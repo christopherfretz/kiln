@@ -767,11 +767,17 @@ The normative description is spec/driver.md "Code generation". In short:
   `stmt.ranged/constexpr-sum`) are `xfail(kiln)`: libstdc++'s
   `c++config.h` uses `decltype`, which kiln_parse does not support yet.
 
-### Inlining attributes on definitions (WP-389, WP-397)
+### Inlining attributes on definitions (WP-389, WP-397, WP-405)
 - `Cg::def_inline_attrs` follows clang's
-  `SetLLVMFunctionAttributesForDefinition`: `always_inline` gives
+  `SetLLVMFunctionAttributesForDefinition`: an `optnone` attribute on
+  any redeclaration, or `-O0` on a function without `minsize` and
+  `always_inline`, gives `noinline optnone` (`optnone` overrides
+  `always_inline` and `minsize`: neither is emitted, and
+  `Cg::has_always_inline_attr` is false); otherwise `naked` gives
+  `noinline`; `always_inline` gives
   `alwaysinline` at every level, or `noinline` alone when `noinline` is
-  also present; otherwise `-O0` gives `noinline optnone`; above `-O0`
+  also present; otherwise `-O0` gives `noinline` (a `minsize`
+  function); above `-O0`
   `noinline` (`[[gnu::noinline]]`, `[[clang::noinline]]`, `__attribute__`)
   stays `noinline`, and a function `inline`-specified on any of its
   declarations, or one instantiated from a pattern that is (not for an
@@ -779,8 +785,21 @@ The normative description is spec/driver.md "Code generation". In short:
   `inlinehint` (`Cg::inline_specified`). `constexpr` and in-class
   definitions are implicitly inline but not inline-specified, so they
   get neither. Tests: `tests/codegen/noinline_matrix_o{0,1,2}.cpp`
-  (exact under oracle 19; on x86_64 above `-O0` only structural, see
-  "Deviations").
+  (exact under oracle 19 on both targets).
+- `Cg::def_opt_attrs` adds `naked` for a `naked` function and, without
+  an `optnone` attribute, `minsize` for `minsize` and `optsize` for
+  `cold` unless the definition is `optnone` by `-O0` (`cold` itself
+  comes from `cold_hot_attrs`, also on `optnone` definitions).
+  Declarations and call sites get none of `optnone`, `minsize`,
+  `naked`. A naked definition (`Fx::naked`) has no parameter prologue
+  (no parameter or `this` slots: clang `EmitFunctionProlog` returns
+  early) and its epilogue is `unreachable` instead of a return (clang
+  `EmitFunctionEpilog`); falling off a value-returning naked function
+  still traps first at `-O0`. Falling off the end of any value-returning
+  function is `llvm.trap` + `unreachable` at `-O0` and `unreachable`
+  alone above it (clang `GenerateCode`). Tests:
+  `tests/codegen/optnone_minsize_naked_o{0,1}.cpp` (exact under oracle
+  19, structural under 22, on both targets).
 - A template parameter object is emitted `linkonce_odr` with a comdat
   and `dso_local`, or `internal` when its type or value names an
   internal entity (spec/abi.md §8.22; clang 22 drops the comdat of an
@@ -844,12 +863,9 @@ The normative description is spec/driver.md "Code generation". In short:
   oracle-19 `Structure` deviation. Following the rest under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
   "Residual").
-- **x86_64 frame pointer above `-O0` (WP-397).** clang omits
-  `"frame-pointer"="all"` and the `frame-pointer` module flag on x86_64
-  at `-O1` and above; kiln keeps them (`target_attrs`), so
-  `noinline_matrix_o1`/`_o2` are `Allow::Structure` there under oracle
-  19. clang 22 also drops the comdat of an internal template parameter
-  object (`linkage_internal_nttp`, oracle 22, `Allow::Structure`).
+- **clang 22 internal template parameter objects.** clang 22 drops the
+  comdat of an internal template parameter object
+  (`linkage_internal_nttp`, oracle 22, `Allow::Structure`).
 - **Uses of constant-initialized reference variables as lvalues.** A
   read through a reference to a `const` referee folds (above), but clang
   also emits a non-odr-use of a reference usable in constant expressions
@@ -941,7 +957,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 | AArch64 empty class by value as `i64` (spec/abi.md §8.21) | compat ≥ 22 | `i8` / ignored |
 | GEP `nuw` (§3 "GEP flags") | compat ≥ 22 | `inbounds` only |
 | `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors), on definitions, declarations and calls, before `noundef` | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
-| AArch64 `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
+| `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 for `non-leaf` (AArch64's default; "Frame pointer") | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
 | no empty `!llvm.linker.options` | compat ≥ 22 | `!llvm.linker.options = !{}` |
 
 x86-64's data layout and `"frame-pointer"="all"` are the same in both.
@@ -2218,6 +2234,31 @@ remembers the last one); the promise's address passes through a
 `bitcast ptr %promise to ptr` before `coro.id`; an ignored empty-class
 return gets clang's `retval` temporary, erased when unused.
 
+### Frame pointer (WP-405)
+`FramePointer::resolve` follows clang's driver (`getFramePointerKind`) for
+Linux targets; `Cg::frame_pointer` applies it.
+- The kind is `none` when `-fomit-frame-pointer` is in effect, or by
+  default on x86-64 when optimizing (`-O1` and above, `-Os`, `-Oz`,
+  `-Og`); AArch64 keeps the frame pointer at every level. Otherwise it
+  is `non-leaf` when the leaf frame pointer is omitted, `all` when kept.
+  The leaf default is to omit on AArch64 and keep on x86-64.
+- `-fomit-frame-pointer` / `-fno-omit-frame-pointer` and
+  `-momit-leaf-frame-pointer` / `-mno-omit-leaf-frame-pointer`: the last
+  of each pair wins (`kiln_driver::args`, `CodegenOptions::
+  omit_frame_pointer` / `omit_leaf_frame_pointer`); the leaf flags only
+  matter when the frame pointer is kept.
+- `all` and `non-leaf` give every function the `"frame-pointer"` string
+  attribute and the module flag `!{i32 7, !"frame-pointer", i32 N}` with
+  N = 2 / 1; `none` gives neither.
+- clang 22 replaces `non-leaf` by `"non-leaf-no-reserve"` (flag 4) on
+  both targets (AArch64's default, x86-64 with
+  `-momit-leaf-frame-pointer`); kiln does so at compat 22 with an LLVM 22
+  backend (§6a), and emits `"non-leaf"` / 1 otherwise.
+- Tests: `kiln_codegen` unit `frame_pointer_matches_clang` (the matrix),
+  `kiln_driver` `frame_pointer_flags_last_win`,
+  `tests/codegen/frame_pointer_*.cpp` and `noinline_matrix_o{1,2}.cpp`
+  (exact under oracle 19 on both targets).
+
 ## 7p. Landed (WP-370): optimization-dependent IR
 
 - **`CodegenOptions::optimize`** (`-O1` and above, clang
@@ -2250,10 +2291,13 @@ return gets clang's `retval` temporary, erased when unused.
 
 clang `CodeGenModule::setTLSMode`, `ItaniumCXXABI::EmitThreadLocalInitFuncs`
 and `EmitThreadLocalVarDeclLValue` mirrored ([basic.stc.thread],
-[basic.start.dynamic]/7, [basic.start.term]/1, Itanium ABI §3.4). Every
-`thread_local`, `_Thread_local` or `__thread` variable is a C++ dynamic
-TLS variable (sema does not yet tell `__thread` apart, kiln_sema
-`decl.rs` `TlsKind::Static`).
+[basic.start.dynamic]/7, [basic.start.term]/1, Itanium ABI §3.4). A
+`thread_local` variable is a C++ dynamic TLS variable (`TlsKind::Dynamic`).
+A `__thread` or `_Thread_local` variable is clang `TLS_Static`
+(`TlsKind::Static`, WP-396): it is a `thread_local` global with no
+`_ZTW`/`_ZTH`, reached through `@llvm.threadlocal.address`. Sema
+guarantees it a constant initializer and a trivial destructor
+(spec/sema.md §4.10).
 
 - **Globals.** A thread-local variable's global (namespace-scope, static
   data member, function-local, its `_ZGV` guard and the `_ZGR` of a
@@ -2293,8 +2337,7 @@ TLS variable (sema does not yet tell `__thread` apart, kiln_sema
 - Tests: `tests/codegen/thread_local.cpp`,
   `tests/codegen/module_thread_local.cpp` (oracle 22),
   `tests/conformance/basic.stc.thread/module-tls-run.cpp`.
-- **Remaining:** `__thread`/`_Thread_local` as clang `TLS_Static` (no
-  wrapper, constant initialization only); clang emits a template
+- **Remaining:** clang emits a template
   variable's initializer after the TU's functions (deferred) where kiln
   emits it at first use, so `thread_local.cpp` has no thread-local
   variable template.

@@ -308,9 +308,11 @@ impl Sema<'_, '_> {
         let n = self.ast.types.nns(Nns::Type { prefix, ty, template_kw });
         // A dependent `X<args>::` is completed at instantiation; its point
         // of instantiation is where the template-id was written (§5.8,
-        // clang `RequireCompleteDeclContext`'s last qualifier name).
+        // clang `RequireCompleteDeclContext`'s last qualifier name; clang
+        // 22: the whole specifier's begin, as `nns_poi`).
         if self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
-            self.note_written_loc(WrittenKey::Nns(n), loc);
+            let at = if self.clang_compat >= 22 { self.nns_start.unwrap_or(loc) } else { loc };
+            self.note_written_loc(WrittenKey::Nns(n), at);
         }
         if let Some(p) = self.current_instantiation(tmpl, ty) {
             return Some((p, n));
@@ -2105,7 +2107,24 @@ impl Sema<'_, '_> {
     /// chain's common data, so the first declaration's parameter names
     /// print. A friend declared in a templated class does not count: clang
     /// links it into the chain only at instantiation.
+    /// At `-fclang-compat=22` the type belongs to the definition, so the
+    /// definition's parameter names print (spec/sema.md §1.1); an
+    /// implicit deduction guide still uses the first declaration's
+    /// ([`Sema::first_injected_params_template`]).
     pub(crate) fn injected_params_template(&self, c: DeclId) -> Option<DeclId> {
+        if self.clang_compat >= 22
+            && let Some(t) = self.ast.definition(c).and_then(|d| self.ast.described_template(d))
+        {
+            return Some(t);
+        }
+        self.first_injected_params_template(c)
+    }
+
+    /// [`Sema::injected_params_template`] as clang 19 picks it, whatever
+    /// the compat level: the first declaration that is not a friend of a
+    /// templated class. clang 22's implicit deduction guides
+    /// (`vector<_Tp, _Alloc>` from `<__fwd/vector.h>`) still name it.
+    pub(crate) fn first_injected_params_template(&self, c: DeclId) -> Option<DeclId> {
         let own =
             self.ast.redecls_of(c).filter_map(|d| self.ast.described_template(d)).filter(|&t| {
                 self.ast.decls.get(t).misc().friend() == FriendKind::None

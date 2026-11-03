@@ -1916,10 +1916,14 @@ impl Sema<'_, '_> {
         if qualifier.is_some() {
             // A declaration whose parameter needed the missing-`typename`
             // recovery is invalid: a qualified redeclaration does not
-            // match it (clang).
+            // match it (clang 19; clang 22 keeps the recovered
+            // declaration valid, spec/sema.md §1.1).
             found.retain(|&x| {
-                !self.missing_typename_fns.contains(&x)
-                    && !self.pattern_of(x).is_some_and(|p| self.missing_typename_fns.contains(&p))
+                self.clang_compat >= 22
+                    || !self.missing_typename_fns.contains(&x)
+                        && !self
+                            .pattern_of(x)
+                            .is_some_and(|p| self.missing_typename_fns.contains(&p))
             });
         }
         if let Some(p) = self.pick_prev_function(&found, new) {
@@ -2430,6 +2434,7 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
+        self.check_optnone_conflicts(decl, &mut attrs);
         self.finish_decl_alignment(decl, &mut attrs);
         self.add_known_function_attrs(decl, &mut attrs);
         self.recognize_builtin_decl(decl, &mut attrs);
@@ -2482,6 +2487,9 @@ impl Sema<'_, '_> {
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
+        }
+        self.check_optnone_conflicts(decl, &mut attrs);
+        if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
         Some(decl)
@@ -2653,19 +2661,6 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// `msg`, a qualified declarator's no-match error, with clang 22's
-    /// note naming the class `ctx` that was searched
-    /// (`note_entity_defined_here` after `err_member_decl_does_not_match`).
-    pub(crate) fn note_class_searched(&self, msg: kiln_diag::Diag, ctx: DeclId) -> kiln_diag::Diag {
-        if self.clang_compat < 22 || self.kind_of(ctx) != DeclKind::CXXRecord {
-            return msg;
-        }
-        let note = self
-            .diag(DiagId::note_entity_defined_here, self.ast.decls.get(ctx).loc())
-            .arg(self.decl_name(ctx));
-        msg.with_note(note)
-    }
-
     pub(crate) fn note_prev(
         &self,
         msg: kiln_diag::Diag,
@@ -2688,10 +2683,13 @@ impl Sema<'_, '_> {
     fn member_qualified_name(&self, p: DeclId) -> String {
         let q = self.qualified_decl_name(p);
         let Some(pc) = self.ast.decls.get(p).ctx() else { return q };
-        if self.ast.partial_spec_info(self.ast.first(pc)).is_none() {
-            return q;
-        }
-        let Some(desc) = self.current_instantiation_desc(pc) else { return q };
+        let Some((_, info)) = self.ast.partial_spec_info(self.ast.first(pc)) else { return q };
+        // Both clangs print the partial specialization's canonical
+        // arguments here (its qualified name, not a type).
+        let mut desc = self.decl_name(pc);
+        let names = crate::names::SemaNames::new(self);
+        let args = self.ast.types.canonical_args(info.args);
+        kiln_ast::types::write_arg_list(&self.ast.types, &names, args, &mut desc);
         let outer = self.qualified_decl_name(pc);
         let outer = outer.rsplit_once("::").map_or(String::new(), |(o, _)| format!("{o}::"));
         format!("{outer}{desc}::{}", self.decl_name(p))
@@ -3438,7 +3436,7 @@ impl Sema<'_, '_> {
                 self.note_prev(m, p, false)
             } else {
                 let m = self.diag(id, d.name_loc()).arg(fname.clone()).arg(scope);
-                if method { self.note_class_searched(m, ctx) } else { m }
+                if method { self.with_class_defined_note(m, ctx) } else { m }
             };
             self.emit(msg);
             invalid_redecl = true;
@@ -3579,9 +3577,15 @@ impl Sema<'_, '_> {
                         }
                         _ => false,
                     };
-                    let msg = if same_params {
+                    // clang 22 reports two `extern "C"` declarations
+                    // differing in return type as conflicting types
+                    // (spec/sema.md §1.1).
+                    let both_c = self.clang_compat >= 22
+                        && kiln_abi::mangle::is_extern_c(&self.ast, p)
+                        && self.ctx_is_extern_c(self.context());
+                    let msg = if same_params && !both_c {
                         self.diag(DiagId::sema_ovl_diff_return_type, d.name_loc())
-                    } else if extern_c_redecl {
+                    } else if extern_c_redecl || both_c {
                         invalid_redecl = true;
                         self.diag(DiagId::sema_conflicting_types, d.name_loc()).arg(fname.clone())
                     } else {
@@ -4391,7 +4395,12 @@ impl Sema<'_, '_> {
             _ => {}
         }
         if ds.thread_local.is_some() {
-            spec = spec.with_tls(TlsKind::Static);
+            // clang `VarDecl::getTLSKind`: `__thread` and `_Thread_local`
+            // are static TLS (checked by `check_static_tls`), `thread_local`
+            // may be dynamically initialized ([basic.stc.thread]).
+            let kind =
+                if ds.thread_kind == TlsKind::Static { TlsKind::Static } else { TlsKind::Dynamic };
+            spec = spec.with_tls(kind);
         }
         if ds.constexpr.is_some() {
             spec = spec.with_constexpr(true);
@@ -4581,6 +4590,10 @@ impl Sema<'_, '_> {
             return self.act_on_static_member(ds, ty, d, name, spec);
         }
         let mut prev_ok = None;
+        // A redefinition (or a redeclaration with another type) is invalid
+        // (clang `setInvalidDecl`), so a later lookup that also finds the
+        // earlier declaration names that one, not an ambiguous set.
+        let mut redefined = false;
         let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
         let (independent, local) = self.var_prev_local(spec, d, name);
         let mut prev = match local {
@@ -4616,16 +4629,27 @@ impl Sema<'_, '_> {
                 let compatible = self.redecl_var_types_compatible(pty, ty)
                     || self.in_local_scope()
                         && (self.is_dependent_type(pty) || self.is_dependent_type(ty));
-                if !compatible {
+                if compatible {
+                    let prev_def = self.is_var_definition(p);
+                    let n = sym_str(self, name);
+                    self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
+                    if !ext && prev_def {
+                        let msg = self.diag(DiagId::sema_redefinition, d.name_loc()).arg(&n);
+                        let msg = self.note_prev(msg, p, true);
+                        self.emit(msg);
+                        redefined = true;
+                    } else {
+                        prev_ok = Some(p);
+                    }
+                } else {
                     // clang's `diagnoseVarDeclTypeMismatch`: "redefinition" if
                     // the new declaration is a definition (judged before its
                     // initializer is seen), and the note says whether the
                     // old one was.
-                    let new_def = !ext;
-                    let id = if new_def {
-                        DiagId::sema_redefinition_different_type
-                    } else {
+                    let id = if ext {
                         DiagId::sema_redeclaration_different_type
+                    } else {
+                        DiagId::sema_redefinition_different_type
                     };
                     let msg = self
                         .diag(id, d.name_loc())
@@ -4633,13 +4657,7 @@ impl Sema<'_, '_> {
                         .diff_args(self, ty, pty);
                     let msg = self.note_prev(msg, p, self.is_var_definition(p));
                     self.emit(msg);
-                } else if !ext && self.is_var_definition(p) {
-                    let msg =
-                        self.diag(DiagId::sema_redefinition, d.name_loc()).arg(sym_str(self, name));
-                    let msg = self.note_prev(msg, p, true);
-                    self.emit(msg);
-                } else {
-                    prev_ok = Some(p);
+                    redefined = true;
                 }
             } else if block && matches!(pn.kind(), DeclKind::Var | DeclKind::ParmVar) {
                 let new_invalid = ds.invalid || d.invalid || self.is_error_type(ty);
@@ -4660,7 +4678,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
-        if ambiguous || self.storage_invalidates_var(ds, d) {
+        if ambiguous || redefined || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
@@ -4750,6 +4768,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         self.act_on_init_inner(v, init);
+        self.check_static_tls(v);
         self.check_constinit(v);
         self.initializing = None;
         self.lambda_mangle.var = None;
@@ -5416,6 +5435,7 @@ impl Sema<'_, '_> {
     pub fn act_on_uninit(&mut self, v: DeclId) {
         self.act_on_uninit_inner(v);
         if self.is_var_definition(v) {
+            self.check_static_tls(v);
             self.check_constinit(v);
         }
     }
@@ -5747,6 +5767,7 @@ impl Sema<'_, '_> {
     /// Finishes the definition of `f` with `body`.
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
         self.check_function_try_block(f, body);
+        self.check_naked_body(f, body);
         let body = self.end_function_body(body, rbrace);
         // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`.
         if let Some(fty) = self.ast.decls.get(f).ty() {
@@ -7574,7 +7595,13 @@ impl Sema<'_, '_> {
             return None;
         }
         if !ds.invalid {
-            self.error(DiagId::sema_no_declarators, ds.loc);
+            // clang 22's declaration range starts at a leading C++11
+            // attribute-specifier-seq (`[[x]] int;`, `alignas(4);`).
+            let at = match ds.lead_cxx11 {
+                Some(a) if self.clang_compat >= 22 => a,
+                _ => ds.loc,
+            };
+            self.error(DiagId::sema_no_declarators, at);
         }
         None
     }
@@ -7955,11 +7982,15 @@ impl Sema<'_, '_> {
         }
         // Declarations of one entity, and type names of one type, are
         // not ambiguous ([basic.lookup.general]/1, [dcl.typedef]/3;
-        // clang `resolveKind`'s `UniqueTypes`).
+        // clang `resolveKind`'s `UniqueTypes`). An invalid declaration (a
+        // redefinition) is ignored, as `resolveKind` does.
         let mut types: Vec<QualType> = Vec::new();
         let mut decls: Vec<DeclId> = Vec::new();
         for &x in &found.decls {
             let d = self.ast.strip_shadow(x);
+            if self.ast.decls.get(d).has(DeclFlags::INVALID) {
+                continue;
+            }
             if let Some(c) = self.designated_type(d) {
                 if !types.contains(&c) {
                     types.push(c);
@@ -8182,7 +8213,8 @@ impl Sema<'_, '_> {
                 // a class template specialization named before `::` is
                 // instantiated (`O<int>::M::N`).
                 if self.ast.definition(d).is_none() && self.ast.instantiated_from(d).is_some() {
-                    let _ = self.instantiate_class(d, loc, true);
+                    let poi = self.nns_poi(loc);
+                    let _ = self.instantiate_class(d, poi, true);
                 }
                 Some(self.ast.definition(d).unwrap_or(d))
             }
@@ -8262,11 +8294,29 @@ impl Sema<'_, '_> {
     /// [`Sema::qualifier_desc`]); `None` for any other class.
     fn current_instantiation_desc(&self, q: DeclId) -> Option<String> {
         let first = self.ast.first(q);
+        // clang 22 prints the injected-class-name fully scoped (`'N::V<T>'`,
+        // `'H::O<U>'`), a partial specialization with its arguments as
+        // written (`'N::V<T *>'`).
+        let c22 = self.clang_compat >= 22;
+        let name = |s: &Self| {
+            if c22 {
+                let mut n = String::new();
+                kiln_ast::types::TypeNames::write_decl_name(
+                    &crate::names::SemaNames::new(s),
+                    q,
+                    true,
+                    &mut n,
+                );
+                n
+            } else {
+                s.decl_name(q)
+            }
+        };
         if let Some((_, info)) = self.ast.partial_spec_info(first) {
-            let mut s = self.decl_name(q);
+            let mut s = name(self);
             let names = crate::names::SemaNames::new(self);
-            let canon = self.ast.types.canonical_args(info.args);
-            kiln_ast::types::write_arg_list(&self.ast.types, &names, canon, &mut s);
+            let args = if c22 { info.args } else { self.ast.types.canonical_args(info.args) };
+            kiln_ast::types::write_arg_list(&self.ast.types, &names, args, &mut s);
             return Some(s);
         }
         let t = self.ast.described_template(first)?;
@@ -8281,7 +8331,7 @@ impl Sema<'_, '_> {
                 n
             })
             .collect();
-        Some(format!("{}<{}>", self.decl_name(q), params.join(", ")))
+        Some(format!("{}<{}>", name(self), params.join(", ")))
     }
 
     /// How a qualifier context is named in "no member named 'x' in ...".
@@ -8361,13 +8411,15 @@ impl Sema<'_, '_> {
                         | "enum_extensibility"
                         | "preferred_name"
                         | "coro_only_destroy_when_complete"
+                        | "optnone"
+                        | "minsize"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
             self.emit(msg);
             return None;
         }
-        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope) else {
+        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax) else {
             let id = if gnu && matches!(n.as_str(), "visibility" | "section" | "format") {
                 DiagId::parse_attribute_ignored
             } else {
@@ -8413,9 +8465,16 @@ impl Sema<'_, '_> {
         // [dcl.attr.assume]/1: exactly one argument (clang's
         // `ActOnCXXAssumeAttr`).
         if args.len() > takes || (kind == AttrKind::ASSUME && args.is_empty()) {
+            // clang 22 names a `[[scope::x]]` attribute with its scope.
+            let name = if syntax == AttrSyntax::Cxx11 && scope.is_some() && self.clang_compat >= 22
+            {
+                shown.clone()
+            } else {
+                n.clone()
+            };
             let msg = self
                 .diag(DiagId::parse_attribute_wrong_arg_count, loc)
-                .arg(n.clone())
+                .arg(name)
                 .arg(if takes == 0 { "0" } else { "1" });
             self.emit(msg);
             return None;
@@ -8911,14 +8970,33 @@ impl Sema<'_, '_> {
     /// diagnostic (`ak_declcontext`: the class's type): the
     /// injected-class-name `A<T>` of a pattern, else the class with its
     /// scope (`N::A<long>::C`).
+    /// clang 22 follows `err_member_decl_does_not_match` naming a class
+    /// with `note_defined_here` at the class (spec/sema.md §1.1); clang 19
+    /// gives no note.
+    pub(crate) fn with_class_defined_note(
+        &self,
+        d: kiln_diag::Diag,
+        ctx: DeclId,
+    ) -> kiln_diag::Diag {
+        if self.clang_compat < 22
+            || !matches!(self.kind_of(ctx).payload(), kiln_ast::decl::PayloadClass::Record)
+        {
+            return d;
+        }
+        let decl = self.ast.decls.get(ctx);
+        let note = self
+            .diag(DiagId::note_entity_defined_here, decl.loc())
+            .arg(self.decl_name_str(decl.name()));
+        d.with_note(note)
+    }
+
     pub(crate) fn class_context_str(&mut self, c: DeclId) -> String {
         let t = self.this_class_type(c);
-        // clang 19 prints a current instantiation unqualified (`'A<T>'`),
-        // clang 22 fully qualified (`'N::A<T>'`).
-        let injected = t != self.tag_type(c) && self.clang_compat < 22;
+        let injected = t != self.tag_type(c);
         let names = crate::names::SemaNames::new(self);
         let opts = kiln_ast::types::PrintOptions {
-            full_scope: !injected,
+            // clang 22 scopes the injected class name too (`'N::A<T>'`).
+            full_scope: !injected || self.clang_compat >= 22,
             ..kiln_ast::types::PrintOptions::SUGARED
         };
         format!("'{}'", kiln_ast::types::print_type(&self.ast.types, &names, t, opts))
@@ -8939,7 +9017,14 @@ pub(crate) fn norm_attr_scope(s: &str) -> &str {
     }
 }
 
-fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<AttrKind> {
+fn attr_kind_of(
+    n: &str,
+    std: bool,
+    gnu: bool,
+    clang_scope: bool,
+    syntax: AttrSyntax,
+) -> Option<AttrKind> {
+    let gnu_syntax = syntax == AttrSyntax::Gnu;
     Some(match (n, std, gnu) {
         ("nodiscard", true, _) | ("warn_unused_result", _, true) => AttrKind::NODISCARD,
         ("maybe_unused", true, _) => AttrKind::MAYBE_UNUSED,
@@ -8962,6 +9047,11 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("pure", _, true) => AttrKind::PURE,
         ("cold", _, true) => AttrKind::COLD,
         ("hot", _, true) => AttrKind::HOT,
+        ("naked", _, true) => AttrKind::NAKED,
+        // clang `Clang<"optnone">` / `Clang<"minsize">` spellings:
+        // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
+        ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,
+        ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
         ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
         ("preferred_name", _, gnu) if gnu || clang_scope => AttrKind::PREFERRED_NAME,

@@ -30,7 +30,7 @@
 //@ diag: 40:28 error "no member named 'a' in 'X<long>::F'"
 //@ diag: 61:41 note "in instantiation of member function 'X<long>::fa' requested here"
 //@ requires: clang<22
-// clang 22 emits error: explicit specialization of 'F' after instantiation; WP-355 residual
+// clang 19 spelling; member-class-enum-spec-errors-clang22.cpp has clang 22's (WP-394).
 template <class T>
 struct X {
   struct N { int a; };

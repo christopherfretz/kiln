@@ -16,7 +16,7 @@
 //@ diag: 42:26 note "template non-type parameter has a different type 'int *' in template argument"
 //@ diag: 40:41 note "previous non-type template parameter with type 'int' is here"
 //@ requires: clang<22
-// clang 22 emits 19:16 note "template non-type parameter has a different type 'int *' in template a...; WP-355 residual
+// clang 19 spelling; dependent-nttp-type-clang22.cpp has clang 22's (WP-394).
 template <class T, template <T> class P> struct DP {};
 template <int *> struct IP;
 template <int> struct II;

@@ -54,7 +54,7 @@
 //@ diag: 61:27 note "candidate constructor (the implicit copy constructor) not viable: no known conversion from 'int' to 'const K<S> &' for 1st argument"
 //@ diag: 61:27 note "candidate constructor (the implicit move constructor) not viable: no known conversion from 'int' to 'K<S> &&' for 1st argument"
 //@ requires: clang<22
-// clang 22 emits error: no viable conversion from 'int' to 'O::J<SA>' (aka 'O::J<ns::S>'); WP-355 residual
+// clang 19 spelling; qualified-specialization-aka-clang22.cpp has clang 22's (WP-394).
 namespace ns {
 struct S {};
 struct O { template <class T> struct J {}; };

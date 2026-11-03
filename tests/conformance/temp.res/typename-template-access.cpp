@@ -26,7 +26,7 @@
 //@ diag: 54:10 error "no matching function for call to 'k'"
 //@ diag: 53:48 note "candidate template ignored: substitution failure [with T = P]: 'Z' is a private member of 'P'"
 //@ requires: clang<22
-// clang 22 emits error: 'type' is a private member of 'P'; WP-355 residual
+// clang 19 spelling; typename-template-access-clang22.cpp has clang 22's (WP-394).
 class P {
   template <class U> struct Z {};
   typedef int type;

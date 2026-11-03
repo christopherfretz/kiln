@@ -68,6 +68,11 @@ impl Sema<'_, '_> {
             _ => self.ast.template_info(a).map(|x| x.params),
         };
         let (Some(pl), Some(al)) = (pl, al) else { return true };
+        if self.clang_compat >= 22 {
+            let none = MultiLevelArgs::new();
+            let pr = super::ttarg22::Priors { p: prior, a: &none };
+            return self.check_template_template_arg_22(p, a, (pl, al), at, pr);
+        }
         let sides = Sides { p: Some(prior), a: None };
         self.ttp_at_least_as_specialized(al, pl, sides) || self.ttp_lists_equal(al, pl, at, sides)
     }

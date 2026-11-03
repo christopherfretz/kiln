@@ -36,7 +36,7 @@
 //@ diag: 106:3 note "subexpression not valid in a constant expression"
 //@ diag: 109:15 note "in call to 'untyped_delete()'"
 //@ requires: clang<22
-// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
+// clang 19 spelling; constexpr-std-deallocate-clang22.cpp has clang 22's (WP-394).
 using size_t = decltype(sizeof(0));
 namespace std {
 template <class T> struct allocator {

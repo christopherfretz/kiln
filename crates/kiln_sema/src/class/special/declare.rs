@@ -424,7 +424,7 @@ impl Sema<'_, '_> {
                         .diag(DiagId::sema_member_def_no_match, sloc)
                         .arg(what)
                         .arg(self.class_context_str(ctx));
-                    let m = self.note_class_searched(m, ctx);
+                    let m = self.with_class_defined_note(m, ctx);
                     self.emit(m);
                     redecl_invalid = true;
                 }

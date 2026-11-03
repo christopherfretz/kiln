@@ -111,9 +111,50 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   written P (`'T *'`, not `'type-parameter-0-0 *'`). A pack-index
   expression's pack name is quoted (`for pack 'Ts'`), and a single-argument
   concept note quotes a non-type argument too.
+- **Type printing** (WP-394; `kiln_ast/src/types/print.rs`,
+  `TypeNames::clang_compat`). A canonical tag type prints fully scoped,
+  inside template arguments too (`'const J<ns::S> &'`), and a written
+  tag or template-id keeps its keyword and qualifier, which are not sugar
+  (`'O::J<SA>' (aka 'O::J<ns::S>')`; `'O::S'` has no `aka`).
+- **Locations and notes** (WP-394). A class's "defined here" note, the
+  deduction and default-argument notes, a dependent nested-name-specifier
+  template-id's point of instantiation (the specifier's begin), a scoped
+  enum's attribute fix-it, a declaration with no declarators and an
+  in-class static member initializer are located as clang 22 locates
+  them; an alias template's note is at its `using`; a macro argument's
+  backtrace is elided as clang 22's `rangesInsideSameMacroArgExpansion`.
+- **Checks clang 22 adds or drops** (WP-394). The self-comparison
+  warning in an instantiation; a `void` return operand is a failed
+  conversion and an erroneous operand drops the return; CWG2369
+  (constraints before substitution) order; P2280 `typeid` of an unknown
+  reference; namespace attributes; CTAD parentheses; NSDMI re-reporting
+  scope and the failed-NSDMI aggregate report; a discarded branch's
+  variable initializer stays quiet; `__builtin_assume_aligned` on a
+  non-pointer, a `nullptr_t` vararg passed as `void *`, the signed
+  `size_t` and an ext-vector shuffle's result type; vector lane
+  evaluation and reductions, `ext_vector_type` on any declaration, the
+  atomic memory-order check order, string-literal overlap and the
+  `std::allocator` allocation site.
+- **Template template arguments** (WP-394; spec/sema-templates.md
+  §3.2.1): P's parameters are matched as arguments to A, with
+  deduction, constraint subsumption and clang 22's partial-ordering
+  context notes (`templ/ttarg22.rs`).
+- **Member access and redeclarations** (WP-394). A qualified member
+  access `x.B::m` casts the object to the base as written
+  (`member_qualifier_type`, `class/member_expr.rs`); the injected
+  parameters of a redeclared class template are the definition's
+  (`injected_params_template`, `templ/actions.rs`), except in an
+  implicit deduction guide, which keeps the first declaration's
+  (`first_injected_params_template`; guide printing below).
+- **Builtins** (WP-394; spec/sema-templates.md §9.1).
+  `__is_referenceable` is an ordinary identifier;
+  `__reference_binds_to_temporary` is `__reference_constructs_from_temporary`
+  and warns `-Wdeprecated-builtins`.
 - Codegen's `-Watomic-alignment` text follows the level
   (spec/codegen.md); the AST dump's type printing, spec/ast-dump.md §2.
 
+kiln++ defaults to level 22 since WP-394 (spec/driver.md); the library
+default (`ClangCompat::default()`, `Sema` and `DiagOptions`) stays 19.
 Where clang 22's output differs and kiln has not followed it yet, the
 test pins clang 19 with `requires: clang<22` and the comment `WP-355
 residual` (docs/status/wp-184-oracle-switch.md).
@@ -183,6 +224,20 @@ residual` (docs/status/wp-184-oracle-switch.md).
     (clang's `MergeVarDecl` returns at an invalid new declaration), so
     it reports no redefinition and `c` still names the valid `c`.
     `dcl.type/missing-type-specifier-implicit-int.cpp`.
+    A variable redefinition (`redefinition of 'y'`, or `... with a
+    different type`), in the same or a reopened namespace, is invalid
+    too (clang `setInvalidDecl`), and `is_ambiguous_lookup` ignores
+    invalid declarations as `resolveKind` does, so a later use of the
+    name, at the start of a statement or through a using-directive
+    included, finds the first `y` rather than an ambiguous set (WP-405;
+    `basic.def.odr/redefinition-reopened-namespace.cpp`).
+    Block scope follows the same rule (`prefer_valid_local`, WP-396). An
+    invalid local gives way to the latest valid declaration of its name
+    in the same scope. So in `R::X x; R::f(x);`, the unknown type `R::f`
+    makes the second `x` an invalid redeclaration, and later uses still
+    name the first `x` with its errors reported, as in clang 19 and 22.
+    `basic.lookup/invalid-redecl-recovery.cpp`,
+    `basic.lookup.argdep/module-example.cpp`.
     A function whose declaration is invalid (an unknown return or
     parameter type) is erroneous when named outside a call (clang's
     `BuildDeclarationNameExpr` makes such a name an error; a call
@@ -1192,7 +1247,8 @@ and returns the scope it names:
 - **Guide printing** (WP-320), as clang:
   - The injected class type of an implicit guide (`-> vector<_Tp,
     _Alloc>`) uses the template parameters of the class template's
-    first declaration (`injected_params_template`): a forward
+    first declaration (`first_injected_params_template`, at every
+    compat level): a forward
     declaration's names, `type-parameter-0-N` for unnamed ones. A friend
     declaration inside a templated class does not count (clang links it
     only at instantiation); one in a non-template class does.
@@ -1353,6 +1409,30 @@ and returns the scope it names:
   - `alignas`/`aligned`, `packed`
   - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`,
     `hot` (`AttrKind::HOT`, WP-172)
+  - `optnone` / `minsize` (GNU syntax or `clang::`; `gnu::` and
+    unscoped standard spellings are unknown) and `naked` (GNU syntax or
+    `gnu::`), WP-405, as clang 19/22. Each takes no arguments (`'X'
+    attribute takes no arguments`). On a non-function, `optnone` and
+    `naked` warn (`only applies to functions and Objective-C methods` /
+    `only applies to functions`) and `minsize` is an error with
+    `optnone`'s text. `check_optnone_conflicts` (after
+    `check_decl_attrs`): with `optnone` on this declaration or a prior
+    one, `always_inline` / `minsize` on this declaration, or (when this
+    declaration brings the first `optnone`) on prior ones, get `'X'
+    attribute ignored` [-Wignored-attributes] with `conflicting attribute
+    is here` at the `optnone`, in source order, and are dropped from this
+    declaration. `check_naked_body` (at the end of a definition, clang
+    `ActOnFinishFunctionBody`): the first body statement that is not an
+    asm statement, a null statement or a declaration of local register
+    variables without initializers is `non-ASM statement in naked
+    function is not supported` with `attribute is here` at `naked`, and
+    the function becomes invalid. An asm operand naming a parameter or
+    `this` (clang `CheckNakedParmReference`, last child first) is
+    `parameter references not allowed in naked functions` / `'this'
+    pointer references not allowed in naked functions` with the same
+    note, and the asm statement is dropped. A naked function gets no
+    fall-off (-Wreturn-type) or noreturn-returns warning. Test:
+    `tests/conformance/dcl.attr/gnu-optnone-minsize-naked.cpp`.
   - `using_if_exists` (`__attribute__((using_if_exists))` or
     `[[clang::using_if_exists]]`; other `clang::` attributes are still
     ignored), on using-declarations (§4.8)
@@ -2483,6 +2563,65 @@ diagnostics and IR.
     copy-initialized from a prvalue.
   - Clang 19 rejects a capture of a binding by a lambda in a constant
     expression, and kiln accepts it.
+
+### 4.10 Static thread-local storage (`static_tls.rs`, WP-396)
+
+[basic.stc.thread], [dcl.stc]/4; clang `TLS_Static`. `DeclSpec::thread_static`
+records a `__thread` or `_Thread_local` spelling, and `var_spec` then gives
+the variable `TlsKind::Static`. `thread_local` gives `TlsKind::Dynamic`.
+Codegen gives only dynamic TLS a `_ZTW` wrapper and `_ZTH` initializer
+(spec/codegen.md §7p). For every *definition* of a static TLS variable,
+`check_static_tls` (clang `CheckCompleteVariableDeclaration`) runs after
+the initializer, or after default initialization, and before the
+`constinit` check:
+
+- A non-dependent, non-reference type that is destructed is
+  `type of thread-local variable has non-trivial destruction` at the
+  variable.
+- Otherwise the initializer is walked by `static_init_culprit` (clang
+  `Expr::isConstantInitializer`), and the first part that fails is
+  `initializer for thread-local variable must be a constant expression`
+  at that part. The walk looks through:
+  - parentheses, cleanups, temporaries, `__extension__` and
+    substituted non-type template parameters;
+  - trivial constructions of a trivially destructible class;
+  - value-preserving casts (no-op, to-union, constructor conversion,
+    atomic, null-to-pointer);
+  - the elements of an array or record list. A glvalue element binds a
+    reference, so it must fold as an address.
+
+  An empty list passes. Anything else must fold with the lax Oven entry
+  (`Sema::fold_rvalue`, clang `isEvaluatable`). A reference's
+  initializer must fold as an address, which is done by folding a
+  synthetic `&e`.
+- Both diagnostics carry `note: use 'thread_local' to allow this` at the
+  variable from C++11 on. They are emitted `per_instantiation`, because
+  clang repeats them at every instantiation (an exception to spec/diag.md
+  §7.4).
+- An instantiation-dependent initializer is checked when it is
+  instantiated, as is the destructor of a variable whose type is
+  dependent.
+- **Compat 19** (`clang_compat < 20`):
+  - clang 19 also rejects an instantiation-dependent initializer in the
+    template definition, at the initializer, unless it is a braced list.
+  - It does not look through a scalar's one-element list, so
+    `__thread int x{f()};` is reported at the `{`.
+- Redeclarations (clang `MergeVarDecl`, `check_tls_redecl`): a
+  redeclaration whose thread storage kind differs from the previous one
+  is reported before any redefinition check. The texts are
+  `thread-local declaration of 'x' follows non-thread-local declaration`,
+  the reverse, and `thread-local declaration of 'x' with
+  static/dynamic initialization follows declaration with
+  dynamic/static initialization`. The note is `previous definition is
+  here` or `previous declaration is here`. The declaration is still
+  merged. This applies at namespace scope and to out-of-class static data
+  members.
+- **Residual:** at compat 19, the single-argument dependent paren
+  initializer `static __thread T w(T(1));` is reported at the `T`. clang 19
+  reports it at the `(` of its `ParenListExpr`, which kiln does not keep.
+- Tests: `basic.stc.thread/static-tls-init.cpp`, `tls-redecl.cpp`,
+  `static-tls-template.cpp`, `static-tls-dependent.cpp` (clang>=22) and
+  `static-tls-dependent-19.cpp` (clang<22).
 
 ## 5. Expressions (`expr.rs`, `conv/`)
 - **Typed nodes:** each `act_on_*` builds clang's typed node, with

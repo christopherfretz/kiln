@@ -858,8 +858,12 @@ impl Compiler<'_> {
                 op(self, bi::OVERFLOW, sub, [a, b, dst], [0, 0], begin);
                 self.emit_site(Op::Store, ak::ASSIGN, &[p, v, rt.0], e, begin);
             }
-            // clang 19 does not constant-evaluate the vector reductions
-            // (spec/oven.md "Vectors").
+            // clang 19 does not constant-evaluate the vector reductions;
+            // clang 22 folds the integer ones (spec/oven.md "Vectors").
+            id::REDUCE_ADD..=id::REDUCE_XOR if self.o.clang_compat >= 22 => {
+                let x = arg(0)?;
+                self.vec_reduce(e, bid, x, dst);
+            }
             id::REDUCE_ADD..=id::REDUCE_XOR => {
                 self.trap_loc(begin, "subexpression not valid in a constant expression".into());
             }

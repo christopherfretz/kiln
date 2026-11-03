@@ -9,7 +9,7 @@
 //@ diag: 24:38 error "in-class initializer for static data member is not a constant expression"
 //@ diag: 25:30 error "in-class initializer for static data member is not a constant expression"
 //@ requires: clang<22
-// clang 22 emits error: in-class initializer for static data member is not a constant expression; WP-355 residual
+// clang 19 spelling; int128-in-class-init-errors-clang22.cpp has clang 22's (WP-394).
 enum En { ea = 5 };
 enum class Ec : long long { x = 7 };
 template<typename V> struct traits {

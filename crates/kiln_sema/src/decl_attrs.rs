@@ -52,6 +52,9 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::FLAG_ENUM => "flag_enum",
         AttrKind::ENUM_EXTENSIBILITY => "enum_extensibility",
         AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE => "coro_only_destroy_when_complete",
+        AttrKind::OPTNONE => "optnone",
+        AttrKind::MINSIZE => "minsize",
+        AttrKind::NAKED => "naked",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
         _ => return None,
     })
@@ -332,6 +335,23 @@ impl Sema<'_, '_> {
                 let name = attr_name(&node).unwrap_or_default();
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, name, "enums")
             }
+            // clang `NakedAttr` / `OptimizeNoneAttr` subjects (ignored
+            // with a warning); `MinSizeAttr`'s is an error.
+            AttrKind::NAKED if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "naked", "functions")
+            }
+            AttrKind::OPTNONE if !kind.is_function() => wrong(
+                self,
+                DiagId::sema_attribute_wrong_decl_type,
+                "optnone",
+                "functions and Objective-C methods",
+            ),
+            AttrKind::MINSIZE if !kind.is_function() => wrong(
+                self,
+                DiagId::sema_attribute_wrong_decl_type_error,
+                "minsize",
+                "functions and Objective-C methods",
+            ),
             AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE if !is_record_kind(kind) => wrong(
                 self,
                 DiagId::sema_attribute_wrong_decl_type,
@@ -340,6 +360,64 @@ impl Sema<'_, '_> {
             ),
             _ => true,
         }
+    }
+
+    /// `optnone` against `always_inline` and `minsize` on function `d`
+    /// (clang `mergeOptimizeNoneAttr`, `mergeAlwaysInlineAttr`,
+    /// `mergeMinSizeAttr`): `optnone` wins, on this declaration or a
+    /// previous one; the losing attribute is "ignored" with a warning at
+    /// it and a note at the `optnone`, and is dropped from `attrs` when
+    /// it is this declaration's own. One already ignored on a previous
+    /// declaration is not diagnosed again; codegen gives `optnone`
+    /// precedence over any redeclaration's (spec/codegen.md).
+    pub(crate) fn check_optnone_conflicts(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        let relevant = |k: AttrKind| {
+            matches!(k, AttrKind::OPTNONE | AttrKind::ALWAYS_INLINE | AttrKind::MINSIZE)
+        };
+        if !attrs.iter().any(|&a| relevant(self.ast.attrs.get(a).kind))
+            || !self.ast.decls.get(d).kind().is_function()
+        {
+            return;
+        }
+        let own = |s: &Self, k: AttrKind| {
+            attrs.iter().map(|&a| *s.ast.attrs.get(a)).find(|n| n.kind == k)
+        };
+        let prior = |s: &Self, k: AttrKind| {
+            s.ast.redecls_of(d).filter(|&r| r != d).find_map(|r| {
+                s.ast
+                    .lists
+                    .iter::<AttrId>(s.ast.attrs.of_decl(r))
+                    .map(|a| *s.ast.attrs.get(a))
+                    .find(|n| n.kind == k)
+            })
+        };
+        let own_optnone = own(self, AttrKind::OPTNONE);
+        let prior_optnone = prior(self, AttrKind::OPTNONE);
+        let Some(optnone) = own_optnone.or(prior_optnone) else { return };
+        let mut losers = Vec::new();
+        for (k, name) in
+            [(AttrKind::ALWAYS_INLINE, "always_inline"), (AttrKind::MINSIZE, "minsize")]
+        {
+            if let Some(l) = own(self, k) {
+                losers.push((l, name));
+            } else if own_optnone.is_some()
+                && prior_optnone.is_none()
+                && let Some(l) = prior(self, k)
+            {
+                losers.push((l, name));
+            }
+        }
+        losers.sort_by_key(|(l, _)| l.loc);
+        for (l, name) in losers {
+            let shown = self.attr_shown(&l, name);
+            let note = self.diag(DiagId::note_conflicting_attribute, optnone.loc);
+            let msg = self.diag(DiagId::parse_attribute_ignored, l.loc).arg(shown).with_note(note);
+            self.emit(msg);
+        }
+        attrs.retain(|&a| {
+            let k = self.ast.attrs.get(a).kind;
+            k != AttrKind::ALWAYS_INLINE && k != AttrKind::MINSIZE
+        });
     }
 
     /// The function type `d` has for clang's `Decl::getFunctionType`: its

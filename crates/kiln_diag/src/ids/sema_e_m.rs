@@ -135,6 +135,7 @@ sema_incompatible_cond_operands = Error (2) "incompatible operand types ({0} and
 sema_incomplete_nested_name_spec = Error (1) "incomplete type {0} named in nested name specifier";
 sema_incomplete_type_required = Error (1) "incomplete type {0} where a complete type is required";
 sema_incomplete_type_trait = Error (1) "incomplete type {0} used in type trait expression";
+sema_inconsistent_deduction = Error (2) "conflicting deduction {0} against {1} for parameter";
 sema_inconsistent_missing_override = Warning [InconsistentMissingOverride] (1) "'{0}' overrides a member function but is not marked 'override'";
 sema_increment_bool = WarningError [IncrementBool] (0) "ISO C++17 does not allow incrementing expression of type bool";
 sema_increment_complex = Extension [C2yExtensions] (1) "'{0}' on an object of complex type is a C2y extension";

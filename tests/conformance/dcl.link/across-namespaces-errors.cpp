@@ -23,7 +23,7 @@
 //@ diag: 41:30 error "redefinition of 'k' as different kind of symbol"
 //@ diag: 40:30 note "previous definition is here"
 //@ requires: clang<22
-// clang 22 emits 25:30 note "previous declaration is here"; WP-355 residual
+// clang 19 spelling; across-namespaces-errors-clang22.cpp has clang 22's (WP-394).
 namespace A { extern "C" int f(int); }
 namespace B { extern "C" int f(int); extern "C" int v; }
 namespace C { extern "C" long f(int); }

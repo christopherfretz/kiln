@@ -7,8 +7,6 @@
 // "definition"
 //@ expect: compile-fail
 //@ strict-diags
-//@ requires: clang>=22
-// clang 22 notes the class a qualified declarator did not match in.
 //@ diag: 42:11 error "extra qualification on member 'f'"
 //@ diag: 43:10 error "extra qualification on member 'x'"
 //@ diag: 44:17 error "extra qualification on member 'y'"
@@ -38,6 +36,8 @@
 //@ diag: 66:29 warning "extra qualification on member 't'"
 //@ diag: 67:22 warning "extra qualification on member 't'"
 //@ diag: 73:8 warning "extra qualification on member 'z'"
+//@ requires: clang>=22
+// clang 22 spelling of extra-qualification.cpp (WP-394).
 struct S {
   void S::f();
   int S::x;

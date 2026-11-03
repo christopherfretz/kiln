@@ -576,6 +576,12 @@ impl<'a> Printer<'a, '_> {
                 return Ok(());
             }
         }
+        // A shadow is not a declaration context: clang 22's JSON nests its
+        // target declaration under it, but the filter's
+        // `RecursiveASTVisitor` does not reach the target through it.
+        if matches!(k, "UsingShadowDecl" | "ConstructorUsingShadowDecl") {
+            return Ok(());
+        }
         // clang's filter is a `RecursiveASTVisitor` that does not visit
         // template instantiations: a template's specializations are
         // skipped (an explicit specialization is visited where it is

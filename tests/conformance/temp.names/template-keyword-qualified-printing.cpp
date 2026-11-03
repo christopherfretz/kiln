@@ -17,7 +17,7 @@
 //@ diag: 37:12 error "cannot initialize a variable of type 'Q<O::J> *' with an rvalue of type 'int'"
 //@ diag: 38:14 error "cannot initialize a variable of type 'Q<ns::T2> *' with an rvalue of type 'int'"
 //@ requires: clang<22
-// clang 22 emits error: cannot initialize a variable of type 'O::template J<SA> *' (aka 'O::templat...; WP-355 residual
+// clang 19 spelling; template-keyword-qualified-printing-clang22.cpp has clang 22's (WP-394).
 namespace ns { struct S {}; template <class T> struct T2 {}; }
 using SA = ns::S;
 struct O { template <class T> struct J {}; };

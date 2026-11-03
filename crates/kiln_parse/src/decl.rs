@@ -296,6 +296,14 @@ impl Parser<'_, '_> {
                 names.push((n, l, inl));
             }
         }
+        if self.s.clang_compat >= 22 && !names.is_empty() {
+            // clang 22: only GNU attributes may follow the name; a C++11
+            // specifier-seq there is reported and dropped ([namespace.def]
+            // puts it before the name; spec/parse.md "Attributes").
+            self.diagnose_and_skip_cxx11_attrs();
+            self.parse_gnu_attr_seq(&mut attrs);
+            self.diagnose_and_skip_cxx11_attrs();
+        }
         self.parse_attributes(&mut attrs);
         let Some(open) = self.expect(Punct::LBrace) else {
             self.skip_unsupported_declaration();
@@ -708,8 +716,17 @@ impl Parser<'_, '_> {
                 Kw::Register => ds.set_storage(StorageSpec::Register, loc),
                 Kw::Mutable => ds.set_storage(StorageSpec::Mutable, loc),
                 Kw::ThreadLocal => {
-                    thread_spelling = Some(self.spelling_of(&self.tok()));
-                    set_flag(&mut ds.thread_local, loc, "thread_local")
+                    let sp = self.spelling_of(&self.tok());
+                    let r = set_flag(&mut ds.thread_local, loc, "thread_local");
+                    if r.is_ok() {
+                        ds.thread_kind = if sp == "thread_local" {
+                            kiln_ast::decl::TlsKind::Dynamic
+                        } else {
+                            kiln_ast::decl::TlsKind::Static
+                        };
+                    }
+                    thread_spelling = Some(sp);
+                    r
                 }
                 Kw::Constexpr | Kw::Consteval | Kw::Constinit => {
                     set_constexpr_kind(&mut ds, k, loc)
@@ -1565,10 +1582,12 @@ impl Parser<'_, '_> {
         };
         let mut scoped = 0;
         if keyword == TagKeyword::Enum {
-            if self.eat_kw(Kw::Class).is_some() {
+            if let Some(l) = self.eat_kw(Kw::Class) {
                 scoped = EnumData::SCOPED;
-            } else if self.eat_kw(Kw::Struct).is_some() {
+                ds.scoped_key_end = Some(l.with_offset(5));
+            } else if let Some(l) = self.eat_kw(Kw::Struct) {
                 scoped = EnumData::SCOPED | EnumData::SCOPED_STRUCT;
+                ds.scoped_key_end = Some(l.with_offset(6));
             }
         }
         let mut attrs = Vec::new();
@@ -3074,7 +3093,8 @@ impl Parser<'_, '_> {
     /// would appertain to no entity ([dcl.pre]/5): at namespace scope,
     /// before a class or enum specifier, clang reports `misplaced
     /// attributes; expected attributes here` after the class-key, where
-    /// they would appertain to the class ([class.pre]/1, [dcl.enum]/1),
+    /// they would appertain to the class ([class.pre]/1, [dcl.enum]/1;
+    /// at compat 22 after the `class`/`struct` of a scoped enum),
     /// and otherwise `an attribute list cannot appear here` at their
     /// start; at block scope always the latter. They are dropped. (In
     /// a class they reach [`Sema::act_on_decl_spec_only`], which warns.)
@@ -3092,7 +3112,11 @@ impl Parser<'_, '_> {
         };
         match ctx {
             DeclaratorContext::File if ds.tag.is_some() && key_len > 0 => {
-                let fix = ds.type_loc.unwrap_or(at).with_offset(key_len);
+                // clang 22 inserts after `enum class` / `enum struct`.
+                let fix = match ds.scoped_key_end {
+                    Some(e) if self.s.clang_compat >= 22 => e,
+                    _ => ds.type_loc.unwrap_or(at).with_offset(key_len),
+                };
                 self.s.error(DiagId::parse_attributes_misplaced, fix);
             }
             DeclaratorContext::File | DeclaratorContext::Block => {

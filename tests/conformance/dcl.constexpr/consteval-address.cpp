@@ -9,7 +9,7 @@
 //@ diag: 28:20 error "cannot take address of consteval function 'sq' outside of an immediate invocation"
 //@ diag: 13:15 note "declared here"
 //@ requires: clang<22
-// clang 22 emits error: call to immediate function 'pick<int>' is not a constant expression; WP-355 residual
+// WP-355 residual: clang 22 escalates a function template taking a consteval function's address (P2564) and reports the escalated call with its notes; kiln does not escalate it.
 consteval int sq(int x) { return x * x; }
 struct S { consteval int m() const { return 1; } };
 consteval int via_ptr(int x) {

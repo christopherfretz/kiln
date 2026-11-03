@@ -548,18 +548,28 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The point of instantiation of a class or enumeration completed as
+    /// a nested-name-specifier component written at `loc`: clang 22 uses
+    /// the begin of the whole specifier (`SS.getBeginLoc()`; spec/sema.md
+    /// §1.1), clang 19 the component. Consumes [`Sema::nns_start`].
+    pub(crate) fn nns_poi(&mut self, loc: Loc) -> Loc {
+        let start = self.nns_start.take();
+        if self.clang_compat >= 22 { start.unwrap_or(loc) } else { loc }
+    }
+
     /// A class named in a nested-name-specifier must be complete
     /// ([expr.prim.id.qual]/1); false after a diagnostic.
     pub fn require_complete_nns(&mut self, q: QualType, loc: Loc) -> bool {
         if let Some(r) = self.undefined_spec(q) {
-            if self.instantiate_class(r, loc, true) {
+            let poi = self.nns_poi(loc);
+            if self.instantiate_class(r, poi, true) {
                 return true;
             }
             // A declared, never defined explicit specialization
             // ([temp.expl.spec]/1) is reported here as incomplete.
             if self.ast.spec_info(r).is_some_and(|(_, s)| s.kind == SpecKind::ExplicitSpecialization)
             {
-                let d = self.diag(DiagId::sema_incomplete_nested_name_spec, loc).arg(self.ty_arg(q));
+                let d = self.diag(DiagId::sema_incomplete_nested_name_spec, poi).arg(self.ty_arg(q));
                 let d = self.incomplete_note(d, q);
                 self.emit(d);
             }
@@ -569,7 +579,8 @@ impl Sema<'_, '_> {
             // A scoped member enumeration is defined when named in a
             // nested-name-specifier (clang `RequireCompleteDeclContext`);
             // one without a definition is opaque, so its scope is empty.
-            let _ = self.instantiate_class(e, loc, false);
+            let poi = self.nns_poi(loc);
+            let _ = self.instantiate_class(e, poi, false);
             return true;
         }
         if let Some(r) = self.ast.types.as_record(q)

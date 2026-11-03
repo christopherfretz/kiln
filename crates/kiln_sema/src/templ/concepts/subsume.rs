@@ -110,6 +110,64 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether constraints `ca` of `a` subsume `cb` of `b` when the two
+    /// are written over different template parameter lists of the same
+    /// shape (a template template parameter and its argument,
+    /// [temp.arg.template]/3): atoms are identical when they are the same
+    /// expression with mappings equal up to each type parameter's depth.
+    /// Unconstrained `cb` is always subsumed.
+    pub(crate) fn at_least_as_constrained_positional(
+        &mut self,
+        a: DeclId,
+        ca: &[ExprId],
+        b: DeclId,
+        cb: &[ExprId],
+    ) -> bool {
+        let Some(q) = self.normal_form(b, cb) else { return true };
+        let Some(p) = self.normal_form(a, ca) else { return false };
+        let (Some(dnf), Some(cnf)) = (self.clauses(p, true), self.clauses(q, false)) else {
+            return false;
+        };
+        self.clauses_subsume(&dnf, &cnf, &mut |s: &Self, x, y| {
+            if x == y {
+                return true;
+            }
+            let (
+                NormNode::Atomic { expr: ex, mapping: mx },
+                NormNode::Atomic { expr: ey, mapping: my },
+            ) = (s.inst.concepts.norm.get(x), s.inst.concepts.norm.get(y))
+            else {
+                return false;
+            };
+            ex == ey && s.mappings_match_positional(mx, my)
+        })
+    }
+
+    /// [`Sema::mappings_match`] with type parameters compared by index
+    /// and pack-ness, not depth.
+    fn mappings_match_positional(
+        &self,
+        a: kiln_ast::ids::ArgListId,
+        b: kiln_ast::ids::ArgListId,
+    ) -> bool {
+        let t = &self.ast.types;
+        let (xa, xb) = (t.args(a), t.args(b));
+        let parm = |x: kiln_ast::types::TemplateArg| match x.view() {
+            kiln_ast::types::ArgView::Type(q) => match t.canonical_view(q) {
+                kiln_ast::types::TypeView::CanonTemplateTypeParm { index, pack, .. } => {
+                    Some((index, pack))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        xa.len() == xb.len()
+            && xa.iter().zip(xb).all(|(x, y)| {
+                t.canonical_arg(*x) == t.canonical_arg(*y)
+                    || parm(*x).is_some_and(|i| parm(*y) == Some(i))
+            })
+    }
+
     /// clang's `MaybeDiagnoseAmbiguousConstraints` after an ambiguous
     /// call: when exactly two candidates are constrained and treating
     /// textually identical atoms ([temp.over.link]/5 equivalence, same

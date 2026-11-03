@@ -390,14 +390,14 @@ declaration ([dcl.meaning.general]/2). A class context is printed as
 its type, a current instantiation unqualified at compat 19 (`'A<T>'`)
 and fully qualified at 22 (`'N::A<T>'`, `class_context_str`); at compat
 22 the error for a class context carries "{0} defined here" at the
-class (`note_class_searched`, clang 22's `note_entity_defined_here`),
-also for an out-of-line constructor. A member function definition that
+class (`with_class_defined_note`, WP-394), also for an out-of-line
+constructor (WP-409). A member function definition that
 differs from the declared member only in its return type is "return type
 of out-of-line definition of 'C::g' differs from that in the
 declaration" with "previous declaration is here" (WP-409). Tests:
 `expr.eq/`, `dcl.mptr/template-id-qualifier.cpp`,
 `basic.lookup.qual/not-a-scope.cpp`,
-`dcl.meaning/qualified-no-match{,-22}.cpp`,
+`dcl.meaning/qualified-no-match{,-clang22}.cpp`,
 `dcl.meaning/qualified-no-match-class-note{,-clang19}.cpp`,
 `dcl.meaning/out-of-line-return-type-mismatch.cpp`.
 

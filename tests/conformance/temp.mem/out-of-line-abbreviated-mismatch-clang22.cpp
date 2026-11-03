@@ -3,10 +3,10 @@
 // member's, type-constraint included.
 //@ expect: compile-fail
 //@ strict-diags
-//@ requires: clang>=22
-// clang 22 notes the class a qualified declarator did not match in.
 //@ diag: 16:30 error "out-of-line definition of 'e' does not match any declaration in 'A<T>'"
 //@ diag: 12:27 note "A defined here"
+//@ requires: clang>=22
+// clang 22 spelling of out-of-line-abbreviated-mismatch.cpp (WP-394).
 template <class T> concept C = sizeof(T) >= 4;
 template <class T> concept D = sizeof(T) >= 2;
 template <class T> struct A {

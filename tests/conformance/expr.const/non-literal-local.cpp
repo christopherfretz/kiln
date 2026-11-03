@@ -22,7 +22,7 @@
 //@ diag: 41:26 note "non-literal type 'NLD' cannot be used in a constant expression"
 //@ diag: 42:15 note "in call to 'm()'"
 //@ requires: clang<22
-// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
+// WP-388 (vbase construction) for M at 22; the other cases are non-literal-local-clang22.cpp.
 struct V { constexpr V(int v = 0) : v(v) {} int v; };
 struct M : virtual V { using V::V; };
 constexpr int f() { M x[2]; return x[0].v; }

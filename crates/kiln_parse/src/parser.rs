@@ -273,7 +273,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         mut src: TokenSource<'a, 'sm>,
         lit_opts: LiteralOptions,
     ) -> Self {
-        let kw = Keywords::new(s.ast.symbols(), s.gnu);
+        let kw = Keywords::new(s.ast.symbols(), s.gnu, s.clang_compat);
         let lex_opts = src.lex_options();
         let std = lex_opts.std;
         s.set_std(std);
@@ -1458,7 +1458,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 if !stop {
                     self.bump();
                 }
-                let q = self.s.act_on_nested_name_component(qual, name, loc).ok_or(())?;
+                self.s.nns_start = Some(start);
+                let q = self.s.act_on_nested_name_component(qual, name, loc);
+                self.s.nns_start = None;
+                let q = q.ok_or(())?;
                 self.s.act_on_nns_component_use(q.1, cc);
                 qual = Some(q);
                 if stop {
@@ -1502,7 +1505,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             if !stop {
                 self.expect(Punct::ColonColon);
             }
-            qual = Some(self.nested_name_template_id(class, qual, name, &args, kw, (start, loc))?);
+            self.s.nns_start = Some(start);
+            let q = self.nested_name_template_id(class, qual, name, &args, kw, loc);
+            self.s.nns_start = None;
+            qual = Some(q?);
             if stop {
                 break;
             }
@@ -1548,16 +1554,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         name: Symbol,
         args: &[kiln_ast::types::TemplateArg],
         kw: Option<Loc>,
-        (start, loc): (Loc, Loc),
+        loc: Loc,
     ) -> Result<(DeclId, NnsId), ()> {
         let template_kw = kw.is_some();
         // The component begins at its `template` keyword, if any (clang's
         // last-qualifier-name location).
         let head = kw.unwrap_or(loc);
-        // clang 22's template specialization type spans its qualifier: an
-        // undefined `N::A<long>::B<int>::` is reported at the start of
-        // the nested-name-specifier, clang 19's at the template-name.
-        let complete_at = if self.s.clang_compat >= 22 { start } else { head };
         let dep_prefix = qual.is_some_and(|(c, _)| self.s.is_dependent_ctx(c));
         let prefix_nns = qual.map(|q| q.1);
         Ok(match (class, qual) {
@@ -1572,7 +1574,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     return Err(());
                 };
                 self.s
-                    .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, complete_at)
+                    .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, head)
                     .ok_or(())?
             }
             (_, Some((c, pn))) if dep_prefix || class == NameClass::Dependent => {

@@ -13,7 +13,7 @@
 //@ diag: 27 error "zero vector size"
 //@ diag: 29:10 note "in instantiation of template type alias 'vec' requested here"
 //@ requires: clang<22
-// clang 22 no longer emits error: 'ext_vector_type' attribute only applies to typedefs; WP-355 residual
+// clang 19 spelling; diagnostics-clang22.cpp has clang 22's (WP-394).
 
 int v __attribute__((ext_vector_type(4)));
 typedef int z __attribute__((ext_vector_type(0)));

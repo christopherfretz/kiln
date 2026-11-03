@@ -6,8 +6,6 @@
 // later ones.
 //@ expect: compile-fail
 //@ strict-diags
-//@ requires: clang>=22
-// clang 22 qualifies the current instantiation and notes the class searched.
 //@ diag: 34:48 error "out-of-line definition of 'g' does not match any declaration in 'N::A<long>'"
 //@ diag: 24:27 note "A defined here"
 //@ diag: 35:48 error "out-of-line definition of 'q' does not match any declaration in 'N::A<long>'"
@@ -20,6 +18,8 @@
 //@ diag: 24:27 note "A defined here"
 //@ diag: 39:33 error "out-of-line definition of 'q' does not match any declaration in 'N::A<long>::C'"
 //@ diag: 25:10 note "C defined here"
+//@ requires: clang>=22
+// clang 22 spelling of temp.expl.spec-member-template-errors.cpp (WP-394).
 namespace N {
 template <class T> struct A {
   struct C {

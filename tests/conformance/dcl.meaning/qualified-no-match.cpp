@@ -9,7 +9,7 @@
 //@ diag: 27:9 error "out-of-line definition of 'n' does not match any declaration in 'S'"
 //@ diag: 28:13 error "out-of-line definition of 'n' does not match any declaration in 'S::In'"
 //@ requires: clang<22
-// clang 19's wording; clang 22 adds the "defined here" note (qualified-no-match-22.cpp).
+// clang 19 spelling; qualified-no-match-clang22.cpp has clang 22's (WP-394).
 namespace N {
 void f();
 namespace M { void j(); }

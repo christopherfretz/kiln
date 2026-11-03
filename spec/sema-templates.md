@@ -4047,8 +4047,9 @@ headers. They are implemented in M3 because they cost one row each:
 clang 22.1 `SemaTypeTraits.cpp`. kiln accepts them at every
 `-fclang-compat` level, a superset of clang 19 (which lacks them); only
 `__has_builtin` follows the level (spec/pp.md "clang compatibility
-level"). Likewise `__is_referenceable`, which clang 22 removed, stays
-implemented, and `__has_builtin` answers 0 for it at level 22.
+level"). The exception is `__is_referenceable`, which clang 22 removed:
+at level 22 it is an ordinary identifier (the parser's keyword table
+omits it) and `__has_builtin` answers 0 for it (WP-394).
 - `__builtin_is_virtual_base_of(B,D)` ([meta.rel], P2985; clang 20):
   false unless both are non-union classes; `D` must then be complete
   ("incomplete type 'X' where a complete type is required" plus the
@@ -4099,8 +4100,15 @@ implemented, and `__has_builtin` answers 0 for it at level 22.
 
 The operand's value category depends on the trait. The C++23 pair takes
 a non-reference `U` as a prvalue ([meta.unary.prop]), while
-`__reference_binds_to_temporary` takes it as an xvalue (clang). The
+`__reference_binds_to_temporary` takes it as an xvalue (clang 19). At
+`-fclang-compat=22` `__reference_binds_to_temporary` is evaluated as
+`__reference_constructs_from_temporary` (prvalue `U`) and warns
+`sema_deprecated_builtin` naming it, as clang 22 (WP-394). The
 `converts` form copy-initializes; the other two direct-initialize.
+
+A deprecated trait spelling warns where it is written and again at each
+instantiation that rebuilds it (under the instantiation note), as clang's
+`BuildTypeTrait` (WP-394).
 
 ### 9.2 Type transforms (`UnaryTransform` types)
 
@@ -4828,6 +4836,21 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   a member (`DP<V, IP>` in `Outer<int>`) is reported at the template-id,
   not at the argument, since substituted types keep no argument
   locations.
+- At `-fclang-compat=22` (WP-394, `templ/ttarg22.rs`; referred to as
+  §3.2.1 in the code) matching follows clang 22's
+  `isTemplateTemplateParameterAtLeastAsSpecializedAs` (CWG2398, P2113)
+  instead: under a partial-ordering context whose diagnostics carry
+  "template template argument has different template parameters than
+  its corresponding template template parameter" at the argument and
+  "previous template template parameter is here" at `P`, `P`'s
+  parameters, written as arguments at their own locations (a pack as an
+  expansion), are checked against `A`'s parameter list as for a
+  template-id `A<...>` (kind, converted-constant conversion, arity); then
+  `A`'s parameters are deduced from them (a conflicting deduction is an
+  error); last a constrained `P` must be at least as constrained as `A`
+  (subsumption over `CanonTemplateTypeParm` atoms). The substituted
+  prior arguments (`Priors`) apply as at level 19
+  (`temp.arg.template/*-clang22.cpp`).
 - P0846 ([temp.names]/3, WP-336): an unqualified name that ordinary
   lookup finds nothing (no builtin) or only non-member functions for,
   followed by a template-argument-list closed by `>(`, is assumed a

@@ -36,6 +36,9 @@ fn takes_expr_args(name: &str) -> bool {
             | "enum_extensibility"
             | "preferred_name"
             | "coro_only_destroy_when_complete"
+            | "optnone"
+            | "minsize"
+            | "naked"
     )
 }
 

@@ -24,7 +24,7 @@
 //@ diag: 30:37 error "no member named 'v' in 'B'"
 //@ diag: 35:12 note "in instantiation of default function argument expression for 'ft<B>' required here"
 //@ requires: clang<22
-// clang 22 no longer emits error: no viable conversion from 'const int' to 'B'; WP-355 residual
+// clang 19 spelling; lazy-default-args-retry-clang22.cpp has clang 22's (WP-394).
 template <class T> struct A { void f(T x = T::value) {} static void s(int y = T::nope) {} };
 struct B { static const int value = 3; };
 template <class T> void ft(T x = T::v) {}

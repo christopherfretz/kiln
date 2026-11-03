@@ -104,9 +104,11 @@ impl Sema<'_, '_> {
     /// The outermost declarator operator over a placeholder, which clang
     /// reports (`err_deduced_class_template_compound_type`'s selector
     /// text and where): grouping parentheses outside every chunk, else
-    /// the last chunk.
-    fn ctad_compound(d: &Declarator) -> Option<(&'static str, Loc)> {
-        if let Some((n, loc)) = d.outer_paren
+    /// the last chunk. clang 22 no longer rejects the parentheses
+    /// (`parens` false; spec/sema-templates.md §6.6).
+    fn ctad_compound(d: &Declarator, parens: bool) -> Option<(&'static str, Loc)> {
+        if parens
+            && let Some((n, loc)) = d.outer_paren
             && n == d.chunks.len()
         {
             return Some(("use parentheses when declaring variable with", loc));
@@ -142,7 +144,7 @@ impl Sema<'_, '_> {
         if d.site == DeclSite::Subst {
             return base;
         }
-        if let Some((what, loc)) = Self::ctad_compound(d) {
+        if let Some((what, loc)) = Self::ctad_compound(d, self.clang_compat < 22) {
             let msg = self.diag(DiagId::sema_ctad_compound_type, loc).arg(what);
             self.emit(msg);
             return QualType::ERROR;

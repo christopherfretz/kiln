@@ -50,7 +50,7 @@
 //@ diag: 79:13 error "no matching function for call to 'h3'"
 //@ diag: 78:25 note "candidate template ignored: deduced conflicting types for parameter 'I' ('int' vs. 's3::al<PC>' (aka 'al<pr<const int, long>>'))"
 //@ requires: clang<22
-// clang 22 emits error: no matching function for call to 'h3'; WP-355 residual
+// clang 19 spelling; deduced-binding-sugar-clang22.cpp has clang 22's (WP-394).
 namespace N { template<class T> struct H {}; struct P {}; }
 template<class T> concept R = sizeof(T) > 100;
 template<class X> requires R<X> void f(char, X&&);
