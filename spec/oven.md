@@ -2505,6 +2505,13 @@ exception (see "Bool vectors" below). The operations are in
   `__builtin_reduce_*` fold, as clang 20+ does (WP-394;
   `ext.vector/constexpr-diagnostics-clang22.cpp`). A `?:` with a vector
   condition fails silently in clang 22 as well, so it stays rejected.
+  Writing a lane (`v[i] = x`, `v.y = x`, any vector element type) of a
+  union member does not make that member active: only member access and
+  array subscript do ([class.union.general]/6), so the vector operand is
+  accessed as a read-modify-write (`compile.rs` `lane_base_access`) and
+  an inactive member is "assignment to member 'v' of union with active
+  member 'c'", as clang (WP-438;
+  `ext.vector/bool-constexpr-union-diagnostics-clang22.cpp`).
   The compat-19 boundary above holds until the oracle switch (WP-184,
   M3 to M4).
 - Codegen emits folded vector values as `<N x T>` constants
@@ -2539,6 +2546,21 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   clang's "element size 1 * element count N is not a multiple of the
   byte size 8" note (`compile/bitcast.rs`). A source with an
   indeterminate lane byte is "indeterminate value".
+- *Shuffles* (WP-438): `__builtin_shufflevector` folds lane by lane at
+  either level. At compat 19 a shuffle whose lane count differs from its
+  operands' has clang 19's GNU-vector-of-`bool` type, `CK_BitCast` to
+  the ext vector (sema); kiln stores that GNU vector packed like a
+  `BoolVec`, but clang 19's `BitCastBuffer` writes it a byte per lane and
+  reads the smaller packed destination from its first bytes, so
+  `vm/bitcast.rs` `gnu_bool_vec_cast` gives lane `k` = source lane `k/8`
+  when `k % 8 == 0`, else false (`b8 w = shuffle(b4, b4, 0..7)` is
+  `0x01`), the value clang 19 folds and emits. At compat 22 the shuffle
+  has the ext vector type and no cast.
+- *Union members* (WP-438): a lane is one bit, so a lane store into a
+  `bool` vector member of a union goes through the union like a
+  bit-field's (`ty.rs` `has_bit_unit` treats the lanes of a `BoolVec` as
+  bit units): `union U { b8 v; unsigned char c; }; constexpr U u =
+  {(b8)true};` constructs `v`, at either level.
 - *Notes* print a bool vector argument lane by lane (`{true, false,
   ...}`, every lane, as clang).
 - *Codegen*: a constexpr or constant-initialized bool-vector variable
@@ -2555,9 +2577,13 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   result (`b4 L = I < 2`), a C-style or `static_cast`, an assignment or a
   `return` in a constexpr function. A `vector_size` or floating source
   has no conversion at all (sema).
-Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`,
+Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp` (shuffles:
+`bool-constexpr-shuffle-run.cpp`, `-19.cpp`;
+`tests/codegen/bool_vector_shuffle_const.cpp`; unions:
+`bool-constexpr-union-run.cpp`, `tests/codegen/bool_vector_union_const.cpp`),
 `ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`,
-`ext.vector/bool-from-int-vector-constexpr-clang22.cpp`.
+`ext.vector/bool-from-int-vector-constexpr-clang22.cpp`;
+budget (packed bits, no per-lane allocation): `tests/stress/bool-vector-sieve.cpp`.
 
 ### `_BitInt` — Landed (WP-404, wide WP-445)
 Type rules: spec/types.md §21.

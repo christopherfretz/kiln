@@ -180,6 +180,16 @@ enum Access {
     Addr,
 }
 
+/// The access to the vector object of a lane access `v[i]` / `v.x` made
+/// as `acc` (clang 22): writing a lane modifies the vector without
+/// assigning it, so a union member holding it is checked to be active
+/// rather than made active ([class.union.general]/6 names only member
+/// access and array subscript; clang `StartLifetimeOfUnionMemberHandler`
+/// stops at a vector).
+fn lane_base_access(acc: Access) -> Access {
+    if acc == Access::Write { Access::Rmw } else { acc }
+}
+
 struct Breakable {
     breaks: Vec<usize>,
     conts: Option<Vec<usize>>,
@@ -4104,7 +4114,7 @@ impl Compiler<'_> {
                 // clang 22 evaluates a lane access as an element of the
                 // lane array (spec/oven.md "Vectors").
                 let [a, i] = self.ast().exprs.operands(e);
-                let p = self.vec_object(a, acc);
+                let p = self.vec_object(a, lane_base_access(acc));
                 let ri = self.rv(i);
                 let ru = self.reg();
                 self.emit(Op::ICast, 64 << 9, &[ru, ri]);
@@ -4121,7 +4131,7 @@ impl Compiler<'_> {
                 let p = if ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::ARROW) {
                     self.rv(base)
                 } else {
-                    self.vec_object(base, acc)
+                    self.vec_object(base, lane_base_access(acc))
                 };
                 let ri = self.reg();
                 self.konst(ri, u128::from(lane));
