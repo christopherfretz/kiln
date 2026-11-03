@@ -1,0 +1,33 @@
+TranslationUnitDecl
+|-VarDecl three 'int'
+| |-CXX26AnnotationAttr 'int' value=1
+| |-CXX26AnnotationAttr 'int' value=1
+| `-CXX26AnnotationAttr 'int' value=1
+|-FunctionDecl g 'void ()'
+| |-CXX26AnnotationAttr 'int' value=1
+| `-CXX26AnnotationAttr 'int' value=1
+|-FunctionDecl g 'void ()'
+| |-CXX26AnnotationAttr 'int' value=1
+| |-CXX26AnnotationAttr 'int' value=1
+| `-CXX26AnnotationAttr 'int' value=1
+|-ClassTemplateDecl X
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+| |-CXXRecordDecl struct X definition
+| | |-CXX26AnnotationAttr 'int' dependent
+| | | `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | `-CXX26AnnotationAttr 'int' dependent
+| |   `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| |-ClassTemplateSpecializationDecl struct X definition implicit_instantiation
+| | |-TemplateArgument value 'int' 0
+| | |-CXX26AnnotationAttr 'int' value=0
+| | `-CXX26AnnotationAttr 'int' value=0
+| `-ClassTemplateSpecializationDecl struct X definition implicit_instantiation
+|   |-TemplateArgument value 'int' 1
+|   |-CXX26AnnotationAttr 'int' value=1
+|   `-CXX26AnnotationAttr 'int' value=1
+|-VarDecl x0 'X<0>' callinit
+| `-CXXConstructExpr 'X<0>' 'void () noexcept'
+|-VarDecl x1 'X<1>' callinit
+| `-CXXConstructExpr 'X<1>' 'void () noexcept'
+`-VarDecl x1_again 'X<1>' callinit
+  `-CXXConstructExpr 'X<1>' 'void () noexcept'

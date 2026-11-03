@@ -119,6 +119,7 @@ note_specialized_decl = Note (0) "attempt to specialize declaration here";
 note_substituted_constraint_ill_formed = Note (1) "because substituted constraint expression is ill-formed{0}";
 note_switch_conversion = Note (2) "conversion to {0:integral|enumeration} type {1}";
 note_temp_member_ref_here = Note (0) "reference member declared here";
+note_template_annotation_here = Note (1) "in instantiation of annotation for '{0}' requested here";
 note_template_arg_refers_to_template = Note (2) "template argument refers to a {0:class template|variable template|concept} '{1}', here";
 note_template_arg_template_params_mismatch = Note (0) "template template argument has different template parameters than its corresponding template template parameter";
 note_template_class_instantiation_here = Note (1) "in instantiation of template class '{0}' requested here";

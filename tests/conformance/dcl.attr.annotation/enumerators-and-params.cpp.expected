@@ -1,0 +1,51 @@
+TranslationUnitDecl
+|-EnumDecl E
+| |-EnumConstantDecl a 'E' value=0
+| | `-CXX26AnnotationAttr 'int' value=1
+| |-EnumConstantDecl referenced b 'E' value=5
+| | |-ImplicitCastExpr 'unsigned int' <IntegralCast>
+| | | `-ConstantExpr 'int' value=5
+| | |   `-IntegerLiteral 'int' 5
+| | |-CXX26AnnotationAttr 'int' value=2
+| | `-CXX26AnnotationAttr 'int' value=3
+| `-EnumConstantDecl c 'E' value=6
+|-EnumDecl class F 'unsigned char'
+| `-EnumConstantDecl x 'F' value=0
+|   `-CXX26AnnotationAttr 'E' value=5
+|-FunctionDecl params 'void (int, int, int)'
+| |-ParmVarDecl 'int'
+| | `-CXX26AnnotationAttr 'int' value=4
+| |-ParmVarDecl named 'int'
+| | |-CXX26AnnotationAttr 'int' value=5
+| | `-CXX26AnnotationAttr 'int' value=6
+| `-ParmVarDecl last 'int' cinit
+|   |-IntegerLiteral 'int' 0
+|   `-CXX26AnnotationAttr 'int' value=7
+|-CXXRecordDecl struct S definition
+| |-CXXConstructorDecl S 'void (int)'
+| | `-ParmVarDecl p 'int'
+| |   `-CXX26AnnotationAttr 'int' value=8
+| `-CXXMethodDecl method 'void (int) const'
+|   `-ParmVarDecl q 'int'
+|     `-CXX26AnnotationAttr 'int' value=9
+|-ClassTemplateDecl T
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+| |-CXXRecordDecl struct T definition
+| | `-EnumDecl M
+| |   |-EnumConstantDecl m 'T::M'
+| |   | `-CXX26AnnotationAttr 'int' dependent
+| |   |   `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| |   `-EnumConstantDecl n 'T::M'
+| |     `-CXX26AnnotationAttr 'int' dependent
+| |       `-BinaryOperator 'int' '*'
+| |         |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| |         `-IntegerLiteral 'int' 2
+| `-ClassTemplateSpecializationDecl struct T definition implicit_instantiation
+|   |-TemplateArgument value 'int' 21
+|   `-EnumDecl M
+|     |-EnumConstantDecl m 'T<21>::M' value=0
+|     | `-CXX26AnnotationAttr 'int' value=21
+|     `-EnumConstantDecl n 'T<21>::M' value=1
+|       `-CXX26AnnotationAttr 'int' value=42
+`-VarDecl t 'T<21>' callinit
+  `-CXXConstructExpr 'T<21>' 'void () noexcept'
