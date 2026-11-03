@@ -2940,6 +2940,71 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `-Wconstant-logical-operand` ([expr.log.and], [expr.log.or]; clang
+    /// `CheckLogicalOperands`): a non-`bool` integer left operand with a
+    /// right operand that folds to an integer probably meant `&` / `|`.
+    /// In C++ any folded value warns unless the right operand is `bool`
+    /// or written by a macro; otherwise only a value other than 0 or 1.
+    /// Not for an operator spelled in a macro or in an instantiation; an
+    /// enumerator operand with a value other than 0 or 1 suppresses it
+    /// (clang's `-Wint-in-bool-context` case).
+    fn check_constant_logical_operand(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) {
+        let enum_not_bool = |s: &Self, e: ExprId| {
+            s.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr && {
+                let d = s.ast.exprs.decl(e);
+                s.kind_of(d) == DeclKind::EnumConstant
+                    && s.ast
+                        .decls
+                        .enumerator(d)
+                        .and_then(|x| x.value)
+                        .and_then(|v| s.const_int(v))
+                        .is_some_and(|v| v != 0 && v != 1)
+            }
+        };
+        let (lt, rt) = (self.ety(l), self.ety(r));
+        let int_ty = |s: &Self, t: QualType| conv::is_integral_or_unscoped_enum(s, t);
+        if enum_not_bool(self, l)
+            || enum_not_bool(self, r)
+            || !int_ty(self, lt)
+            || self.ast.types.builtin(lt) == Some(BuiltinType::Bool)
+            || !int_ty(self, rt)
+            || self.expr_is_value_dependent(r)
+            || self.diags.sm().is_macro_loc(loc)
+            || !self.inst.stack.is_empty()
+        {
+            return;
+        }
+        let Some(v) = self.fold_rvalue_int(r) else { return };
+        if (self.ast.types.builtin(rt) == Some(BuiltinType::Bool)
+            || self.diags.sm().is_macro_loc(self.eloc(r)))
+            && (v == 0 || v == 1)
+        {
+            return;
+        }
+        let and = op == BinaryOp::LAnd;
+        let (text, bit) = if and { ("&&", "&") } else { ("||", "|") };
+        let op_span = kiln_source::Span::new(loc, loc.with_offset(2));
+        let mut d = self
+            .diag(DiagId::sema_constant_logical_operand, loc)
+            .arg(text)
+            .range(self.expr_range(r))
+            .with_note(
+                self.diag(DiagId::note_logical_instead_of_bitwise_change_operator, loc)
+                    .arg(bit)
+                    .fixit(kiln_diag::FixIt::replace(op_span, bit)),
+            );
+        if and {
+            let l_end = self.expr_end_loc(l);
+            let r_end = self.expr_range(r).hi;
+            let mut n = self.diag(DiagId::note_logical_instead_of_bitwise_remove_constant, loc);
+            if let Some(from) = self.token_end(l_end) {
+                n = n.fixit(kiln_diag::FixIt::remove(kiln_source::Span::new(from, r_end)));
+            }
+            d = d.with_note(n);
+        }
+        self.emit(d);
+    }
+
     /// The built-in binary operator `op` ([expr.mul] .. [expr.comma]).
     pub(crate) fn builtin_binary(
         &mut self,
@@ -2982,6 +3047,7 @@ impl Sema<'_, '_> {
                 res
             }
             BinaryOp::LAnd | BinaryOp::LOr => {
+                self.check_constant_logical_operand(op, l, r, loc);
                 let (Ok(l2), Ok(r2)) = (
                     conv::contextually_convert_to_bool(self, l),
                     conv::contextually_convert_to_bool(self, r),

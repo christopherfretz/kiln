@@ -144,6 +144,7 @@ note_uninit_in_ctor = Note (1) "during field initialization in {0:this|the impli
 note_uninit_reference_member = Note (0) "uninitialized reference member is here";
 note_unreachable_silence = Note (0) "silence by adding parentheses to mark code as explicitly dead";
 note_use_noexcept_false = Note (0) "use 'noexcept(false)' instead";
+note_use_thread_local = Note (0) "use 'thread_local' to allow this";
 note_using_decl = Note (0) "using declaration";
 note_using_decl_class_member_alias = Note (0) "use an alias declaration instead";
 note_using_decl_class_member_reference = Note (0) "use a reference instead";

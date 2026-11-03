@@ -671,11 +671,11 @@ fn module_adl_example() {
         .map(|l| l.rsplit('/').next().unwrap_or(l))
         .collect();
     let want = [
-        "module-example.cpp:25:3: error: no matching function for call to 'f'",
+        "module-example.cpp:27:6: error: no type named 'f' in namespace 'R'",
+        "module-example.cpp:29:3: error: no matching function for call to 'f'",
         "adl-m.cppm:5:15: note: candidate function not viable: requires 1 argument, but 2 were provided",
-        "module-example.cpp:31:6: error: no type named 'f' in namespace 'R'",
         "adl-n.cppm:8:3: error: use of undeclared identifier 'g'",
-        "module-example.cpp:27:3: note: in instantiation of function template specialization 'apply<R::X, S::Z>' requested here",
+        "module-example.cpp:31:3: note: in instantiation of function template specialization 'apply<R::X, S::Z>' requested here",
     ];
     assert_eq!(lines, want, "{}", o.stderr);
 }
