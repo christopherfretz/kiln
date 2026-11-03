@@ -1797,6 +1797,10 @@ pub struct DeclArena {
     /// Class definitions in the order their `}` was reached
     /// ([`DeclArena::complete_definition`]; instantiations included).
     completed_records: Vec<DeclId>,
+    /// The end of each top-level declaration of the translation unit, in
+    /// order: the last member of the translation unit's member list and
+    /// the class-completion epoch there ([`DeclArena::end_top_level_decl`]).
+    top_level_ends: Vec<(Option<DeclId>, u32)>,
     /// Cold per-declaration data.
     pub cold: ColdDeclData,
 }
@@ -1886,6 +1890,7 @@ impl Default for DeclArena {
                 loc: Loc::INVALID,
             }],
             completed_records: Vec::new(),
+            top_level_ends: Vec::new(),
             cold: ColdDeclData::default(),
         }
     }
@@ -2746,6 +2751,26 @@ impl DeclArena {
         u32::try_from(self.completed_records.len()).unwrap_or(u32::MAX)
     }
 
+    /// The parser finished a top-level declaration of translation unit
+    /// `tu` (a namespace or linkage-specification block is one): clang
+    /// hands it to code generation here (`HandleTopLevelDecl`), so the
+    /// classes completed so far are the complete ones there.
+    pub fn end_top_level_decl(&mut self, tu: DeclId) {
+        let last = self.member_list(tu).and_then(|m| m.last);
+        let e = self.completion_epoch();
+        self.top_level_ends.push((last, e));
+    }
+
+    /// The ends of the top-level declarations, in order: the translation
+    /// unit's last member and the class-completion epoch at each
+    /// ([`DeclArena::end_top_level_decl`]). A member of the translation
+    /// unit belongs to the first end at or after it in the member list;
+    /// one after the last end was added at the end of the translation
+    /// unit.
+    pub fn top_level_ends(&self) -> &[(Option<DeclId>, u32)] {
+        &self.top_level_ends
+    }
+
     /// Sets a field's default member initializer (write-once).
     pub fn set_field_init(&mut self, f: DeclId, init: ExprId) -> Result<(), AlreadySet> {
         set_once(&mut self.field_mut(f).init, init, "FieldData.init", RawId::raw)
@@ -2888,7 +2913,7 @@ impl DeclArena {
         self.vec_rows().iter().map(|r| r.live_bytes()).sum()
     }
 
-    fn vec_rows(&self) -> [VecDims; 16] {
+    fn vec_rows(&self) -> [VecDims; 17] {
         [
             VecDims::of("nodes", &self.nodes),
             VecDims::of("functions", &self.functions),
@@ -2906,6 +2931,7 @@ impl DeclArena {
             VecDims::of("lets", &self.lets),
             VecDims::of("ctor_inits", &self.ctor_inits),
             VecDims::of("completed_records", &self.completed_records),
+            VecDims::of("top_level_ends", &self.top_level_ends),
         ]
     }
 }
