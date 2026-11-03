@@ -37,7 +37,20 @@ panic and never silently wrong IR.
   `Oven::fold_constant_init`, so `__builtin_is_constant_evaluated()` is
   true in it; the other foldable initializers (local `const` arrays,
   records and references) use `try_fold`, where it is false (WP-063,
-  matching clang's IR). Calls of builtins with an integral or floating
+  matching clang's IR). When that constant initialization fails, a
+  scalar initializer (arithmetic, enum, pointer or member pointer type)
+  is re-folded with `Oven::fold_rvalue`, where it is false, and a value
+  it yields becomes the static initializer (clang
+  `ConstantEmitter::tryEmitPrivateForVarInit`, which emits a non-constant
+  initializer it can fold; WP-415): `int g = __builtin_is_constant_evaluated()
+  ? x : 7;` is the global `i32 7` with no dynamic initializer, and a
+  re-folded initializer is never registered for constant destruction.
+  Aggregates are not re-folded (they keep their dynamic initializer).
+  Uses of a const integral variable whose constant initialization failed
+  fold to that same non-manifest value (spec/oven.md "Lax folds"), so
+  `return cg;` emits `ret i32 9` and the unused internal `cg` is not
+  emitted. Validation: `tests/codegen/static_init_refold.cpp`.
+  Calls of builtins with an integral or floating
   result are candidates too (clang `EmitBuiltinExpr` tries
   `EvaluateAsRValue` first), except `__builtin_is_constant_evaluated()`
   (WP-088). A `CXXDefaultArgExpr` has no children, so the pre-pass walks

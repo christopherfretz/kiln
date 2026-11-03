@@ -233,6 +233,13 @@ impl Sema<'_, '_> {
         let depth = self.template_param_depth(head);
         let mut out: Vec<TemplateArg> = Vec::with_capacity(params.len());
         let arg_loc = |i: usize| arg_locs.get(i).copied().unwrap_or(loc);
+        // The `>` of the template-id as written, when this is its check
+        // (clang `TemplateArgumentListInfo::getRAngleLoc`); the template
+        // name otherwise.
+        let r_angle = match self.templ.r_angle.take() {
+            Some((first, r)) if first == arg_locs.first().copied() => r,
+            _ => loc,
+        };
         let mut wi = 0usize;
         let mut open_expansion = false;
         for (pi, &p) in params.iter().enumerate() {
@@ -304,7 +311,7 @@ impl Sema<'_, '_> {
                 self.diag_template_arity(tmpl, false, loc);
                 return Err(());
             };
-            let a = self.default_template_arg(tmpl, depth, p, def, loc, &out)?;
+            let a = self.checked_default_template_arg(tmpl, depth, p, def, loc, r_angle, &out)?;
             out.push(a);
         }
         if wi < written.len() {
@@ -998,6 +1005,27 @@ impl Sema<'_, '_> {
                 return Err(());
             }
         };
+        // After a user-defined conversion the standard conversion that
+        // follows it narrows from the conversion function's result
+        // (`Z<CI{}>` with `operator int` to `bool`; clang
+        // `getNarrowingKind` on `ICS.UserDefined.After`).
+        if self.ast.types.as_record(cty).is_some() && self.ast.types.is_integral(pty) {
+            let from = self.ignore_paren_imp_casts(c);
+            let t = &self.ast.types;
+            let fty = conv::strip_cv(self, self.ast.exprs.get(from).ty());
+            if from != c
+                && (t.is_integral(fty) || t.as_enum(fty).is_some())
+                && let Some(raw) = self.fold_int(from)
+                && !self.int_fits(pty, raw)
+            {
+                let d = self
+                    .diag(DiagId::sema_cce_narrowing_value, at)
+                    .arg("non-type template argument")
+                    .arg(raw.to_string())
+                    .arg(self.ty_arg(pty));
+                self.emit(d);
+            }
+        }
         let c = self.act_on_constant_full_expr(c);
         match self.eval_const(c, EvalContext::converted(at)) {
             Ok(v) => {
@@ -1055,19 +1083,54 @@ impl Sema<'_, '_> {
         loc: Loc,
         prior: &[TemplateArg],
     ) -> Result<TemplateArg, ()> {
+        self.default_template_arg_impl(tmpl, depth, p, def, loc, None, prior)
+    }
+
+    /// [`Self::default_template_arg`] for a template-id's argument list
+    /// (clang `CheckTemplateArgumentList`): the substituted default is
+    /// checked under a "while checking a default template argument used
+    /// here" frame at the template-id's `>`, `r_angle`
+    /// (`DefaultTemplateArgumentChecking`); substituting it is the
+    /// "in instantiation of default argument" frame at the name, `loc`.
+    #[allow(clippy::too_many_arguments, reason = "mirrors default_template_arg")]
+    fn checked_default_template_arg(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        p: DeclId,
+        def: TemplateArg,
+        loc: Loc,
+        r_angle: Loc,
+        prior: &[TemplateArg],
+    ) -> Result<TemplateArg, ()> {
+        self.default_template_arg_impl(tmpl, depth, p, def, loc, Some(r_angle), prior)
+    }
+
+    #[allow(clippy::too_many_arguments, reason = "mirrors default_template_arg")]
+    fn default_template_arg_impl(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        p: DeclId,
+        def: TemplateArg,
+        loc: Loc,
+        checking: Option<Loc>,
+        prior: &[TemplateArg],
+    ) -> Result<TemplateArg, ()> {
         self.push_cleanups();
         // Nor are the pending odr-use checks of that full-expression its
         // own: a name the call's arguments use, such as a constexpr local
         // named in a lambda, is resolved at the end of the call's
         // full-expression ([basic.def.odr]/5), not here.
         let outer_odr = std::mem::take(&mut self.pending_odr);
-        let r = self.default_template_arg_in(tmpl, depth, p, def, loc, prior);
+        let r = self.default_template_arg_in(tmpl, depth, p, def, loc, checking, prior);
         let inner = std::mem::replace(&mut self.pending_odr, outer_odr);
         self.pending_odr.extend(inner);
         self.pop_cleanups();
         r
     }
 
+    #[allow(clippy::too_many_arguments, reason = "mirrors default_template_arg")]
     fn default_template_arg_in(
         &mut self,
         tmpl: DeclId,
@@ -1075,6 +1138,7 @@ impl Sema<'_, '_> {
         p: DeclId,
         def: TemplateArg,
         loc: Loc,
+        checking: Option<Loc>,
         prior: &[TemplateArg],
     ) -> Result<TemplateArg, ()> {
         let dependent = self
@@ -1082,28 +1146,43 @@ impl Sema<'_, '_> {
             .types
             .arg_flags(def)
             .intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK);
-        if !dependent {
-            let at = self.templ.default_locs.get(&p).copied().unwrap_or(loc);
-            return self.check_template_arg(tmpl, depth, p, def, at, prior);
-        }
-        if !self.push_inst_frame(FrameKind::DefaultTemplateArg, p, tmpl, loc) {
-            return Err(());
-        }
-        let so_far = self.ast.types.arg_list(prior);
-        self.set_frame_args(so_far);
-        let args = self.prior_levels(tmpl, depth, prior);
         // Errors point into the default argument, as clang's do.
         let at = self.templ.default_locs.get(&p).copied().unwrap_or(loc);
-        // In the template's scope, not the use's (`n::f<int>()` outside
-        // `n`).
-        let r =
-            self.in_template_context(tmpl, |s| Substituter::new(s, &args).template_arg(def, at));
-        let r = match r {
-            Ok(a) => self.check_template_arg(tmpl, depth, p, a, at, prior),
-            Err(_) => Err(()),
+        let a = if dependent {
+            if !self.push_inst_frame(FrameKind::DefaultTemplateArg, p, tmpl, loc) {
+                return Err(());
+            }
+            let so_far = self.ast.types.arg_list(prior);
+            self.set_frame_args(so_far);
+            let args = self.prior_levels(tmpl, depth, prior);
+            // In the template's scope, not the use's (`n::f<int>()`
+            // outside `n`).
+            let r = self
+                .in_template_context(tmpl, |s| Substituter::new(s, &args).template_arg(def, at))
+                .map_err(|_| ());
+            if checking.is_none() {
+                let r = r.and_then(|a| self.check_template_arg(tmpl, depth, p, a, at, prior));
+                self.pop_inst_frame();
+                return r;
+            }
+            // Substituted: the instantiation frame ends here (clang
+            // `SubstDefaultTemplateArgument`).
+            self.pop_inst_frame();
+            r?
+        } else {
+            def
         };
-        self.pop_inst_frame();
-        r
+        match checking {
+            Some(r_angle) => {
+                if !self.push_inst_frame(FrameKind::DefaultArgChecking, p, tmpl, r_angle) {
+                    return Err(());
+                }
+                let r = self.check_template_arg(tmpl, depth, p, a, at, prior);
+                self.pop_inst_frame();
+                r
+            }
+            _ => self.check_template_arg(tmpl, depth, p, a, at, prior),
+        }
     }
 
     /// Whether integer `v` is representable in integral type `ty`.
