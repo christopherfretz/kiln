@@ -22,7 +22,9 @@ super::meta_family! {
         DisplayStringOf = ("display_string_of", "i", Stable, 475);
         U8DisplayStringOf = ("u8display_string_of", "i", Stable, 475);
         SourceLocationOf = ("source_location_of", "i", Stable, 475);
-        VariableOf = ("variable_of", "i", Stable, 476);
+        /// Valid only inside the definition of the parameter's function: the
+        /// answer depends on where evaluation is.
+        VariableOf = ("variable_of", "i", PointDependent, 476);
         ReturnTypeOf = ("return_type_of", "i", Stable, 476);
         IsFunctionParameter = ("is_function_parameter", "i", Stable, 476);
         IsExplicitObjectParameter = ("is_explicit_object_parameter", "i", Stable, 476);

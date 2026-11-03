@@ -2320,6 +2320,34 @@ impl Sema<'_, '_> {
         self.ast.consts.push_scalar(Scalar::Pointer { ty, base, offset: 0, designated: None }).ok()
     }
 
+    /// [`Sema::srcloc_string`] for a UTF-8 string: the `const char8_t *`
+    /// value pointing to the `u8` string literal object holding `s` (one
+    /// object per content; `std::meta::u8symbol_of`).
+    pub(crate) fn srcloc_u8_string(&mut self, s: &str) -> Option<kiln_ast::ConstValueId> {
+        let lit = self.ast.strings.intern(kiln_ast::strings::StringEncoding::Utf8, s.as_bytes());
+        let origin = if let Some(&e) = self.srcloc.strings.get(&lit) {
+            e
+        } else {
+            let ty = crate::literal::string_literal_type(
+                self,
+                kiln_lex::Encoding::Utf8,
+                s.len() as u64 + 1,
+            );
+            let e = self.builder().string_literal(
+                ty,
+                kiln_ast::expr::StringKind::Utf8,
+                lit,
+                Loc::INVALID,
+            );
+            self.srcloc.strings.insert(lit, e);
+            e
+        };
+        let ty = self.const_char_ptr(QualType::CHAR8);
+        let ty = self.ast.types.canonical(ty);
+        let base = PtrBase::StringLit { lit, origin };
+        self.ast.consts.push_scalar(Scalar::Pointer { ty, base, offset: 0, designated: None }).ok()
+    }
+
     /// The `const std::source_location::__impl *` value pointing to the
     /// frozen `__impl` object `{file, function, line, column}` (clang's
     /// `UnnamedGlobalConstantDecl`): equal values share one object.

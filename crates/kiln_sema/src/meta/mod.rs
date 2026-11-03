@@ -47,7 +47,7 @@ impl Sema<'_, '_> {
         oven: &mut Oven,
     ) -> Result<(), MetaError> {
         match op {
-            MetaOp::Query(q) => self.meta_query(q, args, out, ctx),
+            MetaOp::Query(q) => self.meta_query(q, args, out, ctx, oven),
             MetaOp::Ext(x) => self.meta_ext(x, args, out, ctx, oven),
             _ => Err(MetaError::not_implemented(op, ctx.loc)),
         }
