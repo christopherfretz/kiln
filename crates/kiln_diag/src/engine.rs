@@ -220,6 +220,15 @@ impl<'sm> DiagEngine<'sm> {
             || (self.has_pragmas.load(Ordering::Acquire) && self.pragmas().enables(id))
     }
 
+    /// Whether the last of `-W<group>` and `-Wno-<group>` on the command
+    /// line was the positive one; `None` if neither was given. clang
+    /// reads a few groups as language options (`-Winvalid-constexpr`
+    /// sets `CheckConstexprFunctionBodies`), which `-Weverything`,
+    /// `-Werror=` and pragmas do not change.
+    pub fn group_flag(&self, group: &str) -> Option<bool> {
+        self.policy.group_flag(group)
+    }
+
     /// Errors emitted so far (fatal errors included).
     pub fn error_count(&self) -> u32 {
         self.errors.load(Ordering::Acquire) + self.held_count(0)
