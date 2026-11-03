@@ -277,25 +277,50 @@ New work inside the steps:
   takes under 0.1 s.
 
 **CI time, from the PR run.** The WP-483 column is the baseline above
-(run 41641461340). The PR column and the delta come from the PR's CI logs,
-one row per step, as `gh run view <id> --repo christopherfretz/kiln --log`
-prints them; they are filled when the PR has run.
+(run 41641461340). The PR column is the PR's first CI run, 41676776320
+(wp/502 at 71afe3dcf). Both come from `gh run view <id> --repo
+christopherfretz/kiln --log`, one row per step, taken from the step and
+`xtask ci:` timestamps. Like the baseline, the fmt-and-clippy row leaves
+out the xtask build.
 
 | Step | `check` WP-483 | `check` PR | delta | `check-x86_64` WP-483 | `check-x86_64` PR | delta |
 |---|--:|--:|--:|--:|--:|--:|
-| Initialize containers (image pull) | 5 s | | | 4 s | | |
+| Initialize containers (image pull) | 5 s | 21 s | +16 s | 4 s | 25 s | +21 s |
 | Install git (removed) | 7 s | 0 s | -7 s | 5 s | 0 s | -5 s |
-| Checkout | 2 s | | | 3 s | | |
-| apt toolchain + GCC check | 12 s | | | 12 s | | |
-| Rust toolchain + cache | 10 s | | | 12 s | | |
-| `xtask ci`: fmt, clippy | 24 s | | | 20 s | | |
-| `xtask ci`: cargo test | 264 s | | | 214 s | | |
-| `xtask ci`: clang 22 self-check | 64 s | | | 67 s | | |
-| `xtask ci`: kiln corpus | 160 s | | | 141 s | | |
-| `KILN_ORACLE=19 xtask ci --quick`: fmt, clippy | 4 s | | | 3 s | | |
-| `--quick`: cargo test | 210 s | | | 178 s | | |
-| `--quick`: kiln corpus | 159 s | | | 140 s | | |
-| Job total | 15.6 min | | | 13.5 min | | |
+| Checkout | 2 s | 5 s | +3 s | 3 s | 6 s | +3 s |
+| apt toolchain + GCC check | 12 s | 12 s | 0 s | 12 s | 12 s | 0 s |
+| Rust toolchain + cache | 10 s | 8 s | -2 s | 12 s | 15 s | +3 s |
+| `xtask ci`: fmt, clippy | 24 s | 24 s | 0 s | 20 s | 27 s | +7 s |
+| `xtask ci`: cargo test | 264 s | 190 s | -74 s | 214 s | 187 s | -27 s |
+| `xtask ci`: clang 22 self-check | 64 s | 69 s | +5 s | 67 s | 72 s | +5 s |
+| `xtask ci`: kiln corpus | 160 s | 175 s | +15 s | 141 s | 192 s | +51 s |
+| `KILN_ORACLE=19 xtask ci --quick`: fmt, clippy | 4 s | 0 s | -4 s | 3 s | 0 s | -3 s |
+| `--quick`: cargo test | 210 s | 15 s | -195 s | 178 s | 15 s | -163 s |
+| `--quick`: kiln corpus | 159 s | 173 s | +14 s | 140 s | 189 s | +49 s |
+| Job total | 938 s (15.6 min) | 711 s (11.9 min) | -227 s | 812 s (13.5 min) | 760 s (12.7 min) | -52 s |
 
-The kiln-corpus summary lines in the log must show `4 compared with gcc`.
-The `Install the toolchain packages` step must print `g++ (GCC) 16.1.0`.
+Most of each job's net change comes from things other than WP-502:
+- **The two `--quick` savings rows are WP-488.** The baseline run predates
+  WP-488. The PR's second pass is `--quick --oracle-only`, which skips fmt
+  and clippy and runs only `cargo test -p kiln_codegen --test ir_vs_clang`.
+- **The corpus grew by 74 tests between the runs** (3868 to 3942).
+- **The rest of the corpus and cargo-test movement is runner variance.**
+  The four GCC comparisons account for about 1 s of the corpus rows.
+
+The cost WP-502 itself adds is image cost:
+- **What it is:** `Initialize containers` plus `Install git`, against the
+  old pair.
+- **`check`:** 21 s against 12 s, so +9 s.
+- **`check-x86_64`:** 25 s against 9 s, so +16 s.
+- **The GCC check:** inside the noise of the apt step.
+
+A same-code control confirms this: main at ec90dc214, run 41674865717,
+on `debian:trixie` with WP-488. Its container + git pair is 12 s / 14 s,
+against the PR's 21 s / 25 s.
+
+Both jobs print `g++ (GCC) 16.1.0` in `Install the toolchain packages`
+and `4 compared with gcc` in both kiln-corpus summary lines.
+
+**Conclusion:** the `gcc:16.1.0-trixie` image costs +9 s (`check`) and
++16 s (`check-x86_64`) per job, well under the 60 s threshold, so the
+image stays and the `actions/cache` fallback is not taken.
