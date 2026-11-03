@@ -3091,6 +3091,26 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   (`k.y`, `EmitLoadOfLValue`) and an `extern` vector without an
   initializer stay loads. As in clang, a write through a cast-away
   `const` (`((i4&)k)[1] = 9`, undefined) does not stop the fold.
+- `__builtin_convertvector` of a `const` vector variable folds the same
+  way (WP-490): `Collect::expr` pushes the `ConvertVectorExpr` operand
+  (a bare vector DeclRef, no `LValueToRValue`), the
+  `ConvertVectorExpr` arm of `emit_scalar_opt` uses its folded value,
+  and `convert_vector`'s `icmp ne`/`fcmp une` against zero (to `bool`)
+  or cast folds lane by lane as LLVM's `ConstantFoldCompareInstruction`
+  / `ConstantFoldCastInstruction` do (`func.rs` `icmp`/`fcmp` over
+  `cmp_lanes`, `fold_vec_cast`; a `half`/`bfloat` lane compares widened
+  exactly to `double`). A lane that is `undef`/`poison` or that the
+  scalar folder leaves (`fp128`, `x86_fp80` compares) is not folded.
+  clang: `ScalarExprEmitter::VisitConvertVectorExpr` visits the
+  operand as a scalar (`tryEmitAsConstant`) and the IRBuilder folds.
+  So `b4 c = __builtin_convertvector(K, b4);` stores `i8 bitcast (<8 x
+  i1> <...> to i8)` and the unused `K` is not emitted. The runtime fold
+  compares a float lane with zero (`0.5f`, `2.0f`, NaN are `true`), as
+  clang's codegen does, while the Oven converts it toward zero first as
+  clang 22's evaluator does (`0.5f` is `false`; spec/oven.md
+  "Vectors"). Tests: `tests/codegen/convertvector_const_fold.cpp`
+  (exact under oracle 19, structural under 22),
+  `tests/conformance/ext.vector/convertvector-const-fold-run.cpp`.
 - A vector variable's non-constant initializer is re-folded like a
   scalar's (§2 `fold.rs`, `is_scalar`): `i4 gv = cv;`, `cv + 1`, a `const
   f4`/`b4`/`l3` source give a static initializer with no

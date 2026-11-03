@@ -2503,7 +2503,13 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
 - *Codegen*: a constexpr or constant-initialized bool-vector variable
   is a `<N x i1>` constant global, also as a struct member and an array
   element (spec/codegen.md), with no `__cxx_global_var_init`
-  (`tests/codegen/bool_vector_const.cpp`).
+  (`tests/codegen/bool_vector_const.cpp`). A runtime
+  `__builtin_convertvector` of a `const` vector variable is folded by
+  codegen instead (WP-490, spec/codegen.md §7w), with clang's codegen
+  rule for a float lane (`x != 0`, so `0.5f` is `true`) where the Oven
+  keeps clang 22's evaluator rule (toward zero, `0.5f` is `false`, a
+  lane outside `(-1, 2)` is not a constant); kiln follows clang on both
+  sides (`ext.vector/convertvector-const-fold-run.cpp`).
 - *Not folded*: clang 22's implicit integer → `bool` ext vector
   conversion (spec/sema.md §5.28), a `CK_IntegralToBoolean` cast of
   vector type, which clang 22's `VectorExprEvaluator` does not evaluate:

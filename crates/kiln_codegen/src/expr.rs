@@ -433,8 +433,12 @@ impl Cg<'_> {
             }
             ExprKind::ConvertVectorExpr => {
                 let src = ast.exprs.operand(e);
-                let v = self.emit_scalar(src)?;
                 let sq = ast.exprs.get(src).ty();
+                // A `const` vector variable folds (WP-490), as a subscript base.
+                let v = match self.folds.get(src) {
+                    Some(c) => V::C(self.const_scalar_value(c, sq)?),
+                    None => self.emit_scalar(src)?,
+                };
                 self.convert_vector(v, sq, q)
             }
             // clang `EmitExtVectorElementExpr` of a prvalue vector (`(v +

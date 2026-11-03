@@ -1706,13 +1706,19 @@ impl Cg<'_> {
             };
             return V::C(self.m.const_bool(x));
         }
+        if let Some(lanes) = self.cmp_lanes(l, r, |s, x| s.cint(x).is_some()) {
+            let res = lanes.into_iter().map(|(a, b)| self.icmp(p, a, b)).collect();
+            if let Some(k) = self.lanes_vector(res) {
+                return k;
+            }
+        }
         let rt = self.cmp_ty(l);
         self.f.fir.push(Op::ICmp { p, l, r }, rt)
     }
 
     #[allow(clippy::float_cmp, reason = "constant folding is exact IEEE comparison")]
     pub fn fcmp(&mut self, p: FloatPredicate, l: V, r: V) -> V {
-        if let (Some((_, a)), Some((_, b))) = (self.cfloat(l), self.cfloat(r)) {
+        if let (Some(a), Some(b)) = (self.cmp_f64(l), self.cmp_f64(r)) {
             let uno = a.is_nan() || b.is_nan();
             let x = match p {
                 FloatPredicate::Oeq => !uno && a == b,
@@ -1727,8 +1733,36 @@ impl Cg<'_> {
             };
             return V::C(self.m.const_bool(x));
         }
+        let folds = matches!(
+            p,
+            FloatPredicate::Oeq
+                | FloatPredicate::One
+                | FloatPredicate::Ogt
+                | FloatPredicate::Oge
+                | FloatPredicate::Olt
+                | FloatPredicate::Ole
+                | FloatPredicate::Une
+                | FloatPredicate::Ueq
+        );
+        if folds && let Some(lanes) = self.cmp_lanes(l, r, |s, x| s.cmp_f64(x).is_some()) {
+            let res = lanes.into_iter().map(|(a, b)| self.fcmp(p, a, b)).collect();
+            if let Some(k) = self.lanes_vector(res) {
+                return k;
+            }
+        }
         let rt = self.cmp_ty(l);
         self.f.fir.push(Op::FCmp { p, l, r }, rt)
+    }
+
+    /// A floating constant read exactly as a `f64` for a folded compare:
+    /// `float`, `double`, and `half`/`bfloat` (widened exactly).
+    fn cmp_f64(&self, v: V) -> Option<f64> {
+        if let Some((_, x)) = self.cfloat(v) {
+            return Some(x);
+        }
+        let (_, k, bits) = self.cfloat_bits(v)?;
+        matches!(k, FloatKind::Half | FloatKind::BFloat16)
+            .then(|| f64::from_bits(apfloat::cast(k, FloatKind::Double, bits) as u64))
     }
 
     /// The type of a comparison of `l`: `i1`, or `<N x i1>` for vectors.
@@ -1985,15 +2019,24 @@ impl Cg<'_> {
         self.f.fir.push(Op::FNeg { v }, ty)
     }
 
-    #[allow(clippy::cast_precision_loss, reason = "int-to-float folds round like LLVM")]
     pub fn cast(&mut self, op: CastOp, v: V, to: LTy) -> V {
         let from = self.f.fir.ty(&self.m, v);
         if from == to && matches!(op, CastOp::BitCast | CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
         {
             return v;
         }
-        if let Some(r) = self.fold_wide_cast(op, v, to) {
+        if let Some(r) = self.fold_cast(op, v, to).or_else(|| self.fold_vec_cast(op, v, to)) {
             return r;
+        }
+        self.f.fir.push(Op::Cast { op, flags: Flags::NONE, v, to }, to)
+    }
+
+    /// The `ConstantFolder` of a scalar cast (`None`: not folded; nothing
+    /// is emitted).
+    #[allow(clippy::cast_precision_loss, reason = "int-to-float folds round like LLVM")]
+    fn fold_cast(&mut self, op: CastOp, v: V, to: LTy) -> Option<V> {
+        if let Some(r) = self.fold_wide_cast(op, v, to) {
+            return Some(r);
         }
         if let Some((_, a, w)) = self.cint(v) {
             let tw = self.m.types.int_width(to);
@@ -2035,7 +2078,7 @@ impl Cg<'_> {
                 _ => None,
             };
             if let Some(r) = r {
-                return r;
+                return Some(r);
             }
         }
         if let Some((fty, x)) = self.cfloat(v) {
@@ -2065,22 +2108,68 @@ impl Cg<'_> {
                 _ => None,
             };
             if let Some(r) = r {
-                return r;
+                return Some(r);
             }
         }
         if let V::C(c) = v
             && matches!(op, CastOp::PtrToInt | CastOp::IntToPtr)
             && let Ok(x) = self.m.const_cast(op, c, to)
         {
-            return V::C(x);
+            return Some(V::C(x));
         }
         if let V::C(c) = v
             && op == CastOp::BitCast
             && let Some(r) = self.fold_vec_to_int(c, to)
         {
-            return r;
+            return Some(r);
         }
-        self.f.fir.push(Op::Cast { op, flags: Flags::NONE, v, to }, to)
+        None
+    }
+
+    /// llvm `ConstantFoldCastInstruction` of a constant vector: lane by
+    /// lane, so `__builtin_convertvector` of a `const` vector variable is a
+    /// constant as in clang (WP-490). An `undef`/`poison` lane, or a lane
+    /// the scalar folder leaves, is not folded.
+    fn fold_vec_cast(&mut self, op: CastOp, v: V, to: LTy) -> Option<V> {
+        if matches!(op, CastOp::BitCast | CastOp::PtrToInt | CastOp::IntToPtr) {
+            return None;
+        }
+        let (tet, n, _) = self.m.types.vector_info(to)?;
+        let lanes = self.vec_const_elems(v)?;
+        if lanes.len() != n as usize {
+            return None;
+        }
+        let mut out = Vec::with_capacity(lanes.len());
+        for e in lanes {
+            if self.cint(V::C(e)).is_none() && self.cfloat_bits(V::C(e)).is_none() {
+                return None;
+            }
+            let V::C(r) = self.fold_cast(op, V::C(e), tet)? else { return None };
+            out.push(r);
+        }
+        self.m.const_vector(&out).ok().map(V::C)
+    }
+
+    /// The lanes of the constant vectors `l` and `r`, when every lane of
+    /// both satisfies `ok` (a vector compare folds lane by lane, WP-490).
+    fn cmp_lanes(&mut self, l: V, r: V, ok: impl Fn(&Self, V) -> bool) -> Option<Vec<(V, V)>> {
+        let a = self.vec_const_elems(l)?;
+        let b = self.vec_const_elems(r)?;
+        if a.len() != b.len() {
+            return None;
+        }
+        let lanes: Vec<(V, V)> = a.into_iter().zip(b).map(|(x, y)| (V::C(x), V::C(y))).collect();
+        lanes.iter().all(|&(x, y)| ok(self, x) && ok(self, y)).then_some(lanes)
+    }
+
+    /// A vector of folded lane results (`ConstantVector::get`).
+    fn lanes_vector(&mut self, lanes: Vec<V>) -> Option<V> {
+        let mut out = Vec::with_capacity(lanes.len());
+        for v in lanes {
+            let V::C(c) = v else { return None };
+            out.push(c);
+        }
+        self.m.const_vector(&out).ok().map(V::C)
     }
 
     /// Integer cast by signedness (`CreateIntCast`).

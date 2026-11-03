@@ -613,6 +613,19 @@ impl Collect<'_> {
                     }
                 }
             }
+            // clang `ScalarExprEmitter::VisitConvertVectorExpr` visits its
+            // glvalue operand as a scalar: a `const` vector variable folds
+            // through `tryEmitAsConstant` like a subscript base (WP-490).
+            ExprKind::ConvertVectorExpr => {
+                let b = ast.exprs.operand(e);
+                if matches!(
+                    ast.types.canonical_view(ast.exprs.get(b).ty()),
+                    TypeView::Vector { .. }
+                ) && refers_to_const_var(ast, b)
+                {
+                    self.out.push(b);
+                }
+            }
             ExprKind::ImplicitCastExpr
                 if ast.exprs.cast_kind(e) == CastKind::LValueToRValue
                     && refers_to_const_var(ast, ast.exprs.operand(e)) =>
