@@ -2957,6 +2957,16 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::Comma], true, false);
         }
         self.s.act_on_exit_declarator_scope(entered);
+        // clang 19's `AddInitializerToDecl` corrects an undeduced
+        // variable's initializer before deducing, with no filter
+        // (`decltype(auto) z = val<int>;`, WP-408).
+        let typos = match (typos, v) {
+            (Some(m), Some(v)) if self.s.has_undeduced_type(v) => {
+                self.s.flush_delayed_typos(m);
+                None
+            }
+            (t, _) => t,
+        };
         let r = self.finish_declarator_initializer(d, v, init);
         if let Some(m) = typos {
             self.s.end_delayed_typos(m);

@@ -241,11 +241,12 @@ impl Sema<'_, '_> {
                     return TemplateIdTypo::Recovered(self.recover_err(&[], loc));
                 }
                 // clang's recovery: an overload set of the one declaration
-                // (with the template arguments for a function template),
-                // which a built-in operator resolves to it
-                // ([`Sema::resolve_single_overload_candidate`]).
+                // with the written template arguments, which a placeholder
+                // context resolves to a non-template ignoring them
+                // ([`Sema::resolve_single_overload_candidate`]) and a target
+                // type does not ([`Sema::resolve_address_of_overloaded`]).
                 let template = self.kind_of(d) == DeclKind::FunctionTemplate;
-                let targs = template.then(|| self.ast.types.arg_list(args));
+                let targs = Some(self.ast.types.arg_list(args));
                 let dn = self.ast.decls.get(d).name();
                 let e = self.builder().unresolved_lookup(dn, &[decl], false, None, targs, loc);
                 return TemplateIdTypo::Recovered(if template {
