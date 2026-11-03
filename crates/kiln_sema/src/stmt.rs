@@ -101,6 +101,10 @@ pub struct FnState {
     /// The first `return` statement (an error in a coroutine,
     /// [stmt.return.coroutine]/1).
     pub(crate) first_return: Option<Loc>,
+    /// The parameters assigned with `=` or whose address was taken so
+    /// far (clang `ModifiedNonNullParams`): a `nonnull` one is no longer
+    /// known non-null (spec/sema.md §5.27).
+    pub(crate) modified_params: Vec<DeclId>,
 }
 
 impl FnState {
@@ -123,6 +127,7 @@ impl FnState {
             discarded: 0,
             coro: None,
             first_return: None,
+            modified_params: Vec::new(),
         }
     }
 }
@@ -340,6 +345,14 @@ impl Sema<'_, '_> {
 
     /// A condition ([stmt.pre]/4): contextually converted to `bool`.
     pub fn act_on_condition(&mut self, e: ExprId) -> ExprId {
+        self.act_on_condition_at(e, Loc::INVALID)
+    }
+
+    /// [`Sema::act_on_condition`] of the statement whose keyword (`if`,
+    /// `while`, `do`, `for`) is at `kw`: the conversion context of its
+    /// implicit-conversion warnings (clang `CheckBooleanCondition`'s
+    /// `Loc`); invalid for the full-expression's own location.
+    pub fn act_on_condition_at(&mut self, e: ExprId, kw: Loc) -> ExprId {
         if self.diagnose_unexpanded_written(e, "expression", None) {
             let at = self.begin_loc(e);
             return self.recover_err(&[], at);
@@ -356,7 +369,8 @@ impl Sema<'_, '_> {
             }
         };
         let saved = std::mem::replace(&mut self.cond_typo_at, if typo { at } else { Loc::INVALID });
-        let r = self.act_on_full_expr(e);
+        let r =
+            if kw.is_valid() { self.act_on_full_expr_at(e, kw) } else { self.act_on_full_expr(e) };
         self.cond_typo_at = saved;
         r
     }
@@ -558,9 +572,9 @@ impl Sema<'_, '_> {
     /// evaluated by the Oven (`EvalKind::IfConstexpr`) and wrapped in a
     /// `ConstantExpr` holding the value. A condition that is not a
     /// constant expression is diagnosed and kept unwrapped.
-    pub fn act_on_constexpr_condition(&mut self, e: ExprId) -> ExprId {
+    pub fn act_on_constexpr_condition(&mut self, e: ExprId, kw: Loc) -> ExprId {
         let at = self.begin_loc(e);
-        let c = self.act_on_condition(e);
+        let c = self.act_on_condition_at(e, kw);
         if self.is_err_expr(c) || self.ast.exprs.get(c).deps().intersects(ExprDeps::VALUE) {
             return c;
         }

@@ -92,6 +92,7 @@ impl Sema<'_, '_> {
             AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN => {
                 ControlFlow::Break(self.alloc_attribute(kind, syntax, args, loc))
             }
+            AttrKind::NONNULL => ControlFlow::Break(self.nonnull_attribute(syntax, args, loc)),
             _ => ControlFlow::Continue(()),
         }
     }

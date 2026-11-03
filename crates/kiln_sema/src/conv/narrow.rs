@@ -318,6 +318,7 @@ fn clamp(neg: bool, mag: u128, w: u32, signed: bool) -> (bool, u128) {
 /// narrowing.
 pub fn narrowing_diag(s: &Sema<'_, '_>, n: &Narrowing, init: ExprId, to: QualType) -> Option<Diag> {
     let loc = s.begin_loc(init);
+    let range = s.expr_range(init);
     let to_arg = s.ty_arg(super::strip_cv(s, to));
     let d = match n {
         Narrowing::NotNarrowing | Narrowing::Dependent => return None,
@@ -333,12 +334,21 @@ pub fn narrowing_diag(s: &Sema<'_, '_>, n: &Narrowing, init: ExprId, to: QualTyp
             s.diag(DiagId::sema_init_list_constant_narrowing, loc).arg(value).arg(to_arg)
         }
     };
+    let d = d.range(range);
     // clang offers the `static_cast<T>(...)` fix-it (and its note) only
     // when `T` can be spelled: a typedef or a builtin type.
     if !spellable(s, to) {
         return Some(d);
     }
-    Some(d.with_note(s.diag(DiagId::note_init_list_narrowing_silence, loc)))
+    let last = s.expr_end_loc(init);
+    let end = s.token_end(last).unwrap_or(last);
+    let cast = format!("static_cast<{}>(", s.ty_str(super::strip_cv(s, to)));
+    let note = s
+        .diag(DiagId::note_init_list_narrowing_silence, loc)
+        .range(range)
+        .fixit(kiln_diag::FixIt::insert(loc, cast))
+        .fixit(kiln_diag::FixIt::insert(end, ")"));
+    Some(d.with_note(note))
 }
 
 /// True if `t` (through elaborated and using sugar) is a typedef or a

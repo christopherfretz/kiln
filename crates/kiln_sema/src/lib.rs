@@ -60,6 +60,7 @@ mod macro_fixit;
 pub mod modules;
 pub mod names;
 pub mod new_delete;
+mod nonnull;
 mod null_compare;
 mod null_deref;
 mod nullability;
