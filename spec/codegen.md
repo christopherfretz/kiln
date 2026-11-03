@@ -1609,6 +1609,7 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   `llvm.trap` + `unreachable`. `delete p` of a polymorphic class with a
   virtual destructor calls D0 through the vtable; otherwise D1 then
   `operator delete`. `::delete p` of such a class: see WP-108 below.
+  A destroying `operator delete` changes both: see §7u (WP-457).
 - **Thunks** (`CodeGenVTables::maybeEmitThunk`): a thunk is declared
   when the vtable that needs it is built and defined right after its
   target (method, D1 or D0) is emitted. `this`-adjusting (`_ZThn`) and
@@ -3060,6 +3061,38 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
 - Tests: `tests/codegen/vector_const_fold.cpp` (both oracles),
   `tests/conformance/ext.vector/ir-bool-from-int-vector.cpp` (`expect: ir`,
   `requires: clang>=22`).
+
+## 7u. Landed (WP-457): destroying `operator delete` through a virtual destructor
+
+[expr.delete]/7, /10, [class.dtor]/13. (Numbered after WP-450's §7s and
+WP-444's §7t; renumber at merge if those land differently.)
+
+- **D0 body.** When the deallocation function Sema selected for a
+  virtual destructor (`Ast::dtor_delete`) is a destroying `operator
+  delete`, the deleting destructor calls only that function: no D1
+  call and no `Cleanup::DtorDelete` (the destroying delete runs the
+  destructor itself if it wants to). Its first argument is `this`
+  converted to the function's first parameter type, the conversion
+  Sema built (`Ast::dtor_delete_this`, a derived-to-base expression on
+  `this`; a GEP for a non-primary base, as clang's
+  `getOperatorDeleteThisArg`); the size and alignment arguments are the
+  destructor's class's (`emit_delete_call`), so an inherited destroying
+  delete receives the most-derived size.
+- **The delete-expression.** `delete p` whose static type has a virtual
+  destructor and a destroying `operator delete` makes the virtual D0 call
+  after the null check (never devirtualized, as clang's
+  `EmitDestroyingObjectDelete`), so the most-derived class's lookup
+  decides: a derived class's own usual `operator delete` hides an
+  inherited destroying one and its D0 is the usual D1-then-delete body.
+- **Tag argument.** The empty `std::destroying_delete_t` argument is a
+  temporary `alloca`; when the call's ABI ignores it (x86-64) the unused
+  `alloca` is erased, as clang does, and kept where it is passed
+  (AArch64).
+- Tests: `tests/codegen/destroying_delete_virtual.cpp` (plain, sized,
+  sized+aligned over-aligned, inherited through a non-primary base, a
+  derived usual delete; both targets; exact under oracle 19, structural
+  under 22), `tests/conformance/expr.delete/destroying-operator-delete-virtual.cpp`
+  (run).
 
 ## 7ac. Landed (WP-460): callee-destroyed arguments (`[[clang::trivial_abi]]`)
 A by-value parameter of a class the callee destroys

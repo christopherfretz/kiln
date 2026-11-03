@@ -660,7 +660,10 @@ virtual base 'A'`).
   `constructor cannot be declared 'virtual'`, `'virtual' cannot be specified on
   member function templates`.
 - **Deleting destructor**: defining a virtual dtor looks up `operator delete`
-  ([class.dtor]/16) into cold map `dtor_delete`.
+  ([class.dtor]/16) into cold map `dtor_delete`, access-checked at the
+  destructor (WP-457); for a destroying `operator delete` the cold map
+  `dtor_delete_this` holds `this` converted to its first parameter, the
+  deleting destructor's argument (spec/codegen.md §7u).
 - **Key function** (Itanium §5.2.3): first non-pure virtual function not inline
   and not defined in the class, computed at `}` (cold map); codegen re-checks
   at TU end.
@@ -800,7 +803,11 @@ inaccessible from the defaulted member; variant members with non-trivial
 members; reference/const members without NSDMI (default ctor); reference/const
 members (copy/move assign); a user-declared move operation (copy members); for
 a defaulted dtor, an inaccessible or deleted `operator delete` of a virtual
-dtor. Until WP-068a lands, selection uses the unique non-template candidate with
+dtor (WP-457: an implicit or defaulted virtual dtor whose deallocation
+function — usual or destroying, looked up as a delete-expression in the
+class would — is not found, is ambiguous, or is inaccessible from the class
+is deleted, note `virtual destructor requires an unambiguous, accessible
+'operator delete'` at the class; `virtual_dtor_delete_usable`). Until WP-068a lands, selection uses the unique non-template candidate with
 a matching parameter form (Q7). The `DeleteReason` drives the notes: `default
 constructor of 'Y' is implicitly deleted because base class 'S' has no default
 constructor`, `... because field 'r' of reference type 'int &' would not be
@@ -2081,8 +2088,7 @@ Constructors, destructors, conversion functions, `= default` and
   ignores templates and reports Unsupported where they matter, and a
   deleted static member named unqualified inside its class is reported as
   "attempt to use"); deferred and late exception specifications of
-  implicit members; the pre-C++23 `constexpr` rules; the operator delete
-  of a virtual destructor ([class.dtor]/16); the `constexpr`-with-virtual-
+  implicit members; the pre-C++23 `constexpr` rules; the `constexpr`-with-virtual-
   base diagnostic (WP-146: constexpr variables and constant evaluation,
 §4.10); `explicit` on friends and parameters (WP-068b);
   injected-class-names in the implicit AST dump (xfail
