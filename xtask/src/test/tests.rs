@@ -269,8 +269,8 @@ fn fixtures_produce_expected_statuses() {
     let mut o = clang_opts(&[dir]);
     o.run_timeout = Duration::from_secs(1);
     let results = execute(&o).unwrap();
-    // 40 tests: helper.h and Inputs/* are not discovered.
-    check_fixture_statuses(&results, 40);
+    // 43 tests: helper.h and Inputs/* are not discovered.
+    check_fixture_statuses(&results, 43);
     let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
     assert!(by_name("fail-timeout.cpp").details.contains("timed out"));
     assert!(by_name("fail-crash.cpp").details.contains("signal"));
@@ -301,6 +301,13 @@ fn fixtures_produce_expected_statuses() {
     );
     let reason = by_name("skip-requires-clang.cpp").reason.clone().unwrap_or_default();
     assert!(reason.starts_with("requires clang>=999.0.0; the compiler is clang 19."), "{reason}");
+    let reason = by_name("skip-min-oracle.cpp").reason.clone().unwrap_or_default();
+    assert!(reason.starts_with("min-oracle 999; the compiler is clang 19."), "{reason}");
+    assert!(by_name("pass-module.cpp").log.iter().any(|l| l.contains("--precompile")));
+    has(
+        "error-module-missing-file.cpp",
+        "`module: fx_none=Inputs/no-such-unit.cppm`: no such file",
+    );
     assert!(by_name("error-bad-directive.cpp").details.contains("unknown directive `frobnicate`"));
     assert!(by_name("error-missing-stdin-file.cpp").details.contains("cannot read run-stdin-file"));
     let hang = by_name("error-oracle-binary-hangs.cpp");
