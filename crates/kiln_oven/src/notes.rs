@@ -40,7 +40,8 @@ fn name_of(ast: &Ast, d: DeclId) -> String {
 }
 
 /// `d`'s name as clang's `getNameForDiagnostic` (unqualified): a function
-/// template specialization with its arguments (`f<int>`).
+/// template or variable template specialization with its arguments
+/// (`f<int>`, `v<int>`).
 fn write_name_for_diag(ast: &Ast, d: DeclId, out: &mut String) {
     let names = AstNames::new(ast);
     // A decomposition's variable prints as `[a, b]` (clang
@@ -57,10 +58,16 @@ fn write_name_for_diag(ast: &Ast, d: DeclId, out: &mut String) {
         return;
     }
     names.write_name(d, out);
-    if ast.decls.get(d).kind().is_function()
-        && let Some((_, info)) = ast.spec_info(d)
-    {
-        kiln_ast::types::write_arg_list(&ast.types, &names, info.print_args, out);
+    if let Some((_, info)) = ast.spec_info(d) {
+        if ast.decls.get(d).kind().is_function() {
+            kiln_ast::types::write_arg_list(&ast.types, &names, info.print_args, out);
+        } else if ast.decls.var(d).is_some() {
+            // A variable template specialization (`v<int>`): canonical,
+            // without trailing defaulted arguments (clang
+            // `VarTemplateSpecializationDecl::getNameForDiagnostic`).
+            let args = ast.types.canonical_args(info.print_args);
+            kiln_ast::types::write_arg_list(&ast.types, &names, args, out);
+        }
     }
 }
 

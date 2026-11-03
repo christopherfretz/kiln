@@ -108,6 +108,10 @@ impl Sema<'_, '_> {
                     self.ast
                         .redecls_of(p)
                         .find(|&x| self.ast.decls.var(x).is_some_and(|v| v.init.is_some()))
+                        // Without one, an out-of-line definition
+                        // (`template<class T> const T S::v;`), which is
+                        // default-initialized.
+                        .or_else(|| self.ast.redecls_of(p).find(|&x| self.is_var_definition(x)))
                         .unwrap_or(p)
                 });
                 (p, self.pattern_of(tmpl))
@@ -137,6 +141,13 @@ impl Sema<'_, '_> {
         }
         let ploc = self.ast.decls.get(pattern).loc();
         self.builder().list_implicit_spec(spec, listed.unwrap_or(pattern));
+        // Default-initialized from an out-of-line definition: clang
+        // instantiates that definition as a redeclaration located there.
+        if self.ast.decls.var(pattern).is_some_and(|x| x.init.is_none())
+            && self.is_spec_of_out_of_line_def(spec)
+        {
+            self.builder().relocate_spec(spec, ploc);
+        }
         let Some((_, args)) = self.spec_args(spec) else { return Err(()) };
         if !self.push_inst_frame(FrameKind::VarTemplateInstantiation, spec, tmpl, poi) {
             self.ast.decls.set_flags(spec, DeclFlags::INVALID);
@@ -162,7 +173,16 @@ impl Sema<'_, '_> {
             return Err(());
         };
         self.ast.decls.set_ty(spec, ty);
-        if self.ast.decls.var(pattern).is_some_and(|x| x.init.is_some()) {
+        // A pattern defined without an initializer is default-initialized
+        // when instantiated (`template<class T> const T c;` is "default
+        // initialization of an object of const type" for `c<int>`).
+        // A member partial specialization without one is a declaration
+        // (clang).
+        let member_partial = matched.as_ref().is_ok_and(Option::is_some)
+            && self.is_in_record_ctx(pattern);
+        if self.ast.decls.var(pattern).is_some_and(|x| x.init.is_some())
+            || (self.is_var_definition(pattern) && !member_partial)
+        {
             self.inst.member_defs.insert(spec);
         }
         Ok(spec)
@@ -238,6 +258,39 @@ impl Sema<'_, '_> {
         s
     }
 
+    /// Whether `v`, declared without an initializer, is an explicit
+    /// specialization of a static data member or of a static data member
+    /// template, which is then a declaration, not a definition
+    /// ([temp.expl.spec]/14): `template<> const int C<int>::x;` and
+    /// `template<> const int S::v<int>;` are not default-initialized.
+    pub(crate) fn is_member_spec_declaration(&self, v: DeclId) -> bool {
+        if self.ast.decls.var(v).is_none_or(|x| x.init.is_some()) {
+            return false;
+        }
+        if !self.is_in_record_ctx(v) {
+            return false;
+        }
+        let explicit = SpecKind::ExplicitSpecialization;
+        self.ast.spec_info(v).is_some_and(|(_, i)| i.kind == explicit)
+            || self.ast.member_spec_info(self.ast.first(v)).is_some_and(|(_, i)| i.kind == explicit)
+    }
+
+    /// Whether `v` is an implicit specialization of a static data member
+    /// template instantiated from its out-of-line definition (`template<class
+    /// T> const T S::v;`): it is listed in the class but is a definition.
+    pub(crate) fn is_spec_of_out_of_line_def(&self, v: DeclId) -> bool {
+        self.ast.spec_info(v).is_some_and(|(_, i)| {
+            i.kind == SpecKind::ImplicitInstantiation
+                && self.is_in_record_ctx(i.from)
+                && !self.is_in_class_static(i.from)
+        })
+    }
+
+    /// Whether `d`'s semantic context is a class.
+    fn is_in_record_ctx(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).ctx().is_some_and(|c| self.kind_of(c) == DeclKind::CXXRecord)
+    }
+
     /// Whether `d` is a variable template specialization (clang's
     /// `VarTemplateSpecializationDecl`).
     pub(crate) fn is_var_spec(&self, d: DeclId) -> bool {
@@ -291,6 +344,18 @@ impl Sema<'_, '_> {
         let v = r.ok()?;
         if ds.invalid || d.invalid {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
+        // The declaration's attributes (`template<> [[deprecated]] int
+        // v<int>`, [dcl.attr.deprecated]/4): an implicit specialization
+        // instantiated from a partial specialization takes them from it
+        // (`own_deprecation`).
+        let mut attrs = self.non_vector_attrs(&ds.attrs);
+        attrs.extend(d.attrs.iter().copied());
+        if !attrs.is_empty() {
+            self.check_decl_attrs(v, &mut attrs);
+        }
+        if !attrs.is_empty() {
+            let _ = self.builder().attach_attrs(v, &attrs);
         }
         Some(v)
     }

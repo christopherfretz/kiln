@@ -2575,6 +2575,10 @@ impl Compiler<'_> {
                 }
             }
             ExprKind::UnaryExprOrTypeTraitExpr => self.trait_expr(e, dst, ty),
+            // An invalid class's layout is a placeholder: no note (clang).
+            ExprKind::OffsetOfExpr if self.ast().exprs.offsetof_invalid_record(e) => {
+                self.trap(e, "");
+            }
             ExprKind::OffsetOfExpr => {
                 let v = u128::from(self.ast().exprs.offsetof_value(e));
                 let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));

@@ -7,6 +7,9 @@
 //! nested in one), or in the decl-specifiers, declarator or initializer
 //! of a declaration that is itself deprecated (clang's delayed
 //! diagnostics, `ShouldDiagnoseAvailabilityInContext`).
+//!
+//! Also the deprecated volatile-qualified parameter types of
+//! [depr.volatile.type]/2 (`-Wdeprecated-volatile`).
 
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::DeclKind;
@@ -17,6 +20,7 @@ use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::declspec::ParamInfo;
 
 impl Sema<'_, '_> {
     /// The deprecation governing a use of `d` and the declaration it was
@@ -61,6 +65,20 @@ impl Sema<'_, '_> {
         }
         if let Some(a) = self.find_attr(self.ast.latest(d), AttrKind::DEPRECATED) {
             return Some(a);
+        }
+        if self.ast.decls.var(d).is_some() {
+            // An implicit or explicitly instantiated variable template
+            // specialization has its pattern's (the primary template's
+            // variable or the partial specialization it was instantiated
+            // from; clang `InstantiateAttrs` in
+            // `BuildVariableInstantiation`).
+            let (_, info) = self.ast.spec_info(d)?;
+            if matches!(info.kind, SpecKind::Undeclared | SpecKind::ExplicitSpecialization)
+                || info.from == d
+            {
+                return None;
+            }
+            return self.find_attr(self.ast.latest(info.from), AttrKind::DEPRECATED);
         }
         self.ast.decls.record(d)?;
         let (_, info) = self.ast.spec_info(d)?;
@@ -301,6 +319,24 @@ impl Sema<'_, '_> {
             return;
         }
         for d in held {
+            self.emit(d);
+        }
+    }
+
+    /// [depr.volatile.type]/2 (C++20 [dcl.fct]/4): each volatile-qualified
+    /// parameter of a function declarator is deprecated, warned at the
+    /// parameter (clang `GetFullTypeForDeclarator`; the caller checks the
+    /// language mode).
+    pub(crate) fn check_volatile_params(&mut self, params: &[ParamInfo]) {
+        for p in params {
+            if !self.ast.types.effective_quals(p.ty).contains(kiln_ast::types::Quals::VOLATILE) {
+                continue;
+            }
+            let at = p.decl.map_or_else(
+                || p.name.map_or(p.loc, |n| n.1),
+                |pd| self.ast.decls.get(pd).loc(),
+            );
+            let d = self.diag(DiagId::sema_deprecated_volatile_param, at).arg(self.ty_arg(p.ty));
             self.emit(d);
         }
     }

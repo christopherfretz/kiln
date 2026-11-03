@@ -2931,12 +2931,15 @@ impl<'a> AstBuilder<'a> {
     /// `__builtin_offsetof(T, designator)` ([support.types.layout]/1):
     /// a prvalue of type `std::size_t` (`ty`) whose value is `offset`
     /// bytes. `indices` are the array subscripts written in the
-    /// designator (dumped as children, as clang).
+    /// designator (dumped as children, as clang). `invalid_record`: the
+    /// designator passes through an invalid class, so the value is not a
+    /// constant (clang `ExprConstant` `VisitOffsetOfExpr`).
     pub fn offsetof(
         &mut self,
         ty: QualType,
         indices: &[ExprId],
         offset: u32,
+        invalid_record: bool,
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
@@ -2949,7 +2952,7 @@ impl<'a> AstBuilder<'a> {
             ExprKind::OffsetOfExpr,
             ValueCategory::PRValue,
             deps,
-            0,
+            u8::from(invalid_record),
             ty,
             loc,
             list.raw(),

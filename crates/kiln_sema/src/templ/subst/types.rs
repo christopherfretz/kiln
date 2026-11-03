@@ -55,6 +55,32 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// [depr.volatile.type]/2: each volatile-qualified parameter type
+    /// `params` of the function type substitution rebuilds from the
+    /// dependent `pattern`, at `loc` (clang's `BuildFunctionType` checks
+    /// every parameter; a non-dependent type is not rebuilt).
+    pub(crate) fn check_volatile_params(
+        &mut self,
+        pattern: QualType,
+        params: &[QualType],
+        loc: Loc,
+    ) {
+        if self.sema.std < kiln_lex::Std::Cxx20
+            || !Sema::dependent_flags(self.sema.ast.types.qflags(pattern))
+        {
+            return;
+        }
+        for &t in params {
+            if self.sema.ast.types.effective_quals(t).contains(kiln_ast::types::Quals::VOLATILE) {
+                let d = self
+                    .sema
+                    .diag(DiagId::sema_deprecated_volatile_param, loc)
+                    .arg(self.sema.ty_arg(t));
+                self.sema.emit(d);
+            }
+        }
+    }
+
     /// One declarator operator applied to `base` with the declarator's
     /// checks.
     /// [temp.deduct.general]/11.10: a substituted function type whose
@@ -315,6 +341,7 @@ impl Substituter<'_, '_, '_> {
                 // `getAdjustedParameterType`).
                 let out: Vec<QualType> =
                     out.into_iter().map(|t| self.sema.adjust_param_type(t)).collect();
+                self.check_volatile_params(q, &out, at);
                 let exc = match self.sema.ast.types.exc_spec(&p) {
                     ExcSpec::NoexceptExpr {
                         expr,

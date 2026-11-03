@@ -263,3 +263,4 @@ sema_dynamic_cast_not_polymorphic = Error (1) "{0} is not polymorphic";
 sema_dynamic_cast_not_ptr = Error (2) "cannot use dynamic_cast to convert from {0} to {1}";
 sema_dynamic_cast_rvalue_to_ref = Error (1) "dynamic_cast from rvalue to reference type {0}";
 sema_dynamic_exception_spec = WarningError [DynamicExceptionSpec] (0) "ISO C++17 does not allow dynamic exception specifications";
+sema_deprecated_volatile_param = Warning [DeprecatedVolatile] (1) "volatile-qualified parameter type {0} is deprecated";
