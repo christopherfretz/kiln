@@ -191,16 +191,7 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
         }
     }
     let mode = mode.unwrap_or(Mode::Syntax);
-    if matches!(mode, Mode::Pp | Mode::Run) {
-        for (line, _) in &oven {
-            let message = if mode == Mode::Pp {
-                "`oven` does not apply to `mode: pp` (nothing is evaluated)"
-            } else {
-                "`oven` does not apply to `mode: run` (the program is measured)"
-            };
-            errors.push(DirectiveError { line: *line, message: message.into() });
-        }
-    }
+    reject_oven_for_mode(mode, &oven, &mut errors);
     if !errors.is_empty() {
         errors.sort_by_key(|e| e.line);
         return Err(errors);
@@ -214,6 +205,23 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
         xfail_kiln,
         budget_time_ms,
     })
+}
+
+/// `oven:` budgets mean nothing in `mode: pp` and `mode: run`: one error per
+/// budget line.
+fn reject_oven_for_mode(
+    mode: Mode,
+    oven: &[(usize, OvenBudget)],
+    errors: &mut Vec<DirectiveError>,
+) {
+    let message = match mode {
+        Mode::Pp => "`oven` does not apply to `mode: pp` (nothing is evaluated)",
+        Mode::Run => "`oven` does not apply to `mode: run` (the program is measured)",
+        _ => return,
+    };
+    for (line, _) in oven {
+        errors.push(DirectiveError { line: *line, message: message.into() });
+    }
 }
 
 /// One bench file.
