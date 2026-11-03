@@ -6,11 +6,12 @@
 //! types without a size: `sizeof`/`alignof`, arrays, fields and variables
 //! of static or thread storage duration are errors (clang
 //! `err_sizeof_alignof_typeof_sizeless`, `err_array_incomplete_or_sizeless_type`,
-//! `err_field_incomplete_or_sizeless`, `err_sizeless_nonlocal`). kiln has
-//! no SVE target feature, so — as clang without `+sve` — every use inside
-//! a function body is an error (clang `checkTypeSupport`,
-//! `err_sve_vector_in_non_sve_target`): only declarations can name them,
-//! and codegen lowers them to scalable vectors in declarations only.
+//! `err_field_incomplete_or_sizeless`, `err_sizeless_nonlocal`). Without
+//! the `sve` target feature ([`Sema::sve`], `-march=armv8-a+sve`) every
+//! use inside a function body is an error, as clang's (`checkTypeSupport`,
+//! `err_sve_vector_in_non_sve_target`): only declarations can name them.
+//! With it, automatic variables, parameters and the built-in operators
+//! on them are valid; codegen lowers the types to scalable vectors.
 
 use kiln_ast::decl::{DeclFlags, DeclKind, TlsKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ValueCategory};
@@ -51,6 +52,38 @@ enum SveOpKind {
     Arithmetic,
     Bitwise,
     Comparison,
+    Conditional,
+}
+
+/// The kind of element clang's `getScalableVectorType` matches a scalar
+/// against: integers by signedness, `bool`, `__bf16`, other floating.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SveElemKind {
+    Int(bool),
+    Bool,
+    BFloat,
+    Float,
+}
+
+/// The element-name part of clang's SVE tuple typedefs
+/// (`__clang_svint64x2_t`) for the vector builtin `b`.
+fn sve_tuple_stem(b: BuiltinType) -> &'static str {
+    use BuiltinType as B;
+    match b {
+        B::SvInt8 => "int8",
+        B::SvInt16 => "int16",
+        B::SvInt32 => "int32",
+        B::SvInt64 => "int64",
+        B::SvUint8 => "uint8",
+        B::SvUint16 => "uint16",
+        B::SvUint32 => "uint32",
+        B::SvUint64 => "uint64",
+        B::SvFloat16 => "float16",
+        B::SvFloat32 => "float32",
+        B::SvFloat64 => "float64",
+        B::SvBfloat16 => "bfloat16",
+        _ => "bool",
+    }
 }
 
 impl Sema<'_, '_> {
@@ -86,8 +119,11 @@ impl Sema<'_, '_> {
     }
 
     /// clang `err_sve_vector_in_non_sve_target` for each SVE type a use of
-    /// type `q` at `loc` needs.
+    /// type `q` at `loc` needs; nothing with the `sve` target feature.
     pub(crate) fn check_sve_support(&mut self, q: QualType, loc: Loc) {
+        if self.sve {
+            return;
+        }
         for x in self.sve_types_of(q) {
             let msg = self.diag(DiagId::sema_sve_type_without_sve, loc).arg(self.ty_arg(x));
             self.emit(msg.allow_duplicate());
@@ -131,8 +167,9 @@ impl Sema<'_, '_> {
 
     /// A variable `v` of sizeless type: an error unless it has automatic
     /// storage duration ([basic.stc]), and then one without SVE support.
-    /// Either way `v` is invalid, so its uses raise no further errors
-    /// (clang marks the declaration invalid after either diagnostic).
+    /// After either error `v` is invalid, so its uses raise no further
+    /// errors (clang marks the declaration invalid after either
+    /// diagnostic); an automatic variable with the `sve` feature is valid.
     pub(crate) fn check_sizeless_var(&mut self, v: DeclId, local: bool) {
         let n = *self.ast.decls.get(v);
         let Some(ty) = n.ty().filter(|&t| self.ast.types.is_sizeless(t)) else { return };
@@ -141,6 +178,9 @@ impl Sema<'_, '_> {
             && !matches!(spec.storage(), VarStorage::Static | VarStorage::Extern)
             && spec.tls() == TlsKind::None;
         if automatic {
+            if self.sve {
+                return;
+            }
             self.check_sve_support(ty, n.loc());
         } else {
             let msg = self.diag(DiagId::sema_nonlocal_sizeless, n.loc()).arg(self.ty_arg(ty));
@@ -248,6 +288,182 @@ impl Sema<'_, '_> {
             return self.recover_err(&[l, r], loc);
         }
         self.builder().compound_assign(op, l, r2, lt0, ty, ty, loc)
+    }
+
+    /// True if `q` is an SVE vector type whose element is integral (clang
+    /// `isValidSizelessVectorForConditionalCondition`, `__SVBool_t`
+    /// included): `q ? t : f` selects element-wise.
+    pub(crate) fn is_sve_condition(&self, q: QualType) -> bool {
+        self.sve_parts(q).is_some_and(|(e, _)| self.ast.types.is_integral(e))
+    }
+
+    /// `c ? t : f` with an SVE vector condition `c` (clang
+    /// `CXXCheckConditionalOperands` + `CheckSizelessVectorConditionalTypes`;
+    /// spec/types.md §5.1). A `void` arm is an error; two SVE arms must
+    /// have the same type, which is the result; one SVE arm goes through
+    /// `CheckSizelessVectorOperands`; two scalar arms get their common
+    /// type, splatted to the SVE vector of the condition's element count.
+    /// The result must have the condition's element count and size.
+    pub(crate) fn sve_conditional(&mut self, c: ExprId, t: ExprId, f: ExprId, loc: Loc) -> ExprId {
+        let c2 = conv::decay(self, c);
+        if self.expr_is_type_dependent(t) || self.expr_is_type_dependent(f) {
+            return self.builder().dependent_conditional(c2, t, f, loc);
+        }
+        for v in [t, f] {
+            if self.ast.types.is_void(self.ety(v)) {
+                let at = self.begin_loc(v);
+                let throw = if self.is_throw_expr(v) { "1" } else { "0" };
+                let msg = self.diag(DiagId::sema_conditional_vector_has_void, at).arg(throw);
+                self.emit(msg);
+                return self.recover_err(&[c, t, f], loc);
+            }
+        }
+        let ct = conv::strip_cv(self, self.ety(c2));
+        let Some((celem, ccount)) = self.sve_parts(ct) else {
+            return self.recover_err(&[c, t, f], loc);
+        };
+        let mut t2 = conv::decay(self, t);
+        let mut f2 = conv::decay(self, f);
+        let lt = conv::strip_cv(self, self.ety(t2));
+        let rt = conv::strip_cv(self, self.ety(f2));
+        let res = match (self.is_sve_vector(lt), self.is_sve_vector(rt)) {
+            (true, true) => {
+                if !self.ast.types.same_type(lt, rt) {
+                    self.vector_diag2(DiagId::sema_conditional_vector_mismatched, lt, rt, loc);
+                    return self.recover_err(&[c, t, f], loc);
+                }
+                Some(lt)
+            }
+            (true, false) | (false, true) => {
+                self.check_sve_vector_operands(&mut t2, &mut f2, loc, false, SveOpKind::Conditional)
+            }
+            (false, false) => self.sve_cond_scalar_arms(ct, ccount, &mut t2, &mut f2, loc),
+        };
+        let Some(res) = res else {
+            return self.recover_err(&[c, t, f], loc);
+        };
+        let Some((relem, rcount)) = self.sve_parts(res) else {
+            return self.recover_err(&[c, t, f], loc);
+        };
+        if rcount != ccount {
+            self.vector_diag2(DiagId::sema_conditional_vector_size, ct, res, loc);
+            return self.recover_err(&[c, t, f], loc);
+        }
+        if self.scalar_bits(relem) != self.scalar_bits(celem) {
+            self.vector_diag2(DiagId::sema_conditional_vector_element_size, ct, res, loc);
+            return self.recover_err(&[c, t, f], loc);
+        }
+        self.builder().conditional(c2, t2, f2, res, loc)
+    }
+
+    /// `CheckSizelessVectorConditionalTypes` with two scalar arms: their
+    /// common type, splatted to the SVE vector of `count` such elements.
+    /// `None` after a diagnostic.
+    fn sve_cond_scalar_arms(
+        &mut self,
+        ct: QualType,
+        count: u32,
+        t2: &mut ExprId,
+        f2: &mut ExprId,
+        loc: Loc,
+    ) -> Option<QualType> {
+        let lt = conv::strip_cv(self, self.ety(*t2));
+        let rt = conv::strip_cv(self, self.ety(*f2));
+        let elem = if self.ast.types.same_type(lt, rt) {
+            lt
+        } else {
+            match conv::usual_arithmetic_conversions_kind(
+                self,
+                *t2,
+                *f2,
+                conv::ArithConvKind::Conditional,
+            ) {
+                Ok((a, b, ty)) => {
+                    (*t2, *f2) = (a, b);
+                    ty
+                }
+                Err(err) => {
+                    self.emit_conv_error(err, loc);
+                    return None;
+                }
+            }
+        };
+        if self.ast.types.as_enum(elem).is_some() {
+            let msg =
+                self.diag(DiagId::sema_conditional_vector_operand_type, loc).arg(self.ty_arg(elem));
+            self.emit(msg);
+            return None;
+        }
+        match self.sve_vector_for_scalar(elem, count) {
+            Ok(vt) => {
+                let pr = ValueCategory::PRValue;
+                *t2 = conv::raw_cast(self, CastKind::VectorSplat, *t2, vt, pr, None);
+                *f2 = conv::raw_cast(self, CastKind::VectorSplat, *f2, vt, pr, None);
+                Some(vt)
+            }
+            // clang finds the tuple type, whose element count is never the
+            // condition's; kiln has no SVE tuple types and names it.
+            Err(Some(tuple)) => {
+                let msg = self
+                    .diag(DiagId::sema_conditional_vector_size, loc)
+                    .arg(self.ty_arg(ct))
+                    .arg(format!("'{tuple}'"));
+                self.emit(msg);
+                None
+            }
+            Err(None) => {
+                let msg = self
+                    .diag(DiagId::sema_conditional_vector_scalar_type_unsupported, loc)
+                    .arg(self.ty_arg(elem))
+                    .arg(self.ty_arg(ct));
+                self.emit(msg);
+                None
+            }
+        }
+    }
+
+    /// The `getScalableVectorType` kind of scalar or element type `q`.
+    fn sve_elem_kind(&self, q: QualType) -> Option<SveElemKind> {
+        let b = self.ast.types.builtin(q)?;
+        Some(if b == BuiltinType::Bool {
+            SveElemKind::Bool
+        } else if b.is_integral() {
+            SveElemKind::Int(conv::rank::builtin_signed(self, b))
+        } else if b == BuiltinType::BFloat16 {
+            SveElemKind::BFloat
+        } else if b.is_floating() {
+            SveElemKind::Float
+        } else {
+            return None;
+        })
+    }
+
+    /// clang `getScalableVectorType(elem, count)`: the SVE vector of
+    /// `count` elements like `elem` (same kind and size), else the name
+    /// of the SVE tuple type of that many (`Err(Some)`), else `Err(None)`.
+    fn sve_vector_for_scalar(
+        &self,
+        elem: QualType,
+        count: u32,
+    ) -> Result<QualType, Option<String>> {
+        let kind = self.sve_elem_kind(elem).ok_or(None)?;
+        let bits = self.scalar_bits(elem).ok_or(None)?;
+        for b in BuiltinType::ALL {
+            let Some((e, n)) = sve_info(b) else { continue };
+            if self.sve_elem_kind(e) != Some(kind) || self.scalar_bits(e) != Some(bits) {
+                continue;
+            }
+            let nf = if count.is_multiple_of(n) { count / n } else { 0 };
+            let tuple =
+                if kind == SveElemKind::Bool { matches!(nf, 2 | 4) } else { (2..=4).contains(&nf) };
+            if nf == 1 {
+                return Ok(b.qual_type());
+            }
+            if tuple {
+                return Err(Some(format!("__clang_sv{}x{nf}_t", sve_tuple_stem(b))));
+            }
+        }
+        Err(None)
     }
 
     /// clang's `CheckSizelessVectorOperands`: converts the operands in

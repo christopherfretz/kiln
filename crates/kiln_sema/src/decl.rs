@@ -827,6 +827,8 @@ impl Sema<'_, '_> {
             if !self.ast.types.effective_quals(params[0].ty).is_empty() {
                 self.error(DiagId::sema_param_with_void_type, params[0].loc);
             }
+            // [dcl.attr.annotation]/1: not on a `void` parameter.
+            self.reject_annotations_in(&params[0].attrs, Some("a parameter of type 'void'"));
             return Vec::new();
         }
         let mut out = Vec::with_capacity(params.len());
@@ -870,6 +872,63 @@ impl Sema<'_, '_> {
             ty = self.ast.types.paren_type(ty);
         }
         ty
+    }
+
+    /// [dcl.fct]/6 (CWG1417): a function type with a cv-qualifier-seq or
+    /// ref-qualifier that `d` (whose decl-specifiers are `ds`) declares
+    /// through a typedef-name or `decltype` (no function declarator) is
+    /// only the type of a non-static member function, of a typedef or
+    /// alias-declaration, of a template type argument or of a type
+    /// parameter's default. Anything else (a non-member function at
+    /// namespace or block scope, a static member function, a friend, a
+    /// parameter, a type-id) is clang's `err_invalid_qualified_function_type`
+    /// in its "of type" form, at the start of the declaration, and the
+    /// qualifiers are dropped (clang `GetFullTypeForDeclarator`). A
+    /// function declarator's own qualifiers are `act_on_function`'s; a
+    /// pointer or reference to such a type is `check_qualified_function`'s.
+    pub fn check_qualified_fn_type(
+        &mut self,
+        ty: QualType,
+        ds: &DeclSpec,
+        d: &Declarator,
+    ) -> QualType {
+        if ds.is_typedef()
+            || matches!(
+                d.site,
+                DeclSite::Alias
+                    | DeclSite::TemplateArg
+                    | DeclSite::TypeParamDefault
+                    | DeclSite::Subst
+            )
+            || d.chunks.iter().any(|c| matches!(c, Chunk::Function { .. }))
+        {
+            return ty;
+        }
+        let Some(p) = self.ast.types.proto(ty).copied() else { return ty };
+        let info = p.info();
+        let (q, r) = (info.this_quals(), info.ref_qual());
+        if q.is_empty() && r == RefQual::None {
+            return ty;
+        }
+        let member = ds.friend.is_none()
+            && match d.qualifier {
+                None => d.ctx == DeclaratorContext::Member,
+                Some(c) => self.ast.decls.record(c).is_some(),
+            };
+        if member && !ds.storage.is_some_and(|(s, _)| s == StorageSpec::Static) {
+            return ty;
+        }
+        let spelled = crate::class::members::method_quals_spelling(q, r);
+        let m = self
+            .diag(DiagId::sema_qualified_fn_type, ds.loc)
+            .arg(u8::from(member))
+            .arg(self.ty_arg(ty))
+            .arg(spelled);
+        self.emit(m);
+        let params = self.ast.types.params(&p).to_vec();
+        let exc = self.ast.types.exc_spec(&p);
+        let info = info.with_this_quals(Quals::NONE).with_ref_qual(RefQual::None);
+        self.ast.types.function(p.ret(), &params, info, exc)
     }
 
     /// The type of `d` given the decl-specifier type `base`
@@ -1529,6 +1588,7 @@ impl Sema<'_, '_> {
         self.declarator_int_recovery = d.ellipsis.is_some();
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         self.declarator_int_recovery = false;
+        ty = self.check_qualified_fn_type(ty, ds, d);
         let recovered = d.ellipsis.is_some() && self.diags.error_count() != errs;
         // [dcl.constexpr]/1, [dcl.constinit]/1: clang `err_invalid_constexpr`.
         let specs = [ds.constexpr, ds.consteval, ds.constinit];
@@ -1595,7 +1655,7 @@ impl Sema<'_, '_> {
     /// default argument or as a pack. (Its cv- and ref-qualifiers are
     /// [`Sema::drop_invalid_fn_quals`]'.) `None`: no explicit object
     /// parameter.
-    fn explicit_object_member(
+    pub(crate) fn explicit_object_member(
         &mut self,
         ds: &DeclSpec,
         params: &[ParamInfo],
@@ -1647,7 +1707,7 @@ impl Sema<'_, '_> {
     /// member function `explicit_object`) quotes them (cv first) at the
     /// first one written and drops them from the type, so an
     /// instantiation does not report them again.
-    fn drop_invalid_fn_quals(
+    pub(crate) fn drop_invalid_fn_quals(
         &mut self,
         ty: QualType,
         d: &Declarator,
@@ -2366,6 +2426,7 @@ impl Sema<'_, '_> {
             && !matches!(ds.storage, Some((StorageSpec::Static, _)));
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         self.declarator_field = false;
+        let ty = self.check_qualified_fn_type(ty, ds, d);
         if head.is_some() {
             if ds.is_typedef() {
                 self.error(DiagId::sema_typedef_template, d.loc);
@@ -4190,6 +4251,7 @@ impl Sema<'_, '_> {
             }
             if !p.attrs.is_empty() {
                 let mut attrs = p.attrs.clone();
+                self.take_annotations(pd, &mut attrs);
                 let range = Span::new(p.range.0, p.range.1);
                 self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
@@ -7475,7 +7537,9 @@ impl Sema<'_, '_> {
                 self.ast.decls.set_access(d, access);
             }
             if !attrs.is_empty() {
-                let _ = self.builder().attach_attrs(d, attrs);
+                let mut attrs = attrs.to_vec();
+                self.take_annotations(d, &mut attrs);
+                let _ = self.builder().attach_attrs(d, &attrs);
             }
             if !scoped && self.in_local_scope() {
                 self.push_local(name, d);
@@ -7535,7 +7599,9 @@ impl Sema<'_, '_> {
             }
         };
         if !attrs.is_empty() {
-            let _ = self.builder().attach_attrs(d, attrs);
+            let mut attrs = attrs.to_vec();
+            self.take_annotations(d, &mut attrs);
+            let _ = self.builder().attach_attrs(d, &attrs);
         }
         if !scoped && self.in_local_scope() {
             self.push_local(name, d);
@@ -9118,6 +9184,7 @@ impl Sema<'_, '_> {
                         | "coro_only_destroy_when_complete"
                         | "optnone"
                         | "minsize"
+                        | "uninitialized"
                         | "trivial_abi"
                 ))
         {
@@ -9868,6 +9935,7 @@ fn attr_kind_of(
         // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
         ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,
         ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
+        ("uninitialized", _, _) if gnu_syntax || clang_scope => AttrKind::UNINITIALIZED,
         // clang `Clang<"trivial_abi">`.
         ("trivial_abi", _, _) if gnu_syntax || clang_scope => AttrKind::TRIVIAL_ABI,
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,

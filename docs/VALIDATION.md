@@ -17,6 +17,20 @@ and perf-sensitive behavior ships with a recorded baseline.
 | libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
 | Feature table | `docs/status/cxx-features.md`, checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every C++23/C++26 paper marked `done` has passing tests and clang 22's `__cpp_*` value |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
+| Reflection perf | `bench/reflect/` (shapes S1-S6 from `cargo xtask gen-reflect`; named explicitly), `cargo xtask bench --scaling <shape>` (spec/bench.md "Reflection shapes", "Scaling sweeps"); manual/nightly on the dev host, not part of `ci` | The §3.8 budgets of docs/plans/m6-reflection.md: `peak_arena` independent of N, linear wall time and RSS, kiln vs GCC 16.1 |
+| External corpora | `cargo xtask test --external <dir>` / `cargo xtask bench --external <dir>` on directories outside the repo (spec/harness.md "External corpora"); manual, never in `ci` | Never crash: private crash reproducers and the reference workload compile or fail cleanly; counts only reach the repo |
+
+**What runs where.** Merge-queue CI (`cargo xtask ci`, both jobs) runs the
+unit tests, the corpus in clang and kiln mode, and the `oven:` counter
+budgets the corpus carries, and every `oracle: gcc` comparison against
+GCC 16.1, the reflection oracle: the jobs run in the `gcc:16.1.0-trixie`
+image with `KILN_GCC=/usr/local/bin/g++` and `KILN_REQUIRE_GCC=1`, so a
+missing GCC fails CI instead of skipping (WP-502; spec/harness.md "GCC
+oracle"). On the dev host, where `scripts/env.sh` sets `KILN_GCC`,
+`cargo xtask ci` and `cargo xtask test` run the same comparisons. Off the queue, by hand or nightly on the dev
+host: `cargo xtask bench` (including `bench/reflect` and the vs-GCC table
+via `--compiler $KILN_GCC`), `--scaling` sweeps, `--external` corpora,
+`cargo xtask libcxx`, `libstdcxx` and `features`.
 
 ## Conformance test format
 
@@ -219,9 +233,18 @@ corpus; spec/harness.md "CI") on every push to `main`, on every pull request and
 merge-queue group (`merge_group`). A newer push to the same ref cancels the
 older run (`concurrency: ci-<ref>`).
 
-The job runs in a `debian:trixie` container on the `ubuntu-24.04-arm`
+The job runs in a `gcc:16.1.0-trixie` container on the `ubuntu-24.04-arm`
 runner: the same aarch64 Debian 13 with Debian's clang 22.1.8 and 19.1.7,
-GCC 14 and libc++ 19 as the development container. The packages are
+GCC 14 and libc++ 19 as the development container, plus GCC 16.1 in
+`/usr/local` (the image is `debian:trixie` by way of `buildpack-deps`).
+GCC 16.1 is only the `oracle: gcc` reference (`KILN_GCC`): clang and
+kiln both still detect Debian's GCC 14 under `/usr/lib/gcc/<triple>/14`
+for libstdc++, because neither looks in `/usr/local`. Its
+`/usr/local/bin/gcc` is `cc` on `PATH` (Rust links with it), and the
+image's `ld.so.conf` puts its libstdc++.so.6 first for every process; both
+are compatible with what Debian's GCC 14 builds. The first action step
+checks the GCC version and compiles a `<meta>` TU with it
+(docs/status/perf.md "WP-502: GCC 16.1 in CI" has the cost). The packages are
 installed in the first step (`clang-19 llvm-19 lld-19 libc++-19-dev
 libc++abi-19-dev clang-22 llvm-22 lld-22`, plus `build-essential procps
 time`). `libc++-22-dev` conflicts with `libc++-19-dev`, so libc++ 22 is
@@ -249,7 +272,7 @@ spec/harness.md). The `-v` search-list test compares with clang++-19 live
 rather than with the reference container's goldens. `check` is the
 required status check; whether `check-x86_64` is too is a branch-rule
 decision. The two jobs stay separate jobs (a matrix would rename the
-required check to `check (…)`). Each installs git, checks out, and runs
+required check to `check (…)`). Each checks out (the image has git) and runs
 the shared composite action `.github/actions/kiln-ci` (toolchain packages,
 Rust 1.99.1, the cache, `cargo xtask ci`), so the steps are written once.
 `ext.c11.atomic/alignment-warning-x86_64-run.cpp` is the x86-64 twin of an
@@ -368,7 +391,12 @@ flags the libc++ runner gives each test, and reports per-test and aggregate
 ratios (time median, geometric mean, p90 and max; memory median and p90)
 with the box load; it is record-only, because only the ratio measured in one
 window means anything on this shared host, and its section of `perf.md` is
-re-recorded at each milestone. The contract is `spec/bench.md`.
+re-recorded at each milestone. The reflection shapes (`bench/reflect/`) are
+measured the same way when named, and `--scaling <shape>` checks their
+growth from N to 4N (4N/N above 4.6x on wall or RSS fails; a growing
+`peak_arena` fails on the shapes whose evaluations do not depend on N);
+both are off-queue, because a ratio of wall times needs a quiet host. The
+contract is `spec/bench.md`.
 
 ## Release candidates
 

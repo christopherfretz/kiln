@@ -431,8 +431,18 @@ fn coro_wrappers_before_passes_match_clang19() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/codegen/coro_await_suspend_o1.cpp");
     let src = src.to_str().unwrap();
     // Pin the triple: clang's default spells the vendor `pc` on some x86
-    // distributions where kiln prints `unknown`.
-    let mut args = vec!["-std=c++26", "-O1", "-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm"];
+    // distributions where kiln prints `unknown`. clang 19 has no C++26
+    // erroneous values, so kiln's fill (of the promise, spec/codegen.md
+    // §7y) is pinned off, as in `ir_vs_clang`.
+    let mut args = vec![
+        "-std=c++26",
+        "-O1",
+        "-Xclang",
+        "-disable-llvm-passes",
+        "-S",
+        "-emit-llvm",
+        "-ftrivial-auto-var-init=uninitialized",
+    ];
     if cfg!(target_arch = "aarch64") {
         args.extend(["--target=aarch64-unknown-linux-gnu", "-moutline-atomics"]);
     } else {

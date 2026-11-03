@@ -7,8 +7,74 @@
 //! the LLVM directory `/usr/lib/llvm-N` (exported to kiln++ as
 //! `KILN_LLVM_DIR`) and the libc++ header directory come from here; the
 //! commands' `--oracle`/`--compiler` flags still override the compiler.
+//!
+//! The GCC oracle (`oracle: gcc` tests; `spec/harness.md` "GCC oracle") is
+//! named by `KILN_GCC` (default `g++-16` on `PATH`); [`gcc_args`] maps a
+//! test's kiln/clang flags to GCC's. `KILN_REQUIRE_GCC=1` (GitHub CI) makes
+//! a missing GCC an infrastructure error instead of dropped comparisons.
 
 use std::path::PathBuf;
+
+/// The environment variable that names the GCC oracle.
+pub const GCC_ENV: &str = "KILN_GCC";
+
+/// The GCC an unset (or empty) `KILN_GCC` means, looked up on `PATH`.
+pub const GCC_DEFAULT: &str = "g++-16";
+
+/// The GCC oracle a `KILN_GCC` value names, and whether it was named
+/// explicitly (an explicit GCC that cannot run is an error; the default
+/// one missing just disables the GCC comparisons).
+pub fn gcc_from(value: Option<&str>) -> (PathBuf, bool) {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => (PathBuf::from(v), true),
+        None => (PathBuf::from(GCC_DEFAULT), false),
+    }
+}
+
+/// The environment variable that makes the GCC oracle mandatory.
+pub const REQUIRE_GCC_ENV: &str = "KILN_REQUIRE_GCC";
+
+/// Whether a `KILN_REQUIRE_GCC` value requires the GCC oracle: exactly `1`,
+/// as `KILN_REQUIRE_LLVM`. Only the command entry points read it
+/// ([`require_gcc_from_env`]), so the harness's own tests never see CI's.
+pub fn require_gcc_from(value: Option<&str>) -> bool {
+    value.map(str::trim) == Some("1")
+}
+
+/// [`require_gcc_from`] of the environment.
+pub fn require_gcc_from_env() -> bool {
+    require_gcc_from(std::env::var(REQUIRE_GCC_ENV).ok().as_deref())
+}
+
+/// A test's `args:` (placeholders already substituted) as GCC 16 takes
+/// them: kiln- and clang-only flags are dropped (`-fclang-compat=`,
+/// `-fkiln-*`, `-fconstexpr-report=`, `-stdlib=`, `-resource-dir`,
+/// `-Xclang <arg>`), and the two limits GCC spells differently are
+/// renamed (`-ferror-limit=N` is `-fmax-errors=N`, `-fconstexpr-steps=N`
+/// is `-fconstexpr-ops-limit=N`). `-freflection`, `-I`, `-D`, `-W...` and
+/// the rest pass through: GCC 16.1 spells reflection `-std=c++26
+/// -freflection` as kiln does.
+pub fn gcc_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "-Xclang" || a == "-resource-dir" {
+            it.next();
+        } else if let Some(n) = a.strip_prefix("-ferror-limit=") {
+            out.push(format!("-fmax-errors={n}"));
+        } else if let Some(n) = a.strip_prefix("-fconstexpr-steps=") {
+            out.push(format!("-fconstexpr-ops-limit={n}"));
+        } else if !(a.starts_with("-fclang-compat=")
+            || a.starts_with("-fkiln-")
+            || a.starts_with("-fconstexpr-report")
+            || a.starts_with("-stdlib=")
+            || a.starts_with("-resource-dir="))
+        {
+            out.push(a.clone());
+        }
+    }
+    out
+}
 
 /// The environment variable that selects the oracle release.
 pub const ENV: &str = "KILN_ORACLE";
@@ -124,6 +190,48 @@ mod tests {
         assert_eq!(o22.filecheck(), "FileCheck-22");
         assert_eq!(o22.llvm_dir(), PathBuf::from("/usr/lib/llvm-22"));
         assert_eq!(o22.libcxx_include(), PathBuf::from("/usr/lib/llvm-22/include/c++/v1"));
+    }
+
+    #[test]
+    fn gcc_selection_and_flag_map() {
+        assert_eq!(gcc_from(None), (PathBuf::from("g++-16"), false));
+        assert_eq!(gcc_from(Some(" ")), (PathBuf::from("g++-16"), false));
+        assert_eq!(gcc_from(Some("/opt/g++")), (PathBuf::from("/opt/g++"), true));
+        assert!(require_gcc_from(Some("1")) && require_gcc_from(Some(" 1 ")));
+        assert!(!require_gcc_from(None) && !require_gcc_from(Some("0")));
+        assert!(!require_gcc_from(Some("")) && !require_gcc_from(Some("yes")));
+        let args: Vec<String> = [
+            "-freflection",
+            "-I",
+            "tests/support",
+            "-fclang-compat=19",
+            "-Xclang",
+            "-verify",
+            "-resource-dir",
+            "/r",
+            "-resource-dir=/r",
+            "-stdlib=libc++",
+            "-fkiln-instantiation-report=json",
+            "-fconstexpr-report=/x",
+            "-ferror-limit=0",
+            "-fconstexpr-steps=100",
+            "-fconstexpr-depth=8",
+            "-DX=1",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        assert_eq!(
+            gcc_args(&args),
+            [
+                "-freflection",
+                "-I",
+                "tests/support",
+                "-fmax-errors=0",
+                "-fconstexpr-ops-limit=100",
+                "-fconstexpr-depth=8",
+                "-DX=1"
+            ]
+        );
     }
 
     #[test]

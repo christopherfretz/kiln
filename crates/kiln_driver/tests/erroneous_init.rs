@@ -1,10 +1,10 @@
 //! C++26 erroneous values at run time (P2795R5, [basic.indet]; spec/codegen.md
-//! §7r): which automatic variables kiln's codegen fills with zero bytes,
-//! under which standard and `-ftrivial-auto-var-init` flags. The cases
-//! here are the kiln-only ones: `tests/codegen/erroneous_init.cpp`
-//! compares the fill itself with clang's `-ftrivial-auto-var-init=zero`,
-//! which (unlike kiln) also fills `[[indeterminate]]` variables and classes
-//! with a non-trivial default constructor.
+//! §7r, §7y): which automatic variables kiln's codegen fills, under which
+//! standard and `-ftrivial-auto-var-init` flags. The cases here are the
+//! kiln-only ones: `tests/codegen/erroneous_init.cpp` and
+//! `tests/codegen/auto_var_init_*.cpp` compare the fill itself with
+//! clang's `-ftrivial-auto-var-init=zero|pattern`, which (unlike kiln's
+//! C++26 default) also fills `[[indeterminate]]` variables.
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
@@ -64,10 +64,12 @@ fn cxx26_fills_by_default() {
     assert!(p.contains("call void @llvm.memset.p0.i64(ptr align "), "{p}");
     assert!(p.contains(" %2, i8 0, i64 64, i1 false), !annotation"), "{p}");
     assert!(ir.contains("!{!\"auto-init\"}"), "{ir}");
-    // [dcl.attr.indet]: no erroneous value; a class whose constructor runs
-    // is initialized by it, not filled first.
+    // [dcl.attr.indet]: no erroneous value. A class whose constructor
+    // leaves a member unwritten is filled first, as clang does.
     assert_eq!(fills(body(&ir, "indet")), 0);
-    assert_eq!(fills(body(&ir, "ctor")), 0);
+    let c = body(&ir, "ctor");
+    assert_eq!(fills(c), 1, "{c}");
+    assert!(c.contains("i8 0, i64 4, i1 false), !annotation"), "{c}");
     // The 4096-byte limit: `e` (4096) is filled, `b` (4097) is not.
     let b = body(&ir, "big");
     assert_eq!(fills(b), 1, "{b}");
@@ -112,10 +114,16 @@ fn max_size_and_remark() {
 
 #[test]
 fn flag_values() {
-    let (code, _, err) = emit("pattern", SRC, &["-ftrivial-auto-var-init=pattern"]);
+    let (code, ir, err) = emit("pattern", SRC, &["-std=c++26", "-ftrivial-auto-var-init=pattern"]);
+    assert_eq!((code, err.as_str()), (Some(0), ""), "{ir}");
+    let p = body(&ir, "plain");
+    assert_eq!(fills(p), 3, "{p}");
+    assert!(p.contains("store i32 -1431655766, ptr %1, align 4, !annotation"), "{p}");
+    assert!(p.contains(" %2, i8 -86, i64 64, i1 false), !annotation"), "{p}");
+    let (code, _, err) = emit("bogus", SRC, &["-ftrivial-auto-var-init=bogus"]);
     assert_eq!(code, Some(1), "{err}");
     assert!(
-        err.contains("unsupported argument 'pattern' to option '-ftrivial-auto-var-init='"),
+        err.contains("unsupported argument 'bogus' to option '-ftrivial-auto-var-init='"),
         "{err}"
     );
     let (code, _, err) = emit("badmax", SRC, &["-ftrivial-auto-var-init-max-size=x"]);

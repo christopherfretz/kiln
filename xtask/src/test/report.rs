@@ -9,9 +9,11 @@ use super::directives::PpCompare;
 use super::runner::{Status, TestResult, indent};
 use crate::bench::record::human_time;
 
-/// Per-status counts.
+/// Per-status counts, how many results are advisory (the GCC oracle's
+/// comparison was dropped; `spec/harness.md` "GCC oracle"), and how many
+/// were compared with the GCC oracle.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Counts(pub BTreeMap<Status, usize>);
+pub struct Counts(pub BTreeMap<Status, usize>, pub usize, pub usize);
 
 impl Counts {
     pub fn of(results: &[TestResult]) -> Self {
@@ -19,7 +21,21 @@ impl Counts {
         for r in results {
             *m.entry(r.status).or_insert(0) += 1;
         }
-        Self(m)
+        Self(
+            m,
+            results.iter().filter(|r| r.advisory.is_some()).count(),
+            results.iter().filter(|r| r.gcc_compared).count(),
+        )
+    }
+
+    /// Results the GCC oracle's verdict or output was compared with.
+    pub fn gcc_compared(&self) -> usize {
+        self.2
+    }
+
+    /// Results whose GCC comparison was dropped (never a failure).
+    pub fn advisory(&self) -> usize {
+        self.1
     }
 
     pub fn get(&self, s: Status) -> usize {
@@ -31,16 +47,20 @@ impl Counts {
     }
 }
 
-/// The line(s) printed for one result. Passes are printed only when verbose;
-/// skips and xfails always (they are tracked debt), with their reason.
+/// The line(s) printed for one result. Passes are printed only when verbose
+/// or advisory; skips and xfails always (they are tracked debt), with their
+/// reason.
 pub fn format_result(r: &TestResult, verbose: bool) -> String {
     let mut s = String::new();
-    if r.status == Status::Pass && !verbose {
+    if r.status == Status::Pass && !verbose && r.advisory.is_none() {
         return s;
     }
     let _ = write!(s, "{:<6} {}", r.status.label(), r.name);
     if let Some(reason) = &r.reason {
         let _ = write!(s, " ({reason})");
+    }
+    if let Some(a) = &r.advisory {
+        let _ = write!(s, " [{a}]");
     }
     if r.updated {
         s.push_str(" [updated .expected]");
@@ -61,11 +81,20 @@ pub fn format_result(r: &TestResult, verbose: bool) -> String {
     s
 }
 
-/// The final summary line.
+/// The final summary line; `A advisory; ` appears before the total only
+/// when a GCC comparison was dropped.
 pub fn format_summary(counts: &Counts, total: usize, elapsed: Duration) -> String {
     let verdict = if counts.failed() { "FAILED" } else { "ok" };
+    let gcc = match counts.gcc_compared() {
+        0 => String::new(),
+        n => format!("{n} compared with gcc; "),
+    };
+    let advisory = match counts.advisory() {
+        0 => String::new(),
+        n => format!("{n} advisory; "),
+    };
     format!(
-        "test result: {verdict}. {} passed; {} failed; {} xfail; {} xpass; {} skipped; {} errors; {} killed; {total} tests in {:.2}s\n",
+        "test result: {verdict}. {} passed; {} failed; {} xfail; {} xpass; {} skipped; {} errors; {} killed; {gcc}{advisory}{total} tests in {:.2}s\n",
         counts.get(Status::Pass),
         counts.get(Status::Fail),
         counts.get(Status::XFail),
@@ -182,6 +211,7 @@ pub fn parity_table(h: &ParityHeader, results: &[TestResult]) -> String {
         let mut c = Counts::default();
         for r in rs {
             *c.0.entry(r.status).or_insert(0) += 1;
+            c.1 += usize::from(r.advisory.is_some());
         }
         // Skipped tests are not counted against the rate.
         let ran = rs.len() - c.get(Status::Skip);
@@ -262,6 +292,8 @@ mod tests {
             details: "why".into(),
             log: vec!["$ cc x.cpp  # exit code 1".into()],
             updated: false,
+            advisory: None,
+            gcc_compared: false,
             elapsed: Duration::ZERO,
         }
     }
@@ -282,6 +314,26 @@ mod tests {
         assert_eq!(
             format_summary(&c, 3, Duration::from_millis(1500)),
             "test result: ok. 1 passed; 0 failed; 1 xfail; 0 xpass; 1 skipped; 0 errors; 0 killed; 3 tests in 1.50s\n"
+        );
+        let mut a = r(Status::Pass);
+        a.advisory = Some("advisory: oracle crashed (internal compiler error)".into());
+        assert_eq!(
+            format_result(&a, false),
+            "PASS   tests/x.cpp [advisory: oracle crashed (internal compiler error)]\n"
+        );
+        let c = Counts::of(&[a.clone(), r(Status::Pass)]);
+        assert!(!c.failed() && c.advisory() == 1);
+        assert_eq!(
+            format_summary(&c, 2, Duration::from_millis(10)),
+            "test result: ok. 2 passed; 0 failed; 0 xfail; 0 xpass; 0 skipped; 0 errors; 0 killed; 1 advisory; 2 tests in 0.01s\n"
+        );
+        let mut g = r(Status::Pass);
+        g.gcc_compared = true;
+        let c = Counts::of(&[g.clone(), g, a]);
+        assert_eq!((c.gcc_compared(), c.advisory()), (2, 1));
+        assert_eq!(
+            format_summary(&c, 3, Duration::from_millis(10)),
+            "test result: ok. 3 passed; 0 failed; 0 xfail; 0 xpass; 0 skipped; 0 errors; 0 killed; 2 compared with gcc; 1 advisory; 3 tests in 0.01s\n"
         );
         assert!(Counts::of(&[r(Status::XPass)]).failed());
         assert!(Counts::of(&[r(Status::Error)]).failed());

@@ -16,6 +16,7 @@
 
 mod absolute_value;
 mod align_redecl;
+mod annot;
 mod asm;
 mod bit_int;
 mod bitfield_constant;
@@ -36,6 +37,7 @@ mod deduce;
 mod deprecated;
 mod empty_body;
 mod enable_if;
+mod entity;
 pub mod except;
 mod expansion;
 pub mod expr;
@@ -79,6 +81,7 @@ mod predefined;
 mod qualified_decl;
 mod range_for;
 mod reflect;
+mod reflect_limit;
 mod reflect_operand;
 mod rtti;
 pub mod scope;
@@ -243,6 +246,10 @@ pub struct Sema<'a, 'sm> {
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
     /// "Predefined identifiers").
     pub clang_compat: u32,
+    /// The `AArch64` `sve` target feature is on (`-march=armv8-a+sve`,
+    /// `-target-feature +sve`): the SVE vector types are usable in
+    /// expressions and as automatic variables (spec/sema.md "SVE").
+    pub sve: bool,
     /// The begin of the nested-name-specifier whose component the parser
     /// is acting on (set around each `act_on_nested_name_*` call): clang
     /// 22's point of instantiation for a class or enumeration completed
@@ -733,6 +740,11 @@ pub struct Sema<'a, 'sm> {
     /// clang's `EST_Uninstantiated`): the first declaration maps to its
     /// pattern; its type carries `ExcSpec::Deferred(pattern)`.
     pub(crate) uninstantiated_exc: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// Function template specializations and members of class template
+    /// specializations whose dependent annotations are substituted when
+    /// needed (spec/annotations.md §5): the specialization maps to its
+    /// pattern.
+    pub(crate) uninstantiated_annots: kiln_source::fx::FxHashMap<DeclId, DeclId>,
     /// The enclosing function's state and the scopes pushed for a member
     /// function definition, saved by `act_on_start_function_def` while a
     /// (local class's or out-of-line) member function body is analysed.
@@ -882,6 +894,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_lifetime_extension: false,
             gnu: false,
             clang_compat: 22,
+            sve: false,
             nns_start: None,
             gnu_lib_builtins: false,
             pack: (0, Vec::new()),
@@ -1008,6 +1021,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             delayed_exc_equiv: Vec::new(),
             unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
+            uninstantiated_annots: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,

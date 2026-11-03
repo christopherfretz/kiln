@@ -187,8 +187,10 @@ impl Sema<'_, '_> {
         if attrs.is_empty() {
             return;
         }
+        let mut attrs = attrs.to_vec();
+        self.take_annotations(ns, &mut attrs);
         let mut kept = Vec::with_capacity(attrs.len());
-        for &a in attrs {
+        for &a in &attrs {
             let attr = *self.ast.attrs.get(a);
             if attr.kind == AttrKind::DEPRECATED && self.ast.decls.get(ns).name().is_empty() {
                 let d = self.diag(DiagId::sema_deprecated_anonymous_namespace, attr.loc);

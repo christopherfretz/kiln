@@ -513,8 +513,23 @@ pub fn record_layout(ast: &Ast, record: DeclId, target: &Target) -> RecordLayout
 /// Lays out `record` and every class it contains by value, storing each
 /// layout not yet cached in `ast.layouts` (keyed by first declaration),
 /// and returns `record`'s.
-pub fn ensure_layout<'a>(ast: &'a mut Ast, record: DeclId, target: &Target) -> &'a RecordLayout {
+///
+/// `None` while `record`'s class is incomplete ([basic.types.general]/5:
+/// no definition yet, or still being defined): its layout is not known,
+/// and a cached one would never be invalidated (spec/abi.md §1).
+pub fn ensure_layout<'a>(
+    ast: &'a mut Ast,
+    record: DeclId,
+    target: &Target,
+) -> Option<&'a RecordLayout> {
     let first = ast.first(record);
+    let complete = ast
+        .definition(first)
+        .and_then(|def| ast.decls.record(def))
+        .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE));
+    if !complete {
+        return None;
+    }
     if ast.layouts.get(first).is_none() {
         let computed: Vec<(DeclId, RecordLayout)> = {
             let mut l = Layouter::new(ast, target);
@@ -525,5 +540,51 @@ pub fn ensure_layout<'a>(ast: &'a mut Ast, record: DeclId, target: &Target) -> &
             ast.layouts.insert(d, layout);
         }
     }
-    ast.layouts.get(first).expect("inserted above")
+    ast.layouts.get(first)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use kiln_ast::decl::{DefinitionBits, TagKind};
+    use kiln_ast::names::DeclName;
+    use kiln_ast::types::{BuiltinType, TypeContext};
+    use kiln_ast::{Ast, DeclHead};
+    use kiln_source::Loc;
+    use kiln_source::symbol::Interner;
+
+    use super::ensure_layout;
+    use crate::target::target;
+
+    /// [basic.types.general]/5: an incomplete class has no layout, so
+    /// `ensure_layout` refuses it, before its definition and inside its
+    /// member-specification, and caches nothing (spec/abi.md §1).
+    #[test]
+    fn ensure_layout_refuses_an_incomplete_class() {
+        let tgt = target("x86_64-unknown-linux-gnu").expect("target");
+        let mut ast = Ast::new(Arc::new(Interner::new()), TypeContext::new(tgt.types.clone()));
+        let name = DeclName::ident(ast.symbols().intern("S"));
+        let tu = ast.tu;
+        let fwd =
+            ast.builder().record(DeclHead::new(tu, name, Loc::INVALID), TagKind::Struct, None);
+        assert!(ensure_layout(&mut ast, fwd, &tgt).is_none(), "declared, not defined");
+        let def =
+            ast.builder().record(DeclHead::new(tu, name, Loc::INVALID), TagKind::Struct, Some(fwd));
+        ast.builder().begin_record_definition(def).expect("def");
+        let x = DeclName::ident(ast.symbols().intern("x"));
+        let _ = ast.builder().field(
+            DeclHead::new(def, x, Loc::INVALID),
+            BuiltinType::Int.qual_type(),
+            None,
+            0,
+        );
+        assert!(ensure_layout(&mut ast, fwd, &tgt).is_none(), "being defined");
+        assert!(ensure_layout(&mut ast, def, &tgt).is_none(), "being defined");
+        assert!(ast.layouts.get(fwd).is_none(), "nothing cached");
+        ast.builder().complete_record_definition(def, DefinitionBits::empty());
+        let l = ensure_layout(&mut ast, fwd, &tgt).expect("complete").clone();
+        assert_eq!((l.size, l.align), (4, 4));
+        assert_eq!(ensure_layout(&mut ast, def, &tgt).map(|l| l.size), Some(4));
+    }
 }

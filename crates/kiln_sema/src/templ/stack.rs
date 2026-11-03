@@ -29,6 +29,9 @@ pub enum FrameKind {
     /// The *noexcept-specifier* of a member of a specialization,
     /// instantiated when needed ([temp.inst]/14, WP-112).
     ExceptionSpec,
+    /// The annotations of a function of a specialization, substituted
+    /// when needed ([dcl.attr.annotation]/4; spec/annotations.md).
+    Annotation,
     /// The definition of a function template specialization (WP-071).
     FunctionSpec,
     /// The initializer of a static data member of a specialization.
@@ -123,6 +126,7 @@ impl FrameKind {
             FrameKind::MemberClass => DiagId::note_template_member_class_here,
             FrameKind::MemberFunction => DiagId::note_template_member_function_here,
             FrameKind::ExceptionSpec => DiagId::note_template_exception_spec_here,
+            FrameKind::Annotation => DiagId::note_template_annotation_here,
             FrameKind::FunctionSpec => DiagId::note_function_template_spec_here,
             FrameKind::StaticDataMember => DiagId::note_template_static_data_member_def_here,
             FrameKind::AliasTemplate => DiagId::note_template_type_alias_instantiation_here,
@@ -159,6 +163,7 @@ impl FrameKind {
             FrameKind::MemberClass => "member-class",
             FrameKind::MemberFunction => "member-function",
             FrameKind::ExceptionSpec => "exception-spec",
+            FrameKind::Annotation => "annotation",
             FrameKind::FunctionSpec => "function",
             FrameKind::StaticDataMember => "static-data-member",
             FrameKind::AliasTemplate => "alias",
@@ -423,6 +428,7 @@ impl Sema<'_, '_> {
             | FrameKind::MemberClass
             | FrameKind::MemberFunction
             | FrameKind::ExceptionSpec
+            | FrameKind::Annotation
             | FrameKind::FunctionSpec
             | FrameKind::StaticDataMember
             | FrameKind::VarTemplateInstantiation
@@ -618,7 +624,7 @@ impl Sema<'_, '_> {
             // arguments (`f<B>` for a member of `A<B>`; an exception
             // specification's frame has them only for a function template
             // specialization).
-            FrameKind::DefaultFunctionArg | FrameKind::ExceptionSpec => {
+            FrameKind::DefaultFunctionArg | FrameKind::ExceptionSpec | FrameKind::Annotation => {
                 let mut s = self.decl_name(f.entity);
                 if let Some(l) = f.args {
                     let names = crate::names::SemaNames::new(self);

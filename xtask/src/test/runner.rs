@@ -18,6 +18,9 @@ use crate::util::oven_report::{self, Report};
 use crate::util::process::{self, MemLimit, Output, Shown};
 use kiln_abi::dump_blocks::{record_layout_blocks, vtable_blocks};
 
+#[path = "gcc.rs"]
+mod gcc;
+
 /// Everything a worker needs; shared read-only between threads.
 #[derive(Debug)]
 pub struct Config {
@@ -33,6 +36,9 @@ pub struct Config {
     pub oracle_kind: CompilerKind,
     /// The oracle's clang version, when it is clang (`requires: clang>=`).
     pub oracle_clang: Option<directives::ClangVersion>,
+    /// The GCC oracle of `oracle: gcc` tests (`KILN_GCC`); `None` drops
+    /// their GCC comparison (`spec/harness.md` "GCC oracle").
+    pub gcc: Option<PathBuf>,
     /// `/usr/lib/llvm-N` of the oracle release: kiln++ runs with it as
     /// `KILN_LLVM_DIR` (`spec/harness.md` "Oracle toolchain").
     pub llvm_dir: PathBuf,
@@ -99,6 +105,13 @@ pub struct TestResult {
     pub log: Vec<String>,
     /// `--update` rewrote this test's `.expected` file.
     pub updated: bool,
+    /// `advisory: oracle crashed (...)`: the GCC oracle crashed, hung or
+    /// gave up, so its comparison was dropped; the status is kiln's alone.
+    pub advisory: Option<String>,
+    /// The GCC oracle compiled the test and its verdict or output was
+    /// compared with kiln's (not dropped as advisory); the summary counts
+    /// these (`spec/harness.md` "Output").
+    pub gcc_compared: bool,
     pub elapsed: Duration,
 }
 
@@ -133,6 +146,8 @@ pub fn run_test(cfg: &Config, case: &TestCase, index: usize) -> TestResult {
         updated: false,
         inst_report: None,
         mem_limit: cfg.mem_limit,
+        advisory: None,
+        gcc_compared: false,
     };
     let (status, reason, details) = t.evaluate();
     if t.dir.exists() {
@@ -145,6 +160,8 @@ pub fn run_test(cfg: &Config, case: &TestCase, index: usize) -> TestResult {
         details,
         log: t.log,
         updated: t.updated,
+        advisory: t.advisory,
+        gcc_compared: t.gcc_compared,
         elapsed: start.elapsed(),
     }
 }
@@ -159,6 +176,10 @@ struct Test<'a> {
     inst_report: Option<String>,
     /// This test's cap: `--mem-limit` lowered by its `mem<=N`.
     mem_limit: Option<MemLimit>,
+    /// Set when the GCC oracle's comparison was dropped ([`TestResult::advisory`]).
+    advisory: Option<String>,
+    /// Set when the GCC oracle gave a verdict ([`TestResult::gcc_compared`]).
+    gcc_compared: bool,
 }
 
 impl Test<'_> {
@@ -200,21 +221,21 @@ impl Test<'_> {
                 format!("not supported by this compiler (kiln-specific `{directive}` directive)");
             return (Status::Skip, Some(reason), String::new());
         }
-        if !spec.modules.is_empty() && kind == CompilerKind::Other {
+        if !spec.modules.is_empty() && !kind.speaks_clang() {
             let reason = "not supported by this compiler (`module:` needs kiln or clang)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
         }
-        if spec.verify && kind == CompilerKind::Other {
+        if spec.verify && !kind.speaks_clang() {
             let reason = "not supported by this compiler (`verify` needs kiln or clang)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
         }
-        if spec.expect == Expect::Ast && kind == CompilerKind::Other {
+        if spec.expect == Expect::Ast && !kind.speaks_clang() {
             let reason = "not supported by this compiler (`expect: ast` needs kiln or clang)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
         }
         if let Some(dump) = DumpKind::of(spec.expect) {
             let name = dump.expect();
-            if kind == CompilerKind::Other {
+            if !kind.speaks_clang() {
                 let reason =
                     format!("not supported by this compiler (`{name}` needs kiln or clang)");
                 return (Status::Skip, Some(reason), String::new());
@@ -243,6 +264,7 @@ impl Test<'_> {
             Expect::Ir => self.dump(&spec, DumpKind::Ir),
             Expect::NoCrash => self.no_crash(&spec),
         };
+        let outcome = self.with_gcc_verdict(&spec, outcome);
         // Budgets are checked once the kind's own checks pass.
         let outcome = outcome.and_then(|()| self.check_oven(&spec));
         let outcome = outcome.and_then(|()| self.check_inst_report(&spec));
@@ -869,6 +891,9 @@ impl Test<'_> {
                     got.describe_end()
                 );
             }
+        }
+        if let Some(gcc) = self.gcc_applies(spec) {
+            self.gcc_run(&gcc, spec, stdin.as_deref(), &got, &mut failures)?;
         }
         if failures.is_empty() { Ok(()) } else { Err(Problem::Fail(failures)) }
     }

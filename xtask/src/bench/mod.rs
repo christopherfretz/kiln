@@ -4,9 +4,10 @@
 //! `spec/bench.md`; the policy background is `docs/VALIDATION.md`.
 
 mod compare;
-mod entry;
+pub(crate) mod entry;
 mod perf_md;
 pub(crate) mod record;
+mod scaling;
 mod slice;
 mod stats;
 #[cfg(test)]
@@ -42,6 +43,17 @@ entries: every bench/<group>/<name>.cpp, plus, only when named explicitly,
                       (record-only: per-test and aggregate ratios against
                       --compare-with, e.g. clang++-22; never judged against
                       baselines)
+  bench/reflect:      the reflection shapes S1-S6 of `cargo xtask gen-reflect`
+
+off-queue modes (spec/bench.md, Scaling sweeps and External corpora):
+  --scaling <shape>        compile gen-reflect shape s1..s6 at N and 4N; report
+                           wall, peak RSS, the constexpr counters and the 4N/N
+                           ratios; fail above 4.6x or when peak_arena grows on
+                           s1/s2/s4/s5 (writes no records)
+  --n <N>                  N of --scaling (default: the shape's default N)
+  --external <dir>         compile every .c/.cpp under <dir> (outside the repo)
+                           once, serially, never-crash: print verdict counts,
+                           total compile time and the largest peak RSS only
 
 options:
   --compiler <path>        compiler to measure (default: build and use a release kiln++)
@@ -100,6 +112,11 @@ pub struct Options {
     pub mem_limit_mib: u64,
     pub verbose: bool,
     pub paths: Vec<PathBuf>,
+    /// `--scaling <shape>` and `--n` (`scaling`).
+    pub scaling: Option<String>,
+    pub scaling_n: Option<usize>,
+    /// `--external <dir>`.
+    pub external: Option<PathBuf>,
 }
 
 impl Default for Options {
@@ -115,6 +132,9 @@ impl Default for Options {
             mem_limit_mib: process::DEFAULT_MEM_LIMIT_MIB,
             verbose: false,
             paths: Vec::new(),
+            scaling: None,
+            scaling_n: None,
+            external: None,
         }
     }
 }
@@ -143,6 +163,14 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--baseline" => o.baseline = Some(PathBuf::from(value("--baseline")?)),
             "--compare-with" => o.compare_with = Some(PathBuf::from(value("--compare-with")?)),
             "--filter" => o.filter = Some(value("--filter")?),
+            "--scaling" => o.scaling = Some(value("--scaling")?),
+            "--external" => o.external = Some(PathBuf::from(value("--external")?)),
+            "--n" => {
+                let v = value("--n")?;
+                o.scaling_n = Some(
+                    v.parse().ok().filter(|&n| n > 0).ok_or_else(|| format!("bad --n `{v}`"))?,
+                );
+            }
             "--runs" => {
                 let v = value("--runs")?;
                 o.runs =
@@ -171,6 +199,17 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             f if f.starts_with('-') => return Err(format!("unknown option `{f}`")),
             _ => o.paths.push(PathBuf::from(arg)),
         }
+    }
+    if o.scaling_n.is_some() && o.scaling.is_none() {
+        return Err("`--n` needs `--scaling`".into());
+    }
+    if o.scaling.is_some() && o.external.is_some() {
+        return Err("`--scaling` and `--external` are separate runs".into());
+    }
+    if (o.scaling.is_some() || o.external.is_some())
+        && (o.record || o.compare_with.is_some() || !o.paths.is_empty())
+    {
+        return Err("`--scaling`/`--external` take no paths, `--record` or `--compare-with`".into());
     }
     Ok(Some(o))
 }
@@ -216,6 +255,8 @@ pub struct Report {
     pub improved: usize,
     pub new: usize,
     pub advisory: usize,
+    /// kiln failures of `xfail(kiln)` entries (an XPASS counts as failed).
+    pub xfail: usize,
     /// Measured entries that are never judged against baselines (the
     /// libc++ slice, `spec/bench.md` "The libcxx-slice entry").
     pub unjudged: usize,
@@ -245,6 +286,9 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
             Some(c) => c.clone(),
             None => build_kiln(&root, &target, "bench", true)?,
         };
+        if opts.scaling.is_some() || opts.external.is_some() {
+            return off_queue(&opts, &root, &target, &compiler);
+        }
         let inputs: Vec<PathBuf> = if opts.paths.is_empty() {
             vec![layout.bench.clone()]
         } else {
@@ -263,6 +307,51 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// `--scaling` and `--external`: no records, no baselines.
+fn off_queue(
+    opts: &Options,
+    root: &Path,
+    target: &Path,
+    compiler: &Path,
+) -> Result<Report, String> {
+    let id = identify(compiler)?;
+    let scratch = scaling::scratch_dir(target);
+    let ok = if opts.scaling.is_some() {
+        scaling::run(opts, &scratch, compiler, &id)
+    } else {
+        external_run(opts, root, &scratch, compiler, id.kind)
+    };
+    let _ = std::fs::remove_dir_all(&scratch);
+    Ok(Report { failing: !ok?, ..Report::default() })
+}
+
+/// `cargo xtask bench --external <dir>`: `cargo xtask test --external`'s
+/// never-crash run, one case at a time and measured.
+fn external_run(
+    opts: &Options,
+    root: &Path,
+    scratch: &Path,
+    compiler: &Path,
+    kind: CompilerKind,
+) -> Result<bool, String> {
+    use crate::test::external;
+    let given = opts.external.as_deref().unwrap_or(Path::new(""));
+    let dir = external::check_outside(given, root)?;
+    std::fs::create_dir_all(scratch)
+        .map_err(|e| format!("cannot create {}: {e}", scratch.display()))?;
+    let probe = RssProbe::detect(scratch);
+    let m = external::Measure { probe: &probe, scratch };
+    let cap = process::MemLimit::from_mib(opts.mem_limit_mib);
+    let (total, summary) = external::run(&dir, compiler, kind, 1, cap, Some(&m))?;
+    if opts.verbose {
+        for (v, name) in &summary.failures {
+            println!("{:<9} {name}", v.label().to_uppercase());
+        }
+    }
+    println!("{}\n{}", summary.line(total), summary.measured_line());
+    Ok(!summary.failed())
 }
 
 /// Shared state of one invocation.
@@ -442,7 +531,7 @@ fn measure_and_report(
     report.failing = report.failed > 0 || (report.regressed > 0 && !opts.record);
     println!(
         "\nbench result: {}. {} entries: {} failed, {} regressed{}, {} improved, {} new, \
-         {} advisory{} ({:.1}s)",
+         {} advisory{}{} ({:.1}s)",
         if report.failing { "FAILED" } else { "ok" },
         report.entries,
         report.failed,
@@ -451,6 +540,7 @@ fn measure_and_report(
         report.improved,
         report.new,
         report.advisory,
+        if report.xfail > 0 { format!(", {} xfail", report.xfail) } else { String::new() },
         if report.unjudged > 0 {
             format!(", {} not judged", report.unjudged)
         } else {
@@ -552,6 +642,21 @@ fn measure_all(
 
 /// Compares the measurements with the baselines of the compiler's kind and
 /// prints the table and the failures. Returns the loaded baseline files.
+/// The baseline file of every judged entry's group.
+fn load_baselines(
+    cx: &Ctx<'_>,
+    entries: &[Entry],
+) -> Result<BTreeMap<String, BaselineFile>, String> {
+    let mut files = BTreeMap::new();
+    for e in entries.iter().filter(|e| !slice::is_slice(&e.id)) {
+        if !files.contains_key(&e.group) {
+            let path = cx.layout.baselines.join(format!("{}.json", e.group));
+            files.insert(e.group.clone(), BaselineFile::load(&path, &e.group)?);
+        }
+    }
+    Ok(files)
+}
+
 fn judge_all(
     opts: &Options,
     cx: &Ctx<'_>,
@@ -562,16 +667,7 @@ fn judge_all(
     oracle_run: Option<&CompilerRun>,
 ) -> Result<(Report, BTreeMap<String, BaselineFile>), String> {
     // Compare with the baselines of the compiler's kind.
-    let mut files: BTreeMap<String, BaselineFile> = BTreeMap::new();
-    for e in entries.iter().filter(|e| !slice::is_slice(&e.id)) {
-        if !files.contains_key(&e.group) {
-            let f = BaselineFile::load(
-                &cx.layout.baselines.join(format!("{}.json", e.group)),
-                &e.group,
-            )?;
-            files.insert(e.group.clone(), f);
-        }
-    }
+    let files = load_baselines(cx, entries)?;
     let mut report = Report { entries: entries.len(), ..Report::default() };
     let mut rows = Vec::new();
     let mut failures = String::new();
@@ -581,13 +677,35 @@ fn judge_all(
             .get(&e.group)
             .and_then(|f| f.entries.get(&e.name))
             .and_then(|k| k.get(test.kind()));
-        match &test_run.entries[&e.id] {
-            Outcome::Failed(why) => {
+        let xfail = specs
+            .get(&e.id)
+            .and_then(|s| s.xfail_kiln.as_deref())
+            .filter(|_| test.id.kind == CompilerKind::Kiln);
+        match (&test_run.entries[&e.id], xfail) {
+            (Outcome::Failed(_), Some(reason)) => {
+                report.xfail += 1;
+                let mut r = row(e, specs.get(&e.id), base, None, &Verdict::Ok);
+                if let Some(status) = r.last_mut() {
+                    *status = format!("xfail ({reason})");
+                }
+                rows.push(r);
+            }
+            (Outcome::Measured(m), Some(reason)) => {
+                report.failed += 1;
+                let _ = writeln!(
+                    failures,
+                    "{} ({}): XPASS: compiled although `xfail(kiln): {reason}`; remove the marker",
+                    e.id,
+                    test.kind()
+                );
+                rows.push(row(e, specs.get(&e.id), base, Some(m), &Verdict::Ok));
+            }
+            (Outcome::Failed(why), None) => {
                 report.failed += 1;
                 let _ = writeln!(failures, "{} ({}): {why}", e.id, test.kind());
                 rows.push(row(e, specs.get(&e.id), base, None, &Verdict::Ok));
             }
-            Outcome::Measured(m) if !judged => {
+            (Outcome::Measured(m), None) if !judged => {
                 report.unjudged += 1;
                 let mut r = row(e, specs.get(&e.id), None, Some(m), &Verdict::Ok);
                 if let Some(status) = r.last_mut() {
@@ -595,7 +713,7 @@ fn judge_all(
                 }
                 rows.push(r);
             }
-            Outcome::Measured(m) => {
+            (Outcome::Measured(m), None) => {
                 let mut t = Thresholds::default();
                 if let Some(spec) = specs.get(&e.id) {
                     t = t.with(&spec.thresholds);

@@ -6,3 +6,6 @@
 
 # cargo xtask bench run records (baselines under bench/baselines are committed)
 /bench/results/
+
+# implementer scratch space (per-WP notes, logs, local binaries); never committed
+/scratchpad/

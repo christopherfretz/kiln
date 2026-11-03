@@ -32,6 +32,7 @@ say which in the PR. A spec change without tests is incomplete.
 | [sema-lambda.md](sema-lambda.md) | kiln_parse, kiln_sema (`lambda`), kiln_oven, kiln_codegen (lambdas) | landed (WP-075) |
 | [consteval-blocks.md](consteval-blocks.md) | kiln_parse, kiln_sema (`consteval_block`, `consteval`), kiln_oven (plain bit) | implemented (WP-473) |
 | [reflection-repr.md](reflection-repr.md) | kiln_ast (`reflect`), kiln_parse, kiln_sema (`reflect_operand`, `consteval_only`) | implemented (WP-472) |
+| [annotations.md](annotations.md) | kiln_parse (`attr`), kiln_sema (`annot`), kiln_ast (`annot`) | implemented (WP-481; queries M6-09) |
 | codegen, driver | | in progress (M2) |
 
 ## Landed sections

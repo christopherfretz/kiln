@@ -174,8 +174,11 @@ clang does. Like clang they are **complete but sizeless**: `size_align` is
 `(0, 0)`, `sizeof`/`alignof`, array elements, fields and non-local
 variables are errors; parameters, returns, pointers, references, template
 arguments and traits work (trivially copyable/trivial/POD and object, but
-not scalar, compound, standard-layout or literal). Because kiln has no
-target-feature flags (no `+sve`), any odr-use of a function or parameter
+not scalar, compound, standard-layout or literal). With the `sve` target
+feature (`-march=armv8-a+sve`, `-mcpu=generic+sve`, `-target-feature
++sve`; spec/driver.md "Target features", WP-459; `Sema::sve`) SVE types
+are usable and none of the following errors are issued. Without it, any
+odr-use of a function or parameter
 whose type involves an SVE type, an automatic SVE variable, or a function
 definition with SVE types is diagnosed "cannot be used in a target without
 sve", exactly as clang without `-target-feature +sve` (`checkTypeSupport`,
@@ -210,11 +213,38 @@ contextually convertible to 'bool'" at the first failing operand, then
 integer one (`svbool_t` counts); `!` and `++`/`--` are errors. A
 subscript of, or arithmetic on, a pointer to a sizeless type is
 "subscript of pointer to sizeless type" at the `[` / "arithmetic on a
-pointer to sizeless type" at the operator. Not yet as clang: the SVE `?:`
-(clang's vector-condition rules); a use of an invalid SVE local where the
-parser classifies the name (statement start, after a `(` that could open
-a type-id) — clang reports it again there, kiln does not; there is no
-`+sve`, so only the no-SVE-target behaviour is reachable. Lowering is
+pointer to sizeless type" at the operator.
+
+`?:` with an SVE condition (WP-459, `sve.rs` `sve_conditional`, clang 22
+`CheckSizelessVectorConditionalTypes`): a condition whose type is an SVE
+vector with an integer element (`svbool_t` counts) selects element-wise;
+any other SVE condition is contextually converted to `bool` and fails. A
+`void` arm (a throw-expression included) is "GNU vector conditional operand
+cannot be void" / "... a throw expression" at that arm. Two SVE arms must
+have one type ("vector operands to the vector conditional must be the same
+type"), which is the result; one SVE arm converts the other as the binary
+operators do. Two scalar arms take their type if equal, else the usual
+arithmetic conversions; an enumeration is "enumeration type 'E' is not
+allowed in a vector conditional"; the result is the SVE vector of that
+element type (integers by signedness and width, `char` by its target
+signedness, `bool` as `svbool_t`, floating types by width) with the
+condition's element count, else the tuple type of that element whose total
+matches ("... and result type '__clang_svint64x2_t' do not have the same
+number of elements"), else "scalar type T not supported with vector
+condition type V" (clang 19 crashes on these, so their tests need clang
+22). The result's element count must equal the condition's and its element
+size the condition's ("vector condition type V and result type R do not
+have the same number of elements" / "... element size"). Dependent arms
+build a dependent conditional, checked at instantiation.
+
+Not yet as clang: a use of an invalid SVE local where the parser
+classifies the name (statement start, conditions, after a `(` that could
+open a type-id, a comma's right operand) is reported again by clang, not
+by kiln (WP-459 deferred it as diagnostic fidelity); an SVE subscript
+`v[i]` is "subscripted value is not an array"; under `+sve`, codegen of
+SVE constants (a scalar splat, `-v`, a vector `?:`) is not implemented
+(IR lowering error), and SVE locals are allocated with alignment 1 where
+clang uses 16 (`svbool_t`: 2). Lowering is
 `<vscale x N x T>` (`__SVCount_t`: `target("aarch64.svcount")`); mangling is
 the vendor-extended `u<len><name>`, a substitution candidate.
 
@@ -321,7 +351,7 @@ libstdc++ 14's `<complex>` uses them where `_Float128` is not
 | `Enum` | D | C | data = first `DeclId` of the enum | |
 | `Complex` | I | C | data = element QualType | GNU `_Complex` (*M4*) |
 | `Atomic` | I | C | data = value QualType | `_Atomic(T)` (WP-154); size is `T`'s rounded up to a power of two when it is at most 16 bytes, alignment is that size (clang's `getTypeInfo` of `AtomicType`); libc++ `<atomic>` uses it via `__c11_atomic_*`. `Sema::act_on_atomic_type` rejects an array, function, reference, atomic, cv-qualified or `_BitInt` operand (clang `BuildAtomicType`; tests `ext.c11.atomic/atomic-specifier.cpp`, `atomic-specifier-bitint.cpp`) |
-| `Vector` | I | C | aux = `VectorKind` (Generic, Neon, NeonPoly, Ext), pairs [element, count] | `vector_size`, `ext_vector_type` (libc++ `simd_utils.h`); built by sema (spec/sema.md §4.5); `sizeof`/`alignof` follow clang 19 `getTypeInfo` (an Ext vector of `bool` is N bits, then: at least 8 bits, rounded up to a power of two, alignment = size capped at the target's max vector alignment); operations (WP-156, `kiln_sema/src/vector_ops.rs`): arithmetic, bitwise, shift and logical operators with scalar splats, comparisons yielding the signed integer vector of the same size (clang `GetSignedVectorType`), subscripts (an element lvalue that cannot be bound or have its address taken), list-initialization, lax casts between vectors and integers of the same total size (never between an integer and an Ext vector; as implicit conversions governed by `-flax-vector-conversions=none|integer|all`, clang's `isLaxVectorConversion`: default `all`, a bare flag `integer`, which allows only integer (vector) to integer (vector), and `none` none; `Sema::lax_vector_conversions`, WP-445), `__builtin_convertvector` and `__builtin_reduce_*`; codegen and the AArch64/x86-64 calling conventions follow clang 19 (`kiln_abi/src/call.rs`); vector `?:` (GNU element-wise and scalar-condition forms) and brace elision of GNU vector members (WP-173; spec/sema.md §4.5), constant evaluation of vector values in the Oven (WP-173; spec/oven.md "Vectors"); `__builtin_shufflevector` (spec/oven.md "Vectors"), ext-vector element access (`.x`, `.xy`, `.s3`, `.hi`; WP-307/312, spec/sema.md §5.19, an `ExtVectorElementExpr`); `bool` ext-vector conditions select on their `<N x i1>` lanes (WP-187); constant evaluation of `bool` ext vectors is not modelled yet (spec/oven.md "Vectors") |
+| `Vector` | I | C | aux = `VectorKind` (Generic, Neon, NeonPoly, Ext), pairs [element, count] | `vector_size`, `ext_vector_type` (libc++ `simd_utils.h`); built by sema (spec/sema.md §4.5); `sizeof`/`alignof` follow clang 19 `getTypeInfo` (an Ext vector of `bool` is N bits, then: at least 8 bits, rounded up to a power of two, alignment = size capped at the target's max vector alignment); operations (WP-156, `kiln_sema/src/vector_ops.rs`): arithmetic, bitwise, shift and logical operators with scalar splats, comparisons yielding the signed integer vector of the same size (clang `GetSignedVectorType`), subscripts (an element lvalue that cannot be bound or have its address taken), list-initialization, lax casts between vectors and integers of the same total size, and between a GNU vector and an Ext vector of the same size (an integer scalar and an Ext vector convert only by a scalar splat), the implicit integer → `bool` Ext vector conversion of the same lane count at `-fclang-compat=22` (WP-453, spec/sema.md §5.28), `__builtin_convertvector` and `__builtin_reduce_*`; codegen and the AArch64/x86-64 calling conventions follow clang 19 (`kiln_abi/src/call.rs`); vector `?:` (GNU element-wise and scalar-condition forms) and brace elision of GNU vector members (WP-173; spec/sema.md §4.5), constant evaluation of vector values in the Oven (WP-173; spec/oven.md "Vectors"); `__builtin_shufflevector` (spec/oven.md "Vectors"), ext-vector element access (`.x`, `.xy`, `.s3`, `.hi`; WP-307/312, spec/sema.md §5.19, an `ExtVectorElementExpr`); `bool` ext-vector conditions select on their `<N x i1>` lanes (WP-187); `bool` Ext vectors are evaluated by the Oven (WP-450/453: lanes, comparisons, `__builtin_convertvector`, bit casts; spec/oven.md "Vectors") except the integer → `bool` vector conversion, which clang 22 does not evaluate either and kiln rejects (WP-466) |
 | `DependentVector` dep | I | S/C | aux = kind, pairs [element, size ExprId / ProfileId] | the size operand as written: the element count for Ext, the byte size for Generic; substitution rebuilds through `Sema::build_vector_type` |
 | `ExtQual` | I | C | pairs [base TypeId, ext-qual word] | reserved: address spaces etc. (M7+) |
 
