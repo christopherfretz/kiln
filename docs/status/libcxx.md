@@ -120,6 +120,25 @@ constructor` (`ranges_replace_copy_if`); 1 `static_assert` failure
 template` (`tuple_size_incomplete.verify`); 1 `not implicitly convertible`
 (`tuple_size_structured_bindings`).
 
+**After WP-416** (libc++ 22's `std-at-least-c++03`..`c++26` lit features,
+`params.py` `std`), on wp/416 merged with main f8e1183d, same flags
+(`-j 4 --mem-limit 3072`), 1501.6 s wall on a loaded host, peak RSS
+676 MiB (`variant.visit/visit_return_type.pass.cpp`, the kiln compile
+step):
+
+| Scope | total | pass | fail | unsupported (driver) | pass rate |
+|---|---:|---:|---:|---:|---:|
+| 21 M4 directories | 2661 | 2614 | 20 | 27 (0) | **99.2%** |
+
+The 53 tests gated on `std-at-least-c++NN` now run: 48 pass and 5 fail,
+none a regression. The new failures: 1 more `static assertion expression
+is not an integral constant expression` (`is_implicit_lifetime.pass`, the
+`.verify` sibling's cause); 2 `'is_pod_v<int>'` / `'is_trivial_v<…>'
+is deprecated` not warned (a deprecated variable template's use);
+1 `returning reference to local temporary object` not diagnosed in
+`<tuple>` (`make_from_tuple.verify`); 1 `no type named 'argument_type'`
+reported as `expected a type` (`variant.hash/hash.depr.verify`).
+
 ## Environment
 
 What `cargo xtask libcxx` detects about the host, and what stays

@@ -231,6 +231,9 @@ impl CodegenJob<'_> {
                 omit_frame_pointer: a.omit_frame_pointer,
                 omit_leaf_frame_pointer: a.omit_leaf_frame_pointer,
             };
+            // Sema sets the level on each evaluation it runs; a unit that
+            // ran none still folds at its level (WP-416).
+            tu.oven.set_clang_compat(opts.clang_compat);
             let (r, warnings) = emit_with_diags(&mut tu.ast, &mut tu.oven, &target, &opts);
             for w in warnings {
                 w.emit(engine);

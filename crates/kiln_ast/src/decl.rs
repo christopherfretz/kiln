@@ -4453,6 +4453,26 @@ pub mod builtin {
     /// `__builtin_nextafterf16b` (GCC; as [`NEXTAFTERF16`]).
     pub const NEXTAFTERF16B: u32 = 2014;
 
+    // ---- WP-416: clang builtins kiln lacked (kiln-private ids). The
+    // alignment builtins and the element-wise math builtins are
+    // `CustomTypeChecking` (sema `builtin_align` / `builtin_elementwise`).
+    /// `__builtin_align_up`.
+    pub const ALIGN_UP: u32 = 2100;
+    /// `__builtin_align_down`.
+    pub const ALIGN_DOWN: u32 = 2101;
+    /// `__builtin_is_aligned`.
+    pub const IS_ALIGNED: u32 = 2102;
+    /// `__builtin_debugtrap`.
+    pub const DEBUGTRAP: u32 = 2103;
+    /// `__builtin_frame_address`.
+    pub const FRAME_ADDRESS: u32 = 2104;
+    /// `__builtin_elementwise_abs`.
+    pub const ELEMENTWISE_ABS: u32 = 2105;
+    /// `__builtin_elementwise_max`.
+    pub const ELEMENTWISE_MAX: u32 = 2106;
+    /// `__builtin_elementwise_min`.
+    pub const ELEMENTWISE_MIN: u32 = 2107;
+
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
     pub const EXTRA: &[Info] = &[
@@ -4466,6 +4486,15 @@ pub mod builtin {
         row(VERBOSE_TRAP, "__builtin_verbose_trap", "vcC*cC*", N | R),
         row(COPYSIGNF16, "__builtin_copysignf16", "hhh", N | C),
         row(IS_WITHIN_LIFETIME, "__builtin_is_within_lifetime", "bv*", N | T | I),
+        // WP-416.
+        row(ALIGN_UP, "__builtin_align_up", "v*.", N | C | T),
+        row(ALIGN_DOWN, "__builtin_align_down", "v*.", N | C | T),
+        row(IS_ALIGNED, "__builtin_is_aligned", "b.", N | C | T),
+        row(DEBUGTRAP, "__builtin_debugtrap", "v", N),
+        row(FRAME_ADDRESS, "__builtin_frame_address", "v*IUi", N),
+        row(ELEMENTWISE_ABS, "__builtin_elementwise_abs", "v.", N | C | T),
+        row(ELEMENTWISE_MAX, "__builtin_elementwise_max", "v.", N | C | T),
+        row(ELEMENTWISE_MIN, "__builtin_elementwise_min", "v.", N | C | T),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19

@@ -9,7 +9,7 @@ use kiln_ast::expr::{BinaryOp, ExprKind};
 use kiln_ast::types::TypeView;
 use kiln_ast::{Ast, ExprId, QualType};
 
-use super::{Compiler, float_code, skip_parens};
+use super::{Compiler, float_code, int_of, skip_parens};
 use crate::kbc::{Op, ak, bi, cmp};
 use crate::softfloat;
 use crate::ty::TyKind;
@@ -973,6 +973,59 @@ impl Compiler<'_> {
                 );
                 op(self, bi::OVERFLOW, sub, [a, b, dst], [0, 0], begin);
                 self.emit_site(Op::Store, ak::ASSIGN, &[p, v, rt.0], e, begin);
+            }
+            // WP-416: clang folds the alignment builtins on an integer
+            // source (`IntExprEvaluator`), checking the alignment (evaluated
+            // first) with its note at the alignment argument; a pointer
+            // source is not folded yet (spec/oven.md "Builtins").
+            id::ALIGN_UP | id::ALIGN_DOWN | id::IS_ALIGNED => {
+                let (x, al) = (arg(0)?, arg(1)?);
+                let xt = self.ety(x);
+                let Some((w, s)) = int_of(self.kind(xt)) else {
+                    self.unsupported(e);
+                    return Some(self.finish_builtin(dst));
+                };
+                let (aw, asg) = self.int_ws(al);
+                let at = self.begin(al);
+                let ws = w | u32::from(s) << 8;
+                let t2 = aw | u32::from(asg) << 8;
+                let b = self.rv(al);
+                op(self, bi::ALIGN, ws | 3 << 9, [dst, b, dst], [0, t2], at);
+                let a = self.rv(x);
+                let k = match bid {
+                    id::ALIGN_UP => 0,
+                    id::ALIGN_DOWN => 1,
+                    _ => 2,
+                };
+                op(self, bi::ALIGN, ws | k << 9, [a, b, dst], [0, t2], at);
+            }
+            // WP-416: clang 22 folds the element-wise `abs` (integer: the
+            // most negative value wraps; floating: `fabs`) and the integer
+            // `max` / `min`; its floating `max` / `min` fail silently. clang
+            // 19 folds none of them (spec/oven.md "Vectors").
+            id::ELEMENTWISE_ABS | id::ELEMENTWISE_MAX | id::ELEMENTWISE_MIN => {
+                if self.o.clang_compat < 22 {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                }
+                let t = self.ety(e);
+                match self.kind(t) {
+                    k @ (TyKind::Int { .. } | TyKind::Bool) => {
+                        let (w, s) = int_of(k).unwrap_or((1, false));
+                        let a = self.rv(arg(0)?);
+                        let b = match arg(1) {
+                            Some(y) => self.rv(y),
+                            None => a,
+                        };
+                        self.int_elementwise(bid, w, s, [a, b], dst, e);
+                    }
+                    TyKind::Float(fk) if bid == id::ELEMENTWISE_ABS => {
+                        let a = self.rv(arg(0)?);
+                        op(self, bi::FP_OP, float_code(fk) | bi::FABS << 4, [a, a, dst], [0, 0], begin);
+                    }
+                    TyKind::Float(_) => self.trap(e, ""),
+                    _ => self.unsupported(e),
+                }
             }
             // clang 19 does not constant-evaluate the vector reductions;
             // clang 22 folds the integer ones (spec/oven.md "Vectors").

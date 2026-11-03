@@ -63,6 +63,15 @@ impl Sema<'_, '_> {
                         self.recheck_shared_ref(x);
                     }
                     let d = self.ast.exprs.decl(x);
+                    // clang `TransformDeclRefExpr` marks a kept node
+                    // referenced, which counts it for
+                    // `-Wunused-but-set-variable` against the discarded
+                    // assignments the instantiated statements subtract.
+                    if kind == ExprKind::DeclRefExpr
+                        && matches!(self.ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar)
+                    {
+                        self.count_var_ref(d);
+                    }
                     if self.ast.exprs.non_odr_use(x) == NonOdrUse::None
                         && self.ast.decls.function(d).is_some()
                     {

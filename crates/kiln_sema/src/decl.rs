@@ -7103,7 +7103,13 @@ impl Sema<'_, '_> {
                 .record(r)
                 .is_some_and(|x| x.defn.contains(DefinitionBits::LAMBDA_CAPTURES))
             {
-                bits = bits.with(DefinitionBits::LAMBDA_CAPTURES);
+                // A closure with a capture has no default constructor
+                // ([expr.prim.lambda.closure]/13), so it is not trivial
+                // (clang `hasTrivialDefaultConstructor` needs
+                // `hasDefaultConstructor`), and not POD.
+                bits = bits
+                    .with(DefinitionBits::LAMBDA_CAPTURES)
+                    .without(DefinitionBits::TRIVIAL_DEFAULT_CTOR);
             }
         }
         let (mut bits, invalid_field) = self.record_field_bits(r, bits);
@@ -9128,6 +9134,18 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(d, &attrs);
         }
+    }
+
+    /// The GNU attributes after the closing brace of class `r`'s
+    /// definition (`struct S { ... } __attribute__((packed));`): clang
+    /// `ParseCXXMemberSpecification` parses them there and
+    /// `ActOnFinishCXXMemberSpecification` applies them to the class
+    /// itself, before it is complete, so `packed` / `aligned` shape its
+    /// layout as when written after the class-key.
+    pub fn act_on_record_trailing_attrs(&mut self, r: DeclId, attrs: &[AttrId]) {
+        let mut attrs = attrs.to_vec();
+        self.check_decl_attrs(r, &mut attrs);
+        self.builder().append_attrs(r, &attrs);
     }
 
     /// clang `handlePreferredName`: `preferred_name` applies to a class

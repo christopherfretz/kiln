@@ -1042,6 +1042,10 @@ impl Sema<'_, '_> {
         let Some(call) = self.build_operator_call(f, found, fop, &order, brs, loc, end) else {
             return OperResult::Done(self.recover_err(written, loc));
         };
+        // clang `DiagnoseUseOfDecl` of the chosen operator function at the
+        // operator (the `(` of a call to an object), its return type
+        // deduced: an SVE parameter or return type without SVE support.
+        self.check_sve_use(f, loc);
         if adl {
             // clang's `IsADLCandidate` (dumped `adl`).
             let mut c = call;

@@ -613,6 +613,11 @@ impl Sema<'_, '_> {
             if let Some((b, rbrace)) = body {
                 let b = self.end_function_body(b, rbrace);
                 if let Some(f) = top.call_op {
+                    // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`
+                    // (the deduced return type included).
+                    if let Some(fty) = self.ast.decls.get(f).ty() {
+                        self.check_sve_support(fty, self.ast.decls.get(f).loc());
+                    }
                     let _ = self.builder().set_body(f, b);
                     // [dcl.constexpr]/3 before C++23 (constexpr_body.rs).
                     if top.explicit_constexpr {

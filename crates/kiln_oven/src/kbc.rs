@@ -455,7 +455,14 @@ pub(crate) mod bi {
     /// `b != 0` and member `sub` of the union of type `t1` at `a` is
     /// (or may be) its active member: one union member access of an
     /// `is_within_lifetime` argument's designator (WP-418).
-    pub const UNION_LIVE: u32 = 26;
+    pub const UNION_LIVE: u32 = 27;
+    /// WP-416: `__builtin_align_up` / `align_down` / `is_aligned` of the
+    /// integer `a` (canonical in width | signed << 8 of sub) to the
+    /// alignment `b` (canonical in `t2`'s width | signed << 8); sub's
+    /// operation << 9 is 0 up, 1 down, 2 `is_aligned` (clang
+    /// `getBuiltinAlignArguments`: a negative or non-power-of-two
+    /// alignment, or one above 2^(width-1), is a fault).
+    pub const ALIGN: u32 = 26;
     /// `std::uncaught_exceptions()` / `__builtin_uncaught_exceptions()`
     /// ([except.uncaught]/1, P3068): the number of exceptions thrown and
     /// not yet caught in this evaluation (a nested evaluation counts its

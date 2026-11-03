@@ -794,6 +794,23 @@ impl Oven {
                     ),
                 };
             }
+            BiFault::AlignArg { lo, hi, w, signed, big } => {
+                let b = u128::from(hi) << 64 | u128::from(lo);
+                let v = if signed { (b as i128).to_string() } else { b.to_string() };
+                if !big {
+                    return format!("requested alignment {v} is not a positive power of two");
+                }
+                let max = 1u128 << (u32::from(w).clamp(1, 128) - 1);
+                let src = site
+                    .e
+                    .and_then(|e| ast.lists.get(ast.exprs.call_args(e)).first().copied())
+                    .map_or_else(String::new, |a| {
+                        Self::qname(ast, ast.exprs.get(ExprId::new(a)).ty())
+                    });
+                return format!(
+                    "requested alignment must be {max} or less for type '{src}'; {v} is invalid"
+                );
+            }
             _ => {}
         }
         let arg_ty = |i: usize, t: OTy| {
@@ -850,7 +867,8 @@ impl Oven {
             | BiFault::CastIndet { .. }
             | BiFault::CastUnrep { .. }
             | BiFault::Align { .. }
-            | BiFault::Lifetime { .. } => String::new(),
+            | BiFault::Lifetime { .. }
+            | BiFault::AlignArg { .. } => String::new(),
         }
     }
 

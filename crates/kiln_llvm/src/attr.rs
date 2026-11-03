@@ -54,6 +54,7 @@ attr_kinds! {
     NoCallback = "nocallback",
     NoCapture = "nocapture",
     NoCfCheck = "nocf_check",
+    NoCreateUndefOrPoison = "nocreateundeforpoison",
     NoDuplicate = "noduplicate",
     NoFree = "nofree",
     NoImplicitFloat = "noimplicitfloat",
