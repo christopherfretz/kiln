@@ -2,8 +2,7 @@
 // finds nothing for, followed by `<`, is assumed to be a template-name;
 // with no call to find a template by argument-dependent lookup it is an
 // undeclared name. Qualified, a non-static member named without an object
-// is diagnosed as such and `<` is the less-than operator (other
-// non-templates: operator-function-id-non-template-args-22.cpp).
+// is diagnosed as such: `<` is then the less-than operator.
 //@ expect: compile-fail
 //@ std: c++23
 //@ strict-diags
