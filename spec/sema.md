@@ -6573,6 +6573,18 @@ same graph.
 
   The `expect: cfg` tests (spec/harness.md "cfg tests") compare its
   shape with clang's.
+- **Titles and `-fclang-compat`.** Each graph is titled with its
+  function's qualified name and `()` (`Sema::cfg_title`, also the
+  `-fkiln-cfg-stats` name). A closure type always prints as `(lambda)`
+  (`lambda(int)::(lambda)::operator()()`), whatever the
+  `-fclang-compat` level. Diagnostics at `-fclang-compat=19` print it as
+  `(anonymous class)`, clang 19's `printQualifiedName`. The dump is
+  different because no clang release has a lambda title to follow: clang's
+  analyzer dumps no lambda call operator. So the title stays the same
+  under either oracle, one golden serves both, and the harness can drop
+  kiln's `(lambda)` graphs from the comparison with the oracle
+  (`cfg_shape::fn_name`). Nothing else in the dump depends on the compat
+  level.
 - **Stats.** `-fkiln-cfg-stats` (a measurement aid, spec/driver.md)
   builds every planned graph and prints one line per body:
   `cfg-stats: 'f' status=Ok blocks=N elems=N edges=N bytes=N build_ns=N`,

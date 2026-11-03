@@ -118,7 +118,8 @@ const LAMBDA: &str = "(lambda)";
 /// The name of the function a signature line declares.
 fn fn_name(sig: &str) -> String {
     // clang's analyzer dumps no lambda call operator; kiln's are only in
-    // the golden.
+    // the golden. kiln titles them `(lambda)` at every `-fclang-compat`
+    // level (spec/sema.md §7.5.1), so this holds under either oracle.
     if sig.contains("(lambda)") {
         return LAMBDA.to_owned();
     }

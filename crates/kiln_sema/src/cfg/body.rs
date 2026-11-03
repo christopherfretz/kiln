@@ -127,7 +127,7 @@ impl Sema<'_, '_> {
         let g = &self.cfg_body.graph;
         let line = format!(
             "cfg-stats: '{}' status={:?} blocks={} elems={} edges={} bytes={} build_ns={ns}\n",
-            self.qualified_decl_name(f),
+            self.cfg_title(f),
             g.status,
             g.blocks.len(),
             g.elems.len(),

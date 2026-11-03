@@ -41,9 +41,22 @@ impl Cfg {
 }
 
 impl Sema<'_, '_> {
+    /// The title of `f`'s graph in `-fkiln-dump-cfg` and
+    /// `-fkiln-cfg-stats`: its qualified name, a closure type printed as
+    /// `(lambda)` whatever the `-fclang-compat` level. clang's analyzer
+    /// dumps no lambda call operator, so the title follows no clang
+    /// release and the goldens stay compat-independent (spec/sema.md
+    /// §7.5.1).
+    pub(crate) fn cfg_title(&self, f: DeclId) -> String {
+        use kiln_ast::types::TypeNames as _;
+        let mut s = String::new();
+        crate::names::SemaNames::new(self).closures_as_lambda().write_decl_name(f, true, &mut s);
+        s
+    }
+
     /// Appends the dump of `cfg` to `out`.
     pub(crate) fn dump_cfg(&self, cfg: &Cfg, out: &mut String) {
-        let name = cfg.func.map_or_else(|| "<body>".to_owned(), |f| self.qualified_decl_name(f));
+        let name = cfg.func.map_or_else(|| "<body>".to_owned(), |f| self.cfg_title(f));
         let _ = writeln!(out, "{name}()");
         if !cfg.ok() {
             let _ = writeln!(out, " (no CFG: {:?})\n", cfg.status);
