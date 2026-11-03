@@ -298,7 +298,9 @@ impl Sema<'_, '_> {
             DeclSite::Alias => site::ALIAS,
             DeclSite::TemplateArg | DeclSite::TypeParamDefault => site::TEMPLATE_ARG,
             DeclSite::RequiresParam => site::REQUIRES_PARAM,
-            DeclSite::Plain if d.ctx == DeclaratorContext::TypeName => site::HERE,
+            DeclSite::Plain | DeclSite::Reflect if d.ctx == DeclaratorContext::TypeName => {
+                site::HERE
+            }
             _ => return None,
         })
     }

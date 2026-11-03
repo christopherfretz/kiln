@@ -374,13 +374,11 @@ impl Sema<'_, '_> {
                 || tys.is_function(q)
                 || tys.is_reference(q)
                 || matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
-                || self.require_complete(q, at)
+                || self.trait_complete(q, at)
             {
                 continue;
             }
-            let msg = self.diag(DiagId::sema_incomplete_type_required, at).arg(self.ty_arg(q));
-            let msg = self.incomplete_note(msg, q);
-            self.emit(msg);
+            self.trait_incomplete(DiagId::sema_incomplete_type_required, at, q);
         }
         self.layout_compatible(a.0, b.0, 0)
     }
@@ -553,10 +551,8 @@ impl Sema<'_, '_> {
         if self.ast.types.same_type(ca, cb) {
             return true;
         }
-        if !self.require_complete(b.0, b.1) {
-            let msg = self.diag(DiagId::sema_incomplete_type_required, b.1).arg(self.ty_arg(b.0));
-            let msg = self.incomplete_note(msg, b.0);
-            self.emit(msg);
+        if !self.trait_complete(b.0, b.1) {
+            self.trait_incomplete(DiagId::sema_incomplete_type_required, b.1, b.0);
             return false;
         }
         crate::conv::bases::is_derived_from(self, derived, base)

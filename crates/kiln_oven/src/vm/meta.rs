@@ -177,6 +177,31 @@ impl Oven {
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
+    /// Element `i` of the `std::meta::info` array at `p` (the pointer
+    /// argument of a `(const info*, size_t)` range intrinsic, so `ctx.elem`
+    /// is `info`; spec/reflection-traits.md §1.3). Reads Oven memory in
+    /// place: no copy of the range is made.
+    ///
+    /// # Errors
+    /// [`MetaError::invalid`] if the pointer's element type is not `info`
+    /// or the element holds no reflection; the evaluator's fault reading
+    /// it (out of bounds, uninitialized).
+    pub fn meta_info_at(
+        &self,
+        p: u128,
+        i: u64,
+        ctx: &MetaCtx,
+    ) -> Result<kiln_ast::ReflectionId, MetaError> {
+        let fault = |f| MetaError { notes: Vec::new(), kind: MetaErrorKind::Fault(OvenFault(f)) };
+        let ct = ctx.elem;
+        if self.types.kind(ct) != crate::ty::TyKind::Reflection {
+            return Err(MetaError::invalid());
+        }
+        let q = self.ptr_add(p as u64, i128::from(i), ct).map_err(fault)?;
+        let v = self.load(q, ct, ak::READ).map_err(fault)?;
+        kiln_ast::ReflectionId::from_bits(v).ok_or_else(MetaError::invalid)
+    }
+
     /// The fault reporting a bridge failure: its first note is the
     /// reason, the rest supporting notes; none is a silent failure.
     fn meta_trap(&mut self, notes: Vec<Note>) -> Fault {
