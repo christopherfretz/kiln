@@ -1359,7 +1359,7 @@ impl Cg<'_> {
         let fn_ty = self.m.types.function(ty, &[ty, ty, ty], false);
         let f = kiln_llvm::intrinsics::intrinsic(&mut self.m, &name, fn_ty)
             .expect("fmuladd declaration");
-        let fa = self.m.attr_set(&[
+        let mut attrs = vec![
             Attr::Flag(AttrKind::NoCallback),
             Attr::Flag(AttrKind::NoFree),
             Attr::Flag(AttrKind::NoSync),
@@ -1367,7 +1367,11 @@ impl Cg<'_> {
             Attr::Flag(AttrKind::Speculatable),
             Attr::Flag(AttrKind::WillReturn),
             Attr::Memory(kiln_llvm::MemoryEffects::all(kiln_llvm::ModRef::None)),
-        ]);
+        ];
+        if kiln_llvm::intrinsics::creates_no_undef_or_poison(&self.m, &name) {
+            attrs.push(Attr::Flag(AttrKind::NoCreateUndefOrPoison));
+        }
+        let fa = self.m.attr_set(&attrs);
         self.m.func_mut(f).attrs.func = fa;
         let c = self.f.fir.push(
             Op::Call {

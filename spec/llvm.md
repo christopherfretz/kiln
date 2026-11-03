@@ -282,6 +282,22 @@ passes must run first (spec/driver.md "IR optimization"). Functions
 holding `llvm.coro.id` carry the `presplitcoroutine` flag attribute,
 which CoroSplit removes.
 
+At `Module::ir_version` 22 or above, the declarations of the intrinsics
+LLVM 22 marks `IntrNoCreateUndefOrPoison` also carry the flag attribute
+`nocreateundeforpoison` (sorted after `nocallback`), as LLVM 22's parser
+attaches it (WP-416): the six `with.overflow`, `ctpop`, `bswap`,
+`bitreverse`, `fshl`/`fshr`, `clmul`, `fabs`, `copysign`, `fma`,
+`fmuladd`, `sqrt`, `powi`, `pow`, `sin`, `cos`, `exp`/`exp2`/`exp10`,
+`log`/`log2`/`log10`, `ldexp`, `frexp`, `floor`, `ceil`, `trunc`, `rint`,
+`nearbyint`, `round`, `roundeven`, `lround`/`llround`/`lrint`/`llrint`,
+`fptrunc.round`, `canonicalize`, `arithmetic.fence`, `is.fpclass`,
+`minnum`/`maxnum`/`minimum`/`maximum`/`minimumnum`/`maximumnum`,
+`smax`/`smin`/`umax`/`umin`, `scmp`/`ucmp`, the four `*.sat` additions and
+subtractions, `fptosi.sat`/`fptoui.sat` and `ptrmask`; not `abs`, `ctlz`,
+`cttz`, the vector reductions or anything else.
+`intrinsics::creates_no_undef_or_poison(m, name)` answers the question
+for a caller of the generic `intrinsic` (kiln_codegen's `llvm.fmuladd`).
+
 The generic `intrinsic(m, name, fn_ty)` declares any other intrinsic but
 cannot know its attributes; the caller must set `attrs` to LLVM's
 built-in set or the printed module is accepted but not a fixed point of
