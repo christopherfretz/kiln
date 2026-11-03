@@ -1487,6 +1487,20 @@ impl Sema<'_, '_> {
         if self.diagnose_member_ambiguity(&found, name, loc) {
             return self.recover_err(&[], loc);
         }
+        // A builtin whose visible declarations are all invalid
+        // redeclarations of it (spec/sema.md §5.4): clang's lookup finds
+        // its implicit declaration too.
+        if qualifier.is_none_or(|q| q == self.ast.tu)
+            && !found.decls.is_empty()
+            && found.decls.iter().all(|&d| {
+                self.kind_of(d) == DeclKind::Function
+                    && self.ast.decls.get(d).flags().contains(DeclFlags::INVALID)
+            })
+            && let Some(sym) = name.as_ident()
+            && let Some(b) = self.lazily_create_builtin(sym, loc)
+        {
+            return self.build_decl_ref(b, loc);
+        }
         let Some(&d) = found.decls.first() else {
             // A builtin is declared in the global namespace on first use,
             // so `::__builtin_memmove` names it too (clang).

@@ -3522,9 +3522,21 @@ impl Sema<'_, '_> {
                     } else {
                         self.diag(DiagId::sema_ovl_static_nonstatic_member, d.name_loc())
                     };
-                    // clang's `getNoteDiagForInvalidRedeclaration`.
+                    // clang's `getNoteDiagForInvalidRedeclaration`: the
+                    // builtin-type note for a builtin.
                     let def = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
-                    let msg = self.note_prev(msg, p, def);
+                    let builtin = self
+                        .ast
+                        .decls
+                        .builtin_id(p)
+                        .and_then(|id| kiln_ast::decl::builtin::info(id).copied());
+                    let msg = match builtin {
+                        Some(info) => {
+                            let loc = self.ast.decls.get(p).loc();
+                            self.builtin_type_note(msg, &info, loc)
+                        }
+                        None => self.note_prev(msg, p, def),
+                    };
                     self.emit(msg);
                 }
             } else {
@@ -5637,6 +5649,15 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name(f));
             let msg = self.note_prev(msg, prev, true);
             self.emit(msg);
+        }
+        // clang `ActOnStartOfFunctionDef`: a non-library builtin cannot be
+        // defined (spec/sema.md §5.4).
+        if let Some(id) = self.ast.decls.builtin_id(f)
+            && let Some(info) = kiln_ast::decl::builtin::info(id)
+        {
+            let loc = self.ast.decls.get(f).loc();
+            self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(info.name));
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         // The return type as written: diagnostics name its typedef.
