@@ -1185,8 +1185,14 @@ impl Sema<'_, '_> {
         if self.unevaluated > 0 && !constant {
             return;
         }
-        if deferred {
+        if deferred && constant {
             self.instantiate_static_member_init(v, loc);
+        } else if deferred {
+            // clang `DoMarkVarDeclReferenced`: an inline static data
+            // member that cannot be constant is queued like any other
+            // definition (its initializer is instantiated by the
+            // end-of-TU drain, in queue order; WP-186).
+            self.queue_instantiation(v, loc);
         } else if constant {
             self.instantiate_static_member_def(v, loc);
         } else {

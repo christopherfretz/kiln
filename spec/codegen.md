@@ -297,9 +297,18 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `cold` / `hot` to the declaration, the definition and direct call
     sites, member calls included (`builtins::cold_hot_attrs`; WP-172,
     `tests/codegen/cold_hot.cpp`; glibc's `abort` is `__COLD`). C library
-    functions recognized by name stay ordinary calls: clang's lowering of
-    a `BuiltinAttr` library call (`memcpy` to `llvm.memcpy`, a folded
-    `strlen("abc")`) is not done (a follow-up);
+    functions recognized by name (spec/sema.md §5.4) stay ordinary calls,
+    except the ones clang's `EmitBuiltinExpr` lowers through their
+    library builtin id: `memcpy` / `memmove` / `memset`, `abs` / `labs` /
+    `llabs`, and `fabs`, `ceil`, `floor`, `trunc`, `round`, `rint`,
+    `nearbyint`, `copysign`, `fmax`, `fmin`, `fma` with their `f` / `l`
+    forms (clang's `GenerateIntrinsics` set; `sqrt` stays a call under
+    `-fmath-errno`) are emitted as their `__builtin_` twin
+    (`DeclArena::lib_twin`, `builtins::lib_intrinsic_twin`; WP-186,
+    `tests/codegen/builtins_lib_intrinsic.cpp`). Not done (follow-ups):
+    clang's -O0 fold of a library call the constant evaluator accepts
+    (`strlen("abc")` is `i64 3`, `memcmp` of literals), clang 22's
+    `modf` to `llvm.modf`, and `-fno-builtin` / `-fno-builtin-<name>`;
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary; an

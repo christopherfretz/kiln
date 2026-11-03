@@ -3056,11 +3056,14 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   before it (WP-270; skipped when counting `I` arguments). Redeclarations inherit them
   (`Ast::has_nothrow_attr` reads the chain). A `NoThrow` callee makes
   a call non-throwing (`can_throw`, so `noexcept(strlen(s))` is
-  true). No `Builtin` attribute is attached, so the call stays an
-  ordinary call: clang's lowering of recognized `memcpy`/`fabs`/`abs`
-  calls to intrinsics and its implicit `format` / `alloc_size`
-  attributes on the library names (`-Wformat*` on `sprintf`) are not
-  modelled; only the `__builtin_` printf rows carry `format` (below).
+  true). No `Builtin` attribute is attached; the first declaration
+  records its `__builtin_` twin instead (`DeclArena::lib_twin`, WP-186),
+  through which codegen lowers the calls clang lowers to intrinsics
+  (`memcpy` to `llvm.memcpy`, `fabs` to `llvm.fabs`; spec/codegen.md §3,
+  "Calls"); sema and the Oven do not read it. clang's implicit `format` /
+  `alloc_size` attributes on the library names (`-Wformat*` on
+  `sprintf`) are not modelled; only the `__builtin_` printf rows carry
+  `format` (below).
 - **GCC's implicit library builtins** (WP-380, `record_gnu_lib_twin`;
   `Sema::gnu_lib_builtins`, set by the driver for `-stdlib=libstdc++`,
   the default): libstdc++'s `<cmath>` double overloads are `using

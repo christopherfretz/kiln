@@ -303,7 +303,12 @@ impl TypeNames for SemaNames<'_> {
     fn write_expr(&self, expr: ExprId, out: &mut String) {
         let n = self.ast.exprs.get(expr);
         match n.kind() {
+            // clang `VisitDeclRefExpr`: the qualifier as written, then the
+            // name (`H<ns::s::S1>`, WP-186).
             ExprKind::DeclRefExpr => {
+                if let Some(q) = self.ast.exprs.decl_ref_extra(expr).and_then(|x| x.qualifier) {
+                    kiln_ast::types::write_nns(&self.ast.types, self, q, out);
+                }
                 out.push_str(&self.simple(self.ast.exprs.decl(expr)).unwrap_or_default());
             }
             ExprKind::ConstantExpr | ExprKind::ImplicitCastExpr => {

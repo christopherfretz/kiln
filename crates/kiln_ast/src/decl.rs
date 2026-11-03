@@ -1616,6 +1616,12 @@ pub struct ColdDeclData {
     /// as an implicit builtin (`ceil` -> `__builtin_ceil`), recorded
     /// under `-stdlib=libstdc++` only (spec/sema.md §5.4).
     pub gnu_lib_twin: ColdMap<DeclId, u32>,
+    /// WP-186: the `__builtin_` twin of a recognized C library function
+    /// (spec/sema.md §5.4, "Library functions"; `memcpy` ->
+    /// `__builtin_memcpy`), on its first declaration, whatever the
+    /// standard library. Codegen lowers a call of the ones clang lowers
+    /// to an intrinsic as the twin (spec/codegen.md §3).
+    pub lib_twin: ColdMap<DeclId, u32>,
     /// The typedef that names an unnamed class or enumeration for linkage
     /// purposes ([dcl.typedef]/9, clang's `TypedefNameForAnonDecl`): the
     /// tag's type prints with the typedef's name.
@@ -1677,6 +1683,7 @@ impl Default for ColdDeclData {
             declarator_end: ColdMap::new("declarator_end"),
             builtin_id: ColdMap::new("builtin_id"),
             gnu_lib_twin: ColdMap::new("gnu_lib_twin"),
+            lib_twin: ColdMap::new("lib_twin"),
             typedef_for_anon: ColdMap::new("typedef_for_anon"),
             decomp_bindings: ColdMap::new("decomp_bindings"),
             binding_decomp: ColdMap::new("binding_decomp"),
@@ -1692,7 +1699,7 @@ impl Default for ColdDeclData {
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 30] {
+    fn rows(&self) -> [MemRow; 31] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1714,6 +1721,7 @@ impl ColdDeclData {
             self.declarator_end.mem_row(),
             self.builtin_id.mem_row(),
             self.gnu_lib_twin.mem_row(),
+            self.lib_twin.mem_row(),
             self.typedef_for_anon.mem_row(),
             self.decomp_bindings.mem_row(),
             self.binding_decomp.mem_row(),
@@ -2112,6 +2120,12 @@ impl DeclArena {
     /// spec/sema.md §5.4; recorded under `-stdlib=libstdc++` only).
     pub fn gnu_lib_twin(&self, d: DeclId) -> Option<u32> {
         self.cold.gnu_lib_twin.get(d).copied()
+    }
+
+    /// The `__builtin_` twin of recognized C library function `d` (its
+    /// first declaration carries it; WP-186, spec/sema.md §5.4).
+    pub fn lib_twin(&self, d: DeclId) -> Option<u32> {
+        self.cold.lib_twin.get(d).copied()
     }
 
     /// The member list of context `ctx` (`None` if `ctx` owns none).

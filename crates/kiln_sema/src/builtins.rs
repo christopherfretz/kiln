@@ -199,6 +199,11 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(info) = self.lib_builtin_info(f) else { return };
+        // WP-186: the twin codegen lowers some calls as (clang keeps the
+        // library builtin id on the declaration).
+        if let Some(twin) = builtin::by_name(&format!("__builtin_{}", info.name)) {
+            let _ = self.ast.decls.cold.lib_twin.insert(f, twin);
+        }
         let loc = self.ast.decls.get(f).loc();
         for (bit, kind) in [
             (builtin::attr::NOTHROW, AttrKind::NOTHROW),
