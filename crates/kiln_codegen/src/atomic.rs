@@ -299,10 +299,13 @@ impl Cg<'_> {
             // clang `AtomicInfo::convertToAtomicIntPointer`: an operand
             // whose memory type is not as wide as the atomic one is copied
             // into an atomic-sized temporary first.
-            // The padding is zeroed first (clang 22; clang 19 left it
-            // uninitialized, so a padded compare-exchange could fail on
-            // garbage).
+            // At `-fclang-compat=22` the padding is zeroed first and a
+            // failed compare-exchange writes the old value back to
+            // `*expected` itself (C11 7.17.7.4p2); clang 19 did neither,
+            // so a padded compare-exchange could fail on garbage
+            // (spec/codegen.md §6a).
             let abits = size * 8;
+            let c22 = self.opts.clang_compat >= 22;
             let is_cx = matches!(form, Form::C11CmpXchg | Form::GnuCmpXchg);
             for (i, (slot, q)) in
                 [(&mut ops.val1, src[0]), (&mut ops.val2, src[1])].into_iter().enumerate()
@@ -312,11 +315,11 @@ impl Cg<'_> {
                 if bits != abits {
                     let t = self.temp(atomic_q);
                     let n = abits.min(bits) / 8;
-                    if bits < abits {
+                    if c22 && bits < abits {
                         self.memset(t, 0, abits / 8, false);
                     }
                     self.memcpy(t, a.v, a.align, n, false);
-                    if is_cx && i == 0 {
+                    if c22 && is_cx && i == 0 {
                         ops.expected_back = Some((a.v, a.align, n));
                     }
                     *slot = Some(Addr { ty: op_ty, ..t });

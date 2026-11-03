@@ -837,11 +837,13 @@ The normative description is spec/driver.md "Code generation". In short:
   choices (atomic temporaries, `select` for vector `?:`, constant-folded
   reductions, `undef` widening shuffles, `delete` block order). clang
   22's IR for a `bool` vector element store fails verification
-  (`vector_ops`). The exception goes the other way: a padded `_Atomic`
-  operand's padding is zeroed (P0528) and a failed compare-exchange
-  writes the old value back to `*expected` (C11 7.17.7.4p2) at every
-  level, as clang 22 does. clang 19 did neither, so `atomic_padded` is an
-  oracle-19 `Structure` deviation. Following the rest under
+  (`vector_ops`). At `-fclang-compat=22` (only), as clang 22 does, a
+  padded `_Atomic` operand's atomic-sized temporary is zeroed before the
+  operand is copied in (P0528), and a failed compare-exchange writes the
+  old value back to `*expected` itself (C11 7.17.7.4p2) and not only to
+  that temporary (`convertToAtomicIntPointer`, WP-411). clang 19 does
+  neither, and nor does kiln below 22, so `atomic_padded` is exact under
+  both oracles. Following the rest under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
   "Residual").
 - **x86_64 frame pointer above `-O0` (WP-397).** clang omits
@@ -943,11 +945,12 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 | `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors), on definitions, declarations and calls, before `noundef` | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
 | AArch64 `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
 | no empty `!llvm.linker.options` | compat ≥ 22 | `!llvm.linker.options = !{}` |
+| a padded `_Atomic` operand's atomic-sized temporary zeroed before the copy, and a failed compare-exchange's old value copied back to `*expected` (`atomic.rs`, WP-411; `tests/codegen/atomic_padded.cpp`) | compat ≥ 22 | the temporary's padding left uninitialized; the old value stored only to the temporary |
 
 x86-64's data layout and `"frame-pointer"="all"` are the same in both.
 The `xtask test` harness runs kiln at the oracle's compat level with the
 oracle's LLVM (spec/harness.md "Oracle toolchain"), so the oracle-22 legs
-see all six. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
+see all seven. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
 compat), `sig_attrs`, `target_attrs` and `trailer`. Not yet: clang 22's
 `captures(none)` for `nocapture` on intrinsic declarations (LLVM 21+
 syntax; `llvm.memcpy`/`llvm.memset`), `!nonnull`/`!align` on loads of a
