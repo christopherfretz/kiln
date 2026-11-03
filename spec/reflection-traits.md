@@ -151,10 +151,11 @@ parity is out of scope.
   P2996R13: the result "represents the type denoted by" the associated
   member typedef; a type, not an alias, is returned). So
   `remove_const(^^const Alias) == ^^int` for `using Alias = int;`, and
-  `common_type({^^A, ^^B})` is `^^std::common_type_t<A, B>`'s canonical
-  type. No transformation retains an alias.
-- WP-472's alias reflections (a reflection that keeps the alias) change
-  only operands (§1.4), not results.
+  `common_type({^^A, ^^B})` is the type `std::common_type_t<A, B>` names.
+  No transformation retains an alias.
+- `^^` keeps a top-level alias (WP-472: `^^std::common_type_t<A, B>`
+  reflects the alias), so a test compares a result with
+  `is_same_type(r, ^^Alias)` (or `dealias`, WP-476), not `==`.
 
 ## 5. Contract table
 
@@ -198,6 +199,11 @@ library template's own requirements (§1.2). Result: **b** `bool`, **z**
 | `tuple_element(I, T)`, `variant_alternative(I, T)` | `std::X<I, T>::type` | L | i |
 | `type_order` | — (follow-up: needs `std::strong_ordering`) | — | — |
 
+An operand may be a cv- or ref-qualified function type (`^^FnC` for
+`using FnC = int() const;`, or `^^int() const`): the operand of `^^`
+declares nothing, so [dcl.fct]/6 does not restrict it (`DeclSite::Reflect`;
+GCC 16.1 agrees; `reflect-qualified-function-type{,-neg}.cpp`).
+
 All 121 rows of `kiln_oven/src/meta/traits.rs` (111 IS signatures and the
 10 `(data, n)` rows of §1.3) are `Stable` and owned by WP-477.
 
@@ -206,7 +212,8 @@ All 121 rows of `kiln_oven/src/meta/traits.rs` (111 IS signatures and the
 `tests/conformance/meta.reflection.traits/`: `categories.cpp`,
 `properties.cpp`, `operations.cpp`, `queries.cpp`, `relations.cpp`,
 `transformations.cpp`, `library.cpp`, `tuple-variant.cpp`,
-`failures-neg.cpp`, `budget.cpp`, and the generated `traits-zoo.cpp`
+`failures-neg.cpp`, `budget.cpp`, `reflect-qualified-function-type.cpp`
+and its `-neg` (`oracle: gcc`), and the generated `traits-zoo.cpp`
 (`is_X_type(^^T) == std::is_X_v<T>` over a type zoo, kiln only) with
 `traits-zoo-rhs.cpp` (`std::is_X_v<T> == V`, V from clang 22,
 `min-oracle: 22`), both written by `gen/gen_zoo.py`.
