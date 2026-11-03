@@ -3317,11 +3317,20 @@ categories, compared with clang 22 and clang 19 on both targets).
   parallel loops; calls to `memory(none)` callees skipped), exact against
   clang 19 and 22 (`tests/codegen/loop_parallel{,_o1}.cpp`;
   `loop_parallel_jam.cpp` is oracle 22 only, as clang 19 makes
-  `followup_inner` distinct).
-- **Not modelled**: an instruction placed by `Fir::insert_before` /
-  `insert_after` gets no access group (clang's `new X(..., InsertPt)`
-  also bypasses `InsertHelper`, but not every kiln insert mirrors one);
-  the clang 19 distinct `followup_inner`; `"; No predecessors!"`
+  `followup_inner` distinct). An instruction kiln places away from the
+  insertion point follows how clang makes it (WP-492): one made by
+  `new X(.., InsertPt)` or appended directly (`Fir::insert_before`,
+  `insert_after`, `insert_before_last`, `push_in`: the `cleanup.cond`
+  flag stores of `setBeforeOutermostConditional` and
+  `SetupCleanupBlockActivation`, the branch fixups' `cleanup.dest.slot`
+  stores, the `cleanup.dest` load of a cleanup's exit switch, the
+  `tmp.exprcleanup` spills of a `CGBuilderTy(CGM, ..)`) gets no access
+  group; one made by the function's builder at a moved insertion point
+  (`Fir::builder_insert_before_last`: the `llvm.lifetime.start` of a
+  full-expression temporary in a conditional branch, put at the
+  outermost conditional's start) gets the active one
+  (`tests/codegen/loop_parallel_inserts{,_o1}.cpp`).
+- **Not modelled**: the clang 19 distinct `followup_inner`; `"; No predecessors!"`
   comments; vtable hiding (`isVTableHidden`: it reads the visibility of
   the RTTI and of undefined methods, and kiln has no visibility model);
   labelled structors of a

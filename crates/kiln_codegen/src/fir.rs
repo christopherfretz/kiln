@@ -770,6 +770,20 @@ impl Fir {
         V::I(n)
     }
 
+    /// [`Fir::insert_before_last`] through the function's builder (clang
+    /// `Builder.restoreIP(Block, Block->back())` then `Builder.CreateX`):
+    /// `LoopInfoStack::InsertHelper` gives it the active access group,
+    /// as [`Fir::push`] does.
+    pub fn builder_insert_before_last(&mut self, b: Blk, op: Op, ty: TypeId) -> V {
+        let grouped = op.may_access_memory();
+        let v = self.insert_before_last(b, op, ty);
+        if let (true, Some(k), Some(g), V::I(n)) = (grouped, self.access_kind, self.access_group, v)
+        {
+            self.insts[n as usize].md.push((k, g));
+        }
+        v
+    }
+
     /// Inserts `op` where LLVM's `CGBuilderTy(Inst->getParent(),
     /// std::next(Inst))` would after the instruction `at`: right after it,
     /// or for an `invoke` at the first insertion point of its normal
