@@ -365,10 +365,13 @@ static member or static member template (clang's `UnresolvedMemberExpr` is
 then of overloaded type); `f` of only non-static members, or with a
 member-pointer target, is "reference to non-static member function must be
 called" with the candidates as "possible target for call", and `&(f)` is
-"cannot create a non-constant pointer to member function". (clang lists
-class members newest first inside a member function defined in the class,
-in declaration order out of line; kiln uses declaration order.) Tests:
+"cannot create a non-constant pointer to member function". The
+"does not match" notes follow clang's lookup order: inside a member
+function defined in its class the class scope is still open and finds the
+members newest first (`in_inline_member_body` reverses the set), out of
+line the class's lookup table gives declaration order. Tests:
 `over.over/implicit-member-template-address.cpp`,
+`over.over/implicit-member-note-order.cpp`,
 `tests/codegen/implicit_member_template_address.cpp`, and
 `over.over/implicit-member-static-target.cpp` (libc++ 22 `<format>`
 `__allocating_buffer` passing `__prepare_write` to its base).

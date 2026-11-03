@@ -119,6 +119,20 @@ impl Sema<'_, '_> {
             .collect()
     }
 
+    /// Whether the current context is in the body of a member function
+    /// defined inside its class (lexically there, not out of line).
+    fn in_inline_member_body(&self) -> bool {
+        let Some(f) = self.enclosing_function(self.ctx) else { return false };
+        let n = self.ast.decls.get(f);
+        matches!(
+            n.kind(),
+            DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion
+        ) && self.ast.decls.lexical_ctx(f) == n.ctx()
+    }
+
     /// The name of the overload set `key` (see [`Self::set_candidates`]).
     fn set_name(&self, key: ExprId) -> String {
         match self.ovl.members.get(&key) {
@@ -509,7 +523,14 @@ impl Sema<'_, '_> {
             }
             (ule, matches)
         };
-        let cands = self.set_candidates(ule);
+        let mut cands = self.set_candidates(ule);
+        if self.ovl.members.contains_key(&ule) && self.in_inline_member_body() {
+            // clang finds the name through the class scope still open
+            // around an inline member body (its `IdResolver` chain, the
+            // last declared first); out of line, through the class's
+            // lookup table, in declaration order.
+            cands.reverse();
+        }
         let name = self.set_name(ule);
         let loc = self.begin_loc(ule);
         if matches.len() > 1 {
