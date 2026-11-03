@@ -177,12 +177,49 @@ impl Cg<'_> {
         } else {
             self.emit_ignored(op)?;
         }
+        self.vla_bytes(q).map(Some)
+    }
+
+    /// The size in bytes of the variable length array type `q`: its
+    /// element count scaled (`mul nuw`) by its non-variable element's
+    /// size (clang's `sizeof` and pointer-difference divisor).
+    pub(crate) fn vla_bytes(&mut self, q: QualType) -> R<V> {
         let (n, elem) = self.vla_size(q)?;
         let esz = self.size_align(elem).0;
         if esz == 1 {
-            return Ok(Some(n));
+            return Ok(n);
         }
         let s = self.i64c(i128::from(esz));
-        Ok(Some(self.bin(BinOp::Mul, Flags::NUW, s, n)))
+        Ok(self.bin(BinOp::Mul, Flags::NUW, s, n))
+    }
+
+    /// clang `emitPointerArithmetic` / `EmitScalarPrePostIncDec` on a
+    /// pointer to the variable length array type `q`: the `i64` index
+    /// `idx` (already negated for a subtraction) scaled (`mul nsw`) by
+    /// `q`'s element count, and the IR type of `q`'s non-variable element
+    /// the GEP steps over. `None` when `q` is not a variable length array.
+    pub(crate) fn vla_pointer_step(&mut self, q: QualType, idx: V) -> R<Option<(V, LTy)>> {
+        if !self.is_vla(q) {
+            return Ok(None);
+        }
+        let (n, elem) = self.vla_size(q)?;
+        let ty = self.mty(elem);
+        Ok(Some((self.bin(BinOp::Mul, Flags::NSW, idx, n), ty)))
+    }
+
+    /// The step of `++`/`--` on a pointer to the variable length array
+    /// type `q`: its element count, negated (`sub nsw 0, n`) for `--`,
+    /// and the IR element type; `None` when `q` is not a variable length
+    /// array (clang `EmitScalarPrePostIncDec`, `vla.negsize`).
+    pub(crate) fn vla_inc_step(&mut self, q: QualType, inc: bool) -> R<Option<(V, LTy)>> {
+        if !self.is_vla(q) {
+            return Ok(None);
+        }
+        let (mut n, elem) = self.vla_size(q)?;
+        if !inc {
+            let z = self.i64c(0);
+            n = self.bin(BinOp::Sub, Flags::NSW, z, n);
+        }
+        Ok(Some((n, self.mty(elem))))
     }
 }

@@ -142,6 +142,11 @@ pub struct Parser<'a, 'sm> {
     /// unexpanded pack (or `auto`): a `...` before its `)` belongs to the
     /// declarator, not the parameter list ([dcl.fct]/14).
     pub(crate) pack_hint: bool,
+    /// The declarator being parsed is a handler's exception-declaration,
+    /// whose direct declarator takes a misplaced `...` (clang
+    /// `ParseDirectDeclarator` consumes one wherever a name may follow;
+    /// sema rejects it). Taken by the first direct declarator.
+    pub(crate) catch_declarator: bool,
     /// The type-constraint location of the constrained placeholder the
     /// last type-id contained (its decl-specifier's, or one in its
     /// trailing return types), for the enclosing declarator's
@@ -307,6 +312,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             greater_is_op: true,
             greater_off_depth: 0,
             pack_hint: false,
+            catch_declarator: false,
             type_id_constraint: Loc::INVALID,
             param_typename: ParamTypename::Implicit,
             param_recovery: None,

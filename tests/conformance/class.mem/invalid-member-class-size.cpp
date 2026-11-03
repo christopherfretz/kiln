@@ -8,20 +8,19 @@
 //@ strict-diags
 //@ std: c++26
 //@ args: -ferror-limit=0
-//@ xfail(kiln): an invalid class keeps its partial layout: the size-1 rule belongs in kiln_abi's Layouter (the oven's sizeof reads it) and the class is not marked invalid at its closing brace (WP-392 follow-up)
-//@ diag: 25:26 error "unknown type name 'undeclared_t'"
-//@ diag: 26:15 error "static assertion failed due to requirement 'sizeof(A) == 1'"
-//@ diag: 26:25 note "expression evaluates to '8 == 1'"
-//@ diag: 27:19 error "unknown type name 'undeclared_t'"
-//@ diag: 28:15 error "static assertion failed due to requirement 'sizeof(B) == 1'"
-//@ diag: 28:25 note "expression evaluates to '8 == 1'"
-//@ diag: 29:25 error "'b' declared as an array with a negative size"
-//@ diag: 31:24 error "field has incomplete type 'void'"
-//@ diag: 33:23 error "bit-field 'b' has negative width (-1)"
-//@ diag: 35:19 error "unknown type name 'undeclared_t'"
-//@ diag: 41:23 error "duplicate member 'a'"
-//@ diag: 41:16 note "previous declaration is here"
-//@ diag: 43:18 error "unknown type name 'undeclared_t'"
+//@ diag: 24:26 error "unknown type name 'undeclared_t'"
+//@ diag: 25:15 error "static assertion failed due to requirement 'sizeof(A) == 1'"
+//@ diag: 25:25 note "expression evaluates to '8 == 1'"
+//@ diag: 26:19 error "unknown type name 'undeclared_t'"
+//@ diag: 27:15 error "static assertion failed due to requirement 'sizeof(B) == 1'"
+//@ diag: 27:25 note "expression evaluates to '8 == 1'"
+//@ diag: 28:25 error "'b' declared as an array with a negative size"
+//@ diag: 30:24 error "field has incomplete type 'void'"
+//@ diag: 32:23 error "bit-field 'b' has negative width (-1)"
+//@ diag: 34:19 error "unknown type name 'undeclared_t'"
+//@ diag: 40:23 error "duplicate member 'a'"
+//@ diag: 40:16 note "previous declaration is here"
+//@ diag: 42:18 error "unknown type name 'undeclared_t'"
 struct A { int a; static undeclared_t s; int c; };
 static_assert(sizeof(A) == 1);
 struct B { int a; undeclared_t f(); int c; };

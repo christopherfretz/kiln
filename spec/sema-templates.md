@@ -595,6 +595,14 @@ instantiation is not a definition:
   the 'template' keyword" at the `{`/`=`/`,`, and the `template` is
   ignored (a plain declaration or definition follows).
 Test `tests/conformance/temp.explicit/instantiation-with-definition.cpp`.
+After a template-id declarator-id a `(` always starts a parameter clause
+(clang `Declarator::mayBeFollowedByCXXDirectInit` is false for a
+non-identifier name; parse.md §2): `template int t<char>(1);` and
+`template<> int t<char>(1);` are function declarators. That gives
+"expected parameter declarator" and "expected ')'" at the `1`, then
+"explicit instantiation of 't' does not refer to a function template,
+…" or "no function template matches function template specialization
+'t'" (WP-406). Test `temp.explicit/template-id-paren-is-function.cpp`.
 
 **Friends.** `template<class U> friend struct B;`,
 `friend void f<>(T);` (a friend specialization), and
@@ -2302,9 +2310,27 @@ impl Sema<'_, '_> {
   pointing at the point of use; `TemplState.deduce_poi` is a qualified
   callee's name, where clang marks it referenced); clang 19 replays the
   bare warning, so the notes are dropped under `-fkiln-compat=19`.
-  A failed deduction drops them. Gap: the warnings of an explicit
-  substitution (`&f<volatile int>`) are dropped, because the SFINAE frames
-  are popped per deduction phase.
+  A failed deduction drops them. One deduction collects the warnings of
+  all its phases (clang's single `TemplateDeductionInfo`): `deduce_spec`
+  appends what each SFINAE frame held (`in_sfinae_held`) to one list, so
+  the explicit-argument substitution's come before the signature's.
+  For a target type, and for a template-id naming one specialization
+  without a call (`&f<volatile int>` with `auto`, `decltype`), the
+  explicit phase substitutes the whole function type. clang
+  `BuildFunctionType` reports that at the template's name. In clang 22
+  its note is "while substituting explicitly-specified template
+  arguments into function template 'f' ", with an empty argument list,
+  so it ends in a space. `keep_deduction_warnings` stores the list only
+  on success. If the specialization already has an entry, the list is
+  stored only when the specialization was formed by this deduction;
+  otherwise it is dropped. clang stores only into an empty slot. An
+  emitted entry stays, empty, so a second `&n<volatile int>` or a later
+  call reports nothing. Test `depr.volatile.type/volatile-return-funcaddr{,-19}.cpp`.
+  Gap: the parser resolves a template-id that is not called to its
+  specialization before the target type is known
+  (`resolve_single_template_id`). So `int (*)() = &f<volatile int>`
+  reports the held warnings and a conversion error, where clang
+  reports "address of overloaded function 'f' does not match".
 - Fatal errors are always reported: the depth limit and stack
   exhaustion.
 
@@ -3449,14 +3475,22 @@ The sites, as clang:
   an expansion and fine);
 - "exception type contains …" at the declarator-id (or the type) of a
   handler (`diagnose_unexpanded_type_written`; the handler type becomes
-  `int`);
+  `int`). A `...` in the handler's direct declarator is parsed
+  (`Parser::catch_declarator`, clang `ParseDirectDeclarator`) and is
+  "only function and template parameters can be parameter packs" at the
+  ellipsis, before that check
+  (`except.handle/exception-decl-ellipsis.cpp`);
+- "expression contains …" at the operand of a computed `goto *e`
+  (`act_on_indirect_goto`), before the computed goto is reported
+  unsupported (`stmt.goto/computed-goto-unexpanded-pack.cpp`);
 - "initializer contains …" for a local variable's initializer.
 Outside a lambda these sites check every unexpanded pack (template
 definitions); during instantiation they do not run. Tests
 `expr.prim.lambda/errors-lambda-local-pack-unexpanded.cpp`,
-`temp.variadic/p12-unexpanded-statement-sites.cpp`. Not done: a computed
-`goto *xs` (not supported), and `catch (T...)` ("only function and
-template parameters can be parameter packs" is a parse error in kiln).
+`temp.variadic/p12-unexpanded-statement-sites.cpp`. Not done: a `...`
+in any other non-parameter declarator (`T... x;` in a block, a member,
+a variable template). clang reports the same error there; kiln reports
+"expected unqualified-id". Also `catch (T(...))`.
 At instantiation an `INVALID` pattern declaration is not instantiated:
 its `DeclStmt` fails silently and ends its compound statement (clang's
 `SubstDecl` / `TransformCompoundStmt`), so no later statement, such as a
@@ -4342,7 +4376,28 @@ template name, then the canonical arguments with every type scoped,
 never the typedef they were written with (`'std::v<std::D<int, int>>'`
 for `std::v<_Del>`; `'std::Ptr<int *, std::D<int, int>,
 std::alloc<int>>::g'` for a member of a specialization spelled through
-the typedefs `_Del`, `_AllocT`). At the end of the TU clang instantiates
+the typedefs `_Del`, `_AllocT`). A variable template specialization in
+sema's diagnostics (`must be initialized by a constant expression`,
+`declaration of reference variable … requires an initializer`, the
+`[[deprecated]]` names) prints the same way, with trailing defaulted
+arguments dropped (`Sema::name_for_diagnostic`; clang
+`VarTemplateSpecializationDecl::getNameForDiagnostic`), even for an
+explicit specialization written with a typedef (`template<> constexpr
+int g<L *>;` is `'g<long *>'`). `declaration of variable 'au' with
+deduced type 'auto' requires an initializer` names the template, as in
+clang. Test `temp.expl.spec/variable-specialization-names.cpp`. Gap:
+the Oven's "initializer of 'v' is not a constant expression" note still
+prints the bare name (`kiln_oven/src/notes.rs`).
+A note on a deleted explicit specialization (of a function template, or
+of a member of a class template specialization) points at the
+specialization's latest declaration (`Sema::deleted_note_decl`). The
+overload candidate note says "has been implicitly deleted" there, since
+clang's candidate is not deleted as written; a direct use's note is
+"'p<int>' has been explicitly marked deleted here". A member
+specialization `template<> void C<int>::q() = delete;` is not a deleted
+redeclaration of the instantiated member. Test
+`temp.expl.spec/deleted-specialization-notes.cpp`.
+At the end of the TU clang instantiates
 the definitions a definition requires while that definition's frame is
 still open (`PerformPendingInstantiations` inside
 `InstantiateFunctionDefinition`), so their notes carry the chain
