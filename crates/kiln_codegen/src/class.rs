@@ -865,6 +865,7 @@ impl Cg<'_> {
             if !vptrs_done && matches!(ci.kind, CtorInitKind::Field | CtorInitKind::IndirectField) {
                 self.flush_memcpy_run(d, &mut run)?;
                 self.init_vtable_ptrs(rd)?;
+                self.record_ty(rd);
                 vptrs_done = true;
             }
             match ci.kind {
@@ -938,6 +939,12 @@ impl Cg<'_> {
         self.flush_memcpy_run(d, &mut run)?;
         if !vptrs_done {
             self.init_vtable_ptrs(rd)?;
+            // clang `EmitCtorPrologue`'s `FieldConstructionScope` takes
+            // `LoadCXXThisAddress()` even with no member initializers, so
+            // the class's IR type is created here (its name's uniquing
+            // suffix, e.g. an explicitly instantiated `X<long>` before
+            // `X<int>`; [temp.explicit]/10).
+            self.record_ty(rd);
         }
         self.emit_stmt(if fn_try { ast.stmts.try_block(body) } else { body })?;
         self.end_scope(sc);
