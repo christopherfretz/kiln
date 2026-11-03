@@ -1186,8 +1186,17 @@ impl Sema<'_, '_> {
             let args = self.prior_levels(tmpl, depth, prior);
             // In the template's scope, not the use's (`n::f<int>()`
             // outside `n`).
+            // A declarator error names the parameter, at the default's
+            // innermost written `*`/`[` (clang's `TypeLoc` of the default).
+            let name = self.ast.decls.get(p).name().as_ident().map(|n| (n, self.decl_loc(p)));
+            let chunk = self.inner_chunk_locs.get(&p).copied();
             let r = self
-                .in_template_context(tmpl, |s| Substituter::new(s, &args).template_arg(def, at))
+                .in_template_context(tmpl, |s| {
+                    let mut sub = Substituter::new(s, &args);
+                    sub.declarator_name = name;
+                    sub.chunk_loc = chunk;
+                    sub.template_arg(def, at)
+                })
                 .map_err(|_| ());
             if checking.is_none() {
                 let r = r.and_then(|a| self.check_template_arg(tmpl, depth, p, a, at, prior));
