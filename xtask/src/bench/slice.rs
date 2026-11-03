@@ -38,7 +38,7 @@ pub fn parse_list(text: &str) -> Result<Vec<String>, String> {
         if line.starts_with('/') || line.split('/').any(|c| c == ".." || c.is_empty()) {
             return Err(at("not a plain path relative to libcxx/test:"));
         }
-        if !line.ends_with(".cpp") {
+        if Path::new(line).extension().is_none_or(|e| e != "cpp") {
             return Err(at("not a .cpp test:"));
         }
         if out.iter().any(|p| p == line) {
@@ -159,8 +159,9 @@ impl Dist {
         // Nearest rank: the smallest value with at least 90% at or below it.
         let rank = (n * 9).div_ceil(10).max(1);
         let max = v[n - 1].1;
-        let max_id =
-            ratios.iter().find(|(_, r)| *r == max).map_or_else(String::new, |(id, _)| id.clone());
+        // The first test with the maximum, in list order.
+        let max_id = v.iter().find(|(_, r)| r.total_cmp(&max).is_eq()).map(|(id, _)| id.clone());
+        let max_id = max_id.unwrap_or_default();
         let xs: Vec<f64> = v.iter().map(|(_, r)| *r).collect();
         Some(Self {
             n,
@@ -270,7 +271,9 @@ fn cells(r: &RatioRow) -> Vec<String> {
     let mut c = r.cells();
     c.truncate(8);
     c.remove(1); // mode: always syntax
-    c[0] = c[0].strip_prefix(&format!("{GROUP}/")).unwrap_or(&c[0]).to_owned();
+    if let Some(id) = c[0].strip_prefix(&format!("{GROUP}/")).map(str::to_owned) {
+        c[0] = id;
+    }
     c
 }
 
@@ -392,7 +395,7 @@ mod tests {
         let dir = bench.join(GROUP);
         let (on, rest) = split_inputs(&bench, std::slice::from_ref(&bench));
         assert!(!on);
-        assert_eq!(rest, [bench.clone()]);
+        assert_eq!(rest, std::slice::from_ref(&bench));
         let other = bench.join("oven");
         let (on, rest) = split_inputs(&bench, &[dir.clone(), other.clone()]);
         assert!(on);
