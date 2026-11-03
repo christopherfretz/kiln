@@ -353,11 +353,21 @@ impl<'a> Cg<'a> {
         }
     }
 
+    /// A virtual member function (clang `SetFunctionAttributes` makes it
+    /// `unnamed_addr`, also when its declaration is a placeholder).
+    fn is_virtual_method(&self, first: DeclId) -> bool {
+        let ast = self.ast;
+        ast.decls.get(first).kind() == DeclKind::CXXMethod
+            && ast
+                .redecls_of(first)
+                .any(|r| ast.decls.function(r).is_some_and(|x| x.spec.is_virtual()))
+    }
+
     /// A parameter or the return type of function `first` is a class
     /// that is incomplete at this point of emission: never defined, or
     /// defined later in the translation unit (clang
     /// `isFuncTypeConvertible`).
-    fn has_incomplete_class_in_sig(&self, first: DeclId) -> bool {
+    pub(crate) fn has_incomplete_class_in_sig(&self, first: DeclId) -> bool {
         let ast = self.ast;
         let Some(fty) = ast.decls.get(first).ty() else { return false };
         let Some(p) = ast.types.proto(fty) else { return false };
@@ -1716,6 +1726,9 @@ impl<'a> Cg<'a> {
                         );
                     }
                 };
+                if self.is_virtual_method(first) {
+                    self.m.func_mut(f).unnamed_addr = UnnamedAddr::Global;
+                }
                 let nothrow = sig.nothrow || ast.has_nothrow_attr(first);
                 self.nounwind.insert(f, nothrow);
                 f
@@ -1793,10 +1806,7 @@ impl<'a> Cg<'a> {
         let (fa, ret) = self.alloc_fn_attrs(first, fa, ret);
         // clang `SetFunctionAttributes`: virtual member functions are
         // `unnamed_addr`.
-        let virt = ast.decls.get(first).kind() == DeclKind::CXXMethod
-            && ast
-                .redecls_of(first)
-                .any(|r| ast.decls.function(r).is_some_and(|x| x.spec.is_virtual()));
+        let virt = self.is_virtual_method(first);
         {
             let func = self.m.func_mut(f);
             func.attrs.func = fa;

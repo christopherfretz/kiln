@@ -7,6 +7,7 @@
 
 use std::rc::Rc;
 
+use kiln_abi::call::ArgKind;
 use kiln_abi::mangle::{self, Structor};
 use kiln_ast::class::{SubobjectId, Thunk, VTableComponent, VTableLayout};
 use kiln_ast::decl::{Access, ConstexprKind, DeclFlags, DeclKind, DefinitionBits, TagKind};
@@ -20,7 +21,7 @@ use kiln_llvm::{
 };
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
-use crate::fir::{Op, V};
+use crate::fir::{Fir, Op, V};
 use crate::func::min_align;
 use crate::module::{Cg, R, err};
 
@@ -1088,31 +1089,75 @@ impl Cg<'_> {
         _layout_class: DeclId,
     ) -> R<Value> {
         let f = self.thunk_fn(m, v, th)?;
-        if self.opts.optimize() && self.m.func(f).is_declaration() && self.thunk_has_no_target(m) {
+        if self.opts.optimize()
+            && self.m.func(f).is_declaration()
+            && self.thunk_has_no_target(m, th)
+        {
             // clang `maybeEmitThunk(ForVTable)` → `shouldEmitVTableThunk`:
             // above -O0 a vtable's thunk is defined `available_externally`
             // with it (a thunk of a method defined here is defined after
-            // that method: `emit_thunks`). Not for a variadic or
-            // unprototyped (incomplete parameter or return type) method.
+            // that method: `emit_thunks`); a variadic one is a `musttail`
+            // forward (the -O1 pipeline's `EliminateAvailableExternally`
+            // leaves its declaration). Not for an unprototyped
+            // (incomplete parameter or return type) method or a
+            // return-adjusting variadic one.
             let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
             let r = self.gen_code_or_thunk(self.ast.first(m), f, v, Some(th));
             self.f = saved;
             r?;
+        } else if self.opts.optimize()
+            && self.m.func(f).is_declaration()
+            && self.variadic_thunk_without_target(m, th)
+        {
+            // clang `maybeEmitThunk(ForVTable)` gives a return-adjusting
+            // variadic thunk the attributes of a definition
+            // (`SetLLVMFunctionAttributesForDefinition`: `uwtable`, the
+            // `-Os`/`-Oz` size attributes, x86's `align 2`) and then
+            // leaves it a declaration: it would be a clone of the method
+            // (`GenerateVarArgsThunk`), never `available_externally`.
+            let fa = self.m.func(f).attrs.func;
+            let mut a = self.m.attrs_of(fa).to_vec();
+            a.push(Attr::UwTable(kiln_llvm::UwTableKind::Async));
+            self.size_attrs(&mut a);
+            a.dedup();
+            let fa = self.m.attr_set(&a);
+            let x86 = self.is_x86();
+            let func = self.m.func_mut(f);
+            func.attrs.func = fa;
+            if x86 {
+                func.align = Some(2);
+            }
         }
         Ok(Value::func(f))
     }
 
-    /// The virtual method `m` has no definition here, is not variadic
-    /// and has a convertible type (clang `isFuncTypeConvertible`: no
-    /// incomplete class parameter or return type).
-    fn thunk_has_no_target(&self, m: DeclId) -> bool {
+    /// The virtual method `m` has no definition here, is variadic, has a
+    /// convertible type, and its thunk `th` adjusts the return.
+    fn variadic_thunk_without_target(&self, m: DeclId, th: Thunk) -> bool {
+        let ast = self.ast;
+        if th.ret == (0, 0) {
+            return false;
+        }
+        if ast.redecls_of(m).any(|r| ast.decls.function(r).is_some_and(|f| f.body.is_some())) {
+            return false;
+        }
+        let first = ast.first(m);
+        let Some(fty) = ast.decls.get(first).ty() else { return false };
+        ast.types.proto(fty).is_some_and(|p| p.variadic())
+            && !self.has_incomplete_class_in_sig(first)
+    }
+
+    /// The virtual method `m` has no definition here, has a convertible
+    /// type (clang `isFuncTypeConvertible`: no incomplete class parameter
+    /// or return type) and, if variadic, thunk `th` adjusts no return.
+    fn thunk_has_no_target(&self, m: DeclId, th: Thunk) -> bool {
         let ast = self.ast;
         if ast.redecls_of(m).any(|r| ast.decls.function(r).is_some_and(|f| f.body.is_some())) {
             return false;
         }
         let Some(fty) = ast.decls.get(ast.first(m)).ty() else { return false };
         let Some(p) = ast.types.proto(fty).copied() else { return false };
-        if p.variadic() {
+        if p.variadic() && th.ret != (0, 0) {
             return false;
         }
         let complete =
@@ -1135,6 +1180,23 @@ impl Cg<'_> {
             th.ret,
         );
         if let Some(&f) = self.thunk_fns.get(&name) {
+            return Ok(f);
+        }
+        if self.has_incomplete_class_in_sig(first) {
+            // clang `GetAddrOfThunk` of a type `isFuncTypeConvertible`
+            // rejects: `void ()` without attributes (spec/codegen.md §7z).
+            let ty = self.m.types.function(LTy::VOID, &[], false);
+            let f = match self.m.add_function(&name, ty) {
+                Ok(f) => f,
+                Err(e) => {
+                    return err(
+                        Some(ast.decls.get(first).loc()),
+                        format!("cannot declare {name}: {e:?}"),
+                    );
+                }
+            };
+            self.m.func_mut(f).unnamed_addr = UnnamedAddr::Global;
+            self.thunk_fns.insert(name, f);
             return Ok(f);
         }
         let sig = self.decl_sig(first)?;
@@ -1225,6 +1287,11 @@ impl Cg<'_> {
         let (_, this_align) = self.this_layout(rd);
         let this = self.this_value();
         let adj = self.type_adjustment(this, this_align, th.this, false);
+        let first = ast.first(d);
+        let fty = ast.decls.get(first).ty().expect("method type");
+        if ast.types.proto(fty).is_some_and(|p| p.variadic()) {
+            return self.emit_musttail_thunk(d, v, th, params, adj);
+        }
         let mut vals = Vec::with_capacity(params.len());
         let mut ptys = Vec::with_capacity(params.len());
         for &p in params {
@@ -1234,8 +1301,6 @@ impl Cg<'_> {
             vals.push(self.delegate_call_arg(a, q));
             ptys.push(q);
         }
-        let first = ast.first(d);
-        let fty = ast.decls.get(first).ty().expect("method type");
         let sig = self.call_sig_this(fty, false, &ptys, Some(rd));
         let (callee, fid) = if let Some(v) = v {
             self.structor_ref(d, v)?
@@ -1264,6 +1329,76 @@ impl Cg<'_> {
         {
             self.store_scalar(x, slot, rq);
         }
+        Ok(())
+    }
+
+    /// clang `EmitMustTailThunk` (from `EmitCallAndReturnForThunk` for a
+    /// variadic method): the thunk's own arguments, `this` replaced by the
+    /// adjusted `adj`, are forwarded to the method by a `musttail` call
+    /// (which passes the variadic arguments on, `...`) whose result is
+    /// returned; then a fresh, unreachable block takes the ordinary
+    /// epilogue (clang's "FIXME: Don't emit unreachable code").
+    fn emit_musttail_thunk(
+        &mut self,
+        d: DeclId,
+        v: Option<Structor>,
+        th: Thunk,
+        params: &[DeclId],
+        adj: V,
+    ) -> R<()> {
+        let ast = self.ast;
+        // clang `maybeEmitThunk` clones the whole method for a
+        // return-adjusting variadic thunk (`GenerateVarArgsThunk`); kiln
+        // does not (spec/codegen.md §7z).
+        if th.ret != (0, 0) {
+            return err(
+                Some(self.ast.decls.get(d).loc()),
+                "a return-adjusting thunk of a variadic virtual function is not supported",
+            );
+        }
+        let rd = self.f.this_class.expect("method class");
+        let ptys: Vec<QualType> =
+            params.iter().map(|&p| ast.decls.get(p).ty().expect("param type")).collect();
+        let first = ast.first(d);
+        let fty = ast.decls.get(first).ty().expect("method type");
+        let sig = self.call_sig_this(fty, false, &ptys, Some(rd));
+        let (callee, fid) = if let Some(v) = v {
+            self.structor_ref(d, v)?
+        } else {
+            let f = self.get_fn(d)?;
+            (V::C(Value::func(f)), Some(f))
+        };
+        let this_no = u32::from(sig.sret());
+        let n = self.m.func(self.f.func.expect("thunk function")).param_types().len() as u32;
+        let args: Vec<V> = (0..n).map(|i| if i == this_no { adj } else { V::Arg(i) }).collect();
+        let rty = match &sig.info.ret.kind {
+            ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
+                let c = coerce.clone();
+                self.ir(&c)
+            }
+            _ => LTy::VOID,
+        };
+        let (ret, pattrs) = self.sig_attrs(&sig, params.len(), false);
+        let mut fa = Vec::new();
+        if sig.nothrow {
+            fa.push(Attr::Flag(AttrKind::NoUnwind));
+        }
+        self.call_size_attrs(fid, &mut fa);
+        let func =
+            if fa.is_empty() { kiln_llvm::AttrList::default().func } else { self.m.attr_set(&fa) };
+        let opts = kiln_llvm::CallOpts {
+            attrs: kiln_llvm::AttrList { func, ret, params: pattrs },
+            ..kiln_llvm::CallOpts::default()
+        };
+        // The thunk has no cleanups or EH scope: always a plain `call`.
+        let r =
+            self.f.fir.push(Op::Call { fn_ty: sig.fn_ty, callee, args, opts: Box::new(opts) }, rty);
+        self.f.fir.set_musttail(Fir::last_inst(r));
+        let rv = (rty != LTy::VOID).then_some(r);
+        self.f.fir.push(Op::Ret { v: rv }, LTy::VOID);
+        self.f.fir.set_cur(None);
+        let b = self.f.fir.create_block();
+        self.emit_block(b, false);
         Ok(())
     }
 

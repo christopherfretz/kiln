@@ -537,6 +537,13 @@ impl Fir {
         }
     }
 
+    /// Marks call `i` `musttail`.
+    pub fn set_musttail(&mut self, i: u32) {
+        if let Op::Call { opts, .. } = &mut self.insts[i as usize].op {
+            opts.tail = kiln_llvm::TailKind::MustTail;
+        }
+    }
+
     /// LLVM `getOrEnforceKnownAlignment` on a pointer: raises the
     /// alignment of an `alloca` to at least `align` and returns the
     /// resulting alignment, or `None` if `p` is not an `alloca`.
