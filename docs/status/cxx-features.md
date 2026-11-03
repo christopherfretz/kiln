@@ -93,6 +93,7 @@ Columns:
 | P2963R3 | Ordering of constraints involving fold expressions | — | done | `conformance/templates/concepts/temp.constr.fold-expanded.cpp` | |
 | P2865R6 | Removing deprecated array comparisons | — | done | `conformance/expr.eq/p2865-probe.cpp`<br>`conformance/expr.eq/p2865-array-comparison.cpp`<br>`conformance/expr.eq/p2865-array-comparison-cxx20.cpp` | WP-356. clang 19 only warns (probe `xfail(clang)`). |
 | P3176R1 | The Oxford variadic comma | — | done | `conformance/dcl.fct/p3176-probe.cpp`<br>`conformance/dcl.fct/p3176-variadic-comma.cpp`<br>`conformance/dcl.fct/p3176-variadic-comma-cxx23.cpp` | WP-356. clang 19 lacks the deprecation (probe `xfail(clang)`). |
+| P3289R1 | `consteval` blocks | — | done | `conformance/dcl.pre/consteval-block-namespace.cpp`<br>`conformance/dcl.pre/consteval-block-block.cpp`<br>`conformance/dcl.pre/consteval-block-class.cpp`<br>`conformance/dcl.pre/consteval-block-template.cpp`<br>`conformance/dcl.pre/consteval-block-errors.cpp`<br>`conformance/dcl.pre/consteval-block-cxx23.cpp`<br>`conformance/dcl.pre/consteval-block-trial-never-mutates.cpp`<br>`conformance/expr.const/plainly-table.cpp`<br>`conformance/expr.const/immediate-escalating-reflect.cpp` | C++26 only, no `-freflection` needed; clang 22 lacks it, so the tests are `skip(clang)`. Contract: `spec/consteval-blocks.md`. |
 
 ## DR-level papers
 

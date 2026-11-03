@@ -1,0 +1,147 @@
+# Consteval blocks and the plainly constant-evaluated bit (WP-473)
+
+Status: implemented (M6-04). Standard: [dcl.pre] (P3289R1, merged into
+the C++26 working draft with P2996R13), [expr.const.core]/2.32,
+[expr.const.imm]/2. Code: `crates/kiln_parse/src/consteval_block.rs`,
+`crates/kiln_sema/src/consteval_block.rs`, `crates/kiln_sema/src/consteval.rs`
+(escalation), `crates/kiln_oven/src/lib.rs` (`EvalContext::plain`,
+`Oven::plain`), `crates/kiln_oven/src/vm.rs` (`Op::IsConstEval`).
+
+## 1. Grammar and parse
+
+```
+consteval-block-declaration:
+    consteval compound-statement
+```
+
+- It is a *block-declaration* (namespace scope, block scope) and a
+  *member-declaration* (class scope). `consteval` directly followed by
+  `{` starts a consteval block; `consteval` followed by anything else is
+  the decl-specifier. `if consteval` (`stmt.rs`) is unchanged.
+- Below `-std=c++26` the parser reports `parse_consteval_block_cxx26`
+  ("consteval blocks are only supported in C++26") at `consteval` and
+  still parses the block (error recovery). `-freflection` is not
+  required.
+- The parser builds the block as P3289R1's equivalence: a consteval
+  lambda `[]() -> void consteval { … }` and a call to it, both inside
+  `enter/exit_constant_evaluated`, so the body is an immediate function
+  context. The result is `DeclKind::ConstevalBlock`, whose payload is the
+  `StaticAssert` record with `cond` = that call (no message). It is
+  dumped as `ConstevalBlockDecl` with the call as its child
+  (`spec/ast-dump.md`).
+
+## 2. Semantics
+
+- **Evaluation point.** The block is evaluated once, when it is
+  declared: at namespace and block scope where it appears, at class
+  scope when reached in the class body (the class is incomplete there;
+  later members are not yet declared). Sema evaluates `call, true` with
+  `EvalContext::consteval_block(loc)` (a void prvalue has no value in
+  the Oven). Diagnostics are reported once.
+- **Errors are errors.** A block that is not a constant expression is
+  `sema_consteval_block_non_constant` ("consteval block is not a constant
+  expression") with the Oven's notes, never a substitution failure.
+  Local variables, `static_assert`, `return;`, and calls to consteval
+  and constexpr functions work as in any consteval lambda body.
+- **Templates.** In a template definition (or any dependent context) the
+  block is not evaluated. It is instantiated with the enclosing entity
+  (`templ/subst/decls.rs` `consteval_block_decl`, class members in
+  `templ/class.rs`, function bodies in `templ/subst/stmts.rs`) and
+  evaluated once per instantiation. A failure in a class template
+  instantiation marks the class invalid, as a failed `static_assert`
+  does.
+- **Never codegen'd.** The declaration produces no IR; the lambda is an
+  immediate function.
+
+Tests: `tests/conformance/dcl.pre/consteval-block-{namespace,block,class,template,errors,cxx23}.cpp`.
+
+## 3. The plainly constant-evaluated bit
+
+P3289R1 introduced "plainly constant-evaluated" for the contexts in
+which injection (`define_aggregate`, kiln's `__kiln_define_member`) may
+mutate. The merged C++26 wording drops the term:
+[expr.const.core]/2.32 makes an injection a non-constant expression
+unless the evaluation is that of a consteval-block-declaration's
+expression. kiln follows the merged wording: the bit is
+`EvalContext::plain`, set only by `EvalContext::consteval_block(loc)`,
+and true for exactly that evaluation including the functions it calls.
+
+`Oven::plain()` is `run.plain && !run.fold && !mem.in_trial()`. The
+extension builtin `__kiln_plainly_constant_evaluated()` (`bool()`,
+constexpr, builtin id 2150, `Op::IsConstEval` aux 2) returns it; at run
+time it is `false`. Like `__kiln_define_member` it is a documented kiln
+extension, not a standard name.
+
+| # | Context | Bit |
+|---|---|---|
+| 1 | a consteval block's evaluation (namespace, class, block scope), and every function it calls | true |
+| 2 | an evaluation nested in a consteval block: a `static_assert`, a constexpr local's initializer | false |
+| 3 | a `static_assert` condition | false |
+| 4 | the initializer of a `constexpr` variable | false |
+| 5 | the initializer of a `constinit` variable | false |
+| 6 | a `const` variable's constant initializer | false |
+| 7 | a template argument | false |
+| 8 | an `if constexpr` condition | false |
+| 9 | an array bound | false |
+| 10 | an enumerator initializer | false |
+| 11 | a noexcept-specifier operand | false |
+| 12 | a bit-field width | false |
+| 13 | a `case` label | false |
+| 14 | an immediate invocation outside a consteval block | false |
+| 15 | a constraint (atomic constraint satisfaction) | false |
+| 16 | a trial: the operand of `__builtin_constant_p`, `try_fold`, codegen's speculative folds, SFINAE probes, even inside a consteval block | false |
+| 17 | a constexpr function evaluated in a constant expression | false |
+
+Every row is one check in `tests/conformance/expr.const/plainly-table.cpp`.
+
+Rules that keep the bit exact:
+- **Constexpr locals.** The initializer of a constexpr local variable is
+  its own manifestly constant-evaluated expression, but the Oven
+  evaluates it inline in the enclosing frame. The compiler brackets it
+  with `Op::IsConstEval` aux 4 (save `run.plain` to a register and clear
+  it) and aux 8 (restore it), so row 2 holds.
+- **Memoization.** A memoized call's result can depend on the bit (a
+  callee reads it), so the memo key carries `Oven::plain()` at bit 30
+  (`const_context` stays at bit 31).
+- **Injection gate.** `vm/meta.rs` `DefineMember` does nothing when
+  `run.fold || mem.in_trial()`, so a trial never mutates
+  (`tests/conformance/dcl.pre/consteval-block-trial-never-mutates.cpp`).
+  The gates on the reflection side (`MetaCtx.plainly`) read
+  `Oven::plain()` once that context exists.
+
+## 4. Immediate escalation of consteval-only expressions
+
+[expr.const.imm]/2: an expression of consteval-only type (today: a
+reflection, `^^x`) is immediate-escalating. Outside an immediate
+function context it must be part of an immediate invocation; otherwise
+the enclosing immediate-escalating function ([expr.const.imm]/3: a
+lambda's call operator, a defaulted special member, or a constexpr
+function that is a templated entity; see `spec/sema.md` §5.10) becomes
+an immediate function, and anywhere else it is
+`sema_immediate_escalating_expr` ("expression of consteval-only type
+{0} is not allowed outside an immediate function context").
+
+- The hook is `Sema::note_immediate_escalating_expr(e) -> ExprId`,
+  called by the parser for `^^` and by template substitution when it
+  rebuilds one. Splices (WP-475) call the same hook and extend
+  `is_consteval_only_ref`.
+- Not noted: an operand in an immediate function context, a
+  value-dependent operand, an expression with errors. Exempt at
+  `finish_immediate_invocations`: a ref inside an immediate invocation,
+  the initializer of a variable that is constant-initialized
+  (`checks_constant_init`, e.g. a `constexpr` variable), and a ref after
+  which an error was already reported (no cascade).
+- A shared (not rebuilt) instantiation copy re-escalates its
+  specialization through the `escalated_exprs` set.
+- The escalation reason note is
+  `note_immediate_function_reason_consteval_only`.
+
+Test: `tests/conformance/expr.const/immediate-escalating-reflect.cpp`.
+
+A plain (non-template) `auto f() { return ^^int; }` is not
+immediate-escalating, so it is ill-formed, not consteval.
+
+Gaps: a call whose result has consteval-only type (`refl<int>()` in a
+runtime function) is not diagnosed; `^^` in a default argument or a
+default member initializer is checked at its own location, not at the
+use.
