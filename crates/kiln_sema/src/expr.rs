@@ -3057,6 +3057,7 @@ impl Sema<'_, '_> {
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
             return self.recover_err(&[l, r], loc);
         }
+        self.check_sve_operands([l, r], loc);
         // [expr.ref]/7.3.2: a bound member function operand can only be
         // called; clang's `CheckPlaceholderExpr` rejects the operator.
         if !matches!(op, BinaryOp::PtrMemD | BinaryOp::PtrMemI)
