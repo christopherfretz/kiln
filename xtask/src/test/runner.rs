@@ -1029,8 +1029,10 @@ impl Test<'_> {
         let timeout = self.cfg.compile_timeout;
         let who = if oracle { "the oracle" } else { "the compiler" };
         let mut killed = None;
-        let mut text = || {
-            let cmd = self.command(clang, spec, &["-fsyntax-only", "-Xclang", "-ast-dump"], None);
+        let mut text = |extra: &[&str]| {
+            let mut flags = vec!["-fsyntax-only", "-Xclang", "-ast-dump"];
+            flags.extend_from_slice(extra);
+            let cmd = self.command(clang, spec, &flags, None);
             let o = self.exec(who, &cmd, timeout).map_err(|p| {
                 let d = p.text().to_owned();
                 if let Problem::Killed { .. } = p {

@@ -1164,7 +1164,8 @@ Redeclaration and linkage rules:
     (`templ/subst/stmts.rs`); they are not checked again.
   - The parser rejects an argument list on a standard attribute that
     takes none (`carries_dependency`, `fallthrough`, `noreturn`,
-    `no_unique_address`, `likely`, `unlikely`, `maybe_unused`, even
+    `no_unique_address`, `likely`, `unlikely`, `maybe_unused`,
+    `indeterminate` from C++26, even
     `()`): `attribute 'likely' cannot have an argument list` at the `(`,
     and drops the attribute (clang `ParseCXX11AttributeArgs`).
   - Codegen ignores them: clang 19 consults likelihood only when
@@ -1959,6 +1960,23 @@ and returns the scope it names:
       parameters, Objective-C methods, and functions`). `packed`: a
       class, an enumeration or a data member; otherwise `'packed'
       attribute ignored` (warning).
+    - `indeterminate` ([dcl.attr.indet]/1, C++26 P2795R5, WP-448;
+      `AttrKind::INDETERMINATE`): only a variable with automatic
+      storage duration (no `static`, `thread_local` or `extern`) or a
+      parameter; elsewhere the error `'indeterminate' attribute only
+      applies to local variables or function parameters` (clang trunk's
+      subject list `LocalVar, ParmVar`). It may repeat ([dcl.attr.grammar]/4,
+      P2156R1). On a parameter it must be on the function's first
+      declaration: a redeclaration adding it is the error
+      `'[[indeterminate]]' attribute on parameter 'b' must appear on the
+      first declaration of the function` at the attribute, with `previous
+      declaration is here` at the first declaration
+      (`check_param_indeterminate`; clang trunk's text, the note is
+      kiln's). Before C++26 it is not recognised: `unknown attribute
+      'indeterminate' ignored` [-Wunknown-attributes]. Effect: codegen
+      writes no erroneous value (spec/codegen.md §7r); constant
+      evaluation is unchanged (an indeterminate read is non-constant).
+      Tests: `tests/conformance/dcl.attr.indet/`.
     - `fallthrough`, `likely`, `unlikely` and `assume` are statement
       attributes: on any declaration `'X' attribute cannot be applied to
       a declaration` (error).

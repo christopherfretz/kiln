@@ -244,7 +244,10 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::Pointer(p) => {
                 let p = self.ty(p, loc)?;
-                self.chunk(p, Chunk::Pointer { quals: kiln_ast::types::Quals::NONE, loc }, loc)
+                // The written innermost `*` ([`Self::chunk_loc`]) is the
+                // first pointer rebuilt.
+                let at = self.chunk_loc.take().unwrap_or(loc);
+                self.chunk(p, Chunk::Pointer { quals: kiln_ast::types::Quals::NONE, loc: at }, loc)
             }
             TypeView::LValueRef(p) => {
                 let at = self.ref_loc.take().unwrap_or(loc);
@@ -272,14 +275,16 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::ConstantArray(a) => {
                 let e = self.ty(a.elem, loc)?;
+                // The written innermost `[` ([`Self::chunk_loc`]).
+                let at = self.chunk_loc.take().unwrap_or(loc);
                 if let Some(s) = a.size_expr {
-                    return self.chunk(e, Chunk::Array { size: Some(s), loc }, loc);
+                    return self.chunk(e, Chunk::Array { size: Some(s), loc: at }, loc);
                 }
                 // [temp.deduct]/11.1: the element checks of a bound
                 // written without an expression.
                 let t = &self.sema.ast.types;
                 if t.is_void(e) || t.is_function(e) || t.is_reference(e) {
-                    return self.chunk(e, Chunk::Array { size: None, loc }, loc);
+                    return self.chunk(e, Chunk::Array { size: None, loc: at }, loc);
                 }
                 // [temp.deduct.general]/11.1: an array of abstract class
                 // type (clang `BuildArrayType`).
@@ -296,12 +301,14 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::IncompleteArray(elem) => {
                 let e = self.ty(elem, loc)?;
-                self.chunk(e, Chunk::Array { size: None, loc }, loc)
+                let at = self.chunk_loc.take().unwrap_or(loc);
+                self.chunk(e, Chunk::Array { size: None, loc: at }, loc)
             }
             TypeView::VariableArray { elem, size } => {
                 let e = self.ty(elem, loc)?;
+                let at = self.chunk_loc.take().unwrap_or(loc);
                 let s = self.expr(size)?;
-                self.chunk(e, Chunk::Array { size: Some(s), loc }, loc)
+                self.chunk(e, Chunk::Array { size: Some(s), loc: at }, loc)
             }
             TypeView::DependentSizedArray { elem, size } => {
                 // A canonical array's bound is profiled: its first
@@ -313,8 +320,9 @@ impl Substituter<'_, '_, '_> {
                     }
                 };
                 let e = self.ty(elem, loc)?;
+                let at = self.chunk_loc.take().unwrap_or(loc);
                 let s = self.expr(s)?;
-                self.chunk(e, Chunk::Array { size: Some(s), loc }, loc)
+                self.chunk(e, Chunk::Array { size: Some(s), loc: at }, loc)
             }
             TypeView::Function(p) => {
                 let ret = self.ty(p.ret(), loc)?;
@@ -324,9 +332,13 @@ impl Substituter<'_, '_, '_> {
                 self.check_return_type(ret, at)?;
                 self.check_volatile_return(p.ret(), ret, at);
                 let params = self.sema.ast.types.params(&p).to_vec();
+                // A parameter of a function type is a 'type name' of its
+                // own (clang names it so).
                 let outer = self.type_begin.take();
+                let name = self.declarator_name.take();
+                let chunk = self.chunk_loc.take();
                 let out = self.expand_types(&params, loc);
-                self.type_begin = outer;
+                (self.type_begin, self.declarator_name, self.chunk_loc) = (outer, name, chunk);
                 let out = out?;
                 // [temp.deduct.general]/11.10: a `void` parameter (clang
                 // `BuildFunctionType`).
