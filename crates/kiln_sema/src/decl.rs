@@ -7426,8 +7426,11 @@ impl Sema<'_, '_> {
     /// `ActOnEnumBody`: the narrowest of `int`, `long`, `long long` when
     /// some value is negative, else of `unsigned int`, `unsigned long`,
     /// `unsigned long long`, promoting to the signed type of the same
-    /// width unless the values need every bit.
-    fn best_enum_types(&self, values: &[(DeclId, i128)]) -> (QualType, QualType) {
+    /// width unless the values need every bit. A `packed` enumeration
+    /// also considers `signed char` / `short` (`unsigned char` /
+    /// `unsigned short`), promoting to `int` (clang
+    /// `ASTContext::computeBestEnumTypes`).
+    fn best_enum_types(&self, values: &[(DeclId, i128)], packed: bool) -> (QualType, QualType) {
         let mut neg_bits = 0u32;
         let mut pos_bits = 0u32;
         for &(_, v) in values {
@@ -7439,6 +7442,18 @@ impl Sema<'_, '_> {
             }
         }
         let width = |t: QualType| constfold::int_info(&self.ast, t).map_or(64, |x| x.0);
+        if packed {
+            let small = if neg_bits > 0 {
+                [QualType::SCHAR, QualType::SHORT]
+                    .into_iter()
+                    .find(|&t| neg_bits <= width(t) && pos_bits < width(t))
+            } else {
+                [QualType::UCHAR, QualType::USHORT].into_iter().find(|&t| pos_bits <= width(t))
+            };
+            if let Some(t) = small {
+                return (t, QualType::INT);
+            }
+        }
         let signed = [QualType::INT, QualType::LONG, QualType::LONGLONG];
         let unsigned = [QualType::UINT, QualType::ULONG, QualType::ULONGLONG];
         if neg_bits > 0 {
@@ -7511,7 +7526,8 @@ impl Sema<'_, '_> {
             // enumeration; `int` stands in until it is instantiated.
             Some((QualType::INT, QualType::INT))
         } else {
-            let (best, promotion) = self.best_enum_types(&build.enumerators);
+            let packed = self.find_attr(e, AttrKind::PACKED).is_some();
+            let (best, promotion) = self.best_enum_types(&build.enumerators, packed);
             // [dcl.enum]/5 (clang's `ActOnEnumBody`): each initializer is
             // converted to the underlying type.
             for &(d, _) in &build.enumerators {
@@ -9239,7 +9255,9 @@ impl Sema<'_, '_> {
     /// `ParseCXXMemberSpecification` parses them there and
     /// `ActOnFinishCXXMemberSpecification` applies them to the class
     /// itself, before it is complete, so `packed` / `aligned` shape its
-    /// layout as when written after the class-key.
+    /// layout as when written after the class-key. Likewise an
+    /// enumeration's (clang `ParseEnumBody` -> `ActOnEnumBody`, ahead of
+    /// its underlying type).
     pub fn act_on_record_trailing_attrs(&mut self, r: DeclId, attrs: &[AttrId]) {
         let mut attrs = attrs.to_vec();
         self.check_decl_attrs(r, &mut attrs);

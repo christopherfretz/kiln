@@ -1291,6 +1291,9 @@ impl Substituter<'_, '_, '_> {
         if failed {
             self.sema.ast.decls.set_flags(e, DeclFlags::INVALID);
         }
+        // clang `VisitEnumDecl` -> `InstantiateAttrs`, ahead of the
+        // definition (a `packed` one's underlying type).
+        self.class_attrs(e, d);
         if let Some(src) = src {
             self.enum_definition(e, src)?;
         }
