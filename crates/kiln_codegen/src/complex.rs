@@ -13,12 +13,12 @@ use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::{ExprId, QualType};
 use kiln_llvm::{BinOp, Flags, FloatPredicate, IntPredicate, TypeId as LTy, Value};
 
-use crate::tbaa::Tb;
 use crate::ComplexRange;
 use crate::expr::{Callee, LV, Opaque};
 use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, err};
+use crate::tbaa::Tb;
 
 /// A complex value with possibly absent parts.
 pub(crate) type Cx = (Option<V>, Option<V>);

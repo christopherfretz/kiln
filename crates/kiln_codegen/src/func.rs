@@ -16,11 +16,11 @@ use kiln_oven::apfloat::{self, FloatKind};
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
-use crate::tbaa::Tb;
 use crate::CodegenError;
 use crate::cleanup::{Cleanups, JumpDest};
 use crate::fir::{Blk, Fir, Op, V};
 use crate::module::{Cg, R, Sig, err};
+use crate::tbaa::Tb;
 
 /// An address with its element type and alignment (clang `Address`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -586,13 +586,11 @@ impl Cg<'_> {
             || !self.opts.exceptions
             || self.no_throw_calls();
         let noreturn = self.ast.is_noreturn_fn(d);
-        let inline = if thunk.is_some() {
-            if self.opts.optimize {
-                crate::module::DefInline::Plain
-            } else {
-                crate::module::DefInline::OptNone
-            }
+        let inline = if thunk.is_some() && !self.opts.optimize {
+            crate::module::DefInline::OptNone
         } else {
+            // clang `maybeEmitThunk` gives a thunk its method's definition
+            // attributes (`optnone`, `inlinehint`, ...) above -O0.
             let inline = self.def_inline_attrs(d);
             self.def_opt_attrs(d, inline, &mut extra);
             inline

@@ -16,12 +16,12 @@ use kiln_llvm::{
 };
 use kiln_source::Loc;
 
-use crate::tbaa::Tb;
 use crate::cleanup::{ArrayDelete, Cleanup, Depth, IrregularPartialArray, NewDelete, Saved};
 use crate::expr::LV;
 use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, err};
+use crate::tbaa::Tb;
 
 /// What clang knows about a global allocation or deallocation function
 /// (`isReplaceableGlobalAllocationFunction`,
@@ -1098,8 +1098,13 @@ impl Cg<'_> {
         // type (multidimensional `new` of member pointers).
         let iq = if ivie { base } else { ast.exprs.get(init).ty() };
         let ity = self.mty(iq);
-        let lv =
-            LV { addr: Addr { v: phi, ty: ity, align: elem_align }, q: iq, bf: None, vidx: None, tb: Tb::Type };
+        let lv = LV {
+            addr: Addr { v: phi, ty: ity, align: elem_align },
+            q: iq,
+            bf: None,
+            vidx: None,
+            tb: Tb::Type,
+        };
         self.init_to_lvalue(init, lv, false)?;
         // clang leaves the list's partial-array cleanup in the loop body,
         // after the first element's initializer.

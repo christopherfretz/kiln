@@ -15,11 +15,11 @@ use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{BinOp, CastOp, ConstData, Flags, IntPredicate, TypeId as LTy, Value};
 
-use crate::tbaa::Tb;
 use crate::expr::LV;
 use crate::fir::{Fir, Op, V};
 use crate::func::Addr;
 use crate::module::{Cg, R, err};
+use crate::tbaa::Tb;
 
 impl Cg<'_> {
     /// The pointee type and class of member pointer type `q`.

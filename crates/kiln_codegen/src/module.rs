@@ -2189,7 +2189,5 @@ pub(crate) struct DefFnAttrs {
 
 /// Removes `optsize` and `minsize` (an `optnone` function).
 fn strip_size_attrs(a: &mut Vec<Attr>) {
-    a.retain(|x| {
-        !matches!(x, Attr::Flag(AttrKind::OptimizeForSize) | Attr::Flag(AttrKind::MinSize))
-    });
+    a.retain(|x| !matches!(x, Attr::Flag(AttrKind::OptimizeForSize | AttrKind::MinSize)));
 }

@@ -970,7 +970,10 @@ mod tests {
         assert_eq!(parse("a.cpp").strict_aliasing, None);
         let a = parse("-fstrict-aliasing -fno-strict-aliasing a.cpp");
         assert_eq!((a.strict_aliasing, a.errors), (Some(false), vec![]));
-        assert_eq!(parse("-fno-strict-aliasing -fstrict-aliasing a.cpp").strict_aliasing, Some(true));
+        assert_eq!(
+            parse("-fno-strict-aliasing -fstrict-aliasing a.cpp").strict_aliasing,
+            Some(true)
+        );
     }
 
     #[test]

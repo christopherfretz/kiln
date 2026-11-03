@@ -55,6 +55,10 @@ use kiln_source::Loc;
 
 /// Options controlling code generation.
 #[derive(Clone, Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent command-line switches, as clang's CodeGenOptions"
+)]
 pub struct CodegenOptions {
     /// The module's `source_filename`.
     pub source_filename: String,

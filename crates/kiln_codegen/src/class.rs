@@ -1575,12 +1575,11 @@ impl Cg<'_> {
     /// `EmitAggregateCopy` of an object of type `q` (see
     /// [`Self::agg_copy_record`]); the copy carries `!tbaa.struct`.
     pub(crate) fn agg_copy(&mut self, q: QualType, dest: Addr, src: Addr, size: u64, vol: bool) {
-        match self.ast.types.canonical_view(q) {
-            TypeView::Record(rd) => self.agg_copy_record(rd, dest, src, size, vol),
-            _ => {
-                let c = self.memcpy(dest, src.v, src.align, size, vol);
-                self.tbaa_struct_copy(c, q);
-            }
+        if let TypeView::Record(rd) = self.ast.types.canonical_view(q) {
+            self.agg_copy_record(rd, dest, src, size, vol);
+        } else {
+            let c = self.memcpy(dest, src.v, src.align, size, vol);
+            self.tbaa_struct_copy(c, q);
         }
     }
 

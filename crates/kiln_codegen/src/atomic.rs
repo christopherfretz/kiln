@@ -21,11 +21,11 @@ use kiln_llvm::{
 };
 use kiln_source::Span;
 
-use crate::tbaa::Tb;
 use crate::expr::LV;
 use crate::fir::{Blk, Fir, Op, V};
 use crate::func::Addr;
 use crate::module::{Cg, R, err};
+use crate::tbaa::Tb;
 
 /// An atomic access with `ordering` (`MemOpts` of a plain one otherwise).
 fn amem(align: u64, volatile: bool, ordering: Ordering, scope: SyncScope) -> MemOpts {

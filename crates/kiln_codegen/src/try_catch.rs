@@ -9,12 +9,12 @@ use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{IntPredicate, TypeId as LTy};
 
-use crate::tbaa::Tb;
 use crate::cleanup::{Cleanup, Depth, Handler, Kind};
 use crate::expr::{LV, Opaque};
 use crate::fir::{Blk, Op, V};
 use crate::func::Addr;
 use crate::module::{Cg, R, err};
+use crate::tbaa::Tb;
 
 /// `TargetCodeGenInfo::getSizeOfUnwindException`: the
 /// `_Unwind_Exception` header before the thrown object.
@@ -276,7 +276,13 @@ impl Cg<'_> {
                 return Ok(());
             }
             let align = self.natural_align(q);
-            let src = LV { addr: Addr { v: adj, ty: addr.ty, align }, q, bf: None, vidx: None, tb: Tb::Type };
+            let src = LV {
+                addr: Addr { v: adj, ty: addr.ty, align },
+                q,
+                bf: None,
+                vidx: None,
+                tb: Tb::Type,
+            };
             let v = self.load_lv(src);
             self.store_scalar(v, addr, q);
             return Ok(());
@@ -298,8 +304,13 @@ impl Cg<'_> {
         let gep = self.rt_fn("__cxa_get_exception_ptr", LTy::PTR, &[LTy::PTR], &[]);
         let adj = self.nounwind_runtime_call(gep, LTy::PTR, vec![exn]);
         let opaque = self.find_in_copy_construct(init)?;
-        let lv =
-            LV { addr: Addr { v: adj, ty: addr.ty, align: exn_align }, q, bf: None, vidx: None, tb: Tb::Type };
+        let lv = LV {
+            addr: Addr { v: adj, ty: addr.ty, align: exn_align },
+            q,
+            bf: None,
+            vidx: None,
+            tb: Tb::Type,
+        };
         self.f.opaque.insert(opaque, Opaque::Lv(lv));
         // The copy constructor runs in a terminate scope
         // ([except.terminate]/1.1).

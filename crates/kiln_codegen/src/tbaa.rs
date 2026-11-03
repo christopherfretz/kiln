@@ -156,12 +156,16 @@ impl Cg<'_> {
             }
             // [basic.lval]/11.3: `std::byte` aliases everything; an
             // enumeration without external linkage is `char`.
-            TypeView::Enum(d) if !self.in_std(d, "byte") && mangle::type_externally_visible(ast, q) => {
+            TypeView::Enum(d)
+                if !self.in_std(d, "byte") && mangle::type_externally_visible(ast, q) =>
+            {
                 let name = mangle::mangle_rtti(ast, &mut self.anon, q, "_ZTS");
                 let c = self.tbaa_char();
                 self.tbaa_scalar(name.as_bytes(), c)
             }
-            TypeView::Pointer(_) | TypeView::LValueRef(_) | TypeView::RValueRef(_) => self.tbaa_pointer(q),
+            TypeView::Pointer(_) | TypeView::LValueRef(_) | TypeView::RValueRef(_) => {
+                self.tbaa_pointer(q)
+            }
             TypeView::Record(rd) if self.tbaa_valid_base(rd).is_some() => {
                 self.tbaa_struct(rd).unwrap_or_else(|| self.tbaa_char())
             }
@@ -203,7 +207,9 @@ impl Cg<'_> {
         let ast = self.ast;
         let name = match ast.types.canonical_view(t) {
             TypeView::Builtin(BuiltinType::Void) => None,
-            TypeView::Builtin(b) => Some(tbaa_builtin_name(b).unwrap_or("omnipotent char").to_owned()),
+            TypeView::Builtin(b) => {
+                Some(tbaa_builtin_name(b).unwrap_or("omnipotent char").to_owned())
+            }
             TypeView::Record(rd) if !ast.decls.get(rd).name().is_empty() => {
                 let u = QualType::unqual(ast.types.canonical(t).ty());
                 Some(mangle::mangle_rtti(ast, &mut self.anon, u, "_ZTS"))
@@ -371,7 +377,8 @@ impl Cg<'_> {
         if !self.tbaa_on() || !matches!(inst, V::I(_)) {
             return;
         }
-        let node = if self.opts.clang_compat < 22 { self.tbaa_any_ptr(1) } else { self.tbaa_any_ptr(2) };
+        let node =
+            if self.opts.clang_compat < 22 { self.tbaa_any_ptr(1) } else { self.tbaa_any_ptr(2) };
         self.tbaa_attach_scalar(inst, node);
     }
 
@@ -381,14 +388,13 @@ impl Cg<'_> {
         if !self.tbaa_on() || !matches!(inst, V::I(_)) {
             return;
         }
-        let n = match self.tbaa.vtable {
-            Some(n) => n,
-            None => {
-                let root = self.tbaa_root();
-                let n = self.tbaa_scalar(b"vtable pointer", root);
-                self.tbaa.vtable = Some(n);
-                n
-            }
+        let n = if let Some(n) = self.tbaa.vtable {
+            n
+        } else {
+            let root = self.tbaa_root();
+            let n = self.tbaa_scalar(b"vtable pointer", root);
+            self.tbaa.vtable = Some(n);
+            n
         };
         self.tbaa_attach_scalar(inst, n);
     }
@@ -434,24 +440,23 @@ impl Cg<'_> {
             return;
         }
         let t = self.ast.types.canonical(q).ty();
-        let node = match self.tbaa.copies.get(&t) {
-            Some(&n) => n,
-            None => {
-                let mut fields = Vec::new();
-                let n = if self.tbaa_collect(0, QualType::unqual(t), &mut fields) {
-                    let mut ops = Vec::with_capacity(fields.len() * 3);
-                    for (off, size, tag) in fields {
-                        ops.push(Some(self.md_i64(off)));
-                        ops.push(Some(self.md_i64(size)));
-                        ops.push(Some(tag));
-                    }
-                    Some(self.m.md_tuple(&ops))
-                } else {
-                    None
-                };
-                self.tbaa.copies.insert(t, n);
-                n
-            }
+        let node = if let Some(&n) = self.tbaa.copies.get(&t) {
+            n
+        } else {
+            let mut fields = Vec::new();
+            let n = if self.tbaa_collect(0, QualType::unqual(t), &mut fields) {
+                let mut ops = Vec::with_capacity(fields.len() * 3);
+                for (off, size, tag) in fields {
+                    ops.push(Some(self.md_i64(off)));
+                    ops.push(Some(self.md_i64(size)));
+                    ops.push(Some(tag));
+                }
+                Some(self.m.md_tuple(&ops))
+            } else {
+                None
+            };
+            self.tbaa.copies.insert(t, n);
+            n
         };
         if let Some(n) = node {
             let (_, k) = self.tbaa_kinds();
@@ -462,7 +467,12 @@ impl Cg<'_> {
     /// clang `CodeGenTBAA::CollectFields`: `(offset, size, tag)` of each
     /// scalar of `q`; false for a class it does not describe (one with
     /// bases or a flexible array member).
-    fn tbaa_collect(&mut self, at: u64, q: QualType, out: &mut Vec<(u64, u64, MetadataId)>) -> bool {
+    fn tbaa_collect(
+        &mut self,
+        at: u64,
+        q: QualType,
+        out: &mut Vec<(u64, u64, MetadataId)>,
+    ) -> bool {
         let ast = self.ast;
         let TypeView::Record(rd) = ast.types.canonical_view(q) else {
             let size = self.size_align(q).0;
