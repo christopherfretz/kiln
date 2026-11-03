@@ -107,6 +107,8 @@ SwitchBool = "switch-bool" [];
 SwitchDefault = "switch-default" [];
 SwitchEnum = "switch-enum" [];
 TautologicalConstantCompare = "tautological-constant-compare" [];
+TautologicalPointerCompare = "tautological-pointer-compare" [];
+TautologicalUndefinedCompare = "tautological-undefined-compare" [];
 UndefinedBoolConversion = "undefined-bool-conversion" [];
 // ----- WP-220 (undefined variable templates)
 UndefinedVarTemplate = "undefined-var-template" [];

@@ -130,6 +130,7 @@ sema_template_template_param_not_at_least_as_constrained = Error (2) "template t
 sema_template_variable_noparams = Error (1) "extraneous 'template<>' in declaration of variable '{0}'";
 sema_this_bool_conversion = Warning [UndefinedBoolConversion] (0) "'this' pointer cannot be null in well-defined C++ code; pointer may be assumed to always convert to true";
 sema_this_capture = Error (1) "'this' cannot be {0:|implicitly }captured in this context";
+sema_this_null_compare = Warning [TautologicalUndefinedCompare] (1) "'this' pointer cannot be null in well-defined C++ code; comparison may be assumed to always evaluate to {0:true|false}";
 sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
 sema_this_static_member_func = Error (1) "'this' cannot be{0:| implicitly} used in a static member function declaration";
 // [basic.stc.thread]: GNU `__thread` / C11 `_Thread_local` (static TLS; WP-396)

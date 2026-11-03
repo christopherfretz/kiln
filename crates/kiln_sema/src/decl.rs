@@ -3258,6 +3258,10 @@ impl Sema<'_, '_> {
         // erroneous default argument) is invalid (clang's
         // `ActOnFunctionDeclarator`).
         invalid_decl |= d.function_params().is_some_and(|ps| ps.iter().any(|p| p.invalid));
+        // So is one whose decl-specifiers name no type (`f(int);`,
+        // `R::h(int);` after "a type specifier is required", or after an
+        // unknown type name; WP-411).
+        invalid_decl |= d.special.is_none() && (ds.type_error || !ds.has_type_specifier());
         let mut invalid_redecl = invalid_decl;
         // A redeclaration of an invalid declaration (below).
         let mut prev_invalid = false;
@@ -4584,6 +4588,9 @@ impl Sema<'_, '_> {
             .prev_candidates(name, Some(q))
             .into_iter()
             .filter(|&d| matches!(self.kind_of(d), DeclKind::Var | DeclKind::Function))
+            // An invalid declaration with no type (`R::v;`) merged with
+            // nothing and makes no lookup ambiguous (WP-411).
+            .filter(|&d| !self.ast.decls.get(d).has(DeclFlags::INVALID))
             .map(|d| self.ast.first(d))
             .collect();
         firsts.sort_unstable();
@@ -4718,6 +4725,24 @@ impl Sema<'_, '_> {
         (independent, local)
     }
 
+    /// [dcl.meaning.general]/2.2: a qualified declarator-id names a
+    /// member of its namespace; when lookup finds none, clang's
+    /// `ActOnVariableDeclarator` reports "no member named" at the name
+    /// and the variable is invalid (`int R::h;`, `R::h;`; WP-411).
+    fn diagnose_no_member_var(&mut self, ctx: DeclId, d: &Declarator, name: Symbol) -> bool {
+        let no_member = d.qualifier.is_some()
+            && matches!(self.kind_of(ctx), DeclKind::Namespace | DeclKind::TranslationUnit)
+            && self.lookup_qualified(ctx, name, LookupKind::Ordinary).decls.is_empty();
+        if no_member {
+            let msg = self
+                .diag(DiagId::sema_no_member, d.name_loc())
+                .arg(sym_str(self, name))
+                .arg(self.qualifier_desc(ctx));
+            self.emit(msg);
+        }
+        no_member
+    }
+
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
@@ -4737,12 +4762,13 @@ impl Sema<'_, '_> {
             p => p,
         };
         let ambiguous = self.diagnose_var_kind_conflict(name, d, prev.is_none());
+        let no_member = prev.is_none() && !ambiguous && self.diagnose_no_member_var(ctx, d, name);
         // A variable declared with no type is invalid and not merged
         // (clang's `MergeVarDecl` returns at an invalid new declaration):
-        // `y; y;` reports the missing type twice, no redefinition.
-        if ambiguous || !ds.has_type_specifier() {
-            prev = None;
-        }
+        // `y; y;` reports the missing type twice, no redefinition; so
+        // does one whose type named no type (`zz v;`, `R::f(v);`; WP-411).
+        let unmerged = ambiguous || !ds.has_type_specifier() || ds.type_error;
+        prev = prev.filter(|_| !unmerged);
         // [dcl.link]/6-7: a C-linkage variable of another scope.
         let prev = match prev {
             None if d.qualifier.is_none() => self.extern_c_prev(name, true, d.name_loc()),
@@ -4809,7 +4835,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
-        if ambiguous || redefined || self.storage_invalidates_var(ds, d) {
+        if ambiguous || no_member || redefined || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
@@ -4898,8 +4924,12 @@ impl Sema<'_, '_> {
         if es.iter().any(|&e| self.diagnose_unexpanded_written(e, "initializer", at)) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
+        let paren = match &init {
+            Initializer::Paren(es, l, _) if es.len() == 1 => Some(*l),
+            _ => None,
+        };
         self.act_on_init_inner(v, init);
-        self.check_static_tls(v);
+        self.check_static_tls(v, paren);
         self.check_constinit(v);
         self.initializing = None;
         self.lambda_mangle.var = None;
@@ -5585,7 +5615,7 @@ impl Sema<'_, '_> {
     pub fn act_on_uninit(&mut self, v: DeclId) {
         self.act_on_uninit_inner(v);
         if self.is_var_definition(v) {
-            self.check_static_tls(v);
+            self.check_static_tls(v, None);
             self.check_constinit(v);
         }
     }

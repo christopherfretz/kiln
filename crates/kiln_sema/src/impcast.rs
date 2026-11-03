@@ -241,7 +241,7 @@ impl Sema<'_, '_> {
     /// clang's `IsInAnyMacroBody`: whether `loc`, walked outward through
     /// macro arguments to where they were written, is in a macro's
     /// replacement list.
-    fn in_any_macro_body(&self, mut loc: Loc) -> bool {
+    pub(crate) fn in_any_macro_body(&self, mut loc: Loc) -> bool {
         let sm = self.diags.sm();
         for _ in 0..256 {
             if !loc.is_macro() {
