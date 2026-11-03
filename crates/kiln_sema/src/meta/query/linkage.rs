@@ -111,6 +111,8 @@ impl Sema<'_, '_> {
     /// `inline`, `extern`, attached to a named module, nor of C language
     /// linkage.
     fn internal_by_declaration(&self, d: DeclId) -> bool {
+        let templated =
+            matches!(self.kind_of(d), DeclKind::FunctionTemplate | DeclKind::VarTemplate);
         let pattern = match self.kind_of(d) {
             DeclKind::FunctionTemplate | DeclKind::VarTemplate => {
                 match self.ast.template_info(d).and_then(|i| i.pattern) {
@@ -128,7 +130,7 @@ impl Sema<'_, '_> {
                 if v.spec.storage() == VarStorage::Static {
                     return true;
                 }
-                if k != DeclKind::Var || p != d {
+                if k != DeclKind::Var || templated {
                     return false;
                 }
                 let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);

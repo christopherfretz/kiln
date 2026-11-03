@@ -97,7 +97,7 @@ impl Sema<'_, '_> {
             |loc| fail(loc, "reflection does not represent parameter of current function");
         let Reflectee::FnParam(f, i) = self.ast.reflections.get(r) else { return not_param(loc) };
         let Some(cur) = self.enclosing_function(self.ctx) else { return not_param(loc) };
-        if self.ast.first(cur) != self.ast.first(f) {
+        if !self.same_entity(cur, f) {
             return not_param(loc);
         }
         let p = self

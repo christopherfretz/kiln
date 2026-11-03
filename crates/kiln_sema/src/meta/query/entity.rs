@@ -174,7 +174,9 @@ impl Sema<'_, '_> {
         Ok(match self.ast.reflections.get(r) {
             Reflectee::Type(t) => {
                 let c = self.ast.types.canonical(t);
-                if c == t { r } else { self.intern_reflection(Reflectee::Type(c), loc)? }
+                // `c` and `t` are types, not declarations.
+                let same = c == t; // same_entity: raw ok
+                if same { r } else { self.intern_reflection(Reflectee::Type(c), loc)? }
             }
             Reflectee::NamespaceAlias(d) => {
                 let ns = self.ast.first(self.ast.resolve_alias(d));
