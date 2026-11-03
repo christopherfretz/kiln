@@ -668,7 +668,8 @@ impl Sema<'_, '_> {
     /// context notes moved from that use to `loc` from clang 22 on (clang
     /// stores only a successful deduction's, made here; WP-424).
     pub(crate) fn take_suppressed_diags(&mut self, d: DeclId, loc: Loc) -> Vec<Diag> {
-        let mut ds = self.templ.suppressed_diags.get_mut(&d).map(std::mem::take).unwrap_or_default();
+        let mut ds =
+            self.templ.suppressed_diags.get_mut(&d).map(std::mem::take).unwrap_or_default();
         if let Some(from) = self.special.dropped_tid_warnings.remove(&d)
             && self.clang_compat >= 22
         {

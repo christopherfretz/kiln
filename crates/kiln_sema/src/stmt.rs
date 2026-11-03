@@ -1124,6 +1124,24 @@ impl Sema<'_, '_> {
         self.unsupported("computed goto", star);
     }
 
+    /// GNU `&&label` (clang `LookupOrCreateLabel` then `ActOnAddrLabel`):
+    /// a prvalue of type `void*` naming the label, which is marked used.
+    /// Outside a function body clang rejects it at the identifier
+    /// (`err_address_of_label_outside_fn`) without the extension warning;
+    /// otherwise "use of GNU address-of-label extension" at the `&&`.
+    pub fn act_on_addr_label(&mut self, name: Symbol, name_loc: Loc, amp: Loc) -> Option<ExprId> {
+        if self.func.is_none() {
+            let d = self.diag(DiagId::parse_address_of_label_outside_fn, name_loc);
+            self.emit(d);
+            return None;
+        }
+        let d = self.diag(DiagId::parse_gnu_address_of_label, amp);
+        self.emit(d);
+        let l = self.act_on_asm_goto_label(name, name_loc);
+        let ty = self.ast.types.pointer_to(QualType::VOID);
+        Some(self.builder().addr_label(l, ty, amp, name_loc))
+    }
+
     /// An `asm goto` label operand (clang `LookupOrCreateLabel` then
     /// `ActOnAddrLabel`, which marks it used).
     pub fn act_on_asm_goto_label(&mut self, name: Symbol, name_loc: Loc) -> DeclId {

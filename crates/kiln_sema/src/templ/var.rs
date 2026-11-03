@@ -358,10 +358,7 @@ impl Sema<'_, '_> {
     /// [`Self::var_spec_depends_on_itself`]).
     pub(crate) fn undeduced_var_spec_use_19(&self, v: DeclId) -> bool {
         self.clang_compat < 22
-            && self
-                .ast
-                .spec_info(v)
-                .is_some_and(|(_, i)| i.kind == SpecKind::ImplicitInstantiation)
+            && self.ast.spec_info(v).is_some_and(|(_, i)| i.kind == SpecKind::ImplicitInstantiation)
     }
 
     /// The end of the translation unit: a specialization clang 19 left
@@ -380,7 +377,10 @@ impl Sema<'_, '_> {
             let args = self.ast.types.canonical_args(info.print_args);
             let name = self.unscoped_spec_name(v, args);
             let msg = self
-                .diag(DiagId::sema_auto_var_template_spec_depends_on_itself, info.point_of_instantiation)
+                .diag(
+                    DiagId::sema_auto_var_template_spec_depends_on_itself,
+                    info.point_of_instantiation,
+                )
                 .arg(name)
                 .arg(self.ty_arg(ty));
             self.emit(msg);
@@ -399,8 +399,7 @@ impl Sema<'_, '_> {
             i.kind == SpecKind::ImplicitInstantiation
                 && !self.ast.decls.get(i.from).has(DeclFlags::INVALID)
         });
-        let undeduced =
-            self.ast.decls.get(v).ty().is_some_and(|t| self.contains_undeduced_auto(t));
+        let undeduced = self.ast.decls.get(v).ty().is_some_and(|t| self.contains_undeduced_auto(t));
         if implicit
             && undeduced
             && let Some(d) = self.auto_expl_spec_in_own_init(v, loc)

@@ -1806,6 +1806,11 @@ impl<'a> Printer<'a, '_> {
                 line = format!("{k} '{}'", name(n).unwrap_or(""));
                 kids_out = self.kid_trees(n)?;
             }
+            "AddrLabelExpr" => {
+                let mut l = self.expr_head(n, k)?;
+                push_opt(&mut l, name(n));
+                line = l;
+            }
             "GotoStmt" => {
                 let target = text(n, "targetLabelDeclId")
                     .and_then(|d| self.ix.labels.get(d))

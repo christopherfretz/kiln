@@ -801,6 +801,10 @@ impl<'a> AstNames<'a> {
             }
             ExprKind::CXXNullPtrLiteralExpr => out.push_str("nullptr"),
             ExprKind::GNUNullExpr => out.push_str("__null"),
+            ExprKind::AddrLabelExpr => {
+                out.push_str("&&");
+                self.write_name(exprs.addr_label(e), out);
+            }
             // clang's `VisitDeclRefExpr`: the qualifier as written, then
             // the name.
             ExprKind::DeclRefExpr => {

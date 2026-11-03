@@ -2,6 +2,7 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+parse_address_of_label_outside_fn = Error (0) "use of address-of-label extension outside of a function body";
 parse_anon_bitfield_member_init = Error (0) "anonymous bit-field cannot have a default member initializer";
 parse_array_qual_outside_prototype = Error (0) "type qualifier used in array declarator outside of function prototype";
 parse_array_static_outside_prototype = Error (0) "'static' used in array declarator outside of function prototype";
@@ -93,8 +94,10 @@ parse_for_range_identifier = Error (0) "range-based for loop requires type for l
 parse_friend_decl_defines_type = Error (0) "cannot define a type in a friend declaration";
 parse_friend_decl_spec = Error (1) "'{0}' is invalid in friend declarations";
 parse_function_definition_not_allowed = Error (0) "function definition is not allowed here";
+parse_gnu_address_of_label = Extension [GnuLabelAsValue] (0) "use of GNU address-of-label extension";
 parse_gnu_case_range = Extension [GnuCaseRange] (0) "case ranges are a GNU extension";
 parse_gnu_case_range_19 = Extension [GnuCaseRange] (0) "use of GNU case range extension";
+parse_gnu_indirect_goto = Extension [GnuLabelAsValue] (0) "use of GNU indirect-goto extension";
 parse_incomplete_array_member_init = Error (0) "array bound cannot be deduced from a default member initializer";
 parse_init_list_bin_op = Error (2) "initializer list cannot be used on the {0:left|right} hand side of operator '{1}'";
 parse_invalid_decl_spec_combination = Error (1) "cannot combine with previous '{0}' declaration specifier";
