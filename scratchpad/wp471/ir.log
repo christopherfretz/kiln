@@ -1,0 +1,16 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/ir_vs_clang.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/ir_vs_clang-b9598ab1f7ff30e5)
+
+running 7 tests
+test ir_norm::tests::unname_locals_renumbers_pass_created_names ... ok
+test ir_norm::tests::comments_outside_strings_only ... ok
+test ir_norm::tests::structural_keeps_byval_align_and_abi_attrs ... ok
+test ir_norm::tests::structural_sorts_comdat_and_global_runs ... ok
+test ir_norm::tests::abi_slice_is_the_signatures_and_types ... ok
+test ir_norm::tests::structural_strips_release_noise ... ok
+test ir_matches_clang has been running for over 60 seconds
+test ir_matches_clang ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 68.26s
+
+EXIT 0

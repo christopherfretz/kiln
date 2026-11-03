@@ -2088,6 +2088,14 @@ impl Cg<'_> {
                 };
                 Ok(self.ref_lvalue(p, q))
             }
+            // clang `EmitCompoundLiteralLValue` of a file-scope literal:
+            // its `.compoundliteral` global (WP-466).
+            ExprKind::CompoundLiteralExpr if let Some(d) = ast.exprs.compound_literal_var(e) => {
+                let g = self.get_gvar(d)?;
+                let (ty, align) = (self.mty(q), self.var_align(d));
+                let addr = Addr { v: V::C(gval(g)), ty, align };
+                Ok(LV { addr, q, bf: None, vidx: None, tb: Tb::Type })
+            }
             ExprKind::CompoundLiteralExpr if !self.is_aggregate(q) => {
                 self.compound_literal_lvalue(e)
             }
