@@ -4508,7 +4508,15 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   The initializer of a variable that is constant-initialized keeps its
   wrappers unvalued (clang's deferred mode). A failure reports `call to
   consteval|immediate function 'f' is not a constant expression` with
-  the Oven's notes. Default arguments and default member initializers
+  the Oven's notes. When the variable a full-expression initializes is
+  constexpr or constinit (`note_checked_var_init_full_expr`), a failing
+  outermost invocation is not reported there: it is kept in
+  `ImmState::after_var` and `report_deferred_immediates` re-evaluates
+  and reports it after `check_constexpr_init`/`check_constinit`, as clang
+  checks the variable first (the invocation's note then names the
+  variable's initializer; WP-465,
+  `meta.const.eval/is-within-lifetime-consteval-var.cpp`). An escalating
+  invocation is reported in place. Default arguments and default member initializers
   are not checked at their definition (`note_default_init_full_expr`).
   A constant-expression finished as a full-expression of its own while
   an enclosing one is being built (`act_on_constant_full_expr`: a
@@ -6292,6 +6300,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   - Class, array and reference `T` need temporaries and are
     unsupported (`temporary_unsupported`) until classes have
     constructors (WP-065).
+  - A function type `T` in `T()`, `T{...}` or `T(a, b)` is `cannot
+    create object of function type 'T'` at the type, ranging over the
+    whole expression (clang `BuildCXXTypeConstructExpr`
+    `err_init_for_function_type`, after the single-operand cast — `T(a)`
+    is a functional cast — and before completeness and abstractness;
+    `function_type_construct`, WP-465). Test:
+    `expr.type.conv/function-type-construct.cpp`.
   - Array `T{...}` (`array_list_cast`, WP-216; `using A = int[2]; A{1,
     2}`) list-initializes an array prvalue that keeps the cv-qualifiers
     of `T` ([expr.type]/2). An array of class type with a non-trivial
@@ -6388,9 +6403,31 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     like any other, and `-Wswitch` sees an enumeration result. Codegen
     and the Oven evaluate it once. Tests:
     `stmt.switch/class-condition-{diags,run}.cpp`.
-  - duplicate `case` values (with a note)
+  - duplicate `case` values (with a note), each case located at its
+    value's begin (clang `getBeginLoc`). A case value outside `i128` (an
+    `unsigned __int128` above its maximum, a `_BitInt(N)` with N > 128;
+    WP-465) keeps its exact constant in the `ConstantExpr`, has no `i128`
+    key, and is compared with the other such values by its words
+    (`wide_duplicate_case`, printed in decimal); codegen emits it from the
+    constant and the Oven compares it limb by limb (spec/oven.md
+    "`_BitInt`"). Tests: `stmt.switch/bit-int-wide-{duplicate-case,condition}.cpp`.
   - multiple `default` labels
-  - `case` values converted to the promoted type
+  - `case` values converted to the promoted type as a converted
+    constant expression ([expr.const]/12, clang
+    `BuildConvertedConstantExpression`; WP-465): the implicit conversion
+    sequence is formed first (`case_cce_check`); none is `value of type
+    'X' is not implicitly convertible to 'T'`, and a standard (or a
+    user-defined sequence's second standard) conversion whose second step
+    is not identity, an integral promotion or conversion, a boolean
+    conversion from an integral or unscoped enumeration type, or a
+    pointer conversion from `nullptr_t` is `conversion from 'X' to 'T' is
+    not allowed in a converted constant expression` (`case 1.5:`, a class
+    with `operator double`, a string literal); both at the value with its
+    range, and the case is dropped. An integral value that does not fit is
+    `case value evaluates to V, which cannot be narrowed to type 'T'`,
+    after the full-expression's conversion warnings, as are an NTTP's and
+    a fixed-type enumerator's. Test:
+    `stmt.switch/case-converted-constant.cpp`.
   - `act_on_start_switch(loc, …)` and
     `act_on_finish_switch(…, cond_var)` bracket the body
   - GNU case ranges `case lo ... hi` (WP-205): the parser emits the
@@ -7013,8 +7050,10 @@ bit-field's signedness ([conv.integral]/3). Storing 1 into a one-bit
 wide signed bit-field reports `... to a one-bit wide bit-field ...`
 [-Wsingle-bit-bitfield-constant-conversion, a subgroup].
 - Nothing is reported for a `bool` bit-field, a dependent or invalid
-  bit-field, a value-dependent or non-constant value, or a value of
-  128 or more bits.
+  bit-field, or a value-dependent or non-constant value. A value of 128
+  or more bits (`__int128`, a wide `_BitInt`; WP-465) gets the same rule
+  computed on its words (`wide_truncation`), with exact decimal values
+  (`class.bit/bit-int-wide-bit-field.cpp`).
 - The value needs the width of its type, except that a negated or
   complemented constant (`-5`, `~0u`), or any unsigned constant written
   that way, needs only its significant bits (`APInt::getSignificantBits`
@@ -7374,9 +7413,6 @@ Everything is gated on `Sema::reflection` (driver `-freflection`).
   - prototype scope (§4.3)
   - `dynamic_cast` and polymorphic `typeid`
   - class and array temporaries (§6.1) and compound literals (§5.8)
-  - `-Wconstant-conversion` and `-Wliteral-conversion` alongside
-    narrowing errors in list-initialization (outside braced lists they
-    landed: spec/sema-conv.md §9)
   - statement expressions: `-Wgnu-statement-expression`, jumps into
     one, and class-glvalue results
 - **Constant evaluation** (what the Oven supports in M2 is in

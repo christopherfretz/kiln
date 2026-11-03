@@ -29,6 +29,7 @@ pub fn int_info(ast: &Ast, ty: QualType) -> Option<(u32, bool)> {
             };
             Some((u32::from(bytes) * 8, signed))
         }
+        TypeView::BitInt { width, signed } => Some((width, signed)),
         TypeView::Enum(d) => {
             let e = ast.decls.enumeration(ast.definition(d).unwrap_or(d))?;
             int_info(ast, e.int_type?)

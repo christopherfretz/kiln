@@ -9,8 +9,10 @@ use super::{Fault, compare, write_fault};
 use crate::Oven;
 use crate::arith::{IntErr, canon};
 use crate::bigint as bi;
+use crate::compile::float_of;
 use crate::kbc::{ak, wide};
 use crate::mem::{MemFault, flags};
+use crate::softfloat;
 use crate::ty::OTy;
 
 impl Oven {
@@ -76,6 +78,88 @@ impl Oven {
         Ok(())
     }
 
+    /// The canonical limbs of the bit-field of wide declared type `ty`
+    /// at `raw`, bit `bit` of that byte, `width` bits (the checks of
+    /// `load_bits`).
+    fn wide_load_bits(
+        &self,
+        raw: u64,
+        ty: OTy,
+        bit: u32,
+        width: u32,
+        k: u32,
+    ) -> Result<Vec<u64>, Fault> {
+        let nb = u64::from((bit + width).div_ceil(8));
+        let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
+        let (st, abs, a) = self.rmw_check(raw, nb, ty, k)?;
+        if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
+            self.slow_access(a.flags, raw, ty, k)?;
+        }
+        let sp = self.mem.space(st);
+        if !sp.is_init(abs, nb) {
+            return Err(fault(MemFault::Uninit));
+        }
+        let Some((tw, signed)) = self.types.wide(ty) else { return Err(Fault::Invalid) };
+        let n = self.wide_limbs(ty);
+        let mut w = vec![0u64; n.max(nb.div_ceil(8) as usize)];
+        for i in 0..nb {
+            w[(i / 8) as usize] |= (sp.read(abs + i, 1) as u64) << (8 * (i % 8));
+        }
+        let mut v = bi::shr(&w, bit, false);
+        bi::canon(&mut v, width.clamp(1, tw), signed);
+        v.truncate(n);
+        Ok(v)
+    }
+
+    /// Stores the low `width` bits of `v` as the bit-field of wide declared
+    /// type `ty` at `raw`, bit `bit` (the checks of `store_bits`).
+    fn wide_store_bits(
+        &mut self,
+        raw: u64,
+        ty: OTy,
+        v: &[u64],
+        (bit, width): (u32, u32),
+        k: u32,
+        init: bool,
+    ) -> Result<(), Fault> {
+        let nb = u64::from((bit + width).div_ceil(8));
+        let k = if init { ak::INIT } else { k };
+        let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
+        let (st, abs, a) = self.mem.check(raw, nb, true).map_err(fault)?;
+        if !init && let Some(f) = write_fault(st, a, ty) {
+            return Err(fault(f));
+        }
+        let has_union = a.flags & flags::HAS_UNION != 0;
+        let mutable = a.flags & (flags::MUTABLE_OUTSIDE | flags::CONST) == flags::MUTABLE_OUTSIDE;
+        if mutable && !init {
+            self.mutable_path(raw, ty, k)?;
+        }
+        self.mem.trial_write(raw, nb).map_err(fault)?;
+        if has_union {
+            self.union_path(raw, ty, k)?;
+        }
+        if width == 0 {
+            return Ok(());
+        }
+        let sp = self.mem.space_mut(st);
+        // Bytes not yet initialized hold zero bits.
+        let mut bytes: Vec<u8> = (0..nb)
+            .map(|i| if sp.is_init(abs + i, 1) { sp.read(abs + i, 1) as u8 } else { 0 })
+            .collect();
+        for j in 0..width {
+            let on = v.get((j / 64) as usize).is_some_and(|&x| x >> (j % 64) & 1 != 0);
+            let at = bit + j;
+            let (byte, m) = ((at / 8) as usize, 1u8 << (at % 8));
+            bytes[byte] = if on { bytes[byte] | m } else { bytes[byte] & !m };
+        }
+        for (i, &b) in bytes.iter().enumerate() {
+            sp.write(abs + i as u64, 1, u128::from(b));
+        }
+        sp.set_init(abs, nb, true);
+        sp.set_ptr(abs, nb, false);
+        Ok(())
+    }
+
     /// `Op::Wide` `[d, a, b, ty, x]` with aux `aux` (`regs` the values of
     /// registers `d`, `a`, `b`): the register value for `d` when the
     /// sub-op yields one (`CMP`, `TO`, `TO_BOOL`).
@@ -113,6 +197,38 @@ impl Oven {
                     return Ok(Some(if neg { i128::MIN as u128 } else { i128::MAX as u128 }));
                 }
                 return Ok(Some(canon(bi::low_u128(&v), w, s)));
+            }
+            wide::TO_FLOAT => {
+                let v = self.wide_load(a as u64, ty, ka)?;
+                let neg = signed && bi::is_neg(&v);
+                let mag = if neg { bi::neg(&v) } else { v };
+                return Ok(Some(softfloat::from_limbs(float_of(x), neg, &mag)));
+            }
+            wide::FROM_FLOAT => {
+                let kind = float_of(x);
+                let range = Fault::FloatRange { kind, bits: a };
+                let Some((neg, mag)) = softfloat::trunc_limbs(kind, a, n + 1) else {
+                    return Err(range);
+                };
+                // Exact in `n + 1` limbs only below `2^(64 n)`, which
+                // bounds every width of `n` limbs.
+                if mag[n] != 0 {
+                    return Err(range);
+                }
+                let zero = bi::is_zero(&mag);
+                let v = if neg { bi::neg(&mag) } else { mag };
+                if (neg && !zero && !signed) || !bi::fits(&v, width, signed) {
+                    return Err(range);
+                }
+                let mut r = v;
+                r.truncate(n);
+                r
+            }
+            wide::LOAD_BITS => self.wide_load_bits(a as u64, ty, x & 7, x >> 3, ka)?,
+            wide::STORE_BITS => {
+                let v = self.wide_load(a as u64, ty, ak::READ)?;
+                self.wide_store_bits(d as u64, ty, &v, (x & 7, x >> 3), k, init)?;
+                return Ok(None);
             }
             wide::CAST => {
                 let from = OTy(x);

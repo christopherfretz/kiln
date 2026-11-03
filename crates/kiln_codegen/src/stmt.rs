@@ -860,8 +860,14 @@ impl Cg<'_> {
                 return self.emit_case_range(cd.lhs, rhs, cd.sub);
             }
             let sw = self.f.sw.expect("case outside a switch");
-            let v = self.fold_int(cd.lhs).expect("case value folds");
-            let k = V::C(self.m.const_int(sw.cond_ty, v));
+            let k = if let Some(v) = self.fold_int(cd.lhs) {
+                V::C(self.m.const_int(sw.cond_ty, v))
+            } else {
+                // A wide `_BitInt` value: its constant (WP-465).
+                let c = self.folds.get(cd.lhs).expect("case value folds");
+                let q = ast.exprs.get(cd.lhs).ty();
+                V::C(self.const_scalar_value(c, q)?)
+            };
             self.f.fir.add_switch_case(sw.inst, k, b);
             if ast.stmts.get(cd.sub).kind() == StmtKind::CaseStmt
                 && ast.stmts.case_data(cd.sub).rhs.is_none()

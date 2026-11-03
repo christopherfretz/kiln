@@ -7,7 +7,7 @@ use kiln_ast::decl::TagKind;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, ValueCategory};
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
-use kiln_source::Loc;
+use kiln_source::{Loc, Span};
 
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
@@ -306,6 +306,22 @@ impl Sema<'_, '_> {
         self.recover_err(&kids, op_loc)
     }
 
+    /// `T()`, `T{...}` or `T(a, b)` of a function type `T`: `cannot create
+    /// object of function type 'T'` at the type with the whole expression's
+    /// range (clang `BuildCXXTypeConstructExpr`, `err_init_for_function_type`,
+    /// after the single-operand cast and before completeness; WP-465).
+    fn function_type_construct(&mut self, ty: QualType, loc: Loc, end: Loc) -> bool {
+        if !self.ast.types.is_function(ty) {
+            return false;
+        }
+        let msg = self
+            .diag(DiagId::sema_init_for_function_type, loc)
+            .arg(self.ty_arg(ty))
+            .range(Span::new(loc, self.token_end(end).unwrap_or(end)));
+        self.emit(msg);
+        true
+    }
+
     /// Whether `T(...)`/`T{...}` of class `ty` fails quietly because the
     /// instantiation of `ty`, triggered here, fails (clang's
     /// `RequireCompleteType` in `BuildCXXTypeConstructExpr` returns an
@@ -329,6 +345,9 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.is_dependent(ty) {
             return self.builder().unresolved_construct(ty, &[], false, loc, rparen);
+        }
+        if self.function_type_construct(ty, loc, rparen) {
+            return self.recover(QualType::ERROR, &[], loc);
         }
         // clang `BuildCXXTypeConstructExpr`'s `RequireCompleteType`: in a
         // template instantiation, a class template specialization whose
@@ -381,7 +400,8 @@ impl Sema<'_, '_> {
             return self.builder().unresolved_construct(ty, &[il], true, loc, l.rbrace);
         }
         // As `T()` (`act_on_value_init_cast`).
-        if self.construction_instantiation_fails(ty, loc)
+        if self.function_type_construct(ty, loc, l.rbrace)
+            || self.construction_instantiation_fails(ty, loc)
             || self.require_non_abstract_alloc(loc, ty)
         {
             let flat = Self::list_exprs(l);
@@ -494,7 +514,8 @@ impl Sema<'_, '_> {
             return self.builder().unresolved_construct(ty, &args, false, loc, rparen);
         }
         // As `T()` (`act_on_value_init_cast`).
-        if self.construction_instantiation_fails(ty, loc)
+        if self.function_type_construct(ty, loc, rparen)
+            || self.construction_instantiation_fails(ty, loc)
             || self.require_non_abstract_alloc(loc, ty)
         {
             return self.recover_dropping_braced(QualType::ERROR, args, loc);
