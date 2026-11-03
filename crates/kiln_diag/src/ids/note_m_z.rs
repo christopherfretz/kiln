@@ -76,6 +76,7 @@ note_placeholder_declared = Note (0) "placeholder declared here";
 note_possible_target = Note (0) "possible target for call";
 note_pp_poisoned_here = Note (0) "poisoned here";
 note_previous_binding_pack = Note (0) "previous binding pack specified here";
+note_previous_builtin_declaration = Note (2) "'{0}' is a builtin with type {1}";
 note_previous_declaration = Note (0) "previous declaration is here";
 note_previous_definition = Note (0) "previous definition is here";
 note_previous_exception_handler = Note (1) "for type {0}";

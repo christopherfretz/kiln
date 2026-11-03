@@ -778,8 +778,16 @@ impl Oven {
                     pc += 3;
                 }
                 Op::FAdd | Op::FSub | Op::FMul | Op::FDiv => {
-                    match arith::float_bin(op, float_of(aux), reg!(1), reg!(2)) {
+                    let kind = float_of(aux);
+                    match arith::float_bin(op, kind, reg!(1), reg!(2)) {
                         Ok(v) => reg!(0) = v,
+                        Err(FloatErr::NaN | FloatErr::DivZero) if self.fold_float_ub => {
+                            let Some(v) = arith::float_bin_raw(op, kind, reg!(1), reg!(2)) else {
+                                fail!(Fault::Float(FloatErr::Unsupported))
+                            };
+                            reg!(0) = v;
+                            self.run.impure += 1;
+                        }
                         Err(e) => fail!(Fault::Float(e)),
                     }
                     pc += 4;

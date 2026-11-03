@@ -67,6 +67,7 @@ IncrementBool = "increment-bool" [];
 InitializerOverrides = "initializer-overrides" [];
 InlineNamespaceReopenedNoninline = "inline-namespace-reopened-noninline" [];
 InstantiationAfterSpecialization = "instantiation-after-specialization" [];
+IntInBoolContext = "int-in-bool-context" [];
 InvalidNoreturn = "invalid-noreturn" [];
 InvalidOffsetof = "invalid-offsetof" [];
 InvalidPartialSpecialization = "invalid-partial-specialization" [];
@@ -103,6 +104,7 @@ Switch = "switch" [];
 SwitchBool = "switch-bool" [];
 SwitchDefault = "switch-default" [];
 SwitchEnum = "switch-enum" [];
+TautologicalConstantCompare = "tautological-constant-compare" [];
 TautologicalPointerCompare = "tautological-pointer-compare" [];
 TautologicalUndefinedCompare = "tautological-undefined-compare" [];
 // ----- WP-220 (undefined variable templates)

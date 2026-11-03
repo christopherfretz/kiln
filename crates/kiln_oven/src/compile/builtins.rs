@@ -529,7 +529,13 @@ impl Compiler<'_> {
             | id::FMINF
             | id::FMINL
             | id::FMAXIMUM_NUMF16
-            | id::FMINIMUM_NUMF16 => {
+            | id::FMINIMUM_NUMF16
+            | id::FMAXIMUM_NUM
+            | id::FMAXIMUM_NUMF
+            | id::FMAXIMUM_NUML
+            | id::FMINIMUM_NUM
+            | id::FMINIMUM_NUMF
+            | id::FMINIMUM_NUML => {
                 let Some(fk) = self.float_kind(e) else {
                     self.trap_loc(begin, INVALID.into());
                     return Some(self.finish_builtin(dst));
@@ -544,8 +550,14 @@ impl Compiler<'_> {
                     }
                     id::FMAX | id::FMAXF | id::FMAXL if c22 => bi::FMAX_22,
                     id::FMAX | id::FMAXF | id::FMAXL => bi::FMAX,
-                    id::FMAXIMUM_NUMF16 => bi::FMAXIMUM_NUM,
-                    id::FMINIMUM_NUMF16 => bi::FMINIMUM_NUM,
+                    id::FMAXIMUM_NUMF16
+                    | id::FMAXIMUM_NUM
+                    | id::FMAXIMUM_NUMF
+                    | id::FMAXIMUM_NUML => bi::FMAXIMUM_NUM,
+                    id::FMINIMUM_NUMF16
+                    | id::FMINIMUM_NUM
+                    | id::FMINIMUM_NUMF
+                    | id::FMINIMUM_NUML => bi::FMINIMUM_NUM,
                     _ if c22 => bi::FMIN_22,
                     _ => bi::FMIN,
                 };
@@ -732,7 +744,15 @@ impl Compiler<'_> {
                 }
             }
             // The other libm functions and the rounding intrinsics.
-            _ if id::is_libm(bid) || bid == id::CANONICALIZEF16 => {
+            _ if id::is_libm(bid)
+                || matches!(
+                    bid,
+                    id::CANONICALIZEF16
+                        | id::CANONICALIZE
+                        | id::CANONICALIZEF
+                        | id::CANONICALIZEL
+                ) =>
+            {
                 self.trap_loc(begin, INVALID.into());
             }
             // WP-171: clang constant-evaluates no coroutine builtin.
