@@ -3,12 +3,18 @@
 //! measurement (`run_measured`: precise wall clock plus peak RSS); capping a
 //! child's address space ([`MemLimit`]) and recognizing that it ran out
 //! ([`Output::out_of_memory`]).
+//!
+//! Every child either function starts is registered in a process-wide table
+//! of live children (each the leader of its own process group) until it is
+//! reaped, so that [`kill_live_children`], which the SIGINT/SIGTERM thread of
+//! [`crate::jobs`] calls, can kill and reap all of them before xtask exits;
+//! after it no new child starts (spawning fails with `Interrupted`).
 
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -256,7 +262,11 @@ pub fn run_with_input(
     // the driver left the readers blocked on a running `cc1` forever.
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(cmd, 0);
-    let mut child = cmd.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let spawning = LIVE.begin_spawn()?;
+    let child = cmd.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
+    // Deregistered when this returns, after the child is reaped.
+    let _live = spawning.spawned(child.as_ref().map(Child::id).ok());
+    let mut child = child?;
     let pid = child.id();
     let writer = input.map(|bytes| {
         let mut pipe = child.stdin.take().expect("stdin is piped");
@@ -416,14 +426,20 @@ pub fn run_measured(
     // As in `run_with_input`: a jobserver slot for the child's lifetime,
     // taken before the wall clock starts.
     let _slot = crate::jobs::global().acquire();
+    let spawning = LIVE.begin_spawn()?;
     let start = Instant::now();
-    let mut child = cmd.spawn()?;
+    let child = cmd.spawn();
+    let live = spawning.spawned(child.as_ref().map(Child::id).ok());
+    let mut child = child?;
     let pid = child.id();
     let err_reader = spawn_reader(&mut child, false);
     let (tx, rx) = mpsc::channel();
     let waiter = thread::spawn(move || {
         let r = child.wait();
-        let _ = tx.send((r, Instant::now()));
+        let end = Instant::now();
+        // Reaped: leave the table before anyone else can reuse the pid.
+        drop(live);
+        let _ = tx.send((r, end));
     });
     let (status, end) = if let Ok((r, end)) = rx.recv_timeout(timeout) {
         (Some(r?), end)
@@ -452,6 +468,125 @@ pub fn run_measured(
 fn read_rss_file(path: &Path) -> Option<u64> {
     let text = std::fs::read_to_string(path).ok()?;
     text.lines().rev().find(|l| !l.trim().is_empty())?.trim().parse().ok()
+}
+
+/// The live children of this process: the pids (each its own process-group
+/// leader) between spawn and reap, the spawns in flight, and whether
+/// [`kill_live_children`] has run.
+struct LiveChildren {
+    state: Mutex<LiveState>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct LiveState {
+    pids: Vec<u32>,
+    spawning: usize,
+    shutdown: bool,
+}
+
+static LIVE: LiveChildren = LiveChildren::new();
+
+/// A spawn in flight: counted so that a shutdown waits for (and kills) a
+/// child whose pid is not known yet. Always ended by [`Spawning::spawned`]
+/// right after the `spawn` call.
+#[must_use]
+struct Spawning<'a>(&'a LiveChildren);
+
+/// A registered child, removed from the table on drop (after it is reaped,
+/// or on any early return or panic).
+#[must_use]
+struct LiveChild<'a> {
+    table: &'a LiveChildren,
+    pid: Option<u32>,
+}
+
+impl LiveChildren {
+    const fn new() -> Self {
+        Self {
+            state: Mutex::new(LiveState { pids: Vec::new(), spawning: 0, shutdown: false }),
+            changed: Condvar::new(),
+        }
+    }
+
+    /// The state is a pid list and two counters updated under the lock, so
+    /// a poisoned lock still holds a consistent value.
+    fn lock(&self) -> MutexGuard<'_, LiveState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn begin_spawn(&self) -> io::Result<Spawning<'_>> {
+        let mut st = self.lock();
+        if st.shutdown {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "xtask is shutting down"));
+        }
+        st.spawning += 1;
+        Ok(Spawning(self))
+    }
+
+    /// Sets the shutdown flag, kills the process group of every live child,
+    /// and waits (at most `grace`) until each is reaped and no spawn is in
+    /// flight; a child spawned meanwhile is killed as it registers. Returns
+    /// how many groups were killed.
+    fn shutdown(&self, grace: Duration) -> usize {
+        let deadline = Instant::now() + grace;
+        let mut st = self.lock();
+        st.shutdown = true;
+        // Killed under the lock: a pid leaves the table only once reaped, so
+        // none of these can have been reused.
+        let killed = st.pids.len();
+        for &pid in &st.pids {
+            kill_group(pid);
+        }
+        while !(st.pids.is_empty() && st.spawning == 0) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            st = self.changed.wait_timeout(st, left).unwrap_or_else(PoisonError::into_inner).0;
+        }
+        killed
+    }
+}
+
+impl<'a> Spawning<'a> {
+    /// Ends the spawn: registers `pid` (the spawn's result), killing it at
+    /// once if a shutdown started meanwhile.
+    fn spawned(self, pid: Option<u32>) -> LiveChild<'a> {
+        let table = self.0;
+        let mut st = table.lock();
+        st.spawning -= 1;
+        if let Some(pid) = pid {
+            st.pids.push(pid);
+            if st.shutdown {
+                kill_group(pid);
+            }
+        }
+        drop(st);
+        table.changed.notify_all();
+        LiveChild { table, pid }
+    }
+}
+
+impl Drop for LiveChild<'_> {
+    fn drop(&mut self) {
+        let Some(pid) = self.pid else { return };
+        let mut st = self.table.lock();
+        if let Some(i) = st.pids.iter().position(|&p| p == pid) {
+            st.pids.swap_remove(i);
+        }
+        drop(st);
+        self.table.changed.notify_all();
+    }
+}
+
+/// Kills (`SIGKILL`, by process group) every child started by [`run`],
+/// [`run_with_input`] or [`run_measured`] that is still running, waits up to
+/// `grace` for their reaping, and makes every later spawn fail. Called once,
+/// by the SIGINT/SIGTERM thread, before the jobserver tokens are returned.
+/// Returns how many children were killed.
+pub fn kill_live_children(grace: Duration) -> usize {
+    LIVE.shutdown(grace)
 }
 
 #[cfg(unix)]
@@ -551,6 +686,42 @@ mod tests {
             RssProbe::Unavailable
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The shutdown kills a registered child's whole group and waits for its
+    /// reaping; a spawn in flight when it starts is killed as it registers;
+    /// later spawns fail. (A private table: the global one is shared with the
+    /// other tests of this process.)
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_kills_and_reaps_live_children() {
+        use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
+        static TABLE: LiveChildren = LiveChildren::new();
+        let start = |spawning: Spawning<'static>| {
+            let mut c = Command::new("sh");
+            c.args(["-c", "sleep 30; :"]).process_group(0);
+            let mut child = c.spawn().unwrap();
+            let live = spawning.spawned(Some(child.id()));
+            thread::spawn(move || {
+                let s = child.wait().unwrap();
+                drop(live);
+                s
+            })
+        };
+        let first = start(TABLE.begin_spawn().unwrap());
+        let late = TABLE.begin_spawn().unwrap();
+        let late = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            start(late).join().unwrap()
+        });
+        let t = Instant::now();
+        assert_eq!(TABLE.shutdown(Duration::from_secs(20)), 1);
+        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+        assert_eq!(first.join().unwrap().signal(), Some(9));
+        assert_eq!(late.join().unwrap().signal(), Some(9));
+        assert!(TABLE.lock().pids.is_empty());
+        let refused = TABLE.begin_spawn().map(|_| ()).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::Interrupted);
     }
 
     #[test]
