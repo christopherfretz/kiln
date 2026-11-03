@@ -1164,6 +1164,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         };
         let lo = t.span.lo;
         let mid = lo.with_offset(1);
+        self.s.note_split_greater(lo);
+        if rest == Punct::Greater {
+            self.s.note_split_greater(mid);
+        }
         self.forget_scans();
         self.cur = Token {
             kind: TokKind::Punct(rest),

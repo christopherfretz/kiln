@@ -670,6 +670,9 @@ fn run_all(cfg: &Config, jobs: &[Job<'_>], n: usize, verbose: bool) -> Vec<TestR
                         if verbose && !r.detail.is_empty() {
                             println!("{}", indent(&r.detail));
                         }
+                        if verbose && let Some(e) = &r.first_error {
+                            println!("{}", indent(&format!("first error: {e}")));
+                        }
                     }
                     slots.lock().expect("no worker panics while holding the lock")[i] = Some(r);
                 }

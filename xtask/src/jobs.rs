@@ -20,9 +20,9 @@
 //! Tokens are released by `Drop`, so a panicking worker, a child killed by
 //! the memory cap or the timeout, and an early `?` return all give the token
 //! back. SIGINT and SIGTERM are caught (by a `signal-hook` thread, so the
-//! `unsafe` of signal handling stays in that dependency): the held and spare
-//! pool bytes are written back, then the signal's default action ends the
-//! process. Only SIGKILL (which no process can catch) or another uncaught
+//! `unsafe` of signal handling stays in that dependency): every live child of
+//! `util::process` is killed and reaped, then the held and spare pool bytes
+//! are written back, then the signal's default action ends the process. Only SIGKILL (which no process can catch) or another uncaught
 //! fatal signal loses the tokens xtask held, as it would for make or cargo;
 //! `cargo xtask jobserver refill` restores the pool afterwards.
 
@@ -33,8 +33,8 @@ use std::process::ExitCode;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, PoisonError};
 
 /// The jobserver this process inherited, if any (read from `MAKEFLAGS` once).
-/// The first call with a live pool also starts the SIGINT/SIGTERM release
-/// thread.
+/// The first call also starts the SIGINT/SIGTERM thread (with or without a
+/// pool: it kills the live children either way).
 pub fn global() -> &'static Client {
     static GLOBAL: OnceLock<Client> = OnceLock::new();
     static SIGNALS: Once = Once::new();
@@ -49,16 +49,21 @@ pub fn global() -> &'static Client {
             Client::none()
         })
     });
-    if client.pool.is_some() {
-        SIGNALS.call_once(|| release_on_signal(client));
-    }
+    SIGNALS.call_once(|| release_on_signal(client));
     client
 }
 
-/// Starts a thread that, on SIGINT or SIGTERM, returns every pool byte the
-/// process holds and then ends it with the signal's default action (so the
+/// How long an interrupted xtask waits for its killed children to be reaped
+/// before returning the tokens anyway (a child in uninterruptible sleep).
+#[cfg(unix)]
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Starts a thread that, on SIGINT or SIGTERM, kills and reaps every live
+/// child (`util::process::kill_live_children`), then returns every pool byte
+/// the process holds, then ends it with the signal's default action (so the
 /// parent still sees "killed by SIGINT"; exit status 128 + signal if that
-/// cannot be emulated).
+/// cannot be emulated). The tokens go back after the children are dead, so
+/// the pool is never oversubscribed by an orphan, and exactly once.
 #[cfg(unix)]
 fn release_on_signal(client: &'static Client) {
     use signal_hook::consts::{SIGINT, SIGTERM};
@@ -67,13 +72,17 @@ fn release_on_signal(client: &'static Client) {
         Err(e) => {
             eprintln!(
                 "xtask: warning: cannot catch SIGINT/SIGTERM ({e}); an interrupted run \
-                 will not return its jobserver tokens"
+                 will neither kill its children nor return its jobserver tokens"
             );
             return;
         }
     };
     let spawned = std::thread::Builder::new().name("jobserver-signals".into()).spawn(move || {
         if let Some(sig) = signals.forever().next() {
+            let killed = crate::util::process::kill_live_children(SHUTDOWN_GRACE);
+            if killed > 0 {
+                eprintln!("xtask: signal {sig}: killed {killed} child process(es)");
+            }
             let n = client.release_all();
             if n > 0 {
                 eprintln!("xtask: signal {sig}: returned {n} jobserver token(s)");

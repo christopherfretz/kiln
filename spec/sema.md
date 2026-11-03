@@ -1990,6 +1990,27 @@ and returns the scope it names:
     and a C-linkage entity of the same name in a namespace conflict
     either way (`err_extern_c_global_conflict` and its note); a
     global function does not.
+  - [dcl.link]/6, a redeclaration keeps the first declaration's language
+    linkage (`has_incompatible_language_linkage`, clang's
+    `haveIncompatibleLanguageLinkages`): the new declaration's innermost
+    lexically enclosing linkage specification is looked up through any
+    context. `extern "C"` around a redeclaration of an entity whose first
+    declaration has C++ language linkage, or `extern "C++"` around one
+    whose first declaration is in an `extern "C"` context, is
+    `sema_different_language_linkage` ("declaration of 'f' has a
+    different language linkage") with "previous declaration/definition
+    is here". The redeclaration is not merged (the function or variable
+    is invalid). A redeclaration with no linkage specification
+    (`extern "C" { void h(); } void h();`) keeps C linkage silently; an
+    entity with internal linkage, a class member, a friend and a
+    different overload are never checked. For a variable the check
+    follows the redefinition check (`extern "C" int w = 1; extern "C++"
+    { int w = 2; }` is "redefinition of 'w'"). Not implemented: a first
+    declaration at block scope (`void f() { extern void k(); } extern "C"
+    void k();`; redeclaration lookup does not find it), and clang's
+    "non-static declaration follows static" for a braceless `extern
+    "C++" int v;` after `static int v;`.
+    Tests: `dcl.link/language-linkage-redecl-errors.cpp`.
 - **Redefinition through an initializer** (clang
   `AddInitializerToDecl`): a namespace-scope variable that was a
   declaration before its initializer (`extern`, or a single-line
@@ -3090,10 +3111,23 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   (`Ast::has_nothrow_attr` reads the chain). A `NoThrow` callee makes
   a call non-throwing (`can_throw`, so `noexcept(strlen(s))` is
   true). No `Builtin` attribute is attached, so the call stays an
-  ordinary call: clang's lowering of recognized `memcpy`/`fabs`/`abs`
-  calls to intrinsics and its implicit `format` / `alloc_size`
-  attributes on the library names (`-Wformat*` on `sprintf`) are not
-  modelled; only the `__builtin_` printf rows carry `format` (below).
+  ordinary call everywhere but in codegen: WP-419 records the row's
+  `__builtin_` twin (`Decls::lib_builtin`, `ceil` -> `__builtin_ceil`,
+  at the `-fclang-compat` level; inherited by redeclarations) and
+  codegen lowers a direct call of the errno-free `<math.h>` functions
+  as the twin (spec/codegen.md §3, "library builtins"). WP-419 adds
+  C23's `roundeven{,f,l}` (clang 19 and 22), clang 22's
+  `fmaximum_num` / `fminimum_num` `{,f,l}` (`builtin::lib_min_compat`:
+  not recognized at `-fclang-compat=19`) and the GNU `sincos{,f,l}`
+  (clang 22, `ALL_GNU_LANGUAGES`: recognized under `-std=gnu++*` only,
+  `builtin::lib_gnu_only`; `NoThrow`, a call is `nounwind`). A call in
+  a constant expression is still a call of a non-constexpr function
+  (clang 19 and 22 reject `constexpr double d = ceil(1.5);`). Not
+  modelled: clang's lowering of recognized `memcpy` / `memmove` /
+  `memset` / `abs` / `labs` / `llabs` calls (and clang 22's `modf`) to
+  intrinsics, and its implicit `format` / `alloc_size` attributes on
+  the library names (`-Wformat*` on `sprintf`); only the `__builtin_`
+  printf rows carry `format` (below).
 - **GCC's implicit library builtins** (WP-380, `record_gnu_lib_twin`;
   `Sema::gnu_lib_builtins`, set by the driver for `-stdlib=libstdc++`,
   the default): libstdc++'s `<cmath>` double overloads are `using
@@ -3224,6 +3258,17 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     a use is an undeclared identifier there), matching `__has_builtin` at
     each level. Folding: spec/oven.md "Builtins"; lowering:
     spec/codegen.md (`tests/conformance/c.math/f16-builtins*.cpp`).
+  - WP-419: `__builtin_signbitf(float)` / `__builtin_signbitl(long
+    double)` (clang 19 and 22; ordinary argument conversions, unlike the
+    custom-checked `__builtin_signbit`), and clang 22's
+    `__builtin_fmaximum_numf128` / `fminimum_numf128` / `sincosf128`
+    (`__float128`, i.e. `long double` on AArch64) and
+    `__builtin_sincospi{,f,l}` (`void(T, T*, T*)`, `nothrow`; only at
+    `-fclang-compat=22`, `builtin::min_compat`).
+  - WP-419: `__builtin_classify_type(e)` (custom-checked, one argument
+    kept unconverted and unevaluated; GCC type classes, identical in
+    clang 19 and 22): spec/sema-templates.md §9.4
+    (`tests/conformance/expr.const/builtin-classify-type*.cpp`).
 - **Format strings** (WP-282; `format_string.rs`, clang
   `CheckPrintfHandler`): a call whose callee has a `format(printf, F, A)`
   attribute with `A` > 0 and whose argument `F` is an ordinary string
@@ -4934,7 +4979,11 @@ conversion to `bool` (`check_constant_logical_operand`):
   for a bitwise operation", `|` for `||`) replacing the operator, and
   for `&&` only `note_logical_instead_of_bitwise_remove_constant`
   removing from the end of the left operand to the end of the right.
-- Tests: `expr.log.and/constant-operand*.cpp`, `expr.log.or/constant-operand.cpp`.
+  Both fix-its are file edits (§7.10.1): the removal is dropped when
+  either end is inside a macro expansion it does not begin or end
+  (`a && G(5)` with `#define G(x) x; (void)0`); the notes stay.
+- Tests: `expr.log.and/constant-operand*.cpp`, `expr.log.or/constant-operand.cpp`,
+  `kiln_driver` `fixits_in_macro_expansions_like_clang`.
 
 ### 5.26 Integers in a boolean context (`int_in_bool.rs`, WP-410)
 
@@ -4971,13 +5020,26 @@ value is used); no parentheses or implicit casts are looked through.
   to a boolean", `int-in-bool-context`) at the operator, from
   `builtin_binary` before the operands are converted.
 - clang's `'*' in boolean context` is C only and not issued.
-- Deviation: clang checks a template's non-dependent full-expressions
-  again in each instantiation and repeats these warnings there; kiln
-  reports them once, in the definition.
+- Templates ([temp.inst], WP-419): `check_implicit_conversions` skips a
+  value- or type-dependent full-expression (clang's
+  `CheckImplicitConversions`), so `return N << 1;` and `(x << 1) && N`
+  are checked only in each instantiation. A non-dependent one is checked
+  in the definition and again in each instantiation, which runs the walk
+  on the shared tree from its `act_on_condition` / `act_on_return` /
+  full-expression actions. The warnings above are
+  `per_instantiation()` (spec/diag.md §7.4), so each instantiation
+  reports them again with its instantiation note. In an instantiation
+  the walk also re-runs the `&&` / `||` enumerator check on each
+  operator of the full-expression (`recheck_enum_constants_in_bool`;
+  clang rebuilds every operator, kiln shares non-dependent ones); an
+  operator rebuilt by substitution is then reported twice at one
+  location and context and deduplicated. A substituted non-type
+  argument is not an integer literal (`a ? N : 5` is not warned).
 - Tests: `expr.shift/shift-bool-always.cpp`,
   `expr.shift/shift-in-bool-context-{19,22}.cpp`,
   `expr.cond/cond-int-constants-bool.cpp`,
-  `conv.bool/enum-constant-in-bool*.cpp`.
+  `conv.bool/enum-constant-in-bool*.cpp`,
+  `conv.bool/int-in-bool-per-instantiation-{19,22}.cpp`.
 
 ### 5.27 Always-non-null comparisons (`null_compare.rs`, WP-411)
 
@@ -5869,6 +5931,35 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
   `stmt.break/unreachable-code-break.cpp`,
   `stmt.if/unreachable-code-config.cpp`.
 
+#### 7.10.1 Fix-its at macro locations (`macro_fixit.rs`, WP-419)
+
+The silencing note and the `-Wconstant-logical-operand` notes (§5.25)
+build their fix-its as clang does, as edits of the file:
+- The end of a token (`Sema::file_token_end`, clang
+  `Lexer::getLocForEndOfToken`) at a macro location exists only when the
+  token ends every expansion it is in (a macro argument ends its
+  expansion unless the argument continues in the next entry); it is then
+  the end of the outermost invocation. Without it the silencing note is
+  not emitted and the removal fix-it is not attached.
+- `Sema::file_fixits` maps a note's fix-its (clang `edit::Commit`,
+  `Lexer::makeFileCharRange`): an insertion at the start of every
+  expansion it is in moves to the invocation, and a macro-argument
+  location to where the argument is written; a range keeps a file end,
+  maps a macro begin by the start rule and a macro end by the end rule,
+  and a range lying in one macro argument maps to its spelling. When any
+  fix-it of the note does not map, the note keeps its message and loses
+  all of its fix-its (clang `mergeFixits`): `if (X 1)` with
+  `#define X h() && !` gets the note without `/* DISABLES CODE */ (`.
+- A token's end is measured from the source text (`Sema::token_end`):
+  an identifier, a number or the longest punctuator ([lex.operators];
+  `>>` and `>>=` included). A one-character `>` that the parser split
+  off a `>>` or `>>=` closing a template argument list ([temp.names]/4;
+  `Parser::split_greater` calls `Sema::note_split_greater`) measures
+  one character, as clang measures the split token. Unit test:
+  `impcast::tests::token_end_measures_shift_tokens_and_split_greaters`.
+- Tests: `kiln_driver` `fixits_in_macro_expansions_like_clang` (stderr of
+  clang 19 and 22), `expr.log.and/constant-operand-macro-fixits.cpp`.
+
 ### 7.11 `-Wfor-loop-analysis` (`for_loop_analysis.rs`, WP-234)
 clang 19's `CheckForLoopConditionalStatement` and
 `CheckForRedundantIteration`. `act_on_for` runs both as each `for` is
@@ -5907,8 +5998,13 @@ instantiation repeats them, as clang does).
   `incremented here` at the header's name.
 - Groups: -Wloop-analysis = {-Wfor-loop-analysis,
   -Wrange-loop-analysis}; not in -Wall.
+- Macros are not suppressed: the warning fires whether the `for`, its
+  condition, increment or the body's last statement comes from a macro
+  expansion, with the usual `expanded from macro` notes (§diag 8). A
+  dependent loop warns once per instantiation, with the instantiation
+  note (WP-419).
 - Tests: `tests/conformance/stmt.for/for-loop-analysis.cpp`,
-  `stmt.for/loop-analysis.cpp`.
+  `stmt.for/loop-analysis.cpp`, `stmt.for/for-loop-analysis-macros.cpp`.
 
 ### 7.12 `-Wbitfield-constant-conversion` (`bitfield_constant.rs`, WP-234)
 clang 19's `AnalyzeBitFieldAssignment`. An integral or enumeration

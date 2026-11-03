@@ -482,6 +482,13 @@ impl Compiler<'_> {
                     self.patch(pc + 3, end);
                 }
             }
+            // WP-419: clang `EvaluateBuiltinClassifyType`: the operand's
+            // GCC type class; the operand is not evaluated.
+            id::CLASSIFY_TYPE => {
+                let ast = self.ast();
+                let v = arg(0).map_or(-1, |x| ast.gcc_type_class(ast.exprs.get(x).ty()));
+                self.konst(dst, i128::from(v) as u128);
+            }
             id::CLZ
             | id::CLZL
             | id::CLZLL

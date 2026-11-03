@@ -313,6 +313,11 @@ pub struct TestResult {
     pub max_rss_kb: Option<u64>,
     /// The peak RSS of its kiln++ compile step, KiB.
     pub compile_rss_kb: Option<u64>,
+    /// A `.compile.fail.cpp` test that passed on its exit status: the first
+    /// `error:` line of the compile (with its location), or `(no error
+    /// line)`, so an audit can spot a wrong-reason failure (spec/libcxx.md
+    /// ".compile.fail.cpp").
+    pub first_error: Option<String>,
 }
 
 /// One test to run: its path, the lit.local.cfg files above it (outermost
@@ -585,7 +590,13 @@ pub fn prepare(
 /// A step's verdict.
 enum Step {
     Ok,
-    Failed { keys: Vec<(String, String)>, crashed: bool, detail: String },
+    Failed {
+        keys: Vec<(String, String)>,
+        crashed: bool,
+        detail: String,
+        /// The first `error:` line of stderr, trimmed.
+        first_error: Option<String>,
+    },
     Killed(String),
     Timeout,
 }
@@ -602,6 +613,7 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
         wall: Duration::ZERO,
         max_rss_kb: None,
         compile_rss_kb: None,
+        first_error: None,
     };
     if let Some(reason) = env_unsupported(&job.rel, &cfg.scratch, cfg.libcxx_version) {
         r.outcome = Outcome::Unsupported(reason);
@@ -651,7 +663,7 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
             .collect();
         execute_script(cfg, &job.path, &scratch, &d.run, &flags, &subst, run, &mut r);
     } else {
-        execute(cfg, &job.path, &scratch, kind, &flags, run, &mut r);
+        execute(cfg, &job.path, &scratch, compile_fail_kind(kind, &text), &flags, run, &mut r);
     }
     // XFAIL turns PASS into XPASS and FAIL into XFAIL; it never hides a
     // KILLED, a TIMEOUT or a compiler crash.
@@ -664,6 +676,17 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
     }
     cleanup(cfg, &scratch);
     r
+}
+
+/// A `.compile.fail.cpp` test with clang-verify directives is run as a
+/// `.verify.cpp` one: its diagnostics must match (spec/libcxx.md
+/// ".compile.fail.cpp"). Every other test keeps its kind.
+fn compile_fail_kind(kind: Kind, text: &str) -> Kind {
+    if kind == Kind::CompileFail && super::directives::has_verify_directives(text) {
+        Kind::Verify
+    } else {
+        kind
+    }
 }
 
 fn cleanup(cfg: &Config, scratch: &Path) {
@@ -776,8 +799,13 @@ fn record(
             r.keys = vec![(format!("{}.fail: {what} successfully", stage.label()), String::new())];
             false
         }
-        Step::Failed { crashed: false, .. } if !expect_success => false,
-        Step::Failed { keys, crashed, detail } => {
+        Step::Failed { crashed: false, first_error, .. } if !expect_success => {
+            if stage == Stage::Compile {
+                r.first_error = Some(first_error.unwrap_or_else(|| "(no error line)".to_owned()));
+            }
+            false
+        }
+        Step::Failed { keys, crashed, detail, .. } => {
             r.outcome = Outcome::Fail(stage);
             r.keys = keys;
             r.crashed = crashed;
@@ -904,6 +932,18 @@ fn attempt_step(
     Ok(verdict)
 }
 
+/// A diagnostic line with the directories of its location dropped
+/// (`/…/libcxx/test/std/x.cpp:3:5: error: e` is `x.cpp:3:5: error: e`), so
+/// a report names no host path.
+fn short_path(line: &str) -> String {
+    let line = line.trim();
+    let at = line.find(": error: ").or_else(|| line.find(": fatal error: ")).unwrap_or(0);
+    match line[..at].rfind('/') {
+        Some(slash) => line[slash + 1..].to_owned(),
+        None => line.to_owned(),
+    }
+}
+
 /// Classifies one step's end. A compiler step "crashes" on a panic, an LLVM
 /// crash banner or a signal; a test binary that aborts is an ordinary
 /// failure.
@@ -920,6 +960,7 @@ fn judge(stage: Stage, m: &Measured, verify: bool) -> Step {
         return Step::Ok;
     }
     let detail = tail(&stderr, 12);
+    let first_error = stderr.lines().find(|l| cluster::error_message(l).is_some()).map(short_path);
     let signalled = out.code().is_none_or(|c| c >= 128);
     let label = stage.label();
     let verify_keys = if verify { cluster::verify_keys(&stderr) } else { Vec::new() };
@@ -937,7 +978,7 @@ fn judge(stage: Stage, m: &Measured, verify: bool) -> Step {
         if let Some(k) = crash {
             let mut keys = vec![k];
             keys.extend(errors);
-            return Step::Failed { keys, crashed: true, detail };
+            return Step::Failed { keys, crashed: true, detail, first_error };
         }
     }
     let mut keys = errors;
@@ -962,7 +1003,7 @@ fn judge(stage: Stage, m: &Measured, verify: bool) -> Step {
         };
         keys.push((k, first.unwrap_or("").to_owned()));
     }
-    Step::Failed { keys, crashed: false, detail }
+    Step::Failed { keys, crashed: false, detail, first_error }
 }
 
 /// The last `n` non-empty lines of `s`, each cut to 300 characters.
@@ -1223,6 +1264,18 @@ mod tests {
     /// `fake_run` of a `.sh.cpp` test with the `RUN:` commands `lines`
     /// (none: a `.pass.cpp` test).
     fn fake_run_lines(script: &str, lines: &[&str], run: RunLimits) -> TestResult {
+        fake_exec(None, Kind::Pass, script, lines, run)
+    }
+
+    /// `fake_run_lines` with the fake compiler `kiln` (a shell script; the
+    /// default one when `None`) and the test kind `kind`.
+    fn fake_exec(
+        kiln: Option<&str>,
+        kind: Kind,
+        script: &str,
+        lines: &[&str],
+        run: RunLimits,
+    ) -> TestResult {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static SEQ: AtomicUsize = AtomicUsize::new(0);
         let base = std::env::temp_dir().join(format!(
@@ -1232,16 +1285,15 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
+        let kiln_script = kiln;
         let kiln = base.join("fake-kiln");
         let src = base.join("t.pass.cpp");
-        write_script(
-            &kiln,
-            &format!(
-                "#!/bin/sh\nfor a; do case \"$a\" in -c) exec touch t.o;; esac; done\n\
-                 cp {} t.exe && chmod +x t.exe\n",
-                src.display()
-            ),
+        let default = format!(
+            "#!/bin/sh\nfor a; do case \"$a\" in -c) exec touch t.o;; esac; done\n\
+             cp {} t.exe && chmod +x t.exe\n",
+            src.display()
         );
+        write_script(&kiln, kiln_script.unwrap_or(&default));
         std::fs::write(&src, script).unwrap();
         let cfg = Config {
             kiln,
@@ -1275,9 +1327,10 @@ mod tests {
             wall: Duration::ZERO,
             max_rss_kb: None,
             compile_rss_kb: None,
+            first_error: None,
         };
         if lines.is_empty() {
-            execute(&cfg, &src, &scratch, Kind::Pass, &[], run, &mut r);
+            execute(&cfg, &src, &scratch, kind, &[], run, &mut r);
         } else {
             let lines: Vec<String> = lines.iter().map(|l| (*l).to_owned()).collect();
             let flags = ["-DEXTRA".to_owned()];
@@ -1311,6 +1364,37 @@ mod tests {
         assert!(r.detail.starts_with("RUN: diff %t.expected %t.actual"), "{}", r.detail);
         let r = fake_run_lines("#!/bin/sh\nexit 0\n", &["false | true"], limits);
         assert_eq!(r.outcome, Outcome::Fail(Stage::Run), "pipefail");
+    }
+
+    /// A `.compile.fail.cpp` test without verify directives passes on a
+    /// failed compile and records its first error (directories dropped); with
+    /// directives it runs as a `.verify.cpp` test, so only a matching
+    /// `-verify` (exit 0) passes (spec/libcxx.md ".compile.fail.cpp").
+    #[test]
+    #[cfg(unix)]
+    fn compile_fail_records_first_error_or_verifies() {
+        let limits = RunLimits { timeout: Duration::from_secs(20), retries: 0 };
+        let kiln = "#!/bin/sh\ncase \"$*\" in *-verify*) exit 0;; esac\n\
+                    echo '/a/b/t.cpp:3:5: warning: w' >&2\n\
+                    echo '/a/b/t.cpp:4:1: error: first' >&2\n\
+                    echo 't.cpp:9:1: error: second' >&2\nexit 1\n";
+        let r = fake_exec(Some(kiln), Kind::CompileFail, "", &[], limits);
+        assert_eq!(r.outcome, Outcome::Pass, "{}", r.detail);
+        assert_eq!(r.first_error.as_deref(), Some("t.cpp:4:1: error: first"));
+        let r = fake_exec(Some("#!/bin/sh\nexit 1\n"), Kind::CompileFail, "", &[], limits);
+        assert_eq!(r.first_error.as_deref(), Some("(no error line)"));
+        let r = fake_exec(Some("#!/bin/sh\nexit 0\n"), Kind::CompileFail, "", &[], limits);
+        assert_eq!(r.outcome, Outcome::Fail(Stage::ExpectedFail));
+        assert_eq!(r.first_error, None);
+        // With directives: the verify run decides.
+        let kind = compile_fail_kind(Kind::CompileFail, "f(); // expected-error {{x}}");
+        assert_eq!(kind, Kind::Verify);
+        assert_eq!(compile_fail_kind(Kind::CompileFail, "// fails"), Kind::CompileFail);
+        assert_eq!(compile_fail_kind(Kind::Pass, "// expected-error {{x}}"), Kind::Pass);
+        let r = fake_exec(Some(kiln), kind, "", &[], limits);
+        assert_eq!((r.outcome, r.first_error), (Outcome::Pass, None));
+        let r = fake_exec(Some("#!/bin/sh\nexit 1\n"), kind, "", &[], limits);
+        assert_eq!(r.outcome, Outcome::Fail(Stage::Compile));
     }
 
     #[test]
