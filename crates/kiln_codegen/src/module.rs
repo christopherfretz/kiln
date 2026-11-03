@@ -1613,16 +1613,40 @@ impl<'a> Cg<'a> {
             out.push(Attr::string("tune-cpu", "generic"));
         } else {
             out.push(Attr::string("target-cpu", "generic"));
-            // clang 19 sorts the `+` features and appends the explicit
-            // `-mno-outline-atomics` after `-fmv`.
-            out.push(Attr::string(
-                "target-features",
-                if self.opts.outline_atomics {
-                    "+fp-armv8,+neon,+outline-atomics,+v8a,-fmv"
-                } else {
-                    "+fp-armv8,+neon,+v8a,-fmv,-outline-atomics"
-                },
-            ));
+            out.push(Attr::string("target-features", &self.aarch64_features()));
+        }
+    }
+
+    /// The `AArch64` `target-features` string: the base `+fp-armv8`,
+    /// `+neon`, `±outline-atomics`, `+v8a`, `-fmv`, overridden by
+    /// [`CodegenOptions::target_features`]; clang lists the enabled
+    /// features sorted, then the disabled ones sorted.
+    fn aarch64_features(&self) -> String {
+        let mut f: std::collections::BTreeMap<&str, bool> = [
+            ("fp-armv8", true),
+            ("neon", true),
+            ("outline-atomics", self.opts.outline_atomics),
+            ("v8a", true),
+            ("fmv", false),
+        ]
+        .into_iter()
+        .collect();
+        for e in &self.opts.target_features {
+            if let Some((sign, name)) = e.split_at_checked(1) {
+                f.insert(name, sign == "+");
+            }
+        }
+        let on = f.iter().filter(|e| *e.1).map(|e| format!("+{}", e.0));
+        let off = f.iter().filter(|e| !*e.1).map(|e| format!("-{}", e.0));
+        on.chain(off).collect::<Vec<_>>().join(",")
+    }
+
+    /// `vscale_range(1,16)` on a function definition with the `sve`
+    /// target feature (clang `StartFunction`; not on the thunks and
+    /// helpers clang builds without a `CodeGenFunction`).
+    pub fn vscale_attr(&self, out: &mut Vec<Attr>) {
+        if self.opts.sve && !self.is_x86() {
+            out.push(Attr::VScaleRange(1, 16));
         }
     }
 
@@ -1798,6 +1822,7 @@ impl<'a> Cg<'a> {
         }
         a.extend(extra);
         a.push(Attr::UwTable(UwTableKind::Async));
+        self.vscale_attr(&mut a);
         self.target_attrs(&mut a);
         if inline == DefInline::OptNone {
             // `SetLLVMFunctionAttributesForDefinition` removes them.

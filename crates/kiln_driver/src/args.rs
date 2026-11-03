@@ -396,6 +396,13 @@ pub struct Args {
     /// `-Woption-ignored` warning naming the last spelling. `None` is the
     /// target's default (on, as clang 19 on an `AArch64` Linux host).
     pub outline_atomics: Option<bool>,
+    /// `-march=<arch>[+ext...]` as written (the last wins); resolved with
+    /// [`crate::features::resolve`] once the target is known.
+    pub march: Option<String>,
+    /// `-mcpu=<cpu>[+ext...]` as written (the last wins).
+    pub mcpu: Option<String>,
+    /// `-target-feature <+name|-name>` (clang's `-Xclang` option), in order.
+    pub target_features: Vec<String>,
     /// `-f[no-]omit-frame-pointer` (the last wins; `Some(true)` omits);
     /// `None` is the target's default (spec/codegen.md "Frame pointer").
     pub omit_frame_pointer: Option<bool>,
@@ -440,7 +447,7 @@ const JOINED_OR_SEPARATE: &[&str] = &[
 /// Options taking a separate value only (`-target foo`), or `=`-joined
 /// (`--sysroot=foo`, `-resource-dir=foo`).
 const SEPARATE_OR_EQ: &[&str] =
-    &["--sysroot", "-resource-dir", "-target", "--target", "-std", "--std"];
+    &["--sysroot", "-resource-dir", "-target-feature", "-target", "--target", "-std", "--std"];
 
 impl Args {
     /// Parses `argv` (without the program name) as `kiln++` would.
@@ -465,7 +472,10 @@ impl Args {
             let mut arg = argv[i].as_str();
             i += 1;
             // `-Xclang <arg>`: kiln has no separate frontend command line;
-            // the argument is parsed like any other.
+            // the argument is parsed like any other. A separate value of a
+            // frontend option comes in its own `-Xclang` (`-Xclang
+            // -target-feature -Xclang +sve`).
+            let mut xclang = false;
             if arg == "-Xclang" {
                 let Some(next) = argv.get(i) else {
                     a.errors.push(ArgError::MissingValue(arg.to_owned()));
@@ -473,6 +483,12 @@ impl Args {
                 };
                 arg = next.as_str();
                 i += 1;
+                xclang = true;
+            }
+            if xclang && argv.get(i).is_some_and(|n| n == "-Xclang") && argv.len() > i + 1 {
+                if let Some((_, Valued::Next)) = split_valued(arg, argv.get(i + 1).map(String::as_str)) {
+                    i += 1;
+                }
             }
             if verify.parse_arg(arg) {
                 continue;
@@ -540,6 +556,7 @@ impl Args {
             "--sysroot" => self.sysroot = Some(v_owned),
             "-resource-dir" => self.resource_dir = Some(v_owned),
             "-target" | "--target" => self.target = Some(v_owned),
+            "-target-feature" => self.target_features.push(v_owned),
             "-std" | "--std" => self.std = Some(v_owned),
             "-o" => self.output = Some(v_owned),
             "-l" | "-L" => self.link.push(LinkOpt {
@@ -633,6 +650,10 @@ impl Args {
                             v.to_owned(),
                         )),
                     }
+                } else if let Some(v) = arg.strip_prefix("-march=") {
+                    self.march = Some(v.to_owned());
+                } else if let Some(v) = arg.strip_prefix("-mcpu=") {
+                    self.mcpu = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("--embed-dir=") {
                     self.embed_dirs.push(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fmodule-file=") {

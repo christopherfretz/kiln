@@ -210,6 +210,7 @@ impl CodegenJob<'_> {
             target.types.char_signed = signed;
         }
         let (pp, _deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+        let feats = crate::features::resolve(a, job.toolchain.target.is_aarch64()).0;
         let popts = ParseOptions {
             std: job.std.lex,
             gnu: job.std.gnu,
@@ -221,6 +222,7 @@ impl CodegenJob<'_> {
             coro_aligned_allocation: a.predef.coro_aligned_allocation,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == StdLib::LibStdCxx,
+            sve: feats.sve,
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
@@ -233,6 +235,8 @@ impl CodegenJob<'_> {
                 exceptions: a.predef.exceptions.unwrap_or(true),
                 ident: ident(),
                 outline_atomics: a.outline_atomics.unwrap_or(true),
+                target_features: feats.extra.clone(),
+                sve: feats.sve,
                 complex_range: a.complex_range(),
                 opt_level: opt_level(a.opt_flag.as_deref()),
                 opt_size: opt_size(a.opt_flag.as_deref()),

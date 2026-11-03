@@ -3836,6 +3836,9 @@ impl Sema<'_, '_> {
             if self.is_vector_condition(ct) {
                 return self.act_on_vector_conditional(c, t, f, loc);
             }
+            if self.is_sve_condition(ct) {
+                return self.sve_conditional(c, t, f, loc);
+            }
         }
         let c2 = if self.expr_is_type_dependent(c) {
             c
