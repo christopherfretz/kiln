@@ -1143,9 +1143,11 @@ impl Sema<'_, '_> {
                 }
             }
             ExprKind::ConditionalOperator => {
-                b.kids.clear();
+                // `kids` is the walk's operand stack: read above `base`.
+                let base = b.kids.len();
                 ex.children_into(e, &self.ast.lists, &mut b.kids);
-                let [c, t, f] = [b.kids[0], b.kids[1], b.kids[2]];
+                let [c, t, f] = [b.kids[base], b.kids[base + 1], b.kids[base + 2]];
+                b.kids.truncate(base);
                 self.cfg_expr(c, b);
                 let kv = self.cfg_truth(c, c, b);
                 let src = b.terminate(Term::Cond(e));

@@ -1,6 +1,6 @@
 // [stmt.if]/1, [expr.log.and]/1, [expr.cond]/1: the control-flow graph of
 // selection statements and of the short-circuit and conditional operators
-// (spec/sema.md §7.5.4); a constant condition prunes the other branch.
+// (spec/sema.md §7.5.1); a constant condition prunes the other branch.
 //@ expect: cfg
 void g();
 int h(int);
@@ -45,3 +45,6 @@ int nested(int x) {
   }
   return 0;
 }
+
+// Two conditional operators as operands of one call.
+int two_conds(int a, int b) { return h((a ? 1 : 2) + (b ? 3 : 4)); }

@@ -197,3 +197,51 @@ nested()
  [B0 (EXIT)]
    Preds (3): B3 B2 B1
 
+two_conds()
+ [B8 (ENTRY)]
+   Succs (1): B7
+ [B7]
+   1: h (DeclRefExpr)
+   2: h (ImplicitCastExpr)
+   3: a (DeclRefExpr)
+   4: a (ImplicitCastExpr)
+   5: a (ImplicitCastExpr)
+   T: [B7.5] ? ... : ...
+   Preds (1): B8
+   Succs (2): B6 B5
+ [B6]
+   1: 1 (IntegerLiteral)
+   Preds (1): B7
+   Succs (1): B4
+ [B5]
+   1: 2 (IntegerLiteral)
+   Preds (1): B7
+   Succs (1): B4
+ [B4]
+   1: a ? 1 : 2 (ConditionalOperator)
+   2: (a ? 1 : 2) (ParenExpr)
+   3: b (DeclRefExpr)
+   4: b (ImplicitCastExpr)
+   5: b (ImplicitCastExpr)
+   T: [B4.5] ? ... : ...
+   Preds (2): B6 B5
+   Succs (2): B3 B2
+ [B3]
+   1: 3 (IntegerLiteral)
+   Preds (1): B4
+   Succs (1): B1
+ [B2]
+   1: 4 (IntegerLiteral)
+   Preds (1): B4
+   Succs (1): B1
+ [B1]
+   1: b ? 3 : 4 (ConditionalOperator)
+   2: (b ? 3 : 4) (ParenExpr)
+   3: (a ? 1 : 2) + (b ? 3 : 4) (BinaryOperator)
+   4: h((a ? 1 : 2) + (b ? 3 : 4)) (CallExpr)
+   5: ReturnStmt
+   Preds (2): B3 B2
+   Succs (1): B0
+ [B0 (EXIT)]
+   Preds (1): B1
+
