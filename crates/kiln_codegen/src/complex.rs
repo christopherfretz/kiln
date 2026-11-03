@@ -18,6 +18,7 @@ use crate::expr::{Callee, LV, Opaque};
 use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, err};
+use crate::tbaa::Tb;
 
 /// A complex value with possibly absent parts.
 pub(crate) type Cx = (Option<V>, Option<V>);
@@ -855,7 +856,7 @@ impl Cg<'_> {
             return Ok(lv);
         }
         let addr = self.cx_part_addr(lv.addr, lv.q, u32::from(imag));
-        Ok(LV { addr, q, bf: None, vidx: None })
+        Ok(LV { addr, q, bf: None, vidx: None, tb: Tb::Type })
     }
 
     /// clang `EmitCompare` on complex operands (`==` and `!=` only).

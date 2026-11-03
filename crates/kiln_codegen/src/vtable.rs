@@ -766,7 +766,8 @@ impl Cg<'_> {
         } else {
             (self.byte_offset(this.v, vp.offset), min_align(this.align, vp.offset))
         };
-        self.store(ap, field.0, field.1, false);
+        let st = self.store(ap, field.0, field.1, false);
+        self.tbaa_vptr(st);
         Ok(())
     }
 
@@ -1164,6 +1165,7 @@ impl Cg<'_> {
         let mut r = v;
         if virt != 0 {
             let vt = self.load(LTy::PTR, v, min_align(align, nv.unsigned_abs()), false);
+            self.tbaa_vptr(vt);
             let o = self.i64c(i128::from(virt));
             let op = self.gep(LTy::I8, vt, vec![o], true);
             let off = self.load(LTy::I64, op, 8, false);
@@ -1208,6 +1210,7 @@ impl Cg<'_> {
     ) -> R<V> {
         let idx = self.method_vtable_index(md, v)?;
         let vt = self.load(LTy::PTR, this, align, false);
+        self.tbaa_vptr(vt);
         let i = self.i64c(i128::from(idx));
         let slot = self.gep(LTy::PTR, vt, vec![i], true);
         Ok(self.load(LTy::PTR, slot, 8, false))

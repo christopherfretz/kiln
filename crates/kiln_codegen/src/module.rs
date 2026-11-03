@@ -92,6 +92,9 @@ pub(crate) struct Cg<'a> {
     pub fns: FxHashMap<DeclId, FuncId>,
     /// Function → its definition carries `nounwind`.
     pub nounwind: FxHashMap<FuncId, bool>,
+    /// Functions declared for an `optnone` declaration: neither they nor
+    /// their call sites get the `-Os`/`-Oz` size attributes.
+    pub optnone_fns: FxHashSet<FuncId>,
     /// First declaration → global variable.
     pub gvars: FxHashMap<DeclId, GlobalId>,
     /// Discardable definitions not yet needed: first declaration → definition.
@@ -166,6 +169,8 @@ pub(crate) struct Cg<'a> {
     pub anon: mangle::AnonIds,
     /// Dynamic initialization of static-storage variables.
     pub gi: crate::global_init::GlobalInits,
+    /// TBAA node caches (`!tbaa`, `!tbaa.struct`).
+    pub tbaa: crate::tbaa::TbaaCache,
 }
 
 impl<'a> Cg<'a> {
@@ -198,6 +203,7 @@ impl<'a> Cg<'a> {
             },
             fns: FxHashMap::default(),
             nounwind: FxHashMap::default(),
+            optnone_fns: FxHashSet::default(),
             gvars: FxHashMap::default(),
             deferred: FxHashMap::default(),
             held: ast.templates.end_of_tu_defs().iter().map(|&d| ast.first(d)).collect(),
@@ -231,6 +237,7 @@ impl<'a> Cg<'a> {
             f: Fx::empty(),
             gi: crate::global_init::GlobalInits::default(),
             anon: mangle::AnonIds::new(),
+            tbaa: crate::tbaa::TbaaCache::default(),
         }
     }
 
@@ -1511,8 +1518,33 @@ impl<'a> Cg<'a> {
         (ret, params)
     }
 
-    /// The target-dependent function attributes.
+    /// The size attributes of `-Os` (`optsize`) and `-Oz` (`optsize
+    /// minsize`) on a function or call site that is not `optnone` (clang
+    /// `getTrivialDefaultFunctionAttributes`).
+    pub(crate) fn size_attrs(&self, out: &mut Vec<Attr>) {
+        if self.opts.opt_size > 0 {
+            out.push(Attr::Flag(AttrKind::OptimizeForSize));
+        }
+        if self.opts.opt_size == 2 {
+            out.push(Attr::Flag(AttrKind::MinSize));
+        }
+    }
+
+    /// The call-site function attributes `-Os`/`-Oz` add to a call of
+    /// `fid` (`None`: an indirect call) through clang `EmitCall`: the
+    /// [`Self::size_attrs`] unless the callee is `optnone`.
+    pub(crate) fn call_size_attrs(&self, fid: Option<FuncId>, out: &mut Vec<Attr>) {
+        if !fid.is_some_and(|f| self.optnone_fns.contains(&f)) {
+            self.size_attrs(out);
+        }
+    }
+
+    /// The target-dependent function attributes (clang
+    /// `getDefaultFunctionAttributes` on a function, not a call site),
+    /// with the [`Self::size_attrs`]; an `optnone` function drops those
+    /// again.
     pub fn target_attrs(&self, out: &mut Vec<Attr>) {
+        self.size_attrs(out);
         if let Some(fp) = self.frame_pointer().attr() {
             out.push(Attr::string("frame-pointer", fp));
         }
@@ -1600,6 +1632,10 @@ impl<'a> Cg<'a> {
             fa.push(Attr::Flag(AttrKind::NoReturn));
         }
         self.target_attrs(&mut fa);
+        let optnone = self.has_fn_attr(first, kiln_ast::attr::AttrKind::OPTNONE);
+        if optnone {
+            strip_size_attrs(&mut fa);
+        }
         let fa = self.m.attr_set(&fa);
         let (fa, ret) = self.alloc_fn_attrs(first, fa, ret);
         // clang `SetFunctionAttributes`: virtual member functions are
@@ -1618,6 +1654,9 @@ impl<'a> Cg<'a> {
             }
         }
         self.nounwind.insert(f, nothrow);
+        if optnone {
+            self.optnone_fns.insert(f);
+        }
         Ok(f)
     }
 
@@ -1703,6 +1742,10 @@ impl<'a> Cg<'a> {
         a.extend(extra);
         a.push(Attr::UwTable(UwTableKind::Async));
         self.target_attrs(&mut a);
+        if inline == DefInline::OptNone {
+            // `SetLLVMFunctionAttributesForDefinition` removes them.
+            strip_size_attrs(&mut a);
+        }
         if self.is_x86() {
             a.push(Attr::string("min-legal-vector-width", &vector_width.to_string()));
         }
@@ -2086,6 +2129,7 @@ impl<'a> Cg<'a> {
             m.add_module_flag_i32(7, "frame-pointer", v);
         }
         m.add_ident(&self.opts.ident);
+        self.tbaa_errno();
     }
 }
 
@@ -2141,4 +2185,9 @@ pub(crate) struct DefFnAttrs {
     pub(crate) inline: DefInline,
     /// `const` / `pure` attributes (`crate::builtins::const_pure_attrs`).
     pub(crate) extra: Vec<Attr>,
+}
+
+/// Removes `optsize` and `minsize` (an `optnone` function).
+fn strip_size_attrs(a: &mut Vec<Attr>) {
+    a.retain(|x| !matches!(x, Attr::Flag(AttrKind::OptimizeForSize | AttrKind::MinSize)));
 }
