@@ -1044,14 +1044,18 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                     }
                     return;
                 }
-                if (sev >= kiln_diag::Severity::Error || is_sfinae_failure(id))
-                    && let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
-                {
+                // A warning that is an error only through `-Werror` is
+                // still a warning here (clang's SFINAE response follows
+                // the diagnostic's class, not its mapped severity).
+                let failure = (sev >= kiln_diag::Severity::Error
+                    && (id.class() != kiln_diag::DiagClass::Warning || id.is_default_error()))
+                    || is_sfinae_failure(id);
+                if failure && let Some(s) = self.inst.sfinae.borrow_mut().last_mut() {
                     s.errors += 1;
                     if s.first.is_none() {
                         s.first = Some(d);
                     }
-                } else if sev < kiln_diag::Severity::Error && self.diags.would_emit(&d) {
+                } else if !failure && self.diags.would_emit(&d) {
                     // A warning waits for the use of what the substitution
                     // forms (§5.7); clang 22 keeps the context notes with it
                     // (clang 19 none).

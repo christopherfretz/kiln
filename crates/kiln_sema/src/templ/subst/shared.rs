@@ -16,6 +16,7 @@
 //! entered.
 
 use kiln_ast::ExprId;
+use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{ExprKind, NonOdrUse};
 use kiln_source::Loc;
 
@@ -66,6 +67,13 @@ impl Sema<'_, '_> {
                         && self.ast.decls.function(d).is_some()
                     {
                         self.mark_function_referenced(d, loc);
+                    } else if kind == ExprKind::DeclRefExpr
+                        && self.ast.decls.get(d).kind() == DeclKind::Var
+                    {
+                        // A variable named in the pattern is odr-used by
+                        // the instantiation, decided at its full-expression
+                        // as for a fresh reference ([basic.def.odr]/5).
+                        self.pending_odr.push(x);
                     }
                 }
                 ExprKind::CXXConstructExpr

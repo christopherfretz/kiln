@@ -468,7 +468,8 @@ afterwards unless `--keep` is given. Compiles use the flags below, then the
 ```
 kiln++ -std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread \
      -ferror-limit=0 -D_LIBCPP_ENABLE_EXPERIMENTAL \
-     -I <llvm-project>/libcxx/test/support  <ADDITIONAL_COMPILE_FLAGS>  \
+     -I <llvm-project>/libcxx/test/support  <warning flags>  \
+     -D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER  <ADDITIONAL_COMPILE_FLAGS>  \
      (-fsyntax-only | -c -o t.o)  <test>
 kiln t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi
 ./t.exe                     # cwd = scratch, --timeout, --mem-limit, no TZ
@@ -480,10 +481,18 @@ system's `/etc/localtime`, which the `current_zone.pass.cpp` tests compare
 against.
 
 This mirrors lit's `llvm-libc++-shared.cfg` at its defaults: the newest
-standard, experimental features enabled, no warnings, and no `-Werror`
-(decided in WP-402: kiln's warning set and wording are not clang's, so
-`-Werror` would turn warning deviations into gate failures; the two
-selftests that check lit's `-Werror` are expected to pass, "Outcomes"). The
+standard, experimental features enabled, and `enable_warnings` (WP-418,
+replacing WP-402's no-warnings choice). `<warning flags>` are libc++'s
+`_warningFlags` (`utils/libcxx/test/params.py` lines 17-81 at the M4 tag:
+`-Werror -Wall -Wextra -Wshadow ...` and the `-Wno-...` list), verbatim
+in `run.rs` `WARNING_FLAGS`. As lit's `AddOptionalWarningFlag`, each one
+is kept only if the compiler accepts it: once per run, an empty
+translation unit is compiled with `-xc++ -fsyntax-only -Werror <flag>`
+(kiln, like clang 22, rejects the GCC-only `-Wno-` names; kiln also
+rejects `-flax-vector-conversions=none`). With them, the libc++ headers
+are not system headers (`-D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER`), so
+kiln's warnings inside them count; a `.verify.cpp` compile undefines it
+again and adds `-Wno-error` (`%{verify}`, `format.py` line 102). The
 libc++ headers and runtime are the system's LLVM 19 ones. The `_LIBCPP_VERSION`
 that kiln sees is recorded in the report.
 
@@ -497,10 +506,8 @@ The verdict is reached in this order:
    FILE_DEPENDENCIES.
 4. The steps.
 5. XFAIL, unless the test is in `run.rs` `XFAIL_IGNORED` (path and
-   reason): `libcxx/selftest/pass.cpp/werror.pass.cpp` and
-   `libcxx/selftest/sh.cpp/werror.sh.cpp` are `XFAIL: *` because lit
-   builds with `-Werror`; the driver does not, so they are expected to
-   pass (PASS, not XPASS).
+   reason; empty since WP-418, when the driver took lit's `-Werror`: the
+   `libcxx/selftest/*/werror.*` tests now XFAIL as under lit).
 
 | Outcome | Meaning |
 |---|---|

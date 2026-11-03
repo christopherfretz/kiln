@@ -1008,8 +1008,11 @@ impl Sema<'_, '_> {
             return e;
         }
         // Scalars only: a class (aggregate or not, complete or not yet
-        // instantiated) takes its braces.
-        if !self.is_aggregate(ty)
+        // instantiated) takes its braces. Not in an instantiation, where
+        // clang 19 and 22 are silent (checked: `return {a == b};` in a
+        // function template).
+        if self.inst.stack.is_empty()
+            && !self.is_aggregate(ty)
             && self.ast.types.as_record(ty).is_none()
             && !self.ast.types.is_reference(ty)
             && let [InitItem { value: InitValue::Expr(_), designator }] = l.items.as_slice()

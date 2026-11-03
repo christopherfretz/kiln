@@ -2394,6 +2394,12 @@ impl Sema<'_, '_> {
 - An *error* is captured, not emitted; the first one is kept. It also
   makes the current substitution return `SubstFail`.
 - Warnings and remarks are held back in `SfinaeState.warnings` (WP-392).
+  What counts is the diagnostic's class, not its mapped severity: a
+  warning that `-Werror` turns into an error is held back like any
+  warning and does not fail the substitution (clang's SFINAE response
+  is per diagnostic id; WP-418,
+  `tests/conformance/temp.deduct.general/werror-warning-not-substitution-failure.cpp`).
+  A warning whose default mapping is an error still fails it.
   When function template deduction forms a specialization, the ones its
   signature substitution produced move to
   `TemplState.suppressed_diags: FxHashMap<DeclId, Vec<Diag>>`, keyed by

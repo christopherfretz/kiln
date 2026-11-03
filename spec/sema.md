@@ -3403,7 +3403,12 @@ for them.
     template 'x'` [-Wunused-template]. Static data members of classes
     with internal linkage, and out-of-line explicit specializations of
     class template members, are diagnosed at their definition; inline
-    variables in the main file are diagnosed as clang does.
+    variables in the main file are diagnosed as clang does. A variable
+    named by a non-dependent expression of a template, which the
+    instantiation shares rather than rebuilds, is odr-used by the
+    instantiation at its full-expression (`mark_shared_expr_referenced`
+    queues it on `pending_odr`; WP-418,
+    `tests/conformance/basic.def.odr/instantiation-odr-uses-variable.cpp`).
   - Gaps: a variable named only in a default argument counts as
     odr-used, so it is not reported as unneeded; C++26 `_` placeholder
     redeclarations ("redefinition of '_'").
@@ -5025,6 +5030,11 @@ and unevaluated operands:
     return value; an argument adds its "passing argument" note), no
     `-Wbraced-scalar-init`, and narrowing checked on the user
     conversion's result
+  - a scalar argument or return value from a one-element braced list
+    (`f({1})`, `return {a == b};`) is `braces around scalar initializer`
+    [-Wbraced-scalar-init] where written, never in an instantiation
+    (clang 19 and 22 are silent there; `too many braces` still shows;
+    WP-418, tests/conformance/dcl.init.list/braced-scalar-instantiation.cpp)
   - a non-aggregate class parameter copy-list-initialized from a braced
     argument (`f({1})`, a default argument, a member call) is constructed
     from the list; when the constructor chosen is explicit ("chosen
