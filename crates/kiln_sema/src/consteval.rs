@@ -427,7 +427,7 @@ impl Sema<'_, '_> {
                     call: true,
                     default_init: None,
                     written: false,
-consteval_only: None,
+                    consteval_only: None,
                 };
                 self.escalate(g, why);
             }
@@ -462,7 +462,7 @@ consteval_only: None,
                 call: false,
                 default_init: None,
                 written: false,
-consteval_only: None,
+                consteval_only: None,
             };
             self.escalate(g, why);
         }
@@ -544,7 +544,7 @@ consteval_only: None,
                             call: true,
                             default_init: Some(decl),
                             written: false,
-consteval_only: None,
+                            consteval_only: None,
                         }
                     } else {
                         Escalation {
@@ -553,7 +553,7 @@ consteval_only: None,
                             call: true,
                             default_init: None,
                             written: false,
-consteval_only: None,
+                            consteval_only: None,
                         }
                     };
                     self.escalate(g, why);
@@ -733,8 +733,14 @@ consteval_only: None,
                             Some((f, w)) => (self.ast.decls.get(g).loc(), Some(f), w),
                             None => (self.begin_loc(c), None, false),
                         };
-                        let why =
-                            Escalation { loc, callee, call: true, default_init: field, written, consteval_only: None };
+                        let why = Escalation {
+                            loc,
+                            callee,
+                            call: true,
+                            default_init: field,
+                            written,
+                            consteval_only: None,
+                        };
                         self.escalate(g, why);
                     }
                     None => self.report_immediate_call(c, callee, fail, None, false),
@@ -767,7 +773,14 @@ consteval_only: None,
                 self.ast.exprs.set_immediate_escalating(r);
                 self.escalate(
                     g,
-                    Escalation { loc, callee: d, call: false, default_init: None, written: false, consteval_only: None },
+                    Escalation {
+                        loc,
+                        callee: d,
+                        call: false,
+                        default_init: None,
+                        written: false,
+                        consteval_only: None,
+                    },
                 );
                 continue;
             }

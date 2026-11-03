@@ -176,7 +176,13 @@ impl EvalContext {
     /// ranges are checked; clear [`EvalContext::enum_range_check`] for a
     /// `constinit` variable that is not `constexpr`).
     pub fn init(var: DeclId, loc: Loc) -> Self {
-        EvalContext { kind: EvalKind::Init, loc, object: Some(var), enum_range_check: true, plain: false }
+        EvalContext {
+            kind: EvalKind::Init,
+            loc,
+            object: Some(var),
+            enum_range_check: true,
+            plain: false,
+        }
     }
 
     /// A converted constant expression ([expr.const]/12) that is not a
@@ -184,7 +190,13 @@ impl EvalContext {
     /// with a fixed underlying type): reported as [`EvalKind::Other`],
     /// with enumeration ranges checked.
     pub fn converted(loc: Loc) -> Self {
-        EvalContext { kind: EvalKind::Other, loc, object: None, enum_range_check: true, plain: false }
+        EvalContext {
+            kind: EvalKind::Other,
+            loc,
+            object: None,
+            enum_range_check: true,
+            plain: false,
+        }
     }
 
     /// The evaluation of the consteval block at `loc`: plainly

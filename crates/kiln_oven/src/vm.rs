@@ -1715,9 +1715,8 @@ impl Oven {
             // A call's result can depend on the evaluation context
             // (`__builtin_is_constant_evaluated` in a callee): the context
             // is part of the key, with the plain bit (consteval blocks).
-            let func = callee
-                | u32::from(self.run.const_context) << 31
-                | u32::from(self.plain()) << 30;
+            let func =
+                callee | u32::from(self.run.const_context) << 31 | u32::from(self.plain()) << 30;
             let mut key = MemoKey { func, args: [0; MAX_ARGS] };
             for (i, p) in f.params.iter().enumerate() {
                 key.args[i] = self.regs[nb + p.reg as usize];

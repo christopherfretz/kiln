@@ -5171,9 +5171,10 @@ impl Compiler<'_> {
             && ast.decls.get(ast.exprs.decl(c)).kind().is_function())
         .then(|| ast.exprs.decl(c));
         if let Some(d) = direct
-            && let Some(b @ (kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED
-            | kiln_ast::decl::builtin::KILN_PLAINLY_CONSTANT_EVALUATED)) =
-                ast.decls.builtin_id(d)
+            && let Some(
+                b @ (kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED
+                | kiln_ast::decl::builtin::KILN_PLAINLY_CONSTANT_EVALUATED),
+            ) = ast.decls.builtin_id(d)
         {
             let r = self.reg();
             // aux bit 1: `__kiln_plainly_constant_evaluated` (WP-473).
