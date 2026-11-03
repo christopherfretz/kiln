@@ -128,6 +128,7 @@ impl Sema<'_, '_> {
     /// to `bool` its implicit casts and parentheses are stripped. Every
     /// form underlines `e` and the context (the null pointer constant,
     /// or the token of the conversion context).
+    #[allow(clippy::too_many_lines, reason = "one arm per clang form, in clang's order")]
     pub(crate) fn always_non_null(&self, e: ExprId, u: NullUse) -> Option<(Diag, bool)> {
         let (at, from) = match u {
             NullUse::Compare { null, .. } => (self.eloc(e), self.begin_loc(null)),

@@ -153,7 +153,8 @@ impl Sema<'_, '_> {
     ) -> bool {
         let shown = format!("'{}'", self.attr_shown(&node, "returns_nonnull"));
         let proto = self.ast.decls.get(d).ty().and_then(|t| self.ast.types.proto(t));
-        let Some(ret) = proto.filter(|_| kind.is_function()).map(|p| p.ret()) else {
+        let Some(ret) = proto.filter(|_| kind.is_function()).map(kiln_ast::types::FuncProto::ret)
+        else {
             let msg = self
                 .diag(DiagId::sema_attribute_wrong_decl_type, node.loc)
                 .arg(shown)
