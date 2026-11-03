@@ -1767,6 +1767,11 @@ and the §6.2 tests.
 - The NSDMI of a member of a specialization is instantiated the first
   time a constructor that uses it is defined, or an aggregate
   initialization reads it. It is cached in the field's cold slot.
+- The fields of an anonymous struct or union member are deferred the same
+  way: `sizeof(V<P>)` does not instantiate `P a = nullptr;` inside an
+  anonymous struct (WP-446; libc++ 22's `_LIBCPP_COMPRESSED_PAIR`,
+  `tests/conformance/temp.inst/nsdmi-anonymous-member-deferred.cpp`).
+  Only a local class's initializers are instantiated with the class.
 - A recursive use while the enclosing class is being instantiated is
   clang's error: "default member initializer for 'x' needed within
   definition of enclosing class 'A<int>' outside of member functions".

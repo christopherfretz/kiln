@@ -1656,11 +1656,12 @@ impl Substituter<'_, '_, '_> {
         // Default member initializers ([temp.inst]/3): instantiated when
         // a constructor or an aggregate initialization uses one
         // ([`Sema::instantiate_nsdmi`], clang
-        // `InstantiateInClassInitializer`). Those of a local class or an
-        // anonymous member are instantiated now, in the complete-class
-        // context (the parser replays them so).
+        // `InstantiateInClassInitializer`), the fields of an anonymous
+        // struct or union member included (WP-446). Those of a local class
+        // are instantiated now, in the complete-class context (the parser
+        // replays them so).
         if !nsdmis.is_empty() && !invalid {
-            if local.is_none() && !anonymous {
+            if local.is_none() {
                 let ctx = (sub.args.clone(), sub.pairs.clone());
                 let _ = sub.sema.inst.nsdmi_ctx.insert(spec, ctx);
                 for (field, init) in nsdmis {
