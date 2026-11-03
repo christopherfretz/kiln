@@ -51,8 +51,12 @@ pub struct Config {
     /// ([`supported_warning_flags`]), passed to every compile with
     /// `-D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER` (lit's `enable_warnings`).
     pub warning_flags: Vec<String>,
-    /// The per-run scratch root; test `i` uses `<root>/t<i>`.
+    /// The per-run scratch root; test `i` uses `<root>/t<i>` ([`scratch_name`]).
     pub scratch: PathBuf,
+    /// The per-run `TMPDIR` root, in the system temp directory as lit's
+    /// `lit-tmp-*`: test `i` gets `<tmp>/t<i>`, short enough for the paths
+    /// a test builds under it (spec/libcxx.md "Commands").
+    pub tmp: PathBuf,
     pub keep: bool,
 }
 
@@ -387,6 +391,25 @@ const ROOT_UNSUPPORTED: &[&str] = &[
 /// The UNSUPPORTED reason of a [`ROOT_UNSUPPORTED`] test run as root.
 pub const ROOT_REASON: &str = "env: running as root: perms::none does not deny access";
 
+/// Run as root, `setrlimit(RLIMIT_NPROC, 0)` does not stop `std::async`
+/// from creating a thread (the kernel exempts root from the limit), so the
+/// expected `resource_unavailable_try_again` never comes.
+const ROOT_NPROC_UNSUPPORTED: &[&str] =
+    &["std/thread/futures/futures.async/thread_create_failure.pass.cpp"];
+
+/// The UNSUPPORTED reason of a [`ROOT_NPROC_UNSUPPORTED`] test run as root.
+pub const ROOT_NPROC_REASON: &str = "env: running as root: RLIMIT_NPROC does not limit root";
+
+/// Tests that need more address space than a `--mem-limit` below the
+/// given MiB allows (the run step runs under the cap): the path, the MiB
+/// it needs, and why. With the cap at or above that, or off (`0`), the
+/// test runs. Sorted.
+const MEM_UNSUPPORTED: &[(&str, u64, &str)] = &[(
+    "std/input.output/string.streams/stringstream/stringstream.members/gcount.pass.cpp",
+    9216,
+    "an INT_MAX - 1 byte payload plus a stringbuf grown past INT_MAX (2 + 2 + 4 GiB at the last regrowth)",
+)];
+
 /// With the scratch directory (`TMPDIR`) on a host-shared filesystem (a
 /// Docker Desktop bind mount): a directory's hard-link count is not
 /// `2 + subdirectories`, and `create_directory(p, attrs)` fails copying
@@ -424,18 +447,32 @@ pub const GROUPING_REASON: &str = "env: glibc en_US.UTF-8 grouping is 3, the tes
 /// Filesystem types of a host-shared bind mount (`/proc/self/mountinfo`).
 const HOST_FS_TYPES: &[&str] = &["fakeowner", "fuse.grpcfuse", "virtiofs"];
 
-/// Why `rel` is UNSUPPORTED on this host, if it is; `scratch` is where its
-/// scratch directory lives, `libcxx` the `_LIBCPP_VERSION` of the headers
-/// the run uses (`features::libcxx_version`; unknown counts as affected).
-pub fn env_unsupported(rel: &str, scratch: &Path, libcxx: Option<u32>) -> Option<String> {
+/// Why `rel` is UNSUPPORTED on this host, if it is; `tmp` is where its
+/// `TMPDIR` lives, `libcxx` the `_LIBCPP_VERSION` of the headers the run
+/// uses (`features::libcxx_version`; unknown counts as affected), `mem` the
+/// `--mem-limit` cap (`None`: off).
+pub fn env_unsupported(
+    rel: &str,
+    tmp: &Path,
+    libcxx: Option<u32>,
+    mem: Option<MemLimit>,
+) -> Option<String> {
     if ROOT_UNSUPPORTED.contains(&rel) && running_as_root() {
         return Some(ROOT_REASON.to_owned());
+    }
+    if ROOT_NPROC_UNSUPPORTED.contains(&rel) && running_as_root() {
+        return Some(ROOT_NPROC_REASON.to_owned());
+    }
+    if let Some(&(_, need, why)) = MEM_UNSUPPORTED.iter().find(|(p, _, _)| *p == rel)
+        && let Some(m) = mem.filter(|m| m.mib < need)
+    {
+        return Some(format!("env: --mem-limit {} MiB is below the {need} MiB it needs: {why}", m.mib));
     }
     if GROUPING_UNSUPPORTED.contains(&rel) && en_us_grouping_is_3() {
         return Some(GROUPING_REASON.to_owned());
     }
     if HOST_FS_UNSUPPORTED.contains(&rel)
-        && let Some(fs) = mount_fs_type(scratch).filter(|t| HOST_FS_TYPES.contains(&t.as_str()))
+        && let Some(fs) = mount_fs_type(tmp).filter(|t| HOST_FS_TYPES.contains(&t.as_str()))
     {
         return Some(format!("env: TMPDIR is on a host-shared {fs} mount"));
     }
@@ -581,6 +618,160 @@ pub fn clang_defect_xfail(rel: &str, clang: bool, libcxx: Option<u32>) -> Option
     CLANG_DEFECT_XFAIL.iter().find(|&&(p, _)| p == rel).map(|&(_, r)| r)
 }
 
+/// The M5 triage ledger (spec/libcxx.md "Outcomes", docs/status/libcxx-m5.md
+/// "Triaged (b)"): `.verify` tests that fail under kiln only on a
+/// diagnostic clang emits and kiln does not (or words differently), with
+/// the diagnostic and the BACKLOG row that tracks it. XFAIL under kiln with
+/// the libc++ [`M5_TRIAGED_LIBCXX`] headers, never in clang mode; a test
+/// that starts passing is XPASS and leaves the list. Sorted by path.
+const M5_TRIAGED: &[(&str, &str)] = &[
+    (
+        "libcxx/algorithms/cpp17_iterator_concepts.verify.cpp",
+        "constraint note prints the substituted 'is_signed_v<unsigned int>' where clang prints the written 'is_signed_v<__iterator_difference_type<…>>'; no WP yet",
+    ),
+    (
+        "libcxx/algorithms/lifetimebound.verify.cpp",
+        "missing [[clang::lifetimebound]] 'temporary bound to local reference … will be destroyed at the end of the full-expression'; no WP yet",
+    ),
+    (
+        "libcxx/algorithms/specialized.algorithms/nonnull.verify.cpp",
+        "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
+    ),
+    (
+        "libcxx/containers/sequences/array/nodiscard.verify.cpp",
+        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::get, forward-declared without it); no WP yet",
+    ),
+    (
+        "libcxx/depr/depr.func.adaptor.typedefs/typedefs.depr_in_cxx17.verify.cpp",
+        "missing \"'…' is deprecated\" on the C++17-deprecated adaptor typedefs (argument_type, result_type, …); no WP yet",
+    ),
+    (
+        "libcxx/depr/depr.rel_ops/rel_ops.depr_in_cxx20.verify.cpp",
+        "missing \"'rel_ops' is deprecated\" on a use of the deprecated namespace; no WP yet",
+    ),
+    (
+        "libcxx/input.output/iostream.format/print.fun/nonnull.verify.cpp",
+        "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
+    ),
+    (
+        "libcxx/mem/mem.res/nonnull.verify.cpp",
+        "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
+    ),
+    (
+        "libcxx/numerics/complex.number/nodiscard.verify.cpp",
+        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::get, forward-declared without it); no WP yet",
+    ),
+    (
+        "libcxx/numerics/numarray/nodiscard.verify.cpp",
+        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::begin/std::end of valarray, forward-declared without it); no WP yet",
+    ),
+    (
+        "libcxx/ranges/range.adaptors/range.adaptor.helpers/as-lvalue.lifetimebound.verify.cpp",
+        "missing [[clang::lifetimebound]] 'temporary bound to local reference … will be destroyed at the end of the full-expression'; no WP yet",
+    ),
+    (
+        "libcxx/ranges/range.adaptors/range.filter/nodiscard.verify.cpp",
+        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iter_move) never warns; no WP yet",
+    ),
+    (
+        "libcxx/ranges/range.adaptors/range.join.with/range.join.with.iterator/eq.nodiscard.verify.cpp",
+        "kiln says 'expression result unused' for a parenthesized [[nodiscard]] operator==; WP-461 item 6",
+    ),
+    (
+        "libcxx/ranges/range.adaptors/range.join.with/range.join.with.iterator/iter_move.nodiscard.verify.cpp",
+        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iter_move) never warns; no WP yet",
+    ),
+    (
+        "libcxx/ranges/range.adaptors/range.join.with/range.join.with.sentinel/eq.nodiscard.verify.cpp",
+        "kiln says 'expression result unused' for a parenthesized [[nodiscard]] operator==; WP-461 item 6",
+    ),
+    (
+        "libcxx/ranges/range.factories/range.iota.view/nodiscard.verify.cpp",
+        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iterator operator+/operator-) never warns; no WP yet",
+    ),
+    (
+        "libcxx/ranges/range.factories/range.repeat.view/nodiscard.verify.cpp",
+        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iterator operator+/operator-) never warns; no WP yet",
+    ),
+    (
+        "libcxx/strings/basic.string/nonnull.verify.cpp",
+        "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
+    ),
+    (
+        "libcxx/strings/string.view/nonnull.verify.cpp",
+        "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
+    ),
+    (
+        "libcxx/thread/thread.shared_mutex/thread_safety.verify.cpp",
+        "missing -Wthread-safety 'writing variable … requires holding shared_mutex … exclusively'; no WP yet",
+    ),
+    (
+        "libcxx/thread/thread.shared_timed_mutex/thread_safety.verify.cpp",
+        "missing -Wthread-safety 'writing variable … requires holding shared_timed_mutex … exclusively'; no WP yet",
+    ),
+    (
+        "libcxx/time/nodiscard.verify.cpp",
+        "kiln says 'expression result unused' for static_cast to a [[nodiscard]] conversion function; WP-461 item 6",
+    ),
+    (
+        "libcxx/utilities/any/nodiscard.verify.cpp",
+        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::any_cast, forward-declared without it); no WP yet",
+    ),
+    (
+        "libcxx/utilities/function.objects/lifetimebound.verify.cpp",
+        "missing [[clang::lifetimebound]] 'temporary bound to local reference … will be destroyed at the end of the full-expression'; no WP yet",
+    ),
+    (
+        "libcxx/utilities/tuple/nodiscard.verify.cpp",
+        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::get, forward-declared without it); no WP yet",
+    ),
+    (
+        "libcxx/utilities/utility/forward/lifetimebound.verify.cpp",
+        "missing [[clang::lifetimebound]] 'temporary bound to local reference … will be destroyed at the end of the full-expression'; no WP yet",
+    ),
+    (
+        "libcxx/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/allocate_vocabulary.attributes.verify.cpp",
+        "missing alloc_align 'requested alignment is not a power of 2' on a constant argument; no WP yet",
+    ),
+    (
+        "libcxx/utilities/utility/pairs/nodiscard.verify.cpp",
+        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::get, forward-declared without it); no WP yet",
+    ),
+    (
+        "libcxx/utilities/variant/nodiscard.verify.cpp",
+        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::get, forward-declared without it); no WP yet",
+    ),
+    (
+        "std/utilities/variant/variant.hash/hash.depr.verify.cpp",
+        "prints 'std::hash<std::monostate>' where clang prints 'std::hash<monostate>' (template-argument type printing); WP-432",
+    ),
+];
+
+/// The libc++ major release [`M5_TRIAGED`] was triaged against.
+const M5_TRIAGED_LIBCXX: u32 = 22;
+
+/// Why `rel` is XFAIL under kiln on the M5 ledger, if it is ([`M5_TRIAGED`]).
+pub fn m5_triaged(rel: &str, clang: bool, libcxx: Option<u32>) -> Option<&'static str> {
+    if clang || libcxx.is_none_or(|v| features::libcxx_major(v) != M5_TRIAGED_LIBCXX) {
+        return None;
+    }
+    M5_TRIAGED.iter().find(|&&(p, _)| p == rel).map(|&(_, r)| r)
+}
+
+/// The XFAIL that applies to `rel` given lit's (`lit`, from [`prepare`]):
+/// lit's unless [`XFAIL_IGNORED`], else the kiln-side lists
+/// ([`CLANG_DEFECT_XFAIL`], `kiln: …`; [`M5_TRIAGED`], `m5: …`).
+pub fn effective_xfail(
+    rel: &str,
+    lit: Option<String>,
+    clang: bool,
+    libcxx: Option<u32>,
+) -> Option<String> {
+    lit.filter(|_| xfail_ignored(rel).is_none())
+        .or_else(|| clang_defect_xfail(rel, clang, libcxx).map(|r| format!("kiln: {r}")))
+        .or_else(|| m5_triaged(rel, clang, libcxx).map(|r| format!("m5: {r}")))
+}
+
 /// What lit decides before anything runs: `Err(outcome)` ends the test
 /// (UNSUPPORTED or ERROR), `Ok` carries the directives, flags and the
 /// XFAIL expression that applies, if any.
@@ -666,7 +857,7 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
         compile_rss_kb: None,
         first_error: None,
     };
-    if let Some(reason) = env_unsupported(&job.rel, &cfg.scratch, cfg.libcxx_version) {
+    if let Some(reason) = env_unsupported(&job.rel, &cfg.tmp, cfg.libcxx_version, cfg.mem) {
         r.outcome = Outcome::Unsupported(reason);
         return r;
     }
@@ -688,15 +879,14 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
     if !d.module_dependencies.is_empty() {
         flags.extend(cfg.module_source_flags());
     }
-    let xfail = xfail.filter(|_| xfail_ignored(&job.rel).is_none());
-    let xfail = xfail.or_else(|| {
-        clang_defect_xfail(&job.rel, cfg.clang, cfg.libcxx_version).map(|r| format!("kiln: {r}"))
-    });
-    // Named like lit's `%T` (`<test file>.dir`): `RUN:` lines can see it.
-    let scratch = cfg.scratch.join(format!("t{}-{name}.dir", job.index));
-    if let Err(e) = std::fs::create_dir_all(&scratch) {
-        r.outcome = Outcome::Error(format!("cannot create {}: {e}", scratch.display()));
-        return r;
+    let xfail = effective_xfail(&job.rel, xfail, cfg.clang, cfg.libcxx_version);
+    // lit's `%T`; `RUN:` lines can see it.
+    let scratch = cfg.scratch.join(scratch_name(job.index));
+    for dir in [&scratch, &test_tmpdir(cfg, &scratch)] {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            r.outcome = Outcome::Error(format!("cannot create {}: {e}", dir.display()));
+            return r;
+        }
     }
     let dir = job.path.parent().unwrap_or(Path::new("."));
     for dep in &d.file_dependencies {
@@ -746,9 +936,32 @@ fn compile_fail_kind(kind: Kind, text: &str) -> Kind {
     }
 }
 
+/// The scratch directory name of test `index`, also the last component of
+/// its `TMPDIR`. Kept short: libc++'s filesystem tests build paths of
+/// `TMPDIR/<cwd name>-static_env.<hash>/...` and compare
+/// `filesystem_error::what()`, whose last byte libc++ 22 drops when the
+/// message is 256 bytes or longer (`fs.op.copy_file/copy_file.pass.cpp`:
+/// two such paths in one message, so each must stay under 103 bytes).
+pub fn scratch_name(index: usize) -> String {
+    format!("t{index}")
+}
+
+/// The `TMPDIR` root of run `pid`/`nanos`: in the system temp directory,
+/// as lit's per-run `lit-tmp-*`, not under the target directory, so the
+/// paths a test builds in it stay short ([`scratch_name`]).
+pub fn tmp_root(pid: u32, nanos: u32) -> PathBuf {
+    std::env::temp_dir().join(format!("kiln-tmp-{pid}-{nanos}"))
+}
+
+/// The `TMPDIR` of the test whose scratch directory is `scratch`.
+fn test_tmpdir(cfg: &Config, scratch: &Path) -> PathBuf {
+    cfg.tmp.join(scratch.file_name().unwrap_or_default())
+}
+
 fn cleanup(cfg: &Config, scratch: &Path) {
     if !cfg.keep {
         let _ = std::fs::remove_dir_all(scratch);
+        let _ = std::fs::remove_dir_all(test_tmpdir(cfg, scratch));
     }
 }
 
@@ -813,7 +1026,7 @@ fn execute(
         }
     };
     for (stage, mut cmd, expect_success) in steps {
-        cmd.current_dir(scratch).env("TMPDIR", scratch);
+        cmd.current_dir(scratch).env("TMPDIR", test_tmpdir(cfg, scratch));
         let is_kiln = stage != Stage::Run;
         let limit = if is_kiln {
             let args: Vec<_> = cmd.get_args().map(std::ffi::OsStr::to_os_string).collect();
@@ -925,7 +1138,7 @@ fn execute_script(
         let mut cmd = Command::new("bash");
         cmd.arg("-c").arg(script::bash_program(&expanded));
         cmd.current_dir(scratch)
-            .env("TMPDIR", scratch)
+            .env("TMPDIR", test_tmpdir(cfg, scratch))
             .env("KILN_LLVM_DIR", &cfg.llvm_dir)
             .env_remove("TZ");
         let is_kiln = stage != Stage::Run;
@@ -1149,6 +1362,7 @@ mod tests {
             probe: RssProbe::Unavailable,
             warning_flags: Vec::new(),
             scratch: "/s".into(),
+            tmp: "/tmp".into(),
             keep: false,
         };
         let kiln = cfg.base_compile_flags().join(" ");
@@ -1231,32 +1445,54 @@ mod tests {
     #[test]
     fn env_exclusions() {
         for list in
-            [ROOT_UNSUPPORTED, HOST_FS_UNSUPPORTED, TZDATA_Z_UNSUPPORTED, GROUPING_UNSUPPORTED]
+            [
+                ROOT_UNSUPPORTED,
+                ROOT_NPROC_UNSUPPORTED,
+                HOST_FS_UNSUPPORTED,
+                TZDATA_Z_UNSUPPORTED,
+                GROUPING_UNSUPPORTED,
+            ]
         {
             let mut sorted = list.to_vec();
             sorted.sort_unstable();
             sorted.dedup();
             assert_eq!(sorted, list);
         }
+        let mem_paths: Vec<&str> = MEM_UNSUPPORTED.iter().map(|&(p, _, _)| p).collect();
+        let mut sorted = mem_paths.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, mem_paths);
         let tmp = std::env::temp_dir();
         let v19 = Some(190_107);
+        let cap = MemLimit::from_mib(3072);
         assert_eq!(
-            env_unsupported("std/utilities/any/any.class/nothing.pass.cpp", &tmp, v19),
+            env_unsupported("std/utilities/any/any.class/nothing.pass.cpp", &tmp, v19, cap),
             None
         );
-        let listed = env_unsupported(ROOT_UNSUPPORTED[0], &tmp, v19);
+        let listed = env_unsupported(ROOT_UNSUPPORTED[0], &tmp, v19, cap);
         assert_eq!(listed.is_some(), running_as_root());
         assert!(listed.is_none_or(|r| r == ROOT_REASON));
-        let listed = env_unsupported(GROUPING_UNSUPPORTED[0], &tmp, v19);
+        let listed = env_unsupported(ROOT_NPROC_UNSUPPORTED[0], &tmp, v19, cap);
+        assert_eq!(listed.is_some(), running_as_root());
+        assert!(listed.is_none_or(|r| r == ROOT_NPROC_REASON));
+        let listed = env_unsupported(GROUPING_UNSUPPORTED[0], &tmp, v19, cap);
         assert_eq!(listed.is_some(), en_us_grouping_is_3());
         assert!(listed.is_none_or(|r| r == GROUPING_REASON));
+        // A memory-hungry test is UNSUPPORTED only below the cap it needs.
+        let (big, need, _) = MEM_UNSUPPORTED[0];
+        let below = env_unsupported(big, &tmp, v19, cap).unwrap();
+        assert!(below.starts_with("env: --mem-limit 3072 MiB is below the "), "{below}");
+        assert!(env_unsupported(big, &tmp, v19, MemLimit::from_mib(need - 1)).is_some());
+        assert_eq!(env_unsupported(big, &tmp, v19, MemLimit::from_mib(need)), None);
+        assert_eq!(env_unsupported(big, &tmp, v19, None), None);
         // The `%z` exclusion follows the host tzdata below libc++ 20 and
         // never applies from 20 on.
         let z = tzdata_version(TZDATA_ZI).is_some_and(|v| tzdata_uses_percent_z(&v));
-        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, v19).is_some(), z);
-        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, None).is_some(), z);
-        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, Some(200_100)), None);
-        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, Some(220_000)), None);
+        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, v19, cap).is_some(), z);
+        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, None, cap).is_some(), z);
+        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, Some(200_100), cap), None);
+        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, Some(220_000), cap), None);
         assert!(tzdata_uses_percent_z("2024b") && tzdata_uses_percent_z("2026b"));
         assert!(!tzdata_uses_percent_z("2024a") && !tzdata_uses_percent_z("2019c"));
         assert!(!tzdata_uses_percent_z("garbage"));
@@ -1317,6 +1553,75 @@ mod tests {
         assert_eq!(clang_defect_xfail(rel, false, Some(190_107)), None);
         assert_eq!(clang_defect_xfail(rel, false, None), None);
         assert_eq!(clang_defect_xfail("std/a/b.pass.cpp", false, Some(220_108)), None);
+    }
+
+    #[test]
+    fn m5_triaged_list() {
+        let paths: Vec<&str> = M5_TRIAGED.iter().map(|&(p, _)| p).collect();
+        let mut sorted = paths.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, paths);
+        for &(path, reason) in M5_TRIAGED {
+            assert!(path.ends_with(".verify.cpp"), "{path}");
+            assert!(!reason.is_empty(), "{path} has no reason");
+        }
+        // No test is on two lists.
+        let mut all: Vec<&str> = XFAIL_IGNORED
+            .iter()
+            .chain(CLANG_DEFECT_XFAIL)
+            .chain(M5_TRIAGED)
+            .map(|&(p, _)| p)
+            .collect();
+        let n = all.len();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), n, "a path is on two XFAIL lists");
+        // Every path names a test of the libc++ 22 checkout, when there is one.
+        let root = crate::util::repo_root();
+        let tests = super::super::default_checkout(&root, super::super::M4_TAG).join("libcxx/test");
+        if tests.is_dir() {
+            for &(path, _) in M5_TRIAGED {
+                assert!(tests.join(path).is_file(), "{path} is not in {}", tests.display());
+            }
+        } else {
+            eprintln!("m5_triaged_list: no {}; paths not checked", tests.display());
+        }
+        let (rel, reason) = M5_TRIAGED[0];
+        assert_eq!(m5_triaged(rel, false, Some(220_108)), Some(reason));
+        assert_eq!(m5_triaged(rel, true, Some(220_108)), None);
+        assert_eq!(m5_triaged(rel, false, Some(190_107)), None);
+        assert_eq!(m5_triaged(rel, false, Some(230_000)), None);
+        assert_eq!(m5_triaged(rel, false, None), None);
+        assert_eq!(
+            effective_xfail(rel, None, false, Some(220_108)),
+            Some(format!("m5: {reason}"))
+        );
+        assert_eq!(effective_xfail(rel, None, true, Some(220_108)), None);
+        let lit = Some("*".to_owned());
+        assert_eq!(effective_xfail("std/a/b.pass.cpp", lit.clone(), false, None), lit);
+        let (defect, why) = CLANG_DEFECT_XFAIL[0];
+        assert_eq!(
+            effective_xfail(defect, None, false, Some(220_108)),
+            Some(format!("kiln: {why}"))
+        );
+    }
+
+    #[test]
+    fn short_scratch_paths() {
+        assert_eq!(scratch_name(0), "t0");
+        assert_eq!(scratch_name(12_345), "t12345");
+        // The deepest path `fs.op.copy_file/copy_file.pass.cpp` puts in a
+        // `filesystem_error` message: `<TMPDIR>/<cwd name>-static_env.<hash>
+        // /file1`, with a 20-digit hash; two of them must keep the message
+        // under 256 bytes ([`scratch_name`]), i.e. each under 103 bytes.
+        let tmp = tmp_root(4_194_304, 999_999_999).join(scratch_name(99_999));
+        let deepest = tmp.join(format!("{}-static_env.{}/file1", scratch_name(99_999), u64::MAX));
+        // With the system temp directory `/tmp` (a longer `TMPDIR` costs
+        // its extra bytes, as lit's `lit-tmp-*` does).
+        let below = deepest.strip_prefix(std::env::temp_dir()).unwrap();
+        let len = "/tmp/".len() + below.as_os_str().len();
+        assert!(len < 103, "{} is {len} bytes under /tmp", below.display());
     }
 
     /// Writes an executable script at `path` without this process ever
@@ -1402,10 +1707,12 @@ mod tests {
             probe: RssProbe::Unavailable,
             warning_flags: Vec::new(),
             scratch: base.join("s"),
+            tmp: base.join("tmp"),
             keep: false,
         };
         let scratch = base.join("s");
         std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::create_dir_all(base.join("tmp/s")).unwrap();
         let mut r = TestResult {
             rel: "t.pass.cpp".into(),
             outcome: Outcome::Pass,
