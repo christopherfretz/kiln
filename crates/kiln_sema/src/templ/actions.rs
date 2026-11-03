@@ -1027,6 +1027,7 @@ impl Sema<'_, '_> {
             .intersects(TypeFlags::DEPENDENT | TypeFlags::UNEXPANDED_PACK)
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per kind of template named")]
     fn template_id(
         &mut self,
         name: TemplateNameId,
@@ -1068,7 +1069,7 @@ impl Sema<'_, '_> {
                 if ttp {
                     self.check_ttp_arity(d, args, l)?;
                 } else if dep_args {
-                    self.check_dependent_class_args(d, args, l)?;
+                    self.check_dependent_template_args(d, args, l)?;
                 } else {
                     let locs = std::mem::take(&mut self.templ.arg_locs);
                     let t = self.class_template_type(name, d, args, &locs, l)?;
@@ -1113,6 +1114,7 @@ impl Sema<'_, '_> {
                     };
                     return Ok(TemplateIdRef::Value(self.build_decl_ref_extra(v, l, Some(extra))));
                 }
+                self.check_var_template_own_init(d, list, l)?;
                 let n = self.ast.decls.get(d).name();
                 let dep_name = self
                     .ast

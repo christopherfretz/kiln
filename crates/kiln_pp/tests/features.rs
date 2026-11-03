@@ -210,7 +210,10 @@ fn compare(triple: &str, std: Std, args: &[&str], queries: &[String]) -> Vec<Str
     let mut cargs = vec!["-undef"];
     cargs.extend_from_slice(args);
     let clang = run_clang(&src, triple, std, &cargs).expect("clang runs");
-    let features = ClangFeatures::from_args(triple, std, args).expect("supported triple");
+    // The oracle is clang 19 (the library default is 22 since WP-413).
+    let features = ClangFeatures::from_args(triple, std, args)
+        .expect("supported triple")
+        .with_compat(ClangCompat::Clang19);
     let kiln = run_kiln_with(&src, triple, std, false, &[], MemoryResolver::new(), |pp| {
         pp.set_feature_queries(Box::new(features));
     });
@@ -628,8 +631,9 @@ fn triples_and_target_flags() {
 #[test]
 fn probed_builtins_match_recorded_clang_answers() {
     let base = cf("aarch64-unknown-linux-gnu", Std::Cxx26, &[]);
-    assert_eq!(base.compat(), ClangCompat::Clang19);
-    let c22 = base.clone().with_compat(ClangCompat::Clang22);
+    assert_eq!(base.compat(), ClangCompat::Clang22);
+    let c22 = base.clone();
+    let base = base.with_compat(ClangCompat::Clang19);
     let mut bad = Vec::new();
     let mut n = 0;
     for line in include_str!("probed_builtins.txt").lines() {
@@ -654,8 +658,8 @@ fn probed_builtins_match_recorded_clang_answers() {
 /// The 19 to 22 `__has_builtin` differences of the probed set, both ways.
 #[test]
 fn has_builtin_under_both_levels() {
-    let c19 = cf("x86_64-unknown-linux-gnu", Std::Cxx26, &[]);
-    let c22 = c19.clone().with_compat(ClangCompat::Clang22);
+    let c22 = cf("x86_64-unknown-linux-gnu", Std::Cxx26, &[]);
+    let c19 = c22.clone().with_compat(ClangCompat::Clang19);
     for name in
         ["__builtin_is_virtual_base_of", "__builtin_is_implicit_lifetime", "__builtin_invoke"]
     {

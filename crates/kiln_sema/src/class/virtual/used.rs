@@ -7,6 +7,8 @@
 //! (an instantiated definition can use further vtables); a local class's
 //! at once.
 
+use std::rc::Rc;
+
 use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DefinitionBits};
 use kiln_ast::modules::UnitKind;
@@ -116,7 +118,7 @@ impl Sema<'_, '_> {
             if !visited.insert(self.ast.first(c)) {
                 continue;
             }
-            for o in self.vtable_finals(c) {
+            for &o in self.vtable_finals(c).iter() {
                 if !is_pure(&self.ast, o) {
                     self.mark_function_referenced(o, loc);
                 }
@@ -135,12 +137,17 @@ impl Sema<'_, '_> {
     }
 
     /// The final overriders in `class`'s vtable in clang's
-    /// `CXXFinalOverriderMap` order (by method), each once.
-    fn vtable_finals(&mut self, class: DeclId) -> Vec<DeclId> {
-        if graph::ensure_virtuals(&mut self.ast, class).is_none() {
-            return Vec::new();
+    /// `CXXFinalOverriderMap` order (by method), each once (cached per
+    /// class once it is complete).
+    fn vtable_finals(&mut self, class: DeclId) -> Rc<[DeclId]> {
+        let first = self.ast.first(class);
+        if let Some(f) = self.vtable_finals.get(&first) {
+            return f.clone();
         }
-        let Some(v) = self.ast.virtuals.get(self.ast.first(class)) else { return Vec::new() };
+        if graph::ensure_virtuals(&mut self.ast, class).is_none() {
+            return Rc::from([]);
+        }
+        let Some(v) = self.ast.virtuals.get(self.ast.first(class)) else { return Rc::from([]) };
         let mut by_method: FxHashMap<DeclId, Vec<DeclId>> = FxHashMap::default();
         for e in &v.overriders {
             by_method.entry(self.ast.first(e.1)).or_default().push(e.2);
@@ -154,6 +161,8 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        let finals: Rc<[DeclId]> = finals.into();
+        self.vtable_finals.insert(first, finals.clone());
         finals
     }
 }

@@ -34,6 +34,7 @@ parse_decomp_decl_empty_19 = ExtWarn [EmptyDecomposition] (0) "ISO C++17 does no
 parse_default_arg_unparsed = Error (0) "unexpected end of default argument expression";
 parse_default_delete_in_multiple_declaration = Error (1) "'= {0}' is a function definition and must occur in a standalone declaration";
 parse_default_special_members = Error (0) "only special member functions and comparison operators may be defaulted";
+parse_default_template_template_param_not_template = Error (0) "default template argument for a template template parameter must be a class template";
 parse_deleted_non_function = Error (0) "only functions can have deleted definitions";
 parse_deprecated_missing_comma_before_ellipsis = Warning [DeprecatedMissingCommaVariadicParameter] (0) "declaration of a variadic function without a comma before '...' is deprecated";
 parse_destructor_tilde_identifier = Error (0) "expected a class name after '~' to name a destructor";

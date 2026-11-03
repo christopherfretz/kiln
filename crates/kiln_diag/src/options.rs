@@ -67,7 +67,8 @@ pub struct DiagOptions {
     /// `-fdiagnostics-format=`.
     pub format: Format,
     /// `-fclang-compat=N`: the clang release whose wording reworded
-    /// diagnostics follow ([`crate::DiagId::for_compat`]). Default 19.
+    /// diagnostics follow ([`crate::DiagId::for_compat`]). Default 22, as
+    /// the driver.
     pub clang_compat: u32,
     /// Problems found while parsing the options above.
     pub pending: Vec<OptionDiag>,
@@ -97,7 +98,7 @@ impl Default for DiagOptions {
             show_location: true,
             show_fixits: true,
             format: Format::Text,
-            clang_compat: 19,
+            clang_compat: 22,
             pending: Vec::new(),
         }
     }

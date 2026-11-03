@@ -12,10 +12,10 @@ use kiln_lex::{LexOptions, Std};
 /// status, not this level.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ClangCompat {
-    /// clang 19.1.7 (the default).
-    #[default]
+    /// clang 19.1.7.
     Clang19,
-    /// clang 22.1.8.
+    /// clang 22.1.8 (the default, as the driver's `-fclang-compat`).
+    #[default]
     Clang22,
 }
 
