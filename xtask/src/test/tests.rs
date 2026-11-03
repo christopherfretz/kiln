@@ -462,7 +462,7 @@ fn ast_fixtures_with_clang() {
     has("fail-compile-error.cpp", "expected the AST dump, but the compiler failed");
     has("fail-unexpected-diag.cpp", "unexpected diagnostics");
     has("error-missing-golden.cpp", "`cargo xtask clang-ast <test>`");
-    has("error-unsupported-construct.cpp", "unsupported AddrLabelExpr");
+    has("error-unsupported-construct.cpp", "unsupported SourceLocExpr");
     let logged = |n: &str, what: &str| by_name(n).log.iter().any(|l| l.contains(what));
     assert!(
         logged("pass-dump.cpp", "-Xclang -ast-dump "),

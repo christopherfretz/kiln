@@ -1967,11 +1967,34 @@ WP-070b):
   appear in its own initializer", `sema_auto_var_*_in_own_initializer`,
   `check_var_template_own_init`); the use of a specialization of the
   primary is diagnosed once, in the pattern
-  (`dcl.spec.auto/own-init-var-template{,-19}.cpp`). Gaps: clang 19
-  reports a primary's own use as "cannot initialize a variable of type
-  'int' with an lvalue of type 'auto'" at the use; "type of variable
-  template specialization 'ap<int>' … depends on itself" is not
-  implemented.
+  (`dcl.spec.auto/own-init-var-template{,-19}.cpp`).
+- [dcl.spec.auto.general]/11, [temp.inst]/7, a specialization still
+  being deduced, used from an initializer (WP-424). The specialization
+  the instantiation makes for that use has no initializer yet: "declaration
+  of variable 'w' with deduced type 'auto' requires an initializer"
+  (`undeduced_var_spec_without_init`, from `var_init`), skipped when the
+  pattern was already diagnosed. From clang 22 on (`clang_compat >= 22`)
+  an implicit specialization's own use during its instantiation, and
+  every later use of an invalid one whose type is still undeduced, is
+  "the type of variable template specialization 'v<int>' declared with
+  deduced type 'auto' depends on itself"
+  (`sema_auto_var_template_spec_depends_on_itself`, from `get_var_spec`
+  and `auto_expl_spec_in_own_init`; `var_spec_depends_on_itself`), at
+  the use, silent when the pattern is invalid. Below clang 22 an implicit
+  specialization's own use is a reference of type `auto`
+  (`undeduced_var_spec_use_19`): an operator on it has "invalid operands
+  to binary expression ('auto' and 'int')", and the specialization keeps
+  the type `auto` (`deduce_auto` of an `auto`-typed initializer), so its
+  uses fail to convert ("cannot initialize a variable of type 'int'
+  with an lvalue of type 'auto'" at the declarator). clang 19 accepts a
+  program whose uses convert nothing and crashes generating it; kiln
+  reports clang 22's "depends on itself" at the point of instantiation
+  at the end of the TU when no other error was reported
+  (`TemplState::self_typed_var_specs`, `reject_self_typed_var_specs`),
+  and a non-template variable deduced from such a reference is
+  "variable 'y' with type 'auto' has incompatible initializer of type
+  'auto'" (clang 19 accepts it). Tests
+  `dcl.spec.auto/own-init-var-template-spec{,-19,-19-accepted}.cpp`.
 
 **Requirement R-OVEN-1 (reentrancy)**, as landed:
 - `Sema.oven` is an `Option<Oven>`. `with_oven` takes it out for the
@@ -2470,10 +2493,17 @@ impl Sema<'_, '_> {
   deduction notes of the overload-set complaint (`addr_no_match_notes`).
   It puts the warnings back into the entry for the specialization's
   first use (`drop_template_id_warnings`). Inside SFINAE nothing is
-  parked. Gap: clang stores a deduction's warnings only when that
-  deduction succeeds, so its clang 22 context notes name the later use;
-  kiln's keep the failed one's location. Test
-  `over.over/template-id-no-match{,-19}.cpp`.
+  parked. clang stores a deduction's warnings only when that deduction
+  succeeds, so from clang 22 on their context notes name the later use:
+  the drop records the template-id's location
+  (`SpecialState.dropped_tid_warnings`), and the next take of the entry
+  (`take_suppressed_diags`, from `resolve_single_template_id` and
+  `emit_suppressed_diags`) moves the notes there to the use's location
+  (`Diag::relocate_notes`; WP-424). Gap: the restored warnings are the
+  failed use's, so a later *call* also reports the warning of the
+  explicit arguments' substitution into the whole function type, which
+  clang's call deduction does not make (clang reports only the signature
+  substitution's). Tests `over.over/template-id-no-match{,-19,-restored}.cpp`.
 - Fatal errors are always reported: the depth limit and stack
   exhaustion.
 
@@ -4598,7 +4628,15 @@ arguments dropped (`Sema::name_for_diagnostic`; clang
 explicit specialization written with a typedef (`template<> constexpr
 int g<L *>;` is `'g<long *>'`). `declaration of variable 'au' with
 deduced type 'auto' requires an initializer` names the template, as in
-clang. Test `temp.expl.spec/variable-specialization-names.cpp`. The
+clang. The "in instantiation of variable template specialization" note
+of an error in a specialization's declaration (its type, or a deduced
+type's initializer, substituted with it) names the pattern, as clang
+does (`'v'`, `'u<T *>'`, `'S::m'`; `var_frame_names_pattern`); the note
+of an initializer instantiated on its own names the specialization
+(`'w<int>'`), and so does a member template of a class template
+specialization (`'X<char>::p<int>'`). Test
+`temp.inst/var-template-instantiation-note-name.cpp` (WP-424).
+Test `temp.expl.spec/variable-specialization-names.cpp`. The
 Oven's notes ("initializer of 'w<A>' is not a constant expression",
 "read of non-const variable 'v<int>'") name the specialization the
 same way (`kiln_oven/src/notes.rs`). Test

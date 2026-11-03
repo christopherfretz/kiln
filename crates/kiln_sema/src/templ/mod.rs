@@ -248,6 +248,11 @@ pub struct TemplState {
     /// reported at its first use (clang's `SuppressedDiagnostics`,
     /// emitted by `DiagnoseUseOfDecl`; §5.7).
     pub(crate) suppressed_diags: kiln_source::fx::FxHashMap<DeclId, Vec<kiln_diag::Diag>>,
+    /// clang 19: implicit variable template specializations whose type
+    /// was "deduced" as its own placeholder (`template<class T> auto v =
+    /// v<T>;`, [`Sema::undeduced_var_spec_use_19`]); rejected at the end
+    /// of a translation unit with no other error.
+    pub(crate) self_typed_var_specs: Vec<DeclId>,
     /// The point of instantiation of the specialization the next call
     /// deduction forms, when it is not the deduction's location: a
     /// qualified callee's name (clang deduces at the callee's begin and

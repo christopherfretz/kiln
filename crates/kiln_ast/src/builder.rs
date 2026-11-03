@@ -1366,6 +1366,24 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::CXXNullPtrLiteralExpr, ValueCategory::PRValue, deps, 0, ty, loc, 0, 0)
     }
 
+    /// GNU `&&label` (clang `AddrLabelExpr`): the address of the label
+    /// declaration `label`, a `void *` prvalue `ty`, written at `loc`
+    /// (the `&&`) with the label's name at `label_loc` (the end).
+    pub fn addr_label(&mut self, label: DeclId, ty: QualType, loc: Loc, label_loc: Loc) -> ExprId {
+        let e = self.simple(
+            ExprKind::AddrLabelExpr,
+            ValueCategory::PRValue,
+            ExprDeps::NONE,
+            0,
+            ty,
+            loc,
+            label.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, label_loc).expect("fresh expression");
+        e
+    }
+
     /// GNU `__null`: `GNUNullExpr`, an integer null pointer constant of
     /// type `ty` (the signed integer type as wide as a pointer).
     pub fn gnu_null(&mut self, ty: QualType, loc: Loc) -> ExprId {

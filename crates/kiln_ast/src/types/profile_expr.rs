@@ -246,6 +246,8 @@ impl Ast {
             // Interned by (encoding, code units); the type carries the length.
             K::StringLiteral => out.extend([tag(k, 0), self.canon_word(n.ty()), n.a()]),
             K::CXXBoolLiteralExpr => out.push(tag(k, u32::from(x.bool_value(e)))),
+            // A label is local to its function: its declaration identifies it.
+            K::AddrLabelExpr => out.extend([tag(k, 0), n.a()]),
             K::CXXNullPtrLiteralExpr
             | K::GNUNullExpr
             | K::ImplicitValueInitExpr

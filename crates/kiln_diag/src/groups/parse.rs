@@ -13,6 +13,7 @@ DeprecatedType = "deprecated-type" [];
 DuplicateDeclSpecifier = "duplicate-decl-specifier" [];
 EmptyDecomposition = "empty-decomposition" [];
 GnuCaseRange = "gnu-case-range" [];
+GnuLabelAsValue = "gnu-label-as-value" [];
 IgnoredPragmas = "ignored-pragmas" [];
 UnknownAttributes = "unknown-attributes" [];
 VexingParse = "vexing-parse" [];

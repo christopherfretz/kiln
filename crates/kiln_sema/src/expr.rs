@@ -1973,6 +1973,7 @@ impl Sema<'_, '_> {
             && !n.has(DeclFlags::INVALID)
             && let Some(t) = n.ty()
             && self.contains_undeduced_auto(t)
+            && !self.undeduced_var_spec_use_19(d)
         {
             let msg = match self.auto_expl_spec_in_own_init(d, loc) {
                 Some(m) => m,

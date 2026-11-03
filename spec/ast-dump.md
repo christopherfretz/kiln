@@ -637,7 +637,10 @@ address, the JSON names only the `LabelDecl` id, which the normalizer
 resolves through the `LabelStmt`), and `AttributedStmt` for
 `[[assume(e)]]`: its children are the `CXXAssumeAttr`s (each with the
 assumption as its child) then the statement. `asm goto` labels are not
-children of the `GCCAsmStmt`, as in clang's text dump. **WP-182**
+children of the `GCCAsmStmt`, as in clang's text dump. **WP-424**
+`AddrLabelExpr 'void *' name` (GNU `&&name`; clang's text dump adds the
+label's address, the JSON its `labelDeclId`, which the normalizer
+drops). **WP-182**
 keeps `[[likely]]`, `[[unlikely]]` and `[[fallthrough]]` too
 (`LikelyAttr`, `UnlikelyAttr`, `FallThroughAttr`, without children).
 Other statement attributes are not yet kept (kiln drops them; the

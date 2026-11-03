@@ -1475,10 +1475,28 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   - **Deviation (computed goto):** GNU `goto *e;` is parsed. Its operand
     is checked for an unexpanded pack (`Sema::act_on_indirect_goto`),
     and then the statement is "computed goto is not supported yet" at the
-    `*`. The address-of-label operator `&&l` is not supported either.
-    clang accepts both, and reports "indirect goto in function with no
-    address-of-label expressions" when the function takes no label's
-    address.
+    `*` (after "use of GNU indirect-goto extension", `-Wgnu-label-as-value`,
+    at the same `*`). clang accepts it, and reports "indirect goto in
+    function with no address-of-label expressions" when the function
+    takes no label's address.
+  - **GNU address-of-label `&&l` (WP-424):** parsed in
+    `parse_cast_expr` as clang's `tok::ampamp` case
+    (`Parser::parse_addr_label`): a non-identifier operand is "expected
+    identifier" at it; outside a function body it is "use of
+    address-of-label extension outside of a function body" at the label
+    name, without the extension warning; otherwise "use of GNU
+    address-of-label extension" (`-Wgnu-label-as-value`, in `-Wgnu` and
+    `-pedantic`) at the `&&`, then `Sema::act_on_addr_label` looks the
+    label up or declares it (as a `goto` does: marked used, so an
+    undefined one is "use of undeclared label" at the function's end)
+    and builds an `AddrLabelExpr` of type `void *`. No postfix suffix
+    follows. Template instantiation looks the label up again by name.
+    Returning one is "returning address of label, which is local"
+    (`-Wreturn-stack-address`, spec/sema-class.md §5.6). **Deviation:**
+    code generation and constant evaluation of `&&l` are "not supported
+    yet" (clang emits a `blockaddress`; it is a constant address, so
+    clang also accepts it in a constant expression and in a static
+    initializer). Tests: `tests/conformance/ext.gnu.label.value/`.
 
 ### 6.2 Attributes (`attr.rs`)
 - **Syntax:** `[[ ]]` (with `using ns:`), `alignas(…)`, and GNU
@@ -1662,7 +1680,7 @@ in `kiln_diag` for now; nothing emits them.
   - lambdas; `new`/`delete` of class types (§5.1)
   - `dynamic_cast` semantics, polymorphic `typeid`
   - class and array compound literals, compound literals at namespace
-    scope, the GNU address-of-label operator
+    scope
   - class `T()`, `T{…}` and `T(a, b)` temporaries
   - fold expressions
   - braced-init-list subscripts and functional-cast operands

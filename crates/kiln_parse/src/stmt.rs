@@ -264,12 +264,15 @@ impl Parser<'_, '_> {
     }
 
     /// `goto identifier ;` ([stmt.goto]); GNU `goto * expression ;`
-    /// (clang `ParseGotoStatement`: the operand is a full-expression,
-    /// then "computed goto is not supported yet", spec/parse.md §6.1).
+    /// (clang `ParseGotoStatement`: "use of GNU indirect-goto extension"
+    /// at the `*`, the operand is a full-expression, then "computed goto
+    /// is not supported yet", spec/parse.md §6.1).
     fn parse_goto(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         if self.at(Punct::Star) {
             let star = self.bump().span.lo;
+            let d = self.s.diag(DiagId::parse_gnu_indirect_goto, star);
+            self.emit(d);
             let Some(e) = self.parse_expression() else {
                 self.skip_to_semi();
                 return None;

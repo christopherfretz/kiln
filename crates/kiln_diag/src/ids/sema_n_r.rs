@@ -194,6 +194,7 @@ sema_register_storage_class = WarningError [Register] (0) "ISO C++17 does not al
 sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
 sema_reorder_ctor = WarningOff [ReorderCtor] (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order does not match the declaration order";
+sema_ret_addr_label = Warning [ReturnStackAddress] (0) "returning address of label, which is local";
 // WP-204: clang's `checkExprLifetime` for a return ([stmt.return],
 // spec/sema-class.md §5.6).
 sema_ret_stack_addr = Warning [ReturnStackAddress] (3) "{0:address of|reference to} stack memory associated with {1:local variable|parameter} {2} returned";

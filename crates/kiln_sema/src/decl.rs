@@ -5393,21 +5393,8 @@ impl Sema<'_, '_> {
         loc: Loc,
         direct: bool,
     ) -> Option<QualType> {
-        use crate::templ::auto::{AutoFail, AutoInit};
-        let (items, kind, lbrace) = match init {
-            Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
-            Initializer::Paren(es, ..) => {
-                (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
-            }
-            Initializer::List(l) if direct => (
-                crate::templ::auto::auto_list_items(l, false),
-                AutoInit::DirectList,
-                Some(l.lbrace),
-            ),
-            Initializer::List(l) => {
-                (crate::templ::auto::auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace))
-            }
-        };
+        use crate::templ::auto::AutoFail;
+        let (items, kind, lbrace) = auto_init_items(init, direct);
         // [temp.deduct.call]/6: every member of an overload set deduces
         // `auto`, so nothing is deduced (a placeholder in a function
         // declarator selecting one member is not implemented) -- except
@@ -5438,6 +5425,20 @@ impl Sema<'_, '_> {
         let fail = match overload {
             Some(e) => AutoFail::Incompatible(e),
             None => match self.deduce_auto(declared, &items, kind) {
+                // clang 19's placeholder-typed specialization
+                // (`undeduced_var_spec_use_19`) deduces only itself; any
+                // other variable "deduced" from it is rejected (clang 19
+                // accepts it and crashes generating code).
+                Ok(t) if self.contains_undeduced_auto(t) => {
+                    if self.undeduced_var_spec_use_19(v) {
+                        self.templ.self_typed_var_specs.push(v);
+                        return Some(t);
+                    }
+                    match items.iter().flatten().next() {
+                        Some(&e) => AutoFail::Incompatible(e),
+                        None => AutoFail::Error,
+                    }
+                }
                 Ok(t) => {
                     let at = self.inst.concepts.placeholder_locs.get(&v).copied().unwrap_or(loc);
                     // `constexpr C decltype(auto) x = e;`: the constraint
@@ -9570,4 +9571,23 @@ fn escape_diag_text(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// The deduction form of a variable's initializer `init`: its items (a
+/// braced list's elements), the form, and a braced list's `{`.
+fn auto_init_items(
+    init: &Initializer,
+    direct: bool,
+) -> (Vec<Option<ExprId>>, crate::templ::auto::AutoInit, Option<Loc>) {
+    use crate::templ::auto::{AutoInit, auto_list_items};
+    match init {
+        Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
+        Initializer::Paren(es, ..) => {
+            (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
+        }
+        Initializer::List(l) if direct => {
+            (auto_list_items(l, false), AutoInit::DirectList, Some(l.lbrace))
+        }
+        Initializer::List(l) => (auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace)),
+    }
 }
