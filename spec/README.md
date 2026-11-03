@@ -48,7 +48,8 @@ and a full CI re-run of the others; one file per WP never conflicts.
 
 - The existing sections stay where they are (no migration). A spec
   whose Landed chapter has moved on ends that chapter with a pointer to
-  its directory (`codegen.md` §7x, `abi.md` §8.26).
+  its directory (the unnumbered "Landed sections after WP-488" in
+  `codegen.md` and `abi.md`).
 - The files are as normative as the spec they extend, and are read in
   WP order after the spec's own Landed chapter. A later WP that changes
   a rule an earlier file states updates that file (or, for a section

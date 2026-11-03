@@ -3115,14 +3115,14 @@ its return slot (`static_cast<R>`), so the IR is clang's
 (`tests/codegen/synth_three_way.cpp`, strong, weak and partial
 categories, compared with clang 22 and clang 19 on both targets).
 
-## 7x. Landed sections after WP-488: `spec/landed/codegen/`
+## Landed sections after WP-488: `spec/landed/codegen/`
 
 From WP-488 on, a work package's Landed section is not appended here: it
 is its own file, `spec/landed/codegen/WP-NNN.md` (title line
 `# WP-NNN — <title>`, the same content as a section above), so open pull
 requests never conflict on the end of this file (spec/README.md "Landed
 sections"). They are as normative as this file; read that directory
-after §7v.
+after the numbered Landed sections above.
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
