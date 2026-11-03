@@ -1992,6 +1992,17 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   constant expression" at the construct expression, with no frame for
   the constructor (clang `HandleConstructorCall`; test
   `expr.const/constexpr-vbase-construct-cxx23.cpp`).
+  A by-value class argument is the callee's parameter object: allocated
+  with `Origin::Var` of the parameter in the callee's first declaration
+  (clang's canonicalized `APValue` base), so its destructor's "in call
+  to 'p.~X()'" note names that parameter (`'.~X()'` when unnamed) and
+  sits at its location, at both levels. A class argument passed through
+  the ellipsis with a non-trivial copy or move constructor or destructor
+  (clang `isValidVarArgType` = `VAK_Undefined`, which sema rewrites to
+  `(__builtin_trap(), arg)`) traps "subexpression not valid" at the
+  argument's begin, after the literal-type check (WP-413; tests
+  `expr.call/param-object-destruction-const.cpp`,
+  `expr.const/non-literal-argument.cpp` and its `-clang19` split).
 - A local variable that sema marked invalid (its initialization was
   already diagnosed) traps silently when its declaration is evaluated,
   so the enclosing constant expression reports only its own error

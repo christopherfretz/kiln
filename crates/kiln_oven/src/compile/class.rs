@@ -736,6 +736,31 @@ impl Compiler<'_> {
         }
     }
 
+    /// The parameters of `callee`'s first declaration (none for a call
+    /// through a pointer).
+    fn callee_params(&self, callee: Callee) -> Vec<DeclId> {
+        let ast = self.ast();
+        let (Callee::Direct(d) | Callee::Base(d) | Callee::Virtual(d, _)) = callee else {
+            return Vec::new();
+        };
+        ast.decls
+            .function(ast.first(d))
+            .map(|f| ast.lists.get(f.params).iter().map(|&p| DeclId::new(p)).collect())
+            .unwrap_or_default()
+    }
+
+    /// clang `isValidVarArgType` returning `VAK_Undefined` (C++11 on):
+    /// class type `q` has a non-trivial copy constructor, move
+    /// constructor or destructor.
+    fn vararg_non_trivial(&self, q: QualType) -> bool {
+        let ast = self.ast();
+        let Some(r) = ast.types.as_record(q) else { return false };
+        let bits = record_bits(ast, r);
+        !bits.contains(DefinitionBits::TRIVIAL_COPY_CTOR)
+            || !bits.contains(DefinitionBits::TRIVIAL_MOVE_CTOR)
+            || !bits.contains(DefinitionBits::TRIVIAL_DTOR)
+    }
+
     /// Which parameters of function `d` are references.
     fn proto_refs(&self, d: DeclId) -> Vec<bool> {
         let ast = self.ast();
@@ -985,6 +1010,7 @@ impl Compiler<'_> {
         if let Some(t) = this {
             self.emit(Op::Mov, 0, &[base + u32::from(is_sret), t]);
         }
+        let params = self.callee_params(callee);
         for (i, &a) in args.iter().enumerate() {
             let slot = base + first + i as u32;
             let aty = self.ety(a);
@@ -1003,10 +1029,26 @@ impl Compiler<'_> {
                         a,
                         &format!("non-literal type '{t}' cannot be used in a constant expression"),
                     );
+                } else if i >= refs.len() && self.vararg_non_trivial(q) {
+                    // [expr.call]/12: passing a class with a non-trivial
+                    // copy or move constructor or destructor through the
+                    // ellipsis is conditionally-supported; clang
+                    // (`DefaultVariadicArgumentPromotion`) makes the
+                    // argument `(__builtin_trap(), a)`, which no constant
+                    // evaluation gets past.
+                    let at = self.begin(a);
+                    self.trap_loc(at, super::builtins::INVALID.into());
                 }
-                self.alloc(slot, aty, Origin::Temp(a), false, a);
+                // [expr.call]/7: the parameter object, named (and
+                // located, for its destructor's "in call to" note) by
+                // the callee's first declaration of the parameter, as
+                // clang's canonicalized `APValue` base does.
+                let (origin, at) = match params.get(i) {
+                    Some(&pd) => (Origin::Var(pd), self.ast().decls.get(pd).loc()),
+                    None => (Origin::Temp(a), self.begin(a)),
+                };
+                self.alloc(slot, aty, origin, false, a);
                 self.init(a, slot, aty);
-                let at = self.begin(a);
                 self.push_cleanup(slot, aty, 0, at);
             } else {
                 self.rv_into(a, slot);
