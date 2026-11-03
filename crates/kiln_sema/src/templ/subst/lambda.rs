@@ -112,8 +112,7 @@ impl Substituter<'_, '_, '_> {
         self.lambda_bodies += 1;
         let b = self.body(body);
         self.lambda_bodies -= 1;
-        let return_failed =
-            std::mem::replace(&mut self.lambda_return_failed, outer_return_failed);
+        let return_failed = std::mem::replace(&mut self.lambda_return_failed, outer_return_failed);
         self.sema.pop_inst_frame();
         self.forget_pattern_params(call_op);
         // A body that reported an error of its own (not one of another

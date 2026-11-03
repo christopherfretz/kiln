@@ -9,6 +9,8 @@
 //! reaped, so that [`kill_live_children`], which the SIGINT/SIGTERM thread of
 //! [`crate::jobs`] calls, can kill and reap all of them before xtask exits;
 //! after it no new child starts (spawning fails with `Interrupted`).
+//! [`run_step`] runs a cargo step the same way, but without a timeout or a
+//! jobserver token, and is stopped with `SIGTERM` before `SIGKILL`.
 
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -265,7 +267,7 @@ pub fn run_with_input(
     let spawning = LIVE.begin_spawn()?;
     let child = cmd.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
     // Deregistered when this returns, after the child is reaped.
-    let _live = spawning.spawned(child.as_ref().map(Child::id).ok());
+    let _live = spawning.spawned(child.as_ref().map(Child::id).ok(), Stop::Kill);
     let mut child = child?;
     let pid = child.id();
     let writer = input.map(|bytes| {
@@ -315,6 +317,78 @@ fn spawn_reader(child: &mut Child, stdout: bool) -> thread::JoinHandle<Vec<u8>> 
         let _ = pipe.read_to_end(&mut buf);
         buf
     })
+}
+
+/// Runs a cargo step (the `cargo fmt`/`clippy`/`test` steps of `cargo
+/// xtask ci`, the `cargo build` of [`super::build_kiln`]) to completion:
+/// no timeout and no jobserver token of xtask's (cargo is a jobserver
+/// client itself, its rustc and test processes take their own). stdin is
+/// closed and stdout inherited. With `tee` stderr is piped, copied to
+/// ours line by line as it arrives and returned; without it, inherited
+/// (the returned string is empty).
+///
+/// When the SIGINT/SIGTERM thread of [`crate::jobs`] runs, the step is the
+/// leader of its own process group and in the live-children table from
+/// spawn to reap, so [`kill_live_children`] stops cargo and everything it
+/// started (rustc, the test binaries): `SIGTERM` to the group first,
+/// `SIGKILL` to whatever is left after [`TERM_GRACE`]. Without that
+/// thread it stays in xtask's group, where a terminal ^C reaches it
+/// directly, as before.
+///
+/// A step that ended because xtask is being interrupted does not return:
+/// the calling thread waits for the signal thread to finish returning the
+/// jobserver tokens and end the process, instead of racing it to `exit`.
+pub fn run_step(cmd: &mut Command, tee: bool) -> io::Result<(ExitStatus, String)> {
+    let table = crate::jobs::signals_caught().then_some(&LIVE);
+    let r = run_step_in(table, cmd, tee);
+    if table.is_some_and(|t| t.lock().shutdown) {
+        loop {
+            thread::park();
+        }
+    }
+    r
+}
+
+fn run_step_in(
+    table: Option<&LiveChildren>,
+    cmd: &mut Command,
+    tee: bool,
+) -> io::Result<(ExitStatus, String)> {
+    cmd.stdin(Stdio::null());
+    if tee {
+        cmd.stderr(Stdio::piped());
+    }
+    let (mut child, live) = match table {
+        Some(table) => {
+            #[cfg(unix)]
+            std::os::unix::process::CommandExt::process_group(cmd, 0);
+            let spawning = table.begin_spawn()?;
+            let child = cmd.spawn();
+            let live = spawning.spawned(child.as_ref().map(Child::id).ok(), Stop::Term);
+            (child?, Some(live))
+        }
+        None => (cmd.spawn()?, None),
+    };
+    let mut captured = Vec::new();
+    if let Some(pipe) = child.stderr.take() {
+        let mut reader = io::BufReader::new(pipe);
+        let mut chunk = Vec::new();
+        let mut out = io::stderr();
+        loop {
+            chunk.clear();
+            match io::BufRead::read_until(&mut reader, b'\n', &mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let _ = out.write_all(&chunk);
+                    captured.extend_from_slice(&chunk);
+                }
+            }
+        }
+    }
+    let status = child.wait();
+    // Reaped: only now may the pid leave the table.
+    drop(live);
+    Ok((status?, String::from_utf8_lossy(&captured).into_owned()))
 }
 
 /// How the peak resident set size of a measured child is obtained.
@@ -429,7 +503,7 @@ pub fn run_measured(
     let spawning = LIVE.begin_spawn()?;
     let start = Instant::now();
     let child = cmd.spawn();
-    let live = spawning.spawned(child.as_ref().map(Child::id).ok());
+    let live = spawning.spawned(child.as_ref().map(Child::id).ok(), Stop::Kill);
     let mut child = child?;
     let pid = child.id();
     let err_reader = spawn_reader(&mut child, false);
@@ -480,12 +554,26 @@ struct LiveChildren {
 
 #[derive(Default)]
 struct LiveState {
-    pids: Vec<u32>,
+    pids: Vec<(u32, Stop)>,
     spawning: usize,
     shutdown: bool,
 }
 
 static LIVE: LiveChildren = LiveChildren::new();
+
+/// How [`kill_live_children`] stops a live child's process group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stop {
+    /// `SIGKILL` at once: a compiler or test binary of `util::process`.
+    Kill,
+    /// `SIGTERM`, then `SIGKILL` after [`TERM_GRACE`]: a cargo step of
+    /// [`run_step`], whose processes may still clean up (a test binary's
+    /// temporary files, cargo's own `Drop`s).
+    Term,
+}
+
+/// How long a [`Stop::Term`] group gets after `SIGTERM` before `SIGKILL`.
+const TERM_GRACE: Duration = Duration::from_secs(3);
 
 /// A spawn in flight: counted so that a shutdown waits for (and kills) a
 /// child whose pid is not known yet. Always ended by [`Spawning::spawned`]
@@ -524,40 +612,53 @@ impl LiveChildren {
         Ok(Spawning(self))
     }
 
-    /// Sets the shutdown flag, kills the process group of every live child,
-    /// and waits (at most `grace`) until each is reaped and no spawn is in
-    /// flight; a child spawned meanwhile is killed as it registers. Returns
-    /// how many groups were killed.
-    fn shutdown(&self, grace: Duration) -> usize {
-        let deadline = Instant::now() + grace;
+    /// Sets the shutdown flag, stops the process group of every live child
+    /// ([`Stop`]: `SIGKILL`, or `SIGTERM` and `SIGKILL` after `term_grace`
+    /// for one still live then), and waits (at most `grace`) until each is
+    /// reaped and no spawn is in flight; a child spawned meanwhile is
+    /// killed as it registers. Returns how many groups were stopped.
+    fn shutdown(&self, grace: Duration, term_grace: Duration) -> usize {
+        let start = Instant::now();
+        let deadline = start + grace;
+        let mut escalate_at = Some(start + term_grace.min(grace));
         let mut st = self.lock();
         st.shutdown = true;
-        // Killed under the lock: a pid leaves the table only once reaped, so
-        // none of these can have been reused.
-        let killed = st.pids.len();
-        for &pid in &st.pids {
-            kill_group(pid);
+        // Signalled under the lock: a pid leaves the table only once reaped,
+        // so none of these can have been reused.
+        let stopped = st.pids.len();
+        for &(pid, stop) in &st.pids {
+            signal_group(pid, if stop == Stop::Term { "TERM" } else { "KILL" });
         }
         while !(st.pids.is_empty() && st.spawning == 0) {
-            let left = deadline.saturating_duration_since(Instant::now());
+            let now = Instant::now();
+            if escalate_at.is_some_and(|at| now >= at) {
+                for &(pid, stop) in &st.pids {
+                    if stop == Stop::Term {
+                        signal_group(pid, "KILL");
+                    }
+                }
+                escalate_at = None;
+            }
+            let left = escalate_at.unwrap_or(deadline).saturating_duration_since(now);
             if left.is_zero() {
                 break;
             }
             st = self.changed.wait_timeout(st, left).unwrap_or_else(PoisonError::into_inner).0;
         }
-        killed
+        stopped
     }
 }
 
 impl<'a> Spawning<'a> {
-    /// Ends the spawn: registers `pid` (the spawn's result), killing it at
-    /// once if a shutdown started meanwhile.
-    fn spawned(self, pid: Option<u32>) -> LiveChild<'a> {
+    /// Ends the spawn: registers `pid` (the spawn's result) with how a
+    /// shutdown stops it, killing it at once if a shutdown started
+    /// meanwhile (it has had no time to do anything worth cleaning up).
+    fn spawned(self, pid: Option<u32>, stop: Stop) -> LiveChild<'a> {
         let table = self.0;
         let mut st = table.lock();
         st.spawning -= 1;
         if let Some(pid) = pid {
-            st.pids.push(pid);
+            st.pids.push((pid, stop));
             if st.shutdown {
                 kill_group(pid);
             }
@@ -572,7 +673,7 @@ impl Drop for LiveChild<'_> {
     fn drop(&mut self) {
         let Some(pid) = self.pid else { return };
         let mut st = self.table.lock();
-        if let Some(i) = st.pids.iter().position(|&p| p == pid) {
+        if let Some(i) = st.pids.iter().position(|&(p, _)| p == pid) {
             st.pids.swap_remove(i);
         }
         drop(st);
@@ -581,16 +682,22 @@ impl Drop for LiveChild<'_> {
 }
 
 /// Kills (`SIGKILL`, by process group) every child started by [`run`],
-/// [`run_with_input`] or [`run_measured`] that is still running, waits up to
-/// `grace` for their reaping, and makes every later spawn fail. Called once,
-/// by the SIGINT/SIGTERM thread, before the jobserver tokens are returned.
-/// Returns how many children were killed.
+/// [`run_with_input`] or [`run_measured`] that is still running, stops
+/// every [`run_step`] cargo step (`SIGTERM`, then `SIGKILL` after
+/// [`TERM_GRACE`]), waits up to `grace` for their reaping, and makes every
+/// later spawn fail. Called once, by the SIGINT/SIGTERM thread, before the
+/// jobserver tokens are returned. Returns how many children were stopped.
 pub fn kill_live_children(grace: Duration) -> usize {
-    LIVE.shutdown(grace)
+    LIVE.shutdown(grace, TERM_GRACE)
 }
 
 #[cfg(unix)]
 fn kill_group(pid: u32) {
+    signal_group(pid, "KILL");
+}
+
+#[cfg(unix)]
+fn signal_group(pid: u32, sig: &str) {
     // The child is the leader of its own process group (pgid == pid); the
     // pid cannot be reused before our waiter thread reaps it. Without a
     // `kill` executable (a minimal container without procps) the shell's
@@ -598,13 +705,16 @@ fn kill_group(pid: u32) {
     let quiet = |c: &mut Command| {
         c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status()
     };
-    if quiet(Command::new("kill").args(["-KILL", "--", &format!("-{pid}")])).is_err() {
-        let _ = quiet(Command::new("sh").args(["-c", &format!("kill -KILL -{pid}")]));
+    if quiet(Command::new("kill").args([&format!("-{sig}"), "--", &format!("-{pid}")])).is_err() {
+        let _ = quiet(Command::new("sh").args(["-c", &format!("kill -{sig} -{pid}")]));
     }
 }
 
 #[cfg(not(unix))]
 fn kill_group(_pid: u32) {}
+
+#[cfg(not(unix))]
+fn signal_group(_pid: u32, _sig: &str) {}
 
 #[cfg(test)]
 mod tests {
@@ -701,7 +811,7 @@ mod tests {
             let mut c = Command::new("sh");
             c.args(["-c", "sleep 30; :"]).process_group(0);
             let mut child = c.spawn().unwrap();
-            let live = spawning.spawned(Some(child.id()));
+            let live = spawning.spawned(Some(child.id()), Stop::Kill);
             thread::spawn(move || {
                 let s = child.wait().unwrap();
                 drop(live);
@@ -715,13 +825,86 @@ mod tests {
             start(late).join().unwrap()
         });
         let t = Instant::now();
-        assert_eq!(TABLE.shutdown(Duration::from_secs(20)), 1);
+        assert_eq!(TABLE.shutdown(Duration::from_secs(20), TERM_GRACE), 1);
         assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
         assert_eq!(first.join().unwrap().signal(), Some(9));
         assert_eq!(late.join().unwrap().signal(), Some(9));
-        assert_eq!(TABLE.lock().pids, Vec::<u32>::new());
+        assert_eq!(TABLE.lock().pids, Vec::new());
         let refused = TABLE.begin_spawn().map(|_| ()).unwrap_err();
         assert_eq!(refused.kind(), io::ErrorKind::Interrupted);
+    }
+
+    /// Starts `script` (under `sh -c`, after it made `<dir>/ready`) as a
+    /// `run_step` cargo step in `table`, on a thread, and waits until it is
+    /// registered and ready.
+    #[cfg(unix)]
+    fn start_step(
+        table: &'static LiveChildren,
+        dir: &Path,
+        script: &str,
+    ) -> thread::JoinHandle<(ExitStatus, String)> {
+        let ready = dir.join("ready");
+        let mut c = Command::new("sh");
+        c.args([
+            "-c",
+            &format!("{script}; : > '{}'; while :; do sleep 0.05; done", ready.display()),
+        ]);
+        let step = thread::spawn(move || run_step_in(Some(table), &mut c, true).unwrap());
+        let t = Instant::now();
+        while !(ready.exists() && table.lock().pids.len() == 1) {
+            assert!(t.elapsed() < Duration::from_secs(10), "the step never got ready");
+            thread::sleep(Duration::from_millis(10));
+        }
+        step
+    }
+
+    /// A cargo step is in the live-children table from spawn to reap (as a
+    /// `Stop::Term` group leader), and a shutdown stops it with `SIGTERM`
+    /// first: its `trap` runs, and the stderr it wrote is still copied and
+    /// returned. (A private table, as above.)
+    #[cfg(unix)]
+    #[test]
+    fn run_step_is_registered_and_terminated() {
+        static TABLE: LiveChildren = LiveChildren::new();
+        let dir = scratch("step-term");
+        let step = start_step(&TABLE, &dir, "trap 'echo term >&2; exit 7' TERM; echo up >&2");
+        assert_eq!(TABLE.lock().pids.first().map(|&(_, stop)| stop), Some(Stop::Term));
+        let t = Instant::now();
+        assert_eq!(TABLE.shutdown(Duration::from_secs(20), Duration::from_secs(10)), 1);
+        assert!(t.elapsed() < Duration::from_secs(8), "{:?}", t.elapsed());
+        let (status, stderr) = step.join().unwrap();
+        assert_eq!(status.code(), Some(7), "{status:?}");
+        // (The shell may report its killed `sleep` in between.)
+        assert!(stderr.starts_with("up\n") && stderr.ends_with("term\n"), "{stderr:?}");
+        assert_eq!(TABLE.lock().pids, Vec::new());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A step that ignores `SIGTERM` is killed once the grace is over.
+    #[cfg(unix)]
+    #[test]
+    fn run_step_ignoring_term_is_killed() {
+        use std::os::unix::process::ExitStatusExt as _;
+        static TABLE: LiveChildren = LiveChildren::new();
+        let dir = scratch("step-kill");
+        let step = start_step(&TABLE, &dir, "trap '' TERM");
+        let t = Instant::now();
+        assert_eq!(TABLE.shutdown(Duration::from_secs(20), Duration::from_millis(300)), 1);
+        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+        assert_eq!(step.join().unwrap().0.signal(), Some(9));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Without a table (no signal thread) a step just runs: its status and
+    /// stderr come back.
+    #[test]
+    fn run_step_without_table() {
+        let mut c = Command::new("sh");
+        c.args(["-c", "echo e >&2; exit 3"]);
+        let (status, stderr) = run_step_in(None, &mut c, true).unwrap();
+        assert_eq!((status.code(), stderr.as_str()), (Some(3), "e\n"));
+        let (status, stderr) = run_step_in(None, &mut Command::new("true"), false).unwrap();
+        assert!(status.success() && stderr.is_empty());
     }
 
     #[test]

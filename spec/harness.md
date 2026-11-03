@@ -597,7 +597,7 @@ it runs alongside:
   in-flight children; the pool can only lower the effective parallelism.
 - **Release.** Tokens are released by `Drop`: on a normal exit, an error
   return, a worker panic, and a child killed by the memory cap or a timeout.
-- **Signals (WP-157, WP-163).** xtask catches **SIGINT and SIGTERM** on a
+- **Signals (WP-157, WP-163, WP-434).** xtask catches **SIGINT and SIGTERM** on a
   dedicated thread (the `signal-hook` crate), with or without a pool. The
   thread starts with the first child. The handler's `unsafe` stays inside
   that dependency, so xtask remains `forbid(unsafe_code)`. On either signal:
@@ -607,6 +607,15 @@ it runs alongside:
      group.
      - Each live group is killed with `SIGKILL`: the wrapper, GNU time, the
        compiler driver and `cc1` all go together.
+     - The `cargo` steps of `cargo xtask ci` and the kiln build of
+       `util::build_kiln` (every runner's first step) go through
+       `util::process::run_step`, which puts them in the same table when the
+       signal thread is running. Their group gets `SIGTERM` first, so cargo
+       can stop its rustc and test children, and `SIGKILL` 3 s later if it
+       is still alive. Cargo is a jobserver client of its own and holds no
+       xtask token, so tokens that cargo still held when it died are lost
+       until `cargo xtask jobserver refill`. The thread that ran the step
+       then parks and leaves the exit to the signal thread.
      - The thread then waits until each child is reaped and no spawn is in
        flight. It waits at most 10 s, for a child in uninterruptible sleep.
      - A child whose spawn was in flight is killed as it registers.
@@ -625,10 +634,10 @@ it runs alongside:
      jobserver token(s)`.
 
   The memory cap and the timeout are unchanged: they kill one child's group
-  and leave the table to its normal reap. Not covered are processes that
-  xtask starts outside `util::process`: the `cargo` steps of `cargo xtask
-  ci` and the helper `git` calls. They share xtask's process group, so a
-  terminal ^C reaches them directly, but a `kill -INT <xtask pid>` does not.
+  and leave the table to its normal reap. Not covered are the helper `git`
+  calls, which xtask starts outside `util::process`. They share xtask's
+  process group, so a terminal ^C reaches them directly, but a
+  `kill -INT <xtask pid>` does not.
 - **SIGKILL cannot be handled.** No process can catch it, so `kill -9`
   (including the kernel OOM killer), or any other fatal signal xtask does
   not catch, loses the tokens xtask held, as it would for make and cargo.
