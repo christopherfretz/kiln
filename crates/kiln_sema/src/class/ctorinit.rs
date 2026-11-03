@@ -108,7 +108,13 @@ impl Sema<'_, '_> {
                 // now ([expr.const]/16; clang checks them as it parses).
                 self.finish_immediate_parts(&initializer_exprs(&info.init));
             }
-            self.mem_inits.pattern.push(info.clone());
+            // Braced arguments keep their nested lists for the
+            // instantiation (`m({{1, 2}, {3, 4}})`).
+            let mut info = info.clone();
+            if let Initializer::Paren(es, ..) = &mut info.init {
+                *es = self.dependent_args(es);
+            }
+            self.mem_inits.pattern.push(info);
             self.cleanup = super::CleanupState::default();
             return;
         }

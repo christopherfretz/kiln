@@ -129,6 +129,10 @@ the evaluator's flattened type table.
   construction begins their lifetime and its destruction ends it (a second
   destruction is "destruction of object outside its lifetime";
   `vm.rs` `placement`, `basic.life/empty-object-lifetime.cpp`; WP-404).
+  Placement of such an object revives the lifetime of all of its type's
+  bytes, so an empty member destroyed and re-created with
+  `std::construct_at` is alive again
+  (`basic.life/empty-member-recreated.cpp`; WP-418).
 - **Lifetime**: leaving a scope releases its objects (`release(mark)`); a
   released slot is reused first-in first-out with its generation bumped, so
   a dangling pointer is detected (generation mismatch) and still names its
@@ -517,6 +521,11 @@ asks whether the evaluation is manifestly constant-evaluated.
   differential set (tests/limits.rs, tests/bench.rs). An evaluation whose
   step count would exceed the budget fails with "constexpr evaluation hit
   maximum step limit; possible infinite loop?".
+  A direct call with one argument to `std::move`, `std::move_if_noexcept`,
+  `std::forward`, `std::forward_like`, `std::as_const`, `std::addressof`
+  or `std::__addressof` is not a call: it costs no step, no frame and no
+  depth (clang's `isStdBuiltin` set; `compile.rs` `is_std_builtin`;
+  `expr.const/budget/std-builtins*.cpp`; WP-418).
 - **Depth** counts active calls as clang's `-fconstexpr-depth` does ("constexpr
   evaluation exceeded maximum depth of N calls"); a nested evaluation counts
   from the depth of the call that started it, plus one (see "Nested
@@ -759,6 +768,28 @@ literal is one instruction and one step, not an interpreted loop.
   must be 0 or 1. Dense, fully initialized types copy all bytes at once.
   `TO_MEM` builds an aggregate result in place; `READ_ONLY` only reads
   the source (clang reads before its type checks).
+- **`__builtin_is_within_lifetime(p)`** (WP-418, `bi::LIFETIME`;
+  P2641R4, clang 20 `IsWithinLifetime`): a null, function or
+  one-past-the-end `p` fails with `'__builtin_is_within_lifetime' cannot
+  be called with a {null|function|one-past-the-end} pointer` at the call
+  (`'std::is_within_lifetime' ...` at the `std::` call when the builtin's
+  frame is that function's); then `p`'s storage is checked as a read of
+  its designator type (static, or a `void *`'s conversion tag), so a
+  destroyed, deleted or out-of-scope object faults as a read outside its
+  lifetime, as clang. Otherwise the result is true unless a union on the
+  path from the allocation to `p` has no active member reaching it
+  (`union_path`). An Oven pointer carries no designator, so two members of
+  one union at the same offset and type are told apart statically: when
+  the argument is `&a.b.c` (through pointer casts) rooted at a variable or
+  `this`, each union member access in the chain emits `bi::UNION_LIVE`
+  (sub = member index; `mem.may_be_active`), ANDed into the result
+  (`union_designators`). A call of `std::is_within_lifetime` with such an
+  argument ANDs its own result with the same chain (its parameter loses
+  the designator). Known gap: a pointer to an inactive member stored in a
+  variable first (`int *p = &u.a; is_within_lifetime(p)`) reads as within
+  its lifetime when the active member has the same offset and type
+  (clang: false); clang's "object whose lifetime has not yet begun" note
+  (a `this` pointer during construction) is not modelled.
 - **Temporaries:** a `MaterializeTemporaryExpr` with full-expression
   storage (a `bit_cast` or builtin operand bound to a reference
   parameter) is an lvalue in the Oven, its object living until the end of

@@ -329,7 +329,17 @@ SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
   base (clang). Unevaluated operands need no object (`sizeof(S::x)`). Errors:
   `invalid use of non-static data member 'x'`, `invalid use of member 'x' in
   static member function`, `call to non-static member function without an
-  object argument`.
+  object argument`. They are reported at the end of the full-expression
+  (`flush_member_refs`); a constant expression (a non-type template
+  argument) whose flush reported one is erroneous, with no "not a
+  constant expression" after it (clang's `ExprError`). The operand of
+  `decltype` is a full-expression ([intro.execution]/5): `decltype(C::f)`
+  of a non-static member function is the "without an object" error there,
+  so in a SFINAE context it is a substitution failure (libc++'s
+  `tuple_size<const T>`; tests
+  `temp.deduct.general/decltype-nonstatic-member-function.cpp`,
+  `dcl.type.decltype/nonstatic-member-function-error.cpp`,
+  `temp.arg.nontype/nonstatic-member-without-object.cpp`).
 - **Through a dependent base** ([temp.dep.type]): in a member of a class
   template with a dependent base, a qualified name `B::m` that names a
   non-static member of a class that is not (yet) a base is kept as a

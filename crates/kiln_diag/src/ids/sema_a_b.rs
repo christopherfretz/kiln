@@ -211,6 +211,7 @@ sema_builtin_fp_class_arg = Error (1) "floating point classification requires ar
 sema_builtin_func_cast_more_than_one_arg = Error (0) "function-style cast to a builtin type can only take one argument";
 sema_builtin_invalid_arg_type = Error (3) "{0:1st|2nd} argument must be {1:a scalar unsigned integer type|a scalar 'int' type} (was {2})";
 sema_builtin_invalid_arg_type_19 = Error (3) "{0:1st|2nd} argument must be {1:an unsigned integer|an 'int'} (was {2})";
+sema_builtin_is_within_lifetime_invalid_arg = Error (1) "{0:non-|function }pointer argument to '__builtin_is_within_lifetime' is not allowed";
 sema_builtin_launder_invalid_arg = Error (1) "{0:non-pointer|function pointer|void pointer} argument to '__builtin_launder' is not allowed";
 sema_builtin_new_delete_not_usual = Error (1) "call to '{0:__builtin_operator_new|__builtin_operator_delete}' selects non-usual {0:allocation|deallocation} function";
 sema_builtin_ordered_compare = Error (2) "ordered compare requires two args of floating point type ({0} and {1})";

@@ -23,6 +23,31 @@ use kiln_source::Loc;
 use crate::Sema;
 
 impl Sema<'_, '_> {
+    /// Marks the declaration a shared `DeclRefExpr` or `MemberExpr` `x`
+    /// names: counted, referenced if a function, and odr-used if a
+    /// variable.
+    fn reference_shared_decl(&mut self, x: ExprId, kind: ExprKind, loc: Loc) {
+        let d = self.ast.exprs.decl(x);
+        // clang `TransformDeclRefExpr` marks a kept node
+        // referenced, which counts it for
+        // `-Wunused-but-set-variable` against the discarded
+        // assignments the instantiated statements subtract.
+        if kind == ExprKind::DeclRefExpr
+            && matches!(self.ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar)
+        {
+            self.count_var_ref(d);
+        }
+        if self.ast.exprs.non_odr_use(x) == NonOdrUse::None && self.ast.decls.function(d).is_some()
+        {
+            self.mark_function_referenced(d, loc);
+        } else if kind == ExprKind::DeclRefExpr && self.ast.decls.get(d).kind() == DeclKind::Var {
+            // A variable named in the pattern is odr-used by
+            // the instantiation, decided at its full-expression
+            // as for a fresh reference ([basic.def.odr]/5).
+            self.pending_odr.push(x);
+        }
+    }
+
     /// Marks the functions that the shared expression `e` odr-uses
     /// referenced (which defines or instantiates them on use), warns
     /// again about its null dereferences ([`Sema::reissue_null_derefs`]),
@@ -62,21 +87,7 @@ impl Sema<'_, '_> {
                     if kind == ExprKind::DeclRefExpr && !callees.contains(&x) {
                         self.recheck_shared_ref(x);
                     }
-                    let d = self.ast.exprs.decl(x);
-                    // clang `TransformDeclRefExpr` marks a kept node
-                    // referenced, which counts it for
-                    // `-Wunused-but-set-variable` against the discarded
-                    // assignments the instantiated statements subtract.
-                    if kind == ExprKind::DeclRefExpr
-                        && matches!(self.ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar)
-                    {
-                        self.count_var_ref(d);
-                    }
-                    if self.ast.exprs.non_odr_use(x) == NonOdrUse::None
-                        && self.ast.decls.function(d).is_some()
-                    {
-                        self.mark_function_referenced(d, loc);
-                    }
+                    self.reference_shared_decl(x, kind, loc);
                 }
                 ExprKind::CXXConstructExpr
                 | ExprKind::CXXTemporaryObjectExpr

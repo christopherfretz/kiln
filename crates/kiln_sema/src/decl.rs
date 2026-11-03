@@ -5164,8 +5164,11 @@ impl Sema<'_, '_> {
         {
             // `T x(a, b)` with a dependent `T` or argument: initialized at
             // instantiation, kept as a `ParenListExpr` (clang
-            // `ActOnParenListExpr` / `AddInitializerToDecl`).
-            let e = self.builder().paren_list(es, *l, *r);
+            // `ActOnParenListExpr` / `AddInitializerToDecl`). A braced
+            // argument keeps its nested lists (`T m({{1, 2}, {3, 4}})`):
+            // the placeholder holds only the top-level expressions.
+            let es = self.dependent_args(es);
+            let e = self.builder().paren_list(&es, *l, *r);
             self.set_dependent_var_init(v, e);
             return true;
         }
@@ -5520,6 +5523,7 @@ impl Sema<'_, '_> {
         }
         match self.eval_const(e, EvalContext::init(v, loc)) {
             Ok(cv) => self.ast.decls.finish_eval(v, Some(cv)),
+            Err(_) if self.refers_to_invalid_var(e) => self.ast.decls.finish_eval(v, None),
             Err(mut f) => {
                 self.ast.decls.finish_eval(v, None);
                 let name = self.name_for_diagnostic(v);
@@ -5709,6 +5713,40 @@ impl Sema<'_, '_> {
     pub(crate) fn has_errors_in(&self, e: ExprId) -> bool {
         self.ast.exprs.get(e).kind() == ExprKind::RecoveryExpr
             || self.is_error_type(self.ast.exprs.get(e).ty())
+    }
+
+    /// Whether `e` names a variable whose declaration is invalid (a
+    /// variable template specialization whose initializer failed to
+    /// instantiate), directly or through the initializer of a variable
+    /// it names: clang's `DeclRefExpr` error dependence, which silences
+    /// the "not a constant expression" diagnostics that would follow the
+    /// error already reported. Asked only after an evaluation failed; the
+    /// walk is bounded.
+    pub(crate) fn refers_to_invalid_var(&self, e: ExprId) -> bool {
+        let mut stack = vec![e];
+        let mut seen = kiln_source::fx::FxHashSet::default();
+        let mut budget = 1usize << 14;
+        while let Some(x) = stack.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            if self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr {
+                let d = self.ast.exprs.decl(x);
+                let n = self.ast.decls.get(d);
+                if n.kind() == DeclKind::Var && seen.insert(d) {
+                    if n.has(DeclFlags::INVALID) {
+                        return true;
+                    }
+                    if let Some(init) = self.ast.decls.var(d).and_then(|v| v.init) {
+                        stack.push(init);
+                    }
+                }
+                continue;
+            }
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+        false
     }
 
     /// A variable declared without an initializer ([dcl.init]/7).
@@ -7780,6 +7818,9 @@ impl Sema<'_, '_> {
                     let d = self.with_trait_explanation(d, inner);
                     self.emit(d);
                 }
+                // clang does not evaluate a condition that contains
+                // errors (a variable whose initializer failed).
+                Err(_) if self.refers_to_invalid_var(c) => failed = true,
                 Err(mut f) => {
                     failed = true;
                     let at = Self::fold_lone_invalid(&mut f, cloc);

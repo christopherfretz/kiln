@@ -203,8 +203,20 @@ impl Substituter<'_, '_, '_> {
                         Ok(x) => out.push(x),
                         Err(f) => {
                             // This declaration and the ones after it are
-                            // invalid; a later use is no new error.
+                            // invalid; a later use is no new error. As
+                            // clang's `TransformCompoundStmt`, a declaration
+                            // that does not instantiate at all (a
+                            // `static_assert` whose condition is invalid, a
+                            // variable whose type does not substitute; not
+                            // one with an invalid initializer) also ends the
+                            // enclosing compound statement (WP-418).
+                            let none = match self.sema.kind_of(d) {
+                                DeclKind::StaticAssert => true,
+                                DeclKind::Var => !self.locals.contains_key(&d),
+                                _ => false,
+                            };
                             self.failed_locals.extend_from_slice(&ds[i..]);
+                            self.invalid_decl_stmt |= none;
                             return Err(f);
                         }
                     }

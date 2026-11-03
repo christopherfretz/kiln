@@ -470,7 +470,8 @@ pub static TABLE: &[Row] = &[
         oven: Oven::No,
     },
     f("__builtin_invoke", LATER, Oven::No),
-    f("__builtin_is_within_lifetime", LATER, Oven::No),
+    // WP-418: sema `builtin_is_within_lifetime`, the Oven `bi::LIFETIME`.
+    f("__builtin_is_within_lifetime", DONE, Oven::Yes),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.
@@ -596,6 +597,7 @@ mod tests {
             "__builtin_is_virtual_base_of",
             "__builtin_is_implicit_lifetime",
             "__builtin_is_cpp_trivially_relocatable",
+            "__builtin_is_within_lifetime",
         ] {
             assert_eq!(has_builtin_staged(n), Some(true), "{n}");
         }
@@ -604,7 +606,6 @@ mod tests {
             "__builtin_structured_binding_size",
             "__builtin_lt_synthesizes_from_spaceship",
             "__builtin_invoke",
-            "__builtin_is_within_lifetime",
         ] {
             assert_eq!(has_builtin_staged(n), Some(false), "{n}");
         }

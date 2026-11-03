@@ -988,6 +988,10 @@ impl Sema<'_, '_> {
                 let rhs = self.reach_arm_expr(rr, live, kv == Some(decisive), e, r);
                 Self::unit(Unit::Expr(e), (live && kv != Some(!decisive)) || rhs, r)
             }
+            // clang `CFGBuilder::VisitExprWithCleanups` visits only the
+            // subexpression: no element of its own, so `throw E()` with a
+            // temporary to destroy leaves nothing dead after it.
+            ExprKind::ExprWithCleanups => self.reach_kids(e, live, r),
             ExprKind::StmtExpr => {
                 let body = self.ast.exprs.stmt_expr_body(e);
                 let live = self.reach_stmt(body, live, r);
