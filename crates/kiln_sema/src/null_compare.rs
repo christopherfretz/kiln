@@ -1,6 +1,6 @@
 //! Comparisons with a null pointer constant that always have the same
 //! result (clang `Sema::DiagnoseAlwaysNonNullPointer`, comparison forms;
-//! spec/sema.md §5.26).
+//! spec/sema.md §5.27).
 //!
 //! `==` / `!=` with exactly one null pointer constant operand
 //! ([conv.ptr]/1) whose other operand is, through implicit conversions:
