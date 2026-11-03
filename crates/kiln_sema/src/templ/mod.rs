@@ -716,6 +716,15 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A template template parameter's default (at `at`) names variable
+    /// template or concept `a` ([temp.arg.template]/1): at clang
+    /// compatibility 22 it is a template argument of the wrong kind, the
+    /// parameter gets no default (clang 19 reports the parser's "must be a
+    /// class template" instead).
+    pub fn act_on_wrong_kind_ttp_default(&mut self, a: DeclId, at: Loc) {
+        self.reject_keyless_ttp_arg(a, at);
+    }
+
     /// clang 22's rejection of template `a` as the argument (at `at`)
     /// of a key-less template template parameter
     /// ([`Sema::act_on_keyless_template_template_param`]).
