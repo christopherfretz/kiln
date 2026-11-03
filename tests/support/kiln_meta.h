@@ -294,3 +294,112 @@ consteval bool name_is(info r, const char* s) {
   return *n == *s;
 }
 }  // namespace std::meta
+
+// [meta.reflection.extract], [meta.reflection.result], [meta.define.static]
+// (P3491R3; WP-479). extract and the reflect_* functions are intrinsics
+// (spec/reflection-values.md); define_static_* are library functions over
+// them, as libstdc++ defines them. define_static_array returns a span: the
+// standard one when a standard library is in use, else a stand-in of the
+// same layout.
+#if defined(_LIBCPP_VERSION) || defined(__GLIBCXX__)
+#include <span>
+#else
+namespace std {
+template <class T>
+class span {
+  T* data_ = nullptr;
+  decltype(sizeof 0) size_ = 0;
+
+ public:
+  constexpr span() noexcept = default;
+  constexpr span(T* p, decltype(sizeof 0) n) noexcept : data_(p), size_(n) {}
+  constexpr T* data() const noexcept { return data_; }
+  constexpr decltype(sizeof 0) size() const noexcept { return size_; }
+  constexpr bool empty() const noexcept { return size_ == 0; }
+  constexpr T* begin() const noexcept { return data_; }
+  constexpr T* end() const noexcept { return data_ + size_; }
+  constexpr T& operator[](decltype(sizeof 0) i) const noexcept { return data_[i]; }
+};
+}  // namespace std
+#endif
+
+namespace std::meta {
+template <class T>
+consteval T extract(info r);
+template <class T>
+consteval info reflect_constant(const T& expr);
+template <class T>
+consteval info reflect_object(T& expr);
+template <class T>
+consteval info reflect_function(T& fn);
+template <class R>
+consteval info reflect_constant_string(R&& r);
+template <class R>
+consteval info reflect_constant_array(R&& r);
+
+consteval bool __kiln_is_string_literal(const char* p);
+consteval bool __kiln_is_string_literal(const wchar_t* p);
+consteval bool __kiln_is_string_literal(const char8_t* p);
+consteval bool __kiln_is_string_literal(const char16_t* p);
+consteval bool __kiln_is_string_literal(const char32_t* p);
+
+// range_value_t of a built-in array or a class with begin().
+template <class T>
+struct __kiln_unref {
+  using type = T;
+};
+template <class T>
+struct __kiln_unref<T&> {
+  using type = T;
+};
+template <class T>
+struct __kiln_unref<const T> : __kiln_unref<T> {};
+template <class T>
+struct __kiln_unref<const T&> : __kiln_unref<T> {};
+template <class T>
+T& __kiln_lval() noexcept;
+template <class T, decltype(sizeof 0) N>
+T* __kiln_begin(T (&a)[N]);
+template <class R>
+auto __kiln_begin(R& r) -> decltype(r.begin());
+template <class R>
+using __kiln_range_value_t =
+    typename __kiln_unref<decltype(*__kiln_begin(__kiln_lval<R>()))>::type;
+}  // namespace std::meta
+
+namespace std {
+consteval bool is_string_literal(const char* p) { return meta::__kiln_is_string_literal(p); }
+consteval bool is_string_literal(const wchar_t* p) { return meta::__kiln_is_string_literal(p); }
+consteval bool is_string_literal(const char8_t* p) { return meta::__kiln_is_string_literal(p); }
+consteval bool is_string_literal(const char16_t* p) { return meta::__kiln_is_string_literal(p); }
+consteval bool is_string_literal(const char32_t* p) { return meta::__kiln_is_string_literal(p); }
+
+template <class R>
+consteval const meta::__kiln_range_value_t<R>* define_static_string(R&& r) {
+  using T = meta::__kiln_range_value_t<R>;
+  return meta::extract<const T*>(meta::reflect_constant_string(r));
+}
+
+template <class R>
+consteval span<const meta::__kiln_range_value_t<R>> define_static_array(R&& r) {
+  using T = meta::__kiln_range_value_t<R>;
+  decltype(sizeof 0) n = 0;
+  for (auto&& x : r) {
+    (void)x;
+    ++n;
+  }
+  if (n == 0) return span<const T>();
+  return span<const T>(meta::extract<const T*>(meta::reflect_constant_array(r)), n);
+}
+
+template <class T>
+consteval const typename meta::__kiln_unref<T>::type* define_static_object(T&& t) {
+  using U = typename meta::__kiln_unref<T>::type;
+  if constexpr (__is_class(U)) {
+    return __builtin_addressof(meta::extract<const U&>(meta::reflect_constant(t)));
+  } else {
+    const U a[1] = {t};
+    return define_static_array(a).data();
+  }
+}
+}  // namespace std
