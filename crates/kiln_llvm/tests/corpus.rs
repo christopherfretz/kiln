@@ -658,7 +658,7 @@ fn nocreateundeforpoison_at_llvm_22() {
             ),
             "{t}"
         );
-        assert!(intrinsics::creates_no_undef_or_poison(&m, "llvm.fma.f64") == marked);
+        assert_eq!(intrinsics::creates_no_undef_or_poison(&m, "llvm.fma.f64"), marked);
         assert!(!intrinsics::creates_no_undef_or_poison(&m, "llvm.fmuladdx.f64"));
         assert!(!intrinsics::creates_no_undef_or_poison(&m, "llvm.abs.i32"));
     }

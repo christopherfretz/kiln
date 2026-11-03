@@ -84,7 +84,7 @@ fn align(sub: u32, a: u128, b: u128, t2: u32) -> Result<u128, Fault> {
     if (signed && (b as i128) < 0) || !b.is_power_of_two() {
         return Err(fault(false));
     }
-    if w >= 1 && w <= 128 && b > 1u128 << (w - 1) {
+    if (1..=128).contains(&w) && b > 1u128 << (w - 1) {
         return Err(fault(true));
     }
     let m = b - 1;
