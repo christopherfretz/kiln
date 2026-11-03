@@ -9,6 +9,7 @@ use crate::keywords::Kw;
 use crate::parser::{PExpr, Parser, is_template_class};
 use crate::tentative::TypeIdContext;
 use kiln_ast::QualType;
+use kiln_sema::DeclSite;
 
 impl Parser<'_, '_> {
     /// `^^ ::` / `^^ type-id` / `^^ reflection-name` / `^^ id-expression`
@@ -35,7 +36,7 @@ impl Parser<'_, '_> {
         if ahead.is_none()
             && self.is_cxx_type_id_at(self.pos(), TypeIdContext::InTrailingReturnType).0
         {
-            let ty = self.parse_type_id()?;
+            let ty = self.parse_type_id_into(None, DeclSite::Reflect)?;
             let end = self.prev_end();
             return Some(self.s.act_on_reflect_type(ty, loc, end));
         }

@@ -2,7 +2,7 @@
 """Writes the [meta.reflection.traits] type-zoo tests (WP-477).
 
   traits-zoo.cpp      kiln only (-freflection): is_X_type(^^T) == std::is_X_v<T>
-                      (and X(^^T) == ^^std::X_t<T> for the transformations),
+                      (and is_same_type(X(^^T), ^^std::X_t<T>) for the transformations),
                       for every zoo type and every trait with a <type_traits>
                       counterpart.
   traits-zoo-rhs.cpp  both compilers (min-oracle 22): std::is_X_v<T> == V, with
@@ -169,15 +169,16 @@ def main():
     zoo = (HEADER
            + "// [meta.reflection.traits] P2996R13: every type trait with a <type_traits>\n"
            + "// counterpart answers as it, over a type zoo (each type reflected through an\n"
-           + "// alias: p4); a transformation returns the canonical type std::X_t names\n"
-           + "// (p5). traits-zoo-rhs.cpp pins the std:: side to clang 22's answers.\n"
+           + "// alias: p4); a transformation returns the type std::X_t names (p5; `^^`\n"
+           + "// keeps the alias std::X_t<T>, so the types are compared). traits-zoo-rhs.cpp\n"
+           + "// pins the std:: side to clang 22's answers.\n"
            + "//@ args: -freflection -I tests/support\n"
            + "//@ skip(clang): clang 19 does not implement P2996 reflection\n"
            + "//@ strict-diags\n"
            + "#include <type_traits>\n#include <utility>\n#include \"kiln_meta_traits.h\"\n"
            + "using namespace std::meta;\n" + PRELUDE + aliases()
            + "".join(f"static_assert({k} == {s});\n" for k, s in pairs)
-           + "".join(f"static_assert({k} == {s});\n" for k, s in transform_rows()))
+           + "".join(f"static_assert(is_same_type({k}, {s}));\n" for k, s in transform_rows()))
     rhs = (HEADER
            + "// [meta.unary], [meta.rel]: the std:: side of traits-zoo.cpp, each value\n"
            + "// clang 22's (computed when the file was generated), so kiln's <type_traits>\n"
