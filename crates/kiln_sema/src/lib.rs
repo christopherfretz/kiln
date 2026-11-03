@@ -133,6 +133,14 @@ struct TypoSpec {
     loc: Loc,
     /// The diagnostic of the correction ("did you mean").
     suggest: Diag,
+    /// What a failed speculation reports instead of the uncorrected
+    /// diagnostic: the correction clang 19 goes on to (a variable the
+    /// rejected function tied with, or the next distance's one value).
+    fallback: Option<Diag>,
+    /// The speculation is on a function another candidate at its
+    /// distance ties with: valid, it makes the correction ambiguous
+    /// (clang's `AmbiguousTypoExprs`) and nothing is corrected.
+    ambiguous: bool,
     /// The full-expression warnings about an expression built on the
     /// correction, with their order ([`Sema::emit_after_typos`]): clang
     /// issues them after it corrects the `TypoExpr`.
@@ -1120,31 +1128,50 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// The speculative corrections among them ([`TypoSpec`]) stand
     /// together or not at all, as clang's `CorrectDelayedTyposInExpr`
     /// rebuilds the whole expression: one that an error came of
-    /// ([`Sema::spec_failed_errors`]) makes them all report the typo
-    /// uncorrected, and those errors are dropped (clang never built the
-    /// failing expression). A dropped expression is never corrected.
+    /// ([`Sema::spec_failed_errors`]) and has no `fallback`, or one that
+    /// succeeded but is `ambiguous`, makes them all report the typo
+    /// uncorrected; a failed one with a `fallback` reports that instead.
+    /// The errors are dropped either way (clang never built the failing
+    /// expression), and an uncorrected typo's expression becomes an
+    /// expression error ([`Sema::holds_uncorrected_typo`]). A dropped
+    /// expression is never corrected.
     fn emit_typos(&mut self, batch: Vec<HeldTypo>, dropped: bool) {
         let specs = batch.iter().filter(|t| t.spec.is_some()).count();
-        let mut failed = dropped;
+        // Per speculation: whether an error came of it.
+        let mut failures = Vec::with_capacity(batch.len());
         if specs > 0 {
-            let mut errors = Vec::new();
             for t in &batch {
-                if let Some(s) = &t.spec {
-                    errors.extend(self.spec_failed_errors(s.loc, s.start));
+                let errors = match &t.spec {
+                    Some(s) => self.spec_failed_errors(s.loc, s.start),
+                    None => Vec::new(),
+                };
+                failures.push(!errors.is_empty());
+                for i in errors {
+                    self.diags.drop_held(i);
                 }
             }
-            failed |= !errors.is_empty();
-            for i in errors {
-                self.diags.drop_held(i);
-            }
+        } else {
+            failures.resize(batch.len(), false);
         }
+        // The speculations stand together: one failing with nowhere to
+        // go, or one valid but ambiguous, leaves the whole batch
+        // uncorrected.
+        let failed = dropped
+            || batch.iter().zip(&failures).any(|(t, &f)| {
+                t.spec.as_ref().is_some_and(|s| if f { s.fallback.is_none() } else { s.ambiguous })
+            });
         let mut after = Vec::new();
-        for t in batch {
+        for (t, f) in batch.into_iter().zip(failures) {
+            if failed && t.spec.is_some() {
+                // clang's uncorrected `TypoExpr` is an `ExprError`.
+                self.expr_errors.insert(t.expr);
+            }
             let d = match t.spec {
-                Some(s) if !failed => {
+                Some(s) if !failed && !f => {
                     after.extend(s.after);
                     s.suggest
                 }
+                Some(s) if !failed => s.fallback.unwrap_or(t.diag),
                 _ => t.diag,
             };
             if dropped {
@@ -1233,7 +1260,15 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// uncorrected diagnostic is `plain` and corrected one `suggest`
     /// ([`TypoSpec`]): the engine holds every diagnostic until its
     /// correction point.
-    pub(crate) fn hold_typo_spec(&mut self, plain: Diag, suggest: Diag, u: ExprId, loc: Loc) {
+    pub(crate) fn hold_typo_spec(
+        &mut self,
+        plain: Diag,
+        suggest: Diag,
+        u: ExprId,
+        loc: Loc,
+        fallback: Option<Diag>,
+        ambiguous: bool,
+    ) {
         let seq = self.typo_count;
         self.typo_count = self.typo_count.wrapping_add(1);
         self.typo_exprs.insert(u);
@@ -1244,7 +1279,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.open_specs += 1;
         self.diags.hold();
         let start = self.diags.held_len();
-        let spec = Some(Box::new(TypoSpec { start, loc, suggest, after: Vec::new() }));
+        let spec = Some(Box::new(TypoSpec {
+            start,
+            loc,
+            suggest,
+            fallback,
+            ambiguous,
+            after: Vec::new(),
+        }));
         self.delayed_typos.push(HeldTypo { seq, expr: u, diag: plain, spec });
     }
 
@@ -1266,6 +1308,27 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// expression (WP-408).
     pub fn is_expr_error(&self, e: ExprId) -> bool {
         self.expr_errors.contains(&e)
+    }
+
+    /// Whether `e` holds a speculative typo correction that did not
+    /// stand ([`TypoSpec`]): clang's full-expression is an `ExprError`.
+    pub fn holds_uncorrected_typo(&self, e: ExprId) -> bool {
+        if self.expr_errors.is_empty() || self.typo_exprs.is_empty() {
+            return false;
+        }
+        let mut stack = vec![e];
+        let mut budget = 1usize << 16;
+        while let Some(x) = stack.pop() {
+            if self.expr_errors.contains(&x) && self.typo_exprs.contains(&x) {
+                return true;
+            }
+            if budget == 0 {
+                return false;
+            }
+            budget -= 1;
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+        false
     }
 
     /// Records `e` as an `ExprError` ([`Sema::is_expr_error`]).

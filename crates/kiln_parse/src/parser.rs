@@ -517,11 +517,13 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// (`PP.EnterToken` + `Tok.setKind(tok::semi)`).
     pub(crate) fn inject_semi(&mut self) {
         let at = self.loc();
-        let semi = Token {
-            kind: TokKind::Punct(Punct::Semi),
-            span: Span::new(at, at),
-            flags: TokFlags::empty(),
-        };
+        self.inject(TokKind::Punct(Punct::Semi), at);
+    }
+
+    /// Inserts a token of kind `kind` at `at` before the current token
+    /// (clang's `UnconsumeToken` of a replacement token).
+    pub(crate) fn inject(&mut self, kind: TokKind, at: Loc) {
+        let semi = Token { kind, span: Span::new(at, at), flags: TokFlags::empty() };
         let saved = Replay {
             toks: vec![semi],
             eof: semi,

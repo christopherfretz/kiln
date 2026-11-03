@@ -346,8 +346,11 @@ outermost class is complete, so their tokens are saved and re-parsed
   "expected ..." diagnostics point at the token that ended it.
   `end_replay()` restores the interrupted stream and returns whether
   every saved token was consumed; replays nest (a nested class's items
-  replay inside the outer class's). `inject_semi` uses the same stack to
-  insert the `;` clang assumes after a class with a missing `;`.
+  replay inside the outer class's). `inject_semi` uses the same stack
+  (`inject`) to insert the `;` clang assumes after a class with a
+  missing `;`, and the undeclared template-id path to put back the
+  keyword clang 19 corrects a template-id to (spec/sema.md "Clang 19
+  edit-distance candidates").
 - The token source's window (§2.1) is unaffected: saved tokens are owned
   by the parser, not the window.
 - Pragma events (§2.3) keyed to tokens inside a saved range fire when the
@@ -1250,7 +1253,16 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   (`Parser::begin_typo_correction` / `correct_typos`): ended
   right after the expression is parsed, before its conversion, and
   reported even inside an enclosing scope; one whose expression failed
-  to parse leaves its typos to the enclosing scope.
+  to parse leaves its typos to the enclosing scope. A `return` operand
+  whose typo stays uncorrected (`Sema::holds_uncorrected_typo`) is
+  replaced by an error expression, as clang 19's `TransformTypos`
+  returns `ExprError`, so the return's conversion is not checked. An
+  undeclared template-id whose nearest candidates are all keywords
+  (`template_id_keyword_typo`) is no expression: the keyword is injected
+  in its place after "expected unqualified-id" and the enclosing
+  construct skips it (`template` instead is consumed, "'template'
+  keyword not permitted here", and an error operand stands before a
+  binary operator).
   Scopes nest: an inner scope's held typos stay held while an outer
   one is open (`end_delayed_typos`), and each held typo records the
   recovery expression that stands for clang's `TypoExpr`

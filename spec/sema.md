@@ -4213,9 +4213,9 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   WP-399; clang 19's `TypoExpr` and `CorrectDelayedTyposInExpr`): under
   `-fclang-compat=19` an undeclared template-id whose best candidate is
   the name itself qualified (exactly one non-member function or using
-  shadow, non-dependent arguments, outside an instantiation, inside a
-  delayed-typo scope) is speculatively rebuilt as a reference to that
-  function, template arguments dropped
+  shadow, outside an instantiation, inside a delayed-typo scope) is
+  speculatively rebuilt as a reference to that function, template
+  arguments dropped (dependent ones too)
   (`speculate_template_id_typo`). The diagnostics engine holds every
   diagnosis (fatal ones aside) from then on (spec/diag.md "Held
   diagnostics"). At the correction point -- the end of the expression
@@ -4232,8 +4232,7 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   identifier 'val'"; a successful one "use of undeclared identifier
   'val'; did you mean '::val'?" with "'::val' declared here". Typos
   corrected in one batch fail together (`(val<int>, val<int> + 1)`).
-  Calls, overload sets and edit-distance candidates are never corrected
-  on this path. The scopes (spec/parse.md "Compat-19 correction scopes",
+  Calls are never corrected on this path. The scopes (spec/parse.md "Compat-19 correction scopes",
   WP-408) differ only in what follows the correction point: an
   initializer (a declaration's, a condition declaration's) is filtered by
   its initialization, so a type mismatch fails the speculation; a flush
@@ -4252,6 +4251,41 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `undeclared-template-id-scopes-19.cpp`,
   `undeclared-template-id-function-19.cpp`; clang 22:
   `undeclared-template-id-function-22.cpp`.
+- **Clang 19 edit-distance candidates** ([temp.names]/3, WP-408; clang
+  19's `CorrectTypoDelayed` and `TransformTypos`): the same speculation
+  covers any candidate ordinary or qualified lookup finds
+  (`template_id_typo_candidates`, ranked as for clang 22 but with no
+  third-of-the-length bound), grouped by distance. clang 19 rebuilds the
+  candidates of each group in turn and takes the first valid one unless
+  another of the same group is valid too (`AmbiguousTypoExprs`), and
+  never a type, template, namespace, concept or non-static member
+  function (`typo_kind_19`: a variable, parameter, enumerator, binding,
+  non-type template parameter, or a field with an implicit object
+  argument is a value; a function, function template or static member
+  function a function). Kiln speculates once (`TypoSpec`): on the one
+  value of the nearest group, or on its first function when it has none
+  (an overload set rebuilt as an unresolved name). A function speculation
+  holds a `fallback` "did you mean" for the value of the same group or of
+  the nearest later group with exactly one value, taken when the
+  function fails; a valid function tied with a value or another function
+  is `ambiguous`, reported uncorrected. Two values in the nearest group
+  are no correction. The correction point validates as before: a
+  built-in operand or an initializer rejects a function, a `return`
+  operand, condition or discarded expression accepts anything, so there
+  a function tied with a value is ambiguous; an ambiguous or failed
+  `return` operand is then an error expression
+  (`Sema::holds_uncorrected_typo`), so no return conversion is checked.
+  When the nearest group is keywords only, clang 19 replaces the name by
+  the first one at once (`template_id_keyword_typo`): "did you mean
+  'break'?" and the keyword is re-parsed where the template-id was
+  ("expected unqualified-id" at it; `template` is consumed with
+  "'template' keyword not permitted here" and "expected unqualified-id"
+  at the next token, an error operand before a binary operator). Within
+  one distance clang orders candidates by a string hash kiln does not
+  model, so a keyword tied with a declaration (`swtch` with `switch` and
+  a function `swatch`), and an initializer that accepts only one of a
+  tied value and function, may differ. Tests:
+  `tests/conformance/temp.names/template-id-typo-*-19.cpp`.
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
 Each rule names the libc++ test it fixed and its corpus test.

@@ -1789,10 +1789,15 @@ impl Parser<'_, '_> {
             self.emit(d);
             return None;
         }
+        if self.s.clang_compat < 22 && !functions {
+            if let Some(kw) = self.s.template_id_keyword_typo(name, nl) {
+                return self.template_id_keyword(kw, nl);
+            }
+        }
         if self.s.clang_compat < 22 {
             // clang 19: a delayed typo on an expression parsing goes on
             // around ("expected ')'" / "expected ';'" may follow).
-            return Some(self.s.act_on_undeclared_template_id_typo(name, &args, nl));
+            return Some(self.s.act_on_undeclared_template_id_typo(name, nl));
         }
         match self.s.correct_template_id_typo(name, &args, nl) {
             kiln_sema::TemplateIdTypo::Recovered(e) => return Some(e),
@@ -1821,6 +1826,29 @@ impl Parser<'_, '_> {
         // skips past it (`a[u<int>], x` skips to the `,`; WP-399).
         self.expr_invalid |= goes_on;
         goes_on.then(|| self.s.act_on_error_expr(&[], nl))
+    }
+
+    /// clang 19's re-parse of the template-id at `nl` corrected to the
+    /// keyword `kw` ([`kiln_sema::Sema::template_id_keyword_typo`]): the
+    /// keyword stands where the template-id was and is no
+    /// unqualified-id. `template` is consumed ("'template' keyword not
+    /// permitted here") and the enclosing expression goes on around an
+    /// error operand before an operator; any other keyword is left for
+    /// the enclosing construct to skip.
+    fn template_id_keyword(&mut self, kw: &str, nl: Loc) -> PExpr {
+        if kw == "template" {
+            let d = self.s.diag(DiagId::parse_unexpected_template_in_unqualified_id, nl);
+            self.emit(d);
+            self.error_here(DiagId::parse_expected_unqualified_id);
+            let goes_on = self.cur_binop().is_some();
+            self.expr_invalid |= goes_on;
+            return goes_on.then(|| self.s.act_on_error_expr(&[], nl));
+        }
+        let d = self.s.diag(DiagId::parse_expected_unqualified_id, nl);
+        self.emit(d);
+        let sym = self.s.ast.symbols().intern(kw);
+        self.inject(TokKind::Identifier(sym), nl);
+        None
     }
 
     /// A (possibly qualified) id-expression that does not name a type

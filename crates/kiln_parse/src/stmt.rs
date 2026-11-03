@@ -1177,7 +1177,13 @@ impl Parser<'_, '_> {
                 self.eat(Punct::Semi);
                 return None;
             };
-            value = Some(e);
+            // An uncorrected speculation leaves clang an `ExprError`
+            // operand: no return checks.
+            value = Some(if self.s.holds_uncorrected_typo(e) {
+                self.s.act_on_error_expr(&[], self.s.expr_loc(e))
+            } else {
+                e
+            });
         }
         let s = self.s.act_on_return(value, loc);
         self.expect_semi_after_stmt("return");
