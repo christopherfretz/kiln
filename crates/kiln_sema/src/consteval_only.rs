@@ -12,7 +12,7 @@
 //! with the immediate invocations in `consteval.rs`. A `std::meta::info`
 //! value therefore never reaches code generation.
 
-use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, Defaulted};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -316,7 +316,41 @@ impl Sema<'_, '_> {
             return;
         }
         let ty = n.ty().unwrap_or(QualType::ERROR);
-        if self.is_consteval_only_type(ty) || self.has_consteval_only_object_param(f) {
+        // A member of a templated class is checked per instantiated
+        // definition, when its class is known (`check_consteval_only_inst`;
+        // GCC 16.1 checks no templated member through its class).
+        if self.is_consteval_only_type(ty)
+            || (!self.in_template() && self.has_consteval_only_object_param(f))
+        {
+            self.error(DiagId::sema_consteval_only_fn, loc);
+        }
+    }
+
+    /// Instantiated function `f` of pattern `pattern`, at `loc`: the
+    /// rule of `check_consteval_only_fn` for a type that became
+    /// consteval-only by substitution (`template <class T> void h(T)`
+    /// as `h<info>`, a member of `W<info>` with a `T` member), checked when
+    /// the definition is instantiated, as GCC 16.1 does. A pattern whose
+    /// own type was already consteval-only was reported at its
+    /// declaration; a `constexpr` or defaulted pattern is
+    /// immediate-escalating.
+    pub(crate) fn check_consteval_only_inst(&mut self, f: DeclId, pattern: DeclId, loc: Loc) {
+        if !self.reflection
+            || self.ast.decls.get(f).has(DeclFlags::INVALID)
+            || self.is_immediate_fn(f)
+            || self.is_immediate_escalating(f)
+        {
+            return;
+        }
+        let Some(p) = self.ast.decls.function(pattern) else { return };
+        if p.spec.constexpr_kind() != ConstexprKind::None || p.spec.defaulted() != Defaulted::No {
+            return;
+        }
+        let ty = |s: &Self, d: DeclId| s.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+        let (fty, pty) = (ty(self, f), ty(self, pattern));
+        if (self.is_consteval_only_type(fty) || self.has_consteval_only_object_param(f))
+            && !self.is_consteval_only_type(pty)
+        {
             self.error(DiagId::sema_consteval_only_fn, loc);
         }
     }
