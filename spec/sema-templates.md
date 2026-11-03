@@ -1391,9 +1391,41 @@ by its explicit instantiation (`queue_explicit_instantiation`). It is
 then reported at both places, as clang's duplicate
 `PendingInstantiations` entries do.
 
-**An explicit instantiation declaration** (`extern template`) does not
-stop sema from instantiating inline and `constexpr` members when they
-are used. It only tells codegen not to emit them (WP-080).
+**An explicit instantiation declaration** (`extern template`,
+[temp.explicit]/12, WP-449) suppresses the implicit instantiation of the
+definitions it covers, even when they are odr-used
+(`Ast::governing_explicit_inst_kind` decides, as codegen does: the
+member's own explicit kind, else the innermost explicitly instantiated
+enclosing class):
+- A member function's definition is instantiated only when its pattern
+  is inline (declared `inline` or `constexpr`/`consteval` on a
+  redeclaration, or defined in its class) or its declared return type
+  contains a placeholder (clang `InstantiateFunctionDefinition`;
+  `Sema::suppressed_by_explicit_inst_declaration`). The others are
+  never instantiated here, so an ill-formed body is not diagnosed.
+- A static data member's out-of-line definition is instantiated only
+  when the member may be usable in constant expressions (clang
+  `InstantiateVariableDefinition`, `might_be_constant_var`). It stays
+  in `inst.member_defs`, so a later explicit instantiation definition
+  still instantiates it.
+- The declaration instantiates the definitions of the class's member
+  classes, recursively, and gives the fresh ones the declaration kind
+  (clang `InstantiateClassMembers` with
+  `TSK_ExplicitInstantiationDeclaration`). A later explicit
+  instantiation definition upgrades such a member class to a
+  definition, so its vtable is required. A member class already
+  implicitly instantiated keeps the implicit kind.
+- An instantiated member function is implicitly inline only when its
+  pattern is (`Sema::instantiated_pattern_inline`, clang copies
+  `isInlined`). An out-of-class non-inline pattern gives a non-inline
+  instantiation, with or without an explicit instantiation. Codegen
+  reads the instantiation's own inline-ness (spec/codegen.md
+  "Explicit instantiation declarations").
+
+Tests: `tests/conformance/temp.explicit/extern-template-no-definitions.cpp`,
+`extern-template-inline-error.cpp`, `implicit-inline-from-pattern-ast.cpp`,
+`tests/codegen/extern_template_nested_class.cpp`,
+`extern_template_optnone_o1.cpp`.
 
 **Member specializations** such as `template<> void A<int>::f()`:
 1. Instantiate the declaration of `A<int>` (declarations only).

@@ -883,6 +883,58 @@ impl Ast {
         false
     }
 
+    /// The explicit instantiation kind that governs variable or function
+    /// `d`: its own, else that of the innermost explicitly instantiated
+    /// or specialized enclosing class (clang propagates the class's kind
+    /// to its members in `InstantiateClassMembers`, [temp.explicit]/10).
+    /// `None` when implicit, an explicit specialization, or excluded from
+    /// explicit instantiation (itself or a member class on the way).
+    pub fn governing_explicit_inst_kind(&self, d: DeclId) -> Option<SpecKind> {
+        let first = self.first(d);
+        let explicit = |k: SpecKind| match k {
+            SpecKind::ExplicitInstantiationDeclaration
+            | SpecKind::ExplicitInstantiationDefinition => Some(Some(k)),
+            SpecKind::ExplicitSpecialization => Some(None),
+            _ => None,
+        };
+        match self.templ_link(first).get() {
+            Some((TemplLinkKind::MemberOfSpecialization, i)) => {
+                if let Some(k) = self.templates.member_spec(i).and_then(|m| explicit(m.kind)) {
+                    return k;
+                }
+                if self.excluded_from_explicit_instantiation(first) {
+                    return None;
+                }
+                let mut ctx = self.decls.get(first).ctx();
+                while let Some(c) = ctx {
+                    if !matches!(
+                        self.decls.get(c).kind(),
+                        DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
+                    ) {
+                        break;
+                    }
+                    if self.member_spec_info(c).is_some()
+                        && self.excluded_from_explicit_instantiation(c)
+                    {
+                        return None;
+                    }
+                    if let Some(k) = self.spec_info(c).and_then(|(_, s)| explicit(s.kind)) {
+                        return k;
+                    }
+                    if let Some(k) = self.member_spec_info(c).and_then(|(_, m)| explicit(m.kind)) {
+                        return k;
+                    }
+                    ctx = self.decls.get(c).ctx();
+                }
+                None
+            }
+            Some((TemplLinkKind::Specialization, _)) => {
+                self.spec_info(first).and_then(|(_, s)| explicit(s.kind)).flatten()
+            }
+            _ => None,
+        }
+    }
+
     /// The partial specialization record of `d` with its index, when `d`
     /// is (a declaration of) a class template partial specialization.
     pub fn partial_spec_info(&self, d: DeclId) -> Option<(u32, &PartialSpecInfo)> {
