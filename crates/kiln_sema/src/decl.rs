@@ -5086,6 +5086,7 @@ impl Sema<'_, '_> {
         } else if !spec.is_inline() && self.is_in_class_static(self.init_written_in(v)) {
             self.check_in_class_static_init(v, e);
         }
+        self.warn_constant_evaluated_init(v, e);
     }
 
     /// `ty` with its referenced array of unknown bound replaced by `ety`,

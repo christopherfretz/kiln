@@ -422,6 +422,9 @@ pub struct Oven {
     /// The translation unit's language standard as its year
     /// ([`Oven::set_cxx_year`]).
     cxx_year: u32,
+    /// The next outermost or nested evaluation reports
+    /// `-Wconstant-evaluated` though silent ([`Oven::warn_constant_evaluated`]).
+    cev_warn_next: bool,
     pub(crate) types: Types,
     pub(crate) code: Vec<u32>,
     pub(crate) sites: Vec<Site>,
@@ -504,6 +507,7 @@ impl Oven {
             backtrace_limit: notes::BACKTRACE_LIMIT,
             clang_compat: 19,
             cxx_year: 2026,
+            cev_warn_next: false,
             types: Types::default(),
             code: Vec::new(),
             sites: Vec::new(),
@@ -714,6 +718,20 @@ impl Oven {
         self.eval_ctx(bridge, e, Some(var), true, false, true).0.ok()
     }
 
+    /// clang's `-Wconstant-evaluated` of a variable's initializer `e`
+    /// that is not checked as `constexpr` or `constinit`: clang's
+    /// `CheckCompleteVariableDeclaration` evaluates the initializer of
+    /// every variable with static storage, or that might be usable in
+    /// constant expressions, as a constant initializer, and
+    /// `__builtin_is_constant_evaluated()` (or `std::is_constant_evaluated()`)
+    /// called directly by it warns that it is always true there, even when
+    /// the initialization then fails. Otherwise silent; not recorded.
+    pub fn warn_constant_evaluated(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, var: DeclId) {
+        self.cev_warn_next = true;
+        let _ = self.eval_ctx(bridge, e, Some(var), true, false, true);
+        self.cev_warn_next = false;
+    }
+
     /// Whether `var`'s initializer is a constant initializer
     /// ([basic.start.static]/2): it evaluates successfully as a constant
     /// expression. Not recorded in the statistics.
@@ -912,6 +930,7 @@ impl Oven {
         self.run.enum_check = enum_check;
         self.run.const_context = const_context;
         self.run.fold = silent && !const_context;
+        self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
         self.run.counters = vm::Counters::default();
         self.run.nesting = 0;
         self.run.depth_base = 0;
@@ -978,6 +997,7 @@ impl Oven {
             self.run.enum_check,
             self.run.const_context,
             self.run.fold,
+            self.run.cev_warn,
             self.run.counters,
             self.run.object,
             self.run.maxd,
@@ -1008,6 +1028,7 @@ impl Oven {
         self.run.enum_check = enum_check;
         self.run.const_context = const_context;
         self.run.fold = silent && !const_context;
+        self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
         self.run.counters = vm::Counters { steps: steps0, ..vm::Counters::default() };
         self.run.maxd = 0;
         self.run.depth_base = depth_base;
@@ -1036,6 +1057,7 @@ impl Oven {
             self.run.enum_check,
             self.run.const_context,
             self.run.fold,
+            self.run.cev_warn,
             counters,
             self.run.object,
             self.run.maxd,

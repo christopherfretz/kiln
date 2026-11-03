@@ -129,6 +129,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     };
     let mut b = Bridge { ast, abi: target, cxx_year: oven.cxx_year() };
     let mut folds = Folds::default();
+    let mut refolded = FxHashSet::default();
     for e in cands {
         if folds.expr.contains_key(&e) {
             continue;
@@ -139,7 +140,24 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         // lax as clang's `EvaluateAsRValue`: a `const double` or
         // `const _Atomic(int)` variable reads as its value.
         let v = match inits.get(&e) {
-            Some(&var) => oven.fold_constant_init(&mut b, e, var),
+            Some(&var) => match oven.fold_constant_init(&mut b, e, var) {
+                // clang `ConstantEmitter::tryEmitPrivateForVarInit`: an
+                // initializer that is not constant is folded again outside
+                // a constant context (`__builtin_is_constant_evaluated()`
+                // is false, a cast only a fold performs continues), and a
+                // value makes it a static initializer all the same. The
+                // variable is not constant-initialized, so neither its
+                // uses nor its destruction see the value. Scalars only
+                // (spec/codegen.md "Static initialization").
+                None if is_scalar(b.ast, var) => {
+                    let v = oven.fold_rvalue(&mut b, e);
+                    if v.is_some() {
+                        refolded.insert(e);
+                    }
+                    v
+                }
+                v => v,
+            },
             None => oven.fold_rvalue(&mut b, e),
         };
         if let Some(v) = v {
@@ -147,7 +165,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         }
     }
     for (e, init) in statics {
-        if let Some(v) = folds.get(init) {
+        if let Some(v) = folds.get(init).filter(|_| !refolded.contains(&init)) {
             folds.expr.entry(e).or_insert(v);
         }
     }
@@ -167,13 +185,28 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     let mut dtors: Vec<_> = dtors.into_iter().collect();
     dtors.sort_unstable_by_key(|&(first, _)| first);
     for (first, (d, init, is_static)) in dtors {
-        let value = init.and_then(|e| folds.get(e));
+        let value = init.filter(|e| !refolded.contains(e)).and_then(|e| folds.get(e));
         let const_context = is_static && (init.is_none() || value.is_some());
         if oven.has_constant_destruction(&mut b, d, value, const_context) {
             folds.const_destroyed.insert(first);
         }
     }
     folds
+}
+
+/// Whether variable `d` has a scalar type (arithmetic, enumeration,
+/// pointer or pointer to member).
+fn is_scalar(ast: &Ast, d: DeclId) -> bool {
+    ast.decls.get(d).ty().is_some_and(|t| {
+        matches!(
+            ast.types.canonical_view(t),
+            TypeView::Builtin(_)
+                | TypeView::BitInt { .. }
+                | TypeView::Pointer(_)
+                | TypeView::MemberPointer { .. }
+                | TypeView::Enum(_)
+        )
+    })
 }
 
 /// Collects the candidate expressions.

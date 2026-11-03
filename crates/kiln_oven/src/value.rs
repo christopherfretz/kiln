@@ -1189,6 +1189,7 @@ impl Oven {
                     self.run.silent,
                     self.run.const_context,
                     self.run.fold,
+                    self.run.cev_warn,
                 );
                 let mark = self.mem.mark();
                 // Its own evaluation context: its allocations are numbered
@@ -1205,6 +1206,7 @@ impl Oven {
                 // Constant initialization is manifestly constant-evaluated.
                 self.run.const_context = true;
                 self.run.fold = false;
+                self.run.cev_warn = false;
                 let r = self.eval_at(b, init, Some(d), top);
                 self.mem.free_heap_of(ctx, &self.types);
                 self.mem.release(mark, &self.types);
@@ -1219,6 +1221,7 @@ impl Oven {
                     self.run.silent,
                     self.run.const_context,
                     self.run.fold,
+                    self.run.cev_warn,
                 ) = saved;
                 // The placeholder's storage now belongs to the variable.
                 self.globals[g as usize].slot = 0;

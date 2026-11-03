@@ -110,6 +110,12 @@ pub(crate) struct RunState {
     /// constant expression may not perform ([expr.const]/5.15) does not
     /// fail it; its pointer result points at nothing (`mem::NOWHERE`).
     pub fold: bool,
+    /// A silent constant initialization that still reports
+    /// `-Wconstant-evaluated` ([`crate::Oven::warn_constant_evaluated`]):
+    /// clang's `evaluateValue` of every variable with static storage or
+    /// usable in constant expressions. Cleared in nested evaluations, a
+    /// global's initialization and `__builtin_constant_p`.
+    pub cev_warn: bool,
 }
 
 impl RunState {
@@ -576,10 +582,17 @@ impl Oven {
         let mark = self.mem.mark();
         // The region's `Ret` writes the frame's result slot.
         let slot = self.regs[fb];
-        let (silent, fold) = (self.run.silent, self.run.fold);
+        let (silent, fold, cev_warn) = (self.run.silent, self.run.fold, self.run.cev_warn);
+        let lax = (self.run.lax, self.mem.lax);
         self.run.entry = entry;
         self.run.silent = true;
+        // clang `EvaluateBuiltinConstantP` folds (`FoldConstant`,
+        // `EM_ConstantFold`): a read of a `const` variable not usable in
+        // constant expressions is only noted, so it is lax too
+        // (`__builtin_constant_p(d)` of a `const double d = 2.5;` is true).
         self.run.fold = true;
+        (self.run.lax, self.mem.lax) = (true, true);
+        self.run.cev_warn = false;
         self.mem.checkpoint(TrialMode::Speculative);
         let r = self.run_loop(b, func, pc0, fb as u32);
         if r.is_ok() {
@@ -589,6 +602,8 @@ impl Oven {
         }
         self.run.silent = silent;
         self.run.fold = fold;
+        (self.run.lax, self.mem.lax) = lax;
+        self.run.cev_warn = cev_warn;
         self.run.entry = saved_entry;
         let v = self.regs[fb + val];
         self.regs[fb] = slot;
@@ -1316,7 +1331,7 @@ impl Oven {
                 Op::IsConstEval => {
                     let cc = self.run.const_context;
                     reg!(0) = u128::from(cc);
-                    if cc && !self.run.silent {
+                    if cc && (!self.run.silent || self.run.cev_warn) {
                         self.always_true_diag(b, pc, aux);
                     }
                     pc += 2;
