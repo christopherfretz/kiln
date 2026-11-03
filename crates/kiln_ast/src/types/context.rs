@@ -526,6 +526,7 @@ impl TypeContext {
     pub fn exc_spec(&self, p: &FuncProto) -> ExcSpec {
         let op = p.exc_operand();
         match p.exc_tag() {
+            ExcSpec::TAG_NOTHROW if op == 1 => ExcSpec::NothrowAttr,
             ExcSpec::TAG_NOTHROW => ExcSpec::Nothrow,
             ExcSpec::TAG_DYNAMIC_NONE => ExcSpec::DynamicNone,
             ExcSpec::TAG_BASIC_NOEXCEPT => ExcSpec::BasicNoexcept,

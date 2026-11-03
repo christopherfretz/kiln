@@ -301,9 +301,19 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `cold` / `hot` to the declaration, the definition and direct call
     sites, member calls included (`builtins::cold_hot_attrs`; WP-172,
     `tests/codegen/cold_hot.cpp`; glibc's `abort` is `__COLD`). C library
-    functions recognized by name stay ordinary calls: clang's lowering of
-    a `BuiltinAttr` library call (`memcpy` to `llvm.memcpy`, a folded
-    `strlen("abc")`) is not done (a follow-up);
+    functions recognized by name (spec/sema.md §5.4) stay ordinary calls,
+    except the ones clang's `EmitBuiltinExpr` lowers through their
+    library builtin id: `memcpy` / `memmove` / `memset`, `abs` / `labs` /
+    `llabs`, and `fabs`, `ceil`, `floor`, `trunc`, `round`, `rint`,
+    `nearbyint`, `copysign`, `fmax`, `fmin`, `fma` with their `f` / `l`
+    forms (clang's `GenerateIntrinsics` set; `sqrt` stays a call under
+    `-fmath-errno`; WP-419's `roundeven` / `fmaximum_num` / `fminimum_num`
+    below) are emitted as their `__builtin_` twin
+    (`DeclArena::lib_builtin`, `builtins::lib_intrinsic`; WP-186,
+    `tests/codegen/builtins_lib_intrinsic.cpp`). Not done (follow-ups):
+    clang's -O0 fold of a library call the constant evaluator accepts
+    (`strlen("abc")` is `i64 3`, `memcmp` of literals), clang 22's
+    `modf` to `llvm.modf`, and `-fno-builtin` / `-fno-builtin-<name>`;
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary; an
@@ -2639,8 +2649,16 @@ missing value instead, which is invalid IR.
 begin/end/suspend/free/id` become the matching `llvm.coro.*` call;
 `alloc`, `begin` and `free` take the function's `%id` first, `suspend`
 a leading `token none`, `end` a trailing `token none`;
-`__builtin_coro_frame` is the `llvm.coro.begin` value. Outside a
-coroutine, `frame`/`alloc`/`begin`/`free` are a codegen error with
+`__builtin_coro_frame` is the `llvm.coro.begin` value. A hand-written
+`__builtin_coro_id` in a function that is not a C++ coroutine creates
+the function's coroutine state (clang `createCoroData`, for coroutines
+written by hand in C): its token feeds the later `alloc`/`begin`/`free`
+calls, a `__builtin_coro_begin` becomes the `frame` value, and the
+function gets no `presplitcoroutine`; a second one is a codegen error
+"only one __builtin_coro_id can be used in a function", and one in a
+C++ coroutine "__builtin_coro_id shall not be used in a C++ coroutine"
+(tests/codegen/coro_builtins.cpp, `lower.rs` `hand_written_coro_id`).
+Without either, `frame`/`alloc`/`begin`/`free` are a codegen error with
 clang's wording ("this builtin expect that __builtin_coro_begin/id has
 been used earlier in this function").
 

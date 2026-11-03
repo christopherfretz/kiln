@@ -723,8 +723,9 @@ impl Sema<'_, '_> {
     /// - `p` non-throwing, with C language linkage, and in a system header
     ///   (or a builtin, or without a location): silently `throw()`, since
     ///   C libraries may add non-throwing specifications.
-    /// - a replaceable global allocation function: the `ExtWarn`
-    ///   `-Wmissing-exception-spec`, inheriting the specification.
+    /// - a replaceable global allocation function, or `p` declared GNU
+    ///   `nothrow` (WP-186): the `ExtWarn` `-Wmissing-exception-spec`,
+    ///   inheriting the specification.
     /// - otherwise the error, still inheriting a non-dependent
     ///   specification, as clang updates the invalid declaration's type.
     pub(crate) fn merge_missing_exc_spec(
@@ -762,7 +763,8 @@ impl Sema<'_, '_> {
             e => Some(e),
         };
         let ty = inherited.map_or(ty, |e| self.with_exc_spec(ty, e));
-        let error = !(replaceable && inherited.is_some());
+        // clang: a missing GNU `nothrow` is the extension warning too.
+        let error = !(replaceable && inherited.is_some()) && old != ExcSpec::NothrowAttr;
         let id = if error {
             DiagId::sema_missing_exception_spec
         } else {

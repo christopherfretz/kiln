@@ -56,6 +56,9 @@ pub(crate) struct CoroData {
     /// `AwaitNum`/`YieldNum`), naming the suspend wrappers.
     pub await_num: u32,
     pub yield_num: u32,
+    /// The state came from a hand-written `__builtin_coro_id` (clang
+    /// `CoroIdExpr`), not from a coroutine body: no `presplitcoroutine`.
+    pub hand_written: bool,
 }
 
 /// How the value of a `co_await`/`co_yield` is wanted.
@@ -138,6 +141,7 @@ impl Cg<'_> {
             resume_eh: None,
             await_num: 0,
             yield_num: 0,
+            hand_written: false,
         }));
 
         // `mem = coro.alloc() ? allocate : null` (the allocation may be
@@ -796,11 +800,40 @@ impl Cg<'_> {
         }
         let f = self.coro_fn(which);
         let r = self.intrinsic_call(f, vals);
-        // clang remembers the call for `CallCoroDelete`.
-        if which == Coro::Free
-            && let Some(c) = self.f.coro.as_deref_mut()
-        {
-            c.last_free = Some(Fir::last_inst(r));
+        // clang lets C code emit `coro.id`/`coro.begin` by hand: the token
+        // is remembered for later `coro.alloc`/`begin`/`free` calls
+        // (`createCoroData`), the handle for `coro.frame`, and the last
+        // `coro.free` for `CallCoroDelete`.
+        match (which, self.f.coro.as_deref_mut()) {
+            (Coro::Id, Some(c)) => {
+                let msg = if c.hand_written {
+                    "only one __builtin_coro_id can be used in a function"
+                } else {
+                    "__builtin_coro_id shall not be used in a C++ coroutine"
+                };
+                return err(self.loc_of(e), msg);
+            }
+            (Coro::Id, None) => {
+                let suspend_bb = self.f.fir.create_block();
+                self.f.coro = Some(Box::new(CoroData {
+                    id: r,
+                    begin: None,
+                    suspend_bb,
+                    cleanup_jd: None,
+                    final_jd: None,
+                    kind: AwaitKind::Normal,
+                    coreturns: 0,
+                    last_free: None,
+                    on_exception: None,
+                    resume_eh: None,
+                    await_num: 0,
+                    yield_num: 0,
+                    hand_written: true,
+                }));
+            }
+            (Coro::Begin, Some(c)) => c.begin = Some(r),
+            (Coro::Free, Some(c)) => c.last_free = Some(Fir::last_inst(r)),
+            _ => {}
         }
         let void = matches!(which, Coro::Resume | Coro::Destroy);
         Ok(BuiltinCall::Emitted((!void).then_some(r)))
@@ -811,7 +844,7 @@ impl Cg<'_> {
     /// class marked `[[clang::coro_only_destroy_when_complete]]` (clang
     /// `CodeGenFunction::EmitCoroutineBody`).
     pub(crate) fn coro_fn_attrs(&self, d: DeclId, extra: &mut Vec<Attr>) {
-        if self.f.coro.is_none() {
+        if self.f.coro.as_deref().is_none_or(|c| c.hand_written) {
             return;
         }
         extra.push(Attr::Flag(AttrKind::PresplitCoroutine));
