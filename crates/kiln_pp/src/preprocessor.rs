@@ -38,7 +38,12 @@ pub enum Marker {
         introducer: PragmaIntroducer,
         /// The `pragma` / `_Pragma` token.
         span: Span,
-        /// The tokens after `pragma`, unexpanded, without the `Eod`.
+        /// Where the pragma starts: the `#` of a directive, the `_Pragma`
+        /// token of an operator (clang's `PragmaIntroducer::Loc`).
+        start: Loc,
+        /// The tokens after `pragma`, without the `Eod`: unexpanded, but
+        /// for those clang's handlers expand (`omp`; the loop hints under
+        /// [`crate::PpOptions::parser_pragmas`]).
         tokens: Vec<Token>,
     },
     /// `#pragma message` / `GCC warning` / `GCC error` (already diagnosed).

@@ -161,6 +161,10 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // instructions match.
     ("lifetime_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("lifetime_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("extern_template_vtable_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("extern_template_vtable_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("loop_hints_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("loop_hints_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("loop_unroll_disable_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("loop_unroll_disable_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("tbaa_atomic_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),

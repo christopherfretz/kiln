@@ -1,0 +1,112 @@
+Dumping f:
+FunctionDecl f 'int (int *, int)'
+|-ParmVarDecl used a 'int *'
+|-ParmVarDecl used n 'int'
+`-CompoundStmt
+  |-AttributedStmt
+  | |-LoopHintAttr
+  | `-ForStmt has_init has_cond has_inc
+  |   |-DeclStmt
+  |   | `-VarDecl used i 'int' cinit
+  |   |   `-IntegerLiteral 'int' 0
+  |   |-BinaryOperator 'bool' '<'
+  |   | |-ImplicitCastExpr 'int' <LValueToRValue>
+  |   | | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  |   | `-ImplicitCastExpr 'int' <LValueToRValue>
+  |   |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+  |   |-UnaryOperator 'int' lvalue prefix '++'
+  |   | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  |   `-BinaryOperator 'int' lvalue '='
+  |     |-ArraySubscriptExpr 'int' lvalue
+  |     | |-ImplicitCastExpr 'int *' <LValueToRValue>
+  |     | | `-DeclRefExpr 'int *' lvalue ParmVar 'a' 'int *'
+  |     | `-ImplicitCastExpr 'int' <LValueToRValue>
+  |     |   `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  |     `-ImplicitCastExpr 'int' <LValueToRValue>
+  |       `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  |-AttributedStmt
+  | |-LoopHintAttr
+  | | `-IntegerLiteral 'int' 4
+  | |-LoopHintAttr
+  | |-LoopHintAttr
+  | | `-IntegerLiteral 'int' 2
+  | `-WhileStmt
+  |   |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+  |   | `-UnaryOperator 'int' postfix '--'
+  |   |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+  |   `-BinaryOperator 'int' lvalue '='
+  |     |-ArraySubscriptExpr 'int' lvalue
+  |     | |-ImplicitCastExpr 'int *' <LValueToRValue>
+  |     | | `-DeclRefExpr 'int *' lvalue ParmVar 'a' 'int *'
+  |     | `-ImplicitCastExpr 'int' <LValueToRValue>
+  |     |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+  |     `-IntegerLiteral 'int' 1
+  |-AttributedStmt
+  | |-LoopHintAttr
+  | `-DoStmt
+  |   |-CompoundStmt
+  |   | `-UnaryOperator 'int' postfix '++'
+  |   |   `-ArraySubscriptExpr 'int' lvalue
+  |   |     |-ImplicitCastExpr 'int *' <LValueToRValue>
+  |   |     | `-DeclRefExpr 'int *' lvalue ParmVar 'a' 'int *'
+  |   |     `-ImplicitCastExpr 'int' <LValueToRValue>
+  |   |       `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+  |   `-BinaryOperator 'bool' '<'
+  |     |-UnaryOperator 'int' postfix '++'
+  |     | `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+  |     `-IntegerLiteral 'int' 10
+  |-AttributedStmt
+  | |-LoopHintAttr
+  | | `-IntegerLiteral 'int' 8
+  | |-LikelyAttr
+  | `-ForStmt has_init has_cond has_inc
+  |   |-DeclStmt
+  |   | `-VarDecl used i 'int' cinit
+  |   |   `-IntegerLiteral 'int' 0
+  |   |-BinaryOperator 'bool' '<'
+  |   | |-ImplicitCastExpr 'int' <LValueToRValue>
+  |   | | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  |   | `-ImplicitCastExpr 'int' <LValueToRValue>
+  |   |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+  |   |-UnaryOperator 'int' lvalue prefix '++'
+  |   | `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  |   `-BinaryOperator 'int' lvalue '='
+  |     |-ArraySubscriptExpr 'int' lvalue
+  |     | |-ImplicitCastExpr 'int *' <LValueToRValue>
+  |     | | `-DeclRefExpr 'int *' lvalue ParmVar 'a' 'int *'
+  |     | `-ImplicitCastExpr 'int' <LValueToRValue>
+  |     |   `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  |     `-ImplicitCastExpr 'int' <LValueToRValue>
+  |       `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+  |-AttributedStmt
+  | |-LoopHintAttr
+  | | `-IntegerLiteral 'int' 4
+  | `-CXXForRangeStmt
+  |   |-DeclStmt
+  |   |-DeclStmt
+  |   |-DeclStmt
+  |   |-BinaryOperator 'bool' '!='
+  |   | |-ImplicitCastExpr 'int *' <LValueToRValue>
+  |   | | `-DeclRefExpr 'int *' lvalue Var '__begin1' 'int *'
+  |   | `-ImplicitCastExpr 'int *' <LValueToRValue>
+  |   |   `-DeclRefExpr 'int *' lvalue Var '__end1' 'int *'
+  |   |-UnaryOperator 'int *' lvalue prefix '++'
+  |   | `-DeclRefExpr 'int *' lvalue Var '__begin1' 'int *'
+  |   |-DeclStmt
+  |   | `-VarDecl used x 'int' cinit
+  |   |   `-ImplicitCastExpr 'int' <LValueToRValue>
+  |   |     `-UnaryOperator 'int' lvalue prefix '*' cannot overflow
+  |   |       `-ImplicitCastExpr 'int *' <LValueToRValue>
+  |   |         `-DeclRefExpr 'int *' lvalue Var '__begin1' 'int *'
+  |   `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+  |     |-ArraySubscriptExpr 'int' lvalue
+  |     | |-ImplicitCastExpr 'int *' <LValueToRValue>
+  |     | | `-DeclRefExpr 'int *' lvalue ParmVar 'a' 'int *'
+  |     | `-IntegerLiteral 'int' 0
+  |     `-ImplicitCastExpr 'int' <LValueToRValue>
+  |       `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+  `-ReturnStmt
+    `-ImplicitCastExpr 'int' <LValueToRValue>
+      `-ImplicitCastExpr 'int' xvalue <NoOp>
+        `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+

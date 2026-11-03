@@ -441,7 +441,7 @@ impl Parser<'_, '_> {
     }
 
     /// Reports `expected {what}` at the current token.
-    fn expected_here(&self, what: &str) {
+    pub(crate) fn expected_here(&self, what: &str) {
         let d = self.s.diag(DiagId::parse_expected, self.loc()).arg(what);
         self.emit(d);
     }
@@ -1075,6 +1075,20 @@ impl Parser<'_, '_> {
     fn parse_member_declaration_leader(&mut self) -> bool {
         self.skip_extension_before_using();
         let loc = self.loc();
+        // A loop-hint pragma in a class (clang
+        // `ParseCXXClassMemberDeclarationWithPragmas`): only the pragma is
+        // skipped.
+        if let Some(h) = self.take_loop_hints() {
+            let tag = self.late.last().and_then(|c| self.s.ast.decls.record(c.record));
+            let tag = match tag.map(|r| r.tag) {
+                Some(kiln_ast::decl::TagKind::Class) => "class",
+                Some(kiln_ast::decl::TagKind::Union) => "union",
+                _ => "struct",
+            };
+            let d = self.s.diag(DiagId::parse_pragma_misplaced_in_decl, h[0].start).arg(tag);
+            self.emit(d);
+            return true;
+        }
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
                 self.bump();
