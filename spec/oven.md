@@ -298,6 +298,17 @@ the evaluator's flattened type table.
   On failure the characters read before the failing one are returned
   with the failure and its notes (clang prints them). spec/sema.md §4.6
   renders the text.
+- `Oven::evaluate_with_params(bridge, cond, binds, at) ->
+  Option<ConstValueId>` (WP-460, clang `Expr::EvaluateWithSubstitution`,
+  for the `enable_if` attribute, spec/sema.md §4.5): evaluates `cond`
+  (`None`: only the bindings, giving `true`) in a fresh function whose
+  locals are the parameters `binds` names, each initialized from its
+  argument expression (a reference parameter binds to it, an object
+  parameter is a local variable copy-initialized from it). A parameter
+  not bound is not a constant expression when read. Manifestly
+  constant-evaluated, silent, not recorded, never cached; fails if the
+  evaluation leaks an allocation. `at` locates the evaluation for the
+  depth check.
 - `Oven::is_constant_initialized(bridge, var) -> bool`
   ([basic.start.static]/2): silent, not recorded; uses the variable's
   cached evaluation state when known.

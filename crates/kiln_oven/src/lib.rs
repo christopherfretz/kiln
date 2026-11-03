@@ -400,13 +400,17 @@ enum Job {
     Expr(ExprId),
     /// The characters of a `static_assert` message ([`Oven::evaluate_chars`]).
     Chars { size: ExprId, data: ExprId },
+    /// A condition with arguments substituted for parameters
+    /// ([`Oven::evaluate_with_params`]; the bindings in `subst_binds`):
+    /// `at` locates it.
+    Subst { cond: Option<ExprId>, at: ExprId },
 }
 
 impl Job {
     /// The expression located in a depth-limit failure.
     fn expr(self) -> ExprId {
         match self {
-            Job::Expr(e) | Job::Chars { size: e, .. } => e,
+            Job::Expr(e) | Job::Chars { size: e, .. } | Job::Subst { at: e, .. } => e,
         }
     }
 }
@@ -479,6 +483,8 @@ pub struct Oven {
     pub(crate) let_pending: Vec<(DeclId, u64)>,
     /// The characters [`Oven::evaluate_chars`] read (`bi::MSG_CHARS`).
     pub(crate) msg_chars: Vec<u8>,
+    /// The parameter bindings of a [`Job::Subst`].
+    pub(crate) subst_binds: Vec<(DeclId, ExprId)>,
     pub(crate) mem: Memory,
     pub(crate) regs: Vec<u128>,
     pub(crate) stack: Vec<Frame>,
@@ -543,6 +549,7 @@ impl Oven {
             unknowns: FxHashMap::default(),
             let_pending: Vec::new(),
             msg_chars: Vec::new(),
+            subst_binds: Vec::new(),
             mem: Memory::new(budget.bytes),
             regs: vec![0; 256],
             stack: Vec::with_capacity(64),
@@ -681,6 +688,29 @@ impl Oven {
         });
         let chars = std::mem::take(&mut self.msg_chars);
         (chars, r.map(|_| ()))
+    }
+
+    /// Evaluates `cond` (`None`: `true`) as a constant expression with
+    /// each parameter `p` of `binds` initialized from its argument `a`
+    /// first, in one scope whose objects are destroyed after the
+    /// condition (clang `Expr::EvaluateWithSubstitution`, for the
+    /// condition of an `enable_if` attribute; spec/oven.md "Evaluation entry
+    /// points"). A
+    /// parameter not in `binds` has no value: reading it is not a
+    /// constant expression. Silent, manifestly constant-evaluated, not
+    /// recorded in the statistics; `at` locates the evaluation.
+    pub fn evaluate_with_params(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        cond: Option<ExprId>,
+        binds: &[(DeclId, ExprId)],
+        at: ExprId,
+    ) -> Option<ConstValueId> {
+        let saved = std::mem::replace(&mut self.subst_binds, binds.to_vec());
+        let job = Job::Subst { cond, at };
+        let r = self.eval_job(bridge, job, None, true, false, true).0.ok();
+        self.subst_binds = saved;
+        r
     }
 
     /// Folds `e` if it is a constant expression; never reports anything
@@ -925,6 +955,7 @@ impl Oven {
         match job {
             Job::Expr(e) => self.eval_inner(b, e, object, fb),
             Job::Chars { size, data } => self.eval_chars(b, size, data, fb),
+            Job::Subst { cond, at } => self.eval_subst(b, cond, at, fb),
         }
     }
 
