@@ -253,3 +253,49 @@ clang row. The remaining time is the per-element instantiation of the body
 An earlier pair of debug runs gave 12.68 s before and 10.56 s after. A
 range of more than 2^20 library-iterator elements is now counted rather
 than rejected.
+
+### WP-502: GCC 16.1 in CI (2026-11-03)
+
+**Choice: `container: gcc:16.1.0-trixie` in both jobs** (the preferred
+form; spec/harness.md "GCC oracle", docs/VALIDATION.md "GitHub Actions"),
+with `KILN_GCC=/usr/local/bin/g++` and `KILN_REQUIRE_GCC=1` in the job
+env. The fallback (`debian:trixie` plus an `actions/cache` restore of the
+GCC layer into `/opt/gcc-16`) applies only if the image's measured per-job
+delta exceeds 60 s. The fallback would still download the 163.5 / 176.4 MB
+GCC layer from the cache, need an `ldconfig` step, and add a cache key to
+keep in step, so it saves at most the base-layer pull. The image's
+preinstalled git removes the `Install git` step (5-7 s), and its
+build tools make the `build-essential` part of the apt step a no-op.
+
+New work inside the steps:
+- **The action's GCC check**, `-dumpfullversion` plus a `<meta>` TU with
+  `-fsyntax-only`, takes 0.5 s on the dev host.
+- **The four `oracle: gcc` tests** in `tests/conformance/meta.reflection.ci/`
+  add one GCC compile, link and run each, in both corpus runs: 0.7 s
+  of GCC together on the dev host, spread over the corpus's parallel jobs.
+- **The xtask unit test `require_gcc_makes_a_missing_gcc_an_error`**
+  takes under 0.1 s.
+
+**CI time, from the PR run.** The WP-483 column is the baseline above
+(run 41641461340). The PR column and the delta come from the PR's CI logs,
+one row per step, as `gh run view <id> --repo christopherfretz/kiln --log`
+prints them; they are filled when the PR has run.
+
+| Step | `check` WP-483 | `check` PR | delta | `check-x86_64` WP-483 | `check-x86_64` PR | delta |
+|---|--:|--:|--:|--:|--:|--:|
+| Initialize containers (image pull) | 5 s | | | 4 s | | |
+| Install git (removed) | 7 s | 0 s | -7 s | 5 s | 0 s | -5 s |
+| Checkout | 2 s | | | 3 s | | |
+| apt toolchain + GCC check | 12 s | | | 12 s | | |
+| Rust toolchain + cache | 10 s | | | 12 s | | |
+| `xtask ci`: fmt, clippy | 24 s | | | 20 s | | |
+| `xtask ci`: cargo test | 264 s | | | 214 s | | |
+| `xtask ci`: clang 22 self-check | 64 s | | | 67 s | | |
+| `xtask ci`: kiln corpus | 160 s | | | 141 s | | |
+| `KILN_ORACLE=19 xtask ci --quick`: fmt, clippy | 4 s | | | 3 s | | |
+| `--quick`: cargo test | 210 s | | | 178 s | | |
+| `--quick`: kiln corpus | 159 s | | | 140 s | | |
+| Job total | 15.6 min | | | 13.5 min | | |
+
+The kiln-corpus summary lines in the log must show `4 compared with gcc`.
+The `Install the toolchain packages` step must print `g++ (GCC) 16.1.0`.
