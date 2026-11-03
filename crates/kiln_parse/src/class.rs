@@ -1118,6 +1118,10 @@ impl Parser<'_, '_> {
                 self.parse_static_assert();
                 true
             }
+            _ if self.at_consteval_block() => {
+                self.parse_consteval_block();
+                true
+            }
             (_, Some(Kw::Using)) => {
                 self.parse_using();
                 true
@@ -1126,7 +1130,7 @@ impl Parser<'_, '_> {
                 self.parse_attributed_using();
                 true
             }
-            (_, Some(Kw::Template)) => {
+            (_, Some(Kw::Template)) if !self.peek_is(1, Punct::SpliceOpen) => {
                 self.parse_template_declaration(DeclaratorContext::Member);
                 self.s.act_on_end_abbreviated();
                 true

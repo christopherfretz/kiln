@@ -9,6 +9,7 @@
 mod asm;
 mod attr;
 mod class;
+mod consteval_block;
 mod decl;
 mod expr;
 pub mod keywords;
@@ -154,6 +155,9 @@ pub struct ParsedTu {
     /// unless [`ParseOptions::cfg_dump`] or [`ParseOptions::cfg_stats`]
     /// asked for them.
     pub cfg_dump: String,
+    /// Splices whose operand was read as a frozen reflection without an
+    /// Oven run (spec/reflection.md §5, the fast path).
+    pub splice_fast: u64,
 }
 
 /// Parses and analyses the translation unit whose main file is `file`,
@@ -251,8 +255,9 @@ pub fn parse_preprocessed<'a, 'sm>(
     let (s, src) = p.finish();
     let name = main.rsplit('/').next().unwrap_or(&main);
     let inst_report = s.instantiation_report(name);
+    let splice_fast = s.splice_fast_count();
     let mut s = s;
     let cfg_dump = std::mem::take(&mut s.cfg_out);
     let (ast, oven) = s.into_parts();
-    (ParsedTu { ast, oven, inst_report, cfg_dump }, src.into_preprocessor())
+    (ParsedTu { ast, oven, inst_report, cfg_dump, splice_fast }, src.into_preprocessor())
 }

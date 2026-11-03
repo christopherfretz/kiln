@@ -1,0 +1,35 @@
+Dumping test_ns:
+NamespaceDecl test_ns
+`-ConstevalBlockDecl
+  `-ExprWithCleanups 'void'
+    `-CXXOperatorCallExpr 'void' '()'
+      |-ImplicitCastExpr 'auto (*)() const -> void' <FunctionToPointerDecay>
+      | `-DeclRefExpr 'auto () const -> void' lvalue CXXMethod 'operator()' 'auto () const -> void'
+      `-ImplicitCastExpr 'const test_ns::(lambda at tests/conformance/dcl.pre/consteval-block-namespace.cpp:17:1)' lvalue <NoOp>
+        `-MaterializeTemporaryExpr '(lambda at tests/conformance/dcl.pre/consteval-block-namespace.cpp:17:1)' lvalue
+          `-LambdaExpr '(lambda at tests/conformance/dcl.pre/consteval-block-namespace.cpp:17:1)'
+            `-CompoundStmt
+              |-DeclStmt
+              | `-VarDecl used a 'int' cinit
+              |   `-CallExpr 'int'
+              |     |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+              |     | `-DeclRefExpr 'int (int)' lvalue Function 'sq' 'int (int)'
+              |     `-IntegerLiteral 'int' 3
+              |-DeclStmt
+              | `-StaticAssertDecl
+              |   `-BinaryOperator 'bool' '=='
+              |     |-CallExpr 'int'
+              |     | |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+              |     | | `-DeclRefExpr 'int (int)' lvalue Function 'cube' 'int (int)'
+              |     | `-IntegerLiteral 'int' 2
+              |     `-IntegerLiteral 'int' 8
+              |-IfStmt
+              | |-BinaryOperator 'bool' '!='
+              | | |-ImplicitCastExpr 'int' <LValueToRValue>
+              | | | `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+              | | `-IntegerLiteral 'int' 9
+              | `-CallExpr 'int'
+              |   `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+              |     `-DeclRefExpr 'int ()' lvalue Function 'rt' 'int ()'
+              `-ReturnStmt
+

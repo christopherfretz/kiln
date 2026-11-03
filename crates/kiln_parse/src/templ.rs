@@ -1336,7 +1336,7 @@ impl Parser<'_, '_> {
         ctx: Option<DeclaratorContext>,
     ) -> Option<QualType> {
         self.bump();
-        if self.at_splice() {
+        if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
             return self.parse_splice_type();
         }
         let Ok(qual) = self.parse_nested_name_nns() else {
@@ -1634,7 +1634,7 @@ impl Parser<'_, '_> {
     /// `typename` ([temp.res.general]/4, P0634: block scope, a condition,
     /// a for-init-statement, a parameter of a function declared with an
     /// unqualified declarator-id at namespace or block scope).
-    fn typename_required(&self, ctx: DeclaratorContext) -> bool {
+    pub(crate) fn typename_required(&self, ctx: DeclaratorContext) -> bool {
         match ctx {
             DeclaratorContext::Block
             | DeclaratorContext::Condition
