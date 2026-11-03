@@ -317,7 +317,8 @@ impl Sema<'_, '_> {
             }
         };
         let saved = std::mem::replace(&mut self.cond_typo_at, if typo { at } else { Loc::INVALID });
-        let r = if kw.is_valid() { self.act_on_full_expr_at(e, kw) } else { self.act_on_full_expr(e) };
+        let r =
+            if kw.is_valid() { self.act_on_full_expr_at(e, kw) } else { self.act_on_full_expr(e) };
         self.cond_typo_at = saved;
         r
     }

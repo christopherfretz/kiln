@@ -524,7 +524,15 @@ family, and the `nonnull` attribute spellings.
      repeats it), and `sizeof(T[n])` warns once (clang twice).
 2. It moves `constexpr`'s implied `const` onto the variable's type.
 3. It looks up a previous declaration (§3), checks that redeclarations
-   are compatible, and links the redeclaration chain.
+   are compatible, and links the redeclaration chain. A declaration
+   found invalid there (ambiguous or missing qualified member, a
+   redefinition, a type mismatch, an invalid storage class) is marked
+   invalid, and a later redeclaration skips invalid variables to the
+   latest valid one (`valid_prev_var`, clang does not link an invalid
+   redeclaration): `R::v; int R::v;` redeclares `extern int v`, and
+   after `long R::t;` against `int t`, `int R::t;` is "redefinition of
+   't'" noting the original (WP-421,
+   `tests/conformance/dcl.meaning/qualified-implicit-int-redeclaration.cpp`).
 4. A variable of type `void` that has an initializer ([basic.def]/5,
    [dcl.init.general]/7: `void x(1);`, `void v(T::m);`, `void h(void
    (*fp)(X<T>::m), int);`) is "variable has incomplete type 'void'" at

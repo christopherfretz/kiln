@@ -1314,6 +1314,14 @@ impl Parser<'_, '_> {
     /// lacks its `;` recovers, since nothing is skipped after it). `()` is
     /// clang's parenthesized declarator wanting a name, reported at the
     /// `)`. Anything else is "expected member name or ';'".
+    /// `R::g;` in a class: an access declaration (not implemented; it
+    /// keeps the "expected member name" recovery rather than the
+    /// qualified implicit-int path).
+    fn at_qualified_access_declaration(&self) -> bool {
+        matches!(self.scan_name_qual_at(self.pos()), Some((end, false, _, _, Some(_)))
+            if Self::punct_of(self.tok_at(end)) == Some(Punct::Semi))
+    }
+
     fn member_without_type(&mut self) {
         if self.at(Punct::LParen) && Self::punct_of(self.peek(1)) == Some(Punct::RParen) {
             self.bump();
@@ -1408,6 +1416,8 @@ impl Parser<'_, '_> {
         if ds.is_empty()
             && !self.at_special_declarator(DeclaratorContext::Member)
             && !self.at_implicit_int_declarator()
+            && !(self.at_qualified_implicit_int_declarator()
+                && !self.at_qualified_access_declaration())
         {
             self.member_without_type();
             return;

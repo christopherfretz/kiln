@@ -264,9 +264,9 @@ impl Sema<'_, '_> {
                 self.diag(DiagId::sema_cast_nonnull_to_bool, at).arg(u32::from(param)).arg(text)
             }
         };
-        msg.range(self.expr_range(e)).range(ctx).with_note(
-            self.diag(DiagId::note_declared_nonnull, node.loc).arg(u32::from(param)),
-        )
+        msg.range(self.expr_range(e))
+            .range(ctx)
+            .with_note(self.diag(DiagId::note_declared_nonnull, node.loc).arg(u32::from(param)))
     }
 
     /// A lambda converted to a function pointer (clang: outside an

@@ -1299,9 +1299,8 @@ impl Parser<'_, '_> {
                 true
             }
             Some((end, NameClass::Value(_), _))
-                if ctx == DeclaratorContext::File
+                if matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                     && self.nontype_scope_name(start)
-                    && Self::punct_of(self.tok_at(end)) != Some(Punct::Less)
                     && self.qualified_unknown_type_follows(end, ctx) =>
             {
                 self.unknown_qualified_type_spec(ds, loc);
@@ -1524,7 +1523,7 @@ impl Parser<'_, '_> {
             || self.unknown_type_follows(end, ctx)
             || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 && Self::punct_of(self.tok_at(end)) == Some(Punct::Less))
-            || (ctx == DeclaratorContext::File
+            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 && Self::punct_of(self.tok_at(end)) == Some(Punct::LParen)
                 && self.declarator_may_start_at(end))
     }
@@ -3328,7 +3327,7 @@ impl Parser<'_, '_> {
     /// [`Self::qualified_unknown_type_follows`]). The name is the
     /// declarator-id of an invalid `int` declaration, after "a type
     /// specifier is required" (WP-411).
-    fn at_qualified_implicit_int_declarator(&self) -> bool {
+    pub(crate) fn at_qualified_implicit_int_declarator(&self) -> bool {
         let i = self.pos();
         let Some((end, false, class, _, Some(q))) = self.scan_name_qual_at(i) else {
             return false;

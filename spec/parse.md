@@ -244,6 +244,23 @@ clang's `Parser` over `Preprocessor::Lex`.
   the previous token. The missing `;` of a declaration carries the
   insertion fix-it `;` (clang `ExpectAndConsume`)
   (`tests/conformance/dcl.dcl/qualified-name-no-type.cpp`).
+  A member declaration recovers the same way (WP-421): `R::f(v);` and
+  `R::f<int> a;` in a class are "no type named" / "no template named
+  'f' in namespace 'R'", and `R::h(int);` is a qualified declarator-id
+  with no type ("non-friend class member 'h' cannot have a qualified
+  name" plus "a type specifier is required"; kiln reports the two in the
+  opposite order and without the qualifier range). `R::g;` (an access
+  declaration, clang's `ext_access_declaration` plus "using declaration
+  in class refers into 'R', which is not a class") is not implemented
+  and keeps "expected member name or ';'"
+  (`tests/conformance/class.mem/qualified-member-no-type.cpp`).
+  A qualified name followed by `<` that names no template
+  (`Q::f<int> z;` with `Q::f` a variable, `Q::g<int>` undeclared) is
+  "no template named 'f' in namespace 'Q'" (clang
+  `err_no_member_template`), not "no type named"; that error and "no
+  type named 'x' in namespace 'R'" underline the nested-name-specifier
+  (`parse_qualified_type_rest`;
+  `tests/conformance/temp.names/qualified-not-a-template.cpp`).
   An unqualified typename-specifier (`typename T`, `typename Ts...[0]`;
   [temp.res.general]/3) is "expected a qualified name after 'typename'"
   and recovers as clang does, by context (`parse_typename_specifier_in`,

@@ -131,7 +131,9 @@ impl Sema<'_, '_> {
         if written.is_empty()
             && !node.loc.is_macro()
             && !variadic
-            && !params.iter().any(|&p| self.ast.types.is_dependent(p) || self.nonnull_pointer_type(p))
+            && !params
+                .iter()
+                .any(|&p| self.ast.types.is_dependent(p) || self.nonnull_pointer_type(p))
         {
             let msg = self.diag(DiagId::sema_attribute_nonnull_no_pointers, node.loc);
             self.emit(msg);
@@ -195,8 +197,10 @@ impl Sema<'_, '_> {
                 return true;
             }
             let shown = format!("'{}'", self.attr_shown(&node, "nonnull"));
-            let msg =
-                self.diag(DiagId::sema_attribute_pointer_args_only, node.loc).arg(shown).range(range);
+            let msg = self
+                .diag(DiagId::sema_attribute_pointer_args_only, node.loc)
+                .arg(shown)
+                .range(range);
             self.emit(msg);
             false
         });

@@ -16,10 +16,10 @@ use kiln_diag::DiagId;
 use kiln_source::{Loc, Span};
 
 use crate::Sema;
-use crate::null_compare::NullUse;
 use crate::conv::narrow::float_kind;
 use crate::conv::rank::{int_signed, int_width, is_integral_or_unscoped_enum};
 use crate::conv::soft;
+use crate::null_compare::NullUse;
 
 /// Bound on the nodes looked at in one full-expression.
 const MAX_NODES: usize = 1_000_000;

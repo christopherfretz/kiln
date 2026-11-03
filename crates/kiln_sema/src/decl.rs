@@ -4718,7 +4718,8 @@ impl Sema<'_, '_> {
             && matches!(spec.storage(), VarStorage::None | VarStorage::Register)
             && spec.tls() == TlsKind::None
             && self.is_placeholder_name(name);
-        let local = self.find_prev(name, d.qualifier);
+        let local =
+            self.find_prev(name, d.qualifier).map(|p| self.valid_prev_var(p, name, d.qualifier));
         if independent
             && local.is_some_and(|p| matches!(self.kind_of(p), DeclKind::Var | DeclKind::Binding))
         {
@@ -4726,6 +4727,23 @@ impl Sema<'_, '_> {
             return (true, None);
         }
         (independent, local)
+    }
+
+    /// The previous declaration a variable redeclares when lookup finds
+    /// `p`: an invalid variable declaration (a redefinition, another
+    /// type, no type at all: `R::v;`) is not linked to the entity
+    /// (clang's `MergeVarDecl` stops at it), so the latest valid one
+    /// lookup finds, if any, is (WP-421).
+    fn valid_prev_var(&self, p: DeclId, name: Symbol, qualifier: Option<DeclId>) -> DeclId {
+        if self.kind_of(p) != DeclKind::Var || !self.is_invalid_decl(p) {
+            return p;
+        }
+        let found = self.prev_candidates(name, qualifier);
+        found
+            .into_iter()
+            .rev()
+            .find(|&d| self.kind_of(d) == DeclKind::Var && !self.is_invalid_decl(d))
+            .unwrap_or(p)
     }
 
     /// [dcl.meaning.general]/2.2: a qualified declarator-id names a
@@ -4838,7 +4856,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
-        if ambiguous || no_member || redefined || self.storage_invalidates_var(ds, d) {
+        if ambiguous || no_member || redefined || unmerged || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
