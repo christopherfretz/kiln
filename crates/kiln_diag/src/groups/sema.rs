@@ -48,6 +48,7 @@ FlexibleArrayExtensions = "flexible-array-extensions" [];
 FloatConversionRank = "float-conversion-rank" [];
 FormatExtraArgs = "format-extra-args" [];
 FormatInsufficientArgs = "format-insufficient-args" [];
+FrameAddress = "frame-address" [];
 GnuAlignofExpression = "gnu-alignof-expression" [];
 GnuDesignator = "gnu-designator" [];
 GnuEmptyStruct = "gnu-empty-struct" [];
