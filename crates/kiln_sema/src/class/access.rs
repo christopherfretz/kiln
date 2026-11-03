@@ -429,6 +429,30 @@ impl Sema<'_, '_> {
         object: Option<DeclId>,
         loc: Loc,
     ) -> bool {
+        self.check_member_access_at(found, naming, object, loc, false)
+    }
+
+    /// [`Sema::check_member_access`] for a check that may share its
+    /// location with another one of a different member (a new-expression's
+    /// `operator new` and `operator delete`): its error is never folded
+    /// into an earlier one at the same location (spec/diag.md §7.4).
+    pub(crate) fn check_member_access_distinct(
+        &mut self,
+        found: DeclId,
+        naming: DeclId,
+        loc: Loc,
+    ) -> bool {
+        self.check_member_access_at(found, naming, None, loc, true)
+    }
+
+    fn check_member_access_at(
+        &mut self,
+        found: DeclId,
+        naming: DeclId,
+        object: Option<DeclId>,
+        loc: Loc,
+        distinct: bool,
+    ) -> bool {
         // A public member named in its own class is accessible; through a
         // base its access is that along the path ([class.access.base]/1).
         let (decl_access, own_class) = match self.injected_class(found, naming) {
@@ -442,12 +466,13 @@ impl Sema<'_, '_> {
             return true;
         }
         self.access_checks = self.access_checks.wrapping_add(1);
-        let repeat = self
-            .inst
-            .stack
-            .frames
-            .last()
-            .is_some_and(|f| f.kind == crate::templ::stack::FrameKind::AliasTemplate);
+        let repeat = distinct
+            || self
+                .inst
+                .stack
+                .frames
+                .last()
+                .is_some_and(|f| f.kind == crate::templ::stack::FrameKind::AliasTemplate);
         let check =
             AccessCheck { member: found, naming_class: naming, object_class: object, loc, repeat };
         // Delayed only while still in the declaration's own context: a
@@ -797,6 +822,23 @@ impl Sema<'_, '_> {
         let ec = self.effective_context_at(from);
         let unpriv = self.unprivileged_access(declaring, t.declaring, t.decl_access);
         self.is_accessible(&ec, &t, declaring, unpriv)
+    }
+
+    /// Whether static member `found`, named in class `naming`, is
+    /// accessible from context `from`, without diagnosing (clang
+    /// `CheckAllocationAccess` with diagnostics suppressed, as
+    /// `ShouldDeleteSpecialMember` calls `FindDeallocationFunction`).
+    pub(crate) fn member_accessible_from(
+        &self,
+        found: DeclId,
+        naming: DeclId,
+        from: DeclId,
+    ) -> bool {
+        let naming = self.ast.definition(naming).unwrap_or(naming);
+        let Some(t) = self.member_target(found, None) else { return true };
+        let ec = self.effective_context_at(from);
+        let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
+        self.is_accessible(&ec, &t, naming, unpriv)
     }
 
     /// Whether a conversion from `derived` to its base class `base` along

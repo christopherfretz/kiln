@@ -1603,6 +1603,11 @@ pub struct ColdDeclData {
     /// Virtual destructor → the `operator delete` its deleting destructor
     /// calls ([class.dtor]/16).
     pub dtor_delete: ColdMap<DeclId, DeclId>,
+    /// Virtual destructor whose `dtor_delete` is a destroying `operator
+    /// delete` → the `this` argument converted to its first parameter's
+    /// type `C*` (clang `CXXDestructorDecl::getOperatorDeleteThisArg`,
+    /// [expr.delete]/7.1; WP-457).
+    pub dtor_delete_this: ColdMap<DeclId, ExprId>,
     /// Class → the `#pragma pack` value in effect at its definition.
     pub record_pack: ColdMap<DeclId, u16>,
     /// Trailing requires-clauses.
@@ -1684,6 +1689,7 @@ impl Default for ColdDeclData {
             friends: ColdMap::new("friends"),
             key_function: ColdMap::new("key_function"),
             dtor_delete: ColdMap::new("dtor_delete"),
+            dtor_delete_this: ColdMap::new("dtor_delete_this"),
             record_pack: ColdMap::new("record_pack"),
             requires_clause: ColdMap::new("requires_clause"),
             contracts: ColdMap::new("contracts"),
@@ -1711,7 +1717,7 @@ impl Default for ColdDeclData {
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 31] {
+    fn rows(&self) -> [MemRow; 32] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1722,6 +1728,7 @@ impl ColdDeclData {
             self.friends.mem_row(),
             self.key_function.mem_row(),
             self.dtor_delete.mem_row(),
+            self.dtor_delete_this.mem_row(),
             self.record_pack.mem_row(),
             self.requires_clause.mem_row(),
             self.contracts.mem_row(),
