@@ -1718,11 +1718,17 @@ impl<'a> Cg<'a> {
         on.chain(off).collect::<Vec<_>>().join(",")
     }
 
-    /// `vscale_range(1,16)` on a function definition with the `sve`
-    /// target feature (clang `StartFunction`; not on the thunks and
-    /// helpers clang builds without a `CodeGenFunction`).
+    /// `vscale_range(N/128,N/128)` under `-msve-vector-bits=N`, else
+    /// `vscale_range(1,16)` with the `sve` target feature, on a function
+    /// definition (clang `getVScaleRange` in `StartFunction`; not on the
+    /// thunks and helpers clang builds without a `CodeGenFunction`).
     pub fn vscale_attr(&self, out: &mut Vec<Attr>) {
-        if self.opts.sve && !self.is_x86() {
+        if self.is_x86() {
+            return;
+        }
+        if let Some(n) = self.opts.sve_vector_bits {
+            out.push(Attr::VScaleRange(n / 128, n / 128));
+        } else if self.opts.sve {
             out.push(Attr::VScaleRange(1, 16));
         }
     }

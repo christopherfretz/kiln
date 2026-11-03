@@ -3225,7 +3225,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   `_GLOBAL__sub_I_*`, `__tls_init`: `init_fn_attrs`) carry
   `vscale_range(1,16)` (clang's `CodeGenFunction` for a target with SVE);
   the TLS wrapper and `__clang_call_terminate`, built outside it, do not.
-  Test `ext.arm.sve/ir-target-features-sve.cpp`.
+  With `CodegenOptions::sve_vector_bits` (`-msve-vector-bits=N`, with or
+  without `sve`) the range is `vscale_range(N/128,N/128)` instead (WP-469).
+  Tests `ext.arm.sve/ir-target-features-sve.cpp`, `ir-sve-vector-bits.cpp`,
+  `ir-target-features-march-levels.cpp`.
 - Not yet: SVE constants (a scalar splat into a scalable vector, the zero
   vector of `-v` or of a vector `?:` condition) are built as fixed vectors
   and fail IR lowering (`expr.rs` integer/float constants, `func.rs`
