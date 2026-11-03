@@ -1146,6 +1146,21 @@ them: `&x` for a variable, `&{*new T#n}` for allocation `n`, then
 | Reserved placement form before C++26, outside namespace std | "this placement new expression is not supported in constant expressions before C++2c" | — |
 | Default-initialized scalar read | "read of uninitialized object is not allowed in a constant expression" | — |
 
+**Uninitialized reads (C++26 erroneous values, WP-448).** P2795R5 gives
+a default-initialized automatic object an *erroneous* value at run time
+([basic.indet]), but in constant evaluation the object is still
+uninitialized: reading an erroneous or an indeterminate value is not a
+core constant expression ([expr.const], the lvalue-to-rvalue bullet),
+so the Oven keeps the row above, with clang's note, for both. The
+[basic.indet]/2 exemption that lets an `unsigned char` or `std::byte`
+glvalue read such a value at run time does not reach constant
+evaluation: copying an uninitialized `unsigned char` or `std::byte` is
+the same note (as clang). A literal reading of the C++26 wording could
+let such a copy produce an erroneous value without an operation "that
+would have erroneous behavior"; kiln follows clang and rejects it. A
+`[[indeterminate]]` variable is read the same way. Test:
+`tests/conformance/basic.indet/constexpr-erroneous.cpp`.
+
 `delete` of null (either form) is a no-op. A leak is reported as
 `NotConstant`, like every other note here (clang reports it through a
 CCEDiag; the observable result, an error on the evaluation, is the
