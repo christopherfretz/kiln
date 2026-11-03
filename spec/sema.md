@@ -6141,6 +6141,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   - Class, array and reference `T` need temporaries and are
     unsupported (`temporary_unsupported`) until classes have
     constructors (WP-065).
+  - A function type `T` in `T()`, `T{...}` or `T(a, b)` is `cannot
+    create object of function type 'T'` at the type, ranging over the
+    whole expression (clang `BuildCXXTypeConstructExpr`
+    `err_init_for_function_type`, after the single-operand cast — `T(a)`
+    is a functional cast — and before completeness and abstractness;
+    `function_type_construct`, WP-465). Test:
+    `expr.type.conv/function-type-construct.cpp`.
   - Array `T{...}` (`array_list_cast`, WP-216; `using A = int[2]; A{1,
     2}`) list-initializes an array prvalue that keeps the cv-qualifiers
     of `T` ([expr.type]/2). An array of class type with a non-trivial

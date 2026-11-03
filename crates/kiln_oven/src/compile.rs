@@ -1418,7 +1418,16 @@ impl Scan<'_> {
                 let op = ast.exprs.operand(e);
                 match ast.exprs.cast_kind(e) {
                     CastKind::LValueToRValue => self.expr(op, true),
-                    CastKind::NoOp if n.value_category().is_glvalue() => self.expr(op, ok),
+                    // A glvalue cast that drops `const` (`const_cast<int&>(c)
+                    // = 2`) may write the variable: it lives in memory, whose
+                    // const flag faults that write ([dcl.type.cv]/4; WP-465).
+                    CastKind::NoOp
+                        if n.value_category().is_glvalue()
+                            && (!const_object(ast, ast.exprs.get(op).ty())
+                                || const_object(ast, n.ty())) =>
+                    {
+                        self.expr(op, ok);
+                    }
                     CastKind::ToVoid => self.expr(op, true),
                     _ => self.expr(op, false),
                 }

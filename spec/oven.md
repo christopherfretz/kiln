@@ -173,6 +173,13 @@ the evaluator's flattened type table.
   inactive union member path ([expr.const]/5.10); then, for reads,
   uninitialized bytes ([expr.const]/5.11) and representation compatibility
   (pointer bytes read as a pointer only).
+  A local is kept in a register only when the compile-time pre-scan
+  (`Scan`) sees no address of it; a glvalue cast that drops `const`
+  (`const_cast<int&>(c) = 2`, `(int&)c`) counts as one, so the write
+  reaches the const allocation and faults (WP-465;
+  `expr.const/5.8/modify-const-cast-away.cpp`). Const is a flag of the
+  allocation: a const member of a non-const object written through a
+  cast (`*(int*)&s.m = 3`) is not detected yet.
 - **Freeze/thaw**: a successful result is frozen into the AST's
   `ConstStore` (scalars inline; aggregates as a byte image with pointer
   relocations, padding and active union members; pointers as
