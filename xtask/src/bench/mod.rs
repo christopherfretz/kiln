@@ -4,7 +4,7 @@
 //! `spec/bench.md`; the policy background is `docs/VALIDATION.md`.
 
 mod compare;
-mod entry;
+pub(crate) mod entry;
 mod perf_md;
 pub(crate) mod record;
 mod slice;
@@ -216,6 +216,8 @@ pub struct Report {
     pub improved: usize,
     pub new: usize,
     pub advisory: usize,
+    /// kiln failures of `xfail(kiln)` entries (an XPASS counts as failed).
+    pub xfail: usize,
     /// Measured entries that are never judged against baselines (the
     /// libc++ slice, `spec/bench.md` "The libcxx-slice entry").
     pub unjudged: usize,
@@ -442,7 +444,7 @@ fn measure_and_report(
     report.failing = report.failed > 0 || (report.regressed > 0 && !opts.record);
     println!(
         "\nbench result: {}. {} entries: {} failed, {} regressed{}, {} improved, {} new, \
-         {} advisory{} ({:.1}s)",
+         {} advisory{}{} ({:.1}s)",
         if report.failing { "FAILED" } else { "ok" },
         report.entries,
         report.failed,
@@ -451,6 +453,7 @@ fn measure_and_report(
         report.improved,
         report.new,
         report.advisory,
+        if report.xfail > 0 { format!(", {} xfail", report.xfail) } else { String::new() },
         if report.unjudged > 0 {
             format!(", {} not judged", report.unjudged)
         } else {
@@ -581,13 +584,35 @@ fn judge_all(
             .get(&e.group)
             .and_then(|f| f.entries.get(&e.name))
             .and_then(|k| k.get(test.kind()));
-        match &test_run.entries[&e.id] {
-            Outcome::Failed(why) => {
+        let xfail = specs
+            .get(&e.id)
+            .and_then(|s| s.xfail_kiln.as_deref())
+            .filter(|_| test.id.kind == CompilerKind::Kiln);
+        match (&test_run.entries[&e.id], xfail) {
+            (Outcome::Failed(_), Some(reason)) => {
+                report.xfail += 1;
+                let mut r = row(e, specs.get(&e.id), base, None, &Verdict::Ok);
+                if let Some(status) = r.last_mut() {
+                    *status = format!("xfail ({reason})");
+                }
+                rows.push(r);
+            }
+            (Outcome::Measured(m), Some(reason)) => {
+                report.failed += 1;
+                let _ = writeln!(
+                    failures,
+                    "{} ({}): XPASS: compiled although `xfail(kiln): {reason}`; remove the marker",
+                    e.id,
+                    test.kind()
+                );
+                rows.push(row(e, specs.get(&e.id), base, Some(m), &Verdict::Ok));
+            }
+            (Outcome::Failed(why), None) => {
                 report.failed += 1;
                 let _ = writeln!(failures, "{} ({}): {why}", e.id, test.kind());
                 rows.push(row(e, specs.get(&e.id), base, None, &Verdict::Ok));
             }
-            Outcome::Measured(m) if !judged => {
+            (Outcome::Measured(m), None) if !judged => {
                 report.unjudged += 1;
                 let mut r = row(e, specs.get(&e.id), None, Some(m), &Verdict::Ok);
                 if let Some(status) = r.last_mut() {
@@ -595,7 +620,7 @@ fn judge_all(
                 }
                 rows.push(r);
             }
-            Outcome::Measured(m) => {
+            (Outcome::Measured(m), None) => {
                 let mut t = Thresholds::default();
                 if let Some(spec) = specs.get(&e.id) {
                     t = t.with(&spec.thresholds);
