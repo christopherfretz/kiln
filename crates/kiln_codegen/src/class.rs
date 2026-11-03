@@ -15,6 +15,7 @@ use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, TypeId};
 use kiln_llvm::{BinOp, Flags, FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value};
+use kiln_source::fx::FxHashSet;
 
 use crate::cleanup::Cleanup;
 use crate::fir::{Op, V};
@@ -1099,7 +1100,24 @@ impl Cg<'_> {
 
     /// clang `CXXRecordDecl::vbases()` order: per direct base, its
     /// virtual bases, then itself if virtual; each class once.
+    /// Each class is expanded once (`seen` holds the expanded classes
+    /// and the collected ones, first declarations): a second expansion
+    /// adds nothing, and re-expanding per path is exponential in a
+    /// lattice of virtual diamonds.
     fn collect_vbases(&self, r: DeclId, out: &mut Vec<DeclId>, depth: usize) {
+        let mut expanded = FxHashSet::default();
+        let mut have = FxHashSet::default();
+        self.collect_vbases_in(r, out, depth, &mut expanded, &mut have);
+    }
+
+    fn collect_vbases_in(
+        &self,
+        r: DeclId,
+        out: &mut Vec<DeclId>,
+        depth: usize,
+        expanded: &mut FxHashSet<DeclId>,
+        have: &mut FxHashSet<DeclId>,
+    ) {
         let ast = self.ast;
         if depth > 1024 {
             return;
@@ -1109,16 +1127,12 @@ impl Cg<'_> {
         for (bq, virt) in bases {
             let Some(b) = ast.types.as_record(bq) else { continue };
             let Some(bd) = self.class_def(b) else { continue };
-            if self.class_bits(bd).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
-                let mut inner = Vec::new();
-                self.collect_vbases(bd, &mut inner, depth + 1);
-                for c in inner {
-                    if !out.iter().any(|&x| ast.first(x) == ast.first(c)) {
-                        out.push(c);
-                    }
-                }
+            if self.class_bits(bd).contains(DefinitionBits::HAS_VIRTUAL_BASES)
+                && expanded.insert(ast.first(bd))
+            {
+                self.collect_vbases_in(bd, out, depth + 1, expanded, have);
             }
-            if virt && !out.iter().any(|&x| ast.first(x) == ast.first(bd)) {
+            if virt && have.insert(ast.first(bd)) {
                 out.push(bd);
             }
         }
