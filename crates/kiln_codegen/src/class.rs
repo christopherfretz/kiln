@@ -608,7 +608,8 @@ impl Cg<'_> {
                 let f = self.base_fn(first, true)?;
                 // The base variant may itself be an alias
                 // ([`Cg::try_base_dtor_alias`]).
-                let target = self.sfns.get(&(first, Structor::Base)).map_or(Value::func(f), |e| e.0);
+                let target =
+                    self.sfns.get(&(first, Structor::Base)).map_or(Value::func(f), |e| e.0);
                 let name = mangle::mangle_structor(ast, &mut self.anon, first, v);
                 let fty = self.m.func(f).ty();
                 let a = match self.m.add_alias(&name, fty, target) {
@@ -773,16 +774,13 @@ impl Cg<'_> {
         {
             return Ok(false);
         }
-        let r = match declared {
-            Some(f) => {
-                let fty = self.m.func(f).ty();
-                self.m.replace_function_with_alias(f, fty, target)
-            }
-            None => {
-                let name = mangle::mangle_structor(ast, &mut self.anon, first, Structor::Base);
-                let fty = self.structor_sig(first, Some(Structor::Base))?.fn_ty;
-                self.m.add_alias(&name, fty, target)
-            }
+        let r = if let Some(f) = declared {
+            let fty = self.m.func(f).ty();
+            self.m.replace_function_with_alias(f, fty, target)
+        } else {
+            let name = mangle::mangle_structor(ast, &mut self.anon, first, Structor::Base);
+            let fty = self.structor_sig(first, Some(Structor::Base))?.fn_ty;
+            self.m.add_alias(&name, fty, target)
         };
         let a = match r {
             Ok(a) => a,

@@ -427,7 +427,8 @@ fn coro_wrappers_before_passes_match_clang19() {
     if !tools() {
         return;
     }
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/codegen/coro_await_suspend_o1.cpp");
+    let src =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/codegen/coro_await_suspend_o1.cpp");
     let src = src.to_str().unwrap();
     let mut args = vec!["-std=c++26", "-O1", "-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm"];
     if cfg!(target_arch = "aarch64") {
