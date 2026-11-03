@@ -134,6 +134,7 @@ note_for_range_member_begin_end_ignored = Note (2) "member is not a candidate be
 note_format_security_fixit = Note (0) "treat the string as an argument to avoid this";
 note_forward_declaration = Note (1) "forward declaration of {0}";
 note_forward_template_decl = Note (0) "forward declaration of template entity is here";
+note_from_diagnose_if = Note (1) "from 'diagnose_if' attribute on '{0}':";
 note_function_returns_const = Note (2) "function {0} which returns const-qualified type {1} declared here";
 note_function_style_cast_add_parentheses = Note (0) "add enclosing parentheses to perform a function-style cast";
 note_function_template_deduction_instantiation_here = Note (1) "while substituting deduced template arguments into function template {0}";

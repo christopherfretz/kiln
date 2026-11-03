@@ -4963,6 +4963,17 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        // clang `checkCall`: also a static member function named by a
+        // member access (`x.s(1)`), which is not `named` here.
+        let checked = named.map(|c| c.decl).or_else(|| {
+            let x = self.ignore_parens(callee);
+            (self.ast.exprs.get(x).kind() == ExprKind::MemberExpr)
+                .then(|| self.ast.exprs.decl(x))
+                .filter(|&d| self.is_static_method(d))
+        });
+        if let Some(f) = checked {
+            self.check_diagnose_if_call(f, &conv_args, rparen);
+        }
         Some(conv_args)
     }
 

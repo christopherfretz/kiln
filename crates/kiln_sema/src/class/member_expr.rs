@@ -1433,31 +1433,65 @@ impl Sema<'_, '_> {
         };
         let mut kids = vec![obj];
         kids.extend_from_slice(args);
+        let mut all_braced = Vec::with_capacity(braced.len() + 1);
+        all_braced.push(None);
+        all_braced.extend(braced.iter_mut().map(Option::take));
+        self.explicit_object_call_with(m, n.loc(), &kids, &mut all_braced, resolved, loc, rparen)
+    }
+
+    /// A call of explicit object member function `m` rebuilt by a
+    /// template instantiation (spec/sema-templates.md §6): `args` are
+    /// the object argument and then the call's arguments, as the
+    /// definition's call holds them; `name` is where the definition named
+    /// `m`. clang's `TreeTransform` rebuilds it as a call of the function
+    /// itself, which is how [`Self::explicit_object_call`] built it.
+    pub(crate) fn rebuild_explicit_object_call(
+        &mut self,
+        m: DeclId,
+        name: Loc,
+        args: &[ExprId],
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let mut braced = vec![None; args.len()];
+        self.explicit_object_call_with(m, name, args, &mut braced, true, loc, rparen)
+    }
+
+    /// [`Self::explicit_object_call`] given the arguments `kids`, the
+    /// object argument first, and where `m` is named.
+    #[allow(clippy::too_many_arguments)]
+    fn explicit_object_call_with(
+        &mut self,
+        m: DeclId,
+        name: Loc,
+        kids: &[ExprId],
+        all_braced: &mut [Option<InitList>],
+        resolved: bool,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let obj = kids[0];
         let fn_ty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
         // The callee names the member function with no implicit object
         // (not an implicit member access, [expr.prim.id.general]/4).
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
-        let r = self.builder().decl_ref(m, fn_ty, n.loc(), None, nou, ExprFlags::NONE);
+        let r = self.builder().decl_ref(m, fn_ty, name, None, nou, ExprFlags::NONE);
         if self.unevaluated == 0 {
-            self.mark_function_referenced(m, n.loc());
+            self.mark_function_referenced(m, name);
         } else {
-            self.exc_spec_needed(m, n.loc());
+            self.exc_spec_needed(m, name);
         }
         let Some(proto) = self.sugared_proto(fn_ty) else {
-            return self.recover_err(&kids, loc);
+            return self.recover_err(kids, loc);
         };
         let f = conv::decay(self, r);
-        let mut all_braced = Vec::with_capacity(braced.len() + 1);
-        all_braced.push(None);
-        all_braced.extend(braced.iter_mut().map(Option::take));
         let named = Some(CallCallee { decl: m, overloadable: false, enable_if: !resolved });
-        let conv_args =
-            self.convert_call_args(named, r, &kids, &mut all_braced, &proto, loc, rparen);
+        let conv_args = self.convert_call_args(named, r, kids, all_braced, &proto, loc, rparen);
         let Some(conv_args) = conv_args else {
-            return self.recover_err(&kids, loc);
+            return self.recover_err(kids, loc);
         };
         if !self.check_lambda_explicit_object_call(m, self.begin_loc(obj)) {
-            return self.recover_err(&kids, loc);
+            return self.recover_err(kids, loc);
         }
         let (ty, vk) = self.call_result(proto.ret(), loc);
         let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);

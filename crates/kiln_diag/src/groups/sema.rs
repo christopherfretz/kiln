@@ -132,6 +132,7 @@ UnusedConstVariable = "unused-const-variable" [];
 UnusedExceptionParameter = "unused-exception-parameter" [];
 UnusedResult = "unused-result" [];
 UserDefinedLiterals = "user-defined-literals" [];
+UserDefinedWarnings = "user-defined-warnings" [];
 Varargs = "varargs" [];
 VecElemSize = "vec-elem-size" [];
 VlaCxxExtension = "vla-cxx-extension" [];

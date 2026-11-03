@@ -208,6 +208,7 @@ sema_union_has_base = Error (0) "unions cannot have base classes";
 sema_union_member_reference = Error (2) "union member '{0}' has reference type {1}";
 sema_unknown_typename = Error (1) "unknown type name '{0}'";
 sema_unknown_visibility = Warning [IgnoredAttributes] (1) "unknown visibility '{0}'";
+sema_unknown_warning_group = Error (1) "unknown warning group '{0}'";
 sema_unneeded_internal_decl = WarningOff [UnneededInternalDeclaration] (2) "{0:function|variable} {1} is not needed and will not be emitted";
 sema_unreachable_code = WarningOff [UnreachableCode] (0) "code will never be executed";
 sema_unreachable_code_break = WarningOff [UnreachableCodeBreak] (0) "'break' will never be executed";

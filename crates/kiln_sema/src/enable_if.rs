@@ -320,8 +320,24 @@ impl Sema<'_, '_> {
         skip: usize,
         loc: Loc,
     ) -> bool {
+        self.cond_with_args(holder, cond, args, skip, loc).unwrap_or(false)
+    }
+
+    /// The value of the condition `cond` of an `enable_if` or
+    /// `diagnose_if` attribute written on `holder` with `args`
+    /// substituted for the parameters (from index `skip`), as
+    /// [`Self::enable_if_holds`] evaluates it; `None` if it is
+    /// value-dependent or not a constant expression.
+    pub(crate) fn cond_with_args(
+        &mut self,
+        holder: DeclId,
+        cond: ExprId,
+        args: &[Option<ExprId>],
+        skip: usize,
+        loc: Loc,
+    ) -> Option<bool> {
         if self.expr_is_value_dependent(cond) {
-            return false;
+            return None;
         }
         let mut owners = vec![holder];
         if let Some(pat) = self.ast.instantiated_from(holder) {
@@ -341,7 +357,7 @@ impl Sema<'_, '_> {
             s.eval_with_params(Some(cond), binds, cond, loc).and_then(|v| s.const_truth(v))
         };
         if let Some(t) = truth(self, &binds) {
-            return t;
+            return Some(t);
         }
         // Some argument may not be a constant expression: drop those and
         // evaluate again.
@@ -351,9 +367,9 @@ impl Sema<'_, '_> {
             .filter(|&(p, a)| self.eval_with_params(None, &[(p, a)], a, loc).is_some())
             .collect();
         if kept.len() == binds.len() {
-            return false;
+            return None;
         }
-        truth(self, &kept).unwrap_or(false)
+        truth(self, &kept)
     }
 
     /// clang `compareEnableIfAttrs` ([over.match.best] extension):
