@@ -597,6 +597,10 @@ impl Sema<'_, '_> {
         // initialization, [`Sema::is_expr_error`]).
         if !self.is_expr_error(e) {
             self.check_implicit_conversions(e, cc);
+            // clang `CheckCompletedExpr`: not for a `constexpr`
+            // variable's initializer (its evaluation reports it).
+            let v = self.pending_var_init();
+            self.check_for_int_overflow(e, v);
         }
         self.flush_member_refs();
         if self.special.has_pending() {

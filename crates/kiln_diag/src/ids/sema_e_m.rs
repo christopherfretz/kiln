@@ -191,6 +191,7 @@ sema_inline_namespace_mismatch = Error (0) "non-inline namespace cannot be reope
 sema_inline_namespace_reopened_noninline = Warning [InlineNamespaceReopenedNoninline] (0) "inline namespace reopened as a non-inline namespace";
 sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
 sema_int_literal_too_large = Error (0) "integer literal is too large to be represented in any integer type";
+sema_integer_constant_overflow = Warning [IntegerOverflow] (2) "overflow in expression; result is {0} with type {1}";
 sema_integer_constants_in_conditional_always_true = Warning [TautologicalConstantCompare] (0) "converting the result of '?:' with integer constants to a boolean always evaluates to 'true'";
 sema_integer_seq_integral_element_type = Error (0) "integer sequences must have integral element type";
 sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
