@@ -71,7 +71,19 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 k if k.is_explicit_cast() => {
-                    let sub = self.strip_impcast(self.ast.exprs.operand(s));
+                    let mut sub = self.strip_impcast(self.ast.exprs.operand(s));
+                    // clang 22 also skips the conversion of the one element
+                    // of a braced functional cast (`int{6.5}`, `T{4.5}` of
+                    // an aggregate `T`): its narrowing is diagnosed instead
+                    // (WP-465). clang 19 checks it.
+                    if self.clang_compat >= 22
+                        && self.ast.exprs.get(sub).kind() == ExprKind::InitListExpr
+                    {
+                        let mut it = self.ast.lists.iter(self.ast.exprs.init_list_inits(sub));
+                        if let (Some(only), None) = (it.next(), it.next()) {
+                            sub = self.strip_impcast(only);
+                        }
+                    }
                     work.push((sub, cc));
                     continue;
                 }
@@ -199,7 +211,8 @@ impl Sema<'_, '_> {
     /// needs more bits than `to` has, or a non-negative signed value of
     /// exactly `to`'s width turns negative (`isSameWidthConstantConversion`;
     /// not for a hexadecimal, octal or binary literal). The arms of a
-    /// conditional are checked separately. A runtime-behavior diagnostic.
+    /// conditional are checked separately. The first is a runtime-behavior
+    /// diagnostic, the second is not.
     fn integer_constant_imp_cast(&mut self, e: ExprId, to: QualType, shown: QualType, cc: Loc) {
         let n = *self.ast.exprs.get(e);
         if n.kind() == ExprKind::ConditionalOperator {
@@ -221,15 +234,6 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        // clang's `DiagRuntimeBehavior`: not in an unevaluated or a
-        // constant-evaluated context (a constant-expression).
-        if self.unevaluated > 0
-            || self.immediate > 0
-            || self.constant_full_expr > 0
-            || self.in_constant_evaluated()
-        {
-            return;
-        }
         let (Some(tw), Some(fw)) = (int_width(self, to), int_width(self, from)) else { return };
         let t_signed = int_signed(self, to);
         // Only a conversion that can change a value of `from`.
@@ -247,6 +251,19 @@ impl Sema<'_, '_> {
         if likely <= tw && !same_width {
             return;
         }
+        // clang's `DiagRuntimeBehavior` for a value wider than `to`: not in
+        // an unevaluated or a constant-evaluated context (a
+        // constant-expression). The same-width conversion is a plain
+        // diagnostic (`_BitInt(7)` case value `100`).
+        let runtime = !same_width;
+        if runtime
+            && (self.unevaluated > 0
+                || self.immediate > 0
+                || self.constant_full_expr > 0
+                || self.in_constant_evaluated())
+        {
+            return;
+        }
         let converted = truncate_to(v, tw, t_signed);
         let range = self.expr_range(e);
         let ctx = Span::new(cc, self.token_end(cc).unwrap_or(cc));
@@ -258,7 +275,11 @@ impl Sema<'_, '_> {
             .arg(converted.to_string())
             .range(range)
             .range(ctx);
-        self.diag_if_reachable(d, e);
+        if runtime {
+            self.diag_if_reachable(d, e);
+        } else {
+            self.emit(d);
+        }
     }
 
     /// Whether `e` is an integer literal spelled in hexadecimal, octal or

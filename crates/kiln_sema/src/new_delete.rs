@@ -1723,7 +1723,7 @@ impl Sema<'_, '_> {
     fn dtor_dealloc_fn(&mut self, class: DeclId, loc: Loc) -> Option<(DeclId, Option<DeclId>)> {
         self.declare_global_new_delete();
         let ty = self.tag_type(class);
-        let align = self.complete_class_align(class, ty);
+        let align = self.complete_class_align(ty);
         let aligned = align > self.abi.default_new_align;
         let found = self.alloc_fns(ty, OverloadedOperator::Delete, false, loc);
         let usual = self.usual_delete(&found.fns, found.in_class, aligned, true, true)?;
@@ -1743,26 +1743,19 @@ impl Sema<'_, '_> {
     }
 
     /// `alignof` of class type `ty` (declaration `class`), through the
-    /// per-Sema [`kiln_abi::LayoutCache`] when the class is complete: its
-    /// layout, and that of every class it contains by value (complete
-    /// too, [class.mem]/7, [class.derived]/2), is final for the rest of
-    /// the TU, so a lattice of `n` classes is laid out once instead of
-    /// once per class (clang caches `ASTRecordLayout`s the same way). A
-    /// class still being defined takes the uncached path.
-    fn complete_class_align(&mut self, class: DeclId, ty: QualType) -> u64 {
-        let complete = self.ast.definition(class).is_some_and(|def| {
-            self.ast
-                .decls
-                .record(def)
-                .is_some_and(|r| !r.defn.contains(DefinitionBits::BEING_DEFINED))
-        });
-        if !complete {
-            return crate::target::size_align(&self.ast, ty, &self.abi).map_or(1, |(_, a)| a);
-        }
+    /// per-Sema [`kiln_abi::LayoutCache`]: the layout of a complete class,
+    /// and that of every class it contains by value (complete too,
+    /// [class.mem]/7, [class.derived]/2), is final for the rest of the TU,
+    /// so a lattice of `n` classes is laid out once instead of once per
+    /// class (clang caches `ASTRecordLayout`s the same way). A class still
+    /// being defined (its implicit destructor is declared before `}`) is
+    /// laid out over the cached layouts of its bases and members but not
+    /// cached itself (`Layouter::into_complete_cache`; WP-450, WP-428).
+    fn complete_class_align(&mut self, ty: QualType) -> u64 {
         let cache = std::mem::take(&mut self.layout_cache);
         let mut lay = kiln_abi::Layouter::with_cache(&self.ast, &self.abi, cache);
         let align = lay.type_layout(ty).align;
-        self.layout_cache = lay.into_cache();
+        self.layout_cache = lay.into_complete_cache();
         align
     }
 }

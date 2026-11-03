@@ -216,7 +216,7 @@ impl Oven {
     /// `bi::LIFETIME` of the pointer `raw` designating an object of type
     /// `t` ([`bi::DYN`]: unknown), `ok` its static union designators'
     /// verdict.
-    fn bi_within_lifetime(&self, raw: u64, ok: bool, t: u32) -> Result<u128, Fault> {
+    fn bi_within_lifetime(&self, ast: &Ast, raw: u64, ok: bool, t: u32) -> Result<u128, Fault> {
         let p = Ptr::decode(raw);
         let kind = match () {
             () if raw == 0 => Some(0),
@@ -236,10 +236,18 @@ impl Oven {
             p: raw,
         })?;
         // clang: the variable whose initializer is being evaluated
-        // (`Info.EvaluatingDecl`) has not begun its lifetime (WP-445).
-        if let (Origin::Var(d), Some(o)) = (a.origin, self.run.object)
-            && d == o
-        {
+        // (`Info.EvaluatingDecl`) has not begun its lifetime (WP-445): the
+        // object it initializes, or the placeholder a namespace-scope
+        // variable named in its own initializer reads (`constexpr C
+        // c(&c)`, WP-465).
+        let evaluating = match (a.origin, self.run.object) {
+            (Origin::Var(d), Some(o)) => d == o,
+            (Origin::Global(d), Some(o)) => {
+                a.flags & flags::RESOLVING != 0 && ast.first(d) == ast.first(o)
+            }
+            _ => false,
+        };
+        if evaluating {
             return Err(Fault::Bi(BiFault::Lifetime { kind: 3 }));
         }
         if !ok {
@@ -261,7 +269,9 @@ impl Oven {
     /// initializing (`Oven::ctor_steps`), or that one when it is not of
     /// class or array type (its initializer is being evaluated). A
     /// subobject of class type being initialized is left to the
-    /// constructor frames above (WP-445).
+    /// constructor frames above (WP-445). While a complete-object
+    /// constructor initializes its virtual bases, its non-virtual
+    /// subobjects and later virtual bases have not begun (WP-465).
     pub(super) fn not_yet_begun(&self, pc: usize, raw: u64, t: u32) -> bool {
         if self.ctor_steps.is_empty() {
             return false;
@@ -278,13 +288,20 @@ impl Oven {
             }
             let rel = u64::from(p.off - this.off);
             let at = self.stack.get(i + 1).map_or(pc, |up| up.call_pc as usize) as u32;
-            let k = steps.partition_point(|&(spc, _)| spc <= at);
-            let Some(&(_, cur)) = k.checked_sub(1).map(|k| &steps[k]) else { continue };
+            let k = steps.partition_point(|s| s.pc <= at);
+            let Some(&st) = k.checked_sub(1).map(|k| &steps[k]) else { continue };
+            let cur = st.cur;
             if cur == u32::MAX {
                 continue;
             }
             let tys = &self.types;
-            let fields = &tys.fields(cls)[..tys.vbase_start(cls)];
+            // A virtual-base stage looks at the virtual bases too; after
+            // it they have begun, and a base-subobject constructor never
+            // initializes them.
+            let vstage = cur & crate::CTOR_STEP_VBASE != 0;
+            let nv = tys.vbase_start(cls);
+            let all = tys.fields(cls);
+            let fields = if vstage { all } else { &all[..nv] };
             let holds = |fi: &crate::ty::FieldInfo| {
                 fi.width.is_none() && rel >= fi.offset && rel < fi.offset + tys.size(fi.ty).max(1)
             };
@@ -293,7 +310,22 @@ impl Oven {
             };
             let pick = fields.iter().position(|fi| holds(fi) && reaches(fi));
             let Some(idx) = pick.or_else(|| fields.iter().position(holds)) else { continue };
+            if vstage {
+                // A non-virtual subobject or a later virtual base; the one
+                // being initialized is a base, left to the frames above.
+                if idx < nv || (idx - nv) as u32 > cur & !crate::CTOR_STEP_VBASE {
+                    return true;
+                }
+                continue;
+            }
             let idx = idx as u32;
+            if cur & crate::CTOR_STEP_ELEM != 0 {
+                let field = cur & !(crate::CTOR_STEP_ELEM | crate::CTOR_STEP_RECORD);
+                if idx > field || (idx == field && self.elem_not_begun(st, rel, ty)) {
+                    return true;
+                }
+                continue;
+            }
             if idx > cur {
                 return true;
             }
@@ -307,6 +339,35 @@ impl Oven {
             }
         }
         false
+    }
+
+    /// Whether the subobject `rel` bytes from `this` (of type `ty`, `None`:
+    /// unknown) has not begun while element step `st` is current: it ends
+    /// before the element (begun), holds it (an aggregate being
+    /// list-initialized, begun), lies in an element of class type (left
+    /// to the frames above), or is the element or after it (not begun;
+    /// clang evaluates a list's elements in order, WP-465).
+    fn elem_not_begun(&self, st: crate::CtorStep, rel: u64, ty: Option<OTy>) -> bool {
+        let tys = &self.types;
+        let (o, n) = (u64::from(st.off), u64::from(st.len));
+        let sz = ty.map_or(1, |t| tys.size(t).max(1));
+        if rel + sz <= o || rel < o {
+            return false;
+        }
+        let record_leaf = st.cur & crate::CTOR_STEP_RECORD != 0;
+        if rel == o
+            && let Some(t) = ty
+        {
+            let holds = match tys.kind(t) {
+                TyKind::Record { .. } => sz > n || !record_leaf,
+                TyKind::Array { .. } => sz > n,
+                _ => false,
+            };
+            if holds {
+                return false;
+            }
+        }
+        !(record_leaf && rel < o + n)
     }
 
     /// Evaluates builtin `aux` (`bi` kind | sub << 8) on registers `a`..`c`
@@ -343,7 +404,7 @@ impl Oven {
                 // tag (`kbc::VOID_TAG`), if any.
                 let tag = (a >> 64) as u32;
                 let t = if t1 == bi::DYN && tag != 0 { tag - 1 } else { t1 };
-                self.bi_within_lifetime(a as u64, b != 0, t)
+                self.bi_within_lifetime(ast, a as u64, b != 0, t)
             }
             bi::UNION_LIVE => {
                 let raw = a as u64;
@@ -686,7 +747,7 @@ impl Oven {
     /// The bytes `[p, p + n)` of a one-byte-element run, if they are all
     /// initialized plain data of an allocation without unions; `n` is
     /// clamped to the elements left in `p`'s array.
-    fn byte_run(&self, p: u64, elem: OTy, n: u64) -> Option<&[u8]> {
+    pub(crate) fn byte_run(&self, p: u64, elem: OTy, n: u64) -> Option<&[u8]> {
         let (_, len, cur, _) = self.extent_of(p, elem).ok()?;
         let n = n.min(len - cur);
         let (sp, abs, a) = self.mem.check(p, n, false).ok()?;

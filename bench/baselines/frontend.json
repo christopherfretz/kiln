@@ -200,6 +200,42 @@
         "recorded": "2026-11-03T123217"
       }
     },
+    "virtual-dtor-chain": {
+      "kiln": {
+        "mode": "syntax",
+        "flags": "-std=c++26 -fsyntax-only",
+        "source_hash": "fnv1a64:5db6150a474f43c3",
+        "runs": 5,
+        "wall_ms_median": 282.291,
+        "wall_ms_min": 262.553,
+        "wall_ms_max": 301.026,
+        "spread_pct": 7.52,
+        "max_rss_kb": 20980,
+        "oven": {
+          "steps": 0,
+          "bytes": 0,
+          "peak_bytes": 0,
+          "calls": 0,
+          "allocs": 0,
+          "peak_arena": 0,
+          "frozen_bytes": 0,
+          "static_bytes": 0,
+          "evaluations": 0
+        },
+        "inst": {
+          "count": 0,
+          "nodes": 0,
+          "bytes": 0
+        },
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-428/release/kiln++",
+        "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
+        "host": {
+          "arch": "aarch64",
+          "cpus": 24
+        },
+        "recorded": "2026-11-03T202955"
+      }
+    },
     "virtual-lattice": {
       "kiln": {
         "mode": "syntax",

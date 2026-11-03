@@ -121,6 +121,31 @@ enum Freeze {
     Notes(Vec<Note>),
 }
 
+/// The automatic variable (a non-`static`, non-`thread_local` local or a
+/// parameter) whose object constant `v` points to or refers to, directly
+/// or through a subobject or a constant object, if any: such a value is
+/// a constant only within its variable's function (P2686R5
+/// [expr.const.init]/2, "constexpr-referenceable"), so it is not
+/// constexpr-representable elsewhere and has no constant form in IR.
+pub fn automatic_referent(ast: &Ast, v: ConstValueId) -> Option<DeclId> {
+    fn walk(ast: &Ast, v: ConstValueId, depth: u32) -> Option<DeclId> {
+        if depth > 64 {
+            return None;
+        }
+        match ast.consts.scalar(v) {
+            Some(Scalar::Pointer { base: PtrBase::Decl(d), .. }) => {
+                let tls =
+                    ast.decls.var(d).is_some_and(|x| x.spec.tls() != kiln_ast::decl::TlsKind::None);
+                (is_local_var(ast, d) && !tls).then_some(d)
+            }
+            Some(Scalar::Pointer { base: PtrBase::Const(c), .. }) => walk(ast, c, depth + 1),
+            Some(_) => None,
+            None => ast.consts.relocs(v).iter().find_map(|r| walk(ast, r.value, depth + 1)),
+        }
+    }
+    walk(ast, v, 0)
+}
+
 impl Oven {
     /// A top-level evaluation with registers from `fb`: `object` is the
     /// variable initialized.
@@ -200,6 +225,11 @@ impl Oven {
                 Err(Freeze::Notes(vec![Note::new(loc, "expression of type 'void' has no value")]))
             }
             RetKind::Scalar(ty) => self.freeze_scalar(b, ty, v, loc),
+            // A wide `_BitInt` result is a scalar in the store (`IntBits`),
+            // so that a fold reads it as an integer (WP-465).
+            RetKind::Sret(ty) if self.types.wide(ty).is_some() => {
+                self.freeze_object(b, v as u64, loc)
+            }
             RetKind::Sret(ty) => self.freeze_aggregate(b, ty, v as u64, loc),
         };
         // [expr.const]/5.20: every allocation is deallocated within the
@@ -557,6 +587,28 @@ impl Oven {
         ]))
     }
 
+    /// Whether automatic variable `d` is constexpr-referenceable from the
+    /// initializing declaration of the variable being initialized
+    /// (P2686R5 [expr.const.init]/2, C++26): that variable is automatic
+    /// too ([expr.const.init]/4: one with static or thread storage
+    /// duration must be representable at namespace scope) and the
+    /// smallest enclosing scope of both that is not a block scope is the
+    /// same function parameter scope (a lambda's body is its own).
+    /// Deliberately narrowed to a variable declared `constexpr` (WP-467):
+    /// the rule would also make `auto& e = local;` constant-initialized,
+    /// which no compiler does yet, so that case waits for an oracle
+    /// (spec/sema.md §4.9).
+    fn referenceable_from_object(&self, b: &dyn SemaBridge, d: DeclId) -> bool {
+        let Some(v) = self.run.object else { return false };
+        let ast = b.ast();
+        let ctx = ast.decls.get(d).ctx();
+        b.cxx26()
+            && is_local_var(ast, v)
+            && ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
+            && ctx.is_some_and(|c| ast.decls.get(c).kind().is_function())
+            && ast.decls.get(v).ctx() == ctx
+    }
+
     /// The designated type a frozen `void *` keeps ([`Scalar::Pointer`]
     /// `designated`): the type its `kbc::VOID_TAG` tag bits `tag`
     /// recorded, for a pointer to `void`.
@@ -614,6 +666,13 @@ impl Oven {
         // constant address ([expr.const]/14).
         let automatic = matches!(a.origin, Origin::Global(d) | Origin::External(d) | Origin::Unknown(d)
             if is_local_var(b.ast(), d));
+        // P2686R5 [expr.const.init]/2: an automatic object is
+        // constexpr-referenceable from the initializing declaration of an
+        // automatic variable of the same function (its frozen address is
+        // that of the object in the variable's own invocation).
+        let referenceable = automatic
+            && matches!(a.origin, Origin::Global(d) | Origin::External(d)
+                if self.referenceable_from_object(b, d));
         // The object of unknown value of a namespace-scope reference
         // (P2280; clang `CheckLValueConstantExpression`
         // `allowConstexprUnknown`).
@@ -639,7 +698,7 @@ impl Oven {
         {
             return Err(Freeze::Fault(FailKind::NotConstant));
         }
-        if p.is_static() && !automatic {
+        if p.is_static() && (!automatic || referenceable) {
             let base = match a.origin {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),
                 Origin::Str(lit, Some(origin)) => PtrBase::StringLit { lit, origin },
@@ -1016,11 +1075,15 @@ impl Oven {
         if !sp.is_init(abs, n) {
             return Err(self.uninit(b, Some(f.decl), f.ty, loc));
         }
-        let mask = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 } << f.bit;
-        let v = sp.read(abs, n) & mask;
+        // The bits `[bit, bit + width)` of the bytes from `abs`, a byte at
+        // a time (a wide `_BitInt` bit-field spans more than 16 bytes).
+        let (lo, hi) = (f.bit, f.bit + width);
         let o = at + f.offset as usize;
         for i in 0..n as usize {
-            s.bytes[o + i] |= (v >> (8 * i)) as u8;
+            let (b0, b1) = (i as u32 * 8, i as u32 * 8 + 8);
+            let (from, to) = (lo.max(b0) - b0, hi.min(b1) - b0);
+            let mask = (((1u16 << to) - 1) & !((1u16 << from) - 1)) as u8;
+            s.bytes[o + i] |= sp.read(abs + i as u64, 1) as u8 & mask;
             s.cover[o + i] = 1;
         }
         Ok(())
@@ -1278,6 +1341,10 @@ impl Oven {
                 _ => self.external(b, ty, d),
             },
             VarEvalState::Evaluating => {
+                // Mid-initialization: kept for this evaluation only (an
+                // automatic variable has no `eval_inner` placeholder to
+                // restore; WP-465).
+                self.provisional.push(g);
                 self.global_obj(ty, flags::CONST | flags::RESOLVING | (hu & flags::HAS_UNION), d)
             }
             VarEvalState::NotEvaluated => {

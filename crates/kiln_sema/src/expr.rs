@@ -309,6 +309,25 @@ impl Sema<'_, '_> {
             Scalar::Bool { ty: t, value: v != 0 }
         } else {
             let (w, signed) = int_info(&self.ast, t).unwrap_or((64, true));
+            if w > 128 {
+                // A wide `_BitInt`: `v` extended over its words.
+                let n = IntBits::words_for(w);
+                let fill = if v < 0 { u64::MAX } else { 0 };
+                let mut words: Vec<u64> = (0..n)
+                    .map(|i| match i {
+                        0 => v as u64,
+                        1 => (v >> 64) as u64,
+                        _ => fill,
+                    })
+                    .collect();
+                if w % 64 != 0 {
+                    words[n - 1] &= (1u64 << (w % 64)) - 1;
+                }
+                if let Some(bits) = IntBits::from_words(w, &words) {
+                    let scalar = Scalar::Int { ty: t, signed, bits };
+                    return self.ast.consts.push_scalar(scalar).expect("integer constants intern");
+                }
+            }
             Scalar::Int { ty: t, signed, bits: IntBits::from_i128(w.clamp(1, 128), v) }
         };
         self.ast.consts.push_scalar(scalar).expect("integer constants intern")
@@ -712,7 +731,7 @@ impl Sema<'_, '_> {
                 return true;
             }
             if let Some(&u) = self.ref_usable.get(&holder) {
-                return u;
+                return u && self.representable_here(holder);
             }
             if self.has_errors_in(init)
                 || self.expr_is_value_dependent(init)
@@ -722,7 +741,7 @@ impl Sema<'_, '_> {
             }
             let u = self.is_constant_initialized(holder);
             self.ref_usable.insert(holder, u);
-            return u;
+            return u && self.representable_here(holder);
         }
         let q = self.ast.types.effective_quals(ty);
         let ok = spec.is_constexpr()
@@ -730,7 +749,28 @@ impl Sema<'_, '_> {
                 && !q.is_volatile()
                 && self.is_integral_or_enum(ty)
                 && !self.ast.types.is_reference(ty));
-        ok && self.is_constant_initialized(holder)
+        ok && self.is_constant_initialized(holder) && self.representable_here(holder)
+    }
+
+    /// P2686R5 [expr.const]/8-9: a variable whose value refers to an
+    /// automatic object (`constexpr int& r = local;`) is usable in
+    /// constant expressions only where that object is
+    /// constexpr-referenceable: in its own function, not in a lambda
+    /// nested in it, where naming the variable odr-uses (captures) it.
+    fn representable_here(&mut self, d: DeclId) -> bool {
+        let x = if let Some(&x) = self.auto_referent.get(&d) {
+            x
+        } else {
+            let Some(kiln_ast::decl::VarEvalState::Value(c)) =
+                self.ast.decls.var(d).map(|v| v.eval.state())
+            else {
+                return true;
+            };
+            let x = kiln_oven::automatic_referent(&self.ast, c);
+            self.auto_referent.insert(d, x);
+            x
+        };
+        x.is_none_or(|x| self.ast.decls.get(x).ctx() == self.enclosing_function(self.ctx))
     }
 
     /// True if the glvalue `e` designates a function or a variable with

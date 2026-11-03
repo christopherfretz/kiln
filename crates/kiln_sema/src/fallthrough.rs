@@ -3,7 +3,7 @@
 //! attributes"): a fallthrough statement must directly precede a switch
 //! label, judged on the body's control flow once the body is complete.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use kiln_ast::attr::AttrKind;
 use kiln_ast::stmt::StmtKind;
@@ -29,9 +29,16 @@ impl Sema<'_, '_> {
     /// The CFG-based checks clang runs after the return-type check
     /// (`AnalysisBasedWarnings::IssueWarnings`): the fallthrough placement
     /// when the body built a fallthrough statement (an instantiation
-    /// copies them, so is not checked), then a throw in a non-throwing
-    /// function.
-    pub(crate) fn late_analysis(&mut self, f: DeclId, body: StmtId, has_fallthrough: bool) {
+    /// copies them, so is not checked), then the infinite recursion
+    /// (`expr_start`: [`Sema::check_infinite_recursion`]), then a throw in
+    /// a non-throwing function.
+    pub(crate) fn late_analysis(
+        &mut self,
+        f: DeclId,
+        body: StmtId,
+        has_fallthrough: bool,
+        expr_start: u32,
+    ) {
         // clang `DiagnoseSwitchLabelsFallthrough`: the unannotated
         // fall-throughs, then the misplaced annotations; the unreachable
         // code (clang `CheckUnreachable`) comes first.
@@ -40,6 +47,7 @@ impl Sema<'_, '_> {
         if has_fallthrough {
             self.check_fallthrough_placement(body);
         }
+        self.check_infinite_recursion(f, body, expr_start);
         self.check_throw_in_nothrow(f, body);
     }
 
@@ -58,8 +66,10 @@ impl Sema<'_, '_> {
         if w.found.is_empty() {
             return;
         }
-        let wanted = w.found.iter().map(|f| f.0).collect();
-        let Some(dead) = self.unreachable_attributed_stmts(body, wanted) else { return };
+        let wanted: Vec<StmtId> = w.found.iter().map(|f| f.0).collect();
+        let Some((before, _)) = self.with_cfg(body, |_, c| c.stmt_flow()) else { return };
+        let dead: HashSet<StmtId> =
+            wanted.into_iter().filter(|s| !before.get(s).copied().unwrap_or(false)).collect();
         // clang erases each valid annotation from a `SmallPtrSet<_, 8>`
         // as it visits the labels in order (the last element moves into
         // the hole), then reports what is left in set order; past 8

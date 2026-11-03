@@ -63,7 +63,7 @@ directives are also ERRORs.
 
 | Directive | Semantics |
 |---|---|
-| `expect: compile-ok \| compile-fail \| run \| pp \| ast \| layout \| vtables \| ir \| no-crash` | Test kind. Default `compile-ok`. |
+| `expect: compile-ok \| compile-fail \| run \| pp \| ast \| cfg \| layout \| vtables \| ir \| no-crash` | Test kind. Default `compile-ok`. |
 | `std: <std>` | `c++98 c++03 c++11 c++14 c++17 c++20 c++23 c++26` (C++), `c89 c99 c11 c17 c23` (C). Default `c++26` / `c17`. Passed as `-std=<std>`. |
 | `args: <flags>` | Extra compiler flags, split shell-style (quotes, backslash). It may be repeated, and the flags accumulate. Placeholders are substituted in each flag (below). |
 | `diag: <line>[:<col>] <sev> "<substring>" [dup(clang)]` | Expected diagnostic. `<sev>` is one of `error fatal warning note remark`. If the column is omitted, any column matches. `dup(clang)`, after the substring and only on a primary (non-note) directive, says clang prints this group twice where kiln's engine prints it once (spec/diag.md §7.4.1); see "Diagnostics". |
@@ -77,6 +77,7 @@ directives are also ERRORs.
 | `run-stdin-file: <path>` | `run` only. The program's stdin is the file's exact contents. The path is relative to the test's directory (use `Inputs/`, which discovery skips). It cannot be combined with `run-stdin:`. A missing file is an ERROR. |
 | `env: <NAME>=<value>` | `run` only. Sets an environment variable for the program (the inherited environment is otherwise kept). `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`; the value is the rest of the line, trimmed, and may be empty or contain `=`. It may be repeated, once per name. |
 | `oracle: clang \| gcc \| none` | `run`/`pp`/`ast`/`verify` only (`gcc`: `run`, `compile-ok` and `compile-fail` only, not `verify`). Whether to compare with the oracle, and which: `gcc` compares with the GCC oracle instead of clang (see "GCC oracle"). Defaults to `clang` for `run`, `pp` and `verify`, `none` for `ast` (the golden is the contract). `layout`, `vtables` and `ir` tests are always compared with the oracle (they have no golden), so the directive is an error there. |
+| `cfg-diverges: <function> <reason>` | `cfg` only. The graphs of `<function>` (matched as in "cfg tests") are left out of the oracle comparison, because clang's analyzer dump differs from its warnings' graph or from kiln's by construction; `<reason>` (required) says how. Repeatable, each function once. A listed function whose shapes agree with the oracle's is a **FAIL** (a stale divergence). WP-509. |
 | `ast-filter: <substr>` | `ast` only. Dump only the declarations whose qualified name contains `<substr>` (no whitespace): kiln gets `-fdump-ast-filter=<substr>`. |
 | `pp-compare: tokens \| text` | `pp` only. How outputs are compared (see "pp comparison"). Default `tokens`. |
 | `ast-implicit` | `ast` only. Include implicit declarations (implicit special members, injected-class-names, ...): kiln gets `-fdump-ast=implicit`, clang's dump is normalized as `xtask clang-ast --implicit`. Use with `ast-filter` to keep the builtin implicit declarations out. |
@@ -181,6 +182,7 @@ satisfies `compile-fail`.
 | `run` | compile and link to `<scratch>/test.out` | the compile succeeds and the diags match; the binary exits normally within `--timeout`; stdout equals the expectation exactly (if one is given); the exit code equals `exit:` (default 0); the oracle agrees (below) |
 | `pp` | `-E -P` (`-E` with `pp-linemarkers`) | exit 0; the diags match; the output is equivalent to `<test>.expected` (if that file exists); the oracle agrees (below). Equivalence is defined in "pp comparison". |
 | `ast` | kiln: `-fsyntax-only -fdump-ast[=implicit] [-fdump-ast-filter=<substr>]`; clang: `-fsyntax-only -Xclang -ast-dump=json`, normalized | exit 0; the diags match; the dump equals `<test>.expected` up to trailing whitespace on each line and trailing blank lines; the oracle agrees (below). See "ast tests". |
+| `cfg` | kiln: `-fsyntax-only -fkiln-dump-cfg`; clang: `-fsyntax-only -w -Xclang -analyze -Xclang -analyzer-checker=debug.DumpCFG` | exit 0; the diags match; the dump (stderr) equals `<test>.expected` as for `ast`; the oracle's graphs have the same shapes. See "cfg tests". Kinds other than kiln and clang SKIP. |
 | `layout` | kiln: `-fsyntax-only -fdump-record-layouts`; clang: `-fsyntax-only -Xclang -fdump-record-layouts-complete` | exit 0; the diags match; the dump has at least one record layout; the oracle's dump has the same blocks in the same order. See "Layout and vtable tests". |
 | `vtables` | kiln: `-fsyntax-only -fdump-vtable-layouts`; clang: `-S -emit-llvm -o <scratch>/test.ll -Xclang -fdump-vtable-layouts` | exit 0; the diags match; the dump has at least one vtable block; the oracle's dump has the same set of blocks. See "Layout and vtable tests". |
 | `ir` | `-S -emit-llvm -O0 -o <scratch>/test.ll` (the oracle: `<scratch>/oracle.ll`) | exit 0; the diags match; the module defines at least one function; it equals the oracle's after normalization. See "IR tests". |
@@ -409,6 +411,38 @@ construct: the test cannot be checked against clang. With another compiler
 (`other`), `ast` tests are a SKIP. A dump that differs from the golden is a
 **FAIL** with a line diff (`-` golden, `+` actual); under `--update` the
 golden is rewritten instead.
+
+### cfg tests
+
+A `cfg` test checks the control-flow graphs kiln builds for each function
+body (spec/sema.md §7.5.1), printed by `-fkiln-dump-cfg` in clang's
+`DumpCFG` layout. Its golden `<test>.expected` is kiln's exact dump
+(required; `--update` writes it). The dump's element texts are kiln's own,
+so clang's dump is compared by *shape* only:
+
+- Each graph is split into blocks. A block's shape is its tag (`entry`,
+  `exit`, `noreturn`), whether it starts with a label, its terminator's
+  kind (`if`, `while`, `do`, `for`, `switch`, `try`, `break`, `continue`,
+  `goto`, `goto*`, `?:`, `&&`, `||`, `tempdtor`, the first word otherwise)
+  and its successors, each marked `(Unreachable)` (a pruned edge) or
+  `NULL` (a dropped loop edge). Elements and predecessors are ignored.
+- Blocks are renumbered canonically, by a depth-first walk from the entry
+  over the successors in order, then from the blocks it missed in print
+  order, so the two numberings need not agree.
+- Graphs are matched by function name: the identifier before the
+  parameter list, without template arguments or qualifiers, then by order
+  among graphs of the same name. Lambda call operators are not compared
+  (clang's analyzer dumps none); they are checked by the golden alone.
+
+Under kiln with an oracle, the oracle's shapes must equal those of kiln's
+dump, except for the functions listed in `cfg-diverges`; a listed function
+whose shapes agree is reported as stale. Under clang, clang's shapes must
+equal the golden's (a listed function is skipped, never stale). The known
+divergences by construction: clang's analyzer adds a `static init`
+branch for a local static and virtual-base branches in constructors
+(`AddStaticInitBranches`, `AddVirtualBaseBranches`, which its warnings'
+graph does not), and clang orphans the destructor decision of a
+temporary nested inside a `?:` arm that has none of its own.
 
 ### Layout and vtable tests
 
