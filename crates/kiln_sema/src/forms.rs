@@ -31,6 +31,11 @@ impl Sema<'_, '_> {
     /// by the list-initialization of the parameter.
     pub fn act_on_braced_arg(&mut self, l: InitList) -> ExprId {
         let flat = Self::list_exprs(&l);
+        if self.list_has_expr_error(&l) {
+            // clang's `ParseBraceInitializer` fails the list (WP-408).
+            let e = self.recover_err(&flat, l.lbrace);
+            return self.mark_expr_error(e);
+        }
         let e = self.builder().init_list(QualType::VOID, &flat, None, None, l.lbrace, l.rbrace);
         self.braced_args.push((e, l));
         e
@@ -327,6 +332,11 @@ impl Sema<'_, '_> {
 
     /// [`Sema::act_on_list_cast`] before the type as written is recorded.
     fn build_list_cast(&mut self, ty: QualType, l: &InitList, loc: Loc) -> ExprId {
+        if self.list_has_expr_error(l) {
+            // clang's `ParseBraceInitializer` fails the list (WP-408).
+            let e = self.recover_err(&Self::list_exprs(l), loc);
+            return self.mark_expr_error(e);
+        }
         let ty = if self.is_ctad_placeholder(ty) {
             self.act_on_ctad_list_cast_type(ty, l, loc)
         } else {

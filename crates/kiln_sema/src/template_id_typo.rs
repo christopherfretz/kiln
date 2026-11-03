@@ -46,6 +46,17 @@ struct Candidate {
     found: Vec<DeclId>,
     /// Found by qualified lookup.
     qualified: bool,
+    /// The scope qualified lookup searched.
+    scope: Option<DeclId>,
+}
+
+/// A clang 19 correction kiln goes on with
+/// ([`Sema::speculate_template_id_typo`]).
+struct Speculation {
+    expr: ExprId,
+    suggest: kiln_diag::Diag,
+    fallback: Option<kiln_diag::Diag>,
+    ambiguous: bool,
 }
 
 /// What a declaration correction recovers as.
@@ -63,73 +74,168 @@ impl Sema<'_, '_> {
     /// identifier" through delayed typo correction, on an erroneous
     /// expression the enclosing expression goes on parsing around
     /// (clang 19's `TypoExpr`; [`Sema::correct_delayed_typos_in`] finds it,
-    /// so a call missing its `)` skips to it quietly). A name ordinary
-    /// lookup found one function for is corrected to that function
-    /// qualified by its namespace when the expression rebuilt on it is
-    /// valid ([`Sema::speculate_template_id_typo`]).
-    pub fn act_on_undeclared_template_id_typo(
-        &mut self,
-        name: Symbol,
-        args: &[TemplateArg],
-        loc: Loc,
-    ) -> ExprId {
+    /// so a call missing its `)` skips to it quietly). A near name the
+    /// expression rebuilt on is valid at the correction point is the
+    /// correction ([`Sema::speculate_template_id_typo`]).
+    pub fn act_on_undeclared_template_id_typo(&mut self, name: Symbol, loc: Loc) -> ExprId {
         let text = sym_str(self, name);
         let msg = self.diag(DiagId::sema_undeclared_var_use, loc).arg(text);
-        if let Some((u, suggest)) = self.speculate_template_id_typo(name, args, loc) {
-            self.hold_typo_spec(msg, suggest, u, loc);
-            return u;
+        if let Some(s) = self.speculate_template_id_typo(name, loc) {
+            self.hold_typo_spec(msg, s.suggest, s.expr, loc, s.fallback, s.ambiguous);
+            return s.expr;
         }
         let e = self.recover_err(&[], loc);
         self.emit_delayed_typo(msg, e);
         e
     }
 
-    /// clang 19's correction of the undeclared template-id `name<args>`:
-    /// its `TypoExpr` consumer offers only `name` qualified by the
-    /// namespace that declares it (`val<int>` with `int val(int)`:
-    /// `::val`), and only for one non-member function (not an overload
-    /// set, not a near name); the template arguments are dropped. The
-    /// correction holds if the expression rebuilt on it at the correction
-    /// point is valid, which kiln finds out by going on with the
-    /// correction: a reference to the function, with the corrected
-    /// diagnostic ("did you mean `::val`?" and its note). Only inside a
-    /// delayed-typo scope outside an instantiation (otherwise there is no
-    /// correction point to decide at), and not with dependent arguments.
-    fn speculate_template_id_typo(
-        &mut self,
-        name: Symbol,
-        args: &[TemplateArg],
-        loc: Loc,
-    ) -> Option<(ExprId, kiln_diag::Diag)> {
+    /// clang 19's keyword correction of the undeclared template-id
+    /// `name<...>` at `loc` (`ActOnIdExpression`'s `KeywordReplacement`):
+    /// when the nearest candidates ([`Sema::template_id_typo_candidates`])
+    /// are keywords only, "use of undeclared identifier 'x'; did you mean
+    /// 'kw'?" is issued at once and the keyword returned; the parser then
+    /// reads the keyword where the template-id was (`breakk<int>` is
+    /// `break`: "expected unqualified-id").
+    pub fn template_id_keyword_typo(&mut self, name: Symbol, loc: Loc) -> Option<&'static str> {
+        if !self.inst.stack.is_empty() {
+            return None;
+        }
+        let cands = self.template_id_typo_candidates(name);
+        let first = cands.first()?;
+        if cands.iter().take_while(|c| c.ed == first.ed).any(|c| !c.decls.is_empty()) {
+            return None;
+        }
+        let kw = self.typo_keywords().into_iter().find(|&k| k == first.text)?;
+        let msg = self.diag(DiagId::sema_undeclared_var_use_suggest, loc).arg(sym_str(self, name));
+        self.emit(msg.arg(kw));
+        Some(kw)
+    }
+
+    /// clang 19's correction of the undeclared template-id `name<args>`
+    /// (`CorrectTypoDelayed`; the template arguments are dropped): the
+    /// candidates by distance ([`Sema::template_id_typo_candidates`]),
+    /// each rebuilt into the expression at the correction point
+    /// (`TransformTypos`); the first valid one is the correction unless
+    /// another at its distance is valid too (no correction). Keywords,
+    /// types, templates other than function templates and non-static
+    /// member functions never rebuild into a valid expression; a value
+    /// (variable, parameter, enumerator, static data member, a field
+    /// under an implicit `this`) is assumed valid, a function is valid
+    /// where a function designator is. kiln goes on with one candidate
+    /// and decides at the correction point ([`TypoSpec`]): the one
+    /// value of the nearest distance, or -- when that distance has
+    /// functions -- its first function, valid making a tie with the value
+    /// (or another function) ambiguous, invalid passing the correction to
+    /// the value (or to the one value of the next distance with any).
+    /// Only inside a delayed-typo scope outside an instantiation
+    /// (otherwise there is no correction point to decide at).
+    fn speculate_template_id_typo(&mut self, name: Symbol, loc: Loc) -> Option<Speculation> {
         if self.typo_delay == 0 || !self.inst.stack.is_empty() {
             return None;
         }
-        if args.iter().any(|&a| Self::dependent_flags(self.ast.types.arg_flags(a))) {
-            return None;
+        let mut groups: Vec<(usize, Vec<Candidate>, Vec<Candidate>)> = Vec::new();
+        for c in self.template_id_typo_candidates(name) {
+            let kind = self.typo_kind_19(&c);
+            if groups.last().is_none_or(|g| g.0 != c.ed) {
+                groups.push((c.ed, Vec::new(), Vec::new()));
+            }
+            let Some(g) = groups.last_mut() else { continue };
+            if g.1.iter().chain(&g.2).any(|o| self.same_typo_entity(o, &c)) {
+                continue;
+            }
+            match kind {
+                Some(true) => g.1.push(c),
+                Some(false) => g.2.push(c),
+                None => {}
+            }
         }
-        let c = self.best_template_id_typo(name)?;
-        let typo = sym_str(self, name);
-        let (&[decl], &[shown]) = (c.decls.as_slice(), c.found.as_slice()) else {
-            return None;
+        let at = groups.iter().position(|g| !g.1.is_empty() || !g.2.is_empty())?;
+        let (_, values, funcs) = groups.swap_remove(at);
+        let rest = groups.into_iter().skip(at);
+        let (probe, ambiguous, fallback) = match (values.len(), funcs.len()) {
+            (1, 0) => (values.into_iter().next()?, false, None),
+            (1, _) => (funcs.into_iter().next()?, true, values.into_iter().next()),
+            (0, n) => {
+                // Past the functions, the next distance with a value.
+                let next = rest.map(|g| g.1).find(|v| !v.is_empty());
+                let fallback = next.filter(|v| v.len() == 1).and_then(|v| v.into_iter().next());
+                (funcs.into_iter().next()?, n > 1, fallback)
+            }
+            _ => return None,
         };
-        let d = self.ast.strip_shadow(decl);
-        if !c.qualified
-            || self.kind_of(d) != DeclKind::Function
-            || c.text.rsplit("::").next() != Some(typo.as_str())
-        {
+        let typo = sym_str(self, name);
+        let suggest = self.template_id_typo_suggest(&typo, &probe, loc);
+        let fallback = fallback.map(|c| self.template_id_typo_suggest(&typo, &c, loc));
+        let expr = self.template_id_typo_expr(&probe, loc)?;
+        Some(Speculation { expr, suggest, fallback, ambiguous })
+    }
+
+    /// What candidate `c` rebuilds into for clang 19
+    /// ([`Sema::speculate_template_id_typo`]): `Some(true)` a value,
+    /// `Some(false)` a function, `None` never a valid expression.
+    fn typo_kind_19(&self, c: &Candidate) -> Option<bool> {
+        if c.decls.is_empty() {
             return None;
         }
+        let d = self.ast.strip_shadow(c.decls[self.typo_correction_decl(c)]);
+        match self.kind_of(d) {
+            DeclKind::Var
+            | DeclKind::ParmVar
+            | DeclKind::EnumConstant
+            | DeclKind::Binding
+            | DeclKind::NonTypeTemplateParm => Some(true),
+            DeclKind::Field | DeclKind::IndirectField => {
+                self.implicit_this_available().then_some(true)
+            }
+            DeclKind::Function | DeclKind::FunctionTemplate | DeclKind::CXXMethod => {
+                let all_static = c.decls.iter().all(|&x| {
+                    let x = self.ast.strip_shadow(x);
+                    let m = match self.kind_of(x) {
+                        DeclKind::FunctionTemplate => self.templated_function(x),
+                        _ => Some(x),
+                    };
+                    m.is_none_or(|m| {
+                        self.kind_of(m) != DeclKind::CXXMethod || self.is_static_method(m)
+                    })
+                });
+                all_static.then_some(false)
+            }
+            _ => None,
+        }
+    }
+
+    /// "use of undeclared identifier 'typo'; did you mean 'c'?" with
+    /// "'c' declared here".
+    fn template_id_typo_suggest(&self, typo: &str, c: &Candidate, loc: Loc) -> kiln_diag::Diag {
+        let shown = c.found[self.typo_correction_decl(c)];
         let note = self
             .diag(DiagId::note_entity_declared_here, self.typo_note_loc(shown))
             .arg(format!("'{}'", c.text));
-        let msg = self
-            .diag(DiagId::sema_undeclared_var_use_suggest, loc)
-            .arg(typo)
-            .arg(c.text)
-            .with_note(note);
-        // clang's `BuildDeclarationNameExpr` on the one function.
-        let u = self.build_decl_ref_via(d, loc, (decl != d).then_some(decl));
-        Some((u, msg))
+        self.diag(DiagId::sema_undeclared_var_use_suggest, loc)
+            .arg(typo.to_owned())
+            .arg(c.text.clone())
+            .with_note(note)
+    }
+
+    /// The expression clang 19 rebuilds candidate `c` into: a reference
+    /// to the one function or value (an implicit member access for a
+    /// field), else an overload set of the functions, named as corrected.
+    fn template_id_typo_expr(&mut self, c: &Candidate, loc: Loc) -> Option<ExprId> {
+        let nns = self.typo_nns(c);
+        if let &[decl] = c.decls.as_slice() {
+            let d = self.ast.strip_shadow(decl);
+            if self.kind_of(d) != DeclKind::FunctionTemplate {
+                return Some(self.build_decl_ref_qualified(
+                    d,
+                    loc,
+                    (decl != d).then_some(decl),
+                    nns,
+                ));
+            }
+        }
+        let first = self.ast.strip_shadow(*c.decls.first()?);
+        let dn = self.ast.decls.get(first).name();
+        Some(self.builder().unresolved_lookup(dn, &c.decls, false, nns, None, loc))
     }
 
     /// clang 22's typo correction (`CorrectTypo` from `DiagnoseEmptyLookup`)
@@ -241,13 +347,15 @@ impl Sema<'_, '_> {
                     return TemplateIdTypo::Recovered(self.recover_err(&[], loc));
                 }
                 // clang's recovery: an overload set of the one declaration
-                // (with the template arguments for a function template),
-                // which a built-in operator resolves to it
-                // ([`Sema::resolve_single_overload_candidate`]).
+                // with the written template arguments, which a placeholder
+                // context resolves to a non-template ignoring them
+                // ([`Sema::resolve_single_overload_candidate`]) and a target
+                // type does not ([`Sema::resolve_address_of_overloaded`]).
                 let template = self.kind_of(d) == DeclKind::FunctionTemplate;
-                let targs = template.then(|| self.ast.types.arg_list(args));
+                let targs = Some(self.ast.types.arg_list(args));
                 let dn = self.ast.decls.get(d).name();
-                let e = self.builder().unresolved_lookup(dn, &[decl], false, None, targs, loc);
+                let nns = self.typo_nns(&c);
+                let e = self.builder().unresolved_lookup(dn, &[decl], false, nns, targs, loc);
                 return TemplateIdTypo::Recovered(if template {
                     self.resolve_single_template_id(e)
                 } else {
@@ -395,6 +503,38 @@ impl Sema<'_, '_> {
     /// [`Sema::correct_template_id_typo`]); `None` when there is none,
     /// it is too distant, or it ties with another.
     fn best_template_id_typo(&self, name: Symbol) -> Option<Candidate> {
+        let len = sym_str(self, name).len();
+        let cands = self.template_id_typo_candidates(name);
+        let mut best: Option<Candidate> = None;
+        for c in cands {
+            match &best {
+                None => best = Some(c),
+                Some(b) if b.ed < c.ed => break,
+                Some(b) => {
+                    if self.same_typo_entity(b, &c) {
+                        continue;
+                    }
+                    return None;
+                }
+            }
+        }
+        let best = best?;
+        let ed = (best.ed + 50) / 100;
+        (len < 3 || ed == 0 || len / ed >= 3).then_some(best)
+    }
+
+    /// Whether candidates `a` and `b` name the same entity (the same
+    /// entity at the same distance counts once, as the lesser spelling).
+    fn same_typo_entity(&self, a: &Candidate, b: &Candidate) -> bool {
+        let key =
+            |c: &Candidate| c.decls.iter().map(|&d| self.ast.first(self.ast.strip_shadow(d))).min();
+        !a.decls.is_empty() && key(a) == key(b)
+    }
+
+    /// Every typo-correction candidate for `name`, by distance and then
+    /// spelling (clang's `TypoCorrectionConsumer` before it picks; see
+    /// [`Sema::correct_template_id_typo`] for what is a candidate).
+    fn template_id_typo_candidates(&self, name: Symbol) -> Vec<Candidate> {
         let typo = sym_str(self, name);
         let len = typo.len();
         let bound = len.div_ceil(3);
@@ -417,6 +557,7 @@ impl Sema<'_, '_> {
                     decls: Vec::new(),
                     found: Vec::new(),
                     qualified: false,
+                    scope: None,
                 });
             }
         }
@@ -442,6 +583,7 @@ impl Sema<'_, '_> {
                 decls: found.decls,
                 found: found.found,
                 qualified: false,
+                scope: None,
             });
         }
         let cur = self.typo_context_chain();
@@ -471,6 +613,7 @@ impl Sema<'_, '_> {
                     decls: found.decls,
                     found: found.found,
                     qualified: true,
+                    scope: Some(scope),
                 });
             }
         }
@@ -479,28 +622,8 @@ impl Sema<'_, '_> {
         if len < 3 {
             cands.retain(|c| c.text.ends_with(&*typo) && c.qualified && (c.ed + 50) / 100 <= len);
         }
-        // The same entity at the same distance counts once (the lesser
-        // spelling).
         cands.sort_by(|a, b| a.ed.cmp(&b.ed).then_with(|| a.text.cmp(&b.text)));
-        let key = |s: &Self, c: &Candidate| {
-            c.decls.iter().map(|&d| s.ast.first(s.ast.strip_shadow(d))).min()
-        };
-        let mut best: Option<Candidate> = None;
-        for c in cands {
-            match &best {
-                None => best = Some(c),
-                Some(b) if b.ed < c.ed => break,
-                Some(b) => {
-                    if !b.decls.is_empty() && key(self, b) == key(self, &c) {
-                        continue;
-                    }
-                    return None;
-                }
-            }
-        }
-        let best = best?;
-        let ed = (best.ed + 50) / 100;
-        (len < 3 || ed == 0 || len / ed >= 3).then_some(best)
+        cands
     }
 
     /// The declaration of correction `c` clang names in the note and
@@ -685,6 +808,29 @@ impl Sema<'_, '_> {
     /// translation unit (one component); the path from the innermost
     /// common context, or `::` and the full path when that is empty or
     /// starts with a name of an enclosing context.
+    /// The nested-name-specifier of correction `c` as spelled (`::val`,
+    /// `N::fn`): its namespaces, from the global one when the spelling
+    /// starts with `::`. `None` when it is unqualified, or names a class
+    /// (kiln then keeps the bare name).
+    fn typo_nns(&mut self, c: &Candidate) -> Option<kiln_ast::ids::NnsId> {
+        use kiln_ast::types::Nns;
+        let scope = c.scope?;
+        let chain = self.typo_chain(scope);
+        if chain.iter().any(|&n| self.kind_of(n) != DeclKind::Namespace) {
+            return None;
+        }
+        let parts = c.text.split("::").count().checked_sub(1)?;
+        let global = c.text.starts_with("::");
+        let take = if global { chain.len() } else { parts.min(chain.len()) };
+        let mut nns = global.then(|| self.ast.types.nns(Nns::Global));
+        for &ns in &chain[chain.len() - take..] {
+            nns = Some(self.ast.types.nns(Nns::Namespace { prefix: nns, ns }));
+        }
+        let n = nns?;
+        let name = c.text.rsplit("::").next().unwrap_or_default();
+        (format!("{}{name}", self.nns_str(n)) == c.text).then_some(n)
+    }
+
     fn typo_qualifier(&self, scope: DeclId, cur: &[DeclId]) -> (String, usize) {
         let chain = self.typo_chain(scope);
         if chain.is_empty() {
