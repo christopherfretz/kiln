@@ -128,6 +128,67 @@ impl Cg<'_> {
         j
     }
 
+    /// clang `GetAddrOfLabel`: `blockaddress` of label `d`'s block, which
+    /// joins the destinations of the function's indirect `goto` block
+    /// (made here if it is the first; once per use, so a label taken
+    /// twice is listed twice, as clang's `addDestination` does).
+    pub(crate) fn addr_of_label(&mut self, d: DeclId, at: Option<kiln_source::Loc>) -> R<kiln_llvm::Value> {
+        let ast = self.ast;
+        let here = self.f.decl.map(|f| ast.first(f));
+        let owner = kiln_abi::mangle::enclosing_function(ast, d).map(|f| ast.first(f));
+        let (Some(f), true) = (self.f.func, here.is_some() && here == owner) else {
+            return err(at, "address of a label of another function in a constant");
+        };
+        let g = self.f.fir.indirect_goto();
+        let j = self.label_dest(d);
+        self.f.fir.add_indirect_dest(g.br, j.blk);
+        let bb = self.f.fir.block_id(&mut self.m, f, j.blk);
+        Ok(self.m.const_blockaddress(f, bb))
+    }
+
+    /// clang `EmitIndirectGotoStmt`: a constant target (`goto *&&l;`) is a
+    /// `goto l;`; otherwise the target joins the indirect `goto` block's
+    /// `phi` and control branches there, running no cleanups (the jump
+    /// checks reject leaving a scope that has any).
+    fn emit_indirect_goto(&mut self, s: StmtId) -> R<()> {
+        let ast = self.ast;
+        if let Some(l) = ast.indirect_goto_constant_target(s) {
+            let j = self.label_dest(l);
+            self.branch_through_cleanup(j);
+            return Ok(());
+        }
+        let v = self.emit_scalar(ast.stmts.indirect_goto_target(s))?;
+        let g = self.f.fir.indirect_goto();
+        if let Some(cur) = self.f.fir.cur() {
+            self.f.fir.add_incoming(g.phi, v, cur);
+        }
+        self.emit_branch(g.blk);
+        Ok(())
+    }
+
+    /// FinishFunction: the indirect `goto` block, if any, goes after the
+    /// return block; with no computed `goto` its empty `phi` becomes
+    /// `poison`. A label whose address was taken keeps its block.
+    pub(crate) fn finish_indirect_goto(&mut self) -> R<()> {
+        let Some(g) = self.f.fir.indirect_goto_made() else { return Ok(()) };
+        self.emit_block(g.blk, false);
+        self.f.fir.set_cur(None);
+        if let Op::Phi { inc, .. } = self.f.fir.op(g.phi)
+            && inc.is_empty()
+        {
+            let p = self.m.const_poison(LTy::PTR);
+            self.f.fir.replace_all_uses(V::I(g.phi), V::C(p));
+            self.f.fir.erase(g.phi);
+        }
+        if let Op::IndirectBr { dests, .. } = self.f.fir.op(g.br)
+            && let Some(&d) = dests.iter().find(|&&d| !self.f.fir.is_placed(d))
+        {
+            let _ = d;
+            return err(None, "address of a label whose block was never emitted");
+        }
+        Ok(())
+    }
+
     /// clang `EmitLabel`.
     pub(crate) fn emit_label(&mut self, d: DeclId) {
         let blk = match self.f.labels.get(&d).copied() {
@@ -279,6 +340,7 @@ impl Cg<'_> {
                 self.branch_through_cleanup(j);
                 Ok(())
             }
+            StmtKind::IndirectGotoStmt => self.emit_indirect_goto(s),
             StmtKind::BreakStmt => {
                 let j = self.f.jumps.last().expect("break outside a loop").brk;
                 self.branch_through_cleanup(j);

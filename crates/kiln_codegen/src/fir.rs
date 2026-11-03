@@ -132,6 +132,12 @@ pub(crate) enum Op {
         normal: Blk,
         indirect: Vec<Blk>,
     },
+    /// `indirectbr ptr %addr, [label %d...]` (computed `goto`; the
+    /// destinations may repeat, as clang's `addDestination` makes them).
+    IndirectBr {
+        addr: V,
+        dests: Vec<Blk>,
+    },
     /// `landingpad { ptr, i32 } [cleanup] catch ptr <clause>...`.
     LandingPad {
         cleanup: bool,
@@ -216,6 +222,7 @@ impl Op {
                 | Op::Unreachable
                 | Op::Invoke { .. }
                 | Op::CallBr { .. }
+                | Op::IndirectBr { .. }
                 | Op::Resume { .. }
         )
     }
@@ -228,6 +235,7 @@ impl Op {
                 std::iter::once(*normal).chain(indirect.iter().copied()).collect()
             }
             Op::CondBr { t, f, .. } => vec![*t, *f],
+            Op::IndirectBr { dests, .. } => dests.clone(),
             Op::Switch { default, cases, .. } => {
                 std::iter::once(*default).chain(cases.iter().map(|c| c.1)).collect()
             }
@@ -243,6 +251,7 @@ impl Op {
                 std::iter::once(normal).chain(indirect.iter_mut()).collect()
             }
             Op::CondBr { t, f, .. } => vec![t, f],
+            Op::IndirectBr { dests, .. } => dests.iter_mut().collect(),
             Op::Switch { default, cases, .. } => {
                 std::iter::once(default).chain(cases.iter_mut().map(|c| &mut c.1)).collect()
             }
@@ -277,7 +286,7 @@ impl Op {
             }
             Op::AssumeBundle { args, .. } => args.clone(),
             Op::LandingPad { clauses, .. } => clauses.clone(),
-            Op::Resume { v } => vec![*v],
+            Op::Resume { v } | Op::IndirectBr { addr: v, .. } => vec![*v],
             Op::CondBr { c, .. } => vec![*c],
             Op::Switch { c, cases, .. } => {
                 std::iter::once(*c).chain(cases.iter().map(|x| x.0)).collect()
@@ -312,7 +321,7 @@ impl Op {
             }
             Op::AssumeBundle { args, .. } => args.iter_mut().collect(),
             Op::LandingPad { clauses, .. } => clauses.iter_mut().collect(),
-            Op::Resume { v } => vec![v],
+            Op::Resume { v } | Op::IndirectBr { addr: v, .. } => vec![v],
             Op::CondBr { c, .. } => vec![c],
             Op::Switch { c, cases, .. } => {
                 std::iter::once(c).chain(cases.iter_mut().map(|x| &mut x.0)).collect()
@@ -336,6 +345,19 @@ struct Block {
     placed: bool,
     /// Terminator references to the block.
     uses: u32,
+    /// The LLVM block made for it ahead of lowering, for a
+    /// `blockaddress` ([`Fir::block_id`]).
+    llvm: Option<BlockId>,
+}
+
+/// The function's indirect `goto` dispatch block (clang
+/// `GetIndirectGotoBlock`), made at the first label address or computed
+/// `goto`: the block, its `phi` and its `indirectbr`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct IndirectGoto {
+    pub blk: Blk,
+    pub phi: u32,
+    pub br: u32,
 }
 
 /// The function buffer.
@@ -347,6 +369,7 @@ pub(crate) struct Fir {
     allocas: Vec<u32>,
     params: Vec<TypeId>,
     cur: Option<Blk>,
+    igoto: Option<IndirectGoto>,
 }
 
 impl Fir {
@@ -360,6 +383,7 @@ impl Fir {
             allocas: Vec::new(),
             params,
             cur: None,
+            igoto: None,
         };
         let e = f.create_block();
         f.place_at_end(e);
@@ -456,10 +480,12 @@ impl Fir {
     }
 
     /// The single predecessor of `b`, counting edges as LLVM's
-    /// `getSinglePredecessor` does (a `condbr` with both arms to `b` is two).
+    /// `getSinglePredecessor` does (a `condbr` with both arms to `b` is two;
+    /// the indirect `goto` block's `indirectbr` counts before it is placed).
     pub fn single_predecessor(&self, b: Blk) -> Option<Blk> {
         let mut pred = None;
-        for &bb in &self.layout {
+        let unplaced = self.igoto.map(|g| g.blk).filter(|&g| !self.is_placed(g));
+        for &bb in self.layout.iter().chain(unplaced.as_ref()) {
             if let Some(t) = self.terminator(bb) {
                 for s in self.insts[t as usize].op.successors() {
                     if s == b {
@@ -530,6 +556,52 @@ impl Fir {
         if let Op::Call { args, .. } = &mut self.insts[i as usize].op {
             args[idx] = v;
         }
+    }
+
+    /// The indirect `goto` dispatch block, made (unplaced) on first use:
+    /// `phi ptr` (`indirect.goto.dest`) and `indirectbr` on it with no
+    /// destinations yet.
+    pub fn indirect_goto(&mut self) -> IndirectGoto {
+        if let Some(g) = self.igoto {
+            return g;
+        }
+        let blk = self.create_block();
+        let V::I(phi) = self.push_in(blk, Op::Phi { ty: TypeId::PTR, inc: Vec::new() }, TypeId::PTR)
+        else {
+            unreachable!()
+        };
+        let V::I(br) =
+            self.push_in(blk, Op::IndirectBr { addr: V::I(phi), dests: Vec::new() }, TypeId::VOID)
+        else {
+            unreachable!()
+        };
+        let g = IndirectGoto { blk, phi, br };
+        self.igoto = Some(g);
+        g
+    }
+
+    /// The indirect `goto` block, if one was made.
+    pub fn indirect_goto_made(&self) -> Option<IndirectGoto> {
+        self.igoto
+    }
+
+    /// Adds destination `d` to `indirectbr` `i`.
+    pub fn add_indirect_dest(&mut self, i: u32, d: Blk) {
+        if let Op::IndirectBr { dests, .. } = &mut self.insts[i as usize].op {
+            dests.push(d);
+            self.blocks[d.0 as usize].uses += 1;
+        }
+    }
+
+    /// The LLVM block `b` will lower to, made now in function `f` (for a
+    /// `blockaddress`, which must name it before the body is lowered).
+    pub fn block_id(&mut self, m: &mut Module, f: FuncId, b: Blk) -> BlockId {
+        if let Some(id) = self.blocks[b.0 as usize].llvm {
+            return id;
+        }
+        let id = m.func_mut(f).create_block("");
+        self.blocks[b.0 as usize].llvm = Some(id);
+        id
     }
 
     /// Adds a case to switch `i`.
@@ -810,7 +882,13 @@ impl Fir {
         let mut b = IrBuilder::new(m, f);
         let mut bmap: Vec<Option<BlockId>> = vec![None; self.blocks.len()];
         for &bb in &self.layout {
-            bmap[bb.0 as usize] = Some(b.append_block(""));
+            bmap[bb.0 as usize] = Some(match self.blocks[bb.0 as usize].llvm {
+                Some(id) => {
+                    b.place_block(id);
+                    id
+                }
+                None => b.append_block(""),
+            });
         }
         let mut vmap: Vec<Option<Value>> = vec![None; self.insts.len()];
         let mut phis: Vec<(Value, u32)> = Vec::new();
@@ -880,6 +958,10 @@ impl Fir {
                         b.landingpad(inst.ty, *cleanup, &cl)?
                     }
                     Op::Resume { v } => b.resume(val(*v))?,
+                    Op::IndirectBr { addr, dests } => {
+                        let ds: Vec<BlockId> = dests.iter().map(|&x| blk(x)).collect();
+                        b.indirect_br(val(*addr), &ds)?
+                    }
                     Op::Br { dest } => b.br(blk(*dest))?,
                     Op::CondBr { c, t, f } => b.cond_br(val(*c), blk(*t), blk(*f))?,
                     Op::Switch { c, default, cases } => {
