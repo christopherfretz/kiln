@@ -99,7 +99,14 @@ comdats and metadata are numbered in print order. Inside the crate,
 `Module::funcs` is indexed by `FuncId` only: every walk over all functions
 (printing, numbering, `verify`) goes through `ordered_funcs()` /
 `func_order`, and outside the crate only `functions()` is visible (WP-206
-audit). `crates/kiln_driver/tests/codegen.rs` `function_order_is_stable`
+audit). `replace_function(old, new)` is LLVM `replaceAllUsesWith` +
+`eraseFromParent` on a function declaration: `old` leaves the order and
+frees its name, a function `new` moves to just after where `old` was
+(clang `applyReplacements`), and every operand naming `old`, earlier or
+later, prints as `resolve(old)`. `replace_function_with_alias(old, ty,
+aliasee)` instead adds an alias that takes `old`'s name and uses (clang
+`TryEmitBaseDestructorAsAlias`); both refuse a defined or already
+replaced `old` (`BadGlobal`) (WP-423). `crates/kiln_driver/tests/codegen.rs` `function_order_is_stable`
 pins that two compilations print the same text in clang's order.
 
 `dso_local` is not printed where LLVM implies it (local linkage, or

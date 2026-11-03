@@ -499,6 +499,10 @@ impl<'a> Printer<'a> {
             },
             ValueRef::Const(c) => self.constant(w, m.consts.get(c)),
             ValueRef::Func(f) => {
+                let r = m.resolve(v);
+                if r != v {
+                    return self.operand(w, r);
+                }
                 Self::global_name(w, &m.funcs[f.index()].name, self.func_slot[f.index()])
             }
             ValueRef::Global(g) => {

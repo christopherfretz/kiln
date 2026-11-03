@@ -2,11 +2,12 @@
 //! `CallLifetimeEnd` and its `VarBypassDetector`.
 //!
 //! clang emits `llvm.lifetime.start`/`.end` around local variables and
-//! temporaries when optimizing, and in a coroutine always (`CoroSplit` uses
-//! them to keep short-lived locals out of the frame). kiln emits them in
-//! coroutines only ([`Fx::lifetime_markers`]); a variable that a `goto`
-//! or a `switch` jumps past gets none, because its lifetime would be
-//! broken into several regions.
+//! temporaries when optimizing (`ShouldEmitLifetimeMarkers`: -O1 and up),
+//! and in a coroutine always (`CoroSplit` uses them to keep short-lived
+//! locals out of the frame); kiln does the same
+//! ([`Cg::lifetime_markers_on`]). A variable that a `goto` or a `switch`
+//! jumps past gets none, because its lifetime would be broken into
+//! several regions.
 
 use kiln_ast::decl::VarStorage;
 use kiln_ast::expr::{ExprKind, StorageDuration};
@@ -224,10 +225,15 @@ impl Detector<'_> {
 }
 
 impl Cg<'_> {
+    /// clang `ShouldEmitLifetimeMarkers`: optimizing, or in a coroutine.
+    pub(crate) fn lifetime_markers_on(&self) -> bool {
+        self.opts.optimize || self.f.lifetime_markers
+    }
+
     /// clang `EmitLifetimeStart` of the alloca `addr` of type `ty`: the
     /// size when a marker was emitted.
     pub(crate) fn emit_lifetime_start(&mut self, addr: V, ty: LTy) -> Option<u64> {
-        if !self.f.lifetime_markers {
+        if !self.lifetime_markers_on() {
             return None;
         }
         let size = self.alloc_size(ty);
@@ -277,7 +283,7 @@ impl Cg<'_> {
     /// one whose type has no destructor starts before the outermost
     /// conditional, so its end needs no `cleanup.cond` flag.
     pub(crate) fn temporary_lifetime(&mut self, m: ExprId, s: ExprId, tmp: crate::func::Addr) {
-        if !self.f.lifetime_markers || self.f.fir.cur().is_none() {
+        if !self.lifetime_markers_on() || self.f.fir.cur().is_none() {
             return;
         }
         let ast = self.ast;
