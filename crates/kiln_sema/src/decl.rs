@@ -2630,6 +2630,7 @@ impl Sema<'_, '_> {
             self.check_decl_attrs(decl, &mut attrs);
         }
         self.check_optnone_conflicts(decl, &mut attrs);
+        self.act_on_asm_label(ds, d, decl, &mut attrs);
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
@@ -2653,8 +2654,18 @@ impl Sema<'_, '_> {
     ) {
         let kind = self.ast.decls.get(decl).kind();
         // A member function takes one as a namespace-scope function does
-        // (clang `ActOnFunctionDeclarator`).
-        if !matches!(kind, DeclKind::Function | DeclKind::CXXMethod | DeclKind::Var) {
+        // (clang `ActOnFunctionDeclarator`), constructors, destructors
+        // and conversion functions included (every structor variant
+        // takes the label, spec/abi.md §1).
+        if !matches!(
+            kind,
+            DeclKind::Function
+                | DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion
+                | DeclKind::Var
+        ) {
             return;
         }
         let prev_attr = self.ast.prev(decl).and_then(|p| {
@@ -3373,6 +3384,7 @@ impl Sema<'_, '_> {
             is_static: spec.storage() == FnStorage::Static,
             head: self.templ.cur,
             requires: d.trailing_requires,
+            enable_if: self.enable_if_list(&d.attrs),
         };
         let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
@@ -4911,7 +4923,9 @@ impl Sema<'_, '_> {
         ext: bool,
         prev_def: bool,
     ) -> bool {
-        if !ext && prev_def {
+        // The same entity defined in another unit's global module
+        // fragment: merged, not redefined (spec/modules.md §6).
+        if !ext && prev_def && !self.module_merge_hidden_definition(p) {
             let msg = self.diag(DiagId::sema_redefinition, at).arg(n);
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
@@ -6135,6 +6149,9 @@ impl Sema<'_, '_> {
             && prev != f
             && !self.is_dependent_friend_fn(f)
             && !self.is_dependent_friend_fn(prev)
+            // The same function defined in another unit's global module
+            // fragment: merged, its body kept (spec/modules.md §6).
+            && (deleted.is_some() || !self.module_merge_hidden_definition(prev))
         {
             let msg = self
                 .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
@@ -6196,6 +6213,7 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(pty));
                 self.emit(self.incomplete_note(msg, pty));
             }
+            self.mark_callee_destroyed_param(p, pty);
         }
         self.check_abstract_signature(f);
         self.begin_function_body(f, ret);
@@ -6724,7 +6742,15 @@ impl Sema<'_, '_> {
                     if self.ast.definition(p).is_some() {
                         // Diagnosed as the specialization already
                         // (`respecialized`): no further redefinition error.
-                        if !respecialized {
+                        if self
+                            .ast
+                            .definition(p)
+                            .is_some_and(|d| self.module_merge_hidden_definition(d))
+                        {
+                            // Silent (spec/modules.md §6): the body is
+                            // skipped like a redefinition's.
+                            redefined = true;
+                        } else if !respecialized {
                             redefined = self.diag_tag_redefinition(p, n, nloc);
                         }
                         prev = None;
@@ -6751,6 +6777,7 @@ impl Sema<'_, '_> {
                     // class redeclaration `struct N; struct N;` (clang
                     // `ActOnTag`): both join `p`'s chain (below).
                     if inst || head.is_none() && is_enum {
+                        self.module_merge_hidden_redecl(p);
                         return p;
                     }
                 }
@@ -7287,6 +7314,7 @@ impl Sema<'_, '_> {
         self.select_destructor(r);
         let bits = self.special_member_bits(r, bits);
         let bits = self.finish_special_members(r, bits);
+        let bits = self.trivial_abi_bits(r, bits);
         // [class.compare.default]/4: the implicit `operator==`s.
         let mut friends =
             build.as_mut().map(|b| std::mem::take(&mut b.friends)).unwrap_or_default();
@@ -9087,6 +9115,7 @@ impl Sema<'_, '_> {
                         | "coro_only_destroy_when_complete"
                         | "optnone"
                         | "minsize"
+                        | "trivial_abi"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
@@ -9114,6 +9143,9 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::ABI_TAG {
             return self.abi_tag_attribute(syntax, &n, args, loc);
+        }
+        if kind == AttrKind::ENABLE_IF {
+            return self.enable_if_attribute(syntax, args, loc);
         }
         if kind == AttrKind::ENUM_EXTENSIBILITY {
             return self.enum_extensibility_attribute(syntax, args, loc);
@@ -9833,6 +9865,8 @@ fn attr_kind_of(
         // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
         ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,
         ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
+        // clang `Clang<"trivial_abi">`.
+        ("trivial_abi", _, _) if gnu_syntax || clang_scope => AttrKind::TRIVIAL_ABI,
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
         ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
         ("preferred_name", _, gnu) if gnu || clang_scope => AttrKind::PREFERRED_NAME,
@@ -9846,6 +9880,8 @@ fn attr_kind_of(
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
+        // clang `GNU<"enable_if">`: no `[[...]]` spelling.
+        ("enable_if", _, _) if gnu_syntax => AttrKind::ENABLE_IF,
         ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
         ("exclude_from_explicit_instantiation", _, gnu) if gnu || clang_scope => {
             AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION

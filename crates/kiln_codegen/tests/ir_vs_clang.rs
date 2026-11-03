@@ -143,19 +143,6 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // `opt-19` CoroEarly pass kiln runs (private; LLVM 22: internal).
     ("coro_builtins", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("coro_builtins", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    // LLVM 21 dropped the size operand of `llvm.lifetime.start/end`. kiln
-    // emits LLVM 19's `(i64, ptr)` form because its optimizer is `opt-19`
-    // (spec/driver.md "IR optimization"); `opt-22`'s auto-upgrade of the
-    // markers that survive -O1 (or all of them, under
-    // `-disable-llvm-passes`) leaves dead `@llvm.lifetime.*.i64`
-    // declarations and moves the upgraded ones to the module end. The
-    // instructions match.
-    ("lifetime_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("lifetime_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("extern_template_vtable_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("extern_template_vtable_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("loop_hints_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("loop_hints_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("loop_unroll_disable_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("loop_unroll_disable_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("tbaa_atomic_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),

@@ -185,6 +185,13 @@ impl Substituter<'_, '_, '_> {
                     continue;
                 }
             }
+            if node.kind == AttrKind::ENABLE_IF {
+                // Its condition names the instantiation's parameters.
+                if let Some(n) = self.enable_if_cond(spec, def, node) {
+                    out.push(self.sema.ast.attrs.push(n));
+                }
+                continue;
+            }
             out.push(self.sema.ast.attrs.push(node));
         }
         let _ = self.sema.builder().attach_attrs(spec, &out);

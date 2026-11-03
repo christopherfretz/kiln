@@ -257,6 +257,36 @@ impl Oven {
         })
     }
 
+    /// Runs the job of [`Oven::evaluate_with_params`] with its frame at
+    /// `fb`: the condition's value.
+    pub(crate) fn eval_subst(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        cond: Option<ExprId>,
+        at: ExprId,
+        fb: u32,
+    ) -> Result<ConstValueId, EvalFailure> {
+        self.run.object = None;
+        let binds = std::mem::take(&mut self.subst_binds);
+        let f = self.compile_subst(b, cond, &binds);
+        self.subst_binds = binds;
+        self.let_pending.clear();
+        self.exec(b, f, fb)?;
+        let v = self.regs[fb as usize];
+        let RetKind::Scalar(ty) = self.funcs[f as usize].ret else {
+            return Err(EvalFailure::silent(FailKind::NotConstant));
+        };
+        let loc = expr_loc(b.ast(), at);
+        let r = self.freeze_scalar(b, ty, v, loc).map_err(|f| match f {
+            Freeze::Fault(k) => EvalFailure::silent(k),
+            Freeze::Notes(notes) => EvalFailure { kind: FailKind::NotConstant, notes },
+        });
+        match self.leak_notes(b) {
+            None => r,
+            Some(_) => Err(EvalFailure::silent(FailKind::NotConstant)),
+        }
+    }
+
     /// Runs the destruction of variable `d` (`Oven::has_constant_destruction`):
     /// whether it succeeds without leaking.
     pub(crate) fn destroy_var(

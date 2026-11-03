@@ -21,6 +21,8 @@ pub(crate) struct NewFn {
     pub head: Option<TemplateParamListId>,
     /// Its trailing requires-clause.
     pub requires: Option<ExprId>,
+    /// Its `enable_if` conditions (`Sema::enable_if_list`).
+    pub enable_if: kiln_ast::ids::ListId,
 }
 
 impl Sema<'_, '_> {
@@ -127,7 +129,7 @@ impl Sema<'_, '_> {
             _ => return false,
         }
         let old_req = self.ast.templates.trailing_requires.get(old).copied();
-        self.opt_exprs_equivalent(old_req, new.requires)
+        self.opt_exprs_equivalent(old_req, new.requires) && self.same_enable_if(old, new.enable_if)
     }
 
     /// [temp.over.link]/6: equivalent template heads (same kinds, packs,
