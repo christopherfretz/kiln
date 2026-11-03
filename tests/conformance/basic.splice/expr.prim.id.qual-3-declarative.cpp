@@ -2,16 +2,17 @@
 // (of a declarator-id, a class-head-name or an enum-head-name) shall not
 // have a splice-scope-specifier, so a splice cannot name the scope of an
 // out-of-line definition or of a class or enum definition.
+// kiln is IS-strict; GCC 16.1 accepts these declarations.
 //@ expect: compile-fail
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
-//@ diag: 26:5 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
-//@ diag: 27:6 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
-//@ diag: 28:5 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
-//@ diag: 29:6 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
-//@ diag: 30:8 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
-//@ diag: 31:12 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
+//@ diag: 27:5 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
+//@ diag: 28:6 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
+//@ diag: 29:5 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
+//@ diag: 30:6 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
+//@ diag: 31:8 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
+//@ diag: 32:12 error "a splice-scope-specifier cannot be used in a declarative nested-name-specifier"
 #include "kiln_meta.h"
 namespace N {
 extern int x;
