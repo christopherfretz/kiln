@@ -1435,9 +1435,10 @@ impl Cg<'_> {
             }
             _ => return err(None, format!("RTTI for type `{name}` is not supported yet")),
         };
+        let pre = self.reserve_rtti(&name);
         let linkage = self.type_rtti_linkage(q);
         let fields = vec![self.abi_vtable(abi)?, self.rtti_type_name(q, linkage)];
-        self.finish_rtti(&name, &fields, linkage)
+        self.finish_rtti(pre, &name, &fields, linkage)
     }
 
     /// clang `ContainsIncompleteClassType`.
@@ -1504,10 +1505,11 @@ impl Cg<'_> {
         if let Some(&g) = self.rtti_globals.get(&name) {
             return Ok((flags, Value::global(g)));
         }
+        let pre = self.reserve_rtti(&name);
         let linkage = self.type_rtti_linkage(q);
         let mut fields = vec![self.abi_vtable("_ZTVN10__cxxabiv120__function_type_infoE")?];
         fields.push(self.rtti_name_global(&format!("_ZTS{}", &name[4..]), linkage));
-        Ok((flags, self.finish_rtti(&name, &fields, linkage)?))
+        Ok((flags, self.finish_rtti(pre, &name, &fields, linkage)?))
     }
 
     /// clang `BuildPointerToMemberTypeInfo`: `{ vtable, name, i32 flags,
@@ -1519,6 +1521,7 @@ impl Cg<'_> {
         class: QualType,
         name: &str,
     ) -> R<Value> {
+        let pre = self.reserve_rtti(name);
         let linkage = self.type_rtti_linkage(q);
         let mut fields =
             vec![self.abi_vtable("_ZTVN10__cxxabiv129__pointer_to_member_type_infoE")?];
@@ -1530,11 +1533,12 @@ impl Cg<'_> {
         fields.push(self.m.const_int(LTy::I32, i128::from(flags)));
         fields.push(pti);
         fields.push(self.rtti(class)?);
-        self.finish_rtti(name, &fields, linkage)
+        self.finish_rtti(pre, name, &fields, linkage)
     }
 
     /// clang `BuildPointerTypeInfo`: `{ vtable, name, i32 flags, pointee }`.
     fn pointer_rtti(&mut self, q: QualType, pointee: QualType, name: &str) -> R<Value> {
+        let pre = self.reserve_rtti(name);
         let linkage = self.type_rtti_linkage(q);
         let mut fields = vec![self.abi_vtable("_ZTVN10__cxxabiv119__pointer_type_infoE")?];
         fields.push(self.rtti_type_name(q, linkage));
@@ -1542,7 +1546,7 @@ impl Cg<'_> {
         let (flags, pti) = self.pointee_rtti(pointee)?;
         fields.push(self.m.const_int(LTy::I32, i128::from(flags)));
         fields.push(pti);
-        self.finish_rtti(name, &fields, linkage)
+        self.finish_rtti(pre, name, &fields, linkage)
     }
 
     /// clang `GetAddrOfTypeName`: the `_ZTS` string of `q`.
@@ -1569,14 +1573,36 @@ impl Cg<'_> {
         Value::global(g)
     }
 
-    /// The `_ZTI` global `name` initialized with `fields`.
-    fn finish_rtti(&mut self, name: &str, fields: &[Value], linkage: VtLinkage) -> R<Value> {
+    /// clang 22 `BuildTypeInfo` creates the `_ZTI` global before building
+    /// its fields (so it prints before its `_ZTS` name, its `__cxxabiv1`
+    /// vtable and its bases' and pointee's descriptors); clang 19 creates
+    /// it after them (spec/codegen.md §6a). The reserved placeholder is
+    /// retyped by [`Self::finish_rtti`].
+    fn reserve_rtti(&mut self, name: &str) -> Option<GlobalId> {
+        (self.opts.clang_compat >= 22).then(|| self.m.add_global(name, LTy::PTR))
+    }
+
+    /// The `_ZTI` global `name` (the `reserve_rtti` placeholder `pre`, or
+    /// a new global) initialized with `fields`.
+    fn finish_rtti(
+        &mut self,
+        pre: Option<GlobalId>,
+        name: &str,
+        fields: &[Value],
+        linkage: VtLinkage,
+    ) -> R<Value> {
         let init = match self.m.const_anon_struct(fields, false) {
             Ok(v) => v,
             Err(e) => return err(None, format!("bad type_info: {e:?}")),
         };
         let ty = self.m.const_type(init);
-        let g = self.m.add_global(name, ty);
+        let g = match pre {
+            Some(g) => {
+                self.m.set_global_value_type(g, ty);
+                g
+            }
+            None => self.m.add_global(name, ty),
+        };
         let _ = self.m.set_initializer(g, Some(init));
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
@@ -1652,6 +1678,7 @@ impl Cg<'_> {
 
     /// clang `ItaniumRTTIBuilder::BuildTypeInfo` for class type `q`.
     fn class_rtti(&mut self, q: QualType, rd: DeclId, name: &str) -> R<Value> {
+        let pre = self.reserve_rtti(name);
         let ast = self.ast;
         let linkage = self.rtti_linkage(rd);
         let def = self.class_def(rd);
@@ -1723,7 +1750,7 @@ impl Cg<'_> {
                 fields.push(self.m.const_int(LTy::I64, i128::from(of)));
             }
         }
-        self.finish_rtti(name, &fields, linkage)
+        self.finish_rtti(pre, name, &fields, linkage)
     }
 
     /// Linkage, `dso_local` and comdat of an RTTI or vtable definition.

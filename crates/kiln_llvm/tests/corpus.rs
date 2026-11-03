@@ -609,6 +609,32 @@ fn parameter_attributes() {
     );
 }
 
+/// §5: at `ir_version` 21+ `nocapture` is written as LLVM 21's
+/// `captures(none)`, in its sorted (integer attribute) position; LLVM 19
+/// cannot parse it, so only the text is pinned.
+#[test]
+fn captures_none_at_llvm_21() {
+    let mut m = aarch64();
+    m.ir_version = 21;
+    let fty = m.types.function(TypeId::VOID, &[TypeId::PTR], false);
+    let f = m.add_function("f", fty).unwrap();
+    let a = m.attr_set(&[
+        Attr::Dereferenceable(8),
+        Attr::Flag(AttrKind::ReadOnly),
+        Attr::Flag(AttrKind::NoCapture),
+        Attr::Flag(AttrKind::NoAlias),
+    ]);
+    m.func_mut(f).attrs.set_param(0, a);
+    let _ = intrinsics::memcpy(&mut m, TypeId::I64);
+    let t = m.to_string();
+    assert!(
+        t.contains("declare void @f(ptr noalias readonly captures(none) dereferenceable(8))\n"),
+        "{t}"
+    );
+    assert!(t.contains("(ptr noalias writeonly captures(none), ptr noalias readonly captures(none), i64, i1 immarg)"), "{t}");
+    assert!(!t.contains("nocapture"), "{t}");
+}
+
 /// §5: function attribute groups are deduplicated and numbered in first-use
 /// order, with enum attributes before string attributes.
 #[test]
