@@ -2282,7 +2282,13 @@ GNU `vector_size` and clang `ext_vector_type` values are stored as an
 array of their lanes (`TyKind::Array`, `Types::is_vector`). The array is
 padded to the vector's own size and alignment, so an `ext_vector_type(3)`
 occupies 4 lanes and the 4th is indeterminate. A vector of `bool` (bits)
-stays `Opaque`: it has no value model yet. The operations are in
+stays `Opaque`: it has no value model yet, so its constant evaluation is
+"not supported" and a namespace-scope `bool`-vector variable gets dynamic
+initialization (clang emits a `<N x i1>` constant). clang 19 folds
+`bool`-vector lists, `!`, `& | ^ ~`, `==`, `__builtin_convertvector` both
+ways and `__builtin_bit_cast`; clang 22 also subscripts and reduces them.
+The planned model is packed bits, lane `i` at bit `i` (follow-up to
+WP-187). The operations are in
 `compile/vector.rs`. The accept/reject boundary is clang 19's
 `VectorExprEvaluator`:
 - **Folded:** arithmetic, bitwise, shift and comparison operators, lane
