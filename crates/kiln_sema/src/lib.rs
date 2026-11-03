@@ -503,6 +503,12 @@ pub struct Sema<'a, 'sm> {
     /// Splices whose operand was read as a frozen constant without an
     /// Oven evaluation (spec/reflection.md §5, the splice fast path).
     pub(crate) splice_fast: u64,
+    /// The `std::meta::substitute` memo (spec/reflection.md §3.3).
+    pub(crate) meta_subst: meta::SubstMemo,
+    /// The placeholder [`Sema::lend_oven`] leaves in a bridge callback's
+    /// Oven slot while the running Oven is lent, kept for the next loan
+    /// (a loan allocates no Oven of its own).
+    pub(crate) spare_oven: Option<Oven>,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -966,6 +972,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             va_list_type: None,
             ext_vector_typedefs: Vec::new(),
             splice_fast: 0,
+            meta_subst: meta::SubstMemo::default(),
+            spare_oven: None,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),

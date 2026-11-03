@@ -12,6 +12,7 @@ note_member_first_declared_here = Note (1) "member {0} first declared here";
 note_member_fn_declared_const = Note (1) "member function '{0}' is declared const here";
 note_member_reference_arrow_from_operator_arrow = Note (0) "'->' applied to return value of the operator->() declared here";
 note_member_synthesized_at = Note (3) "in {0:implicit|defaulted} {1:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} for {2} first required here";
+note_meta_substitution_here = Note (1) "while substituting template arguments into {0} for std::meta::substitute";
 note_misplaced_ellipsis_vararg_add_comma = Note (0) "insert ',' before '...' to silence this warning";
 note_misplaced_ellipsis_vararg_add_ellipsis = Note (1) "place '...' {0:immediately before declared identifier|here} to declare a function parameter pack";
 note_misplaced_ellipsis_vararg_existing_ellipsis = Note (0) "preceding '...' declares a function parameter pack";

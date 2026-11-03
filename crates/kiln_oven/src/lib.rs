@@ -595,6 +595,25 @@ impl Oven {
         self.budget
     }
 
+    /// Opens a transactional trial (spec/oven.md "Trial evaluation",
+    /// `TrialMode::Transactional`) around bridge work that may evaluate
+    /// nested constants (`std::meta::can_substitute`): every effect is
+    /// allowed; [`Oven::trial_end`] keeps or undoes them. O(1).
+    pub fn trial_begin(&mut self) {
+        self.mem.checkpoint(mem::TrialMode::Transactional);
+    }
+
+    /// Closes the innermost trial [`Oven::trial_begin`] opened: `keep`
+    /// commits its effects, else they are rolled back (statics and
+    /// interned values made since are kept).
+    pub fn trial_end(&mut self, keep: bool) {
+        if keep {
+            self.mem.commit();
+        } else {
+            self.mem.rollback(&self.types);
+        }
+    }
+
     /// Evaluates the constant expression `e` (a manifestly
     /// constant-evaluated context; recorded in [`Oven::stats`]).
     pub fn evaluate(
