@@ -1616,6 +1616,10 @@ pub struct ColdDeclData {
     /// as an implicit builtin (`ceil` -> `__builtin_ceil`), recorded
     /// under `-stdlib=libstdc++` only (spec/sema.md §5.4).
     pub gnu_lib_twin: ColdMap<DeclId, u32>,
+    /// WP-419: the `__builtin_` twin of a declaration clang recognizes
+    /// as a C library builtin (`ceil` -> `__builtin_ceil`), recorded on
+    /// every declaration of the chain (spec/sema.md §5.4).
+    pub lib_builtin: ColdMap<DeclId, u32>,
     /// The typedef that names an unnamed class or enumeration for linkage
     /// purposes ([dcl.typedef]/9, clang's `TypedefNameForAnonDecl`): the
     /// tag's type prints with the typedef's name.
@@ -1677,6 +1681,7 @@ impl Default for ColdDeclData {
             declarator_end: ColdMap::new("declarator_end"),
             builtin_id: ColdMap::new("builtin_id"),
             gnu_lib_twin: ColdMap::new("gnu_lib_twin"),
+            lib_builtin: ColdMap::new("lib_builtin"),
             typedef_for_anon: ColdMap::new("typedef_for_anon"),
             decomp_bindings: ColdMap::new("decomp_bindings"),
             binding_decomp: ColdMap::new("binding_decomp"),
@@ -1692,7 +1697,7 @@ impl Default for ColdDeclData {
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 30] {
+    fn rows(&self) -> [MemRow; 31] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1714,6 +1719,7 @@ impl ColdDeclData {
             self.declarator_end.mem_row(),
             self.builtin_id.mem_row(),
             self.gnu_lib_twin.mem_row(),
+            self.lib_builtin.mem_row(),
             self.typedef_for_anon.mem_row(),
             self.decomp_bindings.mem_row(),
             self.binding_decomp.mem_row(),
@@ -2112,6 +2118,14 @@ impl DeclArena {
     /// spec/sema.md §5.4; recorded under `-stdlib=libstdc++` only).
     pub fn gnu_lib_twin(&self, d: DeclId) -> Option<u32> {
         self.cold.gnu_lib_twin.get(d).copied()
+    }
+
+    /// The `__builtin_` twin of `d` if `d` declares a C library function
+    /// clang recognizes as a library builtin (WP-419, spec/sema.md §5.4):
+    /// codegen lowers a call as clang's `EmitBuiltinExpr` lowers the
+    /// library builtin (`ceil(x)` -> `llvm.ceil`).
+    pub fn lib_builtin(&self, d: DeclId) -> Option<u32> {
+        self.cold.lib_builtin.get(d).copied()
     }
 
     /// The member list of context `ctx` (`None` if `ctx` owns none).
@@ -3703,11 +3717,39 @@ pub mod builtin {
         row(1010, "remquol", "LdLdLdi*", N),
         row(1077, "scalbnl", "LdLdi", N),
         row(1071, "scalblnl", "LdLdLi", N),
+        // WP-419: C23's `roundeven`, clang 22's `fmaximum_num` /
+        // `fminimum_num` ([`lib_min_compat`]) and the GNU `sincos`
+        // ([`lib_gnu_only`]; clang 22). The ids are kiln-private.
+        row(2048, "roundeven", "dd", N | C),
+        row(2049, "roundevenf", "ff", N | C),
+        row(2050, "roundevenl", "LdLd", N | C),
+        row(2051, "fmaximum_num", "ddd", N | C),
+        row(2052, "fmaximum_numf", "fff", N | C),
+        row(2053, "fmaximum_numl", "LdLdLd", N | C),
+        row(2054, "fminimum_num", "ddd", N | C),
+        row(2055, "fminimum_numf", "fff", N | C),
+        row(2056, "fminimum_numl", "LdLdLd", N | C),
+        row(2057, "sincos", "vdd*d*", N),
+        row(2058, "sincosf", "vff*f*", N),
+        row(2059, "sincosl", "vLdLd*Ld*", N),
     ];
 
     /// The [`LIB`] row of the C library function spelled `name`.
     pub fn lib_by_name(name: &str) -> Option<&'static Info> {
         LIB.iter().find(|e| e.name == name)
+    }
+
+    /// WP-419: the lowest `-fclang-compat` level that recognizes the
+    /// [`LIB`] function `id` (clang 19 lacks the `fmaximum_num` /
+    /// `fminimum_num` and `sincos` library builtins).
+    pub fn lib_min_compat(id: u32) -> u32 {
+        if (2051..=2059).contains(&id) { 22 } else { 0 }
+    }
+
+    /// WP-419: whether the [`LIB`] function `id` is recognized in the GNU
+    /// dialects only (clang `ALL_GNU_LANGUAGES`: `sincos`).
+    pub fn lib_gnu_only(id: u32) -> bool {
+        (2057..=2059).contains(&id)
     }
 
     /// WP-380: the `__builtin_` twin of the [`LIB`] function `name` when

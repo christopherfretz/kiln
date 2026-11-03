@@ -194,11 +194,28 @@ impl Sema<'_, '_> {
     /// chain). `NoThrowAttr` makes a call non-throwing for `noexcept`
     /// ([`Sema::can_throw`]) and `nounwind` in IR, as in clang; no
     /// `BuiltinAttr` is attached, so a call stays an ordinary call.
+    ///
+    /// WP-419: the declaration also records the row's `__builtin_` twin
+    /// (`ceil` -> `__builtin_ceil`), which redeclarations inherit. Codegen
+    /// lowers a call through the twin where clang's `EmitBuiltinExpr`
+    /// does (the errno-free rounding, `fabs`, `copysign`, `fma`, `fmax` /
+    /// `fmin`, `fmaximum_num` / `fminimum_num` functions); everywhere
+    /// else the call stays an ordinary call.
     pub(crate) fn add_known_function_attrs(&mut self, f: DeclId, attrs: &mut Vec<AttrId>) {
-        if self.ast.prev(f).is_some() {
+        if let Some(p) = self.ast.prev(f) {
+            if self.kind_of(f) == DeclKind::Function
+                && let Some(id) = self.ast.decls.lib_builtin(p)
+            {
+                let _ = self.ast.decls.cold.lib_builtin.insert(f, id);
+            }
             return;
         }
         let Some(info) = self.lib_builtin_info(f) else { return };
+        if let Some(id) =
+            builtin::by_name_at(&format!("__builtin_{}", info.name), self.clang_compat)
+        {
+            let _ = self.ast.decls.cold.lib_builtin.insert(f, id);
+        }
         let loc = self.ast.decls.get(f).loc();
         for (bit, kind) in [
             (builtin::attr::NOTHROW, AttrKind::NOTHROW),
@@ -461,13 +478,20 @@ impl Sema<'_, '_> {
     /// library-builtin recognition in `ActOnFunctionDeclarator`, which
     /// gives it a builtin id): a `Function` in a namespace-scope context
     /// with C language linkage, named in the table and with the row's type
-    /// ignoring the exception specification.
+    /// ignoring the exception specification; WP-419: and declared at the
+    /// `-fclang-compat` level and in the dialect ([`builtin::lib_min_compat`],
+    /// [`builtin::lib_gnu_only`]).
     pub(crate) fn lib_builtin_info(&mut self, f: DeclId) -> Option<builtin::Info> {
         if self.kind_of(f) != DeclKind::Function {
             return None;
         }
         let name = self.ast.decls.get(f).name().as_ident()?;
         let info = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied()?;
+        if builtin::lib_min_compat(info.id) > self.clang_compat
+            || (builtin::lib_gnu_only(info.id) && !self.gnu)
+        {
+            return None;
+        }
         self.c_linkage_file_scope_fn_of_type(f, info.sig).then_some(info)
     }
 

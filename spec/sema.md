@@ -2947,10 +2947,23 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   (`Ast::has_nothrow_attr` reads the chain). A `NoThrow` callee makes
   a call non-throwing (`can_throw`, so `noexcept(strlen(s))` is
   true). No `Builtin` attribute is attached, so the call stays an
-  ordinary call: clang's lowering of recognized `memcpy`/`fabs`/`abs`
-  calls to intrinsics and its implicit `format` / `alloc_size`
-  attributes on the library names (`-Wformat*` on `sprintf`) are not
-  modelled; only the `__builtin_` printf rows carry `format` (below).
+  ordinary call everywhere but in codegen: WP-419 records the row's
+  `__builtin_` twin (`Decls::lib_builtin`, `ceil` -> `__builtin_ceil`,
+  at the `-fclang-compat` level; inherited by redeclarations) and
+  codegen lowers a direct call of the errno-free `<math.h>` functions
+  as the twin (spec/codegen.md §3, "library builtins"). WP-419 adds
+  C23's `roundeven{,f,l}` (clang 19 and 22), clang 22's
+  `fmaximum_num` / `fminimum_num` `{,f,l}` (`builtin::lib_min_compat`:
+  not recognized at `-fclang-compat=19`) and the GNU `sincos{,f,l}`
+  (clang 22, `ALL_GNU_LANGUAGES`: recognized under `-std=gnu++*` only,
+  `builtin::lib_gnu_only`; `NoThrow`, a call is `nounwind`). A call in
+  a constant expression is still a call of a non-constexpr function
+  (clang 19 and 22 reject `constexpr double d = ceil(1.5);`). Not
+  modelled: clang's lowering of recognized `memcpy` / `memmove` /
+  `memset` / `abs` / `labs` / `llabs` calls (and clang 22's `modf`) to
+  intrinsics, and its implicit `format` / `alloc_size` attributes on
+  the library names (`-Wformat*` on `sprintf`); only the `__builtin_`
+  printf rows carry `format` (below).
 - **GCC's implicit library builtins** (WP-380, `record_gnu_lib_twin`;
   `Sema::gnu_lib_builtins`, set by the driver for `-stdlib=libstdc++`,
   the default): libstdc++'s `<cmath>` double overloads are `using

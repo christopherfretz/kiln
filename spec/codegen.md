@@ -392,6 +392,19 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       to `a / 8` (`tests/codegen/builtins_alloca.cpp`);
     - `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf`
       are library builtins (`tests/codegen/builtins_printf_lib.cpp`).
+    - recognized C library functions (WP-419, clang `EmitBuiltinExpr`
+      for a library builtin; spec/sema.md §5.4): a direct call of a
+      declaration with a `lib_builtin` twin whose `__builtin_` form is an
+      LLVM intrinsic (`ceil`, `floor`, `trunc`, `round`, `rint`,
+      `nearbyint`, `roundeven`, `fabs`, `copysign`, `fma`, `fmax` /
+      `fmin` -> `llvm.maxnum` / `llvm.minnum`, clang 22's `fmaximum_num`
+      / `fminimum_num`, each `{,f,l}`) is emitted as the twin
+      (`builtins::lib_intrinsic`) at every `-O` level, a definition of
+      the function included; the call is never folded (clang does not
+      constant-evaluate the library names). Under clang's default
+      `-fmath-errno` the errno-setting ones (`sqrt`, `sin`, `exp`, ...)
+      stay library calls; kiln has no `-fno-math-errno`
+      (`tests/codegen/lib_float_intrinsics.cpp`, `_gnu.cpp`).
     - library builtins (WP-282, clang `EmitBuiltinExpr`):
       `__builtin_assume_aligned(p, a[, off])` returns `p` and emits
       `llvm.assume(i1 true) ["align"(ptr p, i64 a[, i64 off])]`

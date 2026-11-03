@@ -166,6 +166,17 @@ fn fp_intrinsic(b: u32) -> Option<(&'static str, usize)> {
     })
 }
 
+/// WP-419: the `__builtin_` twin a call of the recognized C library
+/// function `d` lowers as (clang `EmitBuiltinExpr` for a library builtin
+/// whose `__builtin_` form is an LLVM intrinsic: `ceil(x)` ->
+/// `llvm.ceil`), if any. Under clang's default `-fmath-errno` only the
+/// errno-free functions are intrinsics, which are exactly the
+/// [`fp_intrinsic`] ones; the others stay library calls.
+pub(crate) fn lib_intrinsic(ast: &Ast, d: DeclId) -> Option<u32> {
+    let t = ast.decls.lib_builtin(d)?;
+    fp_intrinsic(t).is_some().then_some(t)
+}
+
 /// The `llvm.is.fpclass` test of a classification builtin
 /// (`llvm::FPClassTest`).
 fn fp_class_test(b: u32) -> Option<i128> {
