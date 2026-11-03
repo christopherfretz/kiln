@@ -54,6 +54,7 @@ sema_arith_float_unordered = Error (3) "invalid {0:arithmetic between|bitwise op
 sema_arith_function_pointer = Extension [GnuPointerArith] (4) "arithmetic on{0: a|} pointer{0:|s} to{2: the|} function type{2:|s} {1}{2:| and {3}} is a GNU extension";
 sema_arith_function_pointer_cxx = Error (4) "arithmetic on{0: a|} pointer{0:|s} to{2: the|} function type{2:|s} {1}{2:| and {3}}";
 sema_arith_incomplete_pointee = Error (1) "arithmetic on a pointer to an incomplete type {0}";
+sema_arith_sizeless_pointee = Error (1) "arithmetic on a pointer to sizeless type {0}";
 sema_arith_void_pointer = Extension [GnuPointerArith] (1) "arithmetic on{0: a pointer| pointers} to void is a GNU extension";
 // [expr.add]/1: in C++ a `void` or function pointee is an error, not
 // the GNU extension of C (WP-219)

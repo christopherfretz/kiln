@@ -758,6 +758,9 @@ impl Sema<'_, '_> {
         let dep = self.ast.types.arg_list_flags(written).intersects(TypeFlags::DEPENDENT)
             || args.iter().any(|&a| self.is_pack_expansion_arg(a));
         if dep {
+            // Checked against the parameters even so (clang
+            // `CheckTemplateArgumentList`; spec/sema-templates.md §3.2).
+            self.check_dependent_template_args_at(c, &args, arg_locs, loc)?;
             return Ok(self.builder().concept_spec_expr(c, written, QualType::BOOL, loc));
         }
         let conv = self.check_template_args(c, &args, arg_locs, loc)?;

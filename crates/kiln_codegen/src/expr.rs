@@ -455,6 +455,10 @@ impl Cg<'_> {
                 let lv = self.emit_lvalue(e)?;
                 self.load_lv(lv)
             }
+            // clang `VisitAddrLabelExpr`.
+            ExprKind::AddrLabelExpr => {
+                V::C(self.addr_of_label(ast.exprs.addr_label(e), self.loc_of(e))?)
+            }
             k => return err(self.loc_of(e), format!("expression {k:?} is not supported yet")),
         }))
     }
@@ -3055,7 +3059,17 @@ impl Cg<'_> {
             let p = self.emit_scalar(callee_e)?;
             let pq = ast.exprs.get(callee_e).ty();
             let fty = ast.types.pointee(pq).expect("function pointer");
-            (p, fty, false, None)
+            // A callee that folded to a function (a constant `int (&)(int)`
+            // naming one) is that function, as clang's `CalleePtr` is
+            // (`EmitCall` / `TryMarkNoThrow` consult its `nounwind`).
+            let fid = match p {
+                V::C(v) => match v.get() {
+                    kiln_llvm::ValueRef::Func(f) => Some(f),
+                    _ => None,
+                },
+                _ => None,
+            };
+            (p, fty, false, fid)
         };
         let mut sig = self.call_sig(fty, extern_c, &arg_tys);
         let mut extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();

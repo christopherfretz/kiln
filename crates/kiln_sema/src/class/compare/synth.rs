@@ -606,6 +606,7 @@ impl Sema<'_, '_> {
                 sub(d.init) || expr(d.cond) || expr(d.inc) || sub(d.body)
             }
             StmtKind::ReturnStmt => expr(st.return_value(s)),
+            StmtKind::IndirectGotoStmt => expr(Some(st.indirect_goto_target(s))),
             StmtKind::DeclStmt => {
                 self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)).any(|d| expr(var_init(d)))
             }

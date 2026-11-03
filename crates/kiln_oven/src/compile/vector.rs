@@ -89,7 +89,14 @@ impl Compiler<'_> {
             return None;
         }
         ast.decls.builtin_id(ast.exprs.decl(c)).filter(|&b| {
-            matches!(b, id::ELEMENTWISE_ABS | id::ELEMENTWISE_MAX | id::ELEMENTWISE_MIN)
+            matches!(
+                b,
+                id::ELEMENTWISE_ABS
+                    | id::ELEMENTWISE_MAX
+                    | id::ELEMENTWISE_MIN
+                    | id::ELEMENTWISE_ADD_SAT
+                    | id::ELEMENTWISE_SUB_SAT
+            )
         })
     }
 
@@ -107,6 +114,18 @@ impl Compiler<'_> {
     ) {
         use kiln_ast::decl::builtin as id;
         let [a, b] = r;
+        if matches!(bid, id::ELEMENTWISE_ADD_SAT | id::ELEMENTWISE_SUB_SAT) {
+            let k = match (bid == id::ELEMENTWISE_ADD_SAT, s) {
+                (true, true) => bi::SADD_SAT,
+                (true, false) => bi::UADD_SAT,
+                (false, true) => bi::SSUB_SAT,
+                (false, false) => bi::USUB_SAT,
+            };
+            let at = self.begin(e);
+            let aux = bi::INT_OP | (w | k << 8) << 8;
+            self.emit_site(Op::Builtin, aux, &[d, a, b, d, 0, 0], e, at);
+            return;
+        }
         let aux = int_aux(w as u8, s);
         self.emit(Op::Mov, 0, &[d, a]);
         let (c, other) = if bid == id::ELEMENTWISE_ABS {
