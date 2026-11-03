@@ -460,7 +460,20 @@ f(int* _Nullable);`), the `-Wnullability-completeness` family, and the
      constant array, `-Wvla-cxx-extension` at the bound (with the strict
      evaluation's notes) and the ExtWarn "variable length array folded
      to constant array as an extension" [-Wgnu-folding-constant] at the
-     declarator name (WP-165)
+     declarator name (WP-165). One that does not fold there (WP-407,
+     `vla_at_file_scope`) is `-Wvla-cxx-extension` at the bound with the
+     notes, then an error at the declarator name as clang's declaration
+     checks give it: "function declaration cannot have variably modified
+     type" when the declarator's outermost chunk is a function; "fields
+     must have a constant size: ..." for a non-static data member
+     (`Sema::declarator_field`); "variable length array declaration not
+     allowed at file scope" when every chunk outside the bound is an
+     array (variables, static data members, typedefs); "variably
+     modified type declaration not allowed at file scope" otherwise
+     (`int (*p)[n]`). Not yet modelled: an alias-declaration or a
+     namespace-scope type-id (`using V = int[n];`, a cast) still says
+     `sema_vla_unsupported`, and `int z[2][n]` lacks clang's second
+     warning at the outer `[`
    - variable length arrays in a function (WP-183, clang `BuildArrayType`):
      a non-constant bound of a block-scope declarator (variable, typedef,
      alias, type-id) makes a `VariableArray` even when it would fold.
@@ -4096,6 +4109,21 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
 - Tests: `tests/conformance/expr.call/variadic-void-argument.cpp`,
   `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`,
   `tests/conformance/expr.const/non-literal-argument.cpp`.
+- Before C++23 a constexpr function's body shall not define a variable of
+  non-literal type ([dcl.constexpr]/3; clang `CheckConstexprDeclStmt`):
+  `check_constexpr_body_vars` (crates/kiln_sema/src/constexpr_body.rs)
+  reports the first one, "variable of non-literal type 'T' cannot be
+  defined in a constexpr {function|constructor} before C++23", with the
+  type's "not literal because" notes, and marks the function invalid.
+  Variables whose own declaration was already diagnosed are checked too;
+  function templates, their specializations and lambda call operators are
+  not checked yet (open). A local whose initialization sema
+  rejected (no viable constructor) is marked invalid, and evaluating its
+  declaration fails with no note (spec/oven.md "Classes").
+  From C++23 clang 22 no longer applies `CheckLiteralType` during
+  evaluation (spec/oven.md); clang 19 does. Tests:
+  `tests/conformance/dcl.constexpr/non-literal-local-cxx{20,23,23-19}.cpp`,
+  `tests/conformance/expr.const/invalid-local-silent.cpp`.
 
 ### 5.21 Template rules from the libstdc++ clusters (WP-323)
 - **Default arguments in dependent template-ids** ([temp.arg.general]/9,
@@ -4470,6 +4498,24 @@ Each rule names the libc++ test it fixed and its corpus test.
   "value of type 'S' is not implicitly convertible to 'int'", at the
   argument (tuple_size_incomplete). Test:
   `tests/conformance/temp.arg.nontype/class-arg-no-conversion.cpp`.
+- **Conversions a non-type argument may not use** ([temp.arg.nontype]/2,
+  [expr.const]/12; clang `CheckConvertedConstantConversions`): the
+  standard conversion sequence (the one after a user-defined conversion)
+  may use a pointer or pointer-to-member conversion only from
+  `std::nullptr_t` (so `&s` is no `const void *`, `const B *` from `D *`,
+  `int D::*` from `int B::*`, nor `0` a pointer), and a boolean
+  conversion only from an integral or unscoped enumeration type.
+  "conversion from 'S *' to 'const void *' is not allowed in a converted
+  constant expression" at the argument's start, plus (clang 22)
+  "template parameter is declared here"; an explicitly specified
+  argument of a function template is an "invalid explicitly-specified
+  argument" deduction failure. A cast (`(const void *)&s`) or a
+  `const void *` constant is accepted (WP-407). Not yet modelled: the
+  "while checking a default template argument used here" note when the
+  failing argument is a default (clang notes the `>` of the
+  template-id, which `check_template_args` does not receive). Tests:
+  `tests/conformance/temp.arg.nontype/pointer-conversion-not-allowed.cpp`
+  (+`-clang22`), `.../pointer-conversion-allowed.cpp`.
 - **Non-type parameter types substituted from prior arguments**
   ([temp.param]/7):
   - `template <class T, T V>`: `V`'s substituted type is checked at the

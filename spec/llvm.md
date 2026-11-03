@@ -251,6 +251,13 @@ order (functions in module order, then call sites in instruction order) and
 listed after the functions as `attributes #N = { ... }` (inside a group,
 `alignstack(16)` prints as `alignstack=16`, as LLVM writes it).
 
+`Module::ir_version` (default 19) is the LLVM release whose textual IR is
+written. At 21 or above `attr_set` replaces the `nocapture` flag by
+`Attr::CapturesNone`, printed `captures(none)` (LLVM 21's spelling, which
+LLVM 19 cannot parse) in its integer-attribute position after
+`allocsize`; kiln_codegen sets it to the backend's major at
+`-fclang-compat=22` (spec/codegen.md §6a; WP-402).
+
 ## 6. Intrinsics
 Intrinsics are ordinary declarations whose name starts with `llvm.`.
 `kiln_llvm::intrinsics` declares the ones C++ codegen needs with LLVM's

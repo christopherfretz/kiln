@@ -75,6 +75,7 @@ sema_field_designator_unknown = Error (2) "field designator '{0}' does not refer
 sema_field_incomplete = Error (1) "field has incomplete type {0}";
 sema_field_sizeless = Error (1) "field has sizeless type {0}";
 sema_field_uninit_use = Warning [Uninitialized] (1) "field {0} is uninitialized when used here";
+sema_field_variable_size = Error (0) "fields must have a constant size: 'variable length array in structure' extension will never be supported";
 sema_flexible_array_empty_aggregate = Extension [GnuEmptyStruct] (2) "flexible array member '{0}' in otherwise empty {1:struct|class|union} is a GNU extension";
 sema_flexible_array_in_array = Extension [FlexibleArrayExtensions] (1) "{0} may not be used as an array element due to flexible array member";
 sema_flexible_array_in_struct = Extension [FlexibleArrayExtensions] (1) "'{0}' may not be nested in a struct due to flexible array member";

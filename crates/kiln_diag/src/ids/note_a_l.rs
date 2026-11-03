@@ -73,6 +73,8 @@ note_defaulted_cmp_cannot_deduce_callee = Note (2) "selected 'operator<=>' for {
 note_defaulted_cmp_inaccessible = Note (6) "defaulted '{0}' is implicitly deleted because it would invoke a {1:private|protected} '{2}'{3: member of {4}| to compare base class {5}| member of {4} to compare member {5}}";
 note_defaulted_cmp_no_viable = Note (4) "defaulted '{0}' is implicitly deleted because there is no viable {1:three-way comparison function|'operator=='} for {2:|member |base class }{3}";
 note_defaulted_cmp_no_viable_synth = Note (1) "three-way comparison cannot be synthesized because there is no viable function for {0:'=='|'<'} comparison";
+note_defaulted_cmp_not_constexpr = Note (2) "non-constexpr comparison function would be used to compare {0:|member {1}|base class {1}}";
+note_defaulted_cmp_not_constexpr_here = Note (0) "non-constexpr comparison function declared here";
 note_defaulted_cmp_not_rewritten_callee = Note (1) "defaulted '{0}' is implicitly deleted because this non-rewritten comparison function would be the best match for the comparison";
 note_defaulted_cmp_not_rewritten_conversion = Note (1) "defaulted '{0}' is implicitly deleted because a builtin comparison function using this conversion would be the best match for the comparison";
 note_defaulted_cmp_ref_member = Note (2) "defaulted '{0}' is implicitly deleted because class {1} has a reference member";

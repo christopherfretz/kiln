@@ -240,19 +240,22 @@ impl Sema<'_, '_> {
                     InitEntity::Var,
                 )
             };
-            match e {
-                Some(e) => {
-                    // A full-expression ([intro.execution]/5.4): its
-                    // immediate invocations are evaluated.
-                    self.note_var_init_full_expr(v);
-                    self.finish_immediate_invocations(e);
-                    let e = self.finish_cleanups(e);
-                    if self.ast.decls.var(v).is_some_and(|x| x.init.is_none()) {
-                        let _ = self.builder().set_var_init(v, e);
-                        self.ast.decls.mark_var(v, VarSpec::new().with_init_style(InitStyle::Call));
-                    }
+            if let Some(e) = e {
+                // A full-expression ([intro.execution]/5.4): its
+                // immediate invocations are evaluated.
+                self.note_var_init_full_expr(v);
+                self.finish_immediate_invocations(e);
+                let e = self.finish_cleanups(e);
+                if self.ast.decls.var(v).is_some_and(|x| x.init.is_none()) {
+                    let _ = self.builder().set_var_init(v, e);
+                    self.ast.decls.mark_var(v, VarSpec::new().with_init_style(InitStyle::Call));
                 }
-                None => ok = false,
+            } else {
+                // clang `InitializationSequence::Diagnose` makes the
+                // variable invalid: a constant evaluation reaching its
+                // definition fails with no note (spec/oven.md).
+                self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
+                ok = false;
             }
         }
         if ok

@@ -215,6 +215,10 @@ pub enum Attr {
     Align(u64),
     /// `allocsize(N[, M])`.
     AllocSize(u32, Option<u32>),
+    /// `captures(none)`: LLVM 21+'s spelling of `nocapture`
+    /// ([`crate::Module::ir_version`]; an integer attribute, so it sorts
+    /// after the flags).
+    CapturesNone,
     /// `dereferenceable(N)`.
     Dereferenceable(u64),
     /// `dereferenceable_or_null(N)`.
@@ -260,6 +264,7 @@ impl Attr {
             Attr::Align(n) => write!(w, "align {n}"),
             Attr::AllocSize(a, None) => write!(w, "allocsize({a})"),
             Attr::AllocSize(a, Some(b)) => write!(w, "allocsize({a},{b})"),
+            Attr::CapturesNone => w.write_str("captures(none)"),
             Attr::Dereferenceable(n) => write!(w, "dereferenceable({n})"),
             Attr::DereferenceableOrNull(n) => write!(w, "dereferenceable_or_null({n})"),
             Attr::Memory(m) => m.write(w),
