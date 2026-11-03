@@ -39,6 +39,7 @@ always present).
 | `BaseSpec(DeclId, u32)` | the `i`-th direct base-specifier of a class | first declaration of the class, index | `base` |
 | `DataMemberSpec(DmsId)` | a data member description (reserved: M6-08) | id | `data-member-spec` |
 | `Annotation(AnnId)` | an annotation (reserved) | id | `annotation` |
+| `FnParam(DeclId, u32)` | the `i`-th parameter of a function (P3096 `parameters_of`, → WP-478) | first declaration of the function, index | `parameter` |
 
 Declaration-keyed variants (`Decl`, `Namespace`, `NamespaceAlias`) are
 found through a dense `DeclId index -> ReflectionId` vector (4 B per
@@ -159,6 +160,7 @@ template-argument printing use the same `<form>` (`dump/names.rs`):
 | `Decl`, `Namespace`, `NamespaceAlias`, `Template` | `^^` + the qualified name (`^^ns::f`, `^^S::m`) |
 | `Value` / `Object` | `^^(value of type T)` / `^^(object of type T)` |
 | `BaseSpec` | `^^(base #i of C)` |
+| `FnParam` | `^^(parameter #i of f)` |
 | `DataMemberSpec` / `Annotation` | `^^(data member spec #n)` / `^^(annotation #n)` |
 
 The form is stable: tests may match it. Golden:
