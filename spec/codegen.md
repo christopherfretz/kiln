@@ -47,7 +47,7 @@ panic and never silently wrong IR.
   re-folded initializer is never registered for constant destruction.
   A vector initializer is re-folded the same way (`tryEmitPrivate`
   evaluates it as an rvalue: `i4 gv = cv;` with `const i4 cv = {..}` is
-  a static initializer; WP-453, §7u). Aggregates are not re-folded (they
+  a static initializer; WP-453, §7w). Aggregates are not re-folded (they
   keep their dynamic initializer).
   Uses of a const integral variable whose constant initialization failed
   fold to that same non-manifest value (spec/oven.md "Lax folds"), so
