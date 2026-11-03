@@ -2833,6 +2833,20 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     (`ext.gnu.builtins/shufflevector-mask-form.cpp`).
   - `__builtin_powi{,f,l}`, `__builtin_copysignf16` and the `*f128` math
     family are ordinary calls (table rows in spec/sema-templates.md §9.5).
+  - The `__fp16` libm builtins (WP-403; `kiln_ast` `builtin::F16_INTR`
+    and `F16_LIBM`, clang `Builtins.td`'s `f16` spellings): `ceil`,
+    `floor`, `trunc`, `round`, `roundeven`, `rint`, `fabs`, `fma`,
+    `fmax`, `fmin`, `frexp`, `canonicalize` (`const`) and `acos`, `asin`,
+    `atan`, `cos`, `cosh`, `exp`, `exp2`, `exp10`, `fmod`, `ldexp`,
+    `log`, `log2`, `log10`, `pow`, `sin`, `sinh`, `tan`, `tanh` (`f16`
+    suffix, `__fp16` parameters and result, `frexpf16(__fp16, int*)`,
+    `ldexpf16(__fp16, int)`), all `nothrow`. Declared by
+    `builtin::by_name_at(name, clang_compat)`: `atan2f16`, `sincosf16`,
+    `fmaximum_numf16` and `fminimum_numf16` exist only at
+    `-fclang-compat=22` (`builtin::min_compat`; clang 19 lacks them, so
+    a use is an undeclared identifier there), matching `__has_builtin` at
+    each level. Folding: spec/oven.md "Builtins"; lowering:
+    spec/codegen.md (`tests/conformance/c.math/f16-builtins*.cpp`).
 - **Format strings** (WP-282; `format_string.rs`, clang
   `CheckPrintfHandler`): a call whose callee has a `format(printf, F, A)`
   attribute with `A` > 0 and whose argument `F` is an ordinary string
@@ -4381,6 +4395,32 @@ Each rule names the libc++ test it fixed and its corpus test.
   affected. Tests: `expr.eq/p2865-array-comparison*.cpp`.
 - P0847 lambdas and P2036: spec/sema-lambda.md §2, §3.1, §4.4. P2360
   and P3176: spec/parse.md. P0963: §4.9. P2741: §4.6.
+
+### 5.25 `-Wconstant-logical-operand` (`expr.rs`, WP-403)
+
+clang's `CheckLogicalOperands`, on the unconverted operands of a built-in
+`&&` / `||` ([expr.log.and]/1, [expr.log.or]/1), before their contextual
+conversion to `bool` (`check_constant_logical_operand`):
+- If either operand, as written (no parentheses stripped), names an
+  enumerator whose value is not 0 or 1, nothing is diagnosed (that is
+  clang's default-off `-Wint-in-bool-context`, not implemented).
+- Otherwise `sema_constant_logical_operand` ("use of logical '&&' with
+  constant operand", group `constant-logical-operand`, on by default) is
+  issued at the operator, with the right operand's range, when the left
+  operand's type is an integer or unscoped enumeration type other than
+  `bool`, the right one's too and it is not value-dependent, the
+  operator is not spelled by a macro, no template is being instantiated
+  (a definition's non-dependent operands are checked), and the right
+  operand folds laxly to an integer (`Sema::fold_rvalue_int`, clang
+  `EvaluateAsInt`; `__builtin_constant_p` of a non-constant does not
+  fold there, spec/oven.md "Trial evaluation"). The value must be other
+  than 0 or 1 when the right operand is `bool` or its location is a
+  macro's; any value warns otherwise.
+- Notes: `note_logical_instead_of_bitwise_change_operator` ("use '&'
+  for a bitwise operation", `|` for `||`) replacing the operator, and
+  for `&&` only `note_logical_instead_of_bitwise_remove_constant`
+  removing from the end of the left operand to the end of the right.
+- Tests: `expr.log.and/constant-operand*.cpp`, `expr.log.or/constant-operand.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
