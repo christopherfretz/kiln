@@ -229,7 +229,9 @@ impl Substituter<'_, '_, '_> {
                     init_vars.push((v, None));
                     match self.initializer(i, style)? {
                         Some(x) => Some((style, x)),
-                        None => return self.unimplemented("this init-capture in a template", c.loc),
+                        None => {
+                            return self.unimplemented("this init-capture in a template", c.loc);
+                        }
                     }
                 }
                 None => None,

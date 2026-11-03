@@ -5611,49 +5611,14 @@ impl Sema<'_, '_> {
         direct: bool,
     ) -> Option<QualType> {
         use crate::templ::auto::AutoFail;
-        let (items, kind, lbrace) = auto_init_items(init, direct);
-        // [temp.deduct.call]/6: every member of an overload set deduces
-        // `auto`, so nothing is deduced (a placeholder in a function
-        // declarator selecting one member is not implemented) -- except
-        // that a set of one non-template function deduces from it,
-        // explicit template arguments ignored (clang's
-        // `ResolveOverloadForDeduction`; only typo correction builds one,
-        // and the initialization then fails against the deduced type).
-        let mut items = items;
-        for it in items.iter_mut().flatten() {
-            if let Some((_, d, _)) = self.single_overload_candidate(*it) {
-                let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
-                let at = self.ast.exprs.get(*it).loc();
-                *it = self.builder().decl_ref(
-                    d,
-                    ty,
-                    at,
-                    None,
-                    kiln_ast::expr::NonOdrUse::None,
-                    kiln_ast::expr::ExprFlags::NONE,
-                );
-            }
-        }
+        let (mut items, kind, lbrace) = auto_init_items(init, direct);
+        self.resolve_single_overloads(&mut items);
         let overload = items
             .iter()
             .flatten()
             .copied()
             .find(|&e| self.ast.exprs.get(e).ty() == QualType::OVERLOAD);
-        // clang's `err_auto_var_init_paren_braces`: a direct initializer
-        // whose only element is itself braced, `auto x({1});` or
-        // `auto x{{1}};` (a type-dependent one included).
-        let paren_braces = match init {
-            Initializer::Paren(es, ..) if es.len() == 1 => {
-                (self.ast.exprs.get(es[0]).kind() == ExprKind::InitListExpr)
-                    .then_some(0usize)
-            }
-            Initializer::List(l) if direct && l.items.len() == 1 => {
-                let it = &l.items[0];
-                (it.designator.is_empty() && matches!(it.value, crate::init::InitValue::List(_)))
-                    .then_some(1usize)
-            }
-            _ => None,
-        };
+        let paren_braces = self.auto_paren_braces(init, direct);
         let fail = match (overload, paren_braces) {
             (_, Some(nested)) => AutoFail::ParenBraces(nested),
             (Some(e), None) => AutoFail::Incompatible(e),
@@ -5706,35 +5671,10 @@ impl Sema<'_, '_> {
         let name = self.decl_name(v);
         // An init-capture ([expr.prim.lambda.capture]/6) is reported as
         // clang's `err_init_capture_*` (the capture is named, not its type).
-        if self.init_entity == Some(crate::init::entity::CAPTURE) {
-            let msg = match fail {
-                AutoFail::Error => return Some(QualType::ERROR),
-                AutoFail::Incompatible(e) => Some(
-                    self.diag(DiagId::sema_init_capture_deduction_failure, loc)
-                        .arg(name.clone())
-                        .arg(self.ty_arg(self.ast.exprs.get(e).ty())),
-                ),
-                AutoFail::Multiple(at) => Some(
-                    self.diag(DiagId::sema_init_capture_multiple_expressions, at).arg(name.clone()),
-                ),
-                AutoFail::Empty => Some(
-                    self.diag(DiagId::sema_init_capture_no_expression, lbrace).arg(name.clone()),
-                ),
-                AutoFail::FromInitList => Some(
-                    self.diag(DiagId::sema_init_capture_deduction_failure_from_init_list, loc)
-                        .arg(name.clone()),
-                ),
-                AutoFail::ParenBraces(nested) => Some(
-                    self.diag(DiagId::sema_init_capture_paren_braces, lbrace)
-                        .arg(name.clone())
-                        .arg(nested),
-                ),
-                _ => None,
-            };
-            if let Some(msg) = msg {
-                self.emit(msg);
-                return None;
-            }
+        if self.init_entity == Some(crate::init::entity::CAPTURE)
+            && self.report_init_capture_auto_fail(fail, &name, loc, lbrace)
+        {
+            return None;
         }
         let msg = match fail {
             AutoFail::Error => return Some(QualType::ERROR),
@@ -5770,6 +5710,79 @@ impl Sema<'_, '_> {
         };
         self.emit(msg);
         None
+    }
+
+    /// [temp.deduct.call]/6 for a placeholder's initializer items: every
+    /// member of an overload set deduces `auto`, so nothing is deduced (a
+    /// placeholder in a function declarator selecting one member is not
+    /// implemented) -- except that a set of one non-template function
+    /// deduces from it, explicit template arguments ignored (clang's
+    /// `ResolveOverloadForDeduction`; only typo correction builds one, and
+    /// the initialization then fails against the deduced type).
+    fn resolve_single_overloads(&mut self, items: &mut [Option<ExprId>]) {
+        for it in items.iter_mut().flatten() {
+            if let Some((_, d, _)) = self.single_overload_candidate(*it) {
+                let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                let at = self.ast.exprs.get(*it).loc();
+                *it = self.builder().decl_ref(
+                    d,
+                    ty,
+                    at,
+                    None,
+                    kiln_ast::expr::NonOdrUse::None,
+                    kiln_ast::expr::ExprFlags::NONE,
+                );
+            }
+        }
+    }
+
+    /// clang's `err_auto_var_init_paren_braces`: a direct initializer
+    /// whose only element is itself braced, `auto x({1});` (0) or
+    /// `auto x{{1}};` (1), a type-dependent one included.
+    fn auto_paren_braces(&self, init: &Initializer, direct: bool) -> Option<usize> {
+        match init {
+            Initializer::Paren(es, ..) if es.len() == 1 => {
+                (self.ast.exprs.get(es[0]).kind() == ExprKind::InitListExpr).then_some(0usize)
+            }
+            Initializer::List(l) if direct && l.items.len() == 1 => {
+                let it = &l.items[0];
+                (it.designator.is_empty() && matches!(it.value, crate::init::InitValue::List(_)))
+                    .then_some(1usize)
+            }
+            _ => None,
+        }
+    }
+
+    /// Reports placeholder-deduction failure `fail` of init-capture `name`
+    /// in clang's `err_init_capture_*` wording; false for a failure with
+    /// no capture form (reported as for a variable).
+    fn report_init_capture_auto_fail(
+        &mut self,
+        fail: crate::templ::auto::AutoFail,
+        name: &str,
+        loc: Loc,
+        lbrace: Loc,
+    ) -> bool {
+        use crate::templ::auto::AutoFail;
+        let msg = match fail {
+            AutoFail::Incompatible(e) => self
+                .diag(DiagId::sema_init_capture_deduction_failure, loc)
+                .arg(name)
+                .arg(self.ty_arg(self.ast.exprs.get(e).ty())),
+            AutoFail::Multiple(at) => {
+                self.diag(DiagId::sema_init_capture_multiple_expressions, at).arg(name)
+            }
+            AutoFail::Empty => self.diag(DiagId::sema_init_capture_no_expression, lbrace).arg(name),
+            AutoFail::FromInitList => {
+                self.diag(DiagId::sema_init_capture_deduction_failure_from_init_list, loc).arg(name)
+            }
+            AutoFail::ParenBraces(nested) => {
+                self.diag(DiagId::sema_init_capture_paren_braces, lbrace).arg(name).arg(nested)
+            }
+            _ => return false,
+        };
+        self.emit(msg);
+        true
     }
 
     /// A `constexpr` variable's initializer must be a constant expression

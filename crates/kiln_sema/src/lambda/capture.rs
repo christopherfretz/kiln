@@ -818,14 +818,15 @@ impl Sema<'_, '_> {
         let declared = if by_ref { self.ast.types.lvalue_ref_to(auto) } else { auto };
         let ctx = self.ctx;
         let independent = self.is_placeholder_name(name);
-        let v = self.builder().init_capture_var(ctx, DeclName::ident(name), loc, declared, independent);
+        let v =
+            self.builder().init_capture_var(ctx, DeclName::ident(name), loc, declared, independent);
         self.ast.decls.mark_var(v, VarSpec::new().with_init_style(style));
         let index = self.ast.exprs.lambdas.get(id).captures.len();
         let kind = if by_ref { CaptureKind::ByRef } else { CaptureKind::ByCopy };
         let ellipsis = ellipsis.filter(|&l| {
-            let packs = self.initializer_exprs(&init).iter().any(|&e| {
-                self.ast.exprs.get(e).deps().contains(ExprDeps::UNEXPANDED_PACK)
-            });
+            let packs = Self::initializer_exprs(&init)
+                .iter()
+                .any(|&e| self.ast.exprs.get(e).deps().contains(ExprDeps::UNEXPANDED_PACK));
             if !packs {
                 self.error(DiagId::sema_pack_expansion_without_packs, l);
             }
@@ -875,7 +876,7 @@ impl Sema<'_, '_> {
     }
 
     /// The top-level expressions of initializer `init`.
-    fn initializer_exprs(&self, init: &Initializer) -> Vec<ExprId> {
+    fn initializer_exprs(init: &Initializer) -> Vec<ExprId> {
         match init {
             Initializer::Expr(e) => vec![*e],
             Initializer::Paren(es, ..) => es.clone(),
@@ -909,8 +910,8 @@ impl Sema<'_, '_> {
             self.lambda_scope_mut(id).map(|s| std::mem::take(&mut s.init_caps)).unwrap_or_default();
         let vars: Vec<(Symbol, DeclId)> = caps.iter().map(|ic| (ic.name, ic.var)).collect();
         debug_assert!(
-            caps.iter().all(|ic| self.ast.exprs.lambdas.get(id).captures[ic.index].var
-                == Some(ic.var)),
+            caps.iter()
+                .all(|ic| self.ast.exprs.lambdas.get(id).captures[ic.index].var == Some(ic.var)),
             "init-capture variable recorded on its capture"
         );
         if let Some(s) = self.lambda_scope_mut(id) {
