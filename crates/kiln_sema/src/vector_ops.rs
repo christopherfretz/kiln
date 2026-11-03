@@ -54,7 +54,7 @@ impl Sema<'_, '_> {
     }
 
     /// The size in bits of a scalar type (`None` if incomplete).
-    fn scalar_bits(&self, q: QualType) -> Option<u64> {
+    pub(crate) fn scalar_bits(&self, q: QualType) -> Option<u64> {
         crate::target::size_align(&self.ast, q, self.abi()).map(|(s, _)| s * 8)
     }
 
@@ -174,9 +174,10 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `hasIntegerRepresentation`: an integer or unscoped
-    /// enumeration type, or a vector of integers.
-    fn has_integer_repr(&self, q: QualType) -> bool {
+    /// enumeration type, or a vector (GNU or SVE) of integers.
+    pub(crate) fn has_integer_repr(&self, q: QualType) -> bool {
         let q = self.vector_parts(q).map_or(q, |p| p.elem);
+        let q = self.sve_parts(q).map_or(q, |(e, _)| e);
         self.ast.types.is_integral(q) || conv::is_unscoped_enum(self, q)
     }
 
@@ -188,7 +189,7 @@ impl Sema<'_, '_> {
         (first, second)
     }
 
-    fn vector_diag2(&mut self, id: DiagId, a: QualType, b: QualType, loc: Loc) {
+    pub(crate) fn vector_diag2(&mut self, id: DiagId, a: QualType, b: QualType, loc: Loc) {
         let (x, y) = self.ty_arg_pair(a, b);
         let msg = self.diag(id, loc).arg(x).arg(y);
         self.emit(msg);
@@ -420,7 +421,7 @@ impl Sema<'_, '_> {
 
     /// clang's `isRealType` (integers, unscoped enumerations, real
     /// floating types).
-    fn is_scalar_real(&self, q: QualType) -> bool {
+    pub(crate) fn is_scalar_real(&self, q: QualType) -> bool {
         self.ast.types.is_arithmetic(q) || conv::is_unscoped_enum(self, q)
     }
 
@@ -459,13 +460,20 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `tryGCCVectorConvertAndSplat` (inverted: true on success):
-    /// splats the scalar `scalar` to the type of the GNU vector `vec` when
+    /// splats the scalar `scalar` to the type of the GNU or SVE vector `vec` when
     /// the conversion to its element type cannot truncate.
-    fn gcc_vector_convert_and_splat(&mut self, scalar: &mut ExprId, vec: ExprId) -> bool {
+    pub(crate) fn gcc_vector_convert_and_splat(
+        &mut self,
+        scalar: &mut ExprId,
+        vec: ExprId,
+    ) -> bool {
         let sty = conv::strip_cv(self, self.ety(*scalar));
         let vty = conv::strip_cv(self, self.ety(vec));
-        let Some(p) = self.vector_parts(vty) else { return false };
-        let elem = p.elem;
+        let Some(elem) =
+            self.vector_parts(vty).map(|p| p.elem).or_else(|| self.sve_parts(vty).map(|(e, _)| e))
+        else {
+            return false;
+        };
         if !self.is_scalar_real(elem) || !self.is_scalar_real(sty) {
             return false;
         }

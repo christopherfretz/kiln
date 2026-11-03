@@ -2589,6 +2589,18 @@ impl Sema<'_, '_> {
             s.emit(msg);
             s.recover_err(&[e], loc)
         };
+        // clang `CreateBuiltinUnaryOp`: SVE vectors allow `+`, `-` and,
+        // with an integer element, `~`.
+        if self.is_sve_vector(t0)
+            && (matches!(op, UnaryOp::Plus | UnaryOp::Minus)
+                || (op == UnaryOp::Not && self.has_integer_repr(t0)))
+        {
+            let x = conv::decay(self, e);
+            let ty = self.ety(x);
+            let flags =
+                if op == UnaryOp::Minus { ExprFlags::NONE } else { ExprFlags::CANNOT_OVERFLOW };
+            return self.builder().unary(op, x, ty, loc, flags);
+        }
         if self.is_vector_type(t0)
             && matches!(op, UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not | UnaryOp::LNot)
         {
@@ -3070,6 +3082,18 @@ impl Sema<'_, '_> {
         {
             return self.vector_binary(op, l, r, loc);
         }
+        if !matches!(
+            op,
+            BinaryOp::Assign
+                | BinaryOp::Comma
+                | BinaryOp::PtrMemD
+                | BinaryOp::PtrMemI
+                | BinaryOp::LAnd
+                | BinaryOp::LOr
+        ) && (self.is_sve_vector(self.ety(l)) || self.is_sve_vector(self.ety(r)))
+        {
+            return self.sve_binary(op, l, r, loc);
+        }
         match op {
             BinaryOp::Assign => self.assign(l, r, loc),
             _ if op.is_compound_assignment() => self.compound_assign(op, l, r, loc),
@@ -3088,12 +3112,16 @@ impl Sema<'_, '_> {
                 if !self.diagnose_enum_constant_in_bool_context(l, r, loc) {
                     self.check_constant_logical_operand(op, l, r, loc);
                 }
-                let (Ok(l2), Ok(r2)) = (
-                    conv::contextually_convert_to_bool(self, l),
-                    conv::contextually_convert_to_bool(self, r),
-                ) else {
-                    return self.invalid_operands(l, r, loc);
+                // clang `CheckLogicalOperands`: the first operand that
+                // does not convert is diagnosed at its start.
+                let conv_op = |s: &mut Self, e: ExprId| {
+                    conv::contextually_convert_to_bool(s, e).map_err(|err| {
+                        let at = s.begin_loc(e);
+                        s.emit(err.diag_at(s, at));
+                    })
                 };
+                let Ok(l2) = conv_op(self, l) else { return self.invalid_operands(l, r, loc) };
+                let Ok(r2) = conv_op(self, r) else { return self.invalid_operands(l, r, loc) };
                 self.builder().binary(op, l2, r2, QualType::BOOL, loc)
             }
             BinaryOp::Add | BinaryOp::Sub => self.additive(op, l, r, loc),
