@@ -10,7 +10,7 @@
 //! declared, and the pattern instantiated once per element, the select
 //! becoming the element (spec/sema-templates.md §5.5).
 
-use kiln_ast::decl::{DeclFlags, InitStyle, VarSpec, VarStorage};
+use kiln_ast::decl::{DeclFlags, DeclKind, InitStyle, VarSpec, VarStorage};
 use kiln_ast::expr::{BinaryOp, ExprKind, Radix, UnaryOp};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::names::DeclName;
@@ -295,7 +295,13 @@ impl Sema<'_, '_> {
     /// first `i` for which `begin + i != end` is false, each evaluated
     /// as a constant expression (spec/sema.md: the wording counts with
     /// `++` in a consteval lambda; `begin + i` is what each element uses).
+    /// A contiguous iterator whose arithmetic is the language's or the
+    /// standard library's counts in one evaluation of `end - begin`
+    /// ([`Sema::expansion_size_difference`]).
     fn expansion_size(&mut self, begin: DeclId, end: DeclId, colon: Loc) -> Option<u64> {
+        if let Some(n) = self.expansion_size_difference(begin, end, colon) {
+            return Some(n);
+        }
         let pd = QualType::unqual(self.target.ptrdiff_t);
         for i in 0..MAX_ITERATING {
             let b = self.build_decl_ref(begin, colon);
@@ -330,6 +336,78 @@ impl Sema<'_, '_> {
         }
         self.error(DiagId::sema_expansion_size_not_constant, colon);
         None
+    }
+
+    /// The fast path of [`Sema::expansion_size`] (spec/sema.md §7.6a):
+    /// when `begin` and `end` have the same type and it is a pointer to
+    /// a complete object type or a standard library contiguous iterator
+    /// ([`Sema::is_lib_contiguous_iterator`]), the first `i` with
+    /// `begin + i != end` false is `end - begin` whenever that is a
+    /// non-negative constant: `begin + i` for `i` in `[0, end - begin]`
+    /// stays within the range and compares unequal to `end` exactly
+    /// before it. `None` (the incremental count decides, and diagnoses)
+    /// otherwise; nothing is diagnosed here.
+    fn expansion_size_difference(
+        &mut self,
+        begin: DeclId,
+        end: DeclId,
+        colon: Loc,
+    ) -> Option<u64> {
+        let b = self.build_decl_ref(begin, colon);
+        let e = self.build_decl_ref(end, colon);
+        let (bt, et) = (self.ety(b), self.ety(e));
+        if !self.ast.types.same_unqualified(bt, et) {
+            return None;
+        }
+        let contiguous = match self.ast.types.pointee(bt) {
+            Some(p) if self.ast.types.is_pointer(bt) => crate::target::is_complete_object(&self.ast, p),
+            _ => self.is_lib_contiguous_iterator(bt),
+        };
+        if !contiguous {
+            return None;
+        }
+        let d = self.act_on_binary(BinaryOp::Sub, e, b, colon);
+        if self.is_err_expr(d) || !self.ast.types.is_integral(self.ety(d)) {
+            return None;
+        }
+        let n = self.eval_int(d, EvalContext::new(EvalKind::Other, colon)).ok()?;
+        u64::try_from(n).ok()
+    }
+
+    /// Whether class type `t` is one of the standard library's
+    /// contiguous iterator adaptors over a pointer, whose `+`, `-` and
+    /// `!=` are the pointer's: libc++'s `std::__wrap_iter`,
+    /// `std::__bounded_iter` and `std::__static_bounded_iter`, and
+    /// libstdc++'s `__gnu_cxx::__normal_iterator` (the iterators of
+    /// `std::array`, `std::span`, `std::basic_string_view`,
+    /// `std::basic_string` and `std::vector` are these or pointers).
+    fn is_lib_contiguous_iterator(&self, t: QualType) -> bool {
+        let Some(r) = self.ast.types.as_record(t) else { return false };
+        let Some(name) = self.ast.decls.get(r).name().as_ident() else { return false };
+        let Some((_, spec)) = self.ast.spec_info(r) else { return false };
+        let over_pointer = match self.ast.types.args(spec.args).first().map(|a| a.view()) {
+            Some(kiln_ast::types::ArgView::Type(p)) => self.ast.types.is_pointer(p),
+            _ => false,
+        };
+        if !over_pointer {
+            return false;
+        }
+        match self.ast.symbols().as_str(name) {
+            "__wrap_iter" | "__bounded_iter" | "__static_bounded_iter" => {
+                self.is_in_std_namespace(r)
+            }
+            "__normal_iterator" => {
+                let Some(ns) = self.ast.decls.get(r).ctx().map(|c| self.ast.redecl_context(c))
+                else {
+                    return false;
+                };
+                let top = self.ast.decls.get(ns).ctx().map(|p| self.ast.redecl_context(p));
+                self.kind_of(ns) == DeclKind::Namespace
+                    && self.ast.decls.get(ns).name().as_ident() == Some(self.intern("__gnu_cxx"))
+                    && top.is_some_and(|p| self.kind_of(p) == DeclKind::TranslationUnit)
+            }
+            _ => false,
+        }
     }
 
     /// The destructuring form ([stmt.expand]/5.3): `constexpr_opt auto&&

@@ -105,6 +105,11 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_decomp_decl_spec, l).arg(arg);
             self.emit(msg);
         }
+        // [dcl.constexpr]/2: consteval only on a function (clang's
+        // `err_constexpr_wrong_decl_kind`, as for any variable).
+        if let Some(l) = ds.consteval {
+            self.error(DiagId::sema_consteval_wrong_decl_kind, l);
+        }
         if ds.is_typedef() {
             return None;
         }
