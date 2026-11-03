@@ -554,6 +554,14 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   the whole array was zeroed first (`Agg a[2] = {}`, one `memset` of the
   array), the filler loop skips the per-element zeroing of a
   value-initialized aggregate element, so no per-element `memset`.
+- **Constant external declarations (WP-416).** clang
+  `GetOrCreateLLVMGlobal` sets `isConstantStorage(Ctx, false, false)` on
+  a variable's declaration (`Cg::get_gvar`, `constant_storage`): a
+  reference (`extern int &r` is `external constant ptr`) or a `const`
+  object whose base element type is not a class (`extern const int`,
+  `extern int *const`, `extern const int[2]`) is `external constant`; a
+  `const` class object stays `external global`. A definition later in the
+  translation unit sets its own constness (§2).
 - **Discarded volatile reads (WP-416).** A discarded volatile scalar
   glvalue carries sema's `LValueToRValue` cast (spec/sema.md §7,
   [expr.context]/2), lowered as a `load volatile` whose value is unused.

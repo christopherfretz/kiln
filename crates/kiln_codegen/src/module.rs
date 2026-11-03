@@ -1737,9 +1737,11 @@ impl<'a> Cg<'a> {
         let g = self.m.add_global(&name, lt);
         // clang `GetOrCreateLLVMGlobal`: `getDeclAlign(D)`.
         let align = self.var_align(first);
+        let constant = constant_storage(ast, ty);
         let gv = self.m.global_mut(g);
         gv.linkage = Linkage::External;
         gv.align = Some(align);
+        gv.is_constant = constant;
         self.gvars.insert(first, g);
         self.mark_tls(first, g, false);
         self.available_externally(first, g, ty)?;
@@ -2105,6 +2107,21 @@ pub(crate) fn has_mutable(ast: &Ast, ty: QualType) -> bool {
         let def = ast.definition(r).unwrap_or(r);
         ast.decls.record(def).is_some_and(|x| x.defn.contains(DefinitionBits::HAS_MUTABLE_FIELDS))
     })
+}
+
+/// clang `QualType::isConstantStorage(Ctx, false, false)`, the constness
+/// `GetOrCreateLLVMGlobal` gives a declaration: a reference (its slot is
+/// never rebound), or a `const` object whose base element type is not a
+/// class (one might be constructed or destroyed at run time).
+fn constant_storage(ast: &Ast, ty: QualType) -> bool {
+    if ast.types.is_reference(ty) {
+        return true;
+    }
+    let mut t = ast.types.canonical(ty);
+    while let Some(e) = ast.types.element(t) {
+        t = ast.types.canonical(e);
+    }
+    ast.types.effective_quals(ty).is_const() && ast.types.as_record(t).is_none()
 }
 
 /// `Value` of a global.
