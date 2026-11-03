@@ -1362,7 +1362,7 @@ impl Cg<'_> {
         let fn_ty = self.m.types.function(ty, &[ty, ty, ty], false);
         let f = kiln_llvm::intrinsics::intrinsic(&mut self.m, &name, fn_ty)
             .expect("fmuladd declaration");
-        let fa = self.m.attr_set(&[
+        let mut attrs = vec![
             Attr::Flag(AttrKind::NoCallback),
             Attr::Flag(AttrKind::NoFree),
             Attr::Flag(AttrKind::NoSync),
@@ -1370,7 +1370,11 @@ impl Cg<'_> {
             Attr::Flag(AttrKind::Speculatable),
             Attr::Flag(AttrKind::WillReturn),
             Attr::Memory(kiln_llvm::MemoryEffects::all(kiln_llvm::ModRef::None)),
-        ]);
+        ];
+        if kiln_llvm::intrinsics::creates_no_undef_or_poison(&self.m, &name) {
+            attrs.push(Attr::Flag(AttrKind::NoCreateUndefOrPoison));
+        }
+        let fa = self.m.attr_set(&attrs);
         self.m.func_mut(f).attrs.func = fa;
         let c = self.f.fir.push(
             Op::Call {
@@ -2958,8 +2962,11 @@ impl Cg<'_> {
             return Ok(Some(self.emit_lvalue(a)?.addr.v));
         }
         let mut lib = None;
+        // WP-419: a recognized C library function clang lowers as its
+        // `__builtin_` twin (`ceil(x)` -> `llvm.ceil`).
         if let Some(d) = direct
-            && let Some(id) = ast.decls.builtin_id(d)
+            && let Some(id) =
+                ast.decls.builtin_id(d).or_else(|| crate::builtins::lib_intrinsic(ast, d))
         {
             match self.emit_builtin(id, e)? {
                 crate::builtins::BuiltinCall::Emitted(v) => return Ok(v),
@@ -4158,10 +4165,13 @@ impl Cg<'_> {
             };
             // [class.temporary]/5: the temporaries of each element's
             // initialization are destroyed before the next one starts.
+            // The array's zeroed state reaches each element (clang
+            // `EmitInitializationToLValue` with `Dest.isZeroed()`), so a
+            // zeroed array gets no per-element `memset` or zero stores.
             let sc = self.begin_scope(false);
             let r = match filler {
-                Some(f) => self.init_to_lvalue(f, lv, false),
-                None => self.null_init_lvalue(lv, false),
+                Some(f) => self.init_to_lvalue(f, lv, zeroed),
+                None => self.null_init_lvalue(lv, zeroed),
             };
             self.end_scope(sc);
             r?;

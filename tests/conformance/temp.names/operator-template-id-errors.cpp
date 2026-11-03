@@ -1,8 +1,8 @@
 // [temp.names]/3 (P0846): an unqualified operator-function-id that lookup
 // finds nothing for, followed by `<`, is assumed to be a template-name;
 // with no call to find a template by argument-dependent lookup it is an
-// undeclared name. Qualified, a name that is not a template-name is not
-// followed by a template argument list: `<` is the less-than operator.
+// undeclared name. Qualified, a non-static member named without an object
+// is diagnosed as such: `<` is then the less-than operator.
 //@ expect: compile-fail
 //@ std: c++23
 //@ strict-diags

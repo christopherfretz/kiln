@@ -56,6 +56,7 @@ pub mod literal;
 mod literal_op;
 mod local_friend;
 pub mod lookup;
+mod macro_fixit;
 pub mod modules;
 pub mod names;
 pub mod new_delete;
@@ -148,6 +149,11 @@ struct TypoSpec {
     /// distance ties with: valid, it makes the correction ambiguous
     /// (clang's `AmbiguousTypoExprs`) and nothing is corrected.
     ambiguous: bool,
+    /// The tied value an `ambiguous` function speculation competes with,
+    /// as the type and category of the expression it rebuilds into:
+    /// an initializer it cannot initialize settles the tie for the
+    /// function ([`Sema::settle_typo_tie`]).
+    tie: Option<(QualType, kiln_ast::expr::ValueCategory)>,
     /// The full-expression warnings about an expression built on the
     /// correction, with their order ([`Sema::emit_after_typos`]): clang
     /// issues them after it corrects the `TypoExpr`.
@@ -236,6 +242,13 @@ pub struct Sema<'a, 'sm> {
     /// The `}` of the innermost braced aggregate list being checked: a
     /// brace-elided sublist's element destructor checks are located
     /// there (`init_dtor.rs`).
+    /// The unrecoverable error count when the outermost braced list
+    /// being checked started: clang's `InitListChecker::hadError`, which
+    /// suppresses "excess elements" once an element failed (WP-420).
+    pub(crate) agg_error_mark: Option<u32>,
+    /// An initializer clause was left over in the outermost braced list
+    /// being checked: the initialization failed (clang's `hadError`).
+    pub(crate) agg_excess: std::cell::Cell<bool>,
     pub(crate) agg_list_end: Option<Loc>,
     /// Depth of immediate function contexts ([expr.const]/16) entered
     /// by `if consteval`.
@@ -290,6 +303,10 @@ pub struct Sema<'a, 'sm> {
     /// variable with C language linkage, by name ([dcl.link]/6; clang's
     /// extern "C" context, `extern_c.rs`).
     pub(crate) extern_c: kiln_source::fx::FxHashMap<kiln_source::symbol::Symbol, DeclId>,
+    /// The one-character `>` tokens the parser split off a `>>` or `>>=`
+    /// closing a template argument list ([temp.names]/4), for
+    /// `token_end` (clang measures the split token).
+    pub(crate) split_greaters: kiln_source::fx::FxHashSet<Loc>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
     /// Taken out for the duration of an evaluation, so the bridge can
     /// reach the rest of `Sema` (`ensure_body` instantiates through it,
@@ -820,6 +837,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unevaluated: 0,
             decltype_calls: Vec::new(),
             agg_list_end: None,
+            agg_error_mark: None,
+            agg_excess: std::cell::Cell::new(false),
             immediate: 0,
             constant_full_expr: 0,
             discarding_init: false,
@@ -834,6 +853,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),
             missing_typename_fns: kiln_source::fx::FxHashSet::default(),
             extern_c: kiln_source::fx::FxHashMap::default(),
+            split_greaters: kiln_source::fx::FxHashSet::default(),
             oven: Some(Oven::new(Budget::default())),
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
@@ -1338,9 +1358,53 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             suggest,
             fallback,
             ambiguous,
+            tie: None,
             after: Vec::new(),
         }));
         self.delayed_typos.push(HeldTypo { seq, expr: u, diag: plain, spec });
+    }
+
+    /// Records the tied value of the speculation [`Sema::hold_typo_spec`]
+    /// just opened at `loc` ([`TypoSpec::tie`]).
+    pub(crate) fn set_typo_tie(
+        &mut self,
+        loc: Loc,
+        tie: Option<(QualType, kiln_ast::expr::ValueCategory)>,
+    ) {
+        if let Some(s) = self.delayed_typos.last_mut().and_then(|h| h.spec.as_mut())
+            && s.loc == loc
+        {
+            s.tie = tie;
+        }
+    }
+
+    /// clang 19 rebuilds an initializer `= e` once per candidate of a
+    /// speculative correction (`TransformTypos`): when `e` (parentheses
+    /// aside) is a function speculation tied with a value
+    /// ([`TypoSpec::tie`]) and no implicit conversion takes the value to
+    /// `to`, the function is the one valid candidate and the correction
+    /// is no longer ambiguous (`int (*p)(int) = valc<int>;` with
+    /// `int vala; int valb(int);` is `valb`).
+    pub(crate) fn settle_typo_tie(&mut self, e: ExprId, to: QualType) {
+        if self.open_specs == 0 {
+            return;
+        }
+        let at = self.expr_loc(self.ignore_parens(e));
+        let Some(i) = self.delayed_typos.iter().rposition(|h| {
+            h.spec.as_ref().is_some_and(|s| s.loc == at && s.ambiguous && s.tie.is_some())
+        }) else {
+            return;
+        };
+        let Some((ty, vk)) = self.delayed_typos[i].spec.as_ref().and_then(|s| s.tie) else {
+            return;
+        };
+        let arg = overload::ArgInfo::of_type(ty, vk);
+        let ics = self.try_implicit_conversion(&arg, to, overload::IcsOptions::NONE);
+        if ics.is_bad()
+            && let Some(s) = self.delayed_typos[i].spec.as_mut()
+        {
+            s.ambiguous = false;
+        }
     }
 
     /// Called before the compat-19 correction scope of condition `e`

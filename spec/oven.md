@@ -648,7 +648,8 @@ literal is one instruction and one step, not an interpreted loop.
   `ceil`/`floor`/`trunc`/`round`/`roundeven`/`rint`/`nearbyint`,
   `lround`/`llround`/`lrint`/`llrint`, `fmod`/`remainder`/`remquo`,
   `fdim`, `fma`, `frexp`/`ldexp`/`scalbn`/`scalbln`/`ilogb`/`logb`/`modf`,
-  `nextafter`/`nexttoward`, `nextafterf16`/`f16b`, `signbit`, the six
+  `nextafter`/`nexttoward`, `nextafterf16`/`f16b`, `signbit` (WP-419:
+  `signbitf` / `signbitl` through `builtin::f128_twin`), the six
   comparison macros (`isgreater` ... `isunordered`, quiet: false on NaN)
   and integer `abs`/`labs`/`llabs` (`bi::IABS`), and P1383's `sqrt`
   (WP-393, `bi::SQRT`), each in its plain, `f`, `l` and `f128` spellings
@@ -701,7 +702,7 @@ literal is one instruction and one step, not an interpreted loop.
   `_num` forms): `fabs`, `copysign`, `fmax`/`fmin` (each spelling,
   `__builtin_fabsf16`/`fmaxf16`/`fminf16` through `f16_twin`) and the
   clang 22 `fmaximum_num`/`fminimum_num` in every spelling (`f16`, plain,
-  `f`, `l`; WP-410 for the last three), bit-exact as clang folds
+  `f`, `l`, `f128`; WP-410 for plain/`f`/`l`, WP-419 for `f128`), bit-exact as clang folds
   them: `fmax`/`fmin` below `-fclang-compat=22` (clang 19 `APFloat::
   maxnum`) yield the other operand for a NaN (`-0 < +0`); at 22
   (`FMAX_22`/`FMIN_22`, LLVM 22 `maxnum`) a signaling NaN `a`, else a
@@ -845,6 +846,14 @@ literal is one instruction and one step, not an interpreted loop.
   in clang's `HasSideEffects` sense (a call to a function that is not
   `const`/`pure` included, `SIDE` set) and the note "subexpression not
   valid in a constant expression" at the call otherwise.
+  The alignment builtins on integers (kbc 26, `ALIGN`, WP-416; clang
+  `ExprConstant` `BI__builtin_align_up` / `_down` / `__builtin_is_aligned`):
+  the alignment is checked first, at its own location: one that is not a
+  positive power of 2 fails with "requested alignment V is not a positive
+  power of two", one above 2^(N-1) for an N-bit source with "requested
+  alignment must be M or less for type 'T'; V is invalid"; then
+  `(x + mask) & ~mask`, `x & ~mask` or `(x & mask) == 0`, wrapped to the
+  source type. A pointer source is not folded yet (`unsupported`).
   `__builtin_assume_aligned` (kbc 23, `ASSUME_ALIGNED`, sub 1 with an
   offset) evaluates to its pointer operand after clang's check: the
   complete object's alignment (`SemaBridge::decl_align`, clang
@@ -2306,6 +2315,13 @@ stays `Opaque`: it has no value model yet. The operations are in
   at the expression's begin, as clang 19 does: a subscript `v[i]`,
   `__builtin_reduce_*`, and a bit cast from a vector to a scalar of a
   different class.
+- **Element-wise builtins** (WP-416): at compatibility level 22
+  `__builtin_elementwise_abs` folds (integer: the most negative value
+  wraps; floating: `fabs`) as do the integer `_max` / `_min`, scalar and
+  lane-wise (`vec_elementwise`); the floating `_max` / `_min` fail without
+  a note, as clang 22's. At 19 none folds: "subexpression not valid in a
+  constant expression" at the call's begin (shown inside a function
+  body, not at top level, as clang 19).
 - **Ext-vector element access** (`ext_elt_regs`, WP-312): on a prvalue
   vector (a compound literal, an operator result, a call) the selected
   lanes are taken from the operand's registers, for one lane (a scalar)

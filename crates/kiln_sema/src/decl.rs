@@ -3668,6 +3668,16 @@ impl Sema<'_, '_> {
                         let msg = self.note_prev(msg, p, false);
                         self.emit(msg);
                     }
+                    // [dcl.link]/6: the language linkage is the first
+                    // declaration's (clang `err_different_language_linkage`).
+                    let def = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
+                    if !method
+                        && !friend
+                        && self.diagnose_language_linkage_redecl(p, &fname, d.name_loc(), def)
+                    {
+                        prev_ok = None;
+                        invalid_redecl = true;
+                    }
                     if pspec.storage() == FnStorage::Static && spec.storage() == FnStorage::None {
                         spec = spec.with_storage(FnStorage::Static).with_storage_inherited(true);
                     }
@@ -4793,6 +4803,28 @@ impl Sema<'_, '_> {
             .unwrap_or(p)
     }
 
+    /// A variable `n` redeclared at `at` over `p` of a compatible type:
+    /// a second definition (`ext`: the new declaration is `extern`,
+    /// `prev_def`: `p` is a definition; [basic.def.odr]/1) or a different
+    /// language linkage ([dcl.link]/6, clang
+    /// `err_different_language_linkage`). Whether one was reported.
+    fn diagnose_var_redecl_conflict(
+        &mut self,
+        p: DeclId,
+        n: &str,
+        at: Loc,
+        ext: bool,
+        prev_def: bool,
+    ) -> bool {
+        if !ext && prev_def {
+            let msg = self.diag(DiagId::sema_redefinition, at).arg(n);
+            let msg = self.note_prev(msg, p, true);
+            self.emit(msg);
+            return true;
+        }
+        self.diagnose_language_linkage_redecl(p, n, at, prev_def)
+    }
+
     /// [dcl.meaning.general]/2.2: a qualified declarator-id names a
     /// member of its namespace; when lookup finds none, clang's
     /// `ActOnVariableDeclarator` reports "no member named" at the name
@@ -4858,10 +4890,7 @@ impl Sema<'_, '_> {
                     let prev_def = self.is_var_definition(p);
                     let n = sym_str(self, name);
                     self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
-                    if !ext && prev_def {
-                        let msg = self.diag(DiagId::sema_redefinition, d.name_loc()).arg(&n);
-                        let msg = self.note_prev(msg, p, true);
-                        self.emit(msg);
+                    if self.diagnose_var_redecl_conflict(p, &n, d.name_loc(), ext, prev_def) {
                         redefined = true;
                     } else {
                         prev_ok = Some(p);
@@ -7086,7 +7115,13 @@ impl Sema<'_, '_> {
                 .record(r)
                 .is_some_and(|x| x.defn.contains(DefinitionBits::LAMBDA_CAPTURES))
             {
-                bits = bits.with(DefinitionBits::LAMBDA_CAPTURES);
+                // A closure with a capture has no default constructor
+                // ([expr.prim.lambda.closure]/13), so it is not trivial
+                // (clang `hasTrivialDefaultConstructor` needs
+                // `hasDefaultConstructor`), and not POD.
+                bits = bits
+                    .with(DefinitionBits::LAMBDA_CAPTURES)
+                    .without(DefinitionBits::TRIVIAL_DEFAULT_CTOR);
             }
         }
         let (mut bits, invalid_field) = self.record_field_bits(r, bits);
@@ -9108,6 +9143,18 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(d, &attrs);
         }
+    }
+
+    /// The GNU attributes after the closing brace of class `r`'s
+    /// definition (`struct S { ... } __attribute__((packed));`): clang
+    /// `ParseCXXMemberSpecification` parses them there and
+    /// `ActOnFinishCXXMemberSpecification` applies them to the class
+    /// itself, before it is complete, so `packed` / `aligned` shape its
+    /// layout as when written after the class-key.
+    pub fn act_on_record_trailing_attrs(&mut self, r: DeclId, attrs: &[AttrId]) {
+        let mut attrs = attrs.to_vec();
+        self.check_decl_attrs(r, &mut attrs);
+        self.builder().append_attrs(r, &attrs);
     }
 
     /// clang `handlePreferredName`: `preferred_name` applies to a class

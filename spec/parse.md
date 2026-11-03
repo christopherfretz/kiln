@@ -728,7 +728,18 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     operators may be defaulted`.
   - A declarator whose special declarator-id was malformed
     (`operator;`) takes the error type, so no `a type specifier is
-    required` follows.
+    required` follows. Neither does a declarator with no name at all
+    (`group_base_type`, `member_base_type`): clang reports only
+    "expected unqualified-id" (or, in a class, "expected member name or
+    ';' after declaration specifiers", highlighting the
+    decl-specifier-seq from any leading attribute-specifier-seq) and never
+    builds the type. A simple-declaration whose declarator has no name is
+    then skipped by `skip_malformed_decl` (clang's `SkipMalformedDecl`: a
+    braced group ends it). So a linkage-specification outside namespace
+    scope ([dcl.link]/4: `extern "C" void f();`, `extern "C++" { ... }`
+    at block scope, `extern "C"` in a class) is the one error at the
+    string literal, as in clang
+    (`dcl.link/linkage-spec-namespace-scope-only-errors.cpp`).
   - At namespace scope a declaration with no decl-specifiers whose
     first token is a name followed by `;`, `=`, `,`, `[`, `(` or `{`
     (`at_implicit_int_declarator`; `y;`, `y();`) is a declarator, not
@@ -914,7 +925,9 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - **Class body** (`parse_record_body`, clang's `ParseCXXMemberSpecification`):
   `act_on_start_record_definition`, then `act_on_class_final` for a
   class-virt-specifier, then `act_on_base_specifiers` (always, with an
-  empty slice when there is no base clause), the members, `}` and
+  empty slice when there is no base clause), the members, `}`, any GNU
+  `__attribute__((...))` run right after it (`act_on_record_trailing_attrs`:
+  they appertain to the class, WP-416; spec/sema.md §4.5) and
   `act_on_finish_record_definition`. A missing `{` after a base clause
   is `expected '{' after base class list`; the class is still finished.
 - **Base clause** ([class.derived]): `[attrs] [virtual] [access]
@@ -1125,9 +1138,25 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `correct_delayed_typos_in`), or contains an error expression (clang 22,
   `Sema::contains_errors`, clang's `containsErrors`). Tests:
   `tests/conformance/expr.call/expression-list-recovery-22.cpp`,
-  `expression-list-recovery-19.cpp`. Not modelled: clang's `ExprError`
-  for an undeclared plain identifier (kiln builds a recovery
-  expression), so `f(u 8, "a"*2)` does not yet skip to the `,`.
+  `expression-list-recovery-19.cpp`.
+- **Undeclared plain identifiers as operands** (WP-420): under clang 22
+  an unqualified undeclared identifier is `ExprError` (an error
+  expression with "use of undeclared identifier 'u'" and the range of
+  the name). Parsing goes on with it (`expr_invalid` set) when an
+  operator, a postfix token (`[ . -> ++ --`) or a closing token (`) ] }
+  , ; :`) follows; otherwise the operand fails, so `f(u 8, "a"*2)` skips
+  to the `,` and `a[u 8]` to the `]`. Under clang 19 it is a delayed typo
+  (reported at the end of the full-expression or where the parser gives
+  up on it). A parenthesized expression whose operand fails or is
+  invalid skips quietly to its `)` (stopping at `;`) and is an error
+  expression: `(u 8) + "a"*2` still diagnoses the right operand (clang's
+  `ParseParenExpression`). Under clang 19 the same holds for a
+  parenthesized expression beginning with an undeclared identifier not
+  followed by `(`, `<` or `::` (clang's `ClassifyName` makes it
+  `ExprError`) once its delayed typo is corrected. Tests:
+  `tests/conformance/expr.prim.id/undeclared-error-operand-recovery-*.cpp`.
+  Not modelled: a qualified undeclared name (`S::nom 8`) as `ExprError`
+  under clang 22.
 - **Subscript recovery** (WP-399, clang's `ParsePostfixExpressionSuffix`
   for `[`): the subscript is `ExprError` (an error expression with
   `expr_invalid` set, so an enclosing expression-list skips to its `,`
@@ -1138,10 +1167,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   action), or when its Sema action reports an error and yields an error
   expression (`i[1]` on an `int`, a non-integer index, no viable
   `operator[]`). A subscript over an operand that merely contains errors
-  (`g(u<int> 7)[0]`) stays a recovery expression. Under the same model an
-  expression statement followed by `)` `;` reports "extraneous ')'
-  before ';'" and takes both (clang's `ExpectAndConsumeSemi`). Tests:
+  (`g(u<int> 7)[0]`) stays a recovery expression. Tests:
   `tests/conformance/expr.sub/`.
+- **Extraneous token before `;`** (clang's `ExpectAndConsumeSemi`,
+  WP-420): an expression statement or a simple-declaration whose `;` is
+  preceded by one `)` or `]` (`a[1]];`, `f(1));`, `int x = a[1]];`)
+  reports "extraneous ']' before ';'" at that token, with a removal
+  fix-it, and takes both. A missing `;` there is "expected ';' after
+  expression" with an insertion fix-it `;` at the end of the previous
+  token. Other statements (`return a[2]];`) only say "expected ';' after
+  return statement" (clang's `ExpectAndConsume`; also with the `;`
+  fix-it). Tests: `tests/conformance/expr.post/extraneous-token-before-semi.cpp`.
 - **Literals:**
   - Integer, floating and character literals are classified by
     `kiln_lex::literal` and typed by `kiln_sema::literal`

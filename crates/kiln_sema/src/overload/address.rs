@@ -75,24 +75,70 @@ impl Sema<'_, '_> {
         (implicit && m.targs.is_none()).then_some((x, addr))
     }
 
-    /// The matching static (non-template) members of the implicit member
-    /// overload set `x` for `target`, with their found declarations: a
-    /// non-static member is named by an unqualified name only in a call
-    /// ([expr.prim.id.general]/4, [expr.unary.op]/4).
+    /// The matching static members of the implicit member overload set
+    /// `x` for `target`, with their found declarations: a non-static
+    /// member is named by an unqualified name only in a call
+    /// ([expr.prim.id.general]/4, [expr.unary.op]/4). Without a matching
+    /// non-template, the specializations of its static member function
+    /// templates deduced from the target ([over.over]/3, /5).
     fn implicit_member_candidates(&mut self, x: ExprId, target: QualType) -> Vec<(DeclId, DeclId)> {
         let fnty = self.address_target(target);
         if fnty.1 {
             return Vec::new();
         }
-        let Some(m) = self.ovl.members.get(&x) else { return Vec::new() };
-        let cands: Vec<(DeclId, DeclId)> = m
-            .decls
+        let cands = self.set_candidates(x);
+        let direct: Vec<(DeclId, DeclId)> =
+            cands.into_iter().filter(|&(d, _)| self.address_matches(d, fnty)).collect();
+        if !direct.is_empty() {
+            return direct;
+        }
+        self.address_template_candidates(x, target)
+    }
+
+    /// Whether the implicit member overload set `x` has a static member
+    /// function or static member function template: clang's
+    /// `UnresolvedMemberExpr` is then of overloaded type (not
+    /// `hasOnlyNonStaticMemberFunctions`) and a target type resolves it;
+    /// otherwise it is a bound member that can only be called.
+    fn has_static_member(&self, x: ExprId) -> bool {
+        self.member_overload_decls(x)
+            .iter()
+            .any(|&d| self.is_static_method(self.templated_or_self(d)))
+    }
+
+    /// The candidates (function, found declaration) of the overload set
+    /// `key`, an `UnresolvedLookupExpr` or an implicit member overload
+    /// set, in candidate order, without invalid declarations.
+    fn set_candidates(&self, key: ExprId) -> Vec<(DeclId, DeclId)> {
+        let Some(m) = self.ovl.members.get(&key) else { return self.ule_candidates(key) };
+        m.decls
             .iter()
             .enumerate()
             .map(|(i, &d)| (d, m.found.get(i).copied().unwrap_or(d)))
             .filter(|&(d, _)| !self.ast.decls.get(d).has(DeclFlags::INVALID))
-            .collect();
-        cands.into_iter().filter(|&(d, _)| self.address_matches(d, fnty)).collect()
+            .collect()
+    }
+
+    /// Whether the current context is in the body of a member function
+    /// defined inside its class (lexically there, not out of line).
+    fn in_inline_member_body(&self) -> bool {
+        let Some(f) = self.enclosing_function(self.ctx) else { return false };
+        let n = self.ast.decls.get(f);
+        matches!(
+            n.kind(),
+            DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion
+        ) && self.ast.decls.lexical_ctx(f) == n.ctx()
+    }
+
+    /// The name of the overload set `key` (see [`Self::set_candidates`]).
+    fn set_name(&self, key: ExprId) -> String {
+        match self.ovl.members.get(&key) {
+            Some(m) => self.decl_name_str(m.name),
+            None => self.decl_name_str(self.ast.unresolved_name(key)),
+        }
     }
 
     /// The function type a target type asks an overload set for
@@ -198,9 +244,10 @@ impl Sema<'_, '_> {
         cands.into_iter().filter(|&(d, _)| self.address_matches(d, fnty)).collect()
     }
 
-    /// The specializations of the templates of `ule` deduced from the
-    /// function type of `target` that match it, the most specialized
-    /// kept ([over.over]/3, /5).
+    /// The specializations of the templates of `ule` (an overload set,
+    /// see [`Self::set_candidates`]) deduced from the function type of
+    /// `target` that match it, the most specialized kept ([over.over]/3,
+    /// /5).
     fn address_template_candidates(
         &mut self,
         ule: ExprId,
@@ -208,7 +255,7 @@ impl Sema<'_, '_> {
     ) -> Vec<(DeclId, DeclId)> {
         let explicit = self.ast.templates.expr_targs.get(ule).copied();
         let loc = self.ast.exprs.get(ule).loc();
-        let cands = self.ule_candidates(ule);
+        let cands = self.set_candidates(ule);
         self.template_candidates(cands, explicit, loc, target)
     }
 
@@ -434,48 +481,72 @@ impl Sema<'_, '_> {
         at: Loc,
         extra: Option<Diag>,
     ) -> Option<ExprId> {
-        if let Some((x, _)) = self.implicit_member_operand(e)
-            && let [(d, f)] = self.implicit_member_candidates(x, target)[..]
-        {
-            let m = &self.ovl.members[&x];
-            let (naming, nns) = (m.naming, m.nns);
-            let loc = self.ast.exprs.get(x).loc();
-            let r = self.finish_overload_ref(d, f, Some(naming), loc, nns, x, false);
-            let at = self.begin_loc(e);
-            self.note_function_name_use(d, r, at, nns.is_none());
-            return Some(self.rebuild_over(e, x, r));
-        }
-        let Some((ule, _)) = self.overload_operand(e) else {
-            if let Some(x) = self.member_overload(e) {
-                return self.resolve_member_address(e, x, target, complain, ctx, at);
+        let (ule, matches) = if let Some((x, addr)) = self.implicit_member_operand(e) {
+            let matches = self.implicit_member_candidates(x, target);
+            if let [(d, f)] = matches[..] {
+                let m = &self.ovl.members[&x];
+                let (naming, nns) = (m.naming, m.nns);
+                let loc = self.ast.exprs.get(x).loc();
+                let r = self.finish_overload_ref(d, f, Some(naming), loc, nns, x, false);
+                let at = self.begin_loc(e);
+                self.note_function_name_use(d, r, at, nns.is_none());
+                return Some(self.rebuild_over(e, x, r));
             }
-            if complain {
+            if !complain {
+                return None;
+            }
+            // clang: `&f` is a lookup of the name and `f` with a static
+            // member an overloaded `UnresolvedMemberExpr`, both resolved
+            // against a non-member target as below; otherwise `f` is a
+            // bound member function, which can only be called.
+            if self.address_target(target).1 || !(addr || self.has_static_member(x)) {
                 self.check_overload_use(e);
+                return None;
             }
-            return None;
+            (x, matches)
+        } else {
+            let Some((ule, _)) = self.overload_operand(e) else {
+                if let Some(x) = self.member_overload(e) {
+                    return self.resolve_member_address(e, x, target, complain, ctx, at);
+                }
+                if complain {
+                    self.check_overload_use(e);
+                }
+                return None;
+            };
+            let mut matches = self.address_candidates(ule, target);
+            if matches.is_empty() {
+                // [over.over]/3: a function template's specialization
+                // deduced from the target ([temp.deduct.funcaddr]); /5: a
+                // non-template beats it, and of several the more
+                // specialized.
+                matches = self.address_template_candidates(ule, target);
+            }
+            if let [(d, f)] = matches[..] {
+                let naming = self.ovl.ule_found.get(&ule).and_then(|x| x.naming);
+                let nns = self.ast.templates.expr_nns.get(ule).copied();
+                let loc = self.ast.exprs.get(ule).loc();
+                let r = self.finish_overload_ref(d, f, naming, loc, nns, ule, false);
+                // clang diagnoses a deleted function at the start of the
+                // whole operand (its `&` or parenthesis).
+                let at = self.begin_loc(e);
+                self.note_function_name_use(d, r, at, nns.is_none());
+                return Some(self.rebuild_over(e, ule, r));
+            }
+            if !complain {
+                return None;
+            }
+            (ule, matches)
         };
-        let mut matches = self.address_candidates(ule, target);
-        if matches.is_empty() {
-            // [over.over]/3: a function template's specialization deduced
-            // from the target ([temp.deduct.funcaddr]); /5: a
-            // non-template beats it, and of several the more specialized.
-            matches = self.address_template_candidates(ule, target);
+        let mut cands = self.set_candidates(ule);
+        if self.ovl.members.contains_key(&ule) && self.in_inline_member_body() {
+            // clang finds the name through the class scope still open
+            // around an inline member body (its `IdResolver` chain, the
+            // last declared first); out of line, through the class's
+            // lookup table, in declaration order.
+            cands.reverse();
         }
-        if let [(d, f)] = matches[..] {
-            let naming = self.ovl.ule_found.get(&ule).and_then(|x| x.naming);
-            let nns = self.ast.templates.expr_nns.get(ule).copied();
-            let loc = self.ast.exprs.get(ule).loc();
-            let r = self.finish_overload_ref(d, f, naming, loc, nns, ule, false);
-            // clang diagnoses a deleted function at the start of the
-            // whole operand (its `&` or parenthesis).
-            let at = self.begin_loc(e);
-            self.note_function_name_use(d, r, at, nns.is_none());
-            return Some(self.rebuild_over(e, ule, r));
-        }
-        if !complain {
-            return None;
-        }
-        let name = self.decl_name_str(self.ast.unresolved_name(ule));
+        let name = self.set_name(ule);
         let loc = self.begin_loc(ule);
         if matches.len() > 1 {
             let msg = self.diag(DiagId::sema_addr_ovl_ambiguous, loc).arg(name);
@@ -502,33 +573,34 @@ impl Sema<'_, '_> {
                 false,
             ),
         };
-        let mut notes = self.addr_no_match_notes(ule, fnty, detailed, loc);
+        let mut notes = self.addr_no_match_notes(ule, &cands, fnty, detailed, loc);
         notes.extend(extra);
         self.emit(notes.into_iter().fold(msg, Diag::with_note));
         None
     }
 
     /// The notes of "address of overloaded function does not match" for
-    /// the overload set `ule` against function type `fnty` (`detailed`:
-    /// an initialization, whose failed deductions and type mismatches are
-    /// noted; `loc`, the name's start).
+    /// the overload set `ule` (see [`Self::set_candidates`]) with
+    /// candidates `cands` against function type `fnty` (clang
+    /// `ComplainNoMatchesFound`; `detailed`: an initialization, whose
+    /// failed deductions and type mismatches are noted; `loc`, the name's
+    /// start): with deduction failures, the non-template candidates in
+    /// lookup order, then the failed templates by position
+    /// ([temp.deduct.funcaddr]; clang's `DiagnoseBadDeduction`);
+    /// otherwise every candidate in order.
     fn addr_no_match_notes(
         &mut self,
         ule: ExprId,
+        cands: &[(DeclId, DeclId)],
         fnty: QualType,
         detailed: bool,
         loc: Loc,
     ) -> Vec<Diag> {
         let fn_target = detailed && self.ast.types.is_function(fnty);
-        let cands = self.ule_candidates(ule);
         let explicit = self.ast.templates.expr_targs.get(ule).copied();
-        // clang `ComplainNoMatchesFound`: with deduction failures, the
-        // non-template candidates in lookup order, then the failed
-        // templates by position ([temp.deduct.funcaddr]; clang's
-        // `DiagnoseBadDeduction`); otherwise every candidate in order.
         let mut failed: Vec<(Loc, Diag)> = Vec::new();
         if detailed {
-            for &(d, _) in &cands {
+            for &(d, _) in cands {
                 if self.kind_of(d) == DeclKind::FunctionTemplate
                     && let Err(f) = self.deduce_funcaddr(d, explicit, fnty, loc)
                     && f.tdk != crate::templ::deduce::Tdk::Invalid
@@ -539,7 +611,7 @@ impl Sema<'_, '_> {
             }
         }
         let mut notes: Vec<Diag> = Vec::with_capacity(cands.len());
-        for &(d, _) in &cands {
+        for &(d, _) in cands {
             let tmpl = self.kind_of(d) == DeclKind::FunctionTemplate;
             if tmpl && !failed.is_empty() {
                 continue;
@@ -577,7 +649,8 @@ impl Sema<'_, '_> {
         self.drop_template_id_warnings(e);
         let loc = self.begin_loc(ule);
         let name = self.decl_name_str(self.ast.unresolved_name(ule));
-        let notes = self.addr_no_match_notes(ule, fnty, true, loc);
+        let cands = self.ule_candidates(ule);
+        let notes = self.addr_no_match_notes(ule, &cands, fnty, true, loc);
         Some((loc, name, fnty, notes))
     }
 

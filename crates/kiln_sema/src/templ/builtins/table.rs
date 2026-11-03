@@ -210,6 +210,7 @@ pub static TABLE: &[Row] = &[
     // §9.4
     f("__builtin_is_constant_evaluated", DONE, Oven::Yes),
     f("__builtin_constant_p", DONE, Oven::Yes),
+    f("__builtin_classify_type", DONE, Oven::Yes),
     // §9.5 object model
     f("__builtin_addressof", DONE, Oven::Yes),
     f("__builtin_launder", DONE, Oven::Yes),
@@ -260,6 +261,8 @@ pub static TABLE: &[Row] = &[
     f("__builtin_isnan", DONE, Oven::Yes),
     f("__builtin_isnormal", DONE, Oven::Yes),
     f("__builtin_signbit", DONE, Oven::Yes),
+    f("__builtin_signbitf", DONE, Oven::Yes),
+    f("__builtin_signbitl", DONE, Oven::Yes),
     f("__builtin_isgreater", DONE, Oven::Yes),
     f("__builtin_isgreaterequal", DONE, Oven::Yes),
     f("__builtin_isless", DONE, Oven::Yes),

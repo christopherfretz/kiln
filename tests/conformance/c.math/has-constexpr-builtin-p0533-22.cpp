@@ -10,6 +10,8 @@
 #define ONE(b) static_assert(__has_constexpr_builtin(b) && __has_builtin(b), #b)
 ONE(__builtin_abs); ONE(__builtin_labs); ONE(__builtin_llabs);
 ONE(__builtin_signbit);
+// WP-419: the float / long double spellings.
+ONE(__builtin_signbitf); ONE(__builtin_signbitl);
 ONE(__builtin_isgreater); ONE(__builtin_isgreaterequal);
 ONE(__builtin_isless); ONE(__builtin_islessequal);
 ONE(__builtin_islessgreater); ONE(__builtin_isunordered);
@@ -20,6 +22,8 @@ static_assert(__builtin_abs(-3) == 3);
 static_assert(__builtin_labs(-3L) == 3L);
 static_assert(__builtin_llabs(-3LL) == 3LL);
 static_assert(__builtin_signbit(-0.0) && !__builtin_signbit(1.0f));
+static_assert(__builtin_signbitf(-0.0f) && !__builtin_signbitf(1.0) && __builtin_signbitl(-1.0L));
+static_assert(!__builtin_signbitl(__builtin_huge_vall()) && __builtin_signbitf(-__builtin_nanf("")));
 static_assert(__builtin_isgreater(2.0, 1.0) && !__builtin_isgreater(__builtin_nan(""), 1.0));
 static_assert(__builtin_isgreaterequal(1.0, 1.0));
 static_assert(__builtin_isless(1.0f, 2.0f));

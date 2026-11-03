@@ -635,6 +635,35 @@ fn captures_none_at_llvm_21() {
     assert!(!t.contains("nocapture"), "{t}");
 }
 
+/// §6: at `ir_version` 22+ the intrinsics LLVM 22 marks
+/// `IntrNoCreateUndefOrPoison` are declared `nocreateundeforpoison`
+/// (sorted after `nocallback`); `abs`/`ctlz` are not, and LLVM 19 has no
+/// such attribute.
+#[test]
+fn nocreateundeforpoison_at_llvm_22() {
+    for (version, marked) in [(19, false), (22, true)] {
+        let mut m = aarch64();
+        m.ir_version = version;
+        let _ = intrinsics::ctpop(&mut m, TypeId::I32);
+        let _ = intrinsics::with_overflow(&mut m, intrinsics::OverflowOp::SAdd, TypeId::I32);
+        let _ = intrinsics::abs(&mut m, TypeId::I32);
+        let _ = intrinsics::ctlz(&mut m, TypeId::I32);
+        let t = m.to_string();
+        let pure = "{ nocallback nocreateundeforpoison nofree nosync nounwind speculatable \
+                    willreturn memory(none) }";
+        assert_eq!(t.contains(pure), marked, "{t}");
+        assert!(
+            t.contains(
+                "{ nocallback nofree nosync nounwind speculatable willreturn memory(none) }"
+            ),
+            "{t}"
+        );
+        assert_eq!(intrinsics::creates_no_undef_or_poison(&m, "llvm.fma.f64"), marked);
+        assert!(!intrinsics::creates_no_undef_or_poison(&m, "llvm.fmuladdx.f64"));
+        assert!(!intrinsics::creates_no_undef_or_poison(&m, "llvm.abs.i32"));
+    }
+}
+
 /// §5: function attribute groups are deduplicated and numbered in first-use
 /// order, with enum attributes before string attributes.
 #[test]

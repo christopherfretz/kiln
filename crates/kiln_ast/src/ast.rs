@@ -534,6 +534,81 @@ impl Ast {
                 .is_some_and(|f| !f.spec.is_trivial())
     }
 
+    /// The GCC type class of `q` that `__builtin_classify_type` returns
+    /// (clang `EvaluateBuiltinClassifyType` in C++, identical in clang 19
+    /// and 22; WP-419, spec/sema.md §5.4): `void` 0, integer and character
+    /// types 1, enumerations 3, `bool` 4, pointers, arrays and functions 5
+    /// (the decayed type), pointers to data members 7, floating types 8,
+    /// `_Complex` 9, classes and pointers to member functions 12, unions
+    /// 13, `_BitInt` 18, vectors 19, and -1 (`no_type_class`) for
+    /// `std::nullptr_t`, the sizeless SVE types and `std::meta::info`.
+    /// `_Atomic(T)` classifies as `T` and a reference as its referee.
+    pub fn gcc_type_class(&self, q: crate::ids::QualType) -> i32 {
+        use crate::types::{BuiltinType as B, TypeView as V};
+        let mut q = q;
+        for _ in 0..8 {
+            q = self.types.canonical(q);
+            match self.types.canonical_view(q) {
+                V::Atomic(t) | V::LValueRef(t) | V::RValueRef(t) => q = t,
+                V::Builtin(b) => {
+                    return match b {
+                        B::Void => 0,
+                        B::Bool => 4,
+                        B::Char
+                        | B::SChar
+                        | B::UChar
+                        | B::WChar
+                        | B::Char8
+                        | B::Char16
+                        | B::Char32
+                        | B::Short
+                        | B::UShort
+                        | B::Int
+                        | B::UInt
+                        | B::Long
+                        | B::ULong
+                        | B::LongLong
+                        | B::ULongLong
+                        | B::Int128
+                        | B::UInt128 => 1,
+                        B::Float16
+                        | B::BFloat16
+                        | B::Float
+                        | B::Double
+                        | B::LongDouble
+                        | B::Float128
+                        | B::Half
+                        | B::Float32
+                        | B::Float64
+                        | B::StdFloat128
+                        | B::Float32x
+                        | B::Float64x => 8,
+                        _ => -1,
+                    };
+                }
+                V::BitInt { .. } => return 18,
+                V::Pointer(_)
+                | V::ConstantArray(_)
+                | V::IncompleteArray(_)
+                | V::VariableArray { .. }
+                | V::Function(_) => return 5,
+                V::MemberPointer { pointee, .. } => {
+                    return if self.types.is_function(pointee) { 12 } else { 7 };
+                }
+                V::Record(d) => {
+                    let union =
+                        self.decls.record(d).is_some_and(|r| r.tag == crate::decl::TagKind::Union);
+                    return if union { 13 } else { 12 };
+                }
+                V::Enum(_) => return 3,
+                V::Complex(_) => return 9,
+                V::Vector { .. } => return 19,
+                _ => return -1,
+            }
+        }
+        -1
+    }
+
     /// True if `e` is a `CXXConstructExpr` calling a trivial constructor
     /// with no arguments: default-initialization that performs no
     /// initialization ([dcl.init.general]/7, [class.default.ctor]/3).

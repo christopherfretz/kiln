@@ -17,7 +17,7 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode};
 use kiln_ast::decl::DeclKind;
-use kiln_ast::expr::{CastKind, ExprKind, UnaryOp};
+use kiln_ast::expr::{CastKind, ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::types::{BuiltinType, FuncProto};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId, FixIt};
@@ -310,12 +310,19 @@ impl Sema<'_, '_> {
                 None
             }
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
-                let f = self.callee_decl(e)?;
-                let ret = self.declared_return_type(f);
-                if !ret.is_some_and(|r| self.ast.types.is_reference(r)) {
+                // A glvalue call returns a reference; the note names a
+                // direct callee (`getDirectCallee`: a function, not a
+                // pointer to one).
+                if self.ast.exprs.get(e).value_category() == ValueCategory::PRValue {
                     return None;
                 }
-                Some(f)
+                self.callee_decl(e).filter(|&f| {
+                    self.ast
+                        .decls
+                        .get(f)
+                        .ty()
+                        .is_some_and(|t| self.ast.types.is_function(self.ast.types.canonical(t)))
+                })
             }
             _ => return None,
         };

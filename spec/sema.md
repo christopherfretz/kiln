@@ -1777,6 +1777,17 @@ and returns the scope it names:
       `union`, `enum`, `enum class` or `enum struct`), after the
       parser's error for the position, if any. Not for an anonymous
       record.
+    - GNU attributes right after a class definition's closing brace
+      (`struct S { ... } __attribute__((packed));`, WP-416) are not
+      decl-specifier attributes: as clang's `ParseCXXMemberSpecification`
+      the parser reads them there and `act_on_record_trailing_attrs`
+      checks them against the class and appends them to its own
+      attributes before `act_on_finish_record_definition`, so `packed` /
+      `aligned` there shape its layout (also for a class template and
+      its specializations), with no warning, whether or not declarators
+      follow. Not yet for an enumeration's closing brace (still
+      `place it after "enum"`). Test:
+      `tests/conformance/dcl.attr.grammar/gnu-attributes-after-class-body.cpp`.
     - on a non-declaration statement: `'X' attribute cannot be applied
       to a statement` per declaration attribute
       (`act_on_stmt_decl_attrs`); on a block-scope asm-declaration
@@ -1987,6 +1998,27 @@ and returns the scope it names:
     and a C-linkage entity of the same name in a namespace conflict
     either way (`err_extern_c_global_conflict` and its note); a
     global function does not.
+  - [dcl.link]/6, a redeclaration keeps the first declaration's language
+    linkage (`has_incompatible_language_linkage`, clang's
+    `haveIncompatibleLanguageLinkages`): the new declaration's innermost
+    lexically enclosing linkage specification is looked up through any
+    context. `extern "C"` around a redeclaration of an entity whose first
+    declaration has C++ language linkage, or `extern "C++"` around one
+    whose first declaration is in an `extern "C"` context, is
+    `sema_different_language_linkage` ("declaration of 'f' has a
+    different language linkage") with "previous declaration/definition
+    is here". The redeclaration is not merged (the function or variable
+    is invalid). A redeclaration with no linkage specification
+    (`extern "C" { void h(); } void h();`) keeps C linkage silently; an
+    entity with internal linkage, a class member, a friend and a
+    different overload are never checked. For a variable the check
+    follows the redefinition check (`extern "C" int w = 1; extern "C++"
+    { int w = 2; }` is "redefinition of 'w'"). Not implemented: a first
+    declaration at block scope (`void f() { extern void k(); } extern "C"
+    void k();`; redeclaration lookup does not find it), and clang's
+    "non-static declaration follows static" for a braceless `extern
+    "C++" int v;` after `static int v;`.
+    Tests: `dcl.link/language-linkage-redecl-errors.cpp`.
 - **Redefinition through an initializer** (clang
   `AddInitializerToDecl`): a namespace-scope variable that was a
   declaration before its initializer (`extern`, or a single-line
@@ -2829,7 +2861,12 @@ the initializer, or after default initialization, and before the
     WP-320, test `expr.sizeof/incomplete-operand-location.cpp`)
   - **casts:** C-style, functional, `static_cast`,
     `reinterpret_cast`, `const_cast`, with
-    `mark_part_of_explicit_cast`. To a reference (`expr/ref_cast.rs`,
+    `mark_part_of_explicit_cast`. `const_cast` between pointers needs
+    them similar with identical levels (`conv::similar_same_levels`,
+    [expr.const.cast]/3: `int A::**` to `const int A::**` is allowed,
+    `int *(*)[2]` to `const int *(*)[]` is not, like clang's
+    `UnwrapSimilarTypes` without `AllowPiMismatch`; WP-162, test
+    `expr.const.cast/similar-multilevel.cpp`). To a reference (`expr/ref_cast.rs`,
     WP-207): `const_cast<T&&>` (and the C-style cast's const step) of a
     class prvalue of the same unqualified class materializes it
     (`MaterializeTemporaryExpr`, [expr.const.cast]/3) and is a `NoOp`
@@ -2923,9 +2960,17 @@ the initializer, or after default initialization, and before the
   plain one). Unrelated classes have no composite type (`incompatible
   operand types ('int A::*' and 'int B::*')` for `?:`). This is what
   libc++'s `common_with`, `common_reference` and
-  `equality_comparable_with` see through `decltype(b ? x : y)`. Not
-  yet: multi-level cv-combination (`int **` vs `const int **` is
-  `const int *const *`).
+  `equality_comparable_with` see through `decltype(b ? x : y)`. Two
+  similar types of any depth ([conv.qual]/2: pointer, same-class member
+  pointer and array levels down to the same innermost type) combine,
+  before the one-level path, to their cv-combined type
+  (`conv::cv_combined_type`, [conv.qual]/3, WP-162): the union of the
+  cv-qualifiers at each level, `const` added to every level above one
+  that differs (`int **` vs `const int **` is `const int *const *`,
+  `int (*)[3]` vs `const int (*)[3]` is `const int (*)[3]`). `B **` vs
+  `D **` and `int **` vs `long **` are not similar and have none. Tests
+  `expr.cond/composite-pointer-multilevel*.cpp`,
+  `conv.qual/multilevel-compare-run.cpp`.
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
@@ -3074,10 +3119,23 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   (`Ast::has_nothrow_attr` reads the chain). A `NoThrow` callee makes
   a call non-throwing (`can_throw`, so `noexcept(strlen(s))` is
   true). No `Builtin` attribute is attached, so the call stays an
-  ordinary call: clang's lowering of recognized `memcpy`/`fabs`/`abs`
-  calls to intrinsics and its implicit `format` / `alloc_size`
-  attributes on the library names (`-Wformat*` on `sprintf`) are not
-  modelled; only the `__builtin_` printf rows carry `format` (below).
+  ordinary call everywhere but in codegen: WP-419 records the row's
+  `__builtin_` twin (`Decls::lib_builtin`, `ceil` -> `__builtin_ceil`,
+  at the `-fclang-compat` level; inherited by redeclarations) and
+  codegen lowers a direct call of the errno-free `<math.h>` functions
+  as the twin (spec/codegen.md §3, "library builtins"). WP-419 adds
+  C23's `roundeven{,f,l}` (clang 19 and 22), clang 22's
+  `fmaximum_num` / `fminimum_num` `{,f,l}` (`builtin::lib_min_compat`:
+  not recognized at `-fclang-compat=19`) and the GNU `sincos{,f,l}`
+  (clang 22, `ALL_GNU_LANGUAGES`: recognized under `-std=gnu++*` only,
+  `builtin::lib_gnu_only`; `NoThrow`, a call is `nounwind`). A call in
+  a constant expression is still a call of a non-constexpr function
+  (clang 19 and 22 reject `constexpr double d = ceil(1.5);`). Not
+  modelled: clang's lowering of recognized `memcpy` / `memmove` /
+  `memset` / `abs` / `labs` / `llabs` calls (and clang 22's `modf`) to
+  intrinsics, and its implicit `format` / `alloc_size` attributes on
+  the library names (`-Wformat*` on `sprintf`); only the `__builtin_`
+  printf rows carry `format` (below).
 - **GCC's implicit library builtins** (WP-380, `record_gnu_lib_twin`;
   `Sema::gnu_lib_builtins`, set by the driver for `-stdlib=libstdc++`,
   the default): libstdc++'s `<cmath>` double overloads are `using
@@ -3113,6 +3171,41 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     a power of 2 (`requested alignment is not a power of 2`), warned above
     2^32 (`-Wbuiltin-assume-aligned-alignment`); `off` converts to
     `size_t`. The call is a `void *` prvalue.
+  - `__builtin_align_up` / `__builtin_align_down` / `__builtin_is_aligned`
+    (custom, `builtin_align`, clang `BuiltinAlignment`; WP-416): two
+    arguments. The source must be an integer (not `bool` or an
+    enumeration) or a pointer to an object (an array decays): `operand of
+    type T where arithmetic or pointer type is required` at the source.
+    The alignment must be an integer (not `bool` or an enumeration; `used
+    type T where integer is required`); when it is a constant it must be
+    at least 1 (`requested alignment must be 1 or greater`), at most
+    2^(N-1) for an N-bit source (pointers: the index width; `requested
+    alignment must be M or smaller`) and a power of 2 (`requested
+    alignment is not a power of 2`), and 1 is warned
+    (`-Wtautological-compare`: `aligning a value to 1 byte is a no-op` /
+    `... is always true`). The call has the source's unqualified type,
+    `bool` for `__builtin_is_aligned`.
+  - `__builtin_frame_address(level)` (an `I` constant, `check_builtin_ice_args`):
+    `level` in [0, 65535] (`argument value V is outside the valid range`
+    at the callee); a nonzero level warns `calling '__builtin_frame_address'
+    with a nonzero argument is unsafe` (`-Wframe-address`, in `-Wall`).
+    `__builtin_debugtrap()` takes no argument.
+  - `__builtin_elementwise_abs(x)` / `_max(x, y)` / `_min(x, y)` (custom,
+    `vector_ops.rs`; WP-416), by compatibility level. At 22 (clang 22
+    `BuiltinElementwiseMath`): the operands are lvalue-converted (arrays
+    decay) and keep their types; `abs` takes a signed integer, floating or
+    vector of them (`1st argument must be a scalar or vector of signed
+    integer or floating-point types (was T)`; kiln also rejects a pointer,
+    class or scoped enumeration operand clang 22 lets through), `max` /
+    `min` an integer, floating or vector operand (`... must be a vector,
+    integer or floating-point type`) and two operands of the same type
+    (`arguments are of different types`). At 19: the usual unary
+    conversions first, then for `max` / `min` the usual arithmetic
+    conversions when both operands are arithmetic, then the same-type
+    check and clang 19's wording (`... signed integer or floating point
+    type`, `... vector, integer or floating point type`).
+    `tests/conformance/ext.gnu.builtins/elementwise-args*.cpp`,
+    `align-frame-address-args.cpp`.
   - `__builtin_object_size` / `__builtin_dynamic_object_size`: the type
     argument (an `I` constant) must be in [0, 3] (`argument value V is
     outside the valid range [0, 3]` at the callee), checked after
@@ -3157,6 +3250,17 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     a use is an undeclared identifier there), matching `__has_builtin` at
     each level. Folding: spec/oven.md "Builtins"; lowering:
     spec/codegen.md (`tests/conformance/c.math/f16-builtins*.cpp`).
+  - WP-419: `__builtin_signbitf(float)` / `__builtin_signbitl(long
+    double)` (clang 19 and 22; ordinary argument conversions, unlike the
+    custom-checked `__builtin_signbit`), and clang 22's
+    `__builtin_fmaximum_numf128` / `fminimum_numf128` / `sincosf128`
+    (`__float128`, i.e. `long double` on AArch64) and
+    `__builtin_sincospi{,f,l}` (`void(T, T*, T*)`, `nothrow`; only at
+    `-fclang-compat=22`, `builtin::min_compat`).
+  - WP-419: `__builtin_classify_type(e)` (custom-checked, one argument
+    kept unconverted and unevaluated; GCC type classes, identical in
+    clang 19 and 22): spec/sema-templates.md §9.4
+    (`tests/conformance/expr.const/builtin-classify-type*.cpp`).
 - **Format strings** (WP-282; `format_string.rs`, clang
   `CheckPrintfHandler`): a call whose callee has a `format(printf, F, A)`
   attribute with `A` > 0 and whose argument `F` is an ordinary string
@@ -3381,7 +3485,12 @@ for them.
     minus such targets. Not for a reference, class, dependent,
     `[[maybe_unused]]` or `_` variable, a parenthesized assignment, or a
     compound assignment/increment of a volatile one; diagnosed with the
-    unused variables in location order.
+    unused variables in location order. A reference an instantiation
+    shares with its pattern counts again (`mark_shared_expr_referenced`,
+    clang `TransformDeclRefExpr`), balancing the assignment its
+    instantiated statement subtracts: a variable captured by a generic
+    or explicit-object lambda and assigned in its body is not diagnosed
+    (WP-162, test `stmt.dcl/unused-but-set-variable-generic-lambda.cpp`).
   - Namespace-scope variables (WP-217, `unused_file_scope.rs`, clang
     `ShouldWarnIfUnusedFileScopedDecl`): at the end of the translation
     unit, a variable with internal linkage declared in the main file and
@@ -4584,7 +4693,11 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   use member 'f' from dependent base class" (inherited, or when the one
   function callable with no arguments was picked), a note per
   declaration and a `this->` fix-it in a non-static member function;
-  clang 19 says the same from the class lookup. Only this path ranks
+  clang 19 says the same from the class lookup (also for an
+  operator-function-id: "member 'operator+' used before its
+  declaration"). Each "did you mean" carries a replacement fix-it over
+  the name and, under clang 22, the name's range; a keyword suggestion
+  has the range but no fix-it under clang 22 (WP-420). Only this path ranks
   candidates: the general undeclared-identifier path has no corrector.
   Tests: `tests/conformance/temp.names/template-id-typo-*-22.cpp`,
   `template-id-class-member-22.cpp`, `args-for-non-template-member-19.cpp`.
@@ -4592,15 +4705,23 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   [temp.names]/3-4, WP-399): `o.g<int>`, `p->g<>`, `X::g<int>` naming one
   non-template member (also of the current instantiation) followed by
   `<>` or `<` type-id ... `>` is "'g' does not name a template but is
-  followed by template arguments" with a note at the member, the list
-  skipped and the access an error; an overloaded member or a list that
+  followed by template arguments" over the range of the list, with a
+  note at the member, the list skipped and the access an error. The same
+  holds for an operator-function-id (`::operator+<int>(a, b)`,
+  `N::operator-<int>`, `this->operator+<int>(b)`; WP-420). Unqualified
+  and called, such a name is assumed a template; when argument-dependent
+  lookup finds none it is "use of undeclared 'operator*'" (clang 22: with
+  the range of its first token, as for any call whose
+  argument-dependent lookup finds nothing), or inside a class "'operator+'
+  does not refer to a template"; an overloaded member or a list that
   need not be template arguments is parsed as a comparison. A bound
   member function as an operand of a binary operator is only "reference
   to non-static member function must be called". A member template-id of
   a dependent object without `template` is "use 'template' keyword to
   treat 'f' as a dependent template name" with the fix-it. Tests:
   `tests/conformance/expr.ref/member-access-followed-by-template-args.cpp`,
-  `tests/conformance/temp.names/member-template-id-dependent-object.cpp`.
+  `tests/conformance/temp.names/member-template-id-dependent-object.cpp`,
+  `operator-function-id-non-template-args-*.cpp`.
 - **Clang 19 correction to the qualified function** ([temp.names]/3,
   WP-399; clang 19's `TypoExpr` and `CorrectDelayedTyposInExpr`): under
   `-fclang-compat=19` an undeclared template-id whose best candidate is
@@ -4660,7 +4781,11 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   holds a `fallback` "did you mean" for the value of the same group or of
   the nearest later group with exactly one value, taken when the
   function fails; a valid function tied with a value or another function
-  is `ambiguous`, reported uncorrected. Two values in the nearest group
+  is `ambiguous`, reported uncorrected, unless the tie is one value and
+  one function and the speculation is a copy-initializer the value's
+  type and category cannot implicitly convert to (`settle_typo_tie`:
+  `int (*p)(int) = valc<int>;` with `int vala; int valb(int);` is
+  `valb`; WP-420). Two values in the nearest group
   are no correction. The correction point validates as before: a
   built-in operand or an initializer rejects a function, a `return`
   operand, condition or discarded expression accepts anything, so there
@@ -4675,8 +4800,9 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   at the next token, an error operand before a binary operator). Within
   one distance clang orders candidates by a string hash kiln does not
   model, so a keyword tied with a declaration (`swtch` with `switch` and
-  a function `swatch`), and an initializer that accepts only one of a
-  tied value and function, may differ. Tests:
+  a function `swatch`) may differ; an assignment or call argument that
+  accepts only one of a tied value and function is still reported
+  uncorrected. Tests:
   `tests/conformance/temp.names/template-id-typo-*-19.cpp`.
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
@@ -4709,6 +4835,18 @@ Each rule names the libc++ test it fixed and its corpus test.
   "value of type 'S' is not implicitly convertible to 'int'", at the
   argument (tuple_size_incomplete). Test:
   `tests/conformance/temp.arg.nontype/class-arg-no-conversion.cpp`.
+- **Overload set as a non-type argument** ([temp.arg.nontype]/2,
+  [over.over]/1; WP-420): an overload set (`f`, `&f`, `(f)`, `tf<int>`,
+  `&S::m`) for a non-dependent parameter is resolved against the
+  parameter type (pointer to function, reference to function, pointer to
+  member function) before the converted-constant check. When no function
+  matches, or the parameter has another type, it is "value of type
+  '<overloaded function type>' is not implicitly convertible to 'int'"
+  over the argument's range, plus (clang 22) "template parameter is
+  declared here". A misspelled template-name before the arguments is
+  corrected first ("did you mean '::val'?"); clang 19 then shows a
+  corrected template-id naming one function with its function type.
+  Tests: `tests/conformance/temp.arg.nontype/overload-set-argument-*.cpp`.
 - **Conversions a non-type argument may not use** ([temp.arg.nontype]/2,
   [expr.const]/12; clang `CheckConvertedConstantConversions`): the
   standard conversion sequence (the one after a user-defined conversion)
@@ -4857,7 +4995,11 @@ conversion to `bool` (`check_constant_logical_operand`):
   for a bitwise operation", `|` for `||`) replacing the operator, and
   for `&&` only `note_logical_instead_of_bitwise_remove_constant`
   removing from the end of the left operand to the end of the right.
-- Tests: `expr.log.and/constant-operand*.cpp`, `expr.log.or/constant-operand.cpp`.
+  Both fix-its are file edits (§7.10.1): the removal is dropped when
+  either end is inside a macro expansion it does not begin or end
+  (`a && G(5)` with `#define G(x) x; (void)0`); the notes stay.
+- Tests: `expr.log.and/constant-operand*.cpp`, `expr.log.or/constant-operand.cpp`,
+  `kiln_driver` `fixits_in_macro_expansions_like_clang`.
 
 ### 5.26 Integers in a boolean context (`int_in_bool.rs`, WP-410)
 
@@ -4894,13 +5036,26 @@ value is used); no parentheses or implicit casts are looked through.
   to a boolean", `int-in-bool-context`) at the operator, from
   `builtin_binary` before the operands are converted.
 - clang's `'*' in boolean context` is C only and not issued.
-- Deviation: clang checks a template's non-dependent full-expressions
-  again in each instantiation and repeats these warnings there; kiln
-  reports them once, in the definition.
+- Templates ([temp.inst], WP-419): `check_implicit_conversions` skips a
+  value- or type-dependent full-expression (clang's
+  `CheckImplicitConversions`), so `return N << 1;` and `(x << 1) && N`
+  are checked only in each instantiation. A non-dependent one is checked
+  in the definition and again in each instantiation, which runs the walk
+  on the shared tree from its `act_on_condition` / `act_on_return` /
+  full-expression actions. The warnings above are
+  `per_instantiation()` (spec/diag.md §7.4), so each instantiation
+  reports them again with its instantiation note. In an instantiation
+  the walk also re-runs the `&&` / `||` enumerator check on each
+  operator of the full-expression (`recheck_enum_constants_in_bool`;
+  clang rebuilds every operator, kiln shares non-dependent ones); an
+  operator rebuilt by substitution is then reported twice at one
+  location and context and deduplicated. A substituted non-type
+  argument is not an integer literal (`a ? N : 5` is not warned).
 - Tests: `expr.shift/shift-bool-always.cpp`,
   `expr.shift/shift-in-bool-context-{19,22}.cpp`,
   `expr.cond/cond-int-constants-bool.cpp`,
-  `conv.bool/enum-constant-in-bool*.cpp`.
+  `conv.bool/enum-constant-in-bool*.cpp`,
+  `conv.bool/int-in-bool-per-instantiation-{19,22}.cpp`.
 
 ### 5.27 Always-non-null comparisons (`null_compare.rs`, WP-411)
 
@@ -5015,6 +5170,19 @@ and unevaluated operands:
     is itself such an expression as a call argument or in `T{...}`
     (clang's `ParseBraceInitializer` fails). Test:
     `tests/conformance/dcl.init.general/invalid-element-initializer.cpp`.
+  - a failed braced aggregate initialization (WP-420; clang's
+    `InitListChecker::hadError`): once an element failed to initialize
+    (`int a[] = {g(1, 2), 2};` with a `void g`: "cannot initialize an
+    array element of type 'int' with an rvalue of type 'void'") or a list
+    had excess clauses, nested lists included, no further "excess
+    elements" error is reported for the same outermost list
+    (`Sema::agg_error_mark`, the unrecoverable error count when it
+    started, so a narrowing error does not count). The excess error is at
+    the begin location of the first excess clause (`{1, 1 + 2}` at the
+    `1`). The outermost list's initialization is then an `ExprError`
+    (`is_expr_error`): its full-expression is not checked for implicit
+    conversions and the variable has no constant initializer. Test:
+    `tests/conformance/dcl.init.aggr/element-init-failure.cpp`.
   - copy- and direct-initialization of scalars, through the implicit
     conversion sequence, with narrowing enforced for list-init
     ([dcl.init.list]/7); a list element (`init_element`, an array or
@@ -5357,6 +5525,19 @@ and unevaluated operands:
 
 ## 7. Statements (`stmt.rs`)
 - **Compound statements and scopes:** see §2.
+- **Discarded volatile glvalues** ([expr.context]/2, WP-416; clang
+  `IgnoredValueConversions` / `isReadIfDiscardedInCPlusPlus11`). From
+  C++11, `ignored_value_conversions(e)` applies the lvalue-to-rvalue
+  conversion (`conv::lvalue_to_rvalue`, so not to a class or array) to a
+  discarded-value expression that is a non-dependent glvalue of
+  volatile-qualified type and, ignoring parentheses, an id-expression, a
+  subscript, a member access, an indirection, a `.*` / `->*`, a comma
+  whose right operand qualifies, or a conditional (also `a ?: b`) both of
+  whose arms qualify. It runs on an expression statement and a `for`
+  increment (before `act_on_full_expr`), the left operand of a built-in
+  comma, and the operand of a cast to `void`. A call returning a volatile
+  reference is not read. Such a `.*` / `->*` is not `expression result
+  unused` (clang sees the cast).
 - **`if`, `while`, `for`:** condition conversion to `bool` (contextual
   conversion), plus `cond_var` for condition declarations
   (`act_on_condition_var`). A condition variable of function type
@@ -5824,6 +6005,35 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
   `stmt.break/unreachable-code-break.cpp`,
   `stmt.if/unreachable-code-config.cpp`.
 
+#### 7.10.1 Fix-its at macro locations (`macro_fixit.rs`, WP-419)
+
+The silencing note and the `-Wconstant-logical-operand` notes (§5.25)
+build their fix-its as clang does, as edits of the file:
+- The end of a token (`Sema::file_token_end`, clang
+  `Lexer::getLocForEndOfToken`) at a macro location exists only when the
+  token ends every expansion it is in (a macro argument ends its
+  expansion unless the argument continues in the next entry); it is then
+  the end of the outermost invocation. Without it the silencing note is
+  not emitted and the removal fix-it is not attached.
+- `Sema::file_fixits` maps a note's fix-its (clang `edit::Commit`,
+  `Lexer::makeFileCharRange`): an insertion at the start of every
+  expansion it is in moves to the invocation, and a macro-argument
+  location to where the argument is written; a range keeps a file end,
+  maps a macro begin by the start rule and a macro end by the end rule,
+  and a range lying in one macro argument maps to its spelling. When any
+  fix-it of the note does not map, the note keeps its message and loses
+  all of its fix-its (clang `mergeFixits`): `if (X 1)` with
+  `#define X h() && !` gets the note without `/* DISABLES CODE */ (`.
+- A token's end is measured from the source text (`Sema::token_end`):
+  an identifier, a number or the longest punctuator ([lex.operators];
+  `>>` and `>>=` included). A one-character `>` that the parser split
+  off a `>>` or `>>=` closing a template argument list ([temp.names]/4;
+  `Parser::split_greater` calls `Sema::note_split_greater`) measures
+  one character, as clang measures the split token. Unit test:
+  `impcast::tests::token_end_measures_shift_tokens_and_split_greaters`.
+- Tests: `kiln_driver` `fixits_in_macro_expansions_like_clang` (stderr of
+  clang 19 and 22), `expr.log.and/constant-operand-macro-fixits.cpp`.
+
 ### 7.11 `-Wfor-loop-analysis` (`for_loop_analysis.rs`, WP-234)
 clang 19's `CheckForLoopConditionalStatement` and
 `CheckForRedundantIteration`. `act_on_for` runs both as each `for` is
@@ -5862,8 +6072,13 @@ instantiation repeats them, as clang does).
   `incremented here` at the header's name.
 - Groups: -Wloop-analysis = {-Wfor-loop-analysis,
   -Wrange-loop-analysis}; not in -Wall.
+- Macros are not suppressed: the warning fires whether the `for`, its
+  condition, increment or the body's last statement comes from a macro
+  expansion, with the usual `expanded from macro` notes (§diag 8). A
+  dependent loop warns once per instantiation, with the instantiation
+  note (WP-419).
 - Tests: `tests/conformance/stmt.for/for-loop-analysis.cpp`,
-  `stmt.for/loop-analysis.cpp`.
+  `stmt.for/loop-analysis.cpp`, `stmt.for/for-loop-analysis-macros.cpp`.
 
 ### 7.12 `-Wbitfield-constant-conversion` (`bitfield_constant.rs`, WP-234)
 clang 19's `AnalyzeBitFieldAssignment`. An integral or enumeration

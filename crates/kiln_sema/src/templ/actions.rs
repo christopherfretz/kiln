@@ -598,18 +598,31 @@ impl Sema<'_, '_> {
     /// one declaration (a `DeclRefExpr` or implicit member access, not
     /// an overload set) and it is no template.
     pub fn potential_template_name(&self, name: Symbol) -> Option<DeclId> {
-        self.potential_template_name_in(None, name)
+        self.potential_template_name_in(None, DeclName::ident(name))
     }
 
     /// [`Sema::potential_template_name`] for `name` looked up in the
     /// context `qual` when qualified (`::f<int>`, `N::f<int>`).
-    pub fn potential_template_name_in(&self, qual: Option<DeclId>, name: Symbol) -> Option<DeclId> {
+    pub fn potential_template_name_in(
+        &self,
+        qual: Option<DeclId>,
+        name: DeclName,
+    ) -> Option<DeclId> {
         let found = match qual {
-            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
-            None => self.lookup_name(name, LookupKind::Ordinary),
+            Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
+            None => self.lookup_name_dn(name, LookupKind::Ordinary),
         };
         let [d] = found.decls[..] else { return None };
         let d = self.ast.strip_shadow(d);
+        if self.kind_of(d) == DeclKind::CXXMethod
+            && !self.is_static_method(d)
+            && !self.implicit_this_available()
+        {
+            // `S::f` outside a member function is already an error ("call
+            // to non-static member function without an object argument"),
+            // so clang's `checkPotentialAngleBracket` does not run.
+            return None;
+        }
         (!matches!(
             self.kind_of(d),
             DeclKind::FunctionTemplate | DeclKind::VarTemplate | DeclKind::ClassTemplate
@@ -620,19 +633,23 @@ impl Sema<'_, '_> {
     /// clang's `diagnoseExprIntendedAsTemplateName` for the name `name`
     /// at `loc`, found as the non-template `found`, followed by a
     /// template argument list ([temp.names]/3): "'f' does not name a
-    /// template but is followed by template arguments", with a note at
-    /// the declaration.
+    /// template but is followed by template arguments" with the range
+    /// of the list from its `<` at `less` to its `>` at `greater`, and a
+    /// note at the declaration. `name` may be an operator-function-id
+    /// (`::operator+<int>(a, b)`).
     pub fn diagnose_expr_intended_as_template_name(
         &mut self,
-        name: Symbol,
+        name: DeclName,
         found: DeclId,
         loc: Loc,
+        (less, greater): (Loc, Loc),
     ) {
-        let text = self.decl_name_str(DeclName::ident(name));
+        let text = self.decl_name_str(name);
         let at = self.ast.decls.get(found).loc();
         let msg = self
             .diag(DiagId::sema_non_template_in_template_id, loc)
             .arg(text)
+            .range(kiln_source::Span::new(less, greater.with_offset(1)))
             .with_note(self.diag(DiagId::note_non_template_in_template_id_found, at));
         self.emit(msg);
     }
@@ -692,8 +709,7 @@ impl Sema<'_, '_> {
         if self.clang_compat < 22
             && !ordinary.is_empty()
             && self.in_class_context()
-            && let Some(sym) = name.as_ident()
-            && let Some(decls) = self.diagnose_member_found_in_class(sym, loc, false)
+            && let Some(decls) = self.diagnose_member_found_in_class(name, loc, false)
         {
             // clang 19 diagnoses the member as found late in the class;
             // the call then needs an object.
@@ -716,11 +732,18 @@ impl Sema<'_, '_> {
                     .with_note(self.diag(DiagId::note_declared_non_template, at));
                 self.emit(msg);
             }
-            _ => {
-                let msg = self.diag(Self::undeclared_use_id(name), loc).arg(text);
-                self.emit(msg);
-            }
+            _ => self.diagnose_undeclared_template_name(name, loc),
         }
+    }
+
+    /// "use of undeclared 'operator+'" for the template-name `name` at
+    /// `loc`, with (clang 22) the range of the token there.
+    fn diagnose_undeclared_template_name(&mut self, name: DeclName, loc: Loc) {
+        let mut msg = self.diag(Self::undeclared_use_id(name), loc).arg(self.decl_name_str(name));
+        if self.clang_compat >= 22 {
+            msg = msg.range(kiln_source::Span::new(loc, self.token_end(loc).unwrap_or(loc)));
+        }
+        self.emit(msg);
     }
 
     /// Whether the current context is lexically inside a class: the
@@ -812,8 +835,7 @@ impl Sema<'_, '_> {
             return self.builder().unresolved_lookup(name, &decls, true, None, Some(list), loc);
         }
         if decls.is_empty() && qualifier.is_none() {
-            let msg = self.diag(Self::undeclared_use_id(name), loc).arg(self.decl_name_str(name));
-            self.emit(msg);
+            self.diagnose_undeclared_template_name(name, loc);
             return self.act_on_error_expr(&[], loc);
         }
         if !functions || !decls.iter().any(|&d| self.kind_of(d) == DeclKind::FunctionTemplate) {

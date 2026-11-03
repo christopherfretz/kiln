@@ -194,11 +194,28 @@ impl Sema<'_, '_> {
     /// chain). `NoThrowAttr` makes a call non-throwing for `noexcept`
     /// ([`Sema::can_throw`]) and `nounwind` in IR, as in clang; no
     /// `BuiltinAttr` is attached, so a call stays an ordinary call.
+    ///
+    /// WP-419: the declaration also records the row's `__builtin_` twin
+    /// (`ceil` -> `__builtin_ceil`), which redeclarations inherit. Codegen
+    /// lowers a call through the twin where clang's `EmitBuiltinExpr`
+    /// does (the errno-free rounding, `fabs`, `copysign`, `fma`, `fmax` /
+    /// `fmin`, `fmaximum_num` / `fminimum_num` functions); everywhere
+    /// else the call stays an ordinary call.
     pub(crate) fn add_known_function_attrs(&mut self, f: DeclId, attrs: &mut Vec<AttrId>) {
-        if self.ast.prev(f).is_some() {
+        if let Some(p) = self.ast.prev(f) {
+            if self.kind_of(f) == DeclKind::Function
+                && let Some(id) = self.ast.decls.lib_builtin(p)
+            {
+                let _ = self.ast.decls.cold.lib_builtin.insert(f, id);
+            }
             return;
         }
         let Some(info) = self.lib_builtin_info(f) else { return };
+        if let Some(id) =
+            builtin::by_name_at(&format!("__builtin_{}", info.name), self.clang_compat)
+        {
+            let _ = self.ast.decls.cold.lib_builtin.insert(f, id);
+        }
         let loc = self.ast.decls.get(f).loc();
         for (bit, kind) in [
             (builtin::attr::NOTHROW, AttrKind::NOTHROW),
@@ -461,13 +478,20 @@ impl Sema<'_, '_> {
     /// library-builtin recognition in `ActOnFunctionDeclarator`, which
     /// gives it a builtin id): a `Function` in a namespace-scope context
     /// with C language linkage, named in the table and with the row's type
-    /// ignoring the exception specification.
+    /// ignoring the exception specification; WP-419: and declared at the
+    /// `-fclang-compat` level and in the dialect ([`builtin::lib_min_compat`],
+    /// [`builtin::lib_gnu_only`]).
     pub(crate) fn lib_builtin_info(&mut self, f: DeclId) -> Option<builtin::Info> {
         if self.kind_of(f) != DeclKind::Function {
             return None;
         }
         let name = self.ast.decls.get(f).name().as_ident()?;
         let info = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied()?;
+        if builtin::lib_min_compat(info.id) > self.clang_compat
+            || (builtin::lib_gnu_only(info.id) && !self.gnu)
+        {
+            return None;
+        }
         self.c_linkage_file_scope_fn_of_type(f, info.sig).then_some(info)
     }
 
@@ -689,6 +713,14 @@ impl Sema<'_, '_> {
             builtin::ASSUME_ALIGNED => self.builtin_assume_aligned(callee, args, rparen),
             builtin::COMPLEX => self.builtin_complex(callee, args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
+            // WP-419: clang `CheckBuiltinFunctionCall`: one argument, kept
+            // as written (no conversion; the call never evaluates it). A
+            // bound member function or builtin name is diagnosed as in any
+            // call argument; an overload set is kept (clang classifies its
+            // placeholder type as an unspecified value, kiln as -1).
+            builtin::CLASSIFY_TYPE => (self.builtin_arg_count(args, 1, rparen)
+                && !self.check_builtin_fn_use(args[0]))
+            .then(|| (args.to_vec(), QualType::INT)),
             builtin::VA_START => self.builtin_va_start(callee, args, rparen),
             // WP-156: the vector reductions (vector_ops.rs).
             builtin::REDUCE_ADD
@@ -698,6 +730,14 @@ impl Sema<'_, '_> {
             | builtin::REDUCE_XOR
             | builtin::REDUCE_MIN
             | builtin::REDUCE_MAX => self.builtin_reduce(id, args, rparen),
+            // WP-416: the alignment and element-wise math builtins.
+            builtin::ALIGN_UP | builtin::ALIGN_DOWN | builtin::IS_ALIGNED => {
+                self.builtin_align(id, args, rparen)
+            }
+            builtin::ELEMENTWISE_ABS => self.builtin_elementwise_abs(args, rparen),
+            builtin::ELEMENTWISE_MAX | builtin::ELEMENTWISE_MIN => {
+                self.builtin_elementwise_minmax(args, rparen)
+            }
             builtin::OPERATOR_NEW | builtin::OPERATOR_DELETE => {
                 return self.builtin_operator_new_delete(callee, b, id, args, loc, rparen);
             }
@@ -813,6 +853,83 @@ impl Sema<'_, '_> {
         Some((vec![a], QualType::INT))
     }
 
+    /// `__builtin_align_up` / `__builtin_align_down` /
+    /// `__builtin_is_aligned` (clang's `BuiltinAlignment`; spec/sema.md
+    /// §5.4): the source is an integer (not `bool` or an enumeration) or a
+    /// non-function pointer (an array decays), else `operand of type T
+    /// where arithmetic or pointer type is required`; the alignment is
+    /// such an integer, else `used type T where integer is required`. A
+    /// constant alignment must be in [1, 2^(width(T)-1)] and a power of
+    /// two; 1 warns (`-Wtautological-compare`). The result has the
+    /// (decayed, unqualified) source type, or `bool` for `is_aligned`.
+    fn builtin_align(
+        &mut self,
+        id: u32,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 2, rparen) {
+            return None;
+        }
+        let (src, al) = (args[0], args[1]);
+        let valid_int = |s: &Self, q: QualType| {
+            s.ast.types.is_integral(q) && s.ast.types.builtin(q) != Some(BuiltinType::Bool)
+        };
+        let st0 = self.ety(src);
+        let st = if self.ast.types.is_array(st0) { conv::array_decayed(self, st0) } else { st0 };
+        let ptr = self.ast.types.is_pointer(st);
+        let fn_ptr =
+            ptr && self.ast.types.pointee(st).is_some_and(|p| self.ast.types.is_function(p));
+        if (!ptr && !valid_int(self, st)) || fn_ptr {
+            let d = self
+                .diag(DiagId::sema_typecheck_expect_scalar_operand, self.eloc(src))
+                .arg(self.ty_arg(st));
+            self.emit(d);
+            return None;
+        }
+        let at = self.ety(al);
+        if !valid_int(self, at) {
+            let d = self.diag(DiagId::sema_expect_int, self.eloc(al)).arg(self.ty_arg(at));
+            self.emit(d);
+            return None;
+        }
+        let is_aligned = id == builtin::IS_ALIGNED;
+        if !self.expr_is_value_dependent(al)
+            && let Some(v) = self.fold_int(al)
+        {
+            let bits = if ptr {
+                u32::try_from(self.abi.pointer_size * 8).unwrap_or(64)
+            } else {
+                conv::rank::int_width(self, st).unwrap_or(64)
+            };
+            let max = (bits <= 128).then(|| 1u128 << (bits - 1));
+            let loc = self.eloc(al);
+            let err = if v < 1 {
+                Some(self.diag(DiagId::sema_alignment_too_small, loc).arg(1))
+            } else if let Some(m) = max.filter(|&m| v.cast_unsigned() > m) {
+                Some(self.diag(DiagId::sema_alignment_too_big_bits, loc).arg(m.to_string()))
+            } else if v.count_ones() != 1 {
+                Some(self.diag(DiagId::sema_alignment_not_power_of_two, loc))
+            } else {
+                None
+            };
+            if let Some(d) = err {
+                self.emit(d);
+                return None;
+            }
+            if v == 1 {
+                let d = self
+                    .diag(DiagId::sema_alignment_builtin_useless, loc)
+                    .arg(usize::from(is_aligned));
+                self.emit(d);
+            }
+        }
+        let src = conv::decay(self, src);
+        let al = conv::lvalue_to_rvalue(self, al);
+        let ty = if is_aligned { QualType::BOOL } else { conv::strip_cv(self, st) };
+        Some((vec![src, al], ty))
+    }
+
     /// `__builtin_isfinite` & co. (clang's `BuiltinFPClassification`;
     /// C23 7.12.3): one real floating argument.
     fn builtin_fp_classification(
@@ -919,6 +1036,28 @@ impl Sema<'_, '_> {
                 .arg("3".to_string());
             self.emit(d);
             return false;
+        }
+        if id == builtin::FRAME_ADDRESS
+            && let Some(&a) = args.first()
+            && !self.expr_is_value_dependent(a)
+            && let Some(v) = self.fold_int(a)
+        {
+            // clang `BuiltinConstantArgRange(TheCall, 0, 0, 0xFFFF)`, then
+            // `-Wframe-address` for a nonzero level.
+            let at = self.begin_loc(callee);
+            if !(0..=0xFFFF).contains(&v) {
+                let d = self
+                    .diag(DiagId::sema_argument_invalid_range, at)
+                    .arg(v.to_string())
+                    .arg("0".to_string())
+                    .arg("65535".to_string());
+                self.emit(d);
+                return false;
+            }
+            if v != 0 {
+                let d = self.diag(DiagId::sema_frame_address, at).arg("__builtin_frame_address");
+                self.emit(d);
+            }
         }
         true
     }

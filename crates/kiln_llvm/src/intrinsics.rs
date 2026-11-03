@@ -131,6 +131,87 @@ pub fn intrinsic(m: &mut Module, name: &str, fn_ty: TypeId) -> IrResult<FuncId> 
     m.get_or_insert_function(name, fn_ty)
 }
 
+/// The intrinsics LLVM 22 marks `IntrNoCreateUndefOrPoison` (its result is
+/// neither undef nor poison when no argument is), by base name. LLVM 22's
+/// parser attaches `nocreateundeforpoison` to their declarations; LLVM 19
+/// has no such attribute (`spec/llvm.md` §6).
+const NO_CREATE_UNDEF_OR_POISON: &[&str] = &[
+    "llvm.arithmetic.fence",
+    "llvm.bitreverse",
+    "llvm.bswap",
+    "llvm.canonicalize",
+    "llvm.ceil",
+    "llvm.clmul",
+    "llvm.copysign",
+    "llvm.cos",
+    "llvm.ctpop",
+    "llvm.exp",
+    "llvm.exp10",
+    "llvm.exp2",
+    "llvm.fabs",
+    "llvm.floor",
+    "llvm.fma",
+    "llvm.fmuladd",
+    "llvm.fptosi.sat",
+    "llvm.fptoui.sat",
+    "llvm.fptrunc.round",
+    "llvm.frexp",
+    "llvm.fshl",
+    "llvm.fshr",
+    "llvm.is.fpclass",
+    "llvm.ldexp",
+    "llvm.llrint",
+    "llvm.llround",
+    "llvm.log",
+    "llvm.log10",
+    "llvm.log2",
+    "llvm.lrint",
+    "llvm.lround",
+    "llvm.maximum",
+    "llvm.maximumnum",
+    "llvm.maxnum",
+    "llvm.minimum",
+    "llvm.minimumnum",
+    "llvm.minnum",
+    "llvm.nearbyint",
+    "llvm.pow",
+    "llvm.powi",
+    "llvm.ptrmask",
+    "llvm.rint",
+    "llvm.round",
+    "llvm.roundeven",
+    "llvm.sadd.sat",
+    "llvm.sadd.with.overflow",
+    "llvm.scmp",
+    "llvm.sin",
+    "llvm.smax",
+    "llvm.smin",
+    "llvm.smul.with.overflow",
+    "llvm.sqrt",
+    "llvm.ssub.sat",
+    "llvm.ssub.with.overflow",
+    "llvm.trunc",
+    "llvm.uadd.sat",
+    "llvm.uadd.with.overflow",
+    "llvm.ucmp",
+    "llvm.umax",
+    "llvm.umin",
+    "llvm.umul.with.overflow",
+    "llvm.usub.sat",
+    "llvm.usub.with.overflow",
+];
+
+/// Whether the declaration of intrinsic `name` (overload suffixes
+/// included) carries `nocreateundeforpoison`: at [`Module::ir_version`] 22
+/// or later, for the intrinsics LLVM 22 marks (`abs`, `ctlz`, `cttz` and
+/// the vector reductions are not among them).
+pub fn creates_no_undef_or_poison(m: &Module, name: &str) -> bool {
+    m.ir_version >= 22
+        && NO_CREATE_UNDEF_OR_POISON.iter().any(|b| {
+            name.strip_prefix(b).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+        })
+}
+
 fn declare(
     m: &mut Module,
     name: &str,
@@ -145,7 +226,11 @@ fn declare(
     let tys: Vec<TypeId> = params.iter().map(|p| p.0).collect();
     let fn_ty = m.types.function(ret, &tys, false);
     let f = m.add_function(name, fn_ty).expect("intrinsic type is a function type");
-    let fa = m.attr_set(&fn_attrs(shape));
+    let mut fattrs = fn_attrs(shape);
+    if creates_no_undef_or_poison(m, name) {
+        fattrs.push(Attr::Flag(AttrKind::NoCreateUndefOrPoison));
+    }
+    let fa = m.attr_set(&fattrs);
     let ra = m.attr_set(ret_attrs);
     let pa: Vec<_> = params.iter().map(|p| m.attr_set(p.1)).collect();
     let func = m.func_mut(f);
@@ -255,6 +340,15 @@ pub fn trap(m: &mut Module) -> FuncId {
 /// `void @llvm.debugtrap()`.
 pub fn debugtrap(m: &mut Module) -> FuncId {
     declare(m, "llvm.debugtrap", TypeId::VOID, &[], &[], Shape::NoUnwind(false))
+}
+
+/// `ptr @llvm.frameaddress.p0(i32 immarg level)`.
+pub fn frameaddress(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.frameaddress", &[p]);
+    let none = MemoryEffects::all(ModRef::None);
+    let params: [(TypeId, &[Attr]); 1] = [(TypeId::I32, &[Attr::Flag(ImmArg)])];
+    declare(m, &name, p, &params, &[], Shape::Basic(Some(none)))
 }
 
 /// Arithmetic of an `llvm.*.with.overflow.*` intrinsic.

@@ -22,8 +22,8 @@ use kiln_sema::{
     BaseSpecInfo, Chunk, DeclSpec, Declarator, DeclaratorContext, Initializer, MemInitId,
     MemInitInfo, NameClass, SpecialName, StorageSpec, TypeSpecKind,
 };
-use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
+use kiln_source::{Loc, Span};
 
 use crate::decl::{is_deduction_guide, is_untyped_special};
 use crate::keywords::Kw;
@@ -491,6 +491,14 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// "expected member name" at the current token, highlighting the
+    /// decl-specifier-seq `ds_range` (clang's `DS.getSourceRange()`, from
+    /// a leading attribute-specifier-seq).
+    fn error_expected_member_name(&mut self, ds_range: Span) {
+        let e = self.s.diag(DiagId::parse_expected_member_name, self.loc()).range(ds_range);
+        self.emit(e);
+    }
+
     /// clang's `SkipMalformedDecl`: skips to the end of a broken member
     /// declaration (through a `;` or a function body, or up to a `}`).
     pub(crate) fn skip_malformed_decl(&mut self) {
@@ -570,6 +578,14 @@ impl Parser<'_, '_> {
                 self.s.act_on_end_abbreviated();
             }
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
+            // clang `ParseCXXMemberSpecification`: GNU attributes after
+            // the `}` appertain to the class.
+            if self.at_kw(Kw::Attribute) {
+                let mut attrs = Vec::new();
+                self.parse_gnu_attr_seq(&mut attrs);
+                self.trace(|_| format!("record_trailing_attrs({})", attrs.len()));
+                self.s.act_on_record_trailing_attrs(r, &attrs);
+            }
         } else {
             self.s.error(DiagId::parse_expected_lbrace_after_base, self.prev_end());
         }
@@ -1249,9 +1265,13 @@ impl Parser<'_, '_> {
             self.s.plain_auto_type()
         } else if !ds.has_type_specifier() && is_untyped_special(d) {
             QualType::VOID
-        } else if d.invalid && !ds.has_type_specifier() {
+        } else if !ds.has_type_specifier()
+            && (d.invalid || (!d.has_name() && !self.at(Punct::Colon)))
+        {
             // A malformed special declarator-id (`operator;`) is reported;
-            // clang adds nothing about the type.
+            // clang adds nothing about the type. Nor does it for a
+            // declarator with no name (`static "C" ...`): clang reports only
+            // "expected member name" and never builds the type.
             QualType::ERROR
         } else {
             self.s.type_from_declspec_at(ds, d.name_loc())
@@ -1395,6 +1415,15 @@ impl Parser<'_, '_> {
         self.s.end_delayed_deprecation_to(level, None);
     }
 
+    /// After empty decl-specifiers: no declarator that may omit them
+    /// (a special member, an implicit-int declarator, or a qualified
+    /// member name) follows.
+    fn at_member_without_type(&self) -> bool {
+        !self.at_special_declarator(DeclaratorContext::Member)
+            && !self.at_implicit_int_declarator()
+            && !self.at_qualified_member_declarator()
+    }
+
     fn parse_member_declaration_inner(&mut self) {
         let tmpl_kind = self.template_decl_kind.take();
         if !self.stack_ok() || self.parse_member_declaration_leader() {
@@ -1415,16 +1444,13 @@ impl Parser<'_, '_> {
             self.act_on_member_decl_spec_only(&ds);
             return;
         }
-        if ds.is_empty()
-            && !self.at_special_declarator(DeclaratorContext::Member)
-            && !self.at_implicit_int_declarator()
-            && !self.at_qualified_member_declarator()
-        {
+        if ds.is_empty() && self.at_member_without_type() {
             self.member_without_type();
             return;
         }
         let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
         let is_typedef = ds.is_typedef();
+        let ds_range = Span::new(ds.lead_cxx11.unwrap_or(ds.loc), self.prev_end());
         let mut base_ty: Option<QualType> = None;
         let mut restrict_error = None;
         let mut first = true;
@@ -1454,7 +1480,7 @@ impl Parser<'_, '_> {
                 self.parse_member_declarator_tail(&mut d, ds.friend.is_some());
             if !d.has_name() && !has_width {
                 if !d.invalid {
-                    self.error_here(DiagId::parse_expected_member_name);
+                    self.error_expected_member_name(ds_range);
                 }
                 self.skip_until(&[Punct::RBrace], true, false);
                 if first {

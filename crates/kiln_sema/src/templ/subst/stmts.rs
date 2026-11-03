@@ -37,7 +37,8 @@ impl Substituter<'_, '_, '_> {
                 // invalid (clang: the statement is `StmtError`), except
                 // in a declaration statement whose variable's initializer
                 // failed (clang keeps the invalid variable) and in a
-                // lambda body (clang rebuilds the lambda). A statement
+                // lambda body (there the lambda-expression fails, and with
+                // it the enclosing statement, §5.5). A statement
                 // that only names an invalid entity is a `RecoveryExpr`
                 // in clang, not an error.
                 let decl_init = self.sema.ast.stmts.get(s).kind() == StmtKind::DeclStmt

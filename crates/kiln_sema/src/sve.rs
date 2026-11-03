@@ -15,7 +15,7 @@
 use kiln_ast::decl::{DeclFlags, DeclKind, TlsKind, VarStorage};
 use kiln_ast::names::DeclName;
 use kiln_ast::types::BuiltinType;
-use kiln_ast::{DeclHead, DeclId, QualType};
+use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -59,6 +59,23 @@ impl Sema<'_, '_> {
         for x in self.sve_types_of(q) {
             let msg = self.diag(DiagId::sema_sve_type_without_sve, loc).arg(self.ty_arg(x));
             self.emit(msg.allow_duplicate());
+        }
+    }
+
+    /// The operands `ops` of a built-in binary operator at `loc` (clang
+    /// `CreateBuiltinBinOp`'s `checkTypeSupport` of each operand type at
+    /// the operator, with no declaration): diagnosed only inside a
+    /// function and not in an unevaluated operand; a dependent operand
+    /// is checked as it is instantiated.
+    pub(crate) fn check_sve_operands(&mut self, ops: [ExprId; 2], loc: Loc) {
+        if self.unevaluated > 0 || !self.ast.decls.get(self.ctx).kind().is_function() {
+            return;
+        }
+        for e in ops {
+            let t = self.ety(e);
+            if !self.ast.types.is_dependent(t) {
+                self.check_sve_support(t, loc);
+            }
         }
     }
 

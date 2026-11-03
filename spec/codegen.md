@@ -60,7 +60,11 @@ panic and never silently wrong IR.
   `static const` member, first used in a try block, loaded the
   `available_externally` member and failed to link; libc++'s
   `memory_resource::__max_align`). Validation:
-  `tests/codegen/static_member_odr_use.cpp`.
+  `tests/codegen/static_member_odr_use.cpp`. A default member
+  initializer is walked once, at its field, so its candidates are folded
+  for every constructor that uses it (`int m = c;` with
+  `static const int c = 5;` stores `5`; WP-162,
+  `tests/codegen/nsdmi_static_const_fold.cpp`).
   Non-initializer candidates (a load of a const variable, a builtin
   call) fold with `Oven::fold_rvalue` (lax mode, WP-165): like clang's
   `tryEmitAsConstant`, a read of any `const` non-volatile variable with an
@@ -333,8 +337,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `llvm.is.fpclass` with the folded mask `m` (not emitted; the fold
       prepass collects it); `__builtin_expect_with_probability` at -O0 is
       its first operand (the expected value emitted, the probability
-      not); signbit bitcasts to an integer of the
-      float's width and tests `slt 0`; the isgreater family is one
+      not); signbit (and WP-419's `signbitf` / `signbitl`, through
+      `builtin::f128_twin`) bitcasts to an integer of the
+      float's width and tests `slt 0`, and a constant argument folds
+      (clang 19 and 22; `builtins_signbit_fl.cpp`); the isgreater family is one
       `fcmp` (`ogt oge olt ole one uno`) zero-extended;
     - memcpy/memmove are `llvm.memcpy`/`llvm.memmove` (`i64` length,
       not volatile) with each pointer's known alignment as a parameter
@@ -405,11 +411,43 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       to `a / 8` (`tests/codegen/builtins_alloca.cpp`);
     - `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf`
       are library builtins (`tests/codegen/builtins_printf_lib.cpp`).
+    - recognized C library functions (WP-419, clang `EmitBuiltinExpr`
+      for a library builtin; spec/sema.md §5.4): a direct call of a
+      declaration with a `lib_builtin` twin whose `__builtin_` form is an
+      LLVM intrinsic (`ceil`, `floor`, `trunc`, `round`, `rint`,
+      `nearbyint`, `roundeven`, `fabs`, `copysign`, `fma`, `fmax` /
+      `fmin` -> `llvm.maxnum` / `llvm.minnum`, clang 22's `fmaximum_num`
+      / `fminimum_num`, each `{,f,l}`) is emitted as the twin
+      (`builtins::lib_intrinsic`) at every `-O` level, a definition of
+      the function included; the call is never folded (clang does not
+      constant-evaluate the library names). Under clang's default
+      `-fmath-errno` the errno-setting ones (`sqrt`, `sin`, `exp`, ...)
+      stay library calls; kiln has no `-fno-math-errno`
+      (`tests/codegen/lib_float_intrinsics.cpp`, `_gnu.cpp`).
     - library builtins (WP-282, clang `EmitBuiltinExpr`):
       `__builtin_assume_aligned(p, a[, off])` returns `p` and emits
       `llvm.assume(i1 true) ["align"(ptr p, i64 a[, i64 off])]`
       (`emitAlignmentAssumption`; the call is folded first so a dependent
       alignment is a constant; `builtins_assume_aligned.cpp`).
+      The alignment builtins (WP-416, clang `EmitBuiltinAlignTo`): the
+      alignment is zero-extended or truncated to the source type (i64 for
+      a pointer) and `mask = align - 1`; `__builtin_align_up` adds the mask
+      (`getelementptr inbounds i8, p, mask` for a pointer), then both
+      ands with `~mask` (`llvm.ptrmask.p0.i64` for a pointer);
+      `__builtin_is_aligned` is `icmp eq (and src, mask), 0` (`ptrtoint`
+      first for a pointer). Constant operands fold as IRBuilder folds them
+      (`x + 0` is kept); an integer call is a fold candidate.
+      `__builtin_debugtrap()` is `call void @llvm.debugtrap()`,
+      `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`.
+      `__builtin_elementwise_abs` is `llvm.abs(x, i1 false)` for
+      integers and `llvm.fabs` for floating point, `_max` / `_min`
+      `llvm.smax` / `umax` / `smin` / `umin` by element signedness and
+      `llvm.maxnum` / `minnum` for floating point, overloaded on the
+      (vector) operand type; at 22 a call the Oven folds is folded
+      (`builtins_align_elementwise.cpp`, `builtins_elementwise_22.cpp`).
+      The driver sets the Oven's compatibility level before codegen's
+      fold prepass, so a unit in which sema evaluated nothing folds at
+      its level.
       `__builtin_object_size` / `__builtin_dynamic_object_size` of an
       object the frontend does not know is `llvm.objectsize(p, min =
       type & 2, nullunknown = true, dynamic)`, type 3 the constant 0;
@@ -437,7 +475,11 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `fminimum_num{,f,l}` are `llvm.roundeven`/`canonicalize`/
       `maximumnum`/`minimumnum` of the operand type; `exp10{,f,l}` and
       clang 22's `sincos{,f,l}` call the library function of that name
-      (WP-410; `builtins_c_math.cpp`, `builtins_c_math_22.cpp`). A
+      (WP-410; `builtins_c_math.cpp`, `builtins_c_math_22.cpp`). WP-419:
+      clang 22's `fmaximum_numf128` / `fminimum_numf128` lower as their
+      `l` twins (`llvm.maximumnum` / `minimumnum` of `fp128`), and
+      `sincosf128` and `sincospi{,f,l}` call the function of that name
+      (`builtins_c_math_more_22.cpp`). A
       `*f16` builtin (WP-403) is
       lowered likewise through `builtin::f16_twin` on `half` operands:
       `ceil`/`floor`/`trunc`/`round`/`rint`/`fabs`/`fma`/`fmax`/`fmin`
@@ -567,7 +609,32 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   an object whose alignment (`pointee_layout`: the non-virtual alignment
   of a non-final class) exceeds 1. Below 22 neither (clang 19). Metadata
   nodes are numbered in first-use order after the module flags and
-  ident, as clang prints them.
+  ident, as clang prints them. A reference parameter forwarded by a
+  delegating call (an inheriting constructor, a lambda's static invoker,
+  a thunk: `Cg::delegate_call_arg`, clang `EmitDelegateCallArg`) is a
+  plain `load ptr` of its slot with neither, at every compat level
+  (WP-416).
+- **Pointee alignment of an array of unknown bound (WP-416).** clang
+  `getTypeAlignInChars` gives `T[]` its element's alignment, so
+  `pointee_layout` reports `(no size, align of T)`: an `int(&)[]` / `int
+  (*)[]` parameter is `nonnull align 4` (no `dereferenceable`) and loads
+  through it are `align 4`. A function type stays alignment 1.
+- **Zeroed array fillers (WP-416).** clang `EmitArrayInit` passes
+  `Dest.isZeroed()` to the filler's `EmitInitializationToLValue`: when
+  the whole array was zeroed first (`Agg a[2] = {}`, one `memset` of the
+  array), the filler loop skips the per-element zeroing of a
+  value-initialized aggregate element, so no per-element `memset`.
+- **Constant external declarations (WP-416).** clang
+  `GetOrCreateLLVMGlobal` sets `isConstantStorage(Ctx, false, false)` on
+  a variable's declaration (`Cg::get_gvar`, `constant_storage`): a
+  reference (`extern int &r` is `external constant ptr`) or a `const`
+  object whose base element type is not a class (`extern const int`,
+  `extern int *const`, `extern const int[2]`) is `external constant`; a
+  `const` class object stays `external global`. A definition later in the
+  translation unit sets its own constness (§2).
+- **Discarded volatile reads (WP-416).** A discarded volatile scalar
+  glvalue carries sema's `LValueToRValue` cast (spec/sema.md §7,
+  [expr.context]/2), lowered as a `load volatile` whose value is unused.
 
 ### 3.1 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,

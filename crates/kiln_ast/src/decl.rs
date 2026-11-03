@@ -1616,6 +1616,10 @@ pub struct ColdDeclData {
     /// as an implicit builtin (`ceil` -> `__builtin_ceil`), recorded
     /// under `-stdlib=libstdc++` only (spec/sema.md §5.4).
     pub gnu_lib_twin: ColdMap<DeclId, u32>,
+    /// WP-419: the `__builtin_` twin of a declaration clang recognizes
+    /// as a C library builtin (`ceil` -> `__builtin_ceil`), recorded on
+    /// every declaration of the chain (spec/sema.md §5.4).
+    pub lib_builtin: ColdMap<DeclId, u32>,
     /// The typedef that names an unnamed class or enumeration for linkage
     /// purposes ([dcl.typedef]/9, clang's `TypedefNameForAnonDecl`): the
     /// tag's type prints with the typedef's name.
@@ -1677,6 +1681,7 @@ impl Default for ColdDeclData {
             declarator_end: ColdMap::new("declarator_end"),
             builtin_id: ColdMap::new("builtin_id"),
             gnu_lib_twin: ColdMap::new("gnu_lib_twin"),
+            lib_builtin: ColdMap::new("lib_builtin"),
             typedef_for_anon: ColdMap::new("typedef_for_anon"),
             decomp_bindings: ColdMap::new("decomp_bindings"),
             binding_decomp: ColdMap::new("binding_decomp"),
@@ -1692,7 +1697,7 @@ impl Default for ColdDeclData {
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 30] {
+    fn rows(&self) -> [MemRow; 31] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1714,6 +1719,7 @@ impl ColdDeclData {
             self.declarator_end.mem_row(),
             self.builtin_id.mem_row(),
             self.gnu_lib_twin.mem_row(),
+            self.lib_builtin.mem_row(),
             self.typedef_for_anon.mem_row(),
             self.decomp_bindings.mem_row(),
             self.binding_decomp.mem_row(),
@@ -2112,6 +2118,14 @@ impl DeclArena {
     /// spec/sema.md §5.4; recorded under `-stdlib=libstdc++` only).
     pub fn gnu_lib_twin(&self, d: DeclId) -> Option<u32> {
         self.cold.gnu_lib_twin.get(d).copied()
+    }
+
+    /// The `__builtin_` twin of `d` if `d` declares a C library function
+    /// clang recognizes as a library builtin (WP-419, spec/sema.md §5.4):
+    /// codegen lowers a call as clang's `EmitBuiltinExpr` lowers the
+    /// library builtin (`ceil(x)` -> `llvm.ceil`).
+    pub fn lib_builtin(&self, d: DeclId) -> Option<u32> {
+        self.cold.lib_builtin.get(d).copied()
     }
 
     /// The member list of context `ctx` (`None` if `ctx` owns none).
@@ -2919,6 +2933,11 @@ pub mod builtin {
     /// custom type-checking: one argument, decayed): whether the argument
     /// folds to a constant.
     pub const CONSTANT_P: u32 = 211;
+    /// `int __builtin_classify_type(...)` (clang `Builtins.td` signature
+    /// `i.`; custom type-checking: one argument, not converted or
+    /// evaluated): the GCC type class of the argument's type
+    /// ([`crate::Ast::gcc_type_class`]; WP-419).
+    pub const CLASSIFY_TYPE: u32 = 209;
     /// `__builtin_bswap16` (clang `Builtins.td` signature `UsUs`).
     pub const BSWAP16: u32 = 179;
     /// `__builtin_bswap32` (clang `Builtins.td` signature `UiUi`).
@@ -3027,6 +3046,11 @@ pub mod builtin {
     pub const ISNORMAL: u32 = 736;
     /// `__builtin_signbit` (clang `Builtins.td` signature `i.`).
     pub const SIGNBIT: u32 = 1089;
+    /// WP-419: `__builtin_signbitf` (`int(float)`; [`f128_twin`] maps it
+    /// to [`SIGNBIT`]).
+    pub const SIGNBITF: u32 = 1090;
+    /// WP-419: `__builtin_signbitl` (`int(long double)`).
+    pub const SIGNBITL: u32 = 1091;
     /// `__builtin_isgreater` (clang `Builtins.td` signature `i.`).
     pub const ISGREATER: u32 = 727;
     /// `__builtin_isgreaterequal` (clang `Builtins.td` signature `i.`).
@@ -3344,6 +3368,7 @@ pub mod builtin {
         row(CTZG, "__builtin_ctzg", "i.", N | C | T),
         row(POPCOUNTG, "__builtin_popcountg", "i.", N | C | T),
         row(CONSTANT_P, "__builtin_constant_p", "i.", N | C | T),
+        row(CLASSIFY_TYPE, "__builtin_classify_type", "i.", N | C | T),
         row(BSWAP16, "__builtin_bswap16", "UsUs", N | C),
         row(BSWAP32, "__builtin_bswap32", "UiUi", N | C),
         row(BSWAP64, "__builtin_bswap64", "ULiULi", N | C),
@@ -3370,6 +3395,8 @@ pub mod builtin {
         row(ISNAN, "__builtin_isnan", "i.", N | C | T),
         row(ISNORMAL, "__builtin_isnormal", "i.", N | C | T),
         row(SIGNBIT, "__builtin_signbit", "i.", N | C | T),
+        row(SIGNBITF, "__builtin_signbitf", "if", N | C),
+        row(SIGNBITL, "__builtin_signbitl", "iLd", N | C),
         row(ISGREATER, "__builtin_isgreater", "i.", N | C | T),
         row(ISGREATEREQUAL, "__builtin_isgreaterequal", "i.", N | C | T),
         row(ISLESS, "__builtin_isless", "i.", N | C | T),
@@ -3703,11 +3730,39 @@ pub mod builtin {
         row(1010, "remquol", "LdLdLdi*", N),
         row(1077, "scalbnl", "LdLdi", N),
         row(1071, "scalblnl", "LdLdLi", N),
+        // WP-419: C23's `roundeven`, clang 22's `fmaximum_num` /
+        // `fminimum_num` ([`lib_min_compat`]) and the GNU `sincos`
+        // ([`lib_gnu_only`]; clang 22). The ids are kiln-private.
+        row(2048, "roundeven", "dd", N | C),
+        row(2049, "roundevenf", "ff", N | C),
+        row(2050, "roundevenl", "LdLd", N | C),
+        row(2051, "fmaximum_num", "ddd", N | C),
+        row(2052, "fmaximum_numf", "fff", N | C),
+        row(2053, "fmaximum_numl", "LdLdLd", N | C),
+        row(2054, "fminimum_num", "ddd", N | C),
+        row(2055, "fminimum_numf", "fff", N | C),
+        row(2056, "fminimum_numl", "LdLdLd", N | C),
+        row(2057, "sincos", "vdd*d*", N),
+        row(2058, "sincosf", "vff*f*", N),
+        row(2059, "sincosl", "vLdLd*Ld*", N),
     ];
 
     /// The [`LIB`] row of the C library function spelled `name`.
     pub fn lib_by_name(name: &str) -> Option<&'static Info> {
         LIB.iter().find(|e| e.name == name)
+    }
+
+    /// WP-419: the lowest `-fclang-compat` level that recognizes the
+    /// [`LIB`] function `id` (clang 19 lacks the `fmaximum_num` /
+    /// `fminimum_num` and `sincos` library builtins).
+    pub fn lib_min_compat(id: u32) -> u32 {
+        if (2051..=2059).contains(&id) { 22 } else { 0 }
+    }
+
+    /// WP-419: whether the [`LIB`] function `id` is recognized in the GNU
+    /// dialects only (clang `ALL_GNU_LANGUAGES`: `sincos`).
+    pub fn lib_gnu_only(id: u32) -> bool {
+        (2057..=2059).contains(&id)
     }
 
     /// WP-380: the `__builtin_` twin of the [`LIB`] function `name` when
@@ -4388,6 +4443,10 @@ pub mod builtin {
     pub const FMAXF128: u32 = 590;
     /// `__builtin_fminf128`.
     pub const FMINF128: u32 = 598;
+    /// WP-419: `__builtin_fmaximum_numf128` (clang 22).
+    pub const FMAXIMUM_NUMF128: u32 = 2060;
+    /// WP-419: `__builtin_fminimum_numf128` (clang 22).
+    pub const FMINIMUM_NUMF128: u32 = 2061;
     /// `__builtin_frexpf128`.
     pub const FREXPF128: u32 = 620;
     /// `__builtin_huge_valf128`.
@@ -4447,6 +4506,26 @@ pub mod builtin {
     /// `__builtin_nextafterf16b` (GCC; as [`NEXTAFTERF16`]).
     pub const NEXTAFTERF16B: u32 = 2014;
 
+    // ---- WP-416: clang builtins kiln lacked (kiln-private ids). The
+    // alignment builtins and the element-wise math builtins are
+    // `CustomTypeChecking` (sema `builtin_align` / `builtin_elementwise`).
+    /// `__builtin_align_up`.
+    pub const ALIGN_UP: u32 = 2100;
+    /// `__builtin_align_down`.
+    pub const ALIGN_DOWN: u32 = 2101;
+    /// `__builtin_is_aligned`.
+    pub const IS_ALIGNED: u32 = 2102;
+    /// `__builtin_debugtrap`.
+    pub const DEBUGTRAP: u32 = 2103;
+    /// `__builtin_frame_address`.
+    pub const FRAME_ADDRESS: u32 = 2104;
+    /// `__builtin_elementwise_abs`.
+    pub const ELEMENTWISE_ABS: u32 = 2105;
+    /// `__builtin_elementwise_max`.
+    pub const ELEMENTWISE_MAX: u32 = 2106;
+    /// `__builtin_elementwise_min`.
+    pub const ELEMENTWISE_MIN: u32 = 2107;
+
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
     pub const EXTRA: &[Info] = &[
@@ -4459,6 +4538,15 @@ pub mod builtin {
         row(SHUFFLEVECTOR, "__builtin_shufflevector", "v.", N | C | T),
         row(VERBOSE_TRAP, "__builtin_verbose_trap", "vcC*cC*", N | R),
         row(COPYSIGNF16, "__builtin_copysignf16", "hhh", N | C),
+        // WP-416.
+        row(ALIGN_UP, "__builtin_align_up", "v*.", N | C | T),
+        row(ALIGN_DOWN, "__builtin_align_down", "v*.", N | C | T),
+        row(IS_ALIGNED, "__builtin_is_aligned", "b.", N | C | T),
+        row(DEBUGTRAP, "__builtin_debugtrap", "v", N),
+        row(FRAME_ADDRESS, "__builtin_frame_address", "v*IUi", N),
+        row(ELEMENTWISE_ABS, "__builtin_elementwise_abs", "v.", N | C | T),
+        row(ELEMENTWISE_MAX, "__builtin_elementwise_max", "v.", N | C | T),
+        row(ELEMENTWISE_MIN, "__builtin_elementwise_min", "v.", N | C | T),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19
@@ -4494,6 +4582,11 @@ pub mod builtin {
         row(582, "__builtin_fmaf128", "LLdLLdLLdLLd", N),
         row(FMAXF128, "__builtin_fmaxf128", "LLdLLdLLd", N | C),
         row(FMINF128, "__builtin_fminf128", "LLdLLdLLd", N | C),
+        // WP-419: clang 22's `fmaximum_num` / `fminimum_num` / `sincos`
+        // `f128` forms (kiln-private ids, [`min_compat`]).
+        row(FMAXIMUM_NUMF128, "__builtin_fmaximum_numf128", "LLdLLdLLd", N | C),
+        row(FMINIMUM_NUMF128, "__builtin_fminimum_numf128", "LLdLLdLLd", N | C),
+        row(2062, "__builtin_sincosf128", "vLLdLLd*LLd*", N),
         row(606, "__builtin_fmodf128", "LLdLLdLLd", N),
         row(FREXPF128, "__builtin_frexpf128", "LLdLLdi*", N),
         row(HUGE_VALF128, "__builtin_huge_valf128", "LLd", N | C),
@@ -4607,6 +4700,9 @@ pub mod builtin {
             RINTF128 => RINTL,
             ROUNDF128 => ROUNDL,
             TRUNCF128 => TRUNCL,
+            FMAXIMUM_NUMF128 => FMAXIMUM_NUML,
+            FMINIMUM_NUMF128 => FMINIMUM_NUML,
+            SIGNBITF | SIGNBITL => SIGNBIT,
             _ => return f16_twin(id),
         })
     }
@@ -4705,13 +4801,15 @@ pub mod builtin {
     }
 
     /// The lowest `-fclang-compat` level that declares builtin `id`
-    /// (clang 19 lacks `atan2f16`, `sincosf16`, `sincos{,f,l}` and the
-    /// `fmaximum_num` / `fminimum_num` family; `__has_builtin` answers from the
+    /// (clang 19 lacks `atan2f16`, `sincosf16`, `sincos{,f,l}`, the
+    /// `fmaximum_num` / `fminimum_num` family, and WP-419's `sincospi{,f,l}`
+    /// and `f128` forms; `__has_builtin` answers from the
     /// generated clang tables, which agree).
     pub fn min_compat(id: u32) -> u32 {
         match id {
-            // 2039..=2047 (WP-410): `sincos`, `fmaximum_num`, `fminimum_num`.
-            2035 | 2036 | FMAXIMUM_NUMF16 | FMINIMUM_NUMF16 | 2039..=2047 => 22,
+            // 2039..=2047 (WP-410): `sincos`, `fmaximum_num`, `fminimum_num`;
+            // 2060..=2065 (WP-419): the `f128` forms and `sincospi`.
+            2035 | 2036 | FMAXIMUM_NUMF16 | FMINIMUM_NUMF16 | 2039..=2047 | 2060..=2065 => 22,
             _ => 0,
         }
     }
@@ -4776,7 +4874,7 @@ pub mod builtin {
     /// The `double`/`float`/`long double` builtins clang answers
     /// `__has_builtin` for that are library calls, like [`LIBM`]
     /// ([`is_libm`]): `exp10` and clang 22's `sincos` (GNU extensions;
-    /// clang 19 lacks `sincos`).
+    /// clang 19 lacks `sincos`) and (WP-419) `sincospi`.
     pub const C_MATH_LIB: &[Info] = &[
         row(522, "__builtin_exp10", "dd", N),
         row(521, "__builtin_exp10f", "ff", N),
@@ -4784,6 +4882,10 @@ pub mod builtin {
         row(2039, "__builtin_sincos", "vdd*d*", N),
         row(2040, "__builtin_sincosf", "vff*f*", N),
         row(2041, "__builtin_sincosl", "vLdLd*Ld*", N),
+        // WP-419: clang 22's `sincospi` (kiln-private ids).
+        row(2063, "__builtin_sincospi", "vdd*d*", N),
+        row(2064, "__builtin_sincospif", "vff*f*", N),
+        row(2065, "__builtin_sincospil", "vLdLd*Ld*", N),
     ];
 
     // ---- end WP-410 ----

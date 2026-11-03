@@ -166,7 +166,7 @@ with `.` is not a test.
 | Suffix | Kind | Steps | Passes when |
 |---|---|---|---|
 | `.compile.pass.cpp` | compile.pass | `-fsyntax-only` | it compiles |
-| `.compile.fail.cpp` | compile.fail | `-fsyntax-only` | it fails to compile (a kiln crash is a FAIL, not a pass); no `-verify`, as in `format.py` (no such test carries `expected-*` comments) |
+| `.compile.fail.cpp` | compile.fail | `-fsyntax-only`; with clang-verify directives, `%{verify}` | it fails to compile (a kiln crash is a FAIL, not a pass), first error recorded; with directives, as `.verify.cpp` (see ".compile.fail.cpp" below) |
 | `.link.pass.cpp` | link.pass | `-c`, then link | both succeed |
 | `.link.fail.cpp` | link.fail | `-c`, then link | the compile succeeds and the link fails |
 | `.pass.cpp` | pass | `-c`, link, run | the binary exits 0 |
@@ -174,6 +174,32 @@ with `.` is not a test.
 | `.sh.<ext>` | sh | its `RUN:` commands (see "RUN lines") | every command exits 0; a test without `RUN:` lines is UNSUPPORTED (`driver: .sh test without RUN lines`) |
 | `.gen.<ext>` | gen | — | UNSUPPORTED (`driver: generated tests`) |
 | `.pass.mm`, `.compile.pass.mm` | objective-c++ | — | UNSUPPORTED (`driver: objective-c++`) |
+
+### .compile.fail.cpp
+
+libc++'s `format.py` runs a `.compile.fail.cpp` test as `! %{cxx} ...
+-fsyntax-only`, so any failed compile passes, including one that fails
+for an unrelated reason. The driver is stricter in two ways (WP-163):
+- **With directives: `-verify`.** A test that has a clang-verify
+  directive (`directives::has_verify_directives`) runs as a `.verify.cpp`
+  test, with the same flags and outcome: its diagnostics must match. A
+  directive is `expected-error`, `-warning`, `-note` or `-remark` (an
+  optional `-re`, then `{{` on the same line), with the default prefix
+  only.
+- **Without directives: exit status, with the first error recorded.**
+  - The test passes on a failed compile, as in lit, and records the
+    compile's first `error:` line (`TestResult::first_error`) with the
+    directories of its location dropped. A compile that fails without an
+    `error:` line records `(no error line)`.
+  - `-v` prints it under the result.
+  - `--report` lists every such pass with its first error. An audit
+    compares that line with the line the test means to reject.
+
+No libc++ 19 or 22 `.compile.fail.cpp` test carries a directive: 219 and
+195 tests, 0 with `expected-*` comments. So strict mode cannot change a
+gate today, and there is no `--strict-compile-fail` switch; the rule is
+always on. A directive-bearing test from a later release is checked from
+the start.
 
 ## Directives
 
@@ -302,10 +328,15 @@ accepts (`depr.numeric.limits.has.denorm/deprecated.verify.cpp` needs its
 
 `c++26`, `c++experimental`, `large_tests`, `long_tests`,
 `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`,
-`-fsized-deallocation`, `gcc-style-warnings`, `has-fconstexpr-steps`, `verify-support`,
+`std-at-least-c++03`, `std-at-least-c++11`, `std-at-least-c++14`,
+`std-at-least-c++17`, `std-at-least-c++20`, `std-at-least-c++23`,
+`std-at-least-c++26`, `-fsized-deallocation`, `gcc-style-warnings`, `has-fconstexpr-steps`, `verify-support`,
 `can-create-symlinks`, `has-64-bit-atomics`, `has-unix-headers`, `kiln`.
 
-What stays static, and why: the parameters (lit's `params.py` defaults);
+What stays static, and why: the parameters (lit's `params.py` defaults;
+libc++ 22's `std` parameter also adds `std-at-least-<s>` for every
+standard `s` of `_allStandards` up to the selected one, so all seven at
+`c++26`, which libc++ 19 never names);
 compiler-flag probes, which are kiln's answers and change only with kiln;
 snippet-compiling target probes (`has-unix-headers`, `has-64-bit-atomics`),
 taken as clang 19 sees this machine so the set does not move with kiln.
@@ -567,6 +598,8 @@ appended. The region contains:
 - **Crashes**: one row per crash cluster, with its test count and up to
   three example tests.
 - **KILLED, TIMEOUT, ERROR and XPASS**: each test, with its first message.
+- **compile.fail tests passed on exit status**: the count, then (folded)
+  each such test with its first error line (see ".compile.fail.cpp").
 - **UNSUPPORTED reasons**: the count for each reason.
 
 **Clusters.** For a FAIL (or a crash), each `error:` and `fatal error:` line
@@ -612,6 +645,9 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
   are sorted, the root reason, `Uid:` parsing); `slow_tests_list`
   (`slow_tests.txt` is sorted, every entry has a reason, which tests are
   long); `xfail_ignored_list` (sorted, every entry has a reason);
+  `compile_fail_records_first_error_or_verifies` (WP-163: the first
+  error with its directories dropped, `(no error line)`, a compile that
+  succeeds, and a directive-bearing test run as verify);
   `allow_retries_reruns_the_binary` (a fake compiler whose test
   script fails twice, then passes: PASS with 2 retries, FAIL with 1; a
   timeout is retried under the given limit); `preparation_of_scripts`
@@ -635,7 +671,8 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
   (libc++ 19 and 22 spellings, no threads, an explicit API, a target
   `__config` maps to no API).
 - `directives.rs`: `allow_retries_and_long_tests` (`ALLOW_RETRIES:` must
-  be one integer; which `REQUIRES:` mark a test long).
+  be one integer; which `REQUIRES:` mark a test long); `verify_directives`
+  (what counts as a clang-verify directive).
 
 ## Open questions
 
