@@ -573,7 +573,11 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   an object whose alignment (`pointee_layout`: the non-virtual alignment
   of a non-final class) exceeds 1. Below 22 neither (clang 19). Metadata
   nodes are numbered in first-use order after the module flags and
-  ident, as clang prints them.
+  ident, as clang prints them. A reference parameter forwarded by a
+  delegating call (an inheriting constructor, a lambda's static invoker,
+  a thunk: `Cg::delegate_call_arg`, clang `EmitDelegateCallArg`) is a
+  plain `load ptr` of its slot with neither, at every compat level
+  (WP-416).
 - **Pointee alignment of an array of unknown bound (WP-416).** clang
   `getTypeAlignInChars` gives `T[]` its element's alignment, so
   `pointee_layout` reports `(no size, align of T)`: an `int(&)[]` / `int
