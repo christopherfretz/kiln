@@ -88,7 +88,7 @@ impl Sema<'_, '_> {
 
     /// How a declaration names itself in a diagnostic (clang
     /// `getNameForDiagnostic`): a template specialization prints its
-    /// template arguments, `f<int>`, `X<int *, int>`.
+    /// template arguments, `f<int>`, `X<int *, int>`, `v<long>`.
     pub(crate) fn name_for_diagnostic(&self, d: DeclId) -> String {
         let mut name = self.decl_name(d);
         if let Some((_, i)) = self.ast.spec_info(d) {
@@ -102,6 +102,13 @@ impl Sema<'_, '_> {
                     i.print_args,
                     &mut name,
                 );
+            } else if self.ast.decls.var(d).is_some() {
+                // clang `VarTemplateSpecializationDecl::getNameForDiagnostic`:
+                // canonical, without trailing defaulted arguments, even
+                // for an explicit specialization written with a typedef
+                // (`g<L *>` is `'g<long *>'`).
+                let args = types.canonical_args(i.print_args);
+                kiln_ast::types::write_arg_list_scoped_of(types, &names, d, args, &mut name);
             } else if self.ast.decls.function(d).is_some() {
                 // clang's function template specialization keeps the
                 // canonical arguments (`CanonicalBuilder`); the deduced

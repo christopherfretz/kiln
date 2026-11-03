@@ -1045,6 +1045,18 @@ impl Sema<'_, '_> {
         self.builder().goto_stmt(d, loc)
     }
 
+    /// GNU `goto *e;` (clang `ActOnIndirectGotoStmt`): `e` is a
+    /// full-expression, so an unexpanded pack in it is diagnosed
+    /// ([temp.variadic]/12); computed goto itself is not supported yet
+    /// (a deviation, spec/parse.md §6.1), reported at the `*` unless `e`
+    /// was already diagnosed.
+    pub fn act_on_indirect_goto(&mut self, e: ExprId, star: Loc) {
+        if self.diagnose_unexpanded_written(e, "expression", None) || self.is_err_expr(e) {
+            return;
+        }
+        self.unsupported("computed goto", star);
+    }
+
     /// An `asm goto` label operand (clang `LookupOrCreateLabel` then
     /// `ActOnAddrLabel`, which marks it used).
     pub fn act_on_asm_goto_label(&mut self, name: Symbol, name_loc: Loc) -> DeclId {
