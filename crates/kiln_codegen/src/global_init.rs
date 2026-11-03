@@ -96,15 +96,29 @@ impl Cg<'_> {
 
     /// clang `DeclMustBeEmitted` for a discardable variable: it has a
     /// non-trivial destructor, or an initializer that is not a constant
-    /// and may have side effects.
+    /// and may have side effects, or it is a decomposition one of whose
+    /// tuple-like holding variables must be emitted ([dcl.struct.bind]/4:
+    /// an internal `constexpr auto [x, y] = v;` whose `get` returns by
+    /// value is emitted for its external `x`, `y`, which do not refer to
+    /// it).
     pub(crate) fn var_must_emit(&self, d: DeclId) -> bool {
         let ast = self.ast;
         let Some(ty) = ast.decls.get(d).ty() else { return false };
         if !ast.types.is_reference(ty) && self.var_destructed_class(d, ty).is_some() {
             return true;
         }
-        let Some(init) = ast.decls.var(d).and_then(|v| v.init) else { return false };
-        self.folds.get(init).is_none() && self.may_have_side_effects(init)
+        if let Some(init) = ast.decls.var(d).and_then(|v| v.init)
+            && self.folds.get(init).is_none()
+            && self.may_have_side_effects(init)
+        {
+            return true;
+        }
+        ast.decls.decomp_bindings(d).is_some_and(|l| {
+            ast.lists
+                .iter::<DeclId>(l)
+                .filter_map(|b| ast.decls.binding_var(b))
+                .any(|h| !self.discardable_var(h) || self.var_must_emit(h))
+        })
     }
 
     /// clang `Expr::HasSideEffects(Ctx, /*IncludePossibleEffects=*/true)`.

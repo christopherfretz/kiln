@@ -3001,11 +3001,20 @@ diagnostics and IR.
     ([dcl.pre]/6), plus `constexpr` and `constinit` in C++26 (P2686R5,
     WP-454; gated on `-std`, not on `-fclang-compat`). Another storage
     class, `consteval`, `inline`, or `constexpr`/`constinit` before
-    C++26 is `decomposition declaration cannot be declared 'constexpr'`
-    (clang 22: `structured binding declaration ...`), or `... with
-    'static constexpr' specifiers` when there are several, at the first
-    one. Clang 22 implements P2686R5 and, at `-std=c++23`, gives this
-    error rather than an extension warning; kiln follows it. A
+    C++26 is `structured binding declaration cannot be declared
+    'constexpr'`, one error per such specifier at its location (the
+    storage class, then `inline`, then the constexpr kind; clang 22,
+    WP-468). At `-fclang-compat` < 22 it is clang 19's single
+    `decomposition declaration cannot be declared 'constexpr'`, or `...
+    with 'register constexpr' specifiers` when there are several, at the
+    first one. Clang 22 implements P2686R5 and, at `-std=c++23`, gives this
+    error rather than an extension warning; kiln follows it. At block
+    scope an `inline` is also `inline declaration of 'a' not allowed in
+    block scope` at `inline`, naming the first binding: [dcl.inline]'s
+    rule for every block-scope variable (`var_spec`, clang
+    `err_inline_declaration_block_scope`; the variable is not inline),
+    both compat levels. Tests: `dcl.struct.bind/specifiers-each*.cpp`,
+    `dcl.inline/block-scope.cpp`. A
     `consteval` is also `consteval can only be used in function
     declarations` (`sema_consteval_wrong_decl_kind`). The declaration
     continues: a `constexpr` is still applied, which makes `e` const,
@@ -3073,12 +3082,18 @@ diagnostics and IR.
       integral constant expression`.
     - Each binding gets a holding variable of type `tuple_element<i,
       E>::type&` (lvalue `e`) or `&&`, with the binding's name. The
-      index `i` is a `size_t` value argument or, at
+      index `i` of `tuple_element` is a `size_t` value argument or, at
       `-fclang-compat=22`, a `size_t` integer literal written as an
       expression argument (`tuple_element<0UL, E>`; §1.1). It is
       initialized with `e.get<i>()` when a member template `get` has a
       non-type first parameter, else with an ADL-only `get<i>(xvalue
-      e)`, which prints `adl`.
+      e)`, which prints `adl`. The `get` index is always a `size_t`
+      integer literal written as an expression argument (clang
+      `getTrivialIntegralTemplateArgument`), so it is converted to the
+      type of each candidate's template parameter
+      ([temp.arg.nontype]/2): `template <int I> get` is specialized and
+      mangled with an `int` argument (`ILi0E`), not `size_t` (WP-467;
+      `tests/codegen/struct_bind_get_mangling.cpp`).
     - The binding's type is `tuple_element<i, E>::type`, as written,
       and its expression a `DeclRefExpr` to the holding variable.
     - `tuple_element` is checked after the `get` call. An incomplete
@@ -3141,6 +3156,42 @@ diagnostics and IR.
   a constant initializer that is usable in constant expressions; the
   Oven needs no new rule, since
   usability is that of `e` and the holding variables.
+- **Constexpr-referenceable automatic objects (C++26, P2686R5, WP-467).**
+  An object of automatic storage duration is constexpr-referenceable from
+  a point P when its variable (that of its complete object) and P have the
+  same smallest enclosing non-block scope and that scope is a function
+  parameter scope ([expr.const.init]/2; a lambda body is a scope of its
+  own). So at `-std=c++26`, `constexpr int& r = local;`, `constexpr int* p
+  = &parm;`, `constexpr auto& [a, b] = local_constexpr_struct;` and the
+  tuple-like form (`get<i>` of the local) are constant-initialized; a
+  `static`/`thread_local` one is not ([expr.const.init]/4: it must be
+  representable at namespace scope), nor is a pointer escaping its
+  function (`return &k;`). The rule is the Oven's pointer freeze
+  (spec/oven.md "Freezing"): the variable being initialized and the
+  referent's variable are both locals of the same function, and the
+  variable being initialized is declared `constexpr`. Usability is
+  then scoped ([expr.const]/8-9): a variable whose frozen value designates
+  an automatic object (`kiln_oven::automatic_referent`, cached per
+  variable in `Sema::auto_referent`) is usable in constant expressions
+  only where `enclosing_function(ctx)` is that object's function
+  (`Sema::representable_here`), so in a lambda body naming such a
+  reference or pointer is an odr-use and it is captured. Deliberate
+  narrowing (partial: constexpr declarations only): by
+  [expr.const.init]/2 a non-`constexpr` `auto& e = local;` or `auto* p =
+  &local;` would be constant-initialized too, its reference usable in
+  constant expressions and its names `non_odr_use_constant`; kiln does not
+  do that yet, so it stays exactly as clang 22 (not constant-initialized,
+  odr-used, captured; the AST tests `dcl.struct.bind/{array,bitfield,
+  tuple-adl-get}.cpp` run at the default std against clang). That case
+  waits for an oracle: neither clang 22 nor GCC 16 implements P2686's
+  automatic references (clang 22 only the structured-binding part), so the
+  tests of the constexpr cases are `skip(clang)`. A value read through
+  such a reference still needs a constant referent ([expr.const]/10:
+  `constexpr int& r = i; static_assert(r == 3);` reads non-const `i`).
+  Codegen does not fold an initializer or load whose value designates an
+  automatic object (spec/codegen.md `fold.rs`). Before C++26 the freeze
+  rejects as before. Validation: `tests/conformance/expr.const/constexpr-ref-automatic{,-errors,-run}.cpp`,
+  `tests/conformance/dcl.struct.bind/constexpr-ref-automatic.cpp`.
 - **Fixed on the way.**
   - A reference that cannot bind (to `void`, or to a non-class type
     with no conversion) is `reference to type 'int' could not bind to
@@ -3150,10 +3201,9 @@ diagnostics and IR.
     specialization fully qualified (`Sema::decl_ty_str`, clang's
     printing of `getTypeDeclType`).
 - **Left.**
-  - P2686R5's constexpr-referenceable automatic objects: a block-scope
-    non-`static` `constexpr` decomposition whose bindings are
-    references (`constexpr auto& [a] = ...` of a local) still needs `e`
-    to have static storage; clang 22 rejects these too.
+  - Lifetime-extended temporaries of an automatic `constexpr` reference
+    (`constexpr const int& r = 42;` in a function) are still rejected
+    (spec/oven.md "Freezing"); clang 22 and GCC 16 reject them too.
   - Instantiating binding attributes.
   - The NoOp `'const M'` cast clang adds when a const class `e` is
     copy-initialized from a prvalue.
@@ -3976,9 +4026,12 @@ for them.
     `extern` or a handler's exception variable; one of dependent or
     incomplete type; one whose (array element) class has a non-trivial
     destructor, or is initialized by a non-trivial constructor call that
-    is not a constant initialization, or by a type-dependent
-    initializer. A reference lifetime-extending a temporary is judged by
-    the temporary's type.
+    is not a constant initialization (a value referring to an automatic
+    object, constant only by P2686R5, counts as not constant, as in
+    clang 22; a guard for when the §4.9 constexpr-only narrowing is
+    lifted: WP-467, `stmt.dcl/unused-variable-ptr-to-automatic.cpp`),
+    or by a type-dependent initializer. A reference lifetime-extending a
+    temporary is judged by the temporary's type.
   - A variable of dependent type is diagnosed as its instantiation is
     created (`diagnose_unused_inst_var`, from `subst` `var_decl`, clang
     `TemplateDeclInstantiator::VisitVarDecl`) by the pattern's
@@ -4942,6 +4995,12 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `expression is not assignable`; a const base is the usual
   const-variable diagnostic. `&v.x` and binding a non-const reference
   are rejected as for any vector element (§5.13).
+- A `bool` ext vector has no components (clang `isExtVectorBoolType`;
+  a lane is one bit and has no address): every accessor, valid or not,
+  is `illegal vector component name 'name'` at the member name, before
+  the accessor is parsed, also on substitution (WP-438). clang 19
+  quotes the name twice (`''x''`), clang 22 once. A subscript reads a
+  lane instead.
 - A GNU `vector_size` vector has no components (`member reference base
   type ... is not a structure or union`). An unused access (`v.x;`) is
   `expression result unused` at the base's begin (clang's `getExprLoc`).
@@ -4960,6 +5019,7 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `ext.vector/ext-vector-access-diagnostics.cpp`,
   `ext.vector/element-access-diagnostics.cpp`,
   `ext.vector/element-access-constexpr-diagnostics.cpp` (strict-diags),
+  `ext.vector/bool-element-access-diagnostics{,-clang22}.cpp`,
   `tests/codegen/ext_vector_element.cpp`.
 
 ### 5.19a Vector subscript (`vector_ops.rs`, WP-469)
@@ -5814,7 +5874,7 @@ Tests: `ext.vector/bool-from-int-vector-clang22.cpp`,
 `ext.vector/bool-from-int-vector-19.cpp`, `ext.vector/ir-bool-from-int-vector.cpp`;
 codegen spec/codegen.md §7u.
 
-### 5.28 `-Winteger-overflow` (`int_overflow.rs`, WP-458)
+### 5.28 `-Winteger-overflow` (`int_overflow.rs`, WP-458, WP-468)
 
 A full-expression that is not constant-evaluated is checked for signed
 overflow ([expr.pre]/4) once it is complete (`act_on_full_expr_at`;
@@ -5849,13 +5909,65 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   expression) and folded only when they contain none. Unsigned
   arithmetic is silent. The walk is bounded (65 536 nodes, depth 256)
   and skipped when the warning is disabled at the full-expression.
-- Not implemented: an overflow inside a `constexpr` function called from
-  the expression (clang's evaluator reports it at the operator in the
-  function body); compound assignment and increment; the operator's
-  source range; in an instantiation kiln adds the instantiation notes,
-  clang none.
+- **Calls (WP-468).** An operand that calls a `constexpr` or
+  `consteval` function or constructor (directly or below it; the cheap
+  filter counts such a call as a candidate) is evaluated in the Oven with
+  the body (`Oven::fold_for_overflow`, clang `EM_IgnoreSideEffects` with
+  `CheckingForUndefinedBehavior`): a lax fold in which a signed `+`, `-`,
+  `*` or negation that overflows (`Oven::wrap_overflow`, also a compound
+  assignment's `+=`, `-=`, `*=`, and `++` / `--`) yields its wrapped value
+  and is recorded; the evaluation goes on. Each record warns at its
+  operator, in order, with the type of the operation (the compound
+  assignment's type for `+=`), but `++` and `--`, which clang only notes
+  (`HandleOverflow`). A function called twice warns twice at the same
+  place (`inc(g) + inc(g)`). The evaluation enters no nested evaluation,
+  global initialization or `__builtin_constant_p` in this mode and is not
+  memoized. When it fails without a record (a non-constexpr callee, a
+  read of a non-`const` variable), the operand is searched as above, a
+  constexpr call found under it is evaluated in turn. A call that is the
+  full-expression itself is not evaluated (only its arguments), as
+  clang. Shifts, division and `<<=` never warn here.
+- **Reporting.** The warning carries the operation's source range and is
+  reported as clang's `Diags.Report`: no instantiation notes (in a
+  template a non-dependent overflow warns at the definition and in each
+  instantiation, notes-free), not deduplicated against another
+  full-expression or another overflow of the same one (the context key is
+  the instantiation's, the full-expression and the overflow's ordinal), so
+  checking a full-expression twice does not repeat it.
+- **Compound assignment.** `x op= y` is checked as a binary operator
+  would be: `<<=` / `>>=` diagnose a constant count that is negative or
+  not less than the promoted left type's width (`-Wshift-count-*`), `/=`
+  and `%=` a constant zero divisor (`-Wdivision-by-zero`), at the
+  operator with the right operand's range, through the runtime-behaviour
+  deferral (clang `CheckShiftOperands` / `CheckMultiplyDivideOperands` /
+  `CheckRemainderOperands` with `IsCompAssign`).
+- **Never constant (WP-468).** A `constexpr` or `consteval` function
+  that can never be constant is ill-formed, no diagnostic required
+  ([dcl.constexpr]/6); clang runs `isPotentialConstantExpr` on each
+  written definition when `CheckConstexprFunctionBodies` is on: before
+  C++23, else only under `-Winvalid-constexpr` (the last of
+  `-Winvalid-constexpr` / `-Wno-invalid-constexpr` decides,
+  `DiagEngine::group_flag`; `-Weverything`, `-Werror=` and pragmas do
+  not turn it on). Kiln checks the narrow shape a body overflow makes
+  (`constexpr_body.rs` `check_never_constant`, after the body's own
+  `-Winteger-overflow`): a non-member or static member function without
+  parameters, not in a template or an instantiation, not invalid, whose
+  call (`Oven::evaluate_call`) fails in its own body with the one note
+  `value N is outside the range of representable values of type 'T'`
+  (`g + 1`, `++i` on `INT_MAX`, `i += 1`). It reports `{constexpr|
+  consteval} function never produces a constant expression`
+  (`sema_constexpr_never_constant`, an error by default, group
+  `invalid-constexpr`) at the function's name with that note. A failure
+  in a callee (clang is silent too), an unsigned wrap or a narrowing are
+  not reported. Not yet: other failures clang reports (a call to a
+  non-constexpr function, a step limit), functions with parameters (a
+  read of one fails silently in clang), non-static members, lambdas and
+  constructors.
 - Tests: `expr.add/integer-overflow-folded.cpp`,
-  `expr.add/integer-overflow-constexpr-error.cpp`.
+  `expr.add/integer-overflow-constexpr-error.cpp`,
+  `expr.pre/integer-overflow-in-call.cpp`,
+  `expr.ass/compound-assign-overflow.cpp`,
+  `dcl.constexpr/never-constant-overflow-cxx{20,23,26}.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
@@ -6659,7 +6771,22 @@ not supported yet`.
     (`sema_expansion_size_not_constant` when an evaluation fails or the
     cap is reached); the fast path has no cap. A class iterator whose `!=`
     disagrees with its `-` gets the comparison's count
-    (`tests/conformance/stmt.expand/iterating-count.cpp`).
+    (`tests/conformance/stmt.expand/iterating-count.cpp`). *One pass*
+    (WP-467, `expansion_count_elements`): the incremental count and the
+    elements are built together. For i ≥ 1 element i's `__iter` is built
+    first and the count tests `__iter != __end` (i = 0 tests `__begin !=
+    __end`, so an empty range never builds `__begin + 0`), so `__begin + i`
+    is resolved and evaluated once per element, not once for the count and
+    again for the element; the `__iter` built for i = N is dropped. The
+    left operand of `!=` is then a `const` lvalue, as the wording's `i !=
+    end` names a variable, rather than the prvalue `__begin + i`. The pass
+    runs with its diagnostics captured; on any error (or a non-constant
+    test) it is discarded and the separate count and element loop above
+    run and diagnose, so diagnostics are unchanged. Per element it still
+    resolves `+`, `!=` and unary `*` and evaluates `__iter`, the test and
+    the element (docs/status/perf.md "WP-467";
+    `tests/stress/expansion-iterating-user-iterator.cpp` budgets the
+    evaluations and steps).
   - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
     (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
     for-range-declaration the declaration is `static constexpr`.
@@ -6671,9 +6798,10 @@ not supported yet`.
   captured diagnostics, `stash_has_error`: a failed constant
   initialization does not mark the variable INVALID), it is retried by
   value, a copy, each attempt in a block scope of its own. The copy stands
-  in for P2686's constexpr-referenceable automatic objects, which kiln
-  does not implement (§4.9): the paper's `constexpr std::array` local
-  example works. When both fail, the first attempt's diagnostics are emitted.
+  in for P2686's constexpr-referenceable automatic objects for the range
+  (§4.9 implements them for user-written declarations; the range variable
+  is `static constexpr`, which [expr.const.init]/4 excludes): the paper's
+  `constexpr std::array` local example works. When both fail, the first attempt's diagnostics are emitted.
 - **Holding variables.** The holding variables of a `constexpr` structured
   binding declaration are `constexpr` (P2686 [dcl.struct.bind]/4), so the
   Oven sees initialized constants rather than a static variable's
