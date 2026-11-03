@@ -978,12 +978,13 @@ impl Sema<'_, '_> {
                     self.unsupported("this kind of member access", loc);
                     return self.recover_err(&[b], loc);
                 };
-                let b = self.object_to_class(
+                let written = self.member_qualifier_type(nns, target);
+                let b = self.object_to_class_as(
                     b,
                     arrow,
                     obj_class,
                     quals,
-                    target,
+                    (target, written),
                     quals,
                     CastKind::UncheckedDerivedToBase,
                 );
@@ -1063,6 +1064,33 @@ impl Sema<'_, '_> {
         self.materialize_temporary(e, n.ty(), false)
     }
 
+    /// clang 22 (`PerformObjectMemberConversion`): a field access
+    /// qualified by its declaring class casts the object to the
+    /// qualifier's type as written, which keeps its own qualifier
+    /// (`d.::B::m` casts to `::B`, without the object's qualifiers;
+    /// spec/sema.md §1.1). `None` at 19 and
+    /// for any other qualifier.
+    fn member_qualifier_type(
+        &mut self,
+        nns: Option<kiln_ast::NnsId>,
+        target: DeclId,
+    ) -> Option<QualType> {
+        if self.clang_compat < 22 {
+            return None;
+        }
+        let kiln_ast::types::Nns::Type { prefix, ty, .. } = self.ast.types.nns_view(nns?) else {
+            return None;
+        };
+        let r = self.ast.types.as_record(ty)?;
+        if self.ast.definition(r).unwrap_or(r) != self.ast.definition(target).unwrap_or(target) {
+            return None;
+        }
+        Some(match prefix {
+            Some(p) => self.ast.types.elaborated(kiln_ast::types::TagKeyword::None, Some(p), ty),
+            None => ty,
+        })
+    }
+
     /// Converts the object `b` (a pointer for `arrow`) of class
     /// `obj_class` with qualifiers `obj_q` to an object of its class or
     /// base class `target` with qualifiers `to_q`: a `NoOp` cast adding
@@ -1077,6 +1105,22 @@ impl Sema<'_, '_> {
         obj_class: DeclId,
         obj_q: Quals,
         target: DeclId,
+        to_q: Quals,
+        ck: CastKind,
+    ) -> ExprId {
+        self.object_to_class_as(b, arrow, obj_class, obj_q, (target, None), to_q, ck)
+    }
+
+    /// [`Self::object_to_class`] with the derived-to-base cast typed as
+    /// `written` (the qualifier's type as written) when it is given.
+    #[allow(clippy::too_many_arguments, reason = "the object and both class types")]
+    fn object_to_class_as(
+        &mut self,
+        b: ExprId,
+        arrow: bool,
+        obj_class: DeclId,
+        obj_q: Quals,
+        (target, written): (DeclId, Option<QualType>),
         to_q: Quals,
         ck: CastKind,
     ) -> ExprId {
@@ -1123,7 +1167,12 @@ impl Sema<'_, '_> {
                     self.check_base_access(d, t, &p, loc);
                 }
                 let list = path_list(self, &p);
-                let ty = to_ty(self, target);
+                let ty = match written {
+                    // clang's qualifier type carries no qualifiers.
+                    Some(w) if arrow => self.ast.types.pointer_to(w),
+                    Some(w) => w,
+                    None => to_ty(self, target),
+                };
                 self.builder().cast(
                     ExprKind::ImplicitCastExpr,
                     ck,

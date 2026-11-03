@@ -111,9 +111,50 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   written P (`'T *'`, not `'type-parameter-0-0 *'`). A pack-index
   expression's pack name is quoted (`for pack 'Ts'`), and a single-argument
   concept note quotes a non-type argument too.
+- **Type printing** (WP-394; `kiln_ast/src/types/print.rs`,
+  `TypeNames::clang_compat`). A canonical tag type prints fully scoped,
+  inside template arguments too (`'const J<ns::S> &'`), and a written
+  tag or template-id keeps its keyword and qualifier, which are not sugar
+  (`'O::J<SA>' (aka 'O::J<ns::S>')`; `'O::S'` has no `aka`).
+- **Locations and notes** (WP-394). A class's "defined here" note, the
+  deduction and default-argument notes, a dependent nested-name-specifier
+  template-id's point of instantiation (the specifier's begin), a scoped
+  enum's attribute fix-it, a declaration with no declarators and an
+  in-class static member initializer are located as clang 22 locates
+  them; an alias template's note is at its `using`; a macro argument's
+  backtrace is elided as clang 22's `rangesInsideSameMacroArgExpansion`.
+- **Checks clang 22 adds or drops** (WP-394). The self-comparison
+  warning in an instantiation; a `void` return operand is a failed
+  conversion and an erroneous operand drops the return; CWG2369
+  (constraints before substitution) order; P2280 `typeid` of an unknown
+  reference; namespace attributes; CTAD parentheses; NSDMI re-reporting
+  scope and the failed-NSDMI aggregate report; a discarded branch's
+  variable initializer stays quiet; `__builtin_assume_aligned` on a
+  non-pointer, a `nullptr_t` vararg passed as `void *`, the signed
+  `size_t` and an ext-vector shuffle's result type; vector lane
+  evaluation and reductions, `ext_vector_type` on any declaration, the
+  atomic memory-order check order, string-literal overlap and the
+  `std::allocator` allocation site.
+- **Template template arguments** (WP-394; spec/sema-templates.md
+  §3.2.1): P's parameters are matched as arguments to A, with
+  deduction, constraint subsumption and clang 22's partial-ordering
+  context notes (`templ/ttarg22.rs`).
+- **Member access and redeclarations** (WP-394). A qualified member
+  access `x.B::m` casts the object to the base as written
+  (`member_qualifier_type`, `class/member_expr.rs`); the injected
+  parameters of a redeclared class template are the definition's
+  (`injected_params_template`, `templ/actions.rs`), except in an
+  implicit deduction guide, which keeps the first declaration's
+  (`first_injected_params_template`; guide printing below).
+- **Builtins** (WP-394; spec/sema-templates.md §9.1).
+  `__is_referenceable` is an ordinary identifier;
+  `__reference_binds_to_temporary` is `__reference_constructs_from_temporary`
+  and warns `-Wdeprecated-builtins`.
 - Codegen's `-Watomic-alignment` text follows the level
   (spec/codegen.md); the AST dump's type printing, spec/ast-dump.md §2.
 
+kiln++ defaults to level 22 since WP-394 (spec/driver.md); the library
+default (`ClangCompat::default()`, `Sema` and `DiagOptions`) stays 19.
 Where clang 22's output differs and kiln has not followed it yet, the
 test pins clang 19 with `requires: clang<22` and the comment `WP-355
 residual` (docs/status/wp-184-oracle-switch.md).
@@ -1199,7 +1240,8 @@ and returns the scope it names:
 - **Guide printing** (WP-320), as clang:
   - The injected class type of an implicit guide (`-> vector<_Tp,
     _Alloc>`) uses the template parameters of the class template's
-    first declaration (`injected_params_template`): a forward
+    first declaration (`first_injected_params_template`, at every
+    compat level): a forward
     declaration's names, `type-parameter-0-N` for unnamed ones. A friend
     declaration inside a templated class does not count (clang links it
     only at instantiation); one in a non-template class does.

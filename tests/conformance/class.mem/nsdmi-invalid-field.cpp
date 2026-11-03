@@ -12,7 +12,7 @@
 //@ diag: 22:21 error "cannot initialize a member subobject of type 'int *' with an rvalue of type 'int'"
 //@ diag: 24:38 error "cannot initialize a member subobject of type 'int' with an lvalue of type 'const char[2]'"
 //@ requires: clang<22
-// clang 22 emits error: default member initializer for 'a' needed within definition of enclosing cl...; WP-355 residual
+// clang 19 spelling; nsdmi-invalid-field-clang22.cpp has clang 22's (WP-394).
 struct A { int a = "s"; int b; constexpr A() : b(1) {} };
 constexpr A ca;
 struct B { int a = "s"; };

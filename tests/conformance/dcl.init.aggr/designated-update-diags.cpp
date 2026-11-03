@@ -6,7 +6,7 @@
 // destruction is an error. A full override whose prior initializer may have
 // side effects notes that they will not occur.
 //@ expect: compile-fail
-//@ args: -Wno-c99-designator
+//@ args: -Wno-c99-designator -Winitializer-overrides
 //@ strict-diags
 //@ diag: 37:22 warning "initializer partially overrides prior initialization of this subobject"
 //@ diag: 37:14 note "previous initialization is here"
@@ -28,8 +28,8 @@
 //@ diag: 54:14 note "previous initialization is here"
 //@ diag: 56:25 warning "initializer overrides prior initialization of this subobject"
 //@ diag: 56:14 note "previous initialization with side effects is here (side effects will not occur at run time)"
-//@ requires: clang<22
-// clang 22 no longer emits warning: initializer partially overrides prior initialization of this su...; WP-355 residual
+// -Winitializer-overrides is re-enabled after -Wno-c99-designator, which
+// takes it as a subgroup from clang 22 on ([diag] group tree, compat-keyed).
 struct A { int x, y; };
 struct B { A a; int z; };
 struct C { A arr[2]; };

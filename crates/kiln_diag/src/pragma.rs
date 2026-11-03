@@ -138,7 +138,7 @@ impl Pragmas {
                 })
                 .collect()
         } else {
-            match group_members(flavor, group) {
+            match group_members(flavor, group, policy.compat) {
                 Some(ids) => ids,
                 None => return false,
             }

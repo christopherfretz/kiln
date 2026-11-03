@@ -257,6 +257,24 @@ impl Sema<'_, '_> {
         Some(conv_args)
     }
 
+    /// clang 22 builds `__atomic_test_and_set` and `__atomic_clear` as
+    /// atomic operations and checks a constant order (a clear is a
+    /// store); clang 19 does not (spec/sema.md §1.1). `id` is the
+    /// builtin called with `args`.
+    pub(crate) fn atomic_flag_order_check(&mut self, id: u32, args: &[ExprId]) {
+        if self.clang_compat < 22 || !matches!(id, atomic::CLEAR | atomic::TEST_AND_SET) {
+            return;
+        }
+        if let [_, order] = args
+            && let Some(o) = self.fold_int(*order)
+            && (!(0..=5).contains(&o) || id == atomic::CLEAR && matches!(o, 1 | 2 | 4))
+        {
+            let at = self.begin_loc(*order);
+            let msg = self.diag(DiagId::sema_atomic_op_invalid_memory_order, at).arg(0u32);
+            self.emit(msg);
+        }
+    }
+
     /// `-Watomic-memory-ordering` for a constant order of `subs` (clang
     /// `BuildAtomicExpr`).
     fn atomic_check_orders(&mut self, id: u32, form: Form, subs: &[ExprId]) {

@@ -38,7 +38,7 @@
 //@ diag: 79:64 warning "format specifies type 'int' but the argument has type 'double'"
 //@ diag: 81:15 note "in instantiation of function template specialization 'tp<double>' requested here"
 //@ requires: clang<22
-// clang 22 emits warning: format specifies type 'char *' but the argument has type 'void *'; WP-355 residual
+// clang 19 spelling; format-printf-clang22.cpp has clang 22's (WP-394).
 #include <stddef.h>
 char buf[64];
 enum E { e0 };

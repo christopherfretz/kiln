@@ -1,9 +1,9 @@
 // [expr.ref]/4: a qualified member access records its
 // nested-name-specifier; on a dependent object or qualifier it is a
-// CXXDependentScopeMemberExpr.
+// CXXDependentScopeMemberExpr. clang 22 types the base cast of a field
+// access qualified by its class as the qualifier is written (`::B`).
 //@ expect: ast
 //@ requires: clang>=22
-//@ xfail(kiln): clang 22 types the base cast of `d.::B::m` as written, '::B' (WP-355 residual)
 struct B {
   int m;
   virtual int f() { return 1; }

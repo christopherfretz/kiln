@@ -41,7 +41,7 @@
 //@ diag: 69:57 warning "indirection of non-volatile null pointer will be deleted, not trap"
 //@ diag: 69:57 note "consider using __builtin_trap() or qualifying pointer with 'volatile'"
 //@ requires: clang<22
-// clang 22 emits error: non-type template argument is not a constant expression; WP-355 residual
+// clang 19 spelling; runtime-diags-quiet-contexts-clang22.cpp has clang 22's (WP-394).
 constexpr int a = 1 / 0;
 static_assert(2 % 0 == 0);
 enum E { e1 = 4 / 0 };

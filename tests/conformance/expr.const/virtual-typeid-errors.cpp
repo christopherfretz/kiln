@@ -20,7 +20,7 @@
 //@ diag: 61:35 note "in call to 'F()'"
 //@ diag: 62:21 note "in call to 'in_base_init()'"
 //@ requires: clang<22
-// clang 22 emits error: constexpr variable 'x1' must be initialized by a constant expression; WP-355 residual
+// clang 19 spelling; virtual-typeid-errors-clang22.cpp has clang 22's (WP-394).
 namespace std {
 class type_info {
 public:

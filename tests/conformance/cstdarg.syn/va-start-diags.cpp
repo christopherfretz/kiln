@@ -36,7 +36,7 @@
 //@ diag: 64:91 error "too few arguments to function call, expected 2, have 1"
 //@ diag: 64:111 error "non-const lvalue reference to type '__builtin_va_list' cannot bind to a value of unrelated type 'int'"
 // clang 19 and 22 word these differently: the substrings above are common
-// clang 22 no longer emits warning: second argument to 'va_start' is not the last named parameter; WP-355 residual
+// (both start "second argument to 'va_start' is not the last").
 void a(int n) { __builtin_va_list ap; __builtin_va_start(ap, n); }
 void b(int n, int m, ...) { __builtin_va_list ap; __builtin_va_start(ap, n); __builtin_va_end(ap); }
 void c(int n, ...) { __builtin_va_list ap; __builtin_va_start(ap); __builtin_va_start(ap, n, n); }

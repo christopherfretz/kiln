@@ -773,7 +773,13 @@ impl Sema<'_, '_> {
             }
             let n = u32::try_from(args.len() - 2).unwrap_or(u32::MAX);
             if l.count != n {
-                res = self.ast.types.vector(l.elem, n, VectorKind::Generic);
+                // clang 22 keeps an ext_vector_type operand's kind.
+                let kind = if self.clang_compat >= 22 && l.is_ext() {
+                    l.kind
+                } else {
+                    VectorKind::Generic
+                };
+                res = self.ast.types.vector(l.elem, n, kind);
             }
             count = Some(i128::from(l.count));
         }
@@ -937,7 +943,10 @@ impl Sema<'_, '_> {
             self.vector_diag2(DiagId::sema_conditional_vector_size, ct, res, loc);
             return self.recover_err(&[c, t, f], loc);
         }
-        if self.scalar_bits(rp.elem) != self.scalar_bits(cp.elem) {
+        // clang 22 lets a `bool` vector condition select lanes of any size
+        // (spec/sema.md §1.1).
+        let bool_cond = self.clang_compat >= 22 && cp.elem == QualType::BOOL;
+        if !bool_cond && self.scalar_bits(rp.elem) != self.scalar_bits(cp.elem) {
             self.vector_diag2(DiagId::sema_conditional_vector_element_size, ct, res, loc);
             return self.recover_err(&[c, t, f], loc);
         }
@@ -1053,9 +1062,12 @@ impl Sema<'_, '_> {
         let text = self.ast.symbols().as_str(name).to_owned();
         let lanes = match kiln_ast::expr::ext_vector_access(&text, parts.count) {
             kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } => lanes,
-            kiln_ast::expr::ExtVectorAccess::Illegal(c) => {
+            kiln_ast::expr::ExtVectorAccess::Illegal(c, at) => {
+                // clang 22 points at the offending character of the name
+                // (spec/sema.md §1.1); clang 19 at the operator.
+                let at_loc = if self.clang_compat >= 22 { loc.with_offset(at) } else { op_loc };
                 let d = self
-                    .diag(DiagId::sema_ext_vector_component_name_illegal, op_loc)
+                    .diag(DiagId::sema_ext_vector_component_name_illegal, at_loc)
                     .arg(c.to_string());
                 self.emit(d);
                 return self.recover_err(&[base], loc);

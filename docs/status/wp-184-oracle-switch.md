@@ -188,7 +188,38 @@ To list what is left: `git grep -l "WP-355 residual" tests`.
 | **Pinned total** | 152 | 69 | |
 | AST goldens `xfail(kiln)` | 5 | 5 | Not started (item 7): inheriting-ctor shadows, a `::B` base cast as written, redeclaration parameter names, an alias specialization's qualifier, CTAD specialization order. |
 
-**Not done**: kiln++'s own `-fclang-compat` default is still 19 (item 8),
+**Not done** (at WP-377; the flip is done in WP-394, below): kiln++'s own `-fclang-compat` default was still 19 (item 8),
 because the residual count is well above the exit target. Only the
 harness passes 22. Codegen at level 22 (`dead_on_return`, `nuw` gep,
 datalayout) is covered only structurally (spec/codegen.md §6; WP-386).
+
+### Residuals: part 2 (WP-394)
+WP-394 followed clang 22 in the remaining buckets and flipped kiln++'s
+default to `-fclang-compat=22` (spec/driver.md; the library-level
+`ClangCompat` default, used by `Sema`, `DiagOptions` and unit tests,
+stays 19). `xtask libcxx` now always passes the level. 58 more tests
+were split into a clang 19 copy and a `-clang22.cpp` copy, and a few
+were unpinned outright (`designated-update-diags`, `meta.unary.comp`).
+
+The rules added are listed in spec/sema.md §1.1 (type printing, note
+locations, checks clang 22 adds or drops, template template arguments,
+member access, builtins), spec/diag.md §3 (level-keyed group nesting:
+`c99-designator` ⊃ `initializer-overrides`, `reorder-init-list`),
+spec/oven.md (enum range fault; no non-literal local check in C++23) and
+spec/ast-dump.md (the shadow filter).
+
+| Bucket | WP-377 | WP-394 | What remains, and why |
+|---|---|---|---|
+| Constant-evaluation and `static_assert` operand notes | 19 | 4 + 2 | `consteval-address`: P2564 escalation of a template taking a consteval function's address. `non-literal-argument`: the by-value argument literal check is in `kiln_oven/src/compile/class.rs` (WP-388's file). `namespace-scope-diagnostics` (GNU compound literal): clang 22 points at the non-constant element and also reports variable-template instantiations. `static-assert-concept-atom-expr`: clang 22's type-trait explainer notes. Pinned `// WP-388` (vbase construction): `class.inhctor.init/constexpr-vbase`, `expr.const/non-literal-local`. |
+| Scoped names in `aka`/args | 13 | 0 | |
+| GNU/vendor extensions | 9 | 0 | |
+| Attribute names, `nodiscard` | 2 | 0 | |
+| CTAD guide notes | 1 | 0 | |
+| `-Wswitch`, array and self-comparison | 1 | 0 | |
+| Template template notes | 3 | 0 | |
+| Single cases | 21 | 2 + 3 | `dr1467-single-element`: clang 22 no longer applies the single-element copy when an initializer-list constructor exists. `access-in-substitution`: clang 22 skips access checks while deducing an explicit instantiation's candidates. Pinned `// WP-399` (typo correction, clang 22 has no delayed typo correction): the three `stmt.expr/delayed-*` tests. |
+| **Pinned total** | 69 | 13 (8 `WP-355 residual`, 2 `WP-388`, 3 `WP-399`) | |
+| AST goldens `xfail(kiln)` | 5 | 2 | Fixed: inheriting-ctor shadows (harness filter), `::B` cast type as written, redeclaration parameters. Left: `temp.alias-dependent-template-template-arg-ast` (clang 22 keeps the first-written `QualifiedTemplateName`; kiln stores canonical template template arguments, which needs sugared arguments in `check_template_args`, WP-390's file) and `temp.deduct.guide-ast-dump` (clang 21+ does not deduce template candidates when a non-template candidate is a perfect match; kiln needs two-phase overload resolution). |
+
+The exit target (15 or fewer) is met, so the default is flipped. The
+stratum A sample at the flip is in docs/status/libcxx.md.
