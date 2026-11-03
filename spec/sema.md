@@ -1867,7 +1867,11 @@ and returns the scope it names:
   - `alignof` of an expression ([expr.alignof]/1 takes a type-id) is
     the GNU extension `'alignof' applied to an expression is a GNU
     extension` (`-Wgnu-alignof-expression`, in `-Wgnu`, at the keyword;
-    not for `__alignof`/`__alignof__`). `alignof` of a data member
+    not for `__alignof`/`__alignof__`), after the operand's own errors
+    and even when the operand is invalid (`alignof(F::x)` with `F`
+    incomplete, `alignof(1 + )`; clang's `ext_alignof_expr` is emitted
+    before the operand is checked; WP-430,
+    `expr.alignof/incomplete-qualifier-gnu-expression.cpp`). `alignof` of a data member
     (named ignoring parentheses) of a class still being defined is
     `invalid application of 'alignof' to a field of a class still being
     defined` at the operand's own location (clang `CheckAlignOfExpr`;
