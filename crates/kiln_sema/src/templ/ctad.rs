@@ -19,8 +19,8 @@ use crate::conv;
 use crate::declspec::{Chunk, DeclSpec, Declarator};
 use crate::init::{Designator, InitItem, InitList, InitValue, Initializer};
 use crate::overload::{
-    Candidate, CandidateFailure, CandidateKind, Ics, IcsOptions, OverloadCandidateSet,
-    OvlOutcome, SetKind,
+    Candidate, CandidateFailure, CandidateKind, Ics, IcsOptions, OverloadCandidateSet, OvlOutcome,
+    SetKind,
 };
 use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::deduce::{DeducedArgs, Tdk};

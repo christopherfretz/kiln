@@ -3686,7 +3686,14 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   context, as clang reports its rebuilt `ConstantExpr`, or escalating an
   immediate-escalating instantiation (`e<int>` of `template<class T>
   constexpr int e() { return bad(1); }` becomes immediate, so a
-  non-constant call of it is an error; WP-227). A `ConstantExpr` is substituted
+  non-constant call of it is an error; WP-227). At clang 21+
+  (`clang_compat >= 22`; WP-413) a shared reference the definition
+  flagged `immediate-escalating` (an address taken outside an immediate
+  invocation, not an invocation's callee) escalates the instantiation
+  too (`recheck_shared_ref`, reason "evaluates the address of"); clang
+  19 neither escalates nor diagnoses it. An error taking the address of
+  an escalated function (`sema_immediate_address`) carries the reason
+  note after `declared here`, as clang's `DiagnoseImmediateEscalatingReason`. A `ConstantExpr` is substituted
   through to its operand and re-wrapped by the rebuilt call. A shared
   (not rebuilt) expression is walked at each instantiation and the
   functions it odr-uses (named, constructors, bound destructors,

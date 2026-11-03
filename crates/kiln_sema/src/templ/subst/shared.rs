@@ -32,6 +32,8 @@ impl Sema<'_, '_> {
         let rewarn = self.null_deref_rewarn_active();
         let mut derefs = Vec::new();
         let mut varargs = Vec::new();
+        // The callees of the immediate invocations (not references).
+        let mut callees = Vec::new();
         let mut stack = vec![e];
         while let Some(x) = stack.pop() {
             let kind = self.ast.exprs.get(x).kind();
@@ -49,6 +51,9 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 ExprKind::DeclRefExpr | ExprKind::MemberExpr => {
+                    if kind == ExprKind::DeclRefExpr && !callees.contains(&x) {
+                        self.recheck_shared_ref(x);
+                    }
                     let d = self.ast.exprs.decl(x);
                     if self.ast.exprs.non_odr_use(x) == NonOdrUse::None
                         && self.ast.decls.function(d).is_some()
@@ -75,7 +80,10 @@ impl Sema<'_, '_> {
                 }
                 ExprKind::UnaryOperator if rewarn => derefs.push(x),
                 // A failed immediate invocation is reported again.
-                ExprKind::ConstantExpr => self.recheck_shared_invocation(x),
+                ExprKind::ConstantExpr => {
+                    callees.extend(self.invocation_callee_ref(x));
+                    self.recheck_shared_invocation(x);
+                }
                 ExprKind::CXXDeleteExpr => {
                     if let Some(f) = self.ast.exprs.operator_delete(x) {
                         self.mark_function_referenced(f, loc);
