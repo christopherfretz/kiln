@@ -17,7 +17,7 @@ missing-warning gap; **(c)** harness/driver gap; **(d)** environment.
 | | total | pass | fail | xfail | unsupported (driver) | timeout | pass rate |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | first run, base `c77a092a` (WP-418 harness)¹ | 9247 | 8562 | 195 | 34 | 455 (31) | 1 | 97.4% |
-| after WP-446 fixes (`d4e0cff4`; the 196 re-run) | 9247 | 8708 | 48 | 36 | 455 (31) | 0 | **99.0%** |
+| after WP-446 fixes (`ced0e9ad`, main `b4e8dfb3` merged; the 196 re-run) | 9247 | 8708 | 48 | 36 | 455 (31) | 0 | **99.0%** |
 
 ¹ The run started on `c77a092a`; the report stamps `c2e88d0a`, the head
 when it finished. WP-446 fixes were built into the same harness target
@@ -81,6 +81,33 @@ memory-cap list), which turns them into UNSUPPORTED with a reason.
 | (a) | 1 | `copy_move_trivial` (segfault): a file-scope function template named like a builtin hid the builtin | sema (`dc3b8556`) | `over.match.best/builtin-name-template.cpp` |
 | (c) | 1 | `std/modules/std.pass`: kiln found the system LLVM 19 `std.cppm`, whose `headers_not_available` lists `<flat_map>` | harness `-fprebuilt-module-path` to the package tree (`Config::module_source_flags`, `d6162682`) | xtask unit test `clang_mode_flags` |
 | (c) | 2 | `equality_comparable_with`, `three_way_comparable_with`: the `TEST_COMPILER_CLANG` branch pins llvm.org/PR171438; kiln follows the standard | now XFAIL with that reason (`CLANG_DEFECT_XFAIL`, `d4e0cff4`; spec/libcxx.md "Outcomes") | xtask unit test `clang_defect_xfail_list` |
+
+## Affected directories after the fixes
+
+The directories the fixes touch, re-run whole on `ced0e9ad` (-j 3,
+harness kiln, 20 s run timeout, 3072 MiB): 1136 tests, 955 pass, 11 fail,
+2 xfail, 168 unsupported (98.7%; 666 s). The 11 FAILs are the open
+clusters above (trivial_abi ×6, saturation ×2, enable_if, std.compat,
+array `nodiscard.verify`).
+
+| directory | tests | pass | fail | xfail | unsupported | pass rate |
+|---|---:|---:|---:|---:|---:|---:|
+| `std/containers/sequences/forwardlist` | 87 | 87 | 0 | 0 | 0 | 100% |
+| `std/containers/sequences/list` | 89 | 89 | 0 | 0 | 0 | 100% |
+| `std/containers/container.adaptors` | 445 | 445 | 0 | 0 | 0 | 100% |
+| `libcxx/containers` | 201 | 64 | 1 | 0 | 136 | 98.5% |
+| `std/utilities/expected` | 87 | 87 | 0 | 0 | 0 | 100% |
+| `libcxx/utilities/expected` | 24 | 19 | 0 | 0 | 5 | 100% |
+| `std/experimental/simd` | 33 | 33 | 0 | 0 | 0 | 100% |
+| `libcxx/iterators` | 30 | 24 | 0 | 0 | 6 | 100% |
+| `libcxx/ranges/range.adaptors/range.join` | 3 | 3 | 0 | 0 | 0 | 100% |
+| `std/concepts` | 36 | 35 | 0 | 1 | 0 | 97.2% |
+| `std/language.support/cmp` | 16 | 14 | 1 | 1 | 0 | 87.5% |
+| `libcxx/memory/trivial_abi` | 6 | 0 | 6 | 0 | 0 | 0% |
+| `std/numerics/numeric.ops/numeric.ops.sat` | 11 | 8 | 2 | 0 | 1 | 80.0% |
+| `std/utilities/function.objects/func.wrap` | 39 | 34 | 0 | 0 | 5 | 100% |
+| `libcxx/atomics` | 27 | 12 | 0 | 0 | 15 | 100% |
+| `std/modules` | 2 | 1 | 1 | 0 | 0 | 50.0% |
 
 ## Rerunning
 

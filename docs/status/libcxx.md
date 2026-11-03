@@ -54,7 +54,7 @@ own `_warningFlags`). Failure clusters, fixes and proposed work packages:
 
 | Date | kiln main | Scope | pass | fail | xfail | unsupported | pass rate | wall | peak RSS | environment |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 2026-11-03 | wp/446 (d4e0cff4) | the 196 first-run FAIL/TIMEOUT tests re-run after the WP-446 fixes; full-suite counts with them substituted | 8708 | 48 | 36 | 455 (31 driver) | **99.0%** | -j 3, harness kiln, 20 s run timeout (240 s long), 3072 MiB cap. `std/` 99.4%, `libcxx/` 92.7% | — | as below |
+| 2026-11-03 | wp/446 (ced0e9ad, main b4e8dfb3 merged) | the 196 first-run FAIL/TIMEOUT tests re-run after the WP-446 fixes; full-suite counts with them substituted | 8708 | 48 | 36 | 455 (31 driver) | **99.0%** | -j 3, harness kiln, 20 s run timeout (240 s long), 3072 MiB cap. `std/` 99.4%, `libcxx/` 92.7% | — | as below |
 | 2026-11-03 | wp/446 base (c77a092a)¹ | **full suite**, first run: `std` 8424 + `libcxx` 823 (libc++ 22's `libcxx/` tests run; under 19 they were all driver-unsupported) | 8562 | 195 (+1 timeout) | 34 | 455 (31 driver) | **97.4%** | 69 min (4121 s), -j 3, harness kiln, 20 s run timeout (240 s long), 3072 MiB cap. `std/` 97.9%, `libcxx/` 89.3% | 2434 MiB (the `gcount.pass` test binary); largest kiln++ compile 704 MiB (`simd_copy`) | `locale -a` has all 7 lit locales (`scripts/provision-locales.sh`); running as root (uid 0); aarch64, 24 cores, 31 GiB |
 
 ¹ The report stamps `c2e88d0a`, the head when the run finished (see
