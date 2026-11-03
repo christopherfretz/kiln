@@ -291,6 +291,23 @@ ops! {
     // The matched handler becomes active: the in-flight exception is the
     // handled one until the handler's scope exits.
     CatchBegin = 0,
+    // [dst, src, trap]: a cast a constant expression may not perform
+    // ([expr.const]/5.15; clang `CCEDiag`): outside a fold
+    // (`RunState::fold`) it fails as `Trap` `trap`; a fold continues
+    // (not memoized) with aux `cce::CHECK`: nothing else; `cce::PTR`:
+    // `dst` = `src` pointing at nothing (`mem::NOWHERE`; null stays
+    // null); `cce::INT_TO_PTR`: `dst` = the integer `src` as a pointer;
+    // `cce::PTR_TO_INT`: `dst` = the integer of such a pointer (any other
+    // pointer fails).
+    Cce = 3,
+}
+
+/// The conversions of `Op::Cce`.
+pub(crate) mod cce {
+    pub const CHECK: u32 = 0;
+    pub const PTR: u32 = 1;
+    pub const INT_TO_PTR: u32 = 2;
+    pub const PTR_TO_INT: u32 = 3;
 }
 
 /// `Op::Throw` operand: the exception object has no destructor to run.

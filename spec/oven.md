@@ -121,7 +121,8 @@ the evaluator's flattened type table.
   just returned from or unwound (whose slot the next frame object would
   otherwise take) still reads as "read of variable whose lifetime has
   ended" + declared here, as clang reports it, not as a stale slot.
-  Slots whose generation would wrap are retired.
+  Slots whose generation would reach the last one (`mem::NOWHERE`,
+  never issued) are retired.
 - **Static reclamation** (WP-322, WP-060): a static object that dies
   during compilation (the scratch copy `Oven::has_constant_destruction`
   destroys) is freed by `Memory::free_static`, wherever it lies, not only
@@ -938,7 +939,8 @@ slots `2^20..2^21`, static slots have bit 21 set as now. Heap slots have
 their own `Alloc` table and free-slot queue with the frame space's
 generation scheme: `delete` marks the slot dead and keeps its `Alloc` (so a
 dangling pointer still names its origin in notes) until the slot is reused
-with a bumped generation; a slot whose generation would wrap is retired.
+with a bumped generation; a slot whose generation would reach the last
+one (never issued: `mem::NOWHERE`) is retired.
 `Origin::Heap(ExprId, u32)` names the `new` expression (or the
 `std::allocator<T>::allocate` call) and the allocation's serial number in
 its evaluation, for notes (clang prints a heap pointer as
@@ -1256,29 +1258,62 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   operand and "cast from 'void *' is not allowed in a constant
   expression" for null (the operand type as written, with its aka), as
   clang 19 and 22 in every mode. clang reports this as a CCE note and
-  keeps evaluating; kiln stops at it, which gives the same diagnostics
-  wherever clang needs a constant (`expr.const/p2738-void-cast-pre26-cxx*.cpp`).
+  keeps evaluating; kiln stops at it in every evaluation but a fold,
+  which gives the same diagnostics wherever clang needs a constant
+  (`expr.const/p2738-void-cast-pre26-cxx*.cpp`).
   Probed (WP-407, clang 19 and 22, `-std=c++23`): a required constant
   expression keeps the first note (clang `EM_ConstantExpression` never
   replaces it), so a later fault (a read past the end through the cast
   pointer, in a callee or not) adds no second note; `static_assert`,
   `constexpr` variables, enumerators and array bounds print the same as
-  kiln. `__builtin_is_constant_evaluated` / `if consteval` in a static
-  initializer differ only where clang's codegen, after a failed constant
-  initialization, folds the initializer again as a non-manifest trial
-  (`int g = __builtin_is_constant_evaluated() ? x : 7;` is static there),
-  which kiln's codegen does not do for any initializer. The difference that is visible is in a *fold*: clang continues
-  with the cast's result designating nothing (`Designator.setInvalid()`),
-  so a null test or comparison of that pointer folds while any access
-  through it fails silently: a file-scope `int a[(const int *)vp ? 1 :
-  2]` is "folded to constant array", `__builtin_constant_p((const int
-  *)vp == &n)` is true, and `int g = (const int *)vp != nullptr;` is
-  constant-initialized. Kiln's folds stop at the cast (an error for the
-  bound, `false`, dynamic initialization). Not modelled: it needs an
-  invalid-designator pointer state carried by every pointer-consuming
-  op, and covers clang's other CCE-only casts too (`reinterpret_cast`,
-  integer to pointer, which fold the same way); tracked by the xfail
-  `expr.const/p2738-void-cast-pre26-fold-continues.cpp`. Codegen's folds
+  kiln. In a *fold* clang continues with the cast's result designating
+  nothing (`Designator.setInvalid()`), so a null test or comparison of
+  that pointer folds while any access through it fails silently: a
+  file-scope `int a[(const int *)vp ? 1 : 2]` is "folded to constant
+  array", `__builtin_constant_p((const int *)vp == &n)` is true, and
+  `int g = (const int *)vp != nullptr;` is a static initializer. Kiln
+  models this with pointers that point at nothing (below):
+  `expr.const/p2738-void-cast-pre26-fold-continues.cpp`.
+- *Pointers that point at nothing* (WP-415): clang's other casts that
+  only a fold may perform ([expr.const]/5.15: a `reinterpret_cast`
+  between object pointer types other than the same type, a C-style cast
+  doing the same, an integer-to-pointer and a pointer-to-integer
+  conversion) note "reinterpret_cast is not allowed in a constant
+  expression" (a `reinterpret_cast` naming one of those conversions;
+  any other is that note and stops) or "cast that performs the
+  conversions of a reinterpret_cast is not allowed in a constant
+  expression" and continue in a fold the same way. They compile to
+  `Cce [dst, src, trap]` (aux `kbc::cce::CHECK`, `PTR`, `INT_TO_PTR`,
+  `PTR_TO_INT`), and the pre-C++26 `void *` cast's two traps are `Cce`
+  too. Outside a fold `Cce` traps with its note, exactly the old `Trap`
+  (for an integer/pointer conversion the note comes before the operand
+  is evaluated, as in clang). In a fold (`RunState::fold`: a silent
+  evaluation outside a constant context, i.e. `Oven::try_fold`,
+  `Oven::fold_rvalue` and `__builtin_constant_p`'s speculation; never
+  a constant initializer or a constant-destruction check, where clang
+  requires no notes) `PTR` keeps null and marks any other pointer as
+  pointing at nothing: its generation becomes the never-issued last one
+  (`mem::NOWHERE`, which is why `GEN_MAX` is 510), so every access
+  through it fails the generation check every access already makes, and
+  the fast path costs nothing. `INT_TO_PTR` makes a nowhere pointer of
+  slot 0 whose offset is the integer (0 stays null; one that does not
+  fit 32 bits fails); `PTR_TO_INT` gives back that integer, or fails for
+  a pointer to an object (clang keeps a symbolic value there; kiln's
+  fold stops). Pointer arithmetic on a nowhere pointer moves its offset
+  in element units; subtraction of two nowhere pointers of one slot is
+  the offset difference over the element size; comparisons of two
+  pointers of which one points at nothing compare offsets within one
+  slot, and across slots fold only for `==`/`!=` (false/true) unless a
+  side is an integer address other than null. The generation is lost,
+  so pointers compare by slot. `__builtin_constant_p` of a nowhere
+  pointer is true for an integer address and for a string literal at
+  offset 0, as clang's base check. A fold that executed a `Cce` is
+  impure (never memoized). `__builtin_constant_p((int *)8 + 1 == (int
+  *)12)` is true, `int f[(long)(int *)8]` folds to 8 elements and
+  `int i[*reinterpret_cast<const char *>(&n)]` is an error:
+  `expr.const/5.15/reinterpret-cast-fold-points-nowhere.cpp`. Function
+  pointers are not modelled (a cast to or from one still stops a fold).
+  Codegen's folds
   share the TU's bytecode, so they see the TU's language mode
   (`Oven::set_cxx_year`, recorded by sema; before WP-407 they compiled
   with C++26 rules and constant-initialized `int g = *(const int *)vp;`

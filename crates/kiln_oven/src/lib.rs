@@ -755,6 +755,8 @@ impl Oven {
         }
         self.types.refresh(bridge);
         self.begin_outermost(true, false, const_context);
+        // clang requires no notes at all (`VarDecl::evaluateDestruction`).
+        self.run.fold = false;
         let r = self.destroy_var(bridge, var, value);
         self.end_outermost();
         r
@@ -909,6 +911,7 @@ impl Oven {
         self.run.silent = silent;
         self.run.enum_check = enum_check;
         self.run.const_context = const_context;
+        self.run.fold = silent && !const_context;
         self.run.counters = vm::Counters::default();
         self.run.nesting = 0;
         self.run.depth_base = 0;
@@ -974,6 +977,7 @@ impl Oven {
             self.run.silent,
             self.run.enum_check,
             self.run.const_context,
+            self.run.fold,
             self.run.counters,
             self.run.object,
             self.run.maxd,
@@ -1003,6 +1007,7 @@ impl Oven {
         self.run.silent = silent;
         self.run.enum_check = enum_check;
         self.run.const_context = const_context;
+        self.run.fold = silent && !const_context;
         self.run.counters = vm::Counters { steps: steps0, ..vm::Counters::default() };
         self.run.maxd = 0;
         self.run.depth_base = depth_base;
@@ -1030,6 +1035,7 @@ impl Oven {
             self.run.silent,
             self.run.enum_check,
             self.run.const_context,
+            self.run.fold,
             counters,
             self.run.object,
             self.run.maxd,
