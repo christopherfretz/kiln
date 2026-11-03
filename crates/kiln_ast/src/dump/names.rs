@@ -1636,7 +1636,9 @@ impl PrintEnv for AstNames<'_> {
         match r {
             Reflectee::Null => {}
             Reflectee::Type(t) => self.type_name(t, out),
-            Reflectee::Namespace(d) if self.ast.decls.get(d).kind() == DeclKind::TranslationUnit => {
+            Reflectee::Namespace(d)
+                if self.ast.decls.get(d).kind() == DeclKind::TranslationUnit =>
+            {
                 out.push_str("::");
             }
             Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {

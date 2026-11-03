@@ -2442,8 +2442,11 @@ impl<'a> AstBuilder<'a> {
             }
             _ => {}
         }
-        let b =
-            if deps.contains(ExprDeps::VALUE_INST) { 0 } else { self.ast.reflections.intern(operand).index() };
+        let b = if deps.contains(ExprDeps::VALUE_INST) {
+            0
+        } else {
+            self.ast.reflections.intern(operand).index()
+        };
         let (aux, a) = (operand.tag(), operand.payload());
         let e =
             self.simple(ExprKind::CXXReflectExpr, ValueCategory::PRValue, deps, aux, ty, loc, a, b);

@@ -21,7 +21,9 @@
 //! - a value or object is a content-interned `ConstValueId`.
 
 use crate::ast::Ast;
-use crate::ids::{AnnId, ConstValueId, DeclId, DmsId, QualType, RawId, ReflectionId, TemplateNameId};
+use crate::ids::{
+    AnnId, ConstValueId, DeclId, DmsId, QualType, RawId, ReflectionId, TemplateNameId,
+};
 use crate::mem::{HeapSize, MemReport, MemRow};
 use crate::types::TypeView;
 use kiln_source::fx::FxHashMap;
@@ -269,7 +271,12 @@ impl Ast {
                     let u = self.types.canonical(underlying);
                     return self.types.typedef_type(first, u).into();
                 }
-                TypeView::TemplateSpecialization { name, args, underlying: Some(u), alias: true } => {
+                TypeView::TemplateSpecialization {
+                    name,
+                    args,
+                    underlying: Some(u),
+                    alias: true,
+                } => {
                     let n = self.types.canonical_template_name(name);
                     let a = self.types.canonical_args(args);
                     let u = self.types.canonical(u);

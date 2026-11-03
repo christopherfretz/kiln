@@ -4,7 +4,6 @@
 //! implicit nodes semantic analysis added are stripped and the
 //! expression is rebuilt through the Sema actions the parser calls.
 
-use kiln_ast::reflect::Reflectee;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{
     BinaryOp, CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, ExprNode, Radix, TypeidOperand,
@@ -12,6 +11,7 @@ use kiln_ast::expr::{
 };
 use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::names::{DeclName, DeclNameView};
+use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::{ArgView, BuiltinType, Nns, TemplateArg};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;

@@ -66,9 +66,11 @@ impl Sema<'_, '_> {
         if let Some(&b) = self.consteval_only_records.get(&def) {
             return b;
         }
-        let complete = self.ast.decls.record(def).is_some_and(|x| {
-            x.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE)
-        });
+        let complete = self
+            .ast
+            .decls
+            .record(def)
+            .is_some_and(|x| x.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE));
         self.consteval_only_records.insert(def, false);
         let bases: Vec<QualType> =
             self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
@@ -263,8 +265,7 @@ impl Sema<'_, '_> {
         let n = *self.ast.decls.get(f);
         let Some(x) = self.ast.decls.function(f) else { return };
         let spec = x.spec;
-        if n.has(DeclFlags::INVALID) || self.is_immediate_fn(f) || self.is_immediate_escalating(f)
-        {
+        if n.has(DeclFlags::INVALID) || self.is_immediate_fn(f) || self.is_immediate_escalating(f) {
             return;
         }
         // A templated constexpr function is immediate-escalating; the

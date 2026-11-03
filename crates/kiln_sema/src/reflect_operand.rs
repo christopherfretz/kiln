@@ -59,7 +59,8 @@ impl Sema<'_, '_> {
         if found.decls.is_empty() {
             found = lookup(self, LookupKind::Nested);
         }
-        let mut decls: Vec<DeclId> = found.decls.iter().map(|&d| self.ast.strip_shadow(d)).collect();
+        let mut decls: Vec<DeclId> =
+            found.decls.iter().map(|&d| self.ast.strip_shadow(d)).collect();
         decls.dedup_by_key(|d| self.ast.first(*d)); // same_entity: raw ok
         match decls.as_slice() {
             [] => {
@@ -109,7 +110,13 @@ impl Sema<'_, '_> {
 
     /// The reflection of the entity declaration `d` names (after lookup;
     /// also substitution's remapped declaration).
-    pub(crate) fn reflect_entity(&mut self, d: DeclId, name_loc: Loc, loc: Loc, end: Loc) -> ExprId {
+    pub(crate) fn reflect_entity(
+        &mut self,
+        d: DeclId,
+        name_loc: Loc,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
         let info = self.meta_info_type();
         let first = self.ast.first(d);
         let r = match self.kind_of(d) {

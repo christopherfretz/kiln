@@ -37,8 +37,8 @@ pub mod types;
 pub use ast::Ast;
 pub use builder::{AstBuilder, DeclHead};
 pub use ids::{
-    AnnId, ArgListId, AttrId, BlobId, ConstValueId, DeclId, DmsId, ExprId, LambdaId, ListId, NnsId, ProfileId,
-    QualType, RawId, RedeclGroupId, ReflectionId, StmtId, StringLitId, TemplateNameId,
+    AnnId, ArgListId, AttrId, BlobId, ConstValueId, DeclId, DmsId, ExprId, LambdaId, ListId, NnsId,
+    ProfileId, QualType, RawId, RedeclGroupId, ReflectionId, StmtId, StringLitId, TemplateNameId,
     TemplateParamListId, TypeId,
 };
 pub use lists::IdLists;
