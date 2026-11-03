@@ -311,39 +311,43 @@ the evaluator's flattened type table.
   array or pointer) is read as if it were (`VarInfo::lax`); its `mutable`
   members are not (below, WP-183). Lax mode
   applies only to an outermost evaluation (nested in a bridge callback it
-  is plain `try_fold`). Variables resolved under lax mode are recorded in
-  `lax_globals` and reset to unresolved when the next outermost
-  evaluation runs in the other mode, and lax-mode calls are never
-  memoized, so a lax read never leaks into a strict evaluation. A lax
-  global keeps one static object for the whole translation unit
-  (`Oven::lax_objs`, keyed by global, WP-387): re-resolving it in either
-  mode remakes that object in place (`Memory::reinit_static` drops its
-  union records and clears its contents and flags, keeping slot,
-  generation and address) instead of allocating a fresh one, so a
-  strict/lax alternation costs no static memory per switch and a pointer
-  to the global taken in one mode still designates it in the other
-  (test `limits.rs::lax_globals_do_not_grow`). The slot is reused only
-  when the object is live, of the same type and not mid-resolution;
-  otherwise a fresh one is allocated and recorded. **Lax folds** through
+  is plain `try_fold`). Lax-mode calls are never memoized, so a lax
+  read never leaks into a strict evaluation. A lax global keeps one
+  static object for the whole translation unit (WP-407): it is resolved
+  once, in whichever mode first names it, and is never reset by a mode
+  switch, so a strict/lax alternation costs no static memory and a
+  pointer to the global taken in one mode designates the same object,
+  holding the same value, in the other (test
+  `limits.rs::lax_globals_do_not_grow`). **Lax folds** through
   a usable variable (WP-395): a constexpr pointer, reference or class
   member pointing at a lax global (`constexpr const double *p = &d;
   int a[(int)*p];`) is resolved strictly, before or outside any lax fold,
   so the pointer it holds must designate an object a later lax fold can
-  read. A lax global whose initializer evaluates as a strict constant
-  (or whose value sema already froze) therefore gets one static object
-  for both modes, holding that value but flagged external
+  read. A lax global therefore gets one static object for both modes,
+  holding its value but flagged external
   (`Origin::External`, `Alloc::frame == LAX_READ`): a strict read still
   faults "read of non-constexpr variable" exactly as before, and only a
   lax fold (`Memory::lax`, set by `fold_rvalue` for its outermost run)
-  may read it; writes fault in either mode. Such a global is resolved
-  once per translation unit (one strict evaluation of its initializer,
-  memoized like any variable) and is not recorded in `lax_globals`. A lax
-  global whose initializer is not a strict constant (it reads another
-  lax global) keeps the mode-dependent object above, so a usable
-  pointer to it taken strictly still does not fold (open limitation).
+  may read it; writes fault in either mode. Its value is the one sema
+  froze, or else its initializer evaluated **laxly** whatever the mode
+  of the evaluation that resolves it (`Oven::resolve_var` sets
+  `RunState::lax` and `Memory::lax` around it): clang's
+  `VarDecl::evaluateValue` only notes (`CCEDiag`) a read of a
+  non-constexpr variable, so `const double d1 = d0 * 2;` keeps the value
+  5.0 for a later fold however it is reached (`constexpr const double
+  *p = &d1; int a[(int)*p];` folds, WP-407). Before WP-407 such a global
+  was resolved per mode and reset at each mode switch, so a pointer
+  resolved strictly did not fold and, worse, a pointer thawed in a lax
+  fold kept reading the lax contents in a later strict evaluation that
+  never re-resolved the global (`constexpr double v = *p;` accepted). An
+  initializer that does not fold even laxly leaves the object unbacked,
+  so every read faults in either mode; a global met mid-initialization
+  (`VarEvalState::Evaluating`) is resolved provisionally, for that
+  evaluation only.
   A genuinely non-constant bound (a pointer to a non-`const` variable, or
   any function-scope bound, which clang does not fold) stays a variable
   length array (tests `expr.const/lax-fold-through-pointer.cpp`,
+  `expr.const/lax-fold-through-pointer-chain.cpp`,
   `dcl.array/vla-through-constexpr-pointer.cpp`). Codegen
   uses it for its non-initializer fold candidates; sema uses it
   (`OvenBridge::fold_rvalue_int`) for clang's folded array bound
@@ -1254,6 +1258,32 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   clang 19 and 22 in every mode. clang reports this as a CCE note and
   keeps evaluating; kiln stops at it, which gives the same diagnostics
   wherever clang needs a constant (`expr.const/p2738-void-cast-pre26-cxx*.cpp`).
+  Probed (WP-407, clang 19 and 22, `-std=c++23`): a required constant
+  expression keeps the first note (clang `EM_ConstantExpression` never
+  replaces it), so a later fault (a read past the end through the cast
+  pointer, in a callee or not) adds no second note; `static_assert`,
+  `constexpr` variables, enumerators and array bounds print the same as
+  kiln. `__builtin_is_constant_evaluated` / `if consteval` in a static
+  initializer differ only where clang's codegen, after a failed constant
+  initialization, folds the initializer again as a non-manifest trial
+  (`int g = __builtin_is_constant_evaluated() ? x : 7;` is static there),
+  which kiln's codegen does not do for any initializer. The difference that is visible is in a *fold*: clang continues
+  with the cast's result designating nothing (`Designator.setInvalid()`),
+  so a null test or comparison of that pointer folds while any access
+  through it fails silently: a file-scope `int a[(const int *)vp ? 1 :
+  2]` is "folded to constant array", `__builtin_constant_p((const int
+  *)vp == &n)` is true, and `int g = (const int *)vp != nullptr;` is
+  constant-initialized. Kiln's folds stop at the cast (an error for the
+  bound, `false`, dynamic initialization). Not modelled: it needs an
+  invalid-designator pointer state carried by every pointer-consuming
+  op, and covers clang's other CCE-only casts too (`reinterpret_cast`,
+  integer to pointer, which fold the same way); tracked by the xfail
+  `expr.const/p2738-void-cast-pre26-fold-continues.cpp`. Codegen's folds
+  share the TU's bytecode, so they see the TU's language mode
+  (`Oven::set_cxx_year`, recorded by sema; before WP-407 they compiled
+  with C++26 rules and constant-initialized `int g = *(const int *)vp;`
+  in C++23: `expr.const/p2738-void-cast-pre26-static-init.cpp`,
+  `p2738-void-cast-static-init-cxx26.cpp`).
   A `void *` argument in an "in call to" note prints the subobject its
   tag designates (`f(&s)`, not the first member at its address), an
   untagged one the whole object.
@@ -1422,6 +1452,17 @@ the base (needs a fault kind in `notes.rs`); clang also reports
 destroying a derived object (with a non-trivial destructor) whose
 trivially destructible base was never constructed, which kiln does
 not check.
+
+*A virtual base without a mem-initializer (WP-400).* When the most
+derived constructor names no mem-initializer for a virtual base, Sema
+default-initializes it ([class.base.init]/9); a base whose default
+constructor is trivial has its lifetime begun with indeterminate
+contents, so it is *not* an unconstructed base: reading a member is
+"read of uninitialized object is not allowed in a constant expression",
+writing it first is fine, and a default member initializer of the base
+runs. This is clang's behaviour for the non-virtual analog, so
+`unconstructed_bases` deliberately leaves virtual bases out (test
+`tests/conformance/class.base.init/vbase-default-initialized-cxx26.cpp`).
 
 *Deviations from clang 19.* A class
 whose subobjects' lifetimes all ended one by one is diagnosed at its
@@ -1972,6 +2013,19 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   class type, to a declared or a variadic parameter (clang
   `EvaluateCallArg` → `EvaluateInPlace`): a non-literal one traps at the
   argument before it is initialized (WP-320, sema.md §5.20).
+  At `-fclang-compat=22` from C++23 none of these `CheckLiteralType`
+  traps is made (clang 22 dropped it with P2448): a non-literal object
+  fails only at the non-constexpr constructor its creation calls
+  (`literal_check_relaxed`, WP-400). Constructing a class with a virtual
+  base through a constexpr constructor (before C++26) instead traps
+  "cannot construct object of type 'X' with virtual base class in a
+  constant expression" at the construct expression, with no frame for
+  the constructor (clang `HandleConstructorCall`; test
+  `expr.const/constexpr-vbase-construct-cxx23.cpp`).
+- A local variable that sema marked invalid (its initialization was
+  already diagnosed) traps silently when its declaration is evaluated,
+  so the enclosing constant expression reports only its own error
+  (clang's invalid-declaration evaluation failure; WP-400).
 - Covariant return adjustment through a pointer to member function:
   `Fault::Invalid` (stub, follow-up of WP-077).
 - Freezing a pointer to a `typeid` object (`constexpr auto *p =
@@ -2052,14 +2106,23 @@ subobject reads its word and dispatches on the complete object's dynamic
 type (`locate`, then the final overrider's subobject through
 `sub_addr`); `dynamic_cast` and `typeid` find the most derived object and
 the target the same way (`cast_target`, `PolyInfo::vvptrs`/`at`).
-`covariance` returns `None` (`Fault::Invalid`) for a covariant return
-adjustment into a virtual base.
+A covariant return whose method return class is (in) a virtual base of
+the overrider's return class (WP-400) is `CovAdj::VBase(class, k)` in the
+`adj` register (`cov_word`: high half 1; a plain offset is sign-extended),
+and `CovAdj` converts the returned pointer as `Op::VBase` does, through
+the returned object's most derived object (`sub_addr`), so a more derived
+dynamic type of the returned object is honoured
+(`expr.const/constexpr-covariant-virtual-base-cxx26.cpp`).
 
 **`base_owner`.** The search for the most derived object (used by
 `sub_addr` and by the exception handler match of a thrown pointer to a
 subobject, "Exceptions") descends through array elements, members and
 base fields, the virtual-base fields included, so a subobject inside an
-enclosing object's virtual base is found.
+enclosing object's virtual base is found. In a union it searches only the
+active member (`Memory::unions` at the union's key; every member while no
+single active one is recorded), so a member whose class has the searched
+class at the same offset is not mistaken for the most derived object
+(WP-400, `class.union/constexpr-virtual-base-in-union-cxx26.cpp`).
 
 **Tests.** `tests/conformance/class.mi/constexpr-virtual-*`
 (C++23 rejection with clang's notes, C++26 acceptance, diamond and
@@ -2076,23 +2139,12 @@ peak, 1536 arena, no growth per round).
 **Interface changes.** `Op::VBase`; `SetVptr` aux 1;
 `Func::base_obj`, `Oven::func_index_base`, `Oven::base_funcs`,
 `Callee::Base`; `Virt::subs`; `Types::{nv_view, class_of, same_class,
-vbase_start}`; `covariance` returns `Option<i64>`. Sema: a rejected
+vbase_start}`; `covariance` returns `Option<u128>` (a `cov_word`,
+WP-400). Sema: a rejected
 constexpr defaulted special member (C++23) is marked invalid, as clang's
 `setInvalidDecl`.
 
 **Left for later.**
-- clang 19/22 in C++23 accept some defaulted constexpr special members
-  of classes with virtual bases (its `DefaultedDefaultConstructorIsConstexpr`
-  / `DefaultedDestructorIsConstexpr` flags are last-write-wins over the
-  subobjects); kiln rejects them (it rejected them before, as
-  unsupported).
-- Covariant return adjustment into a virtual base (`Fault::Invalid`).
-- `base_owner` in a union takes the first member in which the search
-  succeeds, not the active one.
-- Codegen of a constant global of a class with virtual bases.
-- Sema's final-overrider and used-virtual-member walks are exponential in
-  the depth of a virtual lattice (`class/virtual/graph.rs`,
-  `class/virtual/used.rs`).
 - `vcall` caches neither relative words nor overriders found in a virtual
   base.
 

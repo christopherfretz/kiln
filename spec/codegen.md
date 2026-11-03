@@ -520,9 +520,30 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   `--p` / `p--` keep plain `inbounds`, as clang's
   `EmitCheckedInBoundsGEP` (`isSigned` / `isSubtraction`). Below 22 no
   `nuw` (clang 19). LLVM 19 parses `nuw`, so this is keyed on the compat
-  level only. Not yet: the GEPs built outside these helpers (array
-  initialization loops, `_Complex` and `va_list` parts, VLA strides),
-  which clang 22 also flags (§6a).
+  level only. The GEPs built outside these helpers match clang 22 too
+  (checked against it, WP-402): array initialization loops (`add nuw`
+  index, `inbounds nuw` element), `_Complex` parts and `va_list` fields
+  (struct GEPs), and VLA steps (below).
+- **Pointers to variable length arrays (WP-402).** clang
+  `emitPointerArithmetic`: `p + n` / `p - n` on a pointer to a VLA type
+  scales the `i64` index (negated first for `-`) by the VLA's element
+  count (`mul nsw`, `Cg::vla_pointer_step`) and steps over its first
+  non-variable element type; `++p` / `--p` step by that count (`sub nsw
+  0, n` for `--`, `Cg::vla_inc_step`); `p - q` divides the byte
+  difference by the VLA's size in bytes (`Cg::vla_bytes`, `mul nuw` of
+  the element size and count, as `sizeof`). The GEP flags follow the
+  rules above (an unsigned index or `++` gets `nuw` at compat 22).
+- **Reference loads (WP-402).** clang 22 `EmitLoadOfReference`: at
+  `-fclang-compat=22` the load of a reference's address from its slot
+  (`Cg::load_reference`: a local, parameter, global or static reference
+  variable, a reference member, so also a closure's by-reference capture,
+  a range-for `__range` and a structured binding's reference) carries
+  `!nonnull !{}` unless the referee is `void`, an array of unknown bound
+  or an incomplete class, and then `!align !{i64 A}` when the referee is
+  an object whose alignment (`pointee_layout`: the non-virtual alignment
+  of a non-final class) exceeds 1. Below 22 neither (clang 19). Metadata
+  nodes are numbered in first-use order after the module flags and
+  ident, as clang prints them.
 
 ### 3.1 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
@@ -999,18 +1020,24 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 | `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors), on definitions, declarations and calls, before `noundef` | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
 | `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 for `non-leaf` (AArch64's default; "Frame pointer") | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
 | no empty `!llvm.linker.options` | compat ≥ 22 | `!llvm.linker.options = !{}` |
+| `captures(none)` for `nocapture` (intrinsic declarations such as `llvm.memcpy`/`llvm.memset`; `kiln_llvm` `Module::ir_version`, spec/llvm.md §5) | compat ≥ 22 and LLVM ≥ 21 | `nocapture` (LLVM 19 rejects `captures(..)`) |
+| `!nonnull`/`!align` on reference loads (§3 "Reference loads") | compat ≥ 22 | none |
+| each `_ZTI` global before its `_ZTS`, `__cxxabiv1` vtable and pointee/base descriptors (`Cg::reserve_rtti`) | compat ≥ 22 | `_ZTI` after them |
 
 x86-64's data layout and `"frame-pointer"="all"` are the same in both.
 The `xtask test` harness runs kiln at the oracle's compat level with the
 oracle's LLVM (spec/harness.md "Oracle toolchain"), so the oracle-22 legs
-see all six. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
-compat), `sig_attrs`, `target_attrs` and `trailer`. Not yet: clang 22's
-`captures(none)` for `nocapture` on intrinsic declarations (LLVM 21+
-syntax; `llvm.memcpy`/`llvm.memset`), `!nonnull`/`!align` on loads of a
-reference parameter's slot, the `_ZTI`/`_ZTS` order, and the GEPs §3
-lists. Tests: `tests/conformance/expr.call/ir-clang22-argument-passing.cpp`,
-`tests/conformance/expr.sub/ir-clang22-gep-flags.cpp` (`expect: ir`),
-and `ir_vs_clang` under oracle 22.
+see all nine. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
+compat, `ir_version`), `sig_attrs`, `target_attrs` and `trailer`. Not
+yet: LLVM 22's `nocreateundeforpoison` function attribute on many
+intrinsic declarations (`*.with.overflow`, `ctpop`, `bswap`, `fabs`,
+`fshl`, `smax`, ...; LLVM ≤ 21 rejects it). Tests:
+`tests/conformance/expr.call/ir-clang22-argument-passing.cpp`,
+`tests/conformance/expr.sub/ir-clang22-gep-flags.cpp`,
+`tests/conformance/dcl.ref/ir-clang22-reference-loads.cpp`,
+`tests/conformance/expr.typeid/ir-clang22-typeinfo-order.cpp`,
+`tests/conformance/dcl.array/ir-clang22-vla-pointer-arithmetic.cpp`
+(`expect: ir`), and `ir_vs_clang` under oracle 22.
 
 ## 7. Landed (WP-079): classes
 Lowering of non-polymorphic classes (`class.rs`, `cleanup.rs`,
@@ -1191,6 +1218,19 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   refer to the runtime's `external constant` objects. RTTI of a type that
   involves an incomplete class has `internal` linkage. Linkage of class
   RTTI follows the vtable.
+- **Constant objects of polymorphic classes** (`consts.rs`
+  `record_elems`, WP-400): a constant initializer of a dynamic class
+  gives each vptr field the vtable address point of its subobject in the
+  complete object's vtable (the group `vtable_address_point(complete,
+  subobject)` names; a base subobject never uses its own class's
+  vtable), as clang's `ConstantEmitter` does. A class with virtual bases
+  (constant only through P3533, kiln alone) emits its virtual-base
+  members of the complete-object type the same way, at their layout
+  offsets. An array whose elements all have one constant type uses it as
+  the element type (clang `CommonElementType`), so an array of a dynamic
+  class is `[N x %struct.P]` and not a literal struct. Validation:
+  `tests/codegen/polymorphic_const_global.cpp` (exact IR),
+  `tests/conformance/dcl.constinit/constinit-virtual-base-run-cxx26.cpp`.
 - **vptr stores**: constructors store the address point of every vptr
   after the base initializers and before the member initializers;
   destructors re-store them on entry unless clang's

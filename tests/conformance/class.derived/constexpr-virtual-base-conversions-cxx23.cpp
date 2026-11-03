@@ -11,7 +11,7 @@
 //@ diag: 20:5 note "non-literal type 'Y' cannot be used in a constant expression"
 //@ diag: 25:15 note "in call to 'paths()'"
 //@ requires: clang<22
-// clang 22 notes "cannot construct object of type 'Y' with virtual base class in a constant expression"; WP-355 residual
+// clang 22 differs (no literal type check in C++23, P2448): see constexpr-virtual-base-conversions-cxx23-22.cpp
 struct V { int v = 1; virtual int f() const { return v; } };
 struct W : virtual V { int w = 2; };
 struct X : virtual V { int x = 3; };

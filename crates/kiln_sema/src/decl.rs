@@ -1296,7 +1296,11 @@ impl Sema<'_, '_> {
             _ => None,
         };
         let Some(v) = folded else {
-            self.error(DiagId::sema_vla_unsupported, loc);
+            if matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member) {
+                self.vla_at_file_scope(d, loc, at, f);
+            } else {
+                self.error(DiagId::sema_vla_unsupported, loc);
+            }
             return None;
         };
         let wloc = Self::fold_lone_invalid(&mut f, loc);
@@ -1304,6 +1308,47 @@ impl Sema<'_, '_> {
         self.emit(w);
         self.error(DiagId::sema_vla_folded_to_constant, at);
         u64::try_from(v).ok().map(Ok)
+    }
+
+    /// A bound that neither is a constant expression nor folds, in a
+    /// namespace-scope or member declarator: clang builds the variable
+    /// length array (after `-Wvla-cxx-extension` with the failure's
+    /// notes, at the bound) and the declaration rejects it at its name
+    /// (`CheckVariableDeclarationType`, `CheckTypedefForVariablyModifiedType`,
+    /// `CheckFieldDecl`, `CheckFunctionDeclaration`): a function's type is
+    /// variably modified, a non-static data member's size is not
+    /// constant, and anything else is a variable length array when every
+    /// declarator chunk outside the bound is an array (an array of one is
+    /// one too) or a variably modified type otherwise ([dcl.array]/1: the
+    /// bound is a converted constant expression).
+    fn vla_at_file_scope(
+        &mut self,
+        d: &Declarator,
+        loc: Loc,
+        at: Loc,
+        mut f: kiln_oven::EvalFailure,
+    ) {
+        let wloc = Self::fold_lone_invalid(&mut f, loc);
+        let w = Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f);
+        self.emit(w);
+        let pos = d
+            .chunks
+            .iter()
+            .position(
+                |ch| matches!(ch, Chunk::Array { size: Some(s), .. } if self.begin_loc(*s) == loc),
+            )
+            .unwrap_or(0);
+        let outer = &d.chunks[..pos];
+        let id = if matches!(outer.first(), Some(Chunk::Function { .. })) {
+            DiagId::sema_vm_func_decl
+        } else if self.declarator_field {
+            DiagId::sema_field_variable_size
+        } else if outer.iter().all(|ch| matches!(ch, Chunk::Array { .. })) {
+            DiagId::sema_vla_decl_in_file_scope
+        } else {
+            DiagId::sema_vm_decl_in_file_scope
+        };
+        self.error(id, at);
     }
 
     /// clang `ext_vla_cxx` / `ext_vla_cxx_in_gnu_mode` (off by default in
@@ -2224,7 +2269,12 @@ impl Sema<'_, '_> {
         let base = self.apply_declspec_vector_attrs(base, ds);
         let base = self.ctad_decl_spec_check(ds, base, d);
         self.warn_redundant_parens(Some((ds, base)), d);
+        self.declarator_field = d.ctx == DeclaratorContext::Member
+            && !ds.is_typedef()
+            && ds.friend.is_none()
+            && !matches!(ds.storage, Some((StorageSpec::Static, _)));
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
+        self.declarator_field = false;
         if head.is_some() {
             if ds.is_typedef() {
                 self.error(DiagId::sema_typedef_template, d.loc);
@@ -3473,13 +3523,12 @@ impl Sema<'_, '_> {
                     if pspec.is_inline() {
                         spec = spec.with_implicit_inline(true);
                     }
-                    // [dcl.constexpr]/1: every declaration of an immediate
-                    // function is `consteval` (clang's mismatch check; kiln
-                    // applies it only when one side is consteval).
+                    // [dcl.constexpr]/1: if any declaration of a function
+                    // is `constexpr` or `consteval`, every declaration is
+                    // (clang `err_constexpr_redecl_mismatch`).
+                    // An invalid previous declaration is not checked.
                     let (ok, nk) = (pspec.constexpr_kind(), spec.constexpr_kind());
-                    if ok != nk
-                        && (ok == ConstexprKind::Consteval || nk == ConstexprKind::Consteval)
-                    {
+                    if ok != nk && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID) {
                         let msg = self
                             .diag(DiagId::sema_constexpr_redecl_mismatch, d.name_loc())
                             .arg(nk as u8)
@@ -3634,6 +3683,15 @@ impl Sema<'_, '_> {
             if !method && !friend && d.qualifier.is_none() {
                 self.record_extern_c(name, f);
             }
+        }
+        // Where a constexpr or consteval defaulted assignment or comparison
+        // that cannot be one is diagnosed (`check_defaulted_impl`).
+        if (method || friend)
+            && ds.constexpr.or(ds.consteval).is_some()
+            && ds.loc != d.name_loc()
+            && self.std < kiln_lex::Std::Cxx26
+        {
+            self.constexpr_begin_locs.insert(f, ds.loc);
         }
         self.create_params(f, &params, &defaults);
         self.defer_late_noexcept(f, d);
@@ -5646,6 +5704,9 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name(f));
             let msg = self.note_prev(msg, prev, true);
             self.emit(msg);
+            // clang `CheckForFunctionRedefinition` invalidates the
+            // redefinition (a later redeclaration is not checked against it).
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         // The return type as written: diagnostics name its typedef.
@@ -5706,6 +5767,7 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_body(f, body);
         }
         self.check_constexpr_virtual_base(f);
+        self.check_constexpr_body_vars(f, body);
         if self.kind_of(f) == DeclKind::CXXDestructor
             && let Some(class) = self.ast.decls.get(f).ctx()
             && !self.in_template()

@@ -1018,6 +1018,9 @@ impl Cg<'_> {
             V::C(self.m.const_bool(true))
         } else if ast.types.is_pointer(q) {
             let pq = ast.types.pointee(q).expect("pointee");
+            if let Some((n, et)) = self.vla_inc_step(pq, inc)? {
+                return Ok(self.gep_nuw(et, old, vec![n], inc));
+            }
             let et = if ast.types.is_void(pq) || ast.types.is_function(pq) {
                 LTy::I8
             } else {
@@ -1180,6 +1183,10 @@ impl Cg<'_> {
                 let b = self.cast(CastOp::PtrToInt, r, LTy::I64);
                 let d = self.bin(BinOp::Sub, Flags::NONE, a, b);
                 let pq = ast.types.pointee(lq).expect("pointee");
+                if self.is_vla(pq) {
+                    let c = self.vla_bytes(pq)?;
+                    return Ok(self.bin(BinOp::SDiv, Flags::EXACT, d, c));
+                }
                 let sz = if ast.types.is_void(pq) || ast.types.is_function(pq) {
                     1
                 } else {
@@ -1202,6 +1209,9 @@ impl Cg<'_> {
                     idx = self.bin(BinOp::Sub, Flags::NONE, z, idx);
                 }
                 let et = ast.types.pointee(pq).expect("pointee");
+                if let Some((idx, ety)) = self.vla_pointer_step(et, idx)? {
+                    return Ok(self.gep_nuw(ety, p, vec![idx], !is && !sub));
+                }
                 let ety = if ast.types.is_void(et) || ast.types.is_function(et) {
                     LTy::I8
                 } else {
@@ -1745,7 +1755,7 @@ impl Cg<'_> {
                         }
                         Addr { v, ty: LTy::PTR, align: self.global_align(dq) }
                     };
-                    let p = self.load(LTy::PTR, slot.v, slot.align, false);
+                    let p = self.load_reference(slot.v, slot.align, dq);
                     return Ok(self.ref_lvalue(p, q));
                 }
                 if let Some(&a) = self.f.locals.get(&d) {
@@ -1825,6 +1835,46 @@ impl Cg<'_> {
     pub(crate) fn record_align_of(&mut self, q: QualType) -> u64 {
         let p = self.ast.types.pointee(q).unwrap_or(q);
         self.pointee_layout(p).1
+    }
+
+    /// clang `EmitLoadOfReference`: the address a reference of type `rq`
+    /// stored at `slot` is bound to. At `-fclang-compat=22` (clang 20+) the
+    /// load carries `!nonnull !{}` and, for an object referee whose natural
+    /// alignment (as a pointee: `getNaturalTypeAlignment`, a non-final
+    /// class's non-virtual alignment) exceeds 1, `!align !{i64 A}`; neither
+    /// when the referee is incomplete (spec/codegen.md §3, "Reference
+    /// loads").
+    pub(crate) fn load_reference(&mut self, slot: V, align: u64, rq: QualType) -> V {
+        let p = self.load(LTy::PTR, slot, align, false);
+        if self.opts.clang_compat < 22 {
+            return p;
+        }
+        let Some(referee) = self.referee(rq) else { return p };
+        let types = &self.ast.types;
+        if types.is_void(referee)
+            || matches!(
+                types.canonical_view(referee),
+                kiln_ast::types::TypeView::IncompleteArray(_)
+            )
+            || !crate::builtins::is_complete(self.ast, referee)
+        {
+            return p;
+        }
+        let i = Fir::last_inst(p);
+        let k = self.m.md_kind("nonnull");
+        let empty = self.m.md_tuple(&[]);
+        self.f.fir.add_md(i, k, empty);
+        if !self.ast.types.is_function(referee) {
+            let (_, a) = self.pointee_layout(referee);
+            if a > 1 {
+                let c = self.m.const_int(LTy::I64, i128::from(a));
+                let Ok(m) = self.m.md_const(c) else { unreachable!("integer metadata") };
+                let md = self.m.md_tuple(&[Some(m)]);
+                let k = self.m.md_kind("align");
+                self.f.fir.add_md(i, k, md);
+            }
+        }
+        p
     }
 
     /// The lvalue of type `q` at the address `p` a reference holds.
@@ -2303,7 +2353,7 @@ impl Cg<'_> {
             // clang `EmitLValueForField` on a reference member: load the
             // bound address.
             let slot = self.field_lvalue_init(base, field, fq)?;
-            let p = self.load(LTy::PTR, slot.addr.v, slot.addr.align, false);
+            let p = self.load_reference(slot.addr.v, slot.addr.align, fq);
             let (_, align) = self.pointee_layout(referee);
             let ty = self.mty(referee);
             return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None, vidx: None });

@@ -25,7 +25,7 @@ use kiln_ast::types::{Quals, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId, TypeId};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use super::SpecialKind;
 use super::deletion::Selected;
@@ -482,7 +482,7 @@ impl Sema<'_, '_> {
                 let inherited = !direct.iter().any(|(_, b)| {
                     b.is_virtual && self.base_class(b).is_some_and(|c| self.ast.first(c) == first)
                 });
-                let idx = self.vbase_spec_index(class, vb, 0).unwrap_or(0);
+                let idx = self.vbase_spec_index(class, vb).unwrap_or(0);
                 match self.implicit_base_init(info.iik, spec, idx, true, inherited, loc) {
                     Some(ci) => info.out.push(ci),
                     None => had_error = true,
@@ -527,14 +527,28 @@ impl Sema<'_, '_> {
 
     /// The path index of the base-specifier naming virtual base `vb`
     /// that [`Sema::virtual_bases`] reports for `r`.
-    fn vbase_spec_index(&self, r: DeclId, vb: DeclId, depth: usize) -> Option<u32> {
+    fn vbase_spec_index(&self, r: DeclId, vb: DeclId) -> Option<u32> {
+        let mut walked: FxHashSet<DeclId> = FxHashSet::default();
+        self.vbase_spec_index_in(r, vb, &mut walked, 0)
+    }
+
+    /// [`Self::vbase_spec_index`] below `r`, skipping the classes already
+    /// `walked` (they do not name `vb`; each class is walked once, WP-400).
+    fn vbase_spec_index_in(
+        &self,
+        r: DeclId,
+        vb: DeclId,
+        walked: &mut FxHashSet<DeclId>,
+        depth: usize,
+    ) -> Option<u32> {
         if depth > 1024 {
             return None;
         }
         for (i, b) in self.indexed_bases(r) {
             let Some(bd) = self.base_class(&b) else { continue };
             if self.defn_bits(bd).contains(DefinitionBits::HAS_VIRTUAL_BASES)
-                && let Some(x) = self.vbase_spec_index(bd, vb, depth + 1)
+                && walked.insert(self.ast.first(bd))
+                && let Some(x) = self.vbase_spec_index_in(bd, vb, walked, depth + 1)
             {
                 return Some(x);
             }

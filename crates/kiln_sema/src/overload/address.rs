@@ -46,6 +46,55 @@ impl Sema<'_, '_> {
         (self.ast.exprs.get(x).kind() == ExprKind::UnresolvedLookupExpr).then_some((x, addr))
     }
 
+    /// The implicit member overload set (`f` for `this->f`, kiln's
+    /// `UnresolvedMemberExpr`) an expression of overloaded-function type
+    /// names (through parentheses and one `&`), and whether it is under
+    /// `&`: with a target, [over.over]/1 selects a static member function
+    /// from it, and the implicit object is dropped (clang's
+    /// `FixOverloadedFunctionReference` of an implicit
+    /// `UnresolvedMemberExpr`).
+    pub(crate) fn implicit_member_operand(&self, e: ExprId) -> Option<(ExprId, bool)> {
+        if self.ast.exprs.get(e).ty() != QualType::OVERLOAD {
+            return None;
+        }
+        let mut x = self.ignore_parens(e);
+        let mut addr = false;
+        if self.ast.exprs.get(x).kind() == ExprKind::UnaryOperator
+            && self.ast.exprs.unary_op(x) == UnaryOp::AddrOf
+        {
+            addr = true;
+            x = self.ignore_parens(self.ast.exprs.operand(x));
+        }
+        let x = self.member_overload(x)?;
+        let m = self.ovl.members.get(&x)?;
+        // An instantiated `f` is rebuilt as `this->f` with an implicit
+        // `this` (spec/sema-overload.md §2.3).
+        let implicit = m.implicit
+            || (self.ast.exprs.get(m.base).kind() == ExprKind::CXXThisExpr
+                && self.ast.exprs.this_is_implicit(m.base));
+        (implicit && m.targs.is_none()).then_some((x, addr))
+    }
+
+    /// The matching static (non-template) members of the implicit member
+    /// overload set `x` for `target`, with their found declarations: a
+    /// non-static member is named by an unqualified name only in a call
+    /// ([expr.prim.id.general]/4, [expr.unary.op]/4).
+    fn implicit_member_candidates(&mut self, x: ExprId, target: QualType) -> Vec<(DeclId, DeclId)> {
+        let fnty = self.address_target(target);
+        if fnty.1 {
+            return Vec::new();
+        }
+        let Some(m) = self.ovl.members.get(&x) else { return Vec::new() };
+        let cands: Vec<(DeclId, DeclId)> = m
+            .decls
+            .iter()
+            .enumerate()
+            .map(|(i, &d)| (d, m.found.get(i).copied().unwrap_or(d)))
+            .filter(|&(d, _)| !self.ast.decls.get(d).has(DeclFlags::INVALID))
+            .collect();
+        cands.into_iter().filter(|&(d, _)| self.address_matches(d, fnty)).collect()
+    }
+
     /// The function type a target type asks an overload set for
     /// ([over.over]/1: the pointee of a pointer or reference to function
     /// or of a pointer to member function, or a function type), else the
@@ -187,6 +236,12 @@ impl Sema<'_, '_> {
     /// type is a match too ([over.over]/3; clang's
     /// `ResolveAddressOfOverloadedFunction` from `TryImplicitConversion`).
     pub(crate) fn address_match(&mut self, e: ExprId, target: QualType) -> Option<DeclId> {
+        if let Some((x, _)) = self.implicit_member_operand(e) {
+            return match self.implicit_member_candidates(x, target).as_slice() {
+                [(d, _)] => Some(*d),
+                _ => None,
+            };
+        }
         let (ule, _) = self.overload_operand(e)?;
         let mut m = self.address_candidates(ule, target);
         if m.is_empty() {
@@ -286,6 +341,17 @@ impl Sema<'_, '_> {
         ctx: AddrCtx,
         at: Loc,
     ) -> Option<ExprId> {
+        if let Some((x, _)) = self.implicit_member_operand(e)
+            && let [(d, f)] = self.implicit_member_candidates(x, target)[..]
+        {
+            let m = &self.ovl.members[&x];
+            let (naming, nns) = (m.naming, m.nns);
+            let loc = self.ast.exprs.get(x).loc();
+            let r = self.finish_overload_ref(d, f, Some(naming), loc, nns, x, false);
+            let at = self.begin_loc(e);
+            self.note_function_name_use(d, r, at, nns.is_none());
+            return Some(self.rebuild_over(e, x, r));
+        }
         let Some((ule, _)) = self.overload_operand(e) else {
             if complain {
                 self.check_overload_use(e);
@@ -533,7 +599,9 @@ impl Sema<'_, '_> {
     /// resolved" with a "possible target for call" per candidate. True
     /// if `e` was one (and is now diagnosed).
     pub(crate) fn check_overload_use(&mut self, e: ExprId) -> bool {
-        if let Some(x) = self.member_overload(e) {
+        let member =
+            self.member_overload(e).or_else(|| self.implicit_member_operand(e).map(|p| p.0));
+        if let Some(x) = member {
             // [expr.ref]/7.3.2: a member function can only be called.
             let no_args = self.member_overload_decls(x).iter().any(|&d| {
                 self.ast.decls.function(d).is_some_and(|f| self.ast.lists.get(f.params).is_empty())

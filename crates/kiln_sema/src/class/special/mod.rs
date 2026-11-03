@@ -190,6 +190,10 @@ pub(crate) struct SpecialState {
     pub noexcept_false: Option<ExprId>,
     /// Defaulted comparison operator state (`class/compare.rs`).
     pub cmp: crate::class::compare::CompareState,
+    /// Classes with virtual bases whose defaulted destructor is constexpr
+    /// in C++23 by clang's running `DefaultedDestructorIsConstexpr` flag
+    /// (`vbase_flag_cxx23`; spec/sema-class.md §4.6).
+    pub vbase_dtor_constexpr: FxHashSet<DeclId>,
 }
 
 impl Sema<'_, '_> {
