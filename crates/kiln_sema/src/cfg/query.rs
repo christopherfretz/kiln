@@ -118,8 +118,7 @@ impl Cfg {
         let mut found = false;
         while let Some(b) = work.pop() {
             for a in self.succs(b) {
-                if a.flags & edge::LIVE == 0 || std::mem::replace(&mut seen[a.block.idx()], true)
-                {
+                if a.flags & edge::LIVE == 0 || std::mem::replace(&mut seen[a.block.idx()], true) {
                     continue;
                 }
                 if a.block == BlockId::EXIT {

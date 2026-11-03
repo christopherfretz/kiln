@@ -50,8 +50,7 @@ impl Sema<'_, '_> {
         }
         let named_template = |s: &Self| {
             s.ast.spec_info(f).is_some_and(|(_, i)| {
-                s.kind_of(i.template) == DeclKind::FunctionTemplate
-                    && !s.is_lambda_call_op(f)
+                s.kind_of(i.template) == DeclKind::FunctionTemplate && !s.is_lambda_call_op(f)
             })
         };
         let inherits = !self.inst.stack.is_empty() && !named_template(self);
@@ -110,9 +109,10 @@ impl Sema<'_, '_> {
         let Some(e) = self.stmt_expr(last) else { return false };
         match self.ast.exprs.get(e).kind() {
             ExprKind::CXXThrowExpr => true,
-            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => self
-                .callee_decl(e)
-                .is_some_and(|d| self.inferred_noreturn.contains(&self.ast.first(d))),
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
+                self.callee_decl(e)
+                    .is_some_and(|d| self.inferred_noreturn.contains(&self.ast.first(d)))
+            }
             _ => false,
         }
     }
