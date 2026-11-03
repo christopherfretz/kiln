@@ -835,25 +835,50 @@ impl<'a> Cg<'a> {
     /// Whether variable or function `first` is under an explicit
     /// instantiation declaration (`extern template`), itself or through
     /// its enclosing class specialization ([temp.explicit]/14: no
-    /// definition is provided; at -O0 clang emits none, even for inline
-    /// members, which would be `available_externally`). An inline
-    /// function carrying `always_inline` is the exception
-    /// ([`Self::is_available_externally_fn`]): clang emits it
-    /// `available_externally` at every level and the always-inliner of the
-    /// O0 pipeline inlines and deletes it, so the program never references
-    /// its symbol (libstdc++'s `std::allocator<char>::allocate` is not
-    /// exported; spec/codegen.md "Explicit instantiation declarations").
+    /// definition is provided), and gets no definition here. An inline
+    /// function clang would give `GVA_AvailableExternally` and keep
+    /// (`shouldEmitFunction`) is the exception
+    /// ([`Self::is_available_externally_fn`]).
     pub(crate) fn is_explicit_inst_declaration(&self, first: DeclId) -> bool {
         self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
-            && !self.is_always_inline_fn(first)
+            && !self.keeps_available_externally(first)
     }
 
-    /// clang `GVA_AvailableExternally` emitted at -O0 (`shouldEmitFunction`
-    /// keeps it only with `AlwaysInlineAttr`): an inline `always_inline`
-    /// function under an explicit instantiation declaration.
+    /// clang `GVA_AvailableExternally` kept by `shouldEmitFunction`: an
+    /// inline function under an explicit instantiation declaration,
+    /// emitted `available_externally` so the optimizer can inline it
+    /// (spec/codegen.md "Explicit instantiation declarations").
     pub(crate) fn is_available_externally_fn(&self, first: DeclId) -> bool {
         self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
-            && self.is_always_inline_fn(first)
+            && self.keeps_available_externally(first)
+    }
+
+    /// clang `shouldEmitFunction` for a function under an explicit
+    /// instantiation declaration: at -O0 only an inline `always_inline`
+    /// one (the O0 pipeline's always-inliner inlines and deletes it, so
+    /// the program never references its symbol: libstdc++'s
+    /// `std::allocator<char>::allocate` is not exported); at -O1 and above
+    /// any one whose definition is still instantiated ([temp.explicit]/12:
+    /// an inline function or one with a deduced return type) and that
+    /// has no `noinline`.
+    fn keeps_available_externally(&self, first: DeclId) -> bool {
+        if self.is_always_inline_fn(first) {
+            return true;
+        }
+        let ast = self.ast;
+        let spec_any = |d: DeclId, p: &dyn Fn(kiln_ast::decl::FnSpec) -> bool| {
+            ast.redecls_of(d).any(|r| ast.decls.function(r).is_some_and(|f| p(f.spec)))
+        };
+        // Inline as the pattern is (clang `InstantiateFunctionDefinition`
+        // copies `isInlined`): an instantiated member's own definition is
+        // lexically in its class.
+        let pattern = ast.instantiated_from(first).unwrap_or(first);
+        let inline = spec_any(pattern, &|s| {
+            s.is_inline() || s.implicit_inline() || s.constexpr_kind() != ConstexprKind::None
+        });
+        self.opts.optimize()
+            && (inline || spec_any(first, &kiln_ast::decl::FnSpec::return_deduced))
+            && !self.has_fn_attr(first, kiln_ast::attr::AttrKind::NOINLINE)
     }
 
     /// An inline function with the `always_inline` attribute (on any
