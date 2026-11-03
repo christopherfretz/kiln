@@ -68,6 +68,7 @@ pub use meta::{
     MetaOp, MetaOut, OvenFault, Purity, QueryOp, TemplOp, TraitOp, ValueOp, info_arg,
 };
 pub use stats::{EvalRecord, EvalStats, EvalTotals};
+pub use value::automatic_referent;
 
 use compile::{Func, Global, Site, TrapInfo};
 use mem::Memory;
