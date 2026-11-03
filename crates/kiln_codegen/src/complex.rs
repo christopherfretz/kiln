@@ -889,7 +889,10 @@ impl Cg<'_> {
     }
 
     /// clang `EmitDelegateCallArg`: parameter `q`'s value at `a`
-    /// forwarded to the delegated-to function.
+    /// forwarded to the delegated-to function. A reference parameter is
+    /// a plain `load ptr` of its slot with no `!nonnull` / `!align`
+    /// (clang's `CreateLoad` here bypasses `EmitLoadOfReference`, at 19
+    /// and 22 alike; spec/codegen.md "Reference loads").
     pub(crate) fn delegate_call_arg(&mut self, a: Addr, q: QualType) -> CallArg {
         if self.referee(q).is_some() {
             CallArg::Scalar(self.load(LTy::PTR, a.v, a.align, false))

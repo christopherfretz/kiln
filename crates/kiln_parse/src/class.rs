@@ -570,6 +570,14 @@ impl Parser<'_, '_> {
                 self.s.act_on_end_abbreviated();
             }
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
+            // clang `ParseCXXMemberSpecification`: GNU attributes after
+            // the `}` appertain to the class.
+            if self.at_kw(Kw::Attribute) {
+                let mut attrs = Vec::new();
+                self.parse_gnu_attr_seq(&mut attrs);
+                self.trace(|_| format!("record_trailing_attrs({})", attrs.len()));
+                self.s.act_on_record_trailing_attrs(r, &attrs);
+            }
         } else {
             self.s.error(DiagId::parse_expected_lbrace_after_base, self.prev_end());
         }
