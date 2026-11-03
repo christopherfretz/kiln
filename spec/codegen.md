@@ -37,7 +37,20 @@ panic and never silently wrong IR.
   `Oven::fold_constant_init`, so `__builtin_is_constant_evaluated()` is
   true in it; the other foldable initializers (local `const` arrays,
   records and references) use `try_fold`, where it is false (WP-063,
-  matching clang's IR). Calls of builtins with an integral or floating
+  matching clang's IR). When that constant initialization fails, a
+  scalar initializer (arithmetic, enum, pointer or member pointer type)
+  is re-folded with `Oven::fold_rvalue`, where it is false, and a value
+  it yields becomes the static initializer (clang
+  `ConstantEmitter::tryEmitPrivateForVarInit`, which emits a non-constant
+  initializer it can fold; WP-415): `int g = __builtin_is_constant_evaluated()
+  ? x : 7;` is the global `i32 7` with no dynamic initializer, and a
+  re-folded initializer is never registered for constant destruction.
+  Aggregates are not re-folded (they keep their dynamic initializer).
+  Uses of a const integral variable whose constant initialization failed
+  fold to that same non-manifest value (spec/oven.md "Lax folds"), so
+  `return cg;` emits `ret i32 9` and the unused internal `cg` is not
+  emitted. Validation: `tests/codegen/static_init_refold.cpp`.
+  Calls of builtins with an integral or floating
   result are candidates too (clang `EmitBuiltinExpr` tries
   `EvaluateAsRValue` first), except `__builtin_is_constant_evaluated()`
   (WP-088). A `CXXDefaultArgExpr` has no children, so the pre-pass walks
@@ -844,7 +857,10 @@ The normative description is spec/driver.md "Code generation". In short:
   and `dso_local`, or `internal` when its type or value names an
   internal entity (spec/abi.md §8.22; clang 22 drops the comdat of an
   internal one, kiln keeps it below `-fclang-compat=22`); it carries no
-  `align`, as clang's.
+  `align`, as clang's. A specialization taking such an object is
+  `internal` with no comdat at both levels (`set_def_linkage`), so
+  `linkage_internal_nttp` matches clang 22 with no deviation row
+  (WP-413).
 
 ### Size optimization attributes (WP-412)
 - `CodegenOptions::opt_size` is clang's `CodeGenOpts.OptimizeSize`: 1 at
@@ -1004,21 +1020,19 @@ The normative description is spec/driver.md "Code generation". In short:
   what clang 20-22 changed: x86-64 `__int128` as `i128`
   (19: two `i64`s; the same registers), AArch64 aggregates of pointers
   coerced to `ptr`/`[N x ptr]` (19: integers), `(unnamed struct)` in IR
-  type names, `llvm.modf`, CWG2137's initializer-list constructor for
-  `B{b}` (a sema change kiln should follow), and `-O0` instruction
+  type names, `llvm.modf`, and `-O0` instruction
   choices (atomic temporaries, `select` for vector `?:`, constant-folded
   reductions, `undef` widening shuffles, `delete` block order). clang
   22's IR for a `bool` vector element store fails verification
-  (`vector_ops`). The exception goes the other way: a padded `_Atomic`
-  operand's padding is zeroed (P0528) and a failed compare-exchange
-  writes the old value back to `*expected` (C11 7.17.7.4p2) at every
-  level, as clang 22 does. clang 19 did neither, so `atomic_padded` is an
-  oracle-19 `Structure` deviation. Following the rest under
+  (`vector_ops`). At `-fclang-compat=22` (only), as clang 22 does, a
+  padded `_Atomic` operand's atomic-sized temporary is zeroed before the
+  operand is copied in (P0528), and a failed compare-exchange writes the
+  old value back to `*expected` itself (C11 7.17.7.4p2) and not only to
+  that temporary (`convertToAtomicIntPointer`, WP-411). clang 19 does
+  neither, and nor does kiln below 22, so `atomic_padded` is exact under
+  both oracles. Following the rest under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
   "Residual").
-- **clang 22 internal template parameter objects.** clang 22 drops the
-  comdat of an internal template parameter object
-  (`linkage_internal_nttp`, oracle 22, `Allow::Structure`).
 - **Uses of constant-initialized reference variables as lvalues.** A
   read through a reference to a `const` referee folds (above), but clang
   also emits a non-odr-use of a reference usable in constant expressions
@@ -1112,6 +1126,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 | `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors), on definitions, declarations and calls, before `noundef` | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
 | `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 for `non-leaf` (AArch64's default; "Frame pointer") | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
 | no empty `!llvm.linker.options` | compat ≥ 22 | `!llvm.linker.options = !{}` |
+| a padded `_Atomic` operand's atomic-sized temporary zeroed before the copy, and a failed compare-exchange's old value copied back to `*expected` (`atomic.rs`, WP-411; `tests/codegen/atomic_padded.cpp`) | compat ≥ 22 | the temporary's padding left uninitialized; the old value stored only to the temporary |
 | `captures(none)` for `nocapture` (intrinsic declarations such as `llvm.memcpy`/`llvm.memset`; `kiln_llvm` `Module::ir_version`, spec/llvm.md §5) | compat ≥ 22 and LLVM ≥ 21 | `nocapture` (LLVM 19 rejects `captures(..)`) |
 | `!nonnull`/`!align` on reference loads (§3 "Reference loads") | compat ≥ 22 | none |
 | each `_ZTI` global before its `_ZTS`, `__cxxabiv1` vtable and pointee/base descriptors (`Cg::reserve_rtti`) | compat ≥ 22 | `_ZTI` after them |
@@ -1119,7 +1134,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 x86-64's data layout and `"frame-pointer"="all"` are the same in both.
 The `xtask test` harness runs kiln at the oracle's compat level with the
 oracle's LLVM (spec/harness.md "Oracle toolchain"), so the oracle-22 legs
-see all nine. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
+see all ten. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
 compat, `ir_version`), `sig_attrs`, `target_attrs` and `trailer`. Not
 yet: LLVM 22's `nocreateundeforpoison` function attribute on many
 intrinsic declarations (`*.with.overflow`, `ctpop`, `bswap`, `fabs`,
@@ -1367,6 +1382,11 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
 - **Pointers to virtual members**: `&C::vf` is `{index * 8 + 1, adj}` on
   x86-64 and `{index * 8, 2 * adj + 1}` on AArch64; calls through them
   take the virtual branch already present in WP-079's `memptr.rs`.
+  `index` is the slot of the function the pointer names, so a covariant
+  overrider's result is adjusted by the slot's entry: `&Base::f` reaches
+  the return-adjusting thunk in the base's slot, `&Derived::f` the slot
+  the overrider adds for its own return type (no adjustment), as clang
+  does (`virtual_covariant_memptr`, WP-414).
 - **Template linkage policy**: vtables, RTTI and thunks of classes that
   are template specializations, or have no key function, are
   `linkonce_odr` and emitted only when used (deferred), as with inline
@@ -1412,6 +1432,20 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
     functions) belongs to that vtable, not the next one.
   - Thunks with a virtual adjustment (`_ZTv0_n<off>_`) load the
     vcall offset from the vtable.
+
+**Vtables and VTTs of virtual lattices (WP-414).** Codegen asks for a
+class's vtable group, construction groups, VTT and subobject table once
+per structor and vptr store, so `Module.vts` (a `kiln_abi::VTableSession`,
+spec/abi.md §8.5) caches them for the module; the IR is unchanged. The
+virtual-base list of a class for the vptr stores (`class.rs`
+`collect_vbases_in`) walks each class once, and the `__vmi_class_type_info`
+flags (`vtable.rs` `VmiWalk`, clang `ComputeVMIClassTypeInfoFlags`) memoise
+the (class, virtual?) edges already seen, so neither is exponential in the
+number of paths through a lattice of virtual diamonds. Bench
+`bench/frontend/virtual-lattice-emit.cpp` (D<N> : B<N>, C<N>; B<N>, C<N> :
+virtual D<N-1>), `-emit-llvm`, release, depth 16: 1.37 s before, 0.40 s
+after, clang 22 12.1 s; depth 20: 5.0 s before, 0.8 s after; depth 32:
+4.3 s (clang over 120 s).
 
 **Landed (WP-108):**
 - *Member-pointer RTTI* (clang `BuildPointerToMemberTypeInfo`):

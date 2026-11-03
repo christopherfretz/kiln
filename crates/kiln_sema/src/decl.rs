@@ -1188,6 +1188,11 @@ impl Sema<'_, '_> {
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
                     }
+                    // [depr.volatile.type]/2: and a volatile-qualified
+                    // parameter type, at the parameter.
+                    if self.std >= kiln_lex::Std::Cxx20 && self.inst.stack.is_empty() {
+                        self.check_volatile_params(params);
+                    }
                     let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
@@ -1195,6 +1200,13 @@ impl Sema<'_, '_> {
             if !d.nullability.is_empty() || !moved.is_empty() {
                 ty = self.chunk_nullability(ty, i, d, &moved);
             }
+        }
+        // [temp.variadic]/5: only a parameter declares a pack (clang
+        // `GetFullTypeForDeclarator` drops the `...`).
+        if let Some(e) = d.ellipsis
+            && !matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName)
+        {
+            self.error(DiagId::sema_ellipsis_in_declarator_not_parameter, e);
         }
         if recover && self.is_error_type(ty) {
             return QualType::INT;
@@ -1300,14 +1312,18 @@ impl Sema<'_, '_> {
             self.emit(w);
             return Some(Err(c));
         }
-        let folded = match d.ctx {
-            DeclaratorContext::File | DeclaratorContext::Member => {
-                self.fold_rvalue_int(c).filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
-            }
-            _ => None,
+        // An alias-declaration's type-id is a typedef's declarator
+        // (diagnosed at the alias name, by `act_on_alias_decl`).
+        let alias = d.site == DeclSite::Alias;
+        let file_like =
+            alias || matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member);
+        let folded = if file_like {
+            self.fold_rvalue_int(c).filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
+        } else {
+            None
         };
         let Some(v) = folded else {
-            if matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member) {
+            if file_like {
                 self.vla_at_file_scope(d, loc, at, f);
             } else {
                 self.error(DiagId::sema_vla_unsupported, loc);
@@ -1317,7 +1333,11 @@ impl Sema<'_, '_> {
         let wloc = Self::fold_lone_invalid(&mut f, loc);
         let w = Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f);
         self.emit(w);
-        self.error(DiagId::sema_vla_folded_to_constant, at);
+        if alias {
+            self.pending_alias_vla = Some(DiagId::sema_vla_folded_to_constant);
+        } else {
+            self.error(DiagId::sema_vla_folded_to_constant, at);
+        }
         u64::try_from(v).ok().map(Ok)
     }
 
@@ -1350,6 +1370,26 @@ impl Sema<'_, '_> {
             )
             .unwrap_or(0);
         let outer = &d.chunks[..pos];
+        // clang `BuildArrayType`: the arrays around it are variable length
+        // arrays too, each warned at its `[` (at its bound, with the
+        // failure's notes, when that is not a constant expression either).
+        for ch in outer.iter().rev() {
+            let Chunk::Array { size: Some(s), loc: l, .. } = ch else { break };
+            if self.expr_is_value_dependent(*s) {
+                break;
+            }
+            let bl = self.begin_loc(*s);
+            let c = conv::decay(self, *s);
+            let c = self.act_on_constant_full_expr(c);
+            let w = match self.eval_int(c, EvalContext::new(EvalKind::Other, bl)) {
+                Ok(_) => self.diag(self.vla_ext_id(), *l),
+                Err(mut f) => {
+                    let wloc = Self::fold_lone_invalid(&mut f, bl);
+                    Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f)
+                }
+            };
+            self.emit(w);
+        }
         let id = if matches!(outer.first(), Some(Chunk::Function { .. })) {
             DiagId::sema_vm_func_decl
         } else if self.declarator_field {
@@ -1359,7 +1399,11 @@ impl Sema<'_, '_> {
         } else {
             DiagId::sema_vm_decl_in_file_scope
         };
-        self.error(id, at);
+        if d.site == DeclSite::Alias {
+            self.pending_alias_vla = Some(id);
+        } else {
+            self.error(id, at);
+        }
     }
 
     /// clang `ext_vla_cxx` / `ext_vla_cxx_in_gnu_mode` (off by default in
@@ -3099,6 +3143,9 @@ impl Sema<'_, '_> {
         attrs: &[AttrId],
         type_loc: Loc,
     ) -> DeclId {
+        if let Some(id) = self.pending_alias_vla.take() {
+            self.error(id, name_loc);
+        }
         let mut d = Declarator::new(DeclaratorContext::File, name_loc);
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
@@ -3258,6 +3305,10 @@ impl Sema<'_, '_> {
         // erroneous default argument) is invalid (clang's
         // `ActOnFunctionDeclarator`).
         invalid_decl |= d.function_params().is_some_and(|ps| ps.iter().any(|p| p.invalid));
+        // So is one whose decl-specifiers name no type (`f(int);`,
+        // `R::h(int);` after "a type specifier is required", or after an
+        // unknown type name; WP-411).
+        invalid_decl |= d.special.is_none() && (ds.type_error || !ds.has_type_specifier());
         let mut invalid_redecl = invalid_decl;
         // A redeclaration of an invalid declaration (below).
         let mut prev_invalid = false;
@@ -4584,6 +4635,9 @@ impl Sema<'_, '_> {
             .prev_candidates(name, Some(q))
             .into_iter()
             .filter(|&d| matches!(self.kind_of(d), DeclKind::Var | DeclKind::Function))
+            // An invalid declaration with no type (`R::v;`) merged with
+            // nothing and makes no lookup ambiguous (WP-411).
+            .filter(|&d| !self.ast.decls.get(d).has(DeclFlags::INVALID))
             .map(|d| self.ast.first(d))
             .collect();
         firsts.sort_unstable();
@@ -4718,6 +4772,24 @@ impl Sema<'_, '_> {
         (independent, local)
     }
 
+    /// [dcl.meaning.general]/2.2: a qualified declarator-id names a
+    /// member of its namespace; when lookup finds none, clang's
+    /// `ActOnVariableDeclarator` reports "no member named" at the name
+    /// and the variable is invalid (`int R::h;`, `R::h;`; WP-411).
+    fn diagnose_no_member_var(&mut self, ctx: DeclId, d: &Declarator, name: Symbol) -> bool {
+        let no_member = d.qualifier.is_some()
+            && matches!(self.kind_of(ctx), DeclKind::Namespace | DeclKind::TranslationUnit)
+            && self.lookup_qualified(ctx, name, LookupKind::Ordinary).decls.is_empty();
+        if no_member {
+            let msg = self
+                .diag(DiagId::sema_no_member, d.name_loc())
+                .arg(sym_str(self, name))
+                .arg(self.qualifier_desc(ctx));
+            self.emit(msg);
+        }
+        no_member
+    }
+
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
@@ -4737,12 +4809,13 @@ impl Sema<'_, '_> {
             p => p,
         };
         let ambiguous = self.diagnose_var_kind_conflict(name, d, prev.is_none());
+        let no_member = prev.is_none() && !ambiguous && self.diagnose_no_member_var(ctx, d, name);
         // A variable declared with no type is invalid and not merged
         // (clang's `MergeVarDecl` returns at an invalid new declaration):
-        // `y; y;` reports the missing type twice, no redefinition.
-        if ambiguous || !ds.has_type_specifier() {
-            prev = None;
-        }
+        // `y; y;` reports the missing type twice, no redefinition; so
+        // does one whose type named no type (`zz v;`, `R::f(v);`; WP-411).
+        let unmerged = ambiguous || !ds.has_type_specifier() || ds.type_error;
+        prev = prev.filter(|_| !unmerged);
         // [dcl.link]/6-7: a C-linkage variable of another scope.
         let prev = match prev {
             None if d.qualifier.is_none() => self.extern_c_prev(name, true, d.name_loc()),
@@ -4809,7 +4882,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
-        if ambiguous || redefined || self.storage_invalidates_var(ds, d) {
+        if ambiguous || no_member || redefined || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
@@ -4898,8 +4971,12 @@ impl Sema<'_, '_> {
         if es.iter().any(|&e| self.diagnose_unexpanded_written(e, "initializer", at)) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
+        let paren = match &init {
+            Initializer::Paren(es, l, _) if es.len() == 1 => Some(*l),
+            _ => None,
+        };
         self.act_on_init_inner(v, init);
-        self.check_static_tls(v);
+        self.check_static_tls(v, paren);
         self.check_constinit(v);
         self.initializing = None;
         self.lambda_mangle.var = None;
@@ -5091,6 +5168,7 @@ impl Sema<'_, '_> {
         true
     }
 
+    #[allow(clippy::too_many_lines, reason = "one linear pass over the initializer's checks")]
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -5220,6 +5298,7 @@ impl Sema<'_, '_> {
         } else if !spec.is_inline() && self.is_in_class_static(self.init_written_in(v)) {
             self.check_in_class_static_init(v, e);
         }
+        self.warn_constant_evaluated_init(v, e);
     }
 
     /// `ty` with its referenced array of unknown bound replaced by `ety`,
@@ -5623,7 +5702,7 @@ impl Sema<'_, '_> {
     pub fn act_on_uninit(&mut self, v: DeclId) {
         self.act_on_uninit_inner(v);
         if self.is_var_definition(v) {
-            self.check_static_tls(v);
+            self.check_static_tls(v, None);
             self.check_constinit(v);
         }
     }
@@ -5636,15 +5715,19 @@ impl Sema<'_, '_> {
             return;
         }
         let vn = *self.ast.decls.get(v);
-        if vn.kind() != DeclKind::Var {
-            return;
-        }
-        if self.uninit_array_or_reference(v) || vn.has(DeclFlags::INVALID) {
+        if vn.kind() != DeclKind::Var
+            || self.uninit_array_or_reference(v)
+            || vn.has(DeclFlags::INVALID)
+            || self.is_member_spec_declaration(v)
+        {
             return;
         }
         // An in-class static data member declaration is not a definition
         // ([class.static.data]/3): its type may be incomplete.
-        if self.is_in_class_static(v) && !self.is_var_definition(v) {
+        if self.is_in_class_static(v)
+            && !self.is_var_definition(v)
+            && !self.is_spec_of_out_of_line_def(v)
+        {
             // But it cannot deduce a class type without an initializer.
             if let Some(ty) = vn.ty()
                 && self.is_ctad_placeholder(ty)
@@ -7675,6 +7758,7 @@ impl Sema<'_, '_> {
                     // condition's for a literal).
                     let d = d.range(self.expr_range(if lit { c } else { inner }));
                     let d = self.explain_failed_comparison(d, inner);
+                    let d = self.with_trait_explanation(d, inner);
                     self.emit(d);
                 }
                 // clang does not evaluate a condition that contains

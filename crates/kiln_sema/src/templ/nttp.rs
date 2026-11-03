@@ -474,6 +474,35 @@ impl Sema<'_, '_> {
                         .ok()
                 }
             }
+            // A non-null pointer to member: `&C::m` of the member's own
+            // class, converted to the parameter's type along the value's
+            // base/derived path, by a `static_cast` towards a base (clang
+            // `BuildExpressionFromDeclTemplateArgument`).
+            Scalar::MemberPtr { member, derived, .. } => {
+                let class = self.declaring_class(member)?;
+                let declared = self.ast.decls.get(member).ty()?;
+                let r = self.builder().decl_ref(
+                    member,
+                    declared,
+                    loc,
+                    None,
+                    NonOdrUse::None,
+                    ExprFlags::NONE,
+                );
+                let class_ty = self.tag_type(class).ty();
+                let mp = self.ast.types.member_pointer(declared, class_ty);
+                let a =
+                    self.builder().unary(UnaryOp::AddrOf, r, mp, loc, ExprFlags::CANNOT_OVERFLOW);
+                if self.ast.types.canonical(mp) == self.ast.types.canonical(ty) {
+                    Some(a)
+                } else if derived {
+                    let c = self.act_on_cast(crate::expr::CastStyle::Static, ty, a, loc, loc);
+                    (!self.is_err_expr(c)).then_some(c)
+                } else {
+                    crate::conv::implicit_convert(self, a, ty, crate::conv::ConvCtx::Initialization)
+                        .ok()
+                }
+            }
             _ => None,
         }
     }

@@ -199,11 +199,13 @@ ops! {
     // ([class.union]/2; an access through `.*` never activates one,
     // [class.union]/6)
     MpActive = 2,
-    // [dst, mp, this]: the function of a pointer to member function; a
-    // virtual one is dispatched on the object at register `this` (the
+    // [dst, mp, this, adj]: the function of a pointer to member function;
+    // a virtual one is dispatched on the object at register `this` (the
     // member's class subobject, `MpAddr`'s result), which is adjusted in
-    // place to the final overrider's subobject
-    MpFn = 3,
+    // place to the final overrider's subobject; register `adj`
+    // (`u32::MAX`: none) receives the covariant return adjustment as
+    // `VCall`'s does (0 for a non-virtual function)
+    MpFn = 4,
     // [dst, a, b, c, t1, t2]: a library builtin evaluated natively
     // (spec/oven.md "Builtins"); aux = kind (`bi`) | sub << 8, `a`..`c`
     // registers, `t1`/`t2` types (`bi::DYN`: the designated object's).
@@ -291,6 +293,23 @@ ops! {
     // The matched handler becomes active: the in-flight exception is the
     // handled one until the handler's scope exits.
     CatchBegin = 0,
+    // [dst, src, trap]: a cast a constant expression may not perform
+    // ([expr.const]/5.15; clang `CCEDiag`): outside a fold
+    // (`RunState::fold`) it fails as `Trap` `trap`; a fold continues
+    // (not memoized) with aux `cce::CHECK`: nothing else; `cce::PTR`:
+    // `dst` = `src` pointing at nothing (`mem::NOWHERE`; null stays
+    // null); `cce::INT_TO_PTR`: `dst` = the integer `src` as a pointer;
+    // `cce::PTR_TO_INT`: `dst` = the integer of such a pointer (any other
+    // pointer fails).
+    Cce = 3,
+}
+
+/// The conversions of `Op::Cce`.
+pub(crate) mod cce {
+    pub const CHECK: u32 = 0;
+    pub const PTR: u32 = 1;
+    pub const INT_TO_PTR: u32 = 2;
+    pub const PTR_TO_INT: u32 = 3;
 }
 
 /// `Op::Throw` operand: the exception object has no destructor to run.

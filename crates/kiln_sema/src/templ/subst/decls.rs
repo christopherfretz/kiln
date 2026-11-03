@@ -558,6 +558,7 @@ impl Substituter<'_, '_, '_> {
         loc: Loc,
     ) -> SubstResult<(Vec<ParamInfo>, QualType, kiln_ast::types::ExcSpec)> {
         let info = p.info();
+        let fn_ty = self.sema.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         // A leading return type first, as written (clang
         // `TransformFunctionProtoType`: the first error is the first
         // written); otherwise the parameters first: a trailing return type
@@ -583,6 +584,7 @@ impl Substituter<'_, '_, '_> {
             self.check_return_type(ret, ret_loc)?;
             self.check_volatile_return(p.ret(), ret, ret_loc);
             let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
+            self.check_volatile_params(fn_ty, &ptys, ret_loc);
             self.check_param_types(&ptys, ret_loc)?;
             // A dependent `noexcept(expr)` waits until needed (WP-112).
             let exc = if lazy_exc {
@@ -851,6 +853,7 @@ impl Substituter<'_, '_, '_> {
             let ret_loc = self.sema.type_spec_locs.get(&pat).copied().unwrap_or(loc);
             self.check_volatile_return(p.ret(), ret, ret_loc);
             let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
+            self.check_volatile_params(t, &ptys, ret_loc);
             self.check_param_types(&ptys, loc)?;
             // DR1330 ([temp.inst]/14): a dependent `noexcept(expr)` is
             // not part of deduction; it is substituted when needed (clang

@@ -697,25 +697,31 @@ impl Sema<'_, '_> {
     /// exception specification, and deletion with
     /// `-Wdefaulted-function-deleted`. `loc` is the `default` keyword.
     pub(crate) fn check_defaulted(&mut self, f: DeclId, k: SpecialKind, loc: Loc) {
-        self.check_defaulted_impl(f, k, Some(loc), true);
+        let _ = self.check_defaulted_impl(f, k, Some(loc), true);
     }
 
     /// An out-of-line `= default` ([dcl.fct.def.default]/5): ill-formed
-    /// if it would be deleted.
-    pub(crate) fn check_out_of_line_defaulted(&mut self, f: DeclId, k: SpecialKind) {
-        self.check_defaulted_impl(f, k, None, false);
+    /// if it would be deleted. True when `f` can be defined.
+    pub(crate) fn check_out_of_line_defaulted(&mut self, f: DeclId, k: SpecialKind) -> bool {
+        self.check_defaulted_impl(f, k, None, false)
     }
 
     #[allow(clippy::too_many_lines, reason = "the [dcl.fct.def.default] checks in clang's order")]
-    fn check_defaulted_impl(&mut self, f: DeclId, k: SpecialKind, dloc: Option<Loc>, first: bool) {
+    fn check_defaulted_impl(
+        &mut self,
+        f: DeclId,
+        k: SpecialKind,
+        dloc: Option<Loc>,
+        first: bool,
+    ) -> bool {
         use SpecialKind as K;
-        let Some(ctx) = self.ast.decls.get(f).ctx() else { return };
+        let Some(ctx) = self.ast.decls.get(f).ctx() else { return false };
         let class = self.class_def(ctx);
         let cflags = self.ast.decls.get(class).flags();
         if cflags.contains(DeclFlags::DEPENDENT_CTX)
             || self.ast.decls.get(f).has(DeclFlags::INVALID)
         {
-            return;
+            return false;
         }
         let floc = self.ast.decls.get(f).loc();
         let bits = self.defn_bits(class);
@@ -844,7 +850,7 @@ impl Sema<'_, '_> {
         }
         let deleted = mismatch || self.should_delete(f, k, false);
         if !deleted {
-            return;
+            return !had_error;
         }
         if first {
             self.ast.decls.mark_function(f, FnSpec::new().with_deleted(true));
@@ -872,6 +878,7 @@ impl Sema<'_, '_> {
             }
             self.emit(d);
         }
+        false
     }
 }
 

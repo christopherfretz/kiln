@@ -221,6 +221,29 @@ clang's `Parser` over `Preprocessor::Lex`.
   bit-field cannot have a default member initializer"), and at namespace
   scope the `:` is "expected unqualified-id". At block scope `y : 3;` is
   a label (WP-379, `class.bit/untyped-bit-field.cpp`).
+  At namespace scope a declaration that starts with a qualified name for
+  which lookup finds a non-type or nothing (`R::f` with `R::f` a
+  function) follows clang's `ParseImplicitInt` (WP-411): before a `(`
+  that can start a declarator (`R::f(v);`, `R::f(*p)[2];`, `R::f(X);`
+  with `X` a type; `declarator_may_start_at`, clang's
+  `TryParseDeclarator`) the name was meant as a type, "no type named 'f'
+  in namespace 'R'", recovering to `int`; before `;` `=` `,` `[` `{`
+  `asm` or a `(` that cannot start a declarator (`R::f(1);`, `R::f;`,
+  `R::f(int);`) it is the declarator-id of a declaration with no type
+  (`at_qualified_implicit_int_declarator`): "a type specifier is
+  required for all declarations", and the declaration is invalid and
+  redeclares nothing (no "functions that differ only in their return
+  type", "out-of-line declaration … does not match" or redefinition; an
+  unqualified `f(int);` likewise), while a variable whose namespace has
+  no such member still reports "no member named 'h' in namespace 'R'"
+  ([dcl.meaning.general]/2.2; `int R::h;` too). A later declarator of a
+  group whose type named no type is parsed but takes no initializer
+  (`ParseDeclGroup`), so `R::f(v), g(v);` reports "expected ';' after
+  top level declarator" at the end of the `(` (clang's tentative
+  `isCXXFunctionDeclarator` left `PrevTokLocation` there), else after
+  the previous token. The missing `;` of a declaration carries the
+  insertion fix-it `;` (clang `ExpectAndConsume`)
+  (`tests/conformance/dcl.dcl/qualified-name-no-type.cpp`).
   An unqualified typename-specifier (`typename T`, `typename Ts...[0]`;
   [temp.res.general]/3) is "expected a qualified name after 'typename'"
   and recovers as clang does, by context (`parse_typename_specifier_in`,
@@ -434,6 +457,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     an outer bracket.
   - `skip_to_semi` skips to the end of the current declaration or
     statement.
+  - A declaration missing its `;` (`expect_declaration_semi`), when
+    the next token cannot start a declaration, is skipped by
+    `skip_malformed_decl` (clang `SkipMalformedDecl`: through a braced
+    body), not to the next `;` (WP-417).
+  - A direct-initializer (`(` or `{`) whose expression-list fails is
+    skipped through its closer and the declaration goes on (`void
+    f4(=) {}`, `int b(*= 2), c = 3;`; clang
+    `ParseDeclarationAfterDeclaratorAndAttributes`).
+    `parse_assignment_expr` with no operand before a binary operator
+    of assignment precedence or tighter reports `expected expression`
+    and still parses that operator's right operand on an error
+    expression (`int d = (|| 1);`). Test
+    `dcl.init.general/direct-init-recovery.cpp`.
   - Diagnostics use clang's wording and locations, for example:
     - `expected ';' after top level declarator`
     - `expected ';' at end of declaration`
@@ -1582,7 +1618,16 @@ in `stmt.rs`: a handler is `catch ( exception-declaration )
 compound-statement`, the declaration `...` or a type-specifier-seq with
 an optional (possibly abstract) declarator, sent to
 `act_on_exception_decl`; the handlers to `act_on_catch` and the whole to
-`act_on_try`. A `try` without a handler is `expected catch`. A
+`act_on_try`. The abstract declarator may be a parameter list
+(`catch (int(...))`, `catch (T())`: `parse_direct_declarator` takes
+`Parser::catch_declarator` for the outermost declarator and reads a `(`
+starting a parameter list as a function declarator, not a grouping
+paren; WP-417, `except.handle/catch-function-type.cpp`). A `...`
+before the declarator-id of a variable, member, exception or condition
+declarator (`int ...x;`, also before a ptr-operator or a grouping
+paren) is kept in `Declarator::ellipsis` and Sema reports "only
+function and template parameters can be parameter packs"
+(`temp.variadic/non-parameter-pack-declarator.cpp`). A `try` without a handler is `expected catch`. A
 function-try-block (`class.rs` captured prologue and the free-function
 path) parses `try`, then the ctor-initializer, then the body and its
 handlers; the body statement given to `act_on_finish_function_def` is the

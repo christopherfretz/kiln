@@ -7,7 +7,7 @@ use kiln_ast::names::DeclName;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{DiagId, FixIt};
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
 use kiln_sema::DeclSite;
 use kiln_sema::declspec::SpecError;
@@ -1283,7 +1283,9 @@ impl Parser<'_, '_> {
             // only a type can be: the parse proper reports it ("no type
             // named 'name' in 'S'"; clang's `DiagnoseUnknownTypeName`).
             // At block scope the statement disambiguation chose a
-            // declaration already (`S::name(e);`, `S::name *g;`).
+            // declaration already (`S::name(e);`, `S::name *g;`). At
+            // namespace scope a variable or function `N::f` is reported
+            // the same way (`N::f(v);`, `N::f x;`).
             Some((end, NameClass::Undeclared, _))
                 if (end == start + 2
                     && self.at_decltype_scope()
@@ -1291,7 +1293,17 @@ impl Parser<'_, '_> {
                     && self.unknown_type_follows(end, ctx))
                     || (end > start + 1
                         && self.unresolved_scope_name(start)
-                        && self.qualified_unknown_type_follows(end, ctx)) =>
+                        && self.qualified_unknown_type_follows(end, ctx))
+                    || (end > start + 1 && self.incomplete_scope_name(start)) =>
+            {
+                self.unknown_qualified_type_spec(ds, loc);
+                true
+            }
+            Some((end, NameClass::Value(_), _))
+                if ctx == DeclaratorContext::File
+                    && self.nontype_scope_name(start)
+                    && Self::punct_of(self.tok_at(end)) != Some(Punct::Less)
+                    && self.qualified_unknown_type_follows(end, ctx) =>
             {
                 self.unknown_qualified_type_spec(ds, loc);
                 true
@@ -1376,8 +1388,16 @@ impl Parser<'_, '_> {
     /// ([`Parser::parse_type_name_spec`]): the parse proper reports it,
     /// and the decl-spec recovers to an invalid `int`.
     fn unknown_qualified_type_spec(&mut self, ds: &mut DeclSpec, loc: Loc) {
-        if let Ok(Some(q)) = self.parse_nested_name_nns() {
-            let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
+        match self.parse_nested_name_nns() {
+            Ok(Some(q)) => {
+                let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
+            }
+            // The specifier named an incomplete class (diagnosed): the
+            // final name belongs to the invalid type (clang).
+            Err(()) if self.ident().is_some() => {
+                self.bump();
+            }
+            _ => {}
         }
         ds.invalid = true;
         ds.type_error = true;
@@ -1504,11 +1524,18 @@ impl Parser<'_, '_> {
     /// namespace or class scope, `<` (a class template:
     /// `std::codecvt_utf8<wchar_t> c;`, clang's `ParseImplicitInt` with
     /// `IsTemplateName`; at block scope `N::f<int> x;` is an expression).
+    /// At namespace scope a `(` that starts a declarator counts too
+    /// (`N::f(v);`, `N::f(*p)[2];`; clang's `ParseImplicitInt` runs
+    /// `TryParseDeclarator` after the name), while `N::f(1);` and
+    /// `N::f(int);` declare `N::f` with no type.
     fn qualified_unknown_type_follows(&self, end: usize, ctx: DeclaratorContext) -> bool {
         ctx == DeclaratorContext::Block
             || self.unknown_type_follows(end, ctx)
             || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 && Self::punct_of(self.tok_at(end)) == Some(Punct::Less))
+            || (ctx == DeclaratorContext::File
+                && Self::punct_of(self.tok_at(end)) == Some(Punct::LParen)
+                && self.declarator_may_start_at(end))
     }
 
     // -- class and enum specifiers ----------------------------------------------------
@@ -1658,6 +1685,25 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// `class F::H;` with `F` incomplete: clang's `ActOnTag` rejects
+    /// the qualified standalone declaration before it enters the
+    /// incomplete scope (diagnosed by the specifier parse).
+    fn incomplete_standalone_tag_qualifier(
+        &mut self,
+        ds: &DeclSpec,
+        keyword: TagKeyword,
+        qual_loc: Loc,
+    ) {
+        if ds.friend.is_none()
+            && ds.storage.is_none()
+            && self.incomplete_scope_name(self.pos())
+            && let Some((end, ..)) = self.scan_name_qual_at(self.pos())
+            && Self::punct_of(self.tok_at(end)) == Some(Punct::Semi)
+        {
+            self.s.check_standalone_tag_qualifier(keyword, qual_loc);
+        }
+    }
+
     /// The class-key or `enum` (with its `class`/`struct`) at `k`: the tag
     /// keyword and the enum's `EnumData` scoped flags.
     fn parse_tag_key(&mut self, ds: &mut DeclSpec, k: Kw) -> (TagKeyword, u32) {
@@ -1686,6 +1732,7 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qual_loc = self.tok().span.lo;
+        self.incomplete_standalone_tag_qualifier(ds, keyword, qual_loc);
         let (qual, qual_failed) = self.parse_tag_qualifier_checked(ds);
         let qualifier = qual.map(|q| q.ctx);
         if keyword != TagKeyword::Enum
@@ -2208,11 +2255,9 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// noptr-declarator ([dcl.decl]): the declarator-id or `( declarator )`
-    /// and the array and function suffixes.
-    fn parse_direct_declarator(&mut self, d: &mut Declarator) {
-        let abstract_ok =
-            matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName);
+    /// The `...` before a declarator-id ([`Self::parse_direct_declarator`]):
+    /// whether it was before a ptr-operator, whose declarator it parsed.
+    fn parse_leading_declarator_ellipsis(&mut self, d: &mut Declarator, in_catch: bool) -> bool {
         // `... declarator-id` / an abstract pack declarator
         // ([dcl.decl.general]/4, [dcl.fct]/14).
         if d.ctx == DeclaratorContext::Prototype && self.at(Punct::Ellipsis) {
@@ -2221,8 +2266,47 @@ impl Parser<'_, '_> {
             if named || self.pack_hint {
                 d.ellipsis = Some(self.bump().span.lo);
             }
-        } else if std::mem::take(&mut self.catch_declarator) && self.at(Punct::Ellipsis) {
+        } else if in_catch && self.at(Punct::Ellipsis) {
             d.ellipsis = Some(self.bump().span.lo);
+        } else if matches!(
+            d.ctx,
+            DeclaratorContext::File
+                | DeclaratorContext::Member
+                | DeclaratorContext::Block
+                | DeclaratorContext::Condition
+                | DeclaratorContext::ForInit
+        ) && self.at(Punct::Ellipsis)
+        {
+            // [temp.variadic]/5: only a parameter declares a pack, but a
+            // `...` before any declarator-id is taken (clang
+            // `ParseDirectDeclarator`) and Sema drops it with "only
+            // function and template parameters can be parameter packs".
+            // Before a ptr-operator it is misplaced too (`int... *p`).
+            let ellipsis = self.bump().span.lo;
+            if matches!(Self::punct_of(self.tok()), Some(Punct::Star | Punct::Amp | Punct::AmpAmp))
+                || self.at_member_pointer().is_some()
+            {
+                self.parse_declarator(d);
+                self.misplaced_declarator_ellipsis(d, ellipsis);
+                d.ellipsis.get_or_insert(ellipsis);
+                return true;
+            }
+            d.ellipsis = Some(ellipsis);
+        }
+        false
+    }
+
+    /// noptr-declarator ([dcl.decl]): the declarator-id or `( declarator )`
+    /// and the array and function suffixes.
+    fn parse_direct_declarator(&mut self, d: &mut Declarator) {
+        let abstract_ok =
+            matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName);
+        // An exception-declaration may be abstract ([except.pre]/1), so
+        // `catch (int(...))` declares a function type (clang
+        // `DeclaratorContext::CXXCatch`).
+        let in_catch = std::mem::take(&mut self.catch_declarator);
+        if self.parse_leading_declarator_ellipsis(d, in_catch) {
+            return;
         }
         if self.at_decomposition_declarator(d) {
             self.parse_decomposition_declarator(d);
@@ -2240,7 +2324,10 @@ impl Parser<'_, '_> {
             let qual = self.parse_nested_name();
             self.s.set_entering_context(saved);
             let qual = qual.unwrap_or_else(|()| {
+                // An invalid qualifier declares nothing (clang's
+                // `HandleDeclarator` returns no declaration).
                 d.invalid = true;
+                d.dropped = true;
                 self.s.discard_spec_headers();
                 self.skip_nested_name_rest();
                 None
@@ -2284,16 +2371,26 @@ impl Parser<'_, '_> {
                 d.invalid = true;
             }
             self.parse_declarator_id_attrs(d);
-        } else if self.at(Punct::LParen) && !(abstract_ok && self.is_param_list_start(1)) {
+        } else if self.at(Punct::LParen)
+            && !((abstract_ok || in_catch) && self.is_param_list_start(1))
+        {
             // Like clang's ParseParenDeclarator: grouping is in effect
             // only for the inner declarator, then restored.
             let had_grouping = d.grouping;
             d.grouping = true;
+            // A `...` outside the parentheses is misplaced (`int ...(z)`;
+            // clang `ParseParenDeclarator`).
+            let ellipsis =
+                if d.ctx == DeclaratorContext::Prototype { None } else { d.ellipsis.take() };
             let open = self.bump().span.lo;
             self.skip_attributes();
             self.parse_declarator(d);
             let close = self.expect_closing(Punct::RParen, Punct::LParen, open);
             d.grouping = had_grouping;
+            if let Some(e) = ellipsis {
+                self.misplaced_declarator_ellipsis(d, e);
+                d.ellipsis.get_or_insert(e);
+            }
             d.outer_paren = Some((d.chunks.len(), open));
             d.parens.push((d.chunks.len(), open, close));
             self.discard_prohibited_cxx11_attrs();
@@ -3215,9 +3312,19 @@ impl Parser<'_, '_> {
                 Ok(())
             }
             // A malformed braced-init-list without `=` was skipped
-            // through its `}` (clang's `ParseBraceInitializer`); the
-            // declaration continues.
-            Err(()) if d.init_style == Some(InitStyle::List) => Ok(()),
+            // through its `}` (clang's `ParseBraceInitializer`), a
+            // malformed expression-list through its `)` (clang's
+            // `ParseDeclarationAfterDeclaratorAndAttributes`: `void
+            // f4(=) {}`); the declaration continues, so a missing `;` is
+            // reported.
+            Err(())
+                if matches!(
+                    d.init_style,
+                    Some(InitStyle::List | InitStyle::Call | InitStyle::ParenList)
+                ) =>
+            {
+                Ok(())
+            }
             Err(()) => Err(()),
         }
     }
@@ -3297,7 +3404,37 @@ impl Parser<'_, '_> {
     /// `err_missing_type_specifier`).
     fn at_declarator_without_specifiers(&self, ctx: DeclaratorContext) -> bool {
         self.at_special_declarator(ctx)
-            || (ctx == DeclaratorContext::File && self.at_implicit_int_declarator())
+            || (ctx == DeclaratorContext::File
+                && (self.at_implicit_int_declarator()
+                    || self.at_qualified_implicit_int_declarator()))
+    }
+
+    /// At namespace scope, a qualified name for which lookup finds a
+    /// non-type or nothing (`R::f(1);`, `R::f;`, `R::h(int);`), followed
+    /// by what clang's `ParseImplicitInt` takes as the rest of a
+    /// declarator with no type: `;` `=` `,` `[` `{` `asm`, or a `(` that
+    /// cannot start a declarator (else the name was meant as a type,
+    /// [`Self::qualified_unknown_type_follows`]). The name is the
+    /// declarator-id of an invalid `int` declaration, after "a type
+    /// specifier is required" (WP-411).
+    fn at_qualified_implicit_int_declarator(&self) -> bool {
+        let i = self.pos();
+        let Some((end, false, class, _, Some(q))) = self.scan_name_qual_at(i) else {
+            return false;
+        };
+        if end <= i + 1
+            || self.s.is_dependent_ctx(q)
+            || !matches!(class, NameClass::Value(_) | NameClass::Undeclared)
+        {
+            return false;
+        }
+        match Self::punct_of(self.tok_at(end)) {
+            Some(Punct::Semi | Punct::Equal | Punct::Comma | Punct::LSquare | Punct::LBrace) => {
+                true
+            }
+            Some(Punct::LParen) => !self.declarator_may_start_at(end),
+            _ => self.kw_of(self.tok_at(end)) == Some(Kw::Asm),
+        }
     }
 
     /// [temp.explicit]/3: declarator `d` of an explicit instantiation
@@ -3345,6 +3482,7 @@ impl Parser<'_, '_> {
         let (mut declarators, mut restrict) = (0usize, None);
         let _ = self.s.take_declarator_type_invalid();
         let mut type_invalid = false;
+        let mut semi_at = None;
         loop {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
@@ -3389,10 +3527,15 @@ impl Parser<'_, '_> {
             // So is one after a declarator whose type named an
             // unexpanded pack (`Ts a, b;` reports `a` only).
             if declarators > 0 && (ds.type_error || type_invalid) {
-                if self.eat(Punct::Comma).is_none() {
-                    break;
+                if self.eat(Punct::Comma).is_some() {
+                    continue;
                 }
-                continue;
+                // clang's tentative `isCXXFunctionDeclarator` took the `(`
+                // before reverting, leaving `PrevTokLocation` on it: the
+                // missing `;` is reported after the `(` (`R::f(v), g(v);`;
+                // WP-411).
+                semi_at = self.at(Punct::LParen).then(|| self.tok().span.hi);
+                break;
             }
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
@@ -3425,12 +3568,10 @@ impl Parser<'_, '_> {
             }
         }
         self.s.act_on_end_group(group, &ds);
-        if declarators > 1
-            && let Some((l, v)) = first_decomp
-        {
+        if let Some((l, v)) = first_decomp.filter(|_| declarators > 1) {
             self.s.act_on_decomposition_not_alone(l, v);
         }
-        self.expect_declaration_semi(ctx);
+        self.expect_declaration_semi(ctx, semi_at);
         decls
     }
 
@@ -3560,16 +3701,22 @@ impl Parser<'_, '_> {
     }
 
     /// The `;` ending a simple-declaration.
-    fn expect_declaration_semi(&mut self, ctx: DeclaratorContext) {
+    fn expect_declaration_semi(&mut self, ctx: DeclaratorContext, at: Option<Loc>) {
         if self.eat(Punct::Semi).is_none() {
             let id = if ctx == DeclaratorContext::File {
                 DiagId::parse_expected_semi_toplevel
             } else {
                 DiagId::parse_expected_semi_declaration
             };
-            self.s.error(id, self.expected_loc());
+            // clang's `ExpectAndConsume`: the `;` is inserted where it is
+            // reported, after the previous token.
+            let at = at.unwrap_or_else(|| self.expected_loc());
+            let msg = self.s.diag(id, at).fixit(FixIt::insert(at, ";"));
+            self.s.emit(msg);
+            // clang's `ParseDeclGroup`: `SkipMalformedDecl`, which stops
+            // after a braced body (`void f4(=) {}`).
             if !self.is_decl_spec_start() {
-                self.skip_to_semi();
+                self.skip_malformed_decl();
             }
         }
     }

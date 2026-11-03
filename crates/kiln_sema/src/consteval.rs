@@ -417,6 +417,50 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A reference `r` to an immediate function of a template definition
+    /// that the instantiation being performed shares with it
+    /// (`templ/subst/shared.rs`), not the callee of an invocation: one that
+    /// made the pattern immediate (its address taken outside an immediate
+    /// invocation) makes an immediate-escalating instantiation immediate
+    /// at clang 21+ (P2564; clang 19 keeps the specialization
+    /// non-immediate and does not diagnose it).
+    pub(crate) fn recheck_shared_ref(&mut self, r: ExprId) {
+        if self.clang_compat < 22
+            || !self.ast.exprs.get(r).has(ExprFlags::IMMEDIATE_ESCALATING)
+            || self.immediate_exempt()
+        {
+            return;
+        }
+        let d = self.ast.exprs.decl(r);
+        if !self.is_immediate_fn(d) {
+            return;
+        }
+        if let Some(g) =
+            self.func.as_ref().map(|s| s.decl).filter(|&g| self.is_immediate_escalating(g))
+        {
+            let why = Escalation {
+                loc: self.begin_loc(r),
+                callee: d,
+                call: false,
+                default_init: None,
+                written: false,
+            };
+            self.escalate(g, why);
+        }
+    }
+
+    /// The callee `DeclRefExpr` of the immediate invocation `c`, if any.
+    pub(crate) fn invocation_callee_ref(&self, c: ExprId) -> Option<ExprId> {
+        let e = self.ignore_implicit_for_imm(self.ast.exprs.operand(c));
+        match self.ast.exprs.get(e).kind() {
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr => {
+                let r = self.ignore_implicit_for_imm(self.ast.exprs.callee(e));
+                (self.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr).then_some(r)
+            }
+            _ => None,
+        }
+    }
+
     /// Whether the immediate invocation `c` is marked as the one that
     /// made its function immediate ([`Sema::mark_immediate_escalating`]).
     fn marked_escalating(&self, c: ExprId) -> bool {
@@ -658,6 +702,9 @@ impl Sema<'_, '_> {
             if self.ast.decls.builtin_id(d).is_none() {
                 msg = msg.with_note(self.diag(DiagId::note_declared_at, self.ast.decls.get(d).loc()));
             }
+            if !consteval && let Some(note) = self.escalation_reason_note(d) {
+                msg = msg.with_note(note);
+            }
             self.emit(msg);
         }
         for u in uses {
@@ -791,6 +838,16 @@ impl Sema<'_, '_> {
                 )
                 .with_note(self.diag(DiagId::note_declared_at, begin));
         }
+        if !consteval && let Some(note) = self.escalation_reason_note(f) {
+            msg = msg.with_note(note);
+        }
+        let msg = Self::with_failure_notes(msg, fail);
+        self.emit(msg);
+    }
+
+    /// clang `DiagnoseImmediateEscalatingReason`: why the escalated
+    /// function `f` is immediate, if it is one.
+    fn escalation_reason_note(&self, f: DeclId) -> Option<kiln_diag::Diag> {
         // clang names the reason for a generic lambda's call operator
         // specialization, not for a non-template call operator.
         let plain_call_op = self.is_lambda_call_op(f)
@@ -798,42 +855,38 @@ impl Sema<'_, '_> {
                 self.ast.templ_link(self.ast.first(f)).get(),
                 Some((kiln_ast::decl::TemplLinkKind::Specialization, _))
             );
-        if !consteval
-            && !plain_call_op
-            && let Some(why) = self.imm.reasons.get(&f).copied()
-        {
-            // A constructor is named by its class's unqualified name.
-            let is_ctor = |d: DeclId| self.ast.decls.get(d).kind() == DeclKind::CXXConstructor;
-            let name = |d: DeclId| {
-                if is_ctor(d) { self.unqualified_decl_name(d) } else { self.qualified_decl_name(d) }
-            };
-            let note = match why.default_init {
-                Some(field) => self
-                    .diag(DiagId::note_immediate_default_init_reason, why.loc)
-                    .arg(self.unqualified_decl_name(f))
-                    .arg(u8::from(is_ctor(f)))
-                    .arg(self.unqualified_decl_name(field))
-                    .arg(u8::from(self.is_consteval_kind(why.callee)))
-                    .arg(name(why.callee))
-                    .arg(u8::from(is_ctor(why.callee)))
-                    .arg(u8::from(!why.written)),
-                None => self
-                    .diag(DiagId::note_immediate_function_reason, why.loc)
-                    .arg(if self.is_lambda_call_op(f) {
-                        self.unqualified_decl_name(f)
-                    } else {
-                        name(f)
-                    })
-                    .arg(u8::from(why.call))
-                    .arg(u8::from(self.is_consteval_kind(why.callee)))
-                    .arg(name(why.callee))
-                    .arg(u8::from(is_ctor(f)))
-                    .arg(u8::from(is_ctor(why.callee))),
-            };
-            msg = msg.with_note(note);
+        if plain_call_op {
+            return None;
         }
-        let msg = Self::with_failure_notes(msg, fail);
-        self.emit(msg);
+        let why = self.imm.reasons.get(&f).copied()?;
+        // A constructor is named by its class's unqualified name.
+        let is_ctor = |d: DeclId| self.ast.decls.get(d).kind() == DeclKind::CXXConstructor;
+        let name = |d: DeclId| {
+            if is_ctor(d) { self.unqualified_decl_name(d) } else { self.qualified_decl_name(d) }
+        };
+        Some(match why.default_init {
+            Some(field) => self
+                .diag(DiagId::note_immediate_default_init_reason, why.loc)
+                .arg(self.unqualified_decl_name(f))
+                .arg(u8::from(is_ctor(f)))
+                .arg(self.unqualified_decl_name(field))
+                .arg(u8::from(self.is_consteval_kind(why.callee)))
+                .arg(name(why.callee))
+                .arg(u8::from(is_ctor(why.callee)))
+                .arg(u8::from(!why.written)),
+            None => self
+                .diag(DiagId::note_immediate_function_reason, why.loc)
+                .arg(if self.is_lambda_call_op(f) {
+                    self.unqualified_decl_name(f)
+                } else {
+                    name(f)
+                })
+                .arg(u8::from(why.call))
+                .arg(u8::from(self.is_consteval_kind(why.callee)))
+                .arg(name(why.callee))
+                .arg(u8::from(is_ctor(f)))
+                .arg(u8::from(is_ctor(why.callee))),
+        })
     }
 
     /// Whether `v`'s initializer is checked for constant initialization

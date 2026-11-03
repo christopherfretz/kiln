@@ -97,6 +97,7 @@ sema_template_arg_list_different_arity = Error (3) "{0:too few|too many} templat
 sema_template_arg_must_be_expr = Error (0) "template argument for non-type template parameter must be an expression";
 sema_template_arg_must_be_template = Error (0) "template argument for template template parameter must be a class template or type alias template";
 sema_template_arg_must_be_type = Error (0) "template argument for template type parameter must be a type";
+sema_template_arg_must_be_type_suggest = Error (0) "template argument for template type parameter must be a type; did you forget 'typename'?";
 sema_template_arg_not_valid_template = Error (0) "template argument does not refer to a class or alias template, or template template parameter";
 sema_template_arg_template_params_mismatch = Error (0) "template template argument has different template parameters than its corresponding template template parameter";
 sema_template_constraints_not_satisfied = Error (3) "constraints not satisfied for {0:class template|function template|variable template|alias template|template template parameter|template} '{1}' {2}";
@@ -130,6 +131,7 @@ sema_template_template_param_not_at_least_as_constrained = Error (2) "template t
 sema_template_variable_noparams = Error (1) "extraneous 'template<>' in declaration of variable '{0}'";
 sema_this_bool_conversion = Warning [UndefinedBoolConversion] (0) "'this' pointer cannot be null in well-defined C++ code; pointer may be assumed to always convert to true";
 sema_this_capture = Error (1) "'this' cannot be {0:|implicitly }captured in this context";
+sema_this_null_compare = Warning [TautologicalUndefinedCompare] (1) "'this' pointer cannot be null in well-defined C++ code; comparison may be assumed to always evaluate to {0:true|false}";
 sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
 sema_this_static_member_func = Error (1) "'this' cannot be{0:| implicitly} used in a static member function declaration";
 // [basic.stc.thread]: GNU `__thread` / C11 `_Thread_local` (static TLS; WP-396)

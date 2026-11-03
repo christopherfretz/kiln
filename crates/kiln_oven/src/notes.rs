@@ -40,7 +40,8 @@ fn name_of(ast: &Ast, d: DeclId) -> String {
 }
 
 /// `d`'s name as clang's `getNameForDiagnostic` (unqualified): a function
-/// template specialization with its arguments (`f<int>`).
+/// template or variable template specialization with its arguments
+/// (`f<int>`, `v<int>`).
 fn write_name_for_diag(ast: &Ast, d: DeclId, out: &mut String) {
     let names = AstNames::new(ast);
     // A decomposition's variable prints as `[a, b]` (clang
@@ -57,10 +58,16 @@ fn write_name_for_diag(ast: &Ast, d: DeclId, out: &mut String) {
         return;
     }
     names.write_name(d, out);
-    if ast.decls.get(d).kind().is_function()
-        && let Some((_, info)) = ast.spec_info(d)
-    {
-        kiln_ast::types::write_arg_list(&ast.types, &names, info.print_args, out);
+    if let Some((_, info)) = ast.spec_info(d) {
+        if ast.decls.get(d).kind().is_function() {
+            kiln_ast::types::write_arg_list(&ast.types, &names, info.print_args, out);
+        } else if ast.decls.var(d).is_some() {
+            // A variable template specialization (`v<int>`): canonical,
+            // without trailing defaulted arguments (clang
+            // `VarTemplateSpecializationDecl::getNameForDiagnostic`).
+            let args = ast.types.canonical_args(info.print_args);
+            kiln_ast::types::write_arg_list(&ast.types, &names, args, out);
+        }
     }
 }
 
@@ -1480,11 +1487,16 @@ impl Oven {
                 format!("{verb} variable '{}' whose value is not known", name_of(ast, d))
             }
             MemFault::External(d, false) => {
-                extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                 let name = name_of(ast, d);
                 {
                     let vi = var_info(ast, d);
-                    if ast.decls.get(d).kind() == DeclKind::ParmVar {
+                    // clang notes the first declaration of a parameter or
+                    // a usable variable, and the definition (else the
+                    // redeclaration read) of a variable that is not.
+                    let parm = ast.decls.get(d).kind() == DeclKind::ParmVar;
+                    let at = if parm || vi.usable { d } else { used_redecl(ast, site.e, d) };
+                    extra.push(Note::new(ast.decls.get(at).loc(), "declared here"));
+                    if parm {
                         // clang note_constexpr_function_param_value_unknown.
                         format!(
                             "function parameter '{name}' with unknown value cannot be used in a constant expression"
@@ -1620,6 +1632,50 @@ fn indexes_vla(ast: &Ast, e: ExprId) -> bool {
         }
         false
     })
+}
+
+/// The declaration of variable `d` a note on the read `e` names: its
+/// definition once seen, else the redeclaration `e` names (clang
+/// `findCompleteObject`: the `DeclRefExpr`'s declaration, replaced by
+/// `getDefinition()`); `d` itself when `e` is not such a name.
+fn used_redecl(ast: &Ast, e: Option<ExprId>, d: DeclId) -> DeclId {
+    if let Some(def) = ast.redecls_of(d).find(|&v| is_var_definition(ast, v)) {
+        return def;
+    }
+    let Some(mut e) = e else { return d };
+    for _ in 0..16 {
+        let k = ast.exprs.get(e).kind();
+        match k {
+            ExprKind::DeclRefExpr => {
+                let r = ast.exprs.decl(e);
+                return if ast.first(r) == ast.first(d) { r } else { d };
+            }
+            ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            _ if k.is_cast() => e = ast.exprs.operand(e),
+            _ => return d,
+        }
+    }
+    d
+}
+
+/// Whether variable declaration `v` is a definition ([basic.def]/2): one
+/// with an initializer, or neither `extern` nor a static data member
+/// declared in its class without `inline`.
+fn is_var_definition(ast: &Ast, v: DeclId) -> bool {
+    use kiln_ast::decl::VarStorage;
+    let Some(x) = ast.decls.var(v) else { return false };
+    if x.init.is_some() {
+        return true;
+    }
+    let ctx = ast.decls.get(v).ctx();
+    let in_class = ctx.is_some_and(|c| {
+        ast.decls.get(c).kind() == DeclKind::CXXRecord
+            && ast.decls.lexical_ctx(v).is_some_and(|l| ast.first(l) == ast.first(c))
+    });
+    if in_class {
+        return x.spec.is_inline();
+    }
+    x.spec.storage() != VarStorage::Extern && !ast.decls.is_single_line_linkage(v)
 }
 
 /// The callee's spelling for "'f' evaluates to a null function pointer".

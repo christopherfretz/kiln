@@ -141,7 +141,8 @@ the evaluator's flattened type table.
   just returned from or unwound (whose slot the next frame object would
   otherwise take) still reads as "read of variable whose lifetime has
   ended" + declared here, as clang reports it, not as a stale slot.
-  Slots whose generation would wrap are retired.
+  Slots whose generation would reach the last one (`mem::NOWHERE`,
+  never issued) are retired.
 - **Static reclamation** (WP-322, WP-060): a static object that dies
   during compilation (the scratch copy `Oven::has_constant_destruction`
   destroys) is freed by `Memory::free_static`, wherever it lies, not only
@@ -356,7 +357,23 @@ the evaluator's flattened type table.
   `VarDecl::evaluateValue` only notes (`CCEDiag`) a read of a
   non-constexpr variable, so `const double d1 = d0 * 2;` keeps the value
   5.0 for a later fold however it is reached (`constexpr const double
-  *p = &d1; int a[(int)*p];` folds, WP-407). Before WP-407 such a global
+  *p = &d1; int a[(int)*p];` folds, WP-407). A potentially-constant variable
+  (a const integral, a reference) whose constant initialization failed
+  (sema's `VarEvalState::NotConstant`, or a failed nested resolution) is
+  read the same way (`Oven::refold_var_init`, WP-415): its initializer is
+  evaluated once more, non-manifestly (`const_context` false,
+  `__builtin_is_constant_evaluated()` false) and laxly, into a `LAX_READ`
+  object, as clang's `VarDecl::evaluateValue` keeps a non-manifest value
+  after noting "initializer of 'cx' is not a constant expression". So
+  `const int cx = __builtin_is_constant_evaluated() ? x : 9;` reads 9 in
+  a fold (`int a[cx]` is folded to a constant array, `__builtin_constant_p(cx)`
+  is true) while a strict read still faults with that note; an
+  initializer that does not fold either (`const int cy = x;`) leaves an
+  external object. `__builtin_constant_p`'s speculation is itself a lax
+  fold (`RunState::lax` and `Memory::lax` set for its region, as clang's
+  `EvaluateBuiltinConstantP` folds): `__builtin_constant_p(d)` of
+  `const double d = 2.5;` is true. Validation:
+  `tests/conformance/expr.const/failed-constant-init-folds-non-manifestly.cpp`. Before WP-407 such a global
   was resolved per mode and reset at each mode switch, so a pointer
   resolved strictly did not fold and, worse, a pointer thawed in a lax
   fold kept reading the lax contents in a later strict evaluation that
@@ -406,6 +423,14 @@ the evaluator's flattened type table.
   parameter 'q' with unknown value cannot be used in a constant
   expression") with "declared here" (`MemFault::External`, `notes.rs`).
   This is a lowering change only; it is not on the interpreter hot path.
+  The "declared here" of a `MemFault::External` read names the
+  parameter's or usable variable's first declaration ("initializer of
+  'c' is not a constant expression"/"is unknown"), and for a variable
+  that is not usable ("read of non-const(expr) variable") its definition
+  once seen, else the redeclaration the faulting `DeclRefExpr` names
+  (clang `findCompleteObject` replaces the `DeclRefExpr`'s declaration
+  by `getDefinition()`; `notes.rs` `used_redecl`, WP-415,
+  `tests/conformance/expr.const/declared-here-names-definition.cpp`).
 
 - **Variable length arrays** (WP-183, GNU extension): a VLA local lowers
   to a zero-sized opaque object, so declaring one in a constant
@@ -471,6 +496,14 @@ asks whether the evaluation is manifestly constant-evaluated.
   names `std::is_constant_evaluated` at that call's site. Deeper calls do
   not warn. The warning goes through `SemaBridge::diag`, so it obeys
   `-Wno-`/`-Werror=` and system-header suppression.
+  `Oven::warn_constant_evaluated(bridge, e, var)` (WP-415) reruns the
+  constant initializer `e` of a variable whose silent constant
+  initialization failed with `RunState::cev_warn` set, so a silent run
+  still reports this warning (and nothing else): clang warns while
+  checking the constant initializer even when it then fails (spec/sema.md
+  "Constant initialization"). `cev_warn` is cleared in speculation
+  (`__builtin_constant_p`) and in the nested initialization of a variable
+  it reads.
 - **Memoization:** a function whose body uses `IsConstEval` is never
   memoized, and every memo key carries the context (bit 31 of the
   function word), so a call cached in one context is never replayed in
@@ -987,7 +1020,8 @@ slots `2^20..2^21`, static slots have bit 21 set as now. Heap slots have
 their own `Alloc` table and free-slot queue with the frame space's
 generation scheme: `delete` marks the slot dead and keeps its `Alloc` (so a
 dangling pointer still names its origin in notes) until the slot is reused
-with a bumped generation; a slot whose generation would wrap is retired.
+with a bumped generation; a slot whose generation would reach the last
+one (never issued: `mem::NOWHERE`) is retired.
 `Origin::Heap(ExprId, u32)` names the `new` expression (or the
 `std::allocator<T>::allocate` call) and the allocation's serial number in
 its evaluation, for notes (clang prints a heap pointer as
@@ -1272,7 +1306,10 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   designated objects, and constructing an object that holds no data
   (`Types::holds_no_data`) by placement touches no byte (the member
   sharing its address keeps its value)
-  (`expr.new/p2747-placement-voidified-through-memory*.cpp`).
+  (`expr.new/p2747-placement-voidified-through-memory*.cpp`). The
+  exception is an empty complete object or array element (libc++'s
+  `vector<bitset<0>>`; see "Architecture" above): it owns its byte
+  (`basic.life/constexpr-empty-allocator-storage.cpp`).
 - *Casts from `void *`* (C++26, P2738R1, [expr.static.cast]/14): `VoidCast
   [dst, p, T]` aux 0 (a `static_cast` from `cv void *` to `cv T *`
   outside `std::allocator<T>::allocate`) succeeds for null and when the
@@ -1305,29 +1342,62 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   operand and "cast from 'void *' is not allowed in a constant
   expression" for null (the operand type as written, with its aka), as
   clang 19 and 22 in every mode. clang reports this as a CCE note and
-  keeps evaluating; kiln stops at it, which gives the same diagnostics
-  wherever clang needs a constant (`expr.const/p2738-void-cast-pre26-cxx*.cpp`).
+  keeps evaluating; kiln stops at it in every evaluation but a fold,
+  which gives the same diagnostics wherever clang needs a constant
+  (`expr.const/p2738-void-cast-pre26-cxx*.cpp`).
   Probed (WP-407, clang 19 and 22, `-std=c++23`): a required constant
   expression keeps the first note (clang `EM_ConstantExpression` never
   replaces it), so a later fault (a read past the end through the cast
   pointer, in a callee or not) adds no second note; `static_assert`,
   `constexpr` variables, enumerators and array bounds print the same as
-  kiln. `__builtin_is_constant_evaluated` / `if consteval` in a static
-  initializer differ only where clang's codegen, after a failed constant
-  initialization, folds the initializer again as a non-manifest trial
-  (`int g = __builtin_is_constant_evaluated() ? x : 7;` is static there),
-  which kiln's codegen does not do for any initializer. The difference that is visible is in a *fold*: clang continues
-  with the cast's result designating nothing (`Designator.setInvalid()`),
-  so a null test or comparison of that pointer folds while any access
-  through it fails silently: a file-scope `int a[(const int *)vp ? 1 :
-  2]` is "folded to constant array", `__builtin_constant_p((const int
-  *)vp == &n)` is true, and `int g = (const int *)vp != nullptr;` is
-  constant-initialized. Kiln's folds stop at the cast (an error for the
-  bound, `false`, dynamic initialization). Not modelled: it needs an
-  invalid-designator pointer state carried by every pointer-consuming
-  op, and covers clang's other CCE-only casts too (`reinterpret_cast`,
-  integer to pointer, which fold the same way); tracked by the xfail
-  `expr.const/p2738-void-cast-pre26-fold-continues.cpp`. Codegen's folds
+  kiln. In a *fold* clang continues with the cast's result designating
+  nothing (`Designator.setInvalid()`), so a null test or comparison of
+  that pointer folds while any access through it fails silently: a
+  file-scope `int a[(const int *)vp ? 1 : 2]` is "folded to constant
+  array", `__builtin_constant_p((const int *)vp == &n)` is true, and
+  `int g = (const int *)vp != nullptr;` is a static initializer. Kiln
+  models this with pointers that point at nothing (below):
+  `expr.const/p2738-void-cast-pre26-fold-continues.cpp`.
+- *Pointers that point at nothing* (WP-415): clang's other casts that
+  only a fold may perform ([expr.const]/5.15: a `reinterpret_cast`
+  between object pointer types other than the same type, a C-style cast
+  doing the same, an integer-to-pointer and a pointer-to-integer
+  conversion) note "reinterpret_cast is not allowed in a constant
+  expression" (a `reinterpret_cast` naming one of those conversions;
+  any other is that note and stops) or "cast that performs the
+  conversions of a reinterpret_cast is not allowed in a constant
+  expression" and continue in a fold the same way. They compile to
+  `Cce [dst, src, trap]` (aux `kbc::cce::CHECK`, `PTR`, `INT_TO_PTR`,
+  `PTR_TO_INT`), and the pre-C++26 `void *` cast's two traps are `Cce`
+  too. Outside a fold `Cce` traps with its note, exactly the old `Trap`
+  (for an integer/pointer conversion the note comes before the operand
+  is evaluated, as in clang). In a fold (`RunState::fold`: a silent
+  evaluation outside a constant context, i.e. `Oven::try_fold`,
+  `Oven::fold_rvalue` and `__builtin_constant_p`'s speculation; never
+  a constant initializer or a constant-destruction check, where clang
+  requires no notes) `PTR` keeps null and marks any other pointer as
+  pointing at nothing: its generation becomes the never-issued last one
+  (`mem::NOWHERE`, which is why `GEN_MAX` is 510), so every access
+  through it fails the generation check every access already makes, and
+  the fast path costs nothing. `INT_TO_PTR` makes a nowhere pointer of
+  slot 0 whose offset is the integer (0 stays null; one that does not
+  fit 32 bits fails); `PTR_TO_INT` gives back that integer, or fails for
+  a pointer to an object (clang keeps a symbolic value there; kiln's
+  fold stops). Pointer arithmetic on a nowhere pointer moves its offset
+  in element units; subtraction of two nowhere pointers of one slot is
+  the offset difference over the element size; comparisons of two
+  pointers of which one points at nothing compare offsets within one
+  slot, and across slots fold only for `==`/`!=` (false/true) unless a
+  side is an integer address other than null. The generation is lost,
+  so pointers compare by slot. `__builtin_constant_p` of a nowhere
+  pointer is true for an integer address and for a string literal at
+  offset 0, as clang's base check. A fold that executed a `Cce` is
+  impure (never memoized). `__builtin_constant_p((int *)8 + 1 == (int
+  *)12)` is true, `int f[(long)(int *)8]` folds to 8 elements and
+  `int i[*reinterpret_cast<const char *>(&n)]` is an error:
+  `expr.const/5.15/reinterpret-cast-fold-points-nowhere.cpp`. Function
+  pointers are not modelled (a cast to or from one still stops a fold).
+  Codegen's folds
   share the TU's bytecode, so they see the TU's language mode
   (`Oven::set_cxx_year`, recorded by sema; before WP-407 they compiled
   with C++26 rules and constant-initialized `int g = *(const int *)vp;`
@@ -1911,8 +1981,9 @@ evaluated like any other initializer.
 `MpAddr [dst, obj, mp]` (`obj.*mp`, checking derived-member containment;
 `Fault::NullBase` for a base step through a null object), `MpActive
 [p, mp]` (a union member reached through `.*` must be active), `MpFn
-[dst, mp, trap]` (the callee of a pointer to member function; a virtual
-one dispatches as `VCall` does, WP-077). `Downcast [dst, p, off, ty]` is
+[dst, mp, this, adj]` (the callee of a pointer to member function; a
+virtual one dispatches as `VCall` does, WP-077, and writes its covariant
+return adjustment into `adj`). `Downcast [dst, p, off, ty]` is
 `static_cast` from a base pointer or glvalue to a derived one
 ([expr.static.cast]/2, /11), checking that the base subobject is part of
 an object of the derived type.
@@ -2013,7 +2084,12 @@ calls. Covariant returns: `VCall` writes the overrider-to-method return
 adjustment (a byte offset of the method's return class within the
 overrider's) into register `adj`, and `CovAdj [p, adj]` moves the
 returned pointer or reference (null stays null). `MpFn` of a virtual
-member function dispatches the same way.
+member function dispatches the same way, and a call through a pointer to
+member function whose type returns a class pointer or reference gets
+the same `adj` register and `CovAdj` after the call (0 for a non-virtual
+member): the result has the return type of the function the pointer
+names, as for a direct call ([class.virtual]/8, [expr.mptr.oper]/6;
+`class.virtual/covariant-return-member-pointer.cpp`, WP-414).
 
 **`dynamic_cast`.** `DynCast [dst, p, static, target]` (target
 `u32::MAX`: `void*`; aux 1: reference cast) follows clang's
@@ -2079,18 +2155,26 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   constant expression" at the construct expression, with no frame for
   the constructor (clang `HandleConstructorCall`; test
   `expr.const/constexpr-vbase-construct-cxx23.cpp`).
+  A by-value class argument is the callee's parameter object: allocated
+  with `Origin::Var` of the parameter in the callee's first declaration
+  (clang's canonicalized `APValue` base), so its destructor's "in call
+  to 'p.~X()'" note names that parameter (`'.~X()'` when unnamed) and
+  sits at its location, at both levels. A class argument passed through
+  the ellipsis with a non-trivial copy or move constructor or destructor
+  (clang `isValidVarArgType` = `VAK_Undefined`, which sema rewrites to
+  `(__builtin_trap(), arg)`) traps "subexpression not valid" at the
+  argument's begin, after the literal-type check (WP-413; tests
+  `expr.call/param-object-destruction-const.cpp`,
+  `expr.const/non-literal-argument.cpp` and its `-clang19` split).
 - A local variable that sema marked invalid (its initialization was
   already diagnosed) traps silently when its declaration is evaluated,
   so the enclosing constant expression reports only its own error
   (clang's invalid-declaration evaluation failure; WP-400).
-- Covariant return adjustment through a pointer to member function:
-  `Fault::Invalid` (stub, follow-up of WP-077).
 - Freezing a pointer to a `typeid` object (`constexpr auto *p =
-  &typeid(T);`) is `NotConstant`: needs a `PtrBase` for type_info objects
-  shared with codegen (WP-080, with RTTI emission).
-- `r.A::f()` (an explicit member access with a qualifier) is rejected by
-  sema ("qualified member access is not supported yet"); only implicit
-  `A::f()` is covered.
+  &typeid(T);`) and an explicitly qualified call on a member access
+  (`r.A::f()`, `p->A::f()`, non-virtual per [class.virtual]/16) landed
+  (WP-176 and later; tests `class.virtual/qualified-call-constexpr.cpp`,
+  `codegen/typeid_constant.cpp`).
 - A virtual call on a member subobject whose own base is still being
   constructed reports the lifetime note where clang reports CWG1517
   (`no_dynamic` keys on the running constructor's object and class).
@@ -2141,7 +2225,8 @@ bases, a *relative* word (`REL` bit set): the high word is the signed
 distance from the class's own start to the slot, as the virtual base is
 the most derived object's and at no fixed offset in the class. `locate`
 resolves a relative word by trying each virtual subobject of that class
-through `sub_addr` from the object's start. Plain words are as in
+against the most derived object found once from the object's start
+(`locate_rel`). Plain words are as in
 "Dynamic types".
 
 **Addresses.** `Virt::subs` lists every subobject of a polymorphic or
@@ -2201,9 +2286,27 @@ WP-400). Sema: a rejected
 constexpr defaulted special member (C++23) is marked invalid, as clang's
 `setInvalidDecl`.
 
-**Left for later.**
-- `vcall` caches neither relative words nor overriders found in a virtual
-  base.
+**Call caches (WP-414).** A plain word's call is cached in
+`Virt::dispatch` by (dynamic type, slot offset, method). A word written
+by a complete-object constructor or destructor, or by thawing, carries
+the `CMP` flag (bit 30 of the class half; Oven types stay below 2^30): its
+object is the most derived object, so an overrider in a virtual base is at
+its complete-object offset and the cached `delta` gives `this` without a
+walk of the object model. (A plain word without `CMP`, written on a
+non-virtual slot by a base-object constructor, only reaches overriders in
+non-virtual subobjects, since a final overrider's subobject contains the
+called one; it keeps the `sub_addr` walk as a guard.) A relative word's
+call (`vcall_rel`) walks the object model once (`owner` of the running
+class's object) and is cached in `Virt::rel_dispatch` by (running class,
+relative slot offset, method, called class, most derived class, the
+running class's offset in it), which fix the called subobject; `this` is
+then `sub_in` of the cached overrider subobject. `locate` likewise walks
+once for all candidates of a relative word (`locate_rel`). Probe (release,
+1M calls through virtual bases on complete objects, 2M through relative
+words in base-object constructors): 170 → 143 ms and 465 → 288 ms, same
+steps, peak RSS 9 MB either way; `bench/oven/virtual-dispatch.cpp` (no
+virtual bases) is unchanged. Test:
+`tests/stress/constexpr-vcall-virtual-base-cache.cpp`.
 
 ### Vectors — Landed (WP-173)
 GNU `vector_size` and clang `ext_vector_type` values are stored as an

@@ -629,7 +629,7 @@ impl Sema<'_, '_> {
         }
         self.check_implicit_conversions(e, cc);
         self.flush_member_refs();
-        if !self.special.pending_deleted.is_empty() {
+        if self.special.has_pending() {
             self.flush_pending_deleted();
         }
         // [expr.const]/16: the immediate invocations are evaluated.
@@ -1946,16 +1946,12 @@ impl Sema<'_, '_> {
             _ if self.is_class_member_ref(d) => {
                 return self.implicit_member_ref(d, loc, shadow, extra.and_then(|x| x.qualifier));
             }
-            // [temp.names]/1: a variable template is named with arguments
-            // (clang's `diagnoseMissingTemplateArguments`).
-            DeclKind::VarTemplate => {
-                let note = self.diag(DiagId::note_template_decl_here, n.loc());
-                let msg = self
-                    .diag(DiagId::sema_template_requires_args, loc)
-                    .arg("variable template")
-                    .arg(format!("'{}'", self.decl_name(d)))
-                    .with_note(note);
-                self.emit(msg);
+            // [temp.names]/1: a variable template or concept is named with
+            // arguments (clang's `diagnoseMissingTemplateArguments`).
+            DeclKind::VarTemplate | DeclKind::Concept => {
+                let what =
+                    if n.kind() == DeclKind::Concept { "concept" } else { "variable template" };
+                self.missing_template_args(d, what, extra.and_then(|x| x.qualifier), loc);
                 return self.recover_err(&[], loc);
             }
             k if crate::lookup::is_type_kind(k) || k == DeclKind::Namespace => {
@@ -1996,10 +1992,13 @@ impl Sema<'_, '_> {
             && let Some(t) = n.ty()
             && self.contains_undeduced_auto(t)
         {
-            let msg = self
-                .diag(DiagId::sema_auto_var_in_own_initializer, loc)
-                .arg(self.decl_name(d))
-                .arg(self.ty_arg(t));
+            let msg = match self.auto_expl_spec_in_own_init(d, loc) {
+                Some(m) => m,
+                None => self
+                    .diag(DiagId::sema_auto_var_in_own_initializer, loc)
+                    .arg(self.decl_name(d))
+                    .arg(self.ty_arg(t)),
+            };
             self.emit(msg);
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
             return self.recover_err(&[], loc);
@@ -2383,7 +2382,7 @@ impl Sema<'_, '_> {
     /// `( e )` ([expr.prim.paren]).
     pub fn act_on_paren(&mut self, e: ExprId, lparen: Loc, rparen: Loc) -> ExprId {
         let x = self.builder().paren(e, lparen, rparen);
-        if !self.special.pending_deleted.is_empty() {
+        if self.special.has_pending() {
             self.widen_pending_template_id(e, x);
         }
         x
@@ -2580,7 +2579,7 @@ impl Sema<'_, '_> {
                 OperResult::Converted(v) => self.builtin_unary(op, v[0], loc),
                 OperResult::Builtin | OperResult::BuiltinNotes(_) => self.builtin_unary(op, e, loc),
             };
-        if op == UnaryOp::AddrOf && !self.special.pending_deleted.is_empty() {
+        if op == UnaryOp::AddrOf && self.special.has_pending() {
             self.widen_pending_template_id(e, x);
         }
         x
@@ -3590,6 +3589,9 @@ impl Sema<'_, '_> {
     fn comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         self.diagnose_array_comparison(op, l, r, loc);
         self.diagnose_self_comparison(op, l, r, loc);
+        if matches!(op, BinaryOp::EQ | BinaryOp::NE) {
+            self.diagnose_always_non_null_compare(op == BinaryOp::EQ, l, r);
+        }
         let l2 = conv::decay(self, l);
         let r2 = conv::decay(self, r);
         let (lt, rt) = (self.ety(l2), self.ety(r2));
@@ -4321,7 +4323,7 @@ impl Sema<'_, '_> {
         }
         // [dcl.fct.def.delete]/2: a call of a deleted function by its
         // unqualified name (spec/sema-class.md §4.3).
-        if !self.special.pending_deleted.is_empty() {
+        if self.special.has_pending() {
             let invalid = self.is_err_expr(callee) || args.iter().any(|&a| self.is_err_expr(a));
             let dependent = self.expr_is_type_dependent(callee)
                 || args.iter().any(|&a| self.expr_is_type_dependent(a));

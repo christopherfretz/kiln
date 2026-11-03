@@ -454,6 +454,29 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         Ok(Some(r))
     }
 
+    /// The qualifier of the argument template template parameter name `n`
+    /// is replaced by, when that argument is a qualified template name
+    /// not written with `template` (`X<int>::apply` kept as first written
+    /// on a specialization, clang 22): clang 22 prints the substituted
+    /// template-id with it (`'X<int>::apply<int>'`).
+    pub(crate) fn ttp_arg_qualifier(
+        &mut self,
+        n: kiln_ast::ids::TemplateNameId,
+        loc: Loc,
+    ) -> Option<NnsId> {
+        let TemplateName::TemplateTemplateParm { depth, index, .. } =
+            self.sema.ast.types.template_name_view(n)
+        else {
+            return None;
+        };
+        let ArgLookup::Arg(a) = self.lookup(depth as u16, index as u16) else { return None };
+        let ArgView::Template(t) = self.element(a, None, loc).ok()?.view() else { return None };
+        match self.sema.ast.types.template_name_view(t) {
+            TemplateName::Qualified { nns, .. } => Some(nns),
+            _ => None,
+        }
+    }
+
     /// Substitutes into a template name (a template template parameter
     /// becomes its argument's template).
     pub fn template_name(

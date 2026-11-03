@@ -1338,6 +1338,14 @@ impl Parser<'_, '_> {
         Scan::new(self, i).type_id(ctx)
     }
 
+    /// Whether a declarator may start at token `i` (clang's
+    /// `TryParseDeclarator` without an abstract declarator not giving
+    /// `False`): `(v)`, `(*p)[2]`, `(N::x)` may, `(1)` and `(int)` may
+    /// not.
+    pub(crate) fn declarator_may_start_at(&self, i: usize) -> bool {
+        Scan::new(self, i).declarator(false, true, false, false) != Tpr::False
+    }
+
     /// [dcl.ambig.res]/1: whether the `(` at the current token, after a
     /// declarator-id that could take a direct initializer, starts a
     /// function declarator (clang's `isCXXFunctionDeclarator`). `name`

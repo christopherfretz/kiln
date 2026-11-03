@@ -935,6 +935,17 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     }
 
     /// Whether the name at token `i` is qualified by a non-dependent
+    /// class or namespace in which lookup finds a non-type (a variable,
+    /// function or enumerator).
+    pub(crate) fn nontype_scope_name(&self, i: usize) -> bool {
+        matches!(
+            self.scan_name_qual_at(i),
+            Some((end, false, NameClass::Value(_), _, Some(q)))
+                if end > i + 1 && !self.s.is_dependent_ctx(q)
+        )
+    }
+
+    /// Whether the name at token `i` is qualified by a non-dependent
     /// class or namespace in which lookup finds nothing (clang's
     /// `TryAnnotateName` giving `ANK_Unresolved` after a scope).
     pub(crate) fn unresolved_scope_name(&self, i: usize) -> bool {
@@ -942,6 +953,20 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             self.scan_name_qual_at(i),
             Some((end, false, NameClass::Undeclared, _, Some(q)))
                 if end > i + 1 && !self.s.is_dependent_ctx(q)
+        )
+    }
+
+    /// Whether the name at token `i` is qualified by a class or
+    /// enumeration that is incomplete as a nested-name-specifier
+    /// ([`Sema::nns_ctx_incomplete`]): the parse of the qualified name
+    /// reports it, wherever it stands.
+    ///
+    /// [`Sema::nns_ctx_incomplete`]: kiln_sema::Sema::nns_ctx_incomplete
+    pub(crate) fn incomplete_scope_name(&self, i: usize) -> bool {
+        matches!(
+            self.scan_name_qual_at(i),
+            Some((end, false, NameClass::Undeclared, _, Some(q)))
+                if end > i + 1 && self.s.nns_ctx_incomplete(q)
         )
     }
 
@@ -1470,6 +1495,19 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 let q = self.s.act_on_nested_name_component(qual, name, loc);
                 self.s.nns_start = None;
                 let q = q.ok_or(())?;
+                // The next name is looked up in `q`, which must be
+                // complete; a pointer-to-member's class need not be
+                // ([dcl.mptr]/1, clang checks only at lookup).
+                if !stop && !self.at(Punct::Star) {
+                    self.s.nns_start = Some(start);
+                    if !self.s.require_complete_nns_ctx(q.0, loc) {
+                        // Recover past the rest of the specifier, as
+                        // clang's invalid `CXXScopeSpec` does; the caller
+                        // sees the final name.
+                        self.skip_nested_name_rest();
+                        return Err(());
+                    }
+                }
                 self.s.act_on_nns_component_use(q.1, cc);
                 qual = Some(q);
                 if stop {
