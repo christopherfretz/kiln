@@ -2109,6 +2109,11 @@ impl Substituter<'_, '_, '_> {
             }
             _ => {
                 let e = self.expr(init)?;
+                // A braced element of an expansion-init-list: `decl =
+                // {…};` ([stmt.expand]/5.1).
+                if pk == ExprKind::CXXExpansionSelectExpr && self.is_braced_element(e) {
+                    return Ok(Some(Initializer::List(self.init_list(e)?)));
+                }
                 match style {
                     InitStyle::Call | InitStyle::ParenList => {
                         let r = self.sema.ast.exprs.end_loc(init).unwrap_or(n.loc());

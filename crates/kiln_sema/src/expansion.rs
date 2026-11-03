@@ -11,7 +11,7 @@
 //! becoming the element (spec/sema-templates.md §5.5).
 
 use kiln_ast::decl::{DeclFlags, InitStyle, VarSpec, VarStorage};
-use kiln_ast::expr::{BinaryOp, Radix, UnaryOp};
+use kiln_ast::expr::{BinaryOp, ExprKind, Radix, UnaryOp};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::{ExpansionData, ExpansionForm};
@@ -100,22 +100,27 @@ impl Sema<'_, '_> {
     ) -> Option<ExpansionHead> {
         let (exprs, range_init, form) = match range {
             ExpansionInit::List(l) => {
-                if let Some(i) = l
-                    .items
-                    .iter()
-                    .find(|i| !i.designator.is_empty() || matches!(i.value, InitValue::List(_)))
-                {
-                    let at = match &i.value {
-                        InitValue::List(x) => x.lbrace,
-                        InitValue::Expr(e) => self.begin_loc(*e),
-                    };
-                    self.unsupported(
-                        "a braced or designated element of an expansion-init-list",
-                        at,
-                    );
+                // [stmt.expand]/1: the list is an expression-list, whose
+                // initializer-clauses may be braced-init-lists but not
+                // designated (clang 23 parses it with
+                // `ParseExpressionList`: "expected expression" at the
+                // designator).
+                if let Some(d) = l.items.iter().find_map(|i| i.designator.first()) {
+                    self.error(DiagId::parse_expected_expression, d.loc());
                     return None;
                 }
-                let es = Self::list_exprs(&l);
+                // A braced element is kept as written (a dependent
+                // `InitListExpr`): it list-initializes the
+                // for-range-declaration of its own expansion ([stmt.expand]/5.1,
+                // `decl = {…};`).
+                let es: Vec<ExprId> = l
+                    .items
+                    .iter()
+                    .map(|i| match &i.value {
+                        InitValue::Expr(e) => *e,
+                        InitValue::List(n) => self.dependent_init_list(n),
+                    })
+                    .collect();
                 (self.ast.lists.push(&es), None, ExpansionForm::Enumerating)
             }
             ExpansionInit::Expr(e) => (ListId::EMPTY, Some(e), ExpansionForm::Dependent),
@@ -412,7 +417,7 @@ impl Substituter<'_, '_, '_> {
             let exprs: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(data.exprs).collect();
             let src = match data.range_init {
                 Some(e) => ExpansionSource::Expr(self.expr(e)?),
-                None => ExpansionSource::List(self.expand_exprs(&exprs)?),
+                None => ExpansionSource::List(self.expansion_list(&exprs)?),
             };
             if expand {
                 return self.expand_expansion(init, src, &data, depth, loc);
@@ -437,6 +442,48 @@ impl Substituter<'_, '_, '_> {
         })();
         self.sema.pop_scope();
         r
+    }
+
+    /// The elements of a pattern expansion-init-list, substituted: a
+    /// braced element (and a braced pack expansion `{x}...`,
+    /// [temp.variadic]/5.4) stays a dependent braced list, list-
+    /// initializing its expansion's declaration.
+    fn expansion_list(&mut self, exprs: &[ExprId]) -> SubstResult<Vec<ExprId>> {
+        use crate::templ::pack::Expansion;
+        let mut out = Vec::with_capacity(exprs.len());
+        for &x in exprs {
+            let ex = &self.sema.ast.exprs;
+            if ex.get(x).kind() == ExprKind::InitListExpr {
+                let l = self.init_list(x)?;
+                out.push(self.sema.dependent_init_list(&l));
+                continue;
+            }
+            let pat = crate::templ::pack::expr_pattern(self.sema, x)
+                .filter(|&p| self.sema.ast.exprs.get(p).kind() == ExprKind::InitListExpr);
+            match pat {
+                Some(p) => {
+                    let ellipsis = self.sema.ast.exprs.get(x).loc();
+                    match self.expand_pattern_at(Some(ellipsis), |s| s.init_list(p))? {
+                        Expansion::Elements(ls) => {
+                            out.extend(ls.iter().map(|l| self.sema.dependent_init_list(l)));
+                        }
+                        Expansion::Unexpanded(l) => {
+                            let e = self.sema.dependent_init_list(&l);
+                            out.push(self.sema.act_pack_expansion(e, ellipsis));
+                        }
+                    }
+                }
+                None => out.extend(self.expand_exprs(&[x])?),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether the expansion element `e` is a braced element (a
+    /// `void`-typed `InitListExpr` kept as written).
+    pub(crate) fn is_braced_element(&self, e: ExprId) -> bool {
+        let ex = &self.sema.ast.exprs;
+        ex.get(e).kind() == ExprKind::InitListExpr && self.sema.ast.types.is_void(ex.get(e).ty())
     }
 
     /// The for-range-declaration of pattern `d`, instantiated.
