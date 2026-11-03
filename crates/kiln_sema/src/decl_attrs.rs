@@ -283,14 +283,8 @@ impl Sema<'_, '_> {
             }
             AttrKind::NORETURN if node.is_gnu_spelling() => self.check_gnu_noreturn(d, kind, node),
             // [dcl.attr.noreturn]/1.
-            AttrKind::NORETURN => {
-                kind.is_function()
-                    || wrong(
-                        self,
-                        DiagId::sema_attribute_wrong_decl_type_error,
-                        "noreturn",
-                        "functions",
-                    )
+            AttrKind::NORETURN if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type_error, "noreturn", "functions")
             }
             // [dcl.attr.nouniqueaddr]/1.
             AttrKind::NO_UNIQUE_ADDRESS => {
@@ -335,13 +329,7 @@ impl Sema<'_, '_> {
                 self.check_alloc_attr(d, node);
                 true
             }
-            AttrKind::FORMAT if !kind.is_function() => wrong(
-                self,
-                DiagId::sema_attribute_wrong_decl_type,
-                "format",
-                "Objective-C methods, blocks, and non-K&R-style functions",
-            ),
-            AttrKind::FORMAT => self.check_format_decl_attr(d, node),
+            AttrKind::FORMAT => self.check_format_decl_attr(d, kind, node),
             AttrKind::NOTHROW if node.flags & 1 == 0 => self.check_gnu_nothrow(d, kind, node),
             AttrKind::FLAG_ENUM | AttrKind::ENUM_EXTENSIBILITY if kind != DeclKind::Enum => {
                 let name = attr_name(&node).unwrap_or_default();

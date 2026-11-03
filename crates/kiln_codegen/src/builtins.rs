@@ -170,10 +170,14 @@ fn fp_intrinsic(b: u32) -> Option<(&'static str, usize)> {
 /// whose `__builtin_` form is an LLVM intrinsic: `ceil(x)` ->
 /// `llvm.ceil`), if any. Under clang's default `-fmath-errno` only the
 /// errno-free functions are intrinsics, which are exactly the
-/// [`fp_intrinsic`] ones; the others stay library calls.
+/// [`fp_intrinsic`] ones; WP-186 adds `memcpy` / `memmove` / `memset`
+/// and the integer `abs` family, which clang lowers through their
+/// builtin id too (`memcpy` -> `llvm.memcpy`, spec/codegen.md §3). The
+/// others (`strlen`, `sqrt`, `cbrt`, ...) stay library calls.
 pub(crate) fn lib_intrinsic(ast: &Ast, d: DeclId) -> Option<u32> {
     let t = ast.decls.lib_builtin(d)?;
-    fp_intrinsic(t).is_some().then_some(t)
+    let mem = matches!(t, id::MEMCPY | id::MEMMOVE | id::MEMSET | id::ABS | id::LABS | id::LLABS);
+    (mem || fp_intrinsic(t).is_some()).then_some(t)
 }
 
 /// The `llvm.is.fpclass` test of a classification builtin
@@ -1336,54 +1340,4 @@ impl Cg<'_> {
         let r = self.emit_new_delete_call(f, &vals, &tys, loc)?;
         Ok((b == id::OPERATOR_NEW).then_some(r))
     }
-}
-
-/// WP-186: the `__builtin_` twin a call of recognized C library function
-/// `d` lowers as (spec/codegen.md §3, "Calls"): clang `EmitBuiltinExpr`
-/// keeps the library builtin id, so `memcpy`/`memmove`/`memset`, the
-/// integer `abs` family and the always-`const` `<math.h>` functions with
-/// an elementwise intrinsic (`fabs`, `ceil`, ..., `fmax`, `fma`; clang's
-/// `GenerateIntrinsics`) become the intrinsic the twin does. The rest
-/// (`strlen`, `cbrt`, `sqrt` under `-fmath-errno`) stay ordinary calls.
-pub(crate) fn lib_intrinsic_twin(ast: &Ast, d: DeclId) -> Option<u32> {
-    let t = ast.decls.lib_twin(ast.first(d))?;
-    let lowered =
-        matches!(t, id::MEMCPY | id::MEMMOVE | id::MEMSET | id::ABS | id::LABS | id::LLABS)
-            || matches!(
-                t,
-                id::FABS
-                    | id::FABSF
-                    | id::FABSL
-                    | id::COPYSIGN
-                    | id::COPYSIGNF
-                    | id::COPYSIGNL
-                    | id::FMAX
-                    | id::FMAXF
-                    | id::FMAXL
-                    | id::FMIN
-                    | id::FMINF
-                    | id::FMINL
-                    | id::CEIL
-                    | id::CEILF
-                    | id::CEILL
-                    | id::FLOOR
-                    | id::FLOORF
-                    | id::FLOORL
-                    | id::TRUNC
-                    | id::TRUNCF
-                    | id::TRUNCL
-                    | id::ROUND
-                    | id::ROUNDF
-                    | id::ROUNDL
-                    | id::RINT
-                    | id::RINTF
-                    | id::RINTL
-                    | id::NEARBYINT
-                    | id::NEARBYINTF
-                    | id::NEARBYINTL
-                    | id::FMA
-                    | id::FMAF
-                    | id::FMAL
-            );
-    lowered.then_some(t)
 }

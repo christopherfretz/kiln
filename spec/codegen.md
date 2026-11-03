@@ -307,8 +307,9 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `llabs`, and `fabs`, `ceil`, `floor`, `trunc`, `round`, `rint`,
     `nearbyint`, `copysign`, `fmax`, `fmin`, `fma` with their `f` / `l`
     forms (clang's `GenerateIntrinsics` set; `sqrt` stays a call under
-    `-fmath-errno`) are emitted as their `__builtin_` twin
-    (`DeclArena::lib_twin`, `builtins::lib_intrinsic_twin`; WP-186,
+    `-fmath-errno`; WP-419's `roundeven` / `fmaximum_num` / `fminimum_num`
+    below) are emitted as their `__builtin_` twin
+    (`DeclArena::lib_builtin`, `builtins::lib_intrinsic`; WP-186,
     `tests/codegen/builtins_lib_intrinsic.cpp`). Not done (follow-ups):
     clang's -O0 fold of a library call the constant evaluator accepts
     (`strlen("abc")` is `i64 3`, `memcmp` of literals), clang 22's

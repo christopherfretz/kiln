@@ -181,16 +181,14 @@ impl Sema<'_, '_> {
             ExprKind::ConditionalOperator => {
                 let cond = self.ast.exprs.children(e, &self.ast.lists)[0];
                 let [l, r] = self.ast.exprs.cond_arms(e);
-                match self.fold_int(cond) {
-                    Some(v) => self.format_sources(if v != 0 { l } else { r }, lits, depth + 1),
-                    None => {
-                        let a = self.format_sources(l, lits, depth + 1);
-                        if a == Source::NotLiteral {
-                            return a;
-                        }
-                        a.min(self.format_sources(r, lits, depth + 1))
-                    }
+                if let Some(v) = self.fold_int(cond) {
+                    return self.format_sources(if v != 0 { l } else { r }, lits, depth + 1);
                 }
+                let a = self.format_sources(l, lits, depth + 1);
+                if a == Source::NotLiteral {
+                    return a;
+                }
+                a.min(self.format_sources(r, lits, depth + 1))
             }
             ExprKind::PredefinedExpr => Source::Unchecked,
             ExprKind::DeclRefExpr => {
@@ -283,7 +281,7 @@ impl Sema<'_, '_> {
                 return None;
             }
             let (star_offs, conv_at, want) = match parse_spec(s, &mut i) {
-                Spec::Conv(stars, at, want) => (stars, at, want),
+                Spec::Conv(offs, at, want) => (offs, at, want),
                 Spec::Unmodelled => return None,
                 Spec::Incomplete => {
                     out.push(Pending {
@@ -310,7 +308,7 @@ impl Sema<'_, '_> {
                 }
             };
             for (off, precision) in star_offs {
-                let Some(&a) = data.get(next) else { return None };
+                let &a = data.get(next)?;
                 covered[next] = true;
                 next += 1;
                 let star = Want::Int { class: 0, unsigned: false, size: false };

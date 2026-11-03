@@ -2972,13 +2972,6 @@ impl Cg<'_> {
                 crate::builtins::BuiltinCall::Emitted(v) => return Ok(v),
                 crate::builtins::BuiltinCall::Library => lib = Some(self.lib_fn(d, id)?),
             }
-        } else if let Some(d) = direct
-            && let Some(twin) = crate::builtins::lib_intrinsic_twin(ast, d)
-            && let crate::builtins::BuiltinCall::Emitted(v) = self.emit_builtin(twin, e)?
-        {
-            // WP-186: a recognized library function clang lowers to an
-            // intrinsic (`memcpy` -> `llvm.memcpy`).
-            return Ok(v);
         }
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();

@@ -9318,7 +9318,19 @@ impl Sema<'_, '_> {
     /// `-Wgcc-compat`'s warning and `A` must then be one past the last
     /// parameter); `strftime` requires `A` = 0. False drops the
     /// attribute (after an error).
-    pub(crate) fn check_format_decl_attr(&mut self, d: DeclId, node: AttrNode) -> bool {
+    pub(crate) fn check_format_decl_attr(
+        &mut self,
+        d: DeclId,
+        kind: DeclKind,
+        node: AttrNode,
+    ) -> bool {
+        if !kind.is_function() {
+            let shown = format!("'{}'", self.attr_shown(&node, "format"));
+            let what = "Objective-C methods, blocks, and non-K&R-style functions";
+            let msg = self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc).arg(shown);
+            self.emit(msg.arg(what.to_owned()));
+            return false;
+        }
         if node.flags & 1 != 0 {
             return true;
         }
@@ -9352,7 +9364,8 @@ impl Sema<'_, '_> {
                 Some(BuiltinType::Char | BuiltinType::SChar | BuiltinType::UChar)
             )
         };
-        if !t.is_dependent(pty) && !(t.is_pointer(pty) && t.pointee(pty).is_some_and(is_char)) {
+        let char_ptr = t.is_pointer(pty) && t.pointee(pty).is_some_and(is_char);
+        if !t.is_dependent(pty) && !char_ptr {
             let msg = self.diag(DiagId::sema_format_attribute_not_string, node.loc);
             self.emit(msg);
             return false;
