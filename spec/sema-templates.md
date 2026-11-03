@@ -541,7 +541,7 @@ All of these are built by sema actions, which compute dependence as in
 | `X<T>` where `X` is a class template | dependent `TemplateSpecialization` type |
 | `T(args)` / `T{args}` with dependent `T` | `CXXUnresolvedConstructExpr` (list flag) |
 | `int x(e)` with a type-dependent `e` | the initializer is kept as `ParenListExpr` |
-| a braced argument `{…}` inside a dependent `T(args)`, `new T(args)`, `x(args)` initializer or mem-initializer | kept as a dependent `InitListExpr` with its nested lists intact (`Sema::dependent_args`), not the flattened braced-argument placeholder (`temp.dep.expr/braced-arg-nested-list.cpp`, WP-418). Gap: a mem-initializer pattern still fails at instantiation (`templ/subst/exprs.rs` `written_args`) |
+| a braced argument `{…}` inside a dependent `T(args)`, `new T(args)`, `x(args)` initializer or mem-initializer | kept as a dependent `InitListExpr` with its nested lists intact (`Sema::dependent_args`), not the flattened braced-argument placeholder (`temp.dep.expr/braced-arg-nested-list.cpp`, WP-418). A mem-initializer pattern is rebuilt at instantiation by `written_args` (WP-445) |
 | `X x(e)`, `X x = e`, `X x{e}` whose type `X` is a dependent class type (including the current instantiation, [temp.dep.type]/7) | the initializer is kept unconverted (a `ParenListExpr` for the parenthesized form) and initialization runs only at instantiation, as clang's `AddInitializerToDecl`; overload resolution against a dependent target would treat every candidate's conversion as an identity and report ambiguity (WP-276) |
 | `sizeof...(P)` | `SizeOfPackExpr` |
 | `e...` / `T...` | `PackExpansionExpr` / `PackExpansion` type |
@@ -890,13 +890,45 @@ Type flags are computed at intern time (types.md §5.3). The rules:
 | Type | DEPENDENT when | INSTANTIATION_DEPENDENT also when |
 |---|---|---|
 | `TemplateTypeParm` | always | — |
-| `TemplateSpecialization` | the name is dependent, or any arg is dependent | any arg is instantiation-dependent |
+| `TemplateSpecialization` | the name is dependent, or any arg is dependent; an alias template's: its aliased (canonical) type is | any arg is dependent or instantiation-dependent |
 | `DependentName`, `DependentTemplateSpecialization`, `InjectedClassName` | always | — |
 | `Decltype(e)` | `e` is type-dependent, which gives `DependentDecltype` | `e` is instantiation-dependent |
 | array, pointer, reference, function, member pointer | any component is dependent; an array bound is value-dependent | any component |
 | `Record`/`Enum` | the decl is in a dependent context | — |
 | `PackExpansion` | its pattern is dependent | — (and UNEXPANDED_PACK is cleared) |
 | `Auto` | undeduced inside a dependent context | — |
+
+**Three predicates (WP-445).** Every "is this dependent?" question
+asks exactly one of:
+- *dependent type* (`Sema::is_dependent_type`, the `DEPENDENT` bit,
+  [temp.dep.type]/7): the canonical type is unknown until instantiation.
+  Every semantic check on a type (completeness, conversions, base
+  specifiers, `sizeof`, literal-type and trait checks, deduction of a
+  parameter, switch/range-`for` conditions) waits only for this. A type
+  that is merely instantiation-dependent (`void_t<T>` = `void`,
+  `TC<N>*` with `N` a constant local, an alias whose aliased type ignores
+  its arguments) is checked when parsed, as clang does.
+- *instantiation-dependent* (`Sema::is_instantiation_dependent_type`,
+  either bit): the type mentions a template parameter or a template's
+  local, so substitution must still visit it and its sugar. Only the
+  bookkeeping for a re-substituted pattern asks it: written locations
+  (§5.8, `note_written_loc`, `begin_loc`, `note_ref_loc`,
+  `type_spec_locs`, a trailing `->`), a declared type kept for the next
+  substitution (`subst/decls.rs`), and the non-type template parameter
+  types `ttarg*.rs` substitutes.
+- *value-dependent* (`Sema::expr_is_value_dependent`, [temp.dep.constexpr]):
+  an expression's value is unknown; constant evaluation, narrowing and
+  `static_assert` wait for it. A value-dependent template argument makes
+  its specialization a dependent type. A non-type template argument that
+  is only instantiation-dependent is also kept as written and not folded
+  (`is_same<void, void_t<decltype(e)>>::value`, whose qualifier is
+  instantiation-dependent, as a `DeclRefExpr`'s qualifier makes it):
+  substituting it again is what makes a failure in `e` a deduction
+  failure ([temp.deduct.general]/8).
+
+`sizeof...(U)` with `U` bound to a list holding pack expansions (an alias
+template named `N<Ts...>`) is the value-dependent `k + sizeof...(P1) +
+...` (`pack.rs` `size_of_expansions`), so `N<Ts...>` stays dependent.
 
 ### 3.2 Expression dependence (`ExprDeps`)
 
@@ -1029,6 +1061,25 @@ and resolved at instantiation (`Sema::member_via_dependent_base`; clang
 `'Q::name' is not a member of class 'D<O>'`.
 libc++ `basic_ostream::operator<<(int)` calls `ios_base::flags()` through
 the virtual base `basic_ios<C>` (WP-201).
+
+Destructor names in a member access whose object type is dependent
+([expr.prim.id.dtor]/2, [basic.lookup.qual]/5, [temp.dep.expr]/3;
+WP-457): `p->~T()`, `x.T::~T()`, an alias `~U` and an injected-class-name
+resolve at definition as before; a name the definition context does not
+find (`b->~Base()` naming a class template, `b->~Alias()` naming a member
+of the object's class) is kept as a `CXXPseudoDestructorExpr` with a
+dependent destroyed type and the identifier in the side table
+`TemplateTables::pseudo_dtor_name` (`Sema::dependent_destructor_name`).
+Substitution (`act_on_member_destructor_late`) looks the name up in the
+instantiated object's class only — not found there, or a non-class
+object, is `undeclared identifier 'N' in destructor name` — and then
+builds the ordinary destructor call (or pseudo-destructor). A dependent
+nested-name-specifier ending in the destructor's class name
+(`p->Base<T>::~Base()`) is a qualified pseudo-destructor of the
+qualifier's type, checked against the object at instantiation, and
+`x.~decltype(e)()` is a pseudo-destructor of `decltype(e)`'s type
+(parse.md). Tests:
+`tests/conformance/expr.prim.id.dtor/dependent-member-destructor-name*.cpp`.
 
 ### 3.5 ADL and operator lookup at instantiation ([temp.dep.candidate])
 
@@ -2277,7 +2328,12 @@ recomputed exactly as for non-template code (clang's
   - (WP-301) a nested element of a braced list, a braced argument of a
     paren constructor call (`P p({a, 1}, b)`), and a braced argument of a
     member, `operator()` or `operator[]` call are rebuilt as lists by
-    `call_arg_list`. That function stops at the first `CXXDefaultArgExpr`;
+    `call_arg_list`. That function stops at the first `CXXDefaultArgExpr`.
+    The written arguments of a mem-initializer or parenthesized initializer
+    (`written_args`) take the same rebuild (`braced_args`) when any argument
+    is braced, so `: m(v, {v + 1, v + 2})` and `: m(a..., {a..., 7})`
+    instantiate their lists ([class.base.init]/7;
+    `class.base.init/braced-arg-mem-init-template.cpp`, WP-445);
   - a list-initializing `CXXConstructExpr` operand is formed again
     through `init_from_list_at` of the substituted type
     ([dcl.init.list]/3.7). A single-argument non-list construct is its

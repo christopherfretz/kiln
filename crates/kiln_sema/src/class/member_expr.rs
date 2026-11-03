@@ -472,8 +472,10 @@ impl Sema<'_, '_> {
         let Some((destroyed, td)) = named else {
             let text = self.ast.symbols().as_str(name).to_owned();
             let msg = if self.ast.types.is_dependent(obj.ty) {
-                self.templ_unimplemented("a dependent destructor name", loc);
-                return self.recover_err(&[obj.base], loc);
+                // Looked up in the object's class at instantiation
+                // ([basic.lookup.qual.general]/4; clang keeps the
+                // identifier in the `CXXPseudoDestructorExpr`).
+                return self.dependent_destructor_name(obj, name, loc, op_loc);
             } else if obj.def.is_some() {
                 self.diag(DiagId::sema_dtor_name_undeclared, loc).arg(text)
             } else {
@@ -494,6 +496,59 @@ impl Sema<'_, '_> {
             name_loc,
             op_loc,
         )
+    }
+
+    /// `p->~N()` on a dependent object where `N` names no type yet: a
+    /// `CXXPseudoDestructorExpr` keeping the identifier
+    /// ([`kiln_ast::templates::TemplateTables::pseudo_dtor_name`]).
+    fn dependent_destructor_name(
+        &mut self,
+        obj: DtorObject,
+        name: kiln_source::symbol::Symbol,
+        loc: Loc,
+        op_loc: Loc,
+    ) -> ExprId {
+        let e =
+            self.builder().pseudo_destructor_q(obj.b, obj.arrow, false, QualType::DEPENDENT, loc);
+        let _ = self.ast.templates.pseudo_dtor_name.insert(e, name);
+        if op_loc != loc {
+            let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+        }
+        e
+    }
+
+    /// The instantiation of [`Sema::dependent_destructor_name`]: `~name`
+    /// looked up in the class of the substituted object `base` only
+    /// (clang `getDestructorName` without a scope), as
+    /// [`Sema::act_on_member_destructor`] otherwise.
+    pub(crate) fn act_on_member_destructor_late(
+        &mut self,
+        base: ExprId,
+        name: kiln_source::symbol::Symbol,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        let obj = match self.destructor_object(base, loc, op_loc, arrow) {
+            Ok(o) => o,
+            Err(e) => return e,
+        };
+        if self.ast.types.is_dependent(obj.ty) {
+            return self.dependent_destructor_name(obj, name, loc, op_loc);
+        }
+        let named = obj.def.and_then(|d| {
+            let found = self.lookup_in_class(d, name, LookupKind::Ordinary);
+            self.type_named_by(&found)
+        });
+        let named = self.injected_named(named);
+        let Some((destroyed, td)) = named else {
+            let text = self.ast.symbols().as_str(name).to_owned();
+            // clang `getDestructorName` finds nothing in any object type.
+            let msg = self.diag(DiagId::sema_dtor_name_undeclared, loc).arg(text);
+            self.emit(msg);
+            return self.recover_err(&[obj.base], loc);
+        };
+        self.finish_member_destructor(obj, destroyed, Some(td), DtorQual::None, loc, loc, op_loc)
     }
 
     /// True if a member access on `base` that continues `type-name :: ~`
@@ -682,6 +737,20 @@ impl Sema<'_, '_> {
             });
         let named = self.injected_named(named);
         let Some((destroyed, td)) = named else {
+            // `p->Base<T>::~Base()` with a dependent qualifier: `~Base`
+            // names the class the qualifier denotes ([basic.lookup.qual]/
+            // 4 — the injected-class-name of the same class template),
+            // rebuilt as a qualified destructor member at instantiation.
+            if self.is_dependent_ctx(q.ctx)
+                && let kiln_ast::types::Nns::Type { ty, .. } = self.ast.types.nns_view(q.nns)
+                && self.nns_last_name(q.nns) == Some(name)
+            {
+                let e = self.builder().pseudo_destructor_q(obj.b, obj.arrow, true, ty, loc);
+                if op_loc != loc {
+                    let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+                }
+                return e;
+            }
             if self.ast.types.is_dependent(obj.ty) || self.is_dependent_ctx(q.ctx) {
                 self.templ_unimplemented("a dependent destructor name", loc);
             } else {
@@ -1700,6 +1769,18 @@ impl Sema<'_, '_> {
     /// Reports the names of non-static members used without an object
     /// ([expr.prim.id.general]/4) at the end of a full-expression; true
     /// if one was reported.
+    ///
+    /// Every pending reference is flushed, including those of an
+    /// enclosing full-expression still being parsed when a nested one
+    /// ends (a template argument's constant expression, a lambda body's
+    /// statement). That is only an ordering difference: a pending
+    /// reference with `error` set is ill-formed whatever follows (the
+    /// uses it could still become, `&C::m` and an unevaluated operand,
+    /// either cannot enclose a nested full-expression or clear `error`
+    /// when the reference is formed), and the nested and enclosing
+    /// expressions share one SFINAE context. WP-445 found no program
+    /// whose answer changes, so it is left as is (spec/sema.md §3,
+    /// members named without an object).
     pub(crate) fn flush_member_refs(&mut self) -> bool {
         if self.member_refs.is_empty() {
             return false;

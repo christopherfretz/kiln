@@ -1,7 +1,7 @@
 # Bench: `cargo xtask bench`
 
 Status: implemented (WP-004; constexpr counters and per-entry thresholds
-WP-006; `perf.md` merging WP-006b). Code: `xtask/src/bench/`, with shared pieces in
+WP-006; `perf.md` merging WP-006b; the `libcxx-slice` entry WP-317). Code: `xtask/src/bench/`, with shared pieces in
 `xtask/src/util/` (`process.rs` measured runs, `header.rs` the `//@` scanner,
 `json.rs` the record format). Policy background is `docs/VALIDATION.md`
 "Performance tracking"; this file is the normative contract for the harness,
@@ -18,7 +18,7 @@ cargo xtask bench [options] [paths...]
 | `--compiler <path>` | Compiler to measure. Default: `cargo build --release -p kiln_driver`, then `<target>/release/kiln++` (a debug kiln says nothing about performance). |
 | `--baseline <dir>` | Baseline directory. Default `bench/baselines`. Relative paths are taken from the repo root. |
 | `--record` | Write the measurements as the new baselines (see "Recording"). With `--compare-with`, also merge the ratio table into `docs/status/perf.md`. |
-| `--compare-with <path>` | Also measure this compiler (normally `clang++-19`) on the same entries and print the ratio table. |
+| `--compare-with <path>` | Also measure this compiler on the same entries and print the ratio table: `clang++-22` (the libc++ slice's oracle, the M4 reference), or `clang++-19` for the history of `docs/status/perf.md`. |
 | `--filter <substr>` | Keep only entries whose id (`<group>/<name>`) contains `<substr>`. |
 | `--runs <N>` | Runs per entry, N >= 1. Default 5. |
 | `--threshold-time <PCT>` | Allowed wall-clock regression, percent, >= 0. Default 5. |
@@ -35,7 +35,8 @@ A `--threshold-*` option overrides the same entry's `threshold-*:` directive
 `--flag=value` is accepted for every option that takes a value. `paths` are
 files or directories under the bench root (default: all of `bench/`); a
 relative path that does not exist from the current directory is taken from
-the repo root.
+the repo root. `bench/libcxx-slice` (or its `slice.list`) selects the libc++
+slice; the default `bench/` does not (see "The libcxx-slice entry").
 
 Exit status:
 
@@ -70,6 +71,59 @@ and semantic analysis), `overload` (overload resolution: named calls over
 large overload sets, constructor and conversion selection;
 spec/sema-overload.md §11), `runtime` (`mode: run`: the speed of the generated
 program, e.g. a `std::generator<int>` iterated 10M times).
+
+## The libcxx-slice entry
+
+`bench/libcxx-slice/slice.list` names ~50 heavy libc++ tests, one path per
+line relative to the `libcxx/test` directory of the llvmorg-22.1.8 checkout
+`cargo xtask libcxx` uses (`libcxx::M4_TAG`); blank lines and `#` comments are
+skipped, and an absolute path, `..`, an empty component, a non-`.cpp` path, a
+repeated path or an empty list is a usage error (exit 2). Each listed test is
+an entry with id `libcxx-slice/<path without .cpp>` and mode `syntax`; it has
+no directives (the file is a libc++ test, not a bench entry). `--filter`
+applies to these ids.
+
+- **Selection.** Only an explicit `bench/libcxx-slice` or
+  `bench/libcxx-slice/slice.list` path selects the slice, alone or beside
+  other paths; the default run over `bench/` does not, because it needs the
+  libc++ 22 checkout and takes minutes, which every regression run would pay.
+- **Flags.** Each compiler compiles each test exactly as the libc++ runner
+  would at `-fsyntax-only` (`spec/libcxx.md` "Commands"): `libcxx::syntax_compiles`
+  builds the runner's base flags, the test's `ADDITIONAL_COMPILE_FLAGS`,
+  feature-dependent flags and supported warning flags for that compiler
+  (clang gets `-nostdinc++ -isystem` of the libc++ 22 headers, kiln its
+  `-fclang-compat=22` and `-resource-dir`), with `KILN_LLVM_DIR` set; a
+  `.verify.cpp` test keeps its `-verify` flags. A test the runner would not
+  compile at `-fsyntax-only` (UNSUPPORTED on this host, XFAIL, a `.sh.cpp` or
+  a compile-fail test) fails the entry with the reason; the list holds none.
+  Neither the constexpr nor the instantiation report flag is passed (the
+  runner passes neither). The recorded `flags` show paths under the repo
+  root relative to it and toolchain paths from `.toolchain/` on, so a
+  worktree and the main checkout record the same string. The oracle must be
+  clang 20 or later: libc++ 22's `<__configuration/compiler.h>` warns
+  "Libc++ only supports Clang 20 and later", and the runner's `-Werror`
+  makes that an error, so with `--compare-with clang++-19` every clang side
+  fails. The slice's oracle is `clang++-22`.
+- **Measurement.** As any entry: serial, one compiler process at a time,
+  `--runs` runs, the memory cap with kiln's stack reservation added. The
+  1-minute load average is sampled before each test.
+- **Not judged.** Slice entries are never compared with baselines and never
+  recorded in `bench/baselines/` (their status is `not judged`, counted in
+  the summary); a failed compile still fails the run. Their meaning is the
+  ratio to the oracle measured in the same window: an absolute millisecond
+  baseline from another window moves with the load of this shared host
+  (5–30% at load 8–27, "Regression policy"), and ~50 tests at that noise
+  would fail some run every day. The ratio absorbs most of the load because
+  both compilers run back to back on each test, so it is what is recorded
+  and tracked, by hand, release to release (`docs/status/perf.md`).
+- **Report.** With `--compare-with` the printed output has a per-test table
+  (both medians, the time ratio, both peak RSS values, the memory ratio), the
+  load average (first, mean, max of the samples), and the aggregate ratios
+  over the tests both compilers measured: time median, geometric mean,
+  nearest-rank p90 and maximum with the test that has it; memory likewise. A
+  failed side is `FAIL` in the table and left out of the aggregates, whose
+  count says how many tests they cover. These rows are not in the ordinary
+  ratio table or its geometric means.
 
 ## Directives
 
@@ -217,6 +271,9 @@ not.
 
 An improvement is a hint to re-record, never a failure.
 
+The libc++ slice is record-only: its entries get no verdict (see "The
+libcxx-slice entry").
+
 ## Recording
 
 `--record` merges each successfully measured entry into
@@ -262,6 +319,14 @@ With `--compare-with`, `--record` also **merges** the ratio table (see
   compilers, a malformed or repeated row) the page is written from this run
   alone, with a warning on stdout; the rows it held are lost.
 
+- A section headed `## libc++ slice`, between the table and the
+  hand-written section, holds the slice's last recording: its header (both
+  compilers, the host, N, the RSS source, the load average), the aggregate
+  table and the per-test table. A recording that measured slice entries
+  rewrites the whole section from them; any other recording keeps it
+  verbatim. A recording of the slice alone keeps the main table and its
+  header verbatim. The slice's rows never enter the main table, its stale
+  marks or its means.
 - A section headed `## Measured by hand` (to the end of the page) holds
   measurements no entry makes, such as a libc++ test timed under a debug
   and a release kiln (WP-313). Every recording keeps it verbatim after the
@@ -391,6 +456,19 @@ kinds. `recorded` is the timestamp of the results file of the recording run.
   the entry returns, dropped by a whole-corpus recording), pages that cannot
   be merged into, the pre-`Recorded` and pre-instantiations layouts, and the
   committed page parsing.
+- `xtask/src/bench/slice.rs`: the list format and every rejection, the
+  committed list parsing (sorted), explicit selection, ids and entries
+  under `--filter`, the shown flags, the distributions (odd and even
+  counts, nearest-rank p90, ties for the maximum, zero and non-finite
+  ratios), the aggregate over rows with a failed side, the printed report
+  and the `perf.md` section, and `--help` listing the entry.
+- `xtask/src/bench/perf_md.rs` `splits_out_the_slice_section`: the page cut
+  into table, slice section and hand-written section and put back verbatim,
+  and a page gaining the section in its place.
+- `xtask/src/libcxx/run.rs` `syntax_args_follow_the_runner`: the slice's
+  compile flags are the runner's (base flags, the test's own flags, then
+  `-fsyntax-only` or the verify flags), and a `.sh.cpp`, UNSUPPORTED or
+  XFAIL test is refused.
 - `xtask/src/bench/tests.rs`: command-line parsing, results-name collisions,
   and an end-to-end smoke test with `clang++-19` (skipped when absent) over
   `xtask/fixtures/bench/`: record (with perf.md), compare green, a doctored

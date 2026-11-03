@@ -110,6 +110,13 @@ impl Substituter<'_, '_, '_> {
         if !v.iter().any(|&x| self.braced_source(x).is_some() || self.braced_pattern(x).is_some()) {
             return self.expr_list(l);
         }
+        self.braced_args(v)
+    }
+
+    /// The rebuild of [`Self::call_arg_list`] for an argument list holding a
+    /// braced argument (or a braced pack expansion), up to the first
+    /// `CXXDefaultArgExpr`.
+    fn braced_args(&mut self, v: Vec<ExprId>) -> SubstResult<Vec<ExprId>> {
         let mut out = Vec::with_capacity(v.len());
         for x in v {
             if self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultArgExpr {
@@ -527,8 +534,14 @@ impl Substituter<'_, '_, '_> {
                 let (base, arrow, destroyed) = ex(self).pseudo_destructor(e);
                 let qualified = ex(self).pseudo_destructor_qualified(e);
                 let base = self.member_base(base)?;
-                let destroyed = self.ty(destroyed, loc)?;
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
+                // `p->~N()` whose `N` named no type at the definition: it
+                // is looked up now, in the object's class (clang
+                // `TransformCXXPseudoDestructorExpr` → `getDestructorName`).
+                if let Some(&name) = self.sema.ast.templates.pseudo_dtor_name.get(e) {
+                    return Ok(self.sema.act_on_member_destructor_late(base, name, loc, op, arrow));
+                }
+                let destroyed = self.ty(destroyed, loc)?;
                 Ok(self.sema.rebuild_member_destructor(base, destroyed, qualified, loc, op, arrow))
             }
             ExprKind::CXXDependentScopeMemberExpr => {
@@ -1956,8 +1969,13 @@ impl Substituter<'_, '_, '_> {
         self.expr(e)
     }
 
-    /// Written arguments, pack expansions expanded.
+    /// Written arguments, pack expansions expanded; a braced argument
+    /// (`m(v, {v + 1})`, `m(a..., {a..., 7})`) is rebuilt as a braced
+    /// argument as in a call ([class.base.init]/7, WP-445).
     fn written_args(&mut self, v: &[ExprId]) -> SubstResult<Vec<ExprId>> {
+        if v.iter().any(|&x| self.braced_source(x).is_some() || self.braced_pattern(x).is_some()) {
+            return self.braced_args(v.to_vec());
+        }
         self.expand_exprs(v)
     }
 

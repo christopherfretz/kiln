@@ -5,13 +5,12 @@
 // re-exporting the first (libc++ 22's std.compat over std; the M5 cluster
 // "std.compat GMF visibility", docs/status/libcxx-m5.md). clang builds each
 // unit separately and accepts. kiln builds gdx_m in-process after gdx_c's
-// GMF and merges gdx_m's GMF declarations with gdx_c's (spec/modules.md §6):
-// it reports "redefinition of 'is_b'" and "missing '#include'; 'byte' must
-// be declared before it is used" inside gdx_m.
+// GMF and merges gdx_m's GMF declarations with gdx_c's (spec/modules.md §6;
+// before WP-460 it reported "redefinition of 'is_b'" and "missing
+// '#include'; 'byte' must be declared before it is used" inside gdx_m).
 //@ expect: compile-ok
 //@ module: gdx_m=Inputs/gdx-m.cppm
 //@ module: gdx_c=Inputs/gdx-c.cppm
-//@ xfail(kiln): GMF declarations of an in-process imported unit merge with the importer's GMF (libc++ std.compat.pass)
 import gdx_c;
 static_assert(sizeof(std::byte) == 1);
 static_assert(std::is_b<std::byte>);
