@@ -5,7 +5,7 @@
 // define_aggregate) lands at that point; a nested class's block runs
 // before the enclosing class is complete.
 //@ expect: compile-ok
-//@ args: -freflection -I tests/support
+//@ args: -Wno-kiln-extension -freflection -I tests/support
 //@ skip(clang): clang 19 has no consteval blocks (P3289R1) or reflection
 //@ strict-diags
 #include "kiln_meta.h"

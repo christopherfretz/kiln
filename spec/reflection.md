@@ -45,7 +45,7 @@ Section references in brackets are to the C++26 IS.
    its tests.
 6. **Extensions.** `__kiln_define_member` (§6.3) is the only one. It
    requires `-freflection` and warns under `-Wkiln-extension` (D7,
-   → WP-480). `std::meta::name_of`, `__kiln_members_count` /
+   on by default). `std::meta::name_of`, `__kiln_members_count` /
    `__kiln_member_at` and the recipe helpers of §3.5
    (`__kiln_reflection_range`, `__kiln_member_offset`,
    `__kiln_access_context`) are test-header conveniences, not IS.
@@ -113,7 +113,7 @@ the IS equality ([expr.eq]):
 - **Values** are interned by type and content in `ConstStore`:
   `reflect_constant(3) == reflect_constant(3)` (GCC 16.1 agrees; → WP-479).
 - **`data_member_spec`** results are interned by content: equal
-  arguments give equal reflections (GCC 16.1 agrees; → WP-480).
+  arguments give equal reflections (GCC 16.1 agrees; §6.1).
 - **Annotations** are distinct per occurrence, even with equal values
   (§7; GCC 16.1 agrees; → WP-481).
 
@@ -611,43 +611,117 @@ position's operand).
 
 ## 6. Defining classes
 
-### 6.1 `data_member_spec` (→ WP-480)
-- `data_member_spec(type, data_member_options)` validates its options
-  ([meta.reflection.define.aggregate]): the name must be an identifier
-  (`name_type` holds either a `u8string` or a `string`); the alignment
-  must be a power of two, no smaller than the type's; a bit-field width
-  needs an integral or enumeration type, and width zero needs no name;
-  `alignment` and `bit_width` are not both given; and `no_unique_address`
-  is accepted. GCC 16.1 is the reference for the full list.
-- The result is interned by content (§2.3) as `DataMemberSpec`.
-  `is_data_member_spec` tests for that kind.
+### 6.1 `data_member_spec`
+`data_member_spec(type, data_member_options)` validates its options
+([meta.reflection.define.aggregate]/3-5). The checks are GCC 16.1's, in
+its order (verified line by line:
+`meta.reflection.define.aggregate/data-member-spec-neg.cpp`). Each
+failure throws `std::meta::exception` (§8.2), so a `try` block catches
+it, with `from() == ^^data_member_spec`:
+1. `type` reflects a type: "'X' does not reflect a type".
+2. It is an object or reference type: "'T' is not an object or reference
+   type" (`void`, function types, `int[]` is accepted here and rejected
+   by `define_aggregate`).
+3. A given name is an identifier ([lex.name]): "'n' is not a valid
+   identifier". `name_type` holds either form (a `u8string` or a
+   `string`, §3.5); the Oven reads its flag, then the pointer and length,
+   and the bytes are checked as UTF-8 by `kiln_lex::is_identifier`
+   (XID_Start/XID_Continue, `$` not accepted).
+4. It is not a keyword or alternative token: "'n' is a keyword, not an
+   identifier".
+5. A name or a bit-field width is given: "neither 'name' nor 'bit_width'
+   specified".
+6. Not both `alignment` and `bit_width`: "both 'alignment' and
+   'bit_width' specified".
+7. An alignment is a positive power of two: "'alignment' a is not a
+   positive power of two".
+8. It is no smaller than the type's: "'alignment' a is smaller than the
+   alignment n of 'T'" (checked when `T` is complete and not a reference;
+   no instantiation is started for it).
+9. A width needs an integral or enumeration type: "'bit_width' specified
+   with non-integral and non-enumeration type 'T'".
+10. Not a width with `no_unique_address`: "'bit_width' specified with
+    'no_unique_address'".
+11. A width is not negative: "'bit_width' w is negative" (nor above
+    `INT_MAX`).
+12. Width zero has no name: "'bit_width' 0 specified with a 'name'".
+13. An unnamed bit-field's type is not cv-qualified: "unnamed bit-field of
+    cv-qualified type 'T'".
 
-### 6.2 `define_aggregate` (→ WP-480)
-**Preconditions**, checked in order. Each failure is a `MetaError`
-(§8.1):
-1. The evaluation is plainly constant-evaluated (§4.2). In a trial the
-   call fails silently (§4.3).
-2. `cls` reflects a class type that is incomplete and not being defined.
-3. The injection point lies in a scope where the class may be defined
-   ([expr.const], injected declarations; GCC 16.1 is the reference for
-   the exact rule): the consteval block is in the class's own scope, or
-   in a scope enclosing the class's target scope.
-4. Every element of the range is a `data_member_spec` reflection.
-5. Member names are unique (one `FxHashSet` over the spec names, not a
-   lookup per member).
+The result is a `DataMemberSpec(DmsId)` reflection. The description
+(type, name `Symbol`, alignment, width, `no_unique_address`) is interned
+by content in the Oven (`kiln_oven/src/meta/define.rs`, `DmsTable`), so
+two calls with the same options give the same reflection, whichever form
+the name was spelled in. `is_data_member_spec` tests for that kind.
+
+### 6.2 `define_aggregate`
+**Preconditions**, checked in order. They are "Constant When" ones: a
+failure is not a constant expression (a hard error with notes, §8.1),
+never a `std::meta::exception`, so a `try` block does not catch it:
+1. The evaluation is plainly constant-evaluated (§4.2): "'std::meta::
+   define_aggregate' can only be called from a 'consteval' block". A
+   `static_assert`, a constexpr variable's initializer or a template
+   argument is not. In a trial the call fails silently (§4.3), so a
+   `__builtin_constant_p` probe never mutates.
+2. `cls` reflects a class type ("'X' is not a class type"), not
+   cv-qualified, not being defined ("'C' is being defined") and not
+   complete ("'C' is already complete", plus "definition is here"; a
+   second `define_aggregate` of the same class lands here).
+3. **Scope rule** (GCC 16.1's): no function or class scope lies between
+   the class's target scope and the consteval block's scope, that is, on
+   either path below their nearest common enclosing scope. A lambda body
+   counts as a function scope. Otherwise: "'f' intervenes between the
+   scope of 'C' and the 'consteval' block" (or "a lambda intervenes"),
+   plus "'consteval' block defined here". So a block in `f` cannot
+   complete a namespace-scope class, nor a block at namespace scope a
+   class local to `f` or a member class `H::M`; a block in `H` can
+   complete `H::M`, and a block in `f` a class local to `f`.
+4. Every element of the range is a description with a complete type (or
+   a reference): "element i ('X') is not a data member description",
+   "type 'T' of data member description i is incomplete" (the class
+   itself, an incomplete class, `int[]`; a template specialization is
+   completed on demand first), "type 'T' of data member description i is
+   an abstract class".
+5. Member names are unique: "name 'n' used in multiple data member
+   descriptions". `_` may repeat ([basic.scope.scope]/5), and unnamed
+   bit-fields have no name.
+
+Checks 4 and 5 are one pass over the range with one `FxHashSet<Symbol>`
+(reserved to the range's length), so the first failing element is the
+one reported, as in GCC.
 
 **Effect.**
-- Sema appends one `Field` per spec. Each is flagged
-  `DeclFlags::INJECTED` and its injection point goes in a cold map.
-- Sema runs `act_on_finish_record` once and computes the layout once. The
-  class is complete when `define_aggregate` returns, so the rest of the
-  same evaluation already sees it as complete. The Oven refreshes that one
-  provisional slot at once, rather than at the next evaluation.
+- Sema starts the record's definition and appends one public `Field` per
+  description, in order (`Sema::inject_field`). Each is flagged
+  `DeclFlags::INJECTED`; its injection point (the consteval block) goes
+  in the cold `injection_point` map, and a later redeclaration conflict
+  notes "member injected here". The location of the call is the field's
+  location. Alignment becomes an `alignas`, the width a bit-field width
+  (a width above the type's size warns as a declared one does),
+  `no_unique_address` the attribute. `#pragma pack` at the block does not
+  apply.
+- Sema runs `act_on_finish_record_definition` once, which computes the
+  layout and the aggregate and triviality bits once. The class is
+  complete when `define_aggregate` returns, so the rest of the same
+  evaluation already sees it as complete (`sizeof`, `new C{...}`, member
+  access).
+- **Provisional slots.** A type slot the Oven gives an incomplete class
+  stays `Opaque` and is rebuilt in place once the class is complete, so
+  pointers already naming it stay valid. The Oven keys these slots by the
+  class's first declaration and keeps their set (`FxHashSet<OTy>`) for
+  `intern`'s membership test. The AST logs each completed record; the
+  log's length is the completion epoch, and the Oven keeps the epoch it
+  has applied. A refresh (before each evaluation, and after each
+  `Mutating` op so the rest of the evaluation sees the class complete)
+  reads only the log entries since that epoch and rebuilds their slots:
+  O(classes completed since), O(1) when none was, never a scan of all
+  provisional slots (`stress/incomplete-classes-many.cpp`: 5,000
+  provisional slots, 10,000 evaluations, 100 completions).
 - The result is `cls`.
 
-**Cost.** O(n) in the number of specs. Names are interned as `Symbol`s
-straight from Oven memory (no `String` per name), using a reused scratch
-buffer.
+**Cost.** O(n) in the number of descriptions: one hash set, one record
+finish. Names are already `Symbol`s in the interned descriptions.
+`stress/define-aggregate-10k.cpp` budgets a 10,000-member class.
 
 **This is the one exception** to "a class is frozen at its closing `}`"
 (spec/ast.md §2.4). It is serialized through sema, so the Oven never
@@ -657,8 +731,12 @@ observes a half-completed class.
 `__kiln_define_member(info cls, info type, const char* name)`, declared at
 TU scope. It is `Mutating`. It appends a public non-static data member to
 a class *while that class is being defined*, which is a different rule
-from §6.2. Requiring `-freflection` and warning under `-Wkiln-extension`
-are → WP-480. When the call succeeds, it appends a `Field` named `name` of
+from §6.2. Like every intrinsic it exists only under `-freflection`
+(§3.1). Each call that is evaluated warns "'__kiln_define_member' is a
+kiln extension; use 'std::meta::define_aggregate'" under
+`-Wkiln-extension` (on by default; `-Wno-kiln-extension` silences it).
+It injects through §6.2's path (`Sema::inject_field`). When the call
+succeeds, it appends a `Field` named `name` of
 type `type`, flagged `DeclFlags::INJECTED` and carrying the call's
 location, at the point the member-specification has reached, and returns
 the member's reflection. Completion at `}` provides the layout,

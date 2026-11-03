@@ -3,7 +3,7 @@
 // injected member; a block in a template definition is not evaluated
 // until then), with the enclosing template's arguments.
 //@ expect: compile-ok
-//@ args: -freflection -I tests/support
+//@ args: -Wno-kiln-extension -freflection -I tests/support
 //@ skip(clang): clang 19 has no consteval blocks (P3289R1) or reflection
 //@ strict-diags
 #include "kiln_meta.h"

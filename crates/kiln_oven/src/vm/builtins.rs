@@ -686,7 +686,7 @@ impl Oven {
     /// The bytes `[p, p + n)` of a one-byte-element run, if they are all
     /// initialized plain data of an allocation without unions; `n` is
     /// clamped to the elements left in `p`'s array.
-    fn byte_run(&self, p: u64, elem: OTy, n: u64) -> Option<&[u8]> {
+    pub(crate) fn byte_run(&self, p: u64, elem: OTy, n: u64) -> Option<&[u8]> {
         let (_, len, cur, _) = self.extent_of(p, elem).ok()?;
         let n = n.min(len - cur);
         let (sp, abs, a) = self.mem.check(p, n, false).ok()?;
