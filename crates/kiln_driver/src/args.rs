@@ -316,6 +316,13 @@ pub struct Args {
     /// of that name): the vtable group of every complete dynamic class,
     /// spec/driver.md.
     pub dump_vtable_layouts: bool,
+    /// `-fkiln-dump-cfg` (`-fsyntax-only`): the control-flow graph of
+    /// every analysed function body, in clang's `debug.DumpCFG` layout
+    /// (spec/sema.md §7.5.4).
+    pub dump_cfg: bool,
+    /// `-fkiln-cfg-max-elems=N`: the element cap of one body's graph
+    /// (spec/sema.md §7.5).
+    pub cfg_max_elems: Option<usize>,
     /// `-o <file>`.
     pub output: Option<String>,
     /// The action.
@@ -660,8 +667,16 @@ impl Args {
                 self.dump_record_layouts = true;
             }
             "-fdump-vtable-layouts" => self.dump_vtable_layouts = true,
+            "-fkiln-dump-cfg" => self.dump_cfg = true,
             _ => {
-                if let Some(v) = arg.strip_prefix("--driver-mode=") {
+                if let Some(v) = arg.strip_prefix("-fkiln-cfg-max-elems=") {
+                    match v.parse::<usize>() {
+                        Ok(n) => self.cfg_max_elems = Some(n),
+                        Err(_) => {
+                            self.errors.push(ArgError::InvalidInt(arg.to_owned(), v.to_owned()));
+                        }
+                    }
+                } else if let Some(v) = arg.strip_prefix("--driver-mode=") {
                     match DriverMode::from_flag(v) {
                         Some(m) => self.mode = m,
                         None => self.errors.push(ArgError::UnsupportedValue(
