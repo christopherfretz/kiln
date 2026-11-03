@@ -3038,8 +3038,24 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   20+ `FoldBitCast`), and otherwise stays a `bitcast (...)` constant
   expression. So storing a constant `bool` vector to a local is `store iP
   bitcast (<P x i1> <...> to iP)`, as clang's.
+- *Arrays* (WP-438), as clang's `ConstExprEmitter`
+  `EmitArrayInitialization` / `EmitArrayConstant`: an array of `bool`
+  vectors at any depth keeps `<N x i1>` elements (`[2 x [2 x <4 x
+  i1>]]`), also as a class member (`record_elems`). The desired type is
+  the memory form (`bool_vec_mem_form`: `<4 x i1>` is `i8`), so an
+  all-zero array is `[3 x i8] zeroinitializer` and a trailing zero array
+  without a common type is `[k x i8]`. A value-initialized element, filler
+  or member (`ImplicitValueInitExpr`, clang `EmitNullConstant`) of a
+  `bool` vector, array of them or class is the null of its memory type
+  (`i8 0`, `[2 x i8] zeroinitializer`, `%struct.P zeroinitializer`), so a
+  partly initialized array is a packed struct (`<{ <4 x i1>, <4 x i1>, i8,
+  i8 }>`). `array_const` takes clang's `CommonElementType` over the
+  explicit elements only: a trailing zero array of 8 or more is of their
+  common type (`[9 x <{ <4 x i1>, i8 }>]`) even when the filler's differs.
 - Test: `tests/codegen/bool_vector_const.cpp` (exact on both triples
-  under oracle 19, structural under 22).
+  under oracle 19, structural under 22); arrays and members:
+  `tests/codegen/bool_vector_array_const.cpp`; unions:
+  `tests/codegen/bool_vector_union_const.cpp` (WP-438).
 
 ## 7t. Landed (WP-444): GNU computed goto (`stmt.rs`)
 - `&&l` (clang `GetAddrOfLabel`, `addr_of_label`) is `blockaddress(@f,
