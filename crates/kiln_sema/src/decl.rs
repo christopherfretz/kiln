@@ -5372,21 +5372,8 @@ impl Sema<'_, '_> {
         loc: Loc,
         direct: bool,
     ) -> Option<QualType> {
-        use crate::templ::auto::{AutoFail, AutoInit};
-        let (items, kind, lbrace) = match init {
-            Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
-            Initializer::Paren(es, ..) => {
-                (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
-            }
-            Initializer::List(l) if direct => (
-                crate::templ::auto::auto_list_items(l, false),
-                AutoInit::DirectList,
-                Some(l.lbrace),
-            ),
-            Initializer::List(l) => {
-                (crate::templ::auto::auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace))
-            }
-        };
+        use crate::templ::auto::AutoFail;
+        let (items, kind, lbrace) = auto_init_items(init, direct);
         // [temp.deduct.call]/6: every member of an overload set deduces
         // `auto`, so nothing is deduced (a placeholder in a function
         // declarator selecting one member is not implemented) -- except
@@ -9561,4 +9548,23 @@ fn escape_diag_text(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// The deduction form of a variable's initializer `init`: its items (a
+/// braced list's elements), the form, and a braced list's `{`.
+fn auto_init_items(
+    init: &Initializer,
+    direct: bool,
+) -> (Vec<Option<ExprId>>, crate::templ::auto::AutoInit, Option<Loc>) {
+    use crate::templ::auto::{AutoInit, auto_list_items};
+    match init {
+        Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
+        Initializer::Paren(es, ..) => {
+            (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
+        }
+        Initializer::List(l) if direct => {
+            (auto_list_items(l, false), AutoInit::DirectList, Some(l.lbrace))
+        }
+        Initializer::List(l) => (auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace)),
+    }
 }
