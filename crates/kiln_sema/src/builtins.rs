@@ -2058,7 +2058,13 @@ impl Sema<'_, '_> {
             return self.recover_err(&[sub], loc);
         }
         for (t, which) in [(ty, "1"), (src, "0")] {
-            if self.ast.types.is_reference(t) || !self.is_trivially_copyable_type(t) {
+            // `std::meta::info` is scalar, hence trivially copyable, but it
+            // has no value representation to cast through (P2996
+            // [basic.types.general]: a consteval-only type).
+            if self.ast.types.is_reference(t)
+                || !self.is_trivially_copyable_type(t)
+                || self.is_meta_info(t)
+            {
                 let msg = self.diag(DiagId::sema_bit_cast_not_trivially_copyable, loc).arg(which);
                 self.emit(msg);
                 return self.recover_err(&[sub], loc);
