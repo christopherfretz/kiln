@@ -1267,8 +1267,22 @@ impl Sema<'_, '_> {
             let at = self.ast.exprs.get(e).loc();
             self.act_on_error_expr(&[e], at)
         };
+        // The same concept defined in another unit's global module
+        // fragment (clang `CheckConceptRedefinition`): the earlier one is
+        // made visible and the new one kept out of lookup
+        // (spec/modules.md §6).
+        let merged = self
+            .prev_candidates(name, None)
+            .into_iter()
+            .rev()
+            .find(|&p| self.kind_of(p) == DeclKind::Concept)
+            .filter(|&p| self.module_merge_hidden_definition(p));
         let h = DeclHead::new(self.ctx, DeclName::ident(name), loc);
-        self.builder().concept(h, head, e)
+        let c = self.builder().concept(h, head, e);
+        if merged.is_some() {
+            self.builder().unregister_name(c);
+        }
+        c
     }
 
     /// `requires (params) {` ([expr.prim.req]/1): opens the body whose

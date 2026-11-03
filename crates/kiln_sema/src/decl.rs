@@ -4852,7 +4852,9 @@ impl Sema<'_, '_> {
         ext: bool,
         prev_def: bool,
     ) -> bool {
-        if !ext && prev_def {
+        // The same entity defined in another unit's global module
+        // fragment: merged, not redefined (spec/modules.md §6).
+        if !ext && prev_def && !self.module_merge_hidden_definition(p) {
             let msg = self.diag(DiagId::sema_redefinition, at).arg(n);
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
@@ -6073,6 +6075,9 @@ impl Sema<'_, '_> {
             && prev != f
             && !self.is_dependent_friend_fn(f)
             && !self.is_dependent_friend_fn(prev)
+            // The same function defined in another unit's global module
+            // fragment: merged, its body kept (spec/modules.md §6).
+            && (deleted.is_some() || !self.module_merge_hidden_definition(prev))
         {
             let msg = self
                 .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
@@ -6662,7 +6667,15 @@ impl Sema<'_, '_> {
                     if self.ast.definition(p).is_some() {
                         // Diagnosed as the specialization already
                         // (`respecialized`): no further redefinition error.
-                        if !respecialized {
+                        if self
+                            .ast
+                            .definition(p)
+                            .is_some_and(|d| self.module_merge_hidden_definition(d))
+                        {
+                            // Silent (spec/modules.md §6): the body is
+                            // skipped like a redefinition's.
+                            redefined = true;
+                        } else if !respecialized {
                             redefined = self.diag_tag_redefinition(p, n, nloc);
                         }
                         prev = None;
@@ -6689,6 +6702,7 @@ impl Sema<'_, '_> {
                     // class redeclaration `struct N; struct N;` (clang
                     // `ActOnTag`): both join `p`'s chain (below).
                     if inst || head.is_none() && is_enum {
+                        self.module_merge_hidden_redecl(p);
                         return p;
                     }
                 }
