@@ -140,6 +140,12 @@ impl AttrKind {
     /// ([`LoopHint::pack`]), `loc` the pragma-name token (`unroll`,
     /// `loop`) (WP-449).
     pub const LOOP_HINT: AttrKind = AttrKind(112);
+    /// `[[clang::uninitialized]]` / `__attribute__((uninitialized))` on a
+    /// local variable (clang `UninitializedAttr`): no
+    /// `-ftrivial-auto-var-init` fill (spec/codegen.md §7y; WP-452).
+    /// Numbered apart from the run above so a concurrent addition there
+    /// does not collide.
+    pub const UNINITIALIZED: AttrKind = AttrKind(140);
 }
 
 /// What a loop hint controls (clang `LoopHintAttr::OptionType`).

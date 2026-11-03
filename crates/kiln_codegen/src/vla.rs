@@ -62,7 +62,7 @@ impl Cg<'_> {
     /// clang `getVLASize`: the total element count of the variable length
     /// array type `q` (its nested variable length dimensions multiplied)
     /// and its first non-variable element type.
-    fn vla_size(&mut self, q: QualType) -> R<(V, QualType)> {
+    pub(crate) fn vla_size(&mut self, q: QualType) -> R<(V, QualType)> {
         let mut q = q;
         let mut n: Option<V> = None;
         while let TypeView::VariableArray { elem, size } = self.ast.types.canonical_view(q) {
@@ -130,8 +130,10 @@ impl Cg<'_> {
             }
             t = elem;
         }
-        self.f.locals.insert(d, Addr { v, ty, align });
-        Ok(())
+        let addr = Addr { v, ty, align };
+        self.f.locals.insert(d, addr);
+        // [basic.indet]/1: the erroneous value (spec/codegen.md §7y).
+        self.auto_var_init_vla(d, q, addr)
     }
 
     /// clang `EmitArraySubscriptExpr` of an element of variable length

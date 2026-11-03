@@ -11,6 +11,7 @@
 //@ expect: ir
 //@ requires: clang>=22
 //@ requires: llvm>=22
+//@ args: -ftrivial-auto-var-init=uninitialized
 struct Inc;
 struct alignas(16) Over { int v; };
 struct Base { virtual ~Base(); long l; };
