@@ -809,7 +809,19 @@ member functions and comparison operators may be defaulted`. An `= default`
 written in the class body is a definition there and so implicitly inline
 ([class.mfct]/1; clang `setImplicitlyInline`; the dump prints
 `implicit-inline`); one written out of class is not. Explicitly defaulted on its first
-declaration → not user-provided; out of line → user-provided, defined there. A
+declaration → not user-provided; out of line → user-provided, defined there
+(`defaulted_impl` → `define_implicit_special` on the out-of-line declaration
+once `check_out_of_line_defaulted` passes; clang `SetDeclDefaulted` →
+`DefineDefaultedFunction`), so codegen emits it and the Oven evaluates it. A
+member of a class template whose pattern is defaulted out of line is defined
+when the member's definition is instantiated
+(`instantiate_out_of_line_defaulted`, without the `= default` checks, as
+clang), its context note "in defaulted ... first required here" at the
+pattern's definition. Known difference: an error inside that instantiated
+definition is located at the member's in-class declaration where clang
+uses the pattern's out-of-line one. Tests:
+`tests/conformance/dcl.fct.def.default/out-of-line-defined-run.cpp`,
+`constexpr-out-of-line-cxx20.cpp`. A
 deleted function must be deleted on its first declaration. Signature checks of
 [dcl.fct.def.default]/2–3 (`the parameter for an explicitly-defaulted copy
 constructor is const, but a member or base requires it to be non-const`, return
@@ -899,9 +911,15 @@ WP-400 models clang's `DefaultedDefaultConstructorIsConstexpr` and
 - Tests: `tests/conformance/class.default.ctor/constexpr-defaulted-cxx{20,23}.cpp`,
   `tests/conformance/dcl.fct.def.default/consteval-special-cxx{20,23}.cpp`,
   `tests/conformance/dcl.fct.def.default/cmp-constexpr-mismatch{,-cxx23}.cpp`.
-- Open: the C++20 `-Winvalid-constexpr` "constexpr constructor never
-  produces a constant expression" for an implicit or unspecified defaulted
-  default constructor used in a constant expression; clang 14-17's
+- An implicit or defaulted constructor (in the class or out of line) that
+  can never be constant is not diagnosed at its definition, even under
+  `-Winvalid-constexpr` (clang 19 and 22 run `isPotentialConstantExpr`
+  only on written bodies); a use in a constant expression gets the
+  default member initializer's note and "in call to 'X()'"
+  (`dcl.fct.def.default/constexpr-out-of-line-cxx20.cpp`). Kiln does not
+  yet implement the check for written bodies either ("constexpr
+  {function|constructor} never produces a constant expression", an
+  error by default before C++23). Open: clang 14-17's
   acceptance of a vbase class with an invalid constexpr constructor as
   literal (not mirrored; tests pin C++20 and later).
 
