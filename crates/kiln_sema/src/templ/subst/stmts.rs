@@ -350,8 +350,9 @@ impl Substituter<'_, '_, '_> {
             // clang `TransformAttributedStmt`: each assumption is
             // substituted and built again (`BuildCXXAssumeExpr`, so the
             // instantiation gets its own conversion and `-Wassume`); the
-            // other statement attributes (likelihood, fallthrough) are
-            // kept as they are, already checked in the definition.
+            // other statement attributes (likelihood, fallthrough, a loop
+            // hint without a dependent value) are kept as they are,
+            // already checked in the definition.
             StmtKind::AttributedStmt => {
                 use kiln_ast::ids::RawId;
                 let list = self.sema.ast.stmts.stmt_attrs(s);
@@ -359,6 +360,18 @@ impl Substituter<'_, '_, '_> {
                 let mut kept = Vec::with_capacity(attrs.len());
                 for a in attrs {
                     let node = *self.sema.ast.attrs.get(a);
+                    // A loop hint's dependent value (clang
+                    // `TransformLoopHintAttr`).
+                    if node.kind == kiln_ast::attr::AttrKind::LOOP_HINT {
+                        match ExprId::from_raw(node.a) {
+                            Some(e) if self.sema.expr_is_value_dependent(e) => {
+                                let e = self.expr(e)?;
+                                kept.push(self.sema.instantiated_loop_hint(a, e));
+                            }
+                            _ => kept.push(a),
+                        }
+                        continue;
+                    }
                     if node.kind != kiln_ast::attr::AttrKind::ASSUME {
                         kept.push(a);
                         continue;
