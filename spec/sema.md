@@ -3047,6 +3047,18 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   still lowers as the builtin. Tests:
   `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-written-first.cpp`,
   `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-implicit-first.cpp`.
+- **A function template with a builtin's name** (WP-446): a function
+  template declared at file scope with a builtin's name
+  (`template<class D, class S> void *__builtin_memmove(D*, S*, size_t)`)
+  does not redeclare the builtin and does not hide it. clang's
+  redeclaration lookup (`HandleDeclarator`'s `CreateBuiltins`) creates the
+  builtin in the translation unit first, so an unqualified (or `::`) name
+  that finds only file-scope functions and function templates, at least
+  one a template and none the builtin, also finds the lazily created
+  builtin, and overload resolution chooses: the template for an exact
+  `int*` match, the builtin for a tie ([over.match.best]/2.4). libc++
+  `copy_move_trivial.pass.cpp`. Test:
+  `tests/conformance/over.match.best/builtin-name-template.cpp`.
 - **Redeclaring a builtin** (WP-410; clang `MergeFunctionDecl`,
   `CheckEquivalentExceptionSpec`, `ActOnStartOfFunctionDef`): only a
   file-scope (translation-unit redeclaration context), non-`static`

@@ -1640,6 +1640,30 @@ impl Sema<'_, '_> {
                 d = found.decls[0];
             }
         }
+        // A function template declared at file scope with a builtin's name
+        // (`template<class D, class S> void *__builtin_memmove(D*, S*,
+        // size_t)`) does not redeclare the builtin: clang's redeclaration
+        // lookup creates the builtin in the translation unit first
+        // (`HandleDeclarator`'s `CreateBuiltins`), so both are candidates
+        // and the builtin wins a tie as a non-template ([over.match.best]/2.4;
+        // spec/sema.md §5.4).
+        if qualifier.is_none_or(|q| q == self.ast.tu)
+            && found.naming.is_none()
+            && found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate)
+            && found.decls.iter().all(|&x| {
+                matches!(self.kind_of(x), DeclKind::FunctionTemplate | DeclKind::Function)
+                    && self.ast.decls.builtin_id(x).is_none()
+                    && self.ast.decls.get(x).ctx().map(|c| self.ast.redecl_context(c))
+                        == Some(self.ast.tu)
+            })
+            && let Some(sym) = name.as_ident()
+            && let Some(b) = self.lazily_create_builtin(sym, loc)
+        {
+            found.decls.push(b);
+            if !found.found.is_empty() {
+                found.found.push(b);
+            }
+        }
         let any_tmpl = found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate);
         if any_tmpl
             && found.decls.iter().all(|&x| {
