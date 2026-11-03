@@ -42,6 +42,8 @@ pub struct Ast {
     pub stmts: StmtArena,
     /// Attributes (§7).
     pub attrs: AttrArena,
+    /// Annotations (P3394 `[[=e]]`; spec/annotations.md).
+    pub annots: crate::annot::AnnotArena,
     /// Immutable id lists.
     pub lists: IdLists,
     /// String literal bytes.
@@ -170,6 +172,7 @@ impl Ast {
             exprs: ExprArena::new(),
             stmts: StmtArena::new(),
             attrs: AttrArena::new(),
+            annots: crate::annot::AnnotArena::new(),
             lists: IdLists::new(),
             strings: StringPool::default(),
             names: NameTable::new(),
@@ -756,6 +759,7 @@ impl Ast {
             + self.exprs.live_bytes()
             + self.stmts.live_bytes()
             + self.attrs.live_bytes()
+            + self.annots.live_bytes()
             + self.lists.live_bytes()
             + self.lookup.live_bytes()
             + self.redecls.live_bytes()
@@ -783,6 +787,7 @@ impl Ast {
         r.extend_prefixed("exprs", self.exprs.heap_bytes());
         r.extend_prefixed("stmts", self.stmts.heap_bytes());
         r.extend_prefixed("attrs", self.attrs.heap_bytes());
+        r.extend_prefixed("annots", self.annots.heap_bytes());
         r.extend_prefixed("lists", self.lists.heap_bytes());
         r.extend_prefixed("strings", self.strings.heap_bytes());
         r.extend_prefixed("names", self.names.heap_bytes());
