@@ -242,9 +242,16 @@ impl Sema<'_, '_> {
         &mut self,
         ft: DeclId,
         to: QualType,
+        obj: Option<ArgInfo>,
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
-        let spec = self.deduce_spec(ft, None, None, DeduceTarget::Conversion(to), loc)?;
+        // An explicit object parameter is deduced from the object
+        // argument too (clang's `DeduceTemplateArguments` for a
+        // conversion function template, [temp.deduct.call]).
+        let objs: Vec<ArgInfo> = obj.into_iter().collect();
+        let opts = [IcsOptions::NONE];
+        let call = (!objs.is_empty()).then_some((&objs[..], &opts[..]));
+        let spec = self.deduce_spec(ft, None, call, DeduceTarget::Conversion(to), loc)?;
         if !self.specialize_lambda_conversion(ft, spec, loc) {
             let n = self.template_params(ft).len();
             let d = DeducedArgs::new(self.template_param_depth(ft), n);

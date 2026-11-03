@@ -1645,7 +1645,13 @@ impl Sema<'_, '_> {
         let a = set.args[0];
         let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
         let mut cand = super::Candidate::new(f, found, CandidateKind::ConvFn);
-        let obj = self.object_ics(&a, f);
+        // [over.best.ics.general]/4 (C++23): an explicit object parameter
+        // is copy-initialized from the object without user-defined
+        // conversions (clang `TryObjectArgumentInitialization`).
+        let obj = match self.explicit_object_param_type(f) {
+            Some(p) => self.try_implicit_conversion(&a, p, IcsOptions::SUPPRESS_UDC),
+            None => self.object_ics(&a, f),
+        };
         set.ics.push(obj);
         cand.ics = start..start + 1;
         if obj.is_bad() {
@@ -1784,7 +1790,8 @@ impl Sema<'_, '_> {
             return;
         }
         let loc = set.loc;
-        match self.deduce_conversion(ft, to, loc) {
+        let obj = self.has_explicit_object(pattern).then_some(set.args[0]);
+        match self.deduce_conversion(ft, to, obj, loc) {
             Ok(spec) => {
                 let n = set.cands.len();
                 self.add_conversion_candidate(set, spec, found, to, opts);

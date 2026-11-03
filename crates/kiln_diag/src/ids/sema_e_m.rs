@@ -44,6 +44,7 @@ sema_explicit_non_function = Error (0) "'explicit' can only appear on non-static
 sema_explicit_object_lambda_ambiguous_base = Error (2) "lambda {0} is inaccessible due to ambiguity:{1}";
 sema_explicit_object_lambda_capture_type = Error (2) "invalid explicit object parameter type {0} in lambda with capture; the type must {1:be the same as, or derived from,|derive publicly from} the lambda";
 sema_explicit_object_lambda_mutable = Error (0) "a lambda with an explicit object parameter cannot be mutable";
+sema_explicit_object_param_ctor_dtor = Error (1) "an explicit object parameter cannot appear in a {0:constructor|destructor}";
 sema_explicit_object_param_default = Error (0) "the explicit object parameter cannot have a default argument";
 sema_explicit_object_param_nonmember = Error (2) "an explicit object parameter cannot appear in a {0:static|virtual|non-member} {1:function|lambda}";
 sema_explicit_object_param_not_first = Error (1) "an explicit object parameter can only appear as the first parameter of the {0:function|lambda}";

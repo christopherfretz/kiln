@@ -1592,7 +1592,7 @@ impl Sema<'_, '_> {
     /// parameter is an explicit object parameter. Diagnoses one anywhere
     /// else, in a static, virtual or non-member function, with a
     /// cv- or ref-qualifier, a default argument or as a pack.
-    fn explicit_object_member(
+    pub(crate) fn explicit_object_member(
         &mut self,
         ds: &DeclSpec,
         d: &Declarator,
