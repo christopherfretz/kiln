@@ -1,0 +1,102 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_abi-39b472cfe1cae676)
+
+running 14 tests
+test target::tests::builtin_sizes ... ok
+test asm::tests::global_register_variables ... ok
+test irtype::tests::sve_builtins_lower_to_scalable_vectors ... ok
+test target::tests::bit_int_layout ... ok
+test asm::tests::clobbers ... ok
+test asm::tests::input_constraints_tie ... ok
+test asm::tests::output_constraints ... ok
+test asm::tests::simplify ... ok
+test dump_blocks::tests::record_layout_blocks_drop_builtins ... ok
+test target::tests::triple_spellings_and_aliases ... ok
+test asm::tests::template ... ok
+test dump_blocks::tests::vtable_blocks_are_a_set_without_original_maps ... ok
+test layout::tests::ensure_layout_refuses_an_incomplete_class ... ok
+test vtable::tests::non_dynamic_classes_are_rejected_without_caching ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/layout_bases.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/layout_bases-b8dd0daba9fc2e1b)
+
+running 8 tests
+test no_unique_address_member_after_empty_base ... ok
+test subobject_table_preorder ... ok
+test bit_fields_after_base ... ok
+test mixed_bases_and_empty_members ... ok
+test base_alignment_and_alignas ... ok
+test pragma_pack_caps_alignment ... ok
+test empty_base_same_type_rule ... ok
+test tail_padding_reuse_and_pod ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/layout_rules.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/layout_rules-5548b0090fbf845f)
+
+running 30 tests
+test fundamental_types_per_target ... ok
+test type_size_align_and_cache_fill ... ok
+test dump_format ... ok
+test arrays_of_records ... ok
+test packed_struct_has_byte_alignment ... ok
+test bit_fields_pack_within_their_unit ... ok
+test atomic_layout ... ok
+test unnamed_bit_field_alignment ... ok
+test struct_fields_in_order_with_padding ... ok
+test vector_layout ... ok
+test aligned_attribute_without_argument ... ok
+test member_pointers ... ok
+test empty_class_has_size_one ... ok
+test bit_int_layout ... ok
+test user_constructor_makes_non_pod ... ok
+test bit_field_straddling_its_unit_moves ... ok
+test primary_base_label_compares_classes ... ok
+test union_members_at_zero ... ok
+test enum_layout ... ok
+test no_unique_address_empty_members_overlap ... ok
+test aligned_typedefs ... ok
+test wide_bit_field ... ok
+test zero_width_bit_field ... ok
+test alignas_member_and_class ... ok
+test packed_field_and_explicit_alignment ... ok
+test flexible_and_zero_length_arrays ... ok
+test virtual_bases_diamond ... ok
+test nearly_empty_virtual_primary_base ... ok
+test vptr_and_non_virtual_primary_base ... ok
+test tail_padding_reuse_via_no_unique_address ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+
+     Running tests/layout_vs_clang.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/layout_vs_clang-78b847d22ec3ea4d)
+
+running 1 test
+test layout_matches_clang ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+     Running tests/vtable_rules.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/vtable_rules-a5ff6db6d08c5a72)
+
+running 5 tests
+test diamond_construction_vtables_and_vtt ... ok
+test covariant_return_thunk ... ok
+test non_virtual_this_thunk ... ok
+test virtual_this_thunk_and_vbase_offset ... ok
+test destructor_slots ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/vtable_vs_clang.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/vtable_vs_clang-9a1f2124359085c8)
+
+running 1 test
+test vtables_match_clang ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.30s
+
+   Doc-tests kiln_abi
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

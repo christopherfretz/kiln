@@ -1,0 +1,7 @@
+xtask libcxx: building kiln (cargo build --profile harness -p kiln_driver)
+xtask libcxx: 642 tests from /Volumes/AgentWork/kiln-helper/kiln/.toolchain/llvm-project/libcxx/test with /Volumes/AgentWork/kiln-helper/.build/target-wp-471/harness/kiln++ (harness, compile timeout 120 s, -j 4, jobserver fifo:/run/kiln/jobserver.fifo)
+
+Top clusters:
+
+642 tests: 636 pass, 0 fail, 0 xfail, 0 xpass, 6 unsupported (0 driver), 0 killed, 0 timeout, 0 error; pass rate 100.0%; wall 133.1 s; harness kiln
+EXIT 0

@@ -2394,7 +2394,9 @@ impl<'a> AstBuilder<'a> {
     /// `std::meta::info` prvalue. `a` is the operand (a `QualType` raw
     /// when `aux` is 0, a `DeclId` raw when `aux` is 1), `b` the
     /// [`crate::ids::ReflectionId`] index plus 1 (0 while the operand is
-    /// dependent: the expression is then value-dependent).
+    /// dependent: the expression is then value-dependent; also 0 when the
+    /// reflection table is full, which the caller diagnoses: a
+    /// non-dependent expression whose `reflect_value` is `None`).
     pub fn reflect_expr(
         &mut self,
         operand: crate::reflect::Reflectee,
@@ -2423,7 +2425,7 @@ impl<'a> AstBuilder<'a> {
                 Reflectee::Type(t) => Reflectee::Type(self.ast.types.canonical(t)),
                 r => r,
             };
-            self.ast.reflections.intern(canon).index()
+            self.ast.reflections.intern(canon).map_or(0, crate::ids::ReflectionId::index)
         };
         let e =
             self.simple(ExprKind::CXXReflectExpr, ValueCategory::PRValue, deps, aux, ty, loc, a, b);

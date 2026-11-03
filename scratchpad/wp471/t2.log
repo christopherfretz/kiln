@@ -1,0 +1,12 @@
+   Compiling xtask v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/xtask)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.56s
+     Running unittests src/main.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/xtask-0736a8ab1cdf7413)
+
+running 3 tests
+test entity_lint::lint_ignores_other_comparisons_and_allowed_lines ... ok
+test entity_lint::lint_flags_raw_decl_comparisons ... ok
+test entity_lint::reflection_code_compares_entities_not_decl_ids ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 240 filtered out; finished in 0.01s
+
+EXIT 0

@@ -1,0 +1,14 @@
+   Compiling kiln_source v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_source)
+   Compiling kiln_diag v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_diag)
+   Compiling hashbrown v0.15.5
+   Compiling kiln_ast v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_ast)
+   Compiling kiln_lex v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_lex)
+   Compiling kiln_pp v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_pp)
+   Compiling kiln_abi v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_abi)
+   Compiling kiln_oven v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_oven)
+   Compiling kiln_llvm v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_llvm)
+   Compiling kiln_driver v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_driver)
+   Compiling kiln_sema v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_sema)
+   Compiling kiln_codegen v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_codegen)
+   Compiling kiln_parse v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_parse)
+    Finished `harness` profile [optimized + debuginfo] target(s) in 1m 54s

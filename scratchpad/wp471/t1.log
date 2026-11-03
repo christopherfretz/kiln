@@ -1,0 +1,25 @@
+   Compiling kiln_ast v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_ast)
+   Compiling kiln_abi v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_abi)
+   Compiling kiln_oven v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_oven)
+   Compiling kiln_sema v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_sema)
+error[E0502]: cannot borrow `*s` as immutable because it is also borrowed as mutable
+  --> crates/kiln_sema/tests/entity_identity.rs:28:66
+   |
+28 |         let m = s.ast.builder().namespace(DeclHead::new(tu, name(s, "M"), L), false, None);
+   |                 -----           ---------                        ^ immutable borrow occurs here
+   |                 |               |
+   |                 |               mutable borrow later used by call
+   |                 mutable borrow occurs here
+
+error[E0502]: cannot borrow `*s` as immutable because it is also borrowed as mutable
+  --> crates/kiln_sema/tests/entity_identity.rs:47:63
+   |
+47 |         let c = s.ast.builder().record(DeclHead::new(tu, name(s, "C"), L), TagKind::Struct, None);
+   |                 -----           ------                        ^ immutable borrow occurs here
+   |                 |               |
+   |                 |               mutable borrow later used by call
+   |                 mutable borrow occurs here
+
+For more information about this error, try `rustc --explain E0502`.
+error: could not compile `kiln_sema` (test "entity_identity") due to 2 previous errors
+EXIT 101
