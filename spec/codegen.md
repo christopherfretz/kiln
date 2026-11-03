@@ -47,8 +47,16 @@ panic and never silently wrong IR.
   re-folded initializer is never registered for constant destruction.
   A vector initializer is re-folded the same way (`tryEmitPrivate`
   evaluates it as an rvalue: `i4 gv = cv;` with `const i4 cv = {..}` is
-  a static initializer; WP-453, §7w). Aggregates are not re-folded (they
-  keep their dynamic initializer).
+  a static initializer; WP-453, §7w). An initializer list is re-folded
+  the same way (clang's `ConstExprEmitter` emits each element with
+  `tryEmitPrivateForMemory`, which falls back to `EvaluateAsRValue`;
+  WP-492): `H h = {(void (*)())&f, 1};` and `A a = {
+  __builtin_is_constant_evaluated() ? x : 7};` are static initializers.
+  Other aggregate initializers (a constructor call, a list with
+  temporaries) are not re-folded and keep their dynamic initializer. A
+  cast to or from a function pointer continues in a fold (spec/oven.md
+  "Pointers that point at nothing"), so `void (*p)() = (void (*)())&f;`
+  is the global `ptr @f`.
   Uses of a const integral variable whose constant initialization failed
   fold to that same non-manifest value (spec/oven.md "Lax folds"), so
   `return cg;` emits `ret i32 9` and the unused internal `cg` is not
