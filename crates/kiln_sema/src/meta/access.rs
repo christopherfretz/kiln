@@ -7,6 +7,7 @@
 use kiln_ast::decl::DeclKind;
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::{DeclId, ReflectionId};
+use kiln_source::Loc;
 use kiln_oven::{
     AccessOp, MemberOp, MetaCtx, MetaError, MetaOut, Oven, info_arg, member_kind as mk,
 };
@@ -103,7 +104,7 @@ impl Sema<'_, '_> {
             }
             AccessOp::IsAccessible => {
                 let (r, actx) = (info_arg(args, 0)?, access_ctx_arg(args, 1)?);
-                MetaOut::Scalar(u128::from(self.is_accessible_refl(r, actx)))
+                MetaOut::Scalar(u128::from(self.is_accessible_refl(r, actx, loc)?))
             }
             AccessOp::HasInaccessibleNonstaticDataMembers
             | AccessOp::HasInaccessibleBases
@@ -147,30 +148,40 @@ impl Sema<'_, '_> {
     }
 
     /// `is_accessible(r, ctx)` (P2996R13 [meta.reflection.access.queries]/3).
-    fn is_accessible_refl(&mut self, r: ReflectionId, actx: (ReflectionId, ReflectionId)) -> bool {
+    /// Constant when the member's class (a base's derived class) is
+    /// complete here ([meta.reflection.access.queries]/2).
+    fn is_accessible_refl(
+        &mut self,
+        r: ReflectionId,
+        actx: (ReflectionId, ReflectionId),
+        loc: Loc,
+    ) -> Result<bool, MetaError> {
         let (scope, designating) = actx;
         // The member (or base-specifier) and its class.
         let (decl, parent, base) = match self.ast.reflections.get(r) {
             Reflectee::BaseSpec(d, i) => {
                 let def = self.ast.definition(d).unwrap_or(d);
-                let Some(spec) = self.base_spec_index(def, i) else { return true };
+                let Some(spec) = self.base_spec_index(def, i) else { return Ok(true) };
                 let ty = self.ast.decls.base_spec(spec).ty;
-                let Some(b) = self.ast.types.as_record(ty) else { return true };
+                let Some(b) = self.ast.types.as_record(ty) else { return Ok(true) };
                 (self.ast.definition(b).unwrap_or(b), def, Some(i))
             }
             other => {
-                let Some(d) = self.reflected_member_decl(other) else { return true };
-                let Some(p) = self.declaring_class(d) else { return true };
+                let Some(d) = self.reflected_member_decl(other) else { return Ok(true) };
+                let Some(p) = self.declaring_class(d) else { return Ok(true) };
                 (d, self.ast.definition(p).unwrap_or(p), None)
             }
         };
+        if !self.is_complete(self.tag_type(parent)) {
+            return fail(loc, "incomplete parent class");
+        }
         let nc = self.reflected_class_def(designating).unwrap_or(parent);
         // A member of the designating class (inherited included); a base
         // of it or of one of its bases.
         if !same_class(self, nc, parent) && !is_derived_from(self, nc, parent) {
-            return false;
+            return Ok(false);
         }
-        let Some(from) = self.scope_decl(scope) else { return true };
+        let Some(from) = self.scope_decl(scope) else { return Ok(true) };
         let mut sc = std::mem::take(&mut self.meta_members.scope);
         self.set_access_scope(&mut sc, from);
         let ok = match base {
@@ -181,7 +192,7 @@ impl Sema<'_, '_> {
             None => self.member_accessible_in(&sc, decl, nc),
         };
         self.meta_members.scope = sc;
-        ok
+        Ok(ok)
     }
 
     /// The declaration of the class member reflectee `r` designates, if

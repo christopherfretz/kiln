@@ -320,7 +320,8 @@ impl Sema<'_, '_> {
         for m in decls {
             let n = self.ast.decls.get(m);
             let kind = n.kind();
-            if never_a_member(kind) {
+            // A friend declaration names a non-member ([class.friend]/1).
+            if never_a_member(kind) || n.misc().friend() != kiln_ast::decl::FriendKind::None {
                 continue;
             }
             if kind == DeclKind::CXXDestructor && dtor.is_some_and(|d| d != self.ast.first(m)) {
