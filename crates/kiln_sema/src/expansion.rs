@@ -382,10 +382,11 @@ impl Sema<'_, '_> {
         let Some(r) = self.ast.types.as_record(t) else { return false };
         let Some(name) = self.ast.decls.get(r).name().as_ident() else { return false };
         let Some((_, spec)) = self.ast.spec_info(r) else { return false };
-        let over_pointer = match self.ast.types.args(spec.args).first().map(|a| a.view()) {
-            Some(kiln_ast::types::ArgView::Type(p)) => self.ast.types.is_pointer(p),
-            _ => false,
-        };
+        let over_pointer =
+            match self.ast.types.args(spec.args).first().map(kiln_ast::types::TemplateArg::view) {
+                Some(kiln_ast::types::ArgView::Type(p)) => self.ast.types.is_pointer(p),
+                _ => false,
+            };
         if !over_pointer {
             return false;
         }
