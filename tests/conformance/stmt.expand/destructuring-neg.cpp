@@ -3,9 +3,11 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ requires: clang>=23
-//@ diag: 11:24 error "cannot bind non-class, non-array type 'int'"
-//@ diag: 13:24 error "cannot bind private member 'b' of 'E'"
-//@ diag: 12:34 note "declared private here"
+//@ diag: 13:24 error "non-class, non-array type 'int'"
+//@ diag: 15:24 error "private member 'b' of 'E'"
+//@ diag: 14:34 note "declared private here"
+// clang 22 says "cannot bind", clang 19 "cannot decompose"; kiln follows
+// its -fclang-compat level, so the directives match the common suffix.
 void f() {
   int s = 0;
   template for (auto x : 5) { s += x; }
