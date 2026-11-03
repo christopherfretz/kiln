@@ -117,6 +117,11 @@ pub(crate) struct RunState {
     /// usable in constant expressions. Cleared in nested evaluations, a
     /// global's initialization and `__builtin_constant_p`.
     pub cev_warn: bool,
+    /// The evaluation is plainly constant-evaluated
+    /// ([`crate::EvalContext::plain`]): set for the outermost or nested
+    /// evaluation that asked for it, false in every other (nested ones
+    /// included); read through [`crate::Oven::plain`].
+    pub plain: bool,
 }
 
 impl RunState {
@@ -1384,10 +1389,15 @@ impl Oven {
                     pc += 5;
                 }
                 Op::IsConstEval => {
-                    let cc = self.run.const_context;
-                    reg!(0) = u128::from(cc);
-                    if cc && (!self.run.silent || self.run.cev_warn) {
-                        self.always_true_diag(b, pc, aux);
+                    if aux & 2 != 0 {
+                        // `__kiln_plainly_constant_evaluated()` (WP-473).
+                        reg!(0) = u128::from(self.plain());
+                    } else {
+                        let cc = self.run.const_context;
+                        reg!(0) = u128::from(cc);
+                        if cc && (!self.run.silent || self.run.cev_warn) {
+                            self.always_true_diag(b, pc, aux);
+                        }
                     }
                     pc += 2;
                 }

@@ -70,6 +70,12 @@ impl Oven {
                 })
             }
             MetaOp::DefineMember => {
+                // A fold or a speculative trial (`__builtin_constant_p`'s
+                // operand) never mutates: it fails silently
+                // (spec/consteval-blocks.md §3).
+                if self.run.fold || self.mem.in_trial() {
+                    return Err(self.meta_trap(Vec::new()));
+                }
                 let (cls, ty) = (refl(a)?, refl(bb)?);
                 let name = self.read_name(c as u64, OTy(t1))?;
                 b.define_member(cls, ty, &name, loc, self).map(|m| u128::from(m.bits()))

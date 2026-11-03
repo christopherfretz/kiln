@@ -5154,10 +5154,18 @@ impl Compiler<'_> {
             && ast.decls.get(ast.exprs.decl(c)).kind().is_function())
         .then(|| ast.exprs.decl(c));
         if let Some(d) = direct
-            && ast.decls.builtin_id(d) == Some(kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED)
+            && let Some(b @ (kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED
+            | kiln_ast::decl::builtin::KILN_PLAINLY_CONSTANT_EVALUATED)) =
+                ast.decls.builtin_id(d)
         {
             let r = self.reg();
-            let pc = self.emit_at(Op::IsConstEval, u32::from(self.std_ice), &[r], e);
+            // aux bit 1: `__kiln_plainly_constant_evaluated` (WP-473).
+            let aux = if b == kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED {
+                u32::from(self.std_ice)
+            } else {
+                2
+            };
+            let pc = self.emit_at(Op::IsConstEval, aux, &[r], e);
             let loc = self.begin(e);
             if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
                 site.loc = loc;

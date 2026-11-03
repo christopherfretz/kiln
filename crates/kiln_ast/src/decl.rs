@@ -4573,6 +4573,12 @@ pub mod builtin {
     pub const ELEMENTWISE_ADD_SAT: u32 = 2109;
     /// `__builtin_elementwise_sub_sat`.
     pub const ELEMENTWISE_SUB_SAT: u32 = 2110;
+    // ---- WP-473 (kiln extension).
+    /// `__kiln_plainly_constant_evaluated()`: whether the running
+    /// evaluation is plainly constant-evaluated (the corresponding
+    /// expression of a consteval block; spec/consteval-blocks.md §3);
+    /// false at runtime.
+    pub const KILN_PLAINLY_CONSTANT_EVALUATED: u32 = 2150;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
@@ -4600,6 +4606,8 @@ pub mod builtin {
         row(RETURN_ADDRESS, "__builtin_return_address", "v*IUi", N),
         row(ELEMENTWISE_ADD_SAT, "__builtin_elementwise_add_sat", "v.", N | C | T),
         row(ELEMENTWISE_SUB_SAT, "__builtin_elementwise_sub_sat", "v.", N | C | T),
+        // WP-473.
+        row(KILN_PLAINLY_CONSTANT_EVALUATED, "__kiln_plainly_constant_evaluated", "b", N),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19

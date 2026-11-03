@@ -107,6 +107,9 @@ pub enum EvalKind {
     Constraint,
     /// Array bounds, enumerator values, `case` labels, bit-field widths, ...
     Other,
+    /// The evaluation of a consteval block ([dcl.pre], P3289R1): the one
+    /// plainly constant-evaluated context (spec/consteval-blocks.md §3).
+    ConstevalBlock,
 }
 
 impl EvalKind {
@@ -120,6 +123,7 @@ impl EvalKind {
             EvalKind::IfConstexpr => "if_constexpr",
             EvalKind::Constraint => "constraint",
             EvalKind::Other => "other",
+            EvalKind::ConstevalBlock => "consteval_block",
         }
     }
 }
@@ -145,6 +149,12 @@ pub struct EvalContext {
     /// conditions — not integral constant expressions (`static_assert`,
     /// array bounds, bit-field widths) or other initializers.
     pub enum_range_check: bool,
+    /// Whether the evaluation is plainly constant-evaluated: the
+    /// corresponding expression of a consteval-block-declaration
+    /// ([expr.const.core]/2.32, P3289R1), the only context in which an
+    /// injected declaration may be produced (spec/consteval-blocks.md §3).
+    /// Not inherited by nested evaluations ([`Oven::plain`]).
+    pub plain: bool,
 }
 
 impl EvalContext {
@@ -159,14 +169,14 @@ impl EvalContext {
                 | EvalKind::IfConstexpr
                 | EvalKind::Constraint
         );
-        EvalContext { kind, loc, object: None, enum_range_check }
+        EvalContext { kind, loc, object: None, enum_range_check, plain: false }
     }
 
     /// The initializer of the `constexpr` variable `var` (enumeration
     /// ranges are checked; clear [`EvalContext::enum_range_check`] for a
     /// `constinit` variable that is not `constexpr`).
     pub fn init(var: DeclId, loc: Loc) -> Self {
-        EvalContext { kind: EvalKind::Init, loc, object: Some(var), enum_range_check: true }
+        EvalContext { kind: EvalKind::Init, loc, object: Some(var), enum_range_check: true, plain: false }
     }
 
     /// A converted constant expression ([expr.const]/12) that is not a
@@ -174,7 +184,19 @@ impl EvalContext {
     /// with a fixed underlying type): reported as [`EvalKind::Other`],
     /// with enumeration ranges checked.
     pub fn converted(loc: Loc) -> Self {
-        EvalContext { kind: EvalKind::Other, loc, object: None, enum_range_check: true }
+        EvalContext { kind: EvalKind::Other, loc, object: None, enum_range_check: true, plain: false }
+    }
+
+    /// The evaluation of the consteval block at `loc`: plainly
+    /// constant-evaluated ([`EvalContext::plain`]).
+    pub fn consteval_block(loc: Loc) -> Self {
+        EvalContext {
+            kind: EvalKind::ConstevalBlock,
+            loc,
+            object: None,
+            enum_range_check: true,
+            plain: true,
+        }
     }
 
     /// `self` with [`EvalContext::enum_range_check`] set to `on`.
@@ -429,6 +451,9 @@ pub struct Oven {
     /// The next outermost or nested evaluation reports
     /// `-Wconstant-evaluated` though silent ([`Oven::warn_constant_evaluated`]).
     cev_warn_next: bool,
+    /// The next outermost or nested evaluation is plainly
+    /// constant-evaluated ([`EvalContext::plain`], [`Oven::plain`]).
+    plain_next: bool,
     pub(crate) types: Types,
     pub(crate) code: Vec<u32>,
     pub(crate) sites: Vec<Site>,
@@ -524,6 +549,7 @@ impl Oven {
             clang_compat: 22,
             cxx_year: 2026,
             cev_warn_next: false,
+            plain_next: false,
             types: Types::default(),
             code: Vec::new(),
             sites: Vec::new(),
@@ -620,6 +646,15 @@ impl Oven {
         self.backtrace_limit
     }
 
+    /// Whether the running evaluation is plainly constant-evaluated
+    /// (spec/consteval-blocks.md §3): its context asked for it
+    /// ([`EvalContext::plain`]) and it is not a fold or a speculative
+    /// trial (`__builtin_constant_p`'s operand, [`Oven::try_fold`],
+    /// codegen's folds). The gate of every injecting operation.
+    pub fn plain(&self) -> bool {
+        self.run.plain && !self.run.fold && !self.mem.in_trial()
+    }
+
     /// The limits.
     pub fn budget(&self) -> Budget {
         self.budget
@@ -633,7 +668,9 @@ impl Oven {
         e: ExprId,
         ctx: EvalContext,
     ) -> Result<ConstValueId, EvalFailure> {
+        self.plain_next = ctx.plain;
         let (r, c) = self.eval_ctx(bridge, e, ctx.object, false, ctx.enum_range_check, true);
+        self.plain_next = false;
         self.stats.push(EvalRecord {
             loc: ctx.loc,
             kind: ctx.kind,
@@ -986,6 +1023,7 @@ impl Oven {
         self.run.const_context = const_context;
         self.run.fold = silent && !const_context;
         self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
+        self.run.plain = std::mem::take(&mut self.plain_next);
         self.run.counters = vm::Counters::default();
         self.run.nesting = 0;
         self.run.depth_base = 0;
@@ -1001,6 +1039,7 @@ impl Oven {
     /// are reset.
     fn end_outermost(&mut self) -> vm::Counters {
         self.ctx_depth = 0;
+        self.run.plain = false;
         let mut c = self.run.counters;
         c.bytes = self.mem.allocated;
         c.peak = self.mem.peak;
@@ -1053,6 +1092,7 @@ impl Oven {
             self.run.const_context,
             self.run.fold,
             self.run.cev_warn,
+            self.run.plain,
             self.run.counters,
             self.run.object,
             self.run.maxd,
@@ -1084,6 +1124,7 @@ impl Oven {
         self.run.const_context = const_context;
         self.run.fold = silent && !const_context;
         self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
+        self.run.plain = std::mem::take(&mut self.plain_next);
         self.run.counters = vm::Counters { steps: steps0, ..vm::Counters::default() };
         self.run.maxd = 0;
         self.run.depth_base = depth_base;
@@ -1113,6 +1154,7 @@ impl Oven {
             self.run.const_context,
             self.run.fold,
             self.run.cev_warn,
+            self.run.plain,
             counters,
             self.run.object,
             self.run.maxd,
