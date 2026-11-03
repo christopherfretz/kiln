@@ -209,6 +209,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("LikelyAttr", Keep),
     ("UnlikelyAttr", Keep),
     ("FallThroughAttr", Keep),
+    // Loop-hint pragmas (WP-449): the value, if any.
+    ("LoopHintAttr", Keep),
     ("CXXTryStmt", Keep),
     ("CXXCatchStmt", Keep),
     ("GCCAsmStmt", Keep),
@@ -478,6 +480,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" | "CXXForRangeStmt" | "CXXTryStmt"
         | "CXXCatchStmt" | "GCCAsmStmt" | "AttributedStmt" | "CXXAssumeAttr" | "LikelyAttr"
         | "UnlikelyAttr" | "FallThroughAttr" => &[],
+        "LoopHintAttr" => &["implicit"],
         "LabelStmt" => &["name", "declId"],
         "GotoStmt" => &["targetLabelDeclId"],
         "AddrLabelExpr" => &["name", "labelDeclId"],
@@ -624,6 +627,8 @@ pub const M2_KINDS: &[&str] = &[
     "LikelyAttr",
     "UnlikelyAttr",
     "FallThroughAttr",
+    // Loop-hint pragmas (WP-449).
+    "LoopHintAttr",
     // Predefined identifiers (WP-140).
     "PredefinedExpr",
     "IntegerLiteral",

@@ -256,6 +256,7 @@ impl Job<'_> {
             search.set_observer(Box::new(move |sm, e| on_search_event(&d2, sm, e)));
         }
         let mut opts = self.pp_options(predefines);
+        opts.parser_pragmas = staged;
         // Modules for the modes that run sema, from C++20 (spec/modules.md
         // §2); `-E`/`-M` keep the directives as text.
         if staged && self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx20 {

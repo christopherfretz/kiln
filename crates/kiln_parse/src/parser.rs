@@ -210,6 +210,9 @@ pub struct Parser<'a, 'sm> {
     pub(crate) lead_decl_attrs: Vec<AttrId>,
     /// Where `stmt_attrs` / `lead_decl_attrs` start (`[[` or `alignas`).
     pub(crate) stmt_attrs_loc: Option<Loc>,
+    /// Pending loop-hint pragmas, by the location of the token starting
+    /// the statement they apply to (spec/parse.md §2.3).
+    pub(crate) loop_hints: Vec<(Loc, Vec<crate::tokens::LoopHintInfo>)>,
 }
 
 /// A `decltype(e)` parsed ahead as a nested-name-specifier
@@ -334,6 +337,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             stmt_attrs: Vec::new(),
             lead_decl_attrs: Vec::new(),
             stmt_attrs_loc: None,
+            loop_hints: Vec::new(),
         };
         if p.src.get_mut().module_lines() {
             p.module_activate();

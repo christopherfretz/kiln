@@ -17,7 +17,7 @@ use kiln_source::symbol::Interner;
 use kiln_source::{Loc, SourceManager, Span};
 
 use crate::parser::Parser;
-use crate::tokens::Event;
+use crate::tokens::{Event, LoopHintInfo};
 
 /// Pragmas clang knows and kiln accepts without effect on the
 /// translation unit (codegen hints and `#pragma comment`).
@@ -26,10 +26,6 @@ const IGNORED: &[&str] = &[
     "float_control",
     "unused",
     "omp",
-    "unroll",
-    "nounroll",
-    "unroll_and_jam",
-    "nounroll_and_jam",
 ];
 
 /// Pragmas clang knows that change the meaning of the translation unit
@@ -38,7 +34,7 @@ const UNSUPPORTED: &[&str] = &["align", "options", "ms_struct", "weak", "redefin
 
 /// `#pragma clang ...` pragmas accepted without effect.
 const CLANG_IGNORED: &[&str] =
-    &["diagnostic", "loop", "fp", "optimize", "max_tokens_here", "max_tokens_total", "__debug"];
+    &["diagnostic", "fp", "optimize", "max_tokens_here", "max_tokens_total", "__debug"];
 
 /// `#pragma clang ...` pragmas kiln does not implement yet.
 const CLANG_UNSUPPORTED: &[&str] = &["attribute", "section"];
@@ -77,10 +73,16 @@ impl PragmaCx<'_, '_> {
     }
 }
 
-/// Checks the pragma whose `pragma` / `_Pragma` token is at `span` and
-/// whose tokens are `tokens`, reporting syntax warnings and unknown
-/// pragmas; returns the event the parser acts on, if any.
-pub(crate) fn classify(cx: &PragmaCx<'_, '_>, span: Span, tokens: &[Token]) -> Option<Event> {
+/// Checks the pragma whose `pragma` / `_Pragma` token is at `span` (and
+/// which starts at `start`, its `#` or `_Pragma`) and whose tokens are
+/// `tokens`, reporting syntax warnings and unknown pragmas; returns the
+/// event the parser acts on, if any.
+pub(crate) fn classify(
+    cx: &PragmaCx<'_, '_>,
+    span: Span,
+    start: Loc,
+    tokens: &[Token],
+) -> Option<Event> {
     // Where clang reports a missing token: the end of the last one.
     let end = tokens.last().map_or(span.hi, |t| t.span.hi);
     let first = tokens.first();
@@ -101,6 +103,10 @@ pub(crate) fn classify(cx: &PragmaCx<'_, '_>, span: Span, tokens: &[Token]) -> O
             let loc = rest[0].span.lo;
             match (name, sub) {
                 ("GCC", "visibility") => visibility(cx, loc, &rest[1..], end),
+                // clang's `PragmaUnrollHintHandler` under its GCC names.
+                ("GCC", "unroll") => unroll_hint(cx, "unroll", start, loc, &rest[1..], end),
+                ("GCC", "nounroll") => unroll_hint(cx, "nounroll", start, loc, &rest[1..], end),
+                ("clang", "loop") => clang_loop(cx, start, loc, &rest[1..], end),
                 // Validated by the preprocessor; the warning state is not
                 // applied per location yet (spec/parse.md §2.3).
                 ("GCC", "diagnostic") => None,
@@ -121,6 +127,10 @@ pub(crate) fn classify(cx: &PragmaCx<'_, '_>, span: Span, tokens: &[Token]) -> O
             }
             None
         }
+        "unroll" => unroll_hint(cx, "unroll", start, loc, rest, end),
+        "nounroll" => unroll_hint(cx, "nounroll", start, loc, rest, end),
+        "unroll_and_jam" => unroll_hint(cx, "unroll_and_jam", start, loc, rest, end),
+        "nounroll_and_jam" => unroll_hint(cx, "nounroll_and_jam", start, loc, rest, end),
         s if IGNORED.contains(&s) => None,
         s if UNSUPPORTED.contains(&s) => Some(Event::UnsupportedPragma { what: s.to_owned(), loc }),
         _ => {
@@ -183,6 +193,141 @@ fn visibility(cx: &PragmaCx<'_, '_>, loc: Loc, rest: &[Token], end: Loc) -> Opti
     Some(Event::Visibility { loc, push })
 }
 
+/// The `#pragma clang loop` options (clang's `PragmaLoopHintHandler`).
+const LOOP_OPTIONS: &[&str] = &[
+    "vectorize",
+    "interleave",
+    "unroll",
+    "distribute",
+    "vectorize_predicate",
+    "vectorize_width",
+    "interleave_count",
+    "unroll_count",
+    "pipeline",
+    "pipeline_initiation_interval",
+];
+
+/// A loop hint's value (clang's `ParseLoopHintValue`): the tokens up to
+/// the end of the pragma or, `in_parens`, the matching `)`. Returns the
+/// value, where it ends (clang's `eof` terminator), and the number of
+/// tokens read; `None` after reporting a missing `)`.
+fn hint_value(
+    cx: &PragmaCx<'_, '_>,
+    toks: &[Token],
+    in_parens: bool,
+    end: Loc,
+) -> Option<(Vec<Token>, Loc, usize)> {
+    let mut open = usize::from(in_parens);
+    let mut i = 0;
+    while let Some(t) = toks.get(i) {
+        match t.kind {
+            TokKind::Punct(Punct::LParen) => open += 1,
+            TokKind::Punct(Punct::RParen) => {
+                open = open.saturating_sub(1);
+                if open == 0 && in_parens {
+                    break;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let value = toks[..i].to_vec();
+    if in_parens {
+        if i == toks.len() {
+            cx.report_what(DiagId::parse_expected, "')'", end);
+            return None;
+        }
+        i += 1;
+    }
+    let value_end = toks.get(i).map_or(end, |t| t.span.lo);
+    Some((value, value_end, i))
+}
+
+/// `#pragma unroll [N | (N)]`, `nounroll`, `unroll_and_jam [N | (N)]`,
+/// `nounroll_and_jam`, `GCC unroll` / `GCC nounroll` (clang's
+/// `PragmaUnrollHintHandler`); `loc` is the pragma-name token.
+fn unroll_hint(
+    cx: &PragmaCx<'_, '_>,
+    name: &'static str,
+    start: Loc,
+    loc: Loc,
+    rest: &[Token],
+    end: Loc,
+) -> Option<Event> {
+    let (value, value_end) = if let Some(first) = rest.first() {
+        if name.starts_with("no") {
+            cx.report_what(DiagId::parse_pragma_extra_tokens, name, first.span.lo);
+            return None;
+        }
+        let parens = first.kind == TokKind::Punct(Punct::LParen);
+        let toks = if parens { &rest[1..] } else { rest };
+        let (value, value_end, n) = hint_value(cx, toks, parens, end)?;
+        if let Some(extra) = toks.get(n) {
+            cx.report_what(DiagId::parse_pragma_extra_tokens, "unroll", extra.span.lo);
+            return None;
+        }
+        (Some(value), value_end)
+    } else {
+        (None, end)
+    };
+    let hint = LoopHintInfo { start, name, name_loc: loc, option: None, value, value_end };
+    Some(Event::LoopHints { before: Loc::INVALID, hints: vec![hint] })
+}
+
+/// `#pragma clang loop option(value) ...` (clang's
+/// `PragmaLoopHintHandler`); `loc` is the `loop` token. Any error drops
+/// the whole pragma.
+fn clang_loop(
+    cx: &PragmaCx<'_, '_>,
+    start: Loc,
+    loc: Loc,
+    rest: &[Token],
+    end: Loc,
+) -> Option<Event> {
+    let at = |i: usize| rest.get(i).map_or(end, |t| t.span.lo);
+    if cx.word(rest.first()).is_none() {
+        Diag::new(DiagId::parse_pragma_loop_invalid_option, Span::empty(at(0)))
+            .arg("1")
+            .arg("")
+            .emit(cx.diags);
+        return None;
+    }
+    let mut hints = Vec::new();
+    let mut i = 0;
+    while let Some(word) = cx.word(rest.get(i)) {
+        let Some(&option) = LOOP_OPTIONS.iter().find(|o| **o == word) else {
+            Diag::new(DiagId::parse_pragma_loop_invalid_option, Span::empty(at(i)))
+                .arg("0")
+                .arg(format!(" '{word}'"))
+                .emit(cx.diags);
+            return None;
+        };
+        let option_loc = at(i);
+        i += 1;
+        if rest.get(i).is_none_or(|t| t.kind != TokKind::Punct(Punct::LParen)) {
+            cx.report_what(DiagId::parse_expected, "'('", at(i));
+            return None;
+        }
+        i += 1;
+        let (value, value_end, n) = hint_value(cx, &rest[i..], true, end)?;
+        i += n;
+        hints.push(LoopHintInfo {
+            start,
+            name: "loop",
+            name_loc: loc,
+            option: Some((option, option_loc)),
+            value: Some(value),
+            value_end,
+        });
+    }
+    if i < rest.len() {
+        cx.report_what(DiagId::parse_pragma_extra_tokens, "clang loop", at(i));
+        return None;
+    }
+    Some(Event::LoopHints { before: Loc::INVALID, hints })
+}
+
 impl Parser<'_, '_> {
     /// Acts on a preprocessor event (clang's annotation-token handlers).
     pub(crate) fn on_event(&mut self, e: Event) {
@@ -205,6 +350,14 @@ impl Parser<'_, '_> {
                 self.unsupported(what, span.lo);
             }
             Event::PragmaPack { loc, args } => self.s.act_on_pragma_pack(loc, args),
+            Event::LoopHints { before, hints } => {
+                // Applied when the statement at `before` is parsed.
+                if let Some((_, v)) = self.loop_hints.iter_mut().find(|(l, _)| *l == before) {
+                    v.extend(hints);
+                } else {
+                    self.loop_hints.push((before, hints));
+                }
+            }
             Event::UnsupportedPragma { what, loc } => self.s.act_on_unsupported_pragma(&what, loc),
             // clang's `ActOnPragmaVisibility`. The visibility itself is
             // not applied yet: everything has default visibility.
