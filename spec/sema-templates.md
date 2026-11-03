@@ -1087,8 +1087,22 @@ the running `Substituter` instead.
      arguments before it (`template <class T, decltype(mk<T>()) N>`) and,
      for a function template, the explicit arguments' substitution into
      the function parameter types (§ "Landed (WP-071)"; WP-387);
+     The substituted default (dependent or not) is then checked under a
+     `DefaultTemplateArgumentChecking` frame, "while checking a default
+     template argument used here" at the template-id's `>` (clang
+     `CheckTemplateArgumentList`; the substitution frame has ended). The
+     parser hands the `>` over with the argument locations
+     (`set_template_arg_locs`); a template-id formed by substitution
+     points at its name instead (clang: its `>`; follow-up). Defaults
+     used by deduction are checked inside their substitution frame
+     (`tests/conformance/temp.arg.general/default-argument-checking-and-narrowing.cpp`);
    - converts NTTP args (converted constant expressions, evaluated by the
-     Oven with `EvalKind::TemplateArg`);
+     Oven with `EvalKind::TemplateArg`). A class-type argument converted
+     by a user-defined conversion narrows through the standard conversion
+     after it: the conversion function's result is folded and checked
+     against the parameter type (`Z<CI{}>` with `operator int` to `bool`,
+     "evaluates to 2, which cannot be narrowed"; clang `getNarrowingKind`
+     on `ICS.UserDefined.After`);
    - packs the trailing args into a `Pack`.
    It returns `ConvertedArgs { sugared: ArgListId, canonical: ArgListId }`.
 2. Probe `specializations[(first(tmpl), canonical)]`. On a hit, return

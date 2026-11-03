@@ -196,6 +196,10 @@ pub struct TemplState {
     /// Where each argument of the template-id being parsed starts (set by
     /// the parser right before `act_template_id`; consumed there).
     pub(crate) arg_locs: Vec<Loc>,
+    /// The `>` of that template-id, keyed by its first argument's location
+    /// (read by the first argument check after the parse; the "while
+    /// checking a default template argument used here" note points there).
+    pub(crate) r_angle: Option<(Option<Loc>, Loc)>,
     /// `template<>` was just parsed: the next class template-id declared
     /// is an explicit specialization ([temp.expl.spec]; WP-070b).
     pub(crate) explicit_spec: Option<Loc>,
@@ -440,8 +444,10 @@ impl Sema<'_, '_> {
     }
 
     /// Records where each argument of the next template-id starts (the
-    /// kind and conversion diagnostics point there, as clang's do).
-    pub fn set_template_arg_locs(&mut self, locs: Vec<Loc>) {
+    /// kind and conversion diagnostics point there, as clang's do) and
+    /// where its `>` is.
+    pub fn set_template_arg_locs(&mut self, locs: Vec<Loc>, r_angle: Loc) {
+        self.templ.r_angle = Some((locs.first().copied(), r_angle));
         self.templ.arg_locs = locs;
     }
 

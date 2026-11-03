@@ -977,7 +977,7 @@ impl Parser<'_, '_> {
         }
         if ok && self.at_greater() {
             let r = self.split_greater();
-            self.s.set_template_arg_locs(locs);
+            self.s.set_template_arg_locs(locs, r);
             return Some((args, l, r));
         }
         if ok {
