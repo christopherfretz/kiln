@@ -12,6 +12,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::DEPRECATED => "Deprecated",
         AttrKind::FALLTHROUGH => "FallThrough",
         AttrKind::INDETERMINATE => "Indeterminate",
+        AttrKind::UNINITIALIZED => "Uninitialized",
         AttrKind::LIKELY => "Likely",
         AttrKind::UNLIKELY => "Unlikely",
         AttrKind::MAYBE_UNUSED | AttrKind::UNUSED => "Unused",
