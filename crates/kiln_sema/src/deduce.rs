@@ -131,7 +131,13 @@ impl Sema<'_, '_> {
                 return None;
             }
         }
-        Some(self.ast.types.atomic(t))
+        let r = self.ast.types.atomic(t);
+        // Where substitution diagnoses the operand (§5.8 written
+        // locations): the `_Atomic` of the template definition.
+        if dependent {
+            self.note_written_loc(crate::templ::written::WrittenKey::Type(r), loc);
+        }
+        Some(r)
     }
 
     /// `decltype ( e )` ([dcl.type.decltype]/1): the type `decltype(e)`

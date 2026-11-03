@@ -2825,6 +2825,13 @@ formed it:
   `namespace.udecl/dependent-qualifier-location.cpp`). A non-dependent
   leading prefix (`N::X<T>::m`) or a leading `::` is not recorded, so
   such a qualifier reports at its first dependent component.
+- `act_on_atomic_type` records a dependent `_Atomic(T)` specifier or
+  `_Atomic T` qualifier (`WrittenKey::Type` of the atomic type) at its
+  `_Atomic`: an operand that substitution makes invalid (array, function,
+  reference, atomic, qualified, `_BitInt`) is reported there with the
+  instantiation note, as clang's `TransformAtomicType` does, not at the
+  declarator; an alias template reports at its `using` (`written_locs`
+  off; WP-461, `ext.c11.atomic/atomic-specifier-subst-loc.cpp`).
 - Recording happens only while parsing (the instantiation stack is
   empty), so instantiation never grows the table.
 - `Substituter::written(key, loc)` returns the recorded location nearest
