@@ -3315,7 +3315,12 @@ for them.
     minus such targets. Not for a reference, class, dependent,
     `[[maybe_unused]]` or `_` variable, a parenthesized assignment, or a
     compound assignment/increment of a volatile one; diagnosed with the
-    unused variables in location order.
+    unused variables in location order. A reference an instantiation
+    shares with its pattern counts again (`mark_shared_expr_referenced`,
+    clang `TransformDeclRefExpr`), balancing the assignment its
+    instantiated statement subtracts: a variable captured by a generic
+    or explicit-object lambda and assigned in its body is not diagnosed
+    (WP-162, test `stmt.dcl/unused-but-set-variable-generic-lambda.cpp`).
   - Namespace-scope variables (WP-217, `unused_file_scope.rs`, clang
     `ShouldWarnIfUnusedFileScopedDecl`): at the end of the translation
     unit, a variable with internal linkage declared in the main file and
