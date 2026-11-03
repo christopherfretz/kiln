@@ -2118,7 +2118,28 @@ specification as written (`TypeNames` prints ` noexcept`,
   non-empty list is `ISO C++17 does not allow dynamic exception
   specifications` (`-Wdynamic-exception-spec`, default error) with a
   `use 'noexcept(false)' instead` note, then `Dynamic(types)`.
-- **Gaps:** `__attribute__((nothrow))` is not parsed.
+- **GNU `nothrow`** (WP-186, `apply_nothrow_attrs` in `decl_attrs.rs`;
+  clang `handleFunctionTypeAttr` `AT_NoThrow`): `__attribute__((nothrow))`
+  or `[[gnu::nothrow]]` anywhere in a declaration whose declared type is
+  a function type, or a pointer, reference or member pointer to one, is
+  a type attribute (not kept on the declaration): with no written
+  specification the function type's is `NothrowAttr` (printed
+  `__attribute__((nothrow))`, canonically `Nothrow`, so non-throwing,
+  `nounwind` in IR and the same type as `noexcept`); `throw(X)` or
+  `noexcept(false)` warns `'nothrow' attribute conflicts with exception
+  specification; attribute ignored` (`-Wignored-attributes`); a
+  non-throwing or unresolved one is unchanged. On another declaration:
+  `'nothrow' only applies to function types; type here is 'T'` (when it
+  has a type) and `'nothrow' attribute only applies to functions and
+  function pointers`, dropped. A redeclaration omitting it gets the
+  `-Wmissing-exception-spec` warning (not the error) and an overrider of
+  a `nothrow` virtual function that is potentially throwing the
+  `-Wmicrosoft-exception-spec` warning `exception specification of
+  overriding function is more lax than base version`. Not modelled:
+  `'nothrow' attribute takes no arguments` (no attribute checks its
+  argument count generically) and GCC's `-Wgcc-compat` position warning.
+  Tests: `tests/conformance/except.spec/gnu-nothrow-attribute.cpp`,
+  `tests/codegen/gnu_nothrow.cpp`.
 
 **Landed (WP-112).** Member functions, lazy instantiation and the
 "needed" points ([except.spec]/13):
@@ -2977,7 +2998,7 @@ constant and never look at the operand.
 | `dynamic_cast` to a reference type needing a run-time check | yes (not produced by the M2 parser) |
 | `typeid` of a glvalue of polymorphic class type | M3 (no polymorphic classes in M2) |
 | implicit calls: constructors, destructors, conversion functions, allocation functions | yes: constructors (`CXXConstructExpr`), destructors (`CXXBindTemporaryExpr`) and conversion functions (implicit member calls), each resolving the callee's spec first (WP-112); every `new` counts as throwing |
-| `__attribute__((nothrow))` on the callee | M3 (not parsed) |
+| `__attribute__((nothrow))` on the callee | yes (WP-186: the function type is non-throwing, §3 "GNU `nothrow`") |
 | a dependent operand (value-dependent `CXXNoexceptExpr`) | yes (lazily instantiated member specs, §4.7) |
 | a pseudo-destructor call `t.~T()` ([expr.prim.id.dtor]/2: no effect) | yes (WP-275): never potentially-throwing, and, as clang's `canThrow`, its object expression is not walked either (`noexcept(f().~I())` is true) |
 

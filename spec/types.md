@@ -338,6 +338,7 @@ struct FuncProto {      // 16 bytes
 enum ExcSpec /* tag */ {
     None,                    // potentially throwing (no spec, noexcept(false), throw(T...) pre-17 canon)
     Nothrow,                 // canonical non-throwing
+    NothrowAttr,             // GNU `__attribute__((nothrow))` (WP-186; Nothrow tag, operand 1; sugar, canonical Nothrow)
     DynamicNone,             // `throw()` as written   (sugar; canonical Nothrow from C++17, None before)
     BasicNoexcept,           // `noexcept` as written  (sugar; canonical Nothrow)
     NoexceptExpr(ExprId),    // `noexcept(e)`: sugar resolving to Nothrow/None, or dependent

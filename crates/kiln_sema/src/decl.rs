@@ -2498,6 +2498,7 @@ impl Sema<'_, '_> {
             }
         }
         let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
+        let ty = self.apply_nothrow_attrs(ty, &mut attrs);
         // [dcl.spec.general]/3: a function or member declared with no
         // type (`y();`, `struct S { y; };`) is an invalid `int` one, as
         // clang's `ConvertDeclSpecToType`: later uses name it silently.
@@ -2780,6 +2781,7 @@ impl Sema<'_, '_> {
     pub(crate) fn exc_spec_spelling(&self, exc: ExcSpec) -> String {
         match exc {
             ExcSpec::DynamicNone => "throw()".to_owned(),
+            ExcSpec::NothrowAttr => "__attribute__((nothrow))".to_owned(),
             ExcSpec::NoexceptExpr { expr, .. } => {
                 let mut s = String::from("noexcept(");
                 kiln_ast::types::TypeNames::write_expr(&self.ast, expr, &mut s);
@@ -9534,6 +9536,7 @@ fn attr_kind_of(
             AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION
         }
         ("format", _, true) => AttrKind::FORMAT,
+        ("nothrow", _, true) => AttrKind::NOTHROW,
         _ => return None,
     })
 }

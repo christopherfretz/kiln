@@ -78,6 +78,7 @@ InvalidStaticAssertMessage = "invalid-static-assert-message" [];
 LiteralConversion = "literal-conversion" [];
 LiteralRange = "literal-range" [];
 ManyBracesAroundScalarInit = "many-braces-around-scalar-init" [];
+MicrosoftExceptionSpec = "microsoft-exception-spec" [];
 MissingConstinit = "missing-constinit" [];
 MissingDeclarations = "missing-declarations" [];
 MissingExceptionSpec = "missing-exception-spec" [];
