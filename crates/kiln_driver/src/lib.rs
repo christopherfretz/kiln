@@ -118,7 +118,8 @@ overrides both.
 
 Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -idirafter -cxx-isystem -nostdinc -nostdinc++ -nostdlibinc -nobuiltininc
--isysroot --sysroot -resource-dir -stdlib= --target= --embed-dir= -M -MM
+-isysroot --sysroot -resource-dir -stdlib= -f[no-]experimental-library
+--target= --embed-dir= -M -MM
 -MD -MMD -MF -MT -MQ -MP -W... -w -pedantic -ferror-limit=
 -fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
 -fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -verify[=<prefixes>]
