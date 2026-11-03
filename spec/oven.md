@@ -2877,6 +2877,15 @@ Specified in **`spec/reflection.md`** §3:
   typed-copy rule (§2.1, §2.5);
 - the `bi::META` instruction and the `SemaBridge::meta` entry point
   (§3.2);
+- `bi::META_EXC` (31; operands `[dst, what, at, site + 1]`): run only in
+  the block after a `bi::META` call whose failure is thrown (§8.2). It
+  writes the reflection of the failing intrinsic to `dst` and builds the
+  message (`Str` recipe) at `what` and the call's `source_location` at
+  `at` from the pending failure, which the block then passes to the
+  `std::meta::exception` constructor and throws as a throw-expression
+  ("Exceptions" above). `SemaBridge::meta_exception` names the
+  constructor when the call is compiled, `SemaBridge::meta_throw` makes
+  the values when the call fails;
 - the purity classes and the per-op table (§3.3);
 - `MetaCtx` (§3.4) and materialized results (§3.5);
 - memoization (§3.6);
