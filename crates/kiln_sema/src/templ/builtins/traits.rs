@@ -1049,7 +1049,7 @@ impl Sema<'_, '_> {
             TypeView::Pointer(_) | TypeView::MemberPointer { .. } | TypeView::Enum(_)
         ) || self.is_arithmetic_ext(q)
             || self.is_nullptr_type(q)
-            || self.is_meta_info_type(q)
+            || self.is_meta_info(q)
     }
 
     /// Scalar or vector (clang treats vectors as scalars here).
