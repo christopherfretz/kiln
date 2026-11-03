@@ -1190,6 +1190,20 @@ impl DefinitionBits {
     /// a class that does (a GNU/C99 extension; clang
     /// `RecordDecl::hasFlexibleArrayMember`).
     pub const HAS_FLEXIBLE_ARRAY_MEMBER: DefinitionBits = DefinitionBits(1 << 52);
+    /// `[[clang::trivial_abi]]` is in effect: the class has the attribute
+    /// and clang's `checkIllFormedTrivialABIStruct` kept it. Its copy and
+    /// move constructors and destructor are trivial for the purposes of
+    /// calls (spec/abi.md §7x; WP-460).
+    pub const TRIVIAL_ABI: DefinitionBits = DefinitionBits(1 << 53);
+    /// The copy constructor is trivial for the purposes of calls although
+    /// not trivial (clang `hasTrivialCopyConstructorForCall` and not
+    /// `hasTrivialCopyConstructor`): the class or a subobject has
+    /// `TRIVIAL_ABI`. Trivial-for-call is this bit or `TRIVIAL_COPY_CTOR`.
+    pub const COPY_CTOR_FOR_CALL: DefinitionBits = DefinitionBits(1 << 54);
+    /// The move-constructor analogue of `COPY_CTOR_FOR_CALL`.
+    pub const MOVE_CTOR_FOR_CALL: DefinitionBits = DefinitionBits(1 << 55);
+    /// The destructor analogue of `COPY_CTOR_FOR_CALL`.
+    pub const DTOR_FOR_CALL: DefinitionBits = DefinitionBits(1 << 56);
 
     /// No bits.
     pub const fn empty() -> Self {

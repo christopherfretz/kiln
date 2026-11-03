@@ -39,6 +39,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "coro_only_destroy_when_complete"
             | "optnone"
             | "minsize"
+            | "trivial_abi"
             | "naked"
             | "may_alias"
             | "init_priority"

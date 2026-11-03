@@ -49,6 +49,11 @@ impl AttrKind {
     pub const NOTHROW: AttrKind = AttrKind(76);
     pub const ENABLE_IF: AttrKind = AttrKind(77);
     pub const DIAGNOSE_IF: AttrKind = AttrKind(78);
+    /// `[[clang::trivial_abi]]` / `__attribute__((trivial_abi))` on a
+    /// class (clang `TrivialABIAttr`): when it is in effect (the class
+    /// bit `DefinitionBits::TRIVIAL_ABI`) the class is trivial for the
+    /// purposes of calls, passed and returned in registers, and the
+    /// callee destroys a by-value parameter (spec/abi.md §7x; WP-460).
     pub const TRIVIAL_ABI: AttrKind = AttrKind(79);
     pub const PREFERRED_NAME: AttrKind = AttrKind(80);
     pub const EXCLUDE_FROM_EXPLICIT_INSTANTIATION: AttrKind = AttrKind(81);

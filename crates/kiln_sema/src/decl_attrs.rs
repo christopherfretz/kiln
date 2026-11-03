@@ -56,6 +56,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE => "coro_only_destroy_when_complete",
         AttrKind::OPTNONE => "optnone",
         AttrKind::MINSIZE => "minsize",
+        AttrKind::TRIVIAL_ABI => "trivial_abi",
         AttrKind::NAKED => "naked",
         AttrKind::MAY_ALIAS => "may_alias",
         AttrKind::INIT_PRIORITY => "init_priority",
@@ -369,6 +370,11 @@ impl Sema<'_, '_> {
                 "minsize",
                 "functions and Objective-C methods",
             ),
+            // clang `TrivialABI`: `SubjectList<[CXXRecord]>` (ignored
+            // with a warning).
+            AttrKind::TRIVIAL_ABI if !is_record_kind(kind) => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "trivial_abi", "classes")
+            }
             AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE if !is_record_kind(kind) => wrong(
                 self,
                 DiagId::sema_attribute_wrong_decl_type,

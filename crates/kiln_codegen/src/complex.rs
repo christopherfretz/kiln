@@ -897,6 +897,7 @@ impl Cg<'_> {
         if self.referee(q).is_some() {
             CallArg::Scalar(self.load(LTy::PTR, a.v, a.align, false))
         } else if self.is_aggregate(q) {
+            self.forward_param_cleanup(a.v);
             CallArg::Agg(a)
         } else if self.is_complex(q) {
             match self.cx_load(a, q, ALL) {

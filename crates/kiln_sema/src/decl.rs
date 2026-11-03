@@ -7270,6 +7270,7 @@ impl Sema<'_, '_> {
         self.select_destructor(r);
         let bits = self.special_member_bits(r, bits);
         let bits = self.finish_special_members(r, bits);
+        let bits = self.trivial_abi_bits(r, bits);
         // [class.compare.default]/4: the implicit `operator==`s.
         let mut friends =
             build.as_mut().map(|b| std::mem::take(&mut b.friends)).unwrap_or_default();
@@ -9064,6 +9065,7 @@ impl Sema<'_, '_> {
                         | "coro_only_destroy_when_complete"
                         | "optnone"
                         | "minsize"
+                        | "trivial_abi"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
@@ -9813,6 +9815,8 @@ fn attr_kind_of(
         // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
         ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,
         ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
+        // clang `Clang<"trivial_abi">`.
+        ("trivial_abi", _, _) if gnu_syntax || clang_scope => AttrKind::TRIVIAL_ABI,
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
         ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
         ("preferred_name", _, gnu) if gnu || clang_scope => AttrKind::PREFERRED_NAME,
