@@ -179,8 +179,18 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
 /// natively on an `AArch64` host it does, cross-compiling from x86-64 (the
 /// GitHub runner) it does not. kiln defaults to on; the explicit flag
 /// makes the comparison host-independent.
+///
+/// `-ftrivial-auto-var-init=uninitialized`: kiln writes the C++26
+/// erroneous value of an uninitialized automatic variable by default
+/// (P2795R5, spec/codegen.md §7q), which the clang oracles do not
+/// implement; `erroneous_init.cpp` compares kiln's fill with clang's
+/// `-ftrivial-auto-var-init=zero` through its `//@ args:`.
 fn pinned_flags(triple: &str) -> &'static [&'static str] {
-    if triple.starts_with("aarch64") { &["-moutline-atomics"] } else { &[] }
+    if triple.starts_with("aarch64") {
+        &["-moutline-atomics", "-ftrivial-auto-var-init=uninitialized"]
+    } else {
+        &["-ftrivial-auto-var-init=uninitialized"]
+    }
 }
 
 fn corpus_dir() -> PathBuf {

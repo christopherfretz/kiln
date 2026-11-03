@@ -5,6 +5,8 @@
 // constant step; plain `inbounds` for signed indices, subtraction and
 // decrement. Compared with clang 22's IR exactly.
 //@ expect: ir
+// clang 22 has no C++26 erroneous values (P2795R5, spec/codegen.md §7q).
+//@ args: -ftrivial-auto-var-init=uninitialized
 //@ requires: clang>=22
 //@ requires: llvm>=22
 struct Inner { int x, y; };

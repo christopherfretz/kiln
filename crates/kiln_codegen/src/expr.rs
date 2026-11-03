@@ -4299,6 +4299,9 @@ impl Cg<'_> {
             && self.f.fir.cur().is_some()
         {
             self.emit_var_init(d, q, addr, init)?;
+        } else if init.is_none() {
+            // [basic.indet]/1: the erroneous value (spec/codegen.md §7q).
+            self.auto_var_init(d, addr);
         }
         // clang `EmitAutoVarCleanups`: no insertion point, no cleanup
         // (sema rejects jumps into the variable's scope).
