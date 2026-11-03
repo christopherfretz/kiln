@@ -1112,6 +1112,7 @@ impl Sema<'_, '_> {
                     };
                     return Ok(TemplateIdRef::Value(self.build_decl_ref_extra(v, l, Some(extra))));
                 }
+                self.check_var_template_own_init(d, list, l)?;
                 let n = self.ast.decls.get(d).name();
                 let dep_name = self
                     .ast

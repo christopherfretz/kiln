@@ -1960,10 +1960,13 @@ impl Sema<'_, '_> {
             && let Some(t) = n.ty()
             && self.contains_undeduced_auto(t)
         {
-            let msg = self
-                .diag(DiagId::sema_auto_var_in_own_initializer, loc)
-                .arg(self.decl_name(d))
-                .arg(self.ty_arg(t));
+            let msg = match self.auto_expl_spec_in_own_init(d, loc) {
+                Some(m) => m,
+                None => self
+                    .diag(DiagId::sema_auto_var_in_own_initializer, loc)
+                    .arg(self.decl_name(d))
+                    .arg(self.ty_arg(t)),
+            };
             self.emit(msg);
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
             return self.recover_err(&[], loc);

@@ -14,7 +14,7 @@ use kiln_ast::templates::SpecKind;
 use kiln_ast::types::Quals;
 use kiln_ast::types::TemplateArg;
 use kiln_ast::{DeclId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -286,6 +286,82 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// `v` named with arguments `args` and no scope (clang 22's
+    /// own-initializer diagnostics: `ap<T *>`, `m<int>`).
+    fn unscoped_spec_name(&self, v: DeclId, args: ArgListId) -> String {
+        let mut s = self.decl_name(v);
+        let names = crate::names::SemaNames::new(self);
+        kiln_ast::types::write_arg_list(&self.ast.types, &names, args, &mut s);
+        s
+    }
+
+    /// [dcl.spec.auto.general]/11 (clang 22): variable `v`, whose type is
+    /// undeduced and which is the explicit specialization being
+    /// initialized, names itself at `loc`. The diagnostic names it as one.
+    pub(crate) fn auto_expl_spec_in_own_init(&self, v: DeclId, loc: Loc) -> Option<Diag> {
+        let (_, info) = self.ast.spec_info(v)?;
+        if self.clang_compat < 22 || info.kind != SpecKind::ExplicitSpecialization {
+            return None;
+        }
+        let args = self.ast.types.canonical_args(info.print_args);
+        let ty = self.ast.decls.get(v).ty()?;
+        let name = self.unscoped_spec_name(v, args);
+        Some(
+            self.diag(DiagId::sema_auto_var_expl_spec_in_own_initializer, loc)
+                .arg(name)
+                .arg(self.ty_arg(ty)),
+        )
+    }
+
+    /// [dcl.spec.auto.general]/11 (clang 22 `CheckVarTemplateId`): the
+    /// dependent template-id `tmpl<args>` at `loc` names the variable
+    /// template or partial specialization whose initializer is being
+    /// parsed, with its own parameters as the arguments, while its type
+    /// is undeduced: an error, and the pattern is invalid. clang 19 lets
+    /// it through (and fails at the use); kiln follows clang 22 there too
+    /// only in wording, at instantiation.
+    pub(crate) fn check_var_template_own_init(
+        &mut self,
+        tmpl: DeclId,
+        args: ArgListId,
+        loc: Loc,
+    ) -> Result<(), ()> {
+        // The variable whose declarator or initializer is being parsed.
+        let v = self.initializing.or(self.lambda_mangle.var);
+        let Some(v) = v.filter(|_| self.clang_compat >= 22) else { return Ok(()) };
+        let Some(ty) = self.ast.decls.get(v).ty().filter(|&t| self.contains_undeduced_auto(t))
+        else {
+            return Ok(());
+        };
+        let tmpl = self.ast.first(tmpl);
+        let canon = self.ast.types.canonical_args(args);
+        let (id, name) = if self.pattern_of(tmpl).is_some_and(|p| self.ast.first(p) == self.ast.first(v)) {
+            let Some(info) = self.ast.template_info(tmpl).copied() else { return Ok(()) };
+            let list = *self.ast.templates.param_list(info.params);
+            let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
+            let own: Vec<_> = params.into_iter().map(|p| self.template_param_arg(p)).collect();
+            let own = self.ast.types.arg_list(&own);
+            if self.ast.types.canonical_args(own) != canon {
+                return Ok(());
+            }
+            (DiagId::sema_auto_var_template_in_own_initializer, self.decl_name(tmpl))
+        } else if let Some((_, info)) = self.ast.partial_spec_info(v)
+            && self.ast.first(info.template) == tmpl
+        {
+            let own = info.args;
+            if self.ast.types.canonical_args(own) != canon {
+                return Ok(());
+            }
+            (DiagId::sema_auto_var_partial_spec_in_own_initializer, self.unscoped_spec_name(v, own))
+        } else {
+            return Ok(());
+        };
+        let d = self.diag(id, loc).arg(name).arg(self.ty_arg(ty));
+        self.emit(d);
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        Err(())
+    }
+
     /// Whether `d`'s semantic context is a class.
     fn is_in_record_ctx(&self, d: DeclId) -> bool {
         self.ast.decls.get(d).ctx().is_some_and(|c| self.kind_of(c) == DeclKind::CXXRecord)
@@ -357,6 +433,8 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(v, &attrs);
         }
+        // Its initializer follows (as `act_on_declarator`).
+        self.lambda_mangle.var = Some(v);
         Some(v)
     }
 

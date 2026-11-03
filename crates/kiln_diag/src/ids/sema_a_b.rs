@@ -204,3 +204,6 @@ sema_builtin_ordered_compare = Error (2) "ordered compare requires two args of f
 sema_builtin_pass_in_regs_non_class = Error (1) "argument {0} is not an unqualified class type";
 sema_builtin_passing_incompatible = Error (2) "passing {0} to parameter of incompatible type {1}";
 sema_builtin_verbose_trap_arg = Error (1) "argument to __builtin_verbose_trap must {0:be a pointer to a constant string|not contain $}";
+sema_auto_var_template_in_own_initializer = Error (2) "variable template '{0}' declared with deduced type {1} cannot appear in its own initializer";
+sema_auto_var_partial_spec_in_own_initializer = Error (2) "variable template partial specialization '{0}' declared with deduced type {1} cannot appear in its own initializer";
+sema_auto_var_expl_spec_in_own_initializer = Error (2) "variable template explicit specialization '{0}' declared with deduced type {1} cannot appear in its own initializer";
