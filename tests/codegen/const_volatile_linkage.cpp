@@ -24,4 +24,5 @@ const volatile int *l() { return &ar2[1][1]; }
 const int *m() { return &ci; }
 const volatile int *o() { return &anon; }
 const volatile int *q() { return &n::ncv; }
-int r() { return ca.x + (p != nullptr); }
+int r() { return ca.x; }
+volatile const int *const *s() { return &p; }

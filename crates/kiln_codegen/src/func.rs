@@ -1935,7 +1935,15 @@ impl Cg<'_> {
             return Some(self.store(raw, a.v, a.align, vol));
         }
         if n == 3 {
-            let w = self.shuffle(v, None, vec![0, 1, 2, kiln_llvm::SHUFFLE_POISON]);
+            // clang 22 widens with lane 3 taken from an `undef` operand
+            // (19: a `poison` operand and a poison mask lane).
+            let w = if self.opts.clang_compat >= 22 {
+                let t = self.f.fir.ty(&self.m, v);
+                let u = V::C(self.m.const_undef(t));
+                self.shuffle(v, Some(u), vec![0, 1, 2, 3])
+            } else {
+                self.shuffle(v, None, vec![0, 1, 2, kiln_llvm::SHUFFLE_POISON])
+            };
             return Some(self.store(w, a.v, a.align, vol));
         }
         None

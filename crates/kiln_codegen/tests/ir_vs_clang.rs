@@ -122,23 +122,14 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     ("builtins_math", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // clang 22 instruction-selection changes that kiln has not followed:
     // `alloca` of the atomic flag / order temporaries, `i1` (19: `i8`) overflow-result
-    // truncation, `undef` (19: `poison`) ext-vector widening shuffles,
-    // `select` for vector `?:`, constant-folded vector reductions, and the
-    // block order of `delete`'s null check.
+    // truncation, `select` for vector `?:`, and the block order of
+    // `delete`'s null check.
     ("atomic_builtins", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("atomic_orders", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("atomic_orders", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("builtins_overflow", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("builtins_shufflevector", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("builtins_shufflevector", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("ext_vector_element", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("ext_vector_element", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("vector_abi", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("vector_abi", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("vector_cond", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("vector_cond", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("vector_const", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("vector_const", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("new_array_cookie", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("new_array_cookie", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("new_delete_replaced", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
