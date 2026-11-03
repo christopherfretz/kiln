@@ -544,6 +544,8 @@ impl Oven {
             Ok(p)
         } else if aux & 0xff == crate::kbc::bi::ASSUME_ALIGNED {
             self.bi_assume_aligned(b, aux >> 8 != 0, a as u64, bb, c).map(|()| a)
+        } else if aux & 0xff == crate::kbc::bi::PTR_ALIGN {
+            self.bi_ptr_align(b, aux >> 8, a as u64, bb, OTy(t1))
         } else if aux & 0xff == crate::kbc::bi::MSG_CHARS {
             self.bi_msg_chars(a, bb as u64, OTy(t1)).map(|()| a)
         } else if aux & 0xff == crate::kbc::bi::UNCAUGHT {

@@ -799,6 +799,16 @@ impl Oven {
                     ),
                 };
             }
+            BiFault::AlignRun { adjust: false, align } => {
+                return format!(
+                    "cannot constant evaluate whether run-time alignment is at least {align}"
+                );
+            }
+            BiFault::AlignRun { adjust: true, align } => {
+                return format!(
+                    "cannot constant evaluate the result of adjusting alignment to {align}"
+                );
+            }
             BiFault::AlignArg { lo, hi, w, signed, big } => {
                 let b = u128::from(hi) << 64 | u128::from(lo);
                 let v = if signed { (b as i128).to_string() } else { b.to_string() };
@@ -873,6 +883,7 @@ impl Oven {
             | BiFault::CastUnrep { .. }
             | BiFault::Align { .. }
             | BiFault::Lifetime { .. }
+            | BiFault::AlignRun { .. }
             | BiFault::AlignArg { .. } => String::new(),
         }
     }

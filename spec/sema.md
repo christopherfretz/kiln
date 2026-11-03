@@ -888,6 +888,28 @@ Redeclaration and linkage rules:
   volatile warns as a volatile return type does: at a class member's
   instantiation, and for a deduced function template specialization at
   its first use. Tests: `depr.volatile.type/volatile-param{,-19,-cxx17}.cpp`.
+- **Volatile increment, decrement, assignment and structured bindings**
+  ([depr.volatile.type]/1-3, C++20 and later; WP-432, clang
+  `CheckIncrementDecrementOperand` / `CheckAssignmentOperands` /
+  `ActOnDecompositionDeclarator`):
+  - `++` / `--` (prefix or postfix) of a volatile-qualified object warns
+    `increment|decrement of object of volatile-qualified type T is
+    deprecated` at the operator, after the modifiable check
+    (`check_volatile_inc_dec`, `sema_deprecated_volatile_incdec`);
+  - a simple assignment to a volatile-qualified object outside an
+    unevaluated operand records its left operand (`note_volatile_assign`);
+    discarding the assignment's value (`ignored_value_conversions`, after
+    parentheses and implicit casts) drops it (`discard_volatile_assign`);
+    one still recorded when the function body, a namespace-scope
+    initializer or the translation unit ends warns `use of result of
+    assignment to object of volatile-qualified type T is deprecated` at
+    the left operand's begin (`sema_deprecated_volatile_assign`). A
+    compound assignment never warns (clang 19 and 22 do not);
+  - a `volatile` structured binding declaration warns `volatile
+    qualifier in structured binding declaration is deprecated` at the
+    `volatile` keyword (`sema_deprecated_volatile_binding`).
+  All [-Wdeprecated-volatile]. Tests:
+  `depr.volatile.type/volatile-incdec-assign{,-cxx17}.cpp`.
 - **A `...` in a non-parameter declarator** ([temp.variadic]/5): the
   parser keeps it in `Declarator::ellipsis`; `type_for_declarator_at`
   reports `only function and template parameters can be parameter
@@ -1473,7 +1495,14 @@ and returns the scope it names:
   - an unfixed one's initializer is an integral constant expression that
     may fold (`fold_not_ice`, below)
   - an unfixed one gets its type from the enumerators' range (the best
-    type), and the enumerators are then retyped to the enumeration
+    type), and the enumerators are then retyped to the enumeration; a
+    `packed` one (clang `computeBestEnumTypes` with `IsPacked`, WP-432)
+    takes the smallest of `signed char` / `short` (with negative values)
+    or `unsigned char` / `unsigned short` that holds the range, else
+    the usual best type, and still promotes to `int`. A member
+    enumeration of a class template gets its attributes at
+    instantiation. Tests `dcl.enum/packed-underlying-type.cpp`,
+    `tests/codegen/enum_packed.cpp`
   - `replace_enumerator_init` records the converted initializer
 - **Bit-fields** ([class.bit]; `bit_width`, clang `VerifyBitField`):
   - a named bit-field's type must be integral or an enumeration, checked
@@ -1838,8 +1867,8 @@ and returns the scope it names:
       attributes before `act_on_finish_record_definition`, so `packed` /
       `aligned` there shape its layout (also for a class template and
       its specializations), with no warning, whether or not declarators
-      follow. Not yet for an enumeration's closing brace (still
-      `place it after "enum"`). Test:
+      follow. An enumeration's closing brace takes them the same way
+      (WP-432, before `act_on_finish_enum_definition`). Test:
       `tests/conformance/dcl.attr.grammar/gnu-attributes-after-class-body.cpp`.
     - on a non-declaration statement: `'X' attribute cannot be applied
       to a statement` per declaration attribute
@@ -3330,7 +3359,22 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     `level` in [0, 65535] (`argument value V is outside the valid range`
     at the callee); a nonzero level warns `calling '__builtin_frame_address'
     with a nonzero argument is unsafe` (`-Wframe-address`, in `-Wall`).
+    `__builtin_return_address(level)` (WP-432) is checked the same way,
+    with its own name in the warning
+    (`ext.gnu.builtins/return-address-args.cpp`).
     `__builtin_debugtrap()` takes no argument.
+  - `__builtin_elementwise_add_sat(x, y)` / `_sub_sat(x, y)` (custom,
+    `vector_ops.rs` `builtin_elementwise_sat`; WP-432). At 22
+    (`BuiltinElementwiseMath` with clang 22's integer restriction): both
+    operands are lvalue-converted (arrays decay, no promotion); the first
+    must be a scalar or vector of integer type (`bool` and an unscoped
+    enumeration count; `1st argument must be a scalar or vector of
+    integer types (was T)`), then the second must have the same
+    unqualified type (`arguments are of different types`). At 19: `max`
+    / `min`'s conversions and checks, then the (element) type must be an
+    integer (`1st argument must be a vector of integers (was T)`). The
+    call has the (common) operand type.
+    `ext.gnu.builtins/elementwise-sat-{args,constexpr}{,-clang22}.cpp`.
   - `__builtin_elementwise_abs(x)` / `_max(x, y)` / `_min(x, y)` (custom,
     `vector_ops.rs`; WP-416), by compatibility level. At 22 (clang 22
     `BuiltinElementwiseMath`): the operands are lvalue-converted (arrays
