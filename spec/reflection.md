@@ -262,9 +262,10 @@ whether the op may run in a trial (§4.3):
 this list and the tables is a spec bug, fixed in the same change.
 
 - **Query · Stable · WP-470, done**: `type_of`.
-- **Query · Stable · WP-476**: `object_of`, `constant_of`, `parent_of`,
+- **Query · Stable · WP-476, done** (contract: spec/reflection-queries.md):
+  `object_of`, `constant_of`, `parent_of`,
   `dealias`, `has_template_arguments`, `operator_of`, `symbol_of`,
-  `u8symbol_of`, `variable_of`, `return_type_of`, `is_function_parameter`,
+  `u8symbol_of`, `return_type_of`, `is_function_parameter`,
   `is_explicit_object_parameter`, `is_vararg_function`, `is_public`,
   `is_protected`, `is_private`, `is_virtual`, `is_pure_virtual`,
   `is_override`, `is_final`, `is_deleted`, `is_user_provided`,
@@ -291,8 +292,9 @@ this list and the tables is a spec bug, fixed in the same change.
   `u8identifier_of`, `display_string_of`, `u8display_string_of`,
   `source_location_of` (§3.9), and the helpers `__kiln_reflection_range`,
   `__kiln_member_offset`, `__kiln_access_context` (§3.5).
-- **Query · PointDependent · WP-476**: `has_default_argument`,
-  `is_defaulted`, `is_complete_type`, `is_enumerable_type`.
+- **Query · PointDependent · WP-476, done**: `variable_of`,
+  `has_default_argument`, `is_defaulted`, `is_complete_type`,
+  `is_enumerable_type`.
 - **Trait · Stable · WP-477**: `is_void_type`, `is_null_pointer_type`,
   `is_integral_type`, `is_floating_point_type`, `is_array_type`,
   `is_pointer_type`, `is_lvalue_reference_type`, `is_rvalue_reference_type`,
