@@ -265,8 +265,19 @@ impl Sema<'_, '_> {
                     format!("'{}' is not a character type of a string", self.ty_str(e)),
                 );
             }
-        } else if self.ast.types.is_array(e) || !self.is_structural(e) {
-            return fail(loc, format!("'{}' is not a structural type", self.ty_str(e)));
+        } else {
+            // An array element is reflect_constant_array of it: the
+            // structural requirement is on remove_all_extents_t<U>.
+            let mut t = e;
+            while self.ast.types.is_array(t) {
+                match self.ast.types.element(t) {
+                    Some(x) if self.ast.types.array_size(t).is_some() => t = x,
+                    _ => return fail(loc, format!("'{}' is not a structural type", self.ty_str(e))),
+                }
+            }
+            if !self.is_structural(t) {
+                return fail(loc, format!("'{}' is not a structural type", self.ty_str(t)));
+            }
         }
         let m = oven.meta_elems_len(r, string, ctx)?;
         if m == 0 && !string {
