@@ -1669,6 +1669,11 @@ impl PrintEnv for AstNames<'_> {
             Reflectee::Annotation(a) => {
                 let _ = write!(out, "(annotation #{})", a.index());
             }
+            Reflectee::FnParam(f, i) => {
+                let _ = write!(out, "(parameter #{i} of ");
+                self.write_qualified_name(f, out);
+                out.push(')');
+            }
         }
     }
 }

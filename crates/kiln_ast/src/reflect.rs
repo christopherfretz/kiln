@@ -61,6 +61,12 @@ pub enum Reflectee {
     DataMemberSpec(DmsId),
     /// An annotation (reserved).
     Annotation(AnnId),
+    /// The `index`-th parameter of function `function` (first
+    /// declaration) as P3096 `parameters_of` designates it: the function
+    /// parameter, not the variable a definition introduces for it
+    /// (`variable_of` maps one to the other; spec/reflection-queries.md).
+    /// WP-478's `parameters_of` builds these.
+    FnParam(DeclId, u32),
 }
 
 const _: () = assert!(size_of::<Reflectee>() <= 12);
@@ -90,6 +96,7 @@ impl Reflectee {
             Reflectee::BaseSpec(..) => 8,
             Reflectee::DataMemberSpec(_) => 9,
             Reflectee::Annotation(_) => 10,
+            Reflectee::FnParam(..) => 11,
         }
     }
 
@@ -107,11 +114,13 @@ impl Reflectee {
             Reflectee::BaseSpec(..) => "base",
             Reflectee::DataMemberSpec(_) => "data-member-spec",
             Reflectee::Annotation(_) => "annotation",
+            Reflectee::FnParam(..) => "parameter",
         }
     }
 
     /// The one-word payload stored in a `CXXReflectExpr`'s `a` (a
-    /// `BaseSpec` stores its class; the index lives in the table).
+    /// `BaseSpec` or `FnParam` stores its class or function; the index
+    /// lives in the table).
     pub fn payload(self) -> u32 {
         match self {
             Reflectee::Null => 0,
@@ -119,7 +128,8 @@ impl Reflectee {
             Reflectee::Decl(d)
             | Reflectee::Namespace(d)
             | Reflectee::NamespaceAlias(d)
-            | Reflectee::BaseSpec(d, _) => d.raw(),
+            | Reflectee::BaseSpec(d, _)
+            | Reflectee::FnParam(d, _) => d.raw(),
             Reflectee::Template(n) => n.raw(),
             Reflectee::Value(v) | Reflectee::Object(v) => v.raw(),
             Reflectee::DataMemberSpec(m) => m.raw(),
@@ -128,8 +138,8 @@ impl Reflectee {
     }
 
     /// The reflectee a `(tag, payload)` pair encodes, for the one-word
-    /// kinds (`None` for `BaseSpec` and unknown tags: those are read from
-    /// the table).
+    /// kinds (`None` for `BaseSpec`, `FnParam` and unknown tags: those are
+    /// read from the table).
     pub fn decode(tag: u8, a: u32) -> Option<Reflectee> {
         Some(match tag {
             0 => Reflectee::Type(QualType::from_raw(a).unwrap_or(QualType::ERROR)),
