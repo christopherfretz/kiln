@@ -968,7 +968,9 @@ mod tests {
         let a = parse("-fexperimental-library t.cpp");
         assert!(a.experimental_library);
         assert_eq!(a.errors, []);
-        assert!(!parse("-fexperimental-library -fno-experimental-library t.cpp").experimental_library);
+        assert!(
+            !parse("-fexperimental-library -fno-experimental-library t.cpp").experimental_library
+        );
     }
 
     #[test]

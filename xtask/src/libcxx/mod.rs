@@ -541,9 +541,16 @@ fn execute(opts: &Options) -> Result<bool, String> {
             let text = std::fs::read_to_string(p).unwrap_or_default();
             let verdict = match run::env_unsupported(rel, &tmp_dir, libcxx_version, mem)
                 .map_or_else(
-                || run::prepare(kind, &text, &local_cfgs(&cfg_cache, &test_root, p), &feature_refs),
-                |r| Err(Outcome::Unsupported(r)),
-            ) {
+                    || {
+                        run::prepare(
+                            kind,
+                            &text,
+                            &local_cfgs(&cfg_cache, &test_root, p),
+                            &feature_refs,
+                        )
+                    },
+                    |r| Err(Outcome::Unsupported(r)),
+                ) {
                 Ok((d, _, xfail)) => {
                     let mut v = "run".to_owned();
                     if let Some(x) = run::effective_xfail(rel, xfail, clang, libcxx_version) {
@@ -574,7 +581,8 @@ fn execute(opts: &Options) -> Result<bool, String> {
     let scratch = target.join("xtask-libcxx").join(format!("run-{}-{nanos}", std::process::id()));
     let tmp = run::tmp_root(std::process::id(), nanos);
     for dir in [&scratch, &tmp] {
-        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     let probe = RssProbe::detect(&scratch);
     // Clang mode: the harness self-check (spec/libcxx.md "Clang mode").

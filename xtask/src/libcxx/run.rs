@@ -466,7 +466,10 @@ pub fn env_unsupported(
     if let Some(&(_, need, why)) = MEM_UNSUPPORTED.iter().find(|(p, _, _)| *p == rel)
         && let Some(m) = mem.filter(|m| m.mib < need)
     {
-        return Some(format!("env: --mem-limit {} MiB is below the {need} MiB it needs: {why}", m.mib));
+        return Some(format!(
+            "env: --mem-limit {} MiB is below the {need} MiB it needs: {why}",
+            m.mib
+        ));
     }
     if GROUPING_UNSUPPORTED.contains(&rel) && en_us_grouping_is_3() {
         return Some(GROUPING_REASON.to_owned());
@@ -1444,15 +1447,13 @@ mod tests {
 
     #[test]
     fn env_exclusions() {
-        for list in
-            [
-                ROOT_UNSUPPORTED,
-                ROOT_NPROC_UNSUPPORTED,
-                HOST_FS_UNSUPPORTED,
-                TZDATA_Z_UNSUPPORTED,
-                GROUPING_UNSUPPORTED,
-            ]
-        {
+        for list in [
+            ROOT_UNSUPPORTED,
+            ROOT_NPROC_UNSUPPORTED,
+            HOST_FS_UNSUPPORTED,
+            TZDATA_Z_UNSUPPORTED,
+            GROUPING_UNSUPPORTED,
+        ] {
             let mut sorted = list.to_vec();
             sorted.sort_unstable();
             sorted.dedup();
@@ -1593,10 +1594,7 @@ mod tests {
         assert_eq!(m5_triaged(rel, false, Some(190_107)), None);
         assert_eq!(m5_triaged(rel, false, Some(230_000)), None);
         assert_eq!(m5_triaged(rel, false, None), None);
-        assert_eq!(
-            effective_xfail(rel, None, false, Some(220_108)),
-            Some(format!("m5: {reason}"))
-        );
+        assert_eq!(effective_xfail(rel, None, false, Some(220_108)), Some(format!("m5: {reason}")));
         assert_eq!(effective_xfail(rel, None, true, Some(220_108)), None);
         let lit = Some("*".to_owned());
         assert_eq!(effective_xfail("std/a/b.pass.cpp", lit.clone(), false, None), lit);
