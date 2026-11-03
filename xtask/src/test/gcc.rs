@@ -83,6 +83,7 @@ impl Test<'_> {
             return Ok(Verdict::Advisory);
         }
         self.check_capped("the GCC oracle", &o, cap)?;
+        self.gcc_compared = true;
         Ok(if o.success() { Verdict::Accepted } else { Verdict::Rejected(o.stderr_str()) })
     }
 

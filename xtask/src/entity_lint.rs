@@ -30,7 +30,11 @@ const ALLOW: &str = "// same_entity: raw ok";
 /// Directories scanned recursively and single files, relative to the repo
 /// root; missing ones are skipped (they may not exist yet).
 const DIRS: &[&str] = &["crates/kiln_sema/src/meta", "crates/kiln_oven/src/meta"];
-const FILES: &[&str] = &["crates/kiln_sema/src/reflect.rs"];
+const FILES: &[&str] = &[
+    "crates/kiln_sema/src/reflect.rs",
+    "crates/kiln_sema/src/reflect_operand.rs",
+    "crates/kiln_sema/src/reflect_limit.rs",
+];
 
 /// Calls whose value is a declaration (with at least one argument, so
 /// that `slice.first()` is not one), and those taking none.

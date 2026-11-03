@@ -32,4 +32,13 @@ static_assert(ends_with(source_location_of(^^S).file_name(), "source-location-of
 static_assert(std::string_view(source_location_of(^^S).function_name()).empty());
 static_assert(source_location_of(^^int).line() == 0);
 
+constexpr unsigned n_line = __LINE__ + 1;
+namespace ns {
+template <class T> struct Tm {};
+using Alias = Tm<int>;
+}  // namespace ns
+static_assert(source_location_of(^^ns).line() == n_line);
+static_assert(source_location_of(^^ns::Tm).line() == n_line + 1);
+static_assert(source_location_of(^^ns::Alias).line() == n_line + 2);
+
 int main() {}
