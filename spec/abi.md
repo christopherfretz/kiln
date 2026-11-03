@@ -1257,7 +1257,7 @@ std_substitutions.cpp`, `std_cxx11_abi_tag.cpp`, `std_libcxx_spelling.cpp`,
 
 ### 8.23 Landed (WP-386): clang 20+ call lowering at `-fclang-compat=22`
 `IrTypes::with_clang_compat` carries the codegen compat level (the
-driver's `-fclang-compat`, default 19) into classification. At 22,
+driver's `-fclang-compat`, default 22 as the driver) into classification. At 22,
 `aarch64_arg` follows clang 20+ (`AArch64ABIInfo::classifyArgumentType`,
 GCC's convention): an empty class (`[class.prop]`, no data members, size
 1) is no longer ignored-or-`i8` but goes down the generic small-aggregate
@@ -1273,6 +1273,25 @@ are spec/codegen.md §6a. Tests: `tests/conformance/expr.call/
 ir-clang22-argument-passing.cpp` (exact against clang 22) and the
 oracle-22 `ir_vs_clang` corpus, whose former empty-class `Abi`
 deviations now match.
+
+### 8.24 Landed (WP-423): unnamed-type discriminators
+- **Numbering** (`AnonIds::unnamed_tag`, Itanium §5.1.8
+  `<unnamed-type-name> ::= Ut [<nonnegative number>] _`): an unnamed
+  class, union or enumeration with no typedef name for linkage, declared
+  in a class or a function, gets its context's next number, counted in
+  declaration order over every such type of the context (anonymous
+  unions included, nested blocks of a function included; lambdas and
+  typedef-named classes excluded) — clang's per-context mangling number
+  keyed by the empty name. The first mangles `Ut_`, the second `Ut0_`,
+  the k-th `Ut{k-2}_` (`_ZN1AUt0_E`, `_ZZ1hvENUt0_1fEv`). The table is
+  built in one pass over the declarations on first use.
+- **Linkage** (`tag_externally_visible`): only a namespace-scope unnamed
+  class without a typedef name lacks linkage outright (clang
+  `getLVForNamespaceScopeDecl` `hasNameForLinkage`); a member one takes
+  its class's linkage and a local one its function's (§8.10), so the
+  members of an unnamed local class of an inline function are
+  `linkonce_odr` in a comdat. `tests/mangle/unnamed_types.cpp`,
+  `tests/codegen/tbaa_unnamed_o1.cpp`.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

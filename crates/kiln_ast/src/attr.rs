@@ -108,14 +108,19 @@ impl AttrKind {
     /// GNU `naked` on a function (clang `NakedAttr`): no prologue or
     /// epilogue; the body holds only asm statements (WP-405).
     pub const NAKED: AttrKind = AttrKind(107);
+    /// GNU `may_alias` on a type declaration (clang `MayAliasAttr`, no
+    /// subject list): an access through the typedef or tag type is in
+    /// the `omnipotent char` alias class at `-O1`+ (spec/codegen.md
+    /// "TBAA"; WP-423).
+    pub const MAY_ALIAS: AttrKind = AttrKind(108);
     /// GNU `nonnull` on a function or a parameter (clang `NonNullAttr`):
     /// `a` is the `ListId` of `IntegerLiteral`s holding the one-based
     /// parameter indices it names (as written until the declaration
     /// checks them); the empty list names every parameter (WP-421).
-    pub const NONNULL: AttrKind = AttrKind(108);
+    pub const NONNULL: AttrKind = AttrKind(109);
     /// GNU `returns_nonnull` on a function (clang `ReturnsNonNullAttr`)
     /// (WP-421).
-    pub const RETURNS_NONNULL: AttrKind = AttrKind(109);
+    pub const RETURNS_NONNULL: AttrKind = AttrKind(110);
 }
 
 /// Attribute syntax.

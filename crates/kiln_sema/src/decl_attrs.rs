@@ -55,6 +55,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::OPTNONE => "optnone",
         AttrKind::MINSIZE => "minsize",
         AttrKind::NAKED => "naked",
+        AttrKind::MAY_ALIAS => "may_alias",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -86,11 +87,12 @@ impl Sema<'_, '_> {
     /// end of a decl-specifier-seq (`int [[deprecated]] x;`,
     /// [dcl.spec.general]/1), after a ptr-operator or array declarator
     /// ([dcl.ptr]/1, [dcl.array]/1), after a function declarator
-    /// (`void f() [[noreturn]];`, [dcl.fct]/1, `after_function`) or at
-    /// the end of an alias-declaration's type-id. A declaration
-    /// attribute there is `'X' attribute cannot be applied to types`
-    /// (clang `err_attribute_not_type_attr`), or, written `[[gnu::X]]`
-    /// after a function declarator, `attribute 'X' ignored, because it
+    /// (`void f() [[noreturn]];`, [dcl.fct]/1) or at the end of an
+    /// alias-declaration's type-id. A declaration attribute there is
+    /// `'X' attribute cannot be applied to types` (clang
+    /// `err_attribute_not_type_attr`), or, written `[[gnu::X]]` in a
+    /// declarator chunk (after a ptr-operator, an array or a function
+    /// declarator: `in_chunk`), `attribute 'X' ignored, because it
     /// cannot be applied to a type`; it is dropped. GNU-syntax and
     /// vector attributes are kept.
     /// The attribute's name as a diagnostic prints it, `canonical` the
@@ -126,7 +128,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    pub fn act_on_type_position_attrs(&mut self, attrs: &mut Vec<AttrId>, after_function: bool) {
+    pub fn act_on_type_position_attrs(&mut self, attrs: &mut Vec<AttrId>, in_chunk: bool) {
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);
             if matches!(node.syntax, AttrSyntax::Gnu | AttrSyntax::Declspec) {
@@ -135,7 +137,7 @@ impl Sema<'_, '_> {
             let Some(name) = attr_name(&node) else {
                 return true;
             };
-            let id = if after_function && node.flags & AttrNode::GNU_SCOPED != 0 {
+            let id = if in_chunk && node.flags & AttrNode::GNU_SCOPED != 0 {
                 DiagId::sema_attribute_ignored_on_type
             } else {
                 DiagId::sema_attribute_not_type_attr

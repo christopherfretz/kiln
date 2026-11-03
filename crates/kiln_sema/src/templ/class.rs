@@ -10,7 +10,7 @@ use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TypeFlags, TypeView};
+use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TemplateName, TypeFlags, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -184,12 +184,54 @@ impl Sema<'_, '_> {
             .and_then(|i| i.pattern)
             .and_then(|p| self.ast.decls.record(p))
             .map_or(TagKind::Struct, |r| r.tag);
-        let spec = self.builder().class_spec(tmpl, conv.canonical, conv.canonical, tag);
+        let args = self.first_written_template_args(conv);
+        let spec = self.builder().class_spec(tmpl, args, conv.canonical, tag);
         let print = self.suppress_default_args(tmpl, conv.canonical, written.len(), loc);
         if let Some((i, _)) = self.ast.spec_info(spec) {
             self.ast.templates.update_spec(i, |s| s.print_args = print);
         }
         Ok(spec)
+    }
+
+    /// The arguments a new class template specialization keeps: the
+    /// canonical ones, except that clang 22 keeps a template template
+    /// argument as first written (`X<int>::apply`, a qualified template
+    /// name), which its members' types then print with
+    /// (`'X<int>::apply<int>':'int *'`; [temp.arg.template]/1).
+    fn first_written_template_args(
+        &mut self,
+        conv: crate::templ::args::ConvertedArgs,
+    ) -> ArgListId {
+        if self.clang_compat < 22 {
+            return conv.canonical;
+        }
+        let sugared = self.ast.types.args(conv.sugared).to_vec();
+        let canonical = self.ast.types.args(conv.canonical).to_vec();
+        if sugared.len() != canonical.len() {
+            return conv.canonical;
+        }
+        let mut changed = false;
+        let out: Vec<TemplateArg> = sugared
+            .iter()
+            .zip(&canonical)
+            .map(|(&s, &c)| match s.view() {
+                ArgView::Template(n)
+                    if matches!(
+                        self.ast.types.template_name_view(n),
+                        TemplateName::Qualified { .. }
+                    ) && !self
+                        .ast
+                        .types
+                        .template_name_flags(n)
+                        .intersects(TypeFlags::DEPENDENT_INSTANTIATION) =>
+                {
+                    changed = true;
+                    s
+                }
+                _ => c,
+            })
+            .collect();
+        if changed { self.ast.types.arg_list(&out) } else { conv.canonical }
     }
 
     /// `args` without the trailing arguments equal to their parameter's
@@ -596,10 +638,50 @@ impl Sema<'_, '_> {
             && !self.defining.iter().any(|&x| self.ast.first(x) == self.ast.first(r))
         {
             let d = self.diag(DiagId::sema_incomplete_nested_name_spec, loc).arg(self.ty_arg(q));
+            let d = self.incomplete_note(d, q);
             self.emit(d);
             return false;
         }
         true
+    }
+
+    /// The class or enumeration `ctx` that a nested-name-specifier
+    /// component `name::` at `loc` named, before the next name is looked
+    /// up in it: it must be complete ([expr.prim.id.qual]/1, clang's
+    /// `RequireCompleteDeclContext` at the last qualifier's name). A
+    /// dependent context is checked at instantiation, a class being
+    /// defined is complete enough, a namespace is accepted. The type
+    /// prints fully qualified (clang prints the context's own type, not
+    /// the typedef that named it); the location is [`Sema::nns_poi`].
+    /// False after a diagnostic.
+    pub fn require_complete_nns_ctx(&mut self, ctx: DeclId, loc: Loc) -> bool {
+        if !self.nns_ctx_incomplete(ctx) {
+            self.nns_start = None;
+            return true;
+        }
+        let kind = self.kind_of(ctx);
+        let ty = self.tag_type(ctx);
+        let at = self.nns_poi(loc);
+        let d = self
+            .diag(DiagId::sema_incomplete_nested_name_spec, at)
+            .arg(format!("'{}'", self.decl_ty_str(ty)));
+        // An opaque enumeration gets no note (clang).
+        let d = if kind == DeclKind::CXXRecord { self.incomplete_note(d, ty) } else { d };
+        self.emit(d);
+        false
+    }
+
+    /// Whether [`Sema::require_complete_nns_ctx`] rejects `ctx`: a class
+    /// or enumeration declared but never defined, neither dependent, nor
+    /// declared in a template, nor a template specialization (those are instantiated on demand).
+    pub fn nns_ctx_incomplete(&self, ctx: DeclId) -> bool {
+        matches!(self.kind_of(ctx), DeclKind::CXXRecord | DeclKind::Enum)
+            && self.ast.definition(ctx).is_none()
+            && !self.is_dependent_ctx(ctx)
+            // A member of a template (clang `isDependentContext`).
+            && !self.ast.decls.get(ctx).has(DeclFlags::DEPENDENT_CTX)
+            && self.ast.spec_info(ctx).is_none()
+            && self.ast.instantiated_from(ctx).is_none()
     }
 
     /// The arguments of specialization `spec` by depth (§5.1).

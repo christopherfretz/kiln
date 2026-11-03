@@ -619,10 +619,14 @@ impl Cg<'_> {
         }
         self.f.cl.prologue = self.f.cl.depth();
         let pa = 8;
+        // The parameters are `void *` `ImplicitParamDecl`s: their prolog
+        // stores are tagged, the reloads below are raw `CreateLoad`s.
         let a0 = self.f.fir.alloca(LTy::PTR, pa);
-        self.store(V::Arg(0), a0, pa, false);
+        let st = self.store(V::Arg(0), a0, pa, false);
+        self.tbaa_void_ptr_store(st);
         let a1 = self.f.fir.alloca(LTy::PTR, pa);
-        self.store(V::Arg(1), a1, pa, false);
+        let st = self.store(V::Arg(1), a1, pa, false);
+        self.tbaa_void_ptr_store(st);
         let aw = self.load(LTy::PTR, a0, pa, false);
         self.f.await_frame = Some(self.load(LTy::PTR, a1, pa, false));
         let lv = LV { addr: Addr { v: aw, ..awaiter.addr }, ..awaiter };
@@ -657,6 +661,11 @@ impl Cg<'_> {
         let mut fa = vec![Attr::Flag(AttrKind::AlwaysInline), Attr::Flag(AttrKind::MustProgress)];
         if self.is_x86() {
             fa.push(Attr::string("min-legal-vector-width", &self.f.vector_width.to_string()));
+        }
+        // clang 22 (llvm-project 86b95b0): keep the `.__await_suspend_
+        // wrapper__` suffix for sample-profile name canonicalization.
+        if self.opts.clang_compat >= 22 {
+            fa.push(Attr::string("sample-profile-suffix-elision-policy", "selected"));
         }
         let fa = self.m.attr_set(&fa);
         self.m.func_mut(f).attrs.func = fa;

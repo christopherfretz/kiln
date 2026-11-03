@@ -331,6 +331,9 @@ pub struct Module {
     pub(crate) md_kinds: Vec<Box<str>>,
     pub(crate) sync_scopes: Vec<Box<str>>,
     gnames: HashMap<Box<str>, Value>,
+    /// Erased function declarations and what their uses now refer to
+    /// ([`Module::replace_function`]).
+    replaced: HashMap<FuncId, Value>,
     last_unique: u32,
     /// The LLVM release whose textual IR the module is written in (default
     /// 19). At 21 or later [`Module::attr_set`] writes `nocapture` as
@@ -366,6 +369,7 @@ impl Module {
             md_kinds: FIXED_MD_KINDS.iter().map(|&k| Box::from(k)).collect(),
             sync_scopes: vec![Box::from(""), Box::from("singlethread")],
             gnames: HashMap::new(),
+            replaced: HashMap::new(),
             last_unique: 0,
             ir_version: 19,
         }
@@ -464,6 +468,93 @@ impl Module {
             let _ = self.func_order.remove(i);
             self.func_order.push(f);
         }
+    }
+
+    /// Replace every use of the function declaration `old` by `new` and
+    /// erase `old` (LLVM `replaceAllUsesWith` + `eraseFromParent`): `old`
+    /// leaves the print order, its name is freed, and every reference to
+    /// it, earlier or later, prints as `new`. A function `new` takes
+    /// `old`'s place in the print order (clang `applyReplacements` keeps
+    /// the old order).
+    ///
+    /// # Errors
+    ///
+    /// `old` is defined or already replaced, or `new` is (or resolves to)
+    /// `old`.
+    pub fn replace_function(&mut self, old: FuncId, new: Value) -> IrResult<()> {
+        self.check_replaceable(old, new)?;
+        if let ValueRef::Func(nf) = self.resolve(new).get() {
+            if let Some(i) = self.func_order.iter().position(|&x| x == nf) {
+                let _ = self.func_order.remove(i);
+            }
+            let at = self.func_order.iter().position(|&x| x == old).map_or(0, |i| i + 1);
+            self.func_order.insert(at, nf);
+        }
+        self.erase_replaced(old, new);
+        Ok(())
+    }
+
+    /// Replace the function declaration `old` by a new alias
+    /// `alias value_type, ptr aliasee` that takes its name (clang
+    /// `TryEmitBaseDestructorAsAlias`: an unnamed alias, `takeName`,
+    /// `replaceAllUsesWith`, `eraseFromParent`). The alias is appended to
+    /// the alias list.
+    ///
+    /// # Errors
+    ///
+    /// As [`Module::replace_function`] and [`Module::add_alias`].
+    pub fn replace_function_with_alias(
+        &mut self,
+        old: FuncId,
+        value_type: TypeId,
+        aliasee: Value,
+    ) -> IrResult<AliasId> {
+        let a = self.add_alias("", value_type, aliasee)?;
+        if let Err(e) = self.check_replaceable(old, Value::alias(a)) {
+            let _ = self.aliases.pop();
+            return Err(e);
+        }
+        let name = std::mem::take(&mut self.funcs[old.index()].name);
+        self.erase_replaced(old, Value::alias(a));
+        self.register_global_name(&name, Value::alias(a));
+        self.aliases[a.index()].name = name;
+        Ok(a)
+    }
+
+    fn check_replaceable(&self, old: FuncId, new: Value) -> IrResult<()> {
+        if !self.funcs[old.index()].is_declaration() || self.replaced.contains_key(&old) {
+            return Err(IrError::new(
+                IrErrorKind::BadGlobal,
+                "only a live function declaration can be replaced",
+            ));
+        }
+        if self.resolve(new) == Value::func(old) {
+            return Err(IrError::new(IrErrorKind::BadGlobal, "a function cannot replace itself"));
+        }
+        Ok(())
+    }
+
+    fn erase_replaced(&mut self, old: FuncId, new: Value) {
+        if let Some(i) = self.func_order.iter().position(|&x| x == old) {
+            let _ = self.func_order.remove(i);
+        }
+        let name = &self.funcs[old.index()].name;
+        if self.gnames.get(name.as_ref()) == Some(&Value::func(old)) {
+            let _ = self.gnames.remove(name.as_ref());
+        }
+        self.replaced.insert(old, new);
+    }
+
+    /// What `v` denotes after [`Module::replace_function`]: `v` itself
+    /// unless it is an erased function.
+    pub fn resolve(&self, mut v: Value) -> Value {
+        while let ValueRef::Func(f) = v.get() {
+            match self.replaced.get(&f) {
+                Some(&n) => v = n,
+                None => break,
+            }
+        }
+        v
     }
 
     /// The functions in print order.

@@ -285,6 +285,20 @@ delayed meaning; in practice they are always parsed immediately.
   "unknown type name 'T'"). Tests:
   `temp.param/template-template-param-missing-key{,-clang19,-cxx14}.cpp`,
   `temp.param/template-template-param-keyless-recovery{,-clang19}.cpp`.
+- A template template parameter's default argument names a class
+  template, an alias template or a template template parameter as a whole
+  template-argument ([temp.param]/10, clang's
+  `ParseTemplateTemplateArgument`). Anything else (a type parameter, a
+  class, a template-id `K<int>`, a qualified non-template) is "default
+  template argument for a template template parameter must be a class
+  template" at the token after what was parsed (at a template-id's start),
+  and the parameter is skipped to its `,`/`>`. At compat 22 a variable
+  template or concept is a template name of the wrong kind (P2841):
+  "template argument does not refer to a class or alias template, or
+  template template parameter" with its "refers to" note
+  (`act_on_wrong_kind_ttp_default`, WP-422); at 19 it is the "must be a
+  class template" error after the name. Tests:
+  `temp.param/ttp-default-not-class-template{,-clang19}.cpp`.
 - A template template parameter whose template-head has no parameters
   (`template<> class U`) is "template template parameter must have its
   own template parameters" at its name (at the next token when unnamed);
@@ -1106,8 +1120,22 @@ the running `Substituter` instead.
      arguments before it (`template <class T, decltype(mk<T>()) N>`) and,
      for a function template, the explicit arguments' substitution into
      the function parameter types (§ "Landed (WP-071)"; WP-387);
+     The substituted default (dependent or not) is then checked under a
+     `DefaultTemplateArgumentChecking` frame, "while checking a default
+     template argument used here" at the template-id's `>` (clang
+     `CheckTemplateArgumentList`; the substitution frame has ended). The
+     parser hands the `>` over with the argument locations
+     (`set_template_arg_locs`); a template-id formed by substitution
+     points at its name instead (clang: its `>`; follow-up). Defaults
+     used by deduction are checked inside their substitution frame
+     (`tests/conformance/temp.arg.general/default-argument-checking-and-narrowing.cpp`);
    - converts NTTP args (converted constant expressions, evaluated by the
-     Oven with `EvalKind::TemplateArg`);
+     Oven with `EvalKind::TemplateArg`). A class-type argument converted
+     by a user-defined conversion narrows through the standard conversion
+     after it: the conversion function's result is folded and checked
+     against the parameter type (`Z<CI{}>` with `operator int` to `bool`,
+     "evaluates to 2, which cannot be narrowed"; clang `getNarrowingKind`
+     on `ICS.UserDefined.After`);
    - packs the trailing args into a `Pack`.
    It returns `ConvertedArgs { sugared: ArgListId, canonical: ArgListId }`.
 2. Probe `specializations[(first(tmpl), canonical)]`. On a hit, return
@@ -1591,10 +1619,10 @@ class name" at `B`
   parameter — `H<Y<T>>` (a specialization), `H<T>`, `H<N>`,
   `H<T::X>` without `template` — is rejected when the enclosing template
   is defined, at the argument, even though the arguments are dependent
-  (`check_dependent_template_template_args`, run by `template_id` before
-  it forms the dependent specialization; clang's
-  `CheckTemplateArgumentList` runs on dependent arguments too, WP-404).
-  Alignment stops at the first pack expansion. Test:
+  (`check_dependent_template_args`, run by `template_id` before it
+  forms the dependent specialization; clang's
+  `CheckTemplateArgumentList` runs on dependent arguments too, WP-404,
+  §10.5). Alignment stops at the first pack expansion. Test:
   `tests/conformance/temp.arg.template/dependent-non-template-argument.cpp`.
 - A template argument `ns::A` or `C::A` whose qualifier is a namespace
   or the class `A` is a member of finds the template itself, never an
@@ -3418,7 +3446,19 @@ The `SpecKind` transitions are those of §4.5.
   lvalue). Substitution (`subst/exprs.rs::value_literal` →
   `nttp_value_expr`) builds the replacement: a `DeclRefExpr` to the
   object (class), the entity (reference), `&entity` / the decayed array
-  (pointer), or `nullptr` converted to the parameter type.
+  (pointer), `nullptr` converted to the parameter type, or, for a
+  non-null pointer to member (WP-415), `&C::m` of the member's declaring
+  class `C` (an `AddrOf` of a `DeclRefExpr` to the member, as
+  `member_pointer_of` builds it) converted to the parameter type along
+  the value's path: implicitly towards a derived class, by a
+  `static_cast` when the value points to a derived class's member
+  (`Scalar::MemberPtr::derived`), as clang
+  `BuildExpressionFromDeclTemplateArgument`. Argument identity is the
+  value's (`member`, `derived`, `path`), so `X<pb>` and
+  `X<static_cast<int D::*>(&B::b)>` are one specialization; the mangled
+  names match clang's (`XadL_ZN1S1vEE`, `mcM1BiadL_ZN1D1dEE`;
+  `tests/codegen/nttp_member_pointer.cpp`,
+  `tests/conformance/temp.arg.nontype/member-pointer-argument-value.cpp`).
 - **Reference arguments** (`convert_ref_nttp_arg`): the conversion must
   exist (`sema_cce_not_implicitly_convertible`), must not bind a
   temporary (`sema_cce_ref_binds_temporary`), and the referent must not
@@ -3818,7 +3858,16 @@ cost is small.
     converted args;
   - it carries `sat: Option<SatId>`;
   - a non-dependent concept-id is checked immediately, and its value
-    (`bool`) is fixed at construction.
+    (`bool`) is fixed at construction. "Non-dependent" means no argument
+    is type- or value-dependent (clang `anyDependentTemplateArguments`):
+    an argument that is only instantiation-dependent (`TC<N>` with `N` a
+    `constexpr` local of a function template) is checked at the
+    definition. The concept is checked with each such argument replaced
+    by its canonical form (`settle_inst_sugar`), so its atoms substitute
+    concrete arguments and a nested concept-id or class-template member
+    (`IS<T, U>::value`) is evaluated, not assumed satisfied as a
+    dependent atom would be
+    (`temp.constr.atomic/instantiation-dependent-local-constant.cpp`).
 - **The associated constraints of a templated entity**
   ([temp.constr.decl]/3) are the conjunction, in this order, of:
   1. each template parameter's immediately-declared constraint, in order;
@@ -4271,6 +4320,28 @@ not use it, so it is not in M3.
 | `__builtin_is_constant_evaluated()` | the Oven returns `true` in a manifestly constant-evaluated context. Codegen emits `false`. Sema warns "'__builtin_is_constant_evaluated' will always evaluate to 'true' in a manifestly constant-evaluated expression" where clang does. Owned by WP-063 | Oven `EvalContext` |
 | `__builtin_constant_p(e)` | `int`. The Oven returns 1 if `e` (integral, enumeration, floating, pointer or `nullptr_t`, with no assignment, increment, `new`, `delete` or `throw` of its own) evaluates to a constant. A pointer counts only if it is null or the start of a string literal. Other types and arguments with side effects give 0. The argument is evaluated speculatively (`Op::Speculate`): a failure gives 0, but a resource limit still fails the evaluation. Codegen folds the call through the Oven and emits 0 if that fold fails, as clang does at -O0 (WP-130) | Oven, codegen |
 
+**Failed-trait explanation** (clang 22 `DiagnoseTypeTraitDetails`,
+`traits/explain.rs`, WP-413). At `-fclang-compat=22` only, a failed
+`static_assert` condition and a failed concept atom are checked for a
+type trait. The condition is taken after parentheses and implicit casts
+are skipped. Three forms qualify: `__trait(T)`, `std::is_X_v<T>`, and
+`std::is_X<T>::value` (std may include an inline namespace). For each,
+kiln appends clang's explanation notes at the condition's begin location.
+Only `is_trivially_copyable` is explained so far. Its notes, in order:
+- "T is not trivially copyable";
+- "because it is a reference type";
+- per base, "because it has a virtual base B", then "because it has a
+  non-trivially-copyable base B";
+- per member, "…non-trivially-copyable member 'm' of type M";
+- "because it has a user-provided destructor";
+- "because it has a user provided copy/move constructor/assignment
+  operator", in member order;
+- "'R' defined here" at the class.
+
+Other traits produce no notes yet; see the WP-413 follow-ups. Tests:
+`templates/builtins/meta.unary.prop-trivially-copyable-explain{,-clang19}.cpp`
+and `templates/concepts/static-assert-concept-atom-expr{,-clang19}.cpp`.
+
 ### 9.5 `__builtin_*` functions used by the M3 headers
 
 These are declared by WP-063's builtin declaration table, with custom
@@ -4696,6 +4767,43 @@ ambiguity errors.
 - "too few template arguments for class template 'X'" / "too many …";
   the note is "template is declared here".
 - "template argument for template type parameter must be a type".
+- Template-argument checking (`check_template_args`) stops at the first
+  argument that fails, as clang's `CheckTemplateArgumentList`: later
+  arguments and the arity are not reported (`M<1, int, 2>` is one error).
+  Test: `temp.arg.general/first-failing-argument.cpp`.
+- A variable template or concept named alone as a template-argument
+  ([temp.names]/1): at compat 22 the parser takes it as a template name
+  (P2841, `at_template_name_arg`) and the check reports it against the
+  parameter: for a type parameter "use of variable template 'N::v'
+  requires template arguments" (qualifier as written, at the name) with
+  "template is declared here"; for a template template parameter
+  "template argument does not refer to a class or alias template, or
+  template template parameter" with "template argument refers to a
+  variable template 'v', here"; for a non-type parameter "... must be an
+  expression". At compat 19 it is an expression: "use of variable template
+  'v' requires template arguments", or for a concept "too few template
+  arguments for concept 'C'" (`act_bare_concept_template_arg`). Either
+  way, an argument invalid as an expression ends the
+  template-argument-list (clang's `ParseTemplateArgumentList`). A concept
+  in an expression is "use of concept 'C' requires template arguments".
+  Tests: `temp.arg.general/var-template-or-concept-argument{,-clang19}.cpp`.
+- A class template-id with dependent arguments is checked at its
+  definition (`check_dependent_template_args`, clang's
+  `CheckTemplateArgumentList` on dependent arguments): the arity (a
+  missing argument needs a default), a type for a type parameter, a
+  template for a template template parameter (a template template
+  parameter argument is matched against it, [temp.arg.template]/3), and
+  not a type or template for a non-type parameter; non-type arguments
+  are converted once substituted. A template template parameter `TT`
+  for a type parameter is "use of template template parameter 'TT'
+  requires template arguments". A `T::x` for a type parameter is
+  "template argument for template type parameter must be a type; did
+  you forget 'typename'?" and the check goes on (clang recovers), so
+  `P<T::x, T::y>` reports both; any other failure ends it. Only the
+  arguments before a pack expansion are checked, and not the arity; a
+  template-id naming an expanded parameter pack is checked only for that
+  pack's arity (§3.2). Tests: `temp.arg.general/dependent-template-id-checked.cpp`,
+  `temp.arg.template/dependent-ttp-argument{,-clang22}.cpp`.
 - "non-type template argument is not a constant expression", followed by
   the Oven note chain.
 - "implicit instantiation of undefined template 'X<int>'".

@@ -105,21 +105,10 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // `[N x ptr]` instead of `i64` / `[N x i64]` (the same registers).
     ("srcloc_immediate", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("struct_pointers", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    // clang 22 drops the comdat of an `internal` template parameter
-    // object and of the specializations it is an argument of (`fa<Arr{
-    // ...}>`); at `-fclang-compat=22` kiln drops only the object's.
-    ("linkage_internal_nttp", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("linkage_internal_nttp", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     // clang 22 names members of an unnamed class `(unnamed struct)::N` in
     // IR type names (19: `(anonymous struct)`).
     ("lambda_names", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("lambda_names", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    // clang 20+ implements CWG2137 ([over.match.list], [over.ics.list]):
-    // `B{b}` picks `B(std::initializer_list<B>)` where clang 19 and kiln
-    // copy-construct (CWG1467 alone). kiln is the one to change (sema;
-    // WP-184 residual).
-    ("dr1467_single_element", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("dr1467_single_element", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // clang 22 lowers `modf` to the `llvm.modf` intrinsic (19: a `modff`
     // libcall).
     ("builtins_math", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
@@ -164,6 +153,18 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     ("coro_await_suspend", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("coro_only_destroy_when_complete", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("coro_only_destroy_when_complete", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    // LLVM 21 dropped the size operand of `llvm.lifetime.start/end`. kiln
+    // emits LLVM 19's `(i64, ptr)` form because its optimizer is `opt-19`
+    // (spec/driver.md "IR optimization"); `opt-22`'s auto-upgrade of the
+    // markers that survive -O1 leaves dead `@llvm.lifetime.*.i64`
+    // declarations and moves the upgraded ones to the module end. The
+    // instructions match.
+    ("lifetime_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("lifetime_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("tbaa_atomic_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("tbaa_atomic_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("tbaa_unnamed_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("tbaa_unnamed_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     // clang 22 emits `insertelement <8 x i1> .., i8 1, ..` for a bool
     // vector element store, which opt-22 rejects.
     ("vector_ops", "aarch64-unknown-linux-gnu", "22", Allow::OracleInvalid),

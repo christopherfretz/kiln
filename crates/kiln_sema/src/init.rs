@@ -211,15 +211,18 @@ impl Sema<'_, '_> {
         }
         if let [InitItem { value: InitValue::Expr(x), designator }] = l.items.as_slice()
             && designator.is_empty()
+            && self.clang_compat < 22
             && !self.expr_is_type_dependent(*x)
             && self.is_class_or_derived(*x, ty)
         {
-            // [dcl.init.list]/3.2 as clang applies DR1467 to every class
-            // (not only aggregates, CWG2137): a single element of the class
-            // or a derived class initializes the object, copy-initialized
-            // for copy-list-initialization (explicit constructors are not
+            // [dcl.init.list]/3.2 as clang 19 applies DR1467 to every class
+            // (not only aggregates): a single element of the class or a
+            // derived class initializes the object, copy-initialized for
+            // copy-list-initialization (explicit constructors are not
             // candidates) and direct-initialized for direct-list; no
-            // initializer-list constructor is considered.
+            // initializer-list constructor is considered. clang 20+
+            // (CWG2137) keeps it to aggregates: a non-aggregate goes through
+            // [over.match.list] like any other list.
             let ctx = if style == InitStyle::DirectList {
                 ConvCtx::DirectInitialization
             } else {
@@ -234,6 +237,22 @@ impl Sema<'_, '_> {
         }
         if let Some(e) = self.init_list_ctor_init(ty, l, style, at, temp_end, ctor_at) {
             return Some(e);
+        }
+        // clang 20+ (CWG2137, the single-element copy above gone): in phase
+        // 2, a lone prvalue element of the class itself initializes the
+        // object directly ([dcl.init.general]/16.6.1, clang
+        // `TryConstructorInitialization`), except for a base subobject.
+        if let [InitItem { value: InitValue::Expr(x), .. }] = l.items.as_slice()
+            && self.clang_compat >= 22
+            && !matches!(self.ctor_entity, Some((crate::class::InitEntity::Base { .. }, _)))
+            && self.is_prvalue_of_class(*x, ty)
+        {
+            let ctx = if style == InitStyle::DirectList {
+                ConvCtx::DirectInitialization
+            } else {
+                ConvCtx::Initialization
+            };
+            return Some(self.init_from_expr(ty, *x, ctx, at));
         }
         let mut args = Vec::with_capacity(l.items.len());
         for item in &l.items {

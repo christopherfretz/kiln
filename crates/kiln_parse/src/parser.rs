@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::types::UnaryTransformKind;
-use kiln_ast::{DeclId, ExprId, NnsId, QualType};
+use kiln_ast::{AttrId, DeclId, ExprId, NnsId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::literal::LiteralOptions;
 use kiln_lex::{LexOptions, Punct, Std, TokFlags, TokKind, Token};
@@ -92,6 +92,11 @@ pub struct Parser<'a, 'sm> {
     /// The start of the last `__attribute__((...))`'s closing `)`, or
     /// `Loc::INVALID` (a member declarator's end, clang `SetRangeEnd`).
     pub(crate) gnu_attr_end: Loc,
+    /// The GNU declaration attributes of the last ptr-operator's
+    /// attribute positions (`int *__attribute__((may_alias)) p`): clang
+    /// applies them to the declaration (`ProcessDeclAttributes` walks the
+    /// declarator chunks).
+    pub(crate) chunk_decl_attrs: Vec<AttrId>,
     /// The last run of adjacent `[[...]]` specifiers: the start of the
     /// token before it and of its final `]` (a declarator's end excludes
     /// them, clang `ParseFunctionDeclarator`).
@@ -199,10 +204,10 @@ pub struct Parser<'a, 'sm> {
     /// The leading attribute-specifier-seq of a statement, parsed before
     /// it is known to be a declaration: the declaration's decl-specifiers
     /// take it ([dcl.pre]/5, [dcl.attr.grammar]/5).
-    pub(crate) stmt_attrs: Vec<kiln_ast::AttrId>,
+    pub(crate) stmt_attrs: Vec<AttrId>,
     /// The attributes `parse_decl_specifiers` starts its seq with (a
     /// declaration statement's leading ones).
-    pub(crate) lead_decl_attrs: Vec<kiln_ast::AttrId>,
+    pub(crate) lead_decl_attrs: Vec<AttrId>,
     /// Where `stmt_attrs` / `lead_decl_attrs` start (`[[` or `alignas`).
     pub(crate) stmt_attrs_loc: Option<Loc>,
 }
@@ -295,6 +300,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             pos: 0,
             visibility_depth: 0,
             gnu_attr_end: Loc::INVALID,
+            chunk_decl_attrs: Vec::new(),
             cxx11_attr_run: (Loc::INVALID, Loc::INVALID),
             depth: [0; 3],
             kw,
@@ -957,6 +963,20 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         )
     }
 
+    /// Whether the name at token `i` is qualified by a class or
+    /// enumeration that is incomplete as a nested-name-specifier
+    /// ([`Sema::nns_ctx_incomplete`]): the parse of the qualified name
+    /// reports it, wherever it stands.
+    ///
+    /// [`Sema::nns_ctx_incomplete`]: kiln_sema::Sema::nns_ctx_incomplete
+    pub(crate) fn incomplete_scope_name(&self, i: usize) -> bool {
+        matches!(
+            self.scan_name_qual_at(i),
+            Some((end, false, NameClass::Undeclared, _, Some(q)))
+                if end > i + 1 && self.s.nns_ctx_incomplete(q)
+        )
+    }
+
     /// Whether the template argument list between `<` at `lt` and its
     /// closer at `close` names a template parameter or a dependent name
     /// ([temp.dep.type]/7): lookahead approximation by the unqualified
@@ -1482,6 +1502,19 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 let q = self.s.act_on_nested_name_component(qual, name, loc);
                 self.s.nns_start = None;
                 let q = q.ok_or(())?;
+                // The next name is looked up in `q`, which must be
+                // complete; a pointer-to-member's class need not be
+                // ([dcl.mptr]/1, clang checks only at lookup).
+                if !stop && !self.at(Punct::Star) {
+                    self.s.nns_start = Some(start);
+                    if !self.s.require_complete_nns_ctx(q.0, loc) {
+                        // Recover past the rest of the specifier, as
+                        // clang's invalid `CXXScopeSpec` does; the caller
+                        // sees the final name.
+                        self.skip_nested_name_rest();
+                        return Err(());
+                    }
+                }
                 self.s.act_on_nns_component_use(q.1, cc);
                 qual = Some(q);
                 if stop {

@@ -83,7 +83,7 @@ impl Sema<'_, '_> {
     /// clang `Decl::isInStdNamespace`: `d`'s context, linkage
     /// specifications and inline namespaces skipped, is the namespace
     /// `::std`.
-    fn is_in_std_namespace(&self, d: DeclId) -> bool {
+    pub(crate) fn is_in_std_namespace(&self, d: DeclId) -> bool {
         let std = self.intern("std");
         let mut c = self.ast.decls.get(d).ctx();
         for _ in 0..64 {

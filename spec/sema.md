@@ -61,7 +61,12 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   22's `__size_t` / `__signed_size_t` / `__ptrdiff_t` sugar
   (`Sema::size_type`; diagnostics print `'__size_t' (aka 'unsigned
   long')`); an alias template specialization substitutes its arguments
-  as written (`templ/class.rs`); a `PackExpansionExpr` keeps its
+  as written (`templ/class.rs`); a class template specialization keeps
+  a qualified template template argument as first written
+  (`X<int>::apply`; `first_written_template_args`), and a template-id
+  naming that parameter substitutes to `X<int>::apply<int>` (an
+  elaborated type with the argument's qualifier; `ttp_arg_qualifier`,
+  WP-413); a `PackExpansionExpr` keeps its
   pattern's type; a synthesized `<=>`/`==` converts each operand to the
   cv-qualified base ([class.compare.default]).
 - **Structured bindings** (§4.9): `std::tuple_element`'s index is a
@@ -153,8 +158,11 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
 - Codegen's `-Watomic-alignment` text follows the level
   (spec/codegen.md); the AST dump's type printing, spec/ast-dump.md §2.
 
-kiln++ defaults to level 22 since WP-394 (spec/driver.md); the library
-default (`ClangCompat::default()`, `Sema` and `DiagOptions`) stays 19.
+kiln++ defaults to level 22 since WP-394 (spec/driver.md), and so does
+the library since WP-413: `ClangCompat::default()`, `PredefConfig`,
+`ClangFeatures`, `Sema`, `SemaNames`, `ParseOptions`, `DiagOptions`,
+`Oven`, `CodegenOptions` and `IrTypes` all start at 22. A test about
+clang 19 behaviour passes `ClangCompat::Clang19` (or `19`) explicitly.
 Where clang 22's output differs and kiln has not followed it yet, the
 test pins clang 19 with `requires: clang<22` and the comment `WP-355
 residual` (docs/status/wp-184-oracle-switch.md).
@@ -376,6 +384,24 @@ residual` (docs/status/wp-184-oracle-switch.md).
   (WP-288; libc++ `rand.dist.norm.lognormal/param_types.pass.cpp`;
   `tests/conformance/temp.res/qualified-name-through-typedef.cpp`,
   `qualified-name-through-typedef-run.cpp`).
+- A nested-name-specifier component naming a class or enumeration that
+  is declared but not defined ([basic.lookup.qual]/1, [class.mem]/1:
+  a class is complete only after its definition) is "incomplete type
+  'N::F' named in nested name specifier" (`require_complete_nns_ctx`,
+  clang's `RequireCompleteDeclContext`): the type is printed fully
+  qualified (through a typedef, the class it names); a class takes the
+  "forward declaration of 'F'" note, an opaque enumeration none. At
+  compat 22 it is at the start of the whole specifier, at 19 at the
+  incomplete component. The parser skips the rest of the specifier; a
+  declarator so qualified declares nothing (later uses are undeclared),
+  a type specifier is the error type. It applies in every context
+  (declarations, `friend`, `sizeof`, expressions, alias and default
+  template arguments, out-of-line definitions); not to a dependent
+  qualifier, a member of a template (`DEPENDENT_CTX`), a specialization
+  or instantiation (`require_complete_nns`), a pointer-to-member's
+  `F::*`, or the class being defined. `class F::H;` is first
+  "forward declaration of class cannot have a nested name specifier".
+  Tests: `basic.lookup.qual/incomplete-nested-name-specifier{,-location,-location-clang19}.cpp`.
 
 ## 4. Declarations (`decl.rs`, `declspec.rs`)
 
@@ -499,10 +525,18 @@ family, and the `nonnull` attribute spellings.
      allowed at file scope" when every chunk outside the bound is an
      array (variables, static data members, typedefs); "variably
      modified type declaration not allowed at file scope" otherwise
-     (`int (*p)[n]`). Not yet modelled: an alias-declaration or a
-     namespace-scope type-id (`using V = int[n];`, a cast) still says
-     `sema_vla_unsupported`, and `int z[2][n]` lacks clang's second
-     warning at the outer `[`
+     (`int (*p)[n]`). Before that error each array chunk around the
+     bound is a VLA too and warns (`int z[2][n]`: at the outer `[`
+     without notes; `int w[n][n]`: at the outer bound with its notes),
+     up to the first chunk that is not an array. An alias-declaration's
+     type-id at namespace or class scope (`DeclSite::Alias`) is a
+     typedef's declarator: it folds or is rejected the same way, the
+     folding ExtWarn or the error deferred to the alias name
+     (`Sema::pending_alias_vla`, emitted first by `act_on_alias_decl`;
+     WP-415,
+     `tests/conformance/dcl.array/vla-namespace-scope-alias-and-outer-arrays.cpp`).
+     Not yet modelled: another namespace-scope type-id (`sizeof(int[n])`
+     in an initializer, a cast) still says `sema_vla_unsupported`
    - variable length arrays in a function (WP-183, clang `BuildArrayType`):
      a non-constant bound of a block-scope declarator (variable, typedef,
      alias, type-id) makes a `VariableArray` even when it would fold.
@@ -1288,6 +1322,18 @@ and returns the scope it names:
     guides on the elements. A single element whose type is a
     specialization of `X` or derived from one skips phase 1
     (`ctad_list_of_spec`).
+  - At clang 21+ (`clang_compat >= 22`; WP-413) each resolution is
+    two-phase (`ctad_resolve`, clang `BestViableFunction`'s deferred
+    template candidates): when there are both non-template and template
+    guides, the non-template guides are resolved alone first, and a
+    best one that is a perfect match (`perfect_candidate`, clang
+    `isPerfectMatch`: every argument an identity standard conversion,
+    lvalue transformations aside; a reference bound to the argument's
+    own cv-qualified type, not an lvalue reference to an rvalue) is the
+    result without deducing any template guide, which so instantiates
+    nothing. Otherwise the set is reset and every guide is resolved, as
+    at 19. Tests `templates/ctad/over.match.class.deduct-perfect-guide{,-clang19}.cpp`,
+    `temp.deduct.guide-ast-dump.cpp`.
   - In copy-initialization (`=` and `= {…}`), explicit guides and
     constructors are non-viable (`CandidateFailure::Explicit`).
   - In copy-list-initialization, an explicit winner is
@@ -1510,6 +1556,15 @@ and returns the scope it names:
     note, and the asm statement is dropped. A naked function gets no
     fall-off (-Wreturn-type) or noreturn-returns warning. Test:
     `tests/conformance/dcl.attr/gnu-optnone-minsize-naked.cpp`.
+  - `may_alias` (GNU syntax or `gnu::`; WP-423, clang `MayAliasAttr`):
+    kept on any declaration without a diagnostic (no subject list); with
+    arguments `'may_alias' attribute takes no arguments`. A GNU
+    declaration attribute after a ptr-operator (`int
+    *__attribute__((may_alias)) p`) is the declarator's, and a
+    `[[gnu::X]]` declaration attribute after a ptr-operator or an array
+    declarator is `attribute 'X' ignored, because it cannot be applied
+    to a type` (a warning, as after a function declarator). Codegen:
+    spec/codegen.md "TBAA". Test: `tests/conformance/dcl.attr/gnu-may-alias.cpp`.
   - `using_if_exists` (`__attribute__((using_if_exists))` or
     `[[clang::using_if_exists]]`; other `clang::` attributes are still
     ignored), on using-declarations (§4.8)
@@ -3437,7 +3492,24 @@ for them.
     - for a constructor call, the type-id after the `(`;
     - for a scalar or vector literal, its `{`.
 
-    A dependent literal is checked when instantiated. A valid
+    A dependent literal is checked when instantiated.
+
+    The rules above are clang 19's. At `-fclang-compat=22` (WP-413,
+    `gnu.rs` `element_culprit_loc`) three things change:
+    - the culprit is the element itself, without looking through
+      parentheses or casts, at clang's `getExprLoc` (`expr_loc`). An
+      implicit conversion, including an lvalue-to-rvalue one, is located
+      where it begins, so `p.a` is reported at `p` and `x = 3` at `x`;
+    - a scalar, vector or complex literal is reported at its first
+      non-constant element instead of the `{`;
+    - a literal whose type is dependent but whose written elements are
+      not value-dependent is checked at the template definition (written
+      elements, at `expr_loc`). A failure makes the literal an error
+      expression, so its instantiations do not report it again.
+
+    Tests: `ext.gnu.compound.literal/namespace-scope-diagnostics{,-clang19}.cpp`.
+
+    A valid
     non-array literal is a prvalue, as it is inside a function, and its
     variable is constant-initialized.
 
@@ -3803,7 +3875,14 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   context, as clang reports its rebuilt `ConstantExpr`, or escalating an
   immediate-escalating instantiation (`e<int>` of `template<class T>
   constexpr int e() { return bad(1); }` becomes immediate, so a
-  non-constant call of it is an error; WP-227). A `ConstantExpr` is substituted
+  non-constant call of it is an error; WP-227). At clang 21+
+  (`clang_compat >= 22`; WP-413) a shared reference the definition
+  flagged `immediate-escalating` (an address taken outside an immediate
+  invocation, not an invocation's callee) escalates the instantiation
+  too (`recheck_shared_ref`, reason "evaluates the address of"); clang
+  19 neither escalates nor diagnoses it. An error taking the address of
+  an escalated function (`sema_immediate_address`) carries the reason
+  note after `declared here`, as clang's `DiagnoseImmediateEscalatingReason`. A `ConstantExpr` is substituted
   through to its operand and re-wrapped by the rebuilt call. A shared
   (not rebuilt) expression is walked at each instantiation and the
   functions it odr-uses (named, constructors, bound destructors,
@@ -6069,6 +6148,25 @@ unscoped enumeration is reported (spec/oven.md "Integration").
     (`is_constant_initialized`).
 
   A reference is usable when it binds to a static lvalue.
+- **Constant initialization warning** (WP-415, clang
+  `Sema::CheckCompleteVariableDeclaration`): the initializer of a variable
+  that is neither `constexpr` nor `constinit` but has static or thread
+  storage duration, is a reference, or is a `const` non-`volatile`
+  integral or enumeration variable (locals included) is evaluated as a
+  constant initializer, which is manifestly constant-evaluated. When it
+  calls `__builtin_is_constant_evaluated()` or `std::is_constant_evaluated()`
+  directly, `-Wconstant-evaluated` ("... will always evaluate to 'true' in
+  a manifestly constant-evaluated expression") is reported from that
+  evaluation even when it then fails (`int g = __builtin_is_constant_evaluated()
+  ? x : 7;`); the variable is then initialized dynamically or by
+  codegen's re-fold (spec/codegen.md). A non-const local, a const
+  floating local and a `volatile` variable do not warn. Sema runs it
+  only when a bounded walk of the initializer finds such a direct call
+  (`oven_bridge.rs::warn_constant_evaluated_init`, `Oven::warn_constant_evaluated`).
+  Same wording at `-fclang-compat=19`. Deviation: a variable template's
+  instantiations warn once (oven-bridge diagnostics carry no
+  instantiation context), clang once per instantiation. Validation:
+  `tests/conformance/expr.const/is-constant-evaluated-failed-constant-init.cpp`.
 
   From C++23 on (P2280, a DR; WP-357) a reference that is not usable
   (a parameter named outside its call, an `extern` reference, one with a

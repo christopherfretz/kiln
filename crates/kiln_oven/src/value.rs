@@ -1170,7 +1170,14 @@ impl Oven {
                 self.thaw_into(b, cv, p, top);
                 p
             }
-            VarEvalState::NotConstant => self.external(b, ty, d),
+            VarEvalState::NotConstant => match info.init {
+                // Not constant-initialized: a fold reads the value of its
+                // initializer evaluated non-manifestly (below).
+                Some(init) if info.usable && self.run.nesting < MAX_NESTING => {
+                    self.refold_var_init(b, g, d, ty, init, top, hu)
+                }
+                _ => self.external(b, ty, d),
+            },
             VarEvalState::Evaluating => {
                 self.global_obj(ty, flags::CONST | flags::RESOLVING | (hu & flags::HAS_UNION), d)
             }
@@ -1179,62 +1186,125 @@ impl Oven {
                 if self.run.nesting >= MAX_NESTING {
                     return self.external(b, ty, d);
                 }
-                let p = self.placeholder(g, ty, d);
-                self.globals[g as usize].state = GState::Resolved(p);
-                let saved = (
-                    self.run.counters,
-                    self.mem.allocated,
-                    self.mem.peak,
-                    self.run.object,
-                    self.run.silent,
-                    self.run.const_context,
-                );
-                let mark = self.mem.mark();
-                // Its own evaluation context: its allocations are numbered
-                // from 0, leak-checked and freed at its end.
-                let heap = (self.mem.heap_allocs, self.mem.ctx);
-                let ctx = self.ctx_depth;
-                self.ctx_depth += 1;
-                self.mem.ctx = ctx;
-                self.mem.heap_allocs = 0;
-                self.run.nesting += 1;
-                self.run.counters = Counters::default();
-                self.run.object = Some(d);
-                self.run.silent = true;
-                // Constant initialization is manifestly constant-evaluated.
-                self.run.const_context = true;
-                let r = self.eval_at(b, init, Some(d), top);
-                self.mem.free_heap_of(ctx, &self.types);
-                self.mem.release(mark, &self.types);
-                self.ctx_depth -= 1;
-                (self.mem.heap_allocs, self.mem.ctx) = heap;
-                self.run.nesting -= 1;
-                (
-                    self.run.counters,
-                    self.mem.allocated,
-                    self.mem.peak,
-                    self.run.object,
-                    self.run.silent,
-                    self.run.const_context,
-                ) = saved;
-                // The placeholder's storage now belongs to the variable.
-                self.globals[g as usize].slot = 0;
-                let a = self.mem.alloc_of_mut(Ptr::decode(p));
-                a.frame = 0;
-                if let Ok(cv) = r {
-                    a.flags = a.flags & !flags::RESOLVING | hu;
-                    if lax_read {
-                        a.flags |= flags::EXTERNAL;
-                        a.origin = Origin::External(d);
-                        a.frame = crate::mem::LAX_READ;
+                match self.eval_var_init(b, g, d, ty, init, top, hu, lax_read, true) {
+                    Ok(p) => p,
+                    Err(_) if info.usable && !lax_read => {
+                        self.refold_var_init(b, g, d, ty, init, top, hu)
                     }
-                    self.thaw_into(b, cv, p, top);
-                } else {
-                    a.flags = flags::EXTERNAL | flags::CONST;
-                    a.origin = Origin::External(d);
+                    Err(p) => p,
                 }
-                p
             }
+        }
+    }
+
+    /// The object of potentially-constant variable `d` whose constant
+    /// initialization failed: clang `VarDecl::evaluateValue` then
+    /// evaluates its initializer `init` non-manifestly
+    /// (`__builtin_is_constant_evaluated()` false) and laxly, and a fold
+    /// reads that value after noting "initializer of 'x' is not a constant
+    /// expression" (`const int cx = __builtin_is_constant_evaluated() ? x
+    /// : 9;` folds to 9 in `int a[cx]`, `__builtin_constant_p(cx)` and
+    /// codegen). So the object is [`crate::mem::LAX_READ`]: a strict read
+    /// still faults with that note (spec/oven.md "Lax folds").
+    #[allow(clippy::too_many_arguments)]
+    fn refold_var_init(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        g: u32,
+        d: DeclId,
+        ty: OTy,
+        init: ExprId,
+        top: u32,
+        hu: u8,
+    ) -> u64 {
+        let lax = (self.run.lax, self.mem.lax);
+        (self.run.lax, self.mem.lax) = (true, true);
+        let r = self.eval_var_init(b, g, d, ty, init, top, hu, true, false);
+        (self.run.lax, self.mem.lax) = lax;
+        match r {
+            Ok(p) | Err(p) => p,
+        }
+    }
+
+    /// Evaluates initializer `init` of global `g` (variable `d`) in its own
+    /// evaluation context, manifestly constant-evaluated iff `manifest`,
+    /// into a fresh static object: `Ok` holds its value (a [`crate::mem::
+    /// LAX_READ`] one iff `lax_read`), `Err` an external object.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_var_init(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        g: u32,
+        d: DeclId,
+        ty: OTy,
+        init: ExprId,
+        top: u32,
+        hu: u8,
+        lax_read: bool,
+        manifest: bool,
+    ) -> Result<u64, u64> {
+        let p = self.placeholder(g, ty, d);
+        self.globals[g as usize].state = GState::Resolved(p);
+        let saved = (
+            self.run.counters,
+            self.mem.allocated,
+            self.mem.peak,
+            self.run.object,
+            self.run.silent,
+            self.run.const_context,
+            self.run.fold,
+            self.run.cev_warn,
+        );
+        let mark = self.mem.mark();
+        // Its own evaluation context: its allocations are numbered
+        // from 0, leak-checked and freed at its end.
+        let heap = (self.mem.heap_allocs, self.mem.ctx);
+        let ctx = self.ctx_depth;
+        self.ctx_depth += 1;
+        self.mem.ctx = ctx;
+        self.mem.heap_allocs = 0;
+        self.run.nesting += 1;
+        self.run.counters = Counters::default();
+        self.run.object = Some(d);
+        self.run.silent = true;
+        // Constant initialization is manifestly constant-evaluated;
+        // a re-fold after it failed is not.
+        self.run.const_context = manifest;
+        self.run.fold = !manifest;
+        self.run.cev_warn = false;
+        let r = self.eval_at(b, init, Some(d), top);
+        self.mem.free_heap_of(ctx, &self.types);
+        self.mem.release(mark, &self.types);
+        self.ctx_depth -= 1;
+        (self.mem.heap_allocs, self.mem.ctx) = heap;
+        self.run.nesting -= 1;
+        (
+            self.run.counters,
+            self.mem.allocated,
+            self.mem.peak,
+            self.run.object,
+            self.run.silent,
+            self.run.const_context,
+            self.run.fold,
+            self.run.cev_warn,
+        ) = saved;
+        // The placeholder's storage now belongs to the variable.
+        self.globals[g as usize].slot = 0;
+        let a = self.mem.alloc_of_mut(Ptr::decode(p));
+        a.frame = 0;
+        if let Ok(cv) = r {
+            a.flags = a.flags & !flags::RESOLVING | hu;
+            if lax_read {
+                a.flags |= flags::EXTERNAL;
+                a.origin = Origin::External(d);
+                a.frame = crate::mem::LAX_READ;
+            }
+            self.thaw_into(b, cv, p, top);
+            Ok(p)
+        } else {
+            a.flags = flags::EXTERNAL | flags::CONST;
+            a.origin = Origin::External(d);
+            Err(p)
         }
     }
 

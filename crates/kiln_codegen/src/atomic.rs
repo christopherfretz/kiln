@@ -392,7 +392,9 @@ impl Cg<'_> {
         if self.is_aggregate(rq) {
             if let Some(to) = agg {
                 let n = self.size_align(rq).0;
-                self.memcpy(to, d.v, d.align, n, false);
+                let c = self.memcpy(to, d.v, d.align, n, false);
+                // `EmitAggregateCopy` of the result temporary.
+                self.tbaa_struct_copy(c, rq);
             }
             return Ok(None);
         }
@@ -723,6 +725,8 @@ impl Cg<'_> {
         let at = self.atomic_access_ty(ty, size, false);
         let mem = amem(lv.addr.align, vol, Ordering::SeqCst, SyncScope::SYSTEM);
         let v = self.f.fir.push(Op::Load { ty: at, ptr: lv.addr.v, mem }, at);
+        // `EmitAtomicLoadOp` decorates the load with the lvalue's tag.
+        self.tbaa_mark(v, lv.q, lv.tb);
         if at != ty {
             // Through memory (`ConvertIntToValueOrAtomic`).
             let t = self.temp(lv.q);
@@ -751,6 +755,7 @@ impl Cg<'_> {
         let at = self.m.types.int(u32::try_from(size * 8).unwrap_or(8));
         let mem = amem(lv.addr.align, vol, Ordering::SeqCst, SyncScope::SYSTEM);
         let v = self.f.fir.push(Op::Load { ty: at, ptr: lv.addr.v, mem }, at);
+        self.tbaa_mark(v, lv.q, lv.tb);
         let slot_vol = std::mem::take(&mut self.f.slot_volatile);
         self.store(v, dest.v, dest.align, slot_vol);
     }
@@ -767,7 +772,8 @@ impl Cg<'_> {
         let at = self.m.types.int(u32::try_from(size * 8).unwrap_or(8));
         let v = self.load(at, src.v, src.align, false);
         let mem = amem(lv.addr.align, vol, Ordering::SeqCst, SyncScope::SYSTEM);
-        self.f.fir.push(Op::Store { val: v, ptr: lv.addr.v, mem }, LTy::VOID);
+        let st = self.f.fir.push(Op::Store { val: v, ptr: lv.addr.v, mem }, LTy::VOID);
+        self.tbaa_mark(st, lv.q, lv.tb);
     }
 
     /// clang `AggExprEmitter::VisitCastExpr` for `NonAtomicToAtomic` and
@@ -853,7 +859,9 @@ impl Cg<'_> {
             self.memset(lv.addr, 0, asize, false);
         }
         let dest = project(self);
-        self.store_scalar(v, dest, vq);
+        // `emitCopyIntoMemory` stores through the `_Atomic` lvalue's tag.
+        let st = self.store_scalar_tb(v, dest, vq, Tb::None);
+        self.tbaa_mark(st, lv.q, lv.tb);
         Ok(())
     }
 
@@ -896,7 +904,9 @@ impl Cg<'_> {
             self.load(at, t.v, t.align, false)
         };
         let mem = amem(lv.addr.align, vol, Ordering::SeqCst, SyncScope::SYSTEM);
-        self.f.fir.push(Op::Store { val: v, ptr: lv.addr.v, mem }, LTy::VOID);
+        let st = self.f.fir.push(Op::Store { val: v, ptr: lv.addr.v, mem }, LTy::VOID);
+        // `EmitAtomicStore` decorates the store with the lvalue's tag.
+        self.tbaa_mark(st, lv.q, lv.tb);
     }
 
     /// `seq_cst` `atomicrmw` on an `_Atomic` lvalue (never volatile, as

@@ -25,6 +25,7 @@ use crate::target;
 use crate::templ::stack::FrameKind;
 
 mod cxx26;
+mod explain;
 mod special;
 
 impl Sema<'_, '_> {

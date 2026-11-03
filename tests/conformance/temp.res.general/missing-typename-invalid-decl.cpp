@@ -22,7 +22,7 @@
 //@ diag: 54:34 error "use of undeclared identifier 'fp'"
 //@ diag: 54:51 error "expected '(' for function-style cast or type construction"
 //@ requires: clang<22
-// clang 19 spelling; missing-typename-invalid-decl-clang22.cpp has clang 22's (WP-394).
+// clang 19 spelling: the declaration stays invalid, so f1 and f2 do not match; clang 22 keeps it valid (missing-typename-invalid-decl-clang22.cpp).
 template <class T> struct X { using m = int; };
 template <class T> struct S { S(int); };
 
