@@ -225,6 +225,11 @@ impl Oven {
                 Err(Freeze::Notes(vec![Note::new(loc, "expression of type 'void' has no value")]))
             }
             RetKind::Scalar(ty) => self.freeze_scalar(b, ty, v, loc),
+            // A wide `_BitInt` result is a scalar in the store (`IntBits`),
+            // so that a fold reads it as an integer (WP-465).
+            RetKind::Sret(ty) if self.types.wide(ty).is_some() => {
+                self.freeze_object(b, v as u64, loc)
+            }
             RetKind::Sret(ty) => self.freeze_aggregate(b, ty, v as u64, loc),
         };
         // [expr.const]/5.20: every allocation is deallocated within the
@@ -1070,11 +1075,15 @@ impl Oven {
         if !sp.is_init(abs, n) {
             return Err(self.uninit(b, Some(f.decl), f.ty, loc));
         }
-        let mask = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 } << f.bit;
-        let v = sp.read(abs, n) & mask;
+        // The bits `[bit, bit + width)` of the bytes from `abs`, a byte at
+        // a time (a wide `_BitInt` bit-field spans more than 16 bytes).
+        let (lo, hi) = (f.bit, f.bit + width);
         let o = at + f.offset as usize;
         for i in 0..n as usize {
-            s.bytes[o + i] |= (v >> (8 * i)) as u8;
+            let (b0, b1) = (i as u32 * 8, i as u32 * 8 + 8);
+            let (from, to) = (lo.max(b0) - b0, hi.min(b1) - b0);
+            let mask = (((1u16 << to) - 1) & !((1u16 << from) - 1)) as u8;
+            s.bytes[o + i] |= sp.read(abs + i as u64, 1) as u8 & mask;
             s.cover[o + i] = 1;
         }
         Ok(())
@@ -1332,6 +1341,10 @@ impl Oven {
                 _ => self.external(b, ty, d),
             },
             VarEvalState::Evaluating => {
+                // Mid-initialization: kept for this evaluation only (an
+                // automatic variable has no `eval_inner` placeholder to
+                // restore; WP-465).
+                self.provisional.push(g);
                 self.global_obj(ty, flags::CONST | flags::RESOLVING | (hu & flags::HAS_UNION), d)
             }
             VarEvalState::NotEvaluated => {

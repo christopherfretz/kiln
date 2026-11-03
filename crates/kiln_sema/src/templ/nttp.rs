@@ -412,6 +412,18 @@ impl Sema<'_, '_> {
         value: ConstValueId,
         loc: Loc,
     ) -> Option<ExprId> {
+        // A wide `_BitInt` (any value), or an integer outside `i128` (an
+        // `unsigned __int128` above `i128::MAX`): a literal of the
+        // argument's exact bits.
+        let wide = matches!(
+            self.ast.types.canonical_view(ty),
+            TypeView::BitInt { width, .. } if width > 128
+        );
+        let int = matches!(self.ast.consts.scalar(value), Some(Scalar::Int { .. }));
+        if int && self.ast.types.as_enum(ty).is_none() && (wide || self.const_int(value).is_none())
+        {
+            return Some(self.ast.builder().wide_int_literal(ty, value, Radix::Decimal, loc));
+        }
         let Some(v) = self.const_int(value) else {
             // Class, pointer and null values (§6.10).
             return self.nttp_value_expr(ty, value, loc);
@@ -432,16 +444,20 @@ impl Sema<'_, '_> {
                 ExprFlags::NONE,
             ));
         }
-        let kind = match t.builtin(ty)? {
-            BuiltinType::Bool => {
+        let kind = match t.builtin(ty) {
+            Some(BuiltinType::Bool) => {
                 return Some(self.ast.builder().bool_literal(ty, v != 0, loc));
             }
-            BuiltinType::Char | BuiltinType::SChar | BuiltinType::UChar => Some(CharKind::Ascii),
-            BuiltinType::WChar => Some(CharKind::Wide),
-            BuiltinType::Char8 => Some(CharKind::Utf8),
-            BuiltinType::Char16 => Some(CharKind::Utf16),
-            BuiltinType::Char32 => Some(CharKind::Utf32),
-            _ => None,
+            Some(BuiltinType::Char | BuiltinType::SChar | BuiltinType::UChar) => {
+                Some(CharKind::Ascii)
+            }
+            Some(BuiltinType::WChar) => Some(CharKind::Wide),
+            Some(BuiltinType::Char8) => Some(CharKind::Utf8),
+            Some(BuiltinType::Char16) => Some(CharKind::Utf16),
+            Some(BuiltinType::Char32) => Some(CharKind::Utf32),
+            Some(_) => None,
+            None if matches!(t.canonical_view(ty), TypeView::BitInt { .. }) => None,
+            None => return None,
         };
         if let Some(kind) = kind {
             let u = u32::try_from(v & 0xffff_ffff).unwrap_or(0);

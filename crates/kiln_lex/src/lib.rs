@@ -29,7 +29,7 @@ pub use lexer::Lexer;
 pub use options::{LexMode, LexOptions, Std};
 pub use spelling::{clean, source_offset, spelling};
 pub use token::{Encoding, Punct, TokFlags, TokKind, Token};
-pub use unicode::{NameMatch, lookup_char_name};
+pub use unicode::{NameMatch, is_identifier, lookup_char_name};
 
 /// The Unicode version of the identifier tables ([lex.name] uses UAX #31
 /// `XID_Start`/`XID_Continue`).

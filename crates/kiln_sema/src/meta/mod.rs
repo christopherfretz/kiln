@@ -4,6 +4,7 @@
 //! [`kiln_oven::SemaBridge::meta`]). One file per op family; an op no WP
 //! has implemented yet fails with a note naming its owner.
 
+mod define;
 mod ext;
 pub(crate) mod names;
 mod query;
@@ -60,6 +61,7 @@ impl Sema<'_, '_> {
             MetaOp::Annot(AnnotOp::IsAnnotation) | MetaOp::Define(DefineOp::IsDataMemberSpec) => {
                 self.meta_kind_pred(op, args, out)
             }
+            MetaOp::Define(d) => self.meta_define(d, args, out, ctx, oven),
             MetaOp::Ext(x) => self.meta_ext(x, args, out, ctx, oven),
             MetaOp::Template(t) => self.meta_templ(t, args, out, ctx, oven),
             MetaOp::Trait(t) => self.meta_trait(t, args, out, ctx, oven),

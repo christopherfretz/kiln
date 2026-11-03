@@ -1294,6 +1294,14 @@ impl<'a> Cg<'a> {
         self.ir(&t)
     }
 
+    /// The IR type a value of type `q` is loaded and stored as
+    /// (`convertTypeForLoadStore`): `iN` of a `_BitInt`'s ABI size where
+    /// its in-memory type is a byte array, else [`Self::mty`].
+    pub fn lsty(&mut self, q: QualType) -> LTy {
+        let t = self.tys.convert_load_store(q);
+        self.ir(&t)
+    }
+
     /// `sizeof` and `alignof` of `q`.
     pub fn size_align(&mut self, q: QualType) -> (u64, u64) {
         let l = self.tys.layouter().type_layout(q);

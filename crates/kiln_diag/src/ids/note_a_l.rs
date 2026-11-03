@@ -160,6 +160,7 @@ note_inst_declaration_hint = Note (1) "add an explicit instantiation declaration
 note_instantiation_contexts_suppressed = Note (2) "(skipping {0} context{1} in backtrace; use -ftemplate-backtrace-limit=0 to see all)";
 note_instantiation_required_here = Note (1) "{0:implicit|explicit} instantiation first required here";
 note_it_delegates_to = Note (0) "it delegates to";
+note_kiln_injected_here = Note (0) "member injected here";
 note_lambda_capture_by_ref = Note (1) "capture '{0}' by reference";
 note_lambda_capture_by_value = Note (1) "capture '{0}' by value";
 note_lambda_capture_here = Note (1) "{0:captured|captured by reference|implicitly captured due to use|implicitly captured by reference due to use} here";

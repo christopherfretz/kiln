@@ -307,20 +307,25 @@ impl Oven {
             Fault::FloatRange { kind, bits } => {
                 let t = site
                     .e
-                    .map_or_else(|| "int".into(), |e| {
+                    .map_or_else(|| "'int'".into(), |e| {
                         // A complex part or a vector lane: its element
-                        // type (clang).
+                        // type (clang); otherwise the type as written,
+                        // with its `aka`.
                         let q = ast.exprs.get(e).ty();
-                        let q = match ast.types.canonical_view(q) {
-                            kiln_ast::types::TypeView::Vector { elem, .. } => elem,
-                            _ => ast.types.as_complex(q).unwrap_or(q),
-                        };
-                        Self::qname(ast, q)
+                        match ast.types.canonical_view(q) {
+                            kiln_ast::types::TypeView::Vector { elem, .. } => {
+                                format!("'{}'", Self::qname(ast, elem))
+                            }
+                            _ => match ast.types.as_complex(q) {
+                                Some(el) => format!("'{}'", Self::qname(ast, el)),
+                                None => Self::quoted_aka(ast, q),
+                            },
+                        }
                     });
                 (
                     site.loc,
                     format!(
-                        "value {} is outside the range of representable values of type '{t}'",
+                        "value {} is outside the range of representable values of type {t}",
                         arith::apfloat_to_string(kind, bits)
                     ),
                 )

@@ -15,7 +15,7 @@ use kiln_ast::{Ast, DeclId, ExprId, QualType, TypeId};
 use kiln_source::Loc;
 
 use super::new_delete::record_bits;
-use super::{Access, Compiler, Local, Place, skip_parens};
+use super::{Access, Compiler, ElemTrack, Local, Place, skip_parens};
 use crate::kbc::{Op, cmp, int_aux};
 use crate::mem::Origin;
 use crate::ty::{OTy, TyKind};
@@ -449,6 +449,15 @@ impl Compiler<'_> {
                     // lists them first, in `vbases()` order); an exception
                     // after one destroys it ([except.ctor]/3).
                     if !self.base_obj {
+                        // The virtual base stage (`CTOR_STEP_VBASE`): no
+                        // non-virtual subobject has begun its lifetime.
+                        if !delegating
+                            && !union
+                            && let Some(j) = self.vbase_index(&ci, cls)
+                        {
+                            let pc = self.o.code.len() as u32;
+                            self.ctor_steps.push(step(pc, crate::CTOR_STEP_VBASE | j as u32));
+                        }
                         let m = self.next;
                         if let Some((q, vty)) = self.ctor_init_vbase(&ci, this, cls) {
                             self.push_cleanup(q, vty, 2 | 4, loc);
@@ -466,11 +475,20 @@ impl Compiler<'_> {
                     done = done.max(at);
                     if !delegating && !union {
                         let pc = self.o.code.len() as u32;
-                        self.ctor_steps.push((pc, at as u32));
+                        self.ctor_steps.push(step(pc, at as u32));
+                        // A member list-initialized records the steps of
+                        // its elements (WP-465).
+                        if ci.kind == CtorInitKind::Field {
+                            let fi = self.o.types.fields(cls)[at];
+                            self.elem_track = self
+                                .tracked_list(ci.init, fi.ty)
+                                .map(|list| ElemTrack { list, field: at as u32, off: fi.offset });
+                        }
                     }
                 }
                 let m = self.next;
                 self.ctor_init(&ci, this, cls, union);
+                self.elem_track = None;
                 self.next = m;
                 if ci.kind == CtorInitKind::Delegating {
                     // [except.ctor]/4: the object is constructed; an
@@ -483,7 +501,7 @@ impl Compiler<'_> {
             }
             if !self.ctor_steps.is_empty() {
                 let pc = self.o.code.len() as u32;
-                self.ctor_steps.push((pc, u32::MAX));
+                self.ctor_steps.push(step(pc, u32::MAX));
             }
             if !delegating {
                 let n = self.o.types.vbase_start(cls);
@@ -672,6 +690,14 @@ impl Compiler<'_> {
     /// `cls`; its address and type (a base-subobject view if it has
     /// virtual bases of its own), `None` for an empty one (not laid out:
     /// its constructor still runs, on the object's address).
+    /// The index among the virtual bases of `cls` (entries from
+    /// `vbase_start`) of the one virtual-base initializer `ci` initializes.
+    fn vbase_index(&mut self, ci: &CtorInit, cls: OTy) -> Option<usize> {
+        let vty = self.ty(QualType::unqual(TypeId::new(ci.target)));
+        let t = &self.o.types;
+        t.fields(cls)[t.vbase_start(cls)..].iter().position(|f| t.same_class(f.ty, vty))
+    }
+
     fn ctor_init_vbase(&mut self, ci: &CtorInit, this: u32, cls: OTy) -> Option<(u32, OTy)> {
         let vty = self.ty(QualType::unqual(TypeId::new(ci.target)));
         let vb = self.o.types.vbase_start(cls);
@@ -1333,4 +1359,9 @@ impl Compiler<'_> {
         self.opaque.remove(&src);
         self.next = m;
     }
+}
+
+/// A constructor step that is not an element's ([`crate::CtorStep`]).
+fn step(pc: u32, cur: u32) -> crate::CtorStep {
+    crate::CtorStep { pc, cur, off: 0, len: 0 }
 }
