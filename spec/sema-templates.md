@@ -2506,11 +2506,16 @@ impl Sema<'_, '_> {
   (`SpecialState.dropped_tid_warnings`), and the next take of the entry
   (`take_suppressed_diags`, from `resolve_single_template_id` and
   `emit_suppressed_diags`) moves the notes there to the use's location
-  (`Diag::relocate_notes`; WP-424). Gap: the restored warnings are the
-  failed use's, so a later *call* also reports the warning of the
-  explicit arguments' substitution into the whole function type, which
-  clang's call deduction does not make (clang reports only the signature
-  substitution's). Tests `over.over/template-id-no-match{,-19,-restored}.cpp`.
+  (`Diag::relocate_notes`; WP-424). Only the signature substitution's
+  warnings go back: `keep_deduction_warnings` records how many of the
+  entry's lead it as the forming deduction's own (explicit arguments,
+  defaults; `TemplState.deduction_diags`), and the drop strips that
+  many. The next deduction of the specialization then treats the
+  handed-back entry as clang's empty slot and puts its own phases'
+  warnings ahead of it, so an address-of reports its explicit-argument
+  warning again while a call, whose explicit arguments are substituted
+  into the parameter types alone, reports none (WP-444). Tests
+  `over.over/template-id-no-match{,-19,-restored,-call,-call-19}.cpp`.
 - Fatal errors are always reported: the depth limit and stack
   exhaustion.
 

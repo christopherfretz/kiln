@@ -339,6 +339,13 @@ impl Substituter<'_, '_, '_> {
                 let (name, at) = self.label_name(DeclId::new(n.a()))?;
                 Ok(self.sema.act_on_goto(name, at, loc))
             }
+            // clang `TransformIndirectGotoStmt`: the target is substituted
+            // (its conversion to `const void*` peeled) and converted again.
+            StmtKind::IndirectGotoStmt => {
+                let star = self.sema.ast.stmts.indirect_goto_star(s);
+                let e = self.expr(self.sema.ast.stmts.indirect_goto_target(s))?;
+                self.sema.act_on_indirect_goto(e, loc, star).ok_or(SubstFail)
+            }
             // clang `TransformAttributedStmt`: each assumption is
             // substituted and built again (`BuildCXXAssumeExpr`, so the
             // instantiation gets its own conversion and `-Wassume`); the
