@@ -12,6 +12,7 @@
 mod escape;
 mod print;
 mod side;
+mod subst;
 pub mod table;
 #[cfg(test)]
 mod tests;
@@ -63,13 +64,15 @@ const MAX_JSON_DEPTH: usize = 20_000;
 
 /// Converts clang's JSON dump `json` of a translation unit whose main file
 /// clang names `main_file` into kiln dump text. `text` produces clang's
-/// text dump of the same compile; it is called at most once, and only when
-/// a constexpr variable's value is needed.
+/// text dump of the same compile with extra arguments (none, or an
+/// `-ast-dump-filter`); it is called at most once per argument list, and
+/// only when the JSON leaves something out (a constexpr variable's value,
+/// whether a specialization's argument was written).
 pub fn normalize(
     json: &str,
     main_file: &str,
     opts: &DumpOptions,
-    text: &mut (dyn FnMut() -> Result<String, String> + Send),
+    text: &mut TextDump<'_>,
 ) -> Result<String, String> {
     std::thread::scope(|s| {
         let worker = std::thread::Builder::new()
@@ -84,6 +87,9 @@ pub fn normalize(
         worker.join().unwrap_or_else(|_| Err("clang-ast: the normalizer panicked".into()))
     })
 }
+
+/// Produces clang's text dump of the compile, with extra clang arguments.
+pub type TextDump<'a> = dyn FnMut(&[&str]) -> Result<String, String> + Send + 'a;
 
 /// A clang invocation: the compiler, its working directory, and the
 /// arguments before the dump flags (`-std=`, user flags, the file).
@@ -202,7 +208,11 @@ pub fn main(args: impl Iterator<Item = String>) -> ExitCode {
         timeout: Duration::from_secs(120),
     };
     let result = run.dump("-ast-dump=json").and_then(|json| {
-        let mut text = || run.dump("-ast-dump");
+        let mut text = |extra: &[&str]| {
+            let mut args = args.clone();
+            args.extend(extra.iter().map(|s| (*s).to_owned()));
+            ClangRun { args: &args, ..run }.dump("-ast-dump")
+        };
         normalize(&json, &cli.file, &cli.opts, &mut text)
     });
     match result {

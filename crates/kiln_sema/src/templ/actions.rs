@@ -167,7 +167,8 @@ impl Sema<'_, '_> {
             self.note_written_loc(WrittenKey::Nns(n), loc);
             return Some((self.decltype_scope_marker(), n));
         }
-        let (ctx, spelled) = self.act_on_nested_name_spelled(prefix.map(|p| p.0), name, loc)?;
+        let (ctx, spelled) =
+            self.act_on_nested_name_written(prefix.map(|(p, n)| (p, Some(n))), name, loc)?;
         let n = self.nns_component(prefix.map(|p| p.1), ctx, spelled);
         if self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
             self.note_written_loc(WrittenKey::Nns(n), loc);

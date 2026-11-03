@@ -877,10 +877,50 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// qualifier names (`None` when unqualified).
     pub(crate) fn scan_name_qual_at(
         &self,
-        mut i: usize,
+        i: usize,
     ) -> Option<(usize, bool, NameClass, Symbol, Option<DeclId>)> {
-        if !self.stack_ok() {
+        self.scan_name_walk(i).ok()
+    }
+
+    /// Whether the name at token `i` is qualified by a component that
+    /// names no scope (an undeclared name, a class template without
+    /// arguments, a variable or function before `::`): parsing the
+    /// qualifier diagnoses it ("use of undeclared identifier", "requires
+    /// template arguments"; clang's `ActOnCXXNestedNameSpecifier`).
+    /// Returns the index after the name's last component (before any
+    /// template arguments of it), found by tokens alone.
+    pub(crate) fn not_a_scope_name(&self, i: usize) -> Option<usize> {
+        if !matches!(self.scan_name_walk(i), Err(ScanStop::NotAScope)) {
             return None;
+        }
+        let mut i = i;
+        if Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon) {
+            i += 1;
+        }
+        loop {
+            if self.kw_of(self.tok_at(i)) == Some(Kw::Template) {
+                i += 1;
+            }
+            self.ident_of(self.tok_at(i))?;
+            let mut j = i + 1;
+            if Self::punct_of(self.tok_at(j)) == Some(Punct::Less) {
+                match self.skip_template_args(j) {
+                    Some((close, false)) => j = close + 1,
+                    _ => return None,
+                }
+            }
+            if Self::punct_of(self.tok_at(j)) != Some(Punct::ColonColon) {
+                return Some(i + 1);
+            }
+            i = j + 1;
+        }
+    }
+
+    /// [`Parser::scan_name_qual_at`], saying why there is no name.
+    fn scan_name_walk(&self, mut i: usize) -> Result<ScannedName, ScanStop> {
+        use ScanStop::NoName;
+        if !self.stack_ok() {
+            return Err(NoName);
         }
         let mut qual: Option<DeclId> = None;
         // A qualifier component was a class template named with dependent
@@ -888,7 +928,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         // found in it by lookahead is a member of an unknown specialization.
         let mut dep_tid = false;
         if let Some(d) = self.decltype_scope_at(i) {
-            let q = d.qual?.0;
+            let q = d.qual.ok_or(NoName)?.0;
             // A parsed-ahead `X<T>::` that is not the current
             // instantiation stays the class template (a dependent marker).
             dep_tid = self.s.ast.decls.get(q).kind() == DeclKind::ClassTemplate;
@@ -903,7 +943,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             if template_kw {
                 i += 1;
             }
-            let name = self.ident_of(self.tok_at(i))?;
+            let name = self.ident_of(self.tok_at(i)).ok_or(NoName)?;
             // A name before `::` is looked up for a scope only
             // ([basic.lookup.qual]/1).
             let mut class = if self.tok_at(i + 1).kind == TokKind::Punct(Punct::ColonColon) {
@@ -918,7 +958,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             if (template_kw || is_template_class(class))
                 && self.tok_at(end).kind == TokKind::Punct(Punct::Less)
             {
-                let (close, split) = self.skip_template_args(end)?;
+                let (close, split) = self.skip_template_args(end).ok_or(NoName)?;
                 if let NameClass::TypeTemplate(d) = class
                     && !split
                     && self.tok_at(close + 1).kind == TokKind::Punct(Punct::ColonColon)
@@ -930,7 +970,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 }
                 class = type_if_args(class);
                 if split {
-                    return Some((close, true, class, name, qual));
+                    return Ok((close, true, class, name, qual));
                 }
                 end = close + 1;
             }
@@ -938,16 +978,20 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 qual = Some(match class {
                     NameClass::Namespace(d) | NameClass::Type(_, d) => d,
                     // `T::x::`: still dependent.
-                    NameClass::Dependent => qual?,
+                    NameClass::Dependent => qual.ok_or(NoName)?,
                     // The injected-class-name `X::` in (a member
                     // declarator of) `X<A...>` ([temp.local]/1).
-                    NameClass::TypeTemplate(d) if end == i + 1 => self.s.injected_class_decl(d)?,
-                    _ => return None,
+                    // A class template without arguments names no scope
+                    // outside its own ("requires template arguments").
+                    NameClass::TypeTemplate(d) if end == i + 1 => {
+                        self.s.injected_class_decl(d).ok_or(ScanStop::NotAScope)?
+                    }
+                    _ => return Err(ScanStop::NotAScope),
                 });
                 i = end + 1;
                 continue;
             }
-            return Some((end, false, class, name, qual));
+            return Ok((end, false, class, name, qual));
         }
     }
 
@@ -1676,6 +1720,19 @@ pub(crate) fn is_template_class(c: NameClass) -> bool {
             | NameClass::FunctionTemplate(_)
             | NameClass::Concept(_)
     )
+}
+
+/// A scanned name: the index after it, whether its last argument list
+/// closed inside a `>>`-like token, its class, last component and
+/// qualifier context ([`Parser::scan_name_qual_at`]).
+type ScannedName = (usize, bool, NameClass, Symbol, Option<DeclId>);
+
+/// Why [`Parser::scan_name_walk`] found no name.
+enum ScanStop {
+    /// No name, or one lookahead cannot classify.
+    NoName,
+    /// A qualifier component names no scope ([`Parser::not_a_scope_name`]).
+    NotAScope,
 }
 
 /// A class or alias template specialization scans as a type.

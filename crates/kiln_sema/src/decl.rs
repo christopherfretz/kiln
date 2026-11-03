@@ -903,6 +903,9 @@ impl Sema<'_, '_> {
         // [dcl.spec.auto.general]/2-5.
         let mut ty = self.auto_declarator_check(ty, spec_loc, d);
         let name = self.declarator_name(d);
+        if matches!(d.site, DeclSite::TypeParamDefault | DeclSite::Alias) {
+            self.pending_chunk_loc = Self::inner_chunk_loc(d);
+        }
         let mut prev_ref = false;
         let recover = std::mem::take(&mut self.declarator_int_recovery);
         // A failed chunk: the declarator's type is the error type, or
@@ -1578,6 +1581,7 @@ impl Sema<'_, '_> {
             range: (ds.loc, d.name_loc()),
             type_loc: ds.type_loc.unwrap_or(ds.loc),
             ref_loc: if d.ellipsis.is_none() { Self::outer_ref_loc(d) } else { Loc::INVALID },
+            chunk_loc: if d.ellipsis.is_none() { Self::inner_chunk_loc(d) } else { Loc::INVALID },
             decl: None,
             explicit_object: d.explicit_object,
         }
@@ -3106,12 +3110,27 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Records the outermost `&`/`&&` of declaration `id` of dependent
-    /// type `ty` declared by `d` ([`Sema::ref_locs`]).
+    /// The innermost `*` or `[` of `d`, when that chunk applies to the
+    /// decl-specifiers ([`Sema::inner_chunk_locs`]); invalid otherwise.
+    pub(crate) fn inner_chunk_loc(d: &Declarator) -> Loc {
+        match d.chunks.last() {
+            Some(Chunk::Pointer { loc, .. } | Chunk::Array { loc, .. }) => *loc,
+            _ => Loc::INVALID,
+        }
+    }
+
+    /// Records the outermost `&`/`&&` ([`Sema::ref_locs`]) and the
+    /// innermost `*`/`[` ([`Sema::inner_chunk_locs`]) of declaration `id`
+    /// of dependent type `ty` declared by `d`.
     pub(crate) fn note_ref_loc(&mut self, id: DeclId, d: &Declarator, ty: QualType) {
-        let l = Self::outer_ref_loc(d);
-        if l.is_valid() && self.is_dependent_type(ty) {
-            self.ref_locs.insert(id, l);
+        let (l, c) = (Self::outer_ref_loc(d), Self::inner_chunk_loc(d));
+        if (l.is_valid() || c.is_valid()) && self.is_dependent_type(ty) {
+            if l.is_valid() {
+                self.ref_locs.insert(id, l);
+            }
+            if c.is_valid() {
+                self.inner_chunk_locs.insert(id, c);
+            }
         }
     }
 
@@ -3168,6 +3187,10 @@ impl Sema<'_, '_> {
         }
         if type_loc.is_valid() && self.is_dependent_type(ty) {
             self.type_spec_locs.insert(td, type_loc);
+        }
+        let chunk = std::mem::replace(&mut self.pending_chunk_loc, Loc::INVALID);
+        if chunk.is_valid() && self.is_dependent_type(ty) {
+            self.inner_chunk_locs.insert(td, chunk);
         }
         // [class.access.spec]/1: a member alias-declaration has the
         // current access, as a member typedef does.
@@ -3796,6 +3819,7 @@ impl Sema<'_, '_> {
         let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params, !prev_invalid);
         if let Some(p) = prev_ok {
             self.check_param_nullability(p, &params);
+            self.check_param_indeterminate(p, &params);
         }
         // clang marks the redeclaration invalid and leaves it out of the
         // redeclaration chain; calls ignore it.
@@ -3859,6 +3883,13 @@ impl Sema<'_, '_> {
             })
         {
             self.type_spec_locs.insert(f, tl);
+        }
+        // The return type's innermost `*`/`[` ([`Sema::inner_chunk_locs`]).
+        let chunk = Self::inner_chunk_loc(d);
+        if chunk.is_valid()
+            && self.ast.types.proto(ty).is_some_and(|p| self.is_dependent_type(p.ret()))
+        {
+            self.inner_chunk_locs.insert(f, chunk);
         }
         // A pure virtual function's notes point at its decl-specifiers
         // (clang `getBeginLoc`, §4.11), as does the `->` note on an
@@ -4103,6 +4134,9 @@ impl Sema<'_, '_> {
             }
             if p.ref_loc.is_valid() && self.is_dependent_type(p.ty) {
                 self.ref_locs.insert(pd, p.ref_loc);
+            }
+            if p.chunk_loc.is_valid() && self.is_dependent_type(p.ty) {
+                self.inner_chunk_locs.insert(pd, p.chunk_loc);
             }
             if p.invalid {
                 self.ast.decls.set_flags(pd, DeclFlags::INVALID);
@@ -8695,11 +8729,22 @@ impl Sema<'_, '_> {
         name: Symbol,
         loc: Loc,
     ) -> Option<(DeclId, DeclId)> {
+        self.act_on_nested_name_written(prefix.map(|q| (q, None)), name, loc)
+    }
+
+    /// [`Sema::act_on_nested_name_spelled`] after a prefix given with its
+    /// specifier as written, if known (for the diagnostics that print it).
+    pub(crate) fn act_on_nested_name_written(
+        &mut self,
+        prefix: Option<(DeclId, Option<kiln_ast::ids::NnsId>)>,
+        name: Symbol,
+        loc: Loc,
+    ) -> Option<(DeclId, DeclId)> {
         let found = match prefix {
-            Some(q) => self.lookup_qualified(q, name, LookupKind::Nested),
+            Some((q, _)) => self.lookup_qualified(q, name, LookupKind::Nested),
             None => self.lookup_name(name, LookupKind::Nested),
         };
-        self.nested_name_from_found(prefix, name, &found, loc)
+        self.nested_name_from_found_written(prefix, name, &found, loc)
     }
 
     /// [`Sema::act_on_nested_name_spelled`] once lookup of `name` (after
@@ -8711,6 +8756,19 @@ impl Sema<'_, '_> {
         found: &crate::lookup::Found,
         loc: Loc,
     ) -> Option<(DeclId, DeclId)> {
+        self.nested_name_from_found_written(prefix.map(|q| (q, None)), name, found, loc)
+    }
+
+    /// [`Sema::nested_name_from_found`] after a prefix given with its
+    /// specifier as written, if known.
+    fn nested_name_from_found_written(
+        &mut self,
+        written: Option<(DeclId, Option<kiln_ast::ids::NnsId>)>,
+        name: Symbol,
+        found: &crate::lookup::Found,
+        loc: Loc,
+    ) -> Option<(DeclId, DeclId)> {
+        let prefix = written.map(|w| w.0);
         let Some(&d) = found.decls.first() else {
             // [basic.lookup.qual]/1 ignores names that are not types,
             // templates or namespaces; one that ordinary lookup finds is
@@ -8760,10 +8818,23 @@ impl Sema<'_, '_> {
                 } else {
                     "alias template"
                 };
+                // Printed with the specifier as written (`'::N::Y'`; the
+                // prefix's qualified name when that is not known), with
+                // the "template is declared here" note ([temp.names]/1;
+                // clang's `diagnoseMissingTemplateArguments`).
+                let q = match written {
+                    Some((_, Some(n))) => self.nns_str(n),
+                    Some((q, None)) if self.kind_of(q) != DeclKind::TranslationUnit => {
+                        format!("{}::", self.qualified_decl_name(q))
+                    }
+                    _ => String::new(),
+                };
+                let note = self.diag(DiagId::note_template_decl_here, self.conflict_loc(d));
                 let msg = self
                     .diag(DiagId::sema_template_requires_args, loc)
                     .arg(what)
-                    .arg(format!("'{}'", sym_str(self, name)));
+                    .arg(format!("'{q}{}'", sym_str(self, name)))
+                    .with_note(note);
                 self.emit(msg);
                 None
             }
@@ -8950,7 +9021,11 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
-        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax) else {
+        // [dcl.attr.indet] is C++26 (clang trunk's `LangOpts<"CPlusPlus26">`
+        // spelling): below it, `indeterminate` is an unknown attribute.
+        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax)
+            .filter(|&k| k != AttrKind::INDETERMINATE || self.std >= kiln_lex::Std::Cxx26)
+        else {
             let id = if gnu && matches!(n.as_str(), "visibility" | "section" | "format") {
                 DiagId::parse_attribute_ignored
             } else {
@@ -8970,6 +9045,9 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::ENUM_EXTENSIBILITY {
             return self.enum_extensibility_attribute(syntax, args, loc);
+        }
+        if kind == AttrKind::INIT_PRIORITY {
+            return self.init_priority_attribute(syntax, &shown, args, loc);
         }
         // `preferred_name(typedef-name)`: the type in `b`, checked
         // against its class template in `check_decl_attrs`.
@@ -9580,6 +9658,7 @@ fn attr_kind_of(
         ("unlikely", true, _) => AttrKind::UNLIKELY,
         ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
         ("carries_dependency", true, _) => AttrKind::CARRIES_DEPENDENCY,
+        ("indeterminate", true, _) => AttrKind::INDETERMINATE,
         ("aligned", _, true) | ("alignas", _, _) => AttrKind::ALIGNED,
         ("packed", _, true) => AttrKind::PACKED,
         ("used", _, true) => AttrKind::USED,
@@ -9592,6 +9671,7 @@ fn attr_kind_of(
         ("hot", _, true) => AttrKind::HOT,
         ("naked", _, true) => AttrKind::NAKED,
         ("may_alias", _, true) => AttrKind::MAY_ALIAS,
+        ("init_priority", _, true) => AttrKind::INIT_PRIORITY,
         ("nonnull", _, true) => AttrKind::NONNULL,
         ("returns_nonnull", _, true) => AttrKind::RETURNS_NONNULL,
         // clang `Clang<"optnone">` / `Clang<"minsize">` spellings:

@@ -159,7 +159,7 @@ impl Sema<'_, '_> {
 impl Sema<'_, '_> {
     /// Where clang's note for `d` points: its name, or for an alias
     /// template its `using` keyword.
-    fn conflict_loc(&self, d: DeclId) -> Loc {
+    pub(crate) fn conflict_loc(&self, d: DeclId) -> Loc {
         (self.kind_of(d) == DeclKind::TypeAliasTemplate)
             .then(|| self.ast.template_info(d).and_then(|i| i.pattern))
             .flatten()

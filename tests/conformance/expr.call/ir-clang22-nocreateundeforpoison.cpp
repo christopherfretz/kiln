@@ -6,6 +6,8 @@
 // and the saturating additions, but not abs, ctlz or cttz. Compared with
 // clang 22's IR exactly.
 //@ expect: ir
+// clang 22 has no C++26 erroneous values (P2795R5, spec/codegen.md §7r).
+//@ args: -ftrivial-auto-var-init=uninitialized
 //@ requires: clang>=22
 //@ requires: llvm>=22
 int overflow(int x, int y) {

@@ -1,0 +1,184 @@
+Dumping Y::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping Y<'\xc8'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl a 'int'
+
+Dumping Y<'\n'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl b 'int'
+
+Dumping Y<'\x00'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl c 'int'
+
+Dumping Y<'\''>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl d 'int'
+
+Dumping Y<'\\'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl e 'int'
+
+Dumping Y<u8'a'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl f 'int'
+
+Dumping Y<u8'\xe9'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl g 'int'
+
+Dumping Y<u'\xe9'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl h 'int'
+
+Dumping Y<U'\U0001f600'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl i 'int'
+
+Dumping Y<L'\u1234'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl j 'int'
+
+Dumping Y<L'z'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl k 'int'
+
+Dumping Y<(signed char)'\xfd'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl l 'int'
+
+Dumping Y<(unsigned char)'\xc8'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl m 'int'
+
+Dumping Y<'\x7f'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl n 'int'
+
+Dumping Y<'\t'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl o 'int'
+
+Dumping Y<'"'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl p 'int'
+
+Dumping Y<u'\ud800'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl q 'int'
+
+Dumping Y<'\a'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl r 'int'
+
+Dumping Y<U'\x7f'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl s 'int'
+
+Dumping Y<u8'\x80'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl t 'int'
+
+Dumping A::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping A<'\xc8'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl a 'int'
+
+Dumping A<'A'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl b 'int'
+
+Dumping A<'\x00'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl c 'int'
+
+Dumping A<'\\'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl d 'int'
+
+Dumping B::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping B<'\xfd'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl a 'int'
+
+Dumping B<'A'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl b 'int'
+
+Dumping D::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping D<'\xc8'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl a 'int'
+
+Dumping E::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping E<u8'\xe9'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl a 'int'
+
+Dumping F::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping F<u'\u1234'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl a 'int'
+
+Dumping G::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping G<U'\U0001f600'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl a 'int'
+
+Dumping G<U'\n'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl b 'int'
+
+Dumping H::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping H<L'\xe9'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl a 'int'
+
+Dumping H<L'\''>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl b 'int'
+
+Dumping F<u'\ud800'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl b 'int'
+
+Dumping F<u'\xff'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl c 'int'
+
+Dumping H<L'\U0001f600'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl c 'int'
+
+Dumping H<L'\Uffffffff'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl d 'int'
+
+Dumping E<u8'\x7f'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl b 'int'
+

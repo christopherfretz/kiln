@@ -3,8 +3,7 @@
 // WP-185 feature probe.
 //@ expect: compile-ok
 //@ strict-diags
-//@ xfail(clang): neither clang 19 nor clang 22 knows [[indeterminate]] (P2795)
-//@ xfail(kiln): erroneous behaviour and [[indeterminate]] are not implemented (P2795)
+//@ requires: clang>=23
 void f() {
   int x [[indeterminate]];
   (void)x;

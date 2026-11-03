@@ -723,7 +723,14 @@ specialization (the `Record` behind the sugar) prints its canonical
 arguments without trailing defaults, as clang prints a
 `ClassTemplateSpecializationDecl`: `pr<int, typename id<int>::type>`
 is `'pr<int, typename id<int>::type>' (aka 'pr<int, int>')`, and an
-instantiation note names `'X<int>'` for `X<I>`. Representative goldens (each a unit test, checked against clang 19):
+instantiation note names `'X<int>'` for `X<I>`. An omitted argument is
+always dropped; a written type argument equal to its substituted default
+only where clang's structural `isSubstitutedDefaultArgument` agrees:
+not when the default has an array or function declarator (`U = T[3]`),
+collapses a reference through a parameter (`R = T &`, `T = int &&`) or
+qualifies a reference argument (`R = const T`, `T = int &`), so
+`Y<int &&, int &>` and `X<long, long[3]>` keep their written arguments
+(`Sema::suppress_default_args`, WP-437). Representative goldens (each a unit test, checked against clang 19):
 
 | type | prints |
 |---|---|

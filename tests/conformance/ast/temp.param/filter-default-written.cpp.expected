@@ -1,0 +1,60 @@
+Dumping X::C1:
+CXXRecordDecl struct C1 definition
+`-FieldDecl x 'int'
+
+Dumping X<long>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl a 'int'
+
+Dumping X<const int>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl b 'int'
+
+Dumping X<long, long *const>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl c 'int'
+
+Dumping Y::C1:
+CXXRecordDecl struct C1 definition
+`-FieldDecl x 'int'
+
+Dumping Y<int &, int &>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl a 'int'
+
+Dumping Y<int &&, int &>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl b 'int'
+
+Dumping Y<int>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl c 'int'
+
+Dumping Y<short &&>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl d 'int'
+
+Dumping Z::C1:
+CXXRecordDecl struct C1 definition
+`-FieldDecl x 'int'
+
+Dumping Z<int &, int &>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl a 'int'
+
+Dumping Z<const int>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl b 'int'
+
+Dumping Z<long>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl c 'int'
+
+Dumping Z<int[2]>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl d 'int'
+
+Dumping Z<long &>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl e 'int'
+

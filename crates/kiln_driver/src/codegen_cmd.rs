@@ -13,7 +13,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use kiln_codegen::{CodegenOptions, emit_with_diags};
+use kiln_codegen::{AutoVarInit, CodegenOptions, emit_with_diags};
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Group};
 use kiln_lex::Interner;
 use kiln_parse::{ParseOptions, parse_preprocessed};
@@ -241,6 +241,18 @@ impl CodegenJob<'_> {
                 llvm_major: job.toolchain.llvm_major(),
                 omit_frame_pointer: a.omit_frame_pointer,
                 omit_leaf_frame_pointer: a.omit_leaf_frame_pointer,
+                // [basic.indet]/1 (P2795R5): C++26 automatic variables
+                // start with their erroneous value (spec/codegen.md §7r).
+                auto_var_init: a.auto_var_init.unwrap_or(
+                    if job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx26 {
+                        AutoVarInit::Zero
+                    } else {
+                        AutoVarInit::Uninitialized
+                    },
+                ),
+                auto_var_init_max_size: a
+                    .auto_var_init_max_size
+                    .unwrap_or(kiln_codegen::AUTO_VAR_INIT_MAX_SIZE),
             };
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
