@@ -54,7 +54,7 @@ fn kiln_ir_for(src: &str, llvm_major: u32) -> Result<String, String> {
         file,
         &engine,
         target.clone(),
-        &ParseOptions::default(),
+        &ParseOptions { clang_compat: 19, ..ParseOptions::default() },
         ConstexprLimits::default(),
     );
     let errors: Vec<String> =
@@ -67,6 +67,8 @@ fn kiln_ir_for(src: &str, llvm_major: u32) -> Result<String, String> {
         exceptions: true,
         ident: IDENT.to_owned(),
         llvm_major,
+        // The oracle is clang 19 (`clang-19` below).
+        clang_compat: 19,
         ..CodegenOptions::default()
     };
     let m = emit(&mut tu.ast, &mut tu.oven, &target, &opts).map_err(|e| format!("codegen: {e}"))?;

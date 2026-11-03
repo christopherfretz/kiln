@@ -61,7 +61,12 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   22's `__size_t` / `__signed_size_t` / `__ptrdiff_t` sugar
   (`Sema::size_type`; diagnostics print `'__size_t' (aka 'unsigned
   long')`); an alias template specialization substitutes its arguments
-  as written (`templ/class.rs`); a `PackExpansionExpr` keeps its
+  as written (`templ/class.rs`); a class template specialization keeps
+  a qualified template template argument as first written
+  (`X<int>::apply`; `first_written_template_args`), and a template-id
+  naming that parameter substitutes to `X<int>::apply<int>` (an
+  elaborated type with the argument's qualifier; `ttp_arg_qualifier`,
+  WP-413); a `PackExpansionExpr` keeps its
   pattern's type; a synthesized `<=>`/`==` converts each operand to the
   cv-qualified base ([class.compare.default]).
 - **Structured bindings** (§4.9): `std::tuple_element`'s index is a
@@ -153,8 +158,11 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
 - Codegen's `-Watomic-alignment` text follows the level
   (spec/codegen.md); the AST dump's type printing, spec/ast-dump.md §2.
 
-kiln++ defaults to level 22 since WP-394 (spec/driver.md); the library
-default (`ClangCompat::default()`, `Sema` and `DiagOptions`) stays 19.
+kiln++ defaults to level 22 since WP-394 (spec/driver.md), and so does
+the library since WP-413: `ClangCompat::default()`, `PredefConfig`,
+`ClangFeatures`, `Sema`, `SemaNames`, `ParseOptions`, `DiagOptions`,
+`Oven`, `CodegenOptions` and `IrTypes` all start at 22. A test about
+clang 19 behaviour passes `ClangCompat::Clang19` (or `19`) explicitly.
 Where clang 22's output differs and kiln has not followed it yet, the
 test pins clang 19 with `requires: clang<22` and the comment `WP-355
 residual` (docs/status/wp-184-oracle-switch.md).
@@ -1298,6 +1306,18 @@ and returns the scope it names:
     guides on the elements. A single element whose type is a
     specialization of `X` or derived from one skips phase 1
     (`ctad_list_of_spec`).
+  - At clang 21+ (`clang_compat >= 22`; WP-413) each resolution is
+    two-phase (`ctad_resolve`, clang `BestViableFunction`'s deferred
+    template candidates): when there are both non-template and template
+    guides, the non-template guides are resolved alone first, and a
+    best one that is a perfect match (`perfect_candidate`, clang
+    `isPerfectMatch`: every argument an identity standard conversion,
+    lvalue transformations aside; a reference bound to the argument's
+    own cv-qualified type, not an lvalue reference to an rvalue) is the
+    result without deducing any template guide, which so instantiates
+    nothing. Otherwise the set is reset and every guide is resolved, as
+    at 19. Tests `templates/ctad/over.match.class.deduct-perfect-guide{,-clang19}.cpp`,
+    `temp.deduct.guide-ast-dump.cpp`.
   - In copy-initialization (`=` and `= {…}`), explicit guides and
     constructors are non-viable (`CandidateFailure::Explicit`).
   - In copy-list-initialization, an explicit winner is
@@ -3447,7 +3467,24 @@ for them.
     - for a constructor call, the type-id after the `(`;
     - for a scalar or vector literal, its `{`.
 
-    A dependent literal is checked when instantiated. A valid
+    A dependent literal is checked when instantiated.
+
+    The rules above are clang 19's. At `-fclang-compat=22` (WP-413,
+    `gnu.rs` `element_culprit_loc`) three things change:
+    - the culprit is the element itself, without looking through
+      parentheses or casts, at clang's `getExprLoc` (`expr_loc`). An
+      implicit conversion, including an lvalue-to-rvalue one, is located
+      where it begins, so `p.a` is reported at `p` and `x = 3` at `x`;
+    - a scalar, vector or complex literal is reported at its first
+      non-constant element instead of the `{`;
+    - a literal whose type is dependent but whose written elements are
+      not value-dependent is checked at the template definition (written
+      elements, at `expr_loc`). A failure makes the literal an error
+      expression, so its instantiations do not report it again.
+
+    Tests: `ext.gnu.compound.literal/namespace-scope-diagnostics{,-clang19}.cpp`.
+
+    A valid
     non-array literal is a prvalue, as it is inside a function, and its
     variable is constant-initialized.
 
@@ -3813,7 +3850,14 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   context, as clang reports its rebuilt `ConstantExpr`, or escalating an
   immediate-escalating instantiation (`e<int>` of `template<class T>
   constexpr int e() { return bad(1); }` becomes immediate, so a
-  non-constant call of it is an error; WP-227). A `ConstantExpr` is substituted
+  non-constant call of it is an error; WP-227). At clang 21+
+  (`clang_compat >= 22`; WP-413) a shared reference the definition
+  flagged `immediate-escalating` (an address taken outside an immediate
+  invocation, not an invocation's callee) escalates the instantiation
+  too (`recheck_shared_ref`, reason "evaluates the address of"); clang
+  19 neither escalates nor diagnoses it. An error taking the address of
+  an escalated function (`sema_immediate_address`) carries the reason
+  note after `declared here`, as clang's `DiagnoseImmediateEscalatingReason`. A `ConstantExpr` is substituted
   through to its operand and re-wrapped by the rebuilt call. A shared
   (not rebuilt) expression is walked at each instantiation and the
   functions it odr-uses (named, constructors, bound destructors,

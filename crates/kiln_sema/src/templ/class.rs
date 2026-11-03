@@ -10,7 +10,7 @@ use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TypeFlags, TypeView};
+use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TemplateName, TypeFlags, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -184,12 +184,54 @@ impl Sema<'_, '_> {
             .and_then(|i| i.pattern)
             .and_then(|p| self.ast.decls.record(p))
             .map_or(TagKind::Struct, |r| r.tag);
-        let spec = self.builder().class_spec(tmpl, conv.canonical, conv.canonical, tag);
+        let args = self.first_written_template_args(conv);
+        let spec = self.builder().class_spec(tmpl, args, conv.canonical, tag);
         let print = self.suppress_default_args(tmpl, conv.canonical, written.len(), loc);
         if let Some((i, _)) = self.ast.spec_info(spec) {
             self.ast.templates.update_spec(i, |s| s.print_args = print);
         }
         Ok(spec)
+    }
+
+    /// The arguments a new class template specialization keeps: the
+    /// canonical ones, except that clang 22 keeps a template template
+    /// argument as first written (`X<int>::apply`, a qualified template
+    /// name), which its members' types then print with
+    /// (`'X<int>::apply<int>':'int *'`; [temp.arg.template]/1).
+    fn first_written_template_args(
+        &mut self,
+        conv: crate::templ::args::ConvertedArgs,
+    ) -> ArgListId {
+        if self.clang_compat < 22 {
+            return conv.canonical;
+        }
+        let sugared = self.ast.types.args(conv.sugared).to_vec();
+        let canonical = self.ast.types.args(conv.canonical).to_vec();
+        if sugared.len() != canonical.len() {
+            return conv.canonical;
+        }
+        let mut changed = false;
+        let out: Vec<TemplateArg> = sugared
+            .iter()
+            .zip(&canonical)
+            .map(|(&s, &c)| match s.view() {
+                ArgView::Template(n)
+                    if matches!(
+                        self.ast.types.template_name_view(n),
+                        TemplateName::Qualified { .. }
+                    ) && !self
+                        .ast
+                        .types
+                        .template_name_flags(n)
+                        .intersects(TypeFlags::DEPENDENT_INSTANTIATION) =>
+                {
+                    changed = true;
+                    s
+                }
+                _ => c,
+            })
+            .collect();
+        if changed { self.ast.types.arg_list(&out) } else { conv.canonical }
     }
 
     /// `args` without the trailing arguments equal to their parameter's

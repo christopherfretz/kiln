@@ -201,7 +201,7 @@ pub struct Sema<'a, 'sm> {
     /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
     /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
     pub gnu: bool,
-    /// The clang major `-fclang-compat` names (19 or 22; default 19): the
+    /// The clang major `-fclang-compat` names (19 or 22; default 22, as the driver): the
     /// few spellings that differ between the two releases follow it, e.g.
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
     /// "Predefined identifiers").
@@ -801,7 +801,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             coro_aligned_allocation: false,
             range_lifetime_extension: false,
             gnu: false,
-            clang_compat: 19,
+            clang_compat: 22,
             nns_start: None,
             gnu_lib_builtins: false,
             pack: (0, Vec::new()),
@@ -1030,6 +1030,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             d = d.context(self.inst.stack.context_key());
             let sev = self.diags.severity_at(id, d.loc());
             if self.inst.stack.is_sfinae() {
+                if self.inst.suppress_access.get() && is_access_error(id) {
+                    if let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
+                        && s.first.is_none()
+                    {
+                        s.first = Some(d);
+                    }
+                    return;
+                }
                 if (sev >= kiln_diag::Severity::Error || is_sfinae_failure(id))
                     && let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
                 {
@@ -1615,6 +1623,20 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 /// substitution failure whatever their severity, even when disabled
 /// (`Sema::EmitDiagnostic` consults the SFINAE response before the
 /// mapping). The C99-designator extensions are not among them.
+/// An access-control error ([class.access]) that clang's
+/// `SuppressAccessChecks` discards.
+fn is_access_error(id: DiagId) -> bool {
+    matches!(
+        id,
+        DiagId::sema_access_base_conv
+            | DiagId::sema_access_base_ctor
+            | DiagId::sema_access_ctor
+            | DiagId::sema_access_dtor
+            | DiagId::sema_access_field_ctor
+            | DiagId::sema_access_member
+    )
+}
+
 fn is_sfinae_failure(id: DiagId) -> bool {
     matches!(
         id,

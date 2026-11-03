@@ -87,7 +87,7 @@ impl Default for ParseOptions {
             inst_report: kiln_sema::templ::report::ReportFormat::Off,
             reflection: false,
             coro_aligned_allocation: false,
-            clang_compat: 19,
+            clang_compat: 22,
             gnu_lib_builtins: false,
         }
     }

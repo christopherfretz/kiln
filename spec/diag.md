@@ -147,7 +147,7 @@ diagnostic differently, the table also has a row `<name>_19` with clang
 to the one that reports it at `-fclang-compat=<level>`: below 22, `<name>`
 becomes `<name>_19`; otherwise the id is itself. The engine applies it to
 every diagnostic and note it emits (`DiagOptions::clang_compat`, set by
-the driver from `-fclang-compat=`; default 19), and to its dedup key, so
+the driver from `-fclang-compat=`; default 22, as the driver), and to its dedup key, so
 code emits `<name>` and never picks a `_19` row itself. A message
 embedded in another diagnostic (sema's "substitution failure ...: <msg>")
 is rendered with `Diag::message_at(engine.clang_compat())`. Differences

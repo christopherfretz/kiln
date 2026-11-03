@@ -409,6 +409,10 @@ impl Substituter<'_, '_, '_> {
                     TemplateName::TemplateTemplateParm { decl, .. } => Some(decl),
                     _ => None,
                 };
+                let qual = match ttp {
+                    Some(_) if self.sema.clang_compat >= 22 => self.ttp_arg_qualifier(name, loc),
+                    _ => None,
+                };
                 let name = self.template_name(name, loc)?;
                 let args = self.args(args, loc)?;
                 let mut v = self.sema.ast.types.args(args).to_vec();
@@ -417,7 +421,14 @@ impl Substituter<'_, '_, '_> {
                 }
                 let l = self.written(WrittenKey::Type(q), loc);
                 match self.sema.act_template_id(name, &v, l, l) {
-                    Ok(TemplateIdRef::Type(t)) => Ok(t),
+                    Ok(TemplateIdRef::Type(t)) => Ok(match qual {
+                        Some(nns) => self.sema.ast.types.elaborated(
+                            kiln_ast::types::TagKeyword::None,
+                            Some(nns),
+                            t,
+                        ),
+                        None => t,
+                    }),
                     Ok(_) | Err(()) => Err(SubstFail),
                 }
             }
