@@ -4047,16 +4047,21 @@ impl Sema<'_, '_> {
 
     /// The decl-specifiers of a non-static data member: `mutable`
     /// ([dcl.stc]/9) gives `FieldData::MUTABLE`; the others are errors.
-    fn field_spec_flags(&mut self, ds: &DeclSpec, ty: QualType) -> u32 {
+    /// The second value says the field is invalid (clang
+    /// `CheckFieldDecl`: a `mutable` reference or const member).
+    fn field_spec_flags(&mut self, ds: &DeclSpec, ty: QualType) -> (u32, bool) {
         let mut flags = 0;
+        let mut invalid = false;
         if let Some((s, loc)) = ds.storage {
             match s {
                 StorageSpec::Mutable => {
                     // [dcl.stc]/9: not on a const object or a reference.
                     if self.ast.types.is_reference(ty) {
                         self.error(DiagId::sema_mutable_reference, loc);
+                        invalid = true;
                     } else if self.ast.types.effective_quals(ty).is_const() {
                         self.error(DiagId::sema_mutable_const, loc);
+                        invalid = true;
                     } else {
                         flags |= FieldData::MUTABLE;
                     }
@@ -4075,7 +4080,7 @@ impl Sema<'_, '_> {
         if let Some(loc) = ds.consteval {
             self.error(DiagId::sema_consteval_wrong_decl_kind, loc);
         }
-        flags
+        (flags, invalid)
     }
 
     fn act_on_field(
@@ -4088,7 +4093,8 @@ impl Sema<'_, '_> {
         let ctx = self.ctx;
         let name = d.name.map(|n| n.0);
         let nm = name.map(|n| sym_str(self, n));
-        let mut flags = self.field_spec_flags(ds, ty);
+        let (mut flags, spec_invalid) = self.field_spec_flags(ds, ty);
+        let mut field_invalid = spec_invalid;
         if let Some(style) = d.init_style {
             // A default member initializer ([class.mem.general]/11),
             // replayed after the class is complete.
@@ -4114,6 +4120,7 @@ impl Sema<'_, '_> {
                 let msg =
                     self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
                 self.emit(msg.with_note(note));
+                field_invalid = true;
             }
         }
         // [dcl.spec.auto.general]/5: a placeholder is not allowed in a
@@ -4177,11 +4184,18 @@ impl Sema<'_, '_> {
             ty
         };
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
+        // clang `CheckFieldDecl`: a width that fails `VerifyBitField`
+        // (every such path has diagnosed) leaves the field invalid.
+        field_invalid |= d.bit_width.is_some() && width.is_none();
+        field_invalid |= invalid || failed_spec || self.is_error_type(ty);
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc())
             .misc(DeclMisc::new().with_name_independent(independent));
         let f = self.builder().field(h, ty, width, flags);
-        if failed_spec {
+        if field_invalid {
+            // [class.mem]: an invalid field makes its class invalid
+            // (clang `ActOnFields`; spec/sema-class.md §2.3).
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.invalidate_defining(ctx);
         }
         // The decl-specifiers' start (clang's `FieldDecl::getBeginLoc`;
         // the Oven's `__builtin_bit_cast` notes point there).
@@ -5240,7 +5254,7 @@ impl Sema<'_, '_> {
             Ok(cv) => self.ast.decls.finish_eval(v, Some(cv)),
             Err(mut f) => {
                 self.ast.decls.finish_eval(v, None);
-                let name = self.decl_name(v);
+                let name = self.name_for_diagnostic(v);
                 let at = Self::fold_lone_invalid(&mut f, loc);
                 let id = if f.kind == kiln_oven::FailKind::Destruction {
                     DiagId::sema_constexpr_var_requires_const_destruction
@@ -5489,7 +5503,7 @@ impl Sema<'_, '_> {
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let ty = vn.ty().unwrap_or(QualType::ERROR);
         let loc = vn.loc();
-        let name = self.decl_name(v);
+        let name = self.name_for_diagnostic(v);
         let Some(ty) = self.ctad_uninit(v, ty, loc) else { return };
         // [temp.res.general]/6: checked when instantiated.
         if self.is_error_type(ty) || self.ast.types.is_dependent(ty) {
@@ -5503,6 +5517,9 @@ impl Sema<'_, '_> {
             if !self.inst.stack.is_empty() {
                 return;
             }
+            // clang passes the declaration's name here, not the
+            // declaration: a specialization prints without its arguments.
+            let name = self.decl_name(v);
             let msg =
                 self.diag(DiagId::sema_auto_var_requires_init, loc).arg(name).arg(self.ty_arg(ty));
             self.emit(msg);
@@ -5580,7 +5597,7 @@ impl Sema<'_, '_> {
         }
         if matches!(self.ast.types.canonical_view(ty), TypeView::IncompleteArray(_)) {
             let msg = if spec.is_constexpr() {
-                let name = self.decl_name(v);
+                let name = self.name_for_diagnostic(v);
                 self.diag(DiagId::sema_constexpr_var_non_constant, vn.loc()).arg(name)
             } else {
                 self.diag(DiagId::sema_typecheck_incomplete_array_needs_initializer, vn.loc())
@@ -6595,11 +6612,82 @@ impl Sema<'_, '_> {
             .is_some_and(|x| x.defn.contains(DefinitionBits::EMPTY))
     }
 
+    /// Class `r`, being defined, is invalid (clang `setInvalidDecl` on
+    /// the record): an invalid field, base or member class subobject
+    /// ([class.mem]; spec/sema-class.md §2.3). Uses that need it
+    /// complete before its `}` are quiet, and at its `}` it is flagged
+    /// [`DeclFlags::INVALID`], so its layout is clang's size and
+    /// alignment 1 (spec/abi.md §1).
+    pub(crate) fn invalidate_defining(&mut self, r: DeclId) {
+        if self.defining.contains(&r) {
+            let _ = self.invalid_defining.insert(r);
+        }
+    }
+
+    /// A field type that makes its class invalid: a (possibly multi-
+    /// dimensional array of) class whose definition is invalid (clang
+    /// marks the field invalid; an anonymous struct or union counts).
+    fn has_invalid_class_type(&self, f: DeclId) -> bool {
+        let Some(t) = self.ast.decls.get(f).ty() else { return false };
+        let t = self.field_complete_type(t);
+        self.ast
+            .types
+            .as_record(t)
+            .and_then(|d| self.ast.definition(d))
+            .is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::INVALID))
+    }
+
+    /// The definition bits read off `r`'s fields at its `}`
+    /// (`HAS_MUTABLE_FIELDS`, `HAS_VARIANT_MEMBERS`, `EMPTY`), and whether
+    /// a field of an invalid class type makes `r` invalid (spec/sema-class.md
+    /// §2.3).
+    fn record_field_bits(&mut self, r: DeclId, mut bits: DefinitionBits) -> (DefinitionBits, bool) {
+        let mut invalid = false;
+        let fields: Vec<DeclId> = self.ast.decls.members(r).collect();
+        let mut any_named = false;
+        for f in fields {
+            if self.ast.decls.get(f).kind() != DeclKind::Field {
+                continue;
+            }
+            if self.has_invalid_class_type(f) {
+                self.ast.decls.set_flags(f, DeclFlags::INVALID);
+                invalid = true;
+            }
+            let fd = self.ast.decls.field(f).copied();
+            if fd.is_some_and(|x| x.flags & FieldData::MUTABLE != 0) {
+                bits = bits.with(DefinitionBits::HAS_MUTABLE_FIELDS);
+            }
+            let anon_union = self
+                .ast
+                .decls
+                .get(f)
+                .ty()
+                .and_then(|t| self.ast.types.as_record(t))
+                .and_then(|d| self.ast.decls.record(d))
+                .is_some_and(|x| {
+                    x.tag == TagKind::Union && x.defn.contains(DefinitionBits::ANONYMOUS)
+                });
+            if anon_union {
+                bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
+            }
+            if (fd.is_none_or(|x| x.bit_width.is_none())
+                || !self.ast.decls.get(f).name().is_empty())
+                && !self.is_zero_size_field(f)
+            {
+                any_named = true;
+            }
+        }
+        if !any_named {
+            bits = bits.with(DefinitionBits::EMPTY);
+        }
+        (bits, invalid)
+    }
+
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
         self.scopes.pop();
         let mut build = self.classes.pop_if(|c| c.record == r);
         self.defining.retain(|&d| d != r);
-        let _ = self.invalid_defining.remove(&r);
+        let mut invalid = self.invalid_defining.remove(&r);
         self.ctx = build.as_ref().map_or_else(
             || {
                 self.ast
@@ -6635,39 +6723,8 @@ impl Sema<'_, '_> {
                 bits = bits.with(DefinitionBits::LAMBDA_CAPTURES);
             }
         }
-        let fields: Vec<DeclId> = self.ast.decls.members(r).collect();
-        let mut any_named = false;
-        for f in fields {
-            if self.ast.decls.get(f).kind() != DeclKind::Field {
-                continue;
-            }
-            let fd = self.ast.decls.field(f).copied();
-            if fd.is_some_and(|x| x.flags & FieldData::MUTABLE != 0) {
-                bits = bits.with(DefinitionBits::HAS_MUTABLE_FIELDS);
-            }
-            let anon_union = self
-                .ast
-                .decls
-                .get(f)
-                .ty()
-                .and_then(|t| self.ast.types.as_record(t))
-                .and_then(|d| self.ast.decls.record(d))
-                .is_some_and(|x| {
-                    x.tag == TagKind::Union && x.defn.contains(DefinitionBits::ANONYMOUS)
-                });
-            if anon_union {
-                bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
-            }
-            if (fd.is_none_or(|x| x.bit_width.is_none())
-                || !self.ast.decls.get(f).name().is_empty())
-                && !self.is_zero_size_field(f)
-            {
-                any_named = true;
-            }
-        }
-        if !any_named {
-            bits = bits.with(DefinitionBits::EMPTY);
-        }
+        let (mut bits, invalid_field) = self.record_field_bits(r, bits);
+        invalid |= invalid_field;
         // §5.8: flexible array members.
         if self.check_flexible_array_members(r) {
             bits = bits.with(DefinitionBits::HAS_FLEXIBLE_ARRAY_MEMBER);
@@ -6696,6 +6753,9 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_friends(r, &b.friends);
         }
         self.builder().complete_record_definition(r, bits);
+        if invalid {
+            self.ast.decls.set_flags(r, DeclFlags::INVALID);
+        }
         let own = self.own_aligned(r);
         self.check_alignas_underalignment(r, &own);
         self.hide_inherited_ctors(r);
@@ -7564,6 +7624,12 @@ impl Sema<'_, '_> {
                     .is_some_and(|r| r.defn.contains(DefinitionBits::ANONYMOUS))
                 && !ds.invalid
             {
+                // An invalid anonymous struct or union (an invalid
+                // member) declares nothing: no unnamed object, no
+                // injected names, and its class stays valid (clang).
+                if n.has(DeclFlags::INVALID) {
+                    return None;
+                }
                 return Some(self.act_on_anonymous_record(ds, t));
             }
             self.warn_free_standing_tag_attrs(ds, t, &ds.attrs);

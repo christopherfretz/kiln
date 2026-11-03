@@ -3,6 +3,7 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 sema_early_catch_all = Error (0) "catch-all handler must come last";
+sema_ellipsis_in_declarator_not_parameter = Error (0) "only function and template parameters can be parameter packs";
 sema_empty_for_body = Warning [EmptyBody] (0) "for loop has empty body";
 sema_empty_if_body = Warning [EmptyBody] (0) "if statement has empty body";
 sema_empty_range_for_body = Warning [EmptyBody] (0) "range-based for loop has empty body";

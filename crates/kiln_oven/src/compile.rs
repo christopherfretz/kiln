@@ -4146,6 +4146,20 @@ impl Compiler<'_> {
 
     fn init_inner(&mut self, e: ExprId, p: u32, ty: OTy) {
         let n = self.node(e);
+        // An object of an invalid class (diagnosed, [class.mem]; its
+        // layout is a placeholder) is never constructed: the evaluation
+        // fails without a note (clang `HandleConstructorCall` and
+        // `RecordExprEvaluator` on an invalid decl).
+        if matches!(
+            n.kind(),
+            ExprKind::CXXConstructExpr
+                | ExprKind::CXXTemporaryObjectExpr
+                | ExprKind::InitListExpr
+                | ExprKind::ImplicitValueInitExpr
+        ) && is_invalid_record(self.ast(), n.ty())
+        {
+            return self.trap(e, "");
+        }
         match n.kind() {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 let op = self.ast().exprs.operand(e);
@@ -4997,4 +5011,16 @@ pub(crate) fn is_vla(ast: &kiln_ast::Ast, q: QualType) -> bool {
             _ => return false,
         }
     }
+}
+
+/// Whether `q` (or its array element type) is a class whose definition
+/// is invalid ([class.mem]): its layout is clang's size-1 placeholder.
+fn is_invalid_record(ast: &kiln_ast::Ast, mut q: QualType) -> bool {
+    while let Some(e) = ast.types.element(q) {
+        q = e;
+    }
+    ast.types
+        .as_record(q)
+        .and_then(|r| ast.definition(r))
+        .is_some_and(|d| ast.decls.get(d).has(kiln_ast::decl::DeclFlags::INVALID))
 }

@@ -238,8 +238,11 @@ impl Sema<'_, '_> {
         if cand.viable {
             if self.ovl_deleted(f) {
                 let first = self.ast.first(f);
-                let defaulted = self.fn_spec(first).defaulted() != Defaulted::No
+                let (at, spec) = self.deleted_note_decl(f);
+                let defaulted = spec
+                    || self.fn_spec(first).defaulted() != Defaulted::No
                     || self.fn_spec(f).defaulted() != Defaulted::No;
+                let loc = self.ast.decls.get(at).loc();
                 return self
                     .diag(DiagId::note_ovl_candidate_deleted, loc)
                     .arg(kind)
