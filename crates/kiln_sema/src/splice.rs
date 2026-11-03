@@ -15,19 +15,25 @@
 //! ([`Sema::act_on_splice_namespace`]) or a type
 //! ([`Sema::act_on_splice_type`], `reflect.rs`). A dependent operand
 //! builds a dependent `CXXSpliceExpr`, `Splice` type or `Nns::Splice`
-//! that `templ/subst` resolves.
+//! that `templ/subst` resolves. A splice-specialization-specifier
+//! `[: r :] < args >` (P2996 [temp.names]/1) names a specialization of
+//! the template `r` designates ([`Sema::act_on_splice_template_type`],
+//! [`Sema::act_on_splice_template_expr`]); a dependent `r` is the
+//! template name `TemplateName::Splice`, or a `CXXSpliceExpr` that
+//! keeps the arguments in an expression.
 
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{DeclKind, VarEvalState};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::reflect::Reflectee;
-use kiln_ast::types::Nns;
-use kiln_ast::{DeclId, ExprId, NnsId, ReflectionId};
+use kiln_ast::types::{Nns, TemplateArg, TemplateName};
+use kiln_ast::{DeclId, ExprId, NnsId, QualType, ReflectionId, TemplateNameId};
 use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::templ::actions::TemplateIdRef;
 
 /// The outcome of checking a splice operand.
 #[derive(Clone, Copy, Debug)]
@@ -176,8 +182,138 @@ impl Sema<'_, '_> {
                 self.unsupported("splice of a value or object reflection", open);
                 self.recover_err(&[e], open)
             }
+            // `template [: r :]` / `[: r :]` designating a function
+            // template: its overload set, the templates' arguments
+            // deduced by a call ([expr.prim.splice]/3).
+            Reflectee::Template(n) => match self.ast.types.template_decl(n) {
+                Some(d) if self.kind_of(d) == DeclKind::FunctionTemplate => {
+                    let name = self.ast.decls.get(d).name();
+                    self.builder().unresolved_lookup(name, &[d], false, None, None, open)
+                }
+                _ => self.splice_misfit_expr(e, at, open),
+            },
             _ => self.splice_misfit_expr(e, at, open),
         }
+    }
+
+    /// Whether splice operand `e` is frozen ([`Self::splice_frozen_id`])
+    /// and designates a template: a `<` after it then opens a template
+    /// argument list even without `template` (as GCC 16.1; P2996
+    /// [temp.names]/3 asks for `template` outside a type-only context).
+    /// Reads no unfrozen operand, so it diagnoses nothing.
+    pub fn splice_names_template(&self, e: ExprId) -> bool {
+        if self.expr_has_error(e) {
+            return false;
+        }
+        self.splice_frozen_id(e)
+            .is_some_and(|id| matches!(self.ast.reflections.get(id), Reflectee::Template(_)))
+    }
+
+    /// The template the splice-specifier of a
+    /// splice-specialization-specifier `[: e :] < args >` designates
+    /// ([temp.names]/1, P2996): a dependent `e` is the template name
+    /// `TemplateName::Splice`, resolved at substitution. `None` when
+    /// invalid (diagnosed).
+    /// With `want_type`, the template must be a class or alias template
+    /// (or a template template parameter): the specialization is a
+    /// type.
+    pub(crate) fn splice_template_name(
+        &mut self,
+        e: ExprId,
+        want_type: bool,
+    ) -> Option<TemplateNameId> {
+        match self.splice_entity(e) {
+            Spliced::Error => None,
+            Spliced::Dependent => {
+                let profile = Some(self.dependent_profile(e));
+                Some(self.ast.types.template_name(TemplateName::Splice { expr: e, profile }))
+            }
+            Spliced::Entity(Reflectee::Template(n)) => {
+                let fits = !want_type
+                    || self.ast.types.template_decl(n).is_none_or(|d| {
+                        matches!(
+                            self.kind_of(d),
+                            DeclKind::ClassTemplate
+                                | DeclKind::TypeAliasTemplate
+                                | DeclKind::TemplateTemplateParm
+                                | DeclKind::BuiltinTemplate
+                        )
+                    });
+                if !fits {
+                    self.error(DiagId::sema_splice_not_type, self.begin_loc(e));
+                    return None;
+                }
+                Some(n)
+            }
+            Spliced::Entity(_) => {
+                self.error(DiagId::sema_splice_not_template, self.begin_loc(e));
+                None
+            }
+        }
+    }
+
+    /// The type `[: e :] < args >` names in a type position
+    /// ([dcl.type.splice]/1, P2996): a class or alias template
+    /// specialization (a dependent one while `e` is dependent). `open`
+    /// is the `[:`, `r` the `>`.
+    pub fn act_on_splice_template_type(
+        &mut self,
+        e: ExprId,
+        args: &[TemplateArg],
+        open: Loc,
+        r: Loc,
+    ) -> Option<QualType> {
+        let n = self.splice_template_name(e, true)?;
+        match self.act_template_id(n, args, open, r) {
+            Ok(TemplateIdRef::Type(t)) => Some(t),
+            Ok(_) => {
+                self.error(DiagId::sema_splice_not_type, self.begin_loc(e));
+                None
+            }
+            Err(()) => None,
+        }
+    }
+
+    /// The splice-expression `template [: e :] < args >`
+    /// ([expr.prim.splice]/3, P2996): a variable template
+    /// specialization, a concept-id, or a function template's overload
+    /// set with explicit arguments; a dependent `CXXSpliceExpr` keeping
+    /// `args` while `e` is dependent. `open` is the `[:`, `r` the `>`.
+    pub fn act_on_splice_template_expr(
+        &mut self,
+        e: ExprId,
+        args: &[TemplateArg],
+        open: Loc,
+        r: Loc,
+    ) -> ExprId {
+        if let Spliced::Dependent = self.splice_entity_peek(e) {
+            let list = self.ast.types.arg_list(args);
+            return self.builder().splice_template_expr(e, list, open, r);
+        }
+        let Some(n) = self.splice_template_name(e, false) else {
+            return self.recover_err(&[e], open);
+        };
+        match self.act_template_id(n, args, open, r) {
+            Ok(TemplateIdRef::Value(x) | TemplateIdRef::Overload(x)) => x,
+            Ok(TemplateIdRef::Type(_)) => {
+                let at = self.begin_loc(e);
+                self.splice_misfit_expr(e, at, open)
+            }
+            Err(()) => self.recover_err(&[e], open),
+        }
+    }
+
+    /// [`Self::splice_entity`]'s dependence test alone (no evaluation,
+    /// no diagnostic).
+    fn splice_entity_peek(&self, e: ExprId) -> Spliced {
+        if self.expr_has_error(e) {
+            return Spliced::Error;
+        }
+        let ety = self.ast.exprs.get(e).ty();
+        if self.is_dependent_type(ety) || self.expr_is_value_dependent(e) {
+            return Spliced::Dependent;
+        }
+        Spliced::Entity(Reflectee::Null)
     }
 
     /// [expr.prim.splice]/2: a splice-expression designating a
