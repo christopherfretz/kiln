@@ -65,7 +65,7 @@ impl<'s> SemaNames<'s> {
     }
 
     /// An explicit class template specialization named as a lookup
-    /// context ("no type named 'x' in 'std::hash<monostate>'"): clang's
+    /// context ("no type named 'x' in '`std::hash<monostate>`'"): clang's
     /// `TypePrinter::printTag` prints its arguments as written in the
     /// specialization (`getTypeAsWritten`), so a type argument is not
     /// scoped ([temp.expl.spec]/1). `None` for any other declaration.
