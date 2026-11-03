@@ -2509,8 +2509,11 @@ guarantees it a constant initializer and a trivial destructor
 - **Initialization.** Dynamic initializers are ordinary
   `__cxx_global_var_init.N` functions; an ordered variable's is called
   from `internal void @__tls_init()` behind `internal thread_local i8
-  @__tls_guard` (branch weights 1:1023, guard stored before the calls)
-  and named by `_ZTH<name>`, an alias of `__tls_init` with the variable's
+  @__tls_guard` (branch weights 1:1023, guard stored before the calls;
+  at -O1+ followed by `call ptr @llvm.invariant.start.p0(i64 1, ptr
+  @__tls_guard)`, clang `EmitInvariantStart`, WP-423 — a module
+  initializer's guard gets the same, through the shared
+  `emit_guarded_calls`) and named by `_ZTH<name>`, an alias of `__tls_init` with the variable's
   linkage. A template instantiation's (unordered) `_ZTH` aliases its own
   guarded initializer. Destructors register with `__cxa_thread_atexit`
   (`nounwind`). A function-local `thread_local` is guarded by its
