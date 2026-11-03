@@ -530,7 +530,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   follow emission order exactly as clang's do.
 - A GNU asm label (`asm("name")`, recorded on the entity's first
   declaration, spec/ast.md §4.2) replaces the function's or variable's
-  linkage name (`kiln_abi::mangle::asm_label`). clang prefixes LLVM's
+  linkage name (`kiln_abi::mangle::asm_label`); an instantiated
+  function or variable, which has no recorded label, takes the
+  `AsmLabel` attribute sema copied from its pattern (WP-449,
+  `tests/codegen/asm_label_member.cpp`). **Known gap:** a block-scope
+  `extern` function declaration in a template is instantiated as a
+  local entity (mangled `_ZZ…E1qi`, its label dropped). clang prefixes LLVM's
   `\01` "no global prefix" marker only when the target's user-label
   prefix is non-empty (Mach-O); every kiln target is ELF, so the label
   is the symbol verbatim, and a `\01` the user wrote is kept (LLVM
@@ -1445,8 +1450,22 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   and that carries no `noinline`. A non-inline member and a `noinline` one stay
   declarations; a static local of an emitted one is `linkonce_odr` in
   its own comdat; C1/D1 calls go to C2/D2 (the structor alias rule).
-  Not modelled: clang's `isTriviallyRecursive` exclusion.
   `tests/codegen/extern_template_avail_ext_o1.cpp`.
+  At every level (also for the `always_inline` exception at -O0) a
+  trivially recursive function stays a declaration (WP-449, clang
+  `isTriviallyRecursive`, `Cg::is_trivially_recursive` in
+  `recursion.rs`). The function's name is its asm label, since every
+  function here is mangled, so one without a label never qualifies.
+  Its body is walked as clang's `FunctionIsDirectlyRecursive` walks it:
+  every statement and expression (a declaration statement's variable
+  initializers included), but not the operands of a call. A call whose
+  direct callee (through parentheses, implicit casts and substituted
+  non-type template parameters) carries the same label, or is the
+  builtin `__builtin_<label>` of a library function kiln recognizes
+  (`builtin::lib_by_name`, standing in for clang's `isLibFunction`),
+  makes it recursive.
+  `tests/codegen/trivially_recursive.cpp`,
+  `tests/codegen/trivially_recursive_always_inline.cpp`.
 - **Explicit instantiation definitions** ([temp.explicit], WP-170;
   `Cg::is_explicit_inst_definition`, clang `GetGVALinkageForFunction` ->
   `GVA_StrongODR`): a function or variable that is an explicit

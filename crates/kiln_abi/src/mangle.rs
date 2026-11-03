@@ -699,9 +699,24 @@ pub fn enclosing_function(ast: &Ast, d: DeclId) -> Option<DeclId> {
 /// user-label prefix is non-empty (Mach-O's `_`); every kiln target is
 /// ELF, whose prefix is empty, so the label is the symbol verbatim (a
 /// `\x01` the user wrote stays: LLVM strips it when emitting).
+///
+/// An instantiated function or variable has the label of its pattern:
+/// sema copies the pattern's `AsmLabel` attribute onto the
+/// instantiation (clang `InstantiateAttrs`), so the attribute is read
+/// when no label is recorded.
 pub fn asm_label(ast: &Ast, d: DeclId) -> Option<String> {
-    let l = ast.decls.cold.asm_label.get(ast.first(d))?;
-    Some(String::from_utf8_lossy(ast.strings.bytes(*l)).into_owned())
+    let f = ast.first(d);
+    let l = match ast.decls.cold.asm_label.get(f) {
+        Some(l) => *l,
+        None if ast.instantiated_from(f).is_some() || ast.spec_info(f).is_some() => {
+            let a = ast.redecls_of(f).find_map(|r| {
+                crate::layout::props::attrs(ast, r).find(|a| a.kind == AttrKind::ASM_LABEL)
+            })?;
+            <kiln_ast::StringLitId as kiln_ast::RawId>::from_raw(a.a)?
+        }
+        None => return None,
+    };
+    Some(String::from_utf8_lossy(ast.strings.bytes(l)).into_owned())
 }
 
 /// The `abi_tag` tags of `d` (sorted, unique, `,`-separated), from any

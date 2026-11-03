@@ -868,11 +868,16 @@ impl<'a> Cg<'a> {
     /// `std::allocator<char>::allocate` is not exported); at -O1 and above
     /// any one whose definition is still instantiated ([temp.explicit]/12:
     /// an inline function or one with a deduced return type) and that
-    /// has no `noinline`.
+    /// has no `noinline`. Neither when the function is trivially
+    /// recursive ([`Self::is_trivially_recursive`], clang's last check).
     fn keeps_available_externally(&self, first: DeclId) -> bool {
-        if self.is_always_inline_fn(first) {
-            return true;
-        }
+        (self.is_always_inline_fn(first) || self.keeps_inline_definition(first))
+            && !self.is_trivially_recursive(first)
+    }
+
+    /// [`Self::keeps_available_externally`] for a function without
+    /// `always_inline`: optimizing, and the definition is instantiated.
+    fn keeps_inline_definition(&self, first: DeclId) -> bool {
         let ast = self.ast;
         let spec_any = |d: DeclId, p: &dyn Fn(kiln_ast::decl::FnSpec) -> bool| {
             ast.redecls_of(d).any(|r| ast.decls.function(r).is_some_and(|f| p(f.spec)))

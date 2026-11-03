@@ -35,6 +35,7 @@ mod global_init;
 mod lambda;
 mod lifetime;
 mod loop_md;
+mod recursion;
 mod memptr;
 mod module;
 mod module_init;

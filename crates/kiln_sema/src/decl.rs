@@ -2640,7 +2640,9 @@ impl Sema<'_, '_> {
         attrs: &mut Vec<AttrId>,
     ) {
         let kind = self.ast.decls.get(decl).kind();
-        if !matches!(kind, DeclKind::Function | DeclKind::Var) {
+        // A member function takes one as a namespace-scope function does
+        // (clang `ActOnFunctionDeclarator`).
+        if !matches!(kind, DeclKind::Function | DeclKind::CXXMethod | DeclKind::Var) {
             return;
         }
         let prev_attr = self.ast.prev(decl).and_then(|p| {
@@ -2670,7 +2672,7 @@ impl Sema<'_, '_> {
         } else if self.ast.prev(decl).is_some()
             && self.ast.decls.get(self.ast.first(decl)).flags().contains(DeclFlags::USED)
         {
-            let what = if kind == DeclKind::Function { "1" } else { "0" };
+            let what = if kind == DeclKind::Var { "0" } else { "1" };
             let msg = self.diag(DiagId::sema_late_asm_label, d.name_loc()).arg(what).range(span);
             self.emit(msg);
         }
