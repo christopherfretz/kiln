@@ -773,7 +773,12 @@ impl Sema<'_, '_> {
             return Ok(self.act_on_error_expr(&[], loc));
         }
         let e = self.builder().concept_spec_expr(c, written, QualType::BOOL, loc);
-        let sat = self.check_concept(c, conv.sugared, loc);
+        // Satisfaction depends on the canonical arguments only: sugar
+        // naming a function template's block-scope constants
+        // (instantiation-dependent, not dependent) is dropped, so the
+        // atoms see concrete arguments ([temp.constr.atomic]/3).
+        let args = self.settle_inst_sugar(conv.sugared);
+        let sat = self.check_concept(c, args, loc);
         let ok = self.sat_ok(sat);
         let _ = self.ast.exprs.set_satisfied(e, ok);
         self.inst.concepts.expr_sat.insert(e, sat);

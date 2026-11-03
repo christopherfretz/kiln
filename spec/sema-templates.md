@@ -3664,7 +3664,16 @@ cost is small.
     converted args;
   - it carries `sat: Option<SatId>`;
   - a non-dependent concept-id is checked immediately, and its value
-    (`bool`) is fixed at construction.
+    (`bool`) is fixed at construction. "Non-dependent" means no argument
+    is type- or value-dependent (clang `anyDependentTemplateArguments`):
+    an argument that is only instantiation-dependent (`TC<N>` with `N` a
+    `constexpr` local of a function template) is checked at the
+    definition. The concept is checked with each such argument replaced
+    by its canonical form (`settle_inst_sugar`), so its atoms substitute
+    concrete arguments and a nested concept-id or class-template member
+    (`IS<T, U>::value`) is evaluated, not assumed satisfied as a
+    dependent atom would be
+    (`temp.constr.atomic/instantiation-dependent-local-constant.cpp`).
 - **The associated constraints of a templated entity**
   ([temp.constr.decl]/3) are the conjunction, in this order, of:
   1. each template parameter's immediately-declared constraint, in order;
