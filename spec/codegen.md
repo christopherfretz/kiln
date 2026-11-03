@@ -804,7 +804,10 @@ The normative description is spec/driver.md "Code generation". In short:
   and `dso_local`, or `internal` when its type or value names an
   internal entity (spec/abi.md §8.22; clang 22 drops the comdat of an
   internal one, kiln keeps it below `-fclang-compat=22`); it carries no
-  `align`, as clang's.
+  `align`, as clang's. A specialization taking such an object is
+  `internal` with no comdat at both levels (`set_def_linkage`), so
+  `linkage_internal_nttp` matches clang 22 with no deviation row
+  (WP-413).
 
 ### Always-inliner (WP-389)
 - clang's `-O0` pipeline (`buildO0DefaultPipeline`) runs
@@ -862,9 +865,6 @@ The normative description is spec/driver.md "Code generation". In short:
   oracle-19 `Structure` deviation. Following the rest under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
   "Residual").
-- **clang 22 internal template parameter objects.** clang 22 drops the
-  comdat of an internal template parameter object
-  (`linkage_internal_nttp`, oracle 22, `Allow::Structure`).
 - **Uses of constant-initialized reference variables as lvalues.** A
   read through a reference to a `const` referee folds (above), but clang
   also emits a non-odr-use of a reference usable in constant expressions
