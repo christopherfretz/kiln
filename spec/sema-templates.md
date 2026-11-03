@@ -924,7 +924,15 @@ asks exactly one of:
   (`is_same<void, void_t<decltype(e)>>::value`, whose qualifier is
   instantiation-dependent, as a `DeclRefExpr`'s qualifier makes it):
   substituting it again is what makes a failure in `e` a deduction
-  failure ([temp.deduct.general]/8).
+  failure ([temp.deduct.general]/8). The dependence may sit only in an
+  operand type: `sizeof(void_t<decltype(e)>*)`, `alignof(...)` and a
+  type trait's operands (`__is_same(first_t<int, decltype(e)>, int)`)
+  count (`args.rs` `type_instantiation_dependent`). Such an argument's
+  *canonical* form is still its converted value, as clang's is:
+  `enable_if<sizeof(first_t<int, decltype(T::x)>) == 4>` names the
+  specialization `enable_if<true>` (its `::type` is found at the
+  definition), while the written argument is what a partial
+  specialization's deduction substitutes again (WP-465).
 
 `sizeof...(U)` with `U` bound to a list holding pack expansions (an alias
 template named `N<Ts...>`) is the value-dependent `k + sizeof...(P1) +
@@ -2297,7 +2305,10 @@ recomputed exactly as for non-template code (clang's
 - **An NTTP reference** becomes `SubstNonTypeTemplateParmExpr {param,
   pack_index, replacement}`. The replacement is:
   - an `IntegerLiteral` (or the matching literal) built from the
-    `ConstValueId`;
+    `ConstValueId`; for a `_BitInt(N)` (any N; WP-465) too, and for a
+    wide `_BitInt` (N > 128) or a value outside `i128` (an
+    `unsigned __int128` above its maximum) a wide literal holding the
+    argument's exact constant (`temp.arg.nontype/{bit-int-wide,int128}-value.cpp`);
   - for a class-type NTTP, a `DeclRefExpr` to the `TemplateParamObject`
     (§6.10);
   - for a reference or pointer NTTP, the entity expression;
