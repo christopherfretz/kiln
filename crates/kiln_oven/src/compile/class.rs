@@ -18,6 +18,7 @@ use super::new_delete::record_bits;
 use super::{Access, Compiler, Local, Place, skip_parens};
 use crate::kbc::{Op, cmp, int_aux};
 use crate::mem::Origin;
+use crate::vm::exc::LIFE_CHECK;
 use crate::ty::{OTy, TyKind};
 
 /// A member call through a null object pointer.
@@ -506,7 +507,15 @@ impl Compiler<'_> {
             let bty = self.o.types.nv_view(bty);
             let m = self.next;
             let q = self.elem_ptr_loc(this, off, loc);
-            self.push_cleanup(q, bty, 2, loc);
+            if self.dtor_of(bty).is_some() {
+                self.push_cleanup(q, bty, 2, loc);
+            } else {
+                // Destroying a trivially destructible base its derived
+                // class's constructor never constructed is "destroying
+                // object ... whose lifetime has already ended" (clang's
+                // `HandleDestructionImpl`, WP-409).
+                self.emit_loc(Op::PushCleanup, 2, &[q, LIFE_CHECK, bty.0], loc);
+            }
             self.next = m;
         }
         let fields = self.o.types.fields(cls).to_vec();
