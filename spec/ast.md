@@ -900,6 +900,13 @@ context-free defaults (`NoEnv`):
 - **`bool`:** `true` or `false`.
 - **Floats:** the shortest round-trip form in Rust `{:e}` notation, for
   every `FloatKind`: `1.5e0`, `1e-1`, `-0e0`, `inf`, `-inf`, `nan`.
+  A `FloatingLiteral` in a printed expression (a `static_assert`
+  requirement, a template argument) is clang's `PrintFloatingLiteral`
+  instead: `APFloat::toString` with round-trip precision
+  (`consts::fltstr::to_string(kind, bits, 0)`: `1`, `0.10000000000000001`,
+  `2.5E+10`), a `.` after a bare integer, then the suffix of its type
+  (`F` `float`, `L` `long double`, `F16` `_Float16`, `Q` `__float128`;
+  none for `double` and `__fp16`): `1.`, `2.F`, `2.99999992E-5F` (WP-410).
 - **Null values of any kind:** `nullptr`.
 - **Pointers** print as `&name` plus a designator:
   - The designator is recovered by walking the base's type
