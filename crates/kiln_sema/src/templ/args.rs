@@ -364,7 +364,8 @@ impl Sema<'_, '_> {
         for &p in &params {
             if self.ast.template_parm(p).is_some_and(|x| x.pack) {
                 while wi < args.len() {
-                    failed |= self.check_dependent_arg(tmpl, depth, p, args[wi], arg_loc(wi), &prior)?;
+                    failed |=
+                        self.check_dependent_arg(tmpl, depth, p, args[wi], arg_loc(wi), &prior)?;
                     wi += 1;
                 }
                 break;
@@ -515,9 +516,11 @@ impl Sema<'_, '_> {
     /// The template a template argument names: also a template template
     /// parameter's declaration (`B2<TT>` inside `TT`'s template).
     fn arg_template_decl(&self, name: TemplateNameId) -> Option<DeclId> {
-        self.ast.types.template_decl(name).or_else(|| match self.ast.types.template_name_view(name) {
-            TemplateName::TemplateTemplateParm { decl, .. } => Some(decl),
-            _ => None,
+        self.ast.types.template_decl(name).or_else(|| {
+            match self.ast.types.template_name_view(name) {
+                TemplateName::TemplateTemplateParm { decl, .. } => Some(decl),
+                _ => None,
+            }
         })
     }
 

@@ -1622,6 +1622,25 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// `class F::H;` with `F` incomplete: clang's `ActOnTag` rejects
+    /// the qualified standalone declaration before it enters the
+    /// incomplete scope (diagnosed by the specifier parse).
+    fn incomplete_standalone_tag_qualifier(
+        &mut self,
+        ds: &DeclSpec,
+        keyword: TagKeyword,
+        qual_loc: Loc,
+    ) {
+        if ds.friend.is_none()
+            && ds.storage.is_none()
+            && self.incomplete_scope_name(self.pos())
+            && let Some((end, ..)) = self.scan_name_qual_at(self.pos())
+            && Self::punct_of(self.tok_at(end)) == Some(Punct::Semi)
+        {
+            self.s.check_standalone_tag_qualifier(keyword, qual_loc);
+        }
+    }
+
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
         let keyword = match k {
@@ -1643,17 +1662,7 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qual_loc = self.tok().span.lo;
-        // `class F::H;` with `F` incomplete: clang's `ActOnTag` rejects
-        // the qualified standalone declaration before it enters the
-        // incomplete scope (diagnosed by the specifier parse).
-        if ds.friend.is_none()
-            && ds.storage.is_none()
-            && self.incomplete_scope_name(self.pos())
-            && let Some((end, ..)) = self.scan_name_qual_at(self.pos())
-            && Self::punct_of(self.tok_at(end)) == Some(Punct::Semi)
-        {
-            self.s.check_standalone_tag_qualifier(keyword, qual_loc);
-        }
+        self.incomplete_standalone_tag_qualifier(ds, keyword, qual_loc);
         let (qual, qual_failed) = self.parse_tag_qualifier_checked(ds);
         let qualifier = qual.map(|q| q.ctx);
         if keyword != TagKeyword::Enum

@@ -1945,7 +1945,8 @@ impl Sema<'_, '_> {
             // [temp.names]/1: a variable template or concept is named with
             // arguments (clang's `diagnoseMissingTemplateArguments`).
             DeclKind::VarTemplate | DeclKind::Concept => {
-                let what = if n.kind() == DeclKind::Concept { "concept" } else { "variable template" };
+                let what =
+                    if n.kind() == DeclKind::Concept { "concept" } else { "variable template" };
                 self.missing_template_args(d, what, extra.and_then(|x| x.qualifier), loc);
                 return self.recover_err(&[], loc);
             }

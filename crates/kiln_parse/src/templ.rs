@@ -895,7 +895,8 @@ impl Parser<'_, '_> {
                     | NameClass::FunctionTemplate(_)
             )
         {
-            let d = self.s.diag(DiagId::parse_default_template_template_param_not_template, self.loc());
+            let d =
+                self.s.diag(DiagId::parse_default_template_template_param_not_template, self.loc());
             self.bump();
             let _ = self.parse_template_arg_list();
             self.emit(d);
@@ -948,7 +949,8 @@ impl Parser<'_, '_> {
             (a, _) => a,
         };
         let Some(tn) = arg else {
-            let d = self.s.diag(DiagId::parse_default_template_template_param_not_template, self.loc());
+            let d =
+                self.s.diag(DiagId::parse_default_template_template_param_not_template, self.loc());
             self.emit(d);
             return false;
         };
@@ -1034,7 +1036,9 @@ impl Parser<'_, '_> {
                 args.push(a);
                 // A template name argument is located at its name, after
                 // any qualifier (clang's `TemplateArgumentLoc::getLocation`).
-                if let (ArgView::Template(_), Some(n), Some(at)) = (a.view(), name_loc, locs.last_mut()) {
+                if let (ArgView::Template(_), Some(n), Some(at)) =
+                    (a.view(), name_loc, locs.last_mut())
+                {
                     *at = n;
                 }
                 // An invalid argument ends the list (clang's
