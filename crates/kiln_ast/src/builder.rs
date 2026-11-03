@@ -2417,7 +2417,7 @@ impl<'a> AstBuilder<'a> {
                 Reflectee::Type(t) => Reflectee::Type(self.ast.types.canonical(t)),
                 r => r,
             };
-            self.ast.reflections.intern(canon).map_or(0, |id| id.index())
+            self.ast.reflections.intern(canon).map_or(0, crate::ids::ReflectionId::index)
         };
         let e =
             self.simple(ExprKind::CXXReflectExpr, ValueCategory::PRValue, deps, aux, ty, loc, a, b);

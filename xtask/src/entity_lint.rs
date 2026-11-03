@@ -216,9 +216,8 @@ fn left_operand(line: &str, op: usize) -> String {
         let c = b[i - 1];
         match c {
             b')' | b']' => depth += 1,
-            b'(' | b'[' if depth == 0 => break,
+            b'(' | b'[' | b',' | b';' | b'{' | b'}' | b'|' | b'=' if depth == 0 => break,
             b'(' | b'[' => depth -= 1,
-            b',' | b';' | b'{' | b'}' | b'|' | b'=' if depth == 0 => break,
             b'&' if depth == 0 && i >= 2 && b[i - 2] == b'&' => break,
             _ => {}
         }
@@ -244,9 +243,8 @@ fn right_operand(line: &str, from: usize) -> String {
         let c = b[i];
         match c {
             b'(' | b'[' => depth += 1,
-            b')' | b']' if depth == 0 => break,
+            b')' | b']' | b',' | b';' | b'{' | b'}' if depth == 0 => break,
             b')' | b']' => depth -= 1,
-            b',' | b';' | b'{' | b'}' if depth == 0 => break,
             b'|' | b'&' if depth == 0 && b.get(i + 1) == Some(&c) => break,
             b'=' if depth == 0 && b.get(i + 1) == Some(&b'>') => break,
             _ => {}
