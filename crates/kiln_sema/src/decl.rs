@@ -872,6 +872,60 @@ impl Sema<'_, '_> {
         ty
     }
 
+    /// [dcl.fct]/6 (CWG1417): a function type with a cv-qualifier-seq or
+    /// ref-qualifier that `d` (whose decl-specifiers are `ds`) declares
+    /// through a typedef-name or `decltype` (no function declarator) is
+    /// only the type of a non-static member function, of a typedef or
+    /// alias-declaration, of a template type argument or of a type
+    /// parameter's default. Anything else (a non-member function at
+    /// namespace or block scope, a static member function, a friend, a
+    /// parameter, a type-id) is clang's `err_invalid_qualified_function_type`
+    /// in its "of type" form, at the start of the declaration, and the
+    /// qualifiers are dropped (clang `GetFullTypeForDeclarator`). A
+    /// function declarator's own qualifiers are `act_on_function`'s; a
+    /// pointer or reference to such a type is `check_qualified_function`'s.
+    pub fn check_qualified_fn_type(
+        &mut self,
+        ty: QualType,
+        ds: &DeclSpec,
+        d: &Declarator,
+    ) -> QualType {
+        if ds.is_typedef()
+            || matches!(
+                d.site,
+                DeclSite::Alias | DeclSite::TemplateArg | DeclSite::TypeParamDefault | DeclSite::Subst
+            )
+            || d.chunks.iter().any(|c| matches!(c, Chunk::Function { .. }))
+        {
+            return ty;
+        }
+        let Some(p) = self.ast.types.proto(ty).copied() else { return ty };
+        let info = p.info();
+        let (q, r) = (info.this_quals(), info.ref_qual());
+        if q.is_empty() && r == RefQual::None {
+            return ty;
+        }
+        let member = ds.friend.is_none()
+            && match d.qualifier {
+                None => d.ctx == DeclaratorContext::Member,
+                Some(c) => self.ast.decls.record(c).is_some(),
+            };
+        if member && !ds.storage.is_some_and(|(s, _)| s == StorageSpec::Static) {
+            return ty;
+        }
+        let spelled = crate::class::members::method_quals_spelling(q, r);
+        let m = self
+            .diag(DiagId::sema_qualified_fn_type, ds.loc)
+            .arg(u8::from(member))
+            .arg(self.ty_arg(ty))
+            .arg(spelled);
+        self.emit(m);
+        let params = self.ast.types.params(&p).to_vec();
+        let exc = self.ast.types.exc_spec(&p);
+        let info = info.with_this_quals(Quals::NONE).with_ref_qual(RefQual::None);
+        self.ast.types.function(p.ret(), &params, info, exc)
+    }
+
     /// The type of `d` given the decl-specifier type `base`
     /// ([dcl.meaning], [dcl.ptr], [dcl.ref], [dcl.array], [dcl.fct]).
     pub fn type_for_declarator(&mut self, base: QualType, d: &Declarator) -> QualType {
@@ -1529,6 +1583,7 @@ impl Sema<'_, '_> {
         self.declarator_int_recovery = d.ellipsis.is_some();
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         self.declarator_int_recovery = false;
+        ty = self.check_qualified_fn_type(ty, ds, d);
         let recovered = d.ellipsis.is_some() && self.diags.error_count() != errs;
         // [dcl.constexpr]/1, [dcl.constinit]/1: clang `err_invalid_constexpr`.
         let specs = [ds.constexpr, ds.consteval, ds.constinit];
@@ -2359,6 +2414,7 @@ impl Sema<'_, '_> {
             && !matches!(ds.storage, Some((StorageSpec::Static, _)));
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         self.declarator_field = false;
+        let ty = self.check_qualified_fn_type(ty, ds, d);
         if head.is_some() {
             if ds.is_typedef() {
                 self.error(DiagId::sema_typedef_template, d.loc);

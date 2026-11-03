@@ -3268,7 +3268,8 @@ impl Parser<'_, '_> {
             // (WP-186).
             return Some(QualType::ERROR);
         }
-        Some(self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d))
+        let ty = self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d);
+        Some(self.s.check_qualified_fn_type(ty, &ds, &d))
     }
 
     /// True if a type-id starts at token index `i`.

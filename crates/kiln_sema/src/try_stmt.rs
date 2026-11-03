@@ -57,6 +57,7 @@ impl Sema<'_, '_> {
         let base = self.catch_placeholder_check(base, type_loc, d);
         self.warn_redundant_parens(None, d);
         let mut ty = self.type_for_declarator_at(base, type_loc, d);
+        ty = self.check_qualified_fn_type(ty, ds, d);
         let loc = d.name_loc();
         let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         // [temp.variadic]/12: the handler then catches `int`.

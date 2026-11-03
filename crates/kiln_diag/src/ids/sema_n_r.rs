@@ -161,6 +161,7 @@ sema_ptrmem_lhs_incompatible = Error (3) "left hand operand to {0} must be a {1:
 sema_ptrmem_rhs_not_member_pointer = Error (2) "right hand operand to {0} has non-pointer-to-member type {1}";
 sema_ptrmem_value_classify = Error (2) "pointer-to-member function type {0} can only be called on an {1:rvalue|lvalue}";
 sema_pure_not_virtual = Error (1) "'{0}' is not virtual and cannot be declared pure";
+sema_qualified_fn_type = Error (3) "{0:non-member function|static member function} of type {1} cannot have '{2}' qualifier";
 sema_pure_virtual_call_in_cdtor = Warning [CallToPureVirtualFromCtorDtor] (3) "call to pure virtual member function {0} has undefined behavior; overrides of {0} in subclasses are not available in the {1:constructor|destructor} of {2}";
 sema_qualified_member_of_unrelated = Error (2) "{0} is not a member of class {1}";
 sema_range_on_array_parameter = Error (3) "cannot build range expression with array function parameter '{0}' since parameter with array type {1} is treated as pointer type {2}";

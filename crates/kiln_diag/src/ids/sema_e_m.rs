@@ -77,6 +77,7 @@ sema_fallthrough_invalid_placement = Error (0) "fallthrough annotation does not 
 sema_fallthrough_outside_switch = Error (0) "fallthrough annotation is outside switch statement";
 sema_field_designator_non_record = Error (1) "field designator cannot initialize a non-class type {0}";
 sema_field_designator_unknown = Error (2) "field designator '{0}' does not refer to any field in type {1}";
+sema_field_instantiates_to_function = Error (1) "data member instantiated with function type {0}";
 sema_field_incomplete = Error (1) "field has incomplete type {0}";
 sema_field_sizeless = Error (1) "field has sizeless type {0}";
 sema_field_uninit_use = Warning [Uninitialized] (1) "field {0} is uninitialized when used here";

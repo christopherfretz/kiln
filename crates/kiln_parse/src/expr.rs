@@ -17,7 +17,7 @@ use kiln_lex::literal::{
 };
 use kiln_lex::{Punct, Std, TokKind, Token};
 use kiln_sema::expr::CastStyle;
-use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent, SpecialName};
+use kiln_sema::{DeclSite, DeclaratorContext, NameClass, OffsetofComponent, SpecialName};
 use kiln_source::{Loc, Span};
 
 use crate::decl::is_type_specifier_kw;
@@ -796,7 +796,11 @@ impl Parser<'_, '_> {
     /// A builtin type trait `__trait ( ... )` (spec/sema-templates.md
     /// §9.1, §9.4): a type-id list (each possibly a pack expansion), the
     /// type and dimension of `__array_extent`, or the unevaluated operand
-    /// of `__is_lvalue_expr` / `__is_rvalue_expr`.
+    /// of `__is_lvalue_expr` / `__is_rvalue_expr`. Each type-id is parsed
+    /// as a template type argument (clang `ParseTypeTrait` /
+    /// `ParseArrayTypeTrait` use `DeclaratorContext::TemplateTypeArg`): a
+    /// qualified function type is allowed ([dcl.fct]/6) and a placeholder
+    /// is "not allowed in template argument".
     pub(crate) fn parse_type_trait(&mut self, t: TypeTrait) -> ExprId {
         let loc = self.bump().span.lo;
         let open = self.bump().span.lo;
@@ -813,7 +817,7 @@ impl Parser<'_, '_> {
                 self.s.build_expression_trait(t, e, loc, rparen)
             }
             TypeTrait::ArrayRank | TypeTrait::ArrayExtent => {
-                let Some(ty) = self.parse_type_id() else {
+                let Some(ty) = self.parse_type_id_into(None, DeclSite::TemplateArg) else {
                     self.skip_until(&[Punct::RParen], true, true);
                     return self.s.act_on_error_expr(&[], loc);
                 };
@@ -838,7 +842,7 @@ impl Parser<'_, '_> {
                 let mut args = Vec::new();
                 loop {
                     let at = self.loc();
-                    let Some(mut ty) = self.parse_type_id() else {
+                    let Some(mut ty) = self.parse_type_id_into(None, DeclSite::TemplateArg) else {
                         self.skip_until(&[Punct::RParen], true, true);
                         return self.s.act_on_error_expr(&[], loc);
                     };
