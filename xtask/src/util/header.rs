@@ -88,6 +88,7 @@ pub enum Counter {
     StaticBytes,
     Evaluations,
     MemoHits,
+    ReflBytes,
 }
 
 impl Counter {
@@ -105,7 +106,7 @@ impl Counter {
 
     /// The counters a budget can also name that the bench does not
     /// record (diagnostic counts rather than costs).
-    pub const EXTRA: [Self; 1] = [Self::MemoHits];
+    pub const EXTRA: [Self; 2] = [Self::MemoHits, Self::ReflBytes];
 
     /// The report's field name (and the budget key).
     pub fn name(self) -> &'static str {
@@ -120,6 +121,7 @@ impl Counter {
             Self::StaticBytes => "static_bytes",
             Self::Evaluations => "evaluations",
             Self::MemoHits => "memo_hits",
+            Self::ReflBytes => "refl_bytes",
         }
     }
 
@@ -164,7 +166,7 @@ pub struct OvenBudget {
 pub fn parse_oven(value: &str) -> Result<OvenBudget, String> {
     let usage = "expected `oven: [<line>[:<col>]] <counter><=N|<counter>>=N...` with counters \
                  steps|bytes|peak_bytes|calls|allocs|peak_arena|frozen_bytes|static_bytes|\
-                 evaluations|memo_hits";
+                 evaluations|memo_hits|refl_bytes";
     let mut items = value.split_whitespace().peekable();
     let at = match items.peek() {
         Some(first) if first.starts_with(|c: char| c.is_ascii_digit()) => {
