@@ -4124,11 +4124,24 @@ for them.
   Deviations:
   - A literal in a constexpr variable template or a class template's
     default member initializer, instantiated from a function body, is at
-    file scope in kiln, as in clang 19. clang 22 takes the instantiating
-    function as the context, makes the literal a block-scope temporary
-    and rejects the initialization (`-Wdangling`, then "must be
-    initialized by a constant expression" or the reference-member
-    error); kiln does not follow that at compat 22.
+    file scope in kiln at every compat level, as in clang 19 and GCC:
+    `file_scope` is `self.func.is_none()`, and an instantiation runs
+    with the specialization's own (namespace or class) context and no
+    enclosing function. clang 21+ also requires
+    `!getCurScope()->isInCFunctionScope()` (llvm-project 977d8a4bcd83,
+    #143852, a C fix for a literal inside a struct member declaration
+    in a function body). During instantiation that is the *parser's*
+    scope at the point of instantiation, not the template's, so the same
+    specialization is a block-scope temporary when first instantiated
+    from a function body and a file-scope object when first instantiated
+    at namespace scope: clang 22 then warns `-Wdangling` (calling
+    `p<int>` a "local variable", `q` a "reference member") and rejects
+    the initialization ("must be initialized by a constant expression",
+    or the reference-member error). That depends on where the first use
+    is, which no rule supports, so it is treated as a clang defect and
+    not followed at compat 22 (WP-490; docs/status/deviations.md). Test:
+    `ext.gnu.compound.literal/variable-template-from-function-run.cpp`
+    (`skip(clang)`; clang 19 and GCC 16 compile and pass it).
   - kiln does not wrap the elements of a namespace-scope literal in
     `ConstantExpr` nodes, as clang does.
 - **Flexible array members** (`flex_array.rs`, WP-271; a C99 feature,
