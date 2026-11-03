@@ -393,6 +393,11 @@ pub struct Sema<'a, 'sm> {
     /// clang's `err_typecheck_field_variable_size` there
     /// ([`Sema::type_for_declarator_at`]).
     pub(crate) declarator_field: bool,
+    /// The diagnostic an alias-declaration's type-id left for its name: a
+    /// variable length array bound at namespace or class scope folded
+    /// (`-Wgnu-folding-constant`) or rejected (clang
+    /// `CheckTypedefForVariablyModifiedType` on the `TypeAliasDecl`).
+    pub(crate) pending_alias_vla: Option<DiagId>,
     /// Replaying a non-dependent class-scope using-declaration of a
     /// pattern: clang walks the pattern's shadow list, which is newest
     /// first, so the instantiation's shadows come in reverse (WP-159).
@@ -819,6 +824,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             deferring_call_ref: false,
             declarator_int_recovery: false,
             declarator_field: false,
+            pending_alias_vla: None,
             reverse_using_shadows: false,
             va_list_type: None,
             ext_vector_typedefs: Vec::new(),

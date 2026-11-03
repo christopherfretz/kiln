@@ -470,10 +470,18 @@ f(int* _Nullable);`), the `-Wnullability-completeness` family, and the
      allowed at file scope" when every chunk outside the bound is an
      array (variables, static data members, typedefs); "variably
      modified type declaration not allowed at file scope" otherwise
-     (`int (*p)[n]`). Not yet modelled: an alias-declaration or a
-     namespace-scope type-id (`using V = int[n];`, a cast) still says
-     `sema_vla_unsupported`, and `int z[2][n]` lacks clang's second
-     warning at the outer `[`
+     (`int (*p)[n]`). Before that error each array chunk around the
+     bound is a VLA too and warns (`int z[2][n]`: at the outer `[`
+     without notes; `int w[n][n]`: at the outer bound with its notes),
+     up to the first chunk that is not an array. An alias-declaration's
+     type-id at namespace or class scope (`DeclSite::Alias`) is a
+     typedef's declarator: it folds or is rejected the same way, the
+     folding ExtWarn or the error deferred to the alias name
+     (`Sema::pending_alias_vla`, emitted first by `act_on_alias_decl`;
+     WP-415,
+     `tests/conformance/dcl.array/vla-namespace-scope-alias-and-outer-arrays.cpp`).
+     Not yet modelled: another namespace-scope type-id (`sizeof(int[n])`
+     in an initializer, a cast) still says `sema_vla_unsupported`
    - variable length arrays in a function (WP-183, clang `BuildArrayType`):
      a non-constant bound of a block-scope declarator (variable, typedef,
      alias, type-id) makes a `VariableArray` even when it would fold.
