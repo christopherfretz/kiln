@@ -639,17 +639,59 @@ each specialization evaluates its own.
 - Where kiln has no clang wording to match, diagnostics follow GCC
   16.1's shape. Wording parity is out of scope (§1.7).
 
-### 8.3 Mangling placeholder (→ WP-485)
-- A reflection inside a template argument of an emitted symbol mangles
-  in a kiln vendor form. The form is deterministic within the TU, cached
-  per `ReflectionId`, and flagged in spec/abi.md §8 as "not
-  link-compatible". WP-102 later adopts GCC's Itanium form.
-- Today every reflection argument mangles as the generic unsupported
-  expression `XLi0EE` (`kiln_abi/src/mangle.rs`). Two specializations
-  that differ only in a reflection argument therefore collide. Until
-  → WP-485 lands, such a TU must not emit both.
-- A consteval-only value reaching codegen is the error of §4.1, not a
-  mangling question.
+### 8.3 Mangling placeholder (WP-485)
+- **Form.** A reflection inside a template argument of an emitted symbol
+  mangles as a kiln vendor literal (`kiln_abi/src/mangle.rs`,
+  `Mangler::scalar_value`):
+
+  ```
+  <expr-primary> ::= L <info-type> <number> E    # a reflection value
+  <info-type>    ::= u6__info                    # std::meta::info
+  ```
+
+  `<number>` is the reflection's `ReflectionId` index in decimal (§2.3;
+  the null reflection is 0). `<info-type>` is the mangling of the type
+  `std::meta::info` everywhere (`template <class T>` with `T = info`
+  gives `_Z1kIu6__infoEiv`), and it is a substitution candidate like any
+  vendor type, so a second literal in one symbol writes `LS<seq>_<id>E`
+  and later substitutions count past it: `two<^^I, ^^J>` is
+  `_Z3twoILu6__info4ELS0_5EEiv`, `h<^^P>(Box<P>, P)` is
+  `_Z1hILu6__info3E1PEi3BoxIT0_ES3_`. The literal composes wherever a
+  template argument value does: in a pack (`J…E`), a nested
+  template-id's arguments, a class-type NTTP's `Xtl … E`, and a template
+  parameter object's `_ZTA`.
+- **Properties.** Deterministic within the TU (the id is allocated at the
+  reflection's first evaluation, so the same source gives the same ids).
+  Distinct reflections give distinct strings, because the id is the
+  identity of §2.3: a type and its alias (`^^int`, `^^I`, `^^J`) are
+  three literals. The encoding reads only the id, never the reflectee, so
+  no cache is needed: the id is both the key and the payload, written in
+  at most ten digits. `AnonIds::reflection_literals()` counts the
+  literals written for the module; the 2,000-specialization test of
+  `crates/kiln_codegen/tests/reflection_mangle.rs` asserts it.
+- **Linkage.** The id is TU-local, so the same `f<^^int>` in two TUs has
+  two different strings, and two different reflections could share one.
+  A template argument holding a reflection (directly, inside a class-type
+  NTTP's value, or in a template parameter object) therefore makes the
+  specialization, and everything mangled under it (its statics, vtable,
+  RTTI, guards), internal (`mangle::value_externally_visible`, the
+  unique-external rule of spec/abi.md §8.22). Each TU has its
+  own copy: `S<^^int>::count` is not shared across TUs, and the RTTI of
+  `S<^^int>` compares unequal across them. The form is **not
+  link-compatible with GCC or clang** (spec/abi.md §8).
+- **Follow-up (→ WP-102).** WP-102 switches to GCC 16.1's encoding
+  (cxx-abi issue #208: `std::meta::info` is `Dm`, a value is
+  `L Dm <kind> … E` naming the reflectee), at which point the
+  specializations get their normal linkage again. Its link-compat test: a
+  two-TU program, one TU compiled by kiln and one by `g++-16`, each
+  defining and calling `template <std::meta::info R> int f()` for
+  `^^int`, an alias, a namespace-scope variable and a data member, with
+  `inline` statics, linked together; the run checks the shared statics
+  and `&f<^^int>` agree.
+- A consteval-only value reaching codegen stays the error of §4.1, not a
+  mangling question: a non-template `info` variable with static storage
+  that is not `constexpr` is rejected before any symbol exists
+  (`expr.reflect/reflection-mangle-neg.cpp`).
 
 ## 9. Tests and status
 - **Format.** Reflection tests are kiln goldens: `//@ args: -freflection

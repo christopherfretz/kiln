@@ -847,6 +847,15 @@ GPR/SSE counts (both zero means the argument is read from memory).
   `Sub::TemplateParm`, the same one used when it is a template argument)
   followed by its arguments. `tests/mangle/dependent_spec.cpp`.
 - Constrained parameters, requires-clauses and `Dk` placeholders: §8.16.
+- **Reflection arguments (WP-485): not link-compatible with GCC/clang.**
+  A `std::meta::info` value in a template argument mangles as the kiln
+  vendor literal `L u6__info <ReflectionId index> E`, and the type is
+  `u6__info` (a substitution candidate); spec/reflection.md §8.3 has the
+  grammar. The index is TU-local, so `value_externally_visible` treats a
+  reflection like an internal entity (§8.22): the specialization and all
+  it owns are `internal`. GCC 16.1 writes `Dm` / `L Dm <kind> … E`
+  (cxx-abi #208); clang has no form yet. → WP-102 adopts GCC's.
+  `crates/kiln_codegen/tests/reflection_mangle.rs`.
 
 ### 8.15 Landed (WP-172): abi tags and dependent signature types
 **abi_tag.** `[[gnu::abi_tag("a","b")]]` / `__attribute__((abi_tag(...)))`
