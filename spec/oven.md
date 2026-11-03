@@ -823,6 +823,13 @@ literal is one instruction and one step, not an interpreted loop.
   a member the mem-initializer list skips has begun (clang
   default-initializes it). Nothing is emitted, so the check costs no
   instruction (`meta.const.eval/is-within-lifetime-construction.cpp`).
+  A complete-object constructor (P3533R2) first records
+  `(pc, CTOR_STEP_VBASE | j)` before each virtual-base initializer: while
+  virtual base `j` is initialized, later virtual bases and all
+  non-virtual subobjects have not begun; from the first non-virtual step
+  on, the virtual bases have. A base-subobject constructor initializes
+  none and records no such step (WP-465;
+  `meta.const.eval/is-within-lifetime-virtual-base-cxx26.cpp`, kiln only).
   A pointer into the variable whose initializer is being evaluated
   (`RunState::object`, clang's `EvaluatingDecl`) fails with `... cannot be
   called with a pointer to an object whose lifetime has not yet begun`
@@ -830,7 +837,7 @@ literal is one instruction and one step, not an interpreted loop.
   `meta.const.eval/is-within-lifetime-not-begun-errors.cpp`).
   Known gaps: an aggregate or array member being list-initialized reads
   as within its lifetime as a whole (clang: its later elements are not);
-  virtual bases are not tracked; a consteval constructor's immediate
+  a consteval constructor's immediate
   invocation initializing a variable is evaluated as a temporary, so it
   answers false where clang reports kind 3.
 - **Temporaries:** a `MaterializeTemporaryExpr` with full-expression

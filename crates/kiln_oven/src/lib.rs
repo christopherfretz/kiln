@@ -340,6 +340,9 @@ impl Job {
     }
 }
 
+/// The [`Oven::ctor_steps`] tag of a virtual-base stage (WP-465).
+pub(crate) const CTOR_STEP_VBASE: u32 = 1 << 31;
+
 /// The constant evaluator of one translation unit.
 #[derive(Debug)]
 pub struct Oven {
@@ -370,7 +373,10 @@ pub struct Oven {
     /// function index) that initializes subobjects: `(pc, i)` pairs in
     /// code order, from `pc` on entries `..i` of the class's
     /// `fields` have begun their lifetime, entry `i` is being
-    /// initialized (`u32::MAX`: all have begun). Read only by
+    /// initialized (`u32::MAX`: all have begun). In a complete-object
+    /// constructor, `CTOR_STEP_VBASE | j` first: virtual base `j` (entry
+    /// `vbase_start + j`) is being initialized, the earlier ones have
+    /// begun, no non-virtual entry has. Read only by
     /// `__builtin_is_within_lifetime` (spec/oven.md "Builtins").
     pub(crate) ctor_steps: FxHashMap<u32, Box<[(u32, u32)]>>,
     pub(crate) thunks: FxHashMap<ExprId, u32>,

@@ -261,7 +261,9 @@ impl Oven {
     /// initializing (`Oven::ctor_steps`), or that one when it is not of
     /// class or array type (its initializer is being evaluated). A
     /// subobject of class type being initialized is left to the
-    /// constructor frames above (WP-445).
+    /// constructor frames above (WP-445). While a complete-object
+    /// constructor initializes its virtual bases, its non-virtual
+    /// subobjects and later virtual bases have not begun (WP-465).
     pub(super) fn not_yet_begun(&self, pc: usize, raw: u64, t: u32) -> bool {
         if self.ctor_steps.is_empty() {
             return false;
@@ -284,7 +286,13 @@ impl Oven {
                 continue;
             }
             let tys = &self.types;
-            let fields = &tys.fields(cls)[..tys.vbase_start(cls)];
+            // A virtual-base stage looks at the virtual bases too; after
+            // it they have begun, and a base-subobject constructor never
+            // initializes them.
+            let vstage = cur & crate::CTOR_STEP_VBASE != 0;
+            let nv = tys.vbase_start(cls);
+            let all = tys.fields(cls);
+            let fields = if vstage { all } else { &all[..nv] };
             let holds = |fi: &crate::ty::FieldInfo| {
                 fi.width.is_none() && rel >= fi.offset && rel < fi.offset + tys.size(fi.ty).max(1)
             };
@@ -293,6 +301,14 @@ impl Oven {
             };
             let pick = fields.iter().position(|fi| holds(fi) && reaches(fi));
             let Some(idx) = pick.or_else(|| fields.iter().position(holds)) else { continue };
+            if vstage {
+                // A non-virtual subobject or a later virtual base; the one
+                // being initialized is a base, left to the frames above.
+                if idx < nv || (idx - nv) as u32 > cur & !crate::CTOR_STEP_VBASE {
+                    return true;
+                }
+                continue;
+            }
             let idx = idx as u32;
             if idx > cur {
                 return true;
