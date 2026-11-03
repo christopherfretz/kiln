@@ -784,6 +784,15 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) {
         use crate::templ::pack::PackOperand;
+        let chunk = std::mem::replace(&mut self.pending_chunk_loc, Loc::INVALID);
+        // An invalid type-id is no default (clang's `ParseTypeParameter`
+        // passes the invalid `TypeResult` on, which `ActOnTypeParameter`
+        // ignores): `class U = R<T>*` with `R<T>` a reference.
+        if let ArgView::Type(t) = arg.view()
+            && self.is_error_type(t)
+        {
+            return;
+        }
         if self.templ.keyless_ttps.contains(&p) {
             // Rejected and dropped (clang 22).
             if let ArgView::Template(n) = arg.view()
@@ -819,6 +828,9 @@ impl Sema<'_, '_> {
             return;
         }
         let _ = self.templ.default_locs.insert(p, loc);
+        if chunk.is_valid() && matches!(arg.view(), ArgView::Type(_)) {
+            self.inner_chunk_locs.insert(p, chunk);
+        }
     }
 
     /// `>` and the optional requires-clause of the innermost head

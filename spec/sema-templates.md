@@ -3120,6 +3120,25 @@ immediate context: errors are hard.
   carried as `Subst::ref_loc`, which the first reference rebuilt takes
   (WP-300). An alias-declaration records none and is reported at its
   name, as clang does.
+- **A pointer to a reference or an array of references** formed by
+  substitution ([dcl.ref]/5, [dcl.array]/1; also every other check of
+  the pointer or array rebuilt) is reported at the innermost written `*`
+  or `[` of the declarator, as clang's `TreeTransform` rebuilds the type
+  at its `TypeLoc` sigil: the first `*` of `T const *volatile *m`, the
+  return type's `*` of `T *h()` and `T *(*fp)(int)`. That chunk, when it
+  applies to the decl-specifiers, is recorded for a dependent field,
+  variable, static data member, typedef, alias-declaration, function
+  (its return type), parameter (`ParamInfo::chunk_loc`) and type
+  parameter default in `Sema::inner_chunk_locs`, and carried as
+  `Subst::chunk_loc`, which the first pointer or array rebuilt takes.
+  The diagnostic names the declaration (`Subst::declarator_name`: the
+  member, function, typedef, alias or parameter, and for a substituted
+  default the type parameter, `'U' declared as a pointer to a
+  reference`); a parameter of a function type is a `'type name'`.
+  Without a recorded chunk the declarator's name location is used
+  (WP-437). A type parameter default whose type-id is invalid in the
+  definition (`class U = R<T> *`, `R<T>` a reference) is dropped, as
+  clang's `ActOnTypeParameter` drops an invalid `TypeResult`.
 - **Default template arguments of function templates** are used only for
   parameters that are neither deduced nor given explicitly. They are
   substituted in order and may name earlier parameters.
@@ -4892,6 +4911,15 @@ ambiguity errors.
   argument that fails, as clang's `CheckTemplateArgumentList`: later
   arguments and the arity are not reported (`M<1, int, 2>` is one error).
   Test: `temp.arg.general/first-failing-argument.cpp`.
+- A class or alias template named without a template argument list as
+  a nested-name-specifier component (`N::Y::v`, `X::type g;`;
+  [temp.names]/1) is "use of class template 'N::Y' requires template
+  arguments" at the template name, printed with the specifier as written
+  (`'::N::Y'`, `'P<int>::J'`; `act_on_nested_name_written`), with
+  "template is declared here" at the template (an alias template's at
+  its `using`, `conflict_loc`), as clang's
+  `diagnoseMissingTemplateArguments` (WP-430,
+  `temp.names/missing-args-nested-name-note.cpp`).
 - A variable template or concept named alone as a template-argument
   ([temp.names]/1): at compat 22 the parser takes it as a template name
   (P2841, `at_template_name_arg`) and the check reports it against the
