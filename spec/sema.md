@@ -4689,7 +4689,11 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   use member 'f' from dependent base class" (inherited, or when the one
   function callable with no arguments was picked), a note per
   declaration and a `this->` fix-it in a non-static member function;
-  clang 19 says the same from the class lookup. Only this path ranks
+  clang 19 says the same from the class lookup (also for an
+  operator-function-id: "member 'operator+' used before its
+  declaration"). Each "did you mean" carries a replacement fix-it over
+  the name and, under clang 22, the name's range; a keyword suggestion
+  has the range but no fix-it under clang 22 (WP-420). Only this path ranks
   candidates: the general undeclared-identifier path has no corrector.
   Tests: `tests/conformance/temp.names/template-id-typo-*-22.cpp`,
   `template-id-class-member-22.cpp`, `args-for-non-template-member-19.cpp`.
@@ -4697,15 +4701,23 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   [temp.names]/3-4, WP-399): `o.g<int>`, `p->g<>`, `X::g<int>` naming one
   non-template member (also of the current instantiation) followed by
   `<>` or `<` type-id ... `>` is "'g' does not name a template but is
-  followed by template arguments" with a note at the member, the list
-  skipped and the access an error; an overloaded member or a list that
+  followed by template arguments" over the range of the list, with a
+  note at the member, the list skipped and the access an error. The same
+  holds for an operator-function-id (`::operator+<int>(a, b)`,
+  `N::operator-<int>`, `this->operator+<int>(b)`; WP-420). Unqualified
+  and called, such a name is assumed a template; when argument-dependent
+  lookup finds none it is "use of undeclared 'operator*'" (clang 22: with
+  the range of its first token, as for any call whose
+  argument-dependent lookup finds nothing), or inside a class "'operator+'
+  does not refer to a template"; an overloaded member or a list that
   need not be template arguments is parsed as a comparison. A bound
   member function as an operand of a binary operator is only "reference
   to non-static member function must be called". A member template-id of
   a dependent object without `template` is "use 'template' keyword to
   treat 'f' as a dependent template name" with the fix-it. Tests:
   `tests/conformance/expr.ref/member-access-followed-by-template-args.cpp`,
-  `tests/conformance/temp.names/member-template-id-dependent-object.cpp`.
+  `tests/conformance/temp.names/member-template-id-dependent-object.cpp`,
+  `operator-function-id-non-template-args-*.cpp`.
 - **Clang 19 correction to the qualified function** ([temp.names]/3,
   WP-399; clang 19's `TypoExpr` and `CorrectDelayedTyposInExpr`): under
   `-fclang-compat=19` an undeclared template-id whose best candidate is
@@ -4765,7 +4777,11 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   holds a `fallback` "did you mean" for the value of the same group or of
   the nearest later group with exactly one value, taken when the
   function fails; a valid function tied with a value or another function
-  is `ambiguous`, reported uncorrected. Two values in the nearest group
+  is `ambiguous`, reported uncorrected, unless the tie is one value and
+  one function and the speculation is a copy-initializer the value's
+  type and category cannot implicitly convert to (`settle_typo_tie`:
+  `int (*p)(int) = valc<int>;` with `int vala; int valb(int);` is
+  `valb`; WP-420). Two values in the nearest group
   are no correction. The correction point validates as before: a
   built-in operand or an initializer rejects a function, a `return`
   operand, condition or discarded expression accepts anything, so there
@@ -4780,8 +4796,9 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   at the next token, an error operand before a binary operator). Within
   one distance clang orders candidates by a string hash kiln does not
   model, so a keyword tied with a declaration (`swtch` with `switch` and
-  a function `swatch`), and an initializer that accepts only one of a
-  tied value and function, may differ. Tests:
+  a function `swatch`) may differ; an assignment or call argument that
+  accepts only one of a tied value and function is still reported
+  uncorrected. Tests:
   `tests/conformance/temp.names/template-id-typo-*-19.cpp`.
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
@@ -4814,6 +4831,18 @@ Each rule names the libc++ test it fixed and its corpus test.
   "value of type 'S' is not implicitly convertible to 'int'", at the
   argument (tuple_size_incomplete). Test:
   `tests/conformance/temp.arg.nontype/class-arg-no-conversion.cpp`.
+- **Overload set as a non-type argument** ([temp.arg.nontype]/2,
+  [over.over]/1; WP-420): an overload set (`f`, `&f`, `(f)`, `tf<int>`,
+  `&S::m`) for a non-dependent parameter is resolved against the
+  parameter type (pointer to function, reference to function, pointer to
+  member function) before the converted-constant check. When no function
+  matches, or the parameter has another type, it is "value of type
+  '<overloaded function type>' is not implicitly convertible to 'int'"
+  over the argument's range, plus (clang 22) "template parameter is
+  declared here". A misspelled template-name before the arguments is
+  corrected first ("did you mean '::val'?"); clang 19 then shows a
+  corrected template-id naming one function with its function type.
+  Tests: `tests/conformance/temp.arg.nontype/overload-set-argument-*.cpp`.
 - **Conversions a non-type argument may not use** ([temp.arg.nontype]/2,
   [expr.const]/12; clang `CheckConvertedConstantConversions`): the
   standard conversion sequence (the one after a user-defined conversion)
@@ -5084,6 +5113,19 @@ and unevaluated operands:
     is itself such an expression as a call argument or in `T{...}`
     (clang's `ParseBraceInitializer` fails). Test:
     `tests/conformance/dcl.init.general/invalid-element-initializer.cpp`.
+  - a failed braced aggregate initialization (WP-420; clang's
+    `InitListChecker::hadError`): once an element failed to initialize
+    (`int a[] = {g(1, 2), 2};` with a `void g`: "cannot initialize an
+    array element of type 'int' with an rvalue of type 'void'") or a list
+    had excess clauses, nested lists included, no further "excess
+    elements" error is reported for the same outermost list
+    (`Sema::agg_error_mark`, the unrecoverable error count when it
+    started, so a narrowing error does not count). The excess error is at
+    the begin location of the first excess clause (`{1, 1 + 2}` at the
+    `1`). The outermost list's initialization is then an `ExprError`
+    (`is_expr_error`): its full-expression is not checked for implicit
+    conversions and the variable has no constant initializer. Test:
+    `tests/conformance/dcl.init.aggr/element-init-failure.cpp`.
   - copy- and direct-initialization of scalars, through the implicit
     conversion sequence, with narrowing enforced for list-init
     ([dcl.init.list]/7); a list element (`init_element`, an array or
