@@ -1673,7 +1673,7 @@ impl Sema<'_, '_> {
         self.declare_global_new_delete();
         let loc = self.ast.decls.get(dtor).loc();
         let ty = self.tag_type(class);
-        let align = crate::target::size_align(&self.ast, ty, &self.abi).map_or(1, |(_, a)| a);
+        let align = self.complete_class_align(class, ty);
         let aligned = align > self.abi.default_new_align;
         let found = self.alloc_fns(ty, OverloadedOperator::Delete, false, loc);
         let usual = self.usual_delete(&found.fns, found.in_class, aligned, true, true);
@@ -1682,5 +1682,29 @@ impl Sema<'_, '_> {
             let op = self.ast.latest(op);
             let _ = self.ast.decls.cold.dtor_delete.insert(first, op);
         }
+    }
+
+    /// `alignof` of class type `ty` (declaration `class`), through the
+    /// per-Sema [`kiln_abi::LayoutCache`] when the class is complete: its
+    /// layout, and that of every class it contains by value (complete
+    /// too, [class.mem]/7, [class.derived]/2), is final for the rest of
+    /// the TU, so a lattice of `n` classes is laid out once instead of
+    /// once per class (clang caches `ASTRecordLayout`s the same way). A
+    /// class still being defined takes the uncached path.
+    fn complete_class_align(&mut self, class: DeclId, ty: QualType) -> u64 {
+        let complete = self.ast.definition(class).is_some_and(|def| {
+            self.ast
+                .decls
+                .record(def)
+                .is_some_and(|r| !r.defn.contains(DefinitionBits::BEING_DEFINED))
+        });
+        if !complete {
+            return crate::target::size_align(&self.ast, ty, &self.abi).map_or(1, |(_, a)| a);
+        }
+        let cache = std::mem::take(&mut self.layout_cache);
+        let mut lay = kiln_abi::Layouter::with_cache(&self.ast, &self.abi, cache);
+        let align = lay.type_layout(ty).align;
+        self.layout_cache = lay.into_cache();
+        align
     }
 }
