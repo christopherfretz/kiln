@@ -60,7 +60,12 @@ fn cxx26_fills_by_default() {
     let p = body(&ir, "plain");
     assert_eq!(fills(p), 3, "{p}");
     assert!(p.contains("store i32 0, ptr %1, align 4, !annotation"), "{p}");
-    assert!(p.contains("call void @llvm.memset.p0.i64(ptr align 4 %2, i8 0, i64 64, i1 false), !annotation"), "{p}");
+    assert!(
+        p.contains(
+            "call void @llvm.memset.p0.i64(ptr align 4 %2, i8 0, i64 64, i1 false), !annotation"
+        ),
+        "{p}"
+    );
     assert!(ir.contains("!{!\"auto-init\"}"), "{ir}");
     // [dcl.attr.indet]: no erroneous value; a class whose constructor runs
     // is initialized by it, not filled first.
@@ -112,7 +117,10 @@ fn max_size_and_remark() {
 fn flag_values() {
     let (code, _, err) = emit("pattern", SRC, &["-ftrivial-auto-var-init=pattern"]);
     assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("unsupported argument 'pattern' to option '-ftrivial-auto-var-init='"), "{err}");
+    assert!(
+        err.contains("unsupported argument 'pattern' to option '-ftrivial-auto-var-init='"),
+        "{err}"
+    );
     let (code, _, err) = emit("badmax", SRC, &["-ftrivial-auto-var-init-max-size=x"]);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("invalid integral value 'x'"), "{err}");

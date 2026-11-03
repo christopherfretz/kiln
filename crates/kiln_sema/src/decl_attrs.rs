@@ -253,6 +253,9 @@ impl Sema<'_, '_> {
             if node.kind == AttrKind::NONNULL {
                 return self.check_nonnull_attr(d, kind, a, node);
             }
+            if node.kind == AttrKind::INDETERMINATE {
+                return self.check_indeterminate_subject(d, kind, node);
+            }
             self.check_decl_attr(d, kind, node)
         });
     }
@@ -316,18 +319,6 @@ impl Sema<'_, '_> {
                         DiagId::sema_attribute_wrong_decl_type_error,
                         "carries_dependency",
                         "parameters, Objective-C methods, and functions",
-                    )
-            }
-            // [dcl.attr.indet]/1: a block variable with automatic storage
-            // duration or a parameter (clang trunk's `LocalVar, ParmVar`
-            // subjects).
-            AttrKind::INDETERMINATE => {
-                matches!(kind, DeclKind::Var | DeclKind::ParmVar) && self.has_local_storage(d)
-                    || wrong(
-                        self,
-                        DiagId::sema_attribute_wrong_decl_type_error,
-                        "indeterminate",
-                        "local variables or function parameters",
                     )
             }
             // clang `handlePackedAttr`: a tag or a data member.
@@ -555,6 +546,21 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// [dcl.attr.indet]/1: `[[indeterminate]]` appertains to a block
+    /// variable with automatic storage duration or a parameter (clang
+    /// trunk's `LocalVar, ParmVar` subjects); false drops it.
+    fn check_indeterminate_subject(&mut self, d: DeclId, kind: DeclKind, node: AttrNode) -> bool {
+        if matches!(kind, DeclKind::Var | DeclKind::ParmVar) && self.has_local_storage(d) {
+            return true;
+        }
+        let msg = self
+            .diag(DiagId::sema_attribute_wrong_decl_type_error, node.loc)
+            .arg(format!("'{}'", self.attr_shown(&node, "indeterminate")))
+            .arg("local variables or function parameters");
+        self.emit(msg);
+        false
+    }
+
     /// [dcl.attr.indet]/1: `[[indeterminate]]` on a parameter of a
     /// redeclaration of function `prev` must also be on that parameter
     /// in the function's first declaration (clang trunk
@@ -582,15 +588,15 @@ impl Sema<'_, '_> {
                 .iter::<AttrId>(self.ast.attrs.of_decl(op))
                 .any(|a| self.ast.attrs.get(a).kind == AttrKind::INDETERMINATE);
             if !on_first {
-                let name = p.name.map_or_else(String::new, |(n, _)| {
-                    self.ast.symbols().as_str(n).to_owned()
-                });
-                let note =
+                let name = p
+                    .name
+                    .map_or_else(String::new, |(n, _)| self.ast.symbols().as_str(n).to_owned());
+                let prev =
                     self.diag(DiagId::note_previous_declaration, self.ast.decls.get(first).loc());
                 let msg = self
                     .diag(DiagId::sema_indeterminate_param_not_first_decl, node.loc)
                     .arg(format!("'{name}'"))
-                    .with_note(note);
+                    .with_note(prev);
                 self.emit(msg);
             }
         }
