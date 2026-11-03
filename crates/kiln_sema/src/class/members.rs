@@ -210,6 +210,11 @@ impl Sema<'_, '_> {
                     let redundant = d.init_style.is_none()
                         && prev_def.is_some_and(|x| self.is_in_class_static(x));
                     let prev_def = prev_def.filter(|_| !redundant);
+                    if compatible {
+                        // [dcl.stc]/4: one thread storage kind.
+                        let n = sym_str(self, name);
+                        self.check_tls_redecl(p, spec.tls(), prev_def.is_some(), loc, &n);
+                    }
                     if !compatible {
                         let msg = self
                             .diag(DiagId::sema_redefinition_different_type, loc)

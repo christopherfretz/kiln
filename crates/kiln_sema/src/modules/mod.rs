@@ -668,7 +668,9 @@ impl Sema<'_, '_> {
     /// the file holding `decl` along its `#include`s, the first
     /// include-guarded file, named as the preprocessor suggested
     /// ([`SourceManager::include_guarded_suggestion`]). The walk stops at
-    /// the module unit (its "include location" is the `import`).
+    /// the module unit, which lexes in its own range (no include
+    /// location); an `#include` written with a macro is walked through,
+    /// its include location being the macro name.
     ///
     /// [`SourceManager::include_guarded_suggestion`]:
     ///     kiln_source::SourceManager::include_guarded_suggestion
@@ -677,8 +679,7 @@ impl Sema<'_, '_> {
         let mut loc = sm.expansion_loc(decl);
         loop {
             let inc = sm.include_loc(loc);
-            let (f, off) = sm.offset_of(inc)?;
-            if !sm.text(f).get(off as usize..)?.starts_with(['<', '"']) {
+            if !inc.is_valid() {
                 return None;
             }
             let (file, _) = sm.offset_of(loc)?;

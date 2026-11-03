@@ -80,6 +80,8 @@ fn clang19_unevaluated(b: u32) -> bool {
                 | id::LABS
                 | id::LLABS
                 | id::COPYSIGNF16
+                // WP-403: clang 19 and 22 do not fold `fabsf16`.
+                | id::FABSF16
         )
 }
 
@@ -150,6 +152,11 @@ fn fp_intrinsic(b: u32) -> Option<(&'static str, usize)> {
         // twin ([`id::f128_twin`] maps the others).
         id::COPYSIGNF16 => ("llvm.copysign", 2),
         id::ROUNDEVENF128 => ("llvm.roundeven", 1),
+        // WP-403: the `__fp16` ones without a `float` twin.
+        id::ROUNDEVENF16 => ("llvm.roundeven", 1),
+        id::CANONICALIZEF16 => ("llvm.canonicalize", 1),
+        id::FMAXIMUM_NUMF16 => ("llvm.maximumnum", 2),
+        id::FMINIMUM_NUMF16 => ("llvm.minimumnum", 2),
         _ => return None,
     })
 }

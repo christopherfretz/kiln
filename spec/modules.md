@@ -193,11 +193,14 @@ predicate plus: a function that is *exported*, attached to a named module
 `M` and only reachable (its unit is not imported by the current one) is
 visible when it has the same innermost enclosing non-inline namespace as
 an associated entity attached to `M` (an associated class or enumeration;
-clang 22 considers classes only, a deviation in kiln's favour of the
-standard); hidden friends of associated classes are always visible. The
+clang 22 and 19 consider classes only: deviation 10); hidden friends of associated classes are always visible. The
 standard's /5 example: `f(x)` finds `R::f` through `R::X`, `f(x, S::Z())`
 does not consider `S::f` although `S` is associated
-(`basic.lookup.argdep/module-example.cpp`, `module-enum.cpp`). A
+(`basic.lookup.argdep/module-example.cpp`, `module-enum.cpp`). `R::f(x)`
+is `no type named 'f' in namespace 'R'` (`R::f` is not visible to
+qualified lookup). Its invalid declaration of `x` does not hide the valid
+`x`, so the example's later errors follow, in the standard's order (spec/sema.md
+§3, "Invalid declarations"). A
 non-exported function of the module's interface is not found by an
 importer's ADL: clang 22 reads "in the interface of M" as "exported", and
 kiln follows it (`module.interface/visibility.cpp`). Inside an
@@ -222,12 +225,14 @@ visible, and is reported as clang 22's `diagnoseMissingImport` does:
   `missing '#include'; 'x' must be declared before it is used`, or
   `missing '#include <h>'; ...` when a header is known (clang
   `getHeaderToIncludeForDiagnostics`): walking out from the declaration's
-  file along its `#include`s (stopping at the module unit), the first
+  file along its `#include`s (stopping at the module unit; an `#include`
+  written with a macro is walked through, as in clang), the first
   include-guarded file (a controlling macro; not `#pragma once`), named as
-  kiln_pp suggested (spec/pp.md `suggest_include`). Deviations: clang 22
-  does not strip a *relative* search directory from a BMI's header (it
-  falls back to the main file's directory or the full path) where kiln
-  does; an `#include` written with a macro ends kiln's walk;
+  kiln_pp suggested (spec/pp.md `suggest_include`): relative to the
+  longest *absolute* search directory holding it, else to the main file's
+  directory, else its whole path (clang 22 and 19 read the header's path
+  back from the BMI as absolute and compare the search directories as
+  written, so a relative `-I` never matches; WP-396);
 - either way with `note: declaration here is not visible` at the
   declaration.
 
@@ -417,13 +422,26 @@ part B (§9).
 4. (Retired: module initializers are emitted, §7.)
 5. `#include` is never translated into an import (§3).
 6. Attributes on module / import declarations are ignored (§3).
-7. A class in a module unit's global module fragment whose key function
-   that unit defines has its vtable emitted by that unit, and importers
-   declare it external (§7). clang 22 does the opposite (the module unit
-   omits it and every importer defines it strongly), so two clang
-   importers of one such interface fail to link with a duplicate
-   `vtable for G`; kiln follows the Itanium key-function rule instead
-   (`module.global.frag/gmf-dup-run.cpp`).
+7. **Deliberate, at every compat level (WP-396).** A class in a module
+   unit's global module fragment, whose key function that unit's fragment
+   defines, has its vtable, `type_info` and type name emitted by that
+   unit, and importers declare the vtable `external` (§7; Itanium ABI
+   §5.2.3, [basic.def.odr]/15).
+   - clang 22 and clang 19 do the same thing as each other, which is the
+     opposite. The module unit omits `_ZTV1G`/`_ZTI1G`/`_ZTS1G`. Every
+     importer defines them `dso_local`, with no comdat, together with
+     G's deleting destructor.
+   - So with either clang, an interface linked with two importers fails:
+     `multiple definition of 'vtable for G'` (and `typeinfo for G`,
+     `typeinfo name for G`). This was probed with `--precompile`, `-c`
+     of the BMI and both importers, and one link (WP-396).
+   - Defining the key function in the purview instead is ill-formed in
+     both clangs (`declaration of 'f' in module m follows declaration in
+     the global module`), so this is the only form of the case.
+   - kiln keeps the placement that links. Tests:
+     `module.global.frag/gmf-dup-run.cpp` (links and runs) and
+     `tests/codegen/module_gmf_vtable.cpp` (importer IR against clang 22;
+     the difference is an `Allow::Abi` row in `ir_vs_clang.rs`).
 8. (Retired: a reachable but non-visible declaration is reported as a
    missing import, §5.)
 9. A named module's `thread_local` variables are defined (with their
@@ -437,6 +455,24 @@ part B (§9).
    module unit and an importer fails to link (`multiple definition of
    x@tm`); kiln follows the Itanium rule
    (`basic.stc.thread/module-tls-run.cpp`).
+10. **Deliberate, at every compat level (WP-396).** Module ADL
+    ([basic.lookup.argdep]/4) counts an associated *enumeration* attached
+    to `M`, as the standard says. clang 22 and 19 count associated
+    classes only. Both clangs agree, and spec/sema.md §1.1 keeps the
+    accepted language the same at every level, so there is no compat
+    gate. The difference is observable:
+    - `basic.lookup.argdep/module-enum.cpp`: `h(get_en())`, where `h` is
+      reachable through a scoped `P::En` of a non-visible module E, is
+      `use of undeclared identifier 'h'` in clang.
+    - `basic.lookup.argdep/module-enum-overload.cpp`: with an unscoped
+      `P::Un` and a visible `::h(int)`, kiln calls the exact match
+      `P::h(Un)` and exits 1, which is the standard's result. clang
+      calls `::h(int)` and exits 7. The same shape changes which
+      operator a flag enumeration's `|` uses in a module consumed
+      transitively.
+    - libc++ is unaffected: the `std` module exports declarations of its
+      global module fragment, which are attached to the global module,
+      so the /4 rule does not apply to them.
 
 ## Tests
 
@@ -450,7 +486,9 @@ part B (§9).
   errors (§5), identical to clang 22's output;
   `module.reach/missing-include.cpp`: the header named in
   `missing '#include <h>'` (guarded, nested, `#pragma once`, unguarded
-  and system headers), and `module.import/import-std-hidden.cpp`
+  and system headers), `module.reach/missing-include-dirs.cpp`
+  (relative and absolute `-I`, a macro-written `#include`), and
+  `module.import/import-std-hidden.cpp`
   (`<__memory/pointer_traits.h>` through `import std;`).
 - `module.interface/export-run.cpp`, `visibility.cpp`,
   `module.unit/partitions-run.cpp`, `module.private.frag/private-run.cpp`,
@@ -474,6 +512,9 @@ part B (§9).
   in-class non-inline members, a defaulted virtual destructor) linked
   with two importers that both use them: no duplicate symbol, one
   variable ([module.global.frag]/1, [class.mfct]/1, §7).
+- `tests/codegen/module_gmf_vtable.cpp`: an importer of a GMF class
+  with a key function (vtable declared `external`, deviation 7), a GMF
+  class with inline virtuals (`linkonce_odr`) and a purview class.
 - `tests/codegen/module_class_defs.cpp`: IR golden of a module
   interface's in-class definitions (order, strong linkage), its unused
   vtables and the global `operator delete` against clang 22.
