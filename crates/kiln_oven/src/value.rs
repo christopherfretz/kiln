@@ -1110,14 +1110,18 @@ impl Oven {
     fn resolve_var(&mut self, b: &mut dyn SemaBridge, g: u32, d: DeclId, top: u32) -> u64 {
         let info = var_info(b.ast(), d);
         if !info.lax {
-            return self.resolve_var_in(b, g, d, top, None, false);
+            return self.resolve_var_in(b, g, d, top, false);
         }
-        // A lax variable with a constant value (stored, or its initializer
-        // evaluated strictly): one object in both modes, holding the value,
-        // which only a lax fold may read (`mem::LAX_READ`), so a pointer to
-        // it held by a usable variable (`constexpr const double *p = &d;`,
-        // resolved strictly) reads it in a lax fold (spec/oven.md "Lax
-        // folds").
+        // A lax variable: one object in both modes, holding its value,
+        // which only a lax fold may read (`mem::LAX_READ`; a strict read
+        // faults "read of non-constexpr variable" whatever it holds), so
+        // the variable has one address and a pointer to it held by a
+        // usable variable (`constexpr const double *p = &d;`, resolved
+        // strictly) reads it in a lax fold (spec/oven.md "Lax folds").
+        // The value is the stored one, or else its initializer evaluated
+        // laxly in either mode: clang's `VarDecl::evaluateValue` only
+        // notes a read of a non-constexpr variable, so it keeps the value
+        // of an initializer that reads another lax variable.
         if let VarEvalState::Value(cv) = info.state {
             let ty = self.types.intern(b, info.ty);
             let size = self.types.size(ty);
@@ -1128,103 +1132,52 @@ impl Oven {
             self.thaw_into(b, cv, p, top);
             return p;
         }
-        // Otherwise resolved differently by strict and lax evaluations:
-        // reset when the mode changes (`Oven::begin_outermost`), and then
-        // remade in the object it resolved to before (`lax_objs`), so
-        // alternating modes costs no static space and the variable keeps
-        // one address.
-        let ty = self.types.intern(b, info.ty);
-        let old = self.lax_objs.get(&g).copied().filter(|&p| {
-            self.mem
-                .alloc_of(Ptr::decode(p))
-                .is_ok_and(|a| a.ty == ty && a.flags & flags::RESOLVING == 0)
-        });
-        let p = self.resolve_var_in(b, g, d, top, old, !self.run.lax);
-        if self.mem.alloc_of(Ptr::decode(p)).is_ok_and(|a| a.frame == crate::mem::LAX_READ) {
-            self.lax_objs.remove(&g);
-        } else {
-            self.lax_globals.push(g);
-            self.lax_objs.insert(g, p);
+        if info.state == VarEvalState::Evaluating {
+            // Mid-initialization: kept for this evaluation only.
+            self.provisional.push(g);
         }
+        let lax = (self.run.lax, self.mem.lax);
+        (self.run.lax, self.mem.lax) = (true, true);
+        let p = self.resolve_var_in(b, g, d, top, true);
+        (self.run.lax, self.mem.lax) = lax;
         p
     }
 
-    /// A static object of type `ty` for global `d`: `old` remade in place
-    /// when there is one ([`Memory::reinit_static`]), else a new one.
-    ///
-    /// [`Memory::reinit_static`]: crate::mem::Memory::reinit_static
-    fn global_obj(&mut self, old: Option<u64>, ty: OTy, fl: u8, d: DeclId) -> u64 {
-        if let Some(p) = old {
-            self.mem.reinit_static(p, fl, Origin::Global(d), true, &self.types);
-            return p;
-        }
+    /// A static object of type `ty` for global `d`.
+    fn global_obj(&mut self, ty: OTy, fl: u8, d: DeclId) -> u64 {
         let size = self.types.size(ty);
         self.mem.alloc_static(ty, size, fl, Origin::Global(d))
     }
 
-    /// [`Oven::external`], remaking `old` when there is one.
-    fn external_obj(
-        &mut self,
-        b: &mut dyn SemaBridge,
-        old: Option<u64>,
-        ty: OTy,
-        d: DeclId,
-    ) -> u64 {
-        let Some(p) = old else { return self.external(b, ty, d) };
-        let ast = b.ast();
-        let reference = ast.decls.get(d).ty().is_some_and(|q| ast.types.is_reference(q));
-        let fl = flags::EXTERNAL | flags::CONST;
-        self.mem.reinit_static(p, fl, Origin::External(d), reference, &self.types);
-        p
-    }
-
-    /// [`Oven::resolve_var`]; `old` is the object a lax global resolved to
-    /// before, remade rather than allocating another. `lax_read`: a lax
-    /// global resolved strictly, whose initializer still runs (strictly);
-    /// a value makes a [`crate::mem::LAX_READ`] object.
     fn resolve_var_in(
         &mut self,
         b: &mut dyn SemaBridge,
         g: u32,
         d: DeclId,
         top: u32,
-        old: Option<u64>,
         lax_read: bool,
     ) -> u64 {
         let info = var_info(b.ast(), d);
         let ty = self.types.intern(b, info.ty);
         if !(info.usable || info.lax && (self.run.lax || lax_read)) {
-            return self.external_obj(b, old, ty, d);
+            return self.external(b, ty, d);
         }
         let hu = self.static_flags(ty);
         match info.state {
             VarEvalState::Value(cv) => {
-                let p = self.global_obj(old, ty, flags::CONST | hu, d);
+                let p = self.global_obj(ty, flags::CONST | hu, d);
                 self.globals[g as usize].state = GState::Resolved(p);
                 self.thaw_into(b, cv, p, top);
                 p
             }
-            VarEvalState::NotConstant => self.external_obj(b, old, ty, d),
-            VarEvalState::Evaluating => self.global_obj(
-                old,
-                ty,
-                flags::CONST | flags::RESOLVING | (hu & flags::HAS_UNION),
-                d,
-            ),
+            VarEvalState::NotConstant => self.external(b, ty, d),
+            VarEvalState::Evaluating => {
+                self.global_obj(ty, flags::CONST | flags::RESOLVING | (hu & flags::HAS_UNION), d)
+            }
             VarEvalState::NotEvaluated => {
-                let Some(init) = info.init else { return self.external_obj(b, old, ty, d) };
+                let Some(init) = info.init else { return self.external(b, ty, d) };
                 if self.run.nesting >= MAX_NESTING {
-                    return self.external_obj(b, old, ty, d);
-                }
-                // The initializer runs in the old object (outside a
-                // trial: its writes there would be speculative).
-                if let Some(o) = old
-                    && !self.mem.in_trial()
-                    && self.globals[g as usize].slot == 0
-                {
-                    let fl = flags::CONST | flags::RESOLVING;
-                    self.mem.reinit_static(o, fl, Origin::Global(d), true, &self.types);
-                    self.globals[g as usize].slot = o;
+                    return self.external(b, ty, d);
                 }
                 let p = self.placeholder(g, ty, d);
                 self.globals[g as usize].state = GState::Resolved(p);

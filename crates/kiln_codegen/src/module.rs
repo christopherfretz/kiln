@@ -188,7 +188,14 @@ impl<'a> Cg<'a> {
             tys: IrTypes::new(ast, target).with_clang_compat(opts.clang_compat),
             target,
             opts,
-            m: Module::with_target(&opts.source_filename, spec),
+            m: {
+                let mut m = Module::with_target(&opts.source_filename, spec);
+                // clang 21+'s `captures(none)` (spec/codegen.md §6a).
+                if opts.clang_compat >= 22 {
+                    m.ir_version = opts.llvm_major;
+                }
+                m
+            },
             fns: FxHashMap::default(),
             nounwind: FxHashMap::default(),
             gvars: FxHashMap::default(),

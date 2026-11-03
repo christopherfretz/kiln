@@ -311,39 +311,43 @@ the evaluator's flattened type table.
   array or pointer) is read as if it were (`VarInfo::lax`); its `mutable`
   members are not (below, WP-183). Lax mode
   applies only to an outermost evaluation (nested in a bridge callback it
-  is plain `try_fold`). Variables resolved under lax mode are recorded in
-  `lax_globals` and reset to unresolved when the next outermost
-  evaluation runs in the other mode, and lax-mode calls are never
-  memoized, so a lax read never leaks into a strict evaluation. A lax
-  global keeps one static object for the whole translation unit
-  (`Oven::lax_objs`, keyed by global, WP-387): re-resolving it in either
-  mode remakes that object in place (`Memory::reinit_static` drops its
-  union records and clears its contents and flags, keeping slot,
-  generation and address) instead of allocating a fresh one, so a
-  strict/lax alternation costs no static memory per switch and a pointer
-  to the global taken in one mode still designates it in the other
-  (test `limits.rs::lax_globals_do_not_grow`). The slot is reused only
-  when the object is live, of the same type and not mid-resolution;
-  otherwise a fresh one is allocated and recorded. **Lax folds** through
+  is plain `try_fold`). Lax-mode calls are never memoized, so a lax
+  read never leaks into a strict evaluation. A lax global keeps one
+  static object for the whole translation unit (WP-407): it is resolved
+  once, in whichever mode first names it, and is never reset by a mode
+  switch, so a strict/lax alternation costs no static memory and a
+  pointer to the global taken in one mode designates the same object,
+  holding the same value, in the other (test
+  `limits.rs::lax_globals_do_not_grow`). **Lax folds** through
   a usable variable (WP-395): a constexpr pointer, reference or class
   member pointing at a lax global (`constexpr const double *p = &d;
   int a[(int)*p];`) is resolved strictly, before or outside any lax fold,
   so the pointer it holds must designate an object a later lax fold can
-  read. A lax global whose initializer evaluates as a strict constant
-  (or whose value sema already froze) therefore gets one static object
-  for both modes, holding that value but flagged external
+  read. A lax global therefore gets one static object for both modes,
+  holding its value but flagged external
   (`Origin::External`, `Alloc::frame == LAX_READ`): a strict read still
   faults "read of non-constexpr variable" exactly as before, and only a
   lax fold (`Memory::lax`, set by `fold_rvalue` for its outermost run)
-  may read it; writes fault in either mode. Such a global is resolved
-  once per translation unit (one strict evaluation of its initializer,
-  memoized like any variable) and is not recorded in `lax_globals`. A lax
-  global whose initializer is not a strict constant (it reads another
-  lax global) keeps the mode-dependent object above, so a usable
-  pointer to it taken strictly still does not fold (open limitation).
+  may read it; writes fault in either mode. Its value is the one sema
+  froze, or else its initializer evaluated **laxly** whatever the mode
+  of the evaluation that resolves it (`Oven::resolve_var` sets
+  `RunState::lax` and `Memory::lax` around it): clang's
+  `VarDecl::evaluateValue` only notes (`CCEDiag`) a read of a
+  non-constexpr variable, so `const double d1 = d0 * 2;` keeps the value
+  5.0 for a later fold however it is reached (`constexpr const double
+  *p = &d1; int a[(int)*p];` folds, WP-407). Before WP-407 such a global
+  was resolved per mode and reset at each mode switch, so a pointer
+  resolved strictly did not fold and, worse, a pointer thawed in a lax
+  fold kept reading the lax contents in a later strict evaluation that
+  never re-resolved the global (`constexpr double v = *p;` accepted). An
+  initializer that does not fold even laxly leaves the object unbacked,
+  so every read faults in either mode; a global met mid-initialization
+  (`VarEvalState::Evaluating`) is resolved provisionally, for that
+  evaluation only.
   A genuinely non-constant bound (a pointer to a non-`const` variable, or
   any function-scope bound, which clang does not fold) stays a variable
   length array (tests `expr.const/lax-fold-through-pointer.cpp`,
+  `expr.const/lax-fold-through-pointer-chain.cpp`,
   `dcl.array/vla-through-constexpr-pointer.cpp`). Codegen
   uses it for its non-initializer fold candidates; sema uses it
   (`OvenBridge::fold_rvalue_int`) for clang's folded array bound
@@ -1254,6 +1258,32 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   clang 19 and 22 in every mode. clang reports this as a CCE note and
   keeps evaluating; kiln stops at it, which gives the same diagnostics
   wherever clang needs a constant (`expr.const/p2738-void-cast-pre26-cxx*.cpp`).
+  Probed (WP-407, clang 19 and 22, `-std=c++23`): a required constant
+  expression keeps the first note (clang `EM_ConstantExpression` never
+  replaces it), so a later fault (a read past the end through the cast
+  pointer, in a callee or not) adds no second note; `static_assert`,
+  `constexpr` variables, enumerators and array bounds print the same as
+  kiln. `__builtin_is_constant_evaluated` / `if consteval` in a static
+  initializer differ only where clang's codegen, after a failed constant
+  initialization, folds the initializer again as a non-manifest trial
+  (`int g = __builtin_is_constant_evaluated() ? x : 7;` is static there),
+  which kiln's codegen does not do for any initializer. The difference that is visible is in a *fold*: clang continues
+  with the cast's result designating nothing (`Designator.setInvalid()`),
+  so a null test or comparison of that pointer folds while any access
+  through it fails silently: a file-scope `int a[(const int *)vp ? 1 :
+  2]` is "folded to constant array", `__builtin_constant_p((const int
+  *)vp == &n)` is true, and `int g = (const int *)vp != nullptr;` is
+  constant-initialized. Kiln's folds stop at the cast (an error for the
+  bound, `false`, dynamic initialization). Not modelled: it needs an
+  invalid-designator pointer state carried by every pointer-consuming
+  op, and covers clang's other CCE-only casts too (`reinterpret_cast`,
+  integer to pointer, which fold the same way); tracked by the xfail
+  `expr.const/p2738-void-cast-pre26-fold-continues.cpp`. Codegen's folds
+  share the TU's bytecode, so they see the TU's language mode
+  (`Oven::set_cxx_year`, recorded by sema; before WP-407 they compiled
+  with C++26 rules and constant-initialized `int g = *(const int *)vp;`
+  in C++23: `expr.const/p2738-void-cast-pre26-static-init.cpp`,
+  `p2738-void-cast-static-init-cxx26.cpp`).
   A `void *` argument in an "in call to" note prints the subobject its
   tag designates (`f(&s)`, not the first member at its address), an
   untagged one the whole object.

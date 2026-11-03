@@ -180,6 +180,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         // The note wording follows sema's compatibility level (a field
         // set after the Oven is built).
         oven.set_clang_compat(self.clang_compat);
+        // As is the language mode, for codegen's folds (WP-407).
+        let year = Bridge { sema: self }.cxx_year();
+        oven.set_cxx_year(year);
         let saved = std::mem::replace(&mut self.inst.eval_loc, eval_loc);
         let r = f(&mut oven, &mut Bridge { sema: self });
         self.inst.eval_loc = saved;
