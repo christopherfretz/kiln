@@ -242,6 +242,9 @@ impl Parser<'_, '_> {
                 Kw::Template if self.kw_of(self.peek(1)) == Some(Kw::For) => {
                     return self.parse_expansion_stmt();
                 }
+                // `template [: r :] ...`: a splice template-id
+                // ([expr.prim.splice], [expr.prim.id.qual]).
+                Kw::Template if self.peek_is(1, Punct::SpliceOpen) => {}
                 Kw::Namespace | Kw::Template => {
                     self.unsupported(&format!("'{}' here", k.spelling()), loc);
                     self.skip_statement();

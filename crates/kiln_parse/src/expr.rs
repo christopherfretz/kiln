@@ -1333,12 +1333,23 @@ impl Parser<'_, '_> {
     /// already consumed): `[template] id-expression` or a
     /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
     fn parse_member_access_suffix(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
-        // `e.[: r :]`, `p->[: r :]` ([expr.ref]/1 with a splice-expression;
-        // `template [: r :]` is WP-482).
+        // `e.[: r :]`, `p->[: r :]` ([expr.ref]/1 with a splice-expression).
         if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
             let open = self.loc();
             let (r, close) = self.parse_splice_specifier()?;
             return Some(self.s.act_on_member_splice(e, r, open, close, loc, arrow));
+        }
+        // `e.template [: r :] < args >`: a member template named by a
+        // splice is not implemented (spec/reflection.md §5).
+        if self.kw() == Some(Kw::Template) && self.peek_is(1, Punct::SpliceOpen) {
+            self.bump();
+            let open = self.loc();
+            let (r, _) = self.parse_splice_specifier()?;
+            if self.at(Punct::Less) {
+                let _ = self.parse_template_arg_list();
+            }
+            self.unsupported("a member access naming a template by a splice", open);
+            return Some(self.s.act_on_error_expr(&[e, r], open));
         }
         let mut template_kw = self.eat_kw(Kw::Template).is_some();
         // `p->T::~T()`, `p->N::T::~T()` on a scalar or dependent object: a
@@ -1753,6 +1764,12 @@ impl Parser<'_, '_> {
                 Kw::Requires => Some(self.parse_requires_expression()),
                 // `typename T::type(e)` ([expr.type.conv]).
                 Kw::Typename => self.parse_functional_cast(),
+                // `template [: r :]` / `template [: r :] < args >`
+                // ([expr.prim.splice]); `template [: r :] < args > ::` was
+                // annotated as a scope above.
+                Kw::Template if self.peek_is(1, Punct::SpliceOpen) => {
+                    self.parse_template_splice_expr()
+                }
                 Kw::Template => {
                     self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
                     None

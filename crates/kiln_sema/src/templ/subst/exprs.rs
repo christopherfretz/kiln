@@ -886,7 +886,13 @@ impl Substituter<'_, '_, '_> {
             ExprKind::CXXSpliceExpr => {
                 let op = ex(self).splice_operand(e);
                 let base = ex(self).splice_base(e);
+                let targs = ex(self).splice_template_args(e);
                 let op = self.expr(op)?;
+                if let Some(list) = targs {
+                    let list = self.args(list, loc)?;
+                    let v = self.sema.ast.types.args(list).to_vec();
+                    return Ok(self.sema.act_on_splice_template_expr(op, &v, loc, end));
+                }
                 Ok(match base {
                     None => self.sema.act_on_splice_expr(op, loc, end),
                     Some((b, arrow)) => {

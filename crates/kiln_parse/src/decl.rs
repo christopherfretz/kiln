@@ -218,7 +218,9 @@ impl Parser<'_, '_> {
             {
                 self.parse_linkage_spec();
             }
-            (_, Some(Kw::Template)) => {
+            // `template [: r :] < args > :: name x;` declares `x` (a
+            // splice-scope-specifier, P2996; as GCC 16.1).
+            (_, Some(Kw::Template)) if !self.peek_is(1, Punct::SpliceOpen) => {
                 self.parse_template_declaration(DeclaratorContext::File);
             }
             (_, Some(Kw::Extern)) if self.kw_of(self.peek(1)) == Some(Kw::Template) => {
