@@ -49,10 +49,10 @@ impl Sema<'_, '_> {
             QueryOp::ObjectOf => MetaOut::Info(self.reflect_object_of(r, loc)?),
             QueryOp::ConstantOf => MetaOut::Info(self.reflect_constant_of(r, loc, oven)?),
             QueryOp::ParentOf => match self.parent_of(self.ast.reflections.get(r)) {
-                Some(p) => MetaOut::Info(self.ast.reflections.intern(p)),
+                Some(p) => MetaOut::Info(self.intern_reflection(p, loc)?),
                 None => return fail(loc, "reflection does not represent an entity with parent"),
             },
-            QueryOp::Dealias => MetaOut::Info(self.dealias(r)),
+            QueryOp::Dealias => MetaOut::Info(self.dealias(r, loc)?),
             QueryOp::OperatorOf => MetaOut::Scalar(u128::from(self.reflect_operator_of(r, loc)?)),
             QueryOp::VariableOf => MetaOut::Info(self.reflect_variable_of(r, loc)?),
             QueryOp::ReturnTypeOf => MetaOut::Info(self.reflect_return_type_of(r, loc)?),
@@ -119,7 +119,7 @@ impl Sema<'_, '_> {
         match self.type_of_reflectee(self.ast.reflections.get(r)) {
             Some(t) if !self.ast.types.is_dependent(t) => {
                 let t = self.ast.types.canonical(t);
-                Ok(self.ast.reflections.intern(Reflectee::Type(t)))
+                Ok(self.intern_reflection(Reflectee::Type(t), loc)?)
             }
             _ => fail(loc, format!("'{}' has no type", self.reflection_str(r))),
         }

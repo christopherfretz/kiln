@@ -72,7 +72,7 @@ impl Sema<'_, '_> {
     /// The reflection `^^E` designates for the class, enumeration,
     /// function or namespace `c` (a parent, [meta.reflection.queries]).
     pub(super) fn entity_reflectee(&mut self, c: DeclId) -> Reflectee {
-        let first = self.ast.first(c);
+        let first = self.entity_decl(c);
         match self.kind_of(c) {
             DeclKind::TranslationUnit | DeclKind::Namespace => Reflectee::Namespace(first),
             DeclKind::CXXRecord
@@ -89,7 +89,7 @@ impl Sema<'_, '_> {
     /// The declaration of the entity reflectee `x` represents, if it is
     /// one: a declaration, namespace, namespace alias, template, or the
     /// class, enumeration or alias a type reflection names.
-    pub(super) fn entity_decl(&self, x: Reflectee) -> Option<DeclId> {
+    pub(super) fn reflectee_decl(&self, x: Reflectee) -> Option<DeclId> {
         match x {
             Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => Some(d),
             Reflectee::Type(t) => self.type_decl(t),
@@ -137,7 +137,7 @@ impl Sema<'_, '_> {
         let d = match x {
             Reflectee::BaseSpec(c, _) => return Some(self.entity_reflectee(c)),
             Reflectee::FnParam(f, _) => return Some(Reflectee::Decl(self.ast.first(f))),
-            _ => self.entity_decl(x)?,
+            _ => self.reflectee_decl(x)?,
         };
         let d = match self.kind_of(d) {
             DeclKind::TranslationUnit => return None,
@@ -170,18 +170,18 @@ impl Sema<'_, '_> {
 
     /// `dealias(r)`: the type a type alias denotes (its aliases removed
     /// throughout), the namespace a namespace alias names, else `r`.
-    pub(super) fn dealias(&mut self, r: ReflectionId) -> ReflectionId {
-        match self.ast.reflections.get(r) {
+    pub(super) fn dealias(&mut self, r: ReflectionId, loc: Loc) -> Result<ReflectionId, MetaError> {
+        Ok(match self.ast.reflections.get(r) {
             Reflectee::Type(t) => {
                 let c = self.ast.types.canonical(t);
-                if c == t { r } else { self.ast.reflections.intern(Reflectee::Type(c)) }
+                if c == t { r } else { self.intern_reflection(Reflectee::Type(c), loc)? }
             }
             Reflectee::NamespaceAlias(d) => {
                 let ns = self.ast.first(self.ast.resolve_alias(d));
-                self.ast.reflections.intern(Reflectee::Namespace(ns))
+                self.intern_reflection(Reflectee::Namespace(ns), loc)?
             }
             _ => r,
-        }
+        })
     }
 
     /// `has_template_arguments(r)`: `r` is a specialization of a class,
@@ -302,7 +302,7 @@ impl Sema<'_, '_> {
             offset: 0,
             designated: None,
         }) {
-            Ok(cv) => Ok(self.ast.reflections.intern(Reflectee::Object(cv))),
+            Ok(cv) => Ok(self.intern_reflection(Reflectee::Object(cv), loc)?),
             Err(_) => fail(loc, "kiln: constant store exhausted"),
         }
     }
@@ -353,7 +353,7 @@ impl Sema<'_, '_> {
         match value.and_then(|v| self.const_int(v)) {
             Some(v) => {
                 let cv = self.int_const(ty, v);
-                Ok(self.ast.reflections.intern(Reflectee::Value(cv)))
+                Ok(self.intern_reflection(Reflectee::Value(cv), loc)?)
             }
             None => fail(
                 loc,

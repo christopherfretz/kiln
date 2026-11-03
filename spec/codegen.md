@@ -2906,15 +2906,10 @@ guarantees it a constant initializer and a trivial destructor
 - Tests: `tests/codegen/thread_local.cpp`,
   `tests/codegen/module_thread_local.cpp` (oracle 22),
   `tests/conformance/basic.stc.thread/module-tls-run.cpp`.
-- **Remaining:** clang emits the initializer (and `_ZTH`/`_ZTW`) of an
-  implicitly instantiated variable template specialization or template
-  static data member after the TU's functions (sema
-  `PerformPendingInstantiations` adds the instantiated definition at the
-  end of the TU), where kiln emits it at first use (`get_gvar` →
-  `instantiated_var_def`); fixing it needs sema to defer the
-  instantiation (`templ/pending.rs`), so `thread_local.cpp` has no
-  thread-local variable template (WP-189 triage: everything else in
-  `tls.rs` matches clang 19).
+- The initializer, `_ZTH` and `_ZTW` of an implicitly instantiated
+  thread-local variable template specialization or template static data
+  member follow the TU's functions, as in clang (WP-466, §7ab;
+  `tests/codegen/var_template_thread_local.cpp`, both oracles).
 
 ## 7q. Landed (WP-187): `-Wpsabi` and `bool`-vector conditions
 - **Calls: `-Wpsabi`** (`psabi.rs`, clang
@@ -3186,6 +3181,36 @@ No lowering changed; the new forms reach codegen as existing AST.
     `fold.rs`).
   - An unreferenced namespace-scope `constexpr` decomposition's `e`
     (`@_ZDC1x1yE`, internal) is not emitted; clang emits it.
+
+## 7aa. Landed (WP-459): explicit-object conversion functions, AArch64 target features
+- A conversion function with an explicit object parameter
+  ([class.conv.fct]/1, P0847) is lowered as an explicit-object member
+  function (`is_explicit_object_method` covers `CXXConversion`): no
+  `this`, the object an ordinary first parameter (a reference, or a value
+  for `this H`), mangled with `H` (`_ZNH1ScviERKS_`), named like a free
+  function (`decl_lvalue`), and called with the object as its first
+  argument (no `this` adjustment, no temporary for an lvalue object). A
+  `this auto&&` / `this Self&&` conversion template is instantiated per
+  object type. Test `tests/codegen/explicit_object_conversion.cpp`.
+- AArch64 `"target-features"` (`module.rs` `aarch64_features`): the default
+  entries `+fp-armv8,+neon,+outline-atomics` (or `-outline-atomics`),
+  `+v8a`, `-fmv` are overridden by `CodegenOptions::target_features` (the
+  driver's `-march=`/`-mcpu=`/`-target-feature` result, spec/driver.md
+  "Target features"; last setting wins) and printed as clang does, the
+  sorted `+` features, then the sorted `-` ones
+  (`+fp-armv8,+fullfp16,+neon,+outline-atomics,+sve,+v8a,-fmv` for
+  `-march=armv8-a+sve`).
+- With `CodegenOptions::sve` (AArch64 only), every function definition
+  and the global-initialization functions (`__cxx_global_var_init`,
+  `_GLOBAL__sub_I_*`, `__tls_init`: `init_fn_attrs`) carry
+  `vscale_range(1,16)` (clang's `CodeGenFunction` for a target with SVE);
+  the TLS wrapper and `__clang_call_terminate`, built outside it, do not.
+  Test `ext.arm.sve/ir-target-features-sve.cpp`.
+- Not yet: SVE constants (a scalar splat into a scalable vector, the zero
+  vector of `-v` or of a vector `?:` condition) are built as fixed vectors
+  and fail IR lowering (`expr.rs` integer/float constants, `func.rs`
+  `splat`); SVE allocas use alignment 1 (clang 16, `svbool_t` 2), from
+  `kiln_abi`'s target type table.
 ## 7v. Landed (WP-456): `PseudoObjectExpr`
 
 The synthesized three-way comparison of a defaulted `operator<=>`
@@ -3275,6 +3300,43 @@ categories, compared with clang 22 and clang 19 on both targets).
   definition) and the dead D0 block clang appends to a labelled virtual
   destructor; local classes and instantiations in the incomplete-class
   walk.
+
+## 7ab. Landed (WP-466): linkage, 3-lane stores, file-scope compound literals, end-of-TU variables
+- **`const volatile` linkage** ([basic.link]/3.2; spec/sema.md): a
+  namespace-scope `const volatile` variable that is not `static` has
+  external linkage (`kiln_abi::mangle::internal_by_storage` tests
+  `const` and not `volatile`, for an array through its element type), so
+  it is a mangled `dso_local` definition emitted even when unused
+  (`tests/codegen/const_volatile_linkage.cpp`).
+- **3-lane ext-vector stores** (`func.rs` `vec_store`): a `<3 x T>` value
+  is widened to its `<4 x T>` storage by `shufflevector <3 x T> %v, <3 x
+  T> undef, <4 x i32> <0, 1, 2, 3>` at compat 22 (clang 22), by `... <3 x
+  T> poison, <0, 1, 2, poison>` at compat 19 (clang 19). Loads are the
+  same at both. The oracle-22 `Allow::Structure` rows of
+  `builtins_shufflevector`, `ext_vector_element`, `vector_abi` and
+  `vector_const` are gone (`tests/codegen/ext_vector3_store.cpp`).
+- **File-scope array compound literals** (spec/sema.md §5.8; clang
+  `tryEmitGlobalCompoundLiteral`): the literal's implicit static `Var`
+  (`DeclTable::compound_literal_of`) is emitted by `get_gvar` at its
+  first reference, its initializer constant first, as `@.compoundliteral`
+  (uniqued `.compoundliteral.N` on the module's one name counter;
+  `var_symbol`), `internal global`, or `internal constant` for a const
+  element type. `emit_lvalue` names the global. Alignment: the variable
+  rule at compat 22; the type alignment at compat 19, without x86-64's
+  16-byte alignment of a large array (clang 19 `getTypeAlignInChars`).
+  Clang 19 and 22 are otherwise identical
+  (`tests/codegen/file_scope_compound_literal.cpp`, both oracles).
+- **End-of-TU variable definitions** (WP-440; spec/sema-templates.md
+  §4.6 "Points of instantiation"): an implicitly instantiated variable
+  template specialization is recorded in `end_of_tu_defs` like a
+  static data member, after the instantiations its initializer requires
+  (post-order). Its global, its
+  `__cxx_global_var_init.N` and its `@llvm.global_ctors` entry follow
+  everything else in the TU, in clang's order, at both compat levels
+  (`tests/codegen/var_template_init_order.cpp`,
+  `var_template_thread_local.cpp`). `instantiated_var_def` treats any
+  variable template specialization as its own definition (one without
+  an initializer is default-initialized).
 
 ## Landed sections after WP-488: `spec/landed/codegen/`
 

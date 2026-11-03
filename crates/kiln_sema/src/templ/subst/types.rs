@@ -606,8 +606,9 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.ast.types.complex(e))
             }
             TypeView::Atomic(v) => {
+                let at = self.written(WrittenKey::Type(q), loc);
                 let v = self.ty(v, loc)?;
-                self.sema.act_on_atomic_type(v, loc).ok_or(SubstFail)
+                self.sema.act_on_atomic_type(v, at).ok_or(SubstFail)
             }
             // [temp.inst] for clang's vector types (spec/types.md §1).
             TypeView::Vector { elem, count, kind } => {

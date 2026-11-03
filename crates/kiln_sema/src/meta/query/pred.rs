@@ -232,7 +232,7 @@ impl Sema<'_, '_> {
     fn member_parent(&self, x: Reflectee) -> Option<DeclId> {
         let d = match x {
             Reflectee::BaseSpec(..) | Reflectee::FnParam(..) => return None,
-            _ => self.entity_decl(x)?,
+            _ => self.reflectee_decl(x)?,
         };
         let d = match self.kind_of(d) {
             DeclKind::EnumConstant => {
@@ -259,7 +259,7 @@ impl Sema<'_, '_> {
         if !is_class_kind(self.kind_of(c)) {
             return None;
         }
-        let d = self.entity_decl(x)?;
+        let d = self.reflectee_decl(x)?;
         let d = match self.kind_of(d) {
             DeclKind::EnumConstant => self.ast.decls.get(d).ctx()?,
             // A member of an anonymous union has its access in the union.

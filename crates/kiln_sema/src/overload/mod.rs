@@ -619,6 +619,17 @@ impl Sema<'_, '_> {
         self.ast.decls.function(m).is_some_and(|f| f.spec.has_explicit_object())
     }
 
+    /// The type of explicit object member function `m`'s explicit object
+    /// parameter; `None` for any other function.
+    pub(crate) fn explicit_object_param_type(&self, m: DeclId) -> Option<QualType> {
+        if !self.has_explicit_object(m) {
+            return None;
+        }
+        let ty = self.ast.decls.get(m).ty()?;
+        let p = *self.ast.types.proto(ty)?;
+        self.ast.types.params(&p).first().copied()
+    }
+
     /// Whether `f` is deleted, explicitly or as a defaulted special
     /// member ([dcl.fct.def.delete], [class.default.ctor]/2, ...).
     pub(crate) fn ovl_deleted(&self, f: DeclId) -> bool {

@@ -76,7 +76,7 @@ impl Sema<'_, '_> {
         match ret {
             Some(ret) if !self.ast.types.is_dependent(ret) => {
                 let ret = self.ast.types.canonical(ret);
-                Ok(self.ast.reflections.intern(Reflectee::Type(ret)))
+                Ok(self.intern_reflection(Reflectee::Type(ret), loc)?)
             }
             _ => fail(
                 loc,
@@ -106,7 +106,10 @@ impl Sema<'_, '_> {
             .function(cur)
             .and_then(|data| self.ast.lists.iter::<DeclId>(data.params).nth(i as usize));
         match p {
-            Some(p) => Ok(self.ast.reflections.intern(Reflectee::Decl(self.ast.first(p)))),
+            Some(p) => {
+                let key = self.entity_decl(p);
+                Ok(self.intern_reflection(Reflectee::Decl(key), loc)?)
+            }
             None => not_param(loc),
         }
     }

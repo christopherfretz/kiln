@@ -254,13 +254,13 @@ impl Oven {
                 (0, false)
             } else if s.is_virtual {
                 let def = b.ast().definition(first).unwrap_or(first);
-                let l = b.ensure_layout(def);
-                (l.vbases.iter().find(|v| v.0 == s.class).map_or(0, |v| v.1), true)
+                let o = b.ensure_layout(def).and_then(|l| l.vbases.iter().find(|v| v.0 == s.class));
+                (o.map_or(0, |v| v.1), true)
             } else {
                 let parent = subs[s.parent.index()];
                 let pdef = b.ast().definition(parent.decl).unwrap_or(parent.decl);
                 let l = b.ensure_layout(pdef);
-                let o = l.bases.iter().find(|v| v.0 == s.class).map_or(0, |v| v.1);
+                let o = l.and_then(|l| l.bases.iter().find(|v| v.0 == s.class)).map_or(0, |v| v.1);
                 (parent.off + o, parent.virt)
             };
             let public = i == 0 || {

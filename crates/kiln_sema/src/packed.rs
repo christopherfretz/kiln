@@ -90,7 +90,7 @@ impl Sema<'_, '_> {
         let outer = self.ast.decls.get(*chain.last()?).ctx()?;
         let outer = self.ast.definition(outer).unwrap_or(outer);
         let mut complete =
-            u64::from(kiln_abi::ensure_layout(&mut self.ast, outer, &self.abi).align);
+            u64::from(kiln_abi::ensure_layout(&mut self.ast, outer, &self.abi)?.align);
         // The object named may be more aligned than its class.
         if top_kind == ExprKind::DeclRefExpr && !top_arrow {
             let v = self.ast.exprs.decl(top);
@@ -114,7 +114,7 @@ impl Sema<'_, '_> {
                 let def = self.ast.definition(parent).unwrap_or(parent);
                 let ft = self.ast.decls.get(f).ty()?;
                 let fa = self.align_of(ft)?;
-                let pa = u64::from(kiln_abi::ensure_layout(&mut self.ast, def, &self.abi).align);
+                let pa = u64::from(kiln_abi::ensure_layout(&mut self.ast, def, &self.abi)?.align);
                 return Some(Misaligned { member: e, class: def, field: f, align: fa.min(pa) });
             }
         }

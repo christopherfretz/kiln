@@ -409,14 +409,18 @@ answers as of that point.
   probe on the member path.
 - **Incomplete classes in the Oven's type table.** A class interned while
   incomplete, or while it is being defined, is a *provisional* `Opaque`
-  slot whose layout is not computed (`ensure_layout` refuses an incomplete
-  class, → WP-471). Once the class completes, the slot is rebuilt **in
-  place**, so an `OTy` already held stays valid. No object of a
-  provisional type can exist. Today `Types::refresh` scans the provisional
-  slots at the start of every evaluation and on an `intern` hit. A sema
-  completion epoch and a provisional set make it O(1) when nothing
-  completed (→ WP-471). `define_aggregate` refreshes its target's slot
-  immediately (§6.2).
+  slot whose layout is not computed (`ensure_layout` returns `None` for
+  an incomplete class, spec/abi.md §1). Once the class completes, the
+  slot is rebuilt **in place**, so an `OTy` already held stays valid. No
+  object of a provisional type can exist. The provisional slots are a
+  hash set; `Types::refresh` runs at the start of every evaluation and on
+  an `intern` hit on a provisional slot, and does nothing unless sema's
+  class-completion epoch (`DeclArena::completion_epoch`, moved only by
+  `complete_definition`) changed since the last refresh; it then visits
+  the provisional slots in creation order, so thousands of
+  forward-declared classes cost nothing per evaluation
+  (`tests/stress/provisional-types-scale.cpp`; WP-471).
+  `define_aggregate` refreshes its target's slot immediately (§6.2).
 
 ### 3.8 Accounting
 - A reflection call is ordinary Oven work: steps, calls and bytes of the

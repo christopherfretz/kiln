@@ -8,7 +8,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{BuiltinType, FloatFormat, TypeView};
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::SemaBridge;
 
@@ -142,8 +142,13 @@ pub(crate) struct Types {
     /// member-specification): kept `Opaque` and rebuilt in place once
     /// the class is complete ([`Types::refresh`]), so pointers already
     /// naming the slot stay valid and no layout of an incomplete class
-    /// is computed or cached (WP-267).
-    provisional: Vec<OTy>,
+    /// is computed or cached (WP-267). A set: an intern hit asks for
+    /// membership.
+    provisional: FxHashSet<OTy>,
+    /// The class-completion epoch ([`kiln_ast::decl::DeclArena::completion_epoch`])
+    /// the last [`Types::refresh`] saw: no class completed since, so no
+    /// provisional slot can be rebuilt and the refresh is skipped.
+    seen_epoch: u32,
     /// The base-subobject view of each class with virtual bases: the
     /// class without its virtual bases (`nv_size`, Itanium C++ ABI 2.4),
     /// the type of a base field naming that class (P3533R2; spec/oven.md
@@ -394,7 +399,7 @@ impl Types {
     pub fn intern(&mut self, bridge: &mut dyn SemaBridge, q: QualType) -> OTy {
         let c = bridge.ast().types.canonical(q).without_quals();
         if let Some(&t) = self.map.get(&c) {
-            if !self.provisional.is_empty() && self.provisional.contains(&t) {
+            if self.provisional.contains(&t) {
                 self.upgrade(bridge, t);
             }
             return t;
@@ -667,15 +672,24 @@ impl Types {
 
     /// Rebuilds every provisional class slot whose class is now
     /// complete; called before each evaluation (a class completes
-    /// between evaluations, or inside one through a lent Oven).
+    /// between evaluations, or inside one through a lent Oven). Only
+    /// when a class completed since the last refresh (the completion
+    /// epoch moved), and then visiting only the provisional slots, in
+    /// creation order.
     pub fn refresh(&mut self, bridge: &mut dyn SemaBridge) {
-        let mut i = 0;
-        while i < self.provisional.len() {
-            let t = self.provisional[i];
-            if self.upgrade(bridge, t) {
-                continue;
+        let epoch = bridge.ast().decls.completion_epoch();
+        if epoch == self.seen_epoch || self.provisional.is_empty() {
+            self.seen_epoch = epoch;
+            return;
+        }
+        self.seen_epoch = epoch;
+        let mut slots: Vec<OTy> = self.provisional.iter().copied().collect();
+        slots.sort_unstable_by_key(|t| t.0);
+        for t in slots {
+            // An earlier upgrade may have rebuilt `t` already.
+            if self.provisional.contains(&t) {
+                self.upgrade(bridge, t);
             }
-            i += 1;
         }
     }
 
@@ -688,18 +702,27 @@ impl Types {
         if Self::incomplete(ast, d) {
             return false;
         }
-        self.provisional.retain(|&p| p != t);
+        self.provisional.remove(&t);
         self.record_into(bridge, c, d, Some(t));
         true
     }
 
-    /// Whether class `d` has no definition or is still being defined.
+    /// Whether class `d` has no definition or is still being defined
+    /// (`kiln_abi::ensure_layout` refuses it).
     fn incomplete(ast: &Ast, d: DeclId) -> bool {
         ast.definition(d).is_none_or(|def| {
             ast.decls
                 .record(def)
-                .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::BEING_DEFINED))
+                .is_none_or(|r| !r.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE))
         })
+    }
+
+    /// An `Opaque` slot for incomplete class type `c` (`slot` when one
+    /// is reserved), kept provisional until the class completes.
+    fn provisional_slot(&mut self, c: QualType, slot: Option<OTy>) -> OTy {
+        let t = slot.unwrap_or_else(|| self.simple(c, 0, 1, TyKind::Opaque));
+        self.provisional.insert(t);
+        t
     }
 
     fn record(&mut self, bridge: &mut dyn SemaBridge, c: QualType, d: DeclId) -> OTy {
@@ -717,9 +740,7 @@ impl Types {
     ) -> OTy {
         let ast = bridge.ast();
         if Self::incomplete(ast, d) {
-            let t = self.simple(c, 0, 1, TyKind::Opaque);
-            self.provisional.push(t);
-            return t;
+            return self.provisional_slot(c, slot);
         }
         let Some(def) = ast.definition(d) else {
             return self.simple(c, 0, 1, TyKind::Opaque);
@@ -763,7 +784,10 @@ impl Types {
                 (m, ast.decls.get(m).ty().unwrap_or(QualType::INT), w, mutable)
             })
             .collect();
-        let layout = bridge.ensure_layout(def);
+        let Some(layout) = bridge.ensure_layout(def) else {
+            // Unreachable: `incomplete` is `ensure_layout`'s rule.
+            return self.provisional_slot(c, slot);
+        };
         let (size, align) = (layout.size, layout.align);
         let dsize = layout.data_size;
         let offs: Vec<u64> = layout.fields.to_vec();

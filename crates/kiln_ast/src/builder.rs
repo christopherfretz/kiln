@@ -20,7 +20,7 @@ use crate::decl::{
     Access, CtorInit, DeclFlags, DeclKind, DeclMisc, DefinitionBits, EnumData, EnumeratorData,
     FieldData, FnSpec, FriendKind, FriendTarget, FunctionData, LetData, LinkageLang, Members,
     NamespaceData, NewDecl, ParamData, Payload, PayloadClass, RecordData, Redecl, ScopeData,
-    StaticAssertData, TagKind, TemplLink, TypedefData, VarData, VarEval, VarSpec,
+    StaticAssertData, TagKind, TemplLink, TypedefData, VarData, VarEval, VarSpec, VarStorage,
 };
 use crate::expr::{
     ArrayTraitExtra, BinaryOp, CastKind, CharKind, CoawaitParts, CompoundAssignExtra,
@@ -2394,7 +2394,9 @@ impl<'a> AstBuilder<'a> {
     /// prvalue. `aux` is the operand's [`Reflectee::tag`], `a` its
     /// [`Reflectee::payload`], `b` the [`crate::ids::ReflectionId`] index
     /// (0 while the operand is dependent: the expression is then
-    /// value-dependent). A type is interned as
+    /// value-dependent; also 0 when the reflection table is full, which
+    /// the caller diagnoses: a non-dependent expression whose
+    /// `reflect_value` is `None`). A type is interned as
     /// [`crate::Ast::reflection_type`] keys it; a declaration of a
     /// dependent context (a member of a class template, a local of a
     /// function template) is instantiation-dependent, so substitution
@@ -2445,7 +2447,7 @@ impl<'a> AstBuilder<'a> {
         let b = if deps.contains(ExprDeps::VALUE_INST) {
             0
         } else {
-            self.ast.reflections.intern(operand).index()
+            self.ast.reflections.intern(operand).map_or(0, crate::ids::ReflectionId::index)
         };
         let (aux, a) = (operand.tag(), operand.payload());
         let e =
@@ -3174,6 +3176,53 @@ impl<'a> AstBuilder<'a> {
             init.raw(),
             0,
         )
+    }
+
+    /// A namespace-scope array compound literal `( T[] ) { ... }` (clang
+    /// `BuildCompoundLiteralExpr` with `isFileScope`): an lvalue naming an
+    /// object of static storage duration, the implicit unnamed internal
+    /// variable of `ctx` that it returns second. The variable joins no
+    /// member list or lookup table; `init` (the `InitListExpr`) is both
+    /// the literal's and the variable's initializer.
+    pub fn file_scope_compound_literal(
+        &mut self,
+        ctx: DeclId,
+        ty: QualType,
+        init: ExprId,
+        loc: Loc,
+    ) -> (ExprId, DeclId) {
+        let payload = Payload::Var(VarData {
+            redecl: self.redecl_link(None),
+            init: Some(init),
+            spec: VarSpec::new().with_storage(VarStorage::Static),
+            eval: VarEval::default(),
+            templ: TemplLink::NONE,
+        });
+        let var = self.ast.decls.push(
+            NewDecl {
+                kind: DeclKind::Var,
+                flags: DeclFlags::IMPLICIT,
+                misc: DeclMisc::new(),
+                name: DeclName::EMPTY,
+                ctx: Some(ctx),
+                loc,
+                ty: Some(ty),
+            },
+            payload,
+        );
+        let deps = self.type_deps(ty) | self.deps(init);
+        let e = self.simple(
+            ExprKind::CompoundLiteralExpr,
+            ValueCategory::LValue,
+            deps,
+            1,
+            ty,
+            loc,
+            init.raw(),
+            var.raw(),
+        );
+        self.ast.decls.cold.compound_literal.insert(var, e).expect("fresh variable");
+        (e, var)
     }
 
     // ---------------------------------------------------------------------
