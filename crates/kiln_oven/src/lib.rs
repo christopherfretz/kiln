@@ -66,6 +66,7 @@ pub use meta::{
     AccessOp, AnnotOp, DefineOp, ExtOp, MAX_META_ARGS, MemberOp, MetaCtx, MetaError, MetaErrorKind,
     MetaOp, MetaOut, OvenFault, Purity, QueryOp, TemplOp, TraitOp, ValueOp, info_arg,
 };
+pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
 pub use stats::{EvalRecord, EvalStats, EvalTotals};
 
 use compile::{Func, Global, Site, TrapInfo};
@@ -315,6 +316,39 @@ pub trait SemaBridge {
         let _ = (op, args, out, ctx, oven);
         Err(MetaError::silent())
     }
+
+    /// The [`Shape`] the class-typed result (`param: None`) or parameter
+    /// `param` (of class type `q`) of intrinsic `op` is materialized by
+    /// (spec/reflection.md §3.5), consulted once when a call of `op` is
+    /// compiled; `Ok(None)` passes a parameter by address.
+    ///
+    /// # Errors
+    /// Why `q` cannot be the op's result or parameter (a note at the
+    /// call site).
+    fn meta_shape(
+        &mut self,
+        op: MetaOp,
+        param: Option<usize>,
+        q: QualType,
+    ) -> Result<Option<Shape>, String> {
+        let _ = (op, param, q);
+        Ok(None)
+    }
+
+    /// The `std::meta::exception` constructor a failing intrinsic throws
+    /// with (spec/reflection.md §8.2), when the class is declared;
+    /// consulted when a call of an intrinsic is compiled.
+    fn meta_exception(&mut self) -> Option<ExcCtor> {
+        None
+    }
+
+    /// The exception intrinsic `callee` (op `op`), failing at `loc` with
+    /// reason `what`, throws; `None` fails the evaluation instead (the
+    /// reason as its note).
+    fn meta_throw(&mut self, op: MetaOp, callee: DeclId, what: &str, loc: Loc) -> Option<MetaThrow> {
+        let _ = (op, callee, what, loc);
+        None
+    }
 }
 
 /// What one evaluation context runs.
@@ -429,6 +463,8 @@ pub struct Oven {
     pub(crate) ctx_depth: u32,
     /// What the nested contexts of the running one cost, inclusively.
     inner: Inner,
+    /// Reflection call sites and materialization state (spec/reflection.md §3.5).
+    pub(crate) meta: meta::materialize::MetaState,
 }
 
 /// The inclusive cost of the nested evaluations run so far by the running
@@ -488,6 +524,7 @@ impl Oven {
             virt: vm::Virt::default(),
             ctx_depth: 0,
             inner: Inner::default(),
+            meta: meta::materialize::MetaState::default(),
         }
     }
 
