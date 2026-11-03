@@ -110,7 +110,7 @@ impl Sema<'_, '_> {
     }
 
     /// The implicitly declared special members of class `r`.
-    fn implicit_bits(&self, r: DeclId) -> u8 {
+    pub(crate) fn implicit_bits(&self, r: DeclId) -> u8 {
         self.implicit_declared.get(&self.class_def(r)).copied().unwrap_or(0)
     }
 
