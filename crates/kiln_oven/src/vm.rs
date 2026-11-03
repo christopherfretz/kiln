@@ -1824,7 +1824,13 @@ impl Oven {
 
     /// A heap allocation of `elem` (`n == u64::MAX`) or `elem[n]`,
     /// zero-filled with [`new_aux::ZERO`].
-    pub(crate) fn new_alloc(&mut self, elem: OTy, n: u64, aux: u32, origin: Origin) -> Result<u64, Fault> {
+    pub(crate) fn new_alloc(
+        &mut self,
+        elem: OTy,
+        n: u64,
+        aux: u32,
+        origin: Origin,
+    ) -> Result<u64, Fault> {
         let (ty, fl) = if n == u64::MAX {
             (elem, 0)
         } else if aux & new_aux::STD != 0 {
@@ -2434,7 +2440,14 @@ impl Oven {
         })
     }
 
-    pub(crate) fn store(&mut self, raw: u64, ty: OTy, v: u128, k: u32, init: bool) -> Result<(), Fault> {
+    pub(crate) fn store(
+        &mut self,
+        raw: u64,
+        ty: OTy,
+        v: u128,
+        k: u32,
+        init: bool,
+    ) -> Result<(), Fault> {
         let info = *self.types.info(ty);
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);

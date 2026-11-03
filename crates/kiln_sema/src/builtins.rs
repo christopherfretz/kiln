@@ -2295,29 +2295,64 @@ impl Sema<'_, '_> {
     /// The `const char *` value pointing to the string literal object
     /// holding `s` (one object per content).
     pub(crate) fn srcloc_string(&mut self, s: &str) -> Option<kiln_ast::ConstValueId> {
-        let lit =
-            self.ast.strings.intern(kiln_ast::strings::StringEncoding::Ordinary, s.as_bytes());
+        self.frozen_string(s, false)
+    }
+
+    /// The `const char *` (`const char8_t *` when `u8`) value pointing to
+    /// the string literal object holding `s` (one object per content and
+    /// encoding).
+    pub(crate) fn frozen_string(&mut self, s: &str, u8: bool) -> Option<kiln_ast::ConstValueId> {
+        use kiln_ast::expr::StringKind;
+        use kiln_ast::strings::StringEncoding;
+        let (enc, lex, kind, elem) = if u8 {
+            (StringEncoding::Utf8, kiln_lex::Encoding::Utf8, StringKind::Utf8, QualType::CHAR8)
+        } else {
+            (
+                StringEncoding::Ordinary,
+                kiln_lex::Encoding::Ordinary,
+                StringKind::Ordinary,
+                QualType::CHAR,
+            )
+        };
+        let lit = self.ast.strings.intern(enc, s.as_bytes());
         let origin = if let Some(&e) = self.srcloc.strings.get(&lit) {
             e
         } else {
-            let ty = crate::literal::string_literal_type(
-                self,
-                kiln_lex::Encoding::Ordinary,
-                s.len() as u64 + 1,
-            );
-            let e = self.builder().string_literal(
-                ty,
-                kiln_ast::expr::StringKind::Ordinary,
-                lit,
-                Loc::INVALID,
-            );
+            let ty = crate::literal::string_literal_type(self, lex, s.len() as u64 + 1);
+            let e = self.builder().string_literal(ty, kind, lit, Loc::INVALID);
             self.srcloc.strings.insert(lit, e);
             e
         };
-        let ty = self.const_char_ptr(QualType::CHAR);
+        let ty = self.const_char_ptr(elem);
         let ty = self.ast.types.canonical(ty);
         let base = PtrBase::StringLit { lit, origin };
         self.ast.consts.push_scalar(Scalar::Pointer { ty, base, offset: 0, designated: None }).ok()
+    }
+
+    /// The `const std::source_location::__impl *` value of a
+    /// `source_location` for `loc` in a function named `function`
+    /// (`std::meta::source_location_of`), or `None` when `__impl` is not
+    /// declared with the shape [`Self::std_source_location_impl`] checks
+    /// (quietly: the caller materializes a null `source_location`).
+    pub(crate) fn meta_source_location(
+        &mut self,
+        loc: Loc,
+        function: &str,
+    ) -> Option<kiln_ast::ConstValueId> {
+        if self.srcloc.impl_decl.is_none() {
+            let d = self.lookup_source_location_impl()?;
+            if !self.source_location_impl_ok(d) {
+                return None;
+            }
+            self.srcloc.impl_decl = Some(d);
+        }
+        let (file, line, column) = match self.diags.sm().presumed_line_col(loc) {
+            Some(p) => (p.file_name.to_owned(), p.line, p.col),
+            None => (String::new(), 0, 0),
+        };
+        let file = self.srcloc_string(&file)?;
+        let function = self.srcloc_string(function)?;
+        self.source_location_object(file, function, line, column)
     }
 
     /// The `const std::source_location::__impl *` value pointing to the

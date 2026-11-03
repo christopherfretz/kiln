@@ -62,11 +62,11 @@ use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
 pub use failure::{EvalFailure, FailKind, Note};
+pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
 pub use meta::{
     AccessOp, AnnotOp, DefineOp, ExtOp, MAX_META_ARGS, MemberOp, MetaCtx, MetaError, MetaErrorKind,
     MetaOp, MetaOut, OvenFault, Purity, QueryOp, TemplOp, TraitOp, ValueOp, info_arg,
 };
-pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
 pub use stats::{EvalRecord, EvalStats, EvalTotals};
 
 use compile::{Func, Global, Site, TrapInfo};
@@ -345,7 +345,13 @@ pub trait SemaBridge {
     /// The exception intrinsic `callee` (op `op`), failing at `loc` with
     /// reason `what`, throws; `None` fails the evaluation instead (the
     /// reason as its note).
-    fn meta_throw(&mut self, op: MetaOp, callee: DeclId, what: &str, loc: Loc) -> Option<MetaThrow> {
+    fn meta_throw(
+        &mut self,
+        op: MetaOp,
+        callee: DeclId,
+        what: &str,
+        loc: Loc,
+    ) -> Option<MetaThrow> {
         let _ = (op, callee, what, loc);
         None
     }

@@ -190,8 +190,18 @@ fn leaves(
 /// # Errors
 /// Why the class cannot be built by the shape (for the call-site note).
 pub(crate) fn recipe(types: &Types, t: OTy, shape: Shape) -> Result<Recipe, String> {
-    if !matches!(types.kind(t), TyKind::Record { .. }) {
-        return Err("is not a class".into());
+    match types.kind(t) {
+        TyKind::Record { .. } => {}
+        // A built-in array of `info` is a range too.
+        TyKind::Array { elem, n }
+            if shape == Shape::Range && types.kind(elem) == TyKind::Reflection =>
+        {
+            return Ok(Recipe::Inline { off: 0, elem, n });
+        }
+        _ if shape == Shape::Range => {
+            return Err("is not a contiguous range of 'std::meta::info'".into());
+        }
+        _ => return Err("is not a class".into()),
     }
     let mut ls = Vec::with_capacity(MAX_LEAVES);
     leaves(types, t, 0, 0, &mut ls).map_err(str::to_owned)?;
@@ -344,6 +354,15 @@ impl Oven {
                     let origin = Origin::Heap(e, self.mem.heap_allocs as u32);
                     let aux = new_aux::ARRAY | new_aux::STD;
                     let data = self.new_alloc(elem, n as u64, aux, origin)?;
+                    // The elements are constructed (as by `construct_at`):
+                    // `std::allocator` storage begins outside its lifetime.
+                    let bytes = self.types.size(elem) * n as u64;
+                    self.mem.set_lifetime(data, bytes, true).map_err(|f| Fault::Mem {
+                        f,
+                        ak: ak::INIT,
+                        ty: elem,
+                        p: data,
+                    })?;
                     let mut q = data;
                     for i in 0..n {
                         let v = u128::from(self.meta.infos[i].bits());

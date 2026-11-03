@@ -5406,13 +5406,8 @@ impl Compiler<'_> {
             self.unsupported(e);
             return self.reg();
         }
-        let mut site = MetaSite {
-            e,
-            callee,
-            result: None,
-            ranges: [None; crate::MAX_META_ARGS],
-            exc: None,
-        };
+        let mut site =
+            MetaSite { e, callee, result: None, ranges: [None; crate::MAX_META_ARGS], exc: None };
         // The recipes, matched once per call site.
         let rty = self.ety(e);
         let is_class = |c: &Self, t: OTy| matches!(c.kind(t), TyKind::Record { .. });
@@ -5429,8 +5424,10 @@ impl Compiler<'_> {
             }
         }
         for (i, &x) in args.iter().enumerate() {
+            // Every argument is asked: a range parameter may be given a
+            // built-in array, or a value that is no range at all.
             let xt = self.ety(x);
-            if !is_class(self, xt) || bad.is_some() {
+            if bad.is_some() {
                 continue;
             }
             let q = self.ast().exprs.get(x).ty();
@@ -5512,7 +5509,10 @@ impl Compiler<'_> {
             self.konst(flag, 0);
             site.exc = Some(ExcSite { flag, what, at });
         }
-        let idx = if site.result.is_some() || site.exc.is_some() || site.ranges.iter().any(Option::is_some) {
+        let idx = if site.result.is_some()
+            || site.exc.is_some()
+            || site.ranges.iter().any(Option::is_some)
+        {
             self.o.meta.sites.push(site);
             self.o.meta.sites.len() as u32
         } else {
