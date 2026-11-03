@@ -193,8 +193,16 @@ impl Parser<'_, '_> {
                 self.s.act_explicit_spec_end();
                 return;
             }
-            if self.at_plain_tag_decl() {
+            if self.at_plain_tag_decl() || self.at_namespace_member_tag_decl() {
                 self.extraneous_empty_template_head(loc, ctx);
+                return;
+            }
+            if self.at_non_template_spec() {
+                // `template<> struct NT<int> {}` naming a non-template:
+                // the class-specifier diagnoses the template-id and
+                // declares `NT` ([temp.expl.spec]/1; clang's
+                // `err_template_spec_needs_template_parameters` recovery).
+                self.parse_spec_declaration(ctx);
                 return;
             }
             let _ = self.s.act_explicit_specialization(false, loc);
@@ -252,6 +260,45 @@ impl Parser<'_, '_> {
             || self.is_final_tok(t)
     }
 
+    /// `class-key N::...::identifier` then `{`, `:`, `;` or `final`, the
+    /// qualifier naming a namespace: a class declaration whose name is no
+    /// template-id (`template<> struct N::P {}`, [temp.expl.spec]/1). A
+    /// class qualifier (`template<> struct AI::B {}`, a member of a
+    /// specialization) is not this form.
+    fn at_namespace_member_tag_decl(&self) -> bool {
+        if !matches!(self.kw(), Some(Kw::Class | Kw::Struct | Kw::Union)) {
+            return false;
+        }
+        let i = self.pos() + 1;
+        let Some((end, _, _, _, Some(q))) = self.scan_name_qual_at(i) else { return false };
+        if (i..end).any(|j| self.tok_at(j).kind == TokKind::Punct(Punct::Less))
+            || !matches!(
+                self.s.ast.decls.get(q).kind(),
+                DeclKind::Namespace | DeclKind::TranslationUnit
+            )
+        {
+            return false;
+        }
+        let t = self.tok_at(end);
+        matches!(Self::punct_of(t), Some(Punct::LBrace | Punct::Colon | Punct::Semi))
+            || self.is_final_tok(t)
+    }
+
+    /// `class-key [N::]identifier <` where the name is no template (or
+    /// its qualifier names nothing): a template-id on a non-template,
+    /// which the class-specifier diagnoses.
+    fn at_non_template_spec(&self) -> bool {
+        if !matches!(self.kw(), Some(Kw::Class | Kw::Struct | Kw::Union)) {
+            return false;
+        }
+        let i = self.pos() + 1;
+        let Some((end, _, class, _)) = self.scan_name_at(i) else { return false };
+        !matches!(class, NameClass::TypeTemplate(_))
+            && end > i
+            && self.ident_of(self.tok_at(end - 1)).is_some()
+            && self.tok_at(end).kind == TokKind::Punct(Punct::Less)
+    }
+
     /// Every parameter of `head` failed (`template<template<class> static
     /// class TT> struct D`) before a plain class declaration: the head is
     /// an empty one, parsed as `extraneous_empty_template_head`.
@@ -280,15 +327,21 @@ impl Parser<'_, '_> {
             Some(Kw::Union) => "union",
             _ => "struct",
         };
+        // The declared name: the last component of a qualified one.
+        let end = self.scan_name_at(self.pos() + 1).map_or(self.pos() + 2, |e| e.0);
         let name = self
-            .ident_of(self.tok_at(self.pos() + 1))
+            .ident_of(self.tok_at(end.max(self.pos() + 2) - 1))
             .map_or(String::new(), |n| self.s.ast.symbols().as_str(n).to_owned());
         let d = self.s.diag(DiagId::sema_template_tag_noparams, loc).arg(key).arg(name);
-        self.emit(d);
+        self.s.extraneous_tag_head = Some(d);
         if ctx == DeclaratorContext::Member {
             self.parse_member_declaration();
         } else {
             self.parse_simple_declaration(DeclaratorContext::File, true);
+        }
+        // Not taken by a class declaration (none parsed): still reported.
+        if let Some(d) = self.s.extraneous_tag_head.take() {
+            self.emit(d);
         }
     }
 

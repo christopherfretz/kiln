@@ -28,6 +28,7 @@ use crate::declspec::{
     SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 use crate::init::Initializer;
+use crate::kind_conflict::NewKind;
 use crate::local_friend::LocalFriend;
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
@@ -3276,6 +3277,18 @@ impl Sema<'_, '_> {
             }
             p => p,
         };
+        // `template<class T> struct X; void X();` (clang's IDNS
+        // redeclaration lookup; `kind_conflict`).
+        if prev.is_none()
+            && !method
+            && !friend
+            && d.qualifier.is_none()
+            && self.templ.cur.is_none()
+            && dname.as_ident().is_some()
+        {
+            invalid_redecl |=
+                self.diagnose_template_kind_conflict(name, NewKind::Function, d.name_loc());
+        }
         let matches_member = prev.is_some_and(|p| {
             self.kind_of(p) == DeclKind::CXXMethod
                 && self.ast.decls.get(p).ty().is_some()
@@ -4511,7 +4524,11 @@ impl Sema<'_, '_> {
             None if ext || !self.in_local_scope() => self.find_prev_linkage(name, d.qualifier),
             p => p,
         };
-        let ambiguous = self.diagnose_ambiguous_qualified_var(name, d);
+        let mut ambiguous = self.diagnose_ambiguous_qualified_var(name, d);
+        // `template<class T> int V; int V;` (`kind_conflict`).
+        if prev.is_none() && !ambiguous && d.qualifier.is_none() && self.templ.cur.is_none() {
+            ambiguous = self.diagnose_template_kind_conflict(name, NewKind::Var, d.name_loc());
+        }
         // A variable declared with no type is invalid and not merged
         // (clang's `MergeVarDecl` returns at an invalid new declaration):
         // `y; y;` reports the missing type twice, no redefinition.
@@ -6067,6 +6084,7 @@ impl Sema<'_, '_> {
         fixed: Option<QualType>,
         loc: Loc,
     ) -> DeclId {
+        let extraneous_head = self.extraneous_tag_head.take().map(|d| self.emit(d)).is_some();
         if use_ == TagUse::Friend {
             return self.act_on_friend_tag(keyword, name, qualifier, scoped, fixed, loc);
         }
@@ -6076,6 +6094,10 @@ impl Sema<'_, '_> {
         let member_class_spec = self.begin_member_class_spec(name, qualifier, use_, loc);
         let head = self.tag_template_head(is_enum, qualifier, use_);
         let mut prev = None;
+        // A name of another kind (`kind_conflict`): the tag is declared
+        // anyway, invalid and hidden from lookup (clang's recovery as an
+        // anonymous tag).
+        let mut conflict = false;
         if let Some((n, nloc)) = name {
             if qualifier.is_none() && use_ != TagUse::Reference {
                 self.check_template_param_shadow(n, nloc);
@@ -6083,9 +6105,28 @@ impl Sema<'_, '_> {
             let opaque_enum = is_enum && fixed.is_some();
             let found =
                 self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc);
+            if found.is_empty() && qualifier.is_none() {
+                conflict = match use_ {
+                    TagUse::Reference if !opaque_enum => {
+                        let o = self.lookup_name(n, LookupKind::Nested).decls;
+                        self.diagnose_tag_reference_non_tag(keyword, n, &o, nloc)
+                    }
+                    TagUse::Reference => false,
+                    _ if head.is_some() => {
+                        self.diagnose_template_kind_conflict(n, NewKind::ClassTemplate, nloc)
+                    }
+                    _ => {
+                        self.diagnose_template_kind_conflict(n, NewKind::Tag, nloc)
+                            || self.diagnose_tag_typedef_conflict(n, nloc)
+                    }
+                };
+            }
             if let Some(&p) = found.last() {
                 if self.tag_matches(p, keyword) {
                     prev = Some(p);
+                    if extraneous_head && use_ != TagUse::Reference {
+                        self.diag_spec_member_not_instantiated(p, nloc);
+                    }
                 } else {
                     let msg =
                         self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
@@ -6143,13 +6184,23 @@ impl Sema<'_, '_> {
                     }
                 }
             } else if let Some(q) = qualifier {
-                self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_, head.is_some());
+                let o = match use_ {
+                    TagUse::Reference => self.lookup_qualified(q, n, LookupKind::Nested).decls,
+                    _ => Vec::new(),
+                };
+                if !self.diagnose_tag_reference_non_tag(keyword, n, &o, nloc) {
+                    self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_, head.is_some());
+                }
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
         let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
         h.lexical = Some(if qualifier.is_some() { self.ctx } else { ctx });
+        if conflict {
+            h.misc = h.misc.with_friend(FriendKind::Undeclared);
+            h.flags = h.flags.with(DeclFlags::INVALID);
+        }
         let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
         let d = if is_enum {
             let fx = fixed.map(|f| (f, self.enum_promotion(f)));
@@ -6174,12 +6225,14 @@ impl Sema<'_, '_> {
         if let Some((n, _)) = name
             && self.in_local_scope()
             && qualifier.is_none()
+            && !conflict
         {
             self.push_local(n, d);
         }
         if let Some((n, _)) = name
             && qualifier.is_none()
             && prev.is_none()
+            && !conflict
         {
             self.check_using_shadow_conflict(d, DeclName::ident(n));
         }

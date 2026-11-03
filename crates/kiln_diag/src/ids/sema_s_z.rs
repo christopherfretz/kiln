@@ -23,6 +23,8 @@ sema_sizeof_void = Extension [PointerArith] (1) "invalid application of '{0}' to
 sema_spaceship_narrowing_const = Error (2) "argument to 'operator<=>' evaluates to {0}, which cannot be narrowed to type {1}";
 sema_spaceship_narrowing_var = Error (2) "argument to 'operator<=>' cannot be narrowed from type {0} to {1}";
 sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' after instantiation";
+sema_spec_member_not_instantiated = Error (1) "specialization of member '{0}' does not specialize an instantiated member";
+sema_spec_redecl_global_scope = Error (2) "{0:class template|class template partial|variable template|variable template partial|function template} specialization of '{1}' must occur at global scope";
 sema_special_redeclared = Error (1) "{0:constructor|destructor|conversion function} cannot be redeclared";
 sema_splice_not_constant = Error (0) "splice operand must be a constant expression";
 sema_splice_not_info = Error (1) "splice operand of type {0} is not a reflection";
@@ -85,6 +87,8 @@ sema_switch_missing_default = WarningOff [SwitchDefault] (0) "'switch' missing '
 sema_switch_multiple_conversions = Error (1) "multiple conversions from switch condition type {0} to an integral or enumeration type";
 sema_switch_not_in_enum = Warning [Switch] (1) "case value not in enumerated type {0}";
 sema_switch_unreachable_default = WarningOff [CoveredSwitchDefault] (0) "default label in switch which covers all enumeration values";
+sema_tag_definition_of_typedef = Error (2) "definition of type '{0}' conflicts with {1:typedef|type alias} of the same name";
+sema_tag_reference_non_tag = Error (3) "{0:non-struct type|non-class type|non-union type|non-enum type|typedef|type alias|template|alias template|template template argument} '{1}' cannot be referenced with the '{2}' specifier";
 sema_temp_dtor_access = Error (2) "temporary of type {0} has {1:private|protected} destructor";
 sema_temp_member_ref = Error (1) "reference member {0} binds to a temporary object whose lifetime would be shorter than the lifetime of the constructed object";
 sema_temp_return_local = Error (0) "returning reference to local temporary object";

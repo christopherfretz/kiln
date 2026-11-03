@@ -1249,7 +1249,8 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `err_missing_default_ctor` for a base or member subobject
-    /// of the constructor being defined, with its notes.
+    /// of the constructor being defined, with its notes: one per
+    /// subobject ([class.base.init]/9), so not deduplicated.
     fn missing_default_ctor(&mut self, ty: QualType, class: DeclId, entity: InitEntity, loc: Loc) {
         let Some(ctor) = self.func.as_ref().map(|f| f.decl) else { return };
         let outer = self.ast.decls.get(ctor).ctx().unwrap_or(self.ast.tu);
@@ -1271,7 +1272,11 @@ impl Sema<'_, '_> {
                 .arg(self.decl_arg(class)),
         );
         let _ = loc;
-        self.emit(msg);
+        // Every base and member is reported at the constructor's name
+        // (clang's `err_missing_default_ctor` per subobject): exempt from
+        // `(id, span)` deduplication. A template's constructor is not
+        // defined twice for one instantiation, so no repeat is possible.
+        self.emit(msg.allow_duplicate());
     }
 
     /// The arguments of a call of constructor `m` with `args`: each

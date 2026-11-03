@@ -1,0 +1,183 @@
+//! Redeclarations of a name as a different kind of entity involving
+//! templates, typedefs and namespaces ([basic.scope.scope]/4,
+//! [temp.pre]/7, [dcl.type.elab]/2): clang's "redefinition of 'X' as
+//! different kind of symbol" between a class template and any other
+//! declaration of its scope, "definition of type 'X' conflicts with
+//! typedef of the same name", and "template 'X' cannot be referenced
+//! with the 'struct' specifier" (spec/sema-templates.md §3.13).
+
+use kiln_ast::DeclId;
+use kiln_ast::decl::{DeclKind, FriendKind};
+use kiln_ast::names::DeclName;
+use kiln_ast::types::TagKeyword;
+use kiln_diag::DiagId;
+use kiln_source::Loc;
+use kiln_source::symbol::Symbol;
+
+use crate::Sema;
+use crate::decl::sym_str;
+
+/// What a new declaration whose name may conflict is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum NewKind {
+    /// A class template (a primary template's declaration or definition).
+    ClassTemplate,
+    /// A non-template class or enumeration declaration or definition.
+    Tag,
+    /// A non-template variable.
+    Var,
+    /// A non-template function.
+    Function,
+}
+
+impl Sema<'_, '_> {
+    /// The declaration of the current scope a new declaration `new` of
+    /// `name` conflicts with, by kind (clang's IDNS-filtered redeclaration
+    /// lookup): a class template conflicts with anything but a class
+    /// template; a tag with a class, variable or alias template, a
+    /// concept or a namespace; a variable with any template or concept; a
+    /// function with any template but a function template (overloads).
+    /// Friends not yet declared in the scope are not found.
+    pub(crate) fn template_kind_conflict(&self, name: Symbol, new: NewKind) -> Option<DeclId> {
+        self.lookup_current_scope(name).into_iter().rev().find(|&d| {
+            if self.ast.decls.get(d).misc().friend() == FriendKind::Undeclared {
+                return false;
+            }
+            let k = self.kind_of(d);
+            let templ = matches!(
+                k,
+                DeclKind::ClassTemplate
+                    | DeclKind::VarTemplate
+                    | DeclKind::TypeAliasTemplate
+                    | DeclKind::Concept
+            );
+            match new {
+                NewKind::ClassTemplate => {
+                    k != DeclKind::ClassTemplate && self.ast.described_template(d).is_none()
+                }
+                NewKind::Tag => {
+                    templ || matches!(k, DeclKind::Namespace | DeclKind::NamespaceAlias)
+                }
+                NewKind::Var => templ || k == DeclKind::FunctionTemplate,
+                NewKind::Function => templ,
+            }
+        })
+    }
+
+    /// Reports a declaration of `name` at `loc` conflicting by kind with
+    /// one of its scope ([`Sema::template_kind_conflict`]). True when
+    /// diagnosed.
+    pub(crate) fn diagnose_template_kind_conflict(
+        &mut self,
+        name: Symbol,
+        new: NewKind,
+        loc: Loc,
+    ) -> bool {
+        let Some(p) = self.template_kind_conflict(name, new) else { return false };
+        let msg = self.diag(DiagId::sema_redefinition_different_kind, loc).arg(sym_str(self, name));
+        let msg = msg.with_note(self.diag(DiagId::note_previous_definition, self.conflict_loc(p)));
+        self.emit(msg);
+        true
+    }
+
+    /// A non-template class or enumeration declared or defined as `name`
+    /// where its scope has a typedef of that name that names no tag
+    /// `name` of the typedef's scope ([dcl.typedef]/6: clang's
+    /// `err_tag_definition_of_typedef`). True when diagnosed.
+    pub(crate) fn diagnose_tag_typedef_conflict(&mut self, name: Symbol, loc: Loc) -> bool {
+        let found = self.lookup_current_scope(name).into_iter().rev().find(|&d| {
+            matches!(self.kind_of(d), DeclKind::Typedef | DeclKind::TypeAlias)
+                && self.ast.decls.get(d).misc().friend() != FriendKind::Undeclared
+        });
+        let Some(td) = found else { return false };
+        let underlying = self.ast.decls.typedef(td).map(|t| t.underlying);
+        let tag = underlying.and_then(|u| {
+            let t = self.ast.types.canonical(u);
+            self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t))
+        });
+        if let Some(tag) = tag
+            && self.ast.decls.get(tag).name() == DeclName::ident(name)
+            && self.ast.decls.get(tag).ctx().map(|c| self.ast.redecl_context(c))
+                == self.ast.decls.get(td).ctx().map(|c| self.ast.redecl_context(c))
+        {
+            return false;
+        }
+        let alias = u32::from(self.kind_of(td) == DeclKind::TypeAlias);
+        let quoted = format!("'{}'", sym_str(self, name));
+        let note = self
+            .diag(DiagId::note_entity_declared_here, self.ast.decls.get(td).loc())
+            .arg(quoted);
+        let msg = self
+            .diag(DiagId::sema_tag_definition_of_typedef, loc)
+            .arg(sym_str(self, name))
+            .arg(alias)
+            .with_note(note);
+        self.emit(msg);
+        true
+    }
+
+    /// An elaborated-type-specifier `keyword name` whose tag lookup found
+    /// `found`, a typedef, a type alias or a template rather than a class
+    /// ([dcl.type.elab]/2: clang's `err_tag_reference_non_tag`). True when
+    /// diagnosed.
+    pub(crate) fn diagnose_tag_reference_non_tag(
+        &mut self,
+        keyword: TagKeyword,
+        name: Symbol,
+        found: &[DeclId],
+        loc: Loc,
+    ) -> bool {
+        let pick = found.iter().rev().find_map(|&d| {
+            let sel: u32 = match self.kind_of(d) {
+                DeclKind::Typedef => 4,
+                DeclKind::TypeAlias => 5,
+                DeclKind::ClassTemplate => 6,
+                DeclKind::TypeAliasTemplate => 7,
+                DeclKind::TemplateTemplateParm => 8,
+                _ => return None,
+            };
+            Some((d, sel))
+        });
+        let Some((d, sel)) = pick else { return false };
+        if sel == 8 {
+            // A template template parameter: clang's
+            // `DiagnoseTemplateParameterShadow` ([temp.local]/6).
+            self.check_template_param_shadow(name, loc);
+            return true;
+        }
+        let note = self.diag(DiagId::note_declared_at, self.conflict_loc(d));
+        let msg = self
+            .diag(DiagId::sema_tag_reference_non_tag, loc)
+            .arg(sel)
+            .arg(sym_str(self, name))
+            .arg(keyword.spelling())
+            .with_note(note);
+        self.emit(msg);
+        true
+    }
+}
+
+impl Sema<'_, '_> {
+    /// Where clang's note for `d` points: its name, or for an alias
+    /// template its `using` keyword.
+    fn conflict_loc(&self, d: DeclId) -> Loc {
+        (self.kind_of(d) == DeclKind::TypeAliasTemplate)
+            .then(|| self.ast.template_info(d).and_then(|i| i.pattern))
+            .flatten()
+            .and_then(|p| self.templ.alias_using_loc.get(&p).copied())
+            .unwrap_or_else(|| self.ast.decls.get(d).loc())
+    }
+
+    /// `template<> struct S;` naming the non-template class `prev`
+    /// ([temp.expl.spec]/1 specializes a template or a member of one):
+    /// clang's `err_spec_member_not_instantiated`, after the extraneous
+    /// `template<>` error.
+    pub(crate) fn diag_spec_member_not_instantiated(&mut self, prev: DeclId, loc: Loc) {
+        let note = self.diag(DiagId::note_specialized_decl, self.ast.decls.get(prev).loc());
+        let msg = self
+            .diag(DiagId::sema_spec_member_not_instantiated, loc)
+            .arg(self.qualified_decl_name(prev))
+            .with_note(note);
+        self.emit(msg);
+    }
+}

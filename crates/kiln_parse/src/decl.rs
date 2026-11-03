@@ -1546,7 +1546,9 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qual_loc = self.tok().span.lo;
+        let was_invalid = ds.invalid;
         let qual = self.parse_tag_qualifier(ds);
+        let qual_failed = !was_invalid && ds.invalid;
         let qualifier = qual.map(|q| q.ctx);
         if keyword != TagKeyword::Enum
             && qualifier.is_none()
@@ -1562,6 +1564,7 @@ impl Parser<'_, '_> {
         let fixed = if keyword == TagKeyword::Enum { self.parse_enum_base() } else { None };
         let is_class = keyword != TagKeyword::Enum;
         if is_class
+            && !qual_failed
             && self.at(Punct::Less)
             && let Some((n, nloc)) = name
             && let NameClass::TypeTemplate(t) = self.s.classify_name(n, qualifier)
@@ -1569,6 +1572,23 @@ impl Parser<'_, '_> {
         {
             self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, &attrs);
             return;
+        }
+        if is_class
+            && self.at(Punct::Less)
+            && let Some((n, nloc)) = name
+            && (qual_failed
+                || !matches!(self.s.classify_name(n, qualifier), NameClass::TypeTemplate(_)))
+            && let Some((close, false)) = self.skip_template_args(self.pos())
+        {
+            // `struct NT<int> {}` naming a non-template ([temp.expl.spec]/1
+            // specializes a template): clang's `err_explicit_spec_non_template`;
+            // the arguments are skipped and `NT` itself declared.
+            let what = format!("{} '{}'", keyword.spelling(), self.s.ast.symbols().as_str(n));
+            let d = self.s.diag(DiagId::sema_explicit_spec_non_template, nloc).arg(what);
+            self.emit(d);
+            while self.pos() <= close && self.tok().kind != TokKind::Eof {
+                self.bump();
+            }
         }
         let mut final_loc = None;
         if is_class && name.is_some() {

@@ -308,10 +308,24 @@ impl Sema<'_, '_> {
         {
             return true;
         }
-        if self.kind_of(tmpl) == DeclKind::FunctionTemplate {
+        let var = self.kind_of(tmpl) == DeclKind::VarTemplate;
+        let func = self.kind_of(tmpl) == DeclKind::FunctionTemplate;
+        let note =
+            self.diag(DiagId::note_explicit_spec_template_declared, self.ast.decls.get(tmpl).loc());
+        if self.kind_of(tctx) == DeclKind::TranslationUnit {
+            // A template of the global namespace: clang's
+            // `err_template_spec_redecl_global_scope`.
+            let sel = if func { 4u32 } else { u32::from(var) * 2 + u32::from(partial) };
+            let d = self
+                .diag(DiagId::sema_spec_redecl_global_scope, loc)
+                .arg(sel)
+                .arg(self.decl_name(tmpl))
+                .with_note(note);
+            self.emit(d);
+            return false;
+        }
+        if func {
             let id = DiagId::sema_function_spec_not_in_enclosing_ns;
-            let note = self
-                .diag(DiagId::note_explicit_spec_template_declared, self.ast.decls.get(tmpl).loc());
             let d = self
                 .diag(id, loc)
                 .arg(self.decl_name(tmpl))
@@ -320,15 +334,12 @@ impl Sema<'_, '_> {
             self.emit(d);
             return false;
         }
-        let var = self.kind_of(tmpl) == DeclKind::VarTemplate;
         let id = match (partial, var) {
             (true, false) => DiagId::sema_partial_spec_redecl_scope,
             (false, false) => DiagId::sema_class_spec_not_in_enclosing_ns,
             (true, true) => DiagId::sema_var_partial_spec_redecl_scope,
             (false, true) => DiagId::sema_var_spec_not_in_enclosing_ns,
         };
-        let note =
-            self.diag(DiagId::note_explicit_spec_template_declared, self.ast.decls.get(tmpl).loc());
         let d =
             self.diag(id, loc).arg(self.decl_name(tmpl)).arg(self.decl_name(tctx)).with_note(note);
         self.emit(d);
