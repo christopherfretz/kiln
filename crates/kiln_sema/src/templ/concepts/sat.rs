@@ -468,15 +468,21 @@ impl Sema<'_, '_> {
         if let Some(t) = this_ty {
             self.nsdmi_this.push((entity, t));
         }
+        let access =
+            self.inst.concepts.partial_access.filter(|&(p, _)| p == entity).map(|(_, c)| c);
         let run = |s: &mut Self| {
-            s.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
+            let saved = s.access_ctx;
+            s.access_ctx = access.or(saved);
+            let r = s.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
                 let mut sub = Substituter::new(s, levels);
                 sub.map_contexts(&pairs);
                 if let Some(f) = params_of {
                     sub.seed_function_params(f).ok()?;
                 }
                 sub.expr(e).ok()
-            })
+            });
+            s.access_ctx = saved;
+            r
         };
         // The names of a concept or a namespace-scope template's
         // constraints are looked up again from where they were written,

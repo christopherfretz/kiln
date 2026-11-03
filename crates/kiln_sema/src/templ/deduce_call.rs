@@ -622,9 +622,11 @@ impl Sema<'_, '_> {
             };
             let (p0, a0, tdf) = if decl {
                 let p0 = self.with_exc_spec(pfn, ExcSpec::None);
-                (p0, self.with_exc_spec(a, ExcSpec::None), TdfFlags::NONE)
+                (p0, self.with_exc_spec(a, ExcSpec::None), TdfFlags::TOP_LEVEL_PARAMETER_TYPE_LIST)
             } else {
-                (pfn, a, TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT)
+                let tdf = TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT
+                    .union(TdfFlags::TOP_LEVEL_PARAMETER_TYPE_LIST);
+                (pfn, a, tdf)
             };
             let r = self.deduce(p0, a0, tdf, &mut d);
             if r != Tdk::Success {

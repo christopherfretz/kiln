@@ -2246,7 +2246,11 @@ access, out-of-line declarator scope.**
   (libstdc++ shared_ptr_base.h:625, WP-332). A dependent qualifier
   (`this->B<T>::~B()`) is still `templ_unimplemented` ("a dependent
   destructor name").
-  A pseudo-destructor on a scalar or dependent object is
+  A pseudo-destructor on a scalar ([basic.types.general]/9: a pointer
+  to member included, `Sema::is_scalar`; libc++'s `std::function` of a
+  member function pointer destroys it as `__f_.~_Fp()`; test
+  `expr.prim.id.dtor/pseudo-destructor-member-pointer-run.cpp`) or
+  dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
   expression only, and the Oven does not end the object's lifetime (as

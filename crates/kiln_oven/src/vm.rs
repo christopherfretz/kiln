@@ -2992,7 +2992,8 @@ impl Oven {
                 // the union is destroyed, below) tells it from a union
                 // destroyed already (libc++'s `expected` destroys the
                 // member, then the union, then constructs it anew, WP-334).
-                Err(MemFault::Lifetime) if self.union_outlives_member(raw, ty) => {}
+                Err(MemFault::Lifetime)
+                    if self.union_outlives_member(raw, ty) || self.live_but_unions(raw, ty) => {}
                 r => {
                     r.map_err(fault)?;
                 }
@@ -3024,6 +3025,40 @@ impl Oven {
                 let off = u64::from(Ptr::decode(raw).off);
                 self.mem.unions.contains_key(&Ptr::union_key(raw, off, ty))
             }
+    }
+
+    /// Whether the class object of type `ty` at `raw` (some of whose bytes
+    /// are outside their lifetime) is within its lifetime but for the
+    /// members of its unions: it has bytes outside its unions, and every
+    /// one of them is. A union whose member's lifetime an explicit
+    /// destructor call ended has no active member, which does not end the
+    /// lifetime of the object enclosing it ([class.union.general]/2,
+    /// [basic.life]/1): libc++ 22's list nodes destroy the value in their
+    /// anonymous union, then the node itself (`__delete_node`, WP-446).
+    /// A class that is all union bytes keeps the stricter check.
+    fn live_but_unions(&self, raw: u64, ty: OTy) -> bool {
+        let info = self.types.info(ty);
+        if !info.has_union || !matches!(info.kind, TyKind::Record { union: false, .. }) {
+            return false;
+        }
+        let mut us: Vec<(u64, u64)> =
+            self.types.unions(ty).iter().map(|&(o, u)| (o, o + self.types.size(u))).collect();
+        us.sort_unstable();
+        let off = u64::from(Ptr::decode(raw).off);
+        let live = |a: u64, b: u64| {
+            self.mem.check(Ptr::with_off(raw, off + a, false), b - a, true).is_ok()
+        };
+        let (mut at, mut rest) = (0, 0);
+        for (a, b) in us.into_iter().chain([(info.size, info.size)]) {
+            if a > at {
+                if !live(at, a) {
+                    return false;
+                }
+                rest += a - at;
+            }
+            at = at.max(b);
+        }
+        rest > 0
     }
 
     /// The most derived object containing the byte at `off` of an object

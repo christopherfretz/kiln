@@ -3257,6 +3257,18 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   still lowers as the builtin. Tests:
   `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-written-first.cpp`,
   `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-implicit-first.cpp`.
+- **A function template with a builtin's name** (WP-446): a function
+  template declared at file scope with a builtin's name
+  (`template<class D, class S> void *__builtin_memmove(D*, S*, size_t)`)
+  does not redeclare the builtin and does not hide it. clang's
+  redeclaration lookup (`HandleDeclarator`'s `CreateBuiltins`) creates the
+  builtin in the translation unit first, so an unqualified (or `::`) name
+  that finds only file-scope functions and function templates, at least
+  one a template and none the builtin, also finds the lazily created
+  builtin, and overload resolution chooses: the template for an exact
+  `int*` match, the builtin for a tie ([over.match.best]/2.4). libc++
+  `copy_move_trivial.pass.cpp`. Test:
+  `tests/conformance/over.match.best/builtin-name-template.cpp`.
 - **Redeclaring a builtin** (WP-410; clang `MergeFunctionDecl`,
   `CheckEquivalentExceptionSpec`, `ActOnStartOfFunctionDef`): only a
   file-scope (translation-unit redeclaration context), non-`static`
@@ -4277,7 +4289,9 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   `kiln_ast::decl::builtin::atomic`) become an `AtomicExpr`, as clang's
   `Sema::BuildAtomicExpr`: the pointer operand is checked
   (`sema_atomic_builtin_must_be_pointer`, `_op_needs_atomic` for the c11
-  forms, `_needs_non_const_atomic`/`_pointer`, incomplete types, `_BitInt`
+  forms, `_needs_non_const_atomic`/`_pointer`, incomplete types — c11
+  pointer arithmetic needs a complete pointee, and a function pointee is not
+  incomplete, as clang's `RequireCompleteType` (WP-446) — `_BitInt`
   prohibited), the value kind per op (int / int-or-fp / int-ptr-or-fp /
   trivially copyable), value operands are converted to the value type (or
   `ptrdiff_t` for pointer arithmetic, or pointers for the generic
@@ -5244,7 +5258,11 @@ Each rule names the libc++ test it fixed and its corpus test.
   self-comparison. Operands decayed explicitly (`+a`), an array against
   a pointer, and comparisons in a template instantiation (clang checks
   the definition only; a dependent array type is not diagnosed) are not
-  affected. Tests: `expr.eq/p2865-array-comparison*.cpp`.
+  affected. Constraint satisfaction is an instantiation here (clang's
+  `inTemplateInstantiation` counts `ConstraintsCheck`;
+  `InstStack::in_instantiation_record`), so `requires(T& t) { t == t; }`
+  holds for `int[5]` (WP-446, libc++'s `equality_comparable<int[5]>`).
+  Tests: `expr.eq/p2865-array-comparison*.cpp`.
 - P0847 lambdas and P2036: spec/sema-lambda.md §2, §3.1, §4.4. P2360
   and P3176: spec/parse.md. P0963: §4.9. P2741: §4.6.
 
@@ -6828,7 +6846,9 @@ unscoped enumeration is reported (spec/oven.md "Integration").
   - A failed evaluation whose expression names (directly or through the
     initializers of the variables it names, a bounded walk) a variable
     that is invalid is silent: a `static_assert` fails without a
-    diagnostic and a `constexpr` variable's initializer is not reported
+    diagnostic, a `constexpr` variable's initializer is not reported,
+    and nor is a non-type template argument (`C<v>`, templ/args.rs;
+    `temp.arg.nontype/invalid-variable-specialization-argument.cpp`, WP-446)
     (`Sema::refers_to_invalid_var`; clang marks the `DeclRefExpr`
     error-dependent). This is what keeps one bad variable-template
     instantiation from cascading (`temp.inst/var-spec-invalid-init-silent.cpp`,
