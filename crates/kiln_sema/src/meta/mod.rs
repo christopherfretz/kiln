@@ -7,8 +7,8 @@
 mod ext;
 pub(crate) mod names;
 mod query;
-mod traits;
 mod recipe;
+mod traits;
 mod value;
 
 use kiln_ast::decl::DeclKind;
