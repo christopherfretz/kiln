@@ -88,6 +88,7 @@ note_delete_conversion = Note (1) "conversion to pointer type {0}";
 note_deleted_all_const = Note (3) "{0:default constructor of|constructor inherited by} {1} is implicitly deleted because all {2:data members|data members of an anonymous union member} are const-qualified";
 note_deleted_assign_field = Note (5) "{0:copy|move} assignment operator of {1} is implicitly deleted because field {2} is of {3:reference|const-qualified} type {4}";
 note_deleted_copy_user_declared_move = Note (3) "copy {0:constructor|assignment operator} is implicitly deleted because {1} has a user-declared move {2:constructor|assignment operator}";
+note_deleted_dtor_no_operator_delete = Note (0) "virtual destructor requires an unambiguous, accessible 'operator delete'";
 note_deleted_rvalue_ref_field = Note (3) "copy constructor of {0} is implicitly deleted because field {1} is of rvalue reference type {2}";
 note_deleted_subobject = Note (6) "{0:default constructor of|copy constructor of|move constructor of|copy assignment operator of|move assignment operator of|destructor of|constructor inherited by} {1} is implicitly deleted because {2:base class|field|variant field} {3} has {4:no|a deleted|multiple|an inaccessible|a non-trivial} {5}";
 note_deleted_uninit_field = Note (5) "{0:default constructor of|constructor inherited by} {1} is implicitly deleted because field {2} of {3:reference|const-qualified} type {4} would not be initialized";

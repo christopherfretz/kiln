@@ -1327,9 +1327,20 @@ impl Cg<'_> {
         let Some(&od) = ast.decls.cold.dtor_delete.get(ast.first(d)) else {
             return err(loc, "virtual destructor without a deallocation function");
         };
+        let ty = self.class_type(rd);
+        if ast.is_destroying_operator_delete(od) {
+            // EnterDtorCleanups with a destroying operator delete: it
+            // destroys the object itself, so it alone is called, with
+            // `this` converted to its first parameter and the size of
+            // this class ([expr.delete]/7.1, [class.dtor]/16).
+            let ptr = match ast.decls.cold.dtor_delete_this.get(ast.first(d)) {
+                Some(&arg) => self.emit_scalar(arg)?,
+                None => this.v,
+            };
+            return self.emit_delete_call(od, ptr, ty, loc);
+        }
         // EnterDtorCleanups: the deallocation is a normal-and-EH cleanup
         // around the complete-object destructor call.
-        let ty = self.class_type(rd);
         self.push_cleanup(Cleanup::DtorDelete { op_delete: od, ptr: this.v, ty });
         let fty = ast.decls.get(ast.first(d)).ty().expect("destructor type");
         let (callee, fid) = self.structor_ref(d, Structor::Complete)?;

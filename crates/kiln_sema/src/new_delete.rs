@@ -492,11 +492,11 @@ impl Sema<'_, '_> {
         };
         pass_align = with_align;
         // A class's own allocation function must be accessible
-        // ([expr.new]/19; clang's `CheckAllocationAccess`).
-        if let Some(naming) = alloc.naming
-            && !self.check_member_access(op_new, naming, None, loc)
-        {
-            return self.recover_err(&kids, loc);
+        // ([expr.new]/19; clang's `CheckAllocationAccess`). As clang, an
+        // inaccessible one does not invalidate the expression, so the
+        // matching deallocation function is still checked below.
+        if let Some(naming) = alloc.naming {
+            self.check_member_access(op_new, naming, None, loc);
         }
         if self.is_deleted_fn(op_new) {
             let own = self.ast.decls.function(op_new).is_some_and(|x| x.spec.is_deleted());
@@ -544,9 +544,18 @@ impl Sema<'_, '_> {
             pass_align,
             tid.loc,
         );
-        if let Some(od) = op_delete {
+        if let Some((od, naming)) = op_delete {
+            // The deallocation function is access-checked at the
+            // new-expression too ([expr.new]/28, [class.access]/1); clang
+            // looks it up only when exceptions are enabled.
+            if self.exceptions
+                && let Some(naming) = naming
+            {
+                self.check_member_access_distinct(od, naming, loc);
+            }
             self.mark_used(od);
         }
+        let op_delete = op_delete.map(|d| d.0);
         // The initializer ([expr.new]/23).
         let style = match init {
             NewInit::None => NewInitStyle::None,
@@ -1202,13 +1211,14 @@ impl Sema<'_, '_> {
         new_params: &[QualType],
         pass_align: bool,
         loc: Loc,
-    ) -> Option<DeclId> {
+    ) -> Option<(DeclId, Option<DeclId>)> {
         let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
         let found = self.alloc_fns(elem, op, global, loc);
+        let naming = found.naming;
         if !placement {
             return self
                 .usual_delete(&found.fns, found.in_class, pass_align, true, false)
-                .map(|u| u.0);
+                .map(|u| (u.0, naming));
         }
         let vp = self.ast.types.pointer_to(QualType::VOID);
         let mut params = vec![vp];
@@ -1220,6 +1230,7 @@ impl Sema<'_, '_> {
                     && ps.iter().zip(&params).all(|(a, b)| self.ast.types.same_type(*a, *b))
             })
         })
+        .map(|f| (f, naming))
     }
 
     /// The semantic initializer of a new-expression ([expr.new]/23) and,
@@ -1672,17 +1683,56 @@ impl Sema<'_, '_> {
         if !is_virtual || self.ast.decls.cold.dtor_delete.contains(first) {
             return;
         }
-        self.declare_global_new_delete();
         let loc = self.ast.decls.get(dtor).loc();
+        let Some((op, naming)) = self.dtor_dealloc_fn(class, loc) else { return };
+        // The deallocation function is access-checked at the destructor,
+        // from the destructor ([class.dtor]/16, clang `CheckDestructor` →
+        // `FindDeallocationFunction`).
+        if let Some(naming) = naming {
+            self.check_member_access(op, naming, None, loc);
+        }
+        self.mark_function_referenced(op, loc);
+        if self.ast.is_destroying_operator_delete(op)
+            && let Some((ps, _)) = self.fn_params(op)
+            && let Some(&p0) = ps.first()
+        {
+            // A destroying operator delete is passed `this` converted to
+            // its first parameter's type ([expr.delete]/7.1; clang
+            // `getOperatorDeleteThisArg`).
+            let cls = self.tag_type(class);
+            let this_ty = self.ast.types.pointer_to(cls);
+            let this = self.builder().this_expr(this_ty, true, loc);
+            if let Ok(arg) = conv::implicit_convert(self, this, p0, ConvCtx::Argument) {
+                let _ = self.ast.decls.cold.dtor_delete_this.insert(first, arg);
+            }
+        }
+        let op = self.ast.latest(op);
+        let _ = self.ast.decls.cold.dtor_delete.insert(first, op);
+    }
+
+    /// The deallocation function the deleting destructor of class
+    /// `class` calls and the class naming it (`None` for a global one),
+    /// looked up from the class scope ([class.dtor]/16). `None` when
+    /// class-scope lookup finds no usual deallocation function.
+    fn dtor_dealloc_fn(&mut self, class: DeclId, loc: Loc) -> Option<(DeclId, Option<DeclId>)> {
+        self.declare_global_new_delete();
         let ty = self.tag_type(class);
         let align = crate::target::size_align(&self.ast, ty, &self.abi).map_or(1, |(_, a)| a);
         let aligned = align > self.abi.default_new_align;
         let found = self.alloc_fns(ty, OverloadedOperator::Delete, false, loc);
-        let usual = self.usual_delete(&found.fns, found.in_class, aligned, true, true);
-        if let Some((op, _)) = usual {
-            self.mark_function_referenced(op, loc);
-            let op = self.ast.latest(op);
-            let _ = self.ast.decls.cold.dtor_delete.insert(first, op);
+        let usual = self.usual_delete(&found.fns, found.in_class, aligned, true, true)?;
+        Some((usual.0, found.naming))
+    }
+
+    /// Whether a virtual destructor of `class` finds an unambiguous,
+    /// accessible deallocation function; one that does not is defined as
+    /// deleted ([class.dtor]/7.3).
+    pub(crate) fn virtual_dtor_delete_usable(&mut self, class: DeclId) -> bool {
+        let loc = self.ast.decls.get(class).loc();
+        match self.dtor_dealloc_fn(class, loc) {
+            None => false,
+            Some((op, Some(naming))) => self.member_accessible_from(op, naming, class),
+            Some((_, None)) => true,
         }
     }
 }

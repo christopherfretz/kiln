@@ -246,6 +246,13 @@ impl Sema<'_, '_> {
             for o in deleted {
                 msg = msg.with_note(self.overridden_note(o));
             }
+            // An implicitly deleted override is explained (clang
+            // `NoteDeletedFunction` after `err_deleted_override`).
+            if ms.is_deleted() && ms.defaulted() != kiln_ast::decl::Defaulted::No {
+                for n in self.deleted_function_notes(m, 0) {
+                    msg = msg.with_note(n);
+                }
+            }
             self.emit(msg);
             return;
         }
