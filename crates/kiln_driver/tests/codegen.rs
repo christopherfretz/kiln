@@ -430,9 +430,13 @@ fn coro_wrappers_before_passes_match_clang19() {
     let src =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/codegen/coro_await_suspend_o1.cpp");
     let src = src.to_str().unwrap();
+    // Pin the triple: clang's default spells the vendor `pc` on some x86
+    // distributions where kiln prints `unknown`.
     let mut args = vec!["-std=c++26", "-O1", "-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm"];
     if cfg!(target_arch = "aarch64") {
-        args.push("-moutline-atomics");
+        args.extend(["--target=aarch64-unknown-linux-gnu", "-moutline-atomics"]);
+    } else {
+        args.push("--target=x86_64-unknown-linux-gnu");
     }
     args.extend(["-o", "-", src]);
     let d = scratch("coro-wrappers");
