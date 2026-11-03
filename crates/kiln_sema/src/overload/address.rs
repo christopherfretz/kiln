@@ -476,15 +476,32 @@ impl Sema<'_, '_> {
                 false,
             ),
         };
+        let mut notes = self.address_failure_notes(ule, &cands, fnty, detailed, loc);
+        notes.extend(extra);
+        self.emit(notes.into_iter().fold(msg, Diag::with_note));
+        None
+    }
+
+    /// The notes of a failed resolution of the overload set `ule` with
+    /// candidates `cands` against the function type `fnty` (clang
+    /// `ComplainNoMatchesFound`): with deduction failures, the
+    /// non-template candidates in lookup order, then the failed templates
+    /// by position ([temp.deduct.funcaddr]; clang's
+    /// `DiagnoseBadDeduction`); otherwise every candidate in order. Only
+    /// a `detailed` (implicit conversion) failure explains each one.
+    fn address_failure_notes(
+        &mut self,
+        ule: ExprId,
+        cands: &[(DeclId, DeclId)],
+        fnty: QualType,
+        detailed: bool,
+        loc: Loc,
+    ) -> Vec<Diag> {
         let fn_target = detailed && self.ast.types.is_function(fnty);
         let explicit = self.ast.templates.expr_targs.get(ule).copied();
-        // clang `ComplainNoMatchesFound`: with deduction failures, the
-        // non-template candidates in lookup order, then the failed
-        // templates by position ([temp.deduct.funcaddr]; clang's
-        // `DiagnoseBadDeduction`); otherwise every candidate in order.
         let mut failed: Vec<(Loc, Diag)> = Vec::new();
         if detailed {
-            for &(d, _) in &cands {
+            for &(d, _) in cands {
                 if self.kind_of(d) == DeclKind::FunctionTemplate
                     && let Err(f) = self.deduce_funcaddr(d, explicit, fnty, loc)
                     && f.tdk != crate::templ::deduce::Tdk::Invalid
@@ -495,7 +512,7 @@ impl Sema<'_, '_> {
             }
         }
         let mut notes: Vec<Diag> = Vec::with_capacity(cands.len());
-        for &(d, _) in &cands {
+        for &(d, _) in cands {
             let tmpl = self.kind_of(d) == DeclKind::FunctionTemplate;
             if tmpl && !failed.is_empty() {
                 continue;
@@ -508,9 +525,7 @@ impl Sema<'_, '_> {
         }
         failed.sort_by_key(|&(at, _)| at);
         notes.extend(failed.into_iter().map(|(_, n)| n));
-        notes.extend(extra);
-        self.emit(notes.into_iter().fold(msg, Diag::with_note));
-        None
+        notes
     }
 
     /// A simple assignment from the overload set `e` to `to` whose
