@@ -1245,42 +1245,43 @@ impl Cg<'_> {
 /// (`strlen`, `cbrt`, `sqrt` under `-fmath-errno`) stay ordinary calls.
 pub(crate) fn lib_intrinsic_twin(ast: &Ast, d: DeclId) -> Option<u32> {
     let t = ast.decls.lib_twin(ast.first(d))?;
-    let lowered = matches!(t, id::MEMCPY | id::MEMMOVE | id::MEMSET | id::ABS | id::LABS | id::LLABS)
-        || matches!(
-            t,
-            id::FABS
-                | id::FABSF
-                | id::FABSL
-                | id::COPYSIGN
-                | id::COPYSIGNF
-                | id::COPYSIGNL
-                | id::FMAX
-                | id::FMAXF
-                | id::FMAXL
-                | id::FMIN
-                | id::FMINF
-                | id::FMINL
-                | id::CEIL
-                | id::CEILF
-                | id::CEILL
-                | id::FLOOR
-                | id::FLOORF
-                | id::FLOORL
-                | id::TRUNC
-                | id::TRUNCF
-                | id::TRUNCL
-                | id::ROUND
-                | id::ROUNDF
-                | id::ROUNDL
-                | id::RINT
-                | id::RINTF
-                | id::RINTL
-                | id::NEARBYINT
-                | id::NEARBYINTF
-                | id::NEARBYINTL
-                | id::FMA
-                | id::FMAF
-                | id::FMAL
-        );
+    let lowered =
+        matches!(t, id::MEMCPY | id::MEMMOVE | id::MEMSET | id::ABS | id::LABS | id::LLABS)
+            || matches!(
+                t,
+                id::FABS
+                    | id::FABSF
+                    | id::FABSL
+                    | id::COPYSIGN
+                    | id::COPYSIGNF
+                    | id::COPYSIGNL
+                    | id::FMAX
+                    | id::FMAXF
+                    | id::FMAXL
+                    | id::FMIN
+                    | id::FMINF
+                    | id::FMINL
+                    | id::CEIL
+                    | id::CEILF
+                    | id::CEILL
+                    | id::FLOOR
+                    | id::FLOORF
+                    | id::FLOORL
+                    | id::TRUNC
+                    | id::TRUNCF
+                    | id::TRUNCL
+                    | id::ROUND
+                    | id::ROUNDF
+                    | id::ROUNDL
+                    | id::RINT
+                    | id::RINTF
+                    | id::RINTL
+                    | id::NEARBYINT
+                    | id::NEARBYINTF
+                    | id::NEARBYINTL
+                    | id::FMA
+                    | id::FMAF
+                    | id::FMAL
+            );
     lowered.then_some(t)
 }

@@ -56,6 +56,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::MINSIZE => "minsize",
         AttrKind::NAKED => "naked",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
+        AttrKind::FORMAT => "format",
         _ => return None,
     })
 }
@@ -331,6 +332,13 @@ impl Sema<'_, '_> {
                 self.check_alloc_attr(d, node);
                 true
             }
+            AttrKind::FORMAT if !kind.is_function() => wrong(
+                self,
+                DiagId::sema_attribute_wrong_decl_type,
+                "format",
+                "Objective-C methods, blocks, and non-K&R-style functions",
+            ),
+            AttrKind::FORMAT => self.check_format_decl_attr(d, node),
             AttrKind::FLAG_ENUM | AttrKind::ENUM_EXTENSIBILITY if kind != DeclKind::Enum => {
                 let name = attr_name(&node).unwrap_or_default();
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, name, "enums")

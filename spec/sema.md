@@ -1621,9 +1621,32 @@ and returns the scope it names:
   `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
   `always_inline` with the GNU flag. Test:
   `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
-  - GNU `visibility`, `section` and `format`: `'x' attribute ignored`
-    (a written `format` is not stored; only the printf builtins' implicit
-    one is, §5.4)
+  - GNU `visibility` and `section`: `'x' attribute ignored`
+  - GNU `format(archetype, F, A)` (WP-186, clang `handleFormatAttr`, in
+    its order): exactly three arguments (`'format' attribute requires
+    exactly 3 arguments`), the archetype an identifier (`requires
+    parameter 1 to be an identifier`), `__x__` normalized; `printf`
+    (and `gnu_printf` at clang_compat >= 22), `strftime`, and `scanf`,
+    `printf0`, `strfmon`, `cmn_err`, `vcmn_err`, `zcmn_err`, `kprintf`,
+    `freebsd_kprintf`, `os_trace`, `os_log`, `NSString`, `CFString`
+    (and `gnu_scanf` at >= 22) are stored, `gcc_*diag` are accepted and
+    dropped, anything else warns `'format' attribute argument not
+    supported: X`. `F` and `A` integer constants (`requires parameter N
+    to be an integer constant`); on a function only (`only applies to
+    Objective-C methods, blocks, and non-K&R-style functions`, a
+    warning), `F` in 1..=params (+1 for an implicit object member
+    function, whose index 1 is `this`: `format attribute cannot specify
+    the implicit this argument as the format string`), parameter `F` a
+    pointer to (possibly cv) `char`/`signed char`/`unsigned char`
+    (`format argument not a string type`), a non-variadic function with
+    `A` != 0 warns `GCC requires a function with the 'format' attribute
+    to be variadic` (`-Wgcc-compat`) at the declaration, `strftime`
+    needs `A` = 0 (`strftime format attribute requires 3rd parameter to
+    be 0`), others `A` = 0 or the `...` position (`parameter 3 is out of
+    bounds`). Errors drop the attribute. Not modelled: GCC's position
+    warning on a definition (`-Wgcc-compat`). Test:
+    `tests/conformance/ext.gnu.builtins/format-attribute-written.cpp`,
+    `format-gnu-archetypes-clang22.cpp`.
 - **Argument encoding** (`Attr.a`, `Attr.b`; see spec/abi.md §3.1):
 
   | kind | `a` | `b` |
@@ -1632,7 +1655,7 @@ and returns the scope it names:
   | NODISCARD, DEPRECATED | `ExprId` of the string-literal message | — |
   | ASM_LABEL | raw `StringLitId` of the label (flags bit 1: inherited) | — |
   | BUILTIN | the builtin id (`kiln_ast::decl::builtin`; implicit, §5.4) | — |
-  | FORMAT | 0 (`printf`; implicit, §5.4) | `F \| A << 16`, one-based format and first data argument indices (`A` = 0: a `va_list`) |
+  | FORMAT | the archetype: 0 `printf`, 1 another checked-by-clang kind (not checked by kiln), 2 `strftime` (`FORMAT_*` in `vector.rs`) | `F \| A << 16`, one-based format and first data argument indices, each saturated at 0xfffe (`A` = 0: a `va_list`); flags bit 0: implicit (§5.4) |
   | MALLOC | — | — |
   | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
@@ -3060,10 +3083,14 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   records its `__builtin_` twin instead (`DeclArena::lib_twin`, WP-186),
   through which codegen lowers the calls clang lowers to intrinsics
   (`memcpy` to `llvm.memcpy`, `fabs` to `llvm.fabs`; spec/codegen.md §3,
-  "Calls"); sema and the Oven do not read it. clang's implicit `format` /
-  `alloc_size` attributes on the library names (`-Wformat*` on
-  `sprintf`) are not modelled; only the `__builtin_` printf rows carry
-  `format` (below).
+  "Calls"); sema and the Oven do not read it. The printf family
+  (`printf`, `fprintf`, `sprintf`, `snprintf`, `vprintf`, `vfprintf`,
+  `vsprintf`, `vsnprintf`; `builtin::lib_printf_format`, WP-186) gets
+  clang's implicit `format(printf, F, A)` first, unless a `format` is
+  written. `FILE` in a row's type (`P`) is the translation unit's
+  typedef, alias or (as clang's `LookupNecessaryTypesForBuiltin`) tag
+  named `FILE`. clang's implicit `alloc_size` on the library allocation
+  functions is not modelled.
 - **GCC's implicit library builtins** (WP-380, `record_gnu_lib_twin`;
   `Sema::gnu_lib_builtins`, set by the driver for `-stdlib=libstdc++`,
   the default): libstdc++'s `<cmath>` double overloads are `using
@@ -3143,12 +3170,23 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     a use is an undeclared identifier there), matching `__has_builtin` at
     each level. Folding: spec/oven.md "Builtins"; lowering:
     spec/codegen.md (`tests/conformance/c.math/f16-builtins*.cpp`).
-- **Format strings** (WP-282; `format_string.rs`, clang
-  `CheckPrintfHandler`): a call whose callee has a `format(printf, F, A)`
-  attribute with `A` > 0 and whose argument `F` is an ordinary string
-  literal (through parentheses and implicit casts, concatenation
-  included) has its conversions checked against the data arguments
-  from `A` on. Supported: `%[flags][width][.precision][l|ll|z]conv` with
+- **Format strings** (WP-282, WP-186; `format_string.rs`, clang
+  `checkFormatStringExpr` / `CheckPrintfHandler`): for a call whose
+  callee (a function or, counting `this`, a member function) has a
+  `format` attribute other than `strftime`, the format argument `F` is
+  classified through parentheses and casts: a null pointer constant,
+  `__func__`-style predefined names, a `const` variable with an
+  initializer (pointer: const pointer to const; array of const), a
+  string literal plus an offset and `&lit[n]` are literals kiln does not
+  check; an ordinary string literal is checked; a conditional operator
+  is its taken arm when the condition is a constant, else the less
+  literal of its arms; anything else is not a literal. A non-literal
+  with `A` > 0 and no data arguments warns `format string is not a
+  string literal (potentially insecure)` at the argument
+  (`-Wformat-security`; for `printf` with the note `treat the string as
+  an argument to avoid this`). For `printf` with `A` > 0 each checked
+  literal has its conversions checked against the data arguments from
+  `A` on. Supported: `%[flags][width][.precision][l|ll|z]conv` with
   flags `-+ #0`, width/precision digits or `*`, and `conv` one of `d i u
   o x X c s p f F e E g G a A` (`c s p` and the floating ones without a
   length). The specified type is `int`/`long`/`long long` (`d i c`),
@@ -3168,15 +3206,28 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     walk stops (`-Wformat`);
   - `more '%' conversions than data arguments` at the conversion
     character, then the walk stops (`-Wformat-insufficient-args`);
+  - `incomplete format specifier` at the `%` when the string ends in a
+    specification, then the walk stops (`-Wformat`);
+  - `invalid conversion specifier 'c'` at the character (control
+    characters as `\xNN`) for a conversion clang rejects (the printable
+    ones in `INVALID_CONVERSIONS`, `"`, `\`, a non-positional `$`):
+    the next argument counts as used without being consumed; with none
+    left the walk stops (`-Wformat-invalid-specifier`);
   - `data argument not used by format string` at the first unused
-    argument (`-Wformat-extra-args`).
-  `-Wformat` contains the other two and is in `-Wmost`. Not checked
+    argument (`-Wformat-extra-args`): across the literals of a
+    conditional, at the latest first-unused argument of the literals
+    that completed, and not at all if one of them used every argument
+    (clang `UncoveredArgHandler`).
+  `-Wformat` contains the other four and is in `-Wmost`. Not checked
   (the whole string is skipped, where clang has a diagnostic): other
-  conversions and length modifiers (`h`, `hh`, `j`, `t`, `L`, `n`, `%q`),
-  positional arguments, an embedded NUL, an incomplete trailing `%`, a
-  missing `*` argument, wide strings, class and scoped-enumeration
-  arguments, non-literal formats (`-Wformat-security`), and
-  `-Wformat-truncation`/`-Wformat-overflow`. Dependent calls are checked
+  conversions and length modifiers (`h`, `hh`, `j`, `t`, `L`, `n`, `m`,
+  `C`, `S`, `%q`), positional arguments, `%[` / `%{`, an embedded NUL,
+  a missing `*` argument, wide strings, class and scoped-enumeration
+  arguments, the `scanf` and other archetypes, the contents of a
+  `const` variable (clang follows it, with `format string is defined
+  here`), a format parameter forwarded to a `va_list` function, and
+  `-Wformat-truncation`/`-Wformat-overflow`. Test:
+  `tests/conformance/ext.gnu.builtins/format-security-specifiers.cpp`. Dependent calls are checked
   at instantiation.
 ### 5.5 `throw` (`except.rs`)
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`

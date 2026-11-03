@@ -8816,7 +8816,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax) else {
-            let id = if gnu && matches!(n.as_str(), "visibility" | "section" | "format") {
+            let id = if gnu && matches!(n.as_str(), "visibility" | "section") {
                 DiagId::parse_attribute_ignored
             } else {
                 DiagId::parse_unknown_attribute
@@ -9261,6 +9261,74 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// GNU `format(archetype, F, A)` on function `d` (WP-186; clang
+    /// `handleFormatAttr`): `F` names a parameter (one-based, index 1 of
+    /// an implicit object member function being `this`, which cannot be
+    /// the format string) of pointer-to-character type; `A` is 0 or the
+    /// position of the `...` (a non-variadic function gets
+    /// `-Wgcc-compat`'s warning and `A` must then be one past the last
+    /// parameter); `strftime` requires `A` = 0. False drops the
+    /// attribute (after an error).
+    pub(crate) fn check_format_decl_attr(&mut self, d: DeclId, node: AttrNode) -> bool {
+        if node.flags & 1 != 0 {
+            return true;
+        }
+        let Some(proto) = self.ast.decls.get(d).ty().and_then(|t| self.ast.types.proto(t)) else {
+            return true;
+        };
+        let name = "'format'";
+        let this = u32::from(self.is_implicit_object_member(d));
+        let params = self.ast.types.params(proto).to_vec();
+        let mut num = u32::try_from(params.len()).unwrap_or(u32::MAX - 2) + this;
+        let (f, first) = (node.b & 0xffff, node.b >> 16);
+        let oob = |s: &mut Self, pos: &str| {
+            let msg =
+                s.diag(DiagId::sema_attribute_param_out_of_bounds, node.loc).arg(name).arg(pos);
+            s.emit(msg);
+            false
+        };
+        if f < 1 || f > num {
+            return oob(self, "2");
+        }
+        if this == 1 && f == 1 {
+            let msg = self.diag(DiagId::sema_format_attribute_implicit_this, node.loc);
+            self.emit(msg);
+            return false;
+        }
+        let pty = params[(f - 1 - this) as usize];
+        let t = &self.ast.types;
+        let is_char = |q: QualType| {
+            matches!(
+                t.builtin(t.canonical(q).without_quals()),
+                Some(BuiltinType::Char | BuiltinType::SChar | BuiltinType::UChar)
+            )
+        };
+        if !t.is_dependent(pty) && !(t.is_pointer(pty) && t.pointee(pty).is_some_and(is_char)) {
+            let msg = self.diag(DiagId::sema_format_attribute_not_string, node.loc);
+            self.emit(msg);
+            return false;
+        }
+        if first != 0 {
+            if proto.variadic() {
+                num += 1;
+            } else {
+                let at = self.ast.decls.get(d).loc();
+                let msg = self.diag(DiagId::sema_gcc_requires_variadic, at).arg(name);
+                self.emit(msg);
+            }
+        }
+        if node.a == crate::vector::FORMAT_STRFTIME {
+            if first != 0 {
+                let msg = self.diag(DiagId::sema_format_strftime_third_param, node.loc);
+                self.emit(msg);
+                return false;
+            }
+        } else if first != 0 && first != num {
+            return oob(self, "3");
+        }
+        true
+    }
+
     /// `#pragma pack` and other unsupported pragmas.
     pub fn act_on_unsupported_pragma(&self, what: &str, loc: Loc) {
         self.unsupported(&format!("'#pragma {what}'"), loc);
@@ -9465,6 +9533,7 @@ fn attr_kind_of(
         ("exclude_from_explicit_instantiation", _, gnu) if gnu || clang_scope => {
             AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION
         }
+        ("format", _, true) => AttrKind::FORMAT,
         _ => return None,
     })
 }

@@ -176,12 +176,19 @@ impl Sema<'_, '_> {
     fn file_type(&mut self) -> QualType {
         let name = self.intern("FILE");
         let found = self.lookup_in(self.ast.tu, name, LookupKind::Ordinary);
-        found
+        // clang `LookupNecessaryTypesForBuiltin`: any type declaration,
+        // a typedef or (WP-186) a tag such as `struct FILE;`.
+        let typedef = found
             .decls
             .iter()
-            .find(|&&d| matches!(self.kind_of(d), DeclKind::Typedef | DeclKind::TypeAlias))
-            .and_then(|&d| self.ast.decls.get(d).ty())
-            .unwrap_or(QualType::ERROR)
+            .find(|&&d| matches!(self.kind_of(d), DeclKind::Typedef | DeclKind::TypeAlias));
+        if let Some(&d) = typedef {
+            return self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+        }
+        match found.decls.iter().find(|&&d| crate::lookup::is_tag_kind(self.kind_of(d))) {
+            Some(&d) => self.tag_type(d),
+            None => QualType::ERROR,
+        }
     }
 
     /// clang's library-builtin recognition (`ActOnFunctionDeclarator`)
@@ -205,6 +212,22 @@ impl Sema<'_, '_> {
             let _ = self.ast.decls.cold.lib_twin.insert(f, twin);
         }
         let loc = self.ast.decls.get(f).loc();
+        // WP-186: the printf family's implicit `format`, first (clang
+        // order), unless one is written.
+        if let Some((fmt, first)) = builtin::lib_printf_format(info.name)
+            && !attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::FORMAT)
+        {
+            let b = u32::from(fmt) | u32::from(first) << 16;
+            let n = AttrNode {
+                kind: AttrKind::FORMAT,
+                syntax: AttrSyntax::Gnu,
+                flags: 1,
+                loc,
+                a: 0,
+                b,
+            };
+            attrs.push(self.ast.attrs.push(n));
+        }
         for (bit, kind) in [
             (builtin::attr::NOTHROW, AttrKind::NOTHROW),
             (builtin::attr::CONST, AttrKind::CONST),
