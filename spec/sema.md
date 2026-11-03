@@ -2162,6 +2162,19 @@ and returns the scope it names:
     "non-static declaration follows static" for a braceless `extern
     "C++" int v;` after `static int v;`.
     Tests: `dcl.link/language-linkage-redecl-errors.cpp`.
+- **Internal linkage from a `const` type** ([basic.link]/3.2, WP-466):
+  a namespace-scope non-template, non-inline variable that is neither
+  `extern` nor previously declared with external linkage has internal
+  linkage when its type is const-qualified and **not volatile** (for an
+  array, its element type's qualifiers, [basic.type.qualifier]/3). A
+  `const volatile int cv = 1;` (or array of them) therefore has external
+  linkage; `static`, an unnamed namespace, and a const pointer to
+  volatile (`volatile int *const p`) stay internal.
+  `kiln_abi::mangle::has_internal_linkage` (`internal_by_storage`) is
+  the single computation, shared by sema (`extern_c.rs`,
+  `unused_file_scope.rs`) and codegen. Tests:
+  `basic.link/const-volatile-external-run.cpp`,
+  `tests/codegen/const_volatile_linkage.cpp`.
 - **Redefinition through an initializer** (clang
   `AddInitializerToDecl`): a namespace-scope variable that was a
   declaration before its initializer (`extern`, or a single-line
