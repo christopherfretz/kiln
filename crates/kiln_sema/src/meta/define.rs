@@ -336,8 +336,7 @@ impl Sema<'_, '_> {
         if t.quals_bits() != 0 {
             return fail(loc, format!("'{}' is a cv-qualified class type", self.ty_str(t)));
         }
-        let first = self.ast.first(r);
-        if self.defining.iter().any(|&d| self.ast.first(d) == first) {
+        if self.defining.iter().any(|&d| self.same_entity(d, r)) {
             return fail(loc, format!("'{}' is being defined", self.ty_str(t)));
         }
         if let Some(def) = self.ast.definition(r) {
@@ -426,11 +425,7 @@ impl Sema<'_, '_> {
                 self.lend_oven(oven, |s| s.require_complete(d.ty, loc));
             }
             if !self.is_complete(d.ty)
-                || self
-                    .ast
-                    .types
-                    .as_record(d.ty)
-                    .is_some_and(|x| self.ast.first(x) == self.ast.first(r))
+                || self.ast.types.as_record(d.ty).is_some_and(|x| self.same_entity(x, r))
             {
                 return fail(
                     loc,
@@ -481,8 +476,10 @@ impl Sema<'_, '_> {
         let is_scope = |d: DeclId| {
             self.ast.decls.get(d).kind().is_function() || self.ast.decls.record(d).is_some()
         };
+        // Both chains walk the same parent links, so a shared scope is the
+        // same DeclId.
         let below = |v: &[DeclId]| {
-            v.iter().take_while(|&&x| Some(x) != common).copied().find(|&x| is_scope(x))
+            v.iter().take_while(|&&x| Some(x) != common).copied().find(|&x| is_scope(x)) // same_entity: raw ok
         };
         below(&a).or_else(|| below(&b))
     }

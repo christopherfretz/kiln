@@ -203,7 +203,8 @@ impl Oven {
         let addr = addr as u64;
         let t = self.types.lookup(plan.class).ok_or_else(MetaError::invalid)?;
         let member = |s: &Self, d: DeclId| -> Result<Leaf, MetaError> {
-            let f = s.types.fields(t).iter().find(|f| f.decl == d && !f.base);
+            // `d` is one of the options class's own field declarations.
+            let f = s.types.fields(t).iter().find(|f| f.decl == d && !f.base); // same_entity: raw ok
             let f = f.ok_or_else(MetaError::invalid)?;
             Ok(Leaf { addr: at(addr, f.offset), ty: f.ty })
         };
