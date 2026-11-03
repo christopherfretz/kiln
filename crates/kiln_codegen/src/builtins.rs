@@ -51,7 +51,7 @@ pub(crate) fn builtin_callee(ast: &Ast, e: ExprId) -> Option<(DeclId, u32)> {
 /// Whether the call `e` of a builtin is folded when it can be (clang
 /// `EmitBuiltinExpr` keeps an `EvaluateAsRValue` result that is an integer
 /// or a floating value).
-pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId) -> bool {
+pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId, compat: u32) -> bool {
     let q = ast.exprs.get(e).ty();
     // `__builtin_is_constant_evaluated()` is false outside a manifestly
     // constant-evaluated context, which a fold is not.
@@ -59,7 +59,11 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId) -> bool {
     // WP-365: the `<cmath>` builtins the Oven evaluates and clang 19 does
     // not are emitted as clang emits them.
     builtin_callee(ast, e).is_some_and(|(_, b)| {
-        b != id::IS_CONSTANT_EVALUATED && id::checked_op(b).is_none() && !clang19_unevaluated(b)
+        b != id::IS_CONSTANT_EVALUATED
+            && id::checked_op(b).is_none()
+            && !clang19_unevaluated(b)
+            // clang 20 made `abs`/`labs`/`llabs` constant (WP-432).
+            && !(compat < 22 && matches!(b, id::ABS | id::LABS | id::LLABS))
     }) && (ast.types.is_integral(q) || ast.types.is_floating(q))
 }
 
@@ -75,9 +79,6 @@ fn clang19_unevaluated(b: u32) -> bool {
                 | id::ISLESSEQUAL
                 | id::ISLESSGREATER
                 | id::ISUNORDERED
-                | id::ABS
-                | id::LABS
-                | id::LLABS
                 | id::COPYSIGNF16
                 // WP-403: clang 19 and 22 do not fold `fabsf16`.
                 | id::FABSF16
