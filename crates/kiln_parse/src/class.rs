@@ -729,7 +729,12 @@ impl Parser<'_, '_> {
         self.begin_replay(toks, end);
         self.trace(|p| format!("start_field_init({})", p.decl_name(field)));
         self.s.act_on_start_field_init(field);
-        if let Some(init) = self.parse_member_initializer(false) {
+        // clang 19's `ActOnFinishCXXInClassMemberInitializer` corrects the
+        // delayed typos before the initialization, with no filter (WP-408).
+        let typos = self.begin_typo_correction();
+        let init = self.parse_member_initializer(false);
+        self.correct_typos(typos, init.is_some());
+        if let Some(init) = init {
             self.trace(|p| format!("field_init({})", p.decl_name(field)));
             self.s.act_on_field_init(field, init);
             if !self.at_eof() {

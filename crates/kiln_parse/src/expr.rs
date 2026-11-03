@@ -186,9 +186,36 @@ impl Parser<'_, '_> {
     /// [expr.const]/16).
     pub fn parse_constant_expr(&mut self) -> PExpr {
         self.s.enter_constant_evaluated();
+        // clang 19's `ActOnConstantExpression` corrects the delayed typos
+        // of a constant-expression (a template argument) at once, with no
+        // filter (WP-408).
+        let typos = self.begin_typo_correction();
         let r = self.parse_cast_expr().and_then(|lhs| self.parse_rhs(lhs, prec::COND));
+        self.correct_typos(typos, r.is_some());
         self.s.exit_constant_evaluated(r);
         r
+    }
+
+    /// Opens a clang 19 delayed-typo correction scope (none at a later
+    /// compat level) for an expression clang 19 passes to
+    /// `CorrectDelayedTyposInExpr` with no initialization filter as soon
+    /// as it is parsed (a constant-expression, a default argument or
+    /// member initializer, an element of a braced list; spec/parse.md
+    /// "Compat-19 correction scopes", WP-408).
+    pub(crate) fn begin_typo_correction(&mut self) -> Option<usize> {
+        (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos())
+    }
+
+    /// Closes the scope [`Self::begin_typo_correction`] opened: a parsed
+    /// expression (`parsed`) has its delayed typos corrected now, even
+    /// inside an enclosing scope; a failed one leaves them to the
+    /// enclosing scope (clang corrects nothing in an `ExprError`).
+    pub(crate) fn correct_typos(&mut self, typos: Option<usize>, parsed: bool) {
+        match typos {
+            Some(m) if parsed => self.s.flush_delayed_typos(m),
+            Some(m) => self.s.end_delayed_typos(m),
+            None => {}
+        }
     }
 
     /// An expression whose operators all have precedence `min` or higher
@@ -1742,6 +1769,13 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// Whether the `<` here opens a template argument list that closes
+    /// on a whole `>`, or -- inside an enclosing template argument list
+    /// (`T<val<int>>`, [temp.names]/4) -- on the first `>` of a `>>`.
+    fn closes_assumed_template_args(&self) -> bool {
+        matches!(self.skip_template_args(self.pos()), Some((_, split)) if !split || !self.greater_is_op)
+    }
+
     /// An undeclared template-id that is not called (`(undeclared<int> * 2)`),
     /// at its `<` ([temp.names]/3.3): the name is still a template-name, so
     /// the list is its arguments (not `<`/`>` operators), and the id names
@@ -1766,10 +1800,16 @@ impl Parser<'_, '_> {
             self.emit(d);
             return None;
         }
+        if self.s.clang_compat < 22
+            && !functions
+            && let Some(kw) = self.s.template_id_keyword_typo(name, nl)
+        {
+            return self.template_id_keyword(kw, nl);
+        }
         if self.s.clang_compat < 22 {
             // clang 19: a delayed typo on an expression parsing goes on
             // around ("expected ')'" / "expected ';'" may follow).
-            return Some(self.s.act_on_undeclared_template_id_typo(name, &args, nl));
+            return Some(self.s.act_on_undeclared_template_id_typo(name, nl));
         }
         match self.s.correct_template_id_typo(name, &args, nl) {
             kiln_sema::TemplateIdTypo::Recovered(e) => return Some(e),
@@ -1798,6 +1838,29 @@ impl Parser<'_, '_> {
         // skips past it (`a[u<int>], x` skips to the `,`; WP-399).
         self.expr_invalid |= goes_on;
         goes_on.then(|| self.s.act_on_error_expr(&[], nl))
+    }
+
+    /// clang 19's re-parse of the template-id at `nl` corrected to the
+    /// keyword `kw` ([`kiln_sema::Sema::template_id_keyword_typo`]): the
+    /// keyword stands where the template-id was and is no
+    /// unqualified-id. `template` is consumed ("'template' keyword not
+    /// permitted here") and the enclosing expression goes on around an
+    /// error operand before an operator; any other keyword is left for
+    /// the enclosing construct to skip.
+    fn template_id_keyword(&mut self, kw: &str, nl: Loc) -> PExpr {
+        if kw == "template" {
+            let d = self.s.diag(DiagId::parse_unexpected_template_in_unqualified_id, nl);
+            self.emit(d);
+            self.error_here(DiagId::parse_expected_unqualified_id);
+            let goes_on = self.cur_binop().is_some();
+            self.expr_invalid |= goes_on;
+            return goes_on.then(|| self.s.act_on_error_expr(&[], nl));
+        }
+        let d = self.s.diag(DiagId::parse_expected_unqualified_id, nl);
+        self.emit(d);
+        let sym = self.s.ast.symbols().intern(kw);
+        self.inject(TokKind::Identifier(sym), nl);
+        None
     }
 
     /// A (possibly qualified) id-expression that does not name a type
@@ -1883,7 +1946,7 @@ impl Parser<'_, '_> {
         if qual.is_none()
             && self.at(Punct::Less)
             && class == NameClass::Undeclared
-            && matches!(self.skip_template_args(self.pos()), Some((_, false)))
+            && self.closes_assumed_template_args()
             && self.s.is_assumed_template_name(name)
         {
             return self.undeclared_template_id_expr(name, nl, false);
@@ -1894,7 +1957,7 @@ impl Parser<'_, '_> {
             && self.at(Punct::Less)
             && self.std >= Std::Cxx20
             && matches!(class, NameClass::Value(_))
-            && matches!(self.skip_template_args(self.pos()), Some((_, false)))
+            && self.closes_assumed_template_args()
             && self.s.is_assumed_template_name(name)
         {
             return self.undeclared_template_id_expr(name, nl, true);

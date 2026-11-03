@@ -1079,13 +1079,12 @@ impl Parser<'_, '_> {
         }
         self.s.enter_decltype();
         // clang 19's `ParseDecltypeSpecifier` corrects the operand's
-        // delayed typos as soon as it is parsed (WP-399).
-        let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
+        // delayed typos as soon as it is parsed, even inside an enclosing
+        // full-expression (WP-399, WP-408).
+        let typos = self.begin_typo_correction();
         // [temp.names]/4: inside the parentheses `>` is an operator again.
         let e = self.with_greater_op(true, Self::parse_expression);
-        if let Some(m) = typos {
-            self.s.end_delayed_typos(m);
-        }
+        self.correct_typos(typos, e.is_some());
         self.s.exit_decltype(e);
         let Some(e) = e else {
             self.skip_until(&[Punct::RParen], false, true);
@@ -2837,11 +2836,15 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::Comma, Punct::RParen], true, false);
             return;
         }
+        // clang 19 corrects a default argument's delayed typos before it
+        // converts it to the parameter type (WP-408).
+        let typos = self.begin_typo_correction();
         let init = if self.at(Punct::LBrace) {
             self.parse_init_list().ok().map(Initializer::List)
         } else {
             self.parse_assignment_expr().map(Initializer::Expr)
         };
+        self.correct_typos(typos, init.is_some());
         if let Some(init) = init {
             self.s.act_on_param_default_init(p, init);
         } else {
@@ -3113,6 +3116,16 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::Comma], true, false);
         }
         self.s.act_on_exit_declarator_scope(entered);
+        // clang 19's `AddInitializerToDecl` corrects an undeduced
+        // variable's initializer before deducing, with no filter
+        // (`decltype(auto) z = val<int>;`, WP-408).
+        let typos = match (typos, v) {
+            (Some(m), Some(v)) if self.s.has_undeduced_type(v) => {
+                self.s.flush_delayed_typos(m);
+                None
+            }
+            (t, _) => t,
+        };
         let r = self.finish_declarator_initializer(d, v, init);
         if let Some(m) = typos {
             self.s.end_delayed_typos(m);
@@ -3775,7 +3788,12 @@ impl Parser<'_, '_> {
                 valid &= ok;
                 InitValue::List(l)
             } else {
-                let Some(e) = self.parse_assignment_expr() else {
+                // clang 19's `ParseBraceInitializer` corrects each
+                // element's delayed typos as it is parsed (WP-408).
+                let typos = self.begin_typo_correction();
+                let e = self.parse_assignment_expr();
+                self.correct_typos(typos, e.is_some());
+                let Some(e) = e else {
                     self.skip_until(&[Punct::RBrace], false, true);
                     return Err(());
                 };
