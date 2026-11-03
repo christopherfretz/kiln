@@ -100,7 +100,13 @@ impl Sema<'_, '_> {
         // instantiated from the member template's pattern ([temp.mem]);
         // it is listed with the instantiated one.
         let (pattern, listed) = match matched {
-            Ok(Some(m)) => (Some(m.partial), Some(m.partial)),
+            // A partial specialization redeclared with its member
+            // template ([`Substituter::member_partial_spec`]) is defined
+            // by the original.
+            Ok(Some(m)) => (
+                Some(self.ast.templates.instantiated_from_map(m.partial).unwrap_or(m.partial)),
+                Some(m.partial),
+            ),
             Ok(None) => {
                 // The redeclaration with the initializer (one after
                 // `template<> template<class U>` defines a specialized

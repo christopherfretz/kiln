@@ -41,8 +41,10 @@ Section references in brackets are to the C++26 IS.
    `-freflection`: `__cpp_impl_reflection 202603L`; with `<meta>`,
    `__cpp_lib_reflection 202603L` and `__cpp_lib_define_static 202506L`.
    GCC 16.1 defines no separate consteval-block or annotation macro.
-   kiln predefines none of these until the corresponding surface passes
-   its tests.
+   kiln predefines `__cpp_impl_reflection` under `-freflection` at C++26
+   (WP-525: libstdc++ 16's `<meta>` is empty without it; spec/driver.md
+   "Predefines"); the library macros wait until the corresponding
+   surface passes its tests.
 6. **Extensions.** `__kiln_define_member` (§6.3) is the only one. It
    requires `-freflection` and warns under `-Wkiln-extension` (D7,
    on by default). `std::meta::name_of`, `__kiln_access_via` and the

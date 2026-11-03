@@ -1683,6 +1683,21 @@ impl Substituter<'_, '_, '_> {
         Some(matches!(r, Ok((_, true))))
     }
 
+    /// Starts `spec`'s definition with the class-key of the definition
+    /// instantiated, not of the declaration the specialization was named
+    /// through: it sets the default member and base access
+    /// ([class.access]/2).
+    fn start_instantiated_definition(&mut self, spec: DeclId, def: DeclId) {
+        if let (Some(t), Some(s)) =
+            (self.sema.ast.decls.record(def).map(|r| r.tag), self.sema.ast.decls.record(spec))
+            && s.tag != t
+            && (s.tag == TagKind::Union) == (t == TagKind::Union)
+        {
+            self.sema.ast.decls.set_instantiated_tag(spec, t);
+        }
+        self.sema.act_on_start_record_definition(spec);
+    }
+
     /// [`Substituter::class_body`]; `anonymous` for an anonymous struct
     /// or union (its `}` is followed by `;`).
     pub(crate) fn class_body_with(
@@ -1693,7 +1708,7 @@ impl Substituter<'_, '_, '_> {
         anonymous: bool,
     ) {
         let saved_entity = self.entity.replace(spec);
-        self.sema.act_on_start_record_definition(spec);
+        self.start_instantiated_definition(spec, def);
         self.class_final_and_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);
         let sub = self;
@@ -1960,6 +1975,13 @@ impl Substituter<'_, '_, '_> {
         }
         Ok(Some(match n.kind() {
             DeclKind::Field => self.field_decl(m)?,
+            // An in-class partial specialization of a member variable
+            // template, redeclared for the member template's
+            // redeclaration ([temp.spec.partial.member]).
+            DeclKind::Var if self.sema.ast.partial_spec_info(m).is_some() => {
+                self.member_partial_spec(m)?;
+                return Ok(None);
+            }
             DeclKind::Var if self.defers_init(m) => self.deferred_static_member(m)?,
             DeclKind::Var => {
                 let v = self.var_decl(m, DeclaratorContext::Member)?;

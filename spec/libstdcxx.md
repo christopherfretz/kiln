@@ -20,6 +20,7 @@ cargo xtask libstdcxx [options]
 |---|---|
 | `--std <std>` | `c++26` (default), `c++23`, `c++20` or `c++17`. Each standard has its own region of the report. |
 | `--headers <dir>` | The libstdc++ include directory to enumerate. Default: the newest `/usr/include/c++/<version>` whose name is dot-separated numbers, compared numerically (Debian's `libstdc++-N-dev` layout; `v1`, libc++'s, never matches). Both compilers still find their headers through their own `-stdlib=libstdc++` search (`spec/driver.md` "Header search"); the option only chooses what to enumerate. |
+| `--gcc-toolchain <dir>` | Passed to both compilers as `--gcc-toolchain=<dir>` (spec/driver.md "Toolchain"), so they take libstdc++ from that GCC installation; the default `--headers` becomes the newest `<dir>/include/c++/<version>`. For GCC 16.1: `--gcc-toolchain $KILN_GCC16_ROOT/usr/local` (docs/VALIDATION.md "GCC 16.1 header sweep"; WP-525). |
 | `--profile <p>` | The cargo profile the implicit build uses: `debug`, `harness` (default) or `release` (`spec/libcxx.md` "Build profiles"). |
 | `--compiler <path>` | kiln binary. Default: `cargo build --profile <p> -p kiln_driver`, then `kiln++`. The report's command names `--profile <p>`, or `--compiler <kiln++>` when this is given. |
 | `--clang <path>` | The reference compiler. Default `clang++-19`. If it cannot report a version, a warning is printed and the run continues without a reference column. |
@@ -137,7 +138,7 @@ usual clang++-19 oracle.
 ## Open questions
 
 - **GCC 15/16.** Debian ships GCC 14's libstdc++ today. M6's reference is
-  GCC 16.1; when its libstdc++ is in the sandbox, `--headers` and the
-  driver's GCC detection must agree on it.
+  GCC 16.1; `--gcc-toolchain` (WP-525) makes `--headers` and the driver's
+  GCC detection agree on an unpacked GCC 16.1 tree.
 - **Phase 2.** Driving `testsuite/**/*.cc` with their `{ dg-do run|compile }`
   markers needs the libstdc++ testsuite sources (not installed by Debian).

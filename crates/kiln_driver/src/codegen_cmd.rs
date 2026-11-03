@@ -591,6 +591,12 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     if let Some(s) = &args.sysroot {
         cmd.arg(format!("--sysroot={s}"));
     }
+    if let Some(d) = &args.gcc_toolchain {
+        cmd.arg(format!("--gcc-toolchain={d}"));
+    }
+    if let Some(d) = &args.gcc_install_dir {
+        cmd.arg(format!("--gcc-install-dir={d}"));
+    }
     if let Some(o) = &args.opt_flag {
         cmd.arg(o.clone());
     }

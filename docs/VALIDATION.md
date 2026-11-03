@@ -390,6 +390,37 @@ clang++-22 by the self-check.
   well-formed constexpr programs that print their results at runtime *and*
   `static_assert` them; both compilers must agree.
 
+### GCC 16.1 header sweep
+
+The reference workload needs GCC 16.1's libstdc++ (its `<meta>`). CI has
+no GCC 16 tree, so this sweep is run by hand. `KILN_GCC16_ROOT` is the root
+of an unpacked GCC 16.1 image: headers under
+`$KILN_GCC16_ROOT/usr/local/include/c++/16.1.0`, the installation under
+`$KILN_GCC16_ROOT/usr/local/lib/gcc/<triple>/16.1.0` (with `crtbegin.o`).
+The driver finds it with clang's `--gcc-toolchain=` (spec/driver.md
+"Toolchain"); `-freflection` predefines `__cpp_impl_reflection`, which
+`<meta>` keys on.
+
+```sh
+GCC16=--gcc-toolchain=$KILN_GCC16_ROOT/usr/local
+# the probe: one TU including every standard header the reference
+# workload uses (<algorithm> ... <vector>, <cxxabi.h>, <meta>)
+kiln++ $GCC16 -std=c++26 -freflection -fsyntax-only probe.cpp
+# the same with a main that instantiates (std::meta::is_type(^^int),
+# std::vector<int>{1}.size()), and a TU that instantiates std::format,
+# unordered_map, optional<string>, variant<int, string>, std::sort,
+# set<int> and names std::thread, under -fsyntax-only and under
+kiln++ $GCC16 -std=c++26 -freflection -S -emit-llvm tu.cpp -o tu.ll
+llvm-as-19 tu.ll -o /dev/null && llvm-as-22 tu.ll -o /dev/null
+# every public header alone, against clang++-19 on the same headers
+cargo xtask libstdcxx --gcc-toolchain $KILN_GCC16_ROOT/usr/local
+```
+
+All must be free of errors (`-ferror-limit=0` to count them); record the
+wall time and peak RSS (`/usr/bin/time -f '%e s %M KB'`) when a change
+moves them. The WP-525 baseline and result are in
+`spec/landed/driver/WP-525.md`.
+
 ## Performance tracking
 
 `cargo xtask bench` runs each entry in `bench/` and records wall-clock

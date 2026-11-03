@@ -2355,12 +2355,18 @@ impl Parser<'_, '_> {
         self.emit(diag);
     }
 
-    /// The attributes and nullability qualifiers after a `&` or `&&`
-    /// ([dcl.ref]/1; a nullability qualifier there is diagnosed by sema).
+    /// The attributes, nullability qualifiers and GNU `__restrict`s after
+    /// a `&` or `&&` ([dcl.ref]/1; a nullability qualifier there is
+    /// diagnosed by sema). `__restrict` / `__restrict__` on a reference is
+    /// a GNU extension clang accepts silently (`ParseTypeQualifierListOpt`
+    /// then `DeclaratorChunk::getReference`); kiln drops it, as it is only
+    /// an aliasing hint (spec/parse.md "GNU `__restrict` on references").
     pub(crate) fn parse_ref_quals(&mut self) -> Vec<NullSpec> {
         let mut nulls = Vec::new();
         loop {
-            if let Some(kind) = self.kw().and_then(nullability_kw) {
+            if self.at_kw(Kw::Restrict) {
+                self.bump();
+            } else if let Some(kind) = self.kw().and_then(nullability_kw) {
                 let loc = self.bump().span.lo;
                 nulls.push(NullSpec { kind, loc });
             } else if self.at_attr() {

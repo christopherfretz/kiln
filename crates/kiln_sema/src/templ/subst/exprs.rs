@@ -543,9 +543,12 @@ impl Substituter<'_, '_, '_> {
                     None => None,
                 };
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
-                Ok(self
+                self.sema.pattern_member_access = true;
+                let r = self
                     .sema
-                    .act_on_template_member_q(base, qual, name, targs, false, loc, op, arrow))
+                    .act_on_template_member_q(base, qual, name, targs, false, loc, op, arrow);
+                self.sema.pattern_member_access = false;
+                Ok(r)
             }
             ExprKind::CXXPseudoDestructorExpr => {
                 let (base, arrow, destroyed) = ex(self).pseudo_destructor(e);

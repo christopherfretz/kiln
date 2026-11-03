@@ -822,7 +822,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `__extension__ asm(...)`, WP-271); in a class or block `asm` after it
   is an error, as clang.
   `tests/conformance/ext.gnu.extension/`. Elsewhere it is a
-  decl-specifier or the unary operator.
+  decl-specifier or the unary operator. After `(`, it starts a type
+  (a cast or a parenthesized type-id) only if a decl-specifier follows
+  the `__extension__` run (clang `isCXXDeclarationSpecifier` skips it
+  and looks at the next token): `(__extension__ reinterpret_cast<T(*)[n]>(p))`
+  is a parenthesized expression (libstdc++ 16 `<bits/stl_construct.h>`;
+  WP-525, `ext.gnu.extension/extension-paren-expr.cpp`).
+- **`__restrict` on a reference declarator:** `restrict`, `__restrict`
+  and `__restrict__` after `&`/`&&` in a declarator are consumed and
+  dropped, as clang (which keeps the qualifier only on pointers and
+  diagnoses nothing for a reference; libstdc++ 16 `<cxxabi.h>`
+  `__upcast_result& __restrict`; WP-525, `dcl.ref/restrict-reference.cpp`).
 - **GNU asm labels** (`parse_asm_label`, clang's
   `ParseSimpleAsm(ForAsmLabel)`): `asm`/`__asm`/`__asm__` `(`
   string-literal... `)` after a declarator, before its attributes and

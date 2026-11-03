@@ -212,6 +212,23 @@ pub struct Toolchain {
     pub llvm_dir: String,
     /// The GCC installation, if one was found.
     pub gcc: Option<GccInstall>,
+    /// The installations the search saw, in its order (`-v`'s `Found
+    /// candidate GCC installation` lines; empty for `--gcc-install-dir`).
+    pub gcc_candidates: Vec<String>,
+}
+
+/// Where the GCC installation search looks (clang 19/22
+/// `GCCInstallationDetector::init`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GccSearch<'a> {
+    /// `<sysroot>/usr`.
+    #[default]
+    Default,
+    /// `--gcc-toolchain=<dir>`: `<dir>` is the only prefix.
+    Toolchain(&'a str),
+    /// `--gcc-install-dir=<dir>`: `<dir>` is the installation
+    /// (`.../<triple>/<version>`), if it has a `crtbegin.o`.
+    InstallDir(&'a str),
 }
 
 /// kiln's default resource directory: `$KILN_RESOURCE_DIR`, else the
@@ -252,8 +269,33 @@ impl Toolchain {
             .ok()
             .filter(|d| !d.is_empty())
             .unwrap_or_else(|| "/usr/lib/llvm-19".to_owned());
-        let gcc = detect_gcc(&sysroot, &target);
-        Toolchain { target, sysroot, resource_dir, data_dir, llvm_dir, gcc }
+        let (gcc, gcc_candidates) = detect_gcc(&format!("{sysroot}/usr"), &target);
+        Toolchain { target, sysroot, resource_dir, data_dir, llvm_dir, gcc, gcc_candidates }
+    }
+
+    /// Redoes the GCC installation search for `--gcc-toolchain=` or
+    /// `--gcc-install-dir=` (the latter wins, as in clang). `Err(dir)` when
+    /// the install directory holds no GCC installation (clang
+    /// `err_drv_invalid_gcc_install_dir`); there is then no GCC.
+    pub fn select_gcc(&mut self, search: GccSearch<'_>) -> Result<(), String> {
+        match search {
+            GccSearch::Default => {
+                (self.gcc, self.gcc_candidates) =
+                    detect_gcc(&format!("{}/usr", self.sysroot), &self.target);
+            }
+            GccSearch::Toolchain(dir) => {
+                let prefix = dir.strip_suffix('/').unwrap_or(dir);
+                (self.gcc, self.gcc_candidates) = detect_gcc(prefix, &self.target);
+            }
+            GccSearch::InstallDir(dir) => {
+                self.gcc_candidates.clear();
+                self.gcc = gcc_install_dir(dir);
+                if self.gcc.is_none() {
+                    return Err(dir.to_owned());
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The predefines base file for `std`.
@@ -357,9 +399,12 @@ impl Toolchain {
         v.push(SearchDirSpec::new(base.clone(), DirGroup::System));
         let triple_dir = format!("{inc}/{}/c++/{}", g.triple, g.version);
         let nested = format!("{base}/{}", g.triple);
+        // clang `addLibStdCXXIncludePaths`: Debian's multiarch directory if
+        // it exists, else the nested one (listed even when missing, so `-v`
+        // reports it as nonexistent).
         if Path::new(&triple_dir).is_dir() {
             v.push(SearchDirSpec::new(triple_dir, DirGroup::System));
-        } else if Path::new(&nested).is_dir() {
+        } else {
             v.push(SearchDirSpec::new(nested, DirGroup::System));
         }
         v.push(SearchDirSpec::new(format!("{base}/backward"), DirGroup::System));
@@ -438,26 +483,48 @@ impl Toolchain {
     }
 }
 
-/// The newest GCC under `<sysroot>/usr/lib/gcc/<triple>/<version>` (with a
-/// `crtbegin.o`) for the target's candidate triples.
-fn detect_gcc(sysroot: &str, target: &Target) -> Option<GccInstall> {
+/// The newest GCC under `<prefix>/{lib64,lib}/gcc/<triple>/<version>`
+/// (with a `crtbegin.o`) for the target's candidate triples, ties going to
+/// the first found, and every version directory seen, sorted (clang's
+/// `ScanLibDirForGCCTriple` over `CandidateLibDirs`; its
+/// `CandidateGCCInstallPaths` is a sorted set filled before the
+/// `crtbegin.o` check).
+fn detect_gcc(prefix: &str, target: &Target) -> (Option<GccInstall>, Vec<String>) {
     let mut best: Option<(Vec<u32>, GccInstall)> = None;
-    for triple in target.gcc_triples {
-        let dir = format!("{sysroot}/usr/lib/gcc/{triple}");
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-        for e in rd.flatten() {
-            let version = e.file_name().to_string_lossy().into_owned();
-            let Some(key) = gcc_version_key(&version) else { continue };
-            let path = format!("{dir}/{version}");
-            if !Path::new(&path).join("crtbegin.o").is_file() {
-                continue;
-            }
-            if best.as_ref().is_none_or(|(k, _)| key > *k) {
-                best = Some((key, GccInstall { path, triple: (*triple).to_owned(), version }));
+    let mut seen = std::collections::BTreeSet::new();
+    for lib in ["lib64", "lib"] {
+        for triple in target.gcc_triples {
+            let dir = format!("{prefix}/{lib}/gcc/{triple}");
+            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            for e in rd.flatten() {
+                let version = e.file_name().to_string_lossy().into_owned();
+                let Some(key) = gcc_version_key(&version) else { continue };
+                let path = format!("{dir}/{version}");
+                seen.insert(path.clone());
+                if key < vec![4, 1, 1] || !Path::new(&path).join("crtbegin.o").is_file() {
+                    continue;
+                }
+                if best.as_ref().is_none_or(|(k, _)| key > *k) {
+                    best = Some((key, GccInstall { path, triple: (*triple).to_owned(), version }));
+                }
             }
         }
     }
-    best.map(|(_, g)| g)
+    (best.map(|(_, g)| g), seen.into_iter().collect())
+}
+
+/// The installation `--gcc-install-dir=<dir>` names: `<dir>` (without a
+/// trailing `/`) if it has a `crtbegin.o`; its triple and version are the
+/// names of its parent and of itself.
+fn gcc_install_dir(dir: &str) -> Option<GccInstall> {
+    let path = dir.strip_suffix('/').unwrap_or(dir);
+    if !Path::new(path).join("crtbegin.o").is_file() {
+        return None;
+    }
+    let p = Path::new(path);
+    let version = p.file_name()?.to_string_lossy().into_owned();
+    let triple = p.parent()?.file_name()?.to_string_lossy().into_owned();
+    Some(GccInstall { path: path.to_owned(), triple, version })
 }
 
 /// The major of `<dir>/bin/llvm-config --version`, cached per directory

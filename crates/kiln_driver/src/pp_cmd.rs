@@ -142,6 +142,7 @@ impl Job<'_> {
         cfg.sized_deallocation = p.sized_deallocation.unwrap_or(true);
         cfg.kiln_version = crate::version_pair();
         cfg.clang_compat = p.clang_compat;
+        cfg.reflection = p.reflection;
         cfg.std_float_aliases =
             self.args.stdlib.unwrap_or_default() != crate::toolchain::StdLib::LibCxx;
         Some(build_predefines(&base, &cfg, &self.args.macros))
