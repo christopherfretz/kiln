@@ -8,6 +8,7 @@ sema_empty_if_body = Warning [EmptyBody] (0) "if statement has empty body";
 sema_empty_range_for_body = Warning [EmptyBody] (0) "range-based for loop has empty body";
 sema_empty_switch_body = Warning [EmptyBody] (0) "switch statement has empty body";
 sema_empty_while_body = Warning [EmptyBody] (0) "while loop has empty body";
+sema_enum_constant_in_bool_context = WarningOff [IntInBoolContext] (0) "converting the enum constant to a boolean";
 sema_enum_explicit_instantiation = Error (0) "enumerations cannot be explicitly instantiated";
 sema_enum_fixed_redecl_unfixed = Error (0) "enumeration previously declared with fixed underlying type";
 sema_enum_invalid_underlying = Error (1) "non-integral type {0} is an invalid underlying type";
@@ -170,6 +171,7 @@ sema_inline_namespace_mismatch = Error (0) "non-inline namespace cannot be reope
 sema_inline_namespace_reopened_noninline = Warning [InlineNamespaceReopenedNoninline] (0) "inline namespace reopened as a non-inline namespace";
 sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
 sema_int_literal_too_large = Error (0) "integer literal is too large to be represented in any integer type";
+sema_integer_constants_in_conditional_always_true = Warning [TautologicalConstantCompare] (0) "converting the result of '?:' with integer constants to a boolean always evaluates to 'true'";
 sema_integer_seq_integral_element_type = Error (0) "integer sequences must have integral element type";
 sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
 sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the implementation limit of {1}";
@@ -187,6 +189,12 @@ sema_invalid_storage_class_in_func_decl = Error (0) "invalid storage class speci
 sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
 sema_lambda_impcap = Error (1) "variable '{0}' cannot be implicitly captured in a lambda with no capture-default specified";
 sema_late_asm_label = Error (1) "cannot apply asm label to {0:variable|function} after its first use";
+sema_left_shift_always = Warning [TautologicalConstantCompare] (1) "converting the result of '<<' to a boolean always evaluates to {0:false|true}";
+// -fclang-compat=22; clang 19 prints the operand (`_expr`, not a `_19`
+// row: the argument counts differ).
+sema_left_shift_in_bool_context = WarningOff [IntInBoolContext] (0) "converting the result of '<<' to a boolean; did you mean to compare with '0'?";
+// clang 19 wording of `sema_left_shift_in_bool_context`.
+sema_left_shift_in_bool_context_expr = WarningOff [IntInBoolContext] (1) "converting the result of '<<' to a boolean; did you mean '({0}) != 0'?";
 sema_likelihood_if_conflict = Warning [IgnoredAttributes] (1) "conflicting attributes '{0}' are ignored";
 sema_list_init_in_parens = Error (2) "cannot initialize {0:non-class|reference} type {1} with a parenthesized initializer list";
 sema_literal_conversion = Warning [LiteralConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";

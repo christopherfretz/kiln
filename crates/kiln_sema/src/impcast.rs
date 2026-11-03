@@ -101,6 +101,9 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(src).kind() == ExprKind::GNUNullExpr {
             self.check_null_conversion(src, to, cc);
         }
+        if self.ast.types.builtin(to) == Some(BuiltinType::Bool) {
+            self.diagnose_int_in_bool_context(src);
+        }
         if self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
             return;
         }
@@ -343,7 +346,7 @@ fn representable(neg: bool, mag: u128, w: u32, signed: bool) -> bool {
 
 /// `v` truncated to a `w`-bit integer of signedness `signed` (clang's
 /// `PrettyPrintInRange`).
-fn truncate_to(v: i128, w: u32, signed: bool) -> i128 {
+pub(crate) fn truncate_to(v: i128, w: u32, signed: bool) -> i128 {
     if w == 0 || w >= 128 {
         return if w == 0 { 0 } else { v };
     }

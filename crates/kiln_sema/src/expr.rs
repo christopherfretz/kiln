@@ -2958,27 +2958,13 @@ impl Sema<'_, '_> {
     /// right operand that folds to an integer probably meant `&` / `|`.
     /// In C++ any folded value warns unless the right operand is `bool`
     /// or written by a macro; otherwise only a value other than 0 or 1.
-    /// Not for an operator spelled in a macro or in an instantiation; an
-    /// enumerator operand with a value other than 0 or 1 suppresses it
-    /// (clang's `-Wint-in-bool-context` case).
+    /// Not for an operator spelled in a macro or in an instantiation; the
+    /// caller skips it when an enumerator operand already drew
+    /// `-Wint-in-bool-context` (`diagnose_enum_constant_in_bool_context`).
     fn check_constant_logical_operand(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) {
-        let enum_not_bool = |s: &Self, e: ExprId| {
-            s.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr && {
-                let d = s.ast.exprs.decl(e);
-                s.kind_of(d) == DeclKind::EnumConstant
-                    && s.ast
-                        .decls
-                        .enumerator(d)
-                        .and_then(|x| x.value)
-                        .and_then(|v| s.const_int(v))
-                        .is_some_and(|v| v != 0 && v != 1)
-            }
-        };
         let (lt, rt) = (self.ety(l), self.ety(r));
         let int_ty = |s: &Self, t: QualType| conv::is_integral_or_unscoped_enum(s, t);
-        if enum_not_bool(self, l)
-            || enum_not_bool(self, r)
-            || !int_ty(self, lt)
+        if !int_ty(self, lt)
             || self.ast.types.builtin(lt) == Some(BuiltinType::Bool)
             || !int_ty(self, rt)
             || self.expr_is_value_dependent(r)
@@ -3060,7 +3046,9 @@ impl Sema<'_, '_> {
                 res
             }
             BinaryOp::LAnd | BinaryOp::LOr => {
-                self.check_constant_logical_operand(op, l, r, loc);
+                if !self.diagnose_enum_constant_in_bool_context(l, r, loc) {
+                    self.check_constant_logical_operand(op, l, r, loc);
+                }
                 let (Ok(l2), Ok(r2)) = (
                     conv::contextually_convert_to_bool(self, l),
                     conv::contextually_convert_to_bool(self, r),

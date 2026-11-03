@@ -4710,9 +4710,8 @@ pub mod builtin {
     /// generated clang tables, which agree).
     pub fn min_compat(id: u32) -> u32 {
         match id {
-            2035 | 2036 | FMAXIMUM_NUMF16 | FMINIMUM_NUMF16 => 22,
-            // WP-410: `sincos`, `fmaximum_num`, `fminimum_num`.
-            2039..=2047 => 22,
+            // 2039..=2047 (WP-410): `sincos`, `fmaximum_num`, `fminimum_num`.
+            2035 | 2036 | FMAXIMUM_NUMF16 | FMINIMUM_NUMF16 | 2039..=2047 => 22,
             _ => 0,
         }
     }

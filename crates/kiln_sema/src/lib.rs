@@ -46,6 +46,7 @@ mod impcast;
 mod implicit_fallthrough;
 pub mod init;
 mod init_dtor;
+mod int_in_bool;
 mod jump_scope;
 pub mod lambda;
 pub mod literal;

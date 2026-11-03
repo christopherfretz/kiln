@@ -74,11 +74,7 @@ fn unpack(kind: FloatKind, a: u128) -> Val {
     let field = a & ((1u128 << f.mfield()) - 1);
     let frac = if f.explicit { field & ((1u128 << (f.p - 1)) - 1) } else { field };
     if ef == f.emask() {
-        return if frac == 0 {
-            Val::Inf(sign)
-        } else {
-            Val::NaN(sign, frac << (129 - f.p))
-        };
+        return if frac == 0 { Val::Inf(sign) } else { Val::NaN(sign, frac << (129 - f.p)) };
     }
     let (int, e0) = if ef == 0 {
         if field == 0 {
