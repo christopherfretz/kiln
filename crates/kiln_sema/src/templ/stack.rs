@@ -90,6 +90,12 @@ pub enum FrameKind {
     /// template template parameter, the point the argument. Prints two
     /// notes: the mismatch at the argument and the parameter.
     PartialOrderingTtp,
+    /// Substituting into a lambda-expression's body while instantiating
+    /// its enclosing template (clang `LambdaExpressionSubstitution`). Not
+    /// an instantiation; the entity is the new call operator, the point
+    /// the body's `{`. Ends a SFINAE context: the body is never in the
+    /// immediate context (CWG2672, [temp.deduct.general]/9).
+    LambdaSubstitution,
 }
 
 impl FrameKind {
@@ -106,6 +112,7 @@ impl FrameKind {
                 | FrameKind::PriorArgSubstitution
                 | FrameKind::BuildingDeductionGuides
                 | FrameKind::PartialOrderingTtp
+                | FrameKind::LambdaSubstitution
         )
     }
 
@@ -141,6 +148,7 @@ impl FrameKind {
             FrameKind::BindingInit => DiagId::note_in_binding_decl_init,
             FrameKind::BuildingDeductionGuides => DiagId::note_building_deduction_guide_here,
             FrameKind::PartialOrderingTtp => DiagId::note_template_arg_template_params_mismatch,
+            FrameKind::LambdaSubstitution => DiagId::note_lambda_substitution_here,
         }
     }
 
@@ -171,6 +179,7 @@ impl FrameKind {
             FrameKind::BindingInit => "binding-init",
             FrameKind::BuildingDeductionGuides => "deduction-guides",
             FrameKind::PartialOrderingTtp => "ttp-matching",
+            FrameKind::LambdaSubstitution => "lambda",
         }
     }
 }
@@ -407,7 +416,8 @@ impl Sema<'_, '_> {
             | FrameKind::VarTemplateInstantiation
             | FrameKind::VarTemplateInit
             | FrameKind::Enum
-            | FrameKind::Nsdmi => Some(false),
+            | FrameKind::Nsdmi
+            | FrameKind::LambdaSubstitution => Some(false),
             FrameKind::DeducedArgSubstitution | FrameKind::ExplicitArgSubstitution => Some(true),
             _ => None,
         };
