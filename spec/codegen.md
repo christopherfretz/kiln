@@ -3276,6 +3276,15 @@ categories, compared with clang 22 and clang 19 on both targets).
   destructor; local classes and instantiations in the incomplete-class
   walk.
 
+## Landed sections after WP-488: `spec/landed/codegen/`
+
+From WP-488 on, a work package's Landed section is not appended here: it
+is its own file, `spec/landed/codegen/WP-NNN.md` (title line
+`# WP-NNN — <title>`, the same content as a section above), so open pull
+requests never conflict on the end of this file (spec/README.md "Landed
+sections"). They are as normative as this file; read that directory
+after the numbered Landed sections above.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33

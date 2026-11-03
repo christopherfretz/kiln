@@ -85,6 +85,12 @@ pub struct Options {
     pub pp_compare: Option<PpCompare>,
     pub report_parity: Option<PathBuf>,
     pub paths: Vec<PathBuf>,
+    /// The LLVM release for `requires: llvm` and kiln's `KILN_LLVM_DIR`
+    /// (and the default `--oracle`); `None` is
+    /// [`crate::oracle::Oracle::from_env`]. Not a flag: the harness's own
+    /// tests pin it, so their outcome does not depend on `KILN_ORACLE`
+    /// ("CI", `--oracle-only`).
+    pub toolchain: Option<crate::oracle::Oracle>,
 }
 
 impl Default for Options {
@@ -102,6 +108,7 @@ impl Default for Options {
             pp_compare: None,
             report_parity: None,
             paths: Vec::new(),
+            toolchain: None,
         }
     }
 }
@@ -192,7 +199,10 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
 pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     let start = Instant::now();
     // First, so a bad `KILN_ORACLE` fails before anything is built or run.
-    let toolchain = crate::oracle::Oracle::from_env()?;
+    let toolchain = match opts.toolchain {
+        Some(t) => t,
+        None => crate::oracle::Oracle::from_env()?,
+    };
     let root = repo_root();
     let target = target_dir(&root)?;
 
