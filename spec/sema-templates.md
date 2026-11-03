@@ -585,6 +585,14 @@ instantiation is not a definition:
   the 'template' keyword" at the `{`/`=`/`,`, and the `template` is
   ignored (a plain declaration or definition follows).
 Test `tests/conformance/temp.explicit/instantiation-with-definition.cpp`.
+After a template-id declarator-id a `(` always starts a parameter clause
+(clang `Declarator::mayBeFollowedByCXXDirectInit` is false for a
+non-identifier name; parse.md §2): `template int t<char>(1);` and
+`template<> int t<char>(1);` are function declarators. That gives
+"expected parameter declarator" and "expected ')'" at the `1`, then
+"explicit instantiation of 't' does not refer to a function template,
+…" or "no function template matches function template specialization
+'t'" (WP-406). Test `temp.explicit/template-id-paren-is-function.cpp`.
 
 **Friends.** `template<class U> friend struct B;`,
 `friend void f<>(T);` (a friend specialization), and
@@ -4320,7 +4328,28 @@ template name, then the canonical arguments with every type scoped,
 never the typedef they were written with (`'std::v<std::D<int, int>>'`
 for `std::v<_Del>`; `'std::Ptr<int *, std::D<int, int>,
 std::alloc<int>>::g'` for a member of a specialization spelled through
-the typedefs `_Del`, `_AllocT`). At the end of the TU clang instantiates
+the typedefs `_Del`, `_AllocT`). A variable template specialization in
+sema's diagnostics (`must be initialized by a constant expression`,
+`declaration of reference variable … requires an initializer`, the
+`[[deprecated]]` names) prints the same way, with trailing defaulted
+arguments dropped (`Sema::name_for_diagnostic`; clang
+`VarTemplateSpecializationDecl::getNameForDiagnostic`), even for an
+explicit specialization written with a typedef (`template<> constexpr
+int g<L *>;` is `'g<long *>'`). `declaration of variable 'au' with
+deduced type 'auto' requires an initializer` names the template, as in
+clang. Test `temp.expl.spec/variable-specialization-names.cpp`. Gap:
+the Oven's "initializer of 'v' is not a constant expression" note still
+prints the bare name (`kiln_oven/src/notes.rs`).
+A note on a deleted explicit specialization (of a function template, or
+of a member of a class template specialization) points at the
+specialization's latest declaration (`Sema::deleted_note_decl`). The
+overload candidate note says "has been implicitly deleted" there, since
+clang's candidate is not deleted as written; a direct use's note is
+"'p<int>' has been explicitly marked deleted here". A member
+specialization `template<> void C<int>::q() = delete;` is not a deleted
+redeclaration of the instantiated member. Test
+`temp.expl.spec/deleted-specialization-notes.cpp`.
+At the end of the TU clang instantiates
 the definitions a definition requires while that definition's frame is
 still open (`PerformPendingInstantiations` inside
 `InstantiateFunctionDefinition`), so their notes carry the chain

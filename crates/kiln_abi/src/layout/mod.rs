@@ -250,7 +250,7 @@ impl<'a> Layouter<'a> {
             return RecordFacts::degenerate();
         }
         // clang `getASTRecordLayout`: an invalid class (an invalid field,
-        // base or member subobject; spec/abi.md §4) has size, data size
+        // base or member subobject; spec/abi.md §1) has size, data size
         // and alignment 1, so no follow-on layout diagnostic fires.
         if self.ast.decls.get(def).has(DeclFlags::INVALID) {
             return RecordFacts::invalid(self.ast, def);

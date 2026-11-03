@@ -4,7 +4,7 @@
 // error: too many errors emitted, stopping now" (counted: "20 errors
 // generated."), and everything after it is dropped. The 19th error keeps
 // its notes. clang 22 and 19 agree.
-//@ std: c++26
+//@ expect: compile-fail
 //@ strict-diags
 //@ diag: 31:10 error "use of undeclared identifier 'undeclared0'"
 //@ diag: 32:10 error "use of undeclared identifier 'undeclared1'"

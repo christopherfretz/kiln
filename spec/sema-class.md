@@ -177,6 +177,20 @@ exception specification. The parser marks a friend definition
 the error comes once, at the definition. Test:
 `class.friend/local-friend-definition.cpp`.
 
+**Invalid classes** (WP-406; clang `ActOnFields`, `setInvalidDecl` on the
+record). A class being defined becomes invalid (`DeclFlags::INVALID` at its
+`}`) when a field is invalid (an unknown or incomplete type, a negative
+array bound or bit-field width, a `mutable` reference or const member), a
+base is invalid, a member is a duplicate, or a field's type is (an array of)
+an invalid class. An invalid anonymous struct or union declares nothing and
+leaves its enclosing class valid. Uses of the class before its `}` that need
+it complete stay quiet. An invalid class still gets its implicit special
+members, and its layout is size and alignment 1 (abi.md §1, "Total"):
+`sizeof`, `alignof` and `static_assert`s on it see 1 in sema and the Oven
+alike. A
+constant evaluation that would construct one fails without a note. Test:
+`class.mem/invalid-member-class-size.cpp`.
+
 Out-of-line member definitions (`void S::f() {}`): `act_on_declarator` with a
 qualified declarator-id looks up the name in `S` only and picks the declaration
 with the same parameter-type-list, `this_quals` and `ref_qual` (template heads:

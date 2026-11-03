@@ -255,8 +255,10 @@ impl Sema<'_, '_> {
             }
             return out;
         }
+        // An explicit specialization is noted at its own declaration.
+        let at = self.deleted_note_decl(m).0;
         vec![
-            self.diag(DiagId::note_explicitly_deleted_here, self.ast.decls.get(m).loc())
+            self.diag(DiagId::note_explicitly_deleted_here, self.ast.decls.get(at).loc())
                 .arg(self.decl_arg(m)),
         ]
     }

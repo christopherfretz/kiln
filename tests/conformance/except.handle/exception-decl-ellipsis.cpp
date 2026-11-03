@@ -2,7 +2,7 @@
 // no pack, so a `...` in it is ill-formed ("only function and template
 // parameters can be parameter packs", at the ellipsis) and its type then
 // holds an unexpanded pack (at the declarator).
-//@ std: c++26
+//@ expect: compile-fail
 //@ strict-diags
 //@ diag: 14:18 error "only function and template parameters can be parameter packs"
 //@ diag: 14:21 error "exception type contains unexpanded parameter pack 'T'"

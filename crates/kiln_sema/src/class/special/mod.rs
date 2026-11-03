@@ -388,14 +388,18 @@ impl Sema<'_, '_> {
             return;
         }
         // The declaration kiln makes for an explicit specialization's
-        // specialization (`template<> void f<int>() = delete;`) does not
-        // count (clang skips its implicit one the same way).
+        // specialization (`template<> void f<int>() = delete;`), or the
+        // instantiated member a member specialization redeclares
+        // (`template<> void C<int>::q() = delete;`), does not count
+        // (clang skips its implicit one the same way).
         if let Some(p) = self.ast.prev(f)
             && self.ast.definition(p).is_none_or(|d| d == f)
             && !(self.ast.prev(p).is_none()
-                && self.ast.spec_info(p).is_some_and(|(_, s)| {
+                && (self.ast.spec_info(p).is_some_and(|(_, s)| {
                     s.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
-                }))
+                }) || self.ast.member_spec_info(p).is_some_and(|(_, m)| {
+                    m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
+                })))
         {
             let m = self.diag(DiagId::sema_deleted_not_first, loc);
             let m = self.note_prev(m, p, false);

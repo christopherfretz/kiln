@@ -526,7 +526,7 @@ impl Sema<'_, '_> {
             }
             let def = self.ast.definition(b).unwrap_or(b);
             // clang `CheckBaseSpecifier`: "if the base class is invalid
-            // the derived class is as well" (spec/sema-class.md §2.6).
+            // the derived class is as well" (spec/sema-class.md §2.3).
             if self.ast.decls.get(def).has(kiln_ast::decl::DeclFlags::INVALID) {
                 self.invalidate_defining(r);
             }

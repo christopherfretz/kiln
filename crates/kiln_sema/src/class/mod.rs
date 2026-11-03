@@ -230,7 +230,7 @@ impl Sema<'_, '_> {
     /// empty slice when there is no base-clause. Invalid specifiers are
     /// diagnosed and dropped; one that fails clang's `CheckBaseSpecifier`
     /// (not a class, a union, incomplete, `final`, or itself invalid)
-    /// makes the class invalid (spec/sema-class.md §2.6), a duplicate or
+    /// makes the class invalid (spec/sema-class.md §2.3), a duplicate or
     /// unresolved base name does not.
     pub fn act_on_base_specifiers(&mut self, r: DeclId, specs: &[BaseSpecInfo]) {
         let _ = self.attach_bases(r, specs);

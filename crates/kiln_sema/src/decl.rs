@@ -4108,7 +4108,7 @@ impl Sema<'_, '_> {
         let f = self.builder().field(h, ty, width, flags);
         if field_invalid {
             // [class.mem]: an invalid field makes its class invalid
-            // (clang `ActOnFields`; spec/sema-class.md §2.6).
+            // (clang `ActOnFields`; spec/sema-class.md §2.3).
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
             self.invalidate_defining(ctx);
         }
@@ -5154,7 +5154,7 @@ impl Sema<'_, '_> {
             Ok(cv) => self.ast.decls.finish_eval(v, Some(cv)),
             Err(mut f) => {
                 self.ast.decls.finish_eval(v, None);
-                let name = self.decl_name(v);
+                let name = self.name_for_diagnostic(v);
                 let at = Self::fold_lone_invalid(&mut f, loc);
                 let id = if f.kind == kiln_oven::FailKind::Destruction {
                     DiagId::sema_constexpr_var_requires_const_destruction
@@ -5402,7 +5402,7 @@ impl Sema<'_, '_> {
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let ty = vn.ty().unwrap_or(QualType::ERROR);
         let loc = vn.loc();
-        let name = self.decl_name(v);
+        let name = self.name_for_diagnostic(v);
         let Some(ty) = self.ctad_uninit(v, ty, loc) else { return };
         // [temp.res.general]/6: checked when instantiated.
         if self.is_error_type(ty) || self.ast.types.is_dependent(ty) {
@@ -5416,6 +5416,9 @@ impl Sema<'_, '_> {
             if !self.inst.stack.is_empty() {
                 return;
             }
+            // clang passes the declaration's name here, not the
+            // declaration: a specialization prints without its arguments.
+            let name = self.decl_name(v);
             let msg =
                 self.diag(DiagId::sema_auto_var_requires_init, loc).arg(name).arg(self.ty_arg(ty));
             self.emit(msg);
@@ -5493,7 +5496,7 @@ impl Sema<'_, '_> {
         }
         if matches!(self.ast.types.canonical_view(ty), TypeView::IncompleteArray(_)) {
             let msg = if spec.is_constexpr() {
-                let name = self.decl_name(v);
+                let name = self.name_for_diagnostic(v);
                 self.diag(DiagId::sema_constexpr_var_non_constant, vn.loc()).arg(name)
             } else {
                 self.diag(DiagId::sema_typecheck_incomplete_array_needs_initializer, vn.loc())
@@ -6496,10 +6499,10 @@ impl Sema<'_, '_> {
 
     /// Class `r`, being defined, is invalid (clang `setInvalidDecl` on
     /// the record): an invalid field, base or member class subobject
-    /// ([class.mem]; spec/sema-class.md §2.6). Uses that need it
+    /// ([class.mem]; spec/sema-class.md §2.3). Uses that need it
     /// complete before its `}` are quiet, and at its `}` it is flagged
     /// [`DeclFlags::INVALID`], so its layout is clang's size and
-    /// alignment 1 (spec/abi.md §4).
+    /// alignment 1 (spec/abi.md §1).
     pub(crate) fn invalidate_defining(&mut self, r: DeclId) {
         if self.defining.contains(&r) {
             let _ = self.invalid_defining.insert(r);

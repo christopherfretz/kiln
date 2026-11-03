@@ -2296,6 +2296,11 @@ impl Parser<'_, '_> {
             d.invalid = true;
             return;
         };
+        // A template-id declarator-id takes no direct-initializer (clang
+        // `Declarator::mayBeFollowedByCXXDirectInit` is false for a
+        // non-identifier name): `template int v<char>(1);` is a function
+        // declarator with a bad parameter clause, as in clang.
+        d.direct_init = false;
         d.spec_id = self.s.act_on_specialization_declarator_id(t, &args, loc, r);
         if d.spec_id.is_none() {
             d.dropped = true;
@@ -2444,10 +2449,17 @@ impl Parser<'_, '_> {
                 break;
             }
             if ds.is_empty() {
-                let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("parameter declarator");
+                // clang `err_missing_param`: the clause ends here and the
+                // caller's missing `)` skips the rest; the declarator
+                // stays valid (`template int v<char>(1);` then names a
+                // function). Kept out of deduplication so that `)`, also
+                // `parse_expected` at this token, is reported too.
+                let e = self
+                    .s
+                    .diag(DiagId::parse_expected, self.loc())
+                    .arg("parameter declarator")
+                    .allow_duplicate();
                 self.emit(e);
-                self.skip_until(&[Punct::RParen], false, false);
-                d.invalid = true;
                 break;
             }
             let mut pd = Declarator::new(DeclaratorContext::Prototype, start);
