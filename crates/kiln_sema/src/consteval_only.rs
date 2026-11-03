@@ -346,6 +346,14 @@ impl Sema<'_, '_> {
         if p.spec.constexpr_kind() != ConstexprKind::None || p.spec.defaulted() != Defaulted::No {
             return;
         }
+        // Standard libraries that predate CWG3115 (libc++ 19, libstdc++
+        // 14) define non-constexpr helpers (`vector::__throw_length_error`,
+        // `ranges::__access::__begin`) that `vector<info>` instantiates; a
+        // pattern in a system header is not diagnosed (kiln extension).
+        let ploc = self.ast.decls.get(pattern).loc();
+        if self.diags.sm().is_in_system_header(ploc) {
+            return;
+        }
         let ty = |s: &Self, d: DeclId| s.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         let (fty, pty) = (ty(self, f), ty(self, pattern));
         if (self.is_consteval_only_type(fty) || self.has_consteval_only_object_param(f))
