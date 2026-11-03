@@ -3,6 +3,9 @@
 // sorted `-`), and with `sve` clang's CodeGenFunction gives each
 // definition `vscale_range(1,16)`, including the global-initialization
 // functions. spec/driver.md §Target features, spec/codegen.md §7u.
+// Host-restricted: on an x86_64 host clang 22 has no AArch64 sysroot and
+// leaves `+outline-atomics` out of the cross-compiled features.
+//@ requires: target-aarch64
 //@ requires: clang>=22
 //@ requires: llvm>=22
 //@ expect: ir
