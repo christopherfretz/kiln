@@ -64,16 +64,10 @@ impl Oven {
         let nested = |grew: u64, seen_now: u64, seen_then: u64| {
             grew.saturating_sub(seen_now.saturating_sub(seen_then))
         };
-        let own_content = nested(
-            now.content.saturating_sub(m.content),
-            self.refl_seen.content,
-            m.seen.content,
-        );
-        let own_entries = nested(
-            now.entries.saturating_sub(m.entries),
-            self.refl_seen.entries,
-            m.seen.entries,
-        );
+        let own_content =
+            nested(now.content.saturating_sub(m.content), self.refl_seen.content, m.seen.content);
+        let own_entries =
+            nested(now.entries.saturating_sub(m.entries), self.refl_seen.entries, m.seen.entries);
         self.refl_seen.content += own_content;
         self.refl_seen.entries += own_entries;
         let n = if content { own_content } else { 0 } + own_entries * REFL_ENTRY_BYTES;
