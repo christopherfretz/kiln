@@ -1,4 +1,4 @@
-//! The names family ([meta.reflection.names]; spec/reflection.md §5.2):
+//! The names family ([meta.reflection.names]; spec/reflection.md §3.9):
 //! `has_identifier`, `identifier_of`, `u8identifier_of`,
 //! `display_string_of`, `u8display_string_of` and `source_location_of`,
 //! plus the kiln test helpers of the materialization recipes
@@ -8,6 +8,9 @@
 //! Every string is a frozen string literal object, made once per
 //! reflection and kind and cached here: a call in steady state is one
 //! hash lookup and allocates nothing.
+
+// `Reflectee` grows variants (WP-472); its matches here keep a wildcard.
+#![allow(clippy::match_wildcard_for_single_variants)]
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::names::DeclNameKind;
@@ -61,7 +64,7 @@ enum Text {
 type Ident = Symbol;
 
 impl Sema<'_, '_> {
-    /// Runs names-family op `q` (spec/reflection.md §5.2).
+    /// Runs names-family op `q` (spec/reflection.md §3.9).
     pub(super) fn meta_names(
         &mut self,
         q: QueryOp,
