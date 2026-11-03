@@ -22,7 +22,7 @@ use kiln_sema::{
     BaseSpecInfo, Chunk, DeclSpec, Declarator, DeclaratorContext, Initializer, MemInitId,
     MemInitInfo, NameClass, SpecialName, StorageSpec, TypeSpecKind,
 };
-use kiln_source::Loc;
+use kiln_source::{Loc, Span};
 use kiln_source::symbol::Symbol;
 
 use crate::decl::{is_deduction_guide, is_untyped_special};
@@ -493,7 +493,7 @@ impl Parser<'_, '_> {
 
     /// clang's `SkipMalformedDecl`: skips to the end of a broken member
     /// declaration (through a `;` or a function body, or up to a `}`).
-    fn skip_malformed_decl(&mut self) {
+    pub(crate) fn skip_malformed_decl(&mut self) {
         loop {
             match Self::punct_of(self.tok()) {
                 Some(Punct::LBrace) => {
@@ -1249,9 +1249,12 @@ impl Parser<'_, '_> {
             self.s.plain_auto_type()
         } else if !ds.has_type_specifier() && is_untyped_special(d) {
             QualType::VOID
-        } else if d.invalid && !ds.has_type_specifier() {
+        } else if !ds.has_type_specifier() && (d.invalid || (!d.has_name() && !self.at(Punct::Colon)))
+        {
             // A malformed special declarator-id (`operator;`) is reported;
-            // clang adds nothing about the type.
+            // clang adds nothing about the type. Nor does it for a
+            // declarator with no name (`static "C" ...`): clang reports only
+            // "expected member name" and never builds the type.
             QualType::ERROR
         } else {
             self.s.type_from_declspec_at(ds, d.name_loc())
@@ -1414,6 +1417,9 @@ impl Parser<'_, '_> {
         }
         let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
         let is_typedef = ds.is_typedef();
+        // clang's `DS.getSourceRange()`, highlighted by "expected member
+        // name" (from a leading attribute-specifier-seq).
+        let ds_range = Span::new(ds.lead_cxx11.unwrap_or(ds.loc), self.prev_end());
         let mut base_ty: Option<QualType> = None;
         let mut restrict_error = None;
         let mut first = true;
@@ -1443,7 +1449,9 @@ impl Parser<'_, '_> {
                 self.parse_member_declarator_tail(&mut d, ds.friend.is_some());
             if !d.has_name() && !has_width {
                 if !d.invalid {
-                    self.error_here(DiagId::parse_expected_member_name);
+                    let at = self.loc();
+                    let e = self.s.diag(DiagId::parse_expected_member_name, at).range(ds_range);
+                    self.emit(e);
                 }
                 self.skip_until(&[Punct::RBrace], true, false);
                 if first {

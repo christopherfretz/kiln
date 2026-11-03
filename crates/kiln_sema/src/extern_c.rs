@@ -13,7 +13,7 @@
 //! ([dcl.link]/7, clang's `checkGlobalOrExternCConflict`).
 
 use kiln_ast::DeclId;
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclKind, LinkageLang};
 use kiln_ast::names::DeclName;
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -36,7 +36,7 @@ impl Sema<'_, '_> {
                         .ast
                         .decls
                         .scope(x)
-                        .is_some_and(|s| s.linkage_lang() == Some(kiln_ast::decl::LinkageLang::C));
+                        .is_some_and(|s| s.linkage_lang() == Some(LinkageLang::C));
                 }
                 DeclKind::Namespace => {}
                 _ => return false,
@@ -132,5 +132,77 @@ impl Sema<'_, '_> {
                 self.extern_c.insert(name, d);
             }
         }
+    }
+
+    /// The language of the innermost linkage specification lexically
+    /// enclosing context `ctx`, through any kind of context (clang's
+    /// `isLinkageSpecContext`).
+    fn enclosing_linkage_lang(&self, ctx: DeclId) -> Option<LinkageLang> {
+        let mut c = Some(ctx);
+        for _ in 0..10_000 {
+            let x = c?;
+            match self.kind_of(x) {
+                DeclKind::LinkageSpec => return self.ast.decls.scope(x)?.linkage_lang(),
+                DeclKind::TranslationUnit => return None,
+                _ => {}
+            }
+            c = self.ast.decls.get(x).ctx();
+        }
+        None
+    }
+
+    /// [dcl.link]/6: a redeclaration of namespace-scope function or
+    /// variable `old` in the current context gives it a different
+    /// language linkage: `old` has C++ language linkage and the new
+    /// declaration is in an `extern "C"` specification, or `old` has C
+    /// language linkage (its first declaration is in one) and the new
+    /// one is in an `extern "C++"` specification (clang's
+    /// `haveIncompatibleLanguageLinkages`). An entity with internal
+    /// linkage has no language linkage; a redeclaration with no linkage
+    /// specification keeps the old one.
+    pub(crate) fn has_incompatible_language_linkage(&self, old: DeclId) -> bool {
+        let first = self.ast.first(old);
+        let in_record = self
+            .ast
+            .decls
+            .get(first)
+            .ctx()
+            .is_some_and(|c| {
+                matches!(
+                    self.kind_of(c),
+                    DeclKind::CXXRecord
+                        | DeclKind::ClassTemplateSpecialization
+                        | DeclKind::ClassTemplatePartialSpecialization
+                )
+            });
+        if in_record || kiln_abi::mangle::has_internal_linkage(&self.ast, first) {
+            return false;
+        }
+        let old_c = kiln_abi::mangle::is_extern_c(&self.ast, first);
+        match self.enclosing_linkage_lang(self.ctx) {
+            Some(LinkageLang::C) => !old_c,
+            Some(LinkageLang::Cxx) => old_c,
+            None => false,
+        }
+    }
+
+    /// Reports [`Self::has_incompatible_language_linkage`] for the
+    /// redeclaration of `old` named `name` at `at`
+    /// (`err_different_language_linkage`); `def` says whether the note
+    /// calls `old` a definition. True if reported.
+    pub(crate) fn diagnose_language_linkage_redecl(
+        &mut self,
+        old: DeclId,
+        name: &str,
+        at: Loc,
+        def: bool,
+    ) -> bool {
+        if !self.has_incompatible_language_linkage(old) {
+            return false;
+        }
+        let msg = self.diag(DiagId::sema_different_language_linkage, at).arg(name);
+        let msg = self.note_prev(msg, old, def);
+        self.emit(msg);
+        true
     }
 }

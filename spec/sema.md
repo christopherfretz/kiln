@@ -1908,6 +1908,27 @@ and returns the scope it names:
     and a C-linkage entity of the same name in a namespace conflict
     either way (`err_extern_c_global_conflict` and its note); a
     global function does not.
+  - [dcl.link]/6, a redeclaration keeps the first declaration's language
+    linkage (`has_incompatible_language_linkage`, clang's
+    `haveIncompatibleLanguageLinkages`): the new declaration's innermost
+    lexically enclosing linkage specification is looked up through any
+    context. `extern "C"` around a redeclaration of an entity whose first
+    declaration has C++ language linkage, or `extern "C++"` around one
+    whose first declaration is in an `extern "C"` context, is
+    `sema_different_language_linkage` ("declaration of 'f' has a
+    different language linkage") with "previous declaration/definition
+    is here". The redeclaration is not merged (the function or variable
+    is invalid). A redeclaration with no linkage specification
+    (`extern "C" { void h(); } void h();`) keeps C linkage silently; an
+    entity with internal linkage, a class member, a friend and a
+    different overload are never checked. For a variable the check
+    follows the redefinition check (`extern "C" int w = 1; extern "C++"
+    { int w = 2; }` is "redefinition of 'w'"). Not implemented: a first
+    declaration at block scope (`void f() { extern void k(); } extern "C"
+    void k();`; redeclaration lookup does not find it), and clang's
+    "non-static declaration follows static" for a braceless `extern
+    "C++" int v;` after `static int v;`.
+    Tests: `dcl.link/language-linkage-redecl-errors.cpp`.
 - **Redefinition through an initializer** (clang
   `AddInitializerToDecl`): a namespace-scope variable that was a
   declaration before its initializer (`extern`, or a single-line

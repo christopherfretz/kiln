@@ -3617,6 +3617,16 @@ impl Sema<'_, '_> {
                         let msg = self.note_prev(msg, p, false);
                         self.emit(msg);
                     }
+                    // [dcl.link]/6: the language linkage is the first
+                    // declaration's (clang `err_different_language_linkage`).
+                    let def = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
+                    if !method
+                        && !friend
+                        && self.diagnose_language_linkage_redecl(p, &fname, d.name_loc(), def)
+                    {
+                        prev_ok = None;
+                        invalid_redecl = true;
+                    }
                     if pspec.storage() == FnStorage::Static && spec.storage() == FnStorage::None {
                         spec = spec.with_storage(FnStorage::Static).with_storage_inherited(true);
                     }
@@ -4768,6 +4778,10 @@ impl Sema<'_, '_> {
                         let msg = self.diag(DiagId::sema_redefinition, d.name_loc()).arg(&n);
                         let msg = self.note_prev(msg, p, true);
                         self.emit(msg);
+                        redefined = true;
+                    } else if self.diagnose_language_linkage_redecl(p, &n, d.name_loc(), prev_def)
+                    {
+                        // [dcl.link]/6 (clang `err_different_language_linkage`).
                         redefined = true;
                     } else {
                         prev_ok = Some(p);
