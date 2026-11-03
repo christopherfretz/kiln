@@ -454,6 +454,16 @@ fn algorithmic_name_eq(cp: u32, name: &[u8]) -> bool {
     false
 }
 
+/// Whether `s` is spelled as an identifier ([lex.name]/1): an
+/// `XID_Start` character or `_`, then `XID_Continue` characters
+/// (keywords are not told apart; `std::meta::data_member_spec`'s name
+/// check, spec/reflection.md §6.1).
+pub fn is_identifier(s: &str) -> bool {
+    let mut cs = s.chars();
+    cs.next().is_some_and(|c| c == '_' || c.is_ascii_alphabetic() || is_xid_start(c))
+        && cs.all(|c| c == '_' || c.is_ascii_alphanumeric() || is_xid_continue(c))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,18 +1,18 @@
 // [meta.reflection.define.aggregate] P2996R13 (spike vehicle
 // `__kiln_define_member`): outside the member-specification of the class
 // being defined, or with an operand it cannot use, the call is not a
-// constant expression. A duplicate member ([class.mem]/5) points at the
-// intrinsic call, the previous declaration, and the class. The second
-// identical `add_x(^^S)` is evaluated again, not replayed from the memo
-// cache: a defining call is never memoized.
+// constant expression. A duplicate member ([class.mem]/5) points at the call,
+// the previous declaration (and where it was injected), and the class. A
+// second identical `add_x(^^S)` is evaluated again: a defining call is never memoized.
 //@ expect: compile-fail
-//@ args: -freflection -I tests/support
+//@ args: -Wno-kiln-extension -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
 //@ diag: 52:17 error "static assertion expression is not an integral constant expression"
 //@ diag: 48:39 note "duplicate member 'x'"
 //@ diag: 52:17 note "in call to 'add_x(^^S)'"
 //@ diag: 48:39 note "previous declaration is here"
+//@ diag: 51:3 note "member injected here"
 //@ diag: 49:8 note "in evaluation of '__kiln_define_member' for class 'S' being defined here"
 //@ diag: 53:17 error "static assertion expression is not an integral constant expression"
 //@ diag: 53:17 note "duplicate member 'a'"

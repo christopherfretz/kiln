@@ -64,8 +64,9 @@ use kiln_source::fx::FxHashMap;
 pub use failure::{EvalFailure, FailKind, Note};
 pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
 pub use meta::{
-    AccessOp, AnnotOp, DefineOp, ExtOp, MAX_META_ARGS, MemberOp, MetaCtx, MetaError, MetaErrorKind,
-    MetaOp, MetaOut, OvenFault, Purity, QueryOp, TemplOp, TraitOp, ValueOp, info_arg,
+    AccessOp, AnnotOp, DefineOp, Dms, ExtOp, MAX_META_ARGS, MemberOp, MetaCtx, MetaError,
+    MetaErrorKind, MetaOp, MetaOut, OptionsPlan, OvenFault, Purity, QueryOp, RawOptions, TemplOp,
+    TraitOp, ValueOp, info_arg,
 };
 pub use stats::{EvalRecord, EvalStats, EvalTotals};
 
@@ -508,6 +509,8 @@ pub struct Oven {
     inner: Inner,
     /// Reflection call sites and materialization state (spec/reflection.md §3.5).
     pub(crate) meta: meta::materialize::MetaState,
+    /// The data member descriptions of the translation unit (§6.1).
+    pub(crate) dms: meta::define::DmsTable,
 }
 
 /// The inclusive cost of the nested evaluations run so far by the running
@@ -569,6 +572,7 @@ impl Oven {
             ctx_depth: 0,
             inner: Inner::default(),
             meta: meta::materialize::MetaState::default(),
+            dms: meta::define::DmsTable::default(),
         }
     }
 
@@ -898,6 +902,7 @@ impl Oven {
             + self.memo.footprint()
             + self.run.footprint()
             + self.scratch.footprint()
+            + self.dms.footprint()
             + self.mp.footprint()
             + self.virt.footprint()
     }

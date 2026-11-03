@@ -162,7 +162,10 @@ impl Sema<'_, '_> {
                 let d = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t))?;
                 self.decl_identifier(d)
             }
-            Reflectee::Decl(d) => self.decl_identifier(d),
+            // `Namespace`/`NamespaceAlias` are their own kinds (WP-472).
+            Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
+                self.decl_identifier(d)
+            }
             _ => None,
         }
     }

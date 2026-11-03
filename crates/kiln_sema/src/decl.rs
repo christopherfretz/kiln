@@ -2830,7 +2830,12 @@ impl Sema<'_, '_> {
         } else {
             DiagId::note_previous_declaration
         };
-        msg.with_note(self.diag(id, loc))
+        let msg = msg.with_note(self.diag(id, loc));
+        // A member `define_aggregate` injected (spec/reflection.md §6.2).
+        match self.ast.decls.cold.injection_point.get(prev) {
+            Some(&at) => msg.with_note(self.diag(DiagId::note_kiln_injected_here, at)),
+            None => msg,
+        }
     }
 
     /// The qualified name of member `p` as clang's

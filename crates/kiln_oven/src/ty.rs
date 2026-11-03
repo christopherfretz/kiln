@@ -8,7 +8,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{BuiltinType, FloatFormat, TypeView};
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::SemaBridge;
 
@@ -142,8 +142,16 @@ pub(crate) struct Types {
     /// member-specification): kept `Opaque` and rebuilt in place once
     /// the class is complete ([`Types::refresh`]), so pointers already
     /// naming the slot stay valid and no layout of an incomplete class
-    /// is computed or cached (WP-267).
-    provisional: Vec<OTy>,
+    /// is computed or cached (WP-267). Keyed by the class's first
+    /// declaration, so a completion finds its slot in O(1).
+    provisional: FxHashMap<DeclId, OTy>,
+    /// The provisional slots, for [`Types::intern`]'s membership test.
+    provisional_slots: FxHashSet<OTy>,
+    /// How many entries of `DeclArena::completed_records` (the AST's
+    /// completion log: its length is the completion epoch) refresh has
+    /// already applied: a refresh with no class completed since is O(1)
+    /// (WP-480).
+    completion_epoch: usize,
     /// The base-subobject view of each class with virtual bases: the
     /// class without its virtual bases (`nv_size`, Itanium C++ ABI 2.4),
     /// the type of a base field naming that class (P3533R2; spec/oven.md
@@ -211,6 +219,11 @@ pub(crate) fn float_kind(b: BuiltinType, long_double: FloatFormat) -> Option<Flo
 impl Types {
     pub fn info(&self, t: OTy) -> &TyInfo {
         &self.infos[t.0 as usize]
+    }
+
+    /// The type canonical `c` is interned as, if it is.
+    pub fn lookup(&self, c: QualType) -> Option<OTy> {
+        self.map.get(&c).copied()
     }
 
     pub fn kind(&self, t: OTy) -> TyKind {
@@ -394,7 +407,7 @@ impl Types {
     pub fn intern(&mut self, bridge: &mut dyn SemaBridge, q: QualType) -> OTy {
         let c = bridge.ast().types.canonical(q).without_quals();
         if let Some(&t) = self.map.get(&c) {
-            if !self.provisional.is_empty() && self.provisional.contains(&t) {
+            if !self.provisional_slots.is_empty() && self.provisional_slots.contains(&t) {
                 self.upgrade(bridge, t);
             }
             return t;
@@ -665,15 +678,24 @@ impl Types {
         }
     }
 
-    /// Rebuilds every provisional class slot whose class is now
-    /// complete; called before each evaluation (a class completes
-    /// between evaluations, or inside one through a lent Oven).
+    /// Rebuilds every provisional class slot whose class completed since
+    /// the last refresh; called before each evaluation and after each
+    /// `Mutating` intrinsic (a class completes between evaluations, inside
+    /// one through a lent Oven, or by `define_aggregate`). O(classes
+    /// completed since), not O(provisional slots): the slots are keyed by
+    /// class and the AST's completion log is read from a cursor.
     pub fn refresh(&mut self, bridge: &mut dyn SemaBridge) {
-        let mut i = 0;
-        while i < self.provisional.len() {
-            let t = self.provisional[i];
-            if self.upgrade(bridge, t) {
-                continue;
+        let done = bridge.ast().decls.completed_records().len();
+        let mut i = self.completion_epoch;
+        self.completion_epoch = done;
+        if self.provisional.is_empty() {
+            return;
+        }
+        while i < done {
+            let ast = bridge.ast();
+            let r = ast.decls.completed_records()[i];
+            if let Some(&t) = self.provisional.get(&ast.first(r)) {
+                self.upgrade(bridge, t);
             }
             i += 1;
         }
@@ -688,7 +710,11 @@ impl Types {
         if Self::incomplete(ast, d) {
             return false;
         }
-        self.provisional.retain(|&p| p != t);
+        let first = ast.first(d);
+        if self.provisional.get(&first) == Some(&t) {
+            self.provisional.remove(&first);
+        }
+        self.provisional_slots.remove(&t);
         self.record_into(bridge, c, d, Some(t));
         true
     }
@@ -718,7 +744,8 @@ impl Types {
         let ast = bridge.ast();
         if Self::incomplete(ast, d) {
             let t = self.simple(c, 0, 1, TyKind::Opaque);
-            self.provisional.push(t);
+            self.provisional.insert(ast.first(d), t);
+            self.provisional_slots.insert(t);
             return t;
         }
         let Some(def) = ast.definition(d) else {

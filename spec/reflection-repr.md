@@ -37,7 +37,7 @@ always present).
 | `Value(ConstValueId)` | a value of structural type (`reflect_constant`) | content-interned store value (it carries its type) | `value` |
 | `Object(ConstValueId)` | an object of static storage duration (`reflect_object`) | the interned pointer to it | `object` |
 | `BaseSpec(DeclId, u32)` | the `i`-th direct base-specifier of a class | first declaration of the class, index | `base` |
-| `DataMemberSpec(DmsId)` | a data member description (reserved: M6-08) | id | `data-member-spec` |
+| `DataMemberSpec(DmsId)` | a data member description (`data_member_spec`; spec/reflection.md §6.1) | the content-interned description in the Oven's `DmsTable` (type, name `Symbol`, alignment, width, `no_unique_address`) | `data-member-spec` |
 | `Annotation(AnnId)` | an annotation (reserved) | id | `annotation` |
 
 Declaration-keyed variants (`Decl`, `Namespace`, `NamespaceAlias`) are
