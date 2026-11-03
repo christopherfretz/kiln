@@ -358,6 +358,12 @@ pub struct Args {
     pub isysroot: Option<String>,
     /// `-resource-dir`.
     pub resource_dir: Option<String>,
+    /// `--gcc-toolchain=<dir>`: the only prefix the GCC installation
+    /// search looks under (spec/driver.md "Toolchain").
+    pub gcc_toolchain: Option<String>,
+    /// `--gcc-install-dir=<dir>`: the GCC installation itself
+    /// (`<prefix>/lib/gcc/<triple>/<version>`).
+    pub gcc_install_dir: Option<String>,
     /// `-stdlib=`.
     pub stdlib: Option<StdLib>,
     /// `-f[no-]experimental-library`: `__has_feature(experimental_library)`
@@ -700,10 +706,17 @@ impl Args {
         true
     }
 
-    /// The standard library flags: `-stdlib=` (also `--stdlib=`) and
-    /// `-f[no-]experimental-library`.
+    /// The standard library flags: `-stdlib=` (also `--stdlib=`),
+    /// `-f[no-]experimental-library`, `--gcc-toolchain=` and
+    /// `--gcc-install-dir=` (joined only, as clang).
     fn stdlib_flag(&mut self, arg: &str) -> bool {
-        if let Some(v) = arg.strip_prefix("-stdlib=").or_else(|| arg.strip_prefix("--stdlib=")) {
+        if let Some(v) = arg.strip_prefix("--gcc-toolchain=") {
+            self.gcc_toolchain = Some(v.to_owned());
+        } else if let Some(v) = arg.strip_prefix("--gcc-install-dir=") {
+            self.gcc_install_dir = Some(v.to_owned());
+        } else if let Some(v) =
+            arg.strip_prefix("-stdlib=").or_else(|| arg.strip_prefix("--stdlib="))
+        {
             match v {
                 "libc++" => self.stdlib = Some(StdLib::LibCxx),
                 "libstdc++" => self.stdlib = Some(StdLib::LibStdCxx),
@@ -1027,6 +1040,17 @@ mod tests {
         assert_eq!(a.inputs[0].lang, Some(Lang::C));
         assert_eq!(a.inputs[1].lang, None);
         assert!(a.errors.is_empty(), "{:?}", a.errors);
+    }
+
+    /// WP-525: clang's joined-only GCC installation options.
+    #[test]
+    fn gcc_toolchain_options() {
+        let a = parse("--gcc-toolchain=/opt/gcc --gcc-install-dir=/g/lib/gcc/t/16 t.cpp");
+        assert_eq!(a.gcc_toolchain.as_deref(), Some("/opt/gcc"));
+        assert_eq!(a.gcc_install_dir.as_deref(), Some("/g/lib/gcc/t/16"));
+        assert_eq!(a.errors, []);
+        let a = parse("--gcc-toolchain /opt/gcc t.cpp");
+        assert_eq!(a.errors, [ArgError::Unknown("--gcc-toolchain".into())]);
     }
 
     #[test]

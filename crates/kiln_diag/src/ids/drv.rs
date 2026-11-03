@@ -13,6 +13,7 @@ drv_command_signalled = Error (1) "{0} command failed due to signal (use -v to s
 drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
 drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
 drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
+drv_invalid_gcc_install_dir = Error (1) "'{0}' does not contain a GCC installation";
 drv_invalid_int_value = Error (2) "invalid integral value '{1}' in '{0}'";
 drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
 drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";

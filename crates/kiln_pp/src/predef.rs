@@ -80,6 +80,9 @@ pub struct PredefConfig {
     /// they mean the implementation supports those aliases; libc++'s
     /// `std` module exports them when the macros are defined).
     pub std_float_aliases: bool,
+    /// `-freflection`: `__cpp_impl_reflection 202603L` at C++26 (GCC
+    /// 16.1's value; spec/reflection.md "Feature macros").
+    pub reflection: bool,
 }
 
 impl PredefConfig {
@@ -103,6 +106,7 @@ impl PredefConfig {
             kiln_version: (0, 0),
             clang_compat: ClangCompat::Clang22,
             std_float_aliases: true,
+            reflection: false,
         }
     }
 }
@@ -464,12 +468,17 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         // [cpp.predefined] (P0847, C++23): kiln implements explicit object
         // parameters, members and lambdas; clang 19 leaves the macro
         // undefined, clang 22 defines it from C++23.
-        let cxx23 = m
+        let cplusplus = m
             .get("__cplusplus")
             .and_then(|v| v.trim_end_matches('L').parse::<u32>().ok())
-            .is_some_and(|v| v >= 202_302);
-        if cxx23 {
+            .unwrap_or(0);
+        if cplusplus >= 202_302 {
             set(m, "__cpp_explicit_this_parameter", "202110L");
+        }
+        // GCC 16.1 `-freflection` (C++26 only; `g++-16 -std=c++26
+        // -freflection -dM -E`): libstdc++'s `<meta>` keys on it.
+        if cfg.reflection && cplusplus > 202_302 {
+            set(m, "__cpp_impl_reflection", "202603L");
         }
         apply_p1467(m, cfg.std_float_aliases, cfg.aarch64);
     }
@@ -652,6 +661,21 @@ mod tests {
         let s = build_predefines(b26, &cfg, &[]);
         assert!(!s.contains("__cpp_constexpr_exceptions"), "{s}");
         assert!(s.contains("#define __cpp_constexpr 202406L\n"), "{s}");
+    }
+
+    /// WP-525: `-freflection` predefines GCC 16.1's
+    /// `__cpp_impl_reflection 202603L`, at C++26 only.
+    #[test]
+    fn reflection_macro() {
+        let b26 = "#define __cplusplus 202400L\n";
+        let b23 = "#define __cplusplus 202302L\n";
+        let mut cfg = PredefConfig::new(true);
+        assert!(!build_predefines(b26, &cfg, &[]).contains("__cpp_impl_reflection"));
+        cfg.reflection = true;
+        assert!(
+            build_predefines(b26, &cfg, &[]).contains("#define __cpp_impl_reflection 202603L\n")
+        );
+        assert!(!build_predefines(b23, &cfg, &[]).contains("__cpp_impl_reflection"));
     }
 
     /// `-fsigned-char` removes `__CHAR_UNSIGNED__` (the `AArch64` default),

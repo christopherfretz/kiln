@@ -289,6 +289,77 @@ fn verbose_search_lists_match_clang() {
     assert!(n >= 4);
 }
 
+/// The GCC lines of a `-v` run (`Found candidate`/`Selected GCC
+/// installation`).
+fn gcc_lines(stderr: &str) -> Vec<&str> {
+    stderr.lines().filter(|l| l.contains("GCC installation")).collect()
+}
+
+// spec: driver.md "Toolchain" (WP-525): `--gcc-toolchain=<dir>` makes
+// `<dir>` the only prefix of the GCC installation search (clang 19/22
+// `GCCInstallationDetector::init`), `--gcc-install-dir=<dir>` names the
+// installation; the libstdc++ directories derive from it. A fake tree
+// (two installations with a `crtbegin.o` and headers, one with neither)
+// against clang++-19
+// run live; skipped without it.
+#[test]
+fn gcc_toolchain_matches_clang() {
+    let clang_res = "/usr/lib/llvm-19/lib/clang/19";
+    if !Path::new(clang_res).join("include").is_dir() {
+        eprintln!("skipped: no {clang_res}");
+        return;
+    }
+    let d = scratch("gcc-toolchain");
+    let tc = d.join("tc");
+    for triple in ["aarch64-linux-gnu", "x86_64-linux-gnu"] {
+        for v in ["15", "16.1.0", "17"] {
+            let g = tc.join("lib/gcc").join(triple).join(v);
+            std::fs::create_dir_all(&g).unwrap();
+            if v != "17" {
+                std::fs::write(g.join("crtbegin.o"), "").unwrap();
+            }
+        }
+        let inc = tc.join("include/c++/16.1.0");
+        std::fs::create_dir_all(inc.join(triple).join("bits")).unwrap();
+        std::fs::write(inc.join(triple).join("bits/c++config.h"), "").unwrap();
+    }
+    std::fs::create_dir_all(tc.join("include/c++/16.1.0/backward")).unwrap();
+    std::fs::create_dir_all(tc.join("include/c++/15")).unwrap();
+    std::fs::write(tc.join("include/c++/16.1.0/vector"), "").unwrap();
+    let tcs = tc.display().to_string();
+    let mut n = 0;
+    for target in ["--target=aarch64-linux-gnu", "--target=x86_64-linux-gnu"] {
+        let triple = &target["--target=".len()..];
+        let install = format!("{tcs}/lib/gcc/{triple}/15/");
+        for gcc in [format!("--gcc-toolchain={tcs}/"), format!("--gcc-install-dir={install}")] {
+            let args = [target, &gcc, "-resource-dir", clang_res, "-E", "-v", "-x", "c++", "/dev/null"];
+            let Ok(clang) = std::process::Command::new("clang++-19").args(args).output() else {
+                eprintln!("skipped: no clang++-19");
+                return;
+            };
+            assert!(clang.status.success(), "clang++-19 {args:?} failed");
+            let cerr = String::from_utf8_lossy(&clang.stderr);
+            let o = kiln(&args, "");
+            assert_eq!(o.code, 0, "{}", o.stderr);
+            assert_eq!(gcc_lines(&o.stderr), gcc_lines(&cerr), "{args:?}");
+            assert_eq!(
+                search_block(&o.stderr, "kiln -cc1 version"),
+                search_block(&cerr, "clang -cc1 version"),
+                "{args:?}"
+            );
+            n += 1;
+        }
+    }
+    assert_eq!(n, 4);
+    let bad = format!("--gcc-install-dir={tcs}/lib/gcc/aarch64-linux-gnu/17");
+    let o = kiln(&[&bad, "-fsyntax-only", "-x", "c++", "/dev/null"], "");
+    assert_eq!(
+        (o.code, o.stderr),
+        (1, format!("kiln++: error: '{tcs}/lib/gcc/aarch64-linux-gnu/17' does not contain a GCC installation\n"))
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 /// clang 19's stderr for `clang -E <dir>/a.cpp` with `<dir>` replaced by
 /// `@`: nested and repeated inclusions, a macro-expanded header name, a
 /// note (which prints no include stack of its own) and a diagnostic back

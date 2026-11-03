@@ -29,7 +29,7 @@ use kiln_source::{SourceManager, Span};
 use crate::args::{Action, ArgError, Args, Lang};
 use crate::pp_cmd::{Job, JobResult};
 use crate::syntax_cmd::SyntaxJob;
-use crate::toolchain::{LangStd, Target, Toolchain};
+use crate::toolchain::{GccSearch, LangStd, Target, Toolchain};
 
 /// A [`Write`]r shared between the driver and its diagnostic engines.
 #[derive(Clone)]
@@ -120,6 +120,7 @@ overrides both.
 Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -idirafter -cxx-isystem -nostdinc -nostdinc++ -nostdlibinc -nobuiltininc
 -isysroot --sysroot -resource-dir -stdlib= -f[no-]experimental-library
+--gcc-toolchain= --gcc-install-dir=
 --target= -march= -mcpu= -target-feature --embed-dir= -M -MM
 -MD -MMD -MF -MT -MQ -MP -W... -w -pedantic -ferror-limit=
 -fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
@@ -175,9 +176,12 @@ pub(crate) fn print_version(w: &mut dyn Write, tc: &Toolchain, verbose: bool) {
         tc.target.triple
     );
     if verbose && let Some(g) = &tc.gcc {
+        for c in &tc.gcc_candidates {
+            let _ = writeln!(w, "Found candidate GCC installation: {c}");
+        }
         let _ = write!(
             w,
-            "Found candidate GCC installation: {0}\nSelected GCC installation: {0}\n\
+            "Selected GCC installation: {}\n\
              Candidate multilib: .;@m64\nSelected multilib: .;@m64\n",
             g.path
         );
@@ -413,7 +417,17 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             Target::host()
         }),
     };
-    let tc = Toolchain::new(target, args.sysroot.as_deref(), args.resource_dir.as_deref());
+    let mut tc = Toolchain::new(target, args.sysroot.as_deref(), args.resource_dir.as_deref());
+    let gcc_search = match (&args.gcc_install_dir, &args.gcc_toolchain) {
+        (Some(d), _) => GccSearch::InstallDir(d),
+        (None, Some(d)) => GccSearch::Toolchain(d),
+        (None, None) => GccSearch::Default,
+    };
+    if gcc_search != GccSearch::Default
+        && let Err(dir) = tc.select_gcc(gcc_search)
+    {
+        Diag::new(DiagId::drv_invalid_gcc_install_dir, Span::INVALID).arg(dir).emit(&drv);
+    }
     for e in &features::resolve(&args, tc.target.is_aarch64()).1 {
         emit_arg_error(e, &drv);
     }
