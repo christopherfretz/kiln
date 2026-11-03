@@ -35,7 +35,10 @@ panic and never silently wrong IR.
   A constant initializer ([basic.start.static]/2: static storage,
   `constexpr`, or a `const` non-volatile integral/enum local) folds with
   `Oven::fold_constant_init`, so `__builtin_is_constant_evaluated()` is
-  true in it; the other foldable initializers (local `const` arrays,
+  true in it; a `constexpr` variable sema already evaluated
+  (`VarEvalState::Value`) keeps that value instead, since only sema's
+  bridge runs reflection intrinsics (`constexpr bool b = type_of(R) ==
+  ^^int;` in an emitted body; WP-485, spec/reflection.md §8.3); the other foldable initializers (local `const` arrays,
   records and references) use `try_fold`, where it is false (WP-063,
   matching clang's IR). When that constant initialization fails, a
   scalar initializer (arithmetic, enum, pointer or member pointer type)
