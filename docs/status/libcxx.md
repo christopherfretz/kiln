@@ -87,6 +87,39 @@ static member function converted to a function pointer in a base braced
 mem-initializer; then 4 `substitution into InitListExpr` and 4
 `non-type template argument of this kind` (`not yet implemented`).
 
+**After WP-404** (`_BitInt(N)` end to end, P2418 static member function
+to function pointer in a base braced mem-initializer, substitution into
+`InitListExpr` and float / bound-temporary NTTPs, nullability leftovers,
+the definition-time template template argument check, class redefinition
+recovery, a builtin type transform over an instantiation-dependent
+operand), on wp/404 merged with main f4c0e909, same flags
+(`-j 4 --mem-limit 3072`), 778.1 s wall, peak RSS 672 MiB
+(`variant.visit/visit_return_type.pass.cpp`, the kiln compile step):
+
+| Scope | total | pass | fail | unsupported (driver) | pass rate |
+|---|---:|---:|---:|---:|---:|
+| 21 M4 directories | 2661 | 2566 | 15 | 80 (0) | **99.4%** |
+
+The `_BitInt`, `pstl.sort` / `stable_sort`, P2418 and both
+`not yet implemented` clusters are gone, as is the subrange CTAD cluster
+the clang 22 alias sugar exposed (9 range insertion tests,
+`__remove_reference_t` over `TC<N>*`). The 15 remaining failures are
+single tests: 1 `self-comparison always evaluates to false`
+(`array/compare.verify`: clang 22 warns too, and libc++'s lit passes
+`-Wno-tautological-compare` in `params.py` `_warningFlags`, which the
+harness does not apply); 6 `static assertion expression is not an integral constant
+expression` (`ranges.swap_ranges`, `ranges.ends_with`, `flat.map`
+`initializer_list` and `iter_iter`, `range.single.view/assign`,
+`is_implicit_lifetime.verify`); 2 `.verify` `invalid application of
+'sizeof' to an incomplete type` (`allocator` `allocate` /
+`allocate_at_least`); 1 IR lowering `phi incoming value: expected ptr,
+found iN` (`ranges_nth_element`, a codegen bug); 1 `call to deleted
+constructor` (`ranges_replace_copy_if`); 1 `static_assert` failure
+(`iterator_robust_against_adl`); 1 `no member named … in namespace`
+(`is_within_lifetime`); 1 missing `implicit instantiation of undefined
+template` (`tuple_size_incomplete.verify`); 1 `not implicitly convertible`
+(`tuple_size_structured_bindings`).
+
 ## Environment
 
 What `cargo xtask libcxx` detects about the host, and what stays

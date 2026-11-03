@@ -141,6 +141,20 @@ impl Sema<'_, '_> {
 
     /// [`Self::type_from_declspec`], reporting a missing type specifier
     /// at `loc` (clang uses the first declarator's name).
+    /// `[unsigned] short|long|long long [int]` ([dcl.type.simple]).
+    fn int_declspec_type(width: Width, unsigned: bool) -> QualType {
+        match (width, unsigned) {
+            (Width::Short, false) => QualType::SHORT,
+            (Width::Short, true) => QualType::USHORT,
+            (Width::Long, false) => QualType::LONG,
+            (Width::Long, true) => QualType::ULONG,
+            (Width::LongLong, false) => QualType::LONGLONG,
+            (Width::LongLong, true) => QualType::ULONGLONG,
+            (Width::None, false) => QualType::INT,
+            (Width::None, true) => QualType::UINT,
+        }
+    }
+
     pub fn type_from_declspec_at(&mut self, ds: &DeclSpec, loc: Loc) -> QualType {
         let unsigned = ds.sign == Sign::Unsigned;
         let base = match ds.base {
@@ -157,16 +171,7 @@ impl Sema<'_, '_> {
                 }
                 QualType::INT
             }
-            TypeSpecKind::None | TypeSpecKind::Int => match (ds.width, unsigned) {
-                (Width::Short, false) => QualType::SHORT,
-                (Width::Short, true) => QualType::USHORT,
-                (Width::Long, false) => QualType::LONG,
-                (Width::Long, true) => QualType::ULONG,
-                (Width::LongLong, false) => QualType::LONGLONG,
-                (Width::LongLong, true) => QualType::ULONGLONG,
-                (Width::None, false) => QualType::INT,
-                (Width::None, true) => QualType::UINT,
-            },
+            TypeSpecKind::None | TypeSpecKind::Int => Self::int_declspec_type(ds.width, unsigned),
             TypeSpecKind::Void => QualType::VOID,
             TypeSpecKind::Bool => QualType::BOOL,
             TypeSpecKind::Char => match ds.sign {
@@ -225,6 +230,11 @@ impl Sema<'_, '_> {
                 self.ast.types.auto_type(kw, None, c, args, false)
             }
             TypeSpecKind::Named => ds.named.unwrap_or(QualType::ERROR),
+            // [dcl.type.simple] (C23 6.7.2, a clang extension in C++).
+            TypeSpecKind::BitInt => match ds.bit_int_width {
+                Some((w, _)) => self.build_bit_int_type(unsigned, w, ds.loc),
+                None => QualType::ERROR,
+            },
         };
         let base = match ds.complex {
             Some(cloc) => self.complex_of_declspec(ds, base, cloc),
@@ -1408,7 +1418,17 @@ impl Sema<'_, '_> {
 
     /// [dcl.fct]/5: a parameter of array type "array of T" becomes
     /// "pointer to T"; of function type, "pointer to" that type.
+    /// A nullability qualifier on the array (`int a[_Nonnull]`, or a
+    /// decl-specifier one) moves to the pointer (clang keeps
+    /// `int * _Nonnull`).
     pub(crate) fn adjust_param_type(&mut self, ty: QualType) -> QualType {
+        if let TypeView::Attributed { kind, modified, .. } = self.ast.types.view(ty.ty())
+            && crate::nullability::is_nullability(kind)
+            && self.ast.types.is_array(modified)
+        {
+            let p = self.adjust_param_type(modified);
+            return self.ast.types.attributed(kind, p, p);
+        }
         if self.ast.types.is_array(ty) {
             let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
             self.ast.types.pointer_to(elem)
@@ -3686,6 +3706,9 @@ impl Sema<'_, '_> {
             spec = spec.with_explicit_object(true);
         }
         let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params, !prev_invalid);
+        if let Some(p) = prev_ok {
+            self.check_param_nullability(p, &params);
+        }
         // clang marks the redeclaration invalid and leaves it out of the
         // redeclaration chain; calls ignore it.
         if redefined {
@@ -6172,17 +6195,30 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
-    /// `enum E : T`: the underlying type must be integral ([dcl.enum]/2).
-    fn check_enum_fixed_type(&mut self, fixed: Option<QualType>, loc: Loc) {
+    /// `enum E : T`: the underlying type must be integral ([dcl.enum]/2);
+    /// clang (`CheckEnumUnderlyingType`) takes only the standard integer
+    /// types, so a bit-precise one is rejected too (spec/types.md §21).
+    /// An invalid one recovers to `int`, as clang's `ActOnTag` does. The
+    /// parser checks the enum-base at its type (`loc`, as clang); an
+    /// instantiated dependent one is checked again in [`Self::act_on_tag`].
+    pub fn check_enum_fixed_type(&mut self, fixed: Option<QualType>, loc: Loc) -> Option<QualType> {
         if let Some(f) = fixed {
-            let ok = self.ast.types.is_integral(f)
+            let bit_int = matches!(self.ast.types.canonical_view(f), TypeView::BitInt { .. });
+            let ok = (self.ast.types.is_integral(f) && !bit_int)
                 || self.is_error_type(f)
                 || self.ast.types.is_dependent(f);
             if !ok {
-                let msg = self.diag(DiagId::sema_enum_invalid_underlying, loc).arg(self.ty_arg(f));
+                let id = if bit_int {
+                    DiagId::sema_enum_bit_int_underlying
+                } else {
+                    DiagId::sema_enum_invalid_underlying
+                };
+                let msg = self.diag(id, loc).arg(self.ty_arg(f));
                 self.emit(msg);
+                return Some(QualType::INT);
             }
         }
+        fixed
     }
 
     /// Checks a definition's member specialization header, then returns
@@ -6347,10 +6383,11 @@ impl Sema<'_, '_> {
         }
         let is_enum = keyword == TagKeyword::Enum;
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
-        self.check_enum_fixed_type(fixed, loc);
+        let fixed = self.check_enum_fixed_type(fixed, loc);
         let member_class_spec = self.begin_member_class_spec(name, qualifier, use_, loc);
         let head = self.tag_template_head(is_enum, qualifier, use_);
         let mut prev = None;
+        let mut redefined = false;
         // A name of another kind (`kind_conflict`): the tag is declared
         // anyway, invalid and hidden from lookup (clang's recovery as an
         // anonymous tag).
@@ -6407,12 +6444,11 @@ impl Sema<'_, '_> {
                     self.diagnose_type_name_use(p, nloc);
                     return p;
                 } else if use_ == TagUse::Definition {
-                    if let Some(def) = self.ast.definition(p) {
+                    if self.ast.definition(p).is_some() {
+                        // Diagnosed as the specialization already
+                        // (`respecialized`): no further redefinition error.
                         if !respecialized {
-                            let msg =
-                                self.diag(DiagId::sema_redefinition, nloc).arg(sym_str(self, n));
-                            let msg = self.note_prev(msg, def, true);
-                            self.emit(msg);
+                            redefined = self.diag_tag_redefinition(p, n, nloc);
                         }
                         prev = None;
                     }
@@ -6454,31 +6490,32 @@ impl Sema<'_, '_> {
         let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
         let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
+        if redefined {
+            h = h.flags(DeclFlags::INVALID);
+        }
         h.lexical = Some(if qualifier.is_some() { self.ctx } else { ctx });
         if conflict {
             h.misc = h.misc.with_friend(FriendKind::Undeclared);
             h.flags = h.flags.with(DeclFlags::INVALID);
         }
         let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
-        let d = if is_enum {
-            let fx = fixed.map(|f| (f, self.enum_promotion(f)));
-            self.builder().enumeration(h, scoped, fx, prev)
-        } else if plain_ref && self.templ.cur.is_none() {
-            self.namespace_tag_record(h, Self::tag_kind_of(keyword))
-        } else {
-            self.mark_pattern_next();
-            self.builder().record(h, Self::tag_kind_of(keyword), prev)
-        };
+        let d = self.new_tag_decl(h, keyword, (scoped, fixed), prev, plain_ref);
         self.finish_member_class_spec(member_class_spec, d);
         if qualifier.is_none() {
             self.set_member_access(d);
         }
-        if let Some(t) = self.finish_template_pattern(d) {
+        let t = self.finish_template_pattern(d);
+        if let Some(t) = t {
             if qualifier.is_none() {
                 self.set_member_access(t);
             } else if self.templ.member_spec.is_some() {
                 self.specialize_member_template(t);
             }
+        }
+        if redefined {
+            // Not visible to later lookups (`diag_tag_redefinition`).
+            self.builder().unregister_name(t.unwrap_or(d));
+            return d;
         }
         if let Some((n, _)) = name
             && self.in_local_scope()
@@ -6495,6 +6532,52 @@ impl Sema<'_, '_> {
             self.check_using_shadow_conflict(d, DeclName::ident(n));
         }
         d
+    }
+
+    /// The declaration `act_on_tag` creates: an enumeration (`scoped`,
+    /// `fixed` underlying type), a class a plain elaborated reference
+    /// declares in the enclosing namespace, or a class (a template
+    /// pattern when a template head is pending).
+    fn new_tag_decl(
+        &mut self,
+        h: DeclHead,
+        keyword: TagKeyword,
+        (scoped, fixed): (u32, Option<QualType>),
+        prev: Option<DeclId>,
+        plain_ref: bool,
+    ) -> DeclId {
+        if keyword == TagKeyword::Enum {
+            let fx = fixed.map(|f| (f, self.enum_promotion(f)));
+            self.builder().enumeration(h, scoped, fx, prev)
+        } else if plain_ref && self.templ.cur.is_none() {
+            self.namespace_tag_record(h, Self::tag_kind_of(keyword))
+        } else {
+            self.mark_pattern_next();
+            self.builder().record(h, Self::tag_kind_of(keyword), prev)
+        }
+    }
+
+    /// [basic.def.odr]/1: diagnoses defining the tag `p` again and
+    /// returns true if it has a definition. The new definition is created
+    /// invalid and kept out of lookup, so later uses find the first one
+    /// (clang's `ActOnTag` makes it anonymous and invalid), and the parser
+    /// skips its body ([`Sema::tag_body_skipped`]; spec/sema.md §4.4).
+    fn diag_tag_redefinition(&mut self, p: DeclId, n: Symbol, nloc: Loc) -> bool {
+        let Some(def) = self.ast.definition(p) else {
+            return false;
+        };
+        let msg = self.diag(DiagId::sema_redefinition, nloc).arg(sym_str(self, n));
+        let msg = self.note_prev(msg, def, true);
+        self.emit(msg);
+        true
+    }
+
+    /// True if `d`, just returned by [`Sema::act_on_tag`] for a
+    /// definition, is a redefinition whose body the parser skips
+    /// (spec/sema.md §4.4; clang neither checks its members nor declares
+    /// its enumerators).
+    pub fn tag_body_skipped(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).has(DeclFlags::INVALID)
     }
 
     /// The elaborated-type-specifier of `friend class X;`

@@ -124,6 +124,11 @@ the evaluator's flattened type table.
   subobjects) is zero-initialized and copied as zero bytes: an empty base
   or `[[no_unique_address]]` member may share its address with a pointer
   (libc++'s `__compressed_pair` in `std::unique_ptr`).
+  Constructing such a subobject touches none of its bytes; a complete
+  object or an array element of such a type owns its bytes, so its
+  construction begins their lifetime and its destruction ends it (a second
+  destruction is "destruction of object outside its lifetime";
+  `vm.rs` `placement`, `basic.life/empty-object-lifetime.cpp`; WP-404).
 - **Lifetime**: leaving a scope releases its objects (`release(mark)`); a
   released slot is reused first-in first-out with its generation bumped, so
   a dangling pointer is detected (generation mismatch) and still names its
@@ -1237,11 +1242,9 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   (`Types::holds_no_data`) by placement touches no byte (the member
   sharing its address keeps its value)
   (`expr.new/p2747-placement-voidified-through-memory*.cpp`). The
-  exception is an empty object that is the outermost object at its
-  address, a complete object or an array element (libc++'s
-  `vector<bitset<0>>`): it owns its byte, so its placement begins that
-  byte's lifetime and its destruction checks and ends it (WP-413,
-  `basic.life/constexpr-empty-allocator-storage.cpp`).
+  exception is an empty complete object or array element (libc++'s
+  `vector<bitset<0>>`, "Memory" below): it owns its byte
+  (`basic.life/constexpr-empty-allocator-storage.cpp`).
 - *Casts from `void *`* (C++26, P2738R1, [expr.static.cast]/14): `VoidCast
   [dst, p, T]` aux 0 (a `static_cast` from `cv void *` to `cv T *`
   outside `std::allocator<T>::allocate`) succeeds for null and when the
@@ -2225,6 +2228,35 @@ stays `Opaque`: it has no value model yet. The operations are in
   boundary moves with the oracle at the clang 22 switch (M3 to M4).
 - Codegen emits folded vector values as `<N x T>` constants
   (`kiln_codegen/src/consts.rs`).
+
+### `_BitInt` — Landed (WP-404)
+Type rules: spec/types.md §21.
+- *Representation.* `_BitInt(N)` with `N <= 128` is `TyKind::Int { width:
+  N, signed }` in its ABI-sized slot (`ty.rs`): a register value is the
+  u128 register at width N, so every KBC integer opcode (arithmetic,
+  comparisons, shifts, bitwise, conversions, overflow and shift-count
+  checks) runs on it unchanged, with no allocation. Unsigned arithmetic
+  wraps to N bits; signed overflow, `MIN / -1` and a shift count `>= N`
+  fault with clang's notes ("value 64 is outside the range of representable
+  values of type '_BitInt(7)'", "shift count 7 >= width of type
+  '_BitInt(7)' (7 bits)"). Memory stores the value in the slot's bytes
+  sign- or zero-extended, as codegen does.
+- *`__builtin_bit_cast`* with a `_BitInt` source, destination or
+  subobject is rejected at any width, as clang ("constexpr bit cast
+  involving type 'unsigned _BitInt(16)' is not yet supported";
+  `compile/bitcast.rs`).
+- *Wider than 128 bits* (x86-64 only; AArch64's `BITINT_MAXWIDTH` is 128):
+  the type is `TyKind::Opaque`, and compiling an rvalue or initializer of
+  it traps with "kiln: constant evaluation of a _BitInt wider than 128
+  bits is not supported yet" (`compile.rs` `wide_bit_int`). Deviation:
+  clang evaluates these (`expr.const/bit-int-wide.cpp`, `xfail(kiln)`).
+- *Design for the wide path (not implemented).* A memory-resident
+  `TyKind::WideInt { words, signed }` (like an aggregate: registers hold
+  its address), with limb operations in a dependency-free
+  `kiln_oven/src/bigint.rs` over `u64` words, and freeze/thaw through the
+  existing `kiln_ast::consts::IntBits` word pool. Widths `<= 128` never
+  take it. It needs `notes.rs` to print wide values and `value.rs` to
+  freeze them.
 
 ### Complex values — Landed (WP-211)
 A GNU `_Complex T` object is stored as `T[2]` (`ty.rs`): the real part,
