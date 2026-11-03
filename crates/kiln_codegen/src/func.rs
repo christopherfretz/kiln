@@ -672,6 +672,13 @@ impl Cg<'_> {
             func.attrs.params = params;
         }
         self.nounwind.insert(f, nothrow_def);
+        if thunk.is_none()
+            && structor.is_none()
+            && self.is_variadic_virtual(d)
+            && let Some(body) = self.f.fir.clone_body()
+        {
+            self.vararg_bodies.insert(f, (body, self.f.uses_ph));
+        }
         if self.f.uses_ph {
             let fir = std::mem::replace(&mut self.f.fir, Fir::new(Vec::new()));
             self.pending.push((f, d, fir));

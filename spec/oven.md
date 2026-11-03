@@ -1517,8 +1517,22 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   impure (never memoized). `__builtin_constant_p((int *)8 + 1 == (int
   *)12)` is true, `int f[(long)(int *)8]` folds to 8 elements and
   `int i[*reinterpret_cast<const char *>(&n)]` is an error:
-  `expr.const/5.15/reinterpret-cast-fold-points-nowhere.cpp`. Function
-  pointers are not modelled (a cast to or from one still stops a fold).
+  `expr.const/5.15/reinterpret-cast-fold-points-nowhere.cpp`. A cast to
+  or from a function pointer is `PTR` too (WP-492): the function pointer
+  keeps its function (a nowhere pointer of the function slot), so it
+  freezes to that function (`void (*p)() = (void (*)())&f;` is a static
+  initializer) and compares by function; an indirect call through it
+  calls the function only if the call's function type is the
+  function's, ignoring the exception specification (clang
+  `EvaluateCall`'s `hasSameFunctionTypeIgnoringExceptionSpec`;
+  `Oven::cast_callee_matches`), so a pointer cast back to its type
+  calls in a fold, and any other fails as clang's `Error`. A lax
+  variable (spec "Lax folds") whose constant initialization failed is
+  read as its initializer re-folded non-manifestly, as a
+  potentially-constant one is (`const auto p = (int (*)(int))(void
+  (*)())&f;` folds `p(1)` to a direct call): `VarDecl::evaluateValue`
+  re-evaluates any variable without constant initialization in
+  `EM_ConstantFold`.
   Codegen's folds
   share the TU's bytecode, so they see the TU's language mode
   (`Oven::set_cxx_year`, recorded by sema; before WP-407 they compiled

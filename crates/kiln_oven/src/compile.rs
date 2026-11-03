@@ -3739,13 +3739,17 @@ impl Compiler<'_> {
                             self.void_cast_pre26(e, op, dst, r);
                         } else if fvoid {
                             self.emit_at(Op::VoidCast, 0, &[dst, r, tp.0], e);
-                        } else if matches!(self.kind(fp), TyKind::Func)
-                            || matches!(self.kind(tp), TyKind::Func)
-                        {
-                            self.trap(e, REINTERPRET_CONV);
                         } else {
+                            // A function pointer included: a fold keeps
+                            // the function it designates (clang's invalid
+                            // designator; a call through it fails).
                             self.cce(e, cce::PTR, dst, r, REINTERPRET_CONV);
                         }
+                    }
+                    // A `reinterpret_cast` to or from a function pointer
+                    // (`cce_check` above failed it outside a fold).
+                    (TyKind::Ptr(_), TyKind::Ptr(_)) => {
+                        self.cce(e, cce::PTR, dst, r, REINTERPRET_CONV);
                     }
                     _ => self.trap(e, REINTERPRET_CONV),
                 }
