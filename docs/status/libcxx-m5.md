@@ -44,6 +44,9 @@ timeout) that timed out under shared-host load in this re-run; it passed
 in the WP-446 re-run and passes at 240 s under kiln and clang 22. It is
 in the long-test class, not a cluster.
 
+WP-460, which landed after this run, fixes 8 of the 9 (trivial_abi ×6,
+enable_if, std.compat; see "Fixed in WP-460"), leaving `make_from_tuple`.
+
 ## Open clusters
 
 Reproducers are `xfail(kiln)` corpus tests (clang 22 the oracle) unless
@@ -110,6 +113,14 @@ an XPASS is the cue to drop its row.
 | (a) | 1 | `copy_move_trivial` (segfault): a file-scope function template named like a builtin hid the builtin | sema (`dc3b8556`) | `over.match.best/builtin-name-template.cpp` |
 | (c) | 1 | `std/modules/std.pass`: kiln found the system LLVM 19 `std.cppm`, whose `headers_not_available` lists `<flat_map>` | harness `-fprebuilt-module-path` to the package tree (`Config::module_source_flags`, `d6162682`) | xtask unit test `clang_mode_flags` |
 | (c) | 2 | `equality_comparable_with`, `three_way_comparable_with`: the `TEST_COMPILER_CLANG` branch pins llvm.org/PR171438; kiln follows the standard | now XFAIL with that reason (`CLANG_DEFECT_XFAIL`, `d4e0cff4`; spec/libcxx.md "Outcomes") | xtask unit test `clang_defect_xfail_list` |
+
+## Fixed in WP-460
+
+| class | count | construct / first error | fix (commit) | corpus test |
+|---|---:|---|---|---|
+| (a) | 6 | `[[clang::trivial_abi]]` `unique_ptr`/`shared_ptr`/`weak_ptr`: the attribute was ignored, so the class went through memory and the caller destroyed it | sema trivial-for-call bits, `kiln_abi` register passing, callee-destroyed parameters in codegen (`7b2cfd63`, `9c5f657f`; spec/sema.md "The `trivial_abi` attribute", spec/abi.md §8.26, spec/codegen.md §7ac) | `class.temporary/trivial-abi-run.cpp`, `class.temporary/run-trivial-abi-callee-destroys.cpp`, `dcl.attr/trivial-abi-attribute.cpp`, `tests/codegen/trivial_abi_*.cpp` |
+| (a) | 1 | `cmp.categories.pre/reject-other-than-literal-zero.verify`: clang `enable_if` ignored, `strong_ordering < 1` accepted | sema `enable_if` viability and ranking, Oven `evaluate_with_params` (`daf9b450`, `f5c2d953`; spec/sema.md §4.5) | `dcl.attr/enable-if-attr.cpp`, `dcl.attr/enable-if-{viability,ranking,form}.cpp` |
+| (a) | 1 | `std/modules/std.compat.pass`: an in-process imported unit's GMF declarations stayed apart from the importer's ("'byte' must be declared before it is used") | GMF entities merge across imports (`53258ba6`, `6d8d209c`; spec/modules.md §6) | `module.global.frag/gmf-dedup-import-gmf.cpp`, `module.global.frag/gmf-merge-importer.cpp` |
 
 ## Affected directories after the fixes
 

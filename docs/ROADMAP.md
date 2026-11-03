@@ -168,6 +168,9 @@ from the P2996 text.
   bar for the compiler is consuming BOTH libc++ (M4/M5 gates) and libstdc++
   (consumption track from M4, WP-188; the reference workload under GCC uses it).
   libstdc++ header status: `docs/status/libstdcxx.md` (`cargo xtask libstdcxx`).
+- Plan and decisions: `docs/plans/m6-reflection.md` (16 work packages,
+  WP-470..485; GCC 16.1.0 provisioned on the dev host 2026-11-03; libstdc++
+  16.1 `<meta>` is the production header, the test header until then).
 - Exit: the reference workload builds
   and its tests pass; its compile time and peak memory with kiln are recorded
   against GCC 16.1 (whose constexpr memory growth is the problem kiln exists
