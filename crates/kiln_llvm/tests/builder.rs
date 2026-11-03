@@ -267,3 +267,59 @@ fn move_function_to_end() {
     assert!(text.contains("attributes #1 = { nounwind }"), "{text}");
     assert_eq!(m.func(a).name(), "a");
 }
+
+fn call_and_ret(m: &mut Module, f: FuncId, callee: FuncId) {
+    let mut b = IrBuilder::new(m, f);
+    let e = b.append_block("entry");
+    b.position_at_end(e);
+    b.call(callee, &[]).unwrap();
+    b.ret_void().unwrap();
+}
+
+/// `replace_function` (LLVM `replaceAllUsesWith` + `eraseFromParent`):
+/// earlier and later uses print as the replacement, the replacement takes
+/// the erased function's place in the order, and the name is freed.
+#[test]
+fn replace_function() {
+    let mut m = module();
+    let fty = m.types.function(TypeId::VOID, &[], false);
+    let old = m.add_function("old", fty).unwrap();
+    let user = m.add_function("user", fty).unwrap();
+    let new = m.add_function("new", fty).unwrap();
+    call_and_ret(&mut m, user, old);
+    call_and_ret(&mut m, new, user);
+    m.replace_function(old, Value::func(new)).unwrap();
+    assert_eq!(m.resolve(Value::func(old)), Value::func(new));
+    let order: Vec<FuncId> = m.functions().map(|(f, _)| f).collect();
+    assert_eq!(order, [new, user]);
+    let text = m.to_string();
+    assert!(!text.contains("@old"), "{text}");
+    assert!(text.contains("call void @new()"), "{text}");
+    assert!(text.find("define void @new()").unwrap() < text.find("define void @user()").unwrap());
+    assert_eq!(kind(m.replace_function(old, Value::func(new))), IrErrorKind::BadGlobal);
+    assert_eq!(kind(m.replace_function(new, Value::func(user))), IrErrorKind::BadGlobal);
+    assert!(m.add_function("old", fty).is_ok(), "the name is free again");
+}
+
+/// `replace_function_with_alias` (clang `TryEmitBaseDestructorAsAlias`):
+/// the alias takes the declaration's name and its uses.
+#[test]
+fn replace_function_with_alias() {
+    let mut m = module();
+    let fty = m.types.function(TypeId::VOID, &[], false);
+    let old = m.add_function("old", fty).unwrap();
+    let user = m.add_function("user", fty).unwrap();
+    let target = m.add_function("target", fty).unwrap();
+    call_and_ret(&mut m, user, old);
+    call_and_ret(&mut m, target, user);
+    let a = m.replace_function_with_alias(old, fty, Value::func(target)).unwrap();
+    assert_eq!(m.resolve(Value::func(old)), Value::alias(a));
+    let text = m.to_string();
+    assert!(text.contains("@old = alias void (), ptr @target"), "{text}");
+    assert!(text.contains("call void @old()"), "{text}");
+    assert!(!text.contains("declare void @old"), "{text}");
+    assert_eq!(
+        kind(m.replace_function_with_alias(target, fty, Value::func(target))),
+        IrErrorKind::BadGlobal
+    );
+}

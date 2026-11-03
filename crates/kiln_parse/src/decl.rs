@@ -2062,6 +2062,7 @@ impl Parser<'_, '_> {
             Some(Punct::Star) => {
                 self.bump();
                 let (quals, nulls) = self.parse_ptr_quals();
+                d.attrs.append(&mut self.chunk_decl_attrs);
                 self.parse_declarator(d);
                 d.push_chunk(Chunk::Pointer { quals, loc }, nulls);
             }
@@ -2155,23 +2156,33 @@ impl Parser<'_, '_> {
             self.bump();
         }
         let (quals, nulls) = self.parse_ptr_quals();
+        d.attrs.append(&mut self.chunk_decl_attrs);
         rest(self, d);
         d.push_chunk(Chunk::MemberPointer { qual, quals, loc }, nulls);
     }
 
     /// Attributes appertaining to a type, after a ptr-operator or an
-    /// array declarator ([dcl.ptr]/1, [dcl.array]/1): kiln does not
-    /// attach them, and reports an `alignas` among them (not a type
-    /// attribute, clang `err_attribute_not_type_attr`).
+    /// array declarator ([dcl.ptr]/1, [dcl.array]/1): kiln attaches no
+    /// type attribute there, and reports an `alignas` among them (not a
+    /// type attribute, clang `err_attribute_not_type_attr`). A GNU
+    /// declaration attribute (`__attribute__((may_alias))`) is kept in
+    /// [`Parser::chunk_decl_attrs`] for the declarator.
     fn skip_type_position_attrs(&mut self) {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
-        self.s.act_on_type_position_attrs(&mut attrs, false);
+        self.s.act_on_type_position_attrs(&mut attrs, true);
+        attrs.retain(|&a| {
+            let n = self.s.ast.attrs.get(a);
+            n.syntax == AttrSyntax::Gnu
+                && !matches!(n.kind, AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE)
+        });
+        self.chunk_decl_attrs.extend(attrs);
     }
 
     /// The cv-qualifiers, nullability qualifiers and attributes after a
     /// `*` ([dcl.ptr]/1; clang's `ParseTypeQualifierListOpt`).
     pub(crate) fn parse_ptr_quals(&mut self) -> (Quals, Vec<NullSpec>) {
+        self.chunk_decl_attrs.clear();
         let mut q = Quals::NONE;
         let mut nulls = Vec::new();
         loop {
