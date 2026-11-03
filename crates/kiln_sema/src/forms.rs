@@ -318,6 +318,12 @@ impl Sema<'_, '_> {
         if self.ast.types.is_dependent(ty) {
             return self.builder().unresolved_construct(ty, &[], false, loc, rparen);
         }
+        // clang `BuildCXXTypeConstructExpr`'s `RequireCompleteType`: a
+        // class template specialization whose instantiation fails (a
+        // failed `static_assert` in it, [temp.inst]/2) fails quietly.
+        if self.instantiation_fails(ty, loc) {
+            return self.recover(QualType::ERROR, &[], loc);
+        }
         // [class.abstract]/3 (clang `BuildCXXTypeConstructExpr`).
         if self.require_non_abstract_alloc(loc, ty) {
             return self.recover(QualType::ERROR, &[], loc);
@@ -360,7 +366,8 @@ impl Sema<'_, '_> {
             let il = self.dependent_init_list(l);
             return self.builder().unresolved_construct(ty, &[il], true, loc, l.rbrace);
         }
-        if self.require_non_abstract_alloc(loc, ty) {
+        // As `T()` (`act_on_value_init_cast`).
+        if self.instantiation_fails(ty, loc) || self.require_non_abstract_alloc(loc, ty) {
             let flat = Self::list_exprs(l);
             return self.recover(QualType::ERROR, &flat, loc);
         }
@@ -470,7 +477,8 @@ impl Sema<'_, '_> {
             let args = self.dependent_args(args);
             return self.builder().unresolved_construct(ty, &args, false, loc, rparen);
         }
-        if self.require_non_abstract_alloc(loc, ty) {
+        // As `T()` (`act_on_value_init_cast`).
+        if self.instantiation_fails(ty, loc) || self.require_non_abstract_alloc(loc, ty) {
             return self.recover_dropping_braced(QualType::ERROR, args, loc);
         }
         // A class: a temporary direct-initialized by a constructor

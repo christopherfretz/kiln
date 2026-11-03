@@ -1597,7 +1597,9 @@ member class, whose instantiation now reports failure like a
 specialization's) is invalid, and a base-specifier naming it is dropped
 (class/members.rs), so the derived class does not find its members; a
 using-declaration whose qualifier names an invalid class is not
-diagnosed as "not a base class". A decl-specifier whose qualifier fails
+diagnosed as "not a base class"; an explicit type conversion `T(a, b)`,
+`T()` or `T{a, b}` (forms.rs, clang `BuildCXXTypeConstructExpr`) builds
+nothing (`temp.inst/failed-static-assert-functional-cast.cpp`, WP-446). A decl-specifier whose qualifier fails
 so (`X<A>::type v;`) spans the scanned name and the declaration goes on
 with an invalid type; a base-specifier `X<A>::B` is clang's "expected
 class name" at `B`
