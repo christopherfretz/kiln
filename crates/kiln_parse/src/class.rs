@@ -1363,6 +1363,15 @@ impl Parser<'_, '_> {
             )
     }
 
+    /// A member declarator with no decl-specifier that the declarator
+    /// parse reports: [`Self::at_implicit_int_declarator`], or a qualified
+    /// name with a component that names no scope (`Und::g();`; its
+    /// qualifier reports it, as at namespace scope).
+    fn at_untyped_member_declarator(&self) -> bool {
+        self.at_implicit_int_declarator()
+            || self.not_a_scope_name(self.pos()).is_some_and(|end| self.implicit_int_follows(end))
+    }
+
     /// The default member initializer of `decl`, saved for the complete
     /// class. [dcl.array]/3: for an array of unknown bound (`unbounded`)
     /// it is not an initializer that can deduce a bound (clang
@@ -1425,12 +1434,9 @@ impl Parser<'_, '_> {
             self.act_on_member_decl_spec_only(&ds);
             return;
         }
-        // A qualifier component that names no scope (`Und::g();`): the
-        // declarator's qualifier reports it, as at namespace scope.
         if ds.is_empty()
             && !self.at_special_declarator(DeclaratorContext::Member)
-            && !self.at_implicit_int_declarator()
-            && !self.not_a_scope_name(self.pos()).is_some_and(|end| self.implicit_int_follows(end))
+            && !self.at_untyped_member_declarator()
         {
             self.member_without_type();
             return;
