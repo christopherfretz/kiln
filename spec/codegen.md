@@ -96,6 +96,12 @@ panic and never silently wrong IR.
   read-through").
   Validation: `tests/codegen/const_fold_lax.cpp`,
   `tests/codegen/ref_const_fold.cpp`.
+  A fold whose value designates an automatic object (C++26 P2686R5
+  constexpr references and pointers to locals,
+  `kiln_oven::automatic_referent`) is not recorded: an LLVM constant
+  cannot hold an alloca's address, so the initializer is emitted at run
+  time and uses load the variable, as clang's `ConstantEmitter` falls back
+  (WP-467, `tests/conformance/expr.const/constexpr-ref-automatic-run.cpp`).
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
@@ -3209,14 +3215,13 @@ No lowering changed; the new forms reach codegen as existing AST.
   one calls `get` at run time, as clang does. Test:
   `dcl.struct.bind/p2686-run.cpp`.
 - Left:
-  - A `static constexpr` block-scope tuple-like decomposition's holding
-    references get a guarded dynamic initializer, where clang
-    constant-initializes them: `fold::Collect::local_decl` does not
-    visit the holding variables of a local decomposition, so no fold
-    exists for `static_local` (values are right; WP-453 owns
-    `fold.rs`).
-  - An unreferenced namespace-scope `constexpr` decomposition's `e`
-    (`@_ZDC1x1yE`, internal) is not emitted; clang emits it.
+  - (Fixed by WP-467, `spec/landed/codegen/WP-467.md`.) A `static
+    constexpr` block-scope tuple-like decomposition's holding references
+    got a guarded dynamic initializer, where clang constant-initializes
+    them.
+  - (Fixed by WP-467.) An unreferenced namespace-scope `constexpr`
+    decomposition's `e` (`@_ZDC1x1yE`, internal) was not emitted when
+    its holding variables do not refer to it; clang emits it.
 
 ## 7aa. Landed (WP-459): explicit-object conversion functions, AArch64 target features
 - A conversion function with an explicit object parameter

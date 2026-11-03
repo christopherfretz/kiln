@@ -10,8 +10,8 @@
 //@ diag: 33:15 error "static assertion expression is not an integral constant expression"
 //@ diag: 33:15 note "read of non-constexpr variable 'ms' is not allowed in a constant expression"
 //@ diag: 31:3 note "declared here"
-//@ diag: 36:19 error "constexpr variable '[m, n]' must be initialized by a constant expression"
-//@ diag: 36:19 note "reference to 'loc' is not a constant expression"
+//@ diag: 36:26 error "constexpr variable '[m, n]' must be initialized by a constant expression"
+//@ diag: 36:26 note "reference to 'loc' is not a constant expression"
 //@ diag: 35:5 note "declared here"
 //@ diag: 38:18 error "constexpr variable '[u, v]' must be initialized by a constant expression"
 //@ diag: 38:27 note "read of non-constexpr variable 'arr' is not allowed in a constant expression"
@@ -19,8 +19,8 @@
 // [dcl.pre]/6 (C++26, P2686R5): constexpr and constinit are allowed on a
 // structured binding declaration; inline and consteval still are not. A
 // constexpr one is constant-initialized ([dcl.constexpr]/6): from a
-// non-constant, through a reference to an automatic object, or by copying
-// a non-constexpr array, it is ill-formed.
+// non-constant, a static one bound to an automatic object ([expr.const.init]
+// /4: not constexpr-representable at namespace scope), or by copying a non-constexpr array, it is ill-formed.
 struct S { int a, b; };
 constexpr S cs{1, 2};
 constexpr inline auto [a4, b4] = cs;
@@ -33,7 +33,7 @@ constexpr auto& [a8, b8] = ms;
 static_assert(a8 == 1);
 void h() {
   S loc{1, 2};
-  constexpr auto& [m, n] = loc;
+  static constexpr auto& [m, n] = loc;
   int arr[2] = {1, 2};
   constexpr auto [u, v] = arr;
 }
