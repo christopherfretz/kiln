@@ -1670,7 +1670,19 @@ class name" at `B`
   "previous definition is here".
 - A friend template, or a friend specialization (`friend void f<>(T)`),
   is substituted and then matched against the namespace-scope templates
-  when it is instantiated.
+  when it is instantiated. The friend template keeps its pattern's
+  constraints (checked through `member_constraints`), whose own
+  parameters are a level deeper than the namespace template's; while it
+  is matched, each type-constraint and requires-clause is compared as its
+  substitution with the specialization's arguments, the friend's own
+  parameters at their retained depth (`Sema::friend_cmp_constraints`;
+  clang's `AreConstraintExpressionsEqual`). A constraint whose
+  substitution is not dependent names only the enclosing class's
+  parameters ([temp.friend]/9): it is compared as written, so the friend
+  stays a template of its own (WP-446; libc++ 22 `stack`/`queue`
+  `operator<=>`; `temp.friend/constrained-friend-template-*.cpp`). Gap:
+  a constraint naming both levels is compared substituted, which merges
+  what [temp.friend]/9 keeps apart.
 - A friend function or function template declared with a qualified name
   in a templated class (`template<class U> friend R N::f(X<U>);`,
   `friend R N::g(T);`) whose template head or type is dependent is not
