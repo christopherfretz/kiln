@@ -69,8 +69,7 @@ fn clang19_unevaluated(b: u32) -> bool {
     id::p0533_base(b).is_some()
         || matches!(
             b,
-            id::SIGNBIT
-                | id::ISGREATER
+            id::ISGREATER
                 | id::ISGREATEREQUAL
                 | id::ISLESS
                 | id::ISLESSEQUAL
@@ -164,6 +163,17 @@ fn fp_intrinsic(b: u32) -> Option<(&'static str, usize)> {
         id::FMINIMUM_NUM | id::FMINIMUM_NUMF | id::FMINIMUM_NUML => ("llvm.minimumnum", 2),
         _ => return None,
     })
+}
+
+/// WP-419: the `__builtin_` twin a call of the recognized C library
+/// function `d` lowers as (clang `EmitBuiltinExpr` for a library builtin
+/// whose `__builtin_` form is an LLVM intrinsic: `ceil(x)` ->
+/// `llvm.ceil`), if any. Under clang's default `-fmath-errno` only the
+/// errno-free functions are intrinsics, which are exactly the
+/// [`fp_intrinsic`] ones; the others stay library calls.
+pub(crate) fn lib_intrinsic(ast: &Ast, d: DeclId) -> Option<u32> {
+    let t = ast.decls.lib_builtin(d)?;
+    fp_intrinsic(t).is_some().then_some(t)
 }
 
 /// The `llvm.is.fpclass` test of a classification builtin
@@ -386,6 +396,12 @@ impl Cg<'_> {
             // 1 or 0 when it could evaluate it) is not a constant, as at
             // clang -O0; it is not evaluated.
             id::CONSTANT_P => V::C(self.m.const_int(LTy::I32, 0)),
+            // WP-419: the operand's GCC type class, the operand not
+            // evaluated (clang folds the call whatever the operand).
+            id::CLASSIFY_TYPE => {
+                let c = arg(0).map_or(-1, |x| ast.gcc_type_class(ast.exprs.get(x).ty()));
+                V::C(self.m.const_int(LTy::I32, i128::from(c)))
+            }
             // [specialized.addressof]: `&x` without an overloaded `&`.
             id::ADDRESSOF => self.emit_lvalue(a0)?.addr.v,
             id::CLZ

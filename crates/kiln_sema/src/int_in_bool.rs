@@ -53,14 +53,14 @@ impl Sema<'_, '_> {
                 let (ll, rl) = (self.bool_ctx_literal(l), self.bool_ctx_literal(r));
                 if ll.is_some_and(|x| x.mag == 0) {
                     let d = self.diag(DiagId::sema_left_shift_always, n.loc()).arg(0u32);
-                    self.emit(d);
+                    self.emit(d.per_instantiation());
                 } else if let (Some(ll), Some(rl)) = (ll, rl)
                     && !rl.top_bit
                     && !self.expr_is_value_dependent(e)
                     && let Some(v) = self.fold_literal_shl(ll, rl, n.ty())
                 {
                     let d = self.diag(DiagId::sema_left_shift_always, n.loc()).arg(u32::from(v));
-                    self.emit(d);
+                    self.emit(d.per_instantiation());
                 } else if self.ast.types.is_integral(n.ty()) && int_signed(self, n.ty()) {
                     let d = if self.clang_compat < 22 {
                         let text = self.expr_text_as_written(e);
@@ -68,7 +68,7 @@ impl Sema<'_, '_> {
                     } else {
                         self.diag(DiagId::sema_left_shift_in_bool_context, n.loc())
                     };
-                    self.emit(d);
+                    self.emit(d.per_instantiation());
                 }
             }
             ExprKind::ConditionalOperator => {
@@ -82,7 +82,7 @@ impl Sema<'_, '_> {
                     let at = self.begin_loc(e);
                     let d =
                         self.diag(DiagId::sema_integer_constants_in_conditional_always_true, at);
-                    self.emit(d);
+                    self.emit(d.per_instantiation());
                 }
                 return Some(arms);
             }
@@ -159,8 +159,60 @@ impl Sema<'_, '_> {
             return false;
         }
         let d = self.diag(DiagId::sema_enum_constant_in_bool_context, loc);
-        self.emit(d);
+        self.emit(d.per_instantiation());
         true
+    }
+
+    /// In an instantiation, [`Self::diagnose_enum_constant_in_bool_context`]
+    /// for each `&&` / `||` of the full-expression `root` (clang rebuilds
+    /// every operator and checks it again; a node the instantiation shares
+    /// with its pattern was not built again). The operands are taken as
+    /// written: implicit conversions stripped, parentheses kept. A
+    /// rebuilt operator already reported is deduplicated (spec/diag.md
+    /// §7.4).
+    pub(crate) fn recheck_enum_constants_in_bool(&mut self, root: ExprId) {
+        let mut stack = vec![root];
+        let mut budget = 1u32 << 16;
+        while let Some(e) = stack.pop() {
+            budget = budget.saturating_sub(1);
+            if budget == 0 {
+                break;
+            }
+            let n = *self.ast.exprs.get(e);
+            match n.kind() {
+                ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::StmtExpr
+                | ExprKind::LambdaExpr
+                | ExprKind::CXXDefaultArgExpr
+                | ExprKind::CXXDefaultInitExpr => {
+                    continue;
+                }
+                ExprKind::BinaryOperator
+                    if matches!(self.ast.exprs.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr) =>
+                {
+                    let [l, r] = self.ast.exprs.operands(e);
+                    let (l, r) = (self.strip_implicit_casts(l), self.strip_implicit_casts(r));
+                    self.diagnose_enum_constant_in_bool_context(l, r, n.loc());
+                }
+                _ => {}
+            }
+            let kids = self.ast.exprs.children(e, &self.ast.lists);
+            stack.extend(kids.into_iter().rev());
+        }
+    }
+
+    /// `e` without its implicit casts (parentheses kept).
+    fn strip_implicit_casts(&self, mut e: ExprId) -> ExprId {
+        for _ in 0..256 {
+            if self.ast.exprs.get(e).kind() != ExprKind::ImplicitCastExpr {
+                break;
+            }
+            match self.ast.exprs.children(e, &self.ast.lists).first() {
+                Some(&c) => e = c,
+                None => break,
+            }
+        }
+        e
     }
 }
 

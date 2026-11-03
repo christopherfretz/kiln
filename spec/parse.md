@@ -703,7 +703,18 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     operators may be defaulted`.
   - A declarator whose special declarator-id was malformed
     (`operator;`) takes the error type, so no `a type specifier is
-    required` follows.
+    required` follows. Neither does a declarator with no name at all
+    (`group_base_type`, `member_base_type`): clang reports only
+    "expected unqualified-id" (or, in a class, "expected member name or
+    ';' after declaration specifiers", highlighting the
+    decl-specifier-seq from any leading attribute-specifier-seq) and never
+    builds the type. A simple-declaration whose declarator has no name is
+    then skipped by `skip_malformed_decl` (clang's `SkipMalformedDecl`: a
+    braced group ends it). So a linkage-specification outside namespace
+    scope ([dcl.link]/4: `extern "C" void f();`, `extern "C++" { ... }`
+    at block scope, `extern "C"` in a class) is the one error at the
+    string literal, as in clang
+    (`dcl.link/linkage-spec-namespace-scope-only-errors.cpp`).
   - At namespace scope a declaration with no decl-specifiers whose
     first token is a name followed by `;`, `=`, `,`, `[`, `(` or `{`
     (`at_implicit_int_declarator`; `y;`, `y();`) is a declarator, not
