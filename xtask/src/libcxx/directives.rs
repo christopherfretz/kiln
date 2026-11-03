@@ -272,7 +272,8 @@ pub fn has_verify_directives(text: &str) -> bool {
                 continue;
             }
             let rest = &line[start..];
-            let level = ["error", "warning", "note", "remark"].iter().find(|l| rest.starts_with(*l));
+            let level =
+                ["error", "warning", "note", "remark"].iter().find(|l| rest.starts_with(*l));
             if level.is_some_and(|l| rest[l.len()..].contains("{{")) {
                 return true;
             }

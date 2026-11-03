@@ -14,7 +14,7 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{mpsc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -719,7 +719,7 @@ mod tests {
         assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
         assert_eq!(first.join().unwrap().signal(), Some(9));
         assert_eq!(late.join().unwrap().signal(), Some(9));
-        assert!(TABLE.lock().pids.is_empty());
+        assert_eq!(TABLE.lock().pids, Vec::<u32>::new());
         let refused = TABLE.begin_spawn().map(|_| ()).unwrap_err();
         assert_eq!(refused.kind(), io::ErrorKind::Interrupted);
     }
