@@ -36,6 +36,15 @@ use crate::templ::subst::{SubstFail, SubstResult, Substituter};
 /// size is counted by evaluating `begin + i != end` for each `i`.
 const MAX_ITERATING: u64 = 1 << 20;
 
+/// The outcome of [`Sema::expansion_count_elements`] when it does not
+/// fall back.
+enum OnePass {
+    /// The count reached `end`: the elements, in order.
+    Elements(Vec<Element>),
+    /// The 2^20 element limit was hit (diagnosed).
+    Capped,
+}
+
 /// An expansion-initializer as parsed.
 #[derive(Debug)]
 pub enum ExpansionInit {
@@ -263,10 +272,13 @@ impl Sema<'_, '_> {
             self.act_on_decl_stmt(&[begin, end], colon),
         ];
         let fast = self.expansion_size_difference(begin, end, colon);
-        if fast.is_none() {
-            if let Some(elems) = self.expansion_count_elements(begin, end, colon) {
-                return Some((prelude, elems?));
-            }
+        if fast.is_none()
+            && let Some(one) = self.expansion_count_elements(begin, end, colon)
+        {
+            return match one {
+                OnePass::Elements(elems) => Some((prelude, elems)),
+                OnePass::Capped => None,
+            };
         }
         let n = match fast {
             Some(n) => n,
@@ -318,34 +330,34 @@ impl Sema<'_, '_> {
     /// once for the element (`begin != end` for `i == 0`, as
     /// [`Sema::expansion_size`]; the `__iter` built for `i == N` is
     /// dropped). `None` when anything fails, with nothing diagnosed: the
-    /// separate count and elements then run and diagnose. `Some(None)`
-    /// after the 2^20 element limit is diagnosed.
+    /// separate count and elements then run and diagnose.
+    /// [`OnePass::Capped`] after the 2^20 element limit is diagnosed.
     fn expansion_count_elements(
         &mut self,
         begin: DeclId,
         end: DeclId,
         colon: Loc,
-    ) -> Option<Option<Vec<Element>>> {
+    ) -> Option<OnePass> {
         let (r, stash) = self.capturing(|s| {
             if !s.expansion_more(begin, end, colon)? {
-                return Some(Some(Vec::new()));
+                return Some(OnePass::Elements(Vec::new()));
             }
             let mut elems = Vec::new();
             for i in 0..MAX_ITERATING {
                 let iter = s.expansion_iter(begin, i, colon)?;
                 if i > 0 && !s.expansion_more(iter, end, colon)? {
-                    return Some(Some(elems));
+                    return Some(OnePass::Elements(elems));
                 }
                 let ds = s.act_on_decl_stmt(&[iter], colon);
                 elems.push((Some(ds), s.expansion_deref(iter, colon)?));
             }
-            Some(None)
+            Some(OnePass::Capped)
         });
         if r.is_none() || self.stash_has_error(&stash) {
             return None;
         }
         self.release(stash, Vec::new());
-        if r == Some(None) {
+        if matches!(r, Some(OnePass::Capped)) {
             self.error(DiagId::sema_expansion_size_not_constant, colon);
         }
         r
