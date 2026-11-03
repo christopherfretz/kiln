@@ -60,12 +60,9 @@ fn cxx26_fills_by_default() {
     let p = body(&ir, "plain");
     assert_eq!(fills(p), 3, "{p}");
     assert!(p.contains("store i32 0, ptr %1, align 4, !annotation"), "{p}");
-    assert!(
-        p.contains(
-            "call void @llvm.memset.p0.i64(ptr align 4 %2, i8 0, i64 64, i1 false), !annotation"
-        ),
-        "{p}"
-    );
+    // The array's alignment is the target's (4 on aarch64, 16 on x86_64).
+    assert!(p.contains("call void @llvm.memset.p0.i64(ptr align "), "{p}");
+    assert!(p.contains(" %2, i8 0, i64 64, i1 false), !annotation"), "{p}");
     assert!(ir.contains("!{!\"auto-init\"}"), "{ir}");
     // [dcl.attr.indet]: no erroneous value; a class whose constructor runs
     // is initialized by it, not filled first.
