@@ -78,13 +78,28 @@ fn levels_match(a: Level, b: Level) -> bool {
     }
 }
 
-/// Classifies `from` and `to` under [conv.qual] (top-level cv-qualifiers
-/// are ignored).
-pub fn qualification_relation(s: &Sema<'_, '_>, from: QualType, to: QualType) -> QualRelation {
+/// Two similar types decomposed level by level ([conv.qual]/1, /3),
+/// with their cv-combined decomposition.
+struct Combined {
+    /// cv1_{j+1}, cv2_{j+1} and cv3_{j+1} at index j.
+    cv1: Vec<Quals>,
+    cv2: Vec<Quals>,
+    cv3: Vec<Quals>,
+    /// `P1_j`, `P2_j` and `P3_j`.
+    p1: Vec<Level>,
+    p2: Vec<Level>,
+    p3: Vec<Level>,
+    /// The innermost type U of the first (canonical, its own cv kept).
+    inner: QualType,
+}
+
+/// Decomposes `a` and `b` under [conv.qual] and forms their cv-combined
+/// decomposition (/3), or `None` if they are not similar (/2).
+fn combine(s: &Sema<'_, '_>, a: QualType, b: QualType) -> Option<Combined> {
     // lv[j] = (cv1_{j+1}, P1_j, cv2_{j+1}, P2_j) in the notation of
     // [conv.qual]/3: P_j sits between cv_j and cv_{j+1}.
     let mut lv: Vec<(Quals, Level, Quals, Level)> = Vec::new();
-    let (mut a, mut b) = (s.ast.types.canonical(from), s.ast.types.canonical(to));
+    let (mut a, mut b) = (s.ast.types.canonical(a), s.ast.types.canonical(b));
     loop {
         match (step(s, a), step(s, b)) {
             (Some((la, na)), Some((lb, nb))) if levels_match(la, lb) && lv.len() < 4096 => {
@@ -96,7 +111,7 @@ pub fn qualification_relation(s: &Sema<'_, '_>, from: QualType, to: QualType) ->
         }
     }
     if !s.ast.types.same_type(a.without_quals(), b.without_quals()) {
-        return QualRelation::NotSimilar;
+        return None;
     }
     let n = lv.len();
     let cv1: Vec<Quals> = lv.iter().map(|l| l.0).collect();
@@ -127,6 +142,42 @@ pub fn qualification_relation(s: &Sema<'_, '_>, from: QualType, to: QualType) ->
             }
         }
     }
+    Some(Combined { cv1, cv2, cv3, p1, p2, p3, inner: a })
+}
+
+/// The cv-combined type of `a` and `b` ([conv.qual]/3), unqualified at
+/// the top level, or `None` if they are not similar. Composite pointer
+/// types of similar pointers are built from it ([expr.type]/4.6):
+/// `int **` and `const int **` give `const int *const *`.
+pub(crate) fn cv_combined_type(s: &mut Sema<'_, '_>, a: QualType, b: QualType) -> Option<QualType> {
+    let c = combine(s, a, b)?;
+    let n = c.p3.len();
+    let ty = &mut s.ast.types;
+    let mut t = ty.unqualified(c.inner);
+    if n > 0 {
+        t = ty.qualify(t, c.cv3[n - 1]);
+    }
+    for j in (0..n).rev() {
+        t = match c.p3[j] {
+            Level::Pointer => ty.pointer_to(t),
+            Level::MemberPointer(cls) => ty.member_pointer(t, cls),
+            Level::Array(Some(size)) => ty.constant_array(t, size, None),
+            Level::Array(None) => ty.incomplete_array(t),
+        };
+        if j > 0 {
+            t = ty.qualify(t, c.cv3[j - 1]);
+        }
+    }
+    Some(t)
+}
+
+/// Classifies `from` and `to` under [conv.qual] (top-level cv-qualifiers
+/// are ignored).
+pub fn qualification_relation(s: &Sema<'_, '_>, from: QualType, to: QualType) -> QualRelation {
+    let Some(Combined { cv1, cv2, cv3, p1, p2, p3, .. }) = combine(s, from, to) else {
+        return QualRelation::NotSimilar;
+    };
+    let n = cv1.len();
     let mut drops_outer = false;
     let mut drops_nested = false;
     for j in 0..n {
@@ -149,6 +200,14 @@ pub fn qualification_relation(s: &Sema<'_, '_>, from: QualType, to: QualType) ->
 /// True if `from` and `to` are similar ([conv.qual]/2).
 pub fn similar(s: &Sema<'_, '_>, from: QualType, to: QualType) -> bool {
     !matches!(qualification_relation(s, from, to), QualRelation::NotSimilar)
+}
+
+/// True if `a` and `b` are similar with the same `P_i` at every level
+/// (no array of unknown bound against one of known bound): the
+/// similarity [expr.const.cast]/3 needs (clang `UnwrapSimilarTypes`
+/// without `AllowPiMismatch`).
+pub(crate) fn similar_same_levels(s: &Sema<'_, '_>, a: QualType, b: QualType) -> bool {
+    combine(s, a, b).is_some_and(|c| c.p1 == c.p2)
 }
 
 /// True if a prvalue of `from` converts to `to` by a (possibly empty)

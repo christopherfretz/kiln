@@ -85,7 +85,10 @@ impl Cg<'_> {
     /// closure object of the call operator being emitted.
     pub(crate) fn closure_field_lvalue(&mut self, field: DeclId, q: kiln_ast::QualType) -> R<LV> {
         let ast = self.ast;
-        let (v, l) = self.f.closure.expect("in a lambda call operator");
+        let (mut v, l) = self.f.closure.expect("in a lambda call operator");
+        if let Some(obj) = self.f.closure_obj {
+            v = self.explicit_object_closure(l, obj)?;
+        }
         let rd = ast.exprs.lambdas.get(l).closure;
         let ty = self.record_ty(rd);
         let (_, align) = self.this_layout(rd);

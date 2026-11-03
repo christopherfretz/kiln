@@ -7065,7 +7065,13 @@ impl Sema<'_, '_> {
                 .record(r)
                 .is_some_and(|x| x.defn.contains(DefinitionBits::LAMBDA_CAPTURES))
             {
-                bits = bits.with(DefinitionBits::LAMBDA_CAPTURES);
+                // A closure with a capture has no default constructor
+                // ([expr.prim.lambda.closure]/13), so it is not trivial
+                // (clang `hasTrivialDefaultConstructor` needs
+                // `hasDefaultConstructor`), and not POD.
+                bits = bits
+                    .with(DefinitionBits::LAMBDA_CAPTURES)
+                    .without(DefinitionBits::TRIVIAL_DEFAULT_CTOR);
             }
         }
         let (mut bits, invalid_field) = self.record_field_bits(r, bits);
