@@ -342,22 +342,24 @@ committed file differs from the generator. See spec/bench.md \"Reflection shapes
 /// `cargo xtask gen-reflect`.
 pub fn main(args: impl Iterator<Item = String>) -> ExitCode {
     match run(args) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::from(1),
         Err(e) => {
             eprintln!("xtask gen-reflect: {e}");
-            ExitCode::from(if e.starts_with("usage") { 0 } else { 2 })
+            ExitCode::from(2)
         }
     }
 }
 
-fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+/// `Ok(false)`: `--check` found a stale file.
+fn run(mut args: impl Iterator<Item = String>) -> Result<bool, String> {
     let (mut only, mut n, mut out, mut check) = (None, None, None, false);
     while let Some(a) = args.next() {
         let mut value = |f: &str| args.next().ok_or_else(|| format!("`{f}` requires a value"));
         match a.as_str() {
             "-h" | "--help" => {
                 print!("{USAGE}");
-                return Ok(());
+                return Ok(true);
             }
             "--shape" => {
                 let v = value("--shape")?;
@@ -392,9 +394,12 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         }
     }
     if !stale.is_empty() {
-        return Err(format!("out of date (run `cargo xtask gen-reflect`): {}", stale.join(", ")));
+        eprintln!(
+            "xtask gen-reflect: out of date (run `cargo xtask gen-reflect`): {}",
+            stale.join(", ")
+        );
     }
-    Ok(())
+    Ok(stale.is_empty())
 }
 
 /// Writes (or with `check`, compares) `<dir>/<id>.cpp`; returns the path

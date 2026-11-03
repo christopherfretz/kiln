@@ -109,7 +109,7 @@ pub fn run(
     let failed: Vec<&str> = points.iter().filter_map(|p| p.failed.as_deref()).collect();
     if !failed.is_empty() {
         if let Some(reason) = xfail {
-            println!("scaling result: xfail (`xfail(kiln): {reason}`)");
+            println!("scaling result: xfail (`xfail(kiln): {reason}`)\n{}", failed.join("\n"));
             return Ok(true);
         }
         println!("scaling result: FAILED (the compile failed)\n{}", failed.join("\n"));
