@@ -9,6 +9,7 @@
 mod asm;
 mod attr;
 mod class;
+mod consteval_block;
 mod decl;
 mod expr;
 pub mod keywords;

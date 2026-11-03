@@ -24,6 +24,7 @@ mod builtins;
 pub mod class;
 mod complex;
 mod consteval;
+mod consteval_block;
 mod consteval_only;
 mod constexpr_body;
 pub mod constfold;
