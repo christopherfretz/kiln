@@ -252,6 +252,11 @@ impl Sema<'_, '_> {
         let d = self.entity_decl(x)?;
         let d = match self.kind_of(d) {
             DeclKind::EnumConstant => self.ast.decls.get(d).ctx()?,
+            // A member of an anonymous union has its access in the union.
+            DeclKind::IndirectField => {
+                let chain = self.ast.indirect_field_chain(d);
+                self.ast.lists.iter::<DeclId>(chain).last()?
+            }
             _ => d,
         };
         match self.ast.decls.get(self.ast.first(d)).misc().access() {

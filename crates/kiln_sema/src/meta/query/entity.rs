@@ -203,7 +203,7 @@ impl Sema<'_, '_> {
                         | DeclKind::CXXMethod
                         | DeclKind::CXXConstructor
                         | DeclKind::CXXConversion
-                        | DeclKind::VarTemplateSpecialization
+                        | DeclKind::Var
                 ) && self.ast.spec_info(d).is_some()
             }
             _ => false,
@@ -337,7 +337,7 @@ impl Sema<'_, '_> {
             _ => {
                 return fail(
                     loc,
-                    "reflection does not represent a value, object, variable or enumerator",
+                    "reflection does not represent an annotation or a valid argument to a splice-expression",
                 );
             }
         };
@@ -376,7 +376,21 @@ impl Sema<'_, '_> {
         loc: Loc,
         oven: &mut Oven,
     ) -> Result<Option<ConstValueId>, MetaError> {
-        if crate::constfold::int_info(&self.ast, ty).is_none() {
+        if self.ast.decls.var(d).is_none() {
+            return Ok(None);
+        }
+        let constexpr = self.ast.redecls_of(d).any(|x| {
+            self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr())
+        });
+        let integral = crate::constfold::int_info(&self.ast, ty).is_some();
+        let quals = self.ast.types.effective_quals(ty);
+        let reference = self.ast.types.is_reference(ty);
+        // [expr.const]/3: potentially-constant is constexpr, a reference,
+        // or a const non-volatile integral or enumeration variable.
+        if !constexpr && !reference && !(integral && quals.is_const() && !quals.is_volatile()) {
+            return Ok(None);
+        }
+        if !integral {
             return fail(
                 loc,
                 format!(
@@ -385,11 +399,6 @@ impl Sema<'_, '_> {
                 ),
             );
         }
-        let Some(v) = self.ast.decls.var(d) else { return Ok(None) };
-        let quals = self.ast.types.effective_quals(ty);
-        if !v.spec.is_constexpr() && !(quals.is_const() && !quals.is_volatile()) {
-            return Ok(None);
-        }
         let Some(holder) = self
             .ast
             .redecls_of(d)
@@ -397,13 +406,24 @@ impl Sema<'_, '_> {
         else {
             return Ok(None);
         };
-        let state = |s: &Self| s.ast.decls.var(holder).map(|y| y.eval.state());
-        if state(self) == Some(VarEvalState::NotEvaluated) {
-            self.lend_oven(oven, |s| s.is_constant_initialized(holder));
+        let data = |s: &Self| s.ast.decls.var(holder).map(|y| (y.eval.state(), y.init));
+        match data(self) {
+            Some((VarEvalState::Value(cv), _)) => Ok(Some(cv)),
+            Some((VarEvalState::NotEvaluated, Some(init))) => {
+                // A const variable that is not constexpr has no recorded
+                // value: its initializer, if it is a constant initializer
+                // ([basic.start.static]/2), gives it.
+                Ok(self.lend_oven(oven, |s| {
+                    if !s.is_constant_initialized(holder) {
+                        return None;
+                    }
+                    match data(s) {
+                        Some((VarEvalState::Value(cv), _)) => Some(cv),
+                        _ => s.try_fold(init),
+                    }
+                }))
+            }
+            _ => Ok(None),
         }
-        Ok(match state(self) {
-            Some(VarEvalState::Value(cv)) => Some(cv),
-            _ => None,
-        })
     }
 }
