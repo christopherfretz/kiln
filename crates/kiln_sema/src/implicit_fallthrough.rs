@@ -46,6 +46,11 @@ const CLANG_TOKENS: &str = "[ [ clang :: fallthrough ] ]";
 /// there (a compound statement's child), or `None` for the body.
 type Parents = HashMap<StmtId, (StmtId, usize)>;
 
+/// The statements of each compound statement holding a label, collected
+/// once (a label's walk back reads its block's statements; rebuilding
+/// them per label made a large `switch` quadratic).
+type Kids = HashMap<StmtId, Vec<StmtId>>;
+
 /// The predecessors falling into one label.
 #[derive(Default)]
 struct Preds {
@@ -104,8 +109,9 @@ impl Sema<'_, '_> {
         }
         let mut labels = Vec::new();
         let mut parents = Parents::new();
+        let mut kids = Kids::new();
         let mut switch_bodies = Vec::new();
-        self.ift_collect(body, &mut labels, &mut parents, &mut switch_bodies);
+        self.ift_collect(body, &mut labels, &mut parents, &mut kids, &mut switch_bodies);
         if labels.is_empty() {
             return;
         }
@@ -125,7 +131,7 @@ impl Sema<'_, '_> {
         }
         for l in labels {
             let mut into = Preds::default();
-            self.ift_label_preds(l, &parents, &switch_bodies, &flow, &mut into);
+            self.ift_label_preds(l, &parents, &kids, &switch_bodies, &flow, &mut into);
             if dead_on {
                 for s in std::mem::take(&mut into.dead) {
                     let loc = self.ast.stmts.get(s).loc();
@@ -139,7 +145,7 @@ impl Sema<'_, '_> {
             let at = self.ast.stmts.get(l).loc();
             let mut d = self.diag(DiagId::sema_implicit_fallthrough, at);
             if into.annotated == 0 && !at.is_macro() {
-                if !self.ift_break_only(l, &parents) {
+                if !self.ift_break_only(l, &parents, &kids) {
                     let spelling = self.fallthrough_spelling(at);
                     let n = self
                         .diag(DiagId::note_insert_fallthrough_fixit, at)
@@ -157,13 +163,14 @@ impl Sema<'_, '_> {
     }
 
     /// Collects, in source order, the case and default labels of `s`, the
-    /// position of each compound statement's children and the switch
-    /// bodies.
+    /// position of each compound statement's children, the children
+    /// themselves and the switch bodies.
     fn ift_collect(
         &self,
         s: StmtId,
         labels: &mut Vec<StmtId>,
         parents: &mut Parents,
+        kids: &mut Kids,
         switch_bodies: &mut Vec<StmtId>,
     ) {
         let kind = self.ast.stmts.get(s).kind();
@@ -176,9 +183,13 @@ impl Sema<'_, '_> {
             StmtKind::DeclStmt | StmtKind::ExprStmt => return,
             _ => {}
         }
-        for (i, c) in self.ift_kids(s).into_iter().enumerate() {
+        let ks = self.ift_kids(s);
+        for (i, &c) in ks.iter().enumerate() {
             parents.insert(c, (s, i));
-            self.ift_collect(c, labels, parents, switch_bodies);
+            self.ift_collect(c, labels, parents, kids, switch_bodies);
+        }
+        if kind == StmtKind::CompoundStmt {
+            kids.insert(s, ks);
         }
     }
 
@@ -199,6 +210,7 @@ impl Sema<'_, '_> {
         &self,
         l: StmtId,
         parents: &Parents,
+        kids: &Kids,
         switch_bodies: &[StmtId],
         flow: &Flow,
         into: &mut Preds,
@@ -208,9 +220,9 @@ impl Sema<'_, '_> {
             let Some(&(p, i)) = parents.get(&cur) else { return };
             match self.ast.stmts.get(p).kind() {
                 StmtKind::CompoundStmt => {
-                    let kids = self.children(p);
-                    for &k in kids[..i].iter().rev() {
-                        if self.ift_end(k, flow, into, &kids) == End::Done {
+                    let ks = kids.get(&p).map_or(&[][..], Vec::as_slice);
+                    for j in (0..i.min(ks.len())).rev() {
+                        if self.ift_end(ks[j], flow, into, &ks[..j]) == End::Done {
                             return;
                         }
                     }
@@ -300,17 +312,17 @@ impl Sema<'_, '_> {
     }
 
     /// Adds the predecessor ending with statement `s` to `into`; `End::
-    /// Empty` when `s` holds no CFG element. `kids` are the statements of
-    /// the block holding `s` (an unreachable predecessor is searched
+    /// Empty` when `s` holds no CFG element. `before` are the statements
+    /// before `s` in its block (an unreachable predecessor is searched
     /// backwards for an annotation).
-    fn ift_end(&self, s: StmtId, flow: &Flow, into: &mut Preds, kids: &[StmtId]) -> End {
+    fn ift_end(&self, s: StmtId, flow: &Flow, into: &mut Preds, before: &[StmtId]) -> End {
         let st = &self.ast.stmts;
         match st.get(s).kind() {
             StmtKind::NullStmt => End::Empty,
             StmtKind::CompoundStmt => {
                 let inner = self.children(s);
-                for &k in inner.iter().rev() {
-                    if self.ift_end(k, flow, into, &inner) == End::Done {
+                for j in (0..inner.len()).rev() {
+                    if self.ift_end(inner[j], flow, into, &inner[..j]) == End::Done {
                         return End::Done;
                     }
                 }
@@ -333,13 +345,12 @@ impl Sema<'_, '_> {
                 }
                 End::Done
             }
-            StmtKind::AttributedStmt => self.ift_end(st.sub_stmt(s), flow, into, kids),
+            StmtKind::AttributedStmt => self.ift_end(st.sub_stmt(s), flow, into, &[]),
             _ if !flow.before(s) => {
                 // An unreachable straight-line run falling into the label:
                 // its last annotation, if any.
                 if matches!(st.get(s).kind(), StmtKind::ExprStmt | StmtKind::DeclStmt) {
-                    let at = kids.iter().position(|&k| k == s).unwrap_or(0);
-                    for &k in kids[..at].iter().rev() {
+                    for &k in before.iter().rev() {
                         match st.get(k).kind() {
                             StmtKind::AttributedStmt if self.ift_is_fallthrough(k) => {
                                 into.annotated += 1;
@@ -378,7 +389,7 @@ impl Sema<'_, '_> {
 
     /// clang: the block of label `l`, past empty case blocks, holds
     /// nothing but a `break` (only the `break;` note).
-    fn ift_break_only(&self, l: StmtId, parents: &Parents) -> bool {
+    fn ift_break_only(&self, l: StmtId, parents: &Parents, kids: &Kids) -> bool {
         let st = &self.ast.stmts;
         let mut s = l;
         loop {
@@ -391,8 +402,7 @@ impl Sema<'_, '_> {
                 let Some(&(p, i)) = parents.get(&cur) else { return false };
                 match st.get(p).kind() {
                     StmtKind::CompoundStmt => {
-                        let kids = self.children(p);
-                        if let Some(&n) = kids.get(i + 1) {
+                        if let Some(&n) = kids.get(&p).and_then(|k| k.get(i + 1)) {
                             s = n;
                             break;
                         }
