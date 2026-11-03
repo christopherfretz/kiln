@@ -410,3 +410,150 @@ consteval bool is_data_member_spec(info r);
 template <class R = std::initializer_list<info>>
 consteval info define_aggregate(info class_type, R&& mdescrs);
 }  // namespace std::meta
+
+// [meta.reflection.extract], [meta.reflection.result], [meta.define.static]
+// (P3491R3; WP-479). extract and the reflect_* functions are intrinsics
+// (spec/reflection-values.md); define_static_* are library functions over
+// them, as libstdc++ defines them. define_static_array returns a span: the
+// standard one when a standard library is in use, else a stand-in of the
+// same layout.
+#if defined(_LIBCPP_VERSION) || defined(__GLIBCXX__)
+#include <span>
+#else
+namespace std {
+template <class T>
+class span {
+  T* data_ = nullptr;
+  decltype(sizeof 0) size_ = 0;
+
+ public:
+  constexpr span() noexcept = default;
+  constexpr span(T* p, decltype(sizeof 0) n) noexcept : data_(p), size_(n) {}
+  constexpr T* data() const noexcept { return data_; }
+  constexpr decltype(sizeof 0) size() const noexcept { return size_; }
+  constexpr bool empty() const noexcept { return size_ == 0; }
+  constexpr T* begin() const noexcept { return data_; }
+  constexpr T* end() const noexcept { return data_ + size_; }
+  constexpr T& operator[](decltype(sizeof 0) i) const noexcept { return data_[i]; }
+};
+}  // namespace std
+#endif
+
+namespace std::meta {
+template <class T>
+consteval T extract(info r);
+template <class T>
+consteval info reflect_constant(const T& expr);
+template <class T>
+consteval info reflect_object(T& expr);
+template <class T>
+consteval info reflect_function(T& fn);
+template <class R>
+consteval info __kiln_reflect_constant_string(R&& r);
+template <class R>
+consteval info __kiln_reflect_constant_array(R&& r);
+
+consteval bool __kiln_is_string_literal(const char* p);
+consteval bool __kiln_is_string_literal(const wchar_t* p);
+consteval bool __kiln_is_string_literal(const char8_t* p);
+consteval bool __kiln_is_string_literal(const char16_t* p);
+consteval bool __kiln_is_string_literal(const char32_t* p);
+
+// range_value_t of a built-in array or a class with begin().
+template <class T>
+struct __kiln_unref {
+  using type = T;
+};
+template <class T>
+struct __kiln_unref<T&> {
+  using type = T;
+};
+template <class T>
+struct __kiln_unref<const T> : __kiln_unref<T> {};
+template <class T>
+struct __kiln_unref<const T&> : __kiln_unref<T> {};
+template <class T>
+T& __kiln_lval() noexcept;
+template <class T, decltype(sizeof 0) N>
+T* __kiln_begin(T (&a)[N]);
+template <class R>
+auto __kiln_begin(R& r) -> decltype(r.begin());
+template <class R>
+using __kiln_range_value_t =
+    typename __kiln_unref<decltype(*__kiln_begin(__kiln_lval<R>()))>::type;
+
+// The intrinsics read a built-in array (a string literal's terminator
+// recognized) or a contiguous range by layout; a range with data() and
+// size() is passed as a span of them, any other copied into one.
+template <class F, class R>
+consteval info __kiln_reflect_range(F f, R&& r) {
+  using T = __kiln_range_value_t<R>;
+  if constexpr (__is_array(typename __kiln_unref<R>::type)) {
+    return f(r);
+  } else if constexpr (requires { r.data(); r.size(); }) {
+    return f(span<const T>(r.data(), r.size()));
+  } else if constexpr (__is_array(T)) {
+    return f(r);
+  } else {
+    decltype(sizeof 0) n = 0;
+    for (auto&& x : r) {
+      (void)x;
+      ++n;
+    }
+    T* p = n ? new T[n] : nullptr;
+    decltype(sizeof 0) i = 0;
+    for (auto&& x : r) p[i++] = static_cast<T>(x);
+    info v = f(span<const T>(p, n));
+    delete[] p;
+    return v;
+  }
+}
+template <class R>
+consteval info reflect_constant_string(R&& r) {
+  return __kiln_reflect_range([](auto&& x) { return __kiln_reflect_constant_string(x); }, r);
+}
+template <class R>
+consteval info reflect_constant_array(R&& r) {
+  return __kiln_reflect_range([](auto&& x) { return __kiln_reflect_constant_array(x); }, r);
+}
+}  // namespace std::meta
+
+namespace std {
+consteval bool is_string_literal(const char* p) { return meta::__kiln_is_string_literal(p); }
+consteval bool is_string_literal(const wchar_t* p) { return meta::__kiln_is_string_literal(p); }
+consteval bool is_string_literal(const char8_t* p) { return meta::__kiln_is_string_literal(p); }
+consteval bool is_string_literal(const char16_t* p) { return meta::__kiln_is_string_literal(p); }
+consteval bool is_string_literal(const char32_t* p) { return meta::__kiln_is_string_literal(p); }
+
+template <class R>
+consteval const meta::__kiln_range_value_t<R>* define_static_string(R&& r) {
+  using T = meta::__kiln_range_value_t<R>;
+  return meta::extract<const T*>(meta::reflect_constant_string(r));
+}
+
+template <class R>
+consteval span<const meta::__kiln_range_value_t<R>> define_static_array(R&& r) {
+  using T = meta::__kiln_range_value_t<R>;
+  decltype(sizeof 0) n = 0;
+  for (auto&& x : r) {
+    (void)x;
+    ++n;
+  }
+  if (n == 0) return span<const T>();
+  return span<const T>(meta::extract<const T*>(meta::reflect_constant_array(r)), n);
+}
+
+template <class T>
+consteval const typename meta::__kiln_unref<T>::type* define_static_object(T&& t) {
+  using U = typename meta::__kiln_unref<T>::type;
+  if constexpr (__is_class(U) || __is_union(U)) {
+    return __builtin_addressof(meta::extract<const U&>(meta::reflect_constant(t)));
+  } else if constexpr (__is_array(U)) {
+    return __builtin_addressof(meta::extract<const U&>(meta::reflect_constant_array(t)));
+  } else {
+    // A span, not `const U a[1]`: an array bound in this pattern would
+    // cost every including TU an evaluation.
+    return define_static_array(span<const U>(__builtin_addressof(t), 1)).data();
+  }
+}
+}  // namespace std

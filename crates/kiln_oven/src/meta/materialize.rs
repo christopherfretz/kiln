@@ -43,6 +43,16 @@ pub enum Shape {
     /// (`vector<info>`, `span<const info>`, `array<info, N>`,
     /// `initializer_list<info>`), read as a (data, size) span.
     Range,
+    /// A contiguous range of any element type (`reflect_constant_array`,
+    /// `reflect_constant_string`; WP-479): a built-in array, a class
+    /// holding one array, a pointer and a size, or three element
+    /// pointers, read as a (data, size) span
+    /// (`super::value::elems_recipe`).
+    Elems,
+    /// The whole result object, written by copying the object a value op
+    /// thaws ([`MetaOut::Frozen`], [`MetaOut::Deref`]; `extract<T>` of a
+    /// class `T`).
+    Whole,
 }
 
 /// A scalar member of a recipe's class: its byte offset in the complete
@@ -66,6 +76,8 @@ pub(crate) enum Recipe {
     Pair(Leaf, Leaf),
     /// An array of `n` `info` at `off` (`std::array<info, N>`).
     Inline { off: u64, elem: OTy, n: u64 },
+    /// The whole object ([`Shape::Whole`]).
+    Whole,
 }
 
 /// The exception path of a call site (spec/reflection.md §8.2): the
@@ -190,6 +202,11 @@ fn leaves(
 /// # Errors
 /// Why the class cannot be built by the shape (for the call-site note).
 pub(crate) fn recipe(types: &Types, t: OTy, shape: Shape) -> Result<Recipe, String> {
+    match shape {
+        Shape::Elems => return super::value::elems_recipe(types, t),
+        Shape::Whole => return Ok(Recipe::Whole),
+        _ => {}
+    }
     match types.kind(t) {
         TyKind::Record { .. } => {}
         // A built-in array of `info` is a range too.
@@ -251,6 +268,7 @@ pub(crate) fn recipe(types: &Types, t: OTy, shape: Shape) -> Result<Recipe, Stri
             }
             _ => span(&ls, &is_info),
         },
+        Shape::Elems | Shape::Whole => None,
     };
     found.ok_or_else(|| {
         let what = match shape {
@@ -259,6 +277,7 @@ pub(crate) fn recipe(types: &Types, t: OTy, shape: Shape) -> Result<Recipe, Stri
             Shape::SrcLoc => "one pointer",
             Shape::Pair => "two scalar members",
             Shape::Range => "a contiguous range of 'std::meta::info'",
+            Shape::Elems | Shape::Whole => "a contiguous range",
         };
         format!("does not hold {what}")
     })
@@ -319,7 +338,7 @@ impl Oven {
                 let y = u64::try_from(y).map_err(|_| Fault::Invalid)?;
                 return Ok(u128::from(x) | u128::from(y) << 64);
             }
-            Recipe::Ptr(_) => return Err(Fault::Invalid),
+            Recipe::Ptr(_) | Recipe::Whole => return Err(Fault::Invalid),
         };
         Ok(u128::from(data) | u128::from(n) << 64)
     }

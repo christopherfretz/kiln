@@ -116,7 +116,7 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
 }
 
 /// Why a value cannot be frozen.
-enum Freeze {
+pub(crate) enum Freeze {
     Fault(FailKind),
     Notes(Vec<Note>),
 }
@@ -435,7 +435,7 @@ impl Oven {
     }
 
     /// The value of the complete object at `p`.
-    fn freeze_object(
+    pub(crate) fn freeze_object(
         &mut self,
         b: &mut dyn SemaBridge,
         p: u64,
@@ -495,7 +495,7 @@ impl Oven {
         Some(vec![Note::new(loc, format!("allocation performed here was not deallocated{others}"))])
     }
 
-    fn freeze_scalar(
+    pub(crate) fn freeze_scalar(
         &mut self,
         b: &mut dyn SemaBridge,
         ty: OTy,
@@ -799,7 +799,7 @@ impl Oven {
         Err(Freeze::Notes(notes))
     }
 
-    fn freeze_aggregate(
+    pub(crate) fn freeze_aggregate(
         &mut self,
         b: &mut dyn SemaBridge,
         ty: OTy,
@@ -1489,7 +1489,7 @@ impl Oven {
     }
 
     /// The static object holding stored constant `cv`.
-    fn thaw(&mut self, b: &mut dyn SemaBridge, cv: ConstValueId, top: u32) -> u64 {
+    pub(crate) fn thaw(&mut self, b: &mut dyn SemaBridge, cv: ConstValueId, top: u32) -> u64 {
         if let Some(&p) = self.thawed.get(&cv) {
             return p;
         }

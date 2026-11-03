@@ -30,6 +30,9 @@ impl Sema<'_, '_> {
         q: QualType,
     ) -> Result<Option<Shape>, String> {
         use MetaOp as M;
+        if let M::Value(v) = op {
+            return self.value_shape(v, param);
+        }
         let Some(i) = param else {
             return match op {
                 M::Query(QueryOp::IdentifierOf | QueryOp::DisplayStringOf | QueryOp::SymbolOf) => {

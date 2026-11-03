@@ -14,6 +14,7 @@ mod query;
 mod recipe;
 mod templ;
 mod traits;
+mod value;
 
 pub(crate) use templ::SubstMemo;
 
@@ -71,7 +72,7 @@ impl Sema<'_, '_> {
             MetaOp::Member(m) => self.meta_member(m, args, out, ctx, oven),
             MetaOp::Access(a) => self.meta_access(a, args, out, ctx, oven),
             MetaOp::Annot(a) => self.meta_annot(a, args, out, ctx, oven),
-            MetaOp::Value(_) => Err(MetaError::not_implemented(op, ctx.loc)),
+            MetaOp::Value(v) => self.meta_value(v, args, out, ctx, oven),
         }
     }
 

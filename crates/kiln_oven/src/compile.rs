@@ -5681,9 +5681,42 @@ impl Compiler<'_> {
         self.next += n;
         self.max = self.max.max(self.next);
         let mut t1 = 0;
+        // `reflect_object(T&)`'s and `reflect_function(T&)`'s reference
+        // parameter is given its argument's address (WP-479; a class or
+        // array argument is passed by address anyway).
+        let value_op = matches!(op, crate::MetaOp::Value(_));
+        let by_addr = matches!(
+            op,
+            crate::MetaOp::Value(crate::ValueOp::ReflectObject | crate::ValueOp::ReflectFunction)
+        );
+        let refs: Vec<bool> = if by_addr {
+            let ast = self.ast();
+            let fty = ast.decls.get(callee).ty();
+            fty.and_then(|q| ast.types.proto(q))
+                .map(|p| ast.types.params(p).iter().map(|&t| ast.types.is_reference(t)).collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         for (i, &x) in args.iter().enumerate() {
             let slot = base + i as u32;
             let xt = self.ety(x);
+            let by_ref = refs.get(i).copied().unwrap_or(false)
+                && self.ast().exprs.get(x).value_category().is_glvalue();
+            if by_ref && !matches!(self.kind(xt), TyKind::Record { .. } | TyKind::Array { .. }) {
+                let r = match self.lv(x, Access::Addr) {
+                    Place::Mem(p) => p,
+                    _ => {
+                        // A register local has no address: it is no
+                        // object of static storage duration either.
+                        let r = self.reg();
+                        self.konst(r, 0);
+                        r
+                    }
+                };
+                self.emit(Op::Mov, 0, &[slot, r]);
+                continue;
+            }
             match self.kind(xt) {
                 TyKind::Record { .. } | TyKind::Array { .. } => {
                     let glvalue = self.ast().exprs.get(x).value_category().is_glvalue();
@@ -5693,6 +5726,15 @@ impl Compiler<'_> {
                         self.materialize(x, xt)
                     };
                     self.emit(Op::Mov, 0, &[slot, r]);
+                }
+                // A value op's `const T&` parameter bound to a scalar
+                // glvalue (`reflect_constant(x)`) is given its value.
+                _ if value_op && self.ast().exprs.get(x).value_category().is_glvalue() => {
+                    if let TyKind::Ptr(ct) = self.kind(xt) {
+                        t1 = ct.0;
+                    }
+                    let p = self.lv(x, Access::Read);
+                    self.load(p, xt, ak::READ, x, slot);
                 }
                 TyKind::Ptr(ct) => {
                     t1 = ct.0;
@@ -5722,7 +5764,8 @@ impl Compiler<'_> {
             self.konst(flag, 0);
             site.exc = Some(ExcSite { flag, what, at });
         }
-        let idx = if site.result.is_some()
+        let idx = if value_op
+            || site.result.is_some()
             || site.exc.is_some()
             || site.ranges.iter().any(Option::is_some)
         {

@@ -7,7 +7,6 @@
 //@ oracle: gcc
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
-//@ xfail(kiln): reflect_constant is WP-479, not yet on main
 #if __has_include(<meta>)
 #include <meta>
 #include <type_traits>

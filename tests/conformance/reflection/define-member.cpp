@@ -10,7 +10,7 @@
 // (one per specialization for the templates); nothing stays allocated.
 //@ oven: 26 evaluations<=1 steps<=8 allocs<=0
 //@ oven: 59:17 evaluations<=5 steps<=10
-//@ oven: 76 evaluations<=1 steps<=256 peak_bytes<=64 allocs<=0
+//@ oven: 76 evaluations<=1 steps<=256 peak_bytes<=640 refl_bytes<=600 allocs<=0
 //@ oven: 84:17 evaluations<=2
 #include "kiln_meta.h"
 using namespace std::meta;

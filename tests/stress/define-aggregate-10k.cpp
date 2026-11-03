@@ -3,13 +3,13 @@
 // m0000..m9999, built in a constexpr buffer), and later evaluations read
 // its layout and one object of it. The name check is one hash set over the
 // 10,000 names; the specs are interned by content (§6.1), so the block's
-// peak is its own buffers and the 10,000 infos.
+// peak is its buffers, the 10,000 infos and their table entries (D5).
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ expect: compile-ok
 //@ strict-diags
-//@ oven: evaluations<=10 peak_bytes<=140000 allocs<=1
-//@ oven: 32 steps<=170000 bytes<=1200000 peak_bytes<=140000 allocs<=0
+//@ oven: evaluations<=10 peak_bytes<=430000 refl_bytes<=290100 allocs<=1
+//@ oven: 32 steps<=170000 bytes<=1200000 peak_bytes<=430000 refl_bytes<=290100 allocs<=0
 #include "kiln_meta.h"
 using namespace std::meta;
 

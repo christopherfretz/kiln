@@ -8,7 +8,10 @@
 //@ expect: compile-ok
 //@ oracle: gcc
 //@ strict-diags
-//@ oven: peak_bytes<=64 allocs<=0 steps<=40000
+// Each new specialization's reflection is a 29-byte table entry, which
+// counts into peak_bytes (refl_bytes, spec/oven.md "Reflection bytes");
+// the memoized second pass adds none.
+//@ oven: peak_bytes<=290100 refl_bytes<=290100 allocs<=0 steps<=40000
 //@ mem<=1024
 #if __has_include(<meta>)
 #include <meta>

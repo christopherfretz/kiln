@@ -171,6 +171,12 @@ impl SemaBridge for Bridge<'_, '_, '_> {
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
+    /// Runs `f` with a bridge over `self`, for an Oven call a reflection
+    /// intrinsic makes on the running Oven (WP-479's freezes).
+    pub(crate) fn bridge<R>(&mut self, f: impl FnOnce(&mut dyn SemaBridge) -> R) -> R {
+        f(&mut Bridge { sema: self })
+    }
+
     /// Runs `f` with the running Oven (`oven`, from a bridge callback)
     /// lent back to sema, so the work can evaluate (nested, R-OVEN-1).
     pub(crate) fn lend_oven<R>(&mut self, oven: &mut Oven, f: impl FnOnce(&mut Self) -> R) -> R {
