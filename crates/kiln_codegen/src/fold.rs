@@ -123,6 +123,10 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     };
     let mut b = Bridge { ast, abi: target };
     let mut folds = Folds::default();
+    // clang's `ConstantEmitter` folds in modes that evaluate past
+    // floating arithmetic yielding a NaN or dividing by zero
+    // (`keepEvaluatingAfterUndefinedBehavior`).
+    oven.set_fold_float_ub(true);
     for e in cands {
         if folds.expr.contains_key(&e) {
             continue;
@@ -158,6 +162,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     // `evaluateDestruction` of that value (a `const` variable's object;
     // any other's is outside its lifetime), manifestly constant-evaluated
     // when the variable is constant-initialized.
+    oven.set_fold_float_ub(false);
     let mut dtors: Vec<_> = dtors.into_iter().collect();
     dtors.sort_unstable_by_key(|&(first, _)| first);
     for (first, (d, init, is_static)) in dtors {

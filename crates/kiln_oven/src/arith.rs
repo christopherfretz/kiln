@@ -296,8 +296,26 @@ pub(crate) fn float_bin(op: Op, kind: FloatKind, a: u128, b: u128) -> Result<u12
 /// `a op b` rounded to nearest even, with no check of the result (an
 /// `APFloat` operator: a NaN or an infinity is a value); `None` for a
 /// format whose arithmetic is not implemented.
+///
+/// NaNs follow `APFloat`, not the host: a NaN operand yields the first
+/// NaN operand, quieted, its sign and payload kept; an invalid operation
+/// (`inf - inf`, `0 * inf`, `0 / 0`) the default NaN, positive and quiet.
 pub(crate) fn float_bin_raw(op: Op, kind: FloatKind, a: u128, b: u128) -> Option<u128> {
-    Some(match kind {
+    if matches!(kind, FloatKind::X87Extended | FloatKind::Quad) {
+        return softfloat::bin(op, kind, a, b);
+    }
+    for x in [a, b] {
+        if is_nan(kind, x) {
+            return Some(softfloat::quiet(kind, x));
+        }
+    }
+    let r = float_bin_native(op, kind, a, b);
+    Some(if is_nan(kind, r) { softfloat::make_nan(kind, 0, false) } else { r })
+}
+
+/// [`float_bin_raw`] of non-NaN operands in the host's arithmetic.
+fn float_bin_native(op: Op, kind: FloatKind, a: u128, b: u128) -> u128 {
+    match kind {
         FloatKind::Single => {
             let (x, y) = (f32::from_bits(a as u32), f32::from_bits(b as u32));
             let v = match op {
@@ -329,8 +347,8 @@ pub(crate) fn float_bin_raw(op: Op, kind: FloatKind, a: u128, b: u128) -> Option
             };
             from_f64(kind, v)
         }
-        FloatKind::X87Extended | FloatKind::Quad => softfloat::bin(op, kind, a, b)?,
-    })
+        FloatKind::X87Extended | FloatKind::Quad => unreachable!("softfloat formats"),
+    }
 }
 
 /// `-a`.
@@ -353,8 +371,12 @@ pub(crate) fn float_cast(from: FloatKind, to: FloatKind, a: u128) -> u128 {
     if from == to {
         return a;
     }
+    // A NaN keeps its sign and its payload, shifted by the difference in
+    // precision, and is quieted (`APFloat::convert`); the host's
+    // conversions promise neither.
     if matches!(from, FloatKind::X87Extended | FloatKind::Quad)
         || matches!(to, FloatKind::X87Extended | FloatKind::Quad)
+        || is_nan(from, a)
     {
         return softfloat::cast(from, to, a);
     }

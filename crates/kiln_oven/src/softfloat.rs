@@ -58,7 +58,11 @@ impl Fmt {
 enum Val {
     Zero(bool),
     Inf(bool),
-    NaN,
+    /// Sign and fraction (the `p - 1` bits below the integer bit, quiet
+    /// bit first) left-aligned at bit 127: a conversion keeps the sign
+    /// and shifts the payload by the difference in precision, as
+    /// `APFloat::convert` does.
+    NaN(bool, u128),
     /// `m * 2^(e - 127)`, `m`'s top bit set.
     Fin(bool, i32, u128),
 }
@@ -70,7 +74,11 @@ fn unpack(kind: FloatKind, a: u128) -> Val {
     let field = a & ((1u128 << f.mfield()) - 1);
     let frac = if f.explicit { field & ((1u128 << (f.p - 1)) - 1) } else { field };
     if ef == f.emask() {
-        return if frac == 0 { Val::Inf(sign) } else { Val::NaN };
+        return if frac == 0 {
+            Val::Inf(sign)
+        } else {
+            Val::NaN(sign, frac << (129 - f.p))
+        };
     }
     let (int, e0) = if ef == 0 {
         if field == 0 {
@@ -94,11 +102,20 @@ fn pack_inf(f: Fmt, sign: bool) -> u128 {
     s | f.emask() << f.mfield() | int
 }
 
-fn pack_nan(f: Fmt) -> u128 {
+/// The NaN of sign `sign` and fraction `frac` (aligned as in
+/// [`Val::NaN`]), quiet: every operation that yields a NaN quiets it
+/// (`APFloat` sets the quiet bit after shifting the payload, so a
+/// signaling payload that truncates to nothing becomes the default NaN).
+fn pack_nan(f: Fmt, sign: bool, frac: u128) -> u128 {
     let q = 1u128 << (f.p - 2);
     let int = if f.explicit { 1 << (f.p - 1) } else { 0 };
-    f.emask() << f.mfield() | int | q
+    let s = u128::from(sign) << (f.total() - 1);
+    s | f.emask() << f.mfield() | int | q | frac >> (129 - f.p)
 }
+
+/// `APFloat::makeNaN()`: the default (positive, quiet, zero-payload) NaN
+/// an invalid operation yields.
+const DEFAULT_NAN: Val = Val::NaN(false, 1 << 127);
 
 fn pack_zero(f: Fmt, sign: bool) -> u128 {
     u128::from(sign) << (f.total() - 1)
@@ -159,13 +176,13 @@ fn repack(kind: FloatKind, v: Val) -> u128 {
     match v {
         Val::Zero(s) => pack_zero(f, s),
         Val::Inf(s) => pack_inf(f, s),
-        Val::NaN => pack_nan(f),
+        Val::NaN(s, m) => pack_nan(f, s, m),
         Val::Fin(s, e, m) => pack(kind, s, e, m),
     }
 }
 
 pub(crate) fn is_nan(kind: FloatKind, a: u128) -> bool {
-    unpack(kind, a) == Val::NaN
+    matches!(unpack(kind, a), Val::NaN(..))
 }
 
 pub(crate) fn to_f64(kind: FloatKind, a: u128) -> f64 {
@@ -183,7 +200,7 @@ pub(crate) fn cast(from: FloatKind, to: FloatKind, a: u128) -> u128 {
 pub(crate) fn cmp(kind: FloatKind, a: u128, b: u128) -> Option<Ordering> {
     let key = |v: Val| -> Option<(i8, i32, u128)> {
         Some(match v {
-            Val::NaN => return None,
+            Val::NaN(..) => return None,
             Val::Zero(_) => (0, 0, 0),
             Val::Inf(s) => (if s { -2 } else { 2 }, 0, 0),
             Val::Fin(s, e, m) => (if s { -1 } else { 1 }, e, m),
@@ -226,12 +243,14 @@ pub(crate) fn trunc(kind: FloatKind, a: u128) -> Option<(bool, u128)> {
 
 fn add(kind: FloatKind, x: Val, y: Val) -> Val {
     match (x, y) {
-        (Val::NaN, _) | (_, Val::NaN) => Val::NaN,
+        // The first NaN operand (`APFloat::addOrSubtractSpecials`).
+        (Val::NaN(..), _) => x,
+        (_, Val::NaN(..)) => y,
         (Val::Inf(a), Val::Inf(b)) => {
             if a == b {
                 Val::Inf(a)
             } else {
-                Val::NaN
+                DEFAULT_NAN
             }
         }
         (Val::Inf(a), _) | (_, Val::Inf(a)) => Val::Inf(a),
@@ -259,8 +278,9 @@ fn add(kind: FloatKind, x: Val, y: Val) -> Val {
 fn mul(kind: FloatKind, x: Val, y: Val) -> Val {
     let p = Fmt::of(kind).p;
     match (x, y) {
-        (Val::NaN, _) | (_, Val::NaN) => Val::NaN,
-        (Val::Inf(_), Val::Zero(_)) | (Val::Zero(_), Val::Inf(_)) => Val::NaN,
+        (Val::NaN(..), _) => x,
+        (_, Val::NaN(..)) => y,
+        (Val::Inf(_), Val::Zero(_)) | (Val::Zero(_), Val::Inf(_)) => DEFAULT_NAN,
         (Val::Inf(a), Val::Inf(b) | Val::Fin(b, ..)) | (Val::Fin(a, ..), Val::Inf(b)) => {
             Val::Inf(a != b)
         }
@@ -298,10 +318,9 @@ fn mul(kind: FloatKind, x: Val, y: Val) -> Val {
 fn div(kind: FloatKind, x: Val, y: Val) -> Val {
     let p = Fmt::of(kind).p;
     match (x, y) {
-        (Val::NaN, _)
-        | (_, Val::NaN)
-        | (Val::Inf(_), Val::Inf(_))
-        | (Val::Zero(_), Val::Zero(_)) => Val::NaN,
+        (Val::NaN(..), _) => x,
+        (_, Val::NaN(..)) => y,
+        (Val::Inf(_), Val::Inf(_)) | (Val::Zero(_), Val::Zero(_)) => DEFAULT_NAN,
         (Val::Inf(a), Val::Fin(b, ..) | Val::Zero(b)) => Val::Inf(a != b),
         (Val::Fin(a, ..) | Val::Zero(a), Val::Inf(b)) => Val::Zero(a != b),
         (Val::Zero(a), Val::Fin(b, ..)) => Val::Zero(a != b),
@@ -336,7 +355,8 @@ pub(crate) fn bin(op: Op, kind: FloatKind, a: u128, b: u128) -> Option<u128> {
                 Val::Zero(s) => Val::Zero(!s),
                 Val::Inf(s) => Val::Inf(!s),
                 Val::Fin(s, e, m) => Val::Fin(!s, e, m),
-                Val::NaN => Val::NaN,
+                // A NaN keeps its sign (`APFloat::subtract`).
+                n @ Val::NaN(..) => n,
             },
         ),
         Op::FMul => mul(kind, x, y),
@@ -354,7 +374,7 @@ pub(crate) fn ilogb(kind: FloatKind, a: u128) -> i32 {
         Val::Fin(_, e, _) => e,
         Val::Zero(_) => i32::MIN + 1,
         Val::Inf(_) => i32::MAX,
-        Val::NaN => i32::MIN,
+        Val::NaN(..) => i32::MIN,
     }
 }
 

@@ -456,6 +456,9 @@ pub struct Oven {
     /// slot per translation unit however often the mode alternates
     /// (spec/oven.md "Evaluation entry points").
     pub(crate) lax_objs: FxHashMap<u32, u64>,
+    /// Floating arithmetic that yields a NaN or divides by zero goes on
+    /// with the `APFloat` result ([`Oven::set_fold_float_ub`]).
+    pub(crate) fold_float_ub: bool,
     /// String literal objects of evaluated `StringLiteral` exprs, one per
     /// expression ([lex.string]/9: distinct evaluations need not share).
     pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
@@ -528,6 +531,7 @@ impl Oven {
             lax_globals: Vec::new(),
             lax_objs: FxHashMap::default(),
             lax_resolved: false,
+            fold_float_ub: false,
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
             lets: FxHashMap::default(),
@@ -555,6 +559,16 @@ impl Oven {
         let i = self.origins.len() as u32;
         self.origins.push(o);
         i
+    }
+
+    /// Lets floating arithmetic that yields a NaN or divides by zero
+    /// ([expr.pre]/4, [expr.mul]/4: not a constant expression) go on with
+    /// the IEEE result, as clang's codegen folds an initializer or operand
+    /// (`ConstantEmitter`: such a result is undefined behaviour the
+    /// folding evaluation modes keep evaluating past). A call that did is
+    /// never memoized. Codegen sets it; sema never does.
+    pub fn set_fold_float_ub(&mut self, on: bool) {
+        self.fold_float_ub = on;
     }
 
     /// Sets how many call frames a failure's backtrace shows
