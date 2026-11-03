@@ -105,6 +105,11 @@ pub struct FnState {
     /// far (clang `ModifiedNonNullParams`): a `nonnull` one is no longer
     /// known non-null (spec/sema.md §5.27).
     pub(crate) modified_params: Vec<DeclId>,
+    /// The left operands of the volatile simple assignments of the body
+    /// not (yet) found discarded (clang
+    /// `ExpressionEvaluationContextRecord::VolatileAssignmentLHSs`,
+    /// [`Sema::note_volatile_assign`]), warned at the end of the body.
+    pub(crate) volatile_assigns: Vec<ExprId>,
 }
 
 impl FnState {
@@ -128,6 +133,7 @@ impl FnState {
             coro: None,
             first_return: None,
             modified_params: Vec::new(),
+            volatile_assigns: Vec::new(),
         }
     }
 }
@@ -297,6 +303,7 @@ impl Sema<'_, '_> {
     /// type of one of the forms [`Sema::is_read_if_discarded`] accepts
     /// undergoes the lvalue-to-rvalue conversion (so the object is read).
     pub(crate) fn ignored_value_conversions(&mut self, e: ExprId) -> ExprId {
+        self.discard_volatile_assign(e);
         if self.std >= kiln_lex::Std::Cxx11 && self.is_read_if_discarded(e) {
             conv::lvalue_to_rvalue(self, e)
         } else {
@@ -698,6 +705,9 @@ impl Sema<'_, '_> {
     pub fn exit_var_initializer(&mut self, (quiet, depr): (u32, Option<DeclId>)) {
         if let Some(f) = self.func.as_mut() {
             f.rt_quiet = quiet;
+        } else {
+            let pending = std::mem::take(&mut self.volatile_assigns);
+            self.warn_volatile_assigns(pending);
         }
         self.depr_init = depr;
     }
@@ -1374,6 +1384,7 @@ impl Sema<'_, '_> {
             self.set_deduced_return(f, ret);
         }
         let Some(mut state) = self.func.take() else { return wrapped };
+        self.warn_volatile_assigns(std::mem::take(&mut state.volatile_assigns));
         for &r in &state.returns {
             if let Some(v) = self.ast.stmts.return_nrvo(r)
                 && !self.ast.decls.var(v).is_some_and(|x| x.spec.is_nrvo())

@@ -1010,6 +1010,71 @@ impl Sema<'_, '_> {
         }
         Some((vec![a, b], res))
     }
+
+    /// `__builtin_elementwise_add_sat` / `_sub_sat` (clang
+    /// `BI__builtin_elementwise_add_sat`; spec/sema.md §5.4). Compat 22
+    /// (`BuiltinElementwiseMath` with the integer restriction): both
+    /// arguments decay (no promotion); the first must be a scalar or vector
+    /// of integer type (`bool` and an unscoped enumeration count), then the
+    /// second must have the same unqualified type. Compat 19: the checks of
+    /// `__builtin_elementwise_max` (usual conversions first), then the
+    /// (element) type must be an integer type. The result has the (common)
+    /// argument type.
+    pub(crate) fn builtin_elementwise_sat(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        let int_elem = |s: &Self, q: QualType| {
+            let elem = s.vector_parts(q).map_or(q, |p| p.elem);
+            s.is_integer_type(elem)
+        };
+        if self.clang_compat < 22 {
+            let (args, res) = self.builtin_elementwise_minmax(args, rparen)?;
+            if !int_elem(self, res) {
+                let a = args[0];
+                let msg = self
+                    .diag(DiagId::sema_builtin_arg_must_be, self.begin_loc(a))
+                    .arg(0)
+                    .arg("vector of integers")
+                    .arg(self.ty_arg(self.ety(a)));
+                self.emit(msg);
+                return None;
+            }
+            return Some((args, res));
+        }
+        if !self.builtin_arg_count(args, 2, rparen) {
+            return None;
+        }
+        let a = conv::decay(self, args[0]);
+        let b = conv::decay(self, args[1]);
+        let (ta, tb) = (self.ety(a), self.ety(b));
+        let err =
+            |s: &Self, q: QualType| s.ast.types.canonical(q).without_quals() == QualType::ERROR;
+        if err(self, ta) || err(self, tb) {
+            return None;
+        }
+        let res = conv::strip_cv(self, ta);
+        let at = self.begin_loc(a);
+        if !int_elem(self, res) {
+            let msg = self
+                .diag(DiagId::sema_builtin_arg_must_be, at)
+                .arg(0)
+                .arg("scalar or vector of integer types")
+                .arg(self.ty_arg(res));
+            self.emit(msg);
+            return None;
+        }
+        if !self.ast.types.same_unqualified(ta, tb) {
+            let msg = self
+                .diag(DiagId::sema_call_different_arg_types, at)
+                .arg(self.ty_arg(ta))
+                .arg(self.ty_arg(tb));
+            self.emit(msg);
+            return None;
+        }
+        Some((vec![a, b], res))
+    }
 }
 
 // -- vector conditionals --------------------------------------------------------

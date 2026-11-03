@@ -845,7 +845,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
       normally. An enum in a member declaration may be followed by `:`
       (a bit-field).
     - `parse_enum_body` holds enumerators, with an optional fixed
-      underlying type and `enum class`/`enum struct`.
+      underlying type and `enum class`/`enum struct`. GNU attributes
+      right after the closing `}` (`enum E { ... } __attribute__((packed));`)
+      are read there and given to `act_on_record_trailing_attrs` before
+      `act_on_finish_enum_definition`, as clang's `ParseEnumBody`
+      (WP-432).
 - **Namespaces:**
   - `namespace N { }`, `inline namespace`, `namespace A::B { }`, and
     unnamed namespaces (§sema 4.6)

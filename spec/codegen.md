@@ -283,6 +283,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     nothrow, or the direct callee has a `NoThrow` attribute (a
     recognized C library function, spec/sema.md §5.4) or a `const` /
     `pure` attribute; the declaration and a definition get it too;
+    a callee expression that folds to a function (a constant
+    `int (&)(int)` naming one) is that function for these checks and
+    for `TryMarkNoThrow`, as clang's `CalleePtr` (WP-432,
+    `fn_ref_callee_nounwind.cpp`);
   - a written or implicit `const` / `pure` attribute (not on a builtin,
     whose row decides) adds `willreturn memory(none)` /
     `willreturn memory(read)` to the declaration, the definition and
@@ -333,6 +337,9 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     (`builtins.rs`, clang `EmitBuiltinExpr`; landed in WP-088):
     - a call with an integral or floating result is a fold candidate
       (§3, `fold.rs`); if the Oven folds it, it is that constant;
+      `abs` / `labs` / `llabs` are candidates only at
+      `-fclang-compat=22` (clang 20 made them constant; WP-432,
+      `builtins_abs_22.cpp`);
     - `__builtin_is_constant_evaluated()` is `i1 false`, since code that
       runs is not manifestly constant-evaluated (it is never a fold
       candidate);
@@ -448,7 +455,15 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       first for a pointer). Constant operands fold as IRBuilder folds them
       (`x + 0` is kept); an integer call is a fold candidate.
       `__builtin_debugtrap()` is `call void @llvm.debugtrap()`,
-      `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`.
+      `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`,
+      `__builtin_return_address(n)` `call ptr @llvm.returnaddress(i32 n)`
+      (WP-432, `builtins_return_address.cpp`).
+      `__builtin_elementwise_add_sat` / `_sub_sat` are `llvm.sadd.sat` /
+      `uadd.sat` / `ssub.sat` / `usub.sat` by element signedness (a
+      `bool` operand as unsigned), folded at 22 when the Oven folds them
+      (WP-432, `builtins_elementwise_sat{,_22}.cpp`). The alignment
+      builtins on a pointer to an object of known alignment fold in a
+      global initializer (spec/oven.md "Builtins"; `builtins_align_ptr.cpp`).
       `__builtin_elementwise_abs` is `llvm.abs(x, i1 false)` for
       integers and `llvm.fabs` for floating point, `_max` / `_min`
       `llvm.smax` / `umax` / `smin` / `umin` by element signedness and
@@ -1533,7 +1548,9 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   thunks spill and reload their parameters like any function, adjust
   `this`, and forward the arguments with a `tail call` (not `musttail`).
   Attributes follow clang's IsThunk rules: `this` keeps only `noundef`,
-  and a reference return keeps only `noundef`.
+  and a reference return keeps only `noundef`. A thunk is `nounwind`
+  only by its method's type or attributes: no `TryMarkNoThrow` over its
+  body (clang `generateThunk`; WP-432, `thunk_attrs{,_noexc}.cpp`).
 - **`dynamic_cast`** (`EmitDynamicCast`): pointer sources are
   null-checked (blocks `dynamic_cast.notnull`/`.null`/`.end`, then a
   phi). The runtime call is `__dynamic_cast(p, srcRTTI, dstRTTI, hint)`

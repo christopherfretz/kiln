@@ -1161,6 +1161,10 @@ impl Sema<'_, '_> {
         // The `TypoExpr`s of expressions the parser dropped come first
         // (WP-330).
         self.emit_dropped_typos();
+        // Volatile assignments outside any body or variable initializer
+        // (a default member initializer, a default argument).
+        let pending = std::mem::take(&mut self.volatile_assigns);
+        self.warn_volatile_assigns(pending);
         self.check_delegating_cycles();
         self.diagnose_unused_file_scope_vars();
         self.reject_self_typed_var_specs();
