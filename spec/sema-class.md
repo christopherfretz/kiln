@@ -979,6 +979,28 @@ warns [-Wclass-conversion]. `explicit` elsewhere: `'explicit' can only be
 applied to a constructor or conversion function`. Selection (converting ctors
 and conversion functions in user-defined conversion sequences) is S3O's.
 
+**Explicit object parameters** ([class.conv.fct]/1, [dcl.fct]/6, P0847;
+WP-459). A conversion function may declare an explicit object parameter
+(`operator int(this const S&)`): "no parameters" counts only the non-object
+ones (clang `CheckConversionDeclarator`), and the declaration gets the
+explicit-object flag through the same `explicit_object_member` check as any
+member, which runs before the conversion function's own checks (so `static`
+and a non-first `this` report clang's explicit-object errors, the latter
+before `conversion function cannot have any parameters`). `operator=` takes
+one the same way. A constructor or destructor cannot (`an explicit object
+parameter cannot appear in a {constructor|destructor}`, at `this`; the
+declaration is invalid). In a user-defined conversion sequence the implied
+object argument initializes the explicit object parameter by copy-
+initialization with user-defined conversions suppressed (clang
+`TryObjectArgumentInitialization`), so value-category and cv overloads on the
+object parameter pick as for any call; a conversion function template also
+deduces its object parameter from the implied object argument (`this auto&&`,
+`this Self&&`; `deduce_conversion` gets the object as the one call argument).
+The call is built as an explicit-object call (object as first argument, no
+temporary materialized for it). Before C++23 every explicit object parameter
+is an error (`explicit object parameters are incompatible with C++ standards
+before C++2b`, parser, at `this`; parsing continues as C++23).
+
 #### 4.7.1 Prospective destructors ([class.dtor]/4; WP-289)
 A class may declare several *prospective* destructors, distinguished by
 their trailing *requires-clause*s. Every one is an ordinary member in lookup
