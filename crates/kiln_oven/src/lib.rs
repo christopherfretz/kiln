@@ -34,6 +34,7 @@
 
 pub mod apfloat;
 mod arith;
+mod bigint;
 mod compile;
 mod complex;
 mod failure;
