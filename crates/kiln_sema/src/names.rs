@@ -64,6 +64,22 @@ impl<'s> SemaNames<'s> {
         SemaNames { typed_args: Some(f), ..self }
     }
 
+    /// An explicit class template specialization named as a lookup
+    /// context ("no type named 'x' in 'std::hash<monostate>'"): clang's
+    /// `TypePrinter::printTag` prints its arguments as written in the
+    /// specialization (`getTypeAsWritten`), so a type argument is not
+    /// scoped ([temp.expl.spec]/1). `None` for any other declaration.
+    pub fn explicit_spec_context(&self, d: DeclId) -> Option<String> {
+        let (_, info) = self.ast.spec_info(d)?;
+        if info.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization {
+            return None;
+        }
+        let mut s = String::new();
+        self.write_decl_name(d, true, &mut s);
+        kiln_ast::types::write_arg_list_of(&self.ast.types, self, d, info.print_args, &mut s);
+        Some(s)
+    }
+
     fn simple(&self, d: DeclId) -> Option<String> {
         let name = self.ast.decls.get(d).name();
         let s = self.ast.names.simple_spelling(name, self.ast.symbols()).unwrap_or_else(|| {

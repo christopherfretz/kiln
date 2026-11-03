@@ -8820,6 +8820,12 @@ impl Sema<'_, '_> {
             DeclKind::CXXRecord if self.current_instantiation_desc(q).is_some() => {
                 format!("'{}'", self.current_instantiation_desc(q).unwrap_or_default())
             }
+            // An explicit specialization prints its arguments as written.
+            DeclKind::CXXRecord
+                if let Some(s) = crate::names::SemaNames::new(self).explicit_spec_context(q) =>
+            {
+                format!("'{s}'")
+            }
             // clang prints the context's qualified name (the canonical
             // type: `'N::B'`, not `'B' (aka 'N::B')`).
             _ => {
