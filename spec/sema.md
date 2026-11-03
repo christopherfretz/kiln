@@ -4390,6 +4390,16 @@ Each rule names the libc++ test it fixed and its corpus test.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
+  - an invalid element (WP-408): an expression standing for clang's
+    `ExprError` (`Sema::is_expr_error`: an undeclared identifier or a
+    qualified name not found, as opposed to a `RecoveryExpr` such as a
+    failed call) among the parenthesized arguments or anywhere in a
+    braced list leaves the initialization unperformed and undiagnosed
+    (clang's `ActOnInitializerError`): `int w(S::nom, 2);` reports no
+    "excess elements in scalar initializer". A braced list holding one
+    is itself such an expression as a call argument or in `T{...}`
+    (clang's `ParseBraceInitializer` fails). Test:
+    `tests/conformance/dcl.init.general/invalid-element-initializer.cpp`.
   - copy- and direct-initialization of scalars, through the implicit
     conversion sequence, with narrowing enforced for list-init
     ([dcl.init.list]/7); a list element (`init_element`, an array or

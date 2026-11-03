@@ -596,6 +596,10 @@ pub struct Sema<'a, 'sm> {
     /// [`Sema::note_condition_typo`]'s location, taken by the next
     /// [`Sema::act_on_condition`].
     pending_cond_typo: Loc,
+    /// The expressions that stand for clang's `ExprError` (a name lookup
+    /// found nothing): an initializer holding one is not performed
+    /// ([`Sema::is_expr_error`], clang's `ActOnInitializerError`).
+    expr_errors: kiln_source::fx::FxHashSet<ExprId>,
     /// The C++26 rule for deleting a pointer to an incomplete type
     /// (P3144), as the parser last passed it to
     /// [`Sema::act_on_cxx_delete`]; reused when a dependent
@@ -865,6 +869,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_for_outer_depth: None,
             cond_typo_at: Loc::INVALID,
             pending_cond_typo: Loc::INVALID,
+            expr_errors: kiln_source::fx::FxHashSet::default(),
             delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
             delayed_exc_equiv: Vec::new(),
@@ -1253,6 +1258,20 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         let open = at.is_valid()
             && self.delayed_typos.iter().any(|h| h.spec.as_ref().is_some_and(|s| s.loc == at));
         self.pending_cond_typo = if open { at } else { Loc::INVALID };
+    }
+
+    /// Whether `e` stands for clang's `ExprError` rather than a
+    /// `RecoveryExpr`: the name it refers to was not found (an undeclared
+    /// identifier, `S::nom`), so clang's parser sees an invalid
+    /// expression (WP-408).
+    pub fn is_expr_error(&self, e: ExprId) -> bool {
+        self.expr_errors.contains(&e)
+    }
+
+    /// Records `e` as an `ExprError` ([`Sema::is_expr_error`]).
+    pub(crate) fn mark_expr_error(&mut self, e: ExprId) -> ExprId {
+        self.expr_errors.insert(e);
+        e
     }
 
     /// Takes [`Sema::note_condition_typo`]'s mark if it is for `at`.

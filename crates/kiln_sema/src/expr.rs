@@ -1522,12 +1522,14 @@ impl Sema<'_, '_> {
                 let msg =
                     self.diag(DiagId::sema_no_member, loc).arg(text).arg(self.qualifier_desc(q));
                 let e = self.recover_err(&[], loc);
+                let e = self.mark_expr_error(e);
                 self.emit_delayed_typo(msg, e);
                 return e;
             }
             let msg = self.diag(Self::undeclared_use_id(name), loc).arg(text);
             self.emit(msg);
-            return self.recover_err(&[], loc);
+            let e = self.recover_err(&[], loc);
+            return self.mark_expr_error(e);
         };
         if found.decls.len() > 1
             && found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::UnresolvedUsingValue)
