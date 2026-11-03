@@ -1,0 +1,48 @@
+Dumping X::C:
+CXXRecordDecl struct C definition
+`-FieldDecl x 'int'
+
+Dumping X<V, q::W>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl i 'int'
+
+Dumping Y::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping Y<K::a, K::b>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl j 'int'
+
+Dumping Y2::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping Y2<int, 7, K::a>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl k 'int'
+
+Dumping Y2<long>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl l 'int'
+
+Dumping Y3::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping Y3<K::a, 3, (K)9, 3U, 'a', true, -1L, 5ULL, e1, (short)-3>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl m 'int'
+
+Dumping Y4::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'int'
+
+Dumping Y4<(K)9>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl n 'int'
+
+Dumping Y4<'a'>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl o 'int'
+
