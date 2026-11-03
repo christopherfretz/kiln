@@ -1529,12 +1529,7 @@ impl Sema<'_, '_> {
             return e;
         }
         if self.is_vector_type(ty) {
-            // A vector is not an aggregate ([dcl.init.list]/3.1; clang
-            // `FK_DesignatedInitForNonAggregate`).
-            if l.items.iter().any(|i| !i.designator.is_empty()) && !self.is_error_type(ty) {
-                return self.designated_non_aggregate(ty, l, entity.unwrap_or(l.lbrace));
-            }
-            return self.vector_list_init(ty, l);
+            return self.vector_list_init(ty, l, entity.unwrap_or(l.lbrace));
         }
         if let Some(e) = self.complex_list_init(ty, l) {
             return e;
@@ -1589,8 +1584,13 @@ impl Sema<'_, '_> {
     /// copy-initializes the whole vector; otherwise each element
     /// initializes one vector element, the rest are zero (no filler in
     /// the list, as clang), and an element past the last is "excess
-    /// elements in vector initializer".
-    fn vector_list_init(&mut self, ty: QualType, l: &InitList) -> ExprId {
+    /// elements in vector initializer". A vector is not an aggregate
+    /// ([dcl.init.list]/3.1; clang `FK_DesignatedInitForNonAggregate`),
+    /// so a designated list is an error at `at`.
+    fn vector_list_init(&mut self, ty: QualType, l: &InitList, at: Loc) -> ExprId {
+        if l.items.iter().any(|i| !i.designator.is_empty()) && !self.is_error_type(ty) {
+            return self.designated_non_aggregate(ty, l, at);
+        }
         let top = self.ast.types.desugar_top(ty);
         let (elem, count) = match self.ast.types.view(top.ty()) {
             kiln_ast::types::TypeView::Vector { elem, count, .. } => (elem, count as usize),
@@ -1610,10 +1610,7 @@ impl Sema<'_, '_> {
             inits.push(x);
             pos = 1;
         } else {
-            let Some(xs) = self.vector_elements(elem, count, &l.items, &mut pos, true) else {
-                return self.recover(ty, &[], l.lbrace);
-            };
-            inits = xs;
+            inits = self.vector_elements(elem, count, &l.items, &mut pos, true);
         }
         if let Some(extra) = l.items.get(pos) {
             let msg = self.diag(DiagId::sema_excess_initializers, extra.value.loc(self)).arg("1");
@@ -1633,7 +1630,7 @@ impl Sema<'_, '_> {
         items: &[InitItem],
         pos: &mut usize,
         braced: bool,
-    ) -> Option<Vec<ExprId>> {
+    ) -> Vec<ExprId> {
         let mut inits = Vec::new();
         while inits.len() < count && *pos < items.len() {
             let item = &items[*pos];
@@ -1649,7 +1646,7 @@ impl Sema<'_, '_> {
             inits.push(x);
             *pos += 1;
         }
-        Some(inits)
+        inits
     }
 
     /// One vector element of type `elem` from `e` (clang
@@ -1686,7 +1683,7 @@ impl Sema<'_, '_> {
             kiln_ast::types::TypeView::Vector { elem, count, .. } => (elem, count as usize),
             _ => return self.recover(ty, &[], at),
         };
-        let inits = self.vector_elements(elem, count, items, pos, false).unwrap_or_default();
+        let inits = self.vector_elements(elem, count, items, pos, false);
         self.builder().init_list(ty, &inits, None, None, at, at)
     }
 
