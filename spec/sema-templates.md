@@ -1235,7 +1235,9 @@ Out-of-class partial specializations of a member template (WP-150):
   [temp.expl.spec]/3): the qualifier is resolved, the primary looked up
   in the nominated scope, and the unqualified path reused. The enclosing
   namespace must contain the template's ("class template specialization
-  of 'Z' not in a namespace enclosing 'N'"); a name that is not a class
+  of 'Z' not in a namespace enclosing 'N'", or "... must occur at global
+  scope" for a global template, with "explicitly specialized declaration
+  is here"); a name that is not a class
   template, a missing template-id, or an undeclared name take clang's
   errors (WP-409, `temp.expl.spec/qualified-class-spec{,-errors,-non-template}.cpp`,
   `temp.expl.spec/qualified-class-name-errors.cpp`).
