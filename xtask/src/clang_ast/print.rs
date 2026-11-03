@@ -5,9 +5,10 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use super::side::{self, TextArg, TextDecl, TextTemplateParm};
+use super::subst::{self, Defaulted};
 use super::table::{self, Disposition};
 use super::values::{self, Field, Literals, Record, Types};
-use super::{DumpOptions, escape};
+use super::{DumpOptions, TextDump, escape};
 use crate::util::json::Json;
 
 type Res<T> = Result<T, String>;
@@ -16,11 +17,11 @@ pub(super) fn kind(n: &Json) -> &str {
     n.get("kind").and_then(Json::as_str).unwrap_or("")
 }
 
-fn flag(n: &Json, key: &str) -> bool {
+pub(super) fn flag(n: &Json, key: &str) -> bool {
     matches!(n.get(key), Some(Json::Bool(true)))
 }
 
-fn text<'a>(n: &'a Json, key: &str) -> Option<&'a str> {
+pub(super) fn text<'a>(n: &'a Json, key: &str) -> Option<&'a str> {
     n.get(key).and_then(Json::as_str)
 }
 
@@ -55,7 +56,7 @@ fn is_null(n: &Json) -> bool {
 
 /// A node's children: `inner`, or `array_filler` (an `InitListExpr` with a
 /// filler, whose first entry is the filler).
-fn kids(n: &Json) -> impl Iterator<Item = &Json> {
+pub(super) fn kids(n: &Json) -> impl Iterator<Item = &Json> {
     n.as_obj()
         .into_iter()
         .flatten()
@@ -452,15 +453,23 @@ enum Ctx {
     Transparent,
     /// An unnamed class (clang's spelling of it is not reproduced).
     Unnamed,
+    /// A specialization whose spelling depends on which of its arguments
+    /// were written, which the JSON does not say ([`Defaulted::Unknown`]):
+    /// each candidate contributes `name::`. clang's filtered text dump
+    /// decides between the qualified names they make.
+    Choice(Vec<String>),
 }
 
 struct Printer<'a, 'f> {
     ix: Index<'a>,
     opts: &'f DumpOptions,
     main_file: &'f str,
-    text: &'f mut (dyn FnMut() -> Result<String, String> + Send),
+    text: &'f mut TextDump<'f>,
     /// The text dump, fetched at most once.
     side_text: Option<String>,
+    /// The `Dumping …:` headers of clang's text dump filtered by the
+    /// filter-mode string, fetched at most once ([`Ctx::Choice`]).
+    filter_heads: Option<HashSet<String>>,
     side: Option<Vec<TextDecl>>,
     /// The side channel's cast lines: (class, type as written).
     side_casts: Option<Vec<(&'static str, String)>>,
@@ -479,7 +488,7 @@ pub fn dump(
     root: &Json,
     main_file: &str,
     opts: &DumpOptions,
-    text: &mut (dyn FnMut() -> Result<String, String> + Send),
+    text: &mut TextDump<'_>,
 ) -> Res<String> {
     if kind(root) != "TranslationUnitDecl" {
         return Err("clang-ast: the JSON dump is not a TranslationUnitDecl".into());
@@ -490,6 +499,7 @@ pub fn dump(
         main_file,
         text,
         side_text: None,
+        filter_heads: None,
         side: None,
         side_casts: None,
         side_ttps: None,
@@ -575,11 +585,11 @@ impl<'a> Printer<'a, '_> {
             // A `UsingDecl`'s JSON name is as written (`N::x`); its
             // declaration name is `x`.
             let nm = if k == "UsingDecl" { nm.rsplit("::").next().unwrap_or(nm) } else { nm };
-            let q = match text(n, "parentDeclContextId") {
+            let qs = match text(n, "parentDeclContextId") {
                 Some(p) => qualified(&self.semantic_ctx(p)?, nm)?,
                 None => qualified(ctx, nm)?,
             };
-            if q.contains(f) {
+            if let Some(q) = self.pick_qualified(qs, f)? {
                 if let Some(t) = self.node(n)? {
                     out.push_str("Dumping ");
                     out.push_str(&q);
@@ -709,14 +719,26 @@ impl<'a> Printer<'a, '_> {
         }
         // clang drops trailing arguments equal to their parameter's
         // default (`SuppressDefaultTemplateArgs`), unless one is a pack.
+        // Where equality depends on whether the argument was written
+        // (`Defaulted::Unknown`), both lengths are candidates.
         let mut end = args.len();
+        let mut ends = Vec::new();
         if !args.iter().any(|a| flag(a, "isPack")) {
-            while end > 0 && self.is_default_arg(n, params[end - 1], &args, end - 1)? {
+            while end > 0 {
+                match self.is_default_arg(n, params[end - 1], &args, end - 1)? {
+                    Defaulted::No => break,
+                    Defaulted::Unknown => ends.push(end),
+                    Defaulted::Yes => {}
+                }
                 end -= 1;
             }
         }
+        ends.push(end);
+        let max = ends[0];
         let mut parts = Vec::new();
-        for (i, (a, p)) in args[..end].iter().zip(&params).enumerate() {
+        // `cut[e]`: the number of parts the first `e` arguments print.
+        let mut cut = vec![0];
+        for (i, (a, p)) in args[..max].iter().zip(&params).enumerate() {
             if flag(a, "isPack") {
                 // An empty pack prints nothing; its elements print as
                 // arguments of the parameter's (element) type.
@@ -726,8 +748,11 @@ impl<'a> Printer<'a, '_> {
             } else {
                 parts.push(self.ctx_arg(n, a, i, None, param_ty(p))?);
             }
+            cut.push(parts.len());
         }
-        Ok(Some(Ctx::Named(format!("{nm}<{}>", parts.join(", ")))))
+        let mut names: Vec<String> =
+            ends.iter().map(|&e| format!("{nm}<{}>", parts[..cut[e]].join(", "))).collect();
+        Ok(Some(if names.len() == 1 { Ctx::Named(names.remove(0)) } else { Ctx::Choice(names) }))
     }
 
     /// Argument `arg` of specialization `spec` (argument `idx`, or element
@@ -800,9 +825,15 @@ impl<'a> Printer<'a, '_> {
     /// template template default by the template it names, from the side
     /// channel (`template <class> class TT = V`); a non-type default when
     /// it is a literal. A default the tool cannot compare is an error.
-    fn is_default_arg(&mut self, n: &Json, parm: &Json, args: &[&Json], i: usize) -> Res<bool> {
+    fn is_default_arg(
+        &mut self,
+        n: &Json,
+        parm: &Json,
+        args: &[&Json],
+        i: usize,
+    ) -> Res<Defaulted> {
         if parm.get("defaultArg").is_none() {
-            return Ok(false);
+            return Ok(Defaulted::No);
         }
         if kind(parm) != "TemplateTemplateParmDecl" {
             return is_default_arg(parm, args, i);
@@ -813,7 +844,7 @@ impl<'a> Printer<'a, '_> {
         if !arg.text.starts_with("template '") {
             return Err(unsupported());
         }
-        Ok(arg.decl.as_deref() == Some(def.as_str()))
+        Ok(yes_no(arg.decl.as_deref() == Some(def.as_str())))
     }
 
     /// Argument `idx` (or element `elem` of pack argument `idx`) of class
@@ -883,10 +914,43 @@ impl<'a> Printer<'a, '_> {
         Ok(chain)
     }
 
+    /// Of the candidate qualified names `qs` of one declaration, the one
+    /// clang's filter (`f`) matches it under, if any: the only candidate,
+    /// or else the one among the headers of clang's filtered text dump.
+    fn pick_qualified(&mut self, mut qs: Vec<String>, f: &str) -> Res<Option<String>> {
+        qs.sort();
+        qs.dedup();
+        qs.retain(|q| q.contains(f));
+        if qs.len() <= 1 {
+            return Ok(qs.pop());
+        }
+        if self.filter_heads.is_none() {
+            let arg = format!("-ast-dump-filter={f}");
+            let dump = (self.text)(&["-Xclang", &arg])?;
+            let heads = dump
+                .lines()
+                .filter_map(|l| l.strip_prefix("Dumping ")?.strip_suffix(':'))
+                .map(str::to_owned)
+                .collect();
+            self.filter_heads = Some(heads);
+        }
+        let heads = self.filter_heads.as_ref();
+        let found: Vec<String> =
+            qs.into_iter().filter(|q| heads.is_some_and(|h| h.contains(q))).collect();
+        match found.len() {
+            0 | 1 => Ok(found.into_iter().next()),
+            _ => Err(format!(
+                "clang-ast: filter mode cannot tell which of {} clang dumps a declaration as \
+                 (which specialization arguments were written)",
+                found.join(", ")
+            )),
+        }
+    }
+
     /// clang's text dump of the compile, fetched on first use.
     fn side_text(&mut self) -> Res<&str> {
         if self.side_text.is_none() {
-            self.side_text = Some((self.text)()?);
+            self.side_text = Some((self.text)(&[])?);
         }
         Ok(self.side_text.as_deref().unwrap_or(""))
     }
@@ -2682,7 +2746,7 @@ fn char_literal(u: u32, prefix: &str) -> String {
 }
 
 /// A JSON number as an exact integer (within 2^53, as `spec_arg`).
-fn exact_int(j: &Json) -> Option<i64> {
+pub(super) fn exact_int(j: &Json) -> Option<i64> {
     j.as_f64().filter(|f| f.fract() == 0.0 && f.abs() <= 9_007_199_254_740_992.0).map(|f| f as i64)
 }
 
@@ -2704,7 +2768,7 @@ fn param_ty(parm: &Json) -> Option<&str> {
 }
 
 /// A type node's desugared spelling (its spelling if it has no sugar).
-fn desugared(ty: &Json) -> Option<&str> {
+pub(super) fn desugared(ty: &Json) -> Option<&str> {
     text(ty, "desugaredQualType").or_else(|| text(ty, "qualType"))
 }
 
@@ -2718,7 +2782,7 @@ fn unsupported_default(parm: &Json) -> String {
 
 /// [`Printer::is_default_arg`] for a type or non-type parameter `parm`
 /// with a default argument.
-fn is_default_arg(parm: &Json, args: &[&Json], i: usize) -> Res<bool> {
+fn is_default_arg(parm: &Json, args: &[&Json], i: usize) -> Res<Defaulted> {
     let arg = args[i];
     let nttp_ty = param_ty(parm);
     let unsupported = || unsupported_default(parm);
@@ -2732,13 +2796,13 @@ fn is_default_arg(parm: &Json, args: &[&Json], i: usize) -> Res<bool> {
             || desugared(dt).is_none_or(|q| q.contains("type-parameter"));
         if dependent {
             let depth = parm.get("depth").and_then(exact_int);
-            let sub = kids(def)
+            let arg_ty = arg.get("type").and_then(desugared);
+            return kids(def)
                 .next()
-                .and_then(|t| subst_default(t, args, i, depth))
-                .ok_or_else(unsupported)?;
-            return Ok(arg.get("type").and_then(desugared) == Some(sub.as_str()));
+                .and_then(|t| subst::compare(t, args, i, depth, arg_ty))
+                .ok_or_else(unsupported);
         }
-        return Ok(arg.get("type").and_then(desugared) == desugared(dt));
+        return Ok(yes_no(arg.get("type").and_then(desugared) == desugared(dt)));
     }
     let e = kids(def).next().ok_or_else(unsupported)?;
     let v = match (kind(e), e.get("value")) {
@@ -2750,93 +2814,31 @@ fn is_default_arg(parm: &Json, args: &[&Json], i: usize) -> Res<bool> {
         _ => return Err(unsupported()),
     };
     let printed = integral_arg(v, nttp_ty.ok_or_else(unsupported)?).ok_or_else(unsupported)?;
-    Ok(qualified_name_arg(arg, nttp_ty).ok() == Some(printed))
+    Ok(yes_no(qualified_name_arg(arg, nttp_ty).ok() == Some(printed)))
 }
 
-/// Dependent default type `t` (a `TemplateArgument`'s type tree) with
-/// the template's own parameters (depth `depth`, an index below `i`)
-/// replaced by their arguments in `args`, spelled as clang prints the
-/// canonical type: a parameter, cv-qualified, under pointers and
-/// references (`T *`, `const T &`, `T **`, `T &&`, collapsed). `None`
-/// for any other shape, or for an array or function type under one.
-fn subst_default(t: &Json, args: &[&Json], i: usize, depth: Option<i64>) -> Option<String> {
-    // A declarator-shaped type (array, function) would need re-nesting.
-    let inner =
-        || subst_default(kids(t).next()?, args, i, depth).filter(|s| !s.contains(['(', '[']));
-    let is_ref = |s: &str| s.ends_with('&');
-    match kind(t) {
-        "TemplateTypeParmType" => {
-            if t.get("depth").and_then(exact_int) != depth {
-                return None;
-            }
-            let ix =
-                usize::try_from(t.get("index").and_then(exact_int)?).ok().filter(|&x| x < i)?;
-            args[ix].get("type").and_then(desugared).map(str::to_owned)
-        }
-        "PointerType" => {
-            let s = inner()?;
-            if is_ref(&s) {
-                return None;
-            }
-            Some(if s.ends_with('*') { format!("{s}*") } else { format!("{s} *") })
-        }
-        "LValueReferenceType" | "RValueReferenceType" => {
-            let s = inner()?;
-            let rvalue = kind(t) == "RValueReferenceType";
-            // [dcl.ref]/7: a reference to a reference collapses; only
-            // `&&` to `&&` stays an rvalue reference.
-            if let Some(base) = s.strip_suffix("&&") {
-                return Some(if rvalue { s.clone() } else { format!("{base}&") });
-            }
-            if is_ref(&s) {
-                return Some(s);
-            }
-            let op = if rvalue { "&&" } else { "&" };
-            Some(if s.ends_with('*') { format!("{s}{op}") } else { format!("{s} {op}") })
-        }
-        "QualType" => {
-            let q = text(t, "qualifiers")?;
-            let s = inner()?;
-            if is_ref(&s) {
-                // [dcl.ref]/1: cv-qualifiers on a reference are ignored.
-                return Some(s);
-            }
-            if s.contains('*') {
-                return Some(if s.ends_with('*') { format!("{s}{q}") } else { format!("{s} {q}") });
-            }
-            // Merged with the argument's own qualifiers, in clang's order.
-            let mut rest = s.as_str();
-            let mut quals: Vec<&str> = q.split(' ').collect();
-            while let Some((w, r)) = rest.split_once(' ')
-                && matches!(w, "const" | "volatile")
-            {
-                quals.push(w);
-                rest = r;
-            }
-            let order = ["const", "volatile"];
-            if quals.iter().any(|w| !order.contains(w)) {
-                return None;
-            }
-            let mut out: Vec<&str> = order.into_iter().filter(|w| quals.contains(w)).collect();
-            out.push(rest);
-            Some(out.join(" "))
-        }
-        _ => None,
-    }
+fn yes_no(b: bool) -> Defaulted {
+    if b { Defaulted::Yes } else { Defaulted::No }
 }
 
 /// The qualified name of `nm` declared in `ctx`
-/// (`NamedDecl::printQualifiedName`).
-fn qualified(ctx: &[Ctx], nm: &str) -> Res<String> {
+/// (`NamedDecl::printQualifiedName`): one candidate per combination of
+/// the [`Ctx::Choice`]s in `ctx`.
+fn qualified(ctx: &[Ctx], nm: &str) -> Res<Vec<String>> {
     if matches!(ctx.last(), Some(Ctx::Function(_))) {
-        return Ok(nm.to_owned());
+        return Ok(vec![nm.to_owned()]);
     }
-    let mut q = String::new();
+    let mut qs = vec![String::new()];
     for c in ctx {
         match c {
             Ctx::Named(s) | Ctx::Function(s) => {
-                q.push_str(s);
-                q.push_str("::");
+                for q in &mut qs {
+                    q.push_str(s);
+                    q.push_str("::");
+                }
+            }
+            Ctx::Choice(cs) => {
+                qs = qs.iter().flat_map(|q| cs.iter().map(move |c| format!("{q}{c}::"))).collect();
             }
             Ctx::Transparent => {}
             Ctx::Unnamed => {
@@ -2847,8 +2849,10 @@ fn qualified(ctx: &[Ctx], nm: &str) -> Res<String> {
             }
         }
     }
-    q.push_str(nm);
-    Ok(q)
+    for q in &mut qs {
+        q.push_str(nm);
+    }
+    Ok(qs)
 }
 
 /// `f(int, char *, ...)`, as a function prints in a qualified name.
