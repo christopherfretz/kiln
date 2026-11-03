@@ -759,6 +759,78 @@ fn print_diag_desugared(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -
     p.out
 }
 
+/// A type argument whose canonical type is a vector, as clang prints it
+/// in a diagnostic (`ConvertTypeToDiagnosticString`): `'T' (aka 'U')`
+/// when desugaring looks through sugar that counts, else
+/// `'T' (vector of N 'E' values)`; `None` for a non-vector type. Shared
+/// by Sema's `ty_arg` and codegen's `-Wpsabi`.
+pub fn vector_diag_arg(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> Option<String> {
+    let TypeView::Vector { elem, count, .. } = ctx.canonical_view(q) else {
+        return None;
+    };
+    let s = print_type(ctx, names, q, PrintOptions::SUGARED);
+    // clang's `Desugar` stops before a vector type ("people want their
+    // vec4"), and prints the vector details only without an `aka`.
+    if let Some(d) = vector_aka(ctx, q) {
+        let a = print_type(ctx, names, d, PrintOptions::SUGARED);
+        // A substituted `typename t1<I>::v` prints as clang's rebuilt
+        // qualified name, without the keyword.
+        let a = a.strip_prefix("typename ").map_or_else(|| a.clone(), str::to_owned);
+        if a != s {
+            return Some(format!("'{s}' (aka '{a}')"));
+        }
+    }
+    let top = ctx.desugar_top(q);
+    let elem = match ctx.view(top.ty()) {
+        TypeView::Vector { elem, .. } => elem,
+        _ => elem,
+    };
+    let e = print_type(ctx, names, elem, PrintOptions::SUGARED);
+    let v = if count == 1 { "value" } else { "values" };
+    Some(format!("'{s}' (vector of {count} '{e}' {v})"))
+}
+
+/// clang's `Desugar` for a type whose canonical type is a vector: the
+/// type desugared step by step, stopping at the sugar whose underlying
+/// type is the vector itself, or at the qualified name of the vector's
+/// typedef (`'B' (aka 'X::v')`); `None` when no step counts for an
+/// `aka` (template parameter substitution, `using` and elaborated
+/// names, attributes and deduced types do not).
+fn vector_aka(t: &TypeContext, q: QualType) -> Option<QualType> {
+    let mut cur = q;
+    let mut aka = false;
+    for _ in 0..MAX_DEPTH {
+        let next = t.desugar_once(cur);
+        if next == cur {
+            break;
+        }
+        match t.view(cur.ty()) {
+            // clang substitutes canonical template arguments.
+            TypeView::SubstTemplateTypeParm { .. } => {
+                cur = t.canonical(cur);
+                continue;
+            }
+            TypeView::Elaborated { .. }
+                if matches!(t.view(t.desugar_once(next).ty()), TypeView::Vector { .. }) =>
+            {
+                break;
+            }
+            TypeView::Elaborated { .. }
+            | TypeView::Using { .. }
+            | TypeView::Attributed { .. }
+            | TypeView::Auto { .. } => {}
+            _ => {
+                if matches!(t.view(next.ty()), TypeView::Vector { .. }) {
+                    break;
+                }
+                aka = true;
+            }
+        }
+        cur = next;
+    }
+    aka.then_some(cur)
+}
+
 /// clang's `desugarForDiagnostic` `ShouldAKA`: whether desugaring `q`
 /// for a diagnostic looks through any sugar that asks for an `aka`.
 /// Elaborated, `using`, parenthesized, attributed and deduced (`auto`)
