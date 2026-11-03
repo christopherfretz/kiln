@@ -4,6 +4,7 @@
 
 use kiln_codegen::{AutoVarInit, ComplexRange};
 use kiln_pp::{ClangCompat, CmdMacro, DirGroup, OptLevel, PicModel};
+use kiln_sema::LaxVectorConversions;
 
 use crate::toolchain::StdLib;
 
@@ -410,6 +411,10 @@ pub struct Args {
     /// `-fcomplex-arithmetic=` and `-ffast-math` (basic); `None` is
     /// clang's default (full, or basic under `-Ofast`).
     pub complex_range: Option<ComplexRange>,
+    /// `-flax-vector-conversions[=none|integer|all]` and
+    /// `-fno-lax-vector-conversions` (the last wins; clang's default
+    /// `all`, a bare flag `integer`).
+    pub lax_vector_conversions: LaxVectorConversions,
     /// `-ftrivial-auto-var-init=` (the last wins); `None` is the
     /// standard's default (spec/codegen.md §7r).
     pub auto_var_init: Option<AutoVarInit>,
@@ -497,6 +502,7 @@ impl Args {
                 a.errors.extend(r.err());
             } else if !a.flag(arg)
                 && !a.complex_flag(arg)
+                && !a.lax_vector_flag(arg)
                 && !a.auto_var_init_flag(arg)
                 && !a.predef_flag(arg)
                 && !a.diag_flag(arg)
@@ -707,6 +713,25 @@ impl Args {
                 r
             }
         });
+        true
+    }
+
+    /// `-flax-vector-conversions[=v]` / `-fno-lax-vector-conversions`
+    /// (clang `Options.td`); an unknown value is clang's
+    /// "invalid value 'v' in '-flax-vector-conversions=v'".
+    fn lax_vector_flag(&mut self, arg: &str) -> bool {
+        self.lax_vector_conversions = match arg {
+            "-flax-vector-conversions" => LaxVectorConversions::Integer,
+            "-fno-lax-vector-conversions" => LaxVectorConversions::None,
+            _ => {
+                let Some(v) = arg.strip_prefix("-flax-vector-conversions=") else { return false };
+                let Some(k) = LaxVectorConversions::from_arg(v) else {
+                    self.errors.push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned()));
+                    return true;
+                };
+                k
+            }
+        };
         true
     }
 
@@ -1041,6 +1066,20 @@ mod tests {
             let e = ArgError::UnsupportedValue("-fcomplex-arithmetic=".into(), v.into());
             assert_eq!((a.complex_range, a.errors), (None, vec![e]));
         }
+    }
+
+    #[test]
+    fn lax_vector_conversions() {
+        use LaxVectorConversions::{All, Integer, None};
+        let l = |s: &str| parse(s).lax_vector_conversions;
+        assert_eq!(l("a.cpp"), All);
+        assert_eq!(l("-flax-vector-conversions a.cpp"), Integer);
+        assert_eq!(l("-fno-lax-vector-conversions a.cpp"), None);
+        assert_eq!(l("-flax-vector-conversions=none -flax-vector-conversions=all a.cpp"), All);
+        assert_eq!(l("-flax-vector-conversions=integer a.cpp"), Integer);
+        let a = parse("-flax-vector-conversions=bogus a.cpp");
+        let e = ArgError::InvalidFlagValue("-flax-vector-conversions=bogus".into(), "bogus".into());
+        assert_eq!((a.lax_vector_conversions, a.errors), (All, vec![e]));
     }
 
     #[test]

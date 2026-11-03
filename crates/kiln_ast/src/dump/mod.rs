@@ -810,6 +810,13 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     }
                 }
             }
+            // clang `PseudoObjectExpr::children`: the syntactic form,
+            // then the semantic expressions.
+            ExprKind::PseudoObjectExpr => {
+                for c in lists.iter::<ExprId>(ListId::new(n.a())) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
             ExprKind::BinaryConditionalOperator
             | ExprKind::CoawaitExpr
             | ExprKind::CoyieldExpr

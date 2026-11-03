@@ -509,8 +509,9 @@ impl Substituter<'_, '_, '_> {
             // next substitution's invalid-type check (§5.7.2); clang's
             // parse-time-only uses of it (a range-`for` over an array
             // parameter) do not apply to an instantiation.
-            let original_ty =
-                (declared != ty && self.sema.is_dependent_type(declared)).then_some(declared);
+            let original_ty = (declared != ty
+                && self.sema.is_instantiation_dependent_type(declared))
+            .then_some(declared);
             if let Some(o) = original_ty {
                 self.sema.ast.decls.set_param_original_ty(np, o);
             }
@@ -1254,7 +1255,7 @@ impl Substituter<'_, '_, '_> {
     /// template is substituted again, §5.8).
     fn copy_begin_loc(&mut self, d: DeclId, new: DeclId, ty: QualType) {
         if let Some(&b) = self.sema.ast.decls.cold.begin_loc.get(d)
-            && self.sema.is_dependent_type(ty)
+            && self.sema.is_instantiation_dependent_type(ty)
         {
             let _ = self.sema.ast.decls.cold.begin_loc.insert(new, b);
         }

@@ -1,0 +1,73 @@
+Dumping Use:
+CXXRecordDecl referenced struct Use definition
+|-FieldDecl referenced l 'L'
+`-CXXMethodDecl used operator<=> 'std::weak_ordering (const Use &) const noexcept(false)' default implicit-inline
+  |-ParmVarDecl used 'const Use &'
+  `-CompoundStmt
+    |-IfStmt has_init
+    | |-DeclStmt
+    | | `-VarDecl used cmp 'std::weak_ordering' cinit
+    | |   `-CXXStaticCastExpr 'std::weak_ordering' static_cast<std::weak_ordering> <ConstructorConversion>
+    | |     `-CXXConstructExpr 'std::weak_ordering' 'void (const weak_ordering &) noexcept'
+    | |       `-PseudoObjectExpr 'const weak_ordering' lvalue
+    | |         |-BinaryOperator 'const weak_ordering' lvalue '<=>'
+    | |         | |-MemberExpr 'const L' lvalue .l
+    | |         | | `-UnaryOperator 'const Use' lvalue prefix '*' cannot overflow
+    | |         | |   `-CXXThisExpr 'const Use *' this
+    | |         | `-MemberExpr 'const L' lvalue .l
+    | |         |   `-DeclRefExpr 'const Use' lvalue ParmVar '' 'const Use &'
+    | |         |-OpaqueValueExpr 'const L' lvalue
+    | |         | `-MemberExpr 'const L' lvalue .l
+    | |         |   `-UnaryOperator 'const Use' lvalue prefix '*' cannot overflow
+    | |         |     `-CXXThisExpr 'const Use *' this
+    | |         |-OpaqueValueExpr 'const L' lvalue
+    | |         | `-MemberExpr 'const L' lvalue .l
+    | |         |   `-DeclRefExpr 'const Use' lvalue ParmVar '' 'const Use &'
+    | |         `-ConditionalOperator 'const weak_ordering' lvalue
+    | |           |-CXXOperatorCallExpr 'bool' '=='
+    | |           | |-ImplicitCastExpr 'bool (*)(const L &) const' <FunctionToPointerDecay>
+    | |           | | `-DeclRefExpr 'bool (const L &) const' lvalue CXXMethod 'operator==' 'bool (const L &) const'
+    | |           | |-OpaqueValueExpr 'const L' lvalue
+    | |           | | `-MemberExpr 'const L' lvalue .l
+    | |           | |   `-UnaryOperator 'const Use' lvalue prefix '*' cannot overflow
+    | |           | |     `-CXXThisExpr 'const Use *' this
+    | |           | `-OpaqueValueExpr 'const L' lvalue
+    | |           |   `-MemberExpr 'const L' lvalue .l
+    | |           |     `-DeclRefExpr 'const Use' lvalue ParmVar '' 'const Use &'
+    | |           |-DeclRefExpr 'const weak_ordering' lvalue Var 'equivalent' 'const weak_ordering'
+    | |           `-ConditionalOperator 'const weak_ordering' lvalue
+    | |             |-CXXOperatorCallExpr 'bool' '<'
+    | |             | |-ImplicitCastExpr 'bool (*)(const L &) const' <FunctionToPointerDecay>
+    | |             | | `-DeclRefExpr 'bool (const L &) const' lvalue CXXMethod 'operator<' 'bool (const L &) const'
+    | |             | |-OpaqueValueExpr 'const L' lvalue
+    | |             | | `-MemberExpr 'const L' lvalue .l
+    | |             | |   `-UnaryOperator 'const Use' lvalue prefix '*' cannot overflow
+    | |             | |     `-CXXThisExpr 'const Use *' this
+    | |             | `-OpaqueValueExpr 'const L' lvalue
+    | |             |   `-MemberExpr 'const L' lvalue .l
+    | |             |     `-DeclRefExpr 'const Use' lvalue ParmVar '' 'const Use &'
+    | |             |-DeclRefExpr 'const weak_ordering' lvalue Var 'less' 'const weak_ordering'
+    | |             `-DeclRefExpr 'const weak_ordering' lvalue Var 'greater' 'const weak_ordering'
+    | |-CXXRewrittenBinaryOperator 'bool'
+    | | `-UnaryOperator 'bool' prefix '!' cannot overflow
+    | |   `-CXXOperatorCallExpr 'bool' '==' adl
+    | |     |-ImplicitCastExpr 'bool (*)(weak_ordering, _CmpUnspecifiedParam) noexcept' <FunctionToPointerDecay>
+    | |     | `-DeclRefExpr 'bool (weak_ordering, _CmpUnspecifiedParam) noexcept' lvalue Function 'operator==' 'bool (weak_ordering, _CmpUnspecifiedParam) noexcept'
+    | |     |-CXXConstructExpr 'weak_ordering' 'void (const weak_ordering &) noexcept'
+    | |     | `-ImplicitCastExpr 'const weak_ordering' lvalue <NoOp>
+    | |     |   `-DeclRefExpr 'std::weak_ordering' lvalue Var 'cmp' 'std::weak_ordering'
+    | |     `-ImplicitCastExpr '_CmpUnspecifiedParam' <ConstructorConversion>
+    | |       `-CXXConstructExpr '_CmpUnspecifiedParam' 'void (int _CmpUnspecifiedParam::*) noexcept'
+    | |         `-ImplicitCastExpr 'int _CmpUnspecifiedParam::*' <NullToMemberPointer>
+    | |           `-IntegerLiteral 'int' 0
+    | `-ReturnStmt nrvo_candidate(Var 'cmp' 'std::weak_ordering')
+    |   `-CXXConstructExpr 'std::weak_ordering' 'void (weak_ordering &&) noexcept'
+    |     `-ImplicitCastExpr 'std::weak_ordering' xvalue <NoOp>
+    |       `-DeclRefExpr 'std::weak_ordering' lvalue Var 'cmp' 'std::weak_ordering'
+    `-ReturnStmt
+      `-CXXStaticCastExpr 'std::weak_ordering' static_cast<std::weak_ordering> <NoOp>
+        `-ImplicitCastExpr 'weak_ordering' <UserDefinedConversion> part_of_explicit_cast
+          `-CXXMemberCallExpr 'weak_ordering'
+            `-MemberExpr '<bound member function type>' .operator weak_ordering
+              `-DeclRefExpr 'const strong_ordering' lvalue Var 'equal' 'const strong_ordering'
+

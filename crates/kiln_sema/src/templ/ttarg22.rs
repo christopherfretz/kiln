@@ -226,7 +226,7 @@ impl Sema<'_, '_> {
     /// prior arguments substituted (clang matches the substituted `P`).
     fn ttp22_nttp_type(&mut self, x: DeclId, prior: &MultiLevelArgs) -> Option<QualType> {
         let ty = self.ast.decls.get(x).ty()?;
-        if prior.substituted() == 0 || !self.is_dependent_type(ty) {
+        if prior.substituted() == 0 || !self.is_instantiation_dependent_type(ty) {
             return Some(ty);
         }
         let at = self.ast.decls.get(x).loc();
