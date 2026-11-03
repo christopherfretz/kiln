@@ -1185,7 +1185,8 @@ Redeclaration and linkage rules:
     run first in `late_analysis` (so after the queued runtime warnings
     and before the placement errors), not in a template definition or
     once an error occurred, but in each instantiation:
-    - kiln has no CFG. A label's predecessors are found structurally:
+    - A label's predecessors are found structurally (clang reads the
+      graph's block predecessors; the two agree on the corpus):
       the statements before it in its block, walked back past empty
       ones (`;`, `{}`, an empty label block, which clang's
       `getLastStmt` counts as the predecessor itself), the branches of
@@ -6534,6 +6535,76 @@ same graph.
 
   The `expect: cfg` tests (spec/harness.md "cfg tests") compare its
   shape with clang's.
+- **Stats.** `-fkiln-cfg-stats` (a measurement aid, spec/driver.md)
+  builds every planned graph and prints one line per body:
+  `cfg-stats: 'f' status=Ok blocks=N elems=N edges=N bytes=N build_ns=N`,
+  `bytes` being the lengths of the block, element, edge and adjacency
+  vectors times their sizes (`Cfg::bytes`; the side tables are not
+  counted). The numbers of record are in `spec/landed/sema/WP-509.md`.
+- **Hooks for the uninitialized-values pass (WP-510).** The graph keeps
+  the element order of evaluation inside each block, the declaration
+  statements as elements, and every block's predecessors, which a
+  forward dataflow needs; nothing else is built for it yet.
+
+#### 7.5.2 Consumers of the graph (WP-509)
+
+Each consumer runs at the end of a non-dependent body with no
+uncompilable error, in this order: the runtime-behavior filter
+(`unreachable_probes`, §5.12: a queued diagnostic whose anchor only an
+unreachable block holds is dropped), the fall-off analysis
+(-Wreturn-type / -Winvalid-noreturn, §7.5 above; clang 22's inferred
+`noreturn`, §7.5.3, runs first), -Winfinite-recursion
+and the throw checks of -Wexceptions (§7.5 above), then implicit
+fallthrough (§2, `[[fallthrough]]`) and -Wunreachable-code* (§7.10)
+from `stmt_flow` / `dead_scan`. The AST walks they replace
+(`try_stmt/reach.rs`) are deleted.
+
+#### 7.5.3 -Winfinite-recursion and -Wmissing-noreturn (WP-509)
+
+- **-Winfinite-recursion** (`infinite_recursion.rs`, clang
+  `checkRecursiveFunction`; in -Wall via -Wmost, the diag off by
+  default otherwise): `all paths through this function will call
+  itself` at the start of the body, when every live path from the
+  graph's entry meets a recursive call before reaching the exit and the
+  exit has a live predecessor ([intro.progress] makes no promise; the
+  warning is clang's). A path stops at the first block holding a
+  recursive call. A recursive call is a call, member call or operator
+  call whose callee's first declaration is the function's, except a
+  call through a name qualified by a template specialization
+  (`A<T>::f()`) and a virtual member call on an object other than
+  `this`. Not checked: a specialization of a function template (clang
+  checks non-templated functions and members of class template
+  specializations, whose instantiation context note it prints). Before
+  building a graph the body's expressions are scanned for a recursive
+  call (a constructor's initializers, built earlier, are always
+  graphed), so a non-recursive body costs no graph.
+- **-Wmissing-noreturn, graph form** (`missing_noreturn.rs`, clang
+  `CheckFallThroughForBody` `NeverFallThroughOrReturn`; not in -Wall or
+  -Wextra): `function 'f' could be declared with attribute 'noreturn'`
+  at the start of the body of a function returning `void` whose graph
+  has no live plain or return predecessor of the exit. Not for a
+  `noreturn` (declared or inferred) function, a virtual function, a
+  lambda's call operator, a coroutine, a `naked` function or anything
+  instantiated from a template. A body with no graph does not warn.
+- **-Wmissing-noreturn, inferred form** (clang 22 `inferNoReturnAttr`,
+  `-fclang-compat=22` only; run when -Wreturn-type or -Wmissing-noreturn
+  is enabled, before the body's other flow checks): a body that is a
+  compound statement whose only statement is a throw-expression (under
+  an `ExprWithCleanups`) makes a function that is not `noreturn` and
+  not virtual *inferred noreturn* (`Sema::inferred_noreturn`), with the
+  warning at the function's name. The pattern of a function template is
+  skipped; an instantiation of another templated entity (a member of a
+  class template, a lambda in a template) inherits its pattern's
+  inference without a second warning, while a function template
+  specialization is inferred, and warned, afresh. An inferred function
+  is not suggested again by the graph form. In a value-returning
+  caller, a body whose last statement is a throw-expression, or a call
+  whose direct callee is inferred noreturn, has no -Wreturn-type
+  (clang's syntactic check ahead of `CheckFallThroughForBody`).
+- Tests: `expr.call/infinite-recursion*.cpp`,
+  `dcl.attr.noreturn/missing-noreturn*.cpp` (the `-inferred` pair under
+  `requires: clang>=22` / `clang<22`),
+  `stmt.pre/cfg-analysis-skipped.cpp` (the size cap remark).
 
 ### 7.6 Landed (WP-089): range-based `for` (`range_for.rs`)
 Sema desugars `for (init; decl : range) body` ([stmt.ranged]/1) the way
