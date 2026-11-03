@@ -3180,12 +3180,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   one calls `get` at run time, as clang does. Test:
   `dcl.struct.bind/p2686-run.cpp`.
 - Left:
-  - A `static constexpr` block-scope tuple-like decomposition's holding
-    references get a guarded dynamic initializer, where clang
-    constant-initializes them: `fold::Collect::local_decl` does not
-    visit the holding variables of a local decomposition, so no fold
-    exists for `static_local` (values are right; WP-453 owns
-    `fold.rs`).
+  - (Fixed by WP-467, `spec/landed/codegen/WP-467.md`.) A `static
+    constexpr` block-scope tuple-like decomposition's holding references
+    got a guarded dynamic initializer, where clang constant-initializes
+    them.
   - An unreferenced namespace-scope `constexpr` decomposition's `e`
     (`@_ZDC1x1yE`, internal) is not emitted; clang emits it.
 
