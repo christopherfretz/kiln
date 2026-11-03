@@ -17,6 +17,7 @@
 
 use kiln_ast::ExprId;
 use kiln_ast::expr::{ExprKind, NonOdrUse};
+use kiln_source::Loc;
 
 use crate::Sema;
 
@@ -115,17 +116,7 @@ impl Sema<'_, '_> {
                         kids.iter().filter_map(|k| self.vararg_recheck.get(k).map(|&c| (*k, c))),
                     );
                 }
-                for &k in &kids {
-                    match self.ast.exprs.get(k).kind() {
-                        ExprKind::CXXDefaultArgExpr => {
-                            self.note_default_use(k, self.ast.exprs.default_arg_param(k), at);
-                        }
-                        ExprKind::CXXDefaultInitExpr => {
-                            self.note_default_use(k, self.ast.exprs.default_init_field(k), at);
-                        }
-                        _ => {}
-                    }
-                }
+                self.note_default_uses(&kids, at);
             }
             stack.extend(kids);
         }
@@ -137,6 +128,22 @@ impl Sema<'_, '_> {
         }
         for (a, kind) in varargs {
             self.check_variadic_args(&[a], kind);
+        }
+    }
+
+    /// The default arguments and member initializers among `kids` are
+    /// used again at `at` ([`Sema::mark_shared_expr_referenced`]).
+    fn note_default_uses(&mut self, kids: &[ExprId], at: Loc) {
+        for &k in kids {
+            match self.ast.exprs.get(k).kind() {
+                ExprKind::CXXDefaultArgExpr => {
+                    self.note_default_use(k, self.ast.exprs.default_arg_param(k), at);
+                }
+                ExprKind::CXXDefaultInitExpr => {
+                    self.note_default_use(k, self.ast.exprs.default_init_field(k), at);
+                }
+                _ => {}
+            }
         }
     }
 }
