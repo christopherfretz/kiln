@@ -310,12 +310,7 @@ impl Sema<'_, '_> {
             }
         }
         // clang's `enable_if` ranking (`compareEnableIfAttrs`), last.
-        if let (Some(f1), Some(f2)) = (x.decl, y.decl)
-            && let Some(b) = self.compare_enable_if(f1, f2)
-        {
-            return b;
-        }
-        false
+        x.decl.zip(y.decl).and_then(|(f1, f2)| self.compare_enable_if(f1, f2)).unwrap_or(false)
     }
 
     /// [over.match.best.general]/2.10 (P2582): a guide not formed from an

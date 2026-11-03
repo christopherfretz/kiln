@@ -60,8 +60,14 @@ impl Sema<'_, '_> {
             self.emit(d);
             return None;
         };
-        let node =
-            AttrNode { kind: AttrKind::ENABLE_IF, syntax, flags: 0, loc, a: cond.raw(), b: msg.raw() };
+        let node = AttrNode {
+            kind: AttrKind::ENABLE_IF,
+            syntax,
+            flags: 0,
+            loc,
+            a: cond.raw(),
+            b: msg.raw(),
+        };
         Some(self.ast.attrs.push(node))
     }
 
@@ -221,19 +227,28 @@ impl Sema<'_, '_> {
         } else {
             (DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
         };
-        let node = *self.ast.attrs.get(attr);
-        let note = self
-            .diag(DiagId::note_ovl_candidate_disabled_by_function_cond_attr, self.ast.decls.get(f).loc())
-            .arg(self.enable_if_message(&node));
+        let why = self.enable_if_note(attr, self.ast.decls.get(f).loc());
         let msg = self.diag(id, at).arg(self.decl_name(f)).range(self.expr_range(callee));
-        self.emit(msg.with_note(note));
+        self.emit(msg.with_note(why));
         false
+    }
+
+    /// clang `note_ovl_candidate_disabled_by_function_cond_attr` for the
+    /// failed `enable_if` attribute `attr`, at `loc`.
+    pub(crate) fn enable_if_note(&self, attr: AttrId, loc: Loc) -> kiln_diag::Diag {
+        let node = *self.ast.attrs.get(attr);
+        let msg = self.enable_if_message(&node);
+        self.diag(DiagId::note_ovl_candidate_disabled_by_function_cond_attr, loc).arg(msg)
     }
 
     /// The default argument of parameter `j` of `f` as a call omitting
     /// it would use it, if it has one that is instantiated.
     fn enable_if_default_arg(&mut self, f: DeclId, j: usize) -> Option<ExprId> {
-        let p = self.ast.decls.function(f).and_then(|x| self.ast.lists.iter::<DeclId>(x.params).nth(j))?;
+        let p = self
+            .ast
+            .decls
+            .function(f)
+            .and_then(|x| self.ast.lists.iter::<DeclId>(x.params).nth(j))?;
         if self.inst.lazy_defaults.contains_key(&p) {
             return None;
         }

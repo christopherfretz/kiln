@@ -6,11 +6,11 @@
 //! defaulted members of enclosing classes (clang `addedClassSubobject`'s
 //! `HasTrivialSpecialMembersForCall`).
 
-use kiln_ast::types::Quals;
-use kiln_ast::{DeclId, QualType};
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{DeclFlags, DefinitionBits};
 use kiln_ast::templates::SpecKind;
+use kiln_ast::types::Quals;
+use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 
 use crate::Sema;
@@ -48,8 +48,7 @@ impl Sema<'_, '_> {
     /// Whether member `k` of complete class `s` is trivial for the
     /// purposes of calls (clang `hasTrivial*ForCall`).
     pub(crate) fn trivial_for_call(&self, s: DeclId, k: SpecialKind) -> bool {
-        self.has_trivial(s, k)
-            || for_call_bit(k).is_some_and(|b| self.defn_bits(s).contains(b))
+        self.has_trivial(s, k) || for_call_bit(k).is_some_and(|b| self.defn_bits(s).contains(b))
     }
 
     /// Whether declared special member `m` (kind `k`) of class `r`,
@@ -139,12 +138,8 @@ impl Sema<'_, '_> {
     /// The complete classes of the direct and virtual bases of `r` and of
     /// its non-reference fields (array elements included).
     fn call_subobjects(&self, r: DeclId) -> Vec<DeclId> {
-        let mut out: Vec<DeclId> = self
-            .ast
-            .decls
-            .bases(r, &self.ast.lists)
-            .filter_map(|b| self.base_class(b))
-            .collect();
+        let mut out: Vec<DeclId> =
+            self.ast.decls.bases(r, &self.ast.lists).filter_map(|b| self.base_class(b)).collect();
         out.extend(self.virtual_bases(r).into_iter().map(|x| x.0));
         for f in self.special_fields(r) {
             let Some(t) = self.ast.decls.get(f).ty() else { continue };
@@ -158,9 +153,7 @@ impl Sema<'_, '_> {
 
     /// Whether `r` declares a user-provided special member `k`.
     fn has_user_provided(&self, r: DeclId, k: SpecialKind) -> bool {
-        self.ast
-            .members(r)
-            .any(|m| self.special_kind_of(m) == Some(k) && self.is_user_provided(m))
+        self.ast.members(r).any(|m| self.special_kind_of(m) == Some(k) && self.is_user_provided(m))
     }
 
     /// clang `checkIllFormedTrivialABIStruct`: false (with
@@ -245,7 +238,8 @@ impl Sema<'_, '_> {
         }
         let Some(class) = self.element_class(pty) else { return };
         let class = self.class_def(class);
-        if let Selected::Found(m) = self.select_special(class, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
+        if let Selected::Found(m) =
+            self.select_special(class, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
         {
             let loc = self.ast.decls.get(p).loc();
             self.mark_function_referenced(m, loc);

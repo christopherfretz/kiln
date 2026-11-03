@@ -4117,7 +4117,7 @@ impl Cg<'_> {
     }
 
     /// clang `EmitCallArg`'s `pushFullExprCleanup<DestroyUnpassedArg>`
-    /// + `addArgCleanupDeactivation`: the EH-only destructor cleanup of
+    /// and `addArgCleanupDeactivation`: the EH-only destructor cleanup of
     /// the callee-destroyed argument at `addr` (class `rd`), deactivated
     /// by [`Self::deactivate_arg_cleanups`] at the call.
     fn push_arg_cleanup(&mut self, addr: V, rd: DeclId) {

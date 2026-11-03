@@ -267,6 +267,8 @@ impl Sema<'_, '_> {
     }
 
     /// One attribute of [`Sema::check_decl_attrs`]; false drops it.
+    // One flat match arm per attribute kind's subject rule.
+    #[allow(clippy::too_many_lines)]
     fn check_decl_attr(&mut self, d: DeclId, kind: DeclKind, node: AttrNode) -> bool {
         let wrong = |s: &mut Self, id: DiagId, name: &str, what: &str| {
             let shown = s.attr_shown(&node, name);

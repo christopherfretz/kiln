@@ -1299,6 +1299,27 @@ deviations now match.
   `linkonce_odr` in a comdat. `tests/mangle/unnamed_types.cpp`,
   `tests/codegen/tbaa_unnamed_o1.cpp`.
 
+### 8.25 Landed (WP-460): `[[clang::trivial_abi]]` and trivial-for-call
+- *Trivial for calls* (clang `hasTrivial*ForCall`): the class bits
+  `TRIVIAL_ABI` (attribute in effect) and `COPY_CTOR_FOR_CALL`,
+  `MOVE_CTOR_FOR_CALL`, `DTOR_FOR_CALL` (a declared member that is
+  trivial for calls only because every subobject's is) are set by sema
+  at the class's `}` (spec/sema.md "The `trivial_abi` attribute").
+  `can_pass_in_registers` (§8.13) reads "trivial" as trivial-for-call:
+  a member is trivial, or the class has `TRIVIAL_ABI`, or the member is
+  not user-provided and its kind's `*_FOR_CALL` bit is set. The "all
+  copy/move constructors deleted → indirect" rule is unchanged. Layout,
+  mangling and the coerced register types are those of any class of the
+  same layout passed in registers.
+- *Destroyed in callee* (`is_destroyed_in_callee`, clang
+  `isParamDestroyedInCallee` under Itanium): a class passed in
+  registers whose destructor is not trivial. Codegen: spec/codegen.md
+  §7x.
+- Tests: `tests/codegen/trivial_abi_subobjects.cpp` (signatures of
+  dropped/propagated cases, both oracles, both targets),
+  `tests/conformance/dcl.attr/trivial-abi-attribute.cpp`
+  (`__can_pass_in_regs`).
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

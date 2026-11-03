@@ -3060,6 +3060,44 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   `tests/conformance/ext.vector/ir-bool-from-int-vector.cpp` (`expect: ir`,
   `requires: clang>=22`).
 
+## 7x. Landed (WP-460): callee-destroyed arguments (`[[clang::trivial_abi]]`)
+A by-value parameter of a class the callee destroys
+(`kiln_abi::call::is_destroyed_in_callee`, spec/abi.md §8.25: passed in
+registers yet with a non-trivial destructor, which only `trivial_abi`
+allows) is destroyed at the end of the callee, not at the end of the
+caller's full-expression ([class.temporary]/3; clang
+`isParamDestroyedInCallee`).
+- *Caller* (`emit_call_args`, clang `EmitCallArg` /
+  `CallArgList::addArgCleanupDeactivation`): the argument is emitted into
+  its `agg.tmp` with `dest_destructed` set, so no normal full-expression
+  destructor is pushed; `push_arg_cleanup` instead pushes an EH-only
+  destructor cleanup (clang `DestroyUnpassedArg`) with an activation flag
+  placeholder, recorded in `FuncState::arg_cleanups`. A later argument
+  that throws destroys the already-built argument; the other arguments
+  keep their normal cleanups (destroyed in reverse order after the
+  call).
+- *Deactivation* (`deactivate_arg_cleanups`, clang
+  `deactivateArgCleanupsBeforeCall`): in `call_vals_to`, after the
+  callee is computed and just before the call instruction, the pending
+  cleanups of the call's aggregate arguments are deactivated innermost
+  first and their placeholders erased, so once the call is made the
+  callee owns the object (also on unwind out of the callee).
+- *Callee* (`func.rs` prolog): each such parameter's address gets a
+  normal-and-EH destructor cleanup (`Cleanup::Dtor`) pushed in parameter
+  order, recorded in `FuncState::param_cleanups`; it runs at the
+  function's end (after the return value is built) in reverse order.
+  Thunks push none (the target destroys them).
+- *Delegate calls* (`delegate_call_arg`, clang `EmitDelegateCallArg`):
+  forwarding a callee-destroyed parameter (the lambda static invoker,
+  inheriting constructors) deactivates this function's cleanup of it
+  (`forward_param_cleanup`): the delegate destroys it.
+- Return values are unchanged beyond register passing: a returned
+  `trivial_abi` class is returned per its coerced type, not through
+  `sret`; NRVO still applies.
+- Tests: `tests/codegen/trivial_abi_calls.cpp`, `trivial_abi_subobjects.cpp`
+  (both oracles),
+  `tests/conformance/class.temporary/run-trivial-abi-callee-destroys.cpp`.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33

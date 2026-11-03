@@ -10,8 +10,8 @@ use kiln_ast::AttrId;
 use kiln_ast::attr::AttrSyntax;
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
-use kiln_sema::decl::AttrArg;
 use kiln_sema::Declarator;
+use kiln_sema::decl::AttrArg;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
