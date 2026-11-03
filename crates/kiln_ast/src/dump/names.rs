@@ -759,8 +759,27 @@ impl<'a> AstNames<'a> {
                 };
                 out.push_str(suffix);
             }
+            // clang `PrintFloatingLiteral`: `APFloat::toString` (round-trip
+            // digits, `1`, `2.5E+10`), a `.` after a bare integer, and the
+            // type's suffix (none for `double` and `__fp16`).
             ExprKind::FloatingLiteral => {
-                if let Some(c) = exprs.literal_const(e) {
+                let c = exprs.literal_const(e);
+                if let Some(Scalar::Float { kind, bits, .. }) = c.and_then(|c| ast.consts.scalar(c))
+                {
+                    let s = crate::consts::fltstr::to_string(kind, bits, 0);
+                    let bare = s.bytes().all(|b| b == b'-' || b.is_ascii_digit());
+                    out.push_str(&s);
+                    if bare {
+                        out.push('.');
+                    }
+                    out.push_str(match ast.types.builtin(n.ty()) {
+                        Some(crate::types::BuiltinType::Float) => "F",
+                        Some(crate::types::BuiltinType::LongDouble) => "L",
+                        Some(crate::types::BuiltinType::Float16) => "F16",
+                        Some(crate::types::BuiltinType::Float128) => "Q",
+                        _ => "",
+                    });
+                } else if let Some(c) = c {
                     self.write_dump_value(c, out);
                 }
             }

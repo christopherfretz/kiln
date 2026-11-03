@@ -300,7 +300,10 @@ the target:
    than the target (significant bits when negative, active bits
    otherwise), or a non-negative signed value of exactly the target's
    width that becomes negative unless spelled as a hex, octal or binary
-   literal. The target type prints with its qualifiers. Not for a `bool`
+   literal. The target type prints with its qualifiers. The second range
+   is the context token (an operator), measured as a whole punctuator
+   (`&&` underlines two columns; `>>` is measured as `>`, the half a
+   template argument list may close with; WP-410). Not for a `bool`
    target, the same canonical type, dependent or error operands, an
    unevaluated operand, an immediate or constant-evaluated context, or a
    constant expression (`act_on_constant_full_expr`, which sets
