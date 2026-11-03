@@ -9,7 +9,7 @@
 //! whose value changes (clang's `warn_impcast_integer_precision_constant`);
 //! and `-Wnull-conversion` for GNU `__null` (`gnu_null.rs`).
 
-use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp};
+use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -165,20 +165,46 @@ impl Sema<'_, '_> {
                 .then(|| s.ast.exprs.decl(x))
         };
         if addr_of {
-            // clang `CheckForReference` (a reference-returning call is
-            // left alone: kiln does not model its note).
+            // clang `CheckForReference`: the address of a reference
+            // variable or member, or of a call returning a reference (a
+            // glvalue call; the note names a direct callee). Ranges: the
+            // operand of `&` and the context token.
             let x = self.strip_impcast(e);
-            if let Some(d) = named(self, x) {
-                if self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_reference(t)) {
-                    let at = self.expr_loc(x);
-                    let msg = self.diag(DiagId::sema_address_of_reference_bool_conversion, at);
-                    self.emit_after_typos(root, msg);
-                    return;
-                }
-            } else if matches!(
-                self.ast.exprs.get(x).kind(),
+            let kind = self.ast.exprs.get(x).kind();
+            let call = matches!(
+                kind,
                 ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
-            ) {
+            );
+            let reference = if call {
+                self.ast.exprs.get(x).value_category() != ValueCategory::PRValue
+            } else {
+                named(self, x).is_some_and(|d| {
+                    self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_reference(t))
+                })
+            };
+            if reference {
+                let at = self.expr_loc(x);
+                let range = Span::new(cc, self.token_end(cc).unwrap_or(cc));
+                let mut msg = self
+                    .diag(DiagId::sema_address_of_reference_bool_conversion, at)
+                    .range(self.expr_range(e))
+                    .range(range);
+                // clang `getDirectCallee`: a function, not a pointer.
+                let direct = call.then(|| self.callee_decl(x)).flatten().filter(|&f| {
+                    self.ast.decls.get(f).ty().is_some_and(|t| {
+                        self.ast.types.is_function(self.ast.types.canonical(t))
+                    })
+                });
+                if let Some(f) = direct {
+                    msg = msg.with_note(
+                        self.diag(DiagId::note_reference_is_return_value, self.ast.decls.get(f).loc())
+                            .arg(format!("'{}'", self.decl_name(f))),
+                    );
+                }
+                self.emit_after_typos(root, msg);
+                return;
+            }
+            if call {
                 return;
             }
         }
