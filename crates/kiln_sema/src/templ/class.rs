@@ -272,6 +272,11 @@ impl Sema<'_, '_> {
                 // `= N` or `= Max<L>::value`).
                 break;
             }
+            if let (ArgView::Type(pat), ArgView::Type(t)) = (def.view(), elems[n - 1].view())
+                && !self.default_shape_matches(t, pat, &elems[..n - 1], depth)
+            {
+                break;
+            }
             if !self.push_inst_frame(FrameKind::DefaultArgChecking, p, tmpl, loc) {
                 break;
             }
@@ -291,6 +296,69 @@ impl Sema<'_, '_> {
             }
         }
         if n == elems.len() { args } else { self.ast.types.arg_list(&elems[..n]) }
+    }
+
+    /// Whether written type argument `t` can equal its default `pat` in
+    /// clang's `isSubstitutedType` (TypePrinter.cpp), which compares
+    /// structurally instead of substituting: a type equal to the
+    /// pattern, a type parameter, or a specialization (left to the
+    /// substitution [`Self::suppress_default_args`] then makes), reached
+    /// through pointer-like declarators (`*`, `&`, `&&`, `C::*`) of the
+    /// same type class under equal qualifiers. Anything else, notably an
+    /// array or function declarator (clang's FIXME), never matches, so a
+    /// written `X<long, long[3]>` keeps `long[3]` against `class A =
+    /// T[3]`.
+    fn default_shape_matches(
+        &mut self,
+        t: QualType,
+        pat: QualType,
+        prefix: &[TemplateArg],
+        depth: u16,
+    ) -> bool {
+        let types = &self.ast.types;
+        let (ct, cp) = (types.canonical(t), types.canonical(pat));
+        if ct == cp {
+            return true;
+        }
+        match types.canonical_view(pat) {
+            // The parameter's argument with the pattern's qualifiers is
+            // the written type (clang's `getQualifiedType`: a qualified
+            // reference never equals one).
+            TypeView::CanonTemplateTypeParm { depth: d, index, .. } => {
+                let Some(ArgView::Type(a)) = prefix
+                    .get(index as usize)
+                    .filter(|_| d == u32::from(depth))
+                    .map(TemplateArg::view)
+                else {
+                    return false;
+                };
+                let ca = types.canonical(a);
+                if cp.quals().is_empty() {
+                    return ca == ct;
+                }
+                if types.is_reference(ca) {
+                    return false;
+                }
+                let q = self.ast.types.qualify(ca, cp.quals());
+                return self.ast.types.canonical(q) == ct;
+            }
+            TypeView::TemplateSpecialization { .. } => return true,
+            _ => {}
+        }
+        if ct.quals() != cp.quals() {
+            return false;
+        }
+        let pointee = |q: QualType| match types.view(types.desugar_top(q).ty()) {
+            TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => Some(p),
+            TypeView::MemberPointer { pointee, .. } => Some(pointee),
+            _ => None,
+        };
+        match (pointee(t), pointee(pat)) {
+            (Some(a), Some(b)) if types.kind(t.ty()) == types.kind(pat.ty()) => {
+                self.default_shape_matches(a, b, prefix, depth)
+            }
+            _ => false,
+        }
     }
 
     /// Whether the non-type default `def` is an expression that is not

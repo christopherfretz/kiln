@@ -377,6 +377,17 @@ pub struct Sema<'a, 'sm> {
     /// a reference to `void` is diagnosed there (clang's
     /// `ReferenceTypeLoc`; [dcl.ref]/1).
     pub(crate) ref_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where the innermost `*` or `[` of a declaration of dependent type
+    /// was written, when it applies to the decl-specifiers (`T *m;`,
+    /// `T const *volatile *m;`'s first `*`, `T a[3];`, a type parameter's
+    /// `= T *`): a substitution that forms a pointer to (or an array of)
+    /// references is diagnosed there, as clang's `TreeTransform` rebuilds
+    /// the type at its `TypeLoc` sigil ([dcl.ref]/5, [dcl.array]/1).
+    pub(crate) inner_chunk_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// [`Sema::inner_chunk_locs`] of the type parameter default or
+    /// alias-declaration type just parsed, adopted by
+    /// `act_on_template_param_default` / `act_on_alias_decl`.
+    pub(crate) pending_chunk_loc: Loc,
     /// Where a `constexpr` special member function's declaration
     /// begins, when not at its name: a constexpr defaulted special member
     /// of a class with virtual bases is diagnosed there before C++26
@@ -876,6 +887,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
             ref_locs: kiln_source::fx::FxHashMap::default(),
+            inner_chunk_locs: kiln_source::fx::FxHashMap::default(),
+            pending_chunk_loc: Loc::INVALID,
             constexpr_begin_locs: kiln_source::fx::FxHashMap::default(),
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
             virt_spec_locs: kiln_source::fx::FxHashMap::default(),

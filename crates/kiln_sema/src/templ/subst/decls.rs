@@ -154,11 +154,13 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// Makes pattern declaration `d`'s written outermost `&`/`&&`
-    /// ([`crate::Sema::ref_locs`]) the next reference rebuilt; returns
-    /// the one it replaces.
-    fn swap_ref_loc(&mut self, d: DeclId) -> Option<Loc> {
+    /// ([`crate::Sema::ref_locs`]) the next reference rebuilt, and its
+    /// innermost `*`/`[` ([`crate::Sema::inner_chunk_locs`]) the next
+    /// pointer or array; returns the ones they replace.
+    fn swap_ref_loc(&mut self, d: DeclId) -> (Option<Loc>, Option<Loc>) {
         let l = self.sema.ref_locs.get(&d).copied();
-        std::mem::replace(&mut self.ref_loc, l)
+        let c = self.sema.inner_chunk_locs.get(&d).copied();
+        (std::mem::replace(&mut self.ref_loc, l), std::mem::replace(&mut self.chunk_loc, c))
     }
 
     /// `t`, the type of pattern declaration `d`, substituted with `d`'s
@@ -178,7 +180,7 @@ impl Substituter<'_, '_, '_> {
         let r = self.with_written_scope(scope, |s| s.ty(t, loc));
         self.declarator_name = saved;
         self.type_begin = outer;
-        self.ref_loc = outer_ref;
+        (self.ref_loc, self.chunk_loc) = outer_ref;
         r
     }
 
@@ -484,9 +486,12 @@ impl Substituter<'_, '_, '_> {
             let begin = self.decl_begin(p);
             let outer = self.type_begin.replace(begin);
             let outer_ref = self.swap_ref_loc(p);
+            let named = n.name().as_ident().map(|x| (x, n.loc()));
+            let outer_name = std::mem::replace(&mut self.declarator_name, named);
             let ty = self.with_written_scope(scope, |s| s.ty(t, n.loc()));
             self.type_begin = outer;
-            self.ref_loc = outer_ref;
+            (self.ref_loc, self.chunk_loc) = outer_ref;
+            self.declarator_name = outer_name;
             let declared = ty?;
             let ty = self.param_type(declared, n.loc())?;
             // Created now, so that the rest of the signature (a trailing
@@ -551,6 +556,19 @@ impl Substituter<'_, '_, '_> {
         (WrittenScope { anchor: loc, side: WrittenSide::After, bound }, false)
     }
 
+    /// Return type `ret` of pattern function `d` substituted, with `d`'s
+    /// name and innermost written `*`/`[` ([`crate::Sema::inner_chunk_locs`])
+    /// available to declarator diagnostics, as clang names them.
+    fn ret_ty(&mut self, d: DeclId, ret: QualType, loc: Loc) -> SubstResult<QualType> {
+        let name = self.sema.ast.decls.get(d).name().as_ident().map(|n| (n, loc));
+        let chunk = self.sema.inner_chunk_locs.get(&d).copied();
+        let outer_name = std::mem::replace(&mut self.declarator_name, name);
+        let outer_chunk = std::mem::replace(&mut self.chunk_loc, chunk);
+        let r = self.ty(ret, loc);
+        (self.declarator_name, self.chunk_loc) = (outer_name, outer_chunk);
+        r
+    }
+
     /// The substituted parameters, return type and exception
     /// specification of pattern function `d` of type `p`. On failure the
     /// pattern's parameters are forgotten.
@@ -569,7 +587,8 @@ impl Substituter<'_, '_, '_> {
         // and the exception specification may name them
         // ([basic.scope.param]), and `this` ([expr.prim.this]/2).
         let (ret_scope, leading) = self.ret_written_scope(d, info.trailing_return(), loc);
-        let early_ret = leading.then(|| self.with_written_scope(ret_scope, |s| s.ty(p.ret(), loc)));
+        let early_ret =
+            leading.then(|| self.with_written_scope(ret_scope, |s| s.ret_ty(d, p.ret(), loc)));
         let params = match early_ret {
             Some(Err(e)) => Err(e),
             _ => self.param_infos(d),
@@ -580,7 +599,7 @@ impl Substituter<'_, '_, '_> {
         let sig = params.and_then(|params| {
             let ret = match early_ret {
                 Some(r) => r?,
-                None => self.with_written_scope(ret_scope, |s| s.ty(p.ret(), loc))?,
+                None => self.with_written_scope(ret_scope, |s| s.ret_ty(d, p.ret(), loc))?,
             };
             // [dcl.fct]/11, at the return type as written (clang's
             // `BuildFunctionType` after the parameters).
@@ -852,7 +871,7 @@ impl Substituter<'_, '_, '_> {
         let method = self.sema.kind_of(pat) == DeclKind::CXXMethod;
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         let sig = params.and_then(|params| {
-            let ret = self.ty(p.ret(), loc)?;
+            let ret = self.ret_ty(pat, p.ret(), loc)?;
             self.check_return_type(ret, loc)?;
             let ret_loc = self.sema.type_spec_locs.get(&pat).copied().unwrap_or(loc);
             self.check_volatile_return(p.ret(), ret, ret_loc);
@@ -1195,9 +1214,12 @@ impl Substituter<'_, '_, '_> {
         let begin = self.decl_begin(d);
         let outer = self.type_begin.replace(begin);
         let outer_ref = self.swap_ref_loc(d);
+        let named = n.name().as_ident().map(|x| (x, loc));
+        let outer_name = std::mem::replace(&mut self.declarator_name, named);
         let ty = self.with_written_scope(scope, |s| s.ty(u, loc));
-        self.ref_loc = outer_ref;
+        (self.ref_loc, self.chunk_loc) = outer_ref;
         self.type_begin = outer;
+        self.declarator_name = outer_name;
         // clang `VisitTypedefNameDecl`: a member typedef whose type fails
         // to substitute is still declared, invalid (lookup finds it, its
         // uses are silent, the specialization is invalid).
@@ -1532,6 +1554,7 @@ fn subst_param_info(
         range: (loc, loc),
         type_loc: loc,
         ref_loc: Loc::INVALID,
+        chunk_loc: Loc::INVALID,
         decl: Some(decl),
         explicit_object,
     }

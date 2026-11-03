@@ -2,7 +2,7 @@
 //! implements (`spec/driver.md` "Options"). Anything else is an
 //! `unknown argument` error, never silently ignored.
 
-use kiln_codegen::ComplexRange;
+use kiln_codegen::{AutoVarInit, ComplexRange};
 use kiln_pp::{ClangCompat, CmdMacro, DirGroup, OptLevel, PicModel};
 use kiln_sema::LaxVectorConversions;
 
@@ -415,6 +415,11 @@ pub struct Args {
     /// `-fno-lax-vector-conversions` (the last wins; clang's default
     /// `all`, a bare flag `integer`).
     pub lax_vector_conversions: LaxVectorConversions,
+    /// `-ftrivial-auto-var-init=` (the last wins); `None` is the
+    /// standard's default (spec/codegen.md §7r).
+    pub auto_var_init: Option<AutoVarInit>,
+    /// `-ftrivial-auto-var-init-max-size=` (the last wins).
+    pub auto_var_init_max_size: Option<u64>,
 }
 
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
@@ -498,6 +503,7 @@ impl Args {
             } else if !a.flag(arg)
                 && !a.complex_flag(arg)
                 && !a.lax_vector_flag(arg)
+                && !a.auto_var_init_flag(arg)
                 && !a.predef_flag(arg)
                 && !a.diag_flag(arg)
             {
@@ -660,6 +666,29 @@ impl Args {
                     return false;
                 }
             }
+        }
+        true
+    }
+
+    /// `-ftrivial-auto-var-init=uninitialized|zero` and
+    /// `-ftrivial-auto-var-init-max-size=N` (`pattern` is unsupported).
+    fn auto_var_init_flag(&mut self, arg: &str) -> bool {
+        if let Some(v) = arg.strip_prefix("-ftrivial-auto-var-init=") {
+            match v {
+                "uninitialized" => self.auto_var_init = Some(AutoVarInit::Uninitialized),
+                "zero" => self.auto_var_init = Some(AutoVarInit::Zero),
+                _ => self.errors.push(ArgError::UnsupportedValue(
+                    "-ftrivial-auto-var-init=".to_owned(),
+                    v.to_owned(),
+                )),
+            }
+        } else if let Some(v) = arg.strip_prefix("-ftrivial-auto-var-init-max-size=") {
+            match v.parse() {
+                Ok(n) => self.auto_var_init_max_size = Some(n),
+                Err(_) => self.errors.push(ArgError::InvalidInt(arg.to_owned(), v.to_owned())),
+            }
+        } else {
+            return false;
         }
         true
     }
