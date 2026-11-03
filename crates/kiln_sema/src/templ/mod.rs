@@ -230,7 +230,7 @@ pub struct TemplState {
     /// memoized (§6.1 step 4).
     pub(crate) fn_spec_failures: kiln_source::fx::FxHashMap<DeclId, kiln_diag::Diag>,
     /// Templated functions made invalid by their body (the constexpr
-    /// variable rule, constexpr_body.rs), not by their declaration: a
+    /// variable rule, `constexpr_body.rs`), not by their declaration: a
     /// deduction still runs, and its specialization is a substitution
     /// failure (clang marks only the `FunctionDecl` invalid, not its
     /// template, and an instantiation of it is invalid too). WP-414.

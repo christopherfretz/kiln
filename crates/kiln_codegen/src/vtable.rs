@@ -1808,9 +1808,7 @@ impl Cg<'_> {
             } else if w.nv.contains(&b) {
                 flags |= 1;
             }
-        } else if !w.nv.insert(b) {
-            flags |= 1;
-        } else if w.vb.contains(&b) {
+        } else if !w.nv.insert(b) || w.vb.contains(&b) {
             flags |= 1;
         }
         if depth > 256 {
