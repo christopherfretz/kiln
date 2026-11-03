@@ -10,7 +10,8 @@
 //!
 //! The GCC oracle (`oracle: gcc` tests; `spec/harness.md` "GCC oracle") is
 //! named by `KILN_GCC` (default `g++-16` on `PATH`); [`gcc_args`] maps a
-//! test's kiln/clang flags to GCC's.
+//! test's kiln/clang flags to GCC's. `KILN_REQUIRE_GCC=1` (GitHub CI) makes
+//! a missing GCC an infrastructure error instead of dropped comparisons.
 
 use std::path::PathBuf;
 
@@ -30,9 +31,19 @@ pub fn gcc_from(value: Option<&str>) -> (PathBuf, bool) {
     }
 }
 
-/// [`gcc_from`] of the environment.
-pub fn gcc_from_env() -> (PathBuf, bool) {
-    gcc_from(std::env::var(GCC_ENV).ok().as_deref())
+/// The environment variable that makes the GCC oracle mandatory.
+pub const REQUIRE_GCC_ENV: &str = "KILN_REQUIRE_GCC";
+
+/// Whether a `KILN_REQUIRE_GCC` value requires the GCC oracle: exactly `1`,
+/// as `KILN_REQUIRE_LLVM`. Only the command entry points read it
+/// ([`require_gcc_from_env`]), so the harness's own tests never see CI's.
+pub fn require_gcc_from(value: Option<&str>) -> bool {
+    value.map(str::trim) == Some("1")
+}
+
+/// [`require_gcc_from`] of the environment.
+pub fn require_gcc_from_env() -> bool {
+    require_gcc_from(std::env::var(REQUIRE_GCC_ENV).ok().as_deref())
 }
 
 /// A test's `args:` (placeholders already substituted) as GCC 16 takes
@@ -186,6 +197,9 @@ mod tests {
         assert_eq!(gcc_from(None), (PathBuf::from("g++-16"), false));
         assert_eq!(gcc_from(Some(" ")), (PathBuf::from("g++-16"), false));
         assert_eq!(gcc_from(Some("/opt/g++")), (PathBuf::from("/opt/g++"), true));
+        assert!(require_gcc_from(Some("1")) && require_gcc_from(Some(" 1 ")));
+        assert!(!require_gcc_from(None) && !require_gcc_from(Some("0")));
+        assert!(!require_gcc_from(Some("")) && !require_gcc_from(Some("yes")));
         let args: Vec<String> = [
             "-freflection",
             "-I",

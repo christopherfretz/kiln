@@ -61,6 +61,9 @@ environment:
   KILN_ORACLE  the oracle clang/LLVM release: 22 (default) or 19 (the M3 gate's). Names
                clang++-N, opt-N, llc-N, FileCheck-N and /usr/lib/llvm-N (exported to
                kiln++ as KILN_LLVM_DIR); spec/harness.md \"Oracle toolchain\"
+  KILN_GCC     the GCC 16.1 oracle of `oracle: gcc` tests (default g++-16 on PATH);
+               KILN_REQUIRE_GCC=1 makes a missing one an error (exit 2) in test and ci
+               (GitHub CI sets both; spec/harness.md \"GCC oracle\")
 ";
 
 fn main() -> ExitCode {
@@ -115,6 +118,9 @@ usage: cargo xtask ci [--quick] [--oracle-only]
                  spec/landed lint, no fmt or clippy, and of `cargo test` only the
                  targets that read KILN_ORACLE; the corpus runs as usual (GitHub CI's
                  `KILN_ORACLE=19 cargo xtask ci --quick --oracle-only`)
+
+KILN_REQUIRE_GCC=1: no usable GCC oracle (KILN_GCC, else g++-16) is an error
+(exit 2) before any step runs (spec/harness.md \"GCC oracle\").
 ";
 
 /// The cargo test targets whose outcome depends on `KILN_ORACLE`, as
@@ -168,6 +174,13 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // `KILN_REQUIRE_GCC=1` (GitHub CI): no GCC oracle fails here, before the
+    // cargo steps, rather than after them in the corpus runs.
+    let require_gcc = oracle::require_gcc_from_env();
+    if let Err(e) = test::gcc_oracle(&test::Options { require_gcc, ..test::Options::default() }) {
+        eprintln!("xtask ci: {e}");
+        return ExitCode::from(2);
+    }
     if !oracle_only && !ci_lints(&util::repo_root()) {
         return ExitCode::FAILURE;
     }
@@ -198,12 +211,16 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
     } else if let Err(e) = util::identify(std::path::Path::new(&corpus_compiler)) {
         test::CorpusOutcome::Skipped(format!("{corpus_compiler} not runnable: {e}"))
     } else {
-        ci_corpus(&format!("--compiler {corpus_compiler}"), Some(corpus_compiler.clone().into()))
+        ci_corpus(
+            &format!("--compiler {corpus_compiler}"),
+            Some(corpus_compiler.clone().into()),
+            require_gcc,
+        )
     };
     // kiln-mode always runs: kiln as the compiler, clang++-N as the oracle
     // (and kiln's linker), so without clang it fails rather than passing
     // unchecked.
-    let kiln_mode = ci_corpus(&format!("--compiler {}", kiln.display()), Some(kiln));
+    let kiln_mode = ci_corpus(&format!("--compiler {}", kiln.display()), Some(kiln), require_gcc);
 
     let self_check_name = format!("{corpus_compiler} self-check");
     let runs = [(self_check_name.as_str(), self_check), ("kiln", kiln_mode)];
@@ -245,10 +262,15 @@ fn ci_lints(root: &std::path::Path) -> bool {
     ok
 }
 
-/// One `cargo xtask test` run over the default corpus, with `compiler`.
-fn ci_corpus(what: &str, compiler: Option<std::path::PathBuf>) -> test::CorpusOutcome {
+/// One `cargo xtask test` run over the default corpus, with `compiler`
+/// (`require_gcc`: `KILN_REQUIRE_GCC=1`).
+fn ci_corpus(
+    what: &str,
+    compiler: Option<std::path::PathBuf>,
+    require_gcc: bool,
+) -> test::CorpusOutcome {
     eprintln!("xtask ci: cargo xtask test {what}");
-    let opts = test::Options { compiler, ..test::Options::default() };
+    let opts = test::Options { compiler, require_gcc, ..test::Options::default() };
     let start = std::time::Instant::now();
     let run = test::execute(&opts);
     if let Err(e) = &run {

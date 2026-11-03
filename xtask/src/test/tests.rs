@@ -61,6 +61,7 @@ fn cli_parsing() {
             report_parity: Some("docs/status/pp-parity.md".into()),
             paths: vec!["tests/a".into(), "b.cpp".into()],
             toolchain: None,
+            require_gcc: false,
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
@@ -463,14 +464,20 @@ fn gcc_oracle_with_a_fake_gcc() {
     has("fail-run-exit-differs.cpp", "exit differs from the GCC oracle");
     let counts = report::Counts::of(&results);
     assert_eq!(counts.advisory(), 3);
+    // Every fixture GCC gave a verdict on (all but the advisory three and
+    // the skipped one) counts as a comparison (spec/harness.md "Output").
+    let compared: Vec<&str> =
+        results.iter().filter(|r| r.gcc_compared).map(|r| r.name.as_str()).collect();
+    assert_eq!(compared.len(), 9, "{compared:?}");
+    assert!(results.iter().all(|r| !(r.gcc_compared && r.advisory.is_some())));
     let summary = report::format_summary(&counts, results.len(), Duration::ZERO);
-    assert!(summary.contains("; 3 advisory; 13 tests"), "{summary}");
+    assert!(summary.contains("; 9 compared with gcc; 3 advisory; 13 tests"), "{summary}");
     // Without a GCC the comparisons are dropped, never failed: only kiln's
     // own checks remain (the `error-` fixtures pass, the run diffs pass).
     o.no_gcc = true;
     let results = execute(&o).unwrap();
     assert!(
-        results.iter().all(|r| !r.status.is_failure() && r.advisory.is_none()),
+        results.iter().all(|r| !r.status.is_failure() && r.advisory.is_none() && !r.gcc_compared),
         "{}",
         report(&results)
     );
@@ -485,6 +492,43 @@ fn gcc_oracle_with_a_fake_gcc() {
     o.no_gcc = false;
     o.gcc = Some(root.join("xtask/fixtures/no-such-gcc"));
     assert!(execute(&o).unwrap_err().contains("the GCC oracle"));
+}
+
+/// `KILN_REQUIRE_GCC=1` ([`Options::require_gcc`]): a run without a usable
+/// GCC oracle is an infrastructure error (exit 2), never a run with the
+/// `oracle: gcc` comparisons dropped (spec/harness.md "GCC oracle").
+#[test]
+fn require_gcc_makes_a_missing_gcc_an_error() {
+    let root = repo_root();
+    let fake_gcc = root.join("xtask/fixtures/fake-gcc/g++");
+    let mut o = Options { gcc: Some(fake_gcc.clone()), require_gcc: true, ..Options::default() };
+    let (path, version) = gcc_oracle(&o).unwrap().expect("the fake GCC is a GCC");
+    assert_eq!(path, fake_gcc);
+    assert_eq!(version, "g++ (GCC) 16.1.0-fake (xtask fixture)");
+    // Dropping it explicitly is still an error under the requirement.
+    o.no_gcc = true;
+    let e = gcc_oracle(&o).unwrap_err();
+    assert!(e.starts_with("KILN_REQUIRE_GCC=1 and no usable GCC oracle") && e.contains("--no-gcc"));
+    o.no_gcc = false;
+    o.no_oracle = true;
+    assert!(gcc_oracle(&o).unwrap_err().contains("--no-oracle"));
+    // `execute` fails before running a test (no clang needed: --no-oracle).
+    o.compiler = Some(root.join("xtask/fixtures/fake-kiln/kiln"));
+    o.paths = vec![root.join("xtask/fixtures/gcc")];
+    assert!(execute(&o).unwrap_err().starts_with("KILN_REQUIRE_GCC=1"));
+    // The default GCC (`g++-16`, KILN_GCC unset) missing: dropped without
+    // the requirement, an error with it. (Skipped where g++-16 is on PATH.)
+    let o = Options { require_gcc: true, ..Options::default() };
+    if crate::util::identify(Path::new(crate::oracle::GCC_DEFAULT)).is_err() {
+        let e = gcc_oracle_with(&o, None).unwrap_err();
+        assert!(e.contains("set KILN_GCC or --gcc to GCC 16.1"), "{e}");
+        let o = Options { require_gcc: false, ..o };
+        assert_eq!(gcc_oracle_with(&o, None), Ok(None));
+    }
+    // A named GCC that does not run stays the error it was.
+    let o = Options { require_gcc: false, ..Options::default() };
+    let missing = root.join("xtask/fixtures/no-such-gcc").display().to_string();
+    assert!(gcc_oracle_with(&o, Some(&missing)).unwrap_err().contains("the GCC oracle"));
 }
 
 #[test]
@@ -779,6 +823,7 @@ fn ci_gate_honours_failure_counts() {
         log: Vec::new(),
         updated: false,
         advisory: None,
+        gcc_compared: false,
         elapsed: Duration::ZERO,
     };
     let ran = |statuses: &[Status]| {
