@@ -162,7 +162,7 @@ impl Sema<'_, '_> {
                             )],
                         })
                     }
-                    p => p,
+                    p @ Potential::Fails(_) => p,
                 }
             }
             ExprKind::BinaryConditionalOperator => {

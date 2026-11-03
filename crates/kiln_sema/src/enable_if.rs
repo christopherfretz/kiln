@@ -170,25 +170,22 @@ impl Sema<'_, '_> {
         let mut unbound = false;
         for (j, &p) in params.iter().enumerate().skip(skip) {
             let i = j - skip;
-            let arg = match args.get(i) {
-                Some(a) => {
-                    let r = a.list.is_none().then_some(a.expr).flatten().and_then(|e| {
-                        let pt = conv::strip_cv(self, p);
-                        let to = if self.ast.types.is_reference(p) { p } else { pt };
-                        let (r, diags) =
-                            self.capturing(|s| conv::implicit_convert(s, e, to, ConvCtx::Argument));
-                        let s_failed = |s: &Self, d: &[kiln_diag::Diag]| s.stash_has_error(d);
-                        let failed = s_failed(self, &diags);
-                        r.ok().filter(|_| !failed)
-                    });
-                    unbound |= r.is_none();
-                    r
-                }
-                None => {
-                    let r = self.enable_if_default_arg(f, j);
-                    unbound |= r.is_none() && !self.nth_param_has_default(f, j);
-                    r
-                }
+            let arg = if let Some(a) = args.get(i) {
+                let r = a.list.is_none().then_some(a.expr).flatten().and_then(|e| {
+                    let pt = conv::strip_cv(self, p);
+                    let to = if self.ast.types.is_reference(p) { p } else { pt };
+                    let (r, diags) =
+                        self.capturing(|s| conv::implicit_convert(s, e, to, ConvCtx::Argument));
+                    let s_failed = |s: &Self, d: &[kiln_diag::Diag]| s.stash_has_error(d);
+                    let failed = s_failed(self, &diags);
+                    r.ok().filter(|_| !failed)
+                });
+                unbound |= r.is_none();
+                r
+            } else {
+                let r = self.enable_if_default_arg(f, j);
+                unbound |= r.is_none() && !self.nth_param_has_default(f, j);
+                r
             };
             conv_args.push(arg);
         }

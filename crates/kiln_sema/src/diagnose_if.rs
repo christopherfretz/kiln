@@ -26,7 +26,7 @@ pub(crate) const DIAGNOSE_IF_ERROR: u8 = 4;
 /// `diagnose_if` flag (bit 4): the condition names a parameter or `this`.
 pub(crate) const DIAGNOSE_IF_ARG_DEPENDENT: u8 = 16;
 /// `diagnose_if` flag (bit 5): written with a warning group (the fourth
-/// argument, clang 22), so the diagnostic has no "from 'diagnose_if'" note.
+/// argument, clang 22), so the diagnostic has no "from `diagnose_if`" note.
 pub(crate) const DIAGNOSE_IF_GROUP: u8 = 32;
 
 impl Sema<'_, '_> {
