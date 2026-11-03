@@ -4882,6 +4882,11 @@ impl Sema<'_, '_> {
             let kind = self.variadic_call_kind(named.map(|c| c.decl), callee);
             self.check_variadic_args(&conv_args[n..have], kind);
         }
+        if let Some(c) = named
+            && !self.check_enable_if_direct(c.decl, callee, &conv_args, loc)
+        {
+            return None;
+        }
         Some(conv_args)
     }
 

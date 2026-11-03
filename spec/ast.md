@@ -230,7 +230,9 @@ struct VarData {                    // 24 bytes
 struct RecordData { redecl: Redecl, members: Members /*first, last*/,
                     bases: ListId /*1-based indices into DeclArena::base_specs*/,
                     defn: DefinitionBits /*u64, clang's DefinitionData flags; bits 24–49
-                                            spec/sema-class.md §2.9, bit 50 FINAL*/,
+                                            spec/sema-class.md §2.9, bit 50 FINAL, 51 LAMBDA_CAPTURES,
+                                            52 HAS_FLEXIBLE_ARRAY_MEMBER, 53 TRIVIAL_ABI, 54–56
+                                            {COPY_CTOR,MOVE_CTOR,DTOR}_FOR_CALL (spec/abi.md §8.25)*/,
                     templ: TemplLink, lambda: Option<LambdaId>, tag: TagKind /*struct/class/union*/ }   // 40 bytes
 struct BaseSpec { ty: QualType /*as written*/, loc: Loc, is_virtual: bool,
                   access: Access /*as written; None if defaulted*/, pack_expansion: bool, ... }

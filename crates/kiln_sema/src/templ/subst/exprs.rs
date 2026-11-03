@@ -540,8 +540,14 @@ impl Substituter<'_, '_, '_> {
                 let (base, arrow, destroyed) = ex(self).pseudo_destructor(e);
                 let qualified = ex(self).pseudo_destructor_qualified(e);
                 let base = self.member_base(base)?;
-                let destroyed = self.ty(destroyed, loc)?;
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
+                // `p->~N()` whose `N` named no type at the definition: it
+                // is looked up now, in the object's class (clang
+                // `TransformCXXPseudoDestructorExpr` → `getDestructorName`).
+                if let Some(&name) = self.sema.ast.templates.pseudo_dtor_name.get(e) {
+                    return Ok(self.sema.act_on_member_destructor_late(base, name, loc, op, arrow));
+                }
+                let destroyed = self.ty(destroyed, loc)?;
                 Ok(self.sema.rebuild_member_destructor(base, destroyed, qualified, loc, op, arrow))
             }
             ExprKind::CXXDependentScopeMemberExpr => {
