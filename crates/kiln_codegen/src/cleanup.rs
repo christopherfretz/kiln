@@ -1051,9 +1051,14 @@ impl Cg<'_> {
                 self.f.fir.push(Op::Br { dest: b }, LTy::VOID);
             }
             Exit::Switch { default, cases } => {
+                // `createLoadInstBefore(.., nullptr)`, appended to the
+                // exit block directly: no access group.
                 let slot = self.dest_slot();
-                let ld =
-                    self.f.fir.push(Op::Load { ty: LTy::I32, ptr: slot, mem: mem4() }, LTy::I32);
+                let ld = self.f.fir.push_in(
+                    normal_exit,
+                    Op::Load { ty: LTy::I32, ptr: slot, mem: mem4() },
+                    LTy::I32,
+                );
                 self.f.fir.push(Op::Switch { c: ld, default, cases }, LTy::VOID);
             }
         }

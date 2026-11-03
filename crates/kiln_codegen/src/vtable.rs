@@ -1113,8 +1113,9 @@ impl Cg<'_> {
             // variadic thunk the attributes of a definition
             // (`SetLLVMFunctionAttributesForDefinition`: `uwtable`, the
             // `-Os`/`-Oz` size attributes, x86's `align 2`) and then
-            // leaves it a declaration: it would be a clone of the method
-            // (`GenerateVarArgsThunk`), never `available_externally`.
+            // leaves it a declaration: it is a clone of the method
+            // (`GenerateVarArgsThunk`, `emit_vararg_thunk_clone`), never
+            // `available_externally`.
             let fa = self.m.func(f).attrs.func;
             let mut a = self.m.attrs_of(fa).to_vec();
             a.push(Attr::UwTable(kiln_llvm::UwTableKind::Async));
@@ -1259,9 +1260,14 @@ impl Cg<'_> {
             .filter(|&&(m, _)| ast.first(m) == first)
             .map(|&(_, t)| t)
             .collect();
+        let variadic = v.is_none() && self.is_variadic_virtual(d);
         for th in ths {
             let f = self.thunk_fn(d, v, th)?;
             if !self.m.func(f).is_declaration() {
+                continue;
+            }
+            if variadic && th.ret != (0, 0) {
+                self.emit_vararg_thunk_clone(d, f, th)?;
                 continue;
             }
             let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
@@ -1269,6 +1275,123 @@ impl Cg<'_> {
             self.f = saved;
             r?;
         }
+        Ok(())
+    }
+
+    /// The method `d` is virtual and variadic.
+    pub(crate) fn is_variadic_virtual(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let first = ast.first(d);
+        ast.decls
+            .get(first)
+            .ty()
+            .and_then(|t| ast.types.proto(t))
+            .is_some_and(kiln_ast::types::FuncProto::variadic)
+            && ast
+                .redecls_of(first)
+                .any(|r| ast.decls.function(r).is_some_and(|f| f.spec.is_virtual()))
+    }
+
+    /// clang `GenerateVarArgsThunk`: the return-adjusting thunk `f` (`th`)
+    /// of the variadic method `d` (just defined) is a clone of the
+    /// method's body, appended to the module (`CloneFunction`) with the
+    /// method's header, in which `this` is adjusted before its first
+    /// store in the entry block and the returned value is adjusted before
+    /// the first `ret` in layout order; then `setThunkProperties`.
+    fn emit_vararg_thunk_clone(&mut self, d: DeclId, f: FuncId, th: Thunk) -> R<()> {
+        let ast = self.ast;
+        let loc = Some(ast.decls.get(d).loc());
+        let method = self.get_fn(d)?;
+        let Some((body, uses_ph)) =
+            self.vararg_bodies.get(&method).and_then(|(b, ph)| Some((b.clone_body()?, *ph)))
+        else {
+            // A body with a `blockaddress` cannot be cloned here (or the
+            // method was never defined, clang's `ErrorUnsupported`).
+            return err(
+                loc,
+                "a return-adjusting thunk of this variadic virtual function is not supported",
+            );
+        };
+        let first = ast.first(d);
+        let sig = self.decl_sig(first)?;
+        let rd = sig.this.expect("method class");
+        let fn_ty = self.m.func(method).ty();
+        // `CloneFunction` names the clone after the method (taking the
+        // module's next unique suffix) before `takeName` renames it.
+        let mname = self.m.func(method).name().to_owned();
+        self.m.consume_unique_name(&mname);
+        if let Err(e) = self.m.retype_function_to_end(f, fn_ty) {
+            return err(loc, format!("cannot define a thunk of this function: {e:?}"));
+        }
+        let (attrs, unnamed_addr, align, personality, section, cc) = {
+            let m = self.m.func(method);
+            (m.attrs.clone(), m.unnamed_addr, m.align, m.personality, m.section.clone(), m.cc)
+        };
+        {
+            let func = self.m.func_mut(f);
+            func.attrs = attrs;
+            func.unnamed_addr = unnamed_addr;
+            func.align = align;
+            func.personality = personality;
+            func.section = section;
+            func.cc = cc;
+        }
+        // setThunkProperties: the method's linkage, a comdat of its own.
+        self.set_def_linkage(f, d);
+        let nounwind = self.nounwind.get(&method).copied().unwrap_or(false);
+        self.nounwind.insert(f, nounwind);
+
+        let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
+        self.f.fir = body;
+        self.f.decl = Some(d);
+        self.f.func = Some(f);
+        self.f.sig = Some(sig.clone());
+        self.f.this_class = Some(rd);
+        let r = self.vararg_thunk_adjust(&sig, rd, th);
+        let fir = std::mem::replace(&mut self.f.fir, Fir::new(Vec::new()));
+        self.f = saved;
+        r?;
+        if uses_ph {
+            self.pending.push((f, d, fir));
+        } else if let Err(e) = fir.lower(&mut self.m, f, &self.phs) {
+            return err(loc, format!("IR lowering failed: {e:?}"));
+        }
+        Ok(())
+    }
+
+    /// The `this` and return adjustments of [`Cg::emit_vararg_thunk_clone`]
+    /// on the cloned body in `self.f.fir`.
+    fn vararg_thunk_adjust(&mut self, sig: &crate::module::Sig, rd: DeclId, th: Thunk) -> R<()> {
+        let loc = Some(self.ast.decls.get(self.f.decl.expect("method")).loc());
+        let this = V::Arg(u32::from(sig.sret()));
+        let entry = self.f.fir.entry();
+        let Some(store) = self.f.fir.first_store_of(entry, this) else {
+            return err(loc, "no store of `this` in the entry block of a variadic method");
+        };
+        let (_, this_align) = self.this_layout(rd);
+        let mark = self.f.fir.mark();
+        self.f.fir.set_cur(Some(entry));
+        let adj = self.type_adjustment(this, this_align, th.this, false);
+        for i in mark..self.f.fir.mark() {
+            if self.f.fir.inst_block(i).is_some() {
+                self.f.fir.move_before(i, store);
+            }
+        }
+        self.f.fir.set_store_val(store, adj);
+        let ret = self.f.fir.layout().iter().find_map(|&b| {
+            let t = self.f.fir.terminator(b)?;
+            match self.f.fir.op(t) {
+                Op::Ret { v } => Some((b, t, *v)),
+                _ => None,
+            }
+        });
+        if let Some((b, t, Some(rv))) = ret {
+            self.f.fir.erase(t);
+            self.f.fir.set_cur(Some(b));
+            let p = self.return_adjustment(rv, sig.ret, th.ret);
+            self.f.fir.push(Op::Ret { v: Some(p) }, LTy::VOID);
+        }
+        self.f.fir.set_cur(None);
         Ok(())
     }
 
@@ -1347,9 +1470,9 @@ impl Cg<'_> {
         adj: V,
     ) -> R<()> {
         let ast = self.ast;
-        // clang `maybeEmitThunk` clones the whole method for a
-        // return-adjusting variadic thunk (`GenerateVarArgsThunk`); kiln
-        // does not (spec/codegen.md §7z).
+        // A return-adjusting variadic thunk is a clone of its method
+        // (`emit_vararg_thunk_clone`); only one without a definition here
+        // gets this far (clang `ErrorUnsupported`).
         if th.ret != (0, 0) {
             return err(
                 Some(self.ast.decls.get(d).loc()),
@@ -1416,16 +1539,55 @@ impl Cg<'_> {
         let null = self.f.fir.create_block();
         let end = self.f.fir.create_block();
         let z = V::C(self.m.const_null(LTy::PTR));
-        let isnull = self.icmp(IntPredicate::Eq, p, z);
+        // The IR builder's constant folder (a cloned variadic body can
+        // return a constant).
+        let isnull = match self.const_ptr_is_null(p) {
+            Some(b) => V::C(self.m.const_bool(b)),
+            None => self.icmp(IntPredicate::Eq, p, z),
+        };
         self.cond_br(isnull, null, notnull);
         self.emit_block(notnull, false);
         let a = self.type_adjustment(p, align, adj, true);
         let afrom = self.f.fir.cur().expect("insertion point");
-        self.emit_branch(end);
+        // `Builder.CreateBr`, not `EmitBranch`: the insertion point stays,
+        // so each block is placed after the one before it.
+        self.br(end);
         self.emit_block(null, false);
-        self.emit_branch(end);
+        self.br(end);
         self.emit_block(end, false);
         self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(a, afrom), (z, null)] }, LTy::PTR)
+    }
+
+    /// Whether the pointer constant `p` is null, where LLVM's constant
+    /// folder knows: `null`, or a global that is not `extern_weak` (or an
+    /// `inbounds` GEP of one).
+    fn const_ptr_is_null(&self, p: V) -> Option<bool> {
+        let V::C(c) = p else { return None };
+        if matches!(self.m.const_of(c), Some(kiln_llvm::ConstData::Null(_))) {
+            return Some(true);
+        }
+        let mut c = c;
+        loop {
+            return match c.get() {
+                ValueRef::Const(_) => match self.m.const_of(c) {
+                    Some(kiln_llvm::ConstData::Gep { flags, ops, .. })
+                        if flags.0 & GepFlags::INBOUNDS.0 != 0 =>
+                    {
+                        c = ops[0];
+                        continue;
+                    }
+                    _ => None,
+                },
+                ValueRef::Global(g) => {
+                    let g = self.m.global(g);
+                    (g.linkage != Linkage::ExternWeak && g.addrspace == 0).then_some(false)
+                }
+                ValueRef::Func(f) => {
+                    (self.m.func(f).linkage != Linkage::ExternWeak).then_some(false)
+                }
+                _ => None,
+            };
+        }
     }
 
     /// clang (Itanium) `performTypeAdjustment` of the pointer `p` (to an

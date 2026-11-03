@@ -312,8 +312,11 @@ impl Cg<'_> {
                 if let Some(&outer) = self.f.conds.first()
                     && !destructed
                 {
+                    // clang moves the builder to the outermost
+                    // conditional's start (an access group, unlike the
+                    // `new StoreInst` inserts of the cleanup flags).
                     let op = self.lifetime_call(true, tmp.v, size);
-                    self.f.fir.insert_before_last(outer, op, LTy::VOID);
+                    self.f.fir.builder_insert_before_last(outer, op, LTy::VOID);
                     let conds = std::mem::take(&mut self.f.conds);
                     self.push_full_expr_cleanup(end, true, true);
                     self.f.conds = conds;
