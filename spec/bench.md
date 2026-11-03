@@ -112,7 +112,12 @@ applies to these ids.
   clang 20 or later: libc++ 22's `<__configuration/compiler.h>` warns
   "Libc++ only supports Clang 20 and later", and the runner's `-Werror`
   makes that an error, so with `--compare-with clang++-19` every clang side
-  fails. The slice's oracle is `clang++-22`.
+  would fail. `xtask bench` therefore refuses, with an error (exit 2) before
+  any setup or measurement, a clang `--compare-with` or `--compiler` older
+  than clang 20 or whose `--version` names no version, when the slice is
+  selected (`slice::check_clang_floor`, WP-487); kiln and other kinds are not
+  held to the floor, and without the slice clang 19 stays a fine oracle. The
+  slice's oracle is `clang++-22`.
 - **Measurement.** As any entry: serial, one compiler process at a time,
   `--runs` runs, the memory cap with kiln's stack reservation added. The
   1-minute load average is sampled before each test.
@@ -545,7 +550,12 @@ Nothing from `<dir>` is written; `-v` adds the failing cases' paths.
   under `--filter`, the shown flags, the distributions (odd and even
   counts, nearest-rank p90, ties for the maximum, zero and non-finite
   ratios), the aggregate over rows with a failed side, the printed report
-  and the `perf.md` section, and `--help` listing the entry.
+  and the `perf.md` section, `--help` listing the entry, and
+  `refuses_clang_older_than_20` (the clang-20 floor's verdicts and
+  message).
+- `xtask/src/bench/tests.rs` `slice_refuses_an_oracle_older_than_clang_20`:
+  a clang 19 `--compare-with` or `--compiler` refused for the slice before
+  any setup, and accepted as the oracle of an ordinary entry.
 - `xtask/src/bench/perf_md.rs` `splits_out_the_slice_section`: the page cut
   into table, slice section and hand-written section and put back verbatim,
   and a page gaining the section in its place.

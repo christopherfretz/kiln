@@ -392,7 +392,10 @@ comparison table in `docs/status/perf.md`. The `libcxx-slice` entry
 against clang 22 on ~50 heavy libc++ 22 tests at `-fsyntax-only`, with the
 flags the libc++ runner gives each test, and reports per-test and aggregate
 ratios (time median, geometric mean, p90 and max; memory median and p90)
-with the box load; it is record-only, because only the ratio measured in one
+with the box load. Its oracle must be clang 20 or later: libc++ 22 rejects
+older clangs under the runner's `-Werror`, so a `--compare-with clang++-19`
+(or a clang 19 `--compiler`) would fail every test, and `xtask bench` refuses
+it with an error (exit 2) before measuring anything (WP-487). It is record-only, because only the ratio measured in one
 window means anything on this shared host, and its section of `perf.md` is
 re-recorded at each milestone. The reflection shapes (`bench/reflect/`) are
 measured the same way when named, and `--scaling <shape>` checks their

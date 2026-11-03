@@ -396,6 +396,34 @@ fn time_budget_with_a_fake_kiln() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The libc++ slice refuses a clang older than 20 as either compiler, before
+/// any setup (spec/bench.md "The libcxx-slice entry", WP-487); without the
+/// slice selected clang 19 is a fine oracle (skipped when clang++-19 is not
+/// installed).
+#[test]
+fn slice_refuses_an_oracle_older_than_clang_20() {
+    let clang = Path::new("clang++-19");
+    if identify(clang).is_err() {
+        eprintln!("skipping: clang++-19 not available");
+        return;
+    }
+    let dir = scratch("slice-floor");
+    let lay = layout(&dir);
+    let kiln = lay.root.join("xtask/fixtures/fake-kiln/kiln");
+    let slice = [lay.bench.join(slice::GROUP)];
+    let opts = Options { runs: 1, compare_with: Some(clang.into()), ..Options::default() };
+    let e = execute(&opts, &lay, &kiln, &slice).unwrap_err();
+    assert!(e.starts_with("--compare-with `clang++-19` is clang 19."), "{e}");
+    assert!(e.contains("needs clang 20 or later"), "{e}");
+    assert!(!lay.scratch.exists(), "refused before any setup");
+    let e = execute(&Options { runs: 1, ..Options::default() }, &lay, clang, &slice).unwrap_err();
+    assert!(e.starts_with("--compiler `clang++-19` is clang 19."), "{e}");
+    let tiny = [lay.bench.join("tiny/answer.cpp")];
+    let r = execute(&opts, &lay, clang, &tiny).unwrap();
+    assert!(!r.failing, "{r:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `--record` with `--compare-with` merges into `perf.md` (spec/bench.md
 /// "Recording"): a fresh page when there is none, a filtered recording keeps
 /// the other rows, a re-recording replaces its row, stale rows are marked

@@ -415,6 +415,12 @@ pub fn execute(
     };
     let test = Subject::new(compiler)?;
     let oracle = opts.compare_with.as_deref().map(Subject::new).transpose()?;
+    if with_slice {
+        slice::check_clang_floor(&test.id, "--compiler", &test.path.display().to_string())?;
+        if let Some(o) = &oracle {
+            slice::check_clang_floor(&o.id, "--compare-with", &o.path.display().to_string())?;
+        }
+    }
 
     std::fs::create_dir_all(&layout.scratch)
         .map_err(|e| format!("cannot create {}: {e}", layout.scratch.display()))?;
