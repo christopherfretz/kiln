@@ -1601,11 +1601,14 @@ errors.
      and `-Wdeprecated-declarations` see them on the specialization. A
      dependent `alignas` operand is substituted; other arguments are
      shared with the pattern (no attribute kind that kiln evaluates takes
-     a dependent operand on a function yet). A friend is skipped (it may
-     redeclare a function with its own attributes), as is a declaration
-     that already has attributes. `[[deprecated]]` names a function
+     a dependent operand on a function yet). A befriended function gets them
+     too (a hidden friend found by ADL; WP-491); a declaration that
+     already has attributes is skipped. `[[deprecated]]` names a function
      template specialization with its arguments (`'f<int>' is
-     deprecated`, clang `getNameForDiagnostic`).
+     deprecated`, clang `getNameForDiagnostic`). A function template
+     specialization also takes the `nodiscard`/`pure`/`const` of the
+     template's other declarations (`function_spec_attrs`;
+     spec/landed/sema/WP-491.md).
    - A member typedef or alias-declaration gets the pattern's `aligned`
      attributes, a dependent operand substituted (`var_align_attrs` in
      `typedef_decl_in`; clang `InstantiateAttrs`; WP-335): libc++'s

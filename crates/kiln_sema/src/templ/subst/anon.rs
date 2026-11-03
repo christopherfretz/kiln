@@ -141,6 +141,41 @@ impl Substituter<'_, '_, '_> {
         self.copy_attrs(spec, def, false);
     }
 
+    /// [`Self::class_attrs`] for function template specialization `spec`
+    /// of pattern `pat`, plus the unused-result attributes (`nodiscard`,
+    /// `pure`, `const`) written only on another declaration of the
+    /// template seen so far: clang substitutes the specialization from
+    /// the latest redeclaration, onto which `mergeDeclAttributes` carried
+    /// every earlier one's, so an attribute added by a later declaration
+    /// (libc++'s `get` and `any_cast`, forward-declared without it) or
+    /// present only on the first applies to calls through any of them
+    /// ([dcl.attr.nodiscard]/2). A specialization formed before such a
+    /// declaration keeps what it had, as clang's does.
+    pub(crate) fn function_spec_attrs(&mut self, spec: DeclId, pat: DeclId) {
+        const MERGED: [AttrKind; 3] = [AttrKind::NODISCARD, AttrKind::PURE, AttrKind::CONST];
+        self.class_attrs(spec, pat);
+        let ast = &self.sema.ast;
+        let mut have: Vec<AttrKind> = ast
+            .lists
+            .iter::<AttrId>(ast.attrs.of_decl(spec))
+            .map(|a| ast.attrs.get(a).kind)
+            .collect();
+        let mut extra = Vec::new();
+        for r in ast.redecls_of(pat).take(4096) {
+            if r == pat || !ast.decls.get(r).has(DeclFlags::HAS_ATTRS) {
+                continue;
+            }
+            for a in ast.lists.iter::<AttrId>(ast.attrs.of_decl(r)) {
+                let k = ast.attrs.get(a).kind;
+                if MERGED.contains(&k) && !have.contains(&k) {
+                    have.push(k);
+                    extra.push(a);
+                }
+            }
+        }
+        self.sema.builder().append_attrs(spec, &extra);
+    }
+
     /// The `alignas` attributes of pattern variable `def` on its
     /// instantiation `spec` (clang `InstantiateAttrs` for a local
     /// variable; [dcl.align]/1).
