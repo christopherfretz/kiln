@@ -5746,7 +5746,7 @@ Tests: `ext.vector/bool-from-int-vector-clang22.cpp`,
 `ext.vector/bool-from-int-vector-19.cpp`, `ext.vector/ir-bool-from-int-vector.cpp`;
 codegen spec/codegen.md §7u.
 
-### 5.28 `-Winteger-overflow` (`int_overflow.rs`, WP-458)
+### 5.28 `-Winteger-overflow` (`int_overflow.rs`, WP-458, WP-468)
 
 A full-expression that is not constant-evaluated is checked for signed
 overflow ([expr.pre]/4) once it is complete (`act_on_full_expr_at`;
@@ -5781,13 +5781,42 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   expression) and folded only when they contain none. Unsigned
   arithmetic is silent. The walk is bounded (65 536 nodes, depth 256)
   and skipped when the warning is disabled at the full-expression.
-- Not implemented: an overflow inside a `constexpr` function called from
-  the expression (clang's evaluator reports it at the operator in the
-  function body); compound assignment and increment; the operator's
-  source range; in an instantiation kiln adds the instantiation notes,
-  clang none.
+- **Calls (WP-468).** An operand that calls a `constexpr` or
+  `consteval` function or constructor (directly or below it; the cheap
+  filter counts such a call as a candidate) is evaluated in the Oven with
+  the body (`Oven::fold_for_overflow`, clang `EM_IgnoreSideEffects` with
+  `CheckingForUndefinedBehavior`): a lax fold in which a signed `+`, `-`,
+  `*` or negation that overflows (`Oven::wrap_overflow`, also a compound
+  assignment's `+=`, `-=`, `*=`, and `++` / `--`) yields its wrapped value
+  and is recorded; the evaluation goes on. Each record warns at its
+  operator, in order, with the type of the operation (the compound
+  assignment's type for `+=`), but `++` and `--`, which clang only notes
+  (`HandleOverflow`). A function called twice warns twice at the same
+  place (`inc(g) + inc(g)`). The evaluation enters no nested evaluation,
+  global initialization or `__builtin_constant_p` in this mode and is not
+  memoized. When it fails without a record (a non-constexpr callee, a
+  read of a non-`const` variable), the operand is searched as above, a
+  constexpr call found under it is evaluated in turn. A call that is the
+  full-expression itself is not evaluated (only its arguments), as
+  clang. Shifts, division and `<<=` never warn here.
+- **Reporting.** The warning carries the operation's source range and is
+  reported as clang's `Diags.Report`: no instantiation notes (in a
+  template a non-dependent overflow warns at the definition and in each
+  instantiation, notes-free), not deduplicated against another
+  full-expression or another overflow of the same one (the context key is
+  the instantiation's, the full-expression and the overflow's ordinal), so
+  checking a full-expression twice does not repeat it.
+- **Compound assignment.** `x op= y` is checked as a binary operator
+  would be: `<<=` / `>>=` diagnose a constant count that is negative or
+  not less than the promoted left type's width (`-Wshift-count-*`), `/=`
+  and `%=` a constant zero divisor (`-Wdivision-by-zero`), at the
+  operator with the right operand's range, through the runtime-behaviour
+  deferral (clang `CheckShiftOperands` / `CheckMultiplyDivideOperands` /
+  `CheckRemainderOperands` with `IsCompAssign`).
 - Tests: `expr.add/integer-overflow-folded.cpp`,
-  `expr.add/integer-overflow-constexpr-error.cpp`.
+  `expr.add/integer-overflow-constexpr-error.cpp`,
+  `expr.pre/integer-overflow-in-call.cpp`,
+  `expr.ass/compound-assign-overflow.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

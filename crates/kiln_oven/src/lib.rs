@@ -61,7 +61,7 @@ use kiln_diag::Diag;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
-pub use failure::{EvalFailure, FailKind, Note};
+pub use failure::{EvalFailure, FailKind, Note, Overflow};
 pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
 pub use meta::{
     AccessOp, AnnotOp, DefineOp, ExtOp, MAX_META_ARGS, MemberOp, MetaCtx, MetaError, MetaErrorKind,
@@ -429,6 +429,9 @@ pub struct Oven {
     /// The next outermost or nested evaluation reports
     /// `-Wconstant-evaluated` though silent ([`Oven::warn_constant_evaluated`]).
     cev_warn_next: bool,
+    /// The next outermost evaluation checks for undefined behaviour
+    /// ([`Oven::fold_for_overflow`]).
+    ub_check_next: bool,
     /// The next outermost or nested evaluation is plainly
     /// constant-evaluated ([`EvalContext::plain`], [`Oven::plain`]).
     plain_next: bool,
@@ -530,6 +533,7 @@ impl Oven {
             clang_compat: 22,
             cxx_year: 2026,
             cev_warn_next: false,
+            ub_check_next: false,
             plain_next: false,
             types: Types::default(),
             code: Vec::new(),
@@ -757,6 +761,42 @@ impl Oven {
         self.run.lax = false;
         self.mem.lax = false;
         r
+    }
+
+    /// clang's `Expr::EvaluateForOverflow` of `e` (`EM_IgnoreSideEffects`
+    /// with `CheckingForUndefinedBehavior`), as [`Oven::fold_rvalue`]:
+    /// a signed integer `+`, `-`, `*` (compound assignments included),
+    /// unary `-`, `++` or `--` whose result is outside its type does not
+    /// fail the evaluation, which goes on with the value wrapped to the
+    /// type; each one is returned, in evaluation order, with the value.
+    /// Calls are entered, so an overflow in a `constexpr` function's body
+    /// is found. Nested evaluations, global initializations and
+    /// `__builtin_constant_p` check nothing. Silent and not recorded.
+    /// Outside an outermost evaluation, a plain [`Oven::try_fold`].
+    pub fn fold_for_overflow(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+    ) -> (Option<ConstValueId>, Vec<Overflow>) {
+        if self.ctx_depth != 0 {
+            return (self.try_fold(bridge, e), Vec::new());
+        }
+        self.run.lax = true;
+        self.mem.lax = true;
+        self.ub_check_next = true;
+        let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
+        self.ub_check_next = false;
+        self.run.lax = false;
+        self.mem.lax = false;
+        self.run.ub_check = false;
+        let found = std::mem::take(&mut self.run.overflows)
+            .into_iter()
+            .map(|(pc, value)| {
+                let site = self.site(pc as usize);
+                Overflow { loc: site.loc, e: site.e, value }
+            })
+            .collect();
+        (r, found)
     }
 
     /// Evaluates immediate invocation `e` ([expr.const]/16; manifestly
@@ -1011,6 +1051,8 @@ impl Oven {
         self.run.const_context = const_context;
         self.run.fold = silent && !const_context;
         self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
+        self.run.ub_check = std::mem::take(&mut self.ub_check_next);
+        self.run.overflows.clear();
         self.run.plain = std::mem::take(&mut self.plain_next);
         self.run.counters = vm::Counters::default();
         self.run.nesting = 0;
@@ -1085,6 +1127,7 @@ impl Oven {
             self.run.object,
             self.run.maxd,
             self.run.depth_base,
+            self.run.ub_check,
         );
         let mem = (
             self.mem.allocated,
@@ -1113,6 +1156,7 @@ impl Oven {
         self.run.fold = silent && !const_context;
         self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
         self.run.plain = std::mem::take(&mut self.plain_next);
+        self.run.ub_check = false;
         self.run.counters = vm::Counters { steps: steps0, ..vm::Counters::default() };
         self.run.maxd = 0;
         self.run.depth_base = depth_base;
@@ -1147,6 +1191,7 @@ impl Oven {
             self.run.object,
             self.run.maxd,
             self.run.depth_base,
+            self.run.ub_check,
         ) = run;
         self.run.counters = vm::Counters { steps: steps1, ..counters };
         (

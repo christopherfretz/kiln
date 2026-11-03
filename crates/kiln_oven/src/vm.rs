@@ -122,12 +122,22 @@ pub(crate) struct RunState {
     /// evaluation that asked for it, false in every other (nested ones
     /// included); read through [`crate::Oven::plain`].
     pub plain: bool,
+    /// The evaluation checks for undefined behaviour
+    /// ([`crate::Oven::fold_for_overflow`]): a signed `+`, `-`, `*` or
+    /// negation that overflows yields its wrapped value and is recorded
+    /// in `overflows`. Cleared in nested evaluations, a global's
+    /// initialization and `__builtin_constant_p`.
+    pub ub_check: bool,
+    /// The overflows recorded under `ub_check`: the instruction's pc and
+    /// the wrapped value, sign-extended.
+    pub overflows: Vec<(u32, i128)>,
 }
 
 impl RunState {
     /// Heap bytes held (see `Oven::footprint`).
     pub(crate) fn footprint(&self) -> usize {
         self.pending.capacity() * size_of::<Pending>()
+            + self.overflows.capacity() * size_of::<(u32, i128)>()
     }
 }
 
@@ -608,6 +618,7 @@ impl Oven {
         // The region's `Ret` writes the frame's result slot.
         let slot = self.regs[fb];
         let (silent, fold, cev_warn) = (self.run.silent, self.run.fold, self.run.cev_warn);
+        let ub_check = std::mem::replace(&mut self.run.ub_check, false);
         let lax = (self.run.lax, self.mem.lax);
         self.run.entry = entry;
         self.run.silent = true;
@@ -629,6 +640,7 @@ impl Oven {
         self.run.fold = fold;
         (self.run.lax, self.mem.lax) = lax;
         self.run.cev_warn = cev_warn;
+        self.run.ub_check = ub_check;
         self.run.entry = saved_entry;
         let v = self.regs[fb + val];
         self.regs[fb] = slot;
@@ -758,7 +770,10 @@ impl Oven {
                         aux >> 17 & 1 != 0,
                     ) {
                         Ok(v) => reg!(0) = v,
-                        Err(err) => fail!(Fault::Int { err, op, a, b: bb, aux }),
+                        Err(err) => match self.wrap_overflow(pc, err, op, aux, a, bb) {
+                            Some(v) => reg!(0) = v,
+                            None => fail!(Fault::Int { err, op, a, b: bb, aux }),
+                        },
                     }
                     pc += 4;
                 }
@@ -768,7 +783,10 @@ impl Oven {
                     let signed = aux >> 8 & 1 != 0;
                     match arith::int_bin(Op::ISub, width, signed, 0, a, 0, false) {
                         Ok(v) => reg!(0) = v,
-                        Err(err) => fail!(Fault::Int { err, op, a, b: 0, aux }),
+                        Err(err) => match self.wrap_overflow(pc, err, Op::ISub, aux, 0, a) {
+                            Some(v) => reg!(0) = v,
+                            None => fail!(Fault::Int { err, op, a, b: 0, aux }),
+                        },
                     }
                     pc += 3;
                 }
@@ -1778,6 +1796,38 @@ impl Oven {
             serial,
         });
         Ok(Some((entry, nb)))
+    }
+
+    /// Under `RunState::ub_check`, the wrapped result of a signed `+`,
+    /// `-` or `*` (`op`; a negation is `0 - a`) that overflowed (`err`),
+    /// recorded; `None` otherwise (the evaluation fails).
+    #[cold]
+    #[inline(never)]
+    fn wrap_overflow(
+        &mut self,
+        pc: usize,
+        err: IntErr,
+        op: Op,
+        aux: u32,
+        a: u128,
+        b: u128,
+    ) -> Option<u128> {
+        let width = aux & 0xFF;
+        if !self.run.ub_check
+            || err != IntErr::Overflow
+            || aux >> 8 & 1 == 0
+            || !matches!(op, Op::IAdd | Op::ISub | Op::IMul)
+        {
+            return None;
+        }
+        let r = match op {
+            Op::IAdd => a.wrapping_add(b),
+            Op::ISub => a.wrapping_sub(b),
+            _ => a.wrapping_mul(b),
+        };
+        let v = canon(r, width, true);
+        self.run.overflows.push((pc as u32, v as i128));
+        Some(v)
     }
 
     fn finish_memo(&mut self, result: u128) {

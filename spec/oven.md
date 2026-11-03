@@ -336,6 +336,18 @@ the evaluator's flattened type table.
   Silent, not recorded; an outermost evaluation (false when nested); the
   temporary object is freed (`Memory::free_static`, "Abstract memory")
   and memory reset.
+- `Oven::fold_for_overflow(bridge, e) -> (Option<ConstValueId>,
+  Vec<Overflow>)` (WP-468): `fold_rvalue` checking for undefined
+  behaviour (clang `EvaluateForOverflow`, for `-Winteger-overflow`,
+  spec/sema.md §5.28). `RunState::ub_check` is set for the outermost run
+  only (`Oven::ub_check_next`, taken by `begin_outermost`; cleared in a
+  nested evaluation, a global's initialization and speculation): a signed
+  `IAdd`/`ISub`/`IMul`/`INeg` whose result is outside its width yields
+  the result wrapped to the width and records `(pc, wrapped)`
+  (`vm.rs` `Oven::wrap_overflow`, cold) instead of failing. The records come back
+  in order as `Overflow { loc, e, value }` (the instruction's site); the
+  evaluation's failure (`None`) does not drop them. Silent; lax, so not
+  memoized.
 - `Oven::fold_rvalue(bridge, e) -> Option<ConstValueId>` (WP-165):
   `try_fold` in **lax mode** (`RunState::lax`), clang's codegen-time
   `EvaluateAsRValue`/`tryEmitAsConstant`. A `const`, non-volatile variable
