@@ -65,7 +65,7 @@ impl Oven {
         let ctx = MetaCtx {
             scope: None,
             loc: self.site(pc).loc,
-            plainly: false,
+            plainly: self.plain(),
             trial,
             elem,
             callee: site.map(|s| s.callee),

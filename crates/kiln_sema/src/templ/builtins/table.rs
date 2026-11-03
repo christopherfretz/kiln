@@ -476,6 +476,8 @@ pub static TABLE: &[Row] = &[
     f("__builtin_invoke", LATER, Oven::No),
     // WP-418: sema `builtin_is_within_lifetime`, the Oven `bi::LIFETIME`.
     f("__builtin_is_within_lifetime", DONE, Oven::Yes),
+    // WP-473: kiln extension, the Oven's `Op::IsConstEval` (aux 2).
+    f("__kiln_plainly_constant_evaluated", DONE, Oven::Yes),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.

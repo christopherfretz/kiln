@@ -4422,6 +4422,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   `operator new`/`delete`) are marked referenced, which defines or
   instantiates them, as clang's rebuild does (`templ/subst/shared.rs`;
   unevaluated operands and lambda bodies are not entered).
+- **Consteval-only expressions** ([expr.const.imm]/2). The leaves
+  (`^^`, references to consteval-only variables) and their exemptions
+  are WP-472's, `spec/reflection-repr.md` §6
+  (`consteval_only.rs`, checked from `finish_immediate_invocations`).
+  A non-exempt leaf in an immediate-escalating function escalates it
+  through `escalate_consteval_only` (reason note `... because its body
+  contains an expression of consteval-only type 'std::meta::info'`,
+  WP-473, `spec/consteval-blocks.md` §4); elsewhere it is
+  `sema_consteval_only_expr`. The consteval block itself is
+  §5.10's immediate function context by construction (a consteval
+  lambda).
 - **Codegen.** A valued `ConstantExpr` lowers to its constant: scalars
   directly, aggregates by clang 19's `CreateCoercedStore` into the
   destination (one store per top-level element).

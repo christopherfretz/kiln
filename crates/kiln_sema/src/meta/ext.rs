@@ -27,12 +27,12 @@ impl Sema<'_, '_> {
         *out = match x {
             ExtOp::NameOf => MetaOut::Frozen(self.reflect_name(info_arg(args, 0)?, loc)?),
             ExtOp::MembersCount => {
-                let m = self.reflect_members(info_arg(args, 0)?, loc, oven)?;
+                let m = self.reflect_members(info_arg(args, 0)?, ctx, oven)?;
                 MetaOut::Scalar(m.len() as u128)
             }
             ExtOp::MemberAt => {
                 let i = *args.get(1).ok_or_else(MetaError::invalid)?;
-                let m = self.reflect_members(info_arg(args, 0)?, loc, oven)?;
+                let m = self.reflect_members(info_arg(args, 0)?, ctx, oven)?;
                 match usize::try_from(i).ok().and_then(|i| m.get(i)) {
                     Some(&r) => MetaOut::Info(r),
                     None => {
@@ -50,7 +50,7 @@ impl Sema<'_, '_> {
                 let (cls, ty) = (info_arg(args, 0)?, info_arg(args, 1)?);
                 let p = *args.get(2).ok_or_else(MetaError::invalid)?;
                 let name = oven.meta_c_string(p, ctx)?;
-                MetaOut::Info(self.define_member(cls, ty, &name, loc, oven)?)
+                MetaOut::Info(self.define_member(cls, ty, &name, ctx, oven)?)
             }
         };
         Ok(())
@@ -87,18 +87,20 @@ impl Sema<'_, '_> {
     fn reflected_complete_class(
         &mut self,
         r: ReflectionId,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<DeclId, MetaError> {
+        let loc = ctx.loc;
         let not_class = |s: &Self| {
             MetaError::note(loc, format!("'{}' does not reflect a class type", s.reflection_str(r)))
         };
         let Reflectee::Type(t) = self.ast.reflections.get(r) else { return Err(not_class(self)) };
         let Some(d) = self.ast.types.as_record(t) else { return Err(not_class(self)) };
         if self.undefined_spec(t).is_some() {
-            // Not manifestly constant-evaluated: no instantiation from a
-            // trial (WP-473 moves this to the dispatcher's trial rule).
-            if self.inst.eval_loc.is_none() {
+            // Not manifestly constant-evaluated (a fold, or a trial such
+            // as `__builtin_constant_p`'s operand): no instantiation
+            // (spec/consteval-blocks.md §3).
+            if ctx.trial || self.inst.eval_loc.is_none() {
                 return Err(MetaError::silent());
             }
             self.lend_oven(oven, |s| s.require_complete(t, loc));
@@ -117,10 +119,10 @@ impl Sema<'_, '_> {
     fn reflect_members(
         &mut self,
         r: ReflectionId,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<Vec<ReflectionId>, MetaError> {
-        let def = self.reflected_complete_class(r, loc, oven)?;
+        let def = self.reflected_complete_class(r, ctx, oven)?;
         let members: Vec<DeclId> = self
             .ast
             .members(def)
@@ -158,12 +160,17 @@ impl Sema<'_, '_> {
         cls: ReflectionId,
         ty: ReflectionId,
         name: &str,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<ReflectionId, MetaError> {
-        // A speculative fold must not mutate: it fails silently and the
-        // manifestly constant-evaluated evaluation (if any) defines.
-        if self.inst.eval_loc.is_none() {
+        let loc = ctx.loc;
+        // A fold or a trial must not mutate (the dispatcher already
+        // fails a `Mutating` op there): it fails silently and the
+        // manifestly constant-evaluated evaluation (if any) defines. The
+        // extension may inject from any manifestly constant-evaluated
+        // context in the member-specification (a `static_assert`), not
+        // only where `ctx.plainly` holds (spec/consteval-blocks.md §3).
+        if ctx.trial || self.inst.eval_loc.is_none() {
             return Err(MetaError::silent());
         }
         let Some(r) = (match self.ast.reflections.get(cls) {
