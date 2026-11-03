@@ -80,5 +80,6 @@ clang row. The remaining time is the per-element instantiation of the body
 | kiln | debug | 12.14 s | 227992 KB | 11.38 s | 185644 KB |
 | kiln | harness (opt 3) | 1.22 s | 223976 KB | 0.99 s | 172416 KB |
 
-An earlier pair of debug runs gave 12.68 s before and 10.56 s after. A range of more than 2^20
-library-iterator elements is now counted rather than rejected.
+An earlier pair of debug runs gave 12.68 s before and 10.56 s after. A
+range of more than 2^20 library-iterator elements is now counted rather
+than rejected.

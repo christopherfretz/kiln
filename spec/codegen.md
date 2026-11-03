@@ -2964,6 +2964,35 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   template instantiated twice), `tests/conformance/stmt.goto/computed-
   goto-dispatch-run.cpp` (`expect: run`).
 
+## 7u. Landed (WP-454): braced expansion elements, constexpr structured bindings
+
+No lowering changed; the new forms reach codegen as existing AST.
+
+- A braced element of an expansion-init-list (`template for (P p : {{1,
+  2}, {.x = 3}})`, spec/sema.md §7.6a) is the per-element block `{ P p
+  = {...}; body }`. The expansion variable's list-initialization, its
+  temporaries and its destructor are emitted as for any block-scope
+  `P p = {...};`: each element's temporaries die at the end of its
+  declaration's full-expression and `p` at the end of its block, before
+  the next element starts. Tests:
+  `stmt.expand/braced-elements-run.cpp` (constructor and destructor
+  order), `stmt.expand/braced-elements.cpp` (the Oven's order).
+- A `constexpr` structured binding (P2686R5, spec/sema.md §4.9) emits
+  `e` and its holding variables as `constexpr` variables: a namespace-
+  scope `e` and its tuple-like holding references are constant globals
+  (`@x = constant ptr @_ZGR1x_`, as clang); a block-scope non-`static`
+  one calls `get` at run time, as clang does. Test:
+  `dcl.struct.bind/p2686-run.cpp`.
+- Left:
+  - A `static constexpr` block-scope tuple-like decomposition's holding
+    references get a guarded dynamic initializer, where clang
+    constant-initializes them: `fold::Collect::local_decl` does not
+    visit the holding variables of a local decomposition, so no fold
+    exists for `static_local` (values are right; WP-453 owns
+    `fold.rs`).
+  - An unreferenced namespace-scope `constexpr` decomposition's `e`
+    (`@_ZDC1x1yE`, internal) is not emitted; clang emits it.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
