@@ -242,7 +242,7 @@ impl Sema<'_, '_> {
                     };
                     let Some(spec) = self.base_spec_index(parent, i) else { return true };
                     self.base_accessible_in(sc, naming, parent, spec, e.decl)
-                } else if e.kind & mk::PUBLIC != 0 && naming == parent {
+                } else if e.kind & mk::PUBLIC != 0 && self.same_entity(naming, parent) {
                     true
                 } else {
                     self.member_accessible_in(sc, e.decl, naming)
@@ -325,7 +325,7 @@ impl Sema<'_, '_> {
             if never_a_member(kind) || n.misc().friend() != kiln_ast::decl::FriendKind::None {
                 continue;
             }
-            if kind == DeclKind::CXXDestructor && dtor.is_some_and(|d| d != self.ast.first(m)) {
+            if kind == DeclKind::CXXDestructor && dtor.is_some_and(|d| !self.same_entity(d, m)) {
                 continue;
             }
             if n.has(DeclFlags::IMPLICIT) && kind != DeclKind::Field {
@@ -414,6 +414,8 @@ impl Sema<'_, '_> {
         }
         let mut l = self.meta_members.cache.take(ns, MemberList::Members);
         // New definitions of the namespace (redeclarations, latest first).
+        // Cursors are per definition block, not per entity.
+        // same_entity: raw ok
         let known = |l: &CachedList, d: DeclId| l.cursors.iter().any(|c| c.0 == d);
         let mut fresh: Vec<DeclId> = self.ast.redecls_of(ns).filter(|&d| !known(&l, d)).collect();
         fresh.reverse();
@@ -458,7 +460,7 @@ impl Sema<'_, '_> {
         // A declaration of a member of another scope (a qualified
         // redeclaration, a block-scope `extern`).
         let sem = n.ctx().map(|c| self.ast.first(self.ast.redecl_context(c)));
-        if sem != Some(ns) {
+        if !sem.is_some_and(|c| self.same_entity(c, ns)) {
             return Ok(());
         }
         if !l.seen.insert(self.ast.first(m)) {
@@ -598,7 +600,7 @@ impl Sema<'_, '_> {
                     return bad();
                 };
                 let list = if s.is_virtual { lay.vbases.clone() } else { lay.bases.clone() };
-                let Some(&(_, off)) = list.iter().find(|(b, _)| self.ast.first(*b) == base) else {
+                let Some(&(_, off)) = list.iter().find(|(b, _)| self.same_entity(*b, base)) else {
                     return bad();
                 };
                 Ok(off * 8)
