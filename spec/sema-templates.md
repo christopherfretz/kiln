@@ -1842,6 +1842,14 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
   initializer instantiated **immediately** when it is referenced. Its
   value is then evaluated and cached in `consts()`.
 - Other variables are queued in `pending` when they are odr-used.
+  That includes an inline static data member whose in-class initializer
+  was deferred (§4.4; `deferred_inits`): the drain instantiates its
+  initializer in queue order, interleaved with the out-of-line static
+  data members and function templates queued around it, so the
+  diagnostics and the emitted `__cxx_global_var_init` functions follow
+  clang's order (WP-186;
+  `tests/conformance/temp.inst/static-member-instantiation-order.cpp`,
+  `tests/codegen/static_member_inst_order.cpp`).
 
 This is why the chain `R<N>::v = R<N-1>::v` recurses one frame per level
 in clang (the d1 test in §10.2). Kiln matches its notes exactly.
