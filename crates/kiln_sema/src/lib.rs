@@ -16,6 +16,7 @@
 
 mod absolute_value;
 mod align_redecl;
+mod annot;
 mod asm;
 mod bit_int;
 mod bitfield_constant;
@@ -742,6 +743,11 @@ pub struct Sema<'a, 'sm> {
     /// clang's `EST_Uninstantiated`): the first declaration maps to its
     /// pattern; its type carries `ExcSpec::Deferred(pattern)`.
     pub(crate) uninstantiated_exc: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// Function template specializations and members of class template
+    /// specializations whose dependent annotations are substituted when
+    /// needed (spec/annotations.md §5): the specialization maps to its
+    /// pattern.
+    pub(crate) uninstantiated_annots: kiln_source::fx::FxHashMap<DeclId, DeclId>,
     /// The enclosing function's state and the scopes pushed for a member
     /// function definition, saved by `act_on_start_function_def` while a
     /// (local class's or out-of-line) member function body is analysed.
@@ -1019,6 +1025,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             delayed_exc_equiv: Vec::new(),
             unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
+            uninstantiated_annots: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,

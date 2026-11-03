@@ -91,6 +91,7 @@ pub fn spec() -> BenchSpec {
         args: Vec::new(),
         oven: Vec::new(),
         thresholds: ThresholdOverrides::default(),
+        xfail_kiln: None,
     }
 }
 

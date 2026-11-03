@@ -152,6 +152,7 @@ impl Sema<'_, '_> {
         self.ast.decls.set_flags(f, DeclFlags::REFERENCED);
         self.define_cmp_on_use(f, loc);
         self.exc_spec_needed(f, loc);
+        self.require_annotations(f, loc);
         if self.unevaluated > 0 || self.in_template() {
             return;
         }

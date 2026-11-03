@@ -146,7 +146,10 @@ impl Parser<'_, '_> {
                     self.s.act_on_decl_stmt_attrs(s, &attrs);
                     return Some(s);
                 }
-                StmtKind::LabelStmt => return Some(s),
+                StmtKind::LabelStmt => {
+                    self.s.reject_annotations_in(&attrs, Some("a label"));
+                    return Some(s);
+                }
                 StmtKind::GCCAsmStmt => true,
                 _ => false,
             };

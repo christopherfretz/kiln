@@ -1,0 +1,39 @@
+#!/bin/sh
+# A stand-in for GCC 16.1, for the GCC-oracle self-tests
+# (`xtask/src/test/tests.rs`, spec/harness.md "GCC oracle"). It identifies
+# as GCC and acts on a `// fake-gcc: <what>` line in the source:
+#   ice     reports an internal compiler error (exit 4)
+#   sorry   reports `sorry, unimplemented` (exit 1)
+#   signal  dies of SIGSEGV
+#   reject  reports an error (exit 1)
+#   accept  exits 0 without compiling
+# Otherwise it compiles with ${KILN_FAKE_CC:-clang++-19} and -DKILN_FAKE_GCC,
+# so a test can make GCC's binary behave differently.
+if [ "$1" = "--version" ]; then
+  echo "g++ (GCC) 16.1.0-fake (xtask fixture)"
+  exit 0
+fi
+src=
+for a in "$@"; do
+  case "$a" in
+    *.cpp | *.c | *.h) src=$a ;;
+  esac
+done
+what=$(sed -n 's|^// fake-gcc: *||p' "$src" 2>/dev/null | head -n 1)
+case "$what" in
+  ice)
+    echo "$src:1:1: internal compiler error: Segmentation fault" >&2
+    exit 4
+    ;;
+  sorry)
+    echo "$src:1:1: sorry, unimplemented: reflection on this construct" >&2
+    exit 1
+    ;;
+  signal) kill -SEGV $$ ;;
+  reject)
+    echo "$src:1:1: error: fake rejection" >&2
+    exit 1
+    ;;
+  accept) exit 0 ;;
+esac
+exec "${KILN_FAKE_CC:-clang++-19}" -DKILN_FAKE_GCC "$@"

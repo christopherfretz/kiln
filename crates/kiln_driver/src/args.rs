@@ -717,13 +717,14 @@ impl Args {
         true
     }
 
-    /// `-ftrivial-auto-var-init=uninitialized|zero` and
-    /// `-ftrivial-auto-var-init-max-size=N` (`pattern` is unsupported).
+    /// `-ftrivial-auto-var-init=uninitialized|zero|pattern` and
+    /// `-ftrivial-auto-var-init-max-size=N`.
     fn auto_var_init_flag(&mut self, arg: &str) -> bool {
         if let Some(v) = arg.strip_prefix("-ftrivial-auto-var-init=") {
             match v {
                 "uninitialized" => self.auto_var_init = Some(AutoVarInit::Uninitialized),
                 "zero" => self.auto_var_init = Some(AutoVarInit::Zero),
+                "pattern" => self.auto_var_init = Some(AutoVarInit::Pattern),
                 _ => self.errors.push(ArgError::UnsupportedValue(
                     "-ftrivial-auto-var-init=".to_owned(),
                     v.to_owned(),
