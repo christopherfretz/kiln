@@ -10,7 +10,7 @@ mod query;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::types::BuiltinType;
 use kiln_ast::{DeclId, ReflectionId};
-use kiln_oven::{MetaCtx, MetaError, MetaOp, MetaOut, Oven};
+use kiln_oven::{AnnotOp, DefineOp, MetaCtx, MetaError, MetaOp, MetaOut, Oven};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -48,6 +48,11 @@ impl Sema<'_, '_> {
     ) -> Result<(), MetaError> {
         match op {
             MetaOp::Query(q) => self.meta_query(q, args, out, ctx, oven),
+            // [meta.reflection.queries] lists these two with the
+            // predicates (WP-476); their families belong to WP-480/481.
+            MetaOp::Annot(AnnotOp::IsAnnotation) | MetaOp::Define(DefineOp::IsDataMemberSpec) => {
+                self.meta_kind_pred(op, args, out)
+            }
             MetaOp::Ext(x) => self.meta_ext(x, args, out, ctx, oven),
             _ => Err(MetaError::not_implemented(op, ctx.loc)),
         }

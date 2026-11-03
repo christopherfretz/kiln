@@ -61,6 +61,24 @@ impl Sema<'_, '_> {
         Ok(())
     }
 
+    /// `is_annotation` / `is_data_member_spec`: the reflection is an
+    /// annotation / a data member description. Nothing builds either yet
+    /// (WP-481 / WP-480), so both are false for every reflection today.
+    pub(in crate::meta) fn meta_kind_pred(
+        &mut self,
+        op: MetaOp,
+        args: &[u128],
+        out: &mut MetaOut,
+    ) -> Result<(), MetaError> {
+        let x = self.ast.reflections.get(info_arg(args, 0)?);
+        let b = match op {
+            MetaOp::Annot(_) => matches!(x, Reflectee::Annotation(_)),
+            _ => matches!(x, Reflectee::DataMemberSpec(_)),
+        };
+        *out = MetaOut::Scalar(u128::from(b));
+        Ok(())
+    }
+
     /// The type `type_of(r)` yields, as the declaration or value carries
     /// it (not canonicalized), if `r` has one ([meta.reflection.queries]
     /// *has-type*): a value, object, variable, function, data member,
