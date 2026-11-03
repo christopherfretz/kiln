@@ -4365,7 +4365,12 @@ impl Sema<'_, '_> {
             _ => {}
         }
         if ds.thread_local.is_some() {
-            spec = spec.with_tls(TlsKind::Static);
+            // clang `VarDecl::getTLSKind`: `__thread` and `_Thread_local`
+            // are static TLS (checked by `check_static_tls`), `thread_local`
+            // may be dynamically initialized ([basic.stc.thread]).
+            let kind =
+                if ds.thread_kind == TlsKind::Static { TlsKind::Static } else { TlsKind::Dynamic };
+            spec = spec.with_tls(kind);
         }
         if ds.constexpr.is_some() {
             spec = spec.with_constexpr(true);
@@ -4583,7 +4588,18 @@ impl Sema<'_, '_> {
                 let compatible = self.redecl_var_types_compatible(pty, ty)
                     || self.in_local_scope()
                         && (self.is_dependent_type(pty) || self.is_dependent_type(ty));
-                if !compatible {
+                if compatible {
+                    let prev_def = self.is_var_definition(p);
+                    let n = sym_str(self, name);
+                    self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
+                    if !ext && prev_def {
+                        let msg = self.diag(DiagId::sema_redefinition, d.name_loc()).arg(&n);
+                        let msg = self.note_prev(msg, p, true);
+                        self.emit(msg);
+                    } else {
+                        prev_ok = Some(p);
+                    }
+                } else {
                     // clang's `diagnoseVarDeclTypeMismatch`: "redefinition" if
                     // the new declaration is a definition (judged before its
                     // initializer is seen), and the note says whether the
@@ -4600,13 +4616,6 @@ impl Sema<'_, '_> {
                         .diff_args(self, ty, pty);
                     let msg = self.note_prev(msg, p, self.is_var_definition(p));
                     self.emit(msg);
-                } else if !ext && self.is_var_definition(p) {
-                    let msg =
-                        self.diag(DiagId::sema_redefinition, d.name_loc()).arg(sym_str(self, name));
-                    let msg = self.note_prev(msg, p, true);
-                    self.emit(msg);
-                } else {
-                    prev_ok = Some(p);
                 }
             } else if block && matches!(pn.kind(), DeclKind::Var | DeclKind::ParmVar) {
                 let new_invalid = ds.invalid || d.invalid || self.is_error_type(ty);
@@ -4717,6 +4726,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         self.act_on_init_inner(v, init);
+        self.check_static_tls(v);
         self.check_constinit(v);
         self.initializing = None;
         self.lambda_mangle.var = None;
@@ -5383,6 +5393,7 @@ impl Sema<'_, '_> {
     pub fn act_on_uninit(&mut self, v: DeclId) {
         self.act_on_uninit_inner(v);
         if self.is_var_definition(v) {
+            self.check_static_tls(v);
             self.check_constinit(v);
         }
     }

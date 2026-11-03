@@ -6,7 +6,7 @@
 //! plus the namespaces nominated by `using namespace` in that scope.
 //! Qualified lookup searches one context's table.
 
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclFlags, DeclKind};
 /// Lookup-table entry flags (owned by spec/sema-overload.md §2.3): a hidden
 /// friend's entry is `ADL_ONLY`, invisible to ordinary and qualified
 /// lookup ([namespace.memdef]/3) but seen by redeclaration lookup and ADL.
@@ -375,8 +375,27 @@ impl Sema<'_, '_> {
                 .find(|(n, d, _)| *n == name && self.accept(self.ast.strip_shadow(*d), kind))
                 .map(|e| e.1),
         };
-        let found = self.filter(self.block_scope_set(s, name, hit?, kind), kind);
+        let hit = self.prefer_valid_local(s, hit?);
+        let found = self.filter(self.block_scope_set(s, name, hit, kind), kind);
         (!found.is_empty()).then_some(found)
+    }
+
+    /// clang `LookupResult::resolveKind` ("ignore an invalid declaration
+    /// unless it's the only one left"): an invalid block-scope `hit`
+    /// gives way to the latest valid declaration of its name in the same
+    /// name space of scope `s`. So `R::X x; R::f(x);`, where the unknown
+    /// type `R::f` makes `x` an invalid redeclaration, leaves later uses
+    /// naming the first `x` (spec/sema.md §3).
+    fn prefer_valid_local(&self, s: &crate::scope::Scope, hit: DeclId) -> DeclId {
+        if !self.ast.decls.get(hit).has(DeclFlags::INVALID) {
+            return hit;
+        }
+        let Some(&(name, _, ns)) = s.locals.iter().find(|e| e.1 == hit) else { return hit };
+        s.locals
+            .iter()
+            .rev()
+            .find(|e| e.0 == name && e.2 == ns && !self.ast.decls.get(e.1).has(DeclFlags::INVALID))
+            .map_or(hit, |e| e.1)
     }
 
     fn lookup_name_scoped(&self, dname: DeclName, kind: LookupKind, skip_records: bool) -> Found {

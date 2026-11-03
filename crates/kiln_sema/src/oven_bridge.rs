@@ -292,11 +292,17 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// initializer reads as its value even when it is not usable in
     /// constant expressions.
     pub fn fold_rvalue_int(&mut self, e: ExprId) -> Option<i128> {
+        let v = self.fold_rvalue(e)?;
+        self.const_int(v)
+    }
+
+    /// [`Sema::try_fold`], laxly ([`Oven::fold_rvalue`], clang
+    /// `EvaluateAsRValue`), of an expression of any type.
+    pub fn fold_rvalue(&mut self, e: ExprId) -> Option<ConstValueId> {
         if !self.eval_stack_ok(e) {
             return None;
         }
-        let v = self.with_oven(None, |oven, b| oven.fold_rvalue(b, e))?;
-        self.const_int(v)
+        self.with_oven(None, |oven, b| oven.fold_rvalue(b, e))
     }
 
     /// The stack guard's check before entering the Oven (P4 (c)): the
