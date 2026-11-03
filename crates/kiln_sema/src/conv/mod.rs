@@ -23,7 +23,9 @@ mod arith;
 pub(crate) mod bases;
 pub(crate) mod narrow;
 mod qual;
-pub(crate) use qual::{drop_noexcept, function_ref_compatible};
+pub(crate) use qual::{
+    cv_combined_type, drop_noexcept, function_ref_compatible, similar_same_levels,
+};
 pub(crate) mod rank;
 pub(crate) mod scs;
 pub(crate) mod soft;

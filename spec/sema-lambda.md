@@ -163,7 +163,12 @@ odr-used (`define_lambda_conversion`).
 defaulted default constructor and copy assignment operator; with any
 capture-default or capture, both are deleted. The copy and move
 constructors are defaulted. `closure_default_constructible` drives the
-`__is_constructible` and value-initialization answers.
+`__is_constructible` and value-initialization answers. A closure with a
+capture also loses `TRIVIAL_DEFAULT_CTOR` when its definition completes
+(clang `hasTrivialDefaultConstructor` needs a default constructor), so it
+is neither trivial nor POD, and codegen initializes it member-wise rather
+than copying a constant (WP-162, test
+`expr.prim.lambda/closure-triviality.cpp`).
 
 ### 3.4 Names in diagnostics and dumps
 
@@ -368,7 +373,10 @@ operator's prologue records the closure and the captured `this`; with an
 explicit object parameter the closure is that parameter (its referent
 for a reference), adjusted by the non-virtual offset of the closure-type
 base when its class derives from the closure (`explicit_object_closure`,
-`nv_base_offset`; clang `EmitLValueForLambdaField`). The
+`nv_base_offset`; clang `EmitLValueForLambdaField`), derived again at
+each capture access (`Fx::closure_obj`: a reference parameter is loaded
+once per access, as clang does; WP-162,
+`tests/codegen/lambda_explicit_object.cpp`). The
 conversion function returns the invoker's address (or the call
 operator's for a static lambda); `__invoke` calls the call operator on an
 unused closure temporary, forwarding each parameter (clang

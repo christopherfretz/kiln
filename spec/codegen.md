@@ -60,7 +60,11 @@ panic and never silently wrong IR.
   `static const` member, first used in a try block, loaded the
   `available_externally` member and failed to link; libc++'s
   `memory_resource::__max_align`). Validation:
-  `tests/codegen/static_member_odr_use.cpp`.
+  `tests/codegen/static_member_odr_use.cpp`. A default member
+  initializer is walked once, at its field, so its candidates are folded
+  for every constructor that uses it (`int m = c;` with
+  `static const int c = 5;` stores `5`; WP-162,
+  `tests/codegen/nsdmi_static_const_fold.cpp`).
   Non-initializer candidates (a load of a const variable, a builtin
   call) fold with `Oven::fold_rvalue` (lax mode, WP-165): like clang's
   `tryEmitAsConstant`, a read of any `const` non-volatile variable with an

@@ -178,7 +178,17 @@ not scalar, compound, standard-layout or literal). Because kiln has no
 target-feature flags (no `+sve`), any odr-use of a function or parameter
 whose type involves an SVE type, an automatic SVE variable, or a function
 definition with SVE types is diagnosed "cannot be used in a target without
-sve", exactly as clang without `-target-feature +sve`. Lowering is
+sve", exactly as clang without `-target-feature +sve` (`checkTypeSupport`,
+WP-162): inside a function and outside unevaluated operands, each operand
+of a built-in binary operator (assignment and comma included, not `?:`) at
+the operator; a member function named through `this` or `.`/`->` at its
+name, before "must be called"; a chosen overloaded operator function at the
+operator (a call to an object at its `(`), after return-type deduction; a
+lambda call operator with an SVE parameter or (deduced) return type at the
+lambda's `[`, at the end of its body (instantiated generic ones included).
+Not yet as clang: SVE arithmetic/comparison operators (kiln: "invalid
+operands"), a comma inside `(T)(a, b)` (clang reports it at the `(`),
+and a namespace-scope `auto` variable deduced as an SVE type. Lowering is
 `<vscale x N x T>` (`__SVCount_t`: `target("aarch64.svcount")`); mangling is
 the vendor-extended `u<len><name>`, a substitution candidate.
 

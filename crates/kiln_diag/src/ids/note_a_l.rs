@@ -161,6 +161,7 @@ note_lambda_decl = Note (0) "lambda expression begins here";
 note_lambda_default_by_ref = Note (0) "default capture by reference";
 note_lambda_default_by_value = Note (0) "default capture by value";
 note_lambda_init_capture = Note (2) "captured{0:| by reference} via initialization of lambda capture {1}";
+note_lambda_substitution_here = Note (0) "while substituting into a lambda expression here";
 note_lambda_this_capture_fixit = Note (0) "explicitly capture 'this'";
 note_local_decl_close_match = Note (0) "local declaration nearly matches";
 note_local_decl_close_param_match = Note (3) "type of {0} parameter of local declaration does not match definition ({1} vs {2})";
