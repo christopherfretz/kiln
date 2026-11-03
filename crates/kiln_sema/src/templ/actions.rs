@@ -1026,6 +1026,7 @@ impl Sema<'_, '_> {
             .intersects(TypeFlags::DEPENDENT | TypeFlags::UNEXPANDED_PACK)
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per kind of template named")]
     fn template_id(
         &mut self,
         name: TemplateNameId,

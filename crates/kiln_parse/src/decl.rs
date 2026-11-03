@@ -2021,15 +2021,9 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// noptr-declarator ([dcl.decl]): the declarator-id or `( declarator )`
-    /// and the array and function suffixes.
-    fn parse_direct_declarator(&mut self, d: &mut Declarator) {
-        let abstract_ok =
-            matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName);
-        // An exception-declaration may be abstract ([except.pre]/1), so
-        // `catch (int(...))` declares a function type (clang
-        // `DeclaratorContext::CXXCatch`).
-        let in_catch = std::mem::take(&mut self.catch_declarator);
+    /// The `...` before a declarator-id ([`Self::parse_direct_declarator`]):
+    /// whether it was before a ptr-operator, whose declarator it parsed.
+    fn parse_leading_declarator_ellipsis(&mut self, d: &mut Declarator, in_catch: bool) -> bool {
         // `... declarator-id` / an abstract pack declarator
         // ([dcl.decl.general]/4, [dcl.fct]/14).
         if d.ctx == DeclaratorContext::Prototype && self.at(Punct::Ellipsis) {
@@ -2061,9 +2055,24 @@ impl Parser<'_, '_> {
                 self.parse_declarator(d);
                 self.misplaced_declarator_ellipsis(d, ellipsis);
                 d.ellipsis.get_or_insert(ellipsis);
-                return;
+                return true;
             }
             d.ellipsis = Some(ellipsis);
+        }
+        false
+    }
+
+    /// noptr-declarator ([dcl.decl]): the declarator-id or `( declarator )`
+    /// and the array and function suffixes.
+    fn parse_direct_declarator(&mut self, d: &mut Declarator) {
+        let abstract_ok =
+            matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName);
+        // An exception-declaration may be abstract ([except.pre]/1), so
+        // `catch (int(...))` declares a function type (clang
+        // `DeclaratorContext::CXXCatch`).
+        let in_catch = std::mem::take(&mut self.catch_declarator);
+        if self.parse_leading_declarator_ellipsis(d, in_catch) {
+            return;
         }
         if self.at_decomposition_declarator(d) {
             self.parse_decomposition_declarator(d);

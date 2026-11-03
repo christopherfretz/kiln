@@ -5472,10 +5472,8 @@ impl Sema<'_, '_> {
             return;
         }
         let vn = *self.ast.decls.get(v);
-        if vn.kind() != DeclKind::Var {
-            return;
-        }
-        if self.uninit_array_or_reference(v)
+        if vn.kind() != DeclKind::Var
+            || self.uninit_array_or_reference(v)
             || vn.has(DeclFlags::INVALID)
             || self.is_member_spec_declaration(v)
         {
