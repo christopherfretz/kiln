@@ -99,7 +99,11 @@ applies to these ids.
   Neither the constexpr nor the instantiation report flag is passed (the
   runner passes neither). The recorded `flags` show paths under the repo
   root relative to it and toolchain paths from `.toolchain/` on, so a
-  worktree and the main checkout record the same string.
+  worktree and the main checkout record the same string. The oracle must be
+  clang 20 or later: libc++ 22's `<__configuration/compiler.h>` warns
+  "Libc++ only supports Clang 20 and later", and the runner's `-Werror`
+  makes that an error, so with `--compare-with clang++-19` every clang side
+  fails. The slice's oracle is `clang++-22`.
 - **Measurement.** As any entry: serial, one compiler process at a time,
   `--runs` runs, the memory cap with kiln's stack reservation added. The
   1-minute load average is sampled before each test.
