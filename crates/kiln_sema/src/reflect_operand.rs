@@ -204,7 +204,7 @@ impl Sema<'_, '_> {
             return self.reflect_bad_operand(name_loc, loc);
         };
         if let Some(q) = qual
-            && self.ast.first(q.ctx) != self.ast.first(c)
+            && !self.same_entity(q.ctx, c)
         {
             return self.reflect_bad_operand(name_loc, loc);
         }
