@@ -6,6 +6,7 @@
 
 mod ext;
 mod query;
+mod traits;
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::types::BuiltinType;
@@ -49,6 +50,7 @@ impl Sema<'_, '_> {
         match op {
             MetaOp::Query(q) => self.meta_query(q, args, out, ctx),
             MetaOp::Ext(x) => self.meta_ext(x, args, out, ctx, oven),
+            MetaOp::Trait(t) => self.meta_trait(t, args, out, ctx, oven),
             _ => Err(MetaError::not_implemented(op, ctx.loc)),
         }
     }
