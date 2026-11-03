@@ -183,9 +183,9 @@ impl Sema<'_, '_> {
             return Some((self.nonnull_warning(e, u, node, false, ctx), true));
         }
         if let Some((loc, lbracket)) = self.lambda_pointer_conversion(e, u) {
-            let id = DiagId::sema_impcast_pointer_to_bool;
+            let id = DiagId::sema_impcast_lambda_pointer_to_bool;
             let lb = Span::new(lbracket, self.token_end(lbracket).unwrap_or(lbracket));
-            let msg = self.diag(id, loc).arg(3u32).arg("").range(lb).range(ctx);
+            let msg = self.diag(id, loc).range(lb).range(ctx);
             return Some((msg, false));
         }
         let n = self.ast.exprs.get(e);
