@@ -600,7 +600,10 @@ impl Cg<'_> {
             inline,
             extra,
         });
-        let (mut ret, mut params) = self.sig_attrs(&sig, sig.params.len(), true);
+        // clang `EmitFunctionProlog` adds `noalias` to the `sret` argument,
+        // and returns before that in a naked function (no `ReturnValue`
+        // slot either way: the `sret` pointer is the return address).
+        let (mut ret, mut params) = self.sig_attrs(&sig, sig.params.len(), !self.f.naked);
         if thunk.is_some() {
             (ret, params) = self.thunk_attrs(&sig, ret, params);
         }

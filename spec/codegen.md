@@ -800,6 +800,14 @@ The normative description is spec/driver.md "Code generation". In short:
   alone above it (clang `GenerateCode`). Tests:
   `tests/codegen/optnone_minsize_naked_o{0,1}.cpp` (exact under oracle
   19, structural under 22, on both targets).
+- A naked function returning indirectly keeps its `sret` parameter
+  (`dead_on_unwind writable sret(T) align N`) but without `noalias`,
+  which clang's `EmitFunctionProlog` adds only after the naked early
+  return; nothing stores the `sret` pointer (WP-412). Register variables
+  with an asm label in a naked body are ordinary `alloca`s whose asm
+  operands are pinned to `{reg}` (§7c). Tests:
+  `tests/codegen/naked_sret{,_o1}.cpp`, `tests/codegen/naked_asm_regvar.cpp`
+  (per-target register names: AArch64 `x0`/`w1`, x86-64 `rdi`/`esi`).
 - A template parameter object is emitted `linkonce_odr` with a comdat
   and `dso_local`, or `internal` when its type or value names an
   internal entity (spec/abi.md §8.22; clang 22 drops the comdat of an
