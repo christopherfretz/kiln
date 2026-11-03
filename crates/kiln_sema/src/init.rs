@@ -631,6 +631,33 @@ impl Sema<'_, '_> {
         Some(self.builder().std_initializer_list(mte, ty))
     }
 
+    /// Whether braced list `l` holds, at any depth, an element clang's
+    /// parser saw as invalid ([`Sema::is_expr_error`]): clang's
+    /// `ParseBraceInitializer` then fails the whole list.
+    pub(crate) fn list_has_expr_error(&self, l: &InitList) -> bool {
+        l.items.iter().any(|i| match &i.value {
+            InitValue::Expr(e) => self.is_expr_error(*e),
+            InitValue::List(n) => self.list_has_expr_error(n),
+        })
+    }
+
+    /// `init` left unperformed: a recovery expression of type `ty` over
+    /// its expressions (a lone expression as itself).
+    fn unperformed_init(&mut self, ty: QualType, init: Initializer) -> ExprId {
+        match init {
+            Initializer::Expr(e) => e,
+            Initializer::Paren(v, l, _) => self.recover(ty, &v, l),
+            Initializer::List(l) => {
+                let items: Vec<ExprId> = l
+                    .items
+                    .iter()
+                    .filter_map(|i| if let InitValue::Expr(e) = i.value { Some(e) } else { None })
+                    .collect();
+                self.recover(ty, &items, l.lbrace)
+            }
+        }
+    }
+
     /// The initialization of an object of type `ty` by `init`
     /// ([dcl.init.general]/16); `direct_list` for `T x{...}`
     /// (direct-list-initialization, [dcl.init.list]/1).
@@ -642,20 +669,18 @@ impl Sema<'_, '_> {
         direct_list: bool,
     ) -> ExprId {
         if self.is_error_type(ty) {
-            return match init {
-                Initializer::Expr(e) => e,
-                Initializer::Paren(v, l, _) => self.recover(QualType::ERROR, &v, l),
-                Initializer::List(l) => {
-                    let items: Vec<ExprId> = l
-                        .items
-                        .iter()
-                        .filter_map(
-                            |i| if let InitValue::Expr(e) = i.value { Some(e) } else { None },
-                        )
-                        .collect();
-                    self.recover(QualType::ERROR, &items, l.lbrace)
-                }
-            };
+            return self.unperformed_init(QualType::ERROR, init);
+        }
+        // clang's `ActOnInitializerError`: an element the parser saw as
+        // invalid (`int w(S::nom, 2);`, `int a{1, nom}`) leaves the
+        // initialization unperformed and undiagnosed (WP-408).
+        let invalid = match &init {
+            Initializer::Expr(_) => false,
+            Initializer::Paren(v, _, _) => v.iter().any(|&a| self.is_expr_error(a)),
+            Initializer::List(l) => self.list_has_expr_error(l),
+        };
+        if invalid {
+            return self.unperformed_init(ty, init);
         }
         match init {
             Initializer::Expr(e) => self.init_from_expr(ty, e, ConvCtx::Initialization, loc),

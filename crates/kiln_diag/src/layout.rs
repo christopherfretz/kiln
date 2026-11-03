@@ -336,13 +336,42 @@ fn push_diagnostic(
                 .iter()
                 .map(|l| Range { span: l.span, label: Some(l.text.clone()) })
                 .collect();
-            all.extend(raw.iter().filter(|r| r.label.is_none()).cloned());
+            all.extend(merged_fixit_ranges(sm, &d.fixits));
             all
         } else {
             Vec::new()
         };
         macro_expansions(sm, loc, &raw, &all, limit, compat, out);
     }
+}
+
+/// The ranges of `fixits` as clang's `mergeFixits` leaves them for the
+/// macro-backtrace check: each end moved out of macro arguments to where
+/// the argument is spelled, and through the start of a macro expansion
+/// to its invocation (`edit::Commit::canInsert`); when an end stays in a
+/// macro the commit fails and no fix-it range remains.
+fn merged_fixit_ranges(sm: &SourceManager, fixits: &[FixIt]) -> Vec<Range> {
+    let commit = |mut l: Loc| -> Option<Loc> {
+        while sm.expansion_info(l).is_some_and(|e| e.kind == ExpansionKind::MacroArg) {
+            l = sm.immediate_spelling_loc(l);
+        }
+        while l.is_macro() {
+            let e = sm.expansion_info(l)?;
+            if e.kind == ExpansionKind::MacroArg || l != e.base {
+                return None;
+            }
+            l = e.expansion.lo;
+        }
+        l.is_valid().then_some(l)
+    };
+    let mut out = Vec::new();
+    for f in fixits.iter().filter(|f| f.span.is_valid()) {
+        let (Some(lo), Some(hi)) = (commit(f.span.lo), commit(f.span.hi)) else {
+            return Vec::new();
+        };
+        out.push(Range { span: Span::new(lo, hi), label: None });
+    }
+    out
 }
 
 /// clang's `emitMacroExpansions`.

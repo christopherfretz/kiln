@@ -440,6 +440,9 @@ impl Parser<'_, '_> {
             let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
             let e = self.parse_expression();
             if let Some(m) = typos {
+                if let Some(e) = e {
+                    self.s.note_condition_typo(e);
+                }
                 self.s.end_delayed_typos(m);
             }
             return e.map(|e| (None, e));
@@ -480,12 +483,42 @@ impl Parser<'_, '_> {
             }
         };
         let v = self.s.act_on_declarator(&ds, base, &d);
-        let Ok(Some(init)) = self.parse_initializer(d.init_style, false) else {
-            return None;
+        // clang 19 corrects a condition declaration's delayed typos in
+        // `AddInitializerToDecl`, with the initialization as the filter,
+        // as for any other initializer (WP-408).
+        // An undeduced variable is corrected unfiltered before deduction.
+        let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
+        self.finish_condition_decl(v, d.init_style, name_loc, typos)
+    }
+
+    /// The initializer of condition variable `v` and the reference to it;
+    /// closes the compat-19 correction scope `typos`.
+    fn finish_condition_decl(
+        &mut self,
+        v: Option<DeclId>,
+        style: Option<InitStyle>,
+        name_loc: Loc,
+        typos: Option<usize>,
+    ) -> Option<Cond> {
+        let init = self.parse_initializer(style, false);
+        let typos = match (typos, v) {
+            (Some(m), Some(v)) if self.s.has_undeduced_type(v) => {
+                self.s.flush_delayed_typos(m);
+                None
+            }
+            (t, _) => t,
         };
-        let v = v?;
-        self.s.act_on_init(v, init);
-        Some(self.s.act_on_condition_var(v, name_loc))
+        let r = match (init, v) {
+            (Ok(Some(init)), Some(v)) => {
+                self.s.act_on_init(v, init);
+                Some(self.s.act_on_condition_var(v, name_loc))
+            }
+            _ => None,
+        };
+        if let Some(m) = typos {
+            self.s.end_delayed_typos(m);
+        }
+        r
     }
 
     /// try-block ([except.pre]/1): `try compound-statement handler-seq`,
@@ -1152,7 +1185,13 @@ impl Parser<'_, '_> {
                 self.eat(Punct::Semi);
                 return None;
             };
-            value = Some(e);
+            // An uncorrected speculation leaves clang an `ExprError`
+            // operand: no return checks.
+            value = Some(if self.s.holds_uncorrected_typo(e) {
+                self.s.act_on_error_expr(&[], self.s.expr_loc(e))
+            } else {
+                e
+            });
         }
         let s = self.s.act_on_return(value, loc);
         self.expect_semi_after_stmt("return");
