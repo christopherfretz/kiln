@@ -3029,6 +3029,22 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     a power of 2 (`requested alignment is not a power of 2`), warned above
     2^32 (`-Wbuiltin-assume-aligned-alignment`); `off` converts to
     `size_t`. The call is a `void *` prvalue.
+  - `__builtin_is_within_lifetime(p)` (WP-418; clang 20 `BuiltinIsWithinLifetime`,
+    custom, `builtin_is_within_lifetime`; P2641R4): the only consteval
+    builtin (`builtin::attr::CONSTEVAL`, so its lazily created
+    declaration is `consteval`). One argument (`too few`/`too many`),
+    decayed; a non-pointer (`int`, `nullptr`, a member pointer) or a
+    function pointer is `{non-|function }pointer argument to
+    '__builtin_is_within_lifetime' is not allowed` at the argument. The
+    call is a `bool` prvalue and an immediate invocation like any other
+    (`check_immediate_invocation`: outside an immediate function context
+    it must be a constant expression, and it escalates a constexpr
+    template, [expr.const]/16-20); a reference left by an invalid call is
+    clang's `cannot take address of consteval function` error, without a
+    `declared here` note (a builtin has no declaration). Available at
+    `-fclang-compat=22` (`__has_builtin` is 0 below). Evaluation is
+    spec/oven.md "Builtins". Tests:
+    `tests/conformance/meta.const.eval/is-within-lifetime*.cpp`.
   - `__builtin_object_size` / `__builtin_dynamic_object_size`: the type
     argument (an `I` constant) must be in [0, 3] (`argument value V is
     outside the valid range [0, 3]` at the callee), checked after

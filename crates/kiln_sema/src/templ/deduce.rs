@@ -821,6 +821,11 @@ impl Sema<'_, '_> {
                     return Tdk::Underqualified;
                 }
             }
+            // CWG1584: `cv T` never matches a function type, even where
+            // qualifiers are ignored (`const T*` from `void (*)()`).
+            if pq != 0 && matches!(t.canonical_view(a), TypeView::Function(_)) {
+                return mismatch(d);
+            }
             let deduced = if a_array && pq == 0 {
                 a
             } else if a_array {

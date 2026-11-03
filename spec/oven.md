@@ -734,6 +734,28 @@ literal is one instruction and one step, not an interpreted loop.
   must be 0 or 1. Dense, fully initialized types copy all bytes at once.
   `TO_MEM` builds an aggregate result in place; `READ_ONLY` only reads
   the source (clang reads before its type checks).
+- **`__builtin_is_within_lifetime(p)`** (WP-418, `bi::LIFETIME`;
+  P2641R4, clang 20 `IsWithinLifetime`): a null, function or
+  one-past-the-end `p` fails with `'__builtin_is_within_lifetime' cannot
+  be called with a {null|function|one-past-the-end} pointer` at the call
+  (`'std::is_within_lifetime' ...` at the `std::` call when the builtin's
+  frame is that function's); then `p`'s storage is checked as a read of
+  its designator type (static, or a `void *`'s conversion tag), so a
+  destroyed, deleted or out-of-scope object faults as a read outside its
+  lifetime, as clang. Otherwise the result is true unless a union on the
+  path from the allocation to `p` has no active member reaching it
+  (`union_path`). An Oven pointer carries no designator, so two members of
+  one union at the same offset and type are told apart statically: when
+  the argument is `&a.b.c` (through pointer casts) rooted at a variable or
+  `this`, each union member access in the chain emits `bi::UNION_LIVE`
+  (sub = member index; `mem.may_be_active`), ANDed into the result
+  (`union_designators`). A call of `std::is_within_lifetime` with such an
+  argument ANDs its own result with the same chain (its parameter loses
+  the designator). Known gap: a pointer to an inactive member stored in a
+  variable first (`int *p = &u.a; is_within_lifetime(p)`) reads as within
+  its lifetime when the active member has the same offset and type
+  (clang: false); clang's "object whose lifetime has not yet begun" note
+  (a `this` pointer during construction) is not modelled.
 - **Temporaries:** a `MaterializeTemporaryExpr` with full-expression
   storage (a `bit_cast` or builtin operand bound to a reference
   parameter) is an lvalue in the Oven, its object living until the end of

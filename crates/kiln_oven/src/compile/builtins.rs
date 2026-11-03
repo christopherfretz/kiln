@@ -363,6 +363,85 @@ impl Compiler<'_> {
         }
     }
 
+    /// The verdict of the union member accesses designating the object
+    /// that the `is_within_lifetime` pointer argument `x` points to
+    /// (WP-418; clang reads its `LValue` designator, which an Oven pointer
+    /// does not carry): for `&a.b.c` (through pointer casts) rooted at a
+    /// variable or `this`, each access `m` of a union member is checked
+    /// (`bi::UNION_LIVE`) to name the active member, from register
+    /// `init` (else true). `None` when `x` designates no union member so.
+    /// The accesses have no side effects; the argument was evaluated.
+    pub(super) fn union_designators(&mut self, x: ExprId, init: Option<u32>) -> Option<u32> {
+        use kiln_ast::expr::{ExprFlags, UnaryOp};
+        let ast = self.ast();
+        let a = strip_pointer_casts(ast, x);
+        if ast.exprs.get(a).kind() != ExprKind::UnaryOperator
+            || ast.exprs.unary_op(a) != UnaryOp::AddrOf
+        {
+            return None;
+        }
+        let mut steps = Vec::new();
+        let mut m = skip_parens(ast, ast.exprs.operand(a));
+        loop {
+            let n = ast.exprs.get(m);
+            match n.kind() {
+                ExprKind::MemberExpr
+                    if ast.decls.get(ast.exprs.decl(m)).kind() == kiln_ast::decl::DeclKind::Field =>
+                {
+                    let base = skip_parens(ast, ast.exprs.operand(m));
+                    steps.push(m);
+                    if n.has(ExprFlags::ARROW) {
+                        if ast.exprs.get(base).kind() != ExprKind::CXXThisExpr {
+                            return None;
+                        }
+                        break;
+                    }
+                    m = base;
+                }
+                ExprKind::DeclRefExpr
+                    if ast.decls.get(ast.exprs.decl(m)).kind() == kiln_ast::decl::DeclKind::Var =>
+                {
+                    break;
+                }
+                _ => return None,
+            }
+        }
+        let mut ok = init;
+        for m in steps.into_iter().rev() {
+            let ast = self.ast();
+            let base = ast.exprs.operand(m);
+            let fd = ast.exprs.decl(m);
+            let arrow = ast.exprs.get(m).has(ExprFlags::ARROW);
+            let bq = ast.exprs.get(base).ty();
+            let bt = self.ty(bq);
+            let ut = match self.kind(bt) {
+                TyKind::Ptr(p) if arrow => p,
+                _ => bt,
+            };
+            if !matches!(self.kind(ut), TyKind::Record { union: true, .. }) {
+                continue;
+            }
+            let Some(idx) = self.o.types.fields(ut).iter().position(|f| f.decl == fd) else {
+                continue;
+            };
+            let p = if arrow { self.rv(base) } else { self.lv_mem(base, super::Access::Addr) };
+            let prev = match ok {
+                Some(r) => r,
+                None => {
+                    let one = self.reg();
+                    self.konst(one, 1);
+                    one
+                }
+            };
+            let r = self.reg();
+            let loc = self.begin(m);
+            let k = bi::UNION_LIVE | (idx as u32) << 8;
+            self.emit_site(Op::Builtin, k, &[r, p, prev, prev, ut.0, 0], m, loc);
+            ok = Some(r);
+        }
+        ok.filter(|&r| Some(r) != init)
+    }
+
     /// Lowers call `e` of builtin `bid` into a fresh register; `None` for
     /// a builtin evaluated as an ordinary call.
     pub(super) fn builtin_call(&mut self, e: ExprId, bid: u32, args: &[ExprId]) -> Option<u32> {
@@ -593,6 +672,22 @@ impl Compiler<'_> {
                 let r = [self.rv(p), self.rv(arg(1)?), arg(2).map_or(dst, |o| self.rv(o))];
                 let at = self.ast().exprs.get(p).loc();
                 op(self, bi::ASSUME_ALIGNED, u32::from(arg(2).is_some()), r, [0, 0], at);
+            }
+            // WP-418: the pointer's own checks, then its designator's
+            // unions (spec/oven.md "Builtins").
+            id::IS_WITHIN_LIFETIME => {
+                let x = arg(0)?;
+                let t = self.designator(x);
+                let p = self.rv(x);
+                let ok = match self.union_designators(x, None) {
+                    Some(ok) => ok,
+                    None => {
+                        let one = self.reg();
+                        self.konst(one, 1);
+                        one
+                    }
+                };
+                op(self, bi::LIFETIME, 0, [p, ok, p], [t, 0], begin);
             }
             // clang `tryEvaluateBuiltinObjectSize` (WP-292): the pointer
             // without its pointer casts, evaluated speculatively. clang

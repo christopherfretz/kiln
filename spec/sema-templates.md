@@ -2744,6 +2744,15 @@ This is [temp.deduct.type]. It is a structural recursion over canonical
 - `TT<args>` and `class-template-id<args>`;
 - an NTTP value `i` from an array bound or a template argument.
 
+`cv T` against a function type `A` is `NonDeducedMismatch` (CWG1584;
+clang's `DeduceTemplateArgumentsByTypeMatch`), even under
+`IgnoreQualifiers`: `const T*` does not deduce from `void (*)()` and a
+`template<class T> struct X<const T>` partial specialization does not
+match `X<void()>`; `const T&` binding a function is unaffected (the
+reference strips `P`'s qualifiers first). WP-418,
+`tests/conformance/temp.deduct.type/cwg1584-cv-function.cpp` (libc++
+`std::is_within_lifetime(const T*)` rejects function pointers).
+
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
 ([temp.deduct.call]/4.3). The success must be unique; otherwise the

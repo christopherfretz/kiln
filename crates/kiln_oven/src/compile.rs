@@ -4761,6 +4761,28 @@ impl Compiler<'_> {
     }
 
     fn call(&mut self, e: ExprId, sret: Option<u32>) -> u32 {
+        let r = self.call_inner(e, sret);
+        // `std::is_within_lifetime(&u.m)` (WP-418): the call's verdict and
+        // its argument's union designators, which the parameter loses
+        // (spec/oven.md "Builtins").
+        let ast = self.ast();
+        let callee = skip_parens(ast, ast.exprs.callee(e));
+        let callee = if ast.exprs.get(callee).kind().is_cast() {
+            skip_parens(ast, ast.exprs.operand(callee))
+        } else {
+            callee
+        };
+        if ast.exprs.get(callee).kind() == ExprKind::DeclRefExpr
+            && let [x] = ast.lists.get(ast.exprs.call_args(e))[..]
+            && is_std_function(ast, ast.exprs.decl(callee), "is_within_lifetime")
+            && let Some(ok) = self.union_designators(ExprId::new(x), Some(r))
+        {
+            return ok;
+        }
+        r
+    }
+
+    fn call_inner(&mut self, e: ExprId, sret: Option<u32>) -> u32 {
         let ty = self.ety(e);
         let ast = self.ast();
         let callee = ast.exprs.callee(e);
@@ -4959,7 +4981,7 @@ fn is_std_builtin(ast: &kiln_ast::Ast, d: DeclId) -> bool {
 /// Whether function `d` is named `name` in namespace `std` at
 /// translation-unit scope, possibly through inline namespaces (clang's
 /// `isInStdNamespace`).
-fn is_std_function(ast: &kiln_ast::Ast, d: DeclId, name: &str) -> bool {
+pub(crate) fn is_std_function(ast: &kiln_ast::Ast, d: DeclId, name: &str) -> bool {
     let decls = &ast.decls;
     let named = |d: DeclId, n: &str| {
         decls.get(d).name().as_ident().is_some_and(|s| ast.symbols().as_str(s) == n)
