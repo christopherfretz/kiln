@@ -25,6 +25,7 @@ pub(crate) mod exc;
 mod life;
 mod meta;
 mod virt;
+mod wide;
 
 pub(crate) use builtins::BiFault;
 pub(crate) use virt::Virt;
@@ -176,6 +177,14 @@ pub(crate) enum Fault {
         aux: u32,
     },
     Float(FloatErr),
+    /// An `Op::Wide` integer error on a `width`-bit `_BitInt`: the
+    /// decimal text clang's note prints (the exact result, or the shift
+    /// count; empty for a division by zero).
+    Wide {
+        err: IntErr,
+        text: Box<str>,
+        width: u32,
+    },
     /// Float-to-integer conversion out of range.
     FloatRange {
         kind: FloatKind,
@@ -552,6 +561,9 @@ impl Oven {
             Ok(self.exc.uncaught() as u128)
         } else if aux & 0xff == crate::kbc::bi::META {
             self.exec_meta(b, pc, fb, aux >> 8, (a, bb, c), (t1, t2))
+        } else if aux & 0xff == crate::kbc::bi::LIFETIME {
+            let r = self.builtin(b.ast(), aux, a, bb, c, t1, t2)?;
+            Ok(if r != 0 && self.not_yet_begun(pc, a as u64, t1) { 0 } else { r })
         } else {
             self.builtin(b.ast(), aux, a, bb, c, t1, t2)
         }
@@ -1378,6 +1390,15 @@ impl Oven {
                         self.always_true_diag(b, pc, aux);
                     }
                     pc += 2;
+                }
+                Op::Wide => {
+                    let regs = [reg!(0), reg!(1), reg!(2)];
+                    match self.exec_wide(regs, OTy(arg!(3) as u32), arg!(4) as u32, aux) {
+                        Ok(Some(v)) => reg!(0) = v,
+                        Ok(None) => {}
+                        Err(f) => fail!(f),
+                    }
+                    pc += 6;
                 }
                 Op::Cx => {
                     let v = [reg!(2), reg!(3), reg!(4), reg!(5)];
@@ -2616,7 +2637,7 @@ impl Oven {
             return None;
         }
         match info.kind {
-            TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) => {
+            TyKind::Bool | TyKind::Int { .. } | TyKind::WideInt { .. } | TyKind::Float(_) => {
                 (!s.is_init(abs, value_len(info.size, info.kind))).then_some((field, t))
             }
             TyKind::Ptr(_) | TyKind::NullPtr | TyKind::MemPtr { .. } | TyKind::Reflection => {
@@ -2992,7 +3013,8 @@ impl Oven {
                 // the union is destroyed, below) tells it from a union
                 // destroyed already (libc++'s `expected` destroys the
                 // member, then the union, then constructs it anew, WP-334).
-                Err(MemFault::Lifetime) if self.union_outlives_member(raw, ty) => {}
+                Err(MemFault::Lifetime)
+                    if self.union_outlives_member(raw, ty) || self.live_but_unions(raw, ty) => {}
                 r => {
                     r.map_err(fault)?;
                 }
@@ -3024,6 +3046,40 @@ impl Oven {
                 let off = u64::from(Ptr::decode(raw).off);
                 self.mem.unions.contains_key(&Ptr::union_key(raw, off, ty))
             }
+    }
+
+    /// Whether the class object of type `ty` at `raw` (some of whose bytes
+    /// are outside their lifetime) is within its lifetime but for the
+    /// members of its unions: it has bytes outside its unions, and every
+    /// one of them is. A union whose member's lifetime an explicit
+    /// destructor call ended has no active member, which does not end the
+    /// lifetime of the object enclosing it ([class.union.general]/2,
+    /// [basic.life]/1): libc++ 22's list nodes destroy the value in their
+    /// anonymous union, then the node itself (`__delete_node`, WP-446).
+    /// A class that is all union bytes keeps the stricter check.
+    fn live_but_unions(&self, raw: u64, ty: OTy) -> bool {
+        let info = self.types.info(ty);
+        if !info.has_union || !matches!(info.kind, TyKind::Record { union: false, .. }) {
+            return false;
+        }
+        let mut us: Vec<(u64, u64)> =
+            self.types.unions(ty).iter().map(|&(o, u)| (o, o + self.types.size(u))).collect();
+        us.sort_unstable();
+        let off = u64::from(Ptr::decode(raw).off);
+        let live = |a: u64, b: u64| {
+            self.mem.check(Ptr::with_off(raw, off + a, false), b - a, true).is_ok()
+        };
+        let (mut at, mut rest) = (0, 0);
+        for (a, b) in us.into_iter().chain([(info.size, info.size)]) {
+            if a > at {
+                if !live(at, a) {
+                    return false;
+                }
+                rest += a - at;
+            }
+            at = at.max(b);
+        }
+        rest > 0
     }
 
     /// The most derived object containing the byte at `off` of an object

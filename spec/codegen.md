@@ -1193,8 +1193,7 @@ The normative description is spec/driver.md "Code generation". In short:
 - **clang 22 codegen (WP-355, WP-386).** At `-fclang-compat=22` kiln
   follows clang 22 where §6a says; elsewhere its IR is clang 19's under
   every level. The oracle-22 `DEVIATIONS` entries record the rest of
-  what clang 20-22 changed: x86-64 `__int128` as `i128`
-  (19: two `i64`s; the same registers), AArch64 aggregates of pointers
+  what clang 20-22 changed: AArch64 aggregates of pointers
   coerced to `ptr`/`[N x ptr]` (19: integers), `(unnamed struct)` in IR
   type names, `llvm.modf`, and `-O0` instruction
   choices (atomic temporaries, `select` for vector `?:`, constant-folded
@@ -1208,7 +1207,8 @@ The normative description is spec/driver.md "Code generation". In short:
   neither, and nor does kiln below 22, so `atomic_padded` is exact under
   both oracles. Following the rest under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
-  "Residual").
+  "Residual"). x86-64 `__int128` / `_BitInt(128)` as `i128` (19: two
+  `i64`s) is followed at 22 since WP-458 (spec/abi.md §8.25).
 - **Uses of constant-initialized reference variables as lvalues.** A
   read through a reference to a `const` referee folds (above), but clang
   also emits a non-odr-use of a reference usable in constant expressions
@@ -1309,6 +1309,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 |---|---|---|
 | AArch64 data layout `e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32` (`kiln_llvm::AARCH64_LINUX_GNU_22`; LLVM 19 accepts it) | compat ≥ 22 | `e-m:e-i8:8:32-...` |
 | AArch64 empty class by value as `i64` (spec/abi.md §8.21) | compat ≥ 22 | `i8` / ignored |
+| x86-64 `__int128`, `_BitInt(128)` and a class starting with an `i128` by value and returned as `i128` (spec/abi.md §8.25) | compat ≥ 22 | `{ i64, i64 }` / two `i64`s |
 | GEP `nuw` (§3 "GEP flags") | compat ≥ 22 | `inbounds` only |
 | `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors), on definitions, declarations and calls, before `noundef` | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
 | `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 for `non-leaf` (AArch64's default; "Frame pointer") | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
@@ -1321,7 +1322,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 x86-64's data layout and `"frame-pointer"="all"` are the same in both.
 The `xtask test` harness runs kiln at the oracle's compat level with the
 oracle's LLVM (spec/harness.md "Oracle toolchain"), so the oracle-22 legs
-see all ten. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
+see all eleven. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
 compat, `ir_version`), `sig_attrs`, `target_attrs` and `trailer`. Not
 yet: LLVM 22's `nocreateundeforpoison` function attribute on many
 intrinsic declarations (`*.with.overflow`, `ctpop`, `bswap`, `fabs`,
@@ -3055,6 +3056,23 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   `tests/conformance/ext.vector/ir-bool-from-int-vector.cpp` (`expect: ir`,
   `requires: clang>=22`).
 
+## 7v. Landed (WP-456): `PseudoObjectExpr`
+
+The synthesized three-way comparison of a defaulted `operator<=>`
+([class.spaceship]/1; spec/sema-class.md §4.12) is a `PseudoObjectExpr`
+(ast.md §5.3) whose semantic expressions are `[OVE(a), OVE(b), chain]`.
+As clang's `emitPseudoObjectExpr`, `Cg::bind_pseudo` emits the semantic
+expressions before the result in order: an `OpaqueValueExpr` binds its
+source once in `f.opaque` (an lvalue address for a glvalue source, else
+the scalar), any other is emitted and ignored; the result is then
+emitted in the requested form (scalar `emit_arm`, `emit_lvalue`,
+`emit_agg`, complex `emit_cx`) and `unbind_pseudo` drops the bindings.
+The syntactic form is never emitted. The chain is an lvalue of the
+category's `const` static members, which the defaulted body copies into
+its return slot (`static_cast<R>`), so the IR is clang's
+(`tests/codegen/synth_three_way.cpp`, strong, weak and partial
+categories, compared with clang 22 and clang 19 on both targets).
+
 ## 7ab. Landed (WP-466): linkage, 3-lane stores, file-scope compound literals, end-of-TU variables
 - **`const volatile` linkage** ([basic.link]/3.2; spec/sema.md): a
   namespace-scope `const volatile` variable that is not `static` has
@@ -3082,8 +3100,9 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   (`tests/codegen/file_scope_compound_literal.cpp`, both oracles).
 - **End-of-TU variable definitions** (WP-440; spec/sema-templates.md
   §4.6 "Points of instantiation"): an implicitly instantiated variable
-  template specialization is recorded in `end_of_tu_defs` like a static data member, after the
-  instantiations its initializer requires (post-order). Its global, its
+  template specialization is recorded in `end_of_tu_defs` like a
+  static data member, after the instantiations its initializer requires
+  (post-order). Its global, its
   `__cxx_global_var_init.N` and its `@llvm.global_ctors` entry follow
   everything else in the TU, in clang's order, at both compat levels
   (`tests/codegen/var_template_init_order.cpp`,

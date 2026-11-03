@@ -51,6 +51,7 @@ pub mod init;
 mod init_dtor;
 mod init_priority;
 mod int_in_bool;
+mod int_overflow;
 mod jump_scope;
 mod kind_conflict;
 pub mod lambda;
@@ -119,6 +120,7 @@ pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
 pub use scope::ScopeKind;
 pub use template_id_typo::TemplateIdTypo;
+pub use vector_ops::LaxVectorConversions;
 
 /// A delayed-typo diagnostic held for the end of its full-expression
 /// ([`Sema::begin_delayed_typos`]): its sequence number and the recovery
@@ -212,6 +214,9 @@ pub struct Sema<'a, 'sm> {
     /// `operator new`/`operator delete` when available (P2014R0 option 2,
     /// as clang; spec/sema.md "Coroutines").
     pub coro_aligned_allocation: bool,
+    /// `-flax-vector-conversions=` (default `all`, as clang; spec/types.md
+    /// `Vector`).
+    pub lax_vector_conversions: LaxVectorConversions,
     /// The temporaries of a for-range-initializer are extended to the
     /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
     pub range_lifetime_extension: bool,
@@ -416,6 +421,14 @@ pub struct Sema<'a, 'sm> {
     /// instantiated (`friend_function_template`): a qualified one that
     /// matches no template is not diagnosed (clang).
     pub(crate) instantiating_friend_template: bool,
+    /// While a friend function template of a class template is
+    /// redeclared (`friend_function_template`): its pattern's
+    /// constraints (type-constraints, requires-clauses) mapped to their
+    /// substitution with the specialization's levels, the friend's own
+    /// parameters at their retained depth, which redeclaration matching
+    /// compares instead ([temp.over.link]/6; clang's
+    /// `AreConstraintExpressionsEqual`, WP-446).
+    pub(crate) friend_cmp_constraints: kiln_source::fx::FxHashMap<ExprId, ExprId>,
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).
     pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
@@ -847,6 +860,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             rtti: true,
             reflection: false,
             coro_aligned_allocation: false,
+            lax_vector_conversions: LaxVectorConversions::All,
             range_lifetime_extension: false,
             gnu: false,
             clang_compat: 22,
@@ -902,6 +916,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
             virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
+            friend_cmp_constraints: kiln_source::fx::FxHashMap::default(),
             constinit_locs: kiln_source::fx::FxHashMap::default(),
             ref_usable: kiln_source::fx::FxHashMap::default(),
             empty_loop_bodies: kiln_source::fx::FxHashMap::default(),

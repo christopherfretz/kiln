@@ -115,6 +115,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("StmtExpr", Keep),
     ("CompoundLiteralExpr", Keep),
     ("BinaryConditionalOperator", Keep),
+    // The synthesized three-way comparison (WP-456).
+    ("PseudoObjectExpr", Keep),
     ("OffsetOfExpr", Keep),
     // `__builtin_choose_expr` (WP-316).
     ("ChooseExpr", Keep),
@@ -421,6 +423,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         | "StmtExpr"
         | "CompoundLiteralExpr"
         | "BinaryConditionalOperator"
+        | "PseudoObjectExpr"
         | "OffsetOfExpr"
         | "ChooseExpr" => &[],
         // `hasExplicitParameters` (clang 22+): whether the lambda spells a
@@ -663,6 +666,7 @@ pub const M2_KINDS: &[&str] = &[
     "StmtExpr",
     "CompoundLiteralExpr",
     "BinaryConditionalOperator",
+    "PseudoObjectExpr",
     "OffsetOfExpr",
     "ChooseExpr",
     "CompoundStmt",

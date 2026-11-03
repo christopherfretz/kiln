@@ -284,6 +284,25 @@ impl Oven {
             Fault::Int { err, op, a, b: rhs, aux } => {
                 (site.loc, self.int_msg(ast, site, err, op, a, rhs, aux))
             }
+            Fault::Wide { err, text, width } => {
+                // The operation's type as written (`W` keeps its sugar
+                // through the usual arithmetic conversions).
+                let ty = site.e.map_or_else(
+                    || "'_BitInt'".into(),
+                    |e| Self::quoted_aka(ast, ast.exprs.get(e).ty()),
+                );
+                let msg = match err {
+                    IntErr::Overflow => {
+                        format!("value {text} is outside the range of representable values of type {ty}")
+                    }
+                    IntErr::DivZero => "division by zero".into(),
+                    IntErr::ShiftNeg => format!("negative shift count {text}"),
+                    IntErr::ShiftBig => {
+                        format!("shift count {text} >= width of type {ty} ({width} bits)")
+                    }
+                };
+                (site.loc, msg)
+            }
             Fault::Float(e) => (site.loc, self.float_msg(ast, site, e)),
             Fault::FloatRange { kind, bits } => {
                 let t = site
@@ -758,7 +777,8 @@ impl Oven {
         let what = match kind {
             0 => "a null pointer",
             1 => "a function pointer",
-            _ => "a one-past-the-end pointer",
+            2 => "a one-past-the-end pointer",
+            _ => "a pointer to an object whose lifetime has not yet begun",
         };
         (loc, format!("'{name}' cannot be called with {what}"))
     }
@@ -1046,6 +1066,8 @@ impl Oven {
             TyKind::Array { .. } | TyKind::BoolVec { .. } | TyKind::Record { .. } => {
                 self.write_object(ast, s, t, v as u64, depth);
             }
+            // A wide `_BitInt` register holds its object's address.
+            TyKind::WideInt { .. } => self.write_object(ast, s, t, v as u64, depth),
             // clang: `&C::m` (the member's class and the member,
             // unqualified), `0` for the null member pointer.
             TyKind::MemPtr { .. } => match self.mp.get(v) {
@@ -1178,6 +1200,10 @@ impl Oven {
                 }
                 s.push('}');
             }
+            TyKind::WideInt { signed, .. } => match self.wide_load(raw, t, ak::READ) {
+                Ok(w) => s.push_str(&crate::bigint::to_decimal(&w, signed)),
+                Err(_) => s.push_str("<uninitialized>"),
+            },
             _ => {
                 let len = value_len(info.size, info.kind);
                 let v = self.mem.check(raw, len, false).ok().and_then(|(st, abs, _)| {

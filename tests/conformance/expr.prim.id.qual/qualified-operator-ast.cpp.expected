@@ -1,0 +1,25 @@
+Dumping Use:
+NamespaceDecl Use
+|-VarDecl p1 'bool (A::*)(const A &) const noexcept' cinit
+| `-UnaryOperator 'bool (A::*)(const A &) const noexcept' prefix '&' cannot overflow
+|   `-DeclRefExpr 'bool (const A &) const noexcept' CXXMethod 'operator==' 'bool (const A &) const noexcept'
+|-VarDecl p2 'std::strong_ordering (A::*)(const A &) const noexcept' cinit
+| `-UnaryOperator 'std::strong_ordering (A::*)(const A &) const noexcept' prefix '&' cannot overflow
+|   `-DeclRefExpr 'std::strong_ordering (const A &) const noexcept' CXXMethod 'operator<=>' 'std::strong_ordering (const A &) const noexcept'
+|-VarDecl p3 'int (A::*)(int) const' cinit
+| `-UnaryOperator 'int (A::*)(int) const' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int (int) const' CXXMethod 'operator()' 'int (int) const'
+|-VarDecl p5 'int (A::*)() const' cinit
+| `-UnaryOperator 'int (A::*)() const' prefix '&' cannot overflow
+|   `-DeclRefExpr 'int () const' CXXConversion 'operator int' 'int () const'
+`-FunctionDecl f 'bool (A)'
+  |-ParmVarDecl used a 'A'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CXXMemberCallExpr 'bool'
+        |-MemberExpr '<bound member function type>' .operator==
+        | `-ImplicitCastExpr 'const A' lvalue <NoOp>
+        |   `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+        `-ImplicitCastExpr 'const A' lvalue <NoOp>
+          `-DeclRefExpr 'A' lvalue ParmVar 'a' 'A'
+

@@ -67,6 +67,8 @@ pub struct ParseOptions {
     pub reflection: bool,
     /// `-fcoro-aligned-allocation` ([`kiln_sema::Sema::coro_aligned_allocation`]).
     pub coro_aligned_allocation: bool,
+    /// `-flax-vector-conversions=` ([`kiln_sema::Sema::lax_vector_conversions`]).
+    pub lax_vector_conversions: kiln_sema::LaxVectorConversions,
     /// `-fclang-compat=<major>`: the clang release whose spellings kiln
     /// reproduces where they differ (spec/pp.md "clang compatibility
     /// level"; [`kiln_sema::Sema::clang_compat`]).
@@ -88,6 +90,7 @@ impl Default for ParseOptions {
             inst_report: kiln_sema::templ::report::ReportFormat::Off,
             reflection: false,
             coro_aligned_allocation: false,
+            lax_vector_conversions: kiln_sema::LaxVectorConversions::All,
             clang_compat: 22,
             gnu_lib_builtins: false,
         }
@@ -211,6 +214,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.rtti = opts.rtti;
     s.reflection = opts.reflection;
     s.coro_aligned_allocation = opts.coro_aligned_allocation;
+    s.lax_vector_conversions = opts.lax_vector_conversions;
     s.gnu = opts.gnu;
     s.clang_compat = opts.clang_compat;
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
