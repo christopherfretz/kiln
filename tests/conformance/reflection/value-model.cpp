@@ -10,7 +10,7 @@ static_assert(^^int != ^^long);
 static_assert(^^const int != ^^int);
 
 using I = int;
-static_assert(^^I == ^^int); // spike: alias sugar is dropped
+static_assert(^^I != ^^int); // [expr.reflect]/6: the alias is kept
 
 constexpr info r = ^^double;
 constexpr info r2 = r;

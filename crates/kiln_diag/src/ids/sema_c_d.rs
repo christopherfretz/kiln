@@ -53,6 +53,7 @@ sema_conditional_vector_has_void = Error (1) "GNU vector conditional operand can
 // the stray `}` is clang 19's (a `%diff` typo in the .td file).
 sema_conditional_vector_mismatched = Error (2) "vector operands to the vector conditional must be the same type ({0} and {1})}}";
 sema_conditional_vector_operand_type = Error (1) "enumeration type {0} is not allowed in a vector conditional";
+sema_conditional_vector_scalar_type_unsupported = Error (2) "scalar type {0} not supported with vector condition type {1}";
 sema_conditional_vector_size = Error (2) "vector condition type {0} and result type {1} do not have the same number of elements";
 sema_conditional_void_nonvoid = Error (2) "{0:left|right} operand to ? is void, but {0:right|left} operand is of type {1}";
 sema_conflicting_types = Error (1) "conflicting types for '{0}'";
@@ -61,6 +62,12 @@ sema_constant_conversion = Warning [ConstantConversion] (4) "implicit conversion
 sema_constant_integer_arg_type = Error (1) "argument to '{0}' must be a constant integer";
 sema_constant_logical_operand = Warning [ConstantLogicalOperand] (1) "use of logical '{0}' with constant operand";
 sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
+// [expr.const] (P2996R13): an expression of consteval-only type outside an immediate function context.
+sema_consteval_only_expr = Error (0) "consteval-only expressions are only allowed in a constant-evaluated context";
+// [basic.types.general] (P2996R13): a function whose type is consteval-only.
+sema_consteval_only_fn = Error (0) "function of consteval-only type must be declared 'consteval'";
+// [basic.types.general] (P2996R13): an object of consteval-only type that is not a constexpr variable's.
+sema_consteval_only_var = Error (1) "consteval-only variable '{0}' not declared 'constexpr' used outside a constant-evaluated context";
 sema_consteval_overrides = Error (2) "{0:consteval|non-consteval} function '{1}' cannot override a {0:non-consteval|consteval} function";
 sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
 sema_constexpr_body_invalid_stmt = Error (2) "statement not allowed in {1:constexpr|consteval} {0:function|constructor}";

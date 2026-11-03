@@ -1787,7 +1787,9 @@ impl Cg<'_> {
     fn decl_lvalue(&mut self, e: ExprId, d: DeclId, q: QualType) -> R<LV> {
         let ast = self.ast;
         match ast.decls.get(d).kind() {
-            DeclKind::Function | DeclKind::CXXMethod => {
+            // An explicit object conversion function is named like a
+            // free function ([over.match.funcs.general]/4).
+            DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion => {
                 let f = self.get_fn(d)?;
                 Ok(LV {
                     addr: Addr { v: V::C(Value::func(f)), ty: LTy::PTR, align: 1 },
@@ -2087,6 +2089,14 @@ impl Cg<'_> {
                     return err(self.loc_of(e), "reference-returning call produced no value");
                 };
                 Ok(self.ref_lvalue(p, q))
+            }
+            // clang `EmitCompoundLiteralLValue` of a file-scope literal:
+            // its `.compoundliteral` global (WP-466).
+            ExprKind::CompoundLiteralExpr if let Some(d) = ast.exprs.compound_literal_var(e) => {
+                let g = self.get_gvar(d)?;
+                let (ty, align) = (self.mty(q), self.var_align(d));
+                let addr = Addr { v: V::C(gval(g)), ty, align };
+                Ok(LV { addr, q, bf: None, vidx: None, tb: Tb::Type })
             }
             ExprKind::CompoundLiteralExpr if !self.is_aggregate(q) => {
                 self.compound_literal_lvalue(e)
@@ -4509,9 +4519,11 @@ impl Cg<'_> {
                 Some(c) => self.const_value(c, q, Some(init), true).ok(),
                 None => None,
             };
-            let p = match k {
-                Some(k) => V::C(k),
-                None => self.emit_ref_binding(init)?,
+            let p = if let Some(k) = k {
+                V::C(k)
+            } else {
+                self.auto_init_prefill(d, q, addr, init);
+                self.emit_ref_binding(init)?
             };
             let slot = self.scalar_tls_addr(addr.v);
             let st = self.store(p, slot, addr.align, false);
@@ -4520,6 +4532,7 @@ impl Cg<'_> {
         }
         if ast.types.as_atomic(q).is_some() {
             // clang `EmitExprAsInit` -> `EmitAtomicInit` (WP-165).
+            self.auto_init_prefill(d, q, addr, init);
             return self.atomic_init(init, LV { addr, q, bf: None, vidx: None, tb: Tb::Type });
         }
         let fold = self.folds.get(init);
@@ -4531,11 +4544,14 @@ impl Cg<'_> {
             if let Some(c) = fold.filter(|_| constexpr || constant_init()) {
                 // A constant the lowering cannot spell yet (bit-fields,
                 // base subobjects) is initialized as written instead,
-                // which has the same effect for a local.
+                // which has the same effect for a local, its padding
+                // filled first (clang stores the constant with it).
                 if let Ok(k) = self.const_value(c, q, Some(init), true) {
+                    let k = self.auto_init_constant(d, k);
                     return self.stores_for_constant(d, addr, k, self.is_volatile(q));
                 }
             }
+            self.auto_init_prefill(d, q, addr, init);
             return self.emit_agg_into(init, addr, false);
         }
         if self.is_complex(q) {
@@ -4548,9 +4564,18 @@ impl Cg<'_> {
                 self.store(V::C(k), addr.v, addr.align, vol);
                 return Ok(());
             }
+            self.auto_init_prefill(d, q, addr, init);
             let v = self.emit_complex(init)?;
             self.cx_store(v, addr, q);
             return Ok(());
+        }
+        // clang `mightBeUsableInConstantExpressions`: a const scalar with a
+        // constant initializer is stored as that constant, unfilled.
+        if fold.is_none()
+            || !self.ast.types.effective_quals(q).is_const()
+            || self.m.types.vector_info(addr.ty).is_some()
+        {
+            self.auto_init_prefill(d, q, addr, init);
         }
         let v = match fold {
             Some(c) => V::C(self.const_scalar_value(c, q)?),
@@ -4590,7 +4615,7 @@ impl Cg<'_> {
     }
 
     /// `Constant::isNullValue` (deep for aggregates of zeros).
-    fn const_is_null(&mut self, k: Value) -> bool {
+    pub(crate) fn const_is_null(&mut self, k: Value) -> bool {
         if self.is_null_value(k) {
             return true;
         }
@@ -4636,13 +4661,19 @@ impl Cg<'_> {
                 let b = (x & 0xff) as u8;
                 (0..w / 8).all(|i| ((x >> (8 * i)) & 0xff) as u8 == b).then_some(Some(b))
             }
-            ConstData::Float { ty, bits } => {
+            // `isBytewiseValue` takes `half`, `float` and `double` only.
+            ConstData::Float { ty, bits } if matches!(ty, LTy::HALF | LTy::FLOAT | LTy::DOUBLE) => {
                 let w = self.m.types.float_width(ty)?;
                 let b = (bits & 0xff) as u8;
                 (0..w / 8).all(|i| ((bits >> (8 * i)) & 0xff) as u8 == b).then_some(Some(b))
             }
+            ConstData::Float { .. } => None,
+            ConstData::Cast { op: CastOp::IntToPtr, val, .. } => self.bytewise(val),
             _ => {
-                let es = self.const_elems(k)?;
+                let es = match self.m.const_of(k)?.clone() {
+                    ConstData::Vector { elems, .. } => elems.to_vec(),
+                    _ => self.const_elems(k)?,
+                };
                 let mut acc: Option<u8> = None;
                 for x in es {
                     match self.bytewise(x)? {
@@ -4812,7 +4843,13 @@ impl Cg<'_> {
             .then_some(a)
     }
 
-    fn stores_for_constant(&mut self, d: DeclId, at: Addr, k: Value, vol: bool) -> R<()> {
+    pub(crate) fn stores_for_constant(
+        &mut self,
+        d: DeclId,
+        at: Addr,
+        k: Value,
+        vol: bool,
+    ) -> R<()> {
         let ty = self.m.const_type(k);
         let size = self.alloc_size(ty);
         if size == 0 {

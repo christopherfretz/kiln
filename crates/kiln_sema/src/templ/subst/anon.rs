@@ -149,6 +149,7 @@ impl Substituter<'_, '_, '_> {
     }
 
     fn copy_attrs(&mut self, spec: DeclId, def: DeclId, only_aligned: bool) {
+        self.copy_annotations(spec, def);
         let ast = &self.sema.ast;
         let list = ast.attrs.of_decl(def);
         let nodes: Vec<AttrNode> = ast

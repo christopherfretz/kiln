@@ -61,12 +61,17 @@ impl Sema<'_, '_> {
     /// (one per content, shared with `std::source_location`'s).
     fn reflect_name(&mut self, r: ReflectionId, loc: Loc) -> Result<ConstValueId, MetaError> {
         let name = match self.ast.reflections.get(r) {
-            Reflectee::Null => String::new(),
-            Reflectee::Decl(d) => self.decl_name(d),
+            Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
+                self.decl_name(d)
+            }
             Reflectee::Type(t) => match self.ast.types.as_record(t) {
                 Some(d) => self.decl_name(d),
                 None => self.ty_str(t),
             },
+            Reflectee::Template(n) => {
+                self.ast.types.template_decl(n).map(|d| self.decl_name(d)).unwrap_or_default()
+            }
+            _ => String::new(),
         };
         if name.is_empty() {
             return fail(loc, format!("'{}' has no name", self.reflection_str(r)));
@@ -128,9 +133,17 @@ impl Sema<'_, '_> {
                         DeclKind::AccessSpec | DeclKind::StaticAssert | DeclKind::Friend
                     )
             })
-            .map(|m| self.ast.first(m))
             .collect();
-        Ok(members.into_iter().map(|m| self.ast.reflections.intern(Reflectee::Decl(m))).collect())
+        // Each member keyed as `^^` keys it (a nested type or alias is a
+        // type, a member template a template; spec/reflection-repr.md §1),
+        // one reflection per entity (`Sema::entity_decl`).
+        members
+            .into_iter()
+            .map(|m| {
+                let r = self.reflectee_of_decl(m).unwrap_or(Reflectee::Decl(self.entity_decl(m)));
+                self.intern_reflection(r, loc).map_err(MetaError::from)
+            })
+            .collect()
     }
 
     /// `__kiln_define_member(cls, ty, name)` (spec/reflection.md §3.4):
@@ -166,7 +179,7 @@ impl Sema<'_, '_> {
         // `^^S` names the first declaration of `S`; the class being
         // defined is its definition: compare entities, not decls.
         let building = self.classes.last().map(|c| c.record);
-        let Some(r) = building.filter(|&b| self.ast.first(b) == self.ast.first(r)) else {
+        let Some(r) = building.filter(|&b| self.same_entity(b, r)) else {
             let cname = self.decl_name(r);
             let mut notes = vec![Note::new(
                 loc,
@@ -193,7 +206,7 @@ impl Sema<'_, '_> {
         if self.ast.types.is_function(t)
             || self.ast.types.is_reference(t)
             || !self.is_complete(t)
-            || self.ast.types.as_record(t) == Some(r)
+            || self.ast.types.as_record(t).is_some_and(|d| self.same_entity(d, r))
         {
             return fail(
                 loc,
@@ -228,6 +241,6 @@ impl Sema<'_, '_> {
         h.flags = DeclFlags::INJECTED;
         let f = self.builder().field(h, t, None, 0);
         self.ast.decls.set_access(f, Access::Public);
-        Ok(self.ast.reflections.intern(Reflectee::Decl(f)))
+        Ok(self.intern_reflection(Reflectee::Decl(f), loc)?)
     }
 }

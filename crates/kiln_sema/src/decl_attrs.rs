@@ -28,6 +28,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::ASSUME => "assume",
         AttrKind::CARRIES_DEPENDENCY => "carries_dependency",
         AttrKind::INDETERMINATE => "indeterminate",
+        AttrKind::UNINITIALIZED => "uninitialized",
         AttrKind::DEPRECATED => "deprecated",
         AttrKind::FALLTHROUGH => "fallthrough",
         AttrKind::LIKELY => "likely",
@@ -135,6 +136,9 @@ impl Sema<'_, '_> {
     }
 
     pub fn act_on_type_position_attrs(&mut self, attrs: &mut Vec<AttrId>, in_chunk: bool) {
+        // An annotation appertains only to a declaration
+        // ([dcl.attr.annotation]/1), never to a type.
+        self.reject_annotations(attrs, None);
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);
             if matches!(node.syntax, AttrSyntax::Gnu | AttrSyntax::Declspec) {
@@ -161,6 +165,14 @@ impl Sema<'_, '_> {
     /// table of [`Sema::check_decl_attrs`]; kiln keeps none of them.
     pub fn act_on_decl_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
         let mut v = attrs.to_vec();
+        // None of these declares an entity an annotation can appertain
+        // to ([dcl.attr.annotation]/1).
+        let what = match self.ast.decls.get(d).kind() {
+            DeclKind::UsingDirective => "a using-directive",
+            DeclKind::Using | DeclKind::UsingEnum => "a using-declaration",
+            _ => "an attribute-declaration",
+        };
+        self.reject_annotations(&mut v, Some(what));
         self.check_decl_attrs(d, &mut v);
     }
 
@@ -174,6 +186,9 @@ impl Sema<'_, '_> {
     /// `unlikely`, `fallthrough`) are left to
     /// [`Sema::act_on_attributed_stmt`].
     pub fn act_on_stmt_decl_attrs(&mut self, attrs: &[AttrId], asm: bool) {
+        // An asm-declaration declares nothing an annotation can
+        // appertain to; any other statement is not a declaration.
+        self.reject_annotations_in(attrs, asm.then_some("an asm-declaration"));
         for &a in attrs {
             let node = *self.ast.attrs.get(a);
             if matches!(
@@ -206,7 +221,13 @@ impl Sema<'_, '_> {
             matches!(self.ast.decls.get(d).kind(), DeclKind::UsingDirective | DeclKind::Using)
         });
         if using {
-            self.act_on_stmt_decl_attrs(attrs, false);
+            // Its annotations were rejected by `act_on_decl_attrs`.
+            let attrs: Vec<AttrId> = attrs
+                .iter()
+                .copied()
+                .filter(|&a| self.ast.attrs.get(a).kind != AttrKind::ANNOTATION)
+                .collect();
+            self.act_on_stmt_decl_attrs(&attrs, false);
         }
     }
 
@@ -223,6 +244,8 @@ impl Sema<'_, '_> {
         if attrs.is_empty() {
             return;
         }
+        // They would appertain to the absent declarators ([dcl.pre]/5).
+        self.reject_annotations_in(attrs, Some("a declaration with no declarator"));
         let key = match ds.keyword {
             TagKeyword::Struct => "struct",
             TagKeyword::Class => "class",
@@ -251,6 +274,7 @@ impl Sema<'_, '_> {
     /// attributes, and the standard and GNU attributes whose subject is
     /// wrong.
     pub(crate) fn check_decl_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        self.take_annotations(d, attrs);
         self.check_alignas_subject(d, attrs);
         self.check_init_priority(d, attrs);
         let kind = self.ast.decls.get(d).kind();
@@ -372,6 +396,7 @@ impl Sema<'_, '_> {
                 "minsize",
                 "functions and Objective-C methods",
             ),
+            AttrKind::UNINITIALIZED => self.check_uninitialized_subject(d, kind, node),
             // clang `TrivialABI`: `SubjectList<[CXXRecord]>` (ignored
             // with a warning).
             AttrKind::TRIVIAL_ABI if !is_record_kind(kind) => {
@@ -385,6 +410,22 @@ impl Sema<'_, '_> {
             ),
             _ => true,
         }
+    }
+
+    /// `[[clang::uninitialized]]` (clang `UninitializedAttr`,
+    /// `SubjectList<[LocalVar]>`): only on a variable with automatic
+    /// storage; elsewhere ignored with a warning.
+    fn check_uninitialized_subject(&mut self, d: DeclId, kind: DeclKind, node: AttrNode) -> bool {
+        if kind == DeclKind::Var && self.has_local_storage(d) {
+            return true;
+        }
+        let shown = self.attr_shown(&node, "uninitialized");
+        let msg = self
+            .diag(DiagId::sema_attribute_wrong_decl_type, node.loc)
+            .arg(format!("'{shown}'"))
+            .arg("local variables".to_owned());
+        self.emit(msg);
+        false
     }
 
     /// `optnone` against `always_inline` and `minsize` on function `d`

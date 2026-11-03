@@ -8,7 +8,7 @@
 // callees: ir-psabi-internal-x86_64.cpp). WP-187.
 //@ expect: ir
 //@ requires: clang>=22
-//@ args: --target=x86_64-linux-gnu
+//@ args: --target=x86_64-linux-gnu -ftrivial-auto-var-init=uninitialized
 //@ strict-diags
 //@ diag: 36:3 warning "AVX vector return of type 'g8i' (vector of 8 'int' values) without 'avx' enabled changes the ABI"
 //@ diag: 37:3 warning "AVX vector argument of type 'g8d' (vector of 8 'double' values) without 'avx512f' enabled changes the ABI"

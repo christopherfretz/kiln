@@ -15,7 +15,10 @@ cargo xtask test [options] [paths...]
 |---|---|
 | `--compiler <path>` | Compiler under test. Default: `cargo build -p kiln_driver`, then `kiln++` (the `kiln` binary under its C++ name, made beside it if missing) in the target dir (`$CARGO_TARGET_DIR`, else `target_directory` from `cargo metadata`), `debug` profile. |
 | `--oracle <path>` | Oracle compiler for `run`/`pp`/`ast`/`layout`/`vtables`/`ir` comparisons. Default `clang++-N` of `KILN_ORACLE` (`clang++-22`; see "Oracle toolchain"). |
-| `--no-oracle` | Skip all oracle comparisons (`layout`, `vtables` and `ir` tests, which have no other reference, are then a SKIP). |
+| `--no-oracle` | Skip all oracle comparisons, clang's and GCC's (`layout`, `vtables` and `ir` tests, which have no other reference, are then a SKIP). |
+| `--gcc <path>` | The GCC oracle of `oracle: gcc` tests (see "GCC oracle"). Default `$KILN_GCC`, else `g++-16` on `PATH`. A GCC named by the flag or by `KILN_GCC` that does not run or does not identify as GCC is a usage error (exit 2); the default one missing drops the GCC comparisons. |
+| `--no-gcc` | Drop the GCC comparisons only. |
+| `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--update` | Rewrite existing pp and ast `.expected` goldens with the actual output. |
 | `--pp-compare tokens\|text` | Override every pp test's `pp-compare:` directive (see "pp comparison"). |
@@ -73,7 +76,7 @@ directives are also ERRORs.
 | `run-stdin: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`, to the program's stdin, as for `stdout:`. Repeated lines concatenate in order. |
 | `run-stdin-file: <path>` | `run` only. The program's stdin is the file's exact contents. The path is relative to the test's directory (use `Inputs/`, which discovery skips). It cannot be combined with `run-stdin:`. A missing file is an ERROR. |
 | `env: <NAME>=<value>` | `run` only. Sets an environment variable for the program (the inherited environment is otherwise kept). `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`; the value is the rest of the line, trimmed, and may be empty or contain `=`. It may be repeated, once per name. |
-| `oracle: clang \| none` | `run`/`pp`/`ast`/`verify` only. Whether to compare with the oracle. Defaults to `clang` for `run`, `pp` and `verify`, `none` for `ast` (the golden is the contract). `layout`, `vtables` and `ir` tests are always compared with the oracle (they have no golden), so the directive is an error there. |
+| `oracle: clang \| gcc \| none` | `run`/`pp`/`ast`/`verify` only (`gcc`: `run`, `compile-ok` and `compile-fail` only, not `verify`). Whether to compare with the oracle, and which: `gcc` compares with the GCC oracle instead of clang (see "GCC oracle"). Defaults to `clang` for `run`, `pp` and `verify`, `none` for `ast` (the golden is the contract). `layout`, `vtables` and `ir` tests are always compared with the oracle (they have no golden), so the directive is an error there. |
 | `ast-filter: <substr>` | `ast` only. Dump only the declarations whose qualified name contains `<substr>` (no whitespace): kiln gets `-fdump-ast-filter=<substr>`. |
 | `pp-compare: tokens \| text` | `pp` only. How outputs are compared (see "pp comparison"). Default `tokens`. |
 | `ast-implicit` | `ast` only. Include implicit declarations (implicit special members, injected-class-names, ...): kiln gets `-fdump-ast=implicit`, clang's dump is normalized as `xtask clang-ast --implicit`. Use with `ast-filter` to keep the builtin implicit declarations out. |
@@ -87,8 +90,8 @@ directives are also ERRORs.
 | `min-oracle: N` | Run only when every clang the test runs (the same clangs as `requires: clang>=`) is release `N` or later (`N` a positive major version); otherwise **SKIP** with the reason `min-oracle N; the compiler is clang <version>`. The line `crates/kiln_codegen/tests/ir_vs_clang.rs` reads for an IR case that follows a newer clang where an older one differs (that test compares such a case only under oracle `N` or later); kiln alone (no clang run) still runs the test, at its usual `-fclang-compat`. WP-405. |
 | `module: <name>=<path>` | A module interface unit the test imports, `<path>` relative to the test's directory (an absolute path is an ERROR); repeatable, each `<name>` once, listed in dependency order. Only for `compile-ok` (not `verify`), `compile-fail` and `no-crash` tests. kiln gets `-fmodule-file=<name>=<source>` (it builds the unit in-process); clang first precompiles each unit, in order, with `<clang> -std=<std> <args> <earlier units' -fmodule-file=...> --precompile -x c++-module <source> -o <scratch>/<name>.pcm` and then gets `-fmodule-file=<name>=<bmi>`; either way the flags follow `args` and precede the test file. A missing unit or one clang rejects is **ERROR**; a compiler that is neither kiln nor clang **SKIP**s. The same lines `ir_vs_clang` reads (spec/codegen.md §6, "IR-diff corpus"). WP-405. |
 | `requires: llvm>=N` / `requires: llvm<N` | Run only when every LLVM backend that consumes the test's IR has major version at least `N` (`>=`) or below `N` (`<`); `N` is a bare major (`llvm>=22.1` is an ERROR), each form at most once. The backends are kiln's when kiln is the compiler under test or the compared oracle (the major of the oracle release whose `/usr/lib/llvm-N` kiln gets as `KILN_LLVM_DIR`, "Oracle toolchain") and every clang the test runs (as for `clang>=`; a clang's LLVM major is its own major, an unreadable version never meets it). Otherwise **SKIP** with the reason `requires llvm>=N; kiln's backend is LLVM <M>` (or `the compiler`/`the oracle`; `... has no known LLVM`). Checked after the `clang` requirements. For IR goldens whose syntax an older LLVM rejects (clang 22's `dead_on_return`, AArch64 `"frame-pointer"="non-leaf-no-reserve"`; spec/codegen.md §6a) and for a workaround only an older backend needs. Unlike `clang>=`, it is never met vacuously by kiln: kiln's backend always counts. WP-386. |
-| `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. The oracle is a clang, so `skip(clang)` also implies `oracle: none`: a `run`, `pp` or `verify` test clang cannot compile is not compared with the oracle when kiln runs it (its own expectations, `stdout`/`exit`, `.expected` or `expected-*` comments, are the reference), and `oracle: clang` with `skip(clang)` is an error. `layout`, `vtables` and `ir` tests compare with the oracle only (no golden), so `skip(clang)` on them is an ERROR (`skip(clang)` does not apply to ... tests; a test neither compiler should run uses unqualified `skip:`). Running kiln alone would check nothing but that it compiles, which `compile-ok` already says. WP-258. |
-| `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
+| `skip[(kiln\|clang\|gcc)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind (`skip(gcc)`: when GCC is the compiler under test; it contradicts `oracle: gcc`, an ERROR). The oracle is a clang, so `skip(clang)` also implies `oracle: none`: a `run`, `pp` or `verify` test clang cannot compile is not compared with the oracle when kiln runs it (its own expectations, `stdout`/`exit`, `.expected` or `expected-*` comments, are the reference), and `oracle: clang` with `skip(clang)` is an error. `layout`, `vtables` and `ir` tests compare with the oracle only (no golden), so `skip(clang)` on them is an ERROR (`skip(clang)` does not apply to ... tests; a test neither compiler should run uses unqualified `skip:`). Running kiln alone would check nothing but that it compiles, which `compile-ok` already says. WP-258. |
+| `xfail[(kiln\|clang\|gcc)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
 `pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, each `requires` kind (`target-`, `clang>=`, `clang<`), `min-oracle`, `verify`, each `module` name, and each `skip`/`xfail` qualifier may appear
@@ -112,7 +115,8 @@ should name include directories repo-relative instead (cwd is the repo root).
 
 The compiler kind is detected from the first line of `<compiler> --version`.
 It is `kiln` if that line starts with `kiln version`, `clang` if it contains
-`clang version`, and `other` otherwise.
+`clang version`, `gcc` if it contains `(GCC)` or starts with `g++`/`gcc`,
+and `other` otherwise.
 
 ### Diagnostics
 
@@ -259,6 +263,44 @@ the requirement (`requires: clang>=22` under oracle 19 runs kiln at 22,
 are the oracle's (spec/pp.md "clang compatibility level"; WP-263). A test's
 own `args: -fclang-compat=N` comes later and wins. Without an oracle
 (`--no-oracle`, or a kiln oracle) kiln runs at its default level.
+
+### GCC oracle
+
+GCC 16.1 is the reference implementation of C++26 reflection (P2996,
+P3394, P3491, P3293; docs/plans/m6-reflection.md D1), which no clang
+release implements. A test that says `oracle: gcc` is compared with it
+instead of clang, when kiln is the compiler under test and a GCC is
+configured (`--gcc`, `KILN_GCC`, or `g++-16` on `PATH`; `scripts/env.sh`
+exports `KILN_GCC=.toolchain/gcc-16.1/bin/g++-16` on the dev host when
+it is installed there). GCC compiles the test **once**:
+
+| Kind | GCC runs | Compared |
+|---|---|---|
+| `compile-ok` / `compile-fail` | `-fsyntax-only` | the accept/reject verdict: GCC rejecting a `compile-ok` test, or accepting a `compile-fail` one, is **ERROR** (the expectation is in doubt) |
+| `run` | a compile and link, then one run of the binary with the test's `run-args`, stdin and `env` | the binary's stdout and exit status, which must equal kiln's binary's (a difference is a FAIL; GCC rejecting the test is ERROR) |
+
+IR and diagnostic wording are **never** compared with GCC (`diag:` and
+`strict-diags` still check kiln's own diagnostics). The command is
+`<gcc> [-x c|c++] -std=<std> <mode> <args> <file> [-o <out>]`, where
+`<args>` are the test's with the kiln- and clang-only flags dropped
+(`-fclang-compat=`, `-fkiln-*`, `-fconstexpr-report=`, `-stdlib=`,
+`-resource-dir <dir>`, `-Xclang <arg>`) and two renamed
+(`-ferror-limit=N` to `-fmax-errors=N`, `-fconstexpr-steps=N` to
+`-fconstexpr-ops-limit=N`). Reflection is `-std=c++26 -freflection` in
+both compilers (verified on GCC 16.1.0); libstdc++'s `<meta>` is GCC's
+default library.
+
+**Oracle advisory.** A GCC crash (a signal), `internal compiler error`,
+`sorry, unimplemented`, timeout or memory kill never fails kiln (the
+WP-102 policy for a pre-release oracle): the comparison is dropped, the
+test's result is whatever kiln's own expectations give, and the result
+line carries `[advisory: oracle crashed (<why>)]`; such a result is
+printed even when it passed, and the summary counts it ("Output").
+
+Without a GCC (none configured, `--no-gcc`, `--no-oracle`) an
+`oracle: gcc` test runs against its own expectations only; it never
+fails for want of GCC. CI does not configure one today (docs/status/perf.md
+"CI time"), so the comparisons run on the dev host.
 
 ### verify tests
 
@@ -519,6 +561,33 @@ signal, an internal-error exit, a hang, or going over the memory budget is a
 FAIL. It exists because the default error limit of 20 hid a reachable panic
 in `<string>` (WP-141), so `-ferror-limit=0` is part of the point (WP-145).
 
+## External corpora
+
+`cargo xtask test --external <dir>` compiles every `.c`, `.cc`, `.cpp` and
+`.cxx` file under `<dir>` (recursively, in path order) once with
+`-std=<std> -fsyntax-only -ferror-limit=0 <args> <file>` (GCC:
+`-fmax-errors=0` and the mapped args), taking `std:` and `args:` from the
+file's directive header when it parses as one and `c++26` (`c17`) with no
+args otherwise, with the file's directory as the working directory, on
+`--jobs` threads, under `--mem-limit` (plus kiln's stack reservation), 120 s
+each. The semantics are **never-crash**: a case passes when it compiles
+(exit 0) or is rejected cleanly (exit 1); a signal, a panic, an `internal
+compiler error`, a stack overflow, any other exit status, a timeout or a
+memory kill fails the run. Expected diagnostics are not checked.
+
+`<dir>` must lie outside the repository (after resolving symlinks; inside
+is a usage error, exit 2): it is for corpora that may not be published,
+such as crash reproducers reduced from private code. Nothing from it is
+written anywhere; only counts are printed,
+
+```
+external: ok.|FAILED. N cases: A accepted, R rejected cleanly, C crashed, T timed out, K killed in S.SSs
+```
+
+and, with `-v`, the failing cases' paths relative to `<dir>`. Exit status
+0 when no case failed, 1 when one did, 2 for an error. `cargo xtask bench
+--external` is the same run, measured (spec/bench.md "External corpora").
+
 ## Resource limits
 
 A runaway test must die alone. On 2026-10-31 one `kiln -fdump-ast` that
@@ -694,15 +763,18 @@ Output goes to stdout:
 - One header line: `running N tests with <compiler> (<kind>), oracle: <oracle|none>, J jobs, mem limit: <N MiB|none>`.
 - One block per result, in name order. A result line is
   `<STATUS> <name> [(<reason>)]`. With `-v`, the line ends with the elapsed time `[<secs>s]`.
-- PASS results are printed only with `-v`. SKIP, XFAIL and the failure
-  statuses are always printed.
+- PASS results are printed only with `-v`, unless they carry an oracle
+  advisory ("GCC oracle"). SKIP, XFAIL and the failure statuses are always
+  printed.
 - A failure result is followed by indented details (unified line diffs with
   `-expected +actual`, or `-oracle +actual`) and the commands that were run.
 - Last comes the summary:
 
 ```
-test result: ok|FAILED. P passed; F failed; X xfail; XP xpass; S skipped; E errors; K killed; T tests in S.SSs
+test result: ok|FAILED. P passed; F failed; X xfail; XP xpass; S skipped; E errors; K killed; [A advisory; ]T tests in S.SSs
 ```
+
+`A advisory; ` appears only when a result carries an oracle advisory.
 
 The parity report ("Parity report") counts KILLED in its fail column.
 

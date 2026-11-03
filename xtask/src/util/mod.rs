@@ -18,6 +18,8 @@ use json::Json;
 pub enum CompilerKind {
     Kiln,
     Clang,
+    /// GCC (`g++ (GCC) 16.1.0`): the reflection oracle (`oracle: gcc`).
+    Gcc,
     Other,
 }
 
@@ -26,20 +28,31 @@ impl CompilerKind {
         match self {
             Self::Kiln => "kiln",
             Self::Clang => "clang",
+            Self::Gcc => "gcc",
             Self::Other => "other",
         }
     }
 
     /// Classifies the first line of `--version` output: `kiln version ...`
-    /// is kiln, anything containing `clang version` is clang.
+    /// is kiln, anything containing `clang version` is clang, and a line
+    /// naming `(GCC)` or starting with `g++`/`gcc` (`g++-14 (Debian
+    /// 14.2.0-19) 14.2.0`) is GCC.
     pub fn from_version_line(first: &str) -> Self {
         if first.starts_with("kiln version") {
             Self::Kiln
         } else if first.contains("clang version") {
             Self::Clang
+        } else if first.contains("(GCC)") || first.starts_with("g++") || first.starts_with("gcc") {
+            Self::Gcc
         } else {
             Self::Other
         }
+    }
+
+    /// Does this compiler take clang's driver flags and dumps (`-Xclang
+    /// -verify`, `-fmodule-file=`, `-Xclang -ast-dump`)? kiln and clang do.
+    pub fn speaks_clang(self) -> bool {
+        matches!(self, Self::Kiln | Self::Clang)
     }
 }
 
@@ -269,7 +282,13 @@ mod tests {
             CompilerKind::from_version_line("Ubuntu clang version 19.1.7 (++2025)"),
             CompilerKind::Clang
         );
-        assert_eq!(CompilerKind::from_version_line("g++ (GCC) 14.2"), CompilerKind::Other);
+        assert_eq!(CompilerKind::from_version_line("g++ (GCC) 16.1.0"), CompilerKind::Gcc);
+        assert_eq!(
+            CompilerKind::from_version_line("g++-14 (Debian 14.2.0-19) 14.2.0"),
+            CompilerKind::Gcc
+        );
+        assert_eq!(CompilerKind::from_version_line("icpx (R) 2025"), CompilerKind::Other);
+        assert!(!CompilerKind::Gcc.speaks_clang() && CompilerKind::Kiln.speaks_clang());
     }
 
     /// WP-239: the version `requires: clang>=` compares against.

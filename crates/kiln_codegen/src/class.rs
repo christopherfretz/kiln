@@ -42,8 +42,8 @@ impl Cg<'_> {
         let ast = self.ast;
         let n = ast.decls.get(d);
         match n.kind() {
-            DeclKind::CXXConstructor | DeclKind::CXXDestructor | DeclKind::CXXConversion => n.ctx(),
-            DeclKind::CXXMethod => {
+            DeclKind::CXXConstructor | DeclKind::CXXDestructor => n.ctx(),
+            DeclKind::CXXMethod | DeclKind::CXXConversion => {
                 let f = ast.decls.function(d)?;
                 if f.spec.storage() == FnStorage::Static || f.spec.has_explicit_object() {
                     None
@@ -2057,7 +2057,7 @@ impl Cg<'_> {
     /// `d` is an explicit object member function ([dcl.fct]/6): called
     /// like a non-member function, the object being its first argument.
     pub(crate) fn is_explicit_object_method(&self, d: DeclId) -> bool {
-        self.ast.decls.get(d).kind() == DeclKind::CXXMethod
+        matches!(self.ast.decls.get(d).kind(), DeclKind::CXXMethod | DeclKind::CXXConversion)
             && self.ast.decls.function(d).is_some_and(|f| f.spec.has_explicit_object())
     }
 

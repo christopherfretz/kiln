@@ -85,7 +85,7 @@ impl Sema<'_, '_> {
         false
     }
 
-    fn record_bits(&self, def: DeclId) -> DefinitionBits {
+    pub(crate) fn record_bits(&self, def: DeclId) -> DefinitionBits {
         self.ast.decls.record(def).map(|x| x.defn).unwrap_or_default()
     }
 
@@ -128,7 +128,7 @@ impl Sema<'_, '_> {
     /// member, an rvalue reference member, a non-public base) ends the
     /// walk, else the first non-structural subobject is named and the
     /// walk continues into its type.
-    fn not_structural_notes(&self, ty: QualType) -> Vec<Diag> {
+    pub(crate) fn not_structural_notes(&self, ty: QualType) -> Vec<Diag> {
         let mut notes = Vec::new();
         let mut ty = ty;
         for _ in 0..MAX_DEPTH {

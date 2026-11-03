@@ -337,7 +337,7 @@ fn in_anon_ns(ast: &Ast, d: DeclId) -> bool {
 
 /// True if the namespace-scope function or variable `d` has internal
 /// linkage by its own declaration ([basic.link]/3): `static`, or a
-/// non-`extern`/non-`inline` `const` variable.
+/// non-`extern`/non-`inline` non-volatile `const` variable.
 fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
     let first = ast.first(d);
     let n = ast.decls.get(first);
@@ -355,10 +355,11 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
             }
 
             let q = ast.types.canonical(n.ty().unwrap_or(QualType::INT));
-            let is_const = ast.types.effective_quals(q).is_const() || const_array(ast, q);
-            // [basic.link]/3.2 (P2788): a `const` variable attached to a
-            // named module has module (or, exported, external) linkage.
-            is_const
+            // [basic.link]/3.2: only a non-volatile `const` type gives
+            // internal linkage (`const volatile int cv = 1;` is external).
+            // P2788: a `const` variable attached to a named module has
+            // module (or, exported, external) linkage.
+            const_non_volatile(ast, q)
                 && !v.spec.is_inline()
                 && (!ast.modules.active || ast.module_attachment(first).is_none())
                 && v.spec.storage() != VarStorage::Extern
@@ -633,15 +634,17 @@ fn fn_is_inline(ast: &Ast, f: DeclId) -> bool {
     })
 }
 
-fn const_array(ast: &Ast, q: QualType) -> bool {
+/// Whether canonical type `q` is const-qualified and not volatile
+/// ([basic.link]/3.2), the qualifiers of an array being those of its
+/// element type ([basic.type.qualifier]/3).
+fn const_non_volatile(ast: &Ast, q: QualType) -> bool {
     let mut q = q;
+    let mut quals = ast.types.effective_quals(q);
     while let Some(e) = ast.types.element(q) {
         q = ast.types.canonical(e);
-        if ast.types.effective_quals(q).is_const() {
-            return true;
-        }
+        quals |= ast.types.effective_quals(q);
     }
-    false
+    quals.is_const() && !quals.is_volatile()
 }
 
 /// The spelling of `d`'s name (empty for unnamed entities).
@@ -2165,7 +2168,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     self.out.push('E');
                 }
             }
-            Scalar::Reflection { .. } => self.out.push_str("XLi0EE"),
+            // Vendor stand-in (spec/reflection-repr.md §4) until the
+            // real reflection mangling: `L u6__info <id> E`, the
+            // translation unit's reflection id, so distinct reflections
+            // never collide within a TU.
+            Scalar::Reflection { id, .. } => {
+                use std::fmt::Write as _;
+                let _ = write!(self.out, "Lu6__info{}E", id.index());
+            }
         }
     }
 

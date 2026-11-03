@@ -135,6 +135,10 @@ enum Node {
     Expr(ExprId),
     Stmt(StmtId),
     Attr(AttrId),
+    /// An annotation (P3394 `[[=e]]`; spec/annotations.md §6):
+    /// `CXX26AnnotationAttr <loc> 'T' value=...`, or `dependent` with the
+    /// operand as a child.
+    Annot(crate::annot::AnnId),
     /// The condition variable of an `if`/`switch`/`while`/`for`: a
     /// `DeclStmt` line with the declaration as its child (as clang).
     CondVar(DeclId),
@@ -472,6 +476,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 Node::Expr(e) => self.expr_line(e),
                 Node::Stmt(s) => self.stmt_line(s),
                 Node::Attr(a) => self.attr_line(a),
+                Node::Annot(a) => self.annot_line(a),
                 Node::CondVar(_) => self.line.push_str("DeclStmt"),
                 Node::Base(r, i) => self.base_line(r, i),
                 Node::CtorInit(c, i) => self.ctor_init_line(c, i),
@@ -567,6 +572,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     && let Some(e) = ExprId::from_raw(n.a)
                 {
                     kids.push((Node::Expr(e), None));
+                }
+            }
+            Node::Annot(a) => {
+                let n = self.ast.annots.get(a);
+                if n.value.is_none() {
+                    kids.push((Node::Expr(n.expr), None));
                 }
             }
             Node::Base(..)
@@ -672,6 +683,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             if self.opts.implicit || ast.attrs.get(a).flags & 1 == 0 {
                 kids.push((Node::Attr(a), None));
             }
+        }
+        let annots = ast.annots.of_decl(d);
+        for a in ast.lists.iter::<crate::annot::AnnId>(annots) {
+            kids.push((Node::Annot(a), None));
         }
         // clang adds a class's `FinalAttr` when the definition starts,
         // after the attributes of its head.
@@ -1964,6 +1979,20 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         self.line.push_str(" ]");
     }
 
+    /// One annotation: the frozen underlying constant and its type, or
+    /// `dependent` (the operand follows as a child).
+    fn annot_line(&mut self, a: crate::annot::AnnId) {
+        let n = *self.ast.annots.get(a);
+        self.line.push_str("CXX26AnnotationAttr");
+        self.id('n', a.index());
+        self.loc(n.loc);
+        self.ty(n.written_type);
+        match n.value {
+            Some(v) => self.value(v),
+            None => self.line.push_str(" dependent"),
+        }
+    }
+
     fn attr_line(&mut self, a: AttrId) {
         let node = *self.ast.attrs.get(a);
         if let Some(name) = attrs::class_name(&node) {
@@ -2300,6 +2329,23 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 if let crate::expr::TypeidOperand::Type(t) = exprs.typeid_operand(e) {
                     self.line.push_str(" type_operand=");
                     self.bare_ty(t);
+                }
+            }
+            // kiln: the reflectee's kind and its stable form
+            // (spec/reflection-repr.md §5); `dependent` before
+            // instantiation.
+            ExprKind::CXXReflectExpr => {
+                let r = ast.reflect_operand(e);
+                self.line.push(' ');
+                self.line.push_str(r.kind_name());
+                if let Some(id) = exprs.reflect_value(e) {
+                    self.line.push(' ');
+                    crate::consts::PrintEnv::reflection(ast, id, &mut self.line);
+                } else {
+                    self.line.push_str(" dependent");
+                    if let crate::reflect::Reflectee::Type(t) = r {
+                        self.ty(t);
+                    }
                 }
             }
             // clang prints only the trait; kiln adds the type operands.
