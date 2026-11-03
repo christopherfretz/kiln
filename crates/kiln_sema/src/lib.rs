@@ -197,8 +197,9 @@ pub struct Sema<'a, 'sm> {
     /// The class layouts computed for the deallocation-function lookup of
     /// virtual destructors ([`Sema::complete_class_align`]), kept between
     /// classes so a class lattice is laid out once rather than once per
-    /// class (WP-450). Only complete classes are laid out through it, and
-    /// a complete class's layout never changes within the TU.
+    /// class (WP-450). It holds complete classes only (a class still being
+    /// defined is laid out over it but not kept, WP-428), and a complete
+    /// class's layout never changes within the TU.
     pub(crate) layout_cache: kiln_abi::LayoutCache,
     /// The `#pragma pack` directives seen, in order (location and the
     /// spelling of the argument list).
