@@ -1,0 +1,89 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct Tag definition
+| `-FieldDecl id 'int'
+|-VarDecl leading 'int'
+| `-CXX26AnnotationAttr 'int' value=1
+|-VarDecl trailing 'int'
+| `-CXX26AnnotationAttr 'int' value=2
+|-VarDecl both 'int'
+| |-CXX26AnnotationAttr 'int' value=3
+| `-CXX26AnnotationAttr 'int' value=4
+|-FunctionDecl function 'void ()'
+| `-CXX26AnnotationAttr 'Tag' value={5}
+|-FunctionDecl parameters 'void (int, int)'
+| |-ParmVarDecl a 'int'
+| | `-CXX26AnnotationAttr 'int' value=6
+| `-ParmVarDecl b 'int'
+|   `-CXX26AnnotationAttr 'int' value=7
+|-NamespaceDecl ns
+| `-CXX26AnnotationAttr 'int' value=8
+|-TypeAliasDecl Alias 'int'
+| `-CXX26AnnotationAttr 'int' value=9
+|-TypedefDecl Typedef 'int'
+| `-CXX26AnnotationAttr 'int' value=10
+|-CXXRecordDecl struct Record definition
+| |-CXX26AnnotationAttr 'int' value=11
+| |-FieldDecl member 'int'
+| | `-CXX26AnnotationAttr 'int' value=12
+| |-FieldDecl bits 'int'
+| | |-ConstantExpr 'int' value=3
+| | | `-IntegerLiteral 'int' 3
+| | `-CXX26AnnotationAttr 'int' value=13
+| |-VarDecl static_member 'int' static
+| | `-CXX26AnnotationAttr 'int' value=14
+| |-CXXMethodDecl method 'void ()'
+| | `-CXX26AnnotationAttr 'int' value=15
+| |-CXXConstructorDecl Record 'void ()'
+| | `-CXX26AnnotationAttr 'int' value=16
+| `-FriendDecl
+|   `-FunctionDecl parent friend_undeclared defined_friend 'void ()' implicit-inline
+|     |-CompoundStmt
+|     `-CXX26AnnotationAttr 'int' value=17
+|-EnumDecl Enum
+| |-CXX26AnnotationAttr 'int' value=18
+| `-EnumConstantDecl enumerator 'Enum' value=0
+|   `-CXX26AnnotationAttr 'int' value=19
+|-EnumDecl class Scoped 'int'
+| |-CXX26AnnotationAttr 'int' value=20
+| `-EnumConstantDecl x 'Scoped' value=0
+|-FunctionDecl locals 'void ()'
+| `-CompoundStmt
+|   |-DeclStmt
+|   | `-VarDecl used local 'int' cinit
+|   |   |-IntegerLiteral 'int' 0
+|   |   `-CXX26AnnotationAttr 'int' value=21
+|   |-DeclStmt
+|   | `-VarDecl static_local 'int' static
+|   |   `-CXX26AnnotationAttr 'int' value=22
+|   `-CStyleCastExpr 'void' <ToVoid>
+|     `-DeclRefExpr 'int' lvalue Var 'local' 'int'
+|-CXXRecordDecl referenced struct Pair definition
+| |-FieldDecl referenced x 'int'
+| `-FieldDecl referenced y 'int'
+|-BindingDecl px 'int'
+| `-MemberExpr 'int' lvalue .x
+|   `-DeclRefExpr 'Pair' lvalue Decomposition '' 'Pair'
+|-BindingDecl py 'int'
+| `-MemberExpr 'int' lvalue .y
+|   `-DeclRefExpr 'Pair' lvalue Decomposition '' 'Pair'
+|-DecompositionDecl used 'Pair' cinit
+| |-CXXFunctionalCastExpr 'Pair' functional cast to Pair <NoOp>
+| | `-InitListExpr 'Pair'
+| |   |-IntegerLiteral 'int' 1
+| |   `-IntegerLiteral 'int' 2
+| |-BindingDecl px 'int'
+| | `-MemberExpr 'int' lvalue .x
+| |   `-DeclRefExpr 'Pair' lvalue Decomposition '' 'Pair'
+| |-BindingDecl py 'int'
+| | `-MemberExpr 'int' lvalue .y
+| |   `-DeclRefExpr 'Pair' lvalue Decomposition '' 'Pair'
+| `-CXX26AnnotationAttr 'int' value=23
+|-VarDecl floating 'double'
+| `-CXX26AnnotationAttr 'double' value=2.45e1
+|-VarDecl other_types 'int'
+| |-CXX26AnnotationAttr 'char' value=99
+| `-CXX26AnnotationAttr 'std::nullptr_t' value=nullptr
+|-VarDecl used target 'const int' constexpr cinit value=0
+| `-IntegerLiteral 'int' 0
+`-VarDecl pointer 'int'
+  `-CXX26AnnotationAttr 'const int *' value=&target

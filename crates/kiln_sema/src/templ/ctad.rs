@@ -277,6 +277,9 @@ impl Sema<'_, '_> {
         // clang forms the placeholder `X` for the guide's declarator name
         // while parsing it, which fixes the spelling every later deduced
         // `X` type prints with (`TypeContext::deduced_template_specialization`).
+        // [dcl.attr.annotation]/1: a deduction guide declares no entity.
+        self.reject_annotations_in(&ds.attrs, Some("a deduction guide"));
+        self.reject_annotations_in(&d.attrs, Some("a deduction guide"));
         let placeholder_name = self.template_name_for(template);
         let _ = self.ast.types.deduced_template_specialization(placeholder_name, None);
         let sloc = d.special.map_or(d.loc, |(_, l)| l);
