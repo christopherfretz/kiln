@@ -13,7 +13,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind};
 pub use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::DeclName;
 use kiln_ast::{DeclId, QualType};
-use kiln_source::fx::FxHashSet;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
@@ -679,7 +679,7 @@ impl Sema<'_, '_> {
         depth: usize,
     ) -> Option<ClassHit> {
         let mut leaves =
-            self.class_leaves(def, name, kind, depth, &mut (FxHashSet::default(), false));
+            self.class_leaves(def, name, kind, depth, &mut (FxHashMap::default(), false));
         self.remove_dominated(&mut leaves);
         let mut it = leaves.into_iter();
         let (found, path, _) = it.next()?;
@@ -722,21 +722,23 @@ impl Sema<'_, '_> {
     /// `barren` holds the classes whose search found nothing: a class
     /// reached again through another path (a virtual lattice) is not
     /// searched again, so a name declared nowhere costs one walk per class,
-    /// not one per path (WP-400). Its flag records that the depth limit
-    /// cut the search, after which nothing more is recorded.
+    /// not one per path (WP-400). A class whose search the depth limit
+    /// cut is recorded with the depth it was searched at, and searched
+    /// again only from a shallower one (WP-414: without that, a lattice
+    /// deeper than the limit was searched once per path again).
     fn class_leaves(
         &self,
         def: DeclId,
         name: DeclName,
         kind: LookupKind,
         depth: usize,
-        barren: &mut (FxHashSet<DeclId>, bool),
+        barren: &mut (FxHashMap<DeclId, usize>, bool),
     ) -> Vec<Leaf> {
         if depth > 256 {
             barren.1 = true;
             return Vec::new();
         }
-        if barren.0.contains(&def) {
+        if barren.0.get(&def).is_some_and(|&d| d <= depth) {
             return Vec::new();
         }
         let mut own = self.filter(self.ast.lookup_local(def, name).iter_ordinary().collect(), kind);
@@ -762,6 +764,7 @@ impl Sema<'_, '_> {
         let idx: Vec<u32> = self.ast.lists.get(rec.bases).to_vec();
         let specs: Vec<kiln_ast::decl::BaseSpec> =
             self.ast.decls.bases(def, &self.ast.lists).copied().collect();
+        let cut_above = std::mem::replace(&mut barren.1, false);
         let mut out = Vec::new();
         for (&i, spec) in idx.iter().zip(specs) {
             let Some(b) = self.ast.types.as_record(spec.ty) else { continue };
@@ -777,13 +780,16 @@ impl Sema<'_, '_> {
                 }
                 out.push((f, p, vs));
                 if out.len() > 4096 {
+                    barren.1 |= cut_above;
                     return out;
                 }
             }
         }
-        if out.is_empty() && !barren.1 {
-            barren.0.insert(def);
+        if out.is_empty() {
+            // Barren at any depth unless the limit cut it.
+            barren.0.insert(def, if barren.1 { depth } else { 0 });
         }
+        barren.1 |= cut_above;
         out
     }
 

@@ -109,6 +109,48 @@ pub(crate) fn override_closure(ast: &Ast, m: DeclId) -> Vec<DeclId> {
     out
 }
 
+/// The override roots of `m` (first declarations that override nothing,
+/// reached from `m` through the methods it overrides; `m` itself if it
+/// overrides nothing), memoised per method in `memo`. A postorder over
+/// the override graph with an explicit stack (an expanded method is not
+/// expanded again, so malformed cyclic records terminate).
+fn override_roots<'m>(
+    ast: &Ast,
+    m: DeclId,
+    memo: &'m mut FxHashMap<DeclId, Vec<DeclId>>,
+) -> &'m [DeclId] {
+    let m = ast.first(m);
+    let mut expanded: FxHashSet<DeclId> = FxHashSet::default();
+    let mut stack = vec![(m, false)];
+    while let Some((y, ready)) = stack.pop() {
+        if memo.contains_key(&y) {
+            continue;
+        }
+        if !ready {
+            if expanded.insert(y) {
+                stack.push((y, true));
+                stack.extend(overridden(ast, y).map(|o| (ast.first(o), false)));
+            }
+            continue;
+        }
+        let mut set: Vec<DeclId> = Vec::new();
+        let mut any = false;
+        for o in overridden(ast, y) {
+            any = true;
+            for &r in memo.get(&ast.first(o)).into_iter().flatten() {
+                if !set.contains(&r) {
+                    set.push(r);
+                }
+            }
+        }
+        if !any {
+            set.push(y);
+        }
+        memo.insert(y, set);
+    }
+    memo.get(&m).map_or(&[], Vec::as_slice)
+}
+
 /// The subobject graph of `record` (any declaration). Truncated at
 /// [`MAX_SUBOBJECTS`].
 pub fn subobject_graph(ast: &Ast, record: DeclId) -> Vec<Subobject> {
@@ -123,22 +165,27 @@ pub fn subobject_graph(ast: &Ast, record: DeclId) -> Vec<Subobject> {
     let mut vbases: Vec<DeclId> = Vec::new();
     let mut visited: FxHashSet<DeclId> = FxHashSet::default();
     collect_vbases(ast, root, &mut vbases, &mut visited, 0);
+    // The first numbered subobject naming each class as a direct virtual
+    // base (filled as subobjects are numbered: linear, not a rescan per
+    // virtual base).
+    let mut named: FxHashMap<DeclId, (SubobjectId, u16)> = FxHashMap::default();
+    let mut scanned = 0;
     for v in vbases {
         if out.len() >= MAX_SUBOBJECTS {
             break;
         }
         // The parent: the first subobject whose class names `v` as a
         // direct virtual base.
-        let (parent, base_index) = out
-            .iter()
-            .enumerate()
-            .find_map(|(i, s)| {
-                direct_bases(ast, s.class)
-                    .into_iter()
-                    .find(|b| b.is_virtual && b.class == v)
-                    .map(|b| (SubobjectId(u16::try_from(i).unwrap_or(u16::MAX)), b.index))
-            })
-            .unwrap_or((SubobjectId::COMPLETE, 0));
+        for (i, s) in out.iter().enumerate().skip(scanned) {
+            for b in direct_bases(ast, s.class) {
+                if b.is_virtual {
+                    let id = SubobjectId(u16::try_from(i).unwrap_or(u16::MAX));
+                    named.entry(b.class).or_insert((id, b.index));
+                }
+            }
+        }
+        scanned = out.len();
+        let (parent, base_index) = named.get(&v).copied().unwrap_or((SubobjectId::COMPLETE, 0));
         number_subtree(ast, Subobject { class: v, parent, base_index, is_virtual: true }, &mut out);
     }
     out
@@ -194,18 +241,26 @@ fn collect_vbases(
 /// `(subobject, method)` pair with more than one entry has no unique
 /// final overrider ([class.virtual]/2; an error when the class is
 /// complete, reported by sema).
+///
+/// Linear in the subobjects times the override families (WP-414). The
+/// maximal candidates for a method among the subobjects containing a
+/// subobject `y` are the union of its containers' sets (no member of one
+/// container's set can contain a member of another's, or it would be a
+/// candidate above that container too), or `{y}` when that union is
+/// empty and `y`'s class overrides the method. They are computed once
+/// per subobject for the root `m0` of each method's override closure (a
+/// method that overrides nothing), not once per method: an overrider of
+/// `m` also overrides `m0`, so when every maximal `m0` candidate above `x`
+/// overrides `x`'s `m` too they are exactly `m`'s final overriders in `x`
+/// (and otherwise, which valid code does not produce, `m` is resolved on
+/// its own).
 pub(crate) fn all_final_overriders(
     ast: &Ast,
     subobjects: &[Subobject],
 ) -> Vec<(SubobjectId, DeclId, DeclId, SubobjectId)> {
     let n = subobjects.len();
     let sid = |i: usize| SubobjectId(u16::try_from(i).unwrap_or(u16::MAX));
-    // The subobjects of each class, and each class's direct virtual
-    // bases, for the containment edges.
-    let mut by_class: FxHashMap<DeclId, Vec<usize>> = FxHashMap::default();
-    for (i, s) in subobjects.iter().enumerate() {
-        by_class.entry(s.class).or_default().push(i);
-    }
+    // Each class's direct virtual bases, for the containment edges.
     let mut vcontainers: FxHashMap<DeclId, Vec<usize>> = FxHashMap::default();
     for (i, s) in subobjects.iter().enumerate() {
         for b in direct_bases(ast, s.class) {
@@ -214,76 +269,165 @@ pub(crate) fn all_final_overriders(
             }
         }
     }
-    // Per class: overridden method → the class's own virtual that
-    // overrides it (or is it).
-    let mut inv: FxHashMap<DeclId, FxHashMap<DeclId, DeclId>> = FxHashMap::default();
-    for &c in by_class.keys() {
-        let mut map = FxHashMap::default();
-        for f in own_virtuals(ast, c) {
-            for m in override_closure(ast, f) {
-                map.entry(m).or_insert(f);
-            }
-        }
-        inv.insert(c, map);
-    }
-    let containers = |i: usize| -> Vec<usize> {
-        let s = subobjects[i];
-        if i == 0 {
-            Vec::new()
-        } else if s.is_virtual {
-            vcontainers.get(&s.class).cloned().unwrap_or_default()
-        } else {
-            vec![s.parent.index()]
-        }
-    };
-    // The subobjects containing each subobject (itself included), as a
-    // sorted list of indices.
-    let ancestors = |i: usize| -> Vec<usize> {
-        let mut seen: FxHashSet<usize> = FxHashSet::default();
-        let mut work = vec![i];
-        seen.insert(i);
-        while let Some(x) = work.pop() {
-            for c in containers(x) {
-                if c < n && seen.insert(c) {
-                    work.push(c);
-                }
-            }
-        }
-        let mut v: Vec<usize> = seen.into_iter().collect();
-        v.sort_unstable();
-        v
-    };
-    let mut anc_cache: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
-    let mut out = Vec::new();
-    for (x, sub) in subobjects.iter().enumerate() {
-        let methods = own_virtuals(ast, sub.class);
-        if methods.is_empty() {
+    // The subobjects directly containing each subobject.
+    let containers: Vec<Vec<usize>> = subobjects
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let v = if i == 0 {
+                Vec::new()
+            } else if s.is_virtual {
+                vcontainers.get(&s.class).cloned().unwrap_or_default()
+            } else {
+                vec![s.parent.index()]
+            };
+            v.into_iter().filter(|&c| c < n && c != i).collect()
+        })
+        .collect();
+    // Per class: its own virtuals, and each override root (a method that
+    // overrides nothing) → the class's own virtual that overrides it (or
+    // is it). The roots of a method are memoised from those of the
+    // methods it directly overrides, not from its whole override closure
+    // (which is as deep as the hierarchy).
+    let mut own: FxHashMap<DeclId, Vec<DeclId>> = FxHashMap::default();
+    let mut by_root: FxHashMap<DeclId, FxHashMap<DeclId, DeclId>> = FxHashMap::default();
+    let mut roots: FxHashMap<DeclId, Vec<DeclId>> = FxHashMap::default();
+    for s in subobjects {
+        if own.contains_key(&s.class) {
             continue;
         }
-        let anc_x = anc_cache.entry(x).or_insert_with(|| ancestors(x)).clone();
-        for m in methods {
-            let mut cands: Vec<(DeclId, usize)> = Vec::new();
-            for &t in &anc_x {
-                if let Some(&f) = inv.get(&subobjects[t].class).and_then(|mp| mp.get(&m)) {
-                    cands.push((f, t));
+        let fs = own_virtuals(ast, s.class);
+        let mut map = FxHashMap::default();
+        for &f in &fs {
+            for &r in override_roots(ast, f, &mut roots) {
+                map.entry(r).or_insert(f);
+            }
+        }
+        by_root.insert(s.class, map);
+        own.insert(s.class, fs);
+    }
+    let rooted =
+        |t: usize, m0: DeclId| by_root.get(&subobjects[t].class).and_then(|mp| mp.get(&m0));
+    // Whether `f` is or overrides `m` (closures cached per `f`; only the
+    // final overriders found are checked).
+    let mut closures: FxHashMap<DeclId, FxHashSet<DeclId>> = FxHashMap::default();
+    let mut overrides = |f: DeclId, m: DeclId| {
+        f == m
+            || closures
+                .entry(f)
+                .or_insert_with(|| override_closure(ast, f).into_iter().collect())
+                .contains(&m)
+    };
+    // The (subobject, method) pairs, grouped by root.
+    let mut pairs: Vec<(DeclId, usize, DeclId)> = Vec::new();
+    for (x, sub) in subobjects.iter().enumerate() {
+        for &m in own.get(&sub.class).into_iter().flatten() {
+            let m0 = roots.get(&m).and_then(|r| r.first()).copied().unwrap_or(m);
+            pairs.push((m0, x, m));
+        }
+    }
+    pairs.sort_unstable_by_key(|p| (p.0, p.1));
+    let mut walk = Maximal::new(n);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < pairs.len() {
+        let m0 = pairs[i].0;
+        while i < pairs.len() && pairs[i].0 == m0 {
+            let (_, x, m) = pairs[i];
+            i += 1;
+            let above = walk.above(x, &containers, |y| rooted(y, m0).is_some());
+            let mut found: Vec<(DeclId, usize)> = Vec::with_capacity(above.len());
+            for &t in above {
+                match rooted(t, m0) {
+                    Some(&f) if overrides(f, m) => found.push((f, t)),
+                    _ => break,
                 }
             }
-            let mut finals: Vec<(DeclId, usize)> = Vec::new();
-            for &(f, t) in &cands {
-                let anc_t = anc_cache.entry(t).or_insert_with(|| ancestors(t));
-                let dominated =
-                    cands.iter().any(|&(_, t2)| t2 != t && anc_t.binary_search(&t2).is_ok());
-                if !dominated {
-                    finals.push((f, t));
-                }
+            if found.len() != above.len() {
+                // Not one family (invalid override records): resolve `m`
+                // on its own.
+                let cand = |y: usize| {
+                    own.get(&subobjects[y].class)
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                        .find(|&f| override_closure(ast, f).contains(&m))
+                };
+                let mut alone = Maximal::new(n);
+                found = alone
+                    .above(x, &containers, |y| cand(y).is_some())
+                    .iter()
+                    .filter_map(|&t| Some((cand(t)?, t)))
+                    .collect();
             }
-            for (f, t) in finals {
+            for (f, t) in found {
                 out.push((sid(x), m, f, sid(t)));
             }
         }
+        walk.reset();
     }
     out.sort_by_key(|e| (e.0, e.1, e.3, e.2));
     out
+}
+
+/// The memoised maximal-candidate walk of [`all_final_overriders`] for
+/// one method (dense by subobject; `reset` between methods).
+struct Maximal {
+    finals: Vec<Option<Vec<usize>>>,
+    touched: Vec<usize>,
+    stack: Vec<(usize, bool)>,
+}
+
+impl Maximal {
+    fn new(n: usize) -> Self {
+        Self { finals: vec![None; n], touched: Vec::new(), stack: Vec::new() }
+    }
+
+    /// The maximal candidates (`is_cand`) among the subobjects containing
+    /// `x`, itself included: a postorder over the containment DAG
+    /// (acyclic; an explicit stack).
+    fn above(
+        &mut self,
+        x: usize,
+        containers: &[Vec<usize>],
+        is_cand: impl Fn(usize) -> bool,
+    ) -> &[usize] {
+        self.stack.push((x, false));
+        while let Some((y, ready)) = self.stack.pop() {
+            if self.finals[y].is_some() {
+                continue;
+            }
+            if !ready {
+                self.stack.push((y, true));
+                for &c in &containers[y] {
+                    if self.finals[c].is_none() {
+                        self.stack.push((c, false));
+                    }
+                }
+                continue;
+            }
+            let mut set: Vec<usize> = Vec::new();
+            for &c in &containers[y] {
+                for &t in self.finals[c].as_deref().unwrap_or(&[]) {
+                    if !set.contains(&t) {
+                        set.push(t);
+                    }
+                }
+            }
+            if set.is_empty() && is_cand(y) {
+                set.push(y);
+            }
+            self.finals[y] = Some(set);
+            self.touched.push(y);
+        }
+        self.finals[x].as_deref().unwrap_or(&[])
+    }
+
+    fn reset(&mut self) {
+        for y in self.touched.drain(..) {
+            self.finals[y] = None;
+        }
+    }
 }
 
 /// The subobjects and final overriders of complete class `record` (any

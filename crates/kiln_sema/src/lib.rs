@@ -206,7 +206,7 @@ pub struct Sema<'a, 'sm> {
     /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
     /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
     pub gnu: bool,
-    /// The clang major `-fclang-compat` names (19 or 22; default 19): the
+    /// The clang major `-fclang-compat` names (19 or 22; default 22, as the driver): the
     /// few spellings that differ between the two releases follow it, e.g.
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
     /// "Predefined identifiers").
@@ -419,6 +419,11 @@ pub struct Sema<'a, 'sm> {
     /// clang's `err_typecheck_field_variable_size` there
     /// ([`Sema::type_for_declarator_at`]).
     pub(crate) declarator_field: bool,
+    /// The diagnostic an alias-declaration's type-id left for its name: a
+    /// variable length array bound at namespace or class scope folded
+    /// (`-Wgnu-folding-constant`) or rejected (clang
+    /// `CheckTypedefForVariablyModifiedType` on the `TypeAliasDecl`).
+    pub(crate) pending_alias_vla: Option<DiagId>,
     /// Replaying a non-dependent class-scope using-declaration of a
     /// pattern: clang walks the pattern's shadow list, which is newest
     /// first, so the instantiation's shadows come in reverse (WP-159).
@@ -553,6 +558,11 @@ pub struct Sema<'a, 'sm> {
     pub(crate) vtable_uses: Vec<(DeclId, Loc)>,
     /// The classes ever pushed on `vtable_uses` (first declarations).
     pub(crate) vtables_used: kiln_source::fx::FxHashSet<DeclId>,
+    /// The final overriders in each used vtable, by class (first
+    /// declaration; `class/virtual/used.rs`, WP-414): each use of a
+    /// vtable re-marks its bases' overriders, so a lattice computed them
+    /// once per use and class.
+    pub(crate) vtable_finals: kiln_source::fx::FxHashMap<DeclId, std::rc::Rc<[DeclId]>>,
     /// Module classes whose vtables are defined here even when their key
     /// function is defined in another unit (clang `DefinitionRequired`;
     /// spec/modules.md §7).
@@ -808,7 +818,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             coro_aligned_allocation: false,
             range_lifetime_extension: false,
             gnu: false,
-            clang_compat: 19,
+            clang_compat: 22,
             nns_start: None,
             gnu_lib_builtins: false,
             pack: (0, Vec::new()),
@@ -864,6 +874,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             deferring_call_ref: false,
             declarator_int_recovery: false,
             declarator_field: false,
+            pending_alias_vla: None,
             reverse_using_shadows: false,
             va_list_type: None,
             ext_vector_typedefs: Vec::new(),
@@ -901,6 +912,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             synth: Vec::new(),
             vtable_uses: Vec::new(),
             vtables_used: kiln_source::fx::FxHashSet::default(),
+            vtable_finals: kiln_source::fx::FxHashMap::default(),
             module_vtables: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
             delegating: Vec::new(),
@@ -1038,6 +1050,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             d = d.context(self.inst.stack.context_key());
             let sev = self.diags.severity_at(id, d.loc());
             if self.inst.stack.is_sfinae() {
+                if self.inst.suppress_access.get() && is_access_error(id) {
+                    if let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
+                        && s.first.is_none()
+                    {
+                        s.first = Some(d);
+                    }
+                    return;
+                }
                 if (sev >= kiln_diag::Severity::Error || is_sfinae_failure(id))
                     && let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
                 {
@@ -1667,6 +1687,20 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 /// substitution failure whatever their severity, even when disabled
 /// (`Sema::EmitDiagnostic` consults the SFINAE response before the
 /// mapping). The C99-designator extensions are not among them.
+/// An access-control error ([class.access]) that clang's
+/// `SuppressAccessChecks` discards.
+fn is_access_error(id: DiagId) -> bool {
+    matches!(
+        id,
+        DiagId::sema_access_base_conv
+            | DiagId::sema_access_base_ctor
+            | DiagId::sema_access_ctor
+            | DiagId::sema_access_dtor
+            | DiagId::sema_access_field_ctor
+            | DiagId::sema_access_member
+    )
+}
+
 fn is_sfinae_failure(id: DiagId) -> bool {
     matches!(
         id,

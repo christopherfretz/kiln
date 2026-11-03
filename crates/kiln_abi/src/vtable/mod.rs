@@ -27,6 +27,8 @@ mod vtt;
 pub use kiln_ast::class::{
     Subobject, SubobjectId, Thunk, VTableComponent, VTableLayout, VttComponent,
 };
+use std::rc::Rc;
+
 use kiln_ast::{Ast, DeclId};
 use kiln_source::fx::FxHashMap;
 
@@ -183,11 +185,7 @@ pub fn vtt_vtables(
     record: DeclId,
     target: &Target,
 ) -> Result<Vec<SubobjectId>, VTableError> {
-    let mut cx = session(ast, target);
-    let md = dynamic_class(&mut cx, record)?;
-    let plan = vtt::plan(&mut cx, md)?;
-    let ids = subobject_ids(&mut cx, md);
-    plan.vtables.iter().map(|(b, _)| ids.get(b).copied().ok_or(VTableError::Incomplete)).collect()
+    Ok(vtt_layout(&mut session(ast, target), record)?.vtables)
 }
 
 /// The VTT of `record` (Itanium §2.6.2); empty for a class without
@@ -195,16 +193,154 @@ pub fn vtt_vtables(
 /// [`vtt_vtables`]) and the subobject of `record` whose address point
 /// in that group it holds.
 pub fn vtt(ast: &Ast, record: DeclId, target: &Target) -> Result<Vec<VttComponent>, VTableError> {
-    let mut cx = session(ast, target);
-    let md = dynamic_class(&mut cx, record)?;
-    let plan = vtt::plan(&mut cx, md)?;
-    let ids = subobject_ids(&mut cx, md);
-    plan.components
+    Ok(vtt_layout(&mut session(ast, target), record)?.components)
+}
+
+/// The VTT of a class with the vtable groups it points into
+/// ([`vtt`] and [`vtt_vtables`] together).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VttLayout {
+    /// The entries, in VTT order.
+    pub components: Vec<VttComponent>,
+    /// The subobject of each vtable group the entries name (index 0 is
+    /// `COMPLETE`).
+    pub vtables: Vec<SubobjectId>,
+}
+
+/// The base-subobject table of a class with its reverse index.
+#[derive(Clone, Debug, Default)]
+pub struct SubobjectTable {
+    /// Each subobject with its byte offset, by [`SubobjectId`].
+    pub list: Vec<(Subobject, u64)>,
+    /// `(class, offset)` → its first [`SubobjectId`] (`class` a first
+    /// declaration).
+    pub ids: FxHashMap<(DeclId, u64), SubobjectId>,
+}
+
+impl SubobjectTable {
+    /// The id of the subobject (`class`, `offset`), `class` a first
+    /// declaration.
+    pub fn id(&self, class: DeclId, offset: u64) -> Option<SubobjectId> {
+        self.ids.get(&(class, offset)).copied()
+    }
+}
+
+/// A vtable session for a whole translation unit: one layout and
+/// class-fact cache shared by every query, the vtable groups,
+/// construction groups, VTTs and subobject tables cached by class (what
+/// codegen asks for once per structor and vtable pointer). Each query
+/// gets the builders' full step budget, so sharing changes no answer of
+/// the free functions, which each run in a fresh session.
+pub struct VTableSession<'a> {
+    cx: Classes<'a>,
+    groups: FxHashMap<DeclId, Result<Rc<VTableLayout>, VTableError>>,
+    construction: FxHashMap<(DeclId, SubobjectId), Result<Rc<VTableLayout>, VTableError>>,
+    vtts: FxHashMap<DeclId, Result<Rc<VttLayout>, VTableError>>,
+    tables: FxHashMap<DeclId, Rc<SubobjectTable>>,
+}
+
+impl std::fmt::Debug for VTableSession<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VTableSession")
+            .field("groups", &self.groups.len())
+            .field("construction", &self.construction.len())
+            .field("vtts", &self.vtts.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> VTableSession<'a> {
+    /// An empty session over `ast` on `target`.
+    pub fn new(ast: &'a Ast, target: &'a Target) -> Self {
+        VTableSession {
+            cx: session(ast, target),
+            groups: FxHashMap::default(),
+            construction: FxHashMap::default(),
+            vtts: FxHashMap::default(),
+            tables: FxHashMap::default(),
+        }
+    }
+
+    /// [`vtable_layout`], cached by first declaration.
+    pub fn vtable_layout(&mut self, record: DeclId) -> Result<Rc<VTableLayout>, VTableError> {
+        let first = self.cx.ast().first(record);
+        if let Some(r) = self.groups.get(&first) {
+            return r.clone();
+        }
+        self.cx.refuel();
+        let r = complete_built(&mut self.cx, first).map(|b| Rc::new(to_layout(&mut self.cx, b)));
+        self.groups.insert(first, r.clone());
+        r
+    }
+
+    /// [`construction_vtable`], cached.
+    pub fn construction_vtable(
+        &mut self,
+        most_derived: DeclId,
+        base: SubobjectId,
+    ) -> Result<Rc<VTableLayout>, VTableError> {
+        let first = self.cx.ast().first(most_derived);
+        if base == SubobjectId::COMPLETE {
+            return self.vtable_layout(first);
+        }
+        if let Some(r) = self.construction.get(&(first, base)) {
+            return r.clone();
+        }
+        self.cx.refuel();
+        let r = construction_built(&mut self.cx, first, base)
+            .map(|b| Rc::new(to_layout(&mut self.cx, b)));
+        self.construction.insert((first, base), r.clone());
+        r
+    }
+
+    /// [`vtt`] and [`vtt_vtables`] of `record`, cached.
+    pub fn vtt(&mut self, record: DeclId) -> Result<Rc<VttLayout>, VTableError> {
+        let first = self.cx.ast().first(record);
+        if let Some(r) = self.vtts.get(&first) {
+            return r.clone();
+        }
+        self.cx.refuel();
+        let r = vtt_layout(&mut self.cx, first).map(Rc::new);
+        self.vtts.insert(first, r.clone());
+        r
+    }
+
+    /// The base-subobject table of `record` (any declaration), cached.
+    pub fn subobjects(&mut self, record: DeclId) -> Rc<SubobjectTable> {
+        let ast = self.cx.ast();
+        let first = ast.first(record);
+        if let Some(t) = self.tables.get(&first) {
+            return Rc::clone(t);
+        }
+        let list = self.cx.lay.subobjects(first);
+        let mut ids = FxHashMap::default();
+        for (i, (s, off)) in list.iter().enumerate() {
+            let Ok(id) = u16::try_from(i) else { break };
+            ids.entry((ast.first(s.class), *off)).or_insert(SubobjectId(id));
+        }
+        let t = Rc::new(SubobjectTable { list, ids });
+        self.tables.insert(first, Rc::clone(&t));
+        t
+    }
+}
+
+fn vtt_layout(cx: &mut Classes<'_>, record: DeclId) -> Result<VttLayout, VTableError> {
+    let md = dynamic_class(cx, record)?;
+    let plan = vtt::plan(cx, md)?;
+    let ids = subobject_ids(cx, md);
+    let components = plan
+        .components
         .iter()
         .map(|&(i, b)| {
             Ok(VttComponent { vtable_index: i, base: *ids.get(&b).ok_or(VTableError::Incomplete)? })
         })
-        .collect()
+        .collect::<Result<_, _>>()?;
+    let vtables = plan
+        .vtables
+        .iter()
+        .map(|(b, _)| ids.get(b).copied().ok_or(VTableError::Incomplete))
+        .collect::<Result<_, _>>()?;
+    Ok(VttLayout { components, vtables })
 }
 
 /// The `-fdump-vtable-layouts` text of `record` as clang 19 prints it

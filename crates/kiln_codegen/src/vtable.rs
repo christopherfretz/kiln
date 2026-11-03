@@ -8,7 +8,7 @@
 use std::rc::Rc;
 
 use kiln_abi::mangle::{self, Structor};
-use kiln_ast::class::{SubobjectId, Thunk, VTableComponent, VTableLayout, VttComponent};
+use kiln_ast::class::{SubobjectId, Thunk, VTableComponent, VTableLayout};
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, TagKind};
 use kiln_ast::modules::UnitKind;
 use kiln_ast::templates::SpecKind;
@@ -18,6 +18,7 @@ use kiln_llvm::{
     Attr, AttrKind, CastOp, ComdatKind, FuncId, GepFlags, GlobalId, IntPredicate, Linkage,
     TypeId as LTy, UnnamedAddr, Value,
 };
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::fir::{Op, V};
 use crate::func::min_align;
@@ -41,6 +42,15 @@ pub(crate) enum VtLinkage {
     Internal,
 }
 
+/// The state of a [`Cg::vmi_flags`] walk.
+#[derive(Default)]
+struct VmiWalk {
+    nv: FxHashSet<DeclId>,
+    vb: FxHashSet<DeclId>,
+    expanded: FxHashSet<DeclId>,
+    edges: FxHashMap<DeclId, u32>,
+}
+
 /// One vtable pointer to initialize (clang `VPtr`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VPtr {
@@ -59,21 +69,13 @@ impl Cg<'_> {
 
     /// The vtable group layout of dynamic class `rd` (cached).
     pub(crate) fn vt_layout(&mut self, rd: DeclId) -> R<Rc<VTableLayout>> {
-        let first = self.ast.first(rd);
-        if let Some(l) = self.vt_layouts.get(&first) {
-            return Ok(Rc::clone(l));
+        match self.vts.vtable_layout(rd) {
+            Ok(l) => Ok(l),
+            Err(e) => err(
+                Some(self.ast.decls.get(self.ast.first(rd)).loc()),
+                format!("cannot lay out the vtable: {e:?}"),
+            ),
         }
-        let l = match kiln_abi::vtable::vtable_layout(self.ast, first, self.target) {
-            Ok(l) => Rc::new(l),
-            Err(e) => {
-                return err(
-                    Some(self.ast.decls.get(first).loc()),
-                    format!("cannot lay out the vtable: {e:?}"),
-                );
-            }
-        };
-        self.vt_layouts.insert(first, Rc::clone(&l));
-        Ok(l)
     }
 
     /// The class is dynamic (clang `isDynamicClass`).
@@ -91,13 +93,8 @@ impl Cg<'_> {
         class: DeclId,
         offset: u64,
     ) -> Option<SubobjectId> {
-        let ast = self.ast;
-        let c = ast.first(class);
-        let subs = self.tys.layouter().subobjects(layout_class);
-        subs.iter()
-            .position(|(s, o)| ast.first(s.class) == c && *o == offset)
-            .and_then(|i| u16::try_from(i).ok())
-            .map(SubobjectId)
+        let c = self.ast.first(class);
+        self.vts.subobjects(layout_class).id(c, offset)
     }
 
     /// The (vtable index, index within that vtable) of the address point
@@ -418,8 +415,8 @@ impl Cg<'_> {
         }
         // "This will also defer the definition of the VTT."
         self.vtable_global(first)?;
-        let n = match kiln_abi::vtable::vtt(self.ast, first, self.target) {
-            Ok(c) => c.len(),
+        let n = match self.vts.vtt(first) {
+            Ok(v) => v.components.len(),
             Err(e) => {
                 return err(
                     Some(self.ast.decls.get(first).loc()),
@@ -446,14 +443,13 @@ impl Cg<'_> {
         if self.m.global(vtt).initializer().is_some() {
             return Ok(());
         }
-        let (comps, vts) = match (
-            kiln_abi::vtable::vtt(ast, rd, self.target),
-            kiln_abi::vtable::vtt_vtables(ast, rd, self.target),
-        ) {
-            (Ok(c), Ok(v)) => (c, v),
-            (Err(e), _) | (_, Err(e)) => return err(loc, format!("cannot lay out the VTT: {e:?}")),
+        let vtt_l = match self.vts.vtt(rd) {
+            Ok(v) => v,
+            Err(e) => return err(loc, format!("cannot lay out the VTT: {e:?}")),
         };
-        let subs = self.tys.layouter().subobjects(rd);
+        let (comps, vts) = (&vtt_l.components, &vtt_l.vtables);
+        let table = self.vts.subobjects(rd);
+        let subs = &table.list;
         let mut groups: Vec<(Value, Rc<VTableLayout>)> = Vec::with_capacity(vts.len());
         for (k, &sub) in vts.iter().enumerate() {
             if k == 0 {
@@ -464,8 +460,8 @@ impl Cg<'_> {
             let Some(&(so, off)) = subs.get(usize::from(sub.0)) else {
                 return err(loc, "VTT vtable of an unknown subobject");
             };
-            let l = match kiln_abi::vtable::construction_vtable(ast, rd, sub, self.target) {
-                Ok(l) => Rc::new(l),
+            let l = match self.vts.construction_vtable(rd, sub) {
+                Ok(l) => l,
                 Err(e) => return err(loc, format!("cannot lay out a construction vtable: {e:?}")),
             };
             let name = mangle::mangle_ctor_vtable(ast, &mut self.anon, rd, off as i64, so.class);
@@ -487,7 +483,7 @@ impl Cg<'_> {
             groups.push((Value::global(g), l));
         }
         let mut elems = Vec::with_capacity(comps.len());
-        for c in &comps {
+        for c in comps {
             let Some(&(so, off)) = subs.get(usize::from(c.base.0)) else {
                 return err(loc, "VTT entry of an unknown subobject");
             };
@@ -887,15 +883,11 @@ impl Cg<'_> {
 
     /// The VTT entries of `rd` and the subobjects of the groups they
     /// point into (cached per class by the layouter's subobject ids).
-    fn vtt_of(&mut self, rd: DeclId) -> R<(Vec<VttComponent>, Vec<SubobjectId>)> {
-        let ast = self.ast;
-        match (
-            kiln_abi::vtable::vtt(ast, rd, self.target),
-            kiln_abi::vtable::vtt_vtables(ast, rd, self.target),
-        ) {
-            (Ok(c), Ok(v)) => Ok((c, v)),
-            (Err(e), _) | (_, Err(e)) => {
-                err(Some(ast.decls.get(rd).loc()), format!("cannot lay out the VTT: {e:?}"))
+    fn vtt_of(&mut self, rd: DeclId) -> R<Rc<kiln_abi::vtable::VttLayout>> {
+        match self.vts.vtt(rd) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                err(Some(self.ast.decls.get(rd).loc()), format!("cannot lay out the VTT: {e:?}"))
             }
         }
     }
@@ -904,7 +896,8 @@ impl Cg<'_> {
     /// loaded from the VTT parameter (`getSecondaryVirtualPointerIndex`).
     fn vtt_address_point(&mut self, vtable_class: DeclId, vp: VPtr) -> R<V> {
         let loc = Some(self.ast.decls.get(vp.class).loc());
-        let (comps, _) = self.vtt_of(vtable_class)?;
+        let v = self.vtt_of(vtable_class)?;
+        let comps = &v.components;
         let Some(sub) = self.subobject_id(vtable_class, vp.class, vp.offset) else {
             return err(loc, "vtable pointer of an unknown subobject");
         };
@@ -937,7 +930,8 @@ impl Cg<'_> {
             let Some(sub) = self.subobject_id(rd, base, off) else {
                 return err(loc, "VTT of an unknown subobject");
             };
-            let (comps, vts) = self.vtt_of(rd)?;
+            let v = self.vtt_of(rd)?;
+            let (comps, vts) = (&v.components, &v.vtables);
             let Some(k) = vts.iter().position(|&s| s == sub) else {
                 return err(loc, "no sub-VTT for the base");
             };
@@ -1784,59 +1778,77 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `ComputeVMIClassTypeInfoFlags`.
+    /// clang `ComputeVMIClassTypeInfoFlags`: 1 (non-diamond repeat) and
+    /// 2 (diamond-shaped) over a walk of every base path. clang walks
+    /// each path, which is exponential in the depth of a virtual
+    /// lattice; kiln expands each class once: a second walk of a class's
+    /// bases finds every class in them already seen, so it only adds
+    /// 1 for each non-virtual and 2 for each virtual base edge under it
+    /// (the class's memoised `edges`).
     fn vmi_flags(&self, rd: DeclId) -> u32 {
-        let mut nv: Vec<DeclId> = Vec::new();
-        let mut vb: Vec<DeclId> = Vec::new();
+        let mut w = VmiWalk::default();
         let mut flags = 0;
         if let Some(def) = self.class_def(rd) {
             let bases: Vec<(QualType, bool)> =
                 self.ast.decls.bases(def, &self.ast.lists).map(|b| (b.ty, b.is_virtual)).collect();
             for (bq, virt) in bases {
-                flags |= self.vmi_base_flags(bq, virt, &mut nv, &mut vb, 0);
+                flags |= self.vmi_base_flags(bq, virt, &mut w, 0);
             }
         }
         flags
     }
 
-    fn vmi_base_flags(
-        &self,
-        bq: QualType,
-        virt: bool,
-        nv: &mut Vec<DeclId>,
-        vb: &mut Vec<DeclId>,
-        depth: usize,
-    ) -> u32 {
+    fn vmi_base_flags(&self, bq: QualType, virt: bool, w: &mut VmiWalk, depth: usize) -> u32 {
         let ast = self.ast;
         let Some(b) = ast.types.as_record(bq).map(|b| ast.first(b)) else { return 0 };
         let mut flags = 0;
         if virt {
-            if vb.contains(&b) {
+            if !w.vb.insert(b) {
                 flags |= 2;
-            } else {
-                vb.push(b);
-                if nv.contains(&b) {
-                    flags |= 1;
-                }
-            }
-        } else if nv.contains(&b) {
-            flags |= 1;
-        } else {
-            nv.push(b);
-            if vb.contains(&b) {
+            } else if w.nv.contains(&b) {
                 flags |= 1;
             }
+        } else if !w.nv.insert(b) || w.vb.contains(&b) {
+            flags |= 1;
         }
         if depth > 256 {
             return flags;
+        }
+        if !w.expanded.insert(b) {
+            return flags | self.vmi_edges(b, w, depth);
         }
         if let Some(def) = self.class_def(b) {
             let bases: Vec<(QualType, bool)> =
                 ast.decls.bases(def, &ast.lists).map(|x| (x.ty, x.is_virtual)).collect();
             for (q, v) in bases {
-                flags |= self.vmi_base_flags(q, v, nv, vb, depth + 1);
+                flags |= self.vmi_base_flags(q, v, w, depth + 1);
             }
         }
         flags
+    }
+
+    /// 1 if a non-virtual and 2 if a virtual base edge lies under class
+    /// `b` (within the walk's depth bound), memoised.
+    fn vmi_edges(&self, b: DeclId, w: &mut VmiWalk, depth: usize) -> u32 {
+        if let Some(&e) = w.edges.get(&b) {
+            return e;
+        }
+        let ast = self.ast;
+        let mut e = 0;
+        if depth <= 256
+            && let Some(def) = self.class_def(b)
+        {
+            let bases: Vec<(QualType, bool)> =
+                ast.decls.bases(def, &ast.lists).map(|x| (x.ty, x.is_virtual)).collect();
+            for (q, v) in bases {
+                let Some(c) = ast.types.as_record(q).map(|c| ast.first(c)) else { continue };
+                e |= if v { 2 } else { 1 };
+                if depth < 256 {
+                    e |= self.vmi_edges(c, w, depth + 1);
+                }
+            }
+        }
+        w.edges.insert(b, e);
+        e
     }
 }

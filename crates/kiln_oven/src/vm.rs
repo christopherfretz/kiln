@@ -13,8 +13,8 @@ use crate::arith::{self, FloatErr, IntErr, canon};
 use crate::compile::{FState, GState, float_of};
 use crate::complex;
 use crate::failure::{EvalFailure, FailKind};
-use crate::kbc::{Op, ak, cmp, new_aux};
-use crate::mem::{Alloc, DynKind, MemFault, Origin, Ptr, Sp, TrialMode, flags};
+use crate::kbc::{Op, ak, cce, cmp, new_aux};
+use crate::mem::{Alloc, DynKind, MemFault, NOWHERE, Origin, Ptr, Sp, TrialMode, flags};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{OTy, TyKind};
 use crate::{Oven, SemaBridge};
@@ -105,6 +105,17 @@ pub(crate) struct RunState {
     /// are not usable in constant expressions are read; results are not
     /// memoized.
     pub lax: bool,
+    /// A fold (clang `EM_ConstantFold`: [`crate::Oven::try_fold`],
+    /// [`crate::Oven::fold_rvalue`], `__builtin_constant_p`): a cast a
+    /// constant expression may not perform ([expr.const]/5.15) does not
+    /// fail it; its pointer result points at nothing (`mem::NOWHERE`).
+    pub fold: bool,
+    /// A silent constant initialization that still reports
+    /// `-Wconstant-evaluated` ([`crate::Oven::warn_constant_evaluated`]):
+    /// clang's `evaluateValue` of every variable with static storage or
+    /// usable in constant expressions. Cleared in nested evaluations, a
+    /// global's initialization and `__builtin_constant_p`.
+    pub cev_warn: bool,
 }
 
 impl RunState {
@@ -571,9 +582,17 @@ impl Oven {
         let mark = self.mem.mark();
         // The region's `Ret` writes the frame's result slot.
         let slot = self.regs[fb];
-        let silent = self.run.silent;
+        let (silent, fold, cev_warn) = (self.run.silent, self.run.fold, self.run.cev_warn);
+        let lax = (self.run.lax, self.mem.lax);
         self.run.entry = entry;
         self.run.silent = true;
+        // clang `EvaluateBuiltinConstantP` folds (`FoldConstant`,
+        // `EM_ConstantFold`): a read of a `const` variable not usable in
+        // constant expressions is only noted, so it is lax too
+        // (`__builtin_constant_p(d)` of a `const double d = 2.5;` is true).
+        self.run.fold = true;
+        (self.run.lax, self.mem.lax) = (true, true);
+        self.run.cev_warn = false;
         self.mem.checkpoint(TrialMode::Speculative);
         let r = self.run_loop(b, func, pc0, fb as u32);
         if r.is_ok() {
@@ -582,13 +601,23 @@ impl Oven {
             self.mem.rollback(&self.types);
         }
         self.run.silent = silent;
+        self.run.fold = fold;
+        (self.run.lax, self.mem.lax) = lax;
+        self.run.cev_warn = cev_warn;
         self.run.entry = saved_entry;
         let v = self.regs[fb + val];
         self.regs[fb] = slot;
         let out = match r {
             Ok(()) => Ok(!ptr || v == 0 || {
+                // clang `EvaluateBuiltinConstantPForLValue`: a null base
+                // (an integer cast to a pointer), or a string literal at
+                // offset 0.
                 let p = Ptr::decode(v as u64);
-                p.off == 0 && self.is_literal(v as u64)
+                if Ptr::is_nowhere(v as u64) {
+                    p.slot == 0 || (p.off == 0 && self.is_literal_slot(p.slot))
+                } else {
+                    p.off == 0 && self.is_literal(v as u64)
+                }
             }),
             Err((f, _)) if f.kind() != FailKind::NotConstant => Err(f),
             Err(_) => {
@@ -1206,21 +1235,30 @@ impl Oven {
                 Op::MpFn => match self.mp.get(reg!(1)) {
                     Some(e) if e.virt => {
                         let (m, cls) = (e.member, e.cls);
+                        let adj = arg!(3);
                         match self.vcall(b, m, cls, reg!(2) as u64) {
-                            // A covariant return through a pointer to
-                            // member: not adjusted (WP-077 stub).
-                            Ok((_, _, cov)) if cov != 0 => fail!(Fault::Invalid),
-                            Ok((f, this, _)) => {
+                            Ok((f, this, cov)) => {
                                 reg!(0) = u128::from(crate::mem::fn_ptr(f));
                                 reg!(2) = u128::from(this);
+                                // A covariant return is adjusted as by a
+                                // direct call ([class.virtual]/8).
+                                if adj as u32 != u32::MAX {
+                                    self.regs[fb + adj] = cov;
+                                } else if cov != 0 {
+                                    fail!(Fault::Invalid);
+                                }
                             }
                             Err(f) => fail!(f),
                         }
-                        pc += 4;
+                        pc += 5;
                     }
                     Some(e) => {
                         reg!(0) = u128::from(crate::mem::fn_ptr(e.fn_index));
-                        pc += 4;
+                        let adj = arg!(3);
+                        if adj as u32 != u32::MAX {
+                            self.regs[fb + adj] = 0;
+                        }
+                        pc += 5;
                     }
                     None => fail!(Fault::Invalid),
                 },
@@ -1310,7 +1348,7 @@ impl Oven {
                 Op::IsConstEval => {
                     let cc = self.run.const_context;
                     reg!(0) = u128::from(cc);
-                    if cc && !self.run.silent {
+                    if cc && (!self.run.silent || self.run.cev_warn) {
                         self.always_true_diag(b, pc, aux);
                     }
                     pc += 2;
@@ -1433,6 +1471,20 @@ impl Oven {
                     match self.void_cast(raw, tag, OTy(arg!(2) as u32)) {
                         Ok(()) => reg!(0) = u128::from(raw),
                         Err(f) => fail!(f),
+                    }
+                    pc += 4;
+                }
+                Op::Cce => {
+                    if !self.run.fold {
+                        fail!(Fault::Trap(arg!(2) as u32));
+                    }
+                    match self.cce(aux, reg!(1)) {
+                        Some(v) => {
+                            if aux != cce::CHECK {
+                                reg!(0) = v;
+                            }
+                        }
+                        None => fail!(Fault::Trap(arg!(2) as u32)),
                     }
                     pc += 4;
                 }
@@ -1777,7 +1829,11 @@ impl Oven {
         if i == 0 {
             return Ok(raw);
         }
-        let (start, n, cur, array) = self.extent_of(raw, elem)?;
+        let (start, n, cur, array) = match self.extent_of(raw, elem) {
+            Ok(x) => x,
+            Err(_) if Ptr::is_nowhere(raw) => return self.nowhere_add(raw, i, elem),
+            Err(f) => return Err(f),
+        };
         let new = i128::from(cur) + i;
         if new < 0 || new > i128::from(n) {
             return Err(Fault::ArrayIndex { idx: new, n, array });
@@ -1792,15 +1848,75 @@ impl Oven {
             return Ok(0);
         }
         if p == 0 || q == 0 || Ptr::alloc_key(p) != Ptr::alloc_key(q) {
+            if let Some(d) = self.nowhere_sub(p, q, elem) {
+                return d;
+            }
             // Different complete objects.
             return Err(Fault::PtrArith { p, q, pointee: elem });
         }
-        let (sp, _, ip, _) = self.extent_of(p, elem).map_err(|_| Fault::PtrSub)?;
+        let Ok((sp, _, ip, _)) = self.extent_of(p, elem) else {
+            return self.nowhere_sub(p, q, elem).unwrap_or(Err(Fault::PtrSub));
+        };
         let (sq, _, iq, _) = self.extent_of(q, elem).map_err(|_| Fault::PtrSub)?;
         if sp != sq {
             return Err(Fault::PtrSub);
         }
         Ok(ip as i64 - iq as i64)
+    }
+
+    /// The conversion `aux` (`kbc::cce`) of register value `v` by a cast
+    /// a fold continues past (`Op::Cce`; clang's invalid designator); the
+    /// result is not memoized. `None` fails the fold.
+    #[cold]
+    fn cce(&mut self, aux: u32, v: u128) -> Option<u128> {
+        self.run.impure += 1;
+        let raw = v as u64;
+        match aux {
+            cce::PTR => Some(if raw == 0 { 0 } else { u128::from(raw | NOWHERE) }),
+            cce::INT_TO_PTR => match u32::try_from(v.cast_signed()) {
+                Ok(0) => Some(0),
+                Ok(n) => Some(u128::from(NOWHERE | u64::from(n))),
+                Err(_) => None,
+            },
+            cce::PTR_TO_INT => {
+                let p = Ptr::decode(raw);
+                (raw == 0 || (Ptr::is_nowhere(raw) && p.slot == 0 && !p.past))
+                    .then_some(u128::from(p.off))
+            }
+            _ => Some(v),
+        }
+    }
+
+    /// [`Oven::ptr_add`] of a pointer that points at nothing (clang: an
+    /// invalid designator only moves the offset).
+    #[cold]
+    fn nowhere_add(&self, raw: u64, i: i128, elem: OTy) -> Result<u64, Fault> {
+        let es = i128::from(self.types.size(elem).max(1));
+        let off = i128::from(Ptr::decode(raw).off) + i * es;
+        match u32::try_from(off) {
+            Ok(off) => Ok(Ptr::with_off(raw, u64::from(off), false)),
+            Err(_) => Err(Fault::NullArith),
+        }
+    }
+
+    /// [`Oven::ptr_sub`] when `p` or `q` points at nothing: the difference
+    /// of their offsets within one object (or two integers cast to
+    /// pointers); `None` for two pointers that do not.
+    #[cold]
+    fn nowhere_sub(&self, p: u64, q: u64, elem: OTy) -> Option<Result<i64, Fault>> {
+        let (sp, sq) = Ptr::nowhere_slots(p, q)?;
+        if sp != sq {
+            return Some(Err(Fault::PtrArith { p, q, pointee: elem }));
+        }
+        let es = i64::from(self.types.size(elem).max(1) as u32);
+        let d = i64::from(Ptr::decode(p).off) - i64::from(Ptr::decode(q).off);
+        Some(if d % es == 0 { Ok(d / es) } else { Err(Fault::PtrSub) })
+    }
+
+    /// Whether static slot `slot` holds a string literal (the object of
+    /// a pointer that points at nothing).
+    fn is_literal_slot(&self, slot: u32) -> bool {
+        self.mem.static_in_slot(slot).is_some_and(|a| matches!(a.origin, Origin::Str(..)))
     }
 
     fn is_literal(&self, raw: u64) -> bool {
@@ -1901,6 +2017,18 @@ impl Oven {
         if same {
             let (a, b) = (Ptr::decode(p), Ptr::decode(q));
             return Ok(compare(c, a.off.cmp(&b.off)));
+        }
+        if let Some((sp, sq)) = Ptr::nowhere_slots(p, q) {
+            // clang compares an invalid designator's base and offset: an
+            // integer cast to a pointer has no base (as null).
+            let (a, b) = (Ptr::decode(p), Ptr::decode(q));
+            if sp == sq {
+                return Ok(compare(c, a.off.cmp(&b.off)));
+            }
+            if !eq || (sp == 0 && a.off != 0) || (sq == 0 && b.off != 0) {
+                return Err(Fault::PtrCmp { p, q, pointee });
+            }
+            return Ok(c == cmp::NE);
         }
         if !eq {
             return Err(Fault::PtrCmp { p, q, pointee });

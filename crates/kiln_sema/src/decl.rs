@@ -1188,6 +1188,11 @@ impl Sema<'_, '_> {
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
                     }
+                    // [depr.volatile.type]/2: and a volatile-qualified
+                    // parameter type, at the parameter.
+                    if self.std >= kiln_lex::Std::Cxx20 && self.inst.stack.is_empty() {
+                        self.check_volatile_params(params);
+                    }
                     let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
@@ -1195,6 +1200,13 @@ impl Sema<'_, '_> {
             if !d.nullability.is_empty() || !moved.is_empty() {
                 ty = self.chunk_nullability(ty, i, d, &moved);
             }
+        }
+        // [temp.variadic]/5: only a parameter declares a pack (clang
+        // `GetFullTypeForDeclarator` drops the `...`).
+        if let Some(e) = d.ellipsis
+            && !matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName)
+        {
+            self.error(DiagId::sema_ellipsis_in_declarator_not_parameter, e);
         }
         if recover && self.is_error_type(ty) {
             return QualType::INT;
@@ -1300,14 +1312,18 @@ impl Sema<'_, '_> {
             self.emit(w);
             return Some(Err(c));
         }
-        let folded = match d.ctx {
-            DeclaratorContext::File | DeclaratorContext::Member => {
-                self.fold_rvalue_int(c).filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
-            }
-            _ => None,
+        // An alias-declaration's type-id is a typedef's declarator
+        // (diagnosed at the alias name, by `act_on_alias_decl`).
+        let alias = d.site == DeclSite::Alias;
+        let file_like =
+            alias || matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member);
+        let folded = if file_like {
+            self.fold_rvalue_int(c).filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
+        } else {
+            None
         };
         let Some(v) = folded else {
-            if matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member) {
+            if file_like {
                 self.vla_at_file_scope(d, loc, at, f);
             } else {
                 self.error(DiagId::sema_vla_unsupported, loc);
@@ -1317,7 +1333,11 @@ impl Sema<'_, '_> {
         let wloc = Self::fold_lone_invalid(&mut f, loc);
         let w = Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f);
         self.emit(w);
-        self.error(DiagId::sema_vla_folded_to_constant, at);
+        if alias {
+            self.pending_alias_vla = Some(DiagId::sema_vla_folded_to_constant);
+        } else {
+            self.error(DiagId::sema_vla_folded_to_constant, at);
+        }
         u64::try_from(v).ok().map(Ok)
     }
 
@@ -1350,6 +1370,26 @@ impl Sema<'_, '_> {
             )
             .unwrap_or(0);
         let outer = &d.chunks[..pos];
+        // clang `BuildArrayType`: the arrays around it are variable length
+        // arrays too, each warned at its `[` (at its bound, with the
+        // failure's notes, when that is not a constant expression either).
+        for ch in outer.iter().rev() {
+            let Chunk::Array { size: Some(s), loc: l, .. } = ch else { break };
+            if self.expr_is_value_dependent(*s) {
+                break;
+            }
+            let bl = self.begin_loc(*s);
+            let c = conv::decay(self, *s);
+            let c = self.act_on_constant_full_expr(c);
+            let w = match self.eval_int(c, EvalContext::new(EvalKind::Other, bl)) {
+                Ok(_) => self.diag(self.vla_ext_id(), *l),
+                Err(mut f) => {
+                    let wloc = Self::fold_lone_invalid(&mut f, bl);
+                    Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f)
+                }
+            };
+            self.emit(w);
+        }
         let id = if matches!(outer.first(), Some(Chunk::Function { .. })) {
             DiagId::sema_vm_func_decl
         } else if self.declarator_field {
@@ -1359,7 +1399,11 @@ impl Sema<'_, '_> {
         } else {
             DiagId::sema_vm_decl_in_file_scope
         };
-        self.error(id, at);
+        if d.site == DeclSite::Alias {
+            self.pending_alias_vla = Some(id);
+        } else {
+            self.error(id, at);
+        }
     }
 
     /// clang `ext_vla_cxx` / `ext_vla_cxx_in_gnu_mode` (off by default in
@@ -3099,6 +3143,9 @@ impl Sema<'_, '_> {
         attrs: &[AttrId],
         type_loc: Loc,
     ) -> DeclId {
+        if let Some(id) = self.pending_alias_vla.take() {
+            self.error(id, name_loc);
+        }
         let mut d = Declarator::new(DeclaratorContext::File, name_loc);
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
@@ -5118,6 +5165,7 @@ impl Sema<'_, '_> {
         true
     }
 
+    #[allow(clippy::too_many_lines, reason = "one linear pass over the initializer's checks")]
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -5247,6 +5295,7 @@ impl Sema<'_, '_> {
         } else if !spec.is_inline() && self.is_in_class_static(self.init_written_in(v)) {
             self.check_in_class_static_init(v, e);
         }
+        self.warn_constant_evaluated_init(v, e);
     }
 
     /// `ty` with its referenced array of unknown bound replaced by `ety`,
@@ -5628,15 +5677,19 @@ impl Sema<'_, '_> {
             return;
         }
         let vn = *self.ast.decls.get(v);
-        if vn.kind() != DeclKind::Var {
-            return;
-        }
-        if self.uninit_array_or_reference(v) || vn.has(DeclFlags::INVALID) {
+        if vn.kind() != DeclKind::Var
+            || self.uninit_array_or_reference(v)
+            || vn.has(DeclFlags::INVALID)
+            || self.is_member_spec_declaration(v)
+        {
             return;
         }
         // An in-class static data member declaration is not a definition
         // ([class.static.data]/3): its type may be incomplete.
-        if self.is_in_class_static(v) && !self.is_var_definition(v) {
+        if self.is_in_class_static(v)
+            && !self.is_var_definition(v)
+            && !self.is_spec_of_out_of_line_def(v)
+        {
             // But it cannot deduce a class type without an initializer.
             if let Some(ty) = vn.ty()
                 && self.is_ctad_placeholder(ty)
@@ -7667,6 +7720,7 @@ impl Sema<'_, '_> {
                     // condition's for a literal).
                     let d = d.range(self.expr_range(if lit { c } else { inner }));
                     let d = self.explain_failed_comparison(d, inner);
+                    let d = self.with_trait_explanation(d, inner);
                     self.emit(d);
                 }
                 Err(mut f) => {

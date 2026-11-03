@@ -216,7 +216,7 @@ impl Default for CodegenOptions {
             optimize: false,
             opt_size: 0,
             strict_aliasing: true,
-            clang_compat: 19,
+            clang_compat: 22,
             llvm_major: 19,
             omit_frame_pointer: None,
             omit_leaf_frame_pointer: None,

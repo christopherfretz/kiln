@@ -76,10 +76,13 @@ pub fn with_target<R>(
 ) -> R {
     let sm = SourceManager::new();
     let sink = MemorySink::new();
-    let opts = DiagOptions::default();
+    // These tests record clang 19's answers; the library default is 22
+    // since WP-413 (spec/sema.md §1.1).
+    let opts = DiagOptions { clang_compat: 19, ..DiagOptions::default() };
     let engine = DiagEngine::new(&sm, &opts, sink.clone());
     let ast = Ast::new(Arc::new(Interner::new()), TypeContext::new(target.clone()));
     let mut s = Sema::new(ast, &engine, target);
+    s.clang_compat = 19;
     f(&mut s, &sink)
 }
 
