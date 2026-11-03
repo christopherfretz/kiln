@@ -5740,7 +5740,10 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
   body as clang's CFG does. A constant branch condition prunes its dead
   edge unless it is a configuration value (`is_configuration_value`:
   a `constexpr` call, a global or `const` local, `sizeof`, or a
-  parenthesized or macro-expanded literal).
+  parenthesized or macro-expanded literal). An `ExprWithCleanups` is no
+  element of its own (clang `VisitExprWithCleanups`): the temporaries'
+  destruction after `throw E()` is not dead code
+  (`expr.throw/unreachable-code-temporary.cpp`).
 - Each round reports one dead root: the last dead element, in
   evaluation order, that no reached or dead element flows into. It is
   then treated as reached and the scan repeats, so the regions come out

@@ -47,6 +47,10 @@ pub struct Config {
     pub long_run_timeout: Duration,
     pub mem: Option<MemLimit>,
     pub probe: RssProbe,
+    /// The flags of [`WARNING_FLAGS`] the compiler accepts
+    /// ([`supported_warning_flags`]), passed to every compile with
+    /// `-D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER` (lit's `enable_warnings`).
+    pub warning_flags: Vec<String>,
     /// The per-run scratch root; test `i` uses `<root>/t<i>`.
     pub scratch: PathBuf,
     pub keep: bool,
@@ -96,6 +100,13 @@ impl Config {
         }
         v.push("-I".to_owned());
         v.push(self.test_root().join("support").display().to_string());
+        // lit's `enable_warnings` (default True, `params.py` lines 291-300):
+        // the supported `_warningFlags`, and the libc++ headers are not
+        // system headers (`.verify.cpp` undefines it again, [`VERIFY_FLAGS`]).
+        if !self.warning_flags.is_empty() {
+            v.extend(self.warning_flags.iter().cloned());
+            v.push("-D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_owned());
+        }
         v
     }
 
@@ -125,10 +136,89 @@ impl Config {
     }
 }
 
+/// libc++ 22's `_warningFlags`, verbatim and in order
+/// (`libcxx/utils/libcxx/test/params.py` lines 17-81 at `llvmorg-22.1.8`).
+/// lit adds each one the compiler accepts with `-Werror` to
+/// `%{compile_flags}` (`dsl.py` `AddOptionalWarningFlag`), before the
+/// test's `ADDITIONAL_COMPILE_FLAGS` (spec/libcxx.md "Commands").
+pub const WARNING_FLAGS: &[&str] = &[
+    "-Werror",
+    "-Wall",
+    "-Wctad-maybe-unsupported",
+    "-Wextra",
+    "-Wshadow",
+    "-Wundef",
+    "-Wunused-template",
+    "-Wno-unused-command-line-argument",
+    "-Wno-attributes",
+    "-Wno-pessimizing-move",
+    "-Wno-noexcept-type",
+    "-Wno-aligned-allocation-unavailable",
+    "-Wno-atomic-alignment",
+    "-Wno-reserved-module-identifier",
+    "-Wdeprecated-copy",
+    "-Wdeprecated-copy-dtor",
+    "-Wshift-negative-value",
+    "-Wno-sized-deallocation",
+    "-Wno-literal-suffix",
+    "-Wno-user-defined-literals",
+    "-Wno-tautological-compare",
+    "-Wno-stringop-overread",
+    "-Wno-stringop-overflow",
+    "-Wsign-compare",
+    "-Wunused-variable",
+    "-Wunused-parameter",
+    "-Wunreachable-code",
+    "-Wno-unused-local-typedef",
+    "-Wno-local-type-template-args",
+    "-Wno-c++11-extensions",
+    "-Wno-unknown-pragmas",
+    "-Wno-pass-failed",
+    "-Wno-dangling-reference",
+    "-Wno-mismatched-new-delete",
+    "-Wno-redundant-move",
+    "-Wno-self-move",
+    "-Wno-nullability-completeness",
+    "-flax-vector-conversions=none",
+];
+
+/// The flags of [`WARNING_FLAGS`] that `compiler` accepts: lit's
+/// `hasCompileFlag(config, "-Werror " + flag)`, an empty translation unit
+/// compiled with `-Werror <flag>` (an unknown `-W` option is then an
+/// error). Probed once per run, in `dir`.
+pub fn supported_warning_flags(
+    compiler: &Path,
+    llvm_dir: &Path,
+    dir: &Path,
+    mem: Option<MemLimit>,
+    timeout: Duration,
+) -> Vec<String> {
+    let _ = std::fs::create_dir_all(dir);
+    let src = dir.join("w.cpp");
+    if std::fs::write(&src, "").is_err() {
+        return Vec::new();
+    }
+    let ok = |flag: &str| {
+        let mut cmd = Command::new(compiler);
+        cmd.args(["-xc++", "-fsyntax-only", "-Werror", flag])
+            .arg(&src)
+            .env("TMPDIR", dir)
+            .env("KILN_LLVM_DIR", llvm_dir);
+        process::run(&mut process::limited(&cmd, mem), timeout).is_ok_and(|o| o.success())
+    };
+    let v = WARNING_FLAGS.iter().filter(|f| ok(f)).map(|&f| f.to_owned()).collect();
+    let _ = std::fs::remove_file(&src);
+    let _ = std::fs::remove_dir(dir);
+    v
+}
+
 /// The flags of a `.verify.cpp` compile: libc++'s `%{verify}`
-/// substitution (`libcxx/utils/libcxx/test/params.py`), outcome from the
-/// exit status (spec/libcxx.md ".verify.cpp").
+/// substitution (`libcxx/utils/libcxx/test/format.py` line 102 at
+/// `llvmorg-22.1.8`: the libc++ headers are system headers again,
+/// `-Wno-error`), outcome from the exit status (spec/libcxx.md
+/// ".verify.cpp").
 pub const VERIFY_FLAGS: &[&str] = &[
+    "-U_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER",
     "-fsyntax-only",
     "-Wno-error",
     "-Xclang",
@@ -426,11 +516,8 @@ pub fn is_long(rel: &str, d: &Directives) -> Option<&'static str> {
 /// "Outcomes"): they expect a failure that only lit's flags produce.
 /// Sorted by path.
 const XFAIL_IGNORED: &[(&str, &str)] = &[
-    // `XFAIL: *` because lit compiles with `-Werror`; the driver does not
-    // (kiln's warning set is not clang's, so `-Werror` would turn warning
-    // wording deviations into failures), so the unused variable compiles.
-    ("libcxx/selftest/pass.cpp/werror.pass.cpp", "built without -Werror"),
-    ("libcxx/selftest/sh.cpp/werror.sh.cpp", "built without -Werror"),
+    // None since WP-418: the driver applies lit's `-Werror` ([`WARNING_FLAGS`]),
+    // so `libcxx/selftest/*/werror.*` fail as lit expects.
 ];
 
 /// Why the driver ignores `rel`'s `XFAIL:`, if it does ([`XFAIL_IGNORED`]).
@@ -962,6 +1049,7 @@ mod tests {
             long_run_timeout: Duration::from_secs(1),
             mem: None,
             probe: RssProbe::Unavailable,
+            warning_flags: Vec::new(),
             scratch: "/s".into(),
             keep: false,
         };
@@ -1172,6 +1260,7 @@ mod tests {
             long_run_timeout: run.timeout,
             mem: None,
             probe: RssProbe::Unavailable,
+            warning_flags: Vec::new(),
             scratch: base.join("s"),
             keep: false,
         };
