@@ -13,6 +13,7 @@
 // AArch64 sysroot and leaves `+outline-atomics` out of the features.
 // `-ftrivial-auto-var-init=uninitialized`: kiln still gives SVE locals
 // the C++26 erroneous-value store that clang leaves out.
+//@ requires: clang>=22
 //@ requires: target-aarch64
 //@ expect: ir
 //@ args: -march=armv8-a+sve2p1 -ftrivial-auto-var-init=uninitialized

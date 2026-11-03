@@ -5,6 +5,7 @@
 // spec/driver.md §Target features.
 // Host-restricted (no pinned `--target`): on an x86_64 host clang has no
 // AArch64 sysroot and leaves `+outline-atomics` out of the features.
+//@ requires: clang>=22
 //@ requires: target-aarch64
 //@ expect: ir
 //@ args: -march=armv9.2-a+crypto+nolse
