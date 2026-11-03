@@ -5,7 +5,7 @@
 //! instantiated when used (`instantiate_function_definition`,
 //! [temp.inst]/4).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::names::{DeclName, DeclNameView};
@@ -1616,6 +1616,13 @@ impl Substituter<'_, '_, '_> {
     ) {
         let saved_entity = self.entity.replace(spec);
         self.sema.act_on_start_record_definition(spec);
+        // The pattern's class-virt-specifier `final` ([class.pre]/1):
+        // `__is_final` of a specialization of a `final` class template is
+        // true (libc++'s compressed-pair padding of a final allocator).
+        if self.sema.ast.decls.record(def).is_some_and(|r| r.defn.contains(DefinitionBits::FINAL)) {
+            let loc = self.sema.ast.decls.get(def).loc();
+            self.sema.act_on_class_final(spec, loc);
+        }
         self.class_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);
         let sub = self;
@@ -1717,11 +1724,12 @@ impl Substituter<'_, '_, '_> {
         // Default member initializers ([temp.inst]/3): instantiated when
         // a constructor or an aggregate initialization uses one
         // ([`Sema::instantiate_nsdmi`], clang
-        // `InstantiateInClassInitializer`). Those of a local class or an
-        // anonymous member are instantiated now, in the complete-class
-        // context (the parser replays them so).
+        // `InstantiateInClassInitializer`), the fields of an anonymous
+        // struct or union member included (WP-446). Those of a local class
+        // are instantiated now, in the complete-class context (the parser
+        // replays them so).
         if !nsdmis.is_empty() && !invalid {
-            if local.is_none() && !anonymous {
+            if local.is_none() {
                 let ctx = (sub.args.clone(), sub.pairs.clone());
                 let _ = sub.sema.inst.nsdmi_ctx.insert(spec, ctx);
                 for (field, init) in nsdmis {
