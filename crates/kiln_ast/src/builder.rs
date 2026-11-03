@@ -946,6 +946,24 @@ impl<'a> AstBuilder<'a> {
         Ok(())
     }
 
+    /// Appends `attrs` to `d`'s attribute list (attaching one if `d` has
+    /// none): for attributes that appertain to a declaration after it was
+    /// first given its own (a class's trailing GNU attributes,
+    /// `struct S { ... } __attribute__((packed));`).
+    pub fn append_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
+        if attrs.is_empty() {
+            return;
+        }
+        let old = self.ast.attrs.of_decl(d);
+        let mut all: Vec<AttrId> = self.ast.lists.iter(old).collect();
+        all.extend_from_slice(attrs);
+        let list = self.ast.lists.push(&all);
+        if !self.ast.attrs.decl_attrs.refine(d, list) {
+            let _ = self.ast.attrs.decl_attrs.insert(d, list);
+        }
+        self.ast.decls.set_has_attrs(d);
+    }
+
     // ---------------------------------------------------------------------
     // Classes (spec/sema-class.md §8.1)
     // ---------------------------------------------------------------------

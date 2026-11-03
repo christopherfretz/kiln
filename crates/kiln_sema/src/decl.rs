@@ -8706,6 +8706,18 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The GNU attributes after the closing brace of class `r`'s
+    /// definition (`struct S { ... } __attribute__((packed));`): clang
+    /// `ParseCXXMemberSpecification` parses them there and
+    /// `ActOnFinishCXXMemberSpecification` applies them to the class
+    /// itself, before it is complete, so `packed` / `aligned` shape its
+    /// layout as when written after the class-key.
+    pub fn act_on_record_trailing_attrs(&mut self, r: DeclId, attrs: &[AttrId]) {
+        let mut attrs = attrs.to_vec();
+        self.check_decl_attrs(r, &mut attrs);
+        self.builder().append_attrs(r, &attrs);
+    }
+
     /// clang `handlePreferredName`: `preferred_name` applies to a class
     /// template (else it is ignored with a warning) and names a typedef
     /// for one of its specializations (else an error); kept when valid.

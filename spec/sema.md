@@ -1658,6 +1658,17 @@ and returns the scope it names:
       `union`, `enum`, `enum class` or `enum struct`), after the
       parser's error for the position, if any. Not for an anonymous
       record.
+    - GNU attributes right after a class definition's closing brace
+      (`struct S { ... } __attribute__((packed));`, WP-416) are not
+      decl-specifier attributes: as clang's `ParseCXXMemberSpecification`
+      the parser reads them there and `act_on_record_trailing_attrs`
+      checks them against the class and appends them to its own
+      attributes before `act_on_finish_record_definition`, so `packed` /
+      `aligned` there shape its layout (also for a class template and
+      its specializations), with no warning, whether or not declarators
+      follow. Not yet for an enumeration's closing brace (still
+      `place it after "enum"`). Test:
+      `tests/conformance/dcl.attr.grammar/gnu-attributes-after-class-body.cpp`.
     - on a non-declaration statement: `'X' attribute cannot be applied
       to a statement` per declaration attribute
       (`act_on_stmt_decl_attrs`); on a block-scope asm-declaration
