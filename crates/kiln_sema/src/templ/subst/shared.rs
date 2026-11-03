@@ -60,6 +60,7 @@ impl Sema<'_, '_> {
         let rewarn = self.null_deref_rewarn_active();
         let mut derefs = Vec::new();
         let mut varargs = Vec::new();
+        let mut diagnose_ifs = Vec::new();
         // The callees of the immediate invocations (not references).
         let mut callees = Vec::new();
         let mut compares = Vec::new();
@@ -137,6 +138,11 @@ impl Sema<'_, '_> {
                         kids.iter().filter_map(|k| self.vararg_recheck.get(k).map(|&c| (*k, c))),
                     );
                 }
+                if !self.diagnose_if_recheck.is_empty() && kind != ExprKind::InitListExpr {
+                    diagnose_ifs.extend(
+                        kids.iter().copied().filter(|k| self.diagnose_if_recheck.contains_key(k)),
+                    );
+                }
                 self.note_default_uses(&kids, at);
             }
             stack.extend(kids);
@@ -149,6 +155,9 @@ impl Sema<'_, '_> {
         }
         for (a, kind) in varargs {
             self.check_variadic_args(&[a], kind);
+        }
+        for a in diagnose_ifs {
+            self.recheck_diagnose_if(a);
         }
     }
 

@@ -295,6 +295,17 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The returned-reference-to-temporary diagnostic: P2748R5 made it
+    /// ill-formed in C++26 ([stmt.return]/6); clang warns
+    /// (`-Wreturn-stack-address`) in earlier modes.
+    pub(crate) fn return_temp_ref_id(&self) -> DiagId {
+        if self.std >= kiln_lex::Std::Cxx26 {
+            DiagId::sema_temp_return_local
+        } else {
+            DiagId::sema_return_local_temp_ref
+        }
+    }
+
     /// The diagnostics of a reference bound at `site` to a temporary that
     /// would be destroyed first ([class.temporary]/6.2, 6.11;
     /// [stmt.return]/6): `returning reference to local temporary object`
@@ -310,7 +321,8 @@ impl Sema<'_, '_> {
                 // [stmt.return]/6 (P2748): ill-formed; clang points at the
                 // temporary (`checkExprLifetime`'s `DiagRange` is the
                 // local's range): the operand of `static_cast<const int&>(c)`.
-                let msg = self.diag(DiagId::sema_temp_return_local, loc);
+                // Before C++26 it is `-Wreturn-stack-address`.
+                let msg = self.diag(self.return_temp_ref_id(), loc);
                 self.emit(msg);
             }
             BindingSite::Member(field) => {

@@ -783,11 +783,12 @@ impl Substituter<'_, '_, '_> {
         }
         // The pattern's attributes (`const`, `pure`, `[[noreturn]]`,
         // `[[nodiscard]]`, ...), as clang `InitFunctionInstantiation` →
-        // `InstantiateAttrs` (WP-182). A friend may redeclare a function
-        // that has its own.
-        if friend.is_none() {
-            self.class_attrs(f, d);
-        }
+        // `InstantiateAttrs` (WP-182). A befriended function gets them
+        // too (`[[nodiscard]] friend It operator+(It, int)`, a hidden
+        // friend found by ADL, [dcl.attr.nodiscard]/2; WP-491); one
+        // redeclaring a function keeps that function's own as well, on
+        // its earlier declarations.
+        self.class_attrs(f, d);
         // [expr.prim.this]/3: `this` in a static member function's
         // *noexcept-specifier* is diagnosed again in each instantiation
         // of the class, at the pattern's `this` (clang
@@ -972,8 +973,9 @@ impl Substituter<'_, '_, '_> {
         self.forget_pattern_params(pat);
         self.defer_default_args(pat, spec);
         // The pattern's attributes (clang `InitFunctionInstantiation` →
-        // `InstantiateAttrs`; WP-182).
-        self.class_attrs(spec, pat);
+        // `InstantiateAttrs`; WP-182), merged with its other
+        // declarations' unused-result attributes (WP-491).
+        self.function_spec_attrs(spec, pat);
         Ok(())
     }
 

@@ -198,7 +198,9 @@ impl Sema<'_, '_> {
         });
         self.end_set(set);
         let (d, f) = won?;
-        Some(self.finish_member_winner(&m, d, f, loc))
+        let e = self.finish_member_winner(&m, d, f, loc);
+        self.ovl.resolved_member = Some(e);
+        Some(e)
     }
 
     /// The member access naming `d` (found as `f`) that the overloaded

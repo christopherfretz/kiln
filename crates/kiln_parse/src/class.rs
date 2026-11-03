@@ -1612,6 +1612,17 @@ impl Parser<'_, '_> {
             self.push_late(LateItem::Method { f, parts });
         }
         if self.at(Punct::Equal) {
+            // clang `ParseCXXInlineMethodDef`: an in-class `= default` /
+            // `= delete` definition ends at the last character of the
+            // keyword (`setRangeEnd(KWEndLoc)`), where an implicit
+            // assignment body is located.
+            let kw = self.peek(1).span;
+            let end = if kw.lo.is_file() && kw.hi.to_raw() > kw.lo.to_raw() {
+                kw.lo.with_offset(kw.hi.to_raw() - kw.lo.to_raw() - 1)
+            } else {
+                d.end
+            };
+            self.record_fn_end(target, end);
             self.parse_defaulted_or_deleted(target);
             return;
         }

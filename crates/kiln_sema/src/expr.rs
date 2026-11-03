@@ -4743,6 +4743,7 @@ impl Sema<'_, '_> {
             overloadable: self.kind_of(d) == DeclKind::Function
                 && self.ast.decls.builtin_id(d).is_none()
                 && adl_single == Some(callee),
+            enable_if: true,
         });
         let Some(conv_args) =
             self.convert_call_args(callee_info, callee, args, &mut braced, &proto, loc, rparen)
@@ -5005,9 +5006,21 @@ impl Sema<'_, '_> {
             self.check_variadic_args(&conv_args[n..have], kind);
         }
         if let Some(c) = named
+            && c.enable_if
             && !self.check_enable_if_direct(c.decl, callee, &conv_args, loc)
         {
             return None;
+        }
+        // clang `checkCall`: also a static member function named by a
+        // member access (`x.s(1)`), which is not `named` here.
+        let checked = named.map(|c| c.decl).or_else(|| {
+            let x = self.ignore_parens(callee);
+            (self.ast.exprs.get(x).kind() == ExprKind::MemberExpr)
+                .then(|| self.ast.exprs.decl(x))
+                .filter(|&d| self.is_static_method(d))
+        });
+        if let Some(f) = checked {
+            self.check_diagnose_if_call(f, &conv_args, rparen);
         }
         Some(conv_args)
     }
@@ -6335,6 +6348,11 @@ pub(crate) struct CallCallee {
     /// A non-member function named by an id-expression: clang reports
     /// arity errors through overload resolution ("no matching function").
     pub(crate) overloadable: bool,
+    /// Whether the call checks the function's `enable_if` conditions
+    /// itself: not when overload resolution chose the function (it
+    /// checked them, binding an explicit object member function's
+    /// arguments as clang does, [`Sema::check_enable_if`]).
+    pub(crate) enable_if: bool,
 }
 
 /// An overload set in the order clang lists it: an unqualified lookup

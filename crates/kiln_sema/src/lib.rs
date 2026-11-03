@@ -18,9 +18,11 @@ mod absolute_value;
 mod align_redecl;
 mod annot;
 mod asm;
+mod attr_cond;
 mod bit_int;
 mod bitfield_constant;
 mod builtins;
+pub mod cfg;
 pub mod class;
 mod complex;
 mod consteval;
@@ -35,6 +37,7 @@ mod decl_attrs;
 pub mod declspec;
 mod deduce;
 mod deprecated;
+mod diagnose_if;
 mod empty_body;
 mod enable_if;
 mod entity;
@@ -52,6 +55,7 @@ mod gnu_null;
 mod gnu_typeof;
 mod impcast;
 mod implicit_fallthrough;
+mod infinite_recursion;
 pub mod init;
 mod init_dtor;
 mod init_priority;
@@ -67,6 +71,7 @@ pub mod lookup;
 mod loop_hint;
 mod macro_fixit;
 mod meta;
+mod missing_noreturn;
 pub mod modules;
 pub mod names;
 pub mod new_delete;
@@ -197,8 +202,9 @@ pub struct Sema<'a, 'sm> {
     /// The class layouts computed for the deallocation-function lookup of
     /// virtual destructors ([`Sema::complete_class_align`]), kept between
     /// classes so a class lattice is laid out once rather than once per
-    /// class (WP-450). Only complete classes are laid out through it, and
-    /// a complete class's layout never changes within the TU.
+    /// class (WP-450). It holds complete classes only (a class still being
+    /// defined is laid out over it but not kept, WP-428), and a complete
+    /// class's layout never changes within the TU.
     pub(crate) layout_cache: kiln_abi::LayoutCache,
     /// The `#pragma pack` directives seen, in order (location and the
     /// spelling of the argument list).
@@ -265,6 +271,25 @@ pub struct Sema<'a, 'sm> {
     /// constant evaluation as its `__builtin_` twin, as GCC folds
     /// `::ceil` (spec/sema.md §5.4).
     pub gnu_lib_builtins: bool,
+    /// `-fkiln-dump-cfg`: build the graph of every analysed body and
+    /// append its dump to [`Sema::cfg_out`] (spec/sema.md §7.5.1).
+    pub cfg_dump: bool,
+    /// `-fkiln-cfg-stats`: build the graph of every analysed body and
+    /// append a line with its size and build time to [`Sema::cfg_out`]
+    /// (spec/sema.md §7.5.1).
+    pub cfg_stats: bool,
+    /// The dumps of `-fkiln-dump-cfg` and lines of `-fkiln-cfg-stats`.
+    pub cfg_out: String,
+    /// `-fkiln-cfg-max-elems`: a body whose graph would hold more
+    /// elements gets none; its flow-sensitive warnings are skipped with
+    /// `-Rkiln-analysis-skipped` (spec/sema.md §7.5).
+    pub cfg_max_elems: usize,
+    /// The graph of the body being finished, its vectors reused from
+    /// body to body.
+    pub(crate) cfg_body: cfg::BodyCfg,
+    /// The functions (first declarations) clang 22 infers `noreturn`
+    /// (`InferredNoReturnAttr`, [`Sema::infer_noreturn`]).
+    pub(crate) inferred_noreturn: kiln_source::fx::FxHashSet<DeclId>,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -550,6 +575,15 @@ pub struct Sema<'a, 'sm> {
     /// class argument), with the callee kind: clang checks them only in
     /// the instantiation, which shares the call (spec/sema.md §5.19).
     pub(crate) vararg_recheck: kiln_source::fx::FxHashMap<ExprId, u8>,
+    /// The non-dependent calls of a template definition to a function
+    /// with an argument-dependent `diagnose_if`, by their first converted
+    /// argument: the function, the converted arguments and where to
+    /// diagnose. clang checks them only in the instantiation, which shares
+    /// the call (spec/sema.md "The `diagnose_if` attribute").
+    pub(crate) diagnose_if_recheck: kiln_source::fx::FxHashMap<ExprId, (DeclId, Vec<ExprId>, Loc)>,
+    /// Whether the translation unit has a `diagnose_if` attribute: until
+    /// it does, calls and uses skip looking for one.
+    pub(crate) any_diagnose_if: bool,
     /// The null dereferences warned about per instantiation context
     /// (`queue_null_deref`).
     pub(crate) null_deref_seen: kiln_source::fx::FxHashSet<(ExprId, u64)>,
@@ -923,6 +957,12 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             sve: false,
             nns_start: None,
             gnu_lib_builtins: false,
+            cfg_dump: false,
+            cfg_stats: false,
+            cfg_out: String::new(),
+            cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
+            cfg_body: cfg::BodyCfg::default(),
+            inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,
@@ -996,6 +1036,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             null_deref_rewarn: kiln_source::fx::FxHashMap::default(),
             null_compare_rewarn: kiln_source::fx::FxHashMap::default(),
             vararg_recheck: kiln_source::fx::FxHashMap::default(),
+            any_diagnose_if: false,
+            diagnose_if_recheck: kiln_source::fx::FxHashMap::default(),
             null_deref_seen: kiln_source::fx::FxHashSet::default(),
             designator_pending: None,
             deferred_call_refs: Vec::new(),

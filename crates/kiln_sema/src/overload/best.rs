@@ -2,7 +2,7 @@
 //! [over.match.best]; spec/sema-overload.md §3, §4).
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::{DeclId, ExprId};
+use kiln_ast::{DeclId, ExprId, QualType};
 
 use super::{
     Candidate, CandidateFailure, CandidateKind, Ics, IcsOptions, OverloadCandidateSet, OvlOutcome,
@@ -173,13 +173,37 @@ impl Sema<'_, '_> {
         if cand.viable {
             // clang `CheckEnableIf`, after the candidate is otherwise
             // viable.
-            let args = std::mem::take(&mut set.args);
-            self.check_enable_if(&mut cand, &args, &params, skip, set.loc);
-            set.args = args;
+            self.candidate_enable_if(&mut cand, set, &params, oper_fn, explicit_obj);
         }
         cand.ics.end = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
         set.params = params;
         set.cands.push(cand);
+    }
+
+    /// Checks candidate `cand`'s `enable_if` conditions against the
+    /// set's arguments. clang binds a non-member operator function's
+    /// operands from its first parameter, but passes an explicit-object
+    /// member function the arguments without the object argument, which
+    /// then shift onto the object parameter (`strict`).
+    fn candidate_enable_if(
+        &mut self,
+        cand: &mut Candidate,
+        set: &mut OverloadCandidateSet,
+        params: &[QualType],
+        oper_fn: bool,
+        explicit_obj: bool,
+    ) {
+        let mut args = std::mem::take(&mut set.args);
+        match set.object {
+            Some(o) if oper_fn => {
+                args.insert(0, o);
+                self.check_enable_if(cand, &args, params, 0, false, set.loc);
+                args.remove(0);
+            }
+            _ if explicit_obj => self.check_enable_if(cand, &args, params, 0, true, set.loc),
+            _ => self.check_enable_if(cand, &args, params, 0, false, set.loc),
+        }
+        set.args = args;
     }
 
     /// [over.match.best]: whether viable candidate `c1` is better than
