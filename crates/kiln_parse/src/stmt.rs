@@ -220,12 +220,15 @@ impl Parser<'_, '_> {
                 Kw::Try => return self.parse_try_stmt(),
                 Kw::Asm => return self.parse_asm_statement(),
                 Kw::CoReturn => return self.parse_coreturn(),
-                // [dcl.pre]/5: a static_assert-declaration, alias-declaration
-                // or namespace-alias-definition takes no attributes.
+                // [dcl.pre]/5: static_assert, a consteval block (P3289R1), an
+                // alias or a namespace alias definition takes no attributes.
                 Kw::StaticAssert => {
                     self.prohibit_attrs_at(lead_loc);
                     let d = self.parse_static_assert()?;
                     return Some(self.s.act_on_decl_stmt(&[d], loc));
+                }
+                Kw::Consteval if self.at_consteval_block() => {
+                    return Some(self.parse_consteval_block_stmt(lead_loc, loc));
                 }
                 Kw::Using => {
                     let ds = self.parse_using_leading(&lead_attrs, lead_loc);

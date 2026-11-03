@@ -250,8 +250,10 @@ pub struct MetaCtx {
     /// The call's location (the position of the evaluation point, and
     /// where failure notes point).
     pub loc: Loc,
-    /// The evaluation is plainly constant-evaluated ([expr.const]; the
-    /// only context that may inject). Always false until WP-473.
+    /// The evaluation is plainly constant-evaluated: a consteval
+    /// block's ([expr.const.core]/2.32, the only context in which
+    /// `define_aggregate` may inject); [`crate::Oven::plain`]
+    /// (spec/consteval-blocks.md §3).
     pub plainly: bool,
     /// The evaluation is a trial (a fold, `__builtin_constant_p`, a
     /// speculative checkpoint): a `Mutating` op never reaches the bridge.

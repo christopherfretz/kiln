@@ -197,7 +197,8 @@ or non-static data member (cached per complete class). Sema enforces:
   initializer folds) (`sema_consteval_only_expr`, once per
   full-expression). In an immediate-escalating function the expression
   instead escalates the function to immediate ([expr.const]/18), exactly
-  like an immediate invocation. When the variable being initialized is
+  like an immediate invocation (`escalate_consteval_only`; the reason
+  note is specified in `spec/consteval-blocks.md` §4). When the variable being initialized is
   itself of consteval-only type, the variable rule reports it, not the
   expression rule.
 

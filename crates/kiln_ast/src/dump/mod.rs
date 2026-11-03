@@ -1400,6 +1400,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         match n.kind() {
             DeclKind::TranslationUnit
             | DeclKind::StaticAssert
+            | DeclKind::ConstevalBlock
             | DeclKind::Empty
             | DeclKind::FileScopeAsm => {}
             DeclKind::Typedef | DeclKind::TypeAlias => {

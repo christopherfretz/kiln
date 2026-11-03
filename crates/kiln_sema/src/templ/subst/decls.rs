@@ -1305,6 +1305,18 @@ impl Substituter<'_, '_, '_> {
         Ok(self.sema.static_assert_checked(c, m, loc))
     }
 
+    /// A consteval block of the pattern: substituted and evaluated once
+    /// per instantiation (spec/consteval-blocks.md §2). With whether it
+    /// failed ([`Sema::consteval_block_checked`]).
+    pub(crate) fn consteval_block_decl(&mut self, d: DeclId) -> SubstResult<(DeclId, bool)> {
+        let loc = self.sema.ast.decls.get(d).loc();
+        let Some(sa) = self.sema.ast.decls.static_assert(d).copied() else { return Err(SubstFail) };
+        self.sema.enter_constant_evaluated();
+        let c = self.expr(sa.cond);
+        self.sema.exit_constant_evaluated(c.as_ref().ok().copied());
+        Ok(self.sema.consteval_block_checked(c?, loc))
+    }
+
     /// An enumeration of the pattern: an unscoped one is defined now
     /// (§4.6; clang defines member enumerations with the class), a scoped
     /// member enumeration only when it is required

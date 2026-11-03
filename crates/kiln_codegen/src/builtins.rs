@@ -60,6 +60,7 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId, compat: u32) -> bool {
     // not are emitted as clang emits them.
     builtin_callee(ast, e).is_some_and(|(_, b)| {
         b != id::IS_CONSTANT_EVALUATED
+            && b != id::KILN_PLAINLY_CONSTANT_EVALUATED
             && id::checked_op(b).is_none()
             && !clang19_unevaluated(b)
             // clang 20 made `abs`/`labs`/`llabs` constant (WP-432).
@@ -386,7 +387,9 @@ impl Cg<'_> {
             return self.emit_coro_builtin(b, e);
         }
         let v = match b {
-            id::IS_CONSTANT_EVALUATED => V::C(self.m.const_bool(false)),
+            id::IS_CONSTANT_EVALUATED | id::KILN_PLAINLY_CONSTANT_EVALUATED => {
+                V::C(self.m.const_bool(false))
+            }
             // clang `Builtin::BI__builtin_complex`: the two parts.
             id::COMPLEX => {
                 let re = self.emit_scalar(a0)?;

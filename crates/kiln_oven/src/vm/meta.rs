@@ -53,8 +53,13 @@ impl Oven {
             }
         }
         let trial = self.run.fold || self.mem.in_trial();
-        let ctx =
-            MetaCtx { scope: None, loc: self.site(pc).loc, plainly: false, trial, elem: OTy(t1) };
+        let ctx = MetaCtx {
+            scope: None,
+            loc: self.site(pc).loc,
+            plainly: self.plain(),
+            trial,
+            elem: OTy(t1),
+        };
         match op.purity() {
             Purity::Stable => {}
             Purity::PointDependent => self.run.impure += 1,
