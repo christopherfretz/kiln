@@ -10,6 +10,7 @@ mod features;
 mod gen_pp;
 mod gen_reflect;
 mod jobs;
+mod landed;
 mod libcxx;
 mod libstdcxx;
 mod oracle;
@@ -47,12 +48,13 @@ commands:
               ci (`cargo xtask features --help`; spec/harness.md \"Feature table\")
   jobserver   status|refill: count, or top up, the shared jobserver pool's idle tokens
               (`cargo xtask jobserver --help`; spec/harness.md \"Jobserver\")
-  ci          the merge gate: diag-split --check, fmt --check, clippy -D warnings, cargo test, then the
-              corpus twice: xtask test --compiler clang++-N (the corpus self-check;
-              skipped when clang++-N is not on PATH) and xtask test with kiln; fails
-              on any FAIL, XPASS, ERROR or KILLED in either (contract in spec/harness.md
-              \"CI\"); a cargo step failing with error[E0463] is rerun once
-              `--quick` skips the clang self-check (local iteration only)
+  ci          the merge gate: diag-split --check, the spec/landed lint, fmt --check, clippy
+              -D warnings, cargo test, then the corpus twice: xtask test --compiler
+              clang++-N (the corpus self-check; skipped when clang++-N is not on PATH) and
+              xtask test with kiln; fails on any FAIL, XPASS, ERROR or KILLED in either
+              (contract in spec/harness.md \"CI\"); a cargo step failing with error[E0463]
+              is rerun once; `--quick` skips the clang self-check (local iteration only);
+              `--oracle-only` keeps only what depends on KILN_ORACLE (the second-oracle gate)
 
 environment:
   KILN_ORACLE  the oracle clang/LLVM release: 22 (default) or 19 (the M3 gate's). Names
@@ -104,17 +106,47 @@ fn stress(args: impl Iterator<Item = String>) -> ExitCode {
 }
 
 const CI_USAGE: &str = "\
-usage: cargo xtask ci [--quick]
+usage: cargo xtask ci [--quick] [--oracle-only]
 
-  --quick     skip the clang++-N corpus self-check (N: KILN_ORACLE, default 22; 
-              local iteration; merges and GitHub CI use the full form)
+  --quick        skip the clang++-N corpus self-check (N: KILN_ORACLE, default 22;
+                 local iteration; merges and GitHub CI use the full form)
+  --oracle-only  run only what depends on the oracle release: no diag-split or
+                 spec/landed lint, no fmt or clippy, and of `cargo test` only the
+                 targets that read KILN_ORACLE; the corpus runs as usual (GitHub CI's
+                 `KILN_ORACLE=19 cargo xtask ci --quick --oracle-only`)
 ";
+
+/// The cargo test targets whose outcome depends on `KILN_ORACLE`, as
+/// `(package, integration test)`: all that `ci --oracle-only` runs of
+/// `cargo test` (spec/harness.md "CI"). Every other unit and integration
+/// test pins its tools (`clang++-19`, `/usr/lib/llvm-19`) or uses none, so a
+/// second run under another oracle repeats it unchanged. The test
+/// `oracle_tests_are_listed` fails when a file under `crates/` reads the
+/// variable without being listed here.
+const ORACLE_TESTS: &[(&str, &str)] = &[("kiln_codegen", "ir_vs_clang")];
+
+/// The `cargo` steps of `ci` before the corpus runs, in order.
+fn ci_cargo_steps(oracle_only: bool) -> Vec<Vec<&'static str>> {
+    if oracle_only {
+        return ORACLE_TESTS
+            .iter()
+            .map(|&(pkg, test)| vec!["test", "-p", pkg, "--test", test])
+            .collect();
+    }
+    vec![
+        vec!["fmt", "--all", "--check"],
+        vec!["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
+        vec!["test", "--workspace"],
+    ]
+}
 
 fn ci(args: impl Iterator<Item = String>) -> ExitCode {
     let mut quick = false;
+    let mut oracle_only = false;
     for arg in args {
         match arg.as_str() {
             "--quick" => quick = true,
+            "--oracle-only" => oracle_only = true,
             "-h" | "--help" => {
                 print!("{CI_USAGE}");
                 return ExitCode::SUCCESS;
@@ -135,21 +167,11 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    // The diagnostic tables are split per area (spec/diag.md §2.4).
-    if let Err(problems) = diag_split::check(&util::repo_root()) {
-        for p in &problems {
-            eprintln!("xtask ci: diag-split: {p}");
-        }
-        eprintln!("xtask ci: FAILED: run `cargo xtask diag-split` (spec/diag.md §2.4)");
+    if !oracle_only && !ci_lints(&util::repo_root()) {
         return ExitCode::FAILURE;
     }
-    let steps: &[&[&str]] = &[
-        &["fmt", "--all", "--check"],
-        &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
-        &["test", "--workspace"],
-    ];
-    for step in steps {
-        if !ci_step(step) {
+    for step in ci_cargo_steps(oracle_only) {
+        if !ci_step(&step) {
             return ExitCode::FAILURE;
         }
     }
@@ -199,6 +221,29 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
     }
 }
 
+/// Step 0 of `ci`, in-process: the diagnostic tables are split per area
+/// (spec/diag.md §2.4) and the per-WP Landed spec files are well formed
+/// (spec/README.md "Landed sections"). Both report every problem before
+/// failing.
+fn ci_lints(root: &std::path::Path) -> bool {
+    let mut ok = true;
+    if let Err(problems) = diag_split::check(root) {
+        for p in &problems {
+            eprintln!("xtask ci: diag-split: {p}");
+        }
+        eprintln!("xtask ci: FAILED: run `cargo xtask diag-split` (spec/diag.md §2.4)");
+        ok = false;
+    }
+    if let Err(problems) = landed::check(root) {
+        for p in &problems {
+            eprintln!("xtask ci: spec/landed: {p}");
+        }
+        eprintln!("xtask ci: FAILED: fix the files above (spec/README.md \"Landed sections\")");
+        ok = false;
+    }
+    ok
+}
+
 /// One `cargo xtask test` run over the default corpus, with `compiler`.
 fn ci_corpus(what: &str, compiler: Option<std::path::PathBuf>) -> test::CorpusOutcome {
     eprintln!("xtask ci: cargo xtask test {what}");
@@ -242,5 +287,73 @@ fn ci_step(step: &[&str]) -> bool {
         }
         eprintln!("xtask ci: failed with {status}");
         return false;
+    }
+}
+
+#[cfg(test)]
+mod ci_tests {
+    use super::{ORACLE_TESTS, ci_cargo_steps, util};
+    use std::path::{Path, PathBuf};
+
+    fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().filter_map(Result::ok) {
+            let p = e.path();
+            if p.is_dir() {
+                rust_files(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    /// spec/harness.md "CI": `ci --oracle-only` runs every cargo test target
+    /// that reads `KILN_ORACLE`, so a new oracle-dependent test cannot
+    /// silently drop out of the second-oracle gate. A file that reads it
+    /// must be an integration test listed in [`ORACLE_TESTS`] (or a module
+    /// of one, `tests/<name>/…`).
+    #[test]
+    fn oracle_tests_are_listed() {
+        let crates = util::repo_root().join("crates");
+        let mut files = Vec::new();
+        rust_files(&crates, &mut files);
+        files.sort();
+        let mut unlisted = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for f in &files {
+            if !std::fs::read_to_string(f).unwrap().contains("KILN_ORACLE") {
+                continue;
+            }
+            let rel = f.strip_prefix(&crates).unwrap();
+            let parts: Vec<&str> = rel.iter().filter_map(|c| c.to_str()).collect();
+            let target = match parts[..] {
+                [pkg, "tests", file] => file.strip_suffix(".rs").map(|t| (pkg, t)),
+                [pkg, "tests", dir, ..] => Some((pkg, dir)),
+                _ => None,
+            };
+            match target.filter(|t| ORACLE_TESTS.contains(t)) {
+                Some(t) => _ = seen.insert(t),
+                None => unlisted.push(rel.display().to_string()),
+            }
+        }
+        assert!(
+            unlisted.is_empty(),
+            "these files read KILN_ORACLE but `ci --oracle-only` does not run them; add their \
+             test target to ORACLE_TESTS in xtask/src/main.rs: {unlisted:?}"
+        );
+        for t in ORACLE_TESTS {
+            assert!(seen.contains(t), "ORACLE_TESTS lists {t:?}, which does not read KILN_ORACLE");
+        }
+    }
+
+    #[test]
+    fn cargo_steps() {
+        assert_eq!(
+            ci_cargo_steps(true),
+            [["test", "-p", "kiln_codegen", "--test", "ir_vs_clang"]],
+            "--oracle-only"
+        );
+        let full = ci_cargo_steps(false);
+        assert_eq!(full.len(), 3);
+        assert_eq!(full[2], ["test", "--workspace"]);
     }
 }

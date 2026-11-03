@@ -60,6 +60,7 @@ fn cli_parsing() {
             pp_compare: Some(PpCompare::Text),
             report_parity: Some("docs/status/pp-parity.md".into()),
             paths: vec!["tests/a".into(), "b.cpp".into()],
+            toolchain: None,
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
@@ -99,11 +100,15 @@ fn have_clang() -> bool {
 }
 
 /// clang 19 as both the compiler and the oracle: the fixtures' expected
-/// messages name `clang++-19`, whatever the default `KILN_ORACLE` is.
+/// messages name `clang++-19`, whatever the default `KILN_ORACLE` is. The
+/// toolchain (`requires: llvm`) is release 19's too, so these tests do not
+/// read `KILN_ORACLE` and `ci --oracle-only` need not rerun them
+/// (spec/harness.md "CI").
 fn clang_opts(paths: &[PathBuf]) -> Options {
     Options {
         compiler: Some("clang++-19".into()),
         oracle: Some("clang++-19".into()),
+        toolchain: Some(crate::oracle::Oracle { version: 19 }),
         jobs: Some(2),
         paths: paths.to_vec(),
         ..Options::default()
@@ -134,23 +139,30 @@ fn seed_roots(root: &Path) -> Vec<PathBuf> {
     roots
 }
 
-/// The seed corpus is self-validating: it must pass with clang 19, and it
-/// must exercise every directive.
+/// The seed corpus is self-validating: it must pass with clang 19. The run
+/// is most of this binary's time, so it uses every CPU rather than
+/// `clang_opts`' two jobs.
 #[test]
 fn seed_corpus_passes_with_clang() {
     if !have_clang() {
         return;
     }
     let root = repo_root();
-    let results = execute(&clang_opts(&seed_roots(&root))).expect("runner infrastructure works");
+    let opts = Options { jobs: None, ..clang_opts(&seed_roots(&root)) };
+    let results = execute(&opts).expect("runner infrastructure works");
     let all = report(&results);
     assert!(results.iter().all(|r| !r.status.is_failure()), "{all}");
     let counts = report::Counts::of(&results);
     assert!(counts.get(Status::Pass) >= 6, "{all}");
     assert!(counts.get(Status::XFail) >= 1, "{all}");
     assert!(counts.get(Status::Skip) >= 2, "{all}");
+}
 
-    // Directive coverage, so the corpus keeps demonstrating the format.
+/// The seed corpus exercises every directive, so it keeps demonstrating
+/// the format (static: it needs no compiler).
+#[test]
+fn seed_corpus_exercises_every_directive() {
+    let root = repo_root();
     let cases = discover::discover(&root, &seed_roots(&root), None).unwrap();
     let mut seen = BTreeSet::new();
     for c in &cases {
