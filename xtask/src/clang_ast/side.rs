@@ -140,7 +140,11 @@ fn text_args(rest: &[(usize, &str)], depth: usize) -> Vec<TextArg> {
             args.push(TextArg {
                 text: a.to_owned(),
                 decl: child.and_then(|(_, cc)| address(cc)),
-                elems: if a.starts_with("pack ") { text_args(&rest[k + 1..], d) } else { Vec::new() },
+                elems: if a.starts_with("pack ") {
+                    text_args(&rest[k + 1..], d)
+                } else {
+                    Vec::new()
+                },
             });
         }
     }

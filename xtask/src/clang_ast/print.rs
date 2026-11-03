@@ -347,7 +347,8 @@ impl<'a> Index<'a> {
         for (key, v) in obj {
             if key == "inner" || key == "array_filler" {
                 for c in v.as_arr().unwrap_or(&[]) {
-                    if kind(c) == "TemplateTemplateParmDecl" && side::TEMPLATE_PARM_PARENTS.contains(&k)
+                    if kind(c) == "TemplateTemplateParmDecl"
+                        && side::TEMPLATE_PARM_PARENTS.contains(&k)
                     {
                         self.ttps.insert(id(c), self.ttp_names.len());
                         self.ttp_names.push(name(c).unwrap_or(""));
@@ -729,20 +730,20 @@ impl<'a> Printer<'a, '_> {
         Ok(Some(Ctx::Named(format!("{nm}<{}>", parts.join(", ")))))
     }
 
-    /// Argument `a` of specialization `n` (argument `i`, or element `j`
-    /// of the pack that is argument `i`) as it prints in a qualified
+    /// Argument `arg` of specialization `spec` (argument `idx`, or element
+    /// `elem` of the pack that is argument `idx`) as it prints in a qualified
     /// name: from the JSON, or from the side channel for what it omits.
     fn ctx_arg(
         &mut self,
-        n: &Json,
-        a: &Json,
-        i: usize,
-        j: Option<usize>,
+        spec: &Json,
+        arg: &Json,
+        idx: usize,
+        elem: Option<usize>,
         param: Option<&str>,
     ) -> Res<String> {
-        match qualified_name_arg(a, param) {
+        match qualified_name_arg(arg, param) {
             Ok(s) => Ok(s),
-            Err(e) => self.side_ctx_arg(n, i, j, param).ok_or(e),
+            Err(e) => self.side_ctx_arg(spec, idx, elem, param).ok_or(e),
         }
     }
 
@@ -815,8 +816,8 @@ impl<'a> Printer<'a, '_> {
         Ok(arg.decl.as_deref() == Some(def.as_str()))
     }
 
-    /// Argument `i` (or element `j` of pack argument `i`) of class
-    /// template specialization `n` as it prints in a qualified name, from
+    /// Argument `idx` (or element `elem` of pack argument `idx`) of class
+    /// template specialization `spec` as it prints in a qualified name, from
     /// the side channel, for what the JSON omits: a template template
     /// argument's name (`template 'q::F'`), an enumeration argument's
     /// enumerator (`integral 'K::b'`; a value that names no enumerator,
@@ -825,12 +826,12 @@ impl<'a> Printer<'a, '_> {
     /// line is). `None` when the side channel has nothing usable.
     fn side_ctx_arg(
         &mut self,
-        n: &Json,
-        i: usize,
-        j: Option<usize>,
+        spec: &Json,
+        idx: usize,
+        elem: Option<usize>,
         param: Option<&str>,
     ) -> Option<String> {
-        let line = self.side_arg(n, i, j)?.text;
+        let line = self.side_arg(spec, idx, elem)?.text;
         let quoted = |w: &str| line.strip_prefix(w)?.strip_suffix('\'').map(str::to_owned);
         if param.is_none() {
             return quoted("template '");
@@ -2744,7 +2745,8 @@ fn subst_default(t: &Json, args: &[&Json], i: usize, depth: Option<i64>) -> Opti
             if t.get("depth").and_then(exact_int) != depth {
                 return None;
             }
-            let ix = usize::try_from(t.get("index").and_then(exact_int)?).ok().filter(|&x| x < i)?;
+            let ix =
+                usize::try_from(t.get("index").and_then(exact_int)?).ok().filter(|&x| x < i)?;
             args[ix].get("type").and_then(desugared).map(str::to_owned)
         }
         "PointerType" => {
