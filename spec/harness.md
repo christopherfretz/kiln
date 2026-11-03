@@ -597,21 +597,38 @@ it runs alongside:
   in-flight children; the pool can only lower the effective parallelism.
 - **Release.** Tokens are released by `Drop`: on a normal exit, an error
   return, a worker panic, and a child killed by the memory cap or a timeout.
-- **Signals (WP-157).** With a live pool, xtask catches **SIGINT and
-  SIGTERM** on a dedicated thread (the `signal-hook` crate). The handler
-  `unsafe` stays inside that dependency, so xtask remains
-  `forbid(unsafe_code)`. On either signal:
-  1. every pool byte the process holds (by live tokens, or already read for
-     waiting workers) is written back to the fifo;
-  2. later token drops return nothing and new acquisitions are free;
-  3. the signal's default action ends the process (falling back to exit
-     status 128 + signal), and stderr says `xtask: signal N: returned K
+- **Signals (WP-157, WP-163).** xtask catches **SIGINT and SIGTERM** on a
+  dedicated thread (the `signal-hook` crate), with or without a pool. The
+  thread starts with the first child. The handler's `unsafe` stays inside
+  that dependency, so xtask remains `forbid(unsafe_code)`. On either signal:
+  1. **The children die first.** Every child started through
+     `util::process` (`run`, `run_with_input`, `run_measured`) is in a
+     table from spawn to reap, and each is the leader of its own process
+     group.
+     - Each live group is killed with `SIGKILL`: the wrapper, GNU time, the
+       compiler driver and `cc1` all go together.
+     - The thread then waits until each child is reaped and no spawn is in
+       flight. It waits at most 10 s, for a child in uninterruptible sleep.
+     - A child whose spawn was in flight is killed as it registers.
+     - From then on, every new spawn fails with `Interrupted`, so a worker
+       that sees its test die cannot start the next one.
+     - stderr says `xtask: signal N: killed K child process(es)`.
+  2. Every pool byte the process still holds (by live tokens, or already
+     read for waiting workers) is written back to the fifo. This happens
+     only after step 1, so an orphan never runs on a returned token. Tokens
+     whose children were reaped in step 1 went back through their normal
+     `Drop`.
+  3. Later token drops return nothing, and new acquisitions are free. Each
+     token is therefore returned exactly once.
+  4. The signal's default action ends the process (falling back to exit
+     status 128 + signal). stderr says `xtask: signal N: returned K
      jobserver token(s)`.
 
-  A child still running at that moment keeps running until it exits. For a
-  terminal ^C the children share xtask's process group and get the SIGINT
-  too, except `run_measured`'s, which run in their own group. So the pool
-  can briefly be oversubscribed by those children, never undercounted.
+  The memory cap and the timeout are unchanged: they kill one child's group
+  and leave the table to its normal reap. Not covered are processes that
+  xtask starts outside `util::process`: the `cargo` steps of `cargo xtask
+  ci` and the helper `git` calls. They share xtask's process group, so a
+  terminal ^C reaches them directly, but a `kill -INT <xtask pid>` does not.
 - **SIGKILL cannot be handled.** No process can catch it, so `kill -9`
   (including the kernel OOM killer), or any other fatal signal xtask does
   not catch, loses the tokens xtask held, as it would for make and cargo.
