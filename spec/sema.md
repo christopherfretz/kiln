@@ -5705,6 +5705,25 @@ unscoped enumeration is reported (spec/oven.md "Integration").
     (`is_constant_initialized`).
 
   A reference is usable when it binds to a static lvalue.
+- **Constant initialization warning** (WP-415, clang
+  `Sema::CheckCompleteVariableDeclaration`): the initializer of a variable
+  that is neither `constexpr` nor `constinit` but has static or thread
+  storage duration, is a reference, or is a `const` non-`volatile`
+  integral or enumeration variable (locals included) is evaluated as a
+  constant initializer, which is manifestly constant-evaluated. When it
+  calls `__builtin_is_constant_evaluated()` or `std::is_constant_evaluated()`
+  directly, `-Wconstant-evaluated` ("... will always evaluate to 'true' in
+  a manifestly constant-evaluated expression") is reported from that
+  evaluation even when it then fails (`int g = __builtin_is_constant_evaluated()
+  ? x : 7;`); the variable is then initialized dynamically or by
+  codegen's re-fold (spec/codegen.md). A non-const local, a const
+  floating local and a `volatile` variable do not warn. Sema runs it
+  only when a bounded walk of the initializer finds such a direct call
+  (`oven_bridge.rs::warn_constant_evaluated_init`, `Oven::warn_constant_evaluated`).
+  Same wording at `-fclang-compat=19`. Deviation: a variable template's
+  instantiations warn once (oven-bridge diagnostics carry no
+  instantiation context), clang once per instantiation. Validation:
+  `tests/conformance/expr.const/is-constant-evaluated-failed-constant-init.cpp`.
 
   From C++23 on (P2280, a DR; WP-357) a reference that is not usable
   (a parameter named outside its call, an `extern` reference, one with a

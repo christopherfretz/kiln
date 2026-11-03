@@ -1139,8 +1139,7 @@ pub(crate) fn const_object(ast: &kiln_ast::Ast, q: QualType) -> bool {
 
 /// clang's `note_constexpr_invalid_cast` for a conversion a
 /// `reinterpret_cast` performs ([expr.const]/5.15).
-const REINTERPRET_CONV: &str =
-    "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression";
+const REINTERPRET_CONV: &str = "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression";
 
 /// clang's `note_constexpr_stmt_expr_unsupported`.
 const STMT_EXPR_UNSUPPORTED: &str =

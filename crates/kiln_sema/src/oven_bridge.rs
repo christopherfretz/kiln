@@ -412,9 +412,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// Whether function `f` is `std::is_constant_evaluated`.
     fn is_std_is_constant_evaluated(&self, f: DeclId) -> bool {
-        self.ast.decls.get(f).name().as_ident().is_some_and(|s| {
-            self.ast.symbols().as_str(s) == "is_constant_evaluated"
-        }) && self.is_in_std_namespace(f)
+        self.ast
+            .decls
+            .get(f)
+            .name()
+            .as_ident()
+            .is_some_and(|s| self.ast.symbols().as_str(s) == "is_constant_evaluated")
+            && self.is_in_std_namespace(f)
     }
 
     /// The integer value of the scalar constant `v` (`bool` as 0/1), if

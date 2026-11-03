@@ -336,7 +336,23 @@ the evaluator's flattened type table.
   `VarDecl::evaluateValue` only notes (`CCEDiag`) a read of a
   non-constexpr variable, so `const double d1 = d0 * 2;` keeps the value
   5.0 for a later fold however it is reached (`constexpr const double
-  *p = &d1; int a[(int)*p];` folds, WP-407). Before WP-407 such a global
+  *p = &d1; int a[(int)*p];` folds, WP-407). A potentially-constant variable
+  (a const integral, a reference) whose constant initialization failed
+  (sema's `VarEvalState::NotConstant`, or a failed nested resolution) is
+  read the same way (`Oven::refold_var_init`, WP-415): its initializer is
+  evaluated once more, non-manifestly (`const_context` false,
+  `__builtin_is_constant_evaluated()` false) and laxly, into a `LAX_READ`
+  object, as clang's `VarDecl::evaluateValue` keeps a non-manifest value
+  after noting "initializer of 'cx' is not a constant expression". So
+  `const int cx = __builtin_is_constant_evaluated() ? x : 9;` reads 9 in
+  a fold (`int a[cx]` is folded to a constant array, `__builtin_constant_p(cx)`
+  is true) while a strict read still faults with that note; an
+  initializer that does not fold either (`const int cy = x;`) leaves an
+  external object. `__builtin_constant_p`'s speculation is itself a lax
+  fold (`RunState::lax` and `Memory::lax` set for its region, as clang's
+  `EvaluateBuiltinConstantP` folds): `__builtin_constant_p(d)` of
+  `const double d = 2.5;` is true. Validation:
+  `tests/conformance/expr.const/failed-constant-init-folds-non-manifestly.cpp`. Before WP-407 such a global
   was resolved per mode and reset at each mode switch, so a pointer
   resolved strictly did not fold and, worse, a pointer thawed in a lax
   fold kept reading the lax contents in a later strict evaluation that
@@ -451,6 +467,14 @@ asks whether the evaluation is manifestly constant-evaluated.
   names `std::is_constant_evaluated` at that call's site. Deeper calls do
   not warn. The warning goes through `SemaBridge::diag`, so it obeys
   `-Wno-`/`-Werror=` and system-header suppression.
+  `Oven::warn_constant_evaluated(bridge, e, var)` (WP-415) reruns the
+  constant initializer `e` of a variable whose silent constant
+  initialization failed with `RunState::cev_warn` set, so a silent run
+  still reports this warning (and nothing else): clang warns while
+  checking the constant initializer even when it then fails (spec/sema.md
+  "Constant initialization"). `cev_warn` is cleared in speculation
+  (`__builtin_constant_p`) and in the nested initialization of a variable
+  it reads.
 - **Memoization:** a function whose body uses `IsConstEval` is never
   memoized, and every memo key carries the context (bit 31 of the
   function word), so a call cached in one context is never replayed in
