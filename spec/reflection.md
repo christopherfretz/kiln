@@ -258,7 +258,7 @@ whether the op may run in a trial (§4.3):
   failure is not memoized, because only successful calls are.
 
 **The op table.** This list covers every row in `kiln_oven/src/meta/`
-(231 ops). The Rust tables are the source of truth: a difference between
+(241 ops). The Rust tables are the source of truth: a difference between
 this list and the tables is a spec bug, fixed in the same change.
 
 - **Query · Stable · WP-470, done**: `type_of`.
@@ -332,6 +332,7 @@ this list and the tables is a spec bug, fixed in the same change.
   `decay`, `common_type`, `common_reference`, `underlying_type`,
   `invoke_result`, `unwrap_reference`, `unwrap_ref_decay`, `tuple_size`,
   `tuple_element`, `variant_size`, `variant_alternative`, `type_order`.
+  Full contract and every row (with the `(data, n)` range rows): spec/reflection-traits.md.
 - **Member · PointDependent · WP-478**: `members_of`.
 - **Member · Stable · WP-478**: `bases_of`, `static_data_members_of`,
   `nonstatic_data_members_of`, `subobjects_of`, `enumerators_of`,

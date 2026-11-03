@@ -4563,6 +4563,12 @@ a non-reference `U` as a prvalue ([meta.unary.prop]), while
 `__reference_constructs_from_temporary` (prvalue `U`) and warns
 `sema_deprecated_builtin` naming it, as clang 22 (WP-394). The
 `converts` form copy-initializes; the other two direct-initialize.
+A prvalue operand of a non-class, non-array type has its cv-qualifiers
+dropped ([expr.type]/2), so
+`__reference_constructs_from_temporary(int&&, const int)` is true. This
+holds at every `-fclang-compat` level, since clang 19's false is a bug
+that clang 22 and GCC 16.1 do not have (WP-477;
+`builtin.reference-from-temporary-cv{,-19}.cpp`).
 
 A deprecated trait spelling warns where it is written and again at each
 instantiation that rebuilds it (under the instantiation note), as clang's
