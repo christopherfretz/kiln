@@ -40,7 +40,7 @@ impl Sema<'_, '_> {
         if ty == QualType::ERROR {
             return self.recover(info, &[], loc);
         }
-        self.builder().reflect_expr(Reflectee::Type(ty), info, loc, end)
+        self.build_reflect_expr(Reflectee::Type(ty), info, loc, end)
     }
 
     /// `^^name` / `^^nns name` ([expr.reflect]/3-5): a namespace, a
@@ -74,16 +74,17 @@ impl Sema<'_, '_> {
                 // Spike: an alias reflects the namespace it denotes (P2996
                 // reflects the alias itself; `dealias` unwraps it).
                 DeclKind::NamespaceAlias => {
-                    let d = self.ast.resolve_alias(d);
-                    self.builder().reflect_expr(Reflectee::Decl(d), info, loc, end)
+                    let d = self.entity_decl(self.ast.resolve_alias(d));
+                    self.build_reflect_expr(Reflectee::Decl(d), info, loc, end)
                 }
                 DeclKind::Namespace
                 | DeclKind::Var
                 | DeclKind::Field
                 | DeclKind::Function
                 | DeclKind::CXXMethod => {
-                    let d = self.ast.first(d);
-                    self.builder().reflect_expr(Reflectee::Decl(d), info, loc, end)
+                    // One reflection per entity (`Sema::same_entity`).
+                    let d = self.entity_decl(d);
+                    self.build_reflect_expr(Reflectee::Decl(d), info, loc, end)
                 }
                 _ => {
                     let d =

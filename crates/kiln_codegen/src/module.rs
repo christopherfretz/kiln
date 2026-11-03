@@ -687,11 +687,11 @@ impl<'a> Cg<'a> {
                     });
                     if let Some(def) = def {
                         self.emit_global_var(def)?;
-                    } else if ast.spec_info(first).is_some()
-                        && ast.decls.var(first).is_some_and(|v| v.init.is_some())
-                    {
-                        // A variable template specialization used before
-                        // its template's definition is its own definition.
+                    } else if ast.spec_info(first).is_some() {
+                        // A variable template specialization is its own
+                        // definition (also one used before its template's
+                        // definition; one without an initializer is
+                        // default-initialized).
                         self.emit_global_var(first)?;
                     }
                 }
@@ -1934,9 +1934,22 @@ impl<'a> Cg<'a> {
         } else if let Some(def) = self.instantiated_var_def(first) {
             self.to_emit.push(Def::Decl(def));
         }
+        // A namespace-scope array compound literal's object is defined at
+        // its first use, its initializer emitted before the global, clang
+        // `tryEmitGlobalCompoundLiteral` (WP-466).
+        if ast.decls.compound_literal_of(first).is_some() {
+            let init = ast.decls.var(first).and_then(|v| v.init);
+            if init.is_some_and(|e| self.folds.get(e).is_some()) {
+                self.emit_var_def(first)?;
+                if let Some(&g) = self.gvars.get(&first) {
+                    return Ok(g);
+                }
+            }
+            self.to_emit.push(Def::Decl(first));
+        }
         let Some(ty) = ast.decls.get(first).ty() else { return err(None, "variable without type") };
         let lt = self.mty(ty);
-        let name = mangle::mangle_decl(ast, &mut self.anon, first);
+        let name = self.var_symbol(first);
         // clang `GetOrCreateLLVMGlobal` returns an existing global of the
         // name unchanged, whatever its type: variables whose asm labels
         // name one symbol share it.
@@ -2009,7 +2022,22 @@ impl<'a> Cg<'a> {
     /// `getDeclAlign(D)`): its `alignas`/`aligned` attribute, else
     /// [`Self::global_align`] of its type ([dcl.align]/5).
     pub fn var_align(&mut self, d: DeclId) -> u64 {
-        kiln_abi::layout::decl_align(self.ast, d, self.target, false)
+        // clang 19 `tryEmitGlobalCompoundLiteral` aligns a file-scope
+        // compound literal to its type alignment (no x86-64 large-array
+        // bump); clang 22 uses the variable rule.
+        let literal_type_align =
+            self.opts.clang_compat < 22 && self.ast.decls.compound_literal_of(d).is_some();
+        kiln_abi::layout::decl_align(self.ast, d, self.target, literal_type_align)
+    }
+
+    /// The symbol of namespace-scope or static data member variable
+    /// `first`: its mangled name, or `.compoundliteral` for the object of
+    /// a namespace-scope array compound literal (uniqued by the module).
+    fn var_symbol(&mut self, first: DeclId) -> String {
+        if self.ast.decls.compound_literal_of(first).is_some() {
+            return ".compoundliteral".to_owned();
+        }
+        mangle::mangle_decl(self.ast, &mut self.anon, first)
     }
 
     /// clang `EmitGlobalVarDefinition`.
@@ -2055,7 +2083,7 @@ impl<'a> Cg<'a> {
             }
             g
         } else {
-            let name = mangle::mangle_decl(ast, &mut self.anon, first);
+            let name = self.var_symbol(first);
             // A declaration of another variable with the same asm label
             // is this definition's global (clang `GetOrCreateLLVMGlobal`
             // with `IsForDefinition` replaces it by one of the
