@@ -1787,6 +1787,7 @@ mod tests {
             probe: RssProbe::Unavailable,
             warning_flags: vec!["-Wall".into()],
             scratch: base.join("s"),
+            tmp: base.join("t"),
             keep: false,
         };
         let args = |name: &str, text: &str| {
