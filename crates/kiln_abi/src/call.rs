@@ -1248,7 +1248,7 @@ fn copy_move_ctor_kind(ast: &Ast, ctor: DeclId, class: DeclId) -> Option<bool> {
 /// address and returned through `sret` ([class.temporary]/3).
 /// "Trivial" is clang's trivial-for-call: trivial, or made so by
 /// `[[clang::trivial_abi]]` on the class or a subobject (the class bits
-/// `TRIVIAL_ABI` and `*_FOR_CALL`; spec/abi.md §7x).
+/// `TRIVIAL_ABI` and `*_FOR_CALL`; spec/abi.md §8.25).
 pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
     use kiln_ast::decl::{DeclKind, DefinitionBits as B};
     let Some(def) = ast.definition(record) else { return true };
@@ -1341,7 +1341,7 @@ fn is_user_provided(ast: &Ast, f: DeclId) -> bool {
 /// Whether a by-value parameter of class type `q` is destroyed by the
 /// callee (clang `isParamDestroyedInCallee`, Itanium: the class is passed
 /// in registers yet has a non-trivial destructor, which only
-/// `[[clang::trivial_abi]]` on it or a subobject allows; spec/abi.md §7x).
+/// `[[clang::trivial_abi]]` on it or a subobject allows; spec/abi.md §8.25).
 pub fn is_destroyed_in_callee(ast: &Ast, q: QualType) -> bool {
     use kiln_ast::decl::DefinitionBits as B;
     let TypeView::Record(d) = ast.types.canonical_view(q) else { return false };

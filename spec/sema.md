@@ -2084,6 +2084,52 @@ and returns the scope it names:
       explicit object member function (it takes no value).
     - Tests: `tests/conformance/dcl.attr/enable-if-viability.cpp`,
       `enable-if-ranking.cpp`.
+  - **The `trivial_abi` attribute** (clang extension, `[[clang::trivial_abi]]`
+    / `__attribute__((trivial_abi))`; WP-460, `trivial_abi.rs`; clang
+    AttrDocs "trivial_abi", `Sema::checkIllFormedTrivialABIStruct`):
+    - Subject: classes and unions; elsewhere "'trivial_abi' attribute only
+      applies to classes" (`-Wignored-attributes`). It takes no arguments
+      ("'trivial_abi' attribute takes no arguments", error; the parser
+      keeps the argument list so the check can fire).
+    - Dropped at the class's `}`, with "'trivial_abi' cannot be applied to
+      'X'" (`-Wignored-attributes`) and a note "'trivial_abi' is disallowed
+      on 'X' because …" naming the first reason in clang's order: it is
+      polymorphic; it has a base that cannot be passed in registers or a
+      virtual base ("has a base of a non-trivial class type" / "has a
+      virtual base"); it has a field whose class cannot be ("has a field
+      of a non-trivial class type"); then, unless the class is trivially
+      relocatable (`cxx_relocatable_class`), "its copy constructors and
+      move constructors are all deleted". A template instantiation drops
+      it silently.
+    - In effect, the class's copy and move constructors and destructor are
+      trivial for the purposes of calls (`DefinitionBits::TRIVIAL_ABI`).
+      Otherwise a declared non-trivial, non-user-provided member is
+      trivial for calls when the corresponding members of every base and
+      non-reference field class are (clang `addedClassSubobject`), recorded
+      as `COPY_CTOR_FOR_CALL` / `MOVE_CTOR_FOR_CALL` / `DTOR_FOR_CALL`
+      (`trivial_abi_bits`, computed before the class's properties freeze).
+    - clang quirk, modelled: the implicit members clang declares eagerly at
+      `}` (`implicit_bits`: copy/move constructors needing overload
+      resolution or with inherited constructors, the destructor of a
+      dynamic class) are marked trivial for calls *before* the attribute
+      is dropped, so a class whose attribute is dropped for a virtual base
+      or a non-trivial subobject still passes in registers when its only
+      non-trivial members are those (`__can_pass_in_regs(H)` is true for
+      `struct [[clang::trivial_abi]] H : N {}` in clang 19 and 22).
+    - Callee-destroyed parameters (`mark_callee_destroyed_param`, clang
+      `CheckParmsForFunctionDef`): at a function definition, the
+      destructor of each by-value parameter the callee destroys
+      (`kiln_abi::call::is_destroyed_in_callee`) is referenced, so an
+      implicit one is defined. ABI and codegen: spec/abi.md §8.25,
+      spec/codegen.md §7x.
+    - `__builtin_is_cpp_trivially_relocatable` is not implied (clang 22
+      answers false for a class with user-provided copy/move members);
+      `__is_trivially_relocatable` follows `can_pass_in_registers` as in
+      clang. Not done: clang 22's deprecation warning on
+      `__is_trivially_relocatable`.
+    - Tests: `tests/conformance/dcl.attr/trivial-abi-attribute.cpp`,
+      `tests/conformance/class.temporary/run-trivial-abi-callee-destroys.cpp`,
+      `tests/codegen/trivial_abi_calls.cpp`, `trivial_abi_subobjects.cpp`.
   - **Type-position attributes** ([dcl.spec.general]/1, [dcl.ptr]/1,
     [dcl.array]/1, [dcl.fct]/1; `act_on_type_position_attrs`, clang
     `err_attribute_not_type_attr`; WP-312, WP-324). An

@@ -1193,7 +1193,7 @@ impl DefinitionBits {
     /// `[[clang::trivial_abi]]` is in effect: the class has the attribute
     /// and clang's `checkIllFormedTrivialABIStruct` kept it. Its copy and
     /// move constructors and destructor are trivial for the purposes of
-    /// calls (spec/abi.md §7x; WP-460).
+    /// calls (spec/abi.md §8.25; WP-460).
     pub const TRIVIAL_ABI: DefinitionBits = DefinitionBits(1 << 53);
     /// The copy constructor is trivial for the purposes of calls although
     /// not trivial (clang `hasTrivialCopyConstructorForCall` and not

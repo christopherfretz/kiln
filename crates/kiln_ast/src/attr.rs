@@ -53,7 +53,7 @@ impl AttrKind {
     /// class (clang `TrivialABIAttr`): when it is in effect (the class
     /// bit `DefinitionBits::TRIVIAL_ABI`) the class is trivial for the
     /// purposes of calls, passed and returned in registers, and the
-    /// callee destroys a by-value parameter (spec/abi.md §7x; WP-460).
+    /// callee destroys a by-value parameter (spec/abi.md §8.25; WP-460).
     pub const TRIVIAL_ABI: AttrKind = AttrKind(79);
     pub const PREFERRED_NAME: AttrKind = AttrKind(80);
     pub const EXCLUDE_FROM_EXPLICIT_INSTANTIATION: AttrKind = AttrKind(81);

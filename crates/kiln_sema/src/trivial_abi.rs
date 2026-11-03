@@ -1,5 +1,5 @@
 //! `[[clang::trivial_abi]]` (WP-460; spec/sema.md "The `trivial_abi`
-//! attribute", spec/abi.md §7x): a class with the attribute in effect is
+//! attribute", spec/abi.md §8.25): a class with the attribute in effect is
 //! trivial for the purposes of calls, so it is passed and returned in
 //! registers when its layout allows, and the callee destroys a by-value
 //! parameter. Triviality for calls propagates to the implicit and
