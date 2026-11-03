@@ -289,7 +289,7 @@ impl Cg<'_> {
         // SetLLVMFunctionAttributesForDefinition (no CodeGenFunction: no
         // "min-legal-vector-width"); `noinline` only at -O0.
         let mut fa = Vec::new();
-        if !self.opts.optimize {
+        if !self.opts.optimize() {
             fa.push(Attr::Flag(AttrKind::NoInline));
         }
         if !self.opts.exceptions {
