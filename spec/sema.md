@@ -2121,7 +2121,7 @@ and returns the scope it names:
       `CheckParmsForFunctionDef`): at a function definition, the
       destructor of each by-value parameter the callee destroys
       (`kiln_abi::call::is_destroyed_in_callee`) is referenced, so an
-      implicit one is defined. ABI and codegen: spec/abi.md §8.25,
+      implicit one is defined. ABI and codegen: spec/abi.md §8.26,
       spec/codegen.md §7ac.
     - `__builtin_is_cpp_trivially_relocatable` is not implied (clang 22
       answers false for a class with user-provided copy/move members);
@@ -2881,6 +2881,16 @@ diagnostics and IR.
     declared 'constexpr'`, or `... with 'static constexpr' specifiers`
     when there are several, at the first one. The declaration continues:
     a `constexpr` is still applied, which makes `e` const, as in clang.
+  - Before C++20 (P1091R3, [dcl.pre]/6) `static` and `thread_local`
+    (`__thread`, `_Thread_local`) are an extension:
+    `structured binding declaration declared 'static' is a C++20
+    extension` [-Wc++20-extensions] at each such specifier, before the
+    error for a specifier not allowed (clang 22). At
+    `-fclang-compat` < 22 it is clang 19's single `decomposition
+    declaration declared 'static'` / `... with 'static thread_local'
+    specifiers is a C++20 extension` at the first one, and only when
+    there is no specifier not allowed (`decomp_cxx20_specifiers`, WP-458;
+    `dcl.struct.bind/static-thread-local-*.cpp`).
   - A declarator chunk other than `&`/`&&` is `decomposition declaration
     cannot be declared with parentheses` or `... with type 'T'; declared
     type must be 'auto' or reference to 'auto'`.
@@ -3750,7 +3760,12 @@ for them.
     deprecated use is not re-diagnosed (the shared node is not rebuilt).
     The warning's range is the whole expression where clang's is the
     callee (a caret difference only).
-  - **Comma (WP-182)**: the left operand of a built-in comma is checked
+  - **Comma (WP-182)**: an unused comma is checked through its right
+    operand, except that an integer literal `0` there (parentheses looked
+    through: `r = 1, 0;`, the idiom hiding an assignment's result) is not
+    a warning (clang `isUnusedResultAWarning`, WP-458;
+    `expr.comma/unused-zero-idiom.cpp`). The left operand of a built-in
+    comma is checked
     the same way when the comma is built (clang `CheckCommaOperands`),
     with the generic warning spelled `left operand of comma operator has
     no effect` [-Wunused-value] (not in a SFINAE context). Nothing is
@@ -5556,6 +5571,49 @@ Tests: `ext.vector/bool-from-int-vector-clang22.cpp`,
 `ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`,
 `ext.vector/bool-from-int-vector-19.cpp`, `ext.vector/ir-bool-from-int-vector.cpp`;
 codegen spec/codegen.md §7u.
+
+### 5.28 `-Winteger-overflow` (`int_overflow.rs`, WP-458)
+
+A full-expression that is not constant-evaluated is checked for signed
+overflow ([expr.pre]/4) once it is complete (`act_on_full_expr_at`;
+clang `CheckCompletedExpr` → `CheckForIntOverflow` →
+`EvaluateForOverflow`):
+
+- **Where.** Not a constant-expression (`act_on_constant_full_expr`), an
+  `if constexpr` condition, a `constexpr` variable's initializer, an
+  unevaluated operand or a value-dependent full-expression: there the
+  evaluation's own error reports the overflow (`constexpr int h = g + 3;`
+  is the error and its note only). A non-dependent full-expression in a
+  template is checked at the definition and again in each instantiation
+  (`per_instantiation`), as clang.
+- **What is evaluated.** The full-expression, parentheses and casts
+  ignored, if it is a binary or unary operator; otherwise the elements of
+  an initializer list as written (not `int{x}`), the arguments of a call
+  or a construction, an array index, a compound literal's initializer
+  and an array `new`'s size, in turn. A top-level conditional is not.
+- **Evaluation.** A signed integer `+`, `-`, `*` or unary `-` (at most
+  128 bits) whose operands have values (an integer literal, or a lax fold,
+  `fold_rvalue_int`, so a `const` or `constexpr` variable reads as its
+  value) and whose exact result is outside its type warns `overflow in
+  expression; result is -2'147'483'646 with type 'int'` at the operator
+  (the wrapped value with digit separators in clang 19 and 22), then
+  yields the wrapped value, so an operator on it can warn again
+  (`(g + 1) + (g + 1)` warns three times). Both operands are evaluated
+  even when one has no value; integral casts convert the value; a
+  conditional evaluates the chosen arm when its condition folds and every
+  part otherwise; `&&` / `||` skip a right operand the left one decides.
+  Other expressions are searched for such operators (calls' arguments
+  included; not `sizeof`, `noexcept`, `typeid`, a lambda or a statement
+  expression) and folded only when they contain none. Unsigned
+  arithmetic is silent. The walk is bounded (65 536 nodes, depth 256)
+  and skipped when the warning is disabled at the full-expression.
+- Not implemented: an overflow inside a `constexpr` function called from
+  the expression (clang's evaluator reports it at the operator in the
+  function body); compound assignment and increment; the operator's
+  source range; in an instantiation kiln adds the instantiation notes,
+  clang none.
+- Tests: `expr.add/integer-overflow-folded.cpp`,
+  `expr.add/integer-overflow-constexpr-error.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
