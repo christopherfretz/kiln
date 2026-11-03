@@ -65,3 +65,20 @@ Instantiating (report total): release 9830.7 ms to 3974.1 ms, debug
 | kiln | debug | - | - | 5.95 s | 68004 KB |
 | kiln | release | 2.03 s | 62080 KB | 0.44 s | 61640 KB |
 | clang 19 | release | 0.92 s | 179672 KB | 0.92 s | 179672 KB |
+
+### WP-454: iterating expansion over a 100000-element `std::array` (2026-11-03)
+
+`tests/conformance/stmt.expand/iterating-large.cpp` (`-std=c++26`, kiln's
+bundled libc++). Before is the WP-454 branch with the `end - begin` fast
+path disabled (each element counted by a `begin + i != end` evaluation,
+capped at 2^20), after is the branch. clang 22 lacks P1306, so there is no
+clang row. The remaining time is the per-element instantiation of the body
+(linear in N).
+
+| Compiler | Build | Before wall | Before max RSS | After wall | After max RSS |
+|---|---|--:|--:|--:|--:|
+| kiln | debug | 12.14 s | 227992 KB | 11.38 s | 185644 KB |
+| kiln | harness (opt 3) | 1.22 s | 223976 KB | 0.99 s | 172416 KB |
+
+An earlier pair of debug runs gave 12.68 s before and 10.56 s after. A range of more than 2^20
+library-iterator elements is now counted rather than rejected.
