@@ -5424,6 +5424,38 @@ and unevaluated operands:
   `expr.eq/null-pointer-compare-forms.cpp`, `expr.eq/nonnull-compare.cpp`,
   `conv.bool/pointer-bool-conversion.cpp`, `dcl.attr/nonnull-attribute*.cpp`.
 
+### 5.28 Vector conversions (`conv/scs.rs`, WP-453)
+The implicit conversions between two distinct vector types (clang
+`IsVectorConversion`), by compatibility level:
+- At 22 (clang 20+): an integer ext vector converts to a `bool` ext
+  vector with the same lane count, a Conversion-rank `BooleanConversion`
+  second step (`SecondStep::BooleanConversion`, so an exact overload
+  wins and a candidate needing it ties with any other Conversion-rank
+  match) applied as `CK_IntegralToBoolean` straight to the `bool` vector
+  type; each lane is true when nonzero. In initialization, assignment,
+  a return, a call argument, template argument deduction's later
+  conversion, `static_cast` and a C-style cast alike. No other pair of
+  distinct ext vector types converts: a floating, GNU (`vector_size`)
+  or different-lane-count source, and a `bool` vector to an integer
+  vector, are `cannot initialize ...` / `C-style cast from vector ...
+  of different size`.
+- List-initialization of a `bool` vector from an integer vector
+  (`b4 a{I}`, `b4 b = {I}`) is a type narrowing ([dcl.init.list]/7;
+  clang 22 `type 'i4' (...) cannot be narrowed to 'b4' (...) in
+  initializer list` with `insert an explicit cast to silence this
+  issue`; `init.rs` `check_narrowing_impl` admits a vector target).
+- The conversion is not a constant expression (clang 22's
+  `VectorExprEvaluator` has no case for it): the Oven reports the generic
+  `subexpression not valid in a constant expression`
+  (spec/oven.md "Vectors").
+- At 19 (clang 19) none of these convert: `cannot initialize ...`,
+  `assigning to ... from incompatible type`, `no known conversion`,
+  `static_cast from ... is not allowed`.
+Tests: `ext.vector/bool-from-int-vector-clang22.cpp`,
+`ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`,
+`ext.vector/bool-from-int-vector-19.cpp`, `ext.vector/ir-bool-from-int-vector.cpp`;
+codegen spec/codegen.md §7u.
+
 ### 5.28 `-Winteger-overflow` (`int_overflow.rs`, WP-458)
 
 A full-expression that is not constant-evaluated is checked for signed

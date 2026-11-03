@@ -147,7 +147,9 @@ fn boolean_conversion(s: &mut Sema<'_, '_>, e: ExprId, from: QualType, to: QualT
         }
     } else if s.ast.types.is_floating(from) {
         CastKind::FloatingToBoolean
-    } else if is_integral_or_unscoped_enum(s, from) {
+    } else if is_integral_or_unscoped_enum(s, from) || s.is_vector_type(from) {
+        // An integer ext vector to a `bool` ext vector (clang 20+
+        // `IsVectorConversion`): lane-wise `!= 0`.
         CastKind::IntegralToBoolean
     } else {
         CastKind::NoOp

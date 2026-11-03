@@ -1629,6 +1629,9 @@ impl Sema<'_, '_> {
             && self.is_vector_type(self.ety(*e))
         {
             let at = self.begin_loc(*e);
+            // clang copy-initializes from the element as an element of the
+            // list: an `int` to `bool` vector conversion narrows.
+            self.check_narrowing(*e, ty, ty);
             let x = self.init_from_expr(ty, *e, ConvCtx::Initialization, at);
             if self.is_err_expr(x) {
                 return self.recover(ty, &[x], l.lbrace);
@@ -1848,7 +1851,13 @@ impl Sema<'_, '_> {
             return;
         }
         let t = conv::strip_cv(self, to);
-        if !self.ast.types.is_arithmetic(t) && self.ast.types.as_enum(t).is_none() {
+        // A vector target narrows only through clang 20+'s integer to
+        // `bool` ext vector conversion (a type narrowing, as from a
+        // pointer to `bool`); the others are `NotNarrowing`.
+        if !self.ast.types.is_arithmetic(t)
+            && self.ast.types.as_enum(t).is_none()
+            && !self.is_vector_type(t)
+        {
             return;
         }
         let Some(scs) = conv::standard_conversion(self, e, to, ConvCtx::Initialization) else {
