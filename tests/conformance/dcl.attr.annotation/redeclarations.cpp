@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ skip(clang): clang 19 does not implement P3394 annotations
+//@ oracle: none
 // [dcl.attr.annotation]/3 and [meta.reflection.annotation]: every
 // declaration keeps the annotations written on it, and an entity's
 // annotations are those of all its declarations in declaration order (no

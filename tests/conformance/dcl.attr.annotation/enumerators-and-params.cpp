@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ skip(clang): clang 19 does not implement P3394 annotations
+//@ oracle: none
 // [dcl.attr.annotation]/1: an enumerator and a (non-void) function
 // parameter may carry annotations; an enumerator of a member enumeration
 // of a class template gets its annotations substituted with it.

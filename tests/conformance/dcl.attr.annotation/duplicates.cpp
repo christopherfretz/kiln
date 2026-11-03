@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ skip(clang): clang 19 does not implement P3394 annotations
+//@ oracle: none
 // [dcl.attr.annotation]/3: each annotation is a distinct annotation, even
 // with an equal value (P3394R4 Example 2: `g` has five), and each
 // instantiation of an annotation is a new one.

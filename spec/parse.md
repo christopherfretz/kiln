@@ -1724,6 +1724,17 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   `expected ']'` / `to match this '['` pair. The argument-count error of
   an `assume` without `(...)` still comes from Sema.
 
+- **Annotations (P3394, WP-481):** inside `[[...]]`, `=` starts an
+  annotation: `= constant-expression ...opt` (`parse_annotation`), handed
+  to `act_on_annotation`, which returns an `AttrKind::ANNOTATION` node
+  that rides in the attribute vector until sema takes it
+  (spec/annotations.md §2). An attribute-list holding both annotations
+  and attributes, or an annotation after `using ns:`, is an error
+  (`parse_annotation_mixed`); before C++26 each annotation warns
+  `annotations are a C++26 extension`. Positions where the parser alone
+  knows the declaration is not an entity (a label, a concept, a namespace
+  alias) reject them through `reject_annotations_in`.
+
 ## 7. Driver (`kiln++ -fsyntax-only [-fdump-ast]`)
 - The driver builds the preprocessor exactly as `-E` does
   (`Job::build_preprocessor`: search list, predefines, `-D`/`-U`/

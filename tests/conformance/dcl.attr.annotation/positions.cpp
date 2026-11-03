@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ skip(clang): clang 19 does not implement P3394 annotations
+//@ oracle: none
 // [dcl.attr.annotation]/1 (C++26 P3394R4): an annotation may appertain to
 // a declaration of a type, type alias, variable, function, function
 // parameter, namespace, enumerator or non-static data member (bit-fields

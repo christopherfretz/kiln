@@ -337,14 +337,32 @@ impl Sema<'_, '_> {
             .filter(|&c| self.kind_of(c) == DeclKind::CXXRecord)
             .or_else(|| self.ast.decls.get(f).ctx())
             .unwrap_or(self.ast.tu);
-        let out = self.in_inst_context(ctx, |s| {
+        let params = self.annotated_param_pairs(f, pattern);
+        self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(f);
             sub.map_contexts(&pairs);
-            sub.subst_annotations(f, &anns)
+            sub.subst_entity_annotations(f, &anns, &params);
         });
         self.pop_inst_frame();
-        self.attach_annotations(f, &out);
+    }
+
+    /// The parameters of function `spec` paired with those of its pattern
+    /// `def` that carry annotations (a parameter's own, not merged across
+    /// redeclarations; spec/annotations.md §4). Empty when a pattern pack
+    /// expanded to a different count (spec/annotations.md §9).
+    fn annotated_param_pairs(&self, spec: DeclId, def: DeclId) -> Vec<(DeclId, DeclId)> {
+        if self.ast.decls.function(def).is_none() {
+            return Vec::new();
+        }
+        let (ps, qs) = (self.param_decls(spec), self.param_decls(def));
+        if ps.len() != qs.len() {
+            return Vec::new();
+        }
+        ps.into_iter()
+            .zip(qs)
+            .filter(|&(p, q)| p != q && self.ast.annots.has_list(q) && !self.ast.annots.has_list(p))
+            .collect()
     }
 }
 
@@ -356,15 +374,17 @@ impl Substituter<'_, '_, '_> {
     /// ([`Sema::require_annotations`]); others are substituted now, a
     /// pack expansion giving one annotation per element.
     pub(crate) fn copy_annotations(&mut self, spec: DeclId, def: DeclId) {
+        if self.sema.ast.annots.is_empty() || spec == def {
+            return;
+        }
+        let params = self.sema.annotated_param_pairs(spec, def);
         let ast = &self.sema.ast;
-        if ast.annots.is_empty() || ast.annots.has_list(spec) || spec == def {
+        let anns = if ast.annots.has_list(spec) { Vec::new() } else { ast.annots.of_entity(ast, def) };
+        if anns.is_empty() && params.is_empty() {
             return;
         }
-        let anns = ast.annots.of_entity(ast, def);
-        if anns.is_empty() {
-            return;
-        }
-        let dependent = anns.iter().any(|&a| ast.annots.get(a).value.is_none());
+        let param_anns = params.iter().flat_map(|&(_, q)| ast.lists.iter::<AnnId>(ast.annots.of_decl(q)));
+        let dependent = anns.iter().copied().chain(param_anns).any(|a| ast.annots.get(a).value.is_none());
         // Only a function template specialization's wait (its signature
         // is substituted during deduction, where a failure here must not
         // be a deduction failure); a member of a class specialization,
@@ -374,8 +394,22 @@ impl Substituter<'_, '_, '_> {
             self.sema.uninstantiated_annots.insert(first, def);
             return;
         }
-        let out = self.subst_annotations(spec, &anns);
-        self.sema.attach_annotations(spec, &out);
+        self.subst_entity_annotations(spec, &anns, &params);
+    }
+
+    /// `anns` substituted and attached to `spec`, then each pattern
+    /// parameter's annotations to the paired parameter of `spec`.
+    fn subst_entity_annotations(&mut self, spec: DeclId, anns: &[AnnId], params: &[(DeclId, DeclId)]) {
+        if !anns.is_empty() {
+            let out = self.subst_annotations(spec, anns);
+            self.sema.attach_annotations(spec, &out);
+        }
+        for &(p, q) in params {
+            let ast = &self.sema.ast;
+            let qa: Vec<AnnId> = ast.lists.iter::<AnnId>(ast.annots.of_decl(q)).collect();
+            let out = self.subst_annotations(p, &qa);
+            self.sema.attach_annotations(p, &out);
+        }
     }
 
     /// `anns` substituted for `spec`: a frozen value is shared (a new

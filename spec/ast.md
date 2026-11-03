@@ -626,9 +626,15 @@ struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, 
 `AttrNode { kind: AttrKind /*u16*/, syntax: u8 /*[[ ]], GNU, keyword, declspec*/, flags: u8, loc, a, b }`
 (16 B). Arguments: `ExprId`s, a `Symbol`, or a side record. Declarations
 with attributes have `HAS_ATTRS` and an entry in `decl_attrs: FxHashMap<
-DeclId, ListId>`. Annotations (P3394, M6) are `AttrKind::Annotation` with
-`a` = `ConstValueId` (the annotation value, evaluated when not
-dependent). Unknown attributes are diagnosed and dropped (not stored).
+DeclId, ListId>`. Unknown attributes are diagnosed and dropped (not
+stored). Annotations (P3394, `[[=e]]`, WP-481) are not stored as
+attributes: an `AttrKind::ANNOTATION` node (`a` = the operand `ExprId`)
+lives only between the parser and sema, which moves each into the cold
+side table `Ast::annots` (`kiln_ast::annot`: `Annotation { decl, value:
+Option<ConstValueId>, loc, written_type, expr }`, 20 B, `AnnId`), keyed
+by the declaration it is written on; `value` is `None` while the operand
+is dependent. `AnnotArena::of_entity` gathers an entity's annotations
+over its redeclaration chain (§4.4). Contract: spec/annotations.md.
 `AttrKind::ASM_LABEL` (88): `a` = raw `StringLitId` of the label,
 flags bit 1 = inherited from the previous declaration.
 `AttrKind::BUILTIN` (89): implicit, `a` = builtin id, invalid location.

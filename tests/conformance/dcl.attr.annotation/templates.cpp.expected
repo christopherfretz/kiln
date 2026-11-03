@@ -14,7 +14,12 @@ TranslationUnitDecl
 | | |   `-BinaryOperator 'int' '+'
 | | |     |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
 | | |     `-IntegerLiteral 'int' 2
-| | |-CXXMethodDecl method 'void ()'
+| | |-CXXMethodDecl method 'void (int)'
+| | | |-ParmVarDecl arg 'int'
+| | | | `-CXX26AnnotationAttr 'int' dependent
+| | | |   `-BinaryOperator 'int' '+'
+| | | |     |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | | |     `-IntegerLiteral 'int' 4
 | | | `-CXX26AnnotationAttr 'int' dependent
 | | |   `-BinaryOperator 'int' '+'
 | | |     |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
@@ -33,7 +38,9 @@ TranslationUnitDecl
 |   | `-CXX26AnnotationAttr 'int' value=11
 |   |-VarDecl s 'int' static
 |   | `-CXX26AnnotationAttr 'int' value=12
-|   |-CXXMethodDecl used method 'void ()'
+|   |-CXXMethodDecl used method 'void (int)'
+|   | |-ParmVarDecl arg 'int'
+|   | | `-CXX26AnnotationAttr 'int' value=14
 |   | `-CXX26AnnotationAttr 'int' value=13
 |   `-FunctionTemplateDecl member_template
 |     |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 M
@@ -51,8 +58,9 @@ TranslationUnitDecl
 |-FunctionDecl use_members 'void ()'
 | `-CompoundStmt
 |   |-CXXMemberCallExpr 'void'
-|   | `-MemberExpr '<bound member function type>' .method
-|   |   `-DeclRefExpr 'C<10>' lvalue Var 'c' 'C<10>'
+|   | |-MemberExpr '<bound member function type>' .method
+|   | | `-DeclRefExpr 'C<10>' lvalue Var 'c' 'C<10>'
+|   | `-IntegerLiteral 'int' 0
 |   `-CXXMemberCallExpr 'void'
 |     `-MemberExpr '<bound member function type>' .member_template
 |       `-DeclRefExpr 'C<10>' lvalue Var 'c' 'C<10>'
@@ -97,10 +105,15 @@ TranslationUnitDecl
 | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
 | |-FunctionDecl fn 'void (T)'
 | | |-ParmVarDecl 'T'
+| | | `-CXX26AnnotationAttr '<dependent type>' dependent
+| | |   `-BinaryOperator '<dependent type>' '+'
+| | |     |-DependentScopeDeclRefExpr '<dependent type>' lvalue
+| | |     `-IntegerLiteral 'int' 1
 | | `-CXX26AnnotationAttr '<dependent type>' dependent
 | |   `-DependentScopeDeclRefExpr '<dependent type>' lvalue
 | `-FunctionDecl used fn 'void (V)'
 |   |-ParmVarDecl 'V'
+|   | `-CXX26AnnotationAttr 'int' value=8
 |   `-CXX26AnnotationAttr 'int' value=7
 |-CXXRecordDecl referenced struct V definition
 | `-VarDecl referenced value 'const int' static inline constexpr cinit value=7
