@@ -414,6 +414,14 @@ the evaluator's flattened type table.
   parameter 'q' with unknown value cannot be used in a constant
   expression") with "declared here" (`MemFault::External`, `notes.rs`).
   This is a lowering change only; it is not on the interpreter hot path.
+  The "declared here" of a `MemFault::External` read names the
+  parameter's or usable variable's first declaration ("initializer of
+  'c' is not a constant expression"/"is unknown"), and for a variable
+  that is not usable ("read of non-const(expr) variable") its definition
+  once seen, else the redeclaration the faulting `DeclRefExpr` names
+  (clang `findCompleteObject` replaces the `DeclRefExpr`'s declaration
+  by `getDefinition()`; `notes.rs` `used_redecl`, WP-415,
+  `tests/conformance/expr.const/declared-here-names-definition.cpp`).
 
 - **Variable length arrays** (WP-183, GNU extension): a VLA local lowers
   to a zero-sized opaque object, so declaring one in a constant
