@@ -1107,6 +1107,7 @@ impl Sema<'_, '_> {
                     && !self.is_function_spec(m)
                     && self.copy_or_move_ctor_param(m, class);
                 let args = self.ctor_args(am, call.args, call.narrowing, explicit_first, loc)?;
+                self.check_diagnose_if_call(am, &args, loc);
                 let zeroing = call.info.zeroing || call.value_init && !self.is_user_provided(m);
                 let info = ConstructInfo { zeroing, ..call.info };
                 let e = match call.temp_end {

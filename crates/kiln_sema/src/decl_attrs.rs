@@ -48,6 +48,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::HOT => "hot",
         AttrKind::ABI_TAG => "abi_tag",
         AttrKind::ENABLE_IF => "enable_if",
+        AttrKind::DIAGNOSE_IF => "diagnose_if",
         AttrKind::MALLOC => "malloc",
         AttrKind::ALLOC_SIZE => "alloc_size",
         AttrKind::ALLOC_ALIGN => "alloc_align",
@@ -329,6 +330,15 @@ impl Sema<'_, '_> {
             AttrKind::ENABLE_IF if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "enable_if", "functions")
             }
+            // clang `DiagnoseIf`: `SubjectList<[Function, ObjCMethod,
+            // ObjCProperty]>`.
+            AttrKind::DIAGNOSE_IF if !kind.is_function() => wrong(
+                self,
+                DiagId::sema_attribute_wrong_decl_type,
+                "diagnose_if",
+                "functions, Objective-C methods, and Objective-C properties",
+            ),
+            AttrKind::ENABLE_IF | AttrKind::DIAGNOSE_IF => self.check_attr_cond_potential(d, node),
             // [dcl.attr.nouniqueaddr]/1.
             AttrKind::NO_UNIQUE_ADDRESS => {
                 (kind == DeclKind::Field

@@ -193,7 +193,12 @@ impl DiagId {
     /// clang marks so (checked against clang 19 with `-isystem`).
     pub const fn shows_in_system_header(self) -> bool {
         matches!(self.class(), DiagClass::Error)
-            || matches!(self, DiagId::pp_warning_directive | DiagId::oven_enum_constexpr_conversion)
+            || matches!(
+                self,
+                DiagId::pp_warning_directive
+                    | DiagId::oven_enum_constexpr_conversion
+                    | DiagId::sema_diagnose_if_succeeded_warning
+            )
     }
 
     /// The group whose name is shown in `[-W...]` and in JSON output:

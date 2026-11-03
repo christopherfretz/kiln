@@ -18,6 +18,7 @@ mod absolute_value;
 mod align_redecl;
 mod annot;
 mod asm;
+mod attr_cond;
 mod bit_int;
 mod bitfield_constant;
 mod builtins;
@@ -36,6 +37,7 @@ mod decl_attrs;
 pub mod declspec;
 mod deduce;
 mod deprecated;
+mod diagnose_if;
 mod empty_body;
 mod enable_if;
 mod entity;
@@ -569,6 +571,15 @@ pub struct Sema<'a, 'sm> {
     /// class argument), with the callee kind: clang checks them only in
     /// the instantiation, which shares the call (spec/sema.md §5.19).
     pub(crate) vararg_recheck: kiln_source::fx::FxHashMap<ExprId, u8>,
+    /// The non-dependent calls of a template definition to a function
+    /// with an argument-dependent `diagnose_if`, by their first converted
+    /// argument: the function, the converted arguments and where to
+    /// diagnose. clang checks them only in the instantiation, which shares
+    /// the call (spec/sema.md "The `diagnose_if` attribute").
+    pub(crate) diagnose_if_recheck: kiln_source::fx::FxHashMap<ExprId, (DeclId, Vec<ExprId>, Loc)>,
+    /// Whether the translation unit has a `diagnose_if` attribute: until
+    /// it does, calls and uses skip looking for one.
+    pub(crate) any_diagnose_if: bool,
     /// The null dereferences warned about per instantiation context
     /// (`queue_null_deref`).
     pub(crate) null_deref_seen: kiln_source::fx::FxHashSet<(ExprId, u64)>,
@@ -1020,6 +1031,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             null_deref_rewarn: kiln_source::fx::FxHashMap::default(),
             null_compare_rewarn: kiln_source::fx::FxHashMap::default(),
             vararg_recheck: kiln_source::fx::FxHashMap::default(),
+            any_diagnose_if: false,
+            diagnose_if_recheck: kiln_source::fx::FxHashMap::default(),
             null_deref_seen: kiln_source::fx::FxHashSet::default(),
             designator_pending: None,
             deferred_call_refs: Vec::new(),

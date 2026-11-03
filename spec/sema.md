@@ -2126,16 +2126,34 @@ and returns the scope it names:
       the parameters. A condition that is value-dependent, not a
       constant expression, or false makes the candidate not viable;
       its note is "candidate disabled: <message>" at the function
-      (`<no message provided>` for an empty one). If evaluating with all
+      (`<no message provided>` for an empty one). The arguments bind
+      from the first parameter, except that a non-static member
+      function's object argument binds to no parameter. Two cases follow
+      clang (WP-486): a non-member operator function's first operand
+      binds to its first parameter ([over.match.oper]/2); a member
+      function with an explicit object parameter gets the arguments
+      *without* the object argument, bound from the object parameter on
+      (they shift by one, clang `CheckEnableIf` passing the call's
+      arguments), and an argument that does not convert to the
+      parameter it lands on, or a parameter left with neither an
+      argument nor a default argument, disables it by its first
+      condition (clang `convertArgsForAvailabilityChecks` failing).
+      If evaluating with all
       values fails, the arguments that are not constant expressions on
       their own are dropped and the condition is evaluated again, so
       `__builtin_constant_p(n)` of a non-constant argument is false
       rather than not constant (clang `EvaluateWithSubstitution`).
     - A call without overload resolution (a member call, a call through
       a name of one function) is checked on its converted arguments in
-      `convert_call_args`: "no matching function for call to 'f'" at the
-      callee, or "no matching member function for call to 'm'" at the
-      member name, with the same note.
+      `convert_call_args`, the object argument of an explicit object
+      member function binding to the object parameter ([over.match.funcs.
+      general]/4): "no matching function for call to 'f'" at the callee,
+      or "no matching member function for call to 'm'" at the member
+      name (any member function, clang `BuildCallExpr`'s
+      `isa<CXXMethodDecl>`), with the same note. A call that overload
+      resolution chose is not checked again (`CallCallee::enable_if`;
+      `OvlState::resolved_member` marks a resolved explicit object member
+      call, and an operator call never re-checks).
     - Ranking ([over.match.best], last; clang `compareEnableIfAttrs`): a
       candidate with conditions beats one without; between two with
       conditions, compared in order, the one whose list properly extends
@@ -2145,11 +2163,107 @@ and returns the scope it names:
       parameters naming the specialization's (`Substituter::
       enable_if_cond`, from `copy_attrs`), after deduction; a failed
       substitution drops the attribute.
-    - Not done: `diagnose_if`, the never-constant check
-      (`err_attr_cond_never_constant_expr`), the object argument of an
-      explicit object member function (it takes no value).
+    - Never constant (WP-486, `attr_cond.rs`; clang
+      `checkFunctionConditionAttr`, `Expr::isPotentialConstantExprUnevaluated`):
+      a condition (of `enable_if` or `diagnose_if`) that is not
+      value-dependent and can be a constant expression for no values of
+      the parameters is "'enable_if' attribute expression never produces
+      a constant expression" (error, at the attribute) with the
+      evaluation's notes, and the attribute is dropped. kiln walks the
+      condition as clang's evaluator goes on after failing to read a
+      parameter: a subexpression naming no parameter (nor `this`) that is
+      a prvalue of arithmetic or enumeration type is evaluated on its own
+      (a failure with notes decides); one naming a parameter is first
+      evaluated whole (a success is a value, e.g. a parameter only in
+      `sizeof`), then taken apart — every operand of a built-in operator,
+      cast, subscript, member access or call (whose body is then not
+      entered), in order; `&&`/`||` stop at an unknown left operand and
+      short-circuit on a known one; `?:` takes the known condition's arm,
+      and with an unknown condition fails only if both arms do ("both arms
+      of conditional operator are unable to produce a constant
+      expression", at the expression). Anything else is maybe constant: a
+      condition is never rejected that clang accepts, but some that clang
+      rejects are missed (a call whose arguments are all known but name a
+      parameter; a non-scalar operand). Checked at the declaration
+      (`check_decl_attrs`) and, for a dependent condition, after
+      substitution (`enable_if_cond`); there the error is a hard one even
+      during deduction (clang substitutes attributes in the
+      specialization's instantiation context), its context note "in
+      instantiation of function template specialization 'f<X>' requested
+      here" replacing the deduction's, and the attribute is dropped
+      rather than the candidate.
+    - Not done: taking the address of a
+      function with a non-tautological condition ("cannot take address
+      of function 'f' because it has one or more non-tautological
+      enable_if conditions"); clang gives a class-type by-value parameter
+      initialized by copying an lvalue no value (its implicit copy
+      constructor is not yet defined), kiln evaluates the copy.
     - Tests: `tests/conformance/dcl.attr/enable-if-viability.cpp`,
-      `enable-if-ranking.cpp`.
+      `enable-if-ranking.cpp`, `enable-if-explicit-object.cpp`,
+      `attr-cond-never-constant.cpp`.
+  - **`diagnose_if`** (clang extension, `__attribute__((diagnose_if(cond,
+    "message", "error"|"warning"[, "group"])))`; WP-486, `diagnose_if.rs`;
+    clang AttrDocs "diagnose_if", `Sema::diagnoseArgDependentDiagnoseIfAttrs`
+    / `diagnoseArgIndependentDiagnoseIfAttrs`):
+    - Form: the parser parses the arguments with the function's parameters
+      in scope, as for `enable_if`. Clang 22 takes 3 or 4 arguments ("'x'
+      attribute takes at least 3 arguments" / "takes no more than 4
+      arguments"), clang 19 exactly 3 ("requires exactly 3 arguments"),
+      each at the attribute name. The condition is contextually converted
+      to `bool` unless type-dependent; the message, type and group must be
+      string literals ("expected string literal as argument of
+      'diagnose_if' attribute", at the argument); the type must be "error"
+      or "warning" ("invalid diagnostic type for 'diagnose_if'; use
+      \"error\" or \"warning\" instead"); the group must name a warning
+      group kiln knows ("unknown warning group 'x'"). Any of these drops
+      the attribute. Subject: functions; on anything else "'diagnose_if'
+      attribute only applies to functions, Objective-C methods, and
+      Objective-C properties" (`-Wignored-attributes`).
+    - Kind: a condition that names a parameter or `this` is
+      *argument-dependent*; any other is *argument-independent*.
+    - Argument-dependent conditions are evaluated at each call with the
+      converted arguments, default arguments included, by the same
+      evaluation as `enable_if` (`cond_with_args`: a non-constant argument
+      is dropped and the condition retried). The arguments bind as for
+      `enable_if`, the object argument of an explicit object member
+      function binding to the object parameter. The diagnostic is at the
+      call's `)`, at the operator of an operator call, and at the
+      declarator of a constructed variable. Hooks: `convert_call_args`
+      (every call, including a static member function named through a
+      member access) and `use_ctor`.
+    - Argument-independent conditions are evaluated at each use of the
+      function (every `DeclRefExpr`, `diagnose_if_use`), also inside a
+      template definition.
+    - Result: if any true condition is an "error", the first one alone is
+      reported, as an error; otherwise each true "warning" is reported, in
+      declaration order. Conditions accumulate over redeclarations, oldest
+      first. A condition that is not a constant expression (or is
+      value-dependent) is ignored. Every diagnostic is the message
+      verbatim; warnings are in `-Wuser-defined-warnings` and show in
+      system headers (clang `ShowInSystemHeader`, so libc++'s
+      `_LIBCPP_DIAGNOSE_WARNING` checks fire). Each has the note "from
+      'diagnose_if' attribute on 'f':" at the attribute, except that an
+      attribute with a group gets no note. Duplicates are not merged
+      (two attributes may report at one location).
+    - Templates: a call in a template definition is not diagnosed there.
+      A non-dependent call is shared by the instantiations rather than
+      rebuilt, so it is recorded (`Sema::diagnose_if_recheck`) and checked
+      again whenever an instantiation reaches it (`mark_shared_expr_
+      referenced`); a dependent call is checked when it is rebuilt. The
+      condition is substituted like `enable_if`'s, and checked like it for
+      never being constant.
+    - Explicit object member calls inside a template are rebuilt through
+      `rebuild_explicit_object_call`, keeping the object argument bound to
+      the object parameter (before WP-486 such a rebuilt call was "called
+      object type '…' is not a function or function pointer").
+    - Not done: a condition naming `this` is evaluated without the object
+      (clang evaluates it on a constant object, e.g. `cs.m()` on a
+      `constexpr S cs`), so it is ignored; the group argument does not put
+      the diagnostic in that group (it stays in `-Wuser-defined-warnings`,
+      so `-Wno-<group>` does not silence it); an argument-independent
+      "error" does not make the use fail overload resolution.
+    - Tests: `tests/conformance/dcl.attr/diagnose-if.cpp`,
+      `diagnose-if-form.cpp`, `diagnose-if-form-19.cpp`.
   - **The `trivial_abi` attribute** (clang extension, `[[clang::trivial_abi]]`
     / `__attribute__((trivial_abi))`; WP-460, `trivial_abi.rs`; clang
     AttrDocs "trivial_abi", `Sema::checkIllFormedTrivialABIStruct`):
@@ -2191,8 +2305,8 @@ and returns the scope it names:
     - `__builtin_is_cpp_trivially_relocatable` is not implied (clang 22
       answers false for a class with user-provided copy/move members);
       `__is_trivially_relocatable` follows `can_pass_in_registers` as in
-      clang. Not done: clang 22's deprecation warning on
-      `__is_trivially_relocatable`.
+      clang; at compat 22 it warns `-Wdeprecated-builtins` (builtin
+      traits §, WP-486).
     - Tests: `tests/conformance/dcl.attr/trivial-abi-attribute.cpp`,
       `tests/conformance/class.temporary/run-trivial-abi-callee-destroys.cpp`,
       `tests/codegen/trivial_abi_calls.cpp`, `trivial_abi_subobjects.cpp`.
