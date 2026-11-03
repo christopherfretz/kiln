@@ -394,3 +394,54 @@ fn coro_elide_at_o2() {
     assert_eq!(c.status.code(), Some(0), "{}", text(&c.stderr));
     assert!(elided(&text(&c.stdout)), "clang no longer elides");
 }
+
+/// The module text without comments, `; preds` annotations, the
+/// producer lines and trailing blanks.
+fn ir_body(ll: &str) -> String {
+    let mut out = String::new();
+    for l in ll.lines() {
+        let l = l.split(" ; preds = ").next().unwrap_or(l).trim_end();
+        if l.starts_with(';')
+            || l.starts_with("source_filename")
+            || l.starts_with("!llvm.ident")
+            || l.contains("!{!\"kiln")
+            || l.contains("clang version")
+        {
+            continue;
+        }
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
+}
+
+/// [expr.await]/5.1, [dcl.fct.def.coroutine]: before LLVM passes at -O1
+/// (`-Xclang -disable-llvm-passes`) the `await_suspend` wrappers match
+/// clang 19's exactly: `alwaysinline mustprogress` (x86: plus
+/// `min-legal-vector-width`) and "any pointer" TBAA on the prolog stores
+/// of their `void *` awaiter and frame parameters (spec/codegen.md
+/// "Coroutines"). After the -O1 pipeline the wrappers are inlined away,
+/// so `ir_vs_clang` cannot see them (`coro_await_suspend_o1`).
+#[test]
+fn coro_wrappers_before_passes_match_clang19() {
+    if !tools() {
+        return;
+    }
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/codegen/coro_await_suspend_o1.cpp");
+    let src = src.to_str().unwrap();
+    let mut args = vec!["-std=c++26", "-O1", "-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm"];
+    if cfg!(target_arch = "aarch64") {
+        args.push("-moutline-atomics");
+    }
+    args.extend(["-o", "-", src]);
+    let d = scratch("coro-wrappers");
+    let mut kargs = vec!["-fclang-compat=19"];
+    kargs.extend(&args);
+    let k = kiln_in(&d, &kargs);
+    assert_eq!(k.status.code(), Some(0), "{}", text(&k.stderr));
+    let c = Command::new("clang++-19").args(&args).current_dir(&d).output().unwrap();
+    assert_eq!(c.status.code(), Some(0), "{}", text(&c.stderr));
+    let (k, c) = (ir_body(&text(&k.stdout)), ir_body(&text(&c.stdout)));
+    assert!(k.contains("__await_suspend_wrapper__init"), "{k}");
+    assert_eq!(k, c);
+}

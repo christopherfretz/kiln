@@ -2397,7 +2397,17 @@ label %coro.ret [i8 0, label %<kind>.ready; i8 1, label
 to `coro.ret` (a destroyed coroutine runs the destructors of the
 suspended scope). `.ready` evaluates `await_resume()` in the wanted
 form: ignored, scalar, lvalue, or into an aggregate slot. `<kind>` is
-`init`, `await`, `yield` or `final`.
+`init`, `await`, `yield` or `final`. The wrapper's function attributes are clang's
+(`generateAwaitSuspendWrapper` + `FinishFunction`) at every level:
+`alwaysinline mustprogress`, on x86 `"min-legal-vector-width"`, and at
+`-fclang-compat=22` `"sample-profile-suffix-elision-policy"="selected"`
+(clang 22); never `optnone`/`noinline`. Its parameters are `void *`
+`ImplicitParamDecl`s, so at -O1+ their prolog stores carry "any pointer"
+TBAA and the reloads none (`Cg::tbaa_void_ptr_store`; WP-423). After
+the -O1 pipeline the wrappers are inlined away; the pre-pass text is
+pinned against clang 19 by `kiln_driver/tests/codegen.rs`
+`coro_wrappers_before_passes_match_clang19`, the optimized one by
+`tests/codegen/coro_await_suspend_o1.cpp`.
 
 **Full-expression temporaries across a suspension.** A temporary of the
 full-expression holding a `co_await` lives until the full-expression

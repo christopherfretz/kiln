@@ -414,6 +414,17 @@ impl Cg<'_> {
         self.tbaa_attach_scalar(inst, node);
     }
 
+    /// Tags the prolog store of an implicit `void *` parameter (clang
+    /// `EmitParmDecl` on an `ImplicitParamDecl` of `VoidPtrTy`, e.g. the
+    /// awaiter and frame parameters of an `await_suspend` wrapper).
+    pub(crate) fn tbaa_void_ptr_store(&mut self, inst: V) {
+        if !self.tbaa_on() || !matches!(inst, V::I(_)) {
+            return;
+        }
+        let node = self.tbaa_any_ptr(1);
+        self.tbaa_attach_scalar(inst, node);
+    }
+
     /// Tags a load or store of a vtable pointer (clang
     /// `getTBAAVTablePtrAccessInfo`).
     pub(crate) fn tbaa_vptr(&mut self, inst: V) {
