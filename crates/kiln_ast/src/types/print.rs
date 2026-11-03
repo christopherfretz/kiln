@@ -1901,6 +1901,7 @@ impl Printer<'_> {
             ExcSpec::None | ExcSpec::Deferred(_) => {}
             ExcSpec::Nothrow | ExcSpec::BasicNoexcept => self.push(" noexcept"),
             ExcSpec::DynamicNone => self.push(" throw()"),
+            ExcSpec::NothrowAttr => self.push(" __attribute__((nothrow))"),
             ExcSpec::NoexceptExpr { expr, .. } => {
                 self.push(" noexcept(");
                 self.expr(expr);

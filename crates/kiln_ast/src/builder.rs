@@ -36,8 +36,8 @@ use crate::lookup::LookupFlags;
 use crate::names::DeclName;
 use crate::slot::AlreadySet;
 use crate::stmt::{
-    AsmData, AsmOperand, CaseData, CoroutineBodyData, IfData, IfKind, LoopData, RangeForData,
-    StmtKind, StmtNode, SwitchData,
+    AsmData, AsmOperand, CaseData, CoroutineBodyData, ExpansionData, IfData, IfKind, LoopData,
+    RangeForData, StmtKind, StmtNode, SwitchData,
 };
 use crate::types::TypeFlags;
 
@@ -3689,6 +3689,43 @@ impl<'a> AstBuilder<'a> {
     pub fn cxx_for_range_stmt(&mut self, data: RangeForData, loc: Loc) -> StmtId {
         let side = self.ast.stmts.push_range_for(data);
         self.stmt(StmtKind::CXXForRangeStmt, 0, loc, side, 0)
+    }
+
+    /// An expansion statement ([stmt.expand], P1306R5) of `form` whose
+    /// synthetic template level is at `depth`; `expanded` once `data`
+    /// holds its prelude and expansions.
+    pub fn cxx_expansion_stmt(
+        &mut self,
+        data: ExpansionData,
+        form: crate::stmt::ExpansionForm,
+        expanded: bool,
+        depth: u16,
+        loc: Loc,
+    ) -> StmtId {
+        let side = self.ast.stmts.push_expansion(data);
+        let aux = form as u16 | if expanded { crate::stmt::ExpansionForm::EXPANDED } else { 0 };
+        self.stmt(StmtKind::CXXExpansionStmt, aux, loc, side, u32::from(depth))
+    }
+
+    /// The element `CXXExpansionSelectExpr` initializing the
+    /// for-range-declaration of an expansion statement of `form` whose
+    /// synthetic template level is at `depth` (a template pattern).
+    pub fn cxx_expansion_select(
+        &mut self,
+        form: crate::stmt::ExpansionForm,
+        depth: u16,
+        loc: Loc,
+    ) -> ExprId {
+        self.simple(
+            ExprKind::CXXExpansionSelectExpr,
+            ValueCategory::PRValue,
+            ExprDeps::TYPE_VALUE_INST,
+            form as u8,
+            QualType::DEPENDENT,
+            loc,
+            u32::from(depth),
+            0,
+        )
     }
 
     /// The body of a coroutine ([dcl.fct.def.coroutine]/5), wrapping the

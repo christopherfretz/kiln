@@ -650,6 +650,7 @@ impl Sema<'_, '_> {
                 self.reach_loop(s, live, r)
             }
             StmtKind::CXXForRangeStmt => self.reach_range_for(s, live, r),
+            StmtKind::CXXExpansionStmt => self.reach_expansion(s, live, r),
             StmtKind::SwitchStmt => self.reach_switch(s, live, r),
             StmtKind::CaseStmt => {
                 let d = *self.ast.stmts.case_data(s);
@@ -848,6 +849,37 @@ impl Sema<'_, '_> {
             r.changed = true;
         }
         cond_out || j.broke
+    }
+
+    /// An expansion statement ([stmt.expand]): its init-statement and
+    /// prelude, then each element in order; `continue` ends one element and
+    /// `break` the statement. A pattern (not expanded) runs its body zero or
+    /// more times.
+    fn reach_expansion(&mut self, s: StmtId, mut live: bool, r: &mut Reach) -> bool {
+        let st = &self.ast.stmts;
+        let d = *st.expansion_data(s);
+        let expanded = st.expansion_expanded(s);
+        if let Some(i) = d.init {
+            live = self.reach_stmt(i, live, r);
+        }
+        let l = &self.ast.lists;
+        let (prelude, elems): (Vec<StmtId>, Vec<StmtId>) = if expanded {
+            (l.iter(d.prelude).collect(), l.iter(d.expansions).collect())
+        } else {
+            (Vec::new(), vec![d.body])
+        };
+        for p in prelude {
+            live = self.reach_stmt(p, live, r);
+        }
+        let mut broke = false;
+        for e in elems {
+            r.jumps.push(Jump { is_loop: true, broke: false, continued: false });
+            let out = self.reach_stmt(e, live, r);
+            let j = r.jumps.pop().expect("expansion jump frame");
+            broke |= j.broke;
+            live = if expanded { out || j.continued } else { live };
+        }
+        live || broke
     }
 
     /// A statement whose expressions and sub-statements run in order.

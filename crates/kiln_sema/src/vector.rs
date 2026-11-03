@@ -93,8 +93,81 @@ impl Sema<'_, '_> {
                 ControlFlow::Break(self.alloc_attribute(kind, syntax, args, loc))
             }
             AttrKind::NONNULL => ControlFlow::Break(self.nonnull_attribute(syntax, args, loc)),
+            AttrKind::FORMAT => ControlFlow::Break(self.format_attribute(syntax, args, loc)),
             _ => ControlFlow::Continue(()),
         }
+    }
+
+    /// GNU `format(archetype, F, A)` as written (WP-186; clang
+    /// `handleFormatAttr`): exactly three arguments, an identifier then
+    /// two integer constants. The archetype (`__x__` normalized to `x`)
+    /// is stored in `a`: [`FORMAT_PRINTF`] (checked at calls),
+    /// [`FORMAT_STRFTIME`] or [`FORMAT_OTHER`] (a format clang supports
+    /// that kiln does not check); an unknown one is ignored with a
+    /// warning, and GCC's internal `gcc_*diag` silently. `b` = `F | A <<
+    /// 16`, each saturated at `0xfffe` (a negative value is out of
+    /// bounds); the indices are checked against the declaration in
+    /// `check_decl_attrs`.
+    pub(crate) fn format_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let name = "'format'";
+        if args.len() != 3 {
+            let msg =
+                self.diag(DiagId::sema_attribute_wrong_number_arguments, loc).arg(name).arg("3");
+            self.emit(msg);
+            return None;
+        }
+        let AttrArg::Ident(sym, _) = args[0] else {
+            let msg = self.diag(DiagId::sema_attribute_param_not_ident, loc).arg(name).arg("1");
+            self.emit(msg);
+            return None;
+        };
+        let written = self.ast.symbols().as_str(sym).to_owned();
+        let arch = match written.strip_prefix("__").and_then(|w| w.strip_suffix("__")) {
+            Some(w) if written.len() >= 4 => w,
+            _ => written.as_str(),
+        };
+        // clang 22 maps GCC's `gnu_printf` / `gnu_scanf` to the plain
+        // archetypes; clang 19 does not know them.
+        let gnu22 = self.clang_compat >= 22;
+        let a = match arch {
+            "printf" => FORMAT_PRINTF,
+            "gnu_printf" if gnu22 => FORMAT_PRINTF,
+            "strftime" => FORMAT_STRFTIME,
+            "scanf" | "printf0" | "strfmon" | "cmn_err" | "vcmn_err" | "zcmn_err" | "kprintf"
+            | "freebsd_kprintf" | "os_trace" | "os_log" | "NSString" | "CFString" => FORMAT_OTHER,
+            "gnu_scanf" if gnu22 => FORMAT_OTHER,
+            "gcc_diag" | "gcc_cdiag" | "gcc_cxxdiag" | "gcc_tdiag" => return None,
+            _ => {
+                let msg =
+                    self.diag(DiagId::sema_attribute_arg_not_supported, loc).arg(name).arg(arch);
+                self.emit(msg);
+                return None;
+            }
+        };
+        let mut idx = [0u32; 2];
+        for (i, arg) in args[1..].iter().enumerate() {
+            let v = match arg {
+                AttrArg::Expr(e) => self.fold_int(*e),
+                AttrArg::Type(_) | AttrArg::Ident(..) => None,
+            };
+            let Some(v) = v else {
+                let msg = self
+                    .diag(DiagId::sema_attribute_param_not_ice, loc)
+                    .arg(name)
+                    .arg((i + 2).to_string());
+                self.emit(msg);
+                return None;
+            };
+            idx[i] = u32::try_from(v).map_or(0xfffe, |v| v.min(0xfffe));
+        }
+        let node =
+            AttrNode { kind: AttrKind::FORMAT, syntax, flags: 0, loc, a, b: idx[0] | idx[1] << 16 };
+        Some(self.ast.attrs.push(node))
     }
 
     /// GNU `alloc_size(n[, m])` / `alloc_align(n)` as written: integer
@@ -317,3 +390,11 @@ impl Sema<'_, '_> {
         }
     }
 }
+
+/// [`AttrKind::FORMAT`]'s `a`: a `printf` format, checked at calls.
+pub(crate) const FORMAT_PRINTF: u32 = 0;
+/// [`AttrKind::FORMAT`]'s `a`: a format clang supports that kiln does not
+/// check (`scanf`, `strfmon`, ...).
+pub(crate) const FORMAT_OTHER: u32 = 1;
+/// [`AttrKind::FORMAT`]'s `a`: `strftime` (no data arguments).
+pub(crate) const FORMAT_STRFTIME: u32 = 2;

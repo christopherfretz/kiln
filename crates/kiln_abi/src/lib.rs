@@ -24,7 +24,7 @@ pub use dump::{
     write_record_layout, write_record_layout_with,
 };
 pub use layout::{
-    Layouter, MAX_SUBOBJECTS, TypeLayout, array_layout, ensure_layout, record_layout, subobjects,
-    type_size_align,
+    LayoutCache, Layouter, MAX_SUBOBJECTS, TypeLayout, array_layout, ensure_layout, record_layout,
+    subobjects, type_size_align,
 };
 pub use target::{Arch, Target, Triple, TripleError, target};

@@ -348,6 +348,7 @@ struct FuncProto {      // 16 bytes
 enum ExcSpec /* tag */ {
     None,                    // potentially throwing (no spec, noexcept(false), throw(T...) pre-17 canon)
     Nothrow,                 // canonical non-throwing
+    NothrowAttr,             // GNU `__attribute__((nothrow))` (WP-186; Nothrow tag, operand 1; sugar, canonical Nothrow)
     DynamicNone,             // `throw()` as written   (sugar; canonical Nothrow from C++17, None before)
     BasicNoexcept,           // `noexcept` as written  (sugar; canonical Nothrow)
     NoexceptExpr(ExprId),    // `noexcept(e)`: sugar resolving to Nothrow/None, or dependent
@@ -629,7 +630,10 @@ where `inner` is the declarator text so far (empty at the top):
   `auto (params) -> R`;
 - names: records/enums/typedefs print their (optionally scoped) name, with
   template arguments `<int, 2>` (no space before `>>`; values printed per
-  spec/ast.md §9.3); unnamed classes print `(unnamed struct at F:L:C)`,
+  spec/ast.md §9.3; a written expression argument naming a declaration
+  prints its qualifier as written, `H<ns::U1>`, `G<ns::e2::X>`, clang
+  `VisitDeclRefExpr`, WP-186,
+  `tests/conformance/temp.arg.nontype/enum-arg-printing-qualified.cpp`); unnamed classes print `(unnamed struct at F:L:C)`,
   anonymous `(anonymous struct at F:L:C)`, closures `(lambda at F:L:C)`,
   the anonymous namespace `(anonymous namespace)`, where `F` is the file
   name as the driver names it in diagnostics;
