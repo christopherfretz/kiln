@@ -2541,7 +2541,8 @@ Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp` (shuffles:
 `tests/codegen/bool_vector_shuffle_const.cpp`; unions:
 `bool-constexpr-union-run.cpp`, `tests/codegen/bool_vector_union_const.cpp`),
 `ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`,
-`ext.vector/bool-from-int-vector-constexpr-clang22.cpp`.
+`ext.vector/bool-from-int-vector-constexpr-clang22.cpp`;
+budget (packed bits, no per-lane allocation): `tests/stress/bool-vector-sieve.cpp`.
 
 ### `_BitInt` — Landed (WP-404, wide WP-445)
 Type rules: spec/types.md §21.
