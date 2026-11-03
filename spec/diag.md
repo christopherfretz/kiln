@@ -692,6 +692,13 @@ ranges to the diagnostics clang gives ranges (unused results, static
 assertion failures and their `expression evaluates to` note, invalid
 operands, no matching function); a diagnostic kiln emits without a range
 where clang has one loses the note.
+Under clang 22 (`rangesInsideSameMacroArgExpansion`, unmapped ranges)
+a fix-it counts with the range `mergeFixits` leaves it (WP-408,
+`layout.rs` `merged_fixit_ranges`): an end in a macro argument moves to
+where the argument is spelled and one at the start of a macro expansion
+to its invocation (`edit::Commit::canInsert`), so an insertion before a
+macro argument is a file range and keeps the notes; an end left in a
+macro fails the commit and drops every fix-it range.
 
 ### 8.5 Expansion model expected from the preprocessor
 
