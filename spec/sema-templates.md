@@ -3298,7 +3298,19 @@ The `SpecKind` transitions are those of §4.5.
   lvalue). Substitution (`subst/exprs.rs::value_literal` →
   `nttp_value_expr`) builds the replacement: a `DeclRefExpr` to the
   object (class), the entity (reference), `&entity` / the decayed array
-  (pointer), or `nullptr` converted to the parameter type.
+  (pointer), `nullptr` converted to the parameter type, or, for a
+  non-null pointer to member (WP-415), `&C::m` of the member's declaring
+  class `C` (an `AddrOf` of a `DeclRefExpr` to the member, as
+  `member_pointer_of` builds it) converted to the parameter type along
+  the value's path: implicitly towards a derived class, by a
+  `static_cast` when the value points to a derived class's member
+  (`Scalar::MemberPtr::derived`), as clang
+  `BuildExpressionFromDeclTemplateArgument`. Argument identity is the
+  value's (`member`, `derived`, `path`), so `X<pb>` and
+  `X<static_cast<int D::*>(&B::b)>` are one specialization; the mangled
+  names match clang's (`XadL_ZN1S1vEE`, `mcM1BiadL_ZN1D1dEE`;
+  `tests/codegen/nttp_member_pointer.cpp`,
+  `tests/conformance/temp.arg.nontype/member-pointer-argument-value.cpp`).
 - **Reference arguments** (`convert_ref_nttp_arg`): the conversion must
   exist (`sema_cce_not_implicitly_convertible`), must not bind a
   temporary (`sema_cce_ref_binds_temporary`), and the referent must not
