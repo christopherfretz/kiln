@@ -56,10 +56,10 @@ fn nan_result(kind: FloatKind, xs: &[(FloatKind, u128)]) -> NanIn {
     if xs.iter().any(|&(k, a)| is_signaling(k, a)) {
         return NanIn::Yes(None);
     }
-    match xs.iter().find(|&&(k, a)| unpack(k, a) == Val::NaN) {
+    match xs.iter().find(|&&(k, a)| matches!(unpack(k, a), Val::NaN(..))) {
         None => NanIn::No,
         Some(&(k, a)) => {
-            NanIn::Yes(Some(if k == kind { quiet(kind, a) } else { repack(kind, Val::NaN) }))
+            NanIn::Yes(Some(if k == kind { quiet(kind, a) } else { repack(kind, unpack(k, a)) }))
         }
     }
 }
@@ -88,7 +88,7 @@ pub(crate) fn nextafter(kind: FloatKind, x: u128, ykind: FloatKind, y: u128) -> 
     let f = Fmt::of(kind);
     let r = match unpack(kind, x) {
         // The smallest subnormal: an underflow.
-        Val::Zero(_) | Val::NaN => return None,
+        Val::Zero(_) | Val::NaN(..) => return None,
         Val::Inf(s) => max_finite(kind, s),
         v @ Val::Fin(s, e, m) => {
             let lsb = e.max(f.emin()) - (f.p as i32 - 1);
@@ -106,8 +106,8 @@ pub(crate) fn nextafter(kind: FloatKind, x: u128, ykind: FloatKind, y: u128) -> 
 pub(crate) fn frexp(kind: FloatKind, x: u128) -> Option<(u128, i32)> {
     match unpack(kind, x) {
         Val::Fin(s, e, m) => Some((pack(kind, s, -1, m), e + 1)),
-        Val::NaN if is_signaling(kind, x) => None,
-        Val::NaN => Some((quiet(kind, x), 0)),
+        Val::NaN(..) if is_signaling(kind, x) => None,
+        Val::NaN(..) => Some((quiet(kind, x), 0)),
         _ => Some((x, 0)),
     }
 }
@@ -122,8 +122,8 @@ pub(crate) fn ldexp(kind: FloatKind, x: u128, n: i128) -> Option<u128> {
             let r = pack(kind, s, ne, m);
             (unpack(kind, r) == Val::Fin(s, ne, m)).then_some(r)
         }
-        Val::NaN if is_signaling(kind, x) => None,
-        Val::NaN => Some(quiet(kind, x)),
+        Val::NaN(..) if is_signaling(kind, x) => None,
+        Val::NaN(..) => Some(quiet(kind, x)),
         _ => Some(x),
     }
 }
@@ -143,8 +143,8 @@ pub(crate) fn logb(kind: FloatKind, x: u128) -> Option<u128> {
         Val::Fin(_, e, _) => Some(super::from_int(kind, e as i128 as u128, true)),
         Val::Zero(_) => None,
         Val::Inf(_) => Some(super::inf(kind)),
-        Val::NaN if is_signaling(kind, x) => None,
-        Val::NaN => Some(quiet(kind, x)),
+        Val::NaN(..) if is_signaling(kind, x) => None,
+        Val::NaN(..) => Some(quiet(kind, x)),
     }
 }
 
@@ -182,8 +182,8 @@ pub(crate) fn round_int(kind: FloatKind, x: u128, mode: Rounding) -> Option<u128
             let mag = int + u128::from(bump(int, frac, s, mode));
             Some(if mag == 0 { pack_zero(Fmt::of(kind), s) } else { pack(kind, s, 127, mag) })
         }
-        Val::NaN if is_signaling(kind, x) => None,
-        Val::NaN => Some(quiet(kind, x)),
+        Val::NaN(..) if is_signaling(kind, x) => None,
+        Val::NaN(..) => Some(quiet(kind, x)),
         _ => Some(x),
     }
 }
@@ -218,8 +218,8 @@ pub(crate) fn modf(kind: FloatKind, x: u128) -> Option<(u128, u128)> {
             let frac = if classify(kind, frac) == Class::Zero { pack_zero(f, s) } else { frac };
             Some((frac, int))
         }
-        Val::NaN if is_signaling(kind, x) => None,
-        Val::NaN => Some((quiet(kind, x), quiet(kind, x))),
+        Val::NaN(..) if is_signaling(kind, x) => None,
+        Val::NaN(..) => Some((quiet(kind, x), quiet(kind, x))),
         Val::Zero(_) => Some((x, x)),
     }
 }
@@ -234,7 +234,7 @@ pub(crate) fn rem(kind: FloatKind, x: u128, y: u128, nearest: bool) -> Option<(u
     }
     let p = Fmt::of(kind).p;
     let (sx, ex, mx, sy, ey, my) = match (unpack(kind, x), unpack(kind, y)) {
-        (Val::Inf(_) | Val::NaN, _) | (_, Val::Zero(_) | Val::NaN) => return None,
+        (Val::Inf(_) | Val::NaN(..), _) | (_, Val::Zero(_) | Val::NaN(..)) => return None,
         (Val::Zero(_), _) | (_, Val::Inf(_)) => return Some((x, 0)),
         (Val::Fin(sx, ex, mx), Val::Fin(sy, ey, my)) => (sx, ex, mx, sy, ey, my),
     };
@@ -413,8 +413,8 @@ pub(crate) fn fma(kind: FloatKind, x: u128, y: u128, z: u128) -> Option<u128> {
 /// invalid. The result never overflows or underflows.
 pub(crate) fn sqrt(kind: FloatKind, x: u128) -> Option<u128> {
     match unpack(kind, x) {
-        Val::NaN if is_signaling(kind, x) => None,
-        Val::NaN => Some(quiet(kind, x)),
+        Val::NaN(..) if is_signaling(kind, x) => None,
+        Val::NaN(..) => Some(quiet(kind, x)),
         Val::Zero(_) | Val::Inf(false) => Some(x),
         Val::Inf(true) | Val::Fin(true, ..) => None,
         Val::Fin(false, e, m) => Some(match kind {
@@ -674,6 +674,6 @@ mod tests {
     }
 
     fn is_nan_bits(a: u128) -> bool {
-        unpack(D, a) == Val::NaN
+        matches!(unpack(D, a), Val::NaN(..))
     }
 }

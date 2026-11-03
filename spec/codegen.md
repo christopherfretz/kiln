@@ -219,7 +219,11 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     an invalid operation gives the positive default quiet NaN; a NaN
     `fpext`/`fptrunc` keeps its sign, shifts the significand by the
     precision difference (truncating) and sets the quiet bit (and x87's
-    integer bit).
+    integer bit). The fold prepass evaluates with
+    `Oven::set_fold_float_ub(true)`, so a global initialized by a NaN- or
+    infinity-producing division (`0.0 / 0.0`, `1.0 / 0.0`) is a constant
+    rather than a dynamic initializer, as clang's (WP-410,
+    `tests/codegen/nan_global_init.cpp`).
   - `fptosi`/`fptoui` of a constant (any format) fold toward zero; a NaN,
     an infinity or a value outside the destination's range is `poison`
     (`APFloat::convertToInteger` reporting `opInvalidOp`).
@@ -428,7 +432,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       double` twin (`builtin::f128_twin`) is lowered as the twin on its
       `fp128` operands (intrinsic or constant); `roundevenf128` is
       `llvm.roundeven`; the others call the function of the builtin's
-      own name (`builtins_f128.cpp`). A `*f16` builtin (WP-403) is
+      own name (`builtins_f128.cpp`). `roundeven{,f,l}`,
+      `canonicalize{,f,l}` and clang 22's `fmaximum_num{,f,l}` /
+      `fminimum_num{,f,l}` are `llvm.roundeven`/`canonicalize`/
+      `maximumnum`/`minimumnum` of the operand type; `exp10{,f,l}` and
+      clang 22's `sincos{,f,l}` call the library function of that name
+      (WP-410; `builtins_c_math.cpp`, `builtins_c_math_22.cpp`). A
+      `*f16` builtin (WP-403) is
       lowered likewise through `builtin::f16_twin` on `half` operands:
       `ceil`/`floor`/`trunc`/`round`/`rint`/`fabs`/`fma`/`fmax`/`fmin`
       as their `llvm.*.f16` intrinsics, `roundevenf16`,
@@ -436,7 +446,8 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `llvm.roundeven`/`canonicalize`/`maximumnum`/`minimumnum`,
       `frexpf16` as `llvm.frexp.f16.i32`, the libm set as calls of the
       `half` function the builtin names (`sinf16`, `ldexpf16`, ...)
-      (`builtins_f16_libm.cpp`).
+      (`builtins_f16_libm.cpp`; clang 22's `atan2f16`, `sincosf16`,
+      `fmaximum_numf16`, `fminimum_numf16` in `builtins_f16_libm_22.cpp`).
   - a call of one of the standard functions clang treats as builtins
     (clang `isStdBuiltin`: `std::move`, `move_if_noexcept`, `forward`,
     `forward_like`, `as_const`, `addressof`, `__addressof`, declared in

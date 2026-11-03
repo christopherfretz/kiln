@@ -17,7 +17,7 @@ use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, ValueCategory};
 use kiln_ast::expr::{SourceLocKind, SourceLocValues};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TargetTypes;
-use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals};
+use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, NoexceptValue, Quals};
 use kiln_ast::types::{Nns, TagKeyword};
 use kiln_ast::{Ast, AttrId, DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -252,6 +252,12 @@ impl Sema<'_, '_> {
         }
         if let Some(p) = self.ast.prev(f) {
             if let Some(id) = self.ast.decls.builtin_id(p) {
+                if !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
+                    && let Some(info) = builtin::info(id).copied()
+                    && !self.check_builtin_redecl_exc_spec(f, &info, self.ast.decls.get(p).loc())
+                {
+                    return;
+                }
                 let _ = self.ast.decls.cold.builtin_id.insert(f, id);
             }
             return;
@@ -263,9 +269,28 @@ impl Sema<'_, '_> {
         };
         let Some(info) = builtin::info(id).copied() else { return };
         if !self.c_linkage_file_scope_fn_of_type(f, info.sig) {
+            self.check_builtin_redecl(f, &info);
+            return;
+        }
+        if info.attrs & builtin::attr::CUSTOM != 0 {
+            self.check_builtin_redecl(f, &info);
+            return;
+        }
+        let loc = self.ast.decls.get(f).loc();
+        if !self.check_builtin_redecl_exc_spec(f, &info, loc) {
             return;
         }
         let _ = self.ast.decls.cold.builtin_id.insert(f, id);
+        // clang `CheckEquivalentExceptionSpec`: a redeclaration of a
+        // `NoThrow` builtin without a specification gets `throw()`, so a
+        // later `noexcept` redeclaration matches.
+        if info.attrs & builtin::attr::NOTHROW != 0
+            && let Some(ty) = self.ast.decls.get(f).ty()
+            && self.written_exc_spec(ty) == ExcSpec::None
+        {
+            let ty = self.with_exc_spec(ty, ExcSpec::DynamicNone);
+            self.ast.decls.set_ty(f, ty);
+        }
         let n = AttrNode {
             kind: AttrKind::BUILTIN,
             syntax: AttrSyntax::Gnu,
@@ -275,6 +300,131 @@ impl Sema<'_, '_> {
             b: 0,
         };
         attrs.push(self.ast.attrs.push(n));
+    }
+
+    /// The type of the builtin `info` (clang's `GetBuiltinType`): the
+    /// type its `Builtins.td` signature spells, `noreturn` and `noexcept`
+    /// as its attributes say; `None` when the signature names a type the
+    /// target lacks.
+    fn builtin_fn_type(&mut self, info: &builtin::Info) -> Option<QualType> {
+        let (ret, params, variadic) = self.builtin_signature(info.sig);
+        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
+            return None;
+        }
+        let has = |a: u8| info.attrs & a != 0;
+        let fi =
+            FuncInfo::new().with_variadic(variadic).with_noreturn(has(builtin::attr::NORETURN));
+        let exc = if has(builtin::attr::NOTHROW) { ExcSpec::BasicNoexcept } else { ExcSpec::None };
+        Some(self.ast.types.function(ret, &params, fi, exc))
+    }
+
+    /// clang's "'X' is a builtin with type 'T'" note
+    /// (`note_previous_builtin_declaration`) at `loc`.
+    pub(crate) fn builtin_type_note(
+        &mut self,
+        msg: kiln_diag::Diag,
+        info: &builtin::Info,
+        loc: Loc,
+    ) -> kiln_diag::Diag {
+        let Some(ty) = self.builtin_fn_type(info) else { return msg };
+        let note = self
+            .diag(DiagId::note_previous_builtin_declaration, loc)
+            .arg(info.name)
+            .arg(self.ty_arg(ty));
+        msg.with_note(note)
+    }
+
+    /// The first declaration `f` of the non-library builtin `info`'s name
+    /// at file scope with C language linkage that is not the builtin
+    /// (spec/sema.md §5.4, "Redeclaring a builtin"; clang
+    /// `MergeFunctionDecl` against the implicit builtin declaration): a
+    /// custom-typechecked builtin cannot be redeclared at all ("cannot
+    /// redeclare builtin function"); any other declaration whose type
+    /// differs from the builtin's (ignoring the exception specification)
+    /// is "conflicting types", or at `-fclang-compat=19`, when only the
+    /// return type differs, "functions that differ only in their return
+    /// type cannot be overloaded" (clang 19 checks overloading first).
+    /// Both carry the builtin-type note at `f` and make `f` invalid. A
+    /// declaration in a namespace or with C++ linkage is an ordinary
+    /// function (clang's redeclaration lookup does not find the builtin).
+    fn check_builtin_redecl(&mut self, f: DeclId, info: &builtin::Info) {
+        if !self.file_scope_extern_c_fn(f) {
+            return;
+        }
+        let Some(ty) = self.ast.decls.get(f).ty() else { return };
+        let Some(bty) = self.builtin_fn_type(info) else { return };
+        let loc = self.ast.decls.get(f).loc();
+        let name = info.name;
+        let msg = if info.attrs & builtin::attr::CUSTOM != 0 {
+            self.diag(DiagId::sema_builtin_redeclare, loc).arg(name)
+        } else {
+            let same_params = match (self.ast.types.proto(bty), self.ast.types.proto(ty)) {
+                (Some(a), Some(b)) => {
+                    let (a, b) = (*a, *b);
+                    let (pa, pb) =
+                        (self.ast.types.params(&a).to_vec(), self.ast.types.params(&b).to_vec());
+                    pa.len() == pb.len()
+                        && pa.iter().zip(&pb).all(|(x, y)| self.ast.types.same_type(*x, *y))
+                        && a.info().variadic() == b.info().variadic()
+                }
+                _ => false,
+            };
+            if same_params && self.clang_compat < 22 {
+                self.diag(DiagId::sema_ovl_diff_return_type, loc)
+            } else {
+                self.diag(DiagId::sema_conflicting_types, loc).arg(name)
+            }
+        };
+        let msg = self.builtin_type_note(msg, info, loc);
+        self.emit(msg);
+        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+    }
+
+    /// Whether `f` is a `Function` whose redeclaration context is the
+    /// translation unit and that has C language linkage: the declarations
+    /// clang's redeclaration lookup matches against an implicit builtin.
+    fn file_scope_extern_c_fn(&self, f: DeclId) -> bool {
+        self.kind_of(f) == DeclKind::Function
+            && kiln_abi::mangle::is_extern_c(&self.ast, f)
+            && self.ast.decls.function(f).is_some_and(|x| x.spec.storage() != FnStorage::Static)
+            && self.ast.decls.get(f).ctx().is_some_and(|c| {
+                let r = self.ast.redecl_context(c);
+                self.kind_of(r) == DeclKind::TranslationUnit
+            })
+    }
+
+    /// [except.spec]/5 against the implicit declaration of the `NoThrow`
+    /// builtin `info` (clang `CheckEquivalentExceptionSpec`; its note
+    /// "previous declaration is here" is at `prev_loc`: the previous
+    /// declaration of `f`, or for the first one `f` itself, where clang
+    /// puts the implicit builtin declaration): a potentially
+    /// throwing specification as written on `f` (`noexcept(false)`,
+    /// `throw(T)`) is "exception specification in declaration does not
+    /// match previous declaration", and `f` is invalid. False when it was
+    /// reported.
+    fn check_builtin_redecl_exc_spec(
+        &mut self,
+        f: DeclId,
+        info: &builtin::Info,
+        prev_loc: Loc,
+    ) -> bool {
+        let Some(ty) = self.ast.decls.get(f).ty() else { return true };
+        let spec = self.written_exc_spec(ty);
+        if info.attrs & builtin::attr::NOTHROW == 0
+            || !self.file_scope_extern_c_fn(f)
+            || matches!(spec, ExcSpec::None | ExcSpec::Deferred(_))
+            || spec.is_nothrow()
+            || matches!(spec, ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. })
+            || matches!(spec, ExcSpec::DependentNoexcept(_))
+        {
+            return true;
+        }
+        let loc = self.ast.decls.get(f).loc();
+        let msg = self.diag(DiagId::sema_exception_spec_mismatch, loc);
+        let msg = msg.with_note(self.diag(DiagId::note_previous_declaration, prev_loc));
+        self.emit(msg);
+        self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        false
     }
 
     /// Whether `f` is a `Function` in a namespace-scope context (through
