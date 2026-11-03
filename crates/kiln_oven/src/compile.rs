@@ -5514,6 +5514,15 @@ impl Compiler<'_> {
                     };
                     self.emit(Op::Mov, 0, &[slot, r]);
                 }
+                // A value op's `const T&` parameter bound to a scalar
+                // glvalue (`reflect_constant(x)`) is given its value.
+                _ if value_op && self.ast().exprs.get(x).value_category().is_glvalue() => {
+                    if let TyKind::Ptr(ct) = self.kind(xt) {
+                        t1 = ct.0;
+                    }
+                    let p = self.lv(x, Access::Read);
+                    self.load(p, xt, ak::READ, x, slot);
+                }
                 TyKind::Ptr(ct) => {
                     t1 = ct.0;
                     self.rv_into(x, slot);

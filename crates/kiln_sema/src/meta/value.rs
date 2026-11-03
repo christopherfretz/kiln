@@ -149,9 +149,7 @@ impl Sema<'_, '_> {
         match self.bad_tparg_base(cv) {
             Some(why) => fail(
                 loc,
-                format!(
-                    "{what} refers to {why}, which is not a valid constant template argument"
-                ),
+                format!("{what} refers to {why}, which is not a valid constant template argument"),
             ),
             None => Ok(()),
         }
@@ -196,7 +194,10 @@ impl Sema<'_, '_> {
             return fail(loc, format!("'{}' is not an object type", self.ty_str(t)));
         }
         let not_static = || {
-            MetaError::note(loc, "the argument does not designate an object of static storage duration")
+            MetaError::note(
+                loc,
+                "the argument does not designate an object of static storage duration",
+            )
         };
         if p == 0 {
             return Err(not_static());
@@ -314,7 +315,7 @@ impl Sema<'_, '_> {
                     self.extract_place(r, p, konst, tc, loc)
                 }
                 DeclKind::Function => self.extract_function(r, d, tc, loc),
-                DeclKind::CXXMethod if self.is_static_method(d) => {
+                DeclKind::CXXMethod if self.is_static_method(d) || self.has_explicit_object(d) => {
                     self.extract_function(r, d, tc, loc)
                 }
                 DeclKind::CXXMethod | DeclKind::CXXConversion | DeclKind::Field => {
@@ -423,10 +424,9 @@ impl Sema<'_, '_> {
         };
         let t = &self.ast.types;
         let u = t.pointee(pty).map_or(QualType::ERROR, |q| t.canonical(q));
-        let cv_ok = |q: QualType| !konst || q.quals().is_const();
         if t.is_reference(tc) {
             let tt = t.pointee(tc).map_or(QualType::ERROR, |q| t.canonical(q));
-            if tt.without_quals() == u && cv_ok(tt) {
+            if self.qual_compatible(u, tt, konst) {
                 return Ok(MetaOut::Frozen(p));
             }
             return self.mismatch(r, tc, loc);
@@ -436,9 +436,16 @@ impl Sema<'_, '_> {
             let pt = t.pointee(tc).map_or(QualType::ERROR, |q| t.canonical(q));
             if e.without_quals() == pt.without_quals()
                 && pt.quals().contains(e.quals())
-                && cv_ok(pt)
+                && pt.quals().is_const()
             {
-                let ep = self.object_ptr(e, base, offset)?;
+                // `extract-value<T>(constant_of(r))`: the pointer is into
+                // `reflect_constant_array` of the array's value, not into
+                // the array itself ([meta.reflection.queries] constant_of).
+                let base = match base {
+                    PtrBase::Const(_) => base,
+                    _ => PtrBase::Const(self.array_constant(r, base, offset, u, loc)?),
+                };
+                let ep = self.object_ptr(e, base, 0)?;
                 return Ok(MetaOut::Frozen(ep));
             }
             return self.mismatch(r, tc, loc);
@@ -447,6 +454,73 @@ impl Sema<'_, '_> {
             return Ok(MetaOut::Deref(p));
         }
         self.mismatch(r, tc, loc)
+    }
+
+    /// The content-interned `reflect_constant_array` object holding the
+    /// value of the array of type `u` at `base` + `offset`: a whole
+    /// variable usable in constant expressions.
+    fn array_constant(
+        &mut self,
+        r: ReflectionId,
+        base: PtrBase,
+        offset: u64,
+        u: QualType,
+        loc: Loc,
+    ) -> Result<ConstValueId, MetaError> {
+        let v = match base {
+            PtrBase::Decl(d) if offset == 0 => {
+                match self.ast.decls.var(d).map(|v| v.eval.state()) {
+                    Some(kiln_ast::decl::VarEvalState::Value(v)) => Some(v),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some(img) = v.and_then(|v| self.ast.consts.aggregate(v)) else {
+            return fail(
+                loc,
+                format!(
+                    "kiln: the value of '{}' is not available to 'constant_of'",
+                    self.reflection_str(r)
+                ),
+            );
+        };
+        let t = &mut self.ast.types;
+        let (e, n) = (t.element(u).map_or(QualType::ERROR, |q| t.canonical(q)), t.array_size(u));
+        let Some(n) = n else { return Err(MetaError::invalid()) };
+        let ty = t.constant_array(e.without_quals(), n, None);
+        let (bytes, relocs) = (img.bytes.to_vec(), img.relocs.to_vec());
+        let (padding, unions) = (img.padding.to_vec(), img.unions.to_vec());
+        let img = kiln_ast::consts::ByteImage {
+            ty,
+            bytes: &bytes,
+            relocs: &relocs,
+            padding: &padding,
+            unions: &unions,
+        };
+        let cv = self.ast.consts.push_aggregate(img).map_err(|_| MetaError::memory())?;
+        self.check_tparg(cv, "an element", loc)?;
+        Ok(cv)
+    }
+
+    /// Whether a reference to `t` binds to an object of type `u` (const
+    /// when `konst`) by at most a qualification conversion
+    /// ([meta.reflection.extract]/5: `U(*)[]` converts to `T(*)[]`); array
+    /// bounds match level by level, the cv-qualifiers apply to the
+    /// innermost element.
+    fn qual_compatible(&self, u: QualType, t: QualType, konst: bool) -> bool {
+        let ty = &self.ast.types;
+        let (mut u, mut t) = (ty.canonical(u), ty.canonical(t));
+        while ty.is_array(u) || ty.is_array(t) {
+            if !ty.is_array(u) || !ty.is_array(t) || ty.array_size(u) != ty.array_size(t) {
+                return false;
+            }
+            let el = |q: QualType| ty.element(q).map_or(QualType::ERROR, |e| ty.canonical(e));
+            (u, t) = (el(u), el(t));
+        }
+        u.without_quals() == t.without_quals()
+            && t.quals().contains(u.quals())
+            && (!konst || t.quals().is_const())
     }
 
     /// `extract<T>` of a non-member (or static member) function: a
@@ -460,10 +534,21 @@ impl Sema<'_, '_> {
     ) -> Result<MetaOut, MetaError> {
         let Some(ft) = self.ast.decls.get(d).ty() else { return Err(MetaError::invalid()) };
         let ft = self.unqual(ft);
+        // `T` is `F*`, the function's type being `F` or `F noexcept`
+        // ([meta.reflection.extract]/7.3); a reference `T` is
+        // `extract-ref`'s, which takes only variables and objects.
         let t = &self.ast.types;
-        let ok = (t.is_pointer(tc) || t.is_reference(tc))
-            && t.pointee(tc).is_some_and(|q| t.canonical(q) == ft);
-        if !ok {
+        let want = t.is_pointer(tc).then(|| t.pointee(tc).map(|q| t.canonical(q))).flatten();
+        if self.ast.types.is_reference(tc) {
+            return fail(
+                loc,
+                format!(
+                    "'{}' is a function, not an object: it cannot be extracted as a reference",
+                    self.reflection_str(r)
+                ),
+            );
+        }
+        if !want.is_some_and(|w| w == ft || self.same_but_noexcept(w, ft)) {
             return self.mismatch(r, tc, loc);
         }
         let first = self.ast.first(d);
@@ -501,15 +586,38 @@ impl Sema<'_, '_> {
         else {
             return Err(MetaError::invalid());
         };
-        let class_ty = QualType::from(self.ast.types.record_type(cls));
+        let c = self.ast.types.record_type(cls);
+        let class_ty = QualType::from(c);
+        if self.ast.types.is_reference(tc) {
+            return fail(
+                loc,
+                format!(
+                    "'{}' is a non-static member, not an object: it cannot be extracted as a \
+                     reference",
+                    self.reflection_str(r)
+                ),
+            );
+        }
         let t = &self.ast.types;
-        let ok = match t.canonical_view(tc) {
-            TypeView::MemberPointer { pointee, class } => {
-                t.canonical(pointee) == t.canonical(mt)
-                    && t.canonical(QualType::from(class)) == t.canonical(class_ty)
+        let target = match t.canonical_view(tc) {
+            TypeView::MemberPointer { pointee, class }
+                if t.canonical(QualType::from(class)) == t.canonical(class_ty) =>
+            {
+                Some(t.canonical(pointee))
             }
-            _ => false,
+            _ => None,
         };
+        let mt = self.ast.types.canonical(mt);
+        // A data member's `X C::*` converts by a qualification conversion
+        // (7.1); a member function's type is `F` or `F noexcept` (7.2).
+        let ok = target.is_some_and(|w| {
+            if field {
+                let from = self.ast.types.member_pointer(mt, c);
+                crate::conv::is_qualification_convertible(self, from, tc.without_quals())
+            } else {
+                w == mt || self.same_but_noexcept(w, mt)
+            }
+        });
         if !ok {
             return self.mismatch(r, tc, loc);
         }
@@ -526,6 +634,12 @@ impl Sema<'_, '_> {
             path: &[],
         })?;
         Ok(MetaOut::Frozen(cv))
+    }
+
+    /// Whether function type `w` is non-throwing function type `f` without
+    /// its `noexcept`.
+    fn same_but_noexcept(&mut self, w: QualType, f: QualType) -> bool {
+        crate::conv::drop_noexcept(self, f).is_some_and(|g| self.ast.types.same_type(g, w))
     }
 
     /// `extract<E>` of an enumerator of `E`: its value.

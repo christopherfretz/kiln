@@ -245,7 +245,11 @@ impl Oven {
         let p = r as u64;
         let at = self.types.intern(b, arr);
         if !string {
-            return self.freeze_aggregate(b, at, p, ctx.loc).map_err(freeze_err);
+            let cv = self.freeze_aggregate(b, at, p, ctx.loc).map_err(freeze_err)?;
+            // The image is typed `arr` itself, not the Oven type's first
+            // spelling (`const T[N]` when a const array came first): the
+            // same content is one object whatever reached it first.
+            return retype(b, cv, arr);
         }
         // Characters are plain integers: their bytes, little-endian as
         // the Oven stores them, then the terminator.
@@ -261,13 +265,7 @@ impl Oven {
             bytes.extend_from_slice(&v.to_le_bytes()[..w as usize]);
         }
         bytes.resize(((m + 1) * w) as usize, 0);
-        let img = ByteImage {
-            ty: self.types.info(at).q,
-            bytes: &bytes,
-            relocs: &[],
-            padding: &[],
-            unions: &[],
-        };
+        let img = ByteImage { ty: arr, bytes: &bytes, relocs: &[], padding: &[], unions: &[] };
         b.consts().push_aggregate(img).map_err(|_| fault(Fault::Memory))
     }
 
@@ -348,4 +346,21 @@ impl Oven {
             _ => return None,
         })
     }
+}
+
+/// `cv`, an aggregate, with its image typed `ty`.
+fn retype(
+    b: &mut dyn SemaBridge,
+    cv: ConstValueId,
+    ty: QualType,
+) -> Result<ConstValueId, MetaError> {
+    let c = b.consts();
+    let Some(img) = c.aggregate(cv) else { return Ok(cv) };
+    if img.ty == ty {
+        return Ok(cv);
+    }
+    let (bytes, relocs) = (img.bytes.to_vec(), img.relocs.to_vec());
+    let (padding, unions) = (img.padding.to_vec(), img.unions.to_vec());
+    let img = ByteImage { ty, bytes: &bytes, relocs: &relocs, padding: &padding, unions: &unions };
+    c.push_aggregate(img).map_err(|_| fault(Fault::Memory))
 }
