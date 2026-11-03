@@ -544,8 +544,9 @@ impl Substituter<'_, '_, '_> {
                 };
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
                 self.sema.pattern_member_access = true;
-                let r =
-                    self.sema.act_on_template_member_q(base, qual, name, targs, false, loc, op, arrow);
+                let r = self
+                    .sema
+                    .act_on_template_member_q(base, qual, name, targs, false, loc, op, arrow);
                 self.sema.pattern_member_access = false;
                 Ok(r)
             }

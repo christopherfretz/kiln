@@ -9691,7 +9691,7 @@ impl Sema<'_, '_> {
             // not an integer either. alloc_align also takes
             // `std::align_val_t` (`AddAllocAlignAttr`, `Type::isAlignValT`;
             // libstdc++ 16 `operator new` overloads); alloc_size does not.
-            if !self.ast.types.is_integral(p) && !(refs && self.is_align_val_t(p)) {
+            if !(self.ast.types.is_integral(p) || refs && self.is_align_val_t(p)) {
                 let at = self.ast.exprs.get(e).loc();
                 let msg = self.diag(DiagId::sema_attribute_param_integers_only, at).arg(name);
                 self.emit(msg);

@@ -404,6 +404,23 @@ fn kiln_features(m: &mut BTreeMap<String, String>) {
     set(m, "__cpp_variadic_friend", "202403L");
 }
 
+/// Feature macros keyed on the `__cplusplus` value already in `m`.
+fn apply_std_keyed(m: &mut BTreeMap<String, String>, reflection: bool) {
+    let cplusplus =
+        m.get("__cplusplus").and_then(|v| v.trim_end_matches('L').parse::<u32>().ok()).unwrap_or(0);
+    // [cpp.predefined] (P0847, C++23): kiln implements explicit object
+    // parameters, members and lambdas; clang 19 leaves the macro
+    // undefined, clang 22 defines it from C++23.
+    if cplusplus >= 202_302 {
+        set(m, "__cpp_explicit_this_parameter", "202110L");
+    }
+    // GCC 16.1 `-freflection` (C++26 only; `g++-16 -std=c++26
+    // -freflection -dM -E`): libstdc++'s `<meta>` keys on it.
+    if reflection && cplusplus > 202_302 {
+        set(m, "__cpp_impl_reflection", "202603L");
+    }
+}
+
 fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
     if cfg.gnu {
         m.remove("__STRICT_ANSI__");
@@ -465,21 +482,7 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if !cfg.sized_deallocation {
             m.remove("__cpp_sized_deallocation");
         }
-        // [cpp.predefined] (P0847, C++23): kiln implements explicit object
-        // parameters, members and lambdas; clang 19 leaves the macro
-        // undefined, clang 22 defines it from C++23.
-        let cplusplus = m
-            .get("__cplusplus")
-            .and_then(|v| v.trim_end_matches('L').parse::<u32>().ok())
-            .unwrap_or(0);
-        if cplusplus >= 202_302 {
-            set(m, "__cpp_explicit_this_parameter", "202110L");
-        }
-        // GCC 16.1 `-freflection` (C++26 only; `g++-16 -std=c++26
-        // -freflection -dM -E`): libstdc++'s `<meta>` keys on it.
-        if cfg.reflection && cplusplus > 202_302 {
-            set(m, "__cpp_impl_reflection", "202603L");
-        }
+        apply_std_keyed(m, cfg.reflection);
         apply_p1467(m, cfg.std_float_aliases, cfg.aarch64);
     }
     for n in ["__PIC__", "__pic__", "__PIE__", "__pie__"] {

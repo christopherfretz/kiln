@@ -332,7 +332,8 @@ fn gcc_toolchain_matches_clang() {
         let triple = &target["--target=".len()..];
         let install = format!("{tcs}/lib/gcc/{triple}/15/");
         for gcc in [format!("--gcc-toolchain={tcs}/"), format!("--gcc-install-dir={install}")] {
-            let args = [target, &gcc, "-resource-dir", clang_res, "-E", "-v", "-x", "c++", "/dev/null"];
+            let args =
+                [target, &gcc, "-resource-dir", clang_res, "-E", "-v", "-x", "c++", "/dev/null"];
             let Ok(clang) = std::process::Command::new("clang++-19").args(args).output() else {
                 eprintln!("skipped: no clang++-19");
                 return;
@@ -355,7 +356,12 @@ fn gcc_toolchain_matches_clang() {
     let o = kiln(&[&bad, "-fsyntax-only", "-x", "c++", "/dev/null"], "");
     assert_eq!(
         (o.code, o.stderr),
-        (1, format!("kiln++: error: '{tcs}/lib/gcc/aarch64-linux-gnu/17' does not contain a GCC installation\n"))
+        (
+            1,
+            format!(
+                "kiln++: error: '{tcs}/lib/gcc/aarch64-linux-gnu/17' does not contain a GCC installation\n"
+            )
+        )
     );
     std::fs::remove_dir_all(&d).unwrap();
 }

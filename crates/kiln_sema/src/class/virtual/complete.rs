@@ -265,11 +265,8 @@ impl Sema<'_, '_> {
             let t = self.tag_type(r);
             self.is_consteval_only_type(t)
         };
-        let consteval: Vec<DeclId> = os
-            .iter()
-            .copied()
-            .filter(|&o| ce(spec_of(self, o)) != ce(ms) && !exempt)
-            .collect();
+        let consteval: Vec<DeclId> =
+            os.iter().copied().filter(|&o| ce(spec_of(self, o)) != ce(ms) && !exempt).collect();
         if !consteval.is_empty() {
             let mut msg =
                 self.diag(DiagId::sema_consteval_overrides, loc).arg(u8::from(!ce(ms))).arg(name);

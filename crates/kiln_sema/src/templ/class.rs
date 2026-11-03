@@ -1683,6 +1683,21 @@ impl Substituter<'_, '_, '_> {
         Some(matches!(r, Ok((_, true))))
     }
 
+    /// Starts `spec`'s definition with the class-key of the definition
+    /// instantiated, not of the declaration the specialization was named
+    /// through: it sets the default member and base access
+    /// ([class.access]/2).
+    fn start_instantiated_definition(&mut self, spec: DeclId, def: DeclId) {
+        if let (Some(t), Some(s)) =
+            (self.sema.ast.decls.record(def).map(|r| r.tag), self.sema.ast.decls.record(spec))
+            && s.tag != t
+            && (s.tag == TagKind::Union) == (t == TagKind::Union)
+        {
+            self.sema.ast.decls.set_instantiated_tag(spec, t);
+        }
+        self.sema.act_on_start_record_definition(spec);
+    }
+
     /// [`Substituter::class_body`]; `anonymous` for an anonymous struct
     /// or union (its `}` is followed by `;`).
     pub(crate) fn class_body_with(
@@ -1693,16 +1708,7 @@ impl Substituter<'_, '_, '_> {
         anonymous: bool,
     ) {
         let saved_entity = self.entity.replace(spec);
-        // The class-key of the definition instantiated, not of the
-        // declaration the specialization was named through.
-        if let (Some(t), Some(s)) =
-            (self.sema.ast.decls.record(def).map(|r| r.tag), self.sema.ast.decls.record(spec))
-            && s.tag != t
-            && (s.tag == TagKind::Union) == (t == TagKind::Union)
-        {
-            self.sema.ast.decls.set_instantiated_tag(spec, t);
-        }
-        self.sema.act_on_start_record_definition(spec);
+        self.start_instantiated_definition(spec, def);
         self.class_final_and_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);
         let sub = self;
