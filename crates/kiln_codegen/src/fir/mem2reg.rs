@@ -166,7 +166,7 @@ impl Fir {
     }
 
     /// LLVM `replaceAllUsesWith`.
-    fn replace_all_uses(&mut self, from: V, to: V) {
+    pub(crate) fn replace_all_uses(&mut self, from: V, to: V) {
         for inst in &mut self.insts {
             if inst.block.is_none() {
                 continue;

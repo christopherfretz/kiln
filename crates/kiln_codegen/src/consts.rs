@@ -152,6 +152,10 @@ impl Cg<'_> {
                 Ok(gval(self.let_global(t, ty)?))
             }
             PtrBase::TypeInfo(t) => self.rtti(t),
+            PtrBase::Label { label, origin } => {
+                let at = self.loc_of(origin);
+                self.addr_of_label(label, at)
+            }
         }
     }
 

@@ -8118,6 +8118,22 @@ impl Sema<'_, '_> {
             return d;
         }
         let (Some(lv), Some(rv)) = (self.try_fold(l), self.try_fold(r)) else { return d };
+        // clang's `ConvertAPValueToString` prints no lvalue or member
+        // pointer: a pointer comparison gets no note (`&a == &b`, `&&l ==
+        // &&m`).
+        let pointer = |v| {
+            matches!(
+                self.ast.consts.scalar(v),
+                Some(
+                    kiln_ast::consts::Scalar::Null { .. }
+                        | kiln_ast::consts::Scalar::Pointer { .. }
+                        | kiln_ast::consts::Scalar::MemberPtr { .. }
+                )
+            )
+        };
+        if pointer(lv) || pointer(rv) {
+            return d;
+        }
         let note = self
             .diag(DiagId::note_expr_evaluates_to, self.ast.exprs.get(c).loc())
             .arg(self.comparison_value_text(lv))
