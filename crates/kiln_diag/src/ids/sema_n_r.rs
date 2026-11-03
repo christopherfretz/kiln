@@ -2,6 +2,7 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+sema_naked_non_asm_stmt = Error (0) "non-ASM statement in naked function is not supported";
 // ----- WP-197 (DR482 namespace extra qualification; ambiguous member types)
 sema_namespace_member_extra_qualification = Warning [ExtraQualification] (1) "extra qualification on member '{0}'";
 sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> or import std before using the 'typeid' operator";

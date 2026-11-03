@@ -104,6 +104,10 @@ pub(crate) struct Fx {
     pub ret_coerce: Option<IrType>,
     pub sig: Option<Sig>,
     pub is_main: bool,
+    /// A `naked` function (clang `EmitFunctionProlog` /
+    /// `EmitFunctionEpilog`): no parameter prologue, and the epilogue is
+    /// `unreachable` instead of a return.
+    pub naked: bool,
     pub jumps: Vec<Jump>,
     pub labels: FxHashMap<DeclId, JumpDest>,
     /// The labels of the enclosing lexical scopes with cleanups (clang
@@ -208,6 +212,7 @@ impl Fx {
             ret_coerce: None,
             sig: None,
             is_main: false,
+            naked: false,
             jumps: Vec::new(),
             labels: FxHashMap::default(),
             lex_labels: Vec::new(),
@@ -327,6 +332,7 @@ impl Cg<'_> {
         self.f.decl = Some(d);
         self.f.func = Some(f);
         self.f.is_main = is_main;
+        self.f.naked = thunk.is_none() && self.has_fn_attr(d, kiln_ast::attr::AttrKind::NAKED);
         self.f.sig = Some(sig.clone());
         self.f.vector_width = self.def_vector_width(&sig.info);
         self.f.structor = structor;
@@ -420,11 +426,14 @@ impl Cg<'_> {
             arg_no += 1;
             v
         });
-        let param_decls: Vec<DeclId> = if self.inheriting_drops_params(first, structor) {
-            Vec::new()
-        } else {
-            ast.lists.iter(fd.params).collect()
-        };
+        // clang `EmitFunctionProlog`: naked functions have no prologue
+        // (sema rejects parameter and `this` references in their bodies).
+        let param_decls: Vec<DeclId> =
+            if self.f.naked || self.inheriting_drops_params(first, structor) {
+                Vec::new()
+            } else {
+                ast.lists.iter(fd.params).collect()
+            };
         let mut vals = Vec::with_capacity(param_decls.len());
         for (i, &p) in param_decls.iter().enumerate() {
             let pq = ast.decls.get(p).ty().expect("param type");
@@ -432,12 +441,12 @@ impl Cg<'_> {
             let loc = Some(ast.decls.get(p).loc());
             vals.push(self.prolog_arg(&info.kind, pq, &mut arg_no, loc)?);
         }
-        let this_addr = this_arg.map(|v| {
+        let this_addr = this_arg.filter(|_| !self.f.naked).map(|v| {
             let a = self.f.fir.alloca(LTy::PTR, 8);
             self.store(v, a, 8, false);
             a
         });
-        let vtt_addr = vtt_arg.map(|v| {
+        let vtt_addr = vtt_arg.filter(|_| !self.f.naked).map(|v| {
             let a = self.f.fir.alloca(LTy::PTR, 8);
             self.store(v, a, 8, false);
             a
@@ -506,14 +515,21 @@ impl Cg<'_> {
             _ => self.emit_body(body)?,
         }
 
-        // GenerateCode: falling off the end of a value-returning function.
+        // GenerateCode: falling off the end of a value-returning function
+        // is `llvm.trap` + `unreachable` at -O0 and `unreachable` alone
+        // above it.
         if !is_main
             && thunk.is_none()
             && ast.closure_thunk(d).is_none()
             && self.f.ret_kind != RetKind::Void
             && self.f.fir.cur().is_some()
         {
-            self.emit_trap_unreachable_ex(false);
+            if self.opts.optimize {
+                self.f.fir.push(Op::Unreachable, LTy::VOID);
+                self.f.fir.set_cur(None);
+            } else {
+                self.emit_trap_unreachable_ex(false);
+            }
         }
         // FinishFunction.
         let prologue = self.f.cl.prologue;
@@ -564,17 +580,24 @@ impl Cg<'_> {
             || !self.opts.exceptions
             || self.no_throw_calls();
         let noreturn = self.ast.is_noreturn_fn(d);
+        let inline = if thunk.is_some() {
+            if self.opts.optimize {
+                crate::module::DefInline::Plain
+            } else {
+                crate::module::DefInline::OptNone
+            }
+        } else {
+            let inline = self.def_inline_attrs(d);
+            self.def_opt_attrs(d, inline, &mut extra);
+            inline
+        };
         let fa = self.def_fn_attrs(crate::module::DefFnAttrs {
             is_main,
             nounwind: nothrow_def,
             mustprogress: self.f.mustprogress,
             vector_width: self.f.vector_width,
             noreturn,
-            inline: if thunk.is_some() {
-                crate::module::DefInline::OptNone
-            } else {
-                self.def_inline_attrs(d)
-            },
+            inline,
             extra,
         });
         let (mut ret, mut params) = self.sig_attrs(&sig, sig.params.len(), true);
@@ -708,8 +731,13 @@ impl Cg<'_> {
         self.emit_block(rb, false);
     }
 
-    /// clang `EmitFunctionEpilog`.
+    /// clang `EmitFunctionEpilog` (a naked function has no epilogue: the
+    /// return block ends in `unreachable`).
     pub(crate) fn emit_epilog(&mut self) {
+        if self.f.naked {
+            self.f.fir.push(Op::Unreachable, LTy::VOID);
+            return;
+        }
         let rv = match self.f.ret_kind {
             RetKind::Void => None,
             RetKind::Sret => {
