@@ -156,13 +156,18 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // LLVM 21 dropped the size operand of `llvm.lifetime.start/end`. kiln
     // emits LLVM 19's `(i64, ptr)` form because its optimizer is `opt-19`
     // (spec/driver.md "IR optimization"); `opt-22`'s auto-upgrade of the
-    // markers that survive -O1 leaves dead `@llvm.lifetime.*.i64`
+    // markers that survive -O1 (or all of them, under
+    // `-disable-llvm-passes`) leaves dead `@llvm.lifetime.*.i64`
     // declarations and moves the upgraded ones to the module end. The
     // instructions match.
     ("lifetime_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("lifetime_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("loop_unroll_disable_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("loop_unroll_disable_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("tbaa_atomic_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("tbaa_atomic_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("tbaa_null_init_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("tbaa_null_init_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("tbaa_unnamed_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("tbaa_unnamed_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     // clang 22 emits `insertelement <8 x i1> .., i8 1, ..` for a bool
