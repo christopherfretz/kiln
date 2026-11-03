@@ -1506,8 +1506,10 @@ index per extending decl, codegen `_ZGR`) and the extending decl's storage
 duration. Applies to variables, references in aggregate-initialized objects
 (`const T& r = A{ S() }.ref` cases per clang), and the backing array of
 `std::initializer_list` (§5.7). Not extended (errors/warnings as clang): return
-of a reference to a temporary (`returning reference to local temporary object`
-[-Wreturn-stack-address]), a mem-initializer reference member (§4.9), a
+of a reference to a temporary (`returning reference to local temporary object`:
+an error in C++26, P2748R5 [stmt.return]/6; before C++26 the same text as a
+warning [-Wreturn-stack-address], clang's `warn_ret_local_temp_addr_ref`,
+WP-491), a mem-initializer reference member (§4.9), a
 temporary in a `new`-initializer or a function argument (full-expression
 lifetime). A `.` member access is followed only when it designates a
 non-static data member of non-reference type ([class.temporary]/6.7): a
@@ -1560,7 +1562,8 @@ capture on the path (else at the name), with one note per path step:
 reference due to use here` (located at the capture-default), `captured by
 reference via initialization of lambda capture 'r'`. A temporary reached
 through a local reference is `returning reference to local temporary
-object` (reference return) or `returning address of local temporary
+object` (reference return; an error in C++26, a warning before, as
+above) or `returning address of local temporary
 object`, with the same notes. A GNU `&&label` reached the same way is
 `returning address of label, which is local` [-Wreturn-stack-address]
 (WP-424). Reference parameters, statics,
