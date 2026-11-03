@@ -14,7 +14,7 @@ template <class T, unsigned long N>
 struct struct_of_arrays_impl {
   struct impl;
   consteval {
-    constexpr auto members = members_of<^^T>();
+    constexpr auto members = __kiln_data_members<^^T>();
     info specs[members.size()];
     unsigned long n = 0;
     template for (constexpr info m : members.items) {

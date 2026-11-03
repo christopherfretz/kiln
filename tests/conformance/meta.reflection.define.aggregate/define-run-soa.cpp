@@ -20,11 +20,11 @@ struct point {
 };
 struct points;
 consteval {
-  info specs[__kiln_members_count(^^point)];
-  for (unsigned long i = 0; i < __kiln_members_count(^^point); ++i) {
-    info m = __kiln_member_at(^^point, i);
-    specs[i] = data_member_spec(^^float[4], {.name = identifier_of(m)});
-  }
+  constexpr auto ctx = access_context::unchecked();
+  info specs[nonstatic_data_members_of(^^point, ctx).size()];
+  unsigned long i = 0;
+  for (info m : nonstatic_data_members_of(^^point, ctx))
+    specs[i++] = data_member_spec(^^float[4], {.name = identifier_of(m)});
   define_aggregate(^^points, specs);
 }
 points soa;

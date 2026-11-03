@@ -33,6 +33,6 @@ struct C {
 constexpr info m_before = ^^C::m;
 void C::m() {}
 static_assert(m_before == ^^C::m);
-static_assert(__kiln_member_at(^^C, 1) == ^^C::m);
-static_assert(__kiln_member_at(^^C, 0) == ^^C::x);
+static_assert(members_of(^^C, access_context::unchecked())[1] == ^^C::m);
+static_assert(members_of(^^C, access_context::unchecked())[0] == ^^C::x);
 static_assert(^^C::m != ^^g && ^^C::x != ^^N::v);

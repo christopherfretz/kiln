@@ -22,13 +22,14 @@ static_assert(!__builtin_constant_p(try_define(^^T)));
 consteval {
   if (__builtin_constant_p(try_define(^^T))) throw 0;
 }
-// Still incomplete: its members cannot be counted.
+// Still incomplete: its size cannot be queried. (size_of, not
+// nonstatic_data_members_of: a trial's allocation is never constant.)
 template <class = void> constexpr bool complete(info cls) {
-  if consteval { return __kiln_members_count(cls) < 100; }
+  if consteval { return size_of(cls) < 100; }
   return false;
 }
 static_assert(!__builtin_constant_p(complete(^^T)));
 consteval { try_define(^^T); }
 static_assert(sizeof(T) == sizeof(int));
-static_assert(__kiln_members_count(^^T) == 1);
+static_assert(nonstatic_data_members_of(^^T, access_context::unchecked()).size() == 1);
 static_assert(__builtin_constant_p(complete(^^T)));

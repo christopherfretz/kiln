@@ -1233,6 +1233,81 @@ impl Sema<'_, '_> {
         }
         n.ctx().unwrap_or(self.ctx)
     }
+
+    /// Points `s` at context `from`, recomputing its effective context
+    /// only when `from` changed (reflection access queries, WP-478: a
+    /// loop over one class's members allocates nothing per call).
+    pub(crate) fn set_access_scope(&self, s: &mut AccessScope, from: DeclId) {
+        if s.from == Some(from) {
+            return;
+        }
+        let ec = self.effective_context_at(from);
+        s.ec.records.clone_from(&ec.records);
+        s.ec.functions.clone_from(&ec.functions);
+        s.from = Some(from);
+    }
+
+    /// Whether member `found` named in class `naming` is accessible from
+    /// the context `s` was set to ([`Self::set_access_scope`]; P2996R13
+    /// [meta.reflection.access.queries]). A non-static member is checked
+    /// as if named through an object of class `naming` ([class.protected],
+    /// as GCC 16.1 does).
+    pub(crate) fn member_accessible_in(
+        &self,
+        s: &AccessScope,
+        found: DeclId,
+        naming: DeclId,
+    ) -> bool {
+        let naming = self.ast.definition(naming).unwrap_or(naming);
+        let Some(t) = self.member_target(found, Some(naming)) else { return true };
+        let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
+        self.is_accessible(&s.ec, &t, naming, unpriv)
+    }
+
+    /// Whether the base class `base` named by base-specifier `spec` of
+    /// `derived` is accessible, as a base of `naming` (`derived` or a
+    /// class derived from it), from the context `s` was set to
+    /// ([class.access.base]/4).
+    pub(crate) fn base_accessible_in(
+        &self,
+        s: &AccessScope,
+        naming: DeclId,
+        derived: DeclId,
+        spec: u32,
+        base: DeclId,
+    ) -> bool {
+        let naming = self.ast.definition(naming).unwrap_or(naming);
+        let derived = self.ast.definition(derived).unwrap_or(derived);
+        let acc = if same_class(self, naming, derived) {
+            self.spec_access(derived, spec)
+        } else {
+            self.unprivileged_access(naming, base, Access::Public)
+        };
+        if acc == Access::Public {
+            return true;
+        }
+        let t = Target {
+            member: None,
+            decl_access: Access::Public,
+            declaring: base,
+            instance_member: false,
+            object: None,
+        };
+        self.is_accessible(&s.ec, &t, naming, acc)
+    }
+}
+
+/// A reusable effective context for repeated access checks from one
+/// point ([`Sema::set_access_scope`]).
+pub(crate) struct AccessScope {
+    ec: EffectiveContext,
+    from: Option<DeclId>,
+}
+
+impl Default for AccessScope {
+    fn default() -> Self {
+        Self { ec: EffectiveContext { records: Vec::new(), functions: Vec::new() }, from: None }
+    }
 }
 
 /// What a derived-to-base access check is for (the diagnostic it gives).

@@ -251,15 +251,20 @@ class exception : public __kiln_exception_base {
   consteval std::source_location where() const noexcept { return __where_; }
 };
 
-// [meta.reflection.layout]: offset_of's result (WP-478 answers it).
+// [meta.reflection.layout]: offset_of's result.
 struct member_offset {
   decltype((char*)0 - (char*)0) bytes;
   decltype((char*)0 - (char*)0) bits;
   constexpr decltype((char*)0 - (char*)0) total_bits() const { return 8 * bytes + bits; }
 };
 
+// The designating class of `via(cls)`: `cls` if it is null or a complete
+// class type, else a std::meta::exception (WP-478).
+consteval info __kiln_access_via(info cls);
+
 // [meta.reflection.access.context]: a scope and a designating class
-// (null: none). current() is WP-478's.
+// (null: none). unchecked() is the (null, null) context, which checks
+// nothing (spec/reflection-members.md §3).
 class access_context {
   info __scope_;
   info __designating_;
@@ -268,10 +273,9 @@ class access_context {
  public:
   access_context() = delete;
   static consteval access_context current() noexcept;
-  // The IS's scope is ^^:: (not parsed yet): null stands in for it.
-  static consteval access_context unprivileged() noexcept { return {info(), info()}; }
+  static consteval access_context unprivileged() noexcept { return {^^::, info()}; }
   static consteval access_context unchecked() noexcept { return {info(), info()}; }
-  consteval access_context via(info cls) const { return {__scope_, cls}; }
+  consteval access_context via(info cls) const { return {__scope_, __kiln_access_via(cls)}; }
   consteval info scope() const noexcept { return __scope_; }
   consteval info designating_class() const noexcept { return __designating_; }
 };
@@ -285,17 +289,55 @@ consteval member_offset __kiln_member_offset(decltype((char*)0 - (char*)0) bytes
                                              decltype((char*)0 - (char*)0) bits);
 consteval access_context __kiln_access_context(info scope, info designating);
 
-// members_of: a fixed-capacity array-like (the spike's; WP-478 adds the
-// IS's vector form).
-consteval unsigned long __kiln_members_count(info cls);
-consteval info __kiln_member_at(info cls, unsigned long i);
+// [meta.reflection.access.context]: the scope queries (P2996R13).
+consteval info current_function();
+consteval info current_class();
+consteval info current_namespace();
 
+// [meta.reflection.access.queries]
+consteval bool is_accessible(info r, access_context ctx);
+consteval bool has_inaccessible_nonstatic_data_members(info r, access_context ctx);
+consteval bool has_inaccessible_bases(info r, access_context ctx);
+consteval bool has_inaccessible_subobjects(info r, access_context ctx);
+
+// [meta.reflection.member.queries]
+consteval std::vector<info> members_of(info r, access_context ctx);
+consteval std::vector<info> bases_of(info r, access_context ctx);
+consteval std::vector<info> static_data_members_of(info r, access_context ctx);
+consteval std::vector<info> nonstatic_data_members_of(info r, access_context ctx);
+consteval std::vector<info> subobjects_of(info r, access_context ctx);
+consteval std::vector<info> enumerators_of(info type_enum);
+consteval std::vector<info> parameters_of(info r);
+
+// A test-header convenience, not IS: nonstatic_data_members_of(R) copied
+// into an array-like whose size is a constant, for expansion statements
+// (`template for (constexpr info m : l.items)`) until
+// define_static_array (WP-479).
 template <unsigned long N>
-struct member_list {
+struct __kiln_info_array {
   info items[N == 0 ? 1 : N];
   constexpr unsigned long size() const { return N; }
   constexpr info operator[](unsigned long i) const { return items[i]; }
 };
+template <info R>
+consteval auto __kiln_data_members() {
+  constexpr unsigned long n = nonstatic_data_members_of(R, access_context::unchecked()).size();
+  __kiln_info_array<n> l{};
+  unsigned long i = 0;
+  for (info m : nonstatic_data_members_of(R, access_context::unchecked())) l.items[i++] = m;
+  return l;
+}
+
+// [meta.reflection.layout]
+consteval member_offset offset_of(info r);
+consteval decltype(sizeof 0) size_of(info r);
+consteval decltype(sizeof 0) alignment_of(info r);
+consteval decltype(sizeof 0) bit_size_of(info r);
+
+// [meta.reflection.annotation] (P3394R4)
+consteval bool is_annotation(info r);
+consteval std::vector<info> annotations_of(info item);
+consteval std::vector<info> annotations_of_with_type(info item, info type);
 }  // namespace std::meta
 
 // Defines a non-static data member `name` of type `type` in the class
@@ -305,14 +347,6 @@ consteval std::meta::info __kiln_define_member(std::meta::info cls, std::meta::i
                                                const char* name);
 
 namespace std::meta {
-// members_of(R) as a fixed-capacity array-like whose size is a constant.
-template <info R>
-consteval member_list<__kiln_members_count(R)> members_of() {
-  member_list<__kiln_members_count(R)> l{};
-  for (unsigned long i = 0; i < __kiln_members_count(R); ++i) l.items[i] = __kiln_member_at(R, i);
-  return l;
-}
-
 consteval bool name_is(info r, const char* s) {
   const char* n = name_of(r);
   for (; *n && *n == *s; ++n, ++s) {

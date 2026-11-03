@@ -19,9 +19,9 @@ struct T {
   ~T();
 };
 consteval std::meta::info member(const char* n) {
-  for (unsigned long i = 0; i < std::meta::__kiln_members_count(^^T); ++i)
-    if (std::meta::name_is(std::meta::__kiln_member_at(^^T, i), n))
-      return std::meta::__kiln_member_at(^^T, i);
+  for (std::meta::info m : std::meta::members_of(^^T, std::meta::access_context::unchecked()))
+    if (std::meta::name_is(m, n))
+      return m;
   return ^^int;
 }
 int a = [: ^^int :];
