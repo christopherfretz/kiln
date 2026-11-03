@@ -1686,6 +1686,15 @@ impl Substituter<'_, '_, '_> {
         anonymous: bool,
     ) {
         let saved_entity = self.entity.replace(spec);
+        // The class-key of the definition instantiated, not of the
+        // declaration the specialization was named through.
+        if let (Some(t), Some(s)) =
+            (self.sema.ast.decls.record(def).map(|r| r.tag), self.sema.ast.decls.record(spec))
+            && s.tag != t
+            && (s.tag == TagKind::Union) == (t == TagKind::Union)
+        {
+            self.sema.ast.decls.set_instantiated_tag(spec, t);
+        }
         self.sema.act_on_start_record_definition(spec);
         self.class_final_and_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);

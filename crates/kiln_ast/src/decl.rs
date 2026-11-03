@@ -2656,6 +2656,21 @@ impl DeclArena {
         d.defn = d.defn.with(DefinitionBits::BEING_DEFINED);
     }
 
+    /// The class-key of implicit specialization `r` becomes that of its
+    /// pattern's definition (`tag`) as its definition is instantiated: a
+    /// template first declared `class` and defined `struct` (libstdc++ 16
+    /// `__format::_Scanner`) gives its members public default access
+    /// ([class.access]/3 follows the class-key of the definition).
+    ///
+    /// # Panics
+    /// If `r` is complete, or `tag` changes a union to a class or back.
+    pub fn set_instantiated_tag(&mut self, r: DeclId, tag: TagKind) {
+        let d = self.record_mut(r);
+        assert!(!d.defn.contains(DefinitionBits::COMPLETE), "class key of a complete class");
+        assert_eq!(d.tag == TagKind::Union, tag == TagKind::Union, "union class-key mismatch");
+        d.tag = tag;
+    }
+
     /// Marks class `r` (being defined) as the closure type of lambda `l`
     /// ([expr.prim.lambda.closure]).
     pub fn set_closure(&mut self, r: DeclId, l: LambdaId) {
