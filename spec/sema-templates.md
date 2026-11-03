@@ -1850,6 +1850,36 @@ WP-070b):
      `templates/diag/temp.inst-constexpr-defined-later.cpp` pins the
      note.
 
+**Variable template specializations as declarations (WP-417).**
+- `[[deprecated]]`: an explicit specialization carries its own
+  attribute (before or after the declarator-id); an implicit one
+  inherits the attribute of the partial specialization or primary
+  template it is instantiated from; the primary's attribute does not
+  reach an explicit specialization declared without one
+  (`own_deprecation`; `dcl.attr.deprecated/var-template-spec.cpp`).
+- [dcl.init.general]/8: an implicit specialization instantiated from a
+  definition without an initializer is default-initialized, so a
+  `const` one of a type without a user-provided default constructor is
+  the error at the definition, noted at the use (primary, partial
+  specialization, out-of-line static data member template). An
+  explicit specialization of a static data member without an
+  initializer is a declaration ([temp.expl.spec]/14), and an
+  out-of-class member partial specialization without one is not
+  instantiated as a definition (`is_spec_of_out_of_line_def`;
+  `dcl.init.general/const-default-init-var-template.cpp`).
+- [dcl.spec.auto.general]/11: a deduced-type variable template, partial
+  specialization or explicit specialization named in its own
+  initializer gets clang 22's wording ("variable template partial
+  specialization 'ap<T *>' declared with deduced type 'auto' cannot
+  appear in its own initializer", `sema_auto_var_*_in_own_initializer`,
+  `check_var_template_own_init`); the use of a specialization of the
+  primary is diagnosed once, in the pattern
+  (`dcl.spec.auto/own-init-var-template{,-19}.cpp`). Gaps: clang 19
+  reports a primary's own use as "cannot initialize a variable of type
+  'int' with an lvalue of type 'auto'" at the use; "type of variable
+  template specialization 'ap<int>' … depends on itself" is not
+  implemented.
+
 **Requirement R-OVEN-1 (reentrancy)**, as landed:
 - `Sema.oven` is an `Option<Oven>`. `with_oven` takes it out for the
   duration of an evaluation and hands the closure a `Bridge` that holds
@@ -2286,11 +2316,26 @@ impl Sema<'_, '_> {
   otherwise it is dropped. clang stores only into an empty slot. An
   emitted entry stays, empty, so a second `&n<volatile int>` or a later
   call reports nothing. Test `depr.volatile.type/volatile-return-funcaddr{,-19}.cpp`.
-  Gap: the parser resolves a template-id that is not called to its
+  The parser resolves a template-id that is not called to its
   specialization before the target type is known
-  (`resolve_single_template_id`). So `int (*)() = &f<volatile int>`
-  reports the held warnings and a conversion error, where clang
-  reports "address of overloaded function 'f' does not match".
+  (`resolve_single_template_id`), where clang keeps it an overload set.
+  So that resolution takes the specialization's held warnings out of
+  their entry and parks them in `SpecialState.pending_tid_warnings`,
+  keyed by the reference. The entry follows the enclosing parentheses
+  and `&` (`widen_pending_template_id`). The warnings are reported at a
+  call of the reference, or at the end of the full-expression or
+  declaration (`flush_pending_deleted`). An initialization or `return`
+  of a pointer or reference to function whose type the specialization
+  does not have finds no match ([over.over]/1): `conv`'s
+  `template_id_no_match` reports "address of overloaded function 'f'
+  does not match required type 'int ()'" at the name, with the
+  deduction notes of the overload-set complaint (`addr_no_match_notes`).
+  It puts the warnings back into the entry for the specialization's
+  first use (`drop_template_id_warnings`). Inside SFINAE nothing is
+  parked. Gap: clang stores a deduction's warnings only when that
+  deduction succeeds, so its clang 22 context notes name the later use;
+  kiln's keep the failed one's location. Test
+  `over.over/template-id-no-match{,-19}.cpp`.
 - Fatal errors are always reported: the depth limit and stack
   exhaustion.
 
@@ -4345,9 +4390,11 @@ arguments dropped (`Sema::name_for_diagnostic`; clang
 explicit specialization written with a typedef (`template<> constexpr
 int g<L *>;` is `'g<long *>'`). `declaration of variable 'au' with
 deduced type 'auto' requires an initializer` names the template, as in
-clang. Test `temp.expl.spec/variable-specialization-names.cpp`. Gap:
-the Oven's "initializer of 'v' is not a constant expression" note still
-prints the bare name (`kiln_oven/src/notes.rs`).
+clang. Test `temp.expl.spec/variable-specialization-names.cpp`. The
+Oven's notes ("initializer of 'w<A>' is not a constant expression",
+"read of non-const variable 'v<int>'") name the specialization the
+same way (`kiln_oven/src/notes.rs`). Test
+`expr.const/var-template-spec-note-name.cpp`.
 A note on a deleted explicit specialization (of a function template, or
 of a member of a class template specialization) points at the
 specialization's latest declaration (`Sema::deleted_note_decl`). The

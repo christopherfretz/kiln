@@ -807,6 +807,22 @@ Redeclaration and linkage rules:
   §5.7). A non-dependent volatile return type is not re-warned, and a
   deduced `auto` / `decltype(auto)` return never warns. Tests:
   `depr.volatile.type/volatile-return{,-cxx17,-subst,-subst-19}.cpp`.
+- **Volatile parameter types** ([depr.volatile.type]/2, C++20 and
+  later; WP-417): a parameter whose declared type is volatile-qualified
+  (before [dcl.fct]/5 drops the qualifier; a typedef keeps its sugar; a
+  pointer to volatile is not) warns `volatile-qualified parameter type
+  T is deprecated` [-Wdeprecated-volatile]
+  (`sema_deprecated_volatile_param`) at the parameter
+  (`check_volatile_params`). After substitution a parameter that became
+  volatile warns as a volatile return type does: at a class member's
+  instantiation, and for a deduced function template specialization at
+  its first use. Tests: `depr.volatile.type/volatile-param{,-19,-cxx17}.cpp`.
+- **A `...` in a non-parameter declarator** ([temp.variadic]/5): the
+  parser keeps it in `Declarator::ellipsis`; `type_for_declarator_at`
+  reports `only function and template parameters can be parameter
+  packs` (`sema_ellipsis_in_declarator_not_parameter`) at it for every
+  context but a prototype or a type-name, and the declared type keeps
+  its unexpanded pack. Test `temp.variadic/non-parameter-pack-declarator.cpp`.
 - **Prototype scope** ([basic.scope.param]): the parser brackets each
   parameter-declaration-clause with `act_on_start_prototype`,
   `act_on_prototype_param(&mut ParamInfo)` and `act_on_end_prototype`.
@@ -3257,6 +3273,11 @@ for them.
     expressions and whose type and components are kept in
     `ColdExprData::offsetof_pattern`; substitution rebuilds it
     (sema-templates.md §5.4; `ext.gnu.offsetof/dependent*.cpp`).
+  - (WP-417) Through a record whose definition is invalid, the
+    `OffsetOfExpr` is marked (`ExprArena::offsetof_invalid_record`):
+    the Oven fails it as not a constant expression with no note, and a
+    constexpr object of such a record stays silent, as clang
+    (`ext.gnu.offsetof/invalid-record.cpp`).
 - **`__builtin_choose_expr(c, a, b)`** (`act_on_choose_expr`, clang
   `ActOnChooseExpr`; WP-307): `c` must be an integral (or unscoped
   enumeration) constant expression, else `'__builtin_choose_expr'
