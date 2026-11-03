@@ -165,8 +165,8 @@ pub struct PrintArgs {
 }
 
 /// The `-fclang-compat` level without the flag: clang 22 (WP-394; the
-/// oracle switch, spec/driver.md). The library default stays
-/// [`ClangCompat::Clang19`].
+/// oracle switch, spec/driver.md); the library default
+/// (`ClangCompat::default()`, WP-413) is the same.
 pub const DEFAULT_CLANG_COMPAT: ClangCompat = ClangCompat::Clang22;
 
 /// Flags that change predefined macros; `None` keeps clang's default.

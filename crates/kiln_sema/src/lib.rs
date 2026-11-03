@@ -185,7 +185,7 @@ pub struct Sema<'a, 'sm> {
     /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
     /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
     pub gnu: bool,
-    /// The clang major `-fclang-compat` names (19 or 22; default 19): the
+    /// The clang major `-fclang-compat` names (19 or 22; default 22, as the driver): the
     /// few spellings that differ between the two releases follow it, e.g.
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
     /// "Predefined identifiers").
@@ -751,7 +751,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             coro_aligned_allocation: false,
             range_lifetime_extension: false,
             gnu: false,
-            clang_compat: 19,
+            clang_compat: 22,
             nns_start: None,
             gnu_lib_builtins: false,
             pack: (0, Vec::new()),

@@ -142,7 +142,7 @@ pub struct IrTypes<'a> {
     lay: Layouter<'a>,
     records: FxHashMap<DeclId, IrRecord>,
     /// The clang release whose call lowering to follow where releases
-    /// differ (`-fclang-compat`; 19 by default).
+    /// differ (`-fclang-compat`; 22 by default, as the driver).
     clang_compat: u32,
 }
 
@@ -159,7 +159,7 @@ struct Member {
 impl<'a> IrTypes<'a> {
     /// A session over `ast` for `target`.
     pub fn new(ast: &'a Ast, target: &'a Target) -> Self {
-        IrTypes { lay: Layouter::new(ast, target), records: FxHashMap::default(), clang_compat: 19 }
+        IrTypes { lay: Layouter::new(ast, target), records: FxHashMap::default(), clang_compat: 22 }
     }
 
     /// Follow clang release `major`'s call lowering (`-fclang-compat`):

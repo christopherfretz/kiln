@@ -158,8 +158,11 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
 - Codegen's `-Watomic-alignment` text follows the level
   (spec/codegen.md); the AST dump's type printing, spec/ast-dump.md §2.
 
-kiln++ defaults to level 22 since WP-394 (spec/driver.md); the library
-default (`ClangCompat::default()`, `Sema` and `DiagOptions`) stays 19.
+kiln++ defaults to level 22 since WP-394 (spec/driver.md), and so does
+the library since WP-413: `ClangCompat::default()`, `PredefConfig`,
+`ClangFeatures`, `Sema`, `SemaNames`, `ParseOptions`, `DiagOptions`,
+`Oven`, `CodegenOptions` and `IrTypes` all start at 22. A test about
+clang 19 behaviour passes `ClangCompat::Clang19` (or `19`) explicitly.
 Where clang 22's output differs and kiln has not followed it yet, the
 test pins clang 19 with `requires: clang<22` and the comment `WP-355
 residual` (docs/status/wp-184-oracle-switch.md).

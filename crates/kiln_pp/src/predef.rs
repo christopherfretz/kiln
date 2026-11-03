@@ -101,7 +101,7 @@ impl PredefConfig {
             threadsafe_statics: true,
             sized_deallocation: true,
             kiln_version: (0, 0),
-            clang_compat: ClangCompat::Clang19,
+            clang_compat: ClangCompat::Clang22,
             std_float_aliases: true,
         }
     }
@@ -526,6 +526,8 @@ mod tests {
     fn layout_and_cmdline() {
         let mut cfg = PredefConfig::new(true);
         cfg.gnu = false;
+        // BASE and the expected layout are clang 19's.
+        cfg.clang_compat = ClangCompat::Clang19;
         let s = build_predefines(
             BASE,
             &cfg,
@@ -685,7 +687,8 @@ mod tests {
     fn clang_compat_levels() {
         let base = "#define __BOOL_WIDTH__ 8\n#define __clang_major__ 19\n#define __ARM_ACLE 200\n";
         let mut cfg = PredefConfig::new(true);
-        assert_eq!(cfg.clang_compat, ClangCompat::Clang19);
+        assert_eq!(cfg.clang_compat, ClangCompat::Clang22);
+        cfg.clang_compat = ClangCompat::Clang19;
         let s19 = build_predefines(base, &cfg, &[]);
         for here in ["__BOOL_WIDTH__ 8", "__clang_major__ 19", "__ARM_ACLE 200"] {
             assert!(s19.contains(&format!("#define {here}\n")), "{here}: {s19}");

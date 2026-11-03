@@ -210,7 +210,7 @@ spec/ast-dump.md (the shadow filter).
 
 | Bucket | WP-377 | WP-394 | What remains, and why |
 |---|---|---|---|
-| Constant-evaluation and `static_assert` operand notes | 19 | 4 + 2 | WP-413 fixed the four: `consteval-address` (P2564 escalation of a specialization), `non-literal-argument` (no by-value argument literal check), `namespace-scope-diagnostics` (element locations, dependent literals checked at definition) and `static-assert-concept-atom-expr` (type-trait explainer notes, `is_trivially_copyable` only). Pinned `// WP-388` (vbase construction): `class.inhctor.init/constexpr-vbase`, `expr.const/non-literal-local`. |
+| Constant-evaluation and `static_assert` operand notes | 19 | 4 + 2 | WP-413 fixed the four: `consteval-address` (P2564 escalation of a specialization), `non-literal-argument` (no by-value argument literal check), `namespace-scope-diagnostics` (element locations, dependent literals checked at definition) and `static-assert-concept-atom-expr` (type-trait explainer notes, `is_trivially_copyable` only). Pinned `// WP-388` (vbase construction): `class.inhctor.init/constexpr-vbase`, `expr.const/non-literal-local` — WP-388 has landed and both are only the clang 19 halves of splits whose clang 22 behaviour is tested (`constexpr-vbase-22.cpp`, `non-literal-local-22.cpp`), so nothing is left to burn down. |
 | Scoped names in `aka`/args | 13 | 0 | |
 | GNU/vendor extensions | 9 | 0 | |
 | Attribute names, `nodiscard` | 2 | 0 | |

@@ -508,7 +508,7 @@ impl Oven {
         Oven {
             budget,
             backtrace_limit: notes::BACKTRACE_LIMIT,
-            clang_compat: 19,
+            clang_compat: 22,
             types: Types::default(),
             code: Vec::new(),
             sites: Vec::new(),
@@ -566,7 +566,7 @@ impl Oven {
 
     /// Sets the clang release (major version, 19 or 22) whose note wording
     /// a failure's notes follow (`-fclang-compat=`, spec/oven.md
-    /// "Diagnostics"). Default 19.
+    /// "Diagnostics"). Default 22, as the driver.
     pub fn set_clang_compat(&mut self, level: u32) {
         self.clang_compat = level;
     }

@@ -199,7 +199,7 @@ impl Default for CodegenOptions {
             outline_atomics: true,
             complex_range: ComplexRange::Full,
             optimize: false,
-            clang_compat: 19,
+            clang_compat: 22,
             llvm_major: 19,
             omit_frame_pointer: None,
             omit_leaf_frame_pointer: None,

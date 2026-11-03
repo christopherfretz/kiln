@@ -48,7 +48,7 @@ impl<'s> SemaNames<'s> {
             ast,
             sources: None,
             closure_as_lambda: false,
-            clang_compat: 19,
+            clang_compat: 22,
             typed_args: None,
         }
     }

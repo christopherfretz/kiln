@@ -837,10 +837,11 @@ impl Sema<'_, '_> {
         loc: Loc,
         prior: &[TemplateArg],
     ) -> Result<TemplateArg, ()> {
-        let dependent = self.ast.types.arg_flags(def).intersects(
-            TypeFlags::DEPENDENT_INSTANTIATION
-                | TypeFlags::UNEXPANDED_PACK,
-        );
+        let dependent = self
+            .ast
+            .types
+            .arg_flags(def)
+            .intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK);
         if !dependent {
             let at = self.templ.default_locs.get(&p).copied().unwrap_or(loc);
             return self.check_template_arg(tmpl, depth, p, def, at, prior);

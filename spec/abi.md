@@ -1246,7 +1246,7 @@ std_substitutions.cpp`, `std_cxx11_abi_tag.cpp`, `std_libcxx_spelling.cpp`,
 
 ### 8.23 Landed (WP-386): clang 20+ call lowering at `-fclang-compat=22`
 `IrTypes::with_clang_compat` carries the codegen compat level (the
-driver's `-fclang-compat`, default 19) into classification. At 22,
+driver's `-fclang-compat`, default 22 as the driver) into classification. At 22,
 `aarch64_arg` follows clang 20+ (`AArch64ABIInfo::classifyArgumentType`,
 GCC's convention): an empty class (`[class.prop]`, no data members, size
 1) is no longer ignored-or-`i8` but goes down the generic small-aggregate
