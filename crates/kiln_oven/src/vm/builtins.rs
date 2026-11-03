@@ -59,7 +59,7 @@ pub(crate) enum BiFault {
     Align { kind: u8, v: i64, align: u64 },
     /// `err_invalid_is_within_lifetime` (WP-418): `is_within_lifetime`
     /// of a null (`kind` 0), function (1) or one-past-the-end (2)
-    /// pointer.
+    /// pointer, or one into the variable being initialized (3, WP-445).
     Lifetime { kind: u8 },
     /// WP-416: the alignment `hi:lo` (`signed`) of an align builtin on a
     /// `w`-bit integer is not a positive power of two
@@ -235,6 +235,13 @@ impl Oven {
             ty,
             p: raw,
         })?;
+        // clang: the variable whose initializer is being evaluated
+        // (`Info.EvaluatingDecl`) has not begun its lifetime (WP-445).
+        if let (Origin::Var(d), Some(o)) = (a.origin, self.run.object)
+            && d == o
+        {
+            return Err(Fault::Bi(BiFault::Lifetime { kind: 3 }));
+        }
         if !ok {
             return Ok(0);
         }
@@ -244,6 +251,62 @@ impl Oven {
             || a.flags & flags::HAS_UNION == 0
             || !matches!(self.union_path(raw, ty, ak::READ), Err(Fault::Union { .. }));
         Ok(u128::from(live))
+    }
+
+    /// Whether `raw` (designating an object of type `t`, [`bi::DYN`]:
+    /// unknown) points into a subobject of an object under construction
+    /// whose lifetime has not yet begun, at the `bi::LIFETIME` at `pc`
+    /// (clang: the subobject has no value yet, [basic.life]/1): a
+    /// subobject after the one a constructor active on the stack is
+    /// initializing (`Oven::ctor_steps`), or that one when it is not of
+    /// class or array type (its initializer is being evaluated). A
+    /// subobject of class type being initialized is left to the
+    /// constructor frames above (WP-445).
+    pub(super) fn not_yet_begun(&self, pc: usize, raw: u64, t: u32) -> bool {
+        if self.ctor_steps.is_empty() {
+            return false;
+        }
+        let p = Ptr::decode(raw);
+        let ty = (t != bi::DYN).then_some(OTy(t));
+        for (i, fr) in self.stack.iter().enumerate() {
+            let Some(steps) = self.ctor_steps.get(&fr.func) else { continue };
+            let f = &self.funcs[fr.func as usize];
+            let (Some(r), Some(cls)) = (f.this_reg, f.this_ty) else { continue };
+            let this = Ptr::decode(self.regs[fr.fb as usize + r as usize] as u64);
+            if Ptr::alloc_key(this.encode()) != Ptr::alloc_key(raw) || p.off < this.off {
+                continue;
+            }
+            let rel = u64::from(p.off - this.off);
+            let at = self.stack.get(i + 1).map_or(pc, |up| up.call_pc as usize) as u32;
+            let k = steps.partition_point(|&(spc, _)| spc <= at);
+            let Some(&(_, cur)) = k.checked_sub(1).map(|k| &steps[k]) else { continue };
+            if cur == u32::MAX {
+                continue;
+            }
+            let tys = &self.types;
+            let fields = &tys.fields(cls)[..tys.vbase_start(cls)];
+            let holds = |fi: &crate::ty::FieldInfo| {
+                fi.width.is_none() && rel >= fi.offset && rel < fi.offset + tys.size(fi.ty).max(1)
+            };
+            let reaches = |fi: &crate::ty::FieldInfo| {
+                ty.is_none_or(|ty| tys.has_subobject(fi.ty, rel - fi.offset, ty))
+            };
+            let pick = fields.iter().position(|fi| holds(fi) && reaches(fi));
+            let Some(idx) = pick.or_else(|| fields.iter().position(holds)) else { continue };
+            let idx = idx as u32;
+            if idx > cur {
+                return true;
+            }
+            if idx == cur {
+                let fi = &fields[idx as usize];
+                let whole = !fi.base
+                    && !matches!(tys.kind(fi.ty), TyKind::Record { .. } | TyKind::Array { .. });
+                if whole {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Evaluates builtin `aux` (`bi` kind | sub << 8) on registers `a`..`c`

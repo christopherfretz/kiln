@@ -57,6 +57,14 @@ pub(crate) enum TyKind {
     /// 8 plain bytes, 0 for the null reflection; frozen as
     /// `Scalar::Reflection`.
     Reflection,
+    /// `_BitInt(N)` with `N > 128` (spec/oven.md "`_BitInt`"): a
+    /// memory-resident integer of `size / 8` little-endian words, kept
+    /// canonical (sign- or zero-extended from bit `width`, `crate::bigint`);
+    /// registers hold its address, as for an aggregate.
+    WideInt {
+        width: u32,
+        signed: bool,
+    },
     /// Incomplete or not representable in M2 (member pointers,
     /// vectors, ...): it has no storage the VM can touch.
     Opaque,
@@ -344,11 +352,25 @@ impl Types {
         })
     }
 
+    /// Whether objects of `t` live in memory only (an array, a class, a
+    /// bool vector or a `WideInt`): their prvalues initialize a result
+    /// object.
     pub fn is_aggregate(&self, t: OTy) -> bool {
         matches!(
             self.kind(t),
-            TyKind::Array { .. } | TyKind::Record { .. } | TyKind::BoolVec { .. }
+            TyKind::Array { .. }
+                | TyKind::Record { .. }
+                | TyKind::BoolVec { .. }
+                | TyKind::WideInt { .. }
         )
+    }
+
+    /// `(width, signed)` of a `WideInt` type.
+    pub fn wide(&self, t: OTy) -> Option<(u32, bool)> {
+        match self.kind(t) {
+            TyKind::WideInt { width, signed } => Some((width, signed)),
+            _ => None,
+        }
     }
 
     /// Whether `t` is a GNU/clang vector type (stored as an array of its
@@ -523,12 +545,15 @@ impl Types {
             }
             // `_BitInt(N)` (spec/oven.md "`_BitInt`"): N <= 128 is an
             // ordinary integer of width N in its ABI-sized slot (the KBC
-            // integer opcodes wrap to the width in `aux`); wider ones have
-            // no value model yet (opaque: evaluation stops with a note).
+            // integer opcodes wrap to the width in `aux`); a wider one is a
+            // memory-resident `WideInt` (`crate::bigint`).
             TypeView::BitInt { signed, width } => {
                 let (size, align) = bridge.opaque_size_align(c);
                 let kind = match u8::try_from(width) {
                     Ok(w) if w <= 128 => TyKind::Int { width: w, signed },
+                    _ if size >= u64::from(width).div_ceil(64) * 8 => {
+                        TyKind::WideInt { width, signed }
+                    }
                     _ => TyKind::Opaque,
                 };
                 self.simple(c, size, align.max(1), kind)
