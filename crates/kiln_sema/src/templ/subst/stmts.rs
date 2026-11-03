@@ -340,11 +340,19 @@ impl Substituter<'_, '_, '_> {
                 let (name, at) = self.label_name(DeclId::new(n.a()))?;
                 Ok(self.sema.act_on_goto(name, at, loc))
             }
+            // clang `TransformIndirectGotoStmt`: the target is substituted
+            // (its conversion to `const void*` peeled) and converted again.
+            StmtKind::IndirectGotoStmt => {
+                let star = self.sema.ast.stmts.indirect_goto_star(s);
+                let e = self.expr(self.sema.ast.stmts.indirect_goto_target(s))?;
+                self.sema.act_on_indirect_goto(e, loc, star).ok_or(SubstFail)
+            }
             // clang `TransformAttributedStmt`: each assumption is
             // substituted and built again (`BuildCXXAssumeExpr`, so the
             // instantiation gets its own conversion and `-Wassume`); the
-            // other statement attributes (likelihood, fallthrough) are
-            // kept as they are, already checked in the definition.
+            // other statement attributes (likelihood, fallthrough, a loop
+            // hint without a dependent value) are kept as they are,
+            // already checked in the definition.
             StmtKind::AttributedStmt => {
                 use kiln_ast::ids::RawId;
                 let list = self.sema.ast.stmts.stmt_attrs(s);
@@ -352,6 +360,18 @@ impl Substituter<'_, '_, '_> {
                 let mut kept = Vec::with_capacity(attrs.len());
                 for a in attrs {
                     let node = *self.sema.ast.attrs.get(a);
+                    // A loop hint's dependent value (clang
+                    // `TransformLoopHintAttr`).
+                    if node.kind == kiln_ast::attr::AttrKind::LOOP_HINT {
+                        match ExprId::from_raw(node.a) {
+                            Some(e) if self.sema.expr_is_value_dependent(e) => {
+                                let e = self.expr(e)?;
+                                kept.push(self.sema.instantiated_loop_hint(a, e));
+                            }
+                            _ => kept.push(a),
+                        }
+                        continue;
+                    }
                     if node.kind != kiln_ast::attr::AttrKind::ASSUME {
                         kept.push(a);
                         continue;

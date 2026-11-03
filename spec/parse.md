@@ -375,9 +375,39 @@ when it reaches that token (`handle_events`, as for clang's
 | `STDC <other>` | `unknown pragma in STDC namespace` [-Wunknown-pragmas] |
 | `GCC visibility push(v)` / `pop` | syntax warnings [-Wignored-pragmas] (missing `(`/`)`, `expected identifier`, extra tokens); `Event::Visibility`. An unknown `v` gets `unknown visibility 'v'` [-Wignored-attributes] and is not pushed; an unmatched `pop` is an error. The visibility itself is not applied yet (M3). |
 | `pack ...` | missing `(` gets `missing '(' after '#pragma pack' - ignoring`. Otherwise `Event::PragmaPack`; Sema records `(loc, args)` in `Sema::pragma_packs` and reports `'#pragma pack' is not supported yet` (layout does not apply it yet). |
-| `GCC diagnostic ...`, `clang diagnostic`, `clang loop`, `clang fp`, `clang optimize`, `clang max_tokens_*`, `clang __debug` | accepted, ignored. **Not applied:** `clang diagnostic ignored` does not silence anything. |
-| `comment`, `float_control`, `unused`, `omp`, `unroll`, `nounroll`, `unroll_and_jam`, `nounroll_and_jam` | accepted, ignored |
+| `GCC diagnostic ...`, `clang diagnostic`, `clang fp`, `clang optimize`, `clang max_tokens_*`, `clang __debug` | accepted, ignored. **Not applied:** `clang diagnostic ignored` does not silence anything. |
+| `comment`, `float_control`, `unused`, `omp`, `GCC ivdep` | accepted, ignored |
+| `unroll [N\|(N)]`, `nounroll`, `unroll_and_jam [N\|(N)]`, `nounroll_and_jam`, `GCC unroll [N\|(N)]`, `GCC nounroll`, `clang loop <option>(<arg>)...` | loop hints, below |
 | `weak`, `redefine_extname`, `align`, `options`, `ms_struct`, `clang attribute`, `clang section` | `Event::UnsupportedPragma`: `'#pragma <name>' is not supported yet` |
+
+**Loop hints** (WP-449; clang `PragmaLoopHintHandler`,
+`PragmaUnrollHintHandler`, `HandlePragmaLoopHint`): `pragma::classify`
+checks the pragma's syntax when it reads it (`missing option`, `invalid
+option 'x'`, `expected '('`, extra tokens after `#pragma unroll N` ->
+`extra tokens at end of '#pragma unroll' - ignored` [-Wignored-pragmas])
+and queues each hint (`LoopHintInfo`: pragma name, option, argument
+tokens) in `Parser::loop_hints`, keyed by the location of the token
+after the pragma, so the queue survives the replay of saved tokens (the
+preprocessor runs with `PpOptions::parser_pragmas`, so the pragma's
+tokens are macro-expanded as clang's handlers do: `#pragma unroll N`
+with `N` a macro). `parse_statement` takes the hints for its first
+token; `loop_hint.rs` then parses each argument (an identifier state
+`enable`/`disable`/`full`/`assume_safety`, `fixed`/`scalable` for
+`vectorize_width`, or a constant expression parsed with clang's
+`ParseConstantExpression` and checked by Sema `CheckLoopHintExpr`: an
+integer type, positive, `0` allowed only for `#pragma unroll`) and the
+hints become `LOOP_HINT` attributes (`kiln_ast::attr::LoopHint`: option,
+state, spelling) of an `AttributedStmt` around the statement. Sema
+(`kiln_sema/src/loop_hint.rs`, clang `handleLoopHintAttr`,
+`CheckForIncompatibleAttributes`) reports `expected a for, while, or
+do-while loop to follow '#pragma <name>'` for any other statement and
+`incompatible directives` / `duplicate directives` for a pair of hints
+of one category. A hint queued before `}` reports `expected statement`;
+at namespace scope `expected unqualified-id` (the declaration is
+skipped to its `;`); in a class `this pragma cannot appear in <tag>
+declaration`. A value-dependent value is substituted at instantiation
+(clang `TransformLoopHintAttr`): rechecked, kept unchanged on error, and
+a value `0` or `1` turns the hint into `unroll(disable)`.
 
 A `module` or `import` directive ([cpp.module], [cpp.import]) is
 removed from the stream through its `;`. The parser reports `a module
@@ -845,7 +875,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
       normally. An enum in a member declaration may be followed by `:`
       (a bit-field).
     - `parse_enum_body` holds enumerators, with an optional fixed
-      underlying type and `enum class`/`enum struct`.
+      underlying type and `enum class`/`enum struct`. GNU attributes
+      right after the closing `}` (`enum E { ... } __attribute__((packed));`)
+      are read there and given to `act_on_record_trailing_attrs` before
+      `act_on_finish_enum_definition`, as clang's `ParseEnumBody`
+      (WP-432).
 - **Namespaces:**
   - `namespace N { }`, `inline namespace`, `namespace A::B { }`, and
     unnamed namespaces (§sema 4.6)
@@ -1259,9 +1293,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
 - **new-initializer.** `( expression-list(opt) )` or a braced-init-list
   (`parse_init_list`). The result goes to `Sema::act_on_cxx_new(global,
   start, placement, NewTypeId, NewInit, end)`.
-- **delete.** `delete`, then `[` `]` for the array form (clang's lambda
-  disambiguation of `delete []{...}` is M3 with lambdas), then a
-  cast-expression; `Sema::act_on_cxx_delete`.
+- **delete.** `delete`, then `[` `]` for the array form, then a
+  cast-expression; `Sema::act_on_cxx_delete`. `[` `]` followed by `{`,
+  `<`, `(` `)`, or `(` and two identifiers (not keywords) is clang's
+  lambda lookahead and is reported as `lambda expressions is not
+  supported yet` (clang's `err_lambda_after_delete` recovery is not
+  implemented); anything else, such as `delete[] (char*)p`, is array
+  delete (WP-446, `tests/conformance/expr.delete/array-delete-cast-operand.cpp`).
 - **No postfix suffix.** A new-expression is a unary-expression: a
   following `[`, `(`, `++`, `--`, `.` or `->` reports `expression cannot be
   followed by a postfix '[' operator; add parentheses` and parses the
@@ -1499,15 +1537,15 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     `exit_immediate_context`.
   - `if constexpr` or `if !` not followed by `(` (or `consteval`) is
     `expected '(' after 'if'`; the parser skips to the next `;`.
-- **Unsupported:** case ranges, computed goto, statement expressions
-  and range-based `for` are "not supported yet".
-  - **Deviation (computed goto):** GNU `goto *e;` is parsed. Its operand
-    is checked for an unexpanded pack (`Sema::act_on_indirect_goto`),
-    and then the statement is "computed goto is not supported yet" at the
-    `*` (after "use of GNU indirect-goto extension", `-Wgnu-label-as-value`,
-    at the same `*`). clang accepts it, and reports "indirect goto in
-    function with no address-of-label expressions" when the function
-    takes no label's address.
+- **Unsupported:** case ranges, statement expressions and range-based
+  `for` are "not supported yet".
+  - **Computed goto (GNU, WP-444):** `goto *e;` (clang
+    `ParseGotoStatement`) is "use of GNU indirect-goto extension"
+    (`-Wgnu-label-as-value`) at the `*`; the operand is parsed as an
+    expression and `Sema::act_on_indirect_goto` builds an
+    `IndirectGotoStmt` (spec/ast.md; sema in spec/sema.md "Jump
+    checks"). A missing operand is "expected expression" and the
+    statement is skipped to the `;`.
   - **GNU address-of-label `&&l` (WP-424):** parsed in
     `parse_cast_expr` as clang's `tok::ampamp` case
     (`Parser::parse_addr_label`): a non-identifier operand is "expected
@@ -1521,11 +1559,12 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     and builds an `AddrLabelExpr` of type `void *`. No postfix suffix
     follows. Template instantiation looks the label up again by name.
     Returning one is "returning address of label, which is local"
-    (`-Wreturn-stack-address`, spec/sema-class.md §5.6). **Deviation:**
-    code generation and constant evaluation of `&&l` are "not supported
-    yet" (clang emits a `blockaddress`; it is a constant address, so
-    clang also accepts it in a constant expression and in a static
-    initializer). Tests: `tests/conformance/ext.gnu.label.value/`.
+    (`-Wreturn-stack-address`, spec/sema-class.md §5.6). Code
+    generation is a `blockaddress` (spec/codegen.md §7t), constant
+    evaluation a label-address pointer (spec/oven.md "Label
+    addresses"), so `&&l` also works in a constant expression and a
+    static initializer. Tests: `tests/conformance/ext.gnu.label.value/`,
+    `tests/conformance/stmt.goto/computed-goto-*.cpp`.
 
 ### 6.2 Attributes (`attr.rs`)
 - **Syntax:** `[[ ]]` (with `using ns:`), `alignas(…)`, and GNU

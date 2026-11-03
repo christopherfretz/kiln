@@ -9,7 +9,7 @@ use kiln_llvm::{BinOp, Flags, IntPredicate, TypeId as LTy};
 
 use crate::cleanup::{Depth, JumpDest};
 use crate::fir::{Blk, Op, V};
-use crate::func::{Jump, LoopFrame, RetKind, SwitchCtx};
+use crate::func::{Jump, RetKind, SwitchCtx};
 use crate::module::{Cg, R, err};
 
 /// A `RunCleanupsScope` / `LexicalScope` in progress.
@@ -126,6 +126,74 @@ impl Cg<'_> {
         let j = JumpDest { blk, depth: None, index };
         self.f.labels.insert(d, j);
         j
+    }
+
+    /// clang `GetAddrOfLabel`: `blockaddress` of label `d`'s block, which
+    /// joins the destinations of the function's indirect `goto` block
+    /// (made here if it is the first; once per use, so a label taken
+    /// twice is listed twice, as clang's `addDestination` does).
+    pub(crate) fn addr_of_label(
+        &mut self,
+        d: DeclId,
+        at: Option<kiln_source::Loc>,
+    ) -> R<kiln_llvm::Value> {
+        let ast = self.ast;
+        let here = self.f.decl.map(|f| ast.first(f));
+        let owner = kiln_abi::mangle::enclosing_function(ast, d).map(|f| ast.first(f));
+        let (Some(f), true) = (self.f.func, here.is_some() && here == owner) else {
+            return err(at, "address of a label of another function in a constant");
+        };
+        let g = self.f.fir.indirect_goto();
+        let j = self.label_dest(d);
+        self.f.fir.add_indirect_dest(g.br, j.blk);
+        let bb = self.f.fir.block_id(&mut self.m, f, j.blk);
+        Ok(self.m.const_blockaddress(f, bb))
+    }
+
+    /// clang `EmitIndirectGotoStmt`: a constant target (`goto *&&l;`) is a
+    /// `goto l;`; otherwise the target joins the indirect `goto` block's
+    /// `phi` and control branches there, running no cleanups (the jump
+    /// checks reject leaving a scope that has any).
+    fn emit_indirect_goto(&mut self, s: StmtId) -> R<()> {
+        let ast = self.ast;
+        if let Some(l) = ast.indirect_goto_constant_target(s) {
+            let j = self.label_dest(l);
+            self.branch_through_cleanup(j);
+            return Ok(());
+        }
+        let v = self.emit_scalar(ast.stmts.indirect_goto_target(s))?;
+        let g = self.f.fir.indirect_goto();
+        if let Some(cur) = self.f.fir.cur() {
+            self.f.fir.add_incoming(g.phi, v, cur);
+        }
+        self.emit_branch(g.blk);
+        Ok(())
+    }
+
+    /// `FinishFunction`: the indirect `goto` block, if any, goes after the
+    /// return block; with no computed `goto` its empty `phi` becomes
+    /// `poison` (clang 19: `undef`). A label whose address was taken keeps its block.
+    pub(crate) fn finish_indirect_goto(&mut self) -> R<()> {
+        let Some(g) = self.f.fir.indirect_goto_made() else { return Ok(()) };
+        self.emit_block(g.blk, false);
+        self.f.fir.set_cur(None);
+        if let Op::Phi { inc, .. } = self.f.fir.op(g.phi)
+            && inc.is_empty()
+        {
+            let p = if self.opts.clang_compat >= 22 {
+                self.m.const_poison(LTy::PTR)
+            } else {
+                self.m.const_undef(LTy::PTR)
+            };
+            self.f.fir.replace_all_uses(V::I(g.phi), V::C(p));
+            self.f.fir.erase(g.phi);
+        }
+        if let Op::IndirectBr { dests, .. } = self.f.fir.op(g.br)
+            && dests.iter().any(|&d| !self.f.fir.is_placed(d))
+        {
+            return err(None, "address of a label whose block was never emitted");
+        }
+        Ok(())
     }
 
     /// clang `EmitLabel`.
@@ -273,7 +341,9 @@ impl Cg<'_> {
             }
             StmtKind::AttributedStmt => {
                 self.emit_assumptions(s)?;
-                self.emit_stmt(StmtId::new(n.b()))
+                let sub = StmtId::new(n.b());
+                self.f.loop_hints = Some((sub, s));
+                self.emit_stmt(sub)
             }
             StmtKind::LabelStmt => {
                 self.emit_label(DeclId::new(n.a()));
@@ -284,6 +354,7 @@ impl Cg<'_> {
                 self.branch_through_cleanup(j);
                 Ok(())
             }
+            StmtKind::IndirectGotoStmt => self.emit_indirect_goto(s),
             StmtKind::BreakStmt => {
                 let j = self.f.jumps.last().expect("break outside a loop").brk;
                 self.branch_through_cleanup(j);
@@ -476,59 +547,29 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `checkIfLoopMustProgress` plus the `LoopAttributes` metadata.
-    fn new_loop_md(
-        &mut self,
-        cond: Option<ExprId>,
-        body: Option<StmtId>,
-    ) -> Option<kiln_llvm::MetadataId> {
+    /// clang `checkIfLoopMustProgress`: whether the loop gets
+    /// `llvm.loop.mustprogress`; a loop with a constant-true condition
+    /// and an empty body also takes `mustprogress` off the function.
+    fn loop_must_progress(&mut self, cond: Option<ExprId>, body: Option<StmtId>) -> bool {
         let cond_true = match cond {
             None => true,
             Some(c) => self.fold_bool(c) == Some(true),
         };
-        let mp = if cond_true && self.is_empty_body(body) {
+        if cond_true && self.is_empty_body(body) {
             self.f.mustprogress = false;
-            None
-        } else if let Some(m) = self.f.loop_mp {
-            Some(m)
-        } else {
-            let s = self.m.md_string(b"llvm.loop.mustprogress");
-            let m = self.m.md_tuple(&[Some(s)]);
-            self.f.loop_mp = Some(m);
-            Some(m)
-        };
-        self.loop_id(mp)
+            return false;
+        }
+        true
     }
 
-    /// clang `LoopInfo::createMetadata`: the distinct `llvm.loop` node
-    /// `{self, mustprogress?, unroll.disable?}`, or `None` when it has no
-    /// property. At `-O1` (clang `OptimizationLevel > 0` without
-    /// `UnrollLoops`, which `-O2` and above set) every loop carries
-    /// `llvm.loop.unroll.disable` (spec/codegen.md "Loop metadata").
-    fn loop_id(&mut self, mp: Option<kiln_llvm::MetadataId>) -> Option<kiln_llvm::MetadataId> {
-        let unroll = if self.opts.opt_level == 1 {
-            Some(if let Some(u) = self.f.loop_unroll {
-                u
-            } else {
-                let s = self.m.md_string(b"llvm.loop.unroll.disable");
-                let u = self.m.md_tuple(&[Some(s)]);
-                self.f.loop_unroll = Some(u);
-                u
-            })
-        } else {
-            None
-        };
-        if mp.is_none() && unroll.is_none() {
-            return None;
-        }
-        let ops: Vec<_> =
-            std::iter::once(None).chain([mp, unroll].into_iter().flatten().map(Some)).collect();
-        let node = self.m.md_distinct_tuple(&ops);
-        self.m.md_set_operand(node, 0, Some(node)).expect("distinct loop id");
-        Some(node)
+    /// The loop hints for loop statement `s` (the `AttributedStmt` around
+    /// it), taken.
+    fn take_loop_hints(&mut self, s: StmtId) -> Option<StmtId> {
+        self.f.loop_hints.take().filter(|&(l, _)| l == s).map(|(_, a)| a)
     }
 
     fn emit_while(&mut self, s: StmtId) -> R<()> {
+        let hints = self.take_loop_hints(s);
         let ast = self.ast;
         let d = *ast.stmts.loop_data(s);
         let header_b = self.f.fir.create_block();
@@ -547,8 +588,8 @@ impl Cg<'_> {
             self.emit_binding_vars(v)?;
         }
         let const_true = matches!(self.cint(cv), Some((_, 1, _)));
-        let md = self.new_loop_md(Some(cond), d.body);
-        self.f.loops.push(LoopFrame { header: header_b, md });
+        let mp = self.loop_must_progress(Some(cond), d.body);
+        self.push_loop(header_b, hints, mp);
         let body = self.f.fir.create_block();
         if !const_true {
             let exit = if self.requires_cleanups(&cond_scope) {
@@ -571,7 +612,7 @@ impl Cg<'_> {
         self.f.jumps.pop();
         self.end_scope(cond_scope);
         self.emit_branch(header_b);
-        self.f.loops.pop();
+        self.pop_loop();
         self.emit_block(end.blk, true);
         if const_true {
             self.simplify_forwarding(header_b);
@@ -580,6 +621,7 @@ impl Cg<'_> {
     }
 
     fn emit_do(&mut self, s: StmtId) -> R<()> {
+        let hints = self.take_loop_hints(s);
         let ast = self.ast;
         let d = *ast.stmts.loop_data(s);
         let end = self.jump_dest_here();
@@ -597,12 +639,12 @@ impl Cg<'_> {
         let cv = self.eval_bool(cond)?;
         self.f.jumps.pop();
         let const_false = matches!(self.cint(cv), Some((_, 0, _)));
-        let md = self.new_loop_md(Some(cond), d.body);
-        self.f.loops.push(LoopFrame { header: body_b, md });
+        let mp = self.loop_must_progress(Some(cond), d.body);
+        self.push_loop(body_b, hints, mp);
         if !const_false {
             self.cond_br(cv, body_b, end.blk);
         }
-        self.f.loops.pop();
+        self.pop_loop();
         self.emit_block(end.blk, false);
         if const_false {
             self.simplify_forwarding(cond_d.blk);
@@ -611,6 +653,7 @@ impl Cg<'_> {
     }
 
     fn emit_for(&mut self, s: StmtId) -> R<()> {
+        let hints = self.take_loop_hints(s);
         let ast = self.ast;
         let d = *ast.stmts.loop_data(s);
         let end = self.jump_dest_here();
@@ -621,8 +664,8 @@ impl Cg<'_> {
         let cond_d = self.jump_dest_here();
         let cond_b = cond_d.blk;
         self.emit_block(cond_b, false);
-        let md = self.new_loop_md(d.cond, d.body);
-        self.f.loops.push(LoopFrame { header: cond_b, md });
+        let mp = self.loop_must_progress(d.cond, d.body);
+        self.push_loop(cond_b, hints, mp);
         let cond_scope = self.begin_scope(true);
         let mut cont = if d.inc.is_none() {
             Some(cond_d)
@@ -672,7 +715,7 @@ impl Cg<'_> {
         self.end_scope(cond_scope);
         self.emit_branch(cond_b);
         self.end_scope(for_scope);
-        self.f.loops.pop();
+        self.pop_loop();
         self.emit_block(end.blk, true);
         Ok(())
     }
@@ -681,6 +724,7 @@ impl Cg<'_> {
     /// loop. clang pushes the loop without `mustprogress`, so it carries
     /// `llvm.loop` metadata only at `-O1` (`unroll.disable`).
     fn emit_range_for(&mut self, s: StmtId) -> R<()> {
+        let hints = self.take_loop_hints(s);
         let ast = self.ast;
         let d = *ast.stmts.range_for_data(s);
         let loc = ast.stmts.get(s).loc();
@@ -699,8 +743,7 @@ impl Cg<'_> {
         let cond_d = self.jump_dest_here();
         let cond_b = cond_d.blk;
         self.emit_block(cond_b, false);
-        let md = self.loop_id(None);
-        self.f.loops.push(LoopFrame { header: cond_b, md });
+        self.push_loop(cond_b, hints, false);
         let exit =
             if self.requires_cleanups(&for_scope) { self.f.fir.create_block() } else { end.blk };
         let body_b = self.f.fir.create_block();
@@ -722,7 +765,7 @@ impl Cg<'_> {
         self.f.jumps.pop();
         self.emit_branch(cond_b);
         self.end_scope(for_scope);
-        self.f.loops.pop();
+        self.pop_loop();
         self.emit_block(end.blk, true);
         Ok(())
     }

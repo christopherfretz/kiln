@@ -50,6 +50,7 @@ pub(crate) struct SwitchState {
 
 /// Per-function state while its body is analysed.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts of one body")]
 pub struct FnState {
     pub(crate) decl: DeclId,
     pub(crate) ret: QualType,
@@ -74,6 +75,9 @@ pub struct FnState {
     /// The body has a `switch` (a goto or `asm goto` shows in `labels`):
     /// the jump-scope check runs (clang `NeedsScopeChecking`).
     pub(crate) has_switch: bool,
+    /// The body has a GNU `goto *e;` (clang `setFunctionHasIndirectGoto`):
+    /// the jump-scope check runs.
+    pub(crate) has_indirect_goto: bool,
     /// A `[[fallthrough]]` statement was built for the body (not by an
     /// instantiation, which copies it): its placement is checked at the
     /// end (clang `FunctionScopeInfo::HasFallthroughStmt`).
@@ -105,6 +109,11 @@ pub struct FnState {
     /// far (clang `ModifiedNonNullParams`): a `nonnull` one is no longer
     /// known non-null (spec/sema.md §5.27).
     pub(crate) modified_params: Vec<DeclId>,
+    /// The left operands of the volatile simple assignments of the body
+    /// not (yet) found discarded (clang
+    /// `ExpressionEvaluationContextRecord::VolatileAssignmentLHSs`,
+    /// [`Sema::note_volatile_assign`]), warned at the end of the body.
+    pub(crate) volatile_assigns: Vec<ExprId>,
 }
 
 impl FnState {
@@ -121,6 +130,7 @@ impl FnState {
             this_override: None,
             returns: Vec::new(),
             has_switch: false,
+            has_indirect_goto: false,
             has_fallthrough: false,
             runtime_diags: Vec::new(),
             rt_quiet: 0,
@@ -128,6 +138,7 @@ impl FnState {
             coro: None,
             first_return: None,
             modified_params: Vec::new(),
+            volatile_assigns: Vec::new(),
         }
     }
 }
@@ -297,6 +308,7 @@ impl Sema<'_, '_> {
     /// type of one of the forms [`Sema::is_read_if_discarded`] accepts
     /// undergoes the lvalue-to-rvalue conversion (so the object is read).
     pub(crate) fn ignored_value_conversions(&mut self, e: ExprId) -> ExprId {
+        self.discard_volatile_assign(e);
         if self.std >= kiln_lex::Std::Cxx11 && self.is_read_if_discarded(e) {
             conv::lvalue_to_rvalue(self, e)
         } else {
@@ -405,6 +417,10 @@ impl Sema<'_, '_> {
         let mut likelihood: Option<kiln_ast::attr::AttrNode> = None;
         for &a in attrs {
             let node = *self.ast.attrs.get(a);
+            if node.kind == AttrKind::LOOP_HINT {
+                kept.extend(self.handle_loop_hint(a, sub));
+                continue;
+            }
             let name = match node.kind {
                 AttrKind::ASSUME => "assume",
                 AttrKind::LIKELY => "likely",
@@ -480,6 +496,7 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        self.check_loop_hint_compat(&kept);
         if kept.is_empty() {
             return sub;
         }
@@ -698,6 +715,9 @@ impl Sema<'_, '_> {
     pub fn exit_var_initializer(&mut self, (quiet, depr): (u32, Option<DeclId>)) {
         if let Some(f) = self.func.as_mut() {
             f.rt_quiet = quiet;
+        } else {
+            let pending = std::mem::take(&mut self.volatile_assigns);
+            self.warn_volatile_assigns(pending);
         }
         self.depr_init = depr;
     }
@@ -1128,14 +1148,38 @@ impl Sema<'_, '_> {
 
     /// GNU `goto *e;` (clang `ActOnIndirectGotoStmt`): `e` is a
     /// full-expression, so an unexpanded pack in it is diagnosed
-    /// ([temp.variadic]/12); computed goto itself is not supported yet
-    /// (a deviation, spec/parse.md §6.1), reported at the `*` unless `e`
-    /// was already diagnosed.
-    pub fn act_on_indirect_goto(&mut self, e: ExprId, star: Loc) {
+    /// ([temp.variadic]/12); unless type-dependent it is converted to
+    /// `const void*` as by assignment (clang `CheckSingleAssignment
+    /// Constraints`, whose C++ path is `PerformImplicitConversion` with
+    /// the assignment wording at the operand). The function then needs the
+    /// jump-scope check (`setFunctionHasIndirectGoto`). `None` (the
+    /// statement is dropped) when the operand is invalid.
+    pub fn act_on_indirect_goto(&mut self, e: ExprId, loc: Loc, star: Loc) -> Option<StmtId> {
         if self.diagnose_unexpanded_written(e, "expression", None) || self.is_err_expr(e) {
-            return;
+            return None;
         }
-        self.unsupported("computed goto", star);
+        let e = if self.expr_is_type_dependent(e) {
+            e
+        } else {
+            let cv = self.ast.types.qualify(QualType::VOID, kiln_ast::types::Quals::CONST);
+            let to = self.ast.types.pointer_to(cv);
+            match conv::implicit_convert(self, e, to, ConvCtx::Assignment) {
+                Ok(x) => x,
+                Err(err) => {
+                    let d = err.diag(self, e);
+                    self.emit(d);
+                    return None;
+                }
+            }
+        };
+        let e = self.act_on_full_expr(e);
+        if self.is_err_expr(e) {
+            return None;
+        }
+        if let Some(f) = self.func.as_mut() {
+            f.has_indirect_goto = true;
+        }
+        Some(self.builder().indirect_goto_stmt(e, loc, star))
     }
 
     /// GNU `&&label` (clang `LookupOrCreateLabel` then `ActOnAddrLabel`):
@@ -1153,7 +1197,16 @@ impl Sema<'_, '_> {
         self.emit(d);
         let l = self.act_on_asm_goto_label(name, name_loc);
         let ty = self.ast.types.pointer_to(QualType::VOID);
-        Some(self.builder().addr_label(l, ty, amp, name_loc))
+        let e = self.builder().addr_label(l, ty, amp, name_loc);
+        // A label of a template's body is a declaration of a dependent
+        // context: instantiation rebuilds the expression for the
+        // specialization's label (clang `TransformAddrLabelExpr`).
+        if let Some(f) = self.func.as_ref().map(|f| f.decl)
+            && self.ctx_template_levels(f) > 0
+        {
+            self.ast.exprs.mark_instantiation_dependent(e);
+        }
+        Some(e)
     }
 
     /// An `asm goto` label operand (clang `LookupOrCreateLabel` then
@@ -1374,6 +1427,7 @@ impl Sema<'_, '_> {
             self.set_deduced_return(f, ret);
         }
         let Some(mut state) = self.func.take() else { return wrapped };
+        self.warn_volatile_assigns(std::mem::take(&mut state.volatile_assigns));
         for &r in &state.returns {
             if let Some(v) = self.ast.stmts.return_nrvo(r)
                 && !self.ast.decls.var(v).is_some_and(|x| x.spec.is_nrvo())
@@ -1391,7 +1445,7 @@ impl Sema<'_, '_> {
         }
         // [stmt.dcl]/3, [except.handle]/2: jumps into protected scopes
         // (clang `DiagnoseInvalidJumps`, ahead of the flow warnings).
-        if state.has_switch || !state.labels.is_empty() {
+        if state.has_switch || state.has_indirect_goto || !state.labels.is_empty() {
             self.check_jump_scopes(body);
         }
         // The deferred runtime-behavior diagnostics, ahead of the flow

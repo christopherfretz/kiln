@@ -693,7 +693,13 @@ impl Substituter<'_, '_, '_> {
         } else if let Some(info) = self.sema.ast.template_parm(d).copied() {
             match self.lookup(info.depth, info.index) {
                 ArgLookup::Arg(a) => match a.view() {
-                    ArgView::Pack(l) => Some(self.sema.ast.types.args(l).len()),
+                    ArgView::Pack(l) => {
+                        let elems = self.sema.ast.types.args(l).to_vec();
+                        if elems.iter().any(|&x| self.sema.is_pack_expansion_arg(x)) {
+                            return self.size_of_partial_pack(&elems, e, loc, end);
+                        }
+                        Some(elems.len())
+                    }
                     _ => None,
                 },
                 ArgLookup::Retain(_) => return Ok(e),
@@ -708,6 +714,50 @@ impl Substituter<'_, '_, '_> {
         let _ = end;
         let st = self.sema.size_type();
         Ok(self.int_literal(st, len as i128, loc))
+    }
+}
+
+impl Substituter<'_, '_, '_> {
+    /// `sizeof...` of a pack bound to elements some of which are pack
+    /// expansions (`_Args` := `{int, Ts...}`): still value-dependent, the
+    /// number of the other elements plus `sizeof...` of the first pack
+    /// each expansion names (clang's partially substituted
+    /// `SizeOfPackExpr`).
+    fn size_of_partial_pack(
+        &mut self,
+        elems: &[TemplateArg],
+        e: ExprId,
+        loc: Loc,
+        end: Loc,
+    ) -> SubstResult<ExprId> {
+        let st = self.sema.size_type();
+        let mut fixed = 0i128;
+        let mut terms = Vec::new();
+        for &x in elems {
+            if !self.sema.is_pack_expansion_arg(x) {
+                fixed += 1;
+                continue;
+            }
+            let packs = match x.view() {
+                ArgView::Type(q) => type_pattern(self.sema, q)
+                    .map(|t| self.sema.unexpanded_packs(PackOperand::Type(t))),
+                ArgView::Expr { expr, .. } => expr_pattern(self.sema, expr)
+                    .map(|p| self.sema.unexpanded_packs(PackOperand::Expr(p))),
+                _ => None,
+            };
+            // An expansion whose pack cannot be named keeps the
+            // expression as written.
+            let Some(&pk) = packs.as_ref().and_then(|v| v.first()) else { return Ok(e) };
+            terms.push(self.sema.builder().size_of_pack(pk, st, loc, end));
+        }
+        let mut acc = if fixed > 0 { Some(self.int_literal(st, fixed, loc)) } else { None };
+        for t in terms {
+            acc = Some(match acc {
+                None => t,
+                Some(l) => self.sema.builtin_binary(kiln_ast::expr::BinaryOp::Add, l, t, loc),
+            });
+        }
+        acc.ok_or(SubstFail)
     }
 }
 

@@ -135,6 +135,14 @@ pub struct Parser<'a, 'sm> {
     /// `LHS = ExprError()`). An expression statement then skips to its
     /// `;` with no "expected ';'" (`parse_expression_statement`).
     pub(crate) expr_invalid: bool,
+    /// The `(` of a C-style cast's parenthesized operand, `(T)(a, b)`:
+    /// clang parses it as a `ParenListExpr` whose commas are built at
+    /// the `(` (`MaybeConvertParenListExprToParenExpr`).
+    pub(crate) cast_paren_list: Option<Loc>,
+    /// The `(` of a C-style cast's parenthesized operand for the next
+    /// [`Parser::parse_rhs`] (taken at its entry): its top-level commas
+    /// are [`Parser::parse_paren_list_rest`]'s.
+    pub(crate) comma_loc: Option<Loc>,
     /// False while parsing a template argument: a `>` or `>>` ends the
     /// argument instead of being an operator ([temp.names]/4, clang's
     /// `GreaterThanIsOperator`). Brackets restore it: see
@@ -210,6 +218,9 @@ pub struct Parser<'a, 'sm> {
     pub(crate) lead_decl_attrs: Vec<AttrId>,
     /// Where `stmt_attrs` / `lead_decl_attrs` start (`[[` or `alignas`).
     pub(crate) stmt_attrs_loc: Option<Loc>,
+    /// Pending loop-hint pragmas, by the location of the token starting
+    /// the statement they apply to (spec/parse.md §2.3).
+    pub(crate) loop_hints: Vec<(Loc, Vec<crate::tokens::LoopHintInfo>)>,
 }
 
 /// A `decltype(e)` parsed ahead as a nested-name-specifier
@@ -316,6 +327,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             trace: Vec::new(),
             in_stmt_expr: false,
             expr_invalid: false,
+            cast_paren_list: None,
+            comma_loc: None,
             greater_is_op: true,
             greater_off_depth: 0,
             pack_hint: false,
@@ -334,6 +347,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             stmt_attrs: Vec::new(),
             lead_decl_attrs: Vec::new(),
             stmt_attrs_loc: None,
+            loop_hints: Vec::new(),
         };
         if p.src.get_mut().module_lines() {
             p.module_activate();

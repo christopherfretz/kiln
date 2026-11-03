@@ -392,7 +392,15 @@ impl Cg<'_> {
             // subscript is the vector's value and `extractelement`.
             ExprKind::ArraySubscriptExpr if self.vec_subscript(e).is_some() => {
                 let (base, idx) = self.vec_subscript(e).expect("checked");
-                let v = self.emit_scalar(base)?;
+                // A `const` vector variable folds (`tryEmitAsConstant`,
+                // WP-453): no load, the lane is extracted from the constant.
+                let v = match self.folds.get(base) {
+                    Some(c) => {
+                        let bq = ast.exprs.get(base).ty();
+                        V::C(self.const_scalar_value(c, bq)?)
+                    }
+                    None => self.emit_scalar(base)?,
+                };
                 let i = self.emit_scalar(idx)?;
                 self.extract_elt(v, i)
             }
@@ -448,6 +456,10 @@ impl Cg<'_> {
             | ExprKind::MaterializeTemporaryExpr => {
                 let lv = self.emit_lvalue(e)?;
                 self.load_lv(lv)
+            }
+            // clang `VisitAddrLabelExpr`.
+            ExprKind::AddrLabelExpr => {
+                V::C(self.addr_of_label(ast.exprs.addr_label(e), self.loc_of(e))?)
             }
             k => return err(self.loc_of(e), format!("expression {k:?} is not supported yet")),
         }))
@@ -770,7 +782,12 @@ impl Cg<'_> {
             | CastKind::FloatingCast
             | CastKind::PointerToBoolean => {
                 let v = self.emit_scalar(s)?;
-                self.conv(v, sq, q)
+                if self.vec_of(sq).is_some() {
+                    // clang 22: int → bool ext vector, lane-wise `icmp ne 0`.
+                    self.convert_vector(v, sq, q)
+                } else {
+                    self.conv(v, sq, q)
+                }
             }
             CastKind::FloatingComplexToReal
             | CastKind::IntegralComplexToReal
@@ -3004,7 +3021,17 @@ impl Cg<'_> {
             let p = self.emit_scalar(callee_e)?;
             let pq = ast.exprs.get(callee_e).ty();
             let fty = ast.types.pointee(pq).expect("function pointer");
-            (p, fty, false, None)
+            // A callee that folded to a function (a constant `int (&)(int)`
+            // naming one) is that function, as clang's `CalleePtr` is
+            // (`EmitCall` / `TryMarkNoThrow` consult its `nounwind`).
+            let fid = match p {
+                V::C(v) => match v.get() {
+                    kiln_llvm::ValueRef::Func(f) => Some(f),
+                    _ => None,
+                },
+                _ => None,
+            };
+            (p, fty, false, fid)
         };
         let mut sig = self.call_sig(fty, extern_c, &arg_tys);
         let mut extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();

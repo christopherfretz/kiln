@@ -184,6 +184,14 @@ impl Parser<'_, '_> {
         self.skip_extension_before(&[Kw::Using, Kw::Template, Kw::Asm]);
         self.discard_attrs_before_unattributed_decl();
         let loc = self.loc();
+        // A loop-hint pragma at namespace scope (clang's annotation token
+        // fails `ParseExternalDeclaration` and the declaration after it is
+        // skipped through its `;`).
+        if let Some(h) = self.take_loop_hints() {
+            self.emit(self.s.diag(DiagId::parse_expected_unqualified_id, h[0].start));
+            self.skip_until(&[Punct::Semi], false, true);
+            return;
+        }
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
                 self.bump();
@@ -2085,6 +2093,13 @@ impl Parser<'_, '_> {
             }
         }
         self.expect_closing(Punct::RBrace, Punct::LBrace, open);
+        // clang `ParseEnumBody`: GNU attributes after the `}` appertain to
+        // the enumeration, ahead of its underlying type (`packed`).
+        if self.at_kw(Kw::Attribute) {
+            let mut attrs = Vec::new();
+            self.parse_gnu_attr_seq(&mut attrs);
+            self.s.act_on_record_trailing_attrs(e, &attrs);
+        }
         self.s.act_on_finish_enum_definition(e);
     }
 

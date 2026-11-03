@@ -45,7 +45,10 @@ panic and never silently wrong IR.
   initializer it can fold; WP-415): `int g = __builtin_is_constant_evaluated()
   ? x : 7;` is the global `i32 7` with no dynamic initializer, and a
   re-folded initializer is never registered for constant destruction.
-  Aggregates are not re-folded (they keep their dynamic initializer).
+  A vector initializer is re-folded the same way (`tryEmitPrivate`
+  evaluates it as an rvalue: `i4 gv = cv;` with `const i4 cv = {..}` is
+  a static initializer; WP-453, §7w). Aggregates are not re-folded (they
+  keep their dynamic initializer).
   Uses of a const integral variable whose constant initialization failed
   fold to that same non-manifest value (spec/oven.md "Lax folds"), so
   `return cg;` emits `ret i32 9` and the unused internal `cg` is not
@@ -283,6 +286,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     nothrow, or the direct callee has a `NoThrow` attribute (a
     recognized C library function, spec/sema.md §5.4) or a `const` /
     `pure` attribute; the declaration and a definition get it too;
+    a callee expression that folds to a function (a constant
+    `int (&)(int)` naming one) is that function for these checks and
+    for `TryMarkNoThrow`, as clang's `CalleePtr` (WP-432,
+    `fn_ref_callee_nounwind.cpp`);
   - a written or implicit `const` / `pure` attribute (not on a builtin,
     whose row decides) adds `willreturn memory(none)` /
     `willreturn memory(read)` to the declaration, the definition and
@@ -333,6 +340,9 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     (`builtins.rs`, clang `EmitBuiltinExpr`; landed in WP-088):
     - a call with an integral or floating result is a fold candidate
       (§3, `fold.rs`); if the Oven folds it, it is that constant;
+      `abs` / `labs` / `llabs` are candidates only at
+      `-fclang-compat=22` (clang 20 made them constant; WP-432,
+      `builtins_abs_22.cpp`);
     - `__builtin_is_constant_evaluated()` is `i1 false`, since code that
       runs is not manifestly constant-evaluated (it is never a fold
       candidate);
@@ -448,7 +458,15 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       first for a pointer). Constant operands fold as IRBuilder folds them
       (`x + 0` is kept); an integer call is a fold candidate.
       `__builtin_debugtrap()` is `call void @llvm.debugtrap()`,
-      `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`.
+      `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`,
+      `__builtin_return_address(n)` `call ptr @llvm.returnaddress(i32 n)`
+      (WP-432, `builtins_return_address.cpp`).
+      `__builtin_elementwise_add_sat` / `_sub_sat` are `llvm.sadd.sat` /
+      `uadd.sat` / `ssub.sat` / `usub.sat` by element signedness (a
+      `bool` operand as unsigned), folded at 22 when the Oven folds them
+      (WP-432, `builtins_elementwise_sat{,_22}.cpp`). The alignment
+      builtins on a pointer to an object of known alignment fold in a
+      global initializer (spec/oven.md "Builtins"; `builtins_align_ptr.cpp`).
       `__builtin_elementwise_abs` is `llvm.abs(x, i1 false)` for
       integers and `llvm.fabs` for floating point, `_max` / `_min`
       `llvm.smax` / `umax` / `smin` / `umin` by element signedness and
@@ -540,7 +558,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   follow emission order exactly as clang's do.
 - A GNU asm label (`asm("name")`, recorded on the entity's first
   declaration, spec/ast.md §4.2) replaces the function's or variable's
-  linkage name (`kiln_abi::mangle::asm_label`). clang prefixes LLVM's
+  linkage name (`kiln_abi::mangle::asm_label`); an instantiated
+  function or variable, which has no recorded label, takes the
+  `AsmLabel` attribute sema copied from its pattern (WP-449,
+  `tests/codegen/asm_label_member.cpp`). **Known gap:** a block-scope
+  `extern` function declaration in a template is instantiated as a
+  local entity (mangled `_ZZ…E1qi`, its label dropped). clang prefixes LLVM's
   `\01` "no global prefix" marker only when the target's user-label
   prefix is non-empty (Mach-O); every kiln target is ELF, so the label
   is the symbol verbatim, and a `\01` the user wrote is kept (LLVM
@@ -758,14 +781,39 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   carries `!{!"llvm.loop.unroll.disable"}` after the optional
   `mustprogress` entry: `!{self, mustprogress?, unroll.disable}`, the
   `unroll.disable` tuple cached per module. A loop with neither entry
-  gets no `!llvm.loop` (`Cg::loop_id`). `#pragma unroll` / `#pragma
-  clang loop` are not modelled (the parser ignores them).
-  `tests/codegen/loop_unroll_disable_o1.cpp`.
+  gets no `!llvm.loop`. `tests/codegen/loop_unroll_disable_o1.cpp`.
+- **Loop hints** (WP-449; clang `CGLoopInfo`, `LoopInfoStack::push`/`pop`,
+  `LoopInfo::createMetadata`; `loop_md.rs`): a loop whose statement is
+  the sub-statement of an `AttributedStmt` with `LOOP_HINT` attributes
+  (spec/parse.md §2.3) gets them as clang's `LoopAttributes`, the hint
+  values folded as integer constants (`AttributedStmt` arms reach codegen
+  only through `Cg::f.loop_hints`, keyed by the loop statement). Option
+  and state map as in clang `LoopInfoStack::push` (`Unroll`/`UnrollCount`,
+  `UnrollAndJam`/`UnrollAndJamCount`, `Vectorize`/`VectorizeWidth` with
+  `fixed`/`scalable`, `Interleave`/`InterleaveCount`, `Distribute`,
+  `PipelineDisabled`/`PipelineInitiationInterval`, `VectorizePredicate`);
+  at -O1 an unspecified unroll with no count becomes `disable`. The
+  node is a `distinct` placeholder made when the loop is pushed (clang's
+  `TempLoopID`) and filled when it is popped, through
+  `Module::md_set_operands`, so an inner loop of an `unroll_and_jam` parent
+  is finished first and becomes the parent's
+  `llvm.loop.unroll_and_jam.followup_inner`, the parent's own
+  `followup_outer` carrying the before-jam attributes. The followup chain
+  is clang's: full unroll → distribute → vectorize (`followup_all`,
+  `followup_epilogue`) → unroll-and-jam → partial unroll → pipelining,
+  each stage adding `llvm.loop.isvectorized` / `unroll.disable` /
+  `unroll_and_jam.disable` / `distribute.enable` as clang does; the
+  `mustprogress` entry comes first in the innermost node. **Not
+  modelled:** `vectorize(assume_safety)` / `interleave(assume_safety)`
+  set only `vectorize.enable`; clang's parallel-loop marking
+  (`llvm.access.group` on each memory access in the body and
+  `llvm.loop.parallel_accesses`) is not emitted.
+  `tests/codegen/loop_hints.cpp`, `tests/codegen/loop_hints_o1.cpp`.
 - **Forwarding blocks** (clang `SimplifyForwardingBlocks`): a loop
   condition block that only branches on is folded into its predecessor
   only while no cleanup (a destructor, a lifetime end, a `noexcept`
   terminate scope) is on the EH stack. `tests/codegen/forwarding_block_cleanup.cpp`.
-- Case ranges (GNU) are an error.
+- Case ranges (GNU) are an error. GNU computed goto: §7t.
 - A goto (forward, backward, out of nested scopes, loops and try blocks)
   branches through the cleanups of every scope it leaves (`cleanup.rs`
   branch fixups). A local default-initialized by a trivial constructor
@@ -1424,6 +1472,26 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   `computeKeyFunction`). A class under an explicit instantiation
   declaration (`extern template`, itself or as a member class) gets an
   `external` vtable declaration (WP-158).
+  At `-O1`+ (WP-449; clang `EmitDeferredVTables` /
+  `shouldEmitAvailableExternallyVTable`) a used vtable that is external
+  for either reason is instead defined `available_externally` (no
+  comdat, not `dso_local`) when it can be emitted speculatively
+  (`Cg::can_speculatively_emit_vtable`, clang
+  `canSpeculativelyEmitVTable`): no inline (or deleted) virtual function
+  in a used slot is still unemitted (looked up by symbol: a function
+  definition or an alias), and for a class with virtual bases every
+  dynamic non-virtual base and every dynamic virtual base passes the same
+  test, since the VTT and construction vtables are emitted with it under
+  the same linkage. One that fails the test when first considered is
+  retried after every deferred definition is emitted
+  (`emit_vtables_opportunistically`). Its RTTI stays an external
+  declaration. A thunk the vtable needs whose method has no definition
+  here is defined `available_externally` with it (clang `maybeEmitThunk`
+  with `ForVTable`; at `-O1`+ for any vtable), except for a variadic
+  method or one with an incomplete class parameter or return type,
+  which stay declarations. clang's `isVTableHidden` exclusion never
+  applies (kiln does not model visibility attributes).
+  `tests/codegen/extern_template_vtable_o1.cpp`.
 - **Explicit instantiation declarations** ([temp.explicit]/14, WP-158;
   `Cg::is_explicit_inst_declaration`): a function or variable that is
   an `extern template` specialization, or a member of a class
@@ -1450,13 +1518,27 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   [temp.explicit]/12 instantiates under the declaration is emitted
   `available_externally` the same way (`Cg::keeps_available_externally`):
   one whose pattern is inline (declared `inline` or `constexpr`, or
-  defined in its class; an instantiated out-of-class member counts as
-  its pattern does) or that has a deduced return type, and that carries
-  no `noinline`. A non-inline member and a `noinline` one stay
+  defined in its class; sema marks an instantiation inline as its
+  pattern is, spec/sema-templates.md) or that has a deduced return type,
+  and that carries no `noinline`. A non-inline member and a `noinline` one stay
   declarations; a static local of an emitted one is `linkonce_odr` in
   its own comdat; C1/D1 calls go to C2/D2 (the structor alias rule).
-  Not modelled: clang's `isTriviallyRecursive` exclusion.
   `tests/codegen/extern_template_avail_ext_o1.cpp`.
+  At every level (also for the `always_inline` exception at -O0) a
+  trivially recursive function stays a declaration (WP-449, clang
+  `isTriviallyRecursive`, `Cg::is_trivially_recursive` in
+  `recursion.rs`). The function's name is its asm label, since every
+  function here is mangled, so one without a label never qualifies.
+  Its body is walked as clang's `FunctionIsDirectlyRecursive` walks it:
+  every statement and expression (a declaration statement's variable
+  initializers included), but not the operands of a call. A call whose
+  direct callee (through parentheses, implicit casts and substituted
+  non-type template parameters) carries the same label, or is the
+  builtin `__builtin_<label>` of a library function kiln recognizes
+  (`builtin::lib_by_name`, standing in for clang's `isLibFunction`),
+  makes it recursive.
+  `tests/codegen/trivially_recursive.cpp`,
+  `tests/codegen/trivially_recursive_always_inline.cpp`.
 - **Explicit instantiation definitions** ([temp.explicit], WP-170;
   `Cg::is_explicit_inst_definition`, clang `GetGVALinkageForFunction` ->
   `GVA_StrongODR`): a function or variable that is an explicit
@@ -1533,7 +1615,9 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   thunks spill and reload their parameters like any function, adjust
   `this`, and forward the arguments with a `tail call` (not `musttail`).
   Attributes follow clang's IsThunk rules: `this` keeps only `noundef`,
-  and a reference return keeps only `noundef`.
+  and a reference return keeps only `noundef`. A thunk is `nounwind`
+  only by its method's type or attributes: no `TryMarkNoThrow` over its
+  body (clang `generateThunk`; WP-432, `thunk_attrs{,_noexc}.cpp`).
 - **`dynamic_cast`** (`EmitDynamicCast`): pointer sources are
   null-checked (blocks `dynamic_cast.notnull`/`.null`/`.end`, then a
   phi). The runtime call is `__dynamic_cast(p, srcRTTI, dstRTTI, hint)`
@@ -2912,6 +2996,69 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   bitcast (<P x i1> <...> to iP)`, as clang's.
 - Test: `tests/codegen/bool_vector_const.cpp` (exact on both triples
   under oracle 19, structural under 22).
+
+## 7t. Landed (WP-444): GNU computed goto (`stmt.rs`)
+- `&&l` (clang `GetAddrOfLabel`, `addr_of_label`) is `blockaddress(@f,
+  %bb)` for the label's block. The first label address or computed
+  `goto` in a function makes the dispatch block (clang
+  `GetIndirectGotoBlock`, `Fir::indirect_goto`): `%indirect.goto.dest =
+  phi ptr` and `indirectbr ptr %indirect.goto.dest, [...]`, unplaced.
+  Each `&&l` evaluation adds its label as a destination, so a label
+  whose address is taken twice is listed twice, as clang's
+  `addDestination`. The label's LLVM block is created ahead of lowering
+  (`Fir::block_id`) so the `blockaddress` can name it; an address-taken
+  block is a use of its block and is never pruned.
+- `goto *e` (clang `EmitIndirectGotoStmt`): a target that is `&&l`
+  under parentheses and implicit casts (`Ast::indirect_goto_constant_
+  target`) is `goto l`, through the cleanups of the scopes it leaves;
+  otherwise the target is emitted as a scalar, added to the `phi` from
+  the current block, and the block branches to the dispatch block (no
+  cleanups, which sema guarantees there are none to run).
+- At the end of the function (`finish_indirect_goto`, before EH
+  finishing) the dispatch block is placed after the return block. With
+  no computed `goto` its `phi` has no incoming values and is replaced by
+  `poison` (clang 19, `-fclang-compat=19`: `undef`).
+- A label address in a constant (`static void *t[] = {&&a, &&b};`, a
+  frozen Oven value `PtrBase::Label`, `consts.rs`) is the same
+  `blockaddress`, so the global is a constant initializer exactly as
+  clang's. The address of another function's label (only reachable
+  through a constexpr value computed in that function) is a codegen
+  error "address of a label of another function in a constant" (clang
+  crashes there).
+- Tests: `tests/codegen/computed_goto.cpp` (exact IR on both triples at
+  both oracles: a static table, a conditional target, a duplicate
+  address, an unused dispatch block, `goto *&&l` through a destructor, a
+  template instantiated twice), `tests/conformance/stmt.goto/computed-
+  goto-dispatch-run.cpp` (`expect: run`).
+
+## 7w. Landed (WP-453): vector lane folds, int → `bool` vector conversion
+- A subscript of an ext vector whose base names a `const` non-volatile
+  vector variable (through parentheses and `NoOp` casts;
+  `fold::refers_to_const_var`) is a fold candidate: `Collect::expr`
+  pushes the base, and `emit_scalar_opt`'s vector `ArraySubscriptExpr`
+  arm uses its folded value, so the lane is an `extractelement` of the
+  constant (folded to the lane constant for a constant index, else
+  `extractelement <const>, %i` with the index's side effects kept) and
+  nothing is loaded. clang: `ScalarExprEmitter::VisitArraySubscriptExpr`
+  visits a vector base as a scalar, `VisitDeclRefExpr`'s
+  `tryEmitAsConstant` folds it. Int, float and `bool` lanes alike; a
+  `const` global whose every use folds is not emitted. A volatile or
+  non-const vector, a lane read through a pointer (`(*p)[2]`), a swizzle
+  (`k.y`, `EmitLoadOfLValue`) and an `extern` vector without an
+  initializer stay loads. As in clang, a write through a cast-away
+  `const` (`((i4&)k)[1] = 9`, undefined) does not stop the fold.
+- A vector variable's non-constant initializer is re-folded like a
+  scalar's (§2 `fold.rs`, `is_scalar`): `i4 gv = cv;`, `cv + 1`, a `const
+  f4`/`b4`/`l3` source give a static initializer with no
+  `__cxx_global_var_init` and no `@llvm.global_ctors`.
+- clang 20+'s implicit integer → `bool` ext vector conversion
+  (spec/sema.md §5.28) is a `CK_IntegralToBoolean`
+  cast of vector type, lowered by `convert_vector`: `icmp ne <N x iK> v,
+  zeroinitializer` giving `<N x i1>`, then stored on the packed layout
+  (§7s).
+- Tests: `tests/codegen/vector_const_fold.cpp` (both oracles),
+  `tests/conformance/ext.vector/ir-bool-from-int-vector.cpp` (`expect: ir`,
+  `requires: clang>=22`).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

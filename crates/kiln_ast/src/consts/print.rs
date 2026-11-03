@@ -446,6 +446,14 @@ impl Printer<'_> {
                     let _ = write!(out, "+{offset}");
                 }
             }
+            // clang prints an `AddrLabelExpr` base as the expression.
+            PtrBase::Label { label, .. } => {
+                out.push_str("&&");
+                self.env.decl_name(label, out);
+                if offset != 0 {
+                    let _ = write!(out, " + {offset}");
+                }
+            }
             PtrBase::Decl(d) | PtrBase::Temporary(d) => {
                 if amp {
                     out.push('&');

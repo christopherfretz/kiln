@@ -468,15 +468,21 @@ impl Sema<'_, '_> {
         if let Some(t) = this_ty {
             self.nsdmi_this.push((entity, t));
         }
+        let access =
+            self.inst.concepts.partial_access.filter(|&(p, _)| p == entity).map(|(_, c)| c);
         let run = |s: &mut Self| {
-            s.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
+            let saved = s.access_ctx;
+            s.access_ctx = access.or(saved);
+            let r = s.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
                 let mut sub = Substituter::new(s, levels);
                 sub.map_contexts(&pairs);
                 if let Some(f) = params_of {
                     sub.seed_function_params(f).ok()?;
                 }
                 sub.expr(e).ok()
-            })
+            });
+            s.access_ctx = saved;
+            r
         };
         // The names of a concept or a namespace-scope template's
         // constraints are looked up again from where they were written,
@@ -758,6 +764,9 @@ impl Sema<'_, '_> {
         let dep = self.ast.types.arg_list_flags(written).intersects(TypeFlags::DEPENDENT)
             || args.iter().any(|&a| self.is_pack_expansion_arg(a));
         if dep {
+            // Checked against the parameters even so (clang
+            // `CheckTemplateArgumentList`; spec/sema-templates.md §3.2).
+            self.check_dependent_template_args_at(c, &args, arg_locs, loc)?;
             return Ok(self.builder().concept_spec_expr(c, written, QualType::BOOL, loc));
         }
         let conv = self.check_template_args(c, &args, arg_locs, loc)?;

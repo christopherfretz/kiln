@@ -1112,6 +1112,15 @@ impl<'a> Compiler<'a> {
             // `co_await`/`co_yield` ([expr.const]/5.23, WP-351).
             return self.throw_invalid(e);
         }
+        if k.is_cast()
+            && self.b.ast().exprs.cast_kind(e) == CastKind::IntegralToBoolean
+            && matches!(self.b.ast().types.canonical_view(n.ty()), TypeView::Vector { .. })
+        {
+            // clang 22's `VectorExprEvaluator` has no case for an integer to
+            // `bool` ext vector conversion (sema's clang 20+
+            // `ICK_Boolean_Conversion` between vectors): the generic note.
+            return self.throw_invalid(e);
+        }
         self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
     }
 
@@ -2603,6 +2612,9 @@ impl Compiler<'_> {
             | ExprKind::GNUNullExpr
             | ExprKind::ImplicitValueInitExpr => {
                 self.konst(dst, 0);
+            }
+            ExprKind::AddrLabelExpr => {
+                self.emit_at(Op::LabelAddr, 0, &[dst, e.index()], e);
             }
             ExprKind::FloatingLiteral => {
                 let ast = self.ast();

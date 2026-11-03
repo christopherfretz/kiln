@@ -43,6 +43,8 @@ sema_non_template_in_template_id = Error (1) "'{0}' does not name a template but
 sema_non_thread_thread = Error (1) "non-thread-local declaration of '{0}' follows thread-local declaration";
 sema_nonconst_member_fn_ptr = Error (0) "cannot create a non-constant pointer to member function";
 sema_nonlocal_sizeless = Error (1) "non-local variable with sizeless type {0}";
+// [dcl.fct]/6 (clang `err_invalid_qualified_function_type`)
+sema_nonmember_fn_quals = Error (1) "non-member function cannot have '{0}' qualifier";
 sema_nonnull_expr_compare = Warning [TautologicalPointerCompare] (3) "comparison of nonnull {0:function call|parameter} '{1}' {2:not |}equal to a null pointer is '{2:true|false}' on first encounter";
 sema_nonstatic_member_out_of_line = Error (0) "non-static data member defined out-of-line";
 sema_nonviable_condition_no_candidates = Error (2) "cannot convert {0} to {1} without a conversion operator";
@@ -148,6 +150,9 @@ sema_placement_new_no_operator = Error (1) "no matching {0} function for non-all
 // ----- WP-211 (GNU _Complex)
 sema_plain_complex = Warning (0) "plain '_Complex' requires a type specifier; assuming '_Complex double'";
 sema_pointer_to_reference = Error (2) "'{0}' declared as a pointer to a reference of type {1}";
+sema_pragma_loop_compatibility = Error (3) "{0:incompatible|duplicate} directives '{1}' and '{2}'";
+sema_pragma_loop_invalid_argument_type = Error (1) "invalid argument of type {0}; expected an integer type";
+sema_pragma_loop_precedes_nonloop = Error (1) "expected a for, while, or do-while loop to follow '{0}'";
 sema_predefined_identifier_outside_function = Warning [PredefinedIdentifierOutsideFunction] (0) "predefined identifier is only valid inside function";
 sema_probability_not_constant_float = Error (0) "probability argument to __builtin_expect_with_probability must be constant floating-point expression";
 sema_probability_out_of_range = Error (0) "probability argument to __builtin_expect_with_probability is outside the range [0.0, 1.0]";
@@ -196,6 +201,7 @@ sema_register_storage_class = WarningError [Register] (0) "ISO C++17 does not al
 sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
 sema_reorder_ctor = WarningOff [ReorderCtor] (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order does not match the declaration order";
+sema_requires_positive_value = Error (2) "{1:invalid value '{0}'; must be positive|value '{0}' is too large}";
 sema_ret_addr_label = Warning [ReturnStackAddress] (0) "returning address of label, which is local";
 // WP-204: clang's `checkExprLifetime` for a return ([stmt.return],
 // spec/sema-class.md §5.6).

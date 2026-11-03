@@ -5,7 +5,7 @@
 //! instantiated when used (`instantiate_function_definition`,
 //! [temp.inst]/4).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::names::{DeclName, DeclNameView};
@@ -1161,6 +1161,9 @@ impl Sema<'_, '_> {
             return;
         };
         let Some(body) = self.ast.decls.function(pdef).and_then(|x| x.body) else { return };
+        if self.suppressed_by_explicit_inst_declaration(f, pattern) {
+            return;
+        }
         if self.is_function_spec(f) {
             // A function template specialization (WP-071, §4.4).
             self.instantiate_function_spec_definition(f, pdef, body, poi);
@@ -1194,6 +1197,33 @@ impl Sema<'_, '_> {
         });
         self.replay_dependent_access(pdef, f);
         self.pop_inst_frame();
+    }
+
+    /// [temp.explicit]/12: under an explicit instantiation declaration
+    /// (of `f` itself or of an enclosing class), only an inline function
+    /// or one with a deduced return type is implicitly instantiated
+    /// (clang `InstantiateFunctionDefinition` returns early for
+    /// `TSK_ExplicitInstantiationDeclaration` unless the pattern
+    /// `isInlined()` or its return type contains `auto`). A constexpr or
+    /// consteval function is inline ([dcl.constexpr]/1).
+    fn suppressed_by_explicit_inst_declaration(&self, f: DeclId, pattern: DeclId) -> bool {
+        if self.ast.governing_explicit_inst_kind(f)
+            != Some(SpecKind::ExplicitInstantiationDeclaration)
+        {
+            return false;
+        }
+        let spec_any = |d: DeclId, p: &dyn Fn(kiln_ast::decl::FnSpec) -> bool| {
+            self.ast.redecls_of(d).any(|r| self.ast.decls.function(r).is_some_and(|x| p(x.spec)))
+        };
+        let inline = self.instantiated_pattern_inline(f).unwrap_or(false)
+            || spec_any(pattern, &|s| s.constexpr_kind() != kiln_ast::decl::ConstexprKind::None);
+        let deduced = spec_any(pattern, &kiln_ast::decl::FnSpec::return_deduced)
+            || spec_any(f, &kiln_ast::decl::FnSpec::return_deduced)
+            || self.ast.redecls_of(pattern).any(|r| {
+                let ty = self.ast.decls.get(r).ty().unwrap_or(QualType::ERROR);
+                self.sugared_proto(ty).is_some_and(|p| self.contains_placeholder(p.ret()))
+            });
+        !inline && !deduced
     }
 
     /// A special member whose pattern is defaulted out of line
@@ -1311,6 +1341,17 @@ impl Sema<'_, '_> {
         }) else {
             return;
         };
+        // [temp.explicit]/12: an explicit instantiation declaration
+        // suppresses the definition unless the member may be usable in
+        // constant expressions (clang `InstantiateVariableDefinition`).
+        // The member stays pending so a later explicit instantiation
+        // definition still instantiates it.
+        if self.ast.governing_explicit_inst_kind(v)
+            == Some(SpecKind::ExplicitInstantiationDeclaration)
+            && !self.might_be_constant_var(v)
+        {
+            return;
+        }
         self.inst.member_defs.remove(&v);
         let Some(spec) = self.inst_owner(v) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };
@@ -1611,6 +1652,18 @@ impl Substituter<'_, '_, '_> {
         self.class_body_with(spec, def, local, false);
     }
 
+    /// The pattern's class-virt-specifier `final` ([class.pre]/1:
+    /// `__is_final` of a specialization of a `final` class template is
+    /// true; libc++'s compressed-pair padding of a final allocator), then
+    /// its attributes ([`Substituter::class_attrs`]).
+    fn class_final_and_attrs(&mut self, spec: DeclId, def: DeclId) {
+        if self.sema.ast.decls.record(def).is_some_and(|r| r.defn.contains(DefinitionBits::FINAL)) {
+            let loc = self.sema.ast.decls.get(def).loc();
+            self.sema.act_on_class_final(spec, loc);
+        }
+        self.class_attrs(spec, def);
+    }
+
     /// [`Substituter::class_body`]; `anonymous` for an anonymous struct
     /// or union (its `}` is followed by `;`).
     pub(crate) fn class_body_with(
@@ -1622,7 +1675,7 @@ impl Substituter<'_, '_, '_> {
     ) {
         let saved_entity = self.entity.replace(spec);
         self.sema.act_on_start_record_definition(spec);
-        self.class_attrs(spec, def);
+        self.class_final_and_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);
         let sub = self;
         let (specs, mut invalid) = sub.class_bases(def);
@@ -1723,11 +1776,11 @@ impl Substituter<'_, '_, '_> {
         // Default member initializers ([temp.inst]/3): instantiated when
         // a constructor or an aggregate initialization uses one
         // ([`Sema::instantiate_nsdmi`], clang
-        // `InstantiateInClassInitializer`). Those of a local class or an
-        // anonymous member are instantiated now, in the complete-class
+        // `InstantiateInClassInitializer`), an anonymous member's included.
+        // Those of a local class are instantiated now, in the complete-class
         // context (the parser replays them so).
         if !nsdmis.is_empty() && !invalid {
-            if local.is_none() && !anonymous {
+            if local.is_none() {
                 let ctx = (sub.args.clone(), sub.pairs.clone());
                 let _ = sub.sema.inst.nsdmi_ctx.insert(spec, ctx);
                 for (field, init) in nsdmis {

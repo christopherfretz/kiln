@@ -156,11 +156,15 @@ impl Sema<'_, '_> {
         self.ast.types.is_integral(t) || self.ast.types.as_enum(t).is_some()
     }
 
+    /// A scalar type ([basic.types.general]/9): arithmetic, enumeration,
+    /// pointer, pointer-to-member and `std::nullptr_t`, plus GNU complex
+    /// (clang `isScalarType`).
     pub(crate) fn is_scalar(&self, t: QualType) -> bool {
         self.ast.types.is_arithmetic(t)
             || self.ast.types.as_complex(t).is_some()
             || self.ast.types.as_enum(t).is_some()
             || self.ast.types.is_pointer(t)
+            || self.is_member_pointer(t)
             || self.is_nullptr_type(t)
     }
 
@@ -1598,6 +1602,30 @@ impl Sema<'_, '_> {
                 d = found.decls[0];
             }
         }
+        // A function template declared at file scope with a builtin's name
+        // (`template<class D, class S> void *__builtin_memmove(D*, S*,
+        // size_t)`) does not redeclare the builtin: clang's redeclaration
+        // lookup creates the builtin in the translation unit first
+        // (`HandleDeclarator`'s `CreateBuiltins`), so both are candidates
+        // and the builtin wins a tie as a non-template ([over.match.best]/2.4;
+        // spec/sema.md §5.4).
+        if qualifier.is_none_or(|q| q == self.ast.tu)
+            && found.naming.is_none()
+            && found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate)
+            && found.decls.iter().all(|&x| {
+                matches!(self.kind_of(x), DeclKind::FunctionTemplate | DeclKind::Function)
+                    && self.ast.decls.builtin_id(x).is_none()
+                    && self.ast.decls.get(x).ctx().map(|c| self.ast.redecl_context(c))
+                        == Some(self.ast.tu)
+            })
+            && let Some(sym) = name.as_ident()
+            && let Some(b) = self.lazily_create_builtin(sym, loc)
+        {
+            found.decls.push(b);
+            if !found.found.is_empty() {
+                found.found.push(b);
+            }
+        }
         let any_tmpl = found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate);
         if any_tmpl
             && found.decls.iter().all(|&x| {
@@ -2589,6 +2617,18 @@ impl Sema<'_, '_> {
             s.emit(msg);
             s.recover_err(&[e], loc)
         };
+        // clang `CreateBuiltinUnaryOp`: SVE vectors allow `+`, `-` and,
+        // with an integer element, `~`.
+        if self.is_sve_vector(t0)
+            && (matches!(op, UnaryOp::Plus | UnaryOp::Minus)
+                || (op == UnaryOp::Not && self.has_integer_repr(t0)))
+        {
+            let x = conv::decay(self, e);
+            let ty = self.ety(x);
+            let flags =
+                if op == UnaryOp::Minus { ExprFlags::NONE } else { ExprFlags::CANNOT_OVERFLOW };
+            return self.builder().unary(op, x, ty, loc, flags);
+        }
         if self.is_vector_type(t0)
             && matches!(op, UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not | UnaryOp::LNot)
         {
@@ -2840,6 +2880,7 @@ impl Sema<'_, '_> {
         if !self.check_modifiable(e, loc) {
             return self.recover_err(&[e], loc);
         }
+        self.check_volatile_inc_dec(inc, operand_t, loc);
         let flags =
             if self.narrower_than_int(t) { ExprFlags::CANNOT_OVERFLOW } else { ExprFlags::NONE };
         let ty = if op.is_postfix() || atomic.is_some() { conv::strip_cv(self, t) } else { t };
@@ -2865,6 +2906,12 @@ impl Sema<'_, '_> {
                 .arg(self.ty_arg(p))
                 .arg("0")
                 .arg("");
+            self.emit(msg);
+            return false;
+        }
+        if self.ast.types.is_sizeless(p) {
+            // clang `err_typecheck_arithmetic_incomplete_or_sizeless_type`.
+            let msg = self.diag(DiagId::sema_arith_sizeless_pointee, loc).arg(self.ty_arg(p));
             self.emit(msg);
             return false;
         }
@@ -3039,6 +3086,37 @@ impl Sema<'_, '_> {
         self.emit(d);
     }
 
+    /// The built-in comma operator ([expr.comma]).
+    fn comma_binary(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+        self.diagnose_comma_lhs(l);
+        self.discard_assignment_ref(l);
+        // clang `CheckCommaOperands`: the left operand is a
+        // discarded-value expression ([expr.comma]/1).
+        let l = self.ignored_value_conversions(l);
+        let ty = self.ety(r);
+        let res = self.builder().binary(BinaryOp::Comma, l, r, ty, loc);
+        self.mark_bitfield_if(res, r);
+        res
+    }
+
+    /// The built-in `&&` / `||` ([expr.log.and], [expr.log.or]).
+    fn logical_binary(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+        if !self.diagnose_enum_constant_in_bool_context(l, r, loc) {
+            self.check_constant_logical_operand(op, l, r, loc);
+        }
+        // clang `CheckLogicalOperands`: the first operand that
+        // does not convert is diagnosed at its start.
+        let conv_op = |s: &mut Self, e: ExprId| {
+            conv::contextually_convert_to_bool(s, e).map_err(|err| {
+                let at = s.begin_loc(e);
+                s.emit(err.diag_at(s, at));
+            })
+        };
+        let Ok(l2) = conv_op(self, l) else { return self.invalid_operands(l, r, loc) };
+        let Ok(r2) = conv_op(self, r) else { return self.invalid_operands(l, r, loc) };
+        self.builder().binary(op, l2, r2, QualType::BOOL, loc)
+    }
+
     /// The built-in binary operator `op` ([expr.mul] .. [expr.comma]).
     pub(crate) fn builtin_binary(
         &mut self,
@@ -3070,32 +3148,23 @@ impl Sema<'_, '_> {
         {
             return self.vector_binary(op, l, r, loc);
         }
+        if !matches!(
+            op,
+            BinaryOp::Assign
+                | BinaryOp::Comma
+                | BinaryOp::PtrMemD
+                | BinaryOp::PtrMemI
+                | BinaryOp::LAnd
+                | BinaryOp::LOr
+        ) && (self.is_sve_vector(self.ety(l)) || self.is_sve_vector(self.ety(r)))
+        {
+            return self.sve_binary(op, l, r, loc);
+        }
         match op {
             BinaryOp::Assign => self.assign(l, r, loc),
             _ if op.is_compound_assignment() => self.compound_assign(op, l, r, loc),
-            BinaryOp::Comma => {
-                self.diagnose_comma_lhs(l);
-                self.discard_assignment_ref(l);
-                // clang `CheckCommaOperands`: the left operand is a
-                // discarded-value expression ([expr.comma]/1).
-                let l = self.ignored_value_conversions(l);
-                let ty = self.ety(r);
-                let res = self.builder().binary(op, l, r, ty, loc);
-                self.mark_bitfield_if(res, r);
-                res
-            }
-            BinaryOp::LAnd | BinaryOp::LOr => {
-                if !self.diagnose_enum_constant_in_bool_context(l, r, loc) {
-                    self.check_constant_logical_operand(op, l, r, loc);
-                }
-                let (Ok(l2), Ok(r2)) = (
-                    conv::contextually_convert_to_bool(self, l),
-                    conv::contextually_convert_to_bool(self, r),
-                ) else {
-                    return self.invalid_operands(l, r, loc);
-                };
-                self.builder().binary(op, l2, r2, QualType::BOOL, loc)
-            }
+            BinaryOp::Comma => self.comma_binary(l, r, loc),
+            BinaryOp::LAnd | BinaryOp::LOr => self.logical_binary(op, l, r, loc),
             BinaryOp::Add | BinaryOp::Sub => self.additive(op, l, r, loc),
             BinaryOp::Shl | BinaryOp::Shr => {
                 let (lt, rt) = (self.value_ty(l), self.value_ty(r));
@@ -3226,6 +3295,7 @@ impl Sema<'_, '_> {
         };
         let res = self.builder().binary(BinaryOp::Assign, l, r2, lt, loc);
         self.mark_bitfield_if(res, l);
+        self.note_volatile_assign(l);
         res
     }
 
@@ -3482,9 +3552,11 @@ impl Sema<'_, '_> {
     /// diagnosed, clang's `warn_comparison_always` when both operands name
     /// variables: distinct ones never compare equal, one is a
     /// self-comparison. Not in a template instantiation (clang checks the
-    /// definition only).
+    /// definition only), constraint satisfaction included: clang's
+    /// `inTemplateInstantiation` counts a `ConstraintsCheck` frame, so
+    /// libc++'s `equality_comparable<int[5]>` holds (WP-446).
     fn diagnose_array_comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) {
-        if self.inst.stack.depth() > 0 {
+        if self.inst.stack.in_instantiation_record() {
             return;
         }
         let (ls, rs) = (self.ignore_paren_imp_casts(l), self.ignore_paren_imp_casts(r));
@@ -4247,6 +4319,11 @@ impl Sema<'_, '_> {
             // clang `err_subscript_function_type`, at the pointer operand.
             let at = self.begin_loc(if ptr == bt { b } else { i });
             let msg = self.diag(DiagId::sema_subscript_function_type, at).arg(self.ty_arg(elem));
+            self.emit(msg);
+            return self.recover_err(&[b, i], loc);
+        }
+        if self.ast.types.is_sizeless(elem) {
+            let msg = self.diag(DiagId::sema_subscript_sizeless_type, loc).arg(self.ty_arg(elem));
             self.emit(msg);
             return self.recover_err(&[b, i], loc);
         }

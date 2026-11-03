@@ -560,9 +560,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             Node::Req(e, i) => self.req_children(e, i, kids),
             Node::Attr(a) => {
-                // `CXXAssumeAttr`: the assumption.
+                // `CXXAssumeAttr`: the assumption; `LoopHintAttr`: the
+                // value as written.
                 let n = self.ast.attrs.get(a);
-                if n.kind == AttrKind::ASSUME
+                if matches!(n.kind, AttrKind::ASSUME | AttrKind::LOOP_HINT)
                     && let Some(e) = ExprId::from_raw(n.a)
                 {
                     kids.push((Node::Expr(e), None));
@@ -986,6 +987,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             StmtKind::ReturnStmt => expr(stmts.return_value(s), kids),
+            StmtKind::IndirectGotoStmt => expr(Some(stmts.indirect_goto_target(s)), kids),
             StmtKind::CoreturnStmt => {
                 expr(stmts.coreturn_operand(s), kids);
                 expr(stmts.coreturn_promise_call(s), kids);

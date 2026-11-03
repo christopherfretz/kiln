@@ -102,7 +102,7 @@ impl<'a> Preprocessor<'a, '_> {
 
     /// `#` at the start of a line was lexed from the top file frame
     /// (clang `HandleDirective`).
-    pub(crate) fn handle_directive(&mut self, _hash: Token) {
+    pub(crate) fn handle_directive(&mut self, hash: Token) {
         crate::profile::time!(t_directive_ns);
         crate::profile::count!(directives);
         self.start_directive();
@@ -150,7 +150,7 @@ impl<'a> Preprocessor<'a, '_> {
                 Some(Dir::Line) => self.do_line(),
                 Some(Dir::Error) => self.do_error_warning(name, true),
                 Some(Dir::Warning) => self.do_error_warning(name, false),
-                Some(Dir::Pragma) => self.handle_pragma_directive(name),
+                Some(Dir::Pragma) => self.handle_pragma_directive(hash.span.lo, name),
                 Some(Dir::Ident | Dir::Sccs) => self.do_ident(name),
                 None => {
                     self.emit(Diag::new(DiagId::pp_invalid_directive, name.tok.span));

@@ -41,6 +41,12 @@ impl Parser<'_, '_> {
                 stmts.push(s);
             }
         }
+        // Loop hints before the `}`: clang parses them and then finds no
+        // statement.
+        if let Some(h) = self.take_loop_hints() {
+            let _ = self.loop_hint_attrs(h);
+            self.expected_here("statement");
+        }
         let rbrace = self.expect_closing(Punct::RBrace, Punct::LBrace, lbrace);
         if new_scope {
             self.s.pop_scope();
@@ -84,6 +90,28 @@ impl Parser<'_, '_> {
         if !self.stack_ok() {
             return None;
         }
+        // Loop-hint pragmas before the statement (clang
+        // `ParsePragmaLoopHint`): attributes of it, before any `[[...]]`.
+        let (mut hints, hints_at) = match self.take_loop_hints() {
+            Some(h) => {
+                let at = h[0].start;
+                (self.loop_hint_attrs(h), at)
+            }
+            None => (Vec::new(), Loc::INVALID),
+        };
+        let s = self.parse_statement_hinted(&mut hints);
+        if hints.is_empty() {
+            return s;
+        }
+        // A statement with no other statement attributes.
+        let s = s?;
+        Some(self.s.act_on_attributed_stmt(&hints, s, hints_at, self.std))
+    }
+
+    /// A statement after its loop hints `hints`: one with statement
+    /// attributes takes the hints into its `AttributedStmt` (clearing
+    /// `hints`).
+    fn parse_statement_hinted(&mut self, hints: &mut Vec<kiln_ast::AttrId>) -> Option<StmtId> {
         if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
             let start = self.loc();
             let mut attrs = Vec::new();
@@ -102,7 +130,9 @@ impl Parser<'_, '_> {
                 )
             }) {
                 let sub = self.parse_statement_after_attrs()?;
-                return Some(self.s.act_on_attributed_stmt(&attrs, sub, start, self.std));
+                let mut all = std::mem::take(hints);
+                all.extend_from_slice(&attrs);
+                return Some(self.s.act_on_attributed_stmt(&all, sub, start, self.std));
             }
             // Otherwise they appertain to a declaration's entities; on any
             // other statement they are errors (clang
@@ -268,8 +298,7 @@ impl Parser<'_, '_> {
 
     /// `goto identifier ;` ([stmt.goto]); GNU `goto * expression ;`
     /// (clang `ParseGotoStatement`: "use of GNU indirect-goto extension"
-    /// at the `*`, the operand is a full-expression, then "computed goto
-    /// is not supported yet", spec/parse.md §6.1).
+    /// at the `*`, the operand is a full-expression; an `IndirectGotoStmt`).
     fn parse_goto(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         if self.at(Punct::Star) {
@@ -280,9 +309,9 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return None;
             };
-            self.s.act_on_indirect_goto(e, star);
+            let s = self.s.act_on_indirect_goto(e, loc, star);
             self.expect_semi_after_stmt("goto");
-            return None;
+            return s;
         }
         let Some(name) = self.ident() else {
             let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");

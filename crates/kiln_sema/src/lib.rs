@@ -58,6 +58,7 @@ pub mod literal;
 mod literal_op;
 mod local_friend;
 pub mod lookup;
+mod loop_hint;
 mod macro_fixit;
 pub mod modules;
 pub mod names;
@@ -244,6 +245,9 @@ pub struct Sema<'a, 'sm> {
     pub(crate) func: Option<stmt::FnState>,
     /// Depth of unevaluated operands (`sizeof`, `alignof`).
     pub(crate) unevaluated: u32,
+    /// [`stmt::FnState::volatile_assigns`] outside a function body (a
+    /// namespace-scope initializer, a default member initializer).
+    pub(crate) volatile_assigns: Vec<ExprId>,
     /// The operands of the `decltype`s being parsed, innermost last: the
     /// unevaluated depth of each and the calls with an incomplete class
     /// prvalue result it deferred ([dcl.type.decltype]/2).
@@ -412,6 +416,14 @@ pub struct Sema<'a, 'sm> {
     /// instantiated (`friend_function_template`): a qualified one that
     /// matches no template is not diagnosed (clang).
     pub(crate) instantiating_friend_template: bool,
+    /// While a friend function template of a class template is
+    /// redeclared (`friend_function_template`): its pattern's
+    /// constraints (type-constraints, requires-clauses) mapped to their
+    /// substitution with the specialization's levels, the friend's own
+    /// parameters at their retained depth, which redeclaration matching
+    /// compares instead ([temp.over.link]/6; clang's
+    /// `AreConstraintExpressionsEqual`, WP-446).
+    pub(crate) friend_cmp_constraints: kiln_source::fx::FxHashMap<ExprId, ExprId>,
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).
     pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
@@ -856,6 +868,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ctx: tu,
             func: None,
             unevaluated: 0,
+            volatile_assigns: Vec::new(),
             decltype_calls: Vec::new(),
             agg_list_end: None,
             agg_error_mark: None,
@@ -897,6 +910,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
             virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
+            friend_cmp_constraints: kiln_source::fx::FxHashMap::default(),
             constinit_locs: kiln_source::fx::FxHashMap::default(),
             ref_usable: kiln_source::fx::FxHashMap::default(),
             empty_loop_bodies: kiln_source::fx::FxHashMap::default(),

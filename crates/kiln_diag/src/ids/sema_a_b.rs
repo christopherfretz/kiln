@@ -54,6 +54,7 @@ sema_arith_float_unordered = Error (3) "invalid {0:arithmetic between|bitwise op
 sema_arith_function_pointer = Extension [GnuPointerArith] (4) "arithmetic on{0: a|} pointer{0:|s} to{2: the|} function type{2:|s} {1}{2:| and {3}} is a GNU extension";
 sema_arith_function_pointer_cxx = Error (4) "arithmetic on{0: a|} pointer{0:|s} to{2: the|} function type{2:|s} {1}{2:| and {3}}";
 sema_arith_incomplete_pointee = Error (1) "arithmetic on a pointer to an incomplete type {0}";
+sema_arith_sizeless_pointee = Error (1) "arithmetic on a pointer to sizeless type {0}";
 sema_arith_void_pointer = Extension [GnuPointerArith] (1) "arithmetic on{0: a pointer| pointers} to void is a GNU extension";
 // [expr.add]/1: in C++ a `void` or function pointee is an error, not
 // the GNU extension of C (WP-219)
@@ -123,7 +124,7 @@ sema_atomic_op_needs_atomic_int_ptr_or_fp = Error (2) "address argument to atomi
 sema_atomic_op_needs_non_const_atomic = Error (2) "address argument to atomic operation must be a pointer to non-{0:const|constant} _Atomic type ({1} invalid)";
 sema_atomic_op_needs_non_const_pointer = Error (1) "address argument to atomic operation must be a pointer to non-const type ({0} invalid)";
 sema_atomic_op_needs_trivial_copy = Error (1) "address argument to atomic operation must be a pointer to a trivially-copyable type ({0} invalid)";
-sema_atomic_specifier_bad_type = Error (2) "_Atomic cannot be applied to {0:array|function|reference|atomic|qualified} type {1}";
+sema_atomic_specifier_bad_type = Error (2) "_Atomic cannot be applied to {0:array|function|reference|atomic|qualified|integer} type {1}";
 sema_attribute_arg_not_supported = Warning [IgnoredAttributes] (2) "{0} attribute argument not supported: {1}";
 sema_attribute_argument_out_of_range = Error (3) "{0} attribute requires integer constant between {1} and {2} inclusive";
 sema_attribute_ignored_on_type = Warning [IgnoredAttributes] (1) "attribute {0} ignored, because it cannot be applied to a type";
