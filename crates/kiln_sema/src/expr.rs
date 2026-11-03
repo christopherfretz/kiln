@@ -4960,7 +4960,8 @@ impl Sema<'_, '_> {
             return None;
         }
         let fty = self.ast.decls.get(d).ty()?;
-        let TypeView::Function(p) = self.ast.types.view(self.ast.types.desugar_top(fty).ty()) else {
+        let TypeView::Function(p) = self.ast.types.view(self.ast.types.desugar_top(fty).ty())
+        else {
             return None;
         };
         let ret = p.ret();
@@ -4970,7 +4971,11 @@ impl Sema<'_, '_> {
         }
         let plausible = if arrow {
             self.ast.types.is_pointer(ret)
-                && self.ast.types.pointee(ret).is_some_and(|t| self.ast.types.as_record(t).is_some())
+                && self
+                    .ast
+                    .types
+                    .pointee(ret)
+                    .is_some_and(|t| self.ast.types.as_record(t).is_some())
         } else {
             self.ast.types.as_record(ret).is_some()
         };

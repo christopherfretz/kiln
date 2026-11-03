@@ -533,10 +533,7 @@ impl Sema<'_, '_> {
     /// `e` may be parenthesized and under `&` ([`Sema::overload_operand`]);
     /// the result is the set's `UnresolvedLookupExpr`, the function and
     /// its found declaration.
-    pub(crate) fn single_overload_candidate(
-        &self,
-        e: ExprId,
-    ) -> Option<(ExprId, DeclId, DeclId)> {
+    pub(crate) fn single_overload_candidate(&self, e: ExprId) -> Option<(ExprId, DeclId, DeclId)> {
         let (ule, _) = self.overload_operand(e)?;
         let [(d, found)] = self.ule_candidates(ule)[..] else { return None };
         (matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)

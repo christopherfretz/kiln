@@ -1357,10 +1357,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     pub(crate) fn emit_after_typos(&mut self, e: ExprId, d: Diag) {
         if self.open_specs > 0 {
             let at = (0..self.delayed_typos.len()).rev().find(|&i| {
-                self.delayed_typos[i]
-                    .spec
-                    .as_ref()
-                    .is_some_and(|s| self.expr_contains_at(e, s.loc))
+                self.delayed_typos[i].spec.as_ref().is_some_and(|s| self.expr_contains_at(e, s.loc))
             });
             if let Some(i) = at {
                 let n = self.typo_count;

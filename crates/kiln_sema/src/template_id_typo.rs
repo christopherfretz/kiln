@@ -129,11 +129,7 @@ impl Sema<'_, '_> {
     /// the value (or to the one value of the next distance with any).
     /// Only inside a delayed-typo scope outside an instantiation
     /// (otherwise there is no correction point to decide at).
-    fn speculate_template_id_typo(
-        &mut self,
-        name: Symbol,
-        loc: Loc,
-    ) -> Option<Speculation> {
+    fn speculate_template_id_typo(&mut self, name: Symbol, loc: Loc) -> Option<Speculation> {
         if self.typo_delay == 0 || !self.inst.stack.is_empty() {
             return None;
         }
@@ -229,7 +225,12 @@ impl Sema<'_, '_> {
         if let &[decl] = c.decls.as_slice() {
             let d = self.ast.strip_shadow(decl);
             if self.kind_of(d) != DeclKind::FunctionTemplate {
-                return Some(self.build_decl_ref_qualified(d, loc, (decl != d).then_some(decl), nns));
+                return Some(self.build_decl_ref_qualified(
+                    d,
+                    loc,
+                    (decl != d).then_some(decl),
+                    nns,
+                ));
             }
         }
         let first = self.ast.strip_shadow(*c.decls.first()?);
@@ -525,9 +526,8 @@ impl Sema<'_, '_> {
     /// Whether candidates `a` and `b` name the same entity (the same
     /// entity at the same distance counts once, as the lesser spelling).
     fn same_typo_entity(&self, a: &Candidate, b: &Candidate) -> bool {
-        let key = |c: &Candidate| {
-            c.decls.iter().map(|&d| self.ast.first(self.ast.strip_shadow(d))).min()
-        };
+        let key =
+            |c: &Candidate| c.decls.iter().map(|&d| self.ast.first(self.ast.strip_shadow(d))).min();
         !a.decls.is_empty() && key(a) == key(b)
     }
 
