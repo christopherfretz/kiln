@@ -1,4 +1,4 @@
-//! Reflections (spec/ast.md §10).
+//! Reflections (spec/reflection.md §2).
 //!
 //! WP-267 spike (`-freflection`): the table interns the entity a
 //! `std::meta::info` value designates. A [`ReflectionId`] is a dense index
@@ -9,7 +9,7 @@
 //! the null reflection and an all-zero (value-initialized)
 //! `std::meta::info` is null.
 //!
-//! Mapping (spec/sema.md "Reflection (spike, -freflection)"):
+//! Mapping (spec/reflection.md §2.2; the spike subset):
 //! - a type-id reflects its `QualType` with alias sugar dropped (the
 //!   spike canonicalizes every type; P2996 keeps `^^Alias` distinct);
 //! - a variable, function, data member or namespace reflects its
@@ -19,8 +19,8 @@ use crate::ids::{DeclId, QualType, ReflectionId};
 use crate::mem::{HeapSize, MemReport, MemRow};
 use kiln_source::fx::FxHashMap;
 
-/// The entity a reflection designates (the spike subset of §10's
-/// `Reflectee`).
+/// The entity a reflection designates (the spike subset of
+/// spec/reflection.md §2.2).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Reflectee {
     /// The null reflection.
@@ -32,7 +32,7 @@ pub enum Reflectee {
     Decl(DeclId),
 }
 
-/// Interned reflections (spec/ast.md §10).
+/// Interned reflections (spec/reflection.md §2.2).
 #[derive(Debug)]
 pub struct ReflectionTable {
     items: Vec<Reflectee>,

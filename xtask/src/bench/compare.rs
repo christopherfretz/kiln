@@ -432,6 +432,7 @@ mod tests {
             peak_arena: peak_bytes,
             frozen_bytes: 16,
             static_bytes: 0,
+            memo_hits: 0,
             wall_us: 0,
             evaluations: 2,
         };

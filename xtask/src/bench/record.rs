@@ -259,6 +259,7 @@ fn oven_from_json(j: &Json) -> Result<(Counters, Vec<Counter>), String> {
         peak_arena: n(Counter::PeakArena)?,
         frozen_bytes: n(Counter::FrozenBytes)?,
         static_bytes: n(Counter::StaticBytes)?,
+        memo_hits: 0,
         wall_us: 0,
         evaluations: n(Counter::Evaluations)?,
     };
@@ -577,6 +578,7 @@ pub(super) mod tests {
             peak_arena: 7,
             frozen_bytes: 8,
             static_bytes: 0,
+            memo_hits: 0,
             wall_us: 0,
             evaluations: 6,
         });
