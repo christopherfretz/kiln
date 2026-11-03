@@ -192,8 +192,9 @@ pub(crate) struct Fx {
     /// value of `__builtin_coro_frame()` (clang
     /// `CurAwaitSuspendWrapper.FramePtr`).
     pub await_frame: Option<V>,
-    /// Emit lifetime markers (clang `ShouldEmitLifetimeMarkers`; set in
-    /// a coroutine, spec/codegen.md §7p).
+    /// Emit lifetime markers in this function even without optimization
+    /// (set in a coroutine, spec/codegen.md §7p); at -O1+ every function
+    /// has them ([`Cg::lifetime_markers_on`]).
     pub lifetime_markers: bool,
     /// The variables a jump bypasses, which get no lifetime markers
     /// (clang `Bypasses`).
@@ -496,6 +497,11 @@ impl Cg<'_> {
             self.f.vtt = Some(self.load(LTy::PTR, a, 8, false));
         }
 
+        // GenerateCode: `Bypasses.Init` over the body when lifetime
+        // markers are on (a coroutine redoes it over its own body).
+        if self.lifetime_markers_on() && thunk.is_none() {
+            self.f.bypasses = Some(Box::new(crate::lifetime::detect_bypasses(ast, body)));
+        }
         match kind {
             _ if let Some(th) = thunk => {
                 self.f.mustprogress = false;

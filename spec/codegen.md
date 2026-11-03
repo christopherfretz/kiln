@@ -2419,7 +2419,8 @@ coroutine, `frame`/`alloc`/`begin`/`free` are a codegen error with
 clang's wording ("this builtin expect that __builtin_coro_begin/id has
 been used earlier in this function").
 
-**IR parity details (WP-370, §7p).** A coroutine gets lifetime markers;
+**IR parity details (WP-370, §7p).** A coroutine gets lifetime markers
+at every level;
 its cleanup destination slot is promoted to SSA; the `llvm.coro.free`
 call is moved to guard the deallocation (clang `CallCoroDelete`
 remembers the last one); the promise's address passes through a
@@ -2458,17 +2459,23 @@ Linux targets; `Cg::frame_pointer` applies it.
   the `-O0` `noinline optnone` pair, so the driver's `opt` pipeline
   (driver.md "IR optimization") can inline and optimize them.
 - **Lifetime markers (`lifetime.rs`, clang `EmitLifetimeStart` /
-  `CallLifetimeEnd`).** In a coroutine (where clang emits them at every
-  level: CoroSplit uses them to keep short-lived locals out of the
-  frame), each automatic variable gets `llvm.lifetime.start` right after
+  `CallLifetimeEnd`, `ShouldEmitLifetimeMarkers`).** In every function
+  at `-O1`+ (WP-423; also `optnone` ones, as clang) and in a coroutine
+  at every level (CoroSplit uses them to keep short-lived locals out of
+  the frame), each automatic variable gets `llvm.lifetime.start` right after
   its alloca (the end of clang `EmitAutoVarAlloca`) and each materialized
   temporary when it is created (before the outermost conditional for a
   full-expression temporary with no destructor), and `llvm.lifetime.end` from a
   `LifetimeEnd` cleanup (normal and EH, clang `NormalEHLifetimeMarker`).
   A variable a `goto` or a `switch` jumps past gets none (clang
-  `VarBypassDetector`; an indirect `goto` bypasses every variable).
-  Outside coroutines kiln emits none at any level (a deviation: clang
-  emits them at `-O1`+).
+  `VarBypassDetector`, initialized over the body as in clang
+  `GenerateCode`; an indirect `goto` bypasses every variable). Thunks
+  get none. The markers use LLVM 19's `(i64 size, ptr)` signature, since
+  kiln's optimizer is `opt-19` (driver.md "IR optimization"); under the
+  clang 22 oracle, `opt-22` auto-upgrades the markers that survive
+  optimization to LLVM 21's `(ptr)` form, leaving dead `.i64`
+  declarations, so cases that keep markers after -O1 compare
+  structurally there (`ir_vs_clang` deviation rows).
 - **Cleanup-destination promotion (`fir/mem2reg.rs`).** clang's
   `FinishFunction` replaces a coroutine's `cleanup.dest.slot` alloca by
   SSA values and phis; kiln ports LLVM 19's `PromoteMemToReg` for that
