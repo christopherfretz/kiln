@@ -332,10 +332,9 @@ impl Sema<'_, '_> {
             if !self.ast.types.effective_quals(p.ty).contains(kiln_ast::types::Quals::VOLATILE) {
                 continue;
             }
-            let at = p.decl.map_or_else(
-                || p.name.map_or(p.loc, |n| n.1),
-                |pd| self.ast.decls.get(pd).loc(),
-            );
+            let at = p
+                .decl
+                .map_or_else(|| p.name.map_or(p.loc, |n| n.1), |pd| self.ast.decls.get(pd).loc());
             let d = self.diag(DiagId::sema_deprecated_volatile_param, at).arg(self.ty_arg(p.ty));
             self.emit(d);
         }

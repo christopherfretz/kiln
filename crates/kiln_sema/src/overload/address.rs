@@ -293,7 +293,22 @@ impl Sema<'_, '_> {
         let naming = self.ovl.ule_found.get(&e).and_then(|x| x.naming);
         let nns = self.ast.templates.expr_nns.get(e).copied();
         let loc = self.ast.exprs.get(e).loc();
+        // The warnings its signature's substitution held back wait for the
+        // use too: an initialization the specialization does not convert
+        // to drops them ([`Sema::template_id_no_match`]).
+        let held = if self.inst.stack.is_sfinae() {
+            Vec::new()
+        } else {
+            self.templ.suppressed_diags.get_mut(&d).map(std::mem::take).unwrap_or_default()
+        };
         let r = self.finish_overload_ref(d, f, naming, loc, nns, e, false);
+        if !held.is_empty() {
+            if self.is_err_expr(r) {
+                self.emit_held_warnings(held);
+            } else {
+                self.defer_template_id_warnings(r, d, held);
+            }
+        }
         // A deleted specialization waits for its use, qualified or not
         // (spec/sema-overload.md "Locations").
         if self.is_deleted_fn(d) && !self.is_err_expr(r) && !self.is_class_member_ref(d) {
@@ -379,7 +394,6 @@ impl Sema<'_, '_> {
         if !complain {
             return None;
         }
-        let cands = self.ule_candidates(ule);
         let name = self.decl_name_str(self.ast.unresolved_name(ule));
         let loc = self.begin_loc(ule);
         if matches.len() > 1 {
@@ -407,7 +421,24 @@ impl Sema<'_, '_> {
                 false,
             ),
         };
+        let notes = self.addr_no_match_notes(ule, fnty, detailed, loc);
+        self.emit(notes.into_iter().fold(msg, Diag::with_note));
+        None
+    }
+
+    /// The notes of "address of overloaded function does not match" for
+    /// the overload set `ule` against function type `fnty` (`detailed`:
+    /// an initialization, whose failed deductions and type mismatches are
+    /// noted; `loc`, the name's start).
+    fn addr_no_match_notes(
+        &mut self,
+        ule: ExprId,
+        fnty: QualType,
+        detailed: bool,
+        loc: Loc,
+    ) -> Vec<Diag> {
         let fn_target = detailed && self.ast.types.is_function(fnty);
+        let cands = self.ule_candidates(ule);
         let explicit = self.ast.templates.expr_targs.get(ule).copied();
         // clang `ComplainNoMatchesFound`: with deduction failures, the
         // non-template candidates in lookup order, then the failed
@@ -439,8 +470,33 @@ impl Sema<'_, '_> {
         }
         failed.sort_by_key(|&(at, _)| at);
         notes.extend(failed.into_iter().map(|(_, n)| n));
-        self.emit(notes.into_iter().fold(msg, Diag::with_note));
-        None
+        notes
+    }
+
+    /// [over.over]/1: an initialization (or `return`) of `to`, a
+    /// pointer or reference to function or a pointer to member function,
+    /// by `e`, a function template-id resolved early
+    /// ([`Sema::resolve_single_template_id`]) whose specialization does
+    /// not convert: clang keeps the template-id an overload set and finds
+    /// no match for the target, so the specialization is never used (its
+    /// held-back substitution warnings are dropped). The diagnostic's
+    /// parts: the name's start, the name, the target function type and
+    /// the notes.
+    pub(crate) fn template_id_no_match(
+        &mut self,
+        e: ExprId,
+        to: QualType,
+    ) -> Option<(Loc, String, QualType, Vec<Diag>)> {
+        let ule = self.overload_set_of(e)?;
+        let (fnty, _) = self.address_target(to);
+        if !self.ast.types.is_function(fnty) || self.ast.templates.expr_targs.get(ule).is_none() {
+            return None;
+        }
+        self.drop_template_id_warnings(e);
+        let loc = self.begin_loc(ule);
+        let name = self.decl_name_str(self.ast.unresolved_name(ule));
+        let notes = self.addr_no_match_notes(ule, fnty, true, loc);
+        Some((loc, name, fnty, notes))
     }
 
     /// A simple assignment from the overload set `e` to `to` whose

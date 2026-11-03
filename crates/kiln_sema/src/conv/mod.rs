@@ -579,6 +579,9 @@ fn conversion_error(s: &mut Sema<'_, '_>, e: ExprId, to: QualType, ctx: ConvCtx)
             err.notes = notes;
             err
         }
+        // [over.over]/1: a function template-id resolved early is an
+        // overload set to clang, finding no match for the target.
+        _ if let Some(err) = template_id_no_match(s, e, to, ctx) => err,
         ConvCtx::Assignment => {
             let from_d = {
                 let n = *s.ast.exprs.get(e);
@@ -632,6 +635,25 @@ fn conversion_error(s: &mut Sema<'_, '_>, e: ExprId, to: QualType, ctx: ConvCtx)
             )
         }
     }
+}
+
+/// [over.over]/1: the initialization (or `return`) of `to` by `e`, a
+/// function template-id resolved early whose specialization does not
+/// convert, finds no match ([`Sema::template_id_no_match`]).
+fn template_id_no_match(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    to: QualType,
+    ctx: ConvCtx,
+) -> Option<ConvError> {
+    if !matches!(ctx, ConvCtx::Initialization | ConvCtx::DirectInitialization | ConvCtx::Return) {
+        return None;
+    }
+    let (at, name, fnty, notes) = s.template_id_no_match(e, to)?;
+    let mut err = ConvError::new(DiagId::sema_addr_ovl_no_match, vec![name, s.ty_arg(fnty)]);
+    err.notes = notes;
+    err.at = Some(at);
+    Some(err)
 }
 
 fn unsupported(what: &str) -> ConvError {
@@ -753,6 +775,12 @@ fn bind_reference(
         }
         let x = s.materialize_temporary(x, target, !rvalue_ref);
         return Ok(x);
+    }
+    if !related
+        && s.ast.types.is_function(r_un)
+        && let Some(err) = template_id_no_match(s, e, to, ctx)
+    {
+        return Err(err);
     }
     if !related {
         // [dcl.init.ref]/5.1.2, 5.3.2: a conversion function's result;

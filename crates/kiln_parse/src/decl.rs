@@ -2132,7 +2132,8 @@ impl Parser<'_, '_> {
             d.grouping = true;
             // A `...` outside the parentheses is misplaced (`int ...(z)`;
             // clang `ParseParenDeclarator`).
-            let ellipsis = if d.ctx == DeclaratorContext::Prototype { None } else { d.ellipsis.take() };
+            let ellipsis =
+                if d.ctx == DeclaratorContext::Prototype { None } else { d.ellipsis.take() };
             let open = self.bump().span.lo;
             self.skip_attributes();
             self.parse_declarator(d);

@@ -178,8 +178,8 @@ impl Sema<'_, '_> {
         // initialization of an object of const type" for `c<int>`).
         // A member partial specialization without one is a declaration
         // (clang).
-        let member_partial = matched.as_ref().is_ok_and(Option::is_some)
-            && self.is_in_record_ctx(pattern);
+        let member_partial =
+            matched.as_ref().is_ok_and(Option::is_some) && self.is_in_record_ctx(pattern);
         if self.ast.decls.var(pattern).is_some_and(|x| x.init.is_some())
             || (self.is_var_definition(pattern) && !member_partial)
         {
@@ -335,7 +335,10 @@ impl Sema<'_, '_> {
         };
         let tmpl = self.ast.first(tmpl);
         let canon = self.ast.types.canonical_args(args);
-        let (id, name) = if self.pattern_of(tmpl).is_some_and(|p| self.ast.first(p) == self.ast.first(v)) {
+        let (id, name) = if self
+            .pattern_of(tmpl)
+            .is_some_and(|p| self.ast.first(p) == self.ast.first(v))
+        {
             let Some(info) = self.ast.template_info(tmpl).copied() else { return Ok(()) };
             let list = *self.ast.templates.param_list(info.params);
             let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();

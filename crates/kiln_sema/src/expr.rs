@@ -609,7 +609,7 @@ impl Sema<'_, '_> {
         }
         self.check_implicit_conversions(e, cc);
         self.flush_member_refs();
-        if !self.special.pending_deleted.is_empty() {
+        if self.special.has_pending() {
             self.flush_pending_deleted();
         }
         // [expr.const]/16: the immediate invocations are evaluated.
@@ -2350,7 +2350,7 @@ impl Sema<'_, '_> {
     /// `( e )` ([expr.prim.paren]).
     pub fn act_on_paren(&mut self, e: ExprId, lparen: Loc, rparen: Loc) -> ExprId {
         let x = self.builder().paren(e, lparen, rparen);
-        if !self.special.pending_deleted.is_empty() {
+        if self.special.has_pending() {
             self.widen_pending_template_id(e, x);
         }
         x
@@ -2547,7 +2547,7 @@ impl Sema<'_, '_> {
                 OperResult::Converted(v) => self.builtin_unary(op, v[0], loc),
                 OperResult::Builtin | OperResult::BuiltinNotes(_) => self.builtin_unary(op, e, loc),
             };
-        if op == UnaryOp::AddrOf && !self.special.pending_deleted.is_empty() {
+        if op == UnaryOp::AddrOf && self.special.has_pending() {
             self.widen_pending_template_id(e, x);
         }
         x
@@ -4285,7 +4285,7 @@ impl Sema<'_, '_> {
         }
         // [dcl.fct.def.delete]/2: a call of a deleted function by its
         // unqualified name (spec/sema-class.md §4.3).
-        if !self.special.pending_deleted.is_empty() {
+        if self.special.has_pending() {
             let invalid = self.is_err_expr(callee) || args.iter().any(|&a| self.is_err_expr(a));
             let dependent = self.expr_is_type_dependent(callee)
                 || args.iter().any(|&a| self.expr_is_type_dependent(a));
