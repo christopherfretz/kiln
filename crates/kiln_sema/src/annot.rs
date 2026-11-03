@@ -35,21 +35,25 @@ impl Sema<'_, '_> {
         ellipsis: Option<Loc>,
         loc: Loc,
     ) -> Option<AttrId> {
-        let e = match ellipsis {
-            Some(l) => self.act_pack_expansion(e, l),
-            None => {
-                use crate::templ::pack::PackOperand;
-                if self.diagnose_unexpanded_pack(PackOperand::Expr(e), "expression", loc) {
-                    return None;
-                }
-                e
-            }
+        use crate::templ::pack::PackOperand;
+        let e = if let Some(l) = ellipsis {
+            self.act_pack_expansion(e, l)
+        } else if self.diagnose_unexpanded_pack(PackOperand::Expr(e), "expression", loc) {
+            return None;
+        } else {
+            e
         };
         if self.is_err_expr(e) {
             return None;
         }
-        let node =
-            AttrNode { kind: AttrKind::ANNOTATION, syntax: AttrSyntax::Cxx11, flags: 0, loc, a: e.raw(), b: 0 };
+        let node = AttrNode {
+            kind: AttrKind::ANNOTATION,
+            syntax: AttrSyntax::Cxx11,
+            flags: 0,
+            loc,
+            a: e.raw(),
+            b: 0,
+        };
         Some(self.ast.attrs.push(node))
     }
 
@@ -71,7 +75,9 @@ impl Sema<'_, '_> {
                 return true;
             }
             let d = match what {
-                Some(w) => self.diag(DiagId::sema_annotation_not_allowed, node.loc).arg(w.to_owned()),
+                Some(w) => {
+                    self.diag(DiagId::sema_annotation_not_allowed, node.loc).arg(w.to_owned())
+                }
                 None => self.diag(DiagId::sema_annotation_non_declaration, node.loc),
             };
             self.emit(d);
@@ -131,28 +137,29 @@ impl Sema<'_, '_> {
         // A block-scope function declaration or `extern` variable: its
         // host scope (the block) differs from its target scope
         // ([basic.scope.scope]/2, [dcl.meaning.general]/3.5).
-        let local_extern = || {
-            let in_block = self
-                .ast
-                .decls
-                .lexical_ctx(d)
-                .is_some_and(|c| self.ast.decls.get(c).kind().is_function());
-            in_block
-                && match n.kind() {
-                    DeclKind::Function => true,
-                    DeclKind::Var => self
-                        .ast
-                        .decls
-                        .var(d)
-                        .is_some_and(|v| v.spec.storage() == kiln_ast::decl::VarStorage::Extern),
-                    _ => false,
-                }
-        };
+        let local_extern =
+            || {
+                let in_block = self
+                    .ast
+                    .decls
+                    .lexical_ctx(d)
+                    .is_some_and(|c| self.ast.decls.get(c).kind().is_function());
+                in_block
+                    && match n.kind() {
+                        DeclKind::Function => true,
+                        DeclKind::Var => self.ast.decls.var(d).is_some_and(|v| {
+                            v.spec.storage() == kiln_ast::decl::VarStorage::Extern
+                        }),
+                        _ => false,
+                    }
+            };
         Some(match n.kind() {
             DeclKind::Function | DeclKind::Var if local_extern() => {
                 "a block-scope declaration whose target scope is a namespace"
             }
-            DeclKind::ParmVar if self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_void(t)) => {
+            DeclKind::ParmVar
+                if self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_void(t)) =>
+            {
                 "a parameter of type 'void'"
             }
             DeclKind::Namespace
@@ -264,9 +271,8 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             return false;
         }
-        let not_structural = |s: &mut Self| {
-            s.diag(DiagId::sema_annotation_not_structural, loc).arg(s.ty_arg(ty))
-        };
+        let not_structural =
+            |s: &mut Self| s.diag(DiagId::sema_annotation_not_structural, loc).arg(s.ty_arg(ty));
         if self.ast.types.is_void(ty) {
             let d = not_structural(self);
             self.emit(d);
@@ -379,12 +385,15 @@ impl Substituter<'_, '_, '_> {
         }
         let params = self.sema.annotated_param_pairs(spec, def);
         let ast = &self.sema.ast;
-        let anns = if ast.annots.has_list(spec) { Vec::new() } else { ast.annots.of_entity(ast, def) };
+        let anns =
+            if ast.annots.has_list(spec) { Vec::new() } else { ast.annots.of_entity(ast, def) };
         if anns.is_empty() && params.is_empty() {
             return;
         }
-        let param_anns = params.iter().flat_map(|&(_, q)| ast.lists.iter::<AnnId>(ast.annots.of_decl(q)));
-        let dependent = anns.iter().copied().chain(param_anns).any(|a| ast.annots.get(a).value.is_none());
+        let param_anns =
+            params.iter().flat_map(|&(_, q)| ast.lists.iter::<AnnId>(ast.annots.of_decl(q)));
+        let dependent =
+            anns.iter().copied().chain(param_anns).any(|a| ast.annots.get(a).value.is_none());
         // Only a function template specialization's wait (its signature
         // is substituted during deduction, where a failure here must not
         // be a deduction failure); a member of a class specialization,
@@ -399,7 +408,12 @@ impl Substituter<'_, '_, '_> {
 
     /// `anns` substituted and attached to `spec`, then each pattern
     /// parameter's annotations to the paired parameter of `spec`.
-    fn subst_entity_annotations(&mut self, spec: DeclId, anns: &[AnnId], params: &[(DeclId, DeclId)]) {
+    fn subst_entity_annotations(
+        &mut self,
+        spec: DeclId,
+        anns: &[AnnId],
+        params: &[(DeclId, DeclId)],
+    ) {
         if !anns.is_empty() {
             let out = self.subst_annotations(spec, anns);
             self.sema.attach_annotations(spec, &out);

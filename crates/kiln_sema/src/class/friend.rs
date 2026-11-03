@@ -144,7 +144,10 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             if !def {
                 // [dcl.attr.annotation]/1.
-                self.reject_annotations(&mut attrs, Some("a friend declaration that is not a definition"));
+                self.reject_annotations(
+                    &mut attrs,
+                    Some("a friend declaration that is not a definition"),
+                );
             }
             self.check_decl_attrs(f, &mut attrs);
             let _ = self.builder().attach_attrs(f, &attrs);

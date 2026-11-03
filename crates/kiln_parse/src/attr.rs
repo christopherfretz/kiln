@@ -23,7 +23,7 @@ use crate::parser::Parser;
 /// neither attributes nor a using-prefix (reported once).
 #[derive(Default)]
 struct AnnotMix {
-    using: bool,
+    /// An attribute or a using-prefix (which makes it an attribute-list).
     attr: bool,
     annot: bool,
     reported: bool,
@@ -391,7 +391,7 @@ impl Parser<'_, '_> {
         }
         // An annotation-list ([dcl.attr.grammar]/1, P3394) takes neither
         // a using-prefix nor attributes: `[[=1, nodiscard]]` is ill-formed.
-        let mut mix = AnnotMix { using: default_scope.is_some(), ..AnnotMix::default() };
+        let mut mix = AnnotMix { attr: default_scope.is_some(), ..AnnotMix::default() };
         loop {
             if self.at(Punct::RSquare) || self.at_eof() {
                 break;
@@ -494,7 +494,7 @@ impl Parser<'_, '_> {
             self.emit(w);
         }
         mix.annot = true;
-        let bad = mix.attr || mix.using;
+        let bad = mix.attr;
         if bad && !mix.reported {
             mix.reported = true;
             let d = self.s.diag(DiagId::parse_annotation_mixed, eq);

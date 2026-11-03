@@ -147,6 +147,6 @@ mod tests {
 
     #[test]
     fn annotation_is_20_bytes() {
-        assert_eq!(std::mem::size_of::<Annotation>(), 20);
+        assert_eq!(size_of::<Annotation>(), 20);
     }
 }
