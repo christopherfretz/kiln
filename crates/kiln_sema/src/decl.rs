@@ -1190,6 +1190,13 @@ impl Sema<'_, '_> {
                 ty = self.chunk_nullability(ty, i, d, &moved);
             }
         }
+        // [temp.variadic]/5: only a parameter declares a pack (clang
+        // `GetFullTypeForDeclarator` drops the `...`).
+        if let Some(e) = d.ellipsis
+            && !matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName)
+        {
+            self.error(DiagId::sema_ellipsis_in_declarator_not_parameter, e);
+        }
         if recover && self.is_error_type(ty) {
             return QualType::INT;
         }
