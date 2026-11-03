@@ -147,6 +147,7 @@ sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
 sema_throw_in_nothrow_func = Warning [Exceptions] (1) "'{0}' has a non-throwing exception specification but can still throw";
 sema_throw_incomplete = Error (1) "cannot throw object of incomplete type {0}";
 sema_throw_incomplete_ptr = Error (1) "cannot throw pointer to object of incomplete type {0}";
+sema_too_many_reflections = Fatal (1) "too many reflections in one translation unit (the limit is {0})";
 sema_trailing_requires_non_function = Error (0) "trailing requires clause can only be used when declaring a function";
 sema_trailing_requires_non_template = Error (0) "non-templated function cannot have a requires clause";
 sema_trailing_return_without_auto = Error (1) "function with trailing return type must specify return type 'auto', not {0}";

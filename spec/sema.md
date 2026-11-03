@@ -405,6 +405,24 @@ residual` (docs/status/wp-184-oracle-switch.md).
 
 ## 4. Declarations (`decl.rs`, `declspec.rs`)
 
+**Entity identity** (`entity.rs`, WP-471). Two declarations denote the
+same entity exactly when they are in one redeclaration chain
+([basic.link], [basic.def]/1): a redeclaration, a definition after a
+declaration, an out-of-line member definition ([class.mfct]/1) and a
+friend declaration of a function ([class.friend]; looked through to the
+function it declares) are all the entity their first declaration
+introduced. An instantiated specialization is a distinct entity from its
+template or pattern ([temp.spec.general]), and so is an explicit
+specialization. `Sema::same_entity(a, b)` is the only test of this
+(`Sema::entity_decl` gives the representative: friend looked through,
+then `Ast::first`); code that means "same entity" never compares
+`DeclId`s, which differ between redeclarations. Reflections are interned
+by `entity_decl`, so `info` equality is `same_entity`. `cargo test -p
+xtask` lints the reflection code (`kiln_sema/src/reflect.rs`,
+`kiln_sema/src/meta/`, `kiln_oven/src/meta/`) for raw `DeclId` `==`,
+`!=` and `assert_eq!`; a line that really means the declaration carries
+`// same_entity: raw ok`.
+
 ### 4.1 DeclSpec and Declarator
 - The parser fills a `DeclSpec` and a `Declarator` (clang's classes of
   the same names).

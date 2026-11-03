@@ -563,13 +563,14 @@ mod tests {
     #[test]
     fn ensure_layout_refuses_an_incomplete_class() {
         let tgt = target("x86_64-unknown-linux-gnu").expect("target");
-        let mut ast =
-            Ast::new(Arc::new(Interner::new()), TypeContext::new(tgt.types.clone()));
+        let mut ast = Ast::new(Arc::new(Interner::new()), TypeContext::new(tgt.types.clone()));
         let name = DeclName::ident(ast.symbols().intern("S"));
         let tu = ast.tu;
-        let fwd = ast.builder().record(DeclHead::new(tu, name, Loc::INVALID), TagKind::Struct, None);
+        let fwd =
+            ast.builder().record(DeclHead::new(tu, name, Loc::INVALID), TagKind::Struct, None);
         assert!(ensure_layout(&mut ast, fwd, &tgt).is_none(), "declared, not defined");
-        let def = ast.builder().record(DeclHead::new(tu, name, Loc::INVALID), TagKind::Struct, Some(fwd));
+        let def =
+            ast.builder().record(DeclHead::new(tu, name, Loc::INVALID), TagKind::Struct, Some(fwd));
         ast.builder().begin_record_definition(def).expect("def");
         let x = DeclName::ident(ast.symbols().intern("x"));
         let _ = ast.builder().field(

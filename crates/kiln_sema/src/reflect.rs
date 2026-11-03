@@ -41,7 +41,7 @@ impl Sema<'_, '_> {
         if ty == QualType::ERROR {
             return self.recover(info, &[], loc);
         }
-        self.builder().reflect_expr(Reflectee::Type(ty), info, loc, end)
+        self.build_reflect_expr(Reflectee::Type(ty), info, loc, end)
     }
 
     /// `^^name` / `^^nns name` ([expr.reflect]/3-5): a namespace, a
@@ -75,16 +75,17 @@ impl Sema<'_, '_> {
                 // Spike: an alias reflects the namespace it denotes (P2996
                 // reflects the alias itself; `dealias` unwraps it).
                 DeclKind::NamespaceAlias => {
-                    let d = self.ast.resolve_alias(d);
-                    self.builder().reflect_expr(Reflectee::Decl(d), info, loc, end)
+                    let d = self.entity_decl(self.ast.resolve_alias(d));
+                    self.build_reflect_expr(Reflectee::Decl(d), info, loc, end)
                 }
                 DeclKind::Namespace
                 | DeclKind::Var
                 | DeclKind::Field
                 | DeclKind::Function
                 | DeclKind::CXXMethod => {
-                    let d = self.ast.first(d);
-                    self.builder().reflect_expr(Reflectee::Decl(d), info, loc, end)
+                    // One reflection per entity (`Sema::same_entity`).
+                    let d = self.entity_decl(d);
+                    self.build_reflect_expr(Reflectee::Decl(d), info, loc, end)
                 }
                 _ => {
                     let d =
@@ -225,7 +226,7 @@ impl Sema<'_, '_> {
         match ty {
             Some(t) if t != QualType::ERROR => {
                 let t = self.ast.types.canonical(t);
-                Ok(self.ast.reflections.intern(Reflectee::Type(t)))
+                self.intern_reflection(Reflectee::Type(t), loc)
             }
             _ => fail(loc, format!("'{}' has no type", self.reflection_str(r))),
         }
@@ -312,9 +313,9 @@ impl Sema<'_, '_> {
                         DeclKind::AccessSpec | DeclKind::StaticAssert | DeclKind::Friend
                     )
             })
-            .map(|m| self.ast.first(m))
+            .map(|m| self.entity_decl(m))
             .collect();
-        Ok(members.into_iter().map(|m| self.ast.reflections.intern(Reflectee::Decl(m))).collect())
+        members.into_iter().map(|m| self.intern_reflection(Reflectee::Decl(m), loc)).collect()
     }
 
     /// `__kiln_define_member(cls, ty, name)` (the spike's experiment;
@@ -351,7 +352,7 @@ impl Sema<'_, '_> {
         // `^^S` names the first declaration of `S`; the class being
         // defined is its definition: compare entities, not decls.
         let building = self.classes.last().map(|c| c.record);
-        let Some(r) = building.filter(|&b| self.ast.first(b) == self.ast.first(r)) else {
+        let Some(r) = building.filter(|&b| self.same_entity(b, r)) else {
             let cname = self.decl_name(r);
             let mut notes = vec![Note::new(
                 loc,
@@ -378,7 +379,7 @@ impl Sema<'_, '_> {
         if self.ast.types.is_function(t)
             || self.ast.types.is_reference(t)
             || !self.is_complete(t)
-            || self.ast.types.as_record(t) == Some(r)
+            || self.ast.types.as_record(t).is_some_and(|d| self.same_entity(d, r))
         {
             return fail(
                 loc,
@@ -412,7 +413,7 @@ impl Sema<'_, '_> {
         h.flags = DeclFlags::INJECTED;
         let f = self.builder().field(h, t, None, 0);
         self.ast.decls.set_access(f, Access::Public);
-        Ok(self.ast.reflections.intern(Reflectee::Decl(f)))
+        self.intern_reflection(Reflectee::Decl(f), loc)
     }
 
     /// Runs `f` with the running Oven (`oven`, from a bridge callback)
