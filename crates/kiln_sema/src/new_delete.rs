@@ -1223,14 +1223,18 @@ impl Sema<'_, '_> {
         let vp = self.ast.types.pointer_to(QualType::VOID);
         let mut params = vec![vp];
         params.extend(new_params.iter().skip(1));
-        found.fns.iter().copied().find(|&f| {
-            self.fn_params(f).is_some_and(|(ps, variadic)| {
-                !variadic
-                    && ps.len() == params.len()
-                    && ps.iter().zip(&params).all(|(a, b)| self.ast.types.same_type(*a, *b))
+        found
+            .fns
+            .iter()
+            .copied()
+            .find(|&f| {
+                self.fn_params(f).is_some_and(|(ps, variadic)| {
+                    !variadic
+                        && ps.len() == params.len()
+                        && ps.iter().zip(&params).all(|(a, b)| self.ast.types.same_type(*a, *b))
+                })
             })
-        })
-        .map(|f| (f, naming))
+            .map(|f| (f, naming))
     }
 
     /// The semantic initializer of a new-expression ([expr.new]/23) and,

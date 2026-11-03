@@ -468,11 +468,11 @@ impl Sema<'_, '_> {
         self.access_checks = self.access_checks.wrapping_add(1);
         let repeat = distinct
             || self
-            .inst
-            .stack
-            .frames
-            .last()
-            .is_some_and(|f| f.kind == crate::templ::stack::FrameKind::AliasTemplate);
+                .inst
+                .stack
+                .frames
+                .last()
+                .is_some_and(|f| f.kind == crate::templ::stack::FrameKind::AliasTemplate);
         let check =
             AccessCheck { member: found, naming_class: naming, object_class: object, loc, repeat };
         // Delayed only while still in the declaration's own context: a
@@ -828,7 +828,12 @@ impl Sema<'_, '_> {
     /// accessible from context `from`, without diagnosing (clang
     /// `CheckAllocationAccess` with diagnostics suppressed, as
     /// `ShouldDeleteSpecialMember` calls `FindDeallocationFunction`).
-    pub(crate) fn member_accessible_from(&self, found: DeclId, naming: DeclId, from: DeclId) -> bool {
+    pub(crate) fn member_accessible_from(
+        &self,
+        found: DeclId,
+        naming: DeclId,
+        from: DeclId,
+    ) -> bool {
         let naming = self.ast.definition(naming).unwrap_or(naming);
         let Some(t) = self.member_target(found, None) else { return true };
         let ec = self.effective_context_at(from);

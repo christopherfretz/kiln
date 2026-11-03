@@ -532,9 +532,7 @@ impl Substituter<'_, '_, '_> {
                 // is looked up now, in the object's class (clang
                 // `TransformCXXPseudoDestructorExpr` → `getDestructorName`).
                 if let Some(&name) = self.sema.ast.templates.pseudo_dtor_name.get(e) {
-                    return Ok(self
-                        .sema
-                        .act_on_member_destructor_late(base, name, loc, op, arrow));
+                    return Ok(self.sema.act_on_member_destructor_late(base, name, loc, op, arrow));
                 }
                 let destroyed = self.ty(destroyed, loc)?;
                 Ok(self.sema.rebuild_member_destructor(base, destroyed, qualified, loc, op, arrow))

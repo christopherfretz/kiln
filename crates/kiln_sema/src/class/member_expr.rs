@@ -502,7 +502,8 @@ impl Sema<'_, '_> {
         loc: Loc,
         op_loc: Loc,
     ) -> ExprId {
-        let e = self.builder().pseudo_destructor_q(obj.b, obj.arrow, false, QualType::DEPENDENT, loc);
+        let e =
+            self.builder().pseudo_destructor_q(obj.b, obj.arrow, false, QualType::DEPENDENT, loc);
         let _ = self.ast.templates.pseudo_dtor_name.insert(e, name);
         if op_loc != loc {
             let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
