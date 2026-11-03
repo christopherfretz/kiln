@@ -152,8 +152,8 @@ impl Substituter<'_, '_, '_> {
     /// ([dcl.attr.nodiscard]/2). A specialization formed before such a
     /// declaration keeps what it had, as clang's does.
     pub(crate) fn function_spec_attrs(&mut self, spec: DeclId, pat: DeclId) {
-        self.class_attrs(spec, pat);
         const MERGED: [AttrKind; 3] = [AttrKind::NODISCARD, AttrKind::PURE, AttrKind::CONST];
+        self.class_attrs(spec, pat);
         let ast = &self.sema.ast;
         let mut have: Vec<AttrKind> = ast
             .lists
