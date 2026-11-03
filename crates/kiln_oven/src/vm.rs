@@ -25,6 +25,7 @@ pub(crate) mod exc;
 mod life;
 mod meta;
 mod virt;
+mod wide;
 
 pub(crate) use builtins::BiFault;
 pub(crate) use virt::Virt;
@@ -176,6 +177,14 @@ pub(crate) enum Fault {
         aux: u32,
     },
     Float(FloatErr),
+    /// An `Op::Wide` integer error on a `width`-bit `_BitInt`: the
+    /// decimal text clang's note prints (the exact result, or the shift
+    /// count; empty for a division by zero).
+    Wide {
+        err: IntErr,
+        text: Box<str>,
+        width: u32,
+    },
     /// Float-to-integer conversion out of range.
     FloatRange {
         kind: FloatKind,
@@ -1355,6 +1364,15 @@ impl Oven {
                         self.always_true_diag(b, pc, aux);
                     }
                     pc += 2;
+                }
+                Op::Wide => {
+                    let regs = [reg!(0), reg!(1), reg!(2)];
+                    match self.exec_wide(regs, OTy(arg!(3) as u32), arg!(4) as u32, aux) {
+                        Ok(Some(v)) => reg!(0) = v,
+                        Ok(None) => {}
+                        Err(f) => fail!(f),
+                    }
+                    pc += 6;
                 }
                 Op::Cx => {
                     let v = [reg!(2), reg!(3), reg!(4), reg!(5)];
@@ -2559,7 +2577,7 @@ impl Oven {
             return None;
         }
         match info.kind {
-            TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) => {
+            TyKind::Bool | TyKind::Int { .. } | TyKind::WideInt { .. } | TyKind::Float(_) => {
                 (!s.is_init(abs, value_len(info.size, info.kind))).then_some((field, t))
             }
             TyKind::Ptr(_) | TyKind::NullPtr | TyKind::MemPtr { .. } | TyKind::Reflection => {

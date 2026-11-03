@@ -5,14 +5,13 @@
 //! `arith::int_bin` checks a register value ([expr.pre]/4 for signed
 //! types; unsigned ones wrap, [basic.fundamental]/2).
 
+use super::{Fault, compare, write_fault};
+use crate::Oven;
 use crate::arith::{IntErr, canon};
 use crate::bigint as bi;
 use crate::kbc::{ak, wide};
 use crate::mem::{MemFault, flags};
 use crate::ty::OTy;
-
-use super::{Fault, write_fault};
-use crate::Oven;
 
 impl Oven {
     /// Limbs of a wide object of type `ty`.
@@ -70,8 +69,9 @@ impl Oven {
         Ok(())
     }
 
-    /// `Op::Wide` `[d, a, b, ty, x]` with aux `aux`: the register value
-    /// for `d` when the sub-op yields one.
+    /// `Op::Wide` `[d, a, b, ty, x]` with aux `aux` (`regs` the values of
+    /// registers `d`, `a`, `b`): the register value for `d` when the
+    /// sub-op yields one (`CMP`, `TO`, `TO_BOOL`).
     pub(crate) fn exec_wide(
         &mut self,
         regs: [u128; 3],
@@ -99,12 +99,11 @@ impl Oven {
                     return Ok(Some(u128::from(!bi::is_zero(&v))));
                 }
                 let (w, s) = (x & 0xFF, x >> 8 & 1 != 0);
-                if x >> 9 & 1 != 0 {
-                    let lim = if bi::is_neg(&v) && signed { i128::MIN } else { i128::MAX };
-                    let mut c = v.clone();
-                    bi::canon(&mut c, 128, true);
-                    let fits = c == v && (signed || !bi::is_neg(&v) || n * 64 > width as usize);
-                    return Ok(Some(if fits { bi::low_u128(&v) } else { lim as u128 }));
+                // A shift count: clamped to `i128` (any count out of it
+                // is out of range for every shift).
+                if x >> 9 & 1 != 0 && !bi::fits(&v, 128, signed) {
+                    let neg = signed && bi::is_neg(&v);
+                    return Ok(Some(if neg { i128::MIN as u128 } else { i128::MAX as u128 }));
                 }
                 return Ok(Some(canon(bi::low_u128(&v), w, s)));
             }
@@ -120,7 +119,7 @@ impl Oven {
             wide::CMP => {
                 let va = self.wide_load(a as u64, ty, ak::READ)?;
                 let vb = self.wide_load(b as u64, ty, ak::READ)?;
-                return Ok(Some(u128::from(super::compare(x, bi::cmp(&va, &vb, signed)))));
+                return Ok(Some(u128::from(compare(x, bi::cmp(&va, &vb, signed)))));
             }
             wide::MOV => self.wide_load(a as u64, ty, ak::READ)?,
             _ => {
@@ -183,9 +182,6 @@ fn wide_bin(
             let mb = if nb { bi::neg(&ext(b, n + 1)) } else { ext(b, n + 1) };
             let (q, r) = bi::divrem_u(&ma, &mb);
             // MIN / -1 (and MIN % -1, as clang): the quotient overflows.
-            if signed && na && !nb && false {
-                unreachable!();
-            }
             let q = if na != nb { bi::neg(&q) } else { q };
             if signed && !bi::fits(&q, width, true) {
                 return Err((IntErr::Overflow, bi::to_decimal(&q, true)));
