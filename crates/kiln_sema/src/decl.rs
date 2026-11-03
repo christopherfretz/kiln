@@ -4686,8 +4686,12 @@ impl Sema<'_, '_> {
         if es.iter().any(|&e| self.diagnose_unexpanded_written(e, "initializer", at)) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
+        let paren = match &init {
+            Initializer::Paren(es, l, _) if es.len() == 1 => Some(*l),
+            _ => None,
+        };
         self.act_on_init_inner(v, init);
-        self.check_static_tls(v);
+        self.check_static_tls(v, paren);
         self.check_constinit(v);
         self.initializing = None;
         self.lambda_mangle.var = None;
@@ -5354,7 +5358,7 @@ impl Sema<'_, '_> {
     pub fn act_on_uninit(&mut self, v: DeclId) {
         self.act_on_uninit_inner(v);
         if self.is_var_definition(v) {
-            self.check_static_tls(v);
+            self.check_static_tls(v, None);
             self.check_constinit(v);
         }
     }

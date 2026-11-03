@@ -23,8 +23,9 @@ use crate::Sema;
 impl Sema<'_, '_> {
     /// clang `CheckCompleteVariableDeclaration` for a static TLS variable
     /// definition `v` (after its initializer, or its default
-    /// initialization).
-    pub(crate) fn check_static_tls(&mut self, v: DeclId) {
+    /// initialization). `paren` is the `(` of a one-expression
+    /// parenthesized initializer.
+    pub(crate) fn check_static_tls(&mut self, v: DeclId, paren: Option<Loc>) {
         let vn = *self.ast.decls.get(v);
         let Some(data) = self.ast.decls.var(v) else { return };
         if data.spec.tls() != TlsKind::Static || vn.has(DeclFlags::INVALID) {
@@ -50,7 +51,9 @@ impl Sema<'_, '_> {
         if self.has_errors_in(init) {
             return;
         }
-        let culprit = if self.ast.exprs.get(init).deps().intersects(ExprDeps::TYPE_VALUE_INST) {
+        let deps = self.ast.exprs.get(init).deps();
+        let mut at = None;
+        let culprit = if deps.intersects(ExprDeps::TYPE_VALUE_INST) {
             // An instantiation-dependent initializer is checked when
             // instantiated; clang 19 rejects it in the template
             // definition unless it is a braced list (fixed after clang 19).
@@ -58,13 +61,19 @@ impl Sema<'_, '_> {
             {
                 return;
             }
+            // clang 19 keeps `(e)` of a dependent type or a type-dependent
+            // `e` as a `ParenListExpr`, reported at its `(`; kiln keeps
+            // only a longer list (whose location is its `(`).
+            if dependent_ty || deps.contains(ExprDeps::TYPE) {
+                at = paren;
+            }
             init
         } else {
             let for_ref = !dependent_ty && self.ast.types.is_reference(ty);
             let Some(c) = self.static_init_culprit(init, for_ref) else { return };
             c
         };
-        let at = self.culprit_loc(culprit);
+        let at = at.unwrap_or_else(|| self.culprit_loc(culprit));
         // clang re-runs the check on every instantiation (clang 19 also
         // in the definition).
         let mut msg = self.diag(DiagId::sema_thread_dynamic_init, at).per_instantiation();

@@ -2575,6 +2575,13 @@ the initializer, or after default initialization, and before the
     template definition, at the initializer, unless it is a braced list.
   - It does not look through a scalar's one-element list, so
     `__thread int x{f()};` is reported at the `{`.
+  - A one-expression parenthesized initializer of a dependent type, or
+    whose expression is type-dependent, is clang 19's `ParenListExpr`,
+    reported at its `(` (`static __thread T w(T(1));`, `int w(T::v)`;
+    WP-411). kiln keeps a `ParenListExpr` only for a longer list, so
+    `act_on_init` passes the `(` to `check_static_tls`. A value-dependent
+    expression of a non-dependent type (`int w(sizeof(T))`) is reported
+    at the expression.
 - Redeclarations (clang `MergeVarDecl`, `check_tls_redecl`): a
   redeclaration whose thread storage kind differs from the previous one
   is reported before any redefinition check. The texts are
@@ -2585,12 +2592,10 @@ the initializer, or after default initialization, and before the
   here` or `previous declaration is here`. The declaration is still
   merged. This applies at namespace scope and to out-of-class static data
   members.
-- **Residual:** at compat 19, the single-argument dependent paren
-  initializer `static __thread T w(T(1));` is reported at the `T`. clang 19
-  reports it at the `(` of its `ParenListExpr`, which kiln does not keep.
 - Tests: `basic.stc.thread/static-tls-init.cpp`, `tls-redecl.cpp`,
-  `static-tls-template.cpp`, `static-tls-dependent.cpp` (clang>=22) and
-  `static-tls-dependent-19.cpp` (clang<22).
+  `static-tls-template.cpp`, `static-tls-dependent.cpp` and
+  `static-tls-paren.cpp` (clang>=22), `static-tls-dependent-19.cpp` and
+  `static-tls-paren-19.cpp` (clang<22).
 
 ## 5. Expressions (`expr.rs`, `conv/`)
 - **Typed nodes:** each `act_on_*` builds clang's typed node, with
