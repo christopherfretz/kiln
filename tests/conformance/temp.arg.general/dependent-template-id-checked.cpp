@@ -4,31 +4,34 @@
 // arguments): the arity and each argument's kind.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 42:3 error "too many template arguments for class template 'A'"
-//@ diag: 32:27 note "template is declared here"
-//@ diag: 43:5 error "template argument for template template parameter must be a class template or type alias template"
-//@ diag: 44:5 error "template argument for non-type template parameter must be an expression"
-//@ diag: 34:15 note "template parameter is declared here"
-//@ diag: 45:5 error "use of template template parameter 'TT' requires template arguments"
-//@ diag: 41:43 note "template is declared here"
-//@ diag: 46:5 error "template argument for non-type template parameter must be an expression"
-//@ diag: 34:15 note "template parameter is declared here"
-//@ diag: 48:3 error "too few template arguments for class template 'Q'"
-//@ diag: 36:42 note "template is declared here"
-//@ diag: 49:3 error "too many template arguments for class template 'Q'"
-//@ diag: 36:42 note "template is declared here"
-//@ diag: 54:31 error "too many template arguments for class template 'A'"
-//@ diag: 32:27 note "template is declared here"
-//@ diag: 54:44 error "template argument for template template parameter must be a class template or type alias template"
-//@ diag: 59:5 error "template argument for template type parameter must be a type; did you forget 'typename'?"
-//@ diag: 32:17 note "template parameter is declared here"
-//@ diag: 60:5 error "template argument for template template parameter must be a class template or type alias template"
-//@ diag: 63:5 error "template argument for non-type template parameter must be an expression"
-//@ diag: 34:15 note "template parameter is declared here"
-//@ diag: 64:5 error "template argument for template type parameter must be a type; did you forget 'typename'?"
+//@ diag: 45:3 error "too many template arguments for class template 'A'"
+//@ diag: 35:27 note "template is declared here"
+//@ diag: 46:5 error "template argument for template template parameter must be a class template or type alias template"
+//@ diag: 47:5 error "template argument for non-type template parameter must be an expression"
+//@ diag: 37:15 note "template parameter is declared here"
+//@ diag: 48:5 error "use of template template parameter 'TT' requires template arguments"
+//@ diag: 44:43 note "template is declared here"
+//@ diag: 49:5 error "template argument for non-type template parameter must be an expression"
+//@ diag: 37:15 note "template parameter is declared here"
+//@ diag: 51:3 error "too few template arguments for class template 'Q'"
+//@ diag: 39:42 note "template is declared here"
+//@ diag: 52:3 error "too many template arguments for class template 'Q'"
+//@ diag: 39:42 note "template is declared here"
+//@ diag: 57:31 error "too many template arguments for class template 'A'"
+//@ diag: 35:27 note "template is declared here"
+//@ diag: 57:44 error "template argument for template template parameter must be a class template or type alias template"
+//@ diag: 62:5 error "template argument for template type parameter must be a type; did you forget 'typename'?"
 //@ diag: 35:17 note "template parameter is declared here"
-//@ diag: 64:11 error "template argument for template type parameter must be a type; did you forget 'typename'?"
-//@ diag: 35:26 note "template parameter is declared here"
+//@ diag: 63:5 error "template argument for template template parameter must be a class template or type alias template"
+//@ diag: 66:5 error "template argument for non-type template parameter must be an expression"
+//@ diag: 37:15 note "template parameter is declared here"
+//@ diag: 67:5 error "template argument for template type parameter must be a type; did you forget 'typename'?"
+//@ diag: 38:17 note "template parameter is declared here"
+//@ diag: 67:11 error "template argument for template type parameter must be a type; did you forget 'typename'?"
+//@ diag: 38:26 note "template parameter is declared here"
+//@ diag: 75:3 error "too many template arguments for class template 'P'"
+//@ diag: 38:36 note "template is declared here"
+//@ diag: 76:5 error "template argument for template template parameter must be a class template or type alias template"
 template <class T> struct A {};
 template <template <class> class TT> struct B {};
 template <int N> struct I {};
@@ -64,5 +67,11 @@ template <class T> struct D {
   P<T::x, T::y> p;
 };
 
-// Pack expansions are checked once substituted.
+// A pack expansion may cover any number of parameters: the arguments
+// before it are checked, and the arity only as far as they go.
 template <class... Ts> struct E { A<Ts...> a; Q<int, Ts...> q; };
+template <class... Ts> struct F {
+  P<Ts..., int, int, int> ok;
+  P<int, int, int, Ts...> p;
+  B<int, Ts...> b;
+};
