@@ -322,6 +322,10 @@ pub struct Sema<'a, 'sm> {
     /// Classes whose definitions are being processed (incomplete until
     /// their closing brace).
     pub(crate) defining: Vec<DeclId>,
+    /// Set while a member access resolved in a template's pattern is
+    /// formed again for an instantiation; taken by the next object
+    /// completeness check ([`Sema::member_object`]).
+    pub(crate) pattern_member_access: bool,
     /// Of those, the ones made invalid by a member of incomplete type
     /// (clang's `Record->setInvalidDecl()` in `CheckFieldDecl`): a later
     /// use that needs them complete fails quietly (spec/sema.md §4.3).
@@ -940,6 +944,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             misaligned: Vec::new(),
             imm: consteval::ImmState::default(),
             defining: Vec::new(),
+            pattern_member_access: false,
             invalid_defining: kiln_source::fx::FxHashSet::default(),
             enums: Vec::new(),
             local_externs: Vec::new(),

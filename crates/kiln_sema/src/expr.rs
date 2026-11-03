@@ -5402,7 +5402,16 @@ impl Sema<'_, '_> {
         if self.instantiation_fails(obj_ty, op_loc) {
             return Err(self.recover_err(&[base], loc));
         }
-        let complete = self.this_outside_member_body(rec) || self.require_complete(obj_ty, op_loc);
+        // A member access the pattern resolved into the current
+        // instantiation is formed again with the member it found, without
+        // a completeness check (clang `TreeTransform::RebuildMemberExpr`):
+        // a friend's trailing `decltype(l.base())` on the class being
+        // instantiated.
+        let resolved = std::mem::take(&mut self.pattern_member_access)
+            && self.defining.iter().any(|&d| self.ast.first(d) == self.ast.first(rec));
+        let complete = resolved
+            || self.this_outside_member_body(rec)
+            || self.require_complete(obj_ty, op_loc);
         let Some(def) = self.ast.definition(rec).filter(|_| complete) else {
             let msg = self
                 .diag(DiagId::sema_member_reference_incomplete, op_loc)
