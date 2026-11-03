@@ -178,7 +178,7 @@ impl Sema<'_, '_> {
         } else {
             Reflectee::Value(cv)
         };
-        Ok(self.ast.reflections.intern(r))
+        self.intern_reflection(r, loc).map_err(MetaError::from)
     }
 
     /// `reflect_object(o)` of type `t` ([meta.reflection.result]/5): `p`
@@ -209,7 +209,7 @@ impl Sema<'_, '_> {
             return Err(not_static());
         };
         let cv = self.object_ptr(t, base, offset)?;
-        Ok(self.ast.reflections.intern(Reflectee::Object(cv)))
+        self.intern_reflection(Reflectee::Object(cv), loc).map_err(MetaError::from)
     }
 
     /// `reflect_function(f)` of function type `t`
@@ -229,8 +229,8 @@ impl Sema<'_, '_> {
         let cv = self.bridge(|b| oven.meta_freeze(b, p, pt, loc))?;
         match self.ast.consts.scalar(cv) {
             Some(Scalar::Pointer { base: PtrBase::Function(d), .. }) => {
-                let d = self.ast.first(d);
-                Ok(self.ast.reflections.intern(Reflectee::Decl(d)))
+                let d = self.entity_decl(d);
+                self.intern_reflection(Reflectee::Decl(d), loc).map_err(MetaError::from)
             }
             _ => fail(loc, "the argument does not designate a function"),
         }
@@ -288,7 +288,7 @@ impl Sema<'_, '_> {
         let cv = self.bridge(|b| oven.meta_freeze_elems(b, (r, m), arr, string, ctx))?;
         self.check_tparg(cv, "an element", loc)?;
         let p = self.object_ptr(arr, PtrBase::Const(cv), 0)?;
-        Ok(self.ast.reflections.intern(Reflectee::Object(p)))
+        self.intern_reflection(Reflectee::Object(p), loc).map_err(MetaError::from)
     }
 
     /// `extract<T>(r)` ([meta.reflection.extract]), `t` being `T`.

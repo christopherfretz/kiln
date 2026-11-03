@@ -143,7 +143,7 @@ impl Sema<'_, '_> {
             .into_iter()
             .map(|m| {
                 let r = self.reflectee_of_decl(m).unwrap_or(Reflectee::Decl(self.entity_decl(m)));
-                self.intern_reflection(r, loc).map_err(MetaError::from)
+                self.intern_reflection(r, ctx.loc).map_err(MetaError::from)
             })
             .collect()
     }
