@@ -515,6 +515,68 @@ impl Oven {
         idx
     }
 
+    /// The function of [`Oven::evaluate_with_params`]: in one scope, each
+    /// parameter of `binds` initialized from its argument (a reference
+    /// bound, an object initialized as a local variable), then `cond`
+    /// (`None`: `true`); returns its value. Not cached.
+    pub(crate) fn compile_subst(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        cond: Option<ExprId>,
+        binds: &[(DeclId, ExprId)],
+    ) -> u32 {
+        let idx = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: None,
+            entry: UNCOMPILED,
+            state: FState::Stub,
+            nregs: 0,
+            ret: RetKind::Void,
+            params: Vec::new(),
+            memo: false,
+            this_reg: None,
+            this_ty: None,
+            base_obj: false,
+        });
+        let mut c = Compiler::new(self, b);
+        let entry = c.here();
+        let n = c.reg();
+        c.open_scope(&[], true);
+        for &(d, arg) in binds {
+            let q = c.b.ast().decls.get(d).ty().unwrap_or(QualType::INT);
+            let r = c.reg();
+            if c.b.ast().types.is_reference(q) {
+                c.bind_ref(arg, r);
+            } else {
+                let ty = c.ty(q);
+                c.alloc_var(r, ty, d, false);
+                c.init(arg, r, ty);
+                c.end_local_init(d, r, ty);
+            }
+            c.locals.insert(d, Local::Mem(r));
+        }
+        let ty = match cond {
+            Some(e) => {
+                let ty = c.ety(e);
+                c.rv_into(e, n);
+                ty
+            }
+            None => {
+                c.konst(n, 1);
+                c.ty(QualType::BOOL)
+            }
+        };
+        c.close_scope();
+        c.emit(Op::Ret, 1, &[n]);
+        let nregs = c.max;
+        let f = &mut self.funcs[idx as usize];
+        f.entry = entry;
+        f.state = FState::Ready;
+        f.nregs = nregs;
+        f.ret = RetKind::Scalar(ty);
+        idx
+    }
+
     /// A function destroying the object of type `ty` whose address is in
     /// its register 0 (the constant destruction of `constexpr` variable
     /// `d`, [dcl.constexpr]/6), or `None` if destroying it does nothing.

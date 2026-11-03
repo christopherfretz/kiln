@@ -3350,6 +3350,7 @@ impl Sema<'_, '_> {
             is_static: spec.storage() == FnStorage::Static,
             head: self.templ.cur,
             requires: d.trailing_requires,
+            enable_if: self.enable_if_list(&d.attrs),
         };
         let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
@@ -9029,6 +9030,9 @@ impl Sema<'_, '_> {
         if kind == AttrKind::ABI_TAG {
             return self.abi_tag_attribute(syntax, &n, args, loc);
         }
+        if kind == AttrKind::ENABLE_IF {
+            return self.enable_if_attribute(syntax, args, loc);
+        }
         if kind == AttrKind::ENUM_EXTENSIBILITY {
             return self.enum_extensibility_attribute(syntax, args, loc);
         }
@@ -9758,6 +9762,8 @@ fn attr_kind_of(
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
+        // clang `GNU<"enable_if">`: no `[[...]]` spelling.
+        ("enable_if", _, _) if gnu_syntax => AttrKind::ENABLE_IF,
         ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
         ("exclude_from_explicit_instantiation", _, gnu) if gnu || clang_scope => {
             AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION

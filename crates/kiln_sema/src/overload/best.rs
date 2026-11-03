@@ -170,6 +170,13 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        if cand.viable {
+            // clang `CheckEnableIf`, after the candidate is otherwise
+            // viable.
+            let args = std::mem::take(&mut set.args);
+            self.check_enable_if(&mut cand, &args, &params, skip, set.loc);
+            set.args = args;
+        }
         cand.ics.end = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
         set.params = params;
         set.cands.push(cand);
@@ -301,6 +308,12 @@ impl Sema<'_, '_> {
             if g1 == Some(GuideOrigin::Ctor) && g2 == Some(GuideOrigin::CtorTemplate) {
                 return true;
             }
+        }
+        // clang's `enable_if` ranking (`compareEnableIfAttrs`), last.
+        if let (Some(f1), Some(f2)) = (x.decl, y.decl)
+            && let Some(b) = self.compare_enable_if(f1, f2)
+        {
+            return b;
         }
         false
     }

@@ -256,6 +256,14 @@ impl Sema<'_, '_> {
             return self.deduction_note(ft, fail, loc);
         }
         let detail = match cand.failure {
+            // clang `DiagnoseFailedEnableIfAttr`: at the function.
+            CandidateFailure::EnableIf { attr } => {
+                let node = *self.ast.attrs.get(attr);
+                let msg = self.enable_if_message(&node);
+                return self
+                    .diag(DiagId::note_ovl_candidate_disabled_by_function_cond_attr, loc)
+                    .arg(msg);
+            }
             CandidateFailure::TooManyArgs { .. } | CandidateFailure::TooFewArgs { .. } => {
                 let mut params = Vec::new();
                 let variadic = self.fn_param_types(f, &mut params);
