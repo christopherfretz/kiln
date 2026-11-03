@@ -147,6 +147,11 @@ struct TypoSpec {
     /// distance ties with: valid, it makes the correction ambiguous
     /// (clang's `AmbiguousTypoExprs`) and nothing is corrected.
     ambiguous: bool,
+    /// The tied value an `ambiguous` function speculation competes with,
+    /// as the type and category of the expression it rebuilds into:
+    /// an initializer it cannot initialize settles the tie for the
+    /// function ([`Sema::settle_typo_tie`]).
+    tie: Option<(QualType, kiln_ast::expr::ValueCategory)>,
     /// The full-expression warnings about an expression built on the
     /// correction, with their order ([`Sema::emit_after_typos`]): clang
     /// issues them after it corrects the `TypoExpr`.
@@ -1317,9 +1322,53 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             suggest,
             fallback,
             ambiguous,
+            tie: None,
             after: Vec::new(),
         }));
         self.delayed_typos.push(HeldTypo { seq, expr: u, diag: plain, spec });
+    }
+
+    /// Records the tied value of the speculation [`Sema::hold_typo_spec`]
+    /// just opened at `loc` ([`TypoSpec::tie`]).
+    pub(crate) fn set_typo_tie(
+        &mut self,
+        loc: Loc,
+        tie: Option<(QualType, kiln_ast::expr::ValueCategory)>,
+    ) {
+        if let Some(s) = self.delayed_typos.last_mut().and_then(|h| h.spec.as_mut())
+            && s.loc == loc
+        {
+            s.tie = tie;
+        }
+    }
+
+    /// clang 19 rebuilds an initializer `= e` once per candidate of a
+    /// speculative correction (`TransformTypos`): when `e` (parentheses
+    /// aside) is a function speculation tied with a value
+    /// ([`TypoSpec::tie`]) and no implicit conversion takes the value to
+    /// `to`, the function is the one valid candidate and the correction
+    /// is no longer ambiguous (`int (*p)(int) = valc<int>;` with
+    /// `int vala; int valb(int);` is `valb`).
+    pub(crate) fn settle_typo_tie(&mut self, e: ExprId, to: QualType) {
+        if self.open_specs == 0 {
+            return;
+        }
+        let at = self.expr_loc(self.ignore_parens(e));
+        let Some(i) = self.delayed_typos.iter().rposition(|h| {
+            h.spec.as_ref().is_some_and(|s| s.loc == at && s.ambiguous && s.tie.is_some())
+        }) else {
+            return;
+        };
+        let Some((ty, vk)) = self.delayed_typos[i].spec.as_ref().and_then(|s| s.tie) else {
+            return;
+        };
+        let arg = overload::ArgInfo::of_type(ty, vk);
+        let ics = self.try_implicit_conversion(&arg, to, overload::IcsOptions::NONE);
+        if ics.is_bad()
+            && let Some(s) = self.delayed_typos[i].spec.as_mut()
+        {
+            s.ambiguous = false;
+        }
     }
 
     /// Called before the compat-19 correction scope of condition `e`

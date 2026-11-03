@@ -7,8 +7,9 @@
 //! `use of undeclared identifier 'val'; did you mean '::val'?`).
 
 use kiln_ast::decl::DeclKind;
+use kiln_ast::expr::ValueCategory;
 use kiln_ast::types::TemplateArg;
-use kiln_ast::{DeclId, ExprId};
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
@@ -57,6 +58,7 @@ struct Speculation {
     suggest: kiln_diag::Diag,
     fallback: Option<kiln_diag::Diag>,
     ambiguous: bool,
+    tie: Option<(QualType, ValueCategory)>,
 }
 
 /// What a declaration correction recovers as.
@@ -82,6 +84,7 @@ impl Sema<'_, '_> {
         let msg = self.diag(DiagId::sema_undeclared_var_use, loc).arg(text);
         if let Some(s) = self.speculate_template_id_typo(name, loc) {
             self.hold_typo_spec(msg, s.suggest, s.expr, loc, s.fallback, s.ambiguous);
+            self.set_typo_tie(loc, s.tie);
             return s.expr;
         }
         let e = self.recover_err(&[], loc);
@@ -152,6 +155,7 @@ impl Sema<'_, '_> {
         let at = groups.iter().position(|g| !g.1.is_empty() || !g.2.is_empty())?;
         let (_, values, funcs) = groups.swap_remove(at);
         let rest = groups.into_iter().skip(at);
+        let lone_func = funcs.len() == 1;
         let (probe, ambiguous, fallback) = match (values.len(), funcs.len()) {
             (1, 0) => (values.into_iter().next()?, false, None),
             (1, _) => (funcs.into_iter().next()?, true, values.into_iter().next()),
@@ -165,9 +169,13 @@ impl Sema<'_, '_> {
         };
         let typo = sym_str(self, name);
         let suggest = self.template_id_typo_suggest(&typo, &probe, loc);
+        // A lone function tied with a value: an initializer the value
+        // cannot initialize leaves the function the one valid candidate
+        // ([`Sema::settle_typo_tie`]).
+        let tie = fallback.as_ref().filter(|_| ambiguous && lone_func).and_then(|c| self.typo_value_type(c));
         let fallback = fallback.map(|c| self.template_id_typo_suggest(&typo, &c, loc));
         let expr = self.template_id_typo_expr(&probe, loc)?;
-        Some(Speculation { expr, suggest, fallback, ambiguous })
+        Some(Speculation { expr, suggest, fallback, ambiguous, tie })
     }
 
     /// What candidate `c` rebuilds into for clang 19
@@ -202,6 +210,22 @@ impl Sema<'_, '_> {
             }
             _ => None,
         }
+    }
+
+    /// The type and category of the expression value candidate `c`
+    /// rebuilds into ([`Sema::typo_kind_19`] `Some(true)`).
+    fn typo_value_type(&self, c: &Candidate) -> Option<(QualType, ValueCategory)> {
+        let d = self.ast.strip_shadow(*c.decls.get(self.typo_correction_decl(c))?);
+        let ty = self.ast.decls.get(d).ty()?;
+        let vk = match self.kind_of(d) {
+            DeclKind::EnumConstant | DeclKind::NonTypeTemplateParm
+                if !self.ast.types.is_reference(ty) =>
+            {
+                ValueCategory::PRValue
+            }
+            _ => ValueCategory::LValue,
+        };
+        Some((self.non_reference(ty), vk))
     }
 
     /// "use of undeclared identifier 'typo'; did you mean 'c'?" with

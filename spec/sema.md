@@ -4538,7 +4538,11 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   holds a `fallback` "did you mean" for the value of the same group or of
   the nearest later group with exactly one value, taken when the
   function fails; a valid function tied with a value or another function
-  is `ambiguous`, reported uncorrected. Two values in the nearest group
+  is `ambiguous`, reported uncorrected, unless the tie is one value and
+  one function and the speculation is a copy-initializer the value's
+  type and category cannot implicitly convert to (`settle_typo_tie`:
+  `int (*p)(int) = valc<int>;` with `int vala; int valb(int);` is
+  `valb`; WP-420). Two values in the nearest group
   are no correction. The correction point validates as before: a
   built-in operand or an initializer rejects a function, a `return`
   operand, condition or discarded expression accepts anything, so there
@@ -4553,8 +4557,9 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   at the next token, an error operand before a binary operator). Within
   one distance clang orders candidates by a string hash kiln does not
   model, so a keyword tied with a declaration (`swtch` with `switch` and
-  a function `swatch`), and an initializer that accepts only one of a
-  tied value and function, may differ. Tests:
+  a function `swatch`) may differ; an assignment or call argument that
+  accepts only one of a tied value and function is still reported
+  uncorrected. Tests:
   `tests/conformance/temp.names/template-id-typo-*-19.cpp`.
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)

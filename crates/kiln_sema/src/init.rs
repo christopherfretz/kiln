@@ -664,7 +664,10 @@ impl Sema<'_, '_> {
             return self.unperformed_init(ty, init);
         }
         match init {
-            Initializer::Expr(e) => self.init_from_expr(ty, e, ConvCtx::Initialization, loc),
+            Initializer::Expr(e) => {
+                self.settle_typo_tie(e, ty);
+                self.init_from_expr(ty, e, ConvCtx::Initialization, loc)
+            }
             Initializer::Paren(v, l, r) => {
                 let settled = !v
                     .iter()
