@@ -299,9 +299,20 @@ impl Parser<'_, '_> {
         let mut array = false;
         if self.at(Punct::LSquare) && self.peek_is(1, Punct::RSquare) {
             // [expr.delete]/1: `delete []` is array delete, unless a lambda
-            // follows (clang's lookahead).
-            let next = self.peek(2);
-            if matches!(Self::punct_of(next), Some(Punct::LBrace | Punct::Less | Punct::LParen)) {
+            // follows (clang's lookahead: `{`, `<`, `()`, or `(` and two
+            // identifiers, so `delete[] (char*)p` is array delete).
+            let ident = |p: &Self, n: usize| {
+                let t = p.peek(n);
+                matches!(t.kind, TokKind::Identifier(_)) && p.kw_of(t).is_none()
+            };
+            let lambda = match Self::punct_of(self.peek(2)) {
+                Some(Punct::LBrace | Punct::Less) => true,
+                Some(Punct::LParen) => {
+                    self.peek_is(3, Punct::RParen) || (ident(self, 3) && ident(self, 4))
+                }
+                _ => false,
+            };
+            if lambda {
                 self.unsupported("lambda expressions", self.loc());
                 return None;
             }

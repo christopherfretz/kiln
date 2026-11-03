@@ -2932,7 +2932,8 @@ Remaining (each traps with a `kiln:` note today):
 - `delete` through `void*`.
 - Front-end gaps that keep some forms from reaching the Oven (not
   Oven work): class-specific `operator new`,
-  `delete[] (expr)` (parsed as a lambda) and
+  `delete[] (expr)` when `expr` starts with two identifiers (clang's
+  lambda lookahead) and
   `new char[n]{"hi"}`.
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the
   front end puts the volatile qualifier on the read expression's type.
