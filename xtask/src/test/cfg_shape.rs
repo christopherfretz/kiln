@@ -11,6 +11,7 @@
 //! only).
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 /// One function's graph.
 #[derive(Debug)]
@@ -62,7 +63,7 @@ pub fn parse(dump: &str) -> Vec<Graph> {
             continue;
         }
         if !line.starts_with(' ') && !line.is_empty() {
-            sig = line.to_owned();
+            line.clone_into(&mut sig);
             continue;
         }
         let Some(b) = graphs.last_mut().and_then(|g| g.blocks.last_mut()) else { continue };
@@ -177,12 +178,12 @@ impl Graph {
                 for s in &b.succs {
                     match *s {
                         Succ::Null => line.push_str(" NULL"),
-                        Succ::To(n, live) => {
+                        Succ::To(n, reached) => {
                             let c = by_num.get(&n).and_then(|&j| canon[j]);
                             let c = c.map_or_else(|| format!("?{n}"), |c| format!("c{c}"));
                             line.push(' ');
                             line.push_str(&c);
-                            if !live {
+                            if !reached {
                                 line.push_str("(Unreachable)");
                             }
                         }
@@ -219,32 +220,29 @@ pub fn diff(want: &str, got: &str, skip: &[&str], stale: bool) -> Option<String>
         let skipped = skip.contains(&name.as_str());
         if ws.len() != gs.len() {
             if !skipped {
-                out.push_str(&format!(
-                    "`{name}`: {} graph(s) expected, {} found\n",
-                    ws.len(),
-                    gs.len()
-                ));
+                let _ =
+                    writeln!(out, "`{name}`: {} graph(s) expected, {} found", ws.len(), gs.len());
             }
             continue;
         }
         for (a, b) in ws.iter().zip(gs) {
             if skipped {
                 if stale && a == b {
-                    out.push_str(&format!(
-                        "`{name}` is listed in `cfg-diverges` but the shapes agree\n"
-                    ));
+                    let _ =
+                        writeln!(out, "`{name}` is listed in `cfg-diverges` but the shapes agree");
                 }
             } else if a != b {
-                out.push_str(&format!(
+                let _ = write!(
+                    out,
                     "`{name}`: the shapes differ\n{}",
                     super::runner::indent(&super::compare::line_diff(a, b))
-                ));
+                );
             }
         }
     }
     for (name, _) in &g {
         if !w.iter().any(|(n, _)| n == name) && !skip.contains(&name.as_str()) {
-            out.push_str(&format!("`{name}`: not in the reference dump\n"));
+            let _ = writeln!(out, "`{name}`: not in the reference dump");
         }
     }
     (!out.is_empty()).then_some(out)

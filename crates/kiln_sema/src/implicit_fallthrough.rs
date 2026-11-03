@@ -337,7 +337,6 @@ impl Sema<'_, '_> {
                 }
                 End::Done
             }
-            StmtKind::LabelStmt => self.ift_end(st.sub_stmt(s), flow, into, &[]),
             StmtKind::AttributedStmt if self.ift_is_fallthrough(s) => {
                 into.annotated += 1;
                 if !flow.before(s) {
@@ -345,7 +344,9 @@ impl Sema<'_, '_> {
                 }
                 End::Done
             }
-            StmtKind::AttributedStmt => self.ift_end(st.sub_stmt(s), flow, into, &[]),
+            StmtKind::LabelStmt | StmtKind::AttributedStmt => {
+                self.ift_end(st.sub_stmt(s), flow, into, &[])
+            }
             _ if !flow.before(s) => {
                 // An unreachable straight-line run falling into the label:
                 // its last annotation, if any.

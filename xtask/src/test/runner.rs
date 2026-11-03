@@ -229,13 +229,11 @@ impl Test<'_> {
             let reason = "not supported by this compiler (`verify` needs kiln or clang)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
         }
-        if spec.expect == Expect::Cfg && !kind.speaks_clang() {
-            let reason = "not supported by this compiler (`expect: cfg` needs kiln or clang)";
-            return (Status::Skip, Some(reason.to_owned()), String::new());
-        }
-        if spec.expect == Expect::Ast && !kind.speaks_clang() {
-            let reason = "not supported by this compiler (`expect: ast` needs kiln or clang)";
-            return (Status::Skip, Some(reason.to_owned()), String::new());
+        if matches!(spec.expect, Expect::Cfg | Expect::Ast) && !kind.speaks_clang() {
+            let name = if spec.expect == Expect::Cfg { "cfg" } else { "ast" };
+            let reason =
+                format!("not supported by this compiler (`expect: {name}` needs kiln or clang)");
+            return (Status::Skip, Some(reason), String::new());
         }
         if let Some(dump) = DumpKind::of(spec.expect) {
             let name = dump.expect();

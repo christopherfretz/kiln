@@ -285,7 +285,7 @@ impl Builder {
 
     /// Ends the open block in the exit (a return, a throw leaving the
     /// body, a `noreturn` call).
-    fn to_exit(&mut self, flags: u8) {
+    fn jump_to_exit(&mut self, flags: u8) {
         let b = self.open();
         self.cur = None;
         let e = self.edge(b, flags);
@@ -293,13 +293,12 @@ impl Builder {
     }
 
     fn pos(&mut self) -> Pos {
-        match self.cur {
-            Some(b) => Pos::Block(b),
-            None => {
-                let s = self.cfg.pos_edges.len() as u32;
-                self.cfg.pos_edges.extend_from_slice(&self.dangling);
-                Pos::Edges(s, self.dangling.len() as u32)
-            }
+        if let Some(b) = self.cur {
+            Pos::Block(b)
+        } else {
+            let s = self.cfg.pos_edges.len() as u32;
+            self.cfg.pos_edges.extend_from_slice(&self.dangling);
+            Pos::Edges(s, self.dangling.len() as u32)
         }
     }
 
@@ -313,14 +312,14 @@ impl Builder {
         debug_assert_eq!(self.cfg.blocks[b.idx()].elems.end, i, "block elements are contiguous");
         self.cfg.elems.push(el);
         self.cfg.blocks[b.idx()].elems.end = i + 1;
-        if let Some(u) = el.unit() {
-            if self.req.scan {
-                if let Some(l) = self.cur_inc {
-                    self.cfg.inc.insert(u, l);
-                }
-                if let Some(r) = self.cur_ret {
-                    self.cfg.ret.insert(u, r);
-                }
+        if let Some(u) = el.unit()
+            && self.req.scan
+        {
+            if let Some(l) = self.cur_inc {
+                self.cfg.inc.insert(u, l);
+            }
+            if let Some(r) = self.cur_ret {
+                self.cfg.ret.insert(u, r);
             }
         }
     }
@@ -479,7 +478,7 @@ impl Sema<'_, '_> {
                 b.push(Elem::Stmt(s));
                 b.cur_ret = outer;
                 if self.cfg_dtors(0, b) {
-                    b.to_exit(edge::BOTH | edge::RETURN);
+                    b.jump_to_exit(edge::BOTH | edge::RETURN);
                 }
             }
             StmtKind::BreakStmt | StmtKind::ContinueStmt => {
@@ -589,7 +588,7 @@ impl Sema<'_, '_> {
             let d = b.dtors[i];
             b.push(Elem::AutoDtor(d));
             if self.var_dtor_noreturn(d) {
-                self.cfg_noreturn(b);
+                Self::cfg_noreturn(b);
                 return false;
             }
         }
@@ -617,10 +616,10 @@ impl Sema<'_, '_> {
 
     /// Ends the open block in a `noreturn` call (clang: a `NORETURN`
     /// block whose only successor is the exit).
-    fn cfg_noreturn(&mut self, b: &mut Builder) {
+    fn cfg_noreturn(b: &mut Builder) {
         let blk = b.open();
         b.cfg.blocks[blk.idx()].noreturn = true;
-        b.to_exit(edge::BOTH | edge::ABNORMAL);
+        b.jump_to_exit(edge::BOTH | edge::ABNORMAL);
     }
 
     fn cfg_var_init(&mut self, v: Option<DeclId>, b: &mut Builder) {
@@ -1026,20 +1025,13 @@ impl Sema<'_, '_> {
             hedges.push(b.edge(dispatch, edge::BOTH));
         }
         if !self.has_catch_all(s) {
-            match b.try_stack.last_mut() {
-                Some(t) => {
-                    let e = b.cfg.edges.len() as u32;
-                    b.cfg.edges.push(Edge {
-                        from: dispatch,
-                        to: BlockId::PENDING,
-                        flags: edge::BOTH,
-                    });
-                    t.1.push(e);
-                }
-                None => {
-                    let e = b.edge(dispatch, edge::BOTH | edge::ABNORMAL);
-                    b.cfg.edges[e as usize].to = BlockId::EXIT;
-                }
+            if let Some(t) = b.try_stack.last_mut() {
+                let e = b.cfg.edges.len() as u32;
+                b.cfg.edges.push(Edge { from: dispatch, to: BlockId::PENDING, flags: edge::BOTH });
+                t.1.push(e);
+            } else {
+                let e = b.edge(dispatch, edge::BOTH | edge::ABNORMAL);
+                b.cfg.edges[e as usize].to = BlockId::EXIT;
             }
         }
         let mut outs = out;
@@ -1087,7 +1079,7 @@ impl Sema<'_, '_> {
                         let ed = b.jump(Term::None, edge::BOTH);
                         b.try_stack.last_mut().expect("try frame").1.push(ed);
                     }
-                    None => b.to_exit(edge::BOTH | edge::FAKE),
+                    None => b.jump_to_exit(edge::BOTH | edge::FAKE),
                 }
             }
             ExprKind::ConditionalOperator => {
@@ -1169,7 +1161,7 @@ impl Sema<'_, '_> {
                     b.push(Elem::Expr(e));
                 }
                 if b.has_pos() && self.is_noreturn_call(e) {
-                    self.cfg_noreturn(b);
+                    Self::cfg_noreturn(b);
                 }
             }
         }
@@ -1190,10 +1182,8 @@ impl Sema<'_, '_> {
             let groups = if matches!(toks[i], TempTok::Arms) {
                 i += 1;
                 2
-            } else if matches!(toks[i], TempTok::Open(_)) {
-                1
             } else {
-                0
+                usize::from(matches!(toks[i], TempTok::Open(_)))
             };
             if groups == 0 {
                 i += 1;
@@ -1223,7 +1213,7 @@ impl Sema<'_, '_> {
                     b.push(Elem::TempDtor(t));
                     let d = self.ast.exprs.bound_destructor(t);
                     if self.ast.is_noreturn_fn(d) {
-                        self.cfg_noreturn(b);
+                        Self::cfg_noreturn(b);
                     }
                 }
                 TempTok::Open(k) => {

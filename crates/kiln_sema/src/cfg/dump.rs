@@ -75,7 +75,7 @@ impl Sema<'_, '_> {
                 if !preds.is_empty() {
                     let _ = write!(out, "   Preds ({}):", preds.len());
                     for a in preds {
-                        let _ = write!(out, " {}", adj_text(cfg, a));
+                        let _ = write!(out, " {}", adj_text(cfg, *a));
                     }
                     out.push('\n');
                 }
@@ -88,7 +88,7 @@ impl Sema<'_, '_> {
                         if a.flags & edge::NULL != 0 {
                             out.push_str(" NULL");
                         } else {
-                            let _ = write!(out, " {}", adj_text(cfg, a));
+                            let _ = write!(out, " {}", adj_text(cfg, *a));
                         }
                     }
                     out.push('\n');
@@ -184,7 +184,7 @@ impl Sema<'_, '_> {
     }
 }
 
-fn adj_text(cfg: &Cfg, a: &Adj) -> String {
+fn adj_text(cfg: &Cfg, a: Adj) -> String {
     let n = cfg.number(a.block);
     if a.flags & edge::LIVE == 0 { format!("B{n}(Unreachable)") } else { format!("B{n}") }
 }

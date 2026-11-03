@@ -384,7 +384,7 @@ impl Sema<'_, '_> {
         if found.is_empty() {
             return;
         }
-        let Some(mut found) = self.with_cfg(body, |s, c| s.cfg_escaping_throws(c)) else {
+        let Some(mut found) = self.with_cfg(body, Self::cfg_escaping_throws) else {
             return;
         };
         if found.is_empty() {

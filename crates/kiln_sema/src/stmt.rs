@@ -1416,6 +1416,35 @@ impl Sema<'_, '_> {
 
     /// Finishes a function body; returns the body to attach (a
     /// coroutine's is wrapped in its `CoroutineBodyStmt`).
+    /// Plans the body's graph, built at its first query (spec/sema.md
+    /// §7.5.1), and emits the deferred runtime-behavior diagnostics,
+    /// dropping those anchored to an expression the graph proves
+    /// unreachable.
+    fn flush_runtime_diags(
+        &mut self,
+        f: DeclId,
+        body: StmtId,
+        runtime_diags: Vec<(kiln_diag::Diag, Option<ExprId>)>,
+        has_fallthrough: bool,
+    ) {
+        let dead = if self.diags.uncompilable_error_count() > 0 || self.in_template() {
+            None
+        } else {
+            let wanted: HashSet<ExprId> = runtime_diags.iter().filter_map(|(_, e)| *e).collect();
+            let probe = !wanted.is_empty();
+            self.cfg_plan(f, body, wanted, has_fallthrough);
+            if probe { self.with_cfg(body, |_, c| c.unreachable_probes()) } else { None }
+        };
+        for (msg, anchor) in runtime_diags {
+            if let (Some(dead), Some(e)) = (&dead, anchor)
+                && dead.contains(&e)
+            {
+                continue;
+            }
+            self.emit(msg);
+        }
+    }
+
     pub(crate) fn end_function_body(&mut self, body: StmtId, rbrace: Loc) -> StmtId {
         self.leave_function_scope();
         let coroutine = self.coro_state().is_some_and(|c| c.first.is_some());
@@ -1481,25 +1510,8 @@ impl Sema<'_, '_> {
         if self.in_template() && !self.is_named_function_template(state.decl) {
             state.runtime_diags.retain(|(_, anchor)| anchor.is_none());
         }
-        // The body's graph, built at its first query (spec/sema.md
-        // §7.5.1).
-        let dead = if self.diags.uncompilable_error_count() > 0 || self.in_template() {
-            None
-        } else {
-            let wanted: HashSet<ExprId> =
-                state.runtime_diags.iter().filter_map(|(_, e)| *e).collect();
-            let probe = !wanted.is_empty();
-            self.cfg_plan(state.decl, body, wanted, state.has_fallthrough);
-            if probe { self.with_cfg(body, |_, c| c.unreachable_probes()) } else { None }
-        };
-        for (msg, anchor) in state.runtime_diags {
-            if let (Some(dead), Some(e)) = (&dead, anchor)
-                && dead.contains(&e)
-            {
-                continue;
-            }
-            self.emit(msg);
-        }
+        let runtime_diags = std::mem::take(&mut state.runtime_diags);
+        self.flush_runtime_diags(state.decl, body, runtime_diags, state.has_fallthrough);
         let ret = state.ret;
         // clang skips its analysis-based warnings once an error occurred
         // (`hasUncompilableErrorOccurred`: not a warning promoted by
