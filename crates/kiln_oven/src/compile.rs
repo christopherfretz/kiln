@@ -157,7 +157,18 @@ enum Local {
 enum Place {
     Reg(u32),
     Mem(u32),
-    Bits { p: u32, bit: u32, width: u32 },
+    Bits {
+        p: u32,
+        bit: u32,
+        width: u32,
+    },
+    /// Lane `idx` (a register) of the `bool` vector of type `vty` at `p`
+    /// (`TyKind::BoolVec`: a bit, so no address).
+    Lane {
+        p: u32,
+        idx: u32,
+        vty: OTy,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1236,6 +1247,13 @@ impl Scan<'_> {
                 self.decl(d.loop_var);
                 self.stmt(d.body);
             }
+            StmtKind::CXXExpansionStmt if ast.stmts.expansion_expanded(s) => {
+                let d = *ast.stmts.expansion_data(s);
+                d.init.into_iter().for_each(|x| self.stmt(x));
+                for &x in ast.lists.get(d.prelude).iter().chain(ast.lists.get(d.expansions)) {
+                    self.stmt(StmtId::new(x));
+                }
+            }
             StmtKind::ReturnStmt => {
                 if let Some(v) = ast.stmts.return_value(s) {
                     self.expr(v, false);
@@ -1735,6 +1753,10 @@ impl Compiler<'_> {
                 self.range_for_stmt(s);
                 self.next = m;
             }
+            StmtKind::CXXExpansionStmt if ast.stmts.expansion_expanded(s) => {
+                self.expansion_stmt(s);
+                self.next = m;
+            }
             StmtKind::BreakStmt | StmtKind::ContinueStmt => {
                 let brk = n.kind() == StmtKind::BreakStmt;
                 let idx = if brk {
@@ -2036,6 +2058,53 @@ impl Compiler<'_> {
         let end_pc = self.here();
         for j in b.breaks {
             self.patch(j, end_pc);
+        }
+        self.close_scope();
+    }
+
+    /// An expanded expansion statement ([stmt.expand]/5, P1306R5): the
+    /// init-statement and the prelude in the statement's scope, then each
+    /// element's block in order. `break` leaves the statement; `continue`
+    /// ends the current element's block (the next one follows).
+    fn expansion_stmt(&mut self, s: StmtId) {
+        let ast = self.b.ast();
+        let d = *ast.stmts.expansion_data(s);
+        let prelude: Vec<u32> = ast.lists.get(d.prelude).to_vec();
+        let elems: Vec<u32> = ast.lists.get(d.expansions).to_vec();
+        let mut decls = self.stmt_decls(d.init, None);
+        decls.extend(self.block_decls(&prelude));
+        self.open_scope(&decls, false);
+        if let Some(i) = d.init {
+            self.stmt(i);
+        }
+        for p in prelude {
+            self.stmt(StmtId::new(p));
+        }
+        let depth = self.scopes.len();
+        let mut breaks = Vec::new();
+        for e in elems {
+            self.breakables.push(Breakable {
+                breaks: Vec::new(),
+                conts: Some(Vec::new()),
+                depth,
+                cont_depth: depth,
+            });
+            self.stmt(StmtId::new(e));
+            let b = self.breakables.pop().unwrap_or(Breakable {
+                breaks: Vec::new(),
+                conts: None,
+                depth: 0,
+                cont_depth: 0,
+            });
+            let next = self.here();
+            for j in b.conts.unwrap_or_default() {
+                self.patch(j, next);
+            }
+            breaks.extend(b.breaks);
+        }
+        let end = self.here();
+        for j in breaks {
+            self.patch(j, end);
         }
         self.close_scope();
     }
@@ -2937,7 +3006,7 @@ impl Compiler<'_> {
         if let Some(out) = out {
             let postfix = matches!(op, UnaryOp::PostInc | UnaryOp::PostDec);
             let src = if postfix { old } else { new };
-            if let Place::Bits { .. } = place
+            if let Place::Bits { .. } | Place::Lane { .. } = place
                 && !postfix
             {
                 // The value of the bit-field after the store.
@@ -3633,6 +3702,9 @@ impl Compiler<'_> {
             Place::Bits { p, bit, width } => {
                 self.emit_at(Op::LoadBits, akind, &[dst, p, ty.0, bit | width << 8], e);
             }
+            Place::Lane { p, idx, vty } => {
+                self.emit_at(Op::LoadLane, akind, &[dst, p, idx, vty.0], e);
+            }
         }
     }
 
@@ -3648,6 +3720,9 @@ impl Compiler<'_> {
             }
             Place::Bits { p, bit, width } => {
                 self.emit_at(Op::StoreBits, 0, &[p, src, ty.0, bit | width << 8], e);
+            }
+            Place::Lane { p, idx, vty } => {
+                self.emit_at(Op::StoreLane, 0, &[p, src, idx, vty.0], e);
             }
         }
     }
@@ -3679,7 +3754,7 @@ impl Compiler<'_> {
     fn lv_mem(&mut self, e: ExprId, acc: Access) -> u32 {
         match self.lv(e, acc) {
             Place::Mem(p) => p,
-            Place::Reg(_) | Place::Bits { .. } => {
+            Place::Reg(_) | Place::Bits { .. } | Place::Lane { .. } => {
                 self.trap(e, "kiln: internal: the address of a register value was taken");
                 self.reg()
             }
@@ -4515,6 +4590,22 @@ impl Compiler<'_> {
                     let j = self.jmp();
                     self.patch(j, top);
                     self.patch_here(exit);
+                }
+            }
+            TyKind::BoolVec { elem, n } => {
+                // One bit per lane (`ty.rs`); the lanes not listed are
+                // false.
+                if inits.len() as u64 > n || inits.iter().any(|&x| self.is_vector_expr(x)) {
+                    return self.unsupported(e);
+                }
+                if (inits.len() as u64) < n {
+                    self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
+                }
+                for (i, &x) in inits.iter().enumerate() {
+                    let r = self.rv(x);
+                    let q = self.elem_ptr(p, i as u64 / 8, e);
+                    let bw = (i % 8) as u32 | 1 << 8;
+                    self.emit_at(Op::StoreBits, 1, &[q, r, elem.0, bw], x);
                 }
             }
             TyKind::Record { union: true, .. } => {

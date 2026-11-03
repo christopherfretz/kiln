@@ -777,6 +777,17 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   Calls to `const`/`pure` functions carry their call-site attributes
   (§3 "Calls", WP-182).
 
+- Expansion statements (WP-447, `emit_expansion`): an expanded
+  `CXXExpansionStmt` lowers its init-statement and prelude, then each
+  element's compound statement in order, with no loop and no
+  `!llvm.loop` metadata; `break` branches to a block after the last
+  element and `continue` to a block ending the current one, through the
+  element's cleanups. A pattern is never lowered. clang 22 has no
+  expansion statements, so `tests/codegen/expansion_stmt.cpp` is
+  `min-oracle: 23` (verify-only today); the order and the absence of
+  back-edges are checked by `kiln_codegen` test
+  `expansion_statement_lowers_in_order`.
+
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:
 - `-S -emit-llvm` writes a `.ll` file; `-c -emit-llvm` pipes it to
@@ -2863,6 +2874,26 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
 - **Remaining:** `=pattern`; pre-filling classes with a non-trivial
   default constructor; VLAs; the run-time EB diagnosis P2795 recommends
   is today's `-Wuninitialized` (no sanitizer).
+
+## 7s. Landed (WP-450): `bool` ext-vector constants
+- A constant `bool` ext vector (the Oven's packed `BoolVec`,
+  spec/oven.md "Bool vectors") is a `<N x i1>` constant: lane `i` is bit
+  `i % 8` of byte `i / 8` of the folded image (`consts.rs`
+  `image_const`). Its global, and a struct member or array element of
+  that type, keeps the value type `<N x i1>` rather than the `iP` memory
+  type (`const_ir_type`; clang's literal struct `{ i32, <8 x i1>, <3 x
+  i1> }` and `[2 x <8 x i1>]`), and is laid out by its bit count rounded
+  up to a power-of-two byte size (`func.rs` `ir_layout`).
+- Constant folding as the IRBuilder's `ConstantFolder` does (`func.rs`
+  `fold_shuffle`, `fold_vec_to_int`): a `shufflevector` of two constants
+  folds (a poison mask lane is `undef`; an all-poison mask is `poison`),
+  and a `bitcast` of a constant vector to an integer folds to `0` when the
+  vector is null, to `-1` when every lane is all-ones at compat 22 (LLVM
+  20+ `FoldBitCast`), and otherwise stays a `bitcast (...)` constant
+  expression. So storing a constant `bool` vector to a local is `store iP
+  bitcast (<P x i1> <...> to iP)`, as clang's.
+- Test: `tests/codegen/bool_vector_const.cpp` (exact on both triples
+  under oracle 19, structural under 22).
 
 ## 7t. Landed (WP-444): GNU computed goto (`stmt.rs`)
 - `&&l` (clang `GetAddrOfLabel`, `addr_of_label`) is `blockaddress(@f,

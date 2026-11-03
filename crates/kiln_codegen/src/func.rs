@@ -1465,9 +1465,14 @@ impl Cg<'_> {
             D::Float => (4, 4),
             D::Double | D::Ptr(_) => (8, 8),
             D::Fp128 | D::X86Fp80 => (16, 16),
+            // The lanes are packed (an `<N x i1>` is `N` bits), the total
+            // rounded up to a power of two.
             D::Vector { len, elem, .. } => {
-                let (s, _) = self.ir_layout(*elem);
-                let bytes = (s * u64::from(*len)).next_power_of_two();
+                let bits = match ty.int_width(*elem) {
+                    Some(w) => u64::from(w) * u64::from(*len),
+                    None => self.ir_layout(*elem).0 * 8 * u64::from(*len),
+                };
+                let bytes = bits.div_ceil(8).next_power_of_two();
                 (bytes, bytes.min(16))
             }
             _ => (0, 1),
@@ -1761,7 +1766,75 @@ impl Cg<'_> {
         let et = self.m.types.vector_info(t).map_or(LTy::I8, |x| x.0);
         let b = b.unwrap_or_else(|| V::C(self.m.const_poison(t)));
         let rt = self.m.types.vector(et, mask.len() as u32);
+        if let Some(k) = self.fold_shuffle(a, b, &mask, t) {
+            return V::C(k);
+        }
         self.f.fir.push(Op::ShuffleVector { a, b, mask }, rt)
+    }
+
+    /// llvm `ConstantFoldShuffleVectorInstruction` (the `IRBuilder` folds a
+    /// shuffle of two constants): a poison mask lane is `undef`, any other
+    /// takes that lane of `a` then `b`; an all-poison mask is `poison`.
+    fn fold_shuffle(&mut self, a: V, b: V, mask: &[u32], t: LTy) -> Option<Value> {
+        let (V::C(ca), V::C(cb)) = (a, b) else { return None };
+        let (et, n, _) = self.m.types.vector_info(t)?;
+        if mask.is_empty() {
+            return None;
+        }
+        if mask.iter().all(|&m| m == kiln_llvm::SHUFFLE_POISON) {
+            let rt = self.m.types.vector(et, mask.len() as u32);
+            return Some(self.m.const_poison(rt));
+        }
+        let la = self.const_lanes(ca, et, n)?;
+        let lb = self.const_lanes(cb, et, n)?;
+        let mut out = Vec::with_capacity(mask.len());
+        for &m in mask {
+            let k = if m == kiln_llvm::SHUFFLE_POISON || m >= 2 * n {
+                self.m.const_undef(et)
+            } else if m >= n {
+                lb[(m - n) as usize]
+            } else {
+                la[m as usize]
+            };
+            out.push(k);
+        }
+        self.m.const_vector(&out).ok()
+    }
+
+    /// The `n` lanes of the constant vector `c` (`getAggregateElement`).
+    fn const_lanes(&mut self, c: Value, et: LTy, n: u32) -> Option<Vec<Value>> {
+        let one = match self.m.const_of(c)? {
+            ConstData::Vector { elems, .. } => return Some(elems.to_vec()),
+            ConstData::Zero(_) => self.m.const_zero(et),
+            ConstData::Poison(_) => self.m.const_poison(et),
+            ConstData::Undef(_) => self.m.const_undef(et),
+            _ => return None,
+        };
+        Some(vec![one; n as usize])
+    }
+
+    /// A `bitcast` of the constant vector `c` to the integer type `to`
+    /// (llvm `ConstantFoldCastInstruction`): a null vector folds to `0`;
+    /// an all-ones integer vector folds to `-1` from LLVM 20 on
+    /// (`FoldBitCast` checks `isAllOnesValue` first); anything else stays
+    /// a `bitcast (...)` constant expression.
+    fn fold_vec_to_int(&mut self, c: Value, to: LTy) -> Option<V> {
+        let from = self.m.const_type(c);
+        self.m.types.vector_info(from)?;
+        self.m.types.int_width(to)?;
+        let lanes = match self.m.const_of(c)? {
+            ConstData::Zero(_) => return Some(V::C(self.m.const_int(to, 0))),
+            ConstData::Vector { elems, .. } => elems.to_vec(),
+            _ => return None,
+        };
+        if self.opts.clang_compat >= 22
+            && lanes.iter().all(|&e| {
+                self.cint(V::C(e)).is_some_and(|(_, x, w)| w > 0 && x == u128::MAX >> (128 - w))
+            })
+        {
+            return Some(V::C(self.m.const_int(to, -1)));
+        }
+        self.m.const_cast(CastOp::BitCast, c, to).ok().map(V::C)
     }
 
     /// The unary `__builtin_shufflevector(v, mask)` (clang
@@ -1955,6 +2028,12 @@ impl Cg<'_> {
             && let Ok(x) = self.m.const_cast(op, c, to)
         {
             return V::C(x);
+        }
+        if let V::C(c) = v
+            && op == CastOp::BitCast
+            && let Some(r) = self.fold_vec_to_int(c, to)
+        {
+            return r;
         }
         self.f.fir.push(Op::Cast { op, flags: Flags::NONE, v, to }, to)
     }

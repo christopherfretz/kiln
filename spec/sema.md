@@ -6009,6 +6009,80 @@ template saved in `range_for_outer_depth` for instantiations).
   warnings (groups declared, not emitted); the begin/end-types-differ
   pre-C++17 extension warning; clang's recovery for `for (int x, y : a)`.
 
+### 7.6a Landed (WP-447): Expansion statements (`expansion.rs`)
+P1306R5 `template for` ([stmt.expand]). The parser accepts
+`template for ( init-statement_opt for-range-declaration :
+expansion-initializer ) compound-statement` in every language mode; before
+C++26 it warns `ext_expansion_statements` (-Wc++26-extensions). The body
+must be a compound-statement (`expected '{'` otherwise); `template`
+followed by anything but `for` in a block keeps clang's `'template' here is
+not supported yet`.
+
+- **Synthetic template level.** `act_on_expansion_head` opens a template
+  level of its own (`push_expansion_level`, a parameterless head at the
+  next depth, raising `dependent_depth`) and declares the
+  for-range-declaration in it, initialized from a `CXXExpansionSelectExpr`
+  (form, depth). The body is parsed as a template pattern at that level.
+  Inside a template the statement stays a pattern (`CXXExpansionStmt`
+  without `expanded`) and is expanded when the enclosing template is
+  instantiated; otherwise `act_on_finish_expansion` expands it at once.
+- **Expansion** (`Substituter::expand_expansion`, templ/subst): a child
+  Substituter whose `expansions` stack maps the level's depth to the
+  current element; each `CXXExpansionSelectExpr` at that depth becomes the
+  element, each element gets a block `{ decl = element; body }`
+  ([stmt.expand]/5). An inner pattern that depends on the element is
+  expanded within it. The form is chosen on the substituted initializer:
+  - *enumerating*: an expansion-init-list; element i is its i-th
+    expression. A braced or designated element is unsupported
+    (`unsupported`, not a crash).
+  - *iterating* (`range_for.rs` `expansion_iterable`): not an array, and
+    member `begin`/`end` are found or ADL finds viable candidates;
+    `static constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
+    through a per-element `static constexpr auto __iter = __begin + i`.
+    N is counted by evaluating `__begin + i != __end` for i = 0, 1, ...
+    (kiln deviation: the paper defines N as `__end - __begin`; the count
+    agrees for random-access iterators and also works without
+    `operator-`), capped at 2^20 (`sema_expansion_size_not_constant`
+    when an evaluation fails).
+  - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
+    (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
+    for-range-declaration the declaration is `static constexpr`.
+- **Binding a constexpr range** (`expansion_fallback`). A prvalue
+  initializer is bound by value (`static constexpr auto`, const, so its
+  value is usable in constant expressions; a lifetime-extended temporary
+  would not be). A glvalue is first bound with `auto&&`; when that
+  initialization fails to be a constant expression (decided by the
+  captured diagnostics, `stash_has_error`: a failed constant
+  initialization does not mark the variable INVALID), it is retried by
+  value, a copy, each attempt in a block scope of its own. The copy stands
+  in for P2686 (constexpr references to automatic variables), which kiln
+  does not implement: the paper's `constexpr std::array` local example
+  works. When both fail, the first attempt's diagnostics are emitted.
+- **Holding variables.** The holding variables of a `constexpr` structured
+  binding declaration are `constexpr` (P2686 [dcl.struct.bind]/4), so the
+  Oven sees initialized constants rather than a static variable's
+  definition. A user-written `constexpr` structured binding is still
+  rejected (`structured binding declaration cannot be declared
+  'constexpr'`).
+- **Return type deduction.** A `return` in the pattern of an expansion
+  statement of a non-template function does not deduce the placeholder
+  return type (`in_template_outside_expansions`); its expansions do.
+- **Control flow.** `break` leaves the whole statement and `continue`
+  ends the current element; the statement counts as a loop for the
+  jump-scope, fall-off and reachability analyses (`children` yields the
+  init, prelude and expansions of an expanded statement and the init and
+  body of a pattern).
+- **N = 0.** No block is built, so a body that is ill-formed for every
+  element is never instantiated.
+- **Feature macro.** `__cpp_expansion_statements` 202506L at C++26 at
+  every `-fclang-compat` (`KILN_FEATURES`; clang 22 does not define it).
+- **Left.** `define_static_array` and reflection ranges (kiln's
+  `members_of` returns a `member_list` aggregate without `begin`/`end`);
+  braced or designated init-list elements; P2686.
+- Validation: `tests/conformance/stmt.expand/` (all `requires: clang>=23`),
+  `tests/codegen/expansion_stmt.cpp`, `kiln_codegen` test
+  `expansion_statement_lowers_in_order`.
+
 ### 7.7 Landed (WP-140): GNU asm statements (`asm.rs`)
 `act_on_gcc_asm_stmt` follows clang's `ActOnGCCAsmStmt`: output and input
 constraints are validated per target (`kiln_abi::asm`, aarch64 and

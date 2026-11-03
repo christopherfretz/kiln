@@ -245,6 +245,11 @@ impl Cg<'_> {
                 let d = *st.range_for_data(s);
                 d.init.into_iter().chain(Some(d.body)).collect()
             }
+            StmtKind::CXXExpansionStmt if st.expansion_expanded(s) => {
+                let d = *st.expansion_data(s);
+                let l = &self.ast.lists;
+                d.init.into_iter().chain(l.iter(d.prelude)).chain(l.iter(d.expansions)).collect()
+            }
             StmtKind::LabelStmt | StmtKind::AttributedStmt => vec![StmtId::new(n.b())],
             _ => Vec::new(),
         }
@@ -364,6 +369,7 @@ impl Cg<'_> {
             StmtKind::DoStmt => self.emit_do(s),
             StmtKind::ForStmt => self.emit_for(s),
             StmtKind::CXXForRangeStmt => self.emit_range_for(s),
+            StmtKind::CXXExpansionStmt => self.emit_expansion(s),
             StmtKind::SwitchStmt => self.emit_switch(s),
             StmtKind::CaseStmt => self.emit_case(s),
             StmtKind::DefaultStmt => {
@@ -786,6 +792,38 @@ impl Cg<'_> {
         self.emit_branch(cond_b);
         self.end_scope(for_scope);
         self.f.loops.pop();
+        self.emit_block(end.blk, true);
+        Ok(())
+    }
+
+    /// An expanded expansion statement ([stmt.expand]/5, P1306R5): the
+    /// init-statement and the prelude, then each element's block in
+    /// order, with no loop. `break` leaves the statement; `continue`
+    /// ends the current element (the next one follows).
+    fn emit_expansion(&mut self, s: StmtId) -> R<()> {
+        let ast = self.ast;
+        let loc = ast.stmts.get(s).loc();
+        if !ast.stmts.expansion_expanded(s) {
+            return err(Some(loc), "a dependent expansion statement");
+        }
+        let d = *ast.stmts.expansion_data(s);
+        let end = self.jump_dest_here();
+        let scope = self.begin_scope(true);
+        if let Some(i) = d.init {
+            self.emit_stmt(i)?;
+        }
+        for p in ast.lists.iter::<StmtId>(d.prelude) {
+            self.emit_stmt(p)?;
+        }
+        for e in ast.lists.iter::<StmtId>(d.expansions) {
+            let next = self.jump_dest_here();
+            self.f.jumps.push(Jump { brk: end, cont: Some(next) });
+            let r = self.emit_stmt(e);
+            self.f.jumps.pop();
+            r?;
+            self.emit_block(next.blk, true);
+        }
+        self.end_scope(scope);
         self.emit_block(end.blk, true);
         Ok(())
     }

@@ -936,6 +936,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.act_on_cxx_delete(global, array, loc, o, cxx26))
             }
             ExprKind::RecoveryExpr => self.recovery_expr(e, loc),
+            ExprKind::CXXExpansionSelectExpr => self.expansion_select(e),
             ExprKind::CXXParenListInitExpr => {
                 let ty = self.ty(n.ty(), loc)?;
                 self.paren_list_init(e, ty, loc, end)

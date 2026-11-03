@@ -986,6 +986,30 @@ impl Oven {
                     }
                     pc += 5;
                 }
+                Op::LoadLane => {
+                    let vty = OTy(arg!(3) as u32);
+                    let r = self
+                        .lane_at(reg!(1) as u64, reg!(2) as u64, vty, aux)
+                        .and_then(|(q, bit, elem)| self.load_bits(q, elem, bit, 1, aux));
+                    match r {
+                        Ok(v) => reg!(0) = v,
+                        Err(f) => fail!(f),
+                    }
+                    pc += 5;
+                }
+                Op::StoreLane => {
+                    let vty = OTy(arg!(3) as u32);
+                    let v = reg!(1);
+                    let init = aux & 1 != 0;
+                    let k = if init { ak::INIT } else { ak::ASSIGN };
+                    let r = self
+                        .lane_at(reg!(0) as u64, reg!(2) as u64, vty, k)
+                        .and_then(|(q, bit, elem)| self.store_bits(q, elem, v, bit, 1, init));
+                    if let Err(f) = r {
+                        fail!(f);
+                    }
+                    pc += 5;
+                }
                 Op::Copy => {
                     let ty = OTy(arg!(2) as u32);
                     let full = (aux & 2 != 0).then(|| b.ast());
@@ -2437,6 +2461,28 @@ impl Oven {
         })
     }
 
+    /// The byte address, bit and lane type of lane `idx` of the `bool`
+    /// vector of type `vty` at `raw` (`Op::LoadLane`, `Op::StoreLane`):
+    /// lane `i` is bit `i % 8` of byte `i / 8`. A lane past the end is
+    /// stepped to as an array element would be (clang 22): `n` is the
+    /// one-past-the-end lane, which access `k` cannot dereference.
+    fn lane_at(&self, raw: u64, idx: u64, vty: OTy, k: u32) -> Result<(u64, u32, OTy), Fault> {
+        let TyKind::BoolVec { elem, n } = self.types.kind(vty) else {
+            return Err(Fault::Invalid);
+        };
+        if idx > n {
+            return Err(Fault::ArrayIndex { idx: i128::from(idx), n, array: true });
+        }
+        if idx == n {
+            return Err(Fault::Mem { f: MemFault::PastEnd, ak: k, ty: elem, p: raw });
+        }
+        if raw == 0 || idx < 8 {
+            return Ok((raw, (idx % 8) as u32, elem));
+        }
+        let off = u64::from(Ptr::decode(raw).off) + idx / 8;
+        Ok((Ptr::with_off(raw, off, false), (idx % 8) as u32, elem))
+    }
+
     fn store_bits(
         &mut self,
         raw: u64,
@@ -2574,6 +2620,7 @@ impl Oven {
             TyKind::Ptr(_) | TyKind::NullPtr | TyKind::MemPtr { .. } | TyKind::Reflection => {
                 Some((field, t))
             }
+            TyKind::BoolVec { n, .. } => (!s.is_init(abs, n.div_ceil(8))).then_some((field, t)),
             TyKind::Array { elem, n } => {
                 let es = self.types.size(elem);
                 (0..n).find_map(|i| {

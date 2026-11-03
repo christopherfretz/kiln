@@ -194,6 +194,11 @@ impl Checker<'_, '_, '_> {
                 self.decl(d.loop_var, p);
                 self.stmt(d.body, p);
             }
+            StmtKind::CXXExpansionStmt => {
+                for c in self.sema.children(s) {
+                    self.stmt(c, p);
+                }
+            }
             StmtKind::ReturnStmt => self.opt_expr(st.return_value(s), p),
             StmtKind::CoreturnStmt => self.opt_expr(st.coreturn_operand(s), p),
             StmtKind::CXXTryStmt => self.try_stmt(s, p),
