@@ -1594,8 +1594,10 @@ and returns the scope it names:
     too (WP-187; `ext.vector/type-id-run.cpp`).
     Diagnostics (WP-187, `ext.vector/*-diagnostics.cpp`):
     - A type argument whose desugaring reaches a vector typedef stops at
-      that typedef as written, with its scope and without `typename`:
-      `'B' (aka 'X::v')`, `'A<long>' (aka 't1<long>::v')`
+      that typedef as written, with its scope: `'B' (aka 'X::v')`,
+      `'A<long>' (aka 't1<long>::v')` (clang 22, at
+      `-fclang-compat=22`, keeps a dependent name's keyword: `(aka
+      'typename t1<long>::v')`)
       (`kiln_ast::types::vector_diag_arg`, used by `Sema::ty_arg` and
       codegen; clang's `Desugar` keeps the Elaborated name of a vector).
     - Comparing an integer vector with itself is

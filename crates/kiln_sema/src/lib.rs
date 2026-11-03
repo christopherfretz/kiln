@@ -1494,7 +1494,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// gives no `aka`.
     pub fn ty_arg(&self, q: QualType) -> String {
         let names = names::SemaNames::new(self);
-        if let Some(v) = vector_diag_arg(&self.ast.types, &names, q) {
+        if let Some(v) = vector_diag_arg(&self.ast.types, &names, q, self.clang_compat >= 22) {
             return v;
         }
         let s = print_type(&self.ast.types, &names, q, PrintOptions::SUGARED);

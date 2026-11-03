@@ -764,7 +764,12 @@ fn print_diag_desugared(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -
 /// when desugaring looks through sugar that counts, else
 /// `'T' (vector of N 'E' values)`; `None` for a non-vector type. Shared
 /// by Sema's `ty_arg` and codegen's `-Wpsabi`.
-pub fn vector_diag_arg(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> Option<String> {
+pub fn vector_diag_arg(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    q: QualType,
+    keep_typename: bool,
+) -> Option<String> {
     let TypeView::Vector { elem, count, .. } = ctx.canonical_view(q) else {
         return None;
     };
@@ -773,9 +778,13 @@ pub fn vector_diag_arg(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) ->
     // vec4"), and prints the vector details only without an `aka`.
     if let Some(d) = vector_aka(ctx, q) {
         let a = print_type(ctx, names, d, PrintOptions::SUGARED);
-        // A substituted `typename t1<I>::v` prints as clang's rebuilt
-        // qualified name, without the keyword.
-        let a = a.strip_prefix("typename ").map_or_else(|| a.clone(), str::to_owned);
+        // A substituted `typename t1<I>::v` prints as clang 19's rebuilt
+        // qualified name, without the keyword (`keep_typename`: clang 22
+        // keeps it).
+        let a = match a.strip_prefix("typename ") {
+            Some(rest) if !keep_typename => rest.to_owned(),
+            _ => a.clone(),
+        };
         if a != s {
             return Some(format!("'{s}' (aka '{a}')"));
         }

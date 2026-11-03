@@ -101,7 +101,8 @@ impl Cg<'_> {
 
     fn warn_avx(&mut self, span: Span, argument: bool, q: QualType, feature: &str) {
         let ast = self.ast;
-        let shown = vector_diag_arg(&ast.types, ast, q).unwrap_or_default();
+        let shown =
+            vector_diag_arg(&ast.types, ast, q, self.opts.clang_compat >= 22).unwrap_or_default();
         let d = Diag::new(DiagId::cg_avx_calling_convention, span)
             .arg(u8::from(argument))
             .arg(shown)
