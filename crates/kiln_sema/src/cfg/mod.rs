@@ -33,7 +33,7 @@ use kiln_ast::{DeclId, ExprId, StmtId};
 
 pub(crate) use body::BodyCfg;
 pub(crate) use build::CfgReq;
-pub(crate) use query::{DeadScan, Unit};
+pub(crate) use query::Unit;
 
 /// The default `-fkiln-cfg-max-elems`: at about 16 bytes per element
 /// and a block and two edges per four elements, a graph at the cap holds
@@ -225,10 +225,6 @@ pub(crate) struct Cfg {
     pub(crate) probes: Vec<(ExprId, Pos)>,
     /// Each statement, where control enters and leaves it (`CfgReq::flow`).
     pub(crate) flow: Vec<(StmtId, Pos, Pos)>,
-    /// The scan's pruned-branch candidates: the first element after an
-    /// edge a constant condition prunes, the condition, and the block it
-    /// ends (`CfgReq::scan`).
-    pub(crate) cands: Vec<(u32, ExprId, BlockId)>,
     pub(crate) inc: HashMap<Unit, StmtId>,
     pub(crate) ret: HashMap<Unit, StmtId>,
     pub(crate) do_conds: HashSet<ExprId>,
@@ -251,7 +247,6 @@ impl Cfg {
         self.case_blocks.clear();
         self.probes.clear();
         self.flow.clear();
-        self.cands.clear();
         self.inc.clear();
         self.ret.clear();
         self.do_conds.clear();

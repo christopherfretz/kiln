@@ -6,11 +6,11 @@
 //! `-Wunreachable-code-fallthrough` at a `[[fallthrough]]` in unreachable
 //! code that falls into a label.
 //!
-//! kiln has no CFG: the predecessors of a label are found structurally
-//! (the statements before it in its block, the branches of an `if`
-//! ending there), their reachability from the walk of
-//! [`Sema::stmt_flow`], which mirrors the CFG with every case label
-//! reachable (clang `fillReachableBlocks`).
+//! The predecessors of a label are found structurally (the statements
+//! before it in its block, the branches of an `if` ending there), their
+//! reachability from the body's graph ([`crate::cfg`], `stmt_flow`:
+//! where control enters and leaves each statement, every case label
+//! reachable, clang `fillReachableBlocks`; spec/sema.md §7.5.1).
 
 use std::collections::HashMap;
 
@@ -109,7 +109,7 @@ impl Sema<'_, '_> {
         if labels.is_empty() {
             return;
         }
-        let Some((before, after)) = self.stmt_flow(body) else { return };
+        let Some((before, after)) = self.with_cfg(body, |_, c| c.stmt_flow()) else { return };
         let mut flow = Flow { before, after, do_back: HashMap::new() };
         let dos: Vec<StmtId> = parents
             .iter()

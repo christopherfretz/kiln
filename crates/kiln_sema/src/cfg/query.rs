@@ -31,9 +31,6 @@ pub(crate) struct DeadScan {
     pub(crate) live: HashSet<Unit>,
     /// The elements a reached element (or root) flows into.
     pub(crate) has_pred: HashSet<Unit>,
-    /// The first element of a branch a constant condition prunes, with
-    /// that condition (the silencing note's source).
-    pub(crate) pruned: HashMap<Unit, ExprId>,
 }
 
 /// Whether each statement is reached, and whether control leaves it
@@ -107,6 +104,12 @@ impl Cfg {
         (before, after)
     }
 
+    /// The block holding element `u`.
+    pub(crate) fn block_of(&self, u: Unit) -> Option<BlockId> {
+        let i = self.elems.iter().position(|e| e.unit() == Some(u))? as u32;
+        (0..self.blocks.len() as u32).map(BlockId).find(|b| self.block(*b).elems.contains(&i))
+    }
+
     /// The unreachable-code scan with `roots` treated as reached: from
     /// the entry and every dispatch block (clang's CFG has no exception
     /// edges and scans the dispatch blocks as roots) over the scan's
@@ -159,12 +162,6 @@ impl Cfg {
             }
         }
         sc.order = self.elems.iter().filter_map(|e| e.unit()).collect();
-        for &(i, c, src) in &self.cands {
-            let Some(u) = self.elems[i as usize].unit() else { continue };
-            if live_out[src.idx()] && !sc.has_pred.contains(&u) {
-                sc.pruned.entry(u).or_insert(c);
-            }
-        }
         sc
     }
 }

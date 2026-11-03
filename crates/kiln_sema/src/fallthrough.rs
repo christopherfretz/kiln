@@ -3,7 +3,7 @@
 //! attributes"): a fallthrough statement must directly precede a switch
 //! label, judged on the body's control flow once the body is complete.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use kiln_ast::attr::AttrKind;
 use kiln_ast::stmt::StmtKind;
@@ -58,8 +58,10 @@ impl Sema<'_, '_> {
         if w.found.is_empty() {
             return;
         }
-        let wanted = w.found.iter().map(|f| f.0).collect();
-        let Some(dead) = self.unreachable_attributed_stmts(body, wanted) else { return };
+        let wanted: Vec<StmtId> = w.found.iter().map(|f| f.0).collect();
+        let Some((before, _)) = self.with_cfg(body, |_, c| c.stmt_flow()) else { return };
+        let dead: HashSet<StmtId> =
+            wanted.into_iter().filter(|s| !before.get(s).copied().unwrap_or(false)).collect();
         // clang erases each valid annotation from a `SmallPtrSet<_, 8>`
         // as it visits the labels in order (the last element moves into
         // the hole), then reports what is left in set order; past 8

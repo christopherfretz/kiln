@@ -87,9 +87,8 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   enumerator as one a switch must handle (only `[[maybe_unused]]` ones
   may be omitted; `switch_enum.rs`), which also decides whether the
   switch covers every value for `-Wreturn-type`. An `if consteval` is a
-  branch on an unknown condition in the reachability walk (clang 22
-  builds its CFG; clang 19 builds none and checks nothing;
-  `try_stmt/reach.rs`). `array is too large (N elements)` groups N's
+  branch on an unknown condition in the CFG (clang 22
+  builds its CFG; clang 19 builds none and checks nothing; §7.5.1). `array is too large (N elements)` groups N's
   digits with `'` (`18'446'744'073'709'551'615`;
   `element_count_text`). Wording-only changes are `_19` diag rows
   (spec/diag.md §2.5), e.g. `case ranges are a GNU extension`, `you need
@@ -760,7 +759,7 @@ Redeclaration and linkage rules:
   - incomplete parameter and return types (with a forward-declaration
     note)
   - falling off the end of a non-`void` function (`falls_off`, the
-    clang CheckFallThrough port in `try_stmt/reach.rs`, §7.5). This
+    clang CheckFallThrough port on the CFG's `exit_kinds`, §7.5). This
     warning is suppressed when the function had errors.
 - `main` must return `int` ([basic.start.main]/2). Falling off the end
   of `main` returns 0, so it never warns.
@@ -1199,10 +1198,10 @@ Redeclaration and linkage rules:
       condition is reached (the body falls off its end or a `continue`
       of that loop is reached) and is not a constant false; the
       placement check likewise lets a `[[fallthrough]];` before such a
-      `do` precede that label. Reachability comes from `Sema::stmt_flow`
-      (`try_stmt/reach.rs`): the `Reach` walk recording each
-      statement's live-in and live-out with every case label reachable
-      (clang `fillReachableBlocks`). A switch dispatch, a label directly
+      `do` precede that label. Reachability comes from the body's CFG
+      (`Cfg::stmt_flow`, §7.5.1): each statement's entry and exit
+      position is live when a live edge reaches it from the entry or
+      from any case block (clang `fillReachableBlocks`). A switch dispatch, a label directly
       before (`case 1: case 2:`, `L: case 2:`) and an unreachable
       predecessor are good; a reachable `[[fallthrough]];` is
       annotated; anything else is unannotated.
@@ -6821,14 +6820,18 @@ clang 19's `CheckUnreachable` (`ReachableCode.cpp`) with Sema's
 `UnreachableCodeHandler`, run with the other flow warnings at the end of
 a function body, never in a dependent context, in an instantiation or
 after an error (`uncompilable_error_count`, spec/diag.md §7.5).
-- `Sema::dead_scan` (in `try_stmt/reach.rs`) follows control through the
-  body as clang's CFG does. A constant branch condition prunes its dead
-  edge unless it is a configuration value (`is_configuration_value`:
-  a `constexpr` call, a global or `const` local, `sizeof`, or a
-  parenthesized or macro-expanded literal). An `ExprWithCleanups` is no
-  element of its own (clang `VisitExprWithCleanups`): the temporaries'
-  destruction after `throw E()` is not dead code
-  (`expr.throw/unreachable-code-temporary.cpp`).
+- The scan runs on the body's CFG (§7.5.1; `Cfg::dead_scan`, clang
+  `reachable_code::ScanReachableFromBlock`), from the entry and every
+  catch dispatch block, element by element, over the edges clang's
+  scan follows. A constant branch condition prunes its dead edge unless
+  it is a configuration value (`is_configuration_value`: a `constexpr`
+  call, a global or `const` local, `sizeof`, or a parenthesized or
+  macro-expanded literal); the builder decides that once and marks the
+  edge. An `ExprWithCleanups` is no element of its own
+  (clang `VisitExprWithCleanups`): the temporaries' destruction after
+  `throw E()` is not dead code
+  (`expr.throw/unreachable-code-temporary.cpp`). The AST walk this
+  replaced (`try_stmt/reach.rs`) is gone (WP-509).
 - Each round reports one dead root: the last dead element, in
   evaluation order, that no reached or dead element flows into. It is
   then treated as reached and the scan repeats, so the regions come out
@@ -6845,7 +6848,10 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
   `__builtin_unreachable`.
 - A dead `for` increment is `loop will run at most once (loop increment
   never executed)` [-Wunreachable-code-loop-increment] at the increment.
-- A dead branch pruned by a bare literal condition has the note
+- A root whose block's first predecessor (reachable or not; a loop
+  edge clang drops outright does not count) ends in a condition with a
+  bare literal (`if`, `while`, `for`, `do`, `switch`, `?:`, the left
+  operand of `&&`/`||`; clang `getTerminatorCondition`) has the note
   `silence by adding parentheses to mark code as explicitly dead`, with
   the `/* DISABLES CODE */ (` ... `)` fix-its around the literal. A root
   whose note repeats the previous root's literal is dropped.
@@ -6856,7 +6862,8 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
   -break and -return. None is in -Wall.
 - Tests: `tests/conformance/stmt.return/unreachable-code*.cpp`,
   `stmt.break/unreachable-code-break.cpp`,
-  `stmt.if/unreachable-code-config.cpp`.
+  `stmt.if/unreachable-code-config.cpp`, `stmt.*/cfg-*.cpp` (the
+  graphs, WP-509).
 
 #### 7.10.1 Fix-its at macro locations (`macro_fixit.rs`, WP-419)
 

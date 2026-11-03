@@ -78,8 +78,6 @@ pub(crate) struct Builder {
     /// since the innermost one.
     cleanups: u32,
     extended: u32,
-    /// The scan's pruned edge into the next element.
-    pending: Option<(ExprId, BlockId)>,
     cur_inc: Option<StmtId>,
     cur_ret: Option<StmtId>,
     /// The edges of `goto *p` into the shared indirect-goto block.
@@ -170,9 +168,6 @@ impl Truth {
 struct CondOut {
     t: Vec<u32>,
     f: Vec<u32>,
-    /// The block ending in the statement's terminator, and its truth.
-    src: Option<BlockId>,
-    kv: Truth,
 }
 
 impl Builder {
@@ -191,7 +186,6 @@ impl Builder {
             temps: Vec::new(),
             cleanups: 0,
             extended: 0,
-            pending: None,
             cur_inc: None,
             cur_ret: None,
             igoto: Vec::new(),
@@ -320,9 +314,6 @@ impl Builder {
         self.cfg.elems.push(el);
         self.cfg.blocks[b.idx()].elems.end = i + 1;
         if let Some(u) = el.unit() {
-            if let Some((c, src)) = self.pending.take() {
-                self.cfg.cands.push((i, c, src));
-            }
             if self.req.scan {
                 if let Some(l) = self.cur_inc {
                     self.cfg.inc.insert(u, l);
@@ -338,15 +329,6 @@ impl Builder {
     fn temp_tok(&mut self, t: TempTok) {
         if self.cleanups > 0 {
             self.temps.push(t);
-        }
-    }
-
-    /// Notes (scan only) that the edge into the next element is pruned
-    /// by `c` when `pruned` (clang's scan reports the branch's first
-    /// element with the condition as the silencing note's source).
-    fn prune(&mut self, src: Option<BlockId>, pruned: bool, c: ExprId) {
-        if self.req.scan {
-            self.pending = src.filter(|_| pruned).map(|b| (c, b));
         }
     }
 
@@ -679,7 +661,6 @@ impl Sema<'_, '_> {
         let (l, r) = (self.skip_parens(l), self.skip_parens(r));
         let (lt, lf) = if self.is_logical_op(l) {
             let o = self.cfg_logical_cond(l, Some(Term::Logical(op)), op, true, b);
-            b.pending = None;
             (o.t, o.f)
         } else {
             self.cfg_expr(l, b);
@@ -688,8 +669,6 @@ impl Sema<'_, '_> {
             // clang's order: the true edge first.
             let te = b.edge(src, kv.flags(true, false));
             let fe = b.edge(src, kv.flags(false, false));
-            // The scan's candidate: the right operand's first element.
-            b.prune(Some(src), kv.scan == Some(or), op);
             (vec![te], vec![fe])
         };
         let (rhs, short) = if or { (lf, lt) } else { (lt, lf) };
@@ -703,10 +682,7 @@ impl Sema<'_, '_> {
         } else {
             self.cfg_expr(r, b);
             match t {
-                None => {
-                    let src = b.cur;
-                    CondOut { t: b.take_pos(), f: Vec::new(), src, kv: Truth::UNKNOWN }
-                }
+                None => CondOut { t: b.take_pos(), f: Vec::new() },
                 Some(t) => {
                     let base = self.known_truth(r).or_else(|| self.known_truth(op));
                     let scan = if !scan_on
@@ -722,12 +698,11 @@ impl Sema<'_, '_> {
                     let src = b.terminate(t);
                     let te = b.edge(src, kv.flags(true, false));
                     let fe = b.edge(src, kv.flags(false, false));
-                    CondOut { t: vec![te], f: vec![fe], src: Some(src), kv }
+                    CondOut { t: vec![te], f: vec![fe] }
                 }
             }
         };
         b.temp_tok(TempTok::Close);
-        b.pending = None;
         let mut v = short;
         if or {
             v.append(&mut o.t);
@@ -757,10 +732,10 @@ impl Sema<'_, '_> {
             self.cfg_scope_var(v, b);
         }
         let logical = d.cond.filter(|&c| d.cond_var.is_none() && self.is_logical_op(c));
-        let (src, kv, te, ee) = if let Some(c) = logical {
+        let (te, ee) = if let Some(c) = logical {
             let op = self.skip_parens(c);
             let o = self.cfg_logical_cond(op, Some(Term::If(s)), c, kind != IfKind::Constexpr, b);
-            (o.src, o.kv, o.t, o.f)
+            (o.t, o.f)
         } else {
             let mut kv = Truth::UNKNOWN;
             if let Some(c) = d.cond {
@@ -777,34 +752,21 @@ impl Sema<'_, '_> {
             let src = b.terminate(Term::If(s));
             let te = b.edge(src, kv.flags(true, false));
             let ee = b.edge(src, kv.flags(false, false));
-            (Some(src), kv, vec![te], vec![ee])
+            (vec![te], vec![ee])
         };
         b.set_pos(te);
-        if let Some(c) = d.cond {
-            b.prune(src, kv.scan == Some(false), c);
-        }
         if let Some(t) = d.then {
             self.cfg_stmt(t, b);
         }
-        b.pending = None;
         let then_out = b.take_pos();
         b.set_pos(ee);
         match d.els {
             Some(e) => {
-                if let Some(c) = d.cond {
-                    b.prune(src, kv.scan == Some(true), c);
-                }
                 self.cfg_stmt(e, b);
-                b.pending = None;
                 b.join(then_out);
             }
             None => {
                 b.join(then_out);
-                // The pruned false edge leads to the statement after the
-                // if.
-                if let Some(c) = d.cond {
-                    b.prune(src, kv.scan == Some(true), c);
-                }
             }
         }
         self.cfg_scope_end(mark, b);
@@ -818,18 +780,11 @@ impl Sema<'_, '_> {
         }
         let head = b.fresh();
         self.cfg_var_init(d.cond_var, b);
-        let logical = d.cond.filter(|&c| d.cond_var.is_none() && self.is_logical_op(c));
-        let (src, kv, be, xe) = self.cfg_loop_branch(s, d.cond_var, d.cond, b);
+        let (be, xe) = self.cfg_loop_branch(s, d.cond_var, d.cond, b);
         b.set_pos(be);
-        if let Some(c) = logical {
-            b.prune(src, kv.scan == Some(false), c);
-        }
         b.jumps.push(Jump { is_loop: true, brk: Vec::new(), cont: Vec::new(), dtor_mark: mark });
         if let Some(body) = d.body {
             self.cfg_stmt(body, b);
-        }
-        if logical.is_some() {
-            b.pending = None;
         }
         let j = b.jumps.pop().expect("loop frame");
         b.join(j.cont);
@@ -843,9 +798,6 @@ impl Sema<'_, '_> {
         b.resolve(&back, head);
         b.set_pos(xe);
         b.dangling.extend(j.brk);
-        if let Some(c) = logical {
-            b.prune(src, kv.scan == Some(true), c);
-        }
         self.cfg_scope_end(mark, b);
     }
 
@@ -858,18 +810,18 @@ impl Sema<'_, '_> {
         var: Option<DeclId>,
         cond: Option<ExprId>,
         b: &mut Builder,
-    ) -> (Option<BlockId>, Truth, Vec<u32>, Vec<u32>) {
+    ) -> (Vec<u32>, Vec<u32>) {
         let is_do = self.ast.stmts.get(s).kind() == StmtKind::DoStmt;
         if let Some(c) = cond.filter(|&c| !is_do && var.is_none() && self.is_logical_op(c)) {
             let op = self.skip_parens(c);
             let o = self.cfg_logical_cond(op, Some(Term::Loop(s)), c, true, b);
-            return (o.src, o.kv, o.t, o.f);
+            return (o.t, o.f);
         }
         let kv = self.cfg_loop_cond(var, cond, b);
         let src = b.terminate(Term::Loop(s));
         let be = b.edge(src, kv.flags(true, true));
         let xe = b.edge(src, kv.flags(false, true));
-        (Some(src), kv, vec![be], vec![xe])
+        (vec![be], vec![xe])
     }
 
     /// A loop condition (absent: `true`) and its known truth.
@@ -910,8 +862,7 @@ impl Sema<'_, '_> {
         if let Some(c) = d.cond {
             b.cfg.do_conds.insert(self.ignore_paren_imp_casts(c));
         }
-        let logical = d.cond.filter(|&c| self.is_logical_op(c));
-        let (src, kv, be, xe) = self.cfg_loop_branch(s, None, d.cond, b);
+        let (be, xe) = self.cfg_loop_branch(s, None, d.cond, b);
         // clang's back edge goes through an empty block.
         let latch = b.new_block();
         b.resolve(&be, latch);
@@ -919,9 +870,6 @@ impl Sema<'_, '_> {
         b.resolve(&[e], body_entry);
         b.set_pos(xe);
         b.dangling.extend(j.brk);
-        if let Some(c) = logical {
-            b.prune(src, kv.scan == Some(true), c);
-        }
         self.cfg_scope_end(mark, b);
     }
 
@@ -1156,16 +1104,12 @@ impl Sema<'_, '_> {
                 b.temp_tok(TempTok::Arms);
                 b.temp_tok(TempTok::Open(kv.base));
                 b.set_pos(vec![te]);
-                b.prune(Some(src), kv.scan == Some(false), c);
                 self.cfg_expr(t, b);
-                b.pending = None;
                 b.temp_tok(TempTok::Close);
                 let tout = b.take_pos();
                 b.temp_tok(TempTok::Open(kv.base.map(|v| !v)));
                 b.set_pos(vec![fe]);
-                b.prune(Some(src), kv.scan == Some(true), c);
                 self.cfg_expr(f, b);
-                b.pending = None;
                 b.temp_tok(TempTok::Close);
                 b.join(tout);
                 b.push(Elem::Expr(e));
