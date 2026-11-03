@@ -935,6 +935,17 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     }
 
     /// Whether the name at token `i` is qualified by a non-dependent
+    /// class or namespace in which lookup finds a non-type (a variable,
+    /// function or enumerator).
+    pub(crate) fn nontype_scope_name(&self, i: usize) -> bool {
+        matches!(
+            self.scan_name_qual_at(i),
+            Some((end, false, NameClass::Value(_), _, Some(q)))
+                if end > i + 1 && !self.s.is_dependent_ctx(q)
+        )
+    }
+
+    /// Whether the name at token `i` is qualified by a non-dependent
     /// class or namespace in which lookup finds nothing (clang's
     /// `TryAnnotateName` giving `ANK_Unresolved` after a scope).
     pub(crate) fn unresolved_scope_name(&self, i: usize) -> bool {
