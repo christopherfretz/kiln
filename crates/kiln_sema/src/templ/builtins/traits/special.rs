@@ -1,7 +1,9 @@
 //! The traits that query special members, layout and register passing
 //! (spec/sema-templates.md §9.1; WP-166): the GCC `__has_nothrow_*`
 //! family, `__is_trivially_equality_comparable`, `__can_pass_in_regs`
-//! (and `__is_trivially_relocatable`, which uses it),
+//! (and `__is_trivially_relocatable`, which uses it; at
+//! `-fclang-compat=22` `Sema::act_type_trait` warns it deprecated, as
+//! clang 22 does),
 //! `__is_bitwise_cloneable`, `__is_layout_compatible` and
 //! `__is_pointer_interconvertible_base_of`.
 //! Each follows clang 19 (`EvaluateUnaryTypeTrait`,
