@@ -160,7 +160,7 @@ impl Sema<'_, '_> {
 
     /// [expr.reflect]/7: an id-expression that names an overload set does
     /// not designate an entity.
-    fn reflect_overload_set(&mut self, name_loc: Loc, loc: Loc) -> ExprId {
+    pub fn reflect_overload_set(&mut self, name_loc: Loc, loc: Loc) -> ExprId {
         self.error(DiagId::sema_reflect_overload_set, name_loc);
         let info = self.meta_info_type();
         self.recover(info, &[], loc)
@@ -206,5 +206,12 @@ impl Sema<'_, '_> {
                     | DeclKind::TemplateTemplateParm
             )
         })
+    }
+
+    /// True if `c` is a class whose name is `name` (`C::C` names its
+    /// constructors, [class.qual]/2).
+    pub fn is_class_named(&self, c: DeclId, name: Symbol) -> bool {
+        self.kind_of(c) == DeclKind::CXXRecord
+            && self.ast.decls.get(c).name().as_ident() == Some(name)
     }
 }

@@ -30,7 +30,8 @@ impl Parser<'_, '_> {
         // An operand that can be a type-id is one (as a trailing return
         // type: an ambiguous declarator such as `void (*)(int)` tips to it),
         // unless it is a bare template-name.
-        if !self.at_bare_template_name()
+        let ahead = self.reflect_lookahead();
+        if ahead.is_none()
             && self.is_cxx_type_id_at(self.pos(), TypeIdContext::InTrailingReturnType).0
         {
             let ty = self.parse_type_id()?;
@@ -43,6 +44,11 @@ impl Parser<'_, '_> {
             return Some(self.s.reflect_bad_operand(operand, loc));
         };
         let name_loc = self.bump().span.lo;
+        // `^^S::S` names the constructors ([class.qual]/2): an overload
+        // set, never the injected-class-name.
+        if ahead == Some(ReflectAhead::Constructor) {
+            return Some(self.s.reflect_overload_set(name_loc, loc));
+        }
         if let Some(q) = qual
             && self.s.is_dependent_ctx(q.ctx)
         {
@@ -61,9 +67,10 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_reflect_name(qual, name, name_loc, loc, end))
     }
 
-    /// True at `name` / `nns name` naming a template, not followed by `<`
-    /// (the reflection of the template itself, never a type-id).
-    fn at_bare_template_name(&self) -> bool {
+    /// At `name` / `nns name` not followed by `<`: whether it names a
+    /// template itself (its reflection, never a type-id) or, as
+    /// `nns C::C`, the constructors of class `C`.
+    fn reflect_lookahead(&self) -> Option<ReflectAhead> {
         let mut i = self.pos();
         let mut ctx = None;
         if Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon) {
@@ -71,21 +78,23 @@ impl Parser<'_, '_> {
             i += 1;
         }
         loop {
-            let TokKind::Identifier(name) = self.tok_at(i).kind else { return false };
+            let TokKind::Identifier(name) = self.tok_at(i).kind else { return None };
             let next = Self::punct_of(self.tok_at(i + 1));
             if next == Some(Punct::ColonColon) {
                 // Only plain namespace / class qualifiers are followed.
-                match self.s.lookup_nested_ctx(name, ctx) {
-                    Some(c) => ctx = Some(c),
-                    None => return false,
-                }
+                ctx = Some(self.s.lookup_nested_ctx(name, ctx)?);
                 i += 2;
                 continue;
             }
             if next == Some(Punct::Less) {
-                return false;
+                return None;
             }
-            return self.s.names_template(name, ctx);
+            if let Some(c) = ctx
+                && self.s.is_class_named(c, name)
+            {
+                return Some(ReflectAhead::Constructor);
+            }
+            return self.s.names_template(name, ctx).then_some(ReflectAhead::Template);
         }
     }
 
@@ -129,4 +138,13 @@ impl Parser<'_, '_> {
         let e = e?;
         self.s.act_on_splice_type(e, open, close)
     }
+}
+
+/// What [`Parser::reflect_lookahead`] found after `^^`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReflectAhead {
+    /// A template-name not followed by `<`.
+    Template,
+    /// `nns C::C`.
+    Constructor,
 }
