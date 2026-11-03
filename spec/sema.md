@@ -3967,9 +3967,11 @@ for them.
     `extern` or a handler's exception variable; one of dependent or
     incomplete type; one whose (array element) class has a non-trivial
     destructor, or is initialized by a non-trivial constructor call that
-    is not a constant initialization, or by a type-dependent
-    initializer. A reference lifetime-extending a temporary is judged by
-    the temporary's type.
+    is not a constant initialization (a value referring to an automatic
+    object, constant only by P2686R5, counts as not constant, as in
+    clang 22: WP-467, `stmt.dcl/unused-variable-ptr-to-automatic.cpp`),
+    or by a type-dependent initializer. A reference lifetime-extending a
+    temporary is judged by the temporary's type.
   - A variable of dependent type is diagnosed as its instantiation is
     created (`diagnose_unused_inst_var`, from `subst` `var_decl`, clang
     `TemplateDeclInstantiator::VisitVarDecl`) by the pattern's
