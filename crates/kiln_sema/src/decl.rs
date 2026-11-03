@@ -4540,6 +4540,9 @@ impl Sema<'_, '_> {
             None if d.qualifier.is_none() => self.extern_c_prev(name, true, d.name_loc()),
             p => p,
         };
+        // An invalid decl-specifier (`typename Q b;`) was reported: the
+        // declaration is not merged (clang's invalid `DeclSpec`).
+        let prev = if self.is_error_type(ty) { None } else { prev };
         if let Some(p) = prev {
             let pn = *self.ast.decls.get(p);
             let block = local.is_some() && self.in_local_scope();
@@ -6098,6 +6101,7 @@ impl Sema<'_, '_> {
         // anyway, invalid and hidden from lookup (clang's recovery as an
         // anonymous tag).
         let mut conflict = false;
+        let mut respecialized = false;
         if let Some((n, nloc)) = name {
             if qualifier.is_none() && use_ != TagUse::Reference {
                 self.check_template_param_shadow(n, nloc);
@@ -6125,7 +6129,10 @@ impl Sema<'_, '_> {
                 if self.tag_matches(p, keyword) {
                     prev = Some(p);
                     if extraneous_head && use_ != TagUse::Reference {
+                        // Diagnosed as the specialization: no further
+                        // redefinition error (clang's recovery).
                         self.diag_spec_member_not_instantiated(p, nloc);
+                        respecialized = true;
                     }
                 } else {
                     let msg =
@@ -6153,9 +6160,12 @@ impl Sema<'_, '_> {
                     return p;
                 } else if use_ == TagUse::Definition {
                     if let Some(def) = self.ast.definition(p) {
-                        let msg = self.diag(DiagId::sema_redefinition, nloc).arg(sym_str(self, n));
-                        let msg = self.note_prev(msg, def, true);
-                        self.emit(msg);
+                        if !respecialized {
+                            let msg =
+                                self.diag(DiagId::sema_redefinition, nloc).arg(sym_str(self, n));
+                            let msg = self.note_prev(msg, def, true);
+                            self.emit(msg);
+                        }
                         prev = None;
                     }
                 } else if use_ == TagUse::Declaration
@@ -7824,6 +7834,10 @@ impl Sema<'_, '_> {
         let k = self.ast.decls.get(d).kind();
         if k == DeclKind::Namespace {
             return NameClass::Namespace(d);
+        }
+        if k == DeclKind::TemplateTemplateParm && self.templ.keyless_ttps.contains(&d) {
+            // Names no template (clang 22): "no template named 'T'".
+            return NameClass::Undeclared;
         }
         if k == DeclKind::NamespaceAlias {
             // [namespace.alias]/2: an alias names its namespace.

@@ -126,6 +126,7 @@ note_template_member_function_here = Note (1) "in instantiation of member functi
 note_template_nontype_parm_different_type = Note (1) "template non-type parameter has a different type {0} in template argument";
 note_template_nontype_parm_prev_declaration = Note (1) "previous non-type template parameter with type {0} is here";
 note_template_nsdmi_here = Note (1) "in instantiation of default member initializer '{0}' requested here";
+note_template_arg_refers_to_template = Note (2) "template argument refers to a {0:class template|variable template|concept} '{1}', here";
 note_template_param_different_kind = Note (0) "template parameter has a different kind in template argument";
 note_template_param_has_default = Note (0) "previous default template argument defined here";
 note_template_param_here = Note (0) "template parameter is declared here";

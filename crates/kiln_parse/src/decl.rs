@@ -808,6 +808,34 @@ impl Parser<'_, '_> {
                 Kw::Typename => {
                     self.typename_pack_index = None;
                     let ty = self.parse_typename_specifier_in(Some(ctx));
+                    if std::mem::take(&mut self.typename_failed) {
+                        if ctx == DeclaratorContext::Block
+                            && let Some(n) = self.ident()
+                        {
+                            // At block scope the name is then taken for a
+                            // type-specifier whatever it names ("unknown
+                            // type name") when a declarator follows, else
+                            // for the declarator-id of a declaration with
+                            // no type-specifier (clang's `ParseImplicitInt`).
+                            let at = self.loc();
+                            if self.unknown_type_follows(self.pos() + 1, ctx) {
+                                let text = self.s.ast.symbols().as_str(n).to_owned();
+                                let d = self.s.diag(DiagId::sema_unknown_typename, at).arg(text);
+                                self.emit(d);
+                                self.bump();
+                                ds.type_error = true;
+                                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), at);
+                            } else {
+                                self.s.error(DiagId::parse_missing_type_specifier, at);
+                                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), at);
+                            }
+                            ds.invalid = true;
+                            break;
+                        }
+                        ds.invalid = true;
+                        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
+                        break;
+                    }
                     if ty.is_none() {
                         ds.invalid = true;
                     }
@@ -1613,6 +1641,15 @@ impl Parser<'_, '_> {
             self.dependent_tag_reference(ds, q.nns, (n, nloc), keyword, kw_loc);
             return;
         }
+        if qual_failed && use_ != TagUse::Definition {
+            // The qualifier named nothing (diagnosed): no tag is declared
+            // or found (clang's invalid `CXXScopeSpec` recovery).
+            let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
+            return;
+        }
+        // A definition after a failed qualifier is parsed as an unnamed
+        // class, declaring nothing.
+        let name = if qual_failed { None } else { name };
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs, use_);
         if use_ == TagUse::Definition {

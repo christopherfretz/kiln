@@ -626,7 +626,7 @@ pub struct Sema<'a, 'sm> {
     /// the class-specifier's own errors, as clang's `ActOnTag`). One
     /// naming a non-template class is also clang's "specialization of
     /// member does not specialize an instantiated member".
-    pub extraneous_tag_head: Option<kiln_diag::Diag>,
+    pub extraneous_tag_head: Option<Diag>,
     /// Set when the last declarator's type was diagnosed invalid in a
     /// way clang records on its `Declarator` (an unexpanded pack,
     /// [temp.variadic]/12): clang's `ParseDeclGroup` reuses the

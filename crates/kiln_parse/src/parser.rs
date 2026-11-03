@@ -163,6 +163,10 @@ pub struct Parser<'a, 'sm> {
     /// decl-specifier-seq without consuming its name: the parameter list
     /// stops there (clang's "expected ')'").
     pub(crate) param_abort: bool,
+    /// Set when `typename identifier` failed (no qualifier) and the
+    /// identifier names no type: the identifier is left unconsumed and
+    /// the decl-specifier-seq ends there (clang's `DoneWithDeclSpec`).
+    pub(crate) typename_failed: bool,
     /// The name and end of the last `typename T...[i]` whose pack index
     /// was consumed after "expected a qualified name after 'typename'".
     pub(crate) typename_pack_index: Option<(Loc, Loc)>,
@@ -307,6 +311,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             param_typename: ParamTypename::Implicit,
             param_recovery: None,
             param_abort: false,
+            typename_failed: false,
             typename_pack_index: None,
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),

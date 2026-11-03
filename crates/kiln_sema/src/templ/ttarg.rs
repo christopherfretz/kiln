@@ -58,6 +58,10 @@ impl Sema<'_, '_> {
         at: Loc,
         prior: &MultiLevelArgs,
     ) -> bool {
+        if self.templ.keyless_ttps.contains(&p) {
+            self.reject_keyless_ttp_arg(a, at);
+            return false;
+        }
         let pl = self.ast.template_parm(p).and_then(|x| x.params);
         let al = match self.kind_of(a) {
             DeclKind::TemplateTemplateParm => self.ast.template_parm(a).and_then(|x| x.params),

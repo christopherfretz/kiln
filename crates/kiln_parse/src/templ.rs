@@ -292,11 +292,25 @@ impl Parser<'_, '_> {
             return false;
         }
         let i = self.pos() + 1;
-        let Some((end, _, class, _)) = self.scan_name_at(i) else { return false };
-        !matches!(class, NameClass::TypeTemplate(_))
-            && end > i
-            && self.ident_of(self.tok_at(end - 1)).is_some()
-            && self.tok_at(end).kind == TokKind::Punct(Punct::Less)
+        if let Some((end, _, class, _)) = self.scan_name_at(i) {
+            return !matches!(class, NameClass::TypeTemplate(_))
+                && end > i
+                && self.ident_of(self.tok_at(end - 1)).is_some()
+                && self.tok_at(end).kind == TokKind::Punct(Punct::Less);
+        }
+        // A qualifier naming nothing (`template<> struct NS::Z<int>`):
+        // `[::] identifier (:: identifier)* <`.
+        let mut j = i + usize::from(self.tok_at(i).kind == TokKind::Punct(Punct::ColonColon));
+        loop {
+            if self.ident_of(self.tok_at(j)).is_none() || self.kw_of(self.tok_at(j)).is_some() {
+                return false;
+            }
+            match self.tok_at(j + 1).kind {
+                TokKind::Punct(Punct::ColonColon) => j += 2,
+                TokKind::Punct(Punct::Less) => return j > i,
+                _ => return false,
+            }
+        }
     }
 
     /// Every parameter of `head` failed (`template<template<class> static
@@ -612,7 +626,7 @@ impl Parser<'_, '_> {
         }
         let d = self
             .s
-            .diag(DiagId::parse_expected, self.expected_loc())
+            .diag(DiagId::parse_expected, self.loc())
             .arg("',' or '>' in template-parameter-list");
         self.emit(d);
         self.skip_until(&[Punct::Greater], true, false);
@@ -761,6 +775,7 @@ impl Parser<'_, '_> {
             None
         };
         let params = self.s.act_template_head(requires, r_angle);
+        let mut keyless = false;
         let typename_kw = match self.kw() {
             Some(Kw::Class) => {
                 self.bump();
@@ -778,6 +793,7 @@ impl Parser<'_, '_> {
             }
             _ => {
                 self.missing_template_template_param_key();
+                keyless = true;
                 false
             }
         };
@@ -797,6 +813,9 @@ impl Parser<'_, '_> {
         }
         let (pack, name, at) = self.parse_param_pack_and_name();
         let p = self.s.act_on_template_template_param(params, typename_kw, pack, name, at);
+        if keyless {
+            self.s.act_on_keyless_template_template_param(p);
+        }
         // Its name is not in scope in its own default
         // ([basic.scope.pdecl]/9).
         let ok = self.parse_template_template_param_default(p);
@@ -1175,7 +1194,10 @@ impl Parser<'_, '_> {
             let at = self.loc();
             let d = self.s.diag(DiagId::parse_expected_qualified_after_typename, at);
             self.emit(d);
-            self.ident()?;
+            if self.ident().is_none() {
+                self.typename_failed = ctx.is_some();
+                return None;
+            }
             let pack_index = self.peek_is(1, Punct::Ellipsis) && self.peek_is(2, Punct::LSquare);
             if ctx == Some(DeclaratorContext::Prototype)
                 && let Some(first) = self.param_recovery
@@ -1188,6 +1210,19 @@ impl Parser<'_, '_> {
                     self.emit(d.allow_duplicate());
                 }
                 self.param_abort = true;
+                return None;
+            }
+            if !pack_index && ctx.is_some() {
+                // clang recovers by skipping the `typename` when the name
+                // is a type; otherwise the name is left for the
+                // declarator and the decl-specifier-seq ends
+                // (`template <typename static U>`: "expected ',' or '>'").
+                let n = self.ident()?;
+                if let NameClass::Type(ty, _) = self.s.classify_name(n, None) {
+                    self.bump();
+                    return Some(ty);
+                }
+                self.typename_failed = true;
                 return None;
             }
             self.bump();

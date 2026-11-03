@@ -290,6 +290,10 @@ pub struct TemplState {
     /// The guide formed for (alias template or inheriting class template,
     /// source guide), if any.
     pub(crate) ctad_alias_cache: kiln_source::fx::FxHashMap<(DeclId, DeclId), Option<DeclId>>,
+    /// Each template template parameter written without `class` or
+    /// `typename` at clang compatibility 22 (spec/sema-templates.md):
+    /// it names no template, so every argument is rejected.
+    pub(crate) keyless_ttps: kiln_source::fx::FxHashSet<DeclId>,
     /// The `using` keyword of each alias declaration in a template:
     /// where clang declares the guides formed for an alias template.
     pub(crate) alias_using_loc: kiln_source::fx::FxHashMap<DeclId, Loc>,
@@ -687,6 +691,39 @@ impl Sema<'_, '_> {
         p
     }
 
+    /// Template template parameter `p` was written without `class` or
+    /// `typename` (already diagnosed by the parser). At clang
+    /// compatibility 22 it then names no template: its uses are not
+    /// template names and every argument for it is rejected (clang 22's
+    /// recovery); clang 19 recovers it as a type template.
+    pub fn act_on_keyless_template_template_param(&mut self, p: DeclId) {
+        if self.clang_compat >= 22 {
+            let _ = self.templ.keyless_ttps.insert(p);
+        }
+    }
+
+    /// clang 22's rejection of template `a` as the argument (at `at`)
+    /// of a key-less template template parameter
+    /// ([`Sema::act_on_keyless_template_template_param`]).
+    pub(crate) fn reject_keyless_ttp_arg(&mut self, a: DeclId, at: Loc) {
+        let (sel, nloc) = match self.kind_of(a) {
+            DeclKind::VarTemplate => (1u32, self.ast.decls.get(a).loc()),
+            DeclKind::Concept => (2, self.ast.decls.get(a).loc()),
+            DeclKind::TypeAliasTemplate => {
+                let pat = self.ast.template_info(a).and_then(|i| i.pattern);
+                let l = pat.and_then(|p| self.templ.alias_using_loc.get(&p).copied());
+                (0, l.unwrap_or_else(|| self.ast.decls.get(a).loc()))
+            }
+            _ => (0, self.ast.decls.get(a).loc()),
+        };
+        let note = self
+            .diag(DiagId::note_template_arg_refers_to_template, nloc)
+            .arg(sel)
+            .arg(self.decl_name(a));
+        let d = self.diag(DiagId::sema_template_arg_not_valid_template, at).with_note(note);
+        self.emit(d);
+    }
+
     /// The default argument `= arg` of parameter `p`
     /// ([temp.param]/10-12); `eq` is the `=`, `loc` the argument.
     pub fn act_on_template_param_default(
@@ -697,6 +734,15 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) {
         use crate::templ::pack::PackOperand;
+        if self.templ.keyless_ttps.contains(&p) {
+            // Rejected and dropped (clang 22).
+            if let ArgView::Template(n) = arg.view()
+                && let Some(a) = self.ast.types.template_decl(n)
+            {
+                self.reject_keyless_ttp_arg(a, loc);
+            }
+            return;
+        }
         if self.ast.template_parm(p).is_some_and(|x| x.pack) {
             // [temp.param]/11: "template parameter pack cannot have a
             // default argument", at the `=` (clang's
