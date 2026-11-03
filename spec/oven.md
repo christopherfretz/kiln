@@ -842,9 +842,18 @@ literal is one instruction and one step, not an interpreted loop.
   evaluation only), so a consteval constructor's immediate invocation
   handed `&c` fails the same way (WP-465;
   `meta.const.eval/is-within-lifetime-consteval-var.cpp`).
-  Known gaps: an aggregate or array member being list-initialized reads
-  as within its lifetime as a whole (clang: its later elements are not);
-  `this` inside a consteval constructor whose immediate invocation
+  A member list-initialized by its mem-initializer (an `InitListExpr` or
+  parenthesized list of a non-union class or array) records a step per
+  element, recursively for an element that is such a list itself
+  (`CTOR_STEP_ELEM | i`, the element's offset from `this` and size in
+  `CtorStep::off`/`len`; `CTOR_STEP_RECORD` for an element of class
+  type): while an element is initialized, a subobject ending before it
+  and an aggregate holding it have begun; the element itself, everything
+  after it (explicit, omitted or array-filler elements: clang initializes
+  them in order) has not; inside an element of class type the frames
+  above decide (WP-465;
+  `meta.const.eval/is-within-lifetime-member-list-init.cpp`).
+  Known gaps: `this` inside a consteval constructor whose immediate invocation
   initializes a variable, member, parameter or local temporary is the
   thunk's temporary, so it is answered where clang reports kind 3
   (clang accepts it when the invocation is nested in a temporary, member

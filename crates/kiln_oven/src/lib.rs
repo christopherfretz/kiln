@@ -342,6 +342,26 @@ impl Job {
 
 /// The [`Oven::ctor_steps`] tag of a virtual-base stage (WP-465).
 pub(crate) const CTOR_STEP_VBASE: u32 = 1 << 31;
+/// The [`Oven::ctor_steps`] tag of an element of the member being
+/// list-initialized: the low bits are the member's entry, [`CtorStep::off`]
+/// and [`CtorStep::len`] the element's bytes (WP-465).
+pub(crate) const CTOR_STEP_ELEM: u32 = 1 << 30;
+/// With [`CTOR_STEP_ELEM`]: the element is of class type, its subobjects
+/// are left to the frames above.
+pub(crate) const CTOR_STEP_RECORD: u32 = 1 << 29;
+
+/// One construction step of a constructor ([`Oven::ctor_steps`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CtorStep {
+    /// The first instruction of the step.
+    pub(crate) pc: u32,
+    /// The entry being initialized, with its `CTOR_STEP_*` tags.
+    pub(crate) cur: u32,
+    /// An element step's offset from `this`.
+    pub(crate) off: u32,
+    /// An element step's size.
+    pub(crate) len: u32,
+}
 
 /// The constant evaluator of one translation unit.
 #[derive(Debug)]
@@ -377,8 +397,11 @@ pub struct Oven {
     /// constructor, `CTOR_STEP_VBASE | j` first: virtual base `j` (entry
     /// `vbase_start + j`) is being initialized, the earlier ones have
     /// begun, no non-virtual entry has. Read only by
-    /// `__builtin_is_within_lifetime` (spec/oven.md "Builtins").
-    pub(crate) ctor_steps: FxHashMap<u32, Box<[(u32, u32)]>>,
+    /// `__builtin_is_within_lifetime` (spec/oven.md "Builtins"). While a
+    /// member is list-initialized, `CTOR_STEP_ELEM` steps name the element
+    /// being initialized: the bytes before it have begun, it and those
+    /// after it have not, an aggregate holding it has.
+    pub(crate) ctor_steps: FxHashMap<u32, Box<[CtorStep]>>,
     pub(crate) thunks: FxHashMap<ExprId, u32>,
     /// Thunks compiled inside a default argument use (the key's second
     /// half, [`Oven::fold_immediate_in`]): their source-location builtins

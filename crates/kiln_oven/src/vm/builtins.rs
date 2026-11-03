@@ -288,8 +288,9 @@ impl Oven {
             }
             let rel = u64::from(p.off - this.off);
             let at = self.stack.get(i + 1).map_or(pc, |up| up.call_pc as usize) as u32;
-            let k = steps.partition_point(|&(spc, _)| spc <= at);
-            let Some(&(_, cur)) = k.checked_sub(1).map(|k| &steps[k]) else { continue };
+            let k = steps.partition_point(|s| s.pc <= at);
+            let Some(&st) = k.checked_sub(1).map(|k| &steps[k]) else { continue };
+            let cur = st.cur;
             if cur == u32::MAX {
                 continue;
             }
@@ -318,6 +319,13 @@ impl Oven {
                 continue;
             }
             let idx = idx as u32;
+            if cur & crate::CTOR_STEP_ELEM != 0 {
+                let field = cur & !(crate::CTOR_STEP_ELEM | crate::CTOR_STEP_RECORD);
+                if idx > field || (idx == field && self.elem_not_begun(st, rel, ty)) {
+                    return true;
+                }
+                continue;
+            }
             if idx > cur {
                 return true;
             }
@@ -331,6 +339,35 @@ impl Oven {
             }
         }
         false
+    }
+
+    /// Whether the subobject `rel` bytes from `this` (of type `ty`, `None`:
+    /// unknown) has not begun while element step `st` is current: it ends
+    /// before the element (begun), holds it (an aggregate being
+    /// list-initialized, begun), lies in an element of class type (left
+    /// to the frames above), or is the element or after it (not begun;
+    /// clang evaluates a list's elements in order, WP-465).
+    fn elem_not_begun(&self, st: crate::CtorStep, rel: u64, ty: Option<OTy>) -> bool {
+        let tys = &self.types;
+        let (o, n) = (u64::from(st.off), u64::from(st.len));
+        let sz = ty.map_or(1, |t| tys.size(t).max(1));
+        if rel + sz <= o || rel < o {
+            return false;
+        }
+        let record_leaf = st.cur & crate::CTOR_STEP_RECORD != 0;
+        if rel == o
+            && let Some(t) = ty
+        {
+            let holds = match tys.kind(t) {
+                TyKind::Record { .. } => sz > n || !record_leaf,
+                TyKind::Array { .. } => sz > n,
+                _ => false,
+            };
+            if holds {
+                return false;
+            }
+        }
+        !(record_leaf && rel < o + n)
     }
 
     /// Evaluates builtin `aux` (`bi` kind | sub << 8) on registers `a`..`c`

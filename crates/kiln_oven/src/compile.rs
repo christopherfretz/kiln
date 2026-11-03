@@ -908,7 +908,19 @@ pub(crate) struct Compiler<'a> {
     skip_effects: Vec<ExprId>,
     /// The construction progress of the constructor being compiled
     /// ([`Oven::ctor_steps`]).
-    ctor_steps: Vec<(u32, u32)>,
+    ctor_steps: Vec<crate::CtorStep>,
+    /// The list initializing a constructor's member (or an element of
+    /// it) that records element steps ([`Oven::ctor_steps`]).
+    elem_track: Option<ElemTrack>,
+}
+
+/// A list whose elements record construction steps: it initializes entry
+/// `field` of the constructor's class, at `off` bytes from `this`.
+#[derive(Clone, Copy)]
+pub(crate) struct ElemTrack {
+    pub(crate) list: ExprId,
+    pub(crate) field: u32,
+    pub(crate) off: u64,
 }
 
 /// The value an `OpaqueValueExpr` stands for.
@@ -953,6 +965,7 @@ impl<'a> Compiler<'a> {
             srcloc: None,
             skip_effects: Vec::new(),
             ctor_steps: Vec::new(),
+            elem_track: None,
         }
     }
 
@@ -4738,6 +4751,56 @@ impl Compiler<'_> {
         }
     }
 
+    /// Records the step of the element of type `ty` (`len` bytes, `local`
+    /// bytes into the list `tr` tracks) about to be initialized from `x`,
+    /// and tracks `x` itself when it is a list initializing an aggregate
+    /// element ([`Oven::ctor_steps`]).
+    fn elem_step(
+        &mut self,
+        tr: Option<ElemTrack>,
+        local: u64,
+        ty: OTy,
+        len: u64,
+        x: Option<ExprId>,
+    ) {
+        let Some(t) = tr else { return };
+        let off = t.off + local;
+        let (Ok(o), Ok(n)) = (u32::try_from(off), u32::try_from(len)) else { return };
+        let kind = self.kind(ty);
+        let record = matches!(kind, TyKind::Record { .. });
+        let mut cur = crate::CTOR_STEP_ELEM | t.field;
+        if record {
+            cur |= crate::CTOR_STEP_RECORD;
+        }
+        let pc = self.o.code.len() as u32;
+        self.ctor_steps.push(crate::CtorStep { pc, cur, off: o, len: n });
+        self.elem_track = x.and_then(|x| self.tracked_list(x, ty)).map(|list| ElemTrack {
+            list,
+            field: t.field,
+            off,
+        });
+    }
+
+    /// `x` when it is a list (or parenthesized list) aggregate-initializing
+    /// a non-union class or an array of type `ty`.
+    pub(crate) fn tracked_list(&self, x: ExprId, ty: OTy) -> Option<ExprId> {
+        let ast = self.ast();
+        let mut x = x;
+        while matches!(
+            ast.exprs.get(x).kind(),
+            ExprKind::ParenExpr | ExprKind::ConstantExpr | ExprKind::ExprWithCleanups
+        ) {
+            x = ast.exprs.operand(x);
+        }
+        let list = matches!(
+            ast.exprs.get(x).kind(),
+            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+        );
+        let aggr =
+            matches!(self.kind(ty), TyKind::Array { .. } | TyKind::Record { union: false, .. });
+        (list && aggr).then_some(x)
+    }
+
     fn init_list(&mut self, e: ExprId, p: u32, ty: OTy) {
         let ast = self.ast();
         let inits: Vec<ExprId> =
@@ -4759,6 +4822,7 @@ impl Compiler<'_> {
         p: u32,
         ty: OTy,
     ) {
+        let tr = self.elem_track.take_if(|t| t.list == e);
         match self.kind(ty) {
             TyKind::Array { elem, n } => {
                 if inits.len() as u64 > n {
@@ -4784,13 +4848,16 @@ impl Compiler<'_> {
                 let es = self.o.types.size(elem);
                 for (i, &x) in inits.iter().enumerate() {
                     let q = self.elem_ptr(p, i as u64 * es, e);
+                    self.elem_step(tr, i as u64 * es, elem, es, Some(x));
                     self.init(x, q, elem);
+                    self.elem_track = None;
                 }
                 if rest > 0
                     && !zero_fill
                     && let Some(f) = filler
                 {
                     // A loop over the remaining elements.
+                    self.elem_step(tr, inits.len() as u64 * es, elem, rest * es, None);
                     let k = self.reg();
                     let one = self.reg();
                     let lim = self.reg();
@@ -4852,12 +4919,15 @@ impl Compiler<'_> {
                     let off = self.base_offset(ty, bty);
                     let m = self.next;
                     let q = self.elem_ptr(p, off, e);
-                    match it.next() {
-                        Some(&x) => self.init(x, q, bty),
+                    let x = it.next().copied();
+                    self.elem_step(tr, off, bty, self.o.types.size(bty), x);
+                    match x {
+                        Some(x) => self.init(x, q, bty),
                         None => {
                             self.emit_at(Op::ZeroInit, 0, &[q, bty.0], e);
                         }
                     }
+                    self.elem_track = None;
                     self.next = m;
                 }
                 let fields = self.o.types.fields(ty).to_vec();
@@ -4874,12 +4944,14 @@ impl Compiler<'_> {
                             self.ast().decls.field(fi.decl).and_then(|f| f.init).map(|d| (d, true))
                         }
                     };
+                    self.elem_step(tr, fi.offset, fi.ty, self.o.types.size(fi.ty), x.map(|x| x.0));
                     if let Some((x, dflt)) = x {
                         let saved = self.this_override;
                         if dflt {
                             self.this_override = Some(p);
                         }
                         self.init_field(x, p, fi, e);
+                        self.elem_track = None;
                         self.this_override = saved;
                     } else {
                         // [dcl.init.aggr]/5.3: copy-initialized from `{}`.
