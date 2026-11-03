@@ -7,7 +7,7 @@
 // __tuple_leaf<I, T&> static_asserts on the first one (std::tie).
 //@ expect: compile-ok
 //@ requires: clang<22
-// clang 22 expected compile-ok, but the compiler failed (exit code 1); WP-355 residual
+// clang 19 semantics; builtin.reference-from-temporary-clang22.cpp has clang 22's (WP-394).
 struct B {};
 struct D : B {};
 struct ToRef { operator int &(); };

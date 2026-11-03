@@ -12,7 +12,7 @@
 //@ diag: 26:27 note "candidate function not viable: constraints not satisfied"
 //@ diag: 27:16 note "because 'false' evaluated to false"
 //@ requires: clang<22
-// clang 22 emits warning: self-comparison always evaluates to true; WP-355 residual
+// clang 19 spelling; hidden-friend-of-member-class-unsatisfied-clang22.cpp has clang 22's (WP-394).
 template <class T> concept eq = requires(const T& a) { a == a; };
 struct NoEq {};
 template <class V> struct view {

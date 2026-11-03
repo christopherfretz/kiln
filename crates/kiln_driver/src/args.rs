@@ -164,6 +164,11 @@ pub struct PrintArgs {
     pub includes_too: bool,
 }
 
+/// The `-fclang-compat` level without the flag: clang 22 (WP-394; the
+/// oracle switch, spec/driver.md). The library default stays
+/// [`ClangCompat::Clang19`].
+pub const DEFAULT_CLANG_COMPAT: ClangCompat = ClangCompat::Clang22;
+
 /// Flags that change predefined macros; `None` keeps clang's default.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -436,6 +441,7 @@ impl Args {
             argv: argv.to_vec(),
             program: program_basename(argv0).to_owned(),
             mode: DriverMode::from_program_name(argv0),
+            predef: PredefArgs { clang_compat: DEFAULT_CLANG_COMPAT, ..PredefArgs::default() },
             ..Args::default()
         };
         let mut x: Option<Lang> = None;
@@ -849,7 +855,7 @@ mod tests {
 
     #[test]
     fn clang_compat_level() {
-        assert_eq!(parse("t.cpp").predef.clang_compat, ClangCompat::Clang19);
+        assert_eq!(parse("t.cpp").predef.clang_compat, ClangCompat::Clang22);
         let a = parse("-fclang-compat=22 t.cpp");
         assert_eq!(a.predef.clang_compat, ClangCompat::Clang22);
         assert_eq!(a.errors, []);

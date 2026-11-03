@@ -159,6 +159,15 @@ pub trait TypeNames {
         let _ = ns;
         false
     }
+
+    /// The clang release whose diagnostic type printing to follow
+    /// (`-fclang-compat=<major>`, spec/sema.md §1.1). At 22 a canonical
+    /// tag type prints fully scoped, inside template arguments too, and
+    /// the `aka` keeps a written qualifier ([`aka`]). The AST dump keys
+    /// its own clang 22 rules on [`PrintOptions::written_tags`].
+    fn clang_compat(&self) -> u32 {
+        19
+    }
 }
 
 /// A [`TypeNames`] without an AST: declarations print as `decl#N`,
@@ -339,6 +348,7 @@ pub fn write_declarator(
         scoped_args: false,
         canon_args: false,
         written_tags: opts.written_tags,
+        c22: names.clang_compat() >= 22,
         depth: 0,
     };
     p.print(q, placeholder);
@@ -364,6 +374,7 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
         scoped_args: false,
         canon_args: false,
         written_tags: false,
+        c22: names.clang_compat() >= 22,
         depth: 0,
     };
     p.nns(n);
@@ -419,6 +430,7 @@ pub fn write_nns_resolved(
         scoped_args: false,
         canon_args: true,
         written_tags: false,
+        c22: names.clang_compat() >= 22,
         depth: 0,
     };
     let view = ctx.nns_view(n);
@@ -468,6 +480,7 @@ pub fn write_arg_list_canonical(
         scoped_args: false,
         canon_args: true,
         written_tags: false,
+        c22: names.clang_compat() >= 22,
         depth: 0,
     };
     p.arg_list(l, false);
@@ -528,6 +541,7 @@ fn arg_list_with_scope(
         scoped_args: scope,
         canon_args: false,
         written_tags: false,
+        c22: names.clang_compat() >= 22,
         depth: 0,
     };
     p.arg_list_prefix(l, false, usize::MAX, template, false);
@@ -575,6 +589,7 @@ pub fn write_arg_list_c(
         scoped_args: false,
         canon_args: true,
         written_tags: false,
+        c22: names.clang_compat() >= 22,
         depth: 0,
     };
     p.arg_list_prefix(l, false, usize::MAX, Some(template), false);
@@ -606,6 +621,7 @@ pub fn write_arg_list_prefix(
         scoped_args: false,
         canon_args: false,
         written_tags: false,
+        c22: names.clang_compat() >= 22,
         depth: 0,
     };
     p.arg_list_prefix(l, false, len, None, false);
@@ -636,6 +652,7 @@ pub fn write_template_arg(
         scoped_args: false,
         canon_args: false,
         written_tags: false,
+        c22: names.clang_compat() >= 22,
         depth: 0,
     };
     p.arg(a.view());
@@ -667,6 +684,7 @@ pub fn write_template_name(
         scoped_args: false,
         canon_args: false,
         written_tags: false,
+        c22: names.clang_compat() >= 22,
         depth: 0,
     };
     p.template_name(n, Qual::AsWritten);
@@ -734,6 +752,7 @@ fn print_diag_desugared(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -
         scoped_args: false,
         canon_args: false,
         written_tags: false,
+        c22: names.clang_compat() >= 22,
         depth: 0,
     };
     p.print(q, "");
@@ -1012,6 +1031,8 @@ struct Printer<'a> {
     canon_args: bool,
     /// [`PrintOptions::written_tags`].
     written_tags: bool,
+    /// [`TypeNames::clang_compat`] is 22 or later.
+    c22: bool,
     depth: u32,
 }
 
@@ -1052,7 +1073,9 @@ impl Printer<'_> {
             f(self, replacement);
         } else {
             let r = self.ctx.canonical(replacement);
-            let scope = !self.in_tst_args;
+            // clang 22 prints a canonical tag fully scoped, inside a
+            // written template-id's arguments too (`'Box<N::Q, int>'`).
+            let scope = !self.in_tst_args || self.c22;
             self.with_scope(scope, |p| f(p, r));
         }
     }
@@ -1296,7 +1319,19 @@ impl Printer<'_> {
                     self.names.specialization_args(d)
                 };
                 if let Some(args) = args {
-                    self.arg_list_prefix(args, false, usize::MAX, Some(d), false);
+                    if self.c22 {
+                        // clang 22: the specialization's (canonical)
+                        // arguments print fully scoped, whatever the
+                        // record's own name does (`'const J<ns::S> &'`).
+                        let saved = self.in_tst_args;
+                        self.in_tst_args = false;
+                        self.with_scope(true, |p| {
+                            p.arg_list_prefix(args, false, usize::MAX, Some(d), false);
+                        });
+                        self.in_tst_args = saved;
+                    } else {
+                        self.arg_list_prefix(args, false, usize::MAX, Some(d), false);
+                    }
                 }
                 self.space_before_ph();
             }
@@ -1836,7 +1871,13 @@ impl Printer<'_> {
         let saved = self.in_tst_args;
         // The `aka` and canonical arguments have no `ElaboratedType`.
         self.in_tst_args = !self.diag_desugar && !self.scoped_args;
-        self.arg_list_prefix(args, false, usize::MAX, template, false);
+        if self.diag_desugar && self.c22 {
+            // The written qualifier ([`Printer::diag_strip`]) leaves the
+            // scope off; the desugared arguments print theirs.
+            self.with_scope(true, |p| p.arg_list_prefix(args, false, usize::MAX, template, false));
+        } else {
+            self.arg_list_prefix(args, false, usize::MAX, template, false);
+        }
         self.in_tst_args = saved;
     }
 
@@ -1849,6 +1890,24 @@ impl Printer<'_> {
             match self.ctx.view(q.ty()) {
                 TypeView::TemplateSpecialization { alias: false, .. } => return q,
                 TypeView::Auto { deduced: Some(d), .. } if d == QualType::DEPENDENT => return q,
+                // clang 22: a tag type or template-id keeps its written
+                // keyword and qualifier, which are not sugar
+                // (`'O::J<SA>' (aka 'O::J<ns::S>')`; `'O::S'` has no aka).
+                TypeView::Elaborated { mut named, .. } if self.c22 => {
+                    while let TypeView::Elaborated { named: inner, .. } =
+                        self.ctx.view(split(self.ctx, named).0)
+                    {
+                        named = inner;
+                    }
+                    if matches!(
+                        self.ctx.view(split(self.ctx, named).0),
+                        TypeView::TemplateSpecialization { alias: false, .. }
+                            | TypeView::Record(_)
+                            | TypeView::Enum(_)
+                    ) {
+                        return q;
+                    }
+                }
                 // clang substitutes canonical arguments: `N::S<int>` is a
                 // class there, printed scoped (`'Box<N::S<int>, int>'`).
                 TypeView::SubstTemplateTypeParm { replacement, .. }
@@ -2008,7 +2067,12 @@ impl Printer<'_> {
                 };
                 let saved_tag = self.suppress_tag;
                 self.suppress_tag = true;
+                // A written qualifier ([`Printer::diag_strip`] at clang 22)
+                // prints as written: `'O::J<ns::S>'` for `O::J<SA>`.
+                let saved_dd = self.diag_desugar;
+                self.diag_desugar &= !self.c22;
                 self.with_scope(false, |p| p.print(ty, ""));
+                self.diag_desugar = saved_dd;
                 self.suppress_tag = saved_tag;
             }
             Nns::Identifier { name, .. } => self.symbol(name),

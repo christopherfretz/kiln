@@ -22,6 +22,9 @@ pub struct SemaNames<'s> {
     /// `'f()::(lambda)::operator()<int>'`) rather than `(anonymous class)`
     /// (clang 19).
     closure_as_lambda: bool,
+    /// [`TypeNames::clang_compat`]: `Sema::clang_compat` (19 without a
+    /// `Sema`).
+    clang_compat: u32,
     /// A function template specialization whose own arguments print with
     /// their types ([`Self::typed_args_of`]).
     typed_args: Option<DeclId>,
@@ -34,13 +37,20 @@ impl<'s> SemaNames<'s> {
             ast: &sema.ast,
             sources: Some(sema.diags.sm()),
             closure_as_lambda: sema.clang_compat >= 22,
+            clang_compat: sema.clang_compat,
             typed_args: None,
         }
     }
 
     /// Names for `ast` alone.
     pub fn of_ast(ast: &'s Ast) -> Self {
-        SemaNames { ast, sources: None, closure_as_lambda: false, typed_args: None }
+        SemaNames {
+            ast,
+            sources: None,
+            closure_as_lambda: false,
+            clang_compat: 19,
+            typed_args: None,
+        }
     }
 
     /// These names, printing the template arguments of function template
@@ -253,6 +263,10 @@ impl SemaNames<'_> {
 }
 
 impl TypeNames for SemaNames<'_> {
+    fn clang_compat(&self) -> u32 {
+        self.clang_compat
+    }
+
     fn specialization_args(&self, decl: DeclId) -> Option<kiln_ast::ids::ArgListId> {
         self.ast.spec_print_args(decl)
     }

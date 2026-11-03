@@ -27,7 +27,7 @@
 //@ diag: 68:40 error "vector is not assignable (contains duplicate components)"
 //@ diag: 70:28 note "in instantiation of function template specialization 'dup<float __attribute__((ext_vector_type(4)))>' requested here"
 //@ requires: clang<22
-// clang 22 emits error: illegal vector component name 'r'; WP-355 residual
+// clang 19 spelling; ext-vector-access-diagnostics-clang22.cpp has clang 22's (WP-394).
 typedef float float4 __attribute__((ext_vector_type(4)));
 typedef float float2 __attribute__((ext_vector_type(2)));
 typedef float float3 __attribute__((ext_vector_type(3)));

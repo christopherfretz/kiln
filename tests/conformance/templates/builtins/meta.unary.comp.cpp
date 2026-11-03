@@ -1,8 +1,7 @@
 // [meta.unary.comp]: the composite type category predicates, positive and
-// negative (spec/sema-templates.md §9.1).
+// negative (spec/sema-templates.md §9.1). __is_referenceable is
+// in meta.unary.comp-referenceable.cpp (clang 22 removed it).
 //@ strict-diags
-//@ requires: clang<22
-// clang 22 expected compile-ok, but the compiler failed (exit code 1); WP-355 residual
 struct S { int m; };
 enum E { e0 };
 
@@ -22,5 +21,3 @@ static_assert(__is_compound(void()) && __is_compound(int[2]));
 static_assert(!__is_compound(int) && !__is_compound(void) && !__is_compound(decltype(nullptr)));
 static_assert(__is_member_pointer(int S::*) && __is_member_pointer(void (S::*)()));
 static_assert(!__is_member_pointer(int *) && !__is_member_pointer(S));
-static_assert(__is_referenceable(int) && __is_referenceable(void()) && __is_referenceable(int &));
-static_assert(!__is_referenceable(void) && !__is_referenceable(void() const));

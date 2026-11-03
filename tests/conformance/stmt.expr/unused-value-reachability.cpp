@@ -19,7 +19,7 @@
 //@ diag: 45:27 warning "left operand of comma operator has no effect"
 //@ diag: 48:20 warning "left operand of comma operator has no effect"
 //@ requires: clang<22
-// clang 22 no longer emits warning: expression result unused; WP-355 residual
+// clang 19 spelling; unused-value-reachability-clang22.cpp has clang 22's (WP-394).
 template<class T> void t1() { 1; }
 template<class T> void t2() { return; 2; }
 template<class T> void t3(T x) { return; x; }

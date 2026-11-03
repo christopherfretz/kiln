@@ -69,7 +69,8 @@ impl RowKind {
             | FrameKind::ConstraintSubstitution
             | FrameKind::BindingInit
             | FrameKind::PriorArgSubstitution
-            | FrameKind::BuildingDeductionGuides => RowKind::Default,
+            | FrameKind::BuildingDeductionGuides
+            | FrameKind::PartialOrderingTtp => RowKind::Default,
         }
     }
 }

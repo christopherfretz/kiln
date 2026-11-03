@@ -7,7 +7,7 @@
 //@ diag: 27:15 error "static assertion expression is not an integral constant expression"
 //@ diag: 29:15 error "static assertion expression is not an integral constant expression"
 //@ requires: clang<22
-// clang 22 expected compile-fail, but compilation succeeded; WP-355 residual
+// clang 19 spelling; element-access-constexpr-diagnostics-clang22.cpp has clang 22's (WP-394).
 typedef float f4 __attribute__((ext_vector_type(4)));
 typedef int i4 __attribute__((ext_vector_type(4)));
 typedef int i3 __attribute__((ext_vector_type(3)));

@@ -1126,8 +1126,9 @@ pub enum ExtVectorAccess {
         repeated: bool,
     },
     /// `illegal vector component name '{c}'`: the first character that
-    /// is not from the set the accessor started with.
-    Illegal(char),
+    /// is not from the set the accessor started with, and its byte
+    /// offset in the accessor (clang 22 diagnoses it there).
+    Illegal(char, u32),
     /// `vector component access exceeds type`.
     Exceeds,
 }
@@ -1180,7 +1181,8 @@ pub fn ext_vector_access(name: &str, count: u32) -> ExtVectorAccess {
         }
     }
     if !half && i < b.len() {
-        return ExtVectorAccess::Illegal(name[i..].chars().next().unwrap_or('?'));
+        let at = u32::try_from(i).unwrap_or(u32::MAX);
+        return ExtVectorAccess::Illegal(name[i..].chars().next().unwrap_or('?'), at);
     }
     let idx = |c: u8| if hex { numeric(c) } else { point(c) };
     let comps = &b[usize::from(hex)..];
@@ -2568,6 +2570,23 @@ impl ExprArena {
             ExprKind::InitListExpr => Some(self.init_lists[n.b as usize].rbrace),
             _ => self.cold.end_loc.get(e).copied(),
         }
+    }
+    /// Whether `e`, a `return` operand, is erroneous in itself (clang
+    /// 22 drops such a `return`, `ActOnReturnStmt` getting `ExprError`),
+    /// as opposed to a valid operand whose conversion to the return type
+    /// failed (a `RecoveryExpr` over error-free operands, which clang keeps
+    /// and which fails evaluation without a note).
+    pub fn is_erroneous_operand(&self, e: ExprId, lists: &IdLists) -> bool {
+        let n = self.get(e);
+        if n.kind() != ExprKind::RecoveryExpr {
+            return n.deps().contains(ExprDeps::ERROR);
+        }
+        let kids = self.children(e, lists);
+        kids.is_empty()
+            || kids.iter().any(|&c| {
+                let k = self.get(c);
+                k.kind() == ExprKind::RecoveryExpr || k.deps().contains(ExprDeps::ERROR)
+            })
     }
 
     /// The child expressions of `e` in dump order (§11): the expressions

@@ -199,5 +199,4 @@ sema_return_in_ctor_handler = Error (0) "return in the catch of a function try b
 sema_return_init_list = Error (1) "void function '{0}' must not return a value";
 sema_return_local_temp_addr = Warning [ReturnStackAddress] (0) "returning address of local temporary object";
 sema_return_missing_expr = Error (1) "non-void function '{0}' should return a value";
-sema_return_void_expr_in_nonvoid = Error (1) "non-void function '{0}' should return a value";
 sema_rvalue_ref_bind_to_lvalue = Error (2) "rvalue reference to type {0} cannot bind to lvalue of type {1}";

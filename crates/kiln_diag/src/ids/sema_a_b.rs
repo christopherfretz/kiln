@@ -189,6 +189,7 @@ sema_bound_member_not_called = Error (1) "reference to non-static member functio
 sema_braces_around_init = Warning [BracedScalarInit] (0) "braces around scalar initializer";
 sema_break_not_in_loop_or_switch = Error (0) "'break' statement not in loop or switch statement";
 sema_builtin_arg_must_be = Error (3) "{0:1st|2nd|3rd|4th|5th} argument must be a {1} (was {2})";
+sema_builtin_assume_aligned_non_pointer = Error (0) "non-pointer argument to '__builtin_assume_aligned' is not allowed";
 sema_builtin_assume_aligned_too_big = Warning [BuiltinAssumeAlignedAlignment] (1) "requested alignment must be {0} bytes or smaller; maximum alignment assumed";
 sema_builtin_fn_use = Error (0) "builtin functions must be directly called";
 sema_builtin_fp_class_arg = Error (1) "floating point classification requires argument of floating point type (passed in {0})";

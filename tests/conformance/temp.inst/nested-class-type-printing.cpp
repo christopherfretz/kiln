@@ -22,7 +22,7 @@
 //@ diag: 47:18 error "no viable conversion from 'view<int>::plain' to 'int'"
 //@ diag: 63:25 note "in instantiation of member function 'W<view<int>::plain>::h' requested here"
 //@ requires: clang<22
-// clang 22 emits error: no viable conversion from 'decltype(v.p())' (aka 'plain') to 'int'; WP-355 residual
+// clang 19 spelling; nested-class-type-printing-clang22.cpp has clang 22's (WP-394).
 namespace ns {
 struct S {};
 S mk();
