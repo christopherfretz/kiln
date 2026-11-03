@@ -8073,11 +8073,14 @@ impl Sema<'_, '_> {
         // clang's `ConvertAPValueToString` prints no lvalue or member
         // pointer: a pointer comparison gets no note (`&a == &b`, `&&l ==
         // &&m`).
-        use kiln_ast::consts::Scalar;
         let pointer = |v| {
             matches!(
                 self.ast.consts.scalar(v),
-                Some(Scalar::Null { .. } | Scalar::Pointer { .. } | Scalar::MemberPtr { .. })
+                Some(
+                    kiln_ast::consts::Scalar::Null { .. }
+                        | kiln_ast::consts::Scalar::Pointer { .. }
+                        | kiln_ast::consts::Scalar::MemberPtr { .. }
+                )
             )
         };
         if pointer(lv) || pointer(rv) {

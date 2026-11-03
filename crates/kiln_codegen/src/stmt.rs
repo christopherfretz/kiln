@@ -170,7 +170,7 @@ impl Cg<'_> {
         Ok(())
     }
 
-    /// FinishFunction: the indirect `goto` block, if any, goes after the
+    /// `FinishFunction`: the indirect `goto` block, if any, goes after the
     /// return block; with no computed `goto` its empty `phi` becomes
     /// `poison` (clang 19: `undef`). A label whose address was taken keeps its block.
     pub(crate) fn finish_indirect_goto(&mut self) -> R<()> {

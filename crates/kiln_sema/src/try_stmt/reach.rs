@@ -257,6 +257,23 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// GNU `goto *p`: a live one reaches every address-taken label; it
+    /// never falls through.
+    fn reach_indirect_goto(&mut self, s: StmtId, live: bool, r: &mut Reach) -> bool {
+        let live = self.reach_parts(s, live, r);
+        if Self::unit(Unit::Stmt(s), live, r) {
+            if r.addr_labels.is_none() {
+                r.addr_labels = Some(r.root.map(|b| self.addr_taken_labels(b)).unwrap_or_default());
+            }
+            for &l in r.addr_labels.as_deref().unwrap_or_default() {
+                if r.labels.insert(l) {
+                    r.changed = true;
+                }
+            }
+        }
+        false
+    }
+
     /// The labels of `&&l` expressions in `body`, outside lambdas and
     /// unevaluated operands (the expressions clang's CFG visits).
     fn addr_taken_labels(&self, body: StmtId) -> Vec<DeclId> {
@@ -642,21 +659,7 @@ impl Sema<'_, '_> {
             }
             // GNU `goto *p`: an edge to every address-taken label (clang's
             // indirect-goto block).
-            StmtKind::IndirectGotoStmt => {
-                let live = self.reach_parts(s, live, r);
-                if Self::unit(Unit::Stmt(s), live, r) {
-                    if r.addr_labels.is_none() {
-                        r.addr_labels =
-                            Some(r.root.map(|b| self.addr_taken_labels(b)).unwrap_or_default());
-                    }
-                    for &l in r.addr_labels.as_deref().unwrap_or_default() {
-                        if r.labels.insert(l) {
-                            r.changed = true;
-                        }
-                    }
-                }
-                false
-            }
+            StmtKind::IndirectGotoStmt => self.reach_indirect_goto(s, live, r),
             // [dcl.asm], GNU `asm goto`: an edge to each label as well as
             // to the next statement (clang's CFG `GCCAsmStmt` successors).
             StmtKind::GCCAsmStmt => self.reach_asm(s, live, r),

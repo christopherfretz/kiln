@@ -535,7 +535,7 @@ impl Checker<'_, '_, '_> {
         }));
         let mut reachable = vec![false; self.scopes.len()];
         for &(target_scope, target) in &target_scopes {
-            reachable.iter_mut().for_each(|r| *r = false);
+            reachable.fill(false);
             // The scopes from which the target's can be entered; `min` is
             // the shallowest.
             let mut min = target_scope;

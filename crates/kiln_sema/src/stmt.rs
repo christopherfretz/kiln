@@ -50,6 +50,7 @@ pub(crate) struct SwitchState {
 
 /// Per-function state while its body is analysed.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts of one body")]
 pub struct FnState {
     pub(crate) decl: DeclId,
     pub(crate) ret: QualType,
