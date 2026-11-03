@@ -1,4 +1,4 @@
-//! GNU `init_priority(N)` (spec/sema.md "init_priority"; clang
+//! GNU `init_priority(N)` (spec/sema.md §4.5 `init_priority`; clang
 //! `handleInitPriorityAttr`): the priority of a namespace-scope object's
 //! dynamic initialization ([basic.start.dynamic]/1 leaves the order of
 //! initializations across translation units unspecified; the attribute
@@ -39,7 +39,8 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         };
-        let node = AttrNode { kind: AttrKind::INIT_PRIORITY, syntax, flags: 0, loc, a: e.raw(), b: 0 };
+        let node =
+            AttrNode { kind: AttrKind::INIT_PRIORITY, syntax, flags: 0, loc, a: e.raw(), b: 0 };
         Some(self.ast.attrs.push(node))
     }
 
@@ -86,7 +87,7 @@ impl Sema<'_, '_> {
         while let Some(t) = ty.filter(|&t| self.ast.types.is_array(t)) {
             ty = self.ast.types.element(t);
         }
-        if in_function || !ty.is_some_and(|t| self.ast.types.as_record(t).is_some()) {
+        if in_function || ty.is_none_or(|t| self.ast.types.as_record(t).is_none()) {
             self.error(DiagId::sema_init_priority_object_attr, node.loc);
             return None;
         }
@@ -94,20 +95,18 @@ impl Sema<'_, '_> {
         let e = ExprId::from_raw(node.a)?;
         let at = self.ast.exprs.get(e).loc();
         let Some(v) = self.fold_int(e) else {
-            let msg = self.diag(DiagId::sema_attribute_requires_integer_constant, node.loc).arg(name);
+            let msg =
+                self.diag(DiagId::sema_attribute_requires_integer_constant, node.loc).arg(name);
             self.emit(msg);
             return None;
         };
-        let width = self
-            .ast
-            .exprs
-            .get(e)
-            .ty();
+        let width = self.ast.exprs.get(e).ty();
         let width = crate::conv::rank::int_width(self, width).unwrap_or(32);
         // `APSInt::isIntN(32)`: the value's active bits in its own width.
         let bits = if v < 0 { i128::from(width) } else { i128::from(128 - v.leading_zeros()) };
         if bits > 32 {
-            let msg = self.diag(DiagId::sema_ice_too_large_unsigned, at).arg(v.to_string()).arg("32");
+            let msg =
+                self.diag(DiagId::sema_ice_too_large_unsigned, at).arg(v.to_string()).arg("32");
             self.emit(msg);
             return None;
         }
@@ -125,7 +124,8 @@ impl Sema<'_, '_> {
             }
             // Values up to 100 are reserved for the implementation.
             if p < 101 {
-                let msg = self.diag(DiagId::sema_init_priority_reserved, node.loc).arg(p.to_string());
+                let msg =
+                    self.diag(DiagId::sema_init_priority_reserved, node.loc).arg(p.to_string());
                 self.emit(msg);
             }
         } else if !(101..=65535).contains(&p) && !self.diags.sm().is_in_system_header(node.loc) {

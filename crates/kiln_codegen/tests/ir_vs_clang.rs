@@ -63,7 +63,7 @@ enum Allow {
     /// Nothing: kiln's IR is compared in the oracle's mode after
     /// `opt-N -passes=loop-simplify,lcssa` (which skip `optnone`
     /// functions) and [`ir_norm::unname_locals`], the canonicalization
-    /// clang 19's AArch64 `-O0` pipeline applies to its own output
+    /// clang 19's `AArch64` `-O0` pipeline applies to its own output
     /// (spec/codegen.md "Deviations").
     LoopCanon,
 }
@@ -397,12 +397,7 @@ struct Outcome {
     diff: Option<String>,
 }
 
-fn run_case(
-    name: &str,
-    file: &Path,
-    triple: &str,
-    canon: bool,
-) -> Result<Option<Outcome>, String> {
+fn run_case(name: &str, file: &Path, triple: &str, canon: bool) -> Result<Option<Outcome>, String> {
     let ir = kiln_ir(file, triple)?;
     let Some(checked) = opt(&ir) else { return Ok(None) };
     let (opt_name, clang_name) = (opt_tool(), clang_tool());
