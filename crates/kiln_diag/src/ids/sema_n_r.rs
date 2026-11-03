@@ -57,6 +57,7 @@ sema_nttp_rvalue_ref = Error (1) "non-type template parameter has rvalue referen
 sema_null_conversion = Warning [NullConversion] (1) "implicit conversion of NULL constant to {0}";
 sema_null_in_arithmetic = Warning [NullArithmetic] (0) "use of NULL in arithmetic operation";
 sema_null_in_comparison = Warning [NullArithmetic] (2) "comparison between NULL and non-pointer {0:({1} and NULL)|(NULL and {1})}";
+sema_null_pointer_compare = Warning [TautologicalPointerCompare] (3) "comparison of {0:address of|function|array} '{1}' {2:not |}equal to a null pointer is always {2:true|false}";
 sema_nullability_conflicting = Error (2) "nullability specifier '{0}' conflicts with existing specifier '{1}'";
 sema_nullability_declspec = WarningError [NullabilityDeclspec] (3) "nullability specifier '{0}' cannot be applied to non-pointer type {1}; did you mean to apply the specifier to the {2:pointer|block pointer|member pointer|function pointer|member function pointer}?";
 sema_nullability_duplicate = Warning [Nullability] (1) "duplicate nullability specifier '{0}'";

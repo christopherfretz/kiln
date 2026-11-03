@@ -4504,6 +4504,49 @@ conversion to `bool` (`check_constant_logical_operand`):
   removing from the end of the left operand to the end of the right.
 - Tests: `expr.log.and/constant-operand*.cpp`, `expr.log.or/constant-operand.cpp`.
 
+### 5.26 Always-non-null comparisons (`null_compare.rs`, WP-411)
+
+clang's `DiagnoseAlwaysNonNullPointer`, comparison forms
+([conv.ptr]/1, [basic.compound]/3, [dcl.ref]/5, [expr.prim.this]). A
+built-in `==` / `!=` with exactly one null pointer constant operand
+(`conv::is_null_pointer_constant`: `nullptr`, `__null`, a zero integer
+literal) checks the other, unconverted operand `E` in `comparison()`,
+before the usual conversions, so it applies alike in function bodies,
+default member initializers, namespace-scope and constexpr initializers
+and unevaluated operands:
+- Skipped when `E`'s location is a macro location and it, or the null
+  constant's start, was written in a macro body (clang
+  `IsInAnyMacroBody`); a macro argument is diagnosed.
+- Through implicit conversions only: `this` is `sema_this_null_compare`.
+  Then, through parentheses, a unary operator other than `&` ends the
+  check; `&X` checks `X`: a variable or member of reference type or a
+  call to a function returning a reference (through parentheses) is
+  `sema_address_of_reference_null_compare` (with
+  `note_reference_is_return_value` at the function), both
+  `-Wtautological-undefined-compare`.
+- Otherwise `X` (or `E`) must be a `DeclRefExpr` or `MemberExpr` (not
+  parenthesized) of a non-weak declaration: `&` of a non-function, or
+  without `&` a function or an array, is `sema_null_pointer_compare`
+  ("comparison of {address of|function|array} 'X' ...",
+  `-Wtautological-pointer-compare`, `X` printed as written). A function
+  adds `note_function_warning_silence` (insert `&`) and, when it can be
+  called without arguments and returns a pointer (or an integer, against
+  a literal zero), `note_function_to_function_call` (append `()`).
+- The result selects `true` for `!=`, `false` for `==`. The location is
+  the member name of a member access, else the start of the operand;
+  ranges are the operand's and the null constant's.
+- A template definition checks its non-dependent comparisons; the
+  instantiation warns again: a rebuilt comparison re-checks, and a shared
+  non-dependent operand reissues the definition's warning from
+  `null_compare_rewarn` (`mark_shared_expr_referenced`'s walk), in
+  definition order, with the instantiation notes.
+- Not implemented: the `nonnull` / `returns_nonnull` attribute forms, the
+  lambda-conversion form, and the conversion-to-`bool` forms
+  (`-Wpointer-bool-conversion`, "address of 'x' will always evaluate to
+  'true'"), which share this check in clang.
+- Tests: `expr.eq/null-pointer-compare.cpp`,
+  `expr.eq/null-pointer-compare-forms.cpp`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit

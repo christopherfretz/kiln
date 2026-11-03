@@ -3122,7 +3122,9 @@ impl Parser<'_, '_> {
             return false;
         }
         match Self::punct_of(self.tok_at(end)) {
-            Some(Punct::Semi | Punct::Equal | Punct::Comma | Punct::LSquare | Punct::LBrace) => true,
+            Some(Punct::Semi | Punct::Equal | Punct::Comma | Punct::LSquare | Punct::LBrace) => {
+                true
+            }
             Some(Punct::LParen) => !self.declarator_may_start_at(end),
             _ => self.kw_of(self.tok_at(end)) == Some(Kw::Asm),
         }
@@ -3218,17 +3220,15 @@ impl Parser<'_, '_> {
             // So is one after a declarator whose type named an
             // unexpanded pack (`Ts a, b;` reports `a` only).
             if declarators > 0 && (ds.type_error || type_invalid) {
-                if self.eat(Punct::Comma).is_none() {
-                    // clang's tentative `isCXXFunctionDeclarator` took the
-                    // `(` before reverting, leaving `PrevTokLocation` on it:
-                    // the missing `;` is reported after the `(`
-                    // (`R::f(v), g(v);`; WP-411).
-                    if self.at(Punct::LParen) {
-                        semi_at = Some(self.tok().span.hi);
-                    }
-                    break;
+                if self.eat(Punct::Comma).is_some() {
+                    continue;
                 }
-                continue;
+                // clang's tentative `isCXXFunctionDeclarator` took the `(`
+                // before reverting, leaving `PrevTokLocation` on it: the
+                // missing `;` is reported after the `(` (`R::f(v), g(v);`;
+                // WP-411).
+                semi_at = self.at(Punct::LParen).then(|| self.tok().span.hi);
+                break;
             }
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
@@ -3261,9 +3261,7 @@ impl Parser<'_, '_> {
             }
         }
         self.s.act_on_end_group(group, &ds);
-        if declarators > 1
-            && let Some((l, v)) = first_decomp
-        {
+        if let Some((l, v)) = first_decomp.filter(|_| declarators > 1) {
             self.s.act_on_decomposition_not_alone(l, v);
         }
         self.expect_declaration_semi(ctx, semi_at);

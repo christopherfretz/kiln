@@ -18,6 +18,8 @@ sema_addr_ovl_cast = Error (3) "address of overloaded function '{0}' cannot be {
 sema_addr_ovl_no_match = Error (2) "address of overloaded function '{0}' does not match required type {1}";
 sema_addr_ovl_reinterpret = Error (2) "reinterpret_cast cannot resolve overloaded function '{0}' to type {1}";
 sema_address_of_packed_member = Warning [AddressOfPackedMember] (2) "taking address of packed member {0} of class or structure {1} may result in an unaligned pointer value";
+// WP-411: clang `DiagnoseAlwaysNonNullPointer` (comparison forms).
+sema_address_of_reference_null_compare = Warning [TautologicalUndefinedCompare] (1) "reference cannot be bound to dereferenced null pointer in well-defined C++ code; comparison may be assumed to always evaluate to {0:true|false}";
 sema_addrof_bitfield = Error (0) "address of bit-field requested";
 sema_addrof_rvalue = Error (1) "cannot take the address of an rvalue of type {0}";
 sema_addrof_vector_element = Error (0) "address of vector element requested";

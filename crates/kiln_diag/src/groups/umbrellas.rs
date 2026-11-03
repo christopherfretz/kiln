@@ -27,6 +27,7 @@ PointerArith = "pointer-arith" [GnuPointerArith];
 Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
 RangeLoopAnalysis = "range-loop-analysis" [RangeLoopConstruct, RangeLoopBindReference];
 Reorder = "reorder" [ReorderCtor, ReorderInitList];
+TautologicalCompare = "tautological-compare" [TautologicalPointerCompare, TautologicalUndefinedCompare];
 UnevaluatedExpression = "unevaluated-expression" [PotentiallyEvaluatedExpression];
 Uninitialized = "uninitialized" [StaticSelfInit];
 UnreachableCode = "unreachable-code" [UnreachableCodeFallthrough, UnreachableCodeLoopIncrement];

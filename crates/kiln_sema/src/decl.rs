@@ -4520,6 +4520,24 @@ impl Sema<'_, '_> {
         (independent, local)
     }
 
+    /// [dcl.meaning.general]/2.2: a qualified declarator-id names a
+    /// member of its namespace; when lookup finds none, clang's
+    /// `ActOnVariableDeclarator` reports "no member named" at the name
+    /// and the variable is invalid (`int R::h;`, `R::h;`; WP-411).
+    fn diagnose_no_member_var(&mut self, ctx: DeclId, d: &Declarator, name: Symbol) -> bool {
+        let no_member = d.qualifier.is_some()
+            && matches!(self.kind_of(ctx), DeclKind::Namespace | DeclKind::TranslationUnit)
+            && self.lookup_qualified(ctx, name, LookupKind::Ordinary).decls.is_empty();
+        if no_member {
+            let msg = self
+                .diag(DiagId::sema_no_member, d.name_loc())
+                .arg(sym_str(self, name))
+                .arg(self.qualifier_desc(ctx));
+            self.emit(msg);
+        }
+        no_member
+    }
+
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
@@ -4535,22 +4553,7 @@ impl Sema<'_, '_> {
             p => p,
         };
         let ambiguous = self.diagnose_ambiguous_qualified_var(name, d);
-        // [dcl.meaning.general]/2.2: a qualified declarator-id names a
-        // member of its namespace; when lookup finds none, clang's
-        // `ActOnVariableDeclarator` reports "no member named" at the name
-        // and the variable is invalid (`int R::h;`, `R::h;`; WP-411).
-        let no_member = prev.is_none()
-            && !ambiguous
-            && d.qualifier.is_some()
-            && matches!(self.kind_of(ctx), DeclKind::Namespace | DeclKind::TranslationUnit)
-            && self.lookup_qualified(ctx, name, LookupKind::Ordinary).decls.is_empty();
-        if no_member {
-            let msg = self
-                .diag(DiagId::sema_no_member, d.name_loc())
-                .arg(sym_str(self, name))
-                .arg(self.qualifier_desc(ctx));
-            self.emit(msg);
-        }
+        let no_member = prev.is_none() && !ambiguous && self.diagnose_no_member_var(ctx, d, name);
         // A variable declared with no type is invalid and not merged
         // (clang's `MergeVarDecl` returns at an invalid new declaration):
         // `y; y;` reports the missing type twice, no redefinition; so
