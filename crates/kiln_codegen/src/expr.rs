@@ -4319,7 +4319,18 @@ impl Cg<'_> {
         let ast = self.ast;
         if self.referee(q).is_some() {
             // A reference binds the address of its initializer glvalue.
-            let p = self.emit_ref_binding(init)?;
+            // clang `EmitAutoVarInit`: a reference might be usable in
+            // constant expressions, so a constant initializer is stored as
+            // its constant (`ConstantLValueEmitter`, a byte-offset GEP)
+            // rather than re-evaluated (WP-189).
+            let k = match self.folds.get(init) {
+                Some(c) => self.const_value(c, q, Some(init), true).ok(),
+                None => None,
+            };
+            let p = match k {
+                Some(k) => V::C(k),
+                None => self.emit_ref_binding(init)?,
+            };
             let slot = self.scalar_tls_addr(addr.v);
             let st = self.store(p, slot, addr.align, false);
             self.tbaa_mark(st, q, Tb::Type);
