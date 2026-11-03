@@ -1134,6 +1134,16 @@ impl Sema<'_, '_> {
                         self.unused_warning(r).map(|_| (DiagId::sema_unused_expr, loc, Vec::new()))
                     }
                     _ if op.is_assignment() => None,
+                    // A volatile scalar `.*` / `->*` result is read when
+                    // discarded ([expr.context]/2): clang sees the
+                    // `LValueToRValue` cast and does not warn.
+                    BinaryOp::PtrMemD | BinaryOp::PtrMemI
+                        if self.std >= kiln_lex::Std::Cxx11
+                            && self.ast.types.effective_quals(n.ty()).is_volatile()
+                            && self.ast.types.as_record(n.ty()).is_none() =>
+                    {
+                        None
+                    }
                     _ => Some((DiagId::sema_unused_expr, loc, Vec::new())),
                 }
             }
@@ -2646,13 +2656,13 @@ impl Sema<'_, '_> {
                     ExprFlags::CANNOT_OVERFLOW,
                 );
             }
-            if x == e
-                && self.implicit_member_operand(e).is_some()
-                && self.member_overload_decls(x).iter().any(|&d| self.is_static_method(d))
-            {
-                // `&f` of an implicit member set with a static member: the
-                // target selects it ([over.over]/1; spec/sema-overload.md
-                // §2.3).
+            if x == e && self.implicit_member_operand(e).is_some() {
+                // `&f` of an implicit member set: a lookup of the name
+                // (clang's `ActOnIdExpression` for an address-of operand),
+                // from which the target selects a static member or a
+                // static member template's specialization ([over.over]/1,
+                // /3; spec/sema-overload.md §2.3). `&(f)` stays a member
+                // access.
                 return self.builder().unary(
                     UnaryOp::AddrOf,
                     e,
@@ -3026,6 +3036,9 @@ impl Sema<'_, '_> {
             BinaryOp::Comma => {
                 self.diagnose_comma_lhs(l);
                 self.discard_assignment_ref(l);
+                // clang `CheckCommaOperands`: the left operand is a
+                // discarded-value expression ([expr.comma]/1).
+                let l = self.ignored_value_conversions(l);
                 let ty = self.ety(r);
                 let res = self.builder().binary(op, l, r, ty, loc);
                 self.mark_bitfield_if(res, r);
@@ -5502,6 +5515,9 @@ impl Sema<'_, '_> {
                     return self.recover(ty, &[e], loc);
                 }
                 self.discard_assignment_ref(e);
+                // [expr.static.cast]/6: the operand is a discarded-value
+                // expression (clang `CastOperation::CheckToVoid`).
+                let e = self.ignored_value_conversions(e);
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             if style == CastStyle::Const {
