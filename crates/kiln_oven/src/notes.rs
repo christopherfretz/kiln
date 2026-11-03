@@ -1554,7 +1554,12 @@ impl Oven {
                     let parm = ast.decls.get(d).kind() == DeclKind::ParmVar;
                     let at = if parm || vi.usable { d } else { used_redecl(ast, site.e, d) };
                     extra.push(Note::new(ast.decls.get(at).loc(), "declared here"));
-                    if parm {
+                    if ast.decls.compound_literal_of(d).is_some() {
+                        // clang `handleLValueToRValueConversion`: a read
+                        // of a non-`const` namespace-scope array literal
+                        // (WP-466).
+                        "subexpression not valid in a constant expression".to_owned()
+                    } else if parm {
                         // clang note_constexpr_function_param_value_unknown.
                         format!(
                             "function parameter '{name}' with unknown value cannot be used in a constant expression"

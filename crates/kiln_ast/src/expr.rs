@@ -2883,4 +2883,13 @@ impl ExprArena {
     pub fn compound_literal_init(&self, e: ExprId) -> ExprId {
         ExprId::new(self.expect_kind(e, ExprKind::CompoundLiteralExpr).a)
     }
+
+    /// The implicit static-storage variable of a namespace-scope array
+    /// `CompoundLiteralExpr` (an lvalue, clang's `.compoundliteral`
+    /// object; `AstBuilder::file_scope_compound_literal`), or `None` for
+    /// a prvalue literal.
+    pub fn compound_literal_var(&self, e: ExprId) -> Option<DeclId> {
+        let n = self.expect_kind(e, ExprKind::CompoundLiteralExpr);
+        (n.aux() != 0).then(|| DeclId::new(n.b))
+    }
 }

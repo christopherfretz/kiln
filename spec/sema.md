@@ -3874,11 +3874,31 @@ for them.
     non-array literal is a prvalue, as it is inside a function, and its
     variable is constant-initialized.
 
+    A valid array literal (WP-466; clang `BuildCompoundLiteralExpr`,
+    `isFileScope`) is an lvalue naming an unnamed object of static
+    storage duration (C99 6.5.2.5p5): `file_scope_compound_literal`
+    creates an implicit unnamed `Var` (static storage, the literal's
+    initializer, its context the enclosing namespace even for a
+    class-scope literal) and records it in `DeclTable::compound_literal`
+    (`compound_literal_of`; `ExprTable::compound_literal_var` goes the
+    other way, aux 1). A literal whose initializer is not constant
+    becomes a recovery expression after the error. In the Oven the
+    object is usable in a constant expression only when its type is
+    const and not volatile ([expr.const]/4, as for a const variable),
+    and is read through its initializer; a read of a non-const literal
+    is "subexpression not valid in a constant expression" with the
+    "declared here" note at the literal. Codegen: spec/codegen.md §7ab.
+    Tests: `ext.gnu.compound.literal/namespace-scope-array-{run,diagnostics}.cpp`,
+    `tests/codegen/file_scope_compound_literal.cpp`.
+
   Deviations:
-  - Array literals at namespace scope are reported as not supported
-    yet. clang makes them lvalues naming an internal
-    `.compoundliteral` global, which needs a static-storage object in
-    the Oven and codegen.
+  - A literal in a constexpr variable template or a class template's
+    default member initializer, instantiated from a function body, is at
+    file scope in kiln, as in clang 19. clang 22 takes the instantiating
+    function as the context, makes the literal a block-scope temporary
+    and rejects the initialization (`-Wdangling`, then "must be
+    initialized by a constant expression" or the reference-member
+    error); kiln does not follow that at compat 22.
   - kiln does not wrap the elements of a namespace-scope literal in
     `ConstantExpr` nodes, as clang does.
 - **Flexible array members** (`flex_array.rs`, WP-271; a C99 feature,

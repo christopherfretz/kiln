@@ -1656,6 +1656,10 @@ pub struct ColdDeclData {
     /// type deduction; clang's instantiated declaration name). The
     /// declaration keeps the pattern's name for the mangling (WP-170).
     pub conversion_spec_target: ColdMap<DeclId, QualType>,
+    /// The implicit internal variable of a namespace-scope array compound
+    /// literal → that `CompoundLiteralExpr` (clang's `.compoundliteral`
+    /// global; `AstBuilder::file_scope_compound_literal`, WP-466).
+    pub compound_literal: ColdMap<DeclId, ExprId>,
 }
 
 impl Default for ColdDeclData {
@@ -1692,12 +1696,13 @@ impl Default for ColdDeclData {
             inherited_ctor: ColdMap::new("inherited_ctor"),
             hidden_shadow: ColdMap::new("hidden_shadow"),
             conversion_spec_target: ColdMap::new("conversion_spec_target"),
+            compound_literal: ColdMap::new("compound_literal"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 31] {
+    fn rows(&self) -> [MemRow; 32] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1730,6 +1735,7 @@ impl ColdDeclData {
             self.inherited_ctor.mem_row(),
             self.hidden_shadow.mem_row(),
             self.conversion_spec_target.mem_row(),
+            self.compound_literal.mem_row(),
         ]
     }
 }
@@ -2249,6 +2255,12 @@ impl DeclArena {
     /// If `c` is already recorded.
     pub fn set_inherited_ctor(&mut self, c: DeclId, b: DeclId) -> Result<(), AlreadySet> {
         self.cold.inherited_ctor.insert(c, b)
+    }
+
+    /// The namespace-scope array `CompoundLiteralExpr` whose object is
+    /// implicit variable `d`, if `d` is one (WP-466).
+    pub fn compound_literal_of(&self, d: DeclId) -> Option<ExprId> {
+        self.cold.compound_literal.get(d).copied()
     }
 
     /// The class member hiding using-shadow `s`, if any.

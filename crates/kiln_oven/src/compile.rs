@@ -3861,6 +3861,16 @@ impl Compiler<'_> {
                 let sl = self.ast().exprs.predefined_name(e).unwrap_or(e);
                 self.lv(sl, acc)
             }
+            // A namespace-scope array literal names its static object, an
+            // implicit internal variable (WP-466).
+            ExprKind::CompoundLiteralExpr
+                if let Some(d) = self.ast().exprs.compound_literal_var(e) =>
+            {
+                let g = self.o.global_index(self.b.ast(), d);
+                let r = self.reg();
+                self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
+                Place::Mem(r)
+            }
             ExprKind::StringLiteral => {
                 let s = self.ast().exprs.string_lit(e);
                 let ty = self.ety(e);
