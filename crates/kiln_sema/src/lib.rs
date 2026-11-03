@@ -51,6 +51,7 @@ pub mod init;
 mod init_dtor;
 mod init_priority;
 mod int_in_bool;
+mod int_overflow;
 mod jump_scope;
 mod kind_conflict;
 pub mod lambda;
