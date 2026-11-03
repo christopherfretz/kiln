@@ -473,7 +473,7 @@ impl Sema<'_, '_> {
 
     /// The source range of `e` (clang `getSourceRange`) for a diagnostic:
     /// from its first token to the end of its last (to the last token's
-    /// start in a macro expansion, whose text `token_end` cannot read).
+    /// start when `token_end` cannot measure it).
     pub(crate) fn expr_range(&self, e: ExprId) -> kiln_source::Span {
         let end = self.expr_end_loc(e);
         kiln_source::Span::new(self.begin_loc(e), self.token_end(end).unwrap_or(end))
