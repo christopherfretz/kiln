@@ -1030,6 +1030,25 @@ and resolved at instantiation (`Sema::member_via_dependent_base`; clang
 libc++ `basic_ostream::operator<<(int)` calls `ios_base::flags()` through
 the virtual base `basic_ios<C>` (WP-201).
 
+Destructor names in a member access whose object type is dependent
+([expr.prim.id.dtor]/2, [basic.lookup.qual]/5, [temp.dep.expr]/3;
+WP-457): `p->~T()`, `x.T::~T()`, an alias `~U` and an injected-class-name
+resolve at definition as before; a name the definition context does not
+find (`b->~Base()` naming a class template, `b->~Alias()` naming a member
+of the object's class) is kept as a `CXXPseudoDestructorExpr` with a
+dependent destroyed type and the identifier in the side table
+`TemplateTables::pseudo_dtor_name` (`Sema::dependent_destructor_name`).
+Substitution (`act_on_member_destructor_late`) looks the name up in the
+instantiated object's class only — not found there, or a non-class
+object, is `undeclared identifier 'N' in destructor name` — and then
+builds the ordinary destructor call (or pseudo-destructor). A dependent
+nested-name-specifier ending in the destructor's class name
+(`p->Base<T>::~Base()`) is a qualified pseudo-destructor of the
+qualifier's type, checked against the object at instantiation, and
+`x.~decltype(e)()` is a pseudo-destructor of `decltype(e)`'s type
+(parse.md). Tests:
+`tests/conformance/expr.prim.id.dtor/dependent-member-destructor-name*.cpp`.
+
 ### 3.5 ADL and operator lookup at instantiation ([temp.dep.candidate])
 
 When a dependent unqualified call or operator is substituted:

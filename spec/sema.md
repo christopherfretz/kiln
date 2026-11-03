@@ -3947,8 +3947,33 @@ and aggregate element types.
   deallocation never takes one). Without a virtual destructor the operand
   is converted to the first parameter's type. Codegen calls it with an
   empty tag temporary and runs no destructor; the destructor is still
-  selected (and access-checked) as clang does. A destroying delete through
-  a virtual destructor is a codegen "not supported yet" error.
+  selected (and access-checked) as clang does. Through a virtual
+  destructor the deallocation is the deleting destructor's (WP-457):
+  `check_destructor_delete` selects the class's deallocation function at
+  the destructor (`dtor_dealloc_fn`) and, for a destroying one, stores
+  `this` converted to its first parameter in `Ast::dtor_delete_this`
+  for codegen (spec/codegen.md §7u).
+- **Access to class allocation functions** ([class.access]/4,
+  [expr.new]/28, [class.dtor]/7.3; WP-457): a class-specific `operator
+  new` / `operator delete` (usual or destroying) selected by a
+  new- or delete-expression is access-checked at the expression, naming
+  class the allocated class. A new-expression checks both its `operator
+  new` and its matching `operator delete` (whether or not the
+  initialization can throw, as clang's `FindAllocationFunctions`; not
+  under `-fno-exceptions`), and an inaccessible `operator new` does not
+  stop the matching delete from being looked up and checked — two errors
+  at one location (`check_member_access_distinct`, which the
+  diagnostic engine's dedup would otherwise merge). A user-provided
+  virtual destructor checks its `operator delete` at the destructor; an
+  implicit or defaulted virtual destructor whose `operator delete` is
+  missing, ambiguous or inaccessible from the class is defined as
+  deleted (`virtual_dtor_delete_usable`, deletion reason
+  `note_deleted_dtor_no_operator_delete` "virtual destructor requires an
+  unambiguous, accessible 'operator delete'" at the class), so an
+  override of a non-deleted base destructor is the usual deleted-override
+  error with that note too (`report_override_mismatch`). Tests:
+  `tests/conformance/expr.new/class-operator-delete-access*.cpp`,
+  `tests/conformance/class.dtor/virtual-operator-delete-access.cpp`.
 - The element class's destructor ([expr.delete]/6, and for `new T[n]`
   [expr.new]/27) is selected (`mark_element_dtor_referenced`, skipped
   for an invalid or dependent class): a deleted one (such as a union's
