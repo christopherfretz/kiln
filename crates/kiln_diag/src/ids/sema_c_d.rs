@@ -61,6 +61,7 @@ sema_constant_logical_operand = Warning [ConstantLogicalOperand] (1) "use of log
 sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
 sema_consteval_overrides = Error (2) "{0:consteval|non-consteval} function '{1}' cannot override a {0:non-consteval|consteval} function";
 sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
+sema_constexpr_local_var_non_literal = Error (2) "variable of non-literal type {1} cannot be defined in a constexpr {0:function|constructor} before C++23";
 sema_constexpr_main = Error (1) "'main' is not allowed to be declared {0:constexpr|consteval}";
 sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
 sema_constexpr_nonstatic_member = Error (0) "non-static data member cannot be constexpr; did you intend to make it static?";
@@ -181,6 +182,10 @@ sema_default_member_init_not_yet_parsed = Error (2) "default member initializer 
 sema_default_not_in_switch = Error (0) "'default' statement not in switch statement";
 sema_default_not_special = Error (0) "only special member functions and comparison operators may be defaulted";
 sema_defaulted_assign_return = Error (2) "explicitly-defaulted {0:copy|move} assignment operator must return {1}";
+sema_defaulted_cmp_constexpr_mismatch = Error (2) "defaulted definition of {0:equality|three-way|equality|relational} comparison operator cannot be declared {1:constexpr|consteval} because it invokes a non-constexpr comparison function";
+sema_defaulted_cmp_constexpr_mismatch_19 = Error (2) "defaulted definition of {0:equality|three-way|equality|relational} comparison operator cannot be declared {1:constexpr|consteval} because it invokes a non-constexpr comparison function ";
+sema_defaulted_cmp_constexpr_mismatch_implicit = Error (1) "defaulted definition of three-way comparison operator cannot be declared {0:constexpr|consteval} because for which the corresponding implicit 'operator=='  invokes a non-constexpr comparison function";
+sema_defaulted_cmp_constexpr_mismatch_implicit_19 = Error (1) "defaulted definition of three-way comparison operator cannot be declared {0:constexpr|consteval} because for which the corresponding implicit 'operator=='  invokes a non-constexpr comparison function ";
 sema_defaulted_cmp_deduced_return = Error (2) "deduced return type for defaulted {0:equality|three-way|equality|relational} comparison operator must be 'auto', not {1}";
 sema_defaulted_cmp_deleted = Warning [DefaultedFunctionDeleted] (1) "explicitly defaulted {0:equality|three-way|equality|relational} comparison operator is implicitly deleted";
 sema_defaulted_cmp_non_const = Error (1) "defaulted member {0:equality|three-way|equality|relational} comparison operator must be const-qualified";
@@ -194,6 +199,7 @@ sema_defaulted_cmp_ref_qual = Error (0) "ref-qualifier '&&' is not allowed on a 
 sema_defaulted_cmp_return = Error (2) "return type for defaulted {0:equality|three-way|equality|relational} comparison operator must be 'bool', not {1}";
 sema_defaulted_cmp_template = Error (0) "comparison operator template cannot be defaulted";
 sema_defaulted_cmp_volatile = Error (0) "defaulted comparison function must not be volatile";
+sema_defaulted_constexpr_incorrect = Error (2) "defaulted definition of {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} cannot be marked {1:constexpr|consteval} before C++23";
 sema_defaulted_constexpr_with_vbase = Error (1) "{0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} cannot be 'constexpr' in a class with virtual base class";
 sema_defaulted_copy_assign_not_ref = Error (0) "the parameter for an explicitly-defaulted copy assignment operator must be an lvalue reference type";
 sema_defaulted_default_args = Error (1) "an explicitly-defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} cannot have default arguments";
