@@ -144,6 +144,8 @@ the IS equality ([expr.eq]):
 
 ## 3. The Oven runtime
 
+The value family (`extract`, `reflect_constant*`, P3491 `define_static_*`, `refl_bytes`) is specified in spec/reflection-values.md (WP-479).
+
 ### 3.1 Recognizing an intrinsic
 - The `std::meta` functions have no bodies: the library declares them, and
   a direct call to a declaration that sema recognizes compiles to one KBC

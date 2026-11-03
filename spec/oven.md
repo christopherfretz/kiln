@@ -544,6 +544,22 @@ asks whether the evaluation is manifestly constant-evaluated.
 - **Bytes** bounds the abstract-memory address space held,
   `frame.top + heap.top` ("constexpr evaluation exceeded the memory limit
   of N bytes", at the object's declaration); nested evaluations share it.
+- **Reflection bytes** (`refl_bytes`; WP-479, spec/reflection.md §2.4,
+  §3.8, spec/reflection-values.md §5). A reflection intrinsic that grows
+  the translation unit's interned tables (a new reflection table entry,
+  new constant-store content for `reflect_constant`,
+  `reflect_constant_string`/`_array` or `define_static_*`) charges the
+  growth to the running evaluation: content bytes as the constant store
+  counts them, plus `REFL_ENTRY_BYTES` (`meta/intern.rs`) per table entry.
+  The charge is `Memory::refl`, which is live for the rest of the
+  evaluation, so it counts into `peak_bytes`, `peak_arena` and the
+  **Bytes** limit above (the same "exceeded the memory limit" error at
+  the call). Content interning makes it bounded: a call whose result is
+  already interned charges 0, so `n` calls over `k` distinct values
+  charge `O(k)` (`meta.reflection.result/reflect-constant-budget.cpp`,
+  `stress/reflect-constant-1e5.cpp`). The tables are not reclaimed
+  during the evaluation (an `info` may sit anywhere in Oven memory); a
+  per-evaluation overlay table is an M7 item.
 - `EvalStats` holds one `EvalRecord` per `evaluate` call and TU totals.
   `Oven::footprint()` is the evaluator's own heap (code, memory, caches).
 
@@ -559,8 +575,8 @@ The format is NDJSON (UTF-8, one JSON object per `\n`-terminated line), one
 line per **top-level evaluation** in the order the evaluations finished,
 then exactly one `total` line, which is the last line:
 ```
-{"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"wall_us":4}
-{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"wall_us":4,"evaluations":1}}
+{"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"refl_bytes":0,"wall_us":4}
+{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"refl_bytes":0,"wall_us":4,"evaluations":1}}
 ```
 A top-level evaluation is one call of an evaluation entry point that the
 language requires (a manifestly constant-evaluated context): it includes
@@ -587,6 +603,7 @@ choice and must not move a budget.
 | `frozen_bytes` | Bytes this evaluation added to the `ConstStore`: only newly interned bytes, so a result equal to one already frozen adds 0 (spec/ast.md §9). |
 | `static_bytes` | Bytes of the static space held when the evaluation ended (`Memory::static_top`: live static objects plus the free ranges below the top; "Abstract memory", static reclamation). The space persists across evaluations, so this is the TU's so far. Optional for consumers (absent in reports before WP-322: read as 0). |
 | `memo_hits` | Calls answered from the memo table ("Memoization"); a nested evaluation's hits are its own line's. The one counter that differs with the cache on or off: it observes the cache, it is not a cost. Optional for consumers (absent in reports before WP-470: read as 0). |
+| `refl_bytes` | Bytes this evaluation added to the translation unit's reflection table and content-interned constants ("Reflection bytes" below). Already part of `peak_bytes` and `peak_arena`; reported separately so reflection growth is visible. Optional for consumers (absent in reports before WP-479: read as 0). |
 | `wall_us` | Wall-clock microseconds, rounded down. |
 
 The `total` object has the same counters summed over the evaluations, except
