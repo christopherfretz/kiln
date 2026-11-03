@@ -56,6 +56,21 @@ impl Sema<'_, '_> {
         if ds.friend.is_some() || d.friend || !self.inst.stack.is_empty() {
             return QualifiedDecl::Keep;
         }
+        // [temp.class.general]/3, [temp.spec.partial.general]/7: a
+        // dependent `P<T*>::` names no partial specialization (clang's
+        // `err_template_qualified_declarator_no_match`; clang 22 prints
+        // the specifier without its trailing `::`).
+        if let Some((t, nns)) = self.templ.unmatched_qualifier.take()
+            && t == dc
+        {
+            let mut q = self.nns_str(nns);
+            if self.clang_compat >= 22 && q.ends_with("::") {
+                q.truncate(q.len() - 2);
+            }
+            let m = self.diag(DiagId::sema_template_qualified_declarator_no_match, d.name_loc());
+            self.emit(m.arg(q));
+            return QualifiedDecl::Drop;
+        }
         let mut cur = self.ctx;
         for _ in 0..10_000 {
             if !matches!(self.kind_of(cur), DeclKind::LinkageSpec | DeclKind::Export) {

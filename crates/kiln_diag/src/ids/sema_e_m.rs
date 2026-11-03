@@ -221,6 +221,7 @@ sema_many_braces_around_scalar = Warning [ManyBracesAroundScalarInit] (0) "too m
 sema_member_call_without_object = Error (0) "call to non-static member function without an object argument";
 sema_member_decl_no_match = Error (2) "out-of-line declaration of '{0}' does not match any declaration in {1}";
 sema_member_def_no_match = Error (2) "out-of-line definition of '{0}' does not match any declaration in {1}";
+sema_member_def_ret_type_mismatch = Error (1) "return type of out-of-line definition of '{0}' differs from that in the declaration";
 sema_member_extra_qualification = Error (1) "extra qualification on member '{0}'";
 sema_member_fn_drops_quals = Error (3) "'this' argument to member function '{0}' has type {1}, but function is not marked {2}";
 sema_member_fn_ref_qual_mismatch = Error (3) "'this' argument to member function '{0}' is an {1:lvalue|rvalue}, but function has {2:non-const lvalue|rvalue} ref-qualifier";
