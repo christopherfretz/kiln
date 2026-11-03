@@ -41,6 +41,16 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// Arguments `args` kept as written for instantiation: a braced
+    /// placeholder becomes its whole dependent `InitListExpr`, nested
+    /// lists included (`T m({{1, 2}, {3, 4}})`; the placeholder holds
+    /// only the top-level expressions).
+    pub(crate) fn dependent_args(&mut self, args: &[ExprId]) -> Vec<ExprId> {
+        args.iter()
+            .map(|&a| self.take_braced_arg(a).map_or(a, |l| self.dependent_init_list(&l)))
+            .collect()
+    }
+
     /// Whether `e` is a braced-init-list placeholder of
     /// [`Sema::act_on_braced_arg`] (not yet taken).
     pub fn is_braced_arg(&self, e: ExprId) -> bool {
@@ -457,10 +467,7 @@ impl Sema<'_, '_> {
         {
             // Kept as written; list-initializes at instantiation
             // ([temp.dep.expr]/3).
-            let args: Vec<ExprId> = args
-                .iter()
-                .map(|&a| self.take_braced_arg(a).map_or(a, |l| self.dependent_init_list(&l)))
-                .collect();
+            let args = self.dependent_args(args);
             return self.builder().unresolved_construct(ty, &args, false, loc, rparen);
         }
         if self.require_non_abstract_alloc(loc, ty) {

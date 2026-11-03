@@ -5037,8 +5037,11 @@ impl Sema<'_, '_> {
         {
             // `T x(a, b)` with a dependent `T` or argument: initialized at
             // instantiation, kept as a `ParenListExpr` (clang
-            // `ActOnParenListExpr` / `AddInitializerToDecl`).
-            let e = self.builder().paren_list(es, *l, *r);
+            // `ActOnParenListExpr` / `AddInitializerToDecl`). A braced
+            // argument keeps its nested lists (`T m({{1, 2}, {3, 4}})`):
+            // the placeholder holds only the top-level expressions.
+            let es = self.dependent_args(es);
+            let e = self.builder().paren_list(&es, *l, *r);
             self.set_dependent_var_init(v, e);
             return true;
         }

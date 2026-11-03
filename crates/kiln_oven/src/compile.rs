@@ -4835,6 +4835,22 @@ impl Compiler<'_> {
             }
             return self.lv_mem(x, Access::Addr);
         }
+        // clang's standard-library builtins (`isStdBuiltin`; spec/oven.md
+        // "Calls"): a `constexpr` `std::move`, `forward`, `forward_like`,
+        // `move_if_noexcept`, `as_const`, `addressof` or `__addressof` is
+        // its argument's lvalue (or address), evaluated without a call:
+        // no frame, no step, no depth, as clang's `VisitCallExpr` does.
+        if let Some(d) = direct
+            && let [x] = args[..]
+            && is_std_builtin(ast, d)
+        {
+            let x0 = skip_parens(ast, x);
+            let xty = self.ety(x0);
+            if self.kind(xty) == TyKind::Func {
+                return self.fn_lv(x0);
+            }
+            return self.lv_mem(x, Access::Addr);
+        }
         // Library builtins (spec/oven.md "Builtins").
         if let Some(d) = direct
             && let Some(bid) = ast.decls.builtin_id(d).or_else(|| ast.decls.gnu_lib_twin(d))
@@ -4906,6 +4922,38 @@ impl Compiler<'_> {
 /// translation-unit scope, possibly through inline namespaces).
 fn is_std_is_constant_evaluated(ast: &kiln_ast::Ast, d: DeclId) -> bool {
     is_std_function(ast, d, "is_constant_evaluated")
+}
+
+/// Whether function `d` is one of the standard functions clang evaluates
+/// as a builtin (`isStdBuiltin`, `Builtins.td` `CxxLibBuiltin`; the shape
+/// test of codegen's `is_std_builtin`): `std::move`, `move_if_noexcept`,
+/// `forward`, `forward_like`, `as_const`, `addressof` or `__addressof`,
+/// declared `constexpr`, with one non-variadic reference parameter and a
+/// reference or pointer return to the same type up to qualifiers.
+fn is_std_builtin(ast: &kiln_ast::Ast, d: DeclId) -> bool {
+    const NAMES: [&str; 7] =
+        ["move", "move_if_noexcept", "forward", "forward_like", "as_const", "addressof", "__addressof"];
+    if ast.decls.get(d).kind() != DeclKind::Function
+        || !NAMES.iter().any(|n| is_std_function(ast, d, n))
+        || !ast
+            .decls
+            .function(ast.latest(d))
+            .is_some_and(|f| f.spec.constexpr_kind() != ConstexprKind::None)
+    {
+        return false;
+    }
+    let Some(fty) = ast.decls.get(d).ty() else { return false };
+    let Some(p) = ast.types.proto(fty) else { return false };
+    let [param] = ast.types.params(p) else { return false };
+    if p.variadic() || !ast.types.is_reference(*param) {
+        return false;
+    }
+    let ret = p.ret();
+    (ast.types.is_reference(ret) || ast.types.is_pointer(ret))
+        && match (ast.types.pointee(*param), ast.types.pointee(ret)) {
+            (Some(a), Some(b)) => ast.types.same_unqualified(a, b),
+            _ => false,
+        }
 }
 
 /// Whether function `d` is named `name` in namespace `std` at
