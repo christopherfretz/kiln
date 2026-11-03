@@ -233,10 +233,10 @@ impl<'a> IrTypes<'a> {
             // `typeRequiresSplitIntoByteArray`).
             TypeView::BitInt { width, .. } => {
                 let bits = self.target().bit_int_size_align_bits(width).0;
-                if self.size_align(&IrType::Int(width)).0 != bits / 8 {
-                    IrType::bytes(bits / 8)
-                } else {
+                if self.size_align(&IrType::Int(width)).0 == bits / 8 {
                     IrType::Int(bits as u32)
+                } else {
+                    IrType::bytes(bits / 8)
                 }
             }
             TypeView::Pointer(_)
