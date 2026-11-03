@@ -758,6 +758,16 @@ impl Sema<'_, '_> {
             TypeView::RValueRef(p) if self.ast.types.is_function(p) => (p, ValueCategory::LValue),
             TypeView::RValueRef(p) => (p, ValueCategory::XValue),
             _ if self.ast.types.is_function(from.0) => (from.0, ValueCategory::LValue),
+            // [expr.type]/2: a prvalue of a non-class, non-array type has
+            // its cv-qualifiers dropped (`VAL<const int>` is an `int`;
+            // clang 19 keeps them).
+            _ if prvalue
+                && self.clang_compat >= 22
+                && self.ast.types.as_record(from.0).is_none()
+                && !self.ast.types.is_array(from.0) =>
+            {
+                (self.ast.types.unqualified(from.0), ValueCategory::PRValue)
+            }
             _ if prvalue => (from.0, ValueCategory::PRValue),
             _ => (from.0, ValueCategory::XValue),
         };
