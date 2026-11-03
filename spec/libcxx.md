@@ -302,10 +302,15 @@ accepts (`depr.numeric.limits.has.denorm/deprecated.verify.cpp` needs its
 
 `c++26`, `c++experimental`, `large_tests`, `long_tests`,
 `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`,
-`-fsized-deallocation`, `gcc-style-warnings`, `has-fconstexpr-steps`, `verify-support`,
+`std-at-least-c++03`, `std-at-least-c++11`, `std-at-least-c++14`,
+`std-at-least-c++17`, `std-at-least-c++20`, `std-at-least-c++23`,
+`std-at-least-c++26`, `-fsized-deallocation`, `gcc-style-warnings`, `has-fconstexpr-steps`, `verify-support`,
 `can-create-symlinks`, `has-64-bit-atomics`, `has-unix-headers`, `kiln`.
 
-What stays static, and why: the parameters (lit's `params.py` defaults);
+What stays static, and why: the parameters (lit's `params.py` defaults;
+libc++ 22's `std` parameter also adds `std-at-least-<s>` for every
+standard `s` of `_allStandards` up to the selected one, so all seven at
+`c++26`, which libc++ 19 never names);
 compiler-flag probes, which are kiln's answers and change only with kiln;
 snippet-compiling target probes (`has-unix-headers`, `has-64-bit-atomics`),
 taken as clang 19 sees this machine so the set does not move with kiln.

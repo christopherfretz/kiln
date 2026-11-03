@@ -77,6 +77,16 @@ const FEATURES: &[&str] = &[
     "optimization=none",
     "stdlib=libc++",
     "stdlib=llvm-libc++",
+    // libc++ 22's `std-at-least-<s>` for every standard up to `STD`
+    // (`params.py` `std`: `_allStandards` with `s <= std`); libc++ 19
+    // never names them.
+    "std-at-least-c++03",
+    "std-at-least-c++11",
+    "std-at-least-c++14",
+    "std-at-least-c++17",
+    "std-at-least-c++20",
+    "std-at-least-c++23",
+    "std-at-least-c++26",
     // Flags kiln accepts (lit probes them with hasCompileFlag).
     "-fsized-deallocation",
     // kiln understands `-Wno-<group>` (features.py `_isAnyClangOrGCC`);
@@ -368,6 +378,7 @@ mod tests {
         assert!(all.iter().any(|f| f == STD));
         assert!(all.iter().any(|f| f == "kiln"));
         assert!(all.iter().any(|f| f == "verify-support"));
+        assert!(all.iter().any(|f| *f == format!("std-at-least-{STD}")));
         for f in &all {
             for bad in ["clang", "gcc", "msvc", "apple-clang"] {
                 assert!(
