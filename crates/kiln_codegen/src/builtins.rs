@@ -157,6 +157,11 @@ fn fp_intrinsic(b: u32) -> Option<(&'static str, usize)> {
         id::CANONICALIZEF16 => ("llvm.canonicalize", 1),
         id::FMAXIMUM_NUMF16 => ("llvm.maximumnum", 2),
         id::FMINIMUM_NUMF16 => ("llvm.minimumnum", 2),
+        // WP-410.
+        id::ROUNDEVEN | id::ROUNDEVENF | id::ROUNDEVENL => ("llvm.roundeven", 1),
+        id::CANONICALIZE | id::CANONICALIZEF | id::CANONICALIZEL => ("llvm.canonicalize", 1),
+        id::FMAXIMUM_NUM | id::FMAXIMUM_NUMF | id::FMAXIMUM_NUML => ("llvm.maximumnum", 2),
+        id::FMINIMUM_NUM | id::FMINIMUM_NUMF | id::FMINIMUM_NUML => ("llvm.minimumnum", 2),
         _ => return None,
     })
 }
