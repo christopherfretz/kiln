@@ -251,7 +251,8 @@ impl Sema<'_, '_> {
             return self.builder().dependent_offsetof(st, ty, comps, loc, rparen);
         }
         let mut indices = Vec::new();
-        let offset = self.offsetof_value(loc, ty, comps, &mut indices);
+        let mut invalid = false;
+        let offset = self.offsetof_value(loc, ty, comps, &mut indices, &mut invalid);
         let fits = offset.and_then(|v| u32::try_from(v).ok());
         if offset.is_some() && fits.is_none() {
             self.unsupported("a '__builtin_offsetof' value outside 0 to 2^32 - 1", loc);
@@ -259,20 +260,23 @@ impl Sema<'_, '_> {
         match fits {
             Some(v) => {
                 let st = self.size_type();
-                self.builder().offsetof(st, &indices, v, loc, rparen)
+                self.builder().offsetof(st, &indices, v, invalid, loc, rparen)
             }
             None => self.recover_err(&indices, loc),
         }
     }
 
     /// The offset in bytes `__builtin_offsetof(ty, comps...)` designates,
-    /// or `None` after an error. The converted indices go to `indices`.
+    /// or `None` after an error. The converted indices go to `indices`;
+    /// `invalid` is set when the designator passes through an invalid
+    /// class (the value is then not a constant, clang `ExprConstant`).
     fn offsetof_value(
         &mut self,
         loc: Loc,
         ty: QualType,
         comps: &[OffsetofComponent],
         indices: &mut Vec<ExprId>,
+        invalid: &mut bool,
     ) -> Option<i128> {
         if self.is_error_type(ty) {
             return None;
@@ -287,6 +291,7 @@ impl Sema<'_, '_> {
             self.emit(self.incomplete_note(d, ty));
             return None;
         }
+        *invalid |= self.is_invalid_class(ty);
         let mut cur = ty;
         let mut bits: i128 = 0;
         let mut warned = false;
@@ -324,6 +329,7 @@ impl Sema<'_, '_> {
                 }
                 OffsetofComponent::Field { name, start, end } => {
                     let (b, next) = self.offsetof_field(loc, cur, name, start, end, &mut warned)?;
+                    *invalid |= self.is_invalid_class(cur);
                     bits += b;
                     cur = next;
                 }

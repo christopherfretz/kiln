@@ -173,6 +173,12 @@ pub(crate) struct SpecialState {
     /// Deleted functions named by the expression being analysed whose
     /// diagnostic waits to see whether they are called.
     pub pending_deleted: Vec<PendingDeleted>,
+    /// Function template-ids resolved early with the substitution
+    /// warnings their specialization held back, reported at the end of
+    /// the full-expression unless an initialization finds no match for
+    /// them ([`Sema::template_id_no_match`]); the entry follows the
+    /// enclosing parentheses and `&` as [`PendingDeleted`] does.
+    pub pending_tid_warnings: Vec<(ExprId, DeclId, Vec<kiln_diag::Diag>)>,
     /// Implicit special members found deleted after their class's
     /// definition bits froze (lazy declarations; clang's
     /// `setImplicit*IsDeleted` and its `DefaultedCopyAssignmentIsDeleted`
@@ -194,6 +200,14 @@ pub(crate) struct SpecialState {
     /// in C++23 by clang's running `DefaultedDestructorIsConstexpr` flag
     /// (`vbase_flag_cxx23`; spec/sema-class.md §4.6).
     pub vbase_dtor_constexpr: FxHashSet<DeclId>,
+}
+
+impl SpecialState {
+    /// Whether a use named by the expression being analysed waits for
+    /// its context (a deleted function, a template-id's warnings).
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.pending_deleted.is_empty() || !self.pending_tid_warnings.is_empty()
+    }
 }
 
 impl Sema<'_, '_> {

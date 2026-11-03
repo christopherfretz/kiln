@@ -2226,11 +2226,9 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// noptr-declarator ([dcl.decl]): the declarator-id or `( declarator )`
-    /// and the array and function suffixes.
-    fn parse_direct_declarator(&mut self, d: &mut Declarator) {
-        let abstract_ok =
-            matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName);
+    /// The `...` before a declarator-id ([`Self::parse_direct_declarator`]):
+    /// whether it was before a ptr-operator, whose declarator it parsed.
+    fn parse_leading_declarator_ellipsis(&mut self, d: &mut Declarator, in_catch: bool) -> bool {
         // `... declarator-id` / an abstract pack declarator
         // ([dcl.decl.general]/4, [dcl.fct]/14).
         if d.ctx == DeclaratorContext::Prototype && self.at(Punct::Ellipsis) {
@@ -2239,8 +2237,47 @@ impl Parser<'_, '_> {
             if named || self.pack_hint {
                 d.ellipsis = Some(self.bump().span.lo);
             }
-        } else if std::mem::take(&mut self.catch_declarator) && self.at(Punct::Ellipsis) {
+        } else if in_catch && self.at(Punct::Ellipsis) {
             d.ellipsis = Some(self.bump().span.lo);
+        } else if matches!(
+            d.ctx,
+            DeclaratorContext::File
+                | DeclaratorContext::Member
+                | DeclaratorContext::Block
+                | DeclaratorContext::Condition
+                | DeclaratorContext::ForInit
+        ) && self.at(Punct::Ellipsis)
+        {
+            // [temp.variadic]/5: only a parameter declares a pack, but a
+            // `...` before any declarator-id is taken (clang
+            // `ParseDirectDeclarator`) and Sema drops it with "only
+            // function and template parameters can be parameter packs".
+            // Before a ptr-operator it is misplaced too (`int... *p`).
+            let ellipsis = self.bump().span.lo;
+            if matches!(Self::punct_of(self.tok()), Some(Punct::Star | Punct::Amp | Punct::AmpAmp))
+                || self.at_member_pointer().is_some()
+            {
+                self.parse_declarator(d);
+                self.misplaced_declarator_ellipsis(d, ellipsis);
+                d.ellipsis.get_or_insert(ellipsis);
+                return true;
+            }
+            d.ellipsis = Some(ellipsis);
+        }
+        false
+    }
+
+    /// noptr-declarator ([dcl.decl]): the declarator-id or `( declarator )`
+    /// and the array and function suffixes.
+    fn parse_direct_declarator(&mut self, d: &mut Declarator) {
+        let abstract_ok =
+            matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName);
+        // An exception-declaration may be abstract ([except.pre]/1), so
+        // `catch (int(...))` declares a function type (clang
+        // `DeclaratorContext::CXXCatch`).
+        let in_catch = std::mem::take(&mut self.catch_declarator);
+        if self.parse_leading_declarator_ellipsis(d, in_catch) {
+            return;
         }
         if self.at_decomposition_declarator(d) {
             self.parse_decomposition_declarator(d);
@@ -2302,16 +2339,26 @@ impl Parser<'_, '_> {
                 d.invalid = true;
             }
             self.parse_declarator_id_attrs(d);
-        } else if self.at(Punct::LParen) && !(abstract_ok && self.is_param_list_start(1)) {
+        } else if self.at(Punct::LParen)
+            && !((abstract_ok || in_catch) && self.is_param_list_start(1))
+        {
             // Like clang's ParseParenDeclarator: grouping is in effect
             // only for the inner declarator, then restored.
             let had_grouping = d.grouping;
             d.grouping = true;
+            // A `...` outside the parentheses is misplaced (`int ...(z)`;
+            // clang `ParseParenDeclarator`).
+            let ellipsis =
+                if d.ctx == DeclaratorContext::Prototype { None } else { d.ellipsis.take() };
             let open = self.bump().span.lo;
             self.skip_attributes();
             self.parse_declarator(d);
             let close = self.expect_closing(Punct::RParen, Punct::LParen, open);
             d.grouping = had_grouping;
+            if let Some(e) = ellipsis {
+                self.misplaced_declarator_ellipsis(d, e);
+                d.ellipsis.get_or_insert(e);
+            }
             d.outer_paren = Some((d.chunks.len(), open));
             d.parens.push((d.chunks.len(), open, close));
             self.discard_prohibited_cxx11_attrs();
@@ -3233,9 +3280,19 @@ impl Parser<'_, '_> {
                 Ok(())
             }
             // A malformed braced-init-list without `=` was skipped
-            // through its `}` (clang's `ParseBraceInitializer`); the
-            // declaration continues.
-            Err(()) if d.init_style == Some(InitStyle::List) => Ok(()),
+            // through its `}` (clang's `ParseBraceInitializer`), a
+            // malformed expression-list through its `)` (clang's
+            // `ParseDeclarationAfterDeclaratorAndAttributes`: `void
+            // f4(=) {}`); the declaration continues, so a missing `;` is
+            // reported.
+            Err(())
+                if matches!(
+                    d.init_style,
+                    Some(InitStyle::List | InitStyle::Call | InitStyle::ParenList)
+                ) =>
+            {
+                Ok(())
+            }
             Err(()) => Err(()),
         }
     }
@@ -3624,8 +3681,10 @@ impl Parser<'_, '_> {
             let at = at.unwrap_or_else(|| self.expected_loc());
             let msg = self.s.diag(id, at).fixit(FixIt::insert(at, ";"));
             self.s.emit(msg);
+            // clang's `ParseDeclGroup`: `SkipMalformedDecl`, which stops
+            // after a braced body (`void f4(=) {}`).
             if !self.is_decl_spec_start() {
-                self.skip_to_semi();
+                self.skip_malformed_decl();
             }
         }
     }
