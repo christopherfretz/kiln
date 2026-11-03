@@ -93,6 +93,7 @@ sema_subscript_function_type = Error (1) "subscript of pointer to function type 
 sema_subscript_incomplete_type = Error (1) "subscript of pointer to incomplete type {0}";
 sema_subscript_not_integer = Error (0) "array subscript is not an integer";
 sema_subscript_sizeless_type = Error (1) "subscript of pointer to sizeless type {0}";
+sema_subscript_svbool = Error (0) "subscript of svbool_t is not allowed";
 sema_subscript_value = Error (0) "subscripted value is not an array, pointer, or vector";
 sema_sve_type_without_sve = Error (1) "SVE vector type {0} cannot be used in a target without sve";
 sema_switch_bool_condition = Warning [SwitchBool] (0) "switch condition has boolean value";

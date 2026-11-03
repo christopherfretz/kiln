@@ -4945,6 +4945,29 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `ext.vector/element-access-constexpr-diagnostics.cpp` (strict-diags),
   `tests/codegen/ext_vector_element.cpp`.
 
+### 5.19a Vector subscript (`vector_ops.rs`, WP-469)
+`v[i]` with a vector `v` on the left (clang `CreateBuiltinArraySubscriptExpr`;
+`vector_subscript`):
+- A GNU/ext vector or an SVE vector type (`isSveVLSBuiltinType`: every
+  sizeless builtin but `__SVCount_t`, whose subscript is
+  "subscripted value is not an array, pointer, or vector", as is `i[v]` with an SVE `v`)
+  is subscripted in place: a prvalue base is materialized (CWG1213), the
+  index must be an integer or unscoped enumeration ("array subscript is not
+  an integer"), and the result is the element type (an SVE vector's
+  `getSveEltType`: `signed char` … `double`, `__fp16`, `__bf16`) with the
+  base's qualifiers and value category, an `ObjectKind::VectorComponent`
+  unless a prvalue.
+- `svbool_t` cannot be subscripted: `sema_subscript_svbool` ("subscript of
+  svbool_t is not allowed", clang `err_subscript_svbool_t`), at the `[`,
+  before the index is checked.
+- The element cannot have its address taken ("address of vector element
+  requested") or bind a non-const reference ("non-const reference cannot
+  bind to vector element"). Divergence: clang does not apply the second
+  rule to SVE vectors (`refersToVectorElement` tests `isVectorType`) and
+  binds the reference to the vector's address; kiln keeps it.
+- Tests `ext.arm.sve/subscript.cpp`, `subscript-element-reference.cpp`,
+  `ir-subscript.cpp` (codegen: spec/codegen.md §7aa).
+
 ### 5.20 Variadic arguments (`expr.rs`, WP-311)
 - An argument for the ellipsis gets the default argument promotions
   ([expr.call]/12) and is then checked once the call is built (clang

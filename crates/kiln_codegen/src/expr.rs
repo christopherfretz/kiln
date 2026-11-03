@@ -2686,7 +2686,10 @@ impl Cg<'_> {
     fn vec_subscript(&self, e: ExprId) -> Option<(ExprId, ExprId)> {
         let ast = self.ast;
         let [l, r] = ast.exprs.operands(e);
-        if self.vec_of(ast.exprs.get(l).ty()).is_some() {
+        // An SVE vector (sema rejects `svbool_t` and `__SVCount_t`) is
+        // subscripted as a fixed one, its base always on the left.
+        let lt = ast.exprs.get(l).ty();
+        if self.vec_of(lt).is_some() || ast.types.is_sizeless(lt) {
             Some((l, r))
         } else if self.vec_of(ast.exprs.get(r).ty()).is_some() {
             Some((r, l))

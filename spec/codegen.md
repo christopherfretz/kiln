@@ -3247,6 +3247,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   - A comparison yields `<vscale x N x i1>` (`cmp_ty`), zero-extended to the
     result type unless that is `svbool_t` (`vec_cmp_result`); unsigned
     lanes use the unsigned predicates, floats `fcmp oeq` etc.
+  - `v[i]` (spec/sema.md §5.19a) is a vector element lvalue as for a GNU
+    vector (`vec_subscript`, `LValue::MakeVectorElt`): `extractelement`
+    on a read, `insertelement` and a store back on a write (test
+    `ext.arm.sve/ir-subscript.cpp`).
   - Allocas of a sizeless type are aligned as clang's `getTypeInfo`: 16
     for an SVE data vector, 2 for `svbool_t` and `__SVCount_t`
     (`kiln_abi` `target_types`; sizeof/alignof stay ill-formed in sema).

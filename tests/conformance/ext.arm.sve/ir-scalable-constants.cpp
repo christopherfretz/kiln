@@ -2,12 +2,13 @@
 // `ConstantVector::getSplat`): `v + 1`, `~v`, a scalar operand converted
 // to the vector (`CK_VectorSplat`, an `insertelement` + zero-mask
 // `shufflevector` for a non-constant), the zero of `-v`, the `!= 0` of a
-// vector `?:` condition (an `svbool_t` condition selects by its lanes)
+// vector `?:` condition (an `svbool_t` condition selects by its lanes
+// from clang 22; clang 19 compares it too)
 // and scalar `?:` arms; `splat (T c)` from LLVM 20, the `shufflevector
 // (insertelement ...)` expression before. An SVE comparison is unsigned
 // and its `bool` is zero-extended to the result (clang does not treat the
 // sizeless types as vectors there). SVE allocas are 16-byte aligned,
-// `svbool_t`/`svcount_t` 2-byte. spec/codegen.md §7u, spec/types.md §5.1.
+// `svbool_t`/`svcount_t` 2-byte. spec/codegen.md §7aa, spec/types.md §5.1.
 // Host-restricted (no pinned `--target`): on an x86_64 host clang has no
 // AArch64 sysroot and leaves `+outline-atomics` out of the features.
 // `-ftrivial-auto-var-init=uninitialized`: kiln still gives SVE locals
