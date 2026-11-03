@@ -2502,6 +2502,7 @@ impl Sema<'_, '_> {
             }
         }
         let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
+        let ty = self.apply_nothrow_attrs(ty, &mut attrs);
         // [dcl.spec.general]/3: a function or member declared with no
         // type (`y();`, `struct S { y; };`) is an invalid `int` one, as
         // clang's `ConvertDeclSpecToType`: later uses name it silently.
@@ -2784,6 +2785,7 @@ impl Sema<'_, '_> {
     pub(crate) fn exc_spec_spelling(&self, exc: ExcSpec) -> String {
         match exc {
             ExcSpec::DynamicNone => "throw()".to_owned(),
+            ExcSpec::NothrowAttr => "__attribute__((nothrow))".to_owned(),
             ExcSpec::NoexceptExpr { expr, .. } => {
                 let mut s = String::from("noexcept(");
                 kiln_ast::types::TypeNames::write_expr(&self.ast, expr, &mut s);
@@ -9479,6 +9481,87 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// GNU `format(archetype, F, A)` on function `d` (WP-186; clang
+    /// `handleFormatAttr`): `F` names a parameter (one-based, index 1 of
+    /// an implicit object member function being `this`, which cannot be
+    /// the format string) of pointer-to-character type; `A` is 0 or the
+    /// position of the `...` (a non-variadic function gets
+    /// `-Wgcc-compat`'s warning and `A` must then be one past the last
+    /// parameter); `strftime` requires `A` = 0. False drops the
+    /// attribute (after an error).
+    pub(crate) fn check_format_decl_attr(
+        &mut self,
+        d: DeclId,
+        kind: DeclKind,
+        node: AttrNode,
+    ) -> bool {
+        if !kind.is_function() {
+            let shown = format!("'{}'", self.attr_shown(&node, "format"));
+            let what = "Objective-C methods, blocks, and non-K&R-style functions";
+            let msg = self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc).arg(shown);
+            self.emit(msg.arg(what.to_owned()));
+            return false;
+        }
+        if node.flags & 1 != 0 {
+            return true;
+        }
+        let Some(proto) = self.ast.decls.get(d).ty().and_then(|t| self.ast.types.proto(t)) else {
+            return true;
+        };
+        let name = "'format'";
+        let this = u32::from(self.is_implicit_object_member(d));
+        let params = self.ast.types.params(proto).to_vec();
+        let mut num = u32::try_from(params.len()).unwrap_or(u32::MAX - 2) + this;
+        let (f, first) = (node.b & 0xffff, node.b >> 16);
+        let oob = |s: &mut Self, pos: &str| {
+            let msg =
+                s.diag(DiagId::sema_attribute_param_out_of_bounds, node.loc).arg(name).arg(pos);
+            s.emit(msg);
+            false
+        };
+        if f < 1 || f > num {
+            return oob(self, "2");
+        }
+        if this == 1 && f == 1 {
+            let msg = self.diag(DiagId::sema_format_attribute_implicit_this, node.loc);
+            self.emit(msg);
+            return false;
+        }
+        let pty = params[(f - 1 - this) as usize];
+        let t = &self.ast.types;
+        let is_char = |q: QualType| {
+            matches!(
+                t.builtin(t.canonical(q).without_quals()),
+                Some(BuiltinType::Char | BuiltinType::SChar | BuiltinType::UChar)
+            )
+        };
+        let char_ptr = t.is_pointer(pty) && t.pointee(pty).is_some_and(is_char);
+        if !t.is_dependent(pty) && !char_ptr {
+            let msg = self.diag(DiagId::sema_format_attribute_not_string, node.loc);
+            self.emit(msg);
+            return false;
+        }
+        if first != 0 {
+            if proto.variadic() {
+                num += 1;
+            } else {
+                let at = self.ast.decls.get(d).loc();
+                let msg = self.diag(DiagId::sema_gcc_requires_variadic, at).arg(name);
+                self.emit(msg);
+            }
+        }
+        if node.a == crate::vector::FORMAT_STRFTIME {
+            if first != 0 {
+                let msg = self.diag(DiagId::sema_format_strftime_third_param, node.loc);
+                self.emit(msg);
+                return false;
+            }
+        } else if first != 0 && first != num {
+            return oob(self, "3");
+        }
+        true
+    }
+
     /// `#pragma pack` and other unsupported pragmas.
     pub fn act_on_unsupported_pragma(&self, what: &str, loc: Loc) {
         self.unsupported(&format!("'#pragma {what}'"), loc);
@@ -9688,6 +9771,8 @@ fn attr_kind_of(
         ("exclude_from_explicit_instantiation", _, gnu) if gnu || clang_scope => {
             AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION
         }
+        ("format", _, true) => AttrKind::FORMAT,
+        ("nothrow", _, true) => AttrKind::NOTHROW,
         _ => return None,
     })
 }

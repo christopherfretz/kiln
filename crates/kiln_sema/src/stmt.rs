@@ -1608,6 +1608,19 @@ impl Sema<'_, '_> {
                 st.loop_data(s).body.into_iter().collect()
             }
             StmtKind::CXXForRangeStmt => vec![st.range_for_data(s).body],
+            StmtKind::CXXExpansionStmt => {
+                let d = st.expansion_data(s);
+                let l = &self.ast.lists;
+                if st.expansion_expanded(s) {
+                    d.init
+                        .into_iter()
+                        .chain(l.iter::<StmtId>(d.prelude))
+                        .chain(l.iter::<StmtId>(d.expansions))
+                        .collect()
+                } else {
+                    d.init.into_iter().chain([d.body]).collect()
+                }
+            }
             StmtKind::SwitchStmt => vec![st.switch_data(s).body],
             StmtKind::CaseStmt => vec![st.case_data(s).sub],
             StmtKind::DefaultStmt => vec![st.default_sub(s)],

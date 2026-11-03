@@ -143,6 +143,7 @@ sema_attribute_requires_integer_constant = Error (1) "{0} attribute requires an 
 sema_attribute_void_function = Warning [IgnoredAttributes] (1) "attribute {0} cannot be applied to functions without return value";
 sema_attribute_wrong_decl_type = Warning [IgnoredAttributes] (2) "{0} attribute only applies to {1}";
 sema_attribute_wrong_decl_type_error = Error (2) "{0} attribute only applies to {1}";
+sema_attribute_wrong_number_arguments = Error (2) "{0} attribute requires exactly {1} arguments";
 sema_attribute_wrong_stmt_type = Error (2) "'{0}' attribute only applies to {1}";
 sema_attributes_not_compatible = Error (2) "'{0}' and '{1}' attributes are not compatible";
 sema_auto_expr_deduction_failure = Error (2) "functional-style cast to {0} has incompatible initializer of type {1}";

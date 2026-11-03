@@ -409,6 +409,20 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
                 push(Some(r.body), todo);
             }
+            StmtKind::CXXExpansionStmt => {
+                let x = *stmts.expansion_data(s);
+                push(x.init, todo);
+                if stmts.expansion_expanded(s) {
+                    for c in
+                        lists.iter::<StmtId>(x.prelude).chain(lists.iter::<StmtId>(x.expansions))
+                    {
+                        push(Some(c), todo);
+                    }
+                } else {
+                    todo.push(Search::Decl(x.decl));
+                    push(Some(x.body), todo);
+                }
+            }
             StmtKind::CXXTryStmt => {
                 push(Some(stmts.try_block(s)), todo);
                 for h in lists.iter::<StmtId>(stmts.try_handlers(s)) {
@@ -955,6 +969,28 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 expr(r.inc, kids);
                 var(Some(r.loop_var), kids);
                 stmt(Some(r.body), kids);
+            }
+            StmtKind::CXXExpansionStmt => {
+                // An expanded statement shows its code ([stmt.expand]/5):
+                // the init-statement, the prelude declarations, then one
+                // compound statement per element; a pattern shows the parts
+                // as written.
+                let x = *stmts.expansion_data(s);
+                stmt(x.init, kids);
+                if stmts.expansion_expanded(s) {
+                    for c in
+                        lists.iter::<StmtId>(x.prelude).chain(lists.iter::<StmtId>(x.expansions))
+                    {
+                        stmt(Some(c), kids);
+                    }
+                } else {
+                    var(Some(x.decl), kids);
+                    for e in lists.iter::<ExprId>(x.exprs) {
+                        expr(Some(e), kids);
+                    }
+                    expr(x.range_init, kids);
+                    stmt(Some(x.body), kids);
+                }
             }
             StmtKind::ReturnStmt => expr(stmts.return_value(s), kids),
             StmtKind::CoreturnStmt => {
@@ -2009,6 +2045,14 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             StmtKind::CXXForRangeStmt => {
                 self.flags(&[(stmts.range_for_data(s).init.is_some(), " has_init")]);
+            }
+            StmtKind::CXXExpansionStmt => {
+                self.line.push(' ');
+                self.line.push_str(stmts.expansion_form(s).name());
+                self.flags(&[
+                    (stmts.expansion_data(s).init.is_some(), " has_init"),
+                    (stmts.expansion_expanded(s), " expanded"),
+                ]);
             }
             StmtKind::LabelStmt | StmtKind::GotoStmt => {
                 // clang prints the label's name (and, for a `GotoStmt`, the

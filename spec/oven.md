@@ -2336,14 +2336,8 @@ virtual bases) is unchanged. Test:
 GNU `vector_size` and clang `ext_vector_type` values are stored as an
 array of their lanes (`TyKind::Array`, `Types::is_vector`). The array is
 padded to the vector's own size and alignment, so an `ext_vector_type(3)`
-occupies 4 lanes and the 4th is indeterminate. A vector of `bool` (bits)
-stays `Opaque`: it has no value model yet, so its constant evaluation is
-"not supported" and a namespace-scope `bool`-vector variable gets dynamic
-initialization (clang emits a `<N x i1>` constant). clang 19 folds
-`bool`-vector lists, `!`, `& | ^ ~`, `==`, `__builtin_convertvector` both
-ways and `__builtin_bit_cast`; clang 22 also subscripts and reduces them.
-The planned model is packed bits, lane `i` at bit `i` (follow-up to
-WP-187). The operations are in
+occupies 4 lanes and the 4th is indeterminate. A vector of `bool` is the
+exception (see "Bool vectors" below). The operations are in
 `compile/vector.rs`. The accept/reject boundary is clang 19's
 `VectorExprEvaluator`:
 - **Folded:** arithmetic, bitwise, shift and comparison operators, lane
@@ -2389,6 +2383,43 @@ WP-187). The operations are in
   M3 to M4).
 - Codegen emits folded vector values as `<N x T>` constants
   (`kiln_codegen/src/consts.rs`).
+
+*Bool vectors* (WP-450). An `ext_vector_type(N)` of `bool` is
+`TyKind::BoolVec { elem, n }` (`ty.rs`): packed bits in `ceil(N/8)`
+bytes, lane `i` at bit `i % 8` of byte `i / 8`, padded to the vector's
+size and alignment (`b3` is 1 byte, `b24` is 4), as clang lays out
+`<N x i1>` in memory. A value is never one allocation per lane: list
+initialization, the operators and `__builtin_convertvector` move whole
+registers lane by lane (`load_lanes` / `store_lanes` use `LoadBits` /
+`StoreBits` of width 1 at the lane's byte and bit), and a lane place is
+`Place::Lane`, read and written by the KBC ops `LoadLane` / `StoreLane`
+`[.., p, idx, vector type]` with a dynamic index. A lane index above `N`
+faults with "cannot refer to element I of array of N elements", index
+`N` with "read of / assignment to dereferenced one-past-the-end
+pointer", as clang 22's. The packed bytes are what `value.rs` freezes
+(the last byte's padding bits masked) and thaws.
+- *Folded* at either level: list and empty initialization, a scalar
+  splat, `!`, `~`, unary `+`/`-`, `& | ^` (vector or scalar operand),
+  `==`/`!=` and the other comparisons, `__builtin_convertvector` both
+  ways (to `bool`: nonzero is true; a float lane converts toward zero
+  through a 1-bit unsigned conversion and out of range gives "value V is
+  outside the range of representable values of type 'bool'"), and
+  `__builtin_bit_cast` both ways. At compat 22 also subscripts (through
+  pointers, members, array elements, compound assignment) and
+  `__builtin_reduce_*` (`add`/`mul` wrap in one bit, `max`/`min` are
+  `or`/`and`).
+- *Bit casts* use the packed bytes (`vm/bitcast.rs`); a bool vector
+  whose `N` is not a multiple of 8 is rejected in both directions with
+  clang's "element size 1 * element count N is not a multiple of the
+  byte size 8" note (`compile/bitcast.rs`). A source with an
+  indeterminate lane byte is "indeterminate value".
+- *Notes* print a bool vector argument lane by lane (`{true, false,
+  ...}`, every lane, as clang).
+- *Codegen*: a constexpr or constant-initialized bool-vector variable
+  is a `<N x i1>` constant global, also as a struct member and an array
+  element (spec/codegen.md), with no `__cxx_global_var_init`
+  (`tests/codegen/bool_vector_const.cpp`).
+Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`.
 
 ### `_BitInt` — Landed (WP-404)
 Type rules: spec/types.md §21.
@@ -2895,6 +2926,19 @@ sema.
   - `budget/`: step counts equal to clang's smallest accepted
     `-fconstexpr-steps`, pinned with `oven:` budgets, plus one-step-short
     twins with clang's notes.
+
+### Expansion statements — Landed (WP-447)
+An expanded `CXXExpansionStmt` (spec/sema.md §7.6a) compiles to straight
+line code with no loop (`compile.rs` `expansion_stmt`): the init-statement
+and the prelude (`__range`/`__begin` or the structured binding) in a scope
+of the statement, then each element's `CompoundStmt` in order, each with a
+`Breakable` of its own. Each element block is an ordinary block scope, so
+its element variable, and anything its constructor allocated, is destroyed
+and released at the end of that element: the peak is one element's, not
+N's. `break` jumps past the last element; `continue` jumps to the end of
+the current element (the next one follows). A pattern (not expanded) is
+never compiled. Test: `tests/conformance/stmt.expand/oven-memory.cpp`
+(48 elements, each copy allocating 256 bytes: `peak_bytes<=512`).
 
 ### Coroutines — rejected (WP-351)
 A coroutine is never a constexpr function ([dcl.constexpr]/3; Sema

@@ -535,7 +535,8 @@ impl Ast {
             | K::ExtVectorElementExpr
             | K::CXXReflectExpr
             | K::CXXSpliceExpr
-            | K::RecoveryExpr => out.extend([tag(k, 0) | UNIQUE, e.raw()]),
+            | K::RecoveryExpr
+            | K::CXXExpansionSelectExpr => out.extend([tag(k, 0) | UNIQUE, e.raw()]),
         }
         stack[mark..].reverse();
     }

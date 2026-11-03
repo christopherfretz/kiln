@@ -494,6 +494,7 @@ impl TypeContext {
         match exc {
             ExcSpec::None => simple(ExcSpec::TAG_NONE, 0),
             ExcSpec::Nothrow => simple(ExcSpec::TAG_NOTHROW, 0),
+            ExcSpec::NothrowAttr => simple(ExcSpec::TAG_NOTHROW, 1),
             ExcSpec::DynamicNone => simple(ExcSpec::TAG_DYNAMIC_NONE, 0),
             ExcSpec::BasicNoexcept => simple(ExcSpec::TAG_BASIC_NOEXCEPT, 0),
             ExcSpec::NoexceptExpr { expr, value } => {
@@ -519,6 +520,7 @@ impl TypeContext {
         }
         match exc {
             ExcSpec::Nothrow
+            | ExcSpec::NothrowAttr
             | ExcSpec::DynamicNone
             | ExcSpec::BasicNoexcept
             | ExcSpec::NoexceptExpr { value: NoexceptValue::True, .. } => ExcSpec::Nothrow,

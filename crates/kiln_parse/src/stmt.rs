@@ -7,8 +7,8 @@ use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, Std, TokKind};
 use kiln_sema::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, EmptyBodyStmt, RangeInit, ScopeKind,
-    TypeSpecKind,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, EmptyBodyStmt, ExpansionInit, RangeInit,
+    ScopeKind, TypeSpecKind,
 };
 use kiln_source::Loc;
 
@@ -205,6 +205,9 @@ impl Parser<'_, '_> {
                     if self.ident_of(self.peek(1)).is_some() && self.peek_is(2, Punct::Equal) =>
                 {
                     return self.parse_block_namespace_alias(lead_loc, loc);
+                }
+                Kw::Template if self.kw_of(self.peek(1)) == Some(Kw::For) => {
+                    return self.parse_expansion_stmt();
                 }
                 Kw::Namespace | Kw::Template => {
                     self.unsupported(&format!("'{}' here", k.spelling()), loc);
@@ -1089,6 +1092,123 @@ impl Parser<'_, '_> {
             self.s.check_empty_body(EmptyBodyStmt::RangeFor, rparen, body);
         }
         s
+    }
+
+    /// expansion-statement ([stmt.expand], P1306R5): `template for (
+    /// init-statement_opt for-range-declaration : expansion-initializer )
+    /// compound-statement`, the `template` keyword current.
+    fn parse_expansion_stmt(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        if self.std < Std::Cxx26 {
+            let w = self.s.diag(DiagId::parse_ext_expansion_statements, loc);
+            self.emit(w);
+        }
+        self.bump();
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'for'")
+                .arg("'('");
+            self.emit(d);
+            self.skip_until(&[Punct::RBrace], true, false);
+            return None;
+        };
+        self.s.push_scope(ScopeKind::Control);
+        let r = self.parse_expansion_rest(open, loc);
+        self.s.pop_scope();
+        r
+    }
+
+    /// The head and body of an expansion statement after its `(`.
+    fn parse_expansion_rest(&mut self, open: Loc, loc: Loc) -> Option<StmtId> {
+        let init = if self.at_for_range_head() {
+            None
+        } else {
+            let init = if self.at(Punct::Semi) {
+                self.bump();
+                None
+            } else if self.at_kw(Kw::Using) {
+                self.parse_alias_init_statement()
+            } else if self.is_cxx_declaration_statement(true) {
+                let l = self.loc();
+                let decls = self.parse_simple_declaration(DeclaratorContext::ForInit, false);
+                Some(self.s.act_on_decl_stmt(&decls, l))
+            } else {
+                self.parse_expression_statement(false)
+            };
+            if !self.at_for_range_head() {
+                let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("':'");
+                self.emit(e);
+                self.skip_until(&[Punct::RParen], false, true);
+                self.parse_dead_loop_body();
+                return None;
+            }
+            init
+        };
+        let ctx = DeclaratorContext::ForInit;
+        let ds = self.parse_decl_specifiers(ctx);
+        if ds.is_empty() {
+            let _ = self.parse_expression();
+            if self.at(Punct::Colon) {
+                self.error_here(DiagId::parse_for_range_expected_decl);
+            } else {
+                let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("':'");
+                self.emit(e);
+            }
+            self.skip_until(&[Punct::RParen], false, true);
+            self.parse_dead_loop_body();
+            return None;
+        }
+        let mut d = Declarator::new(ctx, self.loc());
+        self.parse_declarator(&mut d);
+        let base = self.s.type_from_declspec_at(&ds, d.name_loc());
+        if self.at_attr() {
+            self.parse_attributes(&mut d.attrs);
+        }
+        if !d.has_name() || !self.at(Punct::Colon) {
+            if !d.invalid {
+                if d.has_name() {
+                    let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("':'");
+                    self.emit(e);
+                } else {
+                    self.error_here(DiagId::parse_expected_unqualified_id);
+                }
+            }
+            self.skip_until(&[Punct::RParen], false, true);
+            self.parse_dead_loop_body();
+            return None;
+        }
+        let colon = self.bump().span.lo;
+        // An expansion-init-list `{ a, b }` is not a braced-init-list
+        // ([stmt.expand]/1): its expressions are the elements.
+        let range = if self.at(Punct::LBrace) {
+            self.parse_init_list().ok().map(ExpansionInit::List)
+        } else {
+            self.parse_expression().map(ExpansionInit::Expr)
+        };
+        let Some(range) = range else {
+            self.skip_until(&[Punct::RParen], false, true);
+            self.parse_dead_loop_body();
+            return None;
+        };
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        d.init_style = Some(InitStyle::C);
+        let head = self.s.act_on_expansion_head(init, &ds, base, &d, range, colon, loc);
+        if !self.at(Punct::LBrace) {
+            // [stmt.expand]/1: the body is a compound-statement.
+            let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("'{'");
+            self.emit(e);
+            if let Some(h) = head {
+                self.s.act_on_expansion_error(h);
+            }
+            self.parse_dead_loop_body();
+            return None;
+        }
+        self.s.act_on_start_loop();
+        let (body, _) = self.parse_compound(true);
+        self.s.act_on_end_loop();
+        head.and_then(|h| self.s.act_on_finish_expansion(h, body))
     }
 
     /// The body of a loop whose head was in error: analysed (clang keeps

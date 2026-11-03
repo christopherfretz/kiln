@@ -160,6 +160,10 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     ("coro_await_suspend", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("coro_only_destroy_when_complete", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("coro_only_destroy_when_complete", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    // `__builtin_coro_noop`'s `__NoopCoro_ResumeDestroy` is made by the
+    // `opt-19` CoroEarly pass kiln runs (private; LLVM 22: internal).
+    ("coro_builtins", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("coro_builtins", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     // LLVM 21 dropped the size operand of `llvm.lifetime.start/end`. kiln
     // emits LLVM 19's `(i64, ptr)` form because its optimizer is `opt-19`
     // (spec/driver.md "IR optimization"); `opt-22`'s auto-upgrade of the

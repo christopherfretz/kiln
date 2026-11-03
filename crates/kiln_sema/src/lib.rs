@@ -34,6 +34,7 @@ mod deduce;
 mod deprecated;
 mod empty_body;
 pub mod except;
+mod expansion;
 pub mod expr;
 mod extern_c;
 mod fallthrough;
@@ -109,6 +110,7 @@ pub use declspec::{
     NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 pub use empty_body::EmptyBodyStmt;
+pub use expansion::{ExpansionHead, ExpansionInit};
 pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use implicit_fallthrough::AttrMacro;
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
@@ -179,6 +181,12 @@ pub struct Sema<'a, 'sm> {
     /// The full target description (layout for `sizeof`/`alignof`,
     /// spec/abi.md).
     pub abi: Target,
+    /// The class layouts computed for the deallocation-function lookup of
+    /// virtual destructors ([`Sema::complete_class_align`]), kept between
+    /// classes so a class lattice is laid out once rather than once per
+    /// class (WP-450). Only complete classes are laid out through it, and
+    /// a complete class's layout never changes within the TU.
+    pub(crate) layout_cache: kiln_abi::LayoutCache,
     /// The `#pragma pack` directives seen, in order (location and the
     /// spelling of the argument list).
     pub pragma_packs: Vec<(Loc, String)>,
@@ -828,6 +836,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             diags,
             target,
             abi,
+            layout_cache: kiln_abi::LayoutCache::default(),
             pragma_packs: Vec::new(),
             attr_spellings: kiln_source::fx::FxHashMap::default(),
             exceptions: true,

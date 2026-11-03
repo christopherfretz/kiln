@@ -751,9 +751,16 @@ impl Sema<'_, '_> {
                 return;
             }
             if oexc.is_nothrow() {
-                let msg = self
-                    .diag(DiagId::sema_override_exception_spec, mloc)
-                    .with_note(self.overridden_note(o));
+                // clang: overriding a GNU `nothrow` one is the
+                // `-Wmicrosoft-exception-spec` extension (WP-186).
+                let gnu = self.ast.decls.get(o).ty().map(|t| self.written_exc_spec(t))
+                    == Some(ExcSpec::NothrowAttr);
+                let id = if gnu {
+                    DiagId::sema_override_exception_spec_ext
+                } else {
+                    DiagId::sema_override_exception_spec
+                };
+                let msg = self.diag(id, mloc).with_note(self.overridden_note(o));
                 self.emit(msg);
                 return;
             }

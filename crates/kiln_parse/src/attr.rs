@@ -42,6 +42,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "may_alias"
             | "init_priority"
             | "nonnull"
+            | "format"
     )
 }
 
@@ -54,7 +55,8 @@ fn takes_type_arg(name: &str) -> bool {
 /// True for the attributes whose first argument is an identifier when
 /// one is written (clang `attributeHasIdentifierArg`).
 fn takes_ident_arg(name: &str) -> bool {
-    name.trim_start_matches("__").trim_end_matches("__") == "enum_extensibility"
+    let n = name.trim_start_matches("__").trim_end_matches("__");
+    n == "enum_extensibility" || n == "format"
 }
 
 /// True for the standard attributes that take no argument list
