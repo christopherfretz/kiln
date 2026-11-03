@@ -700,7 +700,8 @@ impl Sema<'_, '_> {
                 .arg(self.unqualified_decl_name(d));
             // A builtin has no declaration to point at.
             if self.ast.decls.builtin_id(d).is_none() {
-                msg = msg.with_note(self.diag(DiagId::note_declared_at, self.ast.decls.get(d).loc()));
+                msg =
+                    msg.with_note(self.diag(DiagId::note_declared_at, self.ast.decls.get(d).loc()));
             }
             if !consteval && let Some(note) = self.escalation_reason_note(d) {
                 msg = msg.with_note(note);

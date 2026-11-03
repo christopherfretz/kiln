@@ -740,14 +740,11 @@ impl Oven {
     /// of `std::is_within_lifetime`, it is named so and noted at that
     /// function's call.
     fn lifetime_note(&self, ast: &Ast, site: Site, kind: u8) -> (Loc, String) {
-        let from_std = self
-            .stack
-            .last()
-            .filter(|_| self.stack.len() > self.run.entry + 1)
-            .filter(|fr| {
-                self.funcs[fr.func as usize].decl.is_some_and(|d| {
-                    crate::compile::is_std_function(ast, d, "is_within_lifetime")
-                })
+        let from_std =
+            self.stack.last().filter(|_| self.stack.len() > self.run.entry + 1).filter(|fr| {
+                self.funcs[fr.func as usize]
+                    .decl
+                    .is_some_and(|d| crate::compile::is_std_function(ast, d, "is_within_lifetime"))
             });
         let (loc, name) = match from_std {
             Some(fr) => (self.site(fr.call_pc as usize).loc, "std::is_within_lifetime"),

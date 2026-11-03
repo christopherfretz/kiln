@@ -4719,7 +4719,9 @@ pub mod builtin {
         match id {
             // 2039..=2047 (WP-410): `sincos`, `fmaximum_num`, `fminimum_num`.
             // IS_WITHIN_LIFETIME (WP-418): clang 20.
-            2035 | 2036 | FMAXIMUM_NUMF16 | FMINIMUM_NUMF16 | 2039..=2047 | IS_WITHIN_LIFETIME => 22,
+            2035 | 2036 | FMAXIMUM_NUMF16 | FMINIMUM_NUMF16 | 2039..=2047 | IS_WITHIN_LIFETIME => {
+                22
+            }
             _ => 0,
         }
     }

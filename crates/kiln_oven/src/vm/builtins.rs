@@ -187,8 +187,12 @@ impl Oven {
         }
         let ty = OTy(if t == bi::DYN { 0 } else { t });
         let len = if t == bi::DYN { 1 } else { self.types.size(ty).max(1) };
-        let (_, _, a) =
-            self.mem.check(raw, len, false).map_err(|f| Fault::Mem { f, ak: ak::READ, ty, p: raw })?;
+        let (_, _, a) = self.mem.check(raw, len, false).map_err(|f| Fault::Mem {
+            f,
+            ak: ak::READ,
+            ty,
+            p: raw,
+        })?;
         if !ok {
             return Ok(0);
         }

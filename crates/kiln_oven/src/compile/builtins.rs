@@ -386,7 +386,8 @@ impl Compiler<'_> {
             let n = ast.exprs.get(m);
             match n.kind() {
                 ExprKind::MemberExpr
-                    if ast.decls.get(ast.exprs.decl(m)).kind() == kiln_ast::decl::DeclKind::Field =>
+                    if ast.decls.get(ast.exprs.decl(m)).kind()
+                        == kiln_ast::decl::DeclKind::Field =>
                 {
                     let base = skip_parens(ast, ast.exprs.operand(m));
                     steps.push(m);

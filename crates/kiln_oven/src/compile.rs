@@ -5027,8 +5027,15 @@ fn is_std_is_constant_evaluated(ast: &kiln_ast::Ast, d: DeclId) -> bool {
 /// declared `constexpr`, with one non-variadic reference parameter and a
 /// reference or pointer return to the same type up to qualifiers.
 fn is_std_builtin(ast: &kiln_ast::Ast, d: DeclId) -> bool {
-    const NAMES: [&str; 7] =
-        ["move", "move_if_noexcept", "forward", "forward_like", "as_const", "addressof", "__addressof"];
+    const NAMES: [&str; 7] = [
+        "move",
+        "move_if_noexcept",
+        "forward",
+        "forward_like",
+        "as_const",
+        "addressof",
+        "__addressof",
+    ];
     if ast.decls.get(d).kind() != DeclKind::Function
         || !NAMES.iter().any(|n| is_std_function(ast, d, n))
         || !ast
