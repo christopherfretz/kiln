@@ -25,6 +25,7 @@ use crate::lookup::LookupKind;
 mod analyze;
 mod default;
 mod synth;
+mod three_way;
 
 pub(crate) use default::CmpKind;
 

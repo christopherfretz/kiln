@@ -183,6 +183,7 @@ sema_default_member_init_not_yet_parsed = Error (2) "default member initializer 
 sema_default_not_in_switch = Error (0) "'default' statement not in switch statement";
 sema_default_not_special = Error (0) "only special member functions and comparison operators may be defaulted";
 sema_defaulted_assign_return = Error (2) "explicitly-defaulted {0:copy|move} assignment operator must return {1}";
+sema_defaulted_cmp_cannot_deduce_undeduced_auto = Error (2) "return type of defaulted 'operator<=>' cannot be deduced because three-way comparison for {0:|member |base class }{1} has a deduced return type and is not yet defined";
 sema_defaulted_cmp_constexpr_mismatch = Error (2) "defaulted definition of {0:equality|three-way|equality|relational} comparison operator cannot be declared {1:constexpr|consteval} because it invokes a non-constexpr comparison function";
 sema_defaulted_cmp_constexpr_mismatch_19 = Error (2) "defaulted definition of {0:equality|three-way|equality|relational} comparison operator cannot be declared {1:constexpr|consteval} because it invokes a non-constexpr comparison function ";
 sema_defaulted_cmp_constexpr_mismatch_implicit = Error (1) "defaulted definition of three-way comparison operator cannot be declared {0:constexpr|consteval} because for which the corresponding implicit 'operator=='  invokes a non-constexpr comparison function";

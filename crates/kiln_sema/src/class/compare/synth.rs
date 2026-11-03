@@ -450,17 +450,12 @@ impl Sema<'_, '_> {
     ) -> Option<Piece> {
         let loc = sx.loc;
         let op = binary_of(self.fn_operator(sx.f)?)?;
-        if sx.k == CmpKind::ThreeWay && self.cmp_needs_synth_three_way(l, loc) {
-            // todo(spec/sema-class.md §11 Q12): clang builds a PseudoObjectExpr
-            // (`BuildSynthesizedThreeWayComparison`), which kiln's AST lacks.
-            self.unsupported(
-                "a defaulted 'operator<=>' that synthesizes a three-way comparison from '==' and '<'",
-                loc,
-            );
-            return None;
-        }
-        let e = self.binary_operator(op, l, r, None, loc);
-        let e = self.ok_expr(e)?;
+        let e = if sx.k == CmpKind::ThreeWay && self.cmp_needs_synth_three_way(l, loc) {
+            self.synth_three_way(sx.f, l, r, loc)?
+        } else {
+            let e = self.binary_operator(op, l, r, None, loc);
+            self.ok_expr(e)?
+        };
         match sx.k {
             CmpKind::Equal => match conv::contextually_convert_to_bool(self, e) {
                 Ok(c) => Some(Piece::Expr(c)),
