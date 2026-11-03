@@ -260,6 +260,40 @@ impl Sema<'_, '_> {
         Ok(spec)
     }
 
+    /// Function type `f` returning `ret`.
+    fn with_return_type(&mut self, f: QualType, ret: QualType) -> QualType {
+        let Some(p) = self.ast.types.proto(f).copied() else { return f };
+        let ps = self.ast.types.params(&p).to_vec();
+        let exc = self.written_exc_spec(f);
+        self.ast.types.function(ret, &ps, p.info(), exc)
+    }
+
+    /// The address of specialization `spec` of a function template with
+    /// a deduced return type, taken for function type `target`: its
+    /// return type is deduced from its definition (clang
+    /// `DeduceReturnType` in `DeduceTemplateArguments`) and must be
+    /// `target`'s. `Some(spec's type)` when it is not; `None` also while
+    /// it stays undeduced (the use reports that).
+    fn deduced_return_mismatch(
+        &mut self,
+        spec: DeclId,
+        target: QualType,
+        loc: Loc,
+    ) -> Option<QualType> {
+        let ret_of =
+            |s: &Self, t: QualType| s.ast.types.proto(t).map(kiln_ast::types::FuncProto::ret);
+        let sty = self.ast.decls.get(spec).ty()?;
+        if ret_of(self, sty).is_some_and(|r| self.contains_undeduced_auto(r)) {
+            self.instantiate_function_definition(spec, loc);
+        }
+        let sty = self.ast.decls.get(spec).ty()?;
+        let (sret, tret) = (ret_of(self, sty)?, ret_of(self, target)?);
+        if self.contains_undeduced_auto(sret) || self.ast.types.same_type(sret, tret) {
+            return None;
+        }
+        Some(sty)
+    }
+
     /// The specialization of `ft` a template-id with the explicit
     /// arguments `explicit` names without a call or a target type
     /// ([over.over]/3, [temp.arg.explicit]/4): every argument explicit
@@ -570,8 +604,22 @@ impl Sema<'_, '_> {
             return Err(DeductionFailure::new(Tdk::TooFewArguments, d));
         }
         // [temp.deduct.funcaddr]: the function type against the target.
+        // clang `DeduceTemplateArguments` (C++14): a deduced return type
+        // is a non-deduced context (`SubstAutoTypeDependent`); a
+        // declaration's must then be the same placeholder (the caller
+        // compares the types), the address of a function deduces it from
+        // the specialization's definition and compares it below.
+        let placeholder_ret = matches!(target, DeduceTarget::FuncAddr(_) | DeduceTarget::Decl(_))
+            && self.ast.types.proto(pfn).is_some_and(|p| self.contains_placeholder(p.ret()));
         if let DeduceTarget::FuncAddr(a) | DeduceTarget::Decl(a) = target {
             let decl = matches!(target, DeduceTarget::Decl(_));
+            let pfn = if placeholder_ret
+                && let Some(aret) = self.ast.types.proto(a).map(kiln_ast::types::FuncProto::ret)
+            {
+                self.with_return_type(pfn, aret)
+            } else {
+                pfn
+            };
             let (p0, a0, tdf) = if decl {
                 let p0 = self.with_exc_spec(pfn, ExcSpec::None);
                 (p0, self.with_exc_spec(a, ExcSpec::None), TdfFlags::NONE)
@@ -876,6 +924,16 @@ impl Sema<'_, '_> {
                         f.diag = Some(why);
                         return Err(f);
                     }
+                }
+                if placeholder_ret
+                    && let DeduceTarget::FuncAddr(a) = target
+                    && let Some(m) = self.deduced_return_mismatch(spec, a, loc)
+                {
+                    d.info.first = Some(TemplateArg::ty(m));
+                    d.info.second = Some(TemplateArg::ty(a));
+                    let mut f = DeductionFailure::new(Tdk::NonDeducedMismatch, d);
+                    f.args = Some(sugared);
+                    return Err(f);
                 }
                 self.keep_deduction_warnings(spec, fresh, held);
                 self.templ.explicit_nondep = nondep;

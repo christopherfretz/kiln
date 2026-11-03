@@ -58,6 +58,7 @@ pub mod literal;
 mod literal_op;
 mod local_friend;
 pub mod lookup;
+mod loop_hint;
 mod macro_fixit;
 pub mod modules;
 pub mod names;

@@ -13,6 +13,7 @@ mod decl;
 mod expr;
 pub mod keywords;
 mod lambda;
+mod loop_hint;
 mod modules;
 mod new_delete;
 mod parser;
@@ -38,7 +39,7 @@ use kiln_source::{FileId, SourceManager};
 
 pub use parser::{PExpr, Parser};
 pub use tentative::TypeIdContext;
-pub use tokens::{Event, TokenSource};
+pub use tokens::{Event, LoopHintInfo, TokenSource};
 
 /// Options for [`parse_file`], [`parse_tu`] and [`parse_preprocessed`].
 #[derive(Clone, Copy, Debug)]
@@ -173,6 +174,7 @@ pub fn parse_tu<'sm>(
 ) -> ParsedTu {
     let mut ppo = PpOptions::new(opts.std);
     ppo.reflection = opts.reflection;
+    ppo.parser_pragmas = true;
     // Module units parse from C++20 on (spec/modules.md §2); no module
     // sources are configured, so an import is "module not found".
     if opts.std >= Std::Cxx20 {

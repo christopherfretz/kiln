@@ -152,6 +152,10 @@ pub(crate) struct Cg<'a> {
     pub vts: kiln_abi::vtable::VTableSession<'a>,
     /// Vtables referenced but not yet defined (clang `DeferredVTables`).
     pub deferred_vtables: Vec<DeclId>,
+    /// External vtables to emit `available_externally` once every
+    /// deferred definition is emitted, if they then can be (clang
+    /// `OpportunisticVTables`, `-O1` and up).
+    pub opportunistic_vtables: Vec<DeclId>,
     /// Dynamic classes explicitly instantiated by a definition, in
     /// order: their vtables are required ([temp.explicit]/10; Sema's
     /// `MarkVTableUsed(DefinitionRequired)`).
@@ -231,6 +235,7 @@ impl<'a> Cg<'a> {
             vtables: FxHashMap::default(),
             vts: kiln_abi::vtable::VTableSession::new(ast, target),
             deferred_vtables: Vec::new(),
+            opportunistic_vtables: Vec::new(),
             explicit_vtables: Vec::new(),
             vt_emitted: FxHashSet::default(),
             rtti_globals: FxHashMap::default(),
@@ -285,6 +290,7 @@ impl<'a> Cg<'a> {
         self.emit_key_function_vtables()?;
         self.emit_end_of_tu_instantiations()?;
         self.emit_deferred()?;
+        self.emit_vtables_opportunistically()?;
         self.resolve_placeholders()?;
         self.emit_global_init_trailer()?;
         self.trailer();
@@ -711,11 +717,15 @@ impl<'a> Cg<'a> {
                 {
                     return false;
                 }
+                // A member excluded from its class's explicit
+                // instantiation stays implicitly instantiated (clang
+                // `InstantiateClassMembers` leaves its kind).
                 let ctx = ast.decls.get(first).ctx();
-                ctx.is_none_or(|c| match ast.spec_info(c) {
-                    Some((_, s)) => s.kind == SpecKind::ImplicitInstantiation,
-                    None => true,
-                })
+                ast.excluded_from_explicit_instantiation(first)
+                    || ctx.is_none_or(|c| match ast.spec_info(c) {
+                        Some((_, s)) => s.kind == SpecKind::ImplicitInstantiation,
+                        None => true,
+                    })
             }
             Some((TemplLinkKind::Specialization, _)) => {
                 ast.spec_info(first).is_some_and(|(_, s)| s.kind == SpecKind::ImplicitInstantiation)
@@ -746,7 +756,11 @@ impl<'a> Cg<'a> {
                     DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
                 )
             });
-            if self.is_implicit_instantiation(r) {
+            // An instantiation kept `available_externally` under an
+            // explicit instantiation declaration (a function template
+            // specialization with a deduced return type at -O1) is
+            // emitted on use, as an implicit one.
+            if self.is_implicit_instantiation(r) || self.is_available_externally_fn(first) {
                 return true;
             }
             // An in-class definition attached to a named module is not
@@ -860,20 +874,23 @@ impl<'a> Cg<'a> {
     /// `std::allocator<char>::allocate` is not exported); at -O1 and above
     /// any one whose definition is still instantiated ([temp.explicit]/12:
     /// an inline function or one with a deduced return type) and that
-    /// has no `noinline`.
+    /// has no `noinline`. Neither when the function is trivially
+    /// recursive ([`Self::is_trivially_recursive`], clang's last check).
     fn keeps_available_externally(&self, first: DeclId) -> bool {
-        if self.is_always_inline_fn(first) {
-            return true;
-        }
+        (self.is_always_inline_fn(first) || self.keeps_inline_definition(first))
+            && !self.is_trivially_recursive(first)
+    }
+
+    /// [`Self::keeps_available_externally`] for a function without
+    /// `always_inline`: optimizing, and the definition is instantiated.
+    fn keeps_inline_definition(&self, first: DeclId) -> bool {
         let ast = self.ast;
         let spec_any = |d: DeclId, p: &dyn Fn(kiln_ast::decl::FnSpec) -> bool| {
             ast.redecls_of(d).any(|r| ast.decls.function(r).is_some_and(|f| p(f.spec)))
         };
-        // Inline as the pattern is (clang `InstantiateFunctionDefinition`
-        // copies `isInlined`): an instantiated member's own definition is
-        // lexically in its class.
-        let pattern = ast.instantiated_from(first).unwrap_or(first);
-        let inline = spec_any(pattern, &|s| {
+        // Sema marks an instantiation inline as its pattern is (clang
+        // `InstantiateFunctionDefinition` copies `isInlined`).
+        let inline = spec_any(first, &|s| {
             s.is_inline() || s.implicit_inline() || s.constexpr_kind() != ConstexprKind::None
         });
         self.opts.optimize()
@@ -994,54 +1011,7 @@ impl<'a> Cg<'a> {
     /// class's kind to its members in `InstantiateClassMembers`).
     /// `None` when implicit or an explicit specialization.
     fn explicit_inst_kind(&self, first: DeclId) -> Option<SpecKind> {
-        let ast = self.ast;
-        let first = ast.first(first);
-        let explicit = |k: SpecKind| match k {
-            SpecKind::ExplicitInstantiationDeclaration
-            | SpecKind::ExplicitInstantiationDefinition => Some(Some(k)),
-            SpecKind::ExplicitSpecialization => Some(None),
-            _ => None,
-        };
-        match ast.templ_link(first).get() {
-            Some((TemplLinkKind::MemberOfSpecialization, i)) => {
-                if let Some(k) = ast.templates.member_spec(i).and_then(|m| explicit(m.kind)) {
-                    return k;
-                }
-                // The member's own kind is implicit: the innermost
-                // explicitly instantiated enclosing class decides, unless
-                // the member (or a member class on the way) is excluded
-                // from explicit instantiation.
-                if ast.excluded_from_explicit_instantiation(first) {
-                    return None;
-                }
-                let mut ctx = ast.decls.get(first).ctx();
-                while let Some(c) = ctx {
-                    if !matches!(
-                        ast.decls.get(c).kind(),
-                        DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
-                    ) {
-                        break;
-                    }
-                    if ast.member_spec_info(c).is_some()
-                        && ast.excluded_from_explicit_instantiation(c)
-                    {
-                        return None;
-                    }
-                    if let Some(k) = ast.spec_info(c).and_then(|(_, s)| explicit(s.kind)) {
-                        return k;
-                    }
-                    if let Some(k) = ast.member_spec_info(c).and_then(|(_, m)| explicit(m.kind)) {
-                        return k;
-                    }
-                    ctx = ast.decls.get(c).ctx();
-                }
-                None
-            }
-            Some((TemplLinkKind::Specialization, _)) => {
-                ast.spec_info(first).and_then(|(_, s)| explicit(s.kind)).flatten()
-            }
-            _ => None,
-        }
+        self.ast.governing_explicit_inst_kind(first)
     }
 
     // ---- types ---------------------------------------------------------
