@@ -1707,6 +1707,7 @@ and returns the scope it names:
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
   | ENUM_EXTENSIBILITY | 1 for `open`, 0 for `closed` | — |
   | INIT_PRIORITY | the checked priority (`u32`; the raw `ExprId` before `check_decl_attrs`) | — |
+  | ENABLE_IF | `ExprId` of the condition (contextually converted to `bool` unless type-dependent) | `ExprId` of the string-literal message |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -1987,6 +1988,57 @@ and returns the scope it names:
     Not yet: parameters (`act_on_param_declarator` only checks
     `alignas`) and namespace-definitions are not run through the table.
     Test: `tests/conformance/dcl.attr.grammar/attribute-subjects.cpp`.
+  - **`enable_if`** (clang extension, `__attribute__((enable_if(cond,
+    "message")))` only; WP-460, `enable_if.rs`; clang AttrDocs
+    "enable_if", `Sema::CheckEnableIf`):
+    - Form: exactly two arguments. The parser parses them with the
+      function's parameters in scope (as a trailing requires-clause), so
+      the condition can name them. The condition is contextually
+      converted to `bool` unless type-dependent; the message must be a
+      string literal ("expected string literal as argument of 'enable_if'
+      attribute"); another argument count is "requires exactly 2 arguments".
+    - Subject: functions. On anything else, "'enable_if' attribute only
+      applies to functions" (warning, `-Wignored-attributes`) and the
+      attribute is dropped.
+    - Identity: a function declaration whose conditions are not those of
+      an earlier declaration, in order and by equivalence
+      ([temp.over.link]/5 profiles), declares an overload, not a
+      redeclaration (clang `IsOverload`; `NewFn::enable_if`). So every
+      declaration of one function has the same conditions, and a
+      declaration's own attributes are the function's.
+    - Viability: after a candidate is otherwise viable
+      (`add_candidate`), each argument is converted to its parameter's
+      type with diagnostics captured (a failing one gives its parameter
+      no value), an omitted argument is its default argument, and each
+      condition in declaration order is evaluated by
+      `Oven::evaluate_with_params` (spec/oven.md) with those values for
+      the parameters. A condition that is value-dependent, not a
+      constant expression, or false makes the candidate not viable;
+      its note is "candidate disabled: <message>" at the function
+      (`<no message provided>` for an empty one). If evaluating with all
+      values fails, the arguments that are not constant expressions on
+      their own are dropped and the condition is evaluated again, so
+      `__builtin_constant_p(n)` of a non-constant argument is false
+      rather than not constant (clang `EvaluateWithSubstitution`).
+    - A call without overload resolution (a member call, a call through
+      a name of one function) is checked on its converted arguments in
+      `convert_call_args`: "no matching function for call to 'f'" at the
+      callee, or "no matching member function for call to 'm'" at the
+      member name, with the same note.
+    - Ranking ([over.match.best], last; clang `compareEnableIfAttrs`): a
+      candidate with conditions beats one without; between two with
+      conditions, compared in order, the one whose list properly extends
+      the other's (equivalent prefix) wins; otherwise neither is better
+      (an ambiguity).
+    - Templates: the condition is substituted with the pattern's
+      parameters naming the specialization's (`Substituter::
+      enable_if_cond`, from `copy_attrs`), after deduction; a failed
+      substitution drops the attribute.
+    - Not done: `diagnose_if`, the never-constant check
+      (`err_attr_cond_never_constant_expr`), the object argument of an
+      explicit object member function (it takes no value).
+    - Tests: `tests/conformance/dcl.attr/enable-if-viability.cpp`,
+      `enable-if-ranking.cpp`.
   - **Type-position attributes** ([dcl.spec.general]/1, [dcl.ptr]/1,
     [dcl.array]/1, [dcl.fct]/1; `act_on_type_position_attrs`, clang
     `err_attribute_not_type_attr`; WP-312, WP-324). An
