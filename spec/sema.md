@@ -452,13 +452,42 @@ target, the non-pointer error stands. A qualifier on an undeduced
 Instantiation (`templ/subst/types.rs`, clang's
 `TransformAttributedType`): a qualifier on a dependent type that
 substitutes to a non-pointer is `sema_nullability_nonpointer` and a
-substitution failure (a SFINAE note in deduction). kiln reports it at
-the instantiation location (a member's name), clang at the keyword
-(it keeps a TypeLoc).
-Not implemented: clang's redeclaration check
-(`warn_nullability_conflict` on `void f(int* _Nonnull); void
-f(int* _Nullable);`), the `-Wnullability-completeness` family, and the
-`nonnull` attribute spellings.
+substitution failure (a SFINAE note in deduction), reported at the
+keyword as clang does (it keeps a TypeLoc): `apply_nullability` records
+a dependent result's keyword location in `InstState::nullability_locs`
+(keyed by the attributed type) and `nullability_loc` picks the one
+nearest the substituted declaration (WP-404;
+`tests/conformance/ext.clang.nullability/subst-location.cpp`).
+
+Array brackets (WP-404, clang `ParseBracketDeclarator`; kiln_parse
+`parse_bracket_quals`): a nullability qualifier inside `[...]` is
+recorded against the array chunk. On a parameter's outermost array
+(chunk 0 of a `Prototype` declarator) it is accepted and moves to the
+decayed pointer (`adjust_param_type` re-wraps it: `int a[_Nonnull]` is
+`int * _Nonnull`); on any other array it is the non-pointer error
+(`'int[3]'`, `'int[]'`). C99 `static` and cv/`restrict` qualifiers
+there are errors in C++ at the `[`: `parse_c99_array_usage_cxx`
+("static array size / qualifier in array size is a C99 feature, not
+permitted in C++") on a parameter's outermost array, else
+`parse_array_static_outside_prototype` / `parse_array_qual_outside_prototype`
+(the declarator is invalid). `[*]` is not parsed.
+(`tests/conformance/ext.clang.nullability/array-brackets.cpp`.)
+
+Redeclarations (WP-404, clang `mergeParamDeclAttributes`;
+`check_param_nullability`): each parameter's outermost nullability is
+compared with the previous declaration's; a difference is the
+`-Wnullability` warning `sema_nullability_mismatched_redecl`
+("nullability specifier '_Nullable' conflicts with existing specifier
+'_Nonnull'") at the new parameter, with `note_previous_declaration` at
+the latest previous one. An unwritten one inherits (clang copies it onto
+the type; kiln finds the nearest earlier declaration that wrote one).
+Return types are not compared in C++, nor nested pointers
+(`tests/conformance/ext.clang.nullability/redecl-conflict.cpp`).
+Not implemented: copying the inherited nullability into the
+redeclaration's parameter type, `-Wnonnull` ("null returned from
+function that requires a non-null return value"),
+`-Wnullability-extension` (pedantic), the `-Wnullability-completeness`
+family, and the `nonnull` attribute spellings.
 
 ### 4.2 Declarator to declaration
 `act_on_declarator` turns a `Declarator` into a declaration:
@@ -1366,7 +1395,18 @@ and returns the scope it names:
     a class template redeclaration is, and a later definition joins
     that chain. An enumeration redeclaration creates no decl. Test:
     class.name/redeclaration-ast.cpp.
-  - A definition checks for redefinition and kind mismatch.
+  - A definition checks for redefinition and kind mismatch. A
+    redefinition ([basic.def.odr]/1) is diagnosed once and recovered
+    from as clang's `ActOnTag` does (it makes the new tag anonymous and
+    invalid): the new decl is created `INVALID` and taken out of every
+    lookup table (`AstBuilder::unregister_name`, also its class
+    template), so later uses find the first definition rather than an
+    ambiguity — at namespace scope, in a reopened, unnamed or inline
+    namespace, in a class and in a block alike. The parser skips its
+    body (`Sema::tag_body_skipped`; no member is checked, no enumerator
+    declared) and its declarators get an error type. Gap: clang still
+    parses a base-clause there (`expected class name`). Test:
+    basic.def.odr/class-redefinition-recovery.cpp.
   - A type name marks referenced only the declaration lookup found (the
     latest in its chain; clang `isThisDeclarationReferenced`). An
     elaborated-type-specifier that finds a tag (`struct N *a`) marks

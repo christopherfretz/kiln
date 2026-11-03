@@ -955,6 +955,25 @@ Diagnosed at definition, as clang does:
 - A missing `typename` or `template` (§2.3), a redefined default
   argument, a malformed template head.
 
+**Instantiation-dependent but not dependent** (WP-404). `TC<N>`, with
+`N` a constant local of a function template, is instantiation-dependent
+only (§3.1). Like clang (`anyDependentTemplateArguments` tests
+`isDependent`), it does not defer a check:
+- A concept-id over it is satisfied at once. `concept_spec_expr` is
+  value-dependent only when an argument is dependent; an
+  instantiation-dependent argument leaves it `INSTANTIATION` only.
+- A type trait over it (`__is_object(TC<N> *)`) is evaluated on the
+  argument's canonical type, so a variable template specialization
+  instantiated with it (`is_object_v<T *>`) does not cache an
+  unevaluated `false`.
+- A function or variable template specialization keyed by canonical
+  arguments stores the canonical form of such an argument
+  (`Sema::settle_inst_sugar`; clang builds a specialization from its
+  canonical converted arguments). Another function template's use of the
+  same specialization (an implicit deduction guide's, `subrange(p, p)`)
+  must never substitute the first template's local.
+- Test: tests/conformance/temp.dep.expr/instantiation-dependent-arguments.cpp.
+
 Not diagnosed at definition:
 - `static_assert(false)`, or any non-dependent `static_assert` failure
   inside a template (P2593, clang 17+).
@@ -1582,9 +1601,15 @@ class name" at `B`
   the injected type there (libc++ `__split_buffer:160`
   `__split_buffer_pointer_layout<__split_buffer<…>, …>`, WP-398). Test:
   `tests/conformance/temp.local/injected-class-name-template-template-arg.cpp`.
-  Gap: `H<Y<T>>` (a specialization, not a template) for a template
-  template parameter is diagnosed only at instantiation, clang at the
-  definition.
+  An argument that does not name a template for a template template
+  parameter — `H<Y<T>>` (a specialization), `H<T>`, `H<N>`,
+  `H<T::X>` without `template` — is rejected when the enclosing template
+  is defined, at the argument, even though the arguments are dependent
+  (`check_dependent_template_args`, run by `template_id` before it
+  forms the dependent specialization; clang's
+  `CheckTemplateArgumentList` runs on dependent arguments too, WP-404,
+  §10.5). Alignment stops at the first pack expansion. Test:
+  `tests/conformance/temp.arg.template/dependent-non-template-argument.cpp`.
 - A template argument `ns::A` or `C::A` whose qualifier is a namespace
   or the class `A` is a member of finds the template itself, never an
   injected-class-name, so inside `A`'s own definition it is a template
@@ -2001,8 +2026,10 @@ like clang's.
 | `Auto` | a deduced `Auto` substitutes its deduced type; an undeduced one stays and is deduced in the instantiation |
 | `QualifiedArray{quals, base}` | cv applied to array sugar (`const A` with `using A = T[3]`): substitute `base`, then `qualify` pushes `quals` into the new element type ([dcl.array]/6; WP-301) |
 
-`_BitInt(N)` and splice types never reach the substituter yet: the parser
-does not accept `_BitInt` and rejects a dependent splice. Any other kind
+`DependentBitInt{signed, width}` substitutes the width expression and
+rebuilds the type through `Sema::build_bit_int_type`, which checks the
+width then (spec/types.md §21; WP-404). Splice types never reach the
+substituter yet: the parser rejects a dependent splice. Any other kind
 gives the NYI diagnostic "substitution into this type".
 
 ### 5.4 Expressions
@@ -2060,7 +2087,12 @@ recomputed exactly as for non-template code (clang's
     `ConstValueId`;
   - for a class-type NTTP, a `DeclRefExpr` to the `TemplateParamObject`
     (§6.10);
-  - for a reference or pointer NTTP, the entity expression.
+  - for a reference or pointer NTTP, the entity expression;
+  - for a floating-point NTTP, a `FloatingLiteral` of the value (WP-404;
+    tests/conformance/temp.arg.nontype/float-argument-substituted.cpp);
+  - for a canonical value-dependent argument (`ArgView::Profile`, a
+    dependent default argument met in a partial substitution), its first
+    expression, as `template_arg` uses it (WP-404).
   This matches clang's dump.
 - **`ConceptSpecializationExpr`, `RequiresExpr`.** §8.
 - **Lambdas** get a new closure class per instantiation (WP-075).
@@ -2077,7 +2109,10 @@ recomputed exactly as for non-template code (clang's
   the parameter type is), NTTP arguments and requirements are handled
   the same way. An unknown field in a requirement is a substitution
   failure. The aggregate checks of spec/sema.md §6 run on the
-  instantiated type.
+  instantiated type. `T{x}` of an aggregate whose temporary is bound
+  (`CXXBindTemporaryExpr` between the functional cast and its list) is
+  rebuilt from the list the same way (WP-404;
+  tests/conformance/expr.type.conv/aggregate-list-temporary-substituted.cpp).
 - **Analyzed initializations as operands** (WP-296). An operand that is
   only instantiation-dependent (it names a local of the template) was
   analyzed at definition; its resolved initialization is not reused but
@@ -4164,7 +4199,12 @@ libc++ 19 spells these as `using __remove_cv_t = __remove_cv(_Tp);`.
 - The type is `UnaryTransform{kind, operand}` sugar whose canonical type
   is the result. It prints as clang does, e.g. `__remove_cv(int const)`.
 - A dependent operand gives a dependent `UnaryTransform`. Substitution
-  recomputes it (§5.3).
+  recomputes it (§5.3). Only a dependent operand defers it (clang
+  `BuildUnaryTransformType` tests `isDependentType`): an operand that is
+  merely instantiation-dependent (`TC<N>*`, `N` a constant local of a
+  function template, reaching an alias substituted with its arguments as
+  written at compat 22) is transformed when the type is built
+  (`tests/conformance/temp.dep.type/instantiation-dependent-unary-transform.cpp`).
 
 | Builtin | Result |
 |---|---|
@@ -4655,9 +4695,10 @@ ambiguity errors.
   requires template arguments". A `T::x` for a type parameter is
   "template argument for template type parameter must be a type; did
   you forget 'typename'?" and the check goes on (clang recovers), so
-  `P<T::x, T::y>` reports both; any other failure ends it. A template-id
-  with a pack expansion argument is checked only for an expanded pack's
-  arity (§3.2). Tests: `temp.arg.general/dependent-template-id-checked.cpp`,
+  `P<T::x, T::y>` reports both; any other failure ends it. Only the
+  arguments before a pack expansion are checked, and not the arity; a
+  template-id naming an expanded parameter pack is checked only for that
+  pack's arity (§3.2). Tests: `temp.arg.general/dependent-template-id-checked.cpp`,
   `temp.arg.template/dependent-ttp-argument{,-clang22}.cpp`.
 - "non-type template argument is not a constant expression", followed by
   the Oven note chain.

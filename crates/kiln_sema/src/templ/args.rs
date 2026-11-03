@@ -5,7 +5,7 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
-use kiln_ast::types::{ArgView, TemplateArg, TemplateName, TypeView};
+use kiln_ast::types::{ArgView, TemplateArg, TemplateName, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::EvalContext;
@@ -154,6 +154,38 @@ fn template_kind_select(k: DeclKind) -> u32 {
 }
 
 impl Sema<'_, '_> {
+    /// `args` with each merely instantiation-dependent argument (not
+    /// dependent: `TC<N>` with `N` a constant local of a function
+    /// template) replaced by its canonical form: a specialization is
+    /// shared by every use with the same canonical arguments (§3.1), so
+    /// sugar naming one function template's locals must not reach the
+    /// declaration another use finds (clang builds a specialization from
+    /// its canonical converted arguments).
+    pub(crate) fn settle_inst_sugar(&mut self, args: ArgListId) -> ArgListId {
+        let only_inst = |f: TypeFlags| {
+            f.intersects(TypeFlags::INSTANTIATION_DEPENDENT) && !f.intersects(TypeFlags::DEPENDENT)
+        };
+        if !only_inst(self.ast.types.arg_list_flags(args))
+            && !self.ast.types.args(args).iter().any(|&a| only_inst(self.ast.types.arg_flags(a)))
+        {
+            return args;
+        }
+        let out: Vec<TemplateArg> = self
+            .ast
+            .types
+            .args(args)
+            .iter()
+            .map(|&a| {
+                if only_inst(self.ast.types.arg_flags(a)) {
+                    self.ast.types.canonical_arg(a)
+                } else {
+                    a
+                }
+            })
+            .collect();
+        self.ast.types.arg_list(&out)
+    }
+
     /// The parameters of template `tmpl`, in order.
     pub(crate) fn template_params(&self, tmpl: DeclId) -> Vec<DeclId> {
         let Some(info) = self.ast.template_info(tmpl).copied() else { return Vec::new() };
@@ -336,10 +368,11 @@ impl Sema<'_, '_> {
     /// expression for a non-type parameter). Non-type arguments are
     /// converted once substituted. A dependent `T::x` for a type
     /// parameter is "did you forget 'typename'?" and the check goes on,
-    /// as clang's does; any other failure ends it. A template-id with a
-    /// pack expansion argument is checked only for an expanded pack's
-    /// arity. Consumes the pending argument locations. `Err` after a
-    /// diagnostic.
+    /// as clang's does; any other failure ends it. Only the arguments
+    /// before a pack expansion are checked, and not the arity; a
+    /// template-id naming an expanded parameter pack is checked only for
+    /// that pack's arity. Reads the pending argument locations and leaves
+    /// them for the caller. `Err` after a diagnostic.
     pub(crate) fn check_dependent_template_args(
         &mut self,
         tmpl: DeclId,
@@ -347,14 +380,28 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Result<(), ()> {
         let locs = std::mem::take(&mut self.templ.arg_locs);
+        let r = self.check_dependent_template_args_at(tmpl, args, &locs, loc);
+        self.templ.arg_locs = locs;
+        r
+    }
+
+    fn check_dependent_template_args_at(
+        &mut self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        locs: &[Loc],
+        loc: Loc,
+    ) -> Result<(), ()> {
         self.check_expanded_pack_arity(tmpl, args, loc)?;
         let head = self.head_template(tmpl);
         let params = self.template_params(head);
-        if args.iter().any(|&a| self.is_pack_expansion_arg(a))
-            || params.iter().any(|p| self.templ.expanded_packs.contains_key(p))
-        {
+        if params.iter().any(|p| self.templ.expanded_packs.contains_key(p)) {
             return Ok(());
         }
+        // A pack expansion may cover any number of parameters: the
+        // arguments before it are checked, the arity is not.
+        let expansion = args.iter().position(|&a| self.is_pack_expansion_arg(a));
+        let checked = expansion.unwrap_or(args.len());
         let depth = self.template_param_depth(head);
         let tmpl = self.ast.first(tmpl);
         let arg_loc = |i: usize| locs.get(i).copied().unwrap_or(loc);
@@ -363,16 +410,16 @@ impl Sema<'_, '_> {
         let mut wi = 0usize;
         for &p in &params {
             if self.ast.template_parm(p).is_some_and(|x| x.pack) {
-                while wi < args.len() {
+                while wi < checked {
                     failed |=
                         self.check_dependent_arg(tmpl, depth, p, args[wi], arg_loc(wi), &prior)?;
                     wi += 1;
                 }
                 break;
             }
-            if wi >= args.len() {
+            if wi >= checked {
                 // The rest have defaults, checked once substituted.
-                if self.template_default(p).is_none() {
+                if expansion.is_none() && self.template_default(p).is_none() {
                     self.diag_template_arity(tmpl, false, loc);
                     return Err(());
                 }
@@ -382,7 +429,9 @@ impl Sema<'_, '_> {
             prior.push(args[wi]);
             wi += 1;
         }
-        if wi < args.len() {
+        // Too many even before a pack expansion (`R<int, int, int, T...>`
+        // for two parameters).
+        if wi < checked {
             self.diag_template_arity(tmpl, true, loc);
             return Err(());
         }
@@ -1028,10 +1077,11 @@ impl Sema<'_, '_> {
         loc: Loc,
         prior: &[TemplateArg],
     ) -> Result<TemplateArg, ()> {
-        let dependent = self.ast.types.arg_flags(def).intersects(
-            kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION
-                | kiln_ast::types::TypeFlags::UNEXPANDED_PACK,
-        );
+        let dependent = self
+            .ast
+            .types
+            .arg_flags(def)
+            .intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK);
         if !dependent {
             let at = self.templ.default_locs.get(&p).copied().unwrap_or(loc);
             return self.check_template_arg(tmpl, depth, p, def, at, prior);

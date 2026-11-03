@@ -3,6 +3,8 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 parse_anon_bitfield_member_init = Error (0) "anonymous bit-field cannot have a default member initializer";
+parse_array_qual_outside_prototype = Error (0) "type qualifier used in array declarator outside of function prototype";
+parse_array_static_outside_prototype = Error (0) "'static' used in array declarator outside of function prototype";
 parse_asm_duplicate_qual = Error (1) "duplicate asm qualifier '{0}'";
 parse_asm_expected_string = Error (0) "expected string literal or parenthesized constant expression in 'asm'";
 parse_asm_expected_string_19 = Error (0) "expected string literal in 'asm'";
@@ -16,7 +18,9 @@ parse_attribute_wrong_arg_count = Error (2) "'{0}' attribute takes {1:no argumen
 parse_attributes_misplaced = Error (0) "misplaced attributes; expected attributes here";
 parse_attributes_not_allowed = Error (0) "an attribute list cannot appear here";
 parse_bad_pure_specifier = Error (0) "initializer on function does not look like a pure-specifier";
+parse_bit_int_extension = Extension [BitIntExtension] (0) "'_BitInt' in C++ is a Clang extension";
 parse_c11_noreturn = Extension [C11Extensions] (0) "'_Noreturn' is a C11 extension";
+parse_c99_array_usage_cxx = Error (1) "{0:qualifier in|static} array size is a C99 feature, not permitted in C++";
 parse_c99_complex = Extension [C99Extensions] (0) "'_Complex' is a C99 extension";
 parse_capture_default_first = Error (0) "capture default must be first";
 parse_class_on_template_template_param = Error (1) "template template parameter requires {0} after the parameter list";
@@ -76,6 +80,7 @@ parse_ext_alias_in_init_statement = ExtWarn [Cxx23Extensions] (0) "alias declara
 parse_ext_binding_pack = ExtWarn [Cxx26Extensions] (0) "structured binding packs are a C++2c extension";
 parse_ext_constexpr_if = ExtWarn [Cxx17Extensions] (0) "constexpr if is a C++17 extension";
 parse_ext_for_range_init_stmt = ExtWarn [Cxx20Extensions] (0) "range-based for loop initialization statements are a C++20 extension";
+parse_ext_int_deprecated = Warning [DeprecatedType] (0) "'_ExtInt' is deprecated; use '_BitInt' instead";
 parse_ext_pack_indexing = ExtWarn [Cxx26Extensions] (0) "pack indexing is a C++2c extension";
 parse_ext_static_assert_user_message = ExtWarn [Cxx26Extensions] (0) "'static_assert' with a user-generated message is a C++26 extension";
 parse_ext_variadic_friend = ExtWarn [Cxx26Extensions] (0) "variadic 'friend' declarations are a C++2c extension";
