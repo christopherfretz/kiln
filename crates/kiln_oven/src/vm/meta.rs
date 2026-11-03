@@ -13,6 +13,9 @@
 use super::Fault;
 use crate::compile::TrapInfo;
 use crate::kbc::ak;
+use crate::meta::intern::ReflMark;
+use crate::meta::materialize::Recipe;
+use crate::meta::value::recipe_elem;
 use crate::meta::{MAX_META_ARGS, MetaCtx, MetaError, MetaErrorKind, MetaOut, OvenFault, Purity};
 use crate::ty::OTy;
 use crate::{MetaOp, Note, Oven, SemaBridge};
@@ -53,8 +56,20 @@ impl Oven {
             }
         }
         let trial = self.run.fold || self.mem.in_trial();
-        let ctx =
-            MetaCtx { scope: None, loc: self.site(pc).loc, plainly: false, trial, elem: OTy(t1) };
+        let value_op = matches!(op, MetaOp::Value(_));
+        // A value op's range argument: its element type (WP-479).
+        let elem = site
+            .filter(|_| value_op)
+            .and_then(|s| s.ranges.iter().flatten().find_map(|&rc| recipe_elem(&self.types, rc)))
+            .unwrap_or(OTy(t1));
+        let ctx = MetaCtx {
+            scope: None,
+            loc: self.site(pc).loc,
+            plainly: false,
+            trial,
+            elem,
+            callee: site.map(|s| s.callee),
+        };
         match op.purity() {
             Purity::Stable => {}
             Purity::PointDependent => self.run.impure += 1,
@@ -66,7 +81,10 @@ impl Oven {
             }
         }
         let mut out = MetaOut::Unset;
-        if let Err(e) = b.meta(op, &args[..n], &mut out, &ctx, self) {
+        let mark = ReflMark::of(b);
+        let r = b.meta(op, &args[..n], &mut out, &ctx, self);
+        self.charge_refl(b, mark)?;
+        if let Err(e) = r {
             return Err(match e.kind {
                 MetaErrorKind::Fault(OvenFault(f)) => f,
                 MetaErrorKind::Failed => {
@@ -97,7 +115,18 @@ impl Oven {
         match out {
             MetaOut::Scalar(v) => Ok(v),
             MetaOut::Info(r) => Ok(u128::from(r.bits())),
+            MetaOut::Frozen(_) | MetaOut::Deref(_) if value_op => {
+                let whole = site
+                    .and_then(|s| s.result)
+                    .filter(|rc| matches!(rc, Recipe::Whole))
+                    .map(|_| self.regs[fb + dst] as u64);
+                match self.meta_value_out(b, out, OTy(t2), whole, top)? {
+                    Some(v) => Ok(v),
+                    None => unfit(self),
+                }
+            }
             MetaOut::Frozen(cv) => Ok(self.thaw_ptr(b, cv, OTy(t2), top)),
+            MetaOut::Deref(_) => unfit(self),
             MetaOut::Str(..) | MetaOut::SrcLoc(_) | MetaOut::Pair(..) | MetaOut::Infos(_) => {
                 let Some((rc, s)) = site.and_then(|s| Some((s.result?, s))) else {
                     return unfit(self);

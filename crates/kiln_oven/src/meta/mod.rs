@@ -18,12 +18,13 @@ mod access;
 mod annot;
 mod define;
 mod ext;
+pub(crate) mod intern;
 pub mod materialize;
 mod member;
 mod query;
 mod templ;
 mod traits;
-mod value;
+pub(crate) mod value;
 
 pub use access::AccessOp;
 pub use annot::AnnotOp;
@@ -257,8 +258,13 @@ pub struct MetaCtx {
     /// speculative checkpoint): a `Mutating` op never reaches the bridge.
     pub trial: bool,
     /// The element type of the call's last pointer argument (what
-    /// [`crate::Oven::meta_c_string`] reads).
+    /// [`crate::Oven::meta_c_string`] reads); for a value op given a
+    /// range ([`materialize::Shape::Elems`]), the range's element type.
     pub(crate) elem: OTy,
+    /// The intrinsic's declaration: the specialization whose signature
+    /// gives a function template's `T` (`extract<T>`, `reflect_constant`;
+    /// WP-479).
+    pub callee: Option<DeclId>,
 }
 
 /// An intrinsic's result, written by the bridge.
@@ -272,7 +278,13 @@ pub enum MetaOut {
     /// A `std::meta::info`.
     Info(ReflectionId),
     /// A frozen pointer value, thawed as the call's (pointer) result type.
+    /// For a value op (WP-479), any frozen value of the result type: a
+    /// scalar is thawed into the result register, a class through the
+    /// site's [`materialize::Recipe::Whole`] into the result object.
     Frozen(ConstValueId),
+    /// The value of the object a frozen pointer designates, read as the
+    /// call's result type (`extract<T>` of an object or a variable).
+    Deref(ConstValueId),
     /// A string view (`materialize::Shape::Str`): a frozen pointer to the
     /// characters of a static string object, and its length.
     Str(ConstValueId, u64),
