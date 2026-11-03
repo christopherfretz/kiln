@@ -2310,6 +2310,13 @@ impl ExprArena {
         crate::reflect::Reflectee::decode(n.aux, n.a).unwrap_or(crate::reflect::Reflectee::Null)
     }
 
+    /// The dependent qualified name a `CXXReflectExpr` reflects (`^^T::x`
+    /// before instantiation), if that is its operand.
+    pub fn reflect_dependent_name(&self, e: ExprId) -> Option<ExprId> {
+        let n = self.expect_kind(e, ExprKind::CXXReflectExpr);
+        (n.aux == crate::reflect::Reflectee::DEPENDENT_NAME_TAG).then(|| ExprId::new(n.a))
+    }
+
     /// The value of a `CXXReflectExpr`: `None` while dependent.
     pub fn reflect_value(&self, e: ExprId) -> Option<crate::ids::ReflectionId> {
         let n = self.expect_kind(e, ExprKind::CXXReflectExpr);
@@ -2675,6 +2682,9 @@ impl ExprArena {
             }
             ExprKind::SubstNonTypeTemplateParmExpr => v.extend(id(n.b)),
             ExprKind::CXXSpliceExpr => v.extend([n.b, n.a].into_iter().filter_map(id)),
+            ExprKind::CXXReflectExpr if n.aux == crate::reflect::Reflectee::DEPENDENT_NAME_TAG => {
+                v.extend(id(n.a));
+            }
             k if k.is_cast() => v.extend(id(n.a)),
             ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
                 v.extend(id(n.a));

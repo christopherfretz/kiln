@@ -787,6 +787,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 push(n.a());
                 push(n.b());
             }
+            // kiln: a dependent qualified name reflected (`^^T::x`).
+            ExprKind::CXXReflectExpr => {
+                if let Some(name) = exprs.reflect_dependent_name(e) {
+                    push(name.raw());
+                }
+            }
             // kiln: the object of a member splice, then the operand.
             ExprKind::CXXSpliceExpr => {
                 push(n.b());
@@ -2340,6 +2346,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             // kiln: the reflectee's kind and its stable form
             // (spec/reflection-repr.md §5); `dependent` before
             // instantiation.
+            ExprKind::CXXReflectExpr if exprs.reflect_dependent_name(e).is_some() => {
+                self.line.push_str(" name dependent");
+            }
             ExprKind::CXXReflectExpr => {
                 let r = ast.reflect_operand(e);
                 self.line.push(' ');
