@@ -37,7 +37,7 @@ pub struct TypeLayout { pub size: u64, pub align: u64 }
 pub fn type_size_align(&Ast, QualType, &Target) -> TypeLayout;
 pub fn array_layout(&Ast, elem: QualType, count: u64, &Target) -> TypeLayout;
 pub fn record_layout(&Ast, record: DeclId, &Target) -> RecordLayout;
-pub fn ensure_layout<'a>(&'a mut Ast, DeclId, &Target) -> &'a RecordLayout;
+pub fn ensure_layout<'a>(&'a mut Ast, DeclId, &Target) -> Option<&'a RecordLayout>; // None: incomplete
 pub struct Layouter<'a>   // a session: memoizes records, answers is_pod / is_empty
 pub struct LayoutCache;   // a finished session's records (Layouter::into_cache / with_cache)
 pub fn subobjects(&Ast, record: DeclId, &Target) -> Vec<(Subobject, u64)>; // §8.3
@@ -89,6 +89,19 @@ pub fn vtable_blocks(&str) -> BTreeSet<String>;          // a set, `Original map
   every class in the cache is still complete and unchanged (sema keeps one
   for the deallocation-function lookup of virtual destructors, which lays
   out complete classes only; WP-450).
+- **Complete classes only.** `ensure_layout` returns `None` for a class
+  that is incomplete ([basic.types.general]/5): it has no definition, or
+  its definition has not reached `}` (`DefinitionBits::COMPLETE` is
+  unset, e.g. `S` inside its own member-specification). Such a class has
+  no layout yet, and a cached one would be write-once wrong after the
+  class completes. Every caller handles `None`: sema already diagnoses
+  `sizeof`/`alignof`/member access of an incomplete type before it asks
+  for a layout, the Oven keeps the class an opaque provisional slot
+  (spec/oven.md, type table) and rebuilds it once the class completes,
+  and the remaining callers (packed and `__builtin_offsetof` checks,
+  `std::source_location`, codegen folding) treat it as "no layout"
+  rather than reading a bogus one. `record_layout` and `Layouter` still
+  answer for any class; `ensure_layout` is the cached entry point (WP-471).
 - **Pure.** The result depends only on the AST and the `Target`.
 - Out of scope: MS layout, `-fpack-struct` and other triples.
 

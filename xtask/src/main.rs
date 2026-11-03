@@ -6,6 +6,7 @@ use std::process::ExitCode;
 mod bench;
 mod clang_ast;
 mod diag_split;
+mod entity_lint;
 mod features;
 mod gen_pp;
 mod gen_reflect;

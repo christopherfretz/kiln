@@ -175,6 +175,7 @@ impl SyntaxJob<'_> {
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
+            sve: crate::features::resolve(a, job.toolchain.target.is_aarch64()).0.sve,
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();

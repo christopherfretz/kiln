@@ -210,6 +210,7 @@ impl CodegenJob<'_> {
             target.types.char_signed = signed;
         }
         let (pp, _deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+        let feats = crate::features::resolve(a, job.toolchain.target.is_aarch64()).0;
         let popts = ParseOptions {
             std: job.std.lex,
             gnu: job.std.gnu,
@@ -222,6 +223,7 @@ impl CodegenJob<'_> {
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == StdLib::LibStdCxx,
+            sve: feats.sve,
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
@@ -234,6 +236,8 @@ impl CodegenJob<'_> {
                 exceptions: a.predef.exceptions.unwrap_or(true),
                 ident: ident(),
                 outline_atomics: a.outline_atomics.unwrap_or(true),
+                target_features: feats.extra.clone(),
+                sve: feats.sve,
                 complex_range: a.complex_range(),
                 opt_level: opt_level(a.opt_flag.as_deref()),
                 opt_size: opt_size(a.opt_flag.as_deref()),
@@ -597,6 +601,10 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
         }
         None => {}
     }
+    if args.experimental_library {
+        // clang adds `-lc++experimental` when the stdlib is libc++.
+        cmd.arg("-fexperimental-library");
+    }
     let opts_at = |cmd: &mut Command, pos: usize| {
         for o in args.link.iter().filter(|o| o.pos == pos) {
             cmd.arg(o.arg.clone());
@@ -857,5 +865,13 @@ mod tests {
             cmd.args,
             ["-O2", "-lm", "a.o", "-L/x", "b.o", "-Wl,-z,now", "-static", "-o", "a.out"]
         );
+    }
+
+    #[test]
+    fn link_experimental_library() {
+        let a = args(&["-stdlib=libc++", "-fexperimental-library", "a.o"]);
+        let tc = Toolchain::new(crate::toolchain::Target::host(), None, None);
+        let cmd = link_command(&a, &tc, &[(0, "a.o".to_owned())]);
+        assert_eq!(cmd.args, ["-stdlib=libc++", "-fexperimental-library", "a.o", "-o", "a.out"]);
     }
 }
