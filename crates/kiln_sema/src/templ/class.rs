@@ -1643,6 +1643,15 @@ impl Substituter<'_, '_, '_> {
             if n.flags().contains(DeclFlags::IMPLICIT) {
                 continue;
             }
+            // The `FriendDecl` of an implicit friend `operator==`
+            // ([class.compare.default]/4) too: the specialization declares
+            // its own, linked to this one (spec/sema-class.md §8.3).
+            if n.kind() == DeclKind::Friend
+                && let kiln_ast::decl::FriendTarget::Decl(t) = sub.sema.ast.decls.friend_target(m)
+                && sub.sema.ast.decls.get(t).has(DeclFlags::IMPLICIT)
+            {
+                continue;
+            }
             if n.has(DeclFlags::INVALID)
                 || n.kind() == DeclKind::FunctionTemplate
                     && sub.sema.pattern_of(m).is_some_and(|p| sub.sema.is_invalid_decl(p))

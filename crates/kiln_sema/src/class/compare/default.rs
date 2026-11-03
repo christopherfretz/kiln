@@ -624,6 +624,30 @@ impl Sema<'_, '_> {
         if let Some(l) = self.special.cmp.lookups.get(&sfirst).cloned() {
             let _ = self.special.cmp.lookups.insert(f, l);
         }
+        // [class.compare.default]/4: "the same ... trailing
+        // requires-clause" as the `<=>`; it is checked with the
+        // specialization's arguments, as the `<=>`'s is.
+        if let Some(&req) = self.ast.templates.trailing_requires.get(s) {
+            let _ = self.ast.templates.trailing_requires.insert(f, req);
+        }
+        if self.inst.concepts.untemplated_requires.contains(&s) {
+            let _ = self.inst.concepts.untemplated_requires.insert(f);
+        }
+        let pattern_eq = self
+            .ast
+            .instantiated_from(s)
+            .and_then(|ps| self.special.cmp.implicit_eq.get(&ps).copied());
+        if let Some((_, args)) = self.inst.concepts.member_constraints.get(&s).cloned() {
+            let _ =
+                self.inst.concepts.member_constraints.insert(f, (pattern_eq.unwrap_or(f), args));
+        }
+        // A specialization's implicit `==` is instantiated from its
+        // pattern's (clang `InstantiateClass` instantiates the pattern's
+        // implicit declaration; spec/sema-class.md §8.3).
+        if let Some(pe) = pattern_eq {
+            self.builder().member_of_spec(r, f, pe);
+        }
+        let _ = self.special.cmp.implicit_eq.insert(s, f);
         f
     }
 }

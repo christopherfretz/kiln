@@ -54,6 +54,16 @@ impl Sema<'_, '_> {
                 "inherited constructor"
             }
             CandidateKind::Ctor => "constructor",
+            // clang `oc_implicit_equality_comparison`, ahead of the
+            // reversed form ([class.compare.default]/4).
+            _ if implicit
+                && self.ast.decls.get(f).name()
+                    == kiln_ast::names::DeclName::operator(
+                        kiln_ast::names::OverloadedOperator::EqualEqual,
+                    ) =>
+            {
+                "function (the implicit 'operator==' for this 'operator<=>)'"
+            }
             _ if c.rewrite.is_reversed() => "function (with reversed parameter order)",
             CandidateKind::Method if implicit => match self.special_kind_of(f) {
                 Some(SpecialKind::MoveAssign) => "function (the implicit move assignment operator)",
