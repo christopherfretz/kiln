@@ -26,6 +26,17 @@ done
 _TGT="${KILN_BUILD_ROOT:-$_MAIN/.build}/target-$(basename "$_WS")"
 case "$_MAIN" in /Volumes/AgentWork/kiln-helper/kiln) _TGT="/Volumes/AgentWork/kiln-helper/.build/target-$(basename "$_WS")";; esac
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$_TGT}"
+# The GCC 16.1 oracle (`oracle: gcc`, spec/harness.md "GCC oracle"): a
+# workspace-local build under .toolchain/gcc-16.1 when there is one; otherwise
+# the harness looks for `g++-16` on PATH and skips the comparison without it.
+if [ -z "${KILN_GCC:-}" ]; then
+  for _cand in "$_WS/.toolchain" "$_MAIN/.toolchain" "$_MAIN/../.toolchain"; do
+    if [ -x "$_cand/gcc-16.1/bin/g++-16" ]; then
+      export KILN_GCC="$_cand/gcc-16.1/bin/g++-16"
+      break
+    fi
+  done
+fi
 unset _TGT
 unset _WS _MAIN _cand
 # The workspace mount (a host bind mount) has dropped rmeta/rlib writes under
