@@ -5164,8 +5164,11 @@ impl Sema<'_, '_> {
         {
             // `T x(a, b)` with a dependent `T` or argument: initialized at
             // instantiation, kept as a `ParenListExpr` (clang
-            // `ActOnParenListExpr` / `AddInitializerToDecl`).
-            let e = self.builder().paren_list(es, *l, *r);
+            // `ActOnParenListExpr` / `AddInitializerToDecl`). A braced
+            // argument keeps its nested lists (`T m({{1, 2}, {3, 4}})`):
+            // the placeholder holds only the top-level expressions.
+            let es = self.dependent_args(es);
+            let e = self.builder().paren_list(&es, *l, *r);
             self.set_dependent_var_init(v, e);
             return true;
         }
@@ -5393,21 +5396,8 @@ impl Sema<'_, '_> {
         loc: Loc,
         direct: bool,
     ) -> Option<QualType> {
-        use crate::templ::auto::{AutoFail, AutoInit};
-        let (items, kind, lbrace) = match init {
-            Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
-            Initializer::Paren(es, ..) => {
-                (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
-            }
-            Initializer::List(l) if direct => (
-                crate::templ::auto::auto_list_items(l, false),
-                AutoInit::DirectList,
-                Some(l.lbrace),
-            ),
-            Initializer::List(l) => {
-                (crate::templ::auto::auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace))
-            }
-        };
+        use crate::templ::auto::AutoFail;
+        let (items, kind, lbrace) = auto_init_items(init, direct);
         // [temp.deduct.call]/6: every member of an overload set deduces
         // `auto`, so nothing is deduced (a placeholder in a function
         // declarator selecting one member is not implemented) -- except
@@ -5438,6 +5428,20 @@ impl Sema<'_, '_> {
         let fail = match overload {
             Some(e) => AutoFail::Incompatible(e),
             None => match self.deduce_auto(declared, &items, kind) {
+                // clang 19's placeholder-typed specialization
+                // (`undeduced_var_spec_use_19`) deduces only itself; any
+                // other variable "deduced" from it is rejected (clang 19
+                // accepts it and crashes generating code).
+                Ok(t) if self.contains_undeduced_auto(t) => {
+                    if self.undeduced_var_spec_use_19(v) {
+                        self.templ.self_typed_var_specs.push(v);
+                        return Some(t);
+                    }
+                    match items.iter().flatten().next() {
+                        Some(&e) => AutoFail::Incompatible(e),
+                        None => AutoFail::Error,
+                    }
+                }
                 Ok(t) => {
                     let at = self.inst.concepts.placeholder_locs.get(&v).copied().unwrap_or(loc);
                     // `constexpr C decltype(auto) x = e;`: the constraint
@@ -5519,6 +5523,7 @@ impl Sema<'_, '_> {
         }
         match self.eval_const(e, EvalContext::init(v, loc)) {
             Ok(cv) => self.ast.decls.finish_eval(v, Some(cv)),
+            Err(_) if self.refers_to_invalid_var(e) => self.ast.decls.finish_eval(v, None),
             Err(mut f) => {
                 self.ast.decls.finish_eval(v, None);
                 let name = self.name_for_diagnostic(v);
@@ -5708,6 +5713,40 @@ impl Sema<'_, '_> {
     pub(crate) fn has_errors_in(&self, e: ExprId) -> bool {
         self.ast.exprs.get(e).kind() == ExprKind::RecoveryExpr
             || self.is_error_type(self.ast.exprs.get(e).ty())
+    }
+
+    /// Whether `e` names a variable whose declaration is invalid (a
+    /// variable template specialization whose initializer failed to
+    /// instantiate), directly or through the initializer of a variable
+    /// it names: clang's `DeclRefExpr` error dependence, which silences
+    /// the "not a constant expression" diagnostics that would follow the
+    /// error already reported. Asked only after an evaluation failed; the
+    /// walk is bounded.
+    pub(crate) fn refers_to_invalid_var(&self, e: ExprId) -> bool {
+        let mut stack = vec![e];
+        let mut seen = kiln_source::fx::FxHashSet::default();
+        let mut budget = 1usize << 14;
+        while let Some(x) = stack.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            if self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr {
+                let d = self.ast.exprs.decl(x);
+                let n = self.ast.decls.get(d);
+                if n.kind() == DeclKind::Var && seen.insert(d) {
+                    if n.has(DeclFlags::INVALID) {
+                        return true;
+                    }
+                    if let Some(init) = self.ast.decls.var(d).and_then(|v| v.init) {
+                        stack.push(init);
+                    }
+                }
+                continue;
+            }
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+        false
     }
 
     /// A variable declared without an initializer ([dcl.init]/7).
@@ -6016,6 +6055,13 @@ impl Sema<'_, '_> {
             let loc = self.ast.decls.get(f).loc();
             self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(info.name));
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        }
+        // clang `ActOnStartOfFunctionDef` resolves the exception
+        // specification of every definition: a destructor or defaulted
+        // special member nothing uses still needs its implicit `noexcept`
+        // for codegen's terminate scope ([except.spec]/8, spec/sema.md §4.7).
+        if !self.in_template() {
+            self.resolve_exception_spec(f, self.ast.decls.get(f).loc());
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         // The return type as written: diagnostics name its typedef.
@@ -7779,6 +7825,9 @@ impl Sema<'_, '_> {
                     let d = self.with_trait_explanation(d, inner);
                     self.emit(d);
                 }
+                // clang does not evaluate a condition that contains
+                // errors (a variable whose initializer failed).
+                Err(_) if self.refers_to_invalid_var(c) => failed = true,
                 Err(mut f) => {
                     failed = true;
                     let at = Self::fold_lone_invalid(&mut f, cloc);
@@ -9570,4 +9619,23 @@ fn escape_diag_text(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// The deduction form of a variable's initializer `init`: its items (a
+/// braced list's elements), the form, and a braced list's `{`.
+fn auto_init_items(
+    init: &Initializer,
+    direct: bool,
+) -> (Vec<Option<ExprId>>, crate::templ::auto::AutoInit, Option<Loc>) {
+    use crate::templ::auto::{AutoInit, auto_list_items};
+    match init {
+        Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
+        Initializer::Paren(es, ..) => {
+            (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
+        }
+        Initializer::List(l) if direct => {
+            (auto_list_items(l, false), AutoInit::DirectList, Some(l.lbrace))
+        }
+        Initializer::List(l) => (auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace)),
+    }
 }

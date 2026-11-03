@@ -2339,7 +2339,10 @@ specification as written (`TypeNames` prints ` noexcept`,
 - Implicit and defaulted special members keep `Deferred(f)` and are
   resolved through `class/special/excspec.rs` (sema-class.md §4.7). The
   `noexcept` operator sees these specs through constructor, destructor
-  and member calls (§5.3).
+  and member calls (§5.3). `act_on_start_function_def` resolves the spec
+  of every non-template definition (clang `ActOnStartOfFunctionDef`,
+  WP-431), so an out-of-line destructor nothing uses is still implicitly
+  `noexcept` for codegen's terminate scope ([except.spec]/8).
 
 **Landed (WP-269).** Friends, member templates and function template
 specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
@@ -3199,6 +3202,22 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     a power of 2 (`requested alignment is not a power of 2`), warned above
     2^32 (`-Wbuiltin-assume-aligned-alignment`); `off` converts to
     `size_t`. The call is a `void *` prvalue.
+  - `__builtin_is_within_lifetime(p)` (WP-418; clang 20 `BuiltinIsWithinLifetime`,
+    custom, `builtin_is_within_lifetime`; P2641R4): the only consteval
+    builtin (`builtin::attr::CONSTEVAL`, so its lazily created
+    declaration is `consteval`). One argument (`too few`/`too many`),
+    decayed; a non-pointer (`int`, `nullptr`, a member pointer) or a
+    function pointer is `{non-|function }pointer argument to
+    '__builtin_is_within_lifetime' is not allowed` at the argument. The
+    call is a `bool` prvalue and an immediate invocation like any other
+    (`check_immediate_invocation`: outside an immediate function context
+    it must be a constant expression, and it escalates a constexpr
+    template, [expr.const]/16-20); a reference left by an invalid call is
+    clang's `cannot take address of consteval function` error, without a
+    `declared here` note (a builtin has no declaration). Available at
+    `-fclang-compat=22` (`__has_builtin` is 0 below). Evaluation is
+    spec/oven.md "Builtins". Tests:
+    `tests/conformance/meta.const.eval/is-within-lifetime*.cpp`.
   - `__builtin_align_up` / `__builtin_align_down` / `__builtin_is_aligned`
     (custom, `builtin_align`, clang `BuiltinAlignment`; WP-416): two
     arguments. The source must be an integer (not `bool` or an
@@ -3541,7 +3560,12 @@ for them.
     template 'x'` [-Wunused-template]. Static data members of classes
     with internal linkage, and out-of-line explicit specializations of
     class template members, are diagnosed at their definition; inline
-    variables in the main file are diagnosed as clang does.
+    variables in the main file are diagnosed as clang does. A variable
+    named by a non-dependent expression of a template, which the
+    instantiation shares rather than rebuilds, is odr-used by the
+    instantiation at its full-expression (`mark_shared_expr_referenced`
+    queues it on `pending_odr`; WP-418,
+    `tests/conformance/basic.def.odr/instantiation-odr-uses-variable.cpp`).
   - Gaps: a variable named only in a default argument counts as
     odr-used, so it is not reported as unneeded; C++26 `_` placeholder
     redeclarations ("redefinition of '_'").
@@ -5277,6 +5301,11 @@ and unevaluated operands:
     return value; an argument adds its "passing argument" note), no
     `-Wbraced-scalar-init`, and narrowing checked on the user
     conversion's result
+  - a scalar argument or return value from a one-element braced list
+    (`f({1})`, `return {a == b};`) is `braces around scalar initializer`
+    [-Wbraced-scalar-init] where written, never in an instantiation
+    (clang 19 and 22 are silent there; `too many braces` still shows;
+    WP-418, tests/conformance/dcl.init.list/braced-scalar-instantiation.cpp)
   - a non-aggregate class parameter copy-list-initialized from a braced
     argument (`f({1})`, a default argument, a member call) is constructed
     from the list; when the constructor chosen is explicit ("chosen
@@ -6005,7 +6034,10 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
   body as clang's CFG does. A constant branch condition prunes its dead
   edge unless it is a configuration value (`is_configuration_value`:
   a `constexpr` call, a global or `const` local, `sizeof`, or a
-  parenthesized or macro-expanded literal).
+  parenthesized or macro-expanded literal). An `ExprWithCleanups` is no
+  element of its own (clang `VisitExprWithCleanups`): the temporaries'
+  destruction after `throw E()` is not dead code
+  (`expr.throw/unreachable-code-temporary.cpp`).
 - Each round reports one dead root: the last dead element, in
   evaluation order, that no reached or dead element flows into. It is
   then treated as reached and the scan repeats, so the regions come out
@@ -6436,6 +6468,14 @@ unscoped enumeration is reported (spec/oven.md "Integration").
   - The `EvalFailure`'s notes follow it (`with_failure_notes`): the
     reason, the `in call to` backtrace, and any `declared here` notes.
   - An expression that already contains errors is not evaluated.
+  - A failed evaluation whose expression names (directly or through the
+    initializers of the variables it names, a bounded walk) a variable
+    that is invalid is silent: a `static_assert` fails without a
+    diagnostic and a `constexpr` variable's initializer is not reported
+    (`Sema::refers_to_invalid_var`; clang marks the `DeclRefExpr`
+    error-dependent). This is what keeps one bad variable-template
+    instantiation from cascading (`temp.inst/var-spec-invalid-init-silent.cpp`,
+    WP-418).
 
 ## 8a. Reflection (spike, -freflection) (`reflect.rs`, WP-267)
 

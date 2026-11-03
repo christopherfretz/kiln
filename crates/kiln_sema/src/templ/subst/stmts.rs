@@ -57,6 +57,23 @@ impl Substituter<'_, '_, '_> {
                 if !reported && self.sema.clang_compat >= 22 && self.erroneous_return(s) {
                     return self.sema.act_on_null_stmt(loc);
                 }
+                // A `return` whose operand fails without a new error (it
+                // names a variable whose initializer failed, or, under
+                // clang 19, is an error of the pattern) in a function whose
+                // return type has a placeholder: clang's `DeduceAutoType`
+                // answers `AlreadyDiagnosed` for an operand that
+                // `containsErrors()` and `BuildReturnStmt` marks the
+                // function invalid, so its type is not deduced `void` from
+                // what is left and a call to it does not cascade. In a
+                // lambda body the lambda-expression fails instead
+                // (spec/sema-templates.md §5.5; WP-434).
+                if !reported && !self.probe_done() && self.placeholder_return(s) {
+                    if self.lambda_bodies == 0 {
+                        self.stmt_failed = true;
+                    } else {
+                        self.lambda_return_failed = true;
+                    }
+                }
                 let e = self.sema.recover_err(&[], loc);
                 self.sema.builder().expr_stmt(e)
             }
@@ -73,6 +90,16 @@ impl Substituter<'_, '_, '_> {
                 .stmts
                 .return_value(s)
                 .is_some_and(|v| ast.exprs.is_erroneous_operand(v, &ast.lists))
+    }
+
+    /// Whether pattern statement `s` is a `return` with an operand in a
+    /// function (or lambda call operator) whose declared return type has
+    /// a placeholder, deduced by an earlier `return` or not.
+    fn placeholder_return(&self, s: StmtId) -> bool {
+        let ast = &self.sema.ast;
+        ast.stmts.get(s).kind() == StmtKind::ReturnStmt
+            && ast.stmts.return_value(s).is_some()
+            && self.sema.func.as_ref().is_some_and(|f| f.auto_ret.is_some())
     }
 
     /// A sub-statement: a statement that is not compound gets a block
@@ -176,8 +203,20 @@ impl Substituter<'_, '_, '_> {
                         Ok(x) => out.push(x),
                         Err(f) => {
                             // This declaration and the ones after it are
-                            // invalid; a later use is no new error.
+                            // invalid; a later use is no new error. As
+                            // clang's `TransformCompoundStmt`, a declaration
+                            // that does not instantiate at all (a
+                            // `static_assert` whose condition is invalid, a
+                            // variable whose type does not substitute; not
+                            // one with an invalid initializer) also ends the
+                            // enclosing compound statement (WP-418).
+                            let none = match self.sema.kind_of(d) {
+                                DeclKind::StaticAssert => true,
+                                DeclKind::Var => !self.locals.contains_key(&d),
+                                _ => false,
+                            };
                             self.failed_locals.extend_from_slice(&ds[i..]);
+                            self.invalid_decl_stmt |= none;
                             return Err(f);
                         }
                     }

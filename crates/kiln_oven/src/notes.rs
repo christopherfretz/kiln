@@ -487,6 +487,7 @@ impl Oven {
                 };
                 (site.loc, format!("cannot allocate array; evaluated array bound {v} {what}"))
             }
+            Fault::Bi(BiFault::Lifetime { kind }) => self.lifetime_note(ast, site, kind),
             Fault::Bi(f) => (site.loc, self.bi_msg(ast, site, f)),
             Fault::PureVirtual(d) => {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
@@ -739,6 +740,29 @@ impl Oven {
         (at, Note::new(site.loc, s))
     }
 
+    /// The note of a failed `__builtin_is_within_lifetime` (clang
+    /// `EvaluateBuiltinIsWithinLifetime`'s `Error`): called from the body
+    /// of `std::is_within_lifetime`, it is named so and noted at that
+    /// function's call.
+    fn lifetime_note(&self, ast: &Ast, site: Site, kind: u8) -> (Loc, String) {
+        let from_std =
+            self.stack.last().filter(|_| self.stack.len() > self.run.entry + 1).filter(|fr| {
+                self.funcs[fr.func as usize]
+                    .decl
+                    .is_some_and(|d| crate::compile::is_std_function(ast, d, "is_within_lifetime"))
+            });
+        let (loc, name) = match from_std {
+            Some(fr) => (self.site(fr.call_pc as usize).loc, "std::is_within_lifetime"),
+            None => (site.loc, "__builtin_is_within_lifetime"),
+        };
+        let what = match kind {
+            0 => "a null pointer",
+            1 => "a function pointer",
+            _ => "a one-past-the-end pointer",
+        };
+        (loc, format!("'{name}' cannot be called with {what}"))
+    }
+
     /// The note of a library builtin's failure (clang's
     /// `note_constexpr_memcpy_*`, `note_constexpr_mem{cmp,chr}_unsupported`).
     /// A designated type is printed as the argument's static pointee (with
@@ -848,6 +872,7 @@ impl Oven {
             | BiFault::CastIndet { .. }
             | BiFault::CastUnrep { .. }
             | BiFault::Align { .. }
+            | BiFault::Lifetime { .. }
             | BiFault::AlignArg { .. } => String::new(),
         }
     }

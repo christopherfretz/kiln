@@ -792,6 +792,15 @@ impl Cg<'_> {
         {
             return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
         }
+        self.emit_glvalue_load(s)
+    }
+
+    /// The loaded scalar value of the glvalue `s`: a reference-returning
+    /// call yields its referee's address from `emit_scalar`, so it is
+    /// loaded through its lvalue (clang `ScalarExprEmitter::VisitCallExpr`);
+    /// anything else is its scalar value. Also each arm of a glvalue
+    /// conditional, whose arms clang visits as scalars (WP-418).
+    fn emit_glvalue_load(&mut self, s: ExprId) -> R<Option<V>> {
         // A call returning a reference yields the referee's address
         // (clang `ScalarExprEmitter::VisitCallExpr`: a reference
         // result is `EmitLoadOfLValue`), also through the lvalue
@@ -1522,6 +1531,13 @@ impl Cg<'_> {
         self.f.opaque.get(&src).copied()
     }
 
+    /// The scalar value of a conditional's arm: the arms of a glvalue
+    /// conditional are glvalues and are loaded (`c ? f() : x` with a
+    /// reference-returning `f`, WP-418).
+    fn emit_arm(&mut self, a: ExprId) -> R<Option<V>> {
+        if self.is_glvalue(a) { self.emit_glvalue_load(a) } else { self.emit_scalar_opt(a) }
+    }
+
     /// clang `VisitAbstractConditionalOperator`.
     fn emit_conditional(&mut self, c: ExprId, a: ExprId, b: ExprId) -> R<Option<V>> {
         if let kiln_ast::types::TypeView::Vector { kind, .. } =
@@ -1530,13 +1546,13 @@ impl Cg<'_> {
             return self.emit_vector_conditional(c, a, b, kind).map(Some);
         }
         if let Some(x) = self.fold_bool(c) {
-            return self.emit_scalar_opt(if x { a } else { b });
+            return self.emit_arm(if x { a } else { b });
         }
         if self.folds.get(a).is_some() && self.folds.get(b).is_some() {
             let cv = self.eval_bool(c)?;
             let _ = self.zext_or_same(cv, LTy::I64);
-            let x = self.emit_scalar_opt(a)?;
-            let y = self.emit_scalar_opt(b)?;
+            let x = self.emit_arm(a)?;
+            let y = self.emit_arm(b)?;
             return Ok(match (x, y) {
                 (Some(x), Some(y)) => Some(self.select(cv, x, y)),
                 _ => None,
@@ -1548,11 +1564,11 @@ impl Cg<'_> {
         let start = self.f.fir.cur();
         self.branch_on_bool(c, lb, rb)?;
         self.emit_block(lb, false);
-        let x = self.cond_eval(start, |cg| cg.emit_scalar_opt(a))?;
+        let x = self.cond_eval(start, |cg| cg.emit_arm(a))?;
         let lb = self.f.fir.cur().expect("insert point");
         self.br(cont);
         self.emit_block(rb, false);
-        let mut y = self.cond_eval(start, |cg| cg.emit_scalar_opt(b))?;
+        let mut y = self.cond_eval(start, |cg| cg.emit_arm(b))?;
         // A `bool` arm that is a post-increment of `_Atomic(bool)` is an
         // `i8` (`atomic_incdec`); clang 19 feeds it to a phi of the other
         // arm's type (invalid IR). Kiln converts the second arm to the
@@ -3292,7 +3308,8 @@ impl Cg<'_> {
             self.coerced_store_sized(r, &coerce, t, size);
             return Ok(Some(self.load_scalar(t, rq)));
         }
-        if rty == LTy::BFLOAT && self.is_x86() && !self.opts.optimize && self.opts.llvm_major < 22 {
+        if rty == LTy::BFLOAT && self.is_x86() && !self.opts.optimize() && self.opts.llvm_major < 22
+        {
             // spec/abi.md §8.18: LLVM 19's x86-64 FastISel (`-O0`) takes
             // a `bfloat` call result for the already widened `float`, so a
             // result passed straight on reaches `__truncsfbf2` as raw
@@ -3829,7 +3846,9 @@ impl Cg<'_> {
             self.store_lv(z, lv, false);
         } else {
             let vol = self.is_volatile(lv.q);
-            self.store(z, lv.addr.v, lv.addr.align, vol);
+            // clang `EmitStoreThroughLValue`: the lvalue's access tag.
+            let st = self.store(z, lv.addr.v, lv.addr.align, vol);
+            self.tbaa_mark(st, lv.q, lv.tb);
         }
         Ok(())
     }

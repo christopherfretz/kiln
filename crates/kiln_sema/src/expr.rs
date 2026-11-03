@@ -539,7 +539,15 @@ impl Sema<'_, '_> {
     /// still destroys `D(3)` at its end. A default template argument is
     /// substituted and converted in a context of its own
     /// ([`Sema::default_template_arg`]).
+    ///
+    /// A non-static member named without an object makes it erroneous
+    /// (clang's `ExprError` from `DiagnoseInstanceReference`): no "not a
+    /// constant expression" follows the error.
     pub(crate) fn act_on_constant_full_expr(&mut self, e: ExprId) -> ExprId {
+        if self.flush_member_refs() {
+            let loc = self.ast.exprs.get(e).loc();
+            return self.recover_err(&[e], loc);
+        }
         let outer = self.set_aside_outer_immediates(e);
         let pending = if self.has_own_temporaries(e) {
             self.take_constant_outer_cleanups(e)
@@ -1973,6 +1981,7 @@ impl Sema<'_, '_> {
             && !n.has(DeclFlags::INVALID)
             && let Some(t) = n.ty()
             && self.contains_undeduced_auto(t)
+            && !self.undeduced_var_spec_use_19(d)
         {
             let msg = match self.auto_expl_spec_in_own_init(d, loc) {
                 Some(m) => m,

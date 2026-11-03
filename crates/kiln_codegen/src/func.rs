@@ -170,6 +170,8 @@ pub(crate) struct Fx {
     /// Calls: (instruction, callee, call-site nounwind).
     pub calls: Vec<(u32, Option<FuncId>, bool)>,
     pub loop_mp: Option<MetadataId>,
+    /// The function's `!{!"llvm.loop.unroll.disable"}` node (at `-O1`).
+    pub loop_unroll: Option<MetadataId>,
     /// The active conditional evaluations (clang `ConditionalEvaluation`),
     /// innermost last: each is the block the condition started in.
     pub conds: Vec<Blk>,
@@ -245,6 +247,7 @@ impl Fx {
             cx_ret: None,
             calls: Vec::new(),
             loop_mp: None,
+            loop_unroll: None,
             conds: Vec::new(),
             opaque: FxHashMap::default(),
             array_index: Vec::new(),
@@ -542,7 +545,7 @@ impl Cg<'_> {
             && self.f.ret_kind != RetKind::Void
             && self.f.fir.cur().is_some()
         {
-            if self.opts.optimize {
+            if self.opts.optimize() {
                 self.f.fir.push(Op::Unreachable, LTy::VOID);
                 self.f.fir.set_cur(None);
             } else {
@@ -598,7 +601,7 @@ impl Cg<'_> {
             || !self.opts.exceptions
             || self.no_throw_calls();
         let noreturn = self.ast.is_noreturn_fn(d);
-        let inline = if thunk.is_some() && !self.opts.optimize {
+        let inline = if thunk.is_some() && !self.opts.optimize() {
             crate::module::DefInline::OptNone
         } else {
             // clang `maybeEmitThunk` gives a thunk its method's definition
@@ -888,6 +891,11 @@ impl Cg<'_> {
 
     /// clang `SimplifyForwardingBlocks`.
     pub fn simplify_forwarding(&mut self, b: Blk) {
+        // clang bails out while any cleanup (a destructor, a lifetime end,
+        // a terminate scope) is on the EH stack.
+        if !self.f.cl.stack.is_empty() {
+            return;
+        }
         let insts = self.f.fir.block_insts(b);
         if insts.len() != 1 {
             return;
@@ -937,7 +945,7 @@ impl Cg<'_> {
         let p = self.scalar_tls_addr(a.v);
         let v = self.load(a.ty, p, a.align, vol);
         self.tbaa_mark(v, q, tb);
-        if self.is_bool_value(q) && self.opts.optimize && a.ty == LTy::I8 {
+        if self.is_bool_value(q) && self.opts.optimize() && a.ty == LTy::I8 {
             self.bool_range(v);
         }
         self.emit_from_memory(v, q)

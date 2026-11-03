@@ -359,6 +359,9 @@ impl Substituter<'_, '_, '_> {
             return Ok(());
         }
         let Some(init) = data.init else {
+            if self.sema.undeduced_var_spec_without_init(v) {
+                return Ok(());
+            }
             self.sema.act_on_uninit(v);
             return Ok(());
         };
