@@ -850,9 +850,9 @@ impl<'a> Printer<'a, '_> {
         let p = param?;
         if p == "auto" || p.contains("auto ") || p == "decltype(auto)" {
             // A deduced parameter's argument prints with its type
-            // (`(K)9`, `3U`, `'a'`), as the text dump's line does; an
-            // escaped character is spelled differently by kiln.
-            return (!v.contains('\\')).then_some(v);
+            // (`(K)9`, `3U`, `'a'`, `(signed char)'\xfd'`, `U'\U0001f600'`),
+            // exactly as the text dump's line spells it.
+            return Some(v);
         }
         let bare = v.strip_prefix('(')?.strip_prefix(p)?.strip_prefix(')')?;
         (!bare.is_empty() && bare.trim_start_matches('-').bytes().all(|b| b.is_ascii_digit()))
@@ -2642,19 +2642,43 @@ fn unsupported_ctx_arg(param: Option<&str>) -> String {
 fn integral_arg(v: i64, param: &str) -> Option<String> {
     Some(match param {
         "bool" => (if v != 0 { "true" } else { "false" }).to_owned(),
-        "char" => {
-            let b = u8::try_from(v)
-                .ok()
-                .filter(|b| (b.is_ascii_graphic() || *b == b' ') && *b != b'\'' && *b != b'\\')?;
-            format!("'{}'", char::from(b))
-        }
-        "unsigned char" => (v as u8).to_string(),
+        "char" | "signed char" | "unsigned char" => char_literal(v as u8 as u32, ""),
+        "char8_t" => char_literal(v as u8 as u32, "u8"),
+        "char16_t" => char_literal(v as u16 as u32, "u"),
+        "char32_t" => char_literal(v as u32, "U"),
+        "wchar_t" => char_literal(v as u32, "L"),
         "unsigned short" => (v as u16).to_string(),
         "unsigned int" => (v as u32).to_string(),
         "unsigned long" | "unsigned long long" | "size_t" | "std::size_t" => (v as u64).to_string(),
-        "int" | "long" | "long long" | "short" | "signed char" => v.to_string(),
+        "int" | "long" | "long long" | "short" => v.to_string(),
         _ => return None,
     })
+}
+
+/// A character-typed template argument as clang's `CharacterLiteral::print`
+/// spells it in a qualified name: the encoding `prefix`, then the simple
+/// escapes (`\\ \' \a \b \f \n \r \t \v`), printable ASCII verbatim,
+/// else `\xhh` below 256, `\uhhhh` up to `0xffff`, `\Uhhhhhhhh` above. An
+/// code unit `u` is the value truncated to its type's width (clang's JSON
+/// prints it sign-extended; `signed char` and `unsigned char` print
+/// without their cast outside a deduced parameter).
+fn char_literal(u: u32, prefix: &str) -> String {
+    let body = match u {
+        0x5c => "\\\\".to_owned(),
+        0x27 => "\\'".to_owned(),
+        0x07 => "\\a".to_owned(),
+        0x08 => "\\b".to_owned(),
+        0x0c => "\\f".to_owned(),
+        0x0a => "\\n".to_owned(),
+        0x0d => "\\r".to_owned(),
+        0x09 => "\\t".to_owned(),
+        0x0b => "\\v".to_owned(),
+        0x20..=0x7e => char::from(u as u8).to_string(),
+        0..=0xff => format!("\\x{u:02x}"),
+        0x100..=0xffff => format!("\\u{u:04x}"),
+        _ => format!("\\U{u:08x}"),
+    };
+    format!("{prefix}'{body}'")
 }
 
 /// A JSON number as an exact integer (within 2^53, as `spec_arg`).

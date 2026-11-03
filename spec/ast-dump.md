@@ -715,8 +715,12 @@ contract:
   argument's enumerator), from the side channel's `TemplateArgument`
   lines of the specialization; pack elements print one by one the same
   way (an empty pack prints nothing), and an argument of a deduced
-  (`auto`) parameter prints as the side channel spells it, except that a
-  value with an escape (`'\xc8'`) is an error. A default argument
+  (`auto`) parameter prints exactly as the side channel spells it
+  (`(signed char)'\xfd'`, `U'\U0001f600'`). A character-typed argument
+  of a declared parameter (`char`, `signed char`, `unsigned char`,
+  `char8_t`, `char16_t`, `char32_t`, `wchar_t`) prints as clang's
+  `CharacterLiteral::print` from the JSON value truncated to the type's
+  width (spec/ast.md §9.3; WP-437). A default argument
   compared for trimming (clang drops trailing arguments equal to their
   defaults) is a non-dependent type, a literal, an earlier type
   parameter of the same template, or such a parameter under pointer,
