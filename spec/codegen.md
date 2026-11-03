@@ -1281,6 +1281,20 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   - Thunks with a virtual adjustment (`_ZTv0_n<off>_`) load the
     vcall offset from the vtable.
 
+**Vtables and VTTs of virtual lattices (WP-414).** Codegen asks for a
+class's vtable group, construction groups, VTT and subobject table once
+per structor and vptr store, so `Module.vts` (a `kiln_abi::VTableSession`,
+spec/abi.md §8.5) caches them for the module; the IR is unchanged. The
+virtual-base list of a class for the vptr stores (`class.rs`
+`collect_vbases_in`) walks each class once, and the `__vmi_class_type_info`
+flags (`vtable.rs` `VmiWalk`, clang `ComputeVMIClassTypeInfoFlags`) memoise
+the (class, virtual?) edges already seen, so neither is exponential in the
+number of paths through a lattice of virtual diamonds. Bench
+`bench/frontend/virtual-lattice-emit.cpp` (D<N> : B<N>, C<N>; B<N>, C<N> :
+virtual D<N-1>), `-emit-llvm`, release, depth 16: 1.37 s before, 0.40 s
+after, clang 22 12.1 s; depth 20: 5.0 s before, 0.8 s after; depth 32:
+4.3 s (clang over 120 s).
+
 **Landed (WP-108):**
 - *Member-pointer RTTI* (clang `BuildPointerToMemberTypeInfo`):
   `{ vt, name, i32 flags, pointee, class }` with the

@@ -520,6 +520,11 @@ pub struct Sema<'a, 'sm> {
     pub(crate) vtable_uses: Vec<(DeclId, Loc)>,
     /// The classes ever pushed on `vtable_uses` (first declarations).
     pub(crate) vtables_used: kiln_source::fx::FxHashSet<DeclId>,
+    /// The final overriders in each used vtable, by class (first
+    /// declaration; `class/virtual/used.rs`, WP-414): each use of a
+    /// vtable re-marks its bases' overriders, so a lattice computed them
+    /// once per use and class.
+    pub(crate) vtable_finals: kiln_source::fx::FxHashMap<DeclId, std::rc::Rc<[DeclId]>>,
     /// Module classes whose vtables are defined here even when their key
     /// function is defined in another unit (clang `DefinitionRequired`;
     /// spec/modules.md §7).
@@ -846,6 +851,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             synth: Vec::new(),
             vtable_uses: Vec::new(),
             vtables_used: kiln_source::fx::FxHashSet::default(),
+            vtable_finals: kiln_source::fx::FxHashMap::default(),
             module_vtables: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
             delegating: Vec::new(),

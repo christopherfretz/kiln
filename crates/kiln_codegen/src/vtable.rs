@@ -14,11 +14,11 @@ use kiln_ast::modules::UnitKind;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
-use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_llvm::{
     Attr, AttrKind, CastOp, ComdatKind, FuncId, GepFlags, GlobalId, IntPredicate, Linkage,
     TypeId as LTy, UnnamedAddr, Value,
 };
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::fir::{Op, V};
 use crate::func::min_align;
@@ -885,7 +885,9 @@ impl Cg<'_> {
     fn vtt_of(&mut self, rd: DeclId) -> R<Rc<kiln_abi::vtable::VttLayout>> {
         match self.vts.vtt(rd) {
             Ok(v) => Ok(v),
-            Err(e) => err(Some(self.ast.decls.get(rd).loc()), format!("cannot lay out the VTT: {e:?}")),
+            Err(e) => {
+                err(Some(self.ast.decls.get(rd).loc()), format!("cannot lay out the VTT: {e:?}"))
+            }
         }
     }
 
