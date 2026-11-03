@@ -325,13 +325,10 @@ consteval bool name_is(info r, const char* s) {
 // `data_member_options` with a non-owning `name_type` (the Oven reads
 // its flag, then the pointer and length of the string it holds; §6.1);
 // `optional` is a stand-in without a standard library (libc++'s optional
-// layout); `initializer_list` is always the library's (freestanding, and
-// headers that include it after this one must not see a second one).
+// layout; `initializer_list` is the prelude's).
 #if defined(_LIBCPP_VERSION) || defined(__GLIBCXX__)
-#include <initializer_list>
 #include <optional>
 #else
-#include <initializer_list>
 namespace std {
 template <class T>
 class optional {

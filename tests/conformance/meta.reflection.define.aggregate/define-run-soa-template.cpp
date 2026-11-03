@@ -1,7 +1,6 @@
 //@ expect: run
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
-//@ xfail(kiln): needs dependent splices (WP-474) and the IS's members_of/vector
 //@ strict-diags
 //@ stdout: 48 18
 // P2996R13 §3.11 (struct of arrays), in the paper's shape: a class
