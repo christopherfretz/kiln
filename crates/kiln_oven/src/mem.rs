@@ -23,7 +23,9 @@
 //! frame or heap slot's generation is bumped when the slot is reused, so a
 //! dangling pointer never matches a later allocation in the same slot
 //! (until then it designates the dead allocation, whose origin names it in
-//! notes); a slot whose generation would wrap is retired.
+//! notes); a slot whose generation would wrap is retired. The last
+//! generation is never reached: it marks a pointer that points at
+//! nothing ([`NOWHERE`]).
 
 use std::collections::VecDeque;
 
@@ -38,7 +40,17 @@ pub(crate) const PAST: u64 = 1 << 32;
 const SLOT_SHIFT: u32 = 33;
 const SLOT_MASK: u64 = (1 << 22) - 1;
 const GEN_SHIFT: u32 = 55;
-const GEN_MAX: u16 = (1 << 9) - 1;
+const GEN_MAX: u16 = (1 << 9) - 2;
+/// The generation bits of a pointer that "points at nothing" (clang's
+/// invalid designator): the result of a cast a constant expression may
+/// not perform ([expr.const]/5.15), which a fold continues past
+/// (`RunState::fold`, spec/oven.md "Pointers that point at nothing").
+/// No allocation reaches this generation ([`GEN_MAX`]), so every access
+/// through such a pointer fails the generation check, while null tests,
+/// comparisons and arithmetic work on its slot and offset
+/// ([`Ptr::nowhere_slots`]). Frame slot 0 with these bits is an integer
+/// cast to a pointer, its offset the integer.
+pub(crate) const NOWHERE: u64 = ((1 << 9) - 1) << GEN_SHIFT;
 pub(crate) const STATIC_BIT: u32 = 1 << 21;
 /// Marks a heap slot (frame slots are below it).
 pub(crate) const HEAP_BIT: u32 = 1 << 20;
@@ -111,6 +123,22 @@ impl Ptr {
     /// `p`'s allocation in [`Memory::unions`].
     pub fn union_key(p: u64, off: u64, ty: OTy) -> UKey {
         UKey::new(Ptr::alloc_key(p), off, ty)
+    }
+
+    /// Whether raw pointer `p` points at nothing ([`NOWHERE`]).
+    #[inline]
+    pub fn is_nowhere(p: u64) -> bool {
+        p & NOWHERE == NOWHERE
+    }
+
+    /// The slot of `p` (0 for null) if it or `q` points at nothing:
+    /// such pointers compare by slot and offset (the generation of the
+    /// one pointing at nothing is lost).
+    pub fn nowhere_slots(p: u64, q: u64) -> Option<(u32, u32)> {
+        if !Ptr::is_nowhere(p) && !Ptr::is_nowhere(q) {
+            return None;
+        }
+        Some((Ptr::decode(p).slot, Ptr::decode(q).slot))
     }
 
     /// `p` with its offset replaced.
@@ -1009,6 +1037,15 @@ impl Memory {
             Sp::Heap => &mut self.hslots[(p.slot - HEAP_BIT) as usize],
             Sp::Frame => &mut self.slots[p.slot as usize],
         }
+    }
+
+    /// The allocation now in static slot `slot`, whatever its generation
+    /// (for a pointer that points at nothing, [`NOWHERE`]).
+    pub fn static_in_slot(&self, slot: u32) -> Option<&Alloc> {
+        if slot & STATIC_BIT == 0 || slot == FN_SLOT {
+            return None;
+        }
+        self.statics.get((slot & !STATIC_BIT) as usize)
     }
 
     /// The live or dead (same generation) allocation `p` designates.
