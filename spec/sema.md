@@ -4643,7 +4643,11 @@ conversion to `bool` (`check_constant_logical_operand`):
   for a bitwise operation", `|` for `||`) replacing the operator, and
   for `&&` only `note_logical_instead_of_bitwise_remove_constant`
   removing from the end of the left operand to the end of the right.
-- Tests: `expr.log.and/constant-operand*.cpp`, `expr.log.or/constant-operand.cpp`.
+  Both fix-its are file edits (§7.10.1): the removal is dropped when
+  either end is inside a macro expansion it does not begin or end
+  (`a && G(5)` with `#define G(x) x; (void)0`); the notes stay.
+- Tests: `expr.log.and/constant-operand*.cpp`, `expr.log.or/constant-operand.cpp`,
+  `kiln_driver` `fixits_in_macro_expansions_like_clang`.
 
 ### 5.26 Integers in a boolean context (`int_in_bool.rs`, WP-410)
 
@@ -5492,6 +5496,28 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
 - Tests: `tests/conformance/stmt.return/unreachable-code*.cpp`,
   `stmt.break/unreachable-code-break.cpp`,
   `stmt.if/unreachable-code-config.cpp`.
+
+#### 7.10.1 Fix-its at macro locations (`macro_fixit.rs`, WP-419)
+
+The silencing note and the `-Wconstant-logical-operand` notes (§5.25)
+build their fix-its as clang does, as edits of the file:
+- The end of a token (`Sema::file_token_end`, clang
+  `Lexer::getLocForEndOfToken`) at a macro location exists only when the
+  token ends every expansion it is in (a macro argument ends its
+  expansion unless the argument continues in the next entry); it is then
+  the end of the outermost invocation. Without it the silencing note is
+  not emitted and the removal fix-it is not attached.
+- `Sema::file_fixits` maps a note's fix-its (clang `edit::Commit`,
+  `Lexer::makeFileCharRange`): an insertion at the start of every
+  expansion it is in moves to the invocation, and a macro-argument
+  location to where the argument is written; a range keeps a file end,
+  maps a macro begin by the start rule and a macro end by the end rule,
+  and a range lying in one macro argument maps to its spelling. When any
+  fix-it of the note does not map, the note keeps its message and loses
+  all of its fix-its (clang `mergeFixits`): `if (X 1)` with
+  `#define X h() && !` gets the note without `/* DISABLES CODE */ (`.
+- Tests: `kiln_driver` `fixits_in_macro_expansions_like_clang` (stderr of
+  clang 19 and 22), `expr.log.and/constant-operand-macro-fixits.cpp`.
 
 ### 7.11 `-Wfor-loop-analysis` (`for_loop_analysis.rs`, WP-234)
 clang 19's `CheckForLoopConditionalStatement` and
