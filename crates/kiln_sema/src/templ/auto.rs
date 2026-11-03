@@ -442,6 +442,12 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// Whether declaration `d`'s type still holds an undeduced placeholder
+    /// (`auto x = ...` before its initializer is attached).
+    pub fn has_undeduced_type(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).ty().is_some_and(|t| self.contained_placeholder(t).is_some())
+    }
+
     /// The keyword of the placeholder in `declared` (under pointer and
     /// reference declarators and function return types).
     pub(crate) fn placeholder_keyword(&self, declared: QualType) -> Option<AutoKeyword> {

@@ -119,6 +119,7 @@ parse_template_kw_missing = Error (1) "missing 'template' keyword prior to depen
 parse_template_template_param_typename = ExtWarn [Cxx17Extensions] (0) "template template parameter using 'typename' is a C++17 extension";
 parse_this_captured_by_reference = Error (0) "'this' cannot be captured by reference";
 parse_typename_storage_class = Error (0) "type name does not allow storage class to be specified";
+parse_unexpected_template_in_unqualified_id = Error (0) "'template' keyword not permitted here";
 parse_unknown_attribute = Warning [UnknownAttributes] (1) "unknown attribute '{0}' ignored";
 parse_unsupported = Error (1) "{0} is not supported yet";
 parse_using_enum_requires_name = Error (0) "using enum requires an enum or typedef name";

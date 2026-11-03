@@ -1566,12 +1566,14 @@ impl Sema<'_, '_> {
                 let msg =
                     self.diag(DiagId::sema_no_member, loc).arg(text).arg(self.qualifier_desc(q));
                 let e = self.recover_err(&[], loc);
+                let e = self.mark_expr_error(e);
                 self.emit_delayed_typo(msg, e);
                 return e;
             }
             let msg = self.diag(Self::undeclared_use_id(name), loc).arg(text);
             self.emit(msg);
-            return self.recover_err(&[], loc);
+            let e = self.recover_err(&[], loc);
+            return self.mark_expr_error(e);
         };
         if found.decls.len() > 1
             && found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::UnresolvedUsingValue)
@@ -2583,6 +2585,7 @@ impl Sema<'_, '_> {
     /// The built-in unary operator `op` ([expr.unary.op], [expr.pre.incr],
     /// [expr.post.incr]).
     pub(crate) fn builtin_unary(&mut self, op: UnaryOp, e: ExprId, loc: Loc) -> ExprId {
+        let e = if op == UnaryOp::AddrOf { e } else { self.resolve_single_overload_candidate(e) };
         let t0 = self.ety(e);
         if op != UnaryOp::AddrOf && self.check_overload_use(e) {
             return self.recover_err(&[e], loc);
@@ -3754,6 +3757,10 @@ impl Sema<'_, '_> {
         if self.is_err_expr(c) || self.is_err_expr(t) || self.is_err_expr(f) {
             return self.recover_err(&[c, t, f], loc);
         }
+        // clang's `CheckConditionalOperands`: `CheckPlaceholderExpr` on
+        // both operands first.
+        let t = self.resolve_single_overload_candidate(t);
+        let f = self.resolve_single_overload_candidate(f);
         // The GNU element-wise conditional (clang `CXXCheckConditionalOperands`).
         if !self.expr_is_type_dependent(c) {
             let ct = self.ety(c);
@@ -3992,6 +3999,9 @@ impl Sema<'_, '_> {
             }
             return self.builder().conditional(c2, arms[0], arms[1], ty, loc);
         }
+        // clang names the arms' types after the /7 standard conversions
+        // (an array or function arm as its pointer, WP-408).
+        let (tt, ft) = (self.ety(t2), self.ety(f2));
         let msg = self.diag(DiagId::sema_incompatible_cond_operands, loc).diff_args(self, tt, ft);
         self.emit(msg);
         self.recover_err(&[c, t, f], loc)
@@ -4206,7 +4216,14 @@ impl Sema<'_, '_> {
             return self.recover_err(&[b, i], loc);
         }
         let elem = self.pointee_sugared(ptr).unwrap_or(QualType::ERROR);
-        if !self.ast.types.is_function(elem) && !self.require_complete(elem, loc) {
+        if self.ast.types.is_function(elem) {
+            // clang `err_subscript_function_type`, at the pointer operand.
+            let at = self.begin_loc(if ptr == bt { b } else { i });
+            let msg = self.diag(DiagId::sema_subscript_function_type, at).arg(self.ty_arg(elem));
+            self.emit(msg);
+            return self.recover_err(&[b, i], loc);
+        }
+        if !self.require_complete(elem, loc) {
             // clang `err_subscript_incomplete_or_sizeless_type`.
             let msg = self.diag(DiagId::sema_subscript_incomplete_type, loc).arg(self.ty_arg(elem));
             self.emit(self.incomplete_note(msg, elem));
@@ -4959,6 +4976,55 @@ impl Sema<'_, '_> {
     /// [`Sema::act_on_member_dn`] with an optional nested-name-specifier
     /// before the name (`e.N::m`, `p->B::f`, `e.::N::m`; [expr.ref]/4,
     /// WP-121).
+    /// clang's `tryToRecoverWithCall` in `LookupMemberExpr`: a base naming
+    /// a function callable with no arguments whose result is a class (for
+    /// `.`) or a pointer to one (for `->`) gets "base of member reference
+    /// is a function; perhaps you meant to call it with no arguments?"
+    /// (fix-it `()`) and is recovered as that call ([expr.ref]/1).
+    fn member_base_needs_call(&mut self, base: ExprId, arrow: bool) -> Option<ExprId> {
+        let x = self.ignore_parens(base);
+        if self.ast.exprs.get(x).kind() != ExprKind::DeclRefExpr {
+            return None;
+        }
+        let d = self.ast.exprs.decl(x);
+        if !matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
+            || self.is_class_member_ref(d)
+        {
+            return None;
+        }
+        let fty = self.ast.decls.get(d).ty()?;
+        let TypeView::Function(p) = self.ast.types.view(self.ast.types.desugar_top(fty).ty())
+        else {
+            return None;
+        };
+        let ret = p.ret();
+        let params = self.param_decls(d);
+        if !params.iter().all(|&q| self.param_has_default(q)) || self.ast.types.is_dependent(ret) {
+            return None;
+        }
+        let plausible = if arrow {
+            self.ast.types.is_pointer(ret)
+                && self
+                    .ast
+                    .types
+                    .pointee(ret)
+                    .is_some_and(|t| self.ast.types.as_record(t).is_some())
+        } else {
+            self.ast.types.as_record(ret).is_some()
+        };
+        if !plausible {
+            return None;
+        }
+        let at = self.expr_loc(base);
+        let end = self.expr_end_loc(base);
+        let after = self.token_end(end).unwrap_or(end);
+        let msg = self
+            .diag(DiagId::sema_member_reference_needs_call, at)
+            .fixit(kiln_diag::FixIt::insert(after, "()"));
+        self.emit(msg);
+        Some(self.act_on_call(base, &[], after, after))
+    }
+
     pub fn act_on_member_q(
         &mut self,
         base: ExprId,
@@ -4970,6 +5036,10 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         if self.is_err_expr(base) {
             return self.recover_err(&[base], loc);
+        }
+        let base = self.resolve_single_overload_candidate(base);
+        if let Some(call) = self.member_base_needs_call(base, arrow) {
+            return self.act_on_member_q(call, qual, name, loc, op_loc, arrow);
         }
         if let Some(e) = self.try_dependent_member_q(base, qual, name, None, false, loc, arrow) {
             if op_loc != loc {
@@ -5293,6 +5363,7 @@ impl Sema<'_, '_> {
         {
             return self.recover_err(&[e], loc);
         }
+        let e = self.resolve_single_overload_candidate(e);
         if self.check_overload_use(e) {
             return self.recover_err(&[e], loc);
         }
