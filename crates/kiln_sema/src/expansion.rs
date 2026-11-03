@@ -347,12 +347,7 @@ impl Sema<'_, '_> {
     /// stays within the range and compares unequal to `end` exactly
     /// before it. `None` (the incremental count decides, and diagnoses)
     /// otherwise; nothing is diagnosed here.
-    fn expansion_size_difference(
-        &mut self,
-        begin: DeclId,
-        end: DeclId,
-        colon: Loc,
-    ) -> Option<u64> {
+    fn expansion_size_difference(&mut self, begin: DeclId, end: DeclId, colon: Loc) -> Option<u64> {
         let b = self.build_decl_ref(begin, colon);
         let e = self.build_decl_ref(end, colon);
         let (bt, et) = (self.ety(b), self.ety(e));
@@ -360,7 +355,9 @@ impl Sema<'_, '_> {
             return None;
         }
         let contiguous = match self.ast.types.pointee(bt) {
-            Some(p) if self.ast.types.is_pointer(bt) => crate::target::is_complete_object(&self.ast, p),
+            Some(p) if self.ast.types.is_pointer(bt) => {
+                crate::target::is_complete_object(&self.ast, p)
+            }
             _ => self.is_lib_contiguous_iterator(bt),
         };
         if !contiguous {
