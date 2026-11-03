@@ -4211,8 +4211,23 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   'val'; did you mean '::val'?" with "'::val' declared here". Typos
   corrected in one batch fail together (`(val<int>, val<int> + 1)`).
   Calls, overload sets and edit-distance candidates are never corrected
-  on this path. Tests:
+  on this path. The scopes (spec/parse.md "Compat-19 correction scopes",
+  WP-408) differ only in what follows the correction point: an
+  initializer (a declaration's, a condition declaration's) is filtered by
+  its initialization, so a type mismatch fails the speculation; a flush
+  scope (default member initializer, default argument, template
+  argument, `decltype` operand, braced-list element) and an undeduced type (`auto`,
+  `decltype(auto)`) correct before any conversion, so only an error in
+  the rebuilt expression itself (`sizeof(::val)`) fails it, and the
+  conversion's error then follows "did you mean". The location heuristic
+  above is the same in every scope. Under compat 19 a condition that is
+  itself the corrected name is not checked for `-Wpointer-bool-conversion`
+  (clang 19 converts the `TypoExpr`), while any other full-expression
+  warning about an expression built on the correction is held and issued
+  after "did you mean" (`Sema::emit_after_typos`), or dropped with a
+  failed speculation. Tests:
   `tests/conformance/temp.names/undeclared-template-id-correct-19.cpp`,
+  `undeclared-template-id-scopes-19.cpp`,
   `undeclared-template-id-function-19.cpp`; clang 22:
   `undeclared-template-id-function-22.cpp`.
 

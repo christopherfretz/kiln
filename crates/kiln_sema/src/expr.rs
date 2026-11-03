@@ -3810,6 +3810,9 @@ impl Sema<'_, '_> {
             }
             return self.builder().conditional(c2, arms[0], arms[1], ty, loc);
         }
+        // clang names the arms' types after the /7 standard conversions
+        // (an array or function arm as its pointer, WP-408).
+        let (tt, ft) = (self.ety(t2), self.ety(f2));
         let msg = self.diag(DiagId::sema_incompatible_cond_operands, loc).diff_args(self, tt, ft);
         self.emit(msg);
         self.recover_err(&[c, t, f], loc)

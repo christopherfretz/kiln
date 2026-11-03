@@ -1241,6 +1241,16 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   initializer after the initialization, the condition and the
   `decltype` operand right after the expression (the correction points
   of spec/sema.md "Clang 19 correction to the qualified function").
+  **Compat-19 correction scopes** (WP-408): a condition declaration's
+  initializer is a scope ended after its initialization, as any
+  initializer. A default member initializer, a default argument, a
+  template argument (clang 19's `ActOnConstantExpression`), a `decltype`
+  operand (`ParseDecltypeSpecifier`) and each
+  element of a braced list (`ParseBraceInitializer`) are flush scopes
+  (`Parser::begin_typo_correction` / `correct_typos`): ended
+  right after the expression is parsed, before its conversion, and
+  reported even inside an enclosing scope; one whose expression failed
+  to parse leaves its typos to the enclosing scope.
   Scopes nest: an inner scope's held typos stay held while an outer
   one is open (`end_delayed_typos`), and each held typo records the
   recovery expression that stands for clang's `TypoExpr`

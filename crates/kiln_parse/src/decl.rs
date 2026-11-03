@@ -1034,13 +1034,12 @@ impl Parser<'_, '_> {
         }
         self.s.enter_decltype();
         // clang 19's `ParseDecltypeSpecifier` corrects the operand's
-        // delayed typos as soon as it is parsed (WP-399).
-        let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
+        // delayed typos as soon as it is parsed, even inside an enclosing
+        // full-expression (WP-399, WP-408).
+        let typos = self.begin_typo_correction();
         // [temp.names]/4: inside the parentheses `>` is an operator again.
         let e = self.with_greater_op(true, Self::parse_expression);
-        if let Some(m) = typos {
-            self.s.end_delayed_typos(m);
-        }
+        self.correct_typos(typos, e.is_some());
         self.s.exit_decltype(e);
         let Some(e) = e else {
             self.skip_until(&[Punct::RParen], false, true);
