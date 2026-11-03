@@ -108,9 +108,12 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         }
         let (errors, body_errors) = (self.sema.diags.error_count(), self.sema.inst.body_errors);
+        let outer_return_failed = std::mem::take(&mut self.lambda_return_failed);
         self.lambda_bodies += 1;
         let b = self.body(body);
         self.lambda_bodies -= 1;
+        let return_failed =
+            std::mem::replace(&mut self.lambda_return_failed, outer_return_failed);
         self.sema.pop_inst_frame();
         self.forget_pattern_params(call_op);
         // A body that reported an error of its own (not one of another
@@ -120,7 +123,10 @@ impl Substituter<'_, '_, '_> {
         // ("cannot initialize ... with an rvalue of type 'void'"), and the
         // enclosing statement fails like any other (§5.5).
         let nested = self.sema.inst.body_errors.saturating_sub(body_errors);
-        if self.sema.diags.error_count().saturating_sub(errors) > nested {
+        // So does a `return` that failed without an error of its own in a
+        // call operator with a placeholder return type (clang marks it
+        // invalid; `Substituter::lambda_return_failed`).
+        if self.sema.diags.error_count().saturating_sub(errors) > nested || return_failed {
             self.sema.act_on_lambda_error(lambda);
             return Err(SubstFail);
         }
