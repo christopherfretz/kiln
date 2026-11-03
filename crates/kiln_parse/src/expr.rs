@@ -225,6 +225,23 @@ impl Parser<'_, '_> {
         self.parse_rhs(lhs, min.max(1))
     }
 
+    /// clang's `ParseSimpleExpressionList` for a C-style cast's
+    /// parenthesized operand after its first element `first` and a comma:
+    /// the assignment-expressions are all parsed before their comma
+    /// operators are built, left to right at the `(` `at`.
+    fn parse_paren_list_rest(&mut self, first: ExprId, at: Loc) -> PExpr {
+        let mut elems = vec![self.parse_assignment_expr()?];
+        while self.cur_binop().is_some_and(|(_, op)| op == Some(BinaryOp::Comma)) {
+            self.bump();
+            elems.push(self.parse_assignment_expr()?);
+        }
+        let mut lhs = first;
+        for e in elems {
+            lhs = self.s.act_on_binary(BinaryOp::Comma, lhs, e, at);
+        }
+        Some(lhs)
+    }
+
     /// The precedence of the binary operator at the current token.
     pub(crate) fn cur_binop_prec(&self) -> Option<u8> {
         self.cur_binop().map(|b| b.0)
@@ -284,10 +301,12 @@ impl Parser<'_, '_> {
                 return None;
             }
             let op_tok = self.bump();
-            let op_loc = match comma_at {
-                Some(at) if op == Some(BinaryOp::Comma) => at,
-                _ => op_tok.span.lo,
-            };
+            let op_loc = op_tok.span.lo;
+            if let Some(at) = comma_at
+                && op == Some(BinaryOp::Comma)
+            {
+                return self.parse_paren_list_rest(lhs, at);
+            }
             let mut middle = None;
             let mut colon = None;
             if op.is_none() {

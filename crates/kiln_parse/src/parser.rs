@@ -139,8 +139,9 @@ pub struct Parser<'a, 'sm> {
     /// clang parses it as a `ParenListExpr` whose commas are built at
     /// the `(` (`MaybeConvertParenListExprToParenExpr`).
     pub(crate) cast_paren_list: Option<Loc>,
-    /// The location the next [`Parser::parse_rhs`] gives its top-level
-    /// comma operators (taken at its entry).
+    /// The `(` of a C-style cast's parenthesized operand for the next
+    /// [`Parser::parse_rhs`] (taken at its entry): its top-level commas
+    /// are [`Parser::parse_paren_list_rest`]'s.
     pub(crate) comma_loc: Option<Loc>,
     /// False while parsing a template argument: a `>` or `>>` ends the
     /// argument instead of being an operator ([temp.names]/4, clang's
