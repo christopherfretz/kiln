@@ -76,7 +76,7 @@ impl Sema<'_, '_> {
             {
                 continue;
             }
-            if let Some(args) = self.deduce_partial(p.partial, i, &as_, canonical, poi) {
+            if let Some(args) = self.deduce_partial(p.partial, i, &as_, canonical, who, poi) {
                 matched.push(PartialMatch { partial: p.partial, index: i, args });
             }
             if self.inst.fatal {
@@ -100,6 +100,7 @@ impl Sema<'_, '_> {
         index: u32,
         as_: &[TemplateArg],
         canonical: ArgListId,
+        who: DeclId,
         poi: Loc,
     ) -> Option<ArgListId> {
         let p = *self.ast.templates.partial(index)?;
@@ -152,7 +153,14 @@ impl Sema<'_, '_> {
                 None => Self::outer_levels(tmpl, list.depth),
             };
             levels.push(deduced, p.partial, LevelMode::Substitute);
+            let spec = matches!(
+                self.kind_of(who),
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
+            )
+            .then_some((p.partial, who));
+            let saved = std::mem::replace(&mut self.inst.concepts.partial_access, spec);
             let sat = self.check_constraints(partial, &constraints, &levels, deduced, poi);
+            self.inst.concepts.partial_access = saved;
             if !self.sat_ok(sat) {
                 return None;
             }

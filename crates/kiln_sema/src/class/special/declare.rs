@@ -398,6 +398,10 @@ impl Sema<'_, '_> {
                     self.emit(m);
                     return None;
                 }
+                Some(p) if let Some((id, sel)) = self.defaulted_member_definition(p) => {
+                    self.emit(self.diag(id, sloc).arg(sel));
+                    return None;
+                }
                 Some(p) => {
                     prev_ok = Some(p);
                     let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);

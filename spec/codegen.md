@@ -45,7 +45,10 @@ panic and never silently wrong IR.
   initializer it can fold; WP-415): `int g = __builtin_is_constant_evaluated()
   ? x : 7;` is the global `i32 7` with no dynamic initializer, and a
   re-folded initializer is never registered for constant destruction.
-  Aggregates are not re-folded (they keep their dynamic initializer).
+  A vector initializer is re-folded the same way (`tryEmitPrivate`
+  evaluates it as an rvalue: `i4 gv = cv;` with `const i4 cv = {..}` is
+  a static initializer; WP-453, §7w). Aggregates are not re-folded (they
+  keep their dynamic initializer).
   Uses of a const integral variable whose constant initialization failed
   fold to that same non-manifest value (spec/oven.md "Lax folds"), so
   `return cg;` emits `ret i32 9` and the unused internal `cg` is not
@@ -1207,8 +1210,7 @@ The normative description is spec/driver.md "Code generation". In short:
 - **clang 22 codegen (WP-355, WP-386).** At `-fclang-compat=22` kiln
   follows clang 22 where §6a says; elsewhere its IR is clang 19's under
   every level. The oracle-22 `DEVIATIONS` entries record the rest of
-  what clang 20-22 changed: x86-64 `__int128` as `i128`
-  (19: two `i64`s; the same registers), AArch64 aggregates of pointers
+  what clang 20-22 changed: AArch64 aggregates of pointers
   coerced to `ptr`/`[N x ptr]` (19: integers), `(unnamed struct)` in IR
   type names, `llvm.modf`, and `-O0` instruction
   choices (atomic temporaries, `select` for vector `?:`, constant-folded
@@ -1222,7 +1224,8 @@ The normative description is spec/driver.md "Code generation". In short:
   neither, and nor does kiln below 22, so `atomic_padded` is exact under
   both oracles. Following the rest under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
-  "Residual").
+  "Residual"). x86-64 `__int128` / `_BitInt(128)` as `i128` (19: two
+  `i64`s) is followed at 22 since WP-458 (spec/abi.md §8.25).
 - **Uses of constant-initialized reference variables as lvalues.** A
   read through a reference to a `const` referee folds (above), but clang
   also emits a non-odr-use of a reference usable in constant expressions
@@ -1323,6 +1326,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 |---|---|---|
 | AArch64 data layout `e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32` (`kiln_llvm::AARCH64_LINUX_GNU_22`; LLVM 19 accepts it) | compat ≥ 22 | `e-m:e-i8:8:32-...` |
 | AArch64 empty class by value as `i64` (spec/abi.md §8.21) | compat ≥ 22 | `i8` / ignored |
+| x86-64 `__int128`, `_BitInt(128)` and a class starting with an `i128` by value and returned as `i128` (spec/abi.md §8.25) | compat ≥ 22 | `{ i64, i64 }` / two `i64`s |
 | GEP `nuw` (§3 "GEP flags") | compat ≥ 22 | `inbounds` only |
 | `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors), on definitions, declarations and calls, before `noundef` | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
 | `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 for `non-leaf` (AArch64's default; "Frame pointer") | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
@@ -1335,7 +1339,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 x86-64's data layout and `"frame-pointer"="all"` are the same in both.
 The `xtask test` harness runs kiln at the oracle's compat level with the
 oracle's LLVM (spec/harness.md "Oracle toolchain"), so the oracle-22 legs
-see all ten. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
+see all eleven. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
 compat, `ir_version`), `sig_attrs`, `target_attrs` and `trailer`. Not
 yet: LLVM 22's `nocreateundeforpoison` function attribute on many
 intrinsic declarations (`*.with.overflow`, `ctpop`, `bswap`, `fabs`,
@@ -3054,6 +3058,52 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   address, an unused dispatch block, `goto *&&l` through a destructor, a
   template instantiated twice), `tests/conformance/stmt.goto/computed-
   goto-dispatch-run.cpp` (`expect: run`).
+
+## 7w. Landed (WP-453): vector lane folds, int → `bool` vector conversion
+- A subscript of an ext vector whose base names a `const` non-volatile
+  vector variable (through parentheses and `NoOp` casts;
+  `fold::refers_to_const_var`) is a fold candidate: `Collect::expr`
+  pushes the base, and `emit_scalar_opt`'s vector `ArraySubscriptExpr`
+  arm uses its folded value, so the lane is an `extractelement` of the
+  constant (folded to the lane constant for a constant index, else
+  `extractelement <const>, %i` with the index's side effects kept) and
+  nothing is loaded. clang: `ScalarExprEmitter::VisitArraySubscriptExpr`
+  visits a vector base as a scalar, `VisitDeclRefExpr`'s
+  `tryEmitAsConstant` folds it. Int, float and `bool` lanes alike; a
+  `const` global whose every use folds is not emitted. A volatile or
+  non-const vector, a lane read through a pointer (`(*p)[2]`), a swizzle
+  (`k.y`, `EmitLoadOfLValue`) and an `extern` vector without an
+  initializer stay loads. As in clang, a write through a cast-away
+  `const` (`((i4&)k)[1] = 9`, undefined) does not stop the fold.
+- A vector variable's non-constant initializer is re-folded like a
+  scalar's (§2 `fold.rs`, `is_scalar`): `i4 gv = cv;`, `cv + 1`, a `const
+  f4`/`b4`/`l3` source give a static initializer with no
+  `__cxx_global_var_init` and no `@llvm.global_ctors`.
+- clang 20+'s implicit integer → `bool` ext vector conversion
+  (spec/sema.md §5.28) is a `CK_IntegralToBoolean`
+  cast of vector type, lowered by `convert_vector`: `icmp ne <N x iK> v,
+  zeroinitializer` giving `<N x i1>`, then stored on the packed layout
+  (§7s).
+- Tests: `tests/codegen/vector_const_fold.cpp` (both oracles),
+  `tests/conformance/ext.vector/ir-bool-from-int-vector.cpp` (`expect: ir`,
+  `requires: clang>=22`).
+
+## 7v. Landed (WP-456): `PseudoObjectExpr`
+
+The synthesized three-way comparison of a defaulted `operator<=>`
+([class.spaceship]/1; spec/sema-class.md §4.12) is a `PseudoObjectExpr`
+(ast.md §5.3) whose semantic expressions are `[OVE(a), OVE(b), chain]`.
+As clang's `emitPseudoObjectExpr`, `Cg::bind_pseudo` emits the semantic
+expressions before the result in order: an `OpaqueValueExpr` binds its
+source once in `f.opaque` (an lvalue address for a glvalue source, else
+the scalar), any other is emitted and ignored; the result is then
+emitted in the requested form (scalar `emit_arm`, `emit_lvalue`,
+`emit_agg`, complex `emit_cx`) and `unbind_pseudo` drops the bindings.
+The syntactic form is never emitted. The chain is an lvalue of the
+category's `const` static members, which the defaulted body copies into
+its return slot (`static_cast<R>`), so the IR is clang's
+(`tests/codegen/synth_three_way.cpp`, strong, weak and partial
+categories, compared with clang 22 and clang 19 on both targets).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

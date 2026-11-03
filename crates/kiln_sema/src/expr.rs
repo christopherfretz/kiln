@@ -156,11 +156,15 @@ impl Sema<'_, '_> {
         self.ast.types.is_integral(t) || self.ast.types.as_enum(t).is_some()
     }
 
+    /// A scalar type ([basic.types.general]/9): arithmetic, enumeration,
+    /// pointer, pointer-to-member and `std::nullptr_t`, plus GNU complex
+    /// (clang `isScalarType`).
     pub(crate) fn is_scalar(&self, t: QualType) -> bool {
         self.ast.types.is_arithmetic(t)
             || self.ast.types.as_complex(t).is_some()
             || self.ast.types.as_enum(t).is_some()
             || self.ast.types.is_pointer(t)
+            || self.is_member_pointer(t)
             || self.is_nullptr_type(t)
     }
 
@@ -597,6 +601,10 @@ impl Sema<'_, '_> {
         // initialization, [`Sema::is_expr_error`]).
         if !self.is_expr_error(e) {
             self.check_implicit_conversions(e, cc);
+            // clang `CheckCompletedExpr`: not for a `constexpr`
+            // variable's initializer (its evaluation reports it).
+            let v = self.pending_var_init();
+            self.check_for_int_overflow(e, v);
         }
         self.flush_member_refs();
         if self.special.has_pending() {
@@ -1148,7 +1156,19 @@ impl Sema<'_, '_> {
                     BinaryOp::LT | BinaryOp::GT | BinaryOp::LE | BinaryOp::GE => {
                         Some((DiagId::sema_unused_comparison, loc, vec!["2".to_owned()]))
                     }
-                    BinaryOp::Comma => self.unused_warning(self.ast.exprs.operands(x)[1]),
+                    BinaryOp::Comma => {
+                        // clang `isUnusedResultAWarning`: `(x = y, 0)` is
+                        // an idiom for hiding an assignment's result (an
+                        // integer literal 0 as the right operand, [expr.comma]).
+                        let r = self.ast.exprs.operands(x)[1];
+                        let ri = self.ignore_parens(r);
+                        if self.ast.exprs.get(ri).kind() == ExprKind::IntegerLiteral
+                            && self.ast.exprs.int_value(ri) == Some(0)
+                        {
+                            return None;
+                        }
+                        self.unused_warning(r)
+                    }
                     BinaryOp::LAnd | BinaryOp::LOr => {
                         // `a && f()` is control flow when the right side has effects.
                         let r = self.ast.exprs.operands(x)[1];
@@ -1596,6 +1616,30 @@ impl Sema<'_, '_> {
                     found.found.retain(|_| k.next().copied().unwrap_or(true));
                 }
                 d = found.decls[0];
+            }
+        }
+        // A function template declared at file scope with a builtin's name
+        // (`template<class D, class S> void *__builtin_memmove(D*, S*,
+        // size_t)`) does not redeclare the builtin: clang's redeclaration
+        // lookup creates the builtin in the translation unit first
+        // (`HandleDeclarator`'s `CreateBuiltins`), so both are candidates
+        // and the builtin wins a tie as a non-template ([over.match.best]/2.4;
+        // spec/sema.md §5.4).
+        if qualifier.is_none_or(|q| q == self.ast.tu)
+            && found.naming.is_none()
+            && found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate)
+            && found.decls.iter().all(|&x| {
+                matches!(self.kind_of(x), DeclKind::FunctionTemplate | DeclKind::Function)
+                    && self.ast.decls.builtin_id(x).is_none()
+                    && self.ast.decls.get(x).ctx().map(|c| self.ast.redecl_context(c))
+                        == Some(self.ast.tu)
+            })
+            && let Some(sym) = name.as_ident()
+            && let Some(b) = self.lazily_create_builtin(sym, loc)
+        {
+            found.decls.push(b);
+            if !found.found.is_empty() {
+                found.found.push(b);
             }
         }
         let any_tmpl = found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate);
@@ -3524,9 +3568,11 @@ impl Sema<'_, '_> {
     /// diagnosed, clang's `warn_comparison_always` when both operands name
     /// variables: distinct ones never compare equal, one is a
     /// self-comparison. Not in a template instantiation (clang checks the
-    /// definition only).
+    /// definition only), constraint satisfaction included: clang's
+    /// `inTemplateInstantiation` counts a `ConstraintsCheck` frame, so
+    /// libc++'s `equality_comparable<int[5]>` holds (WP-446).
     fn diagnose_array_comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) {
-        if self.inst.stack.depth() > 0 {
+        if self.inst.stack.in_instantiation_record() {
             return;
         }
         let (ls, rs) = (self.ignore_paren_imp_casts(l), self.ignore_paren_imp_casts(r));

@@ -25,6 +25,7 @@ use crate::lookup::LookupKind;
 mod analyze;
 mod default;
 mod synth;
+mod three_way;
 
 pub(crate) use default::CmpKind;
 
@@ -460,6 +461,12 @@ pub(crate) struct CompareState {
     /// Defaulted comparisons whose implicit definition is being built,
     /// against recursion. First declarations.
     pub defining: Vec<DeclId>,
+    /// The implicit `operator==` declared for each explicitly defaulted
+    /// `operator<=>` ([class.compare.default]/4), keyed by the `<=>`: a
+    /// class template specialization's implicit `==` is linked to the one
+    /// of its pattern (clang instantiates it from the pattern's implicit
+    /// declaration).
+    pub implicit_eq: FxHashMap<DeclId, DeclId>,
 }
 
 impl Sema<'_, '_> {

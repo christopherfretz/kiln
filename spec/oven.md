@@ -789,8 +789,31 @@ literal is one instruction and one step, not an interpreted loop.
   the designator). Known gap: a pointer to an inactive member stored in a
   variable first (`int *p = &u.a; is_within_lifetime(p)`) reads as within
   its lifetime when the active member has the same offset and type
-  (clang: false); clang's "object whose lifetime has not yet begun" note
-  (a `this` pointer during construction) is not modelled.
+  (clang: false): the Oven pointer would need a member designator that
+  survives loads, stores and arithmetic (follow-up). A subobject of an
+  object under construction whose lifetime has not yet begun is not
+  within it (clang: the subobject has no value yet; WP-445): each
+  compiled constructor that initializes subobjects records `(pc, i)`
+  steps in `Oven::ctor_steps` (from `pc` on, entries `..i` of the
+  class's non-virtual `fields` have begun, entry `i` is being
+  initialized, `u32::MAX`: all), and `not_yet_begun` walks the
+  constructor frames on the stack whose `this` holds `p` (the frame's
+  pc is its callee's `call_pc`): a subobject after entry `i`, or entry
+  `i` itself when it is a non-class, non-array member, answers false. A
+  base or class member being initialized is left to the frames above it;
+  a member the mem-initializer list skips has begun (clang
+  default-initializes it). Nothing is emitted, so the check costs no
+  instruction (`meta.const.eval/is-within-lifetime-construction.cpp`).
+  A pointer into the variable whose initializer is being evaluated
+  (`RunState::object`, clang's `EvaluatingDecl`) fails with `... cannot be
+  called with a pointer to an object whose lifetime has not yet begun`
+  (`BiFault::Lifetime` kind 3;
+  `meta.const.eval/is-within-lifetime-not-begun-errors.cpp`).
+  Known gaps: an aggregate or array member being list-initialized reads
+  as within its lifetime as a whole (clang: its later elements are not);
+  virtual bases are not tracked; a consteval constructor's immediate
+  invocation initializing a variable is evaluated as a temporary, so it
+  answers false where clang reports kind 3.
 - **Temporaries:** a `MaterializeTemporaryExpr` with full-expression
   storage (a `bit_cast` or builtin operand bound to a reference
   parameter) is an lvalue in the Oven, its object living until the end of
@@ -1573,6 +1596,14 @@ lifetime" ([basic.life]/7)
 No new memory state: the entry already existed and is removed with the
 destruction. Clang 19 accepts destroying a union with a user-provided
 destructor twice and reading a member after it; kiln rejects both.
+An explicit destruction of a non-union class object whose union members'
+bytes alone are outside their lifetime is accepted too (`EndLife` aux 1,
+`live_but_unions`: every byte outside its `upos` unions must be live, and
+there must be such a byte; a member constructed by `std::construct_at`
+through a plain pointer has no union entry to consult): libc++ 22's list
+nodes destroy the value of their anonymous union, then the node (WP-446,
+`tests/conformance/class.union.anon/constexpr-destroy-member-then-object.cpp`).
+A class all of whose bytes are union bytes keeps the stricter check.
 
 *Unconstructed bases (WP-390).* Sema leaves a direct non-virtual base
 out of a constructor's ctor-initializers only after diagnosing that it
@@ -2443,9 +2474,16 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   is a `<N x i1>` constant global, also as a struct member and an array
   element (spec/codegen.md), with no `__cxx_global_var_init`
   (`tests/codegen/bool_vector_const.cpp`).
-Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`.
+- *Not folded*: clang 22's implicit integer → `bool` ext vector
+  conversion (spec/sema.md §5.28), a `CK_IntegralToBoolean` cast of
+  vector type, which clang 22's `VectorExprEvaluator` does not evaluate:
+  `compile.rs` `unsupported` throws the generic "subexpression not valid
+  in a constant expression" for it (WP-453; `__builtin_convertvector` to
+  a bool vector is the constant form).
+Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`,
+`ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`.
 
-### `_BitInt` — Landed (WP-404)
+### `_BitInt` — Landed (WP-404, wide WP-445)
 Type rules: spec/types.md §21.
 - *Representation.* `_BitInt(N)` with `N <= 128` is `TyKind::Int { width:
   N, signed }` in its ABI-sized slot (`ty.rs`): a register value is the
@@ -2461,18 +2499,37 @@ Type rules: spec/types.md §21.
   subobject is rejected at any width, as clang ("constexpr bit cast
   involving type 'unsigned _BitInt(16)' is not yet supported";
   `compile/bitcast.rs`).
-- *Wider than 128 bits* (x86-64 only; AArch64's `BITINT_MAXWIDTH` is 128):
-  the type is `TyKind::Opaque`, and compiling an rvalue or initializer of
-  it traps with "kiln: constant evaluation of a _BitInt wider than 128
-  bits is not supported yet" (`compile.rs` `wide_bit_int`). Deviation:
-  clang evaluates these (`expr.const/bit-int-wide.cpp`, `xfail(kiln)`).
-- *Design for the wide path (not implemented).* A memory-resident
-  `TyKind::WideInt { words, signed }` (like an aggregate: registers hold
-  its address), with limb operations in a dependency-free
-  `kiln_oven/src/bigint.rs` over `u64` words, and freeze/thaw through the
-  existing `kiln_ast::consts::IntBits` word pool. Widths `<= 128` never
-  take it. It needs `notes.rs` to print wide values and `value.rs` to
-  freeze them.
+- *Wider than 128 bits* (WP-445; x86-64 only, AArch64's `BITINT_MAXWIDTH`
+  is 128) is `TyKind::WideInt { width, signed }` (`ty.rs`), memory-class
+  like an aggregate: a register holds the object's address, and every
+  operation is one `Op::Wide` instruction (`kbc.rs` `wide`; operands
+  `[d, a, b, type, x]`, aux = sub-op | `INIT` | `RMW` | access kind) that
+  reads its operand objects and writes the destination object
+  (`vm/wide.rs`). The memory form is canonical: `ceil(size/8)` little-endian
+  `u64` limbs, sign- or zero-extended past bit N, as codegen stores it.
+  Limb arithmetic is `kiln_oven/src/bigint.rs` (safe Rust, no crates):
+  each operation computes exactly in one more limb (`2n+1` for `*`) and
+  then checks the result fits N bits, so signed overflow, `MIN / -1`,
+  `MIN % -1` and negation of MIN fault with clang's note carrying the
+  exact decimal value ("value 2^199 is outside the range of representable
+  values of type 's200' (aka '_BitInt(200)')", printed in decimal);
+  unsigned arithmetic wraps. Division or remainder by zero, a negative
+  shift count and a count `>= N` fault as for narrow integers; C++20
+  `<<` of a negative or overflowing signed value is defined. Reads check
+  initialization and constness exactly as scalar loads do.
+  `compile/wide.rs` lowers literals, value-init, list-init, `+ - * / % &
+  | ^ << >> ~ !`, unary `-`/`+`, `++`/`--`, (compound) assignment,
+  comparisons, wide/narrow/bool conversions (`FROM`/`TO`/`TO_BOOL`/`CAST`;
+  a wide shift count saturates through `TO`), and an operand lvalue read
+  is copied at its own source location so a note points where clang's
+  does. Freeze writes `Scalar::Int` with exactly `IntBits::words_for(N)`
+  words; thaw re-extends them over the slot.
+- *Not yet evaluated, wide only* (trap "kiln: conversion between a _BitInt
+  wider than 128 bits and a floating type is not supported in constant
+  evaluation yet", or the generic wide-`_BitInt` trap kept in
+  `compile.rs` `rv_inner` as a safety net): conversions to and from
+  floating types, wide bit-fields, `switch` on a wide value, `<=>`, and
+  integer literals wider than 128 bits (clang has none in C++).
 
 ### Complex values — Landed (WP-211)
 A GNU `_Complex T` object is stored as `T[2]` (`ty.rs`): the real part,
@@ -2760,6 +2817,24 @@ value, distinct per expression) is a constant `void *`.
   expression"; sema already rejects the statement in a constexpr body
   (spec/sema.md). Tests: `tests/conformance/stmt.goto/computed-goto-
   constexpr{,-19}.cpp`.
+
+### Pseudo-object expressions — Landed (WP-456)
+A `PseudoObjectExpr` (ast.md §5.3; today only the synthesized three-way
+comparison of a defaulted `operator<=>`, spec/sema-class.md §4.12) is
+compiled from its semantic expressions (`compile.rs` `bind_pseudo` /
+`unbind_pseudo`): those before the result are compiled in order, an
+`OpaqueValueExpr` binding its source once in the compiler's opaque map
+(an lvalue for a glvalue source, else a register), any other compiled
+for effect; the result is then compiled as an rvalue, lvalue,
+initialization or effect, as the context asks, and the bindings are
+dropped. Each operand is therefore evaluated exactly once, and the
+bytecode is the same as for a hand-written `a == b ? ... : a < b ? ...`
+over two locals: the evaluation fast path allocates nothing new. The
+syntactic form `a <=> b` is never compiled; it is the location of notes
+(`expr_loc`). Tests:
+`tests/conformance/class.spaceship/synth-three-way.cpp`
+(`static_assert`s over strong, weak and partial categories, a base, an
+array member, and a call counter that checks the single evaluation).
 
 ### Reflection runtime (M6; WP-267 spike behind `-freflection`)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's
@@ -3060,7 +3135,8 @@ Remaining (each traps with a `kiln:` note today):
 - `delete` through `void*`.
 - Front-end gaps that keep some forms from reaching the Oven (not
   Oven work): class-specific `operator new`,
-  `delete[] (expr)` (parsed as a lambda) and
+  `delete[] (expr)` when `expr` starts with two identifiers (clang's
+  lambda lookahead) and
   `new char[n]{"hi"}`.
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the
   front end puts the volatile qualifier on the read expression's type.

@@ -152,8 +152,8 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
                 // is false, a cast only a fold performs continues), and a
                 // value makes it a static initializer all the same. The
                 // variable is not constant-initialized, so neither its
-                // uses nor its destruction see the value. Scalars only
-                // (spec/codegen.md "Static initialization").
+                // uses nor its destruction see the value. Scalars and
+                // vectors only (spec/codegen.md "Static initialization").
                 None if is_scalar(b.ast, var) => {
                     let v = oven.fold_rvalue(&mut b, e);
                     if v.is_some() {
@@ -201,7 +201,10 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
 }
 
 /// Whether variable `d` has a scalar type (arithmetic, enumeration,
-/// pointer or pointer to member).
+/// pointer or pointer to member) or a vector type: clang
+/// `ConstantEmitter::tryEmitPrivate` folds either with `EvaluateAsRValue`
+/// (`i4 gv = cv;` with `const i4 cv = {..}` is a static initializer,
+/// WP-453); aggregates go through `ConstExprEmitter` instead.
 fn is_scalar(ast: &Ast, d: DeclId) -> bool {
     ast.decls.get(d).ty().is_some_and(|t| {
         matches!(
@@ -211,6 +214,7 @@ fn is_scalar(ast: &Ast, d: DeclId) -> bool {
                 | TypeView::Pointer(_)
                 | TypeView::MemberPointer { .. }
                 | TypeView::Enum(_)
+                | TypeView::Vector { .. }
         )
     })
 }
@@ -593,6 +597,21 @@ impl Collect<'_> {
             // values: its immediate invocations are evaluated per use.
             ExprKind::CXXDefaultInitExpr if ast.exprs.source_loc_values(e).is_some() => {
                 self.default_init(e, None, 0);
+            }
+            // clang `ScalarExprEmitter::VisitArraySubscriptExpr` visits a
+            // vector base as a scalar: `VisitDeclRefExpr`'s
+            // `tryEmitAsConstant` folds a `const` vector variable, and the
+            // lane is an `extractelement` of the constant (WP-453).
+            ExprKind::ArraySubscriptExpr => {
+                for b in ast.exprs.operands(e) {
+                    if matches!(
+                        ast.types.canonical_view(ast.exprs.get(b).ty()),
+                        TypeView::Vector { .. }
+                    ) && refers_to_const_var(ast, b)
+                    {
+                        self.out.push(b);
+                    }
+                }
             }
             ExprKind::ImplicitCastExpr
                 if ast.exprs.cast_kind(e) == CastKind::LValueToRValue

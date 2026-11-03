@@ -391,8 +391,34 @@ impl Sema<'_, '_> {
                             ret = self.fn_ret(fd);
                         }
                         if self.contains_deduced(ret) {
-                            // todo: clang's `cannot_deduce_undeduced_auto`
-                            // error.
+                            // clang emits these in the initial (silent)
+                            // analysis only, before the deletion warning.
+                            if !cx.diagnose && !cx.explain_constexpr {
+                                let here = self
+                                    .diag(
+                                        DiagId::note_defaulted_cmp_cannot_deduce_undeduced_auto,
+                                        sub.loc,
+                                    )
+                                    .arg(sub.kind)
+                                    .arg(&sub.decl);
+                                let callee = self
+                                    .diag(
+                                        DiagId::note_defaulted_cmp_cannot_deduce_callee,
+                                        self.ast.decls.get(fd).loc(),
+                                    )
+                                    .arg(sub.kind)
+                                    .arg(&sub.decl);
+                                let d = self
+                                    .diag(
+                                        DiagId::sema_defaulted_cmp_cannot_deduce_undeduced_auto,
+                                        cx.floc,
+                                    )
+                                    .arg(sub.kind)
+                                    .arg(&sub.decl)
+                                    .with_note(here)
+                                    .with_note(callee);
+                                self.emit(d);
+                            }
                             self.end_set(set);
                             return CmpAnalysis::DELETED;
                         }

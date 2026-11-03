@@ -219,6 +219,12 @@ impl Cg<'_> {
             ExprKind::CXXRewrittenBinaryOperator => {
                 self.emit_cx(ast.exprs.rewritten_semantic(e), ign)
             }
+            ExprKind::PseudoObjectExpr => {
+                let r = self.bind_pseudo(e)?;
+                let v = self.emit_cx(r, ign);
+                self.unbind_pseudo(e);
+                v
+            }
             ExprKind::VAArgExpr => {
                 // clang 19 `VisitVAArgExpr`: the target walk's address,
                 // loaded as a whole (`EmitLoadOfAnyValue`), whatever is

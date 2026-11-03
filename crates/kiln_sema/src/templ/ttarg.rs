@@ -82,7 +82,7 @@ impl Sema<'_, '_> {
     fn ttp_nttp_type(&mut self, d: DeclId, subst: Option<&MultiLevelArgs>) -> Option<QualType> {
         let ty = self.ast.decls.get(d).ty()?;
         let Some(m) = subst.filter(|m| m.substituted() > 0) else { return Some(ty) };
-        if !self.is_dependent_type(ty) {
+        if !self.is_instantiation_dependent_type(ty) {
             return Some(ty);
         }
         let at = self.ast.decls.get(d).loc();
