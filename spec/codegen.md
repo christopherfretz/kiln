@@ -3105,6 +3105,79 @@ its return slot (`static_cast<R>`), so the IR is clang's
 (`tests/codegen/synth_three_way.cpp`, strong, weak and partial
 categories, compared with clang 22 and clang 19 on both targets).
 
+## 7z. Landed (WP-462): local externs, asm labels, placeholders, `-O1` details
+
+- **Block-scope `extern` declarations** (spec/abi.md §8.26) name their
+  namespace-scope entity also in an instantiation of a function
+  template: `template<class T> void f() { extern void g(int); extern int
+  ev; }` declares `@_Z1gi` and `@ev = external global i32`, not
+  `_ZZ1fIiEvvE…` locals (`tests/codegen/local_extern_instantiation.cpp`,
+  `tests/conformance/basic.link/local-extern-instantiation-run.cpp`).
+- **Shared asm labels** (spec/abi.md §8.26): declarations of different
+  types whose labels name one symbol are one function or global, as
+  clang's `GetOrCreateLLVMFunction`/`GetOrCreateLLVMGlobal` return the
+  existing entry whatever its type; each call keeps its own function
+  type. A definition whose type differs from the existing declaration
+  replaces it at the end of the module (`kiln_llvm`
+  `Module::retype_function_to_end`, clang `Function::Create` + `takeName`
+  + RAUW). **Labels on constructors, destructors and conversion
+  functions**: every structor variant names the label, the first variant
+  defined is the one definition, and the complete-object alias is not
+  emitted (`tests/codegen/asm_label_shared.cpp`,
+  `tests/codegen/asm_label_structors.cpp`,
+  `tests/conformance/dcl.asm/asm-label-shared-and-structors.cpp`).
+- **Incomplete class in a signature**: a function first referenced while
+  a class parameter or return type is incomplete (never defined, or
+  defined later in the TU) is declared `void ()` with no attributes, as
+  clang does for a type `isFuncTypeConvertible` rejects; the declaration
+  stays when the class is completed, calls use their call-site function
+  type, and a definition retypes it. The top-level walk tracks the class
+  definitions it has not reached yet; a pointer or reference to such a
+  class has no `dereferenceable` size. A virtual method's placeholder is
+  `unnamed_addr`, and so is its thunk's
+  (`tests/codegen/incomplete_class_sig.cpp`,
+  `tests/codegen/incomplete_class_thunk.cpp`). A braced list initializing
+  a class through a type written before the class was defined now reads
+  the definition's fields
+  (`list-init-of-class-declared-incomplete-run.cpp`).
+- **Lifetime markers at `-fclang-compat=22`** use LLVM 21's
+  `(ptr captures(none))` form (§7p, WP-370, "Lifetime markers"; driver.md
+  "IR optimization"); the `lifetime_o1`, `extern_template_vtable_o1` and
+  `loop_hints_o1` deviations are gone.
+- **Variadic thunks** are clang's `EmitMustTailThunk`: the thunk passes
+  its own arguments with the adjusted `this` to a `musttail` call that
+  forwards `...`, returns its result, and the generic epilogue lands in
+  a dead block (x86-64 functions keep `align 2`). Before this a
+  this-adjusting thunk dropped the variadic arguments. Above `-O0` the
+  vtable's such thunk is `available_externally` when the vtable is; a
+  return-adjusting variadic thunk is a declaration (clang would clone
+  the method), and defining one is diagnosed
+  (`tests/codegen/variadic_thunk{,_o1,_o1_nopasses}.cpp`,
+  `tests/conformance/class.virtual/variadic-thunk-run.cpp`).
+- **`isLibFunction`** is builtin attribute bit `LIB_FUNCTION` (128,
+  clang's `F`), set on the 406 `__builtin_` rows clang 19 and 22 treat as
+  library functions (found by compiling each labelled `extern template`
+  body at `-O1 -disable-llvm-passes`: a declaration means library); the
+  trivially-recursive check (§7a) reads it
+  (`tests/codegen/trivially_recursive_lib.cpp`).
+- **`assume_safety` access groups** (§4, loop metadata):
+  a distinct group per parallel loop, `llvm.loop.parallel_accesses` in
+  its id, `!llvm.access.group` on each memory-accessing instruction
+  `Fir::push` appends while it is active (the union under nested
+  parallel loops; calls to `memory(none)` callees skipped), exact against
+  clang 19 and 22 (`tests/codegen/loop_parallel{,_o1}.cpp`;
+  `loop_parallel_jam.cpp` is oracle 22 only, as clang 19 makes
+  `followup_inner` distinct).
+- **Not modelled**: an instruction placed by `Fir::insert_before` /
+  `insert_after` gets no access group (clang's `new X(..., InsertPt)`
+  also bypasses `InsertHelper`, but not every kiln insert mirrors one);
+  the clang 19 distinct `followup_inner`; `"; No predecessors!"`
+  comments; vtable hiding (`isVTableHidden`); labelled structors of a
+  class with virtual bases (clang emits a VTT call to a one-argument
+  definition) and the dead D0 block clang appends to a labelled virtual
+  destructor; local classes and instantiations in the incomplete-class
+  walk.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
