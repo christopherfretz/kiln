@@ -203,7 +203,9 @@ impl Sema<'_, '_> {
         };
         let at = self.expr_loc(e);
         let text = self.expr_text_as_written(e);
-        let range = self.expr_range(e);
+        // clang streams the context `SourceRange(CC)`, not `e`'s range
+        // (it decides the macro-expansion notes, spec/diag.md §3.3).
+        let range = Span::new(cc, self.token_end(cc).unwrap_or(cc));
         let mut msg =
             self.diag(DiagId::sema_impcast_pointer_to_bool, at).arg(what).arg(text).range(range);
         if function {
