@@ -61,6 +61,7 @@ sema_null_in_comparison = Warning [NullArithmetic] (2) "comparison between NULL 
 sema_nullability_conflicting = Error (2) "nullability specifier '{0}' conflicts with existing specifier '{1}'";
 sema_nullability_declspec = WarningError [NullabilityDeclspec] (3) "nullability specifier '{0}' cannot be applied to non-pointer type {1}; did you mean to apply the specifier to the {2:pointer|block pointer|member pointer|function pointer|member function pointer}?";
 sema_nullability_duplicate = Warning [Nullability] (1) "duplicate nullability specifier '{0}'";
+sema_nullability_mismatched_redecl = Warning [Nullability] (2) "nullability specifier '{0}' conflicts with existing specifier '{1}'";
 sema_nullability_nonpointer = Error (2) "nullability specifier '{0}' cannot be applied to non-pointer type {1}";
 sema_offsetof_array_type = Error (1) "offsetof requires array type, {0} invalid";
 sema_offsetof_bitfield = Error (1) "cannot compute offset of bit-field '{0}'";

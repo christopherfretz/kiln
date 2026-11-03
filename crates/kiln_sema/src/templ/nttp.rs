@@ -431,6 +431,9 @@ impl Sema<'_, '_> {
                 let r = self.ast.reflections.get(id);
                 Some(self.builder().reflect_expr(r, ty, loc, loc))
             }
+            // A floating-point argument ([temp.arg.nontype]/1): the
+            // literal of its value (clang `FloatingLiteral::Create`).
+            Scalar::Float { .. } => Some(self.builder().float_literal(ty, v, loc)),
             Scalar::Null { .. } => {
                 let n = self.builder().nullptr_literal(QualType::NULLPTR, loc);
                 if self.is_nullptr_type(ty) {

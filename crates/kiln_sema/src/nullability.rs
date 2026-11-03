@@ -8,9 +8,11 @@
 use kiln_ast::QualType;
 use kiln_ast::types::{TypeAttrKind, TypeView};
 use kiln_diag::DiagId;
+use kiln_source::Loc;
 
 use crate::Sema;
-use crate::declspec::{Chunk, DeclSpec, Declarator, DeclaratorContext, NullSpec};
+use crate::declspec::{Chunk, DeclSpec, Declarator, DeclaratorContext, NullSpec, ParamInfo};
+use kiln_ast::DeclId;
 
 /// True for the four nullability attribute kinds.
 pub(crate) fn is_nullability(kind: TypeAttrKind) -> bool {
@@ -91,7 +93,7 @@ impl Sema<'_, '_> {
 
     /// The outermost typedef in `ty`'s sugar (clang's
     /// `getAs<TypedefType>`) and its underlying type.
-    fn first_typedef(&self, mut ty: QualType) -> Option<(kiln_ast::DeclId, QualType)> {
+    fn first_typedef(&self, mut ty: QualType) -> Option<(DeclId, QualType)> {
         let t = &self.ast.types;
         for _ in 0..256 {
             match t.view(ty.ty()) {
@@ -169,7 +171,22 @@ impl Sema<'_, '_> {
             self.emit(d);
             return ty;
         }
-        self.ast.types.attributed(n.kind, ty, ty)
+        let r = self.ast.types.attributed(n.kind, ty, ty);
+        if self.is_dependent_type(ty) && n.loc.is_valid() {
+            self.inst.nullability_locs.entry(r).or_default().push(n.loc);
+        }
+        r
+    }
+
+    /// The location of the nullability qualifier of the dependent type
+    /// `t` written nearest `near` (a substituted declaration's), else
+    /// `near` (see `InstState::nullability_locs`).
+    pub(crate) fn nullability_loc(&self, t: QualType, near: Loc) -> Loc {
+        self.inst
+            .nullability_locs
+            .get(&t)
+            .and_then(|v| v.iter().copied().min_by_key(|l| l.to_raw().abs_diff(near.to_raw())))
+            .unwrap_or(near)
     }
 
     /// The decl-specifier nullability qualifiers of `ds` applied to its
@@ -208,7 +225,7 @@ impl Sema<'_, '_> {
     pub(crate) fn declarator_nullability(
         &mut self,
         mut base: QualType,
-        spec_loc: kiln_source::Loc,
+        spec_loc: Loc,
         d: &Declarator,
     ) -> (QualType, Vec<(usize, NullSpec)>) {
         let mut marks = Vec::new();
@@ -323,6 +340,42 @@ impl Sema<'_, '_> {
         result
     }
 
+    /// A redeclaration's parameters against the latest declaration of
+    /// `prev` (clang's `mergeParamDeclAttributes`): an outermost
+    /// nullability that differs from the previous one is
+    /// `-Wnullability` "conflicts with existing specifier", at the new
+    /// parameter, noting the old. A parameter written without one
+    /// inherits the previous one (clang copies it onto the type), so the
+    /// nearest earlier declaration that wrote one decides. Only
+    /// parameters are compared (a return type is not, in C++).
+    pub(crate) fn check_param_nullability(&mut self, prev: DeclId, params: &[ParamInfo]) {
+        let redecls: Vec<DeclId> = self.ast.redecls_of(prev).collect();
+        let param_at = |s: &Self, f: DeclId, i: usize| {
+            s.ast.decls.function(f).and_then(|x| s.ast.lists.at::<DeclId>(x.params, i))
+        };
+        for (i, p) in params.iter().enumerate() {
+            let Some(new) = self.sugared_nullability(p.ty) else { continue };
+            let Some(latest) = redecls.first().and_then(|&f| param_at(self, f, i)) else {
+                continue;
+            };
+            let was = redecls.iter().find_map(|&f| {
+                let t = self.ast.decls.get(param_at(self, f, i)?).ty()?;
+                self.sugared_nullability(t)
+            });
+            if let Some(was) = was
+                && new != was
+            {
+                let at = self.ast.decls.get(latest).loc();
+                let d = self
+                    .diag(DiagId::sema_nullability_mismatched_redecl, p.loc)
+                    .arg(spelling(new))
+                    .arg(spelling(was))
+                    .with_note(self.diag(DiagId::note_previous_declaration, at));
+                self.emit(d);
+            }
+        }
+    }
+
     /// The nullability qualifiers written after (or moved to) chunk `i`
     /// of `d`, applied to its type `ty`.
     pub(crate) fn chunk_nullability(
@@ -332,9 +385,14 @@ impl Sema<'_, '_> {
         d: &Declarator,
         moved: &[(usize, NullSpec)],
     ) -> QualType {
+        // One in a parameter's outermost array brackets (`int a[_Nonnull]`)
+        // applies to the array, which decays ([dcl.fct]/5).
+        let param_array = i == 0
+            && d.ctx == DeclaratorContext::Prototype
+            && matches!(d.chunks.first(), Some(Chunk::Array { .. }));
         for &(j, n) in d.nullability.iter().chain(moved) {
             if j == i {
-                ty = self.apply_nullability(ty, n, false);
+                ty = self.apply_nullability(ty, n, param_array);
             }
         }
         ty

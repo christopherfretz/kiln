@@ -9,6 +9,7 @@ sema_empty_if_body = Warning [EmptyBody] (0) "if statement has empty body";
 sema_empty_range_for_body = Warning [EmptyBody] (0) "range-based for loop has empty body";
 sema_empty_switch_body = Warning [EmptyBody] (0) "switch statement has empty body";
 sema_empty_while_body = Warning [EmptyBody] (0) "while loop has empty body";
+sema_enum_bit_int_underlying = Error (1) "{0} is an invalid underlying type";
 sema_enum_constant_in_bool_context = WarningOff [IntInBoolContext] (0) "converting the enum constant to a boolean";
 sema_enum_explicit_instantiation = Error (0) "enumerations cannot be explicitly instantiated";
 sema_enum_fixed_redecl_unfixed = Error (0) "enumeration previously declared with fixed underlying type";
