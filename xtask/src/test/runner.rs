@@ -229,6 +229,10 @@ impl Test<'_> {
             let reason = "not supported by this compiler (`verify` needs kiln or clang)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
         }
+        if spec.expect == Expect::Cfg && !kind.speaks_clang() {
+            let reason = "not supported by this compiler (`expect: cfg` needs kiln or clang)";
+            return (Status::Skip, Some(reason.to_owned()), String::new());
+        }
         if spec.expect == Expect::Ast && !kind.speaks_clang() {
             let reason = "not supported by this compiler (`expect: ast` needs kiln or clang)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
@@ -263,6 +267,7 @@ impl Test<'_> {
             Expect::Vtables => self.dump(&spec, DumpKind::Vtables),
             Expect::Ir => self.dump(&spec, DumpKind::Ir),
             Expect::NoCrash => self.no_crash(&spec),
+            Expect::Cfg => self.cfg_dump(&spec),
         };
         let outcome = self.with_gcc_verdict(&spec, outcome);
         // Budgets are checked once the kind's own checks pass.
@@ -1013,6 +1018,86 @@ impl Test<'_> {
         if failures.is_empty() { Ok(()) } else { Err(Problem::Fail(failures)) }
     }
 
+    /// `expect: cfg` (spec/harness.md "cfg tests"): kiln's
+    /// `-fkiln-dump-cfg` against the golden `<test>.expected`, and the
+    /// golden's shapes against the oracle's `debug.DumpCFG` (or, with clang
+    /// as the compiler under test, against its own), except for the
+    /// functions `cfg-diverges` names.
+    fn cfg_dump(&mut self, spec: &TestSpec) -> Check {
+        let mut golden = self.case.path.clone().into_os_string();
+        golden.push(".expected");
+        let golden = PathBuf::from(golden);
+        let golden_name = golden.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let read = fs::read_to_string(&golden);
+        let skip: Vec<&str> = spec.cfg_diverges.iter().map(|(f, _)| f.as_str()).collect();
+        let mut failures = String::new();
+        let want = if self.cfg.compiler_kind == CompilerKind::Kiln {
+            let o = self.compile(spec, &["-fsyntax-only", "-fkiln-dump-cfg"], None)?;
+            self.ast_compiled(spec, &o)?;
+            let got = o.stdout_str();
+            if self.cfg.update && read.as_ref().map_or(true, |w| ast_diff(w, &got).is_some()) {
+                fs::write(&golden, &got).map_err(|e| {
+                    Problem::Broken(format!("cannot write {}: {e}", golden.display()))
+                })?;
+                self.updated = true;
+            } else {
+                match &read {
+                    Ok(w) => {
+                        if let Some(d) = ast_diff(w, &got) {
+                            let _ = write!(
+                                failures,
+                                "dump differs from {golden_name}:\n{}",
+                                indent(&d)
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        return Err(Problem::Broken(format!(
+                            "cannot read the golden {golden_name}: {e} (a `cfg` test needs one; \
+                             `--update` writes kiln's dump)"
+                        )));
+                    }
+                }
+            }
+            got
+        } else {
+            let w = read.map_err(|e| {
+                Problem::Broken(format!("cannot read the golden {golden_name}: {e}"))
+            })?;
+            let compiler = self.cfg.compiler.clone();
+            let o = self.compile(spec, &CLANG_CFG_MODE, None)?;
+            if !o.success() {
+                return Err(Problem::Fail(format!(
+                    "expected the CFG dump, but {} failed ({})",
+                    compiler.display(),
+                    o.describe_end()
+                )));
+            }
+            if let Some(d) = super::cfg_shape::diff(&w, &o.stderr_str(), &skip, false) {
+                let _ = write!(
+                    failures,
+                    "the compiler's graphs differ from {golden_name}:\n{}",
+                    indent(&d)
+                );
+            }
+            w
+        };
+        if self.cfg.compiler_kind == CompilerKind::Kiln
+            && let Some(oracle) = self.cfg.oracle.clone()
+        {
+            let theirs = self.oracle_compile(&oracle, spec, &CLANG_CFG_MODE, None)?.stderr_str();
+            if let Some(d) = super::cfg_shape::diff(&theirs, &want, &skip, true) {
+                let _ = write!(
+                    failures,
+                    "the graphs differ from the oracle's ({}):\n{}",
+                    oracle.display(),
+                    indent(&d)
+                );
+            }
+        }
+        if failures.is_empty() { Ok(()) } else { Err(Problem::Fail(failures)) }
+    }
+
     /// The exit status and `diag:` checks of an `ast` compile.
     fn ast_compiled(&self, spec: &TestSpec, o: &Output) -> Check {
         if !o.success() {
@@ -1084,6 +1169,11 @@ impl Test<'_> {
         })
     }
 }
+
+/// clang's CFG dump (`debug.DumpCFG`, on stderr; warnings off so they do
+/// not interleave).
+const CLANG_CFG_MODE: [&str; 6] =
+    ["-fsyntax-only", "-w", "-Xclang", "-analyze", "-Xclang", "-analyzer-checker=debug.DumpCFG"];
 
 /// The dump an `expect: layout`, `expect: vtables` or `expect: ir` test
 /// compares (`spec/harness.md` "Layout and vtable tests", "IR tests").
