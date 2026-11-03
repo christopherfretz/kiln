@@ -3048,9 +3048,19 @@ impl Parser<'_, '_> {
                 Ok(())
             }
             // A malformed braced-init-list without `=` was skipped
-            // through its `}` (clang's `ParseBraceInitializer`); the
-            // declaration continues.
-            Err(()) if d.init_style == Some(InitStyle::List) => Ok(()),
+            // through its `}` (clang's `ParseBraceInitializer`), a
+            // malformed expression-list through its `)` (clang's
+            // `ParseDeclarationAfterDeclaratorAndAttributes`: `void
+            // f4(=) {}`); the declaration continues, so a missing `;` is
+            // reported.
+            Err(())
+                if matches!(
+                    d.init_style,
+                    Some(InitStyle::List | InitStyle::Call | InitStyle::ParenList)
+                ) =>
+            {
+                Ok(())
+            }
             Err(()) => Err(()),
         }
     }
@@ -3401,8 +3411,10 @@ impl Parser<'_, '_> {
                 DiagId::parse_expected_semi_declaration
             };
             self.s.error(id, self.expected_loc());
+            // clang's `ParseDeclGroup`: `SkipMalformedDecl`, which stops
+            // after a braced body (`void f4(=) {}`).
             if !self.is_decl_spec_start() {
-                self.skip_to_semi();
+                self.skip_malformed_decl();
             }
         }
     }

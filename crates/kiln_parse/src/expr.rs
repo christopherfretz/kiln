@@ -133,7 +133,18 @@ impl Parser<'_, '_> {
         if self.at_kw(Kw::CoYield) {
             return self.parse_coyield_expr();
         }
-        let lhs = self.parse_cast_expr()?;
+        let start = self.pos();
+        let Some(lhs) = self.parse_cast_expr() else {
+            // clang's `ParseAssignmentExpression` goes on to the operators
+            // after an operand that is missing (`(= x)`: "expected
+            // expression" at the `=`, then at what follows it); the
+            // expression is erroneous.
+            if self.pos() == start && self.cur_binop_prec().is_some_and(|p| p >= prec::ASSIGN) {
+                let err = self.s.act_on_error_expr(&[], self.loc());
+                let _ = self.parse_rhs(err, prec::ASSIGN);
+            }
+            return None;
+        };
         self.parse_rhs(lhs, prec::ASSIGN)
     }
 
