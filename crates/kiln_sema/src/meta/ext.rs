@@ -61,12 +61,17 @@ impl Sema<'_, '_> {
     /// (one per content, shared with `std::source_location`'s).
     fn reflect_name(&mut self, r: ReflectionId, loc: Loc) -> Result<ConstValueId, MetaError> {
         let name = match self.ast.reflections.get(r) {
-            Reflectee::Null => String::new(),
-            Reflectee::Decl(d) => self.decl_name(d),
+            Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
+                self.decl_name(d)
+            }
             Reflectee::Type(t) => match self.ast.types.as_record(t) {
                 Some(d) => self.decl_name(d),
                 None => self.ty_str(t),
             },
+            Reflectee::Template(n) => {
+                self.ast.types.template_decl(n).map(|d| self.decl_name(d)).unwrap_or_default()
+            }
+            _ => String::new(),
         };
         if name.is_empty() {
             return fail(loc, format!("'{}' has no name", self.reflection_str(r)));
@@ -130,9 +135,16 @@ impl Sema<'_, '_> {
                         DeclKind::AccessSpec | DeclKind::StaticAssert | DeclKind::Friend
                     )
             })
-            .map(|m| self.ast.first(m))
             .collect();
-        Ok(members.into_iter().map(|m| self.ast.reflections.intern(Reflectee::Decl(m))).collect())
+        // Each member keyed as `^^` keys it (a nested type or alias is a
+        // type, a member template a template; spec/reflection-repr.md §1).
+        Ok(members
+            .into_iter()
+            .map(|m| {
+                let r = self.reflectee_of_decl(m).unwrap_or(Reflectee::Decl(self.ast.first(m)));
+                self.ast.reflections.intern(r)
+            })
+            .collect())
     }
 
     /// `__kiln_define_member(cls, ty, name)` (spec/reflection.md §3.4):

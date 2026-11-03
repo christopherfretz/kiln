@@ -116,35 +116,39 @@ Rules that keep the bit exact:
 
 ## 4. Immediate escalation of consteval-only expressions
 
-[expr.const.imm]/2: an expression of consteval-only type (today: a
-reflection, `^^x`) is immediate-escalating. Outside an immediate
-function context it must be part of an immediate invocation; otherwise
-the enclosing immediate-escalating function ([expr.const.imm]/3: a
-lambda's call operator, a defaulted special member, or a constexpr
-function that is a templated entity; see `spec/sema.md` §5.10) becomes
-an immediate function, and anywhere else it is
-`sema_immediate_escalating_expr` ("expression of consteval-only type
-{0} is not allowed outside an immediate function context").
+[expr.const.imm]/2: an expression of consteval-only type is
+immediate-escalating. This section specifies only that behaviour. Which
+expressions count (the consteval-only *leaves*: a `^^` expression, a
+reference to a variable, parameter or binding of consteval-only type),
+where they are recorded, the exemptions (immediate context, a
+`constexpr` variable's initializer, a constant-initialized variable
+whose initializer folds) and the template re-check are WP-472's
+representation, specified once in `spec/reflection-repr.md` §6
+(`crates/kiln_sema/src/consteval_only.rs`).
 
-- The hook is `Sema::note_immediate_escalating_expr(e) -> ExprId`,
-  called by the parser for `^^` and by template substitution when it
-  rebuilds one. Splices (WP-475) call the same hook and extend
-  `is_consteval_only_ref`.
-- Not noted: an operand in an immediate function context, a
-  value-dependent operand, an expression with errors. Exempt at
-  `finish_immediate_invocations`: a ref inside an immediate invocation,
-  the initializer of a variable that is constant-initialized
-  (`checks_constant_init`, e.g. a `constexpr` variable), and a ref after
-  which an error was already reported (no cascade).
-- A shared (not rebuilt) instantiation copy re-escalates its
-  specialization through the `escalated_exprs` set.
-- The escalation reason note is
-  `note_immediate_function_reason_consteval_only`.
+A leaf that is not exempt, checked at `finish_immediate_invocations`:
+
+- inside an immediate-escalating function ([expr.const.imm]/3: a
+  lambda's call operator, a defaulted special member, or a constexpr
+  function that is a templated entity; see `spec/sema.md` §5.10) makes
+  that function an immediate function, exactly like an immediate
+  invocation. `Sema::escalate_consteval_only` records the reason, so a
+  later use of the function as a non-constant expression explains it
+  with `note_immediate_function_reason_consteval_only` ("... because
+  its body contains an expression of consteval-only type {0}");
+- anywhere else is the error `sema_consteval_only_expr`
+  ("consteval-only expressions are only allowed in a constant-evaluated
+  context"), once per full-expression and never after an error already
+  reported in it.
 
 Test: `tests/conformance/expr.const/immediate-escalating-reflect.cpp`.
 
 A plain (non-template) `auto f() { return ^^int; }` is not
-immediate-escalating, so it is ill-formed, not consteval.
+immediate-escalating, so it is ill-formed, not consteval. So is a
+non-template `constexpr` function with an `info` parameter or return
+type (`sema_consteval_only_fn`) and a non-`constexpr` variable of
+consteval-only type (`sema_consteval_only_var`), per
+`spec/reflection-repr.md` §6.
 
 Gaps: a call whose result has consteval-only type (`refl<int>()` in a
 runtime function) is not diagnosed; `^^` in a default argument or a

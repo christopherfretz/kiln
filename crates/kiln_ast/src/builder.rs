@@ -2403,11 +2403,18 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
-    /// `^^T` / `^^entity` (P2996 [expr.reflect], WP-267 spike): a
-    /// `std::meta::info` prvalue. `a` is the operand (a `QualType` raw
-    /// when `aux` is 0, a `DeclId` raw when `aux` is 1), `b` the
-    /// [`crate::ids::ReflectionId`] index plus 1 (0 while the operand is
-    /// dependent: the expression is then value-dependent).
+    /// `^^T` / `^^entity` (P2996 [expr.reflect]): a `std::meta::info`
+    /// prvalue. `aux` is the operand's [`Reflectee::tag`], `a` its
+    /// [`Reflectee::payload`], `b` the [`crate::ids::ReflectionId`] index
+    /// (0 while the operand is dependent: the expression is then
+    /// value-dependent). A type is interned as
+    /// [`crate::Ast::reflection_type`] keys it; a declaration of a
+    /// dependent context (a member of a class template, a local of a
+    /// function template) is instantiation-dependent, so substitution
+    /// remaps it.
+    ///
+    /// [`Reflectee::tag`]: crate::reflect::Reflectee::tag
+    /// [`Reflectee::payload`]: crate::reflect::Reflectee::payload
     pub fn reflect_expr(
         &mut self,
         operand: crate::reflect::Reflectee,
@@ -2417,27 +2424,43 @@ impl<'a> AstBuilder<'a> {
     ) -> ExprId {
         use crate::reflect::Reflectee;
         let mut deps = ExprDeps::NONE;
-        let (aux, a) = match operand {
+        let mut operand = operand;
+        match operand {
             Reflectee::Type(t) => {
                 let d = self.type_deps(t);
                 deps |= d.without(ExprDeps::TYPE);
                 if d.contains(ExprDeps::TYPE) {
                     deps |= ExprDeps::VALUE_INST;
                 }
-                (0u8, t.raw())
+                if !deps.contains(ExprDeps::VALUE_INST) {
+                    operand = Reflectee::Type(self.ast.reflection_type(t));
+                }
             }
-            Reflectee::Decl(d) => (1, d.raw()),
-            Reflectee::Null => (2, 0),
-        };
+            Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
+                if self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX) {
+                    deps |= ExprDeps::VALUE_INST;
+                }
+            }
+            Reflectee::Template(n) => {
+                let flags = self.ast.types.template_name_flags(n);
+                if flags.intersects(TypeFlags::DEPENDENT_INSTANTIATION)
+                    || self
+                        .ast
+                        .types
+                        .template_decl(n)
+                        .is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX))
+                {
+                    deps |= ExprDeps::VALUE_INST;
+                }
+            }
+            _ => {}
+        }
         let b = if deps.contains(ExprDeps::VALUE_INST) {
             0
         } else {
-            let canon = match operand {
-                Reflectee::Type(t) => Reflectee::Type(self.ast.types.canonical(t)),
-                r => r,
-            };
-            self.ast.reflections.intern(canon).index()
+            self.ast.reflections.intern(operand).index()
         };
+        let (aux, a) = (operand.tag(), operand.payload());
         let e =
             self.simple(ExprKind::CXXReflectExpr, ValueCategory::PRValue, deps, aux, ty, loc, a, b);
         self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");

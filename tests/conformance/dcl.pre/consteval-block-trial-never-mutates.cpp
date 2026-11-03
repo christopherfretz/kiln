@@ -12,7 +12,8 @@ using namespace std::meta;
 consteval bool define(info cls, const char* name) {
   return __kiln_define_member(cls, ^^int, name) != info{};
 }
-constexpr bool try_define(info cls) {
+// A templated constexpr function (it takes a consteval-only parameter).
+template <class = void> constexpr bool try_define(info cls) {
   if consteval { return define(cls, "x"); }
   return false;
 }

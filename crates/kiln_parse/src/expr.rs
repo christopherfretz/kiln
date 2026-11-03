@@ -1670,11 +1670,7 @@ impl Parser<'_, '_> {
                 return self.with_greater_op(true, |p| p.parse_paren_rest(loc));
             }
             TokKind::Punct(Punct::LSquare) => return self.parse_lambda_expr(),
-            // [expr.const.imm]/2: of consteval-only type, so
-            // immediate-escalating.
-            TokKind::Punct(Punct::CaretCaret) => {
-                return self.parse_reflect_expr().map(|e| self.s.note_immediate_escalating_expr(e));
-            }
+            TokKind::Punct(Punct::CaretCaret) => return self.parse_reflect_expr(),
             TokKind::Punct(Punct::SpliceOpen) => {
                 self.unsupported("expression splice", loc);
                 return None;

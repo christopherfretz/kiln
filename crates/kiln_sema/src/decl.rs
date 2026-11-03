@@ -4003,6 +4003,7 @@ impl Sema<'_, '_> {
         } else {
             self.register_local(name, f);
         }
+        self.check_consteval_only_fn(f, d.name_loc());
         f
     }
 
@@ -5137,6 +5138,7 @@ impl Sema<'_, '_> {
         self.act_on_init_inner(v, init);
         self.check_static_tls(v, paren);
         self.check_constinit(v);
+        self.check_consteval_only_var(v);
         self.initializing = None;
         self.lambda_mangle.var = None;
         if self.ast.decls.decomp_bindings(v).is_some() {
@@ -5868,6 +5870,7 @@ impl Sema<'_, '_> {
             self.check_static_tls(v, None);
             self.check_constinit(v);
         }
+        self.check_consteval_only_var(v);
     }
 
     fn act_on_uninit_inner(&mut self, v: DeclId) {

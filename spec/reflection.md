@@ -352,7 +352,7 @@ The context the VM passes with every call:
 |---|---|---|
 | `scope: Option<DeclId>` | the scope of the evaluation point, for `access_context::current()` and namespace `members_of`; `None` means the bridge's current context | always `None` until → WP-473 sets it from the evaluation context |
 | `loc: Loc` | the call's location: the position half of the evaluation point, and where failure notes point | implemented |
-| `plainly: bool` | the evaluation is plainly constant-evaluated (§4.2), the only context that may inject | always `false` until → WP-473 |
+| `plainly: bool` | the evaluation is plainly constant-evaluated (§4.2), the only context that may inject | implemented: set from `Oven::plain()` (`EvalContext::plain`, WP-473) |
 | `trial: bool` | the evaluation is a trial: `run.fold`, or an open memory checkpoint | implemented |
 | `elem` (crate-private) | the element type of the call's last pointer argument | implemented |
 
@@ -433,24 +433,20 @@ answers as of that point.
 
 ## 4. The consteval boundary
 
-### 4.1 Consteval-only types (→ WP-473)
-- `std::meta::info`, and every type that contains one (a class with an
-  `info` member or base, an array of, pointer to or reference to such a
-  type, a function type involving one), is *consteval-only*
-  ([basic.types.general]).
-- A variable of consteval-only type must be `constexpr`, or a local of an
-  immediate function, or appear in an immediate-function context. An
-  expression of consteval-only type is immediate-escalating
-  ([expr.const]): a `^^` or splice in a `constexpr` function makes that
-  function immediate when the rules for escalation allow it, and is
-  ill-formed otherwise.
-- No value of consteval-only type reaches codegen. An object of such a
-  type that would survive to emission is an error at its declaration,
-  never a codegen failure. Today, codegen's constant emitter is the
-  backstop: it rejects such a value with "reflection values cannot be
-  emitted" (`kiln_codegen/src/consts.rs`).
+### 4.1 Consteval-only types
+- The consteval-only rules (which types are consteval-only; the
+  variable, function and expression checks; template leaf tracking) are
+  specified once, in `spec/reflection-repr.md` §6. The escalation
+  behaviour of a consteval-only expression in an immediate-escalating
+  function (the function becomes immediate, with
+  `note_immediate_function_reason_consteval_only`) is specified in
+  `spec/consteval-blocks.md` §4.
+- No value of consteval-only type reaches codegen. Codegen's constant
+  emitter stays as the backstop for the known gaps: it rejects such a
+  value with "reflection values cannot be emitted"
+  (`kiln_codegen/src/consts.rs`).
 
-### 4.2 Plainly constant-evaluated (→ WP-473)
+### 4.2 Plainly constant-evaluated
 - An evaluation is *plainly constant-evaluated* ([expr.const]) when it is
   the evaluation of a consteval block (`consteval { … }`, P3289) or of
   another construct the IS lists as such. GCC 16.1 is the reference for
