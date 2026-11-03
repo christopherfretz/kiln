@@ -1193,8 +1193,7 @@ The normative description is spec/driver.md "Code generation". In short:
 - **clang 22 codegen (WP-355, WP-386).** At `-fclang-compat=22` kiln
   follows clang 22 where §6a says; elsewhere its IR is clang 19's under
   every level. The oracle-22 `DEVIATIONS` entries record the rest of
-  what clang 20-22 changed: x86-64 `__int128` as `i128`
-  (19: two `i64`s; the same registers), AArch64 aggregates of pointers
+  what clang 20-22 changed: AArch64 aggregates of pointers
   coerced to `ptr`/`[N x ptr]` (19: integers), `(unnamed struct)` in IR
   type names, `llvm.modf`, and `-O0` instruction
   choices (atomic temporaries, `select` for vector `?:`, constant-folded
@@ -1208,7 +1207,8 @@ The normative description is spec/driver.md "Code generation". In short:
   neither, and nor does kiln below 22, so `atomic_padded` is exact under
   both oracles. Following the rest under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
-  "Residual").
+  "Residual"). x86-64 `__int128` / `_BitInt(128)` as `i128` (19: two
+  `i64`s) is followed at 22 since WP-458 (spec/abi.md §8.25).
 - **Uses of constant-initialized reference variables as lvalues.** A
   read through a reference to a `const` referee folds (above), but clang
   also emits a non-odr-use of a reference usable in constant expressions
@@ -1309,6 +1309,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 |---|---|---|
 | AArch64 data layout `e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32` (`kiln_llvm::AARCH64_LINUX_GNU_22`; LLVM 19 accepts it) | compat ≥ 22 | `e-m:e-i8:8:32-...` |
 | AArch64 empty class by value as `i64` (spec/abi.md §8.21) | compat ≥ 22 | `i8` / ignored |
+| x86-64 `__int128`, `_BitInt(128)` and a class starting with an `i128` by value and returned as `i128` (spec/abi.md §8.25) | compat ≥ 22 | `{ i64, i64 }` / two `i64`s |
 | GEP `nuw` (§3 "GEP flags") | compat ≥ 22 | `inbounds` only |
 | `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors), on definitions, declarations and calls, before `noundef` | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
 | `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 for `non-leaf` (AArch64's default; "Frame pointer") | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
@@ -1321,7 +1322,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 x86-64's data layout and `"frame-pointer"="all"` are the same in both.
 The `xtask test` harness runs kiln at the oracle's compat level with the
 oracle's LLVM (spec/harness.md "Oracle toolchain"), so the oracle-22 legs
-see all ten. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
+see all eleven. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
 compat, `ir_version`), `sig_attrs`, `target_attrs` and `trailer`. Not
 yet: LLVM 22's `nocreateundeforpoison` function attribute on many
 intrinsic declarations (`*.with.overflow`, `ctpop`, `bswap`, `fabs`,
@@ -1608,6 +1609,7 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   `llvm.trap` + `unreachable`. `delete p` of a polymorphic class with a
   virtual destructor calls D0 through the vtable; otherwise D1 then
   `operator delete`. `::delete p` of such a class: see WP-108 below.
+  A destroying `operator delete` changes both: see §7u (WP-457).
 - **Thunks** (`CodeGenVTables::maybeEmitThunk`): a thunk is declared
   when the vtable that needs it is built and defined right after its
   target (method, D1 or D0) is emitted. `this`-adjusting (`_ZThn`) and
@@ -3060,6 +3062,75 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   `tests/conformance/ext.vector/ir-bool-from-int-vector.cpp` (`expect: ir`,
   `requires: clang>=22`).
 
+## 7u. Landed (WP-457): destroying `operator delete` through a virtual destructor
+
+[expr.delete]/7, /10, [class.dtor]/13. (Numbered after WP-450's §7s and
+WP-444's §7t; renumber at merge if those land differently.)
+
+- **D0 body.** When the deallocation function Sema selected for a
+  virtual destructor (`Ast::dtor_delete`) is a destroying `operator
+  delete`, the deleting destructor calls only that function: no D1
+  call and no `Cleanup::DtorDelete` (the destroying delete runs the
+  destructor itself if it wants to). Its first argument is `this`
+  converted to the function's first parameter type, the conversion
+  Sema built (`Ast::dtor_delete_this`, a derived-to-base expression on
+  `this`; a GEP for a non-primary base, as clang's
+  `getOperatorDeleteThisArg`); the size and alignment arguments are the
+  destructor's class's (`emit_delete_call`), so an inherited destroying
+  delete receives the most-derived size.
+- **The delete-expression.** `delete p` whose static type has a virtual
+  destructor and a destroying `operator delete` makes the virtual D0 call
+  after the null check (never devirtualized, as clang's
+  `EmitDestroyingObjectDelete`), so the most-derived class's lookup
+  decides: a derived class's own usual `operator delete` hides an
+  inherited destroying one and its D0 is the usual D1-then-delete body.
+- **Tag argument.** The empty `std::destroying_delete_t` argument is a
+  temporary `alloca`; when the call's ABI ignores it (x86-64) the unused
+  `alloca` is erased, as clang does, and kept where it is passed
+  (AArch64).
+- Tests: `tests/codegen/destroying_delete_virtual.cpp` (plain, sized,
+  sized+aligned over-aligned, inherited through a non-primary base, a
+  derived usual delete; both targets; exact under oracle 19, structural
+  under 22), `tests/conformance/expr.delete/destroying-operator-delete-virtual.cpp`
+  (run).
+
+## 7ac. Landed (WP-460): callee-destroyed arguments (`[[clang::trivial_abi]]`)
+A by-value parameter of a class the callee destroys
+(`kiln_abi::call::is_destroyed_in_callee`, spec/abi.md §8.26: passed in
+registers yet with a non-trivial destructor, which only `trivial_abi`
+allows) is destroyed at the end of the callee, not at the end of the
+caller's full-expression ([class.temporary]/3; clang
+`isParamDestroyedInCallee`).
+- *Caller* (`emit_call_args`, clang `EmitCallArg` /
+  `CallArgList::addArgCleanupDeactivation`): the argument is emitted into
+  its `agg.tmp` with `dest_destructed` set, so no normal full-expression
+  destructor is pushed; `push_arg_cleanup` instead pushes an EH-only
+  destructor cleanup (clang `DestroyUnpassedArg`) with an activation flag
+  placeholder, recorded in `FuncState::arg_cleanups`. A later argument
+  that throws destroys the already-built argument; the other arguments
+  keep their normal cleanups (destroyed in reverse order after the
+  call).
+- *Deactivation* (`deactivate_arg_cleanups`, clang
+  `deactivateArgCleanupsBeforeCall`): in `call_vals_to`, after the
+  callee is computed and just before the call instruction, the pending
+  cleanups of the call's aggregate arguments are deactivated innermost
+  first and their placeholders erased, so once the call is made the
+  callee owns the object (also on unwind out of the callee).
+- *Callee* (`func.rs` prolog): each such parameter's address gets a
+  normal-and-EH destructor cleanup (`Cleanup::Dtor`) pushed in parameter
+  order, recorded in `FuncState::param_cleanups`; it runs at the
+  function's end (after the return value is built) in reverse order.
+  Thunks push none (the target destroys them).
+- *Delegate calls* (`delegate_call_arg`, clang `EmitDelegateCallArg`):
+  forwarding a callee-destroyed parameter (the lambda static invoker,
+  inheriting constructors) deactivates this function's cleanup of it
+  (`forward_param_cleanup`): the delegate destroys it.
+- Return values are unchanged beyond register passing: a returned
+  `trivial_abi` class is returned per its coerced type, not through
+  `sret`; NRVO still applies.
+- Tests: `tests/codegen/trivial_abi_calls.cpp`, `trivial_abi_subobjects.cpp`
+  (both oracles),
+  `tests/conformance/class.temporary/run-trivial-abi-callee-destroys.cpp`.
 ## 7aa. Landed (WP-459): explicit-object conversion functions, AArch64 target features
 - A conversion function with an explicit object parameter
   ([class.conv.fct]/1, P0847) is lowered as an explicit-object member

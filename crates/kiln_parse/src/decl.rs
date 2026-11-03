@@ -3255,8 +3255,20 @@ impl Parser<'_, '_> {
             ds.attrs.retain(|a| !is_vec(a));
         }
         if !ds.has_type_specifier() {
-            self.error_here(DiagId::parse_expected_type);
-            return None;
+            // `using A = S::nope;`, `template<class T = S::nope>`: where
+            // only a type can be, a qualified name that names no type is
+            // the lookup error ("no type named 'nope' in 'S'"; clang's
+            // `DiagnoseUnknownTypeName` from `ParseTypeName`), not a syntax
+            // error, and the type-id goes on with an invalid type.
+            if matches!(site, DeclSite::Alias | DeclSite::TypeParamDefault)
+                && self.qualified_non_type_here()
+            {
+                let loc = self.name_begin();
+                self.unknown_qualified_type_spec(&mut ds, loc);
+            } else {
+                self.error_here(DiagId::parse_expected_type);
+                return None;
+            }
         }
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
         d.site = site;
@@ -3278,6 +3290,24 @@ impl Parser<'_, '_> {
         }
         let ty = self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d);
         Some(self.s.check_qualified_fn_type(ty, &ds, &d))
+    }
+
+    /// Whether the current token starts a name qualified by a
+    /// non-dependent class or namespace in which it names no type
+    /// ([`Parser::unknown_qualified_type_spec`] reports it).
+    fn qualified_non_type_here(&self) -> bool {
+        let start = self.pos();
+        match self.scan_name(start) {
+            Some((end, NameClass::Undeclared, _)) => {
+                end > start + 1
+                    && (self.unresolved_scope_name(start) || self.incomplete_scope_name(start))
+            }
+            Some((end, NameClass::Value(_), _)) => {
+                self.nontype_scope_name(start)
+                    && Self::punct_of(self.tok_at(end)) != Some(Punct::Less)
+            }
+            _ => false,
+        }
     }
 
     /// True if a type-id starts at token index `i`.
@@ -3725,7 +3755,7 @@ impl Parser<'_, '_> {
         self.repeat_declspec_errors(restrict_error, first);
         self.gnu_attr_end = Loc::INVALID;
         if first && d.is_function_declarator() {
-            self.parse_gnu_attr_seq(&mut d.attrs);
+            self.parse_declarator_gnu_attr_seq(d);
         }
         let label = self.parse_asm_label()?;
         if label.is_some() {
@@ -3733,7 +3763,7 @@ impl Parser<'_, '_> {
             self.gnu_attr_end = Loc::INVALID;
         }
         d.asm_label = label;
-        self.parse_gnu_attr_seq(&mut d.attrs);
+        self.parse_declarator_gnu_attr_seq(d);
         if self.gnu_attr_end != Loc::INVALID {
             d.end = self.gnu_attr_end;
         }

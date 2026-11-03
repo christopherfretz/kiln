@@ -1562,7 +1562,15 @@ impl<'a> AstBuilder<'a> {
         non_odr_use: NonOdrUse,
         flags: ExprFlags,
     ) -> ExprId {
-        let deps = self.type_deps(ty) | self.decl_deps(d);
+        let mut deps = self.type_deps(ty) | self.decl_deps(d);
+        // An instantiation-dependent qualifier (`is_same<void,
+        // void_t<decltype(e)>>::value`) makes the reference so (clang
+        // `computeDependence(DeclRefExpr *)`).
+        if let Some(q) = extra.and_then(|x| x.qualifier)
+            && self.ast.types.nns_flags(q).contains(TypeFlags::INSTANTIATION_DEPENDENT)
+        {
+            deps |= ExprDeps::INSTANTIATION;
+        }
         let vk = self.decl_ref_category(d);
         let b = extra.map_or(0, |x| self.ast.exprs.push_declref_extra(x));
         self.push_expr(

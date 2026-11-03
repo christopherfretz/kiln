@@ -266,6 +266,8 @@ impl Sema<'_, '_> {
             return self.deduction_note(ft, fail, loc);
         }
         let detail = match cand.failure {
+            // clang `DiagnoseFailedEnableIfAttr`: at the function.
+            CandidateFailure::EnableIf { attr } => return self.enable_if_note(attr, loc),
             CandidateFailure::TooManyArgs { .. } | CandidateFailure::TooFewArgs { .. } => {
                 let mut params = Vec::new();
                 let variadic = self.fn_param_types(f, &mut params);

@@ -905,6 +905,11 @@ fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u3
                     return (extend(t, s), ni, ns);
                 }
             }
+            // clang 20+: an `i128` at offset 0 is passed directly in the
+            // two registers (spec/abi.md §8.25).
+            if r == IrType::Int(128) {
+                return (direct(r), ni + 1, ns);
+            }
             res = Some(r);
         }
         Sse => {
@@ -984,6 +989,10 @@ fn x86_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
                 if is_integral_or_enum(t, s) && is_promotable(t, s) {
                     return extend(t, s);
                 }
+            }
+            // clang 20+ returns an `i128` at offset 0 directly (§8.25).
+            if r == IrType::Int(128) {
+                return direct(r);
             }
             res = Some(r);
         }
@@ -1106,6 +1115,12 @@ fn integer_at(
         let (es, _) = t.size_align(e);
         let eo = ir_off.checked_div(es).map_or(0, |q| q * es);
         return integer_at(t, e, ir_off - eo, src, src_off);
+    }
+    // clang 20+ (LLVM 20 "Pass __int128 as i128"): a 128-bit integer is
+    // passed whole, so a stack-passed one gets `i128`'s 16-byte slot
+    // (spec/abi.md §8.25). clang 19 splits it into two `i64`s.
+    if ir_off == 0 && *ir == IrType::Int(128) && t.clang_compat() >= 20 {
+        return ir.clone();
     }
     let size = t.layouter().type_layout(src).size;
     IrType::Int(u32::try_from(size.saturating_sub(src_off).min(8) * 8).unwrap_or(64))
@@ -1246,12 +1261,20 @@ fn copy_move_ctor_kind(ast: &Ast, ctor: DeclId, class: DeclId) -> Option<bool> {
 /// or deleted, with at least one non-deleted copy or move constructor,
 /// is passed and returned like a C struct; any other class is passed by
 /// address and returned through `sret` ([class.temporary]/3).
-/// `[[clang::trivial_abi]]` is not modeled (trivial-for-call = trivial).
+/// "Trivial" is clang's trivial-for-call: trivial, or made so by
+/// `[[clang::trivial_abi]]` on the class or a subobject (the class bits
+/// `TRIVIAL_ABI` and `*_FOR_CALL`; spec/abi.md §8.25).
 pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
     use kiln_ast::decl::{DeclKind, DefinitionBits as B};
     let Some(def) = ast.definition(record) else { return true };
     let Some(r) = ast.decls.record(def) else { return true };
     let bits = r.defn;
+    let trivial_abi = bits.contains(B::TRIVIAL_ABI);
+    // A declared, non-trivial member is trivial for calls under
+    // `trivial_abi`, or when not user-provided and the subobjects' are.
+    let member_for_call = |m: DeclId, spec: kiln_ast::decl::FnSpec, b: B| {
+        spec.is_trivial() || trivial_abi || (bits.contains(b) && !is_user_provided(ast, m))
+    };
     let mut copy_decl = false;
     let mut move_decl = false;
     // Declared constructors (implicit ones included once declared).
@@ -1265,7 +1288,7 @@ pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
         } else {
             copy_decl = true;
         }
-        declared.push((c, spec));
+        declared.push((c, spec, if kind { B::MOVE_CTOR_FOR_CALL } else { B::COPY_CTOR_FOR_CALL }));
     }
     let dtor = ast.destructor(def).filter(|&d| ast.decls.get(d).kind() == DeclKind::CXXDestructor);
     let needs_copy = !copy_decl && !bits.contains(B::USER_DECLARED_COPY_CTOR);
@@ -1281,37 +1304,65 @@ pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
     // non-trivial, non-deleted copy/move constructor or destructor) makes
     // the class indirect even when its copy constructor is trivial.
     let mut has_copy_or_move = false;
+    let for_call = |t: B, f: B| bits.contains(t) || bits.contains(f);
     if needs_copy && !bits.contains(B::DEFAULTED_COPY_CTOR_DELETED) {
-        if !bits.contains(B::TRIVIAL_COPY_CTOR) {
+        if !for_call(B::TRIVIAL_COPY_CTOR, B::COPY_CTOR_FOR_CALL) {
             return false;
         }
         has_copy_or_move = true;
     }
     if needs_move && !bits.contains(B::DEFAULTED_MOVE_CTOR_DELETED) {
-        if !bits.contains(B::TRIVIAL_MOVE_CTOR) {
+        if !for_call(B::TRIVIAL_MOVE_CTOR, B::MOVE_CTOR_FOR_CALL) {
             return false;
         }
         has_copy_or_move = true;
     }
-    if needs_dtor && !bits.contains(B::DEFAULTED_DTOR_DELETED) && !bits.contains(B::TRIVIAL_DTOR) {
+    if needs_dtor
+        && !bits.contains(B::DEFAULTED_DTOR_DELETED)
+        && !for_call(B::TRIVIAL_DTOR, B::DTOR_FOR_CALL)
+    {
         return false;
     }
-    for (_, spec) in &declared {
+    for &(c, spec, b) in &declared {
         if spec.is_deleted() {
             continue;
         }
         has_copy_or_move = true;
-        if !spec.is_trivial() {
+        if !member_for_call(c, spec, b) {
             return false;
         }
     }
-    if let Some(f) = dtor.and_then(|d| ast.decls.function(d))
+    if let Some(d) = dtor
+        && let Some(f) = ast.decls.function(d)
         && !f.spec.is_deleted()
-        && !f.spec.is_trivial()
+        && !member_for_call(d, f.spec, B::DTOR_FOR_CALL)
     {
         return false;
     }
     has_copy_or_move
+}
+
+/// clang `isUserProvided` ([dcl.fct.def.default]/5): user-declared and
+/// not defaulted or deleted on its first declaration.
+fn is_user_provided(ast: &Ast, f: DeclId) -> bool {
+    use kiln_ast::decl::{DeclFlags, Defaulted};
+    let first = ast.first(f);
+    let spec = ast.decls.function(first).map(|x| x.spec).unwrap_or_default();
+    !ast.decls.get(first).flags().contains(DeclFlags::IMPLICIT)
+        && spec.defaulted() == Defaulted::No
+        && !spec.is_deleted()
+}
+
+/// Whether a by-value parameter of class type `q` is destroyed by the
+/// callee (clang `isParamDestroyedInCallee`, Itanium: the class is passed
+/// in registers yet has a non-trivial destructor, which only
+/// `[[clang::trivial_abi]]` on it or a subobject allows; spec/abi.md §8.25).
+pub fn is_destroyed_in_callee(ast: &Ast, q: QualType) -> bool {
+    use kiln_ast::decl::DefinitionBits as B;
+    let TypeView::Record(d) = ast.types.canonical_view(q) else { return false };
+    let Some(def) = ast.definition(d) else { return false };
+    let Some(r) = ast.decls.record(def) else { return false };
+    !r.defn.contains(B::TRIVIAL_DTOR) && can_pass_in_registers(ast, def)
 }
 
 /// True if `q` is a class type that [`can_pass_in_registers`] rejects

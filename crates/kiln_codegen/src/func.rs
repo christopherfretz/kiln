@@ -17,7 +17,7 @@ use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
 use crate::CodegenError;
-use crate::cleanup::{Cleanups, JumpDest};
+use crate::cleanup::{Cleanup, Cleanups, JumpDest};
 use crate::fir::{Blk, Fir, Op, V};
 use crate::module::{Cg, R, Sig, err};
 use crate::tbaa::Tb;
@@ -153,6 +153,14 @@ pub(crate) struct Fx {
     /// (clang `AggValueSlot::IsDestructed`): a bound temporary written
     /// there needs no cleanup.
     pub dest_destructed: bool,
+    /// clang `CallArgList::CleanupsToDeactivate`: the EH cleanup of each
+    /// callee-destroyed argument evaluated for a call not yet emitted,
+    /// as `(argument address, cleanup depth, placeholder)` (WP-460;
+    /// spec/codegen.md §7x).
+    pub arg_cleanups: Vec<(V, crate::cleanup::Depth, V)>,
+    /// clang `CalleeDestructedParamCleanups`: each by-value parameter
+    /// this function destroys, as `(address, cleanup depth)`.
+    pub param_cleanups: Vec<(V, crate::cleanup::Depth)>,
     pub sw: Option<SwitchCtx>,
     pub loops: Vec<LoopFrame>,
     pub mustprogress: bool,
@@ -235,6 +243,8 @@ impl Fx {
             overlap: false,
             slot_volatile: false,
             dest_destructed: false,
+            arg_cleanups: Vec::new(),
+            param_cleanups: Vec::new(),
             sw: None,
             loops: Vec::new(),
             mustprogress: true,
@@ -494,6 +504,18 @@ impl Cg<'_> {
                 }
             };
             self.f.locals.insert(p, addr);
+            // clang `EmitParmDecl`: a parameter destroyed in the callee
+            // (`isParamDestroyedInCallee`, not in a thunk) gets its
+            // destructor cleanup here, run at the end of the function.
+            if thunk.is_none()
+                && kiln_abi::call::is_destroyed_in_callee(ast, pq)
+                && let Some(rd) = self.destructed_class(pq)
+            {
+                let c = Cleanup::Dtor { addr: addr.v, record: rd, base: false };
+                self.push_cleanup_kind(c, true, true);
+                let depth = self.f.cl.depth();
+                self.f.param_cleanups.push((addr.v, depth));
+            }
         }
         // EmitInstanceFunctionProlog: `this` is loaded once.
         if let Some(a) = this_addr {

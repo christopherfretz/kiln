@@ -250,6 +250,36 @@ impl Oven {
         })
     }
 
+    /// Runs the job of [`Oven::evaluate_with_params`] with its frame at
+    /// `fb`: the condition's value.
+    pub(crate) fn eval_subst(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        cond: Option<ExprId>,
+        at: ExprId,
+        fb: u32,
+    ) -> Result<ConstValueId, EvalFailure> {
+        self.run.object = None;
+        let binds = std::mem::take(&mut self.subst_binds);
+        let f = self.compile_subst(b, cond, &binds);
+        self.subst_binds = binds;
+        self.let_pending.clear();
+        self.exec(b, f, fb)?;
+        let v = self.regs[fb as usize];
+        let RetKind::Scalar(ty) = self.funcs[f as usize].ret else {
+            return Err(EvalFailure::silent(FailKind::NotConstant));
+        };
+        let loc = expr_loc(b.ast(), at);
+        let r = self.freeze_scalar(b, ty, v, loc).map_err(|f| match f {
+            Freeze::Fault(k) => EvalFailure::silent(k),
+            Freeze::Notes(notes) => EvalFailure { kind: FailKind::NotConstant, notes },
+        });
+        match self.leak_notes(b) {
+            None => r,
+            Some(_) => Err(EvalFailure::silent(FailKind::NotConstant)),
+        }
+    }
+
     /// Runs the destruction of variable `d` (`Oven::has_constant_destruction`):
     /// whether it succeeds without leaking.
     pub(crate) fn destroy_var(
@@ -347,6 +377,19 @@ impl Oven {
         let Some(a) = self.alloc_any(Ptr::decode(p)).copied() else {
             return Err(Freeze::Fault(FailKind::NotConstant));
         };
+        if let Some((width, signed)) = self.types.wide(a.ty) {
+            // A wide `_BitInt` is a scalar in the store (`IntBits`).
+            let Ok(mut w) = self.wide_load(p, a.ty, crate::kbc::ak::READ) else {
+                return Err(self.uninit(b, None, a.ty, loc));
+            };
+            crate::bigint::canon(&mut w, width, false);
+            w.truncate(IntBits::words_for(width));
+            let Some(bits) = IntBits::from_words(width, &w) else {
+                return Err(Freeze::Fault(FailKind::NotConstant));
+            };
+            let s = Scalar::Int { ty: self.types.info(a.ty).q, signed, bits };
+            return b.consts().push_scalar(s).map_err(|_| Freeze::Fault(FailKind::MemoryLimit));
+        }
         if self.types.is_aggregate(a.ty) {
             return self.freeze_aggregate(b, a.ty, p, loc);
         }
@@ -754,7 +797,7 @@ impl Oven {
         let st = p.space();
         let abs = u64::from(a.base) + u64::from(p.off);
         match info.kind {
-            TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) => {
+            TyKind::Bool | TyKind::Int { .. } | TyKind::WideInt { .. } | TyKind::Float(_) => {
                 let len = value_len(info.size, info.kind);
                 let sp = self.mem.space(st);
                 if !sp.is_init(abs, len) {
@@ -1427,6 +1470,22 @@ impl Oven {
     ) {
         let info = *self.types.info(ty);
         let len = value_len(info.size, info.kind);
+        if let TyKind::WideInt { width, signed } = info.kind {
+            // Canonical limbs, extended over the object (as `Op::Wide`
+            // stores them).
+            let w = match b.consts().scalar(cv) {
+                Some(Scalar::Int { bits, .. }) => bits.words().to_vec(),
+                _ => vec![0],
+            };
+            let mut w = crate::bigint::extend(&w, (len / 8) as usize, false);
+            crate::bigint::canon(&mut w, width, signed);
+            for (i, &x) in w.iter().enumerate() {
+                self.mem.stat.write(base + i as u64 * 8, 8, u128::from(x));
+            }
+            self.mem.stat.set_init(base, len, true);
+            self.mem.stat.set_ptr(base, len, false);
+            return;
+        }
         let (v, is_ptr) = match b.consts().scalar(cv) {
             Some(Scalar::Int { bits, .. }) => (bits.to_u128().unwrap_or(0), false),
             Some(Scalar::Bool { value, .. }) => (u128::from(value), false),

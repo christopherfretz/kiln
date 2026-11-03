@@ -520,8 +520,9 @@ impl Sema<'_, '_> {
     // -- visibility --------------------------------------------------------------
 
     /// The namespace-scope declaration whose owner decides whether `raw`
-    /// is visible: `raw` itself, or the enumeration of an enumerator;
-    /// `None` for anything not at namespace scope, and namespaces.
+    /// is visible: `raw` itself, or the enumeration of an unscoped
+    /// enumerator; `None` for anything not at namespace scope (a scoped
+    /// enumerator included), and namespaces.
     fn module_scope_decl(&self, raw: DeclId) -> Option<DeclId> {
         let mut d = raw;
         let n = self.ast.decls.get(d);
@@ -533,6 +534,12 @@ impl Sema<'_, '_> {
             match self.ast.decls.get(c).kind() {
                 DeclKind::LinkageSpec | DeclKind::Export => c = self.ast.decls.get(c).ctx()?,
                 DeclKind::Namespace | DeclKind::TranslationUnit => return Some(d),
+                // A scoped enumeration's enumerator is found only by a
+                // qualified lookup naming the enumeration, which is then
+                // reachable: the enumerator is a member, visible with it
+                // ([module.reach]/5, clang `isVisible` of a member of a
+                // reachable scope).
+                DeclKind::Enum if d == raw && self.is_scoped_enum(c) => return None,
                 DeclKind::Enum if d == raw => {
                     d = c;
                     c = self.ast.decls.get(c).ctx()?;
@@ -551,6 +558,28 @@ impl Sema<'_, '_> {
         }
         let Some(d) = self.module_scope_decl(raw) else { return true };
         self.module_visible_owner(d, mt.owner(d))
+    }
+
+    /// `raw` when it is visible, else a visible redeclaration of its
+    /// entity (clang `LookupResult::getAcceptableDecl` /
+    /// `findAcceptableDecl`): a lookup table holds only the latest
+    /// declaration, which may belong to a unit the current one does not
+    /// see while an earlier redeclaration is its own or merged into it
+    /// (the global module is one module: [module.global.frag]/1,
+    /// spec/modules.md §6). `None` when no declaration is visible.
+    pub(crate) fn module_visible_redecl(&self, raw: DeclId) -> Option<DeclId> {
+        if self.module_visible(raw) {
+            return Some(raw);
+        }
+        // A template's redeclarations are its pattern's ([temp.decls]/1).
+        if let Some(pattern) = self.ast.template_info(raw).and_then(|t| t.pattern) {
+            return self
+                .ast
+                .redecls_of(pattern)
+                .filter_map(|p| self.ast.described_template(p))
+                .find(|&t| t != raw && self.module_visible(t));
+        }
+        self.ast.redecls_of(raw).find(|&x| x != raw && self.module_visible(x))
     }
 
     /// The declarations a lookup of `name` that found nothing would find
@@ -822,6 +851,61 @@ impl Sema<'_, '_> {
             return true;
         }
         o.exported || mt.owner(self.ast.first(d)).exported
+    }
+
+    /// A redeclaration in the current unit of `prev`, an entity of the
+    /// global module declared only by units it does not see
+    /// ([module.global.frag]/1: the global module is one module), that
+    /// creates no declaration of its own (an opaque enum redeclaration):
+    /// `prev` becomes visible here as if redeclared (clang gives the
+    /// redeclaration its own visible decl). True if it did.
+    pub(crate) fn module_merge_hidden_redecl(&mut self, prev: DeclId) -> bool {
+        if !self.module_hidden_global(prev) {
+            return false;
+        }
+        self.module_merge_one(prev);
+        true
+    }
+
+    /// A definition in the current unit of the entity `def` (a previous
+    /// definition) defines, when `def` belongs to the global module of
+    /// another unit: not a redefinition ([basic.def.odr]/15, the same
+    /// entity defined in two units' global module fragments) but a merge
+    /// (clang `Sema::makeMergedDefinitionVisible`, which demotes or skips
+    /// the second definition). `def` (and the template it describes)
+    /// becomes visible here and true is returned (spec/modules.md §6).
+    pub(crate) fn module_merge_hidden_definition(&mut self, def: DeclId) -> bool {
+        if !self.module_hidden_global(def) {
+            return false;
+        }
+        self.module_merge_one(def);
+        if let Some(t) = self.ast.described_template(def) {
+            self.module_merge_one(t);
+        }
+        true
+    }
+
+    /// True if `d` is a namespace-scope declaration of another named
+    /// unit's global module fragment (not a header unit, not a purview):
+    /// never visible from the current unit except by a merge
+    /// ([module.global.frag]/3: the GMF is not exported).
+    fn module_hidden_global(&self, d: DeclId) -> bool {
+        let mt = &self.ast.modules;
+        if !mt.active || !self.inst.stack.is_empty() {
+            return false;
+        }
+        let Some(s) = self.module_scope_decl(d) else { return false };
+        let o = mt.owner(s);
+        if o.unit == self.modules.cur() || o.purview {
+            return false;
+        }
+        mt.units.get(usize::from(o.unit)).is_some_and(|u| u.kind.is_named())
+    }
+
+    /// Merges the one declaration `d` into the current unit.
+    fn module_merge_one(&mut self, d: DeclId) {
+        let i = d.index();
+        self.module_merge_range(DeclId::new(i), DeclId::new(i + 1));
     }
 
     /// Merges the declarations `[lo, hi)` of another unit into the current

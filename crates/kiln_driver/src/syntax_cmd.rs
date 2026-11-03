@@ -172,6 +172,7 @@ impl SyntaxJob<'_> {
             inst_report: a.templ.report,
             reflection: a.predef.reflection,
             coro_aligned_allocation: a.predef.coro_aligned_allocation,
+            lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
             sve: crate::features::resolve(a, job.toolchain.target.is_aarch64()).0.sve,

@@ -118,8 +118,10 @@ default build is unchanged.
 `harness` (Cargo.toml) inherits `release` and sets `opt-level = 3`,
 `debug = 1` (line tables: a panic's backtrace keeps file and line),
 `lto = false`, `codegen-units = 16`, `incremental = true`,
-`debug-assertions = false` and `overflow-checks = false`. `release` itself is
-not changed (the bench baselines are measured with it).
+`debug-assertions = false` and `overflow-checks = false`. `release` keeps
+thin LTO and 4 codegen units: it runs 7–9% faster than `harness` (WP-326,
+below), and the bench baselines are measured with it. `harness` stays the
+suite's default for its cheaper incremental rebuilds, not for speed.
 
 Debug assertions are off, as in the `release` binary users run. The
 `debug_assert!`s in the compiler crates check internal invariants (stack
@@ -151,11 +153,42 @@ main `93ee57ff`, where both tests compile cleanly (WP-303); they are best of
 two, and the box was loaded, so they are higher than on a quiet box. kiln's
 peak RSS is the same in every profile (0.48 and 0.73 GiB; clang 1.0 and
 1.6 GiB). `harness` builds well within the 3-minute budget and compiles the
-two tests faster than `release` does (0.82x and 0.78x of its time; the
-reason the thin-LTO build is slower here has not been investigated), so it
-is the default. A debug kiln++ is 18–22x slower than `harness` on these
+two tests faster than `release` did in that measurement (0.82x and 0.78x
+of its time), which made it the default; WP-326 below found the opposite on
+a later main. A debug kiln++ is 18–22x slower than `harness` on these
 two tests: `visit_return_type.pass` exceeds even the 300 s `debug` limit,
 which is sized for ordinary tests, not for these two.
+
+WP-326 re-measured on main `2c31e9f33`. The WP-319 figures were best of
+two, run one profile after the other under load 13–15; sequential passes
+on this box differ from each other by up to 2.4x per test, which swamps a
+20% effect. So each variant was built once in its own target directory,
+and every command was then run with every binary in turn, three rounds with
+the order rotated, taking each binary's minimum. The commands were the 48
+`bench/libcxx-slice` tests at `-fsyntax-only`, the 7 `bench/frontend`
+sources, and `-fsyntax-only` and `-c` of the two `variant.visit` tests.
+Times are the geomean of the per-command minimum, relative to `harness`.
+Variants other than `release` and `harness` are `release` with one
+`--config` override:
+
+| variant | clean build | largest rustc | binary | slice | frontend | `visit` |
+|---|---:|---:|---:|---:|---:|---:|
+| `harness` | 48 s | 1.38 GB | 73 MB | 1.000 | 1.000 | 1.000 |
+| `release` (thin, 4 cgu) | 51 s | 1.57 GB | 82 MB | 0.907, 0.933 | 0.945, 0.912 | 0.911 |
+| `codegen-units = 16` | 58 s | 1.55 GB | 84 MB | 0.923 | 0.916 | |
+| `lto = false` | 49 s | 1.47 GB | 79 MB | 0.961 | 1.001 | |
+| `lto = "fat"` | 119 s | 2.69 GB | 73 MB | 0.946 | 0.935 | |
+| `codegen-units = 1` | 71 s | 1.50 GB | 75 MB | 0.929 | 0.879 | |
+
+The load average was 8–15. Where `release` has two figures, it was measured
+in two of these runs against different variants. Figures within about 3% of
+each other are noise. The four LTO variants are equally fast, and LTO is
+what makes the difference: `lto = false` with 4 units is no faster than
+`harness`. Fat LTO and one codegen unit cost 1.4–2.3x the build time and,
+for fat LTO, a 2.7 GB rustc for no measurable gain, so `release` is
+unchanged. `panic = "abort"` was not tried, because it would change
+behaviour: `kiln_driver` joins the compiler thread and turns a panic into
+exit status 70 with a message, where abort would give SIGABRT.
 
 ## Classification
 
@@ -519,8 +552,8 @@ replacing WP-402's no-warnings choice). `<warning flags>` are libc++'s
 in `run.rs` `WARNING_FLAGS`. As lit's `AddOptionalWarningFlag`, each one
 is kept only if the compiler accepts it: once per run, an empty
 translation unit is compiled with `-xc++ -fsyntax-only -Werror <flag>`
-(kiln, like clang 22, rejects the GCC-only `-Wno-` names; kiln also
-rejects `-flax-vector-conversions=none`). With them, the libc++ headers
+(kiln, like clang 22, rejects the GCC-only `-Wno-` names; since WP-445
+kiln accepts `-flax-vector-conversions=none`, as clang). With them, the libc++ headers
 are not system headers (`-D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER`), so
 kiln's warnings inside them count; a `.verify.cpp` compile undefines it
 again and adds `-Wno-error` (`%{verify}`, `format.py` line 102). The

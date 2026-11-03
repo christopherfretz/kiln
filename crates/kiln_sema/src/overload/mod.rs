@@ -24,7 +24,7 @@ pub(crate) mod udc;
 use std::ops::Range;
 
 use kiln_ast::types::RefQual;
-use kiln_ast::{DeclId, QualType};
+use kiln_ast::{AttrId, DeclId, QualType};
 use kiln_source::Loc;
 
 pub(crate) use ics::{ArgInfo, BadKind, Ics, IcsOptions};
@@ -127,6 +127,13 @@ pub(crate) enum CandidateFailure {
     InhCtorSlice {
         /// Its first parameter is an rvalue reference.
         moving: bool,
+    },
+    /// An `enable_if` condition is false or not a constant expression
+    /// (clang `ovl_fail_enable_if`; spec/sema.md "The `enable_if`
+    /// attribute").
+    EnableIf {
+        /// The attribute whose condition failed.
+        attr: AttrId,
     },
 }
 
