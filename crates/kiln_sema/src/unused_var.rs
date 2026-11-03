@@ -208,7 +208,7 @@ impl Sema<'_, '_> {
     }
 
     /// Whether variable `v` has automatic storage duration.
-    fn has_automatic_storage(&self, v: DeclId) -> bool {
+    pub(crate) fn has_automatic_storage(&self, v: DeclId) -> bool {
         self.ast.decls.var(v).is_some_and(|var| {
             matches!(var.spec.storage(), VarStorage::None | VarStorage::Register)
                 && var.spec.tls() == kiln_ast::decl::TlsKind::None
@@ -318,7 +318,8 @@ impl Sema<'_, '_> {
 
     /// clang's constructor test for an unused variable `v` of class type
     /// (definition `def`) with initializer `init`: a non-trivial
-    /// constructor counts only when the initializer is not a constant; a
+    /// constructor counts only when the initializer is not a constant (one
+    /// referring to an automatic object, constant by P2686R5, is not); a
     /// type-dependent initializer (a constructor not known yet) counts
     /// when the class declares a non-trivial constructor, and an
     /// unresolved construction with dependent arguments always does.
@@ -331,8 +332,14 @@ impl Sema<'_, '_> {
                     return false;
                 }
                 let loc = self.ast.decls.get(v).loc();
-                if self.eval_const(init, kiln_oven::EvalContext::init(v, loc)).is_err() {
-                    return false;
+                // A value referring to an automatic object is constant
+                // only by C++26 P2686R5, which clang 22 (whose warning
+                // this is) does not implement: not a constant here (a
+                // guard: only a `constexpr` variable's value can, for now,
+                // spec/sema.md §4.9).
+                match self.eval_const(init, kiln_oven::EvalContext::init(v, loc)) {
+                    Ok(c) if kiln_oven::automatic_referent(&self.ast, c).is_none() => {}
+                    _ => return false,
                 }
             }
         }

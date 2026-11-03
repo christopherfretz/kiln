@@ -6,8 +6,8 @@
 //@ diag: 14:18 error "constexpr variable 'q' must be initialized by a constant expression"
 //@ diag: 14:18 note "pointer to subobject of 'a' is not a constant expression"
 //@ diag: 12:14 note "declared here"
-// WP-165: the address of a variable with automatic storage duration is not
-// a constant expression ([expr.const]/14), from an enclosing function too.
+//@ std: c++23
+// WP-165: the address of an automatic variable is not a constant expression ([expr.const]/14, C++23; C++26 P2686R5 allows it).
 void f() {
   int y = 0, a[2] = {};
   constexpr int *p = &y;

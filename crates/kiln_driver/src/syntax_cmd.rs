@@ -175,7 +175,10 @@ impl SyntaxJob<'_> {
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
-            sve: crate::features::resolve(a, job.toolchain.target.is_aarch64()).0.sve,
+            sve: crate::features::resolve(a, &job.toolchain.target).0.sve,
+            cfg_dump: a.dump_cfg,
+            cfg_stats: a.cfg_stats,
+            cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
@@ -193,6 +196,7 @@ impl SyntaxJob<'_> {
             let mut err = job.stderr.clone();
             let _ = err.write_all(tu.inst_report.as_bytes());
         }
+        result.output.push_str(&tu.cfg_dump);
         let ast = tu.ast;
         if a.dump_record_layouts {
             // clang prints each class as Sema completes it, before any

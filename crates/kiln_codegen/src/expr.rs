@@ -96,21 +96,35 @@ impl Cg<'_> {
         V::C(self.m.const_int(LTy::I64, v))
     }
 
+    /// The integer constant `v` of type `ty`, splat across the lanes of a
+    /// (fixed or scalable) vector type.
     pub(crate) fn icn(&mut self, ty: LTy, v: i128) -> V {
-        if let Some((et, n, _)) = self.m.types.vector_info(ty) {
+        if let Some((et, _, _)) = self.m.types.vector_info(ty) {
             let c = self.m.const_int(et, v);
-            return V::C(self.m.const_vector(&vec![c; n as usize]).expect("int vector"));
+            return self.const_splat_of(ty, c);
         }
         V::C(self.m.const_int(ty, v))
     }
 
     /// A floating constant `x` (±1.0 and 0.0 only) of type `ty`.
     pub(crate) fn fconst(&mut self, ty: LTy, x: f64) -> V {
-        if let Some((et, n, _)) = self.m.types.vector_info(ty) {
+        if let Some((et, _, _)) = self.m.types.vector_info(ty) {
             let V::C(c) = self.fconst(et, x) else { unreachable!("constant") };
-            return V::C(self.m.const_vector(&vec![c; n as usize]).expect("float vector"));
+            return self.const_splat_of(ty, c);
         }
         V::C(self.m.const_float(ty, x))
+    }
+
+    /// The vector constant of type `ty` with every lane `c`
+    /// (`ConstantVector::getSplat`): a `<N x T>` vector, or a scalable
+    /// `splat` for an SVE `<vscale x N x T>`.
+    pub(crate) fn const_splat_of(&mut self, ty: LTy, c: Value) -> V {
+        let Some((_, n, scalable)) = self.m.types.vector_info(ty) else { return V::C(c) };
+        V::C(if scalable {
+            self.m.const_splat(ty, c).expect("scalable splat of its element type")
+        } else {
+            self.m.const_vector(&vec![c; n as usize]).expect("vector of its element type")
+        })
     }
 
     pub(crate) fn is_float_ty(&self, t: LTy) -> bool {
@@ -124,11 +138,18 @@ impl Cg<'_> {
 
     /// clang `EmitCompare` on vectors: the `<N x i1>` result sign-extended
     /// to the result type unless that is an `ext_vector_type` of `bool`.
+    /// An SVE result is not a `VectorType` there: the comparison's `bool`
+    /// is converted to it (`EmitScalarConversion`), a zero extension
+    /// (none for `svbool_t`).
     fn vec_cmp_result(&mut self, c: V, q: QualType) -> V {
         match self.vec_of(q) {
             Some((elem, _)) if !self.is_bool(elem) => {
                 let t = self.lty(q);
                 self.cast(CastOp::SExt, c, t)
+            }
+            None if self.ast.types.is_sizeless(q) => {
+                let t = self.lty(q);
+                self.zext_or_same(c, t)
             }
             _ => c,
         }
@@ -722,8 +743,8 @@ impl Cg<'_> {
             // clang `CK_VectorSplat`: `CreateVectorSplat`.
             CastKind::VectorSplat => {
                 let v = self.emit_scalar(s)?;
-                let n = self.vec_of(q).map_or(1, |x| x.1);
-                self.splat(v, n)
+                let t = self.lty(q);
+                self.splat(v, t)
             }
             CastKind::NoOp
             | CastKind::BitCast
@@ -1611,6 +1632,12 @@ impl Cg<'_> {
         {
             return self.emit_vector_conditional(c, a, b, kind).map(Some);
         }
+        // An SVE vector condition (clang `isSveVLSBuiltinType`) selects as
+        // a GNU vector condition does (an `svbool_t` by its lanes).
+        if self.ast.types.is_sizeless(self.ast.exprs.get(c).ty()) {
+            let kind = kiln_ast::types::VectorKind::Generic;
+            return self.emit_vector_conditional(c, a, b, kind).map(Some);
+        }
         if let Some(x) = self.fold_bool(c) {
             return self.emit_arm(if x { a } else { b });
         }
@@ -1664,7 +1691,7 @@ impl Cg<'_> {
     /// by each lane's sign bit through masks (`(f & ~m) | (t & m)`, float
     /// lanes bit-cast to the condition's type), a GNU vector condition by
     /// lane `!= 0` and a bool ext vector condition by its lanes, both
-    /// through a `select`.
+    /// through a `select`. An SVE condition comes here as `Generic`.
     fn emit_vector_conditional(
         &mut self,
         c: ExprId,
@@ -1677,13 +1704,17 @@ impl Cg<'_> {
         let y = self.emit_scalar(b)?;
         let ct = self.f.fir.ty(&self.m, cv);
         let zero = V::C(self.m.const_zero(ct));
+        // A bool ext vector condition (clang 20+) or an `svbool_t` (clang
+        // 22; clang 19 compares it `ne zeroinitializer` like any other
+        // SVE condition) is its `<N x i1>` lanes.
+        if self.m.types.vector_info(ct).is_some_and(|(et, _, _)| et == LTy::I1)
+            && (kind == kiln_ast::types::VectorKind::Ext || self.opts.clang_compat >= 22)
+        {
+            return Ok(self.select(cv, x, y));
+        }
         if kind != kiln_ast::types::VectorKind::Ext {
             let m = self.icmp(IntPredicate::Ne, cv, zero);
             return Ok(self.select(m, x, y));
-        }
-        // A bool ext vector condition (clang 20+) is its `<N x i1>` lanes.
-        if self.m.types.vector_info(ct).is_some_and(|(et, _, _)| et == LTy::I1) {
-            return Ok(self.select(cv, x, y));
         }
         let msb = self.icmp(IntPredicate::Slt, cv, zero);
         let mask = self.cast(CastOp::SExt, msb, ct);
@@ -2659,7 +2690,10 @@ impl Cg<'_> {
     fn vec_subscript(&self, e: ExprId) -> Option<(ExprId, ExprId)> {
         let ast = self.ast;
         let [l, r] = ast.exprs.operands(e);
-        if self.vec_of(ast.exprs.get(l).ty()).is_some() {
+        // An SVE vector (sema rejects `svbool_t` and `__SVCount_t`) is
+        // subscripted as a fixed one, its base always on the left.
+        let lt = ast.exprs.get(l).ty();
+        if self.vec_of(lt).is_some() || ast.types.is_sizeless(lt) {
             Some((l, r))
         } else if self.vec_of(ast.exprs.get(r).ty()).is_some() {
             Some((r, l))

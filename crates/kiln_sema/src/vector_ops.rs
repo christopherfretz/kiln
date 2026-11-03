@@ -236,8 +236,16 @@ impl Sema<'_, '_> {
 
     /// `v[i]` on a vector `v` (clang `CreateBuiltinArraySubscriptExpr`):
     /// a prvalue `v` is materialized (CWG1213), the result is the element
-    /// type with `v`'s qualifiers and value category.
+    /// type with `v`'s qualifiers and value category. An SVE vector
+    /// (`isSveVLSBuiltinType`) is subscripted the same way, its element
+    /// `getSveEltType`; `svbool_t` cannot be (`err_subscript_svbool_t`,
+    /// before the index is checked).
     pub(crate) fn vector_subscript(&mut self, base: ExprId, idx: ExprId, loc: Loc) -> ExprId {
+        let sve = self.sve_parts(self.ety(base)).map(|(e, _)| e);
+        if sve == Some(QualType::BOOL) {
+            self.error(DiagId::sema_subscript_svbool, loc);
+            return self.recover_err(&[base, idx], loc);
+        }
         let mut b = base;
         if self.ast.exprs.get(b).value_category() == ValueCategory::PRValue {
             let t = self.ety(b);
@@ -251,8 +259,10 @@ impl Sema<'_, '_> {
         }
         let bt = self.ety(b);
         let top = self.ast.types.desugar_top(bt);
-        let TypeView::Vector { elem, .. } = self.ast.types.view(top.ty()) else {
-            return self.recover_err(&[b, i], loc);
+        let elem = match (self.ast.types.view(top.ty()), sve) {
+            (TypeView::Vector { elem, .. }, _) => elem,
+            (_, Some(e)) => e,
+            _ => return self.recover_err(&[b, i], loc),
         };
         let quals = self.ast.types.effective_quals(bt);
         let ty = QualType::new(elem.ty(), elem.quals_bits() | quals.bits());
@@ -1320,6 +1330,16 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         let parts = self.vector_parts(vt).expect("an ext vector");
         let text = self.ast.symbols().as_str(name).to_owned();
+        if self.is_ext_bool_vector(vt) {
+            // clang `CheckExtVectorComponent`: no element access on a
+            // `bool` ext vector (a lane is one bit, so it has no address),
+            // diagnosed at the name for every accessor; clang 19 quotes
+            // the name twice (spec/sema.md §5.19).
+            let arg = if self.clang_compat >= 22 { text } else { format!("'{text}'") };
+            let d = self.diag(DiagId::sema_ext_vector_component_name_illegal, loc).arg(arg);
+            self.emit(d);
+            return self.recover_err(&[base], loc);
+        }
         let lanes = match kiln_ast::expr::ext_vector_access(&text, parts.count) {
             kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } => lanes,
             kiln_ast::expr::ExtVectorAccess::Illegal(c, at) => {

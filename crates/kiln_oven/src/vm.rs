@@ -6,6 +6,7 @@
 use std::cmp::Ordering;
 
 use kiln_ast::consts::FloatKind;
+use kiln_ast::expr::ExprKind;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
@@ -117,12 +118,32 @@ pub(crate) struct RunState {
     /// usable in constant expressions. Cleared in nested evaluations, a
     /// global's initialization and `__builtin_constant_p`.
     pub cev_warn: bool,
+    /// The evaluation is plainly constant-evaluated
+    /// ([`crate::EvalContext::plain`]): set for the outermost or nested
+    /// evaluation that asked for it, false in every other (nested ones
+    /// included); read through [`crate::Oven::plain`].
+    pub plain: bool,
+    /// The evaluation checks for undefined behaviour
+    /// ([`crate::Oven::fold_for_overflow`]): a signed `+`, `-`, `*` or
+    /// negation that overflows yields its wrapped value and is recorded
+    /// in `overflows`. Cleared in nested evaluations, a global's
+    /// initialization and `__builtin_constant_p`.
+    pub ub_check: bool,
+    /// The overflows recorded under `ub_check`: the instruction's pc and
+    /// the wrapped value, sign-extended.
+    pub overflows: Vec<(u32, i128)>,
+    /// The evaluation is a potential-constant-expression check
+    /// ([`crate::Oven::evaluate_call`], clang's
+    /// `CheckingPotentialConstantExpression`): `-Wconstant-evaluated` is
+    /// not reported, nested evaluations included.
+    pub potential: bool,
 }
 
 impl RunState {
     /// Heap bytes held (see `Oven::footprint`).
     pub(crate) fn footprint(&self) -> usize {
         self.pending.capacity() * size_of::<Pending>()
+            + self.overflows.capacity() * size_of::<(u32, i128)>()
     }
 }
 
@@ -416,6 +437,9 @@ impl Oven {
     /// `std::is_constant_evaluated` (`aux` = 1) called directly by it,
     /// in an evaluation that is always constant.
     fn always_true_diag(&self, b: &mut dyn SemaBridge, pc: usize, aux: u32) {
+        if self.run.potential {
+            return;
+        }
         let depth = self.stack.len() - self.run.entry;
         let (name, at) = match (depth, aux) {
             (1, _) => ("__builtin_is_constant_evaluated", pc),
@@ -603,6 +627,7 @@ impl Oven {
         // The region's `Ret` writes the frame's result slot.
         let slot = self.regs[fb];
         let (silent, fold, cev_warn) = (self.run.silent, self.run.fold, self.run.cev_warn);
+        let ub_check = std::mem::replace(&mut self.run.ub_check, false);
         let lax = (self.run.lax, self.mem.lax);
         self.run.entry = entry;
         self.run.silent = true;
@@ -624,6 +649,7 @@ impl Oven {
         self.run.fold = fold;
         (self.run.lax, self.mem.lax) = lax;
         self.run.cev_warn = cev_warn;
+        self.run.ub_check = ub_check;
         self.run.entry = saved_entry;
         let v = self.regs[fb + val];
         self.regs[fb] = slot;
@@ -753,7 +779,10 @@ impl Oven {
                         aux >> 17 & 1 != 0,
                     ) {
                         Ok(v) => reg!(0) = v,
-                        Err(err) => fail!(Fault::Int { err, op, a, b: bb, aux }),
+                        Err(err) => match self.wrap_overflow(pc, err, op, aux, a, bb) {
+                            Some(v) => reg!(0) = v,
+                            None => fail!(Fault::Int { err, op, a, b: bb, aux }),
+                        },
                     }
                     pc += 4;
                 }
@@ -763,7 +792,10 @@ impl Oven {
                     let signed = aux >> 8 & 1 != 0;
                     match arith::int_bin(Op::ISub, width, signed, 0, a, 0, false) {
                         Ok(v) => reg!(0) = v,
-                        Err(err) => fail!(Fault::Int { err, op, a, b: 0, aux }),
+                        Err(err) => match self.wrap_overflow(pc, err, Op::ISub, aux, 0, a) {
+                            Some(v) => reg!(0) = v,
+                            None => fail!(Fault::Int { err, op, a, b: 0, aux }),
+                        },
                     }
                     pc += 3;
                 }
@@ -1390,10 +1422,21 @@ impl Oven {
                     pc += 5;
                 }
                 Op::IsConstEval => {
-                    let cc = self.run.const_context;
-                    reg!(0) = u128::from(cc);
-                    if cc && (!self.run.silent || self.run.cev_warn) {
-                        self.always_true_diag(b, pc, aux);
+                    if aux & 2 != 0 {
+                        // `__kiln_plainly_constant_evaluated()` (WP-473).
+                        reg!(0) = u128::from(self.plain());
+                    } else if aux & 4 != 0 {
+                        // A constexpr local's initializer: its own
+                        // evaluation, never plainly (spec/consteval-blocks.md §3).
+                        reg!(0) = u128::from(std::mem::take(&mut self.run.plain));
+                    } else if aux & 8 != 0 {
+                        self.run.plain = reg!(0) != 0;
+                    } else {
+                        let cc = self.run.const_context;
+                        reg!(0) = u128::from(cc);
+                        if cc && (!self.run.silent || self.run.cev_warn) {
+                            self.always_true_diag(b, pc, aux);
+                        }
                     }
                     pc += 2;
                 }
@@ -1445,6 +1488,11 @@ impl Oven {
                         let p = Ptr::decode(v);
                         if v == 0 || !p.is_fn() {
                             fail!(Fault::NullCallee);
+                        }
+                        // A function pointer a fold cast (`Op::Cce`): clang
+                        // calls none whose type differs from the callee's.
+                        if Ptr::is_nowhere(v) && !self.cast_callee_matches(b, pc, p.off) {
+                            fail!(Fault::Invalid);
                         }
                         p.off
                     };
@@ -1704,8 +1752,9 @@ impl Oven {
         if memo {
             // A call's result can depend on the evaluation context
             // (`__builtin_is_constant_evaluated` in a callee): the context
-            // is part of the key.
-            let func = callee | u32::from(self.run.const_context) << 31;
+            // is part of the key, with the plain bit (consteval blocks).
+            let func =
+                callee | u32::from(self.run.const_context) << 31 | u32::from(self.plain()) << 30;
             let mut key = MemoKey { func, args: [0; MAX_ARGS] };
             for (i, p) in f.params.iter().enumerate() {
                 key.args[i] = self.regs[nb + p.reg as usize];
@@ -1761,6 +1810,38 @@ impl Oven {
             serial,
         });
         Ok(Some((entry, nb)))
+    }
+
+    /// Under `RunState::ub_check`, the wrapped result of a signed `+`,
+    /// `-` or `*` (`op`; a negation is `0 - a`) that overflowed (`err`),
+    /// recorded; `None` otherwise (the evaluation fails).
+    #[cold]
+    #[inline(never)]
+    fn wrap_overflow(
+        &mut self,
+        pc: usize,
+        err: IntErr,
+        op: Op,
+        aux: u32,
+        a: u128,
+        b: u128,
+    ) -> Option<u128> {
+        let width = aux & 0xFF;
+        if !self.run.ub_check
+            || err != IntErr::Overflow
+            || aux >> 8 & 1 == 0
+            || !matches!(op, Op::IAdd | Op::ISub | Op::IMul)
+        {
+            return None;
+        }
+        let r = match op {
+            Op::IAdd => a.wrapping_add(b),
+            Op::ISub => a.wrapping_sub(b),
+            _ => a.wrapping_mul(b),
+        };
+        let v = canon(r, width, true);
+        self.run.overflows.push((pc as u32, v as i128));
+        Some(v)
     }
 
     fn finish_memo(&mut self, result: u128) {
@@ -1928,6 +2009,35 @@ impl Oven {
         Ok(ip as i64 - iq as i64)
     }
 
+    /// Whether function `f`, called through a function pointer a fold
+    /// cast (`Op::Cce`) by the indirect call at `pc`, has the type the
+    /// call names, ignoring the exception specification (clang
+    /// `EvaluateCall`'s `hasSameFunctionTypeIgnoringExceptionSpec`): a
+    /// pointer cast back to its function's type calls it (spec/oven.md
+    /// "Pointers that point at nothing").
+    #[cold]
+    fn cast_callee_matches(&self, b: &dyn SemaBridge, pc: usize, f: u32) -> bool {
+        let ast = b.ast();
+        let Some(e) = self.site(pc).e.filter(|&e| ast.exprs.get(e).kind() == ExprKind::CallExpr)
+        else {
+            return false;
+        };
+        let Some(d) = self.funcs.get(f as usize).and_then(|x| x.decl) else { return false };
+        let callee = ast.exprs.get(ast.exprs.callee(e)).ty();
+        let Some(want) = ast.types.pointee(callee) else { return false };
+        let Some(have) = ast.decls.get(d).ty() else { return false };
+        let t = &ast.types;
+        match (t.proto(want), t.proto(have)) {
+            (Some(w), Some(h)) => {
+                t.same_type(w.ret(), h.ret())
+                    && w.variadic() == h.variadic()
+                    && t.params(w).len() == t.params(h).len()
+                    && t.params(w).iter().zip(t.params(h)).all(|(&x, &y)| t.same_type(x, y))
+            }
+            _ => false,
+        }
+    }
+
     /// The conversion `aux` (`kbc::cce`) of register value `v` by a cast
     /// a fold continues past (`Op::Cce`; clang's invalid designator); the
     /// result is not memoized. `None` fails the fold.
@@ -2006,7 +2116,7 @@ impl Oven {
         }
         let Some(ce) = self.site(f.call_pc as usize).e else { return e };
         let ast = b.ast();
-        if ast.exprs.get(ce).kind() == kiln_ast::expr::ExprKind::CXXMemberCallExpr
+        if ast.exprs.get(ce).kind() == ExprKind::CXXMemberCallExpr
             && let Some(&m) = ast.exprs.children(ce, &ast.lists).first()
         {
             return m;

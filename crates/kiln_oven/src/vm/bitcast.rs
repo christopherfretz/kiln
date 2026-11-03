@@ -97,6 +97,11 @@ impl Oven {
         if read_only {
             return Ok(0);
         }
+        let nd = self.types.size(td);
+        let bool_vec = |t| matches!(self.types.kind(t), TyKind::BoolVec { .. });
+        if nd < n && bool_vec(ts) && bool_vec(td) {
+            return self.gnu_bool_vec_cast(ast, ss, sa, ts, dst, td);
+        }
         if self.dense(ts, true) && self.dense(td, false) && self.mem.space(ss).is_init(sa, n) {
             if !to_mem {
                 let v = self.mem.space(ss).read(sa, n);
@@ -125,6 +130,38 @@ impl Oven {
         let sp = self.mem.space_mut(ds);
         sp.set_init(da, n, false);
         sp.set_ptr(da, n, false);
+        self.write_obj(ast, ds, da, &buf, td, 0)
+    }
+
+    /// clang 19's `CK_BitCast` of a widening `__builtin_shufflevector`
+    /// of `bool` ext vectors (the only cast whose destination is smaller
+    /// than its source): the result is a GNU vector of `bool`, which
+    /// clang 19's `BitCastBuffer` writes a byte per lane, and the packed
+    /// ext vector `td` is read from the first of those bytes, so lane `k`
+    /// of `td` is lane `k / 8` of the source when `k % 8 == 0`, else
+    /// false (spec/oven.md "Bool vectors"). kiln's `ts` is packed.
+    fn gnu_bool_vec_cast(
+        &mut self,
+        ast: &Ast,
+        ss: Sp,
+        sa: u64,
+        ts: OTy,
+        dst: u64,
+        td: OTy,
+    ) -> Result<u128, Fault> {
+        let nd = self.types.size(td);
+        let n = self.types.size(ts);
+        let mut src = Buf { bytes: vec![0; n as usize], def: vec![false; n as usize] };
+        self.read_obj(ss, sa, ts, 0, &mut src);
+        let mut buf = Buf { bytes: vec![0; nd as usize], def: vec![false; nd as usize] };
+        for j in 0..nd as usize {
+            buf.bytes[j] = (src.bytes[j / 8] >> (j % 8)) & 1;
+            buf.def[j] = src.def[j / 8];
+        }
+        let (ds, da) = self.dest(dst, nd, td)?;
+        let sp = self.mem.space_mut(ds);
+        sp.set_init(da, nd, false);
+        sp.set_ptr(da, nd, false);
         self.write_obj(ast, ds, da, &buf, td, 0)
     }
 

@@ -1164,6 +1164,9 @@ impl Sema<'_, '_> {
         if self.suppressed_by_explicit_inst_declaration(f, pattern) {
             return;
         }
+        // clang `InstantiateFunctionDefinition`: the function is located
+        // at the definition it is instantiated from from now on.
+        self.builder().relocate_to_pattern_definition(f, pdef);
         if self.is_function_spec(f) {
             // A function template specialization (WP-071, §4.4).
             self.instantiate_function_spec_definition(f, pdef, body, poi);
@@ -1245,7 +1248,11 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::MemberFunction, f, pattern, poi) {
             return;
         }
-        // The definition's context note is at the pattern's definition.
+        // The function, the diagnostics of its definition and the
+        // definition's context note are at the pattern's out-of-line
+        // `= default` definition (clang `InstantiateFunctionDefinition`
+        // relocates it there first).
+        self.builder().relocate_to_pattern_definition(f, def);
         let at = self.ast.decls.get(def).loc();
         self.define_implicit_special(f, kind, at);
         self.pop_inst_frame();
@@ -1768,6 +1775,18 @@ impl Substituter<'_, '_, '_> {
         self.class_attrs(spec, def);
     }
 
+    /// Instantiates member `m` of a class template (`templ`; not a local
+    /// class) if it is a `static_assert` or a consteval block (`kind`):
+    /// whether it failed; `None` for any other member.
+    fn assert_like_failed(&mut self, m: DeclId, kind: DeclKind, templ: bool) -> Option<bool> {
+        let r = match kind {
+            DeclKind::StaticAssert if templ => self.static_assert_decl(m),
+            DeclKind::ConstevalBlock if templ => self.consteval_block_decl(m),
+            _ => return None,
+        };
+        Some(matches!(r, Ok((_, true))))
+    }
+
     /// [`Substituter::class_body`]; `anonymous` for an anonymous struct
     /// or union (its `}` is followed by `;`).
     pub(crate) fn class_body_with(
@@ -1827,11 +1846,11 @@ impl Substituter<'_, '_, '_> {
                 // Injected by its anonymous struct or union.
                 continue;
             }
-            // clang `InstantiateClass`: a failed static_assert makes the
-            // specialization invalid and stops its instantiation (the
-            // later members are not declared).
-            if n.kind() == DeclKind::StaticAssert && local.is_none() {
-                if matches!(sub.static_assert_decl(m), Ok((_, true))) {
+            // clang `InstantiateClass`: a failed static_assert (or consteval
+            // block) makes the specialization invalid and stops its
+            // instantiation (the later members are not declared).
+            if let Some(failed) = sub.assert_like_failed(m, n.kind(), local.is_none()) {
+                if failed {
                     invalid = true;
                     break;
                 }
@@ -2070,6 +2089,10 @@ impl Substituter<'_, '_, '_> {
             DeclKind::Typedef | DeclKind::TypeAlias => self.typedef_decl(m)?,
             DeclKind::StaticAssert => {
                 self.static_assert_decl(m)?;
+                return Ok(None);
+            }
+            DeclKind::ConstevalBlock => {
+                self.consteval_block_decl(m)?;
                 return Ok(None);
             }
             DeclKind::Enum => self.enum_decl(m)?,

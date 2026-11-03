@@ -1118,6 +1118,10 @@ impl Parser<'_, '_> {
                 self.parse_static_assert();
                 true
             }
+            _ if self.at_consteval_block() => {
+                self.parse_consteval_block();
+                true
+            }
             (_, Some(Kw::Using)) => {
                 self.parse_using();
                 true
@@ -1126,7 +1130,7 @@ impl Parser<'_, '_> {
                 self.parse_attributed_using();
                 true
             }
-            (_, Some(Kw::Template)) => {
+            (_, Some(Kw::Template)) if !self.peek_is(1, Punct::SpliceOpen) => {
                 self.parse_template_declaration(DeclaratorContext::Member);
                 self.s.act_on_end_abbreviated();
                 true
@@ -1608,6 +1612,17 @@ impl Parser<'_, '_> {
             self.push_late(LateItem::Method { f, parts });
         }
         if self.at(Punct::Equal) {
+            // clang `ParseCXXInlineMethodDef`: an in-class `= default` /
+            // `= delete` definition ends at the last character of the
+            // keyword (`setRangeEnd(KWEndLoc)`), where an implicit
+            // assignment body is located.
+            let kw = self.peek(1).span;
+            let end = if kw.lo.is_file() && kw.hi.to_raw() > kw.lo.to_raw() {
+                kw.lo.with_offset(kw.hi.to_raw() - kw.lo.to_raw() - 1)
+            } else {
+                d.end
+            };
+            self.record_fn_end(target, end);
             self.parse_defaulted_or_deleted(target);
             return;
         }

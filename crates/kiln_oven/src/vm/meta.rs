@@ -53,8 +53,10 @@ impl Oven {
             }
         }
         let trial = self.run.fold || self.mem.in_trial();
+        // The function whose body holds the call (thunks have none).
+        let scope = self.stack.last().and_then(|f| self.funcs[f.func as usize].decl);
         let ctx =
-            MetaCtx { scope: None, loc: self.site(pc).loc, plainly: false, trial, elem: OTy(t1) };
+            MetaCtx { scope, loc: self.site(pc).loc, plainly: self.plain(), trial, elem: OTy(t1) };
         match op.purity() {
             Purity::Stable => {}
             Purity::PointDependent => self.run.impure += 1,
@@ -86,6 +88,12 @@ impl Oven {
                 }
                 MetaErrorKind::NotImplemented { .. } => self.meta_trap(e.notes),
             });
+        }
+        if op.purity() == Purity::Mutating {
+            // `define_aggregate` completed a class: its provisional slot
+            // is rebuilt now, so the rest of this evaluation sees it
+            // complete (spec/reflection.md §6.2; O(1) when nothing did).
+            self.types.refresh(b);
         }
         let cur = self.stack[self.stack.len() - 1].func;
         let top = fb + self.funcs[cur as usize].nregs as usize + 1;
@@ -170,6 +178,31 @@ impl Oven {
             q = self.ptr_add(q, 1, ct).map_err(fault)?;
         }
         Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// Element `i` of the `std::meta::info` array at `p` (the pointer
+    /// argument of a `(const info*, size_t)` range intrinsic, so `ctx.elem`
+    /// is `info`; spec/reflection-traits.md §1.3). Reads Oven memory in
+    /// place: no copy of the range is made.
+    ///
+    /// # Errors
+    /// [`MetaError::invalid`] if the pointer's element type is not `info`
+    /// or the element holds no reflection; the evaluator's fault reading
+    /// it (out of bounds, uninitialized).
+    pub fn meta_info_at(
+        &self,
+        p: u128,
+        i: u64,
+        ctx: &MetaCtx,
+    ) -> Result<kiln_ast::ReflectionId, MetaError> {
+        let fault = |f| MetaError { notes: Vec::new(), kind: MetaErrorKind::Fault(OvenFault(f)) };
+        let ct = ctx.elem;
+        if self.types.kind(ct) != crate::ty::TyKind::Reflection {
+            return Err(MetaError::invalid());
+        }
+        let q = self.ptr_add(p as u64, i128::from(i), ct).map_err(fault)?;
+        let v = self.load(q, ct, ak::READ).map_err(fault)?;
+        kiln_ast::ReflectionId::from_bits(v).ok_or_else(MetaError::invalid)
     }
 
     /// The fault reporting a bridge failure: its first note is the

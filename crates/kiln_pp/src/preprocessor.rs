@@ -301,6 +301,10 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) embed_bufs: HashSet<FileId>,
     /// Attribute-macro definition history (see [`crate::AttrMacro`]).
     pub(crate) attr_macros: Vec<crate::AttrMacro>,
+    /// Index into `attr_macros` of each macro whose attribute-macro
+    /// definition is in effect (its `end` is invalid), so a `#define` or
+    /// `#undef` finds it in O(1) instead of scanning the history (WP-487).
+    pub(crate) attr_live: SymMap<usize>,
     pub(crate) attr_macro_gen: u32,
     /// clang's `CommentHandler` ([`Preprocessor::set_comment_handler`]).
     pub(crate) comment_handler: Option<Box<dyn FnMut(Span) + 'd>>,
@@ -380,6 +384,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             diag_pushes: 0,
             embed_bufs: HashSet::new(),
             attr_macros: Vec::new(),
+            attr_live: SymMap::default(),
             attr_macro_gen: 0,
             comment_handler: None,
             modules: None,

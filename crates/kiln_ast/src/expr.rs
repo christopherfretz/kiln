@@ -1322,6 +1322,10 @@ pub struct ColdExprData {
     /// designator as written, rebuilt at instantiation (clang keeps its
     /// `OffsetOfNode`s; spec/sema.md §5.8).
     pub offsetof_pattern: ColdMap<ExprId, (QualType, Box<[OffsetofComponent]>)>,
+    /// A dependent `CXXSpliceExpr` written as a template-id,
+    /// `template [: r :] < args >` (P2996 [expr.prim.splice]): the
+    /// template arguments as written.
+    pub splice_args: ColdMap<ExprId, ArgListId>,
 }
 
 /// The predefined identifier a `PredefinedExpr` names ([dcl.fct.def.general]/8
@@ -1446,6 +1450,7 @@ impl Default for ColdExprData {
             union_field: ColdMap::new("union_field"),
             cast_written: ColdMap::new("cast_written"),
             offsetof_pattern: ColdMap::new("offsetof_pattern"),
+            splice_args: ColdMap::new("splice_args"),
         }
     }
 }
@@ -2311,6 +2316,25 @@ impl ExprArena {
         crate::ids::ReflectionId::try_new(n.b)
     }
 
+    /// The operand of a `CXXSpliceExpr`.
+    pub fn splice_operand(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::CXXSpliceExpr).a)
+    }
+
+    /// The template arguments of a `CXXSpliceExpr` written as a
+    /// template-id (`template [: r :] < args >`); `None` otherwise.
+    pub fn splice_template_args(&self, e: ExprId) -> Option<ArgListId> {
+        self.expect_kind(e, ExprKind::CXXSpliceExpr);
+        self.cold.splice_args.get(e).copied()
+    }
+
+    /// The object expression of a member `CXXSpliceExpr` and whether it
+    /// was written with `->`; `None` for an expression splice.
+    pub fn splice_base(&self, e: ExprId) -> Option<(ExprId, bool)> {
+        let n = self.expect_kind(e, ExprKind::CXXSpliceExpr);
+        ExprId::try_new(n.b).map(|b| (b, n.aux & 1 != 0))
+    }
+
     /// The queried type of an `ArrayTypeTraitExpr`.
     pub fn array_trait_type(&self, e: ExprId) -> QualType {
         QualType::from_raw(self.expect_kind(e, ExprKind::ArrayTypeTraitExpr).a)
@@ -2621,9 +2645,16 @@ impl ExprArena {
     /// `CXXDefaultInitExpr` and the default argument of a
     /// `CXXDefaultArgExpr`.
     pub fn children(&self, e: ExprId, lists: &IdLists) -> Vec<ExprId> {
+        let mut v = Vec::new();
+        self.children_into(e, lists, &mut v);
+        v
+    }
+
+    /// [`ExprArena::children`], appended to `v` (no allocation once `v`
+    /// has grown: the CFG builder's walk, spec/sema.md §7.5).
+    pub fn children_into(&self, e: ExprId, lists: &IdLists, v: &mut Vec<ExprId>) {
         let n = self.get(e);
         let id = |w: u32| ExprId::from_raw(w);
-        let mut v = Vec::new();
         match n.kind {
             ExprKind::MemberExpr
             | ExprKind::UnaryOperator
@@ -2650,6 +2681,7 @@ impl ExprArena {
                 v.extend(id(n.b));
             }
             ExprKind::SubstNonTypeTemplateParmExpr => v.extend(id(n.b)),
+            ExprKind::CXXSpliceExpr => v.extend([n.b, n.a].into_iter().filter_map(id)),
             k if k.is_cast() => v.extend(id(n.a)),
             ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
                 v.extend(id(n.a));
@@ -2712,7 +2744,7 @@ impl ExprArena {
             ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)).take(5));
             }
-            ExprKind::PseudoObjectExpr => self.pseudo_children(n, lists, &mut v),
+            ExprKind::PseudoObjectExpr => self.pseudo_children(n, lists, v),
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
             | ExprKind::AtomicExpr
@@ -2723,7 +2755,6 @@ impl ExprArena {
             }
             _ => {}
         }
-        v
     }
 
     pub(crate) fn live_bytes(&self) -> u64 {
@@ -2759,6 +2790,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.union_field.mem_row().prefixed("cold"));
         r.push(self.cold.cast_written.mem_row().prefixed("cold"));
         r.push(self.cold.offsetof_pattern.mem_row().prefixed("cold"));
+        r.push(self.cold.splice_args.mem_row().prefixed("cold"));
         r
     }
 }

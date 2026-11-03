@@ -61,13 +61,18 @@ use kiln_diag::Diag;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
-pub use failure::{EvalFailure, FailKind, Note};
+pub use failure::{EvalFailure, FailKind, Note, Overflow};
 pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
+pub use meta::member_cache::{
+    CachedList, MemberCache, MemberEntry, MemberList, filter_members, member_kind,
+};
 pub use meta::{
-    AccessOp, AnnotOp, DefineOp, ExtOp, MAX_META_ARGS, MemberOp, MetaCtx, MetaError, MetaErrorKind,
-    MetaOp, MetaOut, OvenFault, Purity, QueryOp, TemplOp, TraitOp, ValueOp, info_arg,
+    AccessOp, AnnotOp, DefineOp, Dms, ExtOp, MAX_META_ARGS, MemberOp, MetaCtx, MetaError,
+    MetaErrorKind, MetaOp, MetaOut, OptionsPlan, OvenFault, Purity, QueryOp, RawOptions, TemplOp,
+    TraitOp, ValueOp, info_arg,
 };
 pub use stats::{EvalRecord, EvalStats, EvalTotals};
+pub use value::automatic_referent;
 
 use compile::{Func, Global, Site, TrapInfo};
 use mem::Memory;
@@ -113,6 +118,9 @@ pub enum EvalKind {
     Constraint,
     /// Array bounds, enumerator values, `case` labels, bit-field widths, ...
     Other,
+    /// The evaluation of a consteval block ([dcl.pre], P3289R1): the one
+    /// plainly constant-evaluated context (spec/consteval-blocks.md §3).
+    ConstevalBlock,
 }
 
 impl EvalKind {
@@ -126,6 +134,7 @@ impl EvalKind {
             EvalKind::IfConstexpr => "if_constexpr",
             EvalKind::Constraint => "constraint",
             EvalKind::Other => "other",
+            EvalKind::ConstevalBlock => "consteval_block",
         }
     }
 }
@@ -151,6 +160,12 @@ pub struct EvalContext {
     /// conditions — not integral constant expressions (`static_assert`,
     /// array bounds, bit-field widths) or other initializers.
     pub enum_range_check: bool,
+    /// Whether the evaluation is plainly constant-evaluated: the
+    /// corresponding expression of a consteval-block-declaration
+    /// ([expr.const.core]/2.32, P3289R1), the only context in which an
+    /// injected declaration may be produced (spec/consteval-blocks.md §3).
+    /// Not inherited by nested evaluations ([`Oven::plain`]).
+    pub plain: bool,
 }
 
 impl EvalContext {
@@ -165,14 +180,20 @@ impl EvalContext {
                 | EvalKind::IfConstexpr
                 | EvalKind::Constraint
         );
-        EvalContext { kind, loc, object: None, enum_range_check }
+        EvalContext { kind, loc, object: None, enum_range_check, plain: false }
     }
 
     /// The initializer of the `constexpr` variable `var` (enumeration
     /// ranges are checked; clear [`EvalContext::enum_range_check`] for a
     /// `constinit` variable that is not `constexpr`).
     pub fn init(var: DeclId, loc: Loc) -> Self {
-        EvalContext { kind: EvalKind::Init, loc, object: Some(var), enum_range_check: true }
+        EvalContext {
+            kind: EvalKind::Init,
+            loc,
+            object: Some(var),
+            enum_range_check: true,
+            plain: false,
+        }
     }
 
     /// A converted constant expression ([expr.const]/12) that is not a
@@ -180,7 +201,25 @@ impl EvalContext {
     /// with a fixed underlying type): reported as [`EvalKind::Other`],
     /// with enumeration ranges checked.
     pub fn converted(loc: Loc) -> Self {
-        EvalContext { kind: EvalKind::Other, loc, object: None, enum_range_check: true }
+        EvalContext {
+            kind: EvalKind::Other,
+            loc,
+            object: None,
+            enum_range_check: true,
+            plain: false,
+        }
+    }
+
+    /// The evaluation of the consteval block at `loc`: plainly
+    /// constant-evaluated ([`EvalContext::plain`]).
+    pub fn consteval_block(loc: Loc) -> Self {
+        EvalContext {
+            kind: EvalKind::ConstevalBlock,
+            loc,
+            object: None,
+            enum_range_check: true,
+            plain: true,
+        }
     }
 
     /// `self` with [`EvalContext::enum_range_check`] set to `on`.
@@ -369,15 +408,44 @@ enum Job {
     /// ([`Oven::evaluate_with_params`]; the bindings in `subst_binds`):
     /// `at` locates it.
     Subst { cond: Option<ExprId>, at: ExprId },
+    /// A call of function `f` without arguments at `at`
+    /// ([`Oven::evaluate_call`]).
+    Call { f: DeclId, at: Loc },
 }
 
 impl Job {
-    /// The expression located in a depth-limit failure.
-    fn expr(self) -> ExprId {
+    /// The location of a depth-limit failure.
+    fn loc(self, ast: &Ast) -> Loc {
         match self {
-            Job::Expr(e) | Job::Chars { size: e, .. } | Job::Subst { at: e, .. } => e,
+            Job::Expr(e) | Job::Chars { size: e, .. } | Job::Subst { at: e, .. } => {
+                ast.exprs.get(e).loc()
+            }
+            Job::Call { at, .. } => at,
         }
     }
+}
+
+/// The [`Oven::ctor_steps`] tag of a virtual-base stage (WP-465).
+pub(crate) const CTOR_STEP_VBASE: u32 = 1 << 31;
+/// The [`Oven::ctor_steps`] tag of an element of the member being
+/// list-initialized: the low bits are the member's entry, [`CtorStep::off`]
+/// and [`CtorStep::len`] the element's bytes (WP-465).
+pub(crate) const CTOR_STEP_ELEM: u32 = 1 << 30;
+/// With [`CTOR_STEP_ELEM`]: the element is of class type, its subobjects
+/// are left to the frames above.
+pub(crate) const CTOR_STEP_RECORD: u32 = 1 << 29;
+
+/// One construction step of a constructor ([`Oven::ctor_steps`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CtorStep {
+    /// The first instruction of the step.
+    pub(crate) pc: u32,
+    /// The entry being initialized, with its `CTOR_STEP_*` tags.
+    pub(crate) cur: u32,
+    /// An element step's offset from `this`.
+    pub(crate) off: u32,
+    /// An element step's size.
+    pub(crate) len: u32,
 }
 
 /// The constant evaluator of one translation unit.
@@ -395,6 +463,15 @@ pub struct Oven {
     /// The next outermost or nested evaluation reports
     /// `-Wconstant-evaluated` though silent ([`Oven::warn_constant_evaluated`]).
     cev_warn_next: bool,
+    /// The next outermost evaluation checks for undefined behaviour
+    /// ([`Oven::fold_for_overflow`]).
+    ub_check_next: bool,
+    /// The next outermost evaluation is [`Oven::evaluate_call`]'s
+    /// (`vm::Run::potential`).
+    potential_next: bool,
+    /// The next outermost or nested evaluation is plainly
+    /// constant-evaluated ([`EvalContext::plain`], [`Oven::plain`]).
+    plain_next: bool,
     pub(crate) types: Types,
     pub(crate) code: Vec<u32>,
     pub(crate) sites: Vec<Site>,
@@ -410,9 +487,15 @@ pub struct Oven {
     /// function index) that initializes subobjects: `(pc, i)` pairs in
     /// code order, from `pc` on entries `..i` of the class's
     /// `fields` have begun their lifetime, entry `i` is being
-    /// initialized (`u32::MAX`: all have begun). Read only by
-    /// `__builtin_is_within_lifetime` (spec/oven.md "Builtins").
-    pub(crate) ctor_steps: FxHashMap<u32, Box<[(u32, u32)]>>,
+    /// initialized (`u32::MAX`: all have begun). In a complete-object
+    /// constructor, `CTOR_STEP_VBASE | j` first: virtual base `j` (entry
+    /// `vbase_start + j`) is being initialized, the earlier ones have
+    /// begun, no non-virtual entry has. Read only by
+    /// `__builtin_is_within_lifetime` (spec/oven.md "Builtins"). While a
+    /// member is list-initialized, `CTOR_STEP_ELEM` steps name the element
+    /// being initialized: the bytes before it have begun, it and those
+    /// after it have not, an aggregate holding it has.
+    pub(crate) ctor_steps: FxHashMap<u32, Box<[CtorStep]>>,
     pub(crate) thunks: FxHashMap<ExprId, u32>,
     /// Thunks compiled inside a default argument use (the key's second
     /// half, [`Oven::fold_immediate_in`]): their source-location builtins
@@ -472,6 +555,8 @@ pub struct Oven {
     inner: Inner,
     /// Reflection call sites and materialization state (spec/reflection.md §3.5).
     pub(crate) meta: meta::materialize::MetaState,
+    /// The data member descriptions of the translation unit (§6.1).
+    pub(crate) dms: meta::define::DmsTable,
 }
 
 /// The inclusive cost of the nested evaluations run so far by the running
@@ -493,6 +578,9 @@ impl Oven {
             clang_compat: 22,
             cxx_year: 2026,
             cev_warn_next: false,
+            ub_check_next: false,
+            potential_next: false,
+            plain_next: false,
             types: Types::default(),
             code: Vec::new(),
             sites: Vec::new(),
@@ -532,6 +620,7 @@ impl Oven {
             ctx_depth: 0,
             inner: Inner::default(),
             meta: meta::materialize::MetaState::default(),
+            dms: meta::define::DmsTable::default(),
         }
     }
 
@@ -590,9 +679,37 @@ impl Oven {
         self.backtrace_limit
     }
 
+    /// Whether the running evaluation is plainly constant-evaluated
+    /// (spec/consteval-blocks.md §3): its context asked for it
+    /// ([`EvalContext::plain`]) and it is not a fold or a speculative
+    /// trial (`__builtin_constant_p`'s operand, [`Oven::try_fold`],
+    /// codegen's folds). The gate of every injecting operation.
+    pub fn plain(&self) -> bool {
+        self.run.plain && !self.run.fold && !self.mem.in_trial()
+    }
+
     /// The limits.
     pub fn budget(&self) -> Budget {
         self.budget
+    }
+
+    /// Opens a transactional trial (spec/oven.md "Trial evaluation",
+    /// `TrialMode::Transactional`) around bridge work that may evaluate
+    /// nested constants (`std::meta::can_substitute`): every effect is
+    /// allowed; [`Oven::trial_end`] keeps or undoes them. O(1).
+    pub fn trial_begin(&mut self) {
+        self.mem.checkpoint(mem::TrialMode::Transactional);
+    }
+
+    /// Closes the innermost trial [`Oven::trial_begin`] opened: `keep`
+    /// commits its effects, else they are rolled back (statics and
+    /// interned values made since are kept).
+    pub fn trial_end(&mut self, keep: bool) {
+        if keep {
+            self.mem.commit();
+        } else {
+            self.mem.rollback(&self.types);
+        }
     }
 
     /// Evaluates the constant expression `e` (a manifestly
@@ -603,7 +720,9 @@ impl Oven {
         e: ExprId,
         ctx: EvalContext,
     ) -> Result<ConstValueId, EvalFailure> {
+        self.plain_next = ctx.plain;
         let (r, c) = self.eval_ctx(bridge, e, ctx.object, false, ctx.enum_range_check, true);
+        self.plain_next = false;
         self.stats.push(EvalRecord {
             loc: ctx.loc,
             kind: ctx.kind,
@@ -684,6 +803,33 @@ impl Oven {
         r
     }
 
+    /// Evaluates a call of function `f` without arguments at `at`, with
+    /// its notes, manifestly constant-evaluated (as clang's
+    /// `Expr::isPotentialConstantExpr` runs the body of a `constexpr`
+    /// function without parameters; spec/oven.md "Evaluation entry
+    /// points"): the failure if it is not a constant expression, its last
+    /// note the call's "in call to". A function with parameters, or
+    /// returning a reference or an aggregate, is not evaluated (`Ok`).
+    /// Not recorded in the statistics; outside an outermost evaluation,
+    /// `Ok`.
+    pub fn evaluate_call(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        f: DeclId,
+        at: Loc,
+    ) -> Result<(), EvalFailure> {
+        if self.ctx_depth != 0 {
+            return Ok(());
+        }
+        self.potential_next = true;
+        let r = self.eval_job(bridge, Job::Call { f, at }, None, false, false, true).0;
+        self.potential_next = false;
+        match r {
+            Err(e) if e.notes.is_empty() => Ok(()),
+            r => r.map(|_| ()),
+        }
+    }
+
     /// Folds `e` if it is a constant expression; never reports anything
     /// and is not recorded in the statistics. The evaluation is a trial,
     /// not manifestly constant-evaluated: `__builtin_is_constant_evaluated()`
@@ -708,6 +854,42 @@ impl Oven {
         self.run.lax = false;
         self.mem.lax = false;
         r
+    }
+
+    /// clang's `Expr::EvaluateForOverflow` of `e` (`EM_IgnoreSideEffects`
+    /// with `CheckingForUndefinedBehavior`), as [`Oven::fold_rvalue`]:
+    /// a signed integer `+`, `-`, `*` (compound assignments included),
+    /// unary `-`, `++` or `--` whose result is outside its type does not
+    /// fail the evaluation, which goes on with the value wrapped to the
+    /// type; each one is returned, in evaluation order, with the value.
+    /// Calls are entered, so an overflow in a `constexpr` function's body
+    /// is found. Nested evaluations, global initializations and
+    /// `__builtin_constant_p` check nothing. Silent and not recorded.
+    /// Outside an outermost evaluation, a plain [`Oven::try_fold`].
+    pub fn fold_for_overflow(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+    ) -> (Option<ConstValueId>, Vec<Overflow>) {
+        if self.ctx_depth != 0 {
+            return (self.try_fold(bridge, e), Vec::new());
+        }
+        self.run.lax = true;
+        self.mem.lax = true;
+        self.ub_check_next = true;
+        let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
+        self.ub_check_next = false;
+        self.run.lax = false;
+        self.mem.lax = false;
+        self.run.ub_check = false;
+        let found = std::mem::take(&mut self.run.overflows)
+            .into_iter()
+            .map(|(pc, value)| {
+                let site = self.site(pc as usize);
+                Overflow { loc: site.loc, e: site.e, value }
+            })
+            .collect();
+        (r, found)
     }
 
     /// Evaluates immediate invocation `e` ([expr.const]/16; manifestly
@@ -850,6 +1032,7 @@ impl Oven {
             + self.memo.footprint()
             + self.run.footprint()
             + self.scratch.footprint()
+            + self.dms.footprint()
             + self.mp.footprint()
             + self.virt.footprint()
     }
@@ -931,6 +1114,7 @@ impl Oven {
             Job::Expr(e) => self.eval_inner(b, e, object, fb),
             Job::Chars { size, data } => self.eval_chars(b, size, data, fb),
             Job::Subst { cond, at } => self.eval_subst(b, cond, at, fb),
+            Job::Call { f, at } => self.eval_call(b, f, at, fb),
         }
     }
 
@@ -962,6 +1146,10 @@ impl Oven {
         self.run.const_context = const_context;
         self.run.fold = silent && !const_context;
         self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
+        self.run.ub_check = std::mem::take(&mut self.ub_check_next);
+        self.run.potential = std::mem::take(&mut self.potential_next);
+        self.run.overflows.clear();
+        self.run.plain = std::mem::take(&mut self.plain_next);
         self.run.counters = vm::Counters::default();
         self.run.nesting = 0;
         self.run.depth_base = 0;
@@ -977,6 +1165,7 @@ impl Oven {
     /// are reset.
     fn end_outermost(&mut self) -> vm::Counters {
         self.ctx_depth = 0;
+        self.run.plain = false;
         let mut c = self.run.counters;
         c.bytes = self.mem.allocated;
         c.peak = self.mem.peak;
@@ -1011,7 +1200,7 @@ impl Oven {
             let notes = if silent {
                 Vec::new()
             } else {
-                let loc = bridge.ast().exprs.get(e.expr()).loc();
+                let loc = e.loc(bridge.ast());
                 vec![Note::new(
                     loc,
                     format!(
@@ -1029,10 +1218,12 @@ impl Oven {
             self.run.const_context,
             self.run.fold,
             self.run.cev_warn,
+            self.run.plain,
             self.run.counters,
             self.run.object,
             self.run.maxd,
             self.run.depth_base,
+            self.run.ub_check,
         );
         let mem = (
             self.mem.allocated,
@@ -1060,6 +1251,8 @@ impl Oven {
         self.run.const_context = const_context;
         self.run.fold = silent && !const_context;
         self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
+        self.run.plain = std::mem::take(&mut self.plain_next);
+        self.run.ub_check = false;
         self.run.counters = vm::Counters { steps: steps0, ..vm::Counters::default() };
         self.run.maxd = 0;
         self.run.depth_base = depth_base;
@@ -1089,10 +1282,12 @@ impl Oven {
             self.run.const_context,
             self.run.fold,
             self.run.cev_warn,
+            self.run.plain,
             counters,
             self.run.object,
             self.run.maxd,
             self.run.depth_base,
+            self.run.ub_check,
         ) = run;
         self.run.counters = vm::Counters { steps: steps1, ..counters };
         (

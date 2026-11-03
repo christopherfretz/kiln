@@ -418,6 +418,7 @@ impl Cg<'_> {
         }
         let Some(id) = l.md else { return };
         let mut cur = l.attrs;
+        let compat19 = self.opts.clang_compat < 22;
         let mut b = MdBuilder {
             m: &mut self.m,
             inner_followup: l.inner_followup.as_deref(),
@@ -469,7 +470,19 @@ impl Cg<'_> {
                 let mut has = false;
                 let inner = b.create(&after, before_props, &mut has);
                 if has {
-                    p.inner_followup = Some(inner);
+                    // clang 19 made the after-jam properties a distinct
+                    // self-referential node of their own (its
+                    // `UnrollAndJamInnerFollowup` was a loop id); clang 22
+                    // lists them in `followup_inner` itself.
+                    p.inner_followup = Some(if compat19 {
+                        let n = b.m.md_distinct_tuple(&[None]);
+                        let ops: Vec<_> =
+                            std::iter::once(Some(n)).chain(inner.into_iter().map(Some)).collect();
+                        b.m.md_set_operands(n, &ops).expect("distinct followup node");
+                        vec![n]
+                    } else {
+                        inner
+                    });
                 }
             }
             cur = before;

@@ -60,6 +60,7 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId, compat: u32) -> bool {
     // not are emitted as clang emits them.
     builtin_callee(ast, e).is_some_and(|(_, b)| {
         b != id::IS_CONSTANT_EVALUATED
+            && b != id::KILN_PLAINLY_CONSTANT_EVALUATED
             && id::checked_op(b).is_none()
             && !clang19_unevaluated(b)
             // clang 20 made `abs`/`labs`/`llabs` constant (WP-432).
@@ -90,9 +91,14 @@ fn clang19_unevaluated(b: u32) -> bool {
 /// the `__builtin_assume_aligned` alignment), for the fold prepass.
 pub(crate) fn folded_arg(ast: &Ast, e: ExprId) -> Option<ExprId> {
     let (_, b) = builtin_callee(ast, e)?;
-    matches!(b, id::ISFPCLASS | id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE | id::ASSUME_ALIGNED)
-        .then(|| ast.lists.iter(ast.exprs.call_args(e)).nth(1))
-        .flatten()
+    // `__builtin_expect_with_probability`'s probability is evaluated, not
+    // emitted (clang `EvaluateAsFloat`).
+    let i = match b {
+        id::ISFPCLASS | id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE | id::ASSUME_ALIGNED => 1,
+        id::EXPECT_WITH_PROBABILITY => 2,
+        _ => return None,
+    };
+    ast.lists.iter(ast.exprs.call_args(e)).nth(i)
 }
 
 /// The name of the library function a library builtin calls (clang
@@ -386,7 +392,9 @@ impl Cg<'_> {
             return self.emit_coro_builtin(b, e);
         }
         let v = match b {
-            id::IS_CONSTANT_EVALUATED => V::C(self.m.const_bool(false)),
+            id::IS_CONSTANT_EVALUATED | id::KILN_PLAINLY_CONSTANT_EVALUATED => {
+                V::C(self.m.const_bool(false))
+            }
             // clang `Builtin::BI__builtin_complex`: the two parts.
             id::COMPLEX => {
                 let re = self.emit_scalar(a0)?;
@@ -746,13 +754,40 @@ impl Cg<'_> {
                 return self.builtin_fpclassify(e, &args).map(|v| BuiltinCall::Emitted(Some(v)));
             }
             id::EXPECT | id::EXPECT_WITH_PROBABILITY => {
-                // At -O0 clang returns the value (the value and the expected
-                // value emitted; the probability is only folded).
+                // clang `BI__builtin_expect{,_with_probability}`: the value
+                // and the expected value are emitted; at -O0 the value is
+                // the result, above it `llvm.expect` (with the folded
+                // probability as a `double`) of the two.
                 let x = self.emit_scalar(a0)?;
-                if let Some(a1) = arg(1) {
-                    self.emit_scalar(a1)?;
+                let Some(a1) = arg(1) else {
+                    return err(self.loc_of(e), "__builtin_expect without two arguments");
+                };
+                let ev = self.emit_scalar(a1)?;
+                let prob = match arg(2) {
+                    Some(p) if b == id::EXPECT_WITH_PROBABILITY => {
+                        let Some(c) = self.folds.get(p) else {
+                            return err(
+                                self.loc_of(e),
+                                "__builtin_expect_with_probability probability is not a constant",
+                            );
+                        };
+                        let pq = ast.exprs.get(p).ty();
+                        Some(V::C(self.const_scalar_value(c, pq)?))
+                    }
+                    _ => None,
+                };
+                if self.opts.optimize() {
+                    let ty = self.f.fir.ty(&self.m, x);
+                    if let Some(p) = prob {
+                        let f = kiln_llvm::intrinsics::expect_with_probability(&mut self.m, ty);
+                        self.intrinsic_call(f, vec![x, ev, p])
+                    } else {
+                        let f = kiln_llvm::intrinsics::expect(&mut self.m, ty);
+                        self.intrinsic_call(f, vec![x, ev])
+                    }
+                } else {
+                    x
                 }
-                x
             }
             // WP-282: `llvm.powi.T.i32` (clang `Builtin::BI__builtin_powi`).
             id::POWI | id::POWIF | id::POWIL => {

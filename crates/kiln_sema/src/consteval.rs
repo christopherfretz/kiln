@@ -16,9 +16,9 @@ use std::collections::{HashMap, HashSet};
 use kiln_ast::decl::{ConstexprKind, DeclKind, Defaulted, FnSpec};
 use kiln_ast::expr::{ExprFlags, ExprKind};
 use kiln_ast::templates::SpecKind;
-use kiln_ast::{DeclId, ExprId, QualType};
+use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_oven::{EvalContext, EvalKind};
+use kiln_oven::{EvalContext, EvalFailure, EvalKind};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -40,6 +40,9 @@ pub(crate) struct Escalation {
     default_init: Option<DeclId>,
     /// `default_init` is a written mem-initializer ("the initializer of").
     written: bool,
+    /// An immediate-escalating expression of this consteval-only type
+    /// (`^^x`; `callee` is then the escalated function itself).
+    consteval_only: Option<QualType>,
 }
 
 /// A use of a default argument or default member initializer whose
@@ -71,6 +74,9 @@ pub(crate) struct ImmPending {
     const_eval: u32,
     /// The variable whose initializer the next full-expression is.
     var_init: Option<DeclId>,
+    /// Its failed invocations are reported after its constant
+    /// initialization is checked ([`Sema::report_deferred_immediates`]).
+    var_defer: bool,
     /// The next full-expression is a default argument or default member
     /// initializer: its invocations are not checked here.
     default_init: bool,
@@ -88,6 +94,10 @@ pub(crate) struct ImmState {
     pending: ImmPending,
     /// The escalated functions and why.
     reasons: HashMap<DeclId, Escalation>,
+    /// The failed immediate invocations of a `constexpr` or `constinit`
+    /// variable's initializer, with the variable and the callee, to be
+    /// reported after the variable's check.
+    after_var: Vec<(DeclId, ExprId, DeclId)>,
 }
 
 /// The pending state of an enclosing full-expression set aside by
@@ -289,6 +299,38 @@ impl Sema<'_, '_> {
         self.imm.pending.var_init = Some(v);
     }
 
+    /// [`Sema::note_var_init_full_expr`], with the failed invocations of
+    /// a `constexpr` or `constinit` `v` reported only once its constant
+    /// initialization has been checked ([`Sema::report_deferred_immediates`]):
+    /// clang evaluates the immediate invocations of a declaration's
+    /// initializer after `CheckCompleteVariableDeclaration`, so the
+    /// variable's own error comes first and a read of `v` in an invocation
+    /// sees its failed initializer.
+    pub(crate) fn note_checked_var_init_full_expr(&mut self, v: DeclId) {
+        self.imm.pending.var_init = Some(v);
+        self.imm.pending.var_defer = true;
+    }
+
+    /// Reports the failed immediate invocations of `v`'s initializer set
+    /// aside by [`Sema::finish_immediate_invocations`], evaluating each
+    /// again (`v` now has its initializer and its evaluation state).
+    pub(crate) fn report_deferred_immediates(&mut self, v: DeclId) {
+        if self.imm.after_var.is_empty() {
+            return;
+        }
+        let all = std::mem::take(&mut self.imm.after_var);
+        let (mine, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|&(w, ..)| w == v);
+        self.imm.after_var = rest;
+        for (_, c, callee) in mine {
+            match self.eval_immediate(c) {
+                Ok(val) => {
+                    let _ = self.ast.exprs.set_constant_value(c, val);
+                }
+                Err(fail) => self.report_immediate_call(c, callee, fail, None, false),
+            }
+        }
+    }
+
     /// The variable whose initializer the next full-expression is, if
     /// it is one.
     pub(crate) fn pending_var_init(&self) -> Option<DeclId> {
@@ -416,6 +458,7 @@ impl Sema<'_, '_> {
                     call: true,
                     default_init: None,
                     written: false,
+                    consteval_only: None,
                 };
                 self.escalate(g, why);
             }
@@ -450,6 +493,7 @@ impl Sema<'_, '_> {
                 call: false,
                 default_init: None,
                 written: false,
+                consteval_only: None,
             };
             self.escalate(g, why);
         }
@@ -531,6 +575,7 @@ impl Sema<'_, '_> {
                             call: true,
                             default_init: Some(decl),
                             written: false,
+                            consteval_only: None,
                         }
                     } else {
                         Escalation {
@@ -539,6 +584,7 @@ impl Sema<'_, '_> {
                             call: true,
                             default_init: None,
                             written: false,
+                            consteval_only: None,
                         }
                     };
                     self.escalate(g, why);
@@ -613,11 +659,25 @@ impl Sema<'_, '_> {
         self.imm.pending.default_uses.clear();
     }
 
+    /// Evaluates immediate invocation `c` ([expr.const]/25).
+    fn eval_immediate(&mut self, c: ExprId) -> Result<ConstValueId, EvalFailure> {
+        let at = self.begin_loc(c);
+        self.eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at))
+    }
+
+    /// Whether `v` is constexpr or constinit: its initializer is checked as
+    /// a whole before its immediate invocations are reported (WP-465).
+    fn checked_var(&self, v: DeclId) -> bool {
+        self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
+            || self.constinit_of(v).is_some()
+    }
+
     /// The end of full-expression `e` (from [`Sema::act_on_full_expr`]):
     /// evaluates its immediate invocations and checks the references to
     /// immediate functions ([expr.const]/16-19).
     pub(crate) fn finish_immediate_invocations(&mut self, e: ExprId) {
         let var = self.imm.pending.var_init.take();
+        let var_defer = std::mem::take(&mut self.imm.pending.var_defer);
         let member_init = self.imm.pending.member_init.take();
         let default_init = std::mem::take(&mut self.imm.pending.default_init);
         let uses = std::mem::take(&mut self.imm.pending.default_uses);
@@ -648,13 +708,9 @@ impl Sema<'_, '_> {
         // evaluated (and wrapped) individually.
         let escalating =
             self.func.as_ref().map(|s| s.decl).filter(|&f| self.is_immediate_escalating(f));
-        let mut results = Vec::with_capacity(outer.len());
-        for &(c, _) in &outer {
-            let at = self.begin_loc(c);
-            let r = self
-                .eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at));
-            results.push(r);
-        }
+        let report_after =
+            var.filter(|&v| var_defer && escalating.is_none() && self.checked_var(v));
+        let results: Vec<_> = outer.iter().map(|&(c, _)| self.eval_immediate(c)).collect();
         // A constant-initialized variable's initializer (clang evaluates
         // it as a whole): its invocations keep their wrappers, unvalued
         // in clang's dump.
@@ -677,11 +733,20 @@ impl Sema<'_, '_> {
                             Some((f, w)) => (self.ast.decls.get(g).loc(), Some(f), w),
                             None => (self.begin_loc(c), None, false),
                         };
-                        let why =
-                            Escalation { loc, callee, call: true, default_init: field, written };
+                        let why = Escalation {
+                            loc,
+                            callee,
+                            call: true,
+                            default_init: field,
+                            written,
+                            consteval_only: None,
+                        };
                         self.escalate(g, why);
                     }
-                    None => self.report_immediate_call(c, callee, fail, None, false),
+                    None => match report_after {
+                        Some(v) => self.imm.after_var.push((v, c, callee)),
+                        None => self.report_immediate_call(c, callee, fail, None, false),
+                    },
                 },
             }
         }
@@ -692,6 +757,16 @@ impl Sema<'_, '_> {
         }
         // Consteval-only expressions (spec/reflection-repr.md §6).
         let bad_refs = self.check_consteval_only_leaves(bad_refs, e, var, escalating);
+        self.check_immediate_refs(bad_refs, escalating);
+        for u in uses {
+            self.check_default_use(u.decl, u.loc, escalating, false);
+        }
+    }
+
+    /// The references to immediate functions outside every immediate
+    /// invocation ([expr.const]/18): each escalates `escalating`, or is
+    /// an error.
+    fn check_immediate_refs(&mut self, bad_refs: Vec<ExprId>, escalating: Option<DeclId>) {
         for r in bad_refs {
             // Already immediate-escalating (an instantiation's copy of a
             // pattern's reference): clang skips it.
@@ -704,7 +779,14 @@ impl Sema<'_, '_> {
                 self.ast.exprs.set_immediate_escalating(r);
                 self.escalate(
                     g,
-                    Escalation { loc, callee: d, call: false, default_init: None, written: false },
+                    Escalation {
+                        loc,
+                        callee: d,
+                        call: false,
+                        default_init: None,
+                        written: false,
+                        consteval_only: None,
+                    },
                 );
                 continue;
             }
@@ -722,9 +804,6 @@ impl Sema<'_, '_> {
                 msg = msg.with_note(note);
             }
             self.emit(msg);
-        }
-        for u in uses {
-            self.check_default_use(u.decl, u.loc, escalating, false);
         }
     }
 
@@ -814,6 +893,22 @@ impl Sema<'_, '_> {
 
     /// Makes the immediate-escalating function `g` an immediate function
     /// ([expr.const]/20) for `why`; the first reason is kept.
+    /// The consteval-only expression `r` in immediate-escalating function
+    /// `g` makes `g` immediate ([expr.const.imm]/2), with the reason note
+    /// `note_immediate_function_reason_consteval_only`
+    /// (`consteval_only.rs`, spec/reflection-repr.md §6).
+    pub(crate) fn escalate_consteval_only(&mut self, g: DeclId, r: ExprId) {
+        let why = Escalation {
+            loc: self.begin_loc(r),
+            callee: g,
+            call: false,
+            default_init: None,
+            written: false,
+            consteval_only: Some(self.ast.exprs.get(r).ty()),
+        };
+        self.escalate(g, why);
+    }
+
     fn escalate(&mut self, g: DeclId, why: Escalation) {
         self.ast.decls.mark_function(g, FnSpec::new().with_escalated(true));
         self.imm.reasons.entry(g).or_insert(why);
@@ -828,7 +923,7 @@ impl Sema<'_, '_> {
         &mut self,
         c: ExprId,
         f: DeclId,
-        mut fail: kiln_oven::EvalFailure,
+        mut fail: EvalFailure,
         default_use: Option<(DeclId, Loc)>,
         again: bool,
     ) {
@@ -880,6 +975,18 @@ impl Sema<'_, '_> {
         let name = |d: DeclId| {
             if is_ctor(d) { self.unqualified_decl_name(d) } else { self.qualified_decl_name(d) }
         };
+        if let Some(ty) = why.consteval_only {
+            return Some(
+                self.diag(DiagId::note_immediate_function_reason_consteval_only, why.loc)
+                    .arg(if self.is_lambda_call_op(f) {
+                        self.unqualified_decl_name(f)
+                    } else {
+                        name(f)
+                    })
+                    .arg(u8::from(is_ctor(f)))
+                    .arg(self.ty_arg(ty)),
+            );
+        }
         Some(match why.default_init {
             Some(field) => self
                 .diag(DiagId::note_immediate_default_init_reason, why.loc)

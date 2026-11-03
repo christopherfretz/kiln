@@ -157,7 +157,7 @@ impl Sema<'_, '_> {
             Local::Temp(_) if first.is_none() => return,
             Local::Temp(_) => {
                 let id = if by_ref {
-                    DiagId::sema_temp_return_local
+                    self.return_temp_ref_id()
                 } else {
                     DiagId::sema_return_local_temp_addr
                 };

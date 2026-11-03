@@ -173,6 +173,13 @@ the evaluator's flattened type table.
   inactive union member path ([expr.const]/5.10); then, for reads,
   uninitialized bytes ([expr.const]/5.11) and representation compatibility
   (pointer bytes read as a pointer only).
+  A local is kept in a register only when the compile-time pre-scan
+  (`Scan`) sees no address of it; a glvalue cast that drops `const`
+  (`const_cast<int&>(c) = 2`, `(int&)c`) counts as one, so the write
+  reaches the const allocation and faults (WP-465;
+  `expr.const/5.8/modify-const-cast-away.cpp`). Const is a flag of the
+  allocation: a const member of a non-const object written through a
+  cast (`*(int*)&s.m = 3`) is not detected yet.
 - **Freeze/thaw**: a successful result is frozen into the AST's
   `ConstStore` (scalars inline; aggregates as a byte image with pointer
   relocations, padding and active union members; pointers as
@@ -309,6 +316,17 @@ the evaluator's flattened type table.
   constant-evaluated, silent, not recorded, never cached; fails if the
   evaluation leaks an allocation. `at` locates the evaluation for the
   depth check.
+- `Oven::evaluate_call(bridge, f, at) -> Result<(), EvalFailure>`
+  (WP-468, clang `Expr::isPotentialConstantExpr` for a function without
+  parameters, spec/sema.md §5.28 "Never constant"): evaluates a call of
+  `f` without arguments in a stub (`compile_call`, the call's site at
+  `at`), manifestly constant-evaluated, with notes; the result, if any,
+  is frozen and dropped. The failure's last note is the call's `in call
+  to`. A function with parameters, a variadic one, or one returning a
+  reference or an aggregate is not evaluated (`Ok`), nor is anything
+  inside another evaluation. Not recorded in the stats; a success is
+  memoized as any call (`Func::memo`), so a later use of the function
+  costs a lookup.
 - `Oven::is_constant_initialized(bridge, var) -> bool`
   ([basic.start.static]/2): silent, not recorded; uses the variable's
   cached evaluation state when known.
@@ -336,6 +354,18 @@ the evaluator's flattened type table.
   Silent, not recorded; an outermost evaluation (false when nested); the
   temporary object is freed (`Memory::free_static`, "Abstract memory")
   and memory reset.
+- `Oven::fold_for_overflow(bridge, e) -> (Option<ConstValueId>,
+  Vec<Overflow>)` (WP-468): `fold_rvalue` checking for undefined
+  behaviour (clang `EvaluateForOverflow`, for `-Winteger-overflow`,
+  spec/sema.md §5.28). `RunState::ub_check` is set for the outermost run
+  only (`Oven::ub_check_next`, taken by `begin_outermost`; cleared in a
+  nested evaluation, a global's initialization and speculation): a signed
+  `IAdd`/`ISub`/`IMul`/`INeg` whose result is outside its width yields
+  the result wrapped to the width and records `(pc, wrapped)`
+  (`vm.rs` `Oven::wrap_overflow`, cold) instead of failing. The records come back
+  in order as `Overflow { loc, e, value }` (the instruction's site); the
+  evaluation's failure (`None`) does not drop them. Silent; lax, so not
+  memoized.
 - `Oven::fold_rvalue(bridge, e) -> Option<ConstValueId>` (WP-165):
   `try_fold` in **lax mode** (`RunState::lax`), clang's codegen-time
   `EvaluateAsRValue`/`tryEmitAsConstant`. A `const`, non-volatile variable
@@ -406,6 +436,19 @@ the evaluator's flattened type table.
   is a local variable read as a global): "pointer to '…' is not a
   constant expression" (or "reference to …" when the frozen type is a
   reference; clang `note_constexpr_non_global`), with "declared here".
+  At C++26 (P2686R5 [expr.const.init]/2, WP-467) the pointer is frozen as
+  `PtrBase::Decl(local)` instead when it is constexpr-referenceable from
+  the variable being initialized (`Oven::referenceable_from_object`:
+  `run.object` is a non-static local declared `constexpr`, of the same
+  function as the referent's variable; a `static` one is not a local, and
+  a non-`constexpr` one is deliberately excluded, spec/sema.md §4.9). Globals are
+  resolved once per Oven, so the check is made at the freeze, against
+  `run.object`, not at resolve time. `automatic_referent(ast, value)`
+  finds such a pointer anywhere in a frozen value (scalars, relocations,
+  pointer-to-constant chains), which sema uses for usability
+  (spec/sema.md §4.9) and codegen to skip the fold. Left: a lambda body
+  reading through such a pointer in its own `static_assert` is accepted
+  (the evaluation point is not known to the Oven).
 - Freezing a pointer or reference to a temporary lifetime-extended by
   the variable being initialized ([class.temporary]/6) rejects one whose
   type is destructed (`Ast::needs_destruction`: a non-trivial destructor
@@ -577,7 +620,7 @@ choice and must not move a budget.
 | Key | Meaning |
 |---|---|
 | `loc` | `"file:line:col"` of the evaluated construct (1-based line and column; the file as the driver names it in diagnostics, so it may itself contain `:`), or `null` when there is none (a compiler-synthesized evaluation). For a template instantiation, the point of the construct in the template, not the point of instantiation. |
-| `kind` | `static_assert`; `init` (the initializer of a `constexpr`/`constinit` variable or a constant initialization); `template_arg` (a template argument, including default arguments); `consteval` (an immediate invocation); `if_constexpr` (the condition); `constraint` (a constraint satisfaction check, M3); `other` (array bounds, enumerator values, `case` labels, `alignas`, `noexcept` and `explicit` specifiers, bit-field widths, splices, ...). |
+| `kind` | `static_assert`; `init` (the initializer of a `constexpr`/`constinit` variable or a constant initialization); `template_arg` (a template argument, including default arguments); `consteval` (an immediate invocation); `consteval_block` (a `consteval` block, P2996); `if_constexpr` (the condition); `constraint` (a constraint satisfaction check, M3); `other` (array bounds, enumerator values, `case` labels, `alignas`, `noexcept` and `explicit` specifiers, bit-field widths, splices, ...). |
 | `steps` | Statements executed, counted exactly as clang counts `-fconstexpr-steps` (see "Limits and metrics"), including the recorded steps of memoized calls (as for the budget, so the count does not depend on cache state). |
 | `bytes` | Abstract-memory bytes allocated over the evaluation (cumulative, each object rounded up to the 8-byte granule: frames, temporaries and dynamic allocations; a freed byte stays counted). |
 | `peak_bytes` | The maximum number of abstract-memory bytes live at once (`frame.top + heap_live`, see "Transient allocation"). |
@@ -816,16 +859,41 @@ literal is one instruction and one step, not an interpreted loop.
   a member the mem-initializer list skips has begun (clang
   default-initializes it). Nothing is emitted, so the check costs no
   instruction (`meta.const.eval/is-within-lifetime-construction.cpp`).
+  A complete-object constructor (P3533R2) first records
+  `(pc, CTOR_STEP_VBASE | j)` before each virtual-base initializer: while
+  virtual base `j` is initialized, later virtual bases and all
+  non-virtual subobjects have not begun; from the first non-virtual step
+  on, the virtual bases have. A base-subobject constructor initializes
+  none and records no such step (WP-465;
+  `meta.const.eval/is-within-lifetime-virtual-base-cxx26.cpp`, kiln only).
   A pointer into the variable whose initializer is being evaluated
   (`RunState::object`, clang's `EvaluatingDecl`) fails with `... cannot be
   called with a pointer to an object whose lifetime has not yet begun`
   (`BiFault::Lifetime` kind 3;
-  `meta.const.eval/is-within-lifetime-not-begun-errors.cpp`).
-  Known gaps: an aggregate or array member being list-initialized reads
-  as within its lifetime as a whole (clang: its later elements are not);
-  virtual bases are not tracked; a consteval constructor's immediate
-  invocation initializing a variable is evaluated as a temporary, so it
-  answers false where clang reports kind 3.
+  `meta.const.eval/is-within-lifetime-not-begun-errors.cpp`). That
+  includes the RESOLVING placeholder a self-reference such as `constexpr
+  C c(&c)` reads while `c` is evaluated (`Origin::Global` of the same
+  first declaration; a local constexpr variable mid-initialization
+  resolves to such an object too, kept in `provisional` for that
+  evaluation only), so a consteval constructor's immediate invocation
+  handed `&c` fails the same way (WP-465;
+  `meta.const.eval/is-within-lifetime-consteval-var.cpp`).
+  A member list-initialized by its mem-initializer (an `InitListExpr` or
+  parenthesized list of a non-union class or array) records a step per
+  element, recursively for an element that is such a list itself
+  (`CTOR_STEP_ELEM | i`, the element's offset from `this` and size in
+  `CtorStep::off`/`len`; `CTOR_STEP_RECORD` for an element of class
+  type): while an element is initialized, a subobject ending before it
+  and an aggregate holding it have begun; the element itself, everything
+  after it (explicit, omitted or array-filler elements: clang initializes
+  them in order) has not; inside an element of class type the frames
+  above decide (WP-465;
+  `meta.const.eval/is-within-lifetime-member-list-init.cpp`).
+  Known gaps: `this` inside a consteval constructor whose immediate invocation
+  initializes a variable, member, parameter or local temporary is the
+  thunk's temporary, so it is answered where clang reports kind 3
+  (clang accepts it when the invocation is nested in a temporary, member
+  access or comma of a static-storage initializer).
 - **Temporaries:** a `MaterializeTemporaryExpr` with full-expression
   storage (a `bit_cast` or builtin operand bound to a reference
   parameter) is an lvalue in the Oven, its object living until the end of
@@ -1485,8 +1553,22 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   impure (never memoized). `__builtin_constant_p((int *)8 + 1 == (int
   *)12)` is true, `int f[(long)(int *)8]` folds to 8 elements and
   `int i[*reinterpret_cast<const char *>(&n)]` is an error:
-  `expr.const/5.15/reinterpret-cast-fold-points-nowhere.cpp`. Function
-  pointers are not modelled (a cast to or from one still stops a fold).
+  `expr.const/5.15/reinterpret-cast-fold-points-nowhere.cpp`. A cast to
+  or from a function pointer is `PTR` too (WP-492): the function pointer
+  keeps its function (a nowhere pointer of the function slot), so it
+  freezes to that function (`void (*p)() = (void (*)())&f;` is a static
+  initializer) and compares by function; an indirect call through it
+  calls the function only if the call's function type is the
+  function's, ignoring the exception specification (clang
+  `EvaluateCall`'s `hasSameFunctionTypeIgnoringExceptionSpec`;
+  `Oven::cast_callee_matches`), so a pointer cast back to its type
+  calls in a fold, and any other fails as clang's `Error`. A lax
+  variable (spec "Lax folds") whose constant initialization failed is
+  read as its initializer re-folded non-manifestly, as a
+  potentially-constant one is (`const auto p = (int (*)(int))(void
+  (*)())&f;` folds `p(1)` to a direct call): `VarDecl::evaluateValue`
+  re-evaluates any variable without constant initialization in
+  `EM_ConstantFold`.
   Codegen's folds
   share the TU's bytecode, so they see the TU's language mode
   (`Oven::set_cxx_year`, recorded by sema; before WP-407 they compiled
@@ -1835,8 +1917,12 @@ skipped for clang). Every other observable result matches clang
 (`constant-p-trial.cpp`, which is strict-diags under both compilers).
 
 `TrialMode::Transactional` allows every effect and undoes it on rollback.
-It is the general mode for future evaluator trials. No evaluator path uses
-it yet; the unit tests exercise it.
+It is the general mode for evaluator trials. Its user is
+`std::meta::substitute`/`can_substitute` (WP-482): the reflection bridge
+opens one with `Oven::trial_begin` around each uncached substitution and
+closes it with `Oven::trial_end(keep)`, so a failed substitution's nested
+constant evaluations leave no bytes behind
+(`tests/conformance/reflection/substitute-trial-rollback.cpp`).
 
 **Complexity.**
 
@@ -2464,6 +2550,13 @@ exception (see "Bool vectors" below). The operations are in
   `__builtin_reduce_*` fold, as clang 20+ does (WP-394;
   `ext.vector/constexpr-diagnostics-clang22.cpp`). A `?:` with a vector
   condition fails silently in clang 22 as well, so it stays rejected.
+  Writing a lane (`v[i] = x`, `v.y = x`, any vector element type) of a
+  union member does not make that member active: only member access and
+  array subscript do ([class.union.general]/6), so the vector operand is
+  accessed as a read-modify-write (`compile.rs` `lane_base_access`) and
+  an inactive member is "assignment to member 'v' of union with active
+  member 'c'", as clang (WP-438;
+  `ext.vector/bool-constexpr-union-diagnostics-clang22.cpp`).
   The compat-19 boundary above holds until the oracle switch (WP-184,
   M3 to M4).
 - Codegen emits folded vector values as `<N x T>` constants
@@ -2498,6 +2591,21 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   clang's "element size 1 * element count N is not a multiple of the
   byte size 8" note (`compile/bitcast.rs`). A source with an
   indeterminate lane byte is "indeterminate value".
+- *Shuffles* (WP-438): `__builtin_shufflevector` folds lane by lane at
+  either level. At compat 19 a shuffle whose lane count differs from its
+  operands' has clang 19's GNU-vector-of-`bool` type, `CK_BitCast` to
+  the ext vector (sema); kiln stores that GNU vector packed like a
+  `BoolVec`, but clang 19's `BitCastBuffer` writes it a byte per lane and
+  reads the smaller packed destination from its first bytes, so
+  `vm/bitcast.rs` `gnu_bool_vec_cast` gives lane `k` = source lane `k/8`
+  when `k % 8 == 0`, else false (`b8 w = shuffle(b4, b4, 0..7)` is
+  `0x01`), the value clang 19 folds and emits. At compat 22 the shuffle
+  has the ext vector type and no cast.
+- *Union members* (WP-438): a lane is one bit, so a lane store into a
+  `bool` vector member of a union goes through the union like a
+  bit-field's (`ty.rs` `has_bit_unit` treats the lanes of a `BoolVec` as
+  bit units): `union U { b8 v; unsigned char c; }; constexpr U u =
+  {(b8)true};` constructs `v`, at either level.
 - *Notes* print a bool vector argument lane by lane (`{true, false,
   ...}`, every lane, as clang).
 - *Codegen*: a constexpr or constant-initialized bool-vector variable
@@ -2520,9 +2628,13 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   result (`b4 L = I < 2`), a C-style or `static_cast`, an assignment or a
   `return` in a constexpr function. A `vector_size` or floating source
   has no conversion at all (sema).
-Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`,
+Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp` (shuffles:
+`bool-constexpr-shuffle-run.cpp`, `-19.cpp`;
+`tests/codegen/bool_vector_shuffle_const.cpp`; unions:
+`bool-constexpr-union-run.cpp`, `tests/codegen/bool_vector_union_const.cpp`),
 `ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`,
-`ext.vector/bool-from-int-vector-constexpr-clang22.cpp`.
+`ext.vector/bool-from-int-vector-constexpr-clang22.cpp`;
+budget (packed bits, no per-lane allocation): `tests/stress/bool-vector-sieve.cpp`.
 
 ### `_BitInt` — Landed (WP-404, wide WP-445)
 Type rules: spec/types.md §21.
@@ -2565,12 +2677,30 @@ Type rules: spec/types.md §21.
   is copied at its own source location so a note points where clang's
   does. Freeze writes `Scalar::Int` with exactly `IntBits::words_for(N)`
   words; thaw re-extends them over the slot.
-- *Not yet evaluated, wide only* (trap "kiln: conversion between a _BitInt
-  wider than 128 bits and a floating type is not supported in constant
-  evaluation yet", or the generic wide-`_BitInt` trap kept in
-  `compile.rs` `rv_inner` as a safety net): conversions to and from
-  floating types, wide bit-fields, `switch` on a wide value, `<=>`, and
-  integer literals wider than 128 bits (clang has none in C++).
+- *Floating conversions, bit-fields, `switch`, `<=>`, literals* (WP-465).
+  `TO_FLOAT` converts the exact value to a float kind
+  (`softfloat::from_limbs`: the top 128 significant bits plus a sticky
+  bit, rounded to nearest even; past the format's range it is infinity,
+  as clang folds it); `FROM_FLOAT` truncates toward zero
+  (`softfloat::trunc_limbs`) and faults `FloatRange` when the result does
+  not fit N bits (a negative value for an unsigned type, NaN, infinity),
+  noted at the operand's begin with the destination type as written and its
+  `aka` (the note names every typedef so, narrow ones too). A compound
+  assignment with a floating computation type converts the wide left
+  operand to it and the result back. A wide bit-field is a
+  `Place::Bits` read by `LOAD_BITS` into a temporary (sign- or
+  zero-extended from its width) and written by `STORE_BITS` (truncated to
+  the width), for initialization, assignment, compound assignment and
+  `++`/`--`; freezing copies its bytes one at a time under a per-byte mask.
+  `switch` on a wide condition compares it with each case value converted
+  to the condition's type (`wide_case_cmp`: `CMP` EQ, or GE/LE for a GNU
+  range); sema keeps a case value outside `i128` as its exact constant
+  (spec/sema.md §7). `<=>` of two wide operands of the same type is two
+  `CMP`s giving the ordering. An `IntegerLiteral` wider than 128 bits
+  (only a substituted non-type template argument: C++ has no `wb` suffix)
+  is built from its 128-bit chunks, most significant first (`FROM`, `SHL`
+  by 128, `OR`). The generic wide-`_BitInt` trap in `compile.rs`
+  `rv_inner` remains as a safety net for any other expression form.
 
 ### Complex values — Landed (WP-211)
 A GNU `_Complex T` object is stored as `T[2]` (`ty.rs`): the real part,
@@ -2970,6 +3100,20 @@ sema.
   | `EvalContext::new(Other, loc)` | `other` | no | array bounds, bit-field widths, other enumerators, `alignas`, array designators |
   | `EvalContext::new(TemplateArg / Consteval / IfConstexpr, loc)` | as named | yes | M3 |
   | `EvalContext::new(Constraint, loc)` | `constraint` | yes | M3: constraint satisfaction (an atomic constraint's value) |
+| `EvalContext::consteval_block(loc)` | `consteval_block` | yes | a consteval-block-declaration (WP-473); the only constructor that sets `plain` |
+
+  `EvalContext::plain` (WP-473, `spec/consteval-blocks.md` §3) is the
+  plainly constant-evaluated bit: true only for a consteval block's
+  evaluation ([expr.const.core]/2.32), the one context in which injection
+  may mutate. It becomes `run.plain` for that evaluation (a nested
+  evaluation starts from its own context's bit and restores the
+  enclosing one); `Oven::plain()` is `run.plain && !run.fold &&
+  !mem.in_trial()`, so `try_fold`, `__builtin_constant_p` operands and
+  every other trial read false. `Op::IsConstEval` aux 2 reads it
+  (`__kiln_plainly_constant_evaluated()`); aux 4 / aux 8 save-and-clear
+  / restore it around a constexpr local's initializer, which is its own
+  manifestly constant-evaluated expression. The call memo key carries
+  `Oven::plain()` at bit 30 next to `const_context` at bit 31.
 
 - **Nested evaluation** (R-OVEN-1, spec/sema-templates.md §4.11). The
   Oven calls `SemaBridge::ensure_body(f, oven)` the first time it compiles

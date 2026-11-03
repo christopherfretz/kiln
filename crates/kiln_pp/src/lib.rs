@@ -57,7 +57,7 @@ pub use include::{
 pub use macros::{AttrMacro, MacroDef, MacroTable};
 pub use modules::{DirectiveKind, ModuleDirective, ModuleOptions, has_module_lines};
 pub use options::{ClangCompat, PpOptions};
-pub use predef::{CmdMacro, OptLevel, PicModel, PredefConfig, build_predefines};
+pub use predef::{ArmTarget, CmdMacro, OptLevel, PicModel, PredefConfig, build_predefines};
 pub use preprocessor::{Marker, PpItem, Preprocessor};
 pub use print::{PrintOptions, print_macros, print_preprocessed};
 pub use resolver::{HeaderSearch, SearchEvent, SearchObserver};

@@ -241,6 +241,13 @@ fn target_types(arch: Arch) -> TargetTypes {
     for (b, s, a) in table {
         size_align[b as usize] = (s, a);
     }
+    // The SVE sizeless types have no size; their alignment (clang
+    // `getTypeInfo`: 128 bits for a data vector, 16 for `svbool_t` and
+    // `svcount_t`) is that of their allocas.
+    for b in BuiltinType::ALL.iter().copied().filter(|b| b.is_sizeless()) {
+        let a = if matches!(b, B::SvBool | B::SvCount) { 2 } else { 16 };
+        size_align[b as usize] = (0, a);
+    }
     TargetTypes {
         size_align,
         char_signed: x86,

@@ -385,6 +385,13 @@ impl Module {
 
     // ---- global values --------------------------------------------------
 
+    /// Advances the unique-suffix counter as naming a new global `name`
+    /// would (LLVM `ValueSymbolTable::makeUniqueName` for a value that is
+    /// renamed right after, as `CloneFunction` + `takeName`).
+    pub fn consume_unique_name(&mut self, name: &str) {
+        let _ = self.unique_global_name(name);
+    }
+
     fn unique_global_name(&mut self, name: &str) -> Box<str> {
         if name.is_empty() || !self.gnames.contains_key(name) {
             return name.into();
@@ -439,10 +446,30 @@ impl Module {
     ///
     /// `f` is defined or replaced, or `fn_ty` is not a function type.
     pub fn retype_function_to_end(&mut self, f: FuncId, fn_ty: TypeId) -> IrResult<()> {
-        if !self.funcs[f.index()].is_declaration() || self.replaced.contains_key(&f) {
+        if !self.funcs[f.index()].is_declaration() {
             return Err(IrError::new(
                 IrErrorKind::BadGlobal,
                 "only a live function declaration can be retyped",
+            ));
+        }
+        self.redefine_function_to_end(f, fn_ty)
+    }
+
+    /// [`Module::retype_function_to_end`] for a function that may be
+    /// defined: its body is dropped (clang `GetOrCreateLLVMFunction` for
+    /// a definition of another type under a defined name erases the old
+    /// definition, as when the complete-object variant of a structor
+    /// with virtual bases follows its base-object variant under one asm
+    /// label).
+    ///
+    /// # Errors
+    ///
+    /// `f` is replaced, or `fn_ty` is not a function type.
+    pub fn redefine_function_to_end(&mut self, f: FuncId, fn_ty: TypeId) -> IrResult<()> {
+        if self.replaced.contains_key(&f) {
+            return Err(IrError::new(
+                IrErrorKind::BadGlobal,
+                "only a live function can be redefined",
             ));
         }
         let Some((ret, params, varargs)) = self.types.function_info(fn_ty) else {
@@ -1102,6 +1129,22 @@ impl Module {
         }
         let ty = self.types.vector(et, elems.len() as u32);
         Ok(self.canon_aggregate(ty, elems, |ty, elems| ConstData::Vector { ty, elems }))
+    }
+
+    /// The scalable vector constant of type `ty` (`<vscale x N x T>`)
+    /// with every lane `elem` (llvm `ConstantVector::getSplat`): a null
+    /// `elem` folds to `zeroinitializer`, `undef`/`poison` to themselves.
+    pub fn const_splat(&mut self, ty: TypeId, elem: Value) -> IrResult<Value> {
+        let Some((et, _, true)) = self.types.vector_info(ty) else {
+            return Err(IrError::new(IrErrorKind::InvalidType, "splat of a non-scalable vector"));
+        };
+        self.expect_const_type(elem, et, "splat element")?;
+        Ok(match self.aggregate_canon(&[elem]) {
+            Some(0) => self.consts.intern(ConstData::Zero(ty)),
+            Some(1) => self.consts.intern(ConstData::Undef(ty)),
+            Some(2) => self.consts.intern(ConstData::Poison(ty)),
+            _ => self.consts.intern(ConstData::Splat { ty, elem }),
+        })
     }
 
     /// Constant `getelementptr` expression.

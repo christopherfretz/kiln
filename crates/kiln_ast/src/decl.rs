@@ -153,6 +153,11 @@ pub enum DeclKind {
     Label,
     /// The result name of a postcondition (P2900).
     ContractResultName,
+    /// A consteval-block-declaration ([dcl.pre], P3289R1): payload
+    /// [`StaticAssertData`] whose `cond` is the call of the block's
+    /// synthesized `consteval` lambda and whose `message` is `None`
+    /// (spec/consteval-blocks.md §2).
+    ConstevalBlock,
 }
 
 /// Which payload arena a kind's `data` indexes.
@@ -212,7 +217,7 @@ impl DeclKind {
             K::TranslationUnit | K::LinkageSpec | K::Export | K::RequiresExprBody => {
                 PayloadClass::Scope
             }
-            K::StaticAssert => PayloadClass::StaticAssert,
+            K::StaticAssert | K::ConstevalBlock => PayloadClass::StaticAssert,
             K::LifetimeExtendedTemporary => PayloadClass::Let,
             _ => PayloadClass::None,
         }
@@ -252,6 +257,7 @@ impl DeclKind {
                 | DeclKind::Friend
                 | DeclKind::FriendTemplate
                 | DeclKind::StaticAssert
+                | DeclKind::ConstevalBlock
                 | DeclKind::RequiresExprBody
                 | DeclKind::ParmVar
                 | DeclKind::ImplicitParam
@@ -321,6 +327,7 @@ impl DeclKind {
             K::StaticAssert => "StaticAssert",
             K::Label => "Label",
             K::ContractResultName => "ContractResultName",
+            K::ConstevalBlock => "ConstevalBlock",
         }
     }
 }
@@ -1790,6 +1797,10 @@ pub struct DeclArena {
     /// Class definitions in the order their `}` was reached
     /// ([`DeclArena::complete_definition`]; instantiations included).
     completed_records: Vec<DeclId>,
+    /// The end of each top-level declaration of the translation unit, in
+    /// order: the last member of the translation unit's member list and
+    /// the class-completion epoch there ([`DeclArena::end_top_level_decl`]).
+    top_level_ends: Vec<(Option<DeclId>, u32)>,
     /// Cold per-declaration data.
     pub cold: ColdDeclData,
 }
@@ -1879,6 +1890,7 @@ impl Default for DeclArena {
                 loc: Loc::INVALID,
             }],
             completed_records: Vec::new(),
+            top_level_ends: Vec::new(),
             cold: ColdDeclData::default(),
         }
     }
@@ -2739,6 +2751,26 @@ impl DeclArena {
         u32::try_from(self.completed_records.len()).unwrap_or(u32::MAX)
     }
 
+    /// The parser finished a top-level declaration of translation unit
+    /// `tu` (a namespace or linkage-specification block is one): clang
+    /// hands it to code generation here (`HandleTopLevelDecl`), so the
+    /// classes completed so far are the complete ones there.
+    pub fn end_top_level_decl(&mut self, tu: DeclId) {
+        let last = self.member_list(tu).and_then(|m| m.last);
+        let e = self.completion_epoch();
+        self.top_level_ends.push((last, e));
+    }
+
+    /// The ends of the top-level declarations, in order: the translation
+    /// unit's last member and the class-completion epoch at each
+    /// ([`DeclArena::end_top_level_decl`]). A member of the translation
+    /// unit belongs to the first end at or after it in the member list;
+    /// one after the last end was added at the end of the translation
+    /// unit.
+    pub fn top_level_ends(&self) -> &[(Option<DeclId>, u32)] {
+        &self.top_level_ends
+    }
+
     /// Sets a field's default member initializer (write-once).
     pub fn set_field_init(&mut self, f: DeclId, init: ExprId) -> Result<(), AlreadySet> {
         set_once(&mut self.field_mut(f).init, init, "FieldData.init", RawId::raw)
@@ -2881,7 +2913,7 @@ impl DeclArena {
         self.vec_rows().iter().map(|r| r.live_bytes()).sum()
     }
 
-    fn vec_rows(&self) -> [VecDims; 16] {
+    fn vec_rows(&self) -> [VecDims; 17] {
         [
             VecDims::of("nodes", &self.nodes),
             VecDims::of("functions", &self.functions),
@@ -2899,6 +2931,7 @@ impl DeclArena {
             VecDims::of("lets", &self.lets),
             VecDims::of("ctor_inits", &self.ctor_inits),
             VecDims::of("completed_records", &self.completed_records),
+            VecDims::of("top_level_ends", &self.top_level_ends),
         ]
     }
 }
@@ -4607,6 +4640,12 @@ pub mod builtin {
     pub const ELEMENTWISE_ADD_SAT: u32 = 2109;
     /// `__builtin_elementwise_sub_sat`.
     pub const ELEMENTWISE_SUB_SAT: u32 = 2110;
+    // ---- WP-473 (kiln extension).
+    /// `__kiln_plainly_constant_evaluated()`: whether the running
+    /// evaluation is plainly constant-evaluated (the corresponding
+    /// expression of a consteval block; spec/consteval-blocks.md §3);
+    /// false at runtime.
+    pub const KILN_PLAINLY_CONSTANT_EVALUATED: u32 = 2150;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
@@ -4634,6 +4673,8 @@ pub mod builtin {
         row(RETURN_ADDRESS, "__builtin_return_address", "v*IUi", N),
         row(ELEMENTWISE_ADD_SAT, "__builtin_elementwise_add_sat", "v.", N | C | T),
         row(ELEMENTWISE_SUB_SAT, "__builtin_elementwise_sub_sat", "v.", N | C | T),
+        // WP-473.
+        row(KILN_PLAINLY_CONSTANT_EVALUATED, "__kiln_plainly_constant_evaluated", "b", N),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19

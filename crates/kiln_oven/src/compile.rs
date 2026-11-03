@@ -180,6 +180,16 @@ enum Access {
     Addr,
 }
 
+/// The access to the vector object of a lane access `v[i]` / `v.x` made
+/// as `acc` (clang 22): writing a lane modifies the vector without
+/// assigning it, so a union member holding it is checked to be active
+/// rather than made active ([class.union.general]/6 names only member
+/// access and array subscript; clang `StartLifetimeOfUnionMemberHandler`
+/// stops at a vector).
+fn lane_base_access(acc: Access) -> Access {
+    if acc == Access::Write { Access::Rmw } else { acc }
+}
+
 struct Breakable {
     breaks: Vec<usize>,
     conts: Option<Vec<usize>>,
@@ -580,6 +590,50 @@ impl Oven {
         idx
     }
 
+    /// A function calling function `f` without arguments at `at`
+    /// ([`crate::Oven::evaluate_call`]), returning what it returns: `None`
+    /// if `f` has parameters or returns a reference or an aggregate.
+    pub(crate) fn compile_call(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        f: DeclId,
+        at: Loc,
+    ) -> Option<u32> {
+        let ast = b.ast();
+        let fty = ast.decls.get(f).ty()?;
+        let TypeView::Function(p) = ast.types.canonical_view(fty) else { return None };
+        let ret_q = p.ret();
+        if p.num_params() != 0 || p.variadic() || ast.types.is_reference(ret_q) {
+            return None;
+        }
+        let fi = self.func_index(b.ast(), f);
+        let mut c = Compiler::new(self, b);
+        let rty = c.ty(ret_q);
+        let void = c.o.types.kind(rty) == TyKind::Void;
+        if c.o.types.is_aggregate(rty) {
+            return None;
+        }
+        let entry = c.here();
+        let n = c.reg();
+        c.emit_loc(Op::Call, 0, &[fi, n], at);
+        c.emit(Op::Ret, u32::from(!void), &[n]);
+        let nregs = c.max;
+        let idx = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: None,
+            entry,
+            state: FState::Ready,
+            nregs,
+            ret: if void { RetKind::Void } else { RetKind::Scalar(rty) },
+            params: Vec::new(),
+            memo: false,
+            this_reg: None,
+            this_ty: None,
+            base_obj: false,
+        });
+        Some(idx)
+    }
+
     /// A function destroying the object of type `ty` whose address is in
     /// its register 0 (the constant destruction of `constexpr` variable
     /// `d`, [dcl.constexpr]/6), or `None` if destroying it does nothing.
@@ -908,7 +962,19 @@ pub(crate) struct Compiler<'a> {
     skip_effects: Vec<ExprId>,
     /// The construction progress of the constructor being compiled
     /// ([`Oven::ctor_steps`]).
-    ctor_steps: Vec<(u32, u32)>,
+    ctor_steps: Vec<crate::CtorStep>,
+    /// The list initializing a constructor's member (or an element of
+    /// it) that records element steps ([`Oven::ctor_steps`]).
+    elem_track: Option<ElemTrack>,
+}
+
+/// A list whose elements record construction steps: it initializes entry
+/// `field` of the constructor's class, at `off` bytes from `this`.
+#[derive(Clone, Copy)]
+pub(crate) struct ElemTrack {
+    pub(crate) list: ExprId,
+    pub(crate) field: u32,
+    pub(crate) off: u64,
 }
 
 /// The value an `OpaqueValueExpr` stands for.
@@ -953,6 +1019,7 @@ impl<'a> Compiler<'a> {
             srcloc: None,
             skip_effects: Vec::new(),
             ctor_steps: Vec::new(),
+            elem_track: None,
         }
     }
 
@@ -1418,7 +1485,16 @@ impl Scan<'_> {
                 let op = ast.exprs.operand(e);
                 match ast.exprs.cast_kind(e) {
                     CastKind::LValueToRValue => self.expr(op, true),
-                    CastKind::NoOp if n.value_category().is_glvalue() => self.expr(op, ok),
+                    // A glvalue cast that drops `const` (`const_cast<int&>(c)
+                    // = 2`) may write the variable: it lives in memory, whose
+                    // const flag faults that write ([dcl.type.cv]/4; WP-465).
+                    CastKind::NoOp
+                        if n.value_category().is_glvalue()
+                            && (!const_object(ast, ast.exprs.get(op).ty())
+                                || const_object(ast, n.ty())) =>
+                    {
+                        self.expr(op, ok);
+                    }
                     CastKind::ToVoid => self.expr(op, true),
                     _ => self.expr(op, false),
                 }
@@ -2257,7 +2333,8 @@ impl Compiler<'_> {
             TyKind::Int { width, signed } => (u32::from(width), signed),
             _ => (8, false),
         };
-        let c = self.rv(d.cond);
+        let wide_cond = self.o.types.wide(cond_ty).is_some();
+        let c = if wide_cond { self.wide_place(d.cond) } else { self.rv(d.cond) };
         // [stmt.pre]/4 (P0963): tuple-like bindings after the condition.
         self.cond_bindings(d.cond_var);
         if nested {
@@ -2277,6 +2354,24 @@ impl Compiler<'_> {
         let aux_eq = int_aux(cw as u8, cs) | cmp::EQ << 9;
         for (i, tg) in targets.iter().enumerate() {
             let Some((lo, hi)) = tg.range else { continue };
+            if wide_cond {
+                // A wide condition: each case value compared in memory.
+                let cd = *self.b.ast().stmts.case_data(tg.stmt);
+                if let Some(rhs) = cd.rhs {
+                    let u = self.reg();
+                    self.wide_case_cmp(cmp::GE, u, c, cond_ty, cd.lhs);
+                    let skip = self.jmp_if(u, false);
+                    self.wide_case_cmp(cmp::LE, u, c, cond_ty, rhs);
+                    let j = self.jmp_if(u, true);
+                    stubs.push((i, j));
+                    self.patch_here(skip);
+                } else {
+                    self.wide_case_cmp(cmp::EQ, t, c, cond_ty, cd.lhs);
+                    let j = self.jmp_if(t, true);
+                    stubs.push((i, j));
+                }
+                continue;
+            }
             let (lo, hi) = (crate::arith::canon(lo, cw, cs), crate::arith::canon(hi, cw, cs));
             if lo == hi {
                 self.konst(t, lo);
@@ -2385,6 +2480,23 @@ impl Compiler<'_> {
     }
 
     fn decl_one(&mut self, d: DeclId) {
+        // A constexpr local's initializer is a constant expression of its
+        // own ([expr.const]/22): not part of a consteval block's plainly
+        // constant-evaluated evaluation (spec/consteval-blocks.md §3).
+        let ast = self.b.ast();
+        let constexpr_local = ast.decls.get(d).kind() == DeclKind::Var
+            && is_local_var(ast, d)
+            && ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr());
+        if !constexpr_local {
+            return self.decl_one_var(d);
+        }
+        let saved = self.reg();
+        self.emit(Op::IsConstEval, 4, &[saved]);
+        self.decl_one_var(d);
+        self.emit(Op::IsConstEval, 8, &[saved]);
+    }
+
+    fn decl_one_var(&mut self, d: DeclId) {
         let ast = self.b.ast();
         let n = *ast.decls.get(d);
         if n.kind() != DeclKind::Var {
@@ -3345,8 +3457,14 @@ impl Compiler<'_> {
         let [a, b] = self.ast().exprs.operands(e);
         let (at, bt) = (self.ety(a), self.ety(b));
         let kinds = (self.kind(at), self.kind(bt));
-        let ra = self.rv(a);
-        let rb = self.rv(b);
+        let wide = self.o.types.wide(at).is_some() && at == bt;
+        let (ra, rb) = if wide {
+            let ra = self.wide_place(a);
+            (ra, self.wide_place(b))
+        } else {
+            let ra = self.rv(a);
+            (ra, self.rv(b))
+        };
         let r = self.reg();
         let c = self.reg();
         let partial = info.kind == kiln_ast::class::CmpCategory::Partial;
@@ -3364,7 +3482,11 @@ impl Compiler<'_> {
         };
         let mut ends = Vec::new();
         for (k, v) in tests {
-            self.compare(e, kinds, k, c, ra, rb);
+            if wide {
+                self.wide_cmp_at(k, c, [ra, rb], at, e);
+            } else {
+                self.compare(e, kinds, k, c, ra, rb);
+            }
             let j = self.jmp_if(c, false);
             self.konst(r, v);
             ends.push(self.jmp());
@@ -3671,13 +3793,17 @@ impl Compiler<'_> {
                             self.void_cast_pre26(e, op, dst, r);
                         } else if fvoid {
                             self.emit_at(Op::VoidCast, 0, &[dst, r, tp.0], e);
-                        } else if matches!(self.kind(fp), TyKind::Func)
-                            || matches!(self.kind(tp), TyKind::Func)
-                        {
-                            self.trap(e, REINTERPRET_CONV);
                         } else {
+                            // A function pointer included: a fold keeps
+                            // the function it designates (clang's invalid
+                            // designator; a call through it fails).
                             self.cce(e, cce::PTR, dst, r, REINTERPRET_CONV);
                         }
+                    }
+                    // A `reinterpret_cast` to or from a function pointer
+                    // (`cce_check` above failed it outside a fold).
+                    (TyKind::Ptr(_), TyKind::Ptr(_)) => {
+                        self.cce(e, cce::PTR, dst, r, REINTERPRET_CONV);
                     }
                     _ => self.trap(e, REINTERPRET_CONV),
                 }
@@ -4039,7 +4165,7 @@ impl Compiler<'_> {
                 // clang 22 evaluates a lane access as an element of the
                 // lane array (spec/oven.md "Vectors").
                 let [a, i] = self.ast().exprs.operands(e);
-                let p = self.vec_object(a, acc);
+                let p = self.vec_object(a, lane_base_access(acc));
                 let ri = self.rv(i);
                 let ru = self.reg();
                 self.emit(Op::ICast, 64 << 9, &[ru, ri]);
@@ -4056,7 +4182,7 @@ impl Compiler<'_> {
                 let p = if ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::ARROW) {
                     self.rv(base)
                 } else {
-                    self.vec_object(base, acc)
+                    self.vec_object(base, lane_base_access(acc))
                 };
                 let ri = self.reg();
                 self.konst(ri, u128::from(lane));
@@ -4700,6 +4826,56 @@ impl Compiler<'_> {
         }
     }
 
+    /// Records the step of the element of type `ty` (`len` bytes, `local`
+    /// bytes into the list `tr` tracks) about to be initialized from `x`,
+    /// and tracks `x` itself when it is a list initializing an aggregate
+    /// element ([`Oven::ctor_steps`]).
+    fn elem_step(
+        &mut self,
+        tr: Option<ElemTrack>,
+        local: u64,
+        ty: OTy,
+        len: u64,
+        x: Option<ExprId>,
+    ) {
+        let Some(t) = tr else { return };
+        let off = t.off + local;
+        let (Ok(o), Ok(n)) = (u32::try_from(off), u32::try_from(len)) else { return };
+        let kind = self.kind(ty);
+        let record = matches!(kind, TyKind::Record { .. });
+        let mut cur = crate::CTOR_STEP_ELEM | t.field;
+        if record {
+            cur |= crate::CTOR_STEP_RECORD;
+        }
+        let pc = self.o.code.len() as u32;
+        self.ctor_steps.push(crate::CtorStep { pc, cur, off: o, len: n });
+        self.elem_track = x.and_then(|x| self.tracked_list(x, ty)).map(|list| ElemTrack {
+            list,
+            field: t.field,
+            off,
+        });
+    }
+
+    /// `x` when it is a list (or parenthesized list) aggregate-initializing
+    /// a non-union class or an array of type `ty`.
+    pub(crate) fn tracked_list(&self, x: ExprId, ty: OTy) -> Option<ExprId> {
+        let ast = self.ast();
+        let mut x = x;
+        while matches!(
+            ast.exprs.get(x).kind(),
+            ExprKind::ParenExpr | ExprKind::ConstantExpr | ExprKind::ExprWithCleanups
+        ) {
+            x = ast.exprs.operand(x);
+        }
+        let list = matches!(
+            ast.exprs.get(x).kind(),
+            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+        );
+        let aggr =
+            matches!(self.kind(ty), TyKind::Array { .. } | TyKind::Record { union: false, .. });
+        (list && aggr).then_some(x)
+    }
+
     fn init_list(&mut self, e: ExprId, p: u32, ty: OTy) {
         let ast = self.ast();
         let inits: Vec<ExprId> =
@@ -4721,6 +4897,7 @@ impl Compiler<'_> {
         p: u32,
         ty: OTy,
     ) {
+        let tr = self.elem_track.take_if(|t| t.list == e);
         match self.kind(ty) {
             TyKind::Array { elem, n } => {
                 if inits.len() as u64 > n {
@@ -4746,13 +4923,16 @@ impl Compiler<'_> {
                 let es = self.o.types.size(elem);
                 for (i, &x) in inits.iter().enumerate() {
                     let q = self.elem_ptr(p, i as u64 * es, e);
+                    self.elem_step(tr, i as u64 * es, elem, es, Some(x));
                     self.init(x, q, elem);
+                    self.elem_track = None;
                 }
                 if rest > 0
                     && !zero_fill
                     && let Some(f) = filler
                 {
                     // A loop over the remaining elements.
+                    self.elem_step(tr, inits.len() as u64 * es, elem, rest * es, None);
                     let k = self.reg();
                     let one = self.reg();
                     let lim = self.reg();
@@ -4814,12 +4994,15 @@ impl Compiler<'_> {
                     let off = self.base_offset(ty, bty);
                     let m = self.next;
                     let q = self.elem_ptr(p, off, e);
-                    match it.next() {
-                        Some(&x) => self.init(x, q, bty),
+                    let x = it.next().copied();
+                    self.elem_step(tr, off, bty, self.o.types.size(bty), x);
+                    match x {
+                        Some(x) => self.init(x, q, bty),
                         None => {
                             self.emit_at(Op::ZeroInit, 0, &[q, bty.0], e);
                         }
                     }
+                    self.elem_track = None;
                     self.next = m;
                 }
                 let fields = self.o.types.fields(ty).to_vec();
@@ -4836,17 +5019,22 @@ impl Compiler<'_> {
                             self.ast().decls.field(fi.decl).and_then(|f| f.init).map(|d| (d, true))
                         }
                     };
+                    self.elem_step(tr, fi.offset, fi.ty, self.o.types.size(fi.ty), x.map(|x| x.0));
                     if let Some((x, dflt)) = x {
                         let saved = self.this_override;
                         if dflt {
                             self.this_override = Some(p);
                         }
                         self.init_field(x, p, fi, e);
+                        self.elem_track = None;
                         self.this_override = saved;
                     } else {
                         // [dcl.init.aggr]/5.3: copy-initialized from `{}`.
                         let q = self.elem_ptr(p, fi.offset, e);
                         match fi.width {
+                            Some(w) if self.o.types.wide(fi.ty).is_some() => {
+                                self.wide_field_init(None, q, fi.ty, (fi.bit, w), e);
+                            }
                             Some(w) => {
                                 let z = self.reg();
                                 self.konst(z, 0);
@@ -4921,6 +5109,9 @@ impl Compiler<'_> {
             return;
         }
         match fi.width {
+            Some(w) if self.o.types.wide(fi.ty).is_some() => {
+                self.wide_field_init(Some(x), q, fi.ty, (fi.bit, w), e);
+            }
             Some(w) => {
                 let r = self.rv(x);
                 self.emit_at(Op::StoreBits, 1, &[q, r, fi.ty.0, fi.bit | w << 8], x);
@@ -5170,10 +5361,19 @@ impl Compiler<'_> {
             && ast.decls.get(ast.exprs.decl(c)).kind().is_function())
         .then(|| ast.exprs.decl(c));
         if let Some(d) = direct
-            && ast.decls.builtin_id(d) == Some(kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED)
+            && let Some(
+                b @ (kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED
+                | kiln_ast::decl::builtin::KILN_PLAINLY_CONSTANT_EVALUATED),
+            ) = ast.decls.builtin_id(d)
         {
             let r = self.reg();
-            let pc = self.emit_at(Op::IsConstEval, u32::from(self.std_ice), &[r], e);
+            // aux bit 1: `__kiln_plainly_constant_evaluated` (WP-473).
+            let aux = if b == kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED {
+                u32::from(self.std_ice)
+            } else {
+                2
+            };
+            let pc = self.emit_at(Op::IsConstEval, aux, &[r], e);
             let loc = self.begin(e);
             if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
                 site.loc = loc;

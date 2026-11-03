@@ -1,0 +1,2 @@
+{"template":"std::meta::can_substitute<R>","kind":"default","loc":"substitute-trial-rollback.cpp:23:35","count":5,"nodes":6,"bytes":320,"self_us":0,"incl_us":0}
+{"total":true,"count":5,"nodes":6,"bytes":320,"self_us":0,"sat":1,"sat_cached":10002,"atoms":1,"atoms_cached":0}

@@ -80,6 +80,33 @@ pub struct PredefConfig {
     /// they mean the implementation supports those aliases; libc++'s
     /// `std` module exports them when the macros are defined).
     pub std_float_aliases: bool,
+    /// The `AArch64` target features the `__ARM_*` macros derive from.
+    pub arm: ArmTarget,
+}
+
+/// The `AArch64` target state of `-march=` / `-mcpu=` /
+/// `-msve-vector-bits=` / `-target-feature` (spec/driver.md "Target
+/// features") that the `__ARM_ARCH`, `__ARM_FP`, `__ARM_NEON*` and
+/// `__ARM_FEATURE_*` macros derive from (clang `AArch64TargetInfo`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArmTarget {
+    /// The architecture version `(major, minor)`: `(8, 0)` for `armv8-a`.
+    pub arch: (u8, u8),
+    /// The enabled LLVM feature names (`fp-armv8`, `neon`, `sve`, ...).
+    pub features: Vec<String>,
+    /// `-msve-vector-bits=N`: `__ARM_FEATURE_SVE_BITS N`.
+    pub sve_vector_bits: Option<u32>,
+}
+
+impl Default for ArmTarget {
+    /// `armv8-a` with `fp-armv8` and `neon` (the base files' macros).
+    fn default() -> ArmTarget {
+        ArmTarget {
+            arch: (8, 0),
+            features: vec!["fp-armv8".to_owned(), "neon".to_owned()],
+            sve_vector_bits: None,
+        }
+    }
 }
 
 impl PredefConfig {
@@ -103,6 +130,7 @@ impl PredefConfig {
             kiln_version: (0, 0),
             clang_compat: ClangCompat::Clang22,
             std_float_aliases: true,
+            arm: ArmTarget::default(),
         }
     }
 }
@@ -304,6 +332,9 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
         }
     }
     apply_flags(&mut m, cfg);
+    if cfg.aarch64 {
+        apply_arm(&mut m, &cfg.arm, cfg.clang_compat);
+    }
 
     let mut out = String::with_capacity(base.len() + 256);
     // kiln's identity macros come before clang's first line, so the
@@ -504,6 +535,191 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
     }
 }
 
+/// The `__ARM_*` macros of the `AArch64` target state that the base files
+/// (`armv8-a`, `fp-armv8` + `neon`) leave out or define; each is removed,
+/// then defined if its condition holds.
+const ARM_TARGET_MACROS: &[&str] = &[
+    "__ARM_ARCH",
+    "__ARM_BF16_FORMAT_ALTERNATIVE",
+    "__ARM_FEATURE_AES",
+    "__ARM_FEATURE_ATOMICS",
+    "__ARM_FEATURE_BF16",
+    "__ARM_FEATURE_BF16_SCALAR_ARITHMETIC",
+    "__ARM_FEATURE_BF16_VECTOR_ARITHMETIC",
+    "__ARM_FEATURE_BTI",
+    "__ARM_FEATURE_COMPLEX",
+    "__ARM_FEATURE_CRC32",
+    "__ARM_FEATURE_CRYPTO",
+    "__ARM_FEATURE_CSSC",
+    "__ARM_FEATURE_DOTPROD",
+    "__ARM_FEATURE_FP16_FML",
+    "__ARM_FEATURE_FP16_SCALAR_ARITHMETIC",
+    "__ARM_FEATURE_FP16_VECTOR_ARITHMETIC",
+    "__ARM_FEATURE_FPRCVT",
+    "__ARM_FEATURE_FRINT",
+    "__ARM_FEATURE_GCS",
+    "__ARM_FEATURE_JCVT",
+    "__ARM_FEATURE_LS64",
+    "__ARM_FEATURE_MATMUL_INT8",
+    "__ARM_FEATURE_MEMORY_TAGGING",
+    "__ARM_FEATURE_MOPS",
+    "__ARM_FEATURE_PAUTH",
+    "__ARM_FEATURE_QRDMX",
+    "__ARM_FEATURE_RCPC",
+    "__ARM_FEATURE_RNG",
+    "__ARM_FEATURE_SHA2",
+    "__ARM_FEATURE_SHA3",
+    "__ARM_FEATURE_SHA512",
+    "__ARM_FEATURE_SM3",
+    "__ARM_FEATURE_SM4",
+    "__ARM_FEATURE_SVE",
+    "__ARM_FEATURE_SVE2",
+    "__ARM_FEATURE_SVE2_AES",
+    "__ARM_FEATURE_SVE2_BITPERM",
+    "__ARM_FEATURE_SVE2_SHA3",
+    "__ARM_FEATURE_SVE2_SM4",
+    "__ARM_FEATURE_SVE2p1",
+    "__ARM_FEATURE_SVE2p2",
+    "__ARM_FEATURE_SVE_AES2",
+    "__ARM_FEATURE_SVE_B16B16",
+    "__ARM_FEATURE_SVE_BF16",
+    "__ARM_FEATURE_SVE_BITS",
+    "__ARM_FEATURE_SVE_F16F32MM",
+    "__ARM_FEATURE_SVE_MATMUL_FP32",
+    "__ARM_FEATURE_SVE_MATMUL_FP64",
+    "__ARM_FEATURE_SVE_MATMUL_INT8",
+    "__ARM_FEATURE_SVE_VECTOR_OPERATORS",
+    "__ARM_FEATURE_SYSREG128",
+    "__ARM_FEATURE_TME",
+    "__ARM_FP",
+    "__ARM_NEON",
+    "__ARM_NEON_FP",
+];
+
+/// clang `AArch64TargetInfo::getTargetDefines` over the target state `t`
+/// (measured against clang 19 and 22 for every `-march=` level and
+/// extension kiln accepts). The architecture-version defines
+/// (`QRDMX` from v8.1, `COMPLEX`/`JCVT` from v8.3, `FRINT` from v8.5)
+/// follow the level alone; clang 19 also turns on `crc`, `lse`, `rcpc`,
+/// `dotprod`, `bti`, `bf16`, `i8mm` (and, on v9, `sve2` and `fullfp16`)
+/// from the level whatever the extensions say (its `setArchFeatures`),
+/// where clang 22 follows the features. `__ARM_NEON_SVE_BRIDGE` is
+/// clang 22's unconditionally ([`CLANG22_AARCH64`]) and clang 19's with
+/// SVE and NEON.
+fn apply_arm(m: &mut BTreeMap<String, String>, t: &ArmTarget, compat: ClangCompat) {
+    for n in ARM_TARGET_MACROS {
+        m.remove(*n);
+    }
+    let has = |f: &str| t.features.iter().any(|x| x == f);
+    let c19 = compat == ClangCompat::Clang19;
+    let (major, minor) = t.arch;
+    // The level includes armv8.n (armv9.k includes armv8.(k+5)).
+    let v8 = |n: u8| if major == 9 { n <= minor + 5 } else { major == 8 && n <= minor };
+    let v9 = major == 9;
+    let fp = has("fp-armv8");
+    let neon = fp && has("neon");
+    let sve = neon && has("sve");
+    // `+sve` (and clang 22's `+sve-bitperm` / `+sve-aes`) set `HasFullFP16`
+    // whatever `fullfp16` says (a `-target-feature +sve` alone).
+    let fp16 = has("fullfp16")
+        || has("sve")
+        || if c19 { v9 } else { has("sve-bitperm") || has("sve-aes") };
+    let bf16 = has("bf16") || c19 && v8(6);
+    let i8mm = has("i8mm") || c19 && v8(6);
+    let mut def = |n: &str, v: &str| set(m, n, v);
+    def("__ARM_ARCH", &major.to_string());
+    if fp {
+        def("__ARM_FP", "0xE");
+    }
+    if neon {
+        def("__ARM_NEON", "1");
+        def("__ARM_NEON_FP", "0xE");
+    }
+    let flags: [(bool, &[&str]); 30] = [
+        (v8(1), &["QRDMX"]),
+        (v8(3), &["COMPLEX", "JCVT"]),
+        (v8(5), &["FRINT"]),
+        (has("crc") || c19 && v8(1), &["CRC32"]),
+        (has("lse") || c19 && v8(1), &["ATOMICS"]),
+        (has("dotprod") || c19 && v8(4), &["DOTPROD"]),
+        (has("bti") || c19 && v8(5), &["BTI"]),
+        (bf16, &["BF16", "BF16_SCALAR_ARITHMETIC", "BF16_VECTOR_ARITHMETIC"]),
+        (i8mm, &["MATMUL_INT8"]),
+        (has("aes"), &["AES"]),
+        (has("sha2"), &["SHA2"]),
+        (has("aes") && has("sha2"), &["CRYPTO"]),
+        (has("sha3"), &["SHA3", "SHA512"]),
+        (has("sm4"), &["SM3", "SM4"]),
+        (has("pauth"), &["PAUTH"]),
+        (has("mte"), &["MEMORY_TAGGING"]),
+        (has("rand"), &["RNG"]),
+        (has("mops"), &["MOPS"]),
+        (has("ls64"), &["LS64"]),
+        (has("gcs"), &["GCS"]),
+        (has("d128"), &["SYSREG128"]),
+        (has("tme"), &["TME"]),
+        (has("cssc") && !c19, &["CSSC"]),
+        (has("fprcvt"), &["FPRCVT"]),
+        (fp16, &["FP16_SCALAR_ARITHMETIC"]),
+        (neon && fp16, &["FP16_VECTOR_ARITHMETIC"]),
+        (neon && has("fp16fml"), &["FP16_FML"]),
+        (sve, &["SVE"]),
+        (sve && bf16, &["SVE_BF16"]),
+        (sve && i8mm, &["SVE_MATMUL_INT8"]),
+    ];
+    for (on, names) in flags {
+        if on {
+            for n in names {
+                def(&format!("__ARM_FEATURE_{n}"), "1");
+            }
+        }
+    }
+    for n in sve_feature_macros(t, c19, sve) {
+        def(&format!("__ARM_FEATURE_{n}"), "1");
+    }
+    if bf16 {
+        def("__ARM_BF16_FORMAT_ALTERNATIVE", "1");
+    }
+    if has("rcpc3") {
+        def("__ARM_FEATURE_RCPC", "3");
+    } else if has("rcpc") || c19 && v8(3) {
+        def("__ARM_FEATURE_RCPC", "1");
+    }
+    if sve {
+        def("__ARM_FEATURE_SVE_VECTOR_OPERATORS", "2");
+        if c19 {
+            def("__ARM_NEON_SVE_BRIDGE", "1");
+        }
+    }
+    if let Some(bits) = t.sve_vector_bits {
+        def("__ARM_FEATURE_SVE_BITS", &bits.to_string());
+    }
+}
+
+/// The SVE `__ARM_FEATURE_<name>`s (value 1) beyond `SVE` itself of
+/// [`apply_arm`]; `sve` is SVE mode (`sve` with NEON).
+fn sve_feature_macros(t: &ArmTarget, c19: bool, sve: bool) -> Vec<&'static str> {
+    let has = |f: &str| t.features.iter().any(|x| x == f);
+    let v9 = t.arch.0 == 9;
+    // clang 22 splits `sve2-aes` / `sve2-bitperm` into `sve2` + `sve-x`.
+    let sve2 = has("sve2");
+    let more: [(bool, &'static str); 12] = [
+        (sve && has("f32mm"), "SVE_MATMUL_FP32"),
+        (sve && has("f64mm"), "SVE_MATMUL_FP64"),
+        (sve2 || c19 && v9, "SVE2"),
+        (if c19 { has("sve2-aes") } else { sve2 && has("sve-aes") }, "SVE2_AES"),
+        (if c19 { has("sve2-bitperm") } else { sve2 && has("sve-bitperm") }, "SVE2_BITPERM"),
+        (has("sve-aes2"), "SVE_AES2"),
+        (has("sve-b16b16"), "SVE_B16B16"),
+        (has("sve-f16f32mm"), "SVE_F16F32MM"),
+        (has("sve2-sha3"), "SVE2_SHA3"),
+        (has("sve2-sm4"), "SVE2_SM4"),
+        (has("sve2p1"), "SVE2p1"),
+        (has("sve2p2"), "SVE2p2"),
+    ];
+    more.into_iter().filter_map(|(on, n)| on.then_some(n)).collect()
+}
+
 /// clang `DefineBuiltinMacro`: `X` -> `X 1`, `X=v` -> `X v` (the value
 /// ends at the first newline).
 fn define_line(d: &str) -> String {
@@ -545,7 +761,8 @@ mod tests {
         assert!(
             s.starts_with(
                 "#define __KILN__ 1\n#define __KILN_MAJOR__ 0\n#define __KILN_MINOR__ 0\n\
-                 # 1 \"<built-in>\" 3\n#define __BFLT16_DECIMAL_DIG__ 4\n"
+                 # 1 \"<built-in>\" 3\n#define __ARM_ARCH 8\n#define __ARM_FP 0xE\n\
+                 #define __ARM_NEON 1\n#define __ARM_NEON_FP 0xE\n#define __BFLT16_DECIMAL_DIG__ 4\n"
             ),
             "{s}"
         );
@@ -719,5 +936,77 @@ mod tests {
         for here in ["__ARM_ACLE 202420", "__GCC_DESTRUCTIVE_SIZE 256", "__ARM_NEON_SVE_BRIDGE 1"] {
             assert!(a22.contains(&format!("#define {here}\n")), "{here}: {a22}");
         }
+    }
+
+    /// The `__ARM_*` target macros of `arch` + `features` under `compat`.
+    fn arm(arch: (u8, u8), features: &str, bits: Option<u32>, compat: ClangCompat) -> String {
+        let mut cfg = PredefConfig::new(true);
+        cfg.clang_compat = compat;
+        cfg.arm = ArmTarget {
+            arch,
+            features: features.split(',').filter(|f| !f.is_empty()).map(str::to_owned).collect(),
+            sve_vector_bits: bits,
+        };
+        let base = "#define __ARM_ARCH 8\n#define __ARM_FP 0xE\n#define __ARM_NEON 1\n\
+            #define __ARM_NEON_FP 0xE\n#define __ARM_FEATURE_TME 1\n";
+        let mut v: Vec<_> = build_predefines(base, &cfg, &[])
+            .lines()
+            .filter_map(|l| l.strip_prefix("#define __ARM_"))
+            .filter(|l| !l.starts_with("ACLE") && !l.starts_with("PREFETCH"))
+            .map(|l| l.replace("FEATURE_", ""))
+            .collect();
+        v.sort_unstable();
+        v.join(",")
+    }
+
+    #[test]
+    fn arm_target_macros() {
+        let (c19, c22) = (ClangCompat::Clang19, ClangCompat::Clang22);
+        let sorted = |s: &str| {
+            let mut v: Vec<_> = s.split(',').collect();
+            v.sort_unstable();
+            v.join(",")
+        };
+        let assert_arm = |got: String, want: &str| assert_eq!(got, sorted(want));
+        let base = "ARCH 8,FP 0xE,NEON 1,NEON_FP 0xE";
+        assert_arm(arm((8, 0), "fp-armv8,neon", None, c19), base);
+        assert_arm(arm((8, 0), "fp-armv8,neon", None, c22), &format!("{base},NEON_SVE_BRIDGE 1"));
+        let fp16 = "FP16_SCALAR_ARITHMETIC 1,FP16_VECTOR_ARITHMETIC 1";
+        assert_arm(arm((8, 0), "fp-armv8,fullfp16,neon", None, c19), &format!("{base},{fp16}"));
+        assert_arm(
+            arm((8, 0), "fp-armv8,fullfp16,neon,sve", Some(256), c19),
+            &format!("{base},{fp16},SVE 1,SVE_BITS 256,SVE_VECTOR_OPERATORS 2,NEON_SVE_BRIDGE 1"),
+        );
+        assert_arm(
+            arm((8, 0), "fp-armv8,fullfp16,neon,sve,sve2", None, c22),
+            &format!("{base},{fp16},SVE 1,SVE2 1,SVE_VECTOR_OPERATORS 2,NEON_SVE_BRIDGE 1"),
+        );
+        // No NEON: no SVE mode, scalar FP16 only.
+        assert_arm(
+            arm((8, 0), "fp-armv8,fullfp16,sve", None, c19),
+            "ARCH 8,FP 0xE,FP16_SCALAR_ARITHMETIC 1",
+        );
+        assert_arm(arm((8, 0), "", None, c19), "ARCH 8");
+        // clang 19 ties `crc` / `lse` / `rdm` to v8.1, clang 22 follows
+        // the features (here removed).
+        assert_arm(
+            arm((8, 1), "fp-armv8,neon", None, c19),
+            &format!("{base},ATOMICS 1,CRC32 1,QRDMX 1"),
+        );
+        assert_arm(
+            arm((8, 1), "fp-armv8,neon", None, c22),
+            &format!("{base},QRDMX 1,NEON_SVE_BRIDGE 1"),
+        );
+        assert_arm(
+            arm((9, 0), "fp-armv8,neon", None, c19),
+            "ARCH 9,FP 0xE,NEON 1,NEON_FP 0xE,ATOMICS 1,BTI 1,COMPLEX 1,CRC32 1,DOTPROD 1,\
+             FP16_SCALAR_ARITHMETIC 1,FP16_VECTOR_ARITHMETIC 1,FRINT 1,JCVT 1,QRDMX 1,RCPC 1,SVE2 1",
+        );
+        let crypto = "AES 1,CRYPTO 1,SHA2 1,SHA3 1,SHA512 1,SM3 1,SM4 1";
+        assert_arm(
+            arm((8, 0), "aes,fp-armv8,neon,sha2,sha3,sm4", None, c22),
+            &format!("{base},{crypto},NEON_SVE_BRIDGE 1"),
+        );
+        assert_arm(arm((8, 0), "fp-armv8,neon,rcpc,rcpc3", None, c19), &format!("{base},RCPC 3"));
     }
 }

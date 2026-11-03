@@ -7,6 +7,7 @@
 //! (clang `compareEnableIfAttrs`).
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
+use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::{ListId, RawId};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -16,6 +17,7 @@ use crate::Sema;
 use crate::conv::{self, ConvCtx};
 use crate::decl::AttrArg;
 use crate::overload::{ArgInfo, Candidate, CandidateFailure};
+use crate::templ::stack::{FrameKind, InstFrame};
 use crate::templ::subst::{DeclOrPack, Substituter};
 
 impl Sema<'_, '_> {
@@ -134,19 +136,29 @@ impl Sema<'_, '_> {
     }
 
     /// clang `Sema::CheckEnableIf` for viable candidate `cand` of a call
-    /// with arguments `args` (the object argument aside), `params` the
-    /// candidate's parameter types and `skip` the parameters the object
-    /// argument takes: each argument is converted to its parameter's type
-    /// (an omitted one is the parameter's default argument), then each
-    /// `enable_if` condition is evaluated with them; the first one that
-    /// is not a constant expression or is false makes the candidate not
-    /// viable ([`CandidateFailure::EnableIf`]).
+    /// with arguments `args`, `params` the candidate's parameter types and
+    /// `skip` the parameters before the first argument's: each argument
+    /// is converted to its parameter's type (an omitted one is the
+    /// parameter's default argument), then each `enable_if` condition is
+    /// evaluated with them; the first one that is not a constant
+    /// expression or is false makes the candidate not viable
+    /// ([`CandidateFailure::EnableIf`]).
+    ///
+    /// `strict` is clang's handling of a member function with an explicit
+    /// object parameter found by overload resolution: clang passes the
+    /// arguments without the object argument and binds them from the
+    /// first parameter (the object parameter) on, so they shift by one;
+    /// an argument that does not convert to the parameter it lands on,
+    /// or a parameter left without an argument or a default argument,
+    /// disables the candidate by its first `enable_if` attribute
+    /// (`convertArgsForAvailabilityChecks` failing).
     pub(crate) fn check_enable_if(
         &mut self,
         cand: &mut Candidate,
         args: &[ArgInfo],
         params: &[QualType],
         skip: usize,
+        strict: bool,
         loc: Loc,
     ) {
         let Some(f) = cand.decl else { return };
@@ -155,10 +167,11 @@ impl Sema<'_, '_> {
         }
         // The converted arguments, by parameter index (`None`: no value).
         let mut conv_args: Vec<Option<ExprId>> = Vec::with_capacity(params.len());
+        let mut unbound = false;
         for (j, &p) in params.iter().enumerate().skip(skip) {
             let i = j - skip;
-            let arg = match args.get(i) {
-                Some(a) => a.list.is_none().then_some(a.expr).flatten().and_then(|e| {
+            let arg = if let Some(a) = args.get(i) {
+                let r = a.list.is_none().then_some(a.expr).flatten().and_then(|e| {
                     let pt = conv::strip_cv(self, p);
                     let to = if self.ast.types.is_reference(p) { p } else { pt };
                     let (r, diags) =
@@ -166,10 +179,27 @@ impl Sema<'_, '_> {
                     let s_failed = |s: &Self, d: &[kiln_diag::Diag]| s.stash_has_error(d);
                     let failed = s_failed(self, &diags);
                     r.ok().filter(|_| !failed)
-                }),
-                None => self.enable_if_default_arg(f, j),
+                });
+                unbound |= r.is_none();
+                r
+            } else {
+                let r = self.enable_if_default_arg(f, j);
+                unbound |= r.is_none() && !self.nth_param_has_default(f, j);
+                r
             };
             conv_args.push(arg);
+        }
+        if strict && unbound {
+            let first = self
+                .ast
+                .lists
+                .iter::<AttrId>(self.ast.attrs.of_decl(f))
+                .find(|&a| self.ast.attrs.get(a).kind == AttrKind::ENABLE_IF);
+            if let Some(attr) = first {
+                cand.viable = false;
+                cand.failure = CandidateFailure::EnableIf { attr };
+            }
+            return;
         }
         if let Some(attr) = self.failed_enable_if(f, &conv_args, skip, loc) {
             cand.viable = false;
@@ -224,6 +254,11 @@ impl Sema<'_, '_> {
         let member = self.ast.exprs.get(r).kind() == kiln_ast::expr::ExprKind::MemberExpr;
         let (id, at) = if member {
             (DiagId::sema_ovl_no_viable_member_function_in_call, self.ast.exprs.get(r).loc())
+        } else if self.kind_of(f) == DeclKind::CXXMethod {
+            // An explicit object member function called through a member
+            // access, or a member named by a qualified id (clang
+            // `BuildCallExpr`: `isa<CXXMethodDecl>`).
+            (DiagId::sema_ovl_no_viable_member_function_in_call, self.begin_loc(callee))
         } else {
             (DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
         };
@@ -239,6 +274,16 @@ impl Sema<'_, '_> {
         let node = *self.ast.attrs.get(attr);
         let msg = self.enable_if_message(&node);
         self.diag(DiagId::note_ovl_candidate_disabled_by_function_cond_attr, loc).arg(msg)
+    }
+
+    /// Whether parameter `j` of `f` has a default argument (instantiated
+    /// or not).
+    fn nth_param_has_default(&self, f: DeclId, j: usize) -> bool {
+        self.ast
+            .decls
+            .function(f)
+            .and_then(|x| self.ast.lists.iter::<DeclId>(x.params).nth(j))
+            .is_some_and(|p| self.inst.lazy_defaults.contains_key(&p) || self.param_has_default(p))
     }
 
     /// The default argument of parameter `j` of `f` as a call omitting
@@ -273,8 +318,24 @@ impl Sema<'_, '_> {
         skip: usize,
         loc: Loc,
     ) -> bool {
+        self.cond_with_args(holder, cond, args, skip, loc).unwrap_or(false)
+    }
+
+    /// The value of the condition `cond` of an `enable_if` or
+    /// `diagnose_if` attribute written on `holder` with `args`
+    /// substituted for the parameters (from index `skip`), as
+    /// [`Self::enable_if_holds`] evaluates it; `None` if it is
+    /// value-dependent or not a constant expression.
+    pub(crate) fn cond_with_args(
+        &mut self,
+        holder: DeclId,
+        cond: ExprId,
+        args: &[Option<ExprId>],
+        skip: usize,
+        loc: Loc,
+    ) -> Option<bool> {
         if self.expr_is_value_dependent(cond) {
-            return false;
+            return None;
         }
         let mut owners = vec![holder];
         if let Some(pat) = self.ast.instantiated_from(holder) {
@@ -294,7 +355,7 @@ impl Sema<'_, '_> {
             s.eval_with_params(Some(cond), binds, cond, loc).and_then(|v| s.const_truth(v))
         };
         if let Some(t) = truth(self, &binds) {
-            return t;
+            return Some(t);
         }
         // Some argument may not be a constant expression: drop those and
         // evaluate again.
@@ -304,9 +365,9 @@ impl Sema<'_, '_> {
             .filter(|&(p, a)| self.eval_with_params(None, &[(p, a)], a, loc).is_some())
             .collect();
         if kept.len() == binds.len() {
-            return false;
+            return None;
         }
-        truth(self, &kept).unwrap_or(false)
+        truth(self, &kept)
     }
 
     /// clang `compareEnableIfAttrs` ([over.match.best] extension):
@@ -392,6 +453,47 @@ impl Substituter<'_, '_, '_> {
                 }
             }
         };
-        Some(AttrNode { a: c.raw(), ..node })
+        let node = AttrNode { a: c.raw(), ..node };
+        let Some(fail) = self.sema.attr_cond_never_constant(spec, node) else {
+            return Some(node);
+        };
+        // clang substitutes the attribute in the specialization's own
+        // instantiation context, outside the immediate context of a
+        // deduction: the error is a hard one, with "in instantiation of
+        // function template specialization ... requested here" in place
+        // of the deduction's note.
+        let tmpl = self.sema.spec_args(spec).map(|(t, _)| t);
+        let stack = &mut self.sema.inst.stack;
+        let swapped = match (tmpl, stack.frames.last()) {
+            (Some(t), Some(top)) if stack.is_sfinae() => {
+                let poi = top.poi;
+                let deduction = matches!(
+                    top.kind,
+                    FrameKind::DeducedArgSubstitution | FrameKind::ExplicitArgSubstitution
+                );
+                let saved = if deduction { stack.frames.pop() } else { None };
+                stack.frames.push(InstFrame {
+                    kind: FrameKind::FunctionSpec,
+                    entity: spec,
+                    template: t,
+                    poi,
+                    sfinae: Some(false),
+                    args: None,
+                    start: None,
+                    start_bytes: 0,
+                    start_nodes: 0,
+                    child_ns: 0,
+                });
+                Some(saved)
+            }
+            _ => None,
+        };
+        self.sema.report_never_constant(node, fail);
+        if let Some(saved) = swapped {
+            let stack = &mut self.sema.inst.stack;
+            stack.frames.pop();
+            stack.frames.extend(saved);
+        }
+        None
     }
 }

@@ -13,12 +13,13 @@ use kiln_ast::decl::{
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{BuiltinType, PrintOptions, TypeView, print_type};
 use kiln_ast::{Ast, DeclId, QualType};
+use kiln_diag::{Diag, DiagId};
 use kiln_llvm::{
     Attr, AttrKind, AttrSetId, ComdatKind, FuncId, GlobalId, Linkage, Module, TypeId as LTy,
     UnnamedAddr, UwTableKind, Value,
 };
-use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
+use kiln_source::{Loc, Span};
 
 use crate::fir::{Op, V};
 use crate::fold::Folds;
@@ -100,10 +101,14 @@ pub(crate) struct Cg<'a> {
     pub gvars: FxHashMap<DeclId, GlobalId>,
     /// Discardable definitions not yet needed: first declaration → definition.
     pub deferred: FxHashMap<DeclId, DeclId>,
-    /// Class definitions the top-level walk has not reached yet: their
-    /// types are incomplete to a reference emitted now (clang emits each
-    /// top-level declaration as it is parsed).
-    pub unreached_classes: FxHashSet<DeclId>,
+    /// Each class definition's index in completion order
+    /// (`DeclArena::completed_records`; instantiations included).
+    pub completion_index: FxHashMap<DeclId, u32>,
+    /// While the top-level walk runs, the class-completion epoch at the
+    /// end of the top-level declaration being emitted: a class completed
+    /// later is incomplete to a reference emitted now (clang emits each
+    /// top-level declaration as it is parsed); `u32::MAX` after the walk.
+    pub walk_epoch: u32,
     /// Definitions to emit (clang `DeferredDeclsToEmit`).
     pub to_emit: Vec<Def>,
     /// First declarations of the end-of-TU instantiations not yet handed
@@ -150,6 +155,12 @@ pub(crate) struct Cg<'a> {
     pub c1_done: FxHashSet<DeclId>,
     /// Deleting destructors already emitted (WP-080).
     pub d0_done: FxHashSet<DeclId>,
+    /// The first declaration given each symbol name (clang `Manglings`'
+    /// representative declaration, for `err_duplicate_mangled_name`).
+    pub reps: FxHashMap<String, DeclId>,
+    /// Whether a duplicate mangled name was diagnosed (clang hands no
+    /// later declaration to code generation after an error).
+    pub dup_reported: bool,
     /// Thunk functions by mangled name (WP-080).
     pub thunk_fns: FxHashMap<String, FuncId>,
     /// Structors whose base variant body was generated.
@@ -175,9 +186,13 @@ pub(crate) struct Cg<'a> {
     pub rtti_globals: FxHashMap<String, GlobalId>,
     /// Bodies using placeholders, lowered once the module is complete.
     pub pending: Vec<(FuncId, DeclId, crate::fir::Fir)>,
+    /// The finished body of each variadic virtual method defined so far
+    /// (and whether it uses placeholders), cloned into its
+    /// return-adjusting thunks (clang `GenerateVarArgsThunk`).
+    pub vararg_bodies: FxHashMap<FuncId, (crate::fir::Fir, bool)>,
     /// Warnings codegen reports itself (clang's `CGM.getDiags()`, e.g.
     /// `-Watomic-alignment`), in emission order.
-    pub diags: Vec<kiln_diag::Diag>,
+    pub diags: Vec<Diag>,
     /// Per-function state.
     pub f: Fx,
     /// The `$_N` ids of unnamed classes, in first-mangle order.
@@ -221,7 +236,8 @@ impl<'a> Cg<'a> {
             optnone_fns: FxHashSet::default(),
             gvars: FxHashMap::default(),
             deferred: FxHashMap::default(),
-            unreached_classes: FxHashSet::default(),
+            completion_index: FxHashMap::default(),
+            walk_epoch: u32::MAX,
             held: ast
                 .templates
                 .end_of_tu_defs()
@@ -253,6 +269,8 @@ impl<'a> Cg<'a> {
             c1_decl: FxHashSet::default(),
             c1_done: FxHashSet::default(),
             d0_done: FxHashSet::default(),
+            reps: FxHashMap::default(),
+            dup_reported: false,
             thunk_fns: FxHashMap::default(),
             sdone: FxHashSet::default(),
             vtables: FxHashMap::default(),
@@ -263,6 +281,7 @@ impl<'a> Cg<'a> {
             vt_emitted: FxHashSet::default(),
             rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
+            vararg_bodies: FxHashMap::default(),
             diags: Vec::new(),
             f: Fx::empty(),
             gi: crate::global_init::GlobalInits::default(),
@@ -301,23 +320,25 @@ impl<'a> Cg<'a> {
 
     /// Emits the whole translation unit; also returns the warnings
     /// reported on the way (even when emission fails).
-    pub fn run(mut self) -> (R<Module>, Vec<kiln_diag::Diag>) {
+    pub fn run(mut self) -> (R<Module>, Vec<Diag>) {
         let r = self.run_tu();
         (r.map(|()| self.m), self.diags)
     }
 
     fn run_tu(&mut self) -> R<()> {
         let tu = self.ast.tu;
-        let mut unreached = FxHashSet::default();
-        self.collect_class_defs(tu, &mut unreached, 0);
-        self.unreached_classes = unreached;
+        let completed = self.ast.decls.completed_records();
+        self.completion_index.reserve(completed.len());
+        for (i, &d) in (0u32..).zip(completed) {
+            self.completion_index.entry(d).or_insert(i);
+        }
         self.emit_members(tu)?;
+        self.walk_epoch = u32::MAX;
         // A variable instantiated at a reference whose declaration the
         // walk did not reach (§2a).
         for (_, _, v) in self.ast.templates.ref_var_insts() {
             self.emit_instantiated_var(self.ast.first(*v))?;
         }
-        self.unreached_classes.clear();
         self.emit_late_explicit_insts()?;
         self.emit_key_function_vtables()?;
         self.emit_end_of_tu_instantiations()?;
@@ -329,51 +350,13 @@ impl<'a> Cg<'a> {
         Ok(())
     }
 
-    /// The class definitions among the members of `ctx` (namespaces and
-    /// linkage specifications looked through; nested classes included;
-    /// template instantiations left out).
-    fn collect_class_defs(&self, ctx: DeclId, out: &mut FxHashSet<DeclId>, depth: u32) {
-        let ast = self.ast;
-        if depth > 256 {
-            return;
-        }
-        for d in ast.decls.members(ctx) {
-            match ast.decls.get(d).kind() {
-                DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export => {
-                    self.collect_class_defs(d, out, depth + 1);
-                }
-                // An instantiation is complete where it is instantiated,
-                // which the walk does not track, and a closure type where
-                // its lambda is: they count as complete.
-                DeclKind::CXXRecord
-                    if ast.definition(d) == Some(d)
-                        && ast.instantiated_from(d).is_none()
-                        && ast.spec_info(d).is_none()
-                        && !ast
-                            .decls
-                            .record(d)
-                            .is_some_and(|r| r.defn.contains(DefinitionBits::LAMBDA)) =>
-                {
-                    out.insert(d);
-                    self.collect_class_defs(d, out, depth + 1);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// The top-level walk reached class definition `d`: it and its nested
-    /// classes are complete from here on.
-    fn reach_class(&mut self, d: DeclId) {
-        if self.unreached_classes.is_empty() || !self.unreached_classes.contains(&d) {
-            return;
-        }
-        let mut nested = FxHashSet::default();
-        self.collect_class_defs(d, &mut nested, 0);
-        self.unreached_classes.remove(&d);
-        for n in nested {
-            self.unreached_classes.remove(&n);
-        }
+    /// Class definition `def` is incomplete to code emitted now: the
+    /// top-level walk is emitting a declaration that ended before the
+    /// class was completed (clang `isFuncTypeConvertible` /
+    /// `isCompleteDefinition` at `HandleTopLevelDecl`).
+    pub(crate) fn class_incomplete_now(&self, def: DeclId) -> bool {
+        self.walk_epoch != u32::MAX
+            && self.completion_index.get(&def).is_some_and(|&i| i >= self.walk_epoch)
     }
 
     /// A virtual member function (clang `SetFunctionAttributes` makes it
@@ -397,7 +380,7 @@ impl<'a> Cg<'a> {
         let incomplete = |q: QualType| {
             ast.types.as_record(q).is_some_and(|rd| match ast.definition(rd) {
                 None => true,
-                Some(def) => self.unreached_classes.contains(&def),
+                Some(def) => self.class_incomplete_now(def),
             })
         };
         incomplete(p.ret()) || ast.types.params(p).iter().any(|&q| incomplete(q))
@@ -407,11 +390,25 @@ impl<'a> Cg<'a> {
         let ast = self.ast;
         let members: Vec<DeclId> = ast.decls.members(ctx).collect();
         self.emit_explicit_member_insts(ctx)?;
+        let epochs = if ctx == ast.tu { self.member_epochs(&members) } else { Vec::new() };
+        if let Some(&e) = epochs.first() {
+            self.walk_epoch = e;
+        }
         self.emit_ref_vars(ctx, true)?;
-        for d in members {
+        for (i, &d) in members.iter().enumerate() {
+            if let Some(&e) = epochs.get(i) {
+                self.walk_epoch = e;
+            }
             self.emit_ref_vars(d, false)?;
             if !ast.templates.is_late_explicit_inst(ast.first(d)) {
                 self.emit_member(d)?;
+                if !epochs.is_empty() {
+                    // The explicit instantiation definitions after `d` are
+                    // top-level declarations of their own, which the member
+                    // list does not hold: what was complete when the next
+                    // member ended is (at most a declaration later than clang).
+                    self.walk_epoch = epochs.get(i + 1).copied().unwrap_or(u32::MAX);
+                }
                 self.emit_explicit_member_insts(d)?;
             }
             self.emit_ref_vars(d, true)?;
@@ -431,6 +428,28 @@ impl<'a> Cg<'a> {
             self.emit_instantiated_var(v)?;
         }
         Ok(())
+    }
+
+    /// The class-completion epoch at the end of the top-level declaration
+    /// each member of the translation unit belongs to (the first recorded
+    /// end at or after it, `DeclArena::top_level_ends`; `u32::MAX` past
+    /// the last).
+    fn member_epochs(&self, members: &[DeclId]) -> Vec<u32> {
+        let mut at: FxHashMap<DeclId, u32> = FxHashMap::default();
+        for &(last, e) in self.ast.decls.top_level_ends() {
+            if let Some(l) = last {
+                at.entry(l).or_insert(e);
+            }
+        }
+        let mut out = vec![u32::MAX; members.len()];
+        let mut cur = u32::MAX;
+        for (i, d) in members.iter().enumerate().rev() {
+            if let Some(&e) = at.get(d) {
+                cur = e;
+            }
+            out[i] = cur;
+        }
+        out
     }
 
     /// The member functions and classes explicitly instantiated by a
@@ -503,7 +522,6 @@ impl<'a> Cg<'a> {
                 // and nested classes; inline member functions are emitted
                 // when first used.
                 DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
-                    self.reach_class(d);
                     if !ast.templates.is_moved_class_inst(ast.first(d)) {
                         self.emit_class_members(d)?;
                     }
@@ -547,6 +565,12 @@ impl<'a> Cg<'a> {
                 self.to_emit.push(Def::Decl(d));
             }
         } else {
+            // clang `EmitGlobal` names a deferred definition (its label
+            // is the only name another definition can share).
+            if mangle::asm_label(ast, first).is_some() {
+                let name = mangle::mangle_decl(ast, &mut self.anon, first);
+                self.note_rep(&name, first);
+            }
             self.deferred.insert(first, d);
         }
         Ok(())
@@ -1323,6 +1347,14 @@ impl<'a> Cg<'a> {
         self.ir(&t)
     }
 
+    /// The IR type a value of type `q` is loaded and stored as
+    /// (`convertTypeForLoadStore`): `iN` of a `_BitInt`'s ABI size where
+    /// its in-memory type is a byte array, else [`Self::mty`].
+    pub fn lsty(&mut self, q: QualType) -> LTy {
+        let t = self.tys.convert_load_store(q);
+        self.ir(&t)
+    }
+
     /// `sizeof` and `alignof` of `q`.
     pub fn size_align(&mut self, q: QualType) -> (u64, u64) {
         let l = self.tys.layouter().type_layout(q);
@@ -1392,8 +1424,9 @@ impl<'a> Cg<'a> {
     /// `getClassPointerAlignment`).
     pub fn this_layout(&mut self, rd: DeclId) -> (Option<u64>, u64) {
         match self.ast.definition(rd) {
-            // A class the top-level walk has not reached is incomplete.
-            Some(def) if !self.unreached_classes.contains(&def) => {
+            // A class completed after the top-level declaration being
+            // emitted is incomplete.
+            Some(def) if !self.class_incomplete_now(def) => {
                 let fin = self.class_is_final(def);
                 let eff = fin || self.dtor_is_final(def);
                 let l = self.tys.layouter().record(def);
@@ -1746,11 +1779,17 @@ impl<'a> Cg<'a> {
         on.chain(off).collect::<Vec<_>>().join(",")
     }
 
-    /// `vscale_range(1,16)` on a function definition with the `sve`
-    /// target feature (clang `StartFunction`; not on the thunks and
-    /// helpers clang builds without a `CodeGenFunction`).
+    /// `vscale_range(N/128,N/128)` under `-msve-vector-bits=N`, else
+    /// `vscale_range(1,16)` with the `sve` target feature, on a function
+    /// definition (clang `getVScaleRange` in `StartFunction`; not on the
+    /// thunks and helpers clang builds without a `CodeGenFunction`).
     pub fn vscale_attr(&self, out: &mut Vec<Attr>) {
-        if self.opts.sve && !self.is_x86() {
+        if self.is_x86() {
+            return;
+        }
+        if let Some(n) = self.opts.sve_vector_bits {
+            out.push(Attr::VScaleRange(n / 128, n / 128));
+        } else if self.opts.sve {
             out.push(Attr::VScaleRange(1, 16));
         }
     }
@@ -1766,6 +1805,7 @@ impl<'a> Cg<'a> {
             return Ok(f);
         }
         let name = mangle::mangle_decl(ast, &mut self.anon, first);
+        self.note_rep(&name, first);
         let sig = self.decl_sig(first)?;
         // An existing function of that name and type is this one: a
         // runtime function codegen declared first (`__cxa_allocate_exception`
@@ -1843,6 +1883,7 @@ impl<'a> Cg<'a> {
     /// `GetOrCreateLLVMFunction` with `IsForDefinition`).
     pub(crate) fn fn_for_definition(&mut self, d: DeclId, f: FuncId) -> R<FuncId> {
         let first = self.ast.first(d);
+        self.check_duplicate_def(d, f);
         let sig = self.decl_sig(first)?;
         if self.m.func(f).ty() == sig.fn_ty || !self.m.func(f).is_declaration() {
             return Ok(f);
@@ -1852,6 +1893,38 @@ impl<'a> Cg<'a> {
         }
         self.set_decl_attrs(f, first, &sig);
         Ok(f)
+    }
+
+    /// Records `first` as the representative declaration of symbol
+    /// `name` unless one is recorded.
+    pub(crate) fn note_rep(&mut self, name: &str, first: DeclId) {
+        if !self.reps.contains_key(name) {
+            self.reps.insert(name.to_owned(), first);
+        }
+    }
+
+    /// clang `GetOrCreateLLVMFunction` with `IsForDefinition`: the
+    /// definition `d` into the defined function `f` whose representative
+    /// declaration is another entity is `err_duplicate_mangled_name`
+    /// (once: clang emits no later declaration after the error). The
+    /// body is still appended (its blocks unreachable), as clang does.
+    pub(crate) fn check_duplicate_def(&mut self, d: DeclId, f: FuncId) {
+        if self.dup_reported || self.m.func(f).is_declaration() {
+            return;
+        }
+        let ast = self.ast;
+        let name = self.m.func(f).name();
+        let Some(&rep) = self.reps.get(name) else { return };
+        if rep == ast.first(d) {
+            return;
+        }
+        let prev = ast.definition(rep).unwrap_or(rep);
+        let diag =
+            Diag::new(DiagId::cg_duplicate_mangled_name, Span::empty(ast.decls.get(d).loc()))
+                .arg(name)
+                .note(DiagId::note_previous_definition, Span::empty(ast.decls.get(prev).loc()));
+        self.diags.push(diag);
+        self.dup_reported = true;
     }
 
     /// The declaration attributes of `f` for `first` with signature `sig`.

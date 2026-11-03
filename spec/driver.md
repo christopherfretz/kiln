@@ -60,7 +60,7 @@ starting with `-` are inputs.
 | `-stdlib=libstdc++` / `libc++` | C++ standard library headers (default libstdc++) |
 | `-fexperimental-library`, `-fno-experimental-library` | libc++'s experimental library: `__has_feature(experimental_library)` and `__has_extension(experimental_library)` are 1 (a `kiln_pp` feature overlay, as clang's cc1 flag; libc++ derives `_LIBCPP_ENABLE_EXPERIMENTAL` from it), and the link step gets `-fexperimental-library` (clang adds `-lc++experimental`); the last wins (`Args::experimental_library`, WP-461) |
 | `--target=<triple>` | `aarch64`/`arm64` or `x86_64`/`amd64` Linux; anything else is an error |
-| `-march=<arch>[+ext...]`, `-mcpu=<cpu>[+ext...]`, `-target-feature <±feat>` (usually via `-Xclang`) | AArch64 target features ("Target features" below, WP-459) |
+| `-march=<arch>[+ext...]`, `-mcpu=<cpu>[+ext...]`, `-msve-vector-bits=<N\|scalable>`, `-target-feature <±feat>` (usually via `-Xclang`) | AArch64 target features and the `__ARM_*` predefines ("Target features" below, WP-459, WP-469) |
 | `--embed-dir=<dir>` | `#embed` search directory |
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP` | dependency output (see below) |
 | `-trigraphs`, `-ftrigraphs`, `-fno-trigraphs` | trigraphs (default: on only for strict C and C++ before 17) |
@@ -85,6 +85,9 @@ starting with `-` are inputs.
 | `-verify[=<prefixes>]`, `-verify-ignore-unexpected[=<levels>]` | with `-fsyntax-only`: check the diagnostics against `expected-*` comments (see "-verify") |
 | `-Xclang <arg>` | `<arg>` is parsed as a driver option (kiln has no separate `cc1`), so `-Xclang -verify` is `-verify` |
 | `-fdump-ast[=ids,locs,canonical,implicit,all-files]`, `-fdump-ast-filter=<s>` | with `-fsyntax-only`: the AST dump (`spec/ast-dump.md`) to the output |
+| `-fkiln-cfg-stats` | with `-fsyntax-only` (otherwise not implemented): one line per function body sema analyzes, `cfg-stats: '<function>' status=<Ok\|TooLarge\|...> blocks=N elems=N edges=N bytes=N build_ns=N`, to the output (spec/sema.md §7.5.1); a measurement aid, not a stable format |
+| `-fkiln-dump-cfg` | with `-fsyntax-only` (otherwise not implemented): the control-flow graph of every function body sema analyzes (spec/sema.md §7.5.1), in clang's `DumpCFG` layout, to the output (after the diagnostics, before an AST dump) |
+| `-fkiln-cfg-max-elems=N` | kiln: the element budget of one body's graph (default 33554432); a body over it builds no graph and its CFG-based warnings are skipped (spec/sema.md §7.5.1). A value that is not an integer is `invalid integral value` |
 | `-fdump-record-layouts`, `-fdump-record-layouts-complete` | with `-fsyntax-only`: the record layouts (`spec/abi.md` §6, §8.4) to the output |
 | `-fdump-vtable-layouts` | with `-fsyntax-only`: the vtable groups (`spec/abi.md` §8.5) to the output |
 | `-c`, `-S`, `-emit-llvm` | code generation (see "Code generation") |
@@ -191,38 +194,68 @@ search"), which drops nonexistent and duplicate directories.
 
 ## Target features
 
-`features::resolve` (WP-459) turns `-march=`, `-mcpu=` and
-`-target-feature` into the AArch64 feature set the way clang's AArch64
-driver does (`getAArch64TargetFeatures`); `run_as` reports its errors once,
-the `-fsyntax-only` and codegen paths read the result.
+`features::resolve` (WP-459, WP-469) turns `-march=`, `-mcpu=`,
+`-msve-vector-bits=` and `-target-feature` into the AArch64 target state
+the way clang's AArch64 driver does (`getAArch64TargetFeatures`, LLVM's
+`AArch64::ExtensionSet`); `run_as` reports its errors once, the `-E`,
+`-fsyntax-only` and codegen paths read the result. Both oracles are
+modelled: clang 22 by default, clang 19 at `-fclang-compat=19`.
 
-- **Base.** The last `-march=` wins; its value is `armv8-a` followed by
-  `+ext` modifiers. Without `-march=`, the last `-mcpu=` is used: `generic`
-  (adds `+ete,+trbe`) followed by `+ext` modifiers. When `-march=` is
-  present, `-mcpu=` contributes nothing (clang uses the CPU only without
-  an architecture).
-- **Extensions** are case-insensitive and applied left to right, the
-  last setting of each winning: `sve` adds `+fullfp16` and `+sve`;
-  `nosve` removes `sve` (`+sve+nosve` leaves `+fullfp16`, `-sve`; a lone
-  `+nosve` does nothing).
+- **Base.** The last `-march=` wins: an architecture level, then `+ext`
+  modifiers. The levels are `armv8-a`, `armv8.1-a` ... `armv8.9-a`,
+  `armv9-a`, `armv9.1-a` ... `armv9.5-a`, and with clang 22 also
+  `armv9.6-a`/`armv9.7-a`; spelling is case-insensitive and the `-` before
+  `a` optional (`armv8a`), as clang's. Each level enables its default
+  extensions (those of every lower level, plus its own: `crc`, `lse`,
+  `rdm` at v8.1, ..., `sve2` at v9.0, ...). Without `-march=`, the last
+  `-mcpu=` is used: `generic` (armv8-a, adds `+ete,+trbe`) followed by
+  `+ext` modifiers. When `-march=` is present, `-mcpu=` contributes nothing
+  (clang uses the CPU only without an architecture).
+- **Extensions** are case-insensitive and applied left to right (empty
+  `+` segments are skipped): `+x` enables `x` and, transitively, its
+  dependencies; `+nox` disables `x` if it is enabled and, transitively,
+  everything depending on it (LLVM's `ExtensionDependencies`; e.g. `sve`
+  needs `fullfp16`, which needs `fp`, so `+nofp` removes `sve`). The
+  spellings are clang's (`fp`, `simd`, `fp16`, `crypto`, `crc`, `lse`,
+  `rdm`, `rcpc`, `dotprod`, `bf16`, `i8mm`, `sve`, `sve2`, `sve2-aes`,
+  ..., `memtag`, `rng`, `pauth`, `mops`, `gcs`, `d128`, ...; the table is
+  `features::extension`). The special cases are LLVM's: `+crypto` is
+  `aes`+`sha2`, and from v8.4 also `sha3`+`sm4`; `+fp16` on v8.4 .. v8.9
+  also enables `fp16fml`; `+nocrypto` disables `aes`, `sha2`, `sha3` and
+  `sm4`. clang 22 splits each `sve2-x` into `sve2` + `sve-x` (and accepts
+  `sve-aes`, `sve-bitperm`, `sve-sha3`, `sve-sm4`, `sve2p2`, `sve2p3`,
+  `fprcvt`, `f16f32dot`, ...), drops `tme`; clang 19 has no `sve-x`.
 - **`-target-feature ±name`** applies after the base, in order, last
-  wins; `+sve` alone adds only `+sve` (no `+fullfp16`). `-Xclang
+  wins, with no dependency closure; `+sve` alone adds only `+sve`. `-Xclang
   -target-feature -Xclang +sve` is accepted: an `-Xclang` before a
   separate value is skipped.
-- **Result.** `TargetFeatures { sve, extra }`: `sve` sets
-  `ParseOptions::sve` / `Sema::sve` (SVE types usable, spec/types.md
-  §5.1) and `CodegenOptions::sve` (`vscale_range(1,16)`, spec/codegen.md
-  §7aa); `extra` (`±name` in first-appearance order) overrides the
-  default AArch64 `"target-features"` entries
-  (`CodegenOptions::target_features`).
-- **Errors.** Any other architecture, CPU or extension is `unsupported
-  argument '<v>' to option '-march='` (`-mcpu=` alike); on x86-64,
-  `-march=`/`-mcpu=` are the same error and `-target-feature` is ignored.
-  A `-target-feature` value without a sign is `unsupported argument`.
-  An unknown `+name` is passed through to `"target-features"`.
-- **Not yet.** The `__ARM_FEATURE_SVE`, `__ARM_FEATURE_SVE_VECTOR_OPERATORS`
-  and `__ARM_FEATURE_FP16_*` predefines do not follow the features (the
-  predefine table, `kiln_pp/src/predef.rs`, has no feature input yet).
+- **`-msve-vector-bits=N`** (`128`, `256`, `512`, `1024`, `2048` or
+  `scalable`, the default) fixes the SVE vector length: `vscale_range(N/128,
+  N/128)` on every definition and `__ARM_FEATURE_SVE_BITS N`, with or
+  without `sve` (clang alike).
+- **Result.** `TargetFeatures { sve, extra, arch, sve_vector_bits }`:
+  - `sve` sets `ParseOptions::sve` / `Sema::sve` (SVE types usable,
+    spec/types.md §5.1) and `CodegenOptions::sve` (`vscale_range(1,16)`,
+    spec/codegen.md §7aa; at `-fclang-compat=19` only with NEON too, as
+    clang 19's `SveMode`);
+  - `extra` (the touched features, `+` if on, `-` if off, minus the
+    base's `fp-armv8`, `neon` and `v8a`) overrides the default AArch64
+    `"target-features"` entries (`CodegenOptions::target_features`), which
+    print as clang's: sorted `+` entries, then sorted `-` entries;
+  - `TargetFeatures::enabled()` with `arch` and `sve_vector_bits` is
+    `PredefConfig::arm` (`kiln_pp::ArmTarget`), from which the
+    `__ARM_ARCH`, `__ARM_FP`, `__ARM_NEON*` and `__ARM_FEATURE_*`
+    predefines derive (spec/pp.md "AArch64 target macros").
+- **Errors.** Any other architecture, CPU or extension (`armv8.0-a`,
+  `armv7-a`, `cortex-a57`, `sme`, ...) is `unsupported argument '<v>' to
+  option '-march='` (`-mcpu=` alike), and so is a `-msve-vector-bits=`
+  value outside the list (`'<v>' to option '-msve-vector-bits='`). On
+  x86-64, `-march=`/`-mcpu=` are the same error, `-msve-vector-bits=` is
+  `unsupported option '-msve-vector-bits=' for target '<triple>'` (the
+  `--target` as written; `drv_unsupported_opt_for_target`) and
+  `-target-feature` is ignored. A `-target-feature` value without a sign
+  is `unsupported argument`. An unknown `+name` is passed through to
+  `"target-features"`.
 
 ## Predefines
 
@@ -242,6 +275,8 @@ The `<built-in>` buffer is `kiln_pp::build_predefines(base, cfg, -D/-U)`.
   - `-pthread`;
   - thread-safe statics;
   - sized deallocation;
+  - on AArch64, the target state of "Target features" (`PredefConfig::arm`;
+    the `__ARM_*` target macros, spec/pp.md "AArch64 target macros");
   - `-stdlib=libc++`: no `__STDCPP_FLOAT16_T__` ... `__STDCPP_BFLOAT16_T__`
     (`std_float_aliases`; libc++ has no `<stdfloat>`, spec/pp.md P1467
     macros).
@@ -673,12 +708,13 @@ Each deviation is covered by a test or a test note.
 17. **`-verify` needs `-fsyntax-only`.** clang also verifies a full
     compile. `-Xclang` forwards to the driver parser, not to a `cc1`,
     so only options the driver knows are accepted after it.
-18. **Target features** ("Target features" above): only `armv8-a`
-    and `generic` with the `sve`/`nosve` extensions are known, so other
-    `-march=`/`-mcpu=` values are errors where clang accepts them; on
-    x86-64, `-mcpu=` is "unsupported argument" (clang: "unsupported
-    option") and `-target-feature` is ignored (clang passes it on); a
-    `-target-feature` value without `+`/`-` is an error (clang warns).
+18. **Target features** ("Target features" above): the CPU names other
+    than `generic`, `-march=armv8-r`/`native`, and the extensions kiln does
+    not model (`sme*`, `fp8*`, clang 19's `b16b16`/`sve-b16b16`, ...) are
+    errors where clang accepts them; on x86-64, `-mcpu=` is "unsupported
+    argument" (clang: "unsupported option") and `-target-feature` is
+    ignored (clang passes it on); a `-target-feature` value without
+    `+`/`-` is an error (clang warns).
 
 ## Tests
 

@@ -6,8 +6,7 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{
-    BinaryOp, CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, ExprNode, Radix, TypeidOperand,
-    ValueCategory,
+    BinaryOp, CastKind, ExprDeps, ExprFlags, ExprKind, ExprNode, TypeidOperand, ValueCategory,
 };
 use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::names::{DeclName, DeclNameView};
@@ -371,6 +370,18 @@ impl Substituter<'_, '_, '_> {
                 let args = ex(self).call_args(e);
                 let callee = self.callee(callee)?;
                 let args = self.call_arg_list(args)?;
+                // A call of an explicit object member function (`o.f(x)`
+                // built as `f(o, x)`, P0847) is rebuilt as one.
+                let named = self.sema.ignore_parens(callee);
+                if ex(self).get(named).kind() == ExprKind::DeclRefExpr
+                    && !args.is_empty()
+                    && self.sema.has_explicit_object(ex(self).decl(named))
+                {
+                    let m = ex(self).decl(named);
+                    let at = ex(self).get(named).loc();
+                    let lparen = self.sema.begin_loc(callee);
+                    return Ok(self.sema.rebuild_explicit_object_call(m, at, &args, lparen, end));
+                }
                 // clang `TransformCallExpr`: the "fake" `(` is where the
                 // callee begins.
                 let lparen = self.sema.begin_loc(callee);
@@ -882,6 +893,26 @@ impl Substituter<'_, '_, '_> {
                 }
                 _ => Ok(e),
             },
+            // spec/reflection.md §5: a dependent splice resolves once its
+            // operand (and object) are substituted.
+            ExprKind::CXXSpliceExpr => {
+                let op = ex(self).splice_operand(e);
+                let base = ex(self).splice_base(e);
+                let targs = ex(self).splice_template_args(e);
+                let op = self.expr(op)?;
+                if let Some(list) = targs {
+                    let list = self.args(list, loc)?;
+                    let v = self.sema.ast.types.args(list).to_vec();
+                    return Ok(self.sema.act_on_splice_template_expr(op, &v, loc, end));
+                }
+                Ok(match base {
+                    None => self.sema.act_on_splice_expr(op, loc, end),
+                    Some((b, arrow)) => {
+                        let b = self.expr(b)?;
+                        self.sema.act_on_member_splice(b, op, loc, end, loc, arrow)
+                    }
+                })
+            }
             ExprKind::ArrayTypeTraitExpr => {
                 let t = ex(self).type_trait(e);
                 let q = ex(self).array_trait_type(e);
@@ -1709,62 +1740,14 @@ impl Substituter<'_, '_, '_> {
         value: kiln_ast::ConstValueId,
         loc: Loc,
     ) -> SubstResult<ExprId> {
-        let Some(v) = self.sema.const_int(value) else {
-            // Class, pointer and null values (§6.10).
-            if let Some(r) = self.sema.nttp_value_expr(ty, value, loc) {
-                return Ok(r);
-            }
-            return self.unimplemented("non-type template argument of this type", loc);
-        };
-        let t = &self.sema.ast.types;
-        if let Some(en) = t.as_enum(ty) {
-            let it = self
-                .sema
-                .ast
-                .decls
-                .enumeration(en)
-                .and_then(|d| d.int_type)
-                .unwrap_or(QualType::INT);
-            let lit = self.int_literal(it, v, loc);
-            return Ok(self.sema.ast.builder().cast(
-                ExprKind::CStyleCastExpr,
-                CastKind::IntegralCast,
-                lit,
-                ty,
-                ValueCategory::PRValue,
-                None,
-                loc,
-                ExprFlags::NONE,
-            ));
+        match self.sema.nttp_arg_expr(ty, value, loc) {
+            Some(e) => Ok(e),
+            None => self.unimplemented("non-type template argument of this type", loc),
         }
-        let kind = match t.builtin(ty) {
-            Some(BuiltinType::Bool) => {
-                return Ok(self.sema.ast.builder().bool_literal(ty, v != 0, loc));
-            }
-            Some(BuiltinType::Char | BuiltinType::SChar | BuiltinType::UChar) => {
-                Some(CharKind::Ascii)
-            }
-            Some(BuiltinType::WChar) => Some(CharKind::Wide),
-            Some(BuiltinType::Char8) => Some(CharKind::Utf8),
-            Some(BuiltinType::Char16) => Some(CharKind::Utf16),
-            Some(BuiltinType::Char32) => Some(CharKind::Utf32),
-            Some(_) => None,
-            None => return self.unimplemented("non-type template argument of this type", loc),
-        };
-        if let Some(kind) = kind {
-            let u = u32::try_from(v & 0xffff_ffff).unwrap_or(0);
-            return Ok(self.sema.ast.builder().char_literal(ty, kind, u, loc));
-        }
-        Ok(self.int_literal(ty, v, loc))
     }
 
     pub(crate) fn int_literal(&mut self, ty: QualType, v: i128, loc: Loc) -> ExprId {
-        if let Ok(u) = u64::try_from(v) {
-            self.sema.ast.builder().int_literal(ty, u, Radix::Decimal, loc)
-        } else {
-            let c = self.sema.int_const(ty, v);
-            self.sema.ast.builder().wide_int_literal(ty, c, Radix::Decimal, loc)
-        }
+        self.sema.nttp_int_literal(ty, v, loc)
     }
 
     /// An initializer-clause of a braced list; a `DesignatedInitExpr`

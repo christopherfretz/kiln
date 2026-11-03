@@ -355,8 +355,10 @@ dropped too), when all of these hold:
 - the flag is set (no `-Wsystem-headers`);
 - the id does not show in system headers. `DiagId::shows_in_system_header`
   is true for hard errors (`Error`, `Fatal`) and for the warnings clang
-  marks `ShowInSystemHeader`: `pp_warning_directive` (`#warning`) and
-  `oven_enum_constexpr_conversion` (checked against clang 19). Every other
+  marks `ShowInSystemHeader`: `pp_warning_directive` (`#warning`),
+  `oven_enum_constexpr_conversion` (checked against clang 19) and
+  `sema_diagnose_if_succeeded_warning` (a `diagnose_if` warning, which
+  libc++ issues from its headers; WP-486). Every other
   warning, `DefaultError` warnings included, is suppressed;
 - the primary span is valid and `SourceManager::is_in_system_header(lo)`:
   the expansion location of the caret is in a system header as the
@@ -480,8 +482,14 @@ DiagEngine::with_stderr(&sm, &opts) // TextSink or JsonSink per opts.format
 engine.emit(diag) / diag.emit(&engine)
 engine.severity(id) / is_enabled(id) / is_enabled_at(id, loc) / suppress_system_warnings()
 engine.would_emit(&diag) // §7.4
+engine.group_flag(group) // Option<bool>: the last of -W<group> / -Wno-<group>
 engine.error_count() / warning_count() / has_fatal() / summary() / flush()
 ```
+
+`group_flag` serves the few groups clang reads as language options
+rather than severities (`-Winvalid-constexpr` sets
+`CheckConstexprFunctionBodies`; spec/sema.md §5.28): only those two
+spellings count, not `-Weverything`, `-Werror=<group>` or a pragma.
 
 `new` first emits `opts.pending`, then §5.3's reports, as locationless
 diagnostics. `DiagSink::emit(&mut self, sm, &Diagnostic)` receives

@@ -158,9 +158,10 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
                 // is false, a cast only a fold performs continues), and a
                 // value makes it a static initializer all the same. The
                 // variable is not constant-initialized, so neither its
-                // uses nor its destruction see the value. Scalars and
-                // vectors only (spec/codegen.md "Static initialization").
-                None if is_scalar(b.ast, var) => {
+                // uses nor its destruction see the value. Scalars,
+                // vectors and initializer lists (spec/codegen.md "Static
+                // initialization").
+                None if is_scalar(b.ast, var) || is_init_list(b.ast, e) => {
                     let v = oven.fold_rvalue(&mut b, e);
                     if v.is_some() {
                         refolded.insert(e);
@@ -171,7 +172,11 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             },
             None => oven.fold_rvalue(&mut b, e),
         };
-        if let Some(v) = v {
+        // A value holding the address of an automatic variable (a
+        // `constexpr` reference to a local, P2686R5) has no constant
+        // form: like clang's `ConstantEmitter`, which cannot emit it,
+        // codegen evaluates the expression at run time.
+        if let Some(v) = v.filter(|&v| kiln_oven::automatic_referent(b.ast, v).is_none()) {
             folds.expr.insert(e, v);
         }
     }
@@ -232,6 +237,18 @@ fn is_scalar(ast: &Ast, d: DeclId) -> bool {
                 | TypeView::Vector { .. }
         )
     })
+}
+
+/// Whether initializer `e` is an initializer list: clang's
+/// `ConstExprEmitter` emits each element with `tryEmitPrivateForMemory`,
+/// which folds an element it cannot emit directly with `EvaluateAsRValue`
+/// (outside a constant context once constant initialization failed), so
+/// a list whose elements all fold is a static initializer (`H h =
+/// {(void (*)())&f, 1};`, WP-492). A constructor call is not: the
+/// emitter takes only a trivial one, and a list with temporaries
+/// (`ExprWithCleanups`) is left dynamic.
+fn is_init_list(ast: &Ast, e: ExprId) -> bool {
+    ast.exprs.get(e).kind() == ExprKind::InitListExpr
 }
 
 /// Collects the candidate expressions.
@@ -502,6 +519,17 @@ impl Collect<'_> {
             let is_static = is_static_local(ast, d)
                 || ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::Extern);
             self.var(d, is_static);
+            // A tuple-like decomposition's holding variables are not in
+            // the `DeclStmt` ([dcl.struct.bind]/4): a `static constexpr`
+            // one's are constant-initialized like `e` (clang emits
+            // `@_ZZ1fvE1x = internal constant ptr @_ZZ1fvEDC1x1yE`).
+            if let Some(l) = ast.decls.decomp_bindings(d) {
+                for b in ast.lists.iter::<DeclId>(l) {
+                    if let Some(h) = ast.decls.binding_var(b) {
+                        self.var(h, is_static_local(ast, h));
+                    }
+                }
+            }
         }
     }
 

@@ -1711,6 +1711,24 @@ impl AstBuilder<'_> {
         self.ast.decls.set_loc(spec, loc);
     }
 
+    /// Locates function `f`, whose definition is being instantiated from
+    /// pattern definition `def`, at `def` (clang
+    /// `InstantiateFunctionDefinition` copies the pattern definition's
+    /// location and declarator end): diagnostics in the instantiated
+    /// definition that point at the function, and later notes about it,
+    /// name the out-of-line definition rather than the in-class
+    /// declaration (spec/sema-templates.md §4.4).
+    pub fn relocate_to_pattern_definition(&mut self, f: DeclId, def: DeclId) {
+        let loc = self.ast.decls.get(def).loc();
+        if self.ast.decls.get(f).loc() == loc {
+            return;
+        }
+        self.ast.decls.set_loc(f, loc);
+        if let Some(&end) = self.ast.decls.cold.declarator_end.get(def) {
+            let _ = self.ast.decls.cold.declarator_end.insert(f, end);
+        }
+    }
+
     /// Marks specialization `spec` as declared in lexical context
     /// `lexical` (an explicit specialization or instantiation, which
     /// clang lists among the decls of the context it appears in;

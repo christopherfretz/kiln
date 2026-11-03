@@ -50,8 +50,16 @@ panic and never silently wrong IR.
   re-folded initializer is never registered for constant destruction.
   A vector initializer is re-folded the same way (`tryEmitPrivate`
   evaluates it as an rvalue: `i4 gv = cv;` with `const i4 cv = {..}` is
-  a static initializer; WP-453, §7w). Aggregates are not re-folded (they
-  keep their dynamic initializer).
+  a static initializer; WP-453, §7w). An initializer list is re-folded
+  the same way (clang's `ConstExprEmitter` emits each element with
+  `tryEmitPrivateForMemory`, which falls back to `EvaluateAsRValue`;
+  WP-492): `H h = {(void (*)())&f, 1};` and `A a = {
+  __builtin_is_constant_evaluated() ? x : 7};` are static initializers.
+  Other aggregate initializers (a constructor call, a list with
+  temporaries) are not re-folded and keep their dynamic initializer. A
+  cast to or from a function pointer continues in a fold (spec/oven.md
+  "Pointers that point at nothing"), so `void (*p)() = (void (*)())&f;`
+  is the global `ptr @f`.
   Uses of a const integral variable whose constant initialization failed
   fold to that same non-manifest value (spec/oven.md "Lax folds"), so
   `return cg;` emits `ret i32 9` and the unused internal `cg` is not
@@ -88,6 +96,12 @@ panic and never silently wrong IR.
   read-through").
   Validation: `tests/codegen/const_fold_lax.cpp`,
   `tests/codegen/ref_const_fold.cpp`.
+  A fold whose value designates an automatic object (C++26 P2686R5
+  constexpr references and pointers to locals,
+  `kiln_oven::automatic_referent`) is not recorded: an LLVM constant
+  cannot hold an alloca's address, so the initializer is emitted at run
+  time and uses load the variable, as clang's `ConstantEmitter` falls back
+  (WP-467, `tests/conformance/expr.const/constexpr-ref-automatic-run.cpp`).
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
@@ -374,9 +388,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     - isfinite/isinf/isnan/isnormal are `llvm.is.fpclass` (tests 504,
       516, 3, 264) zero-extended; `__builtin_isfpclass(x, m)` is
       `llvm.is.fpclass` with the folded mask `m` (not emitted; the fold
-      prepass collects it); `__builtin_expect_with_probability` at -O0 is
-      its first operand (the expected value emitted, the probability
-      not); signbit (and WP-419's `signbitf` / `signbitl`, through
+      prepass collects it); `__builtin_expect` and
+      `__builtin_expect_with_probability` at -O0 are their first operand
+      (the expected value emitted, the probability not), above -O0
+      `llvm.expect.T(value, expected)` and
+      `llvm.expect.with.probability.T(value, expected, double P)` with
+      the probability folded (WP-492, `builtin_expect_o1.cpp`); signbit (and WP-419's `signbitf` / `signbitl`, through
       `builtin::f128_twin`) bitcasts to an integer of the
       float's width and tests `slt 0`, and a constant argument folds
       (clang 19 and 22; `builtins_signbit_fl.cpp`); the isgreater family is one
@@ -816,7 +833,9 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   `TempLoopID`) and filled when it is popped, through
   `Module::md_set_operands`, so an inner loop of an `unroll_and_jam` parent
   is finished first and becomes the parent's
-  `llvm.loop.unroll_and_jam.followup_inner`, the parent's own
+  `llvm.loop.unroll_and_jam.followup_inner` (listing its properties;
+  at `-fclang-compat=19` one distinct self-referential node of them, as
+  clang 19's loop-id `UnrollAndJamInnerFollowup`), the parent's own
   `followup_outer` carrying the before-jam attributes. The followup chain
   is clang's: full unroll → distribute → vectorize (`followup_all`,
   `followup_epilogue`) → unroll-and-jam → partial unroll → pipelining,
@@ -3041,8 +3060,24 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   20+ `FoldBitCast`), and otherwise stays a `bitcast (...)` constant
   expression. So storing a constant `bool` vector to a local is `store iP
   bitcast (<P x i1> <...> to iP)`, as clang's.
+- *Arrays* (WP-438), as clang's `ConstExprEmitter`
+  `EmitArrayInitialization` / `EmitArrayConstant`: an array of `bool`
+  vectors at any depth keeps `<N x i1>` elements (`[2 x [2 x <4 x
+  i1>]]`), also as a class member (`record_elems`). The desired type is
+  the memory form (`bool_vec_mem_form`: `<4 x i1>` is `i8`), so an
+  all-zero array is `[3 x i8] zeroinitializer` and a trailing zero array
+  without a common type is `[k x i8]`. A value-initialized element, filler
+  or member (`ImplicitValueInitExpr`, clang `EmitNullConstant`) of a
+  `bool` vector, array of them or class is the null of its memory type
+  (`i8 0`, `[2 x i8] zeroinitializer`, `%struct.P zeroinitializer`), so a
+  partly initialized array is a packed struct (`<{ <4 x i1>, <4 x i1>, i8,
+  i8 }>`). `array_const` takes clang's `CommonElementType` over the
+  explicit elements only: a trailing zero array of 8 or more is of their
+  common type (`[9 x <{ <4 x i1>, i8 }>]`) even when the filler's differs.
 - Test: `tests/codegen/bool_vector_const.cpp` (exact on both triples
-  under oracle 19, structural under 22).
+  under oracle 19, structural under 22); arrays and members:
+  `tests/codegen/bool_vector_array_const.cpp`; unions:
+  `tests/codegen/bool_vector_union_const.cpp` (WP-438).
 
 ## 7t. Landed (WP-444): GNU computed goto (`stmt.rs`)
 - `&&l` (clang `GetAddrOfLabel`, `addr_of_label`) is `blockaddress(@f,
@@ -3216,14 +3251,13 @@ No lowering changed; the new forms reach codegen as existing AST.
   one calls `get` at run time, as clang does. Test:
   `dcl.struct.bind/p2686-run.cpp`.
 - Left:
-  - A `static constexpr` block-scope tuple-like decomposition's holding
-    references get a guarded dynamic initializer, where clang
-    constant-initializes them: `fold::Collect::local_decl` does not
-    visit the holding variables of a local decomposition, so no fold
-    exists for `static_local` (values are right; WP-453 owns
-    `fold.rs`).
-  - An unreferenced namespace-scope `constexpr` decomposition's `e`
-    (`@_ZDC1x1yE`, internal) is not emitted; clang emits it.
+  - (Fixed by WP-467, `spec/landed/codegen/WP-467.md`.) A `static
+    constexpr` block-scope tuple-like decomposition's holding references
+    got a guarded dynamic initializer, where clang constant-initializes
+    them.
+  - (Fixed by WP-467.) An unreferenced namespace-scope `constexpr`
+    decomposition's `e` (`@_ZDC1x1yE`, internal) was not emitted when
+    its holding variables do not refer to it; clang emits it.
 
 ## 7aa. Landed (WP-459): explicit-object conversion functions, AArch64 target features
 - A conversion function with an explicit object parameter
@@ -3248,12 +3282,39 @@ No lowering changed; the new forms reach codegen as existing AST.
   `_GLOBAL__sub_I_*`, `__tls_init`: `init_fn_attrs`) carry
   `vscale_range(1,16)` (clang's `CodeGenFunction` for a target with SVE);
   the TLS wrapper and `__clang_call_terminate`, built outside it, do not.
-  Test `ext.arm.sve/ir-target-features-sve.cpp`.
-- Not yet: SVE constants (a scalar splat into a scalable vector, the zero
-  vector of `-v` or of a vector `?:` condition) are built as fixed vectors
-  and fail IR lowering (`expr.rs` integer/float constants, `func.rs`
-  `splat`); SVE allocas use alignment 1 (clang 16, `svbool_t` 2), from
-  `kiln_abi`'s target type table.
+  With `CodegenOptions::sve_vector_bits` (`-msve-vector-bits=N`, with or
+  without `sve`) the range is `vscale_range(N/128,N/128)` instead (WP-469).
+  Tests `ext.arm.sve/ir-target-features-sve.cpp`, `ir-sve-vector-bits.cpp`,
+  `ir-target-features-march-levels.cpp`.
+- SVE scalable vectors (WP-469; test `ext.arm.sve/ir-scalable-constants.cpp`):
+  - A constant splat into a scalable vector (`v + 1`, the `-1` of `~v`,
+    the zero of `-v`, a scalar `?:` arm) is `ConstData::Splat`
+    (`Module::const_splat`; `ConstantVector::getSplat`): an all-zero lane
+    folds to `zeroinitializer` (likewise undef/poison). It prints as
+    `splat (T c)` for LLVM 20+ and as LLVM 19's
+    `shufflevector (<vscale x N x T> insertelement (<vscale x N x T> poison,
+    T c, i64 0), <vscale x N x T> poison, <vscale x N x i32>
+    zeroinitializer)` before (`Module::ir_version`). A non-constant splat is
+    `insertelement poison, x, i64 0` + a scalable `shufflevector` with a
+    zero mask (`func.rs` `splat`, `shuffle`); no fixed-vector folding.
+  - A vector `?:` on a sizeless condition is element-wise: an `svbool_t`
+    condition selects directly at compat 22 and is compared
+    `icmp ne … zeroinitializer` at compat 19, as every other SVE condition
+    is; then `select`.
+  - A comparison yields `<vscale x N x i1>` (`cmp_ty`), zero-extended to the
+    result type unless that is `svbool_t` (`vec_cmp_result`); unsigned
+    lanes use the unsigned predicates, floats `fcmp oeq` etc.
+  - `v[i]` (spec/sema.md §5.19a) is a vector element lvalue as for a GNU
+    vector (`vec_subscript`, `LValue::MakeVectorElt`): `extractelement`
+    on a read, `insertelement` and a store back on a write (test
+    `ext.arm.sve/ir-subscript.cpp`).
+  - Allocas of a sizeless type are aligned as clang's `getTypeInfo`: 16
+    for an SVE data vector, 2 for `svbool_t` and `__SVCount_t`
+    (`kiln_abi` `target_types`; sizeof/alignof stay ill-formed in sema).
+  - Not yet: a C++26 erroneous-value (`-ftrivial-auto-var-init`) store is
+    emitted for an SVE local; clang emits none (`kiln_codegen`
+    `auto_init.rs`, WP-489). The test passes
+    `-ftrivial-auto-var-init=uninitialized`.
 ## 7v. Landed (WP-456): `PseudoObjectExpr`
 
 The synthesized three-way comparison of a defaulted `operator<=>`
@@ -3292,14 +3353,52 @@ categories, compared with clang 22 and clang 19 on both targets).
   emitted (`tests/codegen/asm_label_shared.cpp`,
   `tests/codegen/asm_label_structors.cpp`,
   `tests/conformance/dcl.asm/asm-label-shared-and-structors.cpp`).
+  A later variant of the same function type has its body appended to
+  that definition as unreachable blocks (a labelled virtual destructor's
+  `D0` after `D2`: `; No predecessors!`, declaring `_ZdlPvm`); one of
+  another type — the complete-object variant of a class with virtual
+  bases, without the base-object variant's VTT parameter — replaces the
+  definition at the end of the module (`Module::redefine_function_to_end`,
+  clang erasing the old definition), so the label is the complete-object
+  function and the class's vtable and VTT are emitted (WP-492,
+  `tests/codegen/asm_label_structors_vbases.cpp`,
+  `tests/conformance/dcl.asm/asm-label-structors-vbases-run.cpp`).
+- **Duplicate mangled names** (WP-492; clang `err_duplicate_mangled_name`
+  in `GetOrCreateLLVMFunction` with `IsForDefinition`): each symbol name
+  has a representative declaration, the first one codegen names it for
+  (a reference, a definition, or a deferred labelled definition: clang's
+  `Manglings`). A function definition into an already defined function
+  whose representative is another entity is the error `definition with
+  same mangled name 'N' as another definition` at the definition, with
+  `note: previous definition is here` at the representative's
+  definition; it is reported once (clang emits no later declaration
+  after an error) and no output is written. Structor variants sharing a
+  label are one entity. A function defined under the symbol of a defined
+  variable (clang's error) is not detected
+  (`crates/kiln_driver/tests/codegen.rs` `duplicate_mangled_name`).
 - **Incomplete class in a signature**: a function first referenced while
   a class parameter or return type is incomplete (never defined, or
   defined later in the TU) is declared `void ()` with no attributes, as
   clang does for a type `isFuncTypeConvertible` rejects; the declaration
   stays when the class is completed, calls use their call-site function
-  type, and a definition retypes it. The top-level walk tracks the class
-  definitions it has not reached yet; a pointer or reference to such a
-  class has no `dereferenceable` size. A virtual method's placeholder is
+  type, and a definition retypes it. A class is complete to the
+  top-level walk from the end of the top-level declaration during which
+  it was completed (clang `HandleTopLevelDecl`; a namespace or
+  linkage-specification block is one declaration, so a class defined
+  later in the same block is complete): the parser records the TU's
+  last member and the class-completion epoch at the end of each
+  (`DeclArena::end_top_level_decl`), a TU member takes the epoch of the
+  first end at or after it in the member list (a class specialization
+  first declared by an explicit instantiation is appended there), the
+  explicit instantiation definitions that follow a member take the next
+  member's, the walk compares the class's completion index against that
+  epoch, and after the walk every class is complete. Class template specializations,
+  member classes of them and explicit specializations count by where
+  they are completed, local classes and closure types are complete with
+  their enclosing declaration (WP-492,
+  `tests/codegen/incomplete_class_inst.cpp`,
+  `temp.inst/incomplete-specialization-signature-run.cpp`). A pointer
+  or reference to an incomplete class has no `dereferenceable` size. A virtual method's placeholder is
   `unnamed_addr`, and so is its thunk's
   (`tests/codegen/incomplete_class_sig.cpp`,
   `tests/codegen/incomplete_class_thunk.cpp`). A braced list initializing
@@ -3316,10 +3415,30 @@ categories, compared with clang 22 and clang 19 on both targets).
   a dead block (x86-64 functions keep `align 2`). Before this a
   this-adjusting thunk dropped the variadic arguments. Above `-O0` the
   vtable's such thunk is `available_externally` when the vtable is; a
-  return-adjusting variadic thunk is a declaration (clang would clone
-  the method), and defining one is diagnosed
-  (`tests/codegen/variadic_thunk{,_o1,_o1_nopasses}.cpp`,
+  return-adjusting variadic thunk of a method defined elsewhere is a
+  declaration (`tests/codegen/variadic_thunk{,_o1,_o1_nopasses}.cpp`,
   `tests/conformance/class.virtual/variadic-thunk-run.cpp`).
+- **Return-adjusting variadic thunks** (WP-492) are clang's
+  `GenerateVarArgsThunk`, emitted after their method's definition
+  (`emit_thunks`): `gen_code_or_thunk` keeps the finished `Fir` of every
+  variadic virtual method (`Cg::vararg_bodies`), and the thunk is a copy
+  of it (`Fir::clone_body`, LLVM `CloneFunction`): moved to the end of
+  the module, the module's unique-name counter advanced once (the clone
+  is first named after the method), with the method's attributes,
+  `unnamed_addr`, `align`, personality and section, then the method's
+  linkage and a comdat of its own (`setThunkProperties`). The this
+  adjustment is inserted before the first `store` of the `this`
+  argument in the entry block, which then stores the adjusted pointer;
+  the first block in layout order ending in `ret` loses its `ret`, the
+  returned value takes `PerformReturnAdjustment` (a pointer null-checked
+  in blocks placed after the returning block, `Builder.CreateBr` keeping
+  each insertion point; a constant pointer's check folded as LLVM's
+  constant folder does: `null` is null, a global that is not
+  `extern_weak` or an `inbounds` GEP of one is not) and a new `ret`
+  returns it. A body that already made a block for a `blockaddress`, or
+  a method never defined here, is diagnosed instead
+  (`tests/codegen/variadic_thunk_ret{,_o1}.cpp`,
+  `tests/conformance/class.virtual/variadic-covariant-thunk-run.cpp`).
 - **`isLibFunction`** is builtin attribute bit `LIB_FUNCTION` (128,
   clang's `F`), set on the 406 `__builtin_` rows clang 19 and 22 treat as
   library functions (found by compiling each labelled `extern template`
@@ -3332,17 +3451,26 @@ categories, compared with clang 22 and clang 19 on both targets).
   `Fir::push` appends while it is active (the union under nested
   parallel loops; calls to `memory(none)` callees skipped), exact against
   clang 19 and 22 (`tests/codegen/loop_parallel{,_o1}.cpp`;
-  `loop_parallel_jam.cpp` is oracle 22 only, as clang 19 makes
-  `followup_inner` distinct).
-- **Not modelled**: an instruction placed by `Fir::insert_before` /
-  `insert_after` gets no access group (clang's `new X(..., InsertPt)`
-  also bypasses `InsertHelper`, but not every kiln insert mirrors one);
-  the clang 19 distinct `followup_inner`; `"; No predecessors!"`
-  comments; vtable hiding (`isVTableHidden`); labelled structors of a
-  class with virtual bases (clang emits a VTT call to a one-argument
-  definition) and the dead D0 block clang appends to a labelled virtual
-  destructor; local classes and instantiations in the incomplete-class
-  walk.
+  `loop_parallel_jam.cpp`, where clang 19, and kiln at
+  `-fclang-compat=19`, makes the `followup_inner` properties a distinct
+  self-referential node; WP-492). An instruction kiln places away from the
+  insertion point follows how clang makes it (WP-492): one made by
+  `new X(.., InsertPt)` or appended directly (`Fir::insert_before`,
+  `insert_after`, `insert_before_last`, `push_in`: the `cleanup.cond`
+  flag stores of `setBeforeOutermostConditional` and
+  `SetupCleanupBlockActivation`, the branch fixups' `cleanup.dest.slot`
+  stores, the `cleanup.dest` load of a cleanup's exit switch, the
+  `tmp.exprcleanup` spills of a `CGBuilderTy(CGM, ..)`) gets no access
+  group; one made by the function's builder at a moved insertion point
+  (`Fir::builder_insert_before_last`: the `llvm.lifetime.start` of a
+  full-expression temporary in a conditional branch, put at the
+  outermost conditional's start) gets the active one
+  (`tests/codegen/loop_parallel_inserts{,_o1}.cpp`).
+- **Not modelled**: `"; No predecessors!"` comments; vtable hiding
+  (`isVTableHidden`: it reads the visibility of the RTTI and of
+  undefined methods, and kiln has no visibility model); the emission
+  order of inline (deferred) labelled structors of a class with virtual
+  bases.
 
 ## 7y. Landed (WP-452): `=pattern`, pre-fills and VLAs (`auto_init.rs`)
 

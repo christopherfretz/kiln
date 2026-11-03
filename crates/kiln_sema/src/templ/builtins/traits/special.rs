@@ -1,7 +1,9 @@
 //! The traits that query special members, layout and register passing
 //! (spec/sema-templates.md §9.1; WP-166): the GCC `__has_nothrow_*`
 //! family, `__is_trivially_equality_comparable`, `__can_pass_in_regs`
-//! (and `__is_trivially_relocatable`, which uses it),
+//! (and `__is_trivially_relocatable`, which uses it; at
+//! `-fclang-compat=22` `Sema::act_type_trait` warns it deprecated, as
+//! clang 22 does),
 //! `__is_bitwise_cloneable`, `__is_layout_compatible` and
 //! `__is_pointer_interconvertible_base_of`.
 //! Each follows clang 19 (`EvaluateUnaryTypeTrait`,
@@ -374,13 +376,11 @@ impl Sema<'_, '_> {
                 || tys.is_function(q)
                 || tys.is_reference(q)
                 || matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
-                || self.require_complete(q, at)
+                || self.trait_complete(q, at)
             {
                 continue;
             }
-            let msg = self.diag(DiagId::sema_incomplete_type_required, at).arg(self.ty_arg(q));
-            let msg = self.incomplete_note(msg, q);
-            self.emit(msg);
+            self.trait_incomplete(DiagId::sema_incomplete_type_required, at, q);
         }
         self.layout_compatible(a.0, b.0, 0)
     }
@@ -553,10 +553,8 @@ impl Sema<'_, '_> {
         if self.ast.types.same_type(ca, cb) {
             return true;
         }
-        if !self.require_complete(b.0, b.1) {
-            let msg = self.diag(DiagId::sema_incomplete_type_required, b.1).arg(self.ty_arg(b.0));
-            let msg = self.incomplete_note(msg, b.0);
-            self.emit(msg);
+        if !self.trait_complete(b.0, b.1) {
+            self.trait_incomplete(DiagId::sema_incomplete_type_required, b.1, b.0);
             return false;
         }
         crate::conv::bases::is_derived_from(self, derived, base)

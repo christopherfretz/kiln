@@ -91,6 +91,7 @@ After a node is created its header and side record are immutable, except:
 | `VarData.init`, `VarData.eval` | init once; eval state machine §9.2 | sema / Oven via bridge |
 | `RecordData` definition data, `members` | while the class is being defined; frozen at `}` (except `define_aggregate`, §10, and the row below) | sema |
 | `DeclArena::completed_records` | append-only: each class definition at its `}` (`complete_definition`; instantiations included), read as the layout dump's order (spec/abi.md §8.4; WP-324) | sema via builder |
+| `DeclArena::top_level_ends` | append-only: (last member of the TU's member list, class-completion epoch) at the end of each top-level declaration of the TU (`end_top_level_decl`, called by the parser); a TU member belongs to the first end at or after it in the list, the classes complete to codegen there (spec/codegen.md §7z; WP-492) | parser |
 | `RecordData.members.last` of a complete class | append-only: implicit special members and inheriting constructors, declared lazily (`append_implicit_member`, spec/sema-class.md §4.1) | sema |
 | `VarData` `nrvo` bit | once, at the variable's scope exit (`set_nrvo`) | sema |
 | `VarSpec` `init_style` `Call` | once, with the `CXXConstructExpr` of a default-initialized class variable (WP-067b; part of `VarSpec::LATE`, ORed in from `C` only) | sema |
@@ -170,7 +171,7 @@ Option<DeclId>, group: RedeclGroupId }`). `T` = may be templated (§8.2).
 | functions | `Function`R T, `CXXMethod`R T, `CXXConstructor`R T, `CXXDestructor`R T, `CXXConversion`R T, `CXXDeductionGuide` T |
 | variables | `Var`R T, `ParmVar`, `ImplicitParam` (`this`, coroutine frame), `Binding` (one structured-binding name; no payload: its expression and holding variable are cold, see below; P1061 pack M4+). The decomposed object of a structured binding declaration (clang's `DecompositionDecl`) is a `Var` with an empty name and the cold `decomp_bindings` list, not a kind of its own (WP-122), `VarTemplateSpecialization`R, `VarTemplatePartialSpecialization`R |
 | templates | `ClassTemplate`R, `FunctionTemplate`R, `VarTemplate`R, `TypeAliasTemplate`R, `Concept`, `BuiltinTemplate` (`__make_integer_seq`, `__type_pack_element`), `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`★ |
-| synthesized | `LifetimeExtendedTemporary` (payload `LetData { extending: DeclId, mangling_index: u32, value: Option<ConstValueId> }`; context the extending declaration's, in no member list or lookup table), `TemplateParamObject` (class-type NTTP object: type + `ConstValueId`), `StaticAssert` (cond `ExprId`, message `ExprId`, P2741), `Label`, `ContractResultName` (P2900 `post(r: ...)`) |
+| synthesized | `LifetimeExtendedTemporary` (payload `LetData { extending: DeclId, mangling_index: u32, value: Option<ConstValueId> }`; context the extending declaration's, in no member list or lookup table), `TemplateParamObject` (class-type NTTP object: type + `ConstValueId`), `StaticAssert` (cond `ExprId`, message `ExprId`, P2741), `ConstevalBlock` (the StaticAssert payload: cond = the call of the block's synthesized consteval lambda, no message; P3289R1, spec/consteval-blocks.md), `Label`, `ContractResultName` (P2900 `post(r: ...)`) |
 
 Using-family payloads (WP-062; one inline `Payload::None(u32)` word,
 read with `Ast::using_target`/`Ast::using_qualifier`):
@@ -256,11 +257,18 @@ fields used by fewer than ~5% of decls of a kind go there.
   of a function or variable, keyed by the entity's *first* declaration
   (a label on any redeclaration names the entity); each declaration
   also carries an `AsmLabel` attribute (§7).
-- `declarator_end: ColdMap<DeclId, Loc>` (WP-370, WP-381): for a
-  function (member, or at namespace or block scope) declared without a body (written in the source, never an
-  instantiation, which reads its pattern's), the start of the
-  declarator's last token (`Declarator::end`, clang `getEndLoc` before a
-  body is attached); sema.md §7.13 points a note there.
+- `declarator_end: ColdMap<DeclId, Loc>` (WP-370, WP-381, WP-428): for a
+  function (member, or at namespace or block scope) declared without a
+  body, or defined by `= default`/`= delete`, the end of its declaration
+  (clang `getEndLoc` before a body is attached): the start of the
+  declarator's last token (`Declarator::end`), or for an `= default`/`=
+  delete` written in a class the last character of the keyword (clang
+  `ParseCXXInlineMethodDef` `setRangeEnd(KWEndLoc)`). An instantiation
+  reads its pattern's, except one whose definition was instantiated from
+  an out-of-line pattern definition, which copies that definition's
+  (`AstBuilder::relocate_to_pattern_definition`). sema.md §7.13 points a
+  note there; a defaulted assignment operator is defined there
+  (sema-class.md §4.4).
 - `builtin_id: ColdMap<DeclId, u32>` (WP-063): the builtin id of an
   implicit builtin `Function` decl, read through
   `DeclArena::builtin_id(d)`. Ids and spellings are in
@@ -408,7 +416,7 @@ Names are clang's (the dump prints them). (M2) marks the M2 subset.
 | coroutines | `CoawaitExpr`, `CoyieldExpr` (WP-351; clang's `CoroutineSuspendExpr`): `a` = a list `[operand, common (the awaiter), ready, suspend, resume, opaque]` (`ExprArena::coawait_parts` → `CoawaitParts`), the type and value category are `resume`'s; `opaque` is the lvalue `OpaqueValueExpr` binding `common` in the three calls, so a visitor walks only the first five (`children`); `aux` bit 0 = implicit (an initial/final suspend point or the `co_await` of a `co_yield`, `coawait_is_implicit`), bits 1-2 = `SuspendKind` `Void`/`Bool`/`Handle` (`coawait_suspend_kind`; `Handle`'s suspend expression is `await_suspend(h).address()`). In a template pattern a `co_yield` is a type-dependent `CoyieldExpr` whose list holds only the operand (`coawait_parts` is `None`) and a `co_await` is a `DependentCoawaitExpr` with `a` = the operand. `coawait_operand` reads the operand of all three. Built by `Builder::coawait_expr` / `dependent_coawait` / `opaque_value_lvalue` |
 | constant | `ConstantExpr` (M2; caches the value, §9.2) |
 | GNU / builtins | `StmtExpr` (M2), `ChooseExpr`, `VAArgExpr` (WP-171: `a` = the `va_list` operand, `b` = the written type, `cold.trait_rhs_loc` = the type's begin, `cold.end_loc` = the `)`; the node type is the written type without references, always a prvalue; accessor `ExprArena::va_arg`), `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`; WP-154: `aux` = the builtin id (`ExprArena::atomic_op`), `a` = a list of the operands in clang's order `ptr`, `order`, `val1`, `order_fail`, `val2`, `weak`, only those the op takes (`atomic_subs`); the per-op shape is `kiln_ast::decl::builtin::atomic`), `ShuffleVectorExpr` (`__builtin_shufflevector`; WP-282: `a` = a list of the operands as written, the two vectors then the indices (`shuffle_subs`); `aux` bit 0 = the mask is known, then `b` = a raw list of the `u32` lane indices, `u32::MAX` for -1 (`shuffle_mask`); `cold.end_loc` = the `)`; dumped and printed as clang), `ConvertVectorExpr`, `ExtVectorElementExpr` (WP-307/312: `a` = the base vector, or for `->` (`ExprFlags::ARROW`) the pointer to it (`operand`), `b` = the accessor's `Symbol` (`ext_vector_accessor`); for `.` the value category is the base's, a glvalue with `ObjectKind::VectorComponent`; built by `Builder::ext_vector_element`; `kiln_ast::expr::ext_vector_access` decodes the accessor to lane numbers as clang's `getEncodedElementAccess`; dumped `ExtVectorElementExpr '<type>' <accessor>`) |
-| reflection (M6) | `CXXReflectExpr` (`^^`: operand type/decl/namespace/expr → `ReflectionId` when non-dependent), `CXXSpliceExpr` (`[: e :]` in expression position; designated entity once evaluated) |
+| reflection (M6) | `CXXReflectExpr` (`^^`: operand type/decl/namespace/expr → `ReflectionId` when non-dependent), `CXXSpliceExpr` (`[: e :]` in expression position; designated entity once evaluated; a dependent `template [: e :] < args >` keeps its arguments in the cold `splice_args` map, `Exprs::splice_template_args`, WP-482) |
 | recovery | `RecoveryExpr` (children kept; `ERROR` dependence; type if known) |
 
 Class-feature payloads (`a`, `b`, `aux` of `CXXConstructExpr`,

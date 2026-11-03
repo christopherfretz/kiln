@@ -87,9 +87,8 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   enumerator as one a switch must handle (only `[[maybe_unused]]` ones
   may be omitted; `switch_enum.rs`), which also decides whether the
   switch covers every value for `-Wreturn-type`. An `if consteval` is a
-  branch on an unknown condition in the reachability walk (clang 22
-  builds its CFG; clang 19 builds none and checks nothing;
-  `try_stmt/reach.rs`). `array is too large (N elements)` groups N's
+  branch on an unknown condition in the CFG (clang 22
+  builds its CFG; clang 19 builds none and checks nothing; §7.5.1). `array is too large (N elements)` groups N's
   digits with `'` (`18'446'744'073'709'551'615`;
   `element_count_text`). Wording-only changes are `_19` diag rows
   (spec/diag.md §2.5), e.g. `case ranges are a GNU extension`, `you need
@@ -760,7 +759,7 @@ Redeclaration and linkage rules:
   - incomplete parameter and return types (with a forward-declaration
     note)
   - falling off the end of a non-`void` function (`falls_off`, the
-    clang CheckFallThrough port in `try_stmt/reach.rs`, §7.5). This
+    clang CheckFallThrough port on the CFG's `exit_kinds`, §7.5). This
     warning is suppressed when the function had errors.
 - `main` must return `int` ([basic.start.main]/2). Falling off the end
   of `main` returns 0, so it never warns.
@@ -1010,7 +1009,8 @@ Redeclaration and linkage rules:
   `decltype` (no function declarator of its own) is only the type of a
   non-static member function, of a typedef or alias-declaration, of a
   template type argument (a type trait's operand parses as one), of a
-  type parameter's default, or the pointee of a pointer to member. As a
+  type parameter's default, the operand of `^^` (it declares nothing;
+  GCC 16.1 agrees, WP-477), or the pointee of a pointer to member. As a
   non-member function at namespace or block scope (`extern` included), a
   static member function, a friend, a parameter, a handler, or in a
   type-id (`sizeof`, `new`, a trailing return type) it is clang's
@@ -1025,12 +1025,29 @@ Redeclaration and linkage rules:
   variable / static data member instantiated with function type T" at its
   name (clang `VisitFieldDecl`/`VisitVarDecl`, [temp.inst]/17); a member
   function's parameter of that type is not diagnosed (it adjusts to a
-  pointer). Not yet: `friend F;` naming a qualified function typedef (an
-  elaborated friend type, clang errors). Tests
+  pointer). `friend F;` naming a qualified function typedef (plain or
+  nested-name-qualified, `friend N::R;`) is the "non-member function of
+  type" form at the start of the declaration (`class/friend.rs`
+  `declare_friend_type`, WP-469); an unqualified function typedef is an
+  ignored non-class friend type ([class.friend]/3), and a dependent
+  `friend T;` substituting to a qualified function type is not diagnosed
+  (a non-dependent one in a template is reported once, in the pattern;
+  clang 19 and 22). Tests
+  `class.friend/friend-qualified-function-typedef.cpp`,
   `dcl.fct/qualified-function-typedef.cpp`,
   `dcl.fct/qualified-function-type-id.cpp`,
   `dcl.fct/qualified-function-instantiation.cpp`,
   `dcl.decl.general/qualified-function-decltype.cpp`.
+- A function declared through a typedef of function type (`typedef int
+  G(int) const; struct S { G g; };`, [dcl.fct]/13) has no parameter
+  declarations of its own; `act_on_function` synthesizes one unnamed
+  parameter per prototype parameter (clang `BuildParmVarDeclForTypedef`),
+  so a later out-of-class definition's parameters map onto them and its
+  body instantiates with them bound. In a class template the member
+  substitutes through the sugared function type (`subst/decls.rs`
+  `function_decl`: no declarator chunk, no trailing return; WP-469), for a
+  plain, cv-qualified, static, nested-class or dependent (`typedef T
+  H(T); H h;`) typedef. Test `temp.inst/member-function-typedef.cpp`.
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
 - A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
@@ -1186,7 +1203,8 @@ Redeclaration and linkage rules:
     run first in `late_analysis` (so after the queued runtime warnings
     and before the placement errors), not in a template definition or
     once an error occurred, but in each instantiation:
-    - kiln has no CFG. A label's predecessors are found structurally:
+    - A label's predecessors are found structurally (clang reads the
+      graph's block predecessors; the two agree on the corpus):
       the statements before it in its block, walked back past empty
       ones (`;`, `{}`, an empty label block, which clang's
       `getLastStmt` counts as the predecessor itself), the branches of
@@ -1199,10 +1217,10 @@ Redeclaration and linkage rules:
       condition is reached (the body falls off its end or a `continue`
       of that loop is reached) and is not a constant false; the
       placement check likewise lets a `[[fallthrough]];` before such a
-      `do` precede that label. Reachability comes from `Sema::stmt_flow`
-      (`try_stmt/reach.rs`): the `Reach` walk recording each
-      statement's live-in and live-out with every case label reachable
-      (clang `fillReachableBlocks`). A switch dispatch, a label directly
+      `do` precede that label. Reachability comes from the body's CFG
+      (`Cfg::stmt_flow`, §7.5.1): each statement's entry and exit
+      position is live when a live edge reaches it from the entry or
+      from any case block (clang `fillReachableBlocks`). A switch dispatch, a label directly
       before (`case 1: case 2:`, `L: case 2:`) and an unreachable
       predecessor are good; a reachable `[[fallthrough]];` is
       annotated; anything else is unannotated.
@@ -2125,16 +2143,34 @@ and returns the scope it names:
       the parameters. A condition that is value-dependent, not a
       constant expression, or false makes the candidate not viable;
       its note is "candidate disabled: <message>" at the function
-      (`<no message provided>` for an empty one). If evaluating with all
+      (`<no message provided>` for an empty one). The arguments bind
+      from the first parameter, except that a non-static member
+      function's object argument binds to no parameter. Two cases follow
+      clang (WP-486): a non-member operator function's first operand
+      binds to its first parameter ([over.match.oper]/2); a member
+      function with an explicit object parameter gets the arguments
+      *without* the object argument, bound from the object parameter on
+      (they shift by one, clang `CheckEnableIf` passing the call's
+      arguments), and an argument that does not convert to the
+      parameter it lands on, or a parameter left with neither an
+      argument nor a default argument, disables it by its first
+      condition (clang `convertArgsForAvailabilityChecks` failing).
+      If evaluating with all
       values fails, the arguments that are not constant expressions on
       their own are dropped and the condition is evaluated again, so
       `__builtin_constant_p(n)` of a non-constant argument is false
       rather than not constant (clang `EvaluateWithSubstitution`).
     - A call without overload resolution (a member call, a call through
       a name of one function) is checked on its converted arguments in
-      `convert_call_args`: "no matching function for call to 'f'" at the
-      callee, or "no matching member function for call to 'm'" at the
-      member name, with the same note.
+      `convert_call_args`, the object argument of an explicit object
+      member function binding to the object parameter ([over.match.funcs.
+      general]/4): "no matching function for call to 'f'" at the callee,
+      or "no matching member function for call to 'm'" at the member
+      name (any member function, clang `BuildCallExpr`'s
+      `isa<CXXMethodDecl>`), with the same note. A call that overload
+      resolution chose is not checked again (`CallCallee::enable_if`;
+      `OvlState::resolved_member` marks a resolved explicit object member
+      call, and an operator call never re-checks).
     - Ranking ([over.match.best], last; clang `compareEnableIfAttrs`): a
       candidate with conditions beats one without; between two with
       conditions, compared in order, the one whose list properly extends
@@ -2144,11 +2180,107 @@ and returns the scope it names:
       parameters naming the specialization's (`Substituter::
       enable_if_cond`, from `copy_attrs`), after deduction; a failed
       substitution drops the attribute.
-    - Not done: `diagnose_if`, the never-constant check
-      (`err_attr_cond_never_constant_expr`), the object argument of an
-      explicit object member function (it takes no value).
+    - Never constant (WP-486, `attr_cond.rs`; clang
+      `checkFunctionConditionAttr`, `Expr::isPotentialConstantExprUnevaluated`):
+      a condition (of `enable_if` or `diagnose_if`) that is not
+      value-dependent and can be a constant expression for no values of
+      the parameters is "'enable_if' attribute expression never produces
+      a constant expression" (error, at the attribute) with the
+      evaluation's notes, and the attribute is dropped. kiln walks the
+      condition as clang's evaluator goes on after failing to read a
+      parameter: a subexpression naming no parameter (nor `this`) that is
+      a prvalue of arithmetic or enumeration type is evaluated on its own
+      (a failure with notes decides); one naming a parameter is first
+      evaluated whole (a success is a value, e.g. a parameter only in
+      `sizeof`), then taken apart — every operand of a built-in operator,
+      cast, subscript, member access or call (whose body is then not
+      entered), in order; `&&`/`||` stop at an unknown left operand and
+      short-circuit on a known one; `?:` takes the known condition's arm,
+      and with an unknown condition fails only if both arms do ("both arms
+      of conditional operator are unable to produce a constant
+      expression", at the expression). Anything else is maybe constant: a
+      condition is never rejected that clang accepts, but some that clang
+      rejects are missed (a call whose arguments are all known but name a
+      parameter; a non-scalar operand). Checked at the declaration
+      (`check_decl_attrs`) and, for a dependent condition, after
+      substitution (`enable_if_cond`); there the error is a hard one even
+      during deduction (clang substitutes attributes in the
+      specialization's instantiation context), its context note "in
+      instantiation of function template specialization 'f<X>' requested
+      here" replacing the deduction's, and the attribute is dropped
+      rather than the candidate.
+    - Not done: taking the address of a
+      function with a non-tautological condition ("cannot take address
+      of function 'f' because it has one or more non-tautological
+      enable_if conditions"); clang gives a class-type by-value parameter
+      initialized by copying an lvalue no value (its implicit copy
+      constructor is not yet defined), kiln evaluates the copy.
     - Tests: `tests/conformance/dcl.attr/enable-if-viability.cpp`,
-      `enable-if-ranking.cpp`.
+      `enable-if-ranking.cpp`, `enable-if-explicit-object.cpp`,
+      `attr-cond-never-constant.cpp`.
+  - **`diagnose_if`** (clang extension, `__attribute__((diagnose_if(cond,
+    "message", "error"|"warning"[, "group"])))`; WP-486, `diagnose_if.rs`;
+    clang AttrDocs "diagnose_if", `Sema::diagnoseArgDependentDiagnoseIfAttrs`
+    / `diagnoseArgIndependentDiagnoseIfAttrs`):
+    - Form: the parser parses the arguments with the function's parameters
+      in scope, as for `enable_if`. Clang 22 takes 3 or 4 arguments ("'x'
+      attribute takes at least 3 arguments" / "takes no more than 4
+      arguments"), clang 19 exactly 3 ("requires exactly 3 arguments"),
+      each at the attribute name. The condition is contextually converted
+      to `bool` unless type-dependent; the message, type and group must be
+      string literals ("expected string literal as argument of
+      'diagnose_if' attribute", at the argument); the type must be "error"
+      or "warning" ("invalid diagnostic type for 'diagnose_if'; use
+      \"error\" or \"warning\" instead"); the group must name a warning
+      group kiln knows ("unknown warning group 'x'"). Any of these drops
+      the attribute. Subject: functions; on anything else "'diagnose_if'
+      attribute only applies to functions, Objective-C methods, and
+      Objective-C properties" (`-Wignored-attributes`).
+    - Kind: a condition that names a parameter or `this` is
+      *argument-dependent*; any other is *argument-independent*.
+    - Argument-dependent conditions are evaluated at each call with the
+      converted arguments, default arguments included, by the same
+      evaluation as `enable_if` (`cond_with_args`: a non-constant argument
+      is dropped and the condition retried). The arguments bind as for
+      `enable_if`, the object argument of an explicit object member
+      function binding to the object parameter. The diagnostic is at the
+      call's `)`, at the operator of an operator call, and at the
+      declarator of a constructed variable. Hooks: `convert_call_args`
+      (every call, including a static member function named through a
+      member access) and `use_ctor`.
+    - Argument-independent conditions are evaluated at each use of the
+      function (every `DeclRefExpr`, `diagnose_if_use`), also inside a
+      template definition.
+    - Result: if any true condition is an "error", the first one alone is
+      reported, as an error; otherwise each true "warning" is reported, in
+      declaration order. Conditions accumulate over redeclarations, oldest
+      first. A condition that is not a constant expression (or is
+      value-dependent) is ignored. Every diagnostic is the message
+      verbatim; warnings are in `-Wuser-defined-warnings` and show in
+      system headers (clang `ShowInSystemHeader`, so libc++'s
+      `_LIBCPP_DIAGNOSE_WARNING` checks fire). Each has the note "from
+      'diagnose_if' attribute on 'f':" at the attribute, except that an
+      attribute with a group gets no note. Duplicates are not merged
+      (two attributes may report at one location).
+    - Templates: a call in a template definition is not diagnosed there.
+      A non-dependent call is shared by the instantiations rather than
+      rebuilt, so it is recorded (`Sema::diagnose_if_recheck`) and checked
+      again whenever an instantiation reaches it (`mark_shared_expr_
+      referenced`); a dependent call is checked when it is rebuilt. The
+      condition is substituted like `enable_if`'s, and checked like it for
+      never being constant.
+    - Explicit object member calls inside a template are rebuilt through
+      `rebuild_explicit_object_call`, keeping the object argument bound to
+      the object parameter (before WP-486 such a rebuilt call was "called
+      object type '…' is not a function or function pointer").
+    - Not done: a condition naming `this` is evaluated without the object
+      (clang evaluates it on a constant object, e.g. `cs.m()` on a
+      `constexpr S cs`), so it is ignored; the group argument does not put
+      the diagnostic in that group (it stays in `-Wuser-defined-warnings`,
+      so `-Wno-<group>` does not silence it); an argument-independent
+      "error" does not make the use fail overload resolution.
+    - Tests: `tests/conformance/dcl.attr/diagnose-if.cpp`,
+      `diagnose-if-form.cpp`, `diagnose-if-form-19.cpp`.
   - **The `trivial_abi` attribute** (clang extension, `[[clang::trivial_abi]]`
     / `__attribute__((trivial_abi))`; WP-460, `trivial_abi.rs`; clang
     AttrDocs "trivial_abi", `Sema::checkIllFormedTrivialABIStruct`):
@@ -2190,8 +2322,8 @@ and returns the scope it names:
     - `__builtin_is_cpp_trivially_relocatable` is not implied (clang 22
       answers false for a class with user-provided copy/move members);
       `__is_trivially_relocatable` follows `can_pass_in_registers` as in
-      clang. Not done: clang 22's deprecation warning on
-      `__is_trivially_relocatable`.
+      clang; at compat 22 it warns `-Wdeprecated-builtins` (builtin
+      traits §, WP-486).
     - Tests: `tests/conformance/dcl.attr/trivial-abi-attribute.cpp`,
       `tests/conformance/class.temporary/run-trivial-abi-callee-destroys.cpp`,
       `tests/codegen/trivial_abi_calls.cpp`, `trivial_abi_subobjects.cpp`.
@@ -2324,6 +2456,33 @@ and returns the scope it names:
     "non-static declaration follows static" for a braceless `extern
     "C++" int v;` after `static int v;`.
     Tests: `dcl.link/language-linkage-redecl-errors.cpp`.
+  - **Which entities have C language linkage** ([dcl.link]/4-5, WP-492;
+    clang `getDeclLanguageLinkage`, `isInExternCContext`):
+    `kiln_abi::mangle::is_extern_c` is the single computation (mangling,
+    `noundef` on returns, and every sema check above). A function or
+    variable has it when its first declaration is lexically inside an
+    `extern "C"` specification (the innermost one deciding), walking
+    the lexical contexts through namespaces, functions and classes
+    (`in_extern_c_context`), and it has external linkage. So a
+    block-scope function or `extern` variable declaration in a function
+    (or a member function defined in a class) inside `extern "C"`, and
+    a friend declared in a class there, name the plain C symbol
+    (`void outer() { void lf(int); }` calls `lf`). A class member has
+    C++ linkage; an entity with internal linkage has none and is
+    mangled as an internal name: `extern "C" { static int sx; }` is
+    `_ZL2sx`, `namespace M { static void mf(); }` in it `_ZN1ML2mfEv`,
+    and a `const` variable in a braced specification is internal
+    (`_ZL2ci`; only a braceless `extern "C" const int c = 1;` is
+    external, [dcl.link]/8). A function or variable of an unnamed
+    namespace first declared in an `extern "C"` context keeps external
+    linkage (clang `getLVForNamespaceScopeDecl`) and its plain name.
+    `Sema::extern_c` neither records nor links a `static` declaration,
+    so two `extern "C" { static int x; }` in different namespaces are
+    distinct entities. Not implemented: the
+    `__attribute__((used))` static-in-`extern "C"` aliases (clang
+    `EmitStaticExternCAliases`; kiln does not emit `used` statics at
+    all yet). Tests: `tests/codegen/extern_c_linkage.cpp`,
+    `dcl.link/static-and-local-in-extern-c-run.cpp`.
 - **Internal linkage from a `const` type** ([basic.link]/3.2, WP-466):
   a namespace-scope non-template, non-inline variable that is neither
   `extern` nor previously declared with external linkage has internal
@@ -2956,11 +3115,20 @@ diagnostics and IR.
     ([dcl.pre]/6), plus `constexpr` and `constinit` in C++26 (P2686R5,
     WP-454; gated on `-std`, not on `-fclang-compat`). Another storage
     class, `consteval`, `inline`, or `constexpr`/`constinit` before
-    C++26 is `decomposition declaration cannot be declared 'constexpr'`
-    (clang 22: `structured binding declaration ...`), or `... with
-    'static constexpr' specifiers` when there are several, at the first
-    one. Clang 22 implements P2686R5 and, at `-std=c++23`, gives this
-    error rather than an extension warning; kiln follows it. A
+    C++26 is `structured binding declaration cannot be declared
+    'constexpr'`, one error per such specifier at its location (the
+    storage class, then `inline`, then the constexpr kind; clang 22,
+    WP-468). At `-fclang-compat` < 22 it is clang 19's single
+    `decomposition declaration cannot be declared 'constexpr'`, or `...
+    with 'register constexpr' specifiers` when there are several, at the
+    first one. Clang 22 implements P2686R5 and, at `-std=c++23`, gives this
+    error rather than an extension warning; kiln follows it. At block
+    scope an `inline` is also `inline declaration of 'a' not allowed in
+    block scope` at `inline`, naming the first binding: [dcl.inline]'s
+    rule for every block-scope variable (`var_spec`, clang
+    `err_inline_declaration_block_scope`; the variable is not inline),
+    both compat levels. Tests: `dcl.struct.bind/specifiers-each*.cpp`,
+    `dcl.inline/block-scope.cpp`. A
     `consteval` is also `consteval can only be used in function
     declarations` (`sema_consteval_wrong_decl_kind`). The declaration
     continues: a `constexpr` is still applied, which makes `e` const,
@@ -3028,12 +3196,18 @@ diagnostics and IR.
       integral constant expression`.
     - Each binding gets a holding variable of type `tuple_element<i,
       E>::type&` (lvalue `e`) or `&&`, with the binding's name. The
-      index `i` is a `size_t` value argument or, at
+      index `i` of `tuple_element` is a `size_t` value argument or, at
       `-fclang-compat=22`, a `size_t` integer literal written as an
       expression argument (`tuple_element<0UL, E>`; §1.1). It is
       initialized with `e.get<i>()` when a member template `get` has a
       non-type first parameter, else with an ADL-only `get<i>(xvalue
-      e)`, which prints `adl`.
+      e)`, which prints `adl`. The `get` index is always a `size_t`
+      integer literal written as an expression argument (clang
+      `getTrivialIntegralTemplateArgument`), so it is converted to the
+      type of each candidate's template parameter
+      ([temp.arg.nontype]/2): `template <int I> get` is specialized and
+      mangled with an `int` argument (`ILi0E`), not `size_t` (WP-467;
+      `tests/codegen/struct_bind_get_mangling.cpp`).
     - The binding's type is `tuple_element<i, E>::type`, as written,
       and its expression a `DeclRefExpr` to the holding variable.
     - `tuple_element` is checked after the `get` call. An incomplete
@@ -3096,6 +3270,42 @@ diagnostics and IR.
   a constant initializer that is usable in constant expressions; the
   Oven needs no new rule, since
   usability is that of `e` and the holding variables.
+- **Constexpr-referenceable automatic objects (C++26, P2686R5, WP-467).**
+  An object of automatic storage duration is constexpr-referenceable from
+  a point P when its variable (that of its complete object) and P have the
+  same smallest enclosing non-block scope and that scope is a function
+  parameter scope ([expr.const.init]/2; a lambda body is a scope of its
+  own). So at `-std=c++26`, `constexpr int& r = local;`, `constexpr int* p
+  = &parm;`, `constexpr auto& [a, b] = local_constexpr_struct;` and the
+  tuple-like form (`get<i>` of the local) are constant-initialized; a
+  `static`/`thread_local` one is not ([expr.const.init]/4: it must be
+  representable at namespace scope), nor is a pointer escaping its
+  function (`return &k;`). The rule is the Oven's pointer freeze
+  (spec/oven.md "Freezing"): the variable being initialized and the
+  referent's variable are both locals of the same function, and the
+  variable being initialized is declared `constexpr`. Usability is
+  then scoped ([expr.const]/8-9): a variable whose frozen value designates
+  an automatic object (`kiln_oven::automatic_referent`, cached per
+  variable in `Sema::auto_referent`) is usable in constant expressions
+  only where `enclosing_function(ctx)` is that object's function
+  (`Sema::representable_here`), so in a lambda body naming such a
+  reference or pointer is an odr-use and it is captured. Deliberate
+  narrowing (partial: constexpr declarations only): by
+  [expr.const.init]/2 a non-`constexpr` `auto& e = local;` or `auto* p =
+  &local;` would be constant-initialized too, its reference usable in
+  constant expressions and its names `non_odr_use_constant`; kiln does not
+  do that yet, so it stays exactly as clang 22 (not constant-initialized,
+  odr-used, captured; the AST tests `dcl.struct.bind/{array,bitfield,
+  tuple-adl-get}.cpp` run at the default std against clang). That case
+  waits for an oracle: neither clang 22 nor GCC 16 implements P2686's
+  automatic references (clang 22 only the structured-binding part), so the
+  tests of the constexpr cases are `skip(clang)`. A value read through
+  such a reference still needs a constant referent ([expr.const]/10:
+  `constexpr int& r = i; static_assert(r == 3);` reads non-const `i`).
+  Codegen does not fold an initializer or load whose value designates an
+  automatic object (spec/codegen.md `fold.rs`). Before C++26 the freeze
+  rejects as before. Validation: `tests/conformance/expr.const/constexpr-ref-automatic{,-errors,-run}.cpp`,
+  `tests/conformance/dcl.struct.bind/constexpr-ref-automatic.cpp`.
 - **Fixed on the way.**
   - A reference that cannot bind (to `void`, or to a non-class type
     with no conversion) is `reference to type 'int' could not bind to
@@ -3105,10 +3315,9 @@ diagnostics and IR.
     specialization fully qualified (`Sema::decl_ty_str`, clang's
     printing of `getTypeDeclType`).
 - **Left.**
-  - P2686R5's constexpr-referenceable automatic objects: a block-scope
-    non-`static` `constexpr` decomposition whose bindings are
-    references (`constexpr auto& [a] = ...` of a local) still needs `e`
-    to have static storage; clang 22 rejects these too.
+  - Lifetime-extended temporaries of an automatic `constexpr` reference
+    (`constexpr const int& r = 42;` in a function) are still rejected
+    (spec/oven.md "Freezing"); clang 22 and GCC 16 reject them too.
   - Instantiating binding attributes.
   - The NoOp `'const M'` cast clang adds when a const class `e` is
     copy-initialized from a prvalue.
@@ -3931,9 +4140,12 @@ for them.
     `extern` or a handler's exception variable; one of dependent or
     incomplete type; one whose (array element) class has a non-trivial
     destructor, or is initialized by a non-trivial constructor call that
-    is not a constant initialization, or by a type-dependent
-    initializer. A reference lifetime-extending a temporary is judged by
-    the temporary's type.
+    is not a constant initialization (a value referring to an automatic
+    object, constant only by P2686R5, counts as not constant, as in
+    clang 22; a guard for when the §4.9 constexpr-only narrowing is
+    lifted: WP-467, `stmt.dcl/unused-variable-ptr-to-automatic.cpp`),
+    or by a type-dependent initializer. A reference lifetime-extending a
+    temporary is judged by the temporary's type.
   - A variable of dependent type is diagnosed as its instantiation is
     created (`diagnose_unused_inst_var`, from `subst` `var_decl`, clang
     `TemplateDeclInstantiator::VisitVarDecl`) by the pattern's
@@ -4440,7 +4652,15 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   The initializer of a variable that is constant-initialized keeps its
   wrappers unvalued (clang's deferred mode). A failure reports `call to
   consteval|immediate function 'f' is not a constant expression` with
-  the Oven's notes. Default arguments and default member initializers
+  the Oven's notes. When the variable a full-expression initializes is
+  constexpr or constinit (`note_checked_var_init_full_expr`), a failing
+  outermost invocation is not reported there: it is kept in
+  `ImmState::after_var` and `report_deferred_immediates` re-evaluates
+  and reports it after `check_constexpr_init`/`check_constinit`, as clang
+  checks the variable first (the invocation's note then names the
+  variable's initializer; WP-465,
+  `meta.const.eval/is-within-lifetime-consteval-var.cpp`). An escalating
+  invocation is reported in place. Default arguments and default member initializers
   are not checked at their definition (`note_default_init_full_expr`).
   A constant-expression finished as a full-expression of its own while
   an enclosing one is being built (`act_on_constant_full_expr`: a
@@ -4538,6 +4758,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   `operator new`/`delete`) are marked referenced, which defines or
   instantiates them, as clang's rebuild does (`templ/subst/shared.rs`;
   unevaluated operands and lambda bodies are not entered).
+- **Consteval-only expressions** ([expr.const.imm]/2). The leaves
+  (`^^`, references to consteval-only variables) and their exemptions
+  are WP-472's, `spec/reflection-repr.md` §6
+  (`consteval_only.rs`, checked from `finish_immediate_invocations`).
+  A non-exempt leaf in an immediate-escalating function escalates it
+  through `escalate_consteval_only` (reason note `... because its body
+  contains an expression of consteval-only type 'std::meta::info'`,
+  WP-473, `spec/consteval-blocks.md` §4); elsewhere it is
+  `sema_consteval_only_expr`. The consteval block itself is
+  §5.10's immediate function context by construction (a consteval
+  lambda).
 - **Codegen.** A valued `ConstantExpr` lowers to its constant: scalars
   directly, aggregates by clang 19's `CreateCoercedStore` into the
   destination (one store per top-level element).
@@ -4899,6 +5130,12 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `expression is not assignable`; a const base is the usual
   const-variable diagnostic. `&v.x` and binding a non-const reference
   are rejected as for any vector element (§5.13).
+- A `bool` ext vector has no components (clang `isExtVectorBoolType`;
+  a lane is one bit and has no address): every accessor, valid or not,
+  is `illegal vector component name 'name'` at the member name, before
+  the accessor is parsed, also on substitution (WP-438). clang 19
+  quotes the name twice (`''x''`), clang 22 once. A subscript reads a
+  lane instead.
 - A GNU `vector_size` vector has no components (`member reference base
   type ... is not a structure or union`). An unused access (`v.x;`) is
   `expression result unused` at the base's begin (clang's `getExprLoc`).
@@ -4917,7 +5154,31 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `ext.vector/ext-vector-access-diagnostics.cpp`,
   `ext.vector/element-access-diagnostics.cpp`,
   `ext.vector/element-access-constexpr-diagnostics.cpp` (strict-diags),
+  `ext.vector/bool-element-access-diagnostics{,-clang22}.cpp`,
   `tests/codegen/ext_vector_element.cpp`.
+
+### 5.19a Vector subscript (`vector_ops.rs`, WP-469)
+`v[i]` with a vector `v` on the left (clang `CreateBuiltinArraySubscriptExpr`;
+`vector_subscript`):
+- A GNU/ext vector or an SVE vector type (`isSveVLSBuiltinType`: every
+  sizeless builtin but `__SVCount_t`, whose subscript is
+  "subscripted value is not an array, pointer, or vector", as is `i[v]` with an SVE `v`)
+  is subscripted in place: a prvalue base is materialized (CWG1213), the
+  index must be an integer or unscoped enumeration ("array subscript is not
+  an integer"), and the result is the element type (an SVE vector's
+  `getSveEltType`: `signed char` … `double`, `__fp16`, `__bf16`) with the
+  base's qualifiers and value category, an `ObjectKind::VectorComponent`
+  unless a prvalue.
+- `svbool_t` cannot be subscripted: `sema_subscript_svbool` ("subscript of
+  svbool_t is not allowed", clang `err_subscript_svbool_t`), at the `[`,
+  before the index is checked.
+- The element cannot have its address taken ("address of vector element
+  requested") or bind a non-const reference ("non-const reference cannot
+  bind to vector element"). Divergence: clang does not apply the second
+  rule to SVE vectors (`refersToVectorElement` tests `isVectorType`) and
+  binds the reference to the vector's address; kiln keeps it.
+- Tests `ext.arm.sve/subscript.cpp`, `subscript-element-reference.cpp`,
+  `ir-subscript.cpp` (codegen: spec/codegen.md §7aa).
 
 ### 5.20 Variadic arguments (`expr.rs`, WP-311)
 - An argument for the ellipsis gets the default argument promotions
@@ -5748,7 +6009,7 @@ Tests: `ext.vector/bool-from-int-vector-clang22.cpp`,
 `ext.vector/bool-from-int-vector-19.cpp`, `ext.vector/ir-bool-from-int-vector.cpp`;
 codegen spec/codegen.md §7u.
 
-### 5.28 `-Winteger-overflow` (`int_overflow.rs`, WP-458)
+### 5.28 `-Winteger-overflow` (`int_overflow.rs`, WP-458, WP-468)
 
 A full-expression that is not constant-evaluated is checked for signed
 overflow ([expr.pre]/4) once it is complete (`act_on_full_expr_at`;
@@ -5783,13 +6044,65 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   expression) and folded only when they contain none. Unsigned
   arithmetic is silent. The walk is bounded (65 536 nodes, depth 256)
   and skipped when the warning is disabled at the full-expression.
-- Not implemented: an overflow inside a `constexpr` function called from
-  the expression (clang's evaluator reports it at the operator in the
-  function body); compound assignment and increment; the operator's
-  source range; in an instantiation kiln adds the instantiation notes,
-  clang none.
+- **Calls (WP-468).** An operand that calls a `constexpr` or
+  `consteval` function or constructor (directly or below it; the cheap
+  filter counts such a call as a candidate) is evaluated in the Oven with
+  the body (`Oven::fold_for_overflow`, clang `EM_IgnoreSideEffects` with
+  `CheckingForUndefinedBehavior`): a lax fold in which a signed `+`, `-`,
+  `*` or negation that overflows (`Oven::wrap_overflow`, also a compound
+  assignment's `+=`, `-=`, `*=`, and `++` / `--`) yields its wrapped value
+  and is recorded; the evaluation goes on. Each record warns at its
+  operator, in order, with the type of the operation (the compound
+  assignment's type for `+=`), but `++` and `--`, which clang only notes
+  (`HandleOverflow`). A function called twice warns twice at the same
+  place (`inc(g) + inc(g)`). The evaluation enters no nested evaluation,
+  global initialization or `__builtin_constant_p` in this mode and is not
+  memoized. When it fails without a record (a non-constexpr callee, a
+  read of a non-`const` variable), the operand is searched as above, a
+  constexpr call found under it is evaluated in turn. A call that is the
+  full-expression itself is not evaluated (only its arguments), as
+  clang. Shifts, division and `<<=` never warn here.
+- **Reporting.** The warning carries the operation's source range and is
+  reported as clang's `Diags.Report`: no instantiation notes (in a
+  template a non-dependent overflow warns at the definition and in each
+  instantiation, notes-free), not deduplicated against another
+  full-expression or another overflow of the same one (the context key is
+  the instantiation's, the full-expression and the overflow's ordinal), so
+  checking a full-expression twice does not repeat it.
+- **Compound assignment.** `x op= y` is checked as a binary operator
+  would be: `<<=` / `>>=` diagnose a constant count that is negative or
+  not less than the promoted left type's width (`-Wshift-count-*`), `/=`
+  and `%=` a constant zero divisor (`-Wdivision-by-zero`), at the
+  operator with the right operand's range, through the runtime-behaviour
+  deferral (clang `CheckShiftOperands` / `CheckMultiplyDivideOperands` /
+  `CheckRemainderOperands` with `IsCompAssign`).
+- **Never constant (WP-468).** A `constexpr` or `consteval` function
+  that can never be constant is ill-formed, no diagnostic required
+  ([dcl.constexpr]/6); clang runs `isPotentialConstantExpr` on each
+  written definition when `CheckConstexprFunctionBodies` is on: before
+  C++23, else only under `-Winvalid-constexpr` (the last of
+  `-Winvalid-constexpr` / `-Wno-invalid-constexpr` decides,
+  `DiagEngine::group_flag`; `-Weverything`, `-Werror=` and pragmas do
+  not turn it on). Kiln checks the narrow shape a body overflow makes
+  (`constexpr_body.rs` `check_never_constant`, after the body's own
+  `-Winteger-overflow`): a non-member or static member function without
+  parameters, not in a template or an instantiation, not invalid, whose
+  call (`Oven::evaluate_call`) fails in its own body with the one note
+  `value N is outside the range of representable values of type 'T'`
+  (`g + 1`, `++i` on `INT_MAX`, `i += 1`). It reports `{constexpr|
+  consteval} function never produces a constant expression`
+  (`sema_constexpr_never_constant`, an error by default, group
+  `invalid-constexpr`) at the function's name with that note. A failure
+  in a callee (clang is silent too), an unsigned wrap or a narrowing are
+  not reported. Not yet: other failures clang reports (a call to a
+  non-constexpr function, a step limit), functions with parameters (a
+  read of one fails silently in clang), non-static members, lambdas and
+  constructors.
 - Tests: `expr.add/integer-overflow-folded.cpp`,
-  `expr.add/integer-overflow-constexpr-error.cpp`.
+  `expr.add/integer-overflow-constexpr-error.cpp`,
+  `expr.pre/integer-overflow-in-call.cpp`,
+  `expr.ass/compound-assign-overflow.cpp`,
+  `dcl.constexpr/never-constant-overflow-cxx{20,23,26}.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
@@ -6154,6 +6467,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   - Class, array and reference `T` need temporaries and are
     unsupported (`temporary_unsupported`) until classes have
     constructors (WP-065).
+  - A function type `T` in `T()`, `T{...}` or `T(a, b)` is `cannot
+    create object of function type 'T'` at the type, ranging over the
+    whole expression (clang `BuildCXXTypeConstructExpr`
+    `err_init_for_function_type`, after the single-operand cast — `T(a)`
+    is a functional cast — and before completeness and abstractness;
+    `function_type_construct`, WP-465). Test:
+    `expr.type.conv/function-type-construct.cpp`.
   - Array `T{...}` (`array_list_cast`, WP-216; `using A = int[2]; A{1,
     2}`) list-initializes an array prvalue that keeps the cv-qualifiers
     of `T` ([expr.type]/2). An array of class type with a non-trivial
@@ -6250,9 +6570,31 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     like any other, and `-Wswitch` sees an enumeration result. Codegen
     and the Oven evaluate it once. Tests:
     `stmt.switch/class-condition-{diags,run}.cpp`.
-  - duplicate `case` values (with a note)
+  - duplicate `case` values (with a note), each case located at its
+    value's begin (clang `getBeginLoc`). A case value outside `i128` (an
+    `unsigned __int128` above its maximum, a `_BitInt(N)` with N > 128;
+    WP-465) keeps its exact constant in the `ConstantExpr`, has no `i128`
+    key, and is compared with the other such values by its words
+    (`wide_duplicate_case`, printed in decimal); codegen emits it from the
+    constant and the Oven compares it limb by limb (spec/oven.md
+    "`_BitInt`"). Tests: `stmt.switch/bit-int-wide-{duplicate-case,condition}.cpp`.
   - multiple `default` labels
-  - `case` values converted to the promoted type
+  - `case` values converted to the promoted type as a converted
+    constant expression ([expr.const]/12, clang
+    `BuildConvertedConstantExpression`; WP-465): the implicit conversion
+    sequence is formed first (`case_cce_check`); none is `value of type
+    'X' is not implicitly convertible to 'T'`, and a standard (or a
+    user-defined sequence's second standard) conversion whose second step
+    is not identity, an integral promotion or conversion, a boolean
+    conversion from an integral or unscoped enumeration type, or a
+    pointer conversion from `nullptr_t` is `conversion from 'X' to 'T' is
+    not allowed in a converted constant expression` (`case 1.5:`, a class
+    with `operator double`, a string literal); both at the value with its
+    range, and the case is dropped. An integral value that does not fit is
+    `case value evaluates to V, which cannot be narrowed to type 'T'`,
+    after the full-expression's conversion warnings, as are an NTTP's and
+    a fixed-type enumerator's. Test:
+    `stmt.switch/case-converted-constant.cpp`.
   - `act_on_start_switch(loc, …)` and
     `act_on_finish_switch(…, cond_var)` bracket the body
   - GNU case ranges `case lo ... hi` (WP-205): the parser emits the
@@ -6408,40 +6750,19 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   destructor/deallocator note); in an instantiated function template
   specialization the name carries its arguments, unqualified (`'k<int>'`,
   `except.spec/throw-in-nothrow-specialization.cpp`); a `[[noreturn]]`
-  function that can fall off is `-Winvalid-noreturn`. Only throws reachable in clang's CFG
-  count (`try_stmt/reach.rs`, WP-118): a structured walk ends the live
-  path at `return`/`break`/`continue`/`goto`/a throw/a `noreturn` call;
-  prunes edges by `tryEvaluateBool` (constant folding, `&&`/`||` decided
-  by one side, `checkIncorrectLogicOperator`) in `if`, loops, `?:`,
-  `&&`/`||`; reaches only the matching case of a constant switch and not
-  the end of a switch with no default over a fully covered enumeration
-  (`isAllEnumCasesCovered`); reaches a handler only from a live throw in
-  its try-block (or in a nested try without a catch-all, as calls have
-  no exception edges); gives a live `asm goto` an edge to each of its
-  labels besides the next statement (WP-230); iterates `goto` labels and loop back edges to a
-  fixed point; and checks nothing in a function with an `if consteval`
-  (clang builds no CFG). The operands of `sizeof`/`alignof` are not
-  walked (a `noexcept` operand is, as clang's CFG does); a GNU case range
-  is reached when the constant condition is in `[lo, hi]` and counts
-  toward enumeration coverage (WP-205). Not modeled: implicit
-  destructors marked `noreturn`. A live GNU indirect `goto *p` reaches
-  every label whose address the body takes (clang's indirect-goto block
-  and `AddressTakenLabels`: `&&l` outside lambdas and unevaluated
-  operands, found once per walk by `addr_taken_labels`) and does not
-  fall through (WP-444, `stmt.goto/computed-goto-reachability.cpp`).
-  The fall-off analysis
-  behind -Wreturn-type / -Winvalid-noreturn (`falls_off` →
-  `fall_off_kind`, WP-219) is the same walk run to a fixed point,
-  classifying the live predecessors of the exit as in clang
-  CheckFallThrough: a live `return`/`co_return`; a throw with no
-  enclosing try (fake edge); a live `noreturn` call (abnormal edge); a
-  live try dispatch with no catch-all and no enclosing try (abnormal
-  edge; a dispatch with no predecessor, i.e. no throw and no nested try
-  without catch-all in its block, counts as live, as clang's CFG
-  rescans it); and the end of the body (plain edge). No plain edge is
-  `Never`; a plain edge plus any other is `Maybe` (`... in all control
-  paths`); a plain edge alone is `Always`. A function with `if
-  consteval` is `Never`.
+  function that can fall off is `-Winvalid-noreturn`. Only the throws
+  reachable in the body's graph count (§7.5.1, `cfg_escaping_throws`;
+  a body with no throw-expression builds none). The fall-off analysis
+  behind -Wreturn-type / -Winvalid-noreturn (`falls_off`) reads the
+  graph's live exit predecessors (`exit_kinds`, clang
+  `CheckFallThrough`). A `return`/`co_return` edge, a fake edge (a
+  throw with no enclosing try) and an abnormal edge (a `noreturn` call
+  or destructor, or a try dispatch with no catch-all and no enclosing
+  try, a dispatch with no predecessor counting as live) are the
+  non-plain kinds; the end of the body is the plain edge. No plain edge
+  is `Never`; a plain edge plus any other is `Maybe` (`... in all
+  control paths`); a plain edge alone is `Always`. A body with no graph
+  (an `if consteval` under clang 19, or over the size cap) is `Never`.
 - Initialization (one condition in `init.rs`, flagged): brace elision
   ([dcl.init.aggr]/16) only descends into an aggregate element; a class
   with a user-provided constructor is copy-initialized from the element
@@ -6450,6 +6771,207 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   the note. (The handler member-reference warning, throw reachability,
   `arr()` member value-initialization of a class array and the
   `new K[2][3]` constructor initializer landed in WP-118.)
+
+#### 7.5.1 The control-flow graph (`cfg/`, WP-509)
+
+One graph per analysed function body (clang `CFG`, built by
+`AnalysisBasedWarnings::IssueWarnings` with `PruneTriviallyFalseEdges`,
+`AddInitializers`, `AddImplicitDtors`, `AddTemporaryDtors`, no EH edges;
+docs/design/reachability.md). Every flow-sensitive consumer queries the
+same graph.
+
+- **Lifetime** (`cfg/body.rs`). The end of a body that is analysed (no
+  uncompilable error, not a dependent context) *plans* a graph
+  (`cfg_plan`) with the side tables its enabled consumers need
+  (`CfgReq`): the deferred runtime-behavior diagnostics' anchors
+  (`probes`), the statement flow when `-Wimplicit-fallthrough` or the
+  misplaced-`[[fallthrough]]` check is on, the unreachable-code tables
+  when a `-Wunreachable-code*` id is on outside an instantiation. The
+  first query (`with_cfg`) builds it. The next body clears it: the
+  vectors are kept, so steady-state memory is bounded by the largest
+  body, and a body no consumer asks about builds nothing.
+- **Model** (`cfg/mod.rs`). Flat vectors of blocks, elements and edges.
+  A block holds ranges into them, so there is no `Rc`, no pointer graph
+  and no `unsafe`. Block 0 is the entry and block 1 the exit; the body's
+  blocks follow in creation order. An element is one of:
+  - a statement (a `[[fallthrough]]`, a `goto`, a `return`, a
+    declaration);
+  - an expression, after its operands;
+  - a constructor's member initializer;
+  - the destructor call of an automatic variable;
+  - the destructor call of a temporary.
+
+  A block ends in a terminator: `if`, a loop, `switch`, a try dispatch,
+  `&&`/`||`, `?:`, a temporary-destructor decision, a jump, `asm goto`
+  or the indirect-goto block. Each edge carries bits:
+  - `LIVE`: clang's pruned graph;
+  - `SCAN`: the edge as clang's unreachable-code scan follows it;
+  - `NULL`: a dropped loop edge;
+  - `RETURN`, `FAKE` (a throw leaving the body) and `ABNORMAL` (a
+    `noreturn` call or destructor, or a dispatch with no catch-all
+    leaving the body), which classify the exit's predecessors.
+
+  A pruned edge stays in the graph as clang's unreachable alternate.
+- **Builder** (`cfg/build.rs`). One forward walk over the body (clang's
+  `CFGBuilder` walks backwards; the graphs agree up to numbering). Blocks
+  are made lazily: when an element is pushed, when a label or case
+  starts one, and at joins.
+  - A condition that `known_truth` folds (`cfg/truth.rs`, clang
+    `tryEvaluateBool`: constant folding, `&&`/`||` decided by one side,
+    `checkIncorrectLogicOperator`) prunes the other edge of an `if`, a
+    loop, a `?:` or an `&&`/`||`. In the scan bits, a configuration
+    value (clang `isConfigurationValue`) does not prune and an
+    `if constexpr` prunes nothing.
+  - An `if`/`while`/`for` condition (without a condition variable) that
+    is `&&`/`||` is clang's `VisitLogicalOperator`. Each left operand's
+    block ends in its operator, and the short-circuit edges go straight
+    to the statement's targets. A `do` condition, and an operator used
+    as a value, joins in one block that holds the value.
+  - `return`, `break`, `continue` and `goto` run the destructors of the
+    scopes they leave and jump. A label starts a block: a forward
+    `goto` is patched when its label is met, and a backward one targets
+    the label's block.
+  - A `switch` has an edge to each case. A constant condition makes only
+    the matching case (else the default) live, and a GNU case range
+    matches `[lo, hi]`. The default edge, or the edge past the body when
+    there is no default, comes last. It is not live after a match, nor
+    over an enumeration whose enumerators all have cases (clang
+    `isAllEnumCasesCovered`). The scan follows every case edge.
+  - A throw-expression ends its block. With no enclosing try it goes to
+    the exit (`FAKE`); otherwise it goes to the innermost try's dispatch
+    block. A dispatch has an edge to each handler, then, without a
+    catch-all, to the enclosing dispatch (or the exit, `ABNORMAL`).
+    Calls have no exception edges.
+  - A call to a `noreturn` function, or a `noreturn` destructor (of a
+    variable or a temporary), ends a `NORETURN` block whose only
+    successor is the exit (`ABNORMAL`).
+  - Temporaries (clang `TempDtorContext`). Inside an
+    `ExprWithCleanups`, each `CXXBindTemporaryExpr` that is not
+    lifetime-extended records its destructor. Those destructors follow
+    the full-expression in reverse construction order. A temporary made
+    in a conditional operand (an arm of `?:`, the right operand of
+    `&&`/`||`) is destroyed under a decision block (`(Temp Dtor)`)
+    branching on that operand's first temporary, unless the operand is
+    known to run. When both arms of a `?:` have temporaries, the false
+    arm's decision falls back to the true arm's.
+  - GNU `goto *p` jumps to one indirect-goto block, which has an edge
+    to every label whose address the body takes (`AddressTakenLabels`).
+    A live `asm goto` has an edge to each of its labels besides the
+    next statement.
+  - The operands of `sizeof`/`alignof` are not walked; a `noexcept`
+    operand is.
+  - Under `-fclang-compat=19`, an `if consteval` anywhere in the body
+    means clang builds no graph (`Status::NoCfg`); clang 22 branches on
+    an unknown condition.
+- **Budget.** A graph over `-fkiln-cfg-max-elems` elements (default
+  33554432, about 1 GiB at the cap) is not built (`Status::TooLarge`).
+  Its body's flow-sensitive warnings are skipped, with the kiln remark
+  `-Rkiln-analysis-skipped` (`flow-sensitive warnings for 'f' skipped:
+  its control-flow graph exceeds -fkiln-cfg-max-elems=N`), emitted once.
+- **Queries** (`cfg/query.rs`), each a forward reachability over the
+  edge bits from the entry:
+  - `unreachable_probes`: the anchors met only in unreachable blocks.
+    The runtime-behavior filter drops their diagnostics (an anchor the
+    walk never meets counts as reachable).
+  - `exit_kinds`: the live predecessors of the exit by kind. A dispatch
+    block with no predecessor is also a root, as clang
+    `CheckFallThrough` rescans it.
+  - `cfg_escaping_throws`: the reachable throw-expressions that no
+    enclosing handler catches (`throw_caught`).
+  - `stmt_flow` and `dead_scan`: the fallthrough and unreachable-code
+    tables (§7.10).
+- **Dump.** `-fkiln-dump-cfg` prints every planned graph in clang's
+  `debug.DumpCFG` layout: `[B<n> (ENTRY)]`, then the body's blocks from
+  the highest number, then `[B0 (EXIT)]`. Each block shows:
+  - its numbered elements as `[B<n>.<i>]`;
+  - `T: <terminator>`;
+  - its `Preds`;
+  - its `Succs`, with `(Unreachable)` and `NULL` alternates.
+
+  The `expect: cfg` tests (spec/harness.md "cfg tests") compare its
+  shape with clang's.
+- **Titles and `-fclang-compat`.** Each graph is titled with its
+  function's qualified name and `()` (`Sema::cfg_title`, also the
+  `-fkiln-cfg-stats` name). A closure type always prints as `(lambda)`
+  (`lambda(int)::(lambda)::operator()()`), whatever the
+  `-fclang-compat` level. Diagnostics at `-fclang-compat=19` print it as
+  `(anonymous class)`, clang 19's `printQualifiedName`. The dump is
+  different because no clang release has a lambda title to follow: clang's
+  analyzer dumps no lambda call operator. So the title stays the same
+  under either oracle, one golden serves both, and the harness can drop
+  kiln's `(lambda)` graphs from the comparison with the oracle
+  (`cfg_shape::fn_name`). Nothing else in the dump depends on the compat
+  level.
+- **Stats.** `-fkiln-cfg-stats` (a measurement aid, spec/driver.md)
+  builds every planned graph and prints one line per body:
+  `cfg-stats: 'f' status=Ok blocks=N elems=N edges=N bytes=N build_ns=N`,
+  `bytes` being the lengths of the block, element, edge and adjacency
+  vectors times their sizes (`Cfg::bytes`; the side tables are not
+  counted). The numbers of record are in `spec/landed/sema/WP-509.md`.
+- **Hooks for the uninitialized-values pass (WP-510).** The graph keeps
+  the element order of evaluation inside each block, the declaration
+  statements as elements, and every block's predecessors, which a
+  forward dataflow needs; nothing else is built for it yet.
+
+#### 7.5.2 Consumers of the graph (WP-509)
+
+Each consumer runs at the end of a non-dependent body with no
+uncompilable error, in this order: the runtime-behavior filter
+(`unreachable_probes`, §5.12: a queued diagnostic whose anchor only an
+unreachable block holds is dropped), the fall-off analysis
+(-Wreturn-type / -Winvalid-noreturn, §7.5 above; clang 22's inferred
+`noreturn`, §7.5.3, runs first), -Winfinite-recursion
+and the throw checks of -Wexceptions (§7.5 above), then implicit
+fallthrough (§2, `[[fallthrough]]`) and -Wunreachable-code* (§7.10)
+from `stmt_flow` / `dead_scan`. The AST walks they replace
+(`try_stmt/reach.rs`) are deleted.
+
+#### 7.5.3 -Winfinite-recursion and -Wmissing-noreturn (WP-509)
+
+- **-Winfinite-recursion** (`infinite_recursion.rs`, clang
+  `checkRecursiveFunction`; in -Wall via -Wmost, the diag off by
+  default otherwise): `all paths through this function will call
+  itself` at the start of the body, when every live path from the
+  graph's entry meets a recursive call before reaching the exit and the
+  exit has a live predecessor ([intro.progress] makes no promise; the
+  warning is clang's). A path stops at the first block holding a
+  recursive call. A recursive call is a call, member call or operator
+  call whose callee's first declaration is the function's, except a
+  call through a name qualified by a template specialization
+  (`A<T>::f()`) and a virtual member call on an object other than
+  `this`. Not checked: a specialization of a function template (clang
+  checks non-templated functions and members of class template
+  specializations, whose instantiation context note it prints). Before
+  building a graph the body's expressions are scanned for a recursive
+  call (a constructor's initializers, built earlier, are always
+  graphed), so a non-recursive body costs no graph.
+- **-Wmissing-noreturn, graph form** (`missing_noreturn.rs`, clang
+  `CheckFallThroughForBody` `NeverFallThroughOrReturn`; not in -Wall or
+  -Wextra): `function 'f' could be declared with attribute 'noreturn'`
+  at the start of the body of a function returning `void` whose graph
+  has no live plain or return predecessor of the exit. Not for a
+  `noreturn` (declared or inferred) function, a virtual function, a
+  lambda's call operator, a coroutine, a `naked` function or anything
+  instantiated from a template. A body with no graph does not warn.
+- **-Wmissing-noreturn, inferred form** (clang 22 `inferNoReturnAttr`,
+  `-fclang-compat=22` only; run when -Wreturn-type or -Wmissing-noreturn
+  is enabled, before the body's other flow checks): a body that is a
+  compound statement whose only statement is a throw-expression (under
+  an `ExprWithCleanups`) makes a function that is not `noreturn` and
+  not virtual *inferred noreturn* (`Sema::inferred_noreturn`), with the
+  warning at the function's name. The pattern of a function template is
+  skipped; an instantiation of another templated entity (a member of a
+  class template, a lambda in a template) inherits its pattern's
+  inference without a second warning, while a function template
+  specialization is inferred, and warned, afresh. An inferred function
+  is not suggested again by the graph form. In a value-returning
+  caller, a body whose last statement is a throw-expression, or a call
+  whose direct callee is inferred noreturn, has no -Wreturn-type
+  (clang's syntactic check ahead of `CheckFallThroughForBody`).
+- Tests: `expr.call/infinite-recursion*.cpp`,
+  `dcl.attr.noreturn/missing-noreturn*.cpp` (the `-inferred` pair under
+  `requires: clang>=22` / `clang<22`),
+  `stmt.pre/cfg-analysis-skipped.cpp` (the size cap remark).
 
 ### 7.6 Landed (WP-089): range-based `for` (`range_for.rs`)
 Sema desugars `for (init; decl : range) body` ([stmt.ranged]/1) the way
@@ -6593,7 +7115,22 @@ not supported yet`.
     (`sema_expansion_size_not_constant` when an evaluation fails or the
     cap is reached); the fast path has no cap. A class iterator whose `!=`
     disagrees with its `-` gets the comparison's count
-    (`tests/conformance/stmt.expand/iterating-count.cpp`).
+    (`tests/conformance/stmt.expand/iterating-count.cpp`). *One pass*
+    (WP-467, `expansion_count_elements`): the incremental count and the
+    elements are built together. For i ≥ 1 element i's `__iter` is built
+    first and the count tests `__iter != __end` (i = 0 tests `__begin !=
+    __end`, so an empty range never builds `__begin + 0`), so `__begin + i`
+    is resolved and evaluated once per element, not once for the count and
+    again for the element; the `__iter` built for i = N is dropped. The
+    left operand of `!=` is then a `const` lvalue, as the wording's `i !=
+    end` names a variable, rather than the prvalue `__begin + i`. The pass
+    runs with its diagnostics captured; on any error (or a non-constant
+    test) it is discarded and the separate count and element loop above
+    run and diagnose, so diagnostics are unchanged. Per element it still
+    resolves `+`, `!=` and unary `*` and evaluates `__iter`, the test and
+    the element (docs/status/perf.md "WP-467";
+    `tests/stress/expansion-iterating-user-iterator.cpp` budgets the
+    evaluations and steps).
   - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
     (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
     for-range-declaration the declaration is `static constexpr`.
@@ -6605,9 +7142,10 @@ not supported yet`.
   captured diagnostics, `stash_has_error`: a failed constant
   initialization does not mark the variable INVALID), it is retried by
   value, a copy, each attempt in a block scope of its own. The copy stands
-  in for P2686's constexpr-referenceable automatic objects, which kiln
-  does not implement (§4.9): the paper's `constexpr std::array` local
-  example works. When both fail, the first attempt's diagnostics are emitted.
+  in for P2686's constexpr-referenceable automatic objects for the range
+  (§4.9 implements them for user-written declarations; the range variable
+  is `static constexpr`, which [expr.const.init]/4 excludes): the paper's
+  `constexpr std::array` local example works. When both fail, the first attempt's diagnostics are emitted.
 - **Holding variables.** The holding variables of a `constexpr` structured
   binding declaration are `constexpr` (P2686 [dcl.struct.bind]/4), so the
   Oven sees initialized constants rather than a static variable's
@@ -6625,8 +7163,8 @@ not supported yet`.
   element is never instantiated.
 - **Feature macro.** `__cpp_expansion_statements` 202506L at C++26 at
   every `-fclang-compat` (`KILN_FEATURES`; clang 22 does not define it).
-- **Left.** `define_static_array` and reflection ranges (kiln's
-  `members_of` returns a `member_list` aggregate without `begin`/`end`);
+- **Left.** `define_static_array` and reflection ranges (since WP-478
+  `members_of` returns a `std::vector<info>`);
   P2686's constexpr-referenceable automatic objects (§4.9).
 - Validation: `tests/conformance/stmt.expand/` (all `requires: clang>=23`),
   `tests/codegen/expansion_stmt.cpp`, `kiln_codegen` test
@@ -6736,14 +7274,18 @@ clang 19's `CheckUnreachable` (`ReachableCode.cpp`) with Sema's
 `UnreachableCodeHandler`, run with the other flow warnings at the end of
 a function body, never in a dependent context, in an instantiation or
 after an error (`uncompilable_error_count`, spec/diag.md §7.5).
-- `Sema::dead_scan` (in `try_stmt/reach.rs`) follows control through the
-  body as clang's CFG does. A constant branch condition prunes its dead
-  edge unless it is a configuration value (`is_configuration_value`:
-  a `constexpr` call, a global or `const` local, `sizeof`, or a
-  parenthesized or macro-expanded literal). An `ExprWithCleanups` is no
-  element of its own (clang `VisitExprWithCleanups`): the temporaries'
-  destruction after `throw E()` is not dead code
-  (`expr.throw/unreachable-code-temporary.cpp`).
+- The scan runs on the body's CFG (§7.5.1; `Cfg::dead_scan`, clang
+  `reachable_code::ScanReachableFromBlock`), from the entry and every
+  catch dispatch block, element by element, over the edges clang's
+  scan follows. A constant branch condition prunes its dead edge unless
+  it is a configuration value (`is_configuration_value`: a `constexpr`
+  call, a global or `const` local, `sizeof`, or a parenthesized or
+  macro-expanded literal); the builder decides that once and marks the
+  edge. An `ExprWithCleanups` is no element of its own
+  (clang `VisitExprWithCleanups`): the temporaries' destruction after
+  `throw E()` is not dead code
+  (`expr.throw/unreachable-code-temporary.cpp`). The AST walk this
+  replaced (`try_stmt/reach.rs`) is gone (WP-509).
 - Each round reports one dead root: the last dead element, in
   evaluation order, that no reached or dead element flows into. It is
   then treated as reached and the scan repeats, so the regions come out
@@ -6760,7 +7302,10 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
   `__builtin_unreachable`.
 - A dead `for` increment is `loop will run at most once (loop increment
   never executed)` [-Wunreachable-code-loop-increment] at the increment.
-- A dead branch pruned by a bare literal condition has the note
+- A root whose block's first predecessor (reachable or not; a loop
+  edge clang drops outright does not count) ends in a condition with a
+  bare literal (`if`, `while`, `for`, `do`, `switch`, `?:`, the left
+  operand of `&&`/`||`; clang `getTerminatorCondition`) has the note
   `silence by adding parentheses to mark code as explicitly dead`, with
   the `/* DISABLES CODE */ (` ... `)` fix-its around the literal. A root
   whose note repeats the previous root's literal is dropped.
@@ -6771,7 +7316,8 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
   -break and -return. None is in -Wall.
 - Tests: `tests/conformance/stmt.return/unreachable-code*.cpp`,
   `stmt.break/unreachable-code-break.cpp`,
-  `stmt.if/unreachable-code-config.cpp`.
+  `stmt.if/unreachable-code-config.cpp`, `stmt.*/cfg-*.cpp` (the
+  graphs, WP-509).
 
 #### 7.10.1 Fix-its at macro locations (`macro_fixit.rs`, WP-419)
 
@@ -6859,8 +7405,10 @@ bit-field's signedness ([conv.integral]/3). Storing 1 into a one-bit
 wide signed bit-field reports `... to a one-bit wide bit-field ...`
 [-Wsingle-bit-bitfield-constant-conversion, a subgroup].
 - Nothing is reported for a `bool` bit-field, a dependent or invalid
-  bit-field, a value-dependent or non-constant value, or a value of
-  128 or more bits.
+  bit-field, or a value-dependent or non-constant value. A value of 128
+  or more bits (`__int128`, a wide `_BitInt`; WP-465) gets the same rule
+  computed on its words (`wide_truncation`), with exact decimal values
+  (`class.bit/bit-int-wide-bit-field.cpp`).
 - The value needs the width of its type, except that a negated or
   complemented constant (`-5`, `~0u`), or any unsigned constant written
   that way, needs only its significant bits (`APInt::getSignificantBits`
@@ -6956,7 +7504,8 @@ specification, a trailing return type or requires-clause, an asm label,
 GNU attributes and the last virt-specifier, but not trailing C++11
 attribute-specifiers (`ColdDeclData::declarator_end`, recorded by the
 parser for bodiless member and namespace- or block-scope function
-declarations, WP-381; an instantiated function uses its pattern's).
+declarations, WP-381; an instantiated function uses its pattern's, or
+the out-of-line definition its definition was instantiated from, WP-428).
 
 **`co_await e` ([expr.await]/3-5).** In order:
 
@@ -7220,9 +7769,6 @@ Everything is gated on `Sema::reflection` (driver `-freflection`).
   - prototype scope (§4.3)
   - `dynamic_cast` and polymorphic `typeid`
   - class and array temporaries (§6.1) and compound literals (§5.8)
-  - `-Wconstant-conversion` and `-Wliteral-conversion` alongside
-    narrowing errors in list-initialization (outside braced lists they
-    landed: spec/sema-conv.md §9)
   - statement expressions: `-Wgnu-statement-expression`, jumps into
     one, and class-glvalue results
 - **Constant evaluation** (what the Oven supports in M2 is in

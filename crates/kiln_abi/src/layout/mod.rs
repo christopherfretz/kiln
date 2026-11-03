@@ -150,22 +150,54 @@ pub struct Layouter<'a> {
     target: &'a Target,
     records: FxHashMap<DeclId, RecordFacts>,
     in_progress: FxHashSet<DeclId>,
+    /// The classes this session laid out, in order (for
+    /// [`Layouter::into_complete_cache`]).
+    fresh: Vec<DeclId>,
 }
 
 impl<'a> Layouter<'a> {
     /// A session with an empty cache.
     pub fn new(ast: &'a Ast, target: &'a Target) -> Self {
-        Layouter { ast, target, records: FxHashMap::default(), in_progress: FxHashSet::default() }
+        Layouter {
+            ast,
+            target,
+            records: FxHashMap::default(),
+            in_progress: FxHashSet::default(),
+            fresh: Vec::new(),
+        }
     }
 
     /// A session resuming the layouts of an earlier one.
     pub fn with_cache(ast: &'a Ast, target: &'a Target, cache: LayoutCache) -> Self {
-        Layouter { ast, target, records: cache.records, in_progress: FxHashSet::default() }
+        Layouter {
+            ast,
+            target,
+            records: cache.records,
+            in_progress: FxHashSet::default(),
+            fresh: Vec::new(),
+        }
     }
 
     /// Ends the session, keeping its layouts for a later one.
     pub fn into_cache(self) -> LayoutCache {
         LayoutCache { records: self.records }
+    }
+
+    /// Ends the session, keeping its layouts of complete classes only
+    /// ([basic.types.general]/5: the definition reached `}`) for a later
+    /// one. A class laid out while incomplete (still being defined, or
+    /// without a definition) is dropped: its layout may change, and a
+    /// [`LayoutCache`] is never invalidated (spec/abi.md §1). The complete
+    /// classes it contains are kept.
+    pub fn into_complete_cache(self) -> LayoutCache {
+        let ast = self.ast;
+        let mut records = self.records;
+        for d in self.fresh {
+            if !is_complete_record(ast, d) {
+                records.remove(&d);
+            }
+        }
+        LayoutCache { records }
     }
 
     /// The AST.
@@ -241,6 +273,7 @@ impl<'a> Layouter<'a> {
                 let facts = self.compute(d);
                 self.in_progress.remove(&d);
                 self.records.insert(d, facts);
+                self.fresh.push(d);
                 continue;
             }
             if !self.in_progress.insert(d) {
@@ -510,6 +543,14 @@ pub fn record_layout(ast: &Ast, record: DeclId, target: &Target) -> RecordLayout
     Layouter::new(ast, target).record(record).clone()
 }
 
+/// Whether class `first`'s definition has reached `}`
+/// ([basic.types.general]/5).
+fn is_complete_record(ast: &Ast, first: DeclId) -> bool {
+    ast.definition(first)
+        .and_then(|def| ast.decls.record(def))
+        .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE))
+}
+
 /// Lays out `record` and every class it contains by value, storing each
 /// layout not yet cached in `ast.layouts` (keyed by first declaration),
 /// and returns `record`'s.
@@ -523,11 +564,7 @@ pub fn ensure_layout<'a>(
     target: &Target,
 ) -> Option<&'a RecordLayout> {
     let first = ast.first(record);
-    let complete = ast
-        .definition(first)
-        .and_then(|def| ast.decls.record(def))
-        .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE));
-    if !complete {
+    if !is_complete_record(ast, first) {
         return None;
     }
     if ast.layouts.get(first).is_none() {
@@ -550,11 +587,11 @@ mod tests {
     use kiln_ast::decl::{DefinitionBits, TagKind};
     use kiln_ast::names::DeclName;
     use kiln_ast::types::{BuiltinType, TypeContext};
-    use kiln_ast::{Ast, DeclHead};
+    use kiln_ast::{Ast, DeclHead, QualType};
     use kiln_source::Loc;
     use kiln_source::symbol::Interner;
 
-    use super::ensure_layout;
+    use super::{Layouter, ensure_layout};
     use crate::target::target;
 
     /// [basic.types.general]/5: an incomplete class has no layout, so
@@ -586,5 +623,43 @@ mod tests {
         let l = ensure_layout(&mut ast, fwd, &tgt).expect("complete").clone();
         assert_eq!((l.size, l.align), (4, 4));
         assert_eq!(ensure_layout(&mut ast, def, &tgt).map(|l| l.size), Some(4));
+    }
+
+    /// [basic.types.general]/5: a session that laid out a class still
+    /// being defined keeps the complete classes it contains, not that class
+    /// (spec/abi.md §1, `into_complete_cache`; WP-428).
+    #[test]
+    fn into_complete_cache_drops_an_incomplete_class() {
+        let tgt = target("x86_64-unknown-linux-gnu").expect("target");
+        let mut ast = Ast::new(Arc::new(Interner::new()), TypeContext::new(tgt.types.clone()));
+        let tu = ast.tu;
+        let field = |ast: &mut Ast, rec, n: &str, ty| {
+            let n = DeclName::ident(ast.symbols().intern(n));
+            let _ = ast.builder().field(DeclHead::new(rec, n, Loc::INVALID), ty, None, 0);
+        };
+        let b_name = DeclName::ident(ast.symbols().intern("B"));
+        let b =
+            ast.builder().record(DeclHead::new(tu, b_name, Loc::INVALID), TagKind::Struct, None);
+        ast.builder().begin_record_definition(b).expect("B");
+        field(&mut ast, b, "x", BuiltinType::Long.qual_type());
+        ast.builder().complete_record_definition(b, DefinitionBits::empty());
+        let s_name = DeclName::ident(ast.symbols().intern("S"));
+        let s =
+            ast.builder().record(DeclHead::new(tu, s_name, Loc::INVALID), TagKind::Struct, None);
+        ast.builder().begin_record_definition(s).expect("S");
+        let b_ty = QualType::unqual(ast.types.record_type(b));
+        field(&mut ast, s, "b", b_ty);
+        field(&mut ast, s, "y", BuiltinType::Int.qual_type());
+        let mut lay = Layouter::new(&ast, &tgt);
+        assert_eq!(lay.record(s).size, 16, "laid out while being defined");
+        let cache = lay.into_complete_cache();
+        assert_eq!(cache.len(), 1, "B kept, S dropped");
+        let mut lay = Layouter::with_cache(&ast, &tgt, cache);
+        assert_eq!(lay.record(b).size, 8);
+        assert!(lay.fresh.is_empty(), "B is not laid out again");
+        ast.builder().complete_record_definition(s, DefinitionBits::empty());
+        let mut lay = Layouter::new(&ast, &tgt);
+        let _ = lay.record(s);
+        assert_eq!(lay.into_complete_cache().len(), 2, "both complete");
     }
 }

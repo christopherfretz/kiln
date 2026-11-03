@@ -39,7 +39,8 @@ pub fn array_layout(&Ast, elem: QualType, count: u64, &Target) -> TypeLayout;
 pub fn record_layout(&Ast, record: DeclId, &Target) -> RecordLayout;
 pub fn ensure_layout<'a>(&'a mut Ast, DeclId, &Target) -> Option<&'a RecordLayout>; // None: incomplete
 pub struct Layouter<'a>   // a session: memoizes records, answers is_pod / is_empty
-pub struct LayoutCache;   // a finished session's records (Layouter::into_cache / with_cache)
+pub struct LayoutCache;   // a finished session's records (Layouter::into_cache / with_cache;
+                          // into_complete_cache drops the incomplete classes, §1)
 pub fn subobjects(&Ast, record: DeclId, &Target) -> Vec<(Subobject, u64)>; // §8.3
 pub const MAX_SUBOBJECTS: usize;              // 65536 (SubobjectId is u16)
 impl Layouter { fn subobjects(&mut self, DeclId) -> Vec<(Subobject, u64)> }
@@ -87,8 +88,11 @@ pub fn vtable_blocks(&str) -> BTreeSet<String>;          // a set, `Original map
   session's records (`LayoutCache`) and `Layouter::with_cache` resumes
   them in a later session over the same AST; the caller guarantees that
   every class in the cache is still complete and unchanged (sema keeps one
-  for the deallocation-function lookup of virtual destructors, which lays
-  out complete classes only; WP-450).
+  for the deallocation-function lookup of virtual destructors; WP-450).
+  `Layouter::into_complete_cache` detaches them without the classes the
+  session laid out while they were incomplete (no definition, or not yet
+  at `}`): sema lays out a class still being defined over its cache and
+  keeps only its complete bases and members (WP-428, sema-class.md §6.5).
 - **Complete classes only.** `ensure_layout` returns `None` for a class
   that is incomplete ([basic.types.general]/5): it has no definition, or
   its definition has not reached `}` (`DefinitionBits::COMPLETE` is
@@ -665,6 +669,15 @@ points, thunks and method indices are clang's.
     potentially-overlapping member of that union type uses (WP-289);
   - `IrRecord::base_index` and `vbase_index` map each base to its
     element;
+  - a `_BitInt(N)` member, array element or object is the integer of
+    its ABI size (`i256` for `_BitInt(200)`), unless LLVM allocates that
+    `iN` in a different number of bytes than the type's size, when it is
+    the byte array `[size x i8]` (`_BitInt(129)`: `i129` allocates 32
+    bytes, the type 24; clang `typeRequiresSplitIntoByteArray`); a value
+    is loaded and stored as the integer of the size either way
+    (`IrTypes::convert_load_store`, clang `convertTypeForLoadStore`),
+    and a constant initializer of a byte-array slot is emitted as bytes
+    (WP-465; `tests/codegen/bit_int_wide_record.cpp`);
   - padding (clang `insertPadding`) fills the gap before each member
     with storage. Those members are disjoint and sorted by offset: an
     empty `[[no_unique_address]]` member has no storage (several may
@@ -1387,8 +1400,8 @@ AArch64).
   label, so the first variant defined is the definition and the
   complete-object alias (C1 → C2, D1 → D2) is not emitted; a virtual
   destructor's vtable names the label in both destructor slots, as
-  clang does. A class with virtual bases is not modelled (clang passes
-  the VTT to a definition without that parameter).
+  clang does. A class with virtual bases: the complete-object variant
+  replaces the base-object definition (WP-492, spec/codegen.md §7z).
 
 ### Landed sections after WP-488: `spec/landed/abi/`
 From WP-488 on, a work package's Landed section is not appended here as

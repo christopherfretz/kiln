@@ -142,13 +142,16 @@ pub(crate) struct Types {
     /// member-specification): kept `Opaque` and rebuilt in place once
     /// the class is complete ([`Types::refresh`]), so pointers already
     /// naming the slot stay valid and no layout of an incomplete class
-    /// is computed or cached (WP-267). A set: an intern hit asks for
-    /// membership.
-    provisional: FxHashSet<OTy>,
-    /// The class-completion epoch ([`kiln_ast::decl::DeclArena::completion_epoch`])
-    /// the last [`Types::refresh`] saw: no class completed since, so no
-    /// provisional slot can be rebuilt and the refresh is skipped.
-    seen_epoch: u32,
+    /// is computed or cached (WP-267). Keyed by the class's first
+    /// declaration, so a completion finds its slot in O(1).
+    provisional: FxHashMap<DeclId, OTy>,
+    /// The provisional slots, for [`Types::intern`]'s membership test.
+    provisional_slots: FxHashSet<OTy>,
+    /// How many entries of `DeclArena::completed_records` (the AST's
+    /// completion log: its length is the completion epoch) refresh has
+    /// already applied: a refresh with no class completed since is O(1)
+    /// (WP-480).
+    completion_epoch: usize,
     /// The base-subobject view of each class with virtual bases: the
     /// class without its virtual bases (`nv_size`, Itanium C++ ABI 2.4),
     /// the type of a base field naming that class (P3533R2; spec/oven.md
@@ -216,6 +219,11 @@ pub(crate) fn float_kind(b: BuiltinType, long_double: FloatFormat) -> Option<Flo
 impl Types {
     pub fn info(&self, t: OTy) -> &TyInfo {
         &self.infos[t.0 as usize]
+    }
+
+    /// The type canonical `c` is interned as, if it is.
+    pub fn lookup(&self, c: QualType) -> Option<OTy> {
+        self.map.get(&c).copied()
     }
 
     pub fn kind(&self, t: OTy) -> TyKind {
@@ -399,7 +407,7 @@ impl Types {
     pub fn intern(&mut self, bridge: &mut dyn SemaBridge, q: QualType) -> OTy {
         let c = bridge.ast().types.canonical(q).without_quals();
         if let Some(&t) = self.map.get(&c) {
-            if self.provisional.contains(&t) {
+            if !self.provisional_slots.is_empty() && self.provisional_slots.contains(&t) {
                 self.upgrade(bridge, t);
             }
             return t;
@@ -670,26 +678,26 @@ impl Types {
         }
     }
 
-    /// Rebuilds every provisional class slot whose class is now
-    /// complete; called before each evaluation (a class completes
-    /// between evaluations, or inside one through a lent Oven). Only
-    /// when a class completed since the last refresh (the completion
-    /// epoch moved), and then visiting only the provisional slots, in
-    /// creation order.
+    /// Rebuilds every provisional class slot whose class completed since
+    /// the last refresh; called before each evaluation and after each
+    /// `Mutating` intrinsic (a class completes between evaluations, inside
+    /// one through a lent Oven, or by `define_aggregate`). O(classes
+    /// completed since), not O(provisional slots): the slots are keyed by
+    /// class and the AST's completion log is read from a cursor.
     pub fn refresh(&mut self, bridge: &mut dyn SemaBridge) {
-        let epoch = bridge.ast().decls.completion_epoch();
-        if epoch == self.seen_epoch || self.provisional.is_empty() {
-            self.seen_epoch = epoch;
+        let done = bridge.ast().decls.completed_records().len();
+        let mut i = self.completion_epoch;
+        self.completion_epoch = done;
+        if self.provisional.is_empty() {
             return;
         }
-        self.seen_epoch = epoch;
-        let mut slots: Vec<OTy> = self.provisional.iter().copied().collect();
-        slots.sort_unstable_by_key(|t| t.0);
-        for t in slots {
-            // An earlier upgrade may have rebuilt `t` already.
-            if self.provisional.contains(&t) {
+        while i < done {
+            let ast = bridge.ast();
+            let r = ast.decls.completed_records()[i];
+            if let Some(&t) = self.provisional.get(&ast.first(r)) {
                 self.upgrade(bridge, t);
             }
+            i += 1;
         }
     }
 
@@ -702,7 +710,11 @@ impl Types {
         if Self::incomplete(ast, d) {
             return false;
         }
-        self.provisional.remove(&t);
+        let first = ast.first(d);
+        if self.provisional.get(&first) == Some(&t) {
+            self.provisional.remove(&first);
+        }
+        self.provisional_slots.remove(&t);
         self.record_into(bridge, c, d, Some(t));
         true
     }
@@ -719,9 +731,11 @@ impl Types {
 
     /// An `Opaque` slot for incomplete class type `c` (`slot` when one
     /// is reserved), kept provisional until the class completes.
-    fn provisional_slot(&mut self, c: QualType, slot: Option<OTy>) -> OTy {
+    /// `first` is the class's first declaration, the slot's key.
+    fn provisional_slot(&mut self, c: QualType, first: DeclId, slot: Option<OTy>) -> OTy {
         let t = slot.unwrap_or_else(|| self.simple(c, 0, 1, TyKind::Opaque));
-        self.provisional.insert(t);
+        self.provisional.insert(first, t);
+        self.provisional_slots.insert(t);
         t
     }
 
@@ -740,7 +754,7 @@ impl Types {
     ) -> OTy {
         let ast = bridge.ast();
         if Self::incomplete(ast, d) {
-            return self.provisional_slot(c, slot);
+            return self.provisional_slot(c, ast.first(d), slot);
         }
         let Some(def) = ast.definition(d) else {
             return self.simple(c, 0, 1, TyKind::Opaque);
@@ -784,9 +798,10 @@ impl Types {
                 (m, ast.decls.get(m).ty().unwrap_or(QualType::INT), w, mutable)
             })
             .collect();
+        let first = ast.first(d);
         let Some(layout) = bridge.ensure_layout(def) else {
             // Unreachable: `incomplete` is `ensure_layout`'s rule.
-            return self.provisional_slot(c, slot);
+            return self.provisional_slot(c, first, slot);
         };
         let (size, align) = (layout.size, layout.align);
         let dsize = layout.data_size;
@@ -1082,8 +1097,11 @@ impl Types {
     /// Whether the storage unit of a bit-field of type `p` lies at `off`
     /// inside `root` (a bit-field is not a subobject that a pointer can
     /// designate, but its accesses still go through the unions above it).
+    /// A lane of a `bool` ext vector is the same: one bit, reached through
+    /// the vector (WP-438).
     pub fn has_bit_unit(&self, root: OTy, off: u64, p: OTy) -> bool {
         match self.kind(root) {
+            TyKind::BoolVec { elem, .. } => elem == p && off < self.size(root),
             TyKind::Array { elem, n } => {
                 let es = self.size(elem);
                 es != 0 && off / es < n && self.has_bit_unit(elem, off % es, p)

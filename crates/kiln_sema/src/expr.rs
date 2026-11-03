@@ -309,6 +309,25 @@ impl Sema<'_, '_> {
             Scalar::Bool { ty: t, value: v != 0 }
         } else {
             let (w, signed) = int_info(&self.ast, t).unwrap_or((64, true));
+            if w > 128 {
+                // A wide `_BitInt`: `v` extended over its words.
+                let n = IntBits::words_for(w);
+                let fill = if v < 0 { u64::MAX } else { 0 };
+                let mut words: Vec<u64> = (0..n)
+                    .map(|i| match i {
+                        0 => v as u64,
+                        1 => (v >> 64) as u64,
+                        _ => fill,
+                    })
+                    .collect();
+                if w % 64 != 0 {
+                    words[n - 1] &= (1u64 << (w % 64)) - 1;
+                }
+                if let Some(bits) = IntBits::from_words(w, &words) {
+                    let scalar = Scalar::Int { ty: t, signed, bits };
+                    return self.ast.consts.push_scalar(scalar).expect("integer constants intern");
+                }
+            }
             Scalar::Int { ty: t, signed, bits: IntBits::from_i128(w.clamp(1, 128), v) }
         };
         self.ast.consts.push_scalar(scalar).expect("integer constants intern")
@@ -712,7 +731,7 @@ impl Sema<'_, '_> {
                 return true;
             }
             if let Some(&u) = self.ref_usable.get(&holder) {
-                return u;
+                return u && self.representable_here(holder);
             }
             if self.has_errors_in(init)
                 || self.expr_is_value_dependent(init)
@@ -722,7 +741,7 @@ impl Sema<'_, '_> {
             }
             let u = self.is_constant_initialized(holder);
             self.ref_usable.insert(holder, u);
-            return u;
+            return u && self.representable_here(holder);
         }
         let q = self.ast.types.effective_quals(ty);
         let ok = spec.is_constexpr()
@@ -730,7 +749,28 @@ impl Sema<'_, '_> {
                 && !q.is_volatile()
                 && self.is_integral_or_enum(ty)
                 && !self.ast.types.is_reference(ty));
-        ok && self.is_constant_initialized(holder)
+        ok && self.is_constant_initialized(holder) && self.representable_here(holder)
+    }
+
+    /// P2686R5 [expr.const]/8-9: a variable whose value refers to an
+    /// automatic object (`constexpr int& r = local;`) is usable in
+    /// constant expressions only where that object is
+    /// constexpr-referenceable: in its own function, not in a lambda
+    /// nested in it, where naming the variable odr-uses (captures) it.
+    fn representable_here(&mut self, d: DeclId) -> bool {
+        let x = if let Some(&x) = self.auto_referent.get(&d) {
+            x
+        } else {
+            let Some(kiln_ast::decl::VarEvalState::Value(c)) =
+                self.ast.decls.var(d).map(|v| v.eval.state())
+            else {
+                return true;
+            };
+            let x = kiln_oven::automatic_referent(&self.ast, c);
+            self.auto_referent.insert(d, x);
+            x
+        };
+        x.is_none_or(|x| self.ast.decls.get(x).ctx() == self.enclosing_function(self.ctx))
     }
 
     /// True if the glvalue `e` designates a function or a variable with
@@ -3329,7 +3369,8 @@ impl Sema<'_, '_> {
             } else {
                 "remainder"
             };
-            let msg = self.diag(DiagId::sema_division_by_zero, loc).arg(what);
+            let msg =
+                self.diag(DiagId::sema_division_by_zero, loc).arg(what).range(self.expr_range(r));
             self.diag_if_reachable(msg, r);
         }
     }
@@ -3351,7 +3392,7 @@ impl Sema<'_, '_> {
         } else {
             return;
         };
-        let msg = self.diag(id, loc);
+        let msg = self.diag(id, loc).range(self.expr_range(r));
         self.diag_if_reachable(msg, r);
     }
 
@@ -3419,6 +3460,8 @@ impl Sema<'_, '_> {
                 let bw = conv::bit_field_width(self, l);
                 let base = conv::strip_cv(self, lt);
                 let p = conv::promoted_type(self, base, bw).unwrap_or(base);
+                // clang `CheckShiftOperands` with `IsCompAssign`.
+                self.diagnose_shift_count(r2, p, loc);
                 (r2, p, p)
             }
             _ => {
@@ -3441,6 +3484,11 @@ impl Sema<'_, '_> {
                         );
                         if needs_int && !self.ast.types.is_integral(ty) {
                             return self.invalid_operands(l, r, loc);
+                        }
+                        // clang `CheckMultiplyDivideOperands` /
+                        // `CheckRemainderOperands` with `IsCompAssign`.
+                        if matches!(op, BinaryOp::DivAssign | BinaryOp::RemAssign) {
+                            self.diagnose_division_by_zero(op, r2, loc);
                         }
                         (r2, ty, ty)
                     }
@@ -4387,7 +4435,7 @@ impl Sema<'_, '_> {
             let ty = self.dependent_subscript_type(base, idx);
             return self.builder().subscript(base, idx, ty, loc);
         }
-        if self.is_vector_type(self.ety(base)) {
+        if self.is_vector_type(self.ety(base)) || self.is_sve_vector(self.ety(base)) {
             return self.vector_subscript(base, idx, loc);
         }
         let b = conv::decay(self, base);
@@ -4695,6 +4743,7 @@ impl Sema<'_, '_> {
             overloadable: self.kind_of(d) == DeclKind::Function
                 && self.ast.decls.builtin_id(d).is_none()
                 && adl_single == Some(callee),
+            enable_if: true,
         });
         let Some(conv_args) =
             self.convert_call_args(callee_info, callee, args, &mut braced, &proto, loc, rparen)
@@ -4957,9 +5006,21 @@ impl Sema<'_, '_> {
             self.check_variadic_args(&conv_args[n..have], kind);
         }
         if let Some(c) = named
+            && c.enable_if
             && !self.check_enable_if_direct(c.decl, callee, &conv_args, loc)
         {
             return None;
+        }
+        // clang `checkCall`: also a static member function named by a
+        // member access (`x.s(1)`), which is not `named` here.
+        let checked = named.map(|c| c.decl).or_else(|| {
+            let x = self.ignore_parens(callee);
+            (self.ast.exprs.get(x).kind() == ExprKind::MemberExpr)
+                .then(|| self.ast.exprs.decl(x))
+                .filter(|&d| self.is_static_method(d))
+        });
+        if let Some(f) = checked {
+            self.check_diagnose_if_call(f, &conv_args, rparen);
         }
         Some(conv_args)
     }
@@ -5247,15 +5308,9 @@ impl Sema<'_, '_> {
             }
             return e;
         }
-        // [over.ref]/1: `x->m` on a class `x` is `(x.operator->())->m`.
-        let (base, arrow) = if arrow && self.ast.types.as_record(self.ety(base)).is_some() {
-            match self.arrow_base(base, op_loc) {
-                crate::overload::arrow::ArrowBase::Arrow(e) => (e, true),
-                crate::overload::arrow::ArrowBase::Dot => (base, false),
-                crate::overload::arrow::ArrowBase::Err => return self.recover_err(&[base], loc),
-            }
-        } else {
-            (base, arrow)
+        let (base, arrow) = match self.member_arrow_base(base, loc, op_loc, arrow) {
+            Ok(x) => x,
+            Err(e) => return e,
         };
         // clang `LookupMemberExpr`: `v.xy` / `p->xy` on an ext vector.
         if qual.is_none()
@@ -5264,6 +5319,45 @@ impl Sema<'_, '_> {
         {
             return self.ext_vector_member(base, vt, id, loc, op_loc, arrow);
         }
+        let (b, obj_ty, def) = match self.member_object(base, loc, op_loc, arrow) {
+            Ok(x) => x,
+            Err(e) => return e,
+        };
+        self.member_access(base, b, obj_ty, def, arrow, name, qual, loc)
+    }
+
+    /// [over.ref]/1: `x->m` on a class `x` is `(x.operator->())->m`;
+    /// the base and whether the access is still an arrow. `Err` carries
+    /// the recovery expression.
+    pub(crate) fn member_arrow_base(
+        &mut self,
+        base: ExprId,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> Result<(ExprId, bool), ExprId> {
+        if arrow && self.ast.types.as_record(self.ety(base)).is_some() {
+            match self.arrow_base(base, op_loc) {
+                crate::overload::arrow::ArrowBase::Arrow(e) => Ok((e, true)),
+                crate::overload::arrow::ArrowBase::Dot => Ok((base, false)),
+                crate::overload::arrow::ArrowBase::Err => Err(self.recover_err(&[base], loc)),
+            }
+        } else {
+            Ok((base, arrow))
+        }
+    }
+
+    /// The object of a class member access `base.m` / `base->m`
+    /// ([expr.ref]/2-4): the (decayed) base, the object type and the
+    /// complete class definition. `Err` carries the recovery expression
+    /// after the diagnostic.
+    pub(crate) fn member_object(
+        &mut self,
+        base: ExprId,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> Result<(ExprId, QualType, DeclId), ExprId> {
         let (b, obj_ty) = if arrow {
             // clang `LookupMemberExpr`: the pointee or element type, or a
             // function type as written.
@@ -5281,14 +5375,14 @@ impl Sema<'_, '_> {
                 let msg =
                     self.diag(DiagId::sema_operator_arrow_not_pointer, loc).arg(self.ty_arg(ot));
                 self.emit(msg);
-                return self.recover_err(&[base], loc);
+                return Err(self.recover_err(&[base], loc));
             };
             if self.ast.types.as_record(p).is_none() {
                 let msg = self
                     .diag(DiagId::sema_member_reference_struct_union, op_loc)
                     .arg(self.ty_arg(p));
                 self.emit(msg);
-                return self.recover_err(&[base], loc);
+                return Err(self.recover_err(&[base], loc));
             }
             (conv::decay(self, base), p)
         } else {
@@ -5309,7 +5403,7 @@ impl Sema<'_, '_> {
                         .arg(self.ty_arg(bt))
                 };
                 self.emit(msg);
-                return self.recover_err(&[base], loc);
+                return Err(self.recover_err(&[base], loc));
             }
             (base, bt)
         };
@@ -5319,7 +5413,7 @@ impl Sema<'_, '_> {
         // a function body: its members declared so far are found (a
         // trailing return type naming `this->m`, [class.mem]/7).
         if self.instantiation_fails(obj_ty, op_loc) {
-            return self.recover_err(&[base], loc);
+            return Err(self.recover_err(&[base], loc));
         }
         let complete = self.this_outside_member_body(rec) || self.require_complete(obj_ty, op_loc);
         let Some(def) = self.ast.definition(rec).filter(|_| complete) else {
@@ -5327,9 +5421,9 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_member_reference_incomplete, op_loc)
                 .arg(self.ty_arg(obj_ty));
             self.emit(self.incomplete_note(msg, obj_ty));
-            return self.recover_err(&[base], loc);
+            return Err(self.recover_err(&[base], loc));
         };
-        self.member_access(base, b, obj_ty, def, arrow, name, qual, loc)
+        Ok((b, obj_ty, def))
     }
 
     /// A name declared by an anonymous union outside a class
@@ -6245,6 +6339,11 @@ pub(crate) struct CallCallee {
     /// A non-member function named by an id-expression: clang reports
     /// arity errors through overload resolution ("no matching function").
     pub(crate) overloadable: bool,
+    /// Whether the call checks the function's `enable_if` conditions
+    /// itself: not when overload resolution chose the function (it
+    /// checked them, binding an explicit object member function's
+    /// arguments as clang does, [`Sema::check_enable_if`]).
+    pub(crate) enable_if: bool,
 }
 
 /// An overload set in the order clang lists it: an unqualified lookup

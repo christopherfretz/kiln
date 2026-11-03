@@ -29,8 +29,8 @@ use crate::expr::{
     StringKind, SuspendKind, TraitKind, TypeTrait, TypeidOperand, UnaryOp, ValueCategory,
 };
 use crate::ids::{
-    AttrId, ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, StmtId, StringLitId,
-    TypeId,
+    ArgListId, AttrId, ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, StmtId,
+    StringLitId, TypeId,
 };
 use crate::lookup::LookupFlags;
 use crate::names::DeclName;
@@ -960,6 +960,19 @@ impl<'a> AstBuilder<'a> {
         self.add(
             DeclHead::new(ctx, DeclName::EMPTY, loc),
             DeclKind::StaticAssert,
+            None,
+            payload,
+            None,
+        )
+    }
+
+    /// A consteval-block-declaration ([dcl.pre], P3289R1): `call` is the
+    /// call of the block's synthesized `consteval` lambda.
+    pub fn consteval_block(&mut self, ctx: DeclId, loc: Loc, call: ExprId) -> DeclId {
+        let payload = Payload::StaticAssert(StaticAssertData { cond: call, message: None });
+        self.add(
+            DeclHead::new(ctx, DeclName::EMPTY, loc),
+            DeclKind::ConstevalBlock,
             None,
             payload,
             None,
@@ -2453,6 +2466,71 @@ impl<'a> AstBuilder<'a> {
         let e =
             self.simple(ExprKind::CXXReflectExpr, ValueCategory::PRValue, deps, aux, ty, loc, a, b);
         self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        e
+    }
+
+    /// A value-dependent splice `[: operand :]` in an expression position
+    /// (spec/reflection.md §5; template patterns only): `a` is the operand,
+    /// `b` the object expression of a member splice `base.[: m :]` /
+    /// `base->[: m :]` (0 otherwise), `aux` bit 0 the `->`. A splice
+    /// whose operand is not dependent is the expression it designates.
+    pub fn splice_expr(
+        &mut self,
+        operand: ExprId,
+        base: Option<(ExprId, bool)>,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        self.splice_node(operand, base, false, loc, end)
+    }
+
+    fn splice_node(
+        &mut self,
+        operand: ExprId,
+        base: Option<(ExprId, bool)>,
+        unexpanded_args: bool,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let mut deps = ExprDeps::TYPE_VALUE_INST;
+        if unexpanded_args {
+            deps |= ExprDeps::UNEXPANDED_PACK;
+        }
+        let unexpanded =
+            |s: &Self, e: ExprId| s.ast.exprs.get(e).deps().contains(ExprDeps::UNEXPANDED_PACK);
+        if unexpanded(self, operand) || base.is_some_and(|(b, _)| unexpanded(self, b)) {
+            deps |= ExprDeps::UNEXPANDED_PACK;
+        }
+        let aux = u8::from(base.is_some_and(|(_, arrow)| arrow));
+        let b = base.map_or(0, |(b, _)| b.raw());
+        let e = self.simple(
+            ExprKind::CXXSpliceExpr,
+            ValueCategory::LValue,
+            deps,
+            aux,
+            QualType::DEPENDENT,
+            loc,
+            operand.raw(),
+            b,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        e
+    }
+
+    /// A dependent splice template-id `template [: operand :] < args >`
+    /// in an expression position (P2996 [expr.prim.splice]): a
+    /// [`Self::splice_expr`] that also keeps the template arguments as
+    /// written, substituted with the operand.
+    pub fn splice_template_expr(
+        &mut self,
+        operand: ExprId,
+        args: ArgListId,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let unexpanded = self.ast.types.arg_list_flags(args).contains(TypeFlags::UNEXPANDED_PACK);
+        let e = self.splice_node(operand, None, unexpanded, loc, end);
+        self.ast.exprs.cold.splice_args.insert(e, args).expect("fresh expression");
         e
     }
 

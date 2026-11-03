@@ -16,10 +16,11 @@ use crate::vm::Fault;
 
 mod access;
 mod annot;
-mod define;
+pub(crate) mod define;
 mod ext;
 pub mod materialize;
 mod member;
+pub mod member_cache;
 mod query;
 mod templ;
 mod traits;
@@ -27,7 +28,7 @@ mod value;
 
 pub use access::AccessOp;
 pub use annot::AnnotOp;
-pub use define::DefineOp;
+pub use define::{DefineOp, Dms, OptionsPlan, RawOptions};
 pub use ext::ExtOp;
 pub use member::MemberOp;
 pub use query::QueryOp;
@@ -243,15 +244,18 @@ impl MetaOp {
 /// Where and how an intrinsic is evaluated (spec/reflection.md §3).
 #[derive(Clone, Copy, Debug)]
 pub struct MetaCtx {
-    /// The scope of the evaluation point (`access_context::current()`,
-    /// namespace `members_of`); `None`: the bridge's current context.
-    /// Set from the evaluation context by WP-473.
+    /// The scope of the evaluation point (`access_context::current()`):
+    /// the function whose body holds the call (its lexical scope; a
+    /// default argument is compiled at its call site), `None` at the
+    /// top level of an evaluation (the bridge's current context).
     pub scope: Option<DeclId>,
     /// The call's location (the position of the evaluation point, and
     /// where failure notes point).
     pub loc: Loc,
-    /// The evaluation is plainly constant-evaluated ([expr.const]; the
-    /// only context that may inject). Always false until WP-473.
+    /// The evaluation is plainly constant-evaluated: a consteval
+    /// block's ([expr.const.core]/2.32, the only context in which
+    /// `define_aggregate` may inject); [`crate::Oven::plain`]
+    /// (spec/consteval-blocks.md §3).
     pub plainly: bool,
     /// The evaluation is a trial (a fold, `__builtin_constant_p`, a
     /// speculative checkpoint): a `Mutating` op never reaches the bridge.
@@ -396,7 +400,7 @@ mod tests {
         let d = MetaOp::lookup("__kiln_define_member", &[true, true, false], false);
         assert_eq!(d, Some(MetaOp::Ext(ExtOp::DefineMember)));
         assert_eq!(MetaOp::Query(QueryOp::TypeOf).purity(), Purity::Stable);
-        assert_eq!(MetaOp::Ext(ExtOp::MemberAt).purity(), Purity::PointDependent);
+        assert_eq!(MetaOp::Member(MemberOp::MembersOf).purity(), Purity::PointDependent);
         assert_eq!(MetaOp::Ext(ExtOp::DefineMember).purity(), Purity::Mutating);
     }
 }
