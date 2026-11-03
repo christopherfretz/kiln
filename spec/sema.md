@@ -936,6 +936,22 @@ Redeclaration and linkage rules:
   direct initializer by [dcl.ambig.res]/1 warns as clang does, with
   its fix-it notes (`add a pair of parentheses`, `replace parentheses
   with an initializer`, `remove parentheses`).
+- **Function qualifiers where none are allowed** ([dcl.fct]/6, clang
+  `err_invalid_qualified_function_type`, WP-435): a cv- or
+  ref-qualifier on a non-member or friend function is "non-member
+  function cannot have 'Q' qualifier", on an explicit-object member
+  function "explicit object member function cannot have 'Q'
+  qualifier", both at the first qualifier (`Declarator::fn_qual_locs`)
+  with every qualifier spelled; the qualifiers are dropped from the
+  function type, so an instantiation does not report them again and
+  `void f() const; void f() {}` declares one function. A free function
+  with an explicit object parameter reports that first, a friend after;
+  an explicit-object static or virtual member reports the qualifier
+  first, then "cannot appear in a static/virtual function" (the
+  declaration is invalid). A static member function's qualifier error
+  is also at its first qualifier. Tests
+  `dcl.fct/nonmember-function-qualifiers.cpp`,
+  `dcl.fct/explicit-object-qualifiers-template.cpp`.
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
 - A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
@@ -3002,6 +3018,14 @@ the initializer, or after default initialization, and before the
   `D **` and `int **` vs `long **` are not similar and have none. Tests
   `expr.cond/composite-pointer-multilevel*.cpp`,
   `conv.qual/multilevel-compare-run.cpp`.
+- **C-style cast of a parenthesized list** (clang
+  `ParseSimpleExpressionList`, WP-435): in `(T)(a, b, c)` the parser
+  parses every element first, then builds the comma operators left to
+  right at the operand's `(` (`Parser::parse_paren_list_rest`), so the
+  elements' own diagnostics come before the commas' and a comma's
+  diagnostic is at the `(`; a nested `((a, b))` keeps its own comma
+  locations, and a `{` element is "expected expression". Test
+  `expr.comma/cast-paren-list.cpp`.
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
