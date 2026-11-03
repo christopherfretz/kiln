@@ -3,6 +3,7 @@
 //! The contract (CLI, directive semantics, exit codes, output) is
 //! `spec/harness.md`; the directive format is `docs/VALIDATION.md`.
 
+mod cfg_shape;
 mod compare;
 mod diag_parse;
 pub(crate) mod directives;

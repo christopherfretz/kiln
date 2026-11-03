@@ -1,9 +1,9 @@
 //! `-Wunreachable-code` and its subgroups (clang `ReachableCode.cpp`;
 //! spec/sema.md §7.10).
 //!
-//! The walk is [`Sema::dead_scan`]: it follows control through a body
-//! the way clang's CFG does, with constant branch conditions pruning
-//! their dead edge unless they are configuration values
+//! The scan is [`Cfg::dead_scan`] over the body's graph (spec/sema.md
+//! §7.5.1), whose `SCAN` edges are pruned by constant branch conditions
+//! unless they are configuration values
 //! ([`Sema::is_configuration_value`]). Each round reports one dead root,
 //! the last dead element (in evaluation order) that no reached or dead
 //! element flows into, and treats it as reached for the next round, so
@@ -19,7 +19,7 @@ use kiln_diag::{DiagId, FixIt};
 use kiln_source::Loc;
 
 use crate::Sema;
-use crate::try_stmt::reach::{DeadScan, Unit};
+use crate::cfg::{Cfg, Term, Unit, edge};
 
 /// clang `reachable_code::UnreachableKind`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -46,27 +46,57 @@ impl Sema<'_, '_> {
         if !ids.iter().any(|&d| self.diags.is_enabled(d)) {
             return;
         }
+        let Some(cfg) = self.cfg_take(body) else { return };
+        self.report_unreachable(&cfg);
+        self.cfg_put(cfg);
+    }
+
+    fn report_unreachable(&mut self, cfg: &Cfg) {
         let mut roots: HashSet<Unit> = HashSet::new();
         let mut prev_note: Option<ExprId> = None;
         // Each round roots at least one more element.
         loop {
-            let Some(scan) = self.dead_scan(body, roots.clone()) else { return };
+            let scan = cfg.dead_scan(&roots);
             let dead: Vec<Unit> =
                 scan.order.iter().copied().filter(|u| !scan.live.contains(u)).collect();
             let Some(&first) = dead.first() else { return };
             let mut all = roots.clone();
             all.extend(dead.iter().copied());
-            let Some(fed) = self.dead_scan(body, all) else { return };
+            let fed = cfg.dead_scan(&all);
             let pick =
                 dead.iter().rev().copied().find(|u| !fed.has_pred.contains(u)).unwrap_or(first);
             roots.insert(pick);
-            self.report_dead(pick, &scan, &mut prev_note);
+            self.report_dead(pick, cfg, &mut prev_note);
+        }
+    }
+
+    /// The silencing note's source (clang `reportDeadCode`): the
+    /// terminator condition of the first predecessor, reachable or not,
+    /// of the dead element's block (`getTerminatorCondition(false)`).
+    fn silence_cond(&self, u: Unit, cfg: &Cfg) -> Option<ExprId> {
+        let b = cfg.block_of(u)?;
+        let p = cfg.preds(b).iter().find(|a| a.flags & edge::NULL == 0)?.block;
+        let st = &self.ast.stmts;
+        match cfg.block(p).term {
+            Term::If(s) => st.if_data(s).cond,
+            Term::Loop(s) => match st.get(s).kind() {
+                StmtKind::WhileStmt | StmtKind::DoStmt | StmtKind::ForStmt => st.loop_data(s).cond,
+                _ => None,
+            },
+            Term::Switch(s) => Some(st.switch_data(s).cond),
+            Term::Logical(op) => Some(self.ast.exprs.operands(op)[0]),
+            Term::Cond(e) => {
+                let mut k = Vec::new();
+                self.ast.exprs.children_into(e, &self.ast.lists, &mut k);
+                k.first().copied()
+            }
+            _ => None,
         }
     }
 
     /// clang `DeadCodeScan::reportDeadCode` and Sema's
     /// `UnreachableCodeHandler`.
-    fn report_dead(&mut self, u: Unit, scan: &DeadScan, prev_note: &mut Option<ExprId>) {
+    fn report_dead(&mut self, u: Unit, cfg: &Cfg, prev_note: &mut Option<ExprId>) {
         let loc = self.unreachable_loc(u);
         if loc.is_macro() || self.unit_begin(u).is_macro() {
             return;
@@ -74,9 +104,9 @@ impl Sema<'_, '_> {
         let kind = if matches!(u, Unit::Stmt(s) if self.ast.stmts.get(s).kind() == StmtKind::BreakStmt)
         {
             Kind::Break
-        } else if self.is_trivial_do_cond(u, scan) || self.is_builtin_unreachable_ref(u) {
+        } else if self.is_trivial_do_cond(u, cfg) || self.is_builtin_unreachable_ref(u) {
             return;
-        } else if self.is_dead_return(u, scan) {
+        } else if self.is_dead_return(u, cfg) {
             Kind::Return
         } else {
             Kind::Other
@@ -85,7 +115,7 @@ impl Sema<'_, '_> {
             if self.ast.stmts.get(s).kind() == StmtKind::AttributedStmt && self.ift_is_fallthrough(s));
         let mut note = None;
         if kind == Kind::Other {
-            if let Some(&l) = scan.inc.get(&u) {
+            if let Some(&l) = cfg.inc.get(&u) {
                 let at = match self.ast.stmts.get(l).kind() {
                     StmtKind::ForStmt => self.ast.stmts.loop_data(l).inc.map(|i| self.begin_loc(i)),
                     _ => None,
@@ -100,7 +130,7 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 return;
             }
-            if let Some(&c) = scan.pruned.get(&u) {
+            if let Some(c) = self.silence_cond(u, cfg) {
                 self.is_configuration_value(c, &mut note);
             }
         }
@@ -167,10 +197,10 @@ impl Sema<'_, '_> {
 
     /// clang `isTrivialDoWhile`: the root is a `do` loop's literal or
     /// enumerator condition (`do { ... } while (0)`).
-    fn is_trivial_do_cond(&self, u: Unit, scan: &DeadScan) -> bool {
+    fn is_trivial_do_cond(&self, u: Unit, cfg: &Cfg) -> bool {
         let Unit::Expr(e) = u else { return false };
         let core = self.ignore_paren_imp_casts(e);
-        if !scan.do_conds.contains(&core) && !scan.do_conds.contains(&e) {
+        if !cfg.do_conds.contains(&core) && !cfg.do_conds.contains(&e) {
             return false;
         }
         match self.ast.exprs.get(core).kind() {
@@ -197,13 +227,13 @@ impl Sema<'_, '_> {
     /// clang `isDeadReturn`: the root is a `return` statement, or part of
     /// a returned value whose evaluation does not branch (the root's CFG
     /// block then ends in the `return`).
-    fn is_dead_return(&self, u: Unit, scan: &DeadScan) -> bool {
+    fn is_dead_return(&self, u: Unit, cfg: &Cfg) -> bool {
         match u {
             Unit::Stmt(s) => {
                 matches!(self.ast.stmts.get(s).kind(), StmtKind::ReturnStmt)
             }
             Unit::Expr(_) => {
-                let Some(&rs) = scan.ret.get(&u) else { return false };
+                let Some(&rs) = cfg.ret.get(&u) else { return false };
                 self.ast.stmts.get(rs).kind() == StmtKind::ReturnStmt
                     && self.ast.stmts.return_value(rs).is_some_and(|v| !self.branches(v))
             }

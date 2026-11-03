@@ -21,6 +21,7 @@ mod asm;
 mod bit_int;
 mod bitfield_constant;
 mod builtins;
+pub mod cfg;
 pub mod class;
 mod complex;
 mod consteval;
@@ -52,6 +53,7 @@ mod gnu_null;
 mod gnu_typeof;
 mod impcast;
 mod implicit_fallthrough;
+mod infinite_recursion;
 pub mod init;
 mod init_dtor;
 mod init_priority;
@@ -67,6 +69,7 @@ pub mod lookup;
 mod loop_hint;
 mod macro_fixit;
 mod meta;
+mod missing_noreturn;
 pub mod modules;
 pub mod names;
 pub mod new_delete;
@@ -265,6 +268,25 @@ pub struct Sema<'a, 'sm> {
     /// constant evaluation as its `__builtin_` twin, as GCC folds
     /// `::ceil` (spec/sema.md §5.4).
     pub gnu_lib_builtins: bool,
+    /// `-fkiln-dump-cfg`: build the graph of every analysed body and
+    /// append its dump to [`Sema::cfg_out`] (spec/sema.md §7.5.1).
+    pub cfg_dump: bool,
+    /// `-fkiln-cfg-stats`: build the graph of every analysed body and
+    /// append a line with its size and build time to [`Sema::cfg_out`]
+    /// (spec/sema.md §7.5.1).
+    pub cfg_stats: bool,
+    /// The dumps of `-fkiln-dump-cfg` and lines of `-fkiln-cfg-stats`.
+    pub cfg_out: String,
+    /// `-fkiln-cfg-max-elems`: a body whose graph would hold more
+    /// elements gets none; its flow-sensitive warnings are skipped with
+    /// `-Rkiln-analysis-skipped` (spec/sema.md §7.5).
+    pub cfg_max_elems: usize,
+    /// The graph of the body being finished, its vectors reused from
+    /// body to body.
+    pub(crate) cfg_body: cfg::BodyCfg,
+    /// The functions (first declarations) clang 22 infers `noreturn`
+    /// (`InferredNoReturnAttr`, [`Sema::infer_noreturn`]).
+    pub(crate) inferred_noreturn: kiln_source::fx::FxHashSet<DeclId>,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -919,6 +941,12 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             sve: false,
             nns_start: None,
             gnu_lib_builtins: false,
+            cfg_dump: false,
+            cfg_stats: false,
+            cfg_out: String::new(),
+            cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
+            cfg_body: cfg::BodyCfg::default(),
+            inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,

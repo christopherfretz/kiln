@@ -80,6 +80,12 @@ pub struct ParseOptions {
     /// The `AArch64` `sve` target feature (`-march=armv8-a+sve`;
     /// [`kiln_sema::Sema::sve`]).
     pub sve: bool,
+    /// `-fkiln-dump-cfg` ([`kiln_sema::Sema::cfg_dump`]).
+    pub cfg_dump: bool,
+    /// `-fkiln-cfg-stats` ([`kiln_sema::Sema::cfg_stats`]).
+    pub cfg_stats: bool,
+    /// `-fkiln-cfg-max-elems=` ([`kiln_sema::Sema::cfg_max_elems`]).
+    pub cfg_max_elems: usize,
 }
 
 impl Default for ParseOptions {
@@ -98,6 +104,9 @@ impl Default for ParseOptions {
             clang_compat: 22,
             gnu_lib_builtins: false,
             sve: false,
+            cfg_dump: false,
+            cfg_stats: false,
+            cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
         }
     }
 }
@@ -142,6 +151,10 @@ pub struct ParsedTu {
     /// The template instantiation report (spec/sema-templates.md
     /// §11.3), empty unless [`ParseOptions::inst_report`] asked for it.
     pub inst_report: String,
+    /// The `-fkiln-dump-cfg` dumps and `-fkiln-cfg-stats` lines, empty
+    /// unless [`ParseOptions::cfg_dump`] or [`ParseOptions::cfg_stats`]
+    /// asked for them.
+    pub cfg_dump: String,
     /// Splices whose operand was read as a frozen reflection without an
     /// Oven run (spec/reflection.md §5, the fast path).
     pub splice_fast: u64,
@@ -228,6 +241,9 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
     s.sve = opts.sve;
+    s.cfg_dump = opts.cfg_dump;
+    s.cfg_stats = opts.cfg_stats;
+    s.cfg_max_elems = opts.cfg_max_elems;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;
@@ -240,6 +256,8 @@ pub fn parse_preprocessed<'a, 'sm>(
     let name = main.rsplit('/').next().unwrap_or(&main);
     let inst_report = s.instantiation_report(name);
     let splice_fast = s.splice_fast_count();
+    let mut s = s;
+    let cfg_dump = std::mem::take(&mut s.cfg_out);
     let (ast, oven) = s.into_parts();
-    (ParsedTu { ast, oven, inst_report, splice_fast }, src.into_preprocessor())
+    (ParsedTu { ast, oven, inst_report, cfg_dump, splice_fast }, src.into_preprocessor())
 }
