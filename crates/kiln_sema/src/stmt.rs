@@ -287,6 +287,9 @@ impl Sema<'_, '_> {
             let at = self.begin_loc(e);
             return self.recover_err(&[], at);
         }
+        let at = self.expr_loc(self.ignore_parens(e));
+        let typo = self.take_condition_typo(at);
+        let e = self.resolve_single_overload_candidate(e);
         let e = match conv::contextually_convert_to_bool(self, e) {
             Ok(c) => c,
             Err(err) => {
@@ -295,7 +298,10 @@ impl Sema<'_, '_> {
                 e
             }
         };
-        self.act_on_full_expr(e)
+        let saved = std::mem::replace(&mut self.cond_typo_at, if typo { at } else { Loc::INVALID });
+        let r = self.act_on_full_expr(e);
+        self.cond_typo_at = saved;
+        r
     }
 
     /// The statement attributes `attrs` written before `sub`, at `loc`

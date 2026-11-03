@@ -137,14 +137,18 @@ impl Sema<'_, '_> {
             return;
         }
         let at = self.expr_loc(e);
+        if at == self.cond_typo_at {
+            return;
+        }
         if at.is_macro() && (self.in_any_macro_body(at) || self.in_any_macro_body(cc)) {
             return;
         }
+        let root = e;
         let mut e = e;
         let kind = self.ast.exprs.get(e).kind();
         if kind == ExprKind::CXXThisExpr {
             let msg = self.diag(DiagId::sema_this_bool_conversion, at);
-            self.emit(msg);
+            self.emit_after_typos(root, msg);
             return;
         }
         let addr_of = kind == ExprKind::UnaryOperator;
@@ -166,7 +170,7 @@ impl Sema<'_, '_> {
                 if self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_reference(t)) {
                     let at = self.expr_loc(x);
                     let msg = self.diag(DiagId::sema_address_of_reference_bool_conversion, at);
-                    self.emit(msg);
+                    self.emit_after_typos(root, msg);
                     return;
                 }
             } else if matches!(
@@ -199,7 +203,9 @@ impl Sema<'_, '_> {
         };
         let at = self.expr_loc(e);
         let text = self.expr_text_as_written(e);
-        let mut msg = self.diag(DiagId::sema_impcast_pointer_to_bool, at).arg(what).arg(text);
+        let range = self.expr_range(e);
+        let mut msg =
+            self.diag(DiagId::sema_impcast_pointer_to_bool, at).arg(what).arg(text).range(range);
         if function {
             let begin = self.begin_loc(e);
             msg = msg.with_note(
@@ -215,7 +221,7 @@ impl Sema<'_, '_> {
                 );
             }
         }
-        self.emit(msg);
+        self.emit_after_typos(root, msg);
     }
 
     /// clang `tryExprAsCall` for function `d` of type `t`, then whether

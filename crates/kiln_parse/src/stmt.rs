@@ -433,6 +433,9 @@ impl Parser<'_, '_> {
             let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
             let e = self.parse_expression();
             if let Some(m) = typos {
+                if let Some(e) = e {
+                    self.s.note_condition_typo(e);
+                }
                 self.s.end_delayed_typos(m);
             }
             return e.map(|e| (None, e));

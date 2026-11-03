@@ -46,6 +46,8 @@ struct Candidate {
     found: Vec<DeclId>,
     /// Found by qualified lookup.
     qualified: bool,
+    /// The scope qualified lookup searched.
+    scope: Option<DeclId>,
 }
 
 /// What a declaration correction recovers as.
@@ -119,6 +121,7 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        let nns = self.typo_nns(&c);
         let note = self
             .diag(DiagId::note_entity_declared_here, self.typo_note_loc(shown))
             .arg(format!("'{}'", c.text));
@@ -127,8 +130,9 @@ impl Sema<'_, '_> {
             .arg(typo)
             .arg(c.text)
             .with_note(note);
-        // clang's `BuildDeclarationNameExpr` on the one function.
-        let u = self.build_decl_ref_via(d, loc, (decl != d).then_some(decl));
+        // clang's `BuildDeclarationNameExpr` on the one function, named
+        // as corrected.
+        let u = self.build_decl_ref_qualified(d, loc, (decl != d).then_some(decl), nns);
         Some((u, msg))
     }
 
@@ -248,7 +252,8 @@ impl Sema<'_, '_> {
                 let template = self.kind_of(d) == DeclKind::FunctionTemplate;
                 let targs = Some(self.ast.types.arg_list(args));
                 let dn = self.ast.decls.get(d).name();
-                let e = self.builder().unresolved_lookup(dn, &[decl], false, None, targs, loc);
+                let nns = self.typo_nns(&c);
+                let e = self.builder().unresolved_lookup(dn, &[decl], false, nns, targs, loc);
                 return TemplateIdTypo::Recovered(if template {
                     self.resolve_single_template_id(e)
                 } else {
@@ -418,6 +423,7 @@ impl Sema<'_, '_> {
                     decls: Vec::new(),
                     found: Vec::new(),
                     qualified: false,
+                    scope: None,
                 });
             }
         }
@@ -443,6 +449,7 @@ impl Sema<'_, '_> {
                 decls: found.decls,
                 found: found.found,
                 qualified: false,
+                scope: None,
             });
         }
         let cur = self.typo_context_chain();
@@ -472,6 +479,7 @@ impl Sema<'_, '_> {
                     decls: found.decls,
                     found: found.found,
                     qualified: true,
+                    scope: Some(scope),
                 });
             }
         }
@@ -686,6 +694,29 @@ impl Sema<'_, '_> {
     /// translation unit (one component); the path from the innermost
     /// common context, or `::` and the full path when that is empty or
     /// starts with a name of an enclosing context.
+    /// The nested-name-specifier of correction `c` as spelled (`::val`,
+    /// `N::fn`): its namespaces, from the global one when the spelling
+    /// starts with `::`. `None` when it is unqualified, or names a class
+    /// (kiln then keeps the bare name).
+    fn typo_nns(&mut self, c: &Candidate) -> Option<kiln_ast::ids::NnsId> {
+        use kiln_ast::types::Nns;
+        let scope = c.scope?;
+        let chain = self.typo_chain(scope);
+        if chain.iter().any(|&n| self.kind_of(n) != DeclKind::Namespace) {
+            return None;
+        }
+        let parts = c.text.split("::").count().checked_sub(1)?;
+        let global = c.text.starts_with("::");
+        let take = if global { chain.len() } else { parts.min(chain.len()) };
+        let mut nns = global.then(|| self.ast.types.nns(Nns::Global));
+        for &ns in &chain[chain.len() - take..] {
+            nns = Some(self.ast.types.nns(Nns::Namespace { prefix: nns, ns }));
+        }
+        let n = nns?;
+        let name = c.text.rsplit("::").next().unwrap_or_default();
+        (format!("{}{name}", self.nns_str(n)) == c.text).then_some(n)
+    }
+
     fn typo_qualifier(&self, scope: DeclId, cur: &[DeclId]) -> (String, usize) {
         let chain = self.typo_chain(scope);
         if chain.is_empty() {

@@ -133,6 +133,10 @@ struct TypoSpec {
     loc: Loc,
     /// The diagnostic of the correction ("did you mean").
     suggest: Diag,
+    /// The full-expression warnings about an expression built on the
+    /// correction, with their order ([`Sema::emit_after_typos`]): clang
+    /// issues them after it corrects the `TypoExpr`.
+    after: Vec<(u32, Diag)>,
 }
 
 /// The semantic-analysis state of one translation unit (spec/sema.md §1).
@@ -584,6 +588,14 @@ pub struct Sema<'a, 'sm> {
     /// range-based `for` from `getCurScope()`); set by the outermost
     /// `in_inst_context`.
     pub(crate) range_for_outer_depth: Option<usize>,
+    /// The location of a condition that is clang 19's speculative typo
+    /// correction: clang converts the uncorrected `TypoExpr` to `bool`
+    /// (a no-op) and so never checks the corrected expression's
+    /// conversion ([`Sema::act_on_condition`]).
+    pub(crate) cond_typo_at: Loc,
+    /// [`Sema::note_condition_typo`]'s location, taken by the next
+    /// [`Sema::act_on_condition`].
+    pending_cond_typo: Loc,
     /// The C++26 rule for deleting a pointer to an incomplete type
     /// (P3144), as the parser last passed it to
     /// [`Sema::act_on_cxx_delete`]; reused when a dependent
@@ -851,6 +863,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             spec_failures: Vec::new(),
             spec_exempt: kiln_source::fx::FxHashSet::default(),
             range_for_outer_depth: None,
+            cond_typo_at: Loc::INVALID,
+            pending_cond_typo: Loc::INVALID,
             delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
             delayed_exc_equiv: Vec::new(),
@@ -1119,9 +1133,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 self.diags.drop_held(i);
             }
         }
+        let mut after = Vec::new();
         for t in batch {
             let d = match t.spec {
-                Some(s) if !failed => s.suggest,
+                Some(s) if !failed => {
+                    after.extend(s.after);
+                    s.suggest
+                }
                 _ => t.diag,
             };
             if dropped {
@@ -1132,6 +1150,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 }
                 self.emit(d);
             }
+        }
+        after.sort_by_key(|&(n, _)| n);
+        for (_, d) in after {
+            self.emit(d);
         }
         for _ in 0..specs {
             self.open_specs = self.open_specs.saturating_sub(1);
@@ -1217,8 +1239,50 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.open_specs += 1;
         self.diags.hold();
         let start = self.diags.held_len();
-        let spec = Some(Box::new(TypoSpec { start, loc, suggest }));
+        let spec = Some(Box::new(TypoSpec { start, loc, suggest, after: Vec::new() }));
         self.delayed_typos.push(HeldTypo { seq, expr: u, diag: plain, spec });
+    }
+
+    /// Called before the compat-19 correction scope of condition `e`
+    /// ends: whether `e` (parentheses aside) is a speculative typo
+    /// correction, which the next [`Sema::act_on_condition`] then does
+    /// not check for `-Wpointer-bool-conversion` (clang 19 converts the
+    /// `TypoExpr`, not the corrected expression).
+    pub fn note_condition_typo(&mut self, e: ExprId) {
+        let at = self.expr_loc(self.ignore_parens(e));
+        let open = at.is_valid()
+            && self.delayed_typos.iter().any(|h| h.spec.as_ref().is_some_and(|s| s.loc == at));
+        self.pending_cond_typo = if open { at } else { Loc::INVALID };
+    }
+
+    /// Takes [`Sema::note_condition_typo`]'s mark if it is for `at`.
+    pub(crate) fn take_condition_typo(&mut self, at: Loc) -> bool {
+        std::mem::replace(&mut self.pending_cond_typo, Loc::INVALID) == at && at.is_valid()
+    }
+
+    /// Emits the full-expression warning `d` about `e`, or, if `e` is
+    /// built on an open speculative correction ([`TypoSpec`]), keeps it
+    /// for after the correction's diagnostic (dropped if the correction
+    /// fails): clang 19 analyzes the full-expression once it has
+    /// corrected its `TypoExpr`s.
+    pub(crate) fn emit_after_typos(&mut self, e: ExprId, d: Diag) {
+        if self.open_specs > 0 {
+            let at = (0..self.delayed_typos.len()).rev().find(|&i| {
+                self.delayed_typos[i]
+                    .spec
+                    .as_ref()
+                    .is_some_and(|s| self.expr_contains_at(e, s.loc))
+            });
+            if let Some(i) = at {
+                let n = self.typo_count;
+                self.typo_count = self.typo_count.wrapping_add(1);
+                if let Some(s) = self.delayed_typos[i].spec.as_mut() {
+                    s.after.push((n, d));
+                }
+                return;
+            }
+        }
+        self.emit(d);
     }
 
     /// Records the recovery expression `e` just built while a
