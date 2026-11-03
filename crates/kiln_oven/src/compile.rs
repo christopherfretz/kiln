@@ -2846,7 +2846,10 @@ impl Compiler<'_> {
             TraitKind::DataSizeOf => {
                 let ast = self.b.ast();
                 match ast.types.as_record(q).and_then(|r| ast.definition(r)) {
-                    Some(def) => self.b.ensure_layout(def).data_size,
+                    Some(def) => match self.b.ensure_layout(def) {
+                        Some(l) => l.data_size,
+                        None => self.o.types.size(t),
+                    },
                     None => self.o.types.size(t),
                 }
             }

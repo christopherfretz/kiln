@@ -81,7 +81,7 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         self.sema.lend_oven(oven, |s| s.resolve_nothrow(f, at))
     }
 
-    fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout {
+    fn ensure_layout(&mut self, record: DeclId) -> Option<&RecordLayout> {
         let s = &mut *self.sema;
         kiln_abi::ensure_layout(&mut s.ast, record, &s.abi)
     }

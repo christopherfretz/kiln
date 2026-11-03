@@ -513,8 +513,23 @@ pub fn record_layout(ast: &Ast, record: DeclId, target: &Target) -> RecordLayout
 /// Lays out `record` and every class it contains by value, storing each
 /// layout not yet cached in `ast.layouts` (keyed by first declaration),
 /// and returns `record`'s.
-pub fn ensure_layout<'a>(ast: &'a mut Ast, record: DeclId, target: &Target) -> &'a RecordLayout {
+///
+/// `None` while `record`'s class is incomplete ([basic.types.general]/5:
+/// no definition yet, or still being defined): its layout is not known,
+/// and a cached one would never be invalidated (spec/abi.md §1).
+pub fn ensure_layout<'a>(
+    ast: &'a mut Ast,
+    record: DeclId,
+    target: &Target,
+) -> Option<&'a RecordLayout> {
     let first = ast.first(record);
+    let complete = ast
+        .definition(first)
+        .and_then(|def| ast.decls.record(def))
+        .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE));
+    if !complete {
+        return None;
+    }
     if ast.layouts.get(first).is_none() {
         let computed: Vec<(DeclId, RecordLayout)> = {
             let mut l = Layouter::new(ast, target);
@@ -525,5 +540,5 @@ pub fn ensure_layout<'a>(ast: &'a mut Ast, record: DeclId, target: &Target) -> &
             ast.layouts.insert(d, layout);
         }
     }
-    ast.layouts.get(first).expect("inserted above")
+    ast.layouts.get(first)
 }

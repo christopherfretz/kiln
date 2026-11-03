@@ -668,12 +668,13 @@ impl Types {
         true
     }
 
-    /// Whether class `d` has no definition or is still being defined.
+    /// Whether class `d` has no definition or is still being defined
+    /// (`kiln_abi::ensure_layout` refuses it).
     fn incomplete(ast: &Ast, d: DeclId) -> bool {
         ast.definition(d).is_none_or(|def| {
             ast.decls
                 .record(def)
-                .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::BEING_DEFINED))
+                .is_none_or(|r| !r.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE))
         })
     }
 
@@ -738,7 +739,10 @@ impl Types {
                 (m, ast.decls.get(m).ty().unwrap_or(QualType::INT), w, mutable)
             })
             .collect();
-        let layout = bridge.ensure_layout(def);
+        let Some(layout) = bridge.ensure_layout(def) else {
+            // Unreachable: `incomplete` is `ensure_layout`'s rule.
+            return self.provisional_slot(c, slot);
+        };
         let (size, align) = (layout.size, layout.align);
         let dsize = layout.data_size;
         let offs: Vec<u64> = layout.fields.to_vec();
