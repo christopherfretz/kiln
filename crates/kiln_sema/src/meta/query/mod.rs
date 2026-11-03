@@ -81,8 +81,9 @@ impl Sema<'_, '_> {
 
     /// The type `type_of(r)` yields, as the declaration or value carries
     /// it (not canonicalized), if `r` has one ([meta.reflection.queries]
-    /// *has-type*): a value, object, variable, function, data member,
-    /// enumerator, function parameter or direct base.
+    /// *has-type*): a value, object, variable, function other than a
+    /// constructor or destructor, data member, enumerator, function
+    /// parameter or direct base.
     fn type_of_reflectee(&self, x: Reflectee) -> Option<QualType> {
         let ty = match x {
             Reflectee::Decl(d) => match self.kind_of(d) {
@@ -94,8 +95,6 @@ impl Sema<'_, '_> {
                 | DeclKind::IndirectField
                 | DeclKind::Function
                 | DeclKind::CXXMethod
-                | DeclKind::CXXConstructor
-                | DeclKind::CXXDestructor
                 | DeclKind::CXXConversion
                 | DeclKind::EnumConstant => self.ast.decls.get(d).ty(),
                 _ => None,

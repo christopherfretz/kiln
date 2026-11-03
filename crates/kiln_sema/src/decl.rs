@@ -2717,6 +2717,9 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
+        if !d.defaulted {
+            self.check_consteval_only_fn(decl, d.name_loc());
+        }
         Some(decl)
     }
 
@@ -4093,7 +4096,9 @@ impl Sema<'_, '_> {
         } else {
             self.register_local(name, f);
         }
-        self.check_consteval_only_fn(f, d.name_loc());
+        if !d.defaulted {
+            self.check_consteval_only_fn(f, d.name_loc());
+        }
         f
     }
 
