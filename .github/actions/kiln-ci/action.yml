@@ -1,10 +1,12 @@
 name: kiln-ci
 description: >
   The steps shared by the `check` and `check-x86_64` jobs (docs/VALIDATION.md
-  "GitHub Actions"): the Debian toolchain packages, the pinned Rust
-  toolchain, the cargo cache, `cargo xtask ci` (oracle clang 22) and
+  "GitHub Actions"): the Debian toolchain packages, a check that the image's
+  GCC 16.1 (the reflection oracle, `KILN_GCC` from the job env) compiles a
+  `<meta>` TU, the pinned Rust toolchain, the cargo cache, `cargo xtask ci`
+  (oracle clang 22, `oracle: gcc` tests against GCC 16.1) and
   `KILN_ORACLE=19 cargo xtask ci --quick --oracle-only`. A local action is only
-  readable after checkout, so each job installs git and checks out first.
+  readable after checkout, so each job checks out first.
 runs:
   using: composite
   steps:
@@ -21,6 +23,15 @@ runs:
           clang-22 llvm-22 lld-22 >/dev/null
         clang++-19 --version | head -1
         clang++-22 --version | head -1
+        # The GCC oracle (spec/harness.md "GCC oracle"): the job's KILN_GCC
+        # must be GCC 16.1 and compile libstdc++'s <meta> with reflection.
+        "${KILN_GCC:?the job env sets KILN_GCC}" --version | head -1
+        case "$("$KILN_GCC" -dumpfullversion)" in
+          16.1.*) ;;
+          *) echo "KILN_GCC=$KILN_GCC is not GCC 16.1" >&2; exit 1 ;;
+        esac
+        printf '#include <meta>\nstatic_assert(std::meta::is_type(^^int));\nint main() {}\n' \
+          | "$KILN_GCC" -std=c++26 -freflection -fsyntax-only -x c++ -
     # The job runs as root in a container whose $HOME is /github/home while
     # root's passwd home is /root; rustup-init's anti-sudo check refuses that
     # mismatch (nondeterministically across runners). Skip the check: there is

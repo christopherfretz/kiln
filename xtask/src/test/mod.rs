@@ -69,6 +69,8 @@ environment:
                       --oracle is clang++-N, and kiln++ runs with
                       KILN_LLVM_DIR=/usr/lib/llvm-N (spec/harness.md \"Oracle toolchain\")
   KILN_GCC            the GCC oracle (default g++-16; spec/harness.md \"GCC oracle\")
+  KILN_REQUIRE_GCC    1: no usable GCC oracle is an error (exit 2), not dropped
+                      comparisons (GitHub CI sets it; --no-gcc/--no-oracle then too)
 
 exit status: 0 all passed (xfail/skip allowed), 1 a test failed/xpassed/errored/was killed,
 2 usage or infrastructure error.
@@ -85,6 +87,11 @@ pub struct Options {
     pub gcc: Option<PathBuf>,
     /// `--no-gcc`: drop the GCC comparisons (the clang oracle stays).
     pub no_gcc: bool,
+    /// `KILN_REQUIRE_GCC=1`: no usable GCC oracle is an infrastructure
+    /// error. Not a flag, and not read by [`parse_args`] or [`execute`]: the
+    /// entry points ([`main`], `xtask ci`) set it from the environment, so
+    /// the harness's own tests are unaffected by CI's.
+    pub require_gcc: bool,
     pub no_oracle: bool,
     /// `--external <dir>`: the never-crash run of [`external`].
     pub external: Option<PathBuf>,
@@ -113,6 +120,7 @@ impl Default for Options {
             oracle: None,
             gcc: None,
             no_gcc: false,
+            require_gcc: false,
             no_oracle: false,
             external: None,
             filter: None,
@@ -192,7 +200,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
 
 /// Entry point for `cargo xtask test`.
 pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
-    let opts = match parse_args(args) {
+    let mut opts = match parse_args(args) {
         Ok(Some(o)) => o,
         Ok(None) => {
             print!("{USAGE}");
@@ -206,6 +214,7 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
     if opts.external.is_some() {
         return external::main(&opts);
     }
+    opts.require_gcc = crate::oracle::require_gcc_from_env();
     match execute(&opts) {
         Ok(results) if results.iter().any(|r| r.status.is_failure()) => ExitCode::from(1),
         Ok(_) => ExitCode::SUCCESS,
@@ -255,7 +264,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
             .map_err(|e| format!("{e} (pass --no-oracle to skip oracle comparisons)"))?;
         (Some(oracle), id.kind, id.clang_version())
     };
-    let gcc = if opts.no_oracle || opts.no_gcc { None } else { resolve_gcc(opts.gcc.as_deref())? };
+    let gcc = gcc_oracle(opts)?;
 
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let scratch = target.join("xtask-test").join(format!("run-{}-{nanos}", std::process::id()));
@@ -270,7 +279,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         oracle,
         oracle_kind,
         oracle_clang,
-        gcc,
+        gcc: gcc.as_ref().map(|(path, _)| path.clone()),
         llvm_dir: toolchain.llvm_dir(),
         llvm_major: toolchain.version,
         update: opts.update,
@@ -290,7 +299,10 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         cfg.compiler.display(),
         compiler_kind.as_str(),
         cfg.oracle.as_ref().map_or_else(|| "none".to_owned(), |o| o.display().to_string()),
-        cfg.gcc.as_ref().map_or_else(|| "none".to_owned(), |o| o.display().to_string()),
+        gcc.as_ref().map_or_else(
+            || "none".to_owned(),
+            |(path, version)| format!("{} ({version})", path.display())
+        ),
         crate::jobs::global().describe().map_or_else(String::new, |d| format!(" (jobserver {d})")),
         cfg.mem_limit.map_or_else(|| "none".to_owned(), |l| format!("{} MiB", l.mib)),
     );
@@ -325,17 +337,57 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     Ok(results)
 }
 
+/// The GCC oracle of this run and its `--version` line: [`resolve_gcc`],
+/// unless `--no-gcc`/`--no-oracle` drop it. With [`Options::require_gcc`]
+/// (`KILN_REQUIRE_GCC=1`) a run without one is an infrastructure error, so
+/// CI never passes with its `oracle: gcc` comparisons silently skipped.
+pub fn gcc_oracle(opts: &Options) -> Result<Option<(PathBuf, String)>, String> {
+    gcc_oracle_with(opts, std::env::var(crate::oracle::GCC_ENV).ok().as_deref())
+}
+
+/// [`gcc_oracle`] with `kiln_gcc` as the value of `KILN_GCC`.
+fn gcc_oracle_with(
+    opts: &Options,
+    kiln_gcc: Option<&str>,
+) -> Result<Option<(PathBuf, String)>, String> {
+    let gcc = if opts.no_oracle || opts.no_gcc {
+        None
+    } else {
+        resolve_gcc(opts.gcc.as_deref(), kiln_gcc)?
+    };
+    if gcc.is_none() && opts.require_gcc {
+        let why = if opts.no_oracle || opts.no_gcc {
+            "`--no-gcc`/`--no-oracle` drop it".to_owned()
+        } else {
+            format!(
+                "set {} or --gcc to GCC 16.1, or put {} on PATH",
+                crate::oracle::GCC_ENV,
+                crate::oracle::GCC_DEFAULT
+            )
+        };
+        return Err(format!(
+            "{}=1 and no usable GCC oracle for `oracle: gcc` tests ({why}; spec/harness.md \"GCC \
+             oracle\")",
+            crate::oracle::REQUIRE_GCC_ENV
+        ));
+    }
+    Ok(gcc)
+}
+
 /// The GCC oracle: `--gcc`, else `KILN_GCC`, else `g++-16` (`spec/harness.md`
-/// "GCC oracle"). An explicitly named GCC that does not run, or is not GCC,
-/// is an infrastructure error; the default one missing is `None` (the GCC
-/// comparisons are dropped, never failed).
-fn resolve_gcc(flag: Option<&Path>) -> Result<Option<PathBuf>, String> {
+/// "GCC oracle"), with its `--version` line. An explicitly named GCC that
+/// does not run, or is not GCC, is an infrastructure error; the default one
+/// missing is `None` (the GCC comparisons are dropped, never failed).
+fn resolve_gcc(
+    flag: Option<&Path>,
+    kiln_gcc: Option<&str>,
+) -> Result<Option<(PathBuf, String)>, String> {
     let (path, explicit) = match flag {
         Some(p) => (p.to_path_buf(), true),
-        None => crate::oracle::gcc_from_env(),
+        None => crate::oracle::gcc_from(kiln_gcc),
     };
     match crate::util::identify(&path) {
-        Ok(id) if id.kind == CompilerKind::Gcc => Ok(Some(path)),
+        Ok(id) if id.kind == CompilerKind::Gcc => Ok(Some((path, id.version))),
         Ok(id) if explicit => Err(format!(
             "the GCC oracle `{}` is not GCC (`--version`: {})",
             path.display(),
