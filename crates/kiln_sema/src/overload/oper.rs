@@ -406,7 +406,11 @@ impl Sema<'_, '_> {
             ops.push(zero);
             brs.push(None);
         }
-        for &e in &ops {
+        // A call of an object completes only the object's class
+        // ([over.call.object]: no argument-dependent lookup; an argument's
+        // class is completed when a conversion needs it).
+        let completed = if form == OperForm::Call { &ops[..1] } else { &ops[..] };
+        for &e in completed {
             if let Some(c) = self.operand_class(e) {
                 let t = self.ety(e);
                 let _ = self.require_complete_silent(t, loc);

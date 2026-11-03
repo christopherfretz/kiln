@@ -191,6 +191,12 @@ P1..Pn)`, `CandidateKind::Surrogate { conv }`, note "conversion candidate of
 type 'void (*)(int)'". Neither present: "type 'H' does not provide a call
 operator". Failure: "no matching function for call to object of type 'F'" /
 "call to object of type 'F' is ambiguous".
+Only `T` is completed up front: there is no argument-dependent lookup, so
+an argument's class template specialization is instantiated only when a
+viable candidate's conversion needs it (a candidate rejected by its
+constraints converts nothing; clang `BuildCallToObjectOfClassType`).
+WP-418, `tests/conformance/over.call.object/argument-class-not-completed.cpp`
+(libc++ `ranges_replace_copy_if`).
 
 ### 2.5 Operators ([over.match.oper])
 `resolve_operator(op, args, loc)`:
