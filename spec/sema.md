@@ -1577,6 +1577,12 @@ and returns the scope it names:
     a `vector_size` vector) gives a `DependentVector` (spec/types.md);
     after substitution it is diagnosed at the size operand (clang: at
     the attribute name).
+    In a type-id (`sizeof`/`alignof`, a cast, a template argument, a
+    new-type-id; not an alias-declaration, whose attributes go to the
+    alias) the decl-specifier attributes modify the decl-specifier type
+    as type attributes (`Sema::apply_type_id_vector_attrs`, clang
+    `processTypeAttrs`), so `ext_vector_type` is accepted at clang 19
+    too (WP-187; `ext.vector/type-id-run.cpp`).
   - GNU `malloc` (function with a pointer result, else `'malloc'
     attribute only applies to return values that are pointers`; on a
     non-function `... only applies to functions`), `alloc_size(n[, m])`
