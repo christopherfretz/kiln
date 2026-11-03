@@ -21,7 +21,9 @@ namespace N { int v; }
 constexpr info n_before = ^^N;
 namespace N { extern int v; }
 namespace A = N;
-static_assert(n_before == ^^N && n_before == ^^A);
+// A namespace alias is its own entity ([expr.reflect]/5; WP-472):
+// reflecting it does not give the namespace it designates.
+static_assert(n_before == ^^N && n_before != ^^A);
 static_assert(^^N::v == ^^A::v);
 
 struct C {
@@ -31,6 +33,6 @@ struct C {
 constexpr info m_before = ^^C::m;
 void C::m() {}
 static_assert(m_before == ^^C::m);
-static_assert(__kiln_member_at(^^C, 1) == ^^C::m);
-static_assert(__kiln_member_at(^^C, 0) == ^^C::x);
+static_assert(members_of(^^C, access_context::unchecked())[1] == ^^C::m);
+static_assert(members_of(^^C, access_context::unchecked())[0] == ^^C::x);
 static_assert(^^C::m != ^^g && ^^C::x != ^^N::v);
