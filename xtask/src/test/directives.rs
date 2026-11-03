@@ -40,6 +40,10 @@ pub enum Expect {
     /// `-fsyntax-only` ends normally (exit 0 or 1): errors are fine, a
     /// crash, a hang or an internal-error exit code is not.
     NoCrash,
+    /// `-fsyntax-only -fkiln-dump-cfg`; compare the dump with
+    /// `<test>.expected`, and its shape with the oracle's `debug.DumpCFG`
+    /// (spec/harness.md "cfg tests").
+    Cfg,
 }
 
 impl Expect {
@@ -54,6 +58,7 @@ impl Expect {
             "vtables" => Self::Vtables,
             "ir" => Self::Ir,
             "no-crash" => Self::NoCrash,
+            "cfg" => Self::Cfg,
             _ => return None,
         })
     }
@@ -70,6 +75,7 @@ impl Expect {
             Self::Vtables => "vtables",
             Self::Ir => "ir",
             Self::NoCrash => "no-crash",
+            Self::Cfg => "cfg",
         }
     }
 }
@@ -277,6 +283,10 @@ pub struct TestSpec {
     /// `ast-filter:`: dump only the declarations whose qualified name
     /// contains this substring (`-fdump-ast-filter=`).
     pub ast_filter: Option<String>,
+    /// `cfg-diverges: <function> <reason>`: the functions of a `cfg` test
+    /// whose graph differs from clang's by construction (the golden holds
+    /// kiln's); their shapes are not compared with the oracle's.
+    pub cfg_diverges: Vec<(String, String)>,
     /// `inst-report:`: the golden NDJSON template instantiation report
     /// (`-fkiln-instantiation-report=json`), relative to the test's
     /// directory; compared with the `*_us` timings masked.
@@ -476,6 +486,8 @@ struct Parser {
     pp_compare: Option<PpCompare>,
     pp_linemarkers: bool,
     ast_filter: Option<String>,
+    cfg_diverges: Vec<(String, String)>,
+    cfg_lines: Vec<usize>,
     inst_report: Option<PathBuf>,
     inst_report_line: usize,
     ast_implicit: bool,
@@ -532,6 +544,8 @@ impl Parser {
             pp_compare: None,
             pp_linemarkers: false,
             ast_filter: None,
+            cfg_diverges: Vec::new(),
+            cfg_lines: Vec::new(),
             inst_report: None,
             inst_report_line: 0,
             ast_implicit: false,
@@ -598,6 +612,15 @@ impl Parser {
                     }
                     Some(c) => self.pp_compare = Some(c),
                     None => self.err(line, format!("unknown pp-compare `{value}` (tokens|text)")),
+                }
+            }
+            "cfg-diverges" => {
+                self.cfg_lines.push(line);
+                match value.split_once(char::is_whitespace) {
+                    Some((f, why)) if !why.trim().is_empty() => {
+                        self.cfg_diverges.push((f.to_owned(), why.trim().to_owned()));
+                    }
+                    _ => self.err(line, "`cfg-diverges` requires a function name and a reason"),
                 }
             }
             "ast-filter" => {
@@ -1075,6 +1098,11 @@ impl Parser {
                 self.err(line, format!("`{key}` only applies to `expect: ast`"));
             }
         }
+        if expect != Expect::Cfg {
+            for line in std::mem::take(&mut self.cfg_lines) {
+                self.err(line, "`cfg-diverges` only applies to `expect: cfg`");
+            }
+        }
         let verify = self.check_verify(expect);
         let gcc = self.check_gcc(expect, verify);
         if self.oracle.is_some()
@@ -1143,6 +1171,7 @@ impl Parser {
             pp_compare: self.pp_compare.unwrap_or_default(),
             pp_linemarkers: self.pp_linemarkers,
             ast_filter: self.ast_filter,
+            cfg_diverges: self.cfg_diverges,
             inst_report: self.inst_report,
             ast_implicit: self.ast_implicit,
             mem_mib: self.mem_mib,
@@ -1197,6 +1226,7 @@ fn is_known_key(k: &str) -> bool {
             | "xfail"
             | "pp-compare"
             | "ast-filter"
+            | "cfg-diverges"
             | "requires"
             | "module"
             | "min-oracle"

@@ -39,7 +39,8 @@ pub fn array_layout(&Ast, elem: QualType, count: u64, &Target) -> TypeLayout;
 pub fn record_layout(&Ast, record: DeclId, &Target) -> RecordLayout;
 pub fn ensure_layout<'a>(&'a mut Ast, DeclId, &Target) -> Option<&'a RecordLayout>; // None: incomplete
 pub struct Layouter<'a>   // a session: memoizes records, answers is_pod / is_empty
-pub struct LayoutCache;   // a finished session's records (Layouter::into_cache / with_cache)
+pub struct LayoutCache;   // a finished session's records (Layouter::into_cache / with_cache;
+                          // into_complete_cache drops the incomplete classes, §1)
 pub fn subobjects(&Ast, record: DeclId, &Target) -> Vec<(Subobject, u64)>; // §8.3
 pub const MAX_SUBOBJECTS: usize;              // 65536 (SubobjectId is u16)
 impl Layouter { fn subobjects(&mut self, DeclId) -> Vec<(Subobject, u64)> }
@@ -87,8 +88,11 @@ pub fn vtable_blocks(&str) -> BTreeSet<String>;          // a set, `Original map
   session's records (`LayoutCache`) and `Layouter::with_cache` resumes
   them in a later session over the same AST; the caller guarantees that
   every class in the cache is still complete and unchanged (sema keeps one
-  for the deallocation-function lookup of virtual destructors, which lays
-  out complete classes only; WP-450).
+  for the deallocation-function lookup of virtual destructors; WP-450).
+  `Layouter::into_complete_cache` detaches them without the classes the
+  session laid out while they were incomplete (no definition, or not yet
+  at `}`): sema lays out a class still being defined over its cache and
+  keeps only its complete bases and members (WP-428, sema-class.md §6.5).
 - **Complete classes only.** `ensure_layout` returns `None` for a class
   that is incomplete ([basic.types.general]/5): it has no definition, or
   its definition has not reached `}` (`DefinitionBits::COMPLETE` is

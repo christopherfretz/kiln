@@ -120,6 +120,10 @@ pub struct FnState {
     /// `ExpressionEvaluationContextRecord::VolatileAssignmentLHSs`,
     /// [`Sema::note_volatile_assign`]), warned at the end of the body.
     pub(crate) volatile_assigns: Vec<ExprId>,
+    /// The expression count when the body began: the body's calls are
+    /// among the expressions built after it (the `-Winfinite-recursion`
+    /// prefilter, [`Sema::check_infinite_recursion`]).
+    pub(crate) expr_start: u32,
 }
 
 impl FnState {
@@ -145,6 +149,7 @@ impl FnState {
             first_return: None,
             modified_params: Vec::new(),
             volatile_assigns: Vec::new(),
+            expr_start: 0,
         }
     }
 }
@@ -1497,6 +1502,7 @@ impl Sema<'_, '_> {
     /// the function scope).
     pub(crate) fn begin_function_body(&mut self, f: DeclId, ret: QualType) {
         let mut state = FnState::new(f, ret);
+        state.expr_start = u32::try_from(self.ast.exprs.len()).unwrap_or(0);
         // An immediate function's body is an immediate function context
         // ([expr.const]/16).
         state.rt_quiet = u32::from(self.is_consteval_kind(f));
@@ -1548,6 +1554,35 @@ impl Sema<'_, '_> {
 
     /// Finishes a function body; returns the body to attach (a
     /// coroutine's is wrapped in its `CoroutineBodyStmt`).
+    /// Plans the body's graph, built at its first query (spec/sema.md
+    /// §7.5.1), and emits the deferred runtime-behavior diagnostics,
+    /// dropping those anchored to an expression the graph proves
+    /// unreachable.
+    fn flush_runtime_diags(
+        &mut self,
+        f: DeclId,
+        body: StmtId,
+        runtime_diags: Vec<(kiln_diag::Diag, Option<ExprId>)>,
+        has_fallthrough: bool,
+    ) {
+        let dead = if self.diags.uncompilable_error_count() > 0 || self.in_template() {
+            None
+        } else {
+            let wanted: HashSet<ExprId> = runtime_diags.iter().filter_map(|(_, e)| *e).collect();
+            let probe = !wanted.is_empty();
+            self.cfg_plan(f, body, wanted, has_fallthrough);
+            if probe { self.with_cfg(body, |_, c| c.unreachable_probes()) } else { None }
+        };
+        for (msg, anchor) in runtime_diags {
+            if let (Some(dead), Some(e)) = (&dead, anchor)
+                && dead.contains(&e)
+            {
+                continue;
+            }
+            self.emit(msg);
+        }
+    }
+
     pub(crate) fn end_function_body(&mut self, body: StmtId, rbrace: Loc) -> StmtId {
         self.leave_function_scope();
         let coroutine = self.coro_state().is_some_and(|c| c.first.is_some());
@@ -1593,6 +1628,11 @@ impl Sema<'_, '_> {
         if state.has_switch || state.has_indirect_goto || !state.labels.is_empty() {
             self.check_jump_scopes(body);
         }
+        // clang 22 `inferNoReturnAttr` (`PopFunctionScopeInfo`, ahead of
+        // the analysis-based warnings; also in a dependent context).
+        if self.diags.uncompilable_error_count() == 0 && !coroutine {
+            self.infer_noreturn(state.decl, body);
+        }
         // The deferred runtime-behavior diagnostics, ahead of the flow
         // warnings (clang `PopFunctionScopeInfo` / `IssueWarnings`). A
         // function template's are flushed unfiltered (clang finishes its
@@ -1608,27 +1648,20 @@ impl Sema<'_, '_> {
         if self.in_template() && !self.is_named_function_template(state.decl) {
             state.runtime_diags.retain(|(_, anchor)| anchor.is_none());
         }
-        let dead = if self.diags.uncompilable_error_count() > 0 || self.in_template() {
-            None
-        } else {
-            let wanted: HashSet<ExprId> =
-                state.runtime_diags.iter().filter_map(|(_, e)| *e).collect();
-            if wanted.is_empty() { None } else { self.unreachable_exprs(body, wanted) }
-        };
-        for (msg, anchor) in state.runtime_diags {
-            if let (Some(dead), Some(e)) = (&dead, anchor)
-                && dead.contains(&e)
-            {
-                continue;
-            }
-            self.emit(msg);
-        }
+        let runtime_diags = std::mem::take(&mut state.runtime_diags);
+        self.flush_runtime_diags(state.decl, body, runtime_diags, state.has_fallthrough);
         let ret = state.ret;
         // clang skips its analysis-based warnings once an error occurred
         // (`hasUncompilableErrorOccurred`: not a warning promoted by
         // `-Werror`), and in dependent contexts.
         if self.diags.uncompilable_error_count() > 0 || self.in_template() {
             return wrapped;
+        }
+        if self.cfg_stats {
+            self.stats_body_cfg();
+        }
+        if self.cfg_dump {
+            self.dump_body_cfg();
         }
         // clang `ActOnFinishFunctionBody`: no fall-off check for a
         // `naked` function (nor for `main`, below).
@@ -1640,7 +1673,7 @@ impl Sema<'_, '_> {
             if !naked && self.falls_off(body) != Falloff::Never {
                 self.error(DiagId::sema_falloff_noreturn, rbrace);
             }
-            self.late_analysis(state.decl, body, state.has_fallthrough);
+            self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
             return wrapped;
         }
         // A coroutine that falls off its end calls `return_void()` when
@@ -1649,13 +1682,19 @@ impl Sema<'_, '_> {
             && wrapped != body
             && self.ast.stmts.coroutine_body(wrapped).on_fallthrough.is_some();
         if self.ast.types.is_void(ret) || self.is_error_type(ret) || coro_void {
-            self.late_analysis(state.decl, body, state.has_fallthrough);
+            if !naked && !coroutine && self.ast.types.is_void(ret) {
+                self.suggest_noreturn(state.decl, body);
+            }
+            self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
             return wrapped;
         }
         if !naked && !self.is_main_function(state.decl) {
             let lambda = self.is_lambda_call_op(state.decl);
             match self.falls_off(body) {
                 Falloff::Never => {}
+                // clang 22: the body ends in a throw or a call of a
+                // function inferred `noreturn`.
+                _ if !coroutine && self.ends_in_inferred_noreturn(body) => {}
                 Falloff::Always if lambda => {
                     self.error(DiagId::sema_falloff_nonvoid_lambda, rbrace);
                 }
@@ -1672,7 +1711,7 @@ impl Sema<'_, '_> {
                 Falloff::Maybe => self.error(DiagId::sema_falloff_nonvoid_maybe, rbrace),
             }
         }
-        self.late_analysis(state.decl, body, state.has_fallthrough);
+        self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
         wrapped
     }
 
@@ -1740,7 +1779,7 @@ impl Sema<'_, '_> {
     /// Whether `f` is the pattern of a function template declared by
     /// name (a generic lambda's call operator is not: clang finishes it
     /// as a function of a dependent context).
-    fn is_named_function_template(&self, f: DeclId) -> bool {
+    pub(crate) fn is_named_function_template(&self, f: DeclId) -> bool {
         !self.is_lambda_call_op(f)
             && (self.ast.described_template(f).is_some()
                 || self.ast.described_template(self.ast.first(f)).is_some())
@@ -1751,11 +1790,22 @@ impl Sema<'_, '_> {
         self.ast.is_noreturn_fn(f)
     }
 
-    /// Whether control can reach the end of the function body `s`
-    /// (clang `CheckFallThrough` over the body's CFG, mirrored by the
-    /// reachability walk; spec/sema.md §7.5).
+    /// How control reaches the end of the function body `s` (clang
+    /// `CheckFallThrough` over the body's graph; spec/sema.md §7.5.1):
+    /// `Never` when it does not (or there is no graph), `Maybe` when the
+    /// body also returns, throws out or calls a `noreturn` function on a
+    /// live path, else `Always`.
     fn falls_off(&mut self, s: StmtId) -> Falloff {
-        self.fall_off_kind(s)
+        match self.with_cfg(s, |_, c| c.exit_kinds()) {
+            Some(k) if k.plain => {
+                if k.ret || k.fake || k.abnormal {
+                    Falloff::Maybe
+                } else {
+                    Falloff::Always
+                }
+            }
+            _ => Falloff::Never,
+        }
     }
 
     pub(crate) fn is_noreturn_call(&self, e: ExprId) -> bool {
