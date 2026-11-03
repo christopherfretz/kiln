@@ -206,6 +206,33 @@ impl Sema<'_, '_> {
         };
         let (params, variadic, rparen, quals, ref_qual) =
             (params.clone(), *variadic, *rparen, *quals, *ref_qual);
+        // [dcl.fct]/6 (P0847): the first parameter may be an explicit
+        // object parameter of a conversion function or `operator=`; a
+        // constructor or destructor has none ([class.ctor.general]/1,
+        // [class.dtor]/1; clang `err_explicit_object_parameter_constructor`).
+        let xobj = params.first().is_some_and(|p| p.explicit_object.is_some());
+        if let (true, Some(this_loc), Shape::Ctor | Shape::Dtor) =
+            (xobj, params.first().and_then(|p| p.explicit_object), shape)
+        {
+            let m = self
+                .diag(DiagId::sema_explicit_object_param_ctor_dtor, this_loc)
+                .arg(u8::from(shape == Shape::Dtor));
+            self.emit(m);
+            *invalid = true;
+        }
+        // Any other misplaced explicit object parameter is reported before
+        // the declarator's own checks, and one in a static or virtual
+        // function makes the declaration invalid (clang
+        // `CheckExplicitObjectMemberFunction` runs first).
+        let eo = if !xobj || matches!(shape, Shape::Conv(_) | Shape::Assign) {
+            self.explicit_object_member(ds, &params, true)
+        } else {
+            None
+        };
+        let xobj_member = eo == Some(true);
+        if eo == Some(false) {
+            *invalid = true;
+        }
         let mut ds_virt = None;
         match shape {
             Shape::Ctor => {
@@ -264,7 +291,9 @@ impl Sema<'_, '_> {
                     Some(DiagId::sema_conv_not_member)
                 } else if ds.has_type_specifier() {
                     Some(DiagId::sema_conv_return_type)
-                } else if !params.is_empty() {
+                } else if params.get(usize::from(xobj)).is_some() {
+                    // [class.conv.fct]/1 (C++23): no non-object parameters;
+                    // an explicit object parameter is allowed (P0847).
                     Some(DiagId::sema_conv_params)
                 } else if variadic {
                     Some(DiagId::sema_conv_variadic)
@@ -296,6 +325,9 @@ impl Sema<'_, '_> {
             Shape::Conv(t) => self.rebuild_fn_type(ty, t, None, false),
             Shape::Assign => ty,
         };
+        // An explicit object member function takes no cv-/ref-qualifiers
+        // ([dcl.fct]/6): reported and dropped as for any other.
+        let ty = if xobj_member { self.drop_invalid_fn_quals(ty, d, true) } else { ty };
         let class_ty = self.class_type(class);
         let canon = self.ast.types.canonical(class_ty).ty();
         let name = match shape {
@@ -470,6 +502,9 @@ impl Sema<'_, '_> {
         }
         if is_static && !in_class {
             self.error(DiagId::sema_static_out_of_class, static_loc_of(ds));
+        }
+        if xobj_member {
+            spec = spec.with_explicit_object(true);
         }
         let explicit =
             self.check_explicit_spec(ds, d, true, matches!(shape, Shape::Ctor | Shape::Conv(_)));

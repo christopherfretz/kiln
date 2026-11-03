@@ -402,7 +402,7 @@ impl Sema<'_, '_> {
                     return Ok(MetaOut::Scalar(u128::from(v != 0)));
                 }
                 let t = self.library_trait_type(name, targs, loc)?;
-                Ok(MetaOut::Info(self.type_reflection(t)))
+                Ok(MetaOut::Info(self.type_reflection(t, loc)))
             }
             _ => Err(none),
         }
@@ -507,11 +507,11 @@ impl Sema<'_, '_> {
             }
             Shape::Transform(k) => {
                 let t = self.apply_unary_transform(k, tys[0], loc).ok_or(none)?;
-                MetaOut::Info(self.type_reflection(t))
+                MetaOut::Info(self.type_reflection(t, loc))
             }
             Shape::AddQuals(q) => {
                 let t = self.add_quals_transform(tys[0], q);
-                MetaOut::Info(self.type_reflection(t))
+                MetaOut::Info(self.type_reflection(t, loc))
             }
             Shape::IsReflection => MetaOut::Scalar(u128::from(self.is_meta_info_type(tys[0]))),
             Shape::IsStructural => bool_out(self.is_structural_type(tys[0], loc)).ok_or(none)?,
@@ -530,13 +530,13 @@ impl Sema<'_, '_> {
             }
             Shape::LibType(name) => {
                 let t = self.library_trait_type(name, &[TemplateArg::ty(tys[0])], loc)?;
-                MetaOut::Info(self.type_reflection(t))
+                MetaOut::Info(self.type_reflection(t, loc))
             }
             Shape::LibIndexed(name) => {
                 let i = args.first().map_or(0, |&v| u64::try_from(v).unwrap_or(u64::MAX));
                 let targs = [self.size_t_arg(i), TemplateArg::ty(tys[0])];
                 let t = self.library_trait_type(name, &targs, loc)?;
-                MetaOut::Info(self.type_reflection(t))
+                MetaOut::Info(self.type_reflection(t, loc))
             }
             Shape::Range | Shape::TypeOrder => return Err(none),
         })
@@ -560,9 +560,11 @@ impl Sema<'_, '_> {
 
     /// The reflection of `t`, canonical ([meta.reflection.traits]/5: the
     /// result is never an alias).
-    fn type_reflection(&mut self, t: QualType) -> ReflectionId {
+    /// A full reflection table is the fatal `sema_too_many_reflections`
+    /// (the result is then the null reflection).
+    fn type_reflection(&mut self, t: QualType, loc: Loc) -> ReflectionId {
         let t = self.ast.types.canonical(t);
-        self.ast.reflections.intern(Reflectee::Type(t))
+        self.intern_reflection(Reflectee::Type(t), loc).unwrap_or(ReflectionId::NULL)
     }
 
     /// `out` from a quiet evaluation, or the failure as a note.

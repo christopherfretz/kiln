@@ -106,7 +106,7 @@ impl Sema<'_, '_> {
                     return fail(loc, "not a complete class type");
                 };
                 let chk = self.checked(actx, def, ctx);
-                let n = self.class_lists(def, m, &chk, oven);
+                let n = self.class_lists(def, m, &chk, oven, loc)?;
                 MetaOut::Infos(n)
             }
             MemberOp::EnumeratorsOf => MetaOut::Infos(self.enumerators_of(r, loc, oven)?),
@@ -157,7 +157,7 @@ impl Sema<'_, '_> {
         let loc = ctx.loc;
         if let Reflectee::Namespace(ns) = self.ast.reflections.get(r) {
             let ns = self.ast.first(ns);
-            self.refresh_namespace(ns);
+            self.refresh_namespace(ns, loc)?;
             let items = &self
                 .meta_members
                 .cache
@@ -170,7 +170,7 @@ impl Sema<'_, '_> {
             return fail(loc, "neither complete class type nor namespace");
         };
         let chk = self.checked(actx, def, ctx);
-        Ok(self.class_lists(def, MemberOp::MembersOf, &chk, oven))
+        self.class_lists(def, MemberOp::MembersOf, &chk, oven, loc)
     }
 
     /// Writes list query `m` of complete class `def`, filtered by `chk`,
@@ -181,8 +181,9 @@ impl Sema<'_, '_> {
         m: MemberOp,
         chk: &Checked,
         oven: &mut Oven,
-    ) -> u32 {
-        self.build_class(def, oven);
+        loc: Loc,
+    ) -> Result<u32, MetaError> {
+        self.build_class(def, oven, loc)?;
         let mut sc = std::mem::take(&mut self.meta_members.scope);
         if let Checked::From { from, .. } = *chk {
             self.set_access_scope(&mut sc, from);
@@ -218,7 +219,7 @@ impl Sema<'_, '_> {
             }
         };
         self.meta_members.scope = sc;
-        n
+        Ok(n)
     }
 
     /// Whether entry `e` of class `parent`'s members (or bases) passes
@@ -304,9 +305,9 @@ impl Sema<'_, '_> {
 
     /// Builds the member and base lists of complete class `def` once,
     /// declaring its implicit special members first ([class.mem]/5).
-    fn build_class(&mut self, def: DeclId, oven: &mut Oven) {
+    fn build_class(&mut self, def: DeclId, oven: &mut Oven, loc: Loc) -> Result<(), MetaError> {
         if self.meta_members.cache.get(def, MemberList::Members).is_some() {
-            return;
+            return Ok(());
         }
         self.lend_oven(oven, |s| {
             for k in SpecialKind::ALL {
@@ -339,13 +340,13 @@ impl Sema<'_, '_> {
             if !l.seen.insert(self.ast.first(m)) {
                 continue;
             }
-            let e = self.class_entry(m);
+            let e = self.class_entry(m, loc)?;
             l.items.push(e);
         }
         for k in SPECIAL_ORDER {
             for &(_, m) in implicit.iter().filter(|x| x.0 == k) {
                 if l.seen.insert(self.ast.first(m)) {
-                    let e = self.class_entry(m);
+                    let e = self.class_entry(m, loc)?;
                     l.items.push(e);
                 }
             }
@@ -361,14 +362,15 @@ impl Sema<'_, '_> {
             let Some(base) = self.ast.types.as_record(s.ty) else { continue };
             let base = self.ast.definition(base).unwrap_or(base);
             let public = self.base_access(def, s.access) == Access::Public;
-            let r = self.ast.reflections.intern(Reflectee::BaseSpec(first, i as u32));
+            let r = self.meta_intern(Reflectee::BaseSpec(first, i as u32), loc)?;
             b.items.push(MemberEntry { r, decl: base, kind: if public { mk::PUBLIC } else { 0 } });
         }
         self.meta_members.cache.put(def, MemberList::Bases, b);
+        Ok(())
     }
 
     /// The entry of class member `m`.
-    fn class_entry(&mut self, m: DeclId) -> MemberEntry {
+    fn class_entry(&mut self, m: DeclId, loc: Loc) -> Result<MemberEntry, MetaError> {
         let n = self.ast.decls.get(m);
         let mut kind = match n.kind() {
             DeclKind::Field => {
@@ -382,23 +384,29 @@ impl Sema<'_, '_> {
         if n.misc().access() == Access::Public {
             kind |= mk::PUBLIC;
         }
-        let r = self.member_reflection(m);
-        MemberEntry { r, decl: m, kind }
+        let r = self.member_reflection(m, loc)?;
+        Ok(MemberEntry { r, decl: m, kind })
     }
 
     /// The reflection of member declaration `m`, keyed as `^^` keys it.
-    fn member_reflection(&mut self, m: DeclId) -> ReflectionId {
+    fn member_reflection(&mut self, m: DeclId, loc: Loc) -> Result<ReflectionId, MetaError> {
         let r = self.reflectee_of_decl(m).unwrap_or(Reflectee::Decl(self.ast.first(m)));
-        self.ast.reflections.intern(r)
+        self.meta_intern(r, loc)
+    }
+
+    /// Interns `r`; a full reflection table is the fatal
+    /// `sema_too_many_reflections` (a partial cache list is dropped).
+    pub(super) fn meta_intern(&mut self, r: Reflectee, loc: Loc) -> Result<ReflectionId, MetaError> {
+        Ok(self.intern_reflection(r, loc)?)
     }
 
     /// Brings namespace `ns`'s (first declaration) list up to date: the
     /// members of each of its definitions so far, in order, each entity
     /// once (spec/reflection-members.md §2).
-    fn refresh_namespace(&mut self, ns: DeclId) {
+    fn refresh_namespace(&mut self, ns: DeclId, loc: Loc) -> Result<(), MetaError> {
         let stamp = u32::try_from(self.ast.decls.len()).unwrap_or(u32::MAX);
         if self.meta_members.cache.get(ns, MemberList::Members).is_some_and(|l| l.stamp == stamp) {
-            return;
+            return Ok(());
         }
         let mut l = self.meta_members.cache.take(ns, MemberList::Members);
         // New definitions of the namespace (redeclarations, latest first).
@@ -412,41 +420,49 @@ impl Sema<'_, '_> {
             let news: Vec<DeclId> = self.ast.members(block).skip(done as usize).collect();
             l.cursors[i].1 = done + news.len() as u32;
             for m in news {
-                self.namespace_member(ns, m, &mut l);
+                self.namespace_member(ns, m, &mut l, loc)?;
             }
             i += 1;
         }
         l.stamp = stamp;
         self.meta_members.cache.put(ns, MemberList::Members, l);
+        Ok(())
     }
 
     /// Adds namespace member declaration `m` (lexically in a definition
     /// of `ns`) to `l`.
-    fn namespace_member(&mut self, ns: DeclId, m: DeclId, l: &mut CachedList) {
+    fn namespace_member(
+        &mut self,
+        ns: DeclId,
+        m: DeclId,
+        l: &mut CachedList,
+        loc: Loc,
+    ) -> Result<(), MetaError> {
         let n = self.ast.decls.get(m);
         let kind = n.kind();
         if matches!(kind, DeclKind::LinkageSpec | DeclKind::Export) {
             l.cursors.push((m, 0));
-            return;
+            return Ok(());
         }
         if never_a_member(kind)
             || n.has(DeclFlags::IMPLICIT)
             || kind == DeclKind::TranslationUnit
             || matches!(self.ast.templ_link(m).get(), Some((TemplLinkKind::Specialization, _)))
         {
-            return;
+            return Ok(());
         }
         // A declaration of a member of another scope (a qualified
         // redeclaration, a block-scope `extern`).
         let sem = n.ctx().map(|c| self.ast.first(self.ast.redecl_context(c)));
         if sem != Some(ns) {
-            return;
+            return Ok(());
         }
         if !l.seen.insert(self.ast.first(m)) {
-            return;
+            return Ok(());
         }
-        let r = self.member_reflection(m);
+        let r = self.member_reflection(m, loc)?;
         l.items.push(MemberEntry { r, decl: m, kind: mk::PUBLIC });
+        Ok(())
     }
 
     /// `enumerators_of(r)`: the enumerators of the enumeration type `r`
@@ -477,7 +493,7 @@ impl Sema<'_, '_> {
                 .collect();
             let mut l = CachedList::default();
             for e in es {
-                let r = self.ast.reflections.intern(Reflectee::Decl(self.ast.first(e)));
+                let r = self.meta_intern(Reflectee::Decl(self.ast.first(e)), loc)?;
                 l.items.push(MemberEntry { r, decl: e, kind: mk::PUBLIC });
             }
             self.meta_members.cache.put(def, MemberList::Enumerators, l);
@@ -526,7 +542,7 @@ impl Sema<'_, '_> {
                     .function(first)
                     .map_or(0, |x| self.ast.lists.get(x.params).len());
                 for i in 0..n {
-                    v.push(self.ast.reflections.intern(Reflectee::FnParam(first, i as u32)));
+                    v.push(self.meta_intern(Reflectee::FnParam(first, i as u32), loc)?);
                 }
             }
             Reflectee::Type(t) if self.ast.types.proto(t).is_some() => {
@@ -538,7 +554,7 @@ impl Sema<'_, '_> {
                     .unwrap_or_default();
                 for p in ps {
                     let q = self.ast.reflection_type(p);
-                    v.push(self.ast.reflections.intern(Reflectee::Type(q)));
+                    v.push(self.meta_intern(Reflectee::Type(q), loc)?);
                 }
             }
             _ => {
@@ -574,7 +590,9 @@ impl Sema<'_, '_> {
                 let s = *self.ast.decls.base_spec(spec);
                 let Some(base) = self.ast.types.as_record(s.ty) else { return bad() };
                 let base = self.ast.first(base);
-                let lay = kiln_abi::ensure_layout(&mut self.ast, def, &self.abi);
+                let Some(lay) = kiln_abi::ensure_layout(&mut self.ast, def, &self.abi) else {
+                    return bad();
+                };
                 let list = if s.is_virtual { lay.vbases.clone() } else { lay.bases.clone() };
                 let Some(&(_, off)) = list.iter().find(|(b, _)| self.ast.first(*b) == base) else {
                     return bad();

@@ -167,7 +167,7 @@ impl Sema<'_, '_> {
                         continue;
                     }
                 }
-                v.push(self.ast.reflections.intern(Reflectee::Annotation(a)));
+                v.push(self.meta_intern(Reflectee::Annotation(a), loc)?);
             }
         }
         let n = u32::try_from(v.len()).unwrap_or(u32::MAX);

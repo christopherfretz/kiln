@@ -6,6 +6,7 @@
 // 22's IR exactly.
 //@ expect: ir
 //@ requires: clang>=22
+//@ args: -ftrivial-auto-var-init=uninitialized
 struct A { A(int &r, const double &d); };
 struct B : A { using A::A; };
 void inherit(int &x, double d) { B b(x, d); }

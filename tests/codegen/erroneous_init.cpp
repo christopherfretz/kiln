@@ -7,9 +7,10 @@
 // compilers (the clang oracles have no erroneous values, and kiln's
 // comparison flags pin `=uninitialized`). Above 4096 bytes nothing is
 // written (`int[1025]`), like clang's
-// `-ftrivial-auto-var-init-max-size=4096`. A class whose default
-// constructor runs and `[[indeterminate]]` variables are not filled;
-// kiln-only (clang fills both), so they are tested in
+// `-ftrivial-auto-var-init-max-size=4096`. A class with a non-trivial
+// default constructor is filled before the constructor runs
+// (auto_var_init_prefill.cpp). `[[indeterminate]]` variables are not
+// filled; that is kiln-only (clang fills them), so it is tested in
 // crates/kiln_driver/tests/erroneous_init.rs.
 //@ args: -ftrivial-auto-var-init=zero -ftrivial-auto-var-init-max-size=4096
 void use(void *);

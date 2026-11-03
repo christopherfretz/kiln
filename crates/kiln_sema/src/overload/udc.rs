@@ -200,7 +200,10 @@ impl Sema<'_, '_> {
         // clang's `PerformImplicitObjectArgumentInitialization`
         // materializes a prvalue object as an lvalue unless the function
         // is `&&`-qualified.
-        let e = if self.ast.exprs.get(e).value_category() == ValueCategory::PRValue {
+        // An explicit object parameter is initialized by the call.
+        let e = if self.ast.exprs.get(e).value_category() == ValueCategory::PRValue
+            && !self.has_explicit_object(f)
+        {
             let (_, rq) = self.method_object_quals(f);
             self.materialize_temporary(e, src, rq != kiln_ast::types::RefQual::RValue)
         } else {

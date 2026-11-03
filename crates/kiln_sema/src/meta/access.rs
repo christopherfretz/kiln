@@ -53,7 +53,7 @@ impl Sema<'_, '_> {
         *out = match a {
             AccessOp::Current => {
                 let s = self.current_scope(ctx);
-                let r = self.scope_reflection(s);
+                let r = self.scope_reflection(s, loc)?;
                 MetaOut::Pair(u128::from(r.bits()), 0)
             }
             AccessOp::CurrentFunction => {
@@ -61,7 +61,7 @@ impl Sema<'_, '_> {
                 if !self.kind_of(s).is_function() {
                     return fail(loc, "current scope does not represent a function");
                 }
-                MetaOut::Info(self.scope_reflection(s))
+                MetaOut::Info(self.scope_reflection(s, loc)?)
             }
             AccessOp::CurrentClass => {
                 let s = self.current_scope(ctx);
@@ -78,7 +78,7 @@ impl Sema<'_, '_> {
                         "current scope does not represent a class nor a member function",
                     );
                 };
-                MetaOut::Info(self.scope_reflection(c))
+                MetaOut::Info(self.scope_reflection(c, loc)?)
             }
             AccessOp::CurrentNamespace => {
                 let mut s = Some(self.current_scope(ctx));
@@ -90,7 +90,7 @@ impl Sema<'_, '_> {
                     s = self.ast.decls.get(c).ctx();
                 }
                 let s = s.unwrap_or(self.ast.tu);
-                MetaOut::Info(self.scope_reflection(s))
+                MetaOut::Info(self.scope_reflection(s, loc)?)
             }
             AccessOp::KilnVia => {
                 let r = info_arg(args, 0)?;
@@ -113,7 +113,7 @@ impl Sema<'_, '_> {
                 let Some(def) = self.complete_class_of(r, loc, oven)? else {
                     return fail(loc, "not a complete class type");
                 };
-                MetaOut::Scalar(u128::from(self.has_inaccessible(a, def, actx, ctx, oven)))
+                MetaOut::Scalar(u128::from(self.has_inaccessible(a, def, actx, ctx, oven)?))
             }
         };
         Ok(())
@@ -142,9 +142,9 @@ impl Sema<'_, '_> {
     }
 
     /// The reflection of scope `s` (a function, class or namespace).
-    fn scope_reflection(&mut self, s: DeclId) -> ReflectionId {
+    fn scope_reflection(&mut self, s: DeclId, loc: Loc) -> Result<ReflectionId, MetaError> {
         let r = self.reflectee_of_decl(s).unwrap_or(Reflectee::Decl(self.ast.first(s)));
-        self.ast.reflections.intern(r)
+        self.meta_intern(r, loc)
     }
 
     /// `is_accessible(r, ctx)` (P2996R13 [meta.reflection.access.queries]/3).
@@ -220,9 +220,9 @@ impl Sema<'_, '_> {
         actx: (ReflectionId, ReflectionId),
         ctx: &MetaCtx,
         oven: &mut Oven,
-    ) -> bool {
+    ) -> Result<bool, MetaError> {
         // Build the lists (the unchecked query), then test each entry.
-        let _ = self.class_lists(def, MemberOp::MembersOf, &Checked::Unchecked, oven);
+        self.class_lists(def, MemberOp::MembersOf, &Checked::Unchecked, oven, ctx.loc)?;
         let chk = self.checked(actx, def, ctx);
         let mut sc = std::mem::take(&mut self.meta_members.scope);
         if let Checked::From { from, .. } = chk {
@@ -244,6 +244,6 @@ impl Sema<'_, '_> {
             _ => bad_base() || bad_member(),
         };
         self.meta_members.scope = sc;
-        r
+        Ok(r)
     }
 }

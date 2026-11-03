@@ -72,6 +72,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
+        let ty = self.check_qualified_fn_type(ty, ds, d);
         let Some((name, _)) = d.name else {
             self.templ.cur = None;
             self.error(DiagId::parse_expected_unqualified_id, d.loc);

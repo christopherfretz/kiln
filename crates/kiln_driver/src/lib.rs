@@ -12,6 +12,7 @@ pub mod args;
 pub mod codegen_cmd;
 pub mod constexpr_opts;
 pub mod deps;
+pub mod features;
 pub mod link;
 pub mod pp_cmd;
 pub mod syntax_cmd;
@@ -118,7 +119,8 @@ overrides both.
 
 Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -idirafter -cxx-isystem -nostdinc -nostdinc++ -nostdlibinc -nobuiltininc
--isysroot --sysroot -resource-dir -stdlib= --target= --embed-dir= -M -MM
+-isysroot --sysroot -resource-dir -stdlib= -f[no-]experimental-library
+--target= -march= -mcpu= -target-feature --embed-dir= -M -MM
 -MD -MMD -MF -MT -MQ -MP -W... -w -pedantic -ferror-limit=
 -fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
 -fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -verify[=<prefixes>]
@@ -412,6 +414,9 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         }),
     };
     let tc = Toolchain::new(target, args.sysroot.as_deref(), args.resource_dir.as_deref());
+    for e in &features::resolve(&args, tc.target.is_aarch64()).1 {
+        emit_arg_error(e, &drv);
+    }
     if args.help {
         let _ = io.stdout.write_all(HELP.as_bytes());
         return 0;

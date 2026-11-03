@@ -1,6 +1,7 @@
 //@ expect: ast
 //@ skip(clang): clang 19 does not implement P3394 annotations
 //@ oracle: none
+//@ requires: clang>=22
 // Annotations are instantiated with their entity ([dcl.attr.annotation]/3:
 // each instantiation is a new annotation); a value-dependent operand is
 // kept unevaluated in the pattern. `= e...` expands a pack into one

@@ -2924,7 +2924,10 @@ impl Compiler<'_> {
             TraitKind::DataSizeOf => {
                 let ast = self.b.ast();
                 match ast.types.as_record(q).and_then(|r| ast.definition(r)) {
-                    Some(def) => self.b.ensure_layout(def).data_size,
+                    Some(def) => match self.b.ensure_layout(def) {
+                        Some(l) => l.data_size,
+                        None => self.o.types.size(t),
+                    },
                     None => self.o.types.size(t),
                 }
             }
@@ -4002,6 +4005,16 @@ impl Compiler<'_> {
             ExprKind::PredefinedExpr if self.ast().exprs.predefined_name(e).is_some() => {
                 let sl = self.ast().exprs.predefined_name(e).unwrap_or(e);
                 self.lv(sl, acc)
+            }
+            // A namespace-scope array literal names its static object, an
+            // implicit internal variable (WP-466).
+            ExprKind::CompoundLiteralExpr
+                if let Some(d) = self.ast().exprs.compound_literal_var(e) =>
+            {
+                let g = self.o.global_index(self.b.ast(), d);
+                let r = self.reg();
+                self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
+                Place::Mem(r)
             }
             ExprKind::StringLiteral => {
                 let s = self.ast().exprs.string_lit(e);

@@ -7,7 +7,7 @@
 // with clang 22's IR exactly.
 //@ expect: ir
 //@ requires: clang>=22
-//@ args: -std=gnu++26
+//@ args: -std=gnu++26 -ftrivial-auto-var-init=uninitialized
 long rows(int n, int i) {
   int a[4][n];
   auto p = a + 1;

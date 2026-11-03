@@ -2793,6 +2793,11 @@ impl Parser<'_, '_> {
             let start = self.loc();
             // explicit-object-parameter-declaration ([dcl.fct]/3, P0847).
             let this_loc = self.eat_kw(Kw::This);
+            if let (Some(l), true) = (this_loc, self.std < Std::Cxx23) {
+                // clang `err_cxx20_deducing_this`; parsing continues as C++23.
+                let m = self.s.diag(DiagId::parse_explicit_object_pre_cxx23, l);
+                self.emit(m);
+            }
             // [temp.res.general]/4.2: only a member-declaration's, a
             // qualified declarator-id's, a lambda's or a requires-
             // expression's parameters take `X<T>::m` as a type. So does
@@ -3284,7 +3289,8 @@ impl Parser<'_, '_> {
             // (WP-186).
             return Some(QualType::ERROR);
         }
-        Some(self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d))
+        let ty = self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d);
+        Some(self.s.check_qualified_fn_type(ty, &ds, &d))
     }
 
     /// Whether the current token starts a name qualified by a

@@ -17,7 +17,7 @@ use kiln_source::Loc;
 
 use crate::class::{CtorCall, DeletedAs, DiagSites, InitEntity, Selected, SpecialKind};
 use crate::conv::{self, ConvCtx};
-use crate::declspec::{Chunk, Declarator};
+use crate::declspec::{Chunk, DeclSpec, Declarator};
 use crate::init::{InitList, InitValue, Initializer};
 use crate::switch_conv::ContextualConv;
 use crate::templ::ctad::CtadInit;
@@ -366,6 +366,8 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         }
         let mut elem = self.type_for_declarator(tid.base, &d);
+        // [dcl.fct]/6: `new F` of a qualified function typedef `F`.
+        elem = self.check_qualified_fn_type(elem, &DeclSpec::new(tid.loc), &d);
         if self.is_error_type(elem) {
             return self.recover_err(&kids, loc);
         }

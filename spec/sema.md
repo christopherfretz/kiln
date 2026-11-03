@@ -414,6 +414,24 @@ residual` (docs/status/wp-184-oracle-switch.md).
 
 ## 4. Declarations (`decl.rs`, `declspec.rs`)
 
+**Entity identity** (`entity.rs`, WP-471). Two declarations denote the
+same entity exactly when they are in one redeclaration chain
+([basic.link], [basic.def]/1): a redeclaration, a definition after a
+declaration, an out-of-line member definition ([class.mfct]/1) and a
+friend declaration of a function ([class.friend]; looked through to the
+function it declares) are all the entity their first declaration
+introduced. An instantiated specialization is a distinct entity from its
+template or pattern ([temp.spec.general]), and so is an explicit
+specialization. `Sema::same_entity(a, b)` is the only test of this
+(`Sema::entity_decl` gives the representative: friend looked through,
+then `Ast::first`); code that means "same entity" never compares
+`DeclId`s, which differ between redeclarations. Reflections are interned
+by `entity_decl`, so `info` equality is `same_entity`. `cargo test -p
+xtask` lints the reflection code (`kiln_sema/src/reflect.rs`,
+`kiln_sema/src/meta/`, `kiln_oven/src/meta/`) for raw `DeclId` `==`,
+`!=` and `assert_eq!`; a line that really means the declaration carries
+`// same_entity: raw ok`.
+
 ### 4.1 DeclSpec and Declarator
 - The parser fills a `DeclSpec` and a `Declarator` (clang's classes of
   the same names).
@@ -985,6 +1003,33 @@ Redeclaration and linkage rules:
   is also at its first qualifier. Tests
   `dcl.fct/nonmember-function-qualifiers.cpp`,
   `dcl.fct/explicit-object-qualifiers-template.cpp`.
+- **Qualified function types through a typedef-name** ([dcl.fct]/6,
+  CWG1417, WP-459, `decl.rs` `check_qualified_fn_type`): a function type
+  with a cv-qualifier-seq or ref-qualifier named by a typedef-name or
+  `decltype` (no function declarator of its own) is only the type of a
+  non-static member function, of a typedef or alias-declaration, of a
+  template type argument (a type trait's operand parses as one), of a
+  type parameter's default, or the pointee of a pointer to member. As a
+  non-member function at namespace or block scope (`extern` included), a
+  static member function, a friend, a parameter, a handler, or in a
+  type-id (`sizeof`, `new`, a trailing return type) it is clang's
+  `err_invalid_qualified_function_type` in its "of type" form: "non-member
+  function of type 'F' (aka 'int () const') cannot have 'const'
+  qualifier" ("static member function of type ..." for a static member)
+  at the start of the declaration or type-id, and the qualifiers are
+  dropped (follow-on errors print `int ()`). A pointer or reference to
+  such a type stays `check_qualified_function`'s (WP-435). In a template
+  instantiation, a data member, variable or static data member whose type
+  substitutes to a function type (qualified or not) is "data member /
+  variable / static data member instantiated with function type T" at its
+  name (clang `VisitFieldDecl`/`VisitVarDecl`, [temp.inst]/17); a member
+  function's parameter of that type is not diagnosed (it adjusts to a
+  pointer). Not yet: `friend F;` naming a qualified function typedef (an
+  elaborated friend type, clang errors). Tests
+  `dcl.fct/qualified-function-typedef.cpp`,
+  `dcl.fct/qualified-function-type-id.cpp`,
+  `dcl.fct/qualified-function-instantiation.cpp`,
+  `dcl.decl.general/qualified-function-decltype.cpp`.
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
 - A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
@@ -2034,6 +2079,14 @@ and returns the scope it names:
       writes no erroneous value (spec/codegen.md §7r); constant
       evaluation is unchanged (an indeterminate read is non-constant).
       Tests: `tests/conformance/dcl.attr.indet/`.
+    - `clang::uninitialized` / GNU `uninitialized` (WP-452;
+      `AttrKind::UNINITIALIZED`, `check_uninitialized_subject`): only a
+      variable with automatic storage duration; elsewhere ignored with
+      the warning `'clang::uninitialized' attribute only applies to
+      local variables` [-Wignored-attributes] (clang's `LocalVar`).
+      Effect: codegen writes no fill under `-ftrivial-auto-var-init` or
+      C++26's erroneous value (spec/codegen.md §7y). Test:
+      `tests/conformance/basic.indet/uninitialized-attr.cpp`.
     - `fallthrough`, `likely`, `unlikely` and `assume` are statement
       attributes: on any declaration `'X' attribute cannot be applied to
       a declaration` (error).
@@ -2270,6 +2323,19 @@ and returns the scope it names:
     "non-static declaration follows static" for a braceless `extern
     "C++" int v;` after `static int v;`.
     Tests: `dcl.link/language-linkage-redecl-errors.cpp`.
+- **Internal linkage from a `const` type** ([basic.link]/3.2, WP-466):
+  a namespace-scope non-template, non-inline variable that is neither
+  `extern` nor previously declared with external linkage has internal
+  linkage when its type is const-qualified and **not volatile** (for an
+  array, its element type's qualifiers, [basic.type.qualifier]/3). A
+  `const volatile int cv = 1;` (or array of them) therefore has external
+  linkage; `static`, an unnamed namespace, and a const pointer to
+  volatile (`volatile int *const p`) stay internal.
+  `kiln_abi::mangle::has_internal_linkage` (`internal_by_storage`) is
+  the single computation, shared by sema (`extern_c.rs`,
+  `unused_file_scope.rs`) and codegen. Tests:
+  `basic.link/const-volatile-external-run.cpp`,
+  `tests/codegen/const_volatile_linkage.cpp`.
 - **Redefinition through an initializer** (clang
   `AddInitializerToDecl`): a namespace-scope variable that was a
   declaration before its initializer (`extern`, or a single-line
@@ -3786,6 +3852,22 @@ for them.
     value of function declared with pure|const attribute` [-Wunused-value]
     at the call's start. Nothing but `nodiscard` is diagnosed for an
     expression spelled in a macro body (clang `ShouldSuppress`).
+  - **Through a cast (WP-461)**: an explicit cast (`static_cast`,
+    `const_cast`, `reinterpret_cast`, C-style, functional) of kind
+    `NoOp`, `ConstructorConversion` or `IntegralCast` whose operand,
+    implicit casts stripped (clang `IgnoreImpCasts`, not parentheses),
+    is a call or a construction is checked as that call
+    (`unused_call_result`: nodiscard type, nodiscard callee, then
+    `pure` / `const`) or construction (`unused_construct_result`), at
+    the cast: `static_cast<bool>(s);` calling a `[[nodiscard]]`
+    conversion function warns `-Wunused-result`, `static_cast<int>(t)`
+    through a `pure` `operator long` warns `pure`. Otherwise the cast is
+    `expression result unused` (`bool{s};`: its operand is an init
+    list). An overloaded comparison that is not the unused expression
+    itself (parenthesized, a comma's right operand, a conditional's
+    arm; `unused_comparison_call`) is checked as that call, at its
+    operator, before falling back to `expression result unused`
+    (`tests/conformance/dcl.attr.nodiscard/through-cast.cpp`).
   - **In an instantiation (WP-217)**: clang rebuilds every expression
     statement and for-increment (`TransformExprStmt` → `ActOnExprStmt`),
     so the warning of a non-dependent one is reported again in each
@@ -4021,11 +4103,31 @@ for them.
     non-array literal is a prvalue, as it is inside a function, and its
     variable is constant-initialized.
 
+    A valid array literal (WP-466; clang `BuildCompoundLiteralExpr`,
+    `isFileScope`) is an lvalue naming an unnamed object of static
+    storage duration (C99 6.5.2.5p5): `file_scope_compound_literal`
+    creates an implicit unnamed `Var` (static storage, the literal's
+    initializer, its context the enclosing namespace even for a
+    class-scope literal) and records it in `DeclTable::compound_literal`
+    (`compound_literal_of`; `ExprTable::compound_literal_var` goes the
+    other way, aux 1). A literal whose initializer is not constant
+    becomes a recovery expression after the error. In the Oven the
+    object is usable in a constant expression only when its type is
+    const and not volatile ([expr.const]/4, as for a const variable),
+    and is read through its initializer; a read of a non-const literal
+    is "subexpression not valid in a constant expression" with the
+    "declared here" note at the literal. Codegen: spec/codegen.md §7ab.
+    Tests: `ext.gnu.compound.literal/namespace-scope-array-{run,diagnostics}.cpp`,
+    `tests/codegen/file_scope_compound_literal.cpp`.
+
   Deviations:
-  - Array literals at namespace scope are reported as not supported
-    yet. clang makes them lvalues naming an internal
-    `.compoundliteral` global, which needs a static-storage object in
-    the Oven and codegen.
+  - A literal in a constexpr variable template or a class template's
+    default member initializer, instantiated from a function body, is at
+    file scope in kiln, as in clang 19. clang 22 takes the instantiating
+    function as the context, makes the literal a block-scope temporary
+    and rejects the initialization (`-Wdangling`, then "must be
+    initialized by a constant expression" or the reference-member
+    error); kiln does not follow that at compat 22.
   - kiln does not wrap the elements of a namespace-scope literal in
     `ConstantExpr` nodes, as clang does.
 - **Flexible array members** (`flex_array.rs`, WP-271; a C99 feature,

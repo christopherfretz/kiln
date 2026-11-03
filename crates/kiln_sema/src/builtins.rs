@@ -2378,7 +2378,7 @@ impl Sema<'_, '_> {
             .members(d)
             .filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
             .collect();
-        let layout = kiln_abi::ensure_layout(&mut self.ast, d, &self.abi);
+        let layout = kiln_abi::ensure_layout(&mut self.ast, d, &self.abi)?;
         let size = layout.size as usize;
         let offsets: Vec<u64> = layout.fields.to_vec();
         let mut bytes = vec![0u8; size];
