@@ -1918,7 +1918,17 @@ and returns the scope it names:
   expression of type `bool`.
   - A failed comparison adds `expression evaluates to 'L op R'` at the
     operator, underlining the whole comparison (clang
-    `DiagnoseStaticAssertDetails`).
+    `DiagnoseStaticAssertDetails`). The condition and its conjuncts are
+    looked at through parentheses, implicit casts and full-expressions
+    (`ExprWithCleanups`, as clang's `IgnoreParenImpCasts` steps through
+    every `FullExpr`), so a comparison of a `__builtin_bit_cast`, which
+    materializes its operand, gets the note too. A float side prints as
+    `ConvertAPValueToString` does, `APFloat::toString` (`1`, `2.5E+10`,
+    `+Inf`); a float literal in the requirement text as clang's
+    `PrintFloatingLiteral` (spec/ast.md §9.3). A range whose ends come
+    from a macro argument ends after the last token, measured where it
+    is spelled (WP-410). Test:
+    `dcl.pre/static-assert-full-expression-note.cpp`.
   - In a template definition (`in_template()`, or a context flagged
     `DEPENDENT_CTX`) the condition is not evaluated, even when it is not
     value-dependent (P2593R1, a DR; clang's
@@ -2913,6 +2923,40 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   still lowers as the builtin. Tests:
   `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-written-first.cpp`,
   `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-implicit-first.cpp`.
+- **Redeclaring a builtin** (WP-410; clang `MergeFunctionDecl`,
+  `CheckEquivalentExceptionSpec`, `ActOnStartOfFunctionDef`): only a
+  file-scope (translation-unit redeclaration context), non-`static`
+  declaration with C linkage of a builtin's name is checked; one at
+  namespace scope, with C++ linkage, or `static` is an ordinary
+  function. Library builtins without the `__builtin_` prefix (`sin`)
+  are not checked in C++ (clang's incompatible-library-redeclaration
+  warning is C only). For a checked first declaration
+  (`recognize_builtin_decl`):
+  - a builtin with custom type checking is `sema_builtin_redeclare`
+    ("cannot redeclare builtin function 'X'");
+  - otherwise a type other than the builtin's is
+    `sema_conflicting_types`, except that at -fclang-compat=19 a type
+    differing only in the return type is
+    `sema_ovl_diff_return_type` (clang 19 checks overloading first);
+  - each with `note_previous_builtin_declaration` ("'X' is a builtin
+    with type T", `builtin_type_note`) at the declaration; the
+    declaration is invalid and is not the builtin (a later call finds
+    the implicit builtin, `lazily_create_builtin`).
+  - A builtin that cannot throw redeclared `noexcept(false)` (or with a
+    potentially-throwing dynamic specification) is
+    `sema_exception_spec_mismatch` with `note_previous_declaration` at
+    the previous declaration (the first declaration itself when there
+    is none); one written without a specification gets the builtin's
+    `throw()` merged in.
+  - A later redeclaration that conflicts with one recognized as the
+    builtin reports the same note in place of "previous declaration is
+    here".
+  - A definition of a declaration recognized as a builtin is
+    `sema_builtin_definition` ("definition of builtin function 'X'"),
+    and the function is invalid.
+  - Not implemented: clang's "different language linkage" error for an
+    `extern "C++"` redeclaration of an implicitly declared builtin.
+  Tests: `dcl.fct/builtin-redecl*.cpp`, `c.math/builtin-redecl.cpp`.
 - **Name:** a `DeclRefExpr` to a builtin is a prvalue of the
   placeholder type `QualType::BUILTIN_FN` (`<builtin fn type>`).
 - **Calls:** `act_on_call` converts the callee with
@@ -4596,8 +4640,9 @@ clang's `CheckLogicalOperands`, on the unconverted operands of a built-in
 `&&` / `||` ([expr.log.and]/1, [expr.log.or]/1), before their contextual
 conversion to `bool` (`check_constant_logical_operand`):
 - If either operand, as written (no parentheses stripped), names an
-  enumerator whose value is not 0 or 1, nothing is diagnosed (that is
-  clang's default-off `-Wint-in-bool-context`, not implemented).
+  enumerator whose value is not 0 or 1, that is
+  `sema_enum_constant_in_bool_context` (§5.26) and nothing more is
+  diagnosed here, whether or not that warning is enabled.
 - Otherwise `sema_constant_logical_operand` ("use of logical '&&' with
   constant operand", group `constant-logical-operand`, on by default) is
   issued at the operator, with the right operand's range, when the left
@@ -4615,6 +4660,49 @@ conversion to `bool` (`check_constant_logical_operand`):
   for `&&` only `note_logical_instead_of_bitwise_remove_constant`
   removing from the end of the left operand to the end of the right.
 - Tests: `expr.log.and/constant-operand*.cpp`, `expr.log.or/constant-operand.cpp`.
+
+### 5.26 Integers in a boolean context (`int_in_bool.rs`, WP-410)
+
+clang's `DiagnoseIntInBoolContext`, run by the implicit-conversion walk
+(`check_implicit_conversions`, `impcast.rs`) on the source of every
+implicit conversion to `bool` ([conv.bool]/1) of a completed
+full-expression, with parentheses and implicit casts stripped; an
+explicit cast to `bool` is not checked. A literal operand is an
+`IntegerLiteral`, or one directly under a unary `-` (the literal's own
+value is used); no parentheses or implicit casts are looked through.
+- `<<` ([expr.shift]): a left operand that is the literal 0 is
+  `sema_left_shift_always` ("converting the result of '<<' to a boolean
+  always evaluates to false", group `tautological-constant-compare`
+  under `tautological-compare`, on by default). Both operands literal,
+  the right literal's top bit clear and the expression not
+  value-dependent: the same warning with the shift's value, folded as
+  clang's constant folder does outside a constant context (a negative
+  count shifts right, a count of at least the width shifts by the width
+  less one, the result wraps to the promoted type). Otherwise, when the
+  shift's type is a signed integer type, `sema_left_shift_in_bool_context`
+  ("...; did you mean to compare with '0'?", group
+  `int-in-bool-context`, off by default, in `-Wmost`); at
+  -fclang-compat=19 `sema_left_shift_in_bool_context_expr` ("...; did
+  you mean '(E) != 0'?" with the shift printed as written). At the
+  operator.
+- Conditional ([expr.cond]): both arms literal, not both of value 0 or
+  1, and both non-zero is `sema_integer_constants_in_conditional_always_true`
+  (`tautological-constant-compare`) at the start of the condition. Each
+  arm whose type is not `bool` is then checked in turn (clang
+  `CheckConditionalOperator`).
+- `&&` / `||` ([expr.log.and], [expr.log.or]): an operand, as written,
+  naming an enumerator whose value is not 0 or 1 is
+  `sema_enum_constant_in_bool_context` ("converting the enum constant
+  to a boolean", `int-in-bool-context`) at the operator, from
+  `builtin_binary` before the operands are converted.
+- clang's `'*' in boolean context` is C only and not issued.
+- Deviation: clang checks a template's non-dependent full-expressions
+  again in each instantiation and repeats these warnings there; kiln
+  reports them once, in the definition.
+- Tests: `expr.shift/shift-bool-always.cpp`,
+  `expr.shift/shift-in-bool-context-{19,22}.cpp`,
+  `expr.cond/cond-int-constants-bool.cpp`,
+  `conv.bool/enum-constant-in-bool*.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

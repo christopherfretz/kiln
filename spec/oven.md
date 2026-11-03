@@ -62,6 +62,17 @@ the evaluator's flattened type table.
 - Typed, checked arithmetic per width (1..128 bits, `_BitInt`-ready): signed
   overflow, division by zero, `INT_MIN / -1`, out-of-range shifts, negative
   shifts and float results that are NaN fault; unsigned arithmetic wraps.
+  NaNs that are values (a `__builtin_nan` operand, a quiet library
+  result) follow `APFloat`, not the host (WP-410): an operation with a
+  NaN operand yields the first NaN operand quieted, sign and payload
+  kept; an invalid operation the positive default quiet NaN; a float
+  conversion keeps the sign and shifts the payload by the precision
+  difference (`softfloat::cast`). `Oven::set_fold_float_ub(true)`
+  (codegen's fold prepass only; sema never sets it) lets arithmetic that
+  yields a NaN or divides by zero go on with the IEEE result, as clang's
+  `ConstantEmitter` folds such an initializer; a call evaluated so is
+  never memoized (`tests/conformance/expr.const/nan-payload.cpp`,
+  `tests/codegen/nan_global_init.cpp`).
   binary32/binary64 use the host's IEEE arithmetic (round to nearest even);
   x87 `long double`, `__float128` / `_Float128`, `_Float16` and `__bf16`
   use the bit-exact soft-float in `softfloat.rs` (each operation rounded
@@ -218,7 +229,8 @@ the evaluator's flattened type table.
   notation unless that would pad more than three zeros or imply more
   digits than that precision, else `D.DDDE+X` (`1.0E+300`, `128.1`,
   `9.999999999999999E+22`, `6.55E+4`); `+Inf`, `-Inf`, `NaN`, `0`, `-0`
-  (WP-237; `fltstr.rs`). A float argument in an "in call to" note is
+  (WP-237; `kiln_ast::consts::fltstr`, shared with sema's expression
+  printing since WP-410). A float argument in an "in call to" note is
   clang's `%e` (`f(1.000000e+10)`).
 - Argument values print as clang's `APValue::printPretty` (WP-241): a
   class or array as a brace list of its bases and members, an array cut
@@ -655,13 +667,14 @@ literal is one instruction and one step, not an interpreted loop.
 - **Sign, min and max** (`bi::FP_OP`; WP-403 for the `f16` and
   `_num` forms): `fabs`, `copysign`, `fmax`/`fmin` (each spelling,
   `__builtin_fabsf16`/`fmaxf16`/`fminf16` through `f16_twin`) and the
-  clang 22 `fmaximum_numf16`/`fminimum_numf16`, bit-exact as clang folds
+  clang 22 `fmaximum_num`/`fminimum_num` in every spelling (`f16`, plain,
+  `f`, `l`; WP-410 for the last three), bit-exact as clang folds
   them: `fmax`/`fmin` below `-fclang-compat=22` (clang 19 `APFloat::
   maxnum`) yield the other operand for a NaN (`-0 < +0`); at 22
   (`FMAX_22`/`FMIN_22`, LLVM 22 `maxnum`) a signaling NaN `a`, else a
   signaling NaN `b`, yields itself quieted (`softfloat::quiet`) first;
   `maximumnum`/`minimumnum` yield the other operand for a NaN, quieted
-  when both are NaN. `__builtin_canonicalizef16` and the
+  when both are NaN. `__builtin_canonicalize{,f,l,f16}` and the
   `F16_LIBM` set (`sin`, `pow`, `atan2`, `sincos`, ...) are not
   constants (the generic note), as in clang
   (`tests/conformance/c.math/f16-builtins*.cpp`, `constexpr-f16*.cpp`).
