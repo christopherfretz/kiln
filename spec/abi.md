@@ -39,6 +39,7 @@ pub fn array_layout(&Ast, elem: QualType, count: u64, &Target) -> TypeLayout;
 pub fn record_layout(&Ast, record: DeclId, &Target) -> RecordLayout;
 pub fn ensure_layout<'a>(&'a mut Ast, DeclId, &Target) -> &'a RecordLayout;
 pub struct Layouter<'a>   // a session: memoizes records, answers is_pod / is_empty
+pub struct LayoutCache;   // a finished session's records (Layouter::into_cache / with_cache)
 pub fn subobjects(&Ast, record: DeclId, &Target) -> Vec<(Subobject, u64)>; // §8.3
 pub const MAX_SUBOBJECTS: usize;              // 65536 (SubobjectId is u16)
 impl Layouter { fn subobjects(&mut self, DeclId) -> Vec<(Subobject, u64)> }
@@ -82,7 +83,12 @@ pub fn vtable_blocks(&str) -> BTreeSet<String>;          // a set, `Original map
 - **Memoized.** A `Layouter` computes each class once, keyed by its first
   declaration. `ensure_layout` writes every class it computed into
   `Ast::layouts` (write-once, spec/types.md §11). Classes already there
-  are reused, not recomputed.
+  are reused, not recomputed. `Layouter::into_cache` detaches a
+  session's records (`LayoutCache`) and `Layouter::with_cache` resumes
+  them in a later session over the same AST; the caller guarantees that
+  every class in the cache is still complete and unchanged (sema keeps one
+  for the deallocation-function lookup of virtual destructors, which lays
+  out complete classes only; WP-450).
 - **Pure.** The result depends only on the AST and the `Target`.
 - Out of scope: MS layout, `-fpack-struct` and other triples.
 

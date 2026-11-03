@@ -8,7 +8,7 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{DeclKind, EnumData};
-use kiln_ast::types::TagKeyword;
+use kiln_ast::types::{ExcSpec, NoexceptValue, TagKeyword, TypeView};
 use kiln_ast::{AttrId, DeclId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::symbol::Symbol;
@@ -61,6 +61,8 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
+        AttrKind::FORMAT => "format",
+        AttrKind::NOTHROW => "nothrow",
         _ => return None,
     })
 }
@@ -292,14 +294,8 @@ impl Sema<'_, '_> {
             }
             AttrKind::NORETURN if node.is_gnu_spelling() => self.check_gnu_noreturn(d, kind, node),
             // [dcl.attr.noreturn]/1.
-            AttrKind::NORETURN => {
-                kind.is_function()
-                    || wrong(
-                        self,
-                        DiagId::sema_attribute_wrong_decl_type_error,
-                        "noreturn",
-                        "functions",
-                    )
+            AttrKind::NORETURN if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type_error, "noreturn", "functions")
             }
             // [dcl.attr.nouniqueaddr]/1.
             AttrKind::NO_UNIQUE_ADDRESS => {
@@ -345,6 +341,8 @@ impl Sema<'_, '_> {
                 true
             }
             AttrKind::RETURNS_NONNULL => self.check_returns_nonnull_attr(d, kind, node),
+            AttrKind::FORMAT => self.check_format_decl_attr(d, kind, node),
+            AttrKind::NOTHROW if node.flags & 1 == 0 => self.check_gnu_nothrow(d, kind, node),
             AttrKind::FLAG_ENUM | AttrKind::ENUM_EXTENSIBILITY if kind != DeclKind::Enum => {
                 let name = attr_name(&node).unwrap_or_default();
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, name, "enums")
@@ -544,6 +542,117 @@ impl Sema<'_, '_> {
         let msg =
             // clang 22 names the type attribute unscoped here.
             self.diag(DiagId::sema_type_attribute_wrong_type, node.loc).arg("'noreturn'").arg(ts);
+        self.emit(msg);
+        false
+    }
+
+    /// GNU `nothrow` written on a declarator (WP-186; clang
+    /// `handleFunctionTypeAttr`, `AT_NoThrow`): a function type attribute,
+    /// applied to the declared type's function type (directly or through
+    /// one pointer, reference or member pointer) and removed from
+    /// `attrs`. With no exception specification the function type
+    /// becomes `__attribute__((nothrow))` ([`ExcSpec::NothrowAttr`],
+    /// non-throwing); a potentially-throwing written one (`throw(X)`,
+    /// `noexcept(false)`) warns `'nothrow' attribute conflicts with
+    /// exception specification; attribute ignored`; a non-throwing or
+    /// unresolved one is kept as is. On any other type the attribute
+    /// stays for [`Sema::check_decl_attrs`] to reject.
+    pub(crate) fn apply_nothrow_attrs(
+        &mut self,
+        ty: QualType,
+        attrs: &mut Vec<AttrId>,
+    ) -> QualType {
+        let mut ty = ty;
+        let mut i = 0;
+        while i < attrs.len() {
+            let node = *self.ast.attrs.get(attrs[i]);
+            if node.kind != AttrKind::NOTHROW || node.flags & 1 != 0 {
+                i += 1;
+                continue;
+            }
+            match self.with_nothrow(ty, node.loc, true) {
+                Some(t) => {
+                    attrs.remove(i);
+                    ty = t;
+                }
+                None => i += 1,
+            }
+        }
+        ty
+    }
+
+    /// `ty` (a function type, or a pointer, reference or member pointer
+    /// to one when `outer`) with GNU `nothrow` applied; None when it is
+    /// no such type.
+    fn with_nothrow(
+        &mut self,
+        ty: QualType,
+        loc: kiln_source::Loc,
+        outer: bool,
+    ) -> Option<QualType> {
+        if self.is_error_type(ty) {
+            return None;
+        }
+        if self.ast.types.is_function(ty) {
+            return Some(match self.written_exc_spec(ty) {
+                ExcSpec::None => self.with_exc_spec(ty, ExcSpec::NothrowAttr),
+                ExcSpec::Dynamic(_) | ExcSpec::NoexceptExpr { value: NoexceptValue::False, .. } => {
+                    self.error(DiagId::sema_nothrow_conflicts_exc_spec, loc);
+                    ty
+                }
+                _ => ty,
+            });
+        }
+        if !outer {
+            return None;
+        }
+        let built = match self.ast.types.canonical_view(ty) {
+            TypeView::Pointer(p) => {
+                let f = self.with_nothrow(p, loc, false)?;
+                self.ast.types.pointer_to(f)
+            }
+            TypeView::LValueRef(p) => {
+                let f = self.with_nothrow(p, loc, false)?;
+                self.ast.types.lvalue_ref_to(f)
+            }
+            TypeView::RValueRef(p) => {
+                let f = self.with_nothrow(p, loc, false)?;
+                self.ast.types.rvalue_ref_to(f)
+            }
+            TypeView::MemberPointer { pointee, class } => {
+                let f = self.with_nothrow(pointee, loc, false)?;
+                self.ast.types.member_pointer(f, class)
+            }
+            _ => return None,
+        };
+        Some(self.ast.types.qualify(built, ty.quals()))
+    }
+
+    /// A written GNU `nothrow` [`Sema::apply_nothrow_attrs`] did not
+    /// apply: kept on a function (a declarator path that does not apply
+    /// type attributes; [`kiln_ast::Ast`]'s `NOTHROW` check still makes
+    /// it non-throwing), else clang's two warnings, `'nothrow' only
+    /// applies to function types; type here is 'T'` (for a declaration
+    /// with a type) and `'nothrow' attribute only applies to functions
+    /// and function pointers`, and dropped.
+    fn check_gnu_nothrow(&mut self, d: DeclId, kind: DeclKind, node: AttrNode) -> bool {
+        if kind.is_function() {
+            return true;
+        }
+        if let Some(ty) = self.decl_value_type(d, kind)
+            && !self.is_error_type(ty)
+        {
+            let ts = format!("'{}'", self.ty_str(ty));
+            let msg = self
+                .diag(DiagId::sema_type_attribute_wrong_type, node.loc)
+                .arg("'nothrow'")
+                .arg(ts);
+            self.emit(msg);
+        }
+        let msg = self
+            .diag(DiagId::sema_attribute_wrong_decl_type, node.loc)
+            .arg(format!("'{}'", self.attr_shown(&node, "nothrow")))
+            .arg("functions and function pointers");
         self.emit(msg);
         false
     }

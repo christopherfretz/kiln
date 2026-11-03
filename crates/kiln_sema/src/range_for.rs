@@ -323,7 +323,13 @@ impl Sema<'_, '_> {
     /// clang `FinishForRangeVarDecl`: deduces the type of the implicit
     /// variable `v` from `init` (diagnosing a failure with `id` at
     /// `loc`) and initializes it. True on failure (`v` is invalid).
-    fn finish_range_var(&mut self, v: DeclId, init: Initializer, loc: Loc, id: DiagId) -> bool {
+    pub(crate) fn finish_range_var(
+        &mut self,
+        v: DeclId,
+        init: Initializer,
+        loc: Loc,
+        id: DiagId,
+    ) -> bool {
         let declared = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
         let (items, kind, init_ty) = match &init {
             Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, self.ety(*e)),
@@ -630,6 +636,68 @@ impl Sema<'_, '_> {
                 .arg(desc)
                 .arg(self.ty_arg(self.ety(e))),
         ]
+    }
+
+    /// The `begin` and `end` variables of an iterating expansion
+    /// statement ([stmt.expand]/5.2): `begin_var` and `end_var` (of a
+    /// deduced type) are initialized from the begin-expr and end-expr
+    /// [stmt.ranged]/1.3 forms for a non-array range of type `range_ty`
+    /// (named by `begin_range` and `end_range`), diagnosed as for a
+    /// range-based `for`. False after an error.
+    pub(crate) fn expansion_begin_end(
+        &mut self,
+        begin_range: ExprId,
+        end_range: ExprId,
+        range_ty: QualType,
+        vars: (DeclId, DeclId),
+        colon: Loc,
+    ) -> bool {
+        let (status, bef, exprs) =
+            self.build_non_array_range(begin_range, end_range, range_ty, vars.0, vars.1, colon);
+        match status {
+            Status::Success => exprs.is_some(),
+            Status::NoViable(notes) => {
+                let at = if bef == Bef::End { end_range } else { begin_range };
+                let mut msg = self
+                    .diag(DiagId::sema_for_range_invalid, self.begin_loc(at))
+                    .arg(self.ty_arg(self.ety(at)))
+                    .arg(bef.index());
+                for n in notes {
+                    msg = msg.with_note(n);
+                }
+                self.emit(msg);
+                false
+            }
+            Status::DiagnosticIssued => false,
+        }
+    }
+
+    /// Whether `range` is expansion-iterable ([stmt.expand]/3, P1306R5):
+    /// not an array, and either a class with a member `begin` or `end`
+    /// (the member form), or `begin(range)` and `end(range)` each have a
+    /// viable candidate found by argument-dependent lookup (silently).
+    pub(crate) fn expansion_iterable(&mut self, range: ExprId, colon: Loc) -> bool {
+        let ty = self.non_reference(self.ety(range));
+        if self.ast.types.is_array(ty) {
+            return false;
+        }
+        if let Some(rec) = self.ast.types.as_record(ty)
+            && self.kind_of(rec) == DeclKind::CXXRecord
+        {
+            let class = self.ast.definition(rec).unwrap_or(rec);
+            for name in ["begin", "end"] {
+                let sym = self.intern(name);
+                if !self.lookup_in_class(class, sym, LookupKind::Ordinary).decls.is_empty() {
+                    return true;
+                }
+            }
+        }
+        let ((b, e), _) = self.capturing(|s| {
+            let b = s.begin_end_call(Bef::Begin, false, range, colon).0;
+            let e = s.begin_end_call(Bef::End, false, range, colon).0;
+            (b, e)
+        });
+        matches!((b, e), (Status::Success, Status::Success))
     }
 
     /// clang `BuildNonArrayForRange`: `begin-expr` and `end-expr` for a

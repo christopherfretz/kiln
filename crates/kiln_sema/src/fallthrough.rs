@@ -129,7 +129,8 @@ impl Sema<'_, '_> {
             StmtKind::WhileStmt
             | StmtKind::ForStmt
             | StmtKind::DoStmt
-            | StmtKind::CXXForRangeStmt => {
+            | StmtKind::CXXForRangeStmt
+            | StmtKind::CXXExpansionStmt => {
                 for c in self.children(s) {
                     self.ft_walk(c, None, None, w);
                 }

@@ -3743,6 +3743,9 @@ pub mod builtin {
         row(1010, "remquol", "LdLdLdi*", N),
         row(1077, "scalbnl", "LdLdi", N),
         row(1071, "scalblnl", "LdLdLi", N),
+        // WP-186: recognized for its implicit `format(printf, 1, 2)` only
+        // ([`lib_printf_format`]; clang's id is not used here).
+        row(0, "printf", "icC*.", 0),
         // WP-419: C23's `roundeven`, clang 22's `fmaximum_num` /
         // `fminimum_num` ([`lib_min_compat`]) and the GNU `sincos`
         // ([`lib_gnu_only`]; clang 22). The ids are kiln-private.
@@ -3763,6 +3766,23 @@ pub mod builtin {
     /// The [`LIB`] row of the C library function spelled `name`.
     pub fn lib_by_name(name: &str) -> Option<&'static Info> {
         LIB.iter().find(|e| e.name == name)
+    }
+
+    /// WP-186: the implicit `format(printf, F, A)` indices of the [`LIB`]
+    /// function `name` (clang `Builtins.td` `PrintfFormat` /
+    /// `VPrintfFormat`, added by `AddKnownFunctionAttributes` before the
+    /// other implicit attributes): one-based `(F, A)`, `A` = 0 for a
+    /// `va_list`.
+    pub fn lib_printf_format(name: &str) -> Option<(u16, u16)> {
+        Some(match name {
+            "printf" => (1, 2),
+            "fprintf" | "sprintf" => (2, 3),
+            "snprintf" => (3, 4),
+            "vprintf" => (1, 0),
+            "vfprintf" | "vsprintf" => (2, 0),
+            "vsnprintf" => (3, 0),
+            _ => return None,
+        })
     }
 
     /// WP-419: the lowest `-fclang-compat` level that recognizes the

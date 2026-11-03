@@ -784,6 +784,21 @@ impl Oven {
                 s.relocs.push(Reloc { at: at as u32, value: id });
                 s.cover[at..at + info.size as usize].fill(1);
             }
+            TyKind::BoolVec { n, .. } => {
+                // The lane bytes; the bits and bytes past the last lane
+                // are padding (zero in the image).
+                let len = n.div_ceil(8);
+                let sp = self.mem.space(st);
+                if !sp.is_init(abs, len) {
+                    return Err(self.uninit(b, field, t, loc));
+                }
+                let (a0, a1) = (abs as usize, (abs + len) as usize);
+                s.bytes[at..at + len as usize].copy_from_slice(&sp.bytes[a0..a1]);
+                if n % 8 != 0 {
+                    s.bytes[at + len as usize - 1] &= (1u8 << (n % 8)) - 1;
+                }
+                s.cover[at..at + len as usize].fill(1);
+            }
             TyKind::Array { elem, n } => {
                 let e = *self.types.info(elem);
                 let es = e.size as usize;

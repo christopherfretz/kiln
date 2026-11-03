@@ -221,6 +221,19 @@ clang's `Parser` over `Preprocessor::Lex`.
   bit-field cannot have a default member initializer"), and at namespace
   scope the `:` is "expected unqualified-id". At block scope `y : 3;` is
   a label (WP-379, `class.bit/untyped-bit-field.cpp`).
+  In a type-id (`DeclaratorContext::TypeName`: a new-type-id, a named or
+  C-style cast's type, an alias-declaration, a trailing return type, a
+  default template argument) an undeclared unqualified name is always
+  "unknown type name" (clang's `ParseImplicitInt` in a type-specifier
+  context), whatever follows it; the type-id is then the error type
+  (`QualType::ERROR`, clang's invalid type), so the cast or trait of it
+  reports nothing more. Where the grammar also allows an expression
+  (`sizeof(Zork *)`, `V<Zork>`, `decltype(Zork)`) the disambiguation
+  picks the expression and the name is "use of undeclared identifier"
+  (WP-186, `dcl.spec/unknown-type-name-type-id.cpp`,
+  `basic.lookup/undeclared-identifier-not-type.cpp`). Not done: clang's
+  typo correction ("did you mean 'unsigned'?") and clang 22's
+  `int c = Zork{};` recovery.
   At namespace scope a declaration that starts with a qualified name for
   which lookup finds a non-type or nothing (`R::f` with `R::f` a
   function) follows clang's `ParseImplicitInt` (WP-411): before a `(`

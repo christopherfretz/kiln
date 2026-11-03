@@ -118,6 +118,30 @@ impl RecordFacts {
     }
 }
 
+/// The class layouts of a finished [`Layouter`] session, detached from
+/// its AST borrow so a caller can resume them in a later session
+/// ([`Layouter::with_cache`]; spec/abi.md §1 "Memoized"). Valid
+/// only while every class in it keeps its definition: the caller resumes
+/// it for complete classes only (a complete class's layout, and that of
+/// every class it contains by value, is final for the rest of the
+/// translation unit).
+#[derive(Debug, Default)]
+pub struct LayoutCache {
+    records: FxHashMap<DeclId, RecordFacts>,
+}
+
+impl LayoutCache {
+    /// The number of classes laid out.
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Whether no class is laid out.
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+}
+
 /// A layout session over one AST and target: caches every class it lays
 /// out (keyed by the class's first declaration).
 #[derive(Debug)]
@@ -132,6 +156,16 @@ impl<'a> Layouter<'a> {
     /// A session with an empty cache.
     pub fn new(ast: &'a Ast, target: &'a Target) -> Self {
         Layouter { ast, target, records: FxHashMap::default(), in_progress: FxHashSet::default() }
+    }
+
+    /// A session resuming the layouts of an earlier one.
+    pub fn with_cache(ast: &'a Ast, target: &'a Target, cache: LayoutCache) -> Self {
+        Layouter { ast, target, records: cache.records, in_progress: FxHashSet::default() }
+    }
+
+    /// Ends the session, keeping its layouts for a later one.
+    pub fn into_cache(self) -> LayoutCache {
+        LayoutCache { records: self.records }
     }
 
     /// The AST.

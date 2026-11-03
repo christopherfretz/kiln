@@ -144,6 +144,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// type: a type the declarator writes again (`T::type (*f)(T::type)`)
     /// resolves to its next occurrence (§5.8).
     written_used: std::cell::RefCell<FxHashMap<WrittenKey, Loc>>,
+    /// The elements of the enclosing expansion statements being expanded
+    /// ([stmt.expand], P1306R5), innermost last: what their
+    /// `CXXExpansionSelectExpr`s become.
+    pub(crate) expansions: Vec<crate::expansion::ExpansionElem>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -186,6 +190,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             as_callee: false,
             written_scope: None,
             written_used: std::cell::RefCell::default(),
+            expansions: Vec::new(),
         }
     }
 

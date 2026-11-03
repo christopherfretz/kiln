@@ -1667,9 +1667,32 @@ and returns the scope it names:
   `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
   `always_inline` with the GNU flag. Test:
   `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
-  - GNU `visibility`, `section` and `format`: `'x' attribute ignored`
-    (a written `format` is not stored; only the printf builtins' implicit
-    one is, §5.4)
+  - GNU `visibility` and `section`: `'x' attribute ignored`
+  - GNU `format(archetype, F, A)` (WP-186, clang `handleFormatAttr`, in
+    its order): exactly three arguments (`'format' attribute requires
+    exactly 3 arguments`), the archetype an identifier (`requires
+    parameter 1 to be an identifier`), `__x__` normalized; `printf`
+    (and `gnu_printf` at clang_compat >= 22), `strftime`, and `scanf`,
+    `printf0`, `strfmon`, `cmn_err`, `vcmn_err`, `zcmn_err`, `kprintf`,
+    `freebsd_kprintf`, `os_trace`, `os_log`, `NSString`, `CFString`
+    (and `gnu_scanf` at >= 22) are stored, `gcc_*diag` are accepted and
+    dropped, anything else warns `'format' attribute argument not
+    supported: X`. `F` and `A` integer constants (`requires parameter N
+    to be an integer constant`); on a function only (`only applies to
+    Objective-C methods, blocks, and non-K&R-style functions`, a
+    warning), `F` in 1..=params (+1 for an implicit object member
+    function, whose index 1 is `this`: `format attribute cannot specify
+    the implicit this argument as the format string`), parameter `F` a
+    pointer to (possibly cv) `char`/`signed char`/`unsigned char`
+    (`format argument not a string type`), a non-variadic function with
+    `A` != 0 warns `GCC requires a function with the 'format' attribute
+    to be variadic` (`-Wgcc-compat`) at the declaration, `strftime`
+    needs `A` = 0 (`strftime format attribute requires 3rd parameter to
+    be 0`), others `A` = 0 or the `...` position (`parameter 3 is out of
+    bounds`). Errors drop the attribute. Not modelled: GCC's position
+    warning on a definition (`-Wgcc-compat`). Test:
+    `tests/conformance/ext.gnu.builtins/format-attribute-written.cpp`,
+    `format-gnu-archetypes-clang22.cpp`.
 - **Argument encoding** (`Attr.a`, `Attr.b`; see spec/abi.md §3.1):
 
   | kind | `a` | `b` |
@@ -1678,7 +1701,7 @@ and returns the scope it names:
   | NODISCARD, DEPRECATED | `ExprId` of the string-literal message | — |
   | ASM_LABEL | raw `StringLitId` of the label (flags bit 1: inherited) | — |
   | BUILTIN | the builtin id (`kiln_ast::decl::builtin`; implicit, §5.4) | — |
-  | FORMAT | 0 (`printf`; implicit, §5.4) | `F \| A << 16`, one-based format and first data argument indices (`A` = 0: a `va_list`) |
+  | FORMAT | the archetype: 0 `printf`, 1 another checked-by-clang kind (not checked by kiln), 2 `strftime` (`FORMAT_*` in `vector.rs`) | `F \| A << 16`, one-based format and first data argument indices, each saturated at 0xfffe (`A` = 0: a `va_list`); flags bit 0: implicit (§5.4) |
   | MALLOC | — | — |
   | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
@@ -2218,7 +2241,28 @@ specification as written (`TypeNames` prints ` noexcept`,
   non-empty list is `ISO C++17 does not allow dynamic exception
   specifications` (`-Wdynamic-exception-spec`, default error) with a
   `use 'noexcept(false)' instead` note, then `Dynamic(types)`.
-- **Gaps:** `__attribute__((nothrow))` is not parsed.
+- **GNU `nothrow`** (WP-186, `apply_nothrow_attrs` in `decl_attrs.rs`;
+  clang `handleFunctionTypeAttr` `AT_NoThrow`): `__attribute__((nothrow))`
+  or `[[gnu::nothrow]]` anywhere in a declaration whose declared type is
+  a function type, or a pointer, reference or member pointer to one, is
+  a type attribute (not kept on the declaration): with no written
+  specification the function type's is `NothrowAttr` (printed
+  `__attribute__((nothrow))`, canonically `Nothrow`, so non-throwing,
+  `nounwind` in IR and the same type as `noexcept`); `throw(X)` or
+  `noexcept(false)` warns `'nothrow' attribute conflicts with exception
+  specification; attribute ignored` (`-Wignored-attributes`); a
+  non-throwing or unresolved one is unchanged. On another declaration:
+  `'nothrow' only applies to function types; type here is 'T'` (when it
+  has a type) and `'nothrow' attribute only applies to functions and
+  function pointers`, dropped. A redeclaration omitting it gets the
+  `-Wmissing-exception-spec` warning (not the error) and an overrider of
+  a `nothrow` virtual function that is potentially throwing the
+  `-Wmicrosoft-exception-spec` warning `exception specification of
+  overriding function is more lax than base version`. Not modelled:
+  `'nothrow' attribute takes no arguments` (no attribute checks its
+  argument count generically) and GCC's `-Wgcc-compat` position warning.
+  Tests: `tests/conformance/except.spec/gnu-nothrow-attribute.cpp`,
+  `tests/codegen/gnu_nothrow.cpp`.
 
 **Landed (WP-112).** Member functions, lazy instantiation and the
 "needed" points ([except.spec]/13):
@@ -3093,7 +3137,7 @@ constant and never look at the operand.
 | `dynamic_cast` to a reference type needing a run-time check | yes (not produced by the M2 parser) |
 | `typeid` of a glvalue of polymorphic class type | M3 (no polymorphic classes in M2) |
 | implicit calls: constructors, destructors, conversion functions, allocation functions | yes: constructors (`CXXConstructExpr`), destructors (`CXXBindTemporaryExpr`) and conversion functions (implicit member calls), each resolving the callee's spec first (WP-112); every `new` counts as throwing |
-| `__attribute__((nothrow))` on the callee | M3 (not parsed) |
+| `__attribute__((nothrow))` on the callee | yes (WP-186: the function type is non-throwing, §3 "GNU `nothrow`") |
 | a dependent operand (value-dependent `CXXNoexceptExpr`) | yes (lazily instantiated member specs, §4.7) |
 | a pseudo-destructor call `t.~T()` ([expr.prim.id.dtor]/2: no effect) | yes (WP-275): never potentially-throwing, and, as clang's `canThrow`, its object expression is not walked either (`noexcept(f().~I())` is true) |
 
@@ -3191,7 +3235,7 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   specification, gets implicit `NoThrow` and `Const`/`Pure` attributes
   (after its written ones). Sig letter `a` is `__builtin_va_list`
   (decayed when an array), `P` the type of the TU-scope `FILE`
-  typedef (none yet: not recognized), `R` adds `restrict` to the type
+  (below), `R` adds `restrict` to the type
   before it (WP-270; skipped when counting `I` arguments). Redeclarations inherit them
   (`Ast::has_nothrow_attr` reads the chain). A `NoThrow` callee makes
   a call non-throwing (`can_throw`, so `noexcept(strlen(s))` is
@@ -3200,19 +3244,23 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   `__builtin_` twin (`Decls::lib_builtin`, `ceil` -> `__builtin_ceil`,
   at the `-fclang-compat` level; inherited by redeclarations) and
   codegen lowers a direct call of the errno-free `<math.h>` functions
-  as the twin (spec/codegen.md §3, "library builtins"). WP-419 adds
+  and (WP-186) of `memcpy` / `memmove` / `memset` / `abs` / `labs` /
+  `llabs` as the twin (spec/codegen.md §3, "library builtins"); sema
+  and the Oven do not read it. WP-419 adds
   C23's `roundeven{,f,l}` (clang 19 and 22), clang 22's
   `fmaximum_num` / `fminimum_num` `{,f,l}` (`builtin::lib_min_compat`:
   not recognized at `-fclang-compat=19`) and the GNU `sincos{,f,l}`
   (clang 22, `ALL_GNU_LANGUAGES`: recognized under `-std=gnu++*` only,
   `builtin::lib_gnu_only`; `NoThrow`, a call is `nounwind`). A call in
   a constant expression is still a call of a non-constexpr function
-  (clang 19 and 22 reject `constexpr double d = ceil(1.5);`). Not
-  modelled: clang's lowering of recognized `memcpy` / `memmove` /
-  `memset` / `abs` / `labs` / `llabs` calls (and clang 22's `modf`) to
-  intrinsics, and its implicit `format` / `alloc_size` attributes on
-  the library names (`-Wformat*` on `sprintf`); only the `__builtin_`
-  printf rows carry `format` (below).
+  (clang 19 and 22 reject `constexpr double d = ceil(1.5);`). The printf
+  family (`printf`, `fprintf`, `sprintf`, `snprintf`, `vprintf`,
+  `vfprintf`, `vsprintf`, `vsnprintf`; `builtin::lib_printf_format`,
+  WP-186) gets clang's implicit `format(printf, F, A)` first, unless a
+  `format` is written. `FILE` in a row's type (`P`) is the translation
+  unit's typedef, alias or (as clang's `LookupNecessaryTypesForBuiltin`)
+  tag named `FILE`. Not modelled: clang 22's `modf` to `llvm.modf` and
+  clang's implicit `alloc_size` on the library allocation functions.
 - **GCC's implicit library builtins** (WP-380, `record_gnu_lib_twin`;
   `Sema::gnu_lib_builtins`, set by the driver for `-stdlib=libstdc++`,
   the default): libstdc++'s `<cmath>` double overloads are `using
@@ -3354,12 +3402,23 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     kept unconverted and unevaluated; GCC type classes, identical in
     clang 19 and 22): spec/sema-templates.md §9.4
     (`tests/conformance/expr.const/builtin-classify-type*.cpp`).
-- **Format strings** (WP-282; `format_string.rs`, clang
-  `CheckPrintfHandler`): a call whose callee has a `format(printf, F, A)`
-  attribute with `A` > 0 and whose argument `F` is an ordinary string
-  literal (through parentheses and implicit casts, concatenation
-  included) has its conversions checked against the data arguments
-  from `A` on. Supported: `%[flags][width][.precision][l|ll|z]conv` with
+- **Format strings** (WP-282, WP-186; `format_string.rs`, clang
+  `checkFormatStringExpr` / `CheckPrintfHandler`): for a call whose
+  callee (a function or, counting `this`, a member function) has a
+  `format` attribute other than `strftime`, the format argument `F` is
+  classified through parentheses and casts: a null pointer constant,
+  `__func__`-style predefined names, a `const` variable with an
+  initializer (pointer: const pointer to const; array of const), a
+  string literal plus an offset and `&lit[n]` are literals kiln does not
+  check; an ordinary string literal is checked; a conditional operator
+  is its taken arm when the condition is a constant, else the less
+  literal of its arms; anything else is not a literal. A non-literal
+  with `A` > 0 and no data arguments warns `format string is not a
+  string literal (potentially insecure)` at the argument
+  (`-Wformat-security`; for `printf` with the note `treat the string as
+  an argument to avoid this`). For `printf` with `A` > 0 each checked
+  literal has its conversions checked against the data arguments from
+  `A` on. Supported: `%[flags][width][.precision][l|ll|z]conv` with
   flags `-+ #0`, width/precision digits or `*`, and `conv` one of `d i u
   o x X c s p f F e E g G a A` (`c s p` and the floating ones without a
   length). The specified type is `int`/`long`/`long long` (`d i c`),
@@ -3379,15 +3438,28 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     walk stops (`-Wformat`);
   - `more '%' conversions than data arguments` at the conversion
     character, then the walk stops (`-Wformat-insufficient-args`);
+  - `incomplete format specifier` at the `%` when the string ends in a
+    specification, then the walk stops (`-Wformat`);
+  - `invalid conversion specifier 'c'` at the character (control
+    characters as `\xNN`) for a conversion clang rejects (the printable
+    ones in `INVALID_CONVERSIONS`, `"`, `\`, a non-positional `$`):
+    the next argument counts as used without being consumed; with none
+    left the walk stops (`-Wformat-invalid-specifier`);
   - `data argument not used by format string` at the first unused
-    argument (`-Wformat-extra-args`).
-  `-Wformat` contains the other two and is in `-Wmost`. Not checked
+    argument (`-Wformat-extra-args`): across the literals of a
+    conditional, at the latest first-unused argument of the literals
+    that completed, and not at all if one of them used every argument
+    (clang `UncoveredArgHandler`).
+  `-Wformat` contains the other four and is in `-Wmost`. Not checked
   (the whole string is skipped, where clang has a diagnostic): other
-  conversions and length modifiers (`h`, `hh`, `j`, `t`, `L`, `n`, `%q`),
-  positional arguments, an embedded NUL, an incomplete trailing `%`, a
-  missing `*` argument, wide strings, class and scoped-enumeration
-  arguments, non-literal formats (`-Wformat-security`), and
-  `-Wformat-truncation`/`-Wformat-overflow`. Dependent calls are checked
+  conversions and length modifiers (`h`, `hh`, `j`, `t`, `L`, `n`, `m`,
+  `C`, `S`, `%q`), positional arguments, `%[` / `%{`, an embedded NUL,
+  a missing `*` argument, wide strings, class and scoped-enumeration
+  arguments, the `scanf` and other archetypes, the contents of a
+  `const` variable (clang follows it, with `format string is defined
+  here`), a format parameter forwarded to a `va_list` function, and
+  `-Wformat-truncation`/`-Wformat-overflow`. Test:
+  `tests/conformance/ext.gnu.builtins/format-security-specifiers.cpp`. Dependent calls are checked
   at instantiation.
 ### 5.5 `throw` (`except.rs`)
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
@@ -5996,6 +6068,80 @@ template saved in `range_for_outer_depth` for instantiations).
   DefaultIgnore `-Wrange-loop-construct`/`-Wrange-loop-bind-reference`
   warnings (groups declared, not emitted); the begin/end-types-differ
   pre-C++17 extension warning; clang's recovery for `for (int x, y : a)`.
+
+### 7.6a Landed (WP-447): Expansion statements (`expansion.rs`)
+P1306R5 `template for` ([stmt.expand]). The parser accepts
+`template for ( init-statement_opt for-range-declaration :
+expansion-initializer ) compound-statement` in every language mode; before
+C++26 it warns `ext_expansion_statements` (-Wc++26-extensions). The body
+must be a compound-statement (`expected '{'` otherwise); `template`
+followed by anything but `for` in a block keeps clang's `'template' here is
+not supported yet`.
+
+- **Synthetic template level.** `act_on_expansion_head` opens a template
+  level of its own (`push_expansion_level`, a parameterless head at the
+  next depth, raising `dependent_depth`) and declares the
+  for-range-declaration in it, initialized from a `CXXExpansionSelectExpr`
+  (form, depth). The body is parsed as a template pattern at that level.
+  Inside a template the statement stays a pattern (`CXXExpansionStmt`
+  without `expanded`) and is expanded when the enclosing template is
+  instantiated; otherwise `act_on_finish_expansion` expands it at once.
+- **Expansion** (`Substituter::expand_expansion`, templ/subst): a child
+  Substituter whose `expansions` stack maps the level's depth to the
+  current element; each `CXXExpansionSelectExpr` at that depth becomes the
+  element, each element gets a block `{ decl = element; body }`
+  ([stmt.expand]/5). An inner pattern that depends on the element is
+  expanded within it. The form is chosen on the substituted initializer:
+  - *enumerating*: an expansion-init-list; element i is its i-th
+    expression. A braced or designated element is unsupported
+    (`unsupported`, not a crash).
+  - *iterating* (`range_for.rs` `expansion_iterable`): not an array, and
+    member `begin`/`end` are found or ADL finds viable candidates;
+    `static constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
+    through a per-element `static constexpr auto __iter = __begin + i`.
+    N is counted by evaluating `__begin + i != __end` for i = 0, 1, ...
+    (kiln deviation: the paper defines N as `__end - __begin`; the count
+    agrees for random-access iterators and also works without
+    `operator-`), capped at 2^20 (`sema_expansion_size_not_constant`
+    when an evaluation fails).
+  - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
+    (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
+    for-range-declaration the declaration is `static constexpr`.
+- **Binding a constexpr range** (`expansion_fallback`). A prvalue
+  initializer is bound by value (`static constexpr auto`, const, so its
+  value is usable in constant expressions; a lifetime-extended temporary
+  would not be). A glvalue is first bound with `auto&&`; when that
+  initialization fails to be a constant expression (decided by the
+  captured diagnostics, `stash_has_error`: a failed constant
+  initialization does not mark the variable INVALID), it is retried by
+  value, a copy, each attempt in a block scope of its own. The copy stands
+  in for P2686 (constexpr references to automatic variables), which kiln
+  does not implement: the paper's `constexpr std::array` local example
+  works. When both fail, the first attempt's diagnostics are emitted.
+- **Holding variables.** The holding variables of a `constexpr` structured
+  binding declaration are `constexpr` (P2686 [dcl.struct.bind]/4), so the
+  Oven sees initialized constants rather than a static variable's
+  definition. A user-written `constexpr` structured binding is still
+  rejected (`structured binding declaration cannot be declared
+  'constexpr'`).
+- **Return type deduction.** A `return` in the pattern of an expansion
+  statement of a non-template function does not deduce the placeholder
+  return type (`in_template_outside_expansions`); its expansions do.
+- **Control flow.** `break` leaves the whole statement and `continue`
+  ends the current element; the statement counts as a loop for the
+  jump-scope, fall-off and reachability analyses (`children` yields the
+  init, prelude and expansions of an expanded statement and the init and
+  body of a pattern).
+- **N = 0.** No block is built, so a body that is ill-formed for every
+  element is never instantiated.
+- **Feature macro.** `__cpp_expansion_statements` 202506L at C++26 at
+  every `-fclang-compat` (`KILN_FEATURES`; clang 22 does not define it).
+- **Left.** `define_static_array` and reflection ranges (kiln's
+  `members_of` returns a `member_list` aggregate without `begin`/`end`);
+  braced or designated init-list elements; P2686.
+- Validation: `tests/conformance/stmt.expand/` (all `requires: clang>=23`),
+  `tests/codegen/expansion_stmt.cpp`, `kiln_codegen` test
+  `expansion_statement_lowers_in_order`.
 
 ### 7.7 Landed (WP-140): GNU asm statements (`asm.rs`)
 `act_on_gcc_asm_stmt` follows clang's `ActOnGCCAsmStmt`: output and input
