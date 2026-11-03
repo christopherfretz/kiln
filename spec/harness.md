@@ -415,7 +415,7 @@ golden is rewritten instead.
 ### cfg tests
 
 A `cfg` test checks the control-flow graphs kiln builds for each function
-body (spec/sema.md §7.5.4), printed by `-fkiln-dump-cfg` in clang's
+body (spec/sema.md §7.5.1), printed by `-fkiln-dump-cfg` in clang's
 `DumpCFG` layout. Its golden `<test>.expected` is kiln's exact dump
 (required; `--update` writes it). The dump's element texts are kiln's own,
 so clang's dump is compared by *shape* only:

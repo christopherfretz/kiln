@@ -78,6 +78,8 @@ InvalidNoreturn = "invalid-noreturn" [];
 InvalidOffsetof = "invalid-offsetof" [];
 InvalidPartialSpecialization = "invalid-partial-specialization" [];
 InvalidStaticAssertMessage = "invalid-static-assert-message" [];
+// WP-509: kiln-only remark group (`-Rkiln-analysis-skipped`).
+KilnAnalysisSkipped = "kiln-analysis-skipped" [];
 LiteralConversion = "literal-conversion" [];
 LiteralRange = "literal-range" [];
 ManyBracesAroundScalarInit = "many-braces-around-scalar-init" [];

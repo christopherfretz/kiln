@@ -1,7 +1,7 @@
 // [class.temporary]/4, [expr.cond]/1, [expr.log.or]/1, [stmt.expr]/1: a
 // full-expression's temporaries are destroyed at its end; one created in
 // a conditional arm is destroyed under the arm's condition (the
-// control-flow graph, spec/sema.md §7.5.4).
+// control-flow graph, spec/sema.md §7.5.1).
 //@ expect: cfg
 //@ cfg-diverges: nested clang leaves the destructor decision of a temporary in a nested operand of a `?:` arm unreachable (CFG.cpp VisitConditionalOperatorForTemporaryDtors drops the true arm without its own temporary)
 struct T {

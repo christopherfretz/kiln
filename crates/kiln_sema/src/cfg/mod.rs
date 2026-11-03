@@ -20,6 +20,7 @@
 //! FindUnreachableCode`): a configuration value does not prune, an
 //! `if constexpr` prunes nothing, every case of a switch is reached.
 
+mod body;
 mod build;
 mod dump;
 mod query;
@@ -30,8 +31,9 @@ use std::ops::Range;
 
 use kiln_ast::{DeclId, ExprId, StmtId};
 
+pub(crate) use body::BodyCfg;
 pub(crate) use build::CfgReq;
-pub(crate) use query::{DeadScan, ExitKinds, StmtFlow, Unit};
+pub(crate) use query::{DeadScan, Unit};
 
 /// The default `-fkiln-cfg-max-elems`: at about 16 bytes per element
 /// and a block and two edges per four elements, a graph at the cap holds

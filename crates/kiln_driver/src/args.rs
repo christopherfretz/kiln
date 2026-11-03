@@ -318,7 +318,7 @@ pub struct Args {
     pub dump_vtable_layouts: bool,
     /// `-fkiln-dump-cfg` (`-fsyntax-only`): the control-flow graph of
     /// every analysed function body, in clang's `debug.DumpCFG` layout
-    /// (spec/sema.md §7.5.4).
+    /// (spec/sema.md §7.5.1).
     pub dump_cfg: bool,
     /// `-fkiln-cfg-max-elems=N`: the element cap of one body's graph
     /// (spec/sema.md §7.5).

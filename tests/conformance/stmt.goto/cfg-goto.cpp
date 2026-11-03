@@ -1,7 +1,7 @@
 // [stmt.goto]/1, [stmt.label]/1, [stmt.break]/1, [stmt.cont]/1: jumps end
 // their block with an edge to the target; a label starts a block; a jump
 // out of a scope runs its destructors first (the control-flow graph,
-// spec/sema.md §7.5.4).
+// spec/sema.md §7.5.1).
 //@ expect: cfg
 void g();
 int h(int);

@@ -2,7 +2,7 @@
 // [class.dtor]/14, [class.base.init]/1: calls of noreturn functions end
 // their block in the exit; try blocks dispatch to their handlers; scope
 // ends run destructors; constructors initialize their members (the
-// control-flow graph, spec/sema.md §7.5.4).
+// control-flow graph, spec/sema.md §7.5.1).
 //@ expect: cfg
 [[noreturn]] void ab();
 void g();

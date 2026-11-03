@@ -1,7 +1,7 @@
 // [stmt.while]/1, [stmt.do]/1, [stmt.for]/1, [expr.log.and]/1,
 // [expr.log.or]/1: a loop condition built of `&&` and `||` branches
 // straight to the body and the exit (the control-flow graph,
-// spec/sema.md §7.5.4).
+// spec/sema.md §7.5.1).
 //@ expect: cfg
 void g();
 int h(int);

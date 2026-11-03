@@ -1,6 +1,6 @@
 // [stmt.while]/1, [stmt.do]/1, [stmt.for]/1, [stmt.ranged]/1,
 // [stmt.break]/1, [stmt.cont]/1: the control-flow graph of iteration
-// statements (spec/sema.md §7.5.4); a loop whose condition is a constant
+// statements (spec/sema.md §7.5.1); a loop whose condition is a constant
 // drops the dead edge (clang prints it as NULL).
 //@ expect: cfg
 void g();

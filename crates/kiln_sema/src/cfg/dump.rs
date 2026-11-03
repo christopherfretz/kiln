@@ -1,5 +1,5 @@
 //! `-fkiln-dump-cfg`: the graph in clang's `debug.DumpCFG` layout
-//! (spec/sema.md §7.5.4, spec/harness.md "cfg tests").
+//! (spec/sema.md §7.5.1, spec/harness.md "cfg tests").
 //!
 //! The layout is clang's: a signature line, then each block as
 //! ` [B<n>]` (`(ENTRY)`, `(EXIT)`, `(NORETURN)`), its label, its
@@ -41,18 +41,6 @@ impl Cfg {
 }
 
 impl Sema<'_, '_> {
-    /// `-fkiln-dump-cfg`: builds the graph of function `f`'s body and
-    /// appends its dump to [`Sema::cfg_out`].
-    pub(crate) fn dump_body_cfg(&mut self, f: DeclId, body: StmtId) {
-        let scratch = std::mem::take(&mut self.cfg_scratch);
-        let max = self.cfg_max_elems;
-        let cfg = self.build_cfg(Some(f), body, scratch, super::CfgReq::default(), max);
-        let mut out = std::mem::take(&mut self.cfg_out);
-        self.dump_cfg(&cfg, &mut out);
-        self.cfg_out = out;
-        self.cfg_scratch = cfg;
-    }
-
     /// Appends the dump of `cfg` to `out`.
     pub(crate) fn dump_cfg(&self, cfg: &Cfg, out: &mut String) {
         let name = cfg.func.map_or_else(|| "<body>".to_owned(), |f| self.qualified_decl_name(f));

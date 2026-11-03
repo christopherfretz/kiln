@@ -36,7 +36,6 @@ use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
 
 use crate::Sema;
-use crate::stmt::Falloff;
 
 /// The state of one walk.
 #[derive(Default)]
@@ -158,73 +157,6 @@ struct SwitchFrame {
 }
 
 impl Sema<'_, '_> {
-    /// The reachable throw-expressions of `body` that escape it; `None`
-    /// when clang would build no CFG.
-    pub(super) fn reachable_escaping_throws(&mut self, body: StmtId) -> Option<Vec<ExprId>> {
-        let mut r = Reach::default();
-        loop {
-            r.changed = false;
-            r.found.clear();
-            self.reach_stmt(body, true, &mut r);
-            if r.no_cfg {
-                return None;
-            }
-            if !r.changed {
-                return Some(r.found);
-            }
-        }
-    }
-
-    /// The expressions of `wanted` that are unreachable in `body` (clang
-    /// `IssueWarnings` filtering `PossiblyUnreachableDiags` through the
-    /// CFG); `None` when clang would build no CFG. An expression the walk
-    /// does not meet counts as reachable, as an unmapped statement does
-    /// in clang.
-    pub(crate) fn unreachable_exprs(
-        &mut self,
-        body: StmtId,
-        wanted: HashSet<ExprId>,
-    ) -> Option<HashSet<ExprId>> {
-        let mut r = Reach { wanted, root: Some(body), ..Reach::default() };
-        loop {
-            r.changed = false;
-            r.found.clear();
-            self.reach_stmt(body, true, &mut r);
-            if r.no_cfg {
-                return None;
-            }
-            if !r.changed {
-                return Some(r.visited.difference(&r.reached).copied().collect());
-            }
-        }
-    }
-
-    /// How control reaches the end of the function body `body` (clang
-    /// `CheckFallThrough`): `Never` when it does not (or clang builds no
-    /// CFG), `Maybe` when the body also returns, throws out or calls a
-    /// `noreturn` function on a live path, else `Always`.
-    pub(crate) fn fall_off_kind(&mut self, body: StmtId) -> Falloff {
-        let mut r = Reach { falloff: true, root: Some(body), ..Reach::default() };
-        loop {
-            r.changed = false;
-            r.found.clear();
-            (r.live_return, r.fake_edge, r.abnormal_edge) = (false, false, false);
-            let end = self.reach_stmt(body, true, &mut r);
-            if r.no_cfg {
-                return Falloff::Never;
-            }
-            if !r.changed {
-                return if !end {
-                    Falloff::Never
-                } else if r.live_return || r.fake_edge || r.abnormal_edge {
-                    Falloff::Maybe
-                } else {
-                    Falloff::Always
-                };
-            }
-        }
-    }
-
     /// Whether the dispatch block of try statement `s` has predecessors
     /// in clang's CFG: a throw-expression in its try-block (outside a
     /// nested try-block and a lambda), or a nested try without a

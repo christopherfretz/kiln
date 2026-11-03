@@ -1,5 +1,5 @@
 // [stmt.switch]/1, [stmt.goto]/1, [stmt.label]/1: the control-flow graph
-// of switch statements and jumps (spec/sema.md §7.5.4).
+// of switch statements and jumps (spec/sema.md §7.5.1).
 //@ expect: cfg
 void g();
 

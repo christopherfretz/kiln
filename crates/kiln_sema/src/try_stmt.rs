@@ -370,8 +370,9 @@ impl Sema<'_, '_> {
     /// throw-expression in the body of a function with a non-throwing
     /// exception specification ([except.spec]/5) that no enclosing handler
     /// of the function catches ([except.handle]/3) — `std::terminate` is
-    /// called ([except.terminate]). Only the throws reachable in the body
-    /// count (`reach.rs`, clang's CFG walk).
+    /// called ([except.terminate]). Only the throws reachable in the
+    /// body's graph count (spec/sema.md §7.5.1); a body with no
+    /// throw-expression builds none.
     pub(crate) fn check_throw_in_nothrow(&mut self, f: DeclId, body: StmtId) {
         let t = &self.ast.types;
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
@@ -385,7 +386,9 @@ impl Sema<'_, '_> {
         if found.is_empty() {
             return;
         }
-        let Some(mut found) = self.reachable_escaping_throws(body) else { return };
+        let Some(mut found) = self.with_cfg(body, |s, c| s.cfg_escaping_throws(c)) else {
+            return;
+        };
         if found.is_empty() {
             return;
         }

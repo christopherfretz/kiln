@@ -1470,12 +1470,16 @@ impl Sema<'_, '_> {
         if self.in_template() && !self.is_named_function_template(state.decl) {
             state.runtime_diags.retain(|(_, anchor)| anchor.is_none());
         }
+        // The body's graph, built at its first query (spec/sema.md
+        // §7.5.1).
         let dead = if self.diags.uncompilable_error_count() > 0 || self.in_template() {
             None
         } else {
             let wanted: HashSet<ExprId> =
                 state.runtime_diags.iter().filter_map(|(_, e)| *e).collect();
-            if wanted.is_empty() { None } else { self.unreachable_exprs(body, wanted) }
+            let probe = !wanted.is_empty();
+            self.cfg_plan(state.decl, body, wanted, state.has_fallthrough);
+            if probe { self.with_cfg(body, |_, c| c.unreachable_probes()) } else { None }
         };
         for (msg, anchor) in state.runtime_diags {
             if let (Some(dead), Some(e)) = (&dead, anchor)
@@ -1493,7 +1497,7 @@ impl Sema<'_, '_> {
             return wrapped;
         }
         if self.cfg_dump {
-            self.dump_body_cfg(state.decl, body);
+            self.dump_body_cfg();
         }
         // clang `ActOnFinishFunctionBody`: no fall-off check for a
         // `naked` function (nor for `main`, below).
@@ -1616,11 +1620,22 @@ impl Sema<'_, '_> {
         self.ast.is_noreturn_fn(f)
     }
 
-    /// Whether control can reach the end of the function body `s`
-    /// (clang `CheckFallThrough` over the body's CFG, mirrored by the
-    /// reachability walk; spec/sema.md §7.5).
+    /// How control reaches the end of the function body `s` (clang
+    /// `CheckFallThrough` over the body's graph; spec/sema.md §7.5.1):
+    /// `Never` when it does not (or there is no graph), `Maybe` when the
+    /// body also returns, throws out or calls a `noreturn` function on a
+    /// live path, else `Always`.
     fn falls_off(&mut self, s: StmtId) -> Falloff {
-        self.fall_off_kind(s)
+        match self.with_cfg(s, |_, c| c.exit_kinds()) {
+            Some(k) if k.plain => {
+                if k.ret || k.fake || k.abnormal {
+                    Falloff::Maybe
+                } else {
+                    Falloff::Always
+                }
+            }
+            _ => Falloff::Never,
+        }
     }
 
     pub(crate) fn is_noreturn_call(&self, e: ExprId) -> bool {

@@ -262,7 +262,7 @@ pub struct Sema<'a, 'sm> {
     /// `::ceil` (spec/sema.md §5.4).
     pub gnu_lib_builtins: bool,
     /// `-fkiln-dump-cfg`: build the graph of every analysed body and
-    /// append its dump to [`Sema::cfg_out`] (spec/sema.md §7.5.4).
+    /// append its dump to [`Sema::cfg_out`] (spec/sema.md §7.5.1).
     pub cfg_dump: bool,
     /// The dumps of `-fkiln-dump-cfg`.
     pub cfg_out: String,
@@ -270,8 +270,9 @@ pub struct Sema<'a, 'sm> {
     /// elements gets none; its flow-sensitive warnings are skipped with
     /// `-Rkiln-analysis-skipped` (spec/sema.md §7.5).
     pub cfg_max_elems: usize,
-    /// The graph's vectors, reused from body to body.
-    pub(crate) cfg_scratch: cfg::Cfg,
+    /// The graph of the body being finished, its vectors reused from
+    /// body to body.
+    pub(crate) cfg_body: cfg::BodyCfg,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -911,7 +912,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_dump: false,
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
-            cfg_scratch: cfg::Cfg::default(),
+            cfg_body: cfg::BodyCfg::default(),
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,
