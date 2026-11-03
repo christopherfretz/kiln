@@ -3730,7 +3730,7 @@ impl Parser<'_, '_> {
 
     /// The `;` ending a simple-declaration.
     fn expect_declaration_semi(&mut self, ctx: DeclaratorContext, at: Option<Loc>) {
-        if self.eat(Punct::Semi).is_none() {
+        if !self.eat_extraneous_before_semi() && self.eat(Punct::Semi).is_none() {
             let id = if ctx == DeclaratorContext::File {
                 DiagId::parse_expected_semi_toplevel
             } else {
