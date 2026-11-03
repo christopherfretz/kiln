@@ -347,7 +347,10 @@ impl Sema<'_, '_> {
             ]
             .into());
         }
-        let scope = ctx.scope.unwrap_or(self.ctx);
+        // The consteval block's scope is where the block is declared (the
+        // bridge's context), not `ctx.scope`: that is the innermost
+        // function on the stack (the block's own body, or a callee).
+        let scope = self.ctx;
         let target = self.ast.decls.get(r).ctx().unwrap_or(self.ast.tu);
         if let Some(between) = self.intervening_scope(scope, target) {
             let what = self.scope_str(between);

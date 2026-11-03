@@ -869,6 +869,25 @@ it through kiln_diag's fatal handling; the core itself carries on.
   (`cpp_cond_plain_decimal_matches_classify_number`,
   `cpp_pre_dir_table_matches_names`, the debug assertion in `spelling()`,
   and the randomized same-entry tests in kiln_source).
+- **Directives cost O(1) in the macro history** (WP-487). Every
+  `#define`/`#undef` reports to `Preprocessor::note_macro_change`, which
+  keeps the attribute-macro history (`attr_macros`, for
+  `-Wimplicit-fallthrough`'s fix-it). The entry still in effect for a
+  name is found through the `attr_live` index (name to history index),
+  never by scanning the history, and a directive returns at once when it
+  neither defines an attribute macro nor touches a live one. Before
+  WP-487 each directive scanned the whole history once any attribute
+  macro existed, which made `bench/pp/headers.cpp` (5120 re-entries, two
+  attribute macros redefined per pass) quadratic: 2.4 s against 0.9 s.
+  `hooks.rs` `cpp_scope_attr_macro_history` pins the history's contents
+  and `cpp_scope_attr_macro_history_churn` its shape under 4000 redefines.
+  The include path itself (header-search cache, `#pragma once`, the
+  guard detector) was measured and is not where the time went: the
+  libc++-include half of the bench moved 347 to 374 ms over the window.
+- **Bench budget.** `bench/pp/headers.cpp` carries a `budget-time:`
+  directive (spec/bench.md) at 1.5x its recorded kiln median, so
+  `cargo xtask bench` fails, even under `--record`, when `-E` on it
+  regresses past that.
 - **Speed and memory against clang.** `-E` on all libc++ 19 headers must
   take at most 1.5x clang's time and use no more than clang's peak RSS.
   The baseline is in `bench/baselines/pp.json` (M1 gate).

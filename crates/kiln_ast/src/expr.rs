@@ -2645,9 +2645,16 @@ impl ExprArena {
     /// `CXXDefaultInitExpr` and the default argument of a
     /// `CXXDefaultArgExpr`.
     pub fn children(&self, e: ExprId, lists: &IdLists) -> Vec<ExprId> {
+        let mut v = Vec::new();
+        self.children_into(e, lists, &mut v);
+        v
+    }
+
+    /// [`ExprArena::children`], appended to `v` (no allocation once `v`
+    /// has grown: the CFG builder's walk, spec/sema.md §7.5).
+    pub fn children_into(&self, e: ExprId, lists: &IdLists, v: &mut Vec<ExprId>) {
         let n = self.get(e);
         let id = |w: u32| ExprId::from_raw(w);
-        let mut v = Vec::new();
         match n.kind {
             ExprKind::MemberExpr
             | ExprKind::UnaryOperator
@@ -2737,7 +2744,7 @@ impl ExprArena {
             ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)).take(5));
             }
-            ExprKind::PseudoObjectExpr => self.pseudo_children(n, lists, &mut v),
+            ExprKind::PseudoObjectExpr => self.pseudo_children(n, lists, v),
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
             | ExprKind::AtomicExpr
@@ -2748,7 +2755,6 @@ impl ExprArena {
             }
             _ => {}
         }
-        v
     }
 
     pub(crate) fn live_bytes(&self) -> u64 {

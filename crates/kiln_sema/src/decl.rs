@@ -9247,6 +9247,9 @@ impl Sema<'_, '_> {
         if kind == AttrKind::ABI_TAG {
             return self.abi_tag_attribute(syntax, &n, args, loc);
         }
+        if kind == AttrKind::DIAGNOSE_IF {
+            return self.diagnose_if_attribute(syntax, args, loc);
+        }
         if kind == AttrKind::ENABLE_IF {
             return self.enable_if_attribute(syntax, args, loc);
         }
@@ -9986,6 +9989,8 @@ fn attr_kind_of(
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
         // clang `GNU<"enable_if">`: no `[[...]]` spelling.
         ("enable_if", _, _) if gnu_syntax => AttrKind::ENABLE_IF,
+        // clang `GNU<"diagnose_if">`: likewise.
+        ("diagnose_if", _, _) if gnu_syntax => AttrKind::DIAGNOSE_IF,
         ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
         ("exclude_from_explicit_instantiation", _, gnu) if gnu || clang_scope => {
             AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION

@@ -87,9 +87,8 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   enumerator as one a switch must handle (only `[[maybe_unused]]` ones
   may be omitted; `switch_enum.rs`), which also decides whether the
   switch covers every value for `-Wreturn-type`. An `if consteval` is a
-  branch on an unknown condition in the reachability walk (clang 22
-  builds its CFG; clang 19 builds none and checks nothing;
-  `try_stmt/reach.rs`). `array is too large (N elements)` groups N's
+  branch on an unknown condition in the CFG (clang 22
+  builds its CFG; clang 19 builds none and checks nothing; §7.5.1). `array is too large (N elements)` groups N's
   digits with `'` (`18'446'744'073'709'551'615`;
   `element_count_text`). Wording-only changes are `_19` diag rows
   (spec/diag.md §2.5), e.g. `case ranges are a GNU extension`, `you need
@@ -760,7 +759,7 @@ Redeclaration and linkage rules:
   - incomplete parameter and return types (with a forward-declaration
     note)
   - falling off the end of a non-`void` function (`falls_off`, the
-    clang CheckFallThrough port in `try_stmt/reach.rs`, §7.5). This
+    clang CheckFallThrough port on the CFG's `exit_kinds`, §7.5). This
     warning is suppressed when the function had errors.
 - `main` must return `int` ([basic.start.main]/2). Falling off the end
   of `main` returns 0, so it never warns.
@@ -1187,7 +1186,8 @@ Redeclaration and linkage rules:
     run first in `late_analysis` (so after the queued runtime warnings
     and before the placement errors), not in a template definition or
     once an error occurred, but in each instantiation:
-    - kiln has no CFG. A label's predecessors are found structurally:
+    - A label's predecessors are found structurally (clang reads the
+      graph's block predecessors; the two agree on the corpus):
       the statements before it in its block, walked back past empty
       ones (`;`, `{}`, an empty label block, which clang's
       `getLastStmt` counts as the predecessor itself), the branches of
@@ -1200,10 +1200,10 @@ Redeclaration and linkage rules:
       condition is reached (the body falls off its end or a `continue`
       of that loop is reached) and is not a constant false; the
       placement check likewise lets a `[[fallthrough]];` before such a
-      `do` precede that label. Reachability comes from `Sema::stmt_flow`
-      (`try_stmt/reach.rs`): the `Reach` walk recording each
-      statement's live-in and live-out with every case label reachable
-      (clang `fillReachableBlocks`). A switch dispatch, a label directly
+      `do` precede that label. Reachability comes from the body's CFG
+      (`Cfg::stmt_flow`, §7.5.1): each statement's entry and exit
+      position is live when a live edge reaches it from the entry or
+      from any case block (clang `fillReachableBlocks`). A switch dispatch, a label directly
       before (`case 1: case 2:`, `L: case 2:`) and an unreachable
       predecessor are good; a reachable `[[fallthrough]];` is
       annotated; anything else is unannotated.
@@ -2126,16 +2126,34 @@ and returns the scope it names:
       the parameters. A condition that is value-dependent, not a
       constant expression, or false makes the candidate not viable;
       its note is "candidate disabled: <message>" at the function
-      (`<no message provided>` for an empty one). If evaluating with all
+      (`<no message provided>` for an empty one). The arguments bind
+      from the first parameter, except that a non-static member
+      function's object argument binds to no parameter. Two cases follow
+      clang (WP-486): a non-member operator function's first operand
+      binds to its first parameter ([over.match.oper]/2); a member
+      function with an explicit object parameter gets the arguments
+      *without* the object argument, bound from the object parameter on
+      (they shift by one, clang `CheckEnableIf` passing the call's
+      arguments), and an argument that does not convert to the
+      parameter it lands on, or a parameter left with neither an
+      argument nor a default argument, disables it by its first
+      condition (clang `convertArgsForAvailabilityChecks` failing).
+      If evaluating with all
       values fails, the arguments that are not constant expressions on
       their own are dropped and the condition is evaluated again, so
       `__builtin_constant_p(n)` of a non-constant argument is false
       rather than not constant (clang `EvaluateWithSubstitution`).
     - A call without overload resolution (a member call, a call through
       a name of one function) is checked on its converted arguments in
-      `convert_call_args`: "no matching function for call to 'f'" at the
-      callee, or "no matching member function for call to 'm'" at the
-      member name, with the same note.
+      `convert_call_args`, the object argument of an explicit object
+      member function binding to the object parameter ([over.match.funcs.
+      general]/4): "no matching function for call to 'f'" at the callee,
+      or "no matching member function for call to 'm'" at the member
+      name (any member function, clang `BuildCallExpr`'s
+      `isa<CXXMethodDecl>`), with the same note. A call that overload
+      resolution chose is not checked again (`CallCallee::enable_if`;
+      `OvlState::resolved_member` marks a resolved explicit object member
+      call, and an operator call never re-checks).
     - Ranking ([over.match.best], last; clang `compareEnableIfAttrs`): a
       candidate with conditions beats one without; between two with
       conditions, compared in order, the one whose list properly extends
@@ -2145,11 +2163,107 @@ and returns the scope it names:
       parameters naming the specialization's (`Substituter::
       enable_if_cond`, from `copy_attrs`), after deduction; a failed
       substitution drops the attribute.
-    - Not done: `diagnose_if`, the never-constant check
-      (`err_attr_cond_never_constant_expr`), the object argument of an
-      explicit object member function (it takes no value).
+    - Never constant (WP-486, `attr_cond.rs`; clang
+      `checkFunctionConditionAttr`, `Expr::isPotentialConstantExprUnevaluated`):
+      a condition (of `enable_if` or `diagnose_if`) that is not
+      value-dependent and can be a constant expression for no values of
+      the parameters is "'enable_if' attribute expression never produces
+      a constant expression" (error, at the attribute) with the
+      evaluation's notes, and the attribute is dropped. kiln walks the
+      condition as clang's evaluator goes on after failing to read a
+      parameter: a subexpression naming no parameter (nor `this`) that is
+      a prvalue of arithmetic or enumeration type is evaluated on its own
+      (a failure with notes decides); one naming a parameter is first
+      evaluated whole (a success is a value, e.g. a parameter only in
+      `sizeof`), then taken apart — every operand of a built-in operator,
+      cast, subscript, member access or call (whose body is then not
+      entered), in order; `&&`/`||` stop at an unknown left operand and
+      short-circuit on a known one; `?:` takes the known condition's arm,
+      and with an unknown condition fails only if both arms do ("both arms
+      of conditional operator are unable to produce a constant
+      expression", at the expression). Anything else is maybe constant: a
+      condition is never rejected that clang accepts, but some that clang
+      rejects are missed (a call whose arguments are all known but name a
+      parameter; a non-scalar operand). Checked at the declaration
+      (`check_decl_attrs`) and, for a dependent condition, after
+      substitution (`enable_if_cond`); there the error is a hard one even
+      during deduction (clang substitutes attributes in the
+      specialization's instantiation context), its context note "in
+      instantiation of function template specialization 'f<X>' requested
+      here" replacing the deduction's, and the attribute is dropped
+      rather than the candidate.
+    - Not done: taking the address of a
+      function with a non-tautological condition ("cannot take address
+      of function 'f' because it has one or more non-tautological
+      enable_if conditions"); clang gives a class-type by-value parameter
+      initialized by copying an lvalue no value (its implicit copy
+      constructor is not yet defined), kiln evaluates the copy.
     - Tests: `tests/conformance/dcl.attr/enable-if-viability.cpp`,
-      `enable-if-ranking.cpp`.
+      `enable-if-ranking.cpp`, `enable-if-explicit-object.cpp`,
+      `attr-cond-never-constant.cpp`.
+  - **`diagnose_if`** (clang extension, `__attribute__((diagnose_if(cond,
+    "message", "error"|"warning"[, "group"])))`; WP-486, `diagnose_if.rs`;
+    clang AttrDocs "diagnose_if", `Sema::diagnoseArgDependentDiagnoseIfAttrs`
+    / `diagnoseArgIndependentDiagnoseIfAttrs`):
+    - Form: the parser parses the arguments with the function's parameters
+      in scope, as for `enable_if`. Clang 22 takes 3 or 4 arguments ("'x'
+      attribute takes at least 3 arguments" / "takes no more than 4
+      arguments"), clang 19 exactly 3 ("requires exactly 3 arguments"),
+      each at the attribute name. The condition is contextually converted
+      to `bool` unless type-dependent; the message, type and group must be
+      string literals ("expected string literal as argument of
+      'diagnose_if' attribute", at the argument); the type must be "error"
+      or "warning" ("invalid diagnostic type for 'diagnose_if'; use
+      \"error\" or \"warning\" instead"); the group must name a warning
+      group kiln knows ("unknown warning group 'x'"). Any of these drops
+      the attribute. Subject: functions; on anything else "'diagnose_if'
+      attribute only applies to functions, Objective-C methods, and
+      Objective-C properties" (`-Wignored-attributes`).
+    - Kind: a condition that names a parameter or `this` is
+      *argument-dependent*; any other is *argument-independent*.
+    - Argument-dependent conditions are evaluated at each call with the
+      converted arguments, default arguments included, by the same
+      evaluation as `enable_if` (`cond_with_args`: a non-constant argument
+      is dropped and the condition retried). The arguments bind as for
+      `enable_if`, the object argument of an explicit object member
+      function binding to the object parameter. The diagnostic is at the
+      call's `)`, at the operator of an operator call, and at the
+      declarator of a constructed variable. Hooks: `convert_call_args`
+      (every call, including a static member function named through a
+      member access) and `use_ctor`.
+    - Argument-independent conditions are evaluated at each use of the
+      function (every `DeclRefExpr`, `diagnose_if_use`), also inside a
+      template definition.
+    - Result: if any true condition is an "error", the first one alone is
+      reported, as an error; otherwise each true "warning" is reported, in
+      declaration order. Conditions accumulate over redeclarations, oldest
+      first. A condition that is not a constant expression (or is
+      value-dependent) is ignored. Every diagnostic is the message
+      verbatim; warnings are in `-Wuser-defined-warnings` and show in
+      system headers (clang `ShowInSystemHeader`, so libc++'s
+      `_LIBCPP_DIAGNOSE_WARNING` checks fire). Each has the note "from
+      'diagnose_if' attribute on 'f':" at the attribute, except that an
+      attribute with a group gets no note. Duplicates are not merged
+      (two attributes may report at one location).
+    - Templates: a call in a template definition is not diagnosed there.
+      A non-dependent call is shared by the instantiations rather than
+      rebuilt, so it is recorded (`Sema::diagnose_if_recheck`) and checked
+      again whenever an instantiation reaches it (`mark_shared_expr_
+      referenced`); a dependent call is checked when it is rebuilt. The
+      condition is substituted like `enable_if`'s, and checked like it for
+      never being constant.
+    - Explicit object member calls inside a template are rebuilt through
+      `rebuild_explicit_object_call`, keeping the object argument bound to
+      the object parameter (before WP-486 such a rebuilt call was "called
+      object type '…' is not a function or function pointer").
+    - Not done: a condition naming `this` is evaluated without the object
+      (clang evaluates it on a constant object, e.g. `cs.m()` on a
+      `constexpr S cs`), so it is ignored; the group argument does not put
+      the diagnostic in that group (it stays in `-Wuser-defined-warnings`,
+      so `-Wno-<group>` does not silence it); an argument-independent
+      "error" does not make the use fail overload resolution.
+    - Tests: `tests/conformance/dcl.attr/diagnose-if.cpp`,
+      `diagnose-if-form.cpp`, `diagnose-if-form-19.cpp`.
   - **The `trivial_abi` attribute** (clang extension, `[[clang::trivial_abi]]`
     / `__attribute__((trivial_abi))`; WP-460, `trivial_abi.rs`; clang
     AttrDocs "trivial_abi", `Sema::checkIllFormedTrivialABIStruct`):
@@ -2191,8 +2305,8 @@ and returns the scope it names:
     - `__builtin_is_cpp_trivially_relocatable` is not implied (clang 22
       answers false for a class with user-provided copy/move members);
       `__is_trivially_relocatable` follows `can_pass_in_registers` as in
-      clang. Not done: clang 22's deprecation warning on
-      `__is_trivially_relocatable`.
+      clang; at compat 22 it warns `-Wdeprecated-builtins` (builtin
+      traits §, WP-486).
     - Tests: `tests/conformance/dcl.attr/trivial-abi-attribute.cpp`,
       `tests/conformance/class.temporary/run-trivial-abi-callee-destroys.cpp`,
       `tests/codegen/trivial_abi_calls.cpp`, `trivial_abi_subobjects.cpp`.
@@ -6583,40 +6697,19 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   destructor/deallocator note); in an instantiated function template
   specialization the name carries its arguments, unqualified (`'k<int>'`,
   `except.spec/throw-in-nothrow-specialization.cpp`); a `[[noreturn]]`
-  function that can fall off is `-Winvalid-noreturn`. Only throws reachable in clang's CFG
-  count (`try_stmt/reach.rs`, WP-118): a structured walk ends the live
-  path at `return`/`break`/`continue`/`goto`/a throw/a `noreturn` call;
-  prunes edges by `tryEvaluateBool` (constant folding, `&&`/`||` decided
-  by one side, `checkIncorrectLogicOperator`) in `if`, loops, `?:`,
-  `&&`/`||`; reaches only the matching case of a constant switch and not
-  the end of a switch with no default over a fully covered enumeration
-  (`isAllEnumCasesCovered`); reaches a handler only from a live throw in
-  its try-block (or in a nested try without a catch-all, as calls have
-  no exception edges); gives a live `asm goto` an edge to each of its
-  labels besides the next statement (WP-230); iterates `goto` labels and loop back edges to a
-  fixed point; and checks nothing in a function with an `if consteval`
-  (clang builds no CFG). The operands of `sizeof`/`alignof` are not
-  walked (a `noexcept` operand is, as clang's CFG does); a GNU case range
-  is reached when the constant condition is in `[lo, hi]` and counts
-  toward enumeration coverage (WP-205). Not modeled: implicit
-  destructors marked `noreturn`. A live GNU indirect `goto *p` reaches
-  every label whose address the body takes (clang's indirect-goto block
-  and `AddressTakenLabels`: `&&l` outside lambdas and unevaluated
-  operands, found once per walk by `addr_taken_labels`) and does not
-  fall through (WP-444, `stmt.goto/computed-goto-reachability.cpp`).
-  The fall-off analysis
-  behind -Wreturn-type / -Winvalid-noreturn (`falls_off` →
-  `fall_off_kind`, WP-219) is the same walk run to a fixed point,
-  classifying the live predecessors of the exit as in clang
-  CheckFallThrough: a live `return`/`co_return`; a throw with no
-  enclosing try (fake edge); a live `noreturn` call (abnormal edge); a
-  live try dispatch with no catch-all and no enclosing try (abnormal
-  edge; a dispatch with no predecessor, i.e. no throw and no nested try
-  without catch-all in its block, counts as live, as clang's CFG
-  rescans it); and the end of the body (plain edge). No plain edge is
-  `Never`; a plain edge plus any other is `Maybe` (`... in all control
-  paths`); a plain edge alone is `Always`. A function with `if
-  consteval` is `Never`.
+  function that can fall off is `-Winvalid-noreturn`. Only the throws
+  reachable in the body's graph count (§7.5.1, `cfg_escaping_throws`;
+  a body with no throw-expression builds none). The fall-off analysis
+  behind -Wreturn-type / -Winvalid-noreturn (`falls_off`) reads the
+  graph's live exit predecessors (`exit_kinds`, clang
+  `CheckFallThrough`). A `return`/`co_return` edge, a fake edge (a
+  throw with no enclosing try) and an abnormal edge (a `noreturn` call
+  or destructor, or a try dispatch with no catch-all and no enclosing
+  try, a dispatch with no predecessor counting as live) are the
+  non-plain kinds; the end of the body is the plain edge. No plain edge
+  is `Never`; a plain edge plus any other is `Maybe` (`... in all
+  control paths`); a plain edge alone is `Always`. A body with no graph
+  (an `if consteval` under clang 19, or over the size cap) is `Never`.
 - Initialization (one condition in `init.rs`, flagged): brace elision
   ([dcl.init.aggr]/16) only descends into an aggregate element; a class
   with a user-provided constructor is copy-initialized from the element
@@ -6625,6 +6718,207 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   the note. (The handler member-reference warning, throw reachability,
   `arr()` member value-initialization of a class array and the
   `new K[2][3]` constructor initializer landed in WP-118.)
+
+#### 7.5.1 The control-flow graph (`cfg/`, WP-509)
+
+One graph per analysed function body (clang `CFG`, built by
+`AnalysisBasedWarnings::IssueWarnings` with `PruneTriviallyFalseEdges`,
+`AddInitializers`, `AddImplicitDtors`, `AddTemporaryDtors`, no EH edges;
+docs/design/reachability.md). Every flow-sensitive consumer queries the
+same graph.
+
+- **Lifetime** (`cfg/body.rs`). The end of a body that is analysed (no
+  uncompilable error, not a dependent context) *plans* a graph
+  (`cfg_plan`) with the side tables its enabled consumers need
+  (`CfgReq`): the deferred runtime-behavior diagnostics' anchors
+  (`probes`), the statement flow when `-Wimplicit-fallthrough` or the
+  misplaced-`[[fallthrough]]` check is on, the unreachable-code tables
+  when a `-Wunreachable-code*` id is on outside an instantiation. The
+  first query (`with_cfg`) builds it. The next body clears it: the
+  vectors are kept, so steady-state memory is bounded by the largest
+  body, and a body no consumer asks about builds nothing.
+- **Model** (`cfg/mod.rs`). Flat vectors of blocks, elements and edges.
+  A block holds ranges into them, so there is no `Rc`, no pointer graph
+  and no `unsafe`. Block 0 is the entry and block 1 the exit; the body's
+  blocks follow in creation order. An element is one of:
+  - a statement (a `[[fallthrough]]`, a `goto`, a `return`, a
+    declaration);
+  - an expression, after its operands;
+  - a constructor's member initializer;
+  - the destructor call of an automatic variable;
+  - the destructor call of a temporary.
+
+  A block ends in a terminator: `if`, a loop, `switch`, a try dispatch,
+  `&&`/`||`, `?:`, a temporary-destructor decision, a jump, `asm goto`
+  or the indirect-goto block. Each edge carries bits:
+  - `LIVE`: clang's pruned graph;
+  - `SCAN`: the edge as clang's unreachable-code scan follows it;
+  - `NULL`: a dropped loop edge;
+  - `RETURN`, `FAKE` (a throw leaving the body) and `ABNORMAL` (a
+    `noreturn` call or destructor, or a dispatch with no catch-all
+    leaving the body), which classify the exit's predecessors.
+
+  A pruned edge stays in the graph as clang's unreachable alternate.
+- **Builder** (`cfg/build.rs`). One forward walk over the body (clang's
+  `CFGBuilder` walks backwards; the graphs agree up to numbering). Blocks
+  are made lazily: when an element is pushed, when a label or case
+  starts one, and at joins.
+  - A condition that `known_truth` folds (`cfg/truth.rs`, clang
+    `tryEvaluateBool`: constant folding, `&&`/`||` decided by one side,
+    `checkIncorrectLogicOperator`) prunes the other edge of an `if`, a
+    loop, a `?:` or an `&&`/`||`. In the scan bits, a configuration
+    value (clang `isConfigurationValue`) does not prune and an
+    `if constexpr` prunes nothing.
+  - An `if`/`while`/`for` condition (without a condition variable) that
+    is `&&`/`||` is clang's `VisitLogicalOperator`. Each left operand's
+    block ends in its operator, and the short-circuit edges go straight
+    to the statement's targets. A `do` condition, and an operator used
+    as a value, joins in one block that holds the value.
+  - `return`, `break`, `continue` and `goto` run the destructors of the
+    scopes they leave and jump. A label starts a block: a forward
+    `goto` is patched when its label is met, and a backward one targets
+    the label's block.
+  - A `switch` has an edge to each case. A constant condition makes only
+    the matching case (else the default) live, and a GNU case range
+    matches `[lo, hi]`. The default edge, or the edge past the body when
+    there is no default, comes last. It is not live after a match, nor
+    over an enumeration whose enumerators all have cases (clang
+    `isAllEnumCasesCovered`). The scan follows every case edge.
+  - A throw-expression ends its block. With no enclosing try it goes to
+    the exit (`FAKE`); otherwise it goes to the innermost try's dispatch
+    block. A dispatch has an edge to each handler, then, without a
+    catch-all, to the enclosing dispatch (or the exit, `ABNORMAL`).
+    Calls have no exception edges.
+  - A call to a `noreturn` function, or a `noreturn` destructor (of a
+    variable or a temporary), ends a `NORETURN` block whose only
+    successor is the exit (`ABNORMAL`).
+  - Temporaries (clang `TempDtorContext`). Inside an
+    `ExprWithCleanups`, each `CXXBindTemporaryExpr` that is not
+    lifetime-extended records its destructor. Those destructors follow
+    the full-expression in reverse construction order. A temporary made
+    in a conditional operand (an arm of `?:`, the right operand of
+    `&&`/`||`) is destroyed under a decision block (`(Temp Dtor)`)
+    branching on that operand's first temporary, unless the operand is
+    known to run. When both arms of a `?:` have temporaries, the false
+    arm's decision falls back to the true arm's.
+  - GNU `goto *p` jumps to one indirect-goto block, which has an edge
+    to every label whose address the body takes (`AddressTakenLabels`).
+    A live `asm goto` has an edge to each of its labels besides the
+    next statement.
+  - The operands of `sizeof`/`alignof` are not walked; a `noexcept`
+    operand is.
+  - Under `-fclang-compat=19`, an `if consteval` anywhere in the body
+    means clang builds no graph (`Status::NoCfg`); clang 22 branches on
+    an unknown condition.
+- **Budget.** A graph over `-fkiln-cfg-max-elems` elements (default
+  33554432, about 1 GiB at the cap) is not built (`Status::TooLarge`).
+  Its body's flow-sensitive warnings are skipped, with the kiln remark
+  `-Rkiln-analysis-skipped` (`flow-sensitive warnings for 'f' skipped:
+  its control-flow graph exceeds -fkiln-cfg-max-elems=N`), emitted once.
+- **Queries** (`cfg/query.rs`), each a forward reachability over the
+  edge bits from the entry:
+  - `unreachable_probes`: the anchors met only in unreachable blocks.
+    The runtime-behavior filter drops their diagnostics (an anchor the
+    walk never meets counts as reachable).
+  - `exit_kinds`: the live predecessors of the exit by kind. A dispatch
+    block with no predecessor is also a root, as clang
+    `CheckFallThrough` rescans it.
+  - `cfg_escaping_throws`: the reachable throw-expressions that no
+    enclosing handler catches (`throw_caught`).
+  - `stmt_flow` and `dead_scan`: the fallthrough and unreachable-code
+    tables (§7.10).
+- **Dump.** `-fkiln-dump-cfg` prints every planned graph in clang's
+  `debug.DumpCFG` layout: `[B<n> (ENTRY)]`, then the body's blocks from
+  the highest number, then `[B0 (EXIT)]`. Each block shows:
+  - its numbered elements as `[B<n>.<i>]`;
+  - `T: <terminator>`;
+  - its `Preds`;
+  - its `Succs`, with `(Unreachable)` and `NULL` alternates.
+
+  The `expect: cfg` tests (spec/harness.md "cfg tests") compare its
+  shape with clang's.
+- **Titles and `-fclang-compat`.** Each graph is titled with its
+  function's qualified name and `()` (`Sema::cfg_title`, also the
+  `-fkiln-cfg-stats` name). A closure type always prints as `(lambda)`
+  (`lambda(int)::(lambda)::operator()()`), whatever the
+  `-fclang-compat` level. Diagnostics at `-fclang-compat=19` print it as
+  `(anonymous class)`, clang 19's `printQualifiedName`. The dump is
+  different because no clang release has a lambda title to follow: clang's
+  analyzer dumps no lambda call operator. So the title stays the same
+  under either oracle, one golden serves both, and the harness can drop
+  kiln's `(lambda)` graphs from the comparison with the oracle
+  (`cfg_shape::fn_name`). Nothing else in the dump depends on the compat
+  level.
+- **Stats.** `-fkiln-cfg-stats` (a measurement aid, spec/driver.md)
+  builds every planned graph and prints one line per body:
+  `cfg-stats: 'f' status=Ok blocks=N elems=N edges=N bytes=N build_ns=N`,
+  `bytes` being the lengths of the block, element, edge and adjacency
+  vectors times their sizes (`Cfg::bytes`; the side tables are not
+  counted). The numbers of record are in `spec/landed/sema/WP-509.md`.
+- **Hooks for the uninitialized-values pass (WP-510).** The graph keeps
+  the element order of evaluation inside each block, the declaration
+  statements as elements, and every block's predecessors, which a
+  forward dataflow needs; nothing else is built for it yet.
+
+#### 7.5.2 Consumers of the graph (WP-509)
+
+Each consumer runs at the end of a non-dependent body with no
+uncompilable error, in this order: the runtime-behavior filter
+(`unreachable_probes`, §5.12: a queued diagnostic whose anchor only an
+unreachable block holds is dropped), the fall-off analysis
+(-Wreturn-type / -Winvalid-noreturn, §7.5 above; clang 22's inferred
+`noreturn`, §7.5.3, runs first), -Winfinite-recursion
+and the throw checks of -Wexceptions (§7.5 above), then implicit
+fallthrough (§2, `[[fallthrough]]`) and -Wunreachable-code* (§7.10)
+from `stmt_flow` / `dead_scan`. The AST walks they replace
+(`try_stmt/reach.rs`) are deleted.
+
+#### 7.5.3 -Winfinite-recursion and -Wmissing-noreturn (WP-509)
+
+- **-Winfinite-recursion** (`infinite_recursion.rs`, clang
+  `checkRecursiveFunction`; in -Wall via -Wmost, the diag off by
+  default otherwise): `all paths through this function will call
+  itself` at the start of the body, when every live path from the
+  graph's entry meets a recursive call before reaching the exit and the
+  exit has a live predecessor ([intro.progress] makes no promise; the
+  warning is clang's). A path stops at the first block holding a
+  recursive call. A recursive call is a call, member call or operator
+  call whose callee's first declaration is the function's, except a
+  call through a name qualified by a template specialization
+  (`A<T>::f()`) and a virtual member call on an object other than
+  `this`. Not checked: a specialization of a function template (clang
+  checks non-templated functions and members of class template
+  specializations, whose instantiation context note it prints). Before
+  building a graph the body's expressions are scanned for a recursive
+  call (a constructor's initializers, built earlier, are always
+  graphed), so a non-recursive body costs no graph.
+- **-Wmissing-noreturn, graph form** (`missing_noreturn.rs`, clang
+  `CheckFallThroughForBody` `NeverFallThroughOrReturn`; not in -Wall or
+  -Wextra): `function 'f' could be declared with attribute 'noreturn'`
+  at the start of the body of a function returning `void` whose graph
+  has no live plain or return predecessor of the exit. Not for a
+  `noreturn` (declared or inferred) function, a virtual function, a
+  lambda's call operator, a coroutine, a `naked` function or anything
+  instantiated from a template. A body with no graph does not warn.
+- **-Wmissing-noreturn, inferred form** (clang 22 `inferNoReturnAttr`,
+  `-fclang-compat=22` only; run when -Wreturn-type or -Wmissing-noreturn
+  is enabled, before the body's other flow checks): a body that is a
+  compound statement whose only statement is a throw-expression (under
+  an `ExprWithCleanups`) makes a function that is not `noreturn` and
+  not virtual *inferred noreturn* (`Sema::inferred_noreturn`), with the
+  warning at the function's name. The pattern of a function template is
+  skipped; an instantiation of another templated entity (a member of a
+  class template, a lambda in a template) inherits its pattern's
+  inference without a second warning, while a function template
+  specialization is inferred, and warned, afresh. An inferred function
+  is not suggested again by the graph form. In a value-returning
+  caller, a body whose last statement is a throw-expression, or a call
+  whose direct callee is inferred noreturn, has no -Wreturn-type
+  (clang's syntactic check ahead of `CheckFallThroughForBody`).
+- Tests: `expr.call/infinite-recursion*.cpp`,
+  `dcl.attr.noreturn/missing-noreturn*.cpp` (the `-inferred` pair under
+  `requires: clang>=22` / `clang<22`),
+  `stmt.pre/cfg-analysis-skipped.cpp` (the size cap remark).
 
 ### 7.6 Landed (WP-089): range-based `for` (`range_for.rs`)
 Sema desugars `for (init; decl : range) body` ([stmt.ranged]/1) the way
@@ -6816,8 +7110,8 @@ not supported yet`.
   element is never instantiated.
 - **Feature macro.** `__cpp_expansion_statements` 202506L at C++26 at
   every `-fclang-compat` (`KILN_FEATURES`; clang 22 does not define it).
-- **Left.** `define_static_array` and reflection ranges (kiln's
-  `members_of` returns a `member_list` aggregate without `begin`/`end`);
+- **Left.** `define_static_array` and reflection ranges (since WP-478
+  `members_of` returns a `std::vector<info>`);
   P2686's constexpr-referenceable automatic objects (§4.9).
 - Validation: `tests/conformance/stmt.expand/` (all `requires: clang>=23`),
   `tests/codegen/expansion_stmt.cpp`, `kiln_codegen` test
@@ -6927,14 +7221,18 @@ clang 19's `CheckUnreachable` (`ReachableCode.cpp`) with Sema's
 `UnreachableCodeHandler`, run with the other flow warnings at the end of
 a function body, never in a dependent context, in an instantiation or
 after an error (`uncompilable_error_count`, spec/diag.md §7.5).
-- `Sema::dead_scan` (in `try_stmt/reach.rs`) follows control through the
-  body as clang's CFG does. A constant branch condition prunes its dead
-  edge unless it is a configuration value (`is_configuration_value`:
-  a `constexpr` call, a global or `const` local, `sizeof`, or a
-  parenthesized or macro-expanded literal). An `ExprWithCleanups` is no
-  element of its own (clang `VisitExprWithCleanups`): the temporaries'
-  destruction after `throw E()` is not dead code
-  (`expr.throw/unreachable-code-temporary.cpp`).
+- The scan runs on the body's CFG (§7.5.1; `Cfg::dead_scan`, clang
+  `reachable_code::ScanReachableFromBlock`), from the entry and every
+  catch dispatch block, element by element, over the edges clang's
+  scan follows. A constant branch condition prunes its dead edge unless
+  it is a configuration value (`is_configuration_value`: a `constexpr`
+  call, a global or `const` local, `sizeof`, or a parenthesized or
+  macro-expanded literal); the builder decides that once and marks the
+  edge. An `ExprWithCleanups` is no element of its own
+  (clang `VisitExprWithCleanups`): the temporaries' destruction after
+  `throw E()` is not dead code
+  (`expr.throw/unreachable-code-temporary.cpp`). The AST walk this
+  replaced (`try_stmt/reach.rs`) is gone (WP-509).
 - Each round reports one dead root: the last dead element, in
   evaluation order, that no reached or dead element flows into. It is
   then treated as reached and the scan repeats, so the regions come out
@@ -6951,7 +7249,10 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
   `__builtin_unreachable`.
 - A dead `for` increment is `loop will run at most once (loop increment
   never executed)` [-Wunreachable-code-loop-increment] at the increment.
-- A dead branch pruned by a bare literal condition has the note
+- A root whose block's first predecessor (reachable or not; a loop
+  edge clang drops outright does not count) ends in a condition with a
+  bare literal (`if`, `while`, `for`, `do`, `switch`, `?:`, the left
+  operand of `&&`/`||`; clang `getTerminatorCondition`) has the note
   `silence by adding parentheses to mark code as explicitly dead`, with
   the `/* DISABLES CODE */ (` ... `)` fix-its around the literal. A root
   whose note repeats the previous root's literal is dropped.
@@ -6962,7 +7263,8 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
   -break and -return. None is in -Wall.
 - Tests: `tests/conformance/stmt.return/unreachable-code*.cpp`,
   `stmt.break/unreachable-code-break.cpp`,
-  `stmt.if/unreachable-code-config.cpp`.
+  `stmt.if/unreachable-code-config.cpp`, `stmt.*/cfg-*.cpp` (the
+  graphs, WP-509).
 
 #### 7.10.1 Fix-its at macro locations (`macro_fixit.rs`, WP-419)
 
@@ -7149,7 +7451,8 @@ specification, a trailing return type or requires-clause, an asm label,
 GNU attributes and the last virt-specifier, but not trailing C++11
 attribute-specifiers (`ColdDeclData::declarator_end`, recorded by the
 parser for bodiless member and namespace- or block-scope function
-declarations, WP-381; an instantiated function uses its pattern's).
+declarations, WP-381; an instantiated function uses its pattern's, or
+the out-of-line definition its definition was instantiated from, WP-428).
 
 **`co_await e` ([expr.await]/3-5).** In order:
 

@@ -109,6 +109,28 @@ dumper cycle of 2026-10-31 OOM-killed the whole container twice) thus dies
 alone. `cargo xtask bench` caps its measured compiles the same way. The
 contract is spec/harness.md "Resource limits".
 
+**libc++ memory exclusions.** The libc++ runner makes a test UNSUPPORTED
+when `--mem-limit` is below what its run step needs (`MEM_UNSUPPORTED` in
+`xtask/src/libcxx/run.rs`, spec/libcxx.md). Measured 2026-11-03 (WP-491;
+per-process peaks from the runner's `gnu-time` probe, `scripts/memlog.sh`
+alongside: no OOM event in the cgroup during either gate run):
+
+| scope | tests | `MEM_UNSUPPORTED` rows | largest process | peak |
+|---|---:|---:|---|---:|
+| `--gate m3 -j 2` (llvmorg-19.1.7) | 642 | 0 | `mem.poly.allocator.mem/construct_types.pass.cpp` (kiln compile) | 76 MiB RSS |
+| `--gate m4 -j 2` (llvmorg-22.1.8) | 2661 | 0 | `variant.visit/visit_return_type.pass.cpp` (kiln compile) | 690 MiB RSS |
+| `stringstream.members/gcount.pass.cpp` (outside both gates) | 1 | 1 | its run step | 6660 MiB address space, 5122 MiB RSS |
+
+The gcount run is not measured directly: it exceeds the 3 GiB
+per-process budget of the shared host. A scaled copy (payload `2^k - 2`
+bytes for `INT_MAX - 1 = 2^31 - 2`, then the test's two 1-byte writes),
+built by kiln and by clang against libc++ 19 and 22, peaks at exactly
+3.25 x 2^k bytes of live heap for every k from 20 to 29 (VmPeak 4 MiB
+above that, VmHWM 2.5 x 2^k): the payload plus a `stringbuf` buffer
+regrown from 0.75 x 2^k to 1.5 x 2^k bytes. At k = 31 that is 6656 MiB of
+heap, 6660 MiB of address space (what `RLIMIT_AS` caps), and 5122 MiB
+RSS, which matches the 5122 MiB WP-369 measured for the real run.
+
 `cargo xtask ci` is the merge gate. After fmt, clippy and the unit tests
 (each cargo step rerun once if it fails with rustc's `error[E0463]`, a
 crate artifact that vanished mid-build) it runs the corpus twice, and fails
@@ -380,7 +402,10 @@ threshold (default 5% time, 2% memory, 0% steps, 2% constexpr bytes; an entry
 can set its own with `threshold-*:` directives, and `--threshold-*` options
 override both). The counters are deterministic, so they catch evaluator
 regressions that host noise would hide in the timings, and `oven:` budgets
-on bench entries are enforced too. The time rule compares the fastest current run
+on bench entries are enforced too, as is a `budget-time:` directive: an
+absolute ceiling on kiln's fastest run that holds even under `--record`, so a
+re-recording cannot absorb a regression past it (`bench/pp/headers.cpp`
+carries one at 1.5x its recorded kiln time, WP-487). The time rule compares the fastest current run
 with the baseline median so host load does not read as a regression, and a
 baseline taken with a different compiler version, host or entry source is
 advisory only. The same corpus is run through clang to produce the
@@ -389,7 +414,10 @@ comparison table in `docs/status/perf.md`. The `libcxx-slice` entry
 against clang 22 on ~50 heavy libc++ 22 tests at `-fsyntax-only`, with the
 flags the libc++ runner gives each test, and reports per-test and aggregate
 ratios (time median, geometric mean, p90 and max; memory median and p90)
-with the box load; it is record-only, because only the ratio measured in one
+with the box load. Its oracle must be clang 20 or later: libc++ 22 rejects
+older clangs under the runner's `-Werror`, so a `--compare-with clang++-19`
+(or a clang 19 `--compiler`) would fail every test, and `xtask bench` refuses
+it with an error (exit 2) before measuring anything (WP-487). It is record-only, because only the ratio measured in one
 window means anything on this shared host, and its section of `perf.md` is
 re-recorded at each milestone. The reflection shapes (`bench/reflect/`) are
 measured the same way when named, and `--scaling <shape>` checks their

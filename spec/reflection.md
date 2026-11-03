@@ -45,12 +45,11 @@ Section references in brackets are to the C++26 IS.
    its tests.
 6. **Extensions.** `__kiln_define_member` (§6.3) is the only one. It
    requires `-freflection` and warns under `-Wkiln-extension` (D7,
-   on by default). `std::meta::name_of`, `__kiln_members_count` /
-   `__kiln_member_at` and the recipe helpers of §3.5
-   (`__kiln_reflection_range`, `__kiln_member_offset`,
+   on by default). `std::meta::name_of`, `__kiln_access_via` and the
+   recipe helpers of §3.5 (`__kiln_reflection_range`, `__kiln_member_offset`,
    `__kiln_access_context`) are test-header conveniences, not IS.
-   `name_of` stays beside `identifier_of`; the member helpers are
-   retired when `members_of` lands (→ WP-478).
+   `name_of` stays beside `identifier_of`. The spike's
+   `__kiln_members_count` / `__kiln_member_at` were retired by WP-478.
 7. **Out of scope for M6.** Token injection (P3294), reflection of
    attributes (P3385), expressions or statements, `define_class` beyond
    aggregates, function or body injection, link-compatible reflection
@@ -88,7 +87,7 @@ Section references in brackets are to the C++26 IS.
 | `Template(TemplateNameId)` | the template name | a class, function, variable or alias template, or a concept | → WP-472 |
 | `Value(ConstValueId)` | a typed frozen value | a value (`reflect_constant`, a template argument) | → WP-479 |
 | `Object(ConstValueId)` | a pointer to a static-storage object | an object (`reflect_object`) | → WP-479 |
-| `BaseSpec(DeclId, u32)` | derived class's first declaration, base index | a direct base class relationship | → WP-478 |
+| `BaseSpec(DeclId, u32)` | derived class's first declaration, base index | a direct base class relationship | implemented (`bases_of`, WP-478) |
 | `DataMemberSpec(DmsId)` | an interned spec | a `data_member_spec` result | → WP-480 |
 | `Annotation(AnnId)` | one annotation occurrence | an annotation (§7) | → WP-481 |
 
@@ -335,14 +334,16 @@ this list and the tables is a spec bug, fixed in the same change.
   `invoke_result`, `unwrap_reference`, `unwrap_ref_decay`, `tuple_size`,
   `tuple_element`, `variant_size`, `variant_alternative`, `type_order`.
   Full contract and every row (with the `(data, n)` range rows): spec/reflection-traits.md.
-- **Member · PointDependent · WP-478**: `members_of`.
-- **Member · Stable · WP-478**: `bases_of`, `static_data_members_of`,
+- **Member · PointDependent · WP-478, done**: `members_of`.
+- **Member · Stable · WP-478, done**: `bases_of`, `static_data_members_of`,
   `nonstatic_data_members_of`, `subobjects_of`, `enumerators_of`,
   `parameters_of`, `offset_of`, `size_of`, `alignment_of`, `bit_size_of`.
-- **Access · PointDependent · WP-478**: `access_context::current`,
+- **Access · PointDependent · WP-478, done**: `access_context::current`,
   `current_function`, `current_class`, `current_namespace`.
-- **Access · Stable · WP-478**: `is_accessible`, `has_inaccessible_bases`,
-  `has_inaccessible_subobjects`.
+- **Access · Stable · WP-478, done**: `is_accessible`, `has_inaccessible_bases`,
+  `has_inaccessible_nonstatic_data_members`, `has_inaccessible_subobjects`,
+  `__kiln_access_via` (`via`'s check).
+  Full contract and every row of the three families: spec/reflection-members.md.
 - **Value · Stable · WP-479**: `extract`, `reflect_constant`,
   `reflect_object`, `reflect_function`, `reflect_constant_string`,
   `reflect_constant_array`.
@@ -353,12 +354,10 @@ this list and the tables is a spec bug, fixed in the same change.
   on the (template, arguments) key; spec/landed/reflection/WP-482.md).
 - **Define · Stable · WP-480**: `data_member_spec`, `is_data_member_spec`.
 - **Define · Mutating · WP-480**: `define_aggregate`.
-- **Annot · PointDependent · WP-478**: `annotations_of`,
+- **Annot · PointDependent · WP-478, done**: `annotations_of`,
   `annotations_of_with_type`.
-- **Annot · Stable · WP-478**: `is_annotation`.
+- **Annot · Stable · WP-478, done**: `is_annotation`.
 - **Ext · Stable · WP-470, done**: `name_of`.
-- **Ext · PointDependent · WP-470, done**: `__kiln_members_count`,
-  `__kiln_member_at`.
 - **Ext · Mutating · WP-470, done**: `__kiln_define_member`.
 
 ### 3.4 `MetaCtx`
@@ -426,9 +425,7 @@ answers as of that point.
   `vector<info>`), `__kiln_member_offset(bytes, bits)` and
   `__kiln_access_context(scope, cls)` exercise the `Range`, `Vector` and
   `Pair` recipes before the ops that use them land (`Query` family,
-  WP-475). `kiln_meta.h` still provides `members_of<R>()` over
-  `__kiln_members_count`/`__kiln_member_at` until WP-478's
-  `vector`-returning list ops.
+  WP-475).
 
 ### 3.6 Memoization
 - A function whose parameters include `std::meta::info` is eligible for
@@ -443,21 +440,18 @@ answers as of that point.
   anyway. §3.7 keeps their cost linear instead.
 
 ### 3.7 Member lists and the type table
-- **Member cache** (→ WP-478). Sema keeps one flat `Vec<ReflectionId>` pool
-  and a map `DeclId → (start, len)`, filled on the first member query of a
-  class, after its implicit special members have been declared (D4). Each
-  element carries a kind mask and an access tag, so `members_of`,
-  `nonstatic_data_members_of`, `static_data_members_of` and access
-  filtering are one filtered copy out of the pool.
-  - Entries for a complete class are immutable.
-  - A namespace entry is a prefix that is extended as the namespace grows.
-    The evaluation point selects the visible prefix.
-  - `bases_of`, `enumerators_of` and `parameters_of` use the same pool.
-  - The spike rebuilds the list per `__kiln_member_at` call, which is
-    O(n²) over a loop. Acceptable for the test convenience only.
-- **Dense index** (→ WP-478). Under `-freflection`, a `DeclId →
-  ReflectionId` side array (4 bytes per declaration) replaces the hash
-  probe on the member path.
+- **Member cache** (WP-478, done; spec/reflection-members.md §2). One
+  list per (class, enumeration or namespace, list kind), built on the
+  first query of a class after its implicit special members are declared
+  (D4). Each entry carries its reflection and a kind and access mask, so
+  `members_of`, the data-member filters and access filtering are one
+  filtered copy into the Oven's reusable result buffer.
+  - A complete class's list is immutable.
+  - A namespace's list is a prefix extended as the namespace grows.
+  - `bases_of` and `enumerators_of` have their own lists.
+- **Dense index** (deferred). The member path interns each entry's
+  reflection once when the list is built, so the per-query path does no
+  hash probe; a `DeclId → ReflectionId` side array is not needed for it.
 - **Incomplete classes in the Oven's type table.** A class interned while
   incomplete, or while it is being defined, is a *provisional* `Opaque`
   slot whose layout is not computed (`ensure_layout` returns `None` for
@@ -786,7 +780,8 @@ each specialization evaluates its own.
   redeclaration's that precedes the evaluation point. GCC 16.1 agrees, so
   `annotations_of` is `PointDependent`.
 - Annotations on a templated entity are instantiated with it.
-- `annotations_of_with_type(r, T)` filters by the type of the value.
+- `annotations_of_with_type(r, T)` keeps the annotations whose type is
+  `remove_const(T)` (spec/reflection-members.md §5).
   `constant_of` and `extract` on an annotation yield its value, and
   `is_annotation` tests the kind.
 
@@ -909,7 +904,7 @@ each specialization evaluates its own.
   | `dcl.pre.consteval-block/` | consteval blocks, plainly constant-evaluated (§4.2) |
   | `meta.reflection.queries/`, `meta.reflection.names/` | queries and names |
   | `meta.reflection.traits/` | type traits |
-  | `meta.reflection.member.queries/`, `meta.reflection.layout/`, `meta.reflection.access.context/` | members, layout, access |
+  | `meta.reflection.member.queries/`, `meta.reflection.layout/`, `meta.reflection.access.context/`, `meta.reflection.access.queries/` | members, layout, access (spec/reflection-members.md) |
   | `meta.reflection.extract/`, `meta.reflection.result/`, `meta.define.static/` | values and static storage |
   | `meta.reflection.substitute/` | substitution |
   | `meta.reflection.define.aggregate/` | `define_aggregate` (§6) |

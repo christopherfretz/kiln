@@ -1123,7 +1123,8 @@ impl Sema<'_, '_> {
             DeclRefExtra { qualifier: None, template_args: None, found_decl: Some(found) },
         );
         let callee = self.builder().operator_callee(f, fty, loc, extra);
-        let named = Some(CallCallee { decl: f, overloadable: false });
+        // Overload resolution checked the `enable_if` conditions.
+        let named = Some(CallCallee { decl: f, overloadable: false, enable_if: false });
         let rparen = if end.is_valid() { end } else { loc };
         let mut conv = Vec::with_capacity(ops.len());
         if method && !self.has_explicit_object(f) {

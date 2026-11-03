@@ -143,6 +143,7 @@ pub(crate) use ctorinit::MemInitState;
 pub(crate) use member_expr::MemberRef;
 pub(crate) use special::{CtorCall, DeletedAs, DiagSites, InitEntity, SpecialState, SynthContext};
 // WP-074: the builtin type traits select special members.
+pub(crate) use access::AccessScope;
 pub(crate) use special::{Selected, SpecialKind};
 pub(crate) use r#virtual::{AbstractUse, VirtualSite, ensure_virtuals, is_virtual};
 

@@ -33,7 +33,7 @@ static_assert(!is_vararg_function(^^int) && !is_vararg_function(info{}));
 
 static_assert(return_type_of(^^g) == (^^void) && return_type_of(^^S::mf) == ^^int);
 static_assert(return_type_of(^^F) == (^^double) && return_type_of(^^deduced) == ^^long);
-static_assert(return_type_of(__kiln_member_at(^^S, 2)) == ^^S&);
+static_assert(return_type_of(members_of(^^S, access_context::unchecked())[2]) == ^^S&);
 
 static_assert(!is_function_parameter(^^g) && !is_function_parameter(^^int));
 static_assert(!is_explicit_object_parameter(^^g) && !has_default_argument(^^g));

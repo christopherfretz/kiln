@@ -18,7 +18,7 @@ template <class T> consteval unsigned long count_after(info cls, T* p) {
   if (p != nullptr) throw 0;
   define_aggregate(cls, {data_member_spec(^^int, {.name = "x"}),
                          data_member_spec(^^int, {.name = "y"})});
-  return __kiln_members_count(cls);
+  return nonstatic_data_members_of(cls, access_context::unchecked()).size();
 }
 consteval {
   P* before = nullptr;
@@ -27,7 +27,7 @@ consteval {
   define_aggregate(^^Q, {data_member_spec(^^P, {.name = "p"}),
                          data_member_spec(^^P*, {.name = "next"})});
   define_aggregate(^^W, {data_member_spec(^^Q, {.name = "q"})});
-  if (__kiln_members_count(^^W) != 1) throw 2;
+  if (nonstatic_data_members_of(^^W, access_context::unchecked()).size() != 1) throw 2;
 }
 static_assert(sizeof(P) == 2 * sizeof(int));
 static_assert(sizeof(Q) == sizeof(P) + sizeof(P*));
@@ -39,7 +39,7 @@ static_assert(w.q.p.x == 1 && w.q.p.y == 2 && w.q.next == nullptr);
 struct V;
 consteval { define_aggregate(^^V, {data_member_spec(^^char, {.name = "c"})}); }
 consteval {
-  if (__kiln_members_count(^^V) != 1) throw 3;
+  if (nonstatic_data_members_of(^^V, access_context::unchecked()).size() != 1) throw 3;
 }
 
 // An Oven type slot made for Z while it was incomplete serves Z's objects

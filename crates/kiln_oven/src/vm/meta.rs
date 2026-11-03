@@ -61,8 +61,10 @@ impl Oven {
             .filter(|_| value_op)
             .and_then(|s| s.ranges.iter().flatten().find_map(|&rc| recipe_elem(&self.types, rc)))
             .unwrap_or(OTy(t1));
+        // The function whose body holds the call (thunks have none).
+        let scope = self.stack.last().and_then(|f| self.funcs[f.func as usize].decl);
         let ctx = MetaCtx {
-            scope: None,
+            scope,
             loc: self.site(pc).loc,
             plainly: self.plain(),
             trial,

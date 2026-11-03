@@ -1,0 +1,142 @@
+sw()
+ [B6 (ENTRY)]
+   Succs (1): B5
+ [B5]
+   1: x (DeclRefExpr)
+   2: x (ImplicitCastExpr)
+   T: switch [B5.2]
+   Preds (1): B6
+   Succs (3): B3 B4 B2
+ [B4]
+  case:
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   Preds (1): B5
+   Succs (1): B3
+ [B3]
+  case:
+   1: BreakStmt
+   T: break;
+   Preds (2): B5 B4
+   Succs (1): B1
+ [B2]
+  default:
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   Preds (1): B5
+   Succs (1): B1
+ [B1]
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   Preds (2): B3 B2
+   Succs (1): B0
+ [B0 (EXIT)]
+   Preds (1): B1
+
+sw_no_default()
+ [B4 (ENTRY)]
+   Succs (1): B3
+ [B3]
+   1: x (DeclRefExpr)
+   2: x (ImplicitCastExpr)
+   T: switch [B3.2]
+   Preds (1): B4
+   Succs (3): B1 B2 B0
+ [B2]
+  case:
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   4: BreakStmt
+   T: break;
+   Preds (1): B3
+   Succs (1): B0
+ [B1]
+  case:
+   1: ReturnStmt
+   Preds (1): B3
+   Succs (1): B0
+ [B0 (EXIT)]
+   Preds (3): B3 B2 B1
+
+sw_enum()
+ [B5 (ENTRY)]
+   Succs (1): B4
+ [B4]
+   1: e (DeclRefExpr)
+   2: e (ImplicitCastExpr)
+   3: e (ImplicitCastExpr)
+   T: switch [B4.3]
+   Preds (1): B5
+   Succs (3): B2 B3 B1(Unreachable)
+ [B3]
+  case:
+   1: 1 (IntegerLiteral)
+   2: ReturnStmt
+   Preds (1): B4
+   Succs (1): B0
+ [B2]
+  case:
+   1: 2 (IntegerLiteral)
+   2: ReturnStmt
+   Preds (1): B4
+   Succs (1): B0
+ [B1]
+   1: 0 (IntegerLiteral)
+   2: ReturnStmt
+   Preds (1): B4(Unreachable)
+   Succs (1): B0
+ [B0 (EXIT)]
+   Preds (3): B3 B2 B1
+
+sw_const()
+ [B4 (ENTRY)]
+   Succs (1): B3
+ [B3]
+   1: 2 (IntegerLiteral)
+   T: switch [B3.1]
+   Preds (1): B4
+   Succs (3): B1 B2(Unreachable) B0(Unreachable)
+ [B2]
+  case:
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   4: BreakStmt
+   T: break;
+   Preds (1): B3(Unreachable)
+   Succs (1): B0
+ [B1]
+  case:
+   1: BreakStmt
+   T: break;
+   Preds (1): B3
+   Succs (1): B0
+ [B0 (EXIT)]
+   Preds (3): B3(Unreachable) B2 B1
+
+jumps()
+ [B3 (ENTRY)]
+   Succs (1): B2
+ [B2]
+  l:
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   4: x (DeclRefExpr)
+   5: x (ImplicitCastExpr)
+   6: x (ImplicitCastExpr)
+   T: if [B2.6]
+   Preds (2): B3 B1
+   Succs (2): B1 B0
+ [B1]
+   1: goto l (GotoStmt)
+   T: goto l;
+   Preds (1): B2
+   Succs (1): B2
+ [B0 (EXIT)]
+   Preds (1): B2
+
