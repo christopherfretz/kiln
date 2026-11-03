@@ -764,6 +764,17 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   Calls to `const`/`pure` functions carry their call-site attributes
   (§3 "Calls", WP-182).
 
+- Expansion statements (WP-447, `emit_expansion`): an expanded
+  `CXXExpansionStmt` lowers its init-statement and prelude, then each
+  element's compound statement in order, with no loop and no
+  `!llvm.loop` metadata; `break` branches to a block after the last
+  element and `continue` to a block ending the current one, through the
+  element's cleanups. A pattern is never lowered. clang 22 has no
+  expansion statements, so `tests/codegen/expansion_stmt.cpp` is
+  `min-oracle: 23` (verify-only today); the order and the absence of
+  back-edges are checked by `kiln_codegen` test
+  `expansion_statement_lowers_in_order`.
+
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:
 - `-S -emit-llvm` writes a `.ll` file; `-c -emit-llvm` pipes it to

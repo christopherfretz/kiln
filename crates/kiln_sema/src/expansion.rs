@@ -1,0 +1,555 @@
+//! Expansion statements ([stmt.expand], P1306R5): `template for`.
+//!
+//! The for-range-declaration and the compound-statement are a template
+//! pattern of a synthetic template level (spec/sema.md "Expansion
+//! statements"): the declaration is initialized from a
+//! `CXXExpansionSelectExpr` naming that level. Once the
+//! expansion-initializer is not dependent (at once outside a template,
+//! else when the enclosing template is instantiated), the statement is
+//! expanded: the form is classified ([stmt.expand]/3), its prelude
+//! declared, and the pattern instantiated once per element, the select
+//! becoming the element (spec/sema-templates.md §5.5).
+
+use kiln_ast::decl::{DeclFlags, InitStyle, VarSpec, VarStorage};
+use kiln_ast::expr::{BinaryOp, Radix, UnaryOp};
+use kiln_ast::ids::ArgListId;
+use kiln_ast::names::DeclName;
+use kiln_ast::stmt::{ExpansionData, ExpansionForm};
+use kiln_ast::types::{AutoKeyword, Quals};
+use kiln_ast::{DeclHead, DeclId, ExprId, ListId, QualType, StmtId};
+use kiln_diag::DiagId;
+use kiln_oven::{EvalContext, EvalKind};
+use kiln_source::Loc;
+
+use crate::Sema;
+use crate::conv;
+use crate::declspec::{
+    BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, StorageSpec,
+    TypeSpecKind,
+};
+use crate::init::{InitList, InitValue, Initializer};
+use crate::scope::ScopeKind;
+use crate::templ::args::{LevelMode, MultiLevelArgs};
+use crate::templ::subst::{SubstFail, SubstResult, Substituter};
+
+/// The most elements an iterating expansion statement may have: its
+/// size is counted by evaluating `begin + i != end` for each `i`.
+const MAX_ITERATING: u64 = 1 << 20;
+
+/// An expansion-initializer as parsed.
+#[derive(Debug)]
+pub enum ExpansionInit {
+    /// An expression.
+    Expr(ExprId),
+    /// An expansion-init-list `{ a, b }`.
+    List(InitList),
+}
+
+/// The head of an expansion statement whose compound-statement is being
+/// parsed (inside its synthetic template level).
+#[derive(Clone, Copy, Debug)]
+pub struct ExpansionHead {
+    init: Option<StmtId>,
+    decl: DeclId,
+    exprs: ListId,
+    range_init: Option<ExprId>,
+    colon: Loc,
+    loc: Loc,
+    depth: u16,
+    form: ExpansionForm,
+}
+
+/// An element of an expansion statement being expanded: what its
+/// `CXXExpansionSelectExpr` at `depth` becomes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ExpansionElem {
+    /// The synthetic template level.
+    pub depth: u16,
+    /// The element expression (used once).
+    pub elem: ExprId,
+}
+
+/// The expansion-initializer of a statement being expanded.
+enum ExpansionSource {
+    /// The expressions of an expansion-init-list.
+    List(Vec<ExprId>),
+    /// An expression.
+    Expr(ExprId),
+}
+
+/// One element's code before the for-range-declaration: an optional
+/// declaration statement (an iterating form's `iter`), and the element.
+type Element = (Option<StmtId>, ExprId);
+
+impl Sema<'_, '_> {
+    /// `template for ( init-statement_opt for-range-declaration :
+    /// expansion-initializer )` ([stmt.expand]/1): opens the synthetic
+    /// template level and declares the for-range-declaration in it,
+    /// initialized from the element select. `None` when the statement is
+    /// dropped (diagnosed); the body is then parsed as dead code.
+    #[allow(clippy::too_many_arguments, reason = "the parts of the head")]
+    pub fn act_on_expansion_head(
+        &mut self,
+        init: Option<StmtId>,
+        ds: &DeclSpec,
+        base: QualType,
+        d: &Declarator,
+        range: ExpansionInit,
+        colon: Loc,
+        loc: Loc,
+    ) -> Option<ExpansionHead> {
+        let (exprs, range_init, form) = match range {
+            ExpansionInit::List(l) => {
+                if let Some(i) = l
+                    .items
+                    .iter()
+                    .find(|i| !i.designator.is_empty() || matches!(i.value, InitValue::List(_)))
+                {
+                    let at = match &i.value {
+                        InitValue::List(x) => x.lbrace,
+                        InitValue::Expr(e) => self.begin_loc(*e),
+                    };
+                    self.unsupported(
+                        "a braced or designated element of an expansion-init-list",
+                        at,
+                    );
+                    return None;
+                }
+                let es = Self::list_exprs(&l);
+                (self.ast.lists.push(&es), None, ExpansionForm::Enumerating)
+            }
+            ExpansionInit::Expr(e) => (ListId::EMPTY, Some(e), ExpansionForm::Dependent),
+        };
+        let depth = self.push_expansion_level(loc);
+        let v = self.act_on_declarator(ds, base, d).filter(|&v| self.act_on_for_range_decl(ds, v));
+        let Some(v) = v else {
+            self.pop_expansion_level();
+            return None;
+        };
+        let sel = self.builder().cxx_expansion_select(form, depth, colon);
+        self.act_on_init(v, Initializer::Expr(sel));
+        Some(ExpansionHead { init, decl: v, exprs, range_init, colon, loc, depth, form })
+    }
+
+    /// The compound-statement of `h` is missing: closes its level.
+    pub fn act_on_expansion_error(&mut self, h: ExpansionHead) {
+        self.pop_expansion_level();
+        self.ast.decls.set_flags(h.decl, DeclFlags::INVALID);
+    }
+
+    /// The expansion statement `h` with compound-statement `body`: a
+    /// pattern in a template, else expanded now.
+    pub fn act_on_finish_expansion(&mut self, h: ExpansionHead, body: StmtId) -> Option<StmtId> {
+        self.pop_expansion_level();
+        let data = ExpansionData {
+            init: h.init,
+            decl: h.decl,
+            exprs: h.exprs,
+            range_init: h.range_init,
+            body,
+            prelude: ListId::EMPTY,
+            expansions: ListId::EMPTY,
+            colon: h.colon,
+        };
+        if self.in_template() {
+            return Some(self.builder().cxx_expansion_stmt(data, h.form, false, h.depth, h.loc));
+        }
+        // The pattern's declaration leaves the scope of the head: each
+        // element redeclares it in a block of its own.
+        let mut pattern = self.decomp_binding_list(h.decl);
+        pattern.push(h.decl);
+        if let Some(sc) = self.scopes.last_mut() {
+            sc.locals.retain(|&(_, d, _)| !pattern.contains(&d));
+        }
+        let src = match h.range_init {
+            Some(e) => ExpansionSource::Expr(e),
+            None => ExpansionSource::List(self.ast.lists.iter::<ExprId>(h.exprs).collect()),
+        };
+        let mut args = MultiLevelArgs::new();
+        for _ in 0..h.depth {
+            args.push(ArgListId::EMPTY, self.ctx, LevelMode::Substitute);
+        }
+        let mut sub = Substituter::new(self, &args);
+        sub.expand_expansion(h.init, src, &data, h.depth, h.loc).ok()
+    }
+
+    /// An implicit `static constexpr` variable of an iterating expansion
+    /// statement ([stmt.expand]/5.2), not found by lookup.
+    fn expansion_var(&mut self, name: &str, ty: QualType, loc: Loc) -> DeclId {
+        let sym = self.intern(name);
+        let mut h = DeclHead::new(self.ctx, DeclName::ident(sym), loc);
+        h.flags = h.flags.with(DeclFlags::IMPLICIT);
+        let spec = VarSpec::new()
+            .with_storage(VarStorage::Static)
+            .with_constexpr(true)
+            .with_init_style(InitStyle::C);
+        self.builder().var(h, ty, spec, None)
+    }
+
+    /// Initializes implicit variable `v` from `e` (deducing its type);
+    /// false after an error.
+    fn init_expansion_var(&mut self, v: DeclId, e: ExprId, loc: Loc, id: DiagId) -> bool {
+        !self.finish_range_var(v, Initializer::Expr(e), loc, id)
+            && !self.ast.decls.get(v).has(DeclFlags::INVALID)
+    }
+
+    /// The `static constexpr` variable over `e`, built by `f(by_ref)`: a
+    /// prvalue initializes an object (`auto`, which is const, so its
+    /// value is usable in constant expressions; a non-const lifetime-
+    /// extended temporary is not). A glvalue is bound by reference
+    /// (`auto&&`); when that fails, a copy (`auto`) is tried, its
+    /// diagnostics replacing the first attempt's only if it succeeds.
+    /// The copy stands in for P2686's constexpr references to automatic
+    /// variables (spec/sema.md "Expansion statements").
+    fn expansion_fallback<T>(
+        &mut self,
+        e: ExprId,
+        f: impl Fn(&mut Self, bool) -> Option<T>,
+    ) -> Option<T> {
+        let attempt = |s: &mut Self, by_ref: bool| {
+            let (r, stash) = s.capturing(|s| f(s, by_ref));
+            let r = r.filter(|_| !s.stash_has_error(&stash));
+            (r, stash)
+        };
+        let glvalue = self.ast.exprs.get(e).value_category().is_glvalue();
+        let (r, stash) = attempt(self, glvalue);
+        if r.is_some() || !glvalue {
+            self.release(stash, Vec::new());
+            return r;
+        }
+        let (r2, stash2) = attempt(self, false);
+        self.release(if r2.is_some() { stash2 } else { stash }, Vec::new());
+        r2
+    }
+
+    /// The iterating form ([stmt.expand]/5.2): `static constexpr auto&&
+    /// range = init; static constexpr auto begin = begin-expr, end =
+    /// end-expr;`, then per element `static constexpr auto iter = begin
+    /// + i;` and the element `*iter`. The prelude and the elements.
+    fn expansion_iterating(
+        &mut self,
+        e: ExprId,
+        colon: Loc,
+    ) -> Option<(Vec<StmtId>, Vec<Element>)> {
+        let range_loc = self.begin_loc(e);
+        let range_ty = self.ety(e);
+        let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
+        let rref = self.ast.types.rvalue_ref_to(auto);
+        let cauto = self.ast.types.qualify(auto, Quals::CONST);
+        let range = self.expansion_fallback(e, |s, by_ref| {
+            let v = s.expansion_var("__range", if by_ref { rref } else { auto }, range_loc);
+            s.init_expansion_var(v, e, range_loc, DiagId::sema_for_range_deduction_failure)
+                .then_some(v)
+        })?;
+        let begin = self.expansion_var("__begin", cauto, colon);
+        let end = self.expansion_var("__end", cauto, colon);
+        let br = self.build_decl_ref(range, colon);
+        let er = self.build_decl_ref(range, colon);
+        if !self.expansion_begin_end(br, er, range_ty, (begin, end), colon) {
+            return None;
+        }
+        if [begin, end].iter().any(|&v| self.ast.decls.get(v).has(DeclFlags::INVALID)) {
+            return None;
+        }
+        let prelude = vec![
+            self.act_on_decl_stmt(&[range], range_loc),
+            self.act_on_decl_stmt(&[begin, end], colon),
+        ];
+        let n = self.expansion_size(begin, end, colon)?;
+        let pd = QualType::unqual(self.target.ptrdiff_t);
+        let mut elems = Vec::new();
+        for i in 0..n {
+            let iter = self.expansion_var("__iter", cauto, colon);
+            let b = self.build_decl_ref(begin, colon);
+            let lit = self.builder().int_literal(pd, i, Radix::Decimal, colon);
+            let add = self.act_on_binary(BinaryOp::Add, b, lit, colon);
+            if self.is_err_expr(add)
+                || !self.init_expansion_var(
+                    iter,
+                    add,
+                    colon,
+                    DiagId::sema_for_range_iter_deduction_failure,
+                )
+            {
+                return None;
+            }
+            let ds = self.act_on_decl_stmt(&[iter], colon);
+            let r = self.build_decl_ref(iter, colon);
+            let deref = self.act_on_unary(UnaryOp::Deref, r, colon);
+            if self.is_err_expr(deref) {
+                return None;
+            }
+            elems.push((Some(ds), deref));
+        }
+        Some((prelude, elems))
+    }
+
+    /// N of an iterating expansion statement ([stmt.expand]/5.2): the
+    /// first `i` for which `begin + i != end` is false, each evaluated
+    /// as a constant expression (spec/sema.md: the wording counts with
+    /// `++` in a consteval lambda; `begin + i` is what each element uses).
+    fn expansion_size(&mut self, begin: DeclId, end: DeclId, colon: Loc) -> Option<u64> {
+        let pd = QualType::unqual(self.target.ptrdiff_t);
+        for i in 0..MAX_ITERATING {
+            let b = self.build_decl_ref(begin, colon);
+            let it = if i == 0 {
+                b
+            } else {
+                let lit = self.builder().int_literal(pd, i, Radix::Decimal, colon);
+                self.act_on_binary(BinaryOp::Add, b, lit, colon)
+            };
+            let e = self.build_decl_ref(end, colon);
+            let ne = self.act_on_binary(BinaryOp::NE, it, e, colon);
+            if self.is_err_expr(ne) {
+                return None;
+            }
+            let c = match conv::contextually_convert_to_bool(self, ne) {
+                Ok(c) => c,
+                Err(err) => {
+                    self.emit_conv_error(err, colon);
+                    return None;
+                }
+            };
+            match self.eval_int(c, EvalContext::new(EvalKind::Other, colon)) {
+                Ok(0) => return Some(i),
+                Ok(_) => {}
+                Err(f) => {
+                    let d = self.diag(DiagId::sema_expansion_size_not_constant, colon);
+                    let d = Self::with_failure_notes(d, f);
+                    self.emit(d);
+                    return None;
+                }
+            }
+        }
+        self.error(DiagId::sema_expansion_size_not_constant, colon);
+        None
+    }
+
+    /// The destructuring form ([stmt.expand]/5.3): `constexpr_opt auto&&
+    /// [u...] = init;` (`constexpr` when the for-range-declaration is),
+    /// the elements its bindings. The prelude and the elements.
+    fn expansion_destructuring(
+        &mut self,
+        e: ExprId,
+        constexpr: bool,
+        colon: Loc,
+    ) -> Option<(Vec<StmtId>, Vec<Element>)> {
+        if constexpr {
+            // Each attempt's bindings stay out of the enclosing scope.
+            return self.expansion_fallback(e, |s, by_ref| {
+                s.push_scope(ScopeKind::Block);
+                let r = s.expansion_decomp(e, true, by_ref, colon);
+                s.pop_scope();
+                r
+            });
+        }
+        self.expansion_decomp(e, false, true, colon)
+    }
+
+    /// `[static constexpr] auto&& [__u...] = e;` (`auto` without `&&`
+    /// unless `by_ref`) and its bindings.
+    fn expansion_decomp(
+        &mut self,
+        e: ExprId,
+        constexpr: bool,
+        by_ref: bool,
+        colon: Loc,
+    ) -> Option<(Vec<StmtId>, Vec<Element>)> {
+        let mut ds = DeclSpec::new(colon);
+        let _ = ds.set_base(TypeSpecKind::Auto, None, colon);
+        if constexpr {
+            ds.constexpr = Some(colon);
+            let _ = ds.set_storage(StorageSpec::Static, colon);
+        }
+        let mut d = Declarator::new(DeclaratorContext::Block, colon);
+        if by_ref {
+            d.chunks.push(Chunk::RRef { loc: colon });
+        }
+        let ids = vec![BindingId {
+            name: self.intern("__u"),
+            loc: colon,
+            ellipsis: Some(colon),
+            attrs: Vec::new(),
+        }];
+        let dc = Decomposition { lbracket: colon, rbracket: colon, ids };
+        d.decomp = Some(dc.clone());
+        d.init_style = Some(InitStyle::C);
+        let auto = self.type_from_declspec_at(&ds, colon);
+        let ty = if by_ref { self.ast.types.rvalue_ref_to(auto) } else { auto };
+        let v = self.declare_decomposition(&ds, ty, &d, &dc, false);
+        self.act_on_init(v, Initializer::Expr(e));
+        if self.ast.decls.get(v).has(DeclFlags::INVALID) {
+            return None;
+        }
+        let prelude = vec![self.act_on_decl_stmt(&[v], colon)];
+        let elems = self
+            .decomp_binding_list(v)
+            .into_iter()
+            .map(|b| (None, self.build_decl_ref(b, colon)))
+            .collect();
+        Some((prelude, elems))
+    }
+}
+
+impl Substituter<'_, '_, '_> {
+    /// Pattern expansion statement `s` (spec/sema-templates.md §5.5):
+    /// expanded once every level outside its synthetic one is
+    /// substituted, else rebuilt as a pattern.
+    pub(crate) fn expansion_stmt(&mut self, s: StmtId) -> SubstResult<StmtId> {
+        let ast = &self.sema.ast;
+        let data = *ast.stmts.expansion_data(s);
+        let depth = ast.stmts.expansion_depth(s);
+        let form = ast.stmts.expansion_form(s);
+        let loc = ast.stmts.get(s).loc();
+        let levels = &self.args.levels;
+        let expand = levels.len() >= usize::from(depth)
+            && levels[..usize::from(depth)].iter().all(|l| l.mode == LevelMode::Substitute);
+        self.sema.push_scope(ScopeKind::Control);
+        let r = (|| {
+            let init = data.init.map(|x| self.stmt(x));
+            let exprs: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(data.exprs).collect();
+            let src = match data.range_init {
+                Some(e) => ExpansionSource::Expr(self.expr(e)?),
+                None => ExpansionSource::List(self.expand_exprs(&exprs)?),
+            };
+            if expand {
+                return self.expand_expansion(init, src, &data, depth, loc);
+            }
+            let (exprs, range_init) = match src {
+                ExpansionSource::Expr(e) => (ListId::EMPTY, Some(e)),
+                ExpansionSource::List(es) => (self.sema.ast.lists.push(&es), None),
+            };
+            let new_depth = self.args.retained_depth(depth);
+            let _ = self.sema.push_expansion_level(loc);
+            let r = (|| {
+                let decl = self.expansion_decl(data.decl)?;
+                self.sema.act_on_start_loop();
+                let body = self.stmt(data.body);
+                self.sema.act_on_end_loop();
+                Ok((decl, body))
+            })();
+            self.sema.pop_expansion_level();
+            let (decl, body) = r?;
+            let data = ExpansionData { init, decl, exprs, range_init, body, ..data };
+            Ok(self.sema.builder().cxx_expansion_stmt(data, form, false, new_depth, loc))
+        })();
+        self.sema.pop_scope();
+        r
+    }
+
+    /// The for-range-declaration of pattern `d`, instantiated.
+    fn expansion_decl(&mut self, d: DeclId) -> SubstResult<DeclId> {
+        if self.sema.ast.decls.decomp_bindings(d).is_some() {
+            self.decomp_decl(d, DeclaratorContext::ForInit)
+        } else {
+            self.var_decl(d, DeclaratorContext::ForInit)
+        }
+    }
+
+    /// A `CXXExpansionSelectExpr`: the element of the expansion being
+    /// expanded at its depth, else (an enclosing level is retained) the
+    /// select renumbered.
+    pub(crate) fn expansion_select(&mut self, e: ExprId) -> SubstResult<ExprId> {
+        let n = *self.sema.ast.exprs.get(e);
+        let depth = u16::try_from(n.a()).map_err(|_| SubstFail)?;
+        if let Some(x) = self.expansions.iter().rev().find(|x| x.depth == depth) {
+            return Ok(x.elem);
+        }
+        let form = ExpansionForm::from_aux(u16::from(n.aux()));
+        let d = self.args.retained_depth(depth);
+        Ok(self.sema.builder().cxx_expansion_select(form, d, n.loc()))
+    }
+
+    /// Expands the statement with pattern `data` at `depth` over `src`
+    /// ([stmt.expand]/3-5): classifies it, declares its prelude, and
+    /// instantiates the pattern per element.
+    fn expand_expansion(
+        &mut self,
+        init: Option<StmtId>,
+        src: ExpansionSource,
+        data: &ExpansionData,
+        depth: u16,
+        loc: Loc,
+    ) -> SubstResult<StmtId> {
+        let colon = data.colon;
+        let (form, prelude, elems) = match src {
+            ExpansionSource::List(es) => (
+                ExpansionForm::Enumerating,
+                Vec::new(),
+                es.into_iter().map(|e| (None, e)).collect(),
+            ),
+            ExpansionSource::Expr(e) => {
+                if self.sema.is_err_expr(e) || self.sema.ast.exprs.get(e).is_type_dependent() {
+                    return Err(SubstFail);
+                }
+                if self.sema.expansion_iterable(e, colon) {
+                    let (p, el) = self.sema.expansion_iterating(e, colon).ok_or(SubstFail)?;
+                    (ExpansionForm::Iterating, p, el)
+                } else {
+                    let constexpr =
+                        self.sema.ast.decls.var(data.decl).is_some_and(|v| v.spec.is_constexpr());
+                    let (p, el) =
+                        self.sema.expansion_destructuring(e, constexpr, colon).ok_or(SubstFail)?;
+                    (ExpansionForm::Destructuring, p, el)
+                }
+            }
+        };
+        let mut out = Vec::with_capacity(elems.len());
+        for (prefix, elem) in elems {
+            out.push(self.expansion_element(prefix, elem, data, depth));
+        }
+        let prelude = self.sema.ast.lists.push(&prelude);
+        let expansions = self.sema.ast.lists.push(&out);
+        let x = ExpansionData { init, prelude, expansions, ..*data };
+        Ok(self.sema.builder().cxx_expansion_stmt(x, form, true, depth, loc))
+    }
+
+    /// One element's statement `{ prefix decl = elem; body }`
+    /// ([stmt.expand]/5): the pattern instantiated with the select at
+    /// `depth` replaced by `elem`, in a block of its own.
+    fn expansion_element(
+        &mut self,
+        prefix: Option<StmtId>,
+        elem: ExprId,
+        data: &ExpansionData,
+        depth: u16,
+    ) -> StmtId {
+        let mut args = MultiLevelArgs::new();
+        args.levels.extend_from_slice(&self.args.levels[..usize::from(depth)]);
+        args.push(ArgListId::EMPTY, self.sema.ctx, LevelMode::Substitute);
+        let lb = self.sema.ast.stmts.get(data.body).loc();
+        let rb = self.sema.ast.stmts.rbrace(data.body);
+        let mut child = Substituter::new(&mut *self.sema, &args);
+        child.locals.clone_from(&self.locals);
+        child.pairs.clone_from(&self.pairs);
+        child.entity = self.entity;
+        child.pack_index = self.pack_index;
+        child.lambda_bodies = self.lambda_bodies;
+        child.written_locs = self.written_locs;
+        child.final_subst = self.final_subst;
+        child.expansions.clone_from(&self.expansions);
+        child.expansions.push(ExpansionElem { depth, elem });
+        child.sema.push_scope(ScopeKind::Block);
+        let mut stmts: Vec<StmtId> = prefix.into_iter().collect();
+        if let Ok(v) = child.expansion_decl(data.decl) {
+            let vloc = child.sema.ast.decls.get(v).loc();
+            stmts.push(child.sema.act_on_decl_stmt(&[v], vloc));
+            child.sema.act_on_start_loop();
+            stmts.push(child.stmt(data.body));
+            child.sema.act_on_end_loop();
+        }
+        child.sema.pop_scope();
+        let failed = child.stmt_failed;
+        let init_failures = child.init_failures;
+        let failed_inits = std::mem::take(&mut child.failed_inits);
+        let failed_init_use = child.failed_init_use;
+        let failed_locals = std::mem::take(&mut child.failed_locals);
+        drop(child);
+        self.stmt_failed |= failed;
+        self.init_failures += init_failures;
+        self.failed_inits.extend(failed_inits);
+        self.failed_init_use |= failed_init_use;
+        self.failed_locals.extend(failed_locals);
+        self.sema.act_on_compound(&stmts, lb, rb)
+    }
+}

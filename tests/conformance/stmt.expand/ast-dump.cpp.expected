@@ -1,0 +1,46 @@
+Dumping test_enum:
+FunctionDecl test_enum 'void ()'
+`-CompoundStmt
+  `-CXXExpansionStmt enumerating expanded
+    |-CompoundStmt
+    | |-DeclStmt
+    | | `-VarDecl used x 'int' cinit
+    | |   `-IntegerLiteral 'int' 1
+    | `-CompoundStmt
+    |   `-CallExpr 'void'
+    |     |-ImplicitCastExpr 'void (*)(int)' <FunctionToPointerDecay>
+    |     | `-DeclRefExpr 'void (int)' lvalue Function 'g' 'void (int)'
+    |     `-ImplicitCastExpr 'int' <LValueToRValue>
+    |       `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+    `-CompoundStmt
+      |-DeclStmt
+      | `-VarDecl used x 'int' cinit
+      |   `-IntegerLiteral 'int' 2
+      `-CompoundStmt
+        `-CallExpr 'void'
+          |-ImplicitCastExpr 'void (*)(int)' <FunctionToPointerDecay>
+          | `-DeclRefExpr 'void (int)' lvalue Function 'g' 'void (int)'
+          `-ImplicitCastExpr 'int' <LValueToRValue>
+            `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+
+Dumping test_dep:
+FunctionTemplateDecl test_dep
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+`-FunctionDecl test_dep 'void (T)'
+  |-ParmVarDecl referenced t 'T'
+  `-CompoundStmt
+    `-CXXExpansionStmt dependent has_init
+      |-DeclStmt
+      | `-VarDecl referenced i 'int' cinit
+      |   `-IntegerLiteral 'int' 0
+      |-DeclStmt
+      | `-VarDecl referenced x 'auto' cinit
+      |   `-CXXExpansionSelectExpr '<dependent type>'
+      |-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      `-CompoundStmt
+        `-CallExpr '<dependent type>'
+          |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'g'
+          `-BinaryOperator '<dependent type>' '+'
+            |-DeclRefExpr 'auto' lvalue Var 'x' 'auto'
+            `-DeclRefExpr 'int' lvalue Var 'i' 'int'
+

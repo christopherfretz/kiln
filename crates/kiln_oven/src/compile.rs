@@ -1236,6 +1236,13 @@ impl Scan<'_> {
                 self.decl(d.loop_var);
                 self.stmt(d.body);
             }
+            StmtKind::CXXExpansionStmt if ast.stmts.expansion_expanded(s) => {
+                let d = *ast.stmts.expansion_data(s);
+                d.init.into_iter().for_each(|x| self.stmt(x));
+                for &x in ast.lists.get(d.prelude).iter().chain(ast.lists.get(d.expansions)) {
+                    self.stmt(StmtId::new(x));
+                }
+            }
             StmtKind::ReturnStmt => {
                 if let Some(v) = ast.stmts.return_value(s) {
                     self.expr(v, false);
@@ -1735,6 +1742,10 @@ impl Compiler<'_> {
                 self.range_for_stmt(s);
                 self.next = m;
             }
+            StmtKind::CXXExpansionStmt if ast.stmts.expansion_expanded(s) => {
+                self.expansion_stmt(s);
+                self.next = m;
+            }
             StmtKind::BreakStmt | StmtKind::ContinueStmt => {
                 let brk = n.kind() == StmtKind::BreakStmt;
                 let idx = if brk {
@@ -2036,6 +2047,53 @@ impl Compiler<'_> {
         let end_pc = self.here();
         for j in b.breaks {
             self.patch(j, end_pc);
+        }
+        self.close_scope();
+    }
+
+    /// An expanded expansion statement ([stmt.expand]/5, P1306R5): the
+    /// init-statement and the prelude in the statement's scope, then each
+    /// element's block in order. `break` leaves the statement; `continue`
+    /// ends the current element's block (the next one follows).
+    fn expansion_stmt(&mut self, s: StmtId) {
+        let ast = self.b.ast();
+        let d = *ast.stmts.expansion_data(s);
+        let prelude: Vec<u32> = ast.lists.get(d.prelude).to_vec();
+        let elems: Vec<u32> = ast.lists.get(d.expansions).to_vec();
+        let mut decls = self.stmt_decls(d.init, None);
+        decls.extend(self.block_decls(&prelude));
+        self.open_scope(&decls, false);
+        if let Some(i) = d.init {
+            self.stmt(i);
+        }
+        for p in prelude {
+            self.stmt(StmtId::new(p));
+        }
+        let depth = self.scopes.len();
+        let mut breaks = Vec::new();
+        for e in elems {
+            self.breakables.push(Breakable {
+                breaks: Vec::new(),
+                conts: Some(Vec::new()),
+                depth,
+                cont_depth: depth,
+            });
+            self.stmt(StmtId::new(e));
+            let b = self.breakables.pop().unwrap_or(Breakable {
+                breaks: Vec::new(),
+                conts: None,
+                depth: 0,
+                cont_depth: 0,
+            });
+            let next = self.here();
+            for j in b.conts.unwrap_or_default() {
+                self.patch(j, next);
+            }
+            breaks.extend(b.breaks);
+        }
+        let end = self.here();
+        for j in breaks {
+            self.patch(j, end);
         }
         self.close_scope();
     }

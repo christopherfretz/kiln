@@ -158,6 +158,10 @@ impl HeadBuild {
 #[allow(clippy::struct_excessive_bools, reason = "independent parse-state flags")]
 pub struct TemplState {
     pub(crate) heads: Vec<HeadBuild>,
+    /// The open expansion statements' synthetic levels (innermost last):
+    /// the function whose body holds each, and the dependent depth
+    /// outside it ([`Sema::in_template_outside_expansions`]).
+    pub(crate) expansions_open: Vec<(Option<DeclId>, u32)>,
     /// A declarator-id's nested-name-specifier is being parsed (clang's
     /// `EnteringContext`): `X<P...>::` names the current instantiation
     /// even outside `X`'s definition ([temp.mem]/1, out-of-line members).
@@ -499,6 +503,49 @@ impl Sema<'_, '_> {
         self.scopes.push(Scope::new(ScopeKind::TemplateParams, None));
         self.ast.templates.dependent_depth += 1;
         depth
+    }
+
+    /// Opens the synthetic template level of an expansion statement's
+    /// for-range-declaration and compound-statement ([stmt.expand]/1:
+    /// they are instantiated once per element, P1306R5): a head with no
+    /// parameters and no scope, taken (no declaration consumes it), and a
+    /// dependent context, so the declarations inside are patterns.
+    /// Returns its depth. Paired with [`Sema::pop_expansion_level`].
+    pub(crate) fn push_expansion_level(&mut self, loc: Loc) -> u16 {
+        let depth = self.template_depth();
+        self.templ.heads.push(HeadBuild {
+            template_loc: loc,
+            l_angle: loc,
+            depth,
+            params: Vec::new(),
+            list: None,
+            taken: true,
+            invented: false,
+        });
+        let f = self.func.as_ref().map(|f| f.decl);
+        self.templ.expansions_open.push((f, self.ast.templates.dependent_depth));
+        self.ast.templates.dependent_depth += 1;
+        depth
+    }
+
+    /// The body of the current function is in a template other than the
+    /// synthetic levels of its own expansion statements: the levels of
+    /// expansion statements in a non-template function are expanded
+    /// before its body ends, so a `return` in one deduces the placeholder
+    /// return type from its expansions ([dcl.spec.auto.general]/12).
+    pub(crate) fn in_template_outside_expansions(&self) -> bool {
+        let f = self.func.as_ref().map(|f| f.decl);
+        match self.templ.expansions_open.iter().find(|e| e.0 == f && f.is_some()) {
+            Some(&(_, outside)) => outside > 0,
+            None => self.in_template(),
+        }
+    }
+
+    /// Closes the level [`Sema::push_expansion_level`] opened.
+    pub(crate) fn pop_expansion_level(&mut self) {
+        self.templ.heads.pop();
+        self.templ.expansions_open.pop();
+        self.ast.templates.dependent_depth = self.ast.templates.dependent_depth.saturating_sub(1);
     }
 
     /// Leaves the template parameter scope of the innermost head.

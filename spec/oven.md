@@ -2822,6 +2822,19 @@ sema.
     `-fconstexpr-steps`, pinned with `oven:` budgets, plus one-step-short
     twins with clang's notes.
 
+### Expansion statements — Landed (WP-447)
+An expanded `CXXExpansionStmt` (spec/sema.md §7.6a) compiles to straight
+line code with no loop (`compile.rs` `expansion_stmt`): the init-statement
+and the prelude (`__range`/`__begin` or the structured binding) in a scope
+of the statement, then each element's `CompoundStmt` in order, each with a
+`Breakable` of its own. Each element block is an ordinary block scope, so
+its element variable, and anything its constructor allocated, is destroyed
+and released at the end of that element: the peak is one element's, not
+N's. `break` jumps past the last element; `continue` jumps to the end of
+the current element (the next one follows). A pattern (not expanded) is
+never compiled. Test: `tests/conformance/stmt.expand/oven-memory.cpp`
+(48 elements, each copy allocating 256 bytes: `peak_bytes<=512`).
+
 ### Coroutines — rejected (WP-351)
 A coroutine is never a constexpr function ([dcl.constexpr]/3; Sema
 rejects `constexpr`/`consteval` coroutines and drops the implicit

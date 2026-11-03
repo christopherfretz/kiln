@@ -253,6 +253,7 @@ impl Sema<'_, '_> {
                     || lists.iter::<StmtId>(st.try_handlers(s)).any(|h| s_(Some(h)))
             }
             StmtKind::CXXCatchStmt => s_(Some(st.catch_block(s))),
+            StmtKind::CXXExpansionStmt => self.children(s).into_iter().any(|c| s_(Some(c))),
             StmtKind::GCCAsmStmt => st.asm_operands(s).iter().any(|op| e(Some(op.expr))),
             _ => false,
         }
@@ -343,6 +344,7 @@ impl Sema<'_, '_> {
             StmtKind::ContinueStmt => true,
             StmtKind::ForStmt => sub(st.loop_data(s).init),
             StmtKind::CXXForRangeStmt => sub(st.range_for_data(s).init),
+            StmtKind::CXXExpansionStmt => sub(st.expansion_data(s).init),
             StmtKind::WhileStmt | StmtKind::DoStmt => false,
             StmtKind::IfStmt => {
                 let i = *st.if_data(s);

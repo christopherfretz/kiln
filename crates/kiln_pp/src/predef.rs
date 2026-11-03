@@ -272,6 +272,9 @@ const KILN_FEATURES: &[(u64, &str, &str)] = &[
     // C++20 modules (WP-363, spec/modules.md §4): clang 22's value, from
     // C++20 on (clang 19 does not define it).
     (202_002, "__cpp_modules", "1"),
+    // P1306R5 expansion statements (WP-447): C++26 only, whatever the
+    // -fclang-compat (clang 22 does not define it).
+    (202_400, "__cpp_expansion_statements", "202506L"),
 ];
 
 /// The driver-injected `-D` that clang's driver appends after the user's
@@ -627,7 +630,7 @@ mod tests {
         }
     }
 
-    /// kiln's own feature-test macros (P2747, P3068) at C++26, at every
+    /// kiln's own feature-test macros (P2747, P3068, P1306) at C++26, at every
     /// compatibility level, and not before C++26 or without exceptions.
     #[test]
     fn kiln_constexpr_feature_macros() {
@@ -639,10 +642,12 @@ mod tests {
             let s = build_predefines(b26, &cfg, &[]);
             assert!(s.contains("#define __cpp_constexpr 202406L\n"), "{s}");
             assert!(s.contains("#define __cpp_constexpr_exceptions 202411L\n"), "{s}");
+            assert!(s.contains("#define __cpp_expansion_statements 202506L\n"), "{s}");
         }
         let s = build_predefines(b23, &cfg, &[]);
         assert!(s.contains("#define __cpp_constexpr 202211L\n"), "{s}");
         assert!(!s.contains("__cpp_constexpr_exceptions"), "{s}");
+        assert!(!s.contains("__cpp_expansion_statements"), "{s}");
         cfg.exceptions = false;
         let s = build_predefines(b26, &cfg, &[]);
         assert!(!s.contains("__cpp_constexpr_exceptions"), "{s}");

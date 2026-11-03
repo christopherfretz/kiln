@@ -186,6 +186,13 @@ impl Detector<'_> {
                     && self.decl(d.loop_var, p)
                     && self.stmt(d.body, p)
             }
+            StmtKind::CXXExpansionStmt if st.expansion_expanded(s) => {
+                let d = *st.expansion_data(s);
+                let l = &self.ast.lists;
+                let kids: Vec<StmtId> =
+                    l.iter(d.prelude).chain(l.iter::<StmtId>(d.expansions)).collect();
+                self.opt_stmt(d.init, p) && kids.into_iter().all(|x| self.stmt(x, p))
+            }
             StmtKind::AttributedStmt => self.stmt(StmtId::new(st.get(s).b()), p),
             StmtKind::ReturnStmt => self.opt_expr(st.return_value(s)),
             StmtKind::CoreturnStmt => self.opt_expr(st.coreturn_operand(s)),
