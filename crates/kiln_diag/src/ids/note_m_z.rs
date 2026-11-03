@@ -100,6 +100,7 @@ note_pure_virtual_method = Note (2) "unimplemented pure virtual method '{0}' in 
 note_raii_guard_add_name = Note (2) "add a variable name to declare a {0} initialized with '{1}'";
 note_ref_or_ptr_member_here = Note (1) "{0:reference|pointer} member declared here";
 note_refconst_member_not_initialized = Note (2) "{0:const|reference} member {1} will never be initialized";
+note_reference_is_return_value = Note (1) "{0} returns a reference";
 note_reference_temporary_list_init = Note (1) "in initialization of temporary of type {0} created to list-initialize this reference";
 note_referenced_type_template = Note (1) "{0:class|type alias} template declared here";
 note_remove_abs = Note (1) "remove the call to '{0}' since unsigned values cannot be negative";

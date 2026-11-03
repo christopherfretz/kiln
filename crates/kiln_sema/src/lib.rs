@@ -59,6 +59,7 @@ pub mod lookup;
 pub mod modules;
 pub mod names;
 pub mod new_delete;
+mod null_compare;
 mod null_deref;
 mod nullability;
 mod oven_bridge;
@@ -440,6 +441,11 @@ pub struct Sema<'a, 'sm> {
     /// issues them again, as clang's rebuilt one does (spec/sema.md
     /// §5.15, WP-235).
     pub(crate) null_deref_rewarn: kiln_source::fx::FxHashMap<ExprId, (usize, Diag)>,
+    /// The always-non-null comparison warnings of a template definition,
+    /// by the operand they point at: an instantiation sharing the
+    /// non-dependent operand issues them again, as clang's rebuilt
+    /// comparison does (spec/sema.md §5.26).
+    pub(crate) null_compare_rewarn: kiln_source::fx::FxHashMap<ExprId, (usize, Diag)>,
     /// The non-dependent variadic arguments of a template definition's
     /// calls that the instantiation must diagnose (a `void` or non-trivial
     /// class argument), with the callee kind: clang checks them only in
@@ -857,6 +863,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),
             null_deref_rewarn: kiln_source::fx::FxHashMap::default(),
+            null_compare_rewarn: kiln_source::fx::FxHashMap::default(),
             vararg_recheck: kiln_source::fx::FxHashMap::default(),
             null_deref_seen: kiln_source::fx::FxHashSet::default(),
             designator_pending: None,
