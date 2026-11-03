@@ -3043,6 +3043,13 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     a use is an undeclared identifier there), matching `__has_builtin` at
     each level. Folding: spec/oven.md "Builtins"; lowering:
     spec/codegen.md (`tests/conformance/c.math/f16-builtins*.cpp`).
+  - WP-419: `__builtin_signbitf(float)` / `__builtin_signbitl(long
+    double)` (clang 19 and 22; ordinary argument conversions, unlike the
+    custom-checked `__builtin_signbit`), and clang 22's
+    `__builtin_fmaximum_numf128` / `fminimum_numf128` / `sincosf128`
+    (`__float128`, i.e. `long double` on AArch64) and
+    `__builtin_sincospi{,f,l}` (`void(T, T*, T*)`, `nothrow`; only at
+    `-fclang-compat=22`, `builtin::min_compat`).
 - **Format strings** (WP-282; `format_string.rs`, clang
   `CheckPrintfHandler`): a call whose callee has a `format(printf, F, A)`
   attribute with `A` > 0 and whose argument `F` is an ordinary string

@@ -11,6 +11,8 @@
 #define ZERO(b) static_assert(!__has_constexpr_builtin(b) && __has_builtin(b), #b)
 ZERO(__builtin_abs); ZERO(__builtin_labs); ZERO(__builtin_llabs);
 ZERO(__builtin_signbit);
+// WP-419: the float / long double spellings.
+ZERO(__builtin_signbitf); ZERO(__builtin_signbitl);
 ZERO(__builtin_isgreater); ZERO(__builtin_isgreaterequal);
 ZERO(__builtin_isless); ZERO(__builtin_islessequal);
 ZERO(__builtin_islessgreater); ZERO(__builtin_isunordered);

@@ -260,6 +260,8 @@ pub static TABLE: &[Row] = &[
     f("__builtin_isnan", DONE, Oven::Yes),
     f("__builtin_isnormal", DONE, Oven::Yes),
     f("__builtin_signbit", DONE, Oven::Yes),
+    f("__builtin_signbitf", DONE, Oven::Yes),
+    f("__builtin_signbitl", DONE, Oven::Yes),
     f("__builtin_isgreater", DONE, Oven::Yes),
     f("__builtin_isgreaterequal", DONE, Oven::Yes),
     f("__builtin_isless", DONE, Oven::Yes),

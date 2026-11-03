@@ -69,8 +69,7 @@ fn clang19_unevaluated(b: u32) -> bool {
     id::p0533_base(b).is_some()
         || matches!(
             b,
-            id::SIGNBIT
-                | id::ISGREATER
+            id::ISGREATER
                 | id::ISGREATEREQUAL
                 | id::ISLESS
                 | id::ISLESSEQUAL

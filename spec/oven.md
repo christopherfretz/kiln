@@ -610,7 +610,8 @@ literal is one instruction and one step, not an interpreted loop.
   `ceil`/`floor`/`trunc`/`round`/`roundeven`/`rint`/`nearbyint`,
   `lround`/`llround`/`lrint`/`llrint`, `fmod`/`remainder`/`remquo`,
   `fdim`, `fma`, `frexp`/`ldexp`/`scalbn`/`scalbln`/`ilogb`/`logb`/`modf`,
-  `nextafter`/`nexttoward`, `nextafterf16`/`f16b`, `signbit`, the six
+  `nextafter`/`nexttoward`, `nextafterf16`/`f16b`, `signbit` (WP-419:
+  `signbitf` / `signbitl` through `builtin::f128_twin`), the six
   comparison macros (`isgreater` ... `isunordered`, quiet: false on NaN)
   and integer `abs`/`labs`/`llabs` (`bi::IABS`), and P1383's `sqrt`
   (WP-393, `bi::SQRT`), each in its plain, `f`, `l` and `f128` spellings
@@ -663,7 +664,7 @@ literal is one instruction and one step, not an interpreted loop.
   `_num` forms): `fabs`, `copysign`, `fmax`/`fmin` (each spelling,
   `__builtin_fabsf16`/`fmaxf16`/`fminf16` through `f16_twin`) and the
   clang 22 `fmaximum_num`/`fminimum_num` in every spelling (`f16`, plain,
-  `f`, `l`; WP-410 for the last three), bit-exact as clang folds
+  `f`, `l`, `f128`; WP-410 for plain/`f`/`l`, WP-419 for `f128`), bit-exact as clang folds
   them: `fmax`/`fmin` below `-fclang-compat=22` (clang 19 `APFloat::
   maxnum`) yield the other operand for a NaN (`-0 < +0`); at 22
   (`FMAX_22`/`FMIN_22`, LLVM 22 `maxnum`) a signaling NaN `a`, else a

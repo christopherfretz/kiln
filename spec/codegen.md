@@ -320,8 +320,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `llvm.is.fpclass` with the folded mask `m` (not emitted; the fold
       prepass collects it); `__builtin_expect_with_probability` at -O0 is
       its first operand (the expected value emitted, the probability
-      not); signbit bitcasts to an integer of the
-      float's width and tests `slt 0`; the isgreater family is one
+      not); signbit (and WP-419's `signbitf` / `signbitl`, through
+      `builtin::f128_twin`) bitcasts to an integer of the
+      float's width and tests `slt 0`, and a constant argument folds
+      (clang 19 and 22; `builtins_signbit_fl.cpp`); the isgreater family is one
       `fcmp` (`ogt oge olt ole one uno`) zero-extended;
     - memcpy/memmove are `llvm.memcpy`/`llvm.memmove` (`i64` length,
       not volatile) with each pointer's known alignment as a parameter
@@ -437,7 +439,11 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `fminimum_num{,f,l}` are `llvm.roundeven`/`canonicalize`/
       `maximumnum`/`minimumnum` of the operand type; `exp10{,f,l}` and
       clang 22's `sincos{,f,l}` call the library function of that name
-      (WP-410; `builtins_c_math.cpp`, `builtins_c_math_22.cpp`). A
+      (WP-410; `builtins_c_math.cpp`, `builtins_c_math_22.cpp`). WP-419:
+      clang 22's `fmaximum_numf128` / `fminimum_numf128` lower as their
+      `l` twins (`llvm.maximumnum` / `minimumnum` of `fp128`), and
+      `sincosf128` and `sincospi{,f,l}` call the function of that name
+      (`builtins_c_math_more_22.cpp`). A
       `*f16` builtin (WP-403) is
       lowered likewise through `builtin::f16_twin` on `half` operands:
       `ceil`/`floor`/`trunc`/`round`/`rint`/`fabs`/`fma`/`fmax`/`fmin`

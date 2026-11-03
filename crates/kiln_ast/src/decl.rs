@@ -3041,6 +3041,11 @@ pub mod builtin {
     pub const ISNORMAL: u32 = 736;
     /// `__builtin_signbit` (clang `Builtins.td` signature `i.`).
     pub const SIGNBIT: u32 = 1089;
+    /// WP-419: `__builtin_signbitf` (`int(float)`; [`f128_twin`] maps it
+    /// to [`SIGNBIT`]).
+    pub const SIGNBITF: u32 = 1090;
+    /// WP-419: `__builtin_signbitl` (`int(long double)`).
+    pub const SIGNBITL: u32 = 1091;
     /// `__builtin_isgreater` (clang `Builtins.td` signature `i.`).
     pub const ISGREATER: u32 = 727;
     /// `__builtin_isgreaterequal` (clang `Builtins.td` signature `i.`).
@@ -3384,6 +3389,8 @@ pub mod builtin {
         row(ISNAN, "__builtin_isnan", "i.", N | C | T),
         row(ISNORMAL, "__builtin_isnormal", "i.", N | C | T),
         row(SIGNBIT, "__builtin_signbit", "i.", N | C | T),
+        row(SIGNBITF, "__builtin_signbitf", "if", N | C),
+        row(SIGNBITL, "__builtin_signbitl", "iLd", N | C),
         row(ISGREATER, "__builtin_isgreater", "i.", N | C | T),
         row(ISGREATEREQUAL, "__builtin_isgreaterequal", "i.", N | C | T),
         row(ISLESS, "__builtin_isless", "i.", N | C | T),
@@ -4430,6 +4437,10 @@ pub mod builtin {
     pub const FMAXF128: u32 = 590;
     /// `__builtin_fminf128`.
     pub const FMINF128: u32 = 598;
+    /// WP-419: `__builtin_fmaximum_numf128` (clang 22).
+    pub const FMAXIMUM_NUMF128: u32 = 2060;
+    /// WP-419: `__builtin_fminimum_numf128` (clang 22).
+    pub const FMINIMUM_NUMF128: u32 = 2061;
     /// `__builtin_frexpf128`.
     pub const FREXPF128: u32 = 620;
     /// `__builtin_huge_valf128`.
@@ -4536,6 +4547,11 @@ pub mod builtin {
         row(582, "__builtin_fmaf128", "LLdLLdLLdLLd", N),
         row(FMAXF128, "__builtin_fmaxf128", "LLdLLdLLd", N | C),
         row(FMINF128, "__builtin_fminf128", "LLdLLdLLd", N | C),
+        // WP-419: clang 22's `fmaximum_num` / `fminimum_num` / `sincos`
+        // `f128` forms (kiln-private ids, [`min_compat`]).
+        row(FMAXIMUM_NUMF128, "__builtin_fmaximum_numf128", "LLdLLdLLd", N | C),
+        row(FMINIMUM_NUMF128, "__builtin_fminimum_numf128", "LLdLLdLLd", N | C),
+        row(2062, "__builtin_sincosf128", "vLLdLLd*LLd*", N),
         row(606, "__builtin_fmodf128", "LLdLLdLLd", N),
         row(FREXPF128, "__builtin_frexpf128", "LLdLLdi*", N),
         row(HUGE_VALF128, "__builtin_huge_valf128", "LLd", N | C),
@@ -4649,6 +4665,9 @@ pub mod builtin {
             RINTF128 => RINTL,
             ROUNDF128 => ROUNDL,
             TRUNCF128 => TRUNCL,
+            FMAXIMUM_NUMF128 => FMAXIMUM_NUML,
+            FMINIMUM_NUMF128 => FMINIMUM_NUML,
+            SIGNBITF | SIGNBITL => SIGNBIT,
             _ => return f16_twin(id),
         })
     }
@@ -4747,13 +4766,16 @@ pub mod builtin {
     }
 
     /// The lowest `-fclang-compat` level that declares builtin `id`
-    /// (clang 19 lacks `atan2f16`, `sincosf16`, `sincos{,f,l}` and the
-    /// `fmaximum_num` / `fminimum_num` family; `__has_builtin` answers from the
+    /// (clang 19 lacks `atan2f16`, `sincosf16`, `sincos{,f,l}`, the
+    /// `fmaximum_num` / `fminimum_num` family, and WP-419's `sincospi{,f,l}`
+    /// and `f128` forms; `__has_builtin` answers from the
     /// generated clang tables, which agree).
     pub fn min_compat(id: u32) -> u32 {
         match id {
             // 2039..=2047 (WP-410): `sincos`, `fmaximum_num`, `fminimum_num`.
             2035 | 2036 | FMAXIMUM_NUMF16 | FMINIMUM_NUMF16 | 2039..=2047 => 22,
+            // WP-419: the `f128` forms and `sincospi`.
+            2060..=2065 => 22,
             _ => 0,
         }
     }
@@ -4818,7 +4840,7 @@ pub mod builtin {
     /// The `double`/`float`/`long double` builtins clang answers
     /// `__has_builtin` for that are library calls, like [`LIBM`]
     /// ([`is_libm`]): `exp10` and clang 22's `sincos` (GNU extensions;
-    /// clang 19 lacks `sincos`).
+    /// clang 19 lacks `sincos`) and (WP-419) `sincospi`.
     pub const C_MATH_LIB: &[Info] = &[
         row(522, "__builtin_exp10", "dd", N),
         row(521, "__builtin_exp10f", "ff", N),
@@ -4826,6 +4848,10 @@ pub mod builtin {
         row(2039, "__builtin_sincos", "vdd*d*", N),
         row(2040, "__builtin_sincosf", "vff*f*", N),
         row(2041, "__builtin_sincosl", "vLdLd*Ld*", N),
+        // WP-419: clang 22's `sincospi` (kiln-private ids).
+        row(2063, "__builtin_sincospi", "vdd*d*", N),
+        row(2064, "__builtin_sincospif", "vff*f*", N),
+        row(2065, "__builtin_sincospil", "vLdLd*Ld*", N),
     ];
 
     // ---- end WP-410 ----
