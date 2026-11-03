@@ -415,7 +415,15 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       double` twin (`builtin::f128_twin`) is lowered as the twin on its
       `fp128` operands (intrinsic or constant); `roundevenf128` is
       `llvm.roundeven`; the others call the function of the builtin's
-      own name (`builtins_f128.cpp`).
+      own name (`builtins_f128.cpp`). A `*f16` builtin (WP-403) is
+      lowered likewise through `builtin::f16_twin` on `half` operands:
+      `ceil`/`floor`/`trunc`/`round`/`rint`/`fabs`/`fma`/`fmax`/`fmin`
+      as their `llvm.*.f16` intrinsics, `roundevenf16`,
+      `canonicalizef16`, `fmaximum_numf16`, `fminimum_numf16` as
+      `llvm.roundeven`/`canonicalize`/`maximumnum`/`minimumnum`,
+      `frexpf16` as `llvm.frexp.f16.i32`, the libm set as calls of the
+      `half` function the builtin names (`sinf16`, `ldexpf16`, ...)
+      (`builtins_f16_libm.cpp`).
   - a call of one of the standard functions clang treats as builtins
     (clang `isStdBuiltin`: `std::move`, `move_if_noexcept`, `forward`,
     `forward_like`, `as_const`, `addressof`, `__addressof`, declared in
@@ -2255,10 +2263,13 @@ return gets clang's `retval` temporary, erased when unused.
 
 clang `CodeGenModule::setTLSMode`, `ItaniumCXXABI::EmitThreadLocalInitFuncs`
 and `EmitThreadLocalVarDeclLValue` mirrored ([basic.stc.thread],
-[basic.start.dynamic]/7, [basic.start.term]/1, Itanium ABI §3.4). Every
-`thread_local`, `_Thread_local` or `__thread` variable is a C++ dynamic
-TLS variable (sema does not yet tell `__thread` apart, kiln_sema
-`decl.rs` `TlsKind::Static`).
+[basic.start.dynamic]/7, [basic.start.term]/1, Itanium ABI §3.4). A
+`thread_local` variable is a C++ dynamic TLS variable (`TlsKind::Dynamic`).
+A `__thread` or `_Thread_local` variable is clang `TLS_Static`
+(`TlsKind::Static`, WP-396): it is a `thread_local` global with no
+`_ZTW`/`_ZTH`, reached through `@llvm.threadlocal.address`. Sema
+guarantees it a constant initializer and a trivial destructor
+(spec/sema.md §4.10).
 
 - **Globals.** A thread-local variable's global (namespace-scope, static
   data member, function-local, its `_ZGV` guard and the `_ZGR` of a
@@ -2298,8 +2309,7 @@ TLS variable (sema does not yet tell `__thread` apart, kiln_sema
 - Tests: `tests/codegen/thread_local.cpp`,
   `tests/codegen/module_thread_local.cpp` (oracle 22),
   `tests/conformance/basic.stc.thread/module-tls-run.cpp`.
-- **Remaining:** `__thread`/`_Thread_local` as clang `TLS_Static` (no
-  wrapper, constant initialization only); clang emits a template
+- **Remaining:** clang emits a template
   variable's initializer after the TU's functions (deferred) where kiln
   emits it at first use, so `thread_local.cpp` has no thread-local
   variable template.

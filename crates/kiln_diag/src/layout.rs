@@ -202,15 +202,54 @@ fn map_ranges(sm: &SourceManager, caret: Loc, ranges: &[Range]) -> Vec<Range> {
 }
 
 /// clang's `checkRangesForMacroArgExpansion`: whether the expansion note
-/// for macro location `l` is dropped as adding nothing. clang compares
+/// for macro location `l` is dropped as adding nothing. clang 19 compares
 /// the ranges *after* `mapDiagnosticRanges`, which yields spelling (file)
 /// locations that are never macro-argument expansions; so the note is
 /// dropped only for a diagnostic without valid ranges whose location `l`
 /// is a macro-argument expansion (e.g. `use of undeclared identifier` on
 /// a macro argument), and kept whenever a range is shown.
-fn ranges_in_same_arg(sm: &SourceManager, l: Loc, ranges: &[Range]) -> bool {
-    ranges.iter().all(|r| !r.span.lo.is_valid())
-        && sm.expansion_info(l).is_some_and(|e| e.kind == ExpansionKind::MacroArg)
+///
+/// clang 22 (`rangesInsideSameMacroArgExpansion`) checks the unmapped
+/// ranges, including the invalid ones a diagnostic streams (an unset
+/// `R2`): every range must be a single token spelled in a macro argument
+/// (a longer range never qualifies, as its locations' argument expansion
+/// start is not `l`), so an invalid range keeps the notes (spec/diag.md
+/// §3.3).
+fn ranges_in_same_arg(sm: &SourceManager, l: Loc, ranges: &[Range], compat: u32) -> bool {
+    if !sm.expansion_info(l).is_some_and(|e| e.kind == ExpansionKind::MacroArg) {
+        return false;
+    }
+    if compat < 22 {
+        return ranges.iter().all(|r| !r.span.lo.is_valid());
+    }
+    let valid: Vec<Range> = ranges.iter().filter(|r| r.span.lo.is_valid()).cloned().collect();
+    if map_ranges(sm, l, &valid).len() < valid.len() {
+        return false;
+    }
+    ranges.iter().all(|r| {
+        r.span.lo.is_valid()
+            && sm.expansion_info(r.span.lo).is_some_and(|e| e.kind == ExpansionKind::MacroArg)
+            && single_token(sm, r.span)
+    })
+}
+
+/// Whether `span` covers one token: a token range whose begin is its end
+/// (as sema streams an expression's range), or a half-open range over an
+/// identifier, a number or a literal.
+fn single_token(sm: &SourceManager, span: Span) -> bool {
+    if span.lo == span.hi {
+        return true;
+    }
+    let Some(d) = sm.same_entry_distance(span.lo, span.hi) else { return false };
+    let lo = sm.spelling_loc(span.lo);
+    let Some(t) = sm.span_text(Span::new(lo, lo.with_offset(d))) else { return false };
+    let t = t.trim_end();
+    let Some(c) = t.chars().next() else { return false };
+    if c == '"' || c == '\'' {
+        return !t.contains(char::is_whitespace);
+    }
+    let digit = c.is_ascii_digit();
+    t.chars().all(|x| x.is_alphanumeric() || x == '_' || (digit && (x == '.' || x == '\'')))
 }
 
 /// clang's `Lexer::getImmediateMacroNameForDiagnostics`: the name of the
@@ -234,16 +273,27 @@ fn macro_name(sm: &SourceManager, mut loc: Loc) -> Option<&str> {
 }
 
 /// Lays out `d` and its notes.
-pub(crate) fn layout(sm: &SourceManager, d: &Diagnostic, backtrace_limit: u32) -> Vec<Entry> {
+pub(crate) fn layout(
+    sm: &SourceManager,
+    d: &Diagnostic,
+    backtrace_limit: u32,
+    compat: u32,
+) -> Vec<Entry> {
     let mut out = Vec::new();
-    push_diagnostic(sm, d, backtrace_limit, &mut out);
+    push_diagnostic(sm, d, backtrace_limit, compat, &mut out);
     for n in &d.notes {
-        push_diagnostic(sm, n, backtrace_limit, &mut out);
+        push_diagnostic(sm, n, backtrace_limit, compat, &mut out);
     }
     out
 }
 
-fn push_diagnostic(sm: &SourceManager, d: &Diagnostic, limit: u32, out: &mut Vec<Entry>) {
+fn push_diagnostic(
+    sm: &SourceManager,
+    d: &Diagnostic,
+    limit: u32,
+    compat: u32,
+    out: &mut Vec<Entry>,
+) {
     let loc = d.span.lo;
     let mut raw: Vec<Range> = d
         .labels
@@ -279,7 +329,19 @@ fn push_diagnostic(sm: &SourceManager, d: &Diagnostic, limit: u32, out: &mut Vec
         fixits: d.fixits.clone(),
     });
     if loc.is_macro() {
-        macro_expansions(sm, loc, &raw, limit, out);
+        // clang 22 also sees the invalid ranges a diagnostic streams.
+        let all: Vec<Range> = if compat >= 22 {
+            let mut all: Vec<Range> = d
+                .labels
+                .iter()
+                .map(|l| Range { span: l.span, label: Some(l.text.clone()) })
+                .collect();
+            all.extend(raw.iter().filter(|r| r.label.is_none()).cloned());
+            all
+        } else {
+            Vec::new()
+        };
+        macro_expansions(sm, loc, &raw, &all, limit, compat, out);
     }
 }
 
@@ -288,7 +350,9 @@ fn macro_expansions(
     sm: &SourceManager,
     start: Loc,
     ranges: &[Range],
+    all: &[Range],
     limit: u32,
+    compat: u32,
     out: &mut Vec<Entry>,
 ) {
     let mut stack: Vec<Loc> = Vec::new();
@@ -297,7 +361,7 @@ fn macro_expansions(
     while l.is_macro() {
         let Some(e) = sm.expansion_info(l) else { break };
         stack.push(if e.kind == ExpansionKind::MacroArg { e.expansion.lo } else { l });
-        if ranges_in_same_arg(sm, l, ranges) {
+        if ranges_in_same_arg(sm, l, if compat >= 22 { all } else { ranges }, compat) {
             ignored_end = stack.len();
         }
         l = sm.immediate_macro_caller_loc(l);

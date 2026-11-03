@@ -188,7 +188,11 @@ impl Sema<'_, '_> {
                     format!("'size_t' (aka '{canon}')")
                 } else {
                     let signed = canon.strip_prefix("unsigned ").unwrap_or(canon);
-                    format!("'ssize_t' (aka '{signed}')")
+                    if self.clang_compat >= 22 {
+                        format!("'signed size_t' (aka '{signed}')")
+                    } else {
+                        format!("'ssize_t' (aka '{signed}')")
+                    }
                 }
             }
             Want::Int { class, unsigned, .. } => {

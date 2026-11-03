@@ -19,7 +19,7 @@
 //@ diag: 36:23 error "explicit instantiation of 'm' does not refer to a function template, variable template, member function, member class, or static data member"
 //@ diag: 35:78 note "candidate template ignored: substitution failure [with U = C, V = typename C::P]: 'P' is a private member of 'C'"
 //@ requires: clang<22
-// clang 22 no longer emits 32:15 error "explicit instantiation of 'rt' does not refer to a function...; WP-355 residual
+// WP-355 residual: clang 22 skips access checks while deducing an explicit instantiation's candidates (rt, D<int>::m are accepted); kiln still fails them.
 class C {
   typedef int P;
   static int obj;

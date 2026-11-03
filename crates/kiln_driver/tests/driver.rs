@@ -119,10 +119,11 @@ fn preprocess_stdin() {
 #[test]
 fn builtin_buffer_like_clang() {
     // clang 19 pushes the interference sizes, so `-D` redefines them
-    // without a warning and `pop_macro` restores the original.
+    // without a warning and `pop_macro` restores the original (64; clang
+    // 22's original is target-dependent, so the level is pinned).
     let src = "int a = __GCC_DESTRUCTIVE_SIZE;\n#pragma pop_macro(\"__GCC_DESTRUCTIVE_SIZE\")\n\
                int b = __GCC_DESTRUCTIVE_SIZE;\n";
-    let o = kiln(&["-E", "-P", "-D__GCC_DESTRUCTIVE_SIZE=128", "-"], src);
+    let o = kiln(&["-E", "-P", "-fclang-compat=19", "-D__GCC_DESTRUCTIVE_SIZE=128", "-"], src);
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));
     assert_eq!(o.stdout, "int a = 128;\nint b = 64;\n");
     // Before `<command line>`, the move back to the marker's line in
@@ -671,11 +672,11 @@ fn module_adl_example() {
         .map(|l| l.rsplit('/').next().unwrap_or(l))
         .collect();
     let want = [
-        "module-example.cpp:25:3: error: no matching function for call to 'f'",
+        "module-example.cpp:27:6: error: no type named 'f' in namespace 'R'",
+        "module-example.cpp:29:3: error: no matching function for call to 'f'",
         "adl-m.cppm:5:15: note: candidate function not viable: requires 1 argument, but 2 were provided",
-        "module-example.cpp:31:6: error: no type named 'f' in namespace 'R'",
         "adl-n.cppm:8:3: error: use of undeclared identifier 'g'",
-        "module-example.cpp:27:3: note: in instantiation of function template specialization 'apply<R::X, S::Z>' requested here",
+        "module-example.cpp:31:3: note: in instantiation of function template specialization 'apply<R::X, S::Z>' requested here",
     ];
     assert_eq!(lines, want, "{}", o.stderr);
 }

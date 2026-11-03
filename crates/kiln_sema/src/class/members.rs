@@ -211,6 +211,11 @@ impl Sema<'_, '_> {
                     let redundant = d.init_style.is_none()
                         && prev_def.is_some_and(|x| self.is_in_class_static(x));
                     let prev_def = prev_def.filter(|_| !redundant);
+                    if compatible {
+                        // [dcl.stc]/4: one thread storage kind.
+                        let n = sym_str(self, name);
+                        self.check_tls_redecl(p, spec.tls(), prev_def.is_some(), loc, &n);
+                    }
                     if !compatible {
                         let msg = self
                             .diag(DiagId::sema_redefinition_different_type, loc)
@@ -427,10 +432,18 @@ impl Sema<'_, '_> {
             // Any constant value of the member's type will do: not
             // `eval_int`, whose `i128` cannot hold every `unsigned
             // __int128` (`~(unsigned __int128)0`, WP-275).
-            if self.eval_const(e, ctx).is_err() {
-                // clang reports at the initializer's `getExprLoc`.
-                let at = self.culprit_loc(e);
-                self.error(DiagId::sema_static_member_init_not_ice, at);
+            if let Err(f) = self.eval_const(e, ctx) {
+                if self.clang_compat >= 22 {
+                    // clang 22 reports at the member, with the
+                    // evaluation's notes.
+                    let d = self.diag(DiagId::sema_static_member_init_not_ice, vn.loc());
+                    let d = Self::with_failure_notes(d, f);
+                    self.emit(d);
+                } else {
+                    // clang 19 reports at the initializer's `getExprLoc`.
+                    let at = self.culprit_loc(e);
+                    self.error(DiagId::sema_static_member_init_not_ice, at);
+                }
                 self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
             }
         } else if self.is_literal_type(ty) {

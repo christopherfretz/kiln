@@ -80,6 +80,15 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // every compat level, as clang 22 does; clang 19 did neither.
     ("atomic_padded", "aarch64-unknown-linux-gnu", "19", Allow::Structure),
     ("atomic_padded", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
+    // An importer of a module whose global module fragment defines G's key
+    // function: kiln declares `_ZTV1G` external (the interface unit emits
+    // it with `_ZTI1G`/`_ZTS1G`, Itanium ABI §5.2.3); clang 22 omits them
+    // from the interface and defines them, with G's deleting destructor,
+    // strongly in every importer, so two importers fail to link
+    // (spec/modules.md §10 deviation 7). The extra globals are in the ABI
+    // slice.
+    ("module_gmf_vtable", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    ("module_gmf_vtable", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // LLVM 20+ passes x86-64 `__int128` as `i128` instead of `{ i64, i64 }`
     // / two `i64`s (the same registers and stack slots: SysV §3.2.3).
     ("abi_decls", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
@@ -102,8 +111,8 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     ("noinline_matrix_o1", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
     ("noinline_matrix_o2", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
     // clang 22 drops the comdat of an `internal` template parameter
-    // object (kiln does at `-fclang-compat=22`, which this run does not
-    // pass).
+    // object and of the specializations it is an argument of (`fa<Arr{
+    // ...}>`); at `-fclang-compat=22` kiln drops only the object's.
     ("linkage_internal_nttp", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("linkage_internal_nttp", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     // clang 22 names members of an unnamed class `(unnamed struct)::N` in
@@ -204,7 +213,8 @@ fn min_oracle(file: &Path) -> Option<u32> {
     src.lines().find_map(|l| l.strip_prefix("//@ min-oracle:")).and_then(|v| v.trim().parse().ok())
 }
 
-/// Compiles `file` for `triple` with the in-process driver.
+/// Compiles `file` for `triple` with the in-process driver, at the
+/// oracle's compat level (`kiln++` defaults to 22 since WP-394).
 fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     let out = SharedBuffer::new();
     let err = SharedBuffer::new();

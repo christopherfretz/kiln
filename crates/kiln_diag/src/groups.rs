@@ -65,24 +65,51 @@ impl Group {
     }
 
     /// True if `id` is a member of this group (directly, through a
-    /// subgroup, or as a group-less extension of `pedantic`).
+    /// subgroup, or as a group-less extension of `pedantic`), with clang
+    /// 19's group tree.
     pub fn contains(self, id: DiagId) -> bool {
+        self.contains_at(id, 19)
+    }
+
+    /// [`Self::contains`] with the group tree of clang `compat`
+    /// ([`Self::compat_subgroups`]).
+    pub fn contains_at(self, id: DiagId, compat: u32) -> bool {
         if self == Group::Pedantic && id.group().is_none() && id.class() == DiagClass::Extension {
             return true;
         }
         match id.group() {
-            Some(g) => self.contains_group(g),
+            Some(g) => self.contains_group(g, compat),
             None => false,
         }
     }
 
-    fn contains_group(self, g: Group) -> bool {
-        self == g || self.subgroups().iter().any(|s| s.contains_group(g))
+    fn contains_group(self, g: Group, compat: u32) -> bool {
+        self == g
+            || self.subgroups().iter().any(|s| s.contains_group(g, compat))
+            || self.compat_subgroups(compat).iter().any(|s| s.contains_group(g, compat))
     }
 
-    /// The members of this group, in table order.
+    /// Subgroups a group has only from a clang compat level on
+    /// (`-fclang-compat=`, spec/diag.md §2.4): clang 22's `c99-designator`
+    /// takes `initializer-overrides` and `reorder-init-list`, so
+    /// `-Wno-c99-designator` silences both.
+    pub const fn compat_subgroups(self, compat: u32) -> &'static [Group] {
+        match self {
+            Group::C99Designator if compat >= 22 => {
+                &[Group::InitializerOverrides, Group::ReorderInitList]
+            }
+            _ => &[],
+        }
+    }
+
+    /// The members of this group, in table order (clang 19's tree).
     pub fn members(self) -> impl Iterator<Item = DiagId> {
-        DiagId::ALL.iter().copied().filter(move |&id| self.contains(id))
+        self.members_at(19)
+    }
+
+    /// The members of this group with the group tree of clang `compat`.
+    pub fn members_at(self, compat: u32) -> impl Iterator<Item = DiagId> {
+        DiagId::ALL.iter().copied().filter(move |&id| self.contains_at(id, compat))
     }
 }
 
@@ -103,12 +130,13 @@ impl Flavor {
     }
 }
 
-/// The members of the group named `name` for `flavor`, or `None` if
+/// The members of the group named `name` for `flavor` (with clang
+/// `compat`'s group tree), or `None` if
 /// neither kiln nor clang knows the name (clang's `getDiagnosticsInGroup`
 /// returning true).
-pub(crate) fn group_members(flavor: Flavor, name: &str) -> Option<Vec<DiagId>> {
+pub(crate) fn group_members(flavor: Flavor, name: &str, compat: u32) -> Option<Vec<DiagId>> {
     if let Some(g) = Group::from_name(name) {
-        return Some(g.members().filter(|&id| flavor.matches(id)).collect());
+        return Some(g.members_at(compat).filter(|&id| flavor.matches(id)).collect());
     }
     CLANG_GROUP_NAMES.binary_search(&name).is_ok().then(Vec::new)
 }

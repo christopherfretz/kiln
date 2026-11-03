@@ -42,6 +42,7 @@ impl Substituter<'_, '_, '_> {
             }
             if s.tls() != TlsKind::None {
                 ds.thread_local = Some(loc);
+                ds.thread_kind = s.tls();
             }
             if s.is_constexpr() {
                 ds.constexpr = Some(loc);
@@ -365,6 +366,7 @@ impl Substituter<'_, '_, '_> {
         // A lambda in the initializer is numbered in `v`'s context
         // (spec/sema-lambda.md; clang `TemplatedVariable`).
         let saved = self.sema.lambda_mangle.var.replace(v);
+        let errors = self.sema.diags.error_count();
         let i = self.initializer(init, style);
         self.sema.lambda_mangle.var = saved;
         if let Ok(i) = i {
@@ -378,6 +380,11 @@ impl Substituter<'_, '_, '_> {
             // "must be initialized" diagnostic.
             self.sema.ast.decls.set_flags(v, DeclFlags::INVALID);
             self.init_failures += 1;
+            // Only an error of this instantiation: an error of the
+            // pattern's initializer leaves its uses `RecoveryExpr`s.
+            if self.sema.diags.error_count() > errors {
+                self.failed_inits.push(v);
+            }
             Err(SubstFail)
         }
     }

@@ -726,6 +726,14 @@ impl Sema<'_, '_> {
                 return Err(f);
             }
         }
+        // clang 22 (CWG2369): the associated constraints are checked
+        // before the deduced arguments are substituted into the function
+        // type, so a candidate failing both reports the constraints
+        // (spec/sema-templates.md §6.1).
+        let early = self.clang_compat >= 22;
+        if early {
+            self.deduced_constraints(ft, depth, &d, sugared, loc)?;
+        }
         // §6.1 step 4: the specialization, its signature substituted.
         let canonical = self.ast.types.canonical_args(sugared);
         let conv = ConvertedArgs { sugared, canonical };
@@ -740,16 +748,8 @@ impl Sema<'_, '_> {
                 // type has been substituted without failure, so a
                 // candidate failing both reports the substitution failure
                 // (clang 19 `FinishTemplateArgumentDeduction`; §6.1, §8.3).
-                let constraints = self.associated_constraints(ft);
-                if !constraints.is_empty() {
-                    let levels = self.prior_levels(ft, depth, &d.args);
-                    let sat = self.check_constraints(ft, &constraints, &levels, sugared, loc);
-                    if !self.sat_ok(sat) {
-                        let mut f = DeductionFailure::new(Tdk::ConstraintsNotSatisfied, d);
-                        f.args = Some(sugared);
-                        f.sat = Some(sat);
-                        return Err(f);
-                    }
+                if !early {
+                    self.deduced_constraints(ft, depth, &d, sugared, loc)?;
                 }
                 // The explicit-specifier, once the constraints are
                 // satisfied (clang `instantiateExplicitSpecifierDeferred`).
@@ -828,6 +828,31 @@ impl Sema<'_, '_> {
     /// context (clang's `hasDeducibleTemplateParameters`): only such a
     /// parameter's argument is an original call argument checked by
     /// [temp.deduct.call]/4. Probed by deducing `p` from itself.
+    /// [temp.deduct.general]/5: the associated constraints of `ft`
+    /// ([temp.constr.decl]/3) with the deduced arguments `sugared`.
+    fn deduced_constraints(
+        &mut self,
+        ft: DeclId,
+        depth: u16,
+        d: &DeducedArgs,
+        sugared: ArgListId,
+        loc: Loc,
+    ) -> Result<(), Box<DeductionFailure>> {
+        let constraints = self.associated_constraints(ft);
+        if constraints.is_empty() {
+            return Ok(());
+        }
+        let levels = self.prior_levels(ft, depth, &d.args);
+        let sat = self.check_constraints(ft, &constraints, &levels, sugared, loc);
+        if self.sat_ok(sat) {
+            return Ok(());
+        }
+        let mut f = DeductionFailure::new(Tdk::ConstraintsNotSatisfied, d.clone());
+        f.args = Some(sugared);
+        f.sat = Some(sat);
+        Err(f)
+    }
+
     fn has_deducible_params(&mut self, p: QualType, d: &DeducedArgs, pattern: bool) -> bool {
         let mut probe = DeducedArgs::new(d.depth, d.args.len());
         probe.loc = d.loc;

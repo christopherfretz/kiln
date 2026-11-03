@@ -1739,6 +1739,15 @@ impl Compiler<'_> {
                     return;
                 }
                 let v = ast.stmts.return_value(s);
+                // clang 22 drops a `return` whose operand has an error
+                // (`containsErrors()`): evaluation goes on past it, to
+                // "control reached end of constexpr function" when nothing
+                // else returns (spec/oven.md "Erroneous expressions").
+                if self.o.clang_compat >= 22
+                    && v.is_some_and(|v| ast.exprs.is_erroneous_operand(v, &ast.lists))
+                {
+                    return;
+                }
                 match (self.ret, v) {
                     (RetKind::Sret(ty), Some(v)) => {
                         self.init(v, 0, ty);
@@ -2231,9 +2240,9 @@ impl Compiler<'_> {
         {
             // clang `CheckLiteralType` (from `EvaluateInPlace`): a local
             // variable of non-literal type, named with its initializer's
-            // whole (array) type. Clang 22 skips the check from C++23
-            // (P2448: [basic.types.general]/10 no longer constrains
-            // constant evaluation), so the constructor call itself fails.
+            // whole (array) type. clang 22 drops the check from C++23 on
+            // (P2448R2: [basic.types.general]/10 no longer constrains
+            // constant evaluation): its constructor or destructor decides.
             let t = Oven::type_name(ast, ast.exprs.get(init).ty().without_quals());
             self.trap(
                 init,
@@ -3683,6 +3692,38 @@ impl Compiler<'_> {
                 Place::Mem(self.fn_lv(e))
             }
             ExprKind::MemberExpr => self.member(e, acc),
+            ExprKind::ArraySubscriptExpr
+                if self.o.clang_compat >= 22 && {
+                    let [a, _] = self.ast().exprs.operands(e);
+                    self.is_vector_expr(a)
+                } =>
+            {
+                // clang 22 evaluates a lane access as an element of the
+                // lane array (spec/oven.md "Vectors").
+                let [a, i] = self.ast().exprs.operands(e);
+                let p = self.vec_object(a, acc);
+                let ri = self.rv(i);
+                let ru = self.reg();
+                self.emit(Op::ICast, 64 << 9, &[ru, ri]);
+                self.lane_place(p, ru, a, e)
+            }
+            ExprKind::ExtVectorElementExpr
+                if self.o.clang_compat >= 22 && self.ext_elt_lane(e).is_some() =>
+            {
+                // clang 22: a one-lane access of a vector object is that
+                // lane (spec/oven.md "Vectors").
+                let lane = self.ext_elt_lane(e).expect("guarded");
+                let ast = self.ast();
+                let base = ast.exprs.operand(e);
+                let p = if ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::ARROW) {
+                    self.rv(base)
+                } else {
+                    self.vec_object(base, acc)
+                };
+                let ri = self.reg();
+                self.konst(ri, u128::from(lane));
+                self.lane_place(p, ri, base, e)
+            }
             ExprKind::ArraySubscriptExpr
                 if {
                     let [a, b] = self.ast().exprs.operands(e);

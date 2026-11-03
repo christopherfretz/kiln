@@ -73,7 +73,10 @@ pub struct EmbedData { bytes: Vec<u8> }
 `suggest_include` names a header for a diagnostic (clang
 `suggestPathToFileForDiagnostics`); `HeaderSearch` implements it with
 `search::suggest_include_name`: the file's path relative to the longest
-search directory that is a path prefix of it (`<...>` for a system
+absolute search directory that is a path prefix of it (a relative one is
+skipped: the suggestion is for a header of an imported unit, whose path
+clang reads back from the BMI as absolute and compares with the search
+directories as written) (`<...>` for a system
 directory, `"..."` otherwise), else relative to `main_dir`, else the whole
 path quoted; paths are compared absolute (against the working directory)
 with `.`/`..` removed. The core calls it for each file it leaves with a
@@ -380,8 +383,8 @@ impl ClangFeatures { pub fn with_compat(self, ClangCompat) -> ClangFeatures; pub
 pub struct PredefConfig { pub clang_compat: ClangCompat, .. }
 ```
 
-The driver option `-fclang-compat=<major>` (spec/driver.md; `19` by
-default, `22`, anything else an error) selects whose answers kiln
+The driver option `-fclang-compat=<major>` (spec/driver.md; `19`, or
+`22`, kiln++'s default since WP-394; anything else an error) selects whose answers kiln
 reproduces: the predefined macros (`build_predefines`) and every
 `FeatureQueries` table (`__has_builtin`, `__has_constexpr_builtin`,
 `__has_feature`, `__has_extension`, `__has_attribute`,
