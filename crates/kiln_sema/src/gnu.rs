@@ -421,7 +421,9 @@ impl Sema<'_, '_> {
         else {
             return 0;
         };
-        kiln_abi::ensure_layout(&mut self.ast, def, &self.abi).fields.get(i).copied().unwrap_or(0)
+        kiln_abi::ensure_layout(&mut self.ast, def, &self.abi)
+            .and_then(|l| l.fields.get(i).copied())
+            .unwrap_or(0)
     }
 
     /// Whether class definition `def` is standard-layout ([class.prop]/3).
