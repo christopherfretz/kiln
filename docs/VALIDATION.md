@@ -208,12 +208,14 @@ a query, not a guess.
 ## GitHub Actions
 
 Both oracles are gates (the two-oracle policy, below): `KILN_ORACLE=19
-cargo xtask ci --quick` must be green too, and before a merge that touches
+cargo xtask ci --quick --oracle-only` must be green too, and before a merge that touches
 an expectation `cargo xtask test --compiler clang++-19 <dirs>` checks the
 corpus against clang 19 as well.
 
 `.github/workflows/ci.yml` runs the same `cargo xtask ci` (full form, clang
-self-check included) and then `KILN_ORACLE=19 cargo xtask ci --quick` on every push to `main`, on every pull request and every
+self-check included) and then `KILN_ORACLE=19 cargo xtask ci --quick
+--oracle-only` (only the oracle-dependent `cargo test` targets and the kiln
+corpus; spec/harness.md "CI") on every push to `main`, on every pull request and every
 merge-queue group (`merge_group`). A newer push to the same ref cancels the
 older run (`concurrency: ci-<ref>`).
 
