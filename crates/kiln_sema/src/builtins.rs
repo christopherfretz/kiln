@@ -886,8 +886,9 @@ impl Sema<'_, '_> {
                 return None;
             }
             if v == 1 {
-                let d =
-                    self.diag(DiagId::sema_alignment_builtin_useless, loc).arg(usize::from(is_aligned));
+                let d = self
+                    .diag(DiagId::sema_alignment_builtin_useless, loc)
+                    .arg(usize::from(is_aligned));
                 self.emit(d);
             }
         }

@@ -397,6 +397,25 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `llvm.assume(i1 true) ["align"(ptr p, i64 a[, i64 off])]`
       (`emitAlignmentAssumption`; the call is folded first so a dependent
       alignment is a constant; `builtins_assume_aligned.cpp`).
+      The alignment builtins (WP-416, clang `EmitBuiltinAlignTo`): the
+      alignment is zero-extended or truncated to the source type (i64 for
+      a pointer) and `mask = align - 1`; `__builtin_align_up` adds the mask
+      (`getelementptr inbounds i8, p, mask` for a pointer), then both
+      ands with `~mask` (`llvm.ptrmask.p0.i64` for a pointer);
+      `__builtin_is_aligned` is `icmp eq (and src, mask), 0` (`ptrtoint`
+      first for a pointer). Constant operands fold as IRBuilder folds them
+      (`x + 0` is kept); an integer call is a fold candidate.
+      `__builtin_debugtrap()` is `call void @llvm.debugtrap()`,
+      `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`.
+      `__builtin_elementwise_abs` is `llvm.abs(x, i1 false)` for
+      integers and `llvm.fabs` for floating point, `_max` / `_min`
+      `llvm.smax` / `umax` / `smin` / `umin` by element signedness and
+      `llvm.maxnum` / `minnum` for floating point, overloaded on the
+      (vector) operand type; at 22 a call the Oven folds is folded
+      (`builtins_align_elementwise.cpp`, `builtins_elementwise_22.cpp`).
+      The driver sets the Oven's compatibility level before codegen's
+      fold prepass, so a unit in which sema evaluated nothing folds at
+      its level.
       `__builtin_object_size` / `__builtin_dynamic_object_size` of an
       object the frontend does not know is `llvm.objectsize(p, min =
       type & 2, nullunknown = true, dynamic)`, type 3 the constant 0;

@@ -653,7 +653,9 @@ fn nocreateundeforpoison_at_llvm_22() {
                     willreturn memory(none) }";
         assert_eq!(t.contains(pure), marked, "{t}");
         assert!(
-            t.contains("{ nocallback nofree nosync nounwind speculatable willreturn memory(none) }"),
+            t.contains(
+                "{ nocallback nofree nosync nounwind speculatable willreturn memory(none) }"
+            ),
             "{t}"
         );
         assert!(intrinsics::creates_no_undef_or_poison(&m, "llvm.fma.f64") == marked);

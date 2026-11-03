@@ -85,15 +85,23 @@ impl Compiler<'_> {
         if ast.exprs.get(c).kind() != ExprKind::DeclRefExpr {
             return None;
         }
-        ast.decls
-            .builtin_id(ast.exprs.decl(c))
-            .filter(|&b| matches!(b, id::ELEMENTWISE_ABS | id::ELEMENTWISE_MAX | id::ELEMENTWISE_MIN))
+        ast.decls.builtin_id(ast.exprs.decl(c)).filter(|&b| {
+            matches!(b, id::ELEMENTWISE_ABS | id::ELEMENTWISE_MAX | id::ELEMENTWISE_MIN)
+        })
     }
 
     /// `__builtin_elementwise_abs` / `max` / `min` of the canonical
     /// `w`-bit integers `a` (and `b`) into `d` (clang 22
     /// `IntExprEvaluator`: `abs` of the most negative value wraps).
-    pub(super) fn int_elementwise(&mut self, bid: u32, w: u32, s: bool, r: [u32; 2], d: u32, e: ExprId) {
+    pub(super) fn int_elementwise(
+        &mut self,
+        bid: u32,
+        w: u32,
+        s: bool,
+        r: [u32; 2],
+        d: u32,
+        e: ExprId,
+    ) {
         use kiln_ast::decl::builtin as id;
         let [a, b] = r;
         let aux = int_aux(w as u8, s);

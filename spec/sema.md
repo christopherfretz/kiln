@@ -2997,6 +2997,41 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     a power of 2 (`requested alignment is not a power of 2`), warned above
     2^32 (`-Wbuiltin-assume-aligned-alignment`); `off` converts to
     `size_t`. The call is a `void *` prvalue.
+  - `__builtin_align_up` / `__builtin_align_down` / `__builtin_is_aligned`
+    (custom, `builtin_align`, clang `BuiltinAlignment`; WP-416): two
+    arguments. The source must be an integer (not `bool` or an
+    enumeration) or a pointer to an object (an array decays): `operand of
+    type T where arithmetic or pointer type is required` at the source.
+    The alignment must be an integer (not `bool` or an enumeration; `used
+    type T where integer is required`); when it is a constant it must be
+    at least 1 (`requested alignment must be 1 or greater`), at most
+    2^(N-1) for an N-bit source (pointers: the index width; `requested
+    alignment must be M or smaller`) and a power of 2 (`requested
+    alignment is not a power of 2`), and 1 is warned
+    (`-Wtautological-compare`: `aligning a value to 1 byte is a no-op` /
+    `... is always true`). The call has the source's unqualified type,
+    `bool` for `__builtin_is_aligned`.
+  - `__builtin_frame_address(level)` (an `I` constant, `check_builtin_ice_args`):
+    `level` in [0, 65535] (`argument value V is outside the valid range`
+    at the callee); a nonzero level warns `calling '__builtin_frame_address'
+    with a nonzero argument is unsafe` (`-Wframe-address`, in `-Wall`).
+    `__builtin_debugtrap()` takes no argument.
+  - `__builtin_elementwise_abs(x)` / `_max(x, y)` / `_min(x, y)` (custom,
+    `vector_ops.rs`; WP-416), by compatibility level. At 22 (clang 22
+    `BuiltinElementwiseMath`): the operands are lvalue-converted (arrays
+    decay) and keep their types; `abs` takes a signed integer, floating or
+    vector of them (`1st argument must be a scalar or vector of signed
+    integer or floating-point types (was T)`; kiln also rejects a pointer,
+    class or scoped enumeration operand clang 22 lets through), `max` /
+    `min` an integer, floating or vector operand (`... must be a vector,
+    integer or floating-point type`) and two operands of the same type
+    (`arguments are of different types`). At 19: the usual unary
+    conversions first, then for `max` / `min` the usual arithmetic
+    conversions when both operands are arithmetic, then the same-type
+    check and clang 19's wording (`... signed integer or floating point
+    type`, `... vector, integer or floating point type`).
+    `tests/conformance/ext.gnu.builtins/elementwise-args*.cpp`,
+    `align-frame-address-args.cpp`.
   - `__builtin_object_size` / `__builtin_dynamic_object_size`: the type
     argument (an `I` constant) must be in [0, 3] (`argument value V is
     outside the valid range [0, 3]` at the callee), checked after

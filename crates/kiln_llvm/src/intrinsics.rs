@@ -328,6 +328,15 @@ pub fn debugtrap(m: &mut Module) -> FuncId {
     declare(m, "llvm.debugtrap", TypeId::VOID, &[], &[], Shape::NoUnwind(false))
 }
 
+/// `ptr @llvm.frameaddress.p0(i32 immarg level)`.
+pub fn frameaddress(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.frameaddress", &[p]);
+    let none = MemoryEffects::all(ModRef::None);
+    let params: [(TypeId, &[Attr]); 1] = [(TypeId::I32, &[Attr::Flag(ImmArg)])];
+    declare(m, &name, p, &params, &[], Shape::Basic(Some(none)))
+}
+
 /// Arithmetic of an `llvm.*.with.overflow.*` intrinsic.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum OverflowOp {
