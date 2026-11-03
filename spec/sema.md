@@ -1951,7 +1951,7 @@ and returns the scope it names:
       (`check_param_indeterminate`; clang trunk's text, the note is
       kiln's). Before C++26 it is not recognised: `unknown attribute
       'indeterminate' ignored` [-Wunknown-attributes]. Effect: codegen
-      writes no erroneous value (spec/codegen.md §7s); constant
+      writes no erroneous value (spec/codegen.md §7r); constant
       evaluation is unchanged (an indeterminate read is non-constant).
       Tests: `tests/conformance/dcl.attr.indet/`.
     - `fallthrough`, `likely`, `unlikely` and `assume` are statement

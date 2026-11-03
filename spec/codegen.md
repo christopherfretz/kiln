@@ -755,7 +755,7 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   condition block that only branches on is folded into its predecessor
   only while no cleanup (a destructor, a lifetime end, a `noexcept`
   terminate scope) is on the EH stack. `tests/codegen/forwarding_block_cleanup.cpp`.
-- Case ranges (GNU) are an error. GNU computed goto: §7s.
+- Case ranges (GNU) are an error. GNU computed goto: §7t.
 - A goto (forward, backward, out of nested scopes, loops and try blocks)
   branches through the cleanups of every scope it leaves (`cleanup.rs`
   branch fixups). A local default-initialized by a trivial constructor
@@ -2864,7 +2864,7 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   default constructor; VLAs; the run-time EB diagnosis P2795 recommends
   is today's `-Wuninitialized` (no sanitizer).
 
-## 7s. Landed (WP-444): GNU computed goto (`stmt.rs`)
+## 7t. Landed (WP-444): GNU computed goto (`stmt.rs`)
 - `&&l` (clang `GetAddrOfLabel`, `addr_of_label`) is `blockaddress(@f,
   %bb)` for the label's block. The first label address or computed
   `goto` in a function makes the dispatch block (clang

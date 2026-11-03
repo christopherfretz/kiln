@@ -2700,7 +2700,7 @@ value, distinct per expression) is a constant `void *`.
   6, printed `&&l` with `+ N` for a non-zero offset; never mangled into
   a template argument); thawing goes back through `label_addr(origin)`.
   Codegen lowers the frozen value to a `blockaddress` (spec/codegen.md
-  §7s).
+  §7t).
 - Evaluating `goto *p` is "subexpression not valid in a constant
   expression"; sema already rejects the statement in a constexpr body
   (spec/sema.md). Tests: `tests/conformance/stmt.goto/computed-goto-

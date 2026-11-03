@@ -1509,7 +1509,7 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     follows. Template instantiation looks the label up again by name.
     Returning one is "returning address of label, which is local"
     (`-Wreturn-stack-address`, spec/sema-class.md §5.6). Code
-    generation is a `blockaddress` (spec/codegen.md §7s), constant
+    generation is a `blockaddress` (spec/codegen.md §7t), constant
     evaluation a label-address pointer (spec/oven.md "Label
     addresses"), so `&&l` also works in a constant expression and a
     static initializer. Tests: `tests/conformance/ext.gnu.label.value/`,
