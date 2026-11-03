@@ -610,6 +610,15 @@ impl Sema<'_, '_> {
         };
         let [d] = found.decls[..] else { return None };
         let d = self.ast.strip_shadow(d);
+        if self.kind_of(d) == DeclKind::CXXMethod
+            && !self.is_static_method(d)
+            && !self.implicit_this_available()
+        {
+            // `S::f` outside a member function is already an error ("call
+            // to non-static member function without an object argument"),
+            // so clang's `checkPotentialAngleBracket` does not run.
+            return None;
+        }
         (!matches!(
             self.kind_of(d),
             DeclKind::FunctionTemplate | DeclKind::VarTemplate | DeclKind::ClassTemplate
