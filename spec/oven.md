@@ -2388,7 +2388,7 @@ stays `Opaque`: it has no value model yet. The operations are in
 - Codegen emits folded vector values as `<N x T>` constants
   (`kiln_codegen/src/consts.rs`).
 
-### `_BitInt` — Landed (WP-404)
+### `_BitInt` — Landed (WP-404, wide WP-445)
 Type rules: spec/types.md §21.
 - *Representation.* `_BitInt(N)` with `N <= 128` is `TyKind::Int { width:
   N, signed }` in its ABI-sized slot (`ty.rs`): a register value is the
@@ -2404,18 +2404,37 @@ Type rules: spec/types.md §21.
   subobject is rejected at any width, as clang ("constexpr bit cast
   involving type 'unsigned _BitInt(16)' is not yet supported";
   `compile/bitcast.rs`).
-- *Wider than 128 bits* (x86-64 only; AArch64's `BITINT_MAXWIDTH` is 128):
-  the type is `TyKind::Opaque`, and compiling an rvalue or initializer of
-  it traps with "kiln: constant evaluation of a _BitInt wider than 128
-  bits is not supported yet" (`compile.rs` `wide_bit_int`). Deviation:
-  clang evaluates these (`expr.const/bit-int-wide.cpp`, `xfail(kiln)`).
-- *Design for the wide path (not implemented).* A memory-resident
-  `TyKind::WideInt { words, signed }` (like an aggregate: registers hold
-  its address), with limb operations in a dependency-free
-  `kiln_oven/src/bigint.rs` over `u64` words, and freeze/thaw through the
-  existing `kiln_ast::consts::IntBits` word pool. Widths `<= 128` never
-  take it. It needs `notes.rs` to print wide values and `value.rs` to
-  freeze them.
+- *Wider than 128 bits* (WP-445; x86-64 only, AArch64's `BITINT_MAXWIDTH`
+  is 128) is `TyKind::WideInt { width, signed }` (`ty.rs`), memory-class
+  like an aggregate: a register holds the object's address, and every
+  operation is one `Op::Wide` instruction (`kbc.rs` `wide`; operands
+  `[d, a, b, type, x]`, aux = sub-op | `INIT` | `RMW` | access kind) that
+  reads its operand objects and writes the destination object
+  (`vm/wide.rs`). The memory form is canonical: `ceil(size/8)` little-endian
+  `u64` limbs, sign- or zero-extended past bit N, as codegen stores it.
+  Limb arithmetic is `kiln_oven/src/bigint.rs` (safe Rust, no crates):
+  each operation computes exactly in one more limb (`2n+1` for `*`) and
+  then checks the result fits N bits, so signed overflow, `MIN / -1`,
+  `MIN % -1` and negation of MIN fault with clang's note carrying the
+  exact decimal value ("value 2^199 is outside the range of representable
+  values of type 's200' (aka '_BitInt(200)')", printed in decimal);
+  unsigned arithmetic wraps. Division or remainder by zero, a negative
+  shift count and a count `>= N` fault as for narrow integers; C++20
+  `<<` of a negative or overflowing signed value is defined. Reads check
+  initialization and constness exactly as scalar loads do.
+  `compile/wide.rs` lowers literals, value-init, list-init, `+ - * / % &
+  | ^ << >> ~ !`, unary `-`/`+`, `++`/`--`, (compound) assignment,
+  comparisons, wide/narrow/bool conversions (`FROM`/`TO`/`TO_BOOL`/`CAST`;
+  a wide shift count saturates through `TO`), and an operand lvalue read
+  is copied at its own source location so a note points where clang's
+  does. Freeze writes `Scalar::Int` with exactly `IntBits::words_for(N)`
+  words; thaw re-extends them over the slot.
+- *Not yet evaluated, wide only* (trap "kiln: conversion between a _BitInt
+  wider than 128 bits and a floating type is not supported in constant
+  evaluation yet", or the generic wide-`_BitInt` trap kept in
+  `compile.rs` `rv_inner` as a safety net): conversions to and from
+  floating types, wide bit-fields, `switch` on a wide value, `<=>`, and
+  integer literals wider than 128 bits (clang has none in C++).
 
 ### Complex values — Landed (WP-211)
 A GNU `_Complex T` object is stored as `T[2]` (`ty.rs`): the real part,

@@ -1050,6 +1050,8 @@ impl Oven {
             TyKind::Array { .. } | TyKind::Record { .. } => {
                 self.write_object(ast, s, t, v as u64, depth);
             }
+            // A wide `_BitInt` register holds its object's address.
+            TyKind::WideInt { .. } => self.write_object(ast, s, t, v as u64, depth),
             // clang: `&C::m` (the member's class and the member,
             // unqualified), `0` for the null member pointer.
             TyKind::MemPtr { .. } => match self.mp.get(v) {
@@ -1160,6 +1162,10 @@ impl Oven {
                 }
                 s.push('}');
             }
+            TyKind::WideInt { signed, .. } => match self.wide_load(raw, t, ak::READ) {
+                Ok(w) => s.push_str(&crate::bigint::to_decimal(&w, signed)),
+                Err(_) => s.push_str("<uninitialized>"),
+            },
             _ => {
                 let len = value_len(info.size, info.kind);
                 let v = self.mem.check(raw, len, false).ok().and_then(|(st, abs, _)| {
