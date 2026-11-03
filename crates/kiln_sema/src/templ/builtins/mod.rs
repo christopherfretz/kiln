@@ -10,3 +10,4 @@ mod traits;
 mod transforms;
 
 pub(crate) use builtin_templates::declare_builtin_templates;
+pub(crate) use traits::{LibFailure, TraitFailure, TraitState};
