@@ -15,6 +15,14 @@
 //! or `consteval` explicitly; an implicitly constexpr one that breaks the
 //! rule is silently not constexpr instead, also when an enclosing
 //! template is instantiated. WP-414.
+//!
+//! The statement rule ([dcl.constexpr]/3, clang `CheckConstexprFunction
+//! Stmt`) is checked in the same walk for the one statement kiln parses
+//! that no language level allows, a GNU indirect `goto *p` ("statement not
+//! allowed in constexpr function", the function made invalid); and before
+//! C++23 a body that passes both rules but holds a label or a `goto`
+//! gets "use of this statement in a constexpr function is a C++23
+//! extension" at the first. WP-444.
 
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, VarStorage};
 use kiln_ast::stmt::StmtKind;
@@ -47,9 +55,9 @@ impl Sema<'_, '_> {
     /// pattern.
     pub(crate) fn implicit_constexpr_lambda_body_vars(&mut self, f: DeclId, body: StmtId) {
         let spec = self.fn_spec(f);
-        if self.std >= kiln_lex::Std::Cxx23
-            || spec.constexpr_kind() != ConstexprKind::Constexpr
-            || self.first_non_literal_var(body).is_none()
+        if spec.constexpr_kind() != ConstexprKind::Constexpr
+            || (self.body_stmts(body).invalid.is_none()
+                && (self.std >= kiln_lex::Std::Cxx23 || self.first_non_literal_var(body).is_none()))
         {
             return;
         }
@@ -58,16 +66,42 @@ impl Sema<'_, '_> {
     }
 
     fn constexpr_body_vars(&mut self, f: DeclId, body: StmtId) {
-        if self.std >= kiln_lex::Std::Cxx23
-            || !self.inst.stack.frames.is_empty()
+        let kind = self.fn_spec(f).constexpr_kind();
+        if !self.inst.stack.frames.is_empty()
             || self.ast.decls.get(f).has(DeclFlags::INVALID)
-            || self.fn_spec(f).constexpr_kind() == ConstexprKind::None
+            || kind == ConstexprKind::None
         {
             return;
         }
-        let Some(v) = self.first_non_literal_var(body) else { return };
-        let ty = self.ast.decls.get(v).ty().unwrap_or(kiln_ast::QualType::ERROR);
         let ctor = self.kind_of(f) == DeclKind::CXXConstructor;
+        let pre23 = self.std < kiln_lex::Std::Cxx23;
+        let stmts = self.body_stmts(body);
+        let var = if pre23 { self.first_non_literal_var(body) } else { None };
+        // The first violation in source order is reported.
+        if let Some(s) = stmts.invalid
+            && var.is_none_or(|v| {
+                self.ast.stmts.get(s).loc().to_raw() < self.ast.decls.get(v).loc().to_raw()
+            })
+        {
+            let msg = self
+                .diag(DiagId::sema_constexpr_body_invalid_stmt, self.ast.stmts.get(s).loc())
+                .arg(u8::from(ctor))
+                .arg(u8::from(kind == ConstexprKind::Consteval));
+            self.emit(msg);
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            self.templ.body_invalid.insert(f);
+            return;
+        }
+        let Some(v) = var else {
+            if pre23 && let Some(loc) = stmts.cxx23 {
+                let msg = self
+                    .diag(DiagId::sema_constexpr_body_invalid_stmt_cxx23, loc)
+                    .arg(u8::from(ctor));
+                self.emit(msg);
+            }
+            return;
+        };
+        let ty = self.ast.decls.get(v).ty().unwrap_or(kiln_ast::QualType::ERROR);
         let msg = self
             .diag(DiagId::sema_constexpr_local_var_non_literal, self.ast.decls.get(v).loc())
             .arg(u8::from(ctor))
@@ -77,6 +111,29 @@ impl Sema<'_, '_> {
         self.ast.decls.set_flags(f, DeclFlags::INVALID);
         // A template's deduction still runs (`TemplState::body_invalid`).
         self.templ.body_invalid.insert(f);
+    }
+
+    /// The statements of `body` that the constexpr rules look at, in
+    /// source order (clang's walk does not enter expressions).
+    fn body_stmts(&self, body: StmtId) -> BodyStmts {
+        let st = &self.ast.stmts;
+        let mut out = BodyStmts::default();
+        let mut stack = vec![body];
+        while let Some(s) = stack.pop() {
+            match st.get(s).kind() {
+                StmtKind::IndirectGotoStmt => {
+                    out.invalid = Some(s);
+                    return out;
+                }
+                StmtKind::LabelStmt | StmtKind::GotoStmt => {
+                    out.cxx23.get_or_insert(st.get(s).loc());
+                }
+                _ => {}
+            }
+            let children = self.children(s);
+            stack.extend(children.into_iter().rev());
+        }
+        out
     }
 
     /// The first variable defined in `body`, in source order, whose type
@@ -146,4 +203,13 @@ impl Sema<'_, '_> {
         let Some(ty) = node.ty() else { return false };
         !self.is_error_type(ty) && !self.is_dependent_type(ty) && !self.is_literal_type(ty)
     }
+}
+
+/// What [`Sema::body_stmts`] found.
+#[derive(Default)]
+struct BodyStmts {
+    /// The first statement no language level allows.
+    invalid: Option<StmtId>,
+    /// The first label or `goto` (allowed from C++23).
+    cxx23: Option<kiln_source::Loc>,
 }

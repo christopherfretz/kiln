@@ -560,6 +560,7 @@ impl Cg<'_> {
         if eh_spec {
             self.pop_terminate();
         }
+        self.finish_indirect_goto()?;
         self.finish_eh();
         self.emit_unreachable_if_used();
         // FinishFunction: a coroutine's cleanup destination slot becomes

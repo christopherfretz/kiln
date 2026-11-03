@@ -50,6 +50,7 @@ pub(crate) struct SwitchState {
 
 /// Per-function state while its body is analysed.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts of one body")]
 pub struct FnState {
     pub(crate) decl: DeclId,
     pub(crate) ret: QualType,
@@ -74,6 +75,9 @@ pub struct FnState {
     /// The body has a `switch` (a goto or `asm goto` shows in `labels`):
     /// the jump-scope check runs (clang `NeedsScopeChecking`).
     pub(crate) has_switch: bool,
+    /// The body has a GNU `goto *e;` (clang `setFunctionHasIndirectGoto`):
+    /// the jump-scope check runs.
+    pub(crate) has_indirect_goto: bool,
     /// A `[[fallthrough]]` statement was built for the body (not by an
     /// instantiation, which copies it): its placement is checked at the
     /// end (clang `FunctionScopeInfo::HasFallthroughStmt`).
@@ -126,6 +130,7 @@ impl FnState {
             this_override: None,
             returns: Vec::new(),
             has_switch: false,
+            has_indirect_goto: false,
             has_fallthrough: false,
             runtime_diags: Vec::new(),
             rt_quiet: 0,
@@ -1142,14 +1147,38 @@ impl Sema<'_, '_> {
 
     /// GNU `goto *e;` (clang `ActOnIndirectGotoStmt`): `e` is a
     /// full-expression, so an unexpanded pack in it is diagnosed
-    /// ([temp.variadic]/12); computed goto itself is not supported yet
-    /// (a deviation, spec/parse.md §6.1), reported at the `*` unless `e`
-    /// was already diagnosed.
-    pub fn act_on_indirect_goto(&mut self, e: ExprId, star: Loc) {
+    /// ([temp.variadic]/12); unless type-dependent it is converted to
+    /// `const void*` as by assignment (clang `CheckSingleAssignment
+    /// Constraints`, whose C++ path is `PerformImplicitConversion` with
+    /// the assignment wording at the operand). The function then needs the
+    /// jump-scope check (`setFunctionHasIndirectGoto`). `None` (the
+    /// statement is dropped) when the operand is invalid.
+    pub fn act_on_indirect_goto(&mut self, e: ExprId, loc: Loc, star: Loc) -> Option<StmtId> {
         if self.diagnose_unexpanded_written(e, "expression", None) || self.is_err_expr(e) {
-            return;
+            return None;
         }
-        self.unsupported("computed goto", star);
+        let e = if self.expr_is_type_dependent(e) {
+            e
+        } else {
+            let cv = self.ast.types.qualify(QualType::VOID, kiln_ast::types::Quals::CONST);
+            let to = self.ast.types.pointer_to(cv);
+            match conv::implicit_convert(self, e, to, ConvCtx::Assignment) {
+                Ok(x) => x,
+                Err(err) => {
+                    let d = err.diag(self, e);
+                    self.emit(d);
+                    return None;
+                }
+            }
+        };
+        let e = self.act_on_full_expr(e);
+        if self.is_err_expr(e) {
+            return None;
+        }
+        if let Some(f) = self.func.as_mut() {
+            f.has_indirect_goto = true;
+        }
+        Some(self.builder().indirect_goto_stmt(e, loc, star))
     }
 
     /// GNU `&&label` (clang `LookupOrCreateLabel` then `ActOnAddrLabel`):
@@ -1167,7 +1196,16 @@ impl Sema<'_, '_> {
         self.emit(d);
         let l = self.act_on_asm_goto_label(name, name_loc);
         let ty = self.ast.types.pointer_to(QualType::VOID);
-        Some(self.builder().addr_label(l, ty, amp, name_loc))
+        let e = self.builder().addr_label(l, ty, amp, name_loc);
+        // A label of a template's body is a declaration of a dependent
+        // context: instantiation rebuilds the expression for the
+        // specialization's label (clang `TransformAddrLabelExpr`).
+        if let Some(f) = self.func.as_ref().map(|f| f.decl)
+            && self.ctx_template_levels(f) > 0
+        {
+            self.ast.exprs.mark_instantiation_dependent(e);
+        }
+        Some(e)
     }
 
     /// An `asm goto` label operand (clang `LookupOrCreateLabel` then
@@ -1406,7 +1444,7 @@ impl Sema<'_, '_> {
         }
         // [stmt.dcl]/3, [except.handle]/2: jumps into protected scopes
         // (clang `DiagnoseInvalidJumps`, ahead of the flow warnings).
-        if state.has_switch || !state.labels.is_empty() {
+        if state.has_switch || state.has_indirect_goto || !state.labels.is_empty() {
             self.check_jump_scopes(body);
         }
         // The deferred runtime-behavior diagnostics, ahead of the flow

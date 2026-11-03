@@ -159,6 +159,7 @@ sema_increment_bool = WarningError [IncrementBool] (0) "ISO C++17 does not allow
 sema_increment_complex = Extension [C2yExtensions] (1) "'{0}' on an object of complex type is a C2y extension";
 sema_indeterminate_param_not_first_decl = Error (1) "'[[indeterminate]]' attribute on parameter {0} must appear on the first declaration of the function";
 sema_indirect_goto_in_protected_scope = Error (1) "cannot jump from this {0:indirect|asm} goto statement to one of its possible targets";
+sema_indirect_goto_without_addrlabel = Error (0) "indirect goto in function with no address-of-label expressions";
 sema_indirection_incomplete = Error (1) "indirection not permitted on operand of type {0}";
 sema_indirection_requires_pointer = Error (1) "indirection requires pointer operand ({0} invalid)";
 sema_indirection_through_null = Warning [NullDereference] (0) "indirection of non-volatile null pointer will be deleted, not trap";
