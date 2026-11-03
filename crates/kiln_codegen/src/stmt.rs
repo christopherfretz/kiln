@@ -168,7 +168,7 @@ impl Cg<'_> {
 
     /// FinishFunction: the indirect `goto` block, if any, goes after the
     /// return block; with no computed `goto` its empty `phi` becomes
-    /// `poison`. A label whose address was taken keeps its block.
+    /// `poison` (clang 19: `undef`). A label whose address was taken keeps its block.
     pub(crate) fn finish_indirect_goto(&mut self) -> R<()> {
         let Some(g) = self.f.fir.indirect_goto_made() else { return Ok(()) };
         self.emit_block(g.blk, false);
@@ -176,14 +176,17 @@ impl Cg<'_> {
         if let Op::Phi { inc, .. } = self.f.fir.op(g.phi)
             && inc.is_empty()
         {
-            let p = self.m.const_poison(LTy::PTR);
+            let p = if self.opts.clang_compat >= 22 {
+                self.m.const_poison(LTy::PTR)
+            } else {
+                self.m.const_undef(LTy::PTR)
+            };
             self.f.fir.replace_all_uses(V::I(g.phi), V::C(p));
             self.f.fir.erase(g.phi);
         }
         if let Op::IndirectBr { dests, .. } = self.f.fir.op(g.br)
-            && let Some(&d) = dests.iter().find(|&&d| !self.f.fir.is_placed(d))
+            && dests.iter().any(|&d| !self.f.fir.is_placed(d))
         {
-            let _ = d;
             return err(None, "address of a label whose block was never emitted");
         }
         Ok(())

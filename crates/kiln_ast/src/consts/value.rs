@@ -270,6 +270,18 @@ pub enum PtrBase {
     Const(ConstValueId),
     /// The `std::type_info` object of a type (`&typeid(T)`).
     TypeInfo(QualType),
+    /// The address of a label (GNU `&&label`, clang's `AddrLabelExpr`
+    /// base): a `void *` constant that designates no object of the
+    /// program. Like a string literal, each `&&l` expression is its own
+    /// base (clang 22 compares two `&&l` expressions unequal), so the
+    /// value is identified by the `AddrLabelExpr` (`origin`); `label` is
+    /// the `LabelDecl` it names.
+    Label {
+        /// The label.
+        label: DeclId,
+        /// The `AddrLabelExpr` whose evaluation produced the address.
+        origin: ExprId,
+    },
 }
 
 impl PtrBase {
@@ -281,12 +293,16 @@ impl PtrBase {
             PtrBase::StringLit { .. } => 3,
             PtrBase::Const(_) => 4,
             PtrBase::TypeInfo(_) => 5,
+            PtrBase::Label { .. } => 6,
         }
     }
 
     pub(crate) fn raw(self) -> u32 {
         match self {
-            PtrBase::Decl(d) | PtrBase::Function(d) | PtrBase::Temporary(d) => d.index(),
+            PtrBase::Decl(d)
+            | PtrBase::Function(d)
+            | PtrBase::Temporary(d)
+            | PtrBase::Label { label: d, .. } => d.index(),
             PtrBase::StringLit { lit, .. } => lit.index(),
             PtrBase::Const(c) => c.index(),
             PtrBase::TypeInfo(t) => t.to_raw(),
@@ -296,7 +312,9 @@ impl PtrBase {
     /// The second id of a base that has one (a string literal's origin).
     pub(crate) fn aux(self) -> Option<u32> {
         match self {
-            PtrBase::StringLit { origin, .. } => Some(origin.index()),
+            PtrBase::StringLit { origin, .. } | PtrBase::Label { origin, .. } => {
+                Some(origin.index())
+            }
             _ => None,
         }
     }
@@ -306,6 +324,10 @@ impl PtrBase {
         match code {
             3 => Some(PtrBase::StringLit {
                 lit: StringLitId::try_new(raw)?,
+                origin: ExprId::try_new(aux)?,
+            }),
+            6 => Some(PtrBase::Label {
+                label: DeclId::try_new(raw)?,
                 origin: ExprId::try_new(aux)?,
             }),
             _ => Self::from_parts(code, raw),

@@ -569,6 +569,10 @@ impl Oven {
                 // static storage duration), e.g. libc++'s
                 // `static constexpr __policy` in <functional> (WP-176).
                 Origin::TypeInfo(t) => PtrBase::TypeInfo(t),
+                // `constexpr void *q = &&l;`: a label address (WP-444).
+                Origin::Label(e) => {
+                    PtrBase::Label { label: b.ast().exprs.addr_label(e), origin: e }
+                }
                 _ => return Err(Freeze::Fault(FailKind::NotConstant)),
             };
             return Ok(Scalar::Pointer { ty: q, base, offset, designated });
@@ -1514,6 +1518,7 @@ impl Oven {
             // The one object `typeid` evaluates to, so a thawed `&typeid(T)`
             // compares equal to a fresh one.
             PtrBase::TypeInfo(q) => self.type_info(q, pointee.unwrap_or(ty)),
+            PtrBase::Label { origin, .. } => self.label_addr(b, origin),
         };
         let rp = Ptr::decode(root);
         let Some(a) = self.alloc_any(rp).copied() else { return root };

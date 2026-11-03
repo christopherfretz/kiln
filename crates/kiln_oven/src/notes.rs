@@ -1235,6 +1235,8 @@ impl Oven {
             Origin::TypeInfo(q) => {
                 let _ = write!(s, "typeid({})", Self::type_name(ast, q));
             }
+            // clang prints the `AddrLabelExpr` base as written: `&&&l`.
+            Origin::Label(e) => ast.write_expr(e, &mut s),
         }
         let (mut t, mut rel) = (a.ty, u64::from(p.off));
         // clang prints a member reached through a base as `.B::m` and
@@ -1474,7 +1476,10 @@ impl Oven {
                     extra.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
                 }
                 let d = self.ptr_string(ast, p, ty);
-                format!("{verb} object '{}' whose value is not known", d.trim_start_matches('&'))
+                // The object's name: a literal's designator less its `&`
+                // (`"a"`, `&&l`).
+                let d = d.strip_prefix('&').unwrap_or(&d);
+                format!("{verb} object '{d}' whose value is not known")
             }
             MemFault::Const(t) => {
                 let q = self.types.info(t).q;

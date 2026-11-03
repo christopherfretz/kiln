@@ -1447,6 +1447,11 @@ impl Oven {
                     pc = fr.ret_pc as usize;
                     fb = self.stack[self.stack.len() - 1].fb as usize;
                 }
+                Op::LabelAddr => {
+                    let Some(e) = ExprId::try_new(arg!(1) as u32) else { fail!(Fault::Invalid) };
+                    reg!(0) = u128::from(self.label_addr(b, e));
+                    pc += 3;
+                }
                 Op::GlobalAddr => {
                     let g = arg!(1);
                     let p = match self.globals[g].state {
@@ -1924,6 +1929,13 @@ impl Oven {
         self.alloc_any(p).is_some_and(|a| matches!(a.origin, Origin::Str(..)))
     }
 
+    /// clang 19's literal bases (`IsLiteralLValue`): a string literal or
+    /// a label address.
+    fn is_literal_or_label(&self, raw: u64) -> bool {
+        let p = Ptr::decode(raw);
+        self.alloc_any(p).is_some_and(|a| matches!(a.origin, Origin::Str(..) | Origin::Label(_)))
+    }
+
     /// clang 22 notes a `std::allocator<T>::allocate` allocation at the
     /// call of `allocate` (its member name for a member call), not at the
     /// `operator new` inside it; `e` when there is no such call.
@@ -2041,7 +2053,7 @@ impl Oven {
                 if self.literals_may_overlap(p, q) {
                     return Err(Fault::LiteralCmp);
                 }
-            } else if self.is_literal(p) || self.is_literal(q) {
+            } else if self.is_literal_or_label(p) || self.is_literal_or_label(q) {
                 return Err(Fault::LiteralCmp);
             }
             if Ptr::decode(p).off == 0 && !Ptr::decode(p).is_fn() && self.past_complete(q) {

@@ -1181,7 +1181,16 @@ impl Sema<'_, '_> {
         self.emit(d);
         let l = self.act_on_asm_goto_label(name, name_loc);
         let ty = self.ast.types.pointer_to(QualType::VOID);
-        Some(self.builder().addr_label(l, ty, amp, name_loc))
+        let e = self.builder().addr_label(l, ty, amp, name_loc);
+        // A label of a template's body is a declaration of a dependent
+        // context: instantiation rebuilds the expression for the
+        // specialization's label (clang `TransformAddrLabelExpr`).
+        if let Some(f) = self.func.as_ref().map(|f| f.decl)
+            && self.ctx_template_levels(f) > 0
+        {
+            self.ast.exprs.mark_instantiation_dependent(e);
+        }
+        Some(e)
     }
 
     /// An `asm goto` label operand (clang `LookupOrCreateLabel` then
