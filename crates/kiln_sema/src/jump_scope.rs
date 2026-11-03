@@ -9,7 +9,10 @@
 //! and jump records the scope it is in. A `goto` or a `switch` may leave
 //! scopes (codegen runs their cleanups) but not enter one with an
 //! "in" diagnostic; an `asm goto` may do neither, because `callbr` cannot
-//! run cleanups.
+//! run cleanups. A GNU indirect `goto *p` may reach every label whose
+//! address is taken (`&&l`; not an `asm goto` label), so it is
+//! checked against each scope holding such a label with the `asm goto`
+//! rule (clang `VerifyIndirectJumps`); `goto *&&l` is an ordinary goto.
 
 use kiln_ast::decl::{DeclKind, InitStyle, VarStorage};
 use kiln_ast::expr::{CastKind, ExprKind, StorageDuration};
@@ -44,6 +47,11 @@ struct Checker<'s, 'a, 'sm> {
     label_stmts: FxHashMap<DeclId, StmtId>,
     /// gotos, switches and `asm goto`s, in walk order.
     jumps: Vec<StmtId>,
+    /// Indirect gotos without a constant target (`IndirectJumps`).
+    indirect_jumps: Vec<StmtId>,
+    /// Labels whose address is taken, in walk order
+    /// (`IndirectJumpTargets`).
+    indirect_targets: Vec<DeclId>,
 }
 
 impl Sema<'_, '_> {
@@ -61,10 +69,13 @@ impl Sema<'_, '_> {
             at: FxHashMap::default(),
             label_stmts: FxHashMap::default(),
             jumps: Vec::new(),
+            indirect_jumps: Vec::new(),
+            indirect_targets: Vec::new(),
         };
         let mut parent = 0;
         c.stmt(body, &mut parent);
         c.verify_jumps();
+        c.verify_indirect_jumps();
     }
 }
 
@@ -135,6 +146,16 @@ impl Checker<'_, '_, '_> {
             }
             StmtKind::AttributedStmt => self.stmt(StmtId::new(n.b()), p),
             StmtKind::GotoStmt => self.record_jump(s, *p),
+            StmtKind::IndirectGotoStmt => {
+                // `goto *&&l` is an ordinary goto, and its operand is not
+                // walked (it takes no address for the other jumps).
+                if ast.indirect_goto_constant_target(s).is_some() {
+                    return self.record_jump(s, *p);
+                }
+                self.at.insert(s, *p);
+                self.indirect_jumps.push(s);
+                self.expr(st.indirect_goto_target(s), p);
+            }
             StmtKind::GCCAsmStmt => {
                 if st.asm_bits(s) & kiln_ast::stmt::asm_bits::GOTO != 0 {
                     self.record_jump(s, *p);
@@ -143,6 +164,27 @@ impl Checker<'_, '_, '_> {
                     self.expr(op.expr, p);
                 }
             }
+            StmtKind::WhileStmt
+            | StmtKind::ForStmt
+            | StmtKind::DoStmt
+            | StmtKind::CXXForRangeStmt => self.loop_stmt(s, p),
+            StmtKind::CXXExpansionStmt => {
+                for c in self.sema.children(s) {
+                    self.stmt(c, p);
+                }
+            }
+            StmtKind::ReturnStmt => self.opt_expr(st.return_value(s), p),
+            StmtKind::CoreturnStmt => self.opt_expr(st.coreturn_operand(s), p),
+            StmtKind::CXXTryStmt => self.try_stmt(s, p),
+            _ => {}
+        }
+    }
+
+    /// A loop statement: its init, condition variable, condition,
+    /// increment and body all live in the loop's own scope.
+    fn loop_stmt(&mut self, s: StmtId, p: &mut u32) {
+        let st = &self.sema.ast.stmts;
+        match st.get(s).kind() {
             StmtKind::WhileStmt | StmtKind::ForStmt => {
                 let d = *st.loop_data(s);
                 self.opt_stmt(d.init, p);
@@ -173,15 +215,7 @@ impl Checker<'_, '_, '_> {
                 self.decl(d.loop_var, p);
                 self.stmt(d.body, p);
             }
-            StmtKind::CXXExpansionStmt => {
-                for c in self.sema.children(s) {
-                    self.stmt(c, p);
-                }
-            }
-            StmtKind::ReturnStmt => self.opt_expr(st.return_value(s), p),
-            StmtKind::CoreturnStmt => self.opt_expr(st.coreturn_operand(s), p),
-            StmtKind::CXXTryStmt => self.try_stmt(s, p),
-            _ => {}
+            _ => unreachable!("loop_stmt on a non-loop statement"),
         }
     }
 
@@ -300,6 +334,7 @@ impl Checker<'_, '_, '_> {
                     }
                 }
             }
+            ExprKind::AddrLabelExpr => self.indirect_targets.push(ast.exprs.addr_label(e)),
             _ => {}
         }
         for c in ast.exprs.children(e, &ast.lists) {
@@ -437,6 +472,12 @@ impl Checker<'_, '_, '_> {
                         self.check_jump(j, to, n.loc(), DiagId::sema_goto_into_protected_scope);
                     }
                 }
+                StmtKind::IndirectGotoStmt => {
+                    let target = self.sema.ast.indirect_goto_constant_target(j);
+                    if let Some(&to) = target.and_then(|l| self.label_stmts.get(&l)) {
+                        self.check_jump(j, to, n.loc(), DiagId::sema_goto_into_protected_scope);
+                    }
+                }
                 StmtKind::GCCAsmStmt => {
                     let labels: Vec<DeclId> =
                         self.sema.ast.lists.iter(st.asm_data(j).labels).collect();
@@ -444,7 +485,7 @@ impl Checker<'_, '_, '_> {
                         let Some(&to) = self.label_stmts.get(&l) else { continue };
                         let (from_scope, to_scope) = (self.at[&j], self.at[&to]);
                         if from_scope != to_scope {
-                            self.diagnose_asm_jump(j, from_scope, to, to_scope);
+                            self.diagnose_indirect_jump(j, from_scope, to, to_scope);
                         }
                     }
                 }
@@ -490,22 +531,84 @@ impl Checker<'_, '_, '_> {
         }
     }
 
-    /// clang `DiagnoseIndirectOrAsmJump` for an `asm goto`: neither
-    /// leaving a scope with an "out" note nor entering one with an "in"
-    /// note is allowed.
-    fn diagnose_asm_jump(&self, jump: StmtId, from: u32, target: StmtId, to: u32) {
+    /// clang `VerifyIndirectJumps`: with no label address taken, the
+    /// first indirect goto is an error; otherwise every scope holding an
+    /// indirect goto must reach every scope holding an address-taken
+    /// label by leaving only scopes without an "out" note, then entering
+    /// only scopes without an "in" note. One jump and one label stand for
+    /// each scope, visited in clang's `DenseMap` order.
+    fn verify_indirect_jumps(&self) {
+        let Some(&first) = self.indirect_jumps.first() else { return };
+        if self.indirect_targets.is_empty() {
+            let loc = self.sema.ast.stmts.get(first).loc();
+            self.sema.emit(self.sema.diag(DiagId::sema_indirect_goto_without_addrlabel, loc));
+            return;
+        }
+        let jump_scopes = dense_map_order(
+            self.indirect_jumps.iter().filter_map(|&j| Some((*self.at.get(&j)?, j))),
+        );
+        let target_scopes = dense_map_order(self.indirect_targets.iter().filter_map(|l| {
+            let s = *self.label_stmts.get(l)?;
+            Some((*self.at.get(&s)?, s))
+        }));
+        let mut reachable = vec![false; self.scopes.len()];
+        for &(target_scope, target) in &target_scopes {
+            reachable.fill(false);
+            // The scopes from which the target's can be entered; `min` is
+            // the shallowest.
+            let mut min = target_scope;
+            loop {
+                reachable[min as usize] = true;
+                if min == 0 || self.scopes[min as usize].in_diag.is_some() {
+                    break;
+                }
+                min = self.scopes[min as usize].parent;
+            }
+            for &(jump_scope, jump) in &jump_scopes {
+                let mut scope = jump_scope;
+                let ok = loop {
+                    if reachable[scope as usize] {
+                        let mut s = jump_scope;
+                        while s != scope {
+                            reachable[s as usize] = true;
+                            s = self.scopes[s as usize].parent;
+                        }
+                        break true;
+                    }
+                    if scope == 0 || scope < min || self.scopes[scope as usize].out_diag.is_some() {
+                        break false;
+                    }
+                    scope = self.scopes[scope as usize].parent;
+                };
+                if !ok {
+                    self.diagnose_indirect_jump(jump, jump_scope, target, target_scope);
+                }
+            }
+        }
+    }
+
+    /// clang `DiagnoseIndirectOrAsmJump` for an indirect or `asm goto`
+    /// `jump` to the label statement `target`: neither leaving a scope
+    /// with an "out" note nor entering one with an "in" note is allowed.
+    fn diagnose_indirect_jump(&self, jump: StmtId, from: u32, target: StmtId, to: u32) {
         let st = &self.sema.ast.stmts;
+        if from == to {
+            return;
+        }
+        let asm = u8::from(st.get(jump).kind() == StmtKind::GCCAsmStmt);
         let common = self.common_scope(from, to);
         let mut msg: Option<kiln_diag::Diag> = None;
         let note = |msg: &mut Option<kiln_diag::Diag>, id: DiagId, loc: Loc| {
             let d = msg.take().unwrap_or_else(|| {
                 self.sema
                     .diag(DiagId::sema_indirect_goto_in_protected_scope, st.get(jump).loc())
-                    .arg(1)
+                    // One per target scope at the same jump, as clang.
+                    .allow_duplicate()
+                    .arg(asm)
                     .with_note(
                         self.sema
                             .diag(DiagId::note_indirect_goto_target, st.get(target).loc())
-                            .arg(1),
+                            .arg(asm),
                     )
             });
             *msg = Some(d.with_note(self.sema.diag(id, loc)));
@@ -530,4 +633,48 @@ impl Checker<'_, '_, '_> {
             self.sema.emit(d);
         }
     }
+}
+
+/// The distinct keys of `items` with the first value for each, in the
+/// iteration order of an LLVM `DenseMap<unsigned, T>` built by inserting
+/// them in turn (hash `k * 37`, quadratic probing, 64 buckets growing
+/// ×2 at three-quarters full): clang visits jump and target scopes in it.
+fn dense_map_order<T: Copy>(items: impl Iterator<Item = (u32, T)>) -> Vec<(u32, T)> {
+    fn slot<T>(table: &[Option<(u32, T)>], k: u32) -> (usize, bool) {
+        let mask = table.len() - 1;
+        let mut b = (k.wrapping_mul(37) as usize) & mask;
+        let mut probe = 1;
+        loop {
+            match &table[b] {
+                None => return (b, false),
+                Some((x, _)) if *x == k => return (b, true),
+                Some(_) => {
+                    b = (b + probe) & mask;
+                    probe += 1;
+                }
+            }
+        }
+    }
+    let mut table: Vec<Option<(u32, T)>> = Vec::new();
+    let mut n = 0usize;
+    for (k, v) in items {
+        if table.is_empty() {
+            table.resize_with(64, || None);
+        }
+        if slot(&table, k).1 {
+            continue;
+        }
+        if (n + 1) * 4 >= table.len() * 3 {
+            let old = std::mem::take(&mut table);
+            table.resize_with(old.len() * 2, || None);
+            for (ok, ov) in old.into_iter().flatten() {
+                let (b, _) = slot(&table, ok);
+                table[b] = Some((ok, ov));
+            }
+        }
+        let (b, _) = slot(&table, k);
+        table[b] = Some((k, v));
+        n += 1;
+    }
+    table.into_iter().flatten().collect()
 }

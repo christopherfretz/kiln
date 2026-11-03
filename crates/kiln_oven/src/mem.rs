@@ -221,6 +221,11 @@ pub(crate) enum Origin {
     Heap(ExprId, u32),
     /// The `std::type_info` object of a type (`typeid`, WP-077).
     TypeInfo(QualType),
+    /// The object a GNU label address (`&&l`, its `AddrLabelExpr`)
+    /// designates: an unbacked `void *`-typed object of unknown value
+    /// (clang treats the expression as the base of an lvalue), one per
+    /// expression (WP-444).
+    Label(ExprId),
 }
 
 pub(crate) mod flags {
@@ -1110,6 +1115,8 @@ impl Memory {
                 Origin::External(d) => return Err(MemFault::External(d, write)),
                 Origin::Unknown(d) => return Err(MemFault::Unknown(d)),
                 Origin::Let(t) => return Err(MemFault::Temporary(t)),
+                // clang: "read of object '&&l' whose value is not known".
+                Origin::Label(e) => return Err(MemFault::Literal(Some(e))),
                 _ => {}
             }
         }

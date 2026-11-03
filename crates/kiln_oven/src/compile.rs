@@ -2613,6 +2613,9 @@ impl Compiler<'_> {
             | ExprKind::ImplicitValueInitExpr => {
                 self.konst(dst, 0);
             }
+            ExprKind::AddrLabelExpr => {
+                self.emit_at(Op::LabelAddr, 0, &[dst, e.index()], e);
+            }
             ExprKind::FloatingLiteral => {
                 let ast = self.ast();
                 let v = ast

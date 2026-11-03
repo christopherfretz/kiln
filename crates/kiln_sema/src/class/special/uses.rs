@@ -131,7 +131,8 @@ impl Sema<'_, '_> {
 
     /// The template-id `e` (possibly in parentheses and under `&`) is
     /// not used after all: its specialization keeps the held-back
-    /// warnings for its first use. clang stores a deduction's warnings
+    /// warnings of its signature's substitution for its first use (those
+    /// of this deduction's explicit arguments are dropped with it). clang stores a deduction's warnings
     /// only when it succeeds, so from clang 22 on (where they carry
     /// context notes) the notes name the deduction of that later use, not
     /// this one: their location is recorded to be moved then
@@ -141,7 +142,11 @@ impl Sema<'_, '_> {
         let mut restored = None;
         for _ in 0..64 {
             if let Some(i) = self.special.pending_tid_warnings.iter().position(|w| w.0 == x) {
-                let (_, d, ds) = self.special.pending_tid_warnings.remove(i);
+                let (_, d, mut ds) = self.special.pending_tid_warnings.remove(i);
+                // Only the signature substitution's: the next deduction
+                // makes its own explicit-argument ones, or none for a call.
+                let n = self.templ.deduction_diags.remove(&d).unwrap_or(0);
+                let ds = ds.split_off(n.min(ds.len()));
                 let slot = self.templ.suppressed_diags.entry(d).or_default();
                 if slot.is_empty() {
                     *slot = ds;

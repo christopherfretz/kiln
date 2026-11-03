@@ -308,6 +308,9 @@ ops! {
     // `cce::PTR_TO_INT`: `dst` = the integer of such a pointer (any other
     // pointer fails).
     Cce = 3,
+    // [dst, expr]: the address a GNU `&&label` (`AddrLabelExpr` `expr`)
+    // evaluates to (`Oven::label_addr`; spec/oven.md "Label addresses")
+    LabelAddr = 2,
 }
 
 /// The conversions of `Op::Cce`.

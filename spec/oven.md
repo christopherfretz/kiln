@@ -2733,6 +2733,41 @@ initializer, the next resolution is a fresh one (the old object stays, at
 most one per variable, since a frozen result may still point to it)
 (`expr.const/p2280-provisional-global.cpp`).
 
+### Label addresses — Landed (WP-444)
+GNU `&&l` (clang's `AddrLabelExpr` lvalue base: an object of unknown
+value, distinct per expression) is a constant `void *`.
+- `compile.rs` lowers an `AddrLabelExpr` to `Op::LabelAddr [dst, expr]`
+  (KBC, appended after `Cce`). The VM's `label_addr` returns the pointer
+  cached for that expression in `VirtState::labels` (`ExprId` → pointer,
+  12 bytes per entry in the footprint), allocating on first use an
+  unbacked `CONST | EXTERNAL` object of origin `Origin::Label(expr)`.
+  Nothing is allocated unless an `&&l` is evaluated, and a second
+  evaluation of the same expression yields an equal pointer.
+- Two label addresses compare equal only when they come from the same
+  expression; a label address is never null. Reading through one is
+  `MemFault::Literal`, "read of object '&&l' whose value is not known"
+  plus "temporary created here" at the expression. Offsetting past the
+  object is "cannot refer to element N of non-array object"; a cast to
+  an object pointer gets the `void *` similarity note, a cast to an
+  integer the reinterpret_cast note; a relational comparison of two
+  label addresses is "comparison between pointers to unrelated objects
+  '&&&l' and '&&&m' has unspecified value" (the pointer is printed as
+  clang's `&` + the expression). `__builtin_constant_p(&&l)` is false
+  (`is_literal` is not true of label bases).
+- clang 19 (`-fclang-compat=19`): any equality comparison with a label
+  or string literal base is "comparison of addresses of literals has
+  unspecified value" (`is_literal_or_label`), and a relational one is
+  "comparison between '&&&l' and '&&&m' has unspecified value".
+- Freezing gives `PtrBase::Label { label, origin }` (spec/ast.md, code
+  6, printed `&&l` with `+ N` for a non-zero offset; never mangled into
+  a template argument); thawing goes back through `label_addr(origin)`.
+  Codegen lowers the frozen value to a `blockaddress` (spec/codegen.md
+  §7t).
+- Evaluating `goto *p` is "subexpression not valid in a constant
+  expression"; sema already rejects the statement in a constexpr body
+  (spec/sema.md). Tests: `tests/conformance/stmt.goto/computed-goto-
+  constexpr{,-19}.cpp`.
+
 ### Reflection runtime (M6; WP-267 spike behind `-freflection`)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's
   `ReflectionTable` (spec/ast.md §10). It is an 8-byte scalar of
