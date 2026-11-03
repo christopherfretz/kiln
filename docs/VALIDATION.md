@@ -109,6 +109,28 @@ dumper cycle of 2026-10-31 OOM-killed the whole container twice) thus dies
 alone. `cargo xtask bench` caps its measured compiles the same way. The
 contract is spec/harness.md "Resource limits".
 
+**libc++ memory exclusions.** The libc++ runner makes a test UNSUPPORTED
+when `--mem-limit` is below what its run step needs (`MEM_UNSUPPORTED` in
+`xtask/src/libcxx/run.rs`, spec/libcxx.md). Measured 2026-11-03 (WP-491;
+per-process peaks from the runner's `gnu-time` probe, `scripts/memlog.sh`
+alongside: no OOM event in the cgroup during either gate run):
+
+| scope | tests | `MEM_UNSUPPORTED` rows | largest process | peak |
+|---|---:|---:|---|---:|
+| `--gate m3 -j 2` (llvmorg-19.1.7) | 642 | 0 | `mem.poly.allocator.mem/construct_types.pass.cpp` (kiln compile) | 76 MiB RSS |
+| `--gate m4 -j 2` (llvmorg-22.1.8) | 2661 | 0 | `variant.visit/visit_return_type.pass.cpp` (kiln compile) | 690 MiB RSS |
+| `stringstream.members/gcount.pass.cpp` (outside both gates) | 1 | 1 | its run step | 6660 MiB address space, 5122 MiB RSS |
+
+The gcount run is not measured directly: it exceeds the 3 GiB
+per-process budget of the shared host. A scaled copy (payload `2^k - 2`
+bytes for `INT_MAX - 1 = 2^31 - 2`, then the test's two 1-byte writes),
+built by kiln and by clang against libc++ 19 and 22, peaks at exactly
+3.25 x 2^k bytes of live heap for every k from 20 to 29 (VmPeak 4 MiB
+above that, VmHWM 2.5 x 2^k): the payload plus a `stringbuf` buffer
+regrown from 0.75 x 2^k to 1.5 x 2^k bytes. At k = 31 that is 6656 MiB of
+heap, 6660 MiB of address space (what `RLIMIT_AS` caps), and 5122 MiB
+RSS, which matches the 5122 MiB WP-369 measured for the real run.
+
 `cargo xtask ci` is the merge gate. After fmt, clippy and the unit tests
 (each cargo step rerun once if it fails with rustc's `error[E0463]`, a
 crate artifact that vanished mid-build) it runs the corpus twice, and fails
