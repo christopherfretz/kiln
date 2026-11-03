@@ -2309,16 +2309,13 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 let r = ast.reflect_operand(e);
                 self.line.push(' ');
                 self.line.push_str(r.kind_name());
-                match exprs.reflect_value(e) {
-                    Some(id) => {
-                        self.line.push(' ');
-                        crate::consts::PrintEnv::reflection(ast, id, &mut self.line);
-                    }
-                    None => {
-                        self.line.push_str(" dependent");
-                        if let crate::reflect::Reflectee::Type(t) = r {
-                            self.ty(t);
-                        }
+                if let Some(id) = exprs.reflect_value(e) {
+                    self.line.push(' ');
+                    crate::consts::PrintEnv::reflection(ast, id, &mut self.line);
+                } else {
+                    self.line.push_str(" dependent");
+                    if let crate::reflect::Reflectee::Type(t) = r {
+                        self.ty(t);
                     }
                 }
             }

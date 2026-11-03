@@ -170,7 +170,6 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Result<ConstValueId, Vec<Note>> {
         let name = match self.ast.reflections.get(r) {
-            Reflectee::Null => String::new(),
             Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
                 self.decl_name(d)
             }

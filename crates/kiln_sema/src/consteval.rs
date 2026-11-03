@@ -690,15 +690,9 @@ impl Sema<'_, '_> {
                 self.ast.exprs.set_constant_elided(c);
             }
         }
-        let mut consteval_only_reported = false;
+        // Consteval-only expressions (spec/reflection-repr.md §6).
+        let bad_refs = self.check_consteval_only_leaves(bad_refs, e, var, escalating);
         for r in bad_refs {
-            // A consteval-only expression (spec/reflection-repr.md §6).
-            if self.is_consteval_only_leaf(r) {
-                if !consteval_only_reported {
-                    consteval_only_reported = self.check_consteval_only_leaf(r, e, var, escalating);
-                }
-                continue;
-            }
             // Already immediate-escalating (an instantiation's copy of a
             // pattern's reference): clang skips it.
             if self.ast.exprs.get(r).has(ExprFlags::IMMEDIATE_ESCALATING) {

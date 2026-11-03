@@ -171,6 +171,28 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `refs` (references outside every immediate invocation of
+    /// full-expression `e`) without its consteval-only leaves, each checked
+    /// by [`Self::check_consteval_only_leaf`] until one is reported.
+    pub(crate) fn check_consteval_only_leaves(
+        &mut self,
+        refs: Vec<ExprId>,
+        e: ExprId,
+        var: Option<DeclId>,
+        escalating: Option<DeclId>,
+    ) -> Vec<ExprId> {
+        let mut reported = false;
+        let mut rest = Vec::with_capacity(refs.len());
+        for r in refs {
+            if !self.is_consteval_only_leaf(r) {
+                rest.push(r);
+            } else if !reported {
+                reported = self.check_consteval_only_leaf(r, e, var, escalating);
+            }
+        }
+        rest
+    }
+
     /// The consteval-only leaf `r` of full-expression `e` outside every
     /// immediate invocation: allowed in the initializer of a variable
     /// whose initialization is constant ([expr.const]: it is manifestly
