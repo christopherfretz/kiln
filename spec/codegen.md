@@ -2916,7 +2916,7 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
 - Test: `tests/codegen/bool_vector_const.cpp` (exact on both triples
   under oracle 19, structural under 22).
 
-## 7u. Landed (WP-453): vector lane folds, int → `bool` vector conversion
+## 7w. Landed (WP-453): vector lane folds, int → `bool` vector conversion
 - A subscript of an ext vector whose base names a `const` non-volatile
   vector variable (through parentheses and `NoOp` casts;
   `fold::refers_to_const_var`) is a fold candidate: `Collect::expr`
