@@ -243,6 +243,9 @@ impl Sema<'_, '_> {
         };
         let mut wi = 0usize;
         let mut open_expansion = false;
+        // Arguments kept as written only for their instantiation-dependence
+        // (index, parameter, location): folded for the canonical list.
+        let mut fold: Vec<(usize, DeclId, Loc)> = Vec::new();
         for (pi, &p) in params.iter().enumerate() {
             if let Some(tys) = self.expanded_pack_types(p) {
                 // An expanded parameter pack takes one argument per
@@ -298,6 +301,9 @@ impl Sema<'_, '_> {
             }
             if wi < written.len() {
                 let a = self.check_template_arg(tmpl, depth, p, written[wi], arg_loc(wi), &out)?;
+                if self.inst_dependent_nttp_arg(p, a) {
+                    fold.push((out.len(), p, arg_loc(wi)));
+                }
                 out.push(a);
                 wi += 1;
                 continue;
@@ -320,8 +326,35 @@ impl Sema<'_, '_> {
             return Err(());
         }
         let sugared = self.ast.types.arg_list(&out);
-        let canonical = self.ast.types.canonical_args(sugared);
+        if fold.is_empty() {
+            let canonical = self.ast.types.canonical_args(sugared);
+            return Ok(ConvertedArgs { sugared, canonical });
+        }
+        // The canonical argument is the value ([temp.arg.nontype]/2; clang
+        // converts an argument that is not value-dependent), so
+        // `enable_if<sizeof(first_t<int, decltype(T::x)>) == 4>` names
+        // `enable_if<true>`; the written form is what substitution
+        // re-checks ([temp.deduct.general]/8).
+        let mut canon = out.clone();
+        for (i, p, at) in fold {
+            let ArgView::Expr { expr, .. } = out[i].view() else { continue };
+            canon[i] = self.convert_nttp_arg(tmpl, depth, p, expr, at, &canon[..i])?;
+        }
+        let canon = self.ast.types.arg_list(&canon);
+        let canonical = self.ast.types.canonical_args(canon);
         Ok(ConvertedArgs { sugared, canonical })
+    }
+
+    /// Whether checked argument `a` for parameter `p` is a non-type
+    /// argument kept as written although not value-dependent: it is
+    /// instantiation-dependent through a type or qualifier.
+    fn inst_dependent_nttp_arg(&self, p: DeclId, a: TemplateArg) -> bool {
+        let ArgView::Expr { expr, .. } = a.view() else { return false };
+        self.kind_of(p) == DeclKind::NonTypeTemplateParm
+            && !self.is_err_expr(expr)
+            && !self.expr_is_value_dependent(expr)
+            && !self.ast.types.is_dependent(self.ast.exprs.get(expr).ty())
+            && self.type_instantiation_dependent(expr)
     }
 
     /// The element types of expanded non-type parameter pack `p`
@@ -907,12 +940,14 @@ impl Sema<'_, '_> {
 
     /// Whether `e` is instantiation-dependent through a type or a
     /// qualifier (`is_same<void, void_t<decltype(x)>>::value`), whose
-    /// substitution can fail. A reference to a local declaration of a
+    /// substitution can fail; a type operand counts
+    /// (`sizeof(void_t<decltype(x)>*)`, `__is_same(U, first_t<int,
+    /// decltype(x)>)`; WP-465). A reference to a local declaration of a
     /// template (`constexpr int N = 3; TC<N>`) is instantiation-dependent
     /// in kiln only so that it is remapped; clang folds it, and so does
     /// kiln.
     fn type_instantiation_dependent(&self, e: ExprId) -> bool {
-        use kiln_ast::expr::ExprDeps;
+        use kiln_ast::expr::{ExprDeps, ExprKind};
         let (x, t) = (&self.ast.exprs, &self.ast.types);
         let inst = |q: QualType| t.flags(q.ty()).contains(TypeFlags::INSTANTIATION_DEPENDENT);
         let mut stack = vec![e];
@@ -920,7 +955,15 @@ impl Sema<'_, '_> {
             if !x.get(e).deps().contains(ExprDeps::INSTANTIATION) {
                 continue;
             }
-            if inst(x.get(e).ty())
+            let operand = match x.get(e).kind() {
+                ExprKind::UnaryExprOrTypeTraitExpr => x.trait_type_arg(e).is_some_and(inst),
+                ExprKind::TypeTraitExpr => {
+                    self.ast.lists.iter::<QualType>(x.type_trait_args(e)).any(inst)
+                }
+                _ => false,
+            };
+            if operand
+                || inst(x.get(e).ty())
                 || x.decl_ref_extra(e)
                     .and_then(|d| d.qualifier)
                     .is_some_and(|q| t.nns_flags(q).contains(TypeFlags::INSTANTIATION_DEPENDENT))
