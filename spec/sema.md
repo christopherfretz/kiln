@@ -1734,7 +1734,11 @@ and returns the scope it names:
     `AddAllocAlignAttr`): integer-constant one-based indices (`requires
     parameter N to be an integer constant`; arity: `takes at least 1
     argument` / `takes no more than 2 arguments` / `takes one argument`)
-    naming an integer parameter (`parameter N is out of bounds`, `argument
+    naming an integer parameter, or for `alloc_align` one of type
+    `std::align_val_t` (an enumeration of that name in namespace `std`,
+    through sugar; clang `Type::isAlignValT`; libstdc++ 16 `<new>`
+    `operator new(size_t, align_val_t)`; WP-525,
+    `dcl.attr/gnu-alloc-align-val-t.cpp`) (`parameter N is out of bounds`, `argument
     may only refer to a function parameter of integer type` at the
     argument, a dependent parameter included; index 1 of an implicit
     object member function: `is invalid for the implicit this
@@ -4566,6 +4570,14 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   address of consteval function 'f' outside of an immediate
   invocation`, with `declared here`. For a qualified name (`&C::m`, also
   inside a member function) the error is at the qualifier, as clang.
+  A reference to an immediate function in a dependent context (a member
+  of a class template's pattern, `DEPENDENT_CTX`, or a function
+  template's pattern) is not recorded (clang `MarkDeclRefReferenced`,
+  `!FD->isDependentContext()`): a dependent call of it
+  (`_S_quote().substr(0, 1)` with `_S_quote` a consteval static member
+  of a class template, libstdc++ 16 `<format>`) is built and checked at
+  instantiation, where taking its address is still an error (WP-525,
+  `expr.const/consteval-member-dependent-call.cpp`).
   The Oven also rejects a constant result (or a subobject of one) that
   is a pointer, reference or member pointer to an immediate function:
   `pointer|reference to a consteval declaration is not a constant

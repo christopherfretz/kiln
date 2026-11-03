@@ -28,7 +28,10 @@ Contract: spec/libstdcxx.md.
 
   --std <std>            c++26 (default), c++23, c++20 or c++17
   --headers <dir>        the libstdc++ include directory to enumerate (default:
-                         the newest /usr/include/c++/<version>)
+                         the newest /usr/include/c++/<version>, or with
+                         --gcc-toolchain the newest <dir>/include/c++/<version>)
+  --gcc-toolchain <dir>  pass --gcc-toolchain=<dir> to both compilers (a GCC
+                         installation prefix, e.g. $KILN_GCC16_ROOT/usr/local)
   --profile <p>          the cargo profile to build kiln++ with: debug, harness
                          (default) or release (spec/libcxx.md \"Build profiles\")
   --compiler <path>      kiln++ binary (default: cargo build --profile <p> -p kiln_driver)
@@ -72,6 +75,8 @@ pub const SKIPPED_DIRS: &[&str] = &[
 pub struct Options {
     pub std: String,
     pub headers: Option<PathBuf>,
+    /// `--gcc-toolchain`: passed to both compilers as `--gcc-toolchain=`.
+    pub gcc_toolchain: Option<PathBuf>,
     pub compiler: Option<PathBuf>,
     pub profile: Profile,
     pub clang: PathBuf,
@@ -91,6 +96,7 @@ impl Default for Options {
         Self {
             std: "c++26".to_owned(),
             headers: None,
+            gcc_toolchain: None,
             compiler: None,
             profile: Profile::Harness,
             clang: PathBuf::from("clang++-19"),
@@ -135,6 +141,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                 o.std = s;
             }
             "--headers" => o.headers = Some(PathBuf::from(value("--headers")?)),
+            "--gcc-toolchain" => o.gcc_toolchain = Some(PathBuf::from(value("--gcc-toolchain")?)),
             "--compiler" => o.compiler = Some(PathBuf::from(value("--compiler")?)),
             "--profile" => o.profile = Profile::parse(&value("--profile")?)?,
             "--clang" => o.clang = PathBuf::from(value("--clang")?),
@@ -256,10 +263,14 @@ pub fn glob_match(pattern: &str, name: &str) -> bool {
 fn execute(opts: &Options) -> Result<(), String> {
     let start = Instant::now();
     let root = repo_root();
+    let base = opts
+        .gcc_toolchain
+        .as_ref()
+        .map_or_else(|| PathBuf::from(SYSTEM_CXX_INCLUDE), |t| t.join("include/c++"));
     let headers_dir = match &opts.headers {
         Some(d) => d.clone(),
-        None => default_headers_dir(Path::new(SYSTEM_CXX_INCLUDE)).ok_or_else(|| {
-            format!("no libstdc++ headers under {SYSTEM_CXX_INCLUDE}; pass --headers <dir>")
+        None => default_headers_dir(&base).ok_or_else(|| {
+            format!("no libstdc++ headers under {}; pass --headers <dir>", base.display())
         })?,
     };
     let mut headers = public_headers(&headers_dir)?;
@@ -306,6 +317,7 @@ fn execute(opts: &Options) -> Result<(), String> {
         clang,
         resource_dir: root.join("resource"),
         headers_dir: headers_dir.clone(),
+        gcc_toolchain: opts.gcc_toolchain.clone(),
         std: opts.std.clone(),
         timeout: opts.timeout(),
         mem: MemLimit::from_mib(opts.mem_limit_mib),
@@ -460,6 +472,8 @@ mod tests {
         assert_eq!(o.report, Some(PathBuf::from("p.md")));
         assert!(o.no_clang);
         assert_eq!(parse(&["--help"]), Ok(None));
+        let g = parse(&["--gcc-toolchain=/g/usr/local"]).unwrap().unwrap();
+        assert_eq!(g.gcc_toolchain, Some(PathBuf::from("/g/usr/local")));
         assert!(parse(&["--std", "c++98"]).is_err());
         assert!(parse(&["-j", "0"]).is_err());
         assert!(parse(&["--list=1"]).is_err());

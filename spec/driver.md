@@ -58,6 +58,8 @@ starting with `-` are inputs.
 | `--sysroot`, `-isysroot` | sysroot (`-isysroot` wins for headers) |
 | `-resource-dir <dir>` | the builtin headers are in `<dir>/include` |
 | `-stdlib=libstdc++` / `libc++` | C++ standard library headers (default libstdc++) |
+| `--gcc-toolchain=<dir>` | joined only: the GCC installation search looks under `<dir>` instead of `<sysroot>/usr` (see "Toolchain") |
+| `--gcc-install-dir=<dir>` | joined only: `<dir>` (`.../lib/gcc/<triple>/<version>`) is the GCC installation; wins over `--gcc-toolchain=`; without a `crtbegin.o` in it, `'<dir>' does not contain a GCC installation` and no GCC |
 | `-fexperimental-library`, `-fno-experimental-library` | libc++'s experimental library: `__has_feature(experimental_library)` and `__has_extension(experimental_library)` are 1 (a `kiln_pp` feature overlay, as clang's cc1 flag; libc++ derives `_LIBCPP_ENABLE_EXPERIMENTAL` from it), and the link step gets `-fexperimental-library` (clang adds `-lc++experimental`); the last wins (`Args::experimental_library`, WP-461) |
 | `--target=<triple>` | `aarch64`/`arm64` or `x86_64`/`amd64` Linux; anything else is an error |
 | `-march=<arch>[+ext...]`, `-mcpu=<cpu>[+ext...]`, `-target-feature <±feat>` (usually via `-Xclang`) | AArch64 target features ("Target features" below, WP-459) |
@@ -163,9 +165,19 @@ and no job runs. C is preprocessed (`-E`, deviation 1); compiling it
   the IR that differs between LLVM 19 and 22 (spec/codegen.md,
   coroutines and §6). A tree whose name says nothing about its version
   (`/opt/llvm`) is keyed correctly by the probe.
-- **GCC:** clang `GCCInstallationDetector`. The newest
-  `<sysroot>/usr/lib/gcc/<triple>/<version>` that contains `crtbegin.o`,
-  over the target's candidate triples in clang's order.
+- **GCC:** clang 19/22 `GCCInstallationDetector::init`. The prefix is
+  `--gcc-toolchain=<dir>` (a trailing `/` dropped) if given, else
+  `<sysroot>/usr`. Under it, for `lib64` then `lib` and the target's
+  candidate triples in clang's order, every `<prefix>/<lib>/gcc/<triple>/<version>`
+  whose name parses as a GCC version is a candidate (`-v`: `Found
+  candidate GCC installation: <path>` for each, sorted, as clang's
+  `CandidateGCCInstallPaths` set); the newest with a `crtbegin.o` and a
+  version of at least 4.1.1 is selected (ties: the first found;
+  `Selected GCC installation: <path>`). `--gcc-install-dir=<dir>` skips
+  the search and names the installation (triple and version are the
+  names of `<dir>`'s parent and of `<dir>`). Test:
+  `crates/kiln_driver/tests/driver.rs` `gcc_toolchain_matches_clang` (a
+  fake tree; `-v` compared with clang 19).
 
 The search list is the user's directories in command-line order, then the
 toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
@@ -173,7 +185,11 @@ toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
 
 1. C++ only, unless `-nostdinc++` or `-nostdlibinc`:
    - **libstdc++:** `<gcc>/../../../../include/c++/<v>`, then
-     `.../<v>/<triple>`, `.../<v>/<triple>/<multilib>`, and `.../backward`.
+     `.../<v>/<triple>` if it exists (Debian multiarch), else
+     `.../<v>/<triple>/<multilib>` (listed even when missing, as clang
+     `addLibStdCXXIncludePaths`), and `.../backward`. With
+     `--gcc-toolchain=<gcc 16.1 root>/usr/local` this is GCC 16.1's own
+     libstdc++ (docs/VALIDATION.md "GCC 16.1 header sweep").
    - **libc++:** the first of `<llvm>/bin/../include`,
      `<sysroot>/usr/local/include` or `<sysroot>/usr/include` that has a
      `c++/v1`. Its per-target `<triple>/c++/v1` comes first if it exists.
@@ -245,6 +261,9 @@ The `<built-in>` buffer is `kiln_pp::build_predefines(base, cfg, -D/-U)`.
   - `-stdlib=libc++`: no `__STDCPP_FLOAT16_T__` ... `__STDCPP_BFLOAT16_T__`
     (`std_float_aliases`; libc++ has no `<stdfloat>`, spec/pp.md P1467
     macros).
+- `-freflection` at C++26: `__cpp_impl_reflection 202603L` (GCC 16.1's
+  value, `g++-16 -std=c++26 -freflection -dM -E`; libstdc++ 16's `<meta>`
+  keys on it; spec/reflection.md §1 item 5).
 - kiln adds `__KILN__ 1`, `__KILN_MAJOR__` and `__KILN_MINOR__`. kiln
   defines `__clang__` and the clang version macros exactly as clang 19 does,
   so headers take their clang paths.
