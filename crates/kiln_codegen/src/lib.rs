@@ -18,6 +18,7 @@
 
 mod asm;
 mod atomic;
+mod auto_init;
 mod builtins;
 mod checked;
 mod class;
@@ -39,6 +40,7 @@ mod module;
 mod module_init;
 mod new_delete;
 mod null_init;
+mod psabi;
 mod stmt;
 mod tbaa;
 mod tls;
@@ -75,10 +77,12 @@ pub struct CodegenOptions {
     /// (`-fcx-limited-range`, `-fcomplex-arithmetic=`; clang's
     /// `LangOptions::ComplexRange`).
     pub complex_range: ComplexRange,
-    /// The IR will be optimized (`-O1` and above): definitions are
-    /// emitted without the `-O0` `noinline optnone` pair (clang
-    /// `CodeGenOpts.OptimizationLevel > 0`; spec/codegen.md §7p).
-    pub optimize: bool,
+    /// The optimization level (clang `CodeGenOpts.OptimizationLevel`):
+    /// 0 at `-O0`, 1 at `-O`/`-O1`/`-Og`, 2 at `-O2`/`-Os`/`-Oz`, 3 at
+    /// `-O3` and above. Above 0 the IR will be optimized (see
+    /// [`Self::optimize`]); at exactly 1 loops carry
+    /// `llvm.loop.unroll.disable` (spec/codegen.md "Loop metadata").
+    pub opt_level: u8,
     /// The size optimization level: 1 at `-Os`, 2 at `-Oz`, else 0
     /// (clang `CodeGenOpts.OptimizeSize`): functions and call sites get
     /// `optsize`, and `minsize` too at 2 (spec/codegen.md "Size
@@ -104,7 +108,30 @@ pub struct CodegenOptions {
     /// `-mno-omit-leaf-frame-pointer` (`Some(false)`); `None` is the
     /// target's default.
     pub omit_leaf_frame_pointer: Option<bool>,
+    /// What an automatic variable without an initializer holds at its
+    /// declaration (`-ftrivial-auto-var-init=`; the C++26 erroneous value
+    /// of [basic.indet], spec/codegen.md §7r). The driver's default is
+    /// [`AutoVarInit::Zero`] in C++26 and [`AutoVarInit::Uninitialized`]
+    /// before.
+    pub auto_var_init: AutoVarInit,
+    /// `-ftrivial-auto-var-init-max-size=`: a variable larger than this
+    /// many bytes is not initialized (0: no limit).
+    pub auto_var_init_max_size: u64,
 }
+
+/// clang's `LangOptions::TrivialAutoVarInitKind` (no `pattern` yet).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AutoVarInit {
+    /// Left uninitialized (indeterminate).
+    #[default]
+    Uninitialized,
+    /// All-zero bytes, padding included.
+    Zero,
+}
+
+/// kiln's default `-ftrivial-auto-var-init-max-size` (spec/codegen.md
+/// §7r): 4 KiB.
+pub const AUTO_VAR_INIT_MAX_SIZE: u64 = 4096;
 
 /// Which functions keep a frame pointer: the `"frame-pointer"` function
 /// attribute and the `frame-pointer` module flag (clang's
@@ -205,6 +232,16 @@ impl ComplexRange {
     }
 }
 
+impl CodegenOptions {
+    /// The IR will be optimized (`-O1` and above): definitions are
+    /// emitted without the `-O0` `noinline optnone` pair (clang
+    /// `CodeGenOpts.OptimizationLevel > 0`; spec/codegen.md §7p).
+    #[must_use]
+    pub fn optimize(&self) -> bool {
+        self.opt_level > 0
+    }
+}
+
 impl Default for CodegenOptions {
     fn default() -> Self {
         CodegenOptions {
@@ -213,13 +250,15 @@ impl Default for CodegenOptions {
             ident: String::new(),
             outline_atomics: true,
             complex_range: ComplexRange::Full,
-            optimize: false,
+            opt_level: 0,
             opt_size: 0,
             strict_aliasing: true,
             clang_compat: 22,
             llvm_major: 19,
             omit_frame_pointer: None,
             omit_leaf_frame_pointer: None,
+            auto_var_init: AutoVarInit::Uninitialized,
+            auto_var_init_max_size: AUTO_VAR_INIT_MAX_SIZE,
         }
     }
 }

@@ -80,6 +80,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// substituted ([`crate::Sema::ref_locs`]): the first reference
     /// rebuilt takes it (clang's `ReferenceTypeLoc`).
     pub(crate) ref_loc: Option<Loc>,
+    /// The written innermost `*`/`[` of the declarator whose type is
+    /// substituted ([`crate::Sema::inner_chunk_locs`]): the first pointer
+    /// or array rebuilt takes it (clang's `TypeLoc` sigil).
+    pub(crate) chunk_loc: Option<Loc>,
     /// A type parameter becomes its (sugared) argument with no
     /// `SubstTemplateTypeParmType` around it (clang's `Final`
     /// substitution of a non-type parameter's type by
@@ -92,6 +96,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// (clang's `TransformCompoundStmt` `SubStmtInvalid`: the body, and
     /// so the function template specialization, is invalid; WP-145).
     pub(crate) stmt_failed: bool,
+    /// A `return` of the lambda body being rebuilt failed in a call
+    /// operator with a placeholder return type: the lambda-expression
+    /// fails (clang marks the call operator invalid; WP-434).
+    pub(crate) lambda_return_failed: bool,
     /// Variable initializers that failed to substitute (the variable is
     /// invalid, its declaration statement is not: clang keeps it).
     pub(crate) init_failures: u32,
@@ -162,9 +170,11 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             declarator_name: None,
             type_begin: None,
             ref_loc: None,
+            chunk_loc: None,
             final_subst: false,
             lambda_bodies: 0,
             stmt_failed: false,
+            lambda_return_failed: false,
             init_failures: 0,
             failed_inits: Vec::new(),
             failed_init_use: false,

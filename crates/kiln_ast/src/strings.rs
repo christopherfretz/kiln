@@ -241,6 +241,42 @@ pub(crate) fn push_unit(u: u32, quote: char, out: &mut String) {
     }
 }
 
+/// Appends the body of a character literal with value `u` the way
+/// clang's `CharacterLiteral::print` spells it (template arguments and
+/// printed expressions): `\\`, `\'`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`,
+/// `\v` use their escapes, printable ASCII prints verbatim, anything else
+/// as `\xhh` below 256, `\uhhhh` up to `0xffff` and `\Uhhhhhhhh` above
+/// (lowercase, zero-padded). `ascii` masks a sign-extended ordinary
+/// `char` value back to its byte.
+pub(crate) fn push_char_literal(mut u: u32, ascii: bool, out: &mut String) {
+    use std::fmt::Write as _;
+    match u {
+        0x5c => out.push_str("\\\\"),
+        0x27 => out.push_str("\\'"),
+        0x07 => out.push_str("\\a"),
+        0x08 => out.push_str("\\b"),
+        0x0c => out.push_str("\\f"),
+        0x0a => out.push_str("\\n"),
+        0x0d => out.push_str("\\r"),
+        0x09 => out.push_str("\\t"),
+        0x0b => out.push_str("\\v"),
+        _ => {
+            if ascii && u & !0xff == !0xff {
+                u &= 0xff;
+            }
+            let _ = match u {
+                0x20..=0x7e => {
+                    out.push(char::from(u as u8));
+                    Ok(())
+                }
+                0..=0xff => write!(out, "\\x{u:02x}"),
+                0x100..=0xffff => write!(out, "\\u{u:04x}"),
+                _ => write!(out, "\\U{u:08x}"),
+            };
+        }
+    }
+}
+
 impl HeapSize for StringPool {
     fn heap_bytes(&self) -> MemReport {
         let mut r = MemReport::new();

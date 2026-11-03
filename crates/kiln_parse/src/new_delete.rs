@@ -216,6 +216,7 @@ impl Parser<'_, '_> {
         self.parse_declarator(&mut d);
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         let base = self.s.type_from_declspec(&ds);
+        let base = self.s.apply_type_id_vector_attrs(base, &ds);
         let loc = ds.type_loc.unwrap_or(loc);
         Some(NewTypeId { base, declarator: d, loc, parenthesized: true })
     }
@@ -232,6 +233,7 @@ impl Parser<'_, '_> {
         d.site = DeclSite::New;
         self.parse_new_declarator(&mut d);
         let base = self.s.type_from_declspec(&ds);
+        let base = self.s.apply_type_id_vector_attrs(base, &ds);
         let loc = ds.type_loc.unwrap_or(loc);
         Some(NewTypeId { base, declarator: d, loc, parenthesized: false })
     }

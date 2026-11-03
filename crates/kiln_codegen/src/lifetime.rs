@@ -227,7 +227,7 @@ impl Detector<'_> {
 impl Cg<'_> {
     /// clang `ShouldEmitLifetimeMarkers`: optimizing, or in a coroutine.
     pub(crate) fn lifetime_markers_on(&self) -> bool {
-        self.opts.optimize || self.f.lifetime_markers
+        self.opts.optimize() || self.f.lifetime_markers
     }
 
     /// clang `EmitLifetimeStart` of the alloca `addr` of type `ty`: the

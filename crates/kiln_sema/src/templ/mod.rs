@@ -248,6 +248,11 @@ pub struct TemplState {
     /// reported at its first use (clang's `SuppressedDiagnostics`,
     /// emitted by `DiagnoseUseOfDecl`; §5.7).
     pub(crate) suppressed_diags: kiln_source::fx::FxHashMap<DeclId, Vec<kiln_diag::Diag>>,
+    /// clang 19: implicit variable template specializations whose type
+    /// was "deduced" as its own placeholder (`template<class T> auto v =
+    /// v<T>;`, [`Sema::undeduced_var_spec_use_19`]); rejected at the end
+    /// of a translation unit with no other error.
+    pub(crate) self_typed_var_specs: Vec<DeclId>,
     /// The point of instantiation of the specialization the next call
     /// deduction forms, when it is not the deduction's location: a
     /// qualified callee's name (clang deduces at the callee's begin and
@@ -779,6 +784,15 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) {
         use crate::templ::pack::PackOperand;
+        let chunk = std::mem::replace(&mut self.pending_chunk_loc, Loc::INVALID);
+        // An invalid type-id is no default (clang's `ParseTypeParameter`
+        // passes the invalid `TypeResult` on, which `ActOnTypeParameter`
+        // ignores): `class U = R<T>*` with `R<T>` a reference.
+        if let ArgView::Type(t) = arg.view()
+            && self.is_error_type(t)
+        {
+            return;
+        }
         if self.templ.keyless_ttps.contains(&p) {
             // Rejected and dropped (clang 22).
             if let ArgView::Template(n) = arg.view()
@@ -814,6 +828,9 @@ impl Sema<'_, '_> {
             return;
         }
         let _ = self.templ.default_locs.insert(p, loc);
+        if chunk.is_valid() && matches!(arg.view(), ArgView::Type(_)) {
+            self.inner_chunk_locs.insert(p, chunk);
+        }
     }
 
     /// `>` and the optional requires-clause of the innermost head

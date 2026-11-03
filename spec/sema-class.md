@@ -1487,7 +1487,9 @@ reference due to use here` (located at the capture-default), `captured by
 reference via initialization of lambda capture 'r'`. A temporary reached
 through a local reference is `returning reference to local temporary
 object` (reference return) or `returning address of local temporary
-object`, with the same notes. Reference parameters, statics,
+object`, with the same notes. A GNU `&&label` reached the same way is
+`returning address of label, which is local` [-Wreturn-stack-address]
+(WP-424). Reference parameters, statics,
 `->` access, captured variables named inside a lambda and aggregate
 (non-lambda) prvalues are not followed. The warning is
 `per_instantiation` (diag.md §7.4): as in clang, a non-dependent return

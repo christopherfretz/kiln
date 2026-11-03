@@ -2003,11 +2003,34 @@ WP-070b):
   appear in its own initializer", `sema_auto_var_*_in_own_initializer`,
   `check_var_template_own_init`); the use of a specialization of the
   primary is diagnosed once, in the pattern
-  (`dcl.spec.auto/own-init-var-template{,-19}.cpp`). Gaps: clang 19
-  reports a primary's own use as "cannot initialize a variable of type
-  'int' with an lvalue of type 'auto'" at the use; "type of variable
-  template specialization 'ap<int>' … depends on itself" is not
-  implemented.
+  (`dcl.spec.auto/own-init-var-template{,-19}.cpp`).
+- [dcl.spec.auto.general]/11, [temp.inst]/7, a specialization still
+  being deduced, used from an initializer (WP-424). The specialization
+  the instantiation makes for that use has no initializer yet: "declaration
+  of variable 'w' with deduced type 'auto' requires an initializer"
+  (`undeduced_var_spec_without_init`, from `var_init`), skipped when the
+  pattern was already diagnosed. From clang 22 on (`clang_compat >= 22`)
+  an implicit specialization's own use during its instantiation, and
+  every later use of an invalid one whose type is still undeduced, is
+  "the type of variable template specialization 'v<int>' declared with
+  deduced type 'auto' depends on itself"
+  (`sema_auto_var_template_spec_depends_on_itself`, from `get_var_spec`
+  and `auto_expl_spec_in_own_init`; `var_spec_depends_on_itself`), at
+  the use, silent when the pattern is invalid. Below clang 22 an implicit
+  specialization's own use is a reference of type `auto`
+  (`undeduced_var_spec_use_19`): an operator on it has "invalid operands
+  to binary expression ('auto' and 'int')", and the specialization keeps
+  the type `auto` (`deduce_auto` of an `auto`-typed initializer), so its
+  uses fail to convert ("cannot initialize a variable of type 'int'
+  with an lvalue of type 'auto'" at the declarator). clang 19 accepts a
+  program whose uses convert nothing and crashes generating it; kiln
+  reports clang 22's "depends on itself" at the point of instantiation
+  at the end of the TU when no other error was reported
+  (`TemplState::self_typed_var_specs`, `reject_self_typed_var_specs`),
+  and a non-template variable deduced from such a reference is
+  "variable 'y' with type 'auto' has incompatible initializer of type
+  'auto'" (clang 19 accepts it). Tests
+  `dcl.spec.auto/own-init-var-template-spec{,-19,-19-accepted}.cpp`.
 
 **Requirement R-OVEN-1 (reentrancy)**, as landed:
 - `Sema.oven` is an `Option<Oven>`. `with_oven` takes it out for the
@@ -2301,6 +2324,30 @@ recomputed exactly as for non-template code (clang's
   - a statement that only refers to an already-invalid entity (it fails
     without a new error: clang builds a `RecoveryExpr`).
 
+  **A `return` with an erroneous operand in a placeholder-return
+  function** (WP-434). A `return` whose operand fails without a new
+  error (it names a local whose initializer failed, `auto l = t.foo();
+  return l;`, or, below `-fclang-compat=22`, it is an error of the
+  pattern) still invalidates the specialization when the declared return
+  type contains a placeholder, whether or not an earlier `return`
+  already deduced it. clang's `DeduceAutoType` answers
+  `AlreadyDiagnosed` for an operand that `containsErrors()`, and
+  `BuildReturnStmt` then marks the function invalid. So the type is not
+  deduced `void` from what is left, the caller gets no `void` cascade,
+  and a later call is a substitution failure. Inside a lambda body the
+  lambda-expression fails instead (`Substituter::lambda_return_failed`).
+  The enclosing statement then fails by the rules above. A
+  non-placeholder return type is unaffected (one error, no
+  invalidation). From clang 22 on, a `return` whose operand is an error
+  of the pattern is dropped instead (`Substituter::stmt`), so a generic lambda
+  `[](auto x) { return x + undeclared; }` deduces `void` and each call
+  cascades, as in clang 22. A non-generic lambda outside any template
+  keeps clang 19's single error under both levels: clang 22 also
+  deduces `void` there, but kiln does not follow it. Tests
+  `dcl.spec.auto/return-of-failed-local.cpp` (both releases) and
+  `expr.prim.lambda/undeclared-identifier-no-void-cascade.cpp`
+  (`clang<22`).
+
   **A lambda body that reports its own error** makes the whole
   lambda-expression fail (clang `TransformLambdaExpr` returns
   `ExprError`; WP-163). Errors that belong to a nested instantiation the
@@ -2488,10 +2535,17 @@ impl Sema<'_, '_> {
   deduction notes of the overload-set complaint (`addr_no_match_notes`).
   It puts the warnings back into the entry for the specialization's
   first use (`drop_template_id_warnings`). Inside SFINAE nothing is
-  parked. Gap: clang stores a deduction's warnings only when that
-  deduction succeeds, so its clang 22 context notes name the later use;
-  kiln's keep the failed one's location. Test
-  `over.over/template-id-no-match{,-19}.cpp`.
+  parked. clang stores a deduction's warnings only when that deduction
+  succeeds, so from clang 22 on their context notes name the later use:
+  the drop records the template-id's location
+  (`SpecialState.dropped_tid_warnings`), and the next take of the entry
+  (`take_suppressed_diags`, from `resolve_single_template_id` and
+  `emit_suppressed_diags`) moves the notes there to the use's location
+  (`Diag::relocate_notes`; WP-424). Gap: the restored warnings are the
+  failed use's, so a later *call* also reports the warning of the
+  explicit arguments' substitution into the whole function type, which
+  clang's call deduction does not make (clang reports only the signature
+  substitution's). Tests `over.over/template-id-no-match{,-19,-restored}.cpp`.
 - Fatal errors are always reported: the depth limit and stack
   exhaustion.
 
@@ -3110,6 +3164,25 @@ immediate context: errors are hard.
   carried as `Subst::ref_loc`, which the first reference rebuilt takes
   (WP-300). An alias-declaration records none and is reported at its
   name, as clang does.
+- **A pointer to a reference or an array of references** formed by
+  substitution ([dcl.ref]/5, [dcl.array]/1; also every other check of
+  the pointer or array rebuilt) is reported at the innermost written `*`
+  or `[` of the declarator, as clang's `TreeTransform` rebuilds the type
+  at its `TypeLoc` sigil: the first `*` of `T const *volatile *m`, the
+  return type's `*` of `T *h()` and `T *(*fp)(int)`. That chunk, when it
+  applies to the decl-specifiers, is recorded for a dependent field,
+  variable, static data member, typedef, alias-declaration, function
+  (its return type), parameter (`ParamInfo::chunk_loc`) and type
+  parameter default in `Sema::inner_chunk_locs`, and carried as
+  `Subst::chunk_loc`, which the first pointer or array rebuilt takes.
+  The diagnostic names the declaration (`Subst::declarator_name`: the
+  member, function, typedef, alias or parameter, and for a substituted
+  default the type parameter, `'U' declared as a pointer to a
+  reference`); a parameter of a function type is a `'type name'`.
+  Without a recorded chunk the declarator's name location is used
+  (WP-437). A type parameter default whose type-id is invalid in the
+  definition (`class U = R<T> *`, `R<T>` a reference) is dropped, as
+  clang's `ActOnTypeParameter` drops an invalid `TypeResult`.
 - **Default template arguments of function templates** are used only for
   parameters that are neither deduced nor given explicitly. They are
   substituted in order and may name earlier parameters.
@@ -4644,18 +4717,20 @@ arguments dropped (`Sema::name_for_diagnostic`; clang
 explicit specialization written with a typedef (`template<> constexpr
 int g<L *>;` is `'g<long *>'`). `declaration of variable 'au' with
 deduced type 'auto' requires an initializer` names the template, as in
-clang. Test `temp.expl.spec/variable-specialization-names.cpp`.
-Dropping a written argument recomputes its parameter's default silently
-(`Sema::suppress_default_args`), and only for a default clang's
-`isSubstitutedType` could match structurally: a non-dependent type, a
-type parameter, a pointer, reference or array of one, a class template
-specialization (canonically, so an alias counts as what it names) of
-such arguments, or a bare non-type parameter. Any other dependent
-default (`typename T::value_type`, `decltype(T::f())`) keeps its
-argument without being substituted, so naming `M<S<int>, int>` never
-instantiates `S<int>` ([temp.inst]/2; libc++'s
+clang. Dropping a written default argument from a printed name never
+substitutes a dependent default whose shape cannot match it
+(`typename T::value_type`, `decltype(T::f())`), so naming
+`M<S<int>, int>` never instantiates `S<int>` ([temp.inst]/2; libc++'s
 `memory_alignment<simd<bool>, bool>`). Test
-`temp.inst/default-arg-elision-no-instantiation.cpp`. The
+`temp.inst/default-arg-elision-no-instantiation.cpp`. The "in instantiation of variable template specialization" note
+of an error in a specialization's declaration (its type, or a deduced
+type's initializer, substituted with it) names the pattern, as clang
+does (`'v'`, `'u<T *>'`, `'S::m'`; `var_frame_names_pattern`); the note
+of an initializer instantiated on its own names the specialization
+(`'w<int>'`), and so does a member template of a class template
+specialization (`'X<char>::p<int>'`). Test
+`temp.inst/var-template-instantiation-note-name.cpp` (WP-424).
+Test `temp.expl.spec/variable-specialization-names.cpp`. The
 Oven's notes ("initializer of 'w<A>' is not a constant expression",
 "read of non-const variable 'v<int>'") name the specialization the
 same way (`kiln_oven/src/notes.rs`). Test
@@ -4885,6 +4960,15 @@ ambiguity errors.
   argument that fails, as clang's `CheckTemplateArgumentList`: later
   arguments and the arity are not reported (`M<1, int, 2>` is one error).
   Test: `temp.arg.general/first-failing-argument.cpp`.
+- A class or alias template named without a template argument list as
+  a nested-name-specifier component (`N::Y::v`, `X::type g;`;
+  [temp.names]/1) is "use of class template 'N::Y' requires template
+  arguments" at the template name, printed with the specifier as written
+  (`'::N::Y'`, `'P<int>::J'`; `act_on_nested_name_written`), with
+  "template is declared here" at the template (an alias template's at
+  its `using`, `conflict_loc`), as clang's
+  `diagnoseMissingTemplateArguments` (WP-430,
+  `temp.names/missing-args-nested-name-note.cpp`).
 - A variable template or concept named alone as a template-argument
   ([temp.names]/1): at compat 22 the parser takes it as a template name
   (P2841, `at_template_name_arg`) and the check reports it against the

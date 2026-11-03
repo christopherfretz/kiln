@@ -40,6 +40,8 @@ fn takes_expr_args(name: &str) -> bool {
             | "minsize"
             | "naked"
             | "may_alias"
+            | "init_priority"
+            | "nonnull"
     )
 }
 
@@ -385,7 +387,11 @@ impl Parser<'_, '_> {
             let text = self.s.ast.symbols().as_str(name).to_owned();
             let args = if scope.is_none() && text == "assume" {
                 self.parse_assume_arg(name)
-            } else if scope.is_none() && self.at(Punct::LParen) && forbids_args(&text) {
+            } else if scope.is_none()
+                && self.at(Punct::LParen)
+                && (forbids_args(&text)
+                    || (text == "indeterminate" && self.std >= kiln_lex::Std::Cxx26))
+            {
                 // clang `ParseCXX11AttributeArgs`: a standard attribute
                 // without arguments takes no argument list, even `()`.
                 let d =

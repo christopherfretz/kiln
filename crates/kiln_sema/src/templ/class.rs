@@ -5,7 +5,7 @@
 //! instantiated when used (`instantiate_function_definition`,
 //! [temp.inst]/4).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::names::{DeclName, DeclNameView};
@@ -272,13 +272,9 @@ impl Sema<'_, '_> {
                 // `= N` or `= Max<L>::value`).
                 break;
             }
-            if !self.default_matchable(def, depth, 0) {
-                // clang's `isSubstitutedType` matches the default against
-                // the argument structurally and never substitutes it, so a
-                // default such as `typename T::value_type` or
-                // `decltype(f<T>())` is never elided — and substituting it
-                // here could instantiate a class (`T::value_type` with a
-                // `T` whose definition fails a `static_assert`).
+            if let (ArgView::Type(pat), ArgView::Type(t)) = (def.view(), elems[n - 1].view())
+                && !self.default_shape_matches(t, pat, &elems[..n - 1], depth)
+            {
                 break;
             }
             if !self.push_inst_frame(FrameKind::DefaultArgChecking, p, tmpl, loc) {
@@ -302,58 +298,66 @@ impl Sema<'_, '_> {
         if n == elems.len() { args } else { self.ast.types.arg_list(&elems[..n]) }
     }
 
-    /// Whether default argument `def` of a template at depth `depth` has
-    /// a shape clang's `isSubstitutedType` / `isSubstitutedTemplateArgument`
-    /// can match: a non-dependent type, a type parameter, a pointer,
-    /// reference or array of such, or a class template specialization
-    /// whose arguments are all matchable (the canonical type, so an alias
-    /// template counts as what it names). Only such a default is
-    /// substituted when eliding it from a printed name; substituting any
-    /// other dependent form could instantiate a class.
-    fn default_matchable(&self, def: TemplateArg, depth: u16, nest: u32) -> bool {
-        const MAX_NEST: u32 = 64;
-        if nest > MAX_NEST {
+    /// Whether written type argument `t` can equal its default `pat` in
+    /// clang's `isSubstitutedType` (TypePrinter.cpp), which compares
+    /// structurally instead of substituting: a type equal to the
+    /// pattern, a type parameter, or a specialization (left to the
+    /// substitution [`Self::suppress_default_args`] then makes), reached
+    /// through pointer-like declarators (`*`, `&`, `&&`, `C::*`) of the
+    /// same type class under equal qualifiers. Anything else, notably an
+    /// array or function declarator (clang's FIXME), never matches, so a
+    /// written `X<long, long[3]>` keeps `long[3]` against `class A =
+    /// T[3]`.
+    fn default_shape_matches(
+        &mut self,
+        t: QualType,
+        pat: QualType,
+        prefix: &[TemplateArg],
+        depth: u16,
+    ) -> bool {
+        let types = &self.ast.types;
+        let (ct, cp) = (types.canonical(t), types.canonical(pat));
+        if ct == cp {
+            return true;
+        }
+        match types.canonical_view(pat) {
+            // The parameter's argument with the pattern's qualifiers is
+            // the written type (clang's `getQualifiedType`: a qualified
+            // reference never equals one).
+            TypeView::CanonTemplateTypeParm { depth: d, index, .. } => {
+                let Some(ArgView::Type(a)) = prefix
+                    .get(index as usize)
+                    .filter(|_| d == u32::from(depth))
+                    .map(TemplateArg::view)
+                else {
+                    return false;
+                };
+                let ca = types.canonical(a);
+                if cp.quals().is_empty() {
+                    return ca == ct;
+                }
+                if types.is_reference(ca) {
+                    return false;
+                }
+                let q = self.ast.types.qualify(ca, cp.quals());
+                return self.ast.types.canonical(q) == ct;
+            }
+            TypeView::TemplateSpecialization { .. } => return true,
+            _ => {}
+        }
+        if ct.quals() != cp.quals() {
             return false;
         }
-        let t = &self.ast.types;
-        match def.view() {
-            ArgView::Type(q) => {
-                if !t.is_dependent(q) {
-                    return true;
-                }
-                match t.canonical_view(q) {
-                    TypeView::CanonTemplateTypeParm { pack, .. } => !pack,
-                    TypeView::Pointer(e)
-                    | TypeView::LValueRef(e)
-                    | TypeView::RValueRef(e)
-                    | TypeView::IncompleteArray(e) => {
-                        self.default_matchable(TemplateArg::ty(e), depth, nest + 1)
-                    }
-                    TypeView::ConstantArray(a) => {
-                        self.default_matchable(TemplateArg::ty(a.elem), depth, nest + 1)
-                    }
-                    TypeView::QualifiedArray { base, .. } => self.default_matchable(
-                        TemplateArg::ty(QualType::unqual(base)),
-                        depth,
-                        nest + 1,
-                    ),
-                    TypeView::TemplateSpecialization { args, alias: false, .. } => {
-                        t.args(args).iter().all(|&a| self.default_matchable(a, depth, nest + 1))
-                    }
-                    _ => false,
-                }
+        let pointee = |q: QualType| match types.view(types.desugar_top(q).ty()) {
+            TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => Some(p),
+            TypeView::MemberPointer { pointee, .. } => Some(pointee),
+            _ => None,
+        };
+        match (pointee(t), pointee(pat)) {
+            (Some(a), Some(b)) if types.kind(t.ty()) == types.kind(pat.ty()) => {
+                self.default_shape_matches(a, b, prefix, depth)
             }
-            // A non-dependent expression (`= 2`) or a bare non-type
-            // parameter (`= N`).
-            ArgView::Expr { expr, .. } => {
-                !self.ast.exprs.get(expr).is_value_dependent()
-                    || self.bare_nttp_index(def, depth).is_some()
-            }
-            ArgView::Null | ArgView::Pack(_) => false,
-            ArgView::Value { .. }
-            | ArgView::Template(_)
-            | ArgView::TemplateExpansion { .. }
-            | ArgView::Profile(_) => true,
+            _ => false,
         }
     }
 
@@ -1612,13 +1616,6 @@ impl Substituter<'_, '_, '_> {
     ) {
         let saved_entity = self.entity.replace(spec);
         self.sema.act_on_start_record_definition(spec);
-        // The pattern's class-virt-specifier `final` ([class.pre]/1):
-        // `__is_final` of a specialization of a `final` class template is
-        // true (libc++'s compressed-pair padding of a final allocator).
-        if self.sema.ast.decls.record(def).is_some_and(|r| r.defn.contains(DefinitionBits::FINAL)) {
-            let loc = self.sema.ast.decls.get(def).loc();
-            self.sema.act_on_class_final(spec, loc);
-        }
         self.class_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);
         let sub = self;
@@ -1720,12 +1717,11 @@ impl Substituter<'_, '_, '_> {
         // Default member initializers ([temp.inst]/3): instantiated when
         // a constructor or an aggregate initialization uses one
         // ([`Sema::instantiate_nsdmi`], clang
-        // `InstantiateInClassInitializer`), the fields of an anonymous
-        // struct or union member included (WP-446). Those of a local class
-        // are instantiated now, in the complete-class context (the parser
-        // replays them so).
+        // `InstantiateInClassInitializer`). Those of a local class or an
+        // anonymous member are instantiated now, in the complete-class
+        // context (the parser replays them so).
         if !nsdmis.is_empty() && !invalid {
-            if local.is_none() {
+            if local.is_none() && !anonymous {
                 let ctx = (sub.args.clone(), sub.pairs.clone());
                 let _ = sub.sema.inst.nsdmi_ctx.insert(spec, ctx);
                 for (field, init) in nsdmis {

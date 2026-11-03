@@ -27,6 +27,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::ALIGNED => "aligned",
         AttrKind::ASSUME => "assume",
         AttrKind::CARRIES_DEPENDENCY => "carries_dependency",
+        AttrKind::INDETERMINATE => "indeterminate",
         AttrKind::DEPRECATED => "deprecated",
         AttrKind::FALLTHROUGH => "fallthrough",
         AttrKind::LIKELY => "likely",
@@ -56,6 +57,9 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::MINSIZE => "minsize",
         AttrKind::NAKED => "naked",
         AttrKind::MAY_ALIAS => "may_alias",
+        AttrKind::INIT_PRIORITY => "init_priority",
+        AttrKind::NONNULL => "nonnull",
+        AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
         _ => return None,
     })
@@ -244,9 +248,16 @@ impl Sema<'_, '_> {
     /// wrong.
     pub(crate) fn check_decl_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
         self.check_alignas_subject(d, attrs);
+        self.check_init_priority(d, attrs);
         let kind = self.ast.decls.get(d).kind();
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);
+            if node.kind == AttrKind::NONNULL {
+                return self.check_nonnull_attr(d, kind, a, node);
+            }
+            if node.kind == AttrKind::INDETERMINATE {
+                return self.check_indeterminate_subject(d, kind, node);
+            }
             self.check_decl_attr(d, kind, node)
         });
     }
@@ -333,6 +344,7 @@ impl Sema<'_, '_> {
                 self.check_alloc_attr(d, node);
                 true
             }
+            AttrKind::RETURNS_NONNULL => self.check_returns_nonnull_attr(d, kind, node),
             AttrKind::FLAG_ENUM | AttrKind::ENUM_EXTENSIBILITY if kind != DeclKind::Enum => {
                 let name = attr_name(&node).unwrap_or_default();
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, name, "enums")
@@ -534,5 +546,61 @@ impl Sema<'_, '_> {
             self.diag(DiagId::sema_type_attribute_wrong_type, node.loc).arg("'noreturn'").arg(ts);
         self.emit(msg);
         false
+    }
+
+    /// [dcl.attr.indet]/1: `[[indeterminate]]` appertains to a block
+    /// variable with automatic storage duration or a parameter (clang
+    /// trunk's `LocalVar, ParmVar` subjects); false drops it.
+    fn check_indeterminate_subject(&mut self, d: DeclId, kind: DeclKind, node: AttrNode) -> bool {
+        if matches!(kind, DeclKind::Var | DeclKind::ParmVar) && self.has_local_storage(d) {
+            return true;
+        }
+        let msg = self
+            .diag(DiagId::sema_attribute_wrong_decl_type_error, node.loc)
+            .arg(format!("'{}'", self.attr_shown(&node, "indeterminate")))
+            .arg("local variables or function parameters");
+        self.emit(msg);
+        false
+    }
+
+    /// [dcl.attr.indet]/1: `[[indeterminate]]` on a parameter of a
+    /// redeclaration of function `prev` must also be on that parameter
+    /// in the function's first declaration (clang trunk
+    /// `err_indeterminate_attr_not_on_first_decl`).
+    pub(crate) fn check_param_indeterminate(
+        &mut self,
+        prev: DeclId,
+        params: &[crate::declspec::ParamInfo],
+    ) {
+        let first = self.ast.first(prev);
+        let Some(fparams) = self.ast.decls.function(first).map(|f| f.params) else { return };
+        for (i, p) in params.iter().enumerate() {
+            let Some(node) = p
+                .attrs
+                .iter()
+                .map(|&a| *self.ast.attrs.get(a))
+                .find(|n| n.kind == AttrKind::INDETERMINATE)
+            else {
+                continue;
+            };
+            let Some(op) = self.ast.lists.at::<DeclId>(fparams, i) else { continue };
+            let on_first = self
+                .ast
+                .lists
+                .iter::<AttrId>(self.ast.attrs.of_decl(op))
+                .any(|a| self.ast.attrs.get(a).kind == AttrKind::INDETERMINATE);
+            if !on_first {
+                let name = p
+                    .name
+                    .map_or_else(String::new, |(n, _)| self.ast.symbols().as_str(n).to_owned());
+                let prev =
+                    self.diag(DiagId::note_previous_declaration, self.ast.decls.get(first).loc());
+                let msg = self
+                    .diag(DiagId::sema_indeterminate_param_not_first_decl, node.loc)
+                    .arg(format!("'{name}'"))
+                    .with_note(prev);
+                self.emit(msg);
+            }
+        }
     }
 }

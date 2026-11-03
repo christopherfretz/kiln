@@ -131,17 +131,21 @@ impl Sema<'_, '_> {
 
     /// The template-id `e` (possibly in parentheses and under `&`) is
     /// not used after all: its specialization keeps the held-back
-    /// warnings for its first use. (clang stores a deduction's warnings
-    /// only when it succeeds, so its context notes name the deduction of
-    /// that use; these keep this one's, BACKLOG WP-417 follow-up.)
+    /// warnings for its first use. clang stores a deduction's warnings
+    /// only when it succeeds, so from clang 22 on (where they carry
+    /// context notes) the notes name the deduction of that later use, not
+    /// this one: their location is recorded to be moved then
+    /// ([`Sema::take_suppressed_diags`]).
     pub(crate) fn drop_template_id_warnings(&mut self, e: ExprId) {
         let mut x = e;
+        let mut restored = None;
         for _ in 0..64 {
             if let Some(i) = self.special.pending_tid_warnings.iter().position(|w| w.0 == x) {
                 let (_, d, ds) = self.special.pending_tid_warnings.remove(i);
                 let slot = self.templ.suppressed_diags.entry(d).or_default();
                 if slot.is_empty() {
                     *slot = ds;
+                    restored = Some(d);
                 }
             }
             let n = *self.ast.exprs.get(x);
@@ -150,8 +154,13 @@ impl Sema<'_, '_> {
                 ExprKind::UnaryOperator if self.ast.exprs.unary_op(x) == UnaryOp::AddrOf => {
                     self.ast.exprs.operand(x)
                 }
-                _ => return,
+                _ => break,
             };
+        }
+        // The notes sit at the template-id itself, the innermost operand.
+        if let Some(d) = restored {
+            let at = self.ast.exprs.get(x).loc();
+            let _ = self.special.dropped_tid_warnings.insert(d, at);
         }
     }
 

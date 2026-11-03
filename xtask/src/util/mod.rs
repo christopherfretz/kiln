@@ -203,11 +203,12 @@ pub fn build_kiln_with(
         "xtask {who}: building kiln (cargo build --profile {} -p kiln_driver)",
         profile.cargo_name()
     );
-    let status = Command::new(env!("CARGO"))
-        .args(["build", "--quiet", "-p", "kiln_driver", "--profile", profile.cargo_name()])
-        .current_dir(root)
-        .status()
-        .map_err(|e| format!("cannot run cargo build: {e}"))?;
+    // In the live-children table: an interrupted xtask stops it too.
+    let mut cmd = Command::new(env!("CARGO"));
+    cmd.args(["build", "--quiet", "-p", "kiln_driver", "--profile", profile.cargo_name()])
+        .current_dir(root);
+    let (status, _) =
+        process::run_step(&mut cmd, false).map_err(|e| format!("cannot run cargo build: {e}"))?;
     if !status.success() {
         return Err(format!("cargo build -p kiln_driver failed ({status})"));
     }

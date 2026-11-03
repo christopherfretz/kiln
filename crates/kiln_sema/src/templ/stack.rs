@@ -543,6 +543,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether the note of variable template specialization frame `f`
+    /// names the pattern (`'v'`, `'u<T *>'`) rather than the
+    /// specialization: clang's `BuildVarTemplateInstantiation` charges
+    /// the declaration's instantiation (and the initializer that deduces
+    /// an undeduced type there) to the pattern, except for a member
+    /// template of a class template specialization.
+    fn var_frame_names_pattern(&self, f: &InstFrame) -> bool {
+        if self.inst_template(f.template) != f.template {
+            return false;
+        }
+        f.kind == FrameKind::VarTemplateInstantiation
+            || self.ast.decls.get(f.entity).ty().is_some_and(|t| self.contains_undeduced_auto(t))
+    }
+
     /// How a frame's entity prints in its note: a class by its type
     /// (`A<int>`), anything else by its qualified name.
     fn frame_name(&self, f: &InstFrame) -> String {
@@ -590,6 +604,12 @@ impl Sema<'_, '_> {
             },
             FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit => {
                 match self.ast.spec_info(f.entity) {
+                    Some((_, i)) if self.var_frame_names_pattern(f) => {
+                        match self.ast.partial_spec_info(i.from) {
+                            Some((_, p)) => self.spec_name(p.template, p.args),
+                            None => self.qualified_decl_name(i.from),
+                        }
+                    }
                     Some((_, i)) => self.spec_decl_name(i.template, i.print_args),
                     None => self.qualified_decl_name(f.entity),
                 }
@@ -643,15 +663,33 @@ impl Sema<'_, '_> {
     /// Reports the warnings held back while function template
     /// specialization `d`'s signature was substituted, at its first use
     /// (clang `DiagnoseUseOfDecl`; §5.7).
-    pub(crate) fn emit_suppressed_diags(&mut self, d: DeclId) {
+    pub(crate) fn emit_suppressed_diags(&mut self, d: DeclId, loc: Loc) {
         if self.templ.suppressed_diags.is_empty() {
             return;
         }
-        // The entry stays, empty: a later deduction forming the same
-        // specialization adds nothing to it (clang keeps it too).
-        if let Some(ds) = self.templ.suppressed_diags.get_mut(&d).map(std::mem::take) {
+        let ds = self.take_suppressed_diags(d, loc);
+        if !ds.is_empty() {
             self.emit_held_warnings(ds);
         }
+    }
+
+    /// The warnings specialization `d` holds back for its first use, at
+    /// `loc`, taken. The entry stays, empty: a later deduction forming
+    /// the same specialization adds nothing to it (clang keeps it too).
+    /// Warnings an earlier use that found no match handed back have their
+    /// context notes moved from that use to `loc` from clang 22 on (clang
+    /// stores only a successful deduction's, made here; WP-424).
+    pub(crate) fn take_suppressed_diags(&mut self, d: DeclId, loc: Loc) -> Vec<Diag> {
+        let mut ds =
+            self.templ.suppressed_diags.get_mut(&d).map(std::mem::take).unwrap_or_default();
+        if let Some(from) = self.special.dropped_tid_warnings.remove(&d)
+            && self.clang_compat >= 22
+        {
+            for x in &mut ds {
+                x.relocate_notes(from, loc);
+            }
+        }
+        ds
     }
 
     /// Reports the held-back substitution warnings `ds`

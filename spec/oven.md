@@ -1177,6 +1177,21 @@ them: `&x` for a variable, `&{*new T#n}` for allocation `n`, then
 | Reserved placement form before C++26, outside namespace std | "this placement new expression is not supported in constant expressions before C++2c" | — |
 | Default-initialized scalar read | "read of uninitialized object is not allowed in a constant expression" | — |
 
+**Uninitialized reads (C++26 erroneous values, WP-448).** P2795R5 gives
+a default-initialized automatic object an *erroneous* value at run time
+([basic.indet]), but in constant evaluation the object is still
+uninitialized: reading an erroneous or an indeterminate value is not a
+core constant expression ([expr.const], the lvalue-to-rvalue bullet),
+so the Oven keeps the row above, with clang's note, for both. The
+[basic.indet]/2 exemption that lets an `unsigned char` or `std::byte`
+glvalue read such a value at run time does not reach constant
+evaluation: copying an uninitialized `unsigned char` or `std::byte` is
+the same note (as clang). A literal reading of the C++26 wording could
+let such a copy produce an erroneous value without an operation "that
+would have erroneous behavior"; kiln follows clang and rejects it. A
+`[[indeterminate]]` variable is read the same way. Test:
+`tests/conformance/basic.indet/constexpr-erroneous.cpp`.
+
 `delete` of null (either form) is a no-op. A leak is reported as
 `NotConstant`, like every other note here (clang reports it through a
 CCEDiag; the observable result, an error on the evaluation, is the
@@ -2330,7 +2345,13 @@ GNU `vector_size` and clang `ext_vector_type` values are stored as an
 array of their lanes (`TyKind::Array`, `Types::is_vector`). The array is
 padded to the vector's own size and alignment, so an `ext_vector_type(3)`
 occupies 4 lanes and the 4th is indeterminate. A vector of `bool` (bits)
-stays `Opaque`: it has no value model yet. The operations are in
+stays `Opaque`: it has no value model yet, so its constant evaluation is
+"not supported" and a namespace-scope `bool`-vector variable gets dynamic
+initialization (clang emits a `<N x i1>` constant). clang 19 folds
+`bool`-vector lists, `!`, `& | ^ ~`, `==`, `__builtin_convertvector` both
+ways and `__builtin_bit_cast`; clang 22 also subscripts and reduces them.
+The planned model is packed bits, lane `i` at bit `i` (follow-up to
+WP-187). The operations are in
 `compile/vector.rs`. The accept/reject boundary is clang 19's
 `VectorExprEvaluator`:
 - **Folded:** arithmetic, bitwise, shift and comparison operators, lane
@@ -2368,8 +2389,12 @@ stays `Opaque`: it has no value model yet. The operations are in
 - **Rejected without a note** (clang 19 fails silently): a `?:` with a
   vector condition, and ext-vector element access on a vector object
   (`v.x` for a variable `v`, the error at the expression's begin).
-- clang 20+ folds subscripts, reductions and vector-condition `?:`. The
-  boundary moves with the oracle at the clang 22 switch (M3 to M4).
+- At `-fclang-compat=22` subscripts (read and written) and
+  `__builtin_reduce_*` fold, as clang 20+ does (WP-394;
+  `ext.vector/constexpr-diagnostics-clang22.cpp`). A `?:` with a vector
+  condition fails silently in clang 22 as well, so it stays rejected.
+  The compat-19 boundary above holds until the oracle switch (WP-184,
+  M3 to M4).
 - Codegen emits folded vector values as `<N x T>` constants
   (`kiln_codegen/src/consts.rs`).
 

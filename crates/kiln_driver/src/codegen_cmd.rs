@@ -13,7 +13,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use kiln_codegen::{CodegenOptions, emit_with_diags};
+use kiln_codegen::{AutoVarInit, CodegenOptions, emit_with_diags};
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Group};
 use kiln_lex::Interner;
 use kiln_parse::{ParseOptions, parse_preprocessed};
@@ -135,6 +135,17 @@ pub fn opt_pipeline(flag: Option<&str>) -> Option<&'static str> {
     }
 }
 
+/// clang's `CodeGenOpts.OptimizationLevel` for `-O<flag>`: 0 at `-O0`,
+/// 1 at `-O`/`-O1`/`-Og`, 2 at `-O2`/`-Os`/`-Oz`, else 3.
+pub fn opt_level(flag: Option<&str>) -> u8 {
+    match flag {
+        None | Some("-O0") => 0,
+        Some("-O" | "-O1" | "-Og") => 1,
+        Some("-O2" | "-Os" | "-Oz") => 2,
+        Some(_) => 3,
+    }
+}
+
 /// clang's `CodeGenOpts.OptimizeSize` for `-O<flag>`: 1 at `-Os`, 2 at
 /// `-Oz`, else 0.
 pub fn opt_size(flag: Option<&str>) -> u8 {
@@ -223,13 +234,25 @@ impl CodegenJob<'_> {
                 ident: ident(),
                 outline_atomics: a.outline_atomics.unwrap_or(true),
                 complex_range: a.complex_range(),
-                optimize: opt_pipeline(a.opt_flag.as_deref()).is_some(),
+                opt_level: opt_level(a.opt_flag.as_deref()),
                 opt_size: opt_size(a.opt_flag.as_deref()),
                 strict_aliasing: a.strict_aliasing.unwrap_or(true),
                 clang_compat: a.predef.clang_compat.major(),
                 llvm_major: job.toolchain.llvm_major(),
                 omit_frame_pointer: a.omit_frame_pointer,
                 omit_leaf_frame_pointer: a.omit_leaf_frame_pointer,
+                // [basic.indet]/1 (P2795R5): C++26 automatic variables
+                // start with their erroneous value (spec/codegen.md §7r).
+                auto_var_init: a.auto_var_init.unwrap_or(
+                    if job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx26 {
+                        AutoVarInit::Zero
+                    } else {
+                        AutoVarInit::Uninitialized
+                    },
+                ),
+                auto_var_init_max_size: a
+                    .auto_var_init_max_size
+                    .unwrap_or(kiln_codegen::AUTO_VAR_INIT_MAX_SIZE),
             };
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
@@ -741,6 +764,12 @@ mod tests {
         assert_eq!(opt_pipeline(Some("-O2")), Some("default<O2>"));
         assert_eq!(opt_pipeline(Some("-Oz")), Some("default<Oz>"));
         assert_eq!(opt_pipeline(Some("-O3")), Some("default<O3>"));
+        assert_eq!(opt_level(None), 0);
+        assert_eq!(opt_level(Some("-O0")), 0);
+        assert_eq!(opt_level(Some("-O")), 1);
+        assert_eq!(opt_level(Some("-Og")), 1);
+        assert_eq!(opt_level(Some("-Oz")), 2);
+        assert_eq!(opt_level(Some("-Ofast")), 3);
     }
 
     #[test]
