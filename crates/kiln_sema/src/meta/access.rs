@@ -143,7 +143,7 @@ impl Sema<'_, '_> {
 
     /// The reflection of scope `s` (a function, class or namespace).
     fn scope_reflection(&mut self, s: DeclId, loc: Loc) -> Result<ReflectionId, MetaError> {
-        let r = self.reflectee_of_decl(s).unwrap_or(Reflectee::Decl(self.ast.first(s)));
+        let r = self.reflectee_of_decl(s).unwrap_or(Reflectee::Decl(self.entity_decl(s)));
         self.meta_intern(r, loc)
     }
 

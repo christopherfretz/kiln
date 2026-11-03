@@ -390,7 +390,7 @@ impl Sema<'_, '_> {
 
     /// The reflection of member declaration `m`, keyed as `^^` keys it.
     fn member_reflection(&mut self, m: DeclId, loc: Loc) -> Result<ReflectionId, MetaError> {
-        let r = self.reflectee_of_decl(m).unwrap_or(Reflectee::Decl(self.ast.first(m)));
+        let r = self.reflectee_of_decl(m).unwrap_or(Reflectee::Decl(self.entity_decl(m)));
         self.meta_intern(r, loc)
     }
 
@@ -499,7 +499,7 @@ impl Sema<'_, '_> {
                 .collect();
             let mut l = CachedList::default();
             for e in es {
-                let r = self.meta_intern(Reflectee::Decl(self.ast.first(e)), loc)?;
+                let r = self.meta_intern(Reflectee::Decl(self.entity_decl(e)), loc)?;
                 l.items.push(MemberEntry { r, decl: e, kind: mk::PUBLIC });
             }
             self.meta_members.cache.put(def, MemberList::Enumerators, l);
