@@ -133,7 +133,7 @@ impl Sema<'_, '_> {
 
     /// Whether `e` names a function parameter or `this` (clang
     /// `ArgumentDependenceChecker`).
-    fn names_param_or_this(&self, e: ExprId, depth: u32) -> bool {
+    pub(crate) fn names_param_or_this(&self, e: ExprId, depth: u32) -> bool {
         if depth > 256 {
             return false;
         }

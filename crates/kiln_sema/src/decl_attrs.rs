@@ -338,6 +338,7 @@ impl Sema<'_, '_> {
                 "diagnose_if",
                 "functions, Objective-C methods, and Objective-C properties",
             ),
+            AttrKind::ENABLE_IF | AttrKind::DIAGNOSE_IF => self.check_attr_cond_potential(d, node),
             // [dcl.attr.nouniqueaddr]/1.
             AttrKind::NO_UNIQUE_ADDRESS => {
                 (kind == DeclKind::Field

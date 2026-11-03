@@ -2162,15 +2162,44 @@ and returns the scope it names:
       parameters naming the specialization's (`Substituter::
       enable_if_cond`, from `copy_attrs`), after deduction; a failed
       substitution drops the attribute.
-    - Not done: the never-constant check
-      (`err_attr_cond_never_constant_expr`); taking the address of a
+    - Never constant (WP-486, `attr_cond.rs`; clang
+      `checkFunctionConditionAttr`, `Expr::isPotentialConstantExprUnevaluated`):
+      a condition (of `enable_if` or `diagnose_if`) that is not
+      value-dependent and can be a constant expression for no values of
+      the parameters is "'enable_if' attribute expression never produces
+      a constant expression" (error, at the attribute) with the
+      evaluation's notes, and the attribute is dropped. kiln walks the
+      condition as clang's evaluator goes on after failing to read a
+      parameter: a subexpression naming no parameter (nor `this`) that is
+      a prvalue of arithmetic or enumeration type is evaluated on its own
+      (a failure with notes decides); one naming a parameter is first
+      evaluated whole (a success is a value, e.g. a parameter only in
+      `sizeof`), then taken apart — every operand of a built-in operator,
+      cast, subscript, member access or call (whose body is then not
+      entered), in order; `&&`/`||` stop at an unknown left operand and
+      short-circuit on a known one; `?:` takes the known condition's arm,
+      and with an unknown condition fails only if both arms do ("both arms
+      of conditional operator are unable to produce a constant
+      expression", at the expression). Anything else is maybe constant: a
+      condition is never rejected that clang accepts, but some that clang
+      rejects are missed (a call whose arguments are all known but name a
+      parameter; a non-scalar operand). Checked at the declaration
+      (`check_decl_attrs`) and, for a dependent condition, after
+      substitution (`enable_if_cond`); there the error is a hard one even
+      during deduction (clang substitutes attributes in the
+      specialization's instantiation context), its context note "in
+      instantiation of function template specialization 'f<X>' requested
+      here" replacing the deduction's, and the attribute is dropped
+      rather than the candidate.
+    - Not done: taking the address of a
       function with a non-tautological condition ("cannot take address
       of function 'f' because it has one or more non-tautological
       enable_if conditions"); clang gives a class-type by-value parameter
       initialized by copying an lvalue no value (its implicit copy
       constructor is not yet defined), kiln evaluates the copy.
     - Tests: `tests/conformance/dcl.attr/enable-if-viability.cpp`,
-      `enable-if-ranking.cpp`, `enable-if-explicit-object.cpp`.
+      `enable-if-ranking.cpp`, `enable-if-explicit-object.cpp`,
+      `attr-cond-never-constant.cpp`.
   - **`diagnose_if`** (clang extension, `__attribute__((diagnose_if(cond,
     "message", "error"|"warning"[, "group"])))`; WP-486, `diagnose_if.rs`;
     clang AttrDocs "diagnose_if", `Sema::diagnoseArgDependentDiagnoseIfAttrs`
@@ -2220,7 +2249,8 @@ and returns the scope it names:
       rebuilt, so it is recorded (`Sema::diagnose_if_recheck`) and checked
       again whenever an instantiation reaches it (`mark_shared_expr_
       referenced`); a dependent call is checked when it is rebuilt. The
-      condition is substituted like `enable_if`'s.
+      condition is substituted like `enable_if`'s, and checked like it for
+      never being constant.
     - Explicit object member calls inside a template are rebuilt through
       `rebuild_explicit_object_call`, keeping the object argument bound to
       the object parameter (before WP-486 such a rebuilt call was "called

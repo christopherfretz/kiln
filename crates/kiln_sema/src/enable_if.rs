@@ -17,6 +17,7 @@ use crate::Sema;
 use crate::conv::{self, ConvCtx};
 use crate::decl::AttrArg;
 use crate::overload::{ArgInfo, Candidate, CandidateFailure};
+use crate::templ::stack::{FrameKind, InstFrame};
 use crate::templ::subst::{DeclOrPack, Substituter};
 
 impl Sema<'_, '_> {
@@ -455,6 +456,47 @@ impl Substituter<'_, '_, '_> {
                 }
             }
         };
-        Some(AttrNode { a: c.raw(), ..node })
+        let node = AttrNode { a: c.raw(), ..node };
+        let Some(fail) = self.sema.attr_cond_never_constant(spec, node) else {
+            return Some(node);
+        };
+        // clang substitutes the attribute in the specialization's own
+        // instantiation context, outside the immediate context of a
+        // deduction: the error is a hard one, with "in instantiation of
+        // function template specialization ... requested here" in place
+        // of the deduction's note.
+        let tmpl = self.sema.spec_args(spec).map(|(t, _)| t);
+        let stack = &mut self.sema.inst.stack;
+        let swapped = match (tmpl, stack.frames.last()) {
+            (Some(t), Some(top)) if stack.is_sfinae() => {
+                let poi = top.poi;
+                let deduction = matches!(
+                    top.kind,
+                    FrameKind::DeducedArgSubstitution | FrameKind::ExplicitArgSubstitution
+                );
+                let saved = if deduction { stack.frames.pop() } else { None };
+                stack.frames.push(InstFrame {
+                    kind: FrameKind::FunctionSpec,
+                    entity: spec,
+                    template: t,
+                    poi,
+                    sfinae: Some(false),
+                    args: None,
+                    start: None,
+                    start_bytes: 0,
+                    start_nodes: 0,
+                    child_ns: 0,
+                });
+                Some(saved)
+            }
+            _ => None,
+        };
+        self.sema.report_never_constant(node, fail);
+        if let Some(saved) = swapped {
+            let stack = &mut self.sema.inst.stack;
+            stack.frames.pop();
+            stack.frames.extend(saved);
+        }
+        None
     }
 }
