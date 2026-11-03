@@ -268,6 +268,7 @@ impl Cg<'_> {
     /// clang `GenerateCode` for the function definition `d`.
     pub fn emit_fn_def(&mut self, d: DeclId) -> R<()> {
         let f = self.get_fn(d)?;
+        let f = self.fn_for_definition(d, f)?;
         self.gen_code(d, f, None)?;
         self.emit_thunks(d, None)
     }

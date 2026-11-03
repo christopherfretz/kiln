@@ -1619,6 +1619,12 @@ impl<'a> Cg<'a> {
                 self.nounwind.entry(f).or_insert(nothrow);
                 f
             }
+            // clang `GetOrCreateLLVMFunction` returns an entry of another
+            // type unchanged unless for a definition: two declarations
+            // whose asm labels name one symbol are one function, called
+            // with each declaration's own type; a definition retypes it
+            // ([`Cg::fn_for_definition`]).
+            Some(f) if self.m.resolve(Value::func(f)) == Value::func(f) => f,
             _ => self.declare_fn(&name, first, &sig)?,
         };
         self.fns.insert(first, f);
@@ -1644,6 +1650,31 @@ impl<'a> Cg<'a> {
                 );
             }
         };
+        self.set_decl_attrs(f, first, sig);
+        Ok(f)
+    }
+
+    /// The function `f` ([`Cg::get_fn`] of `d`) to define `d` into: a
+    /// declaration of another type under the same name (an asm label
+    /// shared with a declaration of another type) is replaced by one of
+    /// the definition's type at the end of the module (clang
+    /// `GetOrCreateLLVMFunction` with `IsForDefinition`).
+    pub(crate) fn fn_for_definition(&mut self, d: DeclId, f: FuncId) -> R<FuncId> {
+        let first = self.ast.first(d);
+        let sig = self.decl_sig(first)?;
+        if self.m.func(f).ty() == sig.fn_ty || !self.m.func(f).is_declaration() {
+            return Ok(f);
+        }
+        if let Err(e) = self.m.retype_function_to_end(f, sig.fn_ty) {
+            return err(Some(self.ast.decls.get(d).loc()), format!("cannot define {e:?}"));
+        }
+        self.set_decl_attrs(f, first, &sig);
+        Ok(f)
+    }
+
+    /// The declaration attributes of `f` for `first` with signature `sig`.
+    pub(crate) fn set_decl_attrs(&mut self, f: FuncId, first: DeclId, sig: &Sig) {
+        let ast = self.ast;
         let (ret, params) = self.sig_attrs(sig, sig.params.len(), false);
         let mut fa = Vec::new();
         // clang `ConstructAttributeList`: a non-throwing type or a
@@ -1684,7 +1715,6 @@ impl<'a> Cg<'a> {
         if optnone {
             self.optnone_fns.insert(f);
         }
-        Ok(f)
     }
 
     /// Sets linkage and definition attributes of `f` defined by `d`.
@@ -1802,6 +1832,16 @@ impl<'a> Cg<'a> {
         let Some(ty) = ast.decls.get(first).ty() else { return err(None, "variable without type") };
         let lt = self.mty(ty);
         let name = mangle::mangle_decl(ast, &mut self.anon, first);
+        // clang `GetOrCreateLLVMGlobal` returns an existing global of the
+        // name unchanged, whatever its type: variables whose asm labels
+        // name one symbol share it.
+        if let Some(g) = self.m.get_global(&name)
+            && !name.is_empty()
+            && mangle::asm_label(ast, first).is_some()
+        {
+            self.gvars.insert(first, g);
+            return Ok(g);
+        }
         let g = self.m.add_global(&name, lt);
         // clang `GetOrCreateLLVMGlobal`: `getDeclAlign(D)`.
         let align = self.var_align(first);
@@ -1911,7 +1951,20 @@ impl<'a> Cg<'a> {
             g
         } else {
             let name = mangle::mangle_decl(ast, &mut self.anon, first);
-            let g = self.m.add_global(&name, ity);
+            // A declaration of another variable with the same asm label
+            // is this definition's global (clang `GetOrCreateLLVMGlobal`
+            // with `IsForDefinition` replaces it by one of the
+            // initializer's type at the end of the module).
+            let shared = mangle::asm_label(ast, first)
+                .and_then(|_| self.m.get_global(&name))
+                .filter(|&g| self.m.global(g).initializer().is_none());
+            let g = match shared {
+                Some(g) => {
+                    self.m.retype_global_to_end(g, ity);
+                    g
+                }
+                None => self.m.add_global(&name, ity),
+            };
             self.gvars.insert(first, g);
             self.mark_tls(first, g, false);
             g
