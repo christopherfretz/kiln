@@ -191,6 +191,7 @@ sema_init_vector_element_failed = Error (3) "cannot initialize a vector element 
 sema_initializer_overrides = ExtWarn [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
 sema_initializer_overrides_destructed = Error (1) "initializer would partially override prior initialization of object of type {0} with non-trivial destruction";
 sema_initializer_union_overrides = WarningError [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
+sema_inline_declaration_block_scope = Error (1) "inline declaration of '{0}' not allowed in block scope";
 sema_inline_namespace_mismatch = Error (0) "non-inline namespace cannot be reopened as inline";
 sema_inline_namespace_reopened_noninline = Warning [InlineNamespaceReopenedNoninline] (0) "inline namespace reopened as a non-inline namespace";
 sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";

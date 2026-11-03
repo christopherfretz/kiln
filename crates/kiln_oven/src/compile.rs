@@ -180,6 +180,16 @@ enum Access {
     Addr,
 }
 
+/// The access to the vector object of a lane access `v[i]` / `v.x` made
+/// as `acc` (clang 22): writing a lane modifies the vector without
+/// assigning it, so a union member holding it is checked to be active
+/// rather than made active ([class.union.general]/6 names only member
+/// access and array subscript; clang `StartLifetimeOfUnionMemberHandler`
+/// stops at a vector).
+fn lane_base_access(acc: Access) -> Access {
+    if acc == Access::Write { Access::Rmw } else { acc }
+}
+
 struct Breakable {
     breaks: Vec<usize>,
     conts: Option<Vec<usize>>,
@@ -578,6 +588,50 @@ impl Oven {
         f.nregs = nregs;
         f.ret = RetKind::Scalar(ty);
         idx
+    }
+
+    /// A function calling function `f` without arguments at `at`
+    /// ([`crate::Oven::evaluate_call`]), returning what it returns: `None`
+    /// if `f` has parameters or returns a reference or an aggregate.
+    pub(crate) fn compile_call(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        f: DeclId,
+        at: Loc,
+    ) -> Option<u32> {
+        let ast = b.ast();
+        let fty = ast.decls.get(f).ty()?;
+        let TypeView::Function(p) = ast.types.canonical_view(fty) else { return None };
+        let ret_q = p.ret();
+        if p.num_params() != 0 || p.variadic() || ast.types.is_reference(ret_q) {
+            return None;
+        }
+        let fi = self.func_index(b.ast(), f);
+        let mut c = Compiler::new(self, b);
+        let rty = c.ty(ret_q);
+        let void = c.o.types.kind(rty) == TyKind::Void;
+        if c.o.types.is_aggregate(rty) {
+            return None;
+        }
+        let entry = c.here();
+        let n = c.reg();
+        c.emit_loc(Op::Call, 0, &[fi, n], at);
+        c.emit(Op::Ret, u32::from(!void), &[n]);
+        let nregs = c.max;
+        let idx = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: None,
+            entry,
+            state: FState::Ready,
+            nregs,
+            ret: if void { RetKind::Void } else { RetKind::Scalar(rty) },
+            params: Vec::new(),
+            memo: false,
+            this_reg: None,
+            this_ty: None,
+            base_obj: false,
+        });
+        Some(idx)
     }
 
     /// A function destroying the object of type `ty` whose address is in
@@ -4111,7 +4165,7 @@ impl Compiler<'_> {
                 // clang 22 evaluates a lane access as an element of the
                 // lane array (spec/oven.md "Vectors").
                 let [a, i] = self.ast().exprs.operands(e);
-                let p = self.vec_object(a, acc);
+                let p = self.vec_object(a, lane_base_access(acc));
                 let ri = self.rv(i);
                 let ru = self.reg();
                 self.emit(Op::ICast, 64 << 9, &[ru, ri]);
@@ -4128,7 +4182,7 @@ impl Compiler<'_> {
                 let p = if ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::ARROW) {
                     self.rv(base)
                 } else {
-                    self.vec_object(base, acc)
+                    self.vec_object(base, lane_base_access(acc))
                 };
                 let ri = self.reg();
                 self.konst(ri, u128::from(lane));
