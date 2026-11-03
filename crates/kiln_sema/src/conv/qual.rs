@@ -85,7 +85,7 @@ struct Combined {
     cv1: Vec<Quals>,
     cv2: Vec<Quals>,
     cv3: Vec<Quals>,
-    /// P1_j, P2_j and P3_j.
+    /// `P1_j`, `P2_j` and `P3_j`.
     p1: Vec<Level>,
     p2: Vec<Level>,
     p3: Vec<Level>,
@@ -202,7 +202,7 @@ pub fn similar(s: &Sema<'_, '_>, from: QualType, to: QualType) -> bool {
     !matches!(qualification_relation(s, from, to), QualRelation::NotSimilar)
 }
 
-/// True if `a` and `b` are similar with the same P_i at every level
+/// True if `a` and `b` are similar with the same `P_i` at every level
 /// (no array of unknown bound against one of known bound): the
 /// similarity [expr.const.cast]/3 needs (clang `UnwrapSimilarTypes`
 /// without `AllowPiMismatch`).
