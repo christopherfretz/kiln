@@ -5,6 +5,7 @@
 // lifetime, and after them the virtual bases have. A base-subobject
 // constructor does not initialize them: they are within their lifetime.
 //@ skip(clang): neither clang 19 nor clang 22 implements P3533
+//@ requires: clang>=22
 //@ std: c++26
 //@ expect: compile-ok
 //@ strict-diags
