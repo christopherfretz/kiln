@@ -2196,7 +2196,7 @@ impl AstBuilder<'_> {
 
     /// `C<args>` naming concept `c` ([temp.names]/8): a
     /// `ConceptSpecializationExpr`, a `bool` prvalue, value-dependent when
-    /// an argument is.
+    /// an argument is dependent.
     pub fn concept_spec_expr(
         &mut self,
         c: DeclId,
@@ -2204,9 +2204,17 @@ impl AstBuilder<'_> {
         bool_ty: QualType,
         loc: Loc,
     ) -> ExprId {
+        // Value-dependent only when an argument is type- or value-dependent;
+        // a merely instantiation-dependent argument (`C<TC<N>>`, `N` a
+        // constant local of a function template) leaves it instantiation-
+        // dependent, like clang's `ConceptSpecializationExpr` dependence.
         let d = self.targs_deps(Some(args));
-        let deps = if d.is_none() { ExprDeps::NONE } else { ExprDeps::VALUE_INST.with(d) };
-        let deps = deps.without(ExprDeps::TYPE);
+        let mut deps = d.without(ExprDeps::TYPE_VALUE_INST);
+        if d.intersects(ExprDeps::TYPE.with(ExprDeps::VALUE)) {
+            deps |= ExprDeps::VALUE_INST;
+        } else if d.intersects(ExprDeps::INSTANTIATION) {
+            deps |= ExprDeps::INSTANTIATION;
+        }
         self.push_expr(
             ExprKind::ConceptSpecializationExpr,
             ValueCategory::PRValue,

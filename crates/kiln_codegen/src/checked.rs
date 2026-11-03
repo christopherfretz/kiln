@@ -208,13 +208,14 @@ impl Cg<'_> {
         self.f.fir.push(Op::Select { c, t, f }, ty)
     }
 
-    /// clang `CreateStore(EmitToMemory(v, q), ...)`: an `i1` is widened.
+    /// clang `CreateStore(EmitToMemory(v, q), ...)`: an `i1` is widened,
+    /// as is a `_BitInt(N)` stored in a wider slot.
     fn store_mem(&mut self, v: V, q: QualType, p: V, al: u64, vol: bool) {
+        let mty = self.mty(q);
         let v = if self.f.fir.ty(&self.m, v) == LTy::I1 {
-            let mty = self.mty(q);
             self.cast(CastOp::ZExt, v, mty)
         } else {
-            v
+            self.emit_to_memory(v, q, mty)
         };
         self.store(v, p, al, vol);
     }

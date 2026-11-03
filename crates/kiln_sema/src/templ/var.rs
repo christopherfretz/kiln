@@ -44,8 +44,8 @@ impl Sema<'_, '_> {
             }
             return Ok(s);
         }
-        let s =
-            self.instantiate_var_spec_decl(tmpl, conv.sugared, conv.canonical, written.len(), loc);
+        let sugared = self.settle_inst_sugar(conv.sugared);
+        let s = self.instantiate_var_spec_decl(tmpl, sugared, conv.canonical, written.len(), loc);
         if let Ok(v) = s
             && self.is_undeduced_auto(self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR))
         {

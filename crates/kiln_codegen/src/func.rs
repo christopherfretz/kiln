@@ -925,14 +925,50 @@ impl Cg<'_> {
         let p = self.scalar_tls_addr(a.v);
         let v = self.load(a.ty, p, a.align, vol);
         self.tbaa_mark(v, q, tb);
-        if self.is_bool_value(q) {
-            if self.opts.optimize && a.ty == LTy::I8 {
-                self.bool_range(v);
-            }
-            self.cast(CastOp::Trunc, v, LTy::I1)
-        } else {
-            v
+        if self.is_bool_value(q) && self.opts.optimize && a.ty == LTy::I8 {
+            self.bool_range(v);
         }
+        self.emit_from_memory(v, q)
+    }
+
+    /// clang `EmitFromMemory`: a `bool` is truncated to `i1`, a
+    /// `_BitInt(N)` from its slot to `iN`.
+    pub fn emit_from_memory(&mut self, v: V, q: QualType) -> V {
+        if self.is_bool_value(q) {
+            return self.cast(CastOp::Trunc, v, LTy::I1);
+        }
+        match self.bit_int_value_ty(q) {
+            Some(t) if self.f.fir.ty(&self.m, v) != t => self.cast(CastOp::Trunc, v, t),
+            _ => v,
+        }
+    }
+
+    /// clang `EmitToMemory`: a `bool` is zero-extended to its slot `mty`,
+    /// a `_BitInt(N)` sign- or zero-extended.
+    pub fn emit_to_memory(&mut self, v: V, q: QualType, mty: LTy) -> V {
+        let vt = self.f.fir.ty(&self.m, v);
+        if vt == mty {
+            return v;
+        }
+        if self.is_bool_value(q) && vt == LTy::I1 {
+            return self.cast(CastOp::ZExt, v, mty);
+        }
+        if self.bit_int_value_ty(q) == Some(vt) {
+            let op = if self.is_signed(q) { CastOp::SExt } else { CastOp::ZExt };
+            return self.cast(op, v, mty);
+        }
+        v
+    }
+
+    /// `iN` when `q` (or its `_Atomic` value type) is `_BitInt(N)` stored
+    /// wider than `N` bits.
+    fn bit_int_value_ty(&mut self, q: QualType) -> Option<LTy> {
+        let q = match self.ast.types.canonical_view(q) {
+            TypeView::Atomic(v) => v,
+            _ => q,
+        };
+        let TypeView::BitInt { .. } = self.ast.types.canonical_view(q) else { return None };
+        Some(self.lty(q))
     }
 
     /// `!range !{i8 0, i8 2}` and `!noundef !{}` on the `bool` load `v`.
@@ -963,11 +999,7 @@ impl Cg<'_> {
             self.tbaa_mark(st, q, tb);
             return;
         }
-        let v = if self.is_bool_value(q) && self.f.fir.ty(&self.m, v) == LTy::I1 {
-            self.cast(CastOp::ZExt, v, a.ty)
-        } else {
-            v
-        };
+        let v = self.emit_to_memory(v, q, a.ty);
         let p = self.scalar_tls_addr(a.v);
         let st = self.store(v, p, a.align, vol);
         self.tbaa_mark(st, q, tb);

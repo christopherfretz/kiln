@@ -198,15 +198,29 @@ impl Sema<'_, '_> {
         });
         self.end_set(set);
         let (d, f) = won?;
+        Some(self.finish_member_winner(&m, d, f, loc))
+    }
+
+    /// The member access naming `d` (found as `f`) that the overloaded
+    /// member access `m` at `loc` resolves to, for a call or a target
+    /// type ([over.over]): a `DeclRefExpr` for a static member of an
+    /// implicit `this`, as clang.
+    pub(crate) fn finish_member_winner(
+        &mut self,
+        m: &OvlMember,
+        d: DeclId,
+        f: DeclId,
+        loc: Loc,
+    ) -> ExprId {
         self.check_member_access(f, m.naming, Some(m.def), loc);
         let shadow = (f != d).then_some(f);
         if self.check_undeduced_use(d, loc) {
-            return Some(self.recover_err(&[m.base], loc));
+            return self.recover_err(&[m.base], loc);
         }
         if m.implicit && self.is_static_method(d) {
             let e = self.build_decl_ref_qualified(d, loc, shadow, m.nns);
             self.note_function_name_use(d, e, loc, m.nns.is_none());
-            return Some(e);
+            return e;
         }
         self.diagnose_deprecated(d, loc);
         let e = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, d, shadow, m.nns, loc);
@@ -221,6 +235,6 @@ impl Sema<'_, '_> {
             self.member_refs
                 .insert(e, MemberRef { decl: d, error: false, qualified: true, begin: None });
         }
-        Some(e)
+        e
     }
 }
