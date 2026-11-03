@@ -1771,7 +1771,7 @@ impl Cg<'_> {
         self.f.fir.push(Op::ShuffleVector { a, b, mask }, rt)
     }
 
-    /// llvm `ConstantFoldShuffleVectorInstruction` (the IRBuilder folds a
+    /// llvm `ConstantFoldShuffleVectorInstruction` (the `IRBuilder` folds a
     /// shuffle of two constants): a poison mask lane is `undef`, any other
     /// takes that lane of `a` then `b`; an all-poison mask is `poison`.
     fn fold_shuffle(&mut self, a: V, b: V, mask: &[u32], t: LTy) -> Option<Value> {
