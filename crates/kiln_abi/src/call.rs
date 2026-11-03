@@ -905,6 +905,11 @@ fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u3
                     return (extend(t, s), ni, ns);
                 }
             }
+            // clang 20+: an `i128` at offset 0 is passed directly in the
+            // two registers (spec/abi.md §8.25).
+            if r == IrType::Int(128) {
+                return (direct(r), ni + 1, ns);
+            }
             res = Some(r);
         }
         Sse => {
@@ -984,6 +989,10 @@ fn x86_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
                 if is_integral_or_enum(t, s) && is_promotable(t, s) {
                     return extend(t, s);
                 }
+            }
+            // clang 20+ returns an `i128` at offset 0 directly (§8.25).
+            if r == IrType::Int(128) {
+                return direct(r);
             }
             res = Some(r);
         }
@@ -1106,6 +1115,12 @@ fn integer_at(
         let (es, _) = t.size_align(e);
         let eo = ir_off.checked_div(es).map_or(0, |q| q * es);
         return integer_at(t, e, ir_off - eo, src, src_off);
+    }
+    // clang 20+ (LLVM 20 "Pass __int128 as i128"): a 128-bit integer is
+    // passed whole, so a stack-passed one gets `i128`'s 16-byte slot
+    // (spec/abi.md §8.25). clang 19 splits it into two `i64`s.
+    if ir_off == 0 && *ir == IrType::Int(128) && t.clang_compat() >= 20 {
+        return ir.clone();
     }
     let size = t.layouter().type_layout(src).size;
     IrType::Int(u32::try_from(size.saturating_sub(src_off).min(8) * 8).unwrap_or(64))

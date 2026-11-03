@@ -94,20 +94,6 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // slice.
     ("module_gmf_vtable", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("module_gmf_vtable", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    // LLVM 20+ passes x86-64 `__int128` as `i128` instead of `{ i64, i64 }`
-    // / two `i64`s (the same registers and stack slots: SysV §3.2.3); the
-    // same for `_BitInt(65..128)`.
-    ("abi_decls", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    ("atomic_builtins", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    ("bit_int_arith", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    ("atomic_lv_libcall", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    ("atomic_wide", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    ("builtins_bits", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    ("builtins_overflow", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    ("int128", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    ("int128_ops", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    ("new_placement_nothrow", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    ("va_arg", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // clang 20+ coerces an AArch64 aggregate of pointers to `ptr` /
     // `[N x ptr]` instead of `i64` / `[N x i64]` (the same registers).
     ("srcloc_immediate", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
@@ -126,9 +112,11 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // `select` for vector `?:`, constant-folded vector reductions, and the
     // block order of `delete`'s null check.
     ("atomic_builtins", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("atomic_builtins", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("atomic_orders", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("atomic_orders", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("builtins_overflow", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
+    ("builtins_overflow", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("builtins_shufflevector", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("builtins_shufflevector", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("ext_vector_element", "aarch64-unknown-linux-gnu", "22", Allow::Structure),

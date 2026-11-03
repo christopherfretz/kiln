@@ -1148,7 +1148,19 @@ impl Sema<'_, '_> {
                     BinaryOp::LT | BinaryOp::GT | BinaryOp::LE | BinaryOp::GE => {
                         Some((DiagId::sema_unused_comparison, loc, vec!["2".to_owned()]))
                     }
-                    BinaryOp::Comma => self.unused_warning(self.ast.exprs.operands(x)[1]),
+                    BinaryOp::Comma => {
+                        // clang `isUnusedResultAWarning`: `(x = y, 0)` is
+                        // an idiom for hiding an assignment's result (an
+                        // integer literal 0 as the right operand, [expr.comma]).
+                        let r = self.ast.exprs.operands(x)[1];
+                        let ri = self.ignore_parens(r);
+                        if self.ast.exprs.get(ri).kind() == ExprKind::IntegerLiteral
+                            && self.ast.exprs.int_value(ri) == Some(0)
+                        {
+                            return None;
+                        }
+                        self.unused_warning(r)
+                    }
                     BinaryOp::LAnd | BinaryOp::LOr => {
                         // `a && f()` is control flow when the right side has effects.
                         let r = self.ast.exprs.operands(x)[1];
