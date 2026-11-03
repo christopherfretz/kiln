@@ -2677,11 +2677,15 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::Comma, Punct::RParen], true, false);
             return;
         }
+        // clang 19 corrects a default argument's delayed typos before it
+        // converts it to the parameter type (WP-408).
+        let typos = self.begin_typo_correction();
         let init = if self.at(Punct::LBrace) {
             self.parse_init_list().ok().map(Initializer::List)
         } else {
             self.parse_assignment_expr().map(Initializer::Expr)
         };
+        self.correct_typos(typos, init.is_some());
         if let Some(init) = init {
             self.s.act_on_param_default_init(p, init);
         } else {
@@ -3598,7 +3602,12 @@ impl Parser<'_, '_> {
                 valid &= ok;
                 InitValue::List(l)
             } else {
-                let Some(e) = self.parse_assignment_expr() else {
+                // clang 19's `ParseBraceInitializer` corrects each
+                // element's delayed typos as it is parsed (WP-408).
+                let typos = self.begin_typo_correction();
+                let e = self.parse_assignment_expr();
+                self.correct_typos(typos, e.is_some());
+                let Some(e) = e else {
                     self.skip_until(&[Punct::RBrace], false, true);
                     return Err(());
                 };

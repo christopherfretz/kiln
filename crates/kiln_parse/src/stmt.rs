@@ -473,7 +473,25 @@ impl Parser<'_, '_> {
             }
         };
         let v = self.s.act_on_declarator(&ds, base, &d);
-        let Ok(Some(init)) = self.parse_initializer(d.init_style, false) else {
+        // clang 19 corrects a condition declaration's delayed typos in
+        // `AddInitializerToDecl`, with the initialization as the filter,
+        // as for any other initializer (WP-408).
+        let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
+        let r = self.finish_condition_decl(v, d.init_style, name_loc);
+        if let Some(m) = typos {
+            self.s.end_delayed_typos(m);
+        }
+        r
+    }
+
+    /// The initializer of condition variable `v` and the reference to it.
+    fn finish_condition_decl(
+        &mut self,
+        v: Option<DeclId>,
+        style: Option<InitStyle>,
+        name_loc: Loc,
+    ) -> Option<Cond> {
+        let Ok(Some(init)) = self.parse_initializer(style, false) else {
             return None;
         };
         let v = v?;

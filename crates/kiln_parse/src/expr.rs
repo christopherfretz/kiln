@@ -175,9 +175,36 @@ impl Parser<'_, '_> {
     /// [expr.const]/16).
     pub fn parse_constant_expr(&mut self) -> PExpr {
         self.s.enter_constant_evaluated();
+        // clang 19's `ActOnConstantExpression` corrects the delayed typos
+        // of a constant-expression (a template argument) at once, with no
+        // filter (WP-408).
+        let typos = self.begin_typo_correction();
         let r = self.parse_cast_expr().and_then(|lhs| self.parse_rhs(lhs, prec::COND));
+        self.correct_typos(typos, r.is_some());
         self.s.exit_constant_evaluated(r);
         r
+    }
+
+    /// Opens a clang 19 delayed-typo correction scope (none at a later
+    /// compat level) for an expression clang 19 passes to
+    /// `CorrectDelayedTyposInExpr` with no initialization filter as soon
+    /// as it is parsed (a constant-expression, a default argument or
+    /// member initializer, an element of a braced list; spec/parse.md
+    /// "Compat-19 correction scopes", WP-408).
+    pub(crate) fn begin_typo_correction(&mut self) -> Option<usize> {
+        (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos())
+    }
+
+    /// Closes the scope [`Self::begin_typo_correction`] opened: a parsed
+    /// expression (`parsed`) has its delayed typos corrected now, even
+    /// inside an enclosing scope; a failed one leaves them to the
+    /// enclosing scope (clang corrects nothing in an `ExprError`).
+    pub(crate) fn correct_typos(&mut self, typos: Option<usize>, parsed: bool) {
+        match typos {
+            Some(m) if parsed => self.s.flush_delayed_typos(m),
+            Some(m) => self.s.end_delayed_typos(m),
+            None => {}
+        }
     }
 
     /// An expression whose operators all have precedence `min` or higher
@@ -1731,6 +1758,13 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// Whether the `<` here opens a template argument list that closes
+    /// on a whole `>`, or -- inside an enclosing template argument list
+    /// (`T<val<int>>`, [temp.names]/4) -- on the first `>` of a `>>`.
+    fn closes_assumed_template_args(&self) -> bool {
+        matches!(self.skip_template_args(self.pos()), Some((_, split)) if !split || !self.greater_is_op)
+    }
+
     /// An undeclared template-id that is not called (`(undeclared<int> * 2)`),
     /// at its `<` ([temp.names]/3.3): the name is still a template-name, so
     /// the list is its arguments (not `<`/`>` operators), and the id names
@@ -1872,7 +1906,7 @@ impl Parser<'_, '_> {
         if qual.is_none()
             && self.at(Punct::Less)
             && class == NameClass::Undeclared
-            && matches!(self.skip_template_args(self.pos()), Some((_, false)))
+            && self.closes_assumed_template_args()
             && self.s.is_assumed_template_name(name)
         {
             return self.undeclared_template_id_expr(name, nl, false);
@@ -1883,7 +1917,7 @@ impl Parser<'_, '_> {
             && self.at(Punct::Less)
             && self.std >= Std::Cxx20
             && matches!(class, NameClass::Value(_))
-            && matches!(self.skip_template_args(self.pos()), Some((_, false)))
+            && self.closes_assumed_template_args()
             && self.s.is_assumed_template_name(name)
         {
             return self.undeclared_template_id_expr(name, nl, true);
