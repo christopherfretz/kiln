@@ -808,7 +808,9 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   `TempLoopID`) and filled when it is popped, through
   `Module::md_set_operands`, so an inner loop of an `unroll_and_jam` parent
   is finished first and becomes the parent's
-  `llvm.loop.unroll_and_jam.followup_inner`, the parent's own
+  `llvm.loop.unroll_and_jam.followup_inner` (listing its properties;
+  at `-fclang-compat=19` one distinct self-referential node of them, as
+  clang 19's loop-id `UnrollAndJamInnerFollowup`), the parent's own
   `followup_outer` carrying the before-jam attributes. The followup chain
   is clang's: full unroll → distribute → vectorize (`followup_all`,
   `followup_epilogue`) → unroll-and-jam → partial unroll → pipelining,
@@ -3362,8 +3364,9 @@ categories, compared with clang 22 and clang 19 on both targets).
   `Fir::push` appends while it is active (the union under nested
   parallel loops; calls to `memory(none)` callees skipped), exact against
   clang 19 and 22 (`tests/codegen/loop_parallel{,_o1}.cpp`;
-  `loop_parallel_jam.cpp` is oracle 22 only, as clang 19 makes
-  `followup_inner` distinct). An instruction kiln places away from the
+  `loop_parallel_jam.cpp`, where clang 19, and kiln at
+  `-fclang-compat=19`, makes the `followup_inner` properties a distinct
+  self-referential node; WP-492). An instruction kiln places away from the
   insertion point follows how clang makes it (WP-492): one made by
   `new X(.., InsertPt)` or appended directly (`Fir::insert_before`,
   `insert_after`, `insert_before_last`, `push_in`: the `cleanup.cond`
@@ -3376,14 +3379,11 @@ categories, compared with clang 22 and clang 19 on both targets).
   full-expression temporary in a conditional branch, put at the
   outermost conditional's start) gets the active one
   (`tests/codegen/loop_parallel_inserts{,_o1}.cpp`).
-- **Not modelled**: the clang 19 distinct `followup_inner`; `"; No predecessors!"`
-  comments; vtable hiding (`isVTableHidden`: it reads the visibility of
-  the RTTI and of undefined methods, and kiln has no visibility model);
-  labelled structors of a
-  class with virtual bases (clang emits a VTT call to a one-argument
-  definition) and the dead D0 block clang appends to a labelled virtual
-  destructor; local classes and instantiations in the incomplete-class
-  walk.
+- **Not modelled**: `"; No predecessors!"` comments; vtable hiding
+  (`isVTableHidden`: it reads the visibility of the RTTI and of
+  undefined methods, and kiln has no visibility model); the emission
+  order of inline (deferred) labelled structors of a class with virtual
+  bases.
 
 ## 7y. Landed (WP-452): `=pattern`, pre-fills and VLAs (`auto_init.rs`)
 
