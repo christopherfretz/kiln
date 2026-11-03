@@ -347,7 +347,10 @@ impl Types {
     /// Whether objects of `t` live in memory only (an array, a class or
     /// a `WideInt`): their prvalues initialize a result object.
     pub fn is_aggregate(&self, t: OTy) -> bool {
-        matches!(self.kind(t), TyKind::Array { .. } | TyKind::Record { .. } | TyKind::WideInt { .. })
+        matches!(
+            self.kind(t),
+            TyKind::Array { .. } | TyKind::Record { .. } | TyKind::WideInt { .. }
+        )
     }
 
     /// `(width, signed)` of a `WideInt` type.

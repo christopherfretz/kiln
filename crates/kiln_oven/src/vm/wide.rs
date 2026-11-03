@@ -43,7 +43,14 @@ impl Oven {
 
     /// Stores the canonical limbs `w` as the wide value of type `ty` at
     /// `raw` (`init`: an initialization).
-    fn wide_store(&mut self, raw: u64, ty: OTy, w: &[u64], k: u32, init: bool) -> Result<(), Fault> {
+    fn wide_store(
+        &mut self,
+        raw: u64,
+        ty: OTy,
+        w: &[u64],
+        k: u32,
+        init: bool,
+    ) -> Result<(), Fault> {
         let len = self.types.size(ty);
         let k = if init { ak::INIT } else { k };
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
@@ -126,7 +133,11 @@ impl Oven {
                 let va = self.wide_load(a as u64, ty, ka)?;
                 let unary = matches!(sub, wide::NEG | wide::NOT | wide::INC | wide::DEC);
                 let shift = matches!(sub, wide::SHL | wide::SHR);
-                let vb = if unary || shift { Vec::new() } else { self.wide_load(b as u64, ty, ak::READ)? };
+                let vb = if unary || shift {
+                    Vec::new()
+                } else {
+                    self.wide_load(b as u64, ty, ak::READ)?
+                };
                 match wide_bin(sub, width, signed, &va, &vb, b, x) {
                     Ok(r) => r,
                     Err((err, text)) => {
@@ -186,7 +197,13 @@ fn wide_bin(
             if signed && !bi::fits(&q, width, true) {
                 return Err((IntErr::Overflow, bi::to_decimal(&q, true)));
             }
-            exact(if sub == wide::DIV { q } else if na { bi::neg(&r) } else { r })
+            exact(if sub == wide::DIV {
+                q
+            } else if na {
+                bi::neg(&r)
+            } else {
+                r
+            })
         }
         wide::SHL | wide::SHR => {
             let (cw, cs) = (cx & 0xFF, cx >> 8 & 1 != 0);

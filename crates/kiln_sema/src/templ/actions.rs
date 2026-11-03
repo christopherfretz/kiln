@@ -122,8 +122,19 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// True if `t` is a dependent type ([temp.dep.type]/7).
+    /// True if `t` is a dependent type ([temp.dep.type]/7): its meaning
+    /// (canonical type) is unknown until instantiation, so semantic
+    /// checks on it wait (spec/sema-templates.md §3.1).
     pub fn is_dependent_type(&self, t: QualType) -> bool {
+        self.ast.types.is_dependent(t)
+    }
+
+    /// True if `t` is dependent or instantiation-dependent: it mentions a
+    /// template parameter or a template's local somewhere, even where its
+    /// canonical type is known (`void_t<T>`, `TC<N>*` for a constant local
+    /// `N`, a `decltype` of such an expression). Substitution must still
+    /// visit it (spec/sema-templates.md §3.1).
+    pub fn is_instantiation_dependent_type(&self, t: QualType) -> bool {
         self.ast.types.flags(t.ty()).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
     }
 
@@ -1027,9 +1038,9 @@ impl Sema<'_, '_> {
     ) -> Result<TemplateIdRef, ()> {
         let _ = r;
         let res = self.template_id(name, args, l);
-        // A dependent specialization type: where it was written (§5.8).
+        // A dependent or instantiation-dependent specialization: where written (§5.8).
         if let Ok(TemplateIdRef::Type(t)) = res
-            && self.is_dependent_type(t)
+            && self.is_instantiation_dependent_type(t)
         {
             self.note_written_loc(WrittenKey::Type(t.without_quals()), l);
         }

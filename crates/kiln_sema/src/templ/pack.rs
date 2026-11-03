@@ -13,7 +13,7 @@
 
 use kiln_ast::QualType;
 use kiln_ast::expr::ExprKind;
-use kiln_ast::ids::RawId;
+use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::templates::Requirement;
 use kiln_ast::types::{ArgView, TemplateArg, TypeView};
 use kiln_ast::{DeclId, ExprId};
@@ -693,7 +693,12 @@ impl Substituter<'_, '_, '_> {
         } else if let Some(info) = self.sema.ast.template_parm(d).copied() {
             match self.lookup(info.depth, info.index) {
                 ArgLookup::Arg(a) => match a.view() {
-                    ArgView::Pack(l) => Some(self.sema.ast.types.args(l).len()),
+                    ArgView::Pack(l) => {
+                        if let Some(r) = self.size_of_expansions(l, loc, end) {
+                            return Ok(r);
+                        }
+                        Some(self.sema.ast.types.args(l).len())
+                    }
                     _ => None,
                 },
                 ArgLookup::Retain(_) => return Ok(e),
@@ -708,6 +713,50 @@ impl Substituter<'_, '_, '_> {
         let _ = end;
         let st = self.sema.size_type();
         Ok(self.int_literal(st, len as i128, loc))
+    }
+
+    /// `sizeof...(U)` with `U` bound to a list holding pack expansions
+    /// (`N<Ts...>` naming `template <class... U> using N =
+    /// ic<int, sizeof...(U)>`, [temp.alias]/2): the length is not known
+    /// yet, so the result is the value-dependent `k + sizeof...(P1) + ...`
+    /// over the plain elements' count `k` and each expansion's first pack
+    /// `Pi` (an expansion has its packs' length, [temp.variadic]/5), as
+    /// clang's partially substituted `SizeOfPackExpr`. `None` when the
+    /// list has no expansion.
+    fn size_of_expansions(&mut self, l: ArgListId, loc: Loc, end: Loc) -> Option<ExprId> {
+        let args = self.sema.ast.types.args(l).to_vec();
+        let mut plain = 0i128;
+        let mut packs = Vec::new();
+        for a in args {
+            let mut found = Vec::new();
+            match a.view() {
+                ArgView::Type(t) => match type_pattern(self.sema, t) {
+                    Some(p) => self.sema.type_packs(p, &mut found, 0),
+                    None => plain += 1,
+                },
+                ArgView::Expr { expr, .. } => match expr_pattern(self.sema, expr) {
+                    Some(p) => self.sema.expr_packs(p, &mut found, 0),
+                    None => plain += 1,
+                },
+                _ => plain += 1,
+            }
+            if let Some(&p) = found.first() {
+                packs.push(p);
+            }
+        }
+        if packs.is_empty() {
+            return None;
+        }
+        let st = self.sema.size_type();
+        let mut acc = (plain > 0).then(|| self.int_literal(st, plain, loc));
+        for p in packs {
+            let e = self.sema.builder().size_of_pack(p, st, loc, end);
+            acc = Some(match acc {
+                Some(x) => self.sema.builtin_binary(kiln_ast::expr::BinaryOp::Add, x, e, loc),
+                None => e,
+            });
+        }
+        acc
     }
 }
 

@@ -3063,7 +3063,7 @@ impl Sema<'_, '_> {
         if !alias
             && ds.loc.is_valid()
             && ds.loc != d.name_loc()
-            && self.is_dependent_type(underlying)
+            && self.is_instantiation_dependent_type(underlying)
         {
             let _ = self.ast.decls.cold.begin_loc.insert(td, ds.loc);
             self.note_type_spec_loc(td, ds, d.name_loc());
@@ -3103,7 +3103,7 @@ impl Sema<'_, '_> {
     /// type `ty` declared by `d` ([`Sema::ref_locs`]).
     pub(crate) fn note_ref_loc(&mut self, id: DeclId, d: &Declarator, ty: QualType) {
         let l = Self::outer_ref_loc(d);
-        if l.is_valid() && self.is_dependent_type(ty) {
+        if l.is_valid() && self.is_instantiation_dependent_type(ty) {
             self.ref_locs.insert(id, l);
         }
     }
@@ -3159,7 +3159,7 @@ impl Sema<'_, '_> {
             self.declarator_type_invalid = false;
             self.ast.decls.set_flags(td, DeclFlags::INVALID);
         }
-        if type_loc.is_valid() && self.is_dependent_type(ty) {
+        if type_loc.is_valid() && self.is_instantiation_dependent_type(ty) {
             self.type_spec_locs.insert(td, type_loc);
         }
         // [class.access.spec]/1: a member alias-declaration has the
@@ -3814,7 +3814,7 @@ impl Sema<'_, '_> {
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
         if let Some(Chunk::Function { trailing: Some((t, arrow)), .. }) = d.chunks.first()
-            && self.is_dependent_type(*t)
+            && self.is_instantiation_dependent_type(*t)
         {
             let _ = self.templ.trailing_arrow.insert(f, *arrow);
         }
@@ -4061,7 +4061,10 @@ impl Sema<'_, '_> {
             }
             if p.range.0.is_valid() && p.range.0 != p.loc {
                 let _ = self.ast.decls.cold.begin_loc.insert(pd, p.range.0);
-                if p.type_loc.is_valid() && p.type_loc != p.loc && self.is_dependent_type(p.ty) {
+                if p.type_loc.is_valid()
+                    && p.type_loc != p.loc
+                    && self.is_instantiation_dependent_type(p.ty)
+                {
                     self.type_spec_locs.insert(pd, p.type_loc);
                 }
             }
@@ -4074,7 +4077,7 @@ impl Sema<'_, '_> {
             {
                 self.type_spec_locs.insert(pd, p.type_loc);
             }
-            if p.ref_loc.is_valid() && self.is_dependent_type(p.ty) {
+            if p.ref_loc.is_valid() && self.is_instantiation_dependent_type(p.ty) {
                 self.ref_locs.insert(pd, p.ref_loc);
             }
             if p.invalid {
@@ -4366,7 +4369,7 @@ impl Sema<'_, '_> {
         if ds.loc.is_valid() && ds.loc != d.name_loc() {
             let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
         }
-        if self.is_dependent_type(ty) {
+        if self.is_instantiation_dependent_type(ty) {
             self.note_type_spec_loc(f, ds, d.name_loc());
             self.note_ref_loc(f, d, ty);
         }
@@ -4915,7 +4918,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
-        if ds.loc.is_valid() && ds.loc != d.name_loc() && self.is_dependent_type(ty) {
+        if ds.loc.is_valid() && ds.loc != d.name_loc() && self.is_instantiation_dependent_type(ty) {
             let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
             self.note_type_spec_loc(v, ds, d.name_loc());
         }

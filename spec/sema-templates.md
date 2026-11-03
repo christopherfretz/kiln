@@ -890,13 +890,40 @@ Type flags are computed at intern time (types.md §5.3). The rules:
 | Type | DEPENDENT when | INSTANTIATION_DEPENDENT also when |
 |---|---|---|
 | `TemplateTypeParm` | always | — |
-| `TemplateSpecialization` | the name is dependent, or any arg is dependent | any arg is instantiation-dependent |
+| `TemplateSpecialization` | the name is dependent, or any arg is dependent; an alias template's: its aliased (canonical) type is | any arg is dependent or instantiation-dependent |
 | `DependentName`, `DependentTemplateSpecialization`, `InjectedClassName` | always | — |
 | `Decltype(e)` | `e` is type-dependent, which gives `DependentDecltype` | `e` is instantiation-dependent |
 | array, pointer, reference, function, member pointer | any component is dependent; an array bound is value-dependent | any component |
 | `Record`/`Enum` | the decl is in a dependent context | — |
 | `PackExpansion` | its pattern is dependent | — (and UNEXPANDED_PACK is cleared) |
 | `Auto` | undeduced inside a dependent context | — |
+
+**Three predicates (WP-445).** Every "is this dependent?" question
+asks exactly one of:
+- *dependent type* (`Sema::is_dependent_type`, the `DEPENDENT` bit,
+  [temp.dep.type]/7): the canonical type is unknown until instantiation.
+  Every semantic check on a type (completeness, conversions, base
+  specifiers, `sizeof`, literal-type and trait checks, deduction of a
+  parameter, switch/range-`for` conditions) waits only for this. A type
+  that is merely instantiation-dependent (`void_t<T>` = `void`,
+  `TC<N>*` with `N` a constant local, an alias whose aliased type ignores
+  its arguments) is checked when parsed, as clang does.
+- *instantiation-dependent* (`Sema::is_instantiation_dependent_type`,
+  either bit): the type mentions a template parameter or a template's
+  local, so substitution must still visit it and its sugar. Only the
+  bookkeeping for a re-substituted pattern asks it: written locations
+  (§5.8, `note_written_loc`, `begin_loc`, `note_ref_loc`,
+  `type_spec_locs`, a trailing `->`), a declared type kept for the next
+  substitution (`subst/decls.rs`), and the non-type template parameter
+  types `ttarg*.rs` substitutes.
+- *value-dependent* (`Sema::expr_is_value_dependent`, [temp.dep.constexpr]):
+  an expression's value is unknown; constant evaluation, narrowing and
+  `static_assert` wait for it. A value-dependent template argument makes
+  its specialization a dependent type.
+
+`sizeof...(U)` with `U` bound to a list holding pack expansions (an alias
+template named `N<Ts...>`) is the value-dependent `k + sizeof...(P1) +
+...` (`pack.rs` `size_of_expansions`), so `N<Ts...>` stays dependent.
 
 ### 3.2 Expression dependence (`ExprDeps`)
 

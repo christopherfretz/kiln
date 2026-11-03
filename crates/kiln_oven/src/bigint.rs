@@ -240,7 +240,8 @@ mod tests {
 
     #[test]
     fn arithmetic_matches_i128() {
-        let vals = [0i128, 1, -1, 7, -7, 1 << 70, -(1 << 90), i128::from(i64::MAX), 12345678901234567];
+        let vals =
+            [0i128, 1, -1, 7, -7, 1 << 70, -(1 << 90), i128::from(i64::MAX), 12345678901234567];
         for &x in &vals {
             for &y in &vals {
                 let (a, b) = (w(x, 4), w(y, 4));
@@ -274,7 +275,10 @@ mod tests {
     #[test]
     fn decimal() {
         assert_eq!(to_decimal(&w(-12345, 4), true), "-12345");
-        assert_eq!(to_decimal(&shl(&w(1, 4), 199), false), "803469022129495137770981046170581301261101496891396417650688");
+        assert_eq!(
+            to_decimal(&shl(&w(1, 4), 199), false),
+            "803469022129495137770981046170581301261101496891396417650688"
+        );
         assert_eq!(to_decimal(&w(0, 4), true), "0");
         assert_eq!(to_decimal(&w(30_000_000_000_000_000_005, 4), true), "30000000000000000005");
     }

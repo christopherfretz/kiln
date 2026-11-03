@@ -267,7 +267,7 @@ impl Sema<'_, '_> {
         let v = self.builder().var(h, ty, spec, prev_ok);
         // The decl-specifiers' start, for the instantiation's written
         // locations (§5.8): `static int (*s)(typename T::type);`.
-        if ds.loc.is_valid() && ds.loc != loc && self.is_dependent_type(ty) {
+        if ds.loc.is_valid() && ds.loc != loc && self.is_instantiation_dependent_type(ty) {
             let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
             self.note_type_spec_loc(v, ds, loc);
         }
