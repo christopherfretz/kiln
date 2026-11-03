@@ -152,8 +152,10 @@ does not instantiate `Holder<Incomplete>` ([temp.inst]/2; WP-310,
 pointers/references/arrays → element; function types → parameters and
 return; member pointers → class and pointee; enum → innermost enclosing
 namespace (+ class if a member); class → itself, all bases, their innermost
-enclosing namespaces; template specializations add their template
-arguments' entities; an overload-set (ULE) argument adds every candidate's.
+enclosing namespaces; a template specialization adds its own template
+arguments' entities (not a base's, nor an enclosing class's: WP-418,
+`tests/conformance/basic.lookup.argdep/base-template-args-not-associated.cpp`,
+libc++ `iterator_robust_against_adl`); an overload-set (ULE) argument adds every candidate's.
 An associated class that is an undefined class template specialization (or
 member class of one) is instantiated first, silently, from the call's
 location, and the set recomputed until nothing new is instantiated (clang

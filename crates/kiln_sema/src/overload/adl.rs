@@ -92,7 +92,9 @@ impl Sema<'_, '_> {
     }
 
     /// [basic.lookup.argdep]/3.2: the class, the class it is a member of,
-    /// its bases; a specialization's template arguments.
+    /// its bases; a specialization's template arguments (its own only:
+    /// not a base's or the enclosing class's, as clang
+    /// `addAssociatedClassesAndNamespaces`).
     fn assoc_class(&self, c: DeclId, out: &mut AssocSet, depth: u32) {
         if !self.assoc_class_only(c, out) {
             return;
@@ -115,10 +117,6 @@ impl Sema<'_, '_> {
                 if let Some(b) = self.ast.types.as_record(bt)
                     && self.assoc_class_only(b, out)
                 {
-                    if let Some((_, s)) = self.ast.spec_info(b) {
-                        let args = s.args;
-                        self.assoc_args(args, out, depth + 1);
-                    }
                     stack.push(self.ast.definition(b).unwrap_or(b));
                 }
             }
