@@ -4036,7 +4036,9 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   `kiln_ast::decl::builtin::atomic`) become an `AtomicExpr`, as clang's
   `Sema::BuildAtomicExpr`: the pointer operand is checked
   (`sema_atomic_builtin_must_be_pointer`, `_op_needs_atomic` for the c11
-  forms, `_needs_non_const_atomic`/`_pointer`, incomplete types, `_BitInt`
+  forms, `_needs_non_const_atomic`/`_pointer`, incomplete types — c11
+  pointer arithmetic needs a complete pointee, and a function pointee is not
+  incomplete, as clang's `RequireCompleteType` (WP-446) — `_BitInt`
   prohibited), the value kind per op (int / int-or-fp / int-ptr-or-fp /
   trivially copyable), value operands are converted to the value type (or
   `ptrdiff_t` for pointer arithmetic, or pointers for the generic

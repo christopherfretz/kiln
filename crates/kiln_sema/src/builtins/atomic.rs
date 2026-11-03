@@ -192,6 +192,9 @@ impl Sema<'_, '_> {
             if is_c11
                 && is_ptr
                 && let Some(p) = self.ast.types.pointee(val)
+                // A function type is not incomplete ([basic.types.general]/5):
+                // `_Atomic(void (*)(int))` arithmetic is checked no further here.
+                && !self.ast.types.is_function(p)
                 && !self.require_complete(p, ptr_at)
             {
                 let msg =
