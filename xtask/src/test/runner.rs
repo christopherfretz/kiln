@@ -108,6 +108,10 @@ pub struct TestResult {
     /// `advisory: oracle crashed (...)`: the GCC oracle crashed, hung or
     /// gave up, so its comparison was dropped; the status is kiln's alone.
     pub advisory: Option<String>,
+    /// The GCC oracle compiled the test and its verdict or output was
+    /// compared with kiln's (not dropped as advisory); the summary counts
+    /// these (`spec/harness.md` "Output").
+    pub gcc_compared: bool,
     pub elapsed: Duration,
 }
 
@@ -143,6 +147,7 @@ pub fn run_test(cfg: &Config, case: &TestCase, index: usize) -> TestResult {
         inst_report: None,
         mem_limit: cfg.mem_limit,
         advisory: None,
+        gcc_compared: false,
     };
     let (status, reason, details) = t.evaluate();
     if t.dir.exists() {
@@ -156,6 +161,7 @@ pub fn run_test(cfg: &Config, case: &TestCase, index: usize) -> TestResult {
         log: t.log,
         updated: t.updated,
         advisory: t.advisory,
+        gcc_compared: t.gcc_compared,
         elapsed: start.elapsed(),
     }
 }
@@ -172,6 +178,8 @@ struct Test<'a> {
     mem_limit: Option<MemLimit>,
     /// Set when the GCC oracle's comparison was dropped ([`TestResult::advisory`]).
     advisory: Option<String>,
+    /// Set when the GCC oracle gave a verdict ([`TestResult::gcc_compared`]).
+    gcc_compared: bool,
 }
 
 impl Test<'_> {

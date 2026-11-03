@@ -23,6 +23,7 @@ static_assert(display_string_of(^^ns::S::mem) == "mem");
 static_assert(u8display_string_of(^^int) == u8"int");
 static_assert(!display_string_of(^^ns::S).empty());
 static_assert(!display_string_of(^^ns::Tm<int>).empty());
-static_assert(!display_string_of(^^ns).empty());
+static_assert(display_string_of(^^ns) == "ns");
+static_assert(display_string_of(^^ns::Tm) == "Tm");
 
 int main() {}

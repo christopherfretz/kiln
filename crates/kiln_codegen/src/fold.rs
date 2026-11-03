@@ -145,12 +145,13 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         // lax as clang's `EvaluateAsRValue`: a `const double` or
         // `const _Atomic(int)` variable reads as its value.
         let v = match inits.get(&e) {
-            // The value sema's constant initialization stored (clang
-            // `VarDecl::evaluateValue` is cached; `tryEmitForInitializer`
-            // reads it): not evaluated again, which would also re-run
-            // reflection intrinsics codegen's bridge does not implement
-            // (`static constexpr auto s = std::define_static_array(r);`,
-            // WP-479).
+            // A `constexpr` variable sema already evaluated keeps that value
+            // (clang `VarDecl::evaluateValue` is cached and
+            // `tryEmitForInitializer` reads it): its initializer is
+            // manifestly constant-evaluated either way, and only sema's
+            // bridge runs the reflection intrinsics (`constexpr bool b =
+            // type_of(R) == ^^int;`, spec/reflection.md §8.3; `static
+            // constexpr auto s = std::define_static_array(r);`, WP-479).
             Some(&var) if let Some(v) = sema_value(b.ast, var) => Some(v),
             Some(&var) => match oven.fold_constant_init(&mut b, e, var) {
                 // clang `ConstantEmitter::tryEmitPrivateForVarInit`: an
@@ -207,10 +208,16 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     folds
 }
 
-/// The constant value sema stored for variable `d`'s initialization.
+/// The value sema computed for `constexpr` variable `d`'s initializer.
+/// Only a `constexpr` one: sema records values only there today
+/// (`check_constexpr_init`), and a value computed for any other variable
+/// is the initialization's value only if the variable really is
+/// constant-initialized (`int y = std::is_constant_evaluated();` is 0 at
+/// run time), so the folder decides that itself.
 fn sema_value(ast: &Ast, d: DeclId) -> Option<ConstValueId> {
-    match ast.decls.var(d)?.eval.state() {
-        kiln_ast::decl::VarEvalState::Value(v) => Some(v),
+    let v = ast.decls.var(d)?;
+    match v.eval.state() {
+        kiln_ast::decl::VarEvalState::Value(c) if v.spec.is_constexpr() => Some(c),
         _ => None,
     }
 }

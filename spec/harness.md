@@ -299,8 +299,23 @@ printed even when it passed, and the summary counts it ("Output").
 
 Without a GCC (none configured, `--no-gcc`, `--no-oracle`) an
 `oracle: gcc` test runs against its own expectations only; it never
-fails for want of GCC. CI does not configure one today (docs/status/perf.md
-"CI time"), so the comparisons run on the dev host.
+fails for want of GCC, unless **`KILN_REQUIRE_GCC=1`** is set (exactly
+`1`, as `KILN_REQUIRE_LLVM`): then `cargo xtask test` and `cargo xtask ci`
+exit 2 before running anything, with `KILN_REQUIRE_GCC=1 and no usable
+GCC oracle ...` naming the fix. "Usable" is the WP-483 check: the
+configured GCC runs and `--version` says GCC; a `--gcc`/`KILN_GCC` that
+does not is an error with or without the variable, and `--no-gcc` /
+`--no-oracle` under it are the same error. `xtask test` reads the
+variable in `main` (`Options::require_gcc`), so the in-process API and
+the harness's own tests are unaffected by the caller's environment. GitHub
+CI sets `KILN_GCC=/usr/local/bin/g++` (the `gcc:16.1.0-trixie` image) and
+`KILN_REQUIRE_GCC=1` in both jobs ("CI", WP-502); `ci` and `test` resolve
+GCC the same way, so a local `cargo xtask ci` with `scripts/env.sh`
+sourced runs the same comparisons. The header line names the GCC and its
+version, and the summary counts the comparisons ("Output"), so a log
+shows whether the oracle ran. `tests/conformance/meta.reflection.ci/`
+holds the `oracle: gcc` tests that need nothing past the reflection on
+`main` when CI first ran GCC (WP-502).
 
 ### verify tests
 
@@ -760,7 +775,7 @@ Step 3 also covers `ast`, `layout`, `vtables` and `ir` tests under an
 
 Output goes to stdout:
 
-- One header line: `running N tests with <compiler> (<kind>), oracle: <oracle|none>, J jobs, mem limit: <N MiB|none>`.
+- One header line: `running N tests with <compiler> (<kind>), oracle: <oracle|none>, [gcc: <path> (<--version line>), ]J jobs, mem limit: <N MiB|none>`; the `gcc:` part appears when a GCC oracle is configured ("GCC oracle").
 - One block per result, in name order. A result line is
   `<STATUS> <name> [(<reason>)]`. With `-v`, the line ends with the elapsed time `[<secs>s]`.
 - PASS results are printed only with `-v`, unless they carry an oracle
@@ -771,10 +786,13 @@ Output goes to stdout:
 - Last comes the summary:
 
 ```
-test result: ok|FAILED. P passed; F failed; X xfail; XP xpass; S skipped; E errors; K killed; [A advisory; ]T tests in S.SSs
+test result: ok|FAILED. P passed; F failed; X xfail; XP xpass; S skipped; E errors; K killed; [G compared with gcc; ][A advisory; ]T tests in S.SSs
 ```
 
-`A advisory; ` appears only when a result carries an oracle advisory.
+`G compared with gcc; ` appears only when G > 0: the number of tests GCC
+compiled to a verdict (accepted or rejected, "GCC oracle"); a comparison
+dropped by an advisory is not counted. `A advisory; ` appears only when a
+result carries an oracle advisory.
 
 The parity report ("Parity report") counts KILLED in its fail column.
 
@@ -818,9 +836,10 @@ manual / M4-gate check.
 
 then the two corpus runs, both over the default paths (`tests/conformance`,
 `tests/differential` and `tests/stress`) with the default oracle
-`clang++-N` (N from `KILN_ORACLE`, default 22; "Oracle toolchain") and the
+`clang++-N` (N from `KILN_ORACLE`, default 22; "Oracle toolchain"), the
+default GCC oracle ("GCC oracle") and the
 default `--mem-limit` (8192 MiB). A bad `KILN_ORACLE` fails `ci` (exit 2)
-before step 0. Both run even
+before step 0, and so does `KILN_REQUIRE_GCC=1` without a usable GCC. Both run even
 if the first fails, so one cannot hide the other:
 
 3. **clang self-check**: `cargo xtask test --compiler clang++-N` (printed
@@ -864,10 +883,15 @@ The end-to-end tests in `xtask/src/test/tests.rs` and
 `xtask/src/bench/tests.rs` skip themselves with a note when clang 19 is
 missing. GitHub CI (`.github/workflows/ci.yml`) runs `cargo xtask ci`, then
 `KILN_ORACLE=19 cargo xtask ci --quick --oracle-only`, in a
-`debian:trixie` container on `ubuntu-24.04-arm`, the reference environment
-(aarch64 Debian 13, clang 19.1.7, GCC 14), with `clang-19 llvm-19 lld-19
-libc++-19-dev libc++abi-19-dev` installed and `KILN_REQUIRE_LLVM=1`, so
-nothing is skipped there (docs/VALIDATION.md "GitHub Actions", WP-226).
+`gcc:16.1.0-trixie` container on `ubuntu-24.04-arm`, the reference
+environment (aarch64 Debian 13, clang 19.1.7, GCC 14 for libstdc++
+detection, plus GCC 16.1 in `/usr/local` as the GCC oracle), with
+`clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev` installed,
+`KILN_REQUIRE_LLVM=1`, `KILN_GCC=/usr/local/bin/g++` and
+`KILN_REQUIRE_GCC=1`, so nothing is skipped there (docs/VALIDATION.md
+"GitHub Actions", WP-226, WP-502). The action first checks that
+`$KILN_GCC -dumpfullversion` is 16.1.x and that it compiles a `<meta>`
+TU with `-std=c++26 -freflection`.
 The job `check` (the required status check) and the job `check-x86_64`
 (the same container on the x86-64 `ubuntu-24.04` runner, WP-228) share
 their steps through the composite action `.github/actions/kiln-ci` rather

@@ -201,11 +201,11 @@ class exception : public __kiln_exception_base {
       : __from_(from), __where_(where) {
     __copy(what.data(), what.size());
   }
-  constexpr exception(const exception& o) noexcept
+  consteval exception(const exception& o) noexcept
       : __kiln_exception_base(o), __from_(o.__from_), __where_(o.__where_) {
     __copy(o.__u8what_, o.__size_);
   }
-  constexpr exception& operator=(const exception& o) noexcept {
+  consteval exception& operator=(const exception& o) noexcept {
     if (this != &o) {
       delete[] __what_;
       delete[] __u8what_;
@@ -237,7 +237,7 @@ struct member_offset {
 class access_context {
   info __scope_;
   info __designating_;
-  constexpr access_context(info s, info d) noexcept : __scope_(s), __designating_(d) {}
+  consteval access_context(info s, info d) noexcept : __scope_(s), __designating_(d) {}
 
  public:
   access_context() = delete;

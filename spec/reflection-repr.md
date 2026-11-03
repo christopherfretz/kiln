@@ -146,10 +146,11 @@ kind names its own specialization and equal reflections share one
 
 Mangling: until the Itanium ABI defines reflection mangling, kiln emits a
 vendor-extended literal `L u6__info <id> E`, where `<id>` is the
-reflection id's index within the translation unit (`_Z1kILu6__info3EEiv`).
-That keeps distinct reflections distinct within a TU. It is not stable
-across TUs; a specialization keyed by a reflection should have internal
-linkage until the real mangling lands.
+reflection id's index within the translation unit (`_Z1kILu6__info3EEiv`;
+spec/reflection.md §8.3 has the grammar). That keeps distinct reflections
+distinct within a TU. It is not stable across TUs, so a specialization
+keyed by a reflection has internal linkage (WP-485) until the real
+mangling lands (→ WP-102).
 
 ## 5. Printing
 
