@@ -3165,13 +3165,16 @@ impl Parser<'_, '_> {
 
     /// A type-id whose vector attributes in the decl-specifiers
     /// (`int __attribute__((ext_vector_type(4)))`) move to `out`, as clang
-    /// `ParseTypeName`'s `Attrs` hands them to an alias-declaration.
+    /// `ParseTypeName`'s `Attrs` hands them to an alias-declaration;
+    /// without `out` they modify the decl-specifier type (a cast, `sizeof`,
+    /// a template argument; clang `processTypeAttrs`).
     pub(crate) fn parse_type_id_into(
         &mut self,
         out: Option<&mut Vec<AttrId>>,
         site: DeclSite,
     ) -> Option<QualType> {
         let mut ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
+        let vec_out = out.is_some();
         if let Some(out) = out {
             let ast = &self.s.ast;
             let is_vec = |a: &AttrId| {
@@ -3187,7 +3190,10 @@ impl Parser<'_, '_> {
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
         d.site = site;
         self.parse_declarator(&mut d);
-        let base = self.s.type_from_declspec(&ds);
+        let mut base = self.s.type_from_declspec(&ds);
+        if !vec_out {
+            base = self.s.apply_type_id_vector_attrs(base, &ds);
+        }
         self.type_id_constraint = if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
             ds.constraint_loc
         } else {
