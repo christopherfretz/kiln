@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
-use super::side::{self, TextDecl};
+use super::side::{self, TextArg, TextDecl, TextTemplateParm};
 use super::table::{self, Disposition};
 use super::values::{self, Field, Literals, Record, Types};
 use super::{DumpOptions, escape};
@@ -184,6 +184,11 @@ struct Index<'a> {
     casts: HashMap<&'a str, usize>,
     /// The class of each position in `casts`.
     cast_classes: Vec<&'a str>,
+    /// Template template parameter ids by pre-order position (aligned
+    /// with the side channel's, for the template a default names).
+    ttps: HashMap<&'a str, usize>,
+    /// The name of each position in `ttps`.
+    ttp_names: Vec<&'a str>,
     /// Declarations inside a template (whose constexpr values clang's
     /// text dump may not show).
     templated: HashSet<&'a str>,
@@ -342,6 +347,12 @@ impl<'a> Index<'a> {
         for (key, v) in obj {
             if key == "inner" || key == "array_filler" {
                 for c in v.as_arr().unwrap_or(&[]) {
+                    if kind(c) == "TemplateTemplateParmDecl"
+                        && side::TEMPLATE_PARM_PARENTS.contains(&k)
+                    {
+                        self.ttps.insert(id(c), self.ttp_names.len());
+                        self.ttp_names.push(name(c).unwrap_or(""));
+                    }
                     self.walk(c, cur, kid_parent, inner_dc);
                 }
                 continue;
@@ -453,6 +464,8 @@ struct Printer<'a, 'f> {
     side: Option<Vec<TextDecl>>,
     /// The side channel's cast lines: (class, type as written).
     side_casts: Option<Vec<(&'static str, String)>>,
+    /// The side channel's template template parameters.
+    side_ttps: Option<Vec<TextTemplateParm>>,
     /// Function words derived from the JSON, checked against the side
     /// channel when it is loaded: (order position, [(word, present)]).
     fn_flags: Vec<(usize, [(&'static str, bool); 3])>,
@@ -479,6 +492,7 @@ pub fn dump(
         side_text: None,
         side: None,
         side_casts: None,
+        side_ttps: None,
         fn_flags: Vec::new(),
         force: false,
     };
@@ -697,37 +711,127 @@ impl<'a> Printer<'a, '_> {
         // default (`SuppressDefaultTemplateArgs`), unless one is a pack.
         let mut end = args.len();
         if !args.iter().any(|a| flag(a, "isPack")) {
-            while end > 0 && is_default_arg(params[end - 1], &args, end - 1)? {
+            while end > 0 && self.is_default_arg(n, params[end - 1], &args, end - 1)? {
                 end -= 1;
             }
         }
         let mut parts = Vec::new();
         for (i, (a, p)) in args[..end].iter().zip(&params).enumerate() {
             if flag(a, "isPack") {
-                // An empty pack prints nothing.
-                for e in kids(a).filter(|c| kind(c) == "TemplateArgument") {
-                    parts.push(qualified_name_arg(e, param_ty(p))?);
+                // An empty pack prints nothing; its elements print as
+                // arguments of the parameter's (element) type.
+                for (j, e) in kids(a).filter(|c| kind(c) == "TemplateArgument").enumerate() {
+                    parts.push(self.ctx_arg(n, e, i, Some(j), param_ty(p))?);
                 }
             } else {
-                match qualified_name_arg(a, param_ty(p)) {
-                    Ok(s) => parts.push(s),
-                    Err(e) => parts.push(self.side_ctx_arg(n, i, param_ty(p)).ok_or(e)?),
-                }
+                parts.push(self.ctx_arg(n, a, i, None, param_ty(p))?);
             }
         }
         Ok(Some(Ctx::Named(format!("{nm}<{}>", parts.join(", ")))))
     }
 
-    /// Argument `i` of class template specialization `n` as it prints in
-    /// a qualified name, from the side channel, for what the JSON omits:
-    /// a template template argument's name (`template 'q::F'`) and an
-    /// enumeration argument's enumerator (`integral 'K::b'`; a value
-    /// that names no enumerator, `(K)7`, prints without its cast unless
-    /// the parameter's type is deduced). `None` when the side channel
-    /// has nothing usable.
-    fn side_ctx_arg(&mut self, n: &Json, i: usize, param: Option<&str>) -> Option<String> {
+    /// Argument `arg` of specialization `spec` (argument `idx`, or element
+    /// `elem` of the pack that is argument `idx`) as it prints in a qualified
+    /// name: from the JSON, or from the side channel for what it omits.
+    fn ctx_arg(
+        &mut self,
+        spec: &Json,
+        arg: &Json,
+        idx: usize,
+        elem: Option<usize>,
+        param: Option<&str>,
+    ) -> Res<String> {
+        match qualified_name_arg(arg, param) {
+            Ok(s) => Ok(s),
+            Err(e) => self.side_ctx_arg(spec, idx, elem, param).ok_or(e),
+        }
+    }
+
+    /// The side channel's argument `i` (or element `j` of pack argument
+    /// `i`) of class template specialization `n`.
+    fn side_arg(&mut self, n: &Json, i: usize, j: Option<usize>) -> Option<TextArg> {
         let pos = *self.ix.order.get(id(n))?;
-        let line = self.side().ok()?.get(pos)?.args.get(i)?.clone();
+        let a = self.side().ok()?.get(pos)?.args.get(i)?;
+        match j {
+            None => Some(a.clone()),
+            Some(j) => a.elems.get(j).cloned(),
+        }
+    }
+
+    /// The side channel's template template parameter `parm`.
+    fn side_ttp(&mut self, parm: &Json) -> Res<&TextTemplateParm> {
+        if self.side_ttps.is_none() {
+            let parms = side::template_template_parms(self.side_text()?)?;
+            if parms.len() != self.ix.ttp_names.len() {
+                return Err(format!(
+                    "clang-ast: clang's text dump has {} template template parameters but its \
+                     JSON dump has {}; cannot align them",
+                    parms.len(),
+                    self.ix.ttp_names.len()
+                ));
+            }
+            for (t, nm) in parms.iter().zip(&self.ix.ttp_names) {
+                if !t.names(nm) {
+                    return Err(format!(
+                        "clang-ast: text dump line `{}` does not match JSON \
+                         TemplateTemplateParmDecl `{nm}`",
+                        t.line
+                    ));
+                }
+            }
+            self.side_ttps = Some(parms);
+        }
+        let pos = *self.ix.ttps.get(id(parm)).ok_or_else(|| {
+            format!(
+                "clang-ast: template template parameter `{}` is not in the side-channel order",
+                name(parm).unwrap_or("")
+            )
+        })?;
+        self.side_ttps.as_deref().and_then(|t| t.get(pos)).ok_or_else(|| {
+            "clang-ast: template template parameter missing from the side channel".into()
+        })
+    }
+
+    /// Whether argument `args[i]` of class template specialization `n`
+    /// equals the default argument of template parameter `parm` (clang
+    /// `isSubstitutedDefaultArgument`). A type default is compared
+    /// desugared, after substituting the earlier arguments for the
+    /// template's own parameters ([`subst_default`]: `class U = T *`); a
+    /// template template default by the template it names, from the side
+    /// channel (`template <class> class TT = V`); a non-type default when
+    /// it is a literal. A default the tool cannot compare is an error.
+    fn is_default_arg(&mut self, n: &Json, parm: &Json, args: &[&Json], i: usize) -> Res<bool> {
+        if parm.get("defaultArg").is_none() {
+            return Ok(false);
+        }
+        if kind(parm) != "TemplateTemplateParmDecl" {
+            return is_default_arg(parm, args, i);
+        }
+        let unsupported = || unsupported_default(parm);
+        let def = self.side_ttp(parm)?.default.clone().ok_or_else(unsupported)?;
+        let arg = self.side_arg(n, i, None).ok_or_else(unsupported)?;
+        if !arg.text.starts_with("template '") {
+            return Err(unsupported());
+        }
+        Ok(arg.decl.as_deref() == Some(def.as_str()))
+    }
+
+    /// Argument `idx` (or element `elem` of pack argument `idx`) of class
+    /// template specialization `spec` as it prints in a qualified name, from
+    /// the side channel, for what the JSON omits: a template template
+    /// argument's name (`template 'q::F'`), an enumeration argument's
+    /// enumerator (`integral 'K::b'`; a value that names no enumerator,
+    /// `(K)7`, prints without its cast) and the argument of a deduced
+    /// parameter (`auto`: `(K)9`, `3U`, printed with its type, as the
+    /// line is). `None` when the side channel has nothing usable.
+    fn side_ctx_arg(
+        &mut self,
+        spec: &Json,
+        idx: usize,
+        elem: Option<usize>,
+        param: Option<&str>,
+    ) -> Option<String> {
+        let line = self.side_arg(spec, idx, elem)?.text;
         let quoted = |w: &str| line.strip_prefix(w)?.strip_suffix('\'').map(str::to_owned);
         if param.is_none() {
             return quoted("template '");
@@ -745,7 +849,10 @@ impl<'a> Printer<'a, '_> {
         }
         let p = param?;
         if p == "auto" || p.contains("auto ") || p == "decltype(auto)" {
-            return None;
+            // A deduced parameter's argument prints with its type
+            // (`(K)9`, `3U`, `'a'`), as the text dump's line does; an
+            // escaped character is spelled differently by kiln.
+            return (!v.contains('\\')).then_some(v);
         }
         let bare = v.strip_prefix('(')?.strip_prefix(p)?.strip_prefix(')')?;
         (!bare.is_empty() && bare.trim_start_matches('-').bytes().all(|b| b.is_ascii_digit()))
@@ -2582,42 +2689,35 @@ fn desugared(ty: &Json) -> Option<&str> {
     text(ty, "desugaredQualType").or_else(|| text(ty, "qualType"))
 }
 
-/// Whether specialization argument `args[i]` equals the default argument
-/// of template parameter `parm` (clang `isSubstitutedDefaultArgument`): a
-/// non-dependent type compared desugared, a literal value, or a default
-/// that is an earlier parameter of the same template (`class U = T`),
-/// compared with that parameter's argument. A default the tool cannot
-/// compare is an error.
+fn unsupported_default(parm: &Json) -> String {
+    format!(
+        "clang-ast: filter mode cannot compare a specialization context's argument with the \
+         default argument of `{}`",
+        name(parm).unwrap_or("")
+    )
+}
+
+/// [`Printer::is_default_arg`] for a type or non-type parameter `parm`
+/// with a default argument.
 fn is_default_arg(parm: &Json, args: &[&Json], i: usize) -> Res<bool> {
-    if parm.get("defaultArg").is_none() {
-        return Ok(false);
-    }
     let arg = args[i];
     let nttp_ty = param_ty(parm);
-    let unsupported = || {
-        format!(
-            "clang-ast: filter mode cannot compare a specialization context's argument with \
-             the default argument of `{}`",
-            name(parm).unwrap_or("")
-        )
-    };
+    let unsupported = || unsupported_default(parm);
     let def = kids(parm).find(|c| kind(c) == "TemplateArgument").ok_or_else(unsupported)?;
     if let Some(dt) = def.get("type") {
-        let dependent = kids(def).any(|c| flag(c, "isDependent"))
+        // A `QualType` node carries no dependence flag: look below it.
+        fn dependent_node(t: &Json) -> bool {
+            flag(t, "isDependent") || (kind(t) == "QualType" && kids(t).any(dependent_node))
+        }
+        let dependent = kids(def).any(dependent_node)
             || desugared(dt).is_none_or(|q| q.contains("type-parameter"));
         if dependent {
-            // An earlier parameter of the same template: its argument.
-            let earlier = kids(def).next().filter(|t| {
-                kind(t) == "TemplateTypeParmType"
-                    && t.get("depth").and_then(exact_int) == parm.get("depth").and_then(exact_int)
-            });
-            let ix = earlier
-                .and_then(|t| t.get("index").and_then(exact_int))
-                .and_then(|x| usize::try_from(x).ok())
-                .filter(|&x| x < i)
+            let depth = parm.get("depth").and_then(exact_int);
+            let sub = kids(def)
+                .next()
+                .and_then(|t| subst_default(t, args, i, depth))
                 .ok_or_else(unsupported)?;
-            let sub = args[ix].get("type").and_then(desugared).ok_or_else(unsupported)?;
-            return Ok(arg.get("type").and_then(desugared) == Some(sub));
+            return Ok(arg.get("type").and_then(desugared) == Some(sub.as_str()));
         }
         return Ok(arg.get("type").and_then(desugared) == desugared(dt));
     }
@@ -2632,6 +2732,78 @@ fn is_default_arg(parm: &Json, args: &[&Json], i: usize) -> Res<bool> {
     };
     let printed = integral_arg(v, nttp_ty.ok_or_else(unsupported)?).ok_or_else(unsupported)?;
     Ok(qualified_name_arg(arg, nttp_ty).ok() == Some(printed))
+}
+
+/// Dependent default type `t` (a `TemplateArgument`'s type tree) with
+/// the template's own parameters (depth `depth`, an index below `i`)
+/// replaced by their arguments in `args`, spelled as clang prints the
+/// canonical type: a parameter, cv-qualified, under pointers and
+/// references (`T *`, `const T &`, `T **`, `T &&`, collapsed). `None`
+/// for any other shape, or for an array or function type under one.
+fn subst_default(t: &Json, args: &[&Json], i: usize, depth: Option<i64>) -> Option<String> {
+    // A declarator-shaped type (array, function) would need re-nesting.
+    let inner =
+        || subst_default(kids(t).next()?, args, i, depth).filter(|s| !s.contains(['(', '[']));
+    let is_ref = |s: &str| s.ends_with('&');
+    match kind(t) {
+        "TemplateTypeParmType" => {
+            if t.get("depth").and_then(exact_int) != depth {
+                return None;
+            }
+            let ix =
+                usize::try_from(t.get("index").and_then(exact_int)?).ok().filter(|&x| x < i)?;
+            args[ix].get("type").and_then(desugared).map(str::to_owned)
+        }
+        "PointerType" => {
+            let s = inner()?;
+            if is_ref(&s) {
+                return None;
+            }
+            Some(if s.ends_with('*') { format!("{s}*") } else { format!("{s} *") })
+        }
+        "LValueReferenceType" | "RValueReferenceType" => {
+            let s = inner()?;
+            let rvalue = kind(t) == "RValueReferenceType";
+            // [dcl.ref]/7: a reference to a reference collapses; only
+            // `&&` to `&&` stays an rvalue reference.
+            if let Some(base) = s.strip_suffix("&&") {
+                return Some(if rvalue { s.clone() } else { format!("{base}&") });
+            }
+            if is_ref(&s) {
+                return Some(s);
+            }
+            let op = if rvalue { "&&" } else { "&" };
+            Some(if s.ends_with('*') { format!("{s}{op}") } else { format!("{s} {op}") })
+        }
+        "QualType" => {
+            let q = text(t, "qualifiers")?;
+            let s = inner()?;
+            if is_ref(&s) {
+                // [dcl.ref]/1: cv-qualifiers on a reference are ignored.
+                return Some(s);
+            }
+            if s.contains('*') {
+                return Some(if s.ends_with('*') { format!("{s}{q}") } else { format!("{s} {q}") });
+            }
+            // Merged with the argument's own qualifiers, in clang's order.
+            let mut rest = s.as_str();
+            let mut quals: Vec<&str> = q.split(' ').collect();
+            while let Some((w, r)) = rest.split_once(' ')
+                && matches!(w, "const" | "volatile")
+            {
+                quals.push(w);
+                rest = r;
+            }
+            let order = ["const", "volatile"];
+            if quals.iter().any(|w| !order.contains(w)) {
+                return None;
+            }
+            let mut out: Vec<&str> = order.into_iter().filter(|w| quals.contains(w)).collect();
+            out.push(rest);
+            Some(out.join(" "))
+        }
+        _ => None,
+    }
 }
 
 /// The qualified name of `nm` declared in `ctx`

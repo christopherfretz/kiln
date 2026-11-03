@@ -716,9 +716,19 @@ contract:
   integral values printed by their parameter's type) or, for what it
   omits (a template template argument's name, an enumeration
   argument's enumerator), from the side channel's `TemplateArgument`
-  lines of the specialization; a default argument compared for
-  trimming is a non-dependent type, a literal, or an earlier parameter
-  of the same template. Any other argument or default is an error.
+  lines of the specialization; pack elements print one by one the same
+  way (an empty pack prints nothing), and an argument of a deduced
+  (`auto`) parameter prints as the side channel spells it, except that a
+  value with an escape (`'\xc8'`) is an error. A default argument
+  compared for trimming (clang drops trailing arguments equal to their
+  defaults) is a non-dependent type, a literal, an earlier type
+  parameter of the same template, or such a parameter under pointer,
+  reference (collapsed) and cv declarators (`U = T *`, `U = const T &`;
+  array and function declarators are errors); a template template
+  parameter's default is equal when the side channel's declaration
+  address of the default (under its `TemplateTemplateParmDecl`, counted
+  only under a template-declaring parent) is the argument's. Any other
+  argument or default is an error.
 
 Anything the tool cannot render exactly is an error naming the construct
 and the enclosing top-level decl. It never prints a guess, so a mismatch

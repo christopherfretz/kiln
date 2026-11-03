@@ -316,17 +316,16 @@ impl Parser<'_, '_> {
             return None;
         };
         let result = in_stmt_expr && self.ends_stmt_expr();
-        if self.at(Punct::RParen) && self.peek_is(1, Punct::Semi) {
-            // clang's `ExpectAndConsumeSemi`: a stray `)` before the `;`
-            // is reported and taken with it (`f(u<int> 7; x);`, WP-399).
-            self.error_here(DiagId::parse_extraneous_rparen);
-            self.bump();
-            self.bump();
-        } else if self.eat(Punct::Semi).is_none() {
+        if !self.eat_extraneous_before_semi() && self.eat(Punct::Semi).is_none() {
             // clang's `ExpectAndConsumeSemi`: nothing is skipped; the next
             // statement starts at the current token (`X<T>::m b;` goes on
             // with `b;`).
-            self.s.error(DiagId::parse_expected_semi_after_expr, self.expected_loc());
+            let at = self.expected_loc();
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_semi_after_expr, at)
+                .fixit(kiln_diag::FixIt::insert(at, ";"));
+            self.emit(d);
         }
         // clang's `handleExprStmt` finishes the full-expression after the
         // `;` (its delayed typo corrections report then: `S::nom y;`).
@@ -349,11 +348,37 @@ impl Parser<'_, '_> {
         self.peek_is(n, Punct::RBrace) && self.peek_is(n + 1, Punct::RParen)
     }
 
+    /// clang's `ExpectAndConsumeSemi`: a stray `)` or `]` before the `;`
+    /// is reported (with a removal fix-it) and taken with it
+    /// (`f(u<int> 7; x);`, WP-399; `a[1]];`, WP-420).
+    pub(crate) fn eat_extraneous_before_semi(&mut self) -> bool {
+        let Some(p) = [Punct::RParen, Punct::RSquare].into_iter().find(|&p| self.at(p)) else {
+            return false;
+        };
+        if !self.peek_is(1, Punct::Semi) {
+            return false;
+        }
+        let text = if p == Punct::RParen { ")" } else { "]" };
+        let d = self
+            .s
+            .diag(DiagId::parse_extraneous_token_before_semi, self.loc())
+            .arg(text)
+            .fixit(kiln_diag::FixIt::remove(self.tok().span));
+        self.emit(d);
+        self.bump();
+        self.bump();
+        true
+    }
+
     /// Expects the `;` ending a `what` statement.
     fn expect_semi_after_stmt(&mut self, what: &str) {
         if self.eat(Punct::Semi).is_none() {
-            let d =
-                self.s.diag(DiagId::parse_expected_semi_after_stmt, self.expected_loc()).arg(what);
+            let at = self.expected_loc();
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_semi_after_stmt, at)
+                .arg(what)
+                .fixit(kiln_diag::FixIt::insert(at, ";"));
             self.emit(d);
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);

@@ -65,10 +65,119 @@ pub struct TextDecl {
     /// (`Overrides: [ B::f 'int ()' ]`).
     pub overrides: Option<String>,
     /// A class template (partial) specialization's `TemplateArgument`
-    /// children, without the class word (`template 'q::F'`, `integral
-    /// 'K::b'`): the JSON omits a template template argument's name and
+    /// children: the JSON omits a template template argument's name and
     /// an enumeration argument's enumerator.
-    pub args: Vec<String>,
+    pub args: Vec<TextArg>,
+}
+
+/// A `TemplateArgument` line of the text dump.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextArg {
+    /// The line without its class word (`template 'q::F'`, `integral
+    /// 'K::b'`, `pack '<V, W>'`).
+    pub text: String,
+    /// The address of the declaration on its child line (the template a
+    /// template template argument names), unique within one dump.
+    pub decl: Option<String>,
+    /// A pack's elements.
+    pub elems: Vec<TextArg>,
+}
+
+impl PartialEq<&str> for TextArg {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+/// The parent classes under which a `TemplateTemplateParmDecl` line is a
+/// template parameter (elsewhere, under a `TemplateArgument` or a type's
+/// `name:` line, it is a reference to one).
+pub const TEMPLATE_PARM_PARENTS: &[&str] = &[
+    "ClassTemplateDecl",
+    "FunctionTemplateDecl",
+    "VarTemplateDecl",
+    "TypeAliasTemplateDecl",
+    "ConceptDecl",
+    "ClassTemplatePartialSpecializationDecl",
+    "VarTemplatePartialSpecializationDecl",
+    "TemplateTemplateParmDecl",
+];
+
+/// A template template parameter of the text dump.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextTemplateParm {
+    /// The line without its tree prefix.
+    pub line: String,
+    /// The address of the template its default argument names (`template
+    /// <class> class TT = V`), if it has one that names a template.
+    pub default: Option<String>,
+}
+
+impl TextTemplateParm {
+    /// Whether the line names parameter `name` (its last word; an unnamed
+    /// parameter matches the empty name).
+    pub fn names(&self, name: &str) -> bool {
+        name.is_empty() || self.line.ends_with(&format!(" {name}"))
+    }
+}
+
+/// The address word (` 0x...`) of a declaration line.
+fn address(content: &str) -> Option<String> {
+    content.split(' ').nth(1).filter(|w| w.starts_with("0x")).map(str::to_owned)
+}
+
+/// The `TemplateArgument` children of the line at `depth` whose
+/// descendants start `rest` (a pack's elements nested).
+fn text_args(rest: &[(usize, &str)], depth: usize) -> Vec<TextArg> {
+    let mut args = Vec::new();
+    let kids = rest.iter().take_while(|(d, _)| *d > depth).enumerate();
+    for (k, &(d, c)) in kids {
+        if d != depth + 1 {
+            continue;
+        }
+        if let Some(a) = c.strip_prefix("TemplateArgument ") {
+            let child = rest.get(k + 1).filter(|(cd, _)| *cd == depth + 2);
+            args.push(TextArg {
+                text: a.to_owned(),
+                decl: child.and_then(|(_, cc)| address(cc)),
+                elems: if a.starts_with("pack ") {
+                    text_args(&rest[k + 1..], d)
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+    }
+    args
+}
+
+/// The template template parameters of `text` (see
+/// [`TEMPLATE_PARM_PARENTS`]), in order.
+pub fn template_template_parms(text: &str) -> Result<Vec<TextTemplateParm>, String> {
+    let lines: Vec<(usize, &str)> =
+        text.lines().filter(|l| !l.is_empty()).map(split).collect::<Result<_, _>>()?;
+    let mut parents: Vec<&str> = Vec::new();
+    let mut parms = Vec::new();
+    for (i, &(depth, content)) in lines.iter().enumerate() {
+        parents.truncate(depth);
+        let is_parm = content.starts_with("TemplateTemplateParmDecl ")
+            && depth > 0
+            && parents.get(depth - 1).is_some_and(|p| {
+                TEMPLATE_PARM_PARENTS
+                    .iter()
+                    .any(|c| p.strip_prefix(c).is_some_and(|r| r.starts_with(' ')))
+            });
+        parents.push(content);
+        if !is_parm {
+            continue;
+        }
+        let default = text_args(&lines[i + 1..], depth)
+            .into_iter()
+            .find(|a| a.text.contains("template '"))
+            .and_then(|a| a.decl);
+        parms.push(TextTemplateParm { line: strip_addresses(content), default });
+    }
+    Ok(parms)
 }
 
 impl TextDecl {
@@ -209,18 +318,9 @@ pub fn parse(text: &str) -> Result<Vec<TextDecl>, String> {
             // declarations) are not part of the declaration order.
             i = j;
         }
-        let mut args = Vec::new();
-        if is_record(class) {
-            // Its direct `TemplateArgument` children; the scan does not
-            // advance `i`, so nested declarations are still collected.
-            for &(d, c) in lines[i..].iter().take_while(|(d, _)| *d > depth) {
-                if d == depth + 1
-                    && let Some(a) = c.strip_prefix("TemplateArgument ")
-                {
-                    args.push(a.to_owned());
-                }
-            }
-        }
+        // Its direct `TemplateArgument` children; the scan does not
+        // advance `i`, so nested declarations are still collected.
+        let args = if is_record(class) { text_args(&lines[i..], depth) } else { Vec::new() };
         decls.push(TextDecl { class, line, value, overrides, args });
     }
     Ok(decls)

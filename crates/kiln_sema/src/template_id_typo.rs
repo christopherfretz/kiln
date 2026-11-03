@@ -7,8 +7,10 @@
 //! `use of undeclared identifier 'val'; did you mean '::val'?`).
 
 use kiln_ast::decl::DeclKind;
+use kiln_ast::expr::ValueCategory;
+use kiln_ast::names::DeclName;
 use kiln_ast::types::TemplateArg;
-use kiln_ast::{DeclId, ExprId};
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
@@ -57,6 +59,7 @@ struct Speculation {
     suggest: kiln_diag::Diag,
     fallback: Option<kiln_diag::Diag>,
     ambiguous: bool,
+    tie: Option<(QualType, ValueCategory)>,
 }
 
 /// What a declaration correction recovers as.
@@ -82,6 +85,7 @@ impl Sema<'_, '_> {
         let msg = self.diag(DiagId::sema_undeclared_var_use, loc).arg(text);
         if let Some(s) = self.speculate_template_id_typo(name, loc) {
             self.hold_typo_spec(msg, s.suggest, s.expr, loc, s.fallback, s.ambiguous);
+            self.set_typo_tie(loc, s.tie);
             return s.expr;
         }
         let e = self.recover_err(&[], loc);
@@ -107,7 +111,8 @@ impl Sema<'_, '_> {
         }
         let kw = self.typo_keywords().into_iter().find(|&k| k == first.text)?;
         let msg = self.diag(DiagId::sema_undeclared_var_use_suggest, loc).arg(sym_str(self, name));
-        self.emit(msg.arg(kw));
+        let msg = self.typo_fixes(msg.arg(kw), loc, kw, true);
+        self.emit(msg);
         Some(kw)
     }
 
@@ -152,6 +157,7 @@ impl Sema<'_, '_> {
         let at = groups.iter().position(|g| !g.1.is_empty() || !g.2.is_empty())?;
         let (_, values, funcs) = groups.swap_remove(at);
         let rest = groups.into_iter().skip(at);
+        let lone_func = funcs.len() == 1;
         let (probe, ambiguous, fallback) = match (values.len(), funcs.len()) {
             (1, 0) => (values.into_iter().next()?, false, None),
             (1, _) => (funcs.into_iter().next()?, true, values.into_iter().next()),
@@ -165,9 +171,16 @@ impl Sema<'_, '_> {
         };
         let typo = sym_str(self, name);
         let suggest = self.template_id_typo_suggest(&typo, &probe, loc);
+        // A lone function tied with a value: an initializer the value
+        // cannot initialize leaves the function the one valid candidate
+        // ([`Sema::settle_typo_tie`]).
+        let tie = fallback
+            .as_ref()
+            .filter(|_| ambiguous && lone_func)
+            .and_then(|c| self.typo_value_type(c));
         let fallback = fallback.map(|c| self.template_id_typo_suggest(&typo, &c, loc));
         let expr = self.template_id_typo_expr(&probe, loc)?;
-        Some(Speculation { expr, suggest, fallback, ambiguous })
+        Some(Speculation { expr, suggest, fallback, ambiguous, tie })
     }
 
     /// What candidate `c` rebuilds into for clang 19
@@ -204,6 +217,22 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The type and category of the expression value candidate `c`
+    /// rebuilds into ([`Sema::typo_kind_19`] `Some(true)`).
+    fn typo_value_type(&self, c: &Candidate) -> Option<(QualType, ValueCategory)> {
+        let d = self.ast.strip_shadow(*c.decls.get(self.typo_correction_decl(c))?);
+        let ty = self.ast.decls.get(d).ty()?;
+        let vk = match self.kind_of(d) {
+            DeclKind::EnumConstant | DeclKind::NonTypeTemplateParm
+                if !self.ast.types.is_reference(ty) =>
+            {
+                ValueCategory::PRValue
+            }
+            _ => ValueCategory::LValue,
+        };
+        Some((self.non_reference(ty), vk))
+    }
+
     /// "use of undeclared identifier 'typo'; did you mean 'c'?" with
     /// "'c' declared here".
     fn template_id_typo_suggest(&self, typo: &str, c: &Candidate, loc: Loc) -> kiln_diag::Diag {
@@ -211,10 +240,31 @@ impl Sema<'_, '_> {
         let note = self
             .diag(DiagId::note_entity_declared_here, self.typo_note_loc(shown))
             .arg(format!("'{}'", c.text));
-        self.diag(DiagId::sema_undeclared_var_use_suggest, loc)
+        let d = self
+            .diag(DiagId::sema_undeclared_var_use_suggest, loc)
             .arg(typo.to_owned())
             .arg(c.text.clone())
-            .with_note(note)
+            .with_note(note);
+        self.typo_fixes(d, loc, &c.text, false)
+    }
+
+    /// A "did you mean" `d` for the name at `loc`: under clang 22 the
+    /// name's range and, for an entity, the fix-it replacing it with
+    /// `text`; under clang 19 the fix-it alone (WP-420).
+    fn typo_fixes(
+        &self,
+        d: kiln_diag::Diag,
+        loc: Loc,
+        text: &str,
+        keyword: bool,
+    ) -> kiln_diag::Diag {
+        let name = kiln_source::Span::new(loc, self.token_end(loc).unwrap_or(loc));
+        let d = if keyword && self.clang_compat >= 22 {
+            d
+        } else {
+            d.fixit(FixIt::replace(name, text))
+        };
+        if self.clang_compat >= 22 { d.range(name) } else { d }
     }
 
     /// The expression clang 19 rebuilds candidate `c` into: a reference
@@ -277,7 +327,8 @@ impl Sema<'_, '_> {
         let typo = sym_str(self, name);
         if c.decls.is_empty() {
             // A keyword: no note, no recovery.
-            let msg = self.diag(DiagId::sema_undeclared_var_use_suggest, loc).arg(typo).arg(c.text);
+            let msg = self.diag(DiagId::sema_undeclared_var_use_suggest, loc).arg(typo);
+            let msg = self.typo_fixes(msg.arg(c.text.clone()), loc, &c.text, true);
             self.emit(msg);
             return TemplateIdTypo::Suggested;
         }
@@ -325,6 +376,7 @@ impl Sema<'_, '_> {
             .arg(typo)
             .arg(c.text.clone())
             .with_note(note);
+        let msg = self.typo_fixes(msg, loc, &c.text, false);
         self.emit(msg);
         match kind {
             Correction::Type => return TemplateIdTypo::Suggested,
@@ -373,7 +425,7 @@ impl Sema<'_, '_> {
     /// ([`Sema::diagnose_member_found_in_class`]) and recovered as a typo
     /// correction to those functions would be.
     fn template_id_class_member(&mut self, name: Symbol, loc: Loc) -> Option<TemplateIdTypo> {
-        let decls = self.diagnose_member_found_in_class(name, loc, true)?;
+        let decls = self.diagnose_member_found_in_class(DeclName::ident(name), loc, true)?;
         let member = decls
             .iter()
             .map(|&d| self.ast.strip_shadow(d))
@@ -404,7 +456,7 @@ impl Sema<'_, '_> {
     /// `name`.
     pub(crate) fn diagnose_member_found_in_class(
         &mut self,
-        name: Symbol,
+        name: DeclName,
         loc: Loc,
         pick: bool,
     ) -> Option<Vec<DeclId>> {
@@ -413,7 +465,7 @@ impl Sema<'_, '_> {
         for _ in 0..10_000 {
             let Some(d) = dc else { break };
             if self.kind_of(d) == DeclKind::CXXRecord {
-                let found = self.lookup_qualified(d, name, LookupKind::Ordinary);
+                let found = self.lookup_qualified_dn(d, name, LookupKind::Ordinary);
                 if !found.decls.is_empty() {
                     hit = Some((d, found.decls));
                     break;
@@ -449,7 +501,7 @@ impl Sema<'_, '_> {
         } else {
             DiagId::sema_found_in_dependent_base
         };
-        let mut msg = self.diag(id, loc).arg(sym_str(self, name));
+        let mut msg = self.diag(id, loc).arg(self.decl_name_str(name));
         if instance {
             msg = msg.fixit(FixIt::insert(loc, "this->"));
         }

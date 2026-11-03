@@ -627,7 +627,11 @@ impl Sema<'_, '_> {
         {
             return r;
         }
-        self.check_implicit_conversions(e, cc);
+        // clang never completes an `ExprError` (a failed list
+        // initialization, [`Sema::is_expr_error`]).
+        if !self.is_expr_error(e) {
+            self.check_implicit_conversions(e, cc);
+        }
         self.flush_member_refs();
         if self.special.has_pending() {
             self.flush_pending_deleted();
@@ -1585,9 +1589,19 @@ impl Sema<'_, '_> {
                 return e;
             }
             let msg = self.diag(Self::undeclared_use_id(name), loc).arg(text);
-            self.emit(msg);
             let e = self.recover_err(&[], loc);
-            return self.mark_expr_error(e);
+            let e = self.mark_expr_error(e);
+            if self.clang_compat < 22 {
+                // clang 19's `TypoExpr`: reported at the end of the
+                // full-expression or where the parser gives up on it
+                // (`f(u 8, x)` skips to the `)`, WP-420).
+                self.emit_delayed_typo(msg, e);
+            } else {
+                // clang 22: the range of the name.
+                let end = self.token_end(loc).unwrap_or(loc);
+                self.emit(msg.range(kiln_source::Span::new(loc, end)));
+            }
+            return e;
         };
         if found.decls.len() > 1
             && found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::UnresolvedUsingValue)
@@ -3031,21 +3045,27 @@ impl Sema<'_, '_> {
         let and = op == BinaryOp::LAnd;
         let (text, bit) = if and { ("&&", "&") } else { ("||", "|") };
         let op_span = kiln_source::Span::new(loc, loc.with_offset(2));
+        // Fix-its are file edits: one with an end inside a macro expansion
+        // is dropped (`macro_fixit.rs`).
+        let mut change = self.diag(DiagId::note_logical_instead_of_bitwise_change_operator, loc);
+        change = change.arg(bit);
+        for f in self.file_fixits(vec![kiln_diag::FixIt::replace(op_span, bit)]) {
+            change = change.fixit(f);
+        }
         let mut d = self
             .diag(DiagId::sema_constant_logical_operand, loc)
             .arg(text)
             .range(self.expr_range(r))
-            .with_note(
-                self.diag(DiagId::note_logical_instead_of_bitwise_change_operator, loc)
-                    .arg(bit)
-                    .fixit(kiln_diag::FixIt::replace(op_span, bit)),
-            );
+            .with_note(change);
         if and {
             let l_end = self.expr_end_loc(l);
             let r_end = self.expr_range(r).hi;
             let mut n = self.diag(DiagId::note_logical_instead_of_bitwise_remove_constant, loc);
-            if let Some(from) = self.token_end(l_end) {
-                n = n.fixit(kiln_diag::FixIt::remove(kiln_source::Span::new(from, r_end)));
+            if let Some(from) = self.file_token_end(l_end) {
+                let rm = kiln_diag::FixIt::remove(kiln_source::Span::new(from, r_end));
+                for f in self.file_fixits(vec![rm]) {
+                    n = n.fixit(f);
+                }
             }
             d = d.with_note(n);
         }
