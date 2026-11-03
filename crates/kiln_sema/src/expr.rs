@@ -3590,6 +3590,9 @@ impl Sema<'_, '_> {
     fn comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         self.diagnose_array_comparison(op, l, r, loc);
         self.diagnose_self_comparison(op, l, r, loc);
+        if matches!(op, BinaryOp::EQ | BinaryOp::NE) {
+            self.diagnose_always_non_null_compare(op == BinaryOp::EQ, l, r);
+        }
         let l2 = conv::decay(self, l);
         let r2 = conv::decay(self, r);
         let (lt, rt) = (self.ety(l2), self.ety(r2));
