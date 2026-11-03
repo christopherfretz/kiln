@@ -289,6 +289,12 @@ impl Sema<'_, '_> {
         self.imm.pending.var_init = Some(v);
     }
 
+    /// The variable whose initializer the next full-expression is, if
+    /// it is one.
+    pub(crate) fn pending_var_init(&self) -> Option<DeclId> {
+        self.imm.pending.var_init
+    }
+
     /// The next full-expression is the mem-initializer of member `f`,
     /// `written` or implicit.
     pub(crate) fn note_member_init_full_expr(&mut self, f: DeclId, written: bool) {

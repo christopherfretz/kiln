@@ -95,6 +95,7 @@ impl Sema<'_, '_> {
         if let Some(l) = ds.inline {
             bad.push(("inline", l));
         }
+        self.decomp_cxx20_specifiers(ds, !bad.is_empty());
         if let Some(&(first, l)) = bad.first() {
             let arg = if bad.len() == 1 {
                 format!("'{first}'")
@@ -148,6 +149,51 @@ impl Sema<'_, '_> {
             self.decomp_written.insert(v, ty);
         }
         Some(v)
+    }
+
+    /// C++20 [dcl.dcl]/8 (P1091R3): `static` and `thread_local` on a
+    /// structured binding declaration are a C++20 extension in C++17
+    /// (clang `ext_decomp_decl_spec`, `-Wc++20-extensions`). clang 22
+    /// reports each specifier at its location; clang 19 one warning at the
+    /// first, naming them all, and none when another specifier is an
+    /// error.
+    fn decomp_cxx20_specifiers(&mut self, ds: &DeclSpec, has_bad: bool) {
+        if self.std >= kiln_lex::Std::Cxx20 {
+            return;
+        }
+        let mut specs: Vec<(&str, Loc)> = Vec::new();
+        if let Some((StorageSpec::Static, l)) = ds.storage {
+            specs.push(("static", l));
+        }
+        if let Some(l) = ds.thread_local {
+            let name = if ds.thread_kind == kiln_ast::decl::TlsKind::Dynamic {
+                "thread_local"
+            } else if self.diags.sm().span_text(kiln_source::Span::new(l, l.with_offset(8)))
+                == Some("__thread")
+            {
+                "__thread"
+            } else {
+                "_Thread_local"
+            };
+            specs.push((name, l));
+        }
+        if self.clang_compat >= 22 {
+            for (name, l) in specs {
+                let msg = self.diag(DiagId::sema_ext_decomp_decl_spec, l).arg(format!("'{name}'"));
+                self.emit(msg);
+            }
+        } else if let Some(&(first, l)) = specs.first()
+            && !has_bad
+        {
+            let arg = if specs.len() == 1 {
+                format!("'{first}'")
+            } else {
+                let all: Vec<&str> = specs.iter().map(|s| s.0).collect();
+                format!("with '{}' specifiers", all.join(" "))
+            };
+            let msg = self.diag(DiagId::sema_ext_decomp_decl_spec, l).arg(arg);
+            self.emit(msg);
+        }
     }
 
     /// [dcl.struct.bind]/1 (P1061): at most one sb-identifier is a

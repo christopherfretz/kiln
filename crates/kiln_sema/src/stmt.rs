@@ -591,7 +591,11 @@ impl Sema<'_, '_> {
     /// constant expression is diagnosed and kept unwrapped.
     pub fn act_on_constexpr_condition(&mut self, e: ExprId, kw: Loc) -> ExprId {
         let at = self.begin_loc(e);
+        // clang `ActOnCondition`: its full-expression is completed as
+        // constant-evaluated (`IsConstexpr`; no `-Winteger-overflow`).
+        self.constant_full_expr += 1;
         let c = self.act_on_condition_at(e, kw);
+        self.constant_full_expr -= 1;
         if self.is_err_expr(c) || self.ast.exprs.get(c).deps().intersects(ExprDeps::VALUE) {
             return c;
         }
