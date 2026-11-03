@@ -1233,6 +1233,30 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   clang 19 and 22 in every mode. clang reports this as a CCE note and
   keeps evaluating; kiln stops at it, which gives the same diagnostics
   wherever clang needs a constant (`expr.const/p2738-void-cast-pre26-cxx*.cpp`).
+  Probed (WP-407, clang 19 and 22, `-std=c++23`): a required constant
+  expression keeps the first note (clang `EM_ConstantExpression` never
+  replaces it), so a later fault (a read past the end through the cast
+  pointer, in a callee or not) adds no second note; `static_assert`,
+  `constexpr` variables, enumerators and array bounds print the same as
+  kiln. `__builtin_is_constant_evaluated` / `if consteval` in a static
+  initializer differ only through the static-initialization fallback
+  below. The difference that is visible is in a *fold*: clang continues
+  with the cast's result designating nothing (`Designator.setInvalid()`),
+  so a null test or comparison of that pointer folds while any access
+  through it fails silently: a file-scope `int a[(const int *)vp ? 1 :
+  2]` is "folded to constant array", `__builtin_constant_p((const int
+  *)vp == &n)` is true, and `int g = (const int *)vp != nullptr;` is
+  constant-initialized. Kiln's folds stop at the cast (an error for the
+  bound, `false`, dynamic initialization). Not modelled: it needs an
+  invalid-designator pointer state carried by every pointer-consuming
+  op, and covers clang's other CCE-only casts too (`reinterpret_cast`,
+  integer to pointer, which fold the same way); tracked by the xfail
+  `expr.const/p2738-void-cast-pre26-fold-continues.cpp`. Codegen's folds
+  share the TU's bytecode, so they see the TU's language mode
+  (`Oven::set_cxx_year`, recorded by sema; before WP-407 they compiled
+  with C++26 rules and constant-initialized `int g = *(const int *)vp;`
+  in C++23: `expr.const/p2738-void-cast-pre26-static-init.cpp`,
+  `p2738-void-cast-static-init-cxx26.cpp`).
   A `void *` argument in an "in call to" note prints the subobject its
   tag designates (`f(&s)`, not the first member at its address), an
   untagged one the whole object.

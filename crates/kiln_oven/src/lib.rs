@@ -419,6 +419,9 @@ pub struct Oven {
     /// The clang release whose note wording failures follow
     /// (`-fclang-compat=`; [`Oven::set_clang_compat`]).
     pub(crate) clang_compat: u32,
+    /// The translation unit's language standard as its year
+    /// ([`Oven::set_cxx_year`]).
+    cxx_year: u32,
     pub(crate) types: Types,
     pub(crate) code: Vec<u32>,
     pub(crate) sites: Vec<Site>,
@@ -500,6 +503,7 @@ impl Oven {
             budget,
             backtrace_limit: notes::BACKTRACE_LIMIT,
             clang_compat: 19,
+            cxx_year: 2026,
             types: Types::default(),
             code: Vec::new(),
             sites: Vec::new(),
@@ -562,6 +566,20 @@ impl Oven {
     /// The compatibility level ([`Oven::set_clang_compat`]).
     pub fn clang_compat(&self) -> u32 {
         self.clang_compat
+    }
+
+    /// Records the translation unit's language standard as its year
+    /// (sema's [`SemaBridge::cxx_year`]), for a bridge that does not know
+    /// it: codegen's folds share the TU's bytecode, which bakes in the
+    /// mode-dependent rules (the pre-C++26 `void *` cast), so they must
+    /// see the same year (spec/oven.md "Casts from void *"). Default 2026.
+    pub fn set_cxx_year(&mut self, year: u32) {
+        self.cxx_year = year;
+    }
+
+    /// The year [`Oven::set_cxx_year`] recorded.
+    pub fn cxx_year(&self) -> u32 {
+        self.cxx_year
     }
 
     /// The backtrace limit ([`Oven::set_backtrace_limit`]).
