@@ -4897,6 +4897,12 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `expression is not assignable`; a const base is the usual
   const-variable diagnostic. `&v.x` and binding a non-const reference
   are rejected as for any vector element (§5.13).
+- A `bool` ext vector has no components (clang `isExtVectorBoolType`;
+  a lane is one bit and has no address): every accessor, valid or not,
+  is `illegal vector component name 'name'` at the member name, before
+  the accessor is parsed, also on substitution (WP-438). clang 19
+  quotes the name twice (`''x''`), clang 22 once. A subscript reads a
+  lane instead.
 - A GNU `vector_size` vector has no components (`member reference base
   type ... is not a structure or union`). An unused access (`v.x;`) is
   `expression result unused` at the base's begin (clang's `getExprLoc`).
@@ -4915,6 +4921,7 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `ext.vector/ext-vector-access-diagnostics.cpp`,
   `ext.vector/element-access-diagnostics.cpp`,
   `ext.vector/element-access-constexpr-diagnostics.cpp` (strict-diags),
+  `ext.vector/bool-element-access-diagnostics{,-clang22}.cpp`,
   `tests/codegen/ext_vector_element.cpp`.
 
 ### 5.20 Variadic arguments (`expr.rs`, WP-311)
