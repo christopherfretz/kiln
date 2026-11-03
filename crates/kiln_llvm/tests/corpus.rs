@@ -635,6 +635,49 @@ fn captures_none_at_llvm_21() {
     assert!(!t.contains("nocapture"), "{t}");
 }
 
+/// §5: at `ir_version` 20+ a vector of one repeated integer or float
+/// constant prints as `splat (T v)`; mixed lanes and pointer lanes do not.
+#[test]
+fn vector_splats_at_llvm_20() {
+    for (version, splat) in [(19, false), (22, true)] {
+        let mut m = aarch64();
+        m.ir_version = version;
+        let five = m.const_int(TypeId::I32, 5);
+        let one = m.const_int(TypeId::I32, 1);
+        let half = m.const_float(TypeId::FLOAT, 1.5);
+        let gp = m.add_global("g", TypeId::I32);
+        let gp = Value::global(gp);
+        let vals = [
+            m.const_vector(&[five]).unwrap(),
+            m.const_vector(&[half, half]).unwrap(),
+            m.const_vector(&[five, one]).unwrap(),
+            m.const_vector(&[gp, gp]).unwrap(),
+        ];
+        for (i, v) in vals.into_iter().enumerate() {
+            let ty = m.const_type(v);
+            let g = m.add_global(&format!("v{i}"), ty);
+            m.set_initializer(g, Some(v)).unwrap();
+        }
+        let t = m.to_string();
+        let want: [&str; 2] = if splat {
+            [
+                "@v0 = global <1 x i32> splat (i32 5)\n",
+                "@v1 = global <2 x float> splat (float 1.500000e+00)\n",
+            ]
+        } else {
+            [
+                "@v0 = global <1 x i32> <i32 5>\n",
+                "@v1 = global <2 x float> <float 1.500000e+00, float 1.500000e+00>\n",
+            ]
+        };
+        for w in want {
+            assert!(t.contains(w), "{t}");
+        }
+        assert!(t.contains("@v2 = global <2 x i32> <i32 5, i32 1>\n"), "{t}");
+        assert!(t.contains("@v3 = global <2 x ptr> <ptr @g, ptr @g>\n"), "{t}");
+    }
+}
+
 /// §5: function attribute groups are deduplicated and numbered in first-use
 /// order, with enum attributes before string attributes.
 #[test]

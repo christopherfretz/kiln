@@ -560,6 +560,19 @@ impl<'a> Printer<'a> {
                 w.write_char(']')
             }
             ConstData::Vector { elems, .. } => {
+                // LLVM 20+'s AsmWriter writes a vector whose lanes are one
+                // integer or floating-point constant as `splat (T v)`.
+                if let Some(&first) = elems.first()
+                    && m.ir_version >= 20
+                    && elems.iter().all(|&e| e == first)
+                    && first.as_const().is_some_and(|c| {
+                        matches!(m.consts.get(c), ConstData::Int { .. } | ConstData::Float { .. })
+                    })
+                {
+                    w.write_str("splat (")?;
+                    self.typed(w, first)?;
+                    return w.write_char(')');
+                }
                 w.write_char('<')?;
                 self.typed_list(w, elems)?;
                 w.write_char('>')
