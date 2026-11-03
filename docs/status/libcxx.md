@@ -90,17 +90,23 @@ mem-initializer; then 4 `substitution into InitListExpr` and 4
 to function pointer in a base braced mem-initializer, substitution into
 `InitListExpr` and float / bound-temporary NTTPs, nullability leftovers,
 the definition-time template template argument check, class redefinition
-recovery), on wp/404 merged with main e406276f, same flags
-(`-j 4 --mem-limit 3072`), 881.6 s wall, peak RSS 671 MiB
+recovery, a builtin type transform over an instantiation-dependent
+operand), on wp/404 merged with main f4c0e909, same flags
+(`-j 4 --mem-limit 3072`), 778.1 s wall, peak RSS 672 MiB
 (`variant.visit/visit_return_type.pass.cpp`, the kiln compile step):
 
 | Scope | total | pass | fail | unsupported (driver) | pass rate |
 |---|---:|---:|---:|---:|---:|
-| 21 M4 directories | 2661 | 2567 | 14 | 80 (0) | **99.5%** |
+| 21 M4 directories | 2661 | 2566 | 15 | 80 (0) | **99.4%** |
 
 The `_BitInt`, `pstl.sort` / `stable_sort`, P2418 and both
-`not yet implemented` clusters are gone. The 14 remaining failures are
-single tests: 6 `static assertion expression is not an integral constant
+`not yet implemented` clusters are gone, as is the subrange CTAD cluster
+the clang 22 alias sugar exposed (9 range insertion tests,
+`__remove_reference_t` over `TC<N>*`). The 15 remaining failures are
+single tests: 1 `self-comparison always evaluates to false`
+(`array/compare.verify`: clang 22 warns too, and libc++'s lit passes
+`-Wno-tautological-compare` in `params.py` `_warningFlags`, which the
+harness does not apply); 6 `static assertion expression is not an integral constant
 expression` (`ranges.swap_ranges`, `ranges.ends_with`, `flat.map`
 `initializer_list` and `iter_iter`, `range.single.view/assign`,
 `is_implicit_lifetime.verify`); 2 `.verify` `invalid application of
