@@ -319,6 +319,28 @@ the target:
    `GNUNullExpr`/`nullptr_t` source converted to a non-pointer),
    `-Wimplicit-int-conversion` and the other conversion warnings; non-dependent full-expressions are not
    re-checked per instantiation.
+   A pointer, array or function converted to `bool` (WP-408, clang
+   `DiagnoseAlwaysNonNullPointer`, same wording at 19 and 22; on by
+   default, `-Wbool-conversion` under `-Wconversion`):
+   `this` and `&r` for a reference `r` are -Wundefined-bool-conversion
+   ("'this' pointer cannot be null in well-defined C++ code; ...",
+   "reference cannot be bound to dereferenced null pointer ..."); a name
+   (or member access) of a function or array, or `&x` of an object, is
+   -Wpointer-bool-conversion "address of {''|function |array }'x' will
+   always evaluate to 'true'", the name printed as written, with the
+   expression's range. A function adds "prefix with the address-of
+   operator to silence this warning" (fix-it `&`) and, when it is
+   callable with no arguments and returns `bool`, "suffix with
+   parentheses to turn this into a function call" (fix-it `()`). Not
+   for `&f` of a function, a weak declaration, a reference-returning
+   call (`&g()`), an unevaluated operand, or a source or conversion
+   point in a macro body. The walk visits a binary operator's right
+   operand first, so `f && g` warns for `g` first. Not implemented:
+   `-Wtautological-pointer-compare` (`f == nullptr`) and clang's
+   reference-returning call note (`CheckForReference`). Tests:
+   `tests/conformance/expr.unary.op/pointer-bool-conversion.cpp`,
+   `expr.log.and/pointer-bool-conversion-operands.cpp`,
+   `intro.compliance/wbool-conversion-members.cpp`.
 4. The deprecated conversion from a string literal to `char*` is rejected,
    as C++11 and later require. clang accepts it with a warning under
    `-Wwritable-strings`.
