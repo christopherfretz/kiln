@@ -186,6 +186,8 @@ forward-declared class from the evaluation.
 - **`members_of` cost.** `__kiln_members_count`/`__kiln_member_at`
   recompute the member list on every call, which is O(n²) for a loop.
   Real `members_of` returns a `std::vector<info>` from one bridge call.
+  (Retired by WP-478: `members_of` is now the cached query of
+  spec/reflection-members.md.)
 - **Declaration location.** An injected member's location is the
   intrinsic call. Through a helper, "previous declaration is here"
   therefore points into the helper, not into the class.
