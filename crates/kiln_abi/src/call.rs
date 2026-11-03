@@ -949,6 +949,11 @@ fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u3
     (direct(res), ni, ns)
 }
 
+/// A `_BitInt(N)` with `N > 128`, which x86-64 passes and returns in memory.
+fn is_wide_bit_int(t: &IrTypes<'_>, q: QualType) -> bool {
+    matches!(view(t, q), TypeView::BitInt { width, .. } if width > 128)
+}
+
 fn x86_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
     use Class::{ComplexX87, Integer, Memory, NoClass, Sse, SseUp, X87, X87Up};
     if is_indirect_record(t.ast(), q) {
@@ -964,7 +969,9 @@ fn x86_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
             }
         }
         Memory => {
-            if !is_aggregate(t, q) {
+            // clang `getIndirectReturnResult`: a `_BitInt` wider than 128
+            // bits returns in memory like an aggregate.
+            if !is_aggregate(t, q) && !is_wide_bit_int(t, q) {
                 let s = strip_enum(t, q);
                 return if is_promotable(t, s) { extend(t, s) } else { direct(natural) };
             }
