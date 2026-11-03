@@ -145,6 +145,12 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         // lax as clang's `EvaluateAsRValue`: a `const double` or
         // `const _Atomic(int)` variable reads as its value.
         let v = match inits.get(&e) {
+            // A `constexpr` variable sema already evaluated keeps that
+            // value: its initializer is manifestly constant-evaluated
+            // either way, and only sema's bridge runs the reflection
+            // intrinsics (`constexpr bool b = type_of(R) == ^^int;` in an
+            // emitted body, spec/reflection.md §8.3).
+            Some(&var) if sema_value(b.ast, var).is_some() => sema_value(b.ast, var),
             Some(&var) => match oven.fold_constant_init(&mut b, e, var) {
                 // clang `ConstantEmitter::tryEmitPrivateForVarInit`: an
                 // initializer that is not constant is folded again outside
@@ -198,6 +204,15 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         }
     }
     folds
+}
+
+/// The value sema computed for `constexpr` variable `d`'s initializer.
+fn sema_value(ast: &Ast, d: DeclId) -> Option<ConstValueId> {
+    let v = ast.decls.var(d)?;
+    match v.eval.state() {
+        kiln_ast::decl::VarEvalState::Value(c) if v.spec.is_constexpr() => Some(c),
+        _ => None,
+    }
 }
 
 /// Whether variable `d` has a scalar type (arithmetic, enumeration,
