@@ -93,6 +93,16 @@ impl Compiler<'_> {
                 Some(format!("constexpr bit cast involving type '{n}' is not yet supported"))
             }
             TyKind::Array { elem, .. } => self.bit_cast_unsupported(elem, src),
+            // clang's `BitCastBuffer` reads a `bool` vector's lanes as
+            // whole bytes only (`note_constexpr_bit_cast_invalid_vector`).
+            TyKind::BoolVec { n, .. } if n % 8 != 0 => {
+                let t = self.o.tname(self.ast(), t);
+                Some(format!(
+                    "bit_cast involving type '{t}' (vector of {n} 'bool' values) is not allowed \
+                     in a constant expression; element size 1 * element count {n} is not a \
+                     multiple of the byte size 8"
+                ))
+            }
             TyKind::Record { decl, .. } => {
                 if self.ast().decls.bases(decl, &self.ast().lists).next().is_some() {
                     return Some(

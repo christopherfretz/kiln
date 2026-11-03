@@ -157,7 +157,18 @@ enum Local {
 enum Place {
     Reg(u32),
     Mem(u32),
-    Bits { p: u32, bit: u32, width: u32 },
+    Bits {
+        p: u32,
+        bit: u32,
+        width: u32,
+    },
+    /// Lane `idx` (a register) of the `bool` vector of type `vty` at `p`
+    /// (`TyKind::BoolVec`: a bit, so no address).
+    Lane {
+        p: u32,
+        idx: u32,
+        vty: OTy,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2992,7 +3003,7 @@ impl Compiler<'_> {
         if let Some(out) = out {
             let postfix = matches!(op, UnaryOp::PostInc | UnaryOp::PostDec);
             let src = if postfix { old } else { new };
-            if let Place::Bits { .. } = place
+            if let Place::Bits { .. } | Place::Lane { .. } = place
                 && !postfix
             {
                 // The value of the bit-field after the store.
@@ -3688,6 +3699,9 @@ impl Compiler<'_> {
             Place::Bits { p, bit, width } => {
                 self.emit_at(Op::LoadBits, akind, &[dst, p, ty.0, bit | width << 8], e);
             }
+            Place::Lane { p, idx, vty } => {
+                self.emit_at(Op::LoadLane, akind, &[dst, p, idx, vty.0], e);
+            }
         }
     }
 
@@ -3703,6 +3717,9 @@ impl Compiler<'_> {
             }
             Place::Bits { p, bit, width } => {
                 self.emit_at(Op::StoreBits, 0, &[p, src, ty.0, bit | width << 8], e);
+            }
+            Place::Lane { p, idx, vty } => {
+                self.emit_at(Op::StoreLane, 0, &[p, src, idx, vty.0], e);
             }
         }
     }
@@ -3734,7 +3751,7 @@ impl Compiler<'_> {
     fn lv_mem(&mut self, e: ExprId, acc: Access) -> u32 {
         match self.lv(e, acc) {
             Place::Mem(p) => p,
-            Place::Reg(_) | Place::Bits { .. } => {
+            Place::Reg(_) | Place::Bits { .. } | Place::Lane { .. } => {
                 self.trap(e, "kiln: internal: the address of a register value was taken");
                 self.reg()
             }
@@ -4570,6 +4587,22 @@ impl Compiler<'_> {
                     let j = self.jmp();
                     self.patch(j, top);
                     self.patch_here(exit);
+                }
+            }
+            TyKind::BoolVec { elem, n } => {
+                // One bit per lane (`ty.rs`); the lanes not listed are
+                // false.
+                if inits.len() as u64 > n || inits.iter().any(|&x| self.is_vector_expr(x)) {
+                    return self.unsupported(e);
+                }
+                if (inits.len() as u64) < n {
+                    self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
+                }
+                for (i, &x) in inits.iter().enumerate() {
+                    let r = self.rv(x);
+                    let q = self.elem_ptr(p, i as u64 / 8, e);
+                    let bw = (i % 8) as u32 | 1 << 8;
+                    self.emit_at(Op::StoreBits, 1, &[q, r, elem.0, bw], x);
                 }
             }
             TyKind::Record { union: true, .. } => {
