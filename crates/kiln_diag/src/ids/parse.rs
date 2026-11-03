@@ -3,6 +3,7 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 parse_address_of_label_outside_fn = Error (0) "use of address-of-label extension outside of a function body";
+parse_annotation_mixed = Error (0) "an attribute-specifier cannot mix annotations and attributes";
 parse_anon_bitfield_member_init = Error (0) "anonymous bit-field cannot have a default member initializer";
 parse_array_qual_outside_prototype = Error (0) "type qualifier used in array declarator outside of function prototype";
 parse_array_static_outside_prototype = Error (0) "'static' used in array declarator outside of function prototype";
@@ -78,6 +79,7 @@ parse_expected_unqualified_id = Error (0) "expected unqualified-id";
 parse_expected_while = Error (0) "expected 'while' in do/while loop";
 parse_explicit_instantiation_with_definition = Error (0) "explicit template instantiation cannot have a definition; if this definition is meant to be an explicit specialization, add '<>' after the 'template' keyword";
 parse_ext_alias_in_init_statement = ExtWarn [Cxx23Extensions] (0) "alias declaration in this context is a C++23 extension";
+parse_ext_annotations = ExtWarn [Cxx26Extensions] (0) "annotations are a C++26 extension";
 parse_ext_binding_pack = ExtWarn [Cxx26Extensions] (0) "structured binding packs are a C++2c extension";
 parse_ext_constexpr_if = ExtWarn [Cxx17Extensions] (0) "constexpr if is a C++17 extension";
 parse_ext_expansion_statements = ExtWarn [Cxx26Extensions] (0) "expansion statements are a C++26 extension";

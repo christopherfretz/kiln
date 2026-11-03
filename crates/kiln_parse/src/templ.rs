@@ -593,6 +593,7 @@ impl Parser<'_, '_> {
         if self.at_attr() {
             let mut attrs = Vec::new();
             self.parse_attributes(&mut attrs);
+            self.s.reject_annotations_in(&attrs, Some("a concept"));
         }
         if self.eat(Punct::Equal).is_none() {
             let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("'='");

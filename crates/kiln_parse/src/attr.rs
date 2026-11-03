@@ -19,6 +19,16 @@ use crate::expr::prec;
 use crate::keywords::Kw;
 use crate::parser::Parser;
 
+/// What one `[[...]]` has held so far: an annotation-list mixes with
+/// neither attributes nor a using-prefix (reported once).
+#[derive(Default)]
+struct AnnotMix {
+    using: bool,
+    attr: bool,
+    annot: bool,
+    reported: bool,
+}
+
 /// True for the attributes whose arguments are expressions.
 fn takes_expr_args(name: &str) -> bool {
     let n = name.trim_start_matches("__").trim_end_matches("__");
@@ -379,12 +389,31 @@ impl Parser<'_, '_> {
             }
             self.expect(Punct::Colon);
         }
+        // An annotation-list ([dcl.attr.grammar]/1, P3394) takes neither
+        // a using-prefix nor attributes: `[[=1, nodiscard]]` is ill-formed.
+        let mut mix = AnnotMix { using: default_scope.is_some(), ..AnnotMix::default() };
         loop {
             if self.at(Punct::RSquare) || self.at_eof() {
                 break;
             }
             if self.eat(Punct::Comma).is_some() {
                 continue;
+            }
+            if self.at(Punct::Equal) {
+                self.parse_annotation(out, &mut mix);
+                if self.at(Punct::RSquare) || self.at_eof() {
+                    break;
+                }
+                if self.expect(Punct::Comma).is_none() {
+                    self.skip_until(&[Punct::RSquare], true, false);
+                    break;
+                }
+                continue;
+            }
+            mix.attr = true;
+            if mix.annot && !mix.reported {
+                mix.reported = true;
+                self.error_here(DiagId::parse_annotation_mixed);
             }
             let Some(mut name) = self.attr_name() else {
                 self.error_here(DiagId::parse_expected_unqualified_id);
@@ -450,6 +479,35 @@ impl Parser<'_, '_> {
         }
         let start = if before == self.cxx11_attr_run.1 { self.cxx11_attr_run.0 } else { before };
         self.cxx11_attr_run = (start, self.prev_lo());
+    }
+
+    /// `= constant-expression ...opt`, one annotation of an
+    /// annotation-list ([dcl.attr.grammar]/1, [dcl.attr.annotation]; P3394,
+    /// spec/annotations.md §2), at the `=`. The operand is a
+    /// conditional-expression (a constant-expression), so `[[=a, =b]]` is
+    /// two annotations; an `...` makes it a pack expansion
+    /// ([dcl.attr.grammar]/6).
+    fn parse_annotation(&mut self, out: &mut Vec<AttrId>, mix: &mut AnnotMix) {
+        let eq = self.bump().span.lo;
+        if !mix.annot && self.std < kiln_lex::Std::Cxx26 {
+            let w = self.s.diag(DiagId::parse_ext_annotations, eq);
+            self.emit(w);
+        }
+        mix.annot = true;
+        let bad = mix.attr || mix.using;
+        if bad && !mix.reported {
+            mix.reported = true;
+            let d = self.s.diag(DiagId::parse_annotation_mixed, eq);
+            self.emit(d);
+        }
+        let e = self.parse_constant_expr();
+        let ellipsis = self.eat(Punct::Ellipsis);
+        if let Some(e) = e
+            && !bad
+            && let Some(a) = self.s.act_on_annotation(e, ellipsis, eq)
+        {
+            out.push(a);
+        }
     }
 
     /// `__attribute__(( gnu-attribute-list ))`.

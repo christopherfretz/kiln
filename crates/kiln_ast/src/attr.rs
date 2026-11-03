@@ -27,7 +27,9 @@ impl AttrKind {
     pub const NODISCARD: AttrKind = AttrKind(10);
     pub const NORETURN: AttrKind = AttrKind(11);
     pub const NO_UNIQUE_ADDRESS: AttrKind = AttrKind(12);
-    /// P3394 annotation: `a` = `ConstValueId` (M6).
+    /// P3394 annotation `[[=e]]`: `a` = the operand `ExprId`. Only between
+    /// parsing and sema: sema moves each into `Ast::annots`
+    /// (spec/annotations.md), so no declaration keeps one.
     pub const ANNOTATION: AttrKind = AttrKind(13);
     // GNU / vendor
     pub const ALWAYS_INLINE: AttrKind = AttrKind(64);

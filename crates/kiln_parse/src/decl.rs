@@ -285,6 +285,7 @@ impl Parser<'_, '_> {
             && self.peek_is(1, Punct::Equal)
         {
             let _ = ns_loc;
+            self.s.reject_annotations_in(&attrs, Some("a namespace alias"));
             let nl = self.bump().span.lo;
             self.bump();
             let _ = self.parse_namespace_alias(name, nl);

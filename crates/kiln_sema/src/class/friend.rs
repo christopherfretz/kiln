@@ -142,6 +142,10 @@ impl Sema<'_, '_> {
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
+            if !def {
+                // [dcl.attr.annotation]/1.
+                self.reject_annotations(&mut attrs, Some("a friend declaration that is not a definition"));
+            }
             self.check_decl_attrs(f, &mut attrs);
             let _ = self.builder().attach_attrs(f, &attrs);
         }

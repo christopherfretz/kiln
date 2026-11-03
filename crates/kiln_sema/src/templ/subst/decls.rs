@@ -1346,6 +1346,7 @@ impl Substituter<'_, '_, '_> {
             };
             let Some(s) = m.name().as_ident() else { continue };
             let x = self.sema.act_on_enumerator(s, m.loc(), init, &[]);
+            self.copy_annotations(x, en);
             self.locals.insert(en, DeclOrPack::Decl(x));
             self.member_link(x, en);
             // Found from the enumeration too (`FindInstantiatedDecl`

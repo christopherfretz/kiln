@@ -128,6 +128,16 @@ define_id!(
     ReflectionId, u32::MAX, "ReflectionId"
 );
 define_id!(
+    /// A data member description (`std::meta::data_member_spec`, §10;
+    /// reserved for M6-08, never handed out yet).
+    DmsId, u32::MAX, "DmsId"
+);
+define_id!(
+    /// An annotation (P3394 `[[=expr]]`, §10; reserved, never handed out
+    /// yet).
+    AnnId, u32::MAX, "AnnId"
+);
+define_id!(
     /// The bytes of a string literal in the `StringPool`.
     StringLitId, u32::MAX, "StringLitId"
 );

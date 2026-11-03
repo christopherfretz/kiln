@@ -346,6 +346,9 @@ impl Sema<'_, '_> {
         let mut attrs = specs.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
+            // A lambda-declarator declares nothing an annotation can
+            // appertain to ([dcl.attr.annotation]/1).
+            self.reject_annotations(&mut attrs, Some("a lambda call operator"));
             self.check_alignas_subject(f, &mut attrs);
             let _ = self.builder().attach_attrs(f, &attrs);
         }
