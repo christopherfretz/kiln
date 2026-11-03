@@ -160,6 +160,9 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::UnsupportedValue(o, v) => {
             Diag::new(DiagId::drv_unsupported_option_argument, Span::INVALID).arg(o).arg(v)
         }
+        ArgError::UnsupportedForTarget(o, t) => {
+            Diag::new(DiagId::drv_unsupported_opt_for_target, Span::INVALID).arg(o).arg(t)
+        }
     };
     d.emit(engine);
 }
@@ -433,7 +436,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     {
         Diag::new(DiagId::drv_invalid_gcc_install_dir, Span::INVALID).arg(dir).emit(&drv);
     }
-    for e in &features::resolve(&args, tc.target.is_aarch64()).1 {
+    for e in &features::resolve(&args, &tc.target).1 {
         emit_arg_error(e, &drv);
     }
     if args.help {

@@ -929,3 +929,33 @@ fn module_adl_example() {
     ];
     assert_eq!(lines, want, "{}", o.stderr);
 }
+
+/// WP-469, spec/driver.md §Target features: clang 22's driver errors for
+/// `-march=` / `-msve-vector-bits=` values it rejects, and the
+/// `__ARM_FEATURE_SVE_BITS` they set when accepted.
+#[test]
+fn aarch64_target_feature_options() {
+    let a64 = "--target=aarch64-unknown-linux-gnu";
+    let src = "int x = __ARM_FEATURE_SVE_BITS;\n";
+    let run = |args: &[&str]| {
+        let o = kiln(&[&["-E", "-P", "-x", "c++", "-"], args].concat(), src);
+        (o.code, o.stderr, o.stdout)
+    };
+    let err = |m: &str| (1, format!("kiln++: error: {m}\n"), String::new());
+    assert_eq!(
+        run(&["--target=x86_64-unknown-linux-gnu", "-msve-vector-bits=256"]),
+        err("unsupported option '-msve-vector-bits=' for target 'x86_64-unknown-linux-gnu'")
+    );
+    assert_eq!(
+        run(&[a64, "-msve-vector-bits=100"]),
+        err("unsupported argument '100' to option '-msve-vector-bits='")
+    );
+    assert_eq!(
+        run(&[a64, "-march=armv8-a+bogus"]),
+        err("unsupported argument 'armv8-a+bogus' to option '-march='")
+    );
+    assert_eq!(
+        run(&[a64, "-march=armv8-a+sve", "-msve-vector-bits=512"]),
+        (0, String::new(), "int x = 512;\n".to_owned())
+    );
+}

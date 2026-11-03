@@ -4435,7 +4435,7 @@ impl Sema<'_, '_> {
             let ty = self.dependent_subscript_type(base, idx);
             return self.builder().subscript(base, idx, ty, loc);
         }
-        if self.is_vector_type(self.ety(base)) {
+        if self.is_vector_type(self.ety(base)) || self.is_sve_vector(self.ety(base)) {
             return self.vector_subscript(base, idx, loc);
         }
         let b = conv::decay(self, base);

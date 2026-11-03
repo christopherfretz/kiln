@@ -920,10 +920,30 @@ impl Sema<'_, '_> {
         if member && !ds.storage.is_some_and(|(s, _)| s == StorageSpec::Static) {
             return ty;
         }
+        self.reject_qualified_fn_type(ty, ds.loc, member)
+    }
+
+    /// Reports `ty`, a function type with a cv-qualifier-seq or
+    /// ref-qualifier, as clang's `err_invalid_qualified_function_type`
+    /// "of type" form at `loc` ("static member function of type" when
+    /// `static_member`, else "non-member function of type") and returns it
+    /// without the qualifiers. Any other type is returned unchanged.
+    pub(crate) fn reject_qualified_fn_type(
+        &mut self,
+        ty: QualType,
+        loc: Loc,
+        static_member: bool,
+    ) -> QualType {
+        let Some(p) = self.ast.types.proto(ty).copied() else { return ty };
+        let info = p.info();
+        let (q, r) = (info.this_quals(), info.ref_qual());
+        if q.is_empty() && r == RefQual::None {
+            return ty;
+        }
         let spelled = crate::class::members::method_quals_spelling(q, r);
         let m = self
-            .diag(DiagId::sema_qualified_fn_type, ds.loc)
-            .arg(u8::from(member))
+            .diag(DiagId::sema_qualified_fn_type, loc)
+            .arg(u8::from(static_member))
             .arg(self.ty_arg(ty))
             .arg(spelled);
         self.emit(m);
@@ -3912,8 +3932,10 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
-        let params: Vec<ParamInfo> =
-            d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();
+        let params: Vec<ParamInfo> = match d.function_params() {
+            Some(p) => p.to_vec(),
+            None => self.typedef_fn_params(ty, d.name_loc()),
+        };
         let eo = match early_explicit_object {
             Some(r) => r,
             None => self.explicit_object_member(ds, &params, method),
@@ -4181,6 +4203,36 @@ impl Sema<'_, '_> {
             }
         }
         true
+    }
+
+    /// The parameters of a function declared without a function
+    /// declarator (`F f;` with `typedef void F(int)`, or through
+    /// `decltype`, [dcl.fct]/13): one unnamed parameter per parameter
+    /// type of `ty`, at the declarator's name (clang
+    /// `BuildParmVarDeclForTypedef`).
+    fn typedef_fn_params(&self, ty: QualType, loc: Loc) -> Vec<ParamInfo> {
+        let Some(p) = self.sugared_proto(ty) else { return Vec::new() };
+        self.ast
+            .types
+            .params(&p)
+            .iter()
+            .map(|&t| ParamInfo {
+                name: None,
+                ty: t,
+                original_ty: None,
+                loc,
+                attrs: Vec::new(),
+                invalid: false,
+                default_arg: DefaultArg::None,
+                default_loc: Loc::INVALID,
+                range: (loc, loc),
+                type_loc: loc,
+                ref_loc: Loc::INVALID,
+                chunk_loc: Loc::INVALID,
+                decl: None,
+                explicit_object: None,
+            })
+            .collect()
     }
 
     /// Creates the parameter declarations of function `f` from the

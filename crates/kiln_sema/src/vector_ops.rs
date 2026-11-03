@@ -236,8 +236,16 @@ impl Sema<'_, '_> {
 
     /// `v[i]` on a vector `v` (clang `CreateBuiltinArraySubscriptExpr`):
     /// a prvalue `v` is materialized (CWG1213), the result is the element
-    /// type with `v`'s qualifiers and value category.
+    /// type with `v`'s qualifiers and value category. An SVE vector
+    /// (`isSveVLSBuiltinType`) is subscripted the same way, its element
+    /// `getSveEltType`; `svbool_t` cannot be (`err_subscript_svbool_t`,
+    /// before the index is checked).
     pub(crate) fn vector_subscript(&mut self, base: ExprId, idx: ExprId, loc: Loc) -> ExprId {
+        let sve = self.sve_parts(self.ety(base)).map(|(e, _)| e);
+        if sve == Some(QualType::BOOL) {
+            self.error(DiagId::sema_subscript_svbool, loc);
+            return self.recover_err(&[base, idx], loc);
+        }
         let mut b = base;
         if self.ast.exprs.get(b).value_category() == ValueCategory::PRValue {
             let t = self.ety(b);
@@ -251,8 +259,10 @@ impl Sema<'_, '_> {
         }
         let bt = self.ety(b);
         let top = self.ast.types.desugar_top(bt);
-        let TypeView::Vector { elem, .. } = self.ast.types.view(top.ty()) else {
-            return self.recover_err(&[b, i], loc);
+        let elem = match (self.ast.types.view(top.ty()), sve) {
+            (TypeView::Vector { elem, .. }, _) => elem,
+            (_, Some(e)) => e,
+            _ => return self.recover_err(&[b, i], loc),
         };
         let quals = self.ast.types.effective_quals(bt);
         let ty = QualType::new(elem.ty(), elem.quals_bits() | quals.bits());
