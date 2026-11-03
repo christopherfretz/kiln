@@ -4892,6 +4892,15 @@ ambiguity errors.
   argument that fails, as clang's `CheckTemplateArgumentList`: later
   arguments and the arity are not reported (`M<1, int, 2>` is one error).
   Test: `temp.arg.general/first-failing-argument.cpp`.
+- A class or alias template named without a template argument list as
+  a nested-name-specifier component (`N::Y::v`, `X::type g;`;
+  [temp.names]/1) is "use of class template 'N::Y' requires template
+  arguments" at the template name, printed with the specifier as written
+  (`'::N::Y'`, `'P<int>::J'`; `act_on_nested_name_written`), with
+  "template is declared here" at the template (an alias template's at
+  its `using`, `conflict_loc`), as clang's
+  `diagnoseMissingTemplateArguments` (WP-430,
+  `temp.names/missing-args-nested-name-note.cpp`).
 - A variable template or concept named alone as a template-argument
   ([temp.names]/1): at compat 22 the parser takes it as a template name
   (P2841, `at_template_name_arg`) and the check reports it against the

@@ -8665,11 +8665,22 @@ impl Sema<'_, '_> {
         name: Symbol,
         loc: Loc,
     ) -> Option<(DeclId, DeclId)> {
+        self.act_on_nested_name_written(prefix.map(|q| (q, None)), name, loc)
+    }
+
+    /// [`Sema::act_on_nested_name_spelled`] after a prefix given with its
+    /// specifier as written, if known (for the diagnostics that print it).
+    pub(crate) fn act_on_nested_name_written(
+        &mut self,
+        prefix: Option<(DeclId, Option<kiln_ast::ids::NnsId>)>,
+        name: Symbol,
+        loc: Loc,
+    ) -> Option<(DeclId, DeclId)> {
         let found = match prefix {
-            Some(q) => self.lookup_qualified(q, name, LookupKind::Nested),
+            Some((q, _)) => self.lookup_qualified(q, name, LookupKind::Nested),
             None => self.lookup_name(name, LookupKind::Nested),
         };
-        self.nested_name_from_found(prefix, name, &found, loc)
+        self.nested_name_from_found_written(prefix, name, &found, loc)
     }
 
     /// [`Sema::act_on_nested_name_spelled`] once lookup of `name` (after
@@ -8681,6 +8692,19 @@ impl Sema<'_, '_> {
         found: &crate::lookup::Found,
         loc: Loc,
     ) -> Option<(DeclId, DeclId)> {
+        self.nested_name_from_found_written(prefix.map(|q| (q, None)), name, found, loc)
+    }
+
+    /// [`Sema::nested_name_from_found`] after a prefix given with its
+    /// specifier as written, if known.
+    fn nested_name_from_found_written(
+        &mut self,
+        written: Option<(DeclId, Option<kiln_ast::ids::NnsId>)>,
+        name: Symbol,
+        found: &crate::lookup::Found,
+        loc: Loc,
+    ) -> Option<(DeclId, DeclId)> {
+        let prefix = written.map(|w| w.0);
         let Some(&d) = found.decls.first() else {
             // [basic.lookup.qual]/1 ignores names that are not types,
             // templates or namespaces; one that ordinary lookup finds is
@@ -8730,10 +8754,23 @@ impl Sema<'_, '_> {
                 } else {
                     "alias template"
                 };
+                // Printed with the specifier as written (`'::N::Y'`; the
+                // prefix's qualified name when that is not known), with
+                // the "template is declared here" note ([temp.names]/1;
+                // clang's `diagnoseMissingTemplateArguments`).
+                let q = match written {
+                    Some((_, Some(n))) => self.nns_str(n),
+                    Some((q, None)) if self.kind_of(q) != DeclKind::TranslationUnit => {
+                        format!("{}::", self.qualified_decl_name(q))
+                    }
+                    _ => String::new(),
+                };
+                let note = self.diag(DiagId::note_template_decl_here, self.conflict_loc(d));
                 let msg = self
                     .diag(DiagId::sema_template_requires_args, loc)
                     .arg(what)
-                    .arg(format!("'{}'", sym_str(self, name)));
+                    .arg(format!("'{q}{}'", sym_str(self, name)))
+                    .with_note(note);
                 self.emit(msg);
                 None
             }
