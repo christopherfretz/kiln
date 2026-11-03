@@ -45,7 +45,10 @@ panic and never silently wrong IR.
   initializer it can fold; WP-415): `int g = __builtin_is_constant_evaluated()
   ? x : 7;` is the global `i32 7` with no dynamic initializer, and a
   re-folded initializer is never registered for constant destruction.
-  Aggregates are not re-folded (they keep their dynamic initializer).
+  A vector initializer is re-folded the same way (`tryEmitPrivate`
+  evaluates it as an rvalue: `i4 gv = cv;` with `const i4 cv = {..}` is
+  a static initializer; WP-453, §7u). Aggregates are not re-folded (they
+  keep their dynamic initializer).
   Uses of a const integral variable whose constant initialization failed
   fold to that same non-manifest value (spec/oven.md "Lax folds"), so
   `return cg;` emits `ret i32 9` and the unused internal `cg` is not
@@ -2912,6 +2915,34 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   bitcast (<P x i1> <...> to iP)`, as clang's.
 - Test: `tests/codegen/bool_vector_const.cpp` (exact on both triples
   under oracle 19, structural under 22).
+
+## 7u. Landed (WP-453): vector lane folds, int → `bool` vector conversion
+- A subscript of an ext vector whose base names a `const` non-volatile
+  vector variable (through parentheses and `NoOp` casts;
+  `fold::refers_to_const_var`) is a fold candidate: `Collect::expr`
+  pushes the base, and `emit_scalar_opt`'s vector `ArraySubscriptExpr`
+  arm uses its folded value, so the lane is an `extractelement` of the
+  constant (folded to the lane constant for a constant index, else
+  `extractelement <const>, %i` with the index's side effects kept) and
+  nothing is loaded. clang: `ScalarExprEmitter::VisitArraySubscriptExpr`
+  visits a vector base as a scalar, `VisitDeclRefExpr`'s
+  `tryEmitAsConstant` folds it. Int, float and `bool` lanes alike; a
+  `const` global whose every use folds is not emitted. A volatile or
+  non-const vector, a lane read through a pointer (`(*p)[2]`), a swizzle
+  (`k.y`, `EmitLoadOfLValue`) and an `extern` vector without an
+  initializer stay loads. As in clang, a write through a cast-away
+  `const` (`((i4&)k)[1] = 9`, undefined) does not stop the fold.
+- A vector variable's non-constant initializer is re-folded like a
+  scalar's (§2 `fold.rs`, `is_scalar`): `i4 gv = cv;`, `cv + 1`, a `const
+  f4`/`b4`/`l3` source give a static initializer with no
+  `__cxx_global_var_init` and no `@llvm.global_ctors`.
+- clang 20+'s implicit integer → `bool` ext vector conversion
+  (spec/sema.md §5.28) is a `CK_IntegralToBoolean`
+  cast of vector type, lowered by `convert_vector`: `icmp ne <N x iK> v,
+  zeroinitializer` giving `<N x i1>`, then stored on the packed layout
+  (§7s).
+- Tests: `tests/codegen/vector_const_fold.cpp` (both oracles),
+  `tests/codegen/vector_int_to_bool_22.cpp` (`min-oracle: 22`).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
