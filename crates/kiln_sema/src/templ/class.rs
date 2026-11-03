@@ -1053,9 +1053,11 @@ impl Sema<'_, '_> {
     fn instantiate_out_of_line_defaulted(&mut self, f: DeclId, pattern: DeclId, poi: Loc) {
         let Some(def) = self.ast.redecls_of(pattern).find(|&d| {
             self.ast.prev(d).is_some()
-                && self.ast.decls.function(d).is_some_and(|x| {
-                    x.spec.defaulted() == kiln_ast::decl::Defaulted::Explicit
-                })
+                && self
+                    .ast
+                    .decls
+                    .function(d)
+                    .is_some_and(|x| x.spec.defaulted() == kiln_ast::decl::Defaulted::Explicit)
         }) else {
             return;
         };
