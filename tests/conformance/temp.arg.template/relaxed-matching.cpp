@@ -23,7 +23,7 @@
 //@ diag: 78:1 note "too many template parameters in template template argument"
 //@ diag: 29:10 note "previous template template parameter is here"
 //@ requires: clang<22
-// clang 22 emits 30:22 note "template parameter has a different kind in template argument"; WP-355 residual
+// clang 19 spelling; relaxed-matching-clang22.cpp has clang 22's (WP-394).
 template<class... T> struct V {};
 template<long N> struct L {};
 template<template<class> class P> struct Q {};

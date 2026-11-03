@@ -17,7 +17,7 @@
 //@ diag: 30:54 error "no matching function for call to 'f7'"
 //@ diag: 29:25 note "candidate template ignored: could not match 'mp7' against 's7::pr'"
 //@ requires: clang<22
-// clang 22 emits error: no matching function for call to 'f'; WP-355 residual
+// clang 19 spelling; mismatch-template-names-clang22.cpp has clang 22's (WP-394).
 namespace s { template <class A, class B> struct pr { pr(A, B); }; }
 template <class K> struct mp {};
 template <class K> void f(mp<K>);

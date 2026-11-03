@@ -8,7 +8,7 @@
 //@ diag: 14:15 error "static assertion expression is not an integral constant expression"
 //@ diag: 14:21 note "comparison of addresses of literals has unspecified value"
 //@ requires: clang<22
-// clang 22 expected compile-fail, but compilation succeeded; WP-355 residual
+// clang 19 spelling; frozen-string-literals-clang22.cpp has clang 22's (WP-394).
 constexpr const char *p = "abc";
 constexpr const char *q = "abc";
 static_assert(p + 1 != q);

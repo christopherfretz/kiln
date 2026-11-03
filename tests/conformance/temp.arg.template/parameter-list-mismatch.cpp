@@ -16,7 +16,7 @@
 //@ diag: 22:14 note "template parameter has a different kind in template argument"
 //@ diag: 29:27 note "previous template template parameter is here"
 //@ requires: clang<22
-// clang 22 emits 19:1 note "too many template parameters in template template argument"; WP-355 residual
+// clang 19 spelling; parameter-list-mismatch-clang22.cpp has clang 22's (WP-394).
 template<class T> struct A {};
 template<class T, class U> struct B {};
 template<int N> struct C {};

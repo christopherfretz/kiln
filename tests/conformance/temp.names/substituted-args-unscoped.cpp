@@ -12,7 +12,7 @@
 //@ diag: 17:36 note "candidate constructor (the implicit copy constructor) not viable: no known conversion from 'int' to 'const Box<Q *, Q> &' for 1st argument"
 //@ diag: 17:36 note "candidate constructor (the implicit move constructor) not viable: no known conversion from 'int' to 'Box<Q *, Q> &&' for 1st argument"
 //@ requires: clang<22
-// clang 22 emits error: no viable conversion from 'int' to 'Box<N::Q, int>'; WP-355 residual
+// clang 19 spelling; substituted-args-unscoped-clang22.cpp has clang 22's (WP-394).
 namespace N { struct Q {}; }
 template <class T, class U> struct Box {};
 template <class T> void use() {

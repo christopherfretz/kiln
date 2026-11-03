@@ -84,6 +84,12 @@ pub enum FrameKind {
     /// Not an instantiation; the point is the template name of the
     /// placeholder that first needed them.
     BuildingDeductionGuides,
+    /// Matching a template template argument against its parameter
+    /// under clang 22's rules ([temp.arg.template]/3-4; clang
+    /// `PartialOrderingTTP`). Not an instantiation; the entity is the
+    /// template template parameter, the point the argument. Prints two
+    /// notes: the mismatch at the argument and the parameter.
+    PartialOrderingTtp,
 }
 
 impl FrameKind {
@@ -99,6 +105,7 @@ impl FrameKind {
                 | FrameKind::BindingInit
                 | FrameKind::PriorArgSubstitution
                 | FrameKind::BuildingDeductionGuides
+                | FrameKind::PartialOrderingTtp
         )
     }
 
@@ -133,6 +140,7 @@ impl FrameKind {
             FrameKind::ConstraintSubstitution => DiagId::note_constraint_substitution_here,
             FrameKind::BindingInit => DiagId::note_in_binding_decl_init,
             FrameKind::BuildingDeductionGuides => DiagId::note_building_deduction_guide_here,
+            FrameKind::PartialOrderingTtp => DiagId::note_template_arg_template_params_mismatch,
         }
     }
 
@@ -162,6 +170,7 @@ impl FrameKind {
             FrameKind::ConstraintSubstitution => "constraint-subst",
             FrameKind::BindingInit => "binding-init",
             FrameKind::BuildingDeductionGuides => "deduction-guides",
+            FrameKind::PartialOrderingTtp => "ttp-matching",
         }
     }
 }
@@ -308,6 +317,7 @@ impl InstantiationStack {
         limit: u32,
         name: &dyn Fn(&InstFrame) -> Option<String>,
         note: &dyn Fn(&InstFrame) -> DiagId,
+        extra: &dyn Fn(&InstFrame) -> Option<Diag>,
     ) -> Vec<Diag> {
         let n = self.frames.len() as u32;
         if n == 0 || self.last_emitted.get() == n {
@@ -346,6 +356,7 @@ impl InstantiationStack {
                 d = d.arg(name(f).unwrap_or_default());
             }
             out.push(d);
+            out.extend(extra(f));
         }
         out
     }
@@ -473,7 +484,21 @@ impl Sema<'_, '_> {
             self.inst.limits.backtrace,
             &|f| Some(self.frame_name(f)),
             &|f| self.frame_note(f),
+            &|f| self.frame_extra_note(f),
         )
+    }
+
+    /// The second note of a frame that prints two: a template template
+    /// argument's matching names the parameter (clang
+    /// `note_template_prev_declaration`).
+    fn frame_extra_note(&self, f: &InstFrame) -> Option<Diag> {
+        (f.kind == FrameKind::PartialOrderingTtp).then(|| {
+            Diag::new(
+                DiagId::note_template_prev_declaration,
+                kiln_source::Span::empty(self.ast.decls.get(f.entity).loc()),
+            )
+            .arg(1u8)
+        })
     }
 
     /// The note a frame prints: its kind's, except that a variable
@@ -682,13 +707,16 @@ mod tests {
     fn notes_print_once_per_depth() {
         let mut s = InstantiationStack::default();
         s.push(frame(FrameKind::ClassInstantiation, 1));
-        assert_eq!(s.context_notes(10, &|_| Some("A<int>".into()), &|f| f.kind.note()).len(), 1);
-        assert!(s.context_notes(10, &|_| None, &|f| f.kind.note()).is_empty());
+        assert_eq!(
+            s.context_notes(10, &|_| Some("A<int>".into()), &|f| f.kind.note(), &|_| None).len(),
+            1
+        );
+        assert!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| None).is_empty());
         s.push(frame(FrameKind::MemberFunction, 2));
-        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note()).len(), 2);
+        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| None).len(), 2);
         let _ = s.pop();
         // Popped below the printed depth: prints again.
-        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note()).len(), 1);
+        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| None).len(), 1);
     }
 
     #[test]
@@ -698,9 +726,9 @@ mod tests {
             s.push(frame(FrameKind::ClassInstantiation, i + 1));
         }
         // 5 + skip note + 5.
-        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note()).len(), 11);
+        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| None).len(), 11);
         s.last_emitted.set(0);
-        assert_eq!(s.context_notes(0, &|_| None, &|f| f.kind.note()).len(), 15);
+        assert_eq!(s.context_notes(0, &|_| None, &|f| f.kind.note(), &|_| None).len(), 15);
     }
 
     #[test]

@@ -184,8 +184,10 @@ impl Keywords {
     /// Interns every keyword spelling in `interner`.
     /// The table for a translation unit; `gnu` (`-std=gnu++NN`) adds the
     /// GNU keywords that are not reserved identifiers (`typeof`, as clang
-    /// in C++; spec/sema.md §5.8).
-    pub fn new(interner: &Interner, gnu: bool) -> Self {
+    /// in C++; spec/sema.md §5.8). At `compat` 22 `__is_referenceable` is
+    /// an ordinary identifier (clang 22 removed the trait; spec/sema.md
+    /// §1.1).
+    pub fn new(interner: &Interner, gnu: bool, compat: u32) -> Self {
         let mut map = HashMap::new();
         for (k, spellings) in Kw::TABLE {
             for s in *spellings {
@@ -197,6 +199,9 @@ impl Keywords {
         }
         let mut builtins = HashMap::new();
         for &t in TypeTrait::all() {
+            if compat >= 22 && t == TypeTrait::IsReferenceable {
+                continue;
+            }
             builtins.insert(interner.intern(t.spelling()), BuiltinKw::Trait(t));
         }
         for v in 0..=u8::MAX {

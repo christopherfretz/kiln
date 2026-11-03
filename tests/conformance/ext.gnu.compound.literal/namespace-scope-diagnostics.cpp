@@ -17,7 +17,7 @@
 //@ diag: 31:29 error "initializer element is not a compile-time constant"
 //@ diag: 32:11 note "in instantiation of variable template specialization 'vt<int>' requested here"
 //@ requires: clang<22
-// clang 22 emits error: initializer element is not a compile-time constant; WP-355 residual
+// WP-355 residual: clang 22 points 'initializer element is not a compile-time constant' at the non-constant element (not the brace) and also reports it in variable-template instantiations.
 struct P { int a, b; };
 int g();
 int x = (int){5};

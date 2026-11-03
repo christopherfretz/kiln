@@ -13,7 +13,7 @@
 //@ diag: 21:27 note "candidate constructor (the implicit move constructor) not viable: no known conversion from 'int' to 'W<plain> &&' for 1st argument"
 //@ diag: 24:14 note "passing argument to parameter here"
 //@ requires: clang<22
-// clang 22 emits note: ... to 'W<s::pl>' (aka 'W<plain>'); error: ... to 'W<s::plain>'; WP-355 residual
+// clang 19 spelling; explicit-arg-sugar-nondependent-param-clang22.cpp has clang 22's (WP-394).
 namespace s {
 struct plain {};
 using pl = plain;

@@ -383,8 +383,8 @@ impl ClangFeatures { pub fn with_compat(self, ClangCompat) -> ClangFeatures; pub
 pub struct PredefConfig { pub clang_compat: ClangCompat, .. }
 ```
 
-The driver option `-fclang-compat=<major>` (spec/driver.md; `19` by
-default, `22`, anything else an error) selects whose answers kiln
+The driver option `-fclang-compat=<major>` (spec/driver.md; `19`, or
+`22`, kiln++'s default since WP-394; anything else an error) selects whose answers kiln
 reproduces: the predefined macros (`build_predefines`) and every
 `FeatureQueries` table (`__has_builtin`, `__has_constexpr_builtin`,
 `__has_feature`, `__has_extension`, `__has_attribute`,

@@ -420,10 +420,12 @@ impl Sema<'_, '_> {
     /// names print (`vector<_Tp, _Alloc>` from `<__fwd/vector.h>`, and
     /// `map<type-parameter-0-0, ...>` from an unnamed `template <class,
     /// class, class, class> class map;`); see
-    /// [`Sema::injected_params_template`].
+    /// [`Sema::first_injected_params_template`] (clang 22 too).
     fn guide_injected_type(&mut self, owner: DeclId) -> Option<QualType> {
-        let own =
-            self.pattern_of(owner).and_then(|p| self.injected_params_template(p)).unwrap_or(owner);
+        let own = self
+            .pattern_of(owner)
+            .and_then(|p| self.first_injected_params_template(p))
+            .unwrap_or(owner);
         self.injected_type_of(own)
     }
 

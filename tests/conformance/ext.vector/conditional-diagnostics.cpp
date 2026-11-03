@@ -27,7 +27,7 @@
 //@ diag: 67:64 error "vector condition type '__attribute__((__vector_size__(4 * sizeof(int)))) int' (vector of 4 'int' values) and result type '__attribute__((__vector_size__(4 * sizeof(double)))) double' (vector of 4 'double' values) do not have elements of the same size"
 //@ diag: 68:13 note "in instantiation of function template specialization 'sel<__attribute__((__vector_size__(4 * sizeof(int)))) int, double>' requested here"
 //@ requires: clang<22
-// clang 22 no longer emits 57:12 error "vector condition type 'v4b' (vector of 4 'bool' values) and...; WP-355 residual
+// clang 19 spelling; conditional-diagnostics-clang22.cpp has clang 22's (WP-394).
 typedef int g4i __attribute__((vector_size(16)));
 typedef unsigned g4u __attribute__((vector_size(16)));
 typedef float g4f __attribute__((vector_size(16)));

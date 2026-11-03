@@ -18,7 +18,7 @@
 //@ diag: 34:13 error "no member named 'gone' in 'S'"
 //@ diag: 34:19 error "expected ';' after return statement"
 //@ requires: clang<22
-// clang 22 no longer emits error: expected ';' after expression; WP-355 residual
+// WP-399 (typo correction): clang 22 has no delayed typo correction, so its parser recovery after the unknown member differs.
 struct S { int m; };
 namespace N { int f(); }
 void g(S s) {

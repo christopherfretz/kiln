@@ -431,10 +431,18 @@ impl Sema<'_, '_> {
             // Any constant value of the member's type will do: not
             // `eval_int`, whose `i128` cannot hold every `unsigned
             // __int128` (`~(unsigned __int128)0`, WP-275).
-            if self.eval_const(e, ctx).is_err() {
-                // clang reports at the initializer's `getExprLoc`.
-                let at = self.culprit_loc(e);
-                self.error(DiagId::sema_static_member_init_not_ice, at);
+            if let Err(f) = self.eval_const(e, ctx) {
+                if self.clang_compat >= 22 {
+                    // clang 22 reports at the member, with the
+                    // evaluation's notes.
+                    let d = self.diag(DiagId::sema_static_member_init_not_ice, vn.loc());
+                    let d = Self::with_failure_notes(d, f);
+                    self.emit(d);
+                } else {
+                    // clang 19 reports at the initializer's `getExprLoc`.
+                    let at = self.culprit_loc(e);
+                    self.error(DiagId::sema_static_member_init_not_ice, at);
+                }
                 self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
             }
         } else if self.is_literal_type(ty) {

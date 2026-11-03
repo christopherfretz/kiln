@@ -1,7 +1,7 @@
 //@ expect: ast
 //@ oracle: clang
 //@ requires: clang>=22
-//@ xfail(kiln): clang 22 orders the guide-deduced specializations differently (WP-355 residual)
+//@ xfail(kiln): WP-355 residual: clang 21+ skips deducing template candidates when a non-template candidate is a perfect match, so it creates no S<int>/P<double,double>/I<bool>; kiln deduces every candidate (needs two-phase overload resolution)
 // [temp.deduct.guide]: user-declared deduction guides dump as clang's
 // CXXDeductionGuideDecl (a template one under its FunctionTemplateDecl);
 // implicit guides are not printed.

@@ -245,7 +245,17 @@ the evaluator's flattened type table.
   render notes or warnings (`silent`).
 - An out-of-range conversion to an unscoped enumeration without a fixed
   underlying type ([expr.static.cast]/10) is accepted with the value, and
-  reported only where clang 19 reports it ("Integration").
+  reported only where clang 19 reports it ("Integration"). At
+  `-fclang-compat=22` it is a fault in every non-silent evaluation
+  (`Fault::EnumRange`, clang 22's CCEDiag): "integer value V is outside
+  the valid range of values [MIN, MAX] for the enumeration type 'E'", so
+  the expression is not a constant expression (WP-394;
+  `expr.const/5.8/enum-range-clang22.cpp`).
+- A local variable of non-literal type in a constexpr function
+  ([dcl.constexpr]/3 before P2448R2) is a fault at level 19 in every mode;
+  at level 22 in C++23 and later the check is skipped, as clang 22
+  (P2448R2), and evaluation fails later on the non-constexpr constructor
+  or destructor call instead (WP-394; `expr.const/non-literal-local-clang22.cpp`).
 
 ### Evaluation entry points — normative for M2
 - `Oven::evaluate(bridge, e, EvalContext) -> Result<ConstValueId,

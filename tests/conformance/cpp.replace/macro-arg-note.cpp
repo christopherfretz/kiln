@@ -24,7 +24,7 @@
 //@ diag: 41:7 error "invalid operands to binary expression ('S' and 'int')"
 //@ diag: 28:14 note "expanded from macro 'M'"
 //@ requires: clang<22
-// clang 22 emits error: no matching function for call to 'g'; WP-355 residual
+// clang 19 spelling; macro-arg-note-clang22.cpp has clang 22's (WP-394).
 #define M(x) x
 #define P(x) M(x)
 #define SA(c) static_assert(c, "m")
