@@ -11,6 +11,7 @@ use kiln_ast::attr::AttrSyntax;
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::decl::AttrArg;
+use kiln_sema::Declarator;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
@@ -43,6 +44,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "init_priority"
             | "nonnull"
             | "format"
+            | "enable_if"
     )
 }
 
@@ -265,10 +267,25 @@ impl Parser<'_, '_> {
     /// (clang `ParseCXXMemberDeclaratorBeforeInitializer`): GNU
     /// attributes appertain to the member; a C++11 specifier-seq before
     /// or after them is reported and dropped.
-    pub(crate) fn parse_member_tail_attrs(&mut self, out: &mut Vec<AttrId>) {
+    pub(crate) fn parse_member_tail_attrs(&mut self, d: &mut Declarator) {
         self.diagnose_and_skip_cxx11_attrs();
-        self.parse_gnu_attr_seq(out);
+        self.parse_declarator_gnu_attr_seq(d);
         self.diagnose_and_skip_cxx11_attrs();
+    }
+
+    /// [`Parser::parse_gnu_attr_seq`] after declarator `d`, into its
+    /// attributes: the arguments of an `enable_if` after a function
+    /// declarator see its parameters (clang `ParseGNUAttributeArgs`
+    /// re-enters the prototype scope, `ActOnReentrantPrototypeParam`).
+    pub(crate) fn parse_declarator_gnu_attr_seq(&mut self, d: &mut Declarator) {
+        if !self.at_kw(Kw::Attribute) {
+            return;
+        }
+        let mut attrs = std::mem::take(&mut d.attrs);
+        while self.at_kw(Kw::Attribute) {
+            self.parse_gnu_attributes_in(&mut attrs, Some(d));
+        }
+        d.attrs = attrs;
     }
 
     /// A run of GNU `__attribute__((...))` specifiers into `out` (clang
@@ -436,6 +453,11 @@ impl Parser<'_, '_> {
 
     /// `__attribute__(( gnu-attribute-list ))`.
     pub(crate) fn parse_gnu_attributes(&mut self, out: &mut Vec<AttrId>) {
+        self.parse_gnu_attributes_in(out, None);
+    }
+
+    /// [`Parser::parse_gnu_attributes`] after declarator `decl`, if any.
+    fn parse_gnu_attributes_in(&mut self, out: &mut Vec<AttrId>, decl: Option<&Declarator>) {
         self.bump();
         let Some(l1) = self.expect(Punct::LParen) else { return };
         let Some(l2) = self.expect(Punct::LParen) else {
@@ -455,7 +477,16 @@ impl Parser<'_, '_> {
                 break;
             };
             let loc = self.bump().span.lo;
-            if let Some(args) = self.parse_attr_args(name)
+            let args = match decl {
+                Some(d) if d.is_function_declarator() && self.is_enable_if(name) => {
+                    let scope = self.s.act_on_start_trailing_requires(d);
+                    let args = self.parse_attr_args(name);
+                    self.s.act_on_end_trailing_requires(scope);
+                    args
+                }
+                _ => self.parse_attr_args(name),
+            };
+            if let Some(args) = args
                 && let Some(a) = self.s.act_on_attribute(AttrSyntax::Gnu, None, name, &args, loc)
             {
                 out.push(a);
@@ -467,6 +498,12 @@ impl Parser<'_, '_> {
         self.expect_closing(Punct::RParen, Punct::LParen, l2);
         self.expect_closing(Punct::RParen, Punct::LParen, l1);
         self.gnu_attr_end = self.prev_lo();
+    }
+
+    /// Whether attribute name `name` is `enable_if` (or `__enable_if__`).
+    fn is_enable_if(&self, name: Symbol) -> bool {
+        let n = self.s.ast.symbols().as_str(name);
+        n.trim_start_matches("__").trim_end_matches("__") == "enable_if"
     }
 
     /// The arguments of attribute `name`, if any: `Some(args)`, or `None`

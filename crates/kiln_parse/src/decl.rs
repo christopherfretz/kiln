@@ -3704,7 +3704,7 @@ impl Parser<'_, '_> {
         self.repeat_declspec_errors(restrict_error, first);
         self.gnu_attr_end = Loc::INVALID;
         if first && d.is_function_declarator() {
-            self.parse_gnu_attr_seq(&mut d.attrs);
+            self.parse_declarator_gnu_attr_seq(d);
         }
         let label = self.parse_asm_label()?;
         if label.is_some() {
@@ -3712,7 +3712,7 @@ impl Parser<'_, '_> {
             self.gnu_attr_end = Loc::INVALID;
         }
         d.asm_label = label;
-        self.parse_gnu_attr_seq(&mut d.attrs);
+        self.parse_declarator_gnu_attr_seq(d);
         if self.gnu_attr_end != Loc::INVALID {
             d.end = self.gnu_attr_end;
         }

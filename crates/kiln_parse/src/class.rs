@@ -1164,7 +1164,7 @@ impl Parser<'_, '_> {
             // right after it; one after the GNU attributes is reported.
             self.parse_cxx11_attr_seq(&mut d.attrs);
         }
-        self.parse_member_tail_attrs(&mut d.attrs);
+        self.parse_member_tail_attrs(d);
         // GNU attributes (closed by `))`) extend the declarator's range;
         // C++11 ones (`]]`) do not (clang `MaybeParseGNUAttributes(D)`).
         if self.gnu_attr_end != Loc::INVALID {
