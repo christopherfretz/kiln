@@ -1219,7 +1219,12 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   designated objects, and constructing an object that holds no data
   (`Types::holds_no_data`) by placement touches no byte (the member
   sharing its address keeps its value)
-  (`expr.new/p2747-placement-voidified-through-memory*.cpp`).
+  (`expr.new/p2747-placement-voidified-through-memory*.cpp`). The
+  exception is an empty object that is the outermost object at its
+  address, a complete object or an array element (libc++'s
+  `vector<bitset<0>>`): it owns its byte, so its placement begins that
+  byte's lifetime and its destruction checks and ends it (WP-413,
+  `basic.life/constexpr-empty-allocator-storage.cpp`).
 - *Casts from `void *`* (C++26, P2738R1, [expr.static.cast]/14): `VoidCast
   [dst, p, T]` aux 0 (a `static_cast` from `cv void *` to `cv T *`
   outside `std::allocator<T>::allocate`) succeeds for null and when the

@@ -2552,8 +2552,16 @@ impl Oven {
         }
         // An object holding no data (an empty class) may share its bytes
         // with another subobject (an empty base, `[[no_unique_address]]`):
-        // its construction touches none of them.
-        let size = if self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
+        // its construction touches none of them. A complete object or
+        // array element (`std::allocator` storage) owns its byte, whose
+        // lifetime its destruction checks.
+        let owns = self.outermost_at(a.ty, off).is_some_and(|mut t| {
+            while let TyKind::Array { elem, .. } = self.types.kind(t) {
+                t = elem;
+            }
+            t == ty
+        });
+        let size = if self.types.holds_no_data(ty) && !owns { 0 } else { self.types.size(ty) };
         if a.flags & flags::HAS_UNION != 0 {
             self.place_in_unions(raw, a.ty, ty)?;
         }
