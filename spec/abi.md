@@ -1299,6 +1299,56 @@ deviations now match.
   `linkonce_odr` in a comdat. `tests/mangle/unnamed_types.cpp`,
   `tests/codegen/tbaa_unnamed_o1.cpp`.
 
+### 8.25 Landed (WP-458): x86-64 `i128` call lowering at `-fclang-compat=22`
+clang 20+ (`X86_64ABIInfo`, LLVM 20 "Pass `__int128` as `i128`") passes
+and returns a value whose two eightbytes are INTEGER as `i128` when
+`GetINTEGERTypeAtOffset` finds an `i128` at offset 0 of its IR type
+(descending through struct and array elements; `integer_at` in
+`kiln_abi/src/call.rs`): `__int128`, `unsigned __int128`,
+`_BitInt(128)`, an enum with such an underlying type, and a class or
+union whose memory type starts with one (`struct { __int128 v; }`,
+`struct { _BitInt(65) v; }`, a one-element array, a bit-field of
+`__int128`, a union with an `__int128` member). It takes both integer
+registers, as `{ i64, i64 }` did, but a stack-passed or `byval` copy
+now has `i128`'s 16-byte alignment (data layout `i128:128`), so a kiln
+TU calling a clang 20+ function with an `__int128` spilled to the
+stack reads the same slot. A bare `_BitInt(65..127)` (IR type `iN`,
+not `i128`), two `long`s and `_Complex long` stay `{ i64, i64 }`. An
+argument that finds no two free registers is passed in memory as
+before (clang 19 already passes a scalar `__int128` there as `i128`).
+`va_arg` classifies through the same `x86_arg`; its IR is unchanged
+(the register-save-area read does not depend on the coerced type).
+Below 20 (`-fclang-compat=19`) the clang 19 lowering (`{ i64, i64 }`,
+two `i64` arguments) is kept. AArch64 already passes `i128`. Tests:
+`tests/codegen/int128_abi.cpp` (both triples, oracle 19 and 22),
+`tests/conformance/expr.call/ir-clang22-int128-x86-64.cpp` (exact
+against clang 22); the oracle-22 x86-64 `Abi` deviations of
+`int128`, `int128_ops`, `abi_decls`, `bit_int_arith`,
+`atomic_lv_libcall`, `atomic_wide`, `builtins_bits`, `va_arg` and
+`new_placement_nothrow` now match, and `atomic_builtins` /
+`builtins_overflow` differ only in instructions (`Structure`, as on
+AArch64).
+### 8.26 Landed (WP-460): `[[clang::trivial_abi]]` and trivial-for-call
+- *Trivial for calls* (clang `hasTrivial*ForCall`): the class bits
+  `TRIVIAL_ABI` (attribute in effect) and `COPY_CTOR_FOR_CALL`,
+  `MOVE_CTOR_FOR_CALL`, `DTOR_FOR_CALL` (a declared member that is
+  trivial for calls only because every subobject's is) are set by sema
+  at the class's `}` (spec/sema.md "The `trivial_abi` attribute").
+  `can_pass_in_registers` (§8.13) reads "trivial" as trivial-for-call:
+  a member is trivial, or the class has `TRIVIAL_ABI`, or the member is
+  not user-provided and its kind's `*_FOR_CALL` bit is set. The "all
+  copy/move constructors deleted → indirect" rule is unchanged. Layout,
+  mangling and the coerced register types are those of any class of the
+  same layout passed in registers.
+- *Destroyed in callee* (`is_destroyed_in_callee`, clang
+  `isParamDestroyedInCallee` under Itanium): a class passed in
+  registers whose destructor is not trivial. Codegen: spec/codegen.md
+  §7ac.
+- Tests: `tests/codegen/trivial_abi_subobjects.cpp` (signatures of
+  dropped/propagated cases, both oracles, both targets),
+  `tests/conformance/dcl.attr/trivial-abi-attribute.cpp`
+  (`__can_pass_in_regs`).
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

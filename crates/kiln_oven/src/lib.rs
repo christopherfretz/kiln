@@ -34,6 +34,7 @@
 
 pub mod apfloat;
 mod arith;
+mod bigint;
 mod compile;
 mod complex;
 mod failure;
@@ -398,13 +399,17 @@ enum Job {
     Expr(ExprId),
     /// The characters of a `static_assert` message ([`Oven::evaluate_chars`]).
     Chars { size: ExprId, data: ExprId },
+    /// A condition with arguments substituted for parameters
+    /// ([`Oven::evaluate_with_params`]; the bindings in `subst_binds`):
+    /// `at` locates it.
+    Subst { cond: Option<ExprId>, at: ExprId },
 }
 
 impl Job {
     /// The expression located in a depth-limit failure.
     fn expr(self) -> ExprId {
         match self {
-            Job::Expr(e) | Job::Chars { size: e, .. } => e,
+            Job::Expr(e) | Job::Chars { size: e, .. } | Job::Subst { at: e, .. } => e,
         }
     }
 }
@@ -435,6 +440,13 @@ pub struct Oven {
     /// The base-object variants of constructors and destructors of
     /// classes with virtual bases ([`Oven::func_index_base`]).
     pub(crate) base_funcs: FxHashMap<DeclId, u32>,
+    /// The construction progress of each compiled constructor (by
+    /// function index) that initializes subobjects: `(pc, i)` pairs in
+    /// code order, from `pc` on entries `..i` of the class's
+    /// `fields` have begun their lifetime, entry `i` is being
+    /// initialized (`u32::MAX`: all have begun). Read only by
+    /// `__builtin_is_within_lifetime` (spec/oven.md "Builtins").
+    pub(crate) ctor_steps: FxHashMap<u32, Box<[(u32, u32)]>>,
     pub(crate) thunks: FxHashMap<ExprId, u32>,
     /// Thunks compiled inside a default argument use (the key's second
     /// half, [`Oven::fold_immediate_in`]): their source-location builtins
@@ -470,6 +482,8 @@ pub struct Oven {
     pub(crate) let_pending: Vec<(DeclId, u64)>,
     /// The characters [`Oven::evaluate_chars`] read (`bi::MSG_CHARS`).
     pub(crate) msg_chars: Vec<u8>,
+    /// The parameter bindings of a [`Job::Subst`].
+    pub(crate) subst_binds: Vec<(DeclId, ExprId)>,
     pub(crate) mem: Memory,
     pub(crate) regs: Vec<u128>,
     pub(crate) stack: Vec<Frame>,
@@ -519,6 +533,7 @@ impl Oven {
             funcs: Vec::new(),
             func_map: FxHashMap::default(),
             base_funcs: FxHashMap::default(),
+            ctor_steps: FxHashMap::default(),
             thunks: FxHashMap::default(),
             thunks_at: FxHashMap::default(),
             srcloc_root: None,
@@ -533,6 +548,7 @@ impl Oven {
             unknowns: FxHashMap::default(),
             let_pending: Vec::new(),
             msg_chars: Vec::new(),
+            subst_binds: Vec::new(),
             mem: Memory::new(budget.bytes),
             regs: vec![0; 256],
             stack: Vec::with_capacity(64),
@@ -671,6 +687,29 @@ impl Oven {
         });
         let chars = std::mem::take(&mut self.msg_chars);
         (chars, r.map(|_| ()))
+    }
+
+    /// Evaluates `cond` (`None`: `true`) as a constant expression with
+    /// each parameter `p` of `binds` initialized from its argument `a`
+    /// first, in one scope whose objects are destroyed after the
+    /// condition (clang `Expr::EvaluateWithSubstitution`, for the
+    /// condition of an `enable_if` attribute; spec/oven.md "Evaluation entry
+    /// points"). A
+    /// parameter not in `binds` has no value: reading it is not a
+    /// constant expression. Silent, manifestly constant-evaluated, not
+    /// recorded in the statistics; `at` locates the evaluation.
+    pub fn evaluate_with_params(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        cond: Option<ExprId>,
+        binds: &[(DeclId, ExprId)],
+        at: ExprId,
+    ) -> Option<ConstValueId> {
+        let saved = std::mem::replace(&mut self.subst_binds, binds.to_vec());
+        let job = Job::Subst { cond, at };
+        let r = self.eval_job(bridge, job, None, true, false, true).0.ok();
+        self.subst_binds = saved;
+        r
     }
 
     /// Folds `e` if it is a constant expression; never reports anything
@@ -817,6 +856,8 @@ impl Oven {
             + cap(&self.funcs)
             + map(&self.func_map)
             + map(&self.base_funcs)
+            + map(&self.ctor_steps)
+            + self.ctor_steps.values().map(|s| size_of_val(&**s)).sum::<usize>()
             + map(&self.thunks)
             + map(&self.thunks_at)
             + cap(&self.globals)
@@ -913,6 +954,7 @@ impl Oven {
         match job {
             Job::Expr(e) => self.eval_inner(b, e, object, fb),
             Job::Chars { size, data } => self.eval_chars(b, size, data, fb),
+            Job::Subst { cond, at } => self.eval_subst(b, cond, at, fb),
         }
     }
 

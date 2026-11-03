@@ -3078,7 +3078,7 @@ impl Sema<'_, '_> {
         if !alias
             && ds.loc.is_valid()
             && ds.loc != d.name_loc()
-            && self.is_dependent_type(underlying)
+            && self.is_instantiation_dependent_type(underlying)
         {
             let _ = self.ast.decls.cold.begin_loc.insert(td, ds.loc);
             self.note_type_spec_loc(td, ds, d.name_loc());
@@ -3128,7 +3128,7 @@ impl Sema<'_, '_> {
     /// of dependent type `ty` declared by `d`.
     pub(crate) fn note_ref_loc(&mut self, id: DeclId, d: &Declarator, ty: QualType) {
         let (l, c) = (Self::outer_ref_loc(d), Self::inner_chunk_loc(d));
-        if (l.is_valid() || c.is_valid()) && self.is_dependent_type(ty) {
+        if (l.is_valid() || c.is_valid()) && self.is_instantiation_dependent_type(ty) {
             if l.is_valid() {
                 self.ref_locs.insert(id, l);
             }
@@ -3189,11 +3189,11 @@ impl Sema<'_, '_> {
             self.declarator_type_invalid = false;
             self.ast.decls.set_flags(td, DeclFlags::INVALID);
         }
-        if type_loc.is_valid() && self.is_dependent_type(ty) {
+        if type_loc.is_valid() && self.is_instantiation_dependent_type(ty) {
             self.type_spec_locs.insert(td, type_loc);
         }
         let chunk = std::mem::replace(&mut self.pending_chunk_loc, Loc::INVALID);
-        if chunk.is_valid() && self.is_dependent_type(ty) {
+        if chunk.is_valid() && self.is_instantiation_dependent_type(ty) {
             self.inner_chunk_locs.insert(td, chunk);
         }
         // [class.access.spec]/1: a member alias-declaration has the
@@ -3373,6 +3373,7 @@ impl Sema<'_, '_> {
             is_static: spec.storage() == FnStorage::Static,
             head: self.templ.cur,
             requires: d.trailing_requires,
+            enable_if: self.enable_if_list(&d.attrs),
         };
         let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
@@ -3892,7 +3893,7 @@ impl Sema<'_, '_> {
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
         if let Some(Chunk::Function { trailing: Some((t, arrow)), .. }) = d.chunks.first()
-            && self.is_dependent_type(*t)
+            && self.is_instantiation_dependent_type(*t)
         {
             let _ = self.templ.trailing_arrow.insert(f, *arrow);
         }
@@ -3914,7 +3915,11 @@ impl Sema<'_, '_> {
         // The return type's innermost `*`/`[` ([`Sema::inner_chunk_locs`]).
         let chunk = Self::inner_chunk_loc(d);
         if chunk.is_valid()
-            && self.ast.types.proto(ty).is_some_and(|p| self.is_dependent_type(p.ret()))
+            && self
+                .ast
+                .types
+                .proto(ty)
+                .is_some_and(|p| self.is_instantiation_dependent_type(p.ret()))
         {
             self.inner_chunk_locs.insert(f, chunk);
         }
@@ -4146,7 +4151,10 @@ impl Sema<'_, '_> {
             }
             if p.range.0.is_valid() && p.range.0 != p.loc {
                 let _ = self.ast.decls.cold.begin_loc.insert(pd, p.range.0);
-                if p.type_loc.is_valid() && p.type_loc != p.loc && self.is_dependent_type(p.ty) {
+                if p.type_loc.is_valid()
+                    && p.type_loc != p.loc
+                    && self.is_instantiation_dependent_type(p.ty)
+                {
                     self.type_spec_locs.insert(pd, p.type_loc);
                 }
             }
@@ -4159,10 +4167,10 @@ impl Sema<'_, '_> {
             {
                 self.type_spec_locs.insert(pd, p.type_loc);
             }
-            if p.ref_loc.is_valid() && self.is_dependent_type(p.ty) {
+            if p.ref_loc.is_valid() && self.is_instantiation_dependent_type(p.ty) {
                 self.ref_locs.insert(pd, p.ref_loc);
             }
-            if p.chunk_loc.is_valid() && self.is_dependent_type(p.ty) {
+            if p.chunk_loc.is_valid() && self.is_instantiation_dependent_type(p.ty) {
                 self.inner_chunk_locs.insert(pd, p.chunk_loc);
             }
             if p.invalid {
@@ -4457,7 +4465,7 @@ impl Sema<'_, '_> {
         if ds.loc.is_valid() && ds.loc != d.name_loc() {
             let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
         }
-        if self.is_dependent_type(ty) {
+        if self.is_instantiation_dependent_type(ty) {
             self.note_type_spec_loc(f, ds, d.name_loc());
             self.note_ref_loc(f, d, ty);
         }
@@ -4904,7 +4912,9 @@ impl Sema<'_, '_> {
         ext: bool,
         prev_def: bool,
     ) -> bool {
-        if !ext && prev_def {
+        // The same entity defined in another unit's global module
+        // fragment: merged, not redefined (spec/modules.md §6).
+        if !ext && prev_def && !self.module_merge_hidden_definition(p) {
             let msg = self.diag(DiagId::sema_redefinition, at).arg(n);
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
@@ -5024,7 +5034,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
-        if ds.loc.is_valid() && ds.loc != d.name_loc() && self.is_dependent_type(ty) {
+        if ds.loc.is_valid() && ds.loc != d.name_loc() && self.is_instantiation_dependent_type(ty) {
             let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
             self.note_type_spec_loc(v, ds, d.name_loc());
         }
@@ -6128,6 +6138,9 @@ impl Sema<'_, '_> {
             && prev != f
             && !self.is_dependent_friend_fn(f)
             && !self.is_dependent_friend_fn(prev)
+            // The same function defined in another unit's global module
+            // fragment: merged, its body kept (spec/modules.md §6).
+            && (deleted.is_some() || !self.module_merge_hidden_definition(prev))
         {
             let msg = self
                 .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
@@ -6189,6 +6202,7 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(pty));
                 self.emit(self.incomplete_note(msg, pty));
             }
+            self.mark_callee_destroyed_param(p, pty);
         }
         self.check_abstract_signature(f);
         self.begin_function_body(f, ret);
@@ -6717,7 +6731,15 @@ impl Sema<'_, '_> {
                     if self.ast.definition(p).is_some() {
                         // Diagnosed as the specialization already
                         // (`respecialized`): no further redefinition error.
-                        if !respecialized {
+                        if self
+                            .ast
+                            .definition(p)
+                            .is_some_and(|d| self.module_merge_hidden_definition(d))
+                        {
+                            // Silent (spec/modules.md §6): the body is
+                            // skipped like a redefinition's.
+                            redefined = true;
+                        } else if !respecialized {
                             redefined = self.diag_tag_redefinition(p, n, nloc);
                         }
                         prev = None;
@@ -6744,6 +6766,7 @@ impl Sema<'_, '_> {
                     // class redeclaration `struct N; struct N;` (clang
                     // `ActOnTag`): both join `p`'s chain (below).
                     if inst || head.is_none() && is_enum {
+                        self.module_merge_hidden_redecl(p);
                         return p;
                     }
                 }
@@ -7280,6 +7303,7 @@ impl Sema<'_, '_> {
         self.select_destructor(r);
         let bits = self.special_member_bits(r, bits);
         let bits = self.finish_special_members(r, bits);
+        let bits = self.trivial_abi_bits(r, bits);
         // [class.compare.default]/4: the implicit `operator==`s.
         let mut friends =
             build.as_mut().map(|b| std::mem::take(&mut b.friends)).unwrap_or_default();
@@ -9009,6 +9033,12 @@ impl Sema<'_, '_> {
             DeclKind::CXXRecord if self.current_instantiation_desc(q).is_some() => {
                 format!("'{}'", self.current_instantiation_desc(q).unwrap_or_default())
             }
+            // An explicit specialization prints its arguments as written.
+            DeclKind::CXXRecord
+                if let Some(s) = crate::names::SemaNames::new(self).explicit_spec_context(q) =>
+            {
+                format!("'{s}'")
+            }
             // clang prints the context's qualified name (the canonical
             // type: `'N::B'`, not `'B' (aka 'N::B')`).
             _ => {
@@ -9074,6 +9104,7 @@ impl Sema<'_, '_> {
                         | "coro_only_destroy_when_complete"
                         | "optnone"
                         | "minsize"
+                        | "trivial_abi"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
@@ -9101,6 +9132,9 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::ABI_TAG {
             return self.abi_tag_attribute(syntax, &n, args, loc);
+        }
+        if kind == AttrKind::ENABLE_IF {
+            return self.enable_if_attribute(syntax, args, loc);
         }
         if kind == AttrKind::ENUM_EXTENSIBILITY {
             return self.enum_extensibility_attribute(syntax, args, loc);
@@ -9820,6 +9854,8 @@ fn attr_kind_of(
         // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
         ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,
         ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
+        // clang `Clang<"trivial_abi">`.
+        ("trivial_abi", _, _) if gnu_syntax || clang_scope => AttrKind::TRIVIAL_ABI,
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
         ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
         ("preferred_name", _, gnu) if gnu || clang_scope => AttrKind::PREFERRED_NAME,
@@ -9833,6 +9869,8 @@ fn attr_kind_of(
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
+        // clang `GNU<"enable_if">`: no `[[...]]` spelling.
+        ("enable_if", _, _) if gnu_syntax => AttrKind::ENABLE_IF,
         ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
         ("exclude_from_explicit_instantiation", _, gnu) if gnu || clang_scope => {
             AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION

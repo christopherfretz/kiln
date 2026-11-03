@@ -25,6 +25,7 @@ pub(crate) mod exc;
 mod life;
 mod meta;
 mod virt;
+mod wide;
 
 pub(crate) use builtins::BiFault;
 pub(crate) use virt::Virt;
@@ -176,6 +177,14 @@ pub(crate) enum Fault {
         aux: u32,
     },
     Float(FloatErr),
+    /// An `Op::Wide` integer error on a `width`-bit `_BitInt`: the
+    /// decimal text clang's note prints (the exact result, or the shift
+    /// count; empty for a division by zero).
+    Wide {
+        err: IntErr,
+        text: Box<str>,
+        width: u32,
+    },
     /// Float-to-integer conversion out of range.
     FloatRange {
         kind: FloatKind,
@@ -552,6 +561,9 @@ impl Oven {
             Ok(self.exc.uncaught() as u128)
         } else if aux & 0xff == crate::kbc::bi::META {
             self.exec_meta(b, pc, fb, aux >> 8, (a, bb, c), (t1, t2))
+        } else if aux & 0xff == crate::kbc::bi::LIFETIME {
+            let r = self.builtin(b.ast(), aux, a, bb, c, t1, t2)?;
+            Ok(if r != 0 && self.not_yet_begun(pc, a as u64, t1) { 0 } else { r })
         } else {
             self.builtin(b.ast(), aux, a, bb, c, t1, t2)
         }
@@ -1378,6 +1390,15 @@ impl Oven {
                         self.always_true_diag(b, pc, aux);
                     }
                     pc += 2;
+                }
+                Op::Wide => {
+                    let regs = [reg!(0), reg!(1), reg!(2)];
+                    match self.exec_wide(regs, OTy(arg!(3) as u32), arg!(4) as u32, aux) {
+                        Ok(Some(v)) => reg!(0) = v,
+                        Ok(None) => {}
+                        Err(f) => fail!(f),
+                    }
+                    pc += 6;
                 }
                 Op::Cx => {
                     let v = [reg!(2), reg!(3), reg!(4), reg!(5)];
@@ -2616,7 +2637,7 @@ impl Oven {
             return None;
         }
         match info.kind {
-            TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) => {
+            TyKind::Bool | TyKind::Int { .. } | TyKind::WideInt { .. } | TyKind::Float(_) => {
                 (!s.is_init(abs, value_len(info.size, info.kind))).then_some((field, t))
             }
             TyKind::Ptr(_) | TyKind::NullPtr | TyKind::MemPtr { .. } | TyKind::Reflection => {

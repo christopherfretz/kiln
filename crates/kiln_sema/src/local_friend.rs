@@ -238,7 +238,13 @@ impl Sema<'_, '_> {
             if found.is_empty() {
                 continue;
             }
-            let new = NewFn { ty, is_static: false, head: None, requires };
+            let new = NewFn {
+                ty,
+                is_static: false,
+                head: None,
+                requires,
+                enable_if: kiln_ast::ids::ListId::EMPTY,
+            };
             let Some(p) = self.pick_prev_function(&found, new) else {
                 self.error(DiagId::sema_no_matching_local_friend, loc);
                 return LocalFriendMember::Invalid;

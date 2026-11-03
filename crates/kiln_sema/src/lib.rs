@@ -33,6 +33,7 @@ pub mod declspec;
 mod deduce;
 mod deprecated;
 mod empty_body;
+mod enable_if;
 pub mod except;
 mod expansion;
 pub mod expr;
@@ -51,6 +52,7 @@ pub mod init;
 mod init_dtor;
 mod init_priority;
 mod int_in_bool;
+mod int_overflow;
 mod jump_scope;
 mod kind_conflict;
 pub mod lambda;
@@ -88,6 +90,7 @@ mod switch_enum;
 pub mod target;
 pub mod templ;
 mod template_id_typo;
+mod trivial_abi;
 mod try_stmt;
 mod type_diff;
 mod unreachable_code;
@@ -119,6 +122,7 @@ pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
 pub use scope::ScopeKind;
 pub use template_id_typo::TemplateIdTypo;
+pub use vector_ops::LaxVectorConversions;
 
 /// A delayed-typo diagnostic held for the end of its full-expression
 /// ([`Sema::begin_delayed_typos`]): its sequence number and the recovery
@@ -212,6 +216,9 @@ pub struct Sema<'a, 'sm> {
     /// `operator new`/`operator delete` when available (P2014R0 option 2,
     /// as clang; spec/sema.md "Coroutines").
     pub coro_aligned_allocation: bool,
+    /// `-flax-vector-conversions=` (default `all`, as clang; spec/types.md
+    /// `Vector`).
+    pub lax_vector_conversions: LaxVectorConversions,
     /// The temporaries of a for-range-initializer are extended to the
     /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
     pub range_lifetime_extension: bool,
@@ -855,6 +862,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             rtti: true,
             reflection: false,
             coro_aligned_allocation: false,
+            lax_vector_conversions: LaxVectorConversions::All,
             range_lifetime_extension: false,
             gnu: false,
             clang_compat: 22,

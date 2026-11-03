@@ -601,6 +601,10 @@ impl Sema<'_, '_> {
         // initialization, [`Sema::is_expr_error`]).
         if !self.is_expr_error(e) {
             self.check_implicit_conversions(e, cc);
+            // clang `CheckCompletedExpr`: not for a `constexpr`
+            // variable's initializer (its evaluation reports it).
+            let v = self.pending_var_init();
+            self.check_for_int_overflow(e, v);
         }
         self.flush_member_refs();
         if self.special.has_pending() {
@@ -1152,7 +1156,19 @@ impl Sema<'_, '_> {
                     BinaryOp::LT | BinaryOp::GT | BinaryOp::LE | BinaryOp::GE => {
                         Some((DiagId::sema_unused_comparison, loc, vec!["2".to_owned()]))
                     }
-                    BinaryOp::Comma => self.unused_warning(self.ast.exprs.operands(x)[1]),
+                    BinaryOp::Comma => {
+                        // clang `isUnusedResultAWarning`: `(x = y, 0)` is
+                        // an idiom for hiding an assignment's result (an
+                        // integer literal 0 as the right operand, [expr.comma]).
+                        let r = self.ast.exprs.operands(x)[1];
+                        let ri = self.ignore_parens(r);
+                        if self.ast.exprs.get(ri).kind() == ExprKind::IntegerLiteral
+                            && self.ast.exprs.int_value(ri) == Some(0)
+                        {
+                            return None;
+                        }
+                        self.unused_warning(r)
+                    }
                     BinaryOp::LAnd | BinaryOp::LOr => {
                         // `a && f()` is control flow when the right side has effects.
                         let r = self.ast.exprs.operands(x)[1];
@@ -4864,6 +4880,11 @@ impl Sema<'_, '_> {
         if have > n {
             let kind = self.variadic_call_kind(named.map(|c| c.decl), callee);
             self.check_variadic_args(&conv_args[n..have], kind);
+        }
+        if let Some(c) = named
+            && !self.check_enable_if_direct(c.decl, callee, &conv_args, loc)
+        {
+            return None;
         }
         Some(conv_args)
     }
