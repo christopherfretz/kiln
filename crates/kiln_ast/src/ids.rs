@@ -124,7 +124,7 @@ define_id!(
     BlobId, u32::MAX, "BlobId"
 );
 define_id!(
-    /// An interned reflection (`std::meta::info`, spec/ast.md §10, M6).
+    /// An interned reflection (`std::meta::info`, spec/reflection.md §2, M6).
     ReflectionId, u32::MAX, "ReflectionId"
 );
 define_id!(

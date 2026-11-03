@@ -266,8 +266,13 @@ impl Cg<'_> {
         let fa = self.m.attr_set(&[Attr::Flag(AttrKind::NoUnwind)]);
         let opts =
             CallOpts { attrs: AttrList { func: fa, ..AttrList::default() }, ..CallOpts::default() };
-        let n = V::C(self.m.const_int(LTy::I64, i128::from(size)));
-        Op::Call { fn_ty, callee: V::C(Value::func(f)), args: vec![n, addr], opts: Box::new(opts) }
+        // LLVM 21+ (`ir_version`, clang 22 at compat 22): no size operand.
+        let args = if intrinsics::lifetime_has_size(&self.m) {
+            vec![V::C(self.m.const_int(LTy::I64, i128::from(size))), addr]
+        } else {
+            vec![addr]
+        };
+        Op::Call { fn_ty, callee: V::C(Value::func(f)), args, opts: Box::new(opts) }
     }
 
     /// The lifetime start and end of the automatic variable `d` at the

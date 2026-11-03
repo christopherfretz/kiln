@@ -31,6 +31,8 @@ pub struct EvalRecord {
     /// objects plus the free ranges between them; the space persists
     /// across evaluations, so this is the translation unit's so far).
     pub static_bytes: u64,
+    /// Calls answered from the memo table (spec/oven.md "Memoization").
+    pub memo_hits: u64,
     /// Wall-clock microseconds (not deterministic).
     pub wall_us: u64,
     /// Whether the evaluation produced a value.
@@ -59,6 +61,8 @@ pub struct EvalTotals {
     /// including work no record covers (`Oven::has_constant_destruction`,
     /// `try_fold`); at least every record's `static_bytes`.
     pub static_bytes: u64,
+    /// Sum of `memo_hits`.
+    pub memo_hits: u64,
     /// Sum of `wall_us`.
     pub wall_us: u64,
     /// Number of evaluations.
@@ -84,6 +88,7 @@ impl EvalStats {
         t.peak_arena = t.peak_arena.max(r.peak_arena);
         t.frozen_bytes += r.frozen_bytes;
         t.static_bytes = t.static_bytes.max(r.static_bytes);
+        t.memo_hits += r.memo_hits;
         t.wall_us += r.wall_us;
         t.evaluations += 1;
         self.records.push(r);

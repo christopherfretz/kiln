@@ -95,6 +95,33 @@ Columns:
 | P2865R6 | Removing deprecated array comparisons | — | done | `conformance/expr.eq/p2865-probe.cpp`<br>`conformance/expr.eq/p2865-array-comparison.cpp`<br>`conformance/expr.eq/p2865-array-comparison-cxx20.cpp` | WP-356. clang 19 only warns (probe `xfail(clang)`). |
 | P3176R1 | The Oxford variadic comma | — | done | `conformance/dcl.fct/p3176-probe.cpp`<br>`conformance/dcl.fct/p3176-variadic-comma.cpp`<br>`conformance/dcl.fct/p3176-variadic-comma-cxx23.cpp` | WP-356. clang 19 lacks the deprecation (probe `xfail(clang)`). |
 
+## C++26 reflection (M6)
+
+One row per M6 work package (docs/ROADMAP.md M6). The contract is
+[spec/reflection.md](../../spec/reflection.md), and the papers are listed in
+its §1. All rows need `-freflection` (§1.4). The reference compiler is GCC 16.1.
+This table is per work package, not per paper, so `cargo xtask features` does
+not check it: its first header cell is not `Paper`.
+
+| WP | Scope | Status | Tests | Notes |
+|---|---|---|---|---|
+| WP-470 | M6-01: spec/reflection.md, the dispatch skeleton (op families, purity classes, `SemaBridge::meta`) | done | `conformance/reflection/dispatch-inline-ns.cpp`<br>`conformance/reflection/memo-purity.cpp` | The four spike ops are ported unchanged; `info` parameters are memo-eligible; `memo_hits` report counter. |
+| WP-471 | M6-02: spike hardening (incomplete-class layout, `Sema::same_entity`, table overflow, type-table epoch) | todo | | |
+| WP-472 | M6-03: representation and the `^^` operator (alias sugar, templates, namespaces, values) | todo | | |
+| WP-473 | M6-04: consteval blocks (P3289), plainly constant-evaluated, consteval-only types | todo | | |
+| WP-474 | M6-05: splices in every position, including dependent ones | todo | | Type splices exist from the spike. |
+| WP-475 | M6-06: result materialization, the names family, `std::meta::exception` (P3560) | todo | | |
+| WP-476 | M6-07: queries and predicates, parameters (P3096) | todo | | `type_of` is ported (WP-470). |
+| WP-477 | M6-08: type traits family | todo | | |
+| WP-478 | M6-09: members, access contexts (P3547), layout, annotation queries | todo | | Includes implicit special members (D4). |
+| WP-479 | M6-10: values and static storage (P3491), `refl_bytes` | todo | | |
+| WP-480 | M6-11: `define_aggregate`, `data_member_spec`, `__kiln_define_member` rules (D7) | todo | | |
+| WP-481 | M6-12: annotations (P3394), syntax and storage | todo | | |
+| WP-482 | M6-13: `substitute`, `can_substitute`, template queries | todo | | |
+| WP-483 | M6-14: validation and perf infrastructure (GCC differential, `bench/reflect`, report fields) | todo | | |
+| WP-484 | M6-15: libstdc++ `<meta>` and the feature macros | todo | | |
+| WP-485 | M6-16: reflection mangling and codegen of entities templated on `info` | todo | | |
+
 ## DR-level papers
 
 DRs already listed above: P2280, P2468, P2036, P2564, P2513, P2327.
