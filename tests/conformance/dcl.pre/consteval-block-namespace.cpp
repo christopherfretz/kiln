@@ -6,6 +6,7 @@
 // its consteval lambda (spec/ast-dump.md; kiln-only golden: clang 19 has
 // no consteval blocks).
 //@ expect: ast
+//@ requires: clang>=22
 //@ ast-filter: test_ns
 //@ skip(clang): clang 19 has no consteval blocks (P3289R1)
 //@ strict-diags

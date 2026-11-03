@@ -143,14 +143,6 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // `opt-19` CoroEarly pass kiln runs (private; LLVM 22: internal).
     ("coro_builtins", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("coro_builtins", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("loop_unroll_disable_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("loop_unroll_disable_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("tbaa_atomic_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("tbaa_atomic_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("tbaa_null_init_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("tbaa_null_init_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("tbaa_unnamed_o1", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("tbaa_unnamed_o1", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     // clang 22 emits `insertelement <8 x i1> .., i8 1, ..` for a bool
     // vector element store, which opt-22 rejects.
     ("vector_ops", "aarch64-unknown-linux-gnu", "22", Allow::OracleInvalid),

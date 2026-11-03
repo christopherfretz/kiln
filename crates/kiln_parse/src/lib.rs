@@ -142,6 +142,9 @@ pub struct ParsedTu {
     /// The template instantiation report (spec/sema-templates.md
     /// §11.3), empty unless [`ParseOptions::inst_report`] asked for it.
     pub inst_report: String,
+    /// Splices whose operand was read as a frozen reflection without an
+    /// Oven run (spec/reflection.md §5, the fast path).
+    pub splice_fast: u64,
 }
 
 /// Parses and analyses the translation unit whose main file is `file`,
@@ -236,6 +239,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     let (s, src) = p.finish();
     let name = main.rsplit('/').next().unwrap_or(&main);
     let inst_report = s.instantiation_report(name);
+    let splice_fast = s.splice_fast_count();
     let (ast, oven) = s.into_parts();
-    (ParsedTu { ast, oven, inst_report }, src.into_preprocessor())
+    (ParsedTu { ast, oven, inst_report, splice_fast }, src.into_preprocessor())
 }

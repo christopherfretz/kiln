@@ -787,6 +787,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 push(n.a());
                 push(n.b());
             }
+            // kiln: the object of a member splice, then the operand.
+            ExprKind::CXXSpliceExpr => {
+                push(n.b());
+                push(n.a());
+            }
             ExprKind::CompoundAssignOperator => {
                 push(n.a());
                 push(exprs.compound_assign(e).rhs.raw());
@@ -2347,6 +2352,13 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     if let crate::reflect::Reflectee::Type(t) = r {
                         self.ty(t);
                     }
+                }
+            }
+            // kiln: a dependent splice (spec/ast-dump.md §3); `.`/`->`
+            // for a member splice.
+            ExprKind::CXXSpliceExpr => {
+                if let Some((_, arrow)) = exprs.splice_base(e) {
+                    self.line.push_str(if arrow { " ->" } else { " ." });
                 }
             }
             // clang prints only the trait; kiln adds the type operands.

@@ -8,8 +8,6 @@
 
 #include "kiln_meta.h"
 
-#include <initializer_list>
-
 namespace std::meta {
 using __kiln_size_t = decltype(sizeof 0);
 // [meta.reflection.traits] primary type categories

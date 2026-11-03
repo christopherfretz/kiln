@@ -294,7 +294,7 @@ impl Sema<'_, '_> {
     /// alias of `<dependent type>` linked into no context, so that
     /// [`Sema::is_dependent_ctx`] holds for it (the specifier itself
     /// carries the `decltype`).
-    fn decltype_scope_marker(&mut self) -> DeclId {
+    pub(crate) fn decltype_scope_marker(&mut self) -> DeclId {
         if let Some(d) = self.templ.decltype_scope {
             return d;
         }
@@ -1079,9 +1079,13 @@ impl Sema<'_, '_> {
                 self.check_ttp_arity(decl, args, l)?;
             }
             return Ok(TemplateIdRef::Type(match self.ast.types.template_name_view(name) {
-                // `TT<args>` for a template template parameter `TT`.
+                // `TT<args>` for a template template parameter `TT`, and
+                // `[: r :]<args>` with a dependent `r` in a type position
+                // (P2996 [temp.names]/1).
                 TemplateName::TemplateTemplateParm { .. }
-                | TemplateName::CanonTemplateTemplateParm { .. } => {
+                | TemplateName::CanonTemplateTemplateParm { .. }
+                | TemplateName::Splice { .. }
+                | TemplateName::SpliceProfile(_) => {
                     self.ast.types.template_specialization(name, list, None, false)
                 }
                 // `T::template X<args>` ([temp.names]/5).

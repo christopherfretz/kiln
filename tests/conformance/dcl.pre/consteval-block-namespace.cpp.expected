@@ -5,9 +5,9 @@ NamespaceDecl test_ns
     `-CXXOperatorCallExpr 'void' '()'
       |-ImplicitCastExpr 'auto (*)() const -> void' <FunctionToPointerDecay>
       | `-DeclRefExpr 'auto () const -> void' lvalue CXXMethod 'operator()' 'auto () const -> void'
-      `-ImplicitCastExpr 'const test_ns::(lambda at tests/conformance/dcl.pre/consteval-block-namespace.cpp:16:1)' lvalue <NoOp>
-        `-MaterializeTemporaryExpr '(lambda at tests/conformance/dcl.pre/consteval-block-namespace.cpp:16:1)' lvalue
-          `-LambdaExpr '(lambda at tests/conformance/dcl.pre/consteval-block-namespace.cpp:16:1)'
+      `-ImplicitCastExpr 'const test_ns::(lambda at tests/conformance/dcl.pre/consteval-block-namespace.cpp:17:1)' lvalue <NoOp>
+        `-MaterializeTemporaryExpr '(lambda at tests/conformance/dcl.pre/consteval-block-namespace.cpp:17:1)' lvalue
+          `-LambdaExpr '(lambda at tests/conformance/dcl.pre/consteval-block-namespace.cpp:17:1)'
             `-CompoundStmt
               |-DeclStmt
               | `-VarDecl used a 'int' cinit

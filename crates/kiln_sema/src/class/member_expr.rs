@@ -249,7 +249,7 @@ impl Sema<'_, '_> {
     /// The `DeclRefExpr` of a non-static member named without an object:
     /// only `&C::m` ([expr.unary.op]/3) or an unevaluated operand may use
     /// it.
-    fn member_ref_without_object(
+    pub(crate) fn member_ref_without_object(
         &mut self,
         d: DeclId,
         loc: Loc,
@@ -1194,7 +1194,7 @@ impl Sema<'_, '_> {
     /// [`Self::object_to_class`] with the derived-to-base cast typed as
     /// `written` (the qualifier's type as written) when it is given.
     #[allow(clippy::too_many_arguments, reason = "the object and both class types")]
-    fn object_to_class_as(
+    pub(crate) fn object_to_class_as(
         &mut self,
         b: ExprId,
         arrow: bool,

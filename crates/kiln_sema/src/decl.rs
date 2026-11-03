@@ -3573,7 +3573,7 @@ impl Sema<'_, '_> {
                 && self.templ.cur.is_none()
                 && dname.as_ident().is_some() =>
             {
-                let p = self.extern_c_prev(name, false, d.name_loc());
+                let p = self.extern_c_prev(name, false, new_fn.is_static, d.name_loc());
                 extern_c_redecl = p.is_some();
                 p
             }
@@ -5045,7 +5045,9 @@ impl Sema<'_, '_> {
         prev = prev.filter(|_| !unmerged);
         // [dcl.link]/6-7: a C-linkage variable of another scope.
         let prev = match prev {
-            None if d.qualifier.is_none() => self.extern_c_prev(name, true, d.name_loc()),
+            None if d.qualifier.is_none() => {
+                self.extern_c_prev(name, true, spec.storage() == VarStorage::Static, d.name_loc())
+            }
             p => p,
         };
         // An invalid decl-specifier (`typename Q b;`) was reported: the
