@@ -216,6 +216,8 @@ impl CodegenJob<'_> {
                 optimize: opt_pipeline(a.opt_flag.as_deref()).is_some(),
                 clang_compat: a.predef.clang_compat.major(),
                 llvm_major: job.toolchain.llvm_major(),
+                omit_frame_pointer: a.omit_frame_pointer,
+                omit_leaf_frame_pointer: a.omit_leaf_frame_pointer,
             };
             let (r, warnings) = emit_with_diags(&mut tu.ast, &mut tu.oven, &target, &opts);
             for w in warnings {

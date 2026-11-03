@@ -1332,11 +1332,14 @@ impl Sema<'_, '_> {
         if self.diags.uncompilable_error_count() > 0 || self.in_template() {
             return wrapped;
         }
+        // clang `ActOnFinishFunctionBody`: no fall-off check for a
+        // `naked` function (nor for `main`, below).
+        let naked = self.naked_attr(state.decl).is_some();
         if self.decl_is_noreturn(state.decl) {
             // [dcl.attr.noreturn]/2: control reaching the end of a
             // `noreturn` function (clang `warn_falloff_noreturn_function`,
             // ahead of the return-type check).
-            if self.falls_off(body) != Falloff::Never {
+            if !naked && self.falls_off(body) != Falloff::Never {
                 self.error(DiagId::sema_falloff_noreturn, rbrace);
             }
             self.late_analysis(state.decl, body, state.has_fallthrough);
@@ -1351,14 +1354,7 @@ impl Sema<'_, '_> {
             self.late_analysis(state.decl, body, state.has_fallthrough);
             return wrapped;
         }
-        let is_main = self.decl_name(state.decl) == "main"
-            && self
-                .ast
-                .decls
-                .get(state.decl)
-                .ctx()
-                .is_some_and(|c| self.ast.redecl_context(c) == self.ast.tu);
-        if !is_main {
+        if !naked && !self.is_main_function(state.decl) {
             let lambda = self.is_lambda_call_op(state.decl);
             match self.falls_off(body) {
                 Falloff::Never => {}
