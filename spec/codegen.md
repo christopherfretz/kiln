@@ -3028,7 +3028,7 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   template instantiated twice), `tests/conformance/stmt.goto/computed-
   goto-dispatch-run.cpp` (`expect: run`).
 
-## 7u. Landed (WP-459): explicit-object conversion functions, AArch64 target features
+## 7aa. Landed (WP-459): explicit-object conversion functions, AArch64 target features
 - A conversion function with an explicit object parameter
   ([class.conv.fct]/1, P0847) is lowered as an explicit-object member
   function (`is_explicit_object_method` covers `CXXConversion`): no

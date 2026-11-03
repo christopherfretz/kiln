@@ -210,7 +210,7 @@ the `-fsyntax-only` and codegen paths read the result.
 - **Result.** `TargetFeatures { sve, extra }`: `sve` sets
   `ParseOptions::sve` / `Sema::sve` (SVE types usable, spec/types.md
   §5.1) and `CodegenOptions::sve` (`vscale_range(1,16)`, spec/codegen.md
-  §7u); `extra` (`±name` in first-appearance order) overrides the
+  §7aa); `extra` (`±name` in first-appearance order) overrides the
   default AArch64 `"target-features"` entries
   (`CodegenOptions::target_features`).
 - **Errors.** Any other architecture, CPU or extension is `unsupported
