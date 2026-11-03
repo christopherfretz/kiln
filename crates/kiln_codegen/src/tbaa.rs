@@ -59,7 +59,8 @@ pub(crate) struct TbaaCache {
     any_ptr: Vec<MetadataId>,
     types: FxHashMap<TypeId, MetadataId>,
     structs: FxHashMap<DeclId, Option<MetadataId>>,
-    copies: FxHashMap<TypeId, Option<MetadataId>>,
+    /// By canonical type and whether it is a may-alias type.
+    copies: FxHashMap<(TypeId, bool), Option<MetadataId>>,
     kinds: Option<(MdKindId, MdKindId)>,
 }
 
@@ -128,8 +129,13 @@ impl Cg<'_> {
         self.tbaa.any_ptr[depth - 1]
     }
 
-    /// The scalar type node of `q` (clang `CodeGenTBAA::getTypeInfo`).
+    /// The scalar type node of `q` (clang `CodeGenTBAA::getTypeInfo`):
+    /// `omnipotent char` for a may-alias type, whatever its canonical
+    /// type ([`Cg::tbaa_may_alias`]).
     pub(crate) fn tbaa_type(&mut self, q: QualType) -> MetadataId {
+        if self.tbaa_may_alias(q) {
+            return self.tbaa_char();
+        }
         let t = self.ast.types.canonical(q).ty();
         if let Some(&n) = self.tbaa.types.get(&t) {
             return n;
@@ -137,6 +143,32 @@ impl Cg<'_> {
         let n = self.tbaa_type_uncached(QualType::unqual(t));
         self.tbaa.types.insert(t, n);
         n
+    }
+
+    /// GNU `may_alias` on `q` (clang `TypeHasMayAlias`): on its class or
+    /// enumeration (any declaration of it), or on a typedef-name in its
+    /// sugar, the outermost first (so the check sees `q` as written).
+    pub(crate) fn tbaa_may_alias(&self, q: QualType) -> bool {
+        use kiln_ast::attr::AttrKind;
+        let ast = self.ast;
+        if let TypeView::Record(d) | TypeView::Enum(d) = ast.types.canonical_view(q)
+            && self.fn_attr(d, AttrKind::MAY_ALIAS).is_some()
+        {
+            return true;
+        }
+        let mut t = q;
+        loop {
+            if let TypeView::Typedef { decl, .. } = ast.types.view(t.ty())
+                && self.fn_attr(decl, AttrKind::MAY_ALIAS).is_some()
+            {
+                return true;
+            }
+            let next = ast.types.desugar_once(t);
+            if next.ty() == t.ty() {
+                return false;
+            }
+            t = next;
+        }
     }
 
     fn tbaa_type_uncached(&mut self, q: QualType) -> MetadataId {
@@ -408,8 +440,8 @@ impl Cg<'_> {
     }
 
     /// The access path of field `field` of an object described by `base`
-    /// (clang `EmitLValueForField`): a union member or a vector-typed
-    /// member may alias anything, a bit-field is untagged, and any other
+    /// (clang `EmitLValueForField`): a union member, a member of a may-alias class, or a vector-typed member
+    /// may alias anything, a bit-field is untagged, and any other
     /// member extends the path of its outermost class.
     pub(crate) fn tb_field(&mut self, base: Tb, field: DeclId, fq: QualType) -> Tb {
         if !self.tbaa_on() {
@@ -419,6 +451,7 @@ impl Cg<'_> {
         let Some(rd) = ast.decls.get(field).ctx() else { return Tb::Type };
         if base == Tb::MayAlias
             || self.is_union(rd)
+            || self.fn_attr(rd, kiln_ast::attr::AttrKind::MAY_ALIAS).is_some()
             || matches!(ast.types.canonical_view(fq), TypeView::Vector { .. })
         {
             return Tb::MayAlias;
@@ -440,11 +473,12 @@ impl Cg<'_> {
             return;
         }
         let t = self.ast.types.canonical(q).ty();
-        let node = if let Some(&n) = self.tbaa.copies.get(&t) {
+        let may = self.tbaa_may_alias(q);
+        let node = if let Some(&n) = self.tbaa.copies.get(&(t, may)) {
             n
         } else {
             let mut fields = Vec::new();
-            let n = if self.tbaa_collect(0, QualType::unqual(t), &mut fields) {
+            let n = if self.tbaa_collect(0, QualType::unqual(t), may, &mut fields) {
                 let mut ops = Vec::with_capacity(fields.len() * 3);
                 for (off, size, tag) in fields {
                     ops.push(Some(self.md_i64(off)));
@@ -455,7 +489,7 @@ impl Cg<'_> {
             } else {
                 None
             };
-            self.tbaa.copies.insert(t, n);
+            self.tbaa.copies.insert((t, may), n);
             n
         };
         if let Some(n) = node {
@@ -466,17 +500,20 @@ impl Cg<'_> {
 
     /// clang `CodeGenTBAA::CollectFields`: `(offset, size, tag)` of each
     /// scalar of `q`; false for a class it does not describe (one with
-    /// bases or a flexible array member).
+    /// bases or a flexible array member). Under a may-alias type (`may`)
+    /// every scalar is `omnipotent char`.
     fn tbaa_collect(
         &mut self,
         at: u64,
         q: QualType,
+        may: bool,
         out: &mut Vec<(u64, u64, MetadataId)>,
     ) -> bool {
         let ast = self.ast;
         let TypeView::Record(rd) = ast.types.canonical_view(q) else {
             let size = self.size_align(q).0;
-            let Some(tag) = self.tbaa_tag(q, Tb::Type) else { return false };
+            let tb = if may { Tb::MayAlias } else { Tb::Type };
+            let Some(tag) = self.tbaa_tag(q, tb) else { return false };
             out.push((at, size, tag));
             return true;
         };
@@ -519,7 +556,8 @@ impl Cg<'_> {
             if self.tys.is_empty_record_for_layout(fq) {
                 continue;
             }
-            if !self.tbaa_collect(off, fq, out) {
+            let fmay = may || self.tbaa_may_alias(fq);
+            if !self.tbaa_collect(off, fq, fmay, out) {
                 return false;
             }
         }

@@ -1446,6 +1446,15 @@ and returns the scope it names:
     note, and the asm statement is dropped. A naked function gets no
     fall-off (-Wreturn-type) or noreturn-returns warning. Test:
     `tests/conformance/dcl.attr/gnu-optnone-minsize-naked.cpp`.
+  - `may_alias` (GNU syntax or `gnu::`; WP-423, clang `MayAliasAttr`):
+    kept on any declaration without a diagnostic (no subject list); with
+    arguments `'may_alias' attribute takes no arguments`. A GNU
+    declaration attribute after a ptr-operator (`int
+    *__attribute__((may_alias)) p`) is the declarator's, and a
+    `[[gnu::X]]` declaration attribute after a ptr-operator or an array
+    declarator is `attribute 'X' ignored, because it cannot be applied
+    to a type` (a warning, as after a function declarator). Codegen:
+    spec/codegen.md "TBAA". Test: `tests/conformance/dcl.attr/gnu-may-alias.cpp`.
   - `using_if_exists` (`__attribute__((using_if_exists))` or
     `[[clang::using_if_exists]]`; other `clang::` attributes are still
     ignored), on using-declarations (§4.8)

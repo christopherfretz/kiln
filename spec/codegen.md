@@ -903,6 +903,24 @@ The normative description is spec/driver.md "Code generation". In short:
   `any p<depth> pointer` node itself). Everything else (complex,
   vectors, member pointers, arrays, unions) is "omnipotent char". A
   vtable pointer is "vtable pointer" (child of the root).
+- **`may_alias`** (WP-423; `Cg::tbaa_may_alias`, clang
+  `TypeHasMayAlias`): a type whose class or enumeration carries GNU
+  `may_alias` (on any declaration), or with a typedef-name carrying it
+  anywhere in its sugar (`typedef int __attribute__((may_alias)) T;`,
+  `using T [[gnu::may_alias]] = int;`, a typedef of such a typedef), is
+  "omnipotent char" as an access type, whatever its canonical type (a
+  pointer typedef too; checked before the canonical-type cache). A
+  member of a may-alias class is a may-alias access (`{char, char, 0}`,
+  clang `EmitLValueForField`); a may-alias class used as a member type
+  keeps its struct node. In `!tbaa.struct` every scalar under a
+  may-alias type is "omnipotent char" (`CollectFields`' `MayAlias`).
+  Sema accepts the attribute on any declaration with no diagnostic
+  (clang `MayAliasAttr` has no subject list); it takes no arguments,
+  `[[gnu::may_alias]]` at the end of a decl-specifier-seq is no type
+  attribute, and after a ptr-operator the GNU spelling applies to the
+  declaration (`int *__attribute__((may_alias)) p`), as clang's
+  `ProcessDeclAttributes` does for every GNU declaration attribute in a
+  declarator chunk (`Parser::chunk_decl_attrs`).
 - **Struct nodes** (`getBaseTypeInfo`): a complete non-union class with
   no flexible array member is `!{!"_ZTS<name>", member, i64 off, ...}`
   listing its non-virtual non-empty bases by offset, then its fields:
@@ -989,11 +1007,7 @@ The normative description is spec/driver.md "Code generation". In short:
   clang's in-process codegen where the text round trip did not.
 
 ### Deviations
-- **TBAA gaps (WP-412).** `__attribute__((may_alias))` is not modelled
-  (clang `TypeHasMayAlias` makes such accesses "omnipotent char"); at
-  `-O1`+ with strict aliasing kiln tags them by their type, so code
-  relying on `may_alias` for type punning can miscompile. Use
-  `-fno-strict-aliasing` for it until it is implemented. Atomic loads
+- **TBAA gaps (WP-412).** Atomic loads
   and stores (`atomic.rs`) carry no `!tbaa`. An unnamed class's struct
   node uses kiln's `Ut_` mangling, which does not number a second
   unnamed class in the same scope (`Ut0_`), so its node name can differ

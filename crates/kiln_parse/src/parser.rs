@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::types::UnaryTransformKind;
-use kiln_ast::{DeclId, ExprId, NnsId, QualType};
+use kiln_ast::{AttrId, DeclId, ExprId, NnsId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::literal::LiteralOptions;
 use kiln_lex::{LexOptions, Punct, Std, TokFlags, TokKind, Token};
@@ -92,6 +92,11 @@ pub struct Parser<'a, 'sm> {
     /// The start of the last `__attribute__((...))`'s closing `)`, or
     /// `Loc::INVALID` (a member declarator's end, clang `SetRangeEnd`).
     pub(crate) gnu_attr_end: Loc,
+    /// The GNU declaration attributes of the last ptr-operator's
+    /// attribute positions (`int *__attribute__((may_alias)) p`): clang
+    /// applies them to the declaration (`ProcessDeclAttributes` walks the
+    /// declarator chunks).
+    pub(crate) chunk_decl_attrs: Vec<AttrId>,
     /// The last run of adjacent `[[...]]` specifiers: the start of the
     /// token before it and of its final `]` (a declarator's end excludes
     /// them, clang `ParseFunctionDeclarator`).
@@ -199,10 +204,10 @@ pub struct Parser<'a, 'sm> {
     /// The leading attribute-specifier-seq of a statement, parsed before
     /// it is known to be a declaration: the declaration's decl-specifiers
     /// take it ([dcl.pre]/5, [dcl.attr.grammar]/5).
-    pub(crate) stmt_attrs: Vec<kiln_ast::AttrId>,
+    pub(crate) stmt_attrs: Vec<AttrId>,
     /// The attributes `parse_decl_specifiers` starts its seq with (a
     /// declaration statement's leading ones).
-    pub(crate) lead_decl_attrs: Vec<kiln_ast::AttrId>,
+    pub(crate) lead_decl_attrs: Vec<AttrId>,
     /// Where `stmt_attrs` / `lead_decl_attrs` start (`[[` or `alignas`).
     pub(crate) stmt_attrs_loc: Option<Loc>,
 }
@@ -294,6 +299,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             pos: 0,
             visibility_depth: 0,
             gnu_attr_end: Loc::INVALID,
+            chunk_decl_attrs: Vec::new(),
             cxx11_attr_run: (Loc::INVALID, Loc::INVALID),
             depth: [0; 3],
             kw,
