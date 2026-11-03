@@ -5944,6 +5944,14 @@ unscoped enumeration is reported (spec/oven.md "Integration").
   - The `EvalFailure`'s notes follow it (`with_failure_notes`): the
     reason, the `in call to` backtrace, and any `declared here` notes.
   - An expression that already contains errors is not evaluated.
+  - A failed evaluation whose expression names (directly or through the
+    initializers of the variables it names, a bounded walk) a variable
+    that is invalid is silent: a `static_assert` fails without a
+    diagnostic and a `constexpr` variable's initializer is not reported
+    (`Sema::refers_to_invalid_var`; clang marks the `DeclRefExpr`
+    error-dependent). This is what keeps one bad variable-template
+    instantiation from cascading (`temp.inst/var-spec-invalid-init-silent.cpp`,
+    WP-418).
 
 ## 8a. Reflection (spike, -freflection) (`reflect.rs`, WP-267)
 

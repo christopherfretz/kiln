@@ -129,6 +129,10 @@ the evaluator's flattened type table.
   construction begins their lifetime and its destruction ends it (a second
   destruction is "destruction of object outside its lifetime";
   `vm.rs` `placement`, `basic.life/empty-object-lifetime.cpp`; WP-404).
+  Placement of such an object revives the lifetime of all of its type's
+  bytes, so an empty member destroyed and re-created with
+  `std::construct_at` is alive again
+  (`basic.life/empty-member-recreated.cpp`; WP-418).
 - **Lifetime**: leaving a scope releases its objects (`release(mark)`); a
   released slot is reused first-in first-out with its generation bumped, so
   a dangling pointer is detected (generation mismatch) and still names its
@@ -484,6 +488,11 @@ asks whether the evaluation is manifestly constant-evaluated.
   differential set (tests/limits.rs, tests/bench.rs). An evaluation whose
   step count would exceed the budget fails with "constexpr evaluation hit
   maximum step limit; possible infinite loop?".
+  A direct call with one argument to `std::move`, `std::move_if_noexcept`,
+  `std::forward`, `std::forward_like`, `std::as_const`, `std::addressof`
+  or `std::__addressof` is not a call: it costs no step, no frame and no
+  depth (clang's `isStdBuiltin` set; `compile.rs` `is_std_builtin`;
+  `expr.const/budget/std-builtins*.cpp`; WP-418).
 - **Depth** counts active calls as clang's `-fconstexpr-depth` does ("constexpr
   evaluation exceeded maximum depth of N calls"); a nested evaluation counts
   from the depth of the call that started it, plus one (see "Nested
