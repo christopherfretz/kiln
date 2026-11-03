@@ -425,10 +425,11 @@ pub(crate) mod bi {
     /// not a failure) << 9.
     pub const LOCK_FREE: u32 = 12;
 
-    /// A reflection intrinsic (WP-267 spike): sub = `MetaOp::code`; the
-    /// operands are the call's arguments (`a`, `b`, `c`); `t1` the
-    /// character type of a name argument, `t2` the result's pointer type
-    /// (`name_of`).
+    /// A reflection intrinsic (spec/reflection.md §3): sub =
+    /// `MetaOp::code`; `a` is the first of the consecutive registers
+    /// holding the call's arguments and `b` their count (both raw, not
+    /// register reads; at most `MAX_META_ARGS`); `t1` the element type of
+    /// the last pointer argument, `t2` the result type.
     pub const META: u32 = 30;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as

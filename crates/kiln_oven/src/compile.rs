@@ -807,7 +807,10 @@ impl Oven {
             && !matches!(ret, RetKind::Sret(_) | RetKind::Void)
             && infos.len() <= 4
             && infos.iter().all(|p| {
+                // An `info` parameter is its id's bits, as stable a key as
+                // an integer (spec/reflection.md §3.6).
                 matches!(c.o.types.scal(p.ty), Some(Scal::Int { .. } | Scal::Bool | Scal::Float(_)))
+                    || matches!(c.o.types.kind(p.ty), TyKind::Reflection)
             })
             && !matches!(ret, RetKind::Scalar(t) if c.o.types.scal(t) == Some(Scal::Ptr));
         let steps = std::mem::take(&mut c.ctor_steps);
@@ -2691,7 +2694,7 @@ impl Compiler<'_> {
                 let v = self.ast().exprs.type_trait_value(e);
                 self.konst(dst, u128::from(v));
             }
-            // spec/oven.md "Reflection runtime": the interned id's value.
+            // spec/reflection.md §2.1: the interned id's value.
             ExprKind::CXXReflectExpr => match self.ast().exprs.reflect_value(e) {
                 Some(id) => self.konst(dst, u128::from(id.bits())),
                 None => self.unsupported(e),
@@ -5408,19 +5411,39 @@ impl Compiler<'_> {
         saved
     }
 
-    /// `__builtin_LINE()` and the other source-location builtins
-    /// ([support.srcloc.cons]): the values sema recorded for the
-    /// expression, or for the default argument use enclosing it.
-    /// A call of reflection intrinsic `op` (`bi::META`): the arguments
-    /// are evaluated in order into the builtin's operands.
+    /// A call of reflection intrinsic `op` (`bi::META`;
+    /// spec/reflection.md §3): the arguments are evaluated in order into
+    /// consecutive registers (a scalar or `info` argument by value, a
+    /// class or array argument by address), whose first index and count
+    /// are the builtin's raw `a`/`b` operands.
     fn meta_call(&mut self, e: ExprId, op: crate::MetaOp, args: &[ExprId]) -> u32 {
-        let mut ops = [0u32; 3];
+        if args.len() > crate::MAX_META_ARGS {
+            self.unsupported(e);
+            return self.reg();
+        }
+        let n = args.len() as u32;
+        let base = self.next;
+        self.next += n;
+        self.max = self.max.max(self.next);
         let mut t1 = 0;
-        for (i, &x) in args.iter().take(3).enumerate() {
-            ops[i] = self.rv(x);
+        for (i, &x) in args.iter().enumerate() {
+            let slot = base + i as u32;
             let xt = self.ety(x);
-            if let TyKind::Ptr(ct) = self.kind(xt) {
-                t1 = ct.0;
+            match self.kind(xt) {
+                TyKind::Record { .. } | TyKind::Array { .. } => {
+                    let glvalue = self.ast().exprs.get(x).value_category().is_glvalue();
+                    let r = if glvalue {
+                        self.lv_mem(x, Access::Addr)
+                    } else {
+                        self.materialize(x, xt)
+                    };
+                    self.emit(Op::Mov, 0, &[slot, r]);
+                }
+                TyKind::Ptr(ct) => {
+                    t1 = ct.0;
+                    self.rv_into(x, slot);
+                }
+                _ => self.rv_into(x, slot),
             }
         }
         let dst = self.reg();
@@ -5429,13 +5452,16 @@ impl Compiler<'_> {
         self.emit_site(
             Op::Builtin,
             crate::kbc::bi::META | op.code() << 8,
-            &[dst, ops[0], ops[1], ops[2], t1, t2],
+            &[dst, base, n, 0, t1, t2],
             e,
             loc,
         );
         dst
     }
 
+    /// `__builtin_LINE()` and the other source-location builtins
+    /// ([support.srcloc.cons]): the values sema recorded for the
+    /// expression, or for the default argument use enclosing it.
     fn source_loc(&mut self, e: ExprId, dst: u32) {
         use kiln_ast::expr::SourceLocKind as K;
         let ast = self.ast();

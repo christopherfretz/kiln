@@ -985,26 +985,11 @@ context-free defaults (`NoEnv`):
 - Printable ASCII prints verbatim.
 - Every other code unit prints as `\x{hh}` (lowercase hex).
 
-## 10. Reflection and injection (M6; representation fixed now)
-- `ReflectionTable` interns `ReflectionId → Reflectee`: `Type(QualType)`,
-  `Decl(DeclId)`, `Namespace(DeclId)`, `Template(TemplateNameId)`,
-  `Value(ConstValueId)`, `Object(ConstValueId /*pointer*/)`,
-  `BaseSpec(DeclId, index)`, `DataMemberSpec(...)`, `Null`.
-- `^^T` reflects the type **as written**: a `QualType` that names an alias
-  (`Typedef`/`Using` sugar at the top) keeps it; all other sugar is
-  canonicalized before interning, so `^^const int == ^^int const` and
-  `^^decltype(1) == ^^int`, but `^^Alias != ^^int` ([meta.reflection]
-  `dealias`).
-- `define_aggregate(r, specs)` completes an incomplete class from a
-  constant evaluation: sema (through the bridge) appends `Field` decls
-  flagged `INJECTED` to the class with an *injection point* (the
-  consteval call's location and the evaluation context) recorded in a cold
-  map, then completes the class and computes its layout. This is the one
-  exception to "frozen at `}`" (§2.4) and is serialized through sema so
-  the Oven never observes a half-completed class.
-- Splices (`[: r :]`) are `CXXSpliceExpr` / `Splice` types / `Splice`
-  nested-name-specifiers whose designated entity is resolved when the
-  operand is not value-dependent.
+## 10. Reflection and injection (M6)
+Specified in **`spec/reflection.md`**: `ReflectionTable` and the
+`Reflectee` variants (§2.2), identity and alias sugar (§2.3), and
+`define_aggregate`'s injected `Field`s, which are the one exception to
+§2.4's "frozen at `}`" (§6.2). Splice nodes are covered in §5.
 
 ## 11. The AST dump format
 Specified in **`spec/ast-dump.md`** (split out to keep both files
