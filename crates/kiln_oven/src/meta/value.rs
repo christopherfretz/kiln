@@ -1,7 +1,10 @@
 //! Values and static storage ([meta.reflection.extract],
 //! [meta.reflection.result], [meta.define.static]; P3491; WP-479). The
 //! results are interned by content (spec/reflection.md §2), so each op is
-//! a pure function of its operand: `Stable`. `define_static_string`,
+//! a pure function of its operand: `Stable`. `reflect_constant_string`
+//! and `reflect_constant_array` are library functions over the
+//! `__kiln_` intrinsics of the same name, which they hand a built-in
+//! array as is and any other range as a span; `define_static_string`,
 //! `define_static_array` and `define_static_object` are library functions
 //! over these (as libstdc++ defines them; `tests/support/kiln_meta.h`),
 //! not intrinsics; `is_string_literal` is one over
@@ -35,8 +38,13 @@ super::meta_family! {
         ReflectConstant = ("reflect_constant", "x", Stable, 479);
         ReflectObject = ("reflect_object", "x", Stable, 479);
         ReflectFunction = ("reflect_function", "x", Stable, 479);
-        ReflectConstantString = ("reflect_constant_string", "x", Stable, 479);
-        ReflectConstantArray = ("reflect_constant_array", "x", Stable, 479);
+        /// `reflect_constant_string(r)` is a library function over
+        /// `std::meta::__kiln_reflect_constant_string`, which reads a
+        /// built-in array or a contiguous range by layout (the library
+        /// passes it a span of any other range).
+        ReflectConstantString = ("__kiln_reflect_constant_string", "x", Stable, 479);
+        /// `reflect_constant_array(r)`: likewise.
+        ReflectConstantArray = ("__kiln_reflect_constant_array", "x", Stable, 479);
         /// `reflect_constant(info)`: `T` is `std::meta::info`.
         ReflectConstantInfo = ("reflect_constant", "i", Stable, 479);
         /// `std::is_string_literal(p)` ([meta.string.literal]) is
