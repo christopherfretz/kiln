@@ -2671,6 +2671,33 @@ guarantees it a constant initializer and a trivial destructor
   emits it at first use, so `thread_local.cpp` has no thread-local
   variable template.
 
+## 7q. Landed (WP-187): `-Wpsabi` and `bool`-vector conditions
+- **Calls: `-Wpsabi`** (`psabi.rs`, clang
+  `X86_64TargetCodeGenInfo::checkFunctionCallABI`). On x86-64 only, each
+  direct call, member call and constructor call checks its arguments in
+  order, then the return type. The first vector wider than 128 bits warns
+  `AVX vector argument|return of type T without 'F' enabled changes the
+  ABI` (`cg_avx_calling_convention`, group `psabi`), with F = `avx` up to
+  256 bits and `avx512f` beyond, and ends the check. kiln has no
+  per-function target features, so clang's mismatch error cannot arise.
+  - T is the callee's declared (sugared) parameter type. For a call that
+    passes an object argument, it is the parameter after that one (clang
+    counts `this`). Through `...` it is the argument's own type, and for
+    a return it is the declared return type. The type is printed with
+    the vector `aka` rule (spec/sema.md, `vector_diag_arg`).
+  - The location is clang's `getExprLoc`: the callee's begin for a plain
+    call, the member name for a member call, the operator for most
+    overloaded operators.
+  - Calls through a pointer are not checked. At `-fclang-compat=22`, a
+    callee that is not externally visible is skipped too.
+  - Tests: `ext.vector/ir-psabi-x86_64.cpp`, `ir-psabi-internal-x86_64*.cpp`.
+- **`bool` ext-vector `?:` conditions** (clang 20+) select on the
+  condition's `<N x i1>` lanes with one `select`
+  (`emit_vector_conditional`; `ext.vector/ir-bool-conditional*.cpp`,
+  `bool-conditional-run.cpp`).
+- At `ir_version` 20+, `kiln_llvm` prints uniform vector constants as
+  `splat (T v)` (spec/llvm.md §5).
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33

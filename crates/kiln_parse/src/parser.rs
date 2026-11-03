@@ -283,9 +283,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         mut src: TokenSource<'a, 'sm>,
         lit_opts: LiteralOptions,
     ) -> Self {
-        let kw = Keywords::new(s.ast.symbols(), s.gnu, s.clang_compat);
         let lex_opts = src.lex_options();
         let std = lex_opts.std;
+        let cxx11 = std >= Std::Cxx11;
+        let kw = Keywords::new(s.ast.symbols(), s.gnu, cxx11, s.clang_compat);
         s.set_std(std);
         let sm = src.source_manager();
         let cur = src.get(0);

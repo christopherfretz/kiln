@@ -1334,6 +1334,16 @@ impl Parser<'_, '_> {
     /// lacks its `;` recovers, since nothing is skipped after it). `()` is
     /// clang's parenthesized declarator wanting a name, reported at the
     /// `)`. Anything else is "expected member name or ';'".
+    /// A member declaration with no type-specifier whose declarator-id
+    /// is a qualified name ([`Parser::at_qualified_implicit_int_declarator`]),
+    /// except `R::g;`: an access declaration (not implemented), which
+    /// keeps the "expected member name" recovery.
+    fn at_qualified_member_declarator(&self) -> bool {
+        let access = matches!(self.scan_name_qual_at(self.pos()),
+            Some((end, false, _, _, Some(_))) if Self::punct_of(self.tok_at(end)) == Some(Punct::Semi));
+        !access && self.at_qualified_implicit_int_declarator()
+    }
+
     fn member_without_type(&mut self) {
         if self.at(Punct::LParen) && Self::punct_of(self.peek(1)) == Some(Punct::RParen) {
             self.bump();
@@ -1361,15 +1371,6 @@ impl Parser<'_, '_> {
                         | Punct::LBrace
                 )
             )
-    }
-
-    /// A member declarator with no decl-specifier that the declarator
-    /// parse reports: [`Self::at_implicit_int_declarator`], or a qualified
-    /// name with a component that names no scope (`Und::g();`; its
-    /// qualifier reports it, as at namespace scope).
-    fn at_untyped_member_declarator(&self) -> bool {
-        self.at_implicit_int_declarator()
-            || self.not_a_scope_name(self.pos()).is_some_and(|end| self.implicit_int_follows(end))
     }
 
     /// The default member initializer of `decl`, saved for the complete
@@ -1414,6 +1415,15 @@ impl Parser<'_, '_> {
         self.s.end_delayed_deprecation_to(level, None);
     }
 
+    /// After empty decl-specifiers: no declarator that may omit them
+    /// (a special member, an implicit-int declarator, or a qualified
+    /// member name) follows.
+    fn at_member_without_type(&self) -> bool {
+        !self.at_special_declarator(DeclaratorContext::Member)
+            && !self.at_implicit_int_declarator()
+            && !self.at_qualified_member_declarator()
+    }
+
     fn parse_member_declaration_inner(&mut self) {
         let tmpl_kind = self.template_decl_kind.take();
         if !self.stack_ok() || self.parse_member_declaration_leader() {
@@ -1434,10 +1444,7 @@ impl Parser<'_, '_> {
             self.act_on_member_decl_spec_only(&ds);
             return;
         }
-        if ds.is_empty()
-            && !self.at_special_declarator(DeclaratorContext::Member)
-            && !self.at_untyped_member_declarator()
-        {
+        if ds.is_empty() && self.at_member_without_type() {
             self.member_without_type();
             return;
         }
