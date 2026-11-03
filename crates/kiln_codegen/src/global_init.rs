@@ -167,8 +167,12 @@ impl Cg<'_> {
     }
 
     /// The function attributes of an initialization function.
+    /// `noinline` only at `-O0` (clang 19 and 22 alike).
     fn init_fn_attrs(&mut self, vector_width: u64) -> kiln_llvm::AttrSetId {
-        let mut a = vec![Attr::Flag(AttrKind::NoInline)];
+        let mut a = Vec::new();
+        if !self.opts.optimize {
+            a.push(Attr::Flag(AttrKind::NoInline));
+        }
         if !self.opts.exceptions {
             a.push(Attr::Flag(AttrKind::NoUnwind));
         }

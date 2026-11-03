@@ -275,10 +275,20 @@ delayed meaning; in practice they are always parsed immediately.
   (`ParseTemplateParameterList`). A list left empty by dropped parameters
   makes a following plain class declaration a non-template with
   "extraneous 'template<>' in declaration of struct 'D'". Where a
-  parameter does recover without its key, kiln makes it a type template
-  template parameter (clang 19's recovery; clang 22's differs, see the
-  WP-401 follow-ups). Tests:
-  `temp.param/template-template-param-missing-key{,-clang19,-cxx14}.cpp`.
+  parameter does recover without its key, clang 19 (and kiln at compat
+  19) makes it a type template template parameter. At compat 22 it names
+  no template (`act_on_keyless_template_template_param`, clang 22's
+  recovery, WP-409): every argument for it is "template argument does not
+  refer to a class or alias template, or template template parameter"
+  with "template argument refers to a class template 'A', here", and its
+  uses are not template names (`T<int>` is "no template named 'T'", `T x`
+  "unknown type name 'T'"). Tests:
+  `temp.param/template-template-param-missing-key{,-clang19,-cxx14}.cpp`,
+  `temp.param/template-template-param-keyless-recovery{,-clang19}.cpp`.
+- A template template parameter whose template-head has no parameters
+  (`template<> class U`) is "template template parameter must have its
+  own template parameters" at its name (at the next token when unnamed);
+  the parameter is kept. Test: `temp.param/template-template-param-no-params.cpp`.
 - Defaults are stored in the cold "template default args" map
   (ast.md §8.1).
 
@@ -1228,6 +1238,36 @@ Out-of-class partial specializations of a member template (WP-150):
   instantiation. Otherwise the error is "explicit specialization of
   'X<int>' after instantiation", with the note "implicit instantiation
   first required here" pointing to `SpecInfo.point_of_instantiation`.
+- A class explicit specialization may name the primary with a
+  nested-name-specifier (`template<> struct N::Z<int> {};`,
+  [temp.expl.spec]/3): the qualifier is resolved, the primary looked up
+  in the nominated scope, and the unqualified path reused. The enclosing
+  namespace must contain the template's ("class template specialization
+  of 'Z' not in a namespace enclosing 'N'", or "... must occur at global
+  scope" for a global template, with "explicitly specialized declaration
+  is here"); a name that is not a class
+  template, a missing template-id, or an undeclared name take clang's
+  errors (WP-409, `temp.expl.spec/qualified-class-spec{,-errors,-non-template}.cpp`,
+  `temp.expl.spec/qualified-class-name-errors.cpp`).
+- A qualifier naming a declared but undefined explicit specialization
+  (`A<long>::B<int>::f` after `template<> template<> struct A<long>::B<int>;`)
+  is "implicit instantiation of undefined template" / "incomplete type
+  named in nested name specifier" with the template's or the
+  specialization's note (`require_complete_nns`). At compat 22 the error is
+  at the start of the whole qualifier, at 19 at the template-name; clang
+  repeats it for a decl-specifier at namespace or class scope (`dup(clang)`,
+  spec/diag.md §7.4.1). Tests: `temp.expl.spec/undefined-member-template-spec-qualifier.cpp`,
+  `temp.expl.spec/undefined-spec-member-definition.cpp`,
+  `temp.res/undefined-template-qualifier{,-clang19}.cpp`.
+- A declarator qualifier that names a class template specialization
+  matching no partial specialization (`template<class T> void P<T*, int>::f()`)
+  is "nested name specifier 'P<T *, int>' for declaration does not refer
+  into a class, class template or class template partial specialization"
+  (`TemplState::unmatched_qualifier`); the declaration is dropped.
+  An out-of-line member of a partial specialization that matches none of
+  its members prints the specialization as written at compat 22
+  (`'P<T, int>'`) and canonically at 19 (`'P<type-parameter-0-0, int>'`).
+  Test: `temp.spec.partial.member/out-of-line-member-mismatch{,-clang19}.cpp`.
 
 **Allowed `SpecKind` transitions** (clang's `CheckSpecializationInstantiationRedecl`):
 
@@ -6175,7 +6215,13 @@ requires-clause scope.**
 - *Template redeclarations* share one identity: `Ast::first`/`latest`
   resolve a template through its pattern's redeclaration group. A friend
   class template naming an existing template is a redeclaration in that
-  group and does not make the original dependent.
+  group and does not make the original dependent. A class template
+  redeclared as a non-template class, a variable, a function, or a
+  variable, function or alias template (or the reverse) is "redefinition
+  of 'X' as different kind of symbol" with "previous definition is
+  here"; `template<> struct NT;` for a non-template class `NT` is
+  "extraneous 'template<>'" plus clang's "specialization of member" error
+  (WP-409, `temp.pre/class-template-redeclaration-kind.cpp`).
 - *Inherited default arguments* ([temp.param]/12):
   `Sema.inherited_defaults`, filled by `merge_template_defaults`. The
   AST records, separately, what clang records:

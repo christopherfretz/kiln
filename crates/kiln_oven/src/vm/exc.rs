@@ -40,6 +40,11 @@ pub(crate) const EXC_END: u32 = u32::MAX - 2;
 pub(crate) const EXC_FREE: u32 = u32::MAX - 3;
 /// The lowest sentinel.
 pub(crate) const SENTINEL: u32 = EXC_FREE;
+/// Not an exception sentinel (below [`SENTINEL`]): the destruction of a
+/// trivially destructible base subobject (`this`, of type `ty`) by its
+/// derived class's destructor, which runs no function but requires the
+/// base within its lifetime (clang's `HandleDestructionImpl`; `run_cleanup`).
+pub(crate) const LIFE_CHECK: u32 = u32::MAX - 4;
 
 /// An exception object.
 #[derive(Clone, Copy, Debug)]

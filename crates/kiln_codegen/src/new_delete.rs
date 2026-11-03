@@ -21,6 +21,7 @@ use crate::expr::LV;
 use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, err};
+use crate::tbaa::Tb;
 
 /// What clang knows about a global allocation or deallocation function
 /// (`isReplaceableGlobalAllocationFunction`,
@@ -388,6 +389,7 @@ impl Cg<'_> {
         if sig.nothrow {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
         }
+        self.call_size_attrs(Some(f), &mut fa);
         let mut ra = self.m.attrs_of(ret).to_vec();
         if af.replaceable && af.is_new {
             fa.push(Attr::AllocSize(0, None));
@@ -799,6 +801,7 @@ impl Cg<'_> {
                 q: x.allocated_ty,
                 bf: None,
                 vidx: None,
+                tb: Tb::Type,
             };
             self.init_to_lvalue(init, lv, false)?;
         }
@@ -994,6 +997,7 @@ impl Cg<'_> {
                     q,
                     bf: None,
                     vidx: None,
+                    tb: Tb::Type,
                 };
                 self.init_to_lvalue(ie, lv, false)?;
                 let one = self.i64c(1);
@@ -1094,8 +1098,13 @@ impl Cg<'_> {
         // type (multidimensional `new` of member pointers).
         let iq = if ivie { base } else { ast.exprs.get(init).ty() };
         let ity = self.mty(iq);
-        let lv =
-            LV { addr: Addr { v: phi, ty: ity, align: elem_align }, q: iq, bf: None, vidx: None };
+        let lv = LV {
+            addr: Addr { v: phi, ty: ity, align: elem_align },
+            q: iq,
+            bf: None,
+            vidx: None,
+            tb: Tb::Type,
+        };
         self.init_to_lvalue(init, lv, false)?;
         // clang leaves the list's partial-array cleanup in the loop body,
         // after the first element's initializer.
@@ -1206,8 +1215,9 @@ impl Cg<'_> {
         let Some(mut dt) = t.pointee(ast.exprs.get(arg).ty()) else {
             return err(loc, "delete of a non-pointer");
         };
+        let array_form = ast.exprs.get(e).has(ExprFlags::ARRAY_FORM);
         let mut cookie = 0;
-        if ast.exprs.get(e).has(ExprFlags::ARRAY_FORM) {
+        if array_form {
             let mut b = dt;
             while let Some(el) = t.element(b) {
                 b = el;
@@ -1246,6 +1256,14 @@ impl Cg<'_> {
             }
         } else if cookie == 0 && self.emit_object_delete(e, arg, p, dt, loc)? {
             self.emit_block(end, false);
+            return Ok(());
+        }
+        if !array_form && self.opts.opt_size > 1 && !ast.is_destroying_operator_delete(od) {
+            // clang `EmitObjectDelete` at -Oz: "When optimizing for size,
+            // call 'operator delete' unconditionally" — the
+            // `CallObjectDelete` cleanup is emitted in the end block.
+            self.emit_block(end, false);
+            self.emit_delete_call(od, ptr, dt, loc)?;
             return Ok(());
         }
         if cookie != 0 {
@@ -1331,6 +1349,7 @@ impl Cg<'_> {
                         return err(loc, "delete-expression without a deallocation function");
                     };
                     let vt = self.load(LTy::PTR, p, al, false);
+                    self.tbaa_vptr(vt);
                     let m2 = self.i64c(-2);
                     let op = self.gep(LTy::I64, vt, vec![m2], true);
                     let off = self.load(LTy::I64, op, 8, false);
