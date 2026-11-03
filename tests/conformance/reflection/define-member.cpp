@@ -3,7 +3,7 @@
 // of the class being defined adds a non-static data member at that point.
 // Lookup, layout, aggregate initialization and members_of see it.
 //@ expect: compile-ok
-//@ args: -freflection -I tests/support
+//@ args: -Wno-kiln-extension -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
 // -fconstexpr-report attributes each defining evaluation to its line

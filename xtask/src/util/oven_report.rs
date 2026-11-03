@@ -18,6 +18,8 @@ pub enum EvalKind {
     Init,
     TemplateArg,
     Consteval,
+    /// A `consteval` block ([dcl.pre]/P2996), which may inject declarations.
+    ConstevalBlock,
     IfConstexpr,
     Constraint,
     Other,
@@ -30,6 +32,7 @@ impl EvalKind {
             "init" => Self::Init,
             "template_arg" => Self::TemplateArg,
             "consteval" => Self::Consteval,
+            "consteval_block" => Self::ConstevalBlock,
             "if_constexpr" => Self::IfConstexpr,
             "constraint" => Self::Constraint,
             "other" => Self::Other,
@@ -238,7 +241,7 @@ fn evaluation(j: &Json) -> Result<Evaluation, String> {
     };
     let kind = j.get("kind").ok_or("missing `kind`")?;
     let kind = kind.as_str().and_then(EvalKind::parse).ok_or(
-        "`kind` must be one of static_assert|init|template_arg|consteval|if_constexpr|constraint|other",
+        "`kind` must be one of static_assert|init|template_arg|consteval|consteval_block|if_constexpr|constraint|other",
     )?;
     let mut counters = counters(j, false)?;
     counters.evaluations = 1;

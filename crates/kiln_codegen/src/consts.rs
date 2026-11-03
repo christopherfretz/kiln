@@ -107,10 +107,57 @@ impl Cg<'_> {
         matches!(self.tys.convert(ty), IrType::Vector(..))
     }
 
+    /// An integer narrower than its memory type `t` (a `_BitInt(N)` in
+    /// its ABI-sized `iM`, or the byte array of one whose `iN` allocates
+    /// a different size): extended by its signedness to the load/store
+    /// width and, for a byte array, split into its bytes (clang
+    /// `ConstantEmitter::emitForMemory`; the targets are little-endian).
+    /// `None` when `t` is an integer of the value's own width.
+    fn extended_int_const(
+        &mut self,
+        bits: &kiln_ast::consts::IntBits<'_>,
+        signed: bool,
+        t: LTy,
+    ) -> Option<R<Value>> {
+        let width = bits.width();
+        let total = match (self.m.types.int_width(t), self.m.types.array_info(t)) {
+            (Some(w), _) if w > width => w,
+            (None, Some((LTy::I8, n))) => u32::try_from(n * 8).ok()?,
+            _ => return None,
+        };
+        let n = total.div_ceil(64) as usize;
+        let mut w = vec![0u64; n];
+        for (d, s) in w.iter_mut().zip(bits.words()) {
+            *d = *s;
+        }
+        let top = width.checked_sub(1)?;
+        let neg = signed && w.get((top / 64) as usize).is_some_and(|x| (x >> (top % 64)) & 1 == 1);
+        for i in 0..total {
+            let (wi, b) = ((i / 64) as usize, i % 64);
+            if i >= width && neg {
+                w[wi] |= 1 << b;
+            } else if i >= width {
+                w[wi] &= !(1 << b);
+            }
+        }
+        if self.m.types.int_width(t).is_some() {
+            return Some(Ok(self.m.const_int_words(t, &w)));
+        }
+        // clang's `ConstantAggregateBuilder` shape for the bytes
+        // (`<{ i8 3, [23 x i8] zeroinitializer }>`).
+        let elems: Vec<Value> = (0..(total / 8) as usize)
+            .map(|i| self.m.const_int(LTy::I8, i128::from((w[i / 8] >> ((i % 8) * 8)) as u8)))
+            .collect();
+        Some(self.array_const(t, LTy::I8, &elems, elems.len()))
+    }
+
     /// A scalar constant of IR type `t`.
     fn scalar_const(&mut self, s: Scalar<'_>, t: LTy) -> R<Value> {
         match s {
-            Scalar::Int { bits, .. } => {
+            Scalar::Int { bits, signed, .. } => {
+                if let Some(v) = self.extended_int_const(&bits, signed, t) {
+                    return v;
+                }
                 if let Some(v) = bits.to_u128() {
                     if self.m.types.int_width(t).is_some() {
                         return Ok(self.m.const_int(t, v as i128));

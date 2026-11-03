@@ -104,6 +104,12 @@ impl Oven {
                 MetaErrorKind::NotImplemented { .. } => self.meta_trap(e.notes),
             });
         }
+        if op.purity() == Purity::Mutating {
+            // `define_aggregate` completed a class: its provisional slot
+            // is rebuilt now, so the rest of this evaluation sees it
+            // complete (spec/reflection.md §6.2; O(1) when nothing did).
+            self.types.refresh(b);
+        }
         let cur = self.stack[self.stack.len() - 1].func;
         let top = fb + self.funcs[cur as usize].nregs as usize + 1;
         let top = u32::try_from(top).map_err(|_| Fault::Invalid)?;

@@ -16,7 +16,7 @@ use crate::vm::Fault;
 
 mod access;
 mod annot;
-mod define;
+pub(crate) mod define;
 mod ext;
 pub(crate) mod intern;
 pub mod materialize;
@@ -28,7 +28,7 @@ pub(crate) mod value;
 
 pub use access::AccessOp;
 pub use annot::AnnotOp;
-pub use define::DefineOp;
+pub use define::{DefineOp, Dms, OptionsPlan, RawOptions};
 pub use ext::ExtOp;
 pub use member::MemberOp;
 pub use query::QueryOp;
