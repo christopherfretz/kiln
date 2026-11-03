@@ -21,7 +21,9 @@ namespace N { int v; }
 constexpr info n_before = ^^N;
 namespace N { extern int v; }
 namespace A = N;
-static_assert(n_before == ^^N && n_before == ^^A);
+// [expr.reflect]/5: ^^A reflects the namespace alias itself (WP-472),
+// not the namespace it denotes; what it names through `::` is the same.
+static_assert(n_before == ^^N && n_before != ^^A);
 static_assert(^^N::v == ^^A::v);
 
 struct C {
