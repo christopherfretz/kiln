@@ -3264,6 +3264,29 @@ categories, compared with clang 22 and clang 19 on both targets).
   emitted (`tests/codegen/asm_label_shared.cpp`,
   `tests/codegen/asm_label_structors.cpp`,
   `tests/conformance/dcl.asm/asm-label-shared-and-structors.cpp`).
+  A later variant of the same function type has its body appended to
+  that definition as unreachable blocks (a labelled virtual destructor's
+  `D0` after `D2`: `; No predecessors!`, declaring `_ZdlPvm`); one of
+  another type — the complete-object variant of a class with virtual
+  bases, without the base-object variant's VTT parameter — replaces the
+  definition at the end of the module (`Module::redefine_function_to_end`,
+  clang erasing the old definition), so the label is the complete-object
+  function and the class's vtable and VTT are emitted (WP-492,
+  `tests/codegen/asm_label_structors_vbases.cpp`,
+  `tests/conformance/dcl.asm/asm-label-structors-vbases-run.cpp`).
+- **Duplicate mangled names** (WP-492; clang `err_duplicate_mangled_name`
+  in `GetOrCreateLLVMFunction` with `IsForDefinition`): each symbol name
+  has a representative declaration, the first one codegen names it for
+  (a reference, a definition, or a deferred labelled definition: clang's
+  `Manglings`). A function definition into an already defined function
+  whose representative is another entity is the error `definition with
+  same mangled name 'N' as another definition` at the definition, with
+  `note: previous definition is here` at the representative's
+  definition; it is reported once (clang emits no later declaration
+  after an error) and no output is written. Structor variants sharing a
+  label are one entity. A function defined under the symbol of a defined
+  variable (clang's error) is not detected
+  (`crates/kiln_driver/tests/codegen.rs` `duplicate_mangled_name`).
 - **Incomplete class in a signature**: a function first referenced while
   a class parameter or return type is incomplete (never defined, or
   defined later in the TU) is declared `void ()` with no attributes, as

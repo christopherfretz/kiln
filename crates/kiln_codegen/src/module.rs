@@ -13,12 +13,13 @@ use kiln_ast::decl::{
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{BuiltinType, PrintOptions, TypeView, print_type};
 use kiln_ast::{Ast, DeclId, QualType};
+use kiln_diag::{Diag, DiagId};
 use kiln_llvm::{
     Attr, AttrKind, AttrSetId, ComdatKind, FuncId, GlobalId, Linkage, Module, TypeId as LTy,
     UnnamedAddr, UwTableKind, Value,
 };
-use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
+use kiln_source::{Loc, Span};
 
 use crate::fir::{Op, V};
 use crate::fold::Folds;
@@ -145,6 +146,12 @@ pub(crate) struct Cg<'a> {
     pub c1_done: FxHashSet<DeclId>,
     /// Deleting destructors already emitted (WP-080).
     pub d0_done: FxHashSet<DeclId>,
+    /// The first declaration given each symbol name (clang `Manglings`'
+    /// representative declaration, for `err_duplicate_mangled_name`).
+    pub reps: FxHashMap<String, DeclId>,
+    /// Whether a duplicate mangled name was diagnosed (clang hands no
+    /// later declaration to code generation after an error).
+    pub dup_reported: bool,
     /// Thunk functions by mangled name (WP-080).
     pub thunk_fns: FxHashMap<String, FuncId>,
     /// Structors whose base variant body was generated.
@@ -176,7 +183,7 @@ pub(crate) struct Cg<'a> {
     pub vararg_bodies: FxHashMap<FuncId, (crate::fir::Fir, bool)>,
     /// Warnings codegen reports itself (clang's `CGM.getDiags()`, e.g.
     /// `-Watomic-alignment`), in emission order.
-    pub diags: Vec<kiln_diag::Diag>,
+    pub diags: Vec<Diag>,
     /// Per-function state.
     pub f: Fx,
     /// The `$_N` ids of unnamed classes, in first-mangle order.
@@ -239,6 +246,8 @@ impl<'a> Cg<'a> {
             c1_decl: FxHashSet::default(),
             c1_done: FxHashSet::default(),
             d0_done: FxHashSet::default(),
+            reps: FxHashMap::default(),
+            dup_reported: false,
             thunk_fns: FxHashMap::default(),
             sdone: FxHashSet::default(),
             vtables: FxHashMap::default(),
@@ -288,7 +297,7 @@ impl<'a> Cg<'a> {
 
     /// Emits the whole translation unit; also returns the warnings
     /// reported on the way (even when emission fails).
-    pub fn run(mut self) -> (R<Module>, Vec<kiln_diag::Diag>) {
+    pub fn run(mut self) -> (R<Module>, Vec<Diag>) {
         let r = self.run_tu();
         (r.map(|()| self.m), self.diags)
     }
@@ -513,6 +522,12 @@ impl<'a> Cg<'a> {
                 self.to_emit.push(Def::Decl(d));
             }
         } else {
+            // clang `EmitGlobal` names a deferred definition (its label
+            // is the only name another definition can share).
+            if mangle::asm_label(ast, first).is_some() {
+                let name = mangle::mangle_decl(ast, &mut self.anon, first);
+                self.note_rep(&name, first);
+            }
             self.deferred.insert(first, d);
         }
         Ok(())
@@ -1721,6 +1736,7 @@ impl<'a> Cg<'a> {
             return Ok(f);
         }
         let name = mangle::mangle_decl(ast, &mut self.anon, first);
+        self.note_rep(&name, first);
         let sig = self.decl_sig(first)?;
         // An existing function of that name and type is this one: a
         // runtime function codegen declared first (`__cxa_allocate_exception`
@@ -1798,6 +1814,7 @@ impl<'a> Cg<'a> {
     /// `GetOrCreateLLVMFunction` with `IsForDefinition`).
     pub(crate) fn fn_for_definition(&mut self, d: DeclId, f: FuncId) -> R<FuncId> {
         let first = self.ast.first(d);
+        self.check_duplicate_def(d, f);
         let sig = self.decl_sig(first)?;
         if self.m.func(f).ty() == sig.fn_ty || !self.m.func(f).is_declaration() {
             return Ok(f);
@@ -1807,6 +1824,38 @@ impl<'a> Cg<'a> {
         }
         self.set_decl_attrs(f, first, &sig);
         Ok(f)
+    }
+
+    /// Records `first` as the representative declaration of symbol
+    /// `name` unless one is recorded.
+    pub(crate) fn note_rep(&mut self, name: &str, first: DeclId) {
+        if !self.reps.contains_key(name) {
+            self.reps.insert(name.to_owned(), first);
+        }
+    }
+
+    /// clang `GetOrCreateLLVMFunction` with `IsForDefinition`: the
+    /// definition `d` into the defined function `f` whose representative
+    /// declaration is another entity is `err_duplicate_mangled_name`
+    /// (once: clang emits no later declaration after the error). The
+    /// body is still appended (its blocks unreachable), as clang does.
+    pub(crate) fn check_duplicate_def(&mut self, d: DeclId, f: FuncId) {
+        if self.dup_reported || self.m.func(f).is_declaration() {
+            return;
+        }
+        let ast = self.ast;
+        let name = self.m.func(f).name();
+        let Some(&rep) = self.reps.get(name) else { return };
+        if rep == ast.first(d) {
+            return;
+        }
+        let prev = ast.definition(rep).unwrap_or(rep);
+        let diag =
+            Diag::new(DiagId::cg_duplicate_mangled_name, Span::empty(ast.decls.get(d).loc()))
+                .arg(name)
+                .note(DiagId::note_previous_definition, Span::empty(ast.decls.get(prev).loc()));
+        self.diags.push(diag);
+        self.dup_reported = true;
     }
 
     /// The declaration attributes of `f` for `first` with signature `sig`.

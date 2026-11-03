@@ -446,10 +446,30 @@ impl Module {
     ///
     /// `f` is defined or replaced, or `fn_ty` is not a function type.
     pub fn retype_function_to_end(&mut self, f: FuncId, fn_ty: TypeId) -> IrResult<()> {
-        if !self.funcs[f.index()].is_declaration() || self.replaced.contains_key(&f) {
+        if !self.funcs[f.index()].is_declaration() {
             return Err(IrError::new(
                 IrErrorKind::BadGlobal,
                 "only a live function declaration can be retyped",
+            ));
+        }
+        self.redefine_function_to_end(f, fn_ty)
+    }
+
+    /// [`Module::retype_function_to_end`] for a function that may be
+    /// defined: its body is dropped (clang `GetOrCreateLLVMFunction` for
+    /// a definition of another type under a defined name erases the old
+    /// definition, as when the complete-object variant of a structor
+    /// with virtual bases follows its base-object variant under one asm
+    /// label).
+    ///
+    /// # Errors
+    ///
+    /// `f` is replaced, or `fn_ty` is not a function type.
+    pub fn redefine_function_to_end(&mut self, f: FuncId, fn_ty: TypeId) -> IrResult<()> {
+        if self.replaced.contains_key(&f) {
+            return Err(IrError::new(
+                IrErrorKind::BadGlobal,
+                "only a live function can be redefined",
             ));
         }
         let Some((ret, params, varargs)) = self.types.function_info(fn_ty) else {
