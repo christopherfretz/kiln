@@ -485,10 +485,12 @@ impl Args {
                 i += 1;
                 xclang = true;
             }
-            if xclang && argv.get(i).is_some_and(|n| n == "-Xclang") && argv.len() > i + 1 {
-                if let Some((_, Valued::Next)) = split_valued(arg, argv.get(i + 1).map(String::as_str)) {
-                    i += 1;
-                }
+            if xclang
+                && argv.get(i).is_some_and(|n| n == "-Xclang")
+                && let Some((_, Valued::Next)) =
+                    split_valued(arg, argv.get(i + 1).map(String::as_str))
+            {
+                i += 1;
             }
             if verify.parse_arg(arg) {
                 continue;
@@ -512,6 +514,7 @@ impl Args {
             if let Some(r) = a.constexpr.parse_arg(arg).or_else(|| a.templ.parse_arg(arg)) {
                 a.errors.extend(r.err());
             } else if !a.flag(arg)
+                && !a.target_flag(arg)
                 && !a.complex_flag(arg)
                 && !a.auto_var_init_flag(arg)
                 && !a.predef_flag(arg)
@@ -574,6 +577,19 @@ impl Args {
             },
             _ => unreachable!("valued option {opt}"),
         }
+    }
+
+    /// `-march=` / `-mcpu=` (the last of each wins; resolved by
+    /// [`crate::features::resolve`]). Returns false if `arg` is neither.
+    fn target_flag(&mut self, arg: &str) -> bool {
+        if let Some(v) = arg.strip_prefix("-march=") {
+            self.march = Some(v.to_owned());
+        } else if let Some(v) = arg.strip_prefix("-mcpu=") {
+            self.mcpu = Some(v.to_owned());
+        } else {
+            return false;
+        }
+        true
     }
 
     /// Plain flags. Returns false if `arg` is not one.
@@ -650,10 +666,6 @@ impl Args {
                             v.to_owned(),
                         )),
                     }
-                } else if let Some(v) = arg.strip_prefix("-march=") {
-                    self.march = Some(v.to_owned());
-                } else if let Some(v) = arg.strip_prefix("-mcpu=") {
-                    self.mcpu = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("--embed-dir=") {
                     self.embed_dirs.push(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fmodule-file=") {

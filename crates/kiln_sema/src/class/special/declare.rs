@@ -291,7 +291,7 @@ impl Sema<'_, '_> {
                     Some(DiagId::sema_conv_not_member)
                 } else if ds.has_type_specifier() {
                     Some(DiagId::sema_conv_return_type)
-                } else if params.iter().skip(usize::from(xobj)).next().is_some() {
+                } else if params.get(usize::from(xobj)).is_some() {
                     // [class.conv.fct]/1 (C++23): no non-object parameters;
                     // an explicit object parameter is allowed (P0847).
                     Some(DiagId::sema_conv_params)

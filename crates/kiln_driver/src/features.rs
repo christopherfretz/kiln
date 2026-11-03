@@ -77,8 +77,8 @@ pub fn resolve(args: &Args, aarch64: bool) -> (TargetFeatures, Vec<ArgError>) {
     }
     if let Some(v) = &args.march {
         let (base, exts) = v.split_once('+').map_or((v.as_str(), None), |(b, e)| (b, Some(e)));
-        let ok = base.eq_ignore_ascii_case("armv8-a")
-            && exts.is_none_or(|e| f.extensions(e).is_some());
+        let ok =
+            base.eq_ignore_ascii_case("armv8-a") && exts.is_none_or(|e| f.extensions(e).is_some());
         if !ok {
             f = TargetFeatures::default();
             errors.push(unsupported("-march=", v));
@@ -89,8 +89,8 @@ pub fn resolve(args: &Args, aarch64: bool) -> (TargetFeatures, Vec<ArgError>) {
         // `trbe` features it names explicitly.
         f.set("ete", true);
         f.set("trbe", true);
-        let ok = base.eq_ignore_ascii_case("generic")
-            && exts.is_none_or(|e| f.extensions(e).is_some());
+        let ok =
+            base.eq_ignore_ascii_case("generic") && exts.is_none_or(|e| f.extensions(e).is_some());
         if !ok {
             f = TargetFeatures::default();
             errors.push(unsupported("-mcpu=", v));
@@ -138,10 +138,7 @@ mod tests {
     #[test]
     fn mcpu_and_march() {
         assert_eq!(feats("-mcpu=generic a.cpp"), "false +ete,+trbe");
-        assert_eq!(
-            feats("-mcpu=generic+sve a.cpp"),
-            "true +ete,+trbe,+fullfp16,+sve"
-        );
+        assert_eq!(feats("-mcpu=generic+sve a.cpp"), "true +ete,+trbe,+fullfp16,+sve");
         // `-march=` wins and `-mcpu=`'s extensions are ignored.
         assert_eq!(feats("-mcpu=generic+sve -march=armv8-a a.cpp"), "false ");
         assert_eq!(feats("-march=armv8-a+sve -mcpu=generic a.cpp"), "true +fullfp16,+sve");

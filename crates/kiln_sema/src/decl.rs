@@ -893,7 +893,10 @@ impl Sema<'_, '_> {
         if ds.is_typedef()
             || matches!(
                 d.site,
-                DeclSite::Alias | DeclSite::TemplateArg | DeclSite::TypeParamDefault | DeclSite::Subst
+                DeclSite::Alias
+                    | DeclSite::TemplateArg
+                    | DeclSite::TypeParamDefault
+                    | DeclSite::Subst
             )
             || d.chunks.iter().any(|c| matches!(c, Chunk::Function { .. }))
         {

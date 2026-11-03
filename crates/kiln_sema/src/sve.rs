@@ -334,13 +334,9 @@ impl Sema<'_, '_> {
                 }
                 Some(lt)
             }
-            (true, false) | (false, true) => self.check_sve_vector_operands(
-                &mut t2,
-                &mut f2,
-                loc,
-                false,
-                SveOpKind::Conditional,
-            ),
+            (true, false) | (false, true) => {
+                self.check_sve_vector_operands(&mut t2, &mut f2, loc, false, SveOpKind::Conditional)
+            }
             (false, false) => self.sve_cond_scalar_arms(ct, ccount, &mut t2, &mut f2, loc),
         };
         let Some(res) = res else {
@@ -445,7 +441,11 @@ impl Sema<'_, '_> {
     /// clang `getScalableVectorType(elem, count)`: the SVE vector of
     /// `count` elements like `elem` (same kind and size), else the name
     /// of the SVE tuple type of that many (`Err(Some)`), else `Err(None)`.
-    fn sve_vector_for_scalar(&self, elem: QualType, count: u32) -> Result<QualType, Option<String>> {
+    fn sve_vector_for_scalar(
+        &self,
+        elem: QualType,
+        count: u32,
+    ) -> Result<QualType, Option<String>> {
         let kind = self.sve_elem_kind(elem).ok_or(None)?;
         let bits = self.scalar_bits(elem).ok_or(None)?;
         for b in BuiltinType::ALL {
@@ -453,8 +453,9 @@ impl Sema<'_, '_> {
             if self.sve_elem_kind(e) != Some(kind) || self.scalar_bits(e) != Some(bits) {
                 continue;
             }
-            let nf = if count % n == 0 { count / n } else { 0 };
-            let tuple = if kind == SveElemKind::Bool { matches!(nf, 2 | 4) } else { (2..=4).contains(&nf) };
+            let nf = if count.is_multiple_of(n) { count / n } else { 0 };
+            let tuple =
+                if kind == SveElemKind::Bool { matches!(nf, 2 | 4) } else { (2..=4).contains(&nf) };
             if nf == 1 {
                 return Ok(b.qual_type());
             }
