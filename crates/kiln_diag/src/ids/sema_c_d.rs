@@ -185,6 +185,7 @@ sema_default_member_init_not_yet_parsed = Error (2) "default member initializer 
 sema_default_not_in_switch = Error (0) "'default' statement not in switch statement";
 sema_default_not_special = Error (0) "only special member functions and comparison operators may be defaulted";
 sema_defaulted_assign_return = Error (2) "explicitly-defaulted {0:copy|move} assignment operator must return {1}";
+sema_defaulted_cmp_cannot_deduce_undeduced_auto = Error (2) "return type of defaulted 'operator<=>' cannot be deduced because three-way comparison for {0:|member |base class }{1} has a deduced return type and is not yet defined";
 sema_defaulted_cmp_constexpr_mismatch = Error (2) "defaulted definition of {0:equality|three-way|equality|relational} comparison operator cannot be declared {1:constexpr|consteval} because it invokes a non-constexpr comparison function";
 sema_defaulted_cmp_constexpr_mismatch_19 = Error (2) "defaulted definition of {0:equality|three-way|equality|relational} comparison operator cannot be declared {1:constexpr|consteval} because it invokes a non-constexpr comparison function ";
 sema_defaulted_cmp_constexpr_mismatch_implicit = Error (1) "defaulted definition of three-way comparison operator cannot be declared {0:constexpr|consteval} because for which the corresponding implicit 'operator=='  invokes a non-constexpr comparison function";
@@ -207,7 +208,8 @@ sema_defaulted_constexpr_with_vbase = Error (1) "{0:default constructor|copy con
 sema_defaulted_copy_assign_not_ref = Error (0) "the parameter for an explicitly-defaulted copy assignment operator must be an lvalue reference type";
 sema_defaulted_default_args = Error (1) "an explicitly-defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} cannot have default arguments";
 sema_defaulted_deleted = Warning [DefaultedFunctionDeleted] (1) "explicitly defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} is implicitly deleted";
-sema_define_implicit_member = Error (1) "definition of implicitly declared {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor}";
+sema_define_explicitly_defaulted_member = Error (1) "definition of explicitly defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor|function}";
+sema_define_implicit_member = Error (1) "definition of implicitly declared {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor|function}";
 sema_delegating_ctor_cycle = WarningError [DelegatingCtorCycles] (1) "constructor for {0} creates a delegation cycle";
 sema_delete_ambiguous_conversion = Error (1) "ambiguous conversion of delete expression of type {0} to a pointer";
 sema_delete_array_type = Warning (1) "'delete' applied to a pointer-to-array type {0} treated as 'delete[]'";

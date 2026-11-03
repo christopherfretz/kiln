@@ -1152,6 +1152,18 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     parsed with `parse_decltype_specifier` and passed to
     `rebuild_member_destructor` (`~decltype(auto)` is the
     `decltype(auto)` error; WP-457).
+    go to `Sema::act_on_member_destructor_q` (WP-223).
+    A member name after `.`/`->` and an optional nested-name-specifier
+    may be an operator-function-id or a conversion-function-id
+    (`a.A::operator==(b)`, `p->A::operator int()`; [expr.ref]/1,
+    [over.oper.general]/1, [class.conv.fct]/1): `parse_operator_function_name`
+    gives the `DeclName` for `Sema::act_on_member_q`. A qualified
+    operator- or conversion-function-id is also an id-expression, so
+    `&A::operator==`, `&A::operator<=>`, `&A::operator()`,
+    `&A::operator[]` and `&A::operator int` form pointers to members
+    (WP-130; tests
+    `tests/conformance/expr.prim.id.qual/qualified-operator-{function-id,member-access,ast}.cpp`,
+    WP-456).
   - Then primary expressions:
     - literals and `this`-less id-expressions
     - qualified names `N::x`
@@ -1297,9 +1309,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
 - **new-initializer.** `( expression-list(opt) )` or a braced-init-list
   (`parse_init_list`). The result goes to `Sema::act_on_cxx_new(global,
   start, placement, NewTypeId, NewInit, end)`.
-- **delete.** `delete`, then `[` `]` for the array form (clang's lambda
-  disambiguation of `delete []{...}` is M3 with lambdas), then a
-  cast-expression; `Sema::act_on_cxx_delete`.
+- **delete.** `delete`, then `[` `]` for the array form, then a
+  cast-expression; `Sema::act_on_cxx_delete`. `[` `]` followed by `{`,
+  `<`, `(` `)`, or `(` and two identifiers (not keywords) is clang's
+  lambda lookahead and is reported as `lambda expressions is not
+  supported yet` (clang's `err_lambda_after_delete` recovery is not
+  implemented); anything else, such as `delete[] (char*)p`, is array
+  delete (WP-446, `tests/conformance/expr.delete/array-delete-cast-operand.cpp`).
 - **No postfix suffix.** A new-expression is a unary-expression: a
   following `[`, `(`, `++`, `--`, `.` or `->` reports `expression cannot be
   followed by a postfix '[' operator; add parentheses` and parses the
@@ -1753,9 +1769,6 @@ in `kiln_diag` for now; nothing emits them.
   - fold expressions
   - braced-init-list subscripts and functional-cast operands
   - pointer-to-member operators on classes
-  - qualified member access `e.N::m` (reported "qualified member
-    access is not supported yet": `act_on_member` takes no
-    nested-name-specifier)
   - reflection beyond the `-freflection` spike (§5.2): expression,
     dependent and template splices, `^^` of a template-id
 - **Statements:** range-based `for`, contracts.
