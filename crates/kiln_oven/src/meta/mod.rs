@@ -18,6 +18,7 @@ mod access;
 mod annot;
 mod define;
 mod ext;
+pub mod materialize;
 mod member;
 mod query;
 mod templ;
@@ -272,6 +273,17 @@ pub enum MetaOut {
     Info(ReflectionId),
     /// A frozen pointer value, thawed as the call's (pointer) result type.
     Frozen(ConstValueId),
+    /// A string view (`materialize::Shape::Str`): a frozen pointer to the
+    /// characters of a static string object, and its length.
+    Str(ConstValueId, u64),
+    /// A `source_location` (`materialize::Shape::SrcLoc`): the frozen
+    /// `const __impl *` it holds, null for `source_location{}`.
+    SrcLoc(Option<ConstValueId>),
+    /// Two scalars (`materialize::Shape::Pair`).
+    Pair(u128, u128),
+    /// A `vector<info>` (`materialize::Shape::Vector`) of the first `n`
+    /// reflections the bridge wrote to [`crate::Oven::meta_infos`].
+    Infos(u32),
 }
 
 /// Why an intrinsic failed.

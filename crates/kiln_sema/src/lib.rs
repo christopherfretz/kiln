@@ -815,6 +815,9 @@ pub struct Sema<'a, 'sm> {
     pub(crate) abstract_noted: kiln_source::fx::FxHashSet<DeclId>,
     /// State of the source-location builtins (`builtins.rs`).
     pub(crate) srcloc: builtins::SrcLocCache,
+    /// The frozen strings and source locations of the `std::meta` names
+    /// family, per reflection (`meta/names.rs`).
+    pub(crate) meta_names: meta::names::NameCache,
     /// The lambdas whose bodies are being analysed, innermost last
     /// (spec/sema-lambda.md; WP-075).
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
@@ -1038,6 +1041,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inst: templ::InstState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
             srcloc: builtins::SrcLocCache::default(),
+            meta_names: meta::names::NameCache::default(),
             lambdas: Vec::new(),
             lambda_mangle: lambda::ManglingState::default(),
             size_t_sugar: size_t,

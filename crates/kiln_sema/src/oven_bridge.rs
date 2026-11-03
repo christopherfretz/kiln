@@ -145,6 +145,29 @@ impl SemaBridge for Bridge<'_, '_, '_> {
     ) -> Result<(), MetaError> {
         self.sema.meta(op, args, out, ctx, oven)
     }
+
+    fn meta_shape(
+        &mut self,
+        op: MetaOp,
+        param: Option<usize>,
+        q: QualType,
+    ) -> Result<Option<kiln_oven::Shape>, String> {
+        self.sema.meta_shape(op, param, q)
+    }
+
+    fn meta_exception(&mut self) -> Option<kiln_oven::ExcCtor> {
+        self.sema.meta_exception_ctor()
+    }
+
+    fn meta_throw(
+        &mut self,
+        op: MetaOp,
+        callee: DeclId,
+        what: &str,
+        loc: Loc,
+    ) -> Option<kiln_oven::MetaThrow> {
+        self.sema.meta_throw(op, callee, what, loc)
+    }
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {

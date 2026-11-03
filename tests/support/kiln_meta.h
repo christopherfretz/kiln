@@ -1,17 +1,266 @@
-// kiln-internal std::meta surface for the WP-267 reflection spike
-// (-freflection; spec/reflection.md §1.3). Not P2996's <meta>: only the
-// names the spike implements. The functions with
-// no body are consteval intrinsics the Oven dispatches by qualified name
-// and signature (spec/reflection.md §3).
+// kiln's <meta>-shaped header for the reflection tests (-freflection;
+// spec/reflection.md §1.3). Not the real <meta> (a later WP): the names
+// the implemented work packages answer, declared where P2996R13 and
+// P3560R2 declare them. The functions with no body are consteval
+// intrinsics the Oven dispatches by qualified name and signature
+// (spec/reflection.md §3).
+//
+// The class types the intrinsics return (vector, string_view,
+// u8string_view, source_location) come from the real standard library
+// when one of its headers was included before this one (`_LIBCPP_VERSION`
+// or `__GLIBCXX__` defined): include standard headers first. Otherwise
+// this header declares minimal stand-ins of the same layout (the Oven
+// matches results by layout, §3.5). The stand-in vector is move-only.
 #pragma once
+
+#if defined(_LIBCPP_VERSION) || defined(__GLIBCXX__)
+#include <exception>
+#include <source_location>
+#include <string_view>
+#include <vector>
+#else
+namespace std {
+using __kiln_size_t = decltype(sizeof 0);
+
+class exception {
+ public:
+  constexpr exception() noexcept = default;
+  constexpr exception(const exception&) noexcept = default;
+  constexpr exception& operator=(const exception&) noexcept = default;
+  constexpr virtual ~exception() = default;
+  constexpr virtual const char* what() const noexcept { return "std::exception"; }
+};
+
+template <class T>
+struct allocator {
+  using value_type = T;
+  constexpr allocator() noexcept = default;
+  template <class U>
+  constexpr allocator(const allocator<U>&) noexcept {}
+  constexpr T* allocate(__kiln_size_t n) { return static_cast<T*>(::operator new(n * sizeof(T))); }
+  constexpr void deallocate(T* p, __kiln_size_t) noexcept { ::operator delete(p); }
+};
+
+// Begin, end and end-of-capacity pointers (libc++'s and libstdc++'s
+// layout). Read-only: elements are only made by the intrinsics.
+template <class T, class A = allocator<T>>
+class vector {
+  T* __begin_ = nullptr;
+  T* __end_ = nullptr;
+  T* __cap_ = nullptr;
+
+ public:
+  using value_type = T;
+  using size_type = __kiln_size_t;
+  using iterator = const T*;
+  using const_iterator = const T*;
+  constexpr vector() noexcept = default;
+  vector(const vector&) = delete;
+  constexpr vector(vector&& o) noexcept : __begin_(o.__begin_), __end_(o.__end_), __cap_(o.__cap_) {
+    o.__begin_ = o.__end_ = o.__cap_ = nullptr;
+  }
+  vector& operator=(const vector&) = delete;
+  constexpr ~vector() {
+    if (__begin_) A().deallocate(__begin_, __kiln_size_t(__cap_ - __begin_));
+  }
+  constexpr size_type size() const noexcept { return __kiln_size_t(__end_ - __begin_); }
+  constexpr size_type capacity() const noexcept { return __kiln_size_t(__cap_ - __begin_); }
+  constexpr bool empty() const noexcept { return __begin_ == __end_; }
+  constexpr const T* data() const noexcept { return __begin_; }
+  constexpr const T* begin() const noexcept { return __begin_; }
+  constexpr const T* end() const noexcept { return __end_; }
+  constexpr const T& operator[](size_type i) const noexcept { return __begin_[i]; }
+  constexpr const T& front() const noexcept { return *__begin_; }
+  constexpr const T& back() const noexcept { return __end_[-1]; }
+};
+
+template <class C>
+class basic_string_view {
+  const C* __data_ = nullptr;
+  __kiln_size_t __size_ = 0;
+
+ public:
+  using value_type = C;
+  using size_type = __kiln_size_t;
+  constexpr basic_string_view() noexcept = default;
+  constexpr basic_string_view(const C* s) noexcept : __data_(s) {
+    while (s[__size_]) ++__size_;
+  }
+  constexpr basic_string_view(const C* s, size_type n) noexcept : __data_(s), __size_(n) {}
+  constexpr const C* data() const noexcept { return __data_; }
+  constexpr size_type size() const noexcept { return __size_; }
+  constexpr size_type length() const noexcept { return __size_; }
+  constexpr bool empty() const noexcept { return __size_ == 0; }
+  constexpr const C* begin() const noexcept { return __data_; }
+  constexpr const C* end() const noexcept { return __data_ + __size_; }
+  constexpr const C& operator[](size_type i) const noexcept { return __data_[i]; }
+  friend constexpr bool operator==(basic_string_view a, basic_string_view b) noexcept {
+    if (a.__size_ != b.__size_) return false;
+    for (size_type i = 0; i < a.__size_; ++i)
+      if (a.__data_[i] != b.__data_[i]) return false;
+    return true;
+  }
+};
+using string_view = basic_string_view<char>;
+using u8string_view = basic_string_view<char8_t>;
+
+// One pointer to a static `__impl` (libc++'s and libstdc++'s layout;
+// the shape __builtin_source_location requires).
+class source_location {
+  struct __impl {
+    const char* _M_file_name;
+    const char* _M_function_name;
+    unsigned _M_line;
+    unsigned _M_column;
+  };
+  using __bsl_ty = decltype(__builtin_source_location());
+  const __impl* __ptr_ = nullptr;
+
+ public:
+  static consteval source_location current(__bsl_ty p = __builtin_source_location()) noexcept {
+    source_location s;
+    s.__ptr_ = static_cast<const __impl*>(p);
+    return s;
+  }
+  constexpr source_location() noexcept = default;
+  constexpr unsigned line() const noexcept { return __ptr_ ? __ptr_->_M_line : 0; }
+  constexpr unsigned column() const noexcept { return __ptr_ ? __ptr_->_M_column : 0; }
+  constexpr const char* file_name() const noexcept { return __ptr_ ? __ptr_->_M_file_name : ""; }
+  constexpr const char* function_name() const noexcept {
+    return __ptr_ ? __ptr_->_M_function_name : "";
+  }
+};
+}  // namespace std
+#endif
 
 namespace std::meta {
 using info = decltype(^^int);
 
+// [meta.reflection.queries]
 consteval info type_of(info r);
+
+// [meta.reflection.names]
+consteval bool has_identifier(info r);
+consteval std::string_view identifier_of(info r);
+consteval std::u8string_view u8identifier_of(info r);
+consteval std::string_view display_string_of(info r);
+consteval std::u8string_view u8display_string_of(info r);
+consteval std::source_location source_location_of(info r);
+
+// The spike's name query (identifier_of as a NTBS; retired by WP-484).
 consteval const char* name_of(info r);
 
-// members_of: a fixed-capacity array-like (no std::vector in the spike).
+// [meta.reflection.exception] (P3560R2): what a failing intrinsic throws.
+// The message is copied (constexpr new), so a copy outlives its source.
+// The base is std::exception where that is usable in a constant
+// expression (P3378 constexpr exceptions, or the stand-in above); a
+// standard library without it (libc++ 19, libstdc++ 14) gets a local
+// polymorphic base with the same what().
+#if (defined(_LIBCPP_VERSION) || defined(__GLIBCXX__)) && \
+    !(defined(__cpp_lib_constexpr_exceptions) && __cpp_lib_constexpr_exceptions >= 202411L)
+class __kiln_exception_base {
+ public:
+  constexpr __kiln_exception_base() noexcept = default;
+  constexpr __kiln_exception_base(const __kiln_exception_base&) noexcept = default;
+  constexpr __kiln_exception_base& operator=(const __kiln_exception_base&) noexcept = default;
+  constexpr virtual ~__kiln_exception_base() = default;
+  constexpr virtual const char* what() const noexcept { return "std::meta::exception"; }
+};
+#else
+using __kiln_exception_base = std::exception;
+#endif
+
+class exception : public __kiln_exception_base {
+  char* __what_ = nullptr;
+  char8_t* __u8what_ = nullptr;
+  decltype(sizeof 0) __size_ = 0;
+  info __from_;
+  std::source_location __where_;
+
+  template <class C>
+  constexpr void __copy(const C* s, decltype(sizeof 0) n) {
+    __size_ = n;
+    __what_ = new char[n + 1];
+    __u8what_ = new char8_t[n + 1];
+    for (decltype(sizeof 0) i = 0; i < n; ++i) {
+      __what_[i] = char(s[i]);
+      __u8what_[i] = char8_t(s[i]);
+    }
+    __what_[n] = 0;
+    __u8what_[n] = 0;
+  }
+
+ public:
+  consteval exception(std::u8string_view what, info from,
+                      std::source_location where = std::source_location::current()) noexcept
+      : __from_(from), __where_(where) {
+    __copy(what.data(), what.size());
+  }
+  consteval exception(std::string_view what, info from,
+                      std::source_location where = std::source_location::current()) noexcept
+      : __from_(from), __where_(where) {
+    __copy(what.data(), what.size());
+  }
+  constexpr exception(const exception& o) noexcept
+      : __kiln_exception_base(o), __from_(o.__from_), __where_(o.__where_) {
+    __copy(o.__u8what_, o.__size_);
+  }
+  constexpr exception& operator=(const exception& o) noexcept {
+    if (this != &o) {
+      delete[] __what_;
+      delete[] __u8what_;
+      __copy(o.__u8what_, o.__size_);
+      __from_ = o.__from_;
+      __where_ = o.__where_;
+    }
+    return *this;
+  }
+  constexpr ~exception() override {
+    delete[] __what_;
+    delete[] __u8what_;
+  }
+  constexpr const char* what() const noexcept override { return __what_; }
+  consteval std::u8string_view u8what() const noexcept { return {__u8what_, __size_}; }
+  consteval info from() const noexcept { return __from_; }
+  consteval std::source_location where() const noexcept { return __where_; }
+};
+
+// [meta.reflection.layout]: offset_of's result (WP-478 answers it).
+struct member_offset {
+  decltype((char*)0 - (char*)0) bytes;
+  decltype((char*)0 - (char*)0) bits;
+  constexpr decltype((char*)0 - (char*)0) total_bits() const { return 8 * bytes + bits; }
+};
+
+// [meta.reflection.access.context]: a scope and a designating class
+// (null: none). current() is WP-478's.
+class access_context {
+  info __scope_;
+  info __designating_;
+  constexpr access_context(info s, info d) noexcept : __scope_(s), __designating_(d) {}
+
+ public:
+  access_context() = delete;
+  static consteval access_context current() noexcept;
+  // The IS's scope is ^^:: (not parsed yet): null stands in for it.
+  static consteval access_context unprivileged() noexcept { return {info(), info()}; }
+  static consteval access_context unchecked() noexcept { return {info(), info()}; }
+  consteval access_context via(info cls) const { return {__scope_, cls}; }
+  consteval info scope() const noexcept { return __scope_; }
+  consteval info designating_class() const noexcept { return __designating_; }
+};
+
+// The materialization recipes under test (spec/reflection.md §3.5):
+// a vector<info> of any contiguous range of info, a member_offset and an
+// access_context made by the Oven from their members.
+template <class R>
+consteval std::vector<info> __kiln_reflection_range(R&& r);
+consteval member_offset __kiln_member_offset(decltype((char*)0 - (char*)0) bytes,
+                                             decltype((char*)0 - (char*)0) bits);
+consteval access_context __kiln_access_context(info scope, info designating);
+
+// members_of: a fixed-capacity array-like (the spike's; WP-478 adds the
+// IS's vector form).
 consteval unsigned long __kiln_members_count(info cls);
 consteval info __kiln_member_at(info cls, unsigned long i);
 

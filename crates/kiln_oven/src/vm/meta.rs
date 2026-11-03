@@ -41,6 +41,17 @@ impl Oven {
         }
         let mut args = [0u128; MAX_META_ARGS];
         args[..n].copy_from_slice(&self.regs[fb + base..fb + base + n]);
+        // The call's site: recipes and exception path (spec/reflection.md
+        // §3.5, §8.2).
+        let (dst, sidx) = (self.code[pc + 1] as usize, self.code[pc + 4] as usize);
+        let site = sidx.checked_sub(1).and_then(|i| self.meta.sites.get(i)).copied();
+        if let Some(s) = site {
+            for (i, a) in args[..n].iter_mut().enumerate() {
+                if let Some(rc) = s.ranges[i] {
+                    *a = self.range_arg(rc, *a as u64)?;
+                }
+            }
+        }
         let trial = self.run.fold || self.mem.in_trial();
         let ctx =
             MetaCtx { scope: None, loc: self.site(pc).loc, plainly: false, trial, elem: OTy(t1) };
@@ -58,25 +69,88 @@ impl Oven {
         if let Err(e) = b.meta(op, &args[..n], &mut out, &ctx, self) {
             return Err(match e.kind {
                 MetaErrorKind::Fault(OvenFault(f)) => f,
-                MetaErrorKind::Failed | MetaErrorKind::NotImplemented { .. } => {
+                MetaErrorKind::Failed => {
+                    if let Some(s) = site
+                        && let Some(x) = s.exc
+                        && !trial
+                        && self.meta_handler()
+                        && let Some(first) = e.notes.first()
+                        && let Some(t) = b.meta_throw(op, s.callee, &first.msg, ctx.loc)
+                    {
+                        // Thrown by the block after the call (`bi::META_EXC`).
+                        self.meta.pending = Some(t);
+                        self.regs[fb + x.flag as usize] = 1;
+                        return Ok(0);
+                    }
                     self.meta_trap(e.notes)
                 }
+                MetaErrorKind::NotImplemented { .. } => self.meta_trap(e.notes),
             });
         }
+        let cur = self.stack[self.stack.len() - 1].func;
+        let top = fb + self.funcs[cur as usize].nregs as usize + 1;
+        let top = u32::try_from(top).map_err(|_| Fault::Invalid)?;
+        let unfit = |s: &mut Self| {
+            let msg = format!("kiln: internal: '{}' produced no result of its type", op.display());
+            Err(s.meta_trap(vec![Note::new(ctx.loc, msg)]))
+        };
         match out {
             MetaOut::Scalar(v) => Ok(v),
             MetaOut::Info(r) => Ok(u128::from(r.bits())),
-            MetaOut::Frozen(cv) => {
-                let cur = self.stack[self.stack.len() - 1].func;
-                let top = fb + self.funcs[cur as usize].nregs as usize + 1;
-                let top = u32::try_from(top).map_err(|_| Fault::Invalid)?;
-                Ok(self.thaw_ptr(b, cv, OTy(t2), top))
+            MetaOut::Frozen(cv) => Ok(self.thaw_ptr(b, cv, OTy(t2), top)),
+            MetaOut::Str(..) | MetaOut::SrcLoc(_) | MetaOut::Pair(..) | MetaOut::Infos(_) => {
+                let Some((rc, s)) = site.and_then(|s| Some((s.result?, s))) else {
+                    return unfit(self);
+                };
+                let addr = self.regs[fb + dst];
+                if self.materialize_out(b, out, rc, addr as u64, (s.e, top))? {
+                    Ok(addr)
+                } else {
+                    unfit(self)
+                }
             }
             MetaOut::Unset => {
                 let msg = format!("kiln: internal: '{}' produced no result", op.display());
                 Err(self.meta_trap(vec![Note::new(ctx.loc, msg)]))
             }
         }
+    }
+
+    /// `bi::META_EXC` at `pc`: fills the message and location arguments
+    /// of the pending `std::meta::exception`'s constructor; `^^fn` is the
+    /// result.
+    pub(super) fn exec_meta_exc(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        pc: usize,
+        fb: usize,
+    ) -> Result<u128, Fault> {
+        let arg = |i: usize| self.code[pc + 1 + i] as usize;
+        let site = arg(3).checked_sub(1).and_then(|i| self.meta.sites.get(i)).copied();
+        let (Some(s), Some(t)) = (site, self.meta.pending.take()) else {
+            return Err(Fault::Invalid);
+        };
+        let Some(x) = s.exc else { return Err(Fault::Invalid) };
+        let (what, at) = (self.regs[fb + arg(1)] as u64, self.regs[fb + arg(2)] as u64);
+        let cur = self.stack[self.stack.len() - 1].func;
+        let top = fb + self.funcs[cur as usize].nregs as usize + 1;
+        let top = u32::try_from(top).map_err(|_| Fault::Invalid)?;
+        let ok = self.materialize_out(b, MetaOut::Str(t.what, t.len), x.what, what, (s.e, top))?
+            && self.materialize_out(b, MetaOut::SrcLoc(t.at), x.at, at, (s.e, top))?;
+        if !ok {
+            return Err(Fault::Invalid);
+        }
+        Ok(u128::from(t.from.bits()))
+    }
+
+    /// Whether a try-block of the running evaluation encloses the current
+    /// point (an exception thrown here may be caught).
+    fn meta_handler(&self) -> bool {
+        let entry = self.run.entry;
+        self.cleanups
+            .iter()
+            .rposition(|c| c.func == super::exc::TRY_MARK)
+            .is_some_and(|i| self.cleanups[i].depth as usize > entry)
     }
 
     /// The narrow string at `p` (a pointer argument of the intrinsic
