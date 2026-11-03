@@ -2698,6 +2698,26 @@ guarantees it a constant initializer and a trivial destructor
 - At `ir_version` 20+, `kiln_llvm` prints uniform vector constants as
   `splat (T v)` (spec/llvm.md §5).
 
+## 7r. Landed (WP-450): `bool` ext-vector constants
+- A constant `bool` ext vector (the Oven's packed `BoolVec`,
+  spec/oven.md "Bool vectors") is a `<N x i1>` constant: lane `i` is bit
+  `i % 8` of byte `i / 8` of the folded image (`consts.rs`
+  `image_const`). Its global, and a struct member or array element of
+  that type, keeps the value type `<N x i1>` rather than the `iP` memory
+  type (`const_ir_type`; clang's literal struct `{ i32, <8 x i1>, <3 x
+  i1> }` and `[2 x <8 x i1>]`), and is laid out by its bit count rounded
+  up to a power-of-two byte size (`func.rs` `ir_layout`).
+- Constant folding as the IRBuilder's `ConstantFolder` does (`func.rs`
+  `fold_shuffle`, `fold_vec_to_int`): a `shufflevector` of two constants
+  folds (a poison mask lane is `undef`; an all-poison mask is `poison`),
+  and a `bitcast` of a constant vector to an integer folds to `0` when the
+  vector is null, to `-1` when every lane is all-ones at compat 22 (LLVM
+  20+ `FoldBitCast`), and otherwise stays a `bitcast (...)` constant
+  expression. So storing a constant `bool` vector to a local is `store iP
+  bitcast (<P x i1> <...> to iP)`, as clang's.
+- Test: `tests/codegen/bool_vector_const.cpp` (exact on both triples
+  under oracle 19, structural under 22).
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33

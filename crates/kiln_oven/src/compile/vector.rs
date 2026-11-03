@@ -1,7 +1,10 @@
 //! Constant evaluation of GNU/clang vector operations (WP-173;
 //! spec/oven.md "Vectors").
 //!
-//! A vector object is stored as an array of its lanes (`ty.rs`). The
+//! A vector object is stored as an array of its lanes (`ty.rs`); a
+//! `bool` vector packs one bit per lane (`TyKind::BoolVec`, WP-450): its
+//! lanes move with `LoadBits`/`StoreBits` of width 1 and a lane place is
+//! `Place::Lane` (KBC `LoadLane`/`StoreLane`). The
 //! operations clang 19's `VectorExprEvaluator` folds are computed lane by
 //! lane in registers: each operand vector is evaluated whole (its lanes
 //! loaded into registers), then the lanes are combined in order, so the
