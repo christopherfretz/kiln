@@ -3650,6 +3650,18 @@ impl Sema<'_, '_> {
             let msg = self.note_prev(msg, p, def);
             self.emit(msg);
             invalid_redecl = true;
+        } else if let Some(p) = prev
+            && method
+            && !friend
+            && !in_class
+            && self.kind_of(p) == fkind
+            && let Some((id, sel)) = self.defaulted_member_definition(p)
+        {
+            // [class.compare.default]/4, [dcl.fct.def.default]/5: an
+            // implicit or explicitly defaulted member is not defined
+            // again out of its class.
+            self.emit(self.diag(id, d.name_loc()).arg(sel));
+            invalid_redecl = true;
         } else if let Some(p) = prev {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == fkind {
@@ -3663,6 +3675,17 @@ impl Sema<'_, '_> {
                     && !self.exc_unparsed(p)
                 {
                     self.resolve_exception_spec(p, d.name_loc());
+                    pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                }
+                // So is a defaulted comparison's implicit one, unevaluated
+                // from the end of its class ([except.spec]/9, clang
+                // `ResolveExceptionSpec` of `EST_Unevaluated`): a
+                // redeclaration after the class must match it.
+                if !self.in_template()
+                    && matches!(self.written_exc_spec(pty), ExcSpec::Deferred(_))
+                    && self.special.cmp.default_loc.contains_key(&self.ast.first(p))
+                {
+                    let _ = self.resolve_cmp_exc(self.ast.first(p));
                     pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
                 }
                 // A friend whose noexcept-specifier waits for the end of

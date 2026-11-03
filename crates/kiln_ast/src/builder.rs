@@ -1729,6 +1729,22 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::BinaryOperator, vk, deps, op as u8, ty, loc, lhs.raw(), rhs.raw())
     }
 
+    /// A `BinaryOperator` of type `ty` and category `vk` that is the
+    /// syntactic form of a [`AstBuilder::pseudo_object`] (`a <=> b` of a
+    /// synthesized three-way comparison; never evaluated).
+    pub fn syntactic_binary(
+        &mut self,
+        op: BinaryOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        ty: QualType,
+        vk: ValueCategory,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.deps(lhs) | self.deps(rhs) | self.type_deps(ty);
+        self.simple(ExprKind::BinaryOperator, vk, deps, op as u8, ty, loc, lhs.raw(), rhs.raw())
+    }
+
     /// A pointer-to-member operator `.*` / `->*` ([expr.mptr.oper]/6: the
     /// category depends on the member kind and the object, so sema
     /// supplies it).
@@ -2820,6 +2836,44 @@ impl<'a> AstBuilder<'a> {
         let deps = self.deps(common) | self.deps(els) | self.type_deps(ty);
         let list = self.ast.lists.push(&[common, cond, then, els]);
         self.simple(ExprKind::BinaryConditionalOperator, vk, deps, 0, ty, loc, list.raw(), 0)
+    }
+
+    /// clang's `PseudoObjectExpr`: `syntactic` is the form as written,
+    /// `semantics` the expressions computing it (the `OpaqueValueExpr`s
+    /// it binds, each before its uses, then the rest), and
+    /// `semantics[result]` the one whose value, type and category are the
+    /// whole expression's.
+    ///
+    /// # Panics
+    /// If `result` is out of range.
+    pub fn pseudo_object(
+        &mut self,
+        syntactic: ExprId,
+        semantics: &[ExprId],
+        result: usize,
+    ) -> ExprId {
+        let r = *self.ast.exprs.get(semantics[result]);
+        let mut deps = self.deps(syntactic);
+        for &s in semantics {
+            deps |= self.deps(s);
+        }
+        let mut all = Vec::with_capacity(semantics.len() + 1);
+        all.push(syntactic);
+        all.extend_from_slice(semantics);
+        let list = self.ast.lists.push(&all);
+        let idx = u32::try_from(result).expect("result index");
+        self.push_expr(
+            ExprKind::PseudoObjectExpr,
+            r.value_category(),
+            r.object_kind(),
+            ExprFlags::NONE,
+            deps,
+            0,
+            r.ty(),
+            self.ast.exprs.get(syntactic).loc(),
+            list.raw(),
+            idx,
+        )
     }
 
     /// A resolved `co_await` / `co_yield` ([expr.await], [expr.yield]):
