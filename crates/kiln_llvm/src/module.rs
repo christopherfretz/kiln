@@ -1271,7 +1271,11 @@ impl Module {
 
     /// Replace all the operands of a `distinct` tuple (a placeholder
     /// filled in once its operands are known, as LLVM's temporary nodes).
-    pub fn md_set_operands(&mut self, node: MetadataId, new: &[Option<MetadataId>]) -> IrResult<()> {
+    pub fn md_set_operands(
+        &mut self,
+        node: MetadataId,
+        new: &[Option<MetadataId>],
+    ) -> IrResult<()> {
         match &mut self.md[node.index()] {
             MdNode::Tuple { distinct: true, ops } => {
                 *ops = new.into();

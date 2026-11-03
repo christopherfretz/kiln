@@ -182,11 +182,7 @@ impl Sema<'_, '_> {
                 LoopHintOption::VectorizePredicate => 6,
             };
             let slot = &mut slots[category];
-            let prev = if hint.option.is_state() {
-                slot.0.replace(a)
-            } else {
-                slot.1.replace(a)
-            };
+            let prev = if hint.option.is_state() { slot.0.replace(a) } else { slot.1.replace(a) };
             let (state, numeric) = *slot;
             if let Some(prev) = prev {
                 let msg = self

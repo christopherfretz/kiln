@@ -23,10 +23,8 @@ impl Cg<'_> {
         let Some(name) = kiln_abi::mangle::asm_label(ast, first) else {
             return false;
         };
-        let Some(body) = ast
-            .definition(first)
-            .and_then(|d| ast.decls.function(d))
-            .and_then(|f| f.body)
+        let Some(body) =
+            ast.definition(first).and_then(|d| ast.decls.function(d)).and_then(|f| f.body)
         else {
             return false;
         };

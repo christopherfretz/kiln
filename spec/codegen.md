@@ -1419,6 +1419,26 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   `computeKeyFunction`). A class under an explicit instantiation
   declaration (`extern template`, itself or as a member class) gets an
   `external` vtable declaration (WP-158).
+  At `-O1`+ (WP-449; clang `EmitDeferredVTables` /
+  `shouldEmitAvailableExternallyVTable`) a used vtable that is external
+  for either reason is instead defined `available_externally` (no
+  comdat, not `dso_local`) when it can be emitted speculatively
+  (`Cg::can_speculatively_emit_vtable`, clang
+  `canSpeculativelyEmitVTable`): no inline (or deleted) virtual function
+  in a used slot is still unemitted (looked up by symbol: a function
+  definition or an alias), and for a class with virtual bases every
+  dynamic non-virtual base and every dynamic virtual base passes the same
+  test, since the VTT and construction vtables are emitted with it under
+  the same linkage. One that fails the test when first considered is
+  retried after every deferred definition is emitted
+  (`emit_vtables_opportunistically`). Its RTTI stays an external
+  declaration. A thunk the vtable needs whose method has no definition
+  here is defined `available_externally` with it (clang `maybeEmitThunk`
+  with `ForVTable`; at `-O1`+ for any vtable), except for a variadic
+  method or one with an incomplete class parameter or return type,
+  which stay declarations. clang's `isVTableHidden` exclusion never
+  applies (kiln does not model visibility attributes).
+  `tests/codegen/extern_template_vtable_o1.cpp`.
 - **Explicit instantiation declarations** ([temp.explicit]/14, WP-158;
   `Cg::is_explicit_inst_declaration`): a function or variable that is
   an `extern template` specialization, or a member of a class

@@ -21,12 +21,7 @@ use crate::tokens::{Event, LoopHintInfo};
 
 /// Pragmas clang knows and kiln accepts without effect on the
 /// translation unit (codegen hints and `#pragma comment`).
-const IGNORED: &[&str] = &[
-    "comment",
-    "float_control",
-    "unused",
-    "omp",
-];
+const IGNORED: &[&str] = &["comment", "float_control", "unused", "omp"];
 
 /// Pragmas clang knows that change the meaning of the translation unit
 /// and that kiln does not implement yet.

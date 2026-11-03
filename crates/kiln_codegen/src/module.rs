@@ -152,6 +152,10 @@ pub(crate) struct Cg<'a> {
     pub vts: kiln_abi::vtable::VTableSession<'a>,
     /// Vtables referenced but not yet defined (clang `DeferredVTables`).
     pub deferred_vtables: Vec<DeclId>,
+    /// External vtables to emit `available_externally` once every
+    /// deferred definition is emitted, if they then can be (clang
+    /// `OpportunisticVTables`, `-O1` and up).
+    pub opportunistic_vtables: Vec<DeclId>,
     /// Dynamic classes explicitly instantiated by a definition, in
     /// order: their vtables are required ([temp.explicit]/10; Sema's
     /// `MarkVTableUsed(DefinitionRequired)`).
@@ -231,6 +235,7 @@ impl<'a> Cg<'a> {
             vtables: FxHashMap::default(),
             vts: kiln_abi::vtable::VTableSession::new(ast, target),
             deferred_vtables: Vec::new(),
+            opportunistic_vtables: Vec::new(),
             explicit_vtables: Vec::new(),
             vt_emitted: FxHashSet::default(),
             rtti_globals: FxHashMap::default(),
@@ -285,6 +290,7 @@ impl<'a> Cg<'a> {
         self.emit_key_function_vtables()?;
         self.emit_end_of_tu_instantiations()?;
         self.emit_deferred()?;
+        self.emit_vtables_opportunistically()?;
         self.resolve_placeholders()?;
         self.emit_global_init_trailer()?;
         self.trailer();

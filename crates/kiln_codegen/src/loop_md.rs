@@ -117,7 +117,11 @@ impl MdBuilder<'_> {
             return props;
         }
         if a.pipeline_ii > 0 {
-            props.push(self.value("llvm.loop.pipeline.initiationinterval", LTy::I32, a.pipeline_ii));
+            props.push(self.value(
+                "llvm.loop.pipeline.initiationinterval",
+                LTy::I32,
+                a.pipeline_ii,
+            ));
         }
         *has = true;
         props
@@ -209,7 +213,8 @@ impl MdBuilder<'_> {
         let mut predicate = false;
         if a.vectorize_predicate_enable != LState::Unspecified {
             predicate = a.vectorize_predicate_enable == LState::Enable;
-            let v = self.value("llvm.loop.vectorize.predicate.enable", LTy::I1, u32::from(predicate));
+            let v =
+                self.value("llvm.loop.vectorize.predicate.enable", LTy::I1, u32::from(predicate));
             args.push(v);
         }
         if a.vectorize_width > 0 {
@@ -341,11 +346,8 @@ impl Cg<'_> {
                 (St::Full, O::Unroll) => a.unroll_enable = LState::Full,
                 (St::Full, O::UnrollAndJam) => a.unroll_and_jam_enable = LState::Full,
                 (St::FixedWidth | St::ScalableWidth, O::VectorizeWidth) => {
-                    a.vectorize_scalable = if h.state == St::ScalableWidth {
-                        LState::Enable
-                    } else {
-                        LState::Disable
-                    };
+                    a.vectorize_scalable =
+                        if h.state == St::ScalableWidth { LState::Enable } else { LState::Disable };
                     if value.is_some() {
                         a.vectorize_width = v;
                     }

@@ -9,14 +9,14 @@ use std::rc::Rc;
 
 use kiln_abi::mangle::{self, Structor};
 use kiln_ast::class::{SubobjectId, Thunk, VTableComponent, VTableLayout};
-use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, TagKind};
+use kiln_ast::decl::{Access, ConstexprKind, DeclFlags, DeclKind, DefinitionBits, TagKind};
 use kiln_ast::modules::UnitKind;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
     Attr, AttrKind, CastOp, ComdatKind, FuncId, GepFlags, GlobalId, IntPredicate, Linkage,
-    TypeId as LTy, UnnamedAddr, Value,
+    TypeId as LTy, UnnamedAddr, Value, ValueRef,
 };
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
@@ -40,6 +40,9 @@ pub(crate) enum VtLinkage {
     Weak,
     /// `internal` (the class has internal linkage).
     Internal,
+    /// `available_externally` (an external vtable emitted at `-O1` and
+    /// up for devirtualization: clang `shouldEmitAvailableExternallyVTable`).
+    AvailableExternally,
 }
 
 /// The state of a [`Cg::vmi_flags`] walk.
@@ -289,15 +292,125 @@ impl Cg<'_> {
         Ok(g)
     }
 
-    /// clang `EmitDeferredVTables`.
+    /// clang `EmitDeferredVTables`: an external vtable is emitted
+    /// `available_externally` at `-O1` and up when it can be
+    /// speculatively (`shouldEmitVTableAtEndOfTranslationUnit`), else
+    /// queued for [`Self::emit_vtables_opportunistically`].
     pub(crate) fn emit_deferred_vtables(&mut self) -> R<()> {
         let cur = std::mem::take(&mut self.deferred_vtables);
         for rd in cur {
             if self.vtable_linkage(rd) != VtLinkage::External {
                 self.emit_vtable_def(rd)?;
+            } else if self.opts.optimize() {
+                if self.can_speculatively_emit_vtable(rd)? {
+                    self.emit_vtable_def_as(rd, VtLinkage::AvailableExternally)?;
+                } else {
+                    self.opportunistic_vtables.push(rd);
+                }
             }
         }
         Ok(())
+    }
+
+    /// clang `EmitVTablesOpportunistically`, after every deferred
+    /// definition: an inline virtual function emitted after the first
+    /// attempt may now allow the `available_externally` copy.
+    pub(crate) fn emit_vtables_opportunistically(&mut self) -> R<()> {
+        for rd in std::mem::take(&mut self.opportunistic_vtables) {
+            if self.can_speculatively_emit_vtable(rd)? {
+                self.emit_vtable_def_as(rd, VtLinkage::AvailableExternally)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// clang `ItaniumCXXABI::canSpeculativelyEmitVTable`: the class
+    /// itself and every dynamic virtual base can be emitted as a base.
+    fn can_speculatively_emit_vtable(&mut self, rd: DeclId) -> R<bool> {
+        if !self.can_speculatively_emit_vtable_as_base(rd)? {
+            return Ok(false);
+        }
+        let Some(def) = self.class_def(rd) else { return Ok(false) };
+        let vbases: Vec<DeclId> = {
+            let l = self.tys.layouter().record(def);
+            l.vbases.iter().map(|&(v, _)| v).collect()
+        };
+        for v in vbases {
+            if self.is_dynamic(v) && !self.can_speculatively_emit_vtable_as_base(v)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// clang `canSpeculativelyEmitVTableAsBaseClass`: no inline virtual
+    /// function of the vtable is still unemitted, and (for a class with
+    /// virtual bases, whose VTT must be emittable too) the same holds
+    /// for each dynamic non-virtual base. clang's `isVTableHidden` test
+    /// never applies: kiln does not model visibility attributes.
+    fn can_speculatively_emit_vtable_as_base(&mut self, rd: DeclId) -> R<bool> {
+        let ast = self.ast;
+        let first = ast.first(rd);
+        if self.has_unused_virtual_inline_function(first)? {
+            return Ok(false);
+        }
+        if !self.class_bits_of(first).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            return Ok(true);
+        }
+        let Some(def) = self.class_def(first) else { return Ok(false) };
+        let bases: Vec<DeclId> = ast
+            .decls
+            .bases(def, &ast.lists)
+            .filter(|b| !b.is_virtual)
+            .filter_map(|b| ast.types.as_record(b.ty))
+            .collect();
+        for b in bases {
+            if self.is_dynamic(b) && !self.can_speculatively_emit_vtable_as_base(b)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// clang `hasAnyUnusedVirtualInlineFunction`: an inline function
+    /// (deleted ones included, [dcl.fct.def.delete]/4) in a used slot
+    /// of `rd`'s vtable whose symbol is not (yet) a definition here.
+    fn has_unused_virtual_inline_function(&mut self, rd: DeclId) -> R<bool> {
+        let ast = self.ast;
+        let l = self.vt_layout(rd)?;
+        for c in &l.components {
+            let (m, v) = match *c {
+                VTableComponent::Func(m) => (m, None),
+                VTableComponent::CompleteDtor(m) => (m, Some(Structor::Complete)),
+                VTableComponent::DeletingDtor(m) => (m, Some(Structor::Deleting)),
+                _ => continue,
+            };
+            let inline = ast.redecls_of(m).any(|r| {
+                ast.decls.function(r).is_some_and(|f| {
+                    f.spec.is_inline()
+                        || f.spec.implicit_inline()
+                        || f.spec.constexpr_kind() != ConstexprKind::None
+                        || f.spec.is_deleted()
+                })
+            });
+            if !inline {
+                continue;
+            }
+            let first = ast.first(m);
+            let name = match v {
+                None => mangle::mangle_decl(ast, &mut self.anon, first),
+                Some(v) => mangle::mangle_structor(ast, &mut self.anon, first, v),
+            };
+            let defined = match self.m.lookup(&name).map(|x| x.get()) {
+                Some(ValueRef::Func(f)) => !self.m.func(f).is_declaration(),
+                Some(ValueRef::Alias(_)) => true,
+                _ => false,
+            };
+            if !defined {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Sema's `DefineUsedVTables` → `HandleVTable` for classes whose key
@@ -388,12 +501,18 @@ impl Cg<'_> {
 
     /// clang `ItaniumCXXABI::emitVTableDefinitions` (idempotent).
     pub(crate) fn emit_vtable_def(&mut self, rd: DeclId) -> R<()> {
+        let linkage = self.vtable_linkage(rd);
+        self.emit_vtable_def_as(rd, linkage)
+    }
+
+    /// [`Self::emit_vtable_def`] with linkage `linkage` (clang
+    /// `GenerateClassData`).
+    pub(crate) fn emit_vtable_def_as(&mut self, rd: DeclId, linkage: VtLinkage) -> R<()> {
         let first = self.ast.first(rd);
         let g = self.vtable_global(first)?;
         if self.m.global(g).initializer().is_some() || !self.vt_emitted.insert(first) {
             return Ok(());
         }
-        let linkage = self.vtable_linkage(first);
         if self.class_bits_of(first).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
             // clang `GenerateClassData`: the VTT (and its construction
             // vtables) before the vtable's own initializer.
@@ -969,7 +1088,36 @@ impl Cg<'_> {
         _layout_class: DeclId,
     ) -> R<Value> {
         let f = self.thunk_fn(m, v, th)?;
+        if self.opts.optimize() && self.m.func(f).is_declaration() && self.thunk_has_no_target(m) {
+            // clang `maybeEmitThunk(ForVTable)` → `shouldEmitVTableThunk`:
+            // above -O0 a vtable's thunk is defined `available_externally`
+            // with it (a thunk of a method defined here is defined after
+            // that method: `emit_thunks`). Not for a variadic or
+            // unprototyped (incomplete parameter or return type) method.
+            let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
+            let r = self.gen_code_or_thunk(self.ast.first(m), f, v, Some(th));
+            self.f = saved;
+            r?;
+        }
         Ok(Value::func(f))
+    }
+
+    /// The virtual method `m` has no definition here, is not variadic
+    /// and has a convertible type (clang `isFuncTypeConvertible`: no
+    /// incomplete class parameter or return type).
+    fn thunk_has_no_target(&self, m: DeclId) -> bool {
+        let ast = self.ast;
+        if ast.redecls_of(m).any(|r| ast.decls.function(r).is_some_and(|f| f.body.is_some())) {
+            return false;
+        }
+        let Some(fty) = ast.decls.get(ast.first(m)).ty() else { return false };
+        let Some(p) = ast.types.proto(fty).copied() else { return false };
+        if p.variadic() {
+            return false;
+        }
+        let complete =
+            |q: QualType| ast.types.as_record(q).is_none_or(|r| self.class_def(r).is_some());
+        complete(p.ret()) && ast.types.params(&p).iter().all(|&q| complete(q))
     }
 
     /// clang `GetAddrOfThunk`: the function of thunk `th` of variant `v`
@@ -1774,6 +1922,10 @@ impl Cg<'_> {
             VtLinkage::Strong | VtLinkage::External => {
                 gv.linkage = Linkage::External;
                 gv.dso_local = true;
+            }
+            VtLinkage::AvailableExternally => {
+                gv.linkage = Linkage::AvailableExternally;
+                gv.dso_local = false;
             }
         }
     }
