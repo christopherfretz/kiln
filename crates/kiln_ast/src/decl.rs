@@ -4558,6 +4558,14 @@ pub mod builtin {
     pub const ELEMENTWISE_MAX: u32 = 2106;
     /// `__builtin_elementwise_min`.
     pub const ELEMENTWISE_MIN: u32 = 2107;
+    // ---- WP-432 (kiln-private ids).
+    /// `__builtin_return_address`.
+    pub const RETURN_ADDRESS: u32 = 2108;
+    /// `__builtin_elementwise_add_sat` (`CustomTypeChecking`, sema
+    /// `builtin_elementwise_sat`).
+    pub const ELEMENTWISE_ADD_SAT: u32 = 2109;
+    /// `__builtin_elementwise_sub_sat`.
+    pub const ELEMENTWISE_SUB_SAT: u32 = 2110;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
@@ -4581,6 +4589,10 @@ pub mod builtin {
         row(ELEMENTWISE_ABS, "__builtin_elementwise_abs", "v.", N | C | T),
         row(ELEMENTWISE_MAX, "__builtin_elementwise_max", "v.", N | C | T),
         row(ELEMENTWISE_MIN, "__builtin_elementwise_min", "v.", N | C | T),
+        // WP-432.
+        row(RETURN_ADDRESS, "__builtin_return_address", "v*IUi", N),
+        row(ELEMENTWISE_ADD_SAT, "__builtin_elementwise_add_sat", "v.", N | C | T),
+        row(ELEMENTWISE_SUB_SAT, "__builtin_elementwise_sub_sat", "v.", N | C | T),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19

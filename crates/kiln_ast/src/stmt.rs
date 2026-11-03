@@ -644,6 +644,17 @@ impl StmtArena {
         DeclId::new(self.expect(s, &[StmtKind::LabelStmt, StmtKind::GotoStmt]).a)
     }
 
+    /// The target of a GNU `IndirectGotoStmt` (`goto *e;`), converted to
+    /// `const void*`.
+    pub fn indirect_goto_target(&self, s: StmtId) -> ExprId {
+        ExprId::new(self.expect(s, &[StmtKind::IndirectGotoStmt]).a)
+    }
+
+    /// The location of the `*` of an `IndirectGotoStmt`.
+    pub fn indirect_goto_star(&self, s: StmtId) -> Loc {
+        Loc::from_raw(self.expect(s, &[StmtKind::IndirectGotoStmt]).b)
+    }
+
     /// The labelled statement of a `LabelStmt`, or the statement an
     /// `AttributedStmt`'s attributes appertain to.
     pub fn sub_stmt(&self, s: StmtId) -> StmtId {

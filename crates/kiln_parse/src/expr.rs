@@ -227,6 +227,23 @@ impl Parser<'_, '_> {
         self.parse_rhs(lhs, min.max(1))
     }
 
+    /// clang's `ParseSimpleExpressionList` for a C-style cast's
+    /// parenthesized operand after its first element `first` and a comma:
+    /// the assignment-expressions are all parsed before their comma
+    /// operators are built, left to right at the `(` `at`.
+    fn parse_paren_list_rest(&mut self, first: ExprId, at: Loc) -> PExpr {
+        let mut elems = vec![self.parse_assignment_expr()?];
+        while self.cur_binop().is_some_and(|(_, op)| op == Some(BinaryOp::Comma)) {
+            self.bump();
+            elems.push(self.parse_assignment_expr()?);
+        }
+        let mut lhs = first;
+        for e in elems {
+            lhs = self.s.act_on_binary(BinaryOp::Comma, lhs, e, at);
+        }
+        Some(lhs)
+    }
+
     /// The precedence of the binary operator at the current token.
     pub(crate) fn cur_binop_prec(&self) -> Option<u8> {
         self.cur_binop().map(|b| b.0)
@@ -276,6 +293,7 @@ impl Parser<'_, '_> {
 
     /// clang's `ParseRHSOfBinaryExpression`.
     fn parse_rhs(&mut self, mut lhs: ExprId, min: u8) -> PExpr {
+        let comma_at = self.comma_loc.take();
         loop {
             let Some((p, op)) = self.cur_binop() else { return Some(lhs) };
             if p < min {
@@ -286,6 +304,11 @@ impl Parser<'_, '_> {
             }
             let op_tok = self.bump();
             let op_loc = op_tok.span.lo;
+            if let Some(at) = comma_at
+                && op == Some(BinaryOp::Comma)
+            {
+                return self.parse_paren_list_rest(lhs, at);
+            }
             let mut middle = None;
             let mut colon = None;
             if op.is_none() {
@@ -703,6 +726,9 @@ impl Parser<'_, '_> {
             let l = self.parse_init_list().ok()?;
             let e = self.s.act_on_compound_literal(ty, &l, open);
             return self.parse_postfix_suffix(e);
+        }
+        if self.at(Punct::LParen) {
+            self.cast_paren_list = Some(self.loc());
         }
         let e = self.parse_cast_expr()?;
         Some(self.s.act_on_cast(CastStyle::CStyle, ty, e, open, rparen))
@@ -2234,7 +2260,7 @@ impl Parser<'_, '_> {
         {
             let ellipsis = self.bump().span.lo;
             self.bump();
-            let Some(rhs) = self.parse_fold_operand(true) else {
+            let Some(rhs) = self.parse_fold_operand(true, None) else {
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
             };
@@ -2253,11 +2279,15 @@ impl Parser<'_, '_> {
                 self.tok_at(self.pos() + 1).kind,
                 TokKind::Punct(Punct::LParen | Punct::Less | Punct::ColonColon)
             );
+        let list = self.cast_paren_list == Some(lparen);
+        if list {
+            self.cast_paren_list = None;
+        }
         let outer_invalid = std::mem::replace(&mut self.expr_invalid, false);
         let e = if self.at_kw(Kw::Throw) {
             self.parse_expression()
         } else {
-            self.parse_fold_operand(false)
+            self.parse_fold_operand(false, list.then_some(lparen))
         };
         let invalid = std::mem::replace(&mut self.expr_invalid, outer_invalid);
         // clang's `ParseParenExpression`: an `ExprError` inside skips to
@@ -2293,7 +2323,7 @@ impl Parser<'_, '_> {
                 self.error_here(DiagId::parse_fold_operator_mismatch);
             }
             self.bump();
-            let Some(r) = self.parse_fold_operand(true) else {
+            let Some(r) = self.parse_fold_operand(true, None) else {
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
             };
@@ -2305,10 +2335,13 @@ impl Parser<'_, '_> {
 
     /// An expression that may be an operand of a fold-expression: a
     /// cast-expression, or any expression (diagnosed when a fold operator
-    /// follows, [expr.prim.fold]/1, clang's `CheckFoldOperand`).
-    fn parse_fold_operand(&mut self, in_fold: bool) -> PExpr {
+    /// follows, [expr.prim.fold]/1, clang's `CheckFoldOperand`). Its
+    /// top-level commas are at `comma_at` when given (a C-style cast's
+    /// parenthesized operand, [`Parser::cast_paren_list`]).
+    fn parse_fold_operand(&mut self, in_fold: bool, comma_at: Option<Loc>) -> PExpr {
         let start = self.loc();
         let cast = self.parse_cast_expr()?;
+        self.comma_loc = comma_at;
         let e = self.parse_rhs(cast, prec::COMMA)?;
         if e != cast && (in_fold || self.fold_op_at(self.pos()).is_some()) {
             // clang's `getExprLoc`: a binary operator's operator, else the

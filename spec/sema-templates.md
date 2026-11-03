@@ -2533,11 +2533,16 @@ impl Sema<'_, '_> {
   (`SpecialState.dropped_tid_warnings`), and the next take of the entry
   (`take_suppressed_diags`, from `resolve_single_template_id` and
   `emit_suppressed_diags`) moves the notes there to the use's location
-  (`Diag::relocate_notes`; WP-424). Gap: the restored warnings are the
-  failed use's, so a later *call* also reports the warning of the
-  explicit arguments' substitution into the whole function type, which
-  clang's call deduction does not make (clang reports only the signature
-  substitution's). Tests `over.over/template-id-no-match{,-19,-restored}.cpp`.
+  (`Diag::relocate_notes`; WP-424). Only the signature substitution's
+  warnings go back: `keep_deduction_warnings` records how many of the
+  entry's lead it as the forming deduction's own (explicit arguments,
+  defaults; `TemplState.deduction_diags`), and the drop strips that
+  many. The next deduction of the specialization then treats the
+  handed-back entry as clang's empty slot and puts its own phases'
+  warnings ahead of it, so an address-of reports its explicit-argument
+  warning again while a call, whose explicit arguments are substituted
+  into the parameter types alone, reports none (WP-444). Tests
+  `over.over/template-id-no-match{,-19,-restored,-call,-call-19}.cpp`.
 - Fatal errors are always reported: the depth limit and stack
   exhaustion.
 
@@ -3728,8 +3733,12 @@ The sites, as clang:
   ellipsis, before that check
   (`except.handle/exception-decl-ellipsis.cpp`);
 - "expression contains …" at the operand of a computed `goto *e`
-  (`act_on_indirect_goto`), before the computed goto is reported
-  unsupported (`stmt.goto/computed-goto-unexpanded-pack.cpp`);
+  (`act_on_indirect_goto`), before its conversion to `const void *`; the
+  statement is dropped (`stmt.goto/computed-goto-unexpanded-pack.cpp`).
+  Instantiation substitutes the target and converts it again
+  (`subst/stmts.rs`); an `AddrLabelExpr` in a template's body is
+  instantiation-dependent, so it is rebuilt for the specialization's
+  label rather than reused from the pattern (WP-444);
 - "initializer contains …" for a local variable's initializer.
 Outside a lambda these sites check every unexpanded pack (template
 definitions); during instantiation they do not run. Tests
@@ -3951,7 +3960,14 @@ down.
 ### 7.4 `sizeof...` and pack indexing
 
 **`sizeof...(P)`.** After substitution it is a `SizeOfPackExpr` with the
-length stored. It is not dependent. Its dump matches clang's.
+length stored. It is not dependent. Its dump matches clang's. A pack
+bound to elements some of which are pack expansions (an alias
+template's `A` := `{int, Ts...}`) has no length yet: the substituted
+expression is the count of the other elements plus `sizeof...` of the
+first pack each expansion names (`1 + sizeof...(Ts)`), still
+value-dependent, so a template-id it selects (`OrImpl<sizeof...(A) !=
+0>`) is not formed early (`size_of_partial_pack`, WP-435; test
+`temp.variadic/sizeof-pack-bound-to-expansion.cpp`).
 
 **Pack indexing (P2662) lands in M3**: clang 19 is the oracle, and the
 cost is small.
@@ -4963,22 +4979,51 @@ ambiguity errors.
   template-argument-list (clang's `ParseTemplateArgumentList`). A concept
   in an expression is "use of concept 'C' requires template arguments".
   Tests: `temp.arg.general/var-template-or-concept-argument{,-clang19}.cpp`.
-- A class template-id with dependent arguments is checked at its
-  definition (`check_dependent_template_args`, clang's
-  `CheckTemplateArgumentList` on dependent arguments): the arity (a
-  missing argument needs a default), a type for a type parameter, a
-  template for a template template parameter (a template template
-  parameter argument is matched against it, [temp.arg.template]/3), and
-  not a type or template for a non-type parameter; non-type arguments
-  are converted once substituted. A template template parameter `TT`
+- A class, variable or alias template-id or a concept-id with dependent
+  arguments is checked at its definition (`check_dependent_template_args`,
+  clang's `CheckTemplateArgumentList` on dependent arguments; WP-435): the
+  arity, a type for a type parameter, a template for a template template
+  parameter (a template template parameter argument is matched against
+  it, [temp.arg.template]/3), and not a type or template for a non-type
+  parameter. A non-dependent non-type argument is converted as for a
+  non-dependent template-id (`B<T, 1>` for `int *P` is an error). A
+  value-dependent one of known type is checked only for a conversion no
+  value can make (clang's `CheckConvertedConstantExpression` on a
+  dependent argument, `check_value_dependent_nttp_arg`): an integral or
+  `bool` source (not an enumeration) for a pointer, member pointer or
+  `nullptr_t` parameter, a pointer for `bool`, and a floating
+  conversion either way are "conversion from 'const int' to 'int *' is
+  not allowed in a converted constant expression"; a source with no
+  implicit conversion sequence is "value of type 'const E' is not
+  implicitly convertible to 'int *'" (the source type keeps its cv); both
+  at the argument, with "template parameter is declared here" at
+  `-fclang-compat=22` only. Narrowing waits for the value, and a
+  parameter of class or placeholder type, a parameter pack's type, a
+  type that names dependent prior arguments, and an explicit argument
+  of a function template-id (`f<i>()`) wait for substitution
+  (`nttp_type_pending`). A missing argument needs a default, which is
+  substituted with the (dependent) prior arguments and checked as at a
+  non-dependent template-id, under "while checking a default template
+  argument used here" at the `>`. A template template parameter `TT`
   for a type parameter is "use of template template parameter 'TT'
   requires template arguments". A `T::x` for a type parameter is
   "template argument for template type parameter must be a type; did
   you forget 'typename'?" and the check goes on (clang recovers), so
   `P<T::x, T::y>` reports both; any other failure ends it. Only the
-  arguments before a pack expansion are checked, and not the arity; a
+  arguments before a pack expansion are checked; it is "too many
+  template arguments" only when the parameters end before it (`P2<int,
+  int, Ts...>`), and for an alias template or a concept a pack expansion
+  for a parameter that is not a pack is "pack expansion used as argument
+  for non-pack parameter of alias template" / "of concept" at the
+  expansion, noting the parameter ([temp.alias]/2, CWG1430); both
+  only as written, not in a template-id substitution forms on the way
+  to re-forming an expansion (`remove_const_t<Ts...>` for an element
+  `Ts...` of a fold's pack). A
   template-id naming an expanded parameter pack is checked only for that
   pack's arity (§3.2). Tests: `temp.arg.general/dependent-template-id-checked.cpp`,
+  `temp.arg.general/dependent-nontype-conversion{,-19}.cpp`,
+  `temp.arg.general/dependent-template-id-converted{,-19}.cpp`,
+  `temp.arg.general/dependent-template-id-pack-expansion.cpp`,
   `temp.arg.template/dependent-ttp-argument{,-clang22}.cpp`.
 - "non-type template argument is not a constant expression", followed by
   the Oven note chain.
