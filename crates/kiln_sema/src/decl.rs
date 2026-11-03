@@ -4563,11 +4563,10 @@ impl Sema<'_, '_> {
                     // the new declaration is a definition (judged before its
                     // initializer is seen), and the note says whether the
                     // old one was.
-                    let new_def = !ext;
-                    let id = if new_def {
-                        DiagId::sema_redefinition_different_type
-                    } else {
+                    let id = if ext {
                         DiagId::sema_redeclaration_different_type
+                    } else {
+                        DiagId::sema_redefinition_different_type
                     };
                     let msg = self
                         .diag(id, d.name_loc())
