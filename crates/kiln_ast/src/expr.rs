@@ -1514,6 +1514,9 @@ fn push_side<T>(v: &mut Vec<T>, x: T) -> u32 {
     i as u32
 }
 
+/// `CXXReflectExpr`'s `aux` tag for a dependent qualified-name operand.
+const REFLECT_DEPENDENT_NAME: u8 = crate::reflect::Reflectee::DEPENDENT_NAME_TAG;
+
 impl ExprArena {
     /// An arena holding only the dummies.
     pub fn new() -> Self {
@@ -2682,9 +2685,7 @@ impl ExprArena {
             }
             ExprKind::SubstNonTypeTemplateParmExpr => v.extend(id(n.b)),
             ExprKind::CXXSpliceExpr => v.extend([n.b, n.a].into_iter().filter_map(id)),
-            ExprKind::CXXReflectExpr if n.aux == crate::reflect::Reflectee::DEPENDENT_NAME_TAG => {
-                v.extend(id(n.a));
-            }
+            ExprKind::CXXReflectExpr if n.aux == REFLECT_DEPENDENT_NAME => v.extend(id(n.a)),
             k if k.is_cast() => v.extend(id(n.a)),
             ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
                 v.extend(id(n.a));

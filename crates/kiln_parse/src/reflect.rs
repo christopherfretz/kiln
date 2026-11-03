@@ -12,6 +12,7 @@ use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_sema::DeclSite;
 use kiln_sema::templ::actions::TemplateIdRef;
+use kiln_sema::using::Qualifier;
 use kiln_source::Loc;
 
 impl Parser<'_, '_> {
@@ -50,54 +51,7 @@ impl Parser<'_, '_> {
         let dependent = qual.filter(|q| self.s.is_dependent_ctx(q.ctx));
         let template_kw = if dependent.is_some() { self.eat_kw(Kw::Template) } else { None };
         let Some(name) = self.ident() else {
-            // An operator-, conversion-function-id or destructor name
-            // ([expr.reflect]/7, WP-519).
-            if self.at_kw(Kw::Operator) {
-                let nl = self.loc();
-                let name = self.parse_operator_function_name()?;
-                if let Some(q) = dependent {
-                    let targs = self.reflect_dependent_targs(template_kw)?;
-                    let end = self.prev_end();
-                    return Some(self.s.act_on_reflect_dependent(
-                        (q.nns, q.loc),
-                        name,
-                        targs,
-                        template_kw,
-                        nl,
-                        loc,
-                        end,
-                    ));
-                }
-                let end = self.prev_end();
-                return Some(self.s.act_on_reflect_dn(qual, name, nl, loc, end));
-            }
-            if self.at(Punct::Tilde) {
-                self.bump();
-                let Some(name) = self.ident() else {
-                    self.error_here(DiagId::parse_destructor_tilde_identifier);
-                    return None;
-                };
-                let nl = self.bump().span.lo;
-                let end = self.prev_end();
-                return Some(self.s.act_on_reflect_destructor(qual, name, nl, loc, end));
-            }
-            let bad = self.s.reflect_bad_operand(operand, loc);
-            // A literal or parenthesized operand is consumed whole, so the
-            // rest of the expression parses ([expr.reflect]/1 has no such
-            // form; `^^(x)` and `^^42` are one error each).
-            if qual.is_none()
-                && (self.at(Punct::LParen)
-                    || matches!(
-                        self.tok().kind,
-                        TokKind::PpNumber
-                            | TokKind::CharLit(_)
-                            | TokKind::StringLit(_)
-                            | TokKind::RawStringLit(_)
-                    ))
-            {
-                let _ = self.parse_primary_expr();
-            }
-            return Some(bad);
+            return self.parse_reflect_special_name(loc, operand, qual, dependent, template_kw);
         };
         let name_loc = self.bump().span.lo;
         // `^^S::S` names the constructors ([class.qual]/2): an overload
@@ -106,7 +60,7 @@ impl Parser<'_, '_> {
             return Some(self.s.reflect_overload_set(name_loc, loc));
         }
         if let Some(q) = dependent {
-            let targs = self.reflect_dependent_targs(template_kw)?;
+            let targs = self.reflect_dependent_targs(template_kw).ok()?;
             let end = self.prev_end();
             let name = kiln_ast::names::DeclName::ident(name);
             return Some(self.s.act_on_reflect_dependent(
@@ -141,17 +95,76 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_reflect_name(qual, name, name_loc, loc, end))
     }
 
+    /// After `^^ nns`, an operand that is not an identifier: an operator-
+    /// or conversion-function-id or a destructor name ([expr.reflect]/7),
+    /// else the bad-operand error.
+    fn parse_reflect_special_name(
+        &mut self,
+        loc: Loc,
+        operand: Loc,
+        qual: Option<Qualifier>,
+        dependent: Option<Qualifier>,
+        template_kw: Option<Loc>,
+    ) -> PExpr {
+        if self.at_kw(Kw::Operator) {
+            let nl = self.loc();
+            let name = self.parse_operator_function_name()?;
+            if let Some(q) = dependent {
+                let targs = self.reflect_dependent_targs(template_kw).ok()?;
+                let end = self.prev_end();
+                return Some(self.s.act_on_reflect_dependent(
+                    (q.nns, q.loc),
+                    name,
+                    targs,
+                    template_kw,
+                    nl,
+                    loc,
+                    end,
+                ));
+            }
+            let end = self.prev_end();
+            return Some(self.s.act_on_reflect_dn(qual, name, nl, loc, end));
+        }
+        if self.at(Punct::Tilde) {
+            self.bump();
+            let Some(name) = self.ident() else {
+                self.error_here(DiagId::parse_destructor_tilde_identifier);
+                return None;
+            };
+            let nl = self.bump().span.lo;
+            let end = self.prev_end();
+            return Some(self.s.act_on_reflect_destructor(qual, name, nl, loc, end));
+        }
+        let bad = self.s.reflect_bad_operand(operand, loc);
+        // A literal or parenthesized operand is consumed whole, so the
+        // rest of the expression parses ([expr.reflect]/1 has no such
+        // form; `^^(x)` and `^^42` are one error each).
+        if qual.is_none()
+            && (self.at(Punct::LParen)
+                || matches!(
+                    self.tok().kind,
+                    TokKind::PpNumber
+                        | TokKind::CharLit(_)
+                        | TokKind::StringLit(_)
+                        | TokKind::RawStringLit(_)
+                ))
+        {
+            let _ = self.parse_primary_expr();
+        }
+        Some(bad)
+    }
+
     /// The template arguments after `^^T::template m` (none without the
     /// `template` keyword: `<` is then the less-than operator).
     fn reflect_dependent_targs(
         &mut self,
         template_kw: Option<Loc>,
-    ) -> Option<Option<kiln_ast::ArgListId>> {
+    ) -> Result<Option<kiln_ast::ArgListId>, ()> {
         if template_kw.is_none() || !self.at(Punct::Less) {
-            return Some(None);
+            return Ok(None);
         }
-        let (args, _, _) = self.parse_template_arg_list()?;
-        Some(Some(self.s.ast.types.arg_list(&args)))
+        let (args, _, _) = self.parse_template_arg_list().ok_or(())?;
+        Ok(Some(self.s.ast.types.arg_list(&args)))
     }
 
     /// At `name` / `nns name` not followed by `<`: whether it names a
