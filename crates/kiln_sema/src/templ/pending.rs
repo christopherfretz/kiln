@@ -42,6 +42,7 @@ impl Sema<'_, '_> {
     /// while draining ([temp.point]/7: the end of the TU is a point of
     /// instantiation of every specialization).
     pub fn end_of_tu_instantiations(&mut self) {
+        self.inst.at_end_of_tu = true;
         // clang `ActOnEndOfTranslationUnit`: the used vtables' virtual
         // members, then the pending instantiations, until neither adds
         // more (class/virtual/used.rs).
@@ -201,6 +202,11 @@ impl Sema<'_, '_> {
                 return Some(p.decl);
             }
             self.ast.templates.add_end_of_tu_def(p.decl);
+        } else if self.inst.quiet_pending.contains(&p.decl) {
+            // A variable that may be usable in constant expressions,
+            // queued only for the end-of-TU point of instantiation
+            // (`note_var_referenced`): clang never queues it, so never
+            // reports it undefined.
         } else if is_var && self.inst.member_defs.contains(&p.decl) {
             self.undefined_explicit_inst(p.decl, p.poi);
             self.undefined_var_template(p.decl, p.poi);

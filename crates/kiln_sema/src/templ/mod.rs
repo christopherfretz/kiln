@@ -404,6 +404,15 @@ pub struct InstState {
     /// instantiation definition still undefined at the end of the TU is
     /// then reported there (clang queues the use, §4.5).
     pub(crate) undefined_var_uses: kiln_source::fx::FxHashMap<DeclId, (Loc, bool)>,
+    /// Variables that may be usable in constant expressions, odr-used
+    /// while their definition could not be instantiated, queued only for
+    /// the end of the TU's point of instantiation ([temp.point]/7): one
+    /// still undefined there is not reported (clang never queues them,
+    /// spec/sema-templates.md §4.6).
+    pub(crate) quiet_pending: kiln_source::fx::FxHashSet<DeclId>,
+    /// The end-of-TU drain has started: an instantiation from here on is
+    /// handed to codegen in `end_of_tu_defs`.
+    pub(crate) at_end_of_tu: bool,
     /// Declaring such a member: its `constexpr` does not imply `inline`
     /// until the initializer is instantiated (as clang).
     pub(crate) deferring_init: bool,

@@ -154,6 +154,22 @@ clang's `CodeGenModule` pipeline:
    redeclaration, initializer or not: `template<class T> T A<T>::s;`; a
    variable template specialization used before its template was
    defined has no redeclaration and is replayed itself, WP-238).
+
+   A variable definition Sema instantiated at a reference while parsing
+   (one usable in constant expressions, spec/sema-templates.md §4.6
+   "Points of instantiation") is held the same way and replayed by the
+   top-level walk at the declaration `TemplateTables::ref_var_insts`
+   names (`Cg::ref_vars`, `emit_ref_vars`): before the namespace-scope
+   declaration containing the reference, or after the anchor when the
+   reference was in a non-member declaration (a `static_assert`); any
+   the walk did not reach are replayed after it (WP-490). This is clang's
+   `PassToConsumerRAII` handing the definition to `HandleTopLevelDecl`
+   before the enclosing declaration: a must-emit specialization (dynamic
+   initialization) gets its global, guard and `__cxx_global_var_init`
+   before the function that names it, interleaved with the TU's own
+   dynamic initializations in clang's order; a constant-initialized one
+   is still deferred to its first use
+   (`tests/codegen/var_template_point_of_instantiation.cpp`).
 4. **`emit_deferred`** (clang `EmitDeferred`): deferred vtables first,
    then `to_emit`, recursing depth-first into the names each definition
    newly references.
