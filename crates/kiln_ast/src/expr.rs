@@ -2311,6 +2311,18 @@ impl ExprArena {
         crate::ids::ReflectionId::try_new(n.b)
     }
 
+    /// The operand of a `CXXSpliceExpr`.
+    pub fn splice_operand(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::CXXSpliceExpr).a)
+    }
+
+    /// The object expression of a member `CXXSpliceExpr` and whether it
+    /// was written with `->`; `None` for an expression splice.
+    pub fn splice_base(&self, e: ExprId) -> Option<(ExprId, bool)> {
+        let n = self.expect_kind(e, ExprKind::CXXSpliceExpr);
+        ExprId::try_new(n.b).map(|b| (b, n.aux & 1 != 0))
+    }
+
     /// The queried type of an `ArrayTypeTraitExpr`.
     pub fn array_trait_type(&self, e: ExprId) -> QualType {
         QualType::from_raw(self.expect_kind(e, ExprKind::ArrayTypeTraitExpr).a)
@@ -2650,6 +2662,7 @@ impl ExprArena {
                 v.extend(id(n.b));
             }
             ExprKind::SubstNonTypeTemplateParmExpr => v.extend(id(n.b)),
+            ExprKind::CXXSpliceExpr => v.extend([n.b, n.a].into_iter().filter_map(id)),
             k if k.is_cast() => v.extend(id(n.a)),
             ExprKind::UnaryExprOrTypeTraitExpr if !n.has(ExprFlags::ARG_IS_TYPE) => {
                 v.extend(id(n.a));
