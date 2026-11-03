@@ -292,13 +292,7 @@ impl Sema<'_, '_> {
                         return Err(MetaError::invalid());
                     };
                     if self.ast.types.is_reference(vt) {
-                        return fail(
-                            loc,
-                            format!(
-                                "kiln: extracting reference variable '{}' is not supported",
-                                self.reflection_str(r)
-                            ),
-                        );
+                        return self.extract_through_ref(r, d, vt, tc, loc);
                     }
                     if !self.has_static_storage(d) {
                         return fail(
@@ -326,6 +320,35 @@ impl Sema<'_, '_> {
             },
             _ => self.not_extractable(r, loc),
         }
+    }
+
+    /// `extract<T>` of reference variable `d` of type `vt`: of the object
+    /// it refers to, its initializer being a constant.
+    fn extract_through_ref(
+        &mut self,
+        r: ReflectionId,
+        d: DeclId,
+        vt: QualType,
+        tc: QualType,
+        loc: Loc,
+    ) -> Result<MetaOut, MetaError> {
+        let v = match self.ast.decls.var(d).map(|v| v.eval.state()) {
+            Some(kiln_ast::decl::VarEvalState::Value(v)) => self.ast.consts.scalar(v),
+            _ => None,
+        };
+        let Some(Scalar::Pointer { base, offset, .. }) = v else {
+            return fail(
+                loc,
+                format!(
+                    "kiln: extracting through reference '{}' needs it to be constexpr",
+                    self.reflection_str(r)
+                ),
+            );
+        };
+        let obj = self.referenced(vt);
+        let konst = self.ast.types.canonical(obj).quals().is_const();
+        let p = self.object_ptr(obj, base, offset)?;
+        self.extract_place(r, p, konst, tc, loc)
     }
 
     fn not_extractable<T>(&self, r: ReflectionId, loc: Loc) -> Result<T, MetaError> {
