@@ -5531,8 +5531,13 @@ instantiation repeats them, as clang does).
   `incremented here` at the header's name.
 - Groups: -Wloop-analysis = {-Wfor-loop-analysis,
   -Wrange-loop-analysis}; not in -Wall.
+- Macros are not suppressed: the warning fires whether the `for`, its
+  condition, increment or the body's last statement comes from a macro
+  expansion, with the usual `expanded from macro` notes (§diag 8). A
+  dependent loop warns once per instantiation, with the instantiation
+  note (WP-419).
 - Tests: `tests/conformance/stmt.for/for-loop-analysis.cpp`,
-  `stmt.for/loop-analysis.cpp`.
+  `stmt.for/loop-analysis.cpp`, `stmt.for/for-loop-analysis-macros.cpp`.
 
 ### 7.12 `-Wbitfield-constant-conversion` (`bitfield_constant.rs`, WP-234)
 clang 19's `AnalyzeBitFieldAssignment`. An integral or enumeration
