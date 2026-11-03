@@ -6170,6 +6170,7 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(pty));
                 self.emit(self.incomplete_note(msg, pty));
             }
+            self.mark_callee_destroyed_param(p, pty);
         }
         self.check_abstract_signature(f);
         self.begin_function_body(f, ret);

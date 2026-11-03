@@ -6,14 +6,15 @@
 //! defaulted members of enclosing classes (clang `addedClassSubobject`'s
 //! `HasTrivialSpecialMembersForCall`).
 
-use kiln_ast::DeclId;
+use kiln_ast::types::Quals;
+use kiln_ast::{DeclId, QualType};
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{DeclFlags, DefinitionBits};
 use kiln_ast::templates::SpecKind;
 use kiln_diag::DiagId;
 
 use crate::Sema;
-use crate::class::SpecialKind;
+use crate::class::{Selected, SpecialKind};
 
 /// The for-call bit of special member kind `k` (copy/move constructor,
 /// destructor), if it has one.
@@ -95,15 +96,27 @@ impl Sema<'_, '_> {
         subobjects: &[DeclId],
         any: DefinitionBits,
     ) -> DefinitionBits {
-        if let Some(a) = attr
-            && self.trivial_abi_in_effect(r, a)
-        {
-            return any.with(DefinitionBits::TRIVIAL_ABI);
+        let mut add = DefinitionBits::empty();
+        if let Some(a) = attr {
+            if self.trivial_abi_in_effect(r, a) {
+                return any.with(DefinitionBits::TRIVIAL_ABI);
+            }
+            // clang declares an implicit member eagerly at `}` (before
+            // `checkIllFormedTrivialABIStruct` drops the attribute) as
+            // trivial for calls because the attribute is still there
+            // (`DeclareImplicitCopyConstructor`'s `setTrivialForCall`), and
+            // the dropped attribute does not undo it: such a class can
+            // still pass in registers. Modelled for ABI compatibility.
+            let eager = self.implicit_bits(r);
+            for (k, b) in FOR_CALL {
+                if eager & k.bit() != 0 {
+                    add = add.with(b);
+                }
+            }
         }
         let bits = self.defn_bits(r);
         let dynamic = bits.contains(DefinitionBits::POLYMORPHIC)
             || bits.contains(DefinitionBits::HAS_VIRTUAL_BASES);
-        let mut add = DefinitionBits::empty();
         for (k, b) in FOR_CALL {
             if bits.contains(k.trivial_bit()) {
                 continue;
@@ -217,5 +230,25 @@ impl Sema<'_, '_> {
             return Some(Reason::AllDeleted);
         }
         None
+    }
+
+    /// clang `CheckParmsForFunctionDef`: the destructor of a parameter
+    /// `p` (of type `pty`) that the function destroys
+    /// (`isParamDestroyedInCallee`) is referenced by its definition.
+    pub(crate) fn mark_callee_destroyed_param(&mut self, p: DeclId, pty: QualType) {
+        if self.in_template()
+            || self.ast.decls.get(p).has(DeclFlags::INVALID)
+            || self.is_dependent_type(pty)
+            || !kiln_abi::call::is_destroyed_in_callee(&self.ast, pty)
+        {
+            return;
+        }
+        let Some(class) = self.element_class(pty) else { return };
+        let class = self.class_def(class);
+        if let Selected::Found(m) = self.select_special(class, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
+        {
+            let loc = self.ast.decls.get(p).loc();
+            self.mark_function_referenced(m, loc);
+        }
     }
 }
