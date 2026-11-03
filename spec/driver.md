@@ -58,6 +58,7 @@ starting with `-` are inputs.
 | `--sysroot`, `-isysroot` | sysroot (`-isysroot` wins for headers) |
 | `-resource-dir <dir>` | the builtin headers are in `<dir>/include` |
 | `-stdlib=libstdc++` / `libc++` | C++ standard library headers (default libstdc++) |
+| `-fexperimental-library`, `-fno-experimental-library` | libc++'s experimental library: `__has_feature(experimental_library)` and `__has_extension(experimental_library)` are 1 (a `kiln_pp` feature overlay, as clang's cc1 flag; libc++ derives `_LIBCPP_ENABLE_EXPERIMENTAL` from it), and the link step gets `-fexperimental-library` (clang adds `-lc++experimental`); the last wins (`Args::experimental_library`, WP-461) |
 | `--target=<triple>` | `aarch64`/`arm64` or `x86_64`/`amd64` Linux; anything else is an error |
 | `--embed-dir=<dir>` | `#embed` search directory |
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP` | dependency output (see below) |
@@ -409,7 +410,8 @@ the current directory (standard input is `-`). `-o -` is standard output.
   takes 0.02 s and 62 MB RSS, against 2.9 s for the whole debug-build
   `kiln++ -c`; `go.pass.cpp` 0.01 s.
 - **Link.** `clang++` with `--target=<triple>` (only if given),
-  `--sysroot=`, the `-O` flag, `-pthread`, `-stdlib=`, then the objects,
+  `--sysroot=`, the `-O` flag, `-pthread`, `-stdlib=`,
+  `-fexperimental-library` (if given), then the objects,
   linker inputs and link options in command-line order, then
   `-o <out>` (default `a.out`). The temporary objects are removed
   afterwards (by their directory's explicit path).
