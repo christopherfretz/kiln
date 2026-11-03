@@ -1726,6 +1726,13 @@ impl Substituter<'_, '_, '_> {
             // clang `InstantiateClass`: a failed static_assert makes the
             // specialization invalid and stops its instantiation (the
             // later members are not declared).
+            if n.kind() == DeclKind::ConstevalBlock && local.is_none() {
+                if matches!(sub.consteval_block_decl(m), Ok((_, true))) {
+                    invalid = true;
+                    break;
+                }
+                continue;
+            }
             if n.kind() == DeclKind::StaticAssert && local.is_none() {
                 if matches!(sub.static_assert_decl(m), Ok((_, true))) {
                     invalid = true;
@@ -1966,6 +1973,10 @@ impl Substituter<'_, '_, '_> {
             DeclKind::Typedef | DeclKind::TypeAlias => self.typedef_decl(m)?,
             DeclKind::StaticAssert => {
                 self.static_assert_decl(m)?;
+                return Ok(None);
+            }
+            DeclKind::ConstevalBlock => {
+                self.consteval_block_decl(m)?;
                 return Ok(None);
             }
             DeclKind::Enum => self.enum_decl(m)?,
