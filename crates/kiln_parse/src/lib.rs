@@ -81,6 +81,8 @@ pub struct ParseOptions {
     pub sve: bool,
     /// `-fkiln-dump-cfg` ([`kiln_sema::Sema::cfg_dump`]).
     pub cfg_dump: bool,
+    /// `-fkiln-cfg-stats` ([`kiln_sema::Sema::cfg_stats`]).
+    pub cfg_stats: bool,
     /// `-fkiln-cfg-max-elems=` ([`kiln_sema::Sema::cfg_max_elems`]).
     pub cfg_max_elems: usize,
 }
@@ -102,6 +104,7 @@ impl Default for ParseOptions {
             gnu_lib_builtins: false,
             sve: false,
             cfg_dump: false,
+            cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
         }
     }
@@ -147,8 +150,9 @@ pub struct ParsedTu {
     /// The template instantiation report (spec/sema-templates.md
     /// §11.3), empty unless [`ParseOptions::inst_report`] asked for it.
     pub inst_report: String,
-    /// The `-fkiln-dump-cfg` dumps, empty unless
-    /// [`ParseOptions::cfg_dump`] asked for them.
+    /// The `-fkiln-dump-cfg` dumps and `-fkiln-cfg-stats` lines, empty
+    /// unless [`ParseOptions::cfg_dump`] or [`ParseOptions::cfg_stats`]
+    /// asked for them.
     pub cfg_dump: String,
 }
 
@@ -234,6 +238,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
     s.sve = opts.sve;
     s.cfg_dump = opts.cfg_dump;
+    s.cfg_stats = opts.cfg_stats;
     s.cfg_max_elems = opts.cfg_max_elems;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;

@@ -114,6 +114,10 @@ pub struct FnState {
     /// `ExpressionEvaluationContextRecord::VolatileAssignmentLHSs`,
     /// [`Sema::note_volatile_assign`]), warned at the end of the body.
     pub(crate) volatile_assigns: Vec<ExprId>,
+    /// The expression count when the body began: the body's calls are
+    /// among the expressions built after it (the `-Winfinite-recursion`
+    /// prefilter, [`Sema::check_infinite_recursion`]).
+    pub(crate) expr_start: u32,
 }
 
 impl FnState {
@@ -139,6 +143,7 @@ impl FnState {
             first_return: None,
             modified_params: Vec::new(),
             volatile_assigns: Vec::new(),
+            expr_start: 0,
         }
     }
 }
@@ -1359,6 +1364,7 @@ impl Sema<'_, '_> {
     /// the function scope).
     pub(crate) fn begin_function_body(&mut self, f: DeclId, ret: QualType) {
         let mut state = FnState::new(f, ret);
+        state.expr_start = u32::try_from(self.ast.exprs.len()).unwrap_or(0);
         // An immediate function's body is an immediate function context
         // ([expr.const]/16).
         state.rt_quiet = u32::from(self.is_consteval_kind(f));
@@ -1455,6 +1461,11 @@ impl Sema<'_, '_> {
         if state.has_switch || state.has_indirect_goto || !state.labels.is_empty() {
             self.check_jump_scopes(body);
         }
+        // clang 22 `inferNoReturnAttr` (`PopFunctionScopeInfo`, ahead of
+        // the analysis-based warnings; also in a dependent context).
+        if self.diags.uncompilable_error_count() == 0 && !coroutine {
+            self.infer_noreturn(state.decl, body);
+        }
         // The deferred runtime-behavior diagnostics, ahead of the flow
         // warnings (clang `PopFunctionScopeInfo` / `IssueWarnings`). A
         // function template's are flushed unfiltered (clang finishes its
@@ -1496,6 +1507,9 @@ impl Sema<'_, '_> {
         if self.diags.uncompilable_error_count() > 0 || self.in_template() {
             return wrapped;
         }
+        if self.cfg_stats {
+            self.stats_body_cfg();
+        }
         if self.cfg_dump {
             self.dump_body_cfg();
         }
@@ -1509,7 +1523,7 @@ impl Sema<'_, '_> {
             if !naked && self.falls_off(body) != Falloff::Never {
                 self.error(DiagId::sema_falloff_noreturn, rbrace);
             }
-            self.late_analysis(state.decl, body, state.has_fallthrough);
+            self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
             return wrapped;
         }
         // A coroutine that falls off its end calls `return_void()` when
@@ -1518,13 +1532,19 @@ impl Sema<'_, '_> {
             && wrapped != body
             && self.ast.stmts.coroutine_body(wrapped).on_fallthrough.is_some();
         if self.ast.types.is_void(ret) || self.is_error_type(ret) || coro_void {
-            self.late_analysis(state.decl, body, state.has_fallthrough);
+            if !naked && !coroutine && self.ast.types.is_void(ret) {
+                self.suggest_noreturn(state.decl, body);
+            }
+            self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
             return wrapped;
         }
         if !naked && !self.is_main_function(state.decl) {
             let lambda = self.is_lambda_call_op(state.decl);
             match self.falls_off(body) {
                 Falloff::Never => {}
+                // clang 22: the body ends in a throw or a call of a
+                // function inferred `noreturn`.
+                _ if !coroutine && self.ends_in_inferred_noreturn(body) => {}
                 Falloff::Always if lambda => {
                     self.error(DiagId::sema_falloff_nonvoid_lambda, rbrace);
                 }
@@ -1541,7 +1561,7 @@ impl Sema<'_, '_> {
                 Falloff::Maybe => self.error(DiagId::sema_falloff_nonvoid_maybe, rbrace),
             }
         }
-        self.late_analysis(state.decl, body, state.has_fallthrough);
+        self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
         wrapped
     }
 
@@ -1609,7 +1629,7 @@ impl Sema<'_, '_> {
     /// Whether `f` is the pattern of a function template declared by
     /// name (a generic lambda's call operator is not: clang finishes it
     /// as a function of a dependent context).
-    fn is_named_function_template(&self, f: DeclId) -> bool {
+    pub(crate) fn is_named_function_template(&self, f: DeclId) -> bool {
         !self.is_lambda_call_op(f)
             && (self.ast.described_template(f).is_some()
                 || self.ast.described_template(self.ast.first(f)).is_some())

@@ -320,6 +320,10 @@ pub struct Args {
     /// every analysed function body, in clang's `debug.DumpCFG` layout
     /// (spec/sema.md §7.5.1).
     pub dump_cfg: bool,
+    /// `-fkiln-cfg-stats` (`-fsyntax-only`): one line per analysed
+    /// function body with its graph's size and build time
+    /// (spec/sema.md §7.5.1).
+    pub cfg_stats: bool,
     /// `-fkiln-cfg-max-elems=N`: the element cap of one body's graph
     /// (spec/sema.md §7.5).
     pub cfg_max_elems: Option<usize>,
@@ -668,6 +672,7 @@ impl Args {
             }
             "-fdump-vtable-layouts" => self.dump_vtable_layouts = true,
             "-fkiln-dump-cfg" => self.dump_cfg = true,
+            "-fkiln-cfg-stats" => self.cfg_stats = true,
             _ => {
                 if let Some(v) = arg.strip_prefix("-fkiln-cfg-max-elems=") {
                     match v.parse::<usize>() {

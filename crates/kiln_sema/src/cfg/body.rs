@@ -116,6 +116,27 @@ impl Sema<'_, '_> {
         self.cfg_body.graph = graph;
     }
 
+    /// `-fkiln-cfg-stats`: builds the planned graph and appends one line
+    /// to [`Sema::cfg_out`]: the function, its blocks, elements, edges,
+    /// bytes ([`Cfg::bytes`]) and the build time in nanoseconds.
+    pub(crate) fn stats_body_cfg(&mut self) {
+        let Some((f, _)) = self.cfg_body.at else { return };
+        let start = std::time::Instant::now();
+        self.cfg_ensure();
+        let ns = start.elapsed().as_nanos();
+        let g = &self.cfg_body.graph;
+        let line = format!(
+            "cfg-stats: '{}' status={:?} blocks={} elems={} edges={} bytes={} build_ns={ns}\n",
+            self.qualified_decl_name(f),
+            g.status,
+            g.blocks.len(),
+            g.elems.len(),
+            g.edges.len(),
+            g.bytes(),
+        );
+        self.cfg_out.push_str(&line);
+    }
+
     /// `-fkiln-dump-cfg`: appends the dump of the planned graph to
     /// [`Sema::cfg_out`] (a body with no graph prints its status).
     pub(crate) fn dump_body_cfg(&mut self) {

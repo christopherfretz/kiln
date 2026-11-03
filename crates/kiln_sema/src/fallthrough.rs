@@ -29,9 +29,16 @@ impl Sema<'_, '_> {
     /// The CFG-based checks clang runs after the return-type check
     /// (`AnalysisBasedWarnings::IssueWarnings`): the fallthrough placement
     /// when the body built a fallthrough statement (an instantiation
-    /// copies them, so is not checked), then a throw in a non-throwing
-    /// function.
-    pub(crate) fn late_analysis(&mut self, f: DeclId, body: StmtId, has_fallthrough: bool) {
+    /// copies them, so is not checked), then the infinite recursion
+    /// (`expr_start`: [`Sema::check_infinite_recursion`]), then a throw in
+    /// a non-throwing function.
+    pub(crate) fn late_analysis(
+        &mut self,
+        f: DeclId,
+        body: StmtId,
+        has_fallthrough: bool,
+        expr_start: u32,
+    ) {
         // clang `DiagnoseSwitchLabelsFallthrough`: the unannotated
         // fall-throughs, then the misplaced annotations; the unreachable
         // code (clang `CheckUnreachable`) comes first.
@@ -40,6 +47,7 @@ impl Sema<'_, '_> {
         if has_fallthrough {
             self.check_fallthrough_placement(body);
         }
+        self.check_infinite_recursion(f, body, expr_start);
         self.check_throw_in_nothrow(f, body);
     }
 

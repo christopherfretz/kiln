@@ -1,13 +1,14 @@
 //! The consumers' views of a [`Cfg`] (spec/sema.md §7.5): reachability
 //! of the deferred diagnostics' expressions, fall-off-the-end, the
 //! throw-expressions escaping the body, the statement flow of the
-//! fallthrough checks and the unreachable-code scan.
+//! fallthrough checks, the unreachable-code scan and the paths of the
+//! infinite-recursion check.
 
 use std::collections::{HashMap, HashSet};
 
 use kiln_ast::{ExprId, StmtId};
 
-use super::{BlockId, Cfg, edge};
+use super::{BlockId, Cfg, Elem, edge};
 use crate::Sema;
 
 /// An element of the unreachable-code scan (a clang `CFGStmt`): an
@@ -102,6 +103,36 @@ impl Cfg {
             *after.entry(s).or_default() |= self.pos_live(exit, &r, edge::LIVE);
         }
         (before, after)
+    }
+
+    /// Whether every live path from the entry meets an expression
+    /// element for which `hit` holds before it reaches the exit, and one
+    /// does (clang `checkForRecursiveFunctionCall`: a path stops at the
+    /// first block holding a hit). `false` when no edge enters the exit.
+    pub(crate) fn every_path_hits(&self, hit: impl Fn(ExprId) -> bool) -> bool {
+        if self.preds(BlockId::EXIT).iter().all(|a| a.flags & edge::NULL != 0) {
+            return false;
+        }
+        let mut seen = vec![false; self.blocks.len()];
+        let mut work = vec![BlockId::ENTRY];
+        let mut found = false;
+        while let Some(b) = work.pop() {
+            for a in self.succs(b) {
+                if a.flags & edge::LIVE == 0 || std::mem::replace(&mut seen[a.block.idx()], true)
+                {
+                    continue;
+                }
+                if a.block == BlockId::EXIT {
+                    return false;
+                }
+                if self.elems(a.block).iter().any(|el| matches!(*el, Elem::Expr(e) if hit(e))) {
+                    found = true;
+                    continue;
+                }
+                work.push(a.block);
+            }
+        }
+        found
     }
 
     /// The block holding element `u`.

@@ -177,6 +177,7 @@ impl SyntaxJob<'_> {
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
             sve: crate::features::resolve(a, job.toolchain.target.is_aarch64()).0.sve,
             cfg_dump: a.dump_cfg,
+            cfg_stats: a.cfg_stats,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             ..ParseOptions::default()
         };
