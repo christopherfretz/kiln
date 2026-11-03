@@ -1491,6 +1491,11 @@ errors.
      can recurse.
    - **attributes** that affect layout (`alignas`, `packed`,
      `trivial_abi`).
+   - the class-virt-specifier **`final`** of the pattern (the primary
+     template's or the partial specialization's definition), through
+     `act_on_class_final` before the bases (WP-446), so `__is_final` and
+     the final-base check see it on the specialization. Test:
+     `tests/conformance/temp.inst/final-class-template.cpp`.
    - A member function's declaration, and a function template
      specialization's (at `function_spec_signature`), gets the pattern's
      attributes (`class_attrs`; clang `InitFunctionInstantiation` →
