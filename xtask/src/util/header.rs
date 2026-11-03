@@ -87,6 +87,7 @@ pub enum Counter {
     FrozenBytes,
     StaticBytes,
     Evaluations,
+    MemoHits,
 }
 
 impl Counter {
@@ -102,6 +103,10 @@ impl Counter {
         Self::Evaluations,
     ];
 
+    /// The counters a budget can also name that the bench does not
+    /// record (diagnostic counts rather than costs).
+    pub const EXTRA: [Self; 1] = [Self::MemoHits];
+
     /// The report's field name (and the budget key).
     pub fn name(self) -> &'static str {
         match self {
@@ -114,11 +119,12 @@ impl Counter {
             Self::FrozenBytes => "frozen_bytes",
             Self::StaticBytes => "static_bytes",
             Self::Evaluations => "evaluations",
+            Self::MemoHits => "memo_hits",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|c| c.name() == s)
+        Self::ALL.into_iter().chain(Self::EXTRA).find(|c| c.name() == s)
     }
 }
 
@@ -139,19 +145,26 @@ impl fmt::Display for OvenLoc {
     }
 }
 
-/// `oven: [<line>[:<col>]] <counter><=N...` — an evaluation budget
-/// (kiln-specific). Without a location it bounds the report's total line.
+/// `oven: [<line>[:<col>]] <counter><=N|<counter>>=N...` — an evaluation
+/// budget (kiln-specific). Without a location it bounds the report's total
+/// line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OvenBudget {
     pub at: Option<OvenLoc>,
-    /// At least one bound, sorted by counter, each counter at most once.
+    /// The upper bounds (`<=`), sorted by counter, each counter at most
+    /// once.
     pub limits: Vec<(Counter, u64)>,
+    /// The lower bounds (`>=`), likewise. At least one bound of either
+    /// kind.
+    pub floors: Vec<(Counter, u64)>,
 }
 
-/// `[<line>[:<col>]] <counter><=N...` (any order; at least one bound).
+/// `[<line>[:<col>]] <counter><=N|<counter>>=N...` (any order; at least
+/// one bound).
 pub fn parse_oven(value: &str) -> Result<OvenBudget, String> {
-    let usage = "expected `oven: [<line>[:<col>]] <counter><=N...` with counters \
-                 steps|bytes|peak_bytes|calls|allocs|peak_arena|frozen_bytes|static_bytes|evaluations";
+    let usage = "expected `oven: [<line>[:<col>]] <counter><=N|<counter>>=N...` with counters \
+                 steps|bytes|peak_bytes|calls|allocs|peak_arena|frozen_bytes|static_bytes|\
+                 evaluations|memo_hits";
     let mut items = value.split_whitespace().peekable();
     let at = match items.peek() {
         Some(first) if first.starts_with(|c: char| c.is_ascii_digit()) => {
@@ -160,22 +173,26 @@ pub fn parse_oven(value: &str) -> Result<OvenBudget, String> {
         }
         _ => None,
     };
-    let mut limits: Vec<(Counter, u64)> = Vec::new();
+    let (mut limits, mut floors): (Vec<(Counter, u64)>, Vec<(Counter, u64)>) = Default::default();
     for item in items {
-        let (key, n) =
-            item.split_once("<=").ok_or_else(|| format!("bad budget `{item}`; {usage}"))?;
+        let (key, n, list) = match (item.split_once("<="), item.split_once(">=")) {
+            (Some((k, n)), None) => (k, n, &mut limits),
+            (None, Some((k, n))) => (k, n, &mut floors),
+            _ => return Err(format!("bad budget `{item}`; {usage}")),
+        };
         let n: u64 = n.parse().map_err(|_| format!("bad number in `{item}`; {usage}"))?;
         let c = Counter::parse(key).ok_or_else(|| format!("unknown budget `{key}`; {usage}"))?;
-        if limits.iter().any(|(k, _)| *k == c) {
-            return Err(format!("duplicate budget `{key}`"));
+        if list.iter().any(|(k, _)| *k == c) {
+            return Err(format!("duplicate budget `{item}`"));
         }
-        limits.push((c, n));
+        list.push((c, n));
     }
-    if limits.is_empty() {
+    if limits.is_empty() && floors.is_empty() {
         return Err(usage.into());
     }
     limits.sort();
-    Ok(OvenBudget { at, limits })
+    floors.sort();
+    Ok(OvenBudget { at, limits, floors })
 }
 
 /// `<line>[:<col>]`, both 1-based.
@@ -282,7 +299,7 @@ mod tests {
     fn oven_budgets() {
         assert_eq!(
             parse_oven("bytes<=7").unwrap(),
-            OvenBudget { at: None, limits: vec![(Counter::Bytes, 7)] }
+            OvenBudget { at: None, limits: vec![(Counter::Bytes, 7)], floors: vec![] }
         );
         let b = parse_oven(
             "evaluations<=2 frozen_bytes<=7 steps<=10 peak_bytes<=3 calls<=4 allocs<=5 peak_arena<=6",
@@ -311,7 +328,13 @@ mod tests {
             assert!(parse_oven(bad).is_err(), "{bad}");
         }
         assert!(parse_oven("steps<=1 12 bytes<=2").unwrap_err().contains("bad budget"));
-        for c in Counter::ALL {
+        let b = parse_oven("3 memo_hits>=1 steps<=9 memo_hits<=4").unwrap();
+        assert_eq!(b.limits, [(Counter::Steps, 9), (Counter::MemoHits, 4)]);
+        assert_eq!(b.floors, [(Counter::MemoHits, 1)]);
+        for bad in ["memo_hits>=1 memo_hits>=2", "steps>=", "steps=>1", "a<=b>=1"] {
+            assert!(parse_oven(bad).is_err(), "{bad}");
+        }
+        for c in Counter::ALL.into_iter().chain(Counter::EXTRA) {
             assert_eq!(Counter::parse(c.name()), Some(c));
         }
     }

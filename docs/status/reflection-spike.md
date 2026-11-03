@@ -1,3 +1,5 @@
+> **Frozen (WP-470, 2026-11-03): superseded by spec/reflection.md.** Kept as history.
+
 # Reflection spike (WP-267, `-freflection`)
 
 Status: spike landed behind `-freflection` (default off). It is a design

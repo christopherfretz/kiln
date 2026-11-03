@@ -817,7 +817,8 @@ fn read_counters(path: &Path, e: &Entry, spec: &BenchSpec) -> Result<Counters, S
         |f: &str| f == e.arg || std::fs::canonicalize(Path::new(f)).is_ok_and(|p| p == e.path);
     oven_report::check_budgets(&report, &spec.oven, &in_entry)
         .map_err(|err| err.trim_end().to_owned())?;
-    Ok(Counters { wall_us: 0, ..report.total })
+    // `memo_hits` is a budget-only counter: the bench does not record it.
+    Ok(Counters { wall_us: 0, memo_hits: 0, ..report.total })
 }
 
 fn describe_outcome(o: &Outcome) -> String {

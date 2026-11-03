@@ -532,8 +532,13 @@ impl Oven {
     ) -> Result<u128, Fault> {
         let arg = |i: usize| self.code[pc + 1 + i] as usize;
         let reg = |i: usize| self.regs[fb + arg(i)];
-        let (a, bb, c) = (reg(1), reg(2), reg(3));
         let (t1, t2) = (arg(4) as u32, arg(5) as u32);
+        if aux & 0xff == crate::kbc::bi::META {
+            // Operands `[dst, base, n, _, t1, t2]` (`base`/`n` raw).
+            let (base, n) = (arg(1), arg(2));
+            return self.exec_meta(b, pc, fb, aux >> 8, (base, n), (t1, t2));
+        }
+        let (a, bb, c) = (reg(1), reg(2), reg(3));
         if aux & 0xff == crate::kbc::bi::THAW_PTR {
             let cur = self.stack[self.stack.len() - 1].func;
             let top = fb + self.funcs[cur as usize].nregs as usize + 1;
@@ -550,8 +555,6 @@ impl Oven {
             self.bi_msg_chars(a, bb as u64, OTy(t1)).map(|()| a)
         } else if aux & 0xff == crate::kbc::bi::UNCAUGHT {
             Ok(self.exc.uncaught() as u128)
-        } else if aux & 0xff == crate::kbc::bi::META {
-            self.exec_meta(b, pc, fb, aux >> 8, (a, bb, c), (t1, t2))
         } else {
             self.builtin(b.ast(), aux, a, bb, c, t1, t2)
         }
