@@ -4248,8 +4248,10 @@ omits it) and `__has_builtin` answers 0 for it (WP-394).
   are not looked through); scalar, array and vector types are true,
   other non-class types false; an aggregate whose destructor is not
   user-provided is true; otherwise the destructor must be trivial and not
-  deleted, and some constructor trivial and not deleted (a declared one,
-  or an implicit default, copy or move constructor that would be).
+  deleted, and some constructor trivial and not deleted (a declared one
+  that is eligible, its constraints satisfied ([special]/6, clang
+  `isIneligibleOrNotSelected`), or an implicit default, copy or move
+  constructor that would be).
 - `__builtin_is_cpp_trivially_relocatable(T)` (clang 21; P2786's
   [class.prop] rules without its keywords): element completeness; the
   element type is false when incomplete, true when scalar or vector; a
