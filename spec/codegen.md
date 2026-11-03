@@ -755,7 +755,7 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   condition block that only branches on is folded into its predecessor
   only while no cleanup (a destructor, a lifetime end, a `noexcept`
   terminate scope) is on the EH stack. `tests/codegen/forwarding_block_cleanup.cpp`.
-- Case ranges (GNU) are an error.
+- Case ranges (GNU) are an error. GNU computed goto: §7r.
 - A goto (forward, backward, out of nested scopes, loops and try blocks)
   branches through the cleanups of every scope it leaves (`cleanup.rs`
   branch fixups). A local default-initialized by a trivial constructor
@@ -2749,6 +2749,40 @@ guarantees it a constant initializer and a trivial destructor
   `bool-conditional-run.cpp`).
 - At `ir_version` 20+, `kiln_llvm` prints uniform vector constants as
   `splat (T v)` (spec/llvm.md §5).
+
+## 7r. Landed (WP-444): GNU computed goto (`stmt.rs`)
+- `&&l` (clang `GetAddrOfLabel`, `addr_of_label`) is `blockaddress(@f,
+  %bb)` for the label's block. The first label address or computed
+  `goto` in a function makes the dispatch block (clang
+  `GetIndirectGotoBlock`, `Fir::indirect_goto`): `%indirect.goto.dest =
+  phi ptr` and `indirectbr ptr %indirect.goto.dest, [...]`, unplaced.
+  Each `&&l` evaluation adds its label as a destination, so a label
+  whose address is taken twice is listed twice, as clang's
+  `addDestination`. The label's LLVM block is created ahead of lowering
+  (`Fir::block_id`) so the `blockaddress` can name it; an address-taken
+  block is a use of its block and is never pruned.
+- `goto *e` (clang `EmitIndirectGotoStmt`): a target that is `&&l`
+  under parentheses and implicit casts (`Ast::indirect_goto_constant_
+  target`) is `goto l`, through the cleanups of the scopes it leaves;
+  otherwise the target is emitted as a scalar, added to the `phi` from
+  the current block, and the block branches to the dispatch block (no
+  cleanups, which sema guarantees there are none to run).
+- At the end of the function (`finish_indirect_goto`, before EH
+  finishing) the dispatch block is placed after the return block. With
+  no computed `goto` its `phi` has no incoming values and is replaced by
+  `poison` (clang 19, `-fclang-compat=19`: `undef`).
+- A label address in a constant (`static void *t[] = {&&a, &&b};`, a
+  frozen Oven value `PtrBase::Label`, `consts.rs`) is the same
+  `blockaddress`, so the global is a constant initializer exactly as
+  clang's. The address of another function's label (only reachable
+  through a constexpr value computed in that function) is a codegen
+  error "address of a label of another function in a constant" (clang
+  crashes there).
+- Tests: `tests/codegen/computed_goto.cpp` (exact IR on both triples at
+  both oracles: a static table, a conditional target, a duplicate
+  address, an unused dispatch block, `goto *&&l` through a destructor, a
+  template instantiated twice), `tests/conformance/stmt.goto/computed-
+  goto-dispatch-run.cpp` (`expect: run`).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

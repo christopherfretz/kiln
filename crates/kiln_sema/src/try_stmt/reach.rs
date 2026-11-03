@@ -88,6 +88,11 @@ struct Reach {
     flow: Option<StmtFlow>,
     /// The unreachable-code scan ([`Sema::dead_scan`]).
     scan: Option<DeadScan>,
+    /// The body walked, for the address-taken labels.
+    root: Option<StmtId>,
+    /// The labels whose address the body takes (clang `CFGBuilder::
+    /// AddressTakenLabels`), found at the first live indirect `goto`.
+    addr_labels: Option<Vec<DeclId>>,
 }
 
 /// An element of the unreachable-code scan (a clang `CFGStmt`): an
@@ -184,7 +189,7 @@ impl Sema<'_, '_> {
         body: StmtId,
         wanted: HashSet<ExprId>,
     ) -> Option<HashSet<ExprId>> {
-        let mut r = Reach { wanted, ..Reach::default() };
+        let mut r = Reach { wanted, root: Some(body), ..Reach::default() };
         loop {
             r.changed = false;
             r.found.clear();
@@ -203,7 +208,7 @@ impl Sema<'_, '_> {
     /// CFG), `Maybe` when the body also returns, throws out or calls a
     /// `noreturn` function on a live path, else `Always`.
     pub(crate) fn fall_off_kind(&mut self, body: StmtId) -> Falloff {
-        let mut r = Reach { falloff: true, ..Reach::default() };
+        let mut r = Reach { falloff: true, root: Some(body), ..Reach::default() };
         loop {
             r.changed = false;
             r.found.clear();
@@ -250,6 +255,24 @@ impl Sema<'_, '_> {
             }
         }
         false
+    }
+
+    /// The labels of `&&l` expressions in `body`, outside lambdas and
+    /// unevaluated operands (the expressions clang's CFG visits).
+    fn addr_taken_labels(&self, body: StmtId) -> Vec<DeclId> {
+        let (mut stmts, mut exprs, mut out) = (vec![body], Vec::new(), Vec::new());
+        while let Some(s) = stmts.pop() {
+            self.stmt_parts(s, &mut exprs, &mut stmts);
+            while let Some(e) = exprs.pop() {
+                match self.ast.exprs.get(e).kind() {
+                    ExprKind::LambdaExpr | ExprKind::UnaryExprOrTypeTraitExpr => {}
+                    ExprKind::AddrLabelExpr => out.push(self.ast.exprs.addr_label(e)),
+                    ExprKind::StmtExpr => stmts.push(self.ast.exprs.stmt_expr_body(e)),
+                    _ => exprs.extend(self.ast.exprs.children(e, &self.ast.lists)),
+                }
+            }
+        }
+        out
     }
 
     fn has_catch_all(&self, s: StmtId) -> bool {
@@ -413,7 +436,8 @@ impl Sema<'_, '_> {
         body: StmtId,
         wanted: HashSet<StmtId>,
     ) -> Option<HashSet<StmtId>> {
-        let mut r = Reach { stmts_wanted: wanted, cases_live: true, ..Reach::default() };
+        let mut r =
+            Reach { stmts_wanted: wanted, cases_live: true, root: Some(body), ..Reach::default() };
         loop {
             r.changed = false;
             r.found.clear();
@@ -432,7 +456,12 @@ impl Sema<'_, '_> {
     /// `FallthroughMapper::fillReachableBlocks`); `None` when clang would
     /// build no CFG.
     pub(crate) fn stmt_flow(&mut self, body: StmtId) -> Option<StmtFlow> {
-        let mut r = Reach { cases_live: true, flow: Some(Default::default()), ..Reach::default() };
+        let mut r = Reach {
+            cases_live: true,
+            flow: Some(Default::default()),
+            root: Some(body),
+            ..Reach::default()
+        };
         loop {
             r.changed = false;
             r.found.clear();
@@ -456,7 +485,7 @@ impl Sema<'_, '_> {
     /// CFG.
     pub(crate) fn dead_scan(&mut self, body: StmtId, roots: HashSet<Unit>) -> Option<DeadScan> {
         let scan = DeadScan { roots, recording: true, ..DeadScan::default() };
-        let mut r = Reach { scan: Some(scan), ..Reach::default() };
+        let mut r = Reach { scan: Some(scan), root: Some(body), ..Reach::default() };
         loop {
             r.changed = false;
             r.found.clear();
@@ -611,9 +640,21 @@ impl Sema<'_, '_> {
                 }
                 false
             }
+            // GNU `goto *p`: an edge to every address-taken label (clang's
+            // indirect-goto block).
             StmtKind::IndirectGotoStmt => {
                 let live = self.reach_parts(s, live, r);
-                Self::unit(Unit::Stmt(s), live, r);
+                if Self::unit(Unit::Stmt(s), live, r) {
+                    if r.addr_labels.is_none() {
+                        r.addr_labels =
+                            Some(r.root.map(|b| self.addr_taken_labels(b)).unwrap_or_default());
+                    }
+                    for &l in r.addr_labels.as_deref().unwrap_or_default() {
+                        if r.labels.insert(l) {
+                            r.changed = true;
+                        }
+                    }
+                }
                 false
             }
             // [dcl.asm], GNU `asm goto`: an edge to each label as well as

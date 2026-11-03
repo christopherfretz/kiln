@@ -1470,15 +1470,15 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     `exit_immediate_context`.
   - `if constexpr` or `if !` not followed by `(` (or `consteval`) is
     `expected '(' after 'if'`; the parser skips to the next `;`.
-- **Unsupported:** case ranges, computed goto, statement expressions
-  and range-based `for` are "not supported yet".
-  - **Deviation (computed goto):** GNU `goto *e;` is parsed. Its operand
-    is checked for an unexpanded pack (`Sema::act_on_indirect_goto`),
-    and then the statement is "computed goto is not supported yet" at the
-    `*` (after "use of GNU indirect-goto extension", `-Wgnu-label-as-value`,
-    at the same `*`). clang accepts it, and reports "indirect goto in
-    function with no address-of-label expressions" when the function
-    takes no label's address.
+- **Unsupported:** case ranges, statement expressions and range-based
+  `for` are "not supported yet".
+  - **Computed goto (GNU, WP-444):** `goto *e;` (clang
+    `ParseGotoStatement`) is "use of GNU indirect-goto extension"
+    (`-Wgnu-label-as-value`) at the `*`; the operand is parsed as an
+    expression and `Sema::act_on_indirect_goto` builds an
+    `IndirectGotoStmt` (spec/ast.md; sema in spec/sema.md "Jump
+    checks"). A missing operand is "expected expression" and the
+    statement is skipped to the `;`.
   - **GNU address-of-label `&&l` (WP-424):** parsed in
     `parse_cast_expr` as clang's `tok::ampamp` case
     (`Parser::parse_addr_label`): a non-identifier operand is "expected
@@ -1492,11 +1492,12 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     and builds an `AddrLabelExpr` of type `void *`. No postfix suffix
     follows. Template instantiation looks the label up again by name.
     Returning one is "returning address of label, which is local"
-    (`-Wreturn-stack-address`, spec/sema-class.md §5.6). **Deviation:**
-    code generation and constant evaluation of `&&l` are "not supported
-    yet" (clang emits a `blockaddress`; it is a constant address, so
-    clang also accepts it in a constant expression and in a static
-    initializer). Tests: `tests/conformance/ext.gnu.label.value/`.
+    (`-Wreturn-stack-address`, spec/sema-class.md §5.6). Code
+    generation is a `blockaddress` (spec/codegen.md §7r), constant
+    evaluation a label-address pointer (spec/oven.md "Label
+    addresses"), so `&&l` also works in a constant expression and a
+    static initializer. Tests: `tests/conformance/ext.gnu.label.value/`,
+    `tests/conformance/stmt.goto/computed-goto-*.cpp`.
 
 ### 6.2 Attributes (`attr.rs`)
 - **Syntax:** `[[ ]]` (with `using ns:`), `alignas(…)`, and GNU

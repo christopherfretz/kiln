@@ -372,7 +372,7 @@ struct ExprNode {        // 20 bytes
   | `BinaryConditionalOperator` | `ListId` of [common, condition, true arm, false arm] | | `binary_conditional_operands` |
   | `CXXThrowExpr` | operand or none (rethrow) | | `throw_operand` |
   | `StmtExpr` | the `CompoundStmt` | | `stmt_expr_body` |
-  | `AddrLabelExpr` (GNU `&&l`, WP-424) | the `LabelDecl` | `cold.end_loc` = the label name's location; a `void *` prvalue | `addr_label` |
+  | `AddrLabelExpr` (GNU `&&l`, WP-424) | the `LabelDecl` | `cold.end_loc` = the label name's location; a `void *` prvalue; instantiation-dependent in a template's body so each specialization rebuilds it for its own label (WP-444) | `addr_label` |
   | `OffsetOfExpr` | `ListId` of the array index expressions | `b` = byte offset (`u32`) | `offsetof_value` |
   | `CompoundLiteralExpr` | the `InitListExpr` | | `compound_literal_init` |
   | `CXXScalarValueInitExpr` | none | | |
@@ -608,7 +608,8 @@ struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, 
 | `DefaultStmt` (M2), `BreakStmt` (M2), `ContinueStmt` (M2) | |
 | `WhileStmt` (M2), `DoStmt` (M2), `ForStmt` (M2) | `{init, cond_var, cond, inc, body}` |
 | `ReturnStmt` (M2) | `a` = value; `b` = NRVO candidate `DeclId` |
-| `LabelStmt`, `GotoStmt`, `IndirectGotoStmt` | `LabelDecl` ids; computed goto reserved (GNU) |
+| `LabelStmt`, `GotoStmt` | `LabelDecl` ids |
+| `IndirectGotoStmt` (GNU `goto *e;`, WP-444) | `a` = the target `ExprId`, converted to `const void *` unless type-dependent (`indirect_goto_target`); `b` = the `*` location (`indirect_goto_star`); `loc` = the `goto`. `Ast::indirect_goto_constant_target` gives the label of a target that is `&&l` after implicit casts and parentheses (clang `getConstantTarget`). The dump prints clang's `IndirectGotoStmt` line with the target as its child (`builder.indirect_goto_stmt`) |
 | `AttributedStmt` | attrs `ListId` + sub (`[[likely]]`, `[[fallthrough]]`, `[[assume(e)]]`) |
 | `CXXForRangeStmt` (WP-089) | clang's desugaring in the `RangeForData` side table: `{init: Option<StmtId>, range: DeclId, begin, end: Option<DeclId>, cond, inc: Option<ExprId>, loop_var: DeclId, body, colon: Loc}` (variables, not `DeclStmt`s; the dump prints each as clang's `DeclStmt`). `begin`/`end`/`cond`/`inc` are `None` in a template pattern whose range or loop-variable type is dependent. `colon` locates the implicit variables and expressions. In C++23 and later (P2718) the temporaries of the range initializer are `extended by Var '__range{d}'` (sema-class.md §5.4); `__range`, `__begin`, `__end` and the loop variable have `VarSpec` `cxx_for_range` (a LATE bit) |
 | `CXXExpansionStmt` (P1306, M6) | `aux` = enumerating / iterating / destructuring; `{init, expansion_var pattern DeclStmt, range (expansion-init-list `ListId` or range expr), body pattern, instantiations: ListId}` where each instantiation is a `CompoundStmt` with the per-element variable; `break`/`continue` target the whole statement |

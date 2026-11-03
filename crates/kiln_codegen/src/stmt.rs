@@ -132,7 +132,11 @@ impl Cg<'_> {
     /// joins the destinations of the function's indirect `goto` block
     /// (made here if it is the first; once per use, so a label taken
     /// twice is listed twice, as clang's `addDestination` does).
-    pub(crate) fn addr_of_label(&mut self, d: DeclId, at: Option<kiln_source::Loc>) -> R<kiln_llvm::Value> {
+    pub(crate) fn addr_of_label(
+        &mut self,
+        d: DeclId,
+        at: Option<kiln_source::Loc>,
+    ) -> R<kiln_llvm::Value> {
         let ast = self.ast;
         let here = self.f.decl.map(|f| ast.first(f));
         let owner = kiln_abi::mangle::enclosing_function(ast, d).map(|f| ast.first(f));

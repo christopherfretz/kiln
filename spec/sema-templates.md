@@ -3687,8 +3687,12 @@ The sites, as clang:
   ellipsis, before that check
   (`except.handle/exception-decl-ellipsis.cpp`);
 - "expression contains …" at the operand of a computed `goto *e`
-  (`act_on_indirect_goto`), before the computed goto is reported
-  unsupported (`stmt.goto/computed-goto-unexpanded-pack.cpp`);
+  (`act_on_indirect_goto`), before its conversion to `const void *`; the
+  statement is dropped (`stmt.goto/computed-goto-unexpanded-pack.cpp`).
+  Instantiation substitutes the target and converts it again
+  (`subst/stmts.rs`); an `AddrLabelExpr` in a template's body is
+  instantiation-dependent, so it is rebuilt for the specialization's
+  label rather than reused from the pattern (WP-444);
 - "initializer contains …" for a local variable's initializer.
 Outside a lambda these sites check every unexpanded pack (template
 definitions); during instantiation they do not run. Tests

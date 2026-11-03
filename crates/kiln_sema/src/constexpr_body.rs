@@ -94,8 +94,9 @@ impl Sema<'_, '_> {
         }
         let Some(v) = var else {
             if pre23 && let Some(loc) = stmts.cxx23 {
-                let msg =
-                    self.diag(DiagId::sema_constexpr_body_invalid_stmt_cxx23, loc).arg(u8::from(ctor));
+                let msg = self
+                    .diag(DiagId::sema_constexpr_body_invalid_stmt_cxx23, loc)
+                    .arg(u8::from(ctor));
                 self.emit(msg);
             }
             return;

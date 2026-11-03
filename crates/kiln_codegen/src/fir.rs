@@ -566,7 +566,8 @@ impl Fir {
             return g;
         }
         let blk = self.create_block();
-        let V::I(phi) = self.push_in(blk, Op::Phi { ty: TypeId::PTR, inc: Vec::new() }, TypeId::PTR)
+        let V::I(phi) =
+            self.push_in(blk, Op::Phi { ty: TypeId::PTR, inc: Vec::new() }, TypeId::PTR)
         else {
             unreachable!()
         };

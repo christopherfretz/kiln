@@ -326,10 +326,9 @@ impl PtrBase {
                 lit: StringLitId::try_new(raw)?,
                 origin: ExprId::try_new(aux)?,
             }),
-            6 => Some(PtrBase::Label {
-                label: DeclId::try_new(raw)?,
-                origin: ExprId::try_new(aux)?,
-            }),
+            6 => {
+                Some(PtrBase::Label { label: DeclId::try_new(raw)?, origin: ExprId::try_new(aux)? })
+            }
             _ => Self::from_parts(code, raw),
         }
     }
