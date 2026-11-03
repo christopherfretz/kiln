@@ -333,9 +333,9 @@ consteval info reflect_object(T& expr);
 template <class T>
 consteval info reflect_function(T& fn);
 template <class R>
-consteval info reflect_constant_string(R&& r);
+consteval info __kiln_reflect_constant_string(R&& r);
 template <class R>
-consteval info reflect_constant_array(R&& r);
+consteval info __kiln_reflect_constant_array(R&& r);
 
 consteval bool __kiln_is_string_literal(const char* p);
 consteval bool __kiln_is_string_literal(const wchar_t* p);
@@ -365,6 +365,41 @@ auto __kiln_begin(R& r) -> decltype(r.begin());
 template <class R>
 using __kiln_range_value_t =
     typename __kiln_unref<decltype(*__kiln_begin(__kiln_lval<R>()))>::type;
+
+// The intrinsics read a built-in array (a string literal's terminator
+// recognized) or a contiguous range by layout; a range with data() and
+// size() is passed as a span of them, any other copied into one.
+template <class F, class R>
+consteval info __kiln_reflect_range(F f, R&& r) {
+  using T = __kiln_range_value_t<R>;
+  if constexpr (__is_array(typename __kiln_unref<R>::type)) {
+    return f(r);
+  } else if constexpr (requires { r.data(); r.size(); }) {
+    return f(span<const T>(r.data(), r.size()));
+  } else if constexpr (__is_array(T)) {
+    return f(r);
+  } else {
+    decltype(sizeof 0) n = 0;
+    for (auto&& x : r) {
+      (void)x;
+      ++n;
+    }
+    T* p = n ? new T[n] : nullptr;
+    decltype(sizeof 0) i = 0;
+    for (auto&& x : r) p[i++] = static_cast<T>(x);
+    info v = f(span<const T>(p, n));
+    delete[] p;
+    return v;
+  }
+}
+template <class R>
+consteval info reflect_constant_string(R&& r) {
+  return __kiln_reflect_range([](auto&& x) { return __kiln_reflect_constant_string(x); }, r);
+}
+template <class R>
+consteval info reflect_constant_array(R&& r) {
+  return __kiln_reflect_range([](auto&& x) { return __kiln_reflect_constant_array(x); }, r);
+}
 }  // namespace std::meta
 
 namespace std {
