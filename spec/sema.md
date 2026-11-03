@@ -61,7 +61,12 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   22's `__size_t` / `__signed_size_t` / `__ptrdiff_t` sugar
   (`Sema::size_type`; diagnostics print `'__size_t' (aka 'unsigned
   long')`); an alias template specialization substitutes its arguments
-  as written (`templ/class.rs`); a `PackExpansionExpr` keeps its
+  as written (`templ/class.rs`); a class template specialization keeps
+  a qualified template template argument as first written
+  (`X<int>::apply`; `first_written_template_args`), and a template-id
+  naming that parameter substitutes to `X<int>::apply<int>` (an
+  elaborated type with the argument's qualifier; `ttp_arg_qualifier`,
+  WP-413); a `PackExpansionExpr` keeps its
   pattern's type; a synthesized `<=>`/`==` converts each operand to the
   cv-qualified base ([class.compare.default]).
 - **Structured bindings** (§4.9): `std::tuple_element`'s index is a
