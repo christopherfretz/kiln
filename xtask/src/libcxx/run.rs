@@ -1224,10 +1224,7 @@ mod tests {
             assert!(Kind::of(path.rsplit('/').next().unwrap()).is_some(), "{path}");
             assert!(!reason.is_empty(), "{path} has no reason");
         }
-        assert_eq!(
-            xfail_ignored("libcxx/selftest/pass.cpp/werror.pass.cpp"),
-            Some("built without -Werror")
-        );
+        assert_eq!(xfail_ignored("libcxx/selftest/pass.cpp/werror.pass.cpp"), None);
         assert_eq!(xfail_ignored("libcxx/selftest/pass.cpp/xfail.pass.cpp"), None);
     }
 

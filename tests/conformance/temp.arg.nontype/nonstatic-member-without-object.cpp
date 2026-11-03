@@ -2,8 +2,7 @@
 // member named without an object in a non-type template argument is
 // erroneous; only that error is reported, with no "not a constant
 // expression" after it.
-//@ expect: compile-fail
-//@ strict-diags
+//@ verify
 template <class T, T v> struct IC { static constexpr T value = v; };
 template <class T> struct W : IC<unsigned long, T::value> {}; // expected-error {{invalid use of non-static data member 'value'}}
 struct E { unsigned long value; };

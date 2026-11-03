@@ -139,6 +139,29 @@ is deprecated` not warned (a deprecated variable template's use);
 `<tuple>` (`make_from_tuple.verify`); 1 `no type named 'argument_type'`
 reported as `expected a type` (`variant.hash/hash.depr.verify`).
 
+**After WP-418** (the WP-404 follow-ups (a)–(d), and libc++ 22's
+`params.py` `_warningFlags` applied to every compile: `-Werror -Wall
+-Wextra …` plus the `-Wno-…` list and
+`-D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER`; `%{verify}` adds `-Wno-error`
+and undefines the macro, as lit does), on wp/418 merged with main
+294e7d985, same flags (`-j 4 --mem-limit 3072`), 1026.7 s wall, peak RSS
+677 MiB (`variant.visit/visit_return_type.pass.cpp`, the kiln compile
+step):
+
+| Scope | total | pass | fail | unsupported (driver) | pass rate |
+|---|---:|---:|---:|---:|---:|
+| 21 M4 directories | 2661 | 2632 | 2 | 27 (0) | **99.9%** |
+
+All 15 WP-404 failures pass, and `is_implicit_lifetime.pass` with them
+(an ineligible constrained constructor, [special]/6). The warning flags
+surfaced 11 more failures, all fixed (a `-Werror` warning in a SFINAE
+context is not a substitution failure; `-Wbraced-scalar-init` is silent
+in an instantiation; a variable named by a reused non-dependent
+expression is odr-used). The 2 remaining are WP-416's: 1
+`returning reference to local temporary object` not diagnosed in
+`<tuple>` (`make_from_tuple.verify`); 1 `no type named 'argument_type'`
+reported as `expected a type` (`variant.hash/hash.depr.verify`).
+
 ## Environment
 
 What `cargo xtask libcxx` detects about the host, and what stays

@@ -1,8 +1,7 @@
 // [expr.prim.id.general]/4: outside a SFINAE context, `decltype(C::f)` of a
 // non-static member function names it without an object and is an error
 // (the operand is a full-expression, [intro.execution]/5).
-//@ expect: compile-fail
-//@ strict-diags
+//@ verify
 struct S {
   void f();
   int m;
