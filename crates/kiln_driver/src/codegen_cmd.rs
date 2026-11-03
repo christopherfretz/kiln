@@ -752,6 +752,12 @@ mod tests {
         assert_eq!(opt_pipeline(Some("-O2")), Some("default<O2>"));
         assert_eq!(opt_pipeline(Some("-Oz")), Some("default<Oz>"));
         assert_eq!(opt_pipeline(Some("-O3")), Some("default<O3>"));
+        assert_eq!(opt_level(None), 0);
+        assert_eq!(opt_level(Some("-O0")), 0);
+        assert_eq!(opt_level(Some("-O")), 1);
+        assert_eq!(opt_level(Some("-Og")), 1);
+        assert_eq!(opt_level(Some("-Oz")), 2);
+        assert_eq!(opt_level(Some("-Ofast")), 3);
     }
 
     #[test]

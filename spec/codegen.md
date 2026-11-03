@@ -741,7 +741,20 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
 - Each loop gets a distinct `!llvm.loop` node with
   `llvm.loop.mustprogress`. A loop with a constant-true or absent
   condition and an empty body clears `mustprogress` on the function and
-  gets no loop metadata.
+  gets no `mustprogress` entry; a range-based for loop never gets one.
+- **Loop metadata at -O1** (WP-431; clang `LoopInfoStack::push`,
+  [intro.progress]/1): at `CodegenOptions::opt_level == 1` exactly (clang
+  `-O`/`-O1`/`-Og`, where `UnrollLoops` is off) every loop's node also
+  carries `!{!"llvm.loop.unroll.disable"}` after the optional
+  `mustprogress` entry: `!{self, mustprogress?, unroll.disable}`, the
+  `unroll.disable` tuple cached per module. A loop with neither entry
+  gets no `!llvm.loop` (`Cg::loop_id`). `#pragma unroll` / `#pragma
+  clang loop` are not modelled (the parser ignores them).
+  `tests/codegen/loop_unroll_disable_o1.cpp`.
+- **Forwarding blocks** (clang `SimplifyForwardingBlocks`): a loop
+  condition block that only branches on is folded into its predecessor
+  only while no cleanup (a destructor, a lifetime end, a `noexcept`
+  terminate scope) is on the EH stack. `tests/codegen/forwarding_block_cleanup.cpp`.
 - Case ranges (GNU) are an error.
 - A goto (forward, backward, out of nested scopes, loops and try blocks)
   branches through the cleanups of every scope it leaves (`cleanup.rs`
@@ -1037,7 +1050,11 @@ The normative description is spec/driver.md "Code generation". In short:
   as `void **`) are tagged; the `this` reload, the return-value slot of
   a direct return, complex parts, vector element read-modify-writes and
   `vec3`/bool-vector loads are not. `bool` loads also carry
-  `!range !{i8 0, i8 2}` and `!noundef`.
+  `!range !{i8 0, i8 2}` and `!noundef`. The scalar zero store of a
+  value-initialization (`null_init_lvalue`: aggregate-init array filler
+  loops, members an aggregate initializer omits, `new T()`) carries the
+  lvalue's tag (clang `EmitStoreThroughLValue`, WP-431;
+  `tests/codegen/tbaa_null_init_o1.cpp`).
 - **Vtable pointers** (`Cg::tbaa_vptr`, clang `GetVTablePtr` /
   `InitializeVTablePointer`): the constructor and destructor vptr stores
   and every vptr load (virtual calls, `dynamic_cast` to `void*`,
@@ -1250,15 +1267,16 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
   is depth-first. The D1 alias copies D2's visibility.
 - **Base-object destructor aliases** (WP-423; `Cg::try_base_dtor_alias`,
   clang `CodeGenModule::TryEmitBaseDestructorAsAlias`): at -O1+ only, and
-  not for a `weak_odr` (explicit-instantiation, COMDAT) or
-  `available_externally` D2, a destructor whose body is an empty
+  not for a `weak_odr` (explicit-instantiation, COMDAT) D2, a destructor whose body is an empty
   compound statement, in a class with no virtual bases and no field of a
   class type with a destructor, whose unique non-virtual base with a
   non-trivial destructor sits at offset 0, gets no D2 body: its D2 is
   the base's D2. The check runs before D2 is declared, and the base D2
   is declared first, as in clang. A discardable D2 (`linkonce_odr`,
-  `internal`) is replaced (RAUW, `Module::replace_function`) unless the
-  base D2 is `available_externally`. Otherwise D2 becomes an `alias`
+  `available_externally`, `internal`) is replaced (RAUW,
+  `Module::replace_function`) by the base D2, unless that is an
+  `available_externally` `always_inline` one (WP-431;
+  `tests/codegen/extern_template_dtor_alias_o1.cpp`). Otherwise D2 becomes an `alias`
   (`unnamed_addr`, external, `dso_local`, D2's visibility) of the base
   D2, unless that is only a declaration or weak for the linker
   (`linkonce_odr`, `weak_odr`). D1 then aliases (or is replaced by) the
@@ -1392,6 +1410,18 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   export them. Tests:
   `tests/conformance/temp.explicit/extern-template-always-inline-run.cpp`,
   `tests/conformance/class.copy.ctor/libstdcxx-string-copy.cpp`.
+  At `-O1`+ (WP-431; clang `shouldEmitFunction`, which then drops only
+  `noinline` ones) every used function whose definition
+  [temp.explicit]/12 instantiates under the declaration is emitted
+  `available_externally` the same way (`Cg::keeps_available_externally`):
+  one whose pattern is inline (declared `inline` or `constexpr`, or
+  defined in its class; an instantiated out-of-class member counts as
+  its pattern does) or that has a deduced return type, and that carries
+  no `noinline`. A non-inline member and a `noinline` one stay
+  declarations; a static local of an emitted one is `linkonce_odr` in
+  its own comdat; C1/D1 calls go to C2/D2 (the structor alias rule).
+  Not modelled: clang's `isTriviallyRecursive` exclusion.
+  `tests/codegen/extern_template_avail_ext_o1.cpp`.
 - **Explicit instantiation definitions** ([temp.explicit], WP-170;
   `Cg::is_explicit_inst_definition`, clang `GetGVALinkageForFunction` ->
   `GVA_StrongODR`): a function or variable that is an explicit
@@ -1632,7 +1662,11 @@ off and sema rejects `try`/`throw`).
   ([except.spec]/5) and EH cleanups that may throw are inside a
   terminate scope: its landing pad is `catch ptr null` and calls
   `__clang_call_terminate` (the linkonce_odr hidden helper calling
-  `__cxa_begin_catch` then `std::terminate`).
+  `__cxa_begin_catch` then `std::terminate`). A destructor without a
+  noexcept-specifier is non-throwing by [except.spec]/8 even when
+  nothing in the TU uses it: sema resolves the exception specification
+  of every definition (spec/sema.md §4.7, WP-431;
+  `tests/codegen/dtor_implicit_noexcept.cpp`, `_o1.cpp`).
 - **throw** ([expr.throw]): `__cxa_allocate_exception(size)`, the
   operand initialized in place under a `FreeException` EH cleanup
   (deactivated after it), then `__cxa_throw(exn, @_ZTI…, dtor or null)`
@@ -2581,8 +2615,10 @@ Linux targets; `Cg::frame_pointer` applies it.
 
 ## 7p. Landed (WP-370): optimization-dependent IR
 
-- **`CodegenOptions::optimize`** (`-O1` and above, clang
-  `CodeGenOpts.OptimizationLevel > 0`): definitions are emitted without
+- **`CodegenOptions::opt_level`** (clang `CodeGenOpts.OptimizationLevel`:
+  0 at `-O0`, 1 at `-O`/`-O1`/`-Og`, 2 at `-O2`/`-Os`/`-Oz`, else 3;
+  `kiln_driver::codegen_cmd::opt_level`, WP-431) and its accessor
+  `CodegenOptions::optimize()` (`opt_level > 0`): when optimizing, definitions are emitted without
   the `-O0` `noinline optnone` pair, so the driver's `opt` pipeline
   (driver.md "IR optimization") can inline and optimize them.
 - **Lifetime markers (`lifetime.rs`, clang `EmitLifetimeStart` /
@@ -2612,6 +2648,15 @@ Linux targets; `Cg::frame_pointer` applies it.
   simplification), so the IR matches clang's.
 - **Empty-record `va_arg`.** The aggregate copy of a `va_arg` result
   skips empty records, as clang's `EmitAggregateCopy`.
+- **Invariant globals** (WP-431; `Cg::emit_decl_invariant`, clang
+  `EmitDeclInvariant`, [dcl.type.cv]/4): when optimizing, the dynamic
+  initialization of a non-reference variable (namespace scope, inline,
+  `thread_local`, static local; guarded or not) whose type is
+  const-qualified (an array of const elements included), has no
+  `mutable` member and needs no destruction ends with
+  `call ptr @llvm.invariant.start.p0(i64 <size>, ptr @var)`, naming the
+  global itself also for a thread-local one. It is the last step of
+  `global_var_decl_init`. `tests/codegen/invariant_start_o1.cpp`.
 
 ## 7p. Landed (WP-376): thread-local storage (`tls.rs`)
 
