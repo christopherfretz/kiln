@@ -5,7 +5,7 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::ArgListId;
-use kiln_ast::types::{ArgView, TemplateArg, TypeView};
+use kiln_ast::types::{ArgView, TemplateArg, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::EvalContext;
@@ -154,6 +154,38 @@ fn template_kind_select(k: DeclKind) -> u32 {
 }
 
 impl Sema<'_, '_> {
+    /// `args` with each merely instantiation-dependent argument (not
+    /// dependent: `TC<N>` with `N` a constant local of a function
+    /// template) replaced by its canonical form: a specialization is
+    /// shared by every use with the same canonical arguments (§3.1), so
+    /// sugar naming one function template's locals must not reach the
+    /// declaration another use finds (clang builds a specialization from
+    /// its canonical converted arguments).
+    pub(crate) fn settle_inst_sugar(&mut self, args: ArgListId) -> ArgListId {
+        let only_inst = |f: TypeFlags| {
+            f.intersects(TypeFlags::INSTANTIATION_DEPENDENT) && !f.intersects(TypeFlags::DEPENDENT)
+        };
+        if !only_inst(self.ast.types.arg_list_flags(args))
+            && !self.ast.types.args(args).iter().any(|&a| only_inst(self.ast.types.arg_flags(a)))
+        {
+            return args;
+        }
+        let out: Vec<TemplateArg> = self
+            .ast
+            .types
+            .args(args)
+            .iter()
+            .map(|&a| {
+                if only_inst(self.ast.types.arg_flags(a)) {
+                    self.ast.types.canonical_arg(a)
+                } else {
+                    a
+                }
+            })
+            .collect();
+        self.ast.types.arg_list(&out)
+    }
+
     /// The parameters of template `tmpl`, in order.
     pub(crate) fn template_params(&self, tmpl: DeclId) -> Vec<DeclId> {
         let Some(info) = self.ast.template_info(tmpl).copied() else { return Vec::new() };
@@ -382,6 +414,69 @@ impl Sema<'_, '_> {
         if wi < args.len() {
             self.diag_template_arity(tmpl, true, loc);
             return Err(());
+        }
+        Ok(())
+    }
+
+    /// The checks a class template-id with dependent arguments gets when
+    /// it is formed (spec/sema-templates.md §4.7).
+    pub(crate) fn check_dependent_class_args(
+        &mut self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        loc: Loc,
+    ) -> Result<(), ()> {
+        let locs = std::mem::take(&mut self.templ.arg_locs);
+        let r = self.check_dependent_template_template_args(tmpl, args, &locs, loc);
+        self.templ.arg_locs = locs;
+        r?;
+        self.check_expanded_pack_arity(tmpl, args, loc)
+    }
+
+    /// The definition-time part of the argument check for a template-id
+    /// whose arguments are dependent (spec/sema-templates.md §4.7): an
+    /// argument for a template template parameter must name a template
+    /// whatever the dependence ([temp.arg.template]/1). clang runs
+    /// `CheckTemplateArgumentList` on dependent arguments too, so `H<T>`,
+    /// `H<N>` and `H<Y<T>>` are rejected at the argument when the
+    /// enclosing template is defined. Alignment stops at the first pack
+    /// expansion (it may cover any number of parameters).
+    fn check_dependent_template_template_args(
+        &self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        arg_locs: &[Loc],
+        loc: Loc,
+    ) -> Result<(), ()> {
+        let params = self.template_params(self.head_template(tmpl));
+        let mut wi = 0usize;
+        for &p in &params {
+            if self.templ.expanded_packs.contains_key(&p) {
+                return Ok(());
+            }
+            let pack = self.ast.template_parm(p).is_some_and(|x| x.pack);
+            let ttp = self.kind_of(p) == DeclKind::TemplateTemplateParm;
+            while wi < args.len() {
+                let a = args[wi];
+                if self.is_pack_expansion_arg(a) {
+                    return Ok(());
+                }
+                let named = match a.view() {
+                    ArgView::Template(_) | ArgView::Null => true,
+                    // Diagnosed when it was formed.
+                    ArgView::Expr { expr, .. } => self.is_err_expr(expr),
+                    _ => false,
+                };
+                if ttp && !named {
+                    let at = arg_locs.get(wi).copied().unwrap_or(loc);
+                    self.error(DiagId::sema_template_arg_must_be_template, at);
+                    return Err(());
+                }
+                wi += 1;
+                if !pack {
+                    break;
+                }
+            }
         }
         Ok(())
     }
@@ -911,10 +1006,11 @@ impl Sema<'_, '_> {
         checking: Option<Loc>,
         prior: &[TemplateArg],
     ) -> Result<TemplateArg, ()> {
-        let dependent = self.ast.types.arg_flags(def).intersects(
-            kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION
-                | kiln_ast::types::TypeFlags::UNEXPANDED_PACK,
-        );
+        let dependent = self
+            .ast
+            .types
+            .arg_flags(def)
+            .intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK);
         // Errors point into the default argument, as clang's do.
         let at = self.templ.default_locs.get(&p).copied().unwrap_or(loc);
         let a = if dependent {

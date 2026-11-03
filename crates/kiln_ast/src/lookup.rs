@@ -248,6 +248,28 @@ impl LookupTables {
         }
     }
 
+    /// Removes `d` from `(ctx, name)`'s entry, if it is there: sema's
+    /// recovery from a class or enumeration redefinition, which is not
+    /// visible to later lookups (clang makes it anonymous; spec/sema.md
+    /// §4.4).
+    pub fn remove(&mut self, ctx: DeclId, name: DeclName, d: DeclId) {
+        let key = (ctx, name);
+        let Some(&LookupEntry(w)) = self.map.get(&key) else {
+            return;
+        };
+        self.generation += 1;
+        if w & SET_BIT == 0 {
+            if w == d.index() {
+                self.map.remove(&key);
+            }
+            return;
+        }
+        let set = &mut self.sets[(w & !SET_BIT) as usize];
+        let before = set.len();
+        set.retain(|s| *s & !FLAG_MASK != d.index());
+        self.set_words -= before - set.len();
+    }
+
     fn new_set(&mut self, v: Vec<u32>) -> LookupEntry {
         let i = self.sets.len() as u32;
         assert!(i < SET_BIT, "lookup overload-set space exhausted");

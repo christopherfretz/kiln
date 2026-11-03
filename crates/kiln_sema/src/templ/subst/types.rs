@@ -535,6 +535,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.ast.types.paren_type(i))
             }
             TypeView::Attributed { kind, modified, equivalent } => {
+                let at = self.sema.nullability_loc(q, loc);
                 let m = self.ty(modified, loc)?;
                 let e = self.ty(equivalent, loc)?;
                 // A nullability qualifier on a type that became a
@@ -542,7 +543,7 @@ impl Substituter<'_, '_, '_> {
                 if crate::nullability::is_nullability(kind) && !self.sema.can_have_nullability(m) {
                     let d = self
                         .sema
-                        .diag(DiagId::sema_nullability_nonpointer, loc)
+                        .diag(DiagId::sema_nullability_nonpointer, at)
                         .arg(crate::nullability::spelling(kind))
                         .arg(self.sema.ty_arg(m));
                     self.sema.emit(d);
@@ -631,8 +632,21 @@ impl Substituter<'_, '_, '_> {
                 let b = self.ty(base.into(), loc)?;
                 Ok(self.sema.ast.types.qualify(b, quals))
             }
-            // Remaining kinds cannot be dependent today: `_BitInt(N)` is not
-            // parsed and dependent splices are rejected by the parser.
+            // clang `TransformDependentBitIntType`: the width is
+            // substituted and the type rebuilt (`BuildBitIntType`; its
+            // errors at the type's start, clang: the `_BitInt` keyword).
+            TypeView::DependentBitInt { signed, width } => {
+                let w = self.sema.ast.types.profile_expr(width).ok_or(SubstFail)?;
+                let w = self.expr(w)?;
+                let at = self.type_begin.unwrap_or(loc);
+                let t = self.sema.build_bit_int_type(!signed, w, at);
+                if self.sema.is_error_type(t) {
+                    return Err(SubstFail);
+                }
+                Ok(t)
+            }
+            // Remaining kinds cannot be dependent today: dependent splices
+            // are rejected by the parser.
             _ => self.unimplemented("substitution into this type", loc),
         }
     }
