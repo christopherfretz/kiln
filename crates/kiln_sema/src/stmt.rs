@@ -277,6 +277,7 @@ impl Sema<'_, '_> {
         } else {
             e
         };
+        let e = self.resolve_single_overload_candidate(e);
         if !self.check_builtin_fn_use(e) && !self.check_overload_use(e) {
             self.diagnose_unused(e);
         }
@@ -343,6 +344,9 @@ impl Sema<'_, '_> {
             let at = self.begin_loc(e);
             return self.recover_err(&[], at);
         }
+        let at = self.expr_loc(self.ignore_parens(e));
+        let typo = self.take_condition_typo(at);
+        let e = self.resolve_single_overload_candidate(e);
         let e = match conv::contextually_convert_to_bool(self, e) {
             Ok(c) => c,
             Err(err) => {
@@ -351,7 +355,10 @@ impl Sema<'_, '_> {
                 e
             }
         };
-        self.act_on_full_expr(e)
+        let saved = std::mem::replace(&mut self.cond_typo_at, if typo { at } else { Loc::INVALID });
+        let r = self.act_on_full_expr(e);
+        self.cond_typo_at = saved;
+        r
     }
 
     /// The statement attributes `attrs` written before `sub`, at `loc`
@@ -532,6 +539,13 @@ impl Sema<'_, '_> {
     /// A condition declaration ([stmt.pre]/4): the variable `v` (already
     /// initialized) yields the condition value, a reference to `v`.
     pub fn act_on_condition_var(&mut self, v: DeclId, loc: Loc) -> (Option<DeclId>, ExprId) {
+        // [stmt.pre]/5: not a function (clang `CheckConditionVariable`,
+        // reached through `decltype(auto)`).
+        if self.ast.decls.get(v).ty().is_some_and(|t| self.ast.types.is_function(t)) {
+            let at = self.decl_loc(v);
+            self.error(DiagId::sema_invalid_use_of_function_type, at);
+            return (Some(v), self.recover_err(&[], loc));
+        }
         let r = self.build_decl_ref(v, loc);
         if let Some(c) = self.refs_minus_assign.get_mut(&v) {
             c.1 = true;

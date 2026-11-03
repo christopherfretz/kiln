@@ -1765,6 +1765,21 @@ impl Sema<'_, '_> {
                 return x;
             }
         }
+        // [over.over] against the parameter: a failure keeps clang's
+        // "passing argument to parameter" note after the candidates.
+        let e = if self.ety(e) == QualType::OVERLOAD && self.overload_operand(e).is_some() {
+            let at = self.begin_loc(e);
+            let ctx = crate::overload::address::AddrCtx::Convert;
+            let noted = Some(note.clone());
+            let Some(x) = self.resolve_address_of_overloaded_noted(e, pty, true, ctx, at, noted)
+            else {
+                let loc = self.ast.exprs.get(e).loc();
+                return self.recover(pty, &[e], loc);
+            };
+            x
+        } else {
+            e
+        };
         match conv::implicit_convert(self, e, pty, ConvCtx::Argument) {
             Ok(x) => x,
             Err(err) => {
@@ -5243,7 +5258,26 @@ impl Sema<'_, '_> {
         };
         // [temp.deduct.call]/6: every member of an overload set deduces
         // `auto`, so nothing is deduced (a placeholder in a function
-        // declarator selecting one member is not implemented).
+        // declarator selecting one member is not implemented) -- except
+        // that a set of one non-template function deduces from it,
+        // explicit template arguments ignored (clang's
+        // `ResolveOverloadForDeduction`; only typo correction builds one,
+        // and the initialization then fails against the deduced type).
+        let mut items = items;
+        for it in items.iter_mut().flatten() {
+            if let Some((_, d, _)) = self.single_overload_candidate(*it) {
+                let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                let at = self.ast.exprs.get(*it).loc();
+                *it = self.builder().decl_ref(
+                    d,
+                    ty,
+                    at,
+                    None,
+                    kiln_ast::expr::NonOdrUse::None,
+                    kiln_ast::expr::ExprFlags::NONE,
+                );
+            }
+        }
         let overload = items
             .iter()
             .flatten()
