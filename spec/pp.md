@@ -353,6 +353,14 @@ impl FeatureFlag { pub const ALL: &[FeatureFlag]; pub fn options(self) -> &'stat
   attributes and 287 keyword spellings, each with a 14-bit mask of the
   configurations it holds in; 1244 overlays give the per-flag answers.
   Lookup is a binary search; nothing is allocated per query.
+- **kiln's own C++ attributes.** An unscoped `__has_cpp_attribute`
+  query the tables answer 0 then looks in `KILN_CPP_ATTRIBUTES`
+  (`features.rs`): standard attributes kiln implements before clang
+  does, with the first standard they exist in, answered at every
+  compatibility level. Today one row: `indeterminate` = `202403` from
+  C++26 (P2795R5, WP-448; clang trunk's spelling is C++26-only too), 0
+  before (`tests/conformance/dcl.attr.indet/has-cpp-attribute.cpp`,
+  `cxx23-unknown.cpp`).
 - **Normalisation** (clang's): `__x__` is `x` for `__has_feature`,
   `__has_extension`, `__has_attribute` and unscoped or `gnu`/`clang`
   scoped `__has_cpp_attribute`; scopes `__gnu__` and `_Clang` are `gnu`

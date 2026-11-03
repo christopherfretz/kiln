@@ -3792,6 +3792,7 @@ impl Sema<'_, '_> {
         let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params, !prev_invalid);
         if let Some(p) = prev_ok {
             self.check_param_nullability(p, &params);
+            self.check_param_indeterminate(p, &params);
         }
         // clang marks the redeclaration invalid and leaves it out of the
         // redeclaration chain; calls ignore it.
@@ -8990,7 +8991,11 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
-        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax) else {
+        // [dcl.attr.indet] is C++26 (clang trunk's `LangOpts<"CPlusPlus26">`
+        // spelling): below it, `indeterminate` is an unknown attribute.
+        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax)
+            .filter(|&k| k != AttrKind::INDETERMINATE || self.std >= kiln_lex::Std::Cxx26)
+        else {
             let id = if gnu && matches!(n.as_str(), "visibility" | "section" | "format") {
                 DiagId::parse_attribute_ignored
             } else {
@@ -9623,6 +9628,7 @@ fn attr_kind_of(
         ("unlikely", true, _) => AttrKind::UNLIKELY,
         ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
         ("carries_dependency", true, _) => AttrKind::CARRIES_DEPENDENCY,
+        ("indeterminate", true, _) => AttrKind::INDETERMINATE,
         ("aligned", _, true) | ("alignas", _, _) => AttrKind::ALIGNED,
         ("packed", _, true) => AttrKind::PACKED,
         ("used", _, true) => AttrKind::USED,
