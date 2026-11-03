@@ -956,12 +956,13 @@ impl Cg<'_> {
         self.store_scalar_tb(v, a, q, Tb::Type);
     }
 
-    /// [`Self::store_scalar`] tagged with the access path `tb`.
-    pub fn store_scalar_tb(&mut self, v: V, a: Addr, q: QualType, tb: Tb) {
+    /// [`Self::store_scalar`] tagged with the access path `tb`; returns
+    /// the store.
+    pub fn store_scalar_tb(&mut self, v: V, a: Addr, q: QualType, tb: Tb) -> V {
         let vol = self.ast.types.effective_quals(q).is_volatile();
         if let Some(st) = self.vec_store(v, a, q, vol) {
             self.tbaa_mark(st, q, tb);
-            return;
+            return st;
         }
         let v = if self.is_bool_value(q) && self.f.fir.ty(&self.m, v) == LTy::I1 {
             self.cast(CastOp::ZExt, v, a.ty)
@@ -971,6 +972,7 @@ impl Cg<'_> {
         let p = self.scalar_tls_addr(a.v);
         let st = self.store(v, p, a.align, vol);
         self.tbaa_mark(st, q, tb);
+        st
     }
 
     /// `memcpy(dst, src, n)`.

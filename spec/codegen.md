@@ -921,6 +921,17 @@ The normative description is spec/driver.md "Code generation". In short:
   declaration (`int *__attribute__((may_alias)) p`), as clang's
   `ProcessDeclAttributes` does for every GNU declaration attribute in a
   declarator chunk (`Parser::chunk_decl_attrs`).
+- **Atomics** (WP-423; `atomic.rs`, clang CGAtomic): `_Atomic(T)` is
+  "omnipotent char" as an access type. The `load atomic` / `store
+  atomic` of an `_Atomic` lvalue (`EmitAtomicLoadOp`, `EmitAtomicStore`,
+  scalar or aggregate) and the plain store of its initialization
+  (`EmitAtomicInit` → `emitCopyIntoMemory`) carry the lvalue's tag
+  (`{char, char, 0}`, or the struct path of an `_Atomic` member). The
+  operation of an `__atomic_*` / `__c11_atomic_*` builtin (load, store,
+  `atomicrmw`, `cmpxchg`, libcall) is untagged; its result is read back
+  from the temporary with the value type's tag, and an aggregate result
+  is copied out with the value type's `!tbaa.struct`.
+  `tests/codegen/tbaa_atomic_o1.cpp`.
 - **Struct nodes** (`getBaseTypeInfo`): a complete non-union class with
   no flexible array member is `!{!"_ZTS<name>", member, i64 off, ...}`
   listing its non-virtual non-empty bases by offset, then its fields:
@@ -1007,8 +1018,6 @@ The normative description is spec/driver.md "Code generation". In short:
   clang's in-process codegen where the text round trip did not.
 
 ### Deviations
-- **TBAA gaps (WP-412).** Atomic loads
-  and stores (`atomic.rs`) carry no `!tbaa`.
 - **clang 22 codegen (WP-355, WP-386).** At `-fclang-compat=22` kiln
   follows clang 22 where §6a says; elsewhere its IR is clang 19's under
   every level. The oracle-22 `DEVIATIONS` entries record the rest of
