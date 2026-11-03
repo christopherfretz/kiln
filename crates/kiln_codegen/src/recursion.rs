@@ -125,8 +125,8 @@ impl Cg<'_> {
 
     /// clang `FunctionIsDirectlyRecursive::VisitCallExpr`: the call's
     /// direct callee carries asm label `name`, or is a library builtin
-    /// `__builtin_<name>` (one whose library function kiln recognizes,
-    /// clang `Builtin::Context::isLibFunction`).
+    /// `__builtin_<name>` marked [`builtin::attr::LIB_FUNCTION`] (clang
+    /// `Builtin::Context::isLibFunction`).
     fn calls_label(&self, call: ExprId, name: &str) -> bool {
         let ast = self.ast;
         let mut c = ast.exprs.callee(call);
@@ -152,7 +152,8 @@ impl Cg<'_> {
         ast.decls
             .builtin_id(f)
             .and_then(builtin::info)
+            .filter(|i| i.attrs & builtin::attr::LIB_FUNCTION != 0)
             .and_then(|i| i.name.strip_prefix("__builtin_"))
-            .is_some_and(|lib| lib == name && builtin::lib_by_name(lib).is_some())
+            .is_some_and(|lib| lib == name)
     }
 }

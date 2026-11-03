@@ -1531,11 +1531,20 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   initializers included), but not the operands of a call. A call whose
   direct callee (through parentheses, implicit casts and substituted
   non-type template parameters) carries the same label, or is the
-  builtin `__builtin_<label>` of a library function kiln recognizes
-  (`builtin::lib_by_name`, standing in for clang's `isLibFunction`),
-  makes it recursive.
+  builtin `__builtin_<label>` of a library function makes it recursive.
+  The library builtins carry `builtin::attr::LIB_FUNCTION` (clang
+  `isLibFunction`, the `FunctionWithBuiltinPrefix` flag, WP-462): the
+  406 `__builtin_` rows that clang 19 and 22 treat so, found by probing
+  each one in an `extern template` labelled with its library name. The
+  generic classification and comparison builtins (`__builtin_isnan`,
+  `__builtin_fpclassify`, ...), `__builtin_powi`, `__builtin_abort` and
+  the `_Float16`/`__float128` math rows are among them; the bit
+  operations (`__builtin_clz`, `__builtin_popcount`), `__builtin_expect`,
+  `__builtin_trap`, the overflow, coroutine, elementwise and alignment
+  builtins are not.
   `tests/codegen/trivially_recursive.cpp`,
-  `tests/codegen/trivially_recursive_always_inline.cpp`.
+  `tests/codegen/trivially_recursive_always_inline.cpp`,
+  `tests/codegen/trivially_recursive_lib.cpp`.
 - **Explicit instantiation definitions** ([temp.explicit], WP-170;
   `Cg::is_explicit_inst_definition`, clang `GetGVALinkageForFunction` ->
   `GVA_StrongODR`): a function or variable that is an explicit
