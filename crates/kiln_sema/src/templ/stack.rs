@@ -99,6 +99,11 @@ pub enum FrameKind {
     /// the body's `{`. Ends a SFINAE context: the body is never in the
     /// immediate context (CWG2672, [temp.deduct.general]/9).
     LambdaSubstitution,
+    /// Forming a template-id for `std::meta::substitute` or
+    /// `std::meta::can_substitute` ([meta.reflection.substitute]; a
+    /// SFINAE context). Not an instantiation; the entity and template are
+    /// the substituted template.
+    MetaSubstitution,
 }
 
 impl FrameKind {
@@ -116,6 +121,7 @@ impl FrameKind {
                 | FrameKind::BuildingDeductionGuides
                 | FrameKind::PartialOrderingTtp
                 | FrameKind::LambdaSubstitution
+                | FrameKind::MetaSubstitution
         )
     }
 
@@ -153,6 +159,7 @@ impl FrameKind {
             FrameKind::BuildingDeductionGuides => DiagId::note_building_deduction_guide_here,
             FrameKind::PartialOrderingTtp => DiagId::note_template_arg_template_params_mismatch,
             FrameKind::LambdaSubstitution => DiagId::note_lambda_substitution_here,
+            FrameKind::MetaSubstitution => DiagId::note_meta_substitution_here,
         }
     }
 
@@ -185,6 +192,7 @@ impl FrameKind {
             FrameKind::BuildingDeductionGuides => "deduction-guides",
             FrameKind::PartialOrderingTtp => "ttp-matching",
             FrameKind::LambdaSubstitution => "lambda",
+            FrameKind::MetaSubstitution => "meta-substitute",
         }
     }
 }
@@ -436,7 +444,9 @@ impl Sema<'_, '_> {
             | FrameKind::Enum
             | FrameKind::Nsdmi
             | FrameKind::LambdaSubstitution => Some(false),
-            FrameKind::DeducedArgSubstitution | FrameKind::ExplicitArgSubstitution => Some(true),
+            FrameKind::DeducedArgSubstitution
+            | FrameKind::ExplicitArgSubstitution
+            | FrameKind::MetaSubstitution => Some(true),
             _ => None,
         };
         if kind.is_instantiation() && self.inst.stack.depth() >= self.inst.limits.depth {
@@ -597,6 +607,7 @@ impl Sema<'_, '_> {
             // clang shows the explicit substitution's (still empty)
             // deduced-argument list: nothing after the name but a space.
             FrameKind::ExplicitArgSubstitution => format!("'{}' ", self.decl_name(f.template)),
+            FrameKind::MetaSubstitution => format!("'{}'", self.qualified_decl_name(f.template)),
             FrameKind::DeducedArgSubstitution => {
                 let name = self.decl_name(f.template);
                 match f.args {
