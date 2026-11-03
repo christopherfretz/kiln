@@ -135,7 +135,9 @@ impl Sema<'_, '_> {
     /// [over.match.ref]/1.1: explicit conversion functions count).
     fn ref_init_viable(&mut self, ty: QualType, e: ExprId) -> bool {
         let a = self.arg_info(e);
-        !self.try_implicit_conversion(&a, ty, crate::overload::ics::IcsOptions::EXPLICIT_REF_CONV).is_bad()
+        !self
+            .try_implicit_conversion(&a, ty, crate::overload::ics::IcsOptions::EXPLICIT_REF_CONV)
+            .is_bad()
     }
 
     /// A glvalue `e` of class type `et` as the referent `r` of reference

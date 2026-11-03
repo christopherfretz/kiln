@@ -18,6 +18,33 @@ use kiln_source::Loc;
 use crate::Sema;
 use crate::conv;
 
+/// `-flax-vector-conversions=` (clang's `LaxVectorConversionKind`): which
+/// same-size vector bitcasts are implicit conversions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LaxVectorConversions {
+    /// `none` (`-fno-lax-vector-conversions`): none.
+    None,
+    /// `integer` (a bare `-flax-vector-conversions`): only between
+    /// integer vectors (and integer scalars).
+    Integer,
+    /// `all` (clang's default): any same-size vectors.
+    #[default]
+    All,
+}
+
+impl LaxVectorConversions {
+    /// The kind a `-flax-vector-conversions=` value names.
+    #[must_use]
+    pub fn from_arg(v: &str) -> Option<Self> {
+        match v {
+            "none" => Some(Self::None),
+            "integer" => Some(Self::Integer),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
 /// A vector type's parts: canonical element, element count, kind.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VecParts {
@@ -78,13 +105,25 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// clang's `isLaxVectorConversion` under the default
-    /// `-flax-vector-conversions=all`: same data size, never between a
-    /// scalar and an ext vector.
+    /// clang's `isLaxVectorConversion`: same data size, never between a
+    /// scalar and an ext vector; under `-flax-vector-conversions=integer`
+    /// both sides integer (vectors), under `none` never.
     pub(crate) fn lax_vector_conversion(&self, from: QualType, to: QualType) -> bool {
         let (fv, tv) = (self.vector_parts(from), self.vector_parts(to));
         if fv.is_none() && tv.is_none() {
             return false;
+        }
+        match self.lax_vector_conversions {
+            LaxVectorConversions::None => return false,
+            LaxVectorConversions::Integer => {
+                let integral = |q: QualType, v: Option<VecParts>| {
+                    self.is_integral_or_enum(v.map_or(q, |p| p.elem))
+                };
+                if !integral(from, fv) || !integral(to, tv) {
+                    return false;
+                }
+            }
+            LaxVectorConversions::All => {}
         }
         if (fv.is_none() && tv.is_some_and(VecParts::is_ext))
             || (tv.is_none() && fv.is_some_and(VecParts::is_ext))

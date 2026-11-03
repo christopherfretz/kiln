@@ -519,8 +519,8 @@ replacing WP-402's no-warnings choice). `<warning flags>` are libc++'s
 in `run.rs` `WARNING_FLAGS`. As lit's `AddOptionalWarningFlag`, each one
 is kept only if the compiler accepts it: once per run, an empty
 translation unit is compiled with `-xc++ -fsyntax-only -Werror <flag>`
-(kiln, like clang 22, rejects the GCC-only `-Wno-` names; kiln also
-rejects `-flax-vector-conversions=none`). With them, the libc++ headers
+(kiln, like clang 22, rejects the GCC-only `-Wno-` names; since WP-445
+kiln accepts `-flax-vector-conversions=none`, as clang). With them, the libc++ headers
 are not system headers (`-D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER`), so
 kiln's warnings inside them count; a `.verify.cpp` compile undefines it
 again and adds `-Wno-error` (`%{verify}`, `format.py` line 102). The

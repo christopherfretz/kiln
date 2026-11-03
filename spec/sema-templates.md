@@ -541,7 +541,7 @@ All of these are built by sema actions, which compute dependence as in
 | `X<T>` where `X` is a class template | dependent `TemplateSpecialization` type |
 | `T(args)` / `T{args}` with dependent `T` | `CXXUnresolvedConstructExpr` (list flag) |
 | `int x(e)` with a type-dependent `e` | the initializer is kept as `ParenListExpr` |
-| a braced argument `{…}` inside a dependent `T(args)`, `new T(args)`, `x(args)` initializer or mem-initializer | kept as a dependent `InitListExpr` with its nested lists intact (`Sema::dependent_args`), not the flattened braced-argument placeholder (`temp.dep.expr/braced-arg-nested-list.cpp`, WP-418). Gap: a mem-initializer pattern still fails at instantiation (`templ/subst/exprs.rs` `written_args`) |
+| a braced argument `{…}` inside a dependent `T(args)`, `new T(args)`, `x(args)` initializer or mem-initializer | kept as a dependent `InitListExpr` with its nested lists intact (`Sema::dependent_args`), not the flattened braced-argument placeholder (`temp.dep.expr/braced-arg-nested-list.cpp`, WP-418). A mem-initializer pattern is rebuilt at instantiation by `written_args` (WP-445) |
 | `X x(e)`, `X x = e`, `X x{e}` whose type `X` is a dependent class type (including the current instantiation, [temp.dep.type]/7) | the initializer is kept unconverted (a `ParenListExpr` for the parenthesized form) and initialization runs only at instantiation, as clang's `AddInitializerToDecl`; overload resolution against a dependent target would treat every candidate's conversion as an identity and report ambiguity (WP-276) |
 | `sizeof...(P)` | `SizeOfPackExpr` |
 | `e...` / `T...` | `PackExpansionExpr` / `PackExpansion` type |
@@ -2179,7 +2179,12 @@ recomputed exactly as for non-template code (clang's
   - (WP-301) a nested element of a braced list, a braced argument of a
     paren constructor call (`P p({a, 1}, b)`), and a braced argument of a
     member, `operator()` or `operator[]` call are rebuilt as lists by
-    `call_arg_list`. That function stops at the first `CXXDefaultArgExpr`;
+    `call_arg_list`. That function stops at the first `CXXDefaultArgExpr`.
+    The written arguments of a mem-initializer or parenthesized initializer
+    (`written_args`) take the same rebuild (`braced_args`) when any argument
+    is braced, so `: m(v, {v + 1, v + 2})` and `: m(a..., {a..., 7})`
+    instantiate their lists ([class.base.init]/7;
+    `class.base.init/braced-arg-mem-init-template.cpp`, WP-445);
   - a list-initializing `CXXConstructExpr` operand is formed again
     through `init_from_list_at` of the substituted type
     ([dcl.init.list]/3.7). A single-argument non-list construct is its

@@ -263,6 +263,12 @@ residual` (docs/status/wp-184-oracle-switch.md).
     create a non-constant pointer to member function" at the `&`; both
     recover silently, with no "cannot take the address of an rvalue"
     (`expr.unary.op/addr-of-parenthesized-member-function.cpp`).
+    A member named without an object is held pending
+    (`Sema::member_refs`) until the end of its full-expression
+    (`flush_member_refs`); a nested full-expression's end flushes the
+    enclosing one's pending names too, which changes only when the
+    (already ill-formed) use is reported (WP-445: no observable
+    difference found).
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
