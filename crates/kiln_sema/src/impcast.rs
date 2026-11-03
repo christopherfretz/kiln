@@ -10,7 +10,7 @@
 //! and `-Wnull-conversion` for GNU `__null` (`gnu_null.rs`).
 
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp};
-use kiln_ast::types::BuiltinType;
+use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::{Loc, Span};
@@ -113,7 +113,8 @@ impl Sema<'_, '_> {
             }
             self.diagnose_int_in_bool_context(src);
         }
-        if self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
+        let bit_int = matches!(self.ast.types.canonical_view(to), TypeView::BitInt { .. });
+        if !bit_int && self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
             return;
         }
         if self.ast.types.builtin(from).and_then(|b| float_kind(self, b)).is_some() {
@@ -230,7 +231,7 @@ impl Sema<'_, '_> {
     /// clang `tryExprAsCall` for function `d` of type `t`, then whether
     /// the call is `bool`: every parameter has a default argument.
     fn zero_arg_call_returns_bool(&self, d: DeclId, t: QualType) -> bool {
-        let kiln_ast::types::TypeView::Function(p) = self.ast.types.view(t.ty()) else {
+        let TypeView::Function(p) = self.ast.types.view(t.ty()) else {
             return false;
         };
         self.ast.types.builtin(self.ast.types.canonical(p.ret())) == Some(BuiltinType::Bool)
@@ -240,7 +241,7 @@ impl Sema<'_, '_> {
     /// clang's `IsInAnyMacroBody`: whether `loc`, walked outward through
     /// macro arguments to where they were written, is in a macro's
     /// replacement list.
-    fn in_any_macro_body(&self, mut loc: Loc) -> bool {
+    pub(crate) fn in_any_macro_body(&self, mut loc: Loc) -> bool {
         let sm = self.diags.sm();
         for _ in 0..256 {
             if !loc.is_macro() {

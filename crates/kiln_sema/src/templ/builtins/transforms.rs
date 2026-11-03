@@ -6,7 +6,7 @@
 //! [`Sema::build_unary_transform`].
 
 use kiln_ast::QualType;
-use kiln_ast::types::{BuiltinType, Quals, RefQual, TypeView, UnaryTransformKind};
+use kiln_ast::types::{BuiltinType, Quals, RefQual, TypeFlags, TypeView, UnaryTransformKind};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -25,7 +25,13 @@ impl Sema<'_, '_> {
         if base == QualType::ERROR {
             return None;
         }
-        if self.is_dependent_type(base) {
+        // Only a dependent type defers the transform (clang
+        // `BuildUnaryTransformType` tests `isDependentType`); a merely
+        // instantiation-dependent one (`TC<N>*`, `N` a constant local of a
+        // function template, reaching an alias substituted with its
+        // arguments as written at compat 22) is transformed now.
+        let dep = TypeFlags::DEPENDENT.union(TypeFlags::UNEXPANDED_PACK);
+        if self.ast.types.flags(base.ty()).intersects(dep) {
             return Some(self.ast.types.unary_transform(kind, base, None));
         }
         let result = self.apply_unary_transform(kind, base, loc)?;

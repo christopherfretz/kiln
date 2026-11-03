@@ -745,9 +745,12 @@ impl Sema<'_, '_> {
     ) -> Result<ExprId, ()> {
         let c = self.ast.first(c);
         let args: Vec<TemplateArg> = self.ast.types.args(written).to_vec();
-        let dep =
-            self.ast.types.arg_list_flags(written).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
-                || args.iter().any(|&a| self.is_pack_expansion_arg(a));
+        // Dependent, not merely instantiation-dependent, arguments defer
+        // the check (clang `anyDependentTemplateArguments`): `C<TC<N>>`
+        // with `N` a constant local of a function template is checked at
+        // the definition (spec/sema-templates.md §5.3).
+        let dep = self.ast.types.arg_list_flags(written).intersects(TypeFlags::DEPENDENT)
+            || args.iter().any(|&a| self.is_pack_expansion_arg(a));
         if dep {
             return Ok(self.builder().concept_spec_expr(c, written, QualType::BOOL, loc));
         }

@@ -967,3 +967,51 @@ the canonical type, and is omitted when equal. `print_type` with
   `tests/codegen/int128_ops.cpp`, `tests/mangle/int128.cpp`.
 - Gap (not `__int128`-specific): Oven notes print a typedef without its
   `(aka '...')`.
+
+## 21. Landed (WP-404): `_BitInt(N)` end to end
+- Parsing: `_BitInt ( constant-expression )` is a simple-type-specifier
+  (`kiln_parse/src/decl.rs` `parse_bit_int_into`), combinable with
+  `signed`/`unsigned`/cv. In C++ it is a clang extension:
+  `-Wbit-int-extension` (pedantic) "'_BitInt' in C++ is a Clang
+  extension" at the keyword. The old spelling `_ExtInt(N)` is accepted
+  with `-Wdeprecated-type` "'_ExtInt' is deprecated; use '_BitInt'
+  instead" (clang 19 and 22).
+- Width (`kiln_sema/src/bit_int.rs`, clang `Sema::BuildBitIntType`): an
+  integral constant expression (folding allowed); signed `N >= 2`,
+  unsigned `N >= 1` ("{signed|unsigned} _BitInt must have a bit size of
+  at least {2|1}"), `N <= BITINT_MAXWIDTH` ("... _BitInt of bit sizes
+  greater than M not supported"). `BITINT_MAXWIDTH` is the target's
+  (`kiln_abi::Target::bit_int_max_width`): 128 on AArch64, 8388608 on
+  x86-64 (clang 22 and 19), predefined as `__BITINT_MAXWIDTH__`. Size
+  errors are at the decl-specifier's start (clang), at the `_BitInt`
+  keyword under instantiation — except that kiln reports a substituted
+  `unsigned _BitInt(N)` at `unsigned` (the type keeps no keyword loc).
+- A value-dependent width makes `DependentBitInt{signed, width}`; the
+  substituter rebuilds it through `build_bit_int_type`
+  (spec/sema-templates.md §5.3), and deduction deduces the width from a
+  `_BitInt` argument of the same signedness as a value of type `int`
+  (`templ/deduce.rs` `deduce_bound`; a `template <auto N>` parameter
+  gets `int`, as an array bound gives it `std::size_t`).
+- Conversions (C23 6.3.1.1 as clang applies it in C++): a `_BitInt` is
+  never promoted (`_BitInt(7) + _BitInt(7)` is `_BitInt(7)`, and its
+  `-`/`++` overflow, hence `nsw`), its rank is below a standard integer
+  type of the same width (`_BitInt(32) + int` is `int`,
+  `unsigned _BitInt(64) + long` is `unsigned long` on LP64), and the
+  usual arithmetic conversions apply otherwise. It is integral and
+  arithmetic for every type trait (`__is_integral`, `__make_signed`,
+  ...), converts to `bool`, narrows in braces by value range, and is not
+  a valid enum underlying type ("'T' is an invalid underlying type").
+  `-Wconstant-conversion` applies to a `_BitInt` target.
+- Layout and ABI: `spec/abi.md` (size `alignTo(N, A)`); an
+  `N > 128` value is returned in memory (sret) and passed `byval` on
+  x86-64 (clang `X86_64ABIInfo::getIndirectReturnResult`). The value is
+  `iN`, the memory form its slot integer (sext/zext on store, trunc on
+  load), as clang.
+- Constant evaluation: spec/oven.md "`_BitInt` — Landed (WP-404)".
+- Tests: `tests/conformance/basic.fundamental/bit-int-*.cpp`,
+  `temp.deduct.type/bit-int-templates.cpp`,
+  `expr.const/bit-int-{expr,wide}.cpp`, `tests/codegen/bit_int_arith.cpp`.
+- Deviations: `long _BitInt(8)` says "cannot combine with previous
+  'long' declaration specifier" where clang says "'long _BitInt' is
+  invalid" (the same pre-existing shape as `short float`,
+  `kiln_sema/src/declspec.rs` `check_base_width`).

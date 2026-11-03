@@ -7,7 +7,7 @@ use kiln_ast::names::DeclName;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{DiagId, FixIt};
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
 use kiln_sema::DeclSite;
 use kiln_sema::declspec::SpecError;
@@ -43,6 +43,8 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Float
             | Kw::Double
             | Kw::Int128
+            | Kw::BitInt
+            | Kw::ExtInt
             | Kw::Float128
             | Kw::Float16
             | Kw::Float32
@@ -778,6 +780,10 @@ impl Parser<'_, '_> {
                 Kw::Char32 => ds.set_base(TypeSpecKind::Char32, None, loc),
                 Kw::Int => ds.set_base(TypeSpecKind::Int, None, loc),
                 Kw::Int128 => ds.set_base(TypeSpecKind::Int128, None, loc),
+                Kw::BitInt | Kw::ExtInt => {
+                    self.parse_bit_int_into(&mut ds, k, loc);
+                    continue;
+                }
                 Kw::Float => ds.set_base(TypeSpecKind::Float, None, loc),
                 Kw::Double => ds.set_base(TypeSpecKind::Double, None, loc),
                 Kw::Float128 => ds.set_base(TypeSpecKind::Float128, None, loc),
@@ -996,6 +1002,42 @@ impl Parser<'_, '_> {
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc) {
             ds.invalid = true;
             self.spec_error(&e, loc);
+        }
+    }
+
+    /// `_BitInt ( constant-expression )` (or the deprecated `_ExtInt`), a
+    /// C23 bit-precise integer type clang accepts in C++ as an extension
+    /// (clang `DiagnoseBitIntUse`, `ParseExtIntegerArgument`; spec/types.md
+    /// §5.3). The width is checked when the type is formed
+    /// ([`kiln_sema::Sema::build_bit_int_type`]), where the sign is known.
+    fn parse_bit_int_into(&mut self, ds: &mut DeclSpec, k: Kw, loc: Loc) {
+        let id = if k == Kw::ExtInt {
+            DiagId::parse_ext_int_deprecated
+        } else {
+            DiagId::parse_bit_int_extension
+        };
+        self.s.error(id, loc);
+        self.bump();
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'_BitInt'")
+                .arg("'('");
+            self.emit(d);
+            return;
+        };
+        let Some(e) = self.with_greater_op(true, Self::parse_constant_expr) else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return;
+        };
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        match ds.set_base(TypeSpecKind::BitInt, None, loc) {
+            Ok(()) => ds.bit_int_width = Some((e, loc)),
+            Err(e) => {
+                ds.invalid = true;
+                self.spec_error(&e, loc);
+            }
         }
     }
 
@@ -1241,7 +1283,9 @@ impl Parser<'_, '_> {
             // only a type can be: the parse proper reports it ("no type
             // named 'name' in 'S'"; clang's `DiagnoseUnknownTypeName`).
             // At block scope the statement disambiguation chose a
-            // declaration already (`S::name(e);`, `S::name *g;`).
+            // declaration already (`S::name(e);`, `S::name *g;`). At
+            // namespace scope a variable or function `N::f` is reported
+            // the same way (`N::f(v);`, `N::f x;`).
             Some((end, NameClass::Undeclared, _))
                 if (end == start + 2
                     && self.at_decltype_scope()
@@ -1250,6 +1294,15 @@ impl Parser<'_, '_> {
                     || (end > start + 1
                         && self.unresolved_scope_name(start)
                         && self.qualified_unknown_type_follows(end, ctx)) =>
+            {
+                self.unknown_qualified_type_spec(ds, loc);
+                true
+            }
+            Some((end, NameClass::Value(_), _))
+                if ctx == DeclaratorContext::File
+                    && self.nontype_scope_name(start)
+                    && Self::punct_of(self.tok_at(end)) != Some(Punct::Less)
+                    && self.qualified_unknown_type_follows(end, ctx) =>
             {
                 self.unknown_qualified_type_spec(ds, loc);
                 true
@@ -1462,11 +1515,18 @@ impl Parser<'_, '_> {
     /// namespace or class scope, `<` (a class template:
     /// `std::codecvt_utf8<wchar_t> c;`, clang's `ParseImplicitInt` with
     /// `IsTemplateName`; at block scope `N::f<int> x;` is an expression).
+    /// At namespace scope a `(` that starts a declarator counts too
+    /// (`N::f(v);`, `N::f(*p)[2];`; clang's `ParseImplicitInt` runs
+    /// `TryParseDeclarator` after the name), while `N::f(1);` and
+    /// `N::f(int);` declare `N::f` with no type.
     fn qualified_unknown_type_follows(&self, end: usize, ctx: DeclaratorContext) -> bool {
         ctx == DeclaratorContext::Block
             || self.unknown_type_follows(end, ctx)
             || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 && Self::punct_of(self.tok_at(end)) == Some(Punct::Less))
+            || (ctx == DeclaratorContext::File
+                && Self::punct_of(self.tok_at(end)) == Some(Punct::LParen)
+                && self.declarator_may_start_at(end))
     }
 
     // -- class and enum specifiers ----------------------------------------------------
@@ -1568,7 +1628,10 @@ impl Parser<'_, '_> {
         let ty = self.s.type_from_declspec(&base);
         // [dcl.enum]/2, [dcl.spec.auto.general]/5.
         let at = base.type_loc.unwrap_or(base.loc);
-        Some(self.s.type_specifier_placeholder_check(ty, at))
+        let ty = self.s.type_specifier_placeholder_check(ty, at);
+        // clang: at the type's location, a `_BitInt`'s keyword.
+        let at = base.bit_int_width.map_or(at, |(_, kw)| kw);
+        self.s.check_enum_fixed_type(Some(ty), at)
     }
 
     /// `parse_tag_qualifier`, and whether it failed (diagnosed it named
@@ -1613,8 +1676,9 @@ impl Parser<'_, '_> {
         }
     }
 
-    fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
-        let kw_loc = self.bump().span.lo;
+    /// The class-key or `enum` (with its `class`/`struct`) at `k`: the tag
+    /// keyword and the enum's `EnumData` scoped flags.
+    fn parse_tag_key(&mut self, ds: &mut DeclSpec, k: Kw) -> (TagKeyword, u32) {
         let keyword = match k {
             Kw::Struct => TagKeyword::Struct,
             Kw::Class => TagKeyword::Class,
@@ -1631,6 +1695,12 @@ impl Parser<'_, '_> {
                 ds.scoped_key_end = Some(l.with_offset(6));
             }
         }
+        (keyword, scoped)
+    }
+
+    fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
+        let kw_loc = self.bump().span.lo;
+        let (keyword, scoped) = self.parse_tag_key(ds, k);
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qual_loc = self.tok().span.lo;
@@ -1696,6 +1766,10 @@ impl Parser<'_, '_> {
         let name = if qual_failed { None } else { name };
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs, use_);
+        if use_ == TagUse::Definition && self.s.tag_body_skipped(d) {
+            self.skip_redefined_tag_body(ds, keyword, kw_loc);
+            return;
+        }
         if use_ == TagUse::Definition {
             // `struct A::B { ... }`: names in the body are looked up in
             // `A` too ([basic.lookup.unqual]/2, [class.nest]/3).
@@ -1845,6 +1919,22 @@ impl Parser<'_, '_> {
             };
             self.check_after_tag_definition(spelling, false);
         }
+    }
+
+    /// A redefinition, diagnosed by sema: its body is skipped and the
+    /// declarators it heads get an error type (clang's invalid anonymous
+    /// tag; spec/sema.md §4.4).
+    fn skip_redefined_tag_body(&mut self, ds: &mut DeclSpec, keyword: TagKeyword, kw_loc: Loc) {
+        self.skip_class_body();
+        ds.invalid = true;
+        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
+        let spelling = match keyword {
+            TagKeyword::Struct => "struct",
+            TagKeyword::Class => "class",
+            TagKeyword::Union => "union",
+            _ => "enum",
+        };
+        self.check_after_tag_definition(spelling, false);
     }
 
     /// Skips a class body that is not defined (`[: bases] { ... }`).
@@ -2082,6 +2172,44 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// C99's `static` and type-qualifier-list in an array declarator's
+    /// brackets (clang `ParseBracketDeclarator`): both are errors in C++
+    /// ("... is a C99 feature" on a parameter's outermost array, else
+    /// "... outside of function prototype", which invalidates the
+    /// declarator), at the `[`. A nullability qualifier there is
+    /// a clang extension: it applies to the array, which only the
+    /// parameter's outermost one may carry (it moves to the decayed
+    /// pointer; spec/sema.md §4.1.1).
+    fn parse_bracket_quals(&mut self, d: &mut Declarator, open: Loc) {
+        let mut stat = self.at_kw(Kw::Static);
+        if stat {
+            self.bump();
+        }
+        let (quals, nulls) = self.parse_ptr_quals();
+        if !stat && !quals.is_empty() && self.at_kw(Kw::Static) {
+            self.bump();
+            stat = true;
+        }
+        let i = d.chunks.len();
+        d.nullability.extend(nulls.into_iter().map(|n| (i, n)));
+        if !stat && quals.is_empty() {
+            return;
+        }
+        let param = d.ctx == DeclaratorContext::Prototype && i == 0;
+        let id = match (param, stat) {
+            (true, _) => DiagId::parse_c99_array_usage_cxx,
+            (false, true) => DiagId::parse_array_static_outside_prototype,
+            (false, false) => DiagId::parse_array_qual_outside_prototype,
+        };
+        let mut diag = self.s.diag(id, open);
+        if param {
+            diag = diag.arg(u8::from(stat));
+        } else {
+            d.invalid = true;
+        }
+        self.emit(diag);
+    }
+
     /// The attributes and nullability qualifiers after a `&` or `&&`
     /// ([dcl.ref]/1; a nullability qualifier there is diagnosed by sema).
     pub(crate) fn parse_ref_quals(&mut self) -> Vec<NullSpec> {
@@ -2272,6 +2400,7 @@ impl Parser<'_, '_> {
         loop {
             if self.at(Punct::LSquare) && !self.at_cxx11_attr() {
                 let open = self.bump().span.lo;
+                self.parse_bracket_quals(d, open);
                 let mut size = None;
                 if !self.at(Punct::RSquare) {
                     // An array bound is manifestly constant-evaluated.
@@ -3243,7 +3372,37 @@ impl Parser<'_, '_> {
     /// `err_missing_type_specifier`).
     fn at_declarator_without_specifiers(&self, ctx: DeclaratorContext) -> bool {
         self.at_special_declarator(ctx)
-            || (ctx == DeclaratorContext::File && self.at_implicit_int_declarator())
+            || (ctx == DeclaratorContext::File
+                && (self.at_implicit_int_declarator()
+                    || self.at_qualified_implicit_int_declarator()))
+    }
+
+    /// At namespace scope, a qualified name for which lookup finds a
+    /// non-type or nothing (`R::f(1);`, `R::f;`, `R::h(int);`), followed
+    /// by what clang's `ParseImplicitInt` takes as the rest of a
+    /// declarator with no type: `;` `=` `,` `[` `{` `asm`, or a `(` that
+    /// cannot start a declarator (else the name was meant as a type,
+    /// [`Self::qualified_unknown_type_follows`]). The name is the
+    /// declarator-id of an invalid `int` declaration, after "a type
+    /// specifier is required" (WP-411).
+    fn at_qualified_implicit_int_declarator(&self) -> bool {
+        let i = self.pos();
+        let Some((end, false, class, _, Some(q))) = self.scan_name_qual_at(i) else {
+            return false;
+        };
+        if end <= i + 1
+            || self.s.is_dependent_ctx(q)
+            || !matches!(class, NameClass::Value(_) | NameClass::Undeclared)
+        {
+            return false;
+        }
+        match Self::punct_of(self.tok_at(end)) {
+            Some(Punct::Semi | Punct::Equal | Punct::Comma | Punct::LSquare | Punct::LBrace) => {
+                true
+            }
+            Some(Punct::LParen) => !self.declarator_may_start_at(end),
+            _ => self.kw_of(self.tok_at(end)) == Some(Kw::Asm),
+        }
     }
 
     /// [temp.explicit]/3: declarator `d` of an explicit instantiation
@@ -3291,6 +3450,7 @@ impl Parser<'_, '_> {
         let (mut declarators, mut restrict) = (0usize, None);
         let _ = self.s.take_declarator_type_invalid();
         let mut type_invalid = false;
+        let mut semi_at = None;
         loop {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
@@ -3335,10 +3495,15 @@ impl Parser<'_, '_> {
             // So is one after a declarator whose type named an
             // unexpanded pack (`Ts a, b;` reports `a` only).
             if declarators > 0 && (ds.type_error || type_invalid) {
-                if self.eat(Punct::Comma).is_none() {
-                    break;
+                if self.eat(Punct::Comma).is_some() {
+                    continue;
                 }
-                continue;
+                // clang's tentative `isCXXFunctionDeclarator` took the `(`
+                // before reverting, leaving `PrevTokLocation` on it: the
+                // missing `;` is reported after the `(` (`R::f(v), g(v);`;
+                // WP-411).
+                semi_at = self.at(Punct::LParen).then(|| self.tok().span.hi);
+                break;
             }
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
@@ -3371,12 +3536,10 @@ impl Parser<'_, '_> {
             }
         }
         self.s.act_on_end_group(group, &ds);
-        if declarators > 1
-            && let Some((l, v)) = first_decomp
-        {
+        if let Some((l, v)) = first_decomp.filter(|_| declarators > 1) {
             self.s.act_on_decomposition_not_alone(l, v);
         }
-        self.expect_declaration_semi(ctx);
+        self.expect_declaration_semi(ctx, semi_at);
         decls
     }
 
@@ -3506,14 +3669,18 @@ impl Parser<'_, '_> {
     }
 
     /// The `;` ending a simple-declaration.
-    fn expect_declaration_semi(&mut self, ctx: DeclaratorContext) {
+    fn expect_declaration_semi(&mut self, ctx: DeclaratorContext, at: Option<Loc>) {
         if self.eat(Punct::Semi).is_none() {
             let id = if ctx == DeclaratorContext::File {
                 DiagId::parse_expected_semi_toplevel
             } else {
                 DiagId::parse_expected_semi_declaration
             };
-            self.s.error(id, self.expected_loc());
+            // clang's `ExpectAndConsume`: the `;` is inserted where it is
+            // reported, after the previous token.
+            let at = at.unwrap_or_else(|| self.expected_loc());
+            let msg = self.s.diag(id, at).fixit(FixIt::insert(at, ";"));
+            self.s.emit(msg);
             // clang's `ParseDeclGroup`: `SkipMalformedDecl`, which stops
             // after a braced body (`void f4(=) {}`).
             if !self.is_decl_spec_start() {

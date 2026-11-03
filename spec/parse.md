@@ -221,6 +221,29 @@ clang's `Parser` over `Preprocessor::Lex`.
   bit-field cannot have a default member initializer"), and at namespace
   scope the `:` is "expected unqualified-id". At block scope `y : 3;` is
   a label (WP-379, `class.bit/untyped-bit-field.cpp`).
+  At namespace scope a declaration that starts with a qualified name for
+  which lookup finds a non-type or nothing (`R::f` with `R::f` a
+  function) follows clang's `ParseImplicitInt` (WP-411): before a `(`
+  that can start a declarator (`R::f(v);`, `R::f(*p)[2];`, `R::f(X);`
+  with `X` a type; `declarator_may_start_at`, clang's
+  `TryParseDeclarator`) the name was meant as a type, "no type named 'f'
+  in namespace 'R'", recovering to `int`; before `;` `=` `,` `[` `{`
+  `asm` or a `(` that cannot start a declarator (`R::f(1);`, `R::f;`,
+  `R::f(int);`) it is the declarator-id of a declaration with no type
+  (`at_qualified_implicit_int_declarator`): "a type specifier is
+  required for all declarations", and the declaration is invalid and
+  redeclares nothing (no "functions that differ only in their return
+  type", "out-of-line declaration … does not match" or redefinition; an
+  unqualified `f(int);` likewise), while a variable whose namespace has
+  no such member still reports "no member named 'h' in namespace 'R'"
+  ([dcl.meaning.general]/2.2; `int R::h;` too). A later declarator of a
+  group whose type named no type is parsed but takes no initializer
+  (`ParseDeclGroup`), so `R::f(v), g(v);` reports "expected ';' after
+  top level declarator" at the end of the `(` (clang's tentative
+  `isCXXFunctionDeclarator` left `PrevTokLocation` there), else after
+  the previous token. The missing `;` of a declaration carries the
+  insertion fix-it `;` (clang `ExpectAndConsume`)
+  (`tests/conformance/dcl.dcl/qualified-name-no-type.cpp`).
   An unqualified typename-specifier (`typename T`, `typename Ts...[0]`;
   [temp.res.general]/3) is "expected a qualified name after 'typename'"
   and recovers as clang does, by context (`parse_typename_specifier_in`,

@@ -405,6 +405,37 @@ impl<'a> AstBuilder<'a> {
         }
     }
 
+    /// Takes `d` out of every lookup table [`AstBuilder::add`] entered
+    /// its name in (the context and the enclosing ones an unscoped
+    /// enumeration or inline namespace reaches): a redefined class or
+    /// enumeration is not visible to later lookups (spec/sema.md §4.4).
+    pub fn unregister_name(&mut self, d: DeclId) {
+        let n = self.ast.decls.get(d);
+        let (name, Some(ctx)) = (n.name(), n.ctx()) else {
+            return;
+        };
+        if name.is_empty() {
+            return;
+        }
+        let mut cur = self.ast.redecl_context(ctx);
+        for _ in 0..10_000 {
+            if !has_lookup_table(self.ast.decls.get(cur).kind()) {
+                return;
+            }
+            let table = self.ast.primary_context(cur);
+            self.ast.lookup.remove(table, name, d);
+            let next = if self.ast.is_transparent(table) || self.is_inline_namespace(table) {
+                self.ast.decls.get(table).ctx()
+            } else {
+                None
+            };
+            match next {
+                Some(n) => cur = self.ast.redecl_context(n),
+                None => return,
+            }
+        }
+    }
+
     fn is_inline_namespace(&self, ns: DeclId) -> bool {
         self.ast.decls.namespace(self.ast.first(ns)).is_some_and(NamespaceData::is_inline)
     }
