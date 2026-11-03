@@ -559,6 +559,10 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
         }
         None => {}
     }
+    if args.experimental_library {
+        // clang adds `-lc++experimental` when the stdlib is libc++.
+        cmd.arg("-fexperimental-library");
+    }
     let opts_at = |cmd: &mut Command, pos: usize| {
         for o in args.link.iter().filter(|o| o.pos == pos) {
             cmd.arg(o.arg.clone());
@@ -790,5 +794,13 @@ mod tests {
             cmd.args,
             ["-O2", "-lm", "a.o", "-L/x", "b.o", "-Wl,-z,now", "-static", "-o", "a.out"]
         );
+    }
+
+    #[test]
+    fn link_experimental_library() {
+        let a = args(&["-stdlib=libc++", "-fexperimental-library", "a.o"]);
+        let tc = Toolchain::new(crate::toolchain::Target::host(), None, None);
+        let cmd = link_command(&a, &tc, &[(0, "a.o".to_owned())]);
+        assert_eq!(cmd.args, ["-stdlib=libc++", "-fexperimental-library", "a.o", "-o", "a.out"]);
     }
 }
