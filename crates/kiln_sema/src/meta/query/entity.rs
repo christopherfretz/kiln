@@ -379,15 +379,17 @@ impl Sema<'_, '_> {
         if self.ast.decls.var(d).is_none() {
             return Ok(None);
         }
-        let constexpr = self.ast.redecls_of(d).any(|x| {
-            self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr())
-        });
+        let constexpr = self
+            .ast
+            .redecls_of(d)
+            .any(|x| self.ast.decls.var(x).is_some_and(|y| y.spec.is_constexpr()));
         let integral = crate::constfold::int_info(&self.ast, ty).is_some();
         let quals = self.ast.types.effective_quals(ty);
         let reference = self.ast.types.is_reference(ty);
         // [expr.const]/3: potentially-constant is constexpr, a reference,
         // or a const non-volatile integral or enumeration variable.
-        if !constexpr && !reference && !(integral && quals.is_const() && !quals.is_volatile()) {
+        let const_int = integral && quals.is_const() && !quals.is_volatile();
+        if !(constexpr || reference || const_int) {
             return Ok(None);
         }
         if !integral {

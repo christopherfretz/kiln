@@ -83,7 +83,7 @@ impl Sema<'_, '_> {
             Q::IsEnumerator => self.decl_kind(x) == Some(DeclKind::EnumConstant),
             Q::IsConst => self.qualified_type(x).is_some_and(|t| self.type_quals_of(t).0),
             Q::IsVolatile => self.qualified_type(x).is_some_and(|t| self.type_quals_of(t).1),
-            Q::IsMutableMember => self.field(x).is_some_and(|f| f.is_mutable()),
+            Q::IsMutableMember => self.field(x).is_some_and(kiln_ast::decl::FieldData::is_mutable),
             Q::IsLvalueReferenceQualified => self.ref_qual_of(x) == RefQual::LValue,
             Q::IsRvalueReferenceQualified => self.ref_qual_of(x) == RefQual::RValue,
             Q::HasStaticStorageDuration => self.has_static_storage_duration(x),
@@ -96,6 +96,16 @@ impl Sema<'_, '_> {
             Q::HasLinkage => self.linkage_of(x) != Linkage::None,
             Q::IsCompleteType => return self.is_complete_type(x, ctx, oven).map(Some),
             Q::IsEnumerableType => return self.is_enumerable_type(x, ctx, oven).map(Some),
+            _ => return Ok(self.entity_pred(q, x)),
+        };
+        Ok(Some(b))
+    }
+
+    /// The kind, special-member, template and membership predicates:
+    /// the answer of `q` for `x`, or `None` when `q` is not one of them.
+    fn entity_pred(&self, q: QueryOp, x: Reflectee) -> Option<bool> {
+        use QueryOp as Q;
+        let b = match q {
             Q::IsVariable => matches!(
                 self.decl_kind(x),
                 Some(DeclKind::Var | DeclKind::VarTemplateSpecialization | DeclKind::ParmVar)
@@ -157,9 +167,9 @@ impl Sema<'_, '_> {
             Q::IsStaticMember => self.is_static_member(x),
             Q::IsBase => matches!(x, Reflectee::BaseSpec(..)),
             Q::HasDefaultMemberInitializer => self.field(x).is_some_and(|f| f.init.is_some()),
-            _ => return Ok(None),
+            _ => return None,
         };
-        Ok(Some(b))
+        Some(b)
     }
 
     /// The kind of declaration `x` reflects, if it is a `Decl`.

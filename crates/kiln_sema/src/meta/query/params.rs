@@ -49,7 +49,7 @@ impl Sema<'_, '_> {
             },
         };
         let c = self.ast.types.canonical(t);
-        self.ast.types.proto(c).is_some_and(|p| p.variadic())
+        self.ast.types.proto(c).is_some_and(kiln_ast::types::FuncProto::variadic)
     }
 
     /// `return_type_of(r)`: the return type of the function (not a
@@ -71,7 +71,7 @@ impl Sema<'_, '_> {
         };
         let ret = t.and_then(|t| {
             let c = self.ast.types.canonical(t);
-            self.ast.types.proto(c).map(|p| p.ret())
+            self.ast.types.proto(c).map(kiln_ast::types::FuncProto::ret)
         });
         match ret {
             Some(ret) if !self.ast.types.is_dependent(ret) => {

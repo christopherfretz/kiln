@@ -55,7 +55,13 @@ impl Sema<'_, '_> {
         let d = self.ast.first(d);
         let k = self.kind_of(d);
         let entity = match k {
-            DeclKind::Var | DeclKind::VarTemplateSpecialization => true,
+            DeclKind::Var
+            | DeclKind::VarTemplateSpecialization
+            | DeclKind::ClassTemplate
+            | DeclKind::FunctionTemplate
+            | DeclKind::VarTemplate
+            | DeclKind::TypeAliasTemplate
+            | DeclKind::Concept => true,
             DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization | DeclKind::Enum => {
                 // An unnamed class or enumeration without a typedef name
                 // for linkage purposes has none, a closure type included
@@ -65,11 +71,6 @@ impl Sema<'_, '_> {
                     && (!self.decl_name(d).is_empty()
                         || self.ast.decls.typedef_for_anon(d).is_some())
             }
-            DeclKind::ClassTemplate
-            | DeclKind::FunctionTemplate
-            | DeclKind::VarTemplate
-            | DeclKind::TypeAliasTemplate
-            | DeclKind::Concept => true,
             DeclKind::CXXDeductionGuide => false,
             k => k.is_function(),
         };
@@ -137,12 +138,12 @@ impl Sema<'_, '_> {
                     e = self.ast.types.canonical(x);
                 }
                 let q = self.ast.types.effective_quals(e);
-                q.is_const()
-                    && !q.is_volatile()
-                    && !v.spec.is_inline()
-                    && v.spec.storage() != VarStorage::Extern
-                    && !(self.ast.modules.active && self.ast.module_attachment(p).is_some())
-                    && !kiln_abi::mangle::is_extern_c(&self.ast, p)
+                let exported = q.is_volatile()
+                    || v.spec.is_inline()
+                    || v.spec.storage() == VarStorage::Extern
+                    || (self.ast.modules.active && self.ast.module_attachment(p).is_some())
+                    || kiln_abi::mangle::is_extern_c(&self.ast, p);
+                q.is_const() && !exported
             }
             _ => false,
         }
