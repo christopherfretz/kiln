@@ -13,6 +13,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind};
 pub use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::DeclName;
 use kiln_ast::{DeclId, QualType};
+use kiln_source::fx::FxHashSet;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
@@ -677,7 +678,8 @@ impl Sema<'_, '_> {
         kind: LookupKind,
         depth: usize,
     ) -> Option<ClassHit> {
-        let mut leaves = self.class_leaves(def, name, kind, depth);
+        let mut leaves =
+            self.class_leaves(def, name, kind, depth, &mut (FxHashSet::default(), false));
         self.remove_dominated(&mut leaves);
         let mut it = leaves.into_iter();
         let (found, path, _) = it.next()?;
@@ -717,14 +719,24 @@ impl Sema<'_, '_> {
 
     /// Every declaration set the search of `def` finds, with the path
     /// from `def` to the class it is found in (in base-specifier order).
+    /// `barren` holds the classes whose search found nothing: a class
+    /// reached again through another path (a virtual lattice) is not
+    /// searched again, so a name declared nowhere costs one walk per class,
+    /// not one per path (WP-400). Its flag records that the depth limit
+    /// cut the search, after which nothing more is recorded.
     fn class_leaves(
         &self,
         def: DeclId,
         name: DeclName,
         kind: LookupKind,
         depth: usize,
+        barren: &mut (FxHashSet<DeclId>, bool),
     ) -> Vec<Leaf> {
         if depth > 256 {
+            barren.1 = true;
+            return Vec::new();
+        }
+        if barren.0.contains(&def) {
             return Vec::new();
         }
         let mut own = self.filter(self.ast.lookup_local(def, name).iter_ordinary().collect(), kind);
@@ -754,7 +766,7 @@ impl Sema<'_, '_> {
         for (&i, spec) in idx.iter().zip(specs) {
             let Some(b) = self.ast.types.as_record(spec.ty) else { continue };
             let Some(bdef) = self.ast.definition(b) else { continue };
-            for (f, mut p, mut vs) in self.class_leaves(bdef, name, kind, depth + 1) {
+            for (f, mut p, mut vs) in self.class_leaves(bdef, name, kind, depth + 1, barren) {
                 p.specs.insert(0, i);
                 p.classes.insert(0, b);
                 p.written.insert(0, spec.ty);
@@ -769,6 +781,9 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        if out.is_empty() && !barren.1 {
+            barren.0.insert(def);
+        }
         out
     }
 
@@ -782,7 +797,7 @@ impl Sema<'_, '_> {
         let ends: Vec<DeclId> = leaves.iter().filter_map(|l| l.1.classes.last().copied()).collect();
         let keep: Vec<bool> = leaves
             .iter()
-            .map(|l| !l.2.iter().any(|&v| ends.iter().any(|&h| self.has_virtual_base(h, v, 0))))
+            .map(|l| !l.2.iter().any(|&v| ends.iter().any(|&h| self.has_virtual_base(h, v))))
             .collect();
         let mut k = keep.into_iter();
         leaves.retain(|_| k.next().unwrap_or(true));
@@ -790,18 +805,25 @@ impl Sema<'_, '_> {
 
     /// True if `class` has `v` as a (direct or indirect) virtual base
     /// (clang `isVirtuallyDerivedFrom`).
-    fn has_virtual_base(&self, class: DeclId, v: DeclId, depth: usize) -> bool {
-        if depth > 256 {
-            return false;
+    /// Each class is walked once (WP-400).
+    fn has_virtual_base(&self, class: DeclId, v: DeclId) -> bool {
+        let v = self.ast.first(v);
+        let mut work = vec![class];
+        let mut walked: FxHashSet<DeclId> = FxHashSet::default();
+        while let Some(c) = work.pop() {
+            let Some(def) = self.ast.definition(c) else { continue };
+            if !walked.insert(def) || walked.len() > 4096 {
+                continue;
+            }
+            for s in self.ast.decls.bases(def, &self.ast.lists) {
+                let Some(b) = self.ast.types.as_record(s.ty) else { continue };
+                if s.is_virtual && self.ast.first(b) == v {
+                    return true;
+                }
+                work.push(b);
+            }
         }
-        let Some(def) = self.ast.definition(class) else { return false };
-        self.ast.decls.bases(def, &self.ast.lists).copied().collect::<Vec<_>>().into_iter().any(
-            |s| {
-                let Some(b) = self.ast.types.as_record(s.ty) else { return false };
-                (s.is_virtual && self.ast.first(b) == self.ast.first(v))
-                    || self.has_virtual_base(b, v, depth + 1)
-            },
-        )
+        false
     }
 
     /// Reports an ambiguous class member lookup ([class.member.lookup]/6)

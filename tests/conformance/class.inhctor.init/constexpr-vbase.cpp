@@ -23,7 +23,7 @@
 //@ diag: 28:12 note "virtual base class declared here"
 //@ diag: 36:21 note "virtual base class declared here"
 //@ requires: clang<22
-// WP-388 (vbase construction): clang 22 notes the inherited constructor of a virtual base, not the non-literal type.
+// clang 22 differs (no literal type check in C++23, P2448; vbase construction, WP-388): see constexpr-vbase-22.cpp
 struct V { constexpr V(int v) : v(v) {} int v; };
 struct M : virtual V { using V::V; };
 struct N : V { using V::V; };

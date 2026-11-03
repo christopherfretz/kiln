@@ -11,7 +11,7 @@ use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DefinitionBits};
 use kiln_ast::modules::UnitKind;
 use kiln_source::Loc;
-use kiln_source::fx::FxHashSet;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use super::graph::{self, is_pure};
 use crate::Sema;
@@ -34,7 +34,7 @@ impl Sema<'_, '_> {
             return;
         }
         if self.is_local_class(def) {
-            self.mark_virtual_members_referenced(loc, def, 0);
+            self.mark_virtual_members_referenced(loc, def);
         } else {
             self.vtable_uses.push((def, loc));
         }
@@ -91,50 +91,69 @@ impl Sema<'_, '_> {
                 continue;
             }
             any = true;
-            self.mark_virtual_members_referenced(loc, class, 0);
+            self.mark_virtual_members_referenced(loc, class);
         }
         any
     }
 
     /// clang `MarkVirtualMembersReferenced`: odr-uses each non-pure final
     /// overrider in `class`'s vtable at `loc`, then (for the VTT) the
-    /// virtual members of each direct base that has virtual bases.
-    fn mark_virtual_members_referenced(&mut self, loc: Loc, class: DeclId, depth: usize) {
-        if depth > 256 {
-            return;
-        }
-        let Some(v) = graph::ensure_virtuals(&mut self.ast, class) else { return };
-        let entries = v.overriders.clone();
-        // In clang's `CXXFinalOverriderMap` order (by method).
-        let mut seen: FxHashSet<DeclId> = FxHashSet::default();
-        let mut finals: Vec<DeclId> = Vec::new();
-        for m in graph::method_order(&self.ast, class) {
-            for e in entries.iter().filter(|e| self.ast.first(e.1) == m) {
-                if seen.insert(e.2) {
-                    finals.push(e.2);
-                }
-            }
-        }
-        for o in finals {
-            if !is_pure(&self.ast, o) {
-                self.mark_function_referenced(o, loc);
-            }
-        }
+    /// virtual members of each direct base that has virtual bases. clang
+    /// recurses into every such base, which is exponential in the depth
+    /// of a virtual lattice; kiln walks the same preorder once, visiting
+    /// each class once (a second visit only re-marks referenced
+    /// functions at the same `loc`, a no-op; WP-400).
+    fn mark_virtual_members_referenced(&mut self, loc: Loc, class: DeclId) {
         let has_vbases = |s: &Self, c: DeclId| {
             s.ast
                 .definition(c)
                 .and_then(|d| s.ast.decls.record(d))
                 .is_some_and(|r| r.defn.contains(DefinitionBits::HAS_VIRTUAL_BASES))
         };
-        if !has_vbases(self, class) {
-            return;
+        let mut visited: FxHashSet<DeclId> = FxHashSet::default();
+        let mut stack = vec![class];
+        while let Some(c) = stack.pop() {
+            if !visited.insert(self.ast.first(c)) {
+                continue;
+            }
+            for o in self.vtable_finals(c) {
+                if !is_pure(&self.ast, o) {
+                    self.mark_function_referenced(o, loc);
+                }
+            }
+            if !has_vbases(self, c) {
+                continue;
+            }
+            let at = stack.len();
+            for b in graph::direct_bases(&self.ast, c) {
+                if has_vbases(self, b.class) {
+                    stack.push(b.class);
+                }
+            }
+            stack[at..].reverse();
         }
-        let bases: Vec<DeclId> =
-            graph::direct_bases(&self.ast, class).into_iter().map(|b| b.class).collect();
-        for b in bases {
-            if has_vbases(self, b) {
-                self.mark_virtual_members_referenced(loc, b, depth + 1);
+    }
+
+    /// The final overriders in `class`'s vtable in clang's
+    /// `CXXFinalOverriderMap` order (by method), each once.
+    fn vtable_finals(&mut self, class: DeclId) -> Vec<DeclId> {
+        if graph::ensure_virtuals(&mut self.ast, class).is_none() {
+            return Vec::new();
+        }
+        let Some(v) = self.ast.virtuals.get(self.ast.first(class)) else { return Vec::new() };
+        let mut by_method: FxHashMap<DeclId, Vec<DeclId>> = FxHashMap::default();
+        for e in &v.overriders {
+            by_method.entry(self.ast.first(e.1)).or_default().push(e.2);
+        }
+        let mut seen: FxHashSet<DeclId> = FxHashSet::default();
+        let mut finals: Vec<DeclId> = Vec::new();
+        for m in graph::method_order(&self.ast, class) {
+            for &o in by_method.get(&m).into_iter().flatten() {
+                if seen.insert(o) {
+                    finals.push(o);
+                }
             }
         }
+        finals
     }
 }

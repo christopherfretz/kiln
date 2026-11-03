@@ -8,6 +8,7 @@ use kiln_ast::names::DeclName;
 use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_ast::{DeclHead, DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
+use kiln_source::fx::FxHashSet;
 use kiln_source::symbol::Symbol;
 
 use super::BaseSpecInfo;
@@ -753,7 +754,7 @@ impl Sema<'_, '_> {
             if !bb.contains(DefinitionBits::STANDARD_LAYOUT) {
                 not_sl(&mut bits);
             }
-            if self.class_has_fields(bd, 0) {
+            if self.class_has_fields(bd) {
                 if bases_with_fields {
                     not_sl(&mut bits);
                 }
@@ -863,21 +864,23 @@ impl Sema<'_, '_> {
 
     /// Whether class `c` or one of its bases declares a non-static data
     /// member (clang's `HasBasesWithFields` and `field_empty`).
-    fn class_has_fields(&self, c: DeclId, depth: usize) -> bool {
-        if depth > 256 {
-            return false;
+    /// Each class is looked at once (a virtual lattice is not walked
+    /// per path; WP-400).
+    fn class_has_fields(&self, c: DeclId) -> bool {
+        let mut work = vec![c];
+        let mut walked: FxHashSet<DeclId> = FxHashSet::default();
+        while let Some(c) = work.pop() {
+            if !walked.insert(c) || walked.len() > 4096 {
+                continue;
+            }
+            if self.ast.decls.members(c).any(|m| self.kind_of(m) == DeclKind::Field) {
+                return true;
+            }
+            work.extend(self.ast.decls.bases(c, &self.ast.lists).filter_map(|b| {
+                self.ast.types.as_record(b.ty).and_then(|d| self.ast.definition(d))
+            }));
         }
-        if self.ast.decls.members(c).any(|m| self.kind_of(m) == DeclKind::Field) {
-            return true;
-        }
-        let bases: Vec<QualType> = self.ast.decls.bases(c, &self.ast.lists).map(|b| b.ty).collect();
-        bases.into_iter().any(|t| {
-            self.ast
-                .types
-                .as_record(t)
-                .and_then(|d| self.ast.definition(d))
-                .is_some_and(|d| self.class_has_fields(d, depth + 1))
-        })
+        false
     }
 
     /// Collects every base class subobject type of `c` into `seen`;
@@ -892,12 +895,14 @@ impl Sema<'_, '_> {
             let Some(d) = self.ast.types.as_record(t).and_then(|d| self.ast.definition(d)) else {
                 continue;
             };
+            // A class seen before had its bases collected then: they all
+            // repeat, so its subtree is not walked again (WP-400).
             if seen.contains(&d) {
                 rep = true;
             } else {
                 seen.push(d);
+                rep |= self.repeated_base(d, seen, depth + 1);
             }
-            rep |= self.repeated_base(d, seen, depth + 1);
         }
         rep
     }

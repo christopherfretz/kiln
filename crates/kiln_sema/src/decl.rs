@@ -3493,13 +3493,12 @@ impl Sema<'_, '_> {
                     if pspec.is_inline() {
                         spec = spec.with_implicit_inline(true);
                     }
-                    // [dcl.constexpr]/1: every declaration of an immediate
-                    // function is `consteval` (clang's mismatch check; kiln
-                    // applies it only when one side is consteval).
+                    // [dcl.constexpr]/1: if any declaration of a function
+                    // is `constexpr` or `consteval`, every declaration is
+                    // (clang `err_constexpr_redecl_mismatch`).
+                    // An invalid previous declaration is not checked.
                     let (ok, nk) = (pspec.constexpr_kind(), spec.constexpr_kind());
-                    if ok != nk
-                        && (ok == ConstexprKind::Consteval || nk == ConstexprKind::Consteval)
-                    {
+                    if ok != nk && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID) {
                         let msg = self
                             .diag(DiagId::sema_constexpr_redecl_mismatch, d.name_loc())
                             .arg(nk as u8)
@@ -3657,6 +3656,15 @@ impl Sema<'_, '_> {
             if !method && !friend && d.qualifier.is_none() {
                 self.record_extern_c(name, f);
             }
+        }
+        // Where a constexpr or consteval defaulted assignment or comparison
+        // that cannot be one is diagnosed (`check_defaulted_impl`).
+        if (method || friend)
+            && ds.constexpr.or(ds.consteval).is_some()
+            && ds.loc != d.name_loc()
+            && self.std < kiln_lex::Std::Cxx26
+        {
+            self.constexpr_begin_locs.insert(f, ds.loc);
         }
         self.create_params(f, &params, &defaults);
         self.defer_late_noexcept(f, d);
@@ -5669,6 +5677,9 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name(f));
             let msg = self.note_prev(msg, prev, true);
             self.emit(msg);
+            // clang `CheckForFunctionRedefinition` invalidates the
+            // redefinition (a later redeclaration is not checked against it).
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         // The return type as written: diagnostics name its typedef.
@@ -5729,6 +5740,7 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_body(f, body);
         }
         self.check_constexpr_virtual_base(f);
+        self.check_constexpr_body_vars(f, body);
         if self.kind_of(f) == DeclKind::CXXDestructor
             && let Some(class) = self.ast.decls.get(f).ctx()
             && !self.in_template()

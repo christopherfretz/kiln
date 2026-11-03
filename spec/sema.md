@@ -4133,6 +4133,21 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
 - Tests: `tests/conformance/expr.call/variadic-void-argument.cpp`,
   `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`,
   `tests/conformance/expr.const/non-literal-argument.cpp`.
+- Before C++23 a constexpr function's body shall not define a variable of
+  non-literal type ([dcl.constexpr]/3; clang `CheckConstexprDeclStmt`):
+  `check_constexpr_body_vars` (crates/kiln_sema/src/constexpr_body.rs)
+  reports the first one, "variable of non-literal type 'T' cannot be
+  defined in a constexpr {function|constructor} before C++23", with the
+  type's "not literal because" notes, and marks the function invalid.
+  Variables whose own declaration was already diagnosed are checked too;
+  function templates, their specializations and lambda call operators are
+  not checked yet (open). A local whose initialization sema
+  rejected (no viable constructor) is marked invalid, and evaluating its
+  declaration fails with no note (spec/oven.md "Classes").
+  From C++23 clang 22 no longer applies `CheckLiteralType` during
+  evaluation (spec/oven.md); clang 19 does. Tests:
+  `tests/conformance/dcl.constexpr/non-literal-local-cxx{20,23,23-19}.cpp`,
+  `tests/conformance/expr.const/invalid-local-silent.cpp`.
 
 ### 5.21 Template rules from the libstdc++ clusters (WP-323)
 - **Default arguments in dependent template-ids** ([temp.arg.general]/9,
