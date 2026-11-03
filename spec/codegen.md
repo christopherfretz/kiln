@@ -3184,8 +3184,9 @@ No lowering changed; the new forms reach codegen as existing AST.
     constexpr` block-scope tuple-like decomposition's holding references
     got a guarded dynamic initializer, where clang constant-initializes
     them.
-  - An unreferenced namespace-scope `constexpr` decomposition's `e`
-    (`@_ZDC1x1yE`, internal) is not emitted; clang emits it.
+  - (Fixed by WP-467.) An unreferenced namespace-scope `constexpr`
+    decomposition's `e` (`@_ZDC1x1yE`, internal) was not emitted when
+    its holding variables do not refer to it; clang emits it.
 
 ## 7aa. Landed (WP-459): explicit-object conversion functions, AArch64 target features
 - A conversion function with an explicit object parameter
