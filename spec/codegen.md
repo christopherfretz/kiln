@@ -3292,9 +3292,24 @@ categories, compared with clang 22 and clang 19 on both targets).
   defined later in the TU) is declared `void ()` with no attributes, as
   clang does for a type `isFuncTypeConvertible` rejects; the declaration
   stays when the class is completed, calls use their call-site function
-  type, and a definition retypes it. The top-level walk tracks the class
-  definitions it has not reached yet; a pointer or reference to such a
-  class has no `dereferenceable` size. A virtual method's placeholder is
+  type, and a definition retypes it. A class is complete to the
+  top-level walk from the end of the top-level declaration during which
+  it was completed (clang `HandleTopLevelDecl`; a namespace or
+  linkage-specification block is one declaration, so a class defined
+  later in the same block is complete): the parser records the TU's
+  last member and the class-completion epoch at the end of each
+  (`DeclArena::end_top_level_decl`), a TU member takes the epoch of the
+  first end at or after it in the member list (a class specialization
+  first declared by an explicit instantiation is appended there), the
+  explicit instantiation definitions that follow a member take the next
+  member's, the walk compares the class's completion index against that
+  epoch, and after the walk every class is complete. Class template specializations,
+  member classes of them and explicit specializations count by where
+  they are completed, local classes and closure types are complete with
+  their enclosing declaration (WP-492,
+  `tests/codegen/incomplete_class_inst.cpp`,
+  `temp.inst/incomplete-specialization-signature-run.cpp`). A pointer
+  or reference to an incomplete class has no `dereferenceable` size. A virtual method's placeholder is
   `unnamed_addr`, and so is its thunk's
   (`tests/codegen/incomplete_class_sig.cpp`,
   `tests/codegen/incomplete_class_thunk.cpp`). A braced list initializing

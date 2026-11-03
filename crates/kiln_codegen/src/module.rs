@@ -101,10 +101,14 @@ pub(crate) struct Cg<'a> {
     pub gvars: FxHashMap<DeclId, GlobalId>,
     /// Discardable definitions not yet needed: first declaration → definition.
     pub deferred: FxHashMap<DeclId, DeclId>,
-    /// Class definitions the top-level walk has not reached yet: their
-    /// types are incomplete to a reference emitted now (clang emits each
-    /// top-level declaration as it is parsed).
-    pub unreached_classes: FxHashSet<DeclId>,
+    /// Each class definition's index in completion order
+    /// (`DeclArena::completed_records`; instantiations included).
+    pub completion_index: FxHashMap<DeclId, u32>,
+    /// While the top-level walk runs, the class-completion epoch at the
+    /// end of the top-level declaration being emitted: a class completed
+    /// later is incomplete to a reference emitted now (clang emits each
+    /// top-level declaration as it is parsed); `u32::MAX` after the walk.
+    pub walk_epoch: u32,
     /// Definitions to emit (clang `DeferredDeclsToEmit`).
     pub to_emit: Vec<Def>,
     /// First declarations of the end-of-TU instantiations not yet handed
@@ -227,7 +231,8 @@ impl<'a> Cg<'a> {
             optnone_fns: FxHashSet::default(),
             gvars: FxHashMap::default(),
             deferred: FxHashMap::default(),
-            unreached_classes: FxHashSet::default(),
+            completion_index: FxHashMap::default(),
+            walk_epoch: u32::MAX,
             held: ast.templates.end_of_tu_defs().iter().map(|&d| ast.first(d)).collect(),
             to_emit: Vec::new(),
             strings: FxHashMap::default(),
@@ -304,11 +309,13 @@ impl<'a> Cg<'a> {
 
     fn run_tu(&mut self) -> R<()> {
         let tu = self.ast.tu;
-        let mut unreached = FxHashSet::default();
-        self.collect_class_defs(tu, &mut unreached, 0);
-        self.unreached_classes = unreached;
+        let completed = self.ast.decls.completed_records();
+        self.completion_index.reserve(completed.len());
+        for (i, &d) in (0u32..).zip(completed) {
+            self.completion_index.entry(d).or_insert(i);
+        }
         self.emit_members(tu)?;
-        self.unreached_classes.clear();
+        self.walk_epoch = u32::MAX;
         self.emit_late_explicit_insts()?;
         self.emit_key_function_vtables()?;
         self.emit_end_of_tu_instantiations()?;
@@ -320,51 +327,13 @@ impl<'a> Cg<'a> {
         Ok(())
     }
 
-    /// The class definitions among the members of `ctx` (namespaces and
-    /// linkage specifications looked through; nested classes included;
-    /// template instantiations left out).
-    fn collect_class_defs(&self, ctx: DeclId, out: &mut FxHashSet<DeclId>, depth: u32) {
-        let ast = self.ast;
-        if depth > 256 {
-            return;
-        }
-        for d in ast.decls.members(ctx) {
-            match ast.decls.get(d).kind() {
-                DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export => {
-                    self.collect_class_defs(d, out, depth + 1);
-                }
-                // An instantiation is complete where it is instantiated,
-                // which the walk does not track, and a closure type where
-                // its lambda is: they count as complete.
-                DeclKind::CXXRecord
-                    if ast.definition(d) == Some(d)
-                        && ast.instantiated_from(d).is_none()
-                        && ast.spec_info(d).is_none()
-                        && !ast
-                            .decls
-                            .record(d)
-                            .is_some_and(|r| r.defn.contains(DefinitionBits::LAMBDA)) =>
-                {
-                    out.insert(d);
-                    self.collect_class_defs(d, out, depth + 1);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// The top-level walk reached class definition `d`: it and its nested
-    /// classes are complete from here on.
-    fn reach_class(&mut self, d: DeclId) {
-        if self.unreached_classes.is_empty() || !self.unreached_classes.contains(&d) {
-            return;
-        }
-        let mut nested = FxHashSet::default();
-        self.collect_class_defs(d, &mut nested, 0);
-        self.unreached_classes.remove(&d);
-        for n in nested {
-            self.unreached_classes.remove(&n);
-        }
+    /// Class definition `def` is incomplete to code emitted now: the
+    /// top-level walk is emitting a declaration that ended before the
+    /// class was completed (clang `isFuncTypeConvertible` /
+    /// `isCompleteDefinition` at `HandleTopLevelDecl`).
+    pub(crate) fn class_incomplete_now(&self, def: DeclId) -> bool {
+        self.walk_epoch != u32::MAX
+            && self.completion_index.get(&def).is_some_and(|&i| i >= self.walk_epoch)
     }
 
     /// A virtual member function (clang `SetFunctionAttributes` makes it
@@ -388,7 +357,7 @@ impl<'a> Cg<'a> {
         let incomplete = |q: QualType| {
             ast.types.as_record(q).is_some_and(|rd| match ast.definition(rd) {
                 None => true,
-                Some(def) => self.unreached_classes.contains(&def),
+                Some(def) => self.class_incomplete_now(def),
             })
         };
         incomplete(p.ret()) || ast.types.params(p).iter().any(|&q| incomplete(q))
@@ -398,14 +367,47 @@ impl<'a> Cg<'a> {
         let ast = self.ast;
         let members: Vec<DeclId> = ast.decls.members(ctx).collect();
         self.emit_explicit_member_insts(ctx)?;
-        for d in members {
+        let epochs = if ctx == ast.tu { self.member_epochs(&members) } else { Vec::new() };
+        for (i, &d) in members.iter().enumerate() {
             if ast.templates.is_late_explicit_inst(ast.first(d)) {
                 continue;
             }
+            if let Some(&e) = epochs.get(i) {
+                self.walk_epoch = e;
+            }
             self.emit_member(d)?;
+            if !epochs.is_empty() {
+                // The explicit instantiation definitions after `d` are
+                // top-level declarations of their own, which the member
+                // list does not hold: what was complete when the next
+                // member ended is (at most a declaration later than clang).
+                self.walk_epoch = epochs.get(i + 1).copied().unwrap_or(u32::MAX);
+            }
             self.emit_explicit_member_insts(d)?;
         }
         Ok(())
+    }
+
+    /// The class-completion epoch at the end of the top-level declaration
+    /// each member of the translation unit belongs to (the first recorded
+    /// end at or after it, `DeclArena::top_level_ends`; `u32::MAX` past
+    /// the last).
+    fn member_epochs(&self, members: &[DeclId]) -> Vec<u32> {
+        let mut at: FxHashMap<DeclId, u32> = FxHashMap::default();
+        for &(last, e) in self.ast.decls.top_level_ends() {
+            if let Some(l) = last {
+                at.entry(l).or_insert(e);
+            }
+        }
+        let mut out = vec![u32::MAX; members.len()];
+        let mut cur = u32::MAX;
+        for (i, d) in members.iter().enumerate().rev() {
+            if let Some(&e) = at.get(d) {
+                cur = e;
+            }
+            out[i] = cur;
+        }
+        out
     }
 
     /// The member functions and classes explicitly instantiated by a
@@ -478,7 +480,6 @@ impl<'a> Cg<'a> {
                 // and nested classes; inline member functions are emitted
                 // when first used.
                 DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
-                    self.reach_class(d);
                     if !ast.templates.is_moved_class_inst(ast.first(d)) {
                         self.emit_class_members(d)?;
                     }
@@ -1362,8 +1363,9 @@ impl<'a> Cg<'a> {
     /// `getClassPointerAlignment`).
     pub fn this_layout(&mut self, rd: DeclId) -> (Option<u64>, u64) {
         match self.ast.definition(rd) {
-            // A class the top-level walk has not reached is incomplete.
-            Some(def) if !self.unreached_classes.contains(&def) => {
+            // A class completed after the top-level declaration being
+            // emitted is incomplete.
+            Some(def) if !self.class_incomplete_now(def) => {
                 let fin = self.class_is_final(def);
                 let eff = fin || self.dtor_is_final(def);
                 let l = self.tys.layouter().record(def);

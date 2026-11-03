@@ -91,6 +91,7 @@ After a node is created its header and side record are immutable, except:
 | `VarData.init`, `VarData.eval` | init once; eval state machine §9.2 | sema / Oven via bridge |
 | `RecordData` definition data, `members` | while the class is being defined; frozen at `}` (except `define_aggregate`, §10, and the row below) | sema |
 | `DeclArena::completed_records` | append-only: each class definition at its `}` (`complete_definition`; instantiations included), read as the layout dump's order (spec/abi.md §8.4; WP-324) | sema via builder |
+| `DeclArena::top_level_ends` | append-only: (last member of the TU's member list, class-completion epoch) at the end of each top-level declaration of the TU (`end_top_level_decl`, called by the parser); a TU member belongs to the first end at or after it in the list, the classes complete to codegen there (spec/codegen.md §7z; WP-492) | parser |
 | `RecordData.members.last` of a complete class | append-only: implicit special members and inheriting constructors, declared lazily (`append_implicit_member`, spec/sema-class.md §4.1) | sema |
 | `VarData` `nrvo` bit | once, at the variable's scope exit (`set_nrvo`) | sema |
 | `VarSpec` `init_style` `Call` | once, with the `CXXConstructExpr` of a default-initialized class variable (WP-067b; part of `VarSpec::LATE`, ORed in from `C` only) | sema |

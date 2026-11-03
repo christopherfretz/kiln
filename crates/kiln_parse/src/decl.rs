@@ -119,6 +119,8 @@ impl Parser<'_, '_> {
     pub fn parse_translation_unit(&mut self) {
         while !self.at_eof() {
             self.parse_external_declaration();
+            let tu = self.s.ast.tu;
+            self.s.ast.decls.end_top_level_decl(tu);
         }
         self.module_flush();
         // [temp.point]/7: the end of the translation unit is a point of
