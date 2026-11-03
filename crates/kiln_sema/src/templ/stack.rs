@@ -270,9 +270,10 @@ impl InstantiationStack {
     /// although kiln's [`Self::depth`] does not count it).
     pub fn in_instantiation_record(&self) -> bool {
         self.depth() > 0
-            || self.frames.iter().any(|f| {
-                matches!(f.kind, FrameKind::ConstraintsCheck | FrameKind::ConceptCheck)
-            })
+            || self
+                .frames
+                .iter()
+                .any(|f| matches!(f.kind, FrameKind::ConstraintsCheck | FrameKind::ConceptCheck))
     }
 
     /// Whether diagnostics are currently in a SFINAE context (the

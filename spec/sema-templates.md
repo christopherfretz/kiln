@@ -1598,8 +1598,13 @@ specialization's) is invalid, and a base-specifier naming it is dropped
 (class/members.rs), so the derived class does not find its members; a
 using-declaration whose qualifier names an invalid class is not
 diagnosed as "not a base class"; an explicit type conversion `T(a, b)`,
-`T()` or `T{a, b}` (forms.rs, clang `BuildCXXTypeConstructExpr`) builds
-nothing (`temp.inst/failed-static-assert-functional-cast.cpp`, WP-446). A decl-specifier whose qualifier fails
+`T()` or `T{a, b}` (forms.rs, clang `BuildCXXTypeConstructExpr`) whose
+instantiation of `T` happens there and fails builds nothing inside a
+template instantiation (clang's `ExprError`); outside one the invalid
+class is initialized quietly and its members are still looked up, as
+clang's `RecoveryExpr` of type `T` is (`Y<int>().m()` is "no member
+named 'm'") (`temp.inst/failed-static-assert-functional-cast.cpp`,
+WP-446). A decl-specifier whose qualifier fails
 so (`X<A>::type v;`) spans the scanned name and the declaration goes on
 with an invalid type; a base-specifier `X<A>::B` is clang's "expected
 class name" at `B`
@@ -4639,7 +4644,18 @@ arguments dropped (`Sema::name_for_diagnostic`; clang
 explicit specialization written with a typedef (`template<> constexpr
 int g<L *>;` is `'g<long *>'`). `declaration of variable 'au' with
 deduced type 'auto' requires an initializer` names the template, as in
-clang. Test `temp.expl.spec/variable-specialization-names.cpp`. The
+clang. Test `temp.expl.spec/variable-specialization-names.cpp`.
+Dropping a written argument recomputes its parameter's default silently
+(`Sema::suppress_default_args`), and only for a default clang's
+`isSubstitutedType` could match structurally: a non-dependent type, a
+type parameter, a pointer, reference or array of one, a class template
+specialization (canonically, so an alias counts as what it names) of
+such arguments, or a bare non-type parameter. Any other dependent
+default (`typename T::value_type`, `decltype(T::f())`) keeps its
+argument without being substituted, so naming `M<S<int>, int>` never
+instantiates `S<int>` ([temp.inst]/2; libc++'s
+`memory_alignment<simd<bool>, bool>`). Test
+`temp.inst/default-arg-elision-no-instantiation.cpp`. The
 Oven's notes ("initializer of 'w<A>' is not a constant expression",
 "read of non-const variable 'v<int>'") name the specialization the
 same way (`kiln_oven/src/notes.rs`). Test

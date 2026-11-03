@@ -468,7 +468,8 @@ impl Sema<'_, '_> {
         if let Some(t) = this_ty {
             self.nsdmi_this.push((entity, t));
         }
-        let access = self.inst.concepts.partial_access.filter(|&(p, _)| p == entity).map(|(_, c)| c);
+        let access =
+            self.inst.concepts.partial_access.filter(|&(p, _)| p == entity).map(|(_, c)| c);
         let run = |s: &mut Self| {
             let saved = s.access_ctx;
             s.access_ctx = access.or(saved);

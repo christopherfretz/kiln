@@ -272,6 +272,15 @@ impl Sema<'_, '_> {
                 // `= N` or `= Max<L>::value`).
                 break;
             }
+            if !self.default_matchable(def, depth, 0) {
+                // clang's `isSubstitutedType` matches the default against
+                // the argument structurally and never substitutes it, so a
+                // default such as `typename T::value_type` or
+                // `decltype(f<T>())` is never elided — and substituting it
+                // here could instantiate a class (`T::value_type` with a
+                // `T` whose definition fails a `static_assert`).
+                break;
+            }
             if !self.push_inst_frame(FrameKind::DefaultArgChecking, p, tmpl, loc) {
                 break;
             }
@@ -291,6 +300,61 @@ impl Sema<'_, '_> {
             }
         }
         if n == elems.len() { args } else { self.ast.types.arg_list(&elems[..n]) }
+    }
+
+    /// Whether default argument `def` of a template at depth `depth` has
+    /// a shape clang's `isSubstitutedType` / `isSubstitutedTemplateArgument`
+    /// can match: a non-dependent type, a type parameter, a pointer,
+    /// reference or array of such, or a class template specialization
+    /// whose arguments are all matchable (the canonical type, so an alias
+    /// template counts as what it names). Only such a default is
+    /// substituted when eliding it from a printed name; substituting any
+    /// other dependent form could instantiate a class.
+    fn default_matchable(&self, def: TemplateArg, depth: u16, nest: u32) -> bool {
+        const MAX_NEST: u32 = 64;
+        if nest > MAX_NEST {
+            return false;
+        }
+        let t = &self.ast.types;
+        match def.view() {
+            ArgView::Type(q) => {
+                if !t.is_dependent(q) {
+                    return true;
+                }
+                match t.canonical_view(q) {
+                    TypeView::CanonTemplateTypeParm { pack, .. } => !pack,
+                    TypeView::Pointer(e)
+                    | TypeView::LValueRef(e)
+                    | TypeView::RValueRef(e)
+                    | TypeView::IncompleteArray(e) => {
+                        self.default_matchable(TemplateArg::ty(e), depth, nest + 1)
+                    }
+                    TypeView::ConstantArray(a) => {
+                        self.default_matchable(TemplateArg::ty(a.elem), depth, nest + 1)
+                    }
+                    TypeView::QualifiedArray { base, .. } => self.default_matchable(
+                        TemplateArg::ty(QualType::unqual(base)),
+                        depth,
+                        nest + 1,
+                    ),
+                    TypeView::TemplateSpecialization { args, alias: false, .. } => {
+                        t.args(args).iter().all(|&a| self.default_matchable(a, depth, nest + 1))
+                    }
+                    _ => false,
+                }
+            }
+            // A non-dependent expression (`= 2`) or a bare non-type
+            // parameter (`= N`).
+            ArgView::Expr { expr, .. } => {
+                !self.ast.exprs.get(expr).is_value_dependent()
+                    || self.bare_nttp_index(def, depth).is_some()
+            }
+            ArgView::Null | ArgView::Pack(_) => false,
+            ArgView::Value { .. }
+            | ArgView::Template(_)
+            | ArgView::TemplateExpansion { .. }
+            | ArgView::Profile(_) => true,
+        }
     }
 
     /// Whether the non-type default `def` is an expression that is not

@@ -235,14 +235,22 @@ impl Substituter<'_, '_, '_> {
         req: Option<kiln_ast::ExprId>,
         pattern: DeclId,
     ) -> kiln_source::fx::FxHashMap<kiln_ast::ExprId, kiln_ast::ExprId> {
-        let mut cs: Vec<kiln_ast::ExprId> =
-            old.iter().filter_map(|&p| self.sema.ast.template_parm(p).and_then(|i| i.constraint)).collect();
+        let mut cs: Vec<kiln_ast::ExprId> = old
+            .iter()
+            .filter_map(|&p| self.sema.ast.template_parm(p).and_then(|i| i.constraint))
+            .collect();
         cs.extend(req);
         cs.extend(self.sema.ast.templates.trailing_requires.get(pattern).copied());
         let mut m = kiln_source::fx::FxHashMap::default();
         for c in cs {
             if let Ok(e) = self.expr(c)
-                && self.sema.ast.exprs.get(e).deps().intersects(kiln_ast::expr::ExprDeps::TYPE_VALUE_INST)
+                && self
+                    .sema
+                    .ast
+                    .exprs
+                    .get(e)
+                    .deps()
+                    .intersects(kiln_ast::expr::ExprDeps::TYPE_VALUE_INST)
             {
                 m.insert(c, e);
             }

@@ -306,6 +306,18 @@ impl Sema<'_, '_> {
         self.recover_err(&kids, op_loc)
     }
 
+    /// Whether `T(...)`/`T{...}` of class `ty` fails quietly because the
+    /// instantiation of `ty`, triggered here, fails (clang's
+    /// `RequireCompleteType` in `BuildCXXTypeConstructExpr` returns an
+    /// error the first time). Only inside a template instantiation: there
+    /// clang's `ExprError` makes the whole construction vanish (libc++
+    /// `expected::transform_error`); at parse time clang keeps a
+    /// `RecoveryExpr` of type `T`, whose members are still looked up
+    /// (`S<int>().m()` says "no member named 'm'"), which kiln gets by
+    /// initializing the invalid class as usual.
+    fn construction_instantiation_fails(&mut self, ty: QualType, loc: Loc) -> bool {
+        self.inst.stack.in_instantiation_record() && self.instantiation_fails(ty, loc)
+    }
     /// `T()` ([expr.type.conv]/2): a value-initialized prvalue of type
     /// `T` (`void()` is a void prvalue; a class `T` is constructed by
     /// [`Sema::value_init_class_temporary`]).
@@ -318,10 +330,12 @@ impl Sema<'_, '_> {
         if self.ast.types.is_dependent(ty) {
             return self.builder().unresolved_construct(ty, &[], false, loc, rparen);
         }
-        // clang `BuildCXXTypeConstructExpr`'s `RequireCompleteType`: a
-        // class template specialization whose instantiation fails (a
-        // failed `static_assert` in it, [temp.inst]/2) fails quietly.
-        if self.instantiation_fails(ty, loc) {
+        // clang `BuildCXXTypeConstructExpr`'s `RequireCompleteType`: in a
+        // template instantiation, a class template specialization whose
+        // instantiation, here, fails (a failed `static_assert` in it,
+        // [temp.inst]/2) is not initialized, quietly
+        // (`construction_instantiation_fails`).
+        if self.construction_instantiation_fails(ty, loc) {
             return self.recover(QualType::ERROR, &[], loc);
         }
         // [class.abstract]/3 (clang `BuildCXXTypeConstructExpr`).
@@ -367,7 +381,9 @@ impl Sema<'_, '_> {
             return self.builder().unresolved_construct(ty, &[il], true, loc, l.rbrace);
         }
         // As `T()` (`act_on_value_init_cast`).
-        if self.instantiation_fails(ty, loc) || self.require_non_abstract_alloc(loc, ty) {
+        if self.construction_instantiation_fails(ty, loc)
+            || self.require_non_abstract_alloc(loc, ty)
+        {
             let flat = Self::list_exprs(l);
             return self.recover(QualType::ERROR, &flat, loc);
         }
@@ -478,7 +494,9 @@ impl Sema<'_, '_> {
             return self.builder().unresolved_construct(ty, &args, false, loc, rparen);
         }
         // As `T()` (`act_on_value_init_cast`).
-        if self.instantiation_fails(ty, loc) || self.require_non_abstract_alloc(loc, ty) {
+        if self.construction_instantiation_fails(ty, loc)
+            || self.require_non_abstract_alloc(loc, ty)
+        {
             return self.recover_dropping_braced(QualType::ERROR, args, loc);
         }
         // A class: a temporary direct-initialized by a constructor

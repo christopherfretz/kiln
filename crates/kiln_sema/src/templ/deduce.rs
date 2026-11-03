@@ -304,7 +304,8 @@ impl Sema<'_, '_> {
                 }
                 let rest = as_.get(k..).unwrap_or(&[]).to_vec();
                 return self.deduce_pack_elements(rest.len(), d, |s, i, d| {
-                    let pattern = if top { s.forwarding_to_lvalue(pattern, rest[i], d) } else { pattern };
+                    let pattern =
+                        if top { s.forwarding_to_lvalue(pattern, rest[i], d) } else { pattern };
                     s.deduce_ty(pattern, rest[i], TdfFlags::NONE, d, level)
                 });
             }
