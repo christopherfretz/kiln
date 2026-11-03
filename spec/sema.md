@@ -224,6 +224,13 @@ residual` (docs/status/wp-184-oracle-switch.md).
     (clang's `MergeVarDecl` returns at an invalid new declaration), so
     it reports no redefinition and `c` still names the valid `c`.
     `dcl.type/missing-type-specifier-implicit-int.cpp`.
+    A variable redefinition (`redefinition of 'y'`, or `... with a
+    different type`), in the same or a reopened namespace, is invalid
+    too (clang `setInvalidDecl`), and `is_ambiguous_lookup` ignores
+    invalid declarations as `resolveKind` does, so a later use of the
+    name, at the start of a statement or through a using-directive
+    included, finds the first `y` rather than an ambiguous set (WP-405;
+    `basic.def.odr/redefinition-reopened-namespace.cpp`).
     Block scope follows the same rule (`prefer_valid_local`, WP-396). An
     invalid local gives way to the latest valid declaration of its name
     in the same scope. So in `R::X x; R::f(x);`, the unknown type `R::f`
@@ -1402,6 +1409,30 @@ and returns the scope it names:
   - `alignas`/`aligned`, `packed`
   - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`,
     `hot` (`AttrKind::HOT`, WP-172)
+  - `optnone` / `minsize` (GNU syntax or `clang::`; `gnu::` and
+    unscoped standard spellings are unknown) and `naked` (GNU syntax or
+    `gnu::`), WP-405, as clang 19/22. Each takes no arguments (`'X'
+    attribute takes no arguments`). On a non-function, `optnone` and
+    `naked` warn (`only applies to functions and Objective-C methods` /
+    `only applies to functions`) and `minsize` is an error with
+    `optnone`'s text. `check_optnone_conflicts` (after
+    `check_decl_attrs`): with `optnone` on this declaration or a prior
+    one, `always_inline` / `minsize` on this declaration, or (when this
+    declaration brings the first `optnone`) on prior ones, get `'X'
+    attribute ignored` [-Wignored-attributes] with `conflicting attribute
+    is here` at the `optnone`, in source order, and are dropped from this
+    declaration. `check_naked_body` (at the end of a definition, clang
+    `ActOnFinishFunctionBody`): the first body statement that is not an
+    asm statement, a null statement or a declaration of local register
+    variables without initializers is `non-ASM statement in naked
+    function is not supported` with `attribute is here` at `naked`, and
+    the function becomes invalid. An asm operand naming a parameter or
+    `this` (clang `CheckNakedParmReference`, last child first) is
+    `parameter references not allowed in naked functions` / `'this'
+    pointer references not allowed in naked functions` with the same
+    note, and the asm statement is dropped. A naked function gets no
+    fall-off (-Wreturn-type) or noreturn-returns warning. Test:
+    `tests/conformance/dcl.attr/gnu-optnone-minsize-naked.cpp`.
   - `using_if_exists` (`__attribute__((using_if_exists))` or
     `[[clang::using_if_exists]]`; other `clang::` attributes are still
     ignored), on using-declarations (§4.8)
@@ -4067,6 +4098,21 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
 - Tests: `tests/conformance/expr.call/variadic-void-argument.cpp`,
   `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`,
   `tests/conformance/expr.const/non-literal-argument.cpp`.
+- Before C++23 a constexpr function's body shall not define a variable of
+  non-literal type ([dcl.constexpr]/3; clang `CheckConstexprDeclStmt`):
+  `check_constexpr_body_vars` (crates/kiln_sema/src/constexpr_body.rs)
+  reports the first one, "variable of non-literal type 'T' cannot be
+  defined in a constexpr {function|constructor} before C++23", with the
+  type's "not literal because" notes, and marks the function invalid.
+  Variables whose own declaration was already diagnosed are checked too;
+  function templates, their specializations and lambda call operators are
+  not checked yet (open). A local whose initialization sema
+  rejected (no viable constructor) is marked invalid, and evaluating its
+  declaration fails with no note (spec/oven.md "Classes").
+  From C++23 clang 22 no longer applies `CheckLiteralType` during
+  evaluation (spec/oven.md); clang 19 does. Tests:
+  `tests/conformance/dcl.constexpr/non-literal-local-cxx{20,23,23-19}.cpp`,
+  `tests/conformance/expr.const/invalid-local-silent.cpp`.
 
 ### 5.21 Template rules from the libstdc++ clusters (WP-323)
 - **Default arguments in dependent template-ids** ([temp.arg.general]/9,

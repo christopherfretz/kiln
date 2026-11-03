@@ -23,6 +23,7 @@ note_asm_input_duplicate_first = Note (1) "constraint '{0}' is already present h
 note_asm_missing_constraint_modifier = Note (1) "use constraint modifier \"{0}\"";
 note_atomic_constraint_false = Note (2) "{0:and|because} '{1}' evaluated to false";
 note_atomic_constraint_false_elaborated = Note (5) "{0:and|because} '{1}' ({2} {3} {4}) evaluated to false";
+note_attribute = Note (0) "attribute is here";
 note_await_ready_no_bool_conversion = Note (0) "return type of 'await_ready' is required to be contextually convertible to 'bool'";
 note_bitfield_decl = Note (0) "bit-field is declared here";
 note_building_deduction_guide_here = Note (0) "while building implicit deduction guide first needed here";
@@ -72,6 +73,8 @@ note_defaulted_cmp_cannot_deduce_callee = Note (2) "selected 'operator<=>' for {
 note_defaulted_cmp_inaccessible = Note (6) "defaulted '{0}' is implicitly deleted because it would invoke a {1:private|protected} '{2}'{3: member of {4}| to compare base class {5}| member of {4} to compare member {5}}";
 note_defaulted_cmp_no_viable = Note (4) "defaulted '{0}' is implicitly deleted because there is no viable {1:three-way comparison function|'operator=='} for {2:|member |base class }{3}";
 note_defaulted_cmp_no_viable_synth = Note (1) "three-way comparison cannot be synthesized because there is no viable function for {0:'=='|'<'} comparison";
+note_defaulted_cmp_not_constexpr = Note (2) "non-constexpr comparison function would be used to compare {0:|member {1}|base class {1}}";
+note_defaulted_cmp_not_constexpr_here = Note (0) "non-constexpr comparison function declared here";
 note_defaulted_cmp_not_rewritten_callee = Note (1) "defaulted '{0}' is implicitly deleted because this non-rewritten comparison function would be the best match for the comparison";
 note_defaulted_cmp_not_rewritten_conversion = Note (1) "defaulted '{0}' is implicitly deleted because a builtin comparison function using this conversion would be the best match for the comparison";
 note_defaulted_cmp_ref_member = Note (2) "defaulted '{0}' is implicitly deleted because class {1} has a reference member";

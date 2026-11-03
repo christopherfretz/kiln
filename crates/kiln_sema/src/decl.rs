@@ -2433,6 +2433,7 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
+        self.check_optnone_conflicts(decl, &mut attrs);
         self.finish_decl_alignment(decl, &mut attrs);
         self.add_known_function_attrs(decl, &mut attrs);
         self.recognize_builtin_decl(decl, &mut attrs);
@@ -2485,6 +2486,9 @@ impl Sema<'_, '_> {
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
+        }
+        self.check_optnone_conflicts(decl, &mut attrs);
+        if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
         Some(decl)
@@ -3473,13 +3477,12 @@ impl Sema<'_, '_> {
                     if pspec.is_inline() {
                         spec = spec.with_implicit_inline(true);
                     }
-                    // [dcl.constexpr]/1: every declaration of an immediate
-                    // function is `consteval` (clang's mismatch check; kiln
-                    // applies it only when one side is consteval).
+                    // [dcl.constexpr]/1: if any declaration of a function
+                    // is `constexpr` or `consteval`, every declaration is
+                    // (clang `err_constexpr_redecl_mismatch`).
+                    // An invalid previous declaration is not checked.
                     let (ok, nk) = (pspec.constexpr_kind(), spec.constexpr_kind());
-                    if ok != nk
-                        && (ok == ConstexprKind::Consteval || nk == ConstexprKind::Consteval)
-                    {
+                    if ok != nk && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID) {
                         let msg = self
                             .diag(DiagId::sema_constexpr_redecl_mismatch, d.name_loc())
                             .arg(nk as u8)
@@ -3634,6 +3637,15 @@ impl Sema<'_, '_> {
             if !method && !friend && d.qualifier.is_none() {
                 self.record_extern_c(name, f);
             }
+        }
+        // Where a constexpr or consteval defaulted assignment or comparison
+        // that cannot be one is diagnosed (`check_defaulted_impl`).
+        if (method || friend)
+            && ds.constexpr.or(ds.consteval).is_some()
+            && ds.loc != d.name_loc()
+            && self.std < kiln_lex::Std::Cxx26
+        {
+            self.constexpr_begin_locs.insert(f, ds.loc);
         }
         self.create_params(f, &params, &defaults);
         self.defer_late_noexcept(f, d);
@@ -4546,6 +4558,10 @@ impl Sema<'_, '_> {
             return self.act_on_static_member(ds, ty, d, name, spec);
         }
         let mut prev_ok = None;
+        // A redefinition (or a redeclaration with another type) is invalid
+        // (clang `setInvalidDecl`), so a later lookup that also finds the
+        // earlier declaration names that one, not an ambiguous set.
+        let mut redefined = false;
         let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
         let (independent, local) = self.var_prev_local(spec, d, name);
         let mut prev = match local {
@@ -4558,9 +4574,8 @@ impl Sema<'_, '_> {
         // (clang's `MergeVarDecl` returns at an invalid new declaration):
         // `y; y;` reports the missing type twice, no redefinition; so
         // does one whose type named no type (`zz v;`, `R::f(v);`; WP-411).
-        if ambiguous || !ds.has_type_specifier() || ds.type_error {
-            prev = None;
-        }
+        let unmerged = ambiguous || !ds.has_type_specifier() || ds.type_error;
+        prev = prev.filter(|_| !unmerged);
         // [dcl.link]/6-7: a C-linkage variable of another scope.
         let prev = match prev {
             None if d.qualifier.is_none() => self.extern_c_prev(name, true, d.name_loc()),
@@ -4584,6 +4599,7 @@ impl Sema<'_, '_> {
                         let msg = self.diag(DiagId::sema_redefinition, d.name_loc()).arg(&n);
                         let msg = self.note_prev(msg, p, true);
                         self.emit(msg);
+                        redefined = true;
                     } else {
                         prev_ok = Some(p);
                     }
@@ -4592,11 +4608,10 @@ impl Sema<'_, '_> {
                     // the new declaration is a definition (judged before its
                     // initializer is seen), and the note says whether the
                     // old one was.
-                    let new_def = !ext;
-                    let id = if new_def {
-                        DiagId::sema_redefinition_different_type
-                    } else {
+                    let id = if ext {
                         DiagId::sema_redeclaration_different_type
+                    } else {
+                        DiagId::sema_redefinition_different_type
                     };
                     let msg = self
                         .diag(id, d.name_loc())
@@ -4604,6 +4619,7 @@ impl Sema<'_, '_> {
                         .diff_args(self, ty, pty);
                     let msg = self.note_prev(msg, p, self.is_var_definition(p));
                     self.emit(msg);
+                    redefined = true;
                 }
             } else if block && matches!(pn.kind(), DeclKind::Var | DeclKind::ParmVar) {
                 let new_invalid = ds.invalid || d.invalid || self.is_error_type(ty);
@@ -4624,7 +4640,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
-        if ambiguous || no_member || self.storage_invalidates_var(ds, d) {
+        if ambiguous || no_member || redefined || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
@@ -5668,6 +5684,9 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name(f));
             let msg = self.note_prev(msg, prev, true);
             self.emit(msg);
+            // clang `CheckForFunctionRedefinition` invalidates the
+            // redefinition (a later redeclaration is not checked against it).
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         // The return type as written: diagnostics name its typedef.
@@ -5717,6 +5736,7 @@ impl Sema<'_, '_> {
     /// Finishes the definition of `f` with `body`.
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
         self.check_function_try_block(f, body);
+        self.check_naked_body(f, body);
         let body = self.end_function_body(body, rbrace);
         // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`.
         if let Some(fty) = self.ast.decls.get(f).ty() {
@@ -5727,6 +5747,7 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_body(f, body);
         }
         self.check_constexpr_virtual_base(f);
+        self.check_constexpr_body_vars(f, body);
         if self.kind_of(f) == DeclKind::CXXDestructor
             && let Some(class) = self.ast.decls.get(f).ctx()
             && !self.in_template()
@@ -7888,11 +7909,15 @@ impl Sema<'_, '_> {
         }
         // Declarations of one entity, and type names of one type, are
         // not ambiguous ([basic.lookup.general]/1, [dcl.typedef]/3;
-        // clang `resolveKind`'s `UniqueTypes`).
+        // clang `resolveKind`'s `UniqueTypes`). An invalid declaration (a
+        // redefinition) is ignored, as `resolveKind` does.
         let mut types: Vec<QualType> = Vec::new();
         let mut decls: Vec<DeclId> = Vec::new();
         for &x in &found.decls {
             let d = self.ast.strip_shadow(x);
+            if self.ast.decls.get(d).has(DeclFlags::INVALID) {
+                continue;
+            }
             if let Some(c) = self.designated_type(d) {
                 if !types.contains(&c) {
                     types.push(c);
@@ -8313,13 +8338,15 @@ impl Sema<'_, '_> {
                         | "enum_extensibility"
                         | "preferred_name"
                         | "coro_only_destroy_when_complete"
+                        | "optnone"
+                        | "minsize"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
             self.emit(msg);
             return None;
         }
-        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope) else {
+        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax) else {
             let id = if gnu && matches!(n.as_str(), "visibility" | "section" | "format") {
                 DiagId::parse_attribute_ignored
             } else {
@@ -8365,9 +8392,16 @@ impl Sema<'_, '_> {
         // [dcl.attr.assume]/1: exactly one argument (clang's
         // `ActOnCXXAssumeAttr`).
         if args.len() > takes || (kind == AttrKind::ASSUME && args.is_empty()) {
+            // clang 22 names a `[[scope::x]]` attribute with its scope.
+            let name = if syntax == AttrSyntax::Cxx11 && scope.is_some() && self.clang_compat >= 22
+            {
+                shown.clone()
+            } else {
+                n.clone()
+            };
             let msg = self
                 .diag(DiagId::parse_attribute_wrong_arg_count, loc)
-                .arg(n.clone())
+                .arg(name)
                 .arg(if takes == 0 { "0" } else { "1" });
             self.emit(msg);
             return None;
@@ -8910,7 +8944,14 @@ pub(crate) fn norm_attr_scope(s: &str) -> &str {
     }
 }
 
-fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<AttrKind> {
+fn attr_kind_of(
+    n: &str,
+    std: bool,
+    gnu: bool,
+    clang_scope: bool,
+    syntax: AttrSyntax,
+) -> Option<AttrKind> {
+    let gnu_syntax = syntax == AttrSyntax::Gnu;
     Some(match (n, std, gnu) {
         ("nodiscard", true, _) | ("warn_unused_result", _, true) => AttrKind::NODISCARD,
         ("maybe_unused", true, _) => AttrKind::MAYBE_UNUSED,
@@ -8933,6 +8974,11 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("pure", _, true) => AttrKind::PURE,
         ("cold", _, true) => AttrKind::COLD,
         ("hot", _, true) => AttrKind::HOT,
+        ("naked", _, true) => AttrKind::NAKED,
+        // clang `Clang<"optnone">` / `Clang<"minsize">` spellings:
+        // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
+        ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,
+        ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
         ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
         ("preferred_name", _, gnu) if gnu || clang_scope => AttrKind::PREFERRED_NAME,

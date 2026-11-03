@@ -103,11 +103,6 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // `[N x ptr]` instead of `i64` / `[N x i64]` (the same registers).
     ("srcloc_immediate", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("struct_pointers", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    // clang omits the frame pointer above -O0 on x86-64 (`"frame-pointer"`
-    // attribute and module flag); kiln keeps `"all"` (BACKLOG follow-up of
-    // WP-397).
-    ("noinline_matrix_o1", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
-    ("noinline_matrix_o2", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
     // clang 22 drops the comdat of an `internal` template parameter
     // object and of the specializations it is an argument of (`fa<Arr{
     // ...}>`); at `-fclang-compat=22` kiln drops only the object's.
