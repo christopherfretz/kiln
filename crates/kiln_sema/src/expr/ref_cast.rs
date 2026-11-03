@@ -64,7 +64,15 @@ impl Sema<'_, '_> {
                 return x;
             }
         }
-        if binds || reinterprets {
+        // [expr.cast]/4: a C-style or functional cast is a `static_cast`
+        // before it is a `reinterpret_cast`, so `(const int&)c` for a
+        // `char c` binds the reference to a temporary `int` ([expr.static.cast]/4,
+        // `const int& t(c);`) rather than reinterpreting `c` (clang
+        // `TryStaticImplicitCast`).
+        let by_init = matches!(style, CastStyle::CStyle | CastStyle::Functional)
+            && !(binds && same)
+            && self.ref_init_viable(ty, e);
+        if (binds || reinterprets) && !by_init {
             // [expr.reinterpret.cast]/11: a glvalue as the same type (an
             // xvalue as an lvalue) or another type.
             if style.allows_reinterpret() && (keeps_cv || style.allows_const()) {
@@ -109,7 +117,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover(ty, &[e], loc);
         }
-        if style.allows_static() && style != CastStyle::Functional {
+        if style.allows_static() && (style != CastStyle::Functional || by_init) {
             // [expr.static.cast]/4: `T& t(e);` (a prvalue bound to an rvalue
             // or const reference is materialized).
             let x = self.perform_init(ty, Initializer::Paren(vec![e], loc, rparen), loc, false);
@@ -120,6 +128,14 @@ impl Sema<'_, '_> {
             return self.typed_cast(style, CastKind::NoOp, x, r, vk, None, loc, rparen);
         }
         self.bad_cast(style, e, ty, loc)
+    }
+
+    /// Whether `T& t(e);` (direct-initialization of the reference type
+    /// `ty`) has an implicit conversion sequence ([dcl.init.ref]/5,
+    /// [over.match.ref]/1.1: explicit conversion functions count).
+    fn ref_init_viable(&mut self, ty: QualType, e: ExprId) -> bool {
+        let a = self.arg_info(e);
+        !self.try_implicit_conversion(&a, ty, crate::overload::ics::IcsOptions::EXPLICIT_REF_CONV).is_bad()
     }
 
     /// A glvalue `e` of class type `et` as the referent `r` of reference
