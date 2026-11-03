@@ -11,8 +11,8 @@
 // offset (pointer to data member) 7; real 8; complex 9; record 12 (also
 // pointers to member functions: GCC's method class 11 is never used);
 // union 13; vector 19; and no_type_class -1 for std::nullptr_t (GCC's lang
-// class 16 is never used). bit-int 18 is checked in
-// builtin-classify-type-bitint.cpp. spec/sema.md §5.4 (WP-419).
+// class 16 is never used). bit-int 18 (no C++ _BitInt before WP-404) is
+// pinned by kiln_ast's gcc_type_class test. spec/sema.md §5.4 (WP-419).
 //@ expect: compile-ok
 //@ strict-diags
 #define CT(e, n) static_assert(__builtin_classify_type(e) == (n), #e)
