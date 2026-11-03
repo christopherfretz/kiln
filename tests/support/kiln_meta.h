@@ -294,3 +294,73 @@ consteval bool name_is(info r, const char* s) {
   return *n == *s;
 }
 }  // namespace std::meta
+
+// [meta.reflection.define.aggregate] (WP-480; spec/reflection.md §6).
+// `data_member_options` with a non-owning `name_type` (the Oven reads
+// its flag, then the pointer and length of the string it holds; §6.1);
+// `optional` and `initializer_list` are stand-ins without a standard
+// library (libc++'s optional layout).
+#if defined(_LIBCPP_VERSION) || defined(__GLIBCXX__)
+#include <initializer_list>
+#include <optional>
+#else
+namespace std {
+template <class E>
+class initializer_list {
+  const E* __b_;
+  __kiln_size_t __n_;
+  constexpr initializer_list(const E* b, __kiln_size_t n) noexcept : __b_(b), __n_(n) {}
+
+ public:
+  constexpr initializer_list() noexcept : __b_(nullptr), __n_(0) {}
+  constexpr const E* begin() const noexcept { return __b_; }
+  constexpr const E* end() const noexcept { return __b_ + __n_; }
+  constexpr __kiln_size_t size() const noexcept { return __n_; }
+};
+
+template <class T>
+class optional {
+  union {
+    char __null_state_;
+    T __val_;
+  };
+  bool __engaged_ = false;
+
+ public:
+  constexpr optional() noexcept : __null_state_() {}
+  template <class U = T>
+    requires(!__is_same(__remove_cvref(U), optional))
+  constexpr optional(U&& v) : __val_(static_cast<U&&>(v)), __engaged_(true) {}
+  constexpr bool has_value() const noexcept { return __engaged_; }
+  constexpr const T& operator*() const noexcept { return __val_; }
+};
+}  // namespace std
+#endif
+
+namespace std::meta {
+struct data_member_options {
+  struct name_type {
+    bool __u8_ = false;
+    const char8_t* __u8p_ = nullptr;
+    decltype(sizeof 0) __u8n_ = 0;
+    const char* __p_ = nullptr;
+    decltype(sizeof 0) __n_ = 0;
+
+    consteval name_type(const char* s) : __p_(s), __n_(__builtin_strlen(s)) {}
+    consteval name_type(const char8_t* s) : __u8_(true), __u8p_(s) {
+      while (s[__u8n_]) ++__u8n_;
+    }
+    consteval name_type(std::string_view s) : __p_(s.data()), __n_(s.size()) {}
+    consteval name_type(std::u8string_view s) : __u8_(true), __u8p_(s.data()), __u8n_(s.size()) {}
+  };
+  std::optional<name_type> name;
+  std::optional<int> alignment;
+  std::optional<int> bit_width;
+  bool no_unique_address = false;
+};
+
+consteval info data_member_spec(info type, data_member_options options);
+consteval bool is_data_member_spec(info r);
+template <class R = std::initializer_list<info>>
+consteval info define_aggregate(info class_type, R&& mdescrs);
+}  // namespace std::meta
