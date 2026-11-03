@@ -2818,6 +2818,69 @@ guarantees it a constant initializer and a trivial destructor
 - At `ir_version` 20+, `kiln_llvm` prints uniform vector constants as
   `splat (T v)` (spec/llvm.md §5).
 
+## 7r. Landed (WP-448): erroneous values (`auto_init.rs`)
+
+C++26 [basic.indet] (P2795R5): an automatic variable without an
+initializer has an *erroneous value*, an implementation-defined value
+that reading yields (erroneous behaviour, no longer undefined), unless
+it is declared `[[indeterminate]]` ([dcl.attr.indet]).
+
+- **kiln's erroneous value is all-zero bytes**, padding included. It is
+  the cheapest value to write (one `store <ty> 0` or one `llvm.memset`
+  with a zero byte, which the backend folds into the stack setup) and
+  the value GCC writes under `-ftrivial-auto-var-init=zero`; zero is
+  also a valid value of every scalar (a null pointer, `false`, `+0.0`).
+- **Where.** `emit_one_var_decl`, after the `alloca` and only when the
+  declaration has no initializer (`Cg::auto_var_init`): at the
+  declaration, so a loop body refills its variable on each iteration. A
+  scalar (integer, pointer, floating point, or a vector of them) gets
+  `store <ty> 0` (`volatile` for a volatile object); anything else
+  (arrays, classes, complex) `call void @llvm.memset.p0.i64(ptr align A
+  %v, i8 0, i64 N, i1 <volatile>)`. Both carry `!annotation
+  !{!"auto-init"}`: the IR of clang's `-ftrivial-auto-var-init=zero`,
+  which `tests/codegen/erroneous_init.cpp` compares exactly.
+- **Not filled:** a `[[indeterminate]]` variable (the attribute on any
+  of its declarations) keeps its plain `alloca`; a reference; an
+  object of size 0; a variable with an initializer, including the
+  implicit call of a non-trivial default constructor (the constructor
+  initializes it; clang's `=zero` pre-fills such a class, kiln does not,
+  so a scalar member the constructor leaves alone is not zeroed:
+  follow-up); a variable length array (clang zero-fills it); a variable
+  whose declaration a jump bypasses ([stmt.dcl]/2 makes that ill-formed
+  for a variable with initialization, but a plain `int x;` may be
+  bypassed and is then unwritten, as in clang).
+- **Size limit: 4096 bytes** (`AUTO_VAR_INIT_MAX_SIZE`, the driver's
+  default for `-ftrivial-auto-var-init-max-size`). A larger variable is
+  not written (its value is still erroneous) and gets the kiln-only
+  remark `erroneous value of variable 'b' not written: its size (4100
+  bytes) exceeds -ftrivial-auto-var-init-max-size=4096
+  [-Rauto-var-init]` (`cg_auto_var_init_too_large`, group
+  `auto-var-init`), at the variable. A size equal to the limit is
+  written; a limit of 0 means none, as for clang (whose default is 0).
+  The limit keeps large stack buffers (`char buf[65536];`, filled later
+  anyway) from paying a memset at every entry.
+- **Standards.** The fill is on by default under `-std=c++26` and later
+  only; before C++26 the read is undefined and nothing changes. The
+  driver flags (spec/driver.md): `-ftrivial-auto-var-init=zero` turns it
+  on under any standard (clang's meaning), `=uninitialized` off; `=pattern`
+  is rejected as an unsupported argument. `CodegenOptions::auto_var_init`
+  (`AutoVarInit::{Uninitialized, Zero}`, default `Uninitialized` for API
+  users) and `auto_var_init_max_size`. The clang oracles have no
+  erroneous values, so the IR-diff corpus (`ir_vs_clang.rs`
+  `pinned_flags`) and the conformance `expect: ir` tests at C++26 pin
+  `-ftrivial-auto-var-init=uninitialized`.
+- **Constant evaluation** is unchanged: an erroneous or indeterminate
+  value is never read in a constant expression (spec/oven.md
+  "Uninitialized reads").
+- Tests: `tests/codegen/erroneous_init.cpp`,
+  `crates/kiln_driver/tests/erroneous_init.rs`,
+  `tests/conformance/basic.indet/` (`run-erroneous-zero.cpp`,
+  `run-byte-read.cpp`, `run-threshold.cpp`, `indeterminate-compiles.cpp`,
+  `ir-cxx23-unchanged.cpp`).
+- **Remaining:** `=pattern`; pre-filling classes with a non-trivial
+  default constructor; VLAs; the run-time EB diagnosis P2795 recommends
+  is today's `-Wuninitialized` (no sanitizer).
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
