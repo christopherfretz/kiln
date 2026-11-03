@@ -223,7 +223,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     /// The token index past the name after `typename` at `self.i`: a
     /// splice `[: r :]` (-freflection) or a (qualified) name.
     fn typename_end(&self) -> Option<usize> {
-        self.p.splice_end(self.i + 1).or_else(|| self.p.scan_name(self.i + 1).map(|n| n.0))
+        self.p.splice_spec_end(self.i + 1).or_else(|| self.p.scan_name(self.i + 1).map(|n| n.0))
     }
 
     #[allow(clippy::too_many_lines, reason = "one arm per decl-specifier keyword")]
@@ -537,7 +537,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 }
             }
             Some(Kw::Typename) if self.p.splice_end(self.i + 1).is_some() => {
-                self.i = self.p.splice_end(self.i + 1).unwrap_or(self.i + 1);
+                self.i = self.p.splice_spec_end(self.i + 1).unwrap_or(self.i + 1);
             }
             Some(Kw::Typename | Kw::Struct | Kw::Class | Kw::Union | Kw::Enum) => {
                 self.i += 1;

@@ -72,7 +72,8 @@ impl RowKind {
             | FrameKind::PriorArgSubstitution
             | FrameKind::BuildingDeductionGuides
             | FrameKind::PartialOrderingTtp
-            | FrameKind::LambdaSubstitution => RowKind::Default,
+            | FrameKind::LambdaSubstitution
+            | FrameKind::MetaSubstitution => RowKind::Default,
         }
     }
 }
@@ -122,6 +123,13 @@ pub struct InstReport {
     child_bytes: Vec<(u64, u64)>,
     /// Total instantiations.
     pub count: u64,
+    /// The undo journal of the open trials (WP-482): each charge made
+    /// while a trial is open records the row's previous state (`None`
+    /// for a row it created) and the counted flag, so a failed
+    /// `std::meta::substitute` trial leaves no instantiation record.
+    journal: Vec<(u32, Option<InstRow>, bool)>,
+    /// Where each open trial's entries start in `journal`.
+    trials: Vec<usize>,
 }
 
 impl InstReport {
@@ -153,8 +161,8 @@ impl InstReport {
         }
         let counted = kind != FrameKind::VarTemplateInit;
         let kind = RowKind::of(kind);
-        let i = if let Some(&i) = self.index.get(&(template, kind)) {
-            i as usize
+        let (i, created) = if let Some(&i) = self.index.get(&(template, kind)) {
+            (i as usize, false)
         } else {
             let i = self.rows.len();
             self.rows.push(InstRow {
@@ -167,8 +175,12 @@ impl InstReport {
                 incl_ns: 0,
             });
             let _ = self.index.insert((template, kind), i as u32);
-            i
+            (i, true)
         };
+        if !self.trials.is_empty() {
+            let prev = (!created).then_some(self.rows[i]);
+            self.journal.push((i as u32, prev, counted));
+        }
         let r = &mut self.rows[i];
         r.count = r.count.saturating_add(u32::from(counted));
         r.nodes = r.nodes.saturating_add(nodes.saturating_sub(cn));
@@ -176,6 +188,40 @@ impl InstReport {
         r.incl_ns = r.incl_ns.saturating_add(incl_ns);
         r.self_ns = r.self_ns.saturating_add(incl_ns.saturating_sub(child_ns));
         self.count += u64::from(counted);
+    }
+
+    /// Opens a trial: the charges until the matching
+    /// [`InstReport::end_trial`] can be undone.
+    pub(crate) fn begin_trial(&mut self) {
+        self.trials.push(self.journal.len());
+    }
+
+    /// Closes the innermost trial. `keep` leaves its charges (an
+    /// enclosing trial can still undo them); otherwise they are undone,
+    /// newest first, and the rows they created are removed.
+    pub(crate) fn end_trial(&mut self, keep: bool) {
+        let Some(start) = self.trials.pop() else { return };
+        if keep {
+            if self.trials.is_empty() {
+                self.journal.clear();
+            }
+            return;
+        }
+        while self.journal.len() > start {
+            let Some((i, prev, counted)) = self.journal.pop() else { break };
+            let i = i as usize;
+            self.count = self.count.saturating_sub(u64::from(counted));
+            if let Some(row) = prev {
+                self.rows[i] = row;
+            } else {
+                // Created by this charge: undoing newest first, it is
+                // the last row.
+                debug_assert_eq!(i + 1, self.rows.len());
+                if let Some(row) = self.rows.pop() {
+                    let _ = self.index.remove(&(row.template, row.kind));
+                }
+            }
+        }
     }
 
     /// The rows, by bytes descending (ties: count, then first seen).
@@ -356,6 +402,34 @@ mod tests {
         assert_eq!(rows[0].self_ns, 30);
         assert_eq!(rows[1].bytes, 100);
         assert_eq!(r.count, 2);
+    }
+
+    #[test]
+    fn failed_trial_leaves_no_rows() {
+        let mut r = InstReport::default();
+        let a = DeclId::new(1);
+        let b = DeclId::new(2);
+        r.open();
+        r.charge(FrameKind::AliasTemplate, a, 1, 8, 0, 0);
+        r.begin_trial();
+        r.open();
+        r.charge(FrameKind::AliasTemplate, a, 2, 16, 0, 0);
+        r.begin_trial(); // nested, kept: the outer trial still owns it
+        r.open();
+        r.charge(FrameKind::ClassInstantiation, b, 3, 32, 0, 0);
+        r.end_trial(true);
+        r.end_trial(false);
+        let rows = r.rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].template, rows[0].count, rows[0].bytes), (a, 1, 8));
+        assert_eq!(r.count, 1);
+        r.begin_trial();
+        r.open();
+        r.charge(FrameKind::ClassInstantiation, b, 3, 32, 0, 0);
+        r.end_trial(true);
+        assert_eq!(r.rows().len(), 2);
+        assert_eq!(r.count, 2);
+        assert_eq!(r.journal, []);
     }
 
     #[test]

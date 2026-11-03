@@ -42,6 +42,8 @@ sema_splice_not_member = Error (1) "splice in a member access position does not 
 sema_splice_not_namespace = Error (0) "splice in a namespace position does not designate a namespace";
 // [basic.lookup.qual.general]/1 (WP-474)
 sema_splice_not_scope = Error (0) "splice in a scope position does not designate a class, namespace or enumeration";
+// [temp.names]/1 with a splice-specialization-specifier (WP-482)
+sema_splice_not_template = Error (0) "splice before a template argument list does not designate a template";
 sema_splice_not_type = Error (0) "splice in a type position does not designate a type";
 // [expr.prim.splice]/2 (WP-474)
 sema_splice_special_member = Error (1) "a splice-expression cannot designate a {0:constructor|destructor}";

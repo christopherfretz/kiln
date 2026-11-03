@@ -162,12 +162,29 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The token index past the splice-specialization-specifier
+    /// `[: r :] < args >` at token `i` (past `[: r :]` when no `<`
+    /// follows): lookahead for a type position.
+    pub(crate) fn splice_spec_end(&self, i: usize) -> Option<usize> {
+        let after = self.splice_end(i)?;
+        if Self::punct_of(self.tok_at(after)) != Some(Punct::Less) {
+            return Some(after);
+        }
+        self.skip_template_args(after).map(|(end, _)| end + 1)
+    }
+
     /// `[: constant-expression :]` in a type position
     /// ([basic.splice], [dcl.type.splice]): the type the operand
-    /// reflects, at `[:`.
+    /// reflects, at `[:`. A `<` after it opens a template argument
+    /// list (a type-only context or after `typename`, P2996
+    /// [temp.names]/3): the specialization named.
     pub(crate) fn parse_splice_type(&mut self) -> Option<QualType> {
         let open = self.loc();
         let (e, close) = self.parse_splice_specifier()?;
+        if self.at(Punct::Less) {
+            let (args, _, r) = self.parse_template_arg_list()?;
+            return self.s.act_on_splice_template_type(e, &args, open, r);
+        }
         self.s.act_on_splice_type(e, open, close)
     }
 
@@ -186,11 +203,40 @@ impl Parser<'_, '_> {
         self.parse_splice_specifier().map(|(e, _)| e)
     }
 
-    /// The splice-expression `[: r :]` at `[:` ([expr.prim.splice]).
+    /// The splice-expression `[: r :]` at `[:` ([expr.prim.splice]); a
+    /// `<` after a frozen operand that designates a template opens its
+    /// argument list ([`kiln_sema::Sema::splice_names_template`]).
     pub(crate) fn parse_splice_expr(&mut self) -> Option<ExprId> {
         let open = self.loc();
         let (e, close) = self.parse_splice_specifier()?;
+        if self.at(Punct::Less) && self.s.splice_names_template(e) {
+            return self.parse_splice_template_args(e, open);
+        }
         Some(self.s.act_on_splice_expr(e, open, close))
+    }
+
+    /// The splice-expression `template [: r :]` or
+    /// `template [: r :] < args >` at `template` ([expr.prim.splice]/3,
+    /// P2996): a function template's overload set, or the
+    /// specialization of a variable template, concept or function
+    /// template the template-id names.
+    pub(crate) fn parse_template_splice_expr(&mut self) -> Option<ExprId> {
+        self.bump();
+        let open = self.loc();
+        let (e, close) = self.parse_splice_specifier()?;
+        if self.at(Punct::Less) {
+            return self.parse_splice_template_args(e, open);
+        }
+        Some(self.s.act_on_splice_expr(e, open, close))
+    }
+
+    /// The `< args >` of the splice template-id whose splice operand is
+    /// `e` (`open` its `[:`): an overload set not called resolves to its
+    /// single specialization ([over.over]).
+    fn parse_splice_template_args(&mut self, e: ExprId, open: Loc) -> Option<ExprId> {
+        let (args, _, r) = self.parse_template_arg_list()?;
+        let x = self.s.act_on_splice_template_expr(e, &args, open, r);
+        Some(if self.at(Punct::LParen) { x } else { self.s.resolve_single_template_id(x) })
     }
 }
 
