@@ -2913,7 +2913,7 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
 - Test: `tests/codegen/bool_vector_const.cpp` (exact on both triples
   under oracle 19, structural under 22).
 
-## 7t. Landed (WP-456): `PseudoObjectExpr`
+## 7v. Landed (WP-456): `PseudoObjectExpr`
 
 The synthesized three-way comparison of a defaulted `operator<=>`
 ([class.spaceship]/1; spec/sema-class.md §4.12) is a `PseudoObjectExpr`
