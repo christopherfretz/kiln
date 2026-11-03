@@ -39,6 +39,7 @@ always present).
 | `BaseSpec(DeclId, u32)` | the `i`-th direct base-specifier of a class | first declaration of the class, index | `base` |
 | `DataMemberSpec(DmsId)` | a data member description (reserved: M6-08) | id | `data-member-spec` |
 | `Annotation(AnnId)` | an annotation (reserved) | id | `annotation` |
+| `FnParam(DeclId, u32)` | the `i`-th parameter of a function (P3096 `parameters_of`, → WP-478) | first declaration of the function, index | `parameter` |
 
 Declaration-keyed variants (`Decl`, `Namespace`, `NamespaceAlias`) are
 found through a dense `DeclId index -> ReflectionId` vector (4 B per
@@ -146,10 +147,11 @@ kind names its own specialization and equal reflections share one
 
 Mangling: until the Itanium ABI defines reflection mangling, kiln emits a
 vendor-extended literal `L u6__info <id> E`, where `<id>` is the
-reflection id's index within the translation unit (`_Z1kILu6__info3EEiv`).
-That keeps distinct reflections distinct within a TU. It is not stable
-across TUs; a specialization keyed by a reflection should have internal
-linkage until the real mangling lands.
+reflection id's index within the translation unit (`_Z1kILu6__info3EEiv`;
+spec/reflection.md §8.3 has the grammar). That keeps distinct reflections
+distinct within a TU. It is not stable across TUs, so a specialization
+keyed by a reflection has internal linkage (WP-485) until the real
+mangling lands (→ WP-102).
 
 ## 5. Printing
 
@@ -166,6 +168,7 @@ template-argument printing use the same `<form>` (`dump/names.rs`):
 | `Decl`, `Namespace`, `NamespaceAlias`, `Template` | `^^` + the qualified name (`^^ns::f`, `^^S::m`) |
 | `Value` / `Object` | `^^(value of type T)` / `^^(object of type T)` |
 | `BaseSpec` | `^^(base #i of C)` |
+| `FnParam` | `^^(parameter #i of f)` |
 | `DataMemberSpec` / `Annotation` | `^^(data member spec #n)` / `^^(annotation #n)` |
 
 The form is stable: tests may match it. Golden:
@@ -196,7 +199,8 @@ or non-static data member (cached per complete class). Sema enforces:
   initializer folds) (`sema_consteval_only_expr`, once per
   full-expression). In an immediate-escalating function the expression
   instead escalates the function to immediate ([expr.const]/18), exactly
-  like an immediate invocation. When the variable being initialized is
+  like an immediate invocation (`escalate_consteval_only`; the reason
+  note is specified in `spec/consteval-blocks.md` §4). When the variable being initialized is
   itself of consteval-only type, the variable rule reports it, not the
   expression rule.
 

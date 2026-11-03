@@ -24,6 +24,7 @@ mod builtins;
 pub mod class;
 mod complex;
 mod consteval;
+mod consteval_block;
 mod consteval_only;
 mod constexpr_body;
 pub mod constfold;
@@ -86,6 +87,7 @@ mod rtti;
 pub mod scope;
 mod self_ref;
 mod side_effects;
+mod splice;
 pub mod stack_guard;
 mod static_tls;
 pub mod stmt;
@@ -499,6 +501,15 @@ pub struct Sema<'a, 'sm> {
     /// directly, in declaration order: an element access names its
     /// result through the first that matches (clang `ExtVectorDecls`).
     pub(crate) ext_vector_typedefs: Vec<DeclId>,
+    /// Splices whose operand was read as a frozen constant without an
+    /// Oven evaluation (spec/reflection.md §5, the splice fast path).
+    pub(crate) splice_fast: u64,
+    /// The `std::meta::substitute` memo (spec/reflection.md §3.3).
+    pub(crate) meta_subst: meta::SubstMemo,
+    /// The placeholder [`Sema::lend_oven`] leaves in a bridge callback's
+    /// Oven slot while the running Oven is lent, kept for the next loan
+    /// (a loan allocates no Oven of its own).
+    pub(crate) spare_oven: Option<Oven>,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -818,6 +829,9 @@ pub struct Sema<'a, 'sm> {
     pub(crate) abstract_noted: kiln_source::fx::FxHashSet<DeclId>,
     /// State of the source-location builtins (`builtins.rs`).
     pub(crate) srcloc: builtins::SrcLocCache,
+    /// The frozen strings and source locations of the `std::meta` names
+    /// family, per reflection (`meta/names.rs`).
+    pub(crate) meta_names: meta::names::NameCache,
     /// The lambdas whose bodies are being analysed, innermost last
     /// (spec/sema-lambda.md; WP-075).
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
@@ -958,6 +972,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             reverse_using_shadows: false,
             va_list_type: None,
             ext_vector_typedefs: Vec::new(),
+            splice_fast: 0,
+            meta_subst: meta::SubstMemo::default(),
+            spare_oven: None,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),
@@ -1041,6 +1058,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inst: templ::InstState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
             srcloc: builtins::SrcLocCache::default(),
+            meta_names: meta::names::NameCache::default(),
             lambdas: Vec::new(),
             lambda_mangle: lambda::ManglingState::default(),
             size_t_sugar: size_t,

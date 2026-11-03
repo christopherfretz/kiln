@@ -22,7 +22,9 @@ super::meta_family! {
         DisplayStringOf = ("display_string_of", "i", Stable, 475);
         U8DisplayStringOf = ("u8display_string_of", "i", Stable, 475);
         SourceLocationOf = ("source_location_of", "i", Stable, 475);
-        VariableOf = ("variable_of", "i", Stable, 476);
+        /// Valid only inside the definition of the parameter's function: the
+        /// answer depends on where evaluation is.
+        VariableOf = ("variable_of", "i", PointDependent, 476);
         ReturnTypeOf = ("return_type_of", "i", Stable, 476);
         IsFunctionParameter = ("is_function_parameter", "i", Stable, 476);
         IsExplicitObjectParameter = ("is_explicit_object_parameter", "i", Stable, 476);
@@ -101,5 +103,16 @@ super::meta_family! {
         IsBase = ("is_base", "i", Stable, 476);
         HasDefaultMemberInitializer = ("has_default_member_initializer", "i", Stable, 476);
         HasParent = ("has_parent", "i", Stable, 476);
+        /// `std::meta::__kiln_reflection_range(r)`: a `vector<info>` of
+        /// the `reflection_range` `r` (the range-argument and vector-result
+        /// recipes under test; spec/reflection.md §3.5).
+        KilnReflectionRange = ("__kiln_reflection_range", "x", Stable, 475);
+        /// `std::meta::__kiln_member_offset(bytes, bits)`: a
+        /// `member_offset` (the pair recipe under test, until WP-478's
+        /// `offset_of`).
+        KilnMemberOffset = ("__kiln_member_offset", "xx", Stable, 475);
+        /// `std::meta::__kiln_access_context(scope, designating)`: an
+        /// `access_context` (the pair recipe with `info` members).
+        KilnAccessContext = ("__kiln_access_context", "ii", Stable, 475);
     }
 }

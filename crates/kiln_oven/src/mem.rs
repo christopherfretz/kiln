@@ -1558,8 +1558,8 @@ pub(crate) enum TrialMode {
     /// fails with [`MemFault::Speculative`]. Heap objects that existed at
     /// the checkpoint may be modified (and are restored by a rollback).
     Speculative,
-    /// Every effect is allowed and undone by a rollback.
-    #[cfg_attr(not(test), expect(dead_code, reason = "no evaluator trial needs it yet"))]
+    /// Every effect is allowed and undone by a rollback
+    /// (`std::meta::substitute` and `can_substitute`, WP-482).
     Transactional,
 }
 
