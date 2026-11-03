@@ -193,7 +193,7 @@ fn wide_bin(
             let mb = if nb { bi::neg(&ext(b, n + 1)) } else { ext(b, n + 1) };
             let (q, r) = bi::divrem_u(&ma, &mb);
             // MIN / -1 (and MIN % -1, as clang): the quotient overflows.
-            let q = if na != nb { bi::neg(&q) } else { q };
+            let q = if na == nb { q } else { bi::neg(&q) };
             if signed && !bi::fits(&q, width, true) {
                 return Err((IntErr::Overflow, bi::to_decimal(&q, true)));
             }

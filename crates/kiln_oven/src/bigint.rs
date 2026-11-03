@@ -10,6 +10,7 @@
 //! in a wider buffer and test them against the width.
 
 use std::cmp::Ordering;
+use std::fmt::Write as _;
 
 /// Sign- or zero-extends `w` from bit `width` in place.
 pub(crate) fn canon(w: &mut [u64], width: u32, signed: bool) {
@@ -225,7 +226,7 @@ pub(crate) fn to_decimal(w: &[u64], signed: bool) -> String {
         s.push_str(&first.to_string());
     }
     for p in it {
-        s.push_str(&format!("{p:019}"));
+        let _ = write!(s, "{p:019}");
     }
     s
 }
