@@ -36,9 +36,8 @@ impl Cg<'_> {
         let Some(fty) = ast.decls.get(callee).ty() else { return };
         // The function type as declared (`proto` is canonical): clang
         // prints the declared parameter and return types.
-        let p = match ast.types.view(ast.types.desugar_top(fty).ty()) {
-            TypeView::Function(p) => p,
-            _ => return,
+        let TypeView::Function(p) = ast.types.view(ast.types.desugar_top(fty).ty()) else {
+            return;
         };
         let params = ast.types.params(&p).to_vec();
         let skip = usize::from(this_arg);
