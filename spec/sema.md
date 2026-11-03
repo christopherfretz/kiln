@@ -4991,7 +4991,11 @@ Each rule names the libc++ test it fixed and its corpus test.
   self-comparison. Operands decayed explicitly (`+a`), an array against
   a pointer, and comparisons in a template instantiation (clang checks
   the definition only; a dependent array type is not diagnosed) are not
-  affected. Tests: `expr.eq/p2865-array-comparison*.cpp`.
+  affected. Constraint satisfaction is an instantiation here (clang's
+  `inTemplateInstantiation` counts `ConstraintsCheck`;
+  `InstStack::in_instantiation_record`), so `requires(T& t) { t == t; }`
+  holds for `int[5]` (WP-446, libc++'s `equality_comparable<int[5]>`).
+  Tests: `expr.eq/p2865-array-comparison*.cpp`.
 - P0847 lambdas and P2036: spec/sema-lambda.md §2, §3.1, §4.4. P2360
   and P3176: spec/parse.md. P0963: §4.9. P2741: §4.6.
 

@@ -3545,9 +3545,11 @@ impl Sema<'_, '_> {
     /// diagnosed, clang's `warn_comparison_always` when both operands name
     /// variables: distinct ones never compare equal, one is a
     /// self-comparison. Not in a template instantiation (clang checks the
-    /// definition only).
+    /// definition only), constraint satisfaction included: clang's
+    /// `inTemplateInstantiation` counts a `ConstraintsCheck` frame, so
+    /// libc++'s `equality_comparable<int[5]>` holds (WP-446).
     fn diagnose_array_comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) {
-        if self.inst.stack.depth() > 0 {
+        if self.inst.stack.in_instantiation_record() {
             return;
         }
         let (ls, rs) = (self.ignore_paren_imp_casts(l), self.ignore_paren_imp_casts(r));
