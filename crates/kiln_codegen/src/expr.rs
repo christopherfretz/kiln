@@ -342,6 +342,12 @@ impl Cg<'_> {
             ExprKind::CXXRewrittenBinaryOperator => {
                 return self.emit_scalar_opt(ast.exprs.rewritten_semantic(e));
             }
+            ExprKind::PseudoObjectExpr => {
+                let r = self.bind_pseudo(e)?;
+                let v = self.emit_arm(r);
+                self.unbind_pseudo(e);
+                return v;
+            }
             ExprKind::CXXNewExpr => self.emit_cxx_new(e)?,
             ExprKind::CXXDeleteExpr => {
                 self.emit_cxx_delete(e)?;
@@ -1541,6 +1547,45 @@ impl Cg<'_> {
         Ok(ops)
     }
 
+    /// clang `emitPseudoObjectExpr`: evaluates the semantic expressions
+    /// of `PseudoObjectExpr` `e` before its result in order, binding each
+    /// `OpaqueValueExpr`'s source once for its uses and ignoring the
+    /// rest; returns the result. [`Self::unbind_pseudo`] drops the
+    /// bindings.
+    pub(crate) fn bind_pseudo(&mut self, e: ExprId) -> R<ExprId> {
+        let ast = self.ast;
+        let result = ast.exprs.pseudo_result(e, &ast.lists);
+        for s in ast.exprs.pseudo_semantics(e, &ast.lists) {
+            if s == result {
+                break;
+            }
+            match ast.exprs.opaque_source(s) {
+                Some(src) if ast.exprs.get(s).kind() == ExprKind::OpaqueValueExpr => {
+                    let v = if self.is_glvalue(src) {
+                        Opaque::Lv(self.emit_lvalue(src)?)
+                    } else {
+                        Opaque::Rv(self.emit_scalar_opt(src)?)
+                    };
+                    self.f.opaque.insert(src, v);
+                }
+                _ => self.emit_ignored(s)?,
+            }
+        }
+        Ok(result)
+    }
+
+    /// Drops the bindings [`Self::bind_pseudo`] made for `e`.
+    pub(crate) fn unbind_pseudo(&mut self, e: ExprId) {
+        let ast = self.ast;
+        for s in ast.exprs.pseudo_semantics(e, &ast.lists) {
+            if ast.exprs.get(s).kind() == ExprKind::OpaqueValueExpr
+                && let Some(src) = ast.exprs.opaque_source(s)
+            {
+                self.f.opaque.remove(&src);
+            }
+        }
+    }
+
     pub(crate) fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
         // A handler's copy-initialization source has no source
         // expression: it is bound by itself.
@@ -2031,6 +2076,12 @@ impl Cg<'_> {
             },
             ExprKind::CXXRewrittenBinaryOperator => {
                 self.emit_lvalue(ast.exprs.rewritten_semantic(e))
+            }
+            ExprKind::PseudoObjectExpr => {
+                let r = self.bind_pseudo(e)?;
+                let lv = self.emit_lvalue(r);
+                self.unbind_pseudo(e);
+                lv
             }
             ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr if self.is_glvalue(e) => {
                 // A call returning a reference.
@@ -3512,6 +3563,12 @@ impl Cg<'_> {
             // semantic form (`(y <=> x)` reversed, or `0 <=> (y <=> x)`).
             ExprKind::CXXRewrittenBinaryOperator => {
                 self.agg_visit(ast.exprs.rewritten_semantic(e), dest, zeroed)
+            }
+            ExprKind::PseudoObjectExpr => {
+                let r = self.bind_pseudo(e)?;
+                let v = self.emit_agg(r, dest, zeroed);
+                self.unbind_pseudo(e);
+                v
             }
             // clang `VisitCompoundLiteralExpr`: `EmitAggExpr` of the
             // initializer into the slot (C++: not destroyed here).

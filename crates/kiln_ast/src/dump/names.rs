@@ -945,6 +945,9 @@ impl<'a> AstNames<'a> {
             ExprKind::CXXRewrittenBinaryOperator => {
                 self.expr(exprs.rewritten_semantic(e), depth, out);
             }
+            ExprKind::PseudoObjectExpr => {
+                self.expr(exprs.pseudo_syntactic(e, &ast.lists), depth, out);
+            }
             // clang's `VisitCXXOperatorCallExpr`.
             ExprKind::CXXOperatorCallExpr => {
                 use crate::names::OverloadedOperator as O;

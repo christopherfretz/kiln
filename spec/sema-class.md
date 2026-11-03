@@ -1328,10 +1328,55 @@ a port of the clang 19 function it names.
   (goldens under `tests/conformance/ast/class.{eq,spaceship,
   compare.secondary,compare.default}/`). The implicit exception
   specification comes from the body.
+- **Synthesized three-way comparison** (`three_way.rs`, clang
+  `BuildSynthesizedThreeWayComparison`; WP-456). In a defaulted `<=>`
+  whose declared return type `R` is a comparison category, a subobject
+  pair `a`, `b` with no usable `<=>` but usable `==` and `<`
+  ([class.spaceship]/1) is compared by `a == b ? R::equal : a < b ?
+  R::less : R::greater` (`equivalent` for `equal` unless `R` is
+  `strong_ordering`; for `partial_ordering`, `... : b < a ? greater :
+  unordered`). `synth_three_way(f, l, r, loc)` builds it as a
+  `PseudoObjectExpr` (ast.md §5.3): syntactic form `a <=> b` (a
+  `BinaryOperator` of the result's type, never evaluated), semantic
+  expressions `[OVE(a), OVE(b), chain]` with result index 2; the chain
+  is an lvalue of the category's `const` static members, referenced
+  without a location as clang does. The analyzer (`analyze.rs`) keeps
+  clang's order: a `==`/`<` that is missing or deleted deletes `f` with
+  clang's notes (`three-way comparison cannot be synthesized because
+  ...`); a `==`/`<` whose result is not contextually convertible to
+  `bool` is the conversion error when `f` is defined on use, with the
+  `in defaulted three-way comparison operator for 'X' first required
+  here` note. A deduced return type (`auto`) never synthesizes: a
+  subobject whose `<=>` is missing deletes `f`, and one whose `<=>` is
+  still undeduced is `sema_defaulted_cmp_cannot_deduce_undeduced_auto`
+  with `note_defaulted_cmp_cannot_deduce_undeduced_auto` and the callee
+  note, emitted in the initial (silent) analysis only, as clang.
+- **Redeclarations** (WP-456, clang `MergeFunctionDecl` order). An
+  out-of-class definition of the implicit `==`, or of a member that was
+  explicitly defaulted in its class (`defaulted_member_definition` in
+  `class/special/mod.rs`; from `decl.rs`, `declare.rs` and, for explicit
+  specializations of class-template members, `templ/funcs.rs`), is
+  `sema_define_implicit_member` (select `function` for a comparison) or
+  `sema_define_explicitly_defaulted_member`, before the exception-spec
+  and `constexpr` checks. A redeclaration of a defaulted comparison
+  (e.g. a friend redeclared after its in-class `= default`) first
+  resolves the comparison's deferred exception specification
+  (`resolve_cmp_exc`), so a missing `noexcept` is diagnosed as clang
+  does; the `constexpr` mismatch ([dcl.constexpr]/1) then applies as to
+  any function.
 - **Templates.** Defaulted comparisons of class templates (member and
   friend) are instantiated with the class and checked at the
   specialization's `}`. Friend functions of class templates are
   instantiated through their `FriendDecl` only (sema-templates.md §4.8).
+  The implicit `==` of a pattern's defaulted `<=>` is not instantiated as
+  a member (`templ/class.rs` skips it, and an implicit friend
+  `FriendDecl`); `declare_implicit_equality` declares it at the
+  specialization's `}` and links it to the pattern's implicit `==`
+  (`CompareState.implicit_eq`, pattern `<=>` -> its `==`) with
+  `member_of_spec`, so `instantiated_from` and an explicit specialization
+  (`template<> bool D<long>::operator==(...)`) find it (WP-456). The `==`
+  takes the `<=>`'s trailing requires-clause
+  ([class.compare.default]/4), as the pattern's for the constraint check.
 
 ## 5. Object construction and temporaries
 
@@ -2196,6 +2241,29 @@ selection, and operator ambiguity:
   with clang 19's text.
 - *Gaps* (§11 Q12).
 
+**Landed (WP-456).** Defaulted-comparison correctness (§4.12):
+- *AST*: `PseudoObjectExpr` (ast.md §5.3; `AstBuilder::pseudo_object`,
+  `syntactic_binary`; `ExprArena::pseudo_syntactic`, `pseudo_semantics`,
+  `pseudo_result`).
+- *Sema state*: `CompareState.implicit_eq: FxHashMap<DeclId, DeclId>`
+  (a defaulted `<=>` -> its implicit `==`).
+- *Entry points* (`pub(crate)`): `synth_three_way` (`pub(super)`),
+  `defaulted_member_definition(p) -> Option<(DiagId, String)>`.
+- *Behaviour*: an objectless qualified member reference (`&A::operator==`)
+  resolves the member's exception specification before taking its type
+  (`member_ref_without_object`, clang `DiagnoseUseOfDecl`). The overload
+  candidate note names an implicit `==` `function (the implicit
+  'operator==' for this 'operator<=>)'`.
+- *Diagnostics*: `sema_defaulted_cmp_cannot_deduce_undeduced_auto`,
+  `note_defaulted_cmp_cannot_deduce_undeduced_auto`,
+  `sema_define_explicitly_defaulted_member`; `sema_define_implicit_member`
+  gains the `function` select.
+- *Tests*: `tests/conformance/class.spaceship/synth-three-way{,-fail}.cpp`,
+  `tests/conformance/ast/class.spaceship/synth-three-way.cpp`,
+  `tests/codegen/synth_three_way.cpp`,
+  `tests/conformance/class.compare.default/{implicit-eq-template,redecl}.cpp`,
+  `tests/conformance/expr.prim.id.qual/qualified-operator-{member-access,ast}.cpp`.
+
 **Landed (WP-121): member access by declared name, qualified member
 access, out-of-line declarator scope.**
 - *Member names* ([expr.ref], [class.dtor]/15, [expr.prim.id.dtor]):
@@ -2486,21 +2554,17 @@ recomputed per virtual destructor (`check_destructor_delete`).
 
 - **Q12 WP-082 gaps** (owners proposed; none changes an accepted
   program's meaning, each is a missing diagnostic or `not supported yet`):
-  - The synthesized three-way comparison ([class.spaceship]/1: a member
-    with `==` and `<` but no `<=>`, under a specified return category)
-    reports `not supported yet` at the `= default`. clang builds it as a
-    `PseudoObjectExpr` (`BuildSynthesizedThreeWayComparison`), which
-    kiln's AST lacks. *Recommend* a small WP that adds `PseudoObjectExpr`
-    (AST, dump, Oven, codegen). It is xfailed in
-    `tests/conformance/class.spaceship/synth-three-way.cpp`. libc++ does not
-    need it: `__synth_three_way` is a library template.
-  - An instantiated implicit `operator==` in a class template is declared
-    again, rather than instantiated from the pattern's; it has no
-    `instantiated_from`. It is unobservable today.
-  - A direct `DeclRefExpr` to a defaulted comparison (`&A::operator==`)
-    resolves its exception spec before the body is defined
-    (`expr.rs` `resolve_exc_for_type`). The parser does not yet accept
-    `&A::operator==` or `a.A::operator==` (parser follow-up).
+  - *Resolved (WP-456)*: the synthesized three-way comparison
+    ([class.spaceship]/1) is built as a `PseudoObjectExpr` (§4.12), with
+    AST, dump, Oven and codegen support.
+  - *Resolved (WP-456)*: the implicit `operator==` of a class template's
+    defaulted `<=>` is linked to the pattern's (`instantiated_from`) and
+    takes the `<=>`'s requires-clause (§4.12 *Templates*).
+  - *Resolved (WP-456)*: `&A::operator==` and `a.A::operator==` parse
+    (they did since WP-130), and the reference takes the resolved
+    `noexcept` type. A direct `DeclRefExpr` still resolves the exception
+    spec before the body is defined (`expr.rs` `resolve_exc_for_type`),
+    as clang's `DiagnoseUseOfDecl` does.
   - The location of a deduced return type in the `deduced return type ...
     must be 'auto'` error is the type's start column; clang uses the
     `auto` RetLoc.
@@ -2510,8 +2574,9 @@ recomputed per virtual destructor (`check_destructor_delete`).
     defaulted comparison; no `-Wtautological-compare`; no
     `ExceptionSpecEvaluation` context note; no consteval or explicit
     object parameter defaulted comparisons (those features are missing).
-  - A constexpr mismatch between redeclarations of a defaulted
-    comparison is not diagnosed.
+  - *Resolved (WP-456)*: a redeclaration of a defaulted comparison is
+    checked against its resolved exception specification, then for a
+    `constexpr` mismatch (§4.12 *Redeclarations*).
 
 ### Supervisor decisions (2026-10-28, binding)
 - **Q1** clang's eager/lazy policy (goldens must match clang's `implicit` lines).

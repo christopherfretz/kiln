@@ -1148,6 +1148,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     nested-name-specifier but the pseudo-destructor's first type-name
     (clang's `MayBePseudoDestructor`; `parse_pseudo_destructor`). Both
     go to `Sema::act_on_member_destructor_q` (WP-223).
+    A member name after `.`/`->` and an optional nested-name-specifier
+    may be an operator-function-id or a conversion-function-id
+    (`a.A::operator==(b)`, `p->A::operator int()`; [expr.ref]/1,
+    [over.oper.general]/1, [class.conv.fct]/1): `parse_operator_function_name`
+    gives the `DeclName` for `Sema::act_on_member_q`. A qualified
+    operator- or conversion-function-id is also an id-expression, so
+    `&A::operator==`, `&A::operator<=>`, `&A::operator()`,
+    `&A::operator[]` and `&A::operator int` form pointers to members
+    (WP-130; tests
+    `tests/conformance/expr.prim.id.qual/qualified-operator-{function-id,member-access,ast}.cpp`,
+    WP-456).
   - Then primary expressions:
     - literals and `this`-less id-expressions
     - qualified names `N::x`
@@ -1753,9 +1764,6 @@ in `kiln_diag` for now; nothing emits them.
   - fold expressions
   - braced-init-list subscripts and functional-cast operands
   - pointer-to-member operators on classes
-  - qualified member access `e.N::m` (reported "qualified member
-    access is not supported yet": `act_on_member` takes no
-    nested-name-specifier)
   - reflection beyond the `-freflection` spike (§5.2): expression,
     dependent and template splices, `^^` of a template-id
 - **Statements:** range-based `for`, contracts.
