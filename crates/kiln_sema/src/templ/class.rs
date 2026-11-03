@@ -325,8 +325,10 @@ impl Sema<'_, '_> {
             // the written type (clang's `getQualifiedType`: a qualified
             // reference never equals one).
             TypeView::CanonTemplateTypeParm { depth: d, index, .. } => {
-                let Some(ArgView::Type(a)) =
-                    prefix.get(index as usize).filter(|_| d == u32::from(depth)).map(|a| a.view())
+                let Some(ArgView::Type(a)) = prefix
+                    .get(index as usize)
+                    .filter(|_| d == u32::from(depth))
+                    .map(TemplateArg::view)
                 else {
                     return false;
                 };

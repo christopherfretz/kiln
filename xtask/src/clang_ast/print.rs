@@ -2706,9 +2706,9 @@ fn unsupported_ctx_arg(param: Option<&str>) -> String {
 fn integral_arg(v: i64, param: &str) -> Option<String> {
     Some(match param {
         "bool" => (if v != 0 { "true" } else { "false" }).to_owned(),
-        "char" | "signed char" | "unsigned char" => char_literal(v as u8 as u32, ""),
-        "char8_t" => char_literal(v as u8 as u32, "u8"),
-        "char16_t" => char_literal(v as u16 as u32, "u"),
+        "char" | "signed char" | "unsigned char" => char_literal(u32::from(v as u8), ""),
+        "char8_t" => char_literal(u32::from(v as u8), "u8"),
+        "char16_t" => char_literal(u32::from(v as u16), "u"),
         "char32_t" => char_literal(v as u32, "U"),
         "wchar_t" => char_literal(v as u32, "L"),
         "unsigned short" => (v as u16).to_string(),

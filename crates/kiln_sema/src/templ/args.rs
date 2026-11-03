@@ -1184,12 +1184,12 @@ impl Sema<'_, '_> {
             let so_far = self.ast.types.arg_list(prior);
             self.set_frame_args(so_far);
             let args = self.prior_levels(tmpl, depth, prior);
-            // In the template's scope, not the use's (`n::f<int>()`
-            // outside `n`).
             // A declarator error names the parameter, at the default's
             // innermost written `*`/`[` (clang's `TypeLoc` of the default).
             let name = self.ast.decls.get(p).name().as_ident().map(|n| (n, self.decl_loc(p)));
             let chunk = self.inner_chunk_locs.get(&p).copied();
+            // In the template's scope, not the use's (`n::f<int>()`
+            // outside `n`).
             let r = self
                 .in_template_context(tmpl, |s| {
                     let mut sub = Substituter::new(s, &args);
