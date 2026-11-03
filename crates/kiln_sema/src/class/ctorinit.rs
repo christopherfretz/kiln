@@ -1163,6 +1163,7 @@ impl Sema<'_, '_> {
         self.emit_dropped_typos();
         self.check_delegating_cycles();
         self.diagnose_unused_file_scope_vars();
+        self.reject_self_typed_var_specs();
     }
 
     /// The end of the translation unit: clang `CheckDelegatingCtorCycles`

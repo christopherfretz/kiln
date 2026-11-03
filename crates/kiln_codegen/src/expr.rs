@@ -1597,7 +1597,8 @@ impl Cg<'_> {
     /// all three operands are evaluated; an ext vector condition selects
     /// by each lane's sign bit through masks (`(f & ~m) | (t & m)`, float
     /// lanes bit-cast to the condition's type), a GNU vector condition by
-    /// lane `!= 0` through a `select`.
+    /// lane `!= 0` and a bool ext vector condition by its lanes, both
+    /// through a `select`.
     fn emit_vector_conditional(
         &mut self,
         c: ExprId,
@@ -1614,8 +1615,9 @@ impl Cg<'_> {
             let m = self.icmp(IntPredicate::Ne, cv, zero);
             return Ok(self.select(m, x, y));
         }
+        // A bool ext vector condition (clang 20+) is its `<N x i1>` lanes.
         if self.m.types.vector_info(ct).is_some_and(|(et, _, _)| et == LTy::I1) {
-            return err(None, "conditionals on bool vectors are not supported yet (M4)");
+            return Ok(self.select(cv, x, y));
         }
         let msb = self.icmp(IntPredicate::Slt, cv, zero);
         let mask = self.cast(CastOp::SExt, msb, ct);
@@ -3023,6 +3025,7 @@ impl Cg<'_> {
         let vals = self.emit_call_args(&sig, &args)?;
         let mut ret_extra = Vec::new();
         if let Some(d) = direct {
+            self.psabi_call_check(e, d, &args, false);
             self.alloc_call_attrs(d, &vals, &mut extra, &mut ret_extra);
         }
         let r =
@@ -3305,7 +3308,8 @@ impl Cg<'_> {
             self.coerced_store_sized(r, &coerce, t, size);
             return Ok(Some(self.load_scalar(t, rq)));
         }
-        if rty == LTy::BFLOAT && self.is_x86() && !self.opts.optimize && self.opts.llvm_major < 22 {
+        if rty == LTy::BFLOAT && self.is_x86() && !self.opts.optimize() && self.opts.llvm_major < 22
+        {
             // spec/abi.md §8.18: LLVM 19's x86-64 FastISel (`-O0`) takes
             // a `bfloat` call result for the already widened `float`, so a
             // result passed straight on reaches `__truncsfbf2` as raw
@@ -3842,7 +3846,9 @@ impl Cg<'_> {
             self.store_lv(z, lv, false);
         } else {
             let vol = self.is_volatile(lv.q);
-            self.store(z, lv.addr.v, lv.addr.align, vol);
+            // clang `EmitStoreThroughLValue`: the lvalue's access tag.
+            let st = self.store(z, lv.addr.v, lv.addr.align, vol);
+            self.tbaa_mark(st, lv.q, lv.tb);
         }
         Ok(())
     }
@@ -4345,7 +4351,18 @@ impl Cg<'_> {
         let ast = self.ast;
         if self.referee(q).is_some() {
             // A reference binds the address of its initializer glvalue.
-            let p = self.emit_ref_binding(init)?;
+            // clang `EmitAutoVarInit`: a reference might be usable in
+            // constant expressions, so a constant initializer is stored as
+            // its constant (`ConstantLValueEmitter`, a byte-offset GEP)
+            // rather than re-evaluated (WP-189).
+            let k = match self.folds.get(init) {
+                Some(c) => self.const_value(c, q, Some(init), true).ok(),
+                None => None,
+            };
+            let p = match k {
+                Some(k) => V::C(k),
+                None => self.emit_ref_binding(init)?,
+            };
             let slot = self.scalar_tls_addr(addr.v);
             let st = self.store(p, slot, addr.align, false);
             self.tbaa_mark(st, q, Tb::Type);

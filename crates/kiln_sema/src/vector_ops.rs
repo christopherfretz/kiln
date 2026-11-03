@@ -324,9 +324,13 @@ impl Sema<'_, '_> {
             | BinaryOp::LE
             | BinaryOp::GE
             | BinaryOp::EQ
-            | BinaryOp::NE => self
-                .check_vector_operands(&mut l2, &mut r2, loc, false, true, true)
-                .map(|v| self.signed_vector_type(v)),
+            | BinaryOp::NE => {
+                let v = self.check_vector_operands(&mut l2, &mut r2, loc, false, true, true);
+                if v.is_some() {
+                    self.diagnose_self_comparison(base, l2, r2, loc);
+                }
+                v.map(|v| self.signed_vector_type(v))
+            }
             BinaryOp::Cmp => {
                 self.error(DiagId::sema_three_way_vector_comparison, loc);
                 None

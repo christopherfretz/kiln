@@ -42,8 +42,12 @@ pub(crate) struct GlobalInits {
     /// clang `DelayedCXXInitPosition`: first declaration → its reserved
     /// slot in `ordered`, or [`DONE`].
     delayed: FxHashMap<DeclId, u32>,
-    /// clang `GlobalCtors`: (lexical order, function, comdat key).
-    ctors: Vec<(u32, FuncId, Option<GlobalId>)>,
+    /// clang `PrioritizedCXXGlobalInits`: the initializers of the
+    /// `init_priority` variables, (priority, function) in emission order.
+    prioritized: Vec<(u32, FuncId)>,
+    /// clang `GlobalCtors`: (lexical order, priority, function, comdat
+    /// key).
+    ctors: Vec<(u32, u32, FuncId, Option<GlobalId>)>,
     /// clang `LLVMUsed`.
     used: Vec<GlobalId>,
     /// Guard variables by first declaration (clang
@@ -170,7 +174,7 @@ impl Cg<'_> {
     /// `noinline` only at `-O0` (clang 19 and 22 alike).
     fn init_fn_attrs(&mut self, vector_width: u64) -> kiln_llvm::AttrSetId {
         let mut a = Vec::new();
-        if !self.opts.optimize {
+        if !self.opts.optimize() {
             a.push(Attr::Flag(AttrKind::NoInline));
         }
         if !self.opts.exceptions {
@@ -262,6 +266,14 @@ impl Cg<'_> {
             self.gi.delayed.insert(first, DONE);
             return Ok(());
         }
+        if let Some(p) = self.init_priority(d) {
+            // [basic.start.dynamic]/1 orders initialization within this
+            // translation unit only; across units, `init_priority` orders
+            // it through its own `llvm.global_ctors` priority.
+            self.gi.prioritized.push((p, f));
+            self.gi.delayed.insert(first, DONE);
+            return Ok(());
+        }
         let internal = mangle::is_internal_symbol(ast, d);
         let key = (!internal).then_some(g);
         let unordered =
@@ -273,7 +285,7 @@ impl Cg<'_> {
                 Some(&p) => p,
                 None => u32::try_from(self.gi.ordered.len()).expect("initializer count"),
             };
-            self.gi.ctors.push((lex, f, key));
+            self.gi.ctors.push((lex, 65535, f, key));
             if let Some(k) = key {
                 self.gi.used.push(k);
                 if let Some(c) = self.m.global(g).comdat {
@@ -288,6 +300,20 @@ impl Cg<'_> {
         }
         self.gi.delayed.insert(first, DONE);
         Ok(())
+    }
+
+    /// The `init_priority` of variable `d` (clang
+    /// `getAttr<InitPriorityAttr>`, inherited by redeclarations).
+    fn init_priority(&self, d: DeclId) -> Option<u32> {
+        let ast = self.ast;
+        let of = |r: DeclId| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .map(|a| ast.attrs.get(a))
+                .find(|a| a.kind == kiln_ast::attr::AttrKind::INIT_PRIORITY)
+                .map(|a| a.a)
+        };
+        of(d).or_else(|| ast.redecls_of(d).find_map(of))
     }
 
     /// clang `EmitCXXGlobalVarDeclInit`: initializes global `g` of
@@ -324,6 +350,7 @@ impl Cg<'_> {
                 self.register_global_dtor(rd, V::C(gval(g)), tls)?;
             }
         }
+        self.emit_decl_invariant(d, ty, g);
         Ok(())
     }
 
@@ -735,6 +762,36 @@ impl Cg<'_> {
         // declares them right before the calling function).
         let own_module_init = self.own_module_init_name();
         let mut fns = self.imported_module_inits();
+        // clang `EmitCXXGlobalInitFunc`: the prioritized initializers,
+        // sorted by priority (stably: lexical order within one), in one
+        // `_GLOBAL__I_<priority>` per priority, the imported module
+        // initializers prepended to the first; a module unit's own
+        // initializer runs them all before the unordered ones
+        // (`EmitCXXModuleInitFunc`).
+        let mut prio = std::mem::take(&mut self.gi.prioritized);
+        prio.sort_by_key(|&(p, _)| p);
+        let any_prio = !prio.is_empty();
+        if own_module_init.is_some() {
+            fns.extend(prio.iter().map(|&(_, f)| f));
+        } else {
+            let mut i = 0;
+            while i < prio.len() {
+                let p = prio[i].0;
+                let mut chunk = std::mem::take(&mut fns);
+                while i < prio.len() && prio[i].0 == p {
+                    chunk.push(prio[i].1);
+                    i += 1;
+                }
+                let f = self.init_function(&format!("_GLOBAL__I_{p:06}"))?;
+                let saved = std::mem::replace(&mut self.f, Fx::empty());
+                self.start_init_fn(f);
+                self.emit_init_calls(&chunk);
+                let r = self.finish_init_fn(f, self.ast.tu);
+                self.f = saved;
+                r?;
+                self.gi.ctors.push((DONE, p, f, None));
+            }
+        }
         fns.extend(self.gi.ordered.iter().flatten().copied());
         if let Some(name) = own_module_init {
             let f = self.module_init_function(&name)?;
@@ -744,8 +801,8 @@ impl Cg<'_> {
             let r = r.and_then(|()| self.finish_init_fn(f, self.ast.tu));
             self.f = saved;
             r?;
-            self.gi.ctors.push((DONE, f, None));
-        } else if !fns.is_empty() {
+            self.gi.ctors.push((DONE, 65535, f, None));
+        } else if !fns.is_empty() || any_prio {
             let name =
                 format!("_GLOBAL__sub_I_{}", transformed_file_name(&self.opts.source_filename));
             let f = self.init_function(&name)?;
@@ -755,18 +812,18 @@ impl Cg<'_> {
             let r = self.finish_init_fn(f, self.ast.tu);
             self.f = saved;
             r?;
-            self.gi.ctors.push((DONE, f, None));
+            self.gi.ctors.push((DONE, 65535, f, None));
         }
         self.emit_tls_trailer()?;
         if self.gi.ctors.is_empty() {
             return Ok(());
         }
         let mut ctors = std::mem::take(&mut self.gi.ctors);
-        ctors.sort_by_key(|&(lex, _, _)| lex);
+        ctors.sort_by_key(|&(lex, _, _, _)| lex);
         let sty = self.m.types.struct_literal(&[LTy::I32, LTy::PTR, LTy::PTR], false);
         let mut elems = Vec::with_capacity(ctors.len());
-        for (_, f, key) in ctors {
-            let prio = self.m.const_int(LTy::I32, 65535);
+        for (_, p, f, key) in ctors {
+            let prio = self.m.const_int(LTy::I32, i128::from(p));
             let data = match key {
                 Some(k) => gval(k),
                 None => self.m.const_null(LTy::PTR),
@@ -869,7 +926,7 @@ impl Cg<'_> {
         let one = V::C(self.m.const_int(LTy::I8, 1));
         self.store(one, gp, 1, false);
         // `EmitInvariantStart`: the guard never changes again (-O1+).
-        if self.opts.optimize {
+        if self.opts.optimize() {
             let f = kiln_llvm::intrinsics::invariant_start(&mut self.m);
             let fn_ty = self.m.func(f).ty();
             let size = V::C(self.m.const_int(LTy::I64, 1));

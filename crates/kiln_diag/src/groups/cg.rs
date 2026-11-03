@@ -3,3 +3,4 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 AtomicAlignment = "atomic-alignment" [];
+Psabi = "psabi" [];

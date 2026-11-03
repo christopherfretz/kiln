@@ -339,6 +339,17 @@ impl Substituter<'_, '_, '_> {
                 self.stmt_expr_result = saved;
                 Ok(self.sema.act_on_stmt_expr(scope, b, loc, rparen))
             }
+            // GNU `&&label` (clang `TransformAddrLabelExpr`): the label is
+            // looked up again by name in the instantiated body, without the
+            // parser's extension warning.
+            ExprKind::AddrLabelExpr => {
+                let l = ex(self).addr_label(e);
+                let name = self.sema.ast.decls.get(l).name().as_ident().ok_or(SubstFail)?;
+                let at = self.sema.ast.exprs.end_loc(e).unwrap_or(loc);
+                let l = self.sema.act_on_asm_goto_label(name, at);
+                let ty = self.sema.ast.types.pointer_to(QualType::VOID);
+                Ok(self.sema.builder().addr_label(l, ty, loc, at))
+            }
             ExprKind::ArraySubscriptExpr => {
                 let [b, i] = ex(self).operands(e);
                 let b = self.expr(b)?;

@@ -4084,7 +4084,10 @@ impl Sema<'_, '_> {
                 self.ast.decls.set_flags(pd, DeclFlags::INVALID);
             }
             if !p.attrs.is_empty() {
-                let _ = self.builder().attach_attrs(pd, &p.attrs);
+                let mut attrs = p.attrs.clone();
+                let range = Span::new(p.range.0, p.range.1);
+                self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
+                let _ = self.builder().attach_attrs(pd, &attrs);
             }
             match p.default_arg {
                 // Replayed in the complete-class context through
@@ -4775,7 +4778,8 @@ impl Sema<'_, '_> {
             && matches!(spec.storage(), VarStorage::None | VarStorage::Register)
             && spec.tls() == TlsKind::None
             && self.is_placeholder_name(name);
-        let local = self.find_prev(name, d.qualifier);
+        let local =
+            self.find_prev(name, d.qualifier).map(|p| self.valid_prev_var(p, name, d.qualifier));
         if independent
             && local.is_some_and(|p| matches!(self.kind_of(p), DeclKind::Var | DeclKind::Binding))
         {
@@ -4783,6 +4787,23 @@ impl Sema<'_, '_> {
             return (true, None);
         }
         (independent, local)
+    }
+
+    /// The previous declaration a variable redeclares when lookup finds
+    /// `p`: an invalid variable declaration (a redefinition, another
+    /// type, no type at all: `R::v;`) is not linked to the entity
+    /// (clang's `MergeVarDecl` stops at it), so the latest valid one
+    /// lookup finds, if any, is (WP-421).
+    fn valid_prev_var(&self, p: DeclId, name: Symbol, qualifier: Option<DeclId>) -> DeclId {
+        if self.kind_of(p) != DeclKind::Var || !self.is_invalid_decl(p) {
+            return p;
+        }
+        let found = self.prev_candidates(name, qualifier);
+        found
+            .into_iter()
+            .rev()
+            .find(|&d| self.kind_of(d) == DeclKind::Var && !self.is_invalid_decl(d))
+            .unwrap_or(p)
     }
 
     /// A variable `n` redeclared at `at` over `p` of a compatible type:
@@ -4914,7 +4935,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
-        if ambiguous || no_member || redefined || self.storage_invalidates_var(ds, d) {
+        if ambiguous || no_member || redefined || unmerged || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
@@ -5378,21 +5399,8 @@ impl Sema<'_, '_> {
         loc: Loc,
         direct: bool,
     ) -> Option<QualType> {
-        use crate::templ::auto::{AutoFail, AutoInit};
-        let (items, kind, lbrace) = match init {
-            Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
-            Initializer::Paren(es, ..) => {
-                (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
-            }
-            Initializer::List(l) if direct => (
-                crate::templ::auto::auto_list_items(l, false),
-                AutoInit::DirectList,
-                Some(l.lbrace),
-            ),
-            Initializer::List(l) => {
-                (crate::templ::auto::auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace))
-            }
-        };
+        use crate::templ::auto::AutoFail;
+        let (items, kind, lbrace) = auto_init_items(init, direct);
         // [temp.deduct.call]/6: every member of an overload set deduces
         // `auto`, so nothing is deduced (a placeholder in a function
         // declarator selecting one member is not implemented) -- except
@@ -5423,6 +5431,20 @@ impl Sema<'_, '_> {
         let fail = match overload {
             Some(e) => AutoFail::Incompatible(e),
             None => match self.deduce_auto(declared, &items, kind) {
+                // clang 19's placeholder-typed specialization
+                // (`undeduced_var_spec_use_19`) deduces only itself; any
+                // other variable "deduced" from it is rejected (clang 19
+                // accepts it and crashes generating code).
+                Ok(t) if self.contains_undeduced_auto(t) => {
+                    if self.undeduced_var_spec_use_19(v) {
+                        self.templ.self_typed_var_specs.push(v);
+                        return Some(t);
+                    }
+                    match items.iter().flatten().next() {
+                        Some(&e) => AutoFail::Incompatible(e),
+                        None => AutoFail::Error,
+                    }
+                }
                 Ok(t) => {
                     let at = self.inst.concepts.placeholder_locs.get(&v).copied().unwrap_or(loc);
                     // `constexpr C decltype(auto) x = e;`: the constraint
@@ -6036,6 +6058,13 @@ impl Sema<'_, '_> {
             let loc = self.ast.decls.get(f).loc();
             self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(info.name));
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        }
+        // clang `ActOnStartOfFunctionDef` resolves the exception
+        // specification of every definition: a destructor or defaulted
+        // special member nothing uses still needs its implicit `noexcept`
+        // for codegen's terminate scope ([except.spec]/8, spec/sema.md §4.7).
+        if !self.in_template() {
+            self.resolve_exception_spec(f, self.ast.decls.get(f).loc());
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         // The return type as written: diagnostics name its typedef.
@@ -8921,6 +8950,9 @@ impl Sema<'_, '_> {
         if kind == AttrKind::ENUM_EXTENSIBILITY {
             return self.enum_extensibility_attribute(syntax, args, loc);
         }
+        if kind == AttrKind::INIT_PRIORITY {
+            return self.init_priority_attribute(syntax, &shown, args, loc);
+        }
         // `preferred_name(typedef-name)`: the type in `b`, checked
         // against its class template in `check_decl_attrs`.
         if kind == AttrKind::PREFERRED_NAME {
@@ -9542,6 +9574,9 @@ fn attr_kind_of(
         ("hot", _, true) => AttrKind::HOT,
         ("naked", _, true) => AttrKind::NAKED,
         ("may_alias", _, true) => AttrKind::MAY_ALIAS,
+        ("init_priority", _, true) => AttrKind::INIT_PRIORITY,
+        ("nonnull", _, true) => AttrKind::NONNULL,
+        ("returns_nonnull", _, true) => AttrKind::RETURNS_NONNULL,
         // clang `Clang<"optnone">` / `Clang<"minsize">` spellings:
         // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
         ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,
@@ -9597,4 +9632,23 @@ fn escape_diag_text(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// The deduction form of a variable's initializer `init`: its items (a
+/// braced list's elements), the form, and a braced list's `{`.
+fn auto_init_items(
+    init: &Initializer,
+    direct: bool,
+) -> (Vec<Option<ExprId>>, crate::templ::auto::AutoInit, Option<Loc>) {
+    use crate::templ::auto::{AutoInit, auto_list_items};
+    match init {
+        Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
+        Initializer::Paren(es, ..) => {
+            (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
+        }
+        Initializer::List(l) if direct => {
+            (auto_list_items(l, false), AutoInit::DirectList, Some(l.lbrace))
+        }
+        Initializer::List(l) => (auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace)),
+    }
 }

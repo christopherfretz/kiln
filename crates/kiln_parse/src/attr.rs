@@ -40,6 +40,8 @@ fn takes_expr_args(name: &str) -> bool {
             | "minsize"
             | "naked"
             | "may_alias"
+            | "init_priority"
+            | "nonnull"
     )
 }
 
