@@ -3421,6 +3421,16 @@ impl Sema<'_, '_> {
             let l2 = conv::implicit_convert(self, l, rt, ConvCtx::Comparison).ok()?;
             return Some((l2, r, rt));
         }
+        // /4.6: similar types (any depth) give their cv-combined type,
+        // `int **` and `const int **` give `const int *const *`.
+        if let Some(to) = conv::cv_combined_type(self, lt, rt)
+            && conv::standard_conversion(self, l, to, ConvCtx::Comparison).is_some()
+            && conv::standard_conversion(self, r, to, ConvCtx::Comparison).is_some()
+        {
+            let l2 = conv::implicit_convert(self, l, to, ConvCtx::Comparison).ok()?;
+            let r2 = conv::implicit_convert(self, r, to, ConvCtx::Comparison).ok()?;
+            return Some((l2, r2, to));
+        }
         self.cv_combined_pointer(l, r, lt, rt)
     }
 
@@ -5855,21 +5865,11 @@ impl Sema<'_, '_> {
     }
 
     /// Pointer types differing only in cv-qualification at any level
-    /// ([conv.qual]/2 "similar").
+    /// ([conv.qual]/2 "similar", [expr.const.cast]/3): the levels below
+    /// the first may be pointers, pointers to members of the same class
+    /// or arrays of the same bound (`int A::**` and `const int A::**`).
     fn similar_pointers(&self, a: QualType, b: QualType) -> bool {
-        let (mut a, mut b) = (a, b);
-        for _ in 0..64 {
-            match (self.ast.types.pointee(a), self.ast.types.pointee(b)) {
-                (Some(x), Some(y))
-                    if self.ast.types.is_pointer(a) && self.ast.types.is_pointer(b) =>
-                {
-                    a = x;
-                    b = y;
-                }
-                _ => return self.ast.types.same_unqualified(a, b),
-            }
-        }
-        false
+        conv::similar_same_levels(self, a, b)
     }
 
     /// True if converting pointer `from` to pointer `to` casts away

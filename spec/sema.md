@@ -2750,7 +2750,12 @@ the initializer, or after default initialization, and before the
     WP-320, test `expr.sizeof/incomplete-operand-location.cpp`)
   - **casts:** C-style, functional, `static_cast`,
     `reinterpret_cast`, `const_cast`, with
-    `mark_part_of_explicit_cast`. To a reference (`expr/ref_cast.rs`,
+    `mark_part_of_explicit_cast`. `const_cast` between pointers needs
+    them similar with identical levels (`conv::similar_same_levels`,
+    [expr.const.cast]/3: `int A::**` to `const int A::**` is allowed,
+    `int *(*)[2]` to `const int *(*)[]` is not, like clang's
+    `UnwrapSimilarTypes` without `AllowPiMismatch`; WP-162, test
+    `expr.const.cast/similar-multilevel.cpp`). To a reference (`expr/ref_cast.rs`,
     WP-207): `const_cast<T&&>` (and the C-style cast's const step) of a
     class prvalue of the same unqualified class materializes it
     (`MaterializeTemporaryExpr`, [expr.const.cast]/3) and is a `NoOp`
@@ -2844,9 +2849,17 @@ the initializer, or after default initialization, and before the
   plain one). Unrelated classes have no composite type (`incompatible
   operand types ('int A::*' and 'int B::*')` for `?:`). This is what
   libc++'s `common_with`, `common_reference` and
-  `equality_comparable_with` see through `decltype(b ? x : y)`. Not
-  yet: multi-level cv-combination (`int **` vs `const int **` is
-  `const int *const *`).
+  `equality_comparable_with` see through `decltype(b ? x : y)`. Two
+  similar types of any depth ([conv.qual]/2: pointer, same-class member
+  pointer and array levels down to the same innermost type) combine,
+  before the one-level path, to their cv-combined type
+  (`conv::cv_combined_type`, [conv.qual]/3, WP-162): the union of the
+  cv-qualifiers at each level, `const` added to every level above one
+  that differs (`int **` vs `const int **` is `const int *const *`,
+  `int (*)[3]` vs `const int (*)[3]` is `const int (*)[3]`). `B **` vs
+  `D **` and `int **` vs `long **` are not similar and have none. Tests
+  `expr.cond/composite-pointer-multilevel*.cpp`,
+  `conv.qual/multilevel-compare-run.cpp`.
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
