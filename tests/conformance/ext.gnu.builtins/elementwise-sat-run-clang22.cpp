@@ -9,7 +9,6 @@
 //@ requires: clang>=22
 //@ expect: run
 //@ stdout: 2147483647 0
-//@ xfail(kiln): __builtin_elementwise_add_sat / _sub_sat are not declared (sema builtins, Oven, codegen)
 #include <stdio.h>
 constexpr signed char a = __builtin_elementwise_add_sat((signed char)100, (signed char)100);
 constexpr unsigned b = __builtin_elementwise_sub_sat(3u, 5u);
