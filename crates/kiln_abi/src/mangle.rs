@@ -2168,7 +2168,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     self.out.push('E');
                 }
             }
-            Scalar::Reflection { .. } => self.out.push_str("XLi0EE"),
+            // Vendor stand-in (spec/reflection-repr.md §4) until the
+            // real reflection mangling: `L u6__info <id> E`, the
+            // translation unit's reflection id, so distinct reflections
+            // never collide within a TU.
+            Scalar::Reflection { id, .. } => {
+                use std::fmt::Write as _;
+                let _ = write!(self.out, "Lu6__info{}E", id.index());
+            }
         }
     }
 

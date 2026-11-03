@@ -428,7 +428,8 @@ then `Ast::first`); code that means "same entity" never compares
 `DeclId`s, which differ between redeclarations. Reflections are interned
 by `entity_decl`, so `info` equality is `same_entity`. `cargo test -p
 xtask` lints the reflection code (`kiln_sema/src/reflect.rs`,
-`kiln_sema/src/meta/`, `kiln_oven/src/meta/`) for raw `DeclId` `==`,
+`reflect_operand.rs`, `reflect_limit.rs`, `kiln_sema/src/meta/`,
+`kiln_oven/src/meta/`) for raw `DeclId` `==`,
 `!=` and `assert_eq!`; a line that really means the declaration carries
 `// same_entity: raw ok`.
 
