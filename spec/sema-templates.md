@@ -2280,7 +2280,7 @@ recomputed exactly as for non-template code (clang's
   The enclosing statement then fails by the rules above. A
   non-placeholder return type is unaffected (one error, no
   invalidation). From clang 22 on, a `return` whose operand is an error
-  of the pattern is dropped instead (below `stmt`), so a generic lambda
+  of the pattern is dropped instead (`Substituter::stmt`), so a generic lambda
   `[](auto x) { return x + undeclared; }` deduces `void` and each call
   cascades, as in clang 22. A non-generic lambda outside any template
   keeps clang 19's single error under both levels: clang 22 also
