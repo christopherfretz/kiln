@@ -442,6 +442,39 @@ fn run_case(name: &str, file: &Path, triple: &str, canon: bool) -> Result<Option
     Ok(Some(Outcome { exact, structural, abi, diff }))
 }
 
+/// `f` over `items` on up to `RUST_TEST_THREADS` (else the available
+/// parallelism) worker threads, the results in `items` order.
+fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let threads = std::env::var("RUST_TEST_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .or_else(|| std::thread::available_parallelism().ok().map(usize::from))
+        .unwrap_or(1)
+        .clamp(1, items.len().max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut out: Vec<Option<R>> = std::iter::repeat_with(|| None).take(items.len()).collect();
+    std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(item) = items.get(i) else { break done };
+                        done.push((i, f(item)));
+                    }
+                })
+            })
+            .collect();
+        for w in workers {
+            for (i, r) in w.join().expect("an IR-diff worker panicked") {
+                out[i] = Some(r);
+            }
+        }
+    });
+    out.into_iter().map(|r| r.expect("every item ran")).collect()
+}
+
 #[test]
 fn ir_matches_clang() {
     let only = std::env::var("KILN_CASE").ok();
@@ -456,65 +489,76 @@ fn ir_matches_clang() {
     let (mut exact, mut structural, mut abi_ok, mut total, mut skipped) = (0, 0, 0, 0, 0);
     let mut failures = Vec::new();
     let mut deviations = Vec::new();
+    // Every (case, triple) pair, in corpus order; the pairs are independent
+    // (kiln runs in-process, clang and opt as child processes), so they run
+    // on worker threads and are then reported in this order.
+    let mut jobs = Vec::new();
     for file in &files {
         let name = file.file_stem().and_then(|s| s.to_str()).expect("file name").to_owned();
         if only.as_deref().is_some_and(|o| o != name) {
             continue;
         }
         for &triple in TRIPLES {
-            total += 1;
             let allow = DEVIATIONS
                 .iter()
                 .find(|d| d.0 == name && d.1 == triple && d.2 == oracle)
                 .map(|d| d.3);
-            let canon = allow == Some(Allow::LoopCanon);
-            let allow = allow.filter(|&a| a != Allow::LoopCanon);
-            let o = match run_case(&name, file, triple, canon) {
-                Ok(Some(o)) => o,
-                Ok(None) => {
-                    skipped += 1;
-                    continue;
-                }
-                Err(e) if allow == Some(Allow::OracleInvalid) && e.contains("rejects clang IR") => {
-                    deviations.push(format!("{name} ({triple}): oracle IR invalid"));
-                    continue;
-                }
-                Err(e) => {
-                    failures.push(format!("{name} ({triple}): {e}"));
-                    continue;
-                }
-            };
-            if canon && o.diff.is_none() {
-                deviations.push(format!("{name} ({triple}): matches after loop canonicalization"));
+            jobs.push((name.clone(), file, triple, allow));
+        }
+    }
+    let outcomes = par_map(&jobs, |(name, file, triple, allow)| {
+        run_case(name, file, triple, *allow == Some(Allow::LoopCanon))
+    });
+    for ((name, _, triple, allow), outcome) in jobs.iter().zip(outcomes) {
+        let (name, triple) = (name.as_str(), *triple);
+        total += 1;
+        let canon = *allow == Some(Allow::LoopCanon);
+        let allow = allow.filter(|&a| a != Allow::LoopCanon);
+        let o = match outcome {
+            Ok(Some(o)) => o,
+            Ok(None) => {
+                skipped += 1;
+                continue;
             }
-            exact += usize::from(o.exact);
-            structural += usize::from(o.structural);
-            abi_ok += usize::from(o.abi.is_none());
-            match (allow, &o.diff, &o.abi) {
-                (None, None, None) => {}
-                (None, Some(d), abi) => failures.push(format!(
-                    "{name} ({triple}): differs from clang {oracle} ({:?} mode)\n{d}{}",
-                    mode(),
-                    abi.as_ref().map_or(String::new(), |a| format!("the ABI slice too:\n{a}"))
-                )),
-                (None | Some(Allow::Structure | Allow::LoopCanon), None, Some(d)) => failures
-                    .push(format!("{name} ({triple}): ABI slice differs from clang {oracle}\n{d}")),
-                (Some(Allow::Structure), Some(_), Some(d)) => failures.push(format!(
-                    "{name} ({triple}): ABI slice differs from clang {oracle} (only the \
-                     structure is a listed deviation)\n{d}"
-                )),
-                (Some(Allow::OracleInvalid), _, _) => failures.push(format!(
-                    "{name} ({triple}): clang {oracle}'s IR now verifies; drop the deviation"
-                )),
-                (Some(_), None, None) => {
-                    deviations.push(format!("{name} ({triple}): now matches; drop the deviation"));
-                }
-                (Some(a), Some(d), _) => {
-                    deviations.push(format!("{name} ({triple}): {a:?} deviation\n{d}"));
-                }
-                (Some(Allow::Abi), None, Some(d)) => {
-                    deviations.push(format!("{name} ({triple}): Abi deviation\n{d}"));
-                }
+            Err(e) if allow == Some(Allow::OracleInvalid) && e.contains("rejects clang IR") => {
+                deviations.push(format!("{name} ({triple}): oracle IR invalid"));
+                continue;
+            }
+            Err(e) => {
+                failures.push(format!("{name} ({triple}): {e}"));
+                continue;
+            }
+        };
+        if canon && o.diff.is_none() {
+            deviations.push(format!("{name} ({triple}): matches after loop canonicalization"));
+        }
+        exact += usize::from(o.exact);
+        structural += usize::from(o.structural);
+        abi_ok += usize::from(o.abi.is_none());
+        match (allow, &o.diff, &o.abi) {
+            (None, None, None) => {}
+            (None, Some(d), abi) => failures.push(format!(
+                "{name} ({triple}): differs from clang {oracle} ({:?} mode)\n{d}{}",
+                mode(),
+                abi.as_ref().map_or(String::new(), |a| format!("the ABI slice too:\n{a}"))
+            )),
+            (None | Some(Allow::Structure | Allow::LoopCanon), None, Some(d)) => failures
+                .push(format!("{name} ({triple}): ABI slice differs from clang {oracle}\n{d}")),
+            (Some(Allow::Structure), Some(_), Some(d)) => failures.push(format!(
+                "{name} ({triple}): ABI slice differs from clang {oracle} (only the \
+                 structure is a listed deviation)\n{d}"
+            )),
+            (Some(Allow::OracleInvalid), _, _) => failures.push(format!(
+                "{name} ({triple}): clang {oracle}'s IR now verifies; drop the deviation"
+            )),
+            (Some(_), None, None) => {
+                deviations.push(format!("{name} ({triple}): now matches; drop the deviation"));
+            }
+            (Some(a), Some(d), _) => {
+                deviations.push(format!("{name} ({triple}): {a:?} deviation\n{d}"));
+            }
+            (Some(Allow::Abi), None, Some(d)) => {
+                deviations.push(format!("{name} ({triple}): Abi deviation\n{d}"));
             }
         }
     }
