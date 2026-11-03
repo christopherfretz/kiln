@@ -548,6 +548,26 @@ impl Ast {
         })
     }
 
+    /// The label of a GNU `goto *&&l;` (clang `IndirectGotoStmt::
+    /// getConstantTarget`: the target with parentheses and implicit casts
+    /// peeled is an `AddrLabelExpr`), which behaves as `goto l;`.
+    pub fn indirect_goto_constant_target(&self, s: crate::ids::StmtId) -> Option<DeclId> {
+        let mut e = self.stmts.indirect_goto_target(s);
+        for _ in 0..64 {
+            match self.exprs.get(e).kind() {
+                ExprKind::AddrLabelExpr => return Some(self.exprs.addr_label(e)),
+                ExprKind::ImplicitCastExpr
+                | ExprKind::ParenExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::ConstantExpr => {
+                    e = *self.exprs.children(e, &self.lists).first()?;
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// Whether the function `d` does not return (clang
     /// `FunctionDecl::isNoReturn` minus the Microsoft spelling): some
     /// declaration of it carries `[[noreturn]]` /

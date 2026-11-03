@@ -135,6 +135,14 @@ pub struct Parser<'a, 'sm> {
     /// `LHS = ExprError()`). An expression statement then skips to its
     /// `;` with no "expected ';'" (`parse_expression_statement`).
     pub(crate) expr_invalid: bool,
+    /// The `(` of a C-style cast's parenthesized operand, `(T)(a, b)`:
+    /// clang parses it as a `ParenListExpr` whose commas are built at
+    /// the `(` (`MaybeConvertParenListExprToParenExpr`).
+    pub(crate) cast_paren_list: Option<Loc>,
+    /// The `(` of a C-style cast's parenthesized operand for the next
+    /// [`Parser::parse_rhs`] (taken at its entry): its top-level commas
+    /// are [`Parser::parse_paren_list_rest`]'s.
+    pub(crate) comma_loc: Option<Loc>,
     /// False while parsing a template argument: a `>` or `>>` ends the
     /// argument instead of being an operator ([temp.names]/4, clang's
     /// `GreaterThanIsOperator`). Brackets restore it: see
@@ -316,6 +324,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             trace: Vec::new(),
             in_stmt_expr: false,
             expr_invalid: false,
+            cast_paren_list: None,
+            comma_loc: None,
             greater_is_op: true,
             greater_off_depth: 0,
             pack_hint: false,
