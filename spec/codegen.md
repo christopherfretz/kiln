@@ -3093,6 +3093,7 @@ WP-444's §7t; renumber at merge if those land differently.)
   derived usual delete; both targets; exact under oracle 19, structural
   under 22), `tests/conformance/expr.delete/destroying-operator-delete-virtual.cpp`
   (run).
+
 ## 7ac. Landed (WP-460): callee-destroyed arguments (`[[clang::trivial_abi]]`)
 A by-value parameter of a class the callee destroys
 (`kiln_abi::call::is_destroyed_in_callee`, spec/abi.md §8.26: passed in
