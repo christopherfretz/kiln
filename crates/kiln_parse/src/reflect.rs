@@ -41,7 +41,23 @@ impl Parser<'_, '_> {
         let operand = self.tok().span.lo;
         let qual = self.parse_nested_name_nns().ok()?;
         let Some(name) = self.ident() else {
-            return Some(self.s.reflect_bad_operand(operand, loc));
+            let bad = self.s.reflect_bad_operand(operand, loc);
+            // A literal or parenthesized operand is consumed whole, so the
+            // rest of the expression parses ([expr.reflect]/1 has no such
+            // form; `^^(x)` and `^^42` are one error each).
+            if qual.is_none()
+                && (self.at(Punct::LParen)
+                    || matches!(
+                        self.tok().kind,
+                        TokKind::PpNumber
+                            | TokKind::CharLit(_)
+                            | TokKind::StringLit(_)
+                            | TokKind::RawStringLit(_)
+                    ))
+            {
+                let _ = self.parse_primary_expr();
+            }
+            return Some(bad);
         };
         let name_loc = self.bump().span.lo;
         // `^^S::S` names the constructors ([class.qual]/2): an overload

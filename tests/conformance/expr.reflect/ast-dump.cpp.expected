@@ -1,0 +1,22 @@
+Dumping test:
+FunctionDecl consteval test 'void (int)' implicit-inline
+|-ParmVarDecl p 'int'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used rs 'std::meta::info[12]' cinit
+  |   `-InitListExpr 'std::meta::info[12]'
+  |     |-CXXReflectExpr 'std::meta::info' type ^^int
+  |     |-CXXReflectExpr 'std::meta::info' type ^^I
+  |     |-CXXReflectExpr 'std::meta::info' type ^^const int *
+  |     |-CXXReflectExpr 'std::meta::info' decl ^^ns::f
+  |     |-CXXReflectExpr 'std::meta::info' namespace ^^ns
+  |     |-CXXReflectExpr 'std::meta::info' namespace-alias ^^na
+  |     |-CXXReflectExpr 'std::meta::info' namespace ^^::
+  |     |-CXXReflectExpr 'std::meta::info' template ^^Tm
+  |     |-CXXReflectExpr 'std::meta::info' type ^^Tm<int>
+  |     |-CXXReflectExpr 'std::meta::info' decl ^^S::m
+  |     |-CXXReflectExpr 'std::meta::info' decl ^^e0
+  |     `-CXXReflectExpr 'std::meta::info' decl ^^p
+  `-CStyleCastExpr 'void' <ToVoid>
+    `-DeclRefExpr 'std::meta::info[12]' lvalue Var 'rs' 'std::meta::info[12]'
+
