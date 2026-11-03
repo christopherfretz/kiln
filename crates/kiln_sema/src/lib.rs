@@ -83,6 +83,7 @@ mod rtti;
 pub mod scope;
 mod self_ref;
 mod side_effects;
+mod splice;
 pub mod stack_guard;
 mod static_tls;
 pub mod stmt;
@@ -492,6 +493,9 @@ pub struct Sema<'a, 'sm> {
     /// directly, in declaration order: an element access names its
     /// result through the first that matches (clang `ExtVectorDecls`).
     pub(crate) ext_vector_typedefs: Vec<DeclId>,
+    /// Splices whose operand was read as a frozen constant without an
+    /// Oven evaluation (spec/reflection.md §5, the splice fast path).
+    pub(crate) splice_fast: u64,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -945,6 +949,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             reverse_using_shadows: false,
             va_list_type: None,
             ext_vector_typedefs: Vec::new(),
+            splice_fast: 0,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),

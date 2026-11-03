@@ -536,6 +536,18 @@ impl Substituter<'_, '_, '_> {
                 let e = e?;
                 self.sema.act_on_decltype(e, loc, loc).ok_or(SubstFail)
             }
+            // `typename [: r :]` with a dependent operand
+            // (spec/reflection.md §5): the substituted operand's type.
+            TypeView::Splice { operand, designated: None } => {
+                let e = match operand {
+                    ExprOperand::Expr(e) => e,
+                    ExprOperand::Profile(p) => {
+                        self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?
+                    }
+                };
+                let e = self.expr(e)?;
+                self.sema.act_on_splice_type(e, loc, loc).ok_or(SubstFail)
+            }
             // GNU `typeof` (spec/sema.md §5.8).
             TypeView::TypeOf { operand: TypeOfOperand::Type(t), unqual, .. } => {
                 let t = self.ty(t, loc)?;
@@ -695,8 +707,7 @@ impl Substituter<'_, '_, '_> {
                 }
                 Ok(t)
             }
-            // Remaining kinds cannot be dependent today: dependent splices
-            // are rejected by the parser.
+            // Remaining kinds cannot be dependent today.
             _ => self.unimplemented("substitution into this type", loc),
         }
     }
