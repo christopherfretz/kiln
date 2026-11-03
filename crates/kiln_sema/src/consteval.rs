@@ -40,6 +40,9 @@ pub(crate) struct Escalation {
     default_init: Option<DeclId>,
     /// `default_init` is a written mem-initializer ("the initializer of").
     written: bool,
+    /// An immediate-escalating expression of this consteval-only type
+    /// (`^^x`; `callee` is then the escalated function itself).
+    consteval_only: Option<QualType>,
 }
 
 /// A use of a default argument or default member initializer whose
@@ -88,6 +91,14 @@ pub(crate) struct ImmState {
     pending: ImmPending,
     /// The escalated functions and why.
     reasons: HashMap<DeclId, Escalation>,
+    /// The immediate-escalating expressions of consteval-only type that
+    /// made their function immediate (an instantiation sharing one
+    /// escalates too, [`Sema::recheck_shared_consteval_only`]).
+    escalated_exprs: HashSet<ExprId>,
+    /// The error count when each pending expression of consteval-only
+    /// type was built: an error since (an invalid conversion of it, as
+    /// `if (^^int)`) was the full-expression's diagnostic.
+    consteval_only_errors: HashMap<ExprId, u32>,
 }
 
 /// The pending state of an enclosing full-expression set aside by
@@ -416,6 +427,7 @@ impl Sema<'_, '_> {
                     call: true,
                     default_init: None,
                     written: false,
+consteval_only: None,
                 };
                 self.escalate(g, why);
             }
@@ -450,6 +462,7 @@ impl Sema<'_, '_> {
                 call: false,
                 default_init: None,
                 written: false,
+consteval_only: None,
             };
             self.escalate(g, why);
         }
@@ -531,6 +544,7 @@ impl Sema<'_, '_> {
                             call: true,
                             default_init: Some(decl),
                             written: false,
+consteval_only: None,
                         }
                     } else {
                         Escalation {
@@ -539,6 +553,7 @@ impl Sema<'_, '_> {
                             call: true,
                             default_init: None,
                             written: false,
+consteval_only: None,
                         }
                     };
                     self.escalate(g, why);
@@ -557,6 +572,54 @@ impl Sema<'_, '_> {
             && !self.imm.pending.refs.contains(&e)
         {
             self.imm.pending.refs.push(e);
+        }
+    }
+
+    /// Records `e`, an expression of consteval-only type ([basic.types]:
+    /// `^^x`, later a splice), which is immediate-escalating
+    /// ([expr.const.imm]/2) unless exempt: checked with the references at
+    /// the end of the full-expression, it makes an enclosing
+    /// immediate-escalating function immediate and is an error elsewhere
+    /// (spec/sema.md §5.10). Returns `e`.
+    pub fn note_immediate_escalating_expr(&mut self, e: ExprId) -> ExprId {
+        if !self.immediate_exempt()
+            && !self.has_errors_in(e)
+            && !self.expr_is_value_dependent(e)
+            && !self.imm.pending.refs.contains(&e)
+        {
+            self.imm.pending.refs.push(e);
+            self.imm.consteval_only_errors.insert(e, self.diags.error_count());
+        }
+        e
+    }
+
+    /// Whether pending reference `r` is an expression of consteval-only
+    /// type ([`Sema::note_immediate_escalating_expr`]), not a reference to
+    /// an immediate function.
+    fn is_consteval_only_ref(&self, r: ExprId) -> bool {
+        self.ast.exprs.get(r).kind() == ExprKind::CXXReflectExpr
+    }
+
+    /// A shared expression of consteval-only type of an instantiation
+    /// (`templ/subst/shared.rs`): one that made the pattern immediate
+    /// makes an immediate-escalating instantiation immediate.
+    pub(crate) fn recheck_shared_consteval_only(&mut self, e: ExprId) {
+        if !self.imm.escalated_exprs.contains(&e) || self.immediate_exempt() {
+            return;
+        }
+        if let Some(g) =
+            self.func.as_ref().map(|s| s.decl).filter(|&g| self.is_immediate_escalating(g))
+        {
+            let ty = self.ast.exprs.get(e).ty();
+            let why = Escalation {
+                loc: self.begin_loc(e),
+                callee: g,
+                call: false,
+                default_init: None,
+                written: false,
+                consteval_only: Some(ty),
+            };
+            self.escalate(g, why);
         }
     }
 
@@ -671,7 +734,7 @@ impl Sema<'_, '_> {
                             None => (self.begin_loc(c), None, false),
                         };
                         let why =
-                            Escalation { loc, callee, call: true, default_init: field, written };
+                            Escalation { loc, callee, call: true, default_init: field, written, consteval_only: None };
                         self.escalate(g, why);
                     }
                     None => self.report_immediate_call(c, callee, fail, None, false),
@@ -683,7 +746,16 @@ impl Sema<'_, '_> {
                 self.ast.exprs.set_constant_elided(c);
             }
         }
+        // [expr.const]/22: a constant-initialized variable's initializer
+        // is manifestly constant-evaluated.
+        let constant_init = var.is_some_and(|v| self.checks_constant_init(v));
         for r in bad_refs {
+            if self.is_consteval_only_ref(r) {
+                if !constant_init {
+                    self.report_consteval_only(r, escalating);
+                }
+                continue;
+            }
             // Already immediate-escalating (an instantiation's copy of a
             // pattern's reference): clang skips it.
             if self.ast.exprs.get(r).has(ExprFlags::IMMEDIATE_ESCALATING) {
@@ -695,7 +767,7 @@ impl Sema<'_, '_> {
                 self.ast.exprs.set_immediate_escalating(r);
                 self.escalate(
                     g,
-                    Escalation { loc, callee: d, call: false, default_init: None, written: false },
+                    Escalation { loc, callee: d, call: false, default_init: None, written: false, consteval_only: None },
                 );
                 continue;
             }
@@ -716,6 +788,40 @@ impl Sema<'_, '_> {
         }
         for u in uses {
             self.check_default_use(u.decl, u.loc, escalating, false);
+        }
+        if !self.imm.consteval_only_errors.is_empty() {
+            for r in &refs {
+                self.imm.consteval_only_errors.remove(r);
+            }
+        }
+    }
+
+    /// Expression `r` of consteval-only type outside an immediate
+    /// function context: escalates `escalating`, else an error.
+    fn report_consteval_only(&mut self, r: ExprId, escalating: Option<DeclId>) {
+        let errors = self.imm.consteval_only_errors.remove(&r).unwrap_or(u32::MAX);
+        if self.diags.error_count() > errors {
+            return;
+        }
+        let loc = self.begin_loc(r);
+        let ty = self.ast.exprs.get(r).ty();
+        match escalating {
+            Some(g) => {
+                self.imm.escalated_exprs.insert(r);
+                let why = Escalation {
+                    loc,
+                    callee: g,
+                    call: false,
+                    default_init: None,
+                    written: false,
+                    consteval_only: Some(ty),
+                };
+                self.escalate(g, why);
+            }
+            None => {
+                let d = self.diag(DiagId::sema_immediate_escalating_expr, loc).arg(self.ty_arg(ty));
+                self.emit(d);
+            }
         }
     }
 
@@ -871,6 +977,18 @@ impl Sema<'_, '_> {
         let name = |d: DeclId| {
             if is_ctor(d) { self.unqualified_decl_name(d) } else { self.qualified_decl_name(d) }
         };
+        if let Some(ty) = why.consteval_only {
+            return Some(
+                self.diag(DiagId::note_immediate_function_reason_consteval_only, why.loc)
+                    .arg(if self.is_lambda_call_op(f) {
+                        self.unqualified_decl_name(f)
+                    } else {
+                        name(f)
+                    })
+                    .arg(u8::from(is_ctor(f)))
+                    .arg(self.ty_arg(ty)),
+            );
+        }
         Some(match why.default_init {
             Some(field) => self
                 .diag(DiagId::note_immediate_default_init_reason, why.loc)

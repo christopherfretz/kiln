@@ -856,7 +856,8 @@ impl Substituter<'_, '_, '_> {
             ExprKind::CXXReflectExpr => match ex(self).reflect_operand(e) {
                 kiln_ast::reflect::Reflectee::Type(q) => {
                     let q = self.ty(q, loc)?;
-                    Ok(self.sema.act_on_reflect_type(q, loc, end))
+                    let r = self.sema.act_on_reflect_type(q, loc, end);
+                    Ok(self.sema.note_immediate_escalating_expr(r))
                 }
                 _ => Ok(e),
             },

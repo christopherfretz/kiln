@@ -106,6 +106,7 @@ impl Sema<'_, '_> {
                         self.mark_function_referenced(f, loc);
                     }
                 }
+                ExprKind::CXXReflectExpr => self.recheck_shared_consteval_only(x),
                 ExprKind::UnaryOperator if rewarn => derefs.push(x),
                 // A failed immediate invocation is reported again.
                 ExprKind::ConstantExpr => {
