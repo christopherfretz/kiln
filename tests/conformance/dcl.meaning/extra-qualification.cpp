@@ -35,7 +35,7 @@
 //@ diag: 65:22 warning "extra qualification on member 't'"
 //@ diag: 71:8 warning "extra qualification on member 'z'"
 //@ requires: clang<22
-// clang 22 emits error: out-of-line declaration of 'f' does not match any declaration in 'A'; WP-355 residual
+// clang 19's wording; clang 22 adds the "defined here" note (extra-qualification-22.cpp).
 struct S {
   void S::f();
   int S::x;

@@ -2653,6 +2653,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `msg`, a qualified declarator's no-match error, with clang 22's
+    /// note naming the class `ctx` that was searched
+    /// (`note_entity_defined_here` after `err_member_decl_does_not_match`).
+    pub(crate) fn note_class_searched(&self, msg: kiln_diag::Diag, ctx: DeclId) -> kiln_diag::Diag {
+        if self.clang_compat < 22 || self.kind_of(ctx) != DeclKind::CXXRecord {
+            return msg;
+        }
+        let note = self
+            .diag(DiagId::note_entity_defined_here, self.ast.decls.get(ctx).loc())
+            .arg(self.decl_name(ctx));
+        msg.with_note(note)
+    }
+
     pub(crate) fn note_prev(
         &self,
         msg: kiln_diag::Diag,
@@ -3425,15 +3438,7 @@ impl Sema<'_, '_> {
                 self.note_prev(m, p, false)
             } else {
                 let m = self.diag(id, d.name_loc()).arg(fname.clone()).arg(scope);
-                // clang 22 notes the class searched.
-                if self.clang_compat >= 22 && method {
-                    let note = self
-                        .diag(DiagId::note_entity_defined_here, self.ast.decls.get(ctx).loc())
-                        .arg(self.decl_name(ctx));
-                    m.with_note(note)
-                } else {
-                    m
-                }
+                if method { self.note_class_searched(m, ctx) } else { m }
             };
             self.emit(msg);
             invalid_redecl = true;
@@ -5975,8 +5980,7 @@ impl Sema<'_, '_> {
             // reports `err_member_decl_does_not_match` as a definition,
             // with or without a body).
             let scope = if self.kind_of(q) == DeclKind::CXXRecord {
-                let t = self.this_class_type(q);
-                format!("'{}'", self.ty_str(t))
+                self.class_context_str(q)
             } else {
                 self.qualifier_desc(q)
             };
@@ -5992,10 +5996,7 @@ impl Sema<'_, '_> {
             _ => 0,
         };
         let scope = match self.kind_of(q) {
-            DeclKind::CXXRecord => {
-                let t = self.this_class_type(q);
-                format!("'{}'", self.ty_str(t))
-            }
+            DeclKind::CXXRecord => self.class_context_str(q),
             DeclKind::Namespace | DeclKind::TranslationUnit => self.qualifier_desc(q),
             _ => format!("'{}'", self.decl_name(q)),
         };
@@ -8912,7 +8913,9 @@ impl Sema<'_, '_> {
     /// scope (`N::A<long>::C`).
     pub(crate) fn class_context_str(&mut self, c: DeclId) -> String {
         let t = self.this_class_type(c);
-        let injected = t != self.tag_type(c);
+        // clang 19 prints a current instantiation unqualified (`'A<T>'`),
+        // clang 22 fully qualified (`'N::A<T>'`).
+        let injected = t != self.tag_type(c) && self.clang_compat < 22;
         let names = crate::names::SemaNames::new(self);
         let opts = kiln_ast::types::PrintOptions {
             full_scope: !injected,
