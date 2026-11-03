@@ -5085,6 +5085,7 @@ impl Sema<'_, '_> {
         true
     }
 
+    #[allow(clippy::too_many_lines, reason = "one linear pass over the initializer's checks")]
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {

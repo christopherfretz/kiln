@@ -929,19 +929,15 @@ impl Sema<'_, '_> {
             let r = self
                 .in_template_context(tmpl, |s| Substituter::new(s, &args).template_arg(def, at))
                 .map_err(|_| ());
-            match checking {
-                // Substituted: the instantiation frame ends here (clang
-                // `SubstDefaultTemplateArgument`).
-                Some(_) => {
-                    self.pop_inst_frame();
-                    r?
-                }
-                None => {
-                    let r = r.and_then(|a| self.check_template_arg(tmpl, depth, p, a, at, prior));
-                    self.pop_inst_frame();
-                    return r;
-                }
+            if checking.is_none() {
+                let r = r.and_then(|a| self.check_template_arg(tmpl, depth, p, a, at, prior));
+                self.pop_inst_frame();
+                return r;
             }
+            // Substituted: the instantiation frame ends here (clang
+            // `SubstDefaultTemplateArgument`).
+            self.pop_inst_frame();
+            r?
         } else {
             def
         };
