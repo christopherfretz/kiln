@@ -835,7 +835,8 @@ The normative description is spec/driver.md "Code generation". In short:
   calls and the plain calls of `__cxx_global_var_init` /
   `__clang_call_terminate` / `_ZTH` have none.
 - Initialization functions (`__cxx_global_var_init`,
-  `_GLOBAL__sub_I_*`) are `noinline` only at `-O0`.
+  `_GLOBAL__sub_I_*`) and the `thread_local` wrapper `_ZTW*` are
+  `noinline` only at `-O0`.
 - At `-Oz` a non-array delete-expression that does not deallocate
   through a virtual deleting destructor or a destroying `operator
   delete` calls `operator delete` unconditionally in the null check's
