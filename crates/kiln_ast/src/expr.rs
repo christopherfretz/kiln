@@ -2861,6 +2861,12 @@ impl ExprArena {
         u64::from(self.expect_kind(e, ExprKind::OffsetOfExpr).b)
     }
 
+    /// Whether an `OffsetOfExpr`'s designator passes through an invalid
+    /// class: its value is then not a constant expression.
+    pub fn offsetof_invalid_record(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::OffsetOfExpr).aux() != 0
+    }
+
     /// The `InitListExpr` of a `CompoundLiteralExpr`.
     pub fn compound_literal_init(&self, e: ExprId) -> ExprId {
         ExprId::new(self.expect_kind(e, ExprKind::CompoundLiteralExpr).a)

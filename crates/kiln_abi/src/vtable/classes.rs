@@ -107,6 +107,11 @@ impl<'a> Classes<'a> {
         Ok(())
     }
 
+    /// Restores the full step budget (a new query on a shared session).
+    pub fn refuel(&mut self) {
+        self.fuel = FUEL;
+    }
+
     pub fn ast(&self) -> &'a Ast {
         self.lay.ast()
     }

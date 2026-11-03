@@ -493,7 +493,7 @@ impl Parser<'_, '_> {
 
     /// clang's `SkipMalformedDecl`: skips to the end of a broken member
     /// declaration (through a `;` or a function body, or up to a `}`).
-    fn skip_malformed_decl(&mut self) {
+    pub(crate) fn skip_malformed_decl(&mut self) {
         loop {
             match Self::punct_of(self.tok()) {
                 Some(Punct::LBrace) => {

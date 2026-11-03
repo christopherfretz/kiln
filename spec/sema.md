@@ -844,6 +844,22 @@ Redeclaration and linkage rules:
   §5.7). A non-dependent volatile return type is not re-warned, and a
   deduced `auto` / `decltype(auto)` return never warns. Tests:
   `depr.volatile.type/volatile-return{,-cxx17,-subst,-subst-19}.cpp`.
+- **Volatile parameter types** ([depr.volatile.type]/2, C++20 and
+  later; WP-417): a parameter whose declared type is volatile-qualified
+  (before [dcl.fct]/5 drops the qualifier; a typedef keeps its sugar; a
+  pointer to volatile is not) warns `volatile-qualified parameter type
+  T is deprecated` [-Wdeprecated-volatile]
+  (`sema_deprecated_volatile_param`) at the parameter
+  (`check_volatile_params`). After substitution a parameter that became
+  volatile warns as a volatile return type does: at a class member's
+  instantiation, and for a deduced function template specialization at
+  its first use. Tests: `depr.volatile.type/volatile-param{,-19,-cxx17}.cpp`.
+- **A `...` in a non-parameter declarator** ([temp.variadic]/5): the
+  parser keeps it in `Declarator::ellipsis`; `type_for_declarator_at`
+  reports `only function and template parameters can be parameter
+  packs` (`sema_ellipsis_in_declarator_not_parameter`) at it for every
+  context but a prototype or a type-name, and the declared type keeps
+  its unexpanded pack. Test `temp.variadic/non-parameter-pack-declarator.cpp`.
 - **Prototype scope** ([basic.scope.param]): the parser brackets each
   parameter-declaration-clause with `act_on_start_prototype`,
   `act_on_prototype_param(&mut ParamInfo)` and `act_on_end_prototype`.
@@ -3357,6 +3373,11 @@ for them.
     expressions and whose type and components are kept in
     `ColdExprData::offsetof_pattern`; substitution rebuilds it
     (sema-templates.md §5.4; `ext.gnu.offsetof/dependent*.cpp`).
+  - (WP-417) Through a record whose definition is invalid, the
+    `OffsetOfExpr` is marked (`ExprArena::offsetof_invalid_record`):
+    the Oven fails it as not a constant expression with no note, and a
+    constexpr object of such a record stays silent, as clang
+    (`ext.gnu.offsetof/invalid-record.cpp`).
 - **`__builtin_choose_expr(c, a, b)`** (`act_on_choose_expr`, clang
   `ActOnChooseExpr`; WP-307): `c` must be an integral (or unscoped
   enumeration) constant expression, else `'__builtin_choose_expr'
@@ -4212,14 +4233,28 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   reports the first one, "variable of non-literal type 'T' cannot be
   defined in a constexpr {function|constructor} before C++23", with the
   type's "not literal because" notes, and marks the function invalid.
-  Variables whose own declaration was already diagnosed are checked too;
-  function templates, their specializations and lambda call operators are
-  not checked yet (open). A local whose initialization sema
+  Variables whose own declaration was already diagnosed are checked too.
+  In a template (a function template, a member of a class template, a
+  generic lambda) only a variable of non-dependent type is checked, at the
+  definition; instantiations are not checked. A function template made
+  invalid this way stays a candidate whose deduction is a substitution
+  failure without a reason ("candidate template ignored: substitution
+  failure [with T = int]"; `TemplState::body_invalid`), unlike one whose
+  declaration is invalid (`Tdk::Invalid`, no candidate); a member of a
+  class template made invalid is not instantiated ("no member named").
+  A lambda's call operator is checked only when the lambda is declared
+  `constexpr` or `consteval` explicitly; an implicitly constexpr one that
+  breaks the rule is silently not constexpr ([expr.prim.lambda.closure]/5;
+  clang `CheckConstexprKind::CheckValid`), checked again when an enclosing
+  template is instantiated, its generic specializations following the
+  pattern (`implicit_constexpr_lambda_body_vars`; WP-414). A local whose initialization sema
   rejected (no viable constructor) is marked invalid, and evaluating its
   declaration fails with no note (spec/oven.md "Classes").
   From C++23 clang 22 no longer applies `CheckLiteralType` during
   evaluation (spec/oven.md); clang 19 does. Tests:
   `tests/conformance/dcl.constexpr/non-literal-local-cxx{20,23,23-19}.cpp`,
+  `tests/conformance/dcl.constexpr/non-literal-local-template-cxx{20,23}.cpp`,
+  `tests/conformance/dcl.constexpr/non-literal-local-lambda-cxx20.cpp`,
   `tests/conformance/expr.const/invalid-local-silent.cpp`.
 
 ### 5.21 Template rules from the libstdc++ clusters (WP-323)

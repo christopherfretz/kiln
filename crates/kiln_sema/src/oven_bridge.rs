@@ -252,7 +252,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
         }
         self.flush_member_refs();
-        if !self.special.pending_deleted.is_empty() {
+        if self.special.has_pending() {
             self.flush_pending_deleted();
         }
         self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate(b, e, ctx))
@@ -271,7 +271,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return (Vec::new(), Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant)));
         }
         self.flush_member_refs();
-        if !self.special.pending_deleted.is_empty() {
+        if self.special.has_pending() {
             self.flush_pending_deleted();
         }
         self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate_chars(b, size, data, ctx))
