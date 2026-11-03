@@ -823,6 +823,11 @@ pub enum DeclSite {
     TypeParamDefault,
     /// A declarator rebuilt by template substitution (already checked).
     Subst,
+    /// The type-id operand of `^^` ([expr.reflect]): as
+    /// [`DeclSite::Plain`], except that a cv- or ref-qualified function
+    /// type may be reflected (it declares nothing: [dcl.fct]/6 restricts
+    /// declarations; GCC 16.1 accepts `^^int() const`).
+    Reflect,
 }
 
 /// The bracketed identifier list of a structured binding declaration

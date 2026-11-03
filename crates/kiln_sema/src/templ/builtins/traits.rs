@@ -770,10 +770,10 @@ impl Sema<'_, '_> {
             TypeView::RValueRef(p) => (p, ValueCategory::XValue),
             _ if self.ast.types.is_function(from.0) => (from.0, ValueCategory::LValue),
             // [expr.type]/2: a prvalue of a non-class, non-array type has
-            // its cv-qualifiers dropped (`VAL<const int>` is an `int`;
-            // clang 19 keeps them).
+            // its cv-qualifiers dropped (`VAL<const int>` is an `int`), at
+            // every -fclang-compat level: clang 19 keeps them, a bug clang
+            // 22 and GCC 16.1 do not have.
             _ if prvalue
-                && self.clang_compat >= 22
                 && self.ast.types.as_record(from.0).is_none()
                 && !self.ast.types.is_array(from.0) =>
             {
@@ -1049,7 +1049,7 @@ impl Sema<'_, '_> {
             TypeView::Pointer(_) | TypeView::MemberPointer { .. } | TypeView::Enum(_)
         ) || self.is_arithmetic_ext(q)
             || self.is_nullptr_type(q)
-            || self.is_meta_info_type(q)
+            || self.is_meta_info(q)
     }
 
     /// Scalar or vector (clang treats vectors as scalars here).

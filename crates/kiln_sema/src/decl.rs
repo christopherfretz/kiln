@@ -879,7 +879,8 @@ impl Sema<'_, '_> {
     /// through a typedef-name or `decltype` (no function declarator) is
     /// only the type of a non-static member function, of a typedef or
     /// alias-declaration, of a template type argument or of a type
-    /// parameter's default. Anything else (a non-member function at
+    /// parameter's default; the operand of `^^` declares nothing, so it
+    /// may name one ([expr.reflect]; GCC 16.1). Anything else (a non-member function at
     /// namespace or block scope, a static member function, a friend, a
     /// parameter, a type-id) is clang's `err_invalid_qualified_function_type`
     /// in its "of type" form, at the start of the declaration, and the
@@ -899,6 +900,7 @@ impl Sema<'_, '_> {
                     | DeclSite::TemplateArg
                     | DeclSite::TypeParamDefault
                     | DeclSite::Subst
+                    | DeclSite::Reflect
             )
             || d.chunks.iter().any(|c| matches!(c, Chunk::Function { .. }))
         {
