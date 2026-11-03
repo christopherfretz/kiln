@@ -117,7 +117,7 @@ impl AttrKind {
     /// (clang `InitPriorityAttr`): `a` is the priority, its dynamic
     /// initializer runs from the `_GLOBAL__I_<N>` constructor of priority
     /// `N` ([basic.start.dynamic]; spec/codegen.md §7f; WP-189).
-    pub const INIT_PRIORITY: AttrKind = AttrKind(109);
+    pub const INIT_PRIORITY: AttrKind = AttrKind(111);
 }
 
 /// Attribute syntax.
