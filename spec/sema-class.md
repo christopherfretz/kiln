@@ -857,11 +857,20 @@ member of a class template whose pattern is defaulted out of line is defined
 when the member's definition is instantiated
 (`instantiate_out_of_line_defaulted`, without the `= default` checks, as
 clang), its context note "in defaulted ... first required here" at the
-pattern's definition. Known difference: an error inside that instantiated
-definition is located at the member's in-class declaration where clang
-uses the pattern's out-of-line one. Tests:
+pattern's definition. The member is located at that definition from then
+on (sema-templates.md §4.6, WP-428), so an error inside the instantiated
+definition, and its note chain, are clang's. A defaulted copy or move
+assignment operator is defined at the end of its declaration (clang
+`DefineImplicitCopyAssignment` `getEndLoc()`, `declarator_end`,
+spec/ast.md): the declarator's closing `)` out of line, the last character
+of `default` in the class, the class for an implicit one; an instantiation
+of a member's `operator=` is "requested here" there. An out-of-line
+definition skips the deletion checks, so a member or base whose selected
+`operator=` is deleted is `attempt to use a deleted function` with the
+"explicitly marked deleted here" note ([dcl.fct.def.delete]/2). Tests:
 `tests/conformance/dcl.fct.def.default/out-of-line-defined-run.cpp`,
-`constexpr-out-of-line-cxx20.cpp`. A
+`constexpr-out-of-line-cxx20.cpp`, `instantiated-out-of-line-loc.cpp`,
+`assign-instantiation-point.cpp`. A
 deleted function must be deleted on its first declaration. Signature checks of
 [dcl.fct.def.default]/2–3 (`the parameter for an explicitly-defaulted copy
 constructor is const, but a member or base requires it to be non-const`, return

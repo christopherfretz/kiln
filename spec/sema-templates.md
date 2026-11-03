@@ -1622,6 +1622,18 @@ errors.
 | anonymous struct or union, unnamed member class | definition, with the unnamed member object and the injected `IndirectField`s (`subst/anon.rs`) | — |
 | unnamed bit-field | declaration, width substituted (a non-dependent width's `ConstantExpr` is not wrapped again) | — |
 
+A member function whose definition is instantiated from an out-of-line
+pattern definition (a user-written body, or `= default`) is located at that
+definition from then on (clang `InstantiateFunctionDefinition` copies the
+pattern definition's location and declarator end;
+`AstBuilder::relocate_to_pattern_definition`, WP-428): diagnostics in the
+instantiated body that point at the function (a reference member a
+constructor does not initialize), its "in defaulted ... first required here"
+note, and later candidate and "declared here" notes name the out-of-line
+definition. A member whose definition was not instantiated stays at its
+in-class declaration. Test:
+`tests/conformance/temp.inst/out-of-line-definition-location.cpp`.
+
 6. Complete the class:
    - implicit special-member declarations (S3C);
    - the layout, which stays lazy until abi asks for it.
