@@ -919,7 +919,12 @@ asks exactly one of:
 - *value-dependent* (`Sema::expr_is_value_dependent`, [temp.dep.constexpr]):
   an expression's value is unknown; constant evaluation, narrowing and
   `static_assert` wait for it. A value-dependent template argument makes
-  its specialization a dependent type.
+  its specialization a dependent type. A non-type template argument that
+  is only instantiation-dependent is also kept as written and not folded
+  (`is_same<void, void_t<decltype(e)>>::value`, whose qualifier is
+  instantiation-dependent, as a `DeclRefExpr`'s qualifier makes it):
+  substituting it again is what makes a failure in `e` a deduction
+  failure ([temp.deduct.general]/8).
 
 `sizeof...(U)` with `U` bound to a list holding pack expansions (an alias
 template named `N<Ts...>`) is the value-dependent `k + sizeof...(P1) +

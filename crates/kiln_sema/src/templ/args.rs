@@ -676,9 +676,18 @@ impl Sema<'_, '_> {
             }
             // A value-dependent argument (of an alias template named
             // with dependent arguments) is checked when it is substituted
-            // ([temp.res.general]/6).
+            // ([temp.res.general]/6), and so is an instantiation-dependent
+            // one (`is_same<void, void_t<decltype(e)>>::value`): folding it
+            // now would drop the substitution failure of `e`
+            // ([temp.deduct.general]/8; clang keeps it as written).
             (DeclKind::NonTypeTemplateParm, ArgView::Expr { expr, .. })
-                if self.expr_is_value_dependent(expr) =>
+                if self.expr_is_value_dependent(expr)
+                    || self
+                        .ast
+                        .exprs
+                        .get(expr)
+                        .deps()
+                        .contains(kiln_ast::expr::ExprDeps::INSTANTIATION) =>
             {
                 Ok(a)
             }
