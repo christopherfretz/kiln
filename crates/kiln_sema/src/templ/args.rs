@@ -682,12 +682,7 @@ impl Sema<'_, '_> {
             // ([temp.deduct.general]/8; clang keeps it as written).
             (DeclKind::NonTypeTemplateParm, ArgView::Expr { expr, .. })
                 if self.expr_is_value_dependent(expr)
-                    || self
-                        .ast
-                        .exprs
-                        .get(expr)
-                        .deps()
-                        .contains(kiln_ast::expr::ExprDeps::INSTANTIATION) =>
+                    || self.type_instantiation_dependent(expr) =>
             {
                 Ok(a)
             }
@@ -830,6 +825,33 @@ impl Sema<'_, '_> {
     /// converted constant expression ([temp.arg.nontype]/2) and
     /// evaluated: a `Value` argument.
     #[allow(clippy::too_many_lines)]
+    /// Whether `e` is instantiation-dependent through a type or a
+    /// qualifier (`is_same<void, void_t<decltype(x)>>::value`), whose
+    /// substitution can fail. A reference to a local declaration of a
+    /// template (`constexpr int N = 3; TC<N>`) is instantiation-dependent
+    /// in kiln only so that it is remapped; clang folds it, and so does
+    /// kiln.
+    fn type_instantiation_dependent(&self, e: ExprId) -> bool {
+        use kiln_ast::expr::ExprDeps;
+        let (x, t) = (&self.ast.exprs, &self.ast.types);
+        let inst = |q: QualType| t.flags(q.ty()).contains(TypeFlags::INSTANTIATION_DEPENDENT);
+        let mut stack = vec![e];
+        while let Some(e) = stack.pop() {
+            if !x.get(e).deps().contains(ExprDeps::INSTANTIATION) {
+                continue;
+            }
+            if inst(x.get(e).ty())
+                || x.decl_ref_extra(e)
+                    .and_then(|d| d.qualifier)
+                    .is_some_and(|q| t.nns_flags(q).contains(TypeFlags::INSTANTIATION_DEPENDENT))
+            {
+                return true;
+            }
+            stack.extend(x.children(e, &self.ast.lists));
+        }
+        false
+    }
+
     fn convert_nttp_arg(
         &mut self,
         tmpl: DeclId,
