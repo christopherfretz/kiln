@@ -107,6 +107,48 @@ fn syntax_only() {
     assert_eq!(o.stderr, "error: -fsyntax-only for C is not implemented yet\n");
 }
 
+/// `-flax-vector-conversions[=none|integer|all]`, `-fno-lax-vector-conversions`
+/// (clang's driver flags; GNU vector extension, spec/sema.md §5.8): which
+/// same-size vector bitcasts are implicit. clang is the oracle.
+#[test]
+fn lax_vector_conversions_like_clang() {
+    let src = "typedef int i4 __attribute__((vector_size(16)));\n\
+               typedef unsigned u4 __attribute__((vector_size(16)));\n\
+               typedef float f4 __attribute__((vector_size(16)));\n\
+               void f(u4 u, f4 b) { i4 x = u; i4 z = b; }\n";
+    let int_err = "<stdin>:4:25: error: cannot initialize a variable of type 'i4' (vector of 4 \
+                   'int' values) with an lvalue of type 'u4' (vector of 4 'unsigned int' values)\n";
+    let float_err = "<stdin>:4:35: error: cannot initialize a variable of type 'i4' (vector of 4 \
+                     'int' values) with an lvalue of type 'f4' (vector of 4 'float' values)\n";
+    let run = |flag: &[&str]| {
+        let mut args = vec!["-std=c++26", "-fsyntax-only", "-fno-caret-diagnostics"];
+        args.extend_from_slice(flag);
+        args.push("-");
+        kiln(&args, src)
+    };
+    for f in [&[][..], &["-flax-vector-conversions=all"]] {
+        let o = run(f);
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{f:?}");
+    }
+    for f in [&["-flax-vector-conversions"][..], &["-flax-vector-conversions=integer"]] {
+        let o = run(f);
+        assert_eq!(o.stderr, format!("{float_err}1 error generated.\n"), "{f:?}");
+    }
+    for f in [&["-fno-lax-vector-conversions"][..], &["-flax-vector-conversions=none"]] {
+        let o = run(f);
+        assert_eq!(o.stderr, format!("{int_err}{float_err}2 errors generated.\n"), "{f:?}");
+    }
+    // clang reports this from cc1 without a program prefix; kiln's driver
+    // errors all carry `kiln++: `.
+    let o = run(&["-flax-vector-conversions=bogus"]);
+    assert_eq!(o.code, 1);
+    assert!(
+        o.stderr.ends_with("error: invalid value 'bogus' in '-flax-vector-conversions=bogus'\n"),
+        "{}",
+        o.stderr
+    );
+}
+
 #[test]
 fn preprocess_stdin() {
     let o = kiln(&["-E", "-P", "-DX=42", "-"], "int a = X;\n#ifdef __KILN__\nkiln\n#endif\n");
