@@ -67,7 +67,7 @@ pub(crate) struct TbaaCache {
 impl Cg<'_> {
     /// TBAA is emitted (clang: `OptimizationLevel > 0 && !RelaxedAliasing`).
     pub(crate) fn tbaa_on(&self) -> bool {
-        self.opts.optimize && self.opts.strict_aliasing
+        self.opts.optimize() && self.opts.strict_aliasing
     }
 
     fn tbaa_kinds(&mut self) -> (MdKindId, MdKindId) {

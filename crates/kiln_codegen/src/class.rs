@@ -693,7 +693,7 @@ impl Cg<'_> {
         declared: Option<FuncId>,
     ) -> R<bool> {
         let ast = self.ast;
-        if !self.opts.optimize || ast.decls.get(d).kind() != DeclKind::CXXDestructor {
+        if !self.opts.optimize() || ast.decls.get(d).kind() != DeclKind::CXXDestructor {
             return Ok(false);
         }
         let linkage = self.fn_def_linkage(d);

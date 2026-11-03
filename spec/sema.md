@@ -2303,7 +2303,10 @@ specification as written (`TypeNames` prints ` noexcept`,
 - Implicit and defaulted special members keep `Deferred(f)` and are
   resolved through `class/special/excspec.rs` (sema-class.md §4.7). The
   `noexcept` operator sees these specs through constructor, destructor
-  and member calls (§5.3).
+  and member calls (§5.3). `act_on_start_function_def` resolves the spec
+  of every non-template definition (clang `ActOnStartOfFunctionDef`,
+  WP-431), so an out-of-line destructor nothing uses is still implicitly
+  `noexcept` for codegen's terminate scope ([except.spec]/8).
 
 **Landed (WP-269).** Friends, member templates and function template
 specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):

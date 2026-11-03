@@ -3289,7 +3289,8 @@ impl Cg<'_> {
             self.coerced_store_sized(r, &coerce, t, size);
             return Ok(Some(self.load_scalar(t, rq)));
         }
-        if rty == LTy::BFLOAT && self.is_x86() && !self.opts.optimize && self.opts.llvm_major < 22 {
+        if rty == LTy::BFLOAT && self.is_x86() && !self.opts.optimize() && self.opts.llvm_major < 22
+        {
             // spec/abi.md §8.18: LLVM 19's x86-64 FastISel (`-O0`) takes
             // a `bfloat` call result for the already widened `float`, so a
             // result passed straight on reaches `__truncsfbf2` as raw
@@ -3826,7 +3827,9 @@ impl Cg<'_> {
             self.store_lv(z, lv, false);
         } else {
             let vol = self.is_volatile(lv.q);
-            self.store(z, lv.addr.v, lv.addr.align, vol);
+            // clang `EmitStoreThroughLValue`: the lvalue's access tag.
+            let st = self.store(z, lv.addr.v, lv.addr.align, vol);
+            self.tbaa_mark(st, lv.q, lv.tb);
         }
         Ok(())
     }

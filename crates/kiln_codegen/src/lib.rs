@@ -75,10 +75,12 @@ pub struct CodegenOptions {
     /// (`-fcx-limited-range`, `-fcomplex-arithmetic=`; clang's
     /// `LangOptions::ComplexRange`).
     pub complex_range: ComplexRange,
-    /// The IR will be optimized (`-O1` and above): definitions are
-    /// emitted without the `-O0` `noinline optnone` pair (clang
-    /// `CodeGenOpts.OptimizationLevel > 0`; spec/codegen.md §7p).
-    pub optimize: bool,
+    /// The optimization level (clang `CodeGenOpts.OptimizationLevel`):
+    /// 0 at `-O0`, 1 at `-O`/`-O1`/`-Og`, 2 at `-O2`/`-Os`/`-Oz`, 3 at
+    /// `-O3` and above. Above 0 the IR will be optimized (see
+    /// [`Self::optimize`]); at exactly 1 loops carry
+    /// `llvm.loop.unroll.disable` (spec/codegen.md "Loop metadata").
+    pub opt_level: u8,
     /// The size optimization level: 1 at `-Os`, 2 at `-Oz`, else 0
     /// (clang `CodeGenOpts.OptimizeSize`): functions and call sites get
     /// `optsize`, and `minsize` too at 2 (spec/codegen.md "Size
@@ -205,6 +207,16 @@ impl ComplexRange {
     }
 }
 
+impl CodegenOptions {
+    /// The IR will be optimized (`-O1` and above): definitions are
+    /// emitted without the `-O0` `noinline optnone` pair (clang
+    /// `CodeGenOpts.OptimizationLevel > 0`; spec/codegen.md §7p).
+    #[must_use]
+    pub fn optimize(&self) -> bool {
+        self.opt_level > 0
+    }
+}
+
 impl Default for CodegenOptions {
     fn default() -> Self {
         CodegenOptions {
@@ -213,7 +225,7 @@ impl Default for CodegenOptions {
             ident: String::new(),
             outline_atomics: true,
             complex_range: ComplexRange::Full,
-            optimize: false,
+            opt_level: 0,
             opt_size: 0,
             strict_aliasing: true,
             clang_compat: 22,

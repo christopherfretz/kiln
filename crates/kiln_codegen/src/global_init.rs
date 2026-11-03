@@ -170,7 +170,7 @@ impl Cg<'_> {
     /// `noinline` only at `-O0` (clang 19 and 22 alike).
     fn init_fn_attrs(&mut self, vector_width: u64) -> kiln_llvm::AttrSetId {
         let mut a = Vec::new();
-        if !self.opts.optimize {
+        if !self.opts.optimize() {
             a.push(Attr::Flag(AttrKind::NoInline));
         }
         if !self.opts.exceptions {
@@ -324,6 +324,7 @@ impl Cg<'_> {
                 self.register_global_dtor(rd, V::C(gval(g)), tls)?;
             }
         }
+        self.emit_decl_invariant(d, ty, g);
         Ok(())
     }
 
@@ -869,7 +870,7 @@ impl Cg<'_> {
         let one = V::C(self.m.const_int(LTy::I8, 1));
         self.store(one, gp, 1, false);
         // `EmitInvariantStart`: the guard never changes again (-O1+).
-        if self.opts.optimize {
+        if self.opts.optimize() {
             let f = kiln_llvm::intrinsics::invariant_start(&mut self.m);
             let fn_ty = self.m.func(f).ty();
             let size = V::C(self.m.const_int(LTy::I64, 1));

@@ -5996,6 +5996,13 @@ impl Sema<'_, '_> {
             self.emit(self.diag(DiagId::sema_builtin_definition, loc).arg(info.name));
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
+        // clang `ActOnStartOfFunctionDef` resolves the exception
+        // specification of every definition: a destructor or defaulted
+        // special member nothing uses still needs its implicit `noexcept`
+        // for codegen's terminate scope ([except.spec]/8, spec/sema.md §4.7).
+        if !self.in_template() {
+            self.resolve_exception_spec(f, self.ast.decls.get(f).loc());
+        }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         // The return type as written: diagnostics name its typedef.
         let ret = self.sugared_proto(fty).map_or(QualType::ERROR, |p| p.ret());
