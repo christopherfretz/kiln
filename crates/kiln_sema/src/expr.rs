@@ -3668,7 +3668,12 @@ impl Sema<'_, '_> {
             } else {
                 DiagId::sema_invalid_operands
             };
-            let msg = self.diag(id, loc).arg(self.ty_arg(lt)).arg(self.ty_arg(rt));
+            let msg = self
+                .diag(id, loc)
+                .arg(self.ty_arg(lt))
+                .arg(self.ty_arg(rt))
+                .range(self.expr_range(l))
+                .range(self.expr_range(r));
             self.emit(msg);
             return self.recover_err(&[l2, r2], loc);
         }

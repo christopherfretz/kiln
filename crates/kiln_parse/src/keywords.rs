@@ -188,12 +188,13 @@ impl Keywords {
     /// GNU keywords that are not reserved identifiers (`typeof`, as clang
     /// in C++; spec/sema.md §5.8). At `compat` 22 `__is_referenceable` is
     /// an ordinary identifier (clang 22 removed the trait; spec/sema.md
-    /// §1.1).
-    pub fn new(interner: &Interner, gnu: bool, compat: u32) -> Self {
+    /// §1.1). Before C++11 `nullptr` is an identifier (clang's
+    /// `KEYCXX11`; spec/parse.md §1).
+    pub fn new(interner: &Interner, gnu: bool, cxx11: bool, compat: u32) -> Self {
         let mut map = HashMap::new();
         for (k, spellings) in Kw::TABLE {
             for s in *spellings {
-                if !gnu && *s == "typeof" {
+                if (!gnu && *s == "typeof") || (!cxx11 && *s == "nullptr") {
                     continue;
                 }
                 map.insert(interner.intern(s), *k);

@@ -273,7 +273,9 @@ The checks:
 `narrowing_diag(s, n, init, to) -> Option<Diag>` returns clang's warning
 (warning-as-error, group `c++11-narrowing`) with its "insert an explicit
 cast" note. The message renders the constant as clang does (`%e`-style for
-floating, `format_e6`).
+floating, `format_e6`). Both underline the initializer, and the note
+carries clang's two insertions `static_cast<T>(` at its start and `)` after
+its last token (only for a spellable `T`, a typedef or builtin; WP-421).
 
 ## 8. Literal typing (`literal.rs`)
 These functions take the lexer's classification (`kiln_lex::literal`) and

@@ -461,6 +461,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     gives "unknown type name '_Bool'", and `sizeof(_Bool)` gives "use
     of undeclared identifier '_Bool'", as in clang. `_Atomic`,
     `_Alignas` and `_Alignof` stay, since clang accepts them in C++.
+  - `nullptr` is a keyword from C++11 on (clang `KEYCXX11`); under
+    `-std=c++98`/`c++03` it is an identifier, so `int *p = nullptr;` is
+    "use of undeclared identifier 'nullptr'" and `int nullptr;` declares
+    a variable (WP-421, `tests/conformance/lex.key/nullptr-cxx98.cpp`).
+    The other C++11 keywords (`constexpr`, `decltype`, `noexcept`,
+    `static_assert`, `thread_local`, `alignas`, `alignof`, `char16_t`,
+    `char32_t`) stay keywords in every mode, where clang makes them
+    identifiers before C++11 too (a follow-up).
 - **Bracket depth:** `bump` tracks `(`, `[` and `{` nesting, like
   clang's `ParenCount`/`BracketCount`/`BraceCount`.
 - **Expected tokens:**
