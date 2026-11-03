@@ -72,7 +72,6 @@ an XPASS is the cue to drop its row.
 
 | cause | count | WP | tests |
 |---|---:|---|---|
-| `[[nodiscard]]` hidden friend of a class template never warns | 5 | none yet | `nodiscard.verify` in range.filter, range.iota.view, range.repeat.view; join.with iterator `eq`, `iter_move` |
 | `-Wnonnull` "null passed to a callee that requires a non-null argument" | 5 | WP-433 | `nonnull.verify` in specialized.algorithms, mem.res, print.fun, basic.string, string.view |
 | `lifetimebound` "temporary bound to local reference … will be destroyed" | 4 | none yet | `lifetimebound.verify` in algorithms, as-lvalue, function.objects, utility/forward |
 | `-Wthread-safety` | 2 | none yet | `thread_safety.verify` in thread.shared_mutex, thread.shared_timed_mutex |
@@ -89,6 +88,7 @@ XPASS under kiln with libc++ 22.1.8).
 | class | count | construct / first error | fix | test |
 |---|---:|---|---|---|
 | (b) | 7 | `[[nodiscard]]` on a later redeclaration of a function template not merged (libc++ forward-declares `get`, `any_cast`, `begin`/`end` without it): `nodiscard.verify` in array, complex.number, numarray, tuple, pairs, variant, any | a function template specialization takes the unused-result attributes of every declaration of its template seen when it is formed (`function_spec_attrs`; spec/landed/sema/WP-491.md) | `dcl.attr.nodiscard/redeclared-function-template.cpp` |
+| (b) | 5 | a `[[nodiscard]]` hidden friend of a class template never warned: `nodiscard.verify` in range.filter, range.iota.view, range.repeat.view; join.with iterator `eq`, `iter_move` | an instantiated friend function gets the pattern's attributes (`friend_definition`/`function_decl`; spec/landed/sema/WP-491.md) | `dcl.attr.nodiscard/hidden-friend-class-template.cpp`, `hidden-friend-operator-clang{22,19}.cpp` |
 
 ## Fixed in WP-461
 

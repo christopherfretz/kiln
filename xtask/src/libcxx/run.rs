@@ -661,26 +661,6 @@ const M5_TRIAGED: &[(&str, &str)] = &[
         "missing [[clang::lifetimebound]] 'temporary bound to local reference … will be destroyed at the end of the full-expression'; no WP yet",
     ),
     (
-        "libcxx/ranges/range.adaptors/range.filter/nodiscard.verify.cpp",
-        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iter_move) never warns; no WP yet",
-    ),
-    (
-        "libcxx/ranges/range.adaptors/range.join.with/range.join.with.iterator/eq.nodiscard.verify.cpp",
-        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (operator==) never warns; no WP yet",
-    ),
-    (
-        "libcxx/ranges/range.adaptors/range.join.with/range.join.with.iterator/iter_move.nodiscard.verify.cpp",
-        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iter_move) never warns; no WP yet",
-    ),
-    (
-        "libcxx/ranges/range.factories/range.iota.view/nodiscard.verify.cpp",
-        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iterator operator+/operator-) never warns; no WP yet",
-    ),
-    (
-        "libcxx/ranges/range.factories/range.repeat.view/nodiscard.verify.cpp",
-        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iterator operator+/operator-) never warns; no WP yet",
-    ),
-    (
         "libcxx/strings/basic.string/nonnull.verify.cpp",
         "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
     ),
