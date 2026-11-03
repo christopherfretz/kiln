@@ -2508,6 +2508,11 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   when `k % 8 == 0`, else false (`b8 w = shuffle(b4, b4, 0..7)` is
   `0x01`), the value clang 19 folds and emits. At compat 22 the shuffle
   has the ext vector type and no cast.
+- *Union members* (WP-438): a lane is one bit, so a lane store into a
+  `bool` vector member of a union goes through the union like a
+  bit-field's (`ty.rs` `has_bit_unit` treats the lanes of a `BoolVec` as
+  bit units): `union U { b8 v; unsigned char c; }; constexpr U u =
+  {(b8)true};` constructs `v`, at either level.
 - *Notes* print a bool vector argument lane by lane (`{true, false,
   ...}`, every lane, as clang).
 - *Codegen*: a constexpr or constant-initialized bool-vector variable
@@ -2526,7 +2531,8 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   has no conversion at all (sema).
 Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp` (shuffles:
 `bool-constexpr-shuffle-run.cpp`, `-19.cpp`;
-`tests/codegen/bool_vector_shuffle_const.cpp`),
+`tests/codegen/bool_vector_shuffle_const.cpp`; unions:
+`bool-constexpr-union-run.cpp`, `tests/codegen/bool_vector_union_const.cpp`),
 `ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`,
 `ext.vector/bool-from-int-vector-constexpr-clang22.cpp`.
 
