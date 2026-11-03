@@ -2464,6 +2464,13 @@ exception (see "Bool vectors" below). The operations are in
   `__builtin_reduce_*` fold, as clang 20+ does (WP-394;
   `ext.vector/constexpr-diagnostics-clang22.cpp`). A `?:` with a vector
   condition fails silently in clang 22 as well, so it stays rejected.
+  Writing a lane (`v[i] = x`, `v.y = x`, any vector element type) of a
+  union member does not make that member active: only member access and
+  array subscript do ([class.union.general]/6), so the vector operand is
+  accessed as a read-modify-write (`compile.rs` `lane_base_access`) and
+  an inactive member is "assignment to member 'v' of union with active
+  member 'c'", as clang (WP-438;
+  `ext.vector/bool-constexpr-union-diagnostics-clang22.cpp`).
   The compat-19 boundary above holds until the oracle switch (WP-184,
   M3 to M4).
 - Codegen emits folded vector values as `<N x T>` constants
