@@ -56,6 +56,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::MINSIZE => "minsize",
         AttrKind::NAKED => "naked",
         AttrKind::MAY_ALIAS => "may_alias",
+        AttrKind::INIT_PRIORITY => "init_priority",
         AttrKind::NONNULL => "nonnull",
         AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
@@ -246,6 +247,7 @@ impl Sema<'_, '_> {
     /// wrong.
     pub(crate) fn check_decl_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
         self.check_alignas_subject(d, attrs);
+        self.check_init_priority(d, attrs);
         let kind = self.ast.decls.get(d).kind();
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);

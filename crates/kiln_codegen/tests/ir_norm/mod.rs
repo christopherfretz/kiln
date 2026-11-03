@@ -22,6 +22,10 @@
 //!   `preallocated`/`nest`/`swift*` with a `byval`'s `align`, mangled
 //!   name, varargs) except the `@llvm.*` intrinsic declarations. It is
 //!   compared verbatim.
+//! - [`unname_locals`] renumbers the local values after LLVM passes named
+//!   the ones they created (the `Allow::LoopCanon` comparison).
+
+use std::fmt::Write as _;
 
 /// Drops the `ModuleID` comment, `source_filename`, the `llvm.ident`
 /// named metadata and its string node (clang's or kiln's version).
@@ -402,6 +406,82 @@ pub fn abi_slice(s: &str) -> String {
     out
 }
 
+/// True for a character of an unquoted LLVM local name (`%name`).
+fn is_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '$' | '.' | '_')
+}
+
+/// Renumbers every function's local values and blocks as an unnamed
+/// module's would be (`%0`, `%1`, ... in definition order, the implicit
+/// entry block included), dropping the names LLVM passes give the values
+/// they create (`.preheader`, `.loopexit`, `.lcssa`). Expects unnamed
+/// numeric arguments (clang and kiln discard value names) and drops the
+/// `; preds` comments; reprint with `opt` to restore them.
+pub fn unname_locals(s: &str) -> String {
+    let lines: Vec<&str> = s.lines().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        out.push_str(line);
+        out.push('\n');
+        i += 1;
+        if !(line.starts_with("define ") && line.trim_end().ends_with('{')) {
+            continue;
+        }
+        let end = (i..lines.len()).find(|&j| lines[j] == "}").unwrap_or(lines.len());
+        let body = &lines[i..end];
+        let mut next = line
+            .split('%')
+            .skip(1)
+            .filter(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit()))
+            .count();
+        let label_of = |l: &str| -> Option<String> {
+            let l = strip_comment(l).trim_end();
+            let name = l.strip_suffix(':')?;
+            (!name.is_empty() && !l.starts_with(' ') && name.chars().all(is_name_char))
+                .then(|| name.to_owned())
+        };
+        let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        if body.first().is_some_and(|l| label_of(l).is_none()) {
+            next += 1;
+        }
+        for l in body {
+            let def = label_of(l).or_else(|| {
+                let t = l.trim_start();
+                let rest = t.strip_prefix('%')?;
+                let (name, tail) = rest.split_at(rest.find(|c| !is_name_char(c))?);
+                tail.starts_with(" = ").then(|| name.to_owned())
+            });
+            if let Some(d) = def {
+                map.insert(d, next.to_string());
+                next += 1;
+            }
+        }
+        for l in body {
+            if let Some(name) = label_of(l) {
+                let _ = writeln!(out, "{}:", map[&name]);
+                continue;
+            }
+            let mut rest = *l;
+            while let Some(p) = rest.find('%') {
+                out.push_str(&rest[..=p]);
+                rest = &rest[p + 1..];
+                let n = rest.find(|c| !is_name_char(c)).unwrap_or(rest.len());
+                match map.get(&rest[..n]) {
+                    Some(new) => out.push_str(new),
+                    None => out.push_str(&rest[..n]),
+                }
+                rest = &rest[n..];
+            }
+            out.push_str(rest);
+            out.push('\n');
+        }
+        i = end;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,6 +527,33 @@ mod tests {
             "target triple = \"x86_64-unknown-linux-gnu\"\n\
              %struct.S = type { i32, [4 x i8] }\n\
              define { i64, i64 } @_Z1fv(i32, ...)\n"
+        );
+    }
+
+    #[test]
+    fn unname_locals_renumbers_pass_created_names() {
+        let s = "%struct.S = type { i32 }\n\
+                 define void @f(ptr noundef %0) {\n\
+                 \x20 br i1 true, label %3, label %.preheader\n\
+                 .preheader:                ; preds = %1\n\
+                 \x20 %.lcssa = phi ptr [ %0, %1 ]\n\
+                 \x20 %2 = getelementptr %struct.S, ptr %.lcssa, i64 1\n\
+                 \x20 br label %3\n\
+                 3:\n\
+                 \x20 ret void\n\
+                 }\n";
+        assert_eq!(
+            unname_locals(s),
+            "%struct.S = type { i32 }\n\
+             define void @f(ptr noundef %0) {\n\
+             \x20 br i1 true, label %5, label %2\n\
+             2:\n\
+             \x20 %3 = phi ptr [ %0, %1 ]\n\
+             \x20 %4 = getelementptr %struct.S, ptr %3, i64 1\n\
+             \x20 br label %5\n\
+             5:\n\
+             \x20 ret void\n\
+             }\n"
         );
     }
 

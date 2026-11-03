@@ -863,8 +863,11 @@ The normative description is spec/driver.md "Code generation". In short:
     verbatim. Required under every oracle.
   A `(case, triple, oracle)` entry in the `DEVIATIONS` table allows
   `Structure` (the mode's comparison may fail; the ABI slice must match),
-  `Abi` (both may fail; the IR must verify) or `OracleInvalid` (the
-  oracle's IR fails verification; only kiln's is verified). An entry that
+  `Abi` (both may fail; the IR must verify), `OracleInvalid` (the
+  oracle's IR fails verification; only kiln's is verified) or
+  `LoopCanon` (kiln's IR is first put through `opt
+  -passes=loop-simplify,lcssa` and `ir_norm::unname_locals`, then must
+  match exactly; the AArch64 deviation below, WP-189). An entry that
   starts matching is reported for removal. The
   corpus is 226 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
@@ -1154,8 +1157,19 @@ The normative description is spec/driver.md "Code generation". In short:
   LoopSimplify/LCSSA prerequisites rewrite loops in every function
   without `optnone` (the `__cxx_global_var_init` functions): array
   construction and EH-cleanup loops gain `.preheader`/`.loopexit` blocks
-  and LCSSA `phi`s. kiln emits the plain loops. `ir_vs_clang` lists
-  `global_init_array_eh` on aarch64 as a known deviation; x86_64 is exact.
+  and LCSSA `phi`s (and the incoming order of existing `phi`s changes).
+  kiln emits the plain loops, as clang 22 and clang 19 on x86_64 do: the
+  reshaping is an LLVM 19 AArch64 pass-pipeline artifact, not frontend
+  output, so kiln does not reproduce it (WP-189). `ir_vs_clang` marks
+  the affected aarch64/oracle-19 cases `Allow::LoopCanon`
+  (`global_init_array_eh`, `eh_array_destroy_throwing_global`,
+  `array_temporary_global`): kiln's IR is run through `opt
+  -passes=loop-simplify,lcssa` (which leaves `optnone` functions alone,
+  as the pipeline does) and its local names are renumbered in definition
+  order (`ir_norm::unname_locals`, so the pass-created `.preheader`/
+  `.loopexit` blocks get the numbers clang's do), after which the case
+  must match clang 19 byte for byte. x86_64 and oracle 22 are exact
+  without it.
 - **GNU array range designators with side effects** (`int a[3] =
   {[0 ... 2] = f()}`, WP-193): sema gives each element of the range its
   own copy of the clause, so the clause is evaluated once per element.
@@ -2044,10 +2058,32 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   value (`fold.rs` `refers_to_const_var`, clang `CEK_AsValueOrReference`).
   `tests/codegen/ref_constant_read.cpp`,
   `tests/conformance/basic.def.odr/reference-constant-init-not-odr-used.cpp`.
-- **Not implemented:** `init_priority`, folding of reads of `const` class
-  objects that clang permits ([basic.start.static]/3), and `constant` on
-  an `extern` declaration of a reference or const scalar (clang
-  `isTypeConstant`; `module.rs` `get_gvar` emits `external global`).
+- **`init_priority(N)` (WP-189).** A namespace-scope variable carrying
+  the GNU attribute (sema.md, `AttrKind::INIT_PRIORITY`, value in the
+  node's `a`; on any redeclaration) is not partially-ordered or ordered:
+  as clang's `EmitCXXGlobalVarDeclInitFunc`, after the thread-local
+  branch (a `thread_local` ignores the priority) its init function joins
+  `prioritized`. At the end of the TU the list is stable-sorted by
+  priority and each priority gets one `_GLOBAL__I_%06u` function
+  (internal, `.text.startup`, the `_GLOBAL__sub_I_` attributes) calling
+  its init functions in definition order; the first chunk starts with
+  the imported module initializers. `_GLOBAL__sub_I_<file>` is emitted
+  whenever prioritized inits exist, even when empty. `@llvm.global_ctors`
+  lists the partially-ordered entries (priority 65535) first, then the
+  chunks with their priority, then `_GLOBAL__sub_I_`. In a module
+  interface or implementation unit the prioritized inits instead run in
+  the module initializer, after the imported module initializers and
+  before the ordered ones (clang `EmitCXXModuleInitFunc`).
+  `tests/codegen/init_priority.cpp`,
+  `tests/conformance/basic.start.dynamic/init-priority-run.cpp`.
+- **Local references (WP-189).** A local reference whose initializer
+  folds stores the folded constant address (clang `EmitAutoVarInit`:
+  `mightBeUsableInConstantExpressions`, `ConstantLValueEmitter`'s
+  byte-offset GEP) instead of evaluating the glvalue; one that does not
+  fold binds the evaluated glvalue. `tests/codegen/ref_local_constant_init.cpp`.
+- Folding of reads of `const` class objects ([expr.const]/4,
+  [basic.start.static]/3) matches clang (no corpus deviation found in
+  the WP-189 triage).
 
 ## 7g. Landed (WP-118): WP-100 follow-ups
 - **Constructor loops.** Sema gives `new K[2][3]` / `new K[n][3]()` a
@@ -2163,6 +2199,16 @@ Where the definitions are emitted (clang hands them to
   WP-117) or structor (`Sema::mark_member_explicit_spec`) of an implicit
   specialization sets that kind, with or without an explicit
   instantiation.
+
+- A constructor emitted at an explicit instantiation definition creates
+  its class's IR struct type before emitting member initializers (after
+  the vptr stores; clang `EmitCtorPrologue`, whose
+  `FieldConstructionScope` converts the record type), so the named
+  struct types are declared in clang's order ([temp.explicit]/10,
+  WP-189). Static data members of an explicitly instantiated class are
+  `weak_odr` in their own COMDAT with their dynamic initializers in the
+  ordered `_GLOBAL__sub_I_` sequence; `extern template` emits neither
+  ([temp.explicit]/11).
 
 Tests: `tests/codegen/explicit_instantiation*.cpp`,
 `tests/codegen/structor_rauw_order.cpp` (IR parity on both triples).
@@ -2718,10 +2764,15 @@ guarantees it a constant initializer and a trivial destructor
 - Tests: `tests/codegen/thread_local.cpp`,
   `tests/codegen/module_thread_local.cpp` (oracle 22),
   `tests/conformance/basic.stc.thread/module-tls-run.cpp`.
-- **Remaining:** clang emits a template
-  variable's initializer after the TU's functions (deferred) where kiln
-  emits it at first use, so `thread_local.cpp` has no thread-local
-  variable template.
+- **Remaining:** clang emits the initializer (and `_ZTH`/`_ZTW`) of an
+  implicitly instantiated variable template specialization or template
+  static data member after the TU's functions (sema
+  `PerformPendingInstantiations` adds the instantiated definition at the
+  end of the TU), where kiln emits it at first use (`get_gvar` →
+  `instantiated_var_def`); fixing it needs sema to defer the
+  instantiation (`templ/pending.rs`), so `thread_local.cpp` has no
+  thread-local variable template (WP-189 triage: everything else in
+  `tls.rs` matches clang 19).
 
 ## 7q. Landed (WP-187): `-Wpsabi` and `bool`-vector conditions
 - **Calls: `-Wpsabi`** (`psabi.rs`, clang
@@ -2770,7 +2821,7 @@ no `result.ptr` spill).
 
 **Remaining (M3):**
 1. Oven folding of constant-initialized references, for the
-   direct-referee use (deviations above); `init_priority` (§7f).
+   direct-referee use (deviations above).
 2. The Sema gaps above, then corpus cases for them: class copy-init,
    braced returns, reference casts, temporaries, range-for over arrays.
 3. Bit-field and base-class constants, reference members.

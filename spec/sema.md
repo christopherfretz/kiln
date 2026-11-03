@@ -1682,6 +1682,7 @@ and returns the scope it names:
   | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
   | ENUM_EXTENSIBILITY | 1 for `open`, 0 for `closed` | — |
+  | INIT_PRIORITY | the checked priority (`u32`; the raw `ExprId` before `check_decl_attrs`) | — |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -1867,6 +1868,29 @@ and returns the scope it names:
     [class.mem.general]/8). Test:
     `tests/conformance/dcl.align/alignof-expression-diag.cpp`.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
+  - **`init_priority(N)`** (GNU, [dcl.attr.grammar]/5;
+    `init_priority.rs`, clang `handleInitPriorityAttr`, WP-189). Parsed
+    with an expression argument (`__attribute__` or `[[gnu::]]`); exactly
+    one, else `'init_priority' attribute takes one argument` (under
+    compat ≥ 22 the `[[gnu::]]` spelling is named `'gnu::init_priority'`).
+    `check_decl_attrs` then checks, in clang's order, dropping the
+    attribute on the first error: the subject is a variable (`only
+    applies to variables`); it is not declared in a function and its type,
+    arrays stripped, is a class (`can only use 'init_priority' attribute
+    on file-scope definitions of objects of class type`); the argument is
+    an integer constant (`'init_priority' attribute requires an integer
+    constant`, at the attribute) whose value fits in 32 bits (`integer
+    constant expression evaluates to value N that cannot be represented
+    in a 32-bit unsigned integer type`, at the expression); and the
+    range. Under compat < 22, outside 101..=65535 is `'init_priority'
+    attribute requires integer constant between 101 and 65535 inclusive`
+    (not checked in a system header). Under compat ≥ 22, above 65535 is
+    the same error with bounds 0 and 65535, and below 101 is `requested
+    'init_priority' N is reserved for internal use`
+    (`-Winit-priority-reserved`, default error; the attribute is kept).
+    A surviving attribute stores the priority in `a`; codegen orders the
+    variable's initialization by it (spec/codegen.md §7f).
+    `tests/conformance/dcl.attr/gnu-init-priority*.cpp`.
   - **Attribute subjects** ([dcl.attr.grammar]/5, `decl_attrs.rs`
     `check_decl_attrs`, clang `diagAppertainsToDecl` and the per-kind
     handlers; WP-324). One table, applied to the attributes of every
