@@ -2964,8 +2964,11 @@ impl Cg<'_> {
             return Ok(Some(self.emit_lvalue(a)?.addr.v));
         }
         let mut lib = None;
+        // WP-419: a recognized C library function clang lowers as its
+        // `__builtin_` twin (`ceil(x)` -> `llvm.ceil`).
         if let Some(d) = direct
-            && let Some(id) = ast.decls.builtin_id(d)
+            && let Some(id) =
+                ast.decls.builtin_id(d).or_else(|| crate::builtins::lib_intrinsic(ast, d))
         {
             match self.emit_builtin(id, e)? {
                 crate::builtins::BuiltinCall::Emitted(v) => return Ok(v),
