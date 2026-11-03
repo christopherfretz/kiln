@@ -1180,6 +1180,7 @@ impl Cg<'_> {
                     return true;
                 }
                 let Some(rd) = ast.types.as_record(n.ty()) else { return false };
+                let rd = ast.definition(rd).unwrap_or(rd);
                 if ast.decls.record(rd).map(|r| r.tag) != Some(TagKind::Struct) {
                     return false;
                 }

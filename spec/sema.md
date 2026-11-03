@@ -369,7 +369,10 @@ residual` (docs/status/wp-184-oracle-switch.md).
   non-dependent `extern int g;` in it conflicts with an earlier `extern
   char g;`. A block-scope redeclaration whose type (or the earlier
   declaration's type) is dependent is checked only at instantiation
-  (clang's `MergeVarDeclTypes` for a local variable). Test:
+  (clang's `MergeVarDeclTypes` for a local variable). An instantiated
+  block-scope `extern` declaration keeps its function as its context but
+  names the namespace-scope entity, which the mangler resolves
+  (spec/abi.md §8.27, WP-462). Test:
   tests/conformance/basic.link/local-extern-template-pattern.cpp (WP-330).
 - **`classify_name`** gives the parser a name's category: type,
   namespace, value, or undeclared.
@@ -651,7 +654,8 @@ Redeclaration and linkage rules:
   redeclarations" (§4.7).
 - **GNU asm labels** (`act_on_asm_label`, clang's
   `ActOn{Function,Variable}Declarator` and `mergeDeclAttributes`): a
-  function (also a member function, WP-449) or variable declarator's
+  function (also a member function, WP-449, and a constructor,
+  destructor or conversion function, WP-462) or variable declarator's
   label becomes an `AsmLabel`
   attribute, first in the declaration's attribute list, and its
   `StringLitId` is recorded in the `asm_label` cold data of the entity's
