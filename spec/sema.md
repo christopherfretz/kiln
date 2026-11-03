@@ -2023,6 +2023,14 @@ and returns the scope it names:
       writes no erroneous value (spec/codegen.md §7r); constant
       evaluation is unchanged (an indeterminate read is non-constant).
       Tests: `tests/conformance/dcl.attr.indet/`.
+    - `clang::uninitialized` / GNU `uninitialized` (WP-452;
+      `AttrKind::UNINITIALIZED`, `check_uninitialized_subject`): only a
+      variable with automatic storage duration; elsewhere ignored with
+      the warning `'clang::uninitialized' attribute only applies to
+      local variables` [-Wignored-attributes] (clang's `LocalVar`).
+      Effect: codegen writes no fill under `-ftrivial-auto-var-init` or
+      C++26's erroneous value (spec/codegen.md §7y). Test:
+      `tests/conformance/basic.indet/uninitialized-attr.cpp`.
     - `fallthrough`, `likely`, `unlikely` and `assume` are statement
       attributes: on any declaration `'X' attribute cannot be applied to
       a declaration` (error).
