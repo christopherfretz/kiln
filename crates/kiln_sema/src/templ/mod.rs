@@ -158,6 +158,10 @@ impl HeadBuild {
 #[allow(clippy::struct_excessive_bools, reason = "independent parse-state flags")]
 pub struct TemplState {
     pub(crate) heads: Vec<HeadBuild>,
+    /// The open expansion statements' synthetic levels (innermost last):
+    /// the function whose body holds each, and the dependent depth
+    /// outside it ([`Sema::in_template_outside_expansions`]).
+    pub(crate) expansions_open: Vec<(Option<DeclId>, u32)>,
     /// A declarator-id's nested-name-specifier is being parsed (clang's
     /// `EnteringContext`): `X<P...>::` names the current instantiation
     /// even outside `X`'s definition ([temp.mem]/1, out-of-line members).
@@ -506,6 +510,49 @@ impl Sema<'_, '_> {
         depth
     }
 
+    /// Opens the synthetic template level of an expansion statement's
+    /// for-range-declaration and compound-statement ([stmt.expand]/1:
+    /// they are instantiated once per element, P1306R5): a head with no
+    /// parameters and no scope, taken (no declaration consumes it), and a
+    /// dependent context, so the declarations inside are patterns.
+    /// Returns its depth. Paired with [`Sema::pop_expansion_level`].
+    pub(crate) fn push_expansion_level(&mut self, loc: Loc) -> u16 {
+        let depth = self.template_depth();
+        self.templ.heads.push(HeadBuild {
+            template_loc: loc,
+            l_angle: loc,
+            depth,
+            params: Vec::new(),
+            list: None,
+            taken: true,
+            invented: false,
+        });
+        let f = self.func.as_ref().map(|f| f.decl);
+        self.templ.expansions_open.push((f, self.ast.templates.dependent_depth));
+        self.ast.templates.dependent_depth += 1;
+        depth
+    }
+
+    /// The body of the current function is in a template other than the
+    /// synthetic levels of its own expansion statements: the levels of
+    /// expansion statements in a non-template function are expanded
+    /// before its body ends, so a `return` in one deduces the placeholder
+    /// return type from its expansions ([dcl.spec.auto.general]/12).
+    pub(crate) fn in_template_outside_expansions(&self) -> bool {
+        let f = self.func.as_ref().map(|f| f.decl);
+        match self.templ.expansions_open.iter().find(|e| e.0 == f && f.is_some()) {
+            Some(&(_, outside)) => outside > 0,
+            None => self.in_template(),
+        }
+    }
+
+    /// Closes the level [`Sema::push_expansion_level`] opened.
+    pub(crate) fn pop_expansion_level(&mut self) {
+        self.templ.heads.pop();
+        self.templ.expansions_open.pop();
+        self.ast.templates.dependent_depth = self.ast.templates.dependent_depth.saturating_sub(1);
+    }
+
     /// Leaves the template parameter scope of the innermost head.
     pub fn act_on_finish_template_decl(&mut self) {
         if let Some(i) = self.scopes.iter().rposition(|s| s.kind == ScopeKind::TemplateParams) {
@@ -784,6 +831,15 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) {
         use crate::templ::pack::PackOperand;
+        let chunk = std::mem::replace(&mut self.pending_chunk_loc, Loc::INVALID);
+        // An invalid type-id is no default (clang's `ParseTypeParameter`
+        // passes the invalid `TypeResult` on, which `ActOnTypeParameter`
+        // ignores): `class U = R<T>*` with `R<T>` a reference.
+        if let ArgView::Type(t) = arg.view()
+            && self.is_error_type(t)
+        {
+            return;
+        }
         if self.templ.keyless_ttps.contains(&p) {
             // Rejected and dropped (clang 22).
             if let ArgView::Template(n) = arg.view()
@@ -819,6 +875,9 @@ impl Sema<'_, '_> {
             return;
         }
         let _ = self.templ.default_locs.insert(p, loc);
+        if chunk.is_valid() && matches!(arg.view(), ArgView::Type(_)) {
+            self.inner_chunk_locs.insert(p, chunk);
+        }
     }
 
     /// `>` and the optional requires-clause of the innermost head

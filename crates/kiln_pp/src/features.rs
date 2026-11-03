@@ -63,6 +63,14 @@ fn std_index(std: Std) -> u16 {
     }
 }
 
+/// Unscoped standard attributes kiln implements beyond clang 22's tables:
+/// (minimum [`std_index`], name, `__has_cpp_attribute` value).
+const KILN_CPP_ATTRIBUTES: &[(u16, &str, u32)] = &[
+    // P2795R5 `[[indeterminate]]` (WP-448, spec/sema.md), C++26 only like
+    // clang trunk's `LangOpts<"CPlusPlus26">` spelling.
+    (6, "indeterminate", 202_403),
+];
+
 /// A target triple, normalized as clang's `TargetInfo` sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Triple {
@@ -329,7 +337,20 @@ impl FeatureQueries for ClangFeatures {
             s => s,
         });
         match scope {
-            None => self.lookup(Kind::CppAttribute, table::CPP_ATTRIBUTE, strip_dunder(name)),
+            None => {
+                let name = strip_dunder(name);
+                let v = self.lookup(Kind::CppAttribute, table::CPP_ATTRIBUTE, name);
+                if v != 0 {
+                    return v;
+                }
+                // Standard attributes kiln implements beyond clang 22, at
+                // every compatibility level (like `KILN_FEATURES`).
+                let std = self.bit.trailing_zeros() as u16 % 7;
+                KILN_CPP_ATTRIBUTES
+                    .iter()
+                    .find(|&&(min, n, _)| n == name && std >= min)
+                    .map_or(0, |&(_, _, v)| v)
+            }
             Some(s) => {
                 let name = if matches!(s, "gnu" | "clang") { strip_dunder(name) } else { name };
                 let key = format!("{s}::{name}");

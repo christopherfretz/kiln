@@ -1165,7 +1165,8 @@ Redeclaration and linkage rules:
     (`templ/subst/stmts.rs`); they are not checked again.
   - The parser rejects an argument list on a standard attribute that
     takes none (`carries_dependency`, `fallthrough`, `noreturn`,
-    `no_unique_address`, `likely`, `unlikely`, `maybe_unused`, even
+    `no_unique_address`, `likely`, `unlikely`, `maybe_unused`,
+    `indeterminate` from C++26, even
     `()`): `attribute 'likely' cannot have an argument list` at the `(`,
     and drops the attribute (clang `ParseCXX11AttributeArgs`).
   - Codegen ignores them: clang 19 consults likelihood only when
@@ -1683,6 +1684,7 @@ and returns the scope it names:
   | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
   | ENUM_EXTENSIBILITY | 1 for `open`, 0 for `closed` | — |
+  | INIT_PRIORITY | the checked priority (`u32`; the raw `ExprId` before `check_decl_attrs`) | — |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -1861,13 +1863,40 @@ and returns the scope it names:
   - `alignof` of an expression ([expr.alignof]/1 takes a type-id) is
     the GNU extension `'alignof' applied to an expression is a GNU
     extension` (`-Wgnu-alignof-expression`, in `-Wgnu`, at the keyword;
-    not for `__alignof`/`__alignof__`). `alignof` of a data member
+    not for `__alignof`/`__alignof__`), after the operand's own errors
+    and even when the operand is invalid (`alignof(F::x)` with `F`
+    incomplete, `alignof(1 + )`; clang's `ext_alignof_expr` is emitted
+    before the operand is checked; WP-430,
+    `expr.alignof/incomplete-qualifier-gnu-expression.cpp`). `alignof` of a data member
     (named ignoring parentheses) of a class still being defined is
     `invalid application of 'alignof' to a field of a class still being
     defined` at the operand's own location (clang `CheckAlignOfExpr`;
     [class.mem.general]/8). Test:
     `tests/conformance/dcl.align/alignof-expression-diag.cpp`.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
+  - **`init_priority(N)`** (GNU, [dcl.attr.grammar]/5;
+    `init_priority.rs`, clang `handleInitPriorityAttr`, WP-189). Parsed
+    with an expression argument (`__attribute__` or `[[gnu::]]`); exactly
+    one, else `'init_priority' attribute takes one argument` (under
+    compat ≥ 22 the `[[gnu::]]` spelling is named `'gnu::init_priority'`).
+    `check_decl_attrs` then checks, in clang's order, dropping the
+    attribute on the first error: the subject is a variable (`only
+    applies to variables`); it is not declared in a function and its type,
+    arrays stripped, is a class (`can only use 'init_priority' attribute
+    on file-scope definitions of objects of class type`); the argument is
+    an integer constant (`'init_priority' attribute requires an integer
+    constant`, at the attribute) whose value fits in 32 bits (`integer
+    constant expression evaluates to value N that cannot be represented
+    in a 32-bit unsigned integer type`, at the expression); and the
+    range. Under compat < 22, outside 101..=65535 is `'init_priority'
+    attribute requires integer constant between 101 and 65535 inclusive`
+    (not checked in a system header). Under compat ≥ 22, above 65535 is
+    the same error with bounds 0 and 65535, and below 101 is `requested
+    'init_priority' N is reserved for internal use`
+    (`-Winit-priority-reserved`, default error; the attribute is kept).
+    A surviving attribute stores the priority in `a`; codegen orders the
+    variable's initialization by it (spec/codegen.md §7f).
+    `tests/conformance/dcl.attr/gnu-init-priority*.cpp`.
   - **Attribute subjects** ([dcl.attr.grammar]/5, `decl_attrs.rs`
     `check_decl_attrs`, clang `diagAppertainsToDecl` and the per-kind
     handlers; WP-324). One table, applied to the attributes of every
@@ -1909,6 +1938,23 @@ and returns the scope it names:
       parameters, Objective-C methods, and functions`). `packed`: a
       class, an enumeration or a data member; otherwise `'packed'
       attribute ignored` (warning).
+    - `indeterminate` ([dcl.attr.indet]/1, C++26 P2795R5, WP-448;
+      `AttrKind::INDETERMINATE`): only a variable with automatic
+      storage duration (no `static`, `thread_local` or `extern`) or a
+      parameter; elsewhere the error `'indeterminate' attribute only
+      applies to local variables or function parameters` (clang trunk's
+      subject list `LocalVar, ParmVar`). It may repeat ([dcl.attr.grammar]/4,
+      P2156R1). On a parameter it must be on the function's first
+      declaration: a redeclaration adding it is the error
+      `'[[indeterminate]]' attribute on parameter 'b' must appear on the
+      first declaration of the function` at the attribute, with `previous
+      declaration is here` at the first declaration
+      (`check_param_indeterminate`; clang trunk's text, the note is
+      kiln's). Before C++26 it is not recognised: `unknown attribute
+      'indeterminate' ignored` [-Wunknown-attributes]. Effect: codegen
+      writes no erroneous value (spec/codegen.md §7r); constant
+      evaluation is unchanged (an indeterminate read is non-constant).
+      Tests: `tests/conformance/dcl.attr.indet/`.
     - `fallthrough`, `likely`, `unlikely` and `assume` are statement
       attributes: on any declaration `'X' attribute cannot be applied to
       a declaration` (error).
@@ -5926,6 +5972,80 @@ template saved in `range_for_outer_depth` for instantiations).
   DefaultIgnore `-Wrange-loop-construct`/`-Wrange-loop-bind-reference`
   warnings (groups declared, not emitted); the begin/end-types-differ
   pre-C++17 extension warning; clang's recovery for `for (int x, y : a)`.
+
+### 7.6a Landed (WP-447): Expansion statements (`expansion.rs`)
+P1306R5 `template for` ([stmt.expand]). The parser accepts
+`template for ( init-statement_opt for-range-declaration :
+expansion-initializer ) compound-statement` in every language mode; before
+C++26 it warns `ext_expansion_statements` (-Wc++26-extensions). The body
+must be a compound-statement (`expected '{'` otherwise); `template`
+followed by anything but `for` in a block keeps clang's `'template' here is
+not supported yet`.
+
+- **Synthetic template level.** `act_on_expansion_head` opens a template
+  level of its own (`push_expansion_level`, a parameterless head at the
+  next depth, raising `dependent_depth`) and declares the
+  for-range-declaration in it, initialized from a `CXXExpansionSelectExpr`
+  (form, depth). The body is parsed as a template pattern at that level.
+  Inside a template the statement stays a pattern (`CXXExpansionStmt`
+  without `expanded`) and is expanded when the enclosing template is
+  instantiated; otherwise `act_on_finish_expansion` expands it at once.
+- **Expansion** (`Substituter::expand_expansion`, templ/subst): a child
+  Substituter whose `expansions` stack maps the level's depth to the
+  current element; each `CXXExpansionSelectExpr` at that depth becomes the
+  element, each element gets a block `{ decl = element; body }`
+  ([stmt.expand]/5). An inner pattern that depends on the element is
+  expanded within it. The form is chosen on the substituted initializer:
+  - *enumerating*: an expansion-init-list; element i is its i-th
+    expression. A braced or designated element is unsupported
+    (`unsupported`, not a crash).
+  - *iterating* (`range_for.rs` `expansion_iterable`): not an array, and
+    member `begin`/`end` are found or ADL finds viable candidates;
+    `static constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
+    through a per-element `static constexpr auto __iter = __begin + i`.
+    N is counted by evaluating `__begin + i != __end` for i = 0, 1, ...
+    (kiln deviation: the paper defines N as `__end - __begin`; the count
+    agrees for random-access iterators and also works without
+    `operator-`), capped at 2^20 (`sema_expansion_size_not_constant`
+    when an evaluation fails).
+  - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
+    (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
+    for-range-declaration the declaration is `static constexpr`.
+- **Binding a constexpr range** (`expansion_fallback`). A prvalue
+  initializer is bound by value (`static constexpr auto`, const, so its
+  value is usable in constant expressions; a lifetime-extended temporary
+  would not be). A glvalue is first bound with `auto&&`; when that
+  initialization fails to be a constant expression (decided by the
+  captured diagnostics, `stash_has_error`: a failed constant
+  initialization does not mark the variable INVALID), it is retried by
+  value, a copy, each attempt in a block scope of its own. The copy stands
+  in for P2686 (constexpr references to automatic variables), which kiln
+  does not implement: the paper's `constexpr std::array` local example
+  works. When both fail, the first attempt's diagnostics are emitted.
+- **Holding variables.** The holding variables of a `constexpr` structured
+  binding declaration are `constexpr` (P2686 [dcl.struct.bind]/4), so the
+  Oven sees initialized constants rather than a static variable's
+  definition. A user-written `constexpr` structured binding is still
+  rejected (`structured binding declaration cannot be declared
+  'constexpr'`).
+- **Return type deduction.** A `return` in the pattern of an expansion
+  statement of a non-template function does not deduce the placeholder
+  return type (`in_template_outside_expansions`); its expansions do.
+- **Control flow.** `break` leaves the whole statement and `continue`
+  ends the current element; the statement counts as a loop for the
+  jump-scope, fall-off and reachability analyses (`children` yields the
+  init, prelude and expansions of an expanded statement and the init and
+  body of a pattern).
+- **N = 0.** No block is built, so a body that is ill-formed for every
+  element is never instantiated.
+- **Feature macro.** `__cpp_expansion_statements` 202506L at C++26 at
+  every `-fclang-compat` (`KILN_FEATURES`; clang 22 does not define it).
+- **Left.** `define_static_array` and reflection ranges (kiln's
+  `members_of` returns a `member_list` aggregate without `begin`/`end`);
+  braced or designated init-list elements; P2686.
+- Validation: `tests/conformance/stmt.expand/` (all `requires: clang>=23`),
+  `tests/codegen/expansion_stmt.cpp`, `kiln_codegen` test
+  `expansion_statement_lowers_in_order`.
 
 ### 7.7 Landed (WP-140): GNU asm statements (`asm.rs`)
 `act_on_gcc_asm_stmt` follows clang's `ActOnGCCAsmStmt`: output and input

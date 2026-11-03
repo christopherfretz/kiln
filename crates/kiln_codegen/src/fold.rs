@@ -399,6 +399,14 @@ impl Collect<'_> {
                 self.local_decl(d.loop_var);
                 self.stmt(d.body);
             }
+            StmtKind::CXXExpansionStmt if ast.stmts.expansion_expanded(s) => {
+                let d = *ast.stmts.expansion_data(s);
+                d.init.into_iter().for_each(|x| self.stmt(x));
+                let l = &ast.lists;
+                for x in l.iter::<StmtId>(d.prelude).chain(l.iter::<StmtId>(d.expansions)) {
+                    self.stmt(x);
+                }
+            }
             StmtKind::ReturnStmt => {
                 if let Some(v) = ast.stmts.return_value(s) {
                     self.expr(v);

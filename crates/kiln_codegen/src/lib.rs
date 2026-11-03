@@ -18,6 +18,7 @@
 
 mod asm;
 mod atomic;
+mod auto_init;
 mod builtins;
 mod checked;
 mod class;
@@ -109,7 +110,30 @@ pub struct CodegenOptions {
     /// `-mno-omit-leaf-frame-pointer` (`Some(false)`); `None` is the
     /// target's default.
     pub omit_leaf_frame_pointer: Option<bool>,
+    /// What an automatic variable without an initializer holds at its
+    /// declaration (`-ftrivial-auto-var-init=`; the C++26 erroneous value
+    /// of [basic.indet], spec/codegen.md §7r). The driver's default is
+    /// [`AutoVarInit::Zero`] in C++26 and [`AutoVarInit::Uninitialized`]
+    /// before.
+    pub auto_var_init: AutoVarInit,
+    /// `-ftrivial-auto-var-init-max-size=`: a variable larger than this
+    /// many bytes is not initialized (0: no limit).
+    pub auto_var_init_max_size: u64,
 }
+
+/// clang's `LangOptions::TrivialAutoVarInitKind` (no `pattern` yet).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AutoVarInit {
+    /// Left uninitialized (indeterminate).
+    #[default]
+    Uninitialized,
+    /// All-zero bytes, padding included.
+    Zero,
+}
+
+/// kiln's default `-ftrivial-auto-var-init-max-size` (spec/codegen.md
+/// §7r): 4 KiB.
+pub const AUTO_VAR_INIT_MAX_SIZE: u64 = 4096;
 
 /// Which functions keep a frame pointer: the `"frame-pointer"` function
 /// attribute and the `frame-pointer` module flag (clang's
@@ -235,6 +259,8 @@ impl Default for CodegenOptions {
             llvm_major: 19,
             omit_frame_pointer: None,
             omit_leaf_frame_pointer: None,
+            auto_var_init: AutoVarInit::Uninitialized,
+            auto_var_init_max_size: AUTO_VAR_INIT_MAX_SIZE,
         }
     }
 }

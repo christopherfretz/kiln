@@ -15,7 +15,7 @@ use crate::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
 use crate::expr::{CharKind, ExprFlags, ExprKind, ValueCategory};
 use crate::ids::{ConstValueId, DeclId, ExprId, ListId, QualType, RawId, TypeId};
 use crate::names::{DeclName, DeclNameView};
-use crate::strings::{StringEncoding, push_unit};
+use crate::strings::{StringEncoding, push_char_literal};
 use crate::types::{
     ArgView, FloatFormat, PrintOptions, TypeFlags, TypeNames, TypeView, write_arg_list,
     write_arg_list_canonical, write_arg_list_prefix, write_nns, write_nns_resolved, write_type,
@@ -784,7 +784,8 @@ impl<'a> AstNames<'a> {
                 }
             }
             ExprKind::CharacterLiteral => {
-                out.push_str(match exprs.char_kind(e) {
+                let kind = exprs.char_kind(e);
+                out.push_str(match kind {
                     CharKind::Ascii => "",
                     CharKind::Wide => "L",
                     CharKind::Utf8 => "u8",
@@ -792,7 +793,8 @@ impl<'a> AstNames<'a> {
                     CharKind::Utf32 => "U",
                 });
                 out.push('\'');
-                push_unit(exprs.char_value(e), '\'', out);
+                let ascii = matches!(kind, CharKind::Ascii);
+                push_char_literal(exprs.char_value(e), ascii, out);
                 out.push('\'');
             }
             ExprKind::StringLiteral => ast.strings.write_literal(exprs.string_lit(e), out),

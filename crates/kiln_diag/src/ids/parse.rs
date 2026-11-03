@@ -80,6 +80,7 @@ parse_explicit_instantiation_with_definition = Error (0) "explicit template inst
 parse_ext_alias_in_init_statement = ExtWarn [Cxx23Extensions] (0) "alias declaration in this context is a C++23 extension";
 parse_ext_binding_pack = ExtWarn [Cxx26Extensions] (0) "structured binding packs are a C++2c extension";
 parse_ext_constexpr_if = ExtWarn [Cxx17Extensions] (0) "constexpr if is a C++17 extension";
+parse_ext_expansion_statements = ExtWarn [Cxx26Extensions] (0) "expansion statements are a C++26 extension";
 parse_ext_for_range_init_stmt = ExtWarn [Cxx20Extensions] (0) "range-based for loop initialization statements are a C++20 extension";
 parse_ext_int_deprecated = Warning [DeprecatedType] (0) "'_ExtInt' is deprecated; use '_BitInt' instead";
 parse_ext_pack_indexing = ExtWarn [Cxx26Extensions] (0) "pack indexing is a C++2c extension";

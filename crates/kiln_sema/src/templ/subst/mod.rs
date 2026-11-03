@@ -80,6 +80,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// substituted ([`crate::Sema::ref_locs`]): the first reference
     /// rebuilt takes it (clang's `ReferenceTypeLoc`).
     pub(crate) ref_loc: Option<Loc>,
+    /// The written innermost `*`/`[` of the declarator whose type is
+    /// substituted ([`crate::Sema::inner_chunk_locs`]): the first pointer
+    /// or array rebuilt takes it (clang's `TypeLoc` sigil).
+    pub(crate) chunk_loc: Option<Loc>,
     /// A type parameter becomes its (sugared) argument with no
     /// `SubstTemplateTypeParmType` around it (clang's `Final`
     /// substitution of a non-type parameter's type by
@@ -140,6 +144,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// type: a type the declarator writes again (`T::type (*f)(T::type)`)
     /// resolves to its next occurrence (§5.8).
     written_used: std::cell::RefCell<FxHashMap<WrittenKey, Loc>>,
+    /// The elements of the enclosing expansion statements being expanded
+    /// ([stmt.expand], P1306R5), innermost last: what their
+    /// `CXXExpansionSelectExpr`s become.
+    pub(crate) expansions: Vec<crate::expansion::ExpansionElem>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -166,6 +174,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             declarator_name: None,
             type_begin: None,
             ref_loc: None,
+            chunk_loc: None,
             final_subst: false,
             lambda_bodies: 0,
             stmt_failed: false,
@@ -181,6 +190,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             as_callee: false,
             written_scope: None,
             written_used: std::cell::RefCell::default(),
+            expansions: Vec::new(),
         }
     }
 

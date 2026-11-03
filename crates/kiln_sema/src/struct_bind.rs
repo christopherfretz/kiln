@@ -749,7 +749,10 @@ impl Sema<'_, '_> {
             } else {
                 VarStorage::None
             })
-            .with_tls(vspec.tls());
+            .with_tls(vspec.tls())
+            // P2686R5 [dcl.struct.bind]/4: a constexpr declaration's
+            // holding variables are constexpr.
+            .with_constexpr(vspec.is_constexpr());
         let hv = self.builder().holding_var(h, ref_ty, spec);
         let init = self.perform_init(ref_ty, Initializer::Expr(call), loc, false);
         let init = self.act_on_full_expr(init);

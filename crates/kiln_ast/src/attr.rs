@@ -121,13 +121,18 @@ impl AttrKind {
     /// GNU `returns_nonnull` on a function (clang `ReturnsNonNullAttr`)
     /// (WP-421).
     pub const RETURNS_NONNULL: AttrKind = AttrKind(110);
+    /// GNU `init_priority(N)` on a namespace-scope variable of class type
+    /// (clang `InitPriorityAttr`): `a` is the priority, its dynamic
+    /// initializer runs from the `_GLOBAL__I_<N>` constructor of priority
+    /// `N` ([basic.start.dynamic]; spec/codegen.md §7f; WP-189).
+    pub const INIT_PRIORITY: AttrKind = AttrKind(111);
     /// A loop hint (`#pragma unroll`, `nounroll`, `unroll_and_jam`,
     /// `nounroll_and_jam`, `GCC unroll`, `clang loop`) on a loop statement
     /// (clang `LoopHintAttr`, [`AttrSyntax::Pragma`]): `a` is the raw
     /// `ExprId` of the value as written (0: none), `b` the [`LoopHint`]
     /// ([`LoopHint::pack`]), `loc` the pragma-name token (`unroll`,
     /// `loop`) (WP-449).
-    pub const LOOP_HINT: AttrKind = AttrKind(111);
+    pub const LOOP_HINT: AttrKind = AttrKind(112);
 }
 
 /// What a loop hint controls (clang `LoopHintAttr::OptionType`).

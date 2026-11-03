@@ -290,6 +290,7 @@ impl Substituter<'_, '_, '_> {
                 r
             }
             StmtKind::CXXForRangeStmt => self.range_for(s),
+            StmtKind::CXXExpansionStmt => self.expansion_stmt(s),
             StmtKind::SwitchStmt => {
                 let sw = *self.sema.ast.stmts.switch_data(s);
                 self.sema.push_scope(ScopeKind::Control);

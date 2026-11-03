@@ -20,7 +20,7 @@ fn run_fixture(name: &str, opts: &DumpOptions) -> (Result<String, String>, usize
     let json = fixture(&format!("{name}.json"));
     let side = fixture(&format!("{name}.txt"));
     let mut calls = 0;
-    let mut text = || {
+    let mut text = |_: &[&str]| {
         calls += 1;
         Ok(side.clone())
     };
@@ -37,7 +37,7 @@ fn spec_example_reproduces() {
     assert_eq!(run_fixture("ex", &f).0.unwrap(), fixture("ex.filter-x.expected"));
     // The main file is matched by name: another name prints no declarations.
     let json = fixture("ex.json");
-    let mut text = || Err("unused".to_owned());
+    let mut text = |_: &[&str]| Err("unused".to_owned());
     let r = normalize(&json, "other.cpp", &DumpOptions::default(), &mut text).unwrap();
     assert_eq!(r, "TranslationUnitDecl\n");
 }
@@ -129,7 +129,7 @@ fn filter_names_contexts_by_side_channel_arguments() {
         })
         .flat_map(|l| [l, "\n"])
         .collect();
-    let mut text = || Ok(side.clone());
+    let mut text = |_: &[&str]| Ok(side.clone());
     let e = normalize(&json, "filter_args.cpp", &f, &mut text).unwrap_err();
     assert!(e.contains("cannot print a"), "{e}");
 }
@@ -142,10 +142,10 @@ fn constexpr_values_come_from_the_text_dump() {
     // A text dump that does not align with the JSON is an error, not a guess.
     let json = fixture("values.json");
     let side = fixture("values.txt").replacen(" o 'const O'", " p 'const O'", 1);
-    let mut text = || Ok(side.clone());
+    let mut text = |_: &[&str]| Ok(side.clone());
     let e = normalize(&json, "values.cpp", &DumpOptions::default(), &mut text).unwrap_err();
     assert!(e.contains("does not match JSON VarDecl `o`"), "{e}");
-    let mut fails = || Err("boom".to_owned());
+    let mut fails = |_: &[&str]| Err("boom".to_owned());
     let e = normalize(&json, "values.cpp", &DumpOptions::default(), &mut fails).unwrap_err();
     assert!(e.starts_with("boom"), "{e}");
 }
@@ -158,7 +158,7 @@ fn tu(decl: &str) -> String {
 }
 
 fn norm(json: &str) -> Result<String, String> {
-    let mut text = || Err("no text dump in this test".to_owned());
+    let mut text = |_: &[&str]| Err("no text dump in this test".to_owned());
     normalize(json, "t.cpp", &DumpOptions::default(), &mut text)
 }
 
