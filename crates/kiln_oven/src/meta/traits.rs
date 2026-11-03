@@ -124,5 +124,19 @@ super::meta_family! {
         VariantSize = ("variant_size", "i", Stable, 477);
         VariantAlternative = ("variant_alternative", "xi", Stable, 477);
         TypeOrder = ("type_order", "ii", Stable, 477);
+        // The range forms as `(const info* data, size_t n)` overloads
+        // (spec/reflection-traits.md §1.3): `kiln_meta_traits.h` forwards
+        // each IS `reflection_range` template to one of these until span
+        // reading lands (WP-475).
+        IsConstructibleTypeN = ("is_constructible_type", "ixx", Stable, 477);
+        IsTriviallyConstructibleTypeN = ("is_trivially_constructible_type", "ixx", Stable, 477);
+        IsNothrowConstructibleTypeN = ("is_nothrow_constructible_type", "ixx", Stable, 477);
+        IsInvocableTypeN = ("is_invocable_type", "ixx", Stable, 477);
+        IsInvocableRTypeN = ("is_invocable_r_type", "iixx", Stable, 477);
+        IsNothrowInvocableTypeN = ("is_nothrow_invocable_type", "ixx", Stable, 477);
+        IsNothrowInvocableRTypeN = ("is_nothrow_invocable_r_type", "iixx", Stable, 477);
+        InvokeResultN = ("invoke_result", "ixx", Stable, 477);
+        CommonTypeN = ("common_type", "xx", Stable, 477);
+        CommonReferenceN = ("common_reference", "xx", Stable, 477);
     }
 }

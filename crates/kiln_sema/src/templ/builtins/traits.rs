@@ -25,8 +25,40 @@ use crate::target;
 use crate::templ::stack::FrameKind;
 
 mod cxx26;
+mod library;
+pub(crate) use library::LibFailure;
 mod explain;
 mod special;
+
+/// Why a quietly evaluated trait failed ([`Sema::quiet_trait`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TraitFailure {
+    /// An operand that must be complete is not (the type named).
+    Incomplete(QualType),
+    /// A transformation's operand is outside its domain
+    /// (`make_signed<bool>`, `underlying_type<int>`): the type named.
+    BadOperand(QualType),
+    /// The trait is not implemented ([`table::trait_status`]).
+    Unimplemented,
+}
+
+/// The engine's per-TU state: whether trait diagnostics are being
+/// recorded instead of emitted, and the first failure recorded so far.
+#[derive(Debug, Default)]
+pub(crate) struct TraitState {
+    pub(crate) quiet: bool,
+    pub(crate) failure: Option<TraitFailure>,
+}
+
+impl TraitState {
+    /// Records `f` (the first failure wins) when quiet; false otherwise.
+    pub(crate) fn record(&mut self, f: TraitFailure) -> bool {
+        if self.quiet {
+            self.failure.get_or_insert(f);
+        }
+        self.quiet
+    }
+}
 
 impl Sema<'_, '_> {
     /// `__trait(T, ...)` as parsed at `loc` (the keyword) up to `rparen`:
@@ -115,31 +147,43 @@ impl Sema<'_, '_> {
                 rparen,
             );
         }
+        let Some(value) = self.eval_type_trait(t, args, loc, rparen) else {
+            return self.recover(QualType::BOOL, &[], loc);
+        };
+        self.builder().type_trait_expr(t, &tys, rhs_loc, value, QualType::BOOL, loc, rparen)
+    }
+
+    /// Evaluates the non-dependent trait `t` on `args` (written at `loc`
+    /// .. `rparen`, arity already checked): the one evaluator behind both
+    /// `__trait(T, ...)` and the [meta.reflection.traits] functions
+    /// (spec/reflection-traits.md), so the two cannot diverge. `None`
+    /// after an error: diagnosed, or recorded in [`TraitState`] while a
+    /// reflection trait evaluates quietly.
+    pub(crate) fn eval_type_trait(
+        &mut self,
+        t: TypeTrait,
+        args: &[(QualType, Loc)],
+        loc: Loc,
+        rparen: Loc,
+    ) -> Option<bool> {
         if matches!(
             t,
             TypeTrait::ReferenceBindsToTemporary
                 | TypeTrait::ReferenceConstructsFromTemporary
                 | TypeTrait::ReferenceConvertsFromTemporary
         ) {
-            let value = self.eval_ref_from_temporary(t, args[0], args[1], loc, rparen);
-            return self.builder().type_trait_expr(
-                t,
-                &tys,
-                rhs_loc,
-                value,
-                QualType::BOOL,
-                loc,
-                rparen,
-            );
+            return Some(self.eval_ref_from_temporary(t, args[0], args[1], loc, rparen));
         }
         let canon = self.trait_eval_args(args);
         let args = canon.as_deref().unwrap_or(args);
-        let eval_tys: Vec<QualType> = args.iter().map(|a| a.0).collect();
         if let Status::Owner(_) = table::trait_status(t) {
+            if self.traits.record(TraitFailure::Unimplemented) {
+                return None;
+            }
             let what = format!("type trait '{}'", t.spelling());
             let d = self.diag(DiagId::sema_unimplemented_template_feature, loc).arg(what);
             self.emit(d);
-            return self.recover(QualType::BOOL, &[], loc);
+            return None;
         }
         let value = if matches!(
             t,
@@ -147,15 +191,12 @@ impl Sema<'_, '_> {
                 | TypeTrait::IsNothrowConstructible
                 | TypeTrait::IsTriviallyConstructible
         ) {
-            match self.eval_constructible(t, args, loc, rparen) {
-                Some(v) => v,
-                None => return self.recover(QualType::BOOL, &[], loc),
+            self.eval_constructible(t, args, loc, rparen)?
+        } else if let [(q, _)] = *args {
+            if !self.check_trait_completeness(t, q, loc) {
+                return None;
             }
-        } else if eval_tys.len() == 1 {
-            if !self.check_trait_completeness(t, eval_tys[0], loc) {
-                return self.recover(QualType::BOOL, &[], loc);
-            }
-            self.eval_unary_trait(t, eval_tys[0], loc)
+            self.eval_unary_trait(t, q, loc)
         } else if t == TypeTrait::IsLayoutCompatible {
             self.eval_layout_compatible(args[0], args[1])
         } else if t == TypeTrait::IsPointerInterconvertibleBaseOf {
@@ -164,10 +205,7 @@ impl Sema<'_, '_> {
             t,
             TypeTrait::IsConvertible | TypeTrait::IsConvertibleTo | TypeTrait::IsNothrowConvertible
         ) {
-            match self.eval_convertible(t, args[0], args[1], loc) {
-                Some(v) => v,
-                None => return self.recover(QualType::BOOL, &[], loc),
-            }
+            self.eval_convertible(t, args[0], args[1], loc)?
         } else if matches!(
             t,
             TypeTrait::IsAssignable
@@ -179,14 +217,11 @@ impl Sema<'_, '_> {
                 TypeTrait::IsTriviallyAssignable => InitCheck::Trivial,
                 _ => InitCheck::WellFormed,
             };
-            match self.eval_assignable(args[0], args[1], check, loc) {
-                Some(v) => v,
-                None => return self.recover(QualType::BOOL, &[], loc),
-            }
+            self.eval_assignable(args[0], args[1], check, loc)?
         } else {
-            self.eval_binary_trait(t, eval_tys[0], eval_tys[1], args[1].1)
+            self.eval_binary_trait(t, args[0].0, args[1].0, args[1].1)
         };
-        self.builder().type_trait_expr(t, &tys, rhs_loc, value, QualType::BOOL, loc, rparen)
+        Some(value)
     }
 
     /// `__array_rank(T)` / `__array_extent(T, I)` ([meta.unary.prop.query]):
@@ -318,16 +353,54 @@ impl Sema<'_, '_> {
         if self.ast.types.is_reference(checked) || self.ast.types.is_function(checked) {
             return true;
         }
-        if self.require_complete(checked, loc) {
+        if self.trait_complete(checked, loc) {
             return true;
         }
-        let msg = self.diag(DiagId::sema_incomplete_type_trait, loc).arg(self.ty_arg(checked));
-        let msg = self.incomplete_note(msg, checked);
-        self.emit(msg);
+        self.trait_incomplete(DiagId::sema_incomplete_type_trait, loc, checked);
         false
     }
 
-    fn array_rank(&self, q: QualType) -> u64 {
+    /// Completes `q` for a trait at `at` (instantiating a class template
+    /// specialization). While a reflection trait evaluates quietly an
+    /// undefined template is not diagnosed: the failure is the caller's.
+    fn trait_complete(&mut self, q: QualType, at: Loc) -> bool {
+        if self.traits.quiet {
+            self.require_complete_silent(q, at)
+        } else {
+            self.require_complete(q, at)
+        }
+    }
+
+    /// The trait's operand `q` (written at `at`) is incomplete where a
+    /// complete type is required: diagnosed as `id` with the
+    /// forward-declaration note, or recorded while evaluating quietly.
+    fn trait_incomplete(&mut self, id: DiagId, at: Loc, q: QualType) {
+        if self.traits.record(TraitFailure::Incomplete(q)) {
+            return;
+        }
+        let msg = self.diag(id, at).arg(self.ty_arg(q));
+        let msg = self.incomplete_note(msg, q);
+        self.emit(msg);
+    }
+
+    /// Runs `f` with trait diagnostics recorded instead of emitted (the
+    /// reflection traits: a failure is a `MetaError`, spec/reflection-traits.md
+    /// §2). Errors from a class template instantiation the trait triggers
+    /// are still diagnosed ([temp.inst]: they are not in the immediate
+    /// context). Returns `f`'s result and the first recorded failure.
+    pub(crate) fn quiet_trait<R>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> (R, Option<TraitFailure>) {
+        let quiet = std::mem::replace(&mut self.traits.quiet, true);
+        let outer = self.traits.failure.take();
+        let r = f(self);
+        self.traits.quiet = quiet;
+        let failure = std::mem::replace(&mut self.traits.failure, outer);
+        (r, failure)
+    }
+
+    pub(crate) fn array_rank(&self, q: QualType) -> u64 {
         let mut t = q;
         let mut n = 0;
         while self.ast.types.is_array(t) {
@@ -340,7 +413,7 @@ impl Sema<'_, '_> {
         n
     }
 
-    fn array_extent(&self, q: QualType, dim: u64) -> u64 {
+    pub(crate) fn array_extent(&self, q: QualType, dim: u64) -> u64 {
         let mut t = q;
         let mut i = 0;
         loop {
@@ -378,11 +451,8 @@ impl Sema<'_, '_> {
                     return true;
                 }
                 // [meta.rel]/2: Derived shall be complete.
-                if !self.require_complete(b, rhs_loc) {
-                    let msg =
-                        self.diag(DiagId::sema_incomplete_type_trait, rhs_loc).arg(self.ty_arg(b));
-                    let msg = self.incomplete_note(msg, b);
-                    self.emit(msg);
+                if !self.trait_complete(b, rhs_loc) {
+                    self.trait_incomplete(DiagId::sema_incomplete_type_trait, rhs_loc, b);
                     return false;
                 }
                 crate::conv::bases::is_derived_from(self, derived, base)
@@ -411,13 +481,11 @@ impl Sema<'_, '_> {
                 || matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
                 || tys.is_reference(q)
                 || tys.is_function(q)
-                || self.require_complete(q, at)
+                || self.trait_complete(q, at)
             {
                 continue;
             }
-            let msg = self.diag(DiagId::sema_incomplete_type_trait, at).arg(self.ty_arg(q));
-            let msg = self.incomplete_note(msg, q);
-            self.emit(msg);
+            self.trait_incomplete(DiagId::sema_incomplete_type_trait, at, q);
             return None;
         }
         if self.ast.types.is_void(a.0) || self.ast.types.is_void(b.0) {
@@ -469,13 +537,11 @@ impl Sema<'_, '_> {
                 || matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
                 || tys.is_reference(q)
                 || tys.is_function(q)
-                || self.require_complete(q, at)
+                || self.trait_complete(q, at)
             {
                 continue;
             }
-            let msg = self.diag(DiagId::sema_incomplete_type_trait, at).arg(self.ty_arg(q));
-            let msg = self.incomplete_note(msg, q);
-            self.emit(msg);
+            self.trait_incomplete(DiagId::sema_incomplete_type_trait, at, q);
             return None;
         }
         let ty = args[0].0;
@@ -635,13 +701,11 @@ impl Sema<'_, '_> {
             if matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
                 || tys.is_reference(q)
                 || tys.is_function(q)
-                || self.require_complete(q, at)
+                || self.trait_complete(q, at)
             {
                 continue;
             }
-            let msg = self.diag(DiagId::sema_incomplete_type_trait, at).arg(self.ty_arg(q));
-            let msg = self.incomplete_note(msg, q);
-            self.emit(msg);
+            self.trait_incomplete(DiagId::sema_incomplete_type_trait, at, q);
             return None;
         }
         // clang `CheckConvertibilityForTypeTraits`: `To test()` needs a
@@ -692,7 +756,7 @@ impl Sema<'_, '_> {
         if !self.ast.types.is_reference(from.0)
             && !self.ast.types.is_function(from.0)
             && !matches!(self.ast.types.canonical_view(from.0), TypeView::IncompleteArray(_))
-            && !self.require_complete(from.0, from.1)
+            && !self.trait_complete(from.0, from.1)
         {
             return false;
         }
@@ -705,6 +769,16 @@ impl Sema<'_, '_> {
             TypeView::RValueRef(p) if self.ast.types.is_function(p) => (p, ValueCategory::LValue),
             TypeView::RValueRef(p) => (p, ValueCategory::XValue),
             _ if self.ast.types.is_function(from.0) => (from.0, ValueCategory::LValue),
+            // [expr.type]/2: a prvalue of a non-class, non-array type has
+            // its cv-qualifiers dropped (`VAL<const int>` is an `int`;
+            // clang 19 keeps them).
+            _ if prvalue
+                && self.clang_compat >= 22
+                && self.ast.types.as_record(from.0).is_none()
+                && !self.ast.types.is_array(from.0) =>
+            {
+                (self.ast.types.unqualified(from.0), ValueCategory::PRValue)
+            }
             _ if prvalue => (from.0, ValueCategory::PRValue),
             _ => (from.0, ValueCategory::XValue),
         };
@@ -948,7 +1022,16 @@ impl Sema<'_, '_> {
 
     /// [basic.fundamental]/17 (clang `isFundamentalType`).
     fn is_fundamental(&self, q: QualType) -> bool {
-        self.ast.types.is_void(q) || self.is_nullptr_type(q) || self.is_arithmetic_ext(q)
+        self.ast.types.is_void(q)
+            || self.is_nullptr_type(q)
+            || self.is_arithmetic_ext(q)
+            || self.is_meta_info_type(q)
+    }
+
+    /// `std::meta::info`, a fundamental ([basic.fundamental]/17) and
+    /// scalar ([basic.types.general]/9) type.
+    pub(crate) fn is_meta_info_type(&self, q: QualType) -> bool {
+        self.ast.types.builtin(q) == Some(kiln_ast::types::BuiltinType::MetaInfo)
     }
 
     /// [basic.types.general]/8: not a function, reference or `void`.
@@ -958,13 +1041,15 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `isScalarType`: arithmetic (complex included),
-    /// enumeration, pointer, member pointer and `std::nullptr_t`.
+    /// enumeration, pointer, member pointer, `std::nullptr_t` and
+    /// `std::meta::info`.
     fn is_scalar_ext(&self, q: QualType) -> bool {
         matches!(
             self.ast.types.canonical_view(q),
             TypeView::Pointer(_) | TypeView::MemberPointer { .. } | TypeView::Enum(_)
         ) || self.is_arithmetic_ext(q)
             || self.is_nullptr_type(q)
+            || self.is_meta_info_type(q)
     }
 
     /// Scalar or vector (clang treats vectors as scalars here).
@@ -975,6 +1060,11 @@ impl Sema<'_, '_> {
     /// [basic.types.general]/9 (clang `isTriviallyCopyableType`).
     pub(crate) fn is_trivially_copyable_type(&self, q: QualType) -> bool {
         let e = self.base_element(q);
+        // kiln: `std::meta::info` is scalar but copied only as an `info`
+        // (spec/reflection.md §2.5, typed copy), so not trivially copyable.
+        if self.is_meta_info_type(e) {
+            return false;
+        }
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
@@ -1000,6 +1090,11 @@ impl Sema<'_, '_> {
     /// [basic.types.general]/9 trivial types (clang `isTrivialType`).
     fn is_trivial_type(&self, q: QualType) -> bool {
         let e = self.base_element(q);
+        // kiln: `std::meta::info` is scalar but copied only as an `info`
+        // (spec/reflection.md §2.5, typed copy), so not trivially copyable.
+        if self.is_meta_info_type(e) {
+            return false;
+        }
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
@@ -1022,6 +1117,11 @@ impl Sema<'_, '_> {
     /// standard-layout.
     pub(crate) fn is_pod_type(&self, q: QualType) -> bool {
         let e = self.base_element(q);
+        // kiln: `std::meta::info` is scalar but copied only as an `info`
+        // (spec/reflection.md §2.5, typed copy), so not trivially copyable.
+        if self.is_meta_info_type(e) {
+            return false;
+        }
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }

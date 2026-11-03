@@ -564,7 +564,7 @@ impl Sema<'_, '_> {
     }
 
     /// `std::NAME` if it is a class template.
-    fn std_class_template(&self, name: &str) -> Option<(DeclId, DeclId)> {
+    pub(crate) fn std_class_template(&self, name: &str) -> Option<(DeclId, DeclId)> {
         let std = self.intern("std");
         let ns = self.lookup_qualified(self.ast.tu, std, LookupKind::Nested);
         let ns = ns.decls.iter().copied().find(|&d| self.kind_of(d) == DeclKind::Namespace)?;
@@ -644,7 +644,7 @@ impl Sema<'_, '_> {
 
     /// The integral template argument `i` of type `std::size_t` (clang
     /// builds `get<i>` and `tuple_element<i, E>` with it).
-    fn size_t_arg(&mut self, i: u64) -> TemplateArg {
+    pub(crate) fn size_t_arg(&mut self, i: u64) -> TemplateArg {
         let size_t = self.size_type();
         let canon = self.ast.types.canonical(size_t);
         let v = self.int_const(canon, i128::from(i));
