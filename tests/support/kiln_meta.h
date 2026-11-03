@@ -309,6 +309,25 @@ consteval std::vector<info> subobjects_of(info r, access_context ctx);
 consteval std::vector<info> enumerators_of(info type_enum);
 consteval std::vector<info> parameters_of(info r);
 
+// A test-header convenience, not IS: nonstatic_data_members_of(R) copied
+// into an array-like whose size is a constant, for expansion statements
+// (`template for (constexpr info m : l.items)`) until
+// define_static_array (WP-479).
+template <unsigned long N>
+struct __kiln_info_array {
+  info items[N == 0 ? 1 : N];
+  constexpr unsigned long size() const { return N; }
+  constexpr info operator[](unsigned long i) const { return items[i]; }
+};
+template <info R>
+consteval auto __kiln_data_members() {
+  constexpr unsigned long n = nonstatic_data_members_of(R, access_context::unchecked()).size();
+  __kiln_info_array<n> l{};
+  unsigned long i = 0;
+  for (info m : nonstatic_data_members_of(R, access_context::unchecked())) l.items[i++] = m;
+  return l;
+}
+
 // [meta.reflection.layout]
 consteval member_offset offset_of(info r);
 consteval decltype(sizeof 0) size_of(info r);
@@ -334,4 +353,60 @@ consteval bool name_is(info r, const char* s) {
   }
   return *n == *s;
 }
+}  // namespace std::meta
+
+// [meta.reflection.define.aggregate] (WP-480; spec/reflection.md §6).
+// `data_member_options` with a non-owning `name_type` (the Oven reads
+// its flag, then the pointer and length of the string it holds; §6.1);
+// `optional` is a stand-in without a standard library (libc++'s optional
+// layout; `initializer_list` is the prelude's).
+#if defined(_LIBCPP_VERSION) || defined(__GLIBCXX__)
+#include <optional>
+#else
+namespace std {
+template <class T>
+class optional {
+  union {
+    char __null_state_;
+    T __val_;
+  };
+  bool __engaged_ = false;
+
+ public:
+  constexpr optional() noexcept : __null_state_() {}
+  template <class U = T>
+    requires(!__is_same(__remove_cvref(U), optional))
+  constexpr optional(U&& v) : __val_(static_cast<U&&>(v)), __engaged_(true) {}
+  constexpr bool has_value() const noexcept { return __engaged_; }
+  constexpr const T& operator*() const noexcept { return __val_; }
+};
+}  // namespace std
+#endif
+
+namespace std::meta {
+struct data_member_options {
+  struct name_type {
+    bool __u8_ = false;
+    const char8_t* __u8p_ = nullptr;
+    decltype(sizeof 0) __u8n_ = 0;
+    const char* __p_ = nullptr;
+    decltype(sizeof 0) __n_ = 0;
+
+    consteval name_type(const char* s) : __p_(s), __n_(__builtin_strlen(s)) {}
+    consteval name_type(const char8_t* s) : __u8_(true), __u8p_(s) {
+      while (s[__u8n_]) ++__u8n_;
+    }
+    consteval name_type(std::string_view s) : __p_(s.data()), __n_(s.size()) {}
+    consteval name_type(std::u8string_view s) : __u8_(true), __u8p_(s.data()), __u8n_(s.size()) {}
+  };
+  std::optional<name_type> name;
+  std::optional<int> alignment;
+  std::optional<int> bit_width;
+  bool no_unique_address = false;
+};
+
+consteval info data_member_spec(info type, data_member_options options);
+consteval bool is_data_member_spec(info r);
+template <class R = std::initializer_list<info>>
+consteval info define_aggregate(info class_type, R&& mdescrs);
 }  // namespace std::meta

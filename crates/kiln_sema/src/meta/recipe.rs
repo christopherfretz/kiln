@@ -8,7 +8,9 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::BuiltinType;
 use kiln_ast::{DeclId, QualType};
-use kiln_oven::{AccessOp, AnnotOp, ExcCtor, MemberOp, MetaOp, MetaThrow, QueryOp, Shape, TemplOp};
+use kiln_oven::{
+    AccessOp, AnnotOp, DefineOp, ExcCtor, MemberOp, MetaOp, MetaThrow, QueryOp, Shape, TemplOp,
+};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -57,7 +59,11 @@ impl Sema<'_, '_> {
         };
         Ok(match (op, i) {
             (M::Query(QueryOp::KilnReflectionRange), 0)
-            | (M::Template(TemplOp::CanSubstitute | TemplOp::Substitute), 1) => Some(Shape::Range),
+            | (
+                M::Template(TemplOp::CanSubstitute | TemplOp::Substitute)
+                | M::Define(DefineOp::DefineAggregate),
+                1,
+            ) => Some(Shape::Range),
             // An access context (scope, designating class).
             (
                 M::Member(
@@ -182,11 +188,16 @@ impl Sema<'_, '_> {
     /// `where()` the call's location.
     pub(crate) fn meta_throw(
         &mut self,
-        _op: MetaOp,
+        op: MetaOp,
         callee: DeclId,
         what: &str,
         loc: Loc,
     ) -> Option<MetaThrow> {
+        // `define_aggregate`'s preconditions are "Constant When" ones
+        // (spec/reflection.md §6.2): not an exception.
+        if op == MetaOp::Define(DefineOp::DefineAggregate) {
+            return None;
+        }
         let (_, u8) = self.meta_names.exc?;
         let what_cv = self.frozen_string(what, u8)?;
         let from = self.intern_reflection(Reflectee::Decl(self.entity_decl(callee)), loc).ok()?;

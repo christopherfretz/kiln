@@ -6,6 +6,7 @@
 
 mod access;
 mod annot;
+mod define;
 mod ext;
 pub(crate) mod member;
 pub(crate) mod names;
@@ -63,13 +64,14 @@ impl Sema<'_, '_> {
             MetaOp::Annot(AnnotOp::IsAnnotation) | MetaOp::Define(DefineOp::IsDataMemberSpec) => {
                 self.meta_kind_pred(op, args, out)
             }
+            MetaOp::Define(d) => self.meta_define(d, args, out, ctx, oven),
             MetaOp::Ext(x) => self.meta_ext(x, args, out, ctx, oven),
             MetaOp::Template(t) => self.meta_templ(t, args, out, ctx, oven),
             MetaOp::Trait(t) => self.meta_trait(t, args, out, ctx, oven),
             MetaOp::Member(m) => self.meta_member(m, args, out, ctx, oven),
             MetaOp::Access(a) => self.meta_access(a, args, out, ctx, oven),
             MetaOp::Annot(a) => self.meta_annot(a, args, out, ctx, oven),
-            _ => Err(MetaError::not_implemented(op, ctx.loc)),
+            MetaOp::Value(_) => Err(MetaError::not_implemented(op, ctx.loc)),
         }
     }
 

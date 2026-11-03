@@ -4,7 +4,7 @@
 // operand is then not constant) and the class is unchanged; the same call
 // in a consteval block adds the member.
 //@ expect: compile-ok
-//@ args: -freflection -I tests/support
+//@ args: -Wno-kiln-extension -freflection -I tests/support
 //@ skip(clang): clang 19 has no consteval blocks (P3289R1) or reflection
 //@ strict-diags
 #include "kiln_meta.h"

@@ -3,11 +3,10 @@
 //! spike's member ops for `members_of`), and `__kiln_define_member`,
 //! which stays an extension (D-ext).
 
-use kiln_ast::decl::{Access, DeclFlags};
-use kiln_ast::names::DeclName;
 use kiln_ast::reflect::Reflectee;
-use kiln_ast::{ConstValueId, DeclHead, ReflectionId};
-use kiln_oven::{ExtOp, MetaCtx, MetaError, MetaOut, Note, Oven, info_arg};
+use kiln_ast::{ConstValueId, ReflectionId};
+use kiln_diag::DiagId;
+use kiln_oven::{Dms, ExtOp, MetaCtx, MetaError, MetaOut, Note, Oven, info_arg};
 use kiln_source::Loc;
 
 use super::{fail, is_identifier};
@@ -88,6 +87,9 @@ impl Sema<'_, '_> {
         if ctx.trial || self.inst.eval_loc.is_none() {
             return Err(MetaError::silent());
         }
+        // `-Wkiln-extension` (default on; spec/reflection.md §6.3).
+        let w = self.diag(DiagId::ext_kiln_define_member, loc);
+        self.emit(w);
         let Some(r) = (match self.ast.reflections.get(cls) {
             Reflectee::Type(t) => self.ast.types.as_record(t),
             _ => None,
@@ -151,17 +153,21 @@ impl Sema<'_, '_> {
         );
         if let Some(&prev) = self.lookup_in(r, sym, LookupKind::Ordinary).decls.first() {
             let ploc = self.ast.decls.get(prev).loc();
-            return Err(vec![
+            let mut notes = vec![
                 Note::new(loc, format!("duplicate member '{name}'")),
                 Note::new(ploc, "previous declaration is here"),
-                in_eval,
-            ]
-            .into());
+            ];
+            if let Some(&at) = self.ast.decls.cold.injection_point.get(prev) {
+                notes.push(Note::new(at, "member injected here"));
+            }
+            notes.push(in_eval);
+            return Err(notes.into());
         }
-        let mut h = DeclHead::new(r, DeclName::ident(sym), loc);
-        h.flags = DeclFlags::INJECTED;
-        let f = self.builder().field(h, t, None, 0);
-        self.ast.decls.set_access(f, Access::Public);
+        // `define_aggregate`'s injection path (spec/reflection.md §6.2):
+        // the member is placed where the evaluation is.
+        let d = Dms { ty: t, name: Some(sym), alignment: None, bit_width: None, nua: false };
+        let point = self.inst.eval_loc.unwrap_or(loc);
+        let f = self.inject_field(r, &d, loc, point);
         Ok(self.intern_reflection(Reflectee::Decl(f), loc)?)
     }
 }

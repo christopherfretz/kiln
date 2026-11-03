@@ -5,3 +5,4 @@
 Cxx17AttributeExtensions = "c++17-attribute-extensions" [];
 Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
 Cxx23AttributeExtensions = "c++23-attribute-extensions" [];
+KilnExtension = "kiln-extension" [];
