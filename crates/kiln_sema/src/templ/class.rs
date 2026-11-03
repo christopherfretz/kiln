@@ -1953,6 +1953,13 @@ impl Substituter<'_, '_, '_> {
         }
         Ok(Some(match n.kind() {
             DeclKind::Field => self.field_decl(m)?,
+            // An in-class partial specialization of a member variable
+            // template, redeclared for the member template's
+            // redeclaration ([temp.spec.partial.member]).
+            DeclKind::Var if self.sema.ast.partial_spec_info(m).is_some() => {
+                self.member_partial_spec(m)?;
+                return Ok(None);
+            }
             DeclKind::Var if self.defers_init(m) => self.deferred_static_member(m)?,
             DeclKind::Var => {
                 let v = self.var_decl(m, DeclaratorContext::Member)?;

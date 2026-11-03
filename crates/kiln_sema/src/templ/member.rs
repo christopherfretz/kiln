@@ -41,8 +41,8 @@ impl Substituter<'_, '_, '_> {
         Err(SubstFail)
     }
 
-    /// Redeclares partial specialization `m` of a member class template
-    /// of the pattern class for the member template it was redeclared as
+    /// Redeclares partial specialization `m` of a member class or
+    /// variable template of the pattern class for the member template it was redeclared as
     /// ([temp.spec.partial.member]/2, [temp.mem]; clang's
     /// `InstantiateClassTemplatePartialSpecialization`): its parameter
     /// list and arguments substituted, so matching sees the enclosing
@@ -65,9 +65,23 @@ impl Substituter<'_, '_, '_> {
             let args = self.args(args, n.loc())?;
             let ctx = self.sema.ast.decls.get(new_tmpl).ctx().unwrap_or(self.sema.ast.tu);
             let h = kiln_ast::DeclHead::new(ctx, n.name(), n.loc());
-            let tag =
-                self.sema.ast.decls.record(m).map_or(kiln_ast::decl::TagKind::Struct, |r| r.tag);
-            let p = self.sema.builder().class_partial_spec(h, new_tmpl, list, args, tag);
+            let p = if let Some(v) = self.sema.ast.decls.var(m).map(|v| v.spec) {
+                // A member variable template's partial specialization
+                // (clang's `InstantiateVarTemplatePartialSpecialization`):
+                // its type substituted too; the original stays the
+                // pattern of the type and initializer of a specialization
+                // instantiated from it.
+                let ty = self.ty(n.ty().unwrap_or(kiln_ast::QualType::ERROR), n.loc())?;
+                self.sema.builder().var_partial_spec(h, new_tmpl, list, args, ty, v)
+            } else {
+                let tag = self
+                    .sema
+                    .ast
+                    .decls
+                    .record(m)
+                    .map_or(kiln_ast::decl::TagKind::Struct, |r| r.tag);
+                self.sema.builder().class_partial_spec(h, new_tmpl, list, args, tag)
+            };
             self.sema.ast.templates.set_instantiated_from(p, m);
             // Its constraints stay the original's, checked with this
             // specialization's levels outside its own (as for a member
@@ -85,15 +99,15 @@ impl Substituter<'_, '_, '_> {
         r
     }
 
-    /// Redeclares the partial specializations of member class template
-    /// `t` declared out of line (`template<class T> template<class U>
+    /// Redeclares the partial specializations of member class or variable
+    /// template `t` declared out of line (`template<class T> template<class U>
     /// struct Outer<T>::Inner<U*> {...}`, [temp.spec.partial.member]/1):
     /// they are not in the pattern class's member list, so the member
     /// walk does not reach them (clang's `VisitClassTemplateDecl`
     /// instantiates every partial specialization of the member
     /// template). Those declared in the class come with the walk.
     fn out_of_line_member_partials(&mut self, t: DeclId) {
-        if self.sema.kind_of(t) != DeclKind::ClassTemplate {
+        if !matches!(self.sema.kind_of(t), DeclKind::ClassTemplate | DeclKind::VarTemplate) {
             return;
         }
         let class = self.sema.ast.decls.get(t).ctx();
