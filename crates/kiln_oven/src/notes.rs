@@ -289,9 +289,14 @@ impl Oven {
                 let t = site
                     .e
                     .map_or_else(|| "int".into(), |e| {
-                        // A complex part: its element type (clang).
+                        // A complex part or a vector lane: its element
+                        // type (clang).
                         let q = ast.exprs.get(e).ty();
-                        Self::qname(ast, ast.types.as_complex(q).unwrap_or(q))
+                        let q = match ast.types.canonical_view(q) {
+                            kiln_ast::types::TypeView::Vector { elem, .. } => elem,
+                            _ => ast.types.as_complex(q).unwrap_or(q),
+                        };
+                        Self::qname(ast, q)
                     });
                 (
                     site.loc,
@@ -1002,7 +1007,7 @@ impl Oven {
                 s.push_str(&self.ptr_string(ast, v as u64, to));
             }
             TyKind::Ptr(pt) => s.push_str(&self.ptr_string(ast, v as u64, pt)),
-            TyKind::Array { .. } | TyKind::Record { .. } => {
+            TyKind::Array { .. } | TyKind::BoolVec { .. } | TyKind::Record { .. } => {
                 self.write_object(ast, s, t, v as u64, depth);
             }
             // clang: `&C::m` (the member's class and the member,
@@ -1085,6 +1090,28 @@ impl Oven {
                 }
                 if n > MAX_ELEMS {
                     s.push_str(", ...");
+                }
+                s.push('}');
+            }
+            // clang prints every lane of a vector (`APValue::printPretty`).
+            TyKind::BoolVec { elem, n } => {
+                let len = n.div_ceil(8);
+                let bytes = self.mem.check(raw, len, false).ok().and_then(|(st, abs, _)| {
+                    let sp = self.mem.space(st);
+                    sp.is_init(abs, len)
+                        .then(|| sp.bytes[abs as usize..(abs + len) as usize].to_vec())
+                });
+                let Some(bytes) = bytes else {
+                    s.push_str("<uninitialized>");
+                    return;
+                };
+                s.push('{');
+                for i in 0..n {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    let b = bytes[(i / 8) as usize] >> (i % 8) & 1;
+                    self.write_value(ast, s, elem, u128::from(b), depth + 1);
                 }
                 s.push('}');
             }

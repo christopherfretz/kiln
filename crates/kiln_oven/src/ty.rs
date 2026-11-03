@@ -33,6 +33,14 @@ pub(crate) enum TyKind {
         elem: OTy,
         n: u64,
     },
+    /// A vector of `n` `bool` lanes (`elem`, the `bool` type): packed
+    /// bits, lane `i` at bit `i % 8` of byte `i / 8`, in `ceil(n / 8)`
+    /// bytes padded to the vector's size (clang's layout; spec/oven.md
+    /// "Vectors", WP-450). The bytes hold no pointer and no union.
+    BoolVec {
+        elem: OTy,
+        n: u64,
+    },
     Record {
         decl: DeclId,
         union: bool,
@@ -337,12 +345,18 @@ impl Types {
     }
 
     pub fn is_aggregate(&self, t: OTy) -> bool {
-        matches!(self.kind(t), TyKind::Array { .. } | TyKind::Record { .. })
+        matches!(
+            self.kind(t),
+            TyKind::Array { .. } | TyKind::Record { .. } | TyKind::BoolVec { .. }
+        )
     }
 
     /// Whether `t` is a GNU/clang vector type (stored as an array of its
-    /// lanes, WP-173).
+    /// lanes, WP-173, or as packed bits, `TyKind::BoolVec`).
     pub fn is_vector(&self, ast: &Ast, t: OTy) -> bool {
+        if let TyKind::BoolVec { .. } = self.kind(t) {
+            return true;
+        }
         matches!(self.kind(t), TyKind::Array { .. })
             && !self.is_synthetic_array(t)
             && matches!(ast.types.canonical_view(self.info(t).q), TypeView::Vector { .. })
@@ -596,12 +610,15 @@ impl Types {
             // elements, padded to the vector's own size and alignment (an
             // `ext_vector_type(3)` occupies 4 lanes); `q` keeps the vector
             // type, so notes name it. A vector of `bool` packs its lanes
-            // into bits and has no value model yet: only its size.
+            // into bits (`TyKind::BoolVec`).
             TypeView::Vector { elem, count, .. } => {
                 let (size, align) = bridge.opaque_size_align(c);
                 let elem = self.intern(bridge, elem);
                 let e = *self.info(elem);
                 let n = u64::from(count);
+                if e.kind == TyKind::Bool && n.div_ceil(8) <= size {
+                    return self.simple(c, size, align.max(1), TyKind::BoolVec { elem, n });
+                }
                 if !matches!(e.kind, TyKind::Int { .. } | TyKind::Float(_))
                     || e.size.saturating_mul(n) > size
                 {

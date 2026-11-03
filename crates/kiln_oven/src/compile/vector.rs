@@ -31,7 +31,7 @@ impl Compiler<'_> {
             return None;
         }
         match self.kind(t) {
-            TyKind::Array { elem, n } => Some((elem, n)),
+            TyKind::Array { elem, n } | TyKind::BoolVec { elem, n } => Some((elem, n)),
             _ => None,
         }
     }
@@ -181,14 +181,16 @@ impl Compiler<'_> {
     /// Initializes the vector object of type `ty` at `p` from operation
     /// `e` (`vec_op`).
     pub(super) fn vec_init(&mut self, e: ExprId, p: u32, ty: OTy) {
-        let Some((elem, _)) = self.lanes(ty) else { return self.unsupported(e) };
+        if self.lanes(ty).is_none() {
+            return self.unsupported(e);
+        }
         let n = self.node(e);
         if n.kind().is_cast() && self.ast().exprs.cast_kind(e) == CastKind::BitCast {
             let r = self.reg();
             return self.vec_bitcast(e, r, Some(p));
         }
         let regs = self.vec_regs(e);
-        self.store_lanes(p, elem, &regs, e);
+        self.store_lanes(p, ty, &regs, e);
     }
 
     /// The address of vector `x`: its object for a glvalue, else a
@@ -218,6 +220,11 @@ impl Compiler<'_> {
     /// vector at `p`, stepped like an array element with the note at
     /// `base`'s begin.
     pub(super) fn lane_place(&mut self, p: u32, ri: u32, base: ExprId, e: ExprId) -> Place {
+        let vty = self.ety(base);
+        if let TyKind::BoolVec { .. } = self.kind(vty) {
+            // A bit: the bounds are checked at the access (`Op::LoadLane`).
+            return Place::Lane { p, idx: ri, vty };
+        }
         let ety = self.ety(e);
         let r = self.reg();
         let pc = self.emit_at(Op::PtrAdd, int_aux(64, false), &[r, p, ri, ety.0], e);
@@ -248,26 +255,46 @@ impl Compiler<'_> {
         }
     }
 
-    /// The lanes of the vector at `p`, read with access kind `akind`.
-    fn load_lanes(&mut self, p: u32, elem: OTy, n: u64, akind: u32, e: ExprId) -> Vec<u32> {
+    /// The lanes of the vector of type `vty` at `p`, read with access
+    /// kind `akind`. A `bool` vector's lanes are bits: lane `i` is bit
+    /// `i % 8` of byte `i / 8` (`ty.rs` `BoolVec`).
+    fn load_lanes(&mut self, p: u32, vty: OTy, akind: u32, e: ExprId) -> Vec<u32> {
+        let Some((elem, n)) = self.lanes(vty) else { return Vec::new() };
+        let bits = matches!(self.kind(vty), TyKind::BoolVec { .. });
         let es = self.o.types.size(elem);
         let loc = self.begin(e);
         (0..n)
             .map(|i| {
-                let q = self.elem_ptr(p, i * es, e);
                 let r = self.reg();
-                self.emit_site(Op::Load, akind, &[r, q, elem.0], e, loc);
+                if bits {
+                    let q = self.elem_ptr(p, i / 8, e);
+                    let bw = (i % 8) as u32 | 1 << 8;
+                    self.emit_site(Op::LoadBits, akind, &[r, q, elem.0, bw], e, loc);
+                } else {
+                    let q = self.elem_ptr(p, i * es, e);
+                    self.emit_site(Op::Load, akind, &[r, q, elem.0], e, loc);
+                }
                 r
             })
             .collect()
     }
 
-    /// Initializes the lanes of the vector at `p` from `regs`.
-    fn store_lanes(&mut self, p: u32, elem: OTy, regs: &[u32], e: ExprId) {
+    /// Initializes the lanes of the vector of type `vty` at `p` from
+    /// `regs` (a `bool` vector's padding bits are zero).
+    fn store_lanes(&mut self, p: u32, vty: OTy, regs: &[u32], e: ExprId) {
+        let Some((elem, _)) = self.lanes(vty) else { return };
+        let bits = matches!(self.kind(vty), TyKind::BoolVec { .. });
         let es = self.o.types.size(elem);
         for (i, &r) in regs.iter().enumerate() {
-            let q = self.elem_ptr(p, i as u64 * es, e);
-            self.emit_at(Op::InitStore, 0, &[q, r, elem.0], e);
+            let i = i as u64;
+            if bits {
+                let q = self.elem_ptr(p, i / 8, e);
+                let bw = (i % 8) as u32 | 1 << 8;
+                self.emit_at(Op::StoreBits, 1, &[q, r, elem.0, bw], e);
+            } else {
+                let q = self.elem_ptr(p, i * es, e);
+                self.emit_at(Op::InitStore, 0, &[q, r, elem.0], e);
+            }
         }
     }
 
@@ -286,7 +313,7 @@ impl Compiler<'_> {
             match self.ast().exprs.cast_kind(e) {
                 CastKind::LValueToRValue => {
                     let p = self.lv_mem(op, Access::Read);
-                    return self.load_lanes(p, elem, n, ak::READ, op);
+                    return self.load_lanes(p, ty, ak::READ, op);
                 }
                 CastKind::NoOp if !node.value_category().is_glvalue() => {
                     return self.vec_regs(op);
@@ -296,7 +323,7 @@ impl Compiler<'_> {
         }
         if !self.vec_op(e) {
             let p = self.vec_addr(e);
-            return self.load_lanes(p, elem, n, ak::READ, e);
+            return self.load_lanes(p, ty, ak::READ, e);
         }
         match node.kind() {
             ExprKind::UnaryOperator => self.vec_unary(e, elem),
@@ -309,10 +336,21 @@ impl Compiler<'_> {
                     return Vec::new();
                 };
                 let src = self.vec_regs(x);
+                // clang converts a floating lane to a `bool` lane as to a
+                // 1-bit unsigned integer: out of range unless in (-1, 2).
+                let f_to_b = match (self.kind(xe), self.kind(elem)) {
+                    (TyKind::Float(k), TyKind::Bool) => Some(float_code(k) | 1 << 4),
+                    _ => None,
+                };
                 src.into_iter()
                     .map(|r| {
                         let d = self.reg();
-                        self.convert(r, xe, elem, d, e);
+                        match f_to_b {
+                            Some(aux) => {
+                                self.emit_at(Op::FToI, aux, &[d, r], e);
+                            }
+                            None => self.convert(r, xe, elem, d, e),
+                        }
                         d
                     })
                     .collect()
@@ -340,7 +378,7 @@ impl Compiler<'_> {
                 self.alloc(d, ty, Origin::Temp(e), false, e);
                 let r = self.reg();
                 self.vec_bitcast(e, r, Some(d));
-                self.load_lanes(d, elem, n, ak::READ, e)
+                self.load_lanes(d, ty, ak::READ, e)
             }
         }
     }
@@ -436,8 +474,12 @@ impl Compiler<'_> {
     }
 
     /// The comparison result `c` (a `bool` register) as a lane of
-    /// signed integer type `elem`: all ones when true.
+    /// signed integer type `elem`: all ones when true (a `bool` lane is
+    /// `c` itself).
     fn lane_mask(&mut self, c: u32, elem: OTy, e: ExprId) -> u32 {
+        if self.kind(elem) == TyKind::Bool {
+            return c;
+        }
         let (w, _) = int_of(self.kind(elem)).unwrap_or((32, true));
         let i = self.reg();
         self.emit(Op::ICast, 1 | w << 9 | 1 << 17, &[i, c]);
@@ -679,7 +721,7 @@ impl Compiler<'_> {
             self.unsupported(e);
             return Place::Mem(self.reg());
         };
-        let old = self.load_lanes(p, elem, n, ak::COMPOUND, e);
+        let old = self.load_lanes(p, ty, ak::COMPOUND, e);
         let new: Vec<u32> = old
             .iter()
             .zip(&rb)
@@ -691,7 +733,7 @@ impl Compiler<'_> {
             .collect();
         let t = self.reg();
         self.alloc(t, ty, Origin::Temp(e), false, e);
-        self.store_lanes(t, elem, &new, e);
+        self.store_lanes(t, ty, &new, e);
         self.emit_at(Op::Copy, 0, &[p, t, ty.0], e);
         Place::Mem(p)
     }

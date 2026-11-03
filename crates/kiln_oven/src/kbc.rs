@@ -130,6 +130,12 @@ ops! {
     LoadBits = 4,
     // [p, src, type, bit | width << 8]; aux = 1 for an initialization
     StoreBits = 4,
+    // [dst, p, idx, vector type]: lane `idx` (unsigned 64-bit) of the
+    // `bool` vector at `p` (one bit per lane, `ty.rs` `BoolVec`); aux =
+    // access kind
+    LoadLane = 4,
+    // [p, src, idx, vector type]; aux = 1 for an initialization
+    StoreLane = 4,
     // [dst p, src p, type]; aux = 1 for an initialization, | 2 to require
     // a fully initialized source, | 4 for a trivial copy/move constructor
     // or assignment call run inline (its failure notes the call's frame)
