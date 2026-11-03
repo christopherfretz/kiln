@@ -66,9 +66,18 @@ impl Sema<'_, '_> {
     /// context redeclares when redeclaration lookup found none it
     /// corresponds to ([dcl.link]/6). Diagnoses a conflict with a global
     /// variable ([dcl.link]/7) at `at` instead; `is_var` says whether the
-    /// new declaration is a variable.
-    pub(crate) fn extern_c_prev(&mut self, name: Symbol, is_var: bool, at: Loc) -> Option<DeclId> {
-        if self.in_local_scope() {
+    /// new declaration is a variable, `is_static` whether it is declared
+    /// `static` (then it has internal linkage and no language linkage,
+    /// [dcl.link]/5: `namespace N { extern "C" { static int x; } }` is
+    /// another entity than `::x`).
+    pub(crate) fn extern_c_prev(
+        &mut self,
+        name: Symbol,
+        is_var: bool,
+        is_static: bool,
+        at: Loc,
+    ) -> Option<DeclId> {
+        if self.in_local_scope() || is_static {
             return None;
         }
         let c = self.ctx_is_extern_c(self.ctx);
@@ -123,6 +132,7 @@ impl Sema<'_, '_> {
             || self.ast.described_template(d).is_some()
             || self.ast.decls.get(d).flags().contains(kiln_ast::decl::DeclFlags::INVALID)
             || !self.ctx_is_extern_c(self.ctx)
+            || kiln_abi::mangle::has_internal_linkage(&self.ast, d)
         {
             return;
         }

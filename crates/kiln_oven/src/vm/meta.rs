@@ -55,7 +55,8 @@ impl Oven {
         let trial = self.run.fold || self.mem.in_trial();
         // The function whose body holds the call (thunks have none).
         let scope = self.stack.last().and_then(|f| self.funcs[f.func as usize].decl);
-        let ctx = MetaCtx { scope, loc: self.site(pc).loc, plainly: false, trial, elem: OTy(t1) };
+        let ctx =
+            MetaCtx { scope, loc: self.site(pc).loc, plainly: self.plain(), trial, elem: OTy(t1) };
         match op.purity() {
             Purity::Stable => {}
             Purity::PointDependent => self.run.impure += 1,

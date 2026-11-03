@@ -2385,6 +2385,23 @@ impl Compiler<'_> {
     }
 
     fn decl_one(&mut self, d: DeclId) {
+        // A constexpr local's initializer is a constant expression of its
+        // own ([expr.const]/22): not part of a consteval block's plainly
+        // constant-evaluated evaluation (spec/consteval-blocks.md §3).
+        let ast = self.b.ast();
+        let constexpr_local = ast.decls.get(d).kind() == DeclKind::Var
+            && is_local_var(ast, d)
+            && ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr());
+        if !constexpr_local {
+            return self.decl_one_var(d);
+        }
+        let saved = self.reg();
+        self.emit(Op::IsConstEval, 4, &[saved]);
+        self.decl_one_var(d);
+        self.emit(Op::IsConstEval, 8, &[saved]);
+    }
+
+    fn decl_one_var(&mut self, d: DeclId) {
         let ast = self.b.ast();
         let n = *ast.decls.get(d);
         if n.kind() != DeclKind::Var {
@@ -3671,13 +3688,17 @@ impl Compiler<'_> {
                             self.void_cast_pre26(e, op, dst, r);
                         } else if fvoid {
                             self.emit_at(Op::VoidCast, 0, &[dst, r, tp.0], e);
-                        } else if matches!(self.kind(fp), TyKind::Func)
-                            || matches!(self.kind(tp), TyKind::Func)
-                        {
-                            self.trap(e, REINTERPRET_CONV);
                         } else {
+                            // A function pointer included: a fold keeps
+                            // the function it designates (clang's invalid
+                            // designator; a call through it fails).
                             self.cce(e, cce::PTR, dst, r, REINTERPRET_CONV);
                         }
+                    }
+                    // A `reinterpret_cast` to or from a function pointer
+                    // (`cce_check` above failed it outside a fold).
+                    (TyKind::Ptr(_), TyKind::Ptr(_)) => {
+                        self.cce(e, cce::PTR, dst, r, REINTERPRET_CONV);
                     }
                     _ => self.trap(e, REINTERPRET_CONV),
                 }
@@ -5170,10 +5191,19 @@ impl Compiler<'_> {
             && ast.decls.get(ast.exprs.decl(c)).kind().is_function())
         .then(|| ast.exprs.decl(c));
         if let Some(d) = direct
-            && ast.decls.builtin_id(d) == Some(kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED)
+            && let Some(
+                b @ (kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED
+                | kiln_ast::decl::builtin::KILN_PLAINLY_CONSTANT_EVALUATED),
+            ) = ast.decls.builtin_id(d)
         {
             let r = self.reg();
-            let pc = self.emit_at(Op::IsConstEval, u32::from(self.std_ice), &[r], e);
+            // aux bit 1: `__kiln_plainly_constant_evaluated` (WP-473).
+            let aux = if b == kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED {
+                u32::from(self.std_ice)
+            } else {
+                2
+            };
+            let pc = self.emit_at(Op::IsConstEval, aux, &[r], e);
             let loc = self.begin(e);
             if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
                 site.loc = loc;

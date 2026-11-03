@@ -94,7 +94,7 @@ impl Sema<'_, '_> {
             }
             AccessOp::KilnVia => {
                 let r = info_arg(args, 0)?;
-                if r != ReflectionId::NULL && self.complete_class_of(r, loc, oven)?.is_none() {
+                if r != ReflectionId::NULL && self.complete_class_of(r, ctx, oven)?.is_none() {
                     return fail(
                         loc,
                         "via argument other than null or complete class type reflection",
@@ -110,7 +110,7 @@ impl Sema<'_, '_> {
             | AccessOp::HasInaccessibleBases
             | AccessOp::HasInaccessibleSubobjects => {
                 let (r, actx) = (info_arg(args, 0)?, access_ctx_arg(args, 1)?);
-                let Some(def) = self.complete_class_of(r, loc, oven)? else {
+                let Some(def) = self.complete_class_of(r, ctx, oven)? else {
                     return fail(loc, "not a complete class type");
                 };
                 MetaOut::Scalar(u128::from(self.has_inaccessible(a, def, actx, ctx, oven)?))

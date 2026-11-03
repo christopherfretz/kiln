@@ -466,6 +466,15 @@ pub fn expect(m: &mut Module, ty: TypeId) -> FuncId {
     declare(m, &name, ty, &[(ty, &[]), (ty, &[])], &[], Shape::Basic(Some(none)))
 }
 
+/// `T @llvm.expect.with.probability.T(T, T, double immarg)`.
+pub fn expect_with_probability(m: &mut Module, ty: TypeId) -> FuncId {
+    let name = overloaded_name(m, "llvm.expect.with.probability", &[ty]);
+    let none = MemoryEffects::all(ModRef::None);
+    let params: &[(TypeId, &[Attr])] =
+        &[(ty, &[]), (ty, &[]), (TypeId::DOUBLE, &[Attr::Flag(ImmArg)])];
+    declare(m, &name, ty, params, &[], Shape::Basic(Some(none)))
+}
+
 /// `void @llvm.assume(i1 noundef)`.
 pub fn assume(m: &mut Module) -> FuncId {
     let shape = Shape::Basic(Some(inaccessible_write()));

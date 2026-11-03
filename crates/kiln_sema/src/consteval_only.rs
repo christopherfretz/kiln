@@ -221,7 +221,7 @@ impl Sema<'_, '_> {
             return false;
         }
         if let Some(g) = escalating {
-            self.ast.decls.mark_function(g, kiln_ast::decl::FnSpec::new().with_escalated(true));
+            self.escalate_consteval_only(g, r);
             return false;
         }
         // The variable itself is reported ([`Sema::check_consteval_only_var`]).

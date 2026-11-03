@@ -1485,8 +1485,22 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   impure (never memoized). `__builtin_constant_p((int *)8 + 1 == (int
   *)12)` is true, `int f[(long)(int *)8]` folds to 8 elements and
   `int i[*reinterpret_cast<const char *>(&n)]` is an error:
-  `expr.const/5.15/reinterpret-cast-fold-points-nowhere.cpp`. Function
-  pointers are not modelled (a cast to or from one still stops a fold).
+  `expr.const/5.15/reinterpret-cast-fold-points-nowhere.cpp`. A cast to
+  or from a function pointer is `PTR` too (WP-492): the function pointer
+  keeps its function (a nowhere pointer of the function slot), so it
+  freezes to that function (`void (*p)() = (void (*)())&f;` is a static
+  initializer) and compares by function; an indirect call through it
+  calls the function only if the call's function type is the
+  function's, ignoring the exception specification (clang
+  `EvaluateCall`'s `hasSameFunctionTypeIgnoringExceptionSpec`;
+  `Oven::cast_callee_matches`), so a pointer cast back to its type
+  calls in a fold, and any other fails as clang's `Error`. A lax
+  variable (spec "Lax folds") whose constant initialization failed is
+  read as its initializer re-folded non-manifestly, as a
+  potentially-constant one is (`const auto p = (int (*)(int))(void
+  (*)())&f;` folds `p(1)` to a direct call): `VarDecl::evaluateValue`
+  re-evaluates any variable without constant initialization in
+  `EM_ConstantFold`.
   Codegen's folds
   share the TU's bytecode, so they see the TU's language mode
   (`Oven::set_cxx_year`, recorded by sema; before WP-407 they compiled
@@ -1835,8 +1849,12 @@ skipped for clang). Every other observable result matches clang
 (`constant-p-trial.cpp`, which is strict-diags under both compilers).
 
 `TrialMode::Transactional` allows every effect and undoes it on rollback.
-It is the general mode for future evaluator trials. No evaluator path uses
-it yet; the unit tests exercise it.
+It is the general mode for evaluator trials. Its user is
+`std::meta::substitute`/`can_substitute` (WP-482): the reflection bridge
+opens one with `Oven::trial_begin` around each uncached substitution and
+closes it with `Oven::trial_end(keep)`, so a failed substitution's nested
+constant evaluations leave no bytes behind
+(`tests/conformance/reflection/substitute-trial-rollback.cpp`).
 
 **Complexity.**
 
@@ -2964,6 +2982,20 @@ sema.
   | `EvalContext::new(Other, loc)` | `other` | no | array bounds, bit-field widths, other enumerators, `alignas`, array designators |
   | `EvalContext::new(TemplateArg / Consteval / IfConstexpr, loc)` | as named | yes | M3 |
   | `EvalContext::new(Constraint, loc)` | `constraint` | yes | M3: constraint satisfaction (an atomic constraint's value) |
+| `EvalContext::consteval_block(loc)` | `consteval_block` | yes | a consteval-block-declaration (WP-473); the only constructor that sets `plain` |
+
+  `EvalContext::plain` (WP-473, `spec/consteval-blocks.md` §3) is the
+  plainly constant-evaluated bit: true only for a consteval block's
+  evaluation ([expr.const.core]/2.32), the one context in which injection
+  may mutate. It becomes `run.plain` for that evaluation (a nested
+  evaluation starts from its own context's bit and restores the
+  enclosing one); `Oven::plain()` is `run.plain && !run.fold &&
+  !mem.in_trial()`, so `try_fold`, `__builtin_constant_p` operands and
+  every other trial read false. `Op::IsConstEval` aux 2 reads it
+  (`__kiln_plainly_constant_evaluated()`); aux 4 / aux 8 save-and-clear
+  / restore it around a constexpr local's initializer, which is its own
+  manifestly constant-evaluated expression. The call memo key carries
+  `Oven::plain()` at bit 30 next to `const_context` at bit 31.
 
 - **Nested evaluation** (R-OVEN-1, spec/sema-templates.md §4.11). The
   Oven calls `SemaBridge::ensure_body(f, oven)` the first time it compiles

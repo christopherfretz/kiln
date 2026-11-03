@@ -261,9 +261,10 @@ whether the op may run in a trial (§4.3):
 this list and the tables is a spec bug, fixed in the same change.
 
 - **Query · Stable · WP-470, done**: `type_of`.
-- **Query · Stable · WP-476**: `object_of`, `constant_of`, `parent_of`,
+- **Query · Stable · WP-476, done** (contract: spec/reflection-queries.md):
+  `object_of`, `constant_of`, `parent_of`,
   `dealias`, `has_template_arguments`, `operator_of`, `symbol_of`,
-  `u8symbol_of`, `variable_of`, `return_type_of`, `is_function_parameter`,
+  `u8symbol_of`, `return_type_of`, `is_function_parameter`,
   `is_explicit_object_parameter`, `is_vararg_function`, `is_public`,
   `is_protected`, `is_private`, `is_virtual`, `is_pure_virtual`,
   `is_override`, `is_final`, `is_deleted`, `is_user_provided`,
@@ -290,8 +291,9 @@ this list and the tables is a spec bug, fixed in the same change.
   `u8identifier_of`, `display_string_of`, `u8display_string_of`,
   `source_location_of` (§3.9), and the helpers `__kiln_reflection_range`,
   `__kiln_member_offset`, `__kiln_access_context` (§3.5).
-- **Query · PointDependent · WP-476**: `has_default_argument`,
-  `is_defaulted`, `is_complete_type`, `is_enumerable_type`.
+- **Query · PointDependent · WP-476, done**: `variable_of`,
+  `has_default_argument`, `is_defaulted`, `is_complete_type`,
+  `is_enumerable_type`.
 - **Trait · Stable · WP-477**: `is_void_type`, `is_null_pointer_type`,
   `is_integral_type`, `is_floating_point_type`, `is_array_type`,
   `is_pointer_type`, `is_lvalue_reference_type`, `is_rvalue_reference_type`,
@@ -343,8 +345,11 @@ this list and the tables is a spec bug, fixed in the same change.
 - **Value · Stable · WP-479**: `extract`, `reflect_constant`,
   `reflect_object`, `reflect_function`, `reflect_constant_string`,
   `reflect_constant_array`.
-- **Template · Stable · WP-482**: `template_of`, `template_arguments_of`.
-- **Template · PointDependent · WP-482**: `can_substitute`, `substitute`.
+- **Template · Stable · WP-482**: `template_of`, `template_arguments_of`
+  (implemented, `kiln_sema/src/meta/templ.rs`; spec/landed/reflection/WP-482.md).
+- **Template · PointDependent · WP-482**: `can_substitute`, `substitute`
+  (implemented: a SFINAE frame inside a Transactional Oven trial, memoized
+  on the (template, arguments) key; spec/landed/reflection/WP-482.md).
 - **Define · Stable · WP-480**: `data_member_spec`, `is_data_member_spec`.
 - **Define · Mutating · WP-480**: `define_aggregate`.
 - **Annot · PointDependent · WP-478, done**: `annotations_of`,
@@ -360,7 +365,7 @@ The context the VM passes with every call:
 |---|---|---|
 | `scope: Option<DeclId>` | the scope of the evaluation point, for `access_context::current()` and namespace `members_of`; `None` means the bridge's current context | always `None` until → WP-473 sets it from the evaluation context |
 | `loc: Loc` | the call's location: the position half of the evaluation point, and where failure notes point | implemented |
-| `plainly: bool` | the evaluation is plainly constant-evaluated (§4.2), the only context that may inject | always `false` until → WP-473 |
+| `plainly: bool` | the evaluation is plainly constant-evaluated (§4.2), the only context that may inject | implemented: set from `Oven::plain()` (`EvalContext::plain`, WP-473) |
 | `trial: bool` | the evaluation is a trial: `run.fold`, or an open memory checkpoint | implemented |
 | `elem` (crate-private) | the element type of the call's last pointer argument | implemented |
 
@@ -492,24 +497,20 @@ answers as of that point.
 
 ## 4. The consteval boundary
 
-### 4.1 Consteval-only types (→ WP-473)
-- `std::meta::info`, and every type that contains one (a class with an
-  `info` member or base, an array of, pointer to or reference to such a
-  type, a function type involving one), is *consteval-only*
-  ([basic.types.general]).
-- A variable of consteval-only type must be `constexpr`, or a local of an
-  immediate function, or appear in an immediate-function context. An
-  expression of consteval-only type is immediate-escalating
-  ([expr.const]): a `^^` or splice in a `constexpr` function makes that
-  function immediate when the rules for escalation allow it, and is
-  ill-formed otherwise.
-- No value of consteval-only type reaches codegen. An object of such a
-  type that would survive to emission is an error at its declaration,
-  never a codegen failure. Today, codegen's constant emitter is the
-  backstop: it rejects such a value with "reflection values cannot be
-  emitted" (`kiln_codegen/src/consts.rs`).
+### 4.1 Consteval-only types
+- The consteval-only rules (which types are consteval-only; the
+  variable, function and expression checks; template leaf tracking) are
+  specified once, in `spec/reflection-repr.md` §6. The escalation
+  behaviour of a consteval-only expression in an immediate-escalating
+  function (the function becomes immediate, with
+  `note_immediate_function_reason_consteval_only`) is specified in
+  `spec/consteval-blocks.md` §4.
+- No value of consteval-only type reaches codegen. Codegen's constant
+  emitter stays as the backstop for the known gaps: it rejects such a
+  value with "reflection values cannot be emitted"
+  (`kiln_codegen/src/consts.rs`).
 
-### 4.2 Plainly constant-evaluated (→ WP-473)
+### 4.2 Plainly constant-evaluated
 - An evaluation is *plainly constant-evaluated* ([expr.const]) when it is
   the evaluation of a consteval block (`consteval { … }`, P3289) or of
   another construct the IS lists as such. GCC 16.1 is the reference for
@@ -530,39 +531,75 @@ answers as of that point.
   (implemented). If the evaluation is also manifestly constant-evaluated,
   that evaluation reports the failure.
 - `can_substitute` runs its instantiation-time evaluations under
-  `checkpoint(TrialMode::Full)` and rolls back on failure. Interned
-  reflections survive the rollback (append-only, §2.4) (→ WP-482).
+  a Transactional checkpoint and rolls back on failure. Interned
+  reflections survive the rollback (append-only, §2.4); so does nothing
+  else: no instantiation-report row, no diagnostic, no Oven bytes
+  (implemented, WP-482: `reflection/substitute-trial-rollback.cpp`).
 
-## 5. Splicing (→ WP-474)
-The grammar is in spec/parse.md §5.2. This section gives the semantics.
+## 5. Splicing (WP-474)
+The grammar is in spec/parse.md §5.2. This section gives the semantics;
+the sema is `kiln_sema/src/splice.rs` (`Sema::splice_entity` reads every
+position's operand).
 
 - **Operand.** The splice operand is a converted constant expression of
-  type `std::meta::info` ([basic.splice]). A non-`info` operand gets
-  "splice operand of type {0} is not a reflection", and a non-constant one
-  gets "splice operand must be a constant expression" followed by the
-  Oven's notes (implemented for type splices: `reflection/splice-type-neg.cpp`).
+  type `std::meta::info` ([basic.splice]), in every position. A non-`info`
+  operand gets "splice operand of type {0} is not a reflection", and a
+  non-constant one gets "splice operand must be a constant expression"
+  followed by the Oven's notes (`basic.splice/p1-not-info.cpp`,
+  `basic.splice/p1-not-constant.cpp`, `reflection/splice-type-neg.cpp`).
 - **Designated entity.** The splice designates the operand's `Reflectee`.
   Each grammar position accepts these kinds:
 
   | Position | Syntax | Accepts | Status |
   |---|---|---|---|
-  | type | `typename [: r :]` [dcl.type.splice]; `[: r :]` as a template type argument | a type or a type alias | implemented when not dependent |
-  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, value or object, or a data member (in a pointer-to-member context) | → WP-474 |
-  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a non-static data member, a member function, or a base subobject (P3293) | → WP-474 |
-  | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration | → WP-474 |
-  | template | `template [: r :] < args >` [temp.names] | a template | → WP-474 |
-  | namespace | `using namespace [: r :];` | a namespace | → WP-474 (GCC 16.1 is the reference) |
+  | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); `[: r :]` as a template type argument | a type or a type alias | implemented (`dcl.type.splice/`) |
+  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`) |
+  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category) | implemented; the base form is untested until `bases_of` (WP-478) |
+  | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration (or an alias of one) | implemented (`basic.splice/splice-scope-specifier.cpp`, `namespace.udecl/splice-scope.cpp`) |
+  | template | `template [: r :] < args >` [temp.names] in an expression, after `typename` or in a type-only context, and as a scope (`template [: r :] < args > ::`); `template [: r :]` alone before a call | a class or alias template in a type or scope; a variable template, concept or function template in an expression | implemented (`temp.names/splice-*.cpp`; spec/landed/reflection/WP-482.md) |
+  | namespace | `using namespace [: r :];` | a namespace other than the global namespace, not dependent ([namespace.udir]/1) | implemented (`namespace.udir/`) |
 
   A misfit gets "splice in a {position} position does not designate a
-  {kind}". The type position's misfit wording is implemented as "splice in
-  a type position does not designate a type".
+  {kinds}" (`sema_splice_not_type`, `_not_expression`, `_not_member`,
+  `_not_scope`, `_not_namespace`); a splice before a template argument
+  list that designates no template gets "splice before a template
+  argument list does not designate a template"
+  (`sema_splice_not_template`). A constructor or destructor is
+  ill-formed in any splice-expression, the member access form included
+  (`sema_splice_special_member`, [expr.prim.splice]/2). A splice-scope-
+  specifier in a declarative nested-name-specifier (an out-of-line
+  definition's declarator-id, a class-head-name or enum-head-name) gets
+  `sema_splice_declarative_scope` ([expr.prim.id.qual]/3; GCC 16.1 accepts
+  some of these). A dependent using-directive splice gets
+  `sema_splice_dependent_namespace` at the template definition (GCC 16.1
+  accepts it) and the global namespace `sema_splice_global_namespace`.
+- **Member functions.** A member-function splice is not a qualified-id, so
+  `e.[: ^^B::f :]()` of a virtual `f` is a virtual call ([expr.call]/2; the
+  [dcl.contract.func] example). `&[: ^^B::f :]` is a pointer to member.
+- **Access.** Splices are not access-checked: a splice of a private member
+  is valid from anywhere (P2996; GCC 16.1 agrees). Access is the business of
+  the query that produced the reflection (`access_context`, WP-478).
 - **Dependent splices.** A value-dependent operand produces a `Splice`
-  type node, a `CXXSpliceExpr` or a splice nested-name-specifier. It is
-  resolved when substitution makes the operand non-dependent (templ/subst).
-  Today a dependent operand is "unsupported: dependent splice".
-- **Fast path.** When the operand is a substituted NTTP or another frozen
-  constant, sema reads the id directly without starting an Oven run. Each
-  distinct `R` in `[: R :]` costs one instantiation, as expected.
+  type node (a type splice), a `CXXSpliceExpr` (an expression or member
+  splice; with the object expression when that or the operand is
+  dependent) or an `Nns::Splice` (a scope splice; the nested-name-specifier
+  is always dependent). Each is resolved by the `templ/subst` arm for its
+  kind when substitution makes the operand non-dependent, through the same
+  `splice.rs` entry points as a non-dependent splice, so a misfit is
+  reported in the specialization with its instantiation note
+  (`temp.dep/splice-*.cpp`).
+- **Fast path.** When the operand is already a frozen reflection, sema
+  reads its id without an Oven run: through parentheses, implicit casts
+  and a substituted NTTP (`SubstNonTypeTemplateParmExpr`), a `ConstantExpr`
+  (its stored value), a `CXXReflectExpr` (its reflection) or a
+  `DeclRefExpr` to a constexpr `info` variable whose value is computed.
+  Each hit counts in `Sema::splice_fast_count()` (not an Oven counter, so
+  the constexpr report does not show it); every other operand is
+  evaluated as a constant expression. 1,000 type, 1,000 expression and
+  1,000 scope splices of three frozen operands start no evaluation
+  (`basic.splice/frozen-operand-fast-path.cpp`: `evaluations<=4`, the
+  three initializers and a static_assert). Each distinct `R` in `[: R :]`
+  costs one instantiation, as expected.
 - **NTTPs.** A substituted `info` template argument is rebuilt as the
   `CXXReflectExpr` of the same entity (implemented).
 

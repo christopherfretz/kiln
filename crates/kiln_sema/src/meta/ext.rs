@@ -30,7 +30,7 @@ impl Sema<'_, '_> {
                 let (cls, ty) = (info_arg(args, 0)?, info_arg(args, 1)?);
                 let p = *args.get(2).ok_or_else(MetaError::invalid)?;
                 let name = oven.meta_c_string(p, ctx)?;
-                MetaOut::Info(self.define_member(cls, ty, &name, loc, oven)?)
+                MetaOut::Info(self.define_member(cls, ty, &name, ctx, oven)?)
             }
         };
         Ok(())
@@ -75,12 +75,17 @@ impl Sema<'_, '_> {
         cls: ReflectionId,
         ty: ReflectionId,
         name: &str,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<ReflectionId, MetaError> {
-        // A speculative fold must not mutate: it fails silently and the
-        // manifestly constant-evaluated evaluation (if any) defines.
-        if self.inst.eval_loc.is_none() {
+        let loc = ctx.loc;
+        // A fold or a trial must not mutate (the dispatcher already
+        // fails a `Mutating` op there): it fails silently and the
+        // manifestly constant-evaluated evaluation (if any) defines. The
+        // extension may inject from any manifestly constant-evaluated
+        // context in the member-specification (a `static_assert`), not
+        // only where `ctx.plainly` holds (spec/consteval-blocks.md §3).
+        if ctx.trial || self.inst.eval_loc.is_none() {
             return Err(MetaError::silent());
         }
         let Some(r) = (match self.ast.reflections.get(cls) {

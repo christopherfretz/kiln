@@ -2325,6 +2325,33 @@ and returns the scope it names:
     "non-static declaration follows static" for a braceless `extern
     "C++" int v;` after `static int v;`.
     Tests: `dcl.link/language-linkage-redecl-errors.cpp`.
+  - **Which entities have C language linkage** ([dcl.link]/4-5, WP-492;
+    clang `getDeclLanguageLinkage`, `isInExternCContext`):
+    `kiln_abi::mangle::is_extern_c` is the single computation (mangling,
+    `noundef` on returns, and every sema check above). A function or
+    variable has it when its first declaration is lexically inside an
+    `extern "C"` specification (the innermost one deciding), walking
+    the lexical contexts through namespaces, functions and classes
+    (`in_extern_c_context`), and it has external linkage. So a
+    block-scope function or `extern` variable declaration in a function
+    (or a member function defined in a class) inside `extern "C"`, and
+    a friend declared in a class there, name the plain C symbol
+    (`void outer() { void lf(int); }` calls `lf`). A class member has
+    C++ linkage; an entity with internal linkage has none and is
+    mangled as an internal name: `extern "C" { static int sx; }` is
+    `_ZL2sx`, `namespace M { static void mf(); }` in it `_ZN1ML2mfEv`,
+    and a `const` variable in a braced specification is internal
+    (`_ZL2ci`; only a braceless `extern "C" const int c = 1;` is
+    external, [dcl.link]/8). A function or variable of an unnamed
+    namespace first declared in an `extern "C"` context keeps external
+    linkage (clang `getLVForNamespaceScopeDecl`) and its plain name.
+    `Sema::extern_c` neither records nor links a `static` declaration,
+    so two `extern "C" { static int x; }` in different namespaces are
+    distinct entities. Not implemented: the
+    `__attribute__((used))` static-in-`extern "C"` aliases (clang
+    `EmitStaticExternCAliases`; kiln does not emit `used` statics at
+    all yet). Tests: `tests/codegen/extern_c_linkage.cpp`,
+    `dcl.link/static-and-local-in-extern-c-run.cpp`.
 - **Internal linkage from a `const` type** ([basic.link]/3.2, WP-466):
   a namespace-scope non-template, non-inline variable that is neither
   `extern` nor previously declared with external linkage has internal
@@ -4526,6 +4553,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   `operator new`/`delete`) are marked referenced, which defines or
   instantiates them, as clang's rebuild does (`templ/subst/shared.rs`;
   unevaluated operands and lambda bodies are not entered).
+- **Consteval-only expressions** ([expr.const.imm]/2). The leaves
+  (`^^`, references to consteval-only variables) and their exemptions
+  are WP-472's, `spec/reflection-repr.md` §6
+  (`consteval_only.rs`, checked from `finish_immediate_invocations`).
+  A non-exempt leaf in an immediate-escalating function escalates it
+  through `escalate_consteval_only` (reason note `... because its body
+  contains an expression of consteval-only type 'std::meta::info'`,
+  WP-473, `spec/consteval-blocks.md` §4); elsewhere it is
+  `sema_consteval_only_expr`. The consteval block itself is
+  §5.10's immediate function context by construction (a consteval
+  lambda).
 - **Codegen.** A valued `ConstantExpr` lowers to its constant: scalars
   directly, aggregates by clang 19's `CreateCoercedStore` into the
   destination (one store per top-level element).

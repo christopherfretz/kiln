@@ -102,25 +102,33 @@ impl Sema<'_, '_> {
             | MemberOp::NonstaticDataMembersOf
             | MemberOp::SubobjectsOf => {
                 let actx = access_ctx_arg(args, 1)?;
-                let Some(def) = self.complete_class_of(r, loc, oven)? else {
+                let Some(def) = self.complete_class_of(r, ctx, oven)? else {
                     return fail(loc, "not a complete class type");
                 };
                 let chk = self.checked(actx, def, ctx);
                 let n = self.class_lists(def, m, &chk, oven, loc)?;
                 MetaOut::Infos(n)
             }
-            MemberOp::EnumeratorsOf => MetaOut::Infos(self.enumerators_of(r, loc, oven)?),
+            MemberOp::EnumeratorsOf => MetaOut::Infos(self.enumerators_of(r, ctx, oven)?),
             MemberOp::ParametersOf => MetaOut::Infos(self.parameters_of(r, loc, oven)?),
             MemberOp::OffsetOf => {
                 let bits = self.offset_bits(r, loc)?;
                 let (bytes, rem) = (bits / 8, bits % 8);
                 MetaOut::Pair(u128::from(bytes), u128::from(rem))
             }
-            MemberOp::SizeOf => MetaOut::Scalar(u128::from(self.layout_size(r, loc, oven)?)),
-            MemberOp::AlignmentOf => MetaOut::Scalar(u128::from(self.layout_align(r, loc, oven)?)),
-            MemberOp::BitSizeOf => MetaOut::Scalar(u128::from(self.layout_bit_size(r, loc, oven)?)),
+            MemberOp::SizeOf => MetaOut::Scalar(u128::from(self.layout_size(r, ctx, oven)?)),
+            MemberOp::AlignmentOf => MetaOut::Scalar(u128::from(self.layout_align(r, ctx, oven)?)),
+            MemberOp::BitSizeOf => MetaOut::Scalar(u128::from(self.layout_bit_size(r, ctx, oven)?)),
         };
         Ok(())
+    }
+
+    /// Whether a metafunction may instantiate a template here: the call is
+    /// manifestly constant-evaluated and not a trial (a fold, or
+    /// `__builtin_constant_p`'s operand; spec/consteval-blocks.md §3).
+    /// Otherwise a query that would instantiate fails silently.
+    pub(super) fn meta_may_instantiate(&self, ctx: &MetaCtx) -> bool {
+        !ctx.trial && self.inst.eval_loc.is_some()
     }
 
     /// The class type `r` reflects (through aliases), completed
@@ -130,13 +138,14 @@ impl Sema<'_, '_> {
     pub(super) fn complete_class_of(
         &mut self,
         r: ReflectionId,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<Option<DeclId>, MetaError> {
+        let loc = ctx.loc;
         let Reflectee::Type(t) = self.ast.reflections.get(r) else { return Ok(None) };
         let Some(d) = self.ast.types.as_record(t) else { return Ok(None) };
         if self.undefined_spec(t).is_some() {
-            if self.inst.eval_loc.is_none() {
+            if !self.meta_may_instantiate(ctx) {
                 return Err(MetaError::silent());
             }
             self.lend_oven(oven, |s| s.require_complete(t, loc));
@@ -166,7 +175,7 @@ impl Sema<'_, '_> {
             // Namespace members need no access check.
             return Ok(filter_members(items, oven.meta_infos(), |_| true));
         }
-        let Some(def) = self.complete_class_of(r, loc, oven)? else {
+        let Some(def) = self.complete_class_of(r, ctx, oven)? else {
             return fail(loc, "neither complete class type nor namespace");
         };
         let chk = self.checked(actx, def, ctx);
@@ -476,12 +485,13 @@ impl Sema<'_, '_> {
     fn enumerators_of(
         &mut self,
         r: ReflectionId,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<u32, MetaError> {
+        let loc = ctx.loc;
         let def = match self.ast.reflections.get(r) {
             Reflectee::Type(t) => {
-                if self.undefined_spec(t).is_some() && self.inst.eval_loc.is_some() {
+                if self.undefined_spec(t).is_some() && self.meta_may_instantiate(ctx) {
                     self.lend_oven(oven, |s| s.require_complete(t, loc));
                 }
                 self.ast.types.as_enum(t).and_then(|d| self.enum_definition(d))
@@ -615,10 +625,11 @@ impl Sema<'_, '_> {
     fn layout_type(
         &mut self,
         r: ReflectionId,
-        loc: Loc,
+        ctx: &MetaCtx,
         what: &str,
         oven: &mut Oven,
     ) -> Result<(QualType, Option<u32>), MetaError> {
+        let loc = ctx.loc;
         let bad = || fail(loc, format!("reflection not suitable for {what}"));
         let (t, width, is_type) = match self.ast.reflections.get(r) {
             Reflectee::Type(t) => (t, None, true),
@@ -645,7 +656,7 @@ impl Sema<'_, '_> {
             }
             _ => return bad(),
         };
-        if self.undefined_spec(t).is_some() && self.inst.eval_loc.is_some() {
+        if self.undefined_spec(t).is_some() && self.meta_may_instantiate(ctx) {
             self.lend_oven(oven, |s| s.require_complete(t, loc));
         }
         let _ = is_type;
@@ -665,10 +676,11 @@ impl Sema<'_, '_> {
     fn layout_size(
         &mut self,
         r: ReflectionId,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<u64, MetaError> {
-        let (t, width) = self.layout_type(r, loc, "size_of", oven)?;
+        let loc = ctx.loc;
+        let (t, width) = self.layout_type(r, ctx, "size_of", oven)?;
         if width.is_some() {
             return fail(loc, "reflection not suitable for size_of");
         }
@@ -681,10 +693,11 @@ impl Sema<'_, '_> {
     fn layout_align(
         &mut self,
         r: ReflectionId,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<u64, MetaError> {
-        let (t, width) = self.layout_type(r, loc, "alignment_of", oven)?;
+        let loc = ctx.loc;
+        let (t, width) = self.layout_type(r, ctx, "alignment_of", oven)?;
         if width.is_some() {
             return fail(loc, "reflection not suitable for alignment_of");
         }
@@ -708,10 +721,11 @@ impl Sema<'_, '_> {
     fn layout_bit_size(
         &mut self,
         r: ReflectionId,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<u64, MetaError> {
-        let (t, width) = self.layout_type(r, loc, "bit_size_of", oven)?;
+        let loc = ctx.loc;
+        let (t, width) = self.layout_type(r, ctx, "bit_size_of", oven)?;
         if let Some(w) = width {
             return Ok(u64::from(w));
         }

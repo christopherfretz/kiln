@@ -1100,6 +1100,24 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         self.targs_memo.get_mut().map.clear();
     }
 
+    /// The token after splice `[: r :]` at `j` inside a template argument
+    /// scan; the `<` after it opens a nested list (pushed on `stack`)
+    /// when `template` (`templ_kw`) or `typename` precedes the splice.
+    fn scan_splice_in_args(
+        &self,
+        j: usize,
+        templ_kw: bool,
+        stack: &mut Vec<Punct>,
+    ) -> Option<usize> {
+        let after = self.splice_end(j)?;
+        let typename = self.kw_of(self.tok_at(j - 1)) == Some(Kw::Typename);
+        if (templ_kw || typename) && self.tok_at(after).kind == TokKind::Punct(Punct::Less) {
+            stack.push(Punct::Less);
+            return Some(after + 1);
+        }
+        Some(after)
+    }
+
     /// [`Parser::skip_template_args`] without the memo.
     fn scan_template_args(&self, i: usize) -> Option<(usize, bool)> {
         let mut stack = vec![Punct::Less];
@@ -1111,6 +1129,13 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             after_template_kw = false;
             match t.kind {
                 TokKind::Eof => return None,
+                // A splice `[: r :]` is skipped whole (`>` is an operator
+                // inside it); a `<` after it opens a list after
+                // `template` or `typename` (P2996 [temp.names]/3).
+                TokKind::Punct(Punct::SpliceOpen) => {
+                    j = self.scan_splice_in_args(j, templ_kw, &mut stack)?;
+                    continue;
+                }
                 TokKind::Identifier(_) if self.kw_of(t) == Some(Kw::Template) => {
                     after_template_kw = true;
                     j += 1;
@@ -1238,12 +1263,30 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         lo
     }
 
-    /// The index of the `::` when a `decltype ( expression ) ::` or a
-    /// pack-index-specifier `T ... [ expression ] ::` starts at token `i`
+    /// The index of the `::` when a `decltype ( expression ) ::`, a
+    /// splice-scope-specifier `[: r :] ::` or a pack-index-specifier
+    /// `T ... [ expression ] ::` starts at token `i`
     /// ([expr.prim.id.qual]: a *computed-type-specifier* as the first
     /// component of a nested-name-specifier; [dcl.type.pack.index]).
     /// `decltype(auto)` is never one.
     pub(crate) fn decltype_scope_end(&self, i: usize) -> Option<usize> {
+        // A splice-scope-specifier `template [: r :] < args > ::`
+        // ([expr.prim.id.qual]/1, P2996): `template` is required before
+        // the arguments (as GCC 16.1).
+        if self.kw_of(self.tok_at(i)) == Some(Kw::Template)
+            && let Some(after) = self.splice_end(i + 1)
+        {
+            if self.tok_at(after).kind != TokKind::Punct(Punct::Less) {
+                return None;
+            }
+            let (end, split) = self.skip_template_args(after)?;
+            return (!split && self.tok_at(end + 1).kind == TokKind::Punct(Punct::ColonColon))
+                .then_some(end + 1);
+        }
+        // A splice-scope-specifier `[: r :] ::` ([expr.prim.id.qual]/1).
+        if let Some(after) = self.splice_end(i) {
+            return (self.tok_at(after).kind == TokKind::Punct(Punct::ColonColon)).then_some(after);
+        }
         if self.ident_of(self.tok_at(i)).is_some() {
             return self.pack_index_scope_end(i);
         }
@@ -1306,6 +1349,35 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             return true;
         }
         let loc = self.loc();
+        if self.kw() == Some(Kw::Template) && self.peek_is(1, Punct::SpliceOpen) {
+            // `template [: r :] < args > ::`: the specialization is the scope.
+            self.bump();
+            let open = self.loc();
+            let (e, _) = self.parse_splice_specifier().unzip();
+            let ty = match e {
+                Some(e) if self.at(Punct::Less) => self
+                    .parse_template_arg_list()
+                    .and_then(|(args, _, r)| self.s.act_on_splice_template_type(e, &args, open, r)),
+                _ => None,
+            };
+            if !self.at(Punct::ColonColon) {
+                return false;
+            }
+            let qual = ty.and_then(|t| self.s.act_on_nested_name_decltype(t, loc));
+            self.decltype_scope =
+                Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc });
+            return true;
+        }
+        if self.at_splice() {
+            let e = self.parse_splice_operand();
+            if !self.at(Punct::ColonColon) {
+                return false;
+            }
+            let qual = e.and_then(|e| self.s.act_on_nested_name_splice(e, loc));
+            self.decltype_scope =
+                Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc });
+            return true;
+        }
         let ty = if self.ident().is_some() {
             self.parse_pack_index_scope(loc)
         } else {

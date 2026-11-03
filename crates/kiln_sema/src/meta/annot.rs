@@ -38,12 +38,12 @@ impl Sema<'_, '_> {
                 self.ast.reflections.get(r),
                 Reflectee::Annotation(_)
             ))),
-            AnnotOp::AnnotationsOf => MetaOut::Infos(self.annotations_of(r, None, loc, oven)?),
+            AnnotOp::AnnotationsOf => MetaOut::Infos(self.annotations_of(r, None, ctx, oven)?),
             AnnotOp::AnnotationsOfWithType => {
                 let t = info_arg(args, 1)?;
                 let ty = match self.ast.reflections.get(t) {
                     Reflectee::Type(q) => {
-                        if self.undefined_spec(q).is_some() && self.inst.eval_loc.is_some() {
+                        if self.undefined_spec(q).is_some() && self.meta_may_instantiate(ctx) {
                             self.lend_oven(oven, |s| s.require_complete(q, loc));
                         }
                         Some(q).filter(|&q| self.is_complete(q))
@@ -60,7 +60,7 @@ impl Sema<'_, '_> {
                 // type is cv-unqualified, so a volatile type matches none.
                 let c = self.ast.types.canonical(ty);
                 let want = QualType::new(c.ty(), c.quals_bits() & !1);
-                MetaOut::Infos(self.annotations_of(r, Some(want), loc, oven)?)
+                MetaOut::Infos(self.annotations_of(r, Some(want), ctx, oven)?)
             }
         };
         Ok(())
@@ -112,15 +112,16 @@ impl Sema<'_, '_> {
         &mut self,
         r: ReflectionId,
         want: Option<QualType>,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<u32, MetaError> {
+        let loc = ctx.loc;
         // A class template specialization's annotations are its
         // instantiation's ([dcl.attr.annotation]/3).
         if let Reflectee::Type(t) = self.ast.reflections.get(r)
             && self.undefined_spec(t).is_some()
         {
-            if self.inst.eval_loc.is_none() {
+            if !self.meta_may_instantiate(ctx) {
                 return Err(MetaError::silent());
             }
             self.lend_oven(oven, |s| s.require_complete(t, loc));
@@ -134,7 +135,7 @@ impl Sema<'_, '_> {
         if let Some(f) = f {
             let first = self.ast.first(f);
             if self.uninstantiated_annots.contains_key(&first) {
-                if self.inst.eval_loc.is_none() {
+                if !self.meta_may_instantiate(ctx) {
                     return Err(MetaError::silent());
                 }
                 self.lend_oven(oven, |s| s.require_annotations(f, loc));
