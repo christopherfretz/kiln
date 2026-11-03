@@ -305,7 +305,7 @@ impl MdBuilder<'_> {
 
 impl Cg<'_> {
     /// clang `LoopInfoStack::push`: the attributes of a loop with the
-    /// loop hints of AttributedStmt `hints` (if any), made active.
+    /// loop hints of `AttributedStmt` `hints` (if any), made active.
     pub(crate) fn push_loop(&mut self, header: Blk, hints: Option<StmtId>, must_progress: bool) {
         let mut a = LoopAttrs::default();
         let ast = self.ast;

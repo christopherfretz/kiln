@@ -681,8 +681,11 @@ impl Sema<'_, '_> {
         });
         Some(
             in_class
-                || spec(pdef).is_some_and(|s| s.implicit_inline())
-                || self.ast.redecls_of(pattern).any(|r| spec(r).is_some_and(|s| s.is_inline())),
+                || spec(pdef).is_some_and(kiln_ast::decl::FnSpec::implicit_inline)
+                || self
+                    .ast
+                    .redecls_of(pattern)
+                    .any(|r| spec(r).is_some_and(kiln_ast::decl::FnSpec::is_inline)),
         )
     }
 

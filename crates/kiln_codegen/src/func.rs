@@ -164,7 +164,7 @@ pub(crate) struct Fx {
     pub cx_ret: Option<(V, V)>,
     /// Calls: (instruction, callee, call-site nounwind).
     pub calls: Vec<(u32, Option<FuncId>, bool)>,
-    /// The loop statement about to be emitted and the AttributedStmt
+    /// The loop statement about to be emitted and the `AttributedStmt`
     /// whose loop hints apply to it (clang `EmitStmt`'s `Attrs`).
     pub loop_hints: Option<(kiln_ast::StmtId, kiln_ast::StmtId)>,
     /// The active conditional evaluations (clang `ConditionalEvaluation`),

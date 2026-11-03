@@ -493,7 +493,7 @@ impl Cg<'_> {
         true
     }
 
-    /// The loop hints for loop statement `s` (the AttributedStmt around
+    /// The loop hints for loop statement `s` (the `AttributedStmt` around
     /// it), taken.
     fn take_loop_hints(&mut self, s: StmtId) -> Option<StmtId> {
         self.f.loop_hints.take().filter(|&(l, _)| l == s).map(|(_, a)| a)

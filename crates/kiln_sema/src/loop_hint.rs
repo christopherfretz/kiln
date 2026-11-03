@@ -112,7 +112,7 @@ impl Sema<'_, '_> {
                 self.check_loop_hint_expr(e, false)?;
             }
             (LoopHintSpelling::Unroll, _, Some(e)) => {
-                if let Some(Some(v)) = self.loop_hint_value(e)
+                if let Some(v) = self.loop_hint_value(e)
                     && (v == 0 || v == 1)
                 {
                     hint.option = LoopHintOption::Unroll;
@@ -143,16 +143,15 @@ impl Sema<'_, '_> {
         self.loop_hint_attr(hint, node.loc, Some(e))
     }
 
-    /// The value of a checked loop hint value: `Some(None)` if it is
-    /// value-dependent.
-    fn loop_hint_value(&mut self, e: ExprId) -> Option<Option<i128>> {
+    /// The value of a checked loop hint value (`None` if it is
+    /// value-dependent or not a constant).
+    fn loop_hint_value(&mut self, e: ExprId) -> Option<i128> {
         if self.expr_is_value_dependent(e) {
-            return Some(None);
+            return None;
         }
         let c = conv::lvalue_to_rvalue(self, e);
         let c = self.act_on_constant_full_expr(c);
-        let v = self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(e))).ok()?;
-        Some(Some(v))
+        self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(e))).ok()
     }
 
     /// Checks the loop hints among `attrs` against each other (clang

@@ -401,7 +401,7 @@ impl Cg<'_> {
                 None => mangle::mangle_decl(ast, &mut self.anon, first),
                 Some(v) => mangle::mangle_structor(ast, &mut self.anon, first, v),
             };
-            let defined = match self.m.lookup(&name).map(|x| x.get()) {
+            let defined = match self.m.lookup(&name).map(Value::get) {
                 Some(ValueRef::Func(f)) => !self.m.func(f).is_declaration(),
                 Some(ValueRef::Alias(_)) => true,
                 _ => false,

@@ -202,13 +202,12 @@ impl Parser<'_, '_> {
             let mut arg2_error = false;
             if p.at(Punct::Comma) {
                 p.bump();
-                match width_state(p.word_of(Some(&p.tok())).as_deref()) {
-                    Some(s) => state = s,
-                    None => {
-                        let at = p.loc();
-                        p.emit(p.s.diag(DiagId::parse_pragma_loop_invalid_vectorize_option, at));
-                        arg2_error = true;
-                    }
+                if let Some(s) = width_state(p.word_of(Some(&p.tok())).as_deref()) {
+                    state = s;
+                } else {
+                    let at = p.loc();
+                    p.emit(p.s.diag(DiagId::parse_pragma_loop_invalid_vectorize_option, at));
+                    arg2_error = true;
                 }
                 p.bump();
             }

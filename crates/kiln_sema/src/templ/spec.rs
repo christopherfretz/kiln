@@ -946,7 +946,7 @@ impl Sema<'_, '_> {
                 | DeclKind::CXXConversion
                     if !declaration =>
                 {
-                    self.instantiate_function_definition(m, loc)
+                    self.instantiate_function_definition(m, loc);
                 }
                 DeclKind::Var if !declaration => {
                     // In-class initializer, else the out-of-line
