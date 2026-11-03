@@ -1508,6 +1508,7 @@ impl Parser<'_, '_> {
                 break;
             }
             if first && is_fn && self.at_function_definition() {
+                d.defaulted = self.at_eq_default();
                 self.parse_member_function_definition(&ds, base, &d, parts);
                 return;
             }
@@ -1574,6 +1575,11 @@ impl Parser<'_, '_> {
             d.init_style = Some(if self.at(Punct::Equal) { InitStyle::C } else { InitStyle::List });
             (data_member, !data_member)
         }
+    }
+
+    /// True at `= default`.
+    pub(crate) fn at_eq_default(&self) -> bool {
+        self.at(Punct::Equal) && self.kw_of(self.peek(1)) == Some(Kw::Default)
     }
 
     /// True at the start of a function definition after a declarator:

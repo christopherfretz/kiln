@@ -131,6 +131,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A member access `e` naming data member or static member variable
+    /// `m` with type `ty` (`this->r`, `h.sm`): a consteval-only leaf,
+    /// as a reference to a variable is ([`Sema::note_consteval_only_ref`]).
+    pub(crate) fn note_consteval_only_member(&mut self, e: ExprId, m: DeclId, ty: QualType) {
+        if matches!(
+            self.ast.decls.get(m).kind(),
+            DeclKind::Field | DeclKind::IndirectField | DeclKind::Var
+        ) && self.is_consteval_only_type(ty)
+        {
+            self.note_consteval_only(e);
+        }
+    }
+
     /// The expression `e` of a template, shared unchanged by an
     /// instantiation: its leaves recorded by the definition
     /// ([`Sema::note_inst_consteval_only`]) are recorded again, except in
@@ -166,6 +179,10 @@ impl Sema<'_, '_> {
             ExprKind::DeclRefExpr => !matches!(
                 self.ast.decls.get(self.ast.exprs.decl(r)).kind(),
                 DeclKind::Function | DeclKind::CXXMethod
+            ),
+            ExprKind::MemberExpr => matches!(
+                self.ast.decls.get(self.ast.exprs.decl(r)).kind(),
+                DeclKind::Field | DeclKind::IndirectField | DeclKind::Var
             ),
             _ => false,
         }
@@ -299,8 +316,21 @@ impl Sema<'_, '_> {
             return;
         }
         let ty = n.ty().unwrap_or(QualType::ERROR);
-        if self.is_consteval_only_type(ty) {
+        if self.is_consteval_only_type(ty) || self.has_consteval_only_object_param(f) {
             self.error(DiagId::sema_consteval_only_fn, loc);
         }
+    }
+
+    /// Whether implicit object member function `f` (a constructor and a
+    /// destructor included) is of a consteval-only class: GCC 16.1 counts
+    /// the implicit object parameter in the function's type (CWG3115), so
+    /// the class's members declared so far decide, as for its other
+    /// parameters.
+    fn has_consteval_only_object_param(&mut self, f: DeclId) -> bool {
+        if !self.is_implicit_object_member(f) {
+            return false;
+        }
+        let Some(c) = self.ast.decls.get(f).ctx() else { return false };
+        self.kind_of(c) == DeclKind::CXXRecord && self.is_consteval_only_record(c)
     }
 }

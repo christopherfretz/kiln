@@ -1208,7 +1208,9 @@ impl Substituter<'_, '_, '_> {
                 self.sema.set_template_id_qualifier(x, nns);
                 res = crate::templ::actions::TemplateIdRef::Overload(x);
             }
-            return Ok(self.sema.act_on_reflect_template_id(res, name_loc, loc, end));
+            let ctx = self.nns_context(nns, begin)?;
+            let r = self.sema.act_on_reflect_template_id(res, name_loc, loc, end);
+            return Ok(self.sema.check_reflect_dependent_kind(r, ctx, name, true, name_loc, loc));
         }
         let ctx = self.nns_context(nns, begin)?;
         if let Some(t) = destroyed {
@@ -1219,7 +1221,9 @@ impl Substituter<'_, '_, '_> {
             return Ok(self.sema.reflect_destructor_of(ctx, name_loc, loc, end));
         }
         let q = crate::using::Qualifier { ctx, nns, loc: begin };
-        Ok(self.sema.act_on_reflect_dn(Some(q), name, name_loc, loc, end))
+        let r = self.sema.act_on_reflect_dn(Some(q), name, name_loc, loc, end);
+        let template_kw = template_kw.is_some();
+        Ok(self.sema.check_reflect_dependent_kind(r, ctx, name, template_kw, name_loc, loc))
     }
 
     fn member_name(&mut self, name: DeclName, loc: Loc) -> SubstResult<DeclName> {

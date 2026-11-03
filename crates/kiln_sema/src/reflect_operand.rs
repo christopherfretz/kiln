@@ -112,6 +112,47 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `r`, the instantiated `^^T::name` (no `typename`): a name that was
+    /// assumed not to name a type ([temp.res.general]/4: `^^T::x` is not
+    /// a type-only context) must not name one at instantiation, nor a
+    /// class or alias template unless `template` said so (`^^T::template
+    /// m`). Clang's missing-`typename` error, at the name; GCC 16.1
+    /// rejects the same operands.
+    pub(crate) fn check_reflect_dependent_kind(
+        &mut self,
+        r: ExprId,
+        ctx: DeclId,
+        name: DeclName,
+        template_kw: bool,
+        name_loc: Loc,
+        loc: Loc,
+    ) -> ExprId {
+        if self.ast.exprs.get(r).kind() != ExprKind::CXXReflectExpr {
+            return r;
+        }
+        let names_type = match self.ast.exprs.reflect_operand(r) {
+            Reflectee::Type(_) => true,
+            Reflectee::Template(n) => {
+                !template_kw
+                    && self.ast.types.template_decl(n).is_some_and(|d| {
+                        matches!(
+                            self.kind_of(d),
+                            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate
+                        )
+                    })
+            }
+            _ => false,
+        };
+        if !names_type {
+            return r;
+        }
+        let text = format!("{}::{}", self.qualified_decl_name(ctx), self.decl_name_str(name));
+        let d = self.diag(DiagId::parse_missing_typename, name_loc).arg(text);
+        self.emit(d);
+        let info = self.meta_info_type();
+        self.recover(info, &[], loc)
+    }
+
     /// `^^nns ~C` / `^^~C` ([expr.reflect]/7, [class.dtor]/1): the
     /// destructor of class `C` (its implicit one declared first). The
     /// type-name is looked up in the qualifier's class, then here, as for

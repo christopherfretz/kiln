@@ -5447,6 +5447,8 @@ impl Sema<'_, '_> {
         let e = self.builder().member(base, m, ty, arrow, loc, extra);
         if self.unevaluated > 0 {
             let _ = self.ast.exprs.set_non_odr_use(e, NonOdrUse::Unevaluated);
+        } else if self.reflection && !self.in_template() {
+            self.note_consteval_only_member(e, m, ty);
         }
         e
     }

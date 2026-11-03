@@ -687,6 +687,10 @@ pub struct Declarator {
     /// The initializer syntax that follows (the parser peeks at `=`, `(`
     /// or `{` before the declaration is created; [dcl.init]/1).
     pub init_style: Option<kiln_ast::decl::InitStyle>,
+    /// A function declarator followed by `= default` (the parser peeks
+    /// before the declaration is created): its consteval-only check
+    /// waits for the defaulting (an immediate-escalating function).
+    pub defaulted: bool,
     /// The declarator may be followed by a direct initializer `( ... )`
     /// (clang's `mayBeFollowedByCXXDirectInit`, less the grouping-paren
     /// and name checks): a variable declaration that is not a `typedef`
@@ -892,6 +896,7 @@ impl Declarator {
             invalid: false,
             missing_typename: false,
             init_style: None,
+            defaulted: false,
             direct_init: false,
             grouping: false,
             asm_label: None,

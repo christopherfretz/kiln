@@ -3699,6 +3699,7 @@ impl Parser<'_, '_> {
             // `isDeclarationAfterDeclarator`, `isStartOfFunctionDefinition`).
             if declarators == 0 && d.is_function_declarator() && d.asm_label.is_none() {
                 if allow_fn_def && self.at_function_definition_start() {
+                    d.defaulted = self.at_eq_default();
                     self.explicit_inst_with_definition(tmpl_kind, &d, true);
                     self.parse_function_definition_after_declarator(
                         &ds, base, &d, &mut decls, level,
