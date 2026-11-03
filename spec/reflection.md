@@ -262,9 +262,10 @@ whether the op may run in a trial (§4.3):
 this list and the tables is a spec bug, fixed in the same change.
 
 - **Query · Stable · WP-470, done**: `type_of`.
-- **Query · Stable · WP-476**: `object_of`, `constant_of`, `parent_of`,
+- **Query · Stable · WP-476, done** (contract: spec/reflection-queries.md):
+  `object_of`, `constant_of`, `parent_of`,
   `dealias`, `has_template_arguments`, `operator_of`, `symbol_of`,
-  `u8symbol_of`, `variable_of`, `return_type_of`, `is_function_parameter`,
+  `u8symbol_of`, `return_type_of`, `is_function_parameter`,
   `is_explicit_object_parameter`, `is_vararg_function`, `is_public`,
   `is_protected`, `is_private`, `is_virtual`, `is_pure_virtual`,
   `is_override`, `is_final`, `is_deleted`, `is_user_provided`,
@@ -291,8 +292,9 @@ this list and the tables is a spec bug, fixed in the same change.
   `u8identifier_of`, `display_string_of`, `u8display_string_of`,
   `source_location_of` (§3.9), and the helpers `__kiln_reflection_range`,
   `__kiln_member_offset`, `__kiln_access_context` (§3.5).
-- **Query · PointDependent · WP-476**: `has_default_argument`,
-  `is_defaulted`, `is_complete_type`, `is_enumerable_type`.
+- **Query · PointDependent · WP-476, done**: `variable_of`,
+  `has_default_argument`, `is_defaulted`, `is_complete_type`,
+  `is_enumerable_type`.
 - **Trait · Stable · WP-477**: `is_void_type`, `is_null_pointer_type`,
   `is_integral_type`, `is_floating_point_type`, `is_array_type`,
   `is_pointer_type`, `is_lvalue_reference_type`, `is_rvalue_reference_type`,
@@ -341,8 +343,11 @@ this list and the tables is a spec bug, fixed in the same change.
 - **Value · Stable · WP-479**: `extract`, `reflect_constant`,
   `reflect_object`, `reflect_function`, `reflect_constant_string`,
   `reflect_constant_array`.
-- **Template · Stable · WP-482**: `template_of`, `template_arguments_of`.
-- **Template · PointDependent · WP-482**: `can_substitute`, `substitute`.
+- **Template · Stable · WP-482**: `template_of`, `template_arguments_of`
+  (implemented, `kiln_sema/src/meta/templ.rs`; spec/landed/reflection/WP-482.md).
+- **Template · PointDependent · WP-482**: `can_substitute`, `substitute`
+  (implemented: a SFINAE frame inside a Transactional Oven trial, memoized
+  on the (template, arguments) key; spec/landed/reflection/WP-482.md).
 - **Define · Stable · WP-480**: `data_member_spec`, `is_data_member_spec`.
 - **Define · Mutating · WP-480**: `define_aggregate`.
 - **Annot · PointDependent · WP-478**: `annotations_of`,
@@ -531,8 +536,10 @@ answers as of that point.
   (implemented). If the evaluation is also manifestly constant-evaluated,
   that evaluation reports the failure.
 - `can_substitute` runs its instantiation-time evaluations under
-  `checkpoint(TrialMode::Full)` and rolls back on failure. Interned
-  reflections survive the rollback (append-only, §2.4) (→ WP-482).
+  a Transactional checkpoint and rolls back on failure. Interned
+  reflections survive the rollback (append-only, §2.4); so does nothing
+  else: no instantiation-report row, no diagnostic, no Oven bytes
+  (implemented, WP-482: `reflection/substitute-trial-rollback.cpp`).
 
 ## 5. Splicing (WP-474)
 The grammar is in spec/parse.md §5.2. This section gives the semantics;
@@ -554,12 +561,15 @@ position's operand).
   | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`) |
   | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category) | implemented; the base form is untested until `bases_of` (WP-478) |
   | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration (or an alias of one) | implemented (`basic.splice/splice-scope-specifier.cpp`, `namespace.udecl/splice-scope.cpp`) |
-  | template | `template [: r :] < args >` [temp.names] | a template | → WP-482 |
+  | template | `template [: r :] < args >` [temp.names] in an expression, after `typename` or in a type-only context, and as a scope (`template [: r :] < args > ::`); `template [: r :]` alone before a call | a class or alias template in a type or scope; a variable template, concept or function template in an expression | implemented (`temp.names/splice-*.cpp`; spec/landed/reflection/WP-482.md) |
   | namespace | `using namespace [: r :];` | a namespace other than the global namespace, not dependent ([namespace.udir]/1) | implemented (`namespace.udir/`) |
 
   A misfit gets "splice in a {position} position does not designate a
   {kinds}" (`sema_splice_not_type`, `_not_expression`, `_not_member`,
-  `_not_scope`, `_not_namespace`). A constructor or destructor is
+  `_not_scope`, `_not_namespace`); a splice before a template argument
+  list that designates no template gets "splice before a template
+  argument list does not designate a template"
+  (`sema_splice_not_template`). A constructor or destructor is
   ill-formed in any splice-expression, the member access form included
   (`sema_splice_special_member`, [expr.prim.splice]/2). A splice-scope-
   specifier in a declarative nested-name-specifier (an out-of-line

@@ -59,3 +59,32 @@ fn reflect_expressions_and_nttps_are_frozen() {
                  A<^^long> a = 1;\n";
     assert_eq!(run(plain), (0, evaluations, 0));
 }
+
+#[test]
+fn splice_template_ids_read_frozen_operands() {
+    // P2996 [temp.names]/1: `[: r :] < args >` in a type, expression and
+    // scope position, dependent and not (WP-482).
+    let src = "template <class T> struct Box { using type = T; };\n\
+               template <class T> constexpr int var = 1;\n\
+               template <class T> int g(T) { return 0; }\n\
+               constexpr decltype(^^int) rb = ^^Box;\n\
+               template <decltype(^^int) R> using A = typename [: R :]<int>;\n\
+               using B = [: rb :]<long>;\n\
+               A<^^Box> a;\n\
+               template [: rb :]<char>::type c = 0;\n\
+               int h() { return template [: ^^var :]<int> + template [: ^^g :]<int>(1); }\n";
+    let (fast, evaluations, errors) = run(src);
+    assert_eq!(errors, 0);
+    // `[: rb :]` twice, `^^var`, `^^g` and the substituted `[: R :]`.
+    assert_eq!(fast, 5);
+    let plain = "template <class T> struct Box { using type = T; };\n\
+                 template <class T> constexpr int var = 1;\n\
+                 template <class T> int g(T) { return 0; }\n\
+                 constexpr decltype(^^int) rb = ^^Box;\n\
+                 template <decltype(^^int) R> using A = Box<int>;\n\
+                 using B = Box<long>;\n\
+                 A<^^Box> a;\n\
+                 Box<char>::type c = 0;\n\
+                 int h() { return var<int> + g<int>(1); }\n";
+    assert_eq!(run(plain), (0, evaluations, 0));
+}
