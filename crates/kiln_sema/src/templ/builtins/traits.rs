@@ -61,6 +61,16 @@ impl Sema<'_, '_> {
         self.build_type_trait(t, args, loc, rparen)
     }
 
+    /// The arguments a non-dependent trait is evaluated on: canonical
+    /// when one is only instantiation-dependent (an alias naming a
+    /// concrete type through a dependent alias specialization; clang
+    /// evaluates on the canonical types), `None` to use `args`.
+    fn trait_eval_args(&self, args: &[(QualType, Loc)]) -> Option<Vec<(QualType, Loc)>> {
+        args.iter()
+            .any(|&(q, _)| self.is_dependent_type(q))
+            .then(|| args.iter().map(|&(q, l)| (self.ast.types.canonical(q), l)).collect())
+    }
+
     /// Builds `__trait(T, ...)` (clang's `BuildTypeTrait`; also the
     /// substituter's rebuild): checks the arity and the operands'
     /// completeness, then evaluates. Not-yet-implemented traits report
@@ -85,11 +95,14 @@ impl Sema<'_, '_> {
             return self.recover(QualType::BOOL, &[], loc);
         }
         let rhs_loc = (tys.len() == 2).then(|| args[1].1);
-        let dependent = has_pack
-            || tys.iter().any(|&q| {
-                self.is_dependent_type(q)
-                    || self.ast.types.flags(q.ty()).intersects(TypeFlags::UNEXPANDED_PACK)
-            });
+        // Only a dependent type defers the trait (clang `BuildTypeTrait`
+        // tests `isDependentType`); a merely instantiation-dependent one
+        // (`TC<N>`, `N` a constant local of a function template) is
+        // evaluated now, on its canonical type, so a specialization
+        // instantiated with it does not cache an unevaluated `false`.
+        let dep = TypeFlags::DEPENDENT.union(TypeFlags::UNEXPANDED_PACK);
+        let dependent =
+            has_pack || tys.iter().any(|&q| self.ast.types.flags(q.ty()).intersects(dep));
         if dependent {
             return self.builder().type_trait_expr(
                 t,
@@ -118,6 +131,9 @@ impl Sema<'_, '_> {
                 rparen,
             );
         }
+        let canon = self.trait_eval_args(args);
+        let args = canon.as_deref().unwrap_or(args);
+        let eval_tys: Vec<QualType> = args.iter().map(|a| a.0).collect();
         if let Status::Owner(_) = table::trait_status(t) {
             let what = format!("type trait '{}'", t.spelling());
             let d = self.diag(DiagId::sema_unimplemented_template_feature, loc).arg(what);
@@ -134,11 +150,11 @@ impl Sema<'_, '_> {
                 Some(v) => v,
                 None => return self.recover(QualType::BOOL, &[], loc),
             }
-        } else if tys.len() == 1 {
-            if !self.check_trait_completeness(t, tys[0], loc) {
+        } else if eval_tys.len() == 1 {
+            if !self.check_trait_completeness(t, eval_tys[0], loc) {
                 return self.recover(QualType::BOOL, &[], loc);
             }
-            self.eval_unary_trait(t, tys[0], loc)
+            self.eval_unary_trait(t, eval_tys[0], loc)
         } else if t == TypeTrait::IsLayoutCompatible {
             self.eval_layout_compatible(args[0], args[1])
         } else if t == TypeTrait::IsPointerInterconvertibleBaseOf {
@@ -167,7 +183,7 @@ impl Sema<'_, '_> {
                 None => return self.recover(QualType::BOOL, &[], loc),
             }
         } else {
-            self.eval_binary_trait(t, tys[0], tys[1], args[1].1)
+            self.eval_binary_trait(t, eval_tys[0], eval_tys[1], args[1].1)
         };
         self.builder().type_trait_expr(t, &tys, rhs_loc, value, QualType::BOOL, loc, rparen)
     }
