@@ -3184,10 +3184,17 @@ impl Cg<'_> {
                 CallArg::Scalar(self.emit_lvalue(a)?.addr.v)
             } else if self.is_aggregate(arg_tys[i]) || self.is_atomic_aggregate(arg_tys[i]) {
                 let t = self.temp(arg_tys[i]);
-                let saved = std::mem::take(&mut self.f.dest_destructed);
+                // clang `EmitCallArg`: an argument the callee destroys is
+                // externally destructed, with an EH-only cleanup until
+                // the call (`DestroyUnpassedArg`).
+                let callee_destroyed = kiln_abi::call::is_destroyed_in_callee(ast, arg_tys[i]);
+                let saved = std::mem::replace(&mut self.f.dest_destructed, callee_destroyed);
                 let r = self.emit_agg(a, t, false);
                 self.f.dest_destructed = saved;
                 r?;
+                if callee_destroyed && let Some(rd) = self.destructed_class(arg_tys[i]) {
+                    self.push_arg_cleanup(t.v, rd);
+                }
                 CallArg::Agg(t)
             } else if self.is_complex(arg_tys[i]) {
                 let (re, im) = self.emit_complex(a)?;
@@ -3290,6 +3297,7 @@ impl Cg<'_> {
             Callee::Value(v) => v,
             Callee::Virtual { md, this, align } => self.virtual_fn_ptr(md, None, this, align)?,
         };
+        self.deactivate_arg_cleanups(vals);
         let rty = match &sig.info.ret.kind {
             ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
                 let c = coerce.clone();
@@ -4166,6 +4174,58 @@ impl Cg<'_> {
         self.push_full_expr_cleanup(c, true, true);
         let depth = self.f.cl.depth();
         self.f.cl.deferred.push((depth, dominator));
+    }
+
+    /// clang `EmitCallArg`'s `pushFullExprCleanup<DestroyUnpassedArg>`
+    /// and `addArgCleanupDeactivation`: the EH-only destructor cleanup of
+    /// the callee-destroyed argument at `addr` (class `rd`), deactivated
+    /// by [`Self::deactivate_arg_cleanups`] at the call.
+    fn push_arg_cleanup(&mut self, addr: V, rd: DeclId) {
+        if self.f.fir.cur().is_none() {
+            return;
+        }
+        self.push_full_expr_cleanup(Cleanup::Dtor { addr, record: rd, base: false }, false, true);
+        let z = V::C(self.m.const_bool(false));
+        let marker =
+            self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+        let depth = self.f.cl.depth();
+        self.f.arg_cleanups.push((addr, depth, marker));
+    }
+
+    /// clang `EmitDelegateCallArg`: forwarding parameter `a`, which this
+    /// function destroys, hands its destruction to the callee.
+    pub(crate) fn forward_param_cleanup(&mut self, a: V) {
+        if self.f.fir.cur().is_none() {
+            return;
+        }
+        let Some(&(_, depth)) = self.f.param_cleanups.iter().find(|x| x.0 == a) else { return };
+        let z = V::C(self.m.const_bool(false));
+        let marker =
+            self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+        self.f.arg_cleanups.push((a, depth, marker));
+    }
+
+    /// clang `deactivateArgCleanupsBeforeCall`: deactivates the pending
+    /// argument cleanups of the aggregate arguments in `vals`, innermost
+    /// first, and drops their placeholders.
+    fn deactivate_arg_cleanups(&mut self, vals: &[CallArg]) {
+        if self.f.arg_cleanups.is_empty() {
+            return;
+        }
+        let mut mine = Vec::new();
+        for v in vals {
+            if let CallArg::Agg(a) = v
+                && let Some(i) = self.f.arg_cleanups.iter().rposition(|x| x.0 == a.v)
+            {
+                mine.push(self.f.arg_cleanups.remove(i));
+            }
+        }
+        mine.sort_by_key(|x| x.1);
+        for (_, depth, marker) in mine.into_iter().rev() {
+            let d = Fir::last_inst(marker);
+            self.deactivate_cleanup_block(depth, d);
+            self.f.fir.erase(d);
+        }
     }
 
     /// `CleanupDeactivationScope::ForceDeactivate`: deactivates the

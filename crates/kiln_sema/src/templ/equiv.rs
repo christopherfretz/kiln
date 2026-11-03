@@ -70,7 +70,8 @@ impl Sema<'_, '_> {
         let is_static = self.kind_of(fb) == DeclKind::CXXMethod
             && self.ast.decls.function(fb).is_some_and(|f| f.spec.storage() == FnStorage::Static);
         let requires = self.ast.templates.trailing_requires.get(fb).copied();
-        self.fn_corresponds(fa, ha, NewFn { ty, is_static, head: hb, requires })
+        let enable_if = self.enable_if_list_of(fb);
+        self.fn_corresponds(fa, ha, NewFn { ty, is_static, head: hb, requires, enable_if })
     }
 
     /// The function declaration and template head that `d` names: a

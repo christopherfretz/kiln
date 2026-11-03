@@ -7,6 +7,7 @@ mod compare;
 mod entry;
 mod perf_md;
 pub(crate) mod record;
+mod slice;
 mod stats;
 #[cfg(test)]
 mod tests;
@@ -35,14 +36,21 @@ Measures compile time and peak memory of the bench/ entries (or the given
 files/directories under bench/) and compares them with bench/baselines.
 See spec/bench.md.
 
+entries: every bench/<group>/<name>.cpp, plus, only when named explicitly,
+  bench/libcxx-slice: the libc++ tests of bench/libcxx-slice/slice.list at
+                      -fsyntax-only with the flags `cargo xtask libcxx` uses
+                      (record-only: per-test and aggregate ratios against
+                      --compare-with, e.g. clang++-22; never judged against
+                      baselines)
+
 options:
   --compiler <path>        compiler to measure (default: build and use a release kiln++)
   --baseline <dir>         baseline directory (default: bench/baselines)
   --record                 write the measurements as the new baselines; with
                            --compare-with, also merge the ratio table into
                            docs/status/perf.md
-  --compare-with <path>    also measure this compiler (e.g. clang++-19, the default
-                           KILN_ORACLE's) and print
+  --compare-with <path>    also measure this compiler (e.g. clang++-22, the libc++
+                           slice's oracle, or clang++-19) and print
                            the time and memory ratios
   --filter <substr>        only entries whose id (<group>/<name>) contains <substr>
   --runs <N>               runs per entry (default: 5; the fastest and slowest are
@@ -208,6 +216,9 @@ pub struct Report {
     pub improved: usize,
     pub new: usize,
     pub advisory: usize,
+    /// Measured entries that are never judged against baselines (the
+    /// libc++ slice, `spec/bench.md` "The libcxx-slice entry").
+    pub unjudged: usize,
     /// Whether the run fails (exit status 1).
     pub failing: bool,
     /// The results file that was written.
@@ -263,7 +274,14 @@ struct Ctx<'a> {
     /// `--mem-limit` (`spec/bench.md` "Resource limits").
     mem_limit: Option<process::MemLimit>,
     verbose: bool,
+    /// The libc++ slice's compiles, by compiler path and entry id.
+    slice: SliceCompiles,
+    /// Tests in the slice's list (the run may select fewer).
+    slice_listed: usize,
 }
+
+type SliceCompiles =
+    BTreeMap<PathBuf, BTreeMap<String, Result<crate::libcxx::SyntaxCompile, String>>>;
 
 /// A compiler taking part in the run.
 struct Subject {
@@ -300,15 +318,31 @@ pub fn execute(
     inputs: &[PathBuf],
 ) -> Result<Report, String> {
     let start = Instant::now();
-    let entries = entry::discover(&layout.root, &layout.bench, inputs, opts.filter.as_deref())?;
-    if entries.is_empty() {
-        return Err("no bench entries selected".into());
-    }
+    let (with_slice, rest) = slice::split_inputs(&layout.bench, inputs);
+    let mut entries = if rest.is_empty() {
+        Vec::new()
+    } else {
+        entry::discover(&layout.root, &layout.bench, &rest, opts.filter.as_deref())?
+    };
     let test = Subject::new(compiler)?;
     let oracle = opts.compare_with.as_deref().map(Subject::new).transpose()?;
 
     std::fs::create_dir_all(&layout.scratch)
         .map_err(|e| format!("cannot create {}: {e}", layout.scratch.display()))?;
+    let (mut slice_compiles, mut slice_listed) = (SliceCompiles::new(), 0);
+    if with_slice {
+        let (listed, slice_entries) =
+            slice_setup(opts, layout, [Some(&test), oracle.as_ref()], &mut slice_compiles)
+                .inspect_err(|_| {
+                    let _ = std::fs::remove_dir_all(&layout.scratch);
+                })?;
+        slice_listed = listed;
+        entries.extend(slice_entries);
+    }
+    if entries.is_empty() {
+        let _ = std::fs::remove_dir_all(&layout.scratch);
+        return Err("no bench entries selected".into());
+    }
     let cx = Ctx {
         layout,
         probe: RssProbe::detect(&layout.scratch),
@@ -316,10 +350,51 @@ pub fn execute(
         runs: opts.runs,
         mem_limit: process::MemLimit::from_mib(opts.mem_limit_mib),
         verbose: opts.verbose,
+        slice: slice_compiles,
+        slice_listed,
     };
     let result = measure_and_report(opts, &cx, &entries, &test, oracle.as_ref(), start);
     let _ = std::fs::remove_dir_all(&layout.scratch);
     result
+}
+
+/// Reads the libc++ slice's list and builds each compiler's compiles of the
+/// selected tests (`crate::libcxx::syntax_compiles`). Returns the number of
+/// listed tests and the selected entries.
+fn slice_setup(
+    opts: &Options,
+    layout: &Layout,
+    subjects: [Option<&Subject>; 2],
+    out: &mut SliceCompiles,
+) -> Result<(usize, Vec<Entry>), String> {
+    let list = layout.bench.join(slice::GROUP).join(slice::LIST);
+    let shown = shown_path(&layout.root, &list);
+    let text = std::fs::read_to_string(&list).map_err(|e| format!("{shown}: {e}"))?;
+    let rels = slice::parse_list(&text).map_err(|e| format!("{shown}: {e}"))?;
+    let listed = rels.len();
+    let rels: Vec<String> = rels
+        .into_iter()
+        .filter(|r| opts.filter.as_deref().is_none_or(|f| slice::id_of(r).contains(f)))
+        .collect();
+    let mut test_root = None;
+    for (i, s) in subjects.into_iter().flatten().enumerate() {
+        let scratch = layout.scratch.join(format!("libcxx-{i}"));
+        let clang = s.id.kind == CompilerKind::Clang;
+        let sc = crate::libcxx::syntax_compiles(
+            &layout.root,
+            &s.path,
+            clang,
+            slice::TAG,
+            &rels,
+            &scratch,
+            opts.mem_limit_mib,
+        )?;
+        let by_id = rels.iter().map(|r| slice::id_of(r)).zip(sc.tests).collect();
+        out.insert(s.path.clone(), by_id);
+        test_root = Some(sc.test_root);
+    }
+    let test_root = test_root.unwrap_or_default();
+    Ok((listed, slice::entries(&rels, &test_root, None)))
 }
 
 fn measure_and_report(
@@ -334,7 +409,7 @@ fn measure_and_report(
     let stamp = record::timestamp(now);
     let load = load_avg_1m();
     print_header(cx, entries, test, oracle, load);
-    let (test_run, oracle_run, specs) = measure_all(cx, entries, test, oracle)?;
+    let (test_run, oracle_run, specs, loads) = measure_all(cx, entries, test, oracle)?;
     let (mut report, files) =
         judge_all(opts, cx, entries, &specs, test, &test_run, oracle_run.as_ref())?;
 
@@ -351,18 +426,23 @@ fn measure_and_report(
     report.results_file = write_results(&cx.layout.results, &stamp, &rec)?;
     println!("\nresults: {}", shown_path(&cx.layout.root, &report.results_file));
 
+    if !loads.0.is_empty() {
+        println!("libc++ slice load average (1 min): {}", loads.describe());
+    }
+
     if opts.record {
         record_baselines(cx, entries, &rec.test, &stamp, files)?;
     }
 
     if let (Some(o), Some(orun)) = (oracle, &rec.oracle) {
-        oracle_report(opts, cx, entries, &specs, (test, &rec.test), (o, orun), (now, &stamp))?;
+        let when = (now, stamp.as_str());
+        oracle_report(opts, cx, entries, &specs, (test, &rec.test), (o, orun), when, &loads)?;
     }
 
     report.failing = report.failed > 0 || (report.regressed > 0 && !opts.record);
     println!(
         "\nbench result: {}. {} entries: {} failed, {} regressed{}, {} improved, {} new, \
-         {} advisory ({:.1}s)",
+         {} advisory{} ({:.1}s)",
         if report.failing { "FAILED" } else { "ok" },
         report.entries,
         report.failed,
@@ -371,6 +451,11 @@ fn measure_and_report(
         report.improved,
         report.new,
         report.advisory,
+        if report.unjudged > 0 {
+            format!(", {} not judged", report.unjudged)
+        } else {
+            String::new()
+        },
         start.elapsed().as_secs_f64()
     );
     Ok(report)
@@ -420,16 +505,23 @@ fn measure_all(
     entries: &[Entry],
     test: &Subject,
     oracle: Option<&Subject>,
-) -> Result<(CompilerRun, Option<CompilerRun>, Specs), String> {
+) -> Result<(CompilerRun, Option<CompilerRun>, Specs, slice::Loads), String> {
     let mut test_run = test.run_record();
     let mut oracle_run = oracle.map(Subject::run_record);
     let mut specs = Specs::new();
+    let mut loads = slice::Loads::default();
     for (i, e) in entries.iter().enumerate() {
         let source =
             std::fs::read(&e.path).map_err(|err| format!("{}: {err}", e.path.display()))?;
-        let spec = entry::parse_spec(&String::from_utf8_lossy(&source)).map_err(|errs| {
-            errs.iter().map(|d| format!("{}: {d}", e.arg)).collect::<Vec<_>>().join("\n")
-        });
+        let in_slice = slice::is_slice(&e.id);
+        let spec = if in_slice {
+            loads.0.extend(load_avg_1m());
+            Ok(slice::spec())
+        } else {
+            entry::parse_spec(&String::from_utf8_lossy(&source)).map_err(|errs| {
+                errs.iter().map(|d| format!("{}: {d}", e.arg)).collect::<Vec<_>>().join("\n")
+            })
+        };
         let hash = entry::source_hash(&source);
         let progress = format!(
             "[{:>w$}/{}] {}",
@@ -444,6 +536,7 @@ fn measure_all(
         }
         for (subject, run) in subjects {
             let outcome = match &spec {
+                Ok(spec) if in_slice => measure_slice(cx, e, spec, &hash, subject),
                 Ok(spec) => measure(cx, e, spec, &hash, subject),
                 Err(why) => Outcome::Failed(format!("bad directives:\n{why}")),
             };
@@ -454,7 +547,7 @@ fn measure_all(
             specs.insert(e.id.clone(), spec);
         }
     }
-    Ok((test_run, oracle_run, specs))
+    Ok((test_run, oracle_run, specs, loads))
 }
 
 /// Compares the measurements with the baselines of the compiler's kind and
@@ -470,7 +563,7 @@ fn judge_all(
 ) -> Result<(Report, BTreeMap<String, BaselineFile>), String> {
     // Compare with the baselines of the compiler's kind.
     let mut files: BTreeMap<String, BaselineFile> = BTreeMap::new();
-    for e in entries {
+    for e in entries.iter().filter(|e| !slice::is_slice(&e.id)) {
         if !files.contains_key(&e.group) {
             let f = BaselineFile::load(
                 &cx.layout.baselines.join(format!("{}.json", e.group)),
@@ -483,12 +576,24 @@ fn judge_all(
     let mut rows = Vec::new();
     let mut failures = String::new();
     for e in entries {
-        let base = files[&e.group].entries.get(&e.name).and_then(|k| k.get(test.kind()));
+        let judged = !slice::is_slice(&e.id);
+        let base = files
+            .get(&e.group)
+            .and_then(|f| f.entries.get(&e.name))
+            .and_then(|k| k.get(test.kind()));
         match &test_run.entries[&e.id] {
             Outcome::Failed(why) => {
                 report.failed += 1;
                 let _ = writeln!(failures, "{} ({}): {why}", e.id, test.kind());
                 rows.push(row(e, specs.get(&e.id), base, None, &Verdict::Ok));
+            }
+            Outcome::Measured(m) if !judged => {
+                report.unjudged += 1;
+                let mut r = row(e, specs.get(&e.id), None, Some(m), &Verdict::Ok);
+                if let Some(status) = r.last_mut() {
+                    *status = status.replacen("ok", "not judged", 1);
+                }
+                rows.push(r);
             }
             Outcome::Measured(m) => {
                 let mut t = Thresholds::default();
@@ -545,7 +650,9 @@ fn judge_all(
     Ok((report, files))
 }
 
-/// Prints the ratio table and, with `--record`, merges it into `perf.md`.
+/// Prints the ratio table (and the libc++ slice's) and, with `--record`,
+/// merges them into `perf.md`.
+#[allow(clippy::too_many_arguments)]
 fn oracle_report(
     opts: &Options,
     cx: &Ctx<'_>,
@@ -554,8 +661,9 @@ fn oracle_report(
     (test, test_run): (&Subject, &CompilerRun),
     (o, orun): (&Subject, &CompilerRun),
     (now, stamp): (SystemTime, &str),
+    loads: &slice::Loads,
 ) -> Result<(), String> {
-    let ratio_rows: Vec<RatioRow> = entries
+    let (slice_rows, ratio_rows): (Vec<RatioRow>, Vec<RatioRow>) = entries
         .iter()
         .map(|e| RatioRow {
             id: e.id.clone(),
@@ -563,72 +671,99 @@ fn oracle_report(
             test: test_run.entries[&e.id].measurement().cloned(),
             oracle: orun.entries[&e.id].measurement().cloned(),
         })
-        .collect();
+        .partition(|r| slice::is_slice(&r.id));
     let (tl, ol) = compare::ratio_labels(test.kind(), o.kind());
-    println!();
-    print!("{}", compare::render_ratio_table(&ratio_rows, &tl, &ol));
+    if !ratio_rows.is_empty() {
+        println!();
+        print!("{}", compare::render_ratio_table(&ratio_rows, &tl, &ol));
+    }
+    if !slice_rows.is_empty() {
+        println!();
+        print!("{}", slice::render_text(&slice_rows, &tl, &ol, loads));
+    }
     if !opts.record {
         return Ok(());
     }
     let page = &cx.layout.perf_md;
     let shown = shown_path(&cx.layout.root, page);
-    // The page's other rows are kept (spec/bench.md "Recording"); one that
-    // cannot be read back is rewritten from this run alone.
-    // So is its hand-written section.
-    let mut kept = None;
-    let old = match std::fs::read_to_string(page) {
-        Ok(page_text) => {
-            kept = perf_md::kept_section(&page_text).map(str::to_owned);
-            perf_md::parse(&page_text, &tl, &ol).unwrap_or_else(|why| {
+    let old_text = std::fs::read_to_string(page).unwrap_or_else(|e| {
+        println!("warning: cannot read {shown} ({e}); writing it from this run only");
+        String::new()
+    });
+    let old = perf_md::split(&old_text);
+    let tpath = test.path.display().to_string();
+    let opath = o.path.display().to_string();
+    let when = record::human_time(now);
+    let host = format!("{}, {} CPUs", cx.host.arch, cx.host.cpus);
+    // The main table: the page's other rows are kept (spec/bench.md
+    // "Recording"); one that cannot be read back is rewritten from this run
+    // alone. A run of the slice alone keeps it verbatim.
+    let mut what = Vec::new();
+    let main = if ratio_rows.is_empty() && !old.main.trim().is_empty() {
+        old.main.to_owned()
+    } else {
+        let rows = perf_md::parse(old.main, &tl, &ol).unwrap_or_else(|why| {
+            if !old_text.is_empty() {
                 println!(
                     "warning: {shown} cannot be merged into ({why}); writing it from this run only"
                 );
-                Vec::new()
-            })
-        }
-        Err(e) => {
-            println!("warning: cannot read {shown} ({e}); writing it from this run only");
+            }
             Vec::new()
-        }
+        });
+        let corpus: BTreeSet<String> = entry::discover(
+            &cx.layout.root,
+            &cx.layout.bench,
+            std::slice::from_ref(&cx.layout.bench),
+            None,
+        )?
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+        let full = corpus.iter().all(|id| test_run.entries.contains_key(id));
+        let merged = perf_md::merge(
+            rows,
+            &ratio_rows,
+            &corpus,
+            full,
+            &perf_md::PerfContext {
+                when: &when,
+                stamp,
+                test: (&tpath, test.kind(), &test.id.version),
+                oracle: (&opath, o.kind(), &o.id.version),
+                host: host.clone(),
+                runs: cx.runs,
+                rss: cx.probe.source_id(),
+            },
+        );
+        what.push(format!(
+            "{} row(s) recorded, {} kept from earlier recordings ({} stale), {} stale dropped",
+            merged.recorded, merged.kept, merged.stale, merged.dropped
+        ));
+        merged.text
     };
-    let corpus: BTreeSet<String> = entry::discover(
-        &cx.layout.root,
-        &cx.layout.bench,
-        std::slice::from_ref(&cx.layout.bench),
-        None,
-    )?
-    .into_iter()
-    .map(|e| e.id)
-    .collect();
-    let full = corpus.iter().all(|id| test_run.entries.contains_key(id));
-    let tpath = test.path.display().to_string();
-    let opath = o.path.display().to_string();
-    let merged = perf_md::merge(
-        old,
-        &ratio_rows,
-        &corpus,
-        full,
-        &perf_md::PerfContext {
-            when: &record::human_time(now),
-            stamp,
-            test: (&tpath, test.kind(), &test.id.version),
-            oracle: (&opath, o.kind(), &o.id.version),
-            host: format!("{}, {} CPUs", cx.host.arch, cx.host.cpus),
-            runs: cx.runs,
-            rss: cx.probe.source_id(),
-        },
-    );
-    let mut merged = merged;
-    if let Some(k) = kept {
-        merged.text.push('\n');
-        merged.text.push_str(&k);
-    }
-    write_file(page, &merged.text)?;
-    println!(
-        "wrote {shown}: {} row(s) recorded, {} kept from earlier recordings ({} stale), {} \
-         stale dropped",
-        merged.recorded, merged.kept, merged.stale, merged.dropped
-    );
+    // The slice's section is rewritten by a run that measured it and kept
+    // otherwise; so is the hand-written section, always.
+    let slice_section = if slice_rows.is_empty() {
+        old.slice.map(str::to_owned)
+    } else {
+        what.push(format!("the libc++ slice section ({} tests)", slice_rows.len()));
+        Some(slice::render_section(
+            &slice_rows,
+            &slice::SectionContext {
+                when: &when,
+                stamp,
+                test: (&tpath, test.kind(), &test.id.version),
+                oracle: (&opath, o.kind(), &o.id.version),
+                host,
+                runs: cx.runs,
+                rss: cx.probe.source_id(),
+                loads,
+                listed: cx.slice_listed,
+            },
+        ))
+    };
+    write_file(page, &perf_md::assemble(&main, slice_section.as_deref(), old.kept))?;
+    println!("wrote {shown}: {}", what.join("; "));
     Ok(())
 }
 
@@ -717,16 +852,71 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
             l
         }
     });
+    let counters = Reports { constexpr: report.as_deref(), inst: inst_report };
+    sample(cx, e, spec, s, &cmd, cap, counters, (flags.join(" "), hash))
+}
+
+/// Which counter reports a measured command writes.
+#[derive(Clone, Copy)]
+struct Reports<'a> {
+    /// kiln's constexpr report file.
+    constexpr: Option<&'a Path>,
+    /// kiln's instantiation totals on stderr.
+    inst: bool,
+}
+
+/// A libc++ slice entry: the compile `crate::libcxx::syntax_compiles` built
+/// for this compiler, without counter reports (the runner passes none).
+fn measure_slice(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -> Outcome {
+    let c = match cx.slice.get(&s.path).and_then(|m| m.get(&e.id)) {
+        Some(Ok(c)) => c,
+        Some(Err(why)) => return Outcome::Failed(format!("not a syntax-only compile: {why}")),
+        None => return Outcome::Failed("no libc++ compile was built for this entry".into()),
+    };
+    let mut cmd = Command::new(&s.path);
+    cmd.args(&c.args).arg(&c.path).current_dir(&cx.layout.root);
+    for (k, v) in &c.env {
+        cmd.env(k, v);
+    }
+    if cx.verbose {
+        eprintln!("  $ {}", Shown(&cmd));
+    }
+    let cap = cx.mem_limit.map(|l| {
+        if s.id.kind == CompilerKind::Kiln {
+            l.plus(process::kiln_stack_reservation_mib(&c.args))
+        } else {
+            l
+        }
+    });
+    let flags = slice::shown_flags(&c.args, &cx.layout.root);
+    let none = Reports { constexpr: None, inst: false };
+    sample(cx, e, spec, s, &cmd, cap, none, (flags, hash))
+}
+
+/// Runs `cmd` `cx.runs` times and summarises the runs; `flags` is the
+/// recorded flag string and `hash` the entry's source hash.
+#[allow(clippy::too_many_arguments)]
+fn sample(
+    cx: &Ctx<'_>,
+    e: &Entry,
+    spec: &BenchSpec,
+    s: &Subject,
+    cmd: &Command,
+    cap: Option<process::MemLimit>,
+    reports: Reports<'_>,
+    (flags, hash): (String, &str),
+) -> Outcome {
+    let (report, inst_report) = (reports.constexpr, reports.inst);
     let rss_file = cx.layout.scratch.join("rss.txt");
     let mut walls = Vec::with_capacity(cx.runs);
     let mut rss = Vec::with_capacity(cx.runs);
     let mut oven: Option<Counters> = None;
     let mut inst: Option<InstCounters> = None;
     for run in 1..=cx.runs {
-        if let Some(r) = &report {
+        if let Some(r) = report {
             let _ = std::fs::remove_file(r);
         }
-        let m = match process::run_measured(&cmd, &cx.probe, &rss_file, RUN_TIMEOUT, cap) {
+        let m = match process::run_measured(cmd, &cx.probe, &rss_file, RUN_TIMEOUT, cap) {
             Ok(m) => m,
             Err(err) => return Outcome::Failed(format!("cannot run {}: {err}", s.path.display())),
         };
@@ -738,7 +928,7 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
         if let Some(k) = m.max_rss_kb {
             rss.push(k);
         }
-        if let Some(r) = &report {
+        if let Some(r) = report {
             let got = read_counters(r, e, spec);
             if let Err(why) = same_every_run(&mut oven, got, run, "constexpr", Counters::describe) {
                 return Outcome::Failed(why);
@@ -763,7 +953,7 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
     };
     Outcome::Measured(Measurement {
         mode: spec.mode,
-        flags: flags.join(" "),
+        flags,
         source_hash: hash.to_owned(),
         runs: cx.runs,
         wall_ms_median: round_to(w.median, 3),
@@ -908,7 +1098,8 @@ fn record_baselines(
     mut files: BTreeMap<String, BaselineFile>,
 ) -> Result<(), String> {
     let mut touched = BTreeMap::new();
-    for e in entries {
+    // The libc++ slice is record-only: no baselines.
+    for e in entries.iter().filter(|e| !slice::is_slice(&e.id)) {
         if let Outcome::Measured(m) = &run.entries[&e.id] {
             let mut m = m.clone();
             m.samples_wall_ms.clear();
