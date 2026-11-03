@@ -770,7 +770,12 @@ impl Cg<'_> {
             | CastKind::FloatingCast
             | CastKind::PointerToBoolean => {
                 let v = self.emit_scalar(s)?;
-                self.conv(v, sq, q)
+                if self.vec_of(sq).is_some() {
+                    // clang 22: int → bool ext vector, lane-wise `icmp ne 0`.
+                    self.convert_vector(v, sq, q)
+                } else {
+                    self.conv(v, sq, q)
+                }
             }
             CastKind::FloatingComplexToReal
             | CastKind::IntegralComplexToReal

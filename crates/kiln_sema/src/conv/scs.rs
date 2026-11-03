@@ -14,7 +14,6 @@ use super::rank::{
 };
 use super::{ConvCtx, array_decayed, bit_field_width, is_null_pointer_constant, strip_cv};
 use crate::Sema;
-use crate::vector_ops::VecParts;
 
 /// The first conversion of a standard conversion sequence ([conv.lval],
 /// [conv.array], [conv.func]).
@@ -495,8 +494,11 @@ fn is_complex_real(s: &Sema<'_, '_>, from: QualType, to: QualType) -> bool {
 }
 
 /// clang's `IsVectorConversion`: a splat of an arithmetic value to an ext
-/// vector, or a bitcast between compatible or same-size vectors (never
-/// between two distinct ext vector types).
+/// vector, or a bitcast between compatible or same-size vectors. Between
+/// two distinct ext vector types the only conversion is clang 20+'s
+/// integer ext vector to a `bool` ext vector of the same lane count
+/// (`ICK_Boolean_Conversion`, Conversion rank; the result of a vector
+/// comparison initializing a `bool` vector). clang 19 has none.
 fn vector_conversion(s: &Sema<'_, '_>, from: QualType, to: QualType) -> Option<SecondStep> {
     let (fv, tv) = (s.vector_parts(from), s.vector_parts(to));
     if fv.is_none() && tv.is_none() {
@@ -508,8 +510,12 @@ fn vector_conversion(s: &Sema<'_, '_>, from: QualType, to: QualType) -> Option<S
     if let Some(t) = tv
         && t.is_ext()
     {
-        if fv.is_some_and(VecParts::is_ext) {
-            return None;
+        if let Some(f) = fv.filter(|f| f.is_ext()) {
+            let int_to_bool = s.clang_compat >= 22
+                && f.count == t.count
+                && t.elem == QualType::BOOL
+                && s.ast.types.is_integral(f.elem);
+            return int_to_bool.then_some(SecondStep::BooleanConversion);
         }
         if super::rank::is_arithmetic_or_unscoped_enum(s, from) {
             return Some(SecondStep::VectorSplat);
