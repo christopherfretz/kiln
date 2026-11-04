@@ -37,7 +37,7 @@ runs:
     # mismatch (nondeterministically across runners). Skip the check: there is
     # no sudo here, and CARGO_HOME/RUSTUP_HOME are set explicitly by the action.
     - uses: dtolnay/rust-toolchain@stable
-      with: { toolchain: "1.99.1", components: "rustfmt, clippy" }
+      with: { toolchain: "1.95.0", components: "rustfmt, clippy" }
       env: { RUSTUP_INIT_SKIP_SUDO_CHECK: "yes" }
     # Saved even when `ci` fails, so the next run starts warm.
     - uses: Swatinem/rust-cache@v2

@@ -612,5 +612,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-611 | specialization default base/member access from its own class-key (eigen gebp_traits) | WP-578 | in progress |
 | WP-606 | sema/parse: accept and ignore the clang thread-safety attribute family (guarded_by, lockable, exclusive_locks_required, …) in GNU and clang:: spellings; no -Wunknown-attributes | WP-578 | in progress |
 | WP-612 | using-declaration base member hidden by same-signature derived member template (eigen Map::operator=) | WP-578 | open |
+| WP-614 | build: pin the toolchain to Rust 1.95 (a downstream build has nothing newer): rust-toolchain.toml, workspace rust-version, the CI action; replace the unstable `isolate_lowest_one`; allow the lints clippy 1.95 reports that 1.99 did not | — | open |
 WP-511
 WP-512

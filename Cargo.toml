@@ -5,7 +5,7 @@ members = ["crates/*", "xtask"]
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-rust-version = "1.99"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/christopherfretz/kiln"
 
@@ -38,6 +38,10 @@ unused_qualifications = "warn"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+# The pinned clippy (Rust 1.95, `rust-toolchain.toml`) reports `match` arms
+# whose body is a single `if` as collapsible; a guard would instead fall
+# through to the next arm, so every such site is a false positive here.
+collapsible_match = "allow"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"

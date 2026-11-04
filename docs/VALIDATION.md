@@ -296,7 +296,7 @@ required status check; whether `check-x86_64` is too is a branch-rule
 decision. The two jobs stay separate jobs (a matrix would rename the
 required check to `check (…)`). Each checks out (the image has git) and runs
 the shared composite action `.github/actions/kiln-ci` (toolchain packages,
-Rust 1.99.1, the cache, `cargo xtask ci`), so the steps are written once.
+Rust 1.95.0, the cache, `cargo xtask ci`), so the steps are written once.
 `ext.c11.atomic/alignment-warning-x86_64-run.cpp` is the x86-64 twin of an
 aarch64-only `run` test (WP-239).
 

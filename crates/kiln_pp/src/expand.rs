@@ -104,6 +104,9 @@ impl Preprocessor<'_, '_> {
             return spelling;
         }
         let exp = if exp.is_valid() { exp } else { Span::new(spelling, spelling) };
+        // The arms differ only inside `profile::count!`, which expands to nothing
+        // without the `profile` feature (clippy 1.95 then sees them as identical).
+        #[allow(clippy::match_same_arms)]
         match kind {
             ExpansionKind::Macro { .. } => crate::profile::count!(exp_macro),
             ExpansionKind::MacroArg => crate::profile::count!(exp_macro_arg),

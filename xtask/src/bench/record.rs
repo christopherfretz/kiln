@@ -310,10 +310,7 @@ impl Outcome {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read back by tests and future trend tooling")
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "read back by tests and future trend tooling"))]
     fn from_json(j: &Json) -> Result<Self, String> {
         match field(j, "status")?.as_str() {
             Some("ok") => Measurement::from_json(j).map(Self::Measured),
@@ -345,10 +342,7 @@ impl CompilerRun {
         ])
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read back by tests and future trend tooling")
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "read back by tests and future trend tooling"))]
     fn from_json(j: &Json) -> Result<Self, String> {
         let s = |k: &str| -> Result<String, String> {
             Ok(field(j, k)?.as_str().ok_or_else(|| format!("`{k}` must be a string"))?.to_owned())

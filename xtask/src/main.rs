@@ -1,5 +1,8 @@
 //! `cargo xtask <command>` — the kiln validation harness. See `docs/VALIDATION.md`.
 #![forbid(unsafe_code)]
+// Harness code: timeouts are spelled in the unit the option takes, and the
+// bench statistics compare exact doubles on purpose (clippy 1.95 flags both).
+#![allow(clippy::duration_suboptimal_units, clippy::float_cmp)]
 
 use std::process::ExitCode;
 
