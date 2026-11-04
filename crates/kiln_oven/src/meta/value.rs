@@ -55,6 +55,13 @@ super::meta_family! {
         ReflectConstantStringStd = ("reflect_constant_string", "x", Stable, 484);
         /// `reflect_constant_array(r)`: likewise.
         ReflectConstantArrayStd = ("reflect_constant_array", "x", Stable, 484);
+        /// libstdc++'s `exception::_S_exception_cvt_from_utf8(r)`: the
+        /// UTF-8 range `r` as an ordinary-encoding `string_view` (kiln's
+        /// ordinary literal encoding is UTF-8: the same characters, or an
+        /// empty view when `r` is not valid UTF-8).
+        ExcCvtFromUtf8 = ("exception::_S_exception_cvt_from_utf8", "x", Stable, 484);
+        /// `exception::_S_exception_cvt_to_utf8(r)`: the converse.
+        ExcCvtToUtf8 = ("exception::_S_exception_cvt_to_utf8", "x", Stable, 484);
     }
 }
 
@@ -290,6 +297,32 @@ impl Oven {
         bytes.resize(((m + 1) * w) as usize, 0);
         let img = ByteImage { ty: arr, bytes: &bytes, relocs: &[], padding: &[], unions: &[] };
         b.consts().push_aggregate(img).map_err(|_| fault(Fault::Memory))
+    }
+
+    /// The first `m` characters of range argument `r` (data | length <<
+    /// 64) of one-byte characters, as bytes (`None`: wider characters).
+    ///
+    /// # Errors
+    /// The evaluator's fault reading one.
+    pub fn meta_elems_bytes(
+        &self,
+        r: u128,
+        m: u64,
+        ctx: &MetaCtx,
+    ) -> Result<Option<Vec<u8>>, MetaError> {
+        let et = ctx.elem;
+        if self.types.size(et) != 1 {
+            return Ok(None);
+        }
+        let mut q = r as u64;
+        let mut bytes = Vec::with_capacity(usize::try_from(m).unwrap_or(0).min(1 << 20));
+        for i in 0..m {
+            if i > 0 {
+                q = self.ptr_add(q, 1, et).map_err(fault)?;
+            }
+            bytes.push(self.load(q, et, ak::READ).map_err(fault)? as u8);
+        }
+        Ok(Some(bytes))
     }
 
     /// Whether `p` points into a string literal object ([lex.string];

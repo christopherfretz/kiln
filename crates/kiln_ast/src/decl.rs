@@ -4661,6 +4661,11 @@ pub mod builtin {
     /// expression of a consteval block; spec/consteval-blocks.md §3);
     /// false at runtime.
     pub const KILN_PLAINLY_CONSTANT_EVALUATED: u32 = 2150;
+    // ---- WP-484 (GCC builtins libstdc++'s `<meta>` tests for).
+    /// `bool __builtin_is_string_literal(const CharT *p)` (GCC 16;
+    /// `std::is_string_literal`, [meta.string.literal]): whether `p`
+    /// points into a string literal object. Consteval.
+    pub const IS_STRING_LITERAL: u32 = 2151;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
@@ -4690,6 +4695,8 @@ pub mod builtin {
         row(ELEMENTWISE_SUB_SAT, "__builtin_elementwise_sub_sat", "v.", N | C | T),
         // WP-473.
         row(KILN_PLAINLY_CONSTANT_EVALUATED, "__kiln_plainly_constant_evaluated", "b", N),
+        // WP-484.
+        row(IS_STRING_LITERAL, "__builtin_is_string_literal", "b.", N | T | I),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19

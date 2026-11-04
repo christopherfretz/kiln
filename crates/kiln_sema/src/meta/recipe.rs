@@ -10,6 +10,7 @@ use kiln_ast::types::BuiltinType;
 use kiln_ast::{DeclId, QualType};
 use kiln_oven::{
     AccessOp, AnnotOp, DefineOp, ExcCtor, MemberOp, MetaOp, MetaThrow, QueryOp, Shape, TemplOp,
+    ValueOp,
 };
 use kiln_source::Loc;
 
@@ -30,6 +31,15 @@ impl Sema<'_, '_> {
         q: QualType,
     ) -> Result<Option<Shape>, String> {
         use MetaOp as M;
+        match (op, param) {
+            (M::Value(ValueOp::ExcCvtFromUtf8), None) => {
+                return self.string_shape(q, QualType::CHAR);
+            }
+            (M::Value(ValueOp::ExcCvtToUtf8), None) => {
+                return self.string_shape(q, QualType::CHAR8);
+            }
+            _ => {}
+        }
         if let M::Value(v) = op {
             return self.value_shape(v, param);
         }

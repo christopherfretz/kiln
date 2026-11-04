@@ -55,6 +55,19 @@ impl Sema<'_, '_> {
             ValueOp::ReflectConstantArray | ValueOp::ReflectConstantArrayStd => {
                 MetaOut::Info(self.reflect_constant_elems(arg(0)?, false, ctx, oven)?)
             }
+            ValueOp::ExcCvtFromUtf8 | ValueOp::ExcCvtToUtf8 => {
+                let r = arg(0)?;
+                let m = (r >> 64) as u64;
+                let s = oven
+                    .meta_elems_bytes(r, m, ctx)?
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .unwrap_or_default();
+                let u8 = v == ValueOp::ExcCvtToUtf8;
+                let Some(cv) = self.frozen_string(&s, u8) else {
+                    return fail(loc, "kiln: message too large for a constant");
+                };
+                MetaOut::Str(cv, s.len() as u64)
+            }
             ValueOp::IsStringLiteral => {
                 MetaOut::Scalar(u128::from(oven.meta_is_string_literal(arg(0)?)))
             }
@@ -82,7 +95,9 @@ impl Sema<'_, '_> {
                 ValueOp::ReflectConstantString
                 | ValueOp::ReflectConstantArray
                 | ValueOp::ReflectConstantStringStd
-                | ValueOp::ReflectConstantArrayStd,
+                | ValueOp::ReflectConstantArrayStd
+                | ValueOp::ExcCvtFromUtf8
+                | ValueOp::ExcCvtToUtf8,
                 Some(0),
             ) => Some(Shape::Elems),
             _ => None,

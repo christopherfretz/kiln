@@ -449,6 +449,9 @@ pub(crate) mod bi {
     /// object at `b` (register reads), `^^fn` as `dst`; `c` is raw, the
     /// call's `MetaSite` index + 1.
     pub const META_EXC: u32 = 31;
+    /// `__builtin_is_string_literal(a)` (WP-484; GCC 16): whether the
+    /// pointer `a` points into a string literal object.
+    pub const STRING_LIT: u32 = 33;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).

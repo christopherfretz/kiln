@@ -249,18 +249,28 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// virtual call or a pointer) is instantiated now, the running
     /// evaluation's location its point of instantiation, with the Oven
     /// lent back to sema so the instantiation can evaluate (nested,
-    /// R-OVEN-1). A specialization already marked but not instantiable
-    /// then (its pattern was defined later) stays undefined, as clang 19
-    /// never instantiates from the evaluator ("undefined function 'f'
-    /// cannot be used in a constant expression"); so does everything
+    /// R-OVEN-1). A constexpr specialization already marked but not
+    /// instantiable then (its pattern was defined later, so it waits in
+    /// the end-of-TU queue) is instantiated now if its pattern is defined
+    /// by the point of this evaluation, as GCC does ([temp.inst]/8: it is
+    /// needed for constant evaluation; WP-484 — clang 19/22 leave it
+    /// undefined). A pattern still undefined here keeps "undefined
+    /// function 'f' cannot be used in a constant expression"; a queued
+    /// non-constexpr function stays queued; nothing is instantiated
     /// during a speculative fold.
     fn instantiate_for_oven(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId> {
         let poi = self.inst.eval_loc?;
-        if self.inst.fatal
-            || self.ast.instantiated_from(f).is_none()
-            || self.inst.queued.contains(&f)
-        {
+        let pattern = self.ast.instantiated_from(f)?;
+        if self.inst.fatal {
             return None;
+        }
+        if self.inst.queued.contains(&f) {
+            let constexpr = self.ast.decls.function(f).is_some_and(|x| {
+                x.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None
+            });
+            if !constexpr || self.defined_body(pattern).is_none() {
+                return None;
+            }
         }
         self.lend_oven(oven, |s| s.instantiate_function_definition(f, poi));
         self.defined_body(f)
