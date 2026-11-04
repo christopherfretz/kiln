@@ -192,9 +192,14 @@ pub(crate) fn print_version(w: &mut dyn Write, tc: &Toolchain, verbose: bool) {
     }
 }
 
-/// The standard of an input in `lang`, or the error to report.
+/// The standard of an input in `lang`, or the error to report (also the
+/// per-input `-cc1` error for an invalid `-fvisibility=` value).
 pub(crate) fn input_std(args: &Args, lang: Lang) -> Result<LangStd, Box<Diag>> {
     let cplusplus = lang == Lang::Cxx;
+    if let Some(a) = &args.invalid_visibility {
+        let v = a.strip_prefix("-fvisibility=").unwrap_or(a);
+        return Err(Box::new(Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(a).arg(v)));
+    }
     let Some(s) = &args.std else { return Ok(LangStd::default_for(cplusplus)) };
     let std = LangStd::parse(s).ok_or_else(|| {
         Box::new(

@@ -323,10 +323,15 @@ impl Parser<'_, '_> {
             self.diagnose_and_skip_cxx11_attrs();
         }
         self.parse_attributes(&mut attrs);
-        let Some(open) = self.expect(Punct::LBrace) else {
+        if !self.at(Punct::LBrace) {
+            let _ = self.expect(Punct::LBrace);
             self.skip_unsupported_declaration();
             return;
-        };
+        }
+        // The namespaces (and a visibility attribute's pragma-stack
+        // marker) begin before `{` is consumed: consuming it lexes the
+        // next token, firing a `#pragma GCC visibility` right after it.
+        let open = self.loc();
         let mut opened = Vec::new();
         if names.is_empty() {
             let ns = self.s.act_on_start_namespace(None, inline, ns_loc, open);
@@ -341,8 +346,15 @@ impl Parser<'_, '_> {
         if let Some(&ns) = opened.last() {
             self.s.act_on_namespace_attrs(ns, &attrs);
         }
+        self.bump();
         while !self.at(Punct::RBrace) && !self.at_eof() {
             self.parse_external_declaration();
+        }
+        // The namespace's visibility scope ends at its `}`, before a
+        // `#pragma GCC visibility` right after it is lexed.
+        let end = self.loc();
+        for &ns in opened.iter().rev() {
+            self.s.pop_namespace_visibility(ns, end);
         }
         self.expect_closing(Punct::RBrace, Punct::LBrace, open);
         for ns in opened.into_iter().rev() {

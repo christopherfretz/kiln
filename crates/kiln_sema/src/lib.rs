@@ -113,6 +113,7 @@ pub mod using;
 mod vector;
 mod vector_ops;
 mod vexing;
+mod visibility;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type, vector_diag_arg};
@@ -368,6 +369,13 @@ pub struct Sema<'a, 'sm> {
     /// linkage (clang pushes the invalid out-of-line declaration on the
     /// block's scope chain; WP-235).
     pub(crate) dropped_qualified_locals: kiln_source::fx::FxHashSet<DeclId>,
+    /// The `#pragma GCC visibility` stack (clang `VisContext`): a pushed
+    /// visibility (0 default, 1 hidden, 2 protected) and the pragma's
+    /// location, or `None` for a namespace with a visibility attribute,
+    /// which suspends the pragma in its body (spec/sema.md §4.5).
+    pub(crate) vis_stack: Vec<Option<(u32, Loc)>>,
+    /// The open namespace definitions that pushed a `None` entry.
+    pub(crate) vis_namespaces: Vec<DeclId>,
     /// Functions declared with a parameter that needed the missing-
     /// `typename` recovery: no qualified redeclaration matches them
     /// (spec/sema-templates.md, clang's invalid declaration).
@@ -997,6 +1005,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             enums: Vec::new(),
             local_externs: Vec::new(),
             dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),
+            vis_stack: Vec::new(),
+            vis_namespaces: Vec::new(),
             missing_typename_fns: kiln_source::fx::FxHashSet::default(),
             extern_c: kiln_source::fx::FxHashMap::default(),
             split_greaters: kiln_source::fx::FxHashSet::default(),

@@ -289,6 +289,7 @@ sema_virtual_out_of_class = Error (0) "'virtual' can only be specified inside th
 // [class.virtual]/6 (WP-294)
 sema_virtual_requires_clause = Error (0) "virtual function cannot have a requires clause";
 sema_visibility_pop_mismatch = Error (0) "#pragma visibility pop with no matching #pragma visibility push";
+sema_visibility_push_mismatch = Error (0) "#pragma visibility push with no matching #pragma visibility pop";
 sema_vla_cxx_extension = Warning [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
 sema_vla_cxx_extension_gnu = Extension [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
 sema_vla_decl_in_file_scope = Error (0) "variable length array declaration not allowed at file scope";

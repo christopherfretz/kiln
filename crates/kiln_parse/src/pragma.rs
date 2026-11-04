@@ -354,24 +354,17 @@ impl Parser<'_, '_> {
                 }
             }
             Event::UnsupportedPragma { what, loc } => self.s.act_on_unsupported_pragma(&what, loc),
-            // clang's `ActOnPragmaVisibility`. The visibility itself is
-            // not applied yet: everything has default visibility.
+            // clang's `ActOnPragmaVisibility`; sema applies the pushed
+            // visibility to the declarations that follow.
             Event::Visibility { loc, push: Some(v) } => {
                 if VISIBILITIES.contains(&v.as_str()) {
-                    self.visibility_depth += 1;
+                    self.s.act_on_pragma_visibility(Some(&v), loc);
                 } else {
                     let d = self.s.diag(DiagId::sema_unknown_visibility, loc).arg(v);
                     self.emit(d);
                 }
             }
-            Event::Visibility { loc, push: None } => {
-                if self.visibility_depth == 0 {
-                    let d = self.s.diag(DiagId::sema_visibility_pop_mismatch, loc);
-                    self.emit(d);
-                } else {
-                    self.visibility_depth -= 1;
-                }
-            }
+            Event::Visibility { loc, push: None } => self.s.act_on_pragma_visibility(None, loc),
         }
     }
 }

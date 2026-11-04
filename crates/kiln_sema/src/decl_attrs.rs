@@ -58,6 +58,8 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE => "coro_only_destroy_when_complete",
         AttrKind::OPTNONE => "optnone",
         AttrKind::MINSIZE => "minsize",
+        AttrKind::VISIBILITY => "visibility",
+        AttrKind::TYPE_VISIBILITY => "type_visibility",
         AttrKind::TRIVIAL_ABI => "trivial_abi",
         AttrKind::NAKED => "naked",
         AttrKind::MAY_ALIAS => "may_alias",
@@ -278,6 +280,7 @@ impl Sema<'_, '_> {
         self.take_annotations(d, attrs);
         self.check_alignas_subject(d, attrs);
         self.check_init_priority(d, attrs);
+        self.check_visibility_attrs(d, attrs);
         let kind = self.ast.decls.get(d).kind();
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);

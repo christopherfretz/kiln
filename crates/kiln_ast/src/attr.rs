@@ -38,6 +38,10 @@ impl AttrKind {
     pub const USED: AttrKind = AttrKind(67);
     pub const UNUSED: AttrKind = AttrKind(68);
     pub const WEAK: AttrKind = AttrKind(69);
+    /// GNU `visibility("v")`: `a` = 0 `default`, 1 `hidden` (also
+    /// `internal`), 2 `protected` ([`AttrNode::visibility`]); the
+    /// implicit flag marks one added by `#pragma GCC visibility push`
+    /// (spec/codegen.md "Symbol visibility").
     pub const VISIBILITY: AttrKind = AttrKind(70);
     pub const SECTION: AttrKind = AttrKind(71);
     /// GNU `format(archetype, F, A)`: `a` = the archetype (0 `printf`),
@@ -146,6 +150,10 @@ impl AttrKind {
     /// Numbered apart from the run above so a concurrent addition there
     /// does not collide.
     pub const UNINITIALIZED: AttrKind = AttrKind(140);
+    /// clang `type_visibility("v")` on a class, enumeration or namespace:
+    /// the visibility of the type's vtable and RTTI (`a` as for
+    /// [`AttrKind::VISIBILITY`]); WP-544.
+    pub const TYPE_VISIBILITY: AttrKind = AttrKind(141);
 }
 
 /// What a loop hint controls (clang `LoopHintAttr::OptionType`).
@@ -356,6 +364,15 @@ impl AttrNode {
     /// after a function declarator it makes a misplaced attribute a
     /// warning rather than an error (clang `isGNUScope`).
     pub const GNU_SCOPED: u8 = 8;
+
+    /// Implicit flag (bit 0): added by sema, not written.
+    pub const IMPLICIT: u8 = 1;
+
+    /// The visibility of a `VISIBILITY` / `TYPE_VISIBILITY` node: 0
+    /// default, 1 hidden, 2 protected.
+    pub const fn visibility(&self) -> u32 {
+        self.a
+    }
 
     /// True for the GNU spelling: `__attribute__((x))` or `[[gnu::x]]`.
     pub const fn is_gnu_spelling(&self) -> bool {

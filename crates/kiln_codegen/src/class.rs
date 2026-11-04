@@ -850,7 +850,8 @@ impl Cg<'_> {
             Ok(a) => a,
             Err(e) => return err(Some(ast.decls.get(d).loc()), format!("cannot alias {e:?}")),
         };
-        let visibility = self.m.func(bf).visibility;
+        // clang `SetCommonAttributes` → `setGVProperties(Alias, D)`.
+        let visibility = self.decl_visibility(d, true);
         {
             // Destructors are always `unnamed_addr`; `SetCommonAttributes`.
             let al = self.m.alias_mut(a);

@@ -489,6 +489,8 @@ impl Sema<'_, '_> {
             if !self.check_inst_exc_spec(m.spec, ty, ds.loc) {
                 return Ok(None);
             }
+            let attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            self.explicit_inst_visibility_attrs(m.spec, &attrs);
             self.act_on_explicit_function_inst(m, ext.is_some(), name_loc);
             return Ok(None);
         }

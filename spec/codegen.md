@@ -1420,7 +1420,7 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
   function list (`Module::move_function_to_end`, WP-113). Deleting destructors (D0) are WP-080.
   Structor references go through `structor_ref`. A cache hit on the base
   variant still queues it for definition, because clang's `EmitDeferred`
-  is depth-first. The D1 alias copies D2's visibility.
+  is depth-first. The D1 alias has the destructor's visibility (§8).
 - **Base-object destructor aliases** (WP-423; `Cg::try_base_dtor_alias`,
   clang `CodeGenModule::TryEmitBaseDestructorAsAlias`): at -O1+ only, and
   not for a `weak_odr` (explicit-instantiation, COMDAT) D2, a destructor whose body is an empty
@@ -1562,8 +1562,8 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   here is defined `available_externally` with it (clang `maybeEmitThunk`
   with `ForVTable`; at `-O1`+ for any vtable), except for a variadic
   method or one with an incomplete class parameter or return type,
-  which stay declarations. clang's `isVTableHidden` exclusion never
-  applies (kiln does not model visibility attributes).
+  which stay declarations. clang's `isVTableHidden` exclusion applies
+  first: a vtable that would be hidden stays external (§8, WP-544).
   `tests/codegen/extern_template_vtable_o1.cpp`.
 - **Explicit instantiation declarations** ([temp.explicit]/14, WP-158;
   `Cg::is_explicit_inst_declaration`): a function or variable that is
@@ -3483,9 +3483,8 @@ categories, compared with clang 22 and clang 19 on both targets).
   full-expression temporary in a conditional branch, put at the
   outermost conditional's start) gets the active one
   (`tests/codegen/loop_parallel_inserts{,_o1}.cpp`).
-- **Not modelled**: `"; No predecessors!"` comments; vtable hiding
-  (`isVTableHidden`: it reads the visibility of the RTTI and of
-  undefined methods, and kiln has no visibility model); the emission
+- **Not modelled**: `"; No predecessors!"` comments (vtable hiding,
+  `isVTableHidden`, is modelled since WP-544: §8); the emission
   order of inline (deferred) labelled structors of a class with virtual
   bases.
 
@@ -3603,6 +3602,129 @@ or `[[clang::uninitialized]]`.
   `var_template_thread_local.cpp`). `instantiated_var_def` treats any
   variable template specialization as its own definition (one without
   an initializer is default-initialized).
+
+## 8. Symbol visibility and `dso_local` (WP-544; `visibility.rs`)
+
+Every global value carries clang's ELF visibility and `dso_local` flag,
+computed as clang's `CodeGenModule::setGlobalVisibility` /
+`NamedDecl::getLinkageAndVisibility` (`getLVForDecl`) and
+`shouldAssumeDSOLocal` do. Inputs: `CodegenOptions::visibility` (value
+visibility, `-fvisibility=`), `type_visibility` (vtables and RTTI; equal to
+`visibility` except under `-fvisibility-ms-compat`, where it is default),
+`inlines_hidden` (`-fvisibility-inlines-hidden`), `reloc`
+(`-fpic`/`-fpie`/`-fno-pic`), `semantic_interposition` and
+`direct_access_external_data` (spec/driver.md "Options"); and sema's
+`AttrKind::VISIBILITY` / `TYPE_VISIBILITY` attributes (`a`: 0 default,
+1 hidden, 2 protected; spec/sema.md "Visibility attributes"), which
+include those `#pragma GCC visibility push` gives a declaration.
+
+**Where it applies.** A definition takes its entity's computed
+visibility; a declaration (and an `available_externally` definition) only
+an explicit one, so an entity defined elsewhere is `hidden` only when
+known hidden (`Cg::decl_visibility(d, definition)`). Functions
+(`set_decl_attrs`, `set_def_linkage`), variables (`get_gvar`,
+`emit_var_def`), static locals of inline functions and their guard
+variables, thunks (the method's), structor aliases (the destructor's)
+follow `decl_visibility`. A class's vtable, VTT and construction vtables
+take the class's type visibility (`Cg::class_visibility`; a construction
+vtable is the most-derived class's, as clang's `setGVProperties(VTable,
+RD)`); a `type_info` object and name take the type's
+(`Cg::type_visibility`, clang `Type::getVisibility`: a class or
+enumeration's, through pointers, references, arrays, member pointers and
+function types); an external `type_info` declaration only an explicit one.
+A template parameter object takes its type's visibility. A local-linkage
+symbol is always default (`Cg::finish_dso_local`).
+
+**The visibility of a declaration** (`Cg::lv`, memoised per `(decl,
+computation)`; clang's `LVComputationKind`: value or type visibility, and
+"ignore explicit" while computing a class for a member with its own
+attribute). Visibilities merge by clang's `mergeVisibility`: the result is
+never less restrictive (hidden < protected < default), and an equal one
+only adds explicitness.
+- *Explicit visibility* (clang `getExplicitVisibility`): the entity's own
+  `visibility` (for type visibility `type_visibility` first) on any
+  redeclaration; else that of the pattern it was instantiated from (a
+  member of a class template specialization, a class, variable or
+  function template specialization, the template). clang does not clone
+  the attribute onto an instantiation, and neither does kiln's
+  `copy_attrs`; an explicit instantiation's own attribute is the
+  specialization's (spec/sema.md "Visibility attributes"; libc++ exports
+  hidden function templates' `extern template` specializations this
+  way). A replaceable global allocation or deallocation function
+  is default (clang's `-fvisibility-global-new-delete=force-default`).
+- *Namespace scope* (clang `getLVForNamespaceScopeDecl`): explicit
+  visibility, else the nearest enclosing namespace's attribute (any of its
+  definitions; it counts as explicit), else the global mode, then hidden
+  for an inline function under `-fvisibility-inlines-hidden`
+  (`use_inline_hidden`: a function defined inline, `constexpr` or
+  implicitly inline, not an explicit instantiation). A non-`extern "C"`
+  variable without explicit visibility merges its type's. A template
+  specialization merges its arguments' (`args_lv`, clang
+  `getLVForTemplateArgumentList`: a type's `type_lv`; a declaration,
+  function or member named by a pointer or member pointer; a template
+  template argument's template; a pack's elements; a class-type value's
+  type, as its template parameter object), when clang's
+  `shouldConsiderTemplateVisibility` holds: an implicit instantiation, or
+  an explicit specialization or instantiation without its own attribute
+  (for a class, also not merely ignoring explicit visibility).
+- *Class members* (clang `getLVForClassMember`): the member's explicit
+  visibility, else `-fvisibility-inlines-hidden`'s hidden; its template
+  arguments; then its class's visibility (type visibility for a nested
+  class), unless an explicit attribute on a member specialization
+  suppresses that (clang's "suppressor" rule).
+- *Local entities* (clang `getLVForLocalDecl`): a block-scope function
+  declaration has only its own attribute; a static local, local class or
+  closure type of an inline function or a template instantiation takes the
+  function's visibility, except that the static local of a function hidden
+  only by `-fvisibility-inlines-hidden` takes its class's explicit
+  visibility, else the global mode (so such guard variables stay default).
+- `vis_active`: with every mode default and no visibility attribute in the
+  TU, the whole computation is skipped.
+
+**`isVTableHidden`** (clang `CGVTables::isVTableHidden`, checked first by
+`canSpeculativelyEmitVTableAsBase`; `Cg::is_vtable_hidden`): above `-O0` a
+vtable defined in another translation unit is not emitted
+`available_externally` (§7a) when its class's type visibility is hidden,
+or a used slot's method (function or destructor) is hidden and not
+defined here. `tests/codegen/visibility_vtable_hidden_o1.cpp`.
+
+**`dso_local`** (`assume_dso_local`, clang 19's `shouldAssumeDSOLocal` for
+ELF, applied by `finish_dso_local` after emission): implied (not printed)
+for local linkage and for a hidden or protected symbol; never for an
+intrinsic or the `extern_weak` `_ZTH` declaration. Under `-fpic`/`-fPIC`
+only an external, non-COMDAT function definition is, and only with
+`-fno-semantic-interposition` (`GlobalValue::canBenefitFromLocalAlias`).
+Under `-fno-pic` every definition is; under `-fpie` a definition is as
+emission chose (clang decides when it creates the global). A declaration
+is `dso_local` under `-fpie`/`-fno-pic` with direct access to external
+data (`-fdirect-access-external-data`, default only for `-fno-pic`) when it
+is a non-TLS variable, or a function under `-fno-pic`. Module flags:
+`PIC Level`, and `PIE Level` under `-fpie`; `SemanticInterposition` under
+`-fPIC -fsemantic-interposition`; `direct-access-external-data` when its
+value differs from the relocation model's default. COMDATs are
+unaffected: a COMDAT member keeps its group whatever its visibility.
+
+**Deviations from clang's model** (none shows in the corpus):
+1. Template parameters' visibility (clang
+   `getLVForTemplateParameterList`: the types of non-type parameters and
+   template template parameters' lists) is not merged.
+2. The entities a class-type or array non-type argument's value names are
+   not merged (only the class type is).
+3. No `getLVForClosure` special case: a closure type's visibility is
+   computed as for a local class of its context (clang gives a lambda in a
+   default argument or a namespace-scope variable initializer its owner's).
+4. Linkage is not part of the computation: an entity with internal
+   linkage (an unnamed namespace, `static`) is emitted with local linkage
+   and so default visibility, which is what clang emits.
+5. `-fvisibility-global-new-delete=` and `-fvisibility-from-dllstorageclass`
+   are not accepted (only clang's defaults are modelled); `weak`, `dllexport`
+   and `__declspec` do not affect visibility.
+
+Tests: `tests/codegen/visibility_{hidden_tu,inlines_hidden,class_attr,
+namespace,pragma,templates,vtable_hidden_o1}.cpp`,
+`tests/codegen/dso_local_{nopic,pie,pic,pic_hidden,pic_nosi,pic_si_direct}.cpp`
+(both oracles, both triples), `crates/kiln_driver/tests/codegen.rs`
+`pic_visibility_and_objects` (`-fPIC -S -emit-llvm` and `-fPIC -c`).
 
 ## Landed sections after WP-488: `spec/landed/codegen/`
 

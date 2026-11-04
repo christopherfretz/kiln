@@ -368,8 +368,11 @@ impl Cg<'_> {
             self.m.func_mut(f).comdat = Some(c);
         }
         if thunk.is_some() && body.is_none() {
-            // clang `setThunkLinkage` with `ForVTable`.
+            // clang `setThunkLinkage` with `ForVTable`; a declaration for
+            // the linker keeps only an explicit visibility.
+            let vis = self.decl_visibility(d, false);
             let func = self.m.func_mut(f);
+            func.visibility = vis;
             func.linkage = kiln_llvm::Linkage::AvailableExternally;
             func.comdat = None;
             func.dso_local = false;
