@@ -1821,20 +1821,25 @@ impl Parser<'_, '_> {
         (keyword, scoped)
     }
 
-    fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
-        let kw_loc = self.bump().span.lo;
-        let (keyword, scoped) = self.parse_tag_key(ds, k);
+    /// The attributes after a class-key or enum-key. After a class-key,
+    /// `_Nullable` (clang nullability on classes) may appear among them
+    /// any number of times (clang `ParseClassSpecifier`); the other
+    /// nullability keywords are not parsed here.
+    fn parse_tag_key_attrs(&mut self, keyword: TagKeyword) -> Vec<AttrId> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
-        // clang nullability on classes: `class _Nullable X`, mixed freely
-        // with the attributes after a class-key (clang
-        // `ParseClassSpecifier`); the other nullability keywords are not
-        // parsed here.
         while keyword != TagKeyword::Enum && self.at_kw(Kw::Nullable) {
             let loc = self.bump().span.lo;
             attrs.push(self.s.act_on_class_nullable(loc));
             self.parse_attributes(&mut attrs);
         }
+        attrs
+    }
+
+    fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
+        let kw_loc = self.bump().span.lo;
+        let (keyword, scoped) = self.parse_tag_key(ds, k);
+        let mut attrs = self.parse_tag_key_attrs(keyword);
         let qual_loc = self.tok().span.lo;
         self.incomplete_standalone_tag_qualifier(ds, keyword, qual_loc);
         let splice_qual = self.at_splice().then_some(qual_loc);
