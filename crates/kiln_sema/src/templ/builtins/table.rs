@@ -419,6 +419,17 @@ pub static TABLE: &[Row] = &[
     f("__builtin_umul_overflow", DONE, Oven::Yes),
     f("__builtin_umull_overflow", DONE, Oven::Yes),
     f("__builtin_umulll_overflow", DONE, Oven::Yes),
+    // WP-557: the multiprecision carry builtins (constant-evaluated)
+    f("__builtin_addcb", DONE, Oven::Yes),
+    f("__builtin_addcs", DONE, Oven::Yes),
+    f("__builtin_addc", DONE, Oven::Yes),
+    f("__builtin_addcl", DONE, Oven::Yes),
+    f("__builtin_addcll", DONE, Oven::Yes),
+    f("__builtin_subcb", DONE, Oven::Yes),
+    f("__builtin_subcs", DONE, Oven::Yes),
+    f("__builtin_subc", DONE, Oven::Yes),
+    f("__builtin_subcl", DONE, Oven::Yes),
+    f("__builtin_subcll", DONE, Oven::Yes),
     f("__builtin_alloca", DONE, Oven::No),
     f("__builtin_alloca_with_align", DONE, Oven::No),
     f("__builtin_vsnprintf", DONE, Oven::No),
@@ -574,6 +585,21 @@ mod tests {
         assert_eq!(has_constexpr_builtin_staged("__builtin_umulll_overflow"), Some(true));
         assert_eq!(has_constexpr_builtin_staged("__builtin_alloca"), Some(false));
         assert_eq!(has_builtin_staged("__builtin_vsnprintf"), Some(true));
+    }
+
+    /// WP-557: every carry builtin is declared, staged on and
+    /// constant-evaluated (clang 19 `Constexpr`).
+    #[test]
+    fn carry_rows() {
+        for op in ["add", "sub"] {
+            for w in ["b", "s", "", "l", "ll"] {
+                let n = format!("__builtin_{op}c{w}");
+                assert_eq!(has_builtin_staged(&n), Some(true), "{n}");
+                assert_eq!(has_constexpr_builtin_staged(&n), Some(true), "{n}");
+                let id = kiln_ast::decl::builtin::by_name(&n).expect("declared");
+                assert_eq!(kiln_ast::decl::builtin::carry_op(id), Some(op == "sub"), "{n}");
+            }
+        }
     }
 
     /// WP-393 ([c.math]/[library.c], P0533): the Oven folds `abs`, `signbit`
