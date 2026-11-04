@@ -15,7 +15,7 @@
 
 use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::decl::DeclKind;
-use kiln_ast::expr::{CastKind, ExprFlags, NonOdrUse};
+use kiln_ast::expr::{CastKind, ExprFlags, NonOdrUse, UnaryOp};
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
@@ -124,6 +124,34 @@ impl Sema<'_, '_> {
             }
         }
         Some(cur)
+    }
+
+    /// The expression a pointer or reference template argument of type
+    /// `ty` designating a subobject (`pty`, `base`, `offset`;
+    /// [`Self::is_subobject_ptr`]) is substituted as: the lvalue naming
+    /// the subobject (`v.m[i]`), its address unless `ty` is a reference.
+    pub(crate) fn subobject_arg_expr(
+        &mut self,
+        ty: QualType,
+        pty: QualType,
+        base: PtrBase,
+        offset: u64,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        let target = self.ast.types.pointee(pty)?;
+        let lv = self.object_lvalue(base, offset, target, loc)?;
+        if self.ast.types.is_reference(ty) {
+            return Some(lv);
+        }
+        let a = self.act_on_unary(UnaryOp::AddrOf, lv, loc);
+        if self.is_err_expr(a) {
+            return None;
+        }
+        if self.ast.types.canonical(self.ety(a)) == self.ast.types.canonical(ty) {
+            Some(a)
+        } else {
+            crate::conv::implicit_convert(self, a, ty, crate::conv::ConvCtx::Initialization).ok()
+        }
     }
 
     /// Whether pointer value (`pty`, `base`, `offset`) designates a proper
