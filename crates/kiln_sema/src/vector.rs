@@ -86,7 +86,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> ControlFlow<Option<AttrId>> {
         match kind {
-            AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE => {
+            k if k.is_vector_type() => {
                 ControlFlow::Break(self.vector_attribute(kind, syntax, raw, args, loc))
             }
             AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN => {
@@ -234,11 +234,23 @@ impl Sema<'_, '_> {
         let mut i = 0;
         while i < attrs.len() {
             let node = *self.ast.attrs.get(attrs[i]);
-            if !matches!(node.kind, AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE) {
+            if !node.kind.is_vector_type() {
                 i += 1;
                 continue;
             }
             attrs.remove(i);
+            if matches!(node.kind, AttrKind::NEON_VECTOR_TYPE | AttrKind::NEON_POLYVECTOR_TYPE) {
+                if self.is_error_type(ty) {
+                    continue;
+                }
+                let poly = node.kind == AttrKind::NEON_POLYVECTOR_TYPE;
+                let Some(count) = ExprId::from_raw(node.a) else { continue };
+                let v = self.build_neon_vector_type(ty, count, poly, node.loc);
+                if v != QualType::ERROR {
+                    ty = v;
+                }
+                continue;
+            }
             let ext = node.kind == AttrKind::EXT_VECTOR_TYPE;
             // clang 22 applies `ext_vector_type` to any declared type
             // (spec/sema.md §1.1).
@@ -290,12 +302,7 @@ impl Sema<'_, '_> {
         attrs
             .iter()
             .copied()
-            .filter(|&a| {
-                !matches!(
-                    self.ast.attrs.get(a).kind,
-                    AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE
-                )
-            })
+            .filter(|&a| !self.ast.attrs.get(a).kind.is_vector_type())
             .collect()
     }
 
@@ -358,6 +365,78 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_vector_size_too_large, loc);
             return QualType::ERROR;
         };
+        self.ast.types.vector(elem, count, kind)
+    }
+
+    /// `neon_vector_type(N)` / `neon_polyvector_type(N)` on `elem` (clang
+    /// `HandleNeonVectorTypeAttr`, WP-558): `N` is an element count, an
+    /// integral constant; the element must be a type the target's Neon
+    /// vectors permit (`isPermittedNeonBaseType`, seen through typedefs:
+    /// plain `char` and anything dependent are not); the vector must be
+    /// 64 or 128 bits. `ERROR` after a diagnostic.
+    fn build_neon_vector_type(
+        &mut self,
+        elem: QualType,
+        count: ExprId,
+        poly: bool,
+        loc: Loc,
+    ) -> QualType {
+        let name = if poly { "neon_polyvector_type" } else { "neon_vector_type" };
+        if self.expr_is_value_dependent(count) {
+            let msg = self.diag(DiagId::sema_attribute_requires_integer_constant, loc).arg(name);
+            self.emit(msg);
+            return QualType::ERROR;
+        }
+        let Some(n) = self.vector_size_value(count, name, loc) else {
+            return QualType::ERROR;
+        };
+        let aarch64 = self.abi().triple.arch == kiln_abi::target::Arch::AArch64;
+        let wide = self.abi().pointer_size == 8;
+        let b = self.ast.types.builtin(elem);
+        let ok = b.is_some_and(|b| {
+            use kiln_ast::types::BuiltinType as B;
+            if poly {
+                if aarch64 {
+                    matches!(b, B::UChar | B::UShort | B::ULong | B::ULongLong)
+                } else {
+                    matches!(b, B::SChar | B::Short | B::LongLong)
+                }
+            } else {
+                matches!(
+                    b,
+                    B::SChar
+                        | B::UChar
+                        | B::Short
+                        | B::UShort
+                        | B::Int
+                        | B::UInt
+                        | B::Long
+                        | B::ULong
+                        | B::LongLong
+                        | B::ULongLong
+                        | B::Float
+                        | B::Half
+                        | B::BFloat16
+                ) || (wide && b == B::Double)
+            }
+        });
+        if !ok {
+            let msg =
+                self.diag(DiagId::sema_vector_invalid_element_type, loc).arg(self.ty_arg(elem));
+            self.emit(msg);
+            return QualType::ERROR;
+        }
+        let esize = crate::target::size_align(&self.ast, elem, self.abi()).map_or(0, |s| s.0);
+        let bits = n.saturating_mul(u128::from(esize)).saturating_mul(8);
+        let Ok(count) = u32::try_from(n) else {
+            self.error(DiagId::sema_neon_vector_bad_size, loc);
+            return QualType::ERROR;
+        };
+        if bits != 64 && bits != 128 {
+            self.error(DiagId::sema_neon_vector_bad_size, loc);
+            return QualType::ERROR;
+        }
+        let kind = if poly { VectorKind::NeonPoly } else { VectorKind::Neon };
         self.ast.types.vector(elem, count, kind)
     }
 

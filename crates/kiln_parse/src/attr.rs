@@ -40,6 +40,8 @@ fn takes_expr_args(name: &str) -> bool {
             | "warn_unused_result"
             | "ext_vector_type"
             | "vector_size"
+            | "neon_vector_type"
+            | "neon_polyvector_type"
             | "alloc_size"
             | "alloc_align"
             | "abi_tag"

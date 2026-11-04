@@ -10195,6 +10195,11 @@ fn attr_kind_of(
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
         ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
+        // clang `Clang<"neon_vector_type">` / `Clang<"neon_polyvector_type">`.
+        ("neon_vector_type", _, _) if gnu_syntax || clang_scope => AttrKind::NEON_VECTOR_TYPE,
+        ("neon_polyvector_type", _, _) if gnu_syntax || clang_scope => {
+            AttrKind::NEON_POLYVECTOR_TYPE
+        }
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
         // clang `GNU<"enable_if">`: no `[[...]]` spelling.

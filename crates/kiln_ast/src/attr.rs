@@ -158,6 +158,27 @@ impl AttrKind {
     /// `TypeNullableAttr`, keyword syntax) lets `X _Nullable` name a
     /// nullable class type; WP-554.
     pub const TYPE_NULLABLE: AttrKind = AttrKind(142);
+    /// clang `neon_vector_type(N)` (clang `NeonVectorTypeAttr`): `a` = the
+    /// element-count `ExprId`. Like [`AttrKind::VECTOR_SIZE`], consumed
+    /// into the declared type (a `Vector` of kind `Neon`); WP-558.
+    pub const NEON_VECTOR_TYPE: AttrKind = AttrKind(143);
+    /// clang `neon_polyvector_type(N)`: as [`AttrKind::NEON_VECTOR_TYPE`],
+    /// a `Vector` of kind `NeonPoly`; WP-558.
+    pub const NEON_POLYVECTOR_TYPE: AttrKind = AttrKind(144);
+
+    /// Whether this is one of the vector type attributes, which are
+    /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
+    /// [`AttrKind::EXT_VECTOR_TYPE`], [`AttrKind::NEON_VECTOR_TYPE`],
+    /// [`AttrKind::NEON_POLYVECTOR_TYPE`]).
+    pub fn is_vector_type(self) -> bool {
+        matches!(
+            self,
+            AttrKind::VECTOR_SIZE
+                | AttrKind::EXT_VECTOR_TYPE
+                | AttrKind::NEON_VECTOR_TYPE
+                | AttrKind::NEON_POLYVECTOR_TYPE
+        )
+    }
 }
 
 /// What a loop hint controls (clang `LoopHintAttr::OptionType`).
