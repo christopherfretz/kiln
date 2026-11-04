@@ -184,6 +184,25 @@ lookup found members uses `(*this)` when available; with no `this`, a
 non-static winner is "call to non-static member function without an object
 argument".
 
+A template-id naming member function templates and called without an
+object expression (`get<I>()` found in a class, `B::get<I>()` qualified,
+also inside `B`) is an `UnresolvedLookupExpr` until the call
+(`resolve_unresolved_call`); there, where `this` may be used and its class
+is (derived from) the members' class ([class.mfct.non.static]/2), it becomes
+the UME `(*this).get<I>` with the explicit arguments
+(`implicit_member_template_id`), so the implicit object parameters are
+ranked against `*this` exactly as for `this->get<I>()` and for a
+non-template name (const `*this` picks the const overload, non-const the
+non-const one). A type-dependent `this`, or a dependent base on the way to
+the members' class, gives the dependent `this->get<I>` resolved at
+instantiation. The naming class is the qualifier's class, else the class of
+`*this`. A call whose candidates all need an object (non-static, no
+explicit object parameter) where no such `this` exists (a static member
+function, an unrelated class) is "call to non-static member function
+without an object argument" at the name before overload resolution, with
+or without template arguments, also in an unevaluated operand (clang's
+`IMA_Error_StaticContext` / `IMA_Error_Unrelated`; WP-543).
+
 ### 2.4 Call to an object of class type ([over.call.object])
 `resolve_call_object(obj, args)`. Candidates: every `operator()` of `T`
 (member lookup), then one **surrogate** per non-hidden, non-explicit

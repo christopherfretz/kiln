@@ -571,6 +571,25 @@ answers as of that point.
 - A `Mutating` op in a trial fails silently, before the bridge is called
   (implemented). If the evaluation is also manifestly constant-evaluated,
   that evaluation reports the failure.
+- **A Transactional checkpoint alone is not a trial for the bridge**
+  (WP-538). `MetaCtx::trial` is "a fold, or a Speculative checkpoint is
+  open" (`Memory::in_speculative_trial`), not "any checkpoint is open".
+  The checkpoint `substitute`/`can_substitute` opens only makes the
+  nested evaluations' memory effects undoable; those evaluations are
+  real ones: the constexpr initializer of a variable template
+  specialization `substitute(^^V, args)` instantiates ([temp.inst]/8) is
+  manifestly constant-evaluated, and its metafunction calls may
+  instantiate and evaluate (the traits, the instantiating queries) and
+  throw as anywhere else. The substitution itself keeps its SFINAE
+  frame: an invalid substitution of the arguments is still a failure,
+  not a hard error. A `Mutating` op still fails under any checkpoint (a
+  rollback cannot undo a class definition), with the note "'X' cannot
+  run while a substitution is being tried (std::meta::substitute)" when
+  no trial hides it (follow-up: GCC 16.1 lets a consteval block of a
+  class template instantiated there define an aggregate).
+- A bridge failure with no note outside a trial gets the Oven's note
+  "kiln: internal: 'X' failed without a reason": a silent failure is
+  only for a trial, whose notes are dropped.
 - `can_substitute` runs its instantiation-time evaluations under
   a Transactional checkpoint and rolls back on failure. Interned
   reflections survive the rollback (append-only, §2.4); so does nothing
