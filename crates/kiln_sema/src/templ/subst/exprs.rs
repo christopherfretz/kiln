@@ -436,16 +436,29 @@ impl Substituter<'_, '_, '_> {
                     (OO::Subscript, [b, rest @ ..]) => {
                         Ok(self.sema.act_on_subscript_args(*b, rest, loc, end))
                     }
+                    // One link of a `->` chain outside a member access
+                    // (the access itself re-forms the whole chain from the
+                    // class object, [over.ref]/1): `operator->` selected
+                    // again for the substituted object.
+                    (OO::Arrow, &[a]) => self.sema.rebuild_operator_arrow(a, loc).ok_or(SubstFail),
                     (_, &[a]) | (OO::PlusPlus | OO::MinusMinus, &[a, _]) => {
                         match unary_of(op, args.len() == 2) {
                             Some(u) => Ok(self.sema.act_on_unary(u, a, loc)),
                             None => self.unimplemented("this overloaded operator", loc),
                         }
                     }
+                    // Every binary operator function, `->*` and `,`
+                    // included, names a built-in binary operator.
                     (_, &[l, r]) => match binary_of(op) {
                         Some(b) => Ok(self.sema.act_on_binary(b, l, r, loc)),
                         None => self.unimplemented("this overloaded operator", loc),
                     },
+                    // Not reached by a resolved call: `new`/`delete`
+                    // operator functions are never a `CXXOperatorCallExpr`
+                    // (a new/delete-expression, or a call `operator new(n)`
+                    // of a named function), and the `operator co_await` call
+                    // of a `CoawaitExpr` is formed again from the operand as
+                    // written ([expr.await]/3.3).
                     _ => self.unimplemented("this overloaded operator", loc),
                 }
             }
@@ -475,17 +488,7 @@ impl Substituter<'_, '_, '_> {
                 let arrow = n.has(ExprFlags::ARROW);
                 // `x->m` through `operator->`: the chain is formed again
                 // from the substituted `x` ([over.ref]/1).
-                let mut base = base;
-                while arrow
-                    && ex(self).get(base).kind() == ExprKind::CXXOperatorCallExpr
-                    && ex(self).operator_call_op(base) == kiln_ast::names::OverloadedOperator::Arrow
-                {
-                    let l = ex(self).call_args(base);
-                    match self.sema.ast.lists.iter::<ExprId>(l).next() {
-                        Some(x) => base = x,
-                        None => break,
-                    }
-                }
+                let base = if arrow { self.sema.arrow_chain_object(base) } else { base };
                 let base = self.member_base(base)?;
                 let name = self.sema.ast.decls.get(m).name();
                 if name.is_empty() && self.sema.kind_of(m) == DeclKind::Field {
