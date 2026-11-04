@@ -537,6 +537,70 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A use `e` of variable `d` in a dependent context (a generic
+    /// lambda's body, or a lambda in a template): when `d` is a local of
+    /// an enclosing function that might be usable in constant
+    /// expressions, its capture waits for the end of the full-expression
+    /// ([`Sema::resolve_potential_captures`]); any other was captured
+    /// when named. A reference whose initializer is a constant
+    /// expression is never captured (clang `DoMarkPotentialCapture`).
+    pub(crate) fn note_potential_capture(&mut self, e: ExprId, d: DeclId) {
+        if self.lambdas.is_empty() || !self.might_be_constant(d) || !self.may_need_capture(d) {
+            return;
+        }
+        let is_ref =
+            self.ast.types.is_reference(self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR));
+        if is_ref && self.usable_in_constant_expressions(d) {
+            return;
+        }
+        self.potential_caps.push(e);
+    }
+
+    /// The end of a full-expression `full` in a dependent context:
+    /// [expr.prim.lambda.capture]/7-8 (clang
+    /// `CheckIfAnyEnclosingLambdasMustCaptureAnyPotentialCaptures`).
+    /// Each potential capture is captured by the enclosing lambdas unless
+    /// `full` is not instantiation-dependent and the use is a potential
+    /// result `constant` (an lvalue-to-rvalue conversion is applied to
+    /// it) of a variable usable in constant expressions, which is no
+    /// odr-use. A generic lambda's call operator is instantiated after
+    /// its closure type is complete, so this is where a captured
+    /// reference such as `const T& r = *p; [&](const auto& x) { return x
+    /// == r; }` gets its member (WP-581). When no lambda can capture it,
+    /// the use is diagnosed now if it must be an odr-use in every
+    /// instantiation.
+    pub(crate) fn resolve_potential_captures(&mut self, full: ExprId, constant: &[ExprId]) {
+        let dependent = self.ast.exprs.get(full).deps().intersects(ExprDeps::TYPE_VALUE_INST);
+        for r in std::mem::take(&mut self.potential_caps) {
+            let d = self.ast.exprs.decl(r);
+            if !dependent && constant.contains(&r) && self.usable_in_constant_expressions(d) {
+                continue;
+            }
+            let loc = self.eloc(r);
+            let probe =
+                self.try_capture_var(d, loc, TryCapture::Implicit, None, Loc::INVALID, false);
+            if matches!(probe, Captured::Yes(_)) || !dependent || self.never_constant(d) {
+                let _ =
+                    self.try_capture_var(d, loc, TryCapture::Implicit, None, Loc::INVALID, true);
+            }
+        }
+    }
+
+    /// clang `VariableCanNeverBeAConstantExpression`: variable `d`, with a
+    /// non-dependent type and initializer, is not usable in constant
+    /// expressions.
+    fn never_constant(&mut self, d: DeclId) -> bool {
+        let Some(t) = self.ast.decls.get(d).ty() else { return false };
+        if self.is_dependent_type(t) {
+            return false;
+        }
+        match self.ast.decls.var(d).and_then(|v| v.init) {
+            None => true,
+            Some(init) if self.expr_is_value_dependent(init) => false,
+            Some(_) => !self.usable_in_constant_expressions(d),
+        }
+    }
+
     /// `err_lambda_impcap` for variable `d` used at `loc` in lambda `l`,
     /// which has no capture-default, with clang's notes and fix-it notes
     /// (`buildLambdaCaptureFixit`).

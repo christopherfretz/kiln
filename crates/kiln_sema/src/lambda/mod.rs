@@ -110,6 +110,7 @@ pub(crate) struct LambdaScope {
     pub(crate) depth: usize,
     saved_ctx: DeclId,
     saved_pending_odr: Vec<ExprId>,
+    saved_potential_caps: Vec<ExprId>,
     saved_cleanup: crate::class::CleanupState,
     saved_unevaluated: u32,
     saved_immediate: u32,
@@ -169,6 +170,7 @@ impl Sema<'_, '_> {
             depth: self.scopes.len(),
             saved_ctx: self.ctx,
             saved_pending_odr: Vec::new(),
+            saved_potential_caps: Vec::new(),
             saved_cleanup: crate::class::CleanupState::default(),
             saved_unevaluated: 0,
             saved_immediate: 0,
@@ -550,6 +552,7 @@ impl Sema<'_, '_> {
         let depth = self.scopes.len();
         let saved_ctx = self.ctx;
         let pending = std::mem::take(&mut self.pending_odr);
+        let potential = std::mem::take(&mut self.potential_caps);
         let cleanup = std::mem::take(&mut self.cleanup);
         let unevaluated = std::mem::take(&mut self.unevaluated);
         let immediate = std::mem::take(&mut self.immediate);
@@ -565,6 +568,7 @@ impl Sema<'_, '_> {
             top.depth = depth;
             top.saved_ctx = saved_ctx;
             top.saved_pending_odr = pending;
+            top.saved_potential_caps = potential;
             top.saved_cleanup = cleanup;
             top.saved_unevaluated = unevaluated;
             top.saved_immediate = immediate;
@@ -658,6 +662,7 @@ impl Sema<'_, '_> {
         };
         debug_assert_eq!(top.id, id);
         self.pending_odr = std::mem::take(&mut top.saved_pending_odr);
+        self.potential_caps = std::mem::take(&mut top.saved_potential_caps);
         self.cleanup = top.saved_cleanup;
         self.unevaluated = top.saved_unevaluated;
         self.restore_immediate_state(std::mem::take(&mut top.saved_imm));
@@ -773,6 +778,7 @@ impl Sema<'_, '_> {
         debug_assert_eq!(top.id, id);
         if top.body_open {
             self.pending_odr = std::mem::take(&mut top.saved_pending_odr);
+            self.potential_caps = std::mem::take(&mut top.saved_potential_caps);
             self.cleanup = top.saved_cleanup;
             self.unevaluated = top.saved_unevaluated;
             self.restore_immediate_state(std::mem::take(&mut top.saved_imm));

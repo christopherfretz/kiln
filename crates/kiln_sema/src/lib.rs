@@ -339,6 +339,12 @@ pub struct Sema<'a, 'sm> {
     /// odr-uses ([basic.def.odr]/4): resolved at the end of the
     /// full-expression (spec/sema.md §5.2).
     pub(crate) pending_odr: Vec<ExprId>,
+    /// `DeclRefExpr`s of the current full-expression, in a dependent
+    /// context inside a lambda, naming an enclosing local that might be
+    /// usable in constant expressions: the potential captures decided at
+    /// the end of the full-expression (clang
+    /// `LambdaScopeInfo::PotentialCaptures`; spec/sema-lambda.md §3).
+    pub(crate) potential_caps: Vec<ExprId>,
     /// `&m` of members a `packed` attribute may misalign, reported at the
     /// end of the full-expression (`-Waddress-of-packed-member`).
     pub(crate) misaligned: Vec<packed::Misaligned>,
@@ -998,6 +1004,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             discarding_init: false,
             std: kiln_lex::Std::Cxx26,
             pending_odr: Vec::new(),
+            potential_caps: Vec::new(),
             misaligned: Vec::new(),
             imm: consteval::ImmState::default(),
             defining: Vec::new(),
