@@ -2209,7 +2209,16 @@ impl Substituter<'_, '_, '_> {
                 Initializer::Paren(args, n.loc(), r)
             }
             _ => {
-                let e = self.expr(init)?;
+                // clang `TransformInitializer` strips the full-expression
+                // even of a non-dependent initializer shared with the
+                // pattern: the instantiated variable's conversion goes
+                // inside it (`template <class T> constexpr T v = f().m;`
+                // keeps `f()`'s temporary alive through the copy of `m`).
+                let src = match n.kind() {
+                    ExprKind::ExprWithCleanups => self.sema.ast.exprs.operand(init),
+                    _ => init,
+                };
+                let e = self.expr(src)?;
                 // A braced element of an expansion-init-list: `decl =
                 // {…};` ([stmt.expand]/5.1).
                 if pk == ExprKind::CXXExpansionSelectExpr && self.is_braced_element(e) {
