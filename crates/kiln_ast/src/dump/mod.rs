@@ -2031,12 +2031,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             self.line.push_str(&String::from_utf8_lossy(self.ast.strings.bytes(l)));
             self.line.push_str("\" IsLiteralLabel");
         }
-        if node.kind == AttrKind::TARGET
+        if matches!(node.kind, AttrKind::TARGET | AttrKind::ALIAS)
             && let Some(l) = StringLitId::from_raw(node.a)
         {
             self.line.push_str(" \"");
             self.line.push_str(&String::from_utf8_lossy(self.ast.strings.bytes(l)));
             self.line.push('"');
+        }
+        if node.kind == AttrKind::WEAKREF {
+            // clang keeps the target in the `AliasAttr`.
+            self.line.push_str(" \"\"");
         }
         if node.kind == AttrKind::BUILTIN || node.kind == AttrKind::MIN_VECTOR_WIDTH {
             let _ = write!(self.line, " {}", node.a);

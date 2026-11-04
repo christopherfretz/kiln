@@ -43,6 +43,8 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::USED => "used",
         AttrKind::UNUSED => "unused",
         AttrKind::WEAK => "weak",
+        AttrKind::WEAKREF => "weakref",
+        AttrKind::ALIAS => "alias",
         AttrKind::CONST => "const",
         AttrKind::PURE => "pure",
         AttrKind::COLD => "cold",
@@ -345,6 +347,7 @@ impl Sema<'_, '_> {
         self.check_alignas_subject(d, attrs);
         self.check_init_priority(d, attrs);
         self.check_visibility_attrs(d, attrs);
+        self.check_weak_attrs(d, attrs);
         let kind = self.ast.decls.get(d).kind();
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);
@@ -504,6 +507,175 @@ impl Sema<'_, '_> {
             ),
             _ => true,
         }
+    }
+
+    /// Whether `d`'s semantic context is a namespace or the translation
+    /// unit, through linkage specifications and export declarations
+    /// (clang `getRedeclContext()->isFileContext()`).
+    fn in_file_context(&self, d: DeclId) -> bool {
+        let mut c = self.ast.decls.get(d).ctx();
+        while let Some(ctx) = c {
+            match self.ast.decls.get(ctx).kind() {
+                DeclKind::TranslationUnit | DeclKind::Namespace => return true,
+                DeclKind::LinkageSpec | DeclKind::Export => c = self.ast.decls.get(ctx).ctx(),
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// GNU `weak`, `weakref` and `alias` on `d` (clang
+    /// `handleWeakRefAttr`, `handleAliasAttr`, the end of
+    /// `ProcessDeclAttributeList` and `checkAttributesAfterMerging`):
+    /// - `weakref` appertains to a variable or function (an error
+    ///   otherwise) declared in a namespace (`must be in a global
+    ///   context`); `weakref("target")` becomes an `alias("target")`
+    ///   followed by a bare `weakref`, as in clang;
+    /// - `alias` appertains to a function or a variable with static
+    ///   storage duration and not to a definition: a function that
+    ///   already has an alias (`weakref("x"), alias("y")`) or an
+    ///   externally visible variable definition is `definition 'x' cannot
+    ///   also be an alias` (a function body or a variable initializer is
+    ///   reported when it is seen, [`Sema::check_alias_definition`]);
+    /// - a `weakref` without a target is `must also have an alias
+    ///   attribute`, at the first attribute, and dropped;
+    /// - a `weakref` on a declaration with external linkage is `weakref
+    ///   declaration must have internal linkage` (dropped with its
+    ///   alias), a `weak` one on a declaration with internal linkage
+    ///   `weak declaration cannot have internal linkage` ([basic.link]).
+    pub(crate) fn check_weak_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        let has = |s: &Self, attrs: &[AttrId], k: AttrKind| {
+            attrs.iter().any(|&a| s.ast.attrs.get(a).kind == k)
+        };
+        if !has(self, attrs, AttrKind::WEAKREF)
+            && !has(self, attrs, AttrKind::ALIAS)
+            && !has(self, attrs, AttrKind::WEAK)
+        {
+            return;
+        }
+        let kind = self.ast.decls.get(d).kind();
+        let quoted = format!("'{}'", self.decl_name(d));
+        let first_loc = attrs
+            .iter()
+            .map(|&a| *self.ast.attrs.get(a))
+            .find(|n| n.kind != AttrKind::ASM_LABEL)
+            .map(|n| n.loc);
+        let mut out = Vec::with_capacity(attrs.len() + 1);
+        let mut has_alias = false;
+        for &a in attrs.iter() {
+            let node = *self.ast.attrs.get(a);
+            match node.kind {
+                AttrKind::WEAKREF => {
+                    // clang `WeakRef`: `SubjectList<[Var, Function], ErrorDiag>`.
+                    if !kind.is_function() && kind != DeclKind::Var {
+                        let shown = self.attr_shown(&node, "weakref");
+                        let msg = self
+                            .diag(DiagId::sema_attribute_wrong_decl_type_error, node.loc)
+                            .arg(format!("'{shown}'"))
+                            .arg("variables and functions");
+                        self.emit(msg);
+                        continue;
+                    }
+                    if !self.in_file_context(d) {
+                        let msg = self
+                            .diag(DiagId::sema_attribute_weakref_not_global_context, node.loc)
+                            .arg(quoted.clone());
+                        self.emit(msg);
+                        continue;
+                    }
+                    if node.a != 0 {
+                        let alias = AttrNode { kind: AttrKind::ALIAS, ..node };
+                        out.push(self.ast.attrs.push(alias));
+                        has_alias = true;
+                        out.push(self.ast.attrs.push(AttrNode { a: 0, ..node }));
+                    } else {
+                        out.push(a);
+                    }
+                }
+                AttrKind::ALIAS => {
+                    let global_var = kind == DeclKind::Var
+                        && (self.in_file_context(d)
+                            || self.ast.decls.var(d).is_some_and(|v| {
+                                matches!(
+                                    v.spec.storage(),
+                                    kiln_ast::decl::VarStorage::Static
+                                        | kiln_ast::decl::VarStorage::Extern
+                                )
+                            }));
+                    // clang `Alias`: `SubjectList<[Function, GlobalVar], ErrorDiag>`.
+                    if !kind.is_function() && !global_var {
+                        let shown = self.attr_shown(&node, "alias");
+                        let msg = self
+                            .diag(DiagId::sema_attribute_wrong_decl_type_error, node.loc)
+                            .arg(format!("'{shown}'"))
+                            .arg("functions and global variables");
+                        self.emit(msg);
+                        continue;
+                    }
+                    let definition = if kind.is_function() {
+                        has_alias
+                    } else {
+                        self.is_var_definition(d)
+                            && !kiln_abi::mangle::has_internal_linkage(&self.ast, d)
+                    };
+                    if definition {
+                        let msg = self
+                            .diag(DiagId::sema_alias_is_definition, node.loc)
+                            .arg(quoted.clone())
+                            .arg(0);
+                        self.emit(msg);
+                        continue;
+                    }
+                    has_alias = true;
+                    out.push(a);
+                }
+                _ => out.push(a),
+            }
+        }
+        if !has_alias && has(self, &out, AttrKind::WEAKREF) {
+            let at = first_loc.unwrap_or_else(|| self.ast.decls.get(d).loc());
+            let msg = self.diag(DiagId::sema_attribute_weakref_without_alias, at).arg(quoted);
+            self.emit(msg);
+            out.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::WEAKREF);
+        }
+        let internal = kiln_abi::mangle::has_internal_linkage(&self.ast, d);
+        if let Some(w) = out.iter().copied().find(|&a| self.ast.attrs.get(a).kind == AttrKind::WEAK)
+            && internal
+        {
+            let msg = self.diag(DiagId::sema_attribute_weak_static, self.ast.attrs.get(w).loc);
+            self.emit(msg);
+            out.retain(|&a| a != w);
+        }
+        if let Some(w) =
+            out.iter().copied().find(|&a| self.ast.attrs.get(a).kind == AttrKind::WEAKREF)
+            && !internal
+        {
+            let msg = self.diag(DiagId::sema_attribute_weakref_not_static, self.ast.attrs.get(w).loc);
+            self.emit(msg);
+            out.retain(|&a| !matches!(self.ast.attrs.get(a).kind, AttrKind::WEAKREF | AttrKind::ALIAS));
+        }
+        *attrs = out;
+    }
+
+    /// The definition of `d` (`body`: a function body, else a variable
+    /// initializer) where `d` has an `alias` attribute: `definition 'x'
+    /// cannot also be an alias` at the attribute (clang
+    /// `ActOnStartOfFunctionDef`, `checkAttributesAfterMerging`).
+    pub(crate) fn check_alias_definition(&mut self, d: DeclId) {
+        let Some(node) = self
+            .ast
+            .lists
+            .iter::<AttrId>(self.ast.attrs.of_decl(d))
+            .map(|a| *self.ast.attrs.get(a))
+            .find(|n| n.kind == AttrKind::ALIAS)
+        else {
+            return;
+        };
+        let msg = self
+            .diag(DiagId::sema_alias_is_definition, node.loc)
+            .arg(format!("'{}'", self.decl_name(d)))
+            .arg(0);
+        self.emit(msg);
     }
 
     /// GNU `gnu_inline` on function `d` (clang `handleGNUInlineAttr`):

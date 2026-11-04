@@ -420,6 +420,13 @@ impl Oven {
                     self.ptr_string(ast, p, pointee)
                 ),
             ),
+            Fault::WeakCmp { p, pointee } => (
+                site.loc,
+                format!(
+                    "comparison against address of weak declaration '{}' can only be performed at runtime",
+                    self.ptr_string(ast, p, pointee)
+                ),
+            ),
             Fault::LiteralCmp if self.clang_compat >= 22 => (
                 site.loc,
                 "comparison of addresses of potentially overlapping literals has unspecified value"

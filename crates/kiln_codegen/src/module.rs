@@ -167,6 +167,11 @@ pub(crate) struct Cg<'a> {
     /// The first declaration given each symbol name (clang `Manglings`'
     /// representative declaration, for `err_duplicate_mangled_name`).
     pub reps: FxHashMap<String, DeclId>,
+    /// The symbols declared `extern_weak` for a use of a GNU `weakref`
+    /// declaration that nothing has referenced strongly yet (clang
+    /// `WeakRefReferences`): a later ordinary reference makes the symbol
+    /// external ([`Cg::strong_ref`]).
+    pub weakref_syms: FxHashSet<String>,
     /// Whether a duplicate mangled name was diagnosed (clang hands no
     /// later declaration to code generation after an error).
     pub dup_reported: bool,
@@ -366,6 +371,7 @@ impl<'a> Cg<'a> {
             c1_done: FxHashSet::default(),
             d0_done: FxHashSet::default(),
             reps: FxHashMap::default(),
+            weakref_syms: FxHashSet::default(),
             dup_reported: false,
             thunk_fns: FxHashMap::default(),
             sdone: FxHashSet::default(),
@@ -646,6 +652,9 @@ impl<'a> Cg<'a> {
         if fd.body.is_none() || matches!(fd.templ.get(), Some((TemplLinkKind::Pattern, _))) {
             return Ok(());
         }
+        if ast.weakref_target(d).is_some() {
+            return Ok(());
+        }
         if fd.spec.is_immediate() {
             return Ok(());
         }
@@ -794,6 +803,11 @@ impl<'a> Cg<'a> {
     fn emit_global_var(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
+        // clang `EmitGlobal`: a weak reference produces no output by
+        // itself; a use names its target ([`Cg::get_gvar`]).
+        if ast.weakref_target(d).is_some() {
+            return Ok(());
+        }
         // [dcl.link]/8: `extern "C" int x;` declares, like `extern`.
         let ext = v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(d);
         // [temp.expl.spec]/14: `template<> int C<char>::n;` declares: uses
@@ -1981,6 +1995,20 @@ impl<'a> Cg<'a> {
         if let Some(&f) = self.fns.get(&first) {
             return Ok(f);
         }
+        if let Some(target) = self.weakref_symbol(first) {
+            let f = match self.m.get_function(&target) {
+                Some(f) => f,
+                None => {
+                    let sig = self.decl_sig(first)?;
+                    let f = self.declare_fn(&target, first, &sig)?;
+                    self.m.func_mut(f).linkage = Linkage::ExternWeak;
+                    self.weakref_syms.insert(target);
+                    f
+                }
+            };
+            self.fns.insert(first, f);
+            return Ok(f);
+        }
         let name = mangle::mangle_decl(ast, &mut self.anon, first);
         self.note_rep(&name, first);
         let sig = self.decl_sig(first)?;
@@ -1989,6 +2017,9 @@ impl<'a> Cg<'a> {
         // from a `throw`), or a separately declared redeclaration of the
         // same `extern "C"` function (clang `GetOrCreateLLVMFunction`
         // returns the entry unchanged).
+        if self.m.get_function(&name).is_some() {
+            self.strong_ref(&name, first);
+        }
         let f = match self.m.get_function(&name) {
             Some(f) if self.m.func(f).ty() == sig.fn_ty => {
                 let nothrow = sig.nothrow || ast.has_nothrow_attr(first);
@@ -2033,6 +2064,29 @@ impl<'a> Cg<'a> {
             self.to_emit.push(Def::Decl(def));
         }
         Ok(f)
+    }
+
+    /// The symbol a use of the GNU `weakref` declaration `first` refers
+    /// to ([`kiln_ast::Ast::weakref_target`]).
+    fn weakref_symbol(&self, first: DeclId) -> Option<String> {
+        let lit = self.ast.weakref_target(first)?;
+        Some(String::from_utf8_lossy(self.ast.strings.bytes(lit)).into_owned())
+    }
+
+    /// An ordinary reference (or definition) of symbol `name` by `first`:
+    /// a symbol only `weakref` declarations referred to so far becomes an
+    /// external reference unless `first` is itself `weak` (clang
+    /// `GetOrCreateLLVMFunction` / `GetOrCreateLLVMGlobal` erasing it from
+    /// `WeakRefReferences`).
+    fn strong_ref(&mut self, name: &str, first: DeclId) {
+        if !self.weakref_syms.remove(name) || self.ast.is_weak_decl(first) {
+            return;
+        }
+        if let Some(f) = self.m.get_function(name) {
+            self.m.func_mut(f).linkage = Linkage::External;
+        } else if let Some(g) = self.m.get_global(name) {
+            self.m.global_mut(g).linkage = Linkage::External;
+        }
     }
 
     /// Declares the function `name` for declaration `first` with
@@ -2140,6 +2194,9 @@ impl<'a> Cg<'a> {
         // clang `setGVProperties` on a declaration: only a known
         // visibility (spec/codegen.md "Symbol visibility").
         let vis = self.decl_visibility(first, false);
+        // clang `SetFunctionAttributes`: a declaration of a `weak`
+        // function is an `extern_weak` reference.
+        let weak = ast.is_weak_decl(first) && ast.weakref_target(first).is_none();
         {
             let func = self.m.func_mut(f);
             func.visibility = vis;
@@ -2148,6 +2205,9 @@ impl<'a> Cg<'a> {
             func.attrs.params = params;
             if virt {
                 func.unnamed_addr = UnnamedAddr::Global;
+            }
+            if weak && func.is_declaration() {
+                func.linkage = Linkage::ExternWeak;
             }
         }
         self.nounwind.insert(f, nothrow);
@@ -2188,11 +2248,19 @@ impl<'a> Cg<'a> {
         } else {
             self.decl_visibility(d, !available_externally)
         };
+        // clang `getLLVMLinkageForDeclarator`: a `weak` definition is
+        // `weak` (ahead of the inline and `available_externally` rules;
+        // an inline one keeps its comdat).
+        let weak_attr = !internal && self.ast.is_weak_decl(d);
         let func = self.m.func_mut(f);
         func.visibility = vis;
         if internal {
             func.linkage = Linkage::Internal;
             func.dso_local = false;
+        } else if weak_attr {
+            func.linkage = Linkage::Weak;
+            func.dso_local = true;
+            func.comdat = comdat;
         } else if available_externally {
             // No comdat and not `dso_local` (clang `setDSOLocal` skips
             // `available_externally`).
@@ -2298,7 +2366,31 @@ impl<'a> Cg<'a> {
         }
         let Some(ty) = ast.decls.get(first).ty() else { return err(None, "variable without type") };
         let lt = self.mty(ty);
+        // clang `GetWeakRefReference`: a use of a `weakref` variable is a
+        // use of its target, declared `extern_weak` unless present.
+        if let Some(target) = self.weakref_symbol(first) {
+            if let Some(g) = self.m.get_global(&target) {
+                self.gvars.insert(first, g);
+                return Ok(g);
+            }
+            let g = self.m.add_global(&target, lt);
+            let align = self.var_align(first);
+            let gv = self.m.global_mut(g);
+            gv.linkage = Linkage::ExternWeak;
+            gv.align = Some(align);
+            gv.is_constant = constant_storage(ast, ty);
+            self.gvars.insert(first, g);
+            self.weakref_syms.insert(target);
+            return Ok(g);
+        }
         let name = self.var_symbol(first);
+        if self.weakref_syms.contains(&name)
+            && let Some(g) = self.m.get_global(&name)
+        {
+            self.strong_ref(&name, first);
+            self.gvars.insert(first, g);
+            return Ok(g);
+        }
         // clang `GetOrCreateLLVMGlobal` returns an existing global of the
         // name unchanged, whatever its type: variables whose asm labels
         // name one symbol share it.
@@ -2314,8 +2406,11 @@ impl<'a> Cg<'a> {
         let align = self.var_align(first);
         let constant = constant_storage(ast, ty);
         let vis = self.decl_visibility(first, false);
+        // clang `GetOrCreateLLVMGlobal`: a declaration of a `weak`
+        // variable is an `extern_weak` reference.
+        let weak = ast.is_weak_decl(first);
         let gv = self.m.global_mut(g);
-        gv.linkage = Linkage::External;
+        gv.linkage = if weak { Linkage::ExternWeak } else { Linkage::External };
         gv.visibility = vis;
         gv.align = Some(align);
         gv.is_constant = constant;
@@ -2440,8 +2535,10 @@ impl<'a> Cg<'a> {
             // with `IsForDefinition` replaces it by one of the
             // initializer's type at the end of the module).
             let shared = mangle::asm_label(ast, first)
+                .or_else(|| self.weakref_syms.contains(&name).then(String::new))
                 .and_then(|_| self.m.get_global(&name))
                 .filter(|&g| self.m.global(g).initializer().is_none());
+            self.weakref_syms.remove(&name);
             let g = match shared {
                 Some(g) => {
                     self.m.retype_global_to_end(g, ity);
@@ -2468,6 +2565,7 @@ impl<'a> Cg<'a> {
         }
         // Set before the initialization function, whose guard copies it.
         let vis = if internal { Visibility::Default } else { self.decl_visibility(d, true) };
+        let weak_attr = !internal && ast.is_weak_decl(d);
         let gv = self.m.global_mut(g);
         gv.is_constant = constant;
         gv.align = Some(align);
@@ -2475,6 +2573,12 @@ impl<'a> Cg<'a> {
         if internal {
             gv.linkage = Linkage::Internal;
             gv.dso_local = false;
+        } else if weak_attr {
+            // clang `getLLVMLinkageForDeclarator`: `weak_odr` for a
+            // constant.
+            gv.linkage = if constant { Linkage::WeakOdr } else { Linkage::Weak };
+            gv.dso_local = true;
+            gv.comdat = comdat;
         } else if inline {
             gv.linkage = instantiated.unwrap_or(Linkage::LinkOnceOdr);
             gv.dso_local = true;

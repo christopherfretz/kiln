@@ -137,7 +137,9 @@ impl Sema<'_, '_> {
             let d = self.ast.decls.get(r);
             if d.has(DeclFlags::INVALID)
                 || d.has(DeclFlags::USED)
-                || [AttrKind::UNUSED, AttrKind::MAYBE_UNUSED, AttrKind::USED]
+                // A `weakref` declaration defines nothing (clang emits no
+                // unused-entity warning for one).
+                || [AttrKind::UNUSED, AttrKind::MAYBE_UNUSED, AttrKind::USED, AttrKind::WEAKREF]
                     .iter()
                     .any(|&k| self.find_attr(r, k).is_some())
             {

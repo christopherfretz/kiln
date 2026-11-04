@@ -183,6 +183,20 @@ impl AttrKind {
     /// `MinVectorWidthAttr`): `a` = N, the least `"min-legal-vector-width"`
     /// of its definition (WP-630).
     pub const MIN_VECTOR_WIDTH: AttrKind = AttrKind(171);
+    /// GNU `weakref` / `weakref("target")` on a namespace-scope function
+    /// or variable with internal linkage (clang `WeakRefAttr`). As
+    /// written, `a` is the argument's `StringLitId` (0: none); the
+    /// declaration's checks split `weakref("target")` into an
+    /// [`AttrKind::ALIAS`] naming the target and a `WEAKREF` with `a` = 0,
+    /// as clang does. A use of the declaration is a use of the symbol
+    /// `target`, an `extern_weak` reference unless the symbol is also
+    /// referenced or defined normally ([`crate::Ast::weakref_target`]).
+    /// Numbered apart from the runs above.
+    pub const WEAKREF: AttrKind = AttrKind(180);
+    /// GNU `alias("target")` (clang `AliasAttr`): `a` = the target's
+    /// `StringLitId`. kiln keeps it only together with `weakref`, whose
+    /// target it names.
+    pub const ALIAS: AttrKind = AttrKind(181);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

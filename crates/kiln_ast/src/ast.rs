@@ -555,6 +555,41 @@ impl Ast {
         })
     }
 
+    /// Whether some declaration of `d` carries `attr`.
+    fn any_redecl_has(&self, d: DeclId, attr: crate::attr::AttrKind) -> bool {
+        self.redecls_of(d).any(|r| {
+            self.lists
+                .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
+                .any(|a| self.attrs.get(a).kind == attr)
+        })
+    }
+
+    /// Whether `d` is a weak declaration (clang `Decl::isWeak`): some
+    /// declaration of it carries GNU `weak` or `weakref`. Its address may
+    /// be null at run time, so a test of it is not a constant expression
+    /// ([expr.const]) and is not folded.
+    pub fn is_weak_decl(&self, d: DeclId) -> bool {
+        self.any_redecl_has(d, crate::attr::AttrKind::WEAK)
+            || self.any_redecl_has(d, crate::attr::AttrKind::WEAKREF)
+    }
+
+    /// The symbol a GNU `weakref` declaration `d` refers to: the target of
+    /// the `alias` attribute that accompanies its `weakref` (clang
+    /// `GetWeakRefReference`), or `None` when `d` is no weak reference.
+    pub fn weakref_target(&self, d: DeclId) -> Option<crate::ids::StringLitId> {
+        use crate::ids::RawId as _;
+        if !self.any_redecl_has(d, crate::attr::AttrKind::WEAKREF) {
+            return None;
+        }
+        self.redecls_of(d).find_map(|r| {
+            self.lists
+                .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
+                .map(|a| self.attrs.get(a))
+                .find(|a| a.kind == crate::attr::AttrKind::ALIAS)
+                .and_then(|a| crate::ids::StringLitId::from_raw(a.a))
+        })
+    }
+
     /// The label of a GNU `goto *&&l;` (clang `IndirectGotoStmt::
     /// getConstantTarget`: the target with parentheses and implicit casts
     /// peeled is an `AddrLabelExpr`), which behaves as `goto l;`.

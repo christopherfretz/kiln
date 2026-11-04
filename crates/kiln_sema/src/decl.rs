@@ -5441,6 +5441,7 @@ impl Sema<'_, '_> {
             Initializer::Paren(es, l, _) if es.len() == 1 => Some(*l),
             _ => None,
         };
+        self.check_alias_definition(v);
         self.act_on_init_inner(v, init);
         self.check_static_tls(v, paren);
         let constinit_ok = self.check_constinit(v);
@@ -6543,6 +6544,7 @@ impl Sema<'_, '_> {
     /// Starts the definition of function `f` at `{`: checks for a
     /// redefinition, opens the function scope with the parameters.
     pub fn act_on_start_function_def(&mut self, f: DeclId) {
+        self.check_alias_definition(f);
         // A deleted function is defined by its first declaration.
         let deleted = Some(self.ast.first(f)).filter(|&p| p != f && self.is_deleted_fn(p));
         if let Some(prev) = deleted.or_else(|| self.ast.definition(f))
@@ -9621,6 +9623,9 @@ impl Sema<'_, '_> {
         if kind == AttrKind::TARGET {
             return self.target_attribute(syntax, &n, args, loc);
         }
+        if kind == AttrKind::WEAKREF || kind == AttrKind::ALIAS {
+            return self.weakref_alias_attribute(kind, syntax, &n, args, loc);
+        }
         if kind == AttrKind::MIN_VECTOR_WIDTH {
             return self.min_vector_width_attribute(syntax, args, loc);
         }
@@ -9791,6 +9796,53 @@ impl Sema<'_, '_> {
         };
         let a = self.ast.exprs.string_lit(lit).raw();
         let node = AttrNode { kind: AttrKind::TARGET, syntax, flags: 0, loc, a, b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// GNU `weakref` / `weakref("target")` and `alias("target")` (clang
+    /// `handleWeakRefAttr`, `handleAliasAttr`): `weakref` takes at most
+    /// one argument, `alias` exactly one, a string literal (`expected
+    /// string literal` at the argument otherwise; an identifier is not
+    /// looked up). `a` is the literal's `StringLitId` (0 for a bare
+    /// `weakref`); the declaration's checks do the rest
+    /// ([`Sema::check_weak_attrs`]).
+    fn weakref_alias_attribute(
+        &mut self,
+        kind: AttrKind,
+        syntax: AttrSyntax,
+        n: &str,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let weakref = kind == AttrKind::WEAKREF;
+        if weakref && args.len() > 1 {
+            let msg = self.diag(DiagId::sema_attribute_too_many_arguments_one, loc).arg("'weakref'");
+            self.emit(msg);
+            return None;
+        }
+        if !weakref && args.len() != 1 {
+            let msg =
+                self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(n.to_owned()).arg("1");
+            self.emit(msg);
+            return None;
+        }
+        let a = match args.first() {
+            None => 0,
+            Some(arg) => {
+                let (lit, at) = match arg {
+                    AttrArg::Expr(e) => (self.string_lit_of(*e), self.begin_loc(*e)),
+                    AttrArg::Ident(_, at) => (None, *at),
+                    AttrArg::Type(_) => (None, loc),
+                };
+                let Some(lit) = lit else {
+                    let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg(n.to_owned());
+                    self.emit(msg);
+                    return None;
+                };
+                self.ast.exprs.string_lit(lit).raw()
+            }
+        };
+        let node = AttrNode { kind, syntax, flags: 0, loc, a, b: 0 };
         Some(self.ast.attrs.push(node))
     }
 
@@ -10413,6 +10465,9 @@ fn attr_kind_of(
         ("always_inline", _, true) => AttrKind::ALWAYS_INLINE,
         ("gnu_inline", _, true) => AttrKind::GNU_INLINE,
         ("weak", _, true) => AttrKind::WEAK,
+        // clang `GCC<"weakref">`, `GCC<"alias">`.
+        ("weakref", _, true) => AttrKind::WEAKREF,
+        ("alias", _, true) => AttrKind::ALIAS,
         ("const", _, true) => AttrKind::CONST,
         ("pure", _, true) => AttrKind::PURE,
         ("cold", _, true) => AttrKind::COLD,

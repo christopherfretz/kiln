@@ -258,6 +258,14 @@ pub(crate) enum Fault {
         pointee: OTy,
     },
     LiteralCmp,
+    /// `==`/`!=` of pointers to different objects, `p` the address of a
+    /// weak declaration ([`kiln_ast::Ast::is_weak_decl`]), which may be
+    /// null or equal to another object's at run time (clang
+    /// `note_constexpr_pointer_weak_comparison`).
+    WeakCmp {
+        p: u64,
+        pointee: OTy,
+    },
     /// `==`/`!=` of pointers to different objects one of which is of
     /// unknown identity ([`Origin::Unknown`], P2280).
     PtrCmpUnknown {
@@ -856,7 +864,17 @@ impl Oven {
                     }
                     pc += 6;
                 }
-                Op::ToBool | Op::PtrToBool => {
+                Op::ToBool => {
+                    reg!(0) = u128::from(reg!(1) != 0);
+                    pc += 3;
+                }
+                Op::PtrToBool => {
+                    // The address of a weak declaration may be null at run
+                    // time: no value, and no note (clang
+                    // `EvalPointerValueAsBool`).
+                    if self.is_weak_ptr(b, reg!(1) as u64) {
+                        fail!(Fault::Quiet)
+                    }
                     reg!(0) = u128::from(reg!(1) != 0);
                     pc += 3;
                 }
@@ -935,7 +953,9 @@ impl Oven {
                     pc += 5;
                 }
                 Op::PtrCmp => {
-                    match self.ptr_cmp(reg!(1) as u64, reg!(2) as u64, OTy(arg!(3) as u32), aux) {
+                    let (p, q) = (reg!(1) as u64, reg!(2) as u64);
+                    let weak = (self.is_weak_ptr(b, p), self.is_weak_ptr(b, q));
+                    match self.ptr_cmp(p, q, OTy(arg!(3) as u32), aux, weak) {
                         Ok(r) => reg!(0) = u128::from(r),
                         Err(f) => fail!(f),
                     }
@@ -2196,13 +2216,57 @@ impl Oven {
         self.alloc_any(p).is_some_and(|a| p.off >= a.size && a.size != 0)
     }
 
-    fn ptr_cmp(&self, p: u64, q: u64, pointee: OTy, c: u32) -> Result<bool, Fault> {
+    /// Whether the raw pointer `raw` is the address of (an object in) a
+    /// weak declaration: a function or a namespace-scope or static
+    /// variable that is `weak` or a `weakref` (clang `IsWeakLValue`).
+    fn is_weak_ptr(&self, b: &dyn SemaBridge, raw: u64) -> bool {
+        if raw == 0 {
+            return false;
+        }
+        let p = Ptr::decode(raw);
+        if !p.is_static() {
+            return false;
+        }
+        let d = if p.is_fn() {
+            self.funcs.get(p.off as usize).and_then(|f| f.decl)
+        } else {
+            // A pointer pointing at nothing keeps its slot, not its
+            // generation; static slots are never reused.
+            let a = if Ptr::is_nowhere(raw) {
+                self.mem.statics.get((p.slot & !crate::mem::STATIC_BIT) as usize)
+            } else {
+                self.alloc_any(p)
+            };
+            match a.map(|a| a.origin) {
+                Some(Origin::Global(d) | Origin::External(d) | Origin::Unknown(d)) => Some(d),
+                _ => None,
+            }
+        };
+        d.is_some_and(|d| b.ast().is_weak_decl(d))
+    }
+
+    /// `weak`: whether `p` and `q` are addresses of weak declarations
+    /// ([`Self::is_weak_ptr`]).
+    fn ptr_cmp(
+        &self,
+        p: u64,
+        q: u64,
+        pointee: OTy,
+        c: u32,
+        weak: (bool, bool),
+    ) -> Result<bool, Fault> {
         let eq = c == cmp::EQ || c == cmp::NE;
         let same =
             (p == 0 && q == 0) || (p != 0 && q != 0 && Ptr::alloc_key(p) == Ptr::alloc_key(q));
         if same {
             let (a, b) = (Ptr::decode(p), Ptr::decode(q));
             return Ok(compare(c, a.off.cmp(&b.off)));
+        }
+        // clang: whether weak symbols end up at one address (or null) is
+        // known only at run time (also through a cast that left the
+        // pointer pointing at nothing, `(void *)&f`).
+        if eq && (weak.0 || weak.1) {
+            return Err(Fault::WeakCmp { p: if weak.0 { p } else { q }, pointee });
         }
         if let Some((sp, sq)) = Ptr::nowhere_slots(p, q) {
             // clang compares an invalid designator's base and offset: an
