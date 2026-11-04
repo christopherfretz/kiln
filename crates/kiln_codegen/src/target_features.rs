@@ -1,0 +1,145 @@
+//! Per-function `AArch64` target features: the `target("...")` attribute
+//! and clang's `checkTargetFeatures` (spec/codegen.md "Target features";
+//! WP-558).
+
+use std::collections::BTreeMap;
+
+use kiln_ast::attr::AttrKind;
+use kiln_ast::decl::builtin::neon;
+use kiln_ast::ids::RawId;
+use kiln_ast::{DeclId, ExprId, StringLitId};
+use kiln_diag::{Diag, DiagId};
+use kiln_source::Span;
+
+use crate::module::Cg;
+
+/// A feature name to whether it is on.
+pub(crate) type FeatureMap = BTreeMap<String, bool>;
+
+impl Cg<'_> {
+    /// The `target("...")` string of function `d`: the first redeclaration
+    /// carrying one (an instantiation carries its pattern's attributes).
+    pub(crate) fn target_attr_str(&self, d: DeclId) -> Option<String> {
+        let ast = self.ast;
+        ast.redecls_of(d).find_map(|r| {
+            ast.lists.iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r)).find_map(|a| {
+                let n = ast.attrs.get(a);
+                let l = StringLitId::from_raw(n.a).filter(|_| n.kind == AttrKind::TARGET)?;
+                Some(String::from_utf8_lossy(ast.strings.bytes(l)).into_owned())
+            })
+        })
+    }
+
+    /// The features of `d`'s `target("...")` attribute, if it has one and
+    /// the driver gave a parser ([`crate::CodegenOptions::target_attr`]).
+    fn target_attr_features(&self, d: DeclId) -> Option<crate::TargetAttrFeatures> {
+        let parse = self.opts.target_attr?;
+        let s = self.target_attr_str(d)?;
+        let module: Vec<String> = self
+            .feature_map(None)
+            .into_iter()
+            .map(|(n, on)| format!("{}{n}", if on { '+' } else { '-' }))
+            .collect();
+        Some(parse(&s, &module, self.opts.clang_compat >= 22))
+    }
+
+    /// The `AArch64` features of function `d` (`None`: the module's): the
+    /// base `fp-armv8`, `neon`, `outline-atomics` (per
+    /// `-m[no-]outline-atomics`), `v8a` and `-fmv`, then
+    /// [`crate::CodegenOptions::target_features`], then the features of
+    /// `d`'s `target("...")` attribute (clang `getFunctionFeatureMap`).
+    pub(crate) fn feature_map(&self, d: Option<DeclId>) -> FeatureMap {
+        let mut f: FeatureMap = [
+            ("fp-armv8", true),
+            ("neon", true),
+            ("outline-atomics", self.opts.outline_atomics),
+            ("v8a", true),
+            ("fmv", false),
+        ]
+        .into_iter()
+        .map(|(n, on)| (n.to_owned(), on))
+        .collect();
+        let attr = d.and_then(|d| self.target_attr_features(d));
+        let attr = attr.iter().flat_map(|a| &a.features);
+        for e in self.opts.target_features.iter().chain(attr) {
+            if let Some((sign, name)) = e.split_at_checked(1) {
+                f.insert(name.to_owned(), sign == "+");
+            }
+        }
+        f
+    }
+
+    /// The name clang's `checkTargetFeatures` diagnostics print for `d`.
+    fn feature_diag_name(&self, d: DeclId) -> String {
+        let ast = self.ast;
+        ast.decls
+            .get(d)
+            .name()
+            .as_ident()
+            .map_or_else(String::new, |n| ast.symbols().as_str(n).to_owned())
+    }
+
+    /// clang `checkTargetFeatures` for the call `e` of NEON builtin `b`
+    /// from the current function: its required-feature expression must
+    /// hold for the function's features, else `err_builtin_needs_feature`
+    /// at the call. Returns whether it holds.
+    pub(crate) fn neon_builtin_features_ok(&mut self, b: u32, e: ExprId) -> bool {
+        let Some(row) = neon::row(b) else { return true };
+        let on = self.feature_map(self.f.decl);
+        if neon::features_hold(row.features, |n| on.get(n) == Some(&true)) {
+            return true;
+        }
+        let d = Diag::new(DiagId::cg_builtin_needs_feature, Span::empty(self.ast.begin_loc(e)))
+            .arg(row.info.name.to_owned())
+            .arg(row.features.to_owned());
+        self.diags.push(d);
+        false
+    }
+
+    /// clang `EmitCall` + `checkTargetFeatures` for the direct call `e` of
+    /// `callee` (`AArch64`): an `always_inline` callee, when it or the
+    /// current function has a `target("...")` attribute, needs every
+    /// feature it is compiled with to be on in the caller, else
+    /// `err_function_needs_feature` at the call naming the first missing
+    /// one: the callee attribute's `+` features in order, then the rest
+    /// of its features (sorted; clang walks a hash map). A callee without
+    /// the attribute is checked feature by feature, one error each.
+    pub(crate) fn target_feature_call_check(&mut self, e: ExprId, callee: DeclId) {
+        if self.opts.target_attr.is_none() || !self.has_always_inline_attr(callee) {
+            return;
+        }
+        let Some(caller) = self.f.decl else { return };
+        let callee_attr = self.target_attr_features(callee);
+        if callee_attr.is_none() && self.target_attr_str(caller).is_none() {
+            return;
+        }
+        let have = self.feature_map(Some(caller));
+        let need = self.feature_map(Some(callee));
+        let missing: Vec<String> = match &callee_attr {
+            Some(a) => {
+                let direct = a.features.iter().filter_map(|f| f.strip_prefix('+'));
+                let all = need.iter().filter(|e| *e.1).map(|e| e.0.as_str());
+                direct
+                    .filter(|f| need.get(*f) == Some(&true))
+                    .chain(all)
+                    .find(|f| have.get(*f) != Some(&true))
+                    .map(str::to_owned)
+                    .into_iter()
+                    .collect()
+            }
+            None => need
+                .iter()
+                .filter(|e| *e.1 && have.get(e.0) != Some(&true))
+                .map(|e| e.0.clone())
+                .collect(),
+        };
+        let span = Span::empty(self.ast.begin_loc(e));
+        for f in missing {
+            let d = Diag::new(DiagId::cg_function_needs_feature, span)
+                .arg(self.feature_diag_name(caller))
+                .arg(self.feature_diag_name(callee))
+                .arg(f);
+            self.diags.push(d);
+        }
+    }
+}

@@ -391,6 +391,9 @@ impl Cg<'_> {
         if id::is_coro(b) {
             return self.emit_coro_builtin(b, e);
         }
+        if id::neon::is_neon(b) {
+            return self.emit_neon_builtin(b, e);
+        }
         let v = match b {
             id::IS_CONSTANT_EVALUATED | id::KILN_PLAINLY_CONSTANT_EVALUATED => {
                 V::C(self.m.const_bool(false))

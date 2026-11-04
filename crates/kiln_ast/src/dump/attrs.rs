@@ -57,6 +57,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::EXT_VECTOR_TYPE => "ExtVectorType",
         AttrKind::NEON_VECTOR_TYPE => "NeonVectorType",
         AttrKind::NEON_POLYVECTOR_TYPE => "NeonPolyVectorType",
+        AttrKind::TARGET => "Target",
         AttrKind::ASM_LABEL => "AsmLabel",
         AttrKind::BUILTIN => "Builtin",
         AttrKind::USING_IF_EXISTS => "UsingIfExists",

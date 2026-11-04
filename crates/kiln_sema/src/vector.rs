@@ -299,11 +299,7 @@ impl Sema<'_, '_> {
     /// `attrs` without the vector attributes (applied separately by
     /// [`Self::apply_declspec_vector_attrs`]).
     pub(crate) fn non_vector_attrs(&self, attrs: &[AttrId]) -> Vec<AttrId> {
-        attrs
-            .iter()
-            .copied()
-            .filter(|&a| !self.ast.attrs.get(a).kind.is_vector_type())
-            .collect()
+        attrs.iter().copied().filter(|&a| !self.ast.attrs.get(a).kind.is_vector_type()).collect()
     }
 
     /// The vector of `elem` sized by `size` (the element count for

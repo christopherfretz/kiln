@@ -2,8 +2,8 @@
 // arm_fp16.inc (clang 19's names: those resource/include/arm_neon.h and
 // arm_fp16.h reference). Do not edit.
 
-use crate::decl::builtin::neon::r;
 use crate::decl::builtin::neon::Row;
+use crate::decl::builtin::neon::r;
 
 /// Every AArch64 NEON / FP16 builtin, sorted by name: (name, prototype,
 /// required target features).

@@ -1841,6 +1841,13 @@ impl<'a> Cg<'a> {
     /// with the [`Self::size_attrs`]; an `optnone` function drops those
     /// again.
     pub fn target_attrs(&self, out: &mut Vec<Attr>) {
+        self.target_attrs_of(out, None);
+    }
+
+    /// [`Self::target_attrs`] of function `d` (`None`: a helper without a
+    /// declaration): on `AArch64` its `target("...")` attribute adds to
+    /// the `target-features` ([`Self::feature_map`]).
+    pub(crate) fn target_attrs_of(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
         self.size_attrs(out);
         if let Some(fp) = self.frame_pointer().attr() {
             out.push(Attr::string("frame-pointer", fp));
@@ -1853,29 +1860,15 @@ impl<'a> Cg<'a> {
             out.push(Attr::string("tune-cpu", "generic"));
         } else {
             out.push(Attr::string("target-cpu", "generic"));
-            out.push(Attr::string("target-features", &self.aarch64_features()));
+            out.push(Attr::string("target-features", &self.aarch64_features(d)));
         }
     }
 
-    /// The `AArch64` `target-features` string: the base `+fp-armv8`,
-    /// `+neon`, `±outline-atomics`, `+v8a`, `-fmv`, overridden by
-    /// [`CodegenOptions::target_features`]; clang lists the enabled
-    /// features sorted, then the disabled ones sorted.
-    fn aarch64_features(&self) -> String {
-        let mut f: std::collections::BTreeMap<&str, bool> = [
-            ("fp-armv8", true),
-            ("neon", true),
-            ("outline-atomics", self.opts.outline_atomics),
-            ("v8a", true),
-            ("fmv", false),
-        ]
-        .into_iter()
-        .collect();
-        for e in &self.opts.target_features {
-            if let Some((sign, name)) = e.split_at_checked(1) {
-                f.insert(name, sign == "+");
-            }
-        }
+    /// The `AArch64` `target-features` string of function `d`
+    /// ([`Self::feature_map`]); clang lists the enabled features sorted,
+    /// then the disabled ones sorted.
+    fn aarch64_features(&self, d: Option<DeclId>) -> String {
+        let f = self.feature_map(d);
         let on = f.iter().filter(|e| *e.1).map(|e| format!("+{}", e.0));
         let off = f.iter().filter(|e| !*e.1).map(|e| format!("-{}", e.0));
         on.chain(off).collect::<Vec<_>>().join(",")
@@ -2046,7 +2039,7 @@ impl<'a> Cg<'a> {
         if ast.is_noreturn_fn(first) {
             fa.push(Attr::Flag(AttrKind::NoReturn));
         }
-        self.target_attrs(&mut fa);
+        self.target_attrs_of(&mut fa, Some(first));
         let optnone = self.has_fn_attr(first, kiln_ast::attr::AttrKind::OPTNONE);
         if optnone {
             strip_size_attrs(&mut fa);
@@ -2133,8 +2126,16 @@ impl<'a> Cg<'a> {
 
     /// The function attributes of a definition.
     pub fn def_fn_attrs(&mut self, f: DefFnAttrs) -> AttrSetId {
-        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn, inline, extra } =
-            f;
+        let DefFnAttrs {
+            decl,
+            is_main,
+            nounwind,
+            mustprogress,
+            vector_width,
+            noreturn,
+            inline,
+            extra,
+        } = f;
         let mut a = Vec::new();
         if inline == DefInline::Always {
             a.push(Attr::Flag(AttrKind::AlwaysInline));
@@ -2163,7 +2164,7 @@ impl<'a> Cg<'a> {
         a.extend(extra);
         a.push(Attr::UwTable(UwTableKind::Async));
         self.vscale_attr(&mut a);
-        self.target_attrs(&mut a);
+        self.target_attrs_of(&mut a, decl);
         if inline == DefInline::OptNone {
             // `SetLLVMFunctionAttributesForDefinition` removes them.
             strip_size_attrs(&mut a);
@@ -2697,6 +2698,8 @@ pub(crate) enum DefInline {
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools, reason = "independent attribute flags")]
 pub(crate) struct DefFnAttrs {
+    /// The function (its `target("...")` attribute).
+    pub(crate) decl: Option<DeclId>,
     pub(crate) is_main: bool,
     pub(crate) nounwind: bool,
     pub(crate) mustprogress: bool,

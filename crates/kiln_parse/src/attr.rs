@@ -61,6 +61,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "format"
             | "enable_if"
             | "diagnose_if"
+            | "target"
     )
 }
 

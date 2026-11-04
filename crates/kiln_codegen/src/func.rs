@@ -652,6 +652,7 @@ impl Cg<'_> {
             inline
         };
         let fa = self.def_fn_attrs(crate::module::DefFnAttrs {
+            decl: Some(d),
             is_main,
             nounwind: nothrow_def,
             mustprogress: self.f.mustprogress,

@@ -2304,8 +2304,7 @@ impl Parser<'_, '_> {
         self.s.act_on_type_position_attrs(&mut attrs, true);
         attrs.retain(|&a| {
             let n = self.s.ast.attrs.get(a);
-            n.syntax == AttrSyntax::Gnu
-                && !n.kind.is_vector_type()
+            n.syntax == AttrSyntax::Gnu && !n.kind.is_vector_type()
         });
         self.chunk_decl_attrs.extend(attrs);
     }

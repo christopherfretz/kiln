@@ -448,6 +448,106 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     (f, errors)
 }
 
+/// The LLVM feature of an `AArch64` extension named in a `target("...")`
+/// attribute: the `-march=` spelling, and in clang 19 also the LLVM
+/// feature names `neon`, `fp-armv8`, `fullfp16`, `jsconv`, `complxnum`.
+fn attr_extension(name: &str, v22: bool) -> Option<&'static str> {
+    extension(name, v22).or_else(|| {
+        let llvm: &[&'static str] =
+            if v22 { &[] } else { &["neon", "fp-armv8", "fullfp16", "jsconv", "complxnum"] };
+        llvm.iter().copied().find(|n| *n == name)
+    })
+}
+
+/// Whether LLVM feature `f` is an extension's (LLVM
+/// `targetFeatureToExtension`): the ones `-march=` extensions name.
+fn is_extension_feature(f: &str, v22: bool) -> bool {
+    ["fp-armv8", "neon", "fullfp16", "jsconv", "complxnum", "mte", "rand", "fmv"].contains(&f)
+        || extension(f, v22) == Some(f)
+}
+
+/// The features of a GNU `target("...")` attribute string on `AArch64`
+/// over the module's features `module` (`+name`/`-name`; clang
+/// `AArch64TargetInfo::parseTargetAttr` + `getFunctionFeatureMap`;
+/// spec/codegen.md "Target features"). The module's extension features
+/// seed an extension set (LLVM `reconstructFromParsedFeatures`); per
+/// comma-separated item, an extension name (`-march=` spelling) enables
+/// it with its dependencies, `no<ext>`/`no-<ext>` disables it with its
+/// dependents; otherwise `no-x` is `-x`, a sub-architecture `v8.Na`/`v9.Na`
+/// is `+v8.Na` plus its level's features (clang 22 `setFeatureEnabled`;
+/// clang 19 enables the extension ones in the set), and
+/// an LLVM feature name is `+x`. Then the extension set's touched
+/// features follow, so they win over a plain `+x`/`-x` naming one.
+/// `arch=`, `cpu=`, `tune=`, `branch-protection=`, `+ext` items and
+/// unknown names add nothing (kiln does not diagnose them yet).
+pub fn target_attr_features(
+    attr: &str,
+    module: &[String],
+    v22: bool,
+) -> kiln_codegen::TargetAttrFeatures {
+    const LLVM: &[&str] = &["fp-armv8", "neon", "fullfp16", "jsconv", "complxnum", "mte", "rand"];
+    let mut bits =
+        ExtensionSet { arch: (8, 0), v22, enabled: BTreeSet::new(), touched: BTreeSet::new() };
+    for m in module {
+        let (on, name) = match m.split_at_checked(1) {
+            Some(("+", n)) => (true, n),
+            Some((_, n)) => (false, n),
+            None => continue,
+        };
+        let known = ["fp-armv8", "neon", "fullfp16", "jsconv", "complxnum", "mte", "rand", "fmv"]
+            .into_iter()
+            .chain(DEPENDENT.iter().copied())
+            .find(|f| *f == name)
+            .or_else(|| extension(name, v22).filter(|f| *f == name));
+        if let Some(f) = known.filter(|f| is_extension_feature(f, v22)) {
+            bits.touched.insert(f);
+            if on {
+                bits.enabled.insert(f);
+            } else {
+                bits.enabled.remove(f);
+            }
+        }
+    }
+    let mut features = Vec::new();
+    for item in attr.split(',').map(str::trim) {
+        if item.is_empty()
+            || item.starts_with('+')
+            || ["arch=", "cpu=", "tune=", "branch-protection="].iter().any(|p| item.starts_with(p))
+        {
+            continue;
+        }
+        let neg = item.strip_prefix("no-").or_else(|| item.strip_prefix("no"));
+        if let Some(f) = neg.and_then(|n| extension(n, v22)) {
+            bits.disable(f);
+            continue;
+        }
+        if let Some(f) = attr_extension(item, v22) {
+            bits.enable(f);
+            continue;
+        }
+        if let Some(n) = item.strip_prefix("no-") {
+            features.push(format!("-{n}"));
+        } else if let Some(arch) = parse_arch(&format!("arm{item}"), v22) {
+            // clang 19 enables the level's extensions in the extension set
+            // (their dependencies too); clang 22 only sets them.
+            for &f in ExtensionSet::new(arch, v22).enabled.iter().filter(|f| **f != item) {
+                if !v22 && is_extension_feature(f, v22) {
+                    bits.enable(f);
+                } else {
+                    features.push(format!("+{f}"));
+                }
+            }
+            features.push(format!("+{item}"));
+        } else if LLVM.contains(&item) {
+            features.push(format!("+{item}"));
+        }
+    }
+    for f in &bits.touched {
+        features.push(format!("{}{f}", if bits.enabled.contains(f) { '+' } else { '-' }));
+    }
+    kiln_codegen::TargetAttrFeatures { features }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,5 +682,32 @@ mod tests {
         // `-target-feature` is ignored on a non-`AArch64` target.
         assert_eq!(res("-target-feature +sve a.cpp", false).0.extra, Vec::<String>::new());
         assert_eq!(res("-march=armv8-a+foo a.cpp", true).0.extra, Vec::<String>::new());
+    }
+
+    /// `target("...")` strings over the default module features (clang
+    /// 19's and 22's `target-features` of such a function;
+    /// spec/codegen.md "Target features").
+    #[test]
+    fn target_attribute() {
+        let module: Vec<String> =
+            ["+fp-armv8", "+neon", "+outline-atomics", "+v8a", "-fmv"].map(String::from).into();
+        let t = |s: &str, v22: bool| target_attr_features(s, &module, v22).features.join(",");
+        assert_eq!(t("bf16,neon", false), "+bf16,-fmv,+fp-armv8,+neon");
+        assert_eq!(t("sha3", false), "-fmv,+fp-armv8,+neon,+sha2,+sha3");
+        assert_eq!(t("fp16", true), "-fmv,+fp-armv8,+fullfp16,+neon");
+        // clang 19 enables the level's extensions in the set, clang 22
+        // sets them after the module's.
+        assert_eq!(t("v8.1a", false), "+v8.1a,+crc,-fmv,+fp-armv8,+lse,+neon,+rdm");
+        assert_eq!(t("v8.1a", true), "+crc,+fp-armv8,+lse,+neon,+rdm,+v8.1a,-fmv,+fp-armv8,+neon");
+        // `neon` is an extension name in clang 19 only.
+        assert_eq!(t("neon", true), "+neon,-fmv,+fp-armv8,+neon");
+        // `no-neon` names the LLVM feature, not the extension (`simd`):
+        // the module's `+neon` in the set wins; `nosha2` of an off
+        // extension touches nothing.
+        assert_eq!(
+            t("no-neon,nosha2,arch=armv8-a,+crc,bogus", false),
+            "-neon,-fmv,+fp-armv8,+neon"
+        );
+        assert_eq!(t("nosimd", true), "-fmv,+fp-armv8,-neon");
     }
 }

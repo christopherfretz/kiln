@@ -563,3 +563,49 @@ fn pic_visibility_and_objects() {
         assert_eq!(&b[..4], b"\x7fELF", "{extra:?}");
     }
 }
+
+/// A NEON builtin whose target feature the calling function lacks is an
+/// error only when the call is emitted (spec/codegen.md "Target
+/// features"; tests/conformance/target.neon/bfdot-without-feature.cpp
+/// pins that `-fsyntax-only` accepts it): calling the `always_inline`
+/// `target("bf16,neon")` header wrapper from a plain function names the
+/// first missing feature, calling the builtin directly names the
+/// builtin's whole feature list. Exact clang 19 stderr, AArch64 only.
+#[test]
+fn neon_bf16_call_without_feature() {
+    if !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let d = scratch("neonbf16");
+    let cases = [
+        (
+            "#include <arm_neon.h>\n\
+             float32x4_t f(float32x4_t r, bfloat16x8_t a, bfloat16x8_t b) { return vbfdotq_f32(r, a, b); }\n",
+            "t.cpp:2:71: error: always_inline function 'vbfdotq_f32' requires target feature 'bf16', \
+             but would be inlined into function 'f' that is compiled without support for 'bf16'\n    \
+             2 | float32x4_t f(float32x4_t r, bfloat16x8_t a, bfloat16x8_t b) { return vbfdotq_f32(r, a, b); }\n      \
+             |                                                                       ^\n1 error generated.\n",
+        ),
+        (
+            "#include <arm_neon.h>\n\
+             int8x16_t g(int8x16_t r, int8x16_t a, int8x16_t b) { return (int8x16_t)__builtin_neon_vbfdotq_f32(r, a, b, 41); }\n",
+            "t.cpp:2:72: error: '__builtin_neon_vbfdotq_f32' needs target feature bf16,neon\n    \
+             2 | int8x16_t g(int8x16_t r, int8x16_t a, int8x16_t b) { return (int8x16_t)__builtin_neon_vbfdotq_f32(r, a, b, 41); }\n      \
+             |                                                                        ^\n1 error generated.\n",
+        ),
+    ];
+    for (src, want) in cases {
+        std::fs::write(d.join("t.cpp"), src).unwrap();
+        let o = kiln_in(&d, &["-fclang-compat=19", "-S", "-emit-llvm", "-o", "k.ll", "t.cpp"]);
+        assert_eq!(text(&o.stderr), want, "{src}");
+        assert_eq!(o.status.code(), Some(1), "{src}");
+        if have("clang++-19") {
+            let c = Command::new("clang++-19")
+                .args(["-S", "-emit-llvm", "-o", "c.ll", "t.cpp"])
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert_eq!(text(&c.stderr), want, "clang++-19: {src}");
+        }
+    }
+}

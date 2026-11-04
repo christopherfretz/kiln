@@ -5105,7 +5105,16 @@ pub mod builtin {
         for &c in e.sig.as_bytes() {
             match c {
                 b'I' => ice = true,
-                b'U' | b'L' | b'S' | b'W' | b'V' | b'0'..=b'9' | b'C' | b'D' | b'R' | b'*'
+                b'U'
+                | b'L'
+                | b'S'
+                | b'W'
+                | b'V'
+                | b'0'..=b'9'
+                | b'C'
+                | b'D'
+                | b'R'
+                | b'*'
                 | b'&' => {}
                 b'.' => break,
                 _ => {

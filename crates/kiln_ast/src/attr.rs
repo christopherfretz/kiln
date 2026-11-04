@@ -165,6 +165,11 @@ impl AttrKind {
     /// clang `neon_polyvector_type(N)`: as [`AttrKind::NEON_VECTOR_TYPE`],
     /// a `Vector` of kind `NeonPoly`; WP-558.
     pub const NEON_POLYVECTOR_TYPE: AttrKind = AttrKind(144);
+    /// GNU `target("features")` on a function (clang `TargetAttr`): `a` =
+    /// the string literal's `StringLitId`. On `AArch64` codegen adds the
+    /// features to the function's own (spec/codegen.md "Target
+    /// features"); WP-558.
+    pub const TARGET: AttrKind = AttrKind(145);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
