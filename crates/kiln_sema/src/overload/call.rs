@@ -116,6 +116,22 @@ impl Sema<'_, '_> {
                 self.diagnose_args_for_non_template(name, &decls, n.loc());
                 return None;
             }
+            // `f<args>(…)` / `C::f<args>(…)` naming member function
+            // templates where `this` may be used: the object argument is
+            // the implicit `*this` ([class.mfct.non.static]/2,
+            // [over.match.funcs]/4), as for the non-template name
+            // (`implicit_member_overload`), so the implicit object
+            // parameters rank the candidates (spec/sema-overload.md §2.3).
+            let nns = self.ast.templates.expr_nns.get(ule).copied();
+            if let Some(e) =
+                self.implicit_member_template_id(name, &cands, naming, nns, explicit, n.loc())
+            {
+                if self.member_overload(e).is_none() {
+                    // `this` is type-dependent: resolved at instantiation.
+                    return Some(e);
+                }
+                return self.resolve_member_call(e, args, braced);
+            }
         }
         let templates = cands.iter().any(|&(d, _)| self.kind_of(d) == DeclKind::FunctionTemplate);
         let plain =
@@ -144,6 +160,15 @@ impl Sema<'_, '_> {
             }
             self.ovl.adl_single = adl.then_some(e);
             return Some(e);
+        }
+        if self.lacks_implicit_object(&cands) {
+            // [expr.prim.id.general]/3, [over.match.call.general]/2.2:
+            // every candidate needs an object and no `this` may be used
+            // (a static member function, an unrelated class) — clang's
+            // `IMA_Error_StaticContext` / `IMA_Error_Unrelated`, diagnosed
+            // before overload resolution, also in an unevaluated operand.
+            self.error(DiagId::sema_member_call_without_object, n.loc());
+            return None;
         }
         let mut set = self.begin_set(SetKind::Normal, at);
         let base = self.push_call_args(&mut set, args, braced);

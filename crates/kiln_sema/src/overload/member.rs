@@ -137,6 +137,114 @@ impl Sema<'_, '_> {
         ))
     }
 
+    /// The template-id `name<targs>` (qualified by `nns`, if any), whose
+    /// lookup found the member functions and member function templates
+    /// `cands` (with their found decls; `naming` the naming class if
+    /// recorded), used as a callee where an implicit `this` may be used
+    /// and its class is (derived from) their class ([class.mfct.non.static]/2,
+    /// [expr.prim.id.general]/3): the overloaded member access
+    /// `(*this).name<targs>`, whose call ranks the implicit object
+    /// parameters against `*this` ([over.match.funcs]/4-5), as
+    /// `this->name<targs>(…)` does. A type-dependent `this` (a member of
+    /// a class template) or a dependent base on the way to the members'
+    /// class gives the dependent `this->name<targs>`. `None` when no
+    /// candidate is an instance member or no such `this` exists (the
+    /// call is then resolved without an object argument).
+    pub(crate) fn implicit_member_template_id(
+        &mut self,
+        name: kiln_ast::names::DeclName,
+        cands: &[(DeclId, DeclId)],
+        naming: Option<DeclId>,
+        nns: Option<kiln_ast::NnsId>,
+        targs: Option<kiln_ast::ids::ArgListId>,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        let decls: Vec<DeclId> = cands.iter().map(|&(d, _)| d).collect();
+        if !decls.iter().all(|&d| {
+            let k = self.kind_of(self.templated_or_self(d));
+            k.is_function() && k != DeclKind::Function
+        }) {
+            return None;
+        }
+        let &first = decls.iter().find(|&&d| self.is_instance_member(self.templated_or_self(d)))?;
+        let first = self.templated_or_self(first);
+        let Some(class) = self.implicit_object_class(first) else {
+            let this_ty = self.dependent_implicit_this(first)?;
+            self.note_this_use(loc);
+            let this = self.builder().this_expr(this_ty, true, loc);
+            let b = crate::conv::decay_dependent(self, this);
+            return Some(self.builder().dependent_member(
+                Some(b),
+                true,
+                name,
+                false,
+                nns,
+                targs,
+                loc,
+            ));
+        };
+        let (this_ty, _) = self.this_class()?;
+        self.note_this_use(loc);
+        let this = self.builder().this_expr(this_ty, true, loc);
+        let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
+        if self.ast.types.is_dependent(obj_ty) {
+            // [temp.dep.expr]/3: `this` is type-dependent.
+            let b = crate::conv::decay_dependent(self, this);
+            return Some(self.builder().dependent_member(
+                Some(b),
+                true,
+                name,
+                false,
+                nns,
+                targs,
+                loc,
+            ));
+        }
+        // [class.access.base]/5: a qualified name is named in its
+        // qualifier's class, an unqualified one in the class of `*this`.
+        let qualifier_class = nns.and_then(|q| match self.ast.types.nns_view(q) {
+            kiln_ast::types::Nns::Type { ty, .. } => {
+                let r = self.ast.types.as_record(ty)?;
+                Some(self.ast.definition(r).unwrap_or(r))
+            }
+            _ => None,
+        });
+        let set = OvlMember {
+            name,
+            decls,
+            found: cands.iter().map(|&(_, f)| f).collect(),
+            naming: naming.or(qualifier_class).unwrap_or(class),
+            obj_ty,
+            def: class,
+            base: this,
+            arrow: true,
+            nns,
+            implicit: true,
+            targs,
+        };
+        Some(self.build_member_overload(set, loc))
+    }
+
+    /// Whether every candidate of `cands` is a member function (template)
+    /// with an implicit object parameter ([dcl.fct]/6, not static, no
+    /// explicit object parameter) and no implicit `this` can be their
+    /// object ([class.mfct.non.static]/2): none may be used here, or its
+    /// class is not (and cannot become, through a dependent base)
+    /// derived from theirs.
+    pub(crate) fn lacks_implicit_object(&self, cands: &[(DeclId, DeclId)]) -> bool {
+        let Some(&(first, _)) = cands.first() else { return false };
+        cands.iter().all(|&(d, _)| {
+            let f = self.templated_or_self(d);
+            self.kind_of(f) == DeclKind::CXXMethod
+                && !self.is_static_method(f)
+                && !self.has_explicit_object(f)
+        }) && {
+            let first = self.templated_or_self(first);
+            self.implicit_object_class(first).is_none()
+                && self.dependent_implicit_this(first).is_none()
+        }
+    }
+
     /// Resolves the call of the overloaded member access `callee`
     /// (possibly parenthesized) with `args`: the member access naming the
     /// best viable function, or `None` after diagnosing.
