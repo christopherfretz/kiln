@@ -292,21 +292,9 @@ impl Sema<'_, '_> {
         s
     }
 
-    /// Whether `v`, declared without an initializer, is an explicit
-    /// specialization of a static data member or of a static data member
-    /// template, which is then a declaration, not a definition
-    /// ([temp.expl.spec]/14): `template<> const int C<int>::x;` and
-    /// `template<> const int S::v<int>;` are not default-initialized.
+    /// [`kiln_ast::Ast::is_member_spec_declaration`] ([temp.expl.spec]/14).
     pub(crate) fn is_member_spec_declaration(&self, v: DeclId) -> bool {
-        if self.ast.decls.var(v).is_none_or(|x| x.init.is_some()) {
-            return false;
-        }
-        if !self.is_in_record_ctx(v) {
-            return false;
-        }
-        let explicit = SpecKind::ExplicitSpecialization;
-        self.ast.spec_info(v).is_some_and(|(_, i)| i.kind == explicit)
-            || self.ast.member_spec_info(self.ast.first(v)).is_some_and(|(_, i)| i.kind == explicit)
+        self.ast.is_member_spec_declaration(v)
     }
 
     /// Whether `v` is an implicit specialization of a static data member
