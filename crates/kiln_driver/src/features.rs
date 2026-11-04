@@ -400,13 +400,14 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
     let native = |v: &Option<String>| v.as_deref() == Some("native");
     if !target.is_aarch64() {
-        // x86: `-march=<cpu>` names the CPU (clang `getX86TargetCPU`).
-        // The name is not checked and its features are not expanded
-        // into `target-features` or predefines (spec/driver.md
-        // deviations).
+        // x86: `-march=<cpu>` names one of clang's CPUs (`getX86TargetCPU`)
+        // or `native`; its features are not expanded into
+        // `target-features` or predefines (spec/driver.md deviations).
+        // Any other value stays unsupported.
+        let v22 = args.predef.clang_compat == ClangCompat::Clang22;
         match args.march.as_deref() {
-            Some("") => errors.push(unsupported("-march=", "")),
-            Some(v) => f.cpu = Some(v.to_owned()),
+            Some(v) if v == "native" || is_x86_cpu(v, v22) => f.cpu = Some(v.to_owned()),
+            Some(v) => errors.push(unsupported("-march=", v)),
             None => {}
         }
         if let Some(v) = &args.mcpu {
@@ -461,6 +462,90 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
         }
     }
     (f, errors)
+}
+
+/// clang 19's x86-64 `-march=` CPUs (its "valid target CPU values"
+/// note, `llvm::X86::fillValidCPUArchList`).
+const X86_CPUS: &[&str] = &[
+    "nocona",
+    "core2",
+    "penryn",
+    "bonnell",
+    "atom",
+    "silvermont",
+    "slm",
+    "goldmont",
+    "goldmont-plus",
+    "tremont",
+    "nehalem",
+    "corei7",
+    "westmere",
+    "sandybridge",
+    "corei7-avx",
+    "ivybridge",
+    "core-avx-i",
+    "haswell",
+    "core-avx2",
+    "broadwell",
+    "skylake",
+    "skylake-avx512",
+    "skx",
+    "cascadelake",
+    "cooperlake",
+    "cannonlake",
+    "icelake-client",
+    "rocketlake",
+    "icelake-server",
+    "tigerlake",
+    "sapphirerapids",
+    "alderlake",
+    "raptorlake",
+    "meteorlake",
+    "arrowlake",
+    "arrowlake-s",
+    "lunarlake",
+    "gracemont",
+    "pantherlake",
+    "sierraforest",
+    "grandridge",
+    "graniterapids",
+    "graniterapids-d",
+    "emeraldrapids",
+    "clearwaterforest",
+    "knl",
+    "knm",
+    "k8",
+    "athlon64",
+    "athlon-fx",
+    "opteron",
+    "k8-sse3",
+    "athlon64-sse3",
+    "opteron-sse3",
+    "amdfam10",
+    "barcelona",
+    "btver1",
+    "btver2",
+    "bdver1",
+    "bdver2",
+    "bdver3",
+    "bdver4",
+    "znver1",
+    "znver2",
+    "znver3",
+    "znver4",
+    "znver5",
+    "x86-64",
+    "x86-64-v2",
+    "x86-64-v3",
+    "x86-64-v4",
+];
+
+/// clang 22's further x86-64 `-march=` CPUs.
+const X86_CPUS_22: &[&str] = &["wildcatlake", "novalake", "diamondrapids"];
+
+/// Whether `-march=<v>` names an x86-64 CPU clang knows.
+fn is_x86_cpu(v: &str, v22: bool) -> bool {
+    X86_CPUS.contains(&v) || (v22 && X86_CPUS_22.contains(&v))
 }
 
 /// The LLVM feature of an `AArch64` extension named in a `target("...")`
@@ -697,6 +782,34 @@ mod tests {
         // `-target-feature` is ignored on a non-`AArch64` target.
         assert_eq!(res("-target-feature +sve a.cpp", false).0.extra, Vec::<String>::new());
         assert_eq!(res("-march=armv8-a+foo a.cpp", true).0.extra, Vec::<String>::new());
+    }
+
+    /// spec/driver.md "Codegen flags" (WP-605): `native` on both targets
+    /// and the x86-64 CPU names are the backend CPU.
+    #[test]
+    fn march_cpu() {
+        let cpu = |s: &str, aarch64: bool| {
+            let (f, e) = res(s, aarch64);
+            assert_eq!(e, [], "{s}");
+            f.cpu
+        };
+        assert_eq!(cpu("a.cpp", true), None);
+        assert_eq!(cpu("a.cpp", false), None);
+        assert_eq!(cpu("-march=native a.cpp", true).as_deref(), Some("native"));
+        assert_eq!(cpu("-mcpu=native a.cpp", true).as_deref(), Some("native"));
+        assert_eq!(cpu("-march=native a.cpp", false).as_deref(), Some("native"));
+        assert_eq!(cpu("-march=haswell a.cpp", false).as_deref(), Some("haswell"));
+        assert_eq!(cpu("-march=x86-64-v3 a.cpp", false).as_deref(), Some("x86-64-v3"));
+        assert_eq!(cpu("-march=armv8.2-a a.cpp", true), None);
+        // `-march=native` keeps the default features.
+        assert_eq!(res("-march=native a.cpp", true).0.extra, Vec::<String>::new());
+        let u = |o: &str, v: &str| ArgError::UnsupportedValue(o.into(), v.into());
+        assert_eq!(res("-march=foo a.cpp", false).1, [u("-march=", "foo")]);
+        assert_eq!(
+            res("-fclang-compat=19 -march=novalake a.cpp", false).1,
+            [u("-march=", "novalake")]
+        );
+        assert_eq!(cpu("-march=novalake a.cpp", false).as_deref(), Some("novalake"));
     }
 
     /// `target("...")` strings over the default module features (clang

@@ -125,7 +125,9 @@ impl CodegenFlags {
             "-fdata-sections" => self.data_sections = true,
             "-fno-data-sections" => self.data_sections = false,
             _ if IGNORED.contains(&arg) => {}
-            _ if REJECTED.contains(&arg) || REJECTED_PREFIXES.iter().any(|p| arg.starts_with(p)) => {
+            _ if REJECTED.contains(&arg)
+                || REJECTED_PREFIXES.iter().any(|p| arg.starts_with(p)) =>
+            {
                 return Some(Err(ArgError::UnsupportedByKiln(arg.to_owned())));
             }
             _ => return self.valued(arg),
