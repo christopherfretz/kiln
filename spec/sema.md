@@ -4141,7 +4141,8 @@ table) are spec/landed/sema/WP-558.md "Target builtins".
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
 `CXXThrowExpr`:
 - With `-fno-exceptions` it is an error
-  (`cannot use 'throw' with exceptions disabled`).
+  (`cannot use 'throw' with exceptions disabled`), except as
+  "Exceptions disabled" below says.
 - The exception object's type is the operand's, with arrays and
   functions decayed and top-level cv removed; it must not be (a
   pointer to) an incomplete type other than cv `void` (clang's
@@ -4152,9 +4153,46 @@ table) are spec/landed/sema/WP-558.md "Target builtins".
   (`thrown_var_in_scope`, WP-100).
 - In `?:`, a throw operand gives the other operand's type and value
   category ([expr.cond]/2).
-- clang's exemption for system headers is not implemented. The Oven
-  treats a `throw` it reaches as not a constant expression; codegen
-  lowers it (spec/codegen.md §7b).
+- The Oven treats a `throw` it reaches as not a constant expression,
+  whatever the flag; codegen lowers it (spec/codegen.md §7b).
+
+**Exceptions disabled** (WP-607; `Sema::check_exceptions_enabled`, shared
+by `act_on_throw` and `act_on_try`). With `-fno-exceptions` a `throw`
+expression or `try` block is diagnosed at its keyword except:
+1. *System headers* (clang `ActOnCXXThrow` / `ActOnCXXTryBlock`): a
+   location whose expansion is in a system header — a header reached
+   through `-isystem`, the `--gcc-toolchain` / resource-dir include
+   directories, the rest of a file after `#pragma GCC system_header`, or
+   a line marker with flag 3 — is not diagnosed, at its definition or in
+   any instantiation. A system macro expanded in user code is diagnosed
+   (the expansion location is the user file's). This is what lets every
+   `-fno-exceptions` TU include libstdc++'s `<exception>`, whose
+   uninstantiated `std::throw_with_nested` holds a raw `throw`.
+2. *Templates* (GCC: `build_throw` returns a dependent `THROW_EXPR` while
+   `processing_template_decl`): inside a template definition
+   (`in_template()`: a function template, a member of a class template, a
+   generic lambda's body, any of those nested) the check waits for the
+   instantiation; a never-instantiated template is accepted. The
+   substitution calls `act_on_throw` / `act_on_try` again outside the
+   template for a rebuilt node (a dependent operand, every try-block); a
+   non-dependent throw-expression the substitution shares instead is kept
+   in `exc_disabled_pattern` and reported by `note_shared_throws` when an
+   instantiation shares it. Either way the error sits at the pattern's
+   keyword with the usual instantiation notes, and a location is
+   reported at most once (`exc_disabled_seen`), at its first
+   instantiation. clang 19 and 22 instead diagnose a template's `throw`
+   / `try` at its definition (and a dependent `throw` again per
+   instantiation); the union of the two compilers' acceptance is what
+   code built with both needs, so kiln accepts the never-instantiated
+   case as GCC does.
+3. *Codegen*: a surviving `throw` lowers to the ordinary
+   `__cxa_allocate_exception` / `__cxa_throw` sequence as plain calls
+   without landing pads, and a surviving `try` to its compound statement
+   with the handlers dropped (no landing pad reaches them), byte-identical
+   to clang (`tests/codegen/throw_no_exceptions.cpp`).
+
+Tests: `tests/conformance/expr.throw/no-exceptions-*.cpp`,
+`tests/conformance/except.pre/try-no-exceptions-*.cpp`.
 
 ### 5.6 `typeid` (`rtti.rs`)
 `act_on_typeid(Ok(expr) | Err(type), loc, rparen)` ([expr.typeid]):
@@ -7020,7 +7058,8 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `OpaqueValueExpr` (clang's `ExceptionDecl` init) and its destructor is
   checked (access, deleted).
 - With `-fno-exceptions`, `try` is `cannot use 'try' with exceptions
-  disabled` (the statement is still analyzed).
+  disabled` (the statement is still analyzed), except in a system header
+  or a template definition (§5.5 "Exceptions disabled").
 - `act_on_try`: a `catch (...)` that is not last is `catch-all handler
   must come last`; a handler whose type is the same as, or a public
   unambiguous derived class of, an earlier one gets `-Wexceptions`

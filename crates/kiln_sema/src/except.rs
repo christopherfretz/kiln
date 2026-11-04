@@ -642,6 +642,46 @@ impl Sema<'_, '_> {
             || self.uninstantiated_exc.get(&first).is_some_and(|p| self.unparsed_exc.contains(p))
     }
 
+    /// A `throw` or `try` at `loc` with exceptions disabled
+    /// (`-fno-exceptions`, [except.pre], spec/sema.md "Exceptions
+    /// disabled"; WP-607): an error (`id`) unless `loc` is in a system
+    /// header (clang `ActOnCXXThrow`/`ActOnCXXTryBlock`) or inside a
+    /// template definition, where it waits for the instantiation (GCC's
+    /// dependent `THROW_EXPR`; the substitution calls `act_on_throw` /
+    /// `act_on_try` again outside the template). A location is reported
+    /// once, however many specializations instantiate it.
+    /// Returns whether the check waits for an instantiation.
+    pub(crate) fn check_exceptions_enabled(&mut self, id: DiagId, loc: Loc) -> bool {
+        if self.exceptions || self.diags.sm().is_in_system_header(loc) {
+            return false;
+        }
+        if self.in_template() {
+            return true;
+        }
+        if self.exc_disabled_seen.insert(loc) {
+            self.error(id, loc);
+        }
+        false
+    }
+
+    /// An instantiation shares the non-dependent pattern expression `e`
+    /// (the substitution does not call `act_on_throw` again): each
+    /// throw-expression in it whose exceptions-disabled error was deferred
+    /// ([`Sema::check_exceptions_enabled`]) is reported now.
+    pub(crate) fn note_shared_throws(&mut self, e: ExprId) {
+        if self.exc_disabled_pattern.is_empty() || self.in_template() {
+            return;
+        }
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            if self.exc_disabled_pattern.contains(&x) {
+                let loc = self.ast.exprs.get(x).loc();
+                self.check_exceptions_enabled(DiagId::sema_throw_disabled, loc);
+            }
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+    }
+
     /// `throw` / `throw e` ([expr.throw]): a prvalue of type `void`. The
     /// exception object's type is `e`'s with arrays and functions decayed
     /// and top-level cv removed ([expr.throw]/3); it must not be (a
@@ -652,9 +692,16 @@ impl Sema<'_, '_> {
     /// past the innermost try-block (`thrown_var_in_scope`, WP-100).
     /// `loc` is the `throw` keyword.
     pub fn act_on_throw(&mut self, operand: Option<ExprId>, loc: Loc) -> ExprId {
-        if !self.exceptions {
-            self.error(DiagId::sema_throw_disabled, loc);
+        let r = self.build_throw(operand, loc);
+        if self.check_exceptions_enabled(DiagId::sema_throw_disabled, loc)
+            && self.ast.exprs.get(r).kind() == ExprKind::CXXThrowExpr
+        {
+            self.exc_disabled_pattern.insert(r);
         }
+        r
+    }
+
+    fn build_throw(&mut self, operand: Option<ExprId>, loc: Loc) -> ExprId {
         let Some(e) = operand else {
             return self.builder().throw_expr(None, QualType::VOID, loc);
         };

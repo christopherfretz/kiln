@@ -223,6 +223,15 @@ pub struct Sema<'a, 'sm> {
     pub(crate) traits: templ::builtins::TraitState,
     /// C++ exceptions are enabled (`-f[no-]exceptions`; default on).
     pub exceptions: bool,
+    /// The `throw`/`try` locations already diagnosed as used with
+    /// exceptions disabled: a template's is reported at its first
+    /// instantiation only (WP-607, [`Sema::check_exceptions_enabled`]).
+    pub(crate) exc_disabled_seen: kiln_source::fx::FxHashSet<Loc>,
+    /// The template patterns' non-dependent throw-expressions whose
+    /// exceptions-disabled error waits for an instantiation: one the
+    /// substitution shares instead of rebuilding is reported by
+    /// [`Sema::note_shared_throws`].
+    pub(crate) exc_disabled_pattern: kiln_source::fx::FxHashSet<ExprId>,
     /// Run-time type information is enabled (`-f[no-]rtti`; default on):
     /// `typeid` is an error otherwise.
     pub rtti: bool,
@@ -974,6 +983,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             attr_spellings: kiln_source::fx::FxHashMap::default(),
             traits: templ::builtins::TraitState::default(),
             exceptions: true,
+            exc_disabled_seen: kiln_source::fx::FxHashSet::default(),
+            exc_disabled_pattern: kiln_source::fx::FxHashSet::default(),
             rtti: true,
             reflection: false,
             consteval_only_records: kiln_source::fx::FxHashMap::default(),
