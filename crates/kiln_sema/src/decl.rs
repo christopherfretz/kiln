@@ -8022,7 +8022,7 @@ impl Sema<'_, '_> {
 
     /// `}` of a namespace.
     pub fn act_on_finish_namespace(&mut self, ns: DeclId) {
-        self.pop_namespace_visibility(ns);
+        self.pop_namespace_visibility(ns, Loc::INVALID);
         self.scopes.pop();
         self.ctx = self.ast.decls.lexical_ctx(ns).unwrap_or(self.ast.tu);
     }

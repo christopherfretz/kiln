@@ -87,8 +87,6 @@ pub struct Parser<'a, 'sm> {
     /// The start of the token before `pos`.
     prev_lo: Loc,
     pos: usize,
-    /// Open `#pragma GCC visibility push`es.
-    pub(crate) visibility_depth: u32,
     /// The start of the last `__attribute__((...))`'s closing `)`, or
     /// `Loc::INVALID` (a member declarator's end, clang `SetRangeEnd`).
     pub(crate) gnu_attr_end: Loc,
@@ -309,7 +307,6 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             prev_hi: Loc::INVALID,
             prev_lo: Loc::INVALID,
             pos: 0,
-            visibility_depth: 0,
             gnu_attr_end: Loc::INVALID,
             chunk_decl_attrs: Vec::new(),
             cxx11_attr_run: (Loc::INVALID, Loc::INVALID),

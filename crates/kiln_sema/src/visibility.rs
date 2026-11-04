@@ -253,10 +253,11 @@ impl Sema<'_, '_> {
     }
 
     /// `#pragma GCC visibility push(V)` (`Some(V)`, a valid name) or
-    /// `pop` (`None`, with a matching push; clang
-    /// `ActOnPragmaVisibility`). A `pop` whose innermost entry is a
-    /// namespace's is ignored (clang `err_pragma_pop_visibility_mismatch`
-    /// is not diagnosed yet).
+    /// `pop` (`None`; clang `ActOnPragmaVisibility` /
+    /// `PopPragmaVisibility`). A `pop` with nothing pushed, or whose
+    /// innermost entry is a namespace's, is
+    /// `err_pragma_pop_visibility_mismatch` (with the namespace's note)
+    /// and pops nothing.
     pub fn act_on_pragma_visibility(&mut self, push: Option<&str>, loc: Loc) {
         match push {
             Some(v) => {
@@ -267,11 +268,24 @@ impl Sema<'_, '_> {
                 };
                 self.vis_stack.push(Some((v, loc)));
             }
-            None => {
-                if matches!(self.vis_stack.last(), Some(Some(_))) {
+            None => match self.vis_stack.last() {
+                Some(Some(_)) => {
                     self.vis_stack.pop();
                 }
-            }
+                Some(None) => {
+                    let ns = self.vis_namespaces.last().copied();
+                    let mut d = self.diag(DiagId::sema_visibility_pop_mismatch, loc);
+                    if let Some(ns) = ns {
+                        let at = self.ast.decls.get(ns).loc();
+                        d = d.with_note(self.diag(DiagId::note_surrounding_namespace_starts_here, at));
+                    }
+                    self.emit(d);
+                }
+                None => {
+                    let d = self.diag(DiagId::sema_visibility_pop_mismatch, loc);
+                    self.emit(d);
+                }
+            },
         }
     }
 
@@ -282,14 +296,21 @@ impl Sema<'_, '_> {
         self.vis_namespaces.push(ns);
     }
 
-    /// The end of namespace definition `ns`: pops its marker and any
-    /// pragma pushed inside and not popped (clang
-    /// `PopPragmaVisibility(true, ...)`'s recovery).
-    pub fn pop_namespace_visibility(&mut self, ns: DeclId) {
+    /// The end (`}` at `end`) of namespace definition `ns`: pops its
+    /// marker. A pragma pushed inside and not popped is clang's
+    /// `err_pragma_push_visibility_mismatch` at the innermost push, with
+    /// the note at `end`, and is popped too (clang's recovery). A no-op
+    /// when `ns` has no marker or it is already popped.
+    pub fn pop_namespace_visibility(&mut self, ns: DeclId, end: Loc) {
         if self.vis_namespaces.last() != Some(&ns) {
             return;
         }
         self.vis_namespaces.pop();
+        if let Some(Some((_, at))) = self.vis_stack.last() {
+            let note = self.diag(DiagId::note_surrounding_namespace_ends_here, end);
+            let d = self.diag(DiagId::sema_visibility_push_mismatch, *at).with_note(note);
+            self.emit(d);
+        }
         while let Some(top) = self.vis_stack.pop() {
             if top.is_none() {
                 break;

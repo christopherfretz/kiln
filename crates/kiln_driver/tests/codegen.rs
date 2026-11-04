@@ -508,3 +508,58 @@ fn duplicate_mangled_name() {
         }
     }
 }
+
+/// `-fPIC` and `-fvisibility=` through the whole driver (spec/codegen.md
+/// "Symbol visibility", "dso_local"; spec/driver.md "Code generation"):
+/// in a shared-library build a default-visibility function may be
+/// interposed, so neither its definition nor its address is `dso_local`;
+/// a hidden one is. `-fvisibility=hidden` hides the definitions it does
+/// not export, and `-c` builds the object as position-independent code.
+#[test]
+fn pic_visibility_and_objects() {
+    let d = scratch("pic");
+    let src = "void f() {}\n__attribute__((visibility(\"hidden\"))) void h() {}\n\
+               __attribute__((visibility(\"default\"))) void e() {}\nvoid (*g)() = f;\n";
+    std::fs::write(d.join("v.cpp"), src).unwrap();
+    let ll = |extra: &[&str]| {
+        let mut a = vec!["-S", "-emit-llvm", "-o", "-", "-fPIC"];
+        a.extend(extra);
+        a.push("v.cpp");
+        let o = kiln_in(&d, &a);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{extra:?}");
+        text(&o.stdout)
+    };
+    let pic = ll(&[]);
+    for want in [
+        "define void @_Z1fv()",
+        "define hidden void @_Z1hv()",
+        "define void @_Z1ev()",
+        "@g = global ptr @_Z1fv,",
+        "!{i32 8, !\"PIC Level\", i32 2}",
+    ] {
+        assert!(pic.contains(want), "{want}\n{pic}");
+    }
+    assert!(!pic.contains("dso_local void @_Z1fv"), "{pic}");
+    let hidden = ll(&["-fvisibility=hidden"]);
+    for want in [
+        "define hidden void @_Z1fv()",
+        "define hidden void @_Z1hv()",
+        "define void @_Z1ev()",
+        "@g = hidden global ptr @_Z1fv,",
+    ] {
+        assert!(hidden.contains(want), "{want}\n{hidden}");
+    }
+    if !tools() {
+        return;
+    }
+    for extra in [&[][..], &["-fvisibility=hidden"]] {
+        let _ = std::fs::remove_file(d.join("v.o"));
+        let mut a = vec!["-c", "-fPIC"];
+        a.extend(extra);
+        a.push("v.cpp");
+        let o = kiln_in(&d, &a);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{extra:?}");
+        let b = std::fs::read(d.join("v.o")).unwrap();
+        assert_eq!(&b[..4], b"\x7fELF", "{extra:?}");
+    }
+}
