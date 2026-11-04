@@ -299,6 +299,31 @@ impl Oven {
         b.consts().push_aggregate(img).map_err(|_| fault(Fault::Memory))
     }
 
+    /// The value of class `q` that holds no data (every byte padding:
+    /// libstdc++'s `array<T, 0>`, whose one member is an empty struct),
+    /// frozen: `reflect_constant_array` of an empty range (P3491R3).
+    /// `None` when `q` holds data.
+    ///
+    /// # Errors
+    /// The constant store's exhaustion.
+    pub fn meta_freeze_blank(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        q: QualType,
+    ) -> Result<Option<ConstValueId>, MetaError> {
+        let t = self.types.intern(b, q);
+        if !self.types.holds_no_data(t) {
+            return Ok(None);
+        }
+        let n = self.types.size(t);
+        let bytes = vec![0; usize::try_from(n).unwrap_or(0)];
+        let len = u32::try_from(n).map_err(|_| fault(Fault::Memory))?;
+        let padding = [kiln_ast::consts::ByteRange { start: 0, len }];
+        let padding = if n == 0 { &padding[..0] } else { &padding[..] };
+        let img = ByteImage { ty: q, bytes: &bytes, relocs: &[], padding, unions: &[] };
+        b.consts().push_aggregate(img).map(Some).map_err(|_| fault(Fault::Memory))
+    }
+
     /// The first `m` characters of range argument `r` (data | length <<
     /// 64) of one-byte characters, as bytes (`None`: wider characters).
     ///

@@ -265,9 +265,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return None;
         }
         if self.inst.queued.contains(&f) {
-            let constexpr = self.ast.decls.function(f).is_some_and(|x| {
-                x.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None
-            });
+            let constexpr =
+                self.ast.decls.function(f).is_some_and(|x| {
+                    x.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None
+                });
             if !constexpr || self.defined_body(pattern).is_none() {
                 return None;
             }

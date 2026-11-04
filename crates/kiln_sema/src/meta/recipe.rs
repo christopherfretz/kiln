@@ -9,8 +9,8 @@ use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::BuiltinType;
 use kiln_ast::{DeclId, QualType};
 use kiln_oven::{
-    AccessOp, AnnotOp, DefineOp, ExcCtor, MemberOp, MetaOp, MetaThrow, QueryOp, Shape, TemplOp, TraitOp,
-    ValueOp,
+    AccessOp, AnnotOp, DefineOp, ExcCtor, MemberOp, MetaOp, MetaThrow, QueryOp, Shape, TemplOp,
+    TraitOp, ValueOp,
 };
 use kiln_source::Loc;
 

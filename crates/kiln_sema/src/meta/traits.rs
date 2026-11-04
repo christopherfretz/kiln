@@ -8,10 +8,10 @@
 
 use kiln_ast::QualType;
 use kiln_ast::ReflectionId;
+use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::TypeTrait;
 use kiln_ast::reflect::Reflectee;
-use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::types::{Quals, TemplateArg, UnaryTransformKind};
 use kiln_oven::{MetaCtx, MetaError, MetaOut, Oven, TraitOp, info_arg};
 use kiln_source::Loc;
@@ -511,15 +511,22 @@ impl Sema<'_, '_> {
         let Some((r, m)) = member else {
             return fail(
                 loc,
-                format!("'type_order' needs a result class with a static member '{name}' \
-                         (std::strong_ordering)"),
+                format!(
+                    "'type_order' needs a result class with a static member '{name}' \
+                         (std::strong_ordering)"
+                ),
             );
         };
         let ty = self.ast.types.pointer_to(r);
         let p = self
             .ast
             .consts
-            .push_scalar(Scalar::Pointer { ty, base: PtrBase::Decl(m), offset: 0, designated: None })
+            .push_scalar(Scalar::Pointer {
+                ty,
+                base: PtrBase::Decl(m),
+                offset: 0,
+                designated: None,
+            })
             .map_err(|_| MetaError::memory())?;
         *out = MetaOut::Deref(p);
         Ok(())

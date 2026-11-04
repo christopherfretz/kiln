@@ -330,13 +330,60 @@ impl Sema<'_, '_> {
         }
         let m = oven.meta_elems_len(r, string, ctx)?;
         if m == 0 && !string {
-            // libstdc++ reflects an `array<T, 0>` here (WP-479 follow-up).
-            return fail(loc, "kiln: 'reflect_constant_array' of an empty range is not supported");
+            return self.reflect_empty_array(e, ctx, oven);
         }
         let arr = self.ast.types.constant_array(e, m + u64::from(string), None);
         let cv = self.bridge(|b| oven.meta_freeze_elems(b, (r, m), arr, string, ctx))?;
         self.check_tparg(cv, "an element", loc)?;
         let p = self.object_ptr(arr, PtrBase::Const(cv), 0)?;
+        self.intern_reflection(Reflectee::Object(p), loc).map_err(MetaError::from)
+    }
+
+    /// `reflect_constant_array` of an empty range of `T`s (P3491R3
+    /// [meta.reflection.array]): the template parameter object of type
+    /// `const std::array<T, 0>`, value-initialized. kiln reads it when
+    /// `std::array<T, 0>` holds no data (libstdc++'s does).
+    fn reflect_empty_array(
+        &mut self,
+        e: QualType,
+        ctx: &MetaCtx,
+        oven: &mut Oven,
+    ) -> Result<ReflectionId, MetaError> {
+        let loc = ctx.loc;
+        let unsupported = |s: &Self| {
+            fail(
+                loc,
+                format!(
+                    "kiln: 'reflect_constant_array' of an empty range needs 'std::array<{}, 0>' to be \
+                     declared and to hold no data",
+                    s.ty_str(e)
+                ),
+            )
+        };
+        let Some((_, tmpl)) = self.std_class_template("array") else {
+            return unsupported(self);
+        };
+        // Instantiating `array<T, 0>` may evaluate: with the Oven lent back.
+        let t = self.lend_oven(oven, |s| {
+            let name = s.template_name_for(tmpl);
+            let args = [kiln_ast::types::TemplateArg::ty(e), s.size_t_arg(0)];
+            match s.act_template_id(name, &args, loc, loc) {
+                Ok(crate::templ::actions::TemplateIdRef::Type(t))
+                    if s.require_complete_silent(t, loc) =>
+                {
+                    Some(t)
+                }
+                _ => None,
+            }
+        });
+        let Some(t) = t else {
+            return unsupported(self);
+        };
+        let t = self.unqual(t);
+        let Some(cv) = self.bridge(|b| oven.meta_freeze_blank(b, t))? else {
+            return unsupported(self);
+        };
+        let p = self.object_ptr(t, PtrBase::Const(cv), 0)?;
         self.intern_reflection(Reflectee::Object(p), loc).map_err(MetaError::from)
     }
 
