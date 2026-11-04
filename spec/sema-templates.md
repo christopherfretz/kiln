@@ -3502,6 +3502,17 @@ S3O calls `deduce_call` for each function template in a candidate set.
 `mark_referenced(f, loc)` is clang's `MarkFunctionReferenced`, applied
 after selection and on any odr-use:
 - **In a dependent context** it does nothing.
+- **In a discarded statement** of a non-template function ([stmt.if]/2;
+  clang's `OdrUseContext::FormallyUsed`, `Sema::in_discarded_statement`)
+  nothing is odr-used: only `constexpr`/`consteval` functions (including
+  implicit special members that are constexpr) are defined or
+  instantiated, for constant evaluation; nothing is queued or marked
+  used, and a variable not usable in constant expressions is not
+  instantiated. A deduced return type is still deduced at the reference.
+  Nested contexts (constant-expressions, `if consteval`, nested
+  `if constexpr`) stay discarded; a lambda body does not. At compat 19 a
+  written variable initializer is not discarded (clang 19/20). Tests:
+  `stmt.if/discarded-statement-*.cpp`.
 - **`constexpr`, `consteval` or deduced-return specializations** are
   instantiated **immediately**, under the frame `TemplateInstantiation`
   with poi `loc`. This keeps clang's diagnostic order and makes the body

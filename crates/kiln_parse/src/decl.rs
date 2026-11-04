@@ -3498,7 +3498,7 @@ impl Parser<'_, '_> {
             _ => 0,
         };
         // The initializer, with its conversions, is potentially evaluated.
-        let quiet = self.s.enter_var_initializer(v);
+        let quiet = self.s.enter_var_initializer(v, d.init_style.is_some());
         // clang 19 corrects the initializer's delayed typos with the
         // initialization as the filter: a correction stands only if the
         // variable can be initialized from it (`int (*p)(int) = val<int>;`

@@ -104,6 +104,8 @@ pub struct FnState {
     /// How many of `rt_quiet`'s contexts are discarded statements:
     /// clang 22 keeps a variable's initializer in a discarded statement
     /// quiet (its evaluation context inherits `InDiscardedStatement`).
+    /// While nonzero, what is named is not odr-used
+    /// ([`Sema::in_discarded_statement`]).
     pub(crate) discarded: u32,
     /// The coroutine state, once a coroutine keyword was seen
     /// (spec/sema.md §coroutines).
@@ -712,6 +714,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether what an expression built now names is only referenced,
+    /// not odr-used, being in a discarded statement of the function
+    /// being defined ([stmt.if]/2 note, [basic.def.odr]/5; clang's
+    /// `isOdrUseContext` giving `FormallyUsed`): nothing is then defined
+    /// or instantiated for it but what constant evaluation or a deduced
+    /// type needs ([temp.inst]/8). As in clang 21, the
+    /// constant-expressions, `if consteval` blocks and nested
+    /// `if constexpr` branches inside a discarded statement are
+    /// discarded too; the body of a lambda or of a local class's member
+    /// function is not (it has its own [`FnState`]).
+    pub(crate) fn in_discarded_statement(&self) -> bool {
+        self.func.as_ref().is_some_and(|f| f.discarded > 0)
+    }
+
     /// Before a variable's initializer: it is potentially evaluated even
     /// inside a quiet context (clang's `ActOnCXXEnterDeclInitializer`
     /// pushes `PotentiallyEvaluated`). Returns what
@@ -719,20 +735,31 @@ impl Sema<'_, '_> {
     /// entity in the initializer of `v` is in `v`'s context
     /// ([dcl.attr.deprecated]; clang delays it to the declarator's
     /// completion). At compat 22 it stays quiet in a discarded statement.
-    pub fn enter_var_initializer(&mut self, v: Option<DeclId>) -> (u32, Option<DeclId>) {
+    /// Before, an initializer written (`has_init`) is no part of the
+    /// discarded statement for odr-use either (clang 19/20's
+    /// `PotentiallyEvaluated` context without `InDiscardedStatement`,
+    /// [`Sema::in_discarded_statement`]); a default-initialization is.
+    pub fn enter_var_initializer(
+        &mut self,
+        v: Option<DeclId>,
+        has_init: bool,
+    ) -> (u32, u32, Option<DeclId>) {
         let keep_discarded = self.clang_compat >= 22;
-        let quiet = self.func.as_mut().map_or(0, |f| {
+        let (quiet, discarded) = self.func.as_mut().map_or((0, 0), |f| {
             let keep = if keep_discarded { f.discarded } else { 0 };
-            std::mem::replace(&mut f.rt_quiet, keep)
+            let odr_keep = if keep_discarded || !has_init { f.discarded } else { 0 };
+            let quiet = std::mem::replace(&mut f.rt_quiet, keep);
+            (quiet, std::mem::replace(&mut f.discarded, odr_keep))
         });
         let depr = std::mem::replace(&mut self.depr_init, v);
-        (quiet, depr)
+        (quiet, discarded, depr)
     }
 
     /// After a variable's initializer.
-    pub fn exit_var_initializer(&mut self, (quiet, depr): (u32, Option<DeclId>)) {
+    pub fn exit_var_initializer(&mut self, (quiet, discarded, depr): (u32, u32, Option<DeclId>)) {
         if let Some(f) = self.func.as_mut() {
             f.rt_quiet = quiet;
+            f.discarded = discarded;
         } else {
             let pending = std::mem::take(&mut self.volatile_assigns);
             self.warn_volatile_assigns(pending);

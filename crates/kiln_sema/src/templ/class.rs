@@ -1283,10 +1283,14 @@ impl Sema<'_, '_> {
     /// leaves it undefined (spec/sema-templates.md §4.6 "Points of
     /// instantiation", WP-490).
     pub(crate) fn note_var_referenced(&mut self, v: DeclId, loc: Loc) {
+        // Neither an unevaluated operand nor a discarded statement
+        // ([stmt.if]/2) odr-uses `v`: only a variable usable in constant
+        // expressions is instantiated there (clang `DoMarkVarDeclReferenced`).
+        let odr = self.unevaluated == 0 && !self.in_discarded_statement();
         let deferred = self.inst.deferred_inits.contains(&v);
         if !deferred && !self.inst.member_defs.contains(&v) {
             if self.is_var_spec(v) && self.var_pattern_def(v).is_none() {
-                let used = self.unevaluated == 0;
+                let used = odr;
                 let poi = self.inst.undefined_var_uses.entry(v).or_insert((loc, used));
                 poi.1 |= used;
                 let poi = poi.0;
@@ -1323,7 +1327,7 @@ impl Sema<'_, '_> {
             return;
         }
         let constant = self.might_be_constant_var(v);
-        if self.unevaluated > 0 && !constant {
+        if !odr && !constant {
             return;
         }
         if deferred && constant {
@@ -1341,7 +1345,7 @@ impl Sema<'_, '_> {
             self.instantiate_static_member_def(v, loc);
             if !self.inst.member_defs.contains(&v) {
                 self.record_ref_var_inst(v);
-            } else if self.unevaluated == 0
+            } else if odr
                 && !self.is_var_spec(v)
                 && self.inst.quiet_pending.insert(v)
             {

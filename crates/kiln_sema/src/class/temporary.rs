@@ -10,7 +10,9 @@
 //! [`Sema::temporaries_bound_by`] and extended in place
 //! (`ExprArena::extend_temporary`, spec/sema-class.md §8.2).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted, DefinitionBits, TlsKind, VarStorage};
+use kiln_ast::decl::{
+    ConstexprKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, TlsKind, VarStorage,
+};
 use kiln_ast::expr::{
     BinaryOp, CastKind, ExprDeps, ExprFlags, ExprKind, StorageDuration, ValueCategory,
 };
@@ -148,6 +150,13 @@ impl Sema<'_, '_> {
     /// special member is defined now (spec/sema-class.md §4.5), except a
     /// trivial default constructor (only odr-used) or destructor (not
     /// even odr-used); then `f` is odr-used.
+    ///
+    /// In a discarded statement `f` is not odr-used ([stmt.if]/2,
+    /// [`Sema::in_discarded_statement`]): only a constexpr `f` is defined
+    /// or instantiated, as constant evaluation may need it (clang's
+    /// `NeededForConstantEvaluation` through
+    /// `isImplicitlyDefinableConstexprFunction`), and `f` is not marked
+    /// used.
     pub(crate) fn mark_function_referenced(&mut self, f: DeclId, loc: Loc) {
         self.ast.decls.set_flags(f, DeclFlags::REFERENCED);
         self.define_cmp_on_use(f, loc);
@@ -159,6 +168,10 @@ impl Sema<'_, '_> {
         let first = self.ast.first(f);
         if self.func.as_ref().is_some_and(|s| self.ast.first(s.decl) == first) {
             // A recursive use from the function's own body.
+            return;
+        }
+        let discarded = self.in_discarded_statement();
+        if discarded && !self.declared_constexpr(first) {
             return;
         }
         if self.inherited_ctor_base(first).is_some() {
@@ -177,9 +190,20 @@ impl Sema<'_, '_> {
             }
         }
         self.define_lambda_conversion(first, loc);
+        if discarded {
+            // Instantiated now for constant evaluation, but not used.
+            self.note_used_for_instantiation(f, loc);
+            return;
+        }
         // A member function of a class template specialization is
         // instantiated ([temp.inst]/5).
         self.mark_used_at(f, loc);
+    }
+
+    /// Whether some declaration of function `f` is `constexpr` or
+    /// `consteval`.
+    fn declared_constexpr(&self, f: DeclId) -> bool {
+        self.ast.redecls_of(f).any(|r| self.fn_spec(r).constexpr_kind() != ConstexprKind::None)
     }
 
     /// The end of a full-expression: wraps `e` in an `ExprWithCleanups`
