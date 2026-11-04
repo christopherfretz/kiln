@@ -4448,6 +4448,29 @@ pub mod builtin {
     pub const UMULL_OVERFLOW: u32 = 1344;
     /// `__builtin_umulll_overflow` (`bULLiCULLiCULLi*`).
     pub const UMULLL_OVERFLOW: u32 = 1345;
+    // WP-557: the multiprecision carry builtins (clang "Multiprecision
+    // Arithmetic Builtins"; kiln-private ids): `T f(T x, T y, T carryin,
+    // T *carryout)` for `T` unsigned char/short/int/long/long long.
+    /// `__builtin_addcb` (`UcUcUcUcUc*`).
+    pub const ADDCB: u32 = 2160;
+    /// `__builtin_addcs` (`UsUsUsUsUs*`).
+    pub const ADDCS: u32 = 2161;
+    /// `__builtin_addc` (`UiUiUiUiUi*`).
+    pub const ADDC: u32 = 2162;
+    /// `__builtin_addcl` (`ULiULiULiULiULi*`).
+    pub const ADDCL: u32 = 2163;
+    /// `__builtin_addcll` (`ULLiULLiULLiULLiULLi*`).
+    pub const ADDCLL: u32 = 2164;
+    /// `__builtin_subcb` (as [`ADDCB`]).
+    pub const SUBCB: u32 = 2165;
+    /// `__builtin_subcs` (as [`ADDCS`]).
+    pub const SUBCS: u32 = 2166;
+    /// `__builtin_subc` (as [`ADDC`]).
+    pub const SUBC: u32 = 2167;
+    /// `__builtin_subcl` (as [`ADDCL`]).
+    pub const SUBCL: u32 = 2168;
+    /// `__builtin_subcll` (as [`ADDCLL`]).
+    pub const SUBCLL: u32 = 2169;
     /// `void *__builtin_alloca(size_t) noexcept` (`v*z`).
     pub const ALLOCA: u32 = 123;
     /// `void *__builtin_alloca_with_align(size_t, size_t) noexcept`
@@ -4462,7 +4485,8 @@ pub mod builtin {
     pub const SPRINTF: u32 = 1057;
 
     /// WP-270: the checked-arithmetic builtins (clang 19 `Builtins.td`
-    /// `__builtin_*_overflow`; all constant-evaluated), `alloca` and the
+    /// `__builtin_*_overflow`; all constant-evaluated), WP-557's carry
+    /// builtins (constant-evaluated), `alloca` and the
     /// `printf`-family library builtins libstdc++ names (lowered to the
     /// libc function; never constant-evaluated). `R` is `restrict`.
     pub const CHECKED: &[Info] = &[
@@ -4487,6 +4511,16 @@ pub mod builtin {
         row(UMUL_OVERFLOW, "__builtin_umul_overflow", "bUiCUiCUi*", N),
         row(UMULL_OVERFLOW, "__builtin_umull_overflow", "bULiCULiCULi*", N),
         row(UMULLL_OVERFLOW, "__builtin_umulll_overflow", "bULLiCULLiCULLi*", N),
+        row(ADDCB, "__builtin_addcb", "UcUcUcUcUc*", N),
+        row(ADDCS, "__builtin_addcs", "UsUsUsUsUs*", N),
+        row(ADDC, "__builtin_addc", "UiUiUiUiUi*", N),
+        row(ADDCL, "__builtin_addcl", "ULiULiULiULiULi*", N),
+        row(ADDCLL, "__builtin_addcll", "ULLiULLiULLiULLiULLi*", N),
+        row(SUBCB, "__builtin_subcb", "UcUcUcUcUc*", N),
+        row(SUBCS, "__builtin_subcs", "UsUsUsUsUs*", N),
+        row(SUBC, "__builtin_subc", "UiUiUiUiUi*", N),
+        row(SUBCL, "__builtin_subcl", "ULiULiULiULiULi*", N),
+        row(SUBCLL, "__builtin_subcll", "ULLiULLiULLiULLiULLi*", N),
         row(ALLOCA, "__builtin_alloca", "v*z", N | F),
         row(ALLOCA_WITH_ALIGN, "__builtin_alloca_with_align", "v*zIz", N | F),
         row(VSNPRINTF, "__builtin_vsnprintf", "ic*RzcC*Ra", N | F),
@@ -4510,6 +4544,17 @@ pub mod builtin {
             | UMULLL_OVERFLOW => (2, true),
             _ => return None,
         })
+    }
+
+    /// Whether builtin `id` is a carry builtin (WP-557): `Some(false)` for
+    /// `__builtin_addc*` (`x + y + carryin`), `Some(true)` for
+    /// `__builtin_subc*` (`x - y - carryin`).
+    pub fn carry_op(id: u32) -> Option<bool> {
+        match id {
+            ADDCB | ADDCS | ADDC | ADDCL | ADDCLL => Some(false),
+            SUBCB | SUBCS | SUBC | SUBCL | SUBCLL => Some(true),
+            _ => None,
+        }
     }
 
     /// The `printf` format-attribute indices of a builtin (clang 19

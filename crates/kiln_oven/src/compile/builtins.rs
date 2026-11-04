@@ -989,6 +989,27 @@ impl Compiler<'_> {
                 op(self, bi::OVERFLOW, sub, [a, b, dst], [0, 0], begin);
                 self.emit_site(Op::Store, ak::ASSIGN, &[p, v, rt.0], e, begin);
             }
+            // WP-557: the carry builtins (clang `IntExprEvaluator`
+            // `BI__builtin_addcb`..): the three operands, then the
+            // carry-out pointer, are evaluated; the carry-out is stored
+            // through the pointer and the wrapped result is the value.
+            _ if id::carry_op(bid).is_some() => {
+                let minus = id::carry_op(bid)?;
+                let (x, y, ci, r) = (arg(0)?, arg(1)?, arg(2)?, arg(3)?);
+                let w = self.int_width(x);
+                let rq = self.ast().exprs.get(r).ty();
+                let pq = self.ast().types.pointee(rq)?;
+                let rt = self.ty(pq);
+                let a = self.rv(x);
+                let b = self.rv(y);
+                let c = self.rv(ci);
+                let p = self.rv(r);
+                let sub = w | u32::from(minus) << 8;
+                let co = self.reg();
+                self.emit_site(Op::Builtin, bi::CARRY | sub << 8, &[co, a, b, c, 0, 0], e, begin);
+                op(self, bi::CARRY, sub | bi::CARRY_VALUE, [a, b, c], [0, 0], begin);
+                self.emit_site(Op::Store, ak::ASSIGN, &[p, co, rt.0], e, begin);
+            }
             // WP-416: clang folds the alignment builtins on an integer
             // source (`IntExprEvaluator`), checking the alignment (evaluated
             // first) with its note at the alignment argument. WP-432: on a
