@@ -129,6 +129,32 @@ How to read it:
   - Codegen is 23%, and half of that is printing the textual IR that
     `opt` then has to parse again.
 
+### S8's IR emission at -O2
+
+S8 was also profiled at N=100 while emitting its -O2 IR, with no LLVM
+passes run (`-O2 -S -emit-llvm -Xclang -disable-llvm-passes`). The run
+counts 22.3 G Ir, and it has the same shape as R3.
+
+| Phase | Share |
+|---|--:|
+| sema | 70.5% |
+| codegen | 19.0% (kiln_codegen 9.5, kiln_llvm 9.6) |
+| oven | 5.0% |
+| lex + preprocess | 3.2% |
+| parse | 2.0% |
+
+The top self costs are `free` 9.0, `malloc` 5.4, `redecl` 4.5, `view`
+4.3, `memcpy` 2.7, `_int_malloc` 2.0 and `DeclArena::get` 2.0.
+
+`StrSearcher::new` also shows at 2.9%, but it is not part of a real -O2
+compile:
+
+- It comes from `lifetime_markers_llvm21`, which rewrites lifetime
+  markers in the text that `-S` writes.
+- That rewrite only runs for `-S` output at `-fclang-compat=22` with an
+  older LLVM.
+- It is not on the `-c` path.
+
 ## Hot functions by self cost
 
 The percentages are of each profile's Ir. "Calls" is the number of calls
