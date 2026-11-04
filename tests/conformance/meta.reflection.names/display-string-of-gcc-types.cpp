@@ -62,6 +62,10 @@ union U {
   int a;
 };
 template <class T> struct Holder {};
+template <class T, class U = T> struct I2 {};
+// First formed with its default written out: GCC prints the arguments
+// written where a specialization is first formed.
+using Expl = I2<char, char>;
 struct D : S, private TT<int> {};
 }  // namespace ns
 template <class T> struct G {};
@@ -126,6 +130,8 @@ CHECK(^^ns::V<>, "ns::V<>");
 CHECK((^^ns::V<int, char>), "ns::V<int, char>");
 CHECK(^^ns::TTP<ns::Q>, "ns::TTP<ns::Q>");
 CHECK(^^G<const ns::S*>, "G<const ns::S*>");
+CHECK(^^ns::I2<char>, "ns::I2<char, char>");
+CHECK(^^ns::I2<int>, "ns::I2<int>");
 // Aliases print with what they alias.
 CHECK(^^ns::Al, "ns::Al {aka ns::S}");
 CHECK(^^ns::I, "ns::I {aka int}");

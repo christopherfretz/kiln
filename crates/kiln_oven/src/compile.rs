@@ -2869,13 +2869,25 @@ impl Compiler<'_> {
             ExprKind::SourceLocExpr => self.source_loc(e, dst),
             ExprKind::ConstantExpr => {
                 let ast = self.ast();
-                let v = ast
-                    .exprs
-                    .constant_value(e)
-                    .and_then(|c| ast.consts.scalar(c))
-                    .and_then(|s| scalar_bits(&s));
+                let cv = ast.exprs.constant_value(e);
+                let scalar = cv.and_then(|c| ast.consts.scalar(c));
+                let v = scalar.as_ref().and_then(scalar_bits);
+                let ptr = matches!(scalar, Some(kiln_ast::consts::Scalar::Pointer { .. }));
                 if let Some(v) = v {
                     self.konst(dst, v);
+                } else if let (true, Some(cv)) = (ptr, cv) {
+                    // A pointer constant (a substituted template argument
+                    // into a `define_static_array` object): thawed.
+                    let ty = self.ety(e);
+                    let raw = kiln_ast::RawId::raw(cv);
+                    let loc = self.begin(e);
+                    self.emit_site(
+                        Op::Builtin,
+                        crate::kbc::bi::THAW_PTR,
+                        &[dst, dst, dst, dst, raw, ty.0],
+                        e,
+                        loc,
+                    );
                 } else {
                     let op = ast.exprs.operand(e);
                     self.rv_inner(op, dst);

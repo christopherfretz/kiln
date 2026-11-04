@@ -49,7 +49,10 @@ impl Substituter<'_, '_, '_> {
         // consumes the overload set it records, so the pattern's node
         // cannot be shared between specializations (clang's
         // `TransformUnresolvedMemberExpr`).
-        if !self.needs_rebuild(e) && self.sema.member_overload(e).is_none() {
+        if !self.needs_rebuild(e)
+            && self.sema.member_overload(e).is_none()
+            && !self.dealiased_in_expansion(e)
+        {
             if self.lambda_bodies > 0 {
                 self.note_shared_captures(e);
             }
@@ -894,6 +897,7 @@ impl Substituter<'_, '_, '_> {
             // template template parameter its argument.
             ExprKind::CXXReflectExpr => match ex(self).reflect_operand(e) {
                 Reflectee::Type(q) => {
+                    let q = self.expansion_dealias(q);
                     let q = self.ty(q, loc)?;
                     Ok(self.sema.act_on_reflect_type(q, loc, end))
                 }
@@ -2457,5 +2461,52 @@ impl Substituter<'_, '_, '_> {
         let _ = self.sema.require_complete(ty, loc);
         let def = self.sema.ast.definition(r).unwrap_or(r);
         self.sema.ast.decls.get(def).has(kiln_ast::decl::DeclFlags::INVALID)
+    }
+}
+
+impl Substituter<'_, '_, '_> {
+    /// The operand of `^^` as GCC 16.1 instantiates it in the body of an
+    /// expansion statement (spec/reflection.md §2.3): its tsubst treats
+    /// that body as a template definition, finds no local specialization
+    /// of a type alias declared outside every template, and drops one
+    /// level of the alias (gcc/cp/pt.cc `tsubst`, "We don't have an
+    /// instantiation yet, so drop the typedef"). So inside `template for`
+    /// `^^std::meta::info` is `^^decltype(^^int)`, and code comparing a
+    /// reflected value's `type_of` with it takes that branch. An alias
+    /// declared in a template (a member of a class template, a local of
+    /// a function template or of the body itself) is kept, as are alias
+    /// template specializations and every alias outside such a body.
+    /// Whether `e`, though not dependent, is a `^^` whose alias operand
+    /// [`Self::expansion_dealias`] drops, so it is formed again. Only a
+    /// `^^` reached as its own operand is: a non-dependent expression
+    /// containing one deeper is still shared (GCC rebuilds that too).
+    fn dealiased_in_expansion(&self, e: ExprId) -> bool {
+        if self.expansions.is_empty()
+            || self.sema.ast.exprs.get(e).kind() != ExprKind::CXXReflectExpr
+        {
+            return false;
+        }
+        match self.sema.ast.exprs.reflect_operand(e) {
+            Reflectee::Type(q) => self.expansion_dealias(q) != q,
+            _ => false,
+        }
+    }
+
+    fn expansion_dealias(&self, q: QualType) -> QualType {
+        if self.expansions.is_empty() {
+            return q;
+        }
+        let ast = &self.sema.ast;
+        let kiln_ast::types::TypeView::Typedef { decl, .. } = ast.types.view(q.ty()) else {
+            return q;
+        };
+        if ast.decls.get(decl).has(kiln_ast::decl::DeclFlags::DEPENDENT_CTX) {
+            return q;
+        }
+        // The aliased type as written (`using B = A;` drops to `A`).
+        let Some(underlying) = ast.decls.typedef(decl).map(|t| t.underlying) else {
+            return q;
+        };
+        QualType::new(underlying.ty(), underlying.quals_bits() | q.quals_bits())
     }
 }

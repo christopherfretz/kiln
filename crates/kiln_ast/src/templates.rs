@@ -338,6 +338,12 @@ pub struct TemplateTables {
     /// explicit instantiation declaration (`extern template struct
     /// X<int>; ... template struct X<int>;`).
     moved_class_insts: FxHashSet<DeclId>,
+    /// The number of template arguments written (or deduced) where a
+    /// class template specialization was first formed, before defaults
+    /// filled the rest: GCC's `NON_DEFAULT_TEMPLATE_ARGS_COUNT`, which
+    /// GCC-style names (`display_string_of`) print up to, explicitly
+    /// written defaults included (spec/reflection.md §3.9).
+    written_args: FxHashMap<DeclId, u32>,
     /// Functions explicitly instantiated by a definition before their
     /// template's definition was seen, in order: instantiated at the end
     /// of the TU, where codegen defines them (clang
@@ -421,6 +427,7 @@ impl Default for TemplateTables {
             end_of_tu_defs: Vec::new(),
             ref_var_insts: Vec::new(),
             moved_class_insts: FxHashSet::default(),
+            written_args: FxHashMap::default(),
             late_explicit_insts: Vec::new(),
             late_explicit_set: FxHashSet::default(),
             preferred_named: FxHashSet::default(),
@@ -572,6 +579,19 @@ impl TemplateTables {
         self.late_explicit_set.contains(&d)
     }
 
+    /// Records that class template specialization `spec` was formed from
+    /// `n` written arguments ([`Self::written_args`]); the first record
+    /// stays.
+    pub fn set_written_args(&mut self, spec: DeclId, n: u32) {
+        self.written_args.entry(spec).or_insert(n);
+    }
+
+    /// The number of arguments written where class template
+    /// specialization `spec` was first formed, if recorded.
+    pub fn written_args(&self, spec: DeclId) -> Option<u32> {
+        self.written_args.get(&spec).copied()
+    }
+
     /// The members explicitly instantiated right after `after`, in order.
     pub fn explicit_member_insts_after(&self, after: DeclId) -> &[DeclId] {
         self.explicit_member_insts.get(&after).map_or(&[], Vec::as_slice)
@@ -704,6 +724,7 @@ impl HeapSize for TemplateTables {
         r.push(MemRow::of_map("templ.partial_map", &self.partial_map));
         r.push(MemRow::of_map("templ.param_objects", &self.param_objects));
         r.push(MemRow::of_map("templ.param_object_values", &self.param_object_values));
+        r.push(MemRow::of_map("templ.written_args", &self.written_args));
         r
     }
 }

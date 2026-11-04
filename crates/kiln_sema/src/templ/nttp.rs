@@ -529,6 +529,14 @@ impl Sema<'_, '_> {
                 crate::conv::implicit_convert(self, n, ty, crate::conv::ConvCtx::Initialization)
                     .ok()
             }
+            // A pointer into an object with static storage and no
+            // declaration (a `define_static_array` element, P3491 §3.5.1):
+            // the constant itself, which no expression of the program
+            // spells.
+            Scalar::Pointer { base: PtrBase::Const(_), .. } => {
+                let o = self.builder().opaque_value_of(ty, ValueCategory::PRValue, loc);
+                Some(self.builder().constant_expr(o, Some(v)))
+            }
             Scalar::Pointer { ty: pty, base, offset, .. }
                 if self.is_subobject_ptr(pty, base, offset) =>
             {

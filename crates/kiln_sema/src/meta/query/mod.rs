@@ -113,9 +113,19 @@ impl Sema<'_, '_> {
             },
             Reflectee::Value(v) => Some(self.ast.consts.ty(v)),
             Reflectee::Object(v) => self.ast.types.pointee(self.ast.consts.ty(v)),
+            // The parameter's type in the function's type ([dcl.fct]/5:
+            // adjusted, top-level cv-qualifiers dropped), as GCC 16.1 gives
+            // it: `void f(const int)` has `type_of(parameters_of(^^f)[0])
+            // == ^^int`, whatever any declaration wrote.
             Reflectee::FnParam(f, i) => {
-                let p = self.fn_param(f, i)?;
-                self.ast.decls.get(p).ty()
+                let fty = self.ast.decls.get(f).ty();
+                let adjusted = fty.and_then(|t| self.ast.types.proto(t)).and_then(|p| {
+                    self.ast.types.params(p).get(i as usize).map(|q| q.without_quals())
+                });
+                match adjusted {
+                    Some(q) => Some(q),
+                    None => self.fn_param(f, i).and_then(|p| self.ast.decls.get(p).ty()),
+                }
             }
             Reflectee::BaseSpec(c, i) => self.base_spec(c, i).map(|b| b.ty),
             // An annotation has the type of its underlying constant

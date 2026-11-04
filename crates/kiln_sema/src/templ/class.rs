@@ -193,6 +193,7 @@ impl Sema<'_, '_> {
         if let Some((i, _)) = self.ast.spec_info(spec) {
             self.ast.templates.update_spec(i, |s| s.print_args = print);
         }
+        self.ast.templates.set_written_args(spec, written.len() as u32);
         Ok(spec)
     }
 

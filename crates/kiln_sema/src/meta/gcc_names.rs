@@ -582,7 +582,11 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             && let Some((_, info)) = ast.spec_info(d)
         {
             let args = ast.types.canonical_args(info.args);
-            let n = ast.types.args(info.print_args).len().min(ast.types.args(args).len());
+            let all = ast.types.args(args).len();
+            let n = match ast.templates.written_args(d) {
+                Some(w) => (w as usize).min(all),
+                None => ast.types.args(info.print_args).len().min(all),
+            };
             if flags & TEMPLATE_NAME == 0 {
                 self.template_args(args, n, flags & !TEMPLATE_HEADER);
             }

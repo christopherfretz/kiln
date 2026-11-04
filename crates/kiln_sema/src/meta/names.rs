@@ -353,14 +353,77 @@ impl Sema<'_, '_> {
         if let Some(&cv) = self.meta_names.locs.get(&r) {
             return Some(cv);
         }
-        let d = self.named_decl(r)?;
-        if self.kind_of(d) == DeclKind::TranslationUnit {
-            return None;
-        }
-        let loc = self.ast.decls.get(d).loc();
+        let loc = match self.ast.reflections.get(r) {
+            // A named parameter is where its name is, an unnamed one where
+            // its decl-specifiers begin (GCC's `DECL_SOURCE_LOCATION`).
+            Reflectee::FnParam(f, i) => {
+                let p = self.gcc_param_decl(f, i)?;
+                let n = self.ast.decls.get(p);
+                match n.name().as_ident() {
+                    Some(_) => n.loc(),
+                    None => self.ast.decls.cold.begin_loc.get(p).copied().unwrap_or(n.loc()),
+                }
+            }
+            _ => {
+                let d = self.named_decl(r)?;
+                if self.kind_of(d) == DeclKind::TranslationUnit {
+                    return None;
+                }
+                self.ast.decls.get(self.gcc_location_decl(r, d)).loc()
+            }
+        };
         let cv = self.meta_source_location(loc, "")?;
         self.meta_names.locs.insert(r, cv);
         Some(cv)
+    }
+}
+
+impl Sema<'_, '_> {
+    /// The declaration whose location `source_location_of(r)` reports for
+    /// `d`, the first declaration `r` names, as GCC 16.1 keeps one location
+    /// per entity (`DECL_SOURCE_LOCATION`, updated as it is redeclared):
+    /// a class or enumeration where it is defined, else where first
+    /// declared; an implicit or partial specialization of a class
+    /// template where its primary template's pattern is (defined, else
+    /// declared); a variable or function its definition, else its latest
+    /// declaration; anything else (a template, namespace, alias, member)
+    /// its first declaration.
+    fn gcc_location_decl(&self, r: ReflectionId, d: DeclId) -> DeclId {
+        use kiln_ast::templates::SpecKind;
+        let k = self.kind_of(d);
+        let is_type = matches!(self.ast.reflections.get(r), Reflectee::Type(_));
+        if is_type && matches!(k, DeclKind::CXXRecord | DeclKind::Enum) {
+            if let Some((_, info)) = self.ast.spec_info(d)
+                && info.kind != SpecKind::ExplicitSpecialization
+                && let Some(p) = self.ast.template_info(info.template).and_then(|t| t.pattern)
+            {
+                return self.ast.definition(p).unwrap_or(p);
+            }
+            return self.ast.definition(d).unwrap_or(d);
+        }
+        if k.is_function()
+            && let Some((_, info)) = self.ast.spec_info(d)
+            && info.kind != SpecKind::ExplicitSpecialization
+        {
+            // A function template specialization is where its template's
+            // definition is (instantiated or not).
+            if let Some(p) = self.ast.template_info(info.template).and_then(|t| t.pattern) {
+                return self.ast.definition(p).unwrap_or(p);
+            }
+            return info.from;
+        }
+        if k.is_function() || matches!(k, DeclKind::Var | DeclKind::VarTemplateSpecialization) {
+            return self.ast.definition(d).unwrap_or_else(|| self.ast.latest(d));
+        }
+        d
+    }
+
+    /// The declaration of parameter `i` of function `f` that GCC 16.1
+    /// keeps: the definition's, else the first declaration's.
+    fn gcc_param_decl(&self, f: DeclId, i: u32) -> Option<DeclId> {
+        let decl = self.ast.definition(f).unwrap_or_else(|| self.ast.first(f));
+        let data = self.ast.decls.function(decl)?;
+        self.ast.lists.iter::<DeclId>(data.params).nth(i as usize)
     }
 }
 
