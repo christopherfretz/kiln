@@ -137,6 +137,16 @@ pub fn opt_pipeline(flag: Option<&str>) -> Option<&'static str> {
 
 /// clang's `CodeGenOpts.OptimizationLevel` for `-O<flag>`: 0 at `-O0`,
 /// 1 at `-O`/`-O1`/`-Og`, 2 at `-O2`/`-Os`/`-Oz`, else 3.
+/// [basic.indet]/1 (P2795R5): C++26 automatic variables start with their
+/// erroneous value (spec/codegen.md §7r).
+fn default_auto_var_init(std: &crate::toolchain::LangStd) -> AutoVarInit {
+    if std.cplusplus && std.lex >= kiln_lex::Std::Cxx26 {
+        AutoVarInit::Zero
+    } else {
+        AutoVarInit::Uninitialized
+    }
+}
+
 pub fn opt_level(flag: Option<&str>) -> u8 {
     match flag {
         None | Some("-O0") => 0,
@@ -258,15 +268,7 @@ impl CodegenJob<'_> {
                 llvm_major: job.toolchain.llvm_major(),
                 omit_frame_pointer: a.omit_frame_pointer,
                 omit_leaf_frame_pointer: a.omit_leaf_frame_pointer,
-                // [basic.indet]/1 (P2795R5): C++26 automatic variables
-                // start with their erroneous value (spec/codegen.md §7r).
-                auto_var_init: a.auto_var_init.unwrap_or(
-                    if job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx26 {
-                        AutoVarInit::Zero
-                    } else {
-                        AutoVarInit::Uninitialized
-                    },
-                ),
+                auto_var_init: a.auto_var_init.unwrap_or(default_auto_var_init(&job.std)),
                 auto_var_init_max_size: a
                     .auto_var_init_max_size
                     .unwrap_or(kiln_codegen::AUTO_VAR_INIT_MAX_SIZE),
