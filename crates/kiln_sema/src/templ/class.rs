@@ -1516,7 +1516,20 @@ impl Sema<'_, '_> {
             .with_constexpr(vspec.is_constexpr());
         let mut h = kiln_ast::DeclHead::new(spec, pn.name(), pn.loc());
         h.lexical = Some(lexical);
+        // The definition belongs to the specialization, which is not a
+        // dependent context ([temp.dep.type]/1; clang's
+        // `InstantiateVariableDefinition` gives it the specialization as
+        // its `DeclContext`), even when the reference instantiating it
+        // sits in a template definition (`alignment_of<char>::value` in
+        // boost's `type_with_alignment<Align>`). Built at that
+        // reference's template depth it got `DEPENDENT_CTX`, and as the
+        // member's latest redeclaration it made every later reference to
+        // the member instantiation-dependent: a template-id taking one as
+        // an argument (boost.mpl's `lcm<S::value, alignment_of<T>::value>`)
+        // stayed dependent after substitution.
+        let depth = std::mem::take(&mut self.ast.templates.dependent_depth);
         let d = self.builder().var(h, ty, spec_bits, Some(v));
+        self.ast.templates.dependent_depth = depth;
         self.ast.templates.set_instantiated_from(d, pdef);
         self.in_inst_context(spec, |s| {
             let mut sub = Substituter::new(s, &args);
