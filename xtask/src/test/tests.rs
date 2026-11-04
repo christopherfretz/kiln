@@ -885,6 +885,11 @@ fn meta_header_mode_selection() {
         Some("meta-header mode: uses the kiln extension `__kiln_define_member`")
     );
     assert_eq!(
+        skip(&format!("{head}auto n = name_of(^^int);\n")).as_deref(),
+        Some("meta-header mode: uses the kiln extension `name_of`")
+    );
+    assert_eq!(skip(&format!("{head}auto n = my_name_of(^^int);\n")), None);
+    assert_eq!(
         skip("//@ expect: compile-ok\n//@ args: -stdlib=libc++\n#include \"kiln_meta_traits.h\"\n")
             .as_deref(),
         Some("meta-header mode: the test does not use libstdc++")

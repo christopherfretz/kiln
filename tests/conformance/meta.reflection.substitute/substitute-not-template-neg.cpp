@@ -1,6 +1,5 @@
-// [meta.reflection.substitute] (P2996R13): substitute of a reflection that
-// is not a template, and template_of / template_arguments_of of one that is
-// not a specialization (including an alias of a specialization), throw.
+// [meta.reflection.substitute] (P2996R13): substitute of a reflection that is not a template, and template_of
+// / template_arguments_of of one that is not a specialization (including an alias of a specialization), throw.
 //@ expect: compile-fail
 //@ oracle: gcc
 //@ args: -freflection -I tests/support
@@ -22,6 +21,7 @@
 //@ diag: 36:20 note "'^^A' is not a template specialization"
 //@ diag: 36:16 error "constexpr variable 'd' must be initialized by a constant expression"
 //@ diag: 36:20 note "'^^A' is not a template specialization"
+//@ meta-header: skip the note spells the real header's default template argument initializer_list<info>
 #if __has_include(<meta>)
 #include <meta>
 #else

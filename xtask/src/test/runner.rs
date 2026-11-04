@@ -1553,12 +1553,17 @@ fn compat_for(
 /// the standard API: tests that use them still run in the mode.
 const META_HEADER_HELPERS: &[&str] = &["__kiln_data_members", "__kiln_info_array"];
 
+/// Functions `tests/support/kiln_meta.h` declares in `std::meta` that the
+/// standard does not (kiln extensions without the `__kiln_` prefix).
+const META_HEADER_EXTENSIONS: &[&str] = &["name_of"];
+
 /// Why the header-differential mode (`--meta-header`) leaves a test out,
 /// or `None` when it runs it: it must include a `kiln_meta*.h`, not say
 /// `meta-header: skip`, be a kind whose outcome does not depend on the
 /// header's declarations (`compile-ok`, `compile-fail`, `run`,
 /// `no-crash`), not select libc++, and name no kiln extension
-/// (`__kiln_*`, other than [`META_HEADER_HELPERS`]).
+/// (`__kiln_*`, other than [`META_HEADER_HELPERS`], or a call of one of
+/// [`META_HEADER_EXTENSIONS`]).
 pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> {
     const MODE: &str = "meta-header mode";
     let includes = source.lines().any(|l| {
@@ -1593,6 +1598,15 @@ pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> 
             return Some(format!("{MODE}: uses the kiln extension `{ident}`"));
         }
         rest = &tail[end..];
+    }
+    for ext in META_HEADER_EXTENSIONS {
+        let call = format!("{ext}(");
+        let called = source
+            .match_indices(&call)
+            .any(|(i, _)| !source[..i].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_'));
+        if called {
+            return Some(format!("{MODE}: uses the kiln extension `{ext}`"));
+        }
     }
     None
 }
