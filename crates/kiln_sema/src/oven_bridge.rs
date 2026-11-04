@@ -218,7 +218,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     }
 
     /// The body of `f`'s definition, if it has one.
-    fn defined_body(&self, f: DeclId) -> Option<StmtId> {
+    pub(crate) fn defined_body(&self, f: DeclId) -> Option<StmtId> {
         let d = self.ast.definition(f)?;
         self.ast.decls.function(d)?.body
     }

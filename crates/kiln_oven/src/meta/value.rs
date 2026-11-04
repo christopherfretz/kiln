@@ -50,6 +50,11 @@ super::meta_family! {
         /// `std::is_string_literal(p)` ([meta.string.literal]) is
         /// `std::meta::__kiln_is_string_literal(p)`.
         IsStringLiteral = ("__kiln_is_string_literal", "x", Stable, 479);
+        /// `reflect_constant_string(r)` as libstdc++ 16.1 declares it
+        /// (no body; WP-484): the intrinsic itself.
+        ReflectConstantStringStd = ("reflect_constant_string", "x", Stable, 484);
+        /// `reflect_constant_array(r)`: likewise.
+        ReflectConstantArrayStd = ("reflect_constant_array", "x", Stable, 484);
     }
 }
 
@@ -58,19 +63,26 @@ const MAX_DEPTH: u32 = 8;
 /// At most this many non-empty members in a range class.
 const MAX_LEAVES: usize = 4;
 
-/// The non-empty scalar and array subobjects of `t` at `base`.
+/// The non-empty scalar and array subobjects of `t` at `base`; a union
+/// member is skipped and counted in `unions` (the small-string buffer of
+/// libstdc++'s `basic_string`, whose pointer and length come first).
 fn range_leaves(
     types: &Types,
     t: OTy,
     base: u64,
     depth: u32,
     out: &mut Vec<Leaf>,
+    unions: &mut u32,
 ) -> Result<(), &'static str> {
     if depth > MAX_DEPTH {
         return Err("nests too deeply");
     }
     match types.kind(t) {
-        TyKind::Record { union: true, .. } => Err("is a union"),
+        TyKind::Record { union: true, .. } if depth == 0 => Err("is a union"),
+        TyKind::Record { union: true, .. } => {
+            *unions += 1;
+            Ok(())
+        }
         TyKind::Record { .. } => {
             for f in types.fields(t) {
                 if f.width.is_some() {
@@ -79,7 +91,7 @@ fn range_leaves(
                 if types.size(f.ty) == 0 || types.holds_no_data(f.ty) {
                     continue;
                 }
-                range_leaves(types, f.ty, base + f.offset, depth + 1, out)?;
+                range_leaves(types, f.ty, base + f.offset, depth + 1, out, unions)?;
             }
             Ok(())
         }
@@ -109,7 +121,8 @@ pub(crate) fn elems_recipe(types: &Types, t: OTy) -> Result<Recipe, String> {
         _ => return Err("is not a contiguous range".into()),
     }
     let mut ls = Vec::with_capacity(MAX_LEAVES);
-    range_leaves(types, t, 0, 0, &mut ls).map_err(str::to_owned)?;
+    let mut unions = 0;
+    range_leaves(types, t, 0, 0, &mut ls, &mut unions).map_err(str::to_owned)?;
     ls.sort_by_key(|l| l.off);
     let ptr_to = |l: &Leaf| match types.kind(l.ty) {
         TyKind::Ptr(e) => Some(e),
@@ -120,6 +133,8 @@ pub(crate) fn elems_recipe(types: &Types, t: OTy) -> Result<Recipe, String> {
         ptr_to(a).is_some_and(|x| ptr_to(b).is_some_and(|y| types.info(x).q == types.info(y).q))
     };
     let found = match ls[..] {
+        // A union only after a pointer and a length (a string's buffer).
+        _ if unions > 0 && !(ls.len() == 2 && ptr_to(&ls[0]).is_some() && is_int(&ls[1])) => None,
         [] => Some(Recipe::Inline { off: 0, elem: t, n: 0 }),
         [l] => match types.kind(l.ty) {
             TyKind::Array { elem, n } => Some(Recipe::Inline { off: l.off, elem, n }),

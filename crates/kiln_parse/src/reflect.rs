@@ -47,17 +47,30 @@ impl Parser<'_, '_> {
             // An operator-, conversion-function-id or destructor name
             // (/7): consumed whole, reflected later.
             if self.at_kw(Kw::Operator) {
-                self.unsupported("reflection of an operator or conversion function name", operand);
-                self.parse_operator_function_name()?;
-                return None;
+                let dn = self.parse_operator_function_name()?;
+                if let Some(q) = qual
+                    && self.s.is_dependent_ctx(q.ctx)
+                {
+                    self.unsupported("reflection of a dependent qualified name", operand);
+                    return None;
+                }
+                let end = self.prev_end();
+                return Some(self.s.act_on_reflect_operator_name(qual, dn, operand, loc, end));
             }
             if self.at(Punct::Tilde) {
-                self.unsupported("reflection of a destructor name", operand);
                 self.bump();
-                if self.ident().is_some() {
-                    self.bump();
+                let Some(class) = self.ident() else {
+                    return Some(self.s.reflect_bad_operand(operand, loc));
+                };
+                self.bump();
+                if let Some(q) = qual
+                    && self.s.is_dependent_ctx(q.ctx)
+                {
+                    self.unsupported("reflection of a dependent qualified name", operand);
+                    return None;
                 }
-                return None;
+                let end = self.prev_end();
+                return Some(self.s.act_on_reflect_destructor(qual, class, operand, loc, end));
             }
             let bad = self.s.reflect_bad_operand(operand, loc);
             // A literal or parenthesized operand is consumed whole, so the

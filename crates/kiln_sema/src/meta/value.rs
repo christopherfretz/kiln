@@ -49,10 +49,10 @@ impl Sema<'_, '_> {
                 let t = self.referenced(p0()?);
                 MetaOut::Info(self.reflect_function(arg(0)?, t, loc, oven)?)
             }
-            ValueOp::ReflectConstantString => {
+            ValueOp::ReflectConstantString | ValueOp::ReflectConstantStringStd => {
                 MetaOut::Info(self.reflect_constant_elems(arg(0)?, true, ctx, oven)?)
             }
-            ValueOp::ReflectConstantArray => {
+            ValueOp::ReflectConstantArray | ValueOp::ReflectConstantArrayStd => {
                 MetaOut::Info(self.reflect_constant_elems(arg(0)?, false, ctx, oven)?)
             }
             ValueOp::IsStringLiteral => {
@@ -78,9 +78,13 @@ impl Sema<'_, '_> {
     ) -> Result<Option<Shape>, String> {
         Ok(match (v, param) {
             (ValueOp::Extract, None) => Some(Shape::Whole),
-            (ValueOp::ReflectConstantString | ValueOp::ReflectConstantArray, Some(0)) => {
-                Some(Shape::Elems)
-            }
+            (
+                ValueOp::ReflectConstantString
+                | ValueOp::ReflectConstantArray
+                | ValueOp::ReflectConstantStringStd
+                | ValueOp::ReflectConstantArrayStd,
+                Some(0),
+            ) => Some(Shape::Elems),
             _ => None,
         })
     }
@@ -175,6 +179,30 @@ impl Sema<'_, '_> {
         }
         let cv = self.bridge(|b| oven.meta_freeze(b, v, t, loc))?;
         self.check_tparg(cv, "the value", loc)?;
+        let r = if self.ast.types.as_record(t).is_some() {
+            let ct = self.ast.types.qualify(t, Quals::CONST);
+            let obj = self.builder().template_param_object(ct, cv);
+            Reflectee::Object(self.object_ptr(t, PtrBase::Decl(obj), 0)?)
+        } else {
+            Reflectee::Value(cv)
+        };
+        self.intern_reflection(r, loc).map_err(MetaError::from)
+    }
+
+    /// The reflection of annotation `a`'s underlying constant
+    /// ([dcl.attr.annotation]/2): `constant_of(a)` (P3394R4). A class
+    /// value is its template parameter object, as `reflect_constant`
+    /// makes it.
+    pub(super) fn annotation_constant(
+        &mut self,
+        a: kiln_ast::AnnId,
+        loc: Loc,
+    ) -> Result<ReflectionId, MetaError> {
+        let Some(cv) = self.ast.annots.get(a).value else {
+            return Err(MetaError::invalid());
+        };
+        let t = self.ast.types.canonical(self.ast.consts.ty(cv));
+        let t = crate::conv::strip_cv(self, t);
         let r = if self.ast.types.as_record(t).is_some() {
             let ct = self.ast.types.qualify(t, Quals::CONST);
             let obj = self.builder().template_param_object(ct, cv);
@@ -302,6 +330,12 @@ impl Sema<'_, '_> {
         let tc = self.ast.types.canonical(t);
         match self.ast.reflections.get(r) {
             Reflectee::Value(cv) => self.extract_value(r, cv, tc, loc),
+            // An annotation's underlying constant ([meta.reflection.extract]
+            // via `constant_of`, P3394R4).
+            Reflectee::Annotation(a) => {
+                let c = self.annotation_constant(a, loc)?;
+                self.extract(c, t, loc)
+            }
             Reflectee::Object(p) => self.extract_object(r, p, tc, loc),
             Reflectee::Decl(d) => match self.kind_of(d) {
                 DeclKind::Var | DeclKind::VarTemplateSpecialization => {

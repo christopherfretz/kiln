@@ -324,6 +324,8 @@ impl Sema<'_, '_> {
     ) -> Result<ReflectionId, MetaError> {
         let d = match self.ast.reflections.get(r) {
             Reflectee::Value(_) => return Ok(r),
+            // An annotation's underlying constant (P3394R4).
+            Reflectee::Annotation(a) => return self.annotation_constant(a, loc),
             Reflectee::Object(cv) => match self.ast.consts.scalar(cv) {
                 Some(Scalar::Pointer { base: PtrBase::Decl(d), offset: 0, .. }) => d,
                 _ => return fail(loc, "kiln: constant_of this object is not implemented yet"),

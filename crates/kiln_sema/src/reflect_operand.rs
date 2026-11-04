@@ -10,6 +10,7 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
+use kiln_ast::names::DeclName;
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -50,13 +51,78 @@ impl Sema<'_, '_> {
         loc: Loc,
         end: Loc,
     ) -> ExprId {
+        self.act_on_reflect_name_dn(qual, DeclName::ident(name), name_loc, loc, end)
+    }
+
+    /// `^^nns operator-function-id` / `^^nns conversion-function-id`
+    /// ([expr.reflect]/7; WP-484): the unique function the name finds.
+    /// The implicit copy and move assignment operators of a class `nns`
+    /// names are declared first, as for any lookup of `operator=`.
+    pub fn act_on_reflect_operator_name(
+        &mut self,
+        qual: Option<Qualifier>,
+        name: DeclName,
+        name_loc: Loc,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        if let Some(q) = qual
+            && self.kind_of(q.ctx) == DeclKind::CXXRecord
+            && name.as_operator() == Some(kiln_ast::names::OverloadedOperator::Equal)
+        {
+            use crate::class::SpecialKind;
+            self.ensure_implicit(q.ctx, SpecialKind::CopyAssign);
+            self.ensure_implicit(q.ctx, SpecialKind::MoveAssign);
+        }
+        self.act_on_reflect_name_dn(qual, name, name_loc, loc, end)
+    }
+
+    /// `^^nns ~ class-name` ([expr.reflect]/7; WP-484): the destructor of
+    /// the class `nns` names (the enclosing class without `nns`), declared
+    /// first if it is implicit. `class_name` must name that class
+    /// ([class.dtor]/1).
+    pub fn act_on_reflect_destructor(
+        &mut self,
+        qual: Option<Qualifier>,
+        class_name: Symbol,
+        name_loc: Loc,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let class = match qual {
+            Some(q) => Some(q.ctx),
+            None => self.this_class().map(|(_, d)| d).or(self.current_class().map(|c| c.record)),
+        }
+        .filter(|&c| self.kind_of(c) == DeclKind::CXXRecord && self.is_class_named(c, class_name));
+        let Some(c) = class else {
+            return self.reflect_bad_operand(name_loc, loc);
+        };
+        self.ensure_implicit(c, crate::class::SpecialKind::Dtor);
+        let canon = self.ast.types.canonical(self.class_type(c)).ty();
+        let dn = self.ast.names.destructor(canon);
+        let found = self.lookup_in_class_dn(c, dn, LookupKind::Ordinary);
+        match found.decls.as_slice() {
+            &[d] => self.reflect_entity(self.ast.strip_shadow(d), name_loc, loc, end),
+            _ => self.reflect_bad_operand(name_loc, loc),
+        }
+    }
+
+    /// [`Sema::act_on_reflect_name`] for any declaration name.
+    fn act_on_reflect_name_dn(
+        &mut self,
+        qual: Option<Qualifier>,
+        name: DeclName,
+        name_loc: Loc,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
         let info = self.meta_info_type();
         let lookup = |s: &Self, k| match qual {
-            Some(q) => s.lookup_qualified(q.ctx, name, k),
-            None => s.lookup_name(name, k),
+            Some(q) => s.lookup_qualified_dn(q.ctx, name, k),
+            None => s.lookup_name_dn(name, k),
         };
         let mut found = lookup(self, LookupKind::Ordinary);
-        if found.decls.is_empty() {
+        if found.decls.is_empty() && name.as_ident().is_some() {
             found = lookup(self, LookupKind::Nested);
         }
         let mut decls: Vec<DeclId> =
@@ -64,7 +130,8 @@ impl Sema<'_, '_> {
         decls.dedup_by_key(|d| self.entity_decl(*d)); // same_entity: raw ok
         match decls.as_slice() {
             [] => {
-                let text = crate::decl::sym_str(self, name);
+                let text =
+                    self.ast.names.simple_spelling(name, self.ast.symbols()).unwrap_or_default();
                 let d = self.diag(DiagId::sema_undeclared_var_use, name_loc).arg(text);
                 self.emit(d);
                 self.recover(info, &[], loc)
