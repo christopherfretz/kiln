@@ -266,7 +266,7 @@ impl Cg<'_> {
         let fa = self.m.attr_set(&[Attr::Flag(AttrKind::NoUnwind)]);
         let opts =
             CallOpts { attrs: AttrList { func: fa, ..AttrList::default() }, ..CallOpts::default() };
-        // LLVM 21+ (`ir_version`, clang 22 at compat 22): no size operand.
+        // LLVM 22+ (`ir_version`, clang 22 at compat 22): no size operand.
         let args = if intrinsics::lifetime_has_size(&self.m) {
             vec![V::C(self.m.const_int(LTy::I64, i128::from(size))), addr]
         } else {

@@ -2989,12 +2989,13 @@ fields; each follows clang 19's IR.
   `VarBypassDetector`, initialized over the body as in clang
   `GenerateCode`; an indirect `goto` bypasses every variable). Thunks
   get none. The markers use LLVM 19's `(i64 size, ptr nocapture)`
-  signature, and LLVM 21's `(ptr captures(none))` at `-fclang-compat=22`
-  (WP-462, §7z): codegen emits the latter itself for an LLVM 21+ backend
+  signature, and LLVM 22's `(ptr captures(none))` at `-fclang-compat=22`
+  (WP-462, §7z): codegen emits the latter itself for an LLVM 22+ backend
   (`kiln_llvm` `Module::ir_version`, `intrinsics::lifetime_has_size`),
   and for an older one the driver rewrites the `-S -emit-llvm` text after
-  `opt` (driver.md "IR optimization"), so `opt-19`/`llc-19` still get
-  the form they parse.
+  `opt` (driver.md "IR optimization"), so `opt`/`llc` 19 and 21 still get
+  the sized form they verify (LLVM 21 spells its pointer
+  `captures(none)` but keeps the size operand).
 - **Cleanup-destination promotion (`fir/mem2reg.rs`).** clang's
   `FinishFunction` replaces a coroutine's `cleanup.dest.slot` alloca by
   SSA values and phis; kiln ports LLVM 19's `PromoteMemToReg` for that
@@ -3551,7 +3552,7 @@ categories, compared with clang 22 and clang 19 on both targets).
   a class through a type written before the class was defined now reads
   the definition's fields
   (`list-init-of-class-declared-incomplete-run.cpp`).
-- **Lifetime markers at `-fclang-compat=22`** use LLVM 21's
+- **Lifetime markers at `-fclang-compat=22`** use LLVM 22's
   `(ptr captures(none))` form (§7p, WP-370, "Lifetime markers"; driver.md
   "IR optimization"); the `lifetime_o1`, `extern_template_vtable_o1` and
   `loop_hints_o1` deviations are gone.

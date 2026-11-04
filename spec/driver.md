@@ -566,15 +566,17 @@ the current directory (standard input is `-`). `-o -` is standard output.
   takes 0.02 s and 62 MB RSS, against 2.9 s for the whole debug-build
   `kiln++ -c`; `go.pass.cpp` 0.01 s.
 
-  Lifetime markers (WP-462): LLVM 21 dropped the size operand of
-  `llvm.lifetime.start`/`.end`. At `-fclang-compat=22` with an LLVM 21+
-  backend codegen emits the new `(ptr captures(none))` form itself; with
-  an older backend it emits LLVM 19's `(i64 immarg, ptr nocapture)` form,
-  which that backend's `opt` and `llc` parse, and the `-S -emit-llvm`
-  text is rewritten to the new form after the `opt` runs
-  (`codegen_cmd::lifetime_markers_llvm21`: the size of every call and of
+  Lifetime markers (WP-462): LLVM 22 dropped the size operand of
+  `llvm.lifetime.start`/`.end` (LLVM 21's verifier still requires it).
+  At `-fclang-compat=22` with an LLVM 22+ backend codegen emits the new
+  `(ptr captures(none))` form itself; with an older backend it emits the
+  sized form (LLVM 19's `(i64 immarg, ptr nocapture)`, LLVM 21's
+  `(i64 immarg, ptr captures(none))`), which that backend's `opt` and
+  `llc` verify, and the `-S -emit-llvm` text is rewritten to the new
+  form after the `opt` runs
+  (`codegen_cmd::lifetime_markers_llvm22`: the size of every call and of
   the two declarations dropped, `nocapture` written `captures(none)`),
-  so it is clang 22's text, which LLVM 19 tools then reject (use
+  so it is clang 22's text, which LLVM 19 and 21 tools then reject (use
   `-fclang-compat=19` for IR they read). Bitcode, assembly and objects
   are never rewritten.
 - **Link.** `clang++` with `--target=<triple>` (only if given),

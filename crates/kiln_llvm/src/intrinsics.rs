@@ -309,21 +309,22 @@ fn lifetime(m: &mut Module, base: &str) -> FuncId {
 }
 
 /// Whether `llvm.lifetime.start`/`.end` take the object size first: below
-/// [`Module::ir_version`] 21 (LLVM 21 dropped the operand; its `ptr` is
-/// then written `captures(none)`).
+/// [`Module::ir_version`] 22 (LLVM 22 dropped the operand; LLVM 21 keeps
+/// it but its verifier rejects the sizeless form, and from 21 on the
+/// `ptr` is written `captures(none)`).
 pub fn lifetime_has_size(m: &Module) -> bool {
-    m.ir_version < 21
+    m.ir_version < 22
 }
 
-/// `void @llvm.lifetime.start.p0(i64 immarg size, ptr nocapture)`; at
-/// [`Module::ir_version`] 21+ `void @llvm.lifetime.start.p0(ptr
-/// captures(none))`.
+/// `void @llvm.lifetime.start.p0(i64 immarg size, ptr nocapture)` (at
+/// [`Module::ir_version`] 21 `captures(none)`); at 22+ `void
+/// @llvm.lifetime.start.p0(ptr captures(none))`.
 pub fn lifetime_start(m: &mut Module) -> FuncId {
     lifetime(m, "llvm.lifetime.start")
 }
 
 /// `void @llvm.lifetime.end.p0(i64 immarg size, ptr nocapture)`; at
-/// [`Module::ir_version`] 21+ without the size.
+/// [`Module::ir_version`] 22+ without the size.
 pub fn lifetime_end(m: &mut Module) -> FuncId {
     lifetime(m, "llvm.lifetime.end")
 }

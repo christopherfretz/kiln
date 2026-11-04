@@ -635,22 +635,24 @@ fn captures_none_at_llvm_21() {
     assert!(!t.contains("nocapture"), "{t}");
 }
 
-/// §6: at `ir_version` 21+ `llvm.lifetime.start`/`.end` take only the
-/// pointer (LLVM 21 dropped the size operand), written `captures(none)`.
+/// §6: at `ir_version` 22+ `llvm.lifetime.start`/`.end` take only the
+/// pointer (LLVM 22 dropped the size operand; LLVM 21's verifier still
+/// requires it), written `captures(none)` from 21 on.
 #[test]
-fn lifetime_markers_at_llvm_21() {
+fn lifetime_markers_at_llvm_22() {
     for (version, want) in [
         (19, "declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #0\n"),
-        (21, "declare void @llvm.lifetime.start.p0(ptr captures(none)) #0\n"),
+        (21, "declare void @llvm.lifetime.start.p0(i64 immarg, ptr captures(none)) #0\n"),
+        (22, "declare void @llvm.lifetime.start.p0(ptr captures(none)) #0\n"),
     ] {
         let mut m = aarch64();
         m.ir_version = version;
-        assert_eq!(intrinsics::lifetime_has_size(&m), version < 21);
+        assert_eq!(intrinsics::lifetime_has_size(&m), version < 22);
         let _ = intrinsics::lifetime_start(&mut m);
         let _ = intrinsics::lifetime_end(&mut m);
         let t = m.to_string();
         assert!(t.contains(want), "{t}");
-        assert_eq!(t.contains("i64 immarg"), version < 21, "{t}");
+        assert_eq!(t.contains("i64 immarg"), version < 22, "{t}");
     }
 }
 

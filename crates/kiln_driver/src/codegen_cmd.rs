@@ -533,29 +533,33 @@ pub fn needs_coro_lowering(ir: &str) -> bool {
     ir.lines().any(|l| l.starts_with("declare ") && l.contains(" @llvm.coro."))
 }
 
-/// The textual IR `ir` with LLVM 21's lifetime markers: the size operand
+/// The textual IR `ir` with LLVM 22's lifetime markers: the size operand
 /// of every `llvm.lifetime.start`/`.end` call and declaration dropped
-/// and the declarations' `nocapture` written `captures(none)`. clang 22's
-/// `-S -emit-llvm` text at `-fclang-compat=22` when kiln's backend is
-/// LLVM 20 or older, whose `opt` and `llc` take the sized form codegen
-/// emits for them (spec/driver.md "IR optimization").
-pub fn lifetime_markers_llvm21(ir: &str) -> String {
+/// and the declarations' `nocapture` (LLVM 19/20) written
+/// `captures(none)`. clang 22's `-S -emit-llvm` text at
+/// `-fclang-compat=22` when kiln's backend is LLVM 21 or older, whose
+/// `opt` and `llc` take only the sized form codegen emits for them
+/// (spec/driver.md "IR optimization").
+pub fn lifetime_markers_llvm22(ir: &str) -> String {
     if !ir.contains("@llvm.lifetime.") {
         return ir.to_owned();
     }
     let mut out = String::with_capacity(ir.len());
     for line in ir.split_inclusive('\n') {
-        out.push_str(&lifetime_line_llvm21(line));
+        out.push_str(&lifetime_line_llvm22(line));
     }
     out
 }
 
-fn lifetime_line_llvm21(line: &str) -> std::borrow::Cow<'_, str> {
+fn lifetime_line_llvm22(line: &str) -> std::borrow::Cow<'_, str> {
     for callee in ["@llvm.lifetime.start.p0(", "@llvm.lifetime.end.p0("] {
         let Some(at) = line.find(callee) else { continue };
         let (head, rest) = line.split_at(at + callee.len());
         if line.starts_with("declare ") {
-            if let Some(tail) = rest.strip_prefix("i64 immarg, ptr nocapture)") {
+            let tail = rest
+                .strip_prefix("i64 immarg, ptr nocapture)")
+                .or_else(|| rest.strip_prefix("i64 immarg, ptr captures(none))"));
+            if let Some(tail) = tail {
                 return format!("{head}ptr captures(none)){tail}").into();
             }
         } else if let Some(sized) = rest.strip_prefix("i64 ") {
@@ -798,13 +802,13 @@ fn execute(
 }
 
 /// The textual IR `-S -emit-llvm` writes: at `-fclang-compat=22` with an
-/// LLVM 20 or older backend, the lifetime markers in LLVM 21's form
-/// ([`lifetime_markers_llvm21`]; codegen emits that form itself for an
-/// LLVM 21+ backend).
+/// LLVM 21 or older backend, the lifetime markers in LLVM 22's form
+/// ([`lifetime_markers_llvm22`]; codegen emits that form itself for an
+/// LLVM 22+ backend).
 fn ir_text<'t>(args: &Args, tc: &Toolchain, text: &'t [u8]) -> std::borrow::Cow<'t, str> {
     let text = String::from_utf8_lossy(text);
-    if args.predef.clang_compat.major() >= 22 && tc.llvm_major() < 21 {
-        lifetime_markers_llvm21(&text).into()
+    if args.predef.clang_compat.major() >= 22 && tc.llvm_major() < 22 {
+        lifetime_markers_llvm22(&text).into()
     } else {
         text
     }
@@ -898,16 +902,16 @@ mod tests {
         let ir = "  call void @llvm.lifetime.start.p0(i64 16, ptr nonnull %3) #4\n\
                   call void @llvm.lifetime.end.p0(i64 4, ptr %x)\n\
                   declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #1\n\
-                  declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #1\n\
+                  declare void @llvm.lifetime.end.p0(i64 immarg, ptr captures(none)) #1\n\
                   call void @f(i64 16, ptr %3)\n";
         let want = "  call void @llvm.lifetime.start.p0(ptr nonnull %3) #4\n\
                     call void @llvm.lifetime.end.p0(ptr %x)\n\
                     declare void @llvm.lifetime.start.p0(ptr captures(none)) #1\n\
                     declare void @llvm.lifetime.end.p0(ptr captures(none)) #1\n\
                     call void @f(i64 16, ptr %3)\n";
-        assert_eq!(lifetime_markers_llvm21(ir), want);
+        assert_eq!(lifetime_markers_llvm22(ir), want);
         let new = "  call void @llvm.lifetime.start.p0(ptr %3)\n";
-        assert_eq!(lifetime_markers_llvm21(new), new);
+        assert_eq!(lifetime_markers_llvm22(new), new);
     }
 
     #[test]
