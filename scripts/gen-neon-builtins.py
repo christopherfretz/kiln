@@ -101,7 +101,7 @@ def main():
         "use crate::decl::builtin::neon::Row;",
         "use crate::decl::builtin::neon::r;",
         "",
-        "/// Every AArch64 NEON / FP16 builtin, sorted by name: (name, prototype,",
+        "/// Every `AArch64` NEON / FP16 builtin, sorted by name: (name, prototype,",
         "/// required target features).",
         "#[rustfmt::skip]",
         "pub(crate) const NEON: &[Row] = &[",
