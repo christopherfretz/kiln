@@ -1638,6 +1638,22 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [class.conv.fct]/1, [over.ics.user]/4: a conversion function never
+    /// converts an object of class type `from` to its own class or to a
+    /// base of it (that is a copy, or a derived-to-base conversion of
+    /// Conversion rank, through a constructor). Such a candidate is not
+    /// viable whatever its result type (clang `AddConversionCandidate`,
+    /// `ovl_fail_trivial_conversion`), so it never competes with the copy
+    /// or move constructor and is never called.
+    fn is_trivial_class_conversion(&mut self, from: QualType, to: QualType) -> bool {
+        let (Some(fr), Some(tr)) = (self.ast.types.as_record(from), self.ast.types.as_record(to))
+        else {
+            return false;
+        };
+        same_class(self, fr, tr)
+            || complete_class(self, fr).is_some() && is_derived_from(self, fr, tr)
+    }
+
     /// Adds conversion function `f` (found as `found`) for converting the
     /// set's only argument to `to` ([over.match.copy], [over.match.conv],
     /// [over.match.ref]).
@@ -1661,20 +1677,14 @@ impl Sema<'_, '_> {
         set.ics.push(obj);
         cand.ics = start..start + 1;
         if obj.is_bad() {
-            cand.viable = false;
-            cand.failure = CandidateFailure::BadConversion { arg: u16::MAX };
-            set.cands.push(cand);
-            return;
+            return set.push_non_viable(cand, CandidateFailure::BadConversion { arg: u16::MAX });
         }
         if let Some(sat) = self.check_function_constraints(f, set.loc).filter(|&s| !self.sat_ok(s))
         {
             // [over.match.viable]/3: a conversion function whose trailing
             // requires-clause is not satisfied is not viable, after the
             // object argument (clang `AddConversionCandidate`).
-            cand.viable = false;
-            cand.failure = CandidateFailure::ConstraintsNotSatisfied { sat };
-            set.cands.push(cand);
-            return;
+            return set.push_non_viable(cand, CandidateFailure::ConstraintsNotSatisfied { sat });
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let ret =
@@ -1697,27 +1707,11 @@ impl Sema<'_, '_> {
                 return;
             }
             if !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
-                cand.viable = false;
-                cand.failure = CandidateFailure::Explicit;
-                set.cands.push(cand);
-                return;
+                return set.push_non_viable(cand, CandidateFailure::Explicit);
             }
         }
-        // [class.conv.fct]/1, [over.ics.user]/4: a conversion function
-        // never converts an object to its own class or to a base of it
-        // (that is a copy, or a derived-to-base conversion of Conversion
-        // rank, through a constructor). Such a candidate is not viable
-        // whatever its result type (clang `AddConversionCandidate`,
-        // `ovl_fail_trivial_conversion`), so it never competes with the
-        // copy or move constructor and is never called.
-        if let (Some(fr), Some(tr)) = (self.ast.types.as_record(a.ty), self.ast.types.as_record(to))
-            && (same_class(self, fr, tr)
-                || complete_class(self, fr).is_some() && is_derived_from(self, fr, tr))
-        {
-            cand.viable = false;
-            cand.failure = CandidateFailure::TrivialConversion;
-            set.cands.push(cand);
-            return;
+        if self.is_trivial_class_conversion(a.ty, to) {
+            return set.push_non_viable(cand, CandidateFailure::TrivialConversion);
         }
         // The call's result: a glvalue of the referenced type or a
         // prvalue.
@@ -1748,10 +1742,7 @@ impl Sema<'_, '_> {
                 let (Some(tr), Some(rr)) =
                     (self.ast.types.as_record(to), self.ast.types.as_record(rty))
                 else {
-                    cand.viable = false;
-                    cand.failure = CandidateFailure::BadFinalConversion;
-                    set.cands.push(cand);
-                    return;
+                    return set.push_non_viable(cand, CandidateFailure::BadFinalConversion);
                 };
                 if same_class(self, rr, tr) {
                     Some(StandardConversion::identity(rty, to, RefBinding::NONE))

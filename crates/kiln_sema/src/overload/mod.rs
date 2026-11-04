@@ -354,6 +354,13 @@ impl OverloadCandidateSet {
         self.exclude = None;
     }
 
+    /// Adds `cand` as a non-viable candidate failing with `failure`.
+    pub(crate) fn push_non_viable(&mut self, mut cand: Candidate, failure: CandidateFailure) {
+        cand.viable = false;
+        cand.failure = failure;
+        self.cands.push(cand);
+    }
+
     /// The conversion sequences of candidate `c`.
     pub(crate) fn ics_of(&self, c: u32) -> &[Ics] {
         let r = &self.cands[c as usize].ics;
