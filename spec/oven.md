@@ -541,17 +541,6 @@ asks whether the evaluation is manifestly constant-evaluated.
   `IsConstEval [dst]`, which writes the flag as a `bool`. Its `aux` is 1
   when the enclosing function is `std::is_constant_evaluated` (a function
   of that name in `std`, through inline namespaces).
-- `if consteval` / `if !consteval` ([stmt.if]/4) reads the same flag:
-  its condition compiles to `IsConstEval [r]` with `aux` 16 and a
-  `JmpIfNot`/`JmpIf` over the first substatement, so a manifestly
-  constant-evaluated run takes the first substatement of `if consteval`
-  and a trial fold the second (clang `EvaluateStmt`: `if consteval` is
-  true only `InConstantContext`). The read never warns, and the function
-  stays memoizable (the memo key holds the flag). Before WP-584 the
-  compiler emitted only the first substatement, so codegen's trial fold
-  of a run-time `if (std::is_constant_evaluated())` (libstdc++
-  implements it with `if consteval` from C++23) folded to true and kept
-  the constant-evaluation-only branch.
 - **Warning** (`-Wconstant-evaluated`, clang's
   `warn_is_constant_evaluated_always_true_constexpr`): when the answer is
   true in a non-silent evaluation, and the builtin is called directly by
@@ -569,10 +558,26 @@ asks whether the evaluation is manifestly constant-evaluated.
   "Constant initialization"). `cev_warn` is cleared in speculation
   (`__builtin_constant_p`) and in the nested initialization of a variable
   it reads.
-- **Memoization:** a function whose body uses `IsConstEval` is never
-  memoized, and every memo key carries the context (bit 31 of the
-  function word), so a call cached in one context is never replayed in
-  the other.
+- **`if consteval`** ([stmt.if]/4; WP-588) reads the same flag: a
+  `consteval` / `!consteval` if statement compiles both substatements and
+  branches on `IsConstEval [dst]` with `aux` 16 (the flag alone, never
+  `-Wconstant-evaluated`). It is a run-time test, not a compile-time
+  choice, because one compiled body serves every evaluation: a trial fold
+  (`try_fold`: codegen folding a plain `if` condition, an operand of `&&`
+  or `?:`, a dynamic initializer) runs the else branch, as clang's
+  `ExprConstant` does when `InConstantContext` is false and GCC's
+  `cp_fold` with `manifestly_const_eval` false; every manifestly
+  constant-evaluated evaluation (above) runs the compound statement.
+  Codegen lowers the run-time `if consteval` to its else branch
+  (spec/codegen.md). Before WP-588 the Oven compiled only the compound
+  statement, so a trial fold of a libstdc++ `char_traits::length` took
+  the constant-evaluation loop and the folded result replaced the run-time
+  call. Tests: `tests/conformance/stmt.if.consteval/`.
+- **Memoization:** a function whose body uses `IsConstEval` for the
+  builtin is never memoized (the warning is a side effect); every memo
+  key carries the context (bit 31 of the function word), so a call cached
+  in one context is never replayed in the other (an `if consteval` body
+  is memoized under that key).
 
 ### Limits and metrics — normative for M2
 - `Budget { steps: 1048576, depth: 512, bytes: 256 MiB, memo_entries:

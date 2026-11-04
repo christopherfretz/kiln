@@ -162,7 +162,7 @@ ops! {
     // aux = 2: `__kiln_plainly_constant_evaluated()` (the run's plain
     // bit); aux = 4: saves the plain bit to [dst] and clears it; aux = 8:
     // restores it from [dst] (around a constexpr local's initializer);
-    // aux = 16: the condition of `if consteval` (no warning; WP-584).
+    // aux = 16: the context alone, never diagnosed (`if consteval`).
     IsConstEval = 1,
     // [src]; aux = 1 if the function returns a scalar
     Ret = 1,

@@ -6,7 +6,7 @@
 // erroneous byte: the only read past `h.ctx` sits under an `if consteval`
 // guard ([stmt.if]/4), which a run-time call never takes. This is the
 // shape of a formatting library's argument-id check that once failed at
-// -O2 under kiln (WP-584): kiln folded the guard to true outside a
+// -O2 under kiln (WP-584; fixed by WP-588): kiln folded the guard to true outside a
 // constant context, and the stray read of the zero-filled `buf` made
 // argument 0 look out of range. The fill was right; the fold was not.
 extern "C" int printf(const char *, ...);

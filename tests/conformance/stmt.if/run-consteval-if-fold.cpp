@@ -10,7 +10,7 @@
 // such contexts; a run-time `if` condition, a conditional operand and a
 // non-constant initializer are not, even where the compiler folds them,
 // so they see the second substatement (kiln once folded them through the
-// first; WP-584). At -O2 the folded and run-time paths must agree.
+// first; WP-584, fixed by WP-588). At -O2 the folded and run-time paths must agree.
 extern "C" int printf(const char *, ...);
 constexpr bool is_ce() {
   if consteval {

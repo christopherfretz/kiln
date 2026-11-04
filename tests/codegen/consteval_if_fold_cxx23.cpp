@@ -1,7 +1,7 @@
 // consteval_if_fold.cpp under -std=c++23 with an explicit
 // -ftrivial-auto-var-init=zero ([stmt.if]/4, [expr.const]/20): the
 // folded run-time `if` drops the `if consteval`-guarded block in C++23
-// too, and the variables get the requested zero fill (WP-584).
+// too, and the variables get the requested zero fill (WP-584, WP-588).
 //@ args: -std=c++23 -ftrivial-auto-var-init=zero
 constexpr bool is_ce() {
   if consteval {

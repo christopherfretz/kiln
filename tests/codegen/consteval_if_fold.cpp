@@ -8,7 +8,7 @@
 // only under the constant-evaluation guard; kiln used to fold the guard
 // to true, emitting that read, which hit the zero-filled bytes of the
 // enclosing C++26 erroneous-value initialization (spec/codegen.md §7r,
-// WP-584). The variables also get clang's zero fill (`args`).
+// WP-584; fixed by WP-588). The variables also get clang's zero fill (`args`).
 //@ args: -ftrivial-auto-var-init=zero
 constexpr bool is_ce() {
   if consteval {

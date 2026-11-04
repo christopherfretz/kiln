@@ -1866,39 +1866,52 @@ impl Compiler<'_> {
                 if let Some(v) = d.cond_var {
                     self.decl_one(v);
                 }
-                let j = match d.cond {
-                    // [stmt.if]/4: `if consteval` takes its first
-                    // branch iff the evaluation is manifestly
-                    // constant-evaluated; a trial fold (codegen's
-                    // folding of a run-time `if` condition, clang
-                    // `EvaluateAsBooleanCondition` outside a constant
-                    // context) takes the other (WP-584). The function stays
-                    // memoizable: the memo key holds the context and the
-                    // read warns about nothing.
-                    _ if matches!(kind, IfKind::Consteval | IfKind::NotConsteval) => {
+                match kind {
+                    // `if consteval` takes its compound statement iff the
+                    // evaluation is manifestly constant-evaluated
+                    // ([stmt.if]/4): a run-time test of the evaluation's
+                    // context, as `__builtin_is_constant_evaluated()`, since
+                    // a trial fold runs the same code (spec/oven.md §9.1).
+                    IfKind::Consteval | IfKind::NotConsteval => {
                         let r = self.reg();
+                        // aux 16: the context alone (no -Wconstant-evaluated).
                         self.emit(Op::IsConstEval, 16, &[r]);
-                        Some(self.jmp_if(r, kind == IfKind::NotConsteval))
+                        let j = self.jmp_if(r, kind == IfKind::NotConsteval);
+                        if let Some(t) = d.then {
+                            self.stmt(t);
+                        }
+                        if let Some(e) = d.els {
+                            let end = self.jmp();
+                            self.patch_here(j);
+                            self.stmt(e);
+                            self.patch_here(end);
+                        } else {
+                            self.patch_here(j);
+                        }
                     }
-                    Some(c) => {
-                        let r = self.rv(c);
-                        self.cond_bindings(d.cond_var);
-                        Some(self.jmp_if(r, false))
+                    _ => {
+                        let j = match d.cond {
+                            Some(c) => {
+                                let r = self.rv(c);
+                                self.cond_bindings(d.cond_var);
+                                Some(self.jmp_if(r, false))
+                            }
+                            None => None,
+                        };
+                        if let Some(t) = d.then {
+                            self.stmt(t);
+                        }
+                        if let Some(e) = d.els {
+                            let end = self.jmp();
+                            if let Some(j) = j {
+                                self.patch_here(j);
+                            }
+                            self.stmt(e);
+                            self.patch_here(end);
+                        } else if let Some(j) = j {
+                            self.patch_here(j);
+                        }
                     }
-                    None => None,
-                };
-                if let Some(t) = d.then {
-                    self.stmt(t);
-                }
-                if let Some(e) = d.els {
-                    let end = self.jmp();
-                    if let Some(j) = j {
-                        self.patch_here(j);
-                    }
-                    self.stmt(e);
-                    self.patch_here(end);
-                } else if let Some(j) = j {
-                    self.patch_here(j);
                 }
                 self.close_scope();
                 self.next = m;
