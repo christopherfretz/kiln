@@ -627,7 +627,7 @@ impl Collect<'_> {
                 if crate::builtins::is_fold_candidate(ast, e, self.compat) {
                     self.out.push(e);
                 }
-                self.out.extend(crate::builtins::folded_arg(ast, e));
+                self.out.extend(crate::builtins::folded_args(ast, e));
             }
             // clang `EmitCXXNewAllocSize` tries the array bound as a constant.
             ExprKind::CXXNewExpr => self.out.extend(ast.exprs.new_extra(e).array_size),
