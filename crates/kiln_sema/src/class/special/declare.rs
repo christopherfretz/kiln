@@ -410,12 +410,11 @@ impl Sema<'_, '_> {
         {
             // [temp.explicit]/4: no non-template member matches, so the
             // declarator names a member function template specialization.
-            let templates = match shape {
-                Shape::Conv(_) => self.conversion_templates_of(ctx),
-                _ => {
-                    let found: Vec<DeclId> = self.ast.lookup_local(class, name).iter().collect();
-                    self.function_templates_in(&found)
-                }
+            let templates = if let Shape::Conv(_) = shape {
+                self.conversion_templates_of(ctx)
+            } else {
+                let found: Vec<DeclId> = self.ast.lookup_local(class, name).iter().collect();
+                self.function_templates_in(&found)
             };
             self.act_on_explicit_special_template_inst(ds, d, &templates, name, ty, sloc);
             return None;
@@ -760,7 +759,9 @@ impl Sema<'_, '_> {
         let mut out = Vec::new();
         for m in self.ast.decls.members(def) {
             if self.kind_of(m) == DeclKind::FunctionTemplate
-                && self.templated_function(m).is_some_and(|f| self.kind_of(f) == DeclKind::CXXConversion)
+                && self
+                    .templated_function(m)
+                    .is_some_and(|f| self.kind_of(f) == DeclKind::CXXConversion)
             {
                 let m = self.ast.first(m);
                 if !out.contains(&m) {
