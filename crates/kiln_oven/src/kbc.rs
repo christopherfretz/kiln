@@ -452,6 +452,15 @@ pub(crate) mod bi {
     /// `__builtin_is_string_literal(a)` (WP-484; GCC 16): whether the
     /// pointer `a` points into a string literal object.
     pub const STRING_LIT: u32 = 33;
+    /// The carry builtins (WP-557; clang `IntExprEvaluator`
+    /// `BI__builtin_addcb`..): on `w`-bit unsigned canonical `a`, `b` and
+    /// the carry-in `c`, sub = `w` | subtract << 8 | [`CARRY_VALUE`].
+    /// With `CARRY_VALUE` the result `a + b + c` (`a - b - c`) modulo
+    /// 2^`w`; without, the carry-out: 1 when either of the two wrapping
+    /// steps overflowed.
+    pub const CARRY: u32 = 34;
+    /// sub flag of `CARRY`: produce the wrapped result.
+    pub const CARRY_VALUE: u32 = 1 << 9;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).

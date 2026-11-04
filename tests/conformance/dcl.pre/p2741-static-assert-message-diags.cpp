@@ -2,11 +2,11 @@
 // literal must be an object whose `size()` converts to `std::size_t` and
 // whose `data()` converts to `const char *` (checked whether or not the
 // assertion holds); a failing assertion's message must be a constant
-// expression. clang also evaluates the message of an assertion that holds
-// (-Winvalid-static-assert-message, an error by default).
+// expression. A holding assertion's message is evaluated only under
+// -Winvalid-static-assert-message (clang's default-error check; WP-570).
 //@ expect: compile-fail
 //@ strict-diags
-//@ args: -ferror-limit=0
+//@ args: -ferror-limit=0 -Werror=invalid-static-assert-message
 //@ diag: 70:21 error "the message in a static assertion must be a string literal or an object with 'data()' and 'size()' member functions"
 //@ diag: 71:22 error "the message in a static assertion must be a string literal or an object with 'data()' and 'size()' member functions"
 //@ diag: 71:15 error "static assertion failed"
@@ -31,7 +31,7 @@
 //@ diag: 79:22 error "the message in a static assertion must be produced by a constant expression"
 //@ diag: 79:22 note "read of dereferenced null pointer is not allowed in a constant expression"
 //@ diag: 79:15 error "static assertion failed"
-//@ diag: 80:21 error "the message in this static assertion is not a constant expression [-Winvalid-static-assert-message]"
+//@ diag: 80:21 error "the message in this static assertion is not a constant expression"
 //@ diag: 80:21 note "non-constexpr function 'size' cannot be used in a constant expression"
 //@ diag: 59:17 note "declared here"
 //@ diag: 81:62 error "the message in a static assertion must be produced by a constant expression"

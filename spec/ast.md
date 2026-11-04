@@ -910,8 +910,16 @@ context-free defaults (`NoEnv`):
 - Names: `decl_name` (default `#d17`), `decl_type`, `type_name` (default
   `#t5`), `enumerator`, `reflection` (default `^^#r3`).
 
-`PrintOptions { style, max_depth: 10, max_elems: 32 }` are the defaults
-(`PrintOptions::DEFAULT`).
+`PrintOptions { style, max_depth: 10, max_elems: 32, include_type: true,
+enum_cast: false }` are the defaults (`PrintOptions::DEFAULT`).
+
+`ConstStore::print_exact(..) -> bool` prints the same text and answers
+whether it is exact: false when some part printed as a placeholder (an
+`Unknown` shape's `{...}` or `?`, an undecodable subobject's `?`, a
+`max_depth` `{...}` or `max_elems` `...` truncation, a `Const` base's
+`#c12`, a `Temporary` or label base, an offset no designator recovers
+(`+off`), an infinity or NaN). `display_string_of` of a value uses it
+(spec/reflection.md §3.9, WP-564).
 
 **Dump** (`PrintStyle::Dump`, the `value=` fields):
 - **Integers:** decimal at any width (`-5`, `18446744073709551615`).
@@ -974,6 +982,9 @@ context-free defaults (`NoEnv`):
     `TypeNames::write_value` uses this style for every integer, so
     diagnostics print `S<n::E::b>` and `Ch<'x'>`, not `S<1>` and
     `Ch<120>` (WP-303).
+  - With `enum_cast` (and no `include_type`), an enumeration value no
+    enumerator matches still prints as its cast (`(n::E)7`, not `7`), so
+    the spelling re-parses as the enumeration (`display_string_of`).
 - **References** print without `&` (`x`).
 - **Class values** print as `S{1, 2}`.
 - Everything else prints as in the dump.
