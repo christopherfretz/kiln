@@ -110,6 +110,16 @@ impl Sema<'_, '_> {
         if conds.is_empty() { ListId::EMPTY } else { self.ast.lists.push(&conds) }
     }
 
+    /// The `enable_if` conditions of the function declaration being
+    /// declared with attributes `attrs`: those of the pattern it
+    /// instantiates ([`Sema::inst_enable_if`]), else its own.
+    pub(crate) fn new_fn_enable_if(&mut self, attrs: &[AttrId]) -> ListId {
+        match self.inst_enable_if.take() {
+            Some(l) => l,
+            None => self.enable_if_list(attrs),
+        }
+    }
+
     /// The [`Self::enable_if_list`] of declaration `f`.
     pub(crate) fn enable_if_list_of(&mut self, f: DeclId) -> ListId {
         let attrs: Vec<AttrId> = self.ast.lists.iter::<AttrId>(self.ast.attrs.of_decl(f)).collect();

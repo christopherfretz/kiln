@@ -152,6 +152,14 @@ impl Sema<'_, '_> {
         // substitution warnings first (spec/sema-templates.md §5.7).
         self.emit_suppressed_diags(d, loc);
         self.diagnose_if_use(d, loc);
+        self.warn_deprecated_use(d, loc);
+    }
+
+    /// The `[[deprecated]]` part of [`Sema::diagnose_deprecated`] alone:
+    /// for a constructor selected by overload resolution (clang
+    /// `PerformConstructorInitialization`'s `DiagnoseUseOfDecl`), whose
+    /// `diagnose_if` conditions the call checks with its arguments.
+    pub(crate) fn warn_deprecated_use(&mut self, d: DeclId, loc: Loc) {
         let Some((a, owner)) = self.deprecation_of(d) else { return };
         let attr = *self.ast.attrs.get(a);
         let name = self.name_for_diagnostic(d);
