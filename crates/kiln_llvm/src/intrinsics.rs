@@ -358,6 +358,16 @@ pub fn frameaddress(m: &mut Module) -> FuncId {
     declare(m, &name, p, &params, &[], Shape::Basic(Some(none)))
 }
 
+/// A target intrinsic without memory effects, e.g.
+/// `<4 x float> @llvm.aarch64.neon.bfdot.v4f32.v8bf16(...)`:
+/// `nocallback nofree nosync nounwind willreturn memory(none)` (LLVM's
+/// `IntrNoMem` target intrinsics, which are not `speculatable`; WP-558).
+/// `name` is the full (overloaded) name.
+pub fn target_nomem(m: &mut Module, name: &str, ret: TypeId, params: &[TypeId]) -> FuncId {
+    let params: Vec<(TypeId, &[Attr])> = params.iter().map(|&t| (t, &[][..])).collect();
+    declare(m, name, ret, &params, &[], Shape::Basic(Some(MemoryEffects::all(ModRef::None))))
+}
+
 /// `ptr @llvm.returnaddress(i32 immarg level)` (WP-432).
 pub fn returnaddress(m: &mut Module) -> FuncId {
     let p = ptr(m);

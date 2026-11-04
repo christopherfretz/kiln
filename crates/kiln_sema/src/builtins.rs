@@ -17,7 +17,7 @@ use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, ValueCategory};
 use kiln_ast::expr::{SourceLocKind, SourceLocValues};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TargetTypes;
-use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, NoexceptValue, Quals};
+use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, NoexceptValue, Quals, VectorKind};
 use kiln_ast::types::{Nns, TagKeyword};
 use kiln_ast::{Ast, AttrId, DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -526,6 +526,10 @@ impl Sema<'_, '_> {
     /// then `NoThrowAttr`, `ConstAttr` / `PureAttr`).
     pub(crate) fn lazily_create_builtin(&mut self, name: Symbol, loc: Loc) -> Option<DeclId> {
         let id = builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat)?;
+        // The NEON builtins are `AArch64` target builtins (WP-558).
+        if builtin::neon::is_neon(id) && self.abi.triple.arch != kiln_abi::target::Arch::AArch64 {
+            return None;
+        }
         let info = *builtin::info(id)?;
         let (ret, params, variadic) = self.builtin_signature(info.sig);
         let has = |a: u8| info.attrs & a != 0;
@@ -604,6 +608,7 @@ impl Sema<'_, '_> {
     /// One type of a `Builtins.td` signature and the rest of the string.
     fn builtin_sig_type<'s>(&mut self, mut s: &'s [u8]) -> (QualType, &'s [u8]) {
         let (mut unsigned, mut longs, mut complex) = (false, 0, false);
+        let (mut signed, mut vector) = (false, 0u32);
         while let Some(&c) = s.first() {
             match c {
                 // `_Complex` of the type that follows (`__builtin_cexp`'s
@@ -611,6 +616,19 @@ impl Sema<'_, '_> {
                 b'X' => complex = true,
                 b'U' => unsigned = true,
                 b'L' => longs += 1,
+                // WP-558 (the NEON prototypes): `S` signed (`Sc` is
+                // `signed char`); `W` `int64_t` (`long` on both LP64
+                // targets); `V<N>` a GNU vector of `N` elements.
+                b'S' => signed = true,
+                b'W' => longs = 1,
+                b'V' => {
+                    let digits = s[1..].iter().take_while(|d| d.is_ascii_digit()).count();
+                    vector = std::str::from_utf8(&s[1..=digits])
+                        .ok()
+                        .and_then(|d| d.parse().ok())
+                        .unwrap_or(1);
+                    s = &s[digits..];
+                }
                 // An integer constant expression argument (checked by
                 // `check_builtin_ice_args`).
                 b'I' => {}
@@ -622,6 +640,7 @@ impl Sema<'_, '_> {
         s = s.get(1..).unwrap_or_default();
         let mut t = match (base, unsigned, longs) {
             (b'b', ..) => QualType::BOOL,
+            (b'c', false, _) if signed => QualType::SCHAR,
             (b'c', false, _) => QualType::CHAR,
             (b'c', true, _) => QualType::UCHAR,
             (b'w', ..) => QualType::WCHAR,
@@ -631,8 +650,10 @@ impl Sema<'_, '_> {
             (b'i', true, 0) => QualType::UINT,
             (b'i', false, 1) => QualType::LONG,
             (b'i', true, 1) => QualType::ULONG,
-            (b'i', false, _) => QualType::LONGLONG,
-            (b'i', true, _) => QualType::ULONGLONG,
+            (b'i', false, 2) => QualType::LONGLONG,
+            (b'i', true, 2) => QualType::ULONGLONG,
+            (b'i', false, _) => QualType::INT128,
+            (b'i', true, _) => QualType::UINT128,
             (b'f', ..) => QualType::FLOAT,
             (b'd', _, 0) => QualType::DOUBLE,
             (b'd', _, 1) => QualType::LONGDOUBLE,
@@ -658,6 +679,9 @@ impl Sema<'_, '_> {
         };
         if complex {
             t = self.ast.types.complex(t);
+        }
+        if vector != 0 {
+            t = self.ast.types.vector(t, vector, VectorKind::Generic);
         }
         while let Some(&c) = s.first() {
             t = match c {
@@ -1971,8 +1995,11 @@ impl Sema<'_, '_> {
     /// function (clang's `LookupBuiltin`): the parser then treats a call of
     /// it in a template as naming a function, not as an ADL-only name.
     pub fn is_builtin_name(&self, name: Symbol) -> bool {
-        builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat)
-            .is_some_and(|id| builtin::info(id).is_some())
+        builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat).is_some_and(|id| {
+            builtin::info(id).is_some()
+                && (!builtin::neon::is_neon(id)
+                    || self.abi.triple.arch == kiln_abi::target::Arch::AArch64)
+        })
     }
 
     /// The builtin function `callee` (through parentheses) names, if it
