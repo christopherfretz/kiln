@@ -1806,6 +1806,37 @@ and returns the scope it names:
     attribute only applies to classes` [-Wignored-attributes]; takes no
     arguments. A coroutine whose return type's class carries it gets the
     LLVM function attribute of that name (spec/codegen.md §7o).
+- **Known and ignored, no diagnostic: the thread-safety family**
+  (WP-606; clang `Attr.td`, the `-Wthread-safety` attributes, which
+  libraries enable under `#if defined(__clang__)`; table
+  `THREAD_SAFETY_ATTRS` in `decl_attrs.rs`, checked first in
+  `attribute_node`). Each is recognised and attaches nothing: no
+  `AttrKind`, no subject or argument-count check, no diagnostic.
+  | spelling | names |
+  |---|---|
+  | GNU (`__attribute__((x))`, `__x__`) and `[[clang::x]]` / `[[_Clang::x]]` (clang `Clang<"x">`) | `capability`, `shared_capability`, `scoped_lockable`, `guarded_var`, `pt_guarded_var`, `requires_capability`, `requires_shared_capability`, `exclusive_locks_required`, `shared_locks_required`, `acquire_capability`, `acquire_shared_capability`, `try_acquire_capability`, `try_acquire_shared_capability`, `release_capability`, `release_shared_capability`, `release_generic_capability`, `unlock_function`, `assert_capability`, `assert_shared_capability`, `no_thread_safety_analysis`; `reentrant_capability` from `-fclang-compat=22` only (unknown at 19, as in clang 19) |
+  | GNU only (clang `GNU<"x">`; `[[clang::x]]` is unknown) | `lockable`, `guarded_by`, `pt_guarded_by`, `acquired_before`, `acquired_after`, `exclusive_lock_function`, `shared_lock_function`, `exclusive_trylock_function`, `shared_trylock_function`, `assert_exclusive_lock`, `assert_shared_lock`, `locks_excluded`, `lock_returned` |
+
+  `[[gnu::x]]` and unscoped `[[x]]` are unknown for every member. The
+  parser skips their arguments as balanced tokens (`takes_expr_args` is
+  false), so an argument may name a member declared later in the class,
+  `this`, `!mu`, `*f()` or `mu.operator!()` and is never looked up or
+  evaluated. Accepted in every position an attribute is: class heads,
+  data members, variables, before a declarator, after a function's
+  parameter list / cv / ref / `noexcept`, constructors, destructors,
+  out-of-line definitions, templates, lambdas. `__has_attribute(x)` /
+  `__has_cpp_attribute(clang::x)` answer from the generated clang table
+  (`kiln_pp` `features_table.rs`): 1 for each GNU spelling, 1 for each
+  `Clang<"x">` name under `clang::`, 0 for the GNU-only names there.
+  Not yet (accepts what clang rejects): clang looks the arguments up —
+  late, at class completion, for a GNU attribute in a class; where
+  written for `[[clang::x]]` and outside classes — so an undeclared name
+  is an error there; clang's subject warnings (`'guarded_by' attribute
+  only applies to non-static data members and global variables`
+  [-Wignored-attributes]), argument-count errors, and `'x' attribute
+  cannot be applied to types` for `[[clang::x]]` after a function
+  declarator are not diagnosed. Tests:
+  `tests/conformance/dcl.attr.grammar/thread-safety-*.cpp`.
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
