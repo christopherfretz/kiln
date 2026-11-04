@@ -157,13 +157,11 @@ directories list every one.
 1. `^^C::priv` names a private member from outside without an error
    (GCC rejects); the operand check belongs to the reflect operand
    (`crates/kiln_sema/src/reflect_operand.rs`).
-2. `type_of` of a `BaseSpec`, `FnParam` or annotation reflection says
-   "has no type" (`crates/kiln_sema/src/meta/query.rs`).
-3. `constexpr auto v = annotations_of(r)[0];` is rejected (the
+2. `constexpr auto v = annotations_of(r)[0];` is rejected (the
    temporary vector escapes): P3032R2's manifestly-constant-evaluated
    immediate context is not implemented; `static_assert` forms work.
-4. The `Vector` recipe stores the result element by element
+3. The `Vector` recipe stores the result element by element
    (`crates/kiln_oven/src/meta/materialize.rs`), which dominates a large
    query's cost; a bulk store would remove it.
-5. A base-specifier's annotations are not recorded
+4. A base-specifier's annotations are not recorded
    (spec/annotations.md §9 item 1), so `annotations_of` of a base is empty.
