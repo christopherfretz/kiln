@@ -935,7 +935,9 @@ C++23 and later (P2448): an implicit or defaulted constructor, assignment or
 destructor is `constexpr` unless the class has a virtual base (dump `constexpr`
 on all implicit members of non-virtual-base classes, absent on
 `VB(...)`/`~VB`). C++20: the [dcl.constexpr]/3–4 per-subobject rule (`NN()` is
-not `constexpr` when a member's selected ctor is not). `HAS_CONSTEXPR_CTOR` and
+not `constexpr` when a member's selected ctor is not; a destructor only when
+every subobject's is, clang `defaultedDestructorIsConstexpr`; none before
+C++20). `HAS_CONSTEXPR_CTOR` and
 `LITERAL` are computed from these. `DEFAULTED_DEFAULT_CTOR_CONSTEXPR` records
 the default ctor's answer before it is declared.
 

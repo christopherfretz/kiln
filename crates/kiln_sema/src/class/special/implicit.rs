@@ -328,7 +328,7 @@ impl Sema<'_, '_> {
     /// never a constructor of a class with a virtual base before C++26
     /// (P3533R2); before C++23 (P2448R2) only when the member each base and
     /// field subobject uses is constexpr, and an assignment of a literal
-    /// class from C++14 on.
+    /// class from C++14 on, a destructor from C++20 on.
     pub(crate) fn defaulted_is_constexpr(
         &mut self,
         class: DeclId,
@@ -343,8 +343,35 @@ impl Sema<'_, '_> {
                 return bits.contains(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR);
             }
             K::Dtor => {
-                return !self.vbases_forbid_constexpr(bits)
-                    || self.special.vbase_dtor_constexpr.contains(&c);
+                if self.vbases_forbid_constexpr(bits)
+                    && !self.special.vbase_dtor_constexpr.contains(&c)
+                {
+                    return false;
+                }
+                // [class.dtor]/9 before C++23 (P2448R2): constexpr only
+                // when every subobject's destructor is (clang
+                // `defaultedDestructorIsConstexpr`, C++20 on).
+                if self.std != kiln_lex::Std::Cxx20 {
+                    return self.std > kiln_lex::Std::Cxx20;
+                }
+                let bases: Vec<DeclId> = self
+                    .ast
+                    .decls
+                    .bases(c, &self.ast.lists)
+                    .copied()
+                    .collect::<Vec<BaseSpec>>()
+                    .iter()
+                    .filter_map(|b| self.base_class(b))
+                    .collect();
+                let fields: Vec<DeclId> = self
+                    .special_fields(c)
+                    .into_iter()
+                    .filter(|&f| !self.is_invalid_decl(f))
+                    .filter_map(|f| self.ast.decls.get(f).ty())
+                    .filter(|&t| !self.ast.types.is_reference(t))
+                    .filter_map(|t| self.element_class(t))
+                    .collect();
+                return bases.into_iter().chain(fields).all(|s| self.has_constexpr_dtor(s));
             }
             K::CopyCtor | K::MoveCtor => {
                 if self.is_union(c) {
