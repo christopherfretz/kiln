@@ -635,6 +635,18 @@ impl Sema<'_, '_> {
                 }
             }
             if !changed {
+                // `DequeIterator<V, 1>` before the declarator-id
+                // `DequeIterator<V, 1>::operator+` of a member of that partial
+                // specialization: its current instantiation.
+                if !alias && let Some(tmpl) = self.ast.types.template_decl(name) {
+                    let entered = self.act_on_enter_declarator_scope(qual);
+                    let c = self.partial_current_instantiation_canon(tmpl, base, loc);
+                    self.act_on_exit_declarator_scope(entered);
+                    if let Some(c) = c {
+                        let t = self.ast.types.template_specialization(name, args, Some(c), false);
+                        return self.ast.types.qualify(t, base.quals());
+                    }
+                }
                 return base;
             }
             if alias {
@@ -703,7 +715,16 @@ impl Sema<'_, '_> {
             let t = self.ast.types.dependent_name(keyword, n, name);
             return self.ast.types.qualify(t, base.quals());
         }
-        let Some(pat) = self.rebuild_ci_nns_record(nns, qual, loc, depth) else { return base };
+        let Some(pat) = self.rebuild_ci_nns_record(nns, qual, loc, depth) else {
+            // The qualifier is no class of the current instantiation, but
+            // may still be rebuilt in it: a member typedef
+            // (`typename list<V, A>::AllocTraits::size_type`) or a
+            // template-id over its members
+            // (`typename add_lvalue_reference<typename shared_ptr<E>::element_type>::type`).
+            let Some(n) = self.rebuild_ci_nns(nns, qual, loc, depth) else { return base };
+            let t = self.ast.types.dependent_name(keyword, n, name);
+            return self.ast.types.qualify(t, base.quals());
+        };
         let found = self.lookup_qualified(pat, name, LookupKind::Ordinary);
         let Some(&m) = found.decls.first() else { return base };
         if !matches!(
@@ -720,6 +741,45 @@ impl Sema<'_, '_> {
         };
         let t = self.ast.types.elaborated(keyword, Some(nns), t);
         self.ast.types.qualify(t, base.quals())
+    }
+
+    /// Nested-name-specifier `nns` (not naming a class of the current
+    /// instantiation, [`Sema::rebuild_ci_nns_record`]) rebuilt in the
+    /// current instantiation: a type component through
+    /// [`Sema::rebuild_ci_type`], or `X<P...>::td` with `td` a member
+    /// typedef as the type `td` aliases. `None` when nothing changes.
+    fn rebuild_ci_nns(
+        &mut self,
+        nns: kiln_ast::ids::NnsId,
+        qual: DeclId,
+        loc: Loc,
+        depth: u32,
+    ) -> Option<kiln_ast::ids::NnsId> {
+        if depth > 32 {
+            return None;
+        }
+        match self.ast.types.nns_view(nns) {
+            kiln_ast::types::Nns::Type { prefix, ty, template_kw } => {
+                let r = self.rebuild_ci_type(ty, qual, loc, depth + 1);
+                (r != ty)
+                    .then(|| self.ast.types.nns(kiln_ast::types::Nns::Type { prefix, ty: r, template_kw }))
+            }
+            kiln_ast::types::Nns::Identifier { prefix: Some(prefix), name } => {
+                let outer = self.rebuild_ci_nns_record(prefix, qual, loc, depth + 1)?;
+                let found = self.lookup_qualified(outer, name, LookupKind::Ordinary);
+                let &[m] = found.decls.as_slice() else { return None };
+                if !matches!(self.kind_of(m), DeclKind::Typedef | DeclKind::TypeAlias) {
+                    return None;
+                }
+                let ty = self.ast.decls.get(m).ty()?;
+                Some(self.ast.types.nns(kiln_ast::types::Nns::Type {
+                    prefix: None,
+                    ty,
+                    template_kw: false,
+                }))
+            }
+            _ => None,
+        }
     }
 
     /// The class of the current instantiation that nested-name-specifier
@@ -4598,8 +4658,12 @@ impl Sema<'_, '_> {
         // [basic.scope.scope]/5 (P2169): a non-static data member `_` is
         // name-independent and conflicts with no earlier one.
         let independent = name.is_some_and(|n| self.is_placeholder_name(n));
+        // A class or enumeration of the same name is hidden, not
+        // redeclared ([basic.scope.hiding]/2; clang `CheckFieldDecl`):
+        // `struct generic_request {...} generic_request;`.
         if let Some(n) = name
             && let Some(&prev) = self.lookup_in(ctx, n, LookupKind::Ordinary).decls.first()
+            && !is_tag_kind(self.kind_of(prev))
         {
             if independent && self.kind_of(prev) == DeclKind::Field {
                 self.diagnose_placeholder_redecl(d.name_loc());
@@ -6279,15 +6343,19 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return;
         }
+        // [dcl.link]/8: the declaration directly contained in a braceless
+        // linkage specification (`extern "C" int x[];`) is one, as `extern`.
+        let declaration_only =
+            spec.storage() == VarStorage::Extern || self.ast.decls.is_single_line_linkage(v);
         if self.ast.types.is_reference(ty) {
-            if spec.storage() != VarStorage::Extern {
+            if !declaration_only {
                 // Repeats the template definition's report (WP-318).
                 let msg = self.diag(DiagId::sema_reference_var_requires_init, loc).arg(name);
                 self.emit(msg.per_instantiation());
             }
             return;
         }
-        if spec.storage() == VarStorage::Extern {
+        if declaration_only {
             return;
         }
         if self.uninit_incomplete(v, ty, loc) {
@@ -7268,7 +7336,11 @@ impl Sema<'_, '_> {
         // `ActOnTag`); the friend then declares a new class `T`, so
         // `friend class Ts...;` expands no pack.
         self.check_template_param_shadow(n, nloc);
-        let found = self.lookup_name(n, LookupKind::Tag).decls;
+        let lookup = self.lookup_name(n, LookupKind::Tag);
+        let found = lookup.decls;
+        // The innermost enclosing namespace's own tag of that name, also
+        // through a using-declaration there (`using iterators::core;`,
+        // when class-scope lookup found something else first).
         let hidden = || {
             self.ast
                 .lookup_local(ns, DeclName::ident(n))
@@ -7276,9 +7348,20 @@ impl Sema<'_, '_> {
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
+                .map(|d| self.ast.using_target(d).unwrap_or(d))
                 .find(|&d| is_tag_kind(self.kind_of(d)))
         };
-        let prev = found.last().copied().filter(|&p| within(self, p)).or_else(hidden);
+        // [namespace.memdef]/3 limits the search by where the declaration
+        // found is: a using-declaration in the innermost enclosing
+        // namespace counts, and the friend is its target (boost's
+        // `friend class iterator_core_access;` through
+        // `using iterators::iterator_core_access;`; clang `ActOnTag`).
+        let found_as = lookup.found.last().copied();
+        let prev = found
+            .last()
+            .copied()
+            .filter(|&p| within(self, found_as.unwrap_or(p)))
+            .or_else(hidden);
         if let Some(p) = prev {
             if self.tag_matches(p, keyword) {
                 self.mark_type_referenced(p);
@@ -8835,7 +8918,11 @@ impl Sema<'_, '_> {
     /// as in `nested_name_from_found` ([basic.lookup.qual.general]/1).
     pub(crate) fn type_name_qualifier(&self, q: DeclId) -> DeclId {
         match self.kind_of(q) {
-            DeclKind::Typedef | DeclKind::TypeAlias if !self.is_dependent_ctx(q) => {
+            // A typedef naming the current instantiation names its class.
+            DeclKind::Typedef | DeclKind::TypeAlias if self.is_dependent_ctx(q) => {
+                self.typedef_current_instantiation(q).unwrap_or(q)
+            }
+            DeclKind::Typedef | DeclKind::TypeAlias => {
                 let ty = self.ast.decls.get(q).ty().unwrap_or(QualType::ERROR);
                 let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));
                 r.map_or(q, |r| self.ast.definition(r).unwrap_or(r))
@@ -9228,9 +9315,22 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         };
+        // A typedef naming the current instantiation (boost's
+        // `typedef basic_pointerbuf<charT, BufferT> this_type;` and then
+        // `typename this_type::pos_type`) nests as the class itself
+        // ([temp.dep.type]/1), as `X<P...>::` does.
+        let typedef_ci = if matches!(self.kind_of(d), DeclKind::Typedef | DeclKind::TypeAlias) {
+            self.typedef_current_instantiation(d)
+        } else {
+            None
+        };
         let ctx = match self.ast.decls.get(d).kind() {
             DeclKind::Namespace => Some(self.ast.first(d)),
             DeclKind::NamespaceAlias => Some(self.ast.resolve_alias(d)),
+            DeclKind::Typedef | DeclKind::TypeAlias if typedef_ci.is_some() => {
+                self.mark_type_referenced(d);
+                typedef_ci
+            }
             // A class named only as a qualifier is not marked referenced
             // (clang's `isReferenced`).
             DeclKind::CXXRecord | DeclKind::Enum => {
@@ -9305,6 +9405,21 @@ impl Sema<'_, '_> {
             self.check_found_access(found, loc);
         }
         ctx.map(|c| (c, d))
+    }
+
+    /// The class of the current instantiation that typedef `d` names
+    /// (`X<P...>` for the class template `X` being defined), if any.
+    pub(crate) fn typedef_current_instantiation(&self, d: DeclId) -> Option<DeclId> {
+        let ty = self.ast.decls.get(d).ty()?;
+        if !self.is_dependent_type(ty) {
+            return None;
+        }
+        let canon = self.ast.types.canonical(ty);
+        let TypeView::TemplateSpecialization { name, .. } = self.ast.types.view(canon.ty()) else {
+            return None;
+        };
+        let tmpl = self.ast.types.template_decl(name)?;
+        self.current_instantiation(tmpl, canon)
     }
 
     /// `'x' is not a class, namespace, or enumeration` for a

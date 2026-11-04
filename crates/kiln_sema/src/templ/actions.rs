@@ -1138,7 +1138,11 @@ impl Sema<'_, '_> {
                     return Ok(TemplateIdRef::Type(t));
                 }
                 let list = if ttp { list } else { self.profile_value_args(list) };
-                let canon = if ttp { None } else { self.dependent_spec_canon(name, d, args, l) };
+                let mut canon = if ttp { None } else { self.dependent_spec_canon(name, d, args, l) };
+                if !ttp && canon.is_none() {
+                    let t = self.ast.types.template_specialization(name, list, None, false);
+                    canon = self.partial_current_instantiation_canon(d, t, l);
+                }
                 Ok(TemplateIdRef::Type(
                     self.ast.types.template_specialization(name, list, canon, false),
                 ))
@@ -2242,6 +2246,24 @@ impl Sema<'_, '_> {
             return self.partial_injected_type(first);
         }
         Some(self.tag_type(c))
+    }
+
+    /// The canonical type of dependent specialization `ty` of class
+    /// template `tmpl` when it names a partial specialization's current
+    /// instantiation with a non-type argument written unconverted
+    /// (`DequeIterator<V, 1>` in a member definition of the partial
+    /// specialization `DequeIterator<V, 1>`, [temp.dep.type]/1.2): its
+    /// injected-class-name type, which holds the converted arguments.
+    pub(crate) fn partial_current_instantiation_canon(
+        &mut self,
+        tmpl: DeclId,
+        ty: QualType,
+        loc: Loc,
+    ) -> Option<QualType> {
+        let p = self.entered_partial_by_converted_args(tmpl, ty, loc)?;
+        let first = self.ast.first(p);
+        let inj = self.partial_injected_type(first)?;
+        Some(self.ast.types.canonical(inj))
     }
 
     /// `X<A...>` for partial specialization `p`'s own arguments `A`, as

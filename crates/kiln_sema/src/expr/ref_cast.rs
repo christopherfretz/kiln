@@ -56,6 +56,14 @@ impl Sema<'_, '_> {
             if same && (style.allows_const() || (keeps_cv && style.allows_static())) {
                 return self.typed_cast(style, CastKind::NoOp, e, r, vk, None, loc, rparen);
             }
+            // [expr.const.cast]/4: an lvalue of `T1` as `T2&` when a
+            // `T1*` const_casts to `T2*`, i.e. similar types with
+            // cv-qualification changed at any level (bslstl_vector's
+            // `const_cast<const iterator&>(position)`, `J *const &` from
+            // `const J *`).
+            if style.allows_const() && conv::similar_same_levels(self, r, et) {
+                return self.typed_cast(style, CastKind::NoOp, e, r, vk, None, loc, rparen);
+            }
             // [expr.static.cast]/2 and /4: a base or derived class.
             if style.allows_static()
                 && (keeps_cv || style.allows_const())

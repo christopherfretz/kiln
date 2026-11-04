@@ -1481,7 +1481,29 @@ impl Sema<'_, '_> {
         }
         let pn = *self.ast.decls.get(pdef);
         let lexical = self.ast.decls.lexical_ctx(pdef).unwrap_or(self.ast.tu);
-        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        let mut ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        // A member declared as an array of unknown bound gets its bound
+        // from the out-of-line definition ([dcl.array]/3), whose type is
+        // the one instantiated (clang `InstantiateVariableDefinition`):
+        // `static T s[];` ... `template<class U> T C<U>::s[N];`, as in
+        // libstdc++'s copy-on-write `basic_string::_Rep::_S_empty_rep_storage`.
+        let incomplete = |s: &Self, t: QualType| {
+            matches!(s.ast.types.canonical_view(t), TypeView::IncompleteArray(_))
+        };
+        if incomplete(self, ty)
+            && let Some(pty) = pn.ty()
+            && !incomplete(self, pty)
+        {
+            let sty = self.in_inst_context(spec, |s| {
+                let mut sub = Substituter::new(s, &args);
+                sub.entity = Some(spec);
+                sub.map_contexts(&pairs);
+                sub.ty(pty, pn.loc()).ok()
+            });
+            if let Some(t) = sty.filter(|&t| !self.is_error_type(t)) {
+                ty = t;
+            }
+        }
         let vspec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let pspec = self.ast.decls.var(pdef).map(|x| x.spec).unwrap_or_default();
         let spec_bits = pspec

@@ -1495,6 +1495,19 @@ impl Substituter<'_, '_, '_> {
     /// ([temp.dep.candidate]; spec §5.4 gap: one lookup, not two).
     fn callee(&mut self, c: ExprId) -> SubstResult<ExprId> {
         let n = *self.sema.ast.exprs.get(c);
+        // `(f)(x)` ([over.call.func]/3: no argument-dependent lookup, which
+        // the name already records): the parenthesized name is a callee
+        // too, looked up and access-checked from the instantiation context
+        // (boost's `(on_capacity_overflow)(throw_on_overflow_t())`).
+        if n.kind() == ExprKind::ParenExpr {
+            let inner = self.sema.ast.exprs.operand(c);
+            let named = self.sema.ignore_parens(inner);
+            if self.sema.ast.exprs.get(named).kind() == ExprKind::UnresolvedLookupExpr {
+                let end = self.sema.ast.exprs.end_loc(c).unwrap_or(n.loc());
+                let o = self.callee(inner)?;
+                return Ok(self.sema.act_on_paren(o, n.loc(), end));
+            }
+        }
         if n.kind() != ExprKind::UnresolvedLookupExpr {
             // A resolved callee rebuilt because of an argument (a
             // function-name-dependent default argument): the call is redone

@@ -1537,8 +1537,10 @@ impl<'a> AstBuilder<'a> {
             }
             DeclKind::Var => {
                 if let Some(v) = self.ast.decls.var(d) {
-                    let potentially_constant =
-                        v.spec.is_constexpr() || n.ty().is_some_and(|t| t.quals_bits() & 1 != 0);
+                    // The `const` may come from a typedef (bsl's
+                    // `typedef const bool Cbool; static Cbool k = ...;`).
+                    let potentially_constant = v.spec.is_constexpr()
+                        || n.ty().is_some_and(|t| self.ast.types.effective_quals(t).is_const());
                     if potentially_constant
                         && v.init.is_some_and(|i| self.deps(i).contains(ExprDeps::VALUE))
                     {

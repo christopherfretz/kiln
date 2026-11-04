@@ -79,13 +79,19 @@ impl Sema<'_, '_> {
         }
         // [class.abstract]/2: a pure virtual final overrider (clang
         // computes it only when a base is abstract; an own pure function
-        // makes the class abstract outright).
+        // makes the class abstract outright). Without a declared
+        // destructor, the implicit one (declared after this, never pure)
+        // overrides a base's pure virtual destructor (boost::exception's
+        // `virtual ~exception() = 0`; clang declares it before for a
+        // dynamic class).
+        let implicit_dtor = self.ast.destructor(r).is_none();
         if own_pure
             || abstract_base
-                && graph::virtuals_of(&self.ast, r)
-                    .overriders
-                    .iter()
-                    .any(|e| is_pure(&self.ast, e.2))
+                && graph::virtuals_of(&self.ast, r).overriders.iter().any(|e| {
+                    is_pure(&self.ast, e.2)
+                        && !(implicit_dtor
+                            && self.ast.decls.get(e.2).kind() == DeclKind::CXXDestructor)
+                })
         {
             bits = bits.with(DefinitionBits::ABSTRACT);
         }

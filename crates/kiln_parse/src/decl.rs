@@ -1865,7 +1865,7 @@ impl Parser<'_, '_> {
             && let NameClass::TypeTemplate(t) = self.s.classify_name(n, qualifier)
             && self.s.ast.decls.get(t).kind() == kiln_ast::decl::DeclKind::ClassTemplate
         {
-            self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, &attrs);
+            self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, &attrs, ctx);
             return;
         }
         if is_class && let Some(name) = name {
@@ -1876,7 +1876,7 @@ impl Parser<'_, '_> {
             self.parse_class_head_attrs(ds.storage.is_some(), &mut attrs);
             final_loc = self.parse_class_virt_specifiers();
         }
-        let use_ = self.tag_use(ds, is_class, final_loc);
+        let use_ = self.tag_use(ds, is_class, final_loc, ctx);
         // [expr.prim.id.qual]/3: the nested-name-specifier of a
         // class-head-name or enum-head-name is declarative and cannot
         // contain a splice-scope-specifier; the definition declares
@@ -1949,13 +1949,25 @@ impl Parser<'_, '_> {
     }
 
     /// How the tag specifier just parsed (up to its name and any
-    /// class-virt-specifiers) is used, from the next token.
-    fn tag_use(&mut self, ds: &DeclSpec, is_class: bool, final_loc: Option<Loc>) -> TagUse {
+    /// class-virt-specifiers) is used, from the next token. In a type-id
+    /// (`ctx`, an alias-declaration's `using Y = struct X<int>;`) a `;`
+    /// ends the enclosing declaration: the specifier only refers (clang's
+    /// `DSC_type_specifier` gives `TUK_Reference`).
+    fn tag_use(
+        &mut self,
+        ds: &DeclSpec,
+        is_class: bool,
+        final_loc: Option<Loc>,
+        ctx: DeclaratorContext,
+    ) -> TagUse {
         let use_ =
             if self.at(Punct::LBrace) || (is_class && self.at(Punct::Colon)) || final_loc.is_some()
             {
                 TagUse::Definition
-            } else if self.at(Punct::Semi) && ds.storage.is_none() {
+            } else if self.at(Punct::Semi)
+                && ds.storage.is_none()
+                && ctx != DeclaratorContext::TypeName
+            {
                 if ds.friend.is_some() { TagUse::Friend } else { TagUse::Declaration }
             } else if ds.friend.is_some()
                 && ds.storage.is_none()
@@ -1991,6 +2003,7 @@ impl Parser<'_, '_> {
         name_loc: Loc,
         kw_loc: Loc,
         attrs: &[AttrId],
+        ctx: DeclaratorContext,
     ) {
         // The template arguments of a partial or explicit specialization's
         // class-head are not access checked ([temp.spec.partial.general]/10,
@@ -2001,7 +2014,7 @@ impl Parser<'_, '_> {
         let parsed = self.parse_template_arg_list().map(|a| {
             self.parse_class_head_attrs(ds.storage.is_some(), &mut attrs);
             let final_loc = self.parse_class_virt_specifiers();
-            (a, final_loc, self.tag_use(ds, true, final_loc))
+            (a, final_loc, self.tag_use(ds, true, final_loc, ctx))
         });
         let declares = parsed
             .as_ref()

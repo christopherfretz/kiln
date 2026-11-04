@@ -1193,6 +1193,14 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                         j = end + 1;
                         continue;
                     }
+                    // A member pointer's qualifier `X<T>::*` ([dcl.mptr];
+                    // boost's `safe_bool<I base<I, T>::*>`) is no name on
+                    // its own, but its components' lists are still nested
+                    // lists: skipped up to the `*`.
+                    if let Some(star) = self.member_pointer_at(j) {
+                        j = star;
+                        continue;
+                    }
                     j += 1;
                     continue;
                 }

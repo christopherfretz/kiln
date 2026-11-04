@@ -157,7 +157,11 @@ impl Sema<'_, '_> {
             if spec.is_constexpr() && !self.inst.deferring_init {
                 spec = spec.with_inline(true);
             }
-            if let Some(&p) = self.lookup_in(ctx, name, LookupKind::Ordinary).decls.first() {
+            // A class or enumeration of the same name is hidden
+            // ([basic.scope.hiding]/2).
+            if let Some(&p) = self.lookup_in(ctx, name, LookupKind::Ordinary).decls.first()
+                && !crate::lookup::is_tag_kind(self.kind_of(p))
+            {
                 let id = if self.kind_of(p) == DeclKind::Var
                     || self.kind_of(p) == DeclKind::Field
                     || self.kind_of(p) == DeclKind::Typedef
