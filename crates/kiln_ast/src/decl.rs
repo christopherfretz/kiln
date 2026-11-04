@@ -2656,15 +2656,17 @@ impl DeclArena {
         d.defn = d.defn.with(DefinitionBits::BEING_DEFINED);
     }
 
-    /// The class-key of implicit specialization `r` becomes that of its
-    /// pattern's definition (`tag`) as its definition is instantiated: a
-    /// template first declared `class` and defined `struct` (libstdc++ 16
-    /// `__format::_Scanner`) gives its members public default access
-    /// ([class.access]/3 follows the class-key of the definition).
+    /// The class-key of class `r` becomes `tag`, the key of the class-head
+    /// that defines it ([class.access]/3, [class.access.base]/2 follow the
+    /// class-key of the definition): an implicit specialization takes its
+    /// pattern's definition's key as that definition is instantiated (a
+    /// template first declared `class` and defined `struct`, libstdc++ 16
+    /// `__format::_Scanner`), and an explicit or partial specialization
+    /// takes its own class-head's key, not the primary template's (WP-611).
     ///
     /// # Panics
     /// If `r` is complete, or `tag` changes a union to a class or back.
-    pub fn set_instantiated_tag(&mut self, r: DeclId, tag: TagKind) {
+    pub fn set_definition_tag(&mut self, r: DeclId, tag: TagKind) {
         let d = self.record_mut(r);
         assert!(!d.defn.contains(DefinitionBits::COMPLETE), "class key of a complete class");
         assert_eq!(d.tag == TagKind::Union, tag == TagKind::Union, "union class-key mismatch");
