@@ -108,12 +108,12 @@ impl Cg<'_> {
         if self.opts.target_attr.is_none() || !self.has_always_inline_attr(callee) {
             return;
         }
-        let Some(caller) = self.f.decl else { return };
+        let Some(from) = self.f.decl else { return };
         let callee_attr = self.target_attr_features(callee);
-        if callee_attr.is_none() && self.target_attr_str(caller).is_none() {
+        if callee_attr.is_none() && self.target_attr_str(from).is_none() {
             return;
         }
-        let have = self.feature_map(Some(caller));
+        let have = self.feature_map(Some(from));
         let need = self.feature_map(Some(callee));
         let missing: Vec<String> = match &callee_attr {
             Some(a) => {
@@ -136,7 +136,7 @@ impl Cg<'_> {
         let span = Span::empty(self.ast.begin_loc(e));
         for f in missing {
             let d = Diag::new(DiagId::cg_function_needs_feature, span)
-                .arg(self.feature_diag_name(caller))
+                .arg(self.feature_diag_name(from))
                 .arg(self.feature_diag_name(callee))
                 .arg(f);
             self.diags.push(d);

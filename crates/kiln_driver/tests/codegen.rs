@@ -570,7 +570,7 @@ fn pic_visibility_and_objects() {
 /// pins that `-fsyntax-only` accepts it): calling the `always_inline`
 /// `target("bf16,neon")` header wrapper from a plain function names the
 /// first missing feature, calling the builtin directly names the
-/// builtin's whole feature list. Exact clang 19 stderr, AArch64 only.
+/// builtin's whole feature list. Exact clang 19 stderr, `AArch64` only.
 #[test]
 fn neon_bf16_call_without_feature() {
     if !cfg!(target_arch = "aarch64") {
