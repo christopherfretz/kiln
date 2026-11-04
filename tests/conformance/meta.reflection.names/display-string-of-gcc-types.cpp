@@ -66,6 +66,11 @@ template <class T, class U = T> struct I2 {};
 // First formed with its default written out: GCC prints the arguments
 // written where a specialization is first formed.
 using Expl = I2<char, char>;
+// First formed by substitution: GCC counts every argument.
+template <class T> struct User {
+  using X = I2<T>;
+};
+using UX = User<long>::X;
 struct D : S, private TT<int> {};
 }  // namespace ns
 template <class T> struct G {};
@@ -132,6 +137,8 @@ CHECK(^^ns::TTP<ns::Q>, "ns::TTP<ns::Q>");
 CHECK(^^G<const ns::S*>, "G<const ns::S*>");
 CHECK(^^ns::I2<char>, "ns::I2<char, char>");
 CHECK(^^ns::I2<int>, "ns::I2<int>");
+CHECK(^^ns::I2<long>, "ns::I2<long int, long int>");
+CHECK(^^ns::UX, "ns::UX {aka ns::I2<long int, long int>}");
 // Aliases print with what they alias.
 CHECK(^^ns::Al, "ns::Al {aka ns::S}");
 CHECK(^^ns::I, "ns::I {aka int}");

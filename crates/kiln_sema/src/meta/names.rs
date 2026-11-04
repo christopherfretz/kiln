@@ -167,6 +167,27 @@ impl Sema<'_, '_> {
     /// P3096): the one name every declaration of `f` that names the
     /// parameter gives it; `None` when none names it or two disagree.
     fn param_identifier(&self, f: DeclId, i: u32) -> Option<Ident> {
+        // An instantiation has the names of what it was instantiated from,
+        // as GCC 16.1 keeps them: a function template's from its last
+        // declaration (GCC's redeclaration of a template keeps the newer
+        // parameters and forgets the older names), a member of a class
+        // template specialization's from every declaration of the
+        // primary's member, which must agree.
+        let mut f = f;
+        if let Some((_, info)) = self.ast.spec_info(f)
+            && self.kind_of(info.template) == DeclKind::FunctionTemplate
+            && let Some(p) = self.ast.template_info(info.template).and_then(|t| t.pattern)
+        {
+            let last = self.ast.definition(p).unwrap_or_else(|| self.ast.latest(p));
+            let data = self.ast.decls.function(last)?;
+            let p = self.ast.lists.iter::<DeclId>(data.params).nth(i as usize)?;
+            return self.ast.decls.get(p).name().as_ident();
+        }
+        if let Some((_, m)) = self.ast.member_spec_info(self.ast.first(f))
+            && self.ast.decls.get(m.instantiated_from).kind().is_function()
+        {
+            f = m.instantiated_from;
+        }
         let mut found = None;
         for d in self.ast.redecls_of(f) {
             let Some(data) = self.ast.decls.function(d) else { continue };

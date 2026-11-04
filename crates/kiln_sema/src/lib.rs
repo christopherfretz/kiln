@@ -248,6 +248,10 @@ pub struct Sema<'a, 'sm> {
     /// Depth of expressions being rebuilt by substitution (their
     /// consteval-only leaves follow the pattern's, not the builders').
     pub(crate) subst_expr_depth: u32,
+    /// A template-id is being formed by substituting into a dependent
+    /// one: a class template specialization it creates records all its
+    /// arguments as written, as GCC's (spec/reflection.md §3.9).
+    pub(crate) subst_template_id: bool,
     /// `-fcoro-aligned-allocation` (default off): a coroutine frame is
     /// allocated and freed with the `std::align_val_t` forms of
     /// `operator new`/`operator delete` when available (P2014R0 option 2,
@@ -994,6 +998,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             consteval_only_records: kiln_source::fx::FxHashMap::default(),
             consteval_only_pattern: kiln_source::fx::FxHashSet::default(),
             subst_expr_depth: 0,
+            subst_template_id: false,
             coro_aligned_allocation: false,
             lax_vector_conversions: LaxVectorConversions::All,
             range_lifetime_extension: false,

@@ -432,7 +432,10 @@ impl Substituter<'_, '_, '_> {
                     self.ttp_default_args(ttp, name, &mut v, loc)?;
                 }
                 let l = self.written(WrittenKey::Type(q), loc);
-                match self.sema.act_template_id(name, &v, l, l) {
+                let saved = std::mem::replace(&mut self.sema.subst_template_id, true);
+                let r = self.sema.act_template_id(name, &v, l, l);
+                self.sema.subst_template_id = saved;
+                match r {
                     Ok(TemplateIdRef::Type(t)) => Ok(match qual {
                         Some(nns) => self.sema.ast.types.elaborated(
                             kiln_ast::types::TagKeyword::None,

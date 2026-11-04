@@ -193,7 +193,11 @@ impl Sema<'_, '_> {
         if let Some((i, _)) = self.ast.spec_info(spec) {
             self.ast.templates.update_spec(i, |s| s.print_args = print);
         }
-        self.ast.templates.set_written_args(spec, written.len() as u32);
+        // GCC counts every argument of a specialization first formed by
+        // substitution (its coercion receives the defaults already filled
+        // in), only the written ones otherwise.
+        let n = if self.subst_template_id { u32::MAX } else { written.len() as u32 };
+        self.ast.templates.set_written_args(spec, n);
         Ok(spec)
     }
 
