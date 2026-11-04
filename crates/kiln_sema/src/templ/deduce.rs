@@ -824,6 +824,23 @@ impl Sema<'_, '_> {
             } else {
                 p == a
             };
+            // clang `isSameOrCompatibleFunctionType`: a non-dependent
+            // function type (the pointee of `void (C::*)(T)` once the
+            // explicit arguments are substituted) matches regardless of
+            // `noexcept`; the deduced `A` is checked afterwards
+            // ([temp.deduct.call]/4.2).
+            if !same
+                && flags.contains(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE)
+                && t.is_function(p)
+                && t.is_function(a)
+            {
+                let pn = self.with_exc_spec(p.without_quals(), ExcSpec::None);
+                let an = self.with_exc_spec(a.without_quals(), ExcSpec::None);
+                let t = &self.ast.types;
+                if t.canonical(pn) == t.canonical(an) {
+                    return Tdk::Success;
+                }
+            }
             return if same { Tdk::Success } else { mismatch(d) };
         }
         let pv = t.view(p.ty());

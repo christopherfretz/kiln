@@ -1287,18 +1287,14 @@ impl Sema<'_, '_> {
             return Tdk::Success;
         }
         let mut at = a.ty;
-        // An overload set ([temp.deduct.call]/6): one non-template
-        // function deduces from its type; otherwise non-deduced.
-        if let Some(e) = a.expr {
-            match self.overload_set_arg(e) {
-                OverloadArg::Single(f) => {
-                    let ft = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-                    let addr =
-                        self.ast.exprs.get(self.ignore_parens(e)).kind() == ExprKind::UnaryOperator;
-                    at = if addr { self.ast.types.pointer_to(ft) } else { ft };
-                }
-                OverloadArg::NonDeduced => return Tdk::Success,
-                OverloadArg::NotASet => {}
+        // An overload set ([temp.deduct.call]/6): the type of the one
+        // member it resolves to, else a non-deduced context.
+        if let Some(e) = a.expr
+            && let OverloadArg::Set(set) = self.overload_set_arg(e)
+        {
+            match self.resolve_overload_for_deduction(p, &set, d) {
+                Some(t) => at = t,
+                None => return Tdk::Success,
             }
         }
         let t = &mut self.ast.types;
@@ -1678,30 +1674,158 @@ impl Sema<'_, '_> {
         self.initializer_list_element(p)
     }
 
-    /// For an argument naming an overload set (possibly `&set`): the one
-    /// non-template function it names, or `Some(None)` when it names
-    /// several or a template; `None` when it is not an overload set.
+    /// For an argument naming an overload set (possibly `&set`, clang
+    /// `OverloadExpr::find`): the set and its form; `NotASet` when it is
+    /// not one.
     fn overload_set_arg(&self, e: ExprId) -> OverloadArg {
         let mut e = self.ignore_parens(e);
+        let mut addr = false;
+        let mut member_form = false;
         if self.ast.exprs.get(e).kind() == ExprKind::UnaryOperator {
             if self.ast.exprs.unary_op(e) != kiln_ast::expr::UnaryOp::AddrOf {
                 return OverloadArg::NotASet;
             }
-            e = self.ignore_parens(self.ast.exprs.operand(e));
+            let operand = self.ast.exprs.operand(e);
+            e = self.ignore_parens(operand);
+            addr = true;
+            // [expr.unary.op]/4: only `&X::f`, unparenthesized, forms a
+            // pointer to member.
+            member_form = operand == e && self.ast.templates.expr_nns.get(e).is_some();
         }
         if self.ast.exprs.get(e).kind() != ExprKind::UnresolvedLookupExpr {
             return OverloadArg::NotASet;
         }
-        let decls = self.ast.unresolved_decls(e);
-        let plain: Vec<DeclId> = decls
-            .iter()
-            .copied()
-            .filter(|&d| self.kind_of(d) != DeclKind::FunctionTemplate)
-            .collect();
-        if plain.len() == 1 && plain.len() == decls.len() {
-            return OverloadArg::Single(plain[0]);
+        OverloadArg::Set(OverloadSetArg { ule: e, addr, member_form })
+    }
+
+    /// The argument type `A` the overload set `set` gives call parameter
+    /// `p` ([temp.deduct.call]/6, clang `ResolveOverloadForDeduction`),
+    /// or `None` for a non-deduced context. For a `P` that is a function
+    /// type, a pointer to function or a pointer to member function
+    /// (after the reference and its top-level cv are dropped), deduction
+    /// is tried against each member: a set with a function template is
+    /// non-deduced (unless the set is a template-id, whose templates
+    /// each contribute the specialization the explicit arguments name),
+    /// and the type of the only member deduction succeeds for is `A`
+    /// (several succeeding: non-deduced). Each trial starts from nothing
+    /// deduced ([temp.deduct.type]/2: the pairs are deduced
+    /// independently); the explicit template arguments are already
+    /// substituted into `p`. For any other `P`, the one non-template
+    /// function the set names, if it names one.
+    fn resolve_overload_for_deduction(
+        &mut self,
+        p: QualType,
+        set: &OverloadSetArg,
+        d: &DeducedArgs,
+    ) -> Option<QualType> {
+        let t = &mut self.ast.types;
+        let c = t.canonical(p);
+        let mut p = t.unqualified(c);
+        let mut by_ref = false;
+        if let TypeView::LValueRef(x) | TypeView::RValueRef(x) = t.canonical_view(p) {
+            p = t.canonical(x);
+            by_ref = true;
         }
-        OverloadArg::NonDeduced
+        let fn_like = match t.canonical_view(p) {
+            TypeView::Function(_) => true,
+            TypeView::Pointer(x) => t.is_function(x),
+            TypeView::MemberPointer { pointee, .. } => t.is_function(pointee),
+            _ => false,
+        };
+        let decls: Vec<DeclId> = self
+            .ast
+            .unresolved_decls(set.ule)
+            .into_iter()
+            .filter(|&x| !self.ast.decls.get(x).has(DeclFlags::INVALID))
+            .collect();
+        if !fn_like {
+            // clang `resolveAddressOfSingleOverloadCandidate`.
+            let [f] = decls[..] else { return None };
+            if self.kind_of(f) == DeclKind::FunctionTemplate {
+                return None;
+            }
+            return self.overload_member_type(f, set);
+        }
+        let explicit = self.ast.templates.expr_targs.get(set.ule).copied();
+        if explicit.is_some_and(|l| {
+            self.ast
+                .types
+                .arg_list_flags(l)
+                .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
+        }) {
+            return None;
+        }
+        let loc = self.ast.exprs.get(set.ule).loc();
+        let is_ptr = matches!(self.ast.types.canonical_view(p), TypeView::Pointer(_));
+        // clang's trial flags; `noexcept` is not compared (clang's type
+        // match ignores a non-deduced mismatch).
+        let mut flags = TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE;
+        if by_ref {
+            flags = flags.union(TdfFlags::PARAM_WITH_REFERENCE_TYPE);
+        }
+        if set.addr {
+            flags = flags.union(TdfFlags::IGNORE_QUALIFIERS);
+        }
+        let mut found: Option<QualType> = None;
+        for f in decls {
+            let f = if self.kind_of(f) == DeclKind::FunctionTemplate {
+                // /6.1: a function template makes the set non-deduced;
+                // a template-id's names the specialization its explicit
+                // arguments (and defaults) give.
+                let l = explicit?;
+                let Ok(spec) = self.deduce_explicit_only(f, Some(l), loc) else { continue };
+                spec
+            } else {
+                f
+            };
+            let Some(mut at) = self.overload_member_type(f, set) else { continue };
+            // Function-to-pointer conversion.
+            if !by_ref && is_ptr && self.ast.types.is_function(at) {
+                at = self.ast.types.pointer_to(at);
+            }
+            let at = self.ast.types.canonical(at);
+            let mut trial = DeducedArgs::new(d.depth, d.args.len());
+            trial.loc = d.loc;
+            trial.expansions = d.expansions;
+            trial.pack_elem = d.pack_elem;
+            trial.pack_cur = d.pack_cur.as_ref().map(|_| Vec::new());
+            if self.deduce(p, at, flags, &mut trial) != Tdk::Success {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some(at);
+        }
+        found
+    }
+
+    /// The type of overload set member `f` as the argument `set` names
+    /// it (clang `GetTypeOfFunction`): a pointer to member function for a
+    /// non-static member named `&X::f` (none for any other form), else
+    /// the function type, or a pointer to it under `&`. `None` too while
+    /// its return type stays undeduced.
+    fn overload_member_type(&mut self, f: DeclId, set: &OverloadSetArg) -> Option<QualType> {
+        let ret_of =
+            |s: &Self, q: QualType| s.ast.types.proto(q).map(kiln_ast::types::FuncProto::ret);
+        let mut ft = self.ast.decls.get(f).ty()?;
+        if ret_of(self, ft).is_some_and(|r| self.contains_undeduced_auto(r)) {
+            let loc = self.ast.exprs.get(set.ule).loc();
+            self.instantiate_function_definition(f, loc);
+            ft = self.ast.decls.get(f).ty()?;
+            if ret_of(self, ft).is_some_and(|r| self.contains_undeduced_auto(r)) {
+                return None;
+            }
+        }
+        if self.is_implicit_object_member(f) {
+            if !set.member_form {
+                return None;
+            }
+            let class = self.declaring_class(f)?;
+            let ct = self.tag_type(class).ty();
+            return Some(self.ast.types.member_pointer(ft, ct));
+        }
+        Some(if set.addr { self.ast.types.pointer_to(ft) } else { ft })
     }
 
     /// The candidate note of a function template whose deduction failed
@@ -1852,15 +1976,24 @@ impl Sema<'_, '_> {
     }
 }
 
-/// What a call argument naming an overload set deduces from
-/// ([temp.deduct.call]/6).
+/// Whether a call argument names an overload set ([temp.deduct.call]/6).
 enum OverloadArg {
     /// Not an overload set.
     NotASet,
-    /// One non-template function: its type.
-    Single(DeclId),
-    /// Several, or a template: a non-deduced context.
-    NonDeduced,
+    /// An overload set.
+    Set(OverloadSetArg),
+}
+
+/// A call argument naming an overload set (clang's
+/// `OverloadExpr::FindResult`).
+struct OverloadSetArg {
+    /// The `UnresolvedLookupExpr`.
+    ule: ExprId,
+    /// It is the operand of `&`.
+    addr: bool,
+    /// It is `&X::f` (unparenthesized and qualified): the form of a
+    /// pointer to member.
+    member_form: bool,
 }
 
 /// `1st`, `2nd`, `3rd`, `4th`, …
