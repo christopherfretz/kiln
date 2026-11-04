@@ -5445,6 +5445,26 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   an element of the list is type-dependent (`braced_arg_type_dependent`).
   This is `defer_dependent_init` (<format>:439 `_Utf32_view`). Test:
   `tests/conformance/dcl.init.general/libstdcxx-paren-braced-init-dependent.cpp`.
+- **Resolved operator calls at instantiation** ([temp.res.general]/6,
+  [over.ref]/1, [over.match.oper]; WP-552): a `CXXOperatorCallExpr`
+  resolved in the pattern (non-dependent operands) is formed again from
+  its substituted operands by overload resolution, never by copying the
+  selected function: `()`/`[]` as a call/subscript, `->*`, `,` and every
+  other binary operator function through its built-in binary form, the
+  unary ones and postfix `++`/`--` (the extra `int` operand dropped)
+  through their unary form. `->` has no built-in form: a member access
+  `x->m` re-forms the whole chain from the class object
+  (`Sema::arrow_chain_object` strips the `operator->` calls together with
+  the qualification conversions and materialized temporaries between the
+  links), and any other `operator->` call (a pseudo-destructor `p->~I()`)
+  is one link, `operator->` selected again for the substituted object
+  (`Sema::rebuild_operator_arrow`). `new`/`delete` operator functions
+  are never such a call; the `operator co_await` of a `co_await` is
+  formed again from the operand as written. Tests:
+  `tests/conformance/temp.dep/overloaded-operator-arrow-std.cpp`,
+  `tests/conformance/temp.dep/overloaded-operator-arrow-chain.cpp`,
+  `tests/conformance/over.oper/arrow-in-template-other-ops.cpp`,
+  `tests/conformance/over.oper/arrow-in-template-run.cpp`.
 
 ### 5.22 Rules from the libc++ `.verify` cluster B (WP-338)
 - **An out-of-line constructor stays explicit** ([dcl.fct.spec]/4,
