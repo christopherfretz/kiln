@@ -1,6 +1,7 @@
 //! Checked integer arithmetic and stack allocation builtins (WP-270):
 //! clang `EmitBuiltinExpr` for `__builtin_{add,sub,mul}_overflow` and
-//! the typed `__builtin_{s,u}{,l,ll}{add,sub,mul}_overflow` forms, and
+//! the typed `__builtin_{s,u}{,l,ll}{add,sub,mul}_overflow` forms, the
+//! carry builtins `__builtin_{add,sub}c{b,s,,l,ll}` (WP-557) and
 //! `__builtin_alloca{,_with_align}` (spec/codegen.md §3, "Builtins").
 
 use kiln_ast::decl::builtin as id;
@@ -103,6 +104,29 @@ impl Cg<'_> {
         }
         self.store_mem(v, rq, p, al, vol);
         Ok(carry)
+    }
+
+    /// The carry builtin `b` of [`id::carry_op`] (WP-557; clang
+    /// `EmitBuiltinExpr` `BI__builtin_addcb`..): two
+    /// `llvm.u{add,sub}.with.overflow` steps, `x op y` then `op carryin`;
+    /// the OR of their flags, zero-extended, is stored through the
+    /// carry-out pointer and the second sum is the value.
+    pub(crate) fn emit_carry(&mut self, b: u32, e: ExprId, args: &[ExprId]) -> R<V> {
+        let (Some(minus), &[x, y, ci, r]) = (id::carry_op(b), args) else {
+            return err(self.loc_of(e), "malformed carry builtin");
+        };
+        let xv = self.emit_scalar(x)?;
+        let yv = self.emit_scalar(y)?;
+        let cv = self.emit_scalar(ci)?;
+        let (p, al) = self.ptr_align(r)?;
+        let op = if minus { OverflowOp::USub } else { OverflowOp::UAdd };
+        let (s1, c1) = self.overflow_intrinsic(op, xv, yv);
+        let (s2, c2) = self.overflow_intrinsic(op, s1, cv);
+        let c = self.bin(BinOp::Or, Flags::NONE, c1, c2);
+        let ty = self.f.fir.ty(&self.m, xv);
+        let c = self.cast(CastOp::ZExt, c, ty);
+        self.store(c, p, al, false);
+        Ok(s2)
     }
 
     /// clang `EmitCheckedMixedSignMultiply`: the magnitude of the signed

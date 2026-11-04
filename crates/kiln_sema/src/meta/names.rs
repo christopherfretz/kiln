@@ -12,6 +12,8 @@
 // `Reflectee` grows variants (WP-472); its matches here keep a wildcard.
 #![allow(clippy::match_wildcard_for_single_variants)]
 
+use std::cell::Cell;
+
 use kiln_ast::decl::DeclKind;
 use kiln_ast::names::DeclNameKind;
 use kiln_ast::reflect::Reflectee;
@@ -242,9 +244,13 @@ impl Sema<'_, '_> {
     /// `display_string_of(r)` (implementation-defined): a declaration's
     /// qualified name as a diagnostic prints it (`N::S::operator+`,
     /// `N::S::~S`; GCC 16.1 qualifies too), a type canonical and fully
-    /// scoped (`N::T1<int>`), else the reflection as a note prints it.
+    /// scoped (`N::T1<int>`), a value or object as its source spelling
+    /// ([`Self::value_spelling`], [`Self::object_spelling`]), else the
+    /// reflection as a note prints it.
     fn display_string(&self, r: ReflectionId) -> String {
         let s = match self.ast.reflections.get(r) {
+            Reflectee::Value(v) => self.value_spelling(v).unwrap_or_default(),
+            Reflectee::Object(p) => self.object_spelling(p).unwrap_or_default(),
             Reflectee::Type(t) => self.ty_canonical_str(t),
             Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
                 self.qualified_decl_name(d)
@@ -258,6 +264,57 @@ impl Sema<'_, '_> {
             _ => String::new(),
         };
         if s.is_empty() { self.reflection_str(r) } else { s }
+    }
+
+    /// The source spelling of constant `v` (spec/reflection.md §3.9): the
+    /// diagnostic constant printer in template-argument style without
+    /// literal suffixes (`86400`, `'a'`, `Col::red`, `Pt{3}`, `&g`,
+    /// `nullptr`), an enumeration value naming no enumerator as a cast
+    /// (`(Col)5`), floating point as the shortest round-tripping decimal
+    /// (`1.5e0`), a reflection of a value or object as the
+    /// `reflect_constant` / `reflect_object` call making it. `None` when
+    /// some part has no spelling (a temporary, an opaque subobject, an
+    /// infinity or NaN, an unnamed class or closure type, a reflection
+    /// with no `^^` operand such as a base specifier).
+    fn value_spelling(&self, v: ConstValueId) -> Option<String> {
+        use kiln_ast::consts::{PrintOptions, PrintStyle};
+        let opts = PrintOptions {
+            include_type: false,
+            enum_cast: true,
+            max_depth: u32::from(u16::MAX),
+            max_elems: u32::MAX,
+            ..PrintOptions::with_style(PrintStyle::TemplateArg)
+        };
+        let env = SpellEnv {
+            sema: self,
+            names: kiln_ast::dump::AstNames::new(&self.ast),
+            lossy: Cell::new(false),
+        };
+        let mut s = String::new();
+        let exact = self.ast.consts.print_exact(v, &self.ast.strings, &env, &opts, &mut s);
+        (exact && !env.lossy.get() && !s.is_empty()).then_some(s)
+    }
+
+    /// The source spelling of the object pointer `p` designates
+    /// (`reflect_object`, a class or reference template argument): a
+    /// template parameter object as its value (`Pt{3}`, as GCC 16.1), a
+    /// named object or subobject as its designator (`ns::v`, `arr[1]`,
+    /// `pt.x`). `None` for anything else (a temporary, a subobject of a
+    /// template parameter object).
+    fn object_spelling(&self, p: ConstValueId) -> Option<String> {
+        use kiln_ast::consts::{PtrBase, Scalar};
+        let Some(Scalar::Pointer { base, offset, .. }) = self.ast.consts.scalar(p) else {
+            return None;
+        };
+        let PtrBase::Decl(d) = base else { return None };
+        if self.kind_of(d) == DeclKind::TemplateParamObject {
+            let v = self.ast.templates.param_object_value(d).filter(|_| offset == 0)?;
+            return self.value_spelling(v);
+        }
+        // The pointer `&x.m` (or `arr` for a whole array) names the object
+        // without its `&`.
+        let s = self.value_spelling(p)?;
+        Some(s.strip_prefix('&').map(str::to_owned).unwrap_or(s))
     }
 
     /// `source_location_of(r)` ([meta.reflection.names]/7): the location
@@ -277,5 +334,87 @@ impl Sema<'_, '_> {
         let cv = self.meta_source_location(loc, "")?;
         self.meta_names.locs.insert(r, cv);
         Some(cv)
+    }
+}
+
+/// The [`kiln_ast::consts::PrintEnv`] of [`Sema::value_spelling`]: the
+/// AST's, with types (a class value's `T{...}`, an enumeration cast's
+/// `(T)`) canonical and fully scoped as `display_string_of` of the type
+/// prints them, so the spelling names the type from any scope. `lossy` is set when a
+/// type or reflection has no spelling.
+struct SpellEnv<'s, 'a, 'b> {
+    sema: &'s Sema<'a, 'b>,
+    names: kiln_ast::dump::AstNames<'s>,
+    lossy: Cell<bool>,
+}
+
+impl SpellEnv<'_, '_, '_> {
+    /// Marks `ty` unspellable when it is an unnamed class (a closure type,
+    /// `struct {} v;`) without a typedef name for linkage.
+    fn check_type(&self, ty: kiln_ast::QualType) {
+        let ast = &self.sema.ast;
+        if let Some(d) = ast.types.as_record(ast.types.canonical(ty))
+            && self.names.is_unnamed(d)
+            && ast.decls.typedef_for_anon(d).is_none()
+        {
+            self.lossy.set(true);
+        }
+    }
+}
+
+impl kiln_ast::consts::PrintEnv for SpellEnv<'_, '_, '_> {
+    fn shape(&self, ty: kiln_ast::QualType) -> kiln_ast::consts::Shape {
+        self.names.shape(ty)
+    }
+
+    fn decl_name(&self, decl: DeclId, out: &mut String) {
+        self.names.decl_name(decl, out);
+    }
+
+    fn decl_type(&self, decl: DeclId) -> Option<kiln_ast::QualType> {
+        self.names.decl_type(decl)
+    }
+
+    fn same_unqualified(&self, a: kiln_ast::QualType, b: kiln_ast::QualType) -> bool {
+        self.names.same_unqualified(a, b)
+    }
+
+    fn type_name(&self, ty: kiln_ast::QualType, out: &mut String) {
+        self.check_type(ty);
+        out.push_str(&self.sema.ty_canonical_str(ty));
+    }
+
+    fn arg_type_name(&self, ty: kiln_ast::QualType, out: &mut String) {
+        self.check_type(ty);
+        out.push_str(&self.sema.ty_canonical_str(ty));
+    }
+
+    fn enumerator(
+        &self,
+        ty: kiln_ast::QualType,
+        bits: &kiln_ast::consts::IntBits<'_>,
+        out: &mut String,
+    ) -> bool {
+        self.names.enumerator(ty, bits, out)
+    }
+
+    fn reflection(&self, id: ReflectionId, out: &mut String) {
+        let (call, s) = match self.sema.ast.reflections.get(id) {
+            Reflectee::Value(v) => ("std::meta::reflect_constant(", self.sema.value_spelling(v)),
+            Reflectee::Object(p) => ("std::meta::reflect_object(", self.sema.object_spelling(p)),
+            Reflectee::BaseSpec(..)
+            | Reflectee::DataMemberSpec(_)
+            | Reflectee::Annotation(_)
+            | Reflectee::FnParam(..) => ("", None),
+            _ => return self.names.reflection(id, out),
+        };
+        if let Some(s) = s {
+            out.push_str(call);
+            out.push_str(&s);
+            out.push(')');
+        } else {
+            self.lossy.set(true);
+            self.names.reflection(id, out);
+        }
     }
 }
