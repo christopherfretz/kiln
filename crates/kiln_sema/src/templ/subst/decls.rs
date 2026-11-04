@@ -769,10 +769,15 @@ impl Substituter<'_, '_, '_> {
             Some(auto) if trailing.is_some() => auto,
             _ => ret,
         };
+        // Its `enable_if` conditions, for the redeclaration check: the
+        // instantiation's own are copied after it is declared.
+        let ei = self.sema.enable_if_list_of(d);
+        self.sema.inst_enable_if = (ei != kiln_ast::ids::ListId::EMPTY).then_some(ei);
         let r = match friend {
             Some(fl) => self.sema.act_on_friend(&ds, base, Some(&dr), fl),
             None => self.sema.act_on_declarator(&ds, base, &dr),
         };
+        self.sema.inst_enable_if = None;
         self.forget_pattern_params(d);
         let Some(r) = r else { return Err(SubstFail) };
         // The befriended function (act_on_friend returns the FriendDecl).

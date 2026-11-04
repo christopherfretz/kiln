@@ -115,6 +115,7 @@ note_exits_cxx_try = Note (0) "jump exits try block";
 note_exits_dtor = Note (0) "jump exits scope of variable with non-trivial destructor";
 note_exits_temporary_dtor = Note (0) "jump exits scope of lifetime-extended temporary with non-trivial destructor";
 note_explicit_ctor_here = Note (0) "explicit constructor declared here";
+note_explicit_instantiation_candidate = Note (2) "explicit instantiation candidate function '{0}' template here {1}";
 note_explicit_instantiation_definition_here = Note (0) "explicit instantiation definition is here";
 note_explicit_instantiation_here = Note (0) "explicit instantiation refers here";
 note_explicit_spec_template_declared = Note (0) "explicitly specialized declaration is here";

@@ -3544,7 +3544,7 @@ impl Sema<'_, '_> {
             is_static: spec.storage() == FnStorage::Static,
             head: self.templ.cur,
             requires: d.trailing_requires,
-            enable_if: self.enable_if_list(&d.attrs),
+            enable_if: self.new_fn_enable_if(&d.attrs),
         };
         let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
