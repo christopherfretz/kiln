@@ -1,11 +1,13 @@
 //! Lambda expressions ([expr.prim.lambda]; clang's `ParseLambdaExpression`,
 //! WP-075).
 
+use kiln_ast::decl::InitStyle;
 use kiln_ast::lambda::{CaptureDefault, CaptureKind};
 use kiln_diag::DiagId;
 use kiln_lex::Punct;
 use kiln_sema::DeclSite;
 use kiln_sema::DeclaratorContext;
+use kiln_sema::Initializer;
 use kiln_sema::declspec::{Chunk, Declarator};
 use kiln_sema::lambda::{LambdaCaptureSpec, LambdaIntroducer, LambdaSpecifiers};
 use kiln_source::Loc;
@@ -179,25 +181,53 @@ impl Parser<'_, '_> {
                 }
                 ellipsis = ellipsis.or(self.eat(Punct::Ellipsis));
                 cap.ellipsis = ellipsis;
-                if self.at(Punct::Equal) {
-                    self.bump();
-                    cap.init = if self.at(Punct::LBrace) {
-                        self.unsupported("init-captures with braced initializers", self.loc());
-                        None
-                    } else {
-                        self.parse_assignment_expr()
-                    };
-                } else if self.at(Punct::LParen) || self.at(Punct::LBrace) {
-                    self.unsupported("init-captures with direct initializers", self.loc());
-                    let close = if self.at(Punct::LParen) { Punct::RParen } else { Punct::RBrace };
-                    self.bump();
-                    self.skip_until(&[close], false, true);
-                }
+                cap.init = self.parse_init_capture_initializer();
             }
             intro.captures.push(cap);
         }
         intro.rbracket = self.bump().span.lo;
         Some(intro)
+    }
+
+    /// The *initializer* of an init-capture, if one follows the
+    /// identifier ([expr.prim.lambda.capture]/1, /6): `= initializer-clause`,
+    /// `= braced-init-list`, `( expression-list )` or `braced-init-list`,
+    /// with its syntax as for a variable's initializer (clang
+    /// `ParseLambdaIntroducer`). A malformed one (diagnosed) is an error
+    /// expression, which Sema skips, as clang keeps the capture with an
+    /// invalid initializer.
+    fn parse_init_capture_initializer(&mut self) -> Option<(InitStyle, Initializer)> {
+        let at = self.loc();
+        let (style, init) = if self.eat(Punct::Equal).is_some() {
+            let init = if self.at(Punct::LBrace) {
+                self.parse_init_list().ok().map(Initializer::List)
+            } else {
+                self.parse_assignment_expr().map(Initializer::Expr)
+            };
+            (InitStyle::C, init)
+        } else if self.at(Punct::LParen) {
+            // clang parses an expression-list, which cannot be empty.
+            let init = if self.peek_is(1, Punct::RParen) {
+                self.bump();
+                self.error_here(DiagId::parse_expected_expression);
+                self.bump();
+                None
+            } else {
+                let i = self.parse_initializer(Some(InitStyle::Call), false).ok().flatten();
+                if i.is_none() {
+                    // clang `Parens.skipToEnd()`.
+                    self.skip_until(&[Punct::RParen], false, true);
+                }
+                i
+            };
+            (InitStyle::Call, init)
+        } else if self.at(Punct::LBrace) {
+            (InitStyle::List, self.parse_init_list().ok().map(Initializer::List))
+        } else {
+            return None;
+        };
+        let init = init.unwrap_or_else(|| Initializer::Expr(self.s.act_on_error_expr(&[], at)));
+        Some((style, init))
     }
 
     /// lambda-specifier-seq ([expr.prim.lambda.general]/1): `mutable`,

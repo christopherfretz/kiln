@@ -14,12 +14,12 @@ that `expect: ast` goldens compare without special cases.
 
 | | Landed (WP-075) | Later |
 |---|---|---|
-| syntax | introducer, captures, `<...>` template-parameter-list with requires-clause, parameter-declaration-clause, `mutable` / `constexpr` / `static`, attributes, *noexcept-specifier*, trailing return type, trailing requires-clause | braced and parenthesized init-captures (`[x{1}]`, `[x(1)]`) |
+| syntax | introducer, captures (init-captures with `= e`, `= {...}`, `(e)` and `{e}`, WP-518), `<...>` template-parameter-list with requires-clause, parameter-declaration-clause, `mutable` / `constexpr` / `static`, attributes, *noexcept-specifier*, trailing return type, trailing requires-clause | |
 | closure type | §3: call operator, conversion to pointer to function, static invoker, deleted special members, linkage, mangling numbers | |
-| captures | §4: by copy, by reference, init-captures (`= expr`), `this`, `*this`, implicit capture through `=` / `&`, nested lambdas | capture packs (`xs...`, `...xs = e`) |
+| captures | §4: by copy, by reference, init-captures (every initializer form), `this`, `*this`, implicit capture through `=` / `&`, nested lambdas, capture packs (`xs...`, `...xs = e`, `...xs(e)`, `&...xs{e}`) | |
 | generic | §5: `auto` parameters, template-parameter-lists, constraints, conversion-function templates | |
 | constant evaluation | §7: calls, captures, conversions, `this`/`*this`; `consteval` and escalated lambdas (§3.2, sema.md §5.10) | |
-| templates | §9: lambdas in templates and generic lambdas in templates; simple-capture packs (`[ts...]`) of a function parameter pack (WP-282) | init-capture packs, lambdas as template arguments |
+| templates | §9: lambdas in templates and generic lambdas in templates; simple-capture packs (`[ts...]`) of a function parameter pack (WP-282); init-capture packs; lambdas as template arguments and closure-typed `auto` NTTP defaults | |
 | codegen | §8: IR-exact against clang for the corpus in `tests/codegen/lambda_*.cpp` | |
 
 A lambda whose body uses `co_await`, `co_yield` or `co_return` is a
@@ -40,8 +40,9 @@ through four entry points (`kiln_sema/src/lambda/mod.rs`), in order:
    definition, pushes the `LambdaData` side record and a `LambdaScope`,
    and checks the explicit captures (§4.1). The scope records
    `templ.heads.len()` and `scopes.len()` so that a later head is known to
-   be the lambda's own. It also creates the init-capture variables
-   (`create_init_capture_vars`, `LambdaScope::init_cap_vars`): P2036 (a
+   be the lambda's own. The capture check creates and initializes each
+   init-capture variable (§4.1); `create_init_capture_vars` then
+   publishes them in `LambdaScope::init_cap_vars`: P2036 (a
    DR, so in every mode) puts them in scope from the introducer on
    ([expr.prim.lambda.capture]/6), so unqualified lookup in the
    *lambda-declarator* (parameters' default arguments, `noexcept`,
@@ -215,9 +216,57 @@ with clang's diagnostics: duplicates (`'x' can appear only once`),
 storage duration, `this` outside a non-static member function, `this`
 in a static lambda. A simple capture names a variable found by ordinary
 lookup, unless `LambdaCaptureSpec.var` already names it (a lambda rebuilt
-by template instantiation, §9). An init-capture declares a variable of
-the closure's call operator, `auto x = init` or `auto &x = init`, whose
-type is deduced at the introducer and which the body declares.
+by template instantiation, §9).
+
+**Init-captures** ([expr.prim.lambda.capture]/6, WP-518). The parser
+reads `identifier initializer` with the `&` and `...` prefixes, where the
+initializer is `= initializer-clause`, `= braced-init-list`,
+`( expression-list )` or `braced-init-list`, into
+`LambdaCaptureSpec.init: Option<(InitStyle, Initializer)>` -- the
+simple-declaration representation (`InitStyle::C` / `Call` / `List`,
+`Initializer::Expr` / `Paren` / `List`), not a lambda-only one. `()` is
+`expected expression` at the `)`; an initializer that fails to parse
+becomes an error expression and the capture is dropped without further
+diagnostics.
+
+`add_init_capture` declares the variable at the introducer (in the
+enclosing context; the call operator adopts it when its body opens), as
+if by `auto x <initializer>` or `auto &x <initializer>`, and records the
+style on it (`VarSpec` init style, so instantiation rebuilds the same
+form). The type is deduced by `deduce_var_auto` -- the variable rule,
+[dcl.type.auto.deduct]/2-4:
+
+- `(e)`, `{e}`, `= e`: from `e`; `= {e...}`: `std::initializer_list<U>`,
+  which needs a declared `std::initializer_list` (`cannot deduce type of
+  initializer list because std::initializer_list was not found`).
+- `(e1, e2)` and `{e1, e2}` are ill-formed (P0960 does not apply to a
+  placeholder): `initializer for lambda capture 'x' contains multiple
+  expressions`, at the second expression, also when the expressions are
+  type-dependent (checked before dependence, as clang; a pack expansion
+  counts as one). `{}` is `initializer missing for lambda capture 'x'`.
+- `({e})` and `{{e}}`: `cannot deduce type for lambda capture 'x' from
+  parenthesized|nested initializer list`; an overload set: `cannot
+  deduce type for lambda capture 'x' from initializer of type
+  '<overloaded function type>'`.
+
+The capture wording (clang `err_init_capture_*`) is chosen by the
+`entity::CAPTURE` initialization entity; a plain variable gets the
+`variable 'x' with type 'auto'` forms, including the parenthesized /
+nested-list check (`sema_auto_var_init_paren_braces`). The variable is
+then initialized with `perform_init(ty, init, direct = style is List)`
+under `entity::CAPTURE`: `(e)` and `{e}` are direct-initialization and
+consider explicit constructors and conversion functions, `= e` is
+copy-initialization and does not ([dcl.init.general]/16). `&r(x)` is a
+reference init-capture. A type-dependent initializer is kept in the
+variable form (`dependent_init_form`: a `ParenListExpr`, an
+`InitListExpr` or the expression) and deduced at instantiation.
+
+An init-capture pack (`...xs <initializer>`, [expr.prim.lambda.capture]/17)
+must name an unexpanded pack in its initializer (`pack expansion does not
+contain any unexpanded parameter packs`); its type is a pack expansion of
+`auto` and its initializer the unexpanded pattern, expanded per element
+at instantiation (§9). A non-pack init-capture whose initializer names an
+unexpanded pack is `initializer contains unexpanded parameter pack`.
 
 ### 4.2 Implicit capture ([expr.prim.lambda.capture]/9-12)
 
@@ -252,7 +301,11 @@ pointer member; `*this` a member of the class type, whose type keeps its
 sugar. A captured array is a member array, initialized element-wise.
 The member initializers (the `LambdaExpr`'s children) copy-initialize from the entities named, as
 [expr.prim.lambda.capture]/15 requires, with the usual temporaries and
-cleanups.
+cleanups. An init-capture's member is initialized by its variable's
+initializer as built (clang's shape: `[x{1}]` an `InitListExpr`, `[y(2)]`
+the bare expression, `[&r(a)]` the `DeclRefExpr`, a class type its
+`CXXConstructExpr`); the Oven and codegen evaluate it as any member
+initializer.
 
 ### 4.4 Names of captured entities in the body
 
@@ -419,8 +472,18 @@ its `ParmVar` (`LambdaCaptureSpec.var`); the elements share a name, so
 the "can appear only once" check compares the resolved variables. An
 outer function parameter pack named in a generic lambda's body is a
 `FunctionParmPackExpr` that captures every element (spec/sema-templates.md
-§7.2). Init-capture packs (`[...xs = ts]`) in templates, and a capture
-pack of a pack that is still unexpanded, remain "not yet implemented".
+§7.2).
+
+An init-capture is rebuilt from its pattern variable's initializer and
+init style (`init_capture_init`, subst `initializer(init, style)`: a
+`ParenListExpr` gives `Initializer::Paren`, an `InitListExpr`
+`Initializer::List`, a single expression of `Call` style a one-element
+`Paren`) and replayed through `add_init_capture` (§4.1), so deduction and
+direct- versus copy-initialization are those of the written form. An
+init-capture pack (`[...xs = ts]`, `[...xs(ts)]`, `[&...xs{ts}]`) becomes
+one init-capture per element, each with the element's initializer in the
+pattern's style. A capture pack of a pack that is still unexpanded (in a
+generic lambda substituted one level) remains "not yet implemented".
 
 Uses of `this` in a rebuilt body capture it again (`note_this_use`);
 `note_shared_this` keeps the enclosing lambda's `this` capture in step.
@@ -436,19 +499,28 @@ rebuilt one is in `locals`, step 1) to itself, as clang's
 
 ## 10. Tests
 
-- `tests/conformance/expr.prim.lambda/`: 56 tests (xfails are marked
+- `tests/conformance/expr.prim.lambda/`: 79 tests (xfails are marked
   per compiler in the files) covering syntax errors, captures and their
   diagnostics, closure members, generic lambdas, conversions, constant
   evaluation, run-time behaviour, mangling and lambdas in templates
   (WP-282: `run-template-param-pack-fold`, `run-capture-pack`,
   `constexpr-template-param-pack-fold`, `errors-template-param-pack-length`),
-  plus six `expect: ast` goldens (`ast-*.cpp`) against clang's JSON.
+  plus seven `expect: ast` goldens (`ast-*.cpp`) against clang's JSON.
 - `tests/conformance/dcl.fct/p0847-lambda-*.cpp` (explicit object
   parameters: compile, run including derived closures, the `[*this]`
   run test under clang >= 22, and the diagnostics) and
   `tests/conformance/expr.prim.lambda/p2036-*.cpp` (init-capture scope).
+- Init-capture forms (WP-518): `run-init-capture-forms`,
+  `run-init-capture-unique-ptr` (`[p(std::move(q))]`),
+  `constexpr-init-capture-forms` (templates and packs),
+  `errors-init-capture-forms` (`verify`), `errors-init-capture-forms-pack`,
+  the `ast-init-capture-forms` golden, and
+  `tests/conformance/dcl.spec.auto/direct-init-forms.cpp` (the variable
+  rule); `consteval-lambda` and `template-operator-call` for the
+  WP-123 rows.
 - `tests/codegen/lambda_basic.cpp`, `lambda_captures.cpp`,
-  `lambda_captures_class.cpp`, `lambda_names.cpp`: IR-exact.
+  `lambda_captures_class.cpp`, `lambda_names.cpp`,
+  `lambda_init_capture_forms.cpp`: IR-exact.
 - `xtask clang-ast` prints `LambdaExpr` and its implicit members.
 
 ## 11. Deviations, open questions and gaps
@@ -464,13 +536,16 @@ rebuilt one is in `locals`, step 1) to itself, as clang's
    the full-expression; clang's finer `NonOdrUseReason` tracking is not
    modelled. No known divergence in the tests.
 3. **Gaps** (each reported as `not yet implemented` / `not supported`):
-   braced and parenthesized init-captures (parser); capture packs
-   ([expr.prim.lambda.capture]/17), also in templates; `consteval`
-   lambdas; a lambda-expression as a template argument and calling an
-   `auto` template parameter whose default is a closure
-   (`template-argument.cpp`). `x.template operator()<T>()` and an
-   unqualified or qualified `operator()<T>` template-id work (WP-364,
-   spec/sema-templates.md).
+   a capture pack of a pack still unexpanded after substitution (§9).
+   Init-captures of every form (WP-518), capture packs, `consteval` and
+   immediate-escalating lambdas, a lambda-expression as a template
+   argument, calling an `auto` template parameter whose default is a
+   closure (`template-argument.cpp`), and `x.template operator()<T>()`
+   (WP-364, spec/sema-templates.md) all work
+   (`consteval-lambda.cpp`, `template-operator-call.cpp`).
+4. **Diagnostic wording.** The init-capture deduction errors use clang's
+   capture wording; other init-capture errors (initialization failures)
+   use the general initialization wording, as clang's do.
 
 ## Landed (WP-075)
 

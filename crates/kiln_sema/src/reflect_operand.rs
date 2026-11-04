@@ -51,14 +51,13 @@ impl Sema<'_, '_> {
         loc: Loc,
         end: Loc,
     ) -> ExprId {
-        self.act_on_reflect_name_dn(qual, DeclName::ident(name), name_loc, loc, end)
+        self.act_on_reflect_dn(qual, DeclName::ident(name), name_loc, loc, end)
     }
 
-    /// `^^nns operator-function-id` / `^^nns conversion-function-id`
-    /// ([expr.reflect]/7; WP-484): the unique function the name finds.
-    /// The implicit copy and move assignment operators of a class `nns`
-    /// names are declared first, as for any lookup of `operator=`.
-    pub fn act_on_reflect_operator_name(
+    /// [`Sema::act_on_reflect_name`] for any declaration name: also
+    /// `^^S::operator=`, `^^operator+`, `^^S::operator int` (WP-519; the
+    /// implicit special members the name can find are declared first).
+    pub fn act_on_reflect_dn(
         &mut self,
         qual: Option<Qualifier>,
         name: DeclName,
@@ -67,56 +66,23 @@ impl Sema<'_, '_> {
         end: Loc,
     ) -> ExprId {
         if let Some(q) = qual
-            && self.kind_of(q.ctx) == DeclKind::CXXRecord
-            && name.as_operator() == Some(kiln_ast::names::OverloadedOperator::Equal)
+            && self.is_dependent_ctx(q.ctx)
         {
-            use crate::class::SpecialKind;
-            self.ensure_implicit(q.ctx, SpecialKind::CopyAssign);
-            self.ensure_implicit(q.ctx, SpecialKind::MoveAssign);
+            return self.act_on_reflect_dependent(
+                (q.nns, q.loc),
+                name,
+                None,
+                None,
+                name_loc,
+                loc,
+                end,
+            );
         }
-        self.act_on_reflect_name_dn(qual, name, name_loc, loc, end)
-    }
-
-    /// `^^nns ~ class-name` ([expr.reflect]/7; WP-484): the destructor of
-    /// the class `nns` names (the enclosing class without `nns`), declared
-    /// first if it is implicit. `class_name` must name that class
-    /// ([class.dtor]/1).
-    pub fn act_on_reflect_destructor(
-        &mut self,
-        qual: Option<Qualifier>,
-        class_name: Symbol,
-        name_loc: Loc,
-        loc: Loc,
-        end: Loc,
-    ) -> ExprId {
-        let class = match qual {
-            Some(q) => Some(q.ctx),
-            None => self.this_class().map(|(_, d)| d).or(self.current_class().map(|c| c.record)),
-        }
-        .filter(|&c| self.kind_of(c) == DeclKind::CXXRecord && self.is_class_named(c, class_name));
-        let Some(c) = class else {
-            return self.reflect_bad_operand(name_loc, loc);
-        };
-        self.ensure_implicit(c, crate::class::SpecialKind::Dtor);
-        let canon = self.ast.types.canonical(self.class_type(c)).ty();
-        let dn = self.ast.names.destructor(canon);
-        let found = self.lookup_in_class_dn(c, dn, LookupKind::Ordinary);
-        match found.decls.as_slice() {
-            &[d] => self.reflect_entity(self.ast.strip_shadow(d), name_loc, loc, end),
-            _ => self.reflect_bad_operand(name_loc, loc),
-        }
-    }
-
-    /// [`Sema::act_on_reflect_name`] for any declaration name.
-    fn act_on_reflect_name_dn(
-        &mut self,
-        qual: Option<Qualifier>,
-        name: DeclName,
-        name_loc: Loc,
-        loc: Loc,
-        end: Loc,
-    ) -> ExprId {
         let info = self.meta_info_type();
+        match qual {
+            Some(q) => self.declare_implicit_named(q.ctx, name),
+            None => self.declare_implicit_named_in_scope(name),
+        }
         let lookup = |s: &Self, k| match qual {
             Some(q) => s.lookup_qualified_dn(q.ctx, name, k),
             None => s.lookup_name_dn(name, k),
@@ -130,15 +96,161 @@ impl Sema<'_, '_> {
         decls.dedup_by_key(|d| self.entity_decl(*d)); // same_entity: raw ok
         match decls.as_slice() {
             [] => {
-                let text =
-                    self.ast.names.simple_spelling(name, self.ast.symbols()).unwrap_or_default();
-                let d = self.diag(DiagId::sema_undeclared_var_use, name_loc).arg(text);
+                let text = self.decl_name_str(name);
+                let d = match qual {
+                    Some(q) => self
+                        .diag(DiagId::sema_no_member, name_loc)
+                        .arg(text)
+                        .arg(self.qualifier_desc(q.ctx)),
+                    None => self.diag(DiagId::sema_undeclared_var_use, name_loc).arg(text),
+                };
                 self.emit(d);
                 self.recover(info, &[], loc)
             }
             &[d] => self.reflect_entity(d, name_loc, loc, end),
             _ => self.reflect_overload_set(name_loc, loc),
         }
+    }
+
+    /// `r`, the instantiated `^^T::name` (no `typename`): a name that was
+    /// assumed not to name a type ([temp.res.general]/4: `^^T::x` is not
+    /// a type-only context) must not name one at instantiation, nor a
+    /// class or alias template unless `template` said so (`^^T::template
+    /// m`). Clang's missing-`typename` error, at the name; GCC 16.1
+    /// rejects the same operands.
+    pub(crate) fn check_reflect_dependent_kind(
+        &mut self,
+        r: ExprId,
+        ctx: DeclId,
+        name: DeclName,
+        template_kw: bool,
+        name_loc: Loc,
+        loc: Loc,
+    ) -> ExprId {
+        if self.ast.exprs.get(r).kind() != ExprKind::CXXReflectExpr {
+            return r;
+        }
+        let names_type = match self.ast.exprs.reflect_operand(r) {
+            Reflectee::Type(_) => true,
+            Reflectee::Template(n) => {
+                !template_kw
+                    && self.ast.types.template_decl(n).is_some_and(|d| {
+                        matches!(
+                            self.kind_of(d),
+                            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate
+                        )
+                    })
+            }
+            _ => false,
+        };
+        if !names_type {
+            return r;
+        }
+        let text = format!("{}::{}", self.qualified_decl_name(ctx), self.decl_name_str(name));
+        let d = self.diag(DiagId::parse_missing_typename, name_loc).arg(text);
+        self.emit(d);
+        let info = self.meta_info_type();
+        self.recover(info, &[], loc)
+    }
+
+    /// `^^nns ~C` / `^^~C` ([expr.reflect]/7, [class.dtor]/1): the
+    /// destructor of class `C` (its implicit one declared first). The
+    /// type-name is looked up in the qualifier's class, then here, as for
+    /// a destructor name in a member access ([basic.lookup.qual.general]/4);
+    /// it must name the qualifier's class.
+    pub fn act_on_reflect_destructor(
+        &mut self,
+        qual: Option<Qualifier>,
+        name: Symbol,
+        name_loc: Loc,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let in_class = qual.filter(|q| self.kind_of(q.ctx) == DeclKind::CXXRecord).and_then(|q| {
+            let found = self.lookup_in_class(q.ctx, name, LookupKind::Ordinary);
+            self.type_named_by(&found)
+        });
+        let named = in_class.or_else(|| {
+            let found = self.lookup_name(name, LookupKind::Ordinary);
+            self.type_named_by(&found)
+        });
+        let named = self.injected_named(named);
+        // `^^T::~T`: the destructor name of the type named here, looked
+        // up in `T`'s class at instantiation.
+        if let Some(q) = qual
+            && self.is_dependent_ctx(q.ctx)
+            && let Some((ty, _)) = named
+        {
+            let canon = self.ast.types.canonical(ty).ty();
+            let dn = self.ast.names.destructor(canon);
+            return self.act_on_reflect_dependent(
+                (q.nns, q.loc),
+                dn,
+                None,
+                None,
+                name_loc,
+                loc,
+                end,
+            );
+        }
+        let Some((ty, _)) = named else {
+            let text = crate::decl::sym_str(self, name);
+            let d = self.diag(DiagId::sema_undeclared_var_use, name_loc).arg(text);
+            self.emit(d);
+            let info = self.meta_info_type();
+            return self.recover(info, &[], loc);
+        };
+        let Some(c) = self.ast.types.as_record(ty) else {
+            return self.reflect_bad_operand(name_loc, loc);
+        };
+        if let Some(q) = qual
+            && !self.same_entity(q.ctx, c)
+        {
+            return self.reflect_bad_operand(name_loc, loc);
+        }
+        self.reflect_destructor_of(c, name_loc, loc, end)
+    }
+
+    /// The reflection of class `c`'s destructor, an implicit one
+    /// declared first; `^^` of a class with none (incomplete, or a
+    /// dependent pattern without a user-declared one) is ill-formed.
+    pub(crate) fn reflect_destructor_of(
+        &mut self,
+        c: DeclId,
+        name_loc: Loc,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let def = self.ast.definition(c).unwrap_or(c);
+        self.ensure_implicit(def, crate::class::SpecialKind::Dtor);
+        match self.ast.destructor(def) {
+            Some(d) => self.reflect_entity(d, name_loc, loc, end),
+            None => self.reflect_bad_operand(name_loc, loc),
+        }
+    }
+
+    /// `^^nns name` with a dependent `nns` (`^^T::x`, `^^T::template
+    /// m<U>`, `^^T::operator=`, `^^T::~T`; [temp.dep.constexpr]): a
+    /// value-dependent reflection of the `DependentScopeDeclRefExpr`,
+    /// resolved by substitution (`templ/subst/exprs.rs`) to whatever the
+    /// qualified-id names then.
+    #[allow(clippy::too_many_arguments, reason = "the parts of the qualified-id")]
+    pub fn act_on_reflect_dependent(
+        &mut self,
+        (nns, begin): (kiln_ast::ids::NnsId, Loc),
+        name: DeclName,
+        targs: Option<kiln_ast::ArgListId>,
+        template_kw: Option<Loc>,
+        name_loc: Loc,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let r = self.act_dependent_scope_ref(nns, name, targs, begin, name_loc);
+        self.set_template_kw(r, template_kw);
+        let info = self.meta_info_type();
+        let e = self.builder().dependent_reflect_expr(r, info, loc, end);
+        self.note_consteval_only(e);
+        e
     }
 
     /// `^^template-id` ([expr.reflect]/6-7): a class or alias template
@@ -156,7 +268,16 @@ impl Sema<'_, '_> {
         let e = match r {
             TemplateIdRef::Type(t) => return self.act_on_reflect_type(t, loc, end),
             TemplateIdRef::Value(e) => e,
-            TemplateIdRef::Overload(e) => self.resolve_single_template_id(e),
+            // The one specialization the template-id names without a
+            // target ([over.over]/3, [temp.arg.explicit]/4), found as
+            // `&f<A>` finds it but not referenced: a member function
+            // template's needs no object.
+            TemplateIdRef::Overload(e) => match self.single_template_spec(e) {
+                Some((d, _)) if !self.expr_has_error(e) => {
+                    return self.reflect_entity(d, name_loc, loc, end);
+                }
+                _ => e,
+            },
         };
         if self.expr_has_error(e) {
             return self.recover(info, &[], loc);

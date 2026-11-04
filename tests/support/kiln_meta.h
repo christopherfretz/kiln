@@ -196,13 +196,10 @@ class __kiln_exception_base {
 using __kiln_exception_base = std::exception;
 #endif
 
+// The data members come last, as in libstdc++'s <meta>: GCC 16.1 decides
+// whether a member function is of consteval-only type (CWG3115, counting
+// the implicit object parameter) from the members declared before it.
 class exception : public __kiln_exception_base {
-  char* __what_ = nullptr;
-  char8_t* __u8what_ = nullptr;
-  decltype(sizeof 0) __size_ = 0;
-  info __from_;
-  std::source_location __where_;
-
   template <class C>
   constexpr void __copy(const C* s, decltype(sizeof 0) n) {
     __size_ = n;
@@ -249,6 +246,13 @@ class exception : public __kiln_exception_base {
   consteval std::u8string_view u8what() const noexcept { return {__u8what_, __size_}; }
   consteval info from() const noexcept { return __from_; }
   consteval std::source_location where() const noexcept { return __where_; }
+
+ private:
+  char* __what_ = nullptr;
+  char8_t* __u8what_ = nullptr;
+  decltype(sizeof 0) __size_ = 0;
+  info __from_;
+  std::source_location __where_;
 };
 
 // [meta.reflection.layout]: offset_of's result.
@@ -266,8 +270,6 @@ consteval info __kiln_access_via(info cls);
 // (null: none). unchecked() is the (null, null) context, which checks
 // nothing (spec/reflection-members.md §3).
 class access_context {
-  info __scope_;
-  info __designating_;
   consteval access_context(info s, info d) noexcept : __scope_(s), __designating_(d) {}
 
  public:
@@ -278,6 +280,10 @@ class access_context {
   consteval access_context via(info cls) const { return {__scope_, __kiln_access_via(cls)}; }
   consteval info scope() const noexcept { return __scope_; }
   consteval info designating_class() const noexcept { return __designating_; }
+
+ private:
+  info __scope_;  // last, as for exception above
+  info __designating_;
 };
 
 // The materialization recipes under test (spec/reflection.md §3.5):

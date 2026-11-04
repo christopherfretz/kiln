@@ -2469,6 +2469,36 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// `^^nns name` with a dependent `nns` (P2996 [expr.reflect]/7,
+    /// spec/reflection-repr.md §2): a value-dependent `CXXReflectExpr`
+    /// over `name`, the `DependentScopeDeclRefExpr` substitution resolves.
+    pub fn dependent_reflect_expr(
+        &mut self,
+        name: ExprId,
+        ty: QualType,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let mut deps = ExprDeps::VALUE_INST;
+        for d in [ExprDeps::UNEXPANDED_PACK, ExprDeps::ERROR] {
+            if self.ast.exprs.get(name).deps().contains(d) {
+                deps |= d;
+            }
+        }
+        let e = self.simple(
+            ExprKind::CXXReflectExpr,
+            ValueCategory::PRValue,
+            deps,
+            crate::reflect::Reflectee::DEPENDENT_NAME_TAG,
+            ty,
+            loc,
+            name.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        e
+    }
+
     /// A value-dependent splice `[: operand :]` in an expression position
     /// (spec/reflection.md §5; template patterns only): `a` is the operand,
     /// `b` the object expression of a member splice `base.[: m :]` /

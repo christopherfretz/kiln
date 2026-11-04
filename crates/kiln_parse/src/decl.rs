@@ -3707,7 +3707,7 @@ impl Parser<'_, '_> {
                 if allow_fn_def && self.at_function_definition_start() {
                     self.explicit_inst_with_definition(tmpl_kind, &d, true);
                     self.parse_function_definition_after_declarator(
-                        &ds, base, &d, &mut decls, level,
+                        &ds, base, &mut d, &mut decls, level,
                     );
                     return decls;
                 }
@@ -3947,10 +3947,11 @@ impl Parser<'_, '_> {
         &mut self,
         ds: &DeclSpec,
         base: QualType,
-        d: &Declarator,
+        d: &mut Declarator,
         decls: &mut Vec<DeclId>,
         level: usize,
     ) {
+        d.defaulted = self.at_eq_default();
         self.s.act_function_def_next(true);
         let f = self.s.act_on_declarator(ds, base, d);
         self.s.act_function_def_next(false);

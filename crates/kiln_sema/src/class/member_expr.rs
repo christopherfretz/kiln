@@ -1000,7 +1000,10 @@ impl Sema<'_, '_> {
     /// names the injected-class-name type `X<P...>` ([temp.local]/1),
     /// which instantiation substitutes, not the pattern's own record
     /// (`this->~X()` in a member of `X<T>`, [expr.prim.id.dtor]/2).
-    fn injected_named(&mut self, n: Option<(QualType, DeclId)>) -> Option<(QualType, DeclId)> {
+    pub(crate) fn injected_named(
+        &mut self,
+        n: Option<(QualType, DeclId)>,
+    ) -> Option<(QualType, DeclId)> {
         let (ty, d) = n?;
         let d0 = self.ast.strip_shadow(d);
         Some((self.injected_tag_type(d0).unwrap_or(ty), d))
@@ -1008,7 +1011,7 @@ impl Sema<'_, '_> {
 
     /// The type and type declaration a lookup result names, if it names a
     /// type (the type-name of a destructor name).
-    fn type_named_by(&self, found: &crate::lookup::Found) -> Option<(QualType, DeclId)> {
+    pub(crate) fn type_named_by(&self, found: &crate::lookup::Found) -> Option<(QualType, DeclId)> {
         let &d = found.decls.first()?;
         let d = self.ast.strip_shadow(d);
         let k = self.kind_of(d);

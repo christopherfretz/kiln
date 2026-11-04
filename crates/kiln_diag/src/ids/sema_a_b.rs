@@ -175,6 +175,7 @@ sema_auto_var_expl_spec_in_own_initializer = Error (2) "variable template explic
 sema_auto_var_in_own_initializer = Error (2) "variable '{0}' declared with deduced type {1} cannot appear in its own initializer";
 sema_auto_var_init_multiple_expressions = Error (2) "initializer for variable '{0}' with type {1} contains multiple expressions";
 sema_auto_var_init_no_expression = Error (2) "initializer for variable '{0}' with type {1} is empty";
+sema_auto_var_init_paren_braces = Error (3) "cannot deduce type for variable '{0}' with type {1} from {2:parenthesized|nested} initializer list";
 sema_auto_var_partial_spec_in_own_initializer = Error (2) "variable template partial specialization '{0}' declared with deduced type {1} cannot appear in its own initializer";
 sema_auto_var_requires_init = Error (2) "declaration of variable '{0}' with deduced type {1} requires an initializer";
 sema_auto_var_template_in_own_initializer = Error (2) "variable template '{0}' declared with deduced type {1} cannot appear in its own initializer";

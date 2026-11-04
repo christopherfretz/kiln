@@ -81,6 +81,12 @@ impl Reflectee {
         }
     }
 
+    /// The `aux` tag of a `CXXReflectExpr` whose operand is a dependent
+    /// qualified name (`^^T::x`, spec/reflection-repr.md §2): `a` is the
+    /// `DependentScopeDeclRefExpr` it is resolved from at instantiation.
+    /// No reflectee kind uses it.
+    pub const DEPENDENT_NAME_TAG: u8 = 12;
+
     /// The kind tag stored in a `CXXReflectExpr`'s `aux` (and printed by
     /// the dump).
     pub fn tag(self) -> u8 {
