@@ -344,6 +344,11 @@ impl Parser<'_, '_> {
         while !self.at(Punct::RBrace) && !self.at_eof() {
             self.parse_external_declaration();
         }
+        // The namespace's visibility scope ends at its `}`, before a
+        // `#pragma GCC visibility` right after it is lexed.
+        for &ns in opened.iter().rev() {
+            self.s.pop_namespace_visibility(ns);
+        }
         self.expect_closing(Punct::RBrace, Punct::LBrace, open);
         for ns in opened.into_iter().rev() {
             self.s.act_on_finish_namespace(ns);

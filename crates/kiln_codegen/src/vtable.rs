@@ -17,7 +17,7 @@ use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
     Attr, AttrKind, CastOp, ComdatKind, FuncId, GepFlags, GlobalId, IntPredicate, Linkage,
-    TypeId as LTy, UnnamedAddr, Value, ValueRef,
+    TypeId as LTy, UnnamedAddr, Value, ValueRef, Visibility,
 };
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
@@ -283,12 +283,14 @@ impl Cg<'_> {
         let l = self.vt_layout(first)?;
         let ty = self.vtable_ir_ty(&l);
         let name = mangle::mangle_class_special(self.ast, &mut self.anon, "_ZTV", first);
+        let vis = self.class_visibility(first, false);
         let g = self.m.add_global(&name, ty);
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
         gv.linkage = Linkage::External;
         gv.unnamed_addr = UnnamedAddr::Global;
         gv.align = Some(8);
+        gv.visibility = vis;
         self.vtables.insert(first, g);
         Ok(g)
     }
@@ -347,11 +349,14 @@ impl Cg<'_> {
     /// clang `canSpeculativelyEmitVTableAsBaseClass`: no inline virtual
     /// function of the vtable is still unemitted, and (for a class with
     /// virtual bases, whose VTT must be emittable too) the same holds
-    /// for each dynamic non-virtual base. clang's `isVTableHidden` test
-    /// never applies: kiln does not model visibility attributes.
+    /// for each dynamic non-virtual base; and the vtable is not hidden
+    /// (clang `isVTableHidden`).
     fn can_speculatively_emit_vtable_as_base(&mut self, rd: DeclId) -> R<bool> {
         let ast = self.ast;
         let first = ast.first(rd);
+        if self.is_vtable_hidden(first)? {
+            return Ok(false);
+        }
         if self.has_unused_virtual_inline_function(first)? {
             return Ok(false);
         }
@@ -371,6 +376,36 @@ impl Cg<'_> {
             }
         }
         Ok(true)
+    }
+
+    /// clang `isVTableHidden`: `rd`'s `type_info` (its type visibility)
+    /// or a function in a used slot that is not defined in this
+    /// translation unit is hidden, so an `available_externally` copy
+    /// could reference a symbol another DSO does not export.
+    fn is_vtable_hidden(&mut self, rd: DeclId) -> R<bool> {
+        if !self.vis_active {
+            return Ok(false);
+        }
+        if self.class_visibility(rd, true) == Visibility::Hidden {
+            return Ok(true);
+        }
+        let ast = self.ast;
+        let l = self.vt_layout(rd)?;
+        for c in &l.components {
+            let m = match *c {
+                VTableComponent::Func(m)
+                | VTableComponent::CompleteDtor(m)
+                | VTableComponent::DeletingDtor(m) => m,
+                _ => continue,
+            };
+            let defined = ast.redecls_of(m).any(|r| {
+                ast.decls.function(r).is_some_and(|f| f.body.is_some() || f.spec.is_deleted())
+            });
+            if !defined && self.decl_visibility(m, true) == Visibility::Hidden {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// clang `hasAnyUnusedVirtualInlineFunction`: an inline function
@@ -523,7 +558,7 @@ impl Cg<'_> {
         let rd_ty = self.class_type(first);
         let rtti = self.rtti(rd_ty)?;
         let init = self.vtable_init(&l, rtti, first)?;
-        self.define_vtable_global(g, init, linkage)
+        self.define_vtable_global(g, init, linkage, first)
     }
 
     /// clang `GetAddrOfVTT`: the `_ZTT` global of `rd` (declared).
@@ -545,9 +580,11 @@ impl Cg<'_> {
             }
         };
         let ty = self.m.types.array(LTy::PTR, n as u64);
+        let vis = self.class_visibility(first, false);
         let g = self.m.add_global(&name, ty);
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
+        gv.visibility = vis;
         gv.linkage = Linkage::External;
         gv.unnamed_addr = UnnamedAddr::Global;
         gv.align = Some(8);
@@ -599,7 +636,7 @@ impl Cg<'_> {
             let bty = self.class_type(so.class);
             let rtti = self.rtti(bty)?;
             let init = self.vtable_init(&l, rtti, rd)?;
-            self.define_vtable_global(g, init, linkage)?;
+            self.define_vtable_global(g, init, linkage, rd)?;
             groups.push((Value::global(g), l));
         }
         let mut elems = Vec::with_capacity(comps.len());
@@ -615,7 +652,7 @@ impl Cg<'_> {
             Ok(a) => a,
             Err(e) => return err(loc, format!("bad VTT: {e:?}")),
         };
-        self.define_vtable_global(vtt, init, linkage)
+        self.define_vtable_global(vtt, init, linkage, rd)
     }
 
     /// Sets the initializer, linkage and comdat of a vtable (or VTT)
@@ -625,11 +662,20 @@ impl Cg<'_> {
         g: GlobalId,
         init: Value,
         linkage: VtLinkage,
+        rd: DeclId,
     ) -> R<()> {
         if let Err(e) = self.m.set_initializer(g, Some(init)) {
             return err(None, format!("bad vtable initializer: {e:?}"));
         }
         self.set_vague_linkage(g, linkage);
+        // clang `setGVProperties(VTable, RD)`: the class's visibility; an
+        // `available_externally` one keeps only an explicit one.
+        let vis = match linkage {
+            VtLinkage::Internal => Visibility::Default,
+            VtLinkage::AvailableExternally => self.class_visibility(rd, false),
+            _ => self.class_visibility(rd, true),
+        };
+        self.m.global_mut(g).visibility = vis;
         Ok(())
     }
 
@@ -1858,12 +1904,12 @@ impl Cg<'_> {
         }
         if let Some(rd) = ast.types.as_record(q) {
             if self.is_dynamic(rd) && self.vtable_linkage(rd) == VtLinkage::External {
-                return Ok(self.external_rtti(&name));
+                return Ok(self.external_rtti(&name, Some(rd)));
             }
             return self.class_rtti(q, rd, &name);
         }
         if self.is_std_lib_rtti(q) {
-            return Ok(self.external_rtti(&name));
+            return Ok(self.external_rtti(&name, None));
         }
         let abi = match ast.types.canonical_view(q) {
             TypeView::Pointer(p) => return self.pointer_rtti(q, p, &name),
@@ -1880,7 +1926,7 @@ impl Cg<'_> {
         let pre = self.reserve_rtti(&name);
         let linkage = self.type_rtti_linkage(q);
         let fields = vec![self.abi_vtable(abi)?, self.rtti_type_name(q, linkage)];
-        self.finish_rtti(pre, &name, &fields, linkage)
+        self.finish_rtti(pre, &name, &fields, linkage, q)
     }
 
     /// clang `ContainsIncompleteClassType`.
@@ -1950,8 +1996,8 @@ impl Cg<'_> {
         let pre = self.reserve_rtti(&name);
         let linkage = self.type_rtti_linkage(q);
         let mut fields = vec![self.abi_vtable("_ZTVN10__cxxabiv120__function_type_infoE")?];
-        fields.push(self.rtti_name_global(&format!("_ZTS{}", &name[4..]), linkage));
-        Ok((flags, self.finish_rtti(pre, &name, &fields, linkage)?))
+        fields.push(self.rtti_name_global(&format!("_ZTS{}", &name[4..]), linkage, q));
+        Ok((flags, self.finish_rtti(pre, &name, &fields, linkage, q)?))
     }
 
     /// clang `BuildPointerToMemberTypeInfo`: `{ vtable, name, i32 flags,
@@ -1975,7 +2021,7 @@ impl Cg<'_> {
         fields.push(self.m.const_int(LTy::I32, i128::from(flags)));
         fields.push(pti);
         fields.push(self.rtti(class)?);
-        self.finish_rtti(pre, name, &fields, linkage)
+        self.finish_rtti(pre, name, &fields, linkage, q)
     }
 
     /// clang `BuildPointerTypeInfo`: `{ vtable, name, i32 flags, pointee }`.
@@ -1988,18 +2034,18 @@ impl Cg<'_> {
         let (flags, pti) = self.pointee_rtti(pointee)?;
         fields.push(self.m.const_int(LTy::I32, i128::from(flags)));
         fields.push(pti);
-        self.finish_rtti(pre, name, &fields, linkage)
+        self.finish_rtti(pre, name, &fields, linkage, q)
     }
 
     /// clang `GetAddrOfTypeName`: the `_ZTS` string of `q`.
     fn rtti_type_name(&mut self, q: QualType, linkage: VtLinkage) -> Value {
         let ts_name = mangle::mangle_rtti(self.ast, &mut self.anon, q, "_ZTS");
-        self.rtti_name_global(&ts_name, linkage)
+        self.rtti_name_global(&ts_name, linkage, q)
     }
 
     /// The `_ZTS` global `ts_name` (its string is the mangling after the
     /// prefix).
-    fn rtti_name_global(&mut self, ts_name: &str, linkage: VtLinkage) -> Value {
+    fn rtti_name_global(&mut self, ts_name: &str, linkage: VtLinkage, q: QualType) -> Value {
         let ts_name = ts_name.to_owned();
         if let Some(g) = self.m.get_global(&ts_name) {
             return Value::global(g);
@@ -2008,9 +2054,11 @@ impl Cg<'_> {
         let ty = self.m.const_type(init);
         let g = self.m.add_global(&ts_name, ty);
         let _ = self.m.set_initializer(g, Some(init));
+        let vis = self.rtti_visibility(q, linkage);
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
         gv.align = Some(1);
+        gv.visibility = vis;
         self.set_vague_linkage(g, linkage);
         Value::global(g)
     }
@@ -2032,6 +2080,7 @@ impl Cg<'_> {
         name: &str,
         fields: &[Value],
         linkage: VtLinkage,
+        q: QualType,
     ) -> R<Value> {
         let init = match self.m.const_anon_struct(fields, false) {
             Ok(v) => v,
@@ -2046,9 +2095,11 @@ impl Cg<'_> {
             None => self.m.add_global(name, ty),
         };
         let _ = self.m.set_initializer(g, Some(init));
+        let vis = self.rtti_visibility(q, linkage);
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
         gv.align = Some(8);
+        gv.visibility = vis;
         self.set_vague_linkage(g, linkage);
         self.rtti_globals.insert(name.to_owned(), g);
         Ok(Value::global(g))
@@ -2074,15 +2125,24 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `GetAddrOfExternalRTTIDescriptor`: `external constant ptr`.
-    fn external_rtti(&mut self, name: &str) -> Value {
+    /// clang `BuildTypeInfo`: an RTTI definition of type `q` has `q`'s
+    /// type visibility unless its linkage is local.
+    fn rtti_visibility(&self, q: QualType, linkage: VtLinkage) -> Visibility {
+        if linkage == VtLinkage::Internal { Visibility::Default } else { self.type_visibility(q) }
+    }
+
+    /// clang `GetAddrOfExternalRTTIDescriptor`: `external constant ptr`,
+    /// with the class `rd`'s explicit visibility.
+    fn external_rtti(&mut self, name: &str, rd: Option<DeclId>) -> Value {
         if let Some(g) = self.m.get_global(name) {
             return Value::global(g);
         }
+        let vis = rd.map_or(Visibility::Default, |rd| self.class_visibility(rd, false));
         let g = self.m.add_global(name, LTy::PTR);
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
         gv.linkage = Linkage::External;
+        gv.visibility = vis;
         Value::global(g)
     }
 
@@ -2192,7 +2252,7 @@ impl Cg<'_> {
                 fields.push(self.m.const_int(LTy::I64, i128::from(of)));
             }
         }
-        self.finish_rtti(pre, name, &fields, linkage)
+        self.finish_rtti(pre, name, &fields, linkage, q)
     }
 
     /// Linkage, `dso_local` and comdat of an RTTI or vtable definition.

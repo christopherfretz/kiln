@@ -461,6 +461,10 @@ pub struct Args {
     /// The last of those was `-fvisibility-ms-compat`: values hidden,
     /// types (vtables, RTTI) default (clang `-ftype-visibility=default`).
     pub visibility_ms_compat: bool,
+    /// The last of `-fvisibility=` and `-fvisibility-ms-compat` was
+    /// `-fvisibility=` with an unknown value: the argument, reported per
+    /// input as clang's `-cc1` "invalid value 'v' in '-fvisibility=v'".
+    pub invalid_visibility: Option<String>,
     /// The last of `-f[no-]visibility-inlines-hidden`.
     pub visibility_inlines_hidden: bool,
     /// The last of `-f[no-]semantic-interposition` (`None`: neither, clang's
@@ -803,7 +807,7 @@ impl Args {
     /// `-f[no-]semantic-interposition` and
     /// `-f[no-]direct-access-external-data`; the last of each group wins;
     /// an unknown value is clang's "invalid value 'v' in
-    /// '-fvisibility=v'".
+    /// '-fvisibility=v'" (from `-cc1`, so per input: [`Args::invalid_visibility`]).
     fn visibility_flag(&mut self, arg: &str) -> bool {
         match arg {
             "-fvisibility-inlines-hidden" => self.visibility_inlines_hidden = true,
@@ -814,6 +818,7 @@ impl Args {
             "-fno-direct-access-external-data" => self.direct_access_external_data = Some(false),
             "-fvisibility-ms-compat" => {
                 (self.visibility, self.visibility_ms_compat) = (Some(Visibility::Hidden), true);
+                self.invalid_visibility = None;
             }
             _ => {
                 let Some(v) = arg.strip_prefix("-fvisibility=") else { return false };
@@ -822,11 +827,12 @@ impl Args {
                     "hidden" | "internal" => Visibility::Hidden,
                     "protected" => Visibility::Protected,
                     _ => {
-                        self.errors.push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned()));
+                        self.invalid_visibility = Some(arg.to_owned());
                         return true;
                     }
                 };
                 (self.visibility, self.visibility_ms_compat) = (Some(vis), false);
+                self.invalid_visibility = None;
             }
         }
         true
@@ -1222,8 +1228,9 @@ mod tests {
         assert!(!v("-fvisibility-ms-compat -fvisibility=hidden a.cpp").1);
         assert!(v("-fvisibility-inlines-hidden a.cpp").2);
         assert!(!v("-fvisibility-inlines-hidden -fno-visibility-inlines-hidden a.cpp").2);
-        let e = ArgError::InvalidFlagValue("-fvisibility=bogus".to_owned(), "bogus".to_owned());
-        assert_eq!(v("-fvisibility=bogus a.cpp").3, vec![e]);
+        let bad = |s| parse(s).invalid_visibility;
+        assert_eq!(bad("-fvisibility=bogus a.cpp").as_deref(), Some("-fvisibility=bogus"));
+        assert_eq!(bad("-fvisibility=bogus -fvisibility=hidden a.cpp"), None);
         let si = |s| parse(s).semantic_interposition;
         assert_eq!(si("a.cpp"), None);
         assert_eq!(si("-fsemantic-interposition -fno-semantic-interposition a.cpp"), Some(false));

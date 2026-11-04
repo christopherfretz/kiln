@@ -285,7 +285,7 @@ impl Sema<'_, '_> {
     /// The end of namespace definition `ns`: pops its marker and any
     /// pragma pushed inside and not popped (clang
     /// `PopPragmaVisibility(true, ...)`'s recovery).
-    pub(crate) fn pop_namespace_visibility(&mut self, ns: DeclId) {
+    pub fn pop_namespace_visibility(&mut self, ns: DeclId) {
         if self.vis_namespaces.last() != Some(&ns) {
             return;
         }
