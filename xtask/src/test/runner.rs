@@ -190,6 +190,28 @@ struct Test<'a> {
 }
 
 impl Test<'_> {
+    /// Why this run's configuration cannot run `spec`: a kiln-specific
+    /// test under another compiler, a test that needs `%{gcc_toolchain}`
+    /// without GCC, or one the header-differential mode leaves out.
+    fn mode_skip(&self, spec: &TestSpec, source: &str) -> Option<String> {
+        if spec.is_kiln_specific() && self.cfg.compiler_kind != CompilerKind::Kiln {
+            let directive = if spec.oven.is_empty() { "inst-report:" } else { "oven:" };
+            return Some(format!(
+                "not supported by this compiler (kiln-specific `{directive}` directive)"
+            ));
+        }
+        if self.cfg.gcc_toolchain.is_none()
+            && spec.args.iter().any(|a| a.contains("%{gcc_toolchain}"))
+        {
+            let reason = "no GCC oracle, so no `%{gcc_toolchain}` (the test needs GCC's libstdc++)";
+            return Some(reason.to_owned());
+        }
+        if self.cfg.meta_header.is_some() {
+            return meta_header_skip(spec, source);
+        }
+        None
+    }
+
     fn evaluate(&mut self) -> (Status, Option<String>, String) {
         let source = match fs::read(&self.case.path) {
             Ok(b) => String::from_utf8_lossy(&b).into_owned(),
@@ -222,21 +244,7 @@ impl Test<'_> {
         ) {
             return (Status::Skip, Some(r), String::new());
         }
-        if self.cfg.gcc_toolchain.is_none()
-            && spec.args.iter().any(|a| a.contains("%{gcc_toolchain}"))
-        {
-            let reason = "no GCC oracle, so no `%{gcc_toolchain}` (the test needs GCC's libstdc++)";
-            return (Status::Skip, Some(reason.to_owned()), String::new());
-        }
-        if self.cfg.meta_header.is_some() {
-            if let Some(reason) = meta_header_skip(&spec, &source) {
-                return (Status::Skip, Some(reason), String::new());
-            }
-        }
-        if spec.is_kiln_specific() && kind != CompilerKind::Kiln {
-            let directive = if spec.oven.is_empty() { "inst-report:" } else { "oven:" };
-            let reason =
-                format!("not supported by this compiler (kiln-specific `{directive}` directive)");
+        if let Some(reason) = self.mode_skip(&spec, &source) {
             return (Status::Skip, Some(reason), String::new());
         }
         if !spec.modules.is_empty() && !kind.speaks_clang() {
@@ -286,13 +294,8 @@ impl Test<'_> {
             Expect::Cfg => self.cfg_dump(&spec),
         };
         let outcome = self.with_gcc_verdict(&spec, outcome);
-        // Budgets are checked once the kind's own checks pass; the
-        // header-differential mode has none (the real <meta> evaluates
-        // thousands of its own constants).
-        let budgets = self.cfg.meta_header.is_none();
-        let outcome = outcome.and_then(|()| if budgets { self.check_oven(&spec) } else { Ok(()) });
-        let outcome =
-            outcome.and_then(|()| if budgets { self.check_inst_report(&spec) } else { Ok(()) });
+        // Budgets are checked once the kind's own checks pass.
+        let outcome = outcome.and_then(|()| self.check_budgets(&spec));
         let xfail = spec.xfail_reason(kind).map(str::to_owned);
         match (outcome, xfail) {
             (Ok(()), None) => (Status::Pass, None, String::new()),
@@ -764,6 +767,17 @@ impl Test<'_> {
 
     /// Reads the constexpr report of the compile and checks the `oven:`
     /// budgets. A missing or malformed report is kiln's fault: FAIL.
+    /// The `oven:` and `inst-report:` budgets. The header-differential
+    /// mode has none (the real <meta> evaluates thousands of its own
+    /// constants).
+    fn check_budgets(&mut self, spec: &TestSpec) -> Check {
+        if self.cfg.meta_header.is_some() {
+            return Ok(());
+        }
+        self.check_oven(spec)?;
+        self.check_inst_report(spec)
+    }
+
     fn check_oven(&mut self, spec: &TestSpec) -> Check {
         if spec.oven.is_empty() {
             return Ok(());

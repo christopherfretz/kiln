@@ -237,8 +237,27 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
     }
 }
 
+/// The stand-in header directory of the header-differential mode
+/// (`--meta-header`), which needs the GCC oracle's installation prefix.
+fn meta_header_dir(
+    opts: &Options,
+    root: &Path,
+    gcc_toolchain: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
+    if !opts.meta_header {
+        return Ok(None);
+    }
+    if gcc_toolchain.is_none() {
+        return Err("--meta-header needs a GCC oracle (--gcc / KILN_GCC) whose \
+                    installation prefix holds libstdc++'s <meta>"
+            .into());
+    }
+    Ok(Some(root.join("tests").join("support").join("meta-header")))
+}
+
 /// Runs the selected tests, printing results and the summary to stdout.
 /// `Err` is an infrastructure problem (exit status 2).
+#[allow(clippy::too_many_lines, reason = "one linear setup / run / report sequence")]
 pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     let start = Instant::now();
     // First, so a bad `KILN_ORACLE` fails before anything is built or run.
@@ -281,16 +300,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     };
     let gcc = gcc_oracle(opts)?;
     let gcc_toolchain = gcc.as_ref().and_then(|(path, _)| crate::oracle::gcc_toolchain_of(path));
-    let meta_header = if opts.meta_header {
-        if gcc_toolchain.is_none() {
-            return Err("--meta-header needs a GCC oracle (--gcc / KILN_GCC) whose \
-                        installation prefix holds libstdc++'s <meta>"
-                .into());
-        }
-        Some(root.join("tests").join("support").join("meta-header"))
-    } else {
-        None
-    };
+    let meta_header = meta_header_dir(opts, &root, gcc_toolchain.as_deref())?;
 
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let scratch = target.join("xtask-test").join(format!("run-{}-{nanos}", std::process::id()));

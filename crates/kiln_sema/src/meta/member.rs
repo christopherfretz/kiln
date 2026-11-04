@@ -463,10 +463,10 @@ impl Sema<'_, '_> {
     ) -> Result<(), MetaError> {
         let (block, done) = l.cursors[idx];
         let last = done.checked_sub(1).and_then(|k| self.ast.members(block).nth(k as usize));
-        if let Some(last) = last.filter(|&d| is_nested_block(self.ast.decls.get(d).kind())) {
-            if let Some(c) = l.cursors.iter().position(|c| c.0 == last) {
-                self.walk_block(ns, c, l, loc)?;
-            }
+        if let Some(last) = last.filter(|&d| is_nested_block(self.ast.decls.get(d).kind()))
+            && let Some(c) = l.cursors.iter().position(|c| c.0 == last)
+        {
+            self.walk_block(ns, c, l, loc)?;
         }
         let news: Vec<DeclId> = self.ast.members(block).skip(done as usize).collect();
         for m in news {

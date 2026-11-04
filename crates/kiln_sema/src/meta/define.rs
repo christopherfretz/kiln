@@ -6,6 +6,7 @@
 //! evaluates. `__kiln_define_member` (`ext.rs`) injects through the same
 //! path ([`Sema::inject_field`]).
 
+use kiln_ast::annot::Annotation;
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, FieldData};
 use kiln_ast::expr::Radix;
 use kiln_ast::names::DeclName;
@@ -196,6 +197,7 @@ impl Sema<'_, '_> {
             alignment: optional(self, "alignment").ok_or_else(missing)?,
             bit_width: optional(self, "bit_width").ok_or_else(missing)?,
             nua: field(self, "no_unique_address").ok_or_else(missing)?.0,
+            annotations: field(self, "annotations").map(|x| x.0),
         };
         oven.set_dms_plan(plan);
         Ok(plan)
@@ -297,8 +299,50 @@ impl Sema<'_, '_> {
                 Some(w as u32)
             }
         };
-        let id = oven.dms_intern(Dms { ty, name, alignment, bit_width, nua: raw.nua });
+        let annots = self.dms_annotations(oven, raw.annotations, loc)?;
+        let id = oven.dms_intern(Dms { ty, name, alignment, bit_width, nua: raw.nua, annots });
         Ok(self.intern_reflection(Reflectee::DataMemberSpec(id), loc)?)
+    }
+
+    /// The `annotations` of the options just read (P3394R4; GCC 16.1):
+    /// each must have a type ("reflection does not have a type"), and
+    /// stands for its constant (`constant_of`: a variable or object is
+    /// its value, an annotation its underlying constant). The constants'
+    /// list, interned (0 when there are none).
+    fn dms_annotations(&mut self, oven: &mut Oven, n: u32, loc: Loc) -> Result<u32, MetaError> {
+        if n == 0 {
+            return Ok(0);
+        }
+        let args = oven.dms_annotation_args().to_vec();
+        let mut out = Vec::with_capacity(args.len());
+        for r in args {
+            let x = self.ast.reflections.get(r);
+            let c = match x {
+                Reflectee::Value(_) => r,
+                Reflectee::Object(_) if self.class_constant(r).is_some() => r,
+                Reflectee::Annotation(a) => self.annotation_constant(a, loc)?,
+                _ if self.type_of_reflectee(x).is_none() => {
+                    return fail(loc, "reflection does not have a type");
+                }
+                _ => self.reflect_constant_of(r, loc, oven)?,
+            };
+            out.push(c);
+        }
+        Ok(oven.dms_annots_intern(&out))
+    }
+
+    /// The class value of constant reflection `r` (an object reflection
+    /// of a template parameter object, [temp.param]/8).
+    fn class_constant(&self, r: ReflectionId) -> Option<kiln_ast::ConstValueId> {
+        let Reflectee::Object(p) = self.ast.reflections.get(r) else { return None };
+        match self.ast.consts.scalar(p) {
+            Some(kiln_ast::consts::Scalar::Pointer {
+                base: kiln_ast::consts::PtrBase::Decl(d),
+                offset: 0,
+                ..
+            }) => self.ast.templates.param_object_value(d),
+            _ => None,
+        }
     }
 
     /// `define_aggregate(class_type, mdescrs)`
@@ -391,7 +435,8 @@ impl Sema<'_, '_> {
         let saved = self.ctx;
         self.act_on_start_record_definition(r);
         for d in &specs {
-            self.inject_field(r, d, loc, block);
+            let annots = oven.dms_annots(d.annots).to_vec();
+            self.inject_field(r, d, &annots, loc, block);
         }
         self.lend_oven(oven, |s| s.act_on_finish_record_definition(r, false));
         self.ctx = saved;
@@ -499,7 +544,14 @@ impl Sema<'_, '_> {
     /// Appends the public data member `d` describes to class `r` (being
     /// defined) at `loc`, injected by the evaluation at `point`
     /// (spec/reflection.md §6.2).
-    pub(super) fn inject_field(&mut self, r: DeclId, d: &Dms, loc: Loc, point: Loc) -> DeclId {
+    pub(super) fn inject_field(
+        &mut self,
+        r: DeclId,
+        d: &Dms,
+        annots: &[ReflectionId],
+        loc: Loc,
+        point: Loc,
+    ) -> DeclId {
         let name = d.name.map_or(DeclName::EMPTY, DeclName::ident);
         let mut h = DeclHead::new(r, name, loc);
         h.flags = DeclFlags::INJECTED;
@@ -528,6 +580,31 @@ impl Sema<'_, '_> {
             let _ = self.ast.decls.cold.alignment.insert(f, e);
         }
         let _ = self.ast.decls.cold.injection_point.insert(f, point);
+        if !annots.is_empty() {
+            self.inject_annotations(f, annots);
+        }
         f
+    }
+
+    /// Attaches description annotations `annots` (constant reflections,
+    /// [`Sema::dms_annotations`]) to injected member `f`. Like GCC 16.1's,
+    /// they have no source location.
+    fn inject_annotations(&mut self, f: DeclId, annots: &[ReflectionId]) {
+        let mut ids = Vec::with_capacity(annots.len());
+        for &c in annots {
+            let value = match self.ast.reflections.get(c) {
+                Reflectee::Value(cv) => Some(cv),
+                _ => self.class_constant(c),
+            };
+            let Some(cv) = value else { continue };
+            let ty = self.ast.types.canonical(self.ast.consts.ty(cv));
+            let ty = crate::conv::strip_cv(self, ty);
+            let expr = self.builder().int_literal(QualType::INT, 0, Radix::Decimal, Loc::INVALID);
+            let a =
+                Annotation { decl: f, value: Some(cv), loc: Loc::INVALID, written_type: ty, expr };
+            ids.push(self.ast.annots.push(a));
+        }
+        let l = self.ast.lists.push(&ids);
+        self.ast.annots.attach(f, l, &mut self.ast.lists);
     }
 }

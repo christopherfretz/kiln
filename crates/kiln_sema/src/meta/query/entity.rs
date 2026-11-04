@@ -316,7 +316,7 @@ impl Sema<'_, '_> {
     /// variable is usable in constant expressions and of integral,
     /// enumeration or `bool` type (other types wait for WP-479's
     /// `reflect_constant`).
-    pub(super) fn reflect_constant_of(
+    pub(in crate::meta) fn reflect_constant_of(
         &mut self,
         r: ReflectionId,
         loc: Loc,

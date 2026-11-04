@@ -1094,6 +1094,7 @@ impl Parser {
         true
     }
 
+    #[allow(clippy::too_many_lines, reason = "one flat pass of cross-directive checks")]
     fn finish(mut self) -> Result<TestSpec, Vec<DirectiveError>> {
         let expect = self.expect.unwrap_or(Expect::CompileOk);
         if expect != Expect::Run {

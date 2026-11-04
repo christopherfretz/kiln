@@ -95,7 +95,7 @@ impl Sema<'_, '_> {
     /// it (not canonicalized), if `r` has one ([meta.reflection.queries]
     /// *has-type*): a value, object, variable, function, data member,
     /// enumerator, function parameter or direct base.
-    fn type_of_reflectee(&self, x: Reflectee) -> Option<QualType> {
+    pub(in crate::meta) fn type_of_reflectee(&self, x: Reflectee) -> Option<QualType> {
         let ty = match x {
             Reflectee::Decl(d) => match self.kind_of(d) {
                 DeclKind::Var

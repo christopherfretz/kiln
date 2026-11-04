@@ -4,7 +4,7 @@
 //! `data_member_options` object in Oven memory. Sema validates the
 //! options and defines the class (`kiln_sema/src/meta/define.rs`).
 
-use kiln_ast::{DeclId, DmsId, QualType};
+use kiln_ast::{DeclId, DmsId, QualType, ReflectionId};
 use kiln_source::fx::FxHashMap;
 use kiln_source::symbol::Symbol;
 
@@ -12,6 +12,7 @@ use super::{MetaError, MetaErrorKind, OvenFault};
 use crate::Oven;
 use crate::kbc::ak;
 use crate::mem::Ptr;
+use crate::meta::materialize::{Shape, recipe};
 use crate::ty::{OTy, TyKind};
 use crate::vm::Fault;
 
@@ -37,6 +38,9 @@ pub struct Dms {
     pub bit_width: Option<u32>,
     /// `[[no_unique_address]]`.
     pub nua: bool,
+    /// The annotations (P3394R4 `annotations`): an interned list of
+    /// constant reflections ([`Oven::dms_annots`]); 0 for none.
+    pub annots: u32,
 }
 
 /// Which members of `std::meta::data_member_options` hold what, found by
@@ -54,6 +58,9 @@ pub struct OptionsPlan {
     pub bit_width: (DeclId, QualType),
     /// `bool no_unique_address`.
     pub nua: DeclId,
+    /// `vector<info> annotations`, when the options class has it
+    /// (libstdc++ 16.1 does; a header without it reads none).
+    pub annotations: Option<DeclId>,
 }
 
 /// A `data_member_options` value as read from Oven memory, before
@@ -68,6 +75,8 @@ pub struct RawOptions {
     pub bit_width: Option<i64>,
     /// `no_unique_address`.
     pub nua: bool,
+    /// How many `annotations` were read ([`Oven::dms_annotation_args`]).
+    pub annotations: u32,
 }
 
 /// A leaf walk: the object's type, the subobject type it stops at, and
@@ -90,6 +99,11 @@ pub(crate) struct DmsTable {
     layouts: FxHashMap<LeafKey, Vec<(u64, OTy)>>,
     /// The leaves of the object being read (reused).
     scratch: Vec<Leaf>,
+    /// The `annotations` read last (reused).
+    anns: Vec<ReflectionId>,
+    /// The interned annotation lists; list `k` is `ann_lists[k - 1]`.
+    ann_lists: Vec<Box<[ReflectionId]>>,
+    ann_ids: FxHashMap<Box<[ReflectionId]>, u32>,
 }
 
 impl DmsTable {
@@ -104,6 +118,9 @@ impl DmsTable {
                 .map(|v| v.capacity() * size_of::<(u64, OTy)>() + 48)
                 .sum::<usize>()
             + self.scratch.capacity() * size_of::<Leaf>()
+            + self.anns.capacity() * size_of::<ReflectionId>()
+            + self.ann_lists.iter().map(|l| 2 * size_of_val(&**l) + 40).sum::<usize>()
+            + self.ann_ids.capacity() * (size_of::<(Box<[ReflectionId]>, u32)>() + 1)
     }
 }
 
@@ -178,6 +195,32 @@ impl Oven {
         self.dms.plan = Some(p);
     }
 
+    /// The `annotations` [`Oven::meta_dms_options`] read last.
+    pub fn dms_annotation_args(&self) -> &[ReflectionId] {
+        &self.dms.anns
+    }
+
+    /// Interns annotation list `l` (equal lists get one id; the empty
+    /// list is 0).
+    pub fn dms_annots_intern(&mut self, l: &[ReflectionId]) -> u32 {
+        if l.is_empty() {
+            return 0;
+        }
+        let t = &mut self.dms;
+        if let Some(&id) = t.ann_ids.get(l) {
+            return id;
+        }
+        t.ann_lists.push(l.into());
+        let id = u32::try_from(t.ann_lists.len()).unwrap_or(u32::MAX);
+        t.ann_ids.insert(l.into(), id);
+        id
+    }
+
+    /// The annotation list `id` ([`Dms::annots`]).
+    pub fn dms_annots(&self, id: u32) -> &[ReflectionId] {
+        (id as usize).checked_sub(1).and_then(|i| self.dms.ann_lists.get(i)).map_or(&[], |l| l)
+    }
+
     /// The bytes of the name [`Oven::meta_dms_options`] read last.
     pub fn dms_name_bytes(&self) -> &[u8] {
         &self.dms.name
@@ -190,7 +233,9 @@ impl Oven {
     /// `u8string`; absent: decided by the character type) and the first
     /// pointer to `char8_t` (or `char`) leaf followed by an integer leaf
     /// (the data and length of the string it holds). Union members are
-    /// searched for the payload but never read unless engaged.
+    /// searched for the payload but never read unless engaged. The
+    /// `annotations` vector, if the class has one, is read through its
+    /// layout recipe into [`Oven::dms_annotation_args`].
     ///
     /// # Errors
     /// [`MetaError::invalid`] if the object does not have that shape; the
@@ -226,6 +271,26 @@ impl Oven {
         let opt = member(self, plan.name.0)?;
         if let Some(v) = self.optional_payload(opt, plan.name.1)? {
             raw.name_u8 = Some(self.read_name(v)?);
+        }
+        self.dms.anns.clear();
+        if let Some(d) = plan.annotations {
+            let v = member(self, d)?;
+            let rc = recipe(&self.types, v.ty, Shape::Vector).map_err(|_| MetaError::invalid())?;
+            let range = self.range_arg(rc, v.addr).map_err(fault)?;
+            let mut anns = std::mem::take(&mut self.dms.anns);
+            let mut r = Ok(());
+            for i in 0..self.meta_range_len(range) {
+                match self.meta_range_at(range, i) {
+                    Ok(x) => anns.push(x),
+                    Err(e) => {
+                        r = Err(e);
+                        break;
+                    }
+                }
+            }
+            raw.annotations = u32::try_from(anns.len()).unwrap_or(u32::MAX);
+            self.dms.anns = anns;
+            r?;
         }
         Ok(raw)
     }
