@@ -523,7 +523,7 @@ pub fn decl_align(ast: &Ast, d: DeclId, target: &Target, for_alignof: bool) -> u
             if let Some(&offset) = index.and_then(|i| rl.fields.get(i))
                 && offset > 0
             {
-                field_align = field_align.min(offset.isolate_lowest_one());
+                field_align = field_align.min(offset & offset.wrapping_neg());
             }
             align = align.min(field_align);
         }

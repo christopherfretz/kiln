@@ -39,7 +39,10 @@ reviewable diff (roughly: one module, one spec section, < ~2k lines).
    `git worktree add .worktrees/wp-<id> -b wp/<id>-<slug>` before spawning.)
 2. Read `README.md`, `docs/ARCHITECTURE.md`, the `spec/` entry, and the
    crate's `lib.rs` docs before writing code.
-3. `#![forbid(unsafe_code)]` stays. The gate is `cargo xtask ci`: fmt,
+3. `#![forbid(unsafe_code)]` stays. The toolchain is pinned to Rust 1.95
+   (`rust-toolchain.toml`, `rust-version`; a downstream build has nothing
+   newer): no std API, language feature or clippy lint name stabilized after
+   1.95. The gate is `cargo xtask ci`: fmt,
    clippy `-D warnings`, `cargo test`, and the corpus under both clang 19
    (the self-check) and kiln (no FAIL, XPASS or ERROR; spec/harness.md
    "CI"). A kiln gap your WP does not close is marked `xfail(kiln):

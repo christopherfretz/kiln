@@ -1,5 +1,6 @@
 //! pp-number classification: [lex.icon], [lex.fcon], [lex.ext].
 //! Diagnostics match clang 19 (`-fsyntax-only -pedantic`) unless noted.
+#![allow(clippy::float_cmp)] // exact literals: the lexer must round-trip them bit-for-bit
 use kiln_lex::literal::{FloatSuffix, IntSize, IntSuffix, NumberClass, Radix, classify_number};
 use kiln_lex::{LexDiagKind as D, Std};
 

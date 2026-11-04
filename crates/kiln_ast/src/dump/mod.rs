@@ -765,8 +765,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::ImaginaryLiteral
             | ExprKind::CompoundLiteralExpr => push(n.a()),
             ExprKind::SubstNonTypeTemplateParmExpr => {
-                // The parameter prints first (clang), then the replacement.
-                drop(push);
+                // The parameter prints first (clang), then the replacement; `push`
+                // (which borrows `kids`) is not used past here.
                 kids.push((Node::Decl(exprs.subst_parameter(e)), None));
                 if let Some(c) = ExprId::from_raw(n.b()) {
                     kids.push((Node::Expr(c), None));
