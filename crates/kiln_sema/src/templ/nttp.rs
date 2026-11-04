@@ -489,7 +489,18 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<ExprId> {
         if self.ast.types.as_record(ty).is_some() {
-            let d = self.ast.templates.param_object(v)?;
+            // The template parameter object holding `v` ([temp.param]/8),
+            // made here for a value that did not come from a template
+            // argument (a spliced value reflection, WP-550).
+            let d = match self.ast.templates.param_object(v) {
+                Some(d) => d,
+                None => {
+                    let canon = self.ast.types.canonical(ty);
+                    let canon = crate::conv::strip_cv(self, canon);
+                    let cty = self.ast.types.qualify(canon, Quals::CONST);
+                    self.builder().template_param_object(cty, v)
+                }
+            };
             let q = self.ast.decls.get(d).ty()?;
             self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
             return Some(self.builder().decl_ref(
@@ -518,6 +529,28 @@ impl Sema<'_, '_> {
                 }
                 crate::conv::implicit_convert(self, n, ty, crate::conv::ConvCtx::Initialization)
                     .ok()
+            }
+            Scalar::Pointer { ty: pty, base, offset, .. }
+                if self.is_subobject_ptr(pty, base, offset) =>
+            {
+                // A pointer or reference to a subobject: the lvalue naming
+                // it (`v.m[i]`, WP-550), its address unless `ty` is a
+                // reference.
+                let target = self.ast.types.pointee(pty)?;
+                let lv = self.object_lvalue(base, offset, target, loc)?;
+                if self.ast.types.is_reference(ty) {
+                    return Some(lv);
+                }
+                let a = self.act_on_unary(UnaryOp::AddrOf, lv, loc);
+                if self.is_err_expr(a) {
+                    return None;
+                }
+                if self.ast.types.canonical(self.ety(a)) == self.ast.types.canonical(ty) {
+                    Some(a)
+                } else {
+                    crate::conv::implicit_convert(self, a, ty, crate::conv::ConvCtx::Initialization)
+                        .ok()
+                }
             }
             Scalar::Pointer { base, offset: 0, .. } => {
                 let (PtrBase::Decl(d) | PtrBase::Function(d)) = base else { return None };
