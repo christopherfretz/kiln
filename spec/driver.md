@@ -91,6 +91,7 @@ starting with `-` are inputs.
 | `-Xclang <arg>` | `<arg>` is parsed as a driver option (kiln has no separate `cc1`), so `-Xclang -verify` is `-verify` |
 | `-fdump-ast[=ids,locs,canonical,implicit,all-files]`, `-fdump-ast-filter=<s>` | with `-fsyntax-only`: the AST dump (`spec/ast-dump.md`) to the output |
 | `-fkiln-cfg-stats` | with `-fsyntax-only` (otherwise not implemented): one line per function body sema analyzes, `cfg-stats: '<function>' status=<Ok\|TooLarge\|...> blocks=N elems=N edges=N bytes=N build_ns=N`, to the output (spec/sema.md §7.5.1); a measurement aid, not a stable format |
+| `-fpermissive` | GCC's; its one effect: in C++26 the arithmetic between different enumeration types, or an enumeration and a floating type (P2864, an error), is diagnosed with the C++20/23 deprecation warning and its group (`-Wdeprecated-enum-enum-conversion`, ...) instead. GCC 16.1 makes it a pedwarn (a warning even without the flag); kiln keeps clang's error by default |
 | `-fkiln-dump-cfg` | with `-fsyntax-only` (otherwise not implemented): the control-flow graph of every function body sema analyzes (spec/sema.md §7.5.1), in clang's `DumpCFG` layout, to the output (after the diagnostics, before an AST dump) |
 | `-fkiln-cfg-max-elems=N` | kiln: the element budget of one body's graph (default 33554432); a body over it builds no graph and its CFG-based warnings are skipped (spec/sema.md §7.5.1). A value that is not an integer is `invalid integral value` |
 | `-fdump-record-layouts`, `-fdump-record-layouts-complete` | with `-fsyntax-only`: the record layouts (`spec/abi.md` §6, §8.4) to the output |
@@ -142,8 +143,7 @@ is `invalid value '<v>' in '-fcf-protection=<v>'`; accepted on AArch64 too,
 where clang errors), `-f[no-]common`, `-fexcess-precision=fast|standard|16`,
 `-f[no-]math-errno`, `-fstack-usage`, `-gz`, `-gz=none|zlib|zstd`,
 `-fno-trapv`, `-fno-short-enums`, `-m64` (every kiln target is 64-bit;
-`-m32` stays unknown), `-pipe`, and GCC's `-fpermissive` (the reference workload's
-generator compile passes it; kiln compiles the code as written). Other
+`-m32` stays unknown) and `-pipe`. Other
 `-fexcess-precision=`/`-gz=` values
 (and an empty `-mtune=`) are `unsupported argument '<v>' to option '<opt>'`.
 

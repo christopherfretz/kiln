@@ -338,6 +338,10 @@ pub struct Args {
     /// function body with its graph's size and build time
     /// (spec/sema.md §7.5.1).
     pub cfg_stats: bool,
+    /// GCC's `-fpermissive`: the C++26 enumeration arithmetic error
+    /// (P2864) is the C++20 deprecation warning instead
+    /// ([`kiln_sema::Sema::permissive`]; spec/driver.md).
+    pub permissive: bool,
     /// `-fkiln-cfg-max-elems=N`: the element cap of one body's graph
     /// (spec/sema.md §7.5).
     pub cfg_max_elems: Option<usize>,
@@ -759,6 +763,7 @@ impl Args {
             "-fdump-vtable-layouts" => self.dump_vtable_layouts = true,
             "-fkiln-dump-cfg" => self.dump_cfg = true,
             "-fkiln-cfg-stats" => self.cfg_stats = true,
+            "-fpermissive" => self.permissive = true,
             _ => {
                 if let Some(v) = arg.strip_prefix("-fkiln-cfg-max-elems=") {
                     match v.parse::<usize>() {
@@ -1277,6 +1282,7 @@ mod tests {
         // the reference workload's clang toolchain and the reference workload's generator compile.
         let a = parse("-m64 -pipe -fpermissive -fconstexpr-ops-limit=2000000000 a.cpp");
         assert_eq!(a.errors, []);
+        assert!(a.permissive);
         assert_eq!(a.constexpr.steps, Some(2_000_000_000));
         assert_eq!(parse("-m32 a.cpp").errors, [ArgError::Unknown("-m32".into())]);
         let a = parse("-mcmodel=medium -mcmodel=large a.cpp");

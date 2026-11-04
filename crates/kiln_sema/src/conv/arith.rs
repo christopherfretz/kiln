@@ -77,7 +77,8 @@ fn compound_lhs_type(s: &Sema<'_, '_>, l: ExprId, lt: QualType) -> QualType {
 /// The enumeration operands of the usual arithmetic conversions
 /// ([expr.arith.conv]/1.2–1.3, clang's wording): an unscoped enumeration
 /// with a floating type, or two different enumerations. Ill-formed since
-/// C++26 (P2864; the error), deprecated in C++20 and C++23 (`Ok` with
+/// C++26 (P2864; the error, the deprecation warning under `-fpermissive`),
+/// deprecated in C++20 and C++23 (`Ok` with
 /// clang's `-Wdeprecated-*` warning, for the caller to report at the
 /// operator), and fine before (`Ok(None)`: clang's `-Wenum-*-conversion`
 /// warnings are off by default).
@@ -90,7 +91,8 @@ fn check_enum_operands(
     let ca = kind == ArithConvKind::CompoundAssign;
     let (le, re) = (is_unscoped_enum(s, lt0), is_unscoped_enum(s, rt0));
     let (lf, rf) = (s.ast.types.is_floating(lt0), s.ast.types.is_floating(rt0));
-    let ill_formed = s.std >= kiln_lex::Std::Cxx26;
+    // `-fpermissive` makes the C++26 error the C++20 deprecation warning.
+    let ill_formed = s.std >= kiln_lex::Std::Cxx26 && !s.permissive;
     let deprecated = !ill_formed && s.std >= kiln_lex::Std::Cxx20;
     if (!ca && le && rf) || (re && lf) {
         let id = if ill_formed {

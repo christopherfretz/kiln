@@ -293,6 +293,11 @@ pub struct Sema<'a, 'sm> {
     /// append a line with its size and build time to [`Sema::cfg_out`]
     /// (spec/sema.md §7.5.1).
     pub cfg_stats: bool,
+    /// GCC's `-fpermissive` (default off): the C++26 arithmetic between
+    /// different enumerations or an enumeration and a floating type
+    /// (P2864, ill-formed) is diagnosed with the C++20/23 deprecation
+    /// warning, so GCC-built code still compiles (spec/driver.md).
+    pub permissive: bool,
     /// The dumps of `-fkiln-dump-cfg` and lines of `-fkiln-cfg-stats`.
     pub cfg_out: String,
     /// `-fkiln-cfg-max-elems`: a body whose graph would hold more
@@ -1009,6 +1014,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             gnu_lib_builtins: false,
             cfg_dump: false,
             cfg_stats: false,
+            permissive: false,
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
             cfg_body: cfg::BodyCfg::default(),

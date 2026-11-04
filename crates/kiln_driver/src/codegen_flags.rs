@@ -11,7 +11,7 @@
 //!    (`-f[no-]stack-clash-protection`, `-fcf-protection[=…]`,
 //!    `-f[no-]common`, `-fexcess-precision=`, `-f[no-]math-errno`,
 //!    `-fstack-usage`, `-gz[=…]`, the defaults `-fno-trapv`,
-//!    `-fno-short-enums` and `-m64`, and `-pipe` and GCC's `-fpermissive`);
+//!    `-fno-short-enums` and `-m64`, and `-pipe`);
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
 //!    `-fshort-enums`, `-fsanitize*`, `-fno-sanitize*`, coverage and
 //!    profiling).
@@ -73,9 +73,6 @@ const IGNORED: &[&str] = &[
     "-m64",
     // kiln's jobs talk through pipes already.
     "-pipe",
-    // GCC's: downgrades some errors to warnings. The reference workload's generator
-    // compile passes it to GCC 16; kiln compiles that code as written.
-    "-fpermissive",
 ];
 
 /// Flags rejected (class 3), exactly as written.

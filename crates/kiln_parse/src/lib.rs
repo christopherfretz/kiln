@@ -86,6 +86,8 @@ pub struct ParseOptions {
     pub cfg_stats: bool,
     /// `-fkiln-cfg-max-elems=` ([`kiln_sema::Sema::cfg_max_elems`]).
     pub cfg_max_elems: usize,
+    /// `-fpermissive` ([`kiln_sema::Sema::permissive`]).
+    pub permissive: bool,
 }
 
 impl Default for ParseOptions {
@@ -107,6 +109,7 @@ impl Default for ParseOptions {
             cfg_dump: false,
             cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
+            permissive: false,
         }
     }
 }
@@ -244,6 +247,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.cfg_dump = opts.cfg_dump;
     s.cfg_stats = opts.cfg_stats;
     s.cfg_max_elems = opts.cfg_max_elems;
+    s.permissive = opts.permissive;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;
