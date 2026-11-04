@@ -11,7 +11,8 @@ implement is an error, never silently ignored. The oracle is Debian's
 
 Three actions are implemented:
 
-- preprocessing: `-E`, `-M`, `-MM`, and `-MD`/`-MMD` alongside `-E`;
+- preprocessing: `-E`, `-M`, `-MM`, and `-MD`/`-MMD` alongside `-E`
+  (`-MD`/`-MMD` also go with the other actions: "Dependency output");
 - `-fsyntax-only [-fdump-ast] [-fdump-record-layouts]
   [-fdump-vtable-layouts]`, which runs
   WP-048's parser and Sema;
@@ -374,7 +375,7 @@ output and status follow the `-E` rules:
 An unknown `-fdump-ast` option gives `invalid value '<opt>' in
 '-fdump-ast=<opts>'`.
 
-C inputs (`-x c`, `.c`), `-MD`/`-MMD` with `-fsyntax-only`, and
+C inputs (`-x c`, `.c`) and
 `-fdump-ast`, `-fdump-record-layouts`, `-fdump-vtable-layouts` or
 `-verify` without `-fsyntax-only` are "not implemented yet".
 
@@ -539,8 +540,8 @@ the current directory (standard input is `-`). `-o -` is standard output.
   start, fails or is killed is a driver error (below); the exit status is
   then 1.
 
-Not implemented: `-MD`/`-MMD` when compiling ("not implemented yet"),
-`-###` with `-E` or `-fsyntax-only` (likewise), and debug information.
+Not implemented: `-###` with `-E` or `-fsyntax-only` ("not implemented
+yet") and debug information.
 
 ## Modules
 
@@ -578,8 +579,14 @@ This is clang's `DependencyCollector` and `DependencyFileGenerator`.
 
 - `-M`/`-MM` print the rule instead of the text and imply `-w`. Their
   output goes to `-MF`, else `-o`, else standard output.
-- `-MD`/`-MMD` preprocess normally and write the rule to `-MF`, else to
-  `-o` with the extension replaced by `.d`, else to `<input stem>.d`.
+- `-MD`/`-MMD` run the action normally (`-E`, `-fsyntax-only`, `-S`,
+  `-c`, or compiling for a link) and write the rule of each source input
+  as a side effect to `-MF` (`-` is standard output), else to `-o` with
+  the extension replaced by `.d` (`-o x/y.o` -> `x/y.d`), else to
+  `<input stem>.d` in the working directory. Linking several sources
+  writes one rule per input: `<stem>.d` each without `-o`; with `-o`
+  every input's rule goes to `<output>.d` and the last one stays
+  (clang's naming, `getDependencyFileName`).
 - `-MM`/`-MMD` leave out system headers.
 - Files are listed in first-seen order:
   - the main file;
@@ -589,10 +596,17 @@ This is clang's `DependencyCollector` and `DependencyFileGenerator`.
   `<built-in>`, `<command line>` and `<stdin>` are left out, and `./` is
   removed.
 - The target is `-MT` (verbatim) or `-MQ` (Make-quoted), in order. Without
-  either it is `-o` (for `-MD`) or `<input stem>.o`.
+  either it is the `-o` value (for `-MD`/`-MMD`, whatever the action) or
+  `<input stem>.o`, Make-quoted.
 - Lines wrap at 75 columns with ` \`. `-MP` adds a phony target for every
   dependency except the main file.
-- Dependency files are written only when there were no errors.
+- With `-E`, dependency files are written only when there were no
+  errors. With the other actions the rule is written once the
+  preprocessor reached the end of the input, whatever errors Sema or
+  code generation report (clang and GCC keep the file); after a fatal
+  error the preprocessor lexes on to the end, its diagnostics dropped,
+  so the list is complete. An `#include` whose file is not found writes
+  no file (clang's `SeenMissingHeader`).
 
 ## Output, diagnostics, exit status
 
@@ -716,8 +730,8 @@ Each deviation is covered by a test or a test note.
     at `-O0`.
 12. **`.ll` and `.bc` inputs are linker inputs**, not compiled (clang
     would run its backend on them).
-13. **`-MD`/`-MMD` with a codegen action is "not implemented yet"**
-    (clang writes the dependency file alongside the object).
+13. **`-E -MD` writes no dependency file after an error** (clang writes
+    it unless a header was missing); the other actions match clang.
 14. **No debug information:** `-g*` is accepted and ignored.
 15. **`-fdump-record-layouts` dumps every complete class**, as
     `-fdump-record-layouts-complete` does. clang dumps only the classes

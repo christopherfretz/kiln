@@ -154,8 +154,7 @@ impl SyntaxJob<'_> {
         if let Some(signed) = a.predef.char_signed {
             target.types.char_signed = signed;
         }
-        // `-MD` with `-fsyntax-only` is rejected before this (no deps).
-        let Some((mut pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs, true)
+        let Some((mut pp, deps)) = job.build_preprocessor(sm, engine, interner, inputs, true)
         else {
             return;
         };
@@ -184,12 +183,16 @@ impl SyntaxJob<'_> {
         let limits = a.constexpr.limits();
         let (tu, mut pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
-        if verify.is_some() {
+        if verify.is_some() || deps.is_some() {
             // The parser stops at a fatal error; clang's preprocessor lexes
             // on to the end (its diagnostics suppressed), so every comment
-            // still reaches the verifier (spec/driver.md "-verify").
+            // still reaches the verifier (spec/driver.md "-verify") and
+            // every header the `-MD` list (spec/driver.md "Dependency
+            // output").
             while !pp.next().is_eof() {}
         }
+        drop(pp);
+        result.dep_list = deps;
         a.constexpr.write_report(&tu.oven, sm, engine);
         if !tu.inst_report.is_empty() {
             engine.flush();

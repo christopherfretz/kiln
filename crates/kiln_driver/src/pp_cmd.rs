@@ -29,6 +29,9 @@ pub struct JobResult {
     pub output: String,
     /// The dependency list, when dependencies were requested.
     pub deps: Option<Vec<String>>,
+    /// `-fsyntax-only`'s list for `-MD` / `-MMD`, complete once the
+    /// preprocessor reached the end of the input (the driver writes it).
+    pub dep_list: Option<SharedDeps>,
     /// Errors reported.
     pub errors: u32,
 }
@@ -257,10 +260,7 @@ impl Job<'_> {
         let a = self.args;
         let PpInputs { list, main, predefines } = inputs;
         let mut search = HeaderSearch::new(RealFs, list).with_embed_dirs(a.embed_dirs.clone());
-        let deps = a
-            .deps
-            .headers()
-            .map(|h| Rc::new(RefCell::new(DepList::new(h == crate::args::DepHeaders::All))));
+        let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
         if let Some(d) = &deps {
             let d2 = Rc::clone(d);
             search.set_observer(Box::new(move |sm, e| on_search_event(&d2, sm, e)));
@@ -342,6 +342,20 @@ impl Job<'_> {
         drop(pp);
         result.deps = deps.map(|d| d.borrow().files().to_vec());
     }
+}
+
+/// The `-MD` / `-MMD` list of a mode that runs the parser, once `pp` is
+/// done: the parser stops at a fatal error, so the preprocessor lexes on
+/// to the end (the engine drops its diagnostics) and the list has every
+/// header (spec/driver.md "Dependency output").
+pub(crate) fn finish_deps(
+    mut pp: Preprocessor<'_, '_>,
+    deps: Option<SharedDeps>,
+) -> Option<SharedDeps> {
+    if deps.is_some() {
+        while pp.next().kind != TokKind::Eof {}
+    }
+    deps
 }
 
 /// clang 19's feature answers with kiln's builtin staging applied

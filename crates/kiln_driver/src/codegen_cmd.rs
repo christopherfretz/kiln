@@ -23,7 +23,7 @@ use kiln_source::{SourceManager, Span};
 
 use crate::args::{Action, Args, Input, Lang, LinkOptKind};
 use crate::link::Command;
-use crate::pp_cmd::{Job, PpInputs};
+use crate::pp_cmd::{Job, PpInputs, SharedDeps};
 use crate::toolchain::{StdLib, Tool, Toolchain};
 use crate::{Io, input_std, make_engine, print_version, report_output_error, write_output};
 
@@ -168,8 +168,9 @@ pub struct CodegenJob<'j>(pub Job<'j>);
 impl CodegenJob<'_> {
     /// Runs the job: diagnostics (and the `N errors generated.` summary)
     /// to standard error. Returns the module's text, or `None` after an
-    /// error (the error count is the second element).
-    pub fn run(self) -> (Option<String>, u32) {
+    /// error (the error count is the second element), and the `-MD` /
+    /// `-MMD` dependency list, complete whatever the errors (the third).
+    pub fn run(self) -> (Option<String>, u32, Option<SharedDeps>) {
         let job = &self.0;
         let sm = SourceManager::new();
         let interner = Arc::new(Interner::new());
@@ -177,8 +178,9 @@ impl CodegenJob<'_> {
         diag_opts.pending.clear();
         let engine = make_engine(&sm, &diag_opts, job.stderr.clone(), None);
         let mut ir = None;
+        let mut deps = None;
         if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-            ir = self.lower(&sm, &engine, &interner, inputs);
+            ir = self.lower(&sm, &engine, &interner, inputs, &mut deps);
         }
         engine.flush();
         if let Some(s) = engine.summary()
@@ -188,7 +190,7 @@ impl CodegenJob<'_> {
             let _ = writeln!(err, "{s}");
         }
         let errors = engine.error_count();
-        (if errors == 0 { ir } else { None }, errors)
+        (if errors == 0 { ir } else { None }, errors, deps)
     }
 
     fn lower<'sm>(
@@ -197,6 +199,7 @@ impl CodegenJob<'_> {
         engine: &DiagEngine<'sm>,
         interner: &'sm Arc<Interner>,
         inputs: PpInputs,
+        deps_out: &mut Option<SharedDeps>,
     ) -> Option<String> {
         let job = &self.0;
         let a = job.args;
@@ -209,7 +212,7 @@ impl CodegenJob<'_> {
         if let Some(signed) = a.predef.char_signed {
             target.types.char_signed = signed;
         }
-        let (pp, _deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+        let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let popts = ParseOptions {
             std: job.std.lex,
@@ -228,8 +231,9 @@ impl CodegenJob<'_> {
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
-        let (mut tu, _pp) =
+        let (mut tu, pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
+        *deps_out = crate::pp_cmd::finish_deps(pp, deps);
         let mut ir = None;
         if engine.error_count() == 0 {
             let opts = CodegenOptions {
@@ -753,14 +757,16 @@ fn ir_text<'t>(args: &Args, tc: &Toolchain, text: &'t [u8]) -> std::borrow::Cow<
     }
 }
 
-/// The frontend on one source input; `None` after an error.
+/// The frontend on one source input; `None` after an error. Writes the
+/// input's `-MD` / `-MMD` dependency file, errors or not
+/// ([`crate::deps::write_side_file`]).
 fn frontend(
     args: &Args,
     tc: &Toolchain,
     input: &Input,
     stdin_text: Option<&str>,
     diag_opts: &DiagOptions,
-    io: &Io,
+    io: &mut Io,
 ) -> Option<String> {
     let lang = args.input_lang(input);
     let report = |d: Diag| {
@@ -789,7 +795,13 @@ fn frontend(
         diag_opts,
         stderr: io.stderr.clone(),
     };
-    CodegenJob(job).run().0
+    let (ir, _, deps) = CodegenJob(job).run();
+    if let Some(list) = deps
+        && !crate::deps::write_side_file(args, &input.path, &list.borrow(), diag_opts, io)
+    {
+        return None;
+    }
+    ir
 }
 
 #[cfg(test)]
