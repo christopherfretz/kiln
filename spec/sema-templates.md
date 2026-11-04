@@ -3077,7 +3077,15 @@ formed it:
      its argument is not a deduction failure, and a successful one is
      not an original argument for /4. A pack expanded in P's template
      argument list with a deducible pattern (`Tup<int, Us...>`) is in a
-     deduced context, so a mismatch there still fails deduction.
+     deduced context, so a mismatch there still fails deduction. A
+     non-type expansion is deducible only when its pattern is a bare
+     template parameter of the deduced depth (`Spec<N...>`); any other
+     expression pattern (`Spec<conv<Args>()...>`, `Spec<sizeof(Args)...>`,
+     directly or through an alias) is a non-deduced context
+     ([temp.deduct.type]/5.3), so `Args` comes from the trailing pack and
+     the argument converts to the substituted P, through a consteval
+     converting constructor if need be (WP-566; tests
+     `temp.deduct.type/nttp-pack-expansion-non-deduced-*.cpp`).
 3. **Finish** ([temp.deduct.general]/5):
    - an undeduced parameter takes its default (substituted in order); a
      pack takes the empty pack; anything else gives `Incomplete`;
