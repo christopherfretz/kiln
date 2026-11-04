@@ -458,13 +458,29 @@ impl Substituter<'_, '_, '_> {
         };
         let packs = pp.iter().filter(|&&p| is_pack(self, p)).count();
         let extra = (fp.len() + packs).saturating_sub(pp.len());
+        // With several packs (`Ts&&... ts, Us&&... us`, `Ts` the enclosing
+        // class template's and `Us` deduced; libstdc++'s
+        // `__tuple_concater::_S_do`) the parameter count does not say
+        // where one ends: each takes the length of its own expansion.
+        let lens: Vec<Option<usize>> = if packs > 1 {
+            pp.iter()
+                .map(|&p| if is_pack(self, p) { self.param_pack_len(p) } else { None })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut j = 0;
-        for &a in pp {
+        for (k, &a) in pp.iter().enumerate() {
             // A pack whose new parameter is still a pack (a generic
             // lambda's, rebuilt with its levels retained) maps one to one.
             let retained = fp.get(j).is_some_and(|&b| is_pack(self, b));
-            if is_pack(self, a) && packs == 1 && !retained {
-                let end = (j + extra).min(fp.len());
+            let len = match lens.get(k) {
+                Some(&n) => n,
+                None if is_pack(self, a) && packs == 1 && !retained => Some(extra),
+                None => None,
+            };
+            if let Some(n) = len {
+                let end = (j + n).min(fp.len());
                 let l = self.sema.ast.lists.push(&fp[j..end]);
                 self.locals.insert(a, DeclOrPack::Pack(l));
                 j = end;
@@ -473,6 +489,25 @@ impl Substituter<'_, '_, '_> {
                 j += 1;
             }
         }
+    }
+
+    /// The number of parameters pattern function parameter pack `p`
+    /// expands to under the current arguments: its type's pattern probed
+    /// for the pack it names, as [`Self::expand_pattern`] does. `None`
+    /// when no pack is substituted (one retained, or `p` no expansion).
+    fn param_pack_len(&mut self, p: DeclId) -> Option<usize> {
+        let pd = self.sema.ast.decls.param(p).copied();
+        let t = pd.and_then(|x| x.original_ty).unwrap_or_else(|| self.decl_ty(p));
+        let pat = type_pattern(self.sema, t)?;
+        let loc = self.sema.ast.decls.get(p).loc();
+        let saved_state = std::mem::take(&mut self.pack);
+        let saved_index = self.pack_index.take();
+        self.pack.probing = true;
+        let _ = self.element_ty(pat, loc);
+        let found = self.pack.found.take();
+        self.pack = saved_state;
+        self.pack_index = saved_index;
+        found.map(|(n, _)| n as usize)
     }
 
     /// Gives the parameters [`Self::map_params`] mapped the names of
