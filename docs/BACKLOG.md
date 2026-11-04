@@ -600,5 +600,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-579 | overloads distinguished only by __attribute__((enable_if)) rejected as redeclaration (abseil SpinLock) | corpus | open |
 | WP-580 | explicit instantiation of constructor/member function templates by signature; defaulted-NTTP out-of-line ctor (abseil Cord) | corpus | open |
 | WP-585 | runtime: tinyobjloader LoadMtl unknown_parameter map stays empty (std::map<string,string> insert; -O2) | corpus | open |
+| WP-607 | sema: throw/try under -fno-exceptions not diagnosed in system headers (clang) and deferred to instantiation in templates (GCC); codegen keeps __cxa_throw | WP-578 | in progress |
 WP-511
 WP-512
