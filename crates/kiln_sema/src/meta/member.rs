@@ -352,6 +352,19 @@ impl Sema<'_, '_> {
             if matches!(self.ast.templ_link(m).get(), Some((TemplLinkKind::Specialization, _))) {
                 continue;
             }
+            // A function whose constraints are not satisfied is not
+            // members-of-representable ([meta.reflection.member.queries]/2
+            // P2996R13; GCC 16.1 skips it too): a member of a class template
+            // specialization redeclared from a pattern member with a
+            // trailing requires-clause that fails for these arguments.
+            if kind.is_function()
+                && self.ast.templates.trailing_requires.get(m).is_some()
+                && self.lend_oven(oven, |s| {
+                    s.check_function_constraints(m, loc).is_some_and(|sat| !s.sat_ok(sat))
+                })
+            {
+                continue;
+            }
             if !l.seen.insert(self.ast.first(m)) {
                 continue;
             }

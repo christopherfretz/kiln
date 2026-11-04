@@ -62,7 +62,12 @@ gone; `__kiln_define_member` (spec/reflection.md §6.3) stays.
   an unchanged namespace walks nothing, and a grown one walks only new
   declarations.
 - **Classes and enumerations** must be complete at the evaluation point
-  (a class template specialization is instantiated first). The list is
+  (a class template specialization is instantiated first). A member
+  function whose trailing requires-clause is not satisfied (a member of a
+  class template specialization redeclared from a constrained pattern
+  member) is not members-of-representable and is left out (P2996R13
+  [meta.reflection.member.queries]/2; GCC 16.1 agrees;
+  `meta.reflection.member.queries/members-of-unsatisfied-constraints.cpp`). The list is
   built once and never changes.
 - **Filters.** `static_data_members_of`, `nonstatic_data_members_of` and
   `subobjects_of` (bases then non-static data members) filter the same
