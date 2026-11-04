@@ -276,6 +276,19 @@ max_field_align)` when `max_field_align` is not 0.
    - `size = alignTo(size, align)`.
    - POD: `dsize = nvsize = size`. Otherwise `dsize = nvsize`.
    - `nvalign = align` and `preferred_align = align`.
+5. **Unadjusted alignment** (clang `ASTRecordLayout::getUnadjustedAlignment`,
+   WP-583). Two more values, in bytes, at least 1:
+   `unadjusted_field_align` is the maximum `field_align` of step 2 (after
+   `packed`, the field's own `alignas` and the cap; a field of class type
+   contributes that class's *adjusted* alignment) over the ordinary and
+   bit-fields, not the wide bit-fields and not the class's own
+   `aligned`/`alignas` of step 1 (clang 19/20). `unadjusted_align` also
+   counts each non-virtual base not placed as an empty base at offset 0,
+   with its capped `nvalign` (clang 21+, llvm-project#135551).
+   `Layouter::type_unadjusted_align(q, bases)` reads one of them for a
+   record (looking through typedefs, so a typedef's `aligned` does not
+   count) and the type's alignment for any other type. The AAPCS64
+   classification uses it (spec/landed/abi/WP-583.md).
 
 `RecordLayout.fields` holds the bit offset of each `Field` declaration,
 in declaration order, unnamed bit-fields included. `RecordLayout.bases`
@@ -829,6 +842,8 @@ sizes.
 needed_sse }`: on aarch64 the parameter classification (`aarch64_arg`;
 the register counts are unused), on x86_64 `x86_arg(q, 0)` with its
 GPR/SSE counts (both zero means the argument is read from memory).
+On aarch64 the register-offset and stack round-up of `va_arg` use the
+unadjusted alignment, as the classification does (WP-583).
 
 ### 8.13 Landed (WP-176): register passing and call-order details
 - *`can_pass_in_registers`* (`call.rs`, clang `canPassInRegisters` under
@@ -1309,6 +1324,8 @@ still `void` (clang 22 kept `classifyReturnType`). x86-64 is unchanged
 (an empty class is `Ignore` there under both). `-fclang-abi-compat=19`
 in clang 22 does not restore the old `i8`, so kiln keys on the compat
 level only. Below 22 the clang 19 lowering (`i8` / ignored) is kept.
+The alignment `aarch64_arg` classifies by (even-pair `i128`, HFA slot
+alignment) is the unadjusted one, spec/landed/abi/WP-583.md.
 The IR-level companions (the data layout, `dead_on_return`, GEP `nuw`)
 are spec/codegen.md §6a. Tests: `tests/conformance/expr.call/
 ir-clang22-argument-passing.cpp` (exact against clang 22) and the
