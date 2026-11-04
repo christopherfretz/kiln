@@ -594,6 +594,9 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-571 | type_of/has-type for annotation reflections: type_of(a) for any annotation (class-type constexpr variable, prvalue, literal; on members/functions/vars/classes) fails with has-no-type; must be type_of(constant_of(a)) per P3394 (GCC 16.1 agrees); blocks the reference workload annotation scanner (synth_skip corpus runs) | WP-550 | open |
 | WP-572 | explicit specialization of a static data member without initializer is a declaration ([temp.expl.spec]/14) but kiln emits a strong definition; libstdc++ __timepunct_cache<char>::_S_timezones becomes multiply defined when linking two TUs that include <locale> (pugixml corpus run) | WP-550 | open |
 | WP-573 | annotations_of / annotations_of_with_type on a namespace-alias reflection fail as unsuitable; GCC 16.1 accepts and yields an empty range (a namespace alias has its own, always empty, annotations); the reference workload scans every members_of entry of a namespace with annotations_of_with_type, so a namespace alias member aborts the bind (spdlog corpus run) | WP-550 | open |
+| WP-578 | -MD/-MMD dependency files when compiling (cmake+ninja; blocks every compiled corpus lib; supersedes the -MMD item of WP-569) | corpus | open |
+| WP-579 | overloads distinguished only by __attribute__((enable_if)) rejected as redeclaration (abseil SpinLock) | corpus | open |
+| WP-580 | explicit instantiation of constructor/member function templates by signature; defaulted-NTTP out-of-line ctor (abseil Cord) | corpus | open |
 | WP-585 | runtime: tinyobjloader LoadMtl unknown_parameter map stays empty (std::map<string,string> insert; -O2) | corpus | open |
 WP-511
 WP-512

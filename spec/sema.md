@@ -2202,7 +2202,9 @@ and returns the scope it names:
       ([temp.over.link]/5 profiles), declares an overload, not a
       redeclaration (clang `IsOverload`; `NewFn::enable_if`). So every
       declaration of one function has the same conditions, and a
-      declaration's own attributes are the function's.
+      declaration's own attributes are the function's. This holds for
+      special members and instantiated class-template members too, and
+      the conditions are mangled (spec/sema-overload.md §4.3).
     - Viability: after a candidate is otherwise viable
       (`add_candidate`), each argument is converted to its parameter's
       type with diagnostics captured (a failing one gives its parameter

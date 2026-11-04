@@ -276,6 +276,10 @@ impl Mangler<'_, '_> {
             | ExprKind::CharacterLiteral
             | ExprKind::CXXNullPtrLiteralExpr
             | ExprKind::GNUNullExpr => true,
+            // An enumerator is its value's literal.
+            ExprKind::DeclRefExpr => {
+                ast.decls.get(ast.exprs.decl(e)).kind() == DeclKind::EnumConstant
+            }
             // A template parameter reference is wrapped (`XT_E`).
             _ => false,
         }
@@ -321,6 +325,14 @@ impl Mangler<'_, '_> {
                         self.template_param_at(depth, idx);
                     }
                     DeclKind::ParmVar => return self.function_param_ref(d),
+                    // `L <enum-type> <value> E` (clang `mangleDeclRefExpr`).
+                    DeclKind::EnumConstant => {
+                        let Some(v) = ast.decls.enumerator(d).and_then(|x| x.value) else {
+                            return false;
+                        };
+                        let Some(ty) = ast.decls.get(d).ty() else { return false };
+                        self.value_arg(ty, v);
+                    }
                     _ => return false,
                 }
             }
