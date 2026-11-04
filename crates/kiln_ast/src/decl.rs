@@ -5099,6 +5099,9 @@ pub mod builtin {
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
+        if name.starts_with(neon::PREFIX) {
+            return neon::by_name(name);
+        }
         ALL.iter()
             .chain(INT_MEM)
             .chain(LIBM)
@@ -5118,6 +5121,9 @@ pub mod builtin {
 
     /// The table row of builtin `id`.
     pub fn info(id: u32) -> Option<&'static Info> {
+        if let Some(r) = neon::row(id) {
+            return Some(&r.info);
+        }
         ALL.iter()
             .chain(INT_MEM)
             .chain(LIBM)
@@ -5144,7 +5150,17 @@ pub mod builtin {
         for &c in e.sig.as_bytes() {
             match c {
                 b'I' => ice = true,
-                b'U' | b'L' | b'C' | b'D' | b'R' | b'*' | b'&' => {}
+                b'U'
+                | b'L'
+                | b'S'
+                | b'W'
+                | b'V'
+                | b'0'..=b'9'
+                | b'C'
+                | b'D'
+                | b'R'
+                | b'*'
+                | b'&' => {}
                 b'.' => break,
                 _ => {
                     if ice && idx > 0 {
@@ -5219,5 +5235,83 @@ pub mod builtin {
     /// Whether builtin `id` has custom type-checking.
     pub fn is_custom(id: u32) -> bool {
         info(id).is_some_and(|i| i.attrs & attr::CUSTOM != 0)
+    }
+
+    /// WP-558: the `AArch64` NEON / FP16 target builtins
+    /// (`__builtin_neon_*`), clang's `TARGET_BUILTIN` rows of
+    /// `arm_neon.inc` / `arm_fp16.inc` for every name kiln's resource
+    /// `arm_neon.h` and `arm_fp16.h` use (spec/landed/sema/WP-558.md "Target
+    /// builtins"). The generated table (`scripts/gen-neon-builtins.py`) is
+    /// sorted by name; a row's id is [`neon::BASE`] plus its index, so
+    /// lookup by name is a binary search and by id an index. Signatures
+    /// add the NEON prototype codes to [`Info::sig`]'s: `V<N>` a GNU
+    /// vector of `N` elements, `S` signed, `W` `int64_t` (`long`), `h`
+    /// `__fp16`, `y` `__bf16`, `LLL` `__int128`.
+    pub mod neon {
+        use super::{Info, attr};
+
+        /// The common prefix of the names.
+        pub const PREFIX: &str = "__builtin_neon_";
+        /// The id of the table's first row (kiln-private ids).
+        pub const BASE: u32 = 0x1_0000;
+
+        /// One builtin and the target features it needs.
+        #[derive(Clone, Copy, Debug)]
+        pub struct Row {
+            /// The builtin (always `NOTHROW`).
+            pub info: Info,
+            /// clang's required-features string: comma-separated names,
+            /// all of which must be enabled for the calling function.
+            pub features: &'static str,
+        }
+
+        pub(crate) const fn r(
+            index: u32,
+            name: &'static str,
+            sig: &'static str,
+            features: &'static str,
+        ) -> Row {
+            Row { info: Info { id: BASE + index, name, sig, attrs: attr::NOTHROW }, features }
+        }
+
+        /// Every row, sorted by name.
+        pub fn all() -> &'static [Row] {
+            crate::neon_builtins::NEON
+        }
+
+        /// The NEON builtin spelled `name`.
+        pub fn by_name(name: &str) -> Option<u32> {
+            let t = all();
+            t.binary_search_by(|r| r.info.name.cmp(name)).ok().map(|i| t[i].info.id)
+        }
+
+        /// The row of builtin `id`, if it is a NEON builtin.
+        pub fn row(id: u32) -> Option<&'static Row> {
+            all().get(usize::try_from(id.checked_sub(BASE)?).ok()?)
+        }
+
+        /// The required-features string of the NEON builtin `name`.
+        pub fn required_features(name: &str) -> Option<&'static str> {
+            row(by_name(name)?).map(|r| r.features)
+        }
+
+        /// Whether `id` is a NEON builtin.
+        pub fn is_neon(id: u32) -> bool {
+            row(id).is_some()
+        }
+
+        /// Whether the required-features string `req` holds when exactly
+        /// the features `on` accepts are enabled (clang
+        /// `Builtin::evaluateRequiredTargetFeatures`: `,` is all of, `|`
+        /// any of).
+        pub fn features_hold(req: &str, on: impl Fn(&str) -> bool) -> bool {
+            req.split(',').all(|all| all.split('|').any(|f| on(f.trim())))
+        }
+
+        /// The first feature of `req` that `on` does not accept (for a
+        /// diagnostic), if any.
+        pub fn first_missing(req: &str, on: impl Fn(&str) -> bool) -> Option<&str> {
+            req.split(',').find(|all| !all.split('|').any(|f| on(f.trim())))
+        }
     }
 }

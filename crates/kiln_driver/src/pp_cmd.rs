@@ -294,8 +294,19 @@ impl Job<'_> {
         // effective dialect (clang's default is GNU) goes last so it wins.
         let mut fargs = a.argv.clone();
         fargs.push(if self.std.gnu { "-std=gnu++" } else { "-std=c++" }.to_owned());
-        let features = ClangFeatures::from_args(triple, self.std.lex, &fargs)
+        let mut features = ClangFeatures::from_args(triple, self.std.lex, &fargs)
             .map(|f| f.with_compat(a.predef.clang_compat));
+        if self.toolchain.target.is_aarch64() {
+            // WP-558: the NEON builtins answer from the enabled features.
+            let enabled = crate::features::resolve(a, &self.toolchain.target).0.enabled();
+            features = features.map(|f| {
+                f.with_target_builtins(kiln_pp::TargetBuiltins {
+                    prefix: kiln_ast::decl::builtin::neon::PREFIX,
+                    required: kiln_ast::decl::builtin::neon::required_features,
+                    enabled,
+                })
+            });
+        }
         let Some(features) = features else {
             // No silent fallback to `NoFeatures` (unreachable today:
             // `Target` only has triples the tables cover).

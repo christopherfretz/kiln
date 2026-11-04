@@ -1,6 +1,8 @@
 //! `cargo xtask gen-reflect`: writes the reflection perf shapes S1–S6 of
-//! `docs/plans/m6-reflection.md` §3.8 as bench entries under `bench/reflect/`
-//! (`spec/bench.md` "Reflection shapes").
+//! `docs/plans/m6-reflection.md` §3.8, and the reference-workload shapes S7
+//! (a binding generator) and S8 (the bindings it prints, compiled) of
+//! `docs/status/perf-reference-workload.md`, as bench entries under
+//! `bench/reflect/` (`spec/bench.md` "Reflection shapes").
 //!
 //! Each shape is a function of one size parameter N and nothing else: the
 //! same N gives the same bytes on every host, so the committed files (at
@@ -13,9 +15,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// One §3.8 shape.
+/// One shape.
 pub struct Shape {
-    /// `s1` … `s6`: the file stem under `bench/reflect/`.
+    /// `s1` … `s8`: the file stem under `bench/reflect/`.
     pub id: &'static str,
     /// The N the committed file is generated at (small enough for the
     /// merge-queue S-tier, `docs/plans/m6-reflection.md` §3.9).
@@ -28,13 +30,18 @@ pub struct Shape {
     /// `xfail(kiln)` reason), and the other families it needs.
     pub owner: &'static str,
     pub needs: &'static str,
+    /// The entry compiles today against GCC 16.1's libstdc++ (the GCC
+    /// oracle's `--gcc-toolchain`, which kiln is given in the sweeps and in
+    /// bench runs): it carries no `xfail(kiln)`, and `owner` is the WP that
+    /// added it.
+    pub libstdcxx: bool,
     body: fn(usize, &mut String),
     /// The `oven:` budget, a function of N.
     budget: fn(usize) -> String,
 }
 
 /// The shapes, in order.
-pub const SHAPES: [Shape; 6] = [
+pub const SHAPES: [Shape; 8] = [
     Shape {
         id: "s1",
         default_n: 100,
@@ -43,6 +50,7 @@ pub const SHAPES: [Shape; 6] = [
                identifier_of + member splices in `template for`",
         owner: "WP-478",
         needs: "WP-474 (member splices), WP-475 (identifier_of), WP-479 (define_static_array)",
+        libstdcxx: false,
         body: s1,
         budget: |_| "peak_arena<=65536".into(),
     },
@@ -53,6 +61,7 @@ pub const SHAPES: [Shape; 6] = [
         what: "N enums x 64 enumerators; enum<->string tables via enumerators_of",
         owner: "WP-478",
         needs: "WP-474 (expression splices), WP-475 (identifier_of), WP-479 (define_static_array)",
+        libstdcxx: false,
         body: s2,
         budget: |_| "peak_arena<=65536".into(),
     },
@@ -64,6 +73,7 @@ pub const SHAPES: [Shape; 6] = [
                struct of 10*N members",
         owner: "WP-480",
         needs: "WP-473 (consteval blocks), WP-482 (substitute), WP-478 (members)",
+        libstdcxx: false,
         body: s3,
         budget: |n| format!("peak_bytes<={}", 64 * 10 * n + 65536),
     },
@@ -75,6 +85,7 @@ pub const SHAPES: [Shape; 6] = [
                annotations_of_with_type selects",
         owner: "WP-481",
         needs: "WP-478 (annotations_of_with_type), WP-474, WP-475, WP-479",
+        libstdcxx: false,
         body: s4,
         budget: |_| "peak_arena<=65536".into(),
     },
@@ -86,6 +97,7 @@ pub const SHAPES: [Shape; 6] = [
                (N distinct instantiations), 100 per evaluation",
         owner: "WP-482",
         needs: "WP-478 (static_data_members_of), WP-479 (reflect_constant, extract)",
+        libstdcxx: false,
         body: s5,
         budget: |_| "peak_arena<=65536".into(),
     },
@@ -96,35 +108,83 @@ pub const SHAPES: [Shape; 6] = [
         what: "a namespace of N declarations scanned by members_of, 100 times",
         owner: "WP-478",
         needs: "WP-472 (namespace reflections)",
+        libstdcxx: false,
         body: s6,
         budget: |n| format!("peak_bytes<={}", 16 * n + 65536),
     },
+    Shape {
+        id: "s7",
+        default_n: 40,
+        step: 1,
+        what: "a binding generator: N annotated classes walked by members_of + \
+               annotations_of_with_type, each binding built as a std::string and printed \
+               from a template for that splices the bound members",
+        owner: "WP-551",
+        needs: "a libstdc++ with <meta> (GCC 16.1)",
+        libstdcxx: true,
+        body: s7,
+        budget: |n| format!("peak_bytes<={}", 64 * n + 65536),
+    },
+    Shape {
+        id: "s8",
+        default_n: 40,
+        step: 1,
+        what: "the bindings S7 prints, compiled: N class_<T> instantiations of a \
+               nanobind-style binding library (casters, call thunks, constexpr signatures)",
+        owner: "WP-551",
+        needs: "a libstdc++ with <meta> (GCC 16.1)",
+        libstdcxx: true,
+        body: s8,
+        budget: |_| "peak_arena<=65536".into(),
+    },
 ];
 
-/// The shape named `id` (`s1` … `s6`, case-insensitive).
+/// The shape named `id` (`s1` … `s8`, case-insensitive).
 pub fn shape(id: &str) -> Option<&'static Shape> {
     SHAPES.iter().find(|s| s.id.eq_ignore_ascii_case(id))
+}
+
+/// kiln's extra flags for `shape`: for a [`Shape::libstdcxx`] shape, the
+/// `--gcc-toolchain=` of the GCC oracle (`KILN_GCC`, else `g++-16`, as
+/// `spec/harness.md` "GCC oracle"), whose libstdc++ has `<meta>`. Empty for
+/// the other shapes, and when no GCC oracle runs (the compile then fails on
+/// the missing header, which the report shows).
+pub fn kiln_flags(shape: &Shape) -> Vec<String> {
+    if !shape.libstdcxx {
+        return Vec::new();
+    }
+    let (gcc, _) = crate::oracle::gcc_from(std::env::var(crate::oracle::GCC_ENV).ok().as_deref());
+    crate::oracle::gcc_toolchain_of(&gcc)
+        .map(|p| vec![format!("--gcc-toolchain={}", p.display())])
+        .unwrap_or_default()
 }
 
 /// The bench entry for `shape` at `n`.
 pub fn generate(shape: &Shape, n: usize) -> String {
     let mut out = String::new();
     let upper = shape.id.to_uppercase();
+    let source = if shape.libstdcxx {
+        "docs/status/perf-reference-workload.md"
+    } else {
+        "docs/plans/m6-reflection.md §3.8"
+    };
+    let needs = if shape.libstdcxx {
+        format!("Added by {}; needs {}.", shape.owner, shape.needs)
+    } else {
+        format!("Needs {} and {}.", shape.owner, shape.needs)
+    };
     let _ = writeln!(
         out,
         "// Generated by `cargo xtask gen-reflect` (xtask/src/gen_reflect.rs): shape {upper}, \
          N={n}.\n\
-         // Do not edit; regenerate. docs/plans/m6-reflection.md §3.8 {upper}: {}.\n\
-         // Needs {} and {}.",
-        shape.what, shape.owner, shape.needs
+         // Do not edit; regenerate. {source} {upper}: {}.\n// {needs}",
+        shape.what
     );
-    let _ = writeln!(
-        out,
-        "//@ std: c++26\n//@ args: -freflection\n//@ xfail(kiln): {} (reflection family not \
-         landed)\n//@ oven: {}\n",
-        shape.owner,
-        (shape.budget)(n)
-    );
+    out.push_str("//@ std: c++26\n//@ args: -freflection\n");
+    if !shape.libstdcxx {
+        let _ = writeln!(out, "//@ xfail(kiln): {} (reflection family not landed)", shape.owner);
+    }
+    let _ = writeln!(out, "//@ oven: {}\n", (shape.budget)(n));
     out.push_str("#include <meta>\n");
     (shape.body)(n, &mut out);
     out
@@ -329,10 +389,464 @@ fn s6(n: usize, out: &mut String) {
     }
 }
 
-pub const USAGE: &str = "\
-usage: cargo xtask gen-reflect [--shape s1..s6] [--n <N>] [--out <dir>] [--check]
+/// Member types of the binding shapes S7/S8: C++ spelling, the name the
+/// binding signatures give it, an initializer.
+const BIND_TYPES: [(&str, &str, &str); 5] = [
+    ("int", "int", "1"),
+    ("double", "float", "2.5"),
+    ("long long", "int", "3"),
+    ("short", "int", "4"),
+    ("unsigned", "int", "5u"),
+];
 
-Writes the reflection perf shapes S1-S6 (docs/plans/m6-reflection.md §3.8) as
+/// One class of the binding shapes: what it declares and what a binding
+/// generator selects from it.
+struct BindClass {
+    i: usize,
+    /// Annotated `bind::bound`; every eighth class is not, and is skipped.
+    bound: bool,
+    /// `(type index, readonly, doc)` per annotated field `f<j>`.
+    fields: Vec<(usize, bool, bool)>,
+    /// Getter/setter pairs for the first `accessors` fields.
+    accessors: usize,
+    /// An annotated `double scale(double, int) const`.
+    scale: bool,
+    /// An annotated `virtual int kind() const`.
+    virt: bool,
+}
+
+impl BindClass {
+    fn new(i: usize) -> Self {
+        let fields = (0..2 + i % 4)
+            .map(|j| ((i + j) % BIND_TYPES.len(), (i + j) % 3 == 1, j % 2 == 0))
+            .collect();
+        BindClass {
+            i,
+            bound: i % 8 != 7,
+            fields,
+            accessors: 1 + i % 2,
+            scale: i.is_multiple_of(3),
+            virt: i % 4 == 3,
+        }
+    }
+
+    /// The declaration in `namespace lib`.
+    fn declare(&self, out: &mut String) {
+        let i = self.i;
+        let bound = if self.bound { "[[=bind::bound{}]] " } else { "" };
+        let _ = writeln!(out, "struct {bound}C{i:04} {{");
+        for (j, &(t, ro, doc)) in self.fields.iter().enumerate() {
+            let (ty, _, init) = BIND_TYPES[t];
+            let ro = if ro { ", =bind::readonly{}" } else { "" };
+            let doc = if doc { format!(", =bind::doc{{{j}}}") } else { String::new() };
+            let _ = writeln!(out, "  [[=bind::field{{}}{ro}{doc}]] {ty} f{j} = {init};");
+        }
+        out.push_str("  int hidden = 0;\n");
+        for j in 0..self.accessors {
+            let ty = BIND_TYPES[self.fields[j].0].0;
+            let _ = writeln!(
+                out,
+                "  [[=bind::method{{}}]] {ty} get{j}() const {{ return f{j}; }}\n  \
+                 [[=bind::method{{}}]] void set{j}({ty} v) {{ f{j} = v; }}"
+            );
+        }
+        if self.scale {
+            out.push_str(
+                "  [[=bind::method{}]] double scale(double k, int n) const { return f0 * k + n; }\n",
+            );
+        }
+        if self.virt {
+            let _ =
+                writeln!(out, "  [[=bind::method{{}}]] virtual int kind() const {{ return {i}; }}");
+        }
+        let _ = writeln!(out, "  static int count() {{ return {i}; }}\n}};");
+    }
+
+    /// The binding text S7's generator emits for the class (and S8 compiles).
+    fn binding(&self) -> String {
+        let c = format!("C{:04}", self.i);
+        let mut s = format!("  nb::class_<lib::{c}>(m, \"{c}\")\n    .def(nb::init<>())\n");
+        for (j, &(_, ro, _)) in self.fields.iter().enumerate() {
+            let def = if ro { "def_ro" } else { "def_rw" };
+            let _ = writeln!(s, "    .{def}(\"f{j}\", &lib::{c}::f{j})");
+        }
+        let mut method = |name: &str, sig: &str| {
+            let _ = writeln!(s, "    .def(\"{name}\", &lib::{c}::{name}) // {sig}");
+        };
+        for j in 0..self.accessors {
+            let py = BIND_TYPES[self.fields[j].0].1;
+            method(&format!("get{j}"), &format!("(self) -> {py}"));
+            method(&format!("set{j}"), &format!("(self, {py}) -> None"));
+        }
+        if self.scale {
+            method("scale", "(self, float, int) -> float");
+        }
+        if self.virt {
+            method("kind", "(self) -> int");
+        }
+        s.push_str("  ;\n");
+        s
+    }
+}
+
+/// The annotation types and the N classes of S7 and S8.
+fn bind_classes(n: usize, out: &mut String) -> Vec<BindClass> {
+    out.push_str(
+        "\nnamespace bind {\nstruct bound {};\nstruct field {};\nstruct readonly {};\n\
+         struct method {};\nstruct doc { int id; };\n}  // namespace bind\n\nnamespace lib {\n",
+    );
+    let classes: Vec<BindClass> = (0..n).map(BindClass::new).collect();
+    for c in &classes {
+        c.declare(out);
+    }
+    out.push_str("}  // namespace lib\n");
+    classes
+}
+
+/// S7: the generator TU. A consteval binding generator, a function
+/// template per class whose `template for` walks `members_of` and
+/// `annotations_of_with_type`, builds each class's binding as a
+/// `std::string` (the bound-class list is a `std::vector`), and `main`
+/// prints it from a `template for` over the classes that also splices
+/// every bound member. Each class's text is checked against the
+/// generator's.
+fn s7(n: usize, out: &mut String) {
+    out.push_str(
+        "#include <cstdio>\n#include <string>\n#include <string_view>\n#include <type_traits>\n\
+         #include <vector>\n",
+    );
+    let classes = bind_classes(n, out);
+    let bound: Vec<&BindClass> = classes.iter().filter(|c| c.bound).collect();
+    let _ = write!(
+        out,
+        r##"
+constexpr auto ctx = std::meta::access_context::unchecked();
+
+template <class Tag>
+consteval bool has(std::meta::info r) {{
+  return !std::meta::annotations_of_with_type(r, ^^Tag).empty();
+}}
+
+consteval std::vector<std::meta::info> bound_classes() {{
+  std::vector<std::meta::info> out;
+  for (auto m : std::meta::members_of(^^lib, ctx))
+    if (std::meta::is_class_type(m) && has<bind::bound>(m)) out.push_back(m);
+  return out;
+}}
+
+template <class T>
+consteval std::string py_name() {{
+  if constexpr (std::is_void_v<T>)
+    return "None";
+  else if constexpr (std::is_floating_point_v<T>)
+    return "float";
+  else if constexpr (std::is_integral_v<T>)
+    return "int";
+  else
+    return std::string(std::meta::identifier_of(^^T));
+}}
+
+template <std::meta::info F>
+consteval std::string signature() {{
+  std::string s = "(self";
+  template for (constexpr auto p : std::define_static_array(std::meta::parameters_of(F)))
+    s += ", " + py_name<typename [:std::meta::type_of(p):]>();
+  return s + ") -> " + py_name<typename [:std::meta::return_type_of(F):]>();
+}}
+
+template <std::meta::info C>
+consteval std::string binding() {{
+  std::string name(std::meta::identifier_of(C));
+  std::string out = "  nb::class_<lib::" + name + ">(m, \"" + name + "\")\n";
+  out += "    .def(nb::init<>())\n";
+  template for (constexpr auto m : std::define_static_array(std::meta::members_of(C, ctx))) {{
+    constexpr bool field = std::meta::is_nonstatic_data_member(m) && has<bind::field>(m);
+    if constexpr (field || (std::meta::is_function(m) && has<bind::method>(m))) {{
+      std::string id(std::meta::identifier_of(m));
+      std::string ref = "(\"" + id + "\", &lib::" + name + "::" + id + ")";
+      if constexpr (field)
+        out += (has<bind::readonly>(m) ? "    .def_ro" : "    .def_rw") + ref + "\n";
+      else
+        out += "    .def" + ref + " // " + signature<m>() + "\n";
+    }}
+  }}
+  return out + "  ;\n";
+}}
+
+constexpr unsigned digest(std::string_view s) {{
+  unsigned h = {FNV_BASIS}u;
+  for (char c : s) h = (h ^ (unsigned char)c) * 16777619u;
+  return h;
+}}
+
+static_assert(bound_classes().size() == {count});
+
+template <class T>
+long long checksum(const T& obj) {{
+  long long sum = 0;
+  template for (constexpr auto m : std::define_static_array(std::meta::nonstatic_data_members_of(^^T, ctx)))
+    if constexpr (has<bind::field>(m)) {{
+      long long v = static_cast<long long>(obj.[:m:]);
+      sum += v;
+    }}
+  return sum;
+}}
+
+int main() {{
+  std::puts("#include \"binding.h\"\nvoid bind_all(nb::module_& m) {{");
+  long long total = 0;
+  template for (constexpr auto c : std::define_static_array(bound_classes())) {{
+    constexpr const char* text = std::define_static_string(binding<c>());
+    std::fputs(text, stdout);
+    typename [:c:] obj{{}};
+    total += checksum(obj);
+  }}
+  std::printf("}}\n// checksum %lld\n", total);
+}}
+"##,
+        count = bound.len()
+    );
+    // Each class's binding text, checked in an evaluation of its own (so no
+    // single evaluation grows with N).
+    for c in bound {
+        let text = c.binding();
+        let _ = writeln!(
+            out,
+            "static_assert(digest(binding<^^lib::C{:04}>()) == {}u);",
+            c.i,
+            text.bytes().fold(FNV_BASIS, fnv)
+        );
+    }
+}
+
+/// S8's binding library: a self-contained miniature of a nanobind-style
+/// `class_<T>` with `def`/`def_rw`/`def_ro`, type casters, constexpr
+/// signature descriptors and type-erased call thunks.
+const NB: &str = r#"
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+namespace nb {
+struct handle {
+  void* p = nullptr;
+};
+
+template <std::size_t N>
+struct descr {
+  char text[N + 1]{};
+  constexpr descr() = default;
+  constexpr descr(const char (&s)[N + 1]) {
+    for (std::size_t i = 0; i < N; ++i) text[i] = s[i];
+  }
+  constexpr std::string_view view() const { return {text, N}; }
+};
+
+template <std::size_t N>
+constexpr descr<N - 1> const_name(const char (&s)[N]) {
+  return descr<N - 1>(s);
+}
+
+template <std::size_t A, std::size_t B>
+constexpr descr<A + B> operator+(const descr<A>& a, const descr<B>& b) {
+  descr<A + B> r;
+  for (std::size_t i = 0; i < A; ++i) r.text[i] = a.text[i];
+  for (std::size_t i = 0; i < B; ++i) r.text[A + i] = b.text[i];
+  return r;
+}
+
+constexpr descr<0> concat() { return {}; }
+template <std::size_t N>
+constexpr descr<N> concat(const descr<N>& d) { return d; }
+template <std::size_t N, class... Ds>
+constexpr auto concat(const descr<N>& d, const Ds&... ds) {
+  return d + const_name(", ") + concat(ds...);
+}
+
+namespace detail {
+template <class T, class = void>
+struct type_caster;
+
+template <class T>
+struct type_caster<T, std::enable_if_t<std::is_integral_v<T>>> {
+  static constexpr auto Name = const_name("int");
+  T value{};
+  bool from_python(handle h) noexcept {
+    value = static_cast<T>(reinterpret_cast<std::uintptr_t>(h.p));
+    return true;
+  }
+  static handle from_cpp(T v) noexcept {
+    return {reinterpret_cast<void*>(static_cast<std::uintptr_t>(v))};
+  }
+  T& get() noexcept { return value; }
+};
+
+template <class T>
+struct type_caster<T, std::enable_if_t<std::is_floating_point_v<T>>> {
+  static constexpr auto Name = const_name("float");
+  T value{};
+  bool from_python(handle h) noexcept {
+    value = static_cast<T>(reinterpret_cast<std::uintptr_t>(h.p));
+    return true;
+  }
+  static handle from_cpp(T v) noexcept {
+    return {reinterpret_cast<void*>(static_cast<std::uintptr_t>(v))};
+  }
+  T& get() noexcept { return value; }
+};
+
+template <class T>
+struct type_caster<T, std::enable_if_t<std::is_class_v<T>>> {
+  static constexpr auto Name = const_name("self");
+  T* value = nullptr;
+  bool from_python(handle h) noexcept {
+    value = static_cast<T*>(h.p);
+    return value != nullptr;
+  }
+  static handle from_cpp(const T& v) noexcept { return {const_cast<T*>(&v)}; }
+  T& get() noexcept { return *value; }
+};
+
+template <class T>
+using make_caster = type_caster<std::remove_cvref_t<T>>;
+
+template <class Ret>
+constexpr auto return_name() {
+  if constexpr (std::is_void_v<Ret>)
+    return const_name("None");
+  else
+    return make_caster<Ret>::Name;
+}
+
+template <class Ret, class... Args>
+constexpr auto signature() {
+  return const_name("(") + concat(make_caster<Args>::Name...) + const_name(") -> ") +
+         return_name<Ret>();
+}
+
+template <class Ret, class... Args, class F, std::size_t... Is>
+handle call_impl(F& f, handle* args, std::index_sequence<Is...>) {
+  std::tuple<make_caster<Args>...> in;
+  if (!(std::get<Is>(in).from_python(args[Is]) && ...)) return {};
+  if constexpr (std::is_void_v<Ret>) {
+    f(std::get<Is>(in).get()...);
+    return {};
+  } else {
+    return make_caster<Ret>::from_cpp(f(std::get<Is>(in).get()...));
+  }
+}
+}  // namespace detail
+
+struct function_record {
+  std::string name;
+  std::string signature;
+  std::size_t nargs = 0;
+  void* capture = nullptr;
+  handle (*impl)(void*, handle*) = nullptr;
+  void (*free_capture)(void*) = nullptr;
+};
+
+struct module_ {
+  std::vector<function_record> functions;
+  std::vector<std::string> types;
+};
+
+template <class... Args>
+struct init {};
+
+template <class Ret, class... Args, class F>
+function_record make_function(std::string name, F f) {
+  static constexpr auto sig = detail::signature<Ret, Args...>();
+  function_record r;
+  r.name = std::move(name);
+  r.signature = std::string(sig.view());
+  r.nargs = sizeof...(Args);
+  r.capture = new F(std::move(f));
+  r.impl = [](void* cap, handle* args) -> handle {
+    return detail::call_impl<Ret, Args...>(*static_cast<F*>(cap), args,
+                                           std::index_sequence_for<Args...>{});
+  };
+  r.free_capture = [](void* cap) { delete static_cast<F*>(cap); };
+  return r;
+}
+
+template <class T>
+class class_ {
+  module_* m_;
+
+ public:
+  class_(module_& m, const char* name) : m_(&m) { m.types.emplace_back(name); }
+
+  template <class... Args>
+  class_& def(init<Args...>) {
+    m_->functions.push_back(make_function<void, T&, Args...>(
+        "__init__", [](T& self, Args... args) { self = T{args...}; }));
+    return *this;
+  }
+  template <class Ret, class... Args>
+  class_& def(const char* name, Ret (T::*f)(Args...)) {
+    m_->functions.push_back(make_function<Ret, T&, Args...>(
+        name, [f](T& self, Args... args) -> Ret { return (self.*f)(args...); }));
+    return *this;
+  }
+  template <class Ret, class... Args>
+  class_& def(const char* name, Ret (T::*f)(Args...) const) {
+    m_->functions.push_back(make_function<Ret, const T&, Args...>(
+        name, [f](const T& self, Args... args) -> Ret { return (self.*f)(args...); }));
+    return *this;
+  }
+  template <class D>
+  class_& def_ro(const char* name, D T::*pm) {
+    m_->functions.push_back(make_function<D, const T&>(
+        name, [pm](const T& self) -> D { return self.*pm; }));
+    return *this;
+  }
+  template <class D>
+  class_& def_rw(const char* name, D T::*pm) {
+    def_ro(name, pm);
+    m_->functions.push_back(make_function<void, T&, const D&>(
+        name, [pm](T& self, const D& v) { self.*pm = v; }));
+    return *this;
+  }
+};
+}  // namespace nb
+"#;
+
+/// S8: the production TU, what S7's generator prints compiled against
+/// [`NB`]: N `class_<T>` instantiations whose `def`s instantiate a call
+/// thunk, a caster tuple and a constexpr signature per member, with each
+/// signature checked against the comment S7 writes next to it.
+fn s8(n: usize, out: &mut String) {
+    out.push_str(NB);
+    let classes = bind_classes(n, out);
+    out.push_str("\nvoid bind_all(nb::module_& m) {\n");
+    for c in classes.iter().filter(|c| c.bound) {
+        out.push_str(&c.binding());
+    }
+    out.push_str("}\n\n");
+    for c in classes.iter().filter(|c| c.bound) {
+        let name = format!("C{:04}", c.i);
+        for j in 0..c.accessors {
+            let (ty, py, _) = BIND_TYPES[c.fields[j].0];
+            let _ = writeln!(
+                out,
+                "static_assert(nb::detail::signature<{ty}, const lib::{name}&>().view() == \
+                 \"(self) -> {py}\");"
+            );
+        }
+    }
+}
+
+pub const USAGE: &str = "\
+usage: cargo xtask gen-reflect [--shape s1..s8] [--n <N>] [--out <dir>] [--check]
+
+Writes the reflection perf shapes S1-S6 (docs/plans/m6-reflection.md §3.8) and
+the reference-workload shapes S7-S8 (docs/status/perf-reference-workload.md) as
 bench entries. Without --n each shape is written at its committed default N
 into bench/reflect/; a different N needs --out (the sweeps of `cargo xtask
 bench --scaling` build their own). --check writes nothing and fails when a
@@ -363,7 +877,7 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<bool, String> {
             }
             "--shape" => {
                 let v = value("--shape")?;
-                only = Some(shape(&v).ok_or_else(|| format!("unknown shape `{v}` (s1..s6)"))?);
+                only = Some(shape(&v).ok_or_else(|| format!("unknown shape `{v}` (s1..s8)"))?);
             }
             "--n" => {
                 let v = value("--n")?;
@@ -438,13 +952,30 @@ mod tests {
             assert_eq!(a, generate(s, s.default_n), "{}", s.id);
             assert_ne!(a, generate(s, s.default_n + s.step), "{}", s.id);
             assert!(a.contains(&format!("N={}.", s.default_n)), "{}", s.id);
-            assert!(a.contains(&format!("//@ xfail(kiln): {}", s.owner)), "{}", s.id);
+            assert_eq!(a.contains("//@ xfail(kiln): "), !s.libstdcxx, "{}", s.id);
             assert_eq!(write_or_check(&dir, s, s.default_n, true), Ok(None), "{} is stale", s.id);
             let spec =
                 crate::bench::entry::parse_spec(&a).unwrap_or_else(|e| panic!("{}: {e:?}", s.id));
-            assert!(spec.xfail_kiln.as_deref().is_some_and(|r| r.starts_with(s.owner)), "{}", s.id);
+            let xfail = spec.xfail_kiln.as_deref();
+            assert!(s.libstdcxx || xfail.is_some_and(|r| r.starts_with(s.owner)), "{}", s.id);
         }
         assert!(write_or_check(&dir, shape("S5").unwrap(), 150, true).is_err());
+    }
+
+    /// S8 compiles exactly the bindings S7 checks its generator against,
+    /// and both see the same classes.
+    #[test]
+    fn s7_checks_what_s8_compiles() {
+        let (s7, s8) = (generate(shape("s7").unwrap(), 9), generate(shape("s8").unwrap(), 9));
+        let classes: String =
+            (0..9).map(BindClass::new).filter(|c| c.bound).map(|c| c.binding()).collect();
+        assert!(s8.contains(&classes));
+        let c8 = BindClass::new(8).binding();
+        let h = c8.bytes().fold(FNV_BASIS, fnv);
+        assert!(s7.contains(&format!("digest(binding<^^lib::C0008>()) == {h}u")));
+        assert!(s7.contains("bound_classes().size() == 8)"));
+        assert!(!s7.contains("C0007\")") && s7.contains("struct C0007 {"));
+        assert_eq!(kiln_flags(shape("s1").unwrap()), Vec::<String>::new());
     }
 
     #[test]

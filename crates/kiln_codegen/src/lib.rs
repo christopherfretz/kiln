@@ -39,11 +39,13 @@ mod loop_md;
 mod memptr;
 mod module;
 mod module_init;
+mod neon;
 mod new_delete;
 mod null_init;
 mod psabi;
 mod recursion;
 mod stmt;
+mod target_features;
 mod tbaa;
 mod tls;
 mod try_catch;
@@ -81,6 +83,13 @@ pub struct CodegenOptions {
     /// base set (`-march=armv8-a+sve`, `-target-feature`; one per name),
     /// merged into the functions' `target-features`. Ignored on x86-64.
     pub target_features: Vec<String>,
+    /// `AArch64` only: how a function's `target("...")` attribute string
+    /// changes the module's features (the driver's
+    /// `features::target_attr_features`; its arguments are the string, the
+    /// module's features as `+name`/`-name` and `-fclang-compat=22`).
+    /// `None` ignores the attribute (spec/landed/codegen/WP-558.md "Target features";
+    /// WP-558).
+    pub target_attr: Option<TargetAttrParser>,
     /// `AArch64` only: the `sve` target feature is on, so function
     /// definitions carry `vscale_range(1,16)` (clang `getVScaleRange`).
     pub sve: bool,
@@ -291,6 +300,23 @@ impl ComplexRange {
     }
 }
 
+/// The target features of one `AArch64` `target("...")` attribute string
+/// (clang `AArch64TargetInfo::parseTargetAttr`, then `initFeatureMap`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TargetAttrFeatures {
+    /// The `+name` / `-name` entries applied in order over the module's
+    /// features (the last naming a feature wins): the attribute's
+    /// non-extension features (an architecture level with the features it
+    /// implies), then every extension feature of the module or the
+    /// attribute with its final state. The `+` ones are what an
+    /// `always_inline` callee requires first, in this order.
+    pub features: Vec<String>,
+}
+
+/// Parses a `target("...")` attribute string (see
+/// [`CodegenOptions::target_attr`]).
+pub type TargetAttrParser = fn(&str, &[String], bool) -> TargetAttrFeatures;
+
 impl CodegenOptions {
     /// The IR will be optimized (`-O1` and above): definitions are
     /// emitted without the `-O0` `noinline optnone` pair (clang
@@ -309,6 +335,7 @@ impl Default for CodegenOptions {
             ident: String::new(),
             outline_atomics: true,
             target_features: Vec::new(),
+            target_attr: None,
             sve: false,
             sve_vector_bits: None,
             complex_range: ComplexRange::Full,

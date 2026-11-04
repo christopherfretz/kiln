@@ -48,7 +48,7 @@ pub use callbacks::{
 };
 pub use cond::{IfContext, IfEvaluator, StubIfEvaluator};
 pub use diag_map::literal_diags;
-pub use features::{ClangFeatures, FeatureFlag};
+pub use features::{ClangFeatures, FeatureFlag, TargetBuiltins};
 pub use ifeval::IfEval;
 pub use include::{
     EmbedData, EmbedRequest, IncludeKind, IncludeRequest, IncludeResolver, MemoryResolver,
