@@ -8811,14 +8811,21 @@ impl Sema<'_, '_> {
     /// looked up in the explicit, then the partial specializations
     /// ([temp.expl.spec], [temp.spec.partial]): `template<> struct
     /// O<int> { template<class I> using c = I; }; O<int>::c<long> x;`.
+    /// So is every name when the primary template is only declared: the
+    /// template-id then names an explicit or partial specialization, and
+    /// lookup in it finds the member (boost.mpl's `template<class Tag>
+    /// struct at_impl;` with `template<> struct at_impl<map_tag> {
+    /// template<class M, class K> struct apply ...; }`, named as
+    /// `at_impl<map_tag>::apply<M, K>` inside another template).
     fn classify_template_member(&self, tmpl: DeclId, name: Symbol) -> NameClass {
         let Some(p) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
             return NameClass::Dependent;
         };
-        let Some(def) = self.ast.definition(p) else { return NameClass::Dependent };
-        let found = self.lookup_qualified(def, name, LookupKind::Ordinary);
-        let d = match found.decls.first() {
-            Some(&d) => d,
+        let in_primary = self.ast.definition(p).and_then(|def| {
+            self.lookup_qualified(def, name, LookupKind::Ordinary).decls.first().copied()
+        });
+        let d = match in_primary {
+            Some(d) => d,
             None => match self.specialization_member(tmpl, name) {
                 Some(d) => d,
                 None => return NameClass::Dependent,
