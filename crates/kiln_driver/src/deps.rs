@@ -1,13 +1,20 @@
 //! Make-style dependency output (`-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`,
 //! `-MQ`, `-MP`): clang's `DependencyCollector` and
 //! `DependencyFileGenerator` (`spec/driver.md` "Dependency output").
+//! Shared by `-E` and, for `-MD` / `-MMD`, by `-fsyntax-only`, `-S`, `-c`
+//! and linking: the list's setup ([`DepList::for_args`]), the rule's text
+//! ([`deps_text`]) and where it goes ([`dep_destination`]).
 
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use kiln_pp::{FileChange, PpCallbacks, SearchEvent};
+use kiln_diag::DiagOptions;
+use kiln_pp::{FileChange, IncludeRequest, PpCallbacks, ResolvedInclude, SearchEvent};
 use kiln_source::SourceManager;
+
+use crate::args::{Args, DepHeaders};
+use crate::{Io, report_output_error, write_output};
 
 /// clang's `MaxColumns` for the dependency file.
 const MAX_COLUMNS: usize = 75;
@@ -19,12 +26,25 @@ pub struct DepList {
     pub system: bool,
     files: Vec<String>,
     seen: HashSet<String>,
+    /// An `#include` named a file that was not found (clang's
+    /// `SeenMissingHeader`: no dependency file is written).
+    missing: bool,
 }
 
 impl DepList {
     /// An empty list.
     pub fn new(system: bool) -> DepList {
         DepList { system, ..DepList::default() }
+    }
+
+    /// The list `args` asks for (`-M`, `-MM`, `-MD`, `-MMD`), if any.
+    pub fn for_args(args: &Args) -> Option<DepList> {
+        args.deps.headers().map(|h| DepList::new(h == DepHeaders::All))
+    }
+
+    /// Whether an `#include` failed to find its file.
+    pub fn saw_missing(&self) -> bool {
+        self.missing
     }
 
     /// clang `DependencyCollector::maybeAddDependency`.
@@ -75,6 +95,12 @@ impl PpCallbacks for DepCallbacks<'_> {
     fn file_changed(&mut self, change: FileChange) {
         if let FileChange::Enter { file, system, .. } = change {
             self.list.borrow_mut().add(self.sm.file_name(file), system);
+        }
+    }
+
+    fn inclusion_directive(&mut self, _req: &IncludeRequest, result: Option<&ResolvedInclude>) {
+        if result.is_none() {
+            self.list.borrow_mut().missing = true;
         }
     }
 }
@@ -196,6 +222,79 @@ pub fn default_dep_file(output: Option<&str>, input: &str) -> String {
     match o[slash..].rfind('.') {
         Some(i) if i > 0 => format!("{}.d", &o[..slash + i]),
         _ => format!("{o}.d"),
+    }
+}
+
+/// Where a dependency rule goes.
+pub(crate) enum DepDest {
+    /// With the main output (`-M`, `-MM`, `-MF -`).
+    Main,
+    /// A file.
+    File(String),
+}
+
+/// clang `RenderDependencyOptions`'s dependency file: `-MF`, else (for
+/// `-MD` / `-MMD`) the `-o` file with its extension replaced by `.d`,
+/// else `<input stem>.d` in the working directory. `-M` / `-MM` write
+/// the rule as the main output.
+pub(crate) fn dep_destination(args: &Args, input: &str) -> DepDest {
+    if args.deps.only.is_some() {
+        return DepDest::Main;
+    }
+    match args.deps.file.as_deref() {
+        Some("-") => DepDest::Main,
+        Some(f) => DepDest::File(f.to_owned()),
+        None => DepDest::File(default_dep_file(args.output.as_deref(), input)),
+    }
+}
+
+/// The rule of `input` over `files`: the `-MT` / `-MQ` targets in order,
+/// else the `-o` value (not for `-M` / `-MM`), else `<input stem>.o`,
+/// Make-quoted; `-MP` adds a phony rule per header.
+pub(crate) fn deps_text(args: &Args, input: &str, files: &[String]) -> String {
+    let targets: Vec<String> = if args.deps.targets.is_empty() {
+        let t = match args.output.as_deref() {
+            Some(o) if args.deps.only.is_none() => o.to_owned(),
+            _ => default_target(input),
+        };
+        vec![quote_target(&t)]
+    } else {
+        args.deps
+            .targets
+            .iter()
+            .map(|(t, quote)| if *quote { quote_target(t) } else { t.clone() })
+            .collect()
+    };
+    render(&targets, files, args.deps.phony)
+}
+
+/// `-MD` / `-MMD` with `-fsyntax-only`, `-S`, `-c` or a link: writes the
+/// rule of `input` once its preprocessing finished, whatever later
+/// errors the translation unit has (clang and GCC keep the file then),
+/// unless an `#include` was not found (clang `SeenMissingHeader`).
+/// `-MF -` writes it to standard output. `false` after reporting an
+/// output error.
+pub(crate) fn write_side_file(
+    args: &Args,
+    input: &str,
+    list: &DepList,
+    diag_opts: &DiagOptions,
+    io: &mut Io,
+) -> bool {
+    if list.saw_missing() {
+        return true;
+    }
+    let text = deps_text(args, input, list.files());
+    let path = match dep_destination(args, input) {
+        DepDest::Main => "-".to_owned(),
+        DepDest::File(f) => f,
+    };
+    match write_output(Some(&path), &text, &mut io.stdout) {
+        Ok(()) => true,
+        Err(e) => {
+            report_output_error(diag_opts, &io.stderr, &path, &e);
+            false
+        }
     }
 }
 
