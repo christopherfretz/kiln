@@ -2195,6 +2195,23 @@ impl Cg<'_> {
                 return Some(r);
             }
         }
+        // LLVM's ConstantFolder: `ptrtoint` of null is 0, and of an
+        // `inttoptr` of a same-width integer that integer.
+        if let V::C(c) = v
+            && op == CastOp::PtrToInt
+            && self.m.types.int_width(to).is_some()
+        {
+            let folded = match self.m.const_of(c) {
+                Some(kiln_llvm::ConstData::Null(_)) => Some(None),
+                Some(&kiln_llvm::ConstData::Cast { op: CastOp::IntToPtr, val, .. }) => {
+                    (self.m.const_type(val) == to).then_some(Some(val))
+                }
+                _ => None,
+            };
+            if let Some(f) = folded {
+                return Some(V::C(f.unwrap_or_else(|| self.m.const_int(to, 0))));
+            }
+        }
         if let V::C(c) = v
             && matches!(op, CastOp::PtrToInt | CastOp::IntToPtr)
             && let Ok(x) = self.m.const_cast(op, c, to)

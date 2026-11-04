@@ -4404,6 +4404,223 @@ pub mod builtin {
 
     // ---- end WP-154 ----
 
+    // ---- the GCC legacy `__sync` builtins (a separate block; see `sync`) ----
+
+    /// The GCC legacy `__sync` builtins (clang `Builtins.td`, ids clang
+    /// 19's): each overloaded operation as written (`v.`, custom
+    /// type-checking), then its `_1`, `_2`, `_4`, `_8` and `_16` forms
+    /// (also custom type-checked: sema retargets a call to the form for
+    /// the pointee's size, clang `BuiltinAtomicOverloaded`), the clang
+    /// `int`/`unsigned` min/max extensions and `__sync_synchronize`.
+    pub const SYNC: &[Info] = &[
+        row(1193, "__sync_lock_test_and_set_1", "ccD*c.", T | N),
+        row(1194, "__sync_lock_test_and_set_2", "ssD*s.", T | N),
+        row(1195, "__sync_lock_test_and_set_4", "iiD*i.", T | N),
+        row(1196, "__sync_lock_test_and_set_8", "LLiLLiD*LLi.", T | N),
+        row(1197, "__sync_lock_test_and_set_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1198, "__sync_val_compare_and_swap_1", "ccD*cc.", T | N),
+        row(1199, "__sync_val_compare_and_swap_2", "ssD*ss.", T | N),
+        row(1200, "__sync_val_compare_and_swap_4", "iiD*ii.", T | N),
+        row(1201, "__sync_val_compare_and_swap_8", "LLiLLiD*LLiLLi.", T | N),
+        row(1202, "__sync_val_compare_and_swap_16", "LLLiLLLiD*LLLiLLLi.", T | N),
+        row(1203, "__sync_add_and_fetch", "v.", T),
+        row(1204, "__sync_add_and_fetch_1", "ccD*c.", T | N),
+        row(1205, "__sync_add_and_fetch_2", "ssD*s.", T | N),
+        row(1206, "__sync_add_and_fetch_4", "iiD*i.", T | N),
+        row(1207, "__sync_add_and_fetch_8", "LLiLLiD*LLi.", T | N),
+        row(1208, "__sync_add_and_fetch_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1209, "__sync_and_and_fetch", "v.", T),
+        row(1210, "__sync_and_and_fetch_1", "ccD*c.", T | N),
+        row(1211, "__sync_and_and_fetch_2", "ssD*s.", T | N),
+        row(1212, "__sync_and_and_fetch_4", "iiD*i.", T | N),
+        row(1213, "__sync_and_and_fetch_8", "LLiLLiD*LLi.", T | N),
+        row(1214, "__sync_and_and_fetch_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1215, "__sync_bool_compare_and_swap", "v.", T),
+        row(1216, "__sync_bool_compare_and_swap_1", "bcD*cc.", T | N),
+        row(1217, "__sync_bool_compare_and_swap_2", "bsD*ss.", T | N),
+        row(1218, "__sync_bool_compare_and_swap_4", "biD*ii.", T | N),
+        row(1219, "__sync_bool_compare_and_swap_8", "bLLiD*LLiLLi.", T | N),
+        row(1220, "__sync_bool_compare_and_swap_16", "bLLLiD*LLLiLLLi.", T | N),
+        row(1221, "__sync_fetch_and_add", "v.", T),
+        row(1222, "__sync_fetch_and_add_1", "ccD*c.", T | N),
+        row(1223, "__sync_fetch_and_add_2", "ssD*s.", T | N),
+        row(1224, "__sync_fetch_and_add_4", "iiD*i.", T | N),
+        row(1225, "__sync_fetch_and_add_8", "LLiLLiD*LLi.", T | N),
+        row(1226, "__sync_fetch_and_add_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1227, "__sync_fetch_and_and", "v.", T),
+        row(1228, "__sync_fetch_and_and_1", "ccD*c.", T | N),
+        row(1229, "__sync_fetch_and_and_2", "ssD*s.", T | N),
+        row(1230, "__sync_fetch_and_and_4", "iiD*i.", T | N),
+        row(1231, "__sync_fetch_and_and_8", "LLiLLiD*LLi.", T | N),
+        row(1232, "__sync_fetch_and_and_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1233, "__sync_fetch_and_max", "iiD*i", N),
+        row(1234, "__sync_fetch_and_min", "iiD*i", N),
+        row(1235, "__sync_fetch_and_nand", "v.", T),
+        row(1236, "__sync_fetch_and_nand_1", "ccD*c.", T | N),
+        row(1237, "__sync_fetch_and_nand_2", "ssD*s.", T | N),
+        row(1238, "__sync_fetch_and_nand_4", "iiD*i.", T | N),
+        row(1239, "__sync_fetch_and_nand_8", "LLiLLiD*LLi.", T | N),
+        row(1240, "__sync_fetch_and_nand_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1241, "__sync_fetch_and_or", "v.", T),
+        row(1242, "__sync_fetch_and_or_1", "ccD*c.", T | N),
+        row(1243, "__sync_fetch_and_or_2", "ssD*s.", T | N),
+        row(1244, "__sync_fetch_and_or_4", "iiD*i.", T | N),
+        row(1245, "__sync_fetch_and_or_8", "LLiLLiD*LLi.", T | N),
+        row(1246, "__sync_fetch_and_or_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1247, "__sync_fetch_and_sub", "v.", T),
+        row(1248, "__sync_fetch_and_sub_1", "ccD*c.", T | N),
+        row(1249, "__sync_fetch_and_sub_2", "ssD*s.", T | N),
+        row(1250, "__sync_fetch_and_sub_4", "iiD*i.", T | N),
+        row(1251, "__sync_fetch_and_sub_8", "LLiLLiD*LLi.", T | N),
+        row(1252, "__sync_fetch_and_sub_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1253, "__sync_fetch_and_umax", "UiUiD*Ui", N),
+        row(1254, "__sync_fetch_and_umin", "UiUiD*Ui", N),
+        row(1255, "__sync_fetch_and_xor", "v.", T),
+        row(1256, "__sync_fetch_and_xor_1", "ccD*c.", T | N),
+        row(1257, "__sync_fetch_and_xor_2", "ssD*s.", T | N),
+        row(1258, "__sync_fetch_and_xor_4", "iiD*i.", T | N),
+        row(1259, "__sync_fetch_and_xor_8", "LLiLLiD*LLi.", T | N),
+        row(1260, "__sync_fetch_and_xor_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1261, "__sync_lock_release", "v.", T),
+        row(1262, "__sync_lock_release_1", "vcD*.", T | N),
+        row(1263, "__sync_lock_release_2", "vsD*.", T | N),
+        row(1264, "__sync_lock_release_4", "viD*.", T | N),
+        row(1265, "__sync_lock_release_8", "vLLiD*.", T | N),
+        row(1266, "__sync_lock_release_16", "vLLLiD*.", T | N),
+        row(1267, "__sync_lock_test_and_set", "v.", T),
+        row(1268, "__sync_nand_and_fetch", "v.", T),
+        row(1269, "__sync_nand_and_fetch_1", "ccD*c.", T | N),
+        row(1270, "__sync_nand_and_fetch_2", "ssD*s.", T | N),
+        row(1271, "__sync_nand_and_fetch_4", "iiD*i.", T | N),
+        row(1272, "__sync_nand_and_fetch_8", "LLiLLiD*LLi.", T | N),
+        row(1273, "__sync_nand_and_fetch_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1274, "__sync_or_and_fetch", "v.", T),
+        row(1275, "__sync_or_and_fetch_1", "ccD*c.", T | N),
+        row(1276, "__sync_or_and_fetch_2", "ssD*s.", T | N),
+        row(1277, "__sync_or_and_fetch_4", "iiD*i.", T | N),
+        row(1278, "__sync_or_and_fetch_8", "LLiLLiD*LLi.", T | N),
+        row(1279, "__sync_or_and_fetch_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1280, "__sync_sub_and_fetch", "v.", T),
+        row(1281, "__sync_sub_and_fetch_1", "ccD*c.", T | N),
+        row(1282, "__sync_sub_and_fetch_2", "ssD*s.", T | N),
+        row(1283, "__sync_sub_and_fetch_4", "iiD*i.", T | N),
+        row(1284, "__sync_sub_and_fetch_8", "LLiLLiD*LLi.", T | N),
+        row(1285, "__sync_sub_and_fetch_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1286, "__sync_swap", "v.", T),
+        row(1287, "__sync_swap_1", "ccD*c.", T | N),
+        row(1288, "__sync_swap_2", "ssD*s.", T | N),
+        row(1289, "__sync_swap_4", "iiD*i.", T | N),
+        row(1290, "__sync_swap_8", "LLiLLiD*LLi.", T | N),
+        row(1291, "__sync_swap_16", "LLLiLLLiD*LLLi.", T | N),
+        row(1292, "__sync_synchronize", "v", N),
+        row(1293, "__sync_val_compare_and_swap", "v.", T),
+        row(1294, "__sync_xor_and_fetch", "v.", T),
+        row(1295, "__sync_xor_and_fetch_1", "ccD*c.", T | N),
+        row(1296, "__sync_xor_and_fetch_2", "ssD*s.", T | N),
+        row(1297, "__sync_xor_and_fetch_4", "iiD*i.", T | N),
+        row(1298, "__sync_xor_and_fetch_8", "LLiLLiD*LLi.", T | N),
+        row(1299, "__sync_xor_and_fetch_16", "LLLiLLLiD*LLLi.", T | N),
+    ];
+
+    /// The overloaded `__sync` operations ([`SYNC`]): their families, the
+    /// `_N` form for a size, and the operands each takes (clang
+    /// `Sema::BuiltinAtomicOverloaded`, `CodeGenFunction::EmitBuiltinExpr`).
+    pub mod sync {
+        use super::atomic::Rmw;
+        use super::{by_name, info};
+
+        /// `void __sync_synchronize() noexcept`: a `seq_cst` fence.
+        pub const SYNCHRONIZE: u32 = 1292;
+        /// `int __sync_fetch_and_max(volatile int *, int) noexcept`.
+        pub const FETCH_AND_MAX: u32 = 1233;
+        /// `int __sync_fetch_and_min(volatile int *, int) noexcept`.
+        pub const FETCH_AND_MIN: u32 = 1234;
+        /// `unsigned __sync_fetch_and_umax(volatile unsigned *, unsigned)`.
+        pub const FETCH_AND_UMAX: u32 = 1253;
+        /// `unsigned __sync_fetch_and_umin(volatile unsigned *, unsigned)`.
+        pub const FETCH_AND_UMIN: u32 = 1254;
+
+        /// An overloaded `__sync` operation.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Op {
+            /// `__sync_fetch_and_<op>`: the old value.
+            Fetch(Rmw),
+            /// `__sync_<op>_and_fetch`: the new value.
+            Post(Rmw),
+            /// `__sync_val_compare_and_swap`: the old value.
+            ValCas,
+            /// `__sync_bool_compare_and_swap`: whether it swapped.
+            BoolCas,
+            /// `__sync_lock_test_and_set`: an exchange.
+            LockTestAndSet,
+            /// `__sync_lock_release`: a release store of 0.
+            LockRelease,
+            /// `__sync_swap`: an exchange.
+            Swap,
+        }
+
+        /// The families, by name after `__sync_`, in clang's
+        /// `BuiltinIndices` order.
+        const FAMILIES: &[(&str, Op)] = &[
+            ("fetch_and_add", Op::Fetch(Rmw::Add)),
+            ("fetch_and_sub", Op::Fetch(Rmw::Sub)),
+            ("fetch_and_or", Op::Fetch(Rmw::Or)),
+            ("fetch_and_and", Op::Fetch(Rmw::And)),
+            ("fetch_and_xor", Op::Fetch(Rmw::Xor)),
+            ("fetch_and_nand", Op::Fetch(Rmw::Nand)),
+            ("add_and_fetch", Op::Post(Rmw::Add)),
+            ("sub_and_fetch", Op::Post(Rmw::Sub)),
+            ("and_and_fetch", Op::Post(Rmw::And)),
+            ("or_and_fetch", Op::Post(Rmw::Or)),
+            ("xor_and_fetch", Op::Post(Rmw::Xor)),
+            ("nand_and_fetch", Op::Post(Rmw::Nand)),
+            ("val_compare_and_swap", Op::ValCas),
+            ("bool_compare_and_swap", Op::BoolCas),
+            ("lock_test_and_set", Op::LockTestAndSet),
+            ("lock_release", Op::LockRelease),
+            ("swap", Op::Swap),
+        ];
+
+        /// The operation builtin `id` performs and, for an `_N` form, N
+        /// (`None` for the overloaded spelling).
+        pub fn op(id: u32) -> Option<(Op, Option<u32>)> {
+            let name = info(id)?.name.strip_prefix("__sync_")?;
+            FAMILIES.iter().find_map(|&(f, op)| {
+                let rest = name.strip_prefix(f)?;
+                if rest.is_empty() {
+                    return Some((op, None));
+                }
+                let n = rest.strip_prefix('_')?.parse().ok()?;
+                Some((op, Some(n)))
+            })
+        }
+
+        /// The `_N` form of the operation of `id` for an `n`-byte value
+        /// (`None` unless `n` is 1, 2, 4, 8 or 16).
+        pub fn sized(id: u32, n: u64) -> Option<u32> {
+            if !matches!(n, 1 | 2 | 4 | 8 | 16) {
+                return None;
+            }
+            let name = info(id)?.name;
+            let base = match op(id)? {
+                (_, None) => name,
+                (_, Some(_)) => &name[..name.rfind('_')?],
+            };
+            by_name(&format!("{base}_{n}"))
+        }
+
+        /// The value operands after the pointer (clang's `NumFixed`).
+        pub fn num_fixed(op: Op) -> usize {
+            match op {
+                Op::ValCas | Op::BoolCas => 2,
+                Op::LockRelease => 0,
+                _ => 1,
+            }
+        }
+    }
+
+    // ---- end `__sync` ----
+
     // ---- WP-270: checked arithmetic, alloca, printf-family builtins ----
 
     /// `bool __builtin_add_overflow(...) noexcept` (custom type-checking:
@@ -5137,6 +5354,7 @@ pub mod builtin {
             .chain(INT_MEM)
             .chain(LIBM)
             .chain(ATOMIC)
+            .chain(SYNC)
             .chain(CORO)
             .chain(CHECKED)
             .chain(EXTRA)
@@ -5162,6 +5380,7 @@ pub mod builtin {
             .chain(INT_MEM)
             .chain(LIBM)
             .chain(ATOMIC)
+            .chain(SYNC)
             .chain(CORO)
             .chain(CHECKED)
             .chain(EXTRA)

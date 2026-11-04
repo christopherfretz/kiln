@@ -20,3 +20,4 @@ cg_error = Error (1) "{0}";
 // clang `err_function_needs_feature` (`checkTargetFeatures`): {0} the
 // caller, {1} the `always_inline` callee, {2} the missing feature; WP-558.
 cg_function_needs_feature = Error (3) "always_inline function '{1}' requires target feature '{2}', but would be inlined into function '{0}' that is compiled without support for '{2}'";
+cg_sync_op_misaligned = Warning [SyncAlignment] (0) "__sync builtin operation must have natural alignment (consider using __atomic)";

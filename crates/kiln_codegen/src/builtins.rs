@@ -1085,6 +1085,18 @@ impl Cg<'_> {
             | id::atomic::C11_THREAD_FENCE => {
                 return self.emit_atomic_builtin(b, e, &args).map(BuiltinCall::Emitted);
             }
+            _ if id::sync::op(b).is_some()
+                || matches!(
+                    b,
+                    id::sync::SYNCHRONIZE
+                        | id::sync::FETCH_AND_MAX
+                        | id::sync::FETCH_AND_MIN
+                        | id::sync::FETCH_AND_UMAX
+                        | id::sync::FETCH_AND_UMIN
+                ) =>
+            {
+                return self.emit_sync_builtin(b, e, &args).map(BuiltinCall::Emitted);
+            }
             _ if id::checked_op(b).is_some() => self.emit_checked(b, e, &args)?,
             _ if id::carry_op(b).is_some() => self.emit_carry(b, e, &args)?,
             id::ALLOCA | id::ALLOCA_WITH_ALIGN => self.emit_alloca(b, e, &args)?,

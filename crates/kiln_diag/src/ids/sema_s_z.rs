@@ -108,6 +108,7 @@ sema_switch_missing_default = WarningOff [SwitchDefault] (0) "'switch' missing '
 sema_switch_multiple_conversions = Error (1) "multiple conversions from switch condition type {0} to an integral or enumeration type";
 sema_switch_not_in_enum = Warning [Switch] (1) "case value not in enumerated type {0}";
 sema_switch_unreachable_default = WarningOff [CoveredSwitchDefault] (0) "default label in switch which covers all enumeration values";
+sema_sync_fetch_and_nand_semantics_change = Warning [SyncFetchAndNandSemanticsChanged] (0) "the semantics of this intrinsic changed with GCC version 4.4 - the newer semantics are provided here";
 sema_tag_definition_of_typedef = Error (2) "definition of type '{0}' conflicts with {1:typedef|type alias} of the same name";
 sema_tag_reference_non_tag = Error (3) "{0:non-struct type|non-class type|non-union type|non-enum type|typedef|type alias|template|alias template|template template argument} '{1}' cannot be referenced with the '{2}' specifier";
 sema_temp_dtor_access = Error (2) "temporary of type {0} has {1:private|protected} destructor";

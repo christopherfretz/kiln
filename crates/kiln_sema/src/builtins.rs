@@ -744,6 +744,12 @@ impl Sema<'_, '_> {
         if id == builtin::SHUFFLEVECTOR {
             return self.act_on_shufflevector(args, self.begin_loc(callee), rparen);
         }
+        if builtin::sync::op(id).is_some() {
+            return match self.builtin_sync_call(callee, b, id, args, loc, rparen) {
+                Some(e) => e,
+                None => self.recover_err(&kids, loc),
+            };
+        }
         if builtin::atomic::is_op(id) {
             // WP-154: an `AtomicExpr` (no call, no callee).
             return match self.builtin_atomic_op(self.begin_loc(callee), id, args, rparen) {

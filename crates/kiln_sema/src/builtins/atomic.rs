@@ -301,3 +301,148 @@ impl Sema<'_, '_> {
         }
     }
 }
+
+impl Sema<'_, '_> {
+    /// A call of the overloaded `__sync` builtin `id` (the spelling as
+    /// written or one of its `_N` forms) named by `callee` (declared by
+    /// `b`): clang `Sema::BuiltinAtomicOverloaded`. The first argument
+    /// (decayed) must point to a non-`const` integer or pointer whose
+    /// size is 1, 2, 4, 8 or 16 bytes; the call is retargeted to the
+    /// `_N` builtin for that size (a new `DeclRefExpr`, converted to a
+    /// pointer as any builtin callee) and the value operands (two for the
+    /// compare-and-swaps, none for `__sync_lock_release`) are
+    /// copy-initialized as parameters of the pointee's unqualified type,
+    /// the call's type (`bool` for `__sync_bool_compare_and_swap`, `void`
+    /// for `__sync_lock_release`). Arguments after them are kept as
+    /// written and ignored. `None` after a diagnostic.
+    #[allow(clippy::too_many_lines, reason = "one check per step of clang's")]
+    pub(crate) fn builtin_sync_call(
+        &mut self,
+        callee: ExprId,
+        b: kiln_ast::DeclId,
+        id: u32,
+        args: &[ExprId],
+        loc: Loc,
+        rparen: Loc,
+    ) -> Option<ExprId> {
+        use kiln_ast::decl::builtin::sync::{self, Op};
+        let (op, _) = sync::op(id)?;
+        let at = self.begin_loc(callee);
+        if args.is_empty() {
+            let msg = self.diag(DiagId::sema_call_too_few_args_at_least, rparen).arg(1).arg(0);
+            self.emit(msg);
+            return None;
+        }
+        let ptr = conv::decay(self, args[0]);
+        if self.is_err_expr(ptr) {
+            return None;
+        }
+        let pt = self.ety(ptr);
+        let Some(pointee) = self.ast.types.pointee(pt).filter(|_| self.ast.types.is_pointer(pt))
+        else {
+            let msg = self
+                .diag(DiagId::sema_atomic_builtin_must_be_pointer, at)
+                .arg(self.ty_arg(pt))
+                .arg(0);
+            self.emit(msg);
+            return None;
+        };
+        let canon = self.ast.types.canonical(pointee);
+        let is_int = conv::rank::is_integral_or_unscoped_enum(self, canon)
+            || matches!(self.ast.types.canonical_view(canon), TypeView::BitInt { .. });
+        if !is_int && !self.ast.types.is_pointer(canon) {
+            let msg = self
+                .diag(DiagId::sema_atomic_builtin_must_be_pointer_intptr, at)
+                .arg(self.ty_arg(pt));
+            self.emit(msg);
+            return None;
+        }
+        if self.ast.types.effective_quals(pointee).is_const() {
+            let msg =
+                self.diag(DiagId::sema_atomic_builtin_cannot_be_const, at).arg(self.ty_arg(pt));
+            self.emit(msg);
+            return None;
+        }
+        let val = self.ast.types.unqualified(pointee);
+        let size = crate::target::size_align(&self.ast, val, &self.abi).map_or(0, |(s, _)| s);
+        let Some(new_id) = sync::sized(id, size) else {
+            let msg = self.diag(DiagId::sema_atomic_builtin_pointer_size, at).arg(self.ty_arg(pt));
+            self.emit(msg);
+            return None;
+        };
+        let fixed = sync::num_fixed(op);
+        if args.len() < 1 + fixed {
+            let msg = self
+                .diag(DiagId::sema_call_too_few_args_at_least, rparen)
+                .arg(1 + fixed)
+                .arg(args.len());
+            self.emit(msg);
+            return None;
+        }
+        self.emit(self.diag(DiagId::sema_atomic_implicit_seq_cst, rparen));
+        if matches!(op, Op::Fetch(atomic::Rmw::Nand) | Op::Post(atomic::Rmw::Nand)) {
+            self.emit(self.diag(DiagId::sema_sync_fetch_and_nand_semantics_change, rparen));
+        }
+        let new_decl = if new_id == id { b } else { self.sync_builtin_decl(new_id, at)? };
+        let mut call_args = Vec::with_capacity(args.len());
+        call_args.push(ptr);
+        for &a in &args[1..=fixed] {
+            match conv::implicit_convert(self, a, val, ConvCtx::Argument) {
+                Ok(x) if !self.is_err_expr(x) => call_args.push(x),
+                Ok(_) => return None,
+                Err(err) => {
+                    let msg = err.diag(self, a);
+                    self.emit(msg);
+                    return None;
+                }
+            }
+        }
+        call_args.extend_from_slice(&args[1 + fixed..]);
+        let result = match op {
+            Op::BoolCas => QualType::BOOL,
+            Op::LockRelease => QualType::VOID,
+            _ => val,
+        };
+        // clang: a `_BitInt` whose width is not a power of two cannot be
+        // operated on atomically.
+        if let TypeView::BitInt { width, .. } = self.ast.types.canonical_view(val)
+            && !width.is_power_of_two()
+        {
+            let msg = self.diag(DiagId::sema_atomic_builtin_bit_int_prohibited, self.eloc(ptr));
+            self.emit(msg);
+            return None;
+        }
+        let name_loc = self.eloc(self.ignore_parens(callee));
+        let r = if new_decl == b { self.ignore_parens(callee) } else { self.build_decl_ref(new_decl, name_loc) };
+        let f = self.builtin_fn_to_ptr(r, new_decl);
+        Some(self.builder().call(
+            f,
+            &call_args,
+            result,
+            kiln_ast::expr::ValueCategory::PRValue,
+            loc,
+            rparen,
+            kiln_ast::expr::ExprFlags::NONE,
+        ))
+    }
+
+    /// The declaration of builtin `id` (a `__sync` `_N` form) that
+    /// unqualified lookup at namespace scope finds, declaring it if needed
+    /// (clang `LookupName` with `AllowBuiltinCreation`).
+    fn sync_builtin_decl(&mut self, id: u32, at: Loc) -> Option<kiln_ast::DeclId> {
+        use kiln_ast::decl::builtin;
+        let name = self.ast.symbols().intern(builtin::info(id)?.name);
+        let tu = self.ast.tu;
+        let found = self.lookup_qualified_dn(
+            tu,
+            kiln_ast::names::DeclName::ident(name),
+            crate::lookup::LookupKind::Ordinary,
+        );
+        let existing = found
+            .decls
+            .iter()
+            .copied()
+            .find(|&d| self.ast.decls.builtin_id(d) == Some(id));
+        existing.or_else(|| self.lazily_create_builtin(name, at))
+    }
+}

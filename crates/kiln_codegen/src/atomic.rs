@@ -1266,6 +1266,142 @@ impl Cg<'_> {
         }
     }
 
+    /// The GCC `__sync` builtins (clang `EmitBuiltinExpr` with
+    /// `MakeBinaryAtomicValue`, `EmitBinaryAtomicPost` and
+    /// `MakeAtomicCmpXchgValue`): call `e` of the `_N` form or extension
+    /// `b` with `args` as sema converted them. Every operation is
+    /// `seq_cst` on an `iN` of the value's size (a pointer through
+    /// `ptrtoint`/`inttoptr`, a `bool` through its `i8`), never volatile:
+    /// `fetch_and_<op>` is an `atomicrmw` returning the old value,
+    /// `<op>_and_fetch` applies the operation again to the old value
+    /// (`nand`: `and` then `xor -1`), the compare-and-swaps a `cmpxchg`
+    /// (the old value, or the success bit), `lock_test_and_set` and
+    /// `swap` an `xchg`; `lock_release` is a `release` store of 0 and
+    /// `__sync_synchronize` a `seq_cst` fence. A pointer less aligned than
+    /// the value's size warns (`-Wsync-alignment`) and the access takes
+    /// the natural alignment.
+    pub(crate) fn emit_sync_builtin(
+        &mut self,
+        b: u32,
+        e: ExprId,
+        args: &[ExprId],
+    ) -> R<Option<V>> {
+        use kiln_ast::decl::builtin::sync::{self as sy, Op as SOp};
+        let arg = |i: usize| args.get(i).copied().map_or_else(|| err(None, "missing argument"), Ok);
+        if b == sy::SYNCHRONIZE {
+            let fence = Op::Fence { ordering: Ordering::SeqCst, scope: SyncScope::SYSTEM };
+            self.f.fir.push(fence, LTy::VOID);
+            return Ok(None);
+        }
+        let op = match b {
+            sy::FETCH_AND_MAX => SOp::Fetch(Rmw::Max),
+            sy::FETCH_AND_MIN => SOp::Fetch(Rmw::Min),
+            sy::FETCH_AND_UMAX | sy::FETCH_AND_UMIN => SOp::Fetch(Rmw::Max),
+            _ => match sy::op(b) {
+                Some((op, _)) => op,
+                None => return err(self.loc_of(e), "unknown __sync builtin"),
+            },
+        };
+        let a0 = arg(0)?;
+        let ast = self.ast;
+        let pq = ast.exprs.get(a0).ty();
+        let Some(vq) = ast.types.pointee(pq).map(QualType::without_quals) else {
+            return err(self.loc_of(e), "__sync builtin without a pointer");
+        };
+        let (p, align) = self.pointer_and_align(a0)?;
+        let bytes = self.size_align(vq).0.max(1);
+        let align = if align.is_multiple_of(bytes) {
+            align
+        } else {
+            // At the call's start (clang `getBeginLoc`): the callee's.
+            let start = self.ast.exprs.callee(e);
+            let span = self.loc_of(start).map_or(Span::INVALID, Span::empty);
+            self.diags.push(Diag::new(DiagId::cg_sync_op_misaligned, span));
+            bytes
+        };
+        let ity = self.m.types.int(u32::try_from(bytes * 8).unwrap_or(8));
+        let mem = |o| amem(align, false, o, SyncScope::SYSTEM);
+        if op == SOp::LockRelease {
+            let z = self.icn(ity, 0);
+            self.f.fir.push(Op::Store { val: z, ptr: p, mem: mem(Ordering::Release) }, LTy::VOID);
+            return Ok(None);
+        }
+        // clang `EmitToInt` / `EmitFromInt`.
+        let to_int = |cg: &mut Self, v: V| {
+            let v = cg.emit_to_memory(v, vq, ity);
+            if cg.f.fir.ty(&cg.m, v) == LTy::PTR { cg.cast(CastOp::PtrToInt, v, ity) } else { v }
+        };
+        let from_int = |cg: &mut Self, v: V, vt: LTy| {
+            let v = cg.emit_from_memory(v, vq);
+            if vt == LTy::PTR { cg.cast(CastOp::IntToPtr, v, vt) } else { v }
+        };
+        if matches!(op, SOp::ValCas | SOp::BoolCas) {
+            let c = self.emit_scalar(arg(1)?)?;
+            let vt = self.f.fir.ty(&self.m, c);
+            let c = to_int(self, c);
+            let n = self.emit_scalar(arg(2)?)?;
+            let n = to_int(self, n);
+            let opts = CmpXchgOpts {
+                align,
+                success: Ordering::SeqCst,
+                failure: Ordering::SeqCst,
+                weak: false,
+                volatile: false,
+                scope: SyncScope::SYSTEM,
+            };
+            // clang `MakeAtomicCmpXchgValue`: only the field it returns.
+            let st = self.m.types.struct_literal(&[ity, LTy::I1], false);
+            let pair = self.f.fir.push(Op::CmpXchg { ptr: p, cmp: c, new: n, opts }, st);
+            if op == SOp::BoolCas {
+                return Ok(Some(self.f.fir.push(Op::ExtractValue { agg: pair, idx: 1 }, LTy::I1)));
+            }
+            let old = self.f.fir.push(Op::ExtractValue { agg: pair, idx: 0 }, ity);
+            return Ok(Some(from_int(self, old, vt)));
+        }
+        let v = self.emit_scalar(arg(1)?)?;
+        let vt = self.f.fir.ty(&self.m, v);
+        let v = to_int(self, v);
+        let (kind, post) = match op {
+            SOp::Fetch(r) => (r, None),
+            SOp::Post(r) => (r, Some(r)),
+            _ => (Rmw::Add, None),
+        };
+        let rop = match (op, b) {
+            (SOp::LockTestAndSet | SOp::Swap, _) => RmwOp::Xchg,
+            (_, sy::FETCH_AND_UMAX) => RmwOp::UMax,
+            (_, sy::FETCH_AND_UMIN) => RmwOp::UMin,
+            _ => match kind {
+                Rmw::Add => RmwOp::Add,
+                Rmw::Sub => RmwOp::Sub,
+                Rmw::And => RmwOp::And,
+                Rmw::Or => RmwOp::Or,
+                Rmw::Xor => RmwOp::Xor,
+                Rmw::Nand => RmwOp::Nand,
+                Rmw::Max => RmwOp::Max,
+                Rmw::Min => RmwOp::Min,
+            },
+        };
+        let mut r = self.f.fir.push(
+            Op::AtomicRmw { op: rop, ptr: p, val: v, mem: mem(Ordering::SeqCst) },
+            ity,
+        );
+        if let Some(post) = post {
+            let bop = match post {
+                Rmw::Add => BinOp::Add,
+                Rmw::Sub => BinOp::Sub,
+                Rmw::Or => BinOp::Or,
+                Rmw::Xor => BinOp::Xor,
+                Rmw::And | Rmw::Nand | Rmw::Max | Rmw::Min => BinOp::And,
+            };
+            r = self.bin(bop, Flags::NONE, r, v);
+            if post == Rmw::Nand {
+                let ones = self.icn(ity, -1);
+                r = self.bin(BinOp::Xor, Flags::NONE, r, ones);
+            }
+        }
+        Ok(Some(from_int(self, r, vt)))
+    }
+
     /// Whether the pointer argument `a` (implicit conversions stripped, as
     /// clang's `IgnoreImpCasts`) points to a volatile object.
     fn arg_pointee_volatile(&self, a: ExprId) -> bool {
