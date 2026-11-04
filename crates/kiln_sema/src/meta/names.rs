@@ -408,16 +408,13 @@ impl kiln_ast::consts::PrintEnv for SpellEnv<'_, '_, '_> {
             | Reflectee::FnParam(..) => ("", None),
             _ => return self.names.reflection(id, out),
         };
-        match s {
-            Some(s) => {
-                out.push_str(call);
-                out.push_str(&s);
-                out.push(')');
-            }
-            None => {
-                self.lossy.set(true);
-                self.names.reflection(id, out);
-            }
+        if let Some(s) = s {
+            out.push_str(call);
+            out.push_str(&s);
+            out.push(')');
+        } else {
+            self.lossy.set(true);
+            self.names.reflection(id, out);
         }
     }
 }

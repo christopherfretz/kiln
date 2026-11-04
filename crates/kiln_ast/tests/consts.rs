@@ -1040,6 +1040,69 @@ fn print_scalars() {
     assert_eq!(st.display(p, &strings, &NoEnv, &PrintOptions::DEFAULT), "&#d9+4");
 }
 
+/// `print_exact` reports placeholders, and `enum_cast` keeps the cast of
+/// an enumeration value no enumerator names without the other types'
+/// suffixes (spec/ast.md §9.3; `display_string_of`, WP-564).
+#[test]
+fn print_exact_and_enum_cast() {
+    let mut st = ConstStore::default();
+    let strings = StringPool::new();
+    let opts = PrintOptions {
+        include_type: false,
+        enum_cast: true,
+        ..PrintOptions::with_style(PrintStyle::TemplateArg)
+    };
+    let exact = |st: &ConstStore, id, o: &PrintOptions| {
+        let mut s = String::new();
+        let ok = st.print_exact(id, &strings, &Env, o, &mut s);
+        (s, ok)
+    };
+    let e7 = st
+        .push_scalar(Scalar::Int { ty: ty(ENUM), signed: true, bits: IntBits::from_i128(32, 7) })
+        .unwrap();
+    let e1 = st
+        .push_scalar(Scalar::Int { ty: ty(ENUM), signed: true, bits: IntBits::from_i128(32, 1) })
+        .unwrap();
+    let ul = st
+        .push_scalar(Scalar::Int { ty: ty(ULONG), signed: false, bits: IntBits::from_u128(64, 5) })
+        .unwrap();
+    assert_eq!(exact(&st, e7, &opts), ("(E)7".to_string(), true));
+    assert_eq!(exact(&st, e1, &opts), ("E::A".to_string(), true));
+    assert_eq!(exact(&st, ul, &opts), ("5".to_string(), true));
+    let plain = PrintOptions { enum_cast: false, ..opts };
+    assert_eq!(exact(&st, e7, &plain), ("7".to_string(), true));
+    // Placeholders: a truncated array, a `Const` base, an infinity.
+    let big = st.push_aggregate(agg(ARR3, &le(&[1, 2, 3]))).unwrap();
+    assert_eq!(exact(&st, big, &opts), ("{1, 2, 3}".to_string(), true));
+    let cut = PrintOptions { max_elems: 2, ..opts };
+    assert_eq!(exact(&st, big, &cut), ("{1, 2, ...}".to_string(), false));
+    let p = st
+        .push_scalar(Scalar::Pointer {
+            ty: ty(INT_PTR),
+            base: PtrBase::Const(big),
+            offset: 0,
+            designated: None,
+        })
+        .unwrap();
+    assert!(!exact(&st, p, &opts).1);
+    let inf = st
+        .push_scalar(Scalar::Float {
+            ty: ty(DOUBLE),
+            kind: FloatKind::Double,
+            bits: u128::from(f64::INFINITY.to_bits()),
+        })
+        .unwrap();
+    assert_eq!(exact(&st, inf, &opts), ("inf".to_string(), false));
+    let half = st
+        .push_scalar(Scalar::Float {
+            ty: ty(DOUBLE),
+            kind: FloatKind::Double,
+            bits: u128::from(1.5f64.to_bits()),
+        })
+        .unwrap();
+    assert_eq!(exact(&st, half, &opts), ("1.5e0".to_string(), true));
+}
+
 #[test]
 fn print_aggregates() {
     let mut st = ConstStore::default();

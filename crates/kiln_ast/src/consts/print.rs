@@ -55,8 +55,7 @@ pub struct PrintOptions {
 
 impl PrintOptions {
     /// The default limits: depth 10, 32 elements.
-    pub const DEFAULT: PrintOptions =
-        PrintOptions {
+    pub const DEFAULT: PrintOptions = PrintOptions {
         style: PrintStyle::Dump,
         max_depth: 10,
         max_elems: 32,
@@ -722,12 +721,11 @@ impl Printer<'_> {
     }
 
     fn image_int(&self, ty: QualType, signed: bool, width: u32, words: &[u64], out: &mut String) {
-        match IntBits::from_words(width, words) {
-            Some(bits) => self.int(ty, signed, &bits, out),
-            None => {
-                self.lost();
-                out.push('?');
-            }
+        if let Some(bits) = IntBits::from_words(width, words) {
+            self.int(ty, signed, &bits, out);
+        } else {
+            self.lost();
+            out.push('?');
         }
     }
 }
