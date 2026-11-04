@@ -1857,6 +1857,12 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        // The callee of a call is not a reference outside an immediate
+        // invocation ([expr.const]/18): a dependent call of an immediate
+        // function, qualified (kept as the `DeclRefExpr`) or not, is
+        // checked as an invocation when instantiated.
+        let r = self.ignore_parens(callee);
+        self.forget_immediate_ref(r);
         let ty = QualType::DEPENDENT;
         self.builder().call(f, args, ty, ValueCategory::PRValue, loc, rparen, ExprFlags::NONE)
     }

@@ -4708,7 +4708,16 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   (`_S_quote().substr(0, 1)` with `_S_quote` a consteval static member
   of a class template, libstdc++ 16 `<format>`) is built and checked at
   instantiation, where taking its address is still an error (WP-525,
-  `expr.const/consteval-member-dependent-call.cpp`).
+  `expr.const/consteval-member-dependent-call.cpp`). The callee of a
+  dependent call (`dependent_call`, type-dependent callee or arguments)
+  is not a reference either: an unqualified callee is rebuilt as an
+  `UnresolvedLookupExpr` for ADL, and a qualified one (`::f(t)`,
+  `N::f(t)`, a using-declaration's `M::f(t)`, also parenthesized) stays
+  the `DeclRefExpr` but is dropped from the full-expression's pending
+  references (`forget_immediate_ref`), as a resolved callee is by
+  `check_immediate_invocation`; the instantiated call is the immediate
+  invocation (WP-533,
+  `expr.const/consteval-qualified-dependent-call-{run,neg}.cpp`).
   The Oven also rejects a constant result (or a subobject of one) that
   is a pointer, reference or member pointer to an immediate function:
   `pointer|reference to a consteval declaration is not a constant
