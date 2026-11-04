@@ -489,7 +489,17 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<ExprId> {
         if self.ast.types.as_record(ty).is_some() {
-            let d = self.ast.templates.param_object(v)?;
+            // The template parameter object holding `v` ([temp.param]/8),
+            // made here for a value that did not come from a template
+            // argument (a spliced value reflection, WP-550).
+            let d = if let Some(d) = self.ast.templates.param_object(v) {
+                d
+            } else {
+                let canon = self.ast.types.canonical(ty);
+                let canon = crate::conv::strip_cv(self, canon);
+                let cty = self.ast.types.qualify(canon, Quals::CONST);
+                self.builder().template_param_object(cty, v)
+            };
             let q = self.ast.decls.get(d).ty()?;
             self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
             return Some(self.builder().decl_ref(
@@ -518,6 +528,11 @@ impl Sema<'_, '_> {
                 }
                 crate::conv::implicit_convert(self, n, ty, crate::conv::ConvCtx::Initialization)
                     .ok()
+            }
+            Scalar::Pointer { ty: pty, base, offset, .. }
+                if self.is_subobject_ptr(pty, base, offset) =>
+            {
+                self.subobject_arg_expr(ty, pty, base, offset, loc)
             }
             Scalar::Pointer { base, offset: 0, .. } => {
                 let (PtrBase::Decl(d) | PtrBase::Function(d)) = base else { return None };
