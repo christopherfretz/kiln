@@ -392,11 +392,11 @@ impl Cg<'_> {
         let ast = self.ast;
         let l = self.vt_layout(rd)?;
         for c in &l.components {
-            let m = match *c {
-                VTableComponent::Func(m)
-                | VTableComponent::CompleteDtor(m)
-                | VTableComponent::DeletingDtor(m) => m,
-                _ => continue,
+            let (VTableComponent::Func(m)
+            | VTableComponent::CompleteDtor(m)
+            | VTableComponent::DeletingDtor(m)) = *c
+            else {
+                continue;
             };
             let defined = ast.redecls_of(m).any(|r| {
                 ast.decls.function(r).is_some_and(|f| f.body.is_some() || f.spec.is_deleted())

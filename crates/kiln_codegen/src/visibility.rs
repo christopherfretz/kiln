@@ -98,6 +98,7 @@ const fn is_explicit_inst_or_spec(k: SpecKind) -> bool {
 }
 
 /// The inputs of clang's `shouldAssumeDSOLocal` for one global value.
+#[allow(clippy::struct_excessive_bools)]
 struct GvFacts<'n> {
     name: &'n str,
     linkage: Linkage,
@@ -148,8 +149,7 @@ fn assume_dso_local(
         RelocModel::Pie(_) if !g.decl => None,
         _ => Some(
             direct_access
-                && ((!g.function && !g.tls)
-                    || (g.function && reloc == RelocModel::Static)),
+                && ((!g.function && !g.tls) || (g.function && reloc == RelocModel::Static)),
         ),
     }
 }
@@ -501,7 +501,9 @@ impl Cg<'_> {
         let member = ast.member_spec_info(first).map(|(_, m)| m.instantiated_from);
         let spec = ast.spec_info(first).map(|(_, s)| s.template);
         if is_record_kind(k) || is_var_kind(k) || k.is_function() {
-            if k.is_function() && let Some(t) = spec {
+            if k.is_function()
+                && let Some(t) = spec
+            {
                 return self.pattern_of(t).and_then(|p| self.vis_of(p, comp.ty, true));
             }
             if let Some(m) = member {

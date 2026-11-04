@@ -99,8 +99,8 @@ impl Sema<'_, '_> {
                 if old.a == v {
                     continue;
                 }
-                let note = self.diag(DiagId::note_previous_attribute, node.loc);
-                let msg = self.diag(DiagId::sema_mismatched_visibility, old.loc).with_note(note);
+                let prev = self.diag(DiagId::note_previous_attribute, node.loc);
+                let msg = self.diag(DiagId::sema_mismatched_visibility, old.loc).with_note(prev);
                 self.emit(msg);
                 out.remove(i);
             }
@@ -113,8 +113,7 @@ impl Sema<'_, '_> {
     /// `kind`, or `None` after a diagnostic.
     fn visibility_value(&mut self, kind: DeclKind, node: AttrNode) -> Option<u32> {
         let type_vis = node.kind == AttrKind::TYPE_VISIBILITY;
-        let shown =
-            self.attr_shown(&node, if type_vis { "type_visibility" } else { "visibility" });
+        let shown = self.attr_shown(&node, if type_vis { "type_visibility" } else { "visibility" });
         if matches!(kind, DeclKind::Typedef | DeclKind::TypeAlias) {
             let msg = self.diag(DiagId::parse_attribute_ignored, node.loc).arg(shown);
             self.emit(msg);
@@ -128,7 +127,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
-        let Some(e) = ExprId::from_raw(node.b) else { return None };
+        let e = ExprId::from_raw(node.b)?;
         let Some(lit) = self.string_lit_of(e) else {
             let name = if type_vis { "type_visibility" } else { "visibility" };
             let msg = self
@@ -179,15 +178,17 @@ impl Sema<'_, '_> {
                 && prior.is_none()
                 && self.ast.redecls_of(decl).any(|r| r == def)
             {
-                let note = self.diag(DiagId::note_previous_definition, self.ast.decls.get(def).loc());
-                let msg = self.diag(DiagId::sema_attribute_precede_definition, node.loc).with_note(note);
+                let prev =
+                    self.diag(DiagId::note_previous_definition, self.ast.decls.get(def).loc());
+                let msg =
+                    self.diag(DiagId::sema_attribute_precede_definition, node.loc).with_note(prev);
                 self.emit(msg);
                 attrs.remove(i);
             } else if let Some(p) = prior
                 && p.a != node.a
             {
-                let note = self.diag(DiagId::note_previous_attribute, p.loc);
-                let msg = self.diag(DiagId::sema_mismatched_visibility, node.loc).with_note(note);
+                let prev = self.diag(DiagId::note_previous_attribute, p.loc);
+                let msg = self.diag(DiagId::sema_mismatched_visibility, node.loc).with_note(prev);
                 self.emit(msg);
                 attrs.remove(i);
             }
@@ -277,7 +278,9 @@ impl Sema<'_, '_> {
                     let mut d = self.diag(DiagId::sema_visibility_pop_mismatch, loc);
                     if let Some(ns) = ns {
                         let at = self.ast.decls.get(ns).loc();
-                        d = d.with_note(self.diag(DiagId::note_surrounding_namespace_starts_here, at));
+                        d = d.with_note(
+                            self.diag(DiagId::note_surrounding_namespace_starts_here, at),
+                        );
                     }
                     self.emit(d);
                 }

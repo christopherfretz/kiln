@@ -111,9 +111,9 @@ mod unused_file_scope;
 mod unused_var;
 pub mod using;
 mod vector;
-mod visibility;
 mod vector_ops;
 mod vexing;
+mod visibility;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type, vector_diag_arg};

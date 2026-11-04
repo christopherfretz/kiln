@@ -510,7 +510,7 @@ fn duplicate_mangled_name() {
 }
 
 /// `-fPIC` and `-fvisibility=` through the whole driver (spec/codegen.md
-/// "Symbol visibility", "dso_local"; spec/driver.md "Code generation"):
+/// "Symbol visibility", "`dso_local`"; spec/driver.md "Code generation"):
 /// in a shared-library build a default-visibility function may be
 /// interposed, so neither its definition nor its address is `dso_local`;
 /// a hidden one is. `-fvisibility=hidden` hides the definitions it does

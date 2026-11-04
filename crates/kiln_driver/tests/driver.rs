@@ -108,7 +108,8 @@ fn visibility_flags() {
         let o = kiln(&[mode, "-fvisibility=foo", "-x", "c++", "-"], "int x;\n");
         assert_eq!((o.code, o.stderr.as_str()), (1, bad), "{mode}");
     }
-    let o = kiln(&["-fsyntax-only", "-fvisibility=foo", "-fvisibility=hidden", "-x", "c++", "-"], "");
+    let o =
+        kiln(&["-fsyntax-only", "-fvisibility=foo", "-fvisibility=hidden", "-x", "c++", "-"], "");
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));
 }
 
