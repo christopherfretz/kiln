@@ -1948,6 +1948,12 @@ opens one with `Oven::trial_begin` around each uncached substitution and
 closes it with `Oven::trial_end(keep)`, so a failed substitution's nested
 constant evaluations leave no bytes behind
 (`tests/conformance/reflection/substitute-trial-rollback.cpp`).
+`Memory::in_trial` is true under it, but it is not speculative: a
+metafunction call's `MetaCtx::trial` is `run.fold ||
+Memory::in_speculative_trial()` (spec/reflection.md §4.3, WP-538), so the
+nested evaluations it wraps (a variable template's initializer) run
+their traits and instantiating queries; only `Mutating` ops are refused
+under any checkpoint.
 
 **Complexity.**
 

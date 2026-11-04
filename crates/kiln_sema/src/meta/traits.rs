@@ -334,9 +334,14 @@ impl Sema<'_, '_> {
             return self.run_trait(op, shape, tys, args, out, loc);
         }
         // Anything else may instantiate or evaluate: never in a trial
-        // (spec/reflection.md §4.3), and with the Oven lent back.
+        // (spec/reflection.md §4.3), and with the Oven lent back. The
+        // Transactional checkpoint `substitute` opens around a variable
+        // template's instantiation is not a trial (`ctx.trial` is a fold
+        // or a speculative checkpoint; WP-538): the initializer evaluated
+        // there asks its traits here, as a manifestly constant-evaluated
+        // evaluation.
         if ctx.trial || self.inst.eval_loc.is_none() {
-            return Err(MetaError::silent());
+            return Err(speculative_refusal(op, loc));
         }
         self.lend_oven(oven, |s| s.run_trait(op, shape, tys, args, out, loc))
     }
@@ -379,7 +384,7 @@ impl Sema<'_, '_> {
             *slot = self.trait_operand(oven.meta_info_at(p, i, ctx)?, loc)?;
         }
         if ctx.trial || self.inst.eval_loc.is_none() {
-            return Err(MetaError::silent());
+            return Err(speculative_refusal(op, loc));
         }
         let tys = &*tys;
         self.lend_oven(oven, |s| {
@@ -694,6 +699,22 @@ impl Sema<'_, '_> {
             (None, Err(f)) => fail(loc, lib_failure_note(op, f)),
         }
     }
+}
+
+/// The failure of a trait that would instantiate or evaluate, asked in a
+/// fold or a speculative trial: a speculative evaluation's notes are
+/// dropped (the manifestly constant-evaluated evaluation, if any, runs
+/// the trait itself), but the failure still carries a note, so that if
+/// it ever reaches a reported evaluation it is not a bare "not a
+/// constant expression" (WP-538).
+fn speculative_refusal(op: TraitOp, loc: Loc) -> MetaError {
+    MetaError::note(
+        loc,
+        format!(
+            "'{}' is not evaluated during a speculative evaluation (it may instantiate)",
+            op.name()
+        ),
+    )
 }
 
 /// The note for library trait failure `f` of `op`.

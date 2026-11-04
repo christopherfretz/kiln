@@ -128,7 +128,18 @@ parity is out of scope.
   names a not-yet-instantiated class template specialization
   (`trait_is_light`). The rest are *light* and run in place.
 - In a trial, or outside a constant evaluation that sema started, it
-  fails silently instead (spec/reflection.md §4.3).
+  fails instead (spec/reflection.md §4.3), with the note "'X' is not
+  evaluated during a speculative evaluation (it may instantiate)" (a
+  trial's notes are dropped; the note is there so that the refusal can
+  never surface as a bare "not a constant expression", WP-538).
+- The Transactional checkpoint `substitute` opens around an
+  instantiation is not a trial (spec/reflection.md §4.3): a heavy trait
+  asked from the initializer of a variable template specialization that
+  `substitute(^^V, args)` instantiates answers as it does outside the
+  substitution (`meta.reflection.substitute/substitute-var-template-traits.cpp`,
+  `substitute-var-template-assign-destroy.cpp`,
+  `substitute-memo-door-nested.cpp`), and fails with its own note
+  (`substitute-var-template-traits-neg.cpp`). WP-538.
 
 ## 3. Performance
 

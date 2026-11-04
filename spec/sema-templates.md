@@ -2239,6 +2239,12 @@ WP-070b):
   - a member marked before its pattern was defined, which is
     instantiated at the end of the TU.
 - No fallback is needed (pre-instantiating everything odr-used).
+- A reflection intrinsic lends the Oven the same way (`lend_oven`).
+  `std::meta::substitute` instantiates a variable template
+  specialization under a Transactional Oven checkpoint and a SFINAE
+  frame; the specialization's initializer is evaluated there on the
+  lent Oven as an ordinary manifestly constant-evaluated evaluation, not
+  a trial, so its trait queries run (spec/reflection.md §4.3, WP-538).
 
 ## 5. Substitution: the tree transform
 

@@ -54,7 +54,15 @@ impl Oven {
                 }
             }
         }
-        let trial = self.run.fold || self.mem.in_trial();
+        // A trial for the bridge is a fold or a speculative checkpoint
+        // (spec/reflection.md §4.3). The Transactional checkpoint
+        // `substitute` opens around an instantiation is not one: a
+        // variable template's initializer evaluated there is a real
+        // manifestly constant-evaluated evaluation, so its traits and
+        // queries may instantiate and evaluate (WP-538). A `Mutating` op
+        // still fails under any checkpoint: a rollback cannot undo it.
+        let trial = self.run.fold || self.mem.in_speculative_trial();
+        let no_mutation = trial || self.mem.in_trial();
         // A value op, or `type_order` (its `strong_ordering` copied whole).
         let value_op = matches!(op, MetaOp::Value(_) | MetaOp::Trait(crate::TraitOp::TypeOrder));
         // A value op's range argument: its element type (WP-479); a
@@ -78,8 +86,20 @@ impl Oven {
             Purity::PointDependent => self.run.impure += 1,
             Purity::Mutating => {
                 self.run.impure += 1;
-                if trial {
-                    return Err(self.meta_trap(Vec::new()));
+                if no_mutation {
+                    // Under a Transactional checkpoint alone the
+                    // evaluation is reported: say why it stopped.
+                    let notes = if trial {
+                        Vec::new()
+                    } else {
+                        let msg = format!(
+                            "'{}' cannot run while a substitution is being tried \
+                             (std::meta::substitute)",
+                            op.display()
+                        );
+                        vec![Note::new(ctx.loc, msg)]
+                    };
+                    return Err(self.meta_trap(notes));
                 }
             }
         }
@@ -103,7 +123,18 @@ impl Oven {
                         self.regs[fb + x.flag as usize] = 1;
                         return Ok(0);
                     }
-                    self.meta_trap(e.notes)
+                    let mut notes = e.notes;
+                    if notes.is_empty() && !trial {
+                        // A silent failure is for a trial, whose notes are
+                        // dropped; anywhere else the bridge owes a reason
+                        // (WP-538: a trait silently refused under
+                        // `substitute`'s checkpoint gave a bare "not a
+                        // constant expression").
+                        let msg =
+                            format!("kiln: internal: '{}' failed without a reason", op.display());
+                        notes.push(Note::new(ctx.loc, msg));
+                    }
+                    self.meta_trap(notes)
                 }
                 MetaErrorKind::NotImplemented { .. } => self.meta_trap(e.notes),
             });

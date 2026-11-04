@@ -1679,6 +1679,16 @@ impl Memory {
         !self.trial.cps.is_empty()
     }
 
+    /// Whether a [`TrialMode::Speculative`] checkpoint is open: the
+    /// evaluation's result may be discarded, so it must not instantiate
+    /// or mutate (spec/reflection.md §4.3). A Transactional checkpoint
+    /// alone (`std::meta::substitute`) is not speculative: the
+    /// evaluations under it are real ones; only their memory effects may
+    /// be undone (WP-538). O(open checkpoints).
+    pub fn in_speculative_trial(&self) -> bool {
+        self.trial.cps.iter().any(|c| c.mode == TrialMode::Speculative)
+    }
+
     /// Opens a checkpoint; its effects are kept by [`Memory::commit`] or
     /// undone by [`Memory::rollback`] (innermost first). O(1).
     pub fn checkpoint(&mut self, mode: TrialMode) {
