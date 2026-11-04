@@ -1075,7 +1075,15 @@ impl Sema<'_, '_> {
                     return b;
                 }
                 if kind == DeclKind::Field {
-                    return self.field_access(b, m, quals, arrow, loc);
+                    // The qualifier as written stays on the access (clang's
+                    // `MemberExpr`): instantiation looks `B::m` up in `B`
+                    // only, never in the derived class ([class.qual]/1).
+                    let q = nns.map(|q| DeclRefExtra {
+                        qualifier: Some(q),
+                        template_args: None,
+                        found_decl: None,
+                    });
+                    return self.field_access_extra(b, m, quals, arrow, loc, q);
                 }
                 let chain: Vec<DeclId> =
                     self.ast.lists.iter::<DeclId>(self.ast.indirect_field_chain(m)).collect();
@@ -1781,7 +1789,13 @@ impl Sema<'_, '_> {
         } else {
             let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
             let at = self.eloc(e);
-            let x = self.builder().decl_ref(d, declared, at, None, nou, ExprFlags::NONE);
+            // The qualifier as written stays on the operand (clang's
+            // `DeclRefExpr`), so that instantiation forms `&C::m` again
+            // rather than the implicit member access `this->C::m`.
+            let extra = self.ast.exprs.decl_ref_extra(e).and_then(|x| x.qualifier).map(|q| {
+                DeclRefExtra { qualifier: Some(q), template_args: None, found_decl: None }
+            });
+            let x = self.builder().decl_ref(d, declared, at, extra, nou, ExprFlags::NONE);
             if let Some(b) = r.begin {
                 let _ = self.ast.templates.expr_begin.insert(x, b);
             }
@@ -1802,7 +1816,11 @@ impl Sema<'_, '_> {
         let mp = if self.has_explicit_object(d) {
             self.ast.types.pointer_to(declared)
         } else {
-            let class_ty = self.tag_type(class).ty();
+            // [temp.dep.type]/1: in a class template's pattern the class
+            // is the current instantiation, its injected-class-name type
+            // `X<P...>` (clang's `getTypeDeclType` of the parent), which
+            // instantiation substitutes.
+            let class_ty = self.this_class_type(class).ty();
             self.ast.types.member_pointer(declared, class_ty)
         };
         Some(self.builder().unary(UnaryOp::AddrOf, operand, mp, loc, ExprFlags::CANNOT_OVERFLOW))
