@@ -36,7 +36,15 @@ impl Sema<'_, '_> {
         let loc = ctx.loc;
         if let QueryOp::SymbolOf | QueryOp::U8SymbolOf = q {
             let op = *args.first().ok_or_else(MetaError::invalid)?;
-            *out = MetaOut::Frozen(self.reflect_symbol(op, q == QueryOp::U8SymbolOf, loc)?);
+            let (cv, len) = self.reflect_symbol(op, q == QueryOp::U8SymbolOf, loc)?;
+            // `std::[u8]string_view` (the standard's, through <meta>) or
+            // the NTBS of tests/support/kiln_meta_queries.h.
+            let view = ctx
+                .callee
+                .and_then(|f| self.ast.decls.get(f).ty())
+                .and_then(|t| self.ast.types.proto(t))
+                .is_some_and(|p| self.ast.types.as_record(self.ast.types.canonical(p.ret())).is_some());
+            *out = if view { MetaOut::Str(cv, len) } else { MetaOut::Frozen(cv) };
             return Ok(());
         }
         let r = info_arg(args, 0)?;

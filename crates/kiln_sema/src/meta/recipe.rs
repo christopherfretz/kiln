@@ -9,7 +9,7 @@ use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::BuiltinType;
 use kiln_ast::{DeclId, QualType};
 use kiln_oven::{
-    AccessOp, AnnotOp, DefineOp, ExcCtor, MemberOp, MetaOp, MetaThrow, QueryOp, Shape, TemplOp,
+    AccessOp, AnnotOp, DefineOp, ExcCtor, MemberOp, MetaOp, MetaThrow, QueryOp, Shape, TemplOp, TraitOp,
     ValueOp,
 };
 use kiln_source::Loc;
@@ -38,6 +38,7 @@ impl Sema<'_, '_> {
             (M::Value(ValueOp::ExcCvtToUtf8), None) => {
                 return self.string_shape(q, QualType::CHAR8);
             }
+            (M::Trait(TraitOp::TypeOrder), None) => return Ok(Some(Shape::Whole)),
             _ => {}
         }
         if let M::Value(v) = op {
@@ -70,6 +71,10 @@ impl Sema<'_, '_> {
                 _ => Ok(None),
             };
         };
+        if let M::Trait(t) = op {
+            let range = super::traits::range_n(t).is_some_and(|(_, k)| k == i);
+            return Ok(range.then_some(Shape::Range));
+        }
         Ok(match (op, i) {
             (M::Query(QueryOp::KilnReflectionRange), 0)
             | (

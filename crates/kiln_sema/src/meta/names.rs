@@ -217,17 +217,21 @@ impl Sema<'_, '_> {
     }
 
     /// `display_string_of(r)` (implementation-defined): a declaration's
-    /// name as a diagnostic prints it (`operator+`, `~X`), a type as
-    /// written in a diagnostic, else the reflection as a note prints it.
+    /// qualified name as a diagnostic prints it (`N::S::operator+`,
+    /// `N::S::~S`; GCC 16.1 qualifies too), a type canonical and fully
+    /// scoped (`N::T1<int>`), else the reflection as a note prints it.
     fn display_string(&self, r: ReflectionId) -> String {
         let s = match self.ast.reflections.get(r) {
-            Reflectee::Type(t) => self.ty_str(t),
+            Reflectee::Type(t) => self.ty_canonical_str(t),
             Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
-                self.decl_name(d)
+                self.qualified_decl_name(d)
             }
-            Reflectee::Template(n) => {
-                self.ast.types.template_decl(n).map(|d| self.decl_name(d)).unwrap_or_default()
-            }
+            Reflectee::Template(n) => self
+                .ast
+                .types
+                .template_decl(n)
+                .map(|d| self.qualified_decl_name(d))
+                .unwrap_or_default(),
             _ => String::new(),
         };
         if s.is_empty() { self.reflection_str(r) } else { s }

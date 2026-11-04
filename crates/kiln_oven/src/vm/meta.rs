@@ -55,7 +55,8 @@ impl Oven {
             }
         }
         let trial = self.run.fold || self.mem.in_trial();
-        let value_op = matches!(op, MetaOp::Value(_));
+        // A value op, or `type_order` (its `strong_ordering` copied whole).
+        let value_op = matches!(op, MetaOp::Value(_) | MetaOp::Trait(crate::TraitOp::TypeOrder));
         // A value op's range argument: its element type (WP-479).
         let elem = site
             .filter(|_| value_op)

@@ -246,14 +246,13 @@ impl Sema<'_, '_> {
     }
 
     /// `symbol_of(op)` / `u8symbol_of(op)`: the operator's spelling, as
-    /// a pointer to a string literal object (the `name_of` encoding until
-    /// WP-475's `string_view` materialization).
+    /// a pointer to a string literal object, and its length.
     pub(super) fn reflect_symbol(
         &mut self,
         op: u128,
         utf8: bool,
         loc: Loc,
-    ) -> Result<ConstValueId, MetaError> {
+    ) -> Result<(ConstValueId, u64), MetaError> {
         let sym = usize::try_from(op)
             .ok()
             .and_then(|i| i.checked_sub(1))
@@ -263,7 +262,8 @@ impl Sema<'_, '_> {
             return fail(loc, "operators argument is not a valid operator");
         };
         let cv = self.frozen_string(sym, utf8);
-        cv.ok_or_else(|| MetaError::note(loc, "kiln: string too large for a constant"))
+        let cv = cv.ok_or_else(|| MetaError::note(loc, "kiln: string too large for a constant"))?;
+        Ok((cv, sym.len() as u64))
     }
 
     /// `object_of(r)`: `r` for an object; for a variable with static
