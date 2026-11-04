@@ -5698,6 +5698,15 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `tests/conformance/basic.lookup.qual/class-qual-base-member-hidden-in-template.cpp`,
   `tests/conformance/re.alg/regex-match-libstdcxx.cpp` (and its
   `-libstdcxx16` / `-libcxx` siblings).
+- **A pack before a defaulted parameter, named again at instantiation**
+  ([temp.deduct.call]/1, [temp.param]/14): a parameter pack that is not
+  the last template parameter is deduced from the call and the
+  parameters after it take their defaults (or deductions) after it, never
+  elements of the pack; a member template specialization the class
+  template's pattern selected keeps exactly those arguments when it is
+  named again in the instantiated class (spec/sema-templates.md,
+  `respecialized_member_template`; WP-629). Tests:
+  `tests/conformance/temp.deduct.call/pack-before-*.cpp`.
 
 ### 5.22 Rules from the libc++ `.verify` cluster B (WP-338)
 - **An out-of-line constructor stays explicit** ([dcl.fct.spec]/4,

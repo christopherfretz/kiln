@@ -648,5 +648,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-625 | codegen: __builtin_constant_p on a non-constant at -O0 emits 0 instead of llvm.is.constant so LLVM cannot fold it later | WP-610 | open |
 | WP-626 | sema: an explicit instantiation error is not diagnosed when an earlier error already exists in the TU | WP-610 | open |
 | WP-627 | diagnostics: source ranges (not only a caret) for every diagnostic, kiln-wide; needed for clang-style fix-it and tooling output | WP-610 | open |
+| WP-629 | sema: a defaulted template parameter after a parameter pack is absorbed into the pack on an unqualified member-template call inside a class template (libdart make_object()) | — | in progress |
 WP-511
 WP-512
