@@ -407,6 +407,22 @@ impl Sema<'_, '_> {
                 break;
             }
         }
+        if matched.is_none()
+            && !in_class
+            && self.at_explicit_head()
+            && self.templ.explicit_inst.is_some()
+        {
+            // [temp.explicit]/4: no non-template member matches, so the
+            // declarator names a member function template specialization.
+            let templates = if let Shape::Conv(_) = shape {
+                self.conversion_templates_of(ctx)
+            } else {
+                let found: Vec<DeclId> = self.ast.lookup_local(class, name).iter().collect();
+                self.function_templates_in(&found)
+            };
+            self.act_on_explicit_special_template_inst(ds, d, &templates, name, ty, sloc);
+            return None;
+        }
         let mut prev_ok = None;
         let mut ty = ty;
         let mut redecl_invalid = false;
@@ -740,6 +756,26 @@ impl Sema<'_, '_> {
 
     /// `-Wclass-conversion` ([class.conv.fct]/1 note: a conversion to the
     /// class itself, a base or `void` is never used).
+    /// The conversion function templates declared in class definition
+    /// `def` (first declarations): a specialization of one is not found
+    /// by name lookup, every one is considered instead ([temp.mem]/6).
+    fn conversion_templates_of(&self, def: DeclId) -> Vec<DeclId> {
+        let mut out = Vec::new();
+        for m in self.ast.decls.members(def) {
+            if self.kind_of(m) == DeclKind::FunctionTemplate
+                && self
+                    .templated_function(m)
+                    .is_some_and(|f| self.kind_of(f) == DeclKind::CXXConversion)
+            {
+                let m = self.ast.first(m);
+                if !out.contains(&m) {
+                    out.push(m);
+                }
+            }
+        }
+        out
+    }
+
     fn warn_class_conversion(&mut self, class: DeclId, target: QualType, loc: Loc) {
         let t = self.non_reference(target);
         let t = self.ast.types.canonical(t).without_quals();
