@@ -88,19 +88,24 @@ fn clang19_unevaluated(b: u32) -> bool {
         )
 }
 
-/// The argument of the builtin call `e` codegen folds rather than emits
+/// The arguments of the builtin call `e` codegen folds rather than emits
 /// (the `__builtin_isfpclass` mask, the `__builtin_object_size` type,
-/// the `__builtin_assume_aligned` alignment), for the fold prepass.
-pub(crate) fn folded_arg(ast: &Ast, e: ExprId) -> Option<ExprId> {
-    let (_, b) = builtin_callee(ast, e)?;
+/// the `__builtin_assume_aligned` alignment, a NEON builtin's lane and
+/// type-code immediates), for the fold prepass.
+pub(crate) fn folded_args(ast: &Ast, e: ExprId) -> impl Iterator<Item = ExprId> + '_ {
     // `__builtin_expect_with_probability`'s probability is evaluated, not
     // emitted (clang `EvaluateAsFloat`).
-    let i = match b {
-        id::ISFPCLASS | id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE | id::ASSUME_ALIGNED => 1,
-        id::EXPECT_WITH_PROBABILITY => 2,
-        _ => return None,
+    let idx: &'static [usize] = match builtin_callee(ast, e) {
+        Some((
+            _,
+            id::ISFPCLASS | id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE | id::ASSUME_ALIGNED,
+        )) => &[1],
+        Some((_, id::EXPECT_WITH_PROBABILITY)) => &[2],
+        Some((_, b)) => crate::neon::imm_args(b),
+        None => &[],
     };
-    ast.lists.iter(ast.exprs.call_args(e)).nth(i)
+    let args = ast.exprs.call_args(e);
+    idx.iter().filter_map(move |&i| ast.lists.iter(args).nth(i))
 }
 
 /// The name of the library function a library builtin calls (clang

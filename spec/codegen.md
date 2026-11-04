@@ -3399,6 +3399,22 @@ No lowering changed; the new forms reach codegen as existing AST.
   sorted `+` features, then the sorted `-` ones
   (`+fp-armv8,+fullfp16,+neon,+outline-atomics,+sve,+v8a,-fmv` for
   `-march=armv8-a+sve`).
+- AArch64 NEON builtins (`neon.rs`) lower as clang 19's
+  `EmitAArch64BuiltinExpr`, from two tables: the bf16 intrinsics
+  (spec/landed/codegen/WP-558.md "bf16 lowering") and the load/store,
+  lane, splat, narrowing and permute builtins with the type-code and
+  alignment rules (spec/landed/codegen/WP-628.md "NEON load/store
+  builtins"; a load or store takes the pointer operand's known
+  alignment, not always `align 1`), and the arithmetic builtins the
+  reference workload reaches (WP-628.md "NEON arithmetic builtins":
+  `vpadd`, `vqsub`, `vmax`, `vmin`, `vabs`, `vsqrt`, `vfma`, `vbsl`,
+  `vtst` as `sext (icmp ne (and a, b), zeroinitializer)`, `vcvt`, the
+  `v{max,min,add}v` reductions, `vmull_p64`; and every other builtin an
+  `arm_neon.h` intrinsic reaches outside `vld2`..`vld4`/`vst2`..`vst4`
+  and the `_x2`..`_x4` forms: the immediate shifts `vshl_n`, `vshrn_n`,
+  `vsra_n`, `vsri_n`, `vmovl`, `vqmovn`, `vfma` by lane, the float width
+  `vcvt`s, `vpmin`/`vpmax`, `vabd`, `vqadd`, `vminnm`/`vmaxnm`, the
+  reciprocal estimates and steps, `vrnd*`, `vcnt`, `vclz`, `vcmla*`).
 - With `CodegenOptions::sve` (AArch64 only), every function definition
   and the global-initialization functions (`__cxx_global_var_init`,
   `_GLOBAL__sub_I_*`, `__tls_init`: `init_fn_attrs`) carry
