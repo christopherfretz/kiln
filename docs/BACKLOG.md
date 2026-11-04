@@ -604,5 +604,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-585 | runtime: tinyobjloader LoadMtl unknown_parameter map stays empty (std::map<string,string> insert; -O2) | corpus | open |
 | WP-611 | specialization default base/member access from its own class-key (eigen gebp_traits) | WP-578 | in progress |
 | WP-606 | sema/parse: accept and ignore the clang thread-safety attribute family (guarded_by, lockable, exclusive_locks_required, …) in GNU and clang:: spellings; no -Wunknown-attributes | WP-578 | in progress |
+| WP-612 | using-declaration base member hidden by same-signature derived member template (eigen Map::operator=) | WP-578 | open |
 WP-511
 WP-512

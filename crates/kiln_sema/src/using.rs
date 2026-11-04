@@ -728,12 +728,16 @@ impl Sema<'_, '_> {
             if e != es && fnlike(self, es) && fnlike(self, target) {
                 continue;
             }
-            if self.using_conflicts(target, es) {
-                if in_class && e == es && fnlike(self, es) && fnlike(self, target) {
-                    // [namespace.udecl]/14: a member function of the class
-                    // hides the one the declarator would introduce.
+            if in_class && e == es && fnlike(self, es) && fnlike(self, target) {
+                // [namespace.udecl]/14: a member function (template) of
+                // the class hides the one the declarator would introduce
+                // when they correspond; otherwise they overload.
+                if self.member_hides_using_target(es, target) {
                     return None;
                 }
+                continue;
+            }
+            if self.using_conflicts(target, es) {
                 let msg = self
                     .diag(DiagId::sema_using_decl_conflict, loc)
                     .with_note(self.diag(DiagId::note_using_decl_target, self.decl_loc(target)))
@@ -794,6 +798,21 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// [namespace.udecl]/14: whether member function (template) `own` of
+    /// a class hides `target`, a base member function (template) a
+    /// using-declarator of the class names: both templates or both not,
+    /// with the same parameter-type-list, cv- and ref-qualifiers and
+    /// trailing requires-clause, and for templates equivalent template
+    /// heads ([temp.over.link]/6). The return type does not take part,
+    /// for templates either (clang's `UseMemberUsingDeclRules`; gcc
+    /// compares template return types): `M& operator=(int)` hides a
+    /// using-declared `B& operator=(int)`. In an instantiated class the
+    /// comparison is between the instantiated declarations.
+    pub(crate) fn member_hides_using_target(&mut self, own: DeclId, target: DeclId) -> bool {
+        let is_t = |me: &Self, x| me.kind_of(x) == DeclKind::FunctionTemplate;
+        is_t(self, own) == is_t(self, target) && self.signatures_correspond(target, own, true)
+    }
+
     /// Checks a new declaration `d` named `name` against the using-shadows
     /// of the current scope ([namespace.udecl]/11); on a conflict, reports
     /// it, marks `d` invalid and returns true.
@@ -802,12 +821,27 @@ impl Sema<'_, '_> {
         shadows.retain(|&s| self.kind_of(s) == DeclKind::UsingShadow);
         for s in shadows.into_iter().rev() {
             let t = self.ast.strip_shadow(s);
-            if self.ast.first(t) == self.ast.first(d) || !self.using_conflicts(t, d) {
+            if self.ast.first(t) == self.ast.first(d) {
                 continue;
             }
-            if self.member_spec_class().is_some()
-                && self.kind_of(d).is_function() | (self.kind_of(d) == DeclKind::FunctionTemplate)
-            {
+            let fnlike = |me: &Self, x| {
+                let k = me.kind_of(x);
+                k.is_function() || k == DeclKind::FunctionTemplate
+            };
+            let in_class = self.member_spec_class().is_some();
+            if in_class && fnlike(self, d) && fnlike(self, t) {
+                // [namespace.udecl]/14: a member function (template)
+                // hides a corresponding one the shadow introduced;
+                // otherwise they overload.
+                if self.member_hides_using_target(d, t) {
+                    let _ = self.ast.decls.set_hidden_shadow(s, d);
+                }
+                continue;
+            }
+            if !self.using_conflicts(t, d) {
+                continue;
+            }
+            if in_class && fnlike(self, d) {
                 // [namespace.udecl]/14: in a class the member hides the
                 // shadow instead of conflicting with it.
                 let _ = self.ast.decls.set_hidden_shadow(s, d);
