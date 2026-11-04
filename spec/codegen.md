@@ -1607,8 +1607,10 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   At every level (also for the `always_inline` exception at -O0) a
   trivially recursive function stays a declaration (WP-449, clang
   `isTriviallyRecursive`, `Cg::is_trivially_recursive` in
-  `recursion.rs`). The function's name is its asm label, since every
-  function here is mangled, so one without a label never qualifies.
+  `recursion.rs`). The function's name is its asm label, else its plain
+  name when it is unmangled (`extern "C"`, `main`); a mangled function
+  without a label never qualifies (WP-585: clang `isTriviallyRecursive`
+  falls back to the identifier only for an unmangled one).
   Its body is walked as clang's `FunctionIsDirectlyRecursive` walks it:
   every statement and expression (a declaration statement's variable
   initializers included), but not the operands of a call. A call whose
@@ -1628,6 +1630,32 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   `tests/codegen/trivially_recursive.cpp`,
   `tests/codegen/trivially_recursive_always_inline.cpp`,
   `tests/codegen/trivially_recursive_lib.cpp`.
+- **GNU inline functions** (GNU extension, WP-585; clang
+  `basicGVALinkageForFunction` -> `isInlineDefinitionExternallyVisible`,
+  which is false in C++ for every `gnu_inline` function; sema rule in
+  spec/sema.md "GNU inline functions"): an inline function with external
+  linkage that carries `gnu_inline` (`AttrKind::GNU_INLINE`, on any of
+  its declarations; templates, members and `constexpr` functions
+  included) is defined in another translation unit, exactly like a
+  function under an explicit instantiation declaration
+  (`Cg::defined_elsewhere`, `Cg::is_gnu_inline_fn`): its body is
+  emitted `available_externally` under the same conditions
+  (`always_inline` at -O0; at -O1+ any not `noinline`; never when
+  trivially recursive), otherwise it is only declared. It is never a
+  `linkonce_odr` definition of its symbol. One with internal linkage
+  (`static`, unnamed namespace) is defined as usual. The shape that
+  matters is the C library's optimized-only C++ overload
+  (`extern "C++" const char *strchr(const char *, int) __asm("strchr")`,
+  `__extern_always_inline` = `extern __inline
+  __attribute__((__always_inline__, __gnu_inline__))`, body
+  `return __builtin_strchr(s, c);`): it is trivially recursive and
+  stays a declaration. Emitted as a definition (kiln before WP-585) it
+  replaced the C library's `strchr` in the program with a function
+  that calls itself, an infinite loop at -O1 and undefined behaviour
+  (`mustprogress`) at -O2. `tests/codegen/gnu_inline.cpp`,
+  `tests/codegen/gnu_inline_o1.cpp`,
+  `tests/conformance/ext.gnu.inline/available-externally-O1-run.cpp`,
+  `tests/conformance/ext.gnu.inline/available-externally-O2-run.cpp`.
 - **Explicit instantiation definitions** ([temp.explicit], WP-170;
   `Cg::is_explicit_inst_definition`, clang `GetGVALinkageForFunction` ->
   `GVA_StrongODR`): a function or variable that is an explicit
