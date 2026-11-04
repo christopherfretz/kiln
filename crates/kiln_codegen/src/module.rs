@@ -24,7 +24,7 @@ use kiln_source::{Loc, Span};
 use crate::fir::{Op, V};
 use crate::fold::Folds;
 use crate::func::Fx;
-use crate::{CodegenError, CodegenOptions, RelocModel};
+use crate::{CodegenError, CodegenOptions, RelocModel, StackProtector, UnwindTables};
 
 /// Result of an emission step.
 pub(crate) type R<T> = Result<T, CodegenError>;
@@ -1582,10 +1582,13 @@ impl<'a> Cg<'a> {
     }
 
     /// clang `ConstructAttributeList` for a reference parameter or return:
-    /// `nonnull align A dereferenceable(N)`.
+    /// `nonnull align A dereferenceable(N)` (no `nonnull` under
+    /// `-fno-delete-null-pointer-checks`).
     fn ref_attrs(&mut self, q: QualType, out: &mut Vec<Attr>) {
         let Some(p) = self.referee(q) else { return };
-        out.push(Attr::Flag(AttrKind::NonNull));
+        if !self.opts.null_pointer_is_valid {
+            out.push(Attr::Flag(AttrKind::NonNull));
+        }
         if self.ast.types.is_function(p) {
             return;
         }
@@ -1790,11 +1793,15 @@ impl<'a> Cg<'a> {
         if let Some(t) = sig.this {
             // ConstructAttributeList: `nonnull dereferenceable(N) align A`
             // on `this` (the minimum object size and class pointer
-            // alignment), plus `noundef`.
+            // alignment), plus `noundef`; `dereferenceable_or_null(N)`
+            // without `nonnull` under `-fno-delete-null-pointer-checks`.
             let (size, align) = self.this_layout(t);
-            let mut s = vec![Attr::Flag(AttrKind::NoUndef), Attr::Flag(AttrKind::NonNull)];
-            if let Some(n) = size {
-                s.push(Attr::Dereferenceable(n));
+            let mut s = vec![Attr::Flag(AttrKind::NoUndef)];
+            if self.opts.null_pointer_is_valid {
+                s.extend(size.map(Attr::DereferenceableOrNull));
+            } else {
+                s.push(Attr::Flag(AttrKind::NonNull));
+                s.extend(size.map(Attr::Dereferenceable));
             }
             s.push(Attr::Align(align));
             params.push(self.m.attr_set(&s));
@@ -1878,16 +1885,55 @@ impl<'a> Cg<'a> {
         if let Some(fp) = self.frame_pointer().attr() {
             out.push(Attr::string("frame-pointer", fp));
         }
+        if self.opts.null_pointer_is_valid {
+            out.push(Attr::Flag(AttrKind::NullPointerIsValid));
+        }
         out.push(Attr::string("no-trapping-math", "true"));
         out.push(Attr::string("stack-protector-buffer-size", "8"));
+        let tune = self.opts.tune_cpu.as_deref();
+        // `-march=native`: no `target-cpu`, the backend's `-mcpu=native`.
+        let cpu = self.opts.target_cpu.as_deref();
+        let native = cpu == Some("native");
         if self.is_x86() {
-            out.push(Attr::string("target-cpu", "x86-64"));
+            // clang `getTrivialDefaultFunctionAttributes`: `-march=<cpu>`
+            // names the CPU and drops the default `tune-cpu`.
+            if !native {
+                out.push(Attr::string("target-cpu", cpu.unwrap_or("x86-64")));
+            }
             out.push(Attr::string("target-features", "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"));
-            out.push(Attr::string("tune-cpu", "generic"));
+            if let Some(t) = tune.or(if cpu.is_none() { Some("generic") } else { None }) {
+                out.push(Attr::string("tune-cpu", t));
+            }
         } else {
-            out.push(Attr::string("target-cpu", "generic"));
+            if !native {
+                out.push(Attr::string("target-cpu", "generic"));
+            }
             out.push(Attr::string("target-features", &self.aarch64_features(d)));
+            if let Some(t) = tune {
+                out.push(Attr::string("tune-cpu", t));
+            }
         }
+    }
+
+    /// The unwind-table and stack-protector attributes of a function
+    /// definition (clang `SetLLVMFunctionAttributesForDefinition`):
+    /// `uwtable` / `uwtable(sync)` per [`CodegenOptions::unwind_tables`],
+    /// and `ssp` / `sspstrong` / `sspreq` per
+    /// [`CodegenOptions::stack_protector`] (spec/codegen.md "Codegen
+    /// flags").
+    pub(crate) fn def_attrs(&self, out: &mut Vec<Attr>) {
+        match self.opts.unwind_tables {
+            Some(UnwindTables::Async) => out.push(Attr::UwTable(UwTableKind::Async)),
+            Some(UnwindTables::Sync) => out.push(Attr::UwTable(UwTableKind::Sync)),
+            None => {}
+        }
+        let ssp = match self.opts.stack_protector {
+            StackProtector::Off => return,
+            StackProtector::On => AttrKind::StackProtect,
+            StackProtector::Strong => AttrKind::StackProtectStrong,
+            StackProtector::All => AttrKind::StackProtectReq,
+        };
+        out.push(Attr::Flag(ssp));
     }
 
     /// The `AArch64` `target-features` string of function `d`
@@ -2065,6 +2111,12 @@ impl<'a> Cg<'a> {
         if ast.is_noreturn_fn(first) {
             fa.push(Attr::Flag(AttrKind::NoReturn));
         }
+        // clang `ConstructAttributeList` under `-fno-plt`: a function not
+        // yet defined is `nonlazybind` (kiln: none in the translation unit;
+        // spec/codegen.md "Codegen flags").
+        if self.opts.no_plt && ast.definition(first).is_none() {
+            fa.push(Attr::Flag(AttrKind::NonLazyBind));
+        }
         self.target_attrs_of(&mut fa, Some(first));
         let optnone = self.has_fn_attr(first, kiln_ast::attr::AttrKind::OPTNONE);
         if optnone {
@@ -2188,7 +2240,7 @@ impl<'a> Cg<'a> {
             a.push(Attr::Flag(AttrKind::OptimizeNone));
         }
         a.extend(extra);
-        a.push(Attr::UwTable(UwTableKind::Async));
+        self.def_attrs(&mut a);
         self.vscale_attr(&mut a);
         self.target_attrs_of(&mut a, decl);
         if inline == DefInline::OptNone {
@@ -2655,10 +2707,17 @@ impl<'a> Cg<'a> {
                 m.add_module_flag_i32(7, "PIE Level", i32::from(l));
             }
         }
+        if self.opts.no_plt {
+            m.add_module_flag_i32(7, "RtLibUseGOT", 1);
+        }
         if direct_access != (self.opts.reloc == RelocModel::Static) {
             m.add_module_flag_i32(7, "direct-access-external-data", i32::from(direct_access));
         }
-        m.add_module_flag_i32(7, "uwtable", 2);
+        match self.opts.unwind_tables {
+            Some(UnwindTables::Async) => m.add_module_flag_i32(7, "uwtable", 2),
+            Some(UnwindTables::Sync) => m.add_module_flag_i32(7, "uwtable", 1),
+            None => {}
+        }
         if let Some(v) = fp {
             m.add_module_flag_i32(7, "frame-pointer", v);
         }

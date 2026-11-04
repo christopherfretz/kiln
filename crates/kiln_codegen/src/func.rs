@@ -1565,6 +1565,19 @@ impl Cg<'_> {
         self.gep_nuw(t, p, vec![V::C(z), V::C(iv)], true)
     }
 
+    /// The address of field `i` of struct `t` at `p` ([`Self::struct_gep`]);
+    /// clang 20+ makes it a plain `getelementptr` when pointer overflow is
+    /// defined (`emitAddrOfFieldStorage` with `PointerOverflowDefined`),
+    /// clang 19 keeps it `inbounds` under `-fwrapv`.
+    pub fn field_gep(&mut self, t: LTy, p: V, i: u32) -> V {
+        if self.opts.wrapv_pointer && self.opts.clang_compat >= 22 {
+            let z = self.m.const_int(LTy::I32, 0);
+            let iv = self.m.const_int(LTy::I32, i128::from(i));
+            return self.gep_flags(t, p, vec![V::C(z), V::C(iv)], GepFlags::NONE);
+        }
+        self.struct_gep(t, p, i)
+    }
+
     // ---- instructions with IRBuilder constant folding --------------------
 
     /// The integer constant `v`, if it is one: (type, zero-extended bits, width).
@@ -2269,6 +2282,30 @@ impl Cg<'_> {
             flags = flags.with(GepFlags::NUW);
         }
         self.gep_flags(src, base, idx, flags)
+    }
+
+    /// [`Self::gep_nuw`] for pointer arithmetic and subscripts (clang
+    /// `EmitCheckedInBoundsGEP`): a plain `getelementptr` when pointer
+    /// overflow is defined ([`crate::CodegenOptions::wrapv_pointer`]).
+    pub fn gep_arith(&mut self, src: LTy, base: V, idx: Vec<V>, nuw: bool) -> V {
+        if self.opts.wrapv_pointer {
+            return self.gep_flags(src, base, idx, GepFlags::NONE);
+        }
+        self.gep_nuw(src, base, idx, nuw)
+    }
+
+    /// `nsw` for arithmetic in a signed type (`signed`) unless signed
+    /// overflow is defined ([`crate::CodegenOptions::wrapv`]; clang
+    /// `isSignedOverflowDefined`).
+    pub fn nsw_if(&self, signed: bool) -> Flags {
+        if signed && !self.opts.wrapv { Flags::NSW } else { Flags::NONE }
+    }
+
+    /// The `nsw` of a variable length array index scaling, which clang
+    /// drops when pointer overflow is defined
+    /// ([`crate::CodegenOptions::wrapv_pointer`]).
+    pub fn vla_nsw(&self) -> Flags {
+        if self.opts.wrapv_pointer { Flags::NONE } else { Flags::NSW }
     }
 
     fn gep_flags(&mut self, src: LTy, base: V, idx: Vec<V>, flags: GepFlags) -> V {

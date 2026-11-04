@@ -20,7 +20,7 @@ use kiln_ast::expr::{CastKind, ExprFlags, ExprKind};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
     Attr, AttrKind, BinOp, CallOpts, ComdatKind, Flags, FuncId, GlobalId, IntPredicate, Linkage,
-    MemOpts, Ordering, TypeId as LTy, UwTableKind, Value, Visibility,
+    MemOpts, Ordering, TypeId as LTy, Value, Visibility,
 };
 use kiln_source::fx::FxHashMap;
 
@@ -194,7 +194,7 @@ impl Cg<'_> {
         if !self.opts.exceptions {
             a.push(Attr::Flag(AttrKind::NoUnwind));
         }
-        a.push(Attr::UwTable(UwTableKind::Async));
+        self.def_attrs(&mut a);
         self.vscale_attr(&mut a);
         self.target_attrs(&mut a);
         if self.is_x86() {

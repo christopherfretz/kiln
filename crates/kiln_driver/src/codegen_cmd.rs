@@ -286,6 +286,16 @@ impl CodegenJob<'_> {
                 },
                 semantic_interposition: a.semantic_interposition,
                 direct_access_external_data: a.direct_access_external_data,
+                stack_protector: a.codegen.stack_protector(),
+                unwind_tables: a.codegen.unwind_tables(a.predef.freestanding.unwrap_or(false)),
+                no_plt: a.codegen.no_plt,
+                wrapv: a.codegen.wrapv(),
+                wrapv_pointer: a
+                    .codegen
+                    .wrapv_pointer(a.predef.clang_compat == ClangCompat::Clang22),
+                null_pointer_is_valid: a.codegen.null_pointer_is_valid(),
+                target_cpu: feats.cpu.clone(),
+                tune_cpu: a.codegen.mtune.clone().filter(|t| t != "native"),
             };
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
@@ -599,6 +609,17 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
     });
     if phase != Phase::Assembly {
         cmd.arg("-filetype=obj");
+    }
+    // spec/driver.md "Codegen flags": clang's `-ffunction-sections` /
+    // `-fdata-sections` and the `-march=native` / x86 `-march=<cpu>` CPU.
+    if args.codegen.function_sections {
+        cmd.arg("-function-sections");
+    }
+    if args.codegen.data_sections {
+        cmd.arg("-data-sections");
+    }
+    if let Some(cpu) = crate::features::resolve(args, &tc.target).0.cpu {
+        cmd.arg(format!("-mcpu={cpu}"));
     }
     cmd.arg("-o").arg(out).arg("-");
     cmd

@@ -202,7 +202,7 @@ impl Cg<'_> {
         if let Some(af) = self.alloc_fn(d).filter(|a| a.replaceable && a.is_new) {
             extra.push(Attr::AllocSize(0, None));
             ret.push(Attr::Flag(AttrKind::NoAlias));
-            if !af.nothrow_t {
+            if !af.nothrow_t && !self.opts.null_pointer_is_valid {
                 ret.push(Attr::Flag(AttrKind::NonNull));
             }
         } else if let Some(a) = self.fn_alloc_size(d) {
@@ -325,7 +325,7 @@ impl Cg<'_> {
             f.push(Attr::Flag(AttrKind::NoBuiltin));
             if af.is_new {
                 f.push(Attr::AllocSize(0, None));
-                if !af.nothrow_t {
+                if !af.nothrow_t && !self.opts.null_pointer_is_valid {
                     r.push(Attr::Flag(AttrKind::NonNull));
                 }
             }
@@ -394,7 +394,7 @@ impl Cg<'_> {
         if af.replaceable && af.is_new {
             fa.push(Attr::AllocSize(0, None));
             ra.push(Attr::Flag(AttrKind::NoAlias));
-            if !af.nothrow_t {
+            if !af.nothrow_t && !self.opts.null_pointer_is_valid {
                 ra.push(Attr::Flag(AttrKind::NonNull));
             }
         }

@@ -23,7 +23,7 @@ use kiln_ast::DeclId;
 use kiln_ast::decl::{PayloadClass, TlsKind, VarStorage};
 use kiln_llvm::{
     Attr, AttrKind, AttrList, CallOpts, ComdatKind, FuncId, GlobalId, IntPredicate, IrBuilder,
-    Linkage, TlsModel, TypeId as LTy, UwTableKind, Value, Visibility,
+    Linkage, TlsModel, TypeId as LTy, Value, Visibility,
 };
 
 use crate::fir::{Op, V};
@@ -295,7 +295,7 @@ impl Cg<'_> {
         if !self.opts.exceptions {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
         }
-        fa.push(Attr::UwTable(UwTableKind::Async));
+        self.def_attrs(&mut fa);
         self.target_attrs(&mut fa);
         let fa = self.m.attr_set(&fa);
         self.m.func_mut(w).attrs.func = fa;

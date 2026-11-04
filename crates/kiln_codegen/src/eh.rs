@@ -5,7 +5,7 @@
 
 use kiln_llvm::{
     Attr, AttrKind, AttrList, CallOpts, ComdatKind, FuncId, IrBuilder, Linkage, MemOpts,
-    TypeId as LTy, UwTableKind, Value, Visibility,
+    TypeId as LTy, Value, Visibility,
 };
 
 use kiln_abi::mangle::Structor;
@@ -257,8 +257,8 @@ impl Cg<'_> {
             Attr::Flag(AttrKind::NoInline),
             Attr::Flag(AttrKind::NoReturn),
             Attr::Flag(AttrKind::NoUnwind),
-            Attr::UwTable(UwTableKind::Async),
         ];
+        self.def_attrs(&mut fa);
         self.target_attrs(&mut fa);
         let fa = self.m.attr_set(&fa);
         let pa = self.m.attr_set(&[Attr::Flag(AttrKind::NoUndef)]);

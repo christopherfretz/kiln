@@ -43,6 +43,12 @@ pub struct TargetFeatures {
     /// `-msve-vector-bits=N` (128 .. 2048, a power of two); `None` for
     /// `scalable` or no option.
     pub sve_vector_bits: Option<u32>,
+    /// The CPU the backend generates code for: `native` for
+    /// `-march=native` / `-mcpu=native` (both targets; the backend's
+    /// `-mcpu=native` detects the host, kiln does not), or the x86
+    /// `-march=<cpu>`; `None` for the default (spec/driver.md "Codegen
+    /// flags").
+    pub cpu: Option<String>,
 }
 
 impl TargetFeatures {
@@ -392,9 +398,16 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     let mut f = TargetFeatures { arch: (8, 0), ..TargetFeatures::default() };
     let mut errors = Vec::new();
     let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
+    let native = |v: &Option<String>| v.as_deref() == Some("native");
     if !target.is_aarch64() {
-        if let Some(v) = &args.march {
-            errors.push(unsupported("-march=", v));
+        // x86: `-march=<cpu>` names the CPU (clang `getX86TargetCPU`).
+        // The name is not checked and its features are not expanded
+        // into `target-features` or predefines (spec/driver.md
+        // deviations).
+        match args.march.as_deref() {
+            Some("") => errors.push(unsupported("-march=", "")),
+            Some(v) => f.cpu = Some(v.to_owned()),
+            None => {}
         }
         if let Some(v) = &args.mcpu {
             errors.push(unsupported("-mcpu=", v));
@@ -406,7 +419,9 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
         return (f, errors);
     }
     let v22 = args.predef.clang_compat == ClangCompat::Clang22;
-    if let Some(v) = &args.march {
+    if native(&args.march) || (args.march.is_none() && native(&args.mcpu)) {
+        f.cpu = Some("native".to_owned());
+    } else if let Some(v) = &args.march {
         let (base, exts) = split(v);
         let set = parse_arch(&base.to_ascii_lowercase(), v22).and_then(|arch| {
             let mut s = ExtensionSet::new(arch, v22);
