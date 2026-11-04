@@ -167,7 +167,7 @@ impl AttrKind {
     pub const NEON_POLYVECTOR_TYPE: AttrKind = AttrKind(144);
     /// GNU `target("features")` on a function (clang `TargetAttr`): `a` =
     /// the string literal's `StringLitId`. On `AArch64` codegen adds the
-    /// features to the function's own (spec/codegen.md "Target
+    /// features to the function's own (spec/landed/codegen/WP-558.md "Target
     /// features"); WP-558.
     pub const TARGET: AttrKind = AttrKind(145);
 

@@ -5195,7 +5195,7 @@ pub mod builtin {
     /// WP-558: the `AArch64` NEON / FP16 target builtins
     /// (`__builtin_neon_*`), clang's `TARGET_BUILTIN` rows of
     /// `arm_neon.inc` / `arm_fp16.inc` for every name kiln's resource
-    /// `arm_neon.h` and `arm_fp16.h` use (spec/sema-builtins.md "Target
+    /// `arm_neon.h` and `arm_fp16.h` use (spec/landed/sema/WP-558.md "Target
     /// builtins"). The generated table (`scripts/gen-neon-builtins.py`) is
     /// sorted by name; a row's id is [`neon::BASE`] plus its index, so
     /// lookup by name is a binary search and by id an index. Signatures

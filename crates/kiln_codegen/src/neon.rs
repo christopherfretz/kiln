@@ -1,4 +1,4 @@
-//! `AArch64` NEON builtins (`__builtin_neon_*`; spec/codegen.md "Target
+//! `AArch64` NEON builtins (`__builtin_neon_*`; spec/landed/codegen/WP-558.md "Target
 //! features", WP-558): the per-function feature check, then the bf16
 //! subset lowered as clang 19 `EmitAArch64BuiltinExpr`. Any other NEON
 //! builtin is a "not supported yet" error when its caller is emitted.

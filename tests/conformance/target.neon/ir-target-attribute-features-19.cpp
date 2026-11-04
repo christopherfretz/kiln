@@ -3,7 +3,7 @@
 // LLVM feature and dependencies (`sha3` adds `sha2`, `fp16` is
 // `fullfp16`, `fp16fml` adds `fullfp16`), a sub-architecture `v8.Na`
 // its level's features, `nosimd` disables `neon` while `no-neon` (the
-// LLVM name, not the extension's) changes nothing (spec/codegen.md
+// LLVM name, not the extension's) changes nothing (spec/landed/codegen/WP-558.md
 // "Target features"). Host-restricted (no pinned `--target`; see
 // ext.arm.sve/ir-target-features-march-levels.cpp). The clang 19 IR
 // (sibling of the clang 22 test). WP-558.

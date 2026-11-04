@@ -469,7 +469,7 @@ fn is_extension_feature(f: &str, v22: bool) -> bool {
 /// The features of a GNU `target("...")` attribute string on `AArch64`
 /// over the module's features `module` (`+name`/`-name`; clang
 /// `AArch64TargetInfo::parseTargetAttr` + `getFunctionFeatureMap`;
-/// spec/codegen.md "Target features"). The module's extension features
+/// spec/landed/codegen/WP-558.md "Target features"). The module's extension features
 /// seed an extension set (LLVM `reconstructFromParsedFeatures`); per
 /// comma-separated item, an extension name (`-march=` spelling) enables
 /// it with its dependencies, `no<ext>`/`no-<ext>` disables it with its
@@ -686,7 +686,7 @@ mod tests {
 
     /// `target("...")` strings over the default module features (clang
     /// 19's and 22's `target-features` of such a function;
-    /// spec/codegen.md "Target features").
+    /// spec/landed/codegen/WP-558.md "Target features").
     #[test]
     fn target_attribute() {
         let module: Vec<String> =

@@ -87,7 +87,7 @@ pub struct CodegenOptions {
     /// changes the module's features (the driver's
     /// `features::target_attr_features`; its arguments are the string, the
     /// module's features as `+name`/`-name` and `-fclang-compat=22`).
-    /// `None` ignores the attribute (spec/codegen.md "Target features";
+    /// `None` ignores the attribute (spec/landed/codegen/WP-558.md "Target features";
     /// WP-558).
     pub target_attr: Option<TargetAttrParser>,
     /// `AArch64` only: the `sve` target feature is on, so function

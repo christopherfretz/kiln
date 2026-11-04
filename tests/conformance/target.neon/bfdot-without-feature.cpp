@@ -3,7 +3,7 @@
 // `err_function_needs_feature` ("always_inline function 'vbfdotq_f32'
 // requires target feature 'bf16', but would be inlined into function
 // 'f' ...") is a codegen error, pinned against clang 19 by the driver
-// test `neon_bf16_call_without_feature` (spec/codegen.md "Target
+// test `neon_bf16_call_without_feature` (spec/landed/codegen/WP-558.md "Target
 // features"). WP-558.
 //@ requires: target-aarch64
 //@ strict-diags

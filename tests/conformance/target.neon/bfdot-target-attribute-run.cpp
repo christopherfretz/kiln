@@ -1,7 +1,7 @@
 // [driver] `vbfdotq_f32` from a function with `target("bf16")` under
 // `-march=armv8.6-a+bf16` lowers to `llvm.aarch64.neon.bfdot` (and the
 // operands' `vcvtq_low/high_bf16_f32` to `bfcvtn`/`bfcvtn2`): each lane
-// of the result is r[i] + a[2i]*b[2i] + a[2i+1]*b[2i+1] (spec/codegen.md
+// of the result is r[i] + a[2i]*b[2i] + a[2i+1]*b[2i+1] (spec/landed/codegen/WP-558.md
 // "Target features"). WP-558.
 //@ expect: run
 //@ requires: target-aarch64

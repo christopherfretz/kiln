@@ -3677,6 +3677,8 @@ expression.
 clang's `LazilyCreateBuiltin`. kiln knows one builtin,
 `bool __builtin_is_constant_evaluated() noexcept` (id 722, clang's
 `BIis_constant_evaluated`; `kiln_ast::decl::builtin`).
+The AArch64 NEON target builtins (`__builtin_neon_*`, a generated
+table) are spec/landed/sema/WP-558.md "Target builtins".
 - **Declaration:** when an unqualified id-expression's lookup finds
   nothing and the name is a builtin (`lazily_create_builtin`), Sema
   declares it in the translation unit: an implicit `LinkageSpecDecl`

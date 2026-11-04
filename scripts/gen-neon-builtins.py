@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generate crates/kiln_ast/src/neon_builtins.rs, the AArch64 NEON / FP16
-builtin table (spec/sema-builtins.md "Target builtins", WP-558).
+builtin table (spec/landed/sema/WP-558.md "Target builtins", WP-558).
 
 The table holds every `__builtin_neon_*` name that kiln's resource headers
 `arm_neon.h` and `arm_fp16.h` (clang 19's) reference, sorted by name, with

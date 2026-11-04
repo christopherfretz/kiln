@@ -1,5 +1,5 @@
 //! Per-function `AArch64` target features: the `target("...")` attribute
-//! and clang's `checkTargetFeatures` (spec/codegen.md "Target features";
+//! and clang's `checkTargetFeatures` (spec/landed/codegen/WP-558.md "Target features";
 //! WP-558).
 
 use std::collections::BTreeMap;

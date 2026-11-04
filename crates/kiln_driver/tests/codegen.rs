@@ -565,7 +565,7 @@ fn pic_visibility_and_objects() {
 }
 
 /// A NEON builtin whose target feature the calling function lacks is an
-/// error only when the call is emitted (spec/codegen.md "Target
+/// error only when the call is emitted (spec/landed/codegen/WP-558.md "Target
 /// features"; tests/conformance/target.neon/bfdot-without-feature.cpp
 /// pins that `-fsyntax-only` accepts it): calling the `always_inline`
 /// `target("bf16,neon")` header wrapper from a plain function names the

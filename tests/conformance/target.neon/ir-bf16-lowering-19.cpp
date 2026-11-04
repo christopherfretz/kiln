@@ -3,7 +3,7 @@
 // `bfmlalb`/`bfmlalt`/`bfmmla`, `bfcvt`, `bfcvtn`/`bfcvtn2` (results
 // bitcast to the builtin's declared type), declared
 // `nocallback nofree nosync nounwind willreturn memory(none)`
-// (spec/codegen.md "Target features"). WP-558.
+// (spec/landed/codegen/WP-558.md "Target features"). WP-558.
 //@ requires: clang<22
 //@ requires: target-aarch64
 //@ expect: ir
