@@ -9443,6 +9443,10 @@ impl Sema<'_, '_> {
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
         let std = scope_s.is_none() && syntax != AttrSyntax::Gnu;
         let clang_scope = scope_s.as_deref() == Some("clang");
+        // The thread-safety family: known, ignored, no diagnostic (WP-606).
+        if crate::decl_attrs::is_thread_safety_attr(&n, syntax, clang_scope, self.clang_compat) {
+            return None;
+        }
         // clang 19 names only the attribute, not its scope.
         if scope_s.as_deref().is_some_and(|s| s != "gnu")
             && !(clang_scope
