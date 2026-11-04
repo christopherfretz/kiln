@@ -4676,6 +4676,57 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   (`set_aside_outer_immediates`; clang pushes a `ConstantEvaluated`
   context in `SubstDefaultTemplateArgument`). WP-286;
   `tests/conformance/expr.const/immediate-invocation-default-template-arg-*.cpp`.
+- **Invocations validated by constant initialization**
+  ([expr.const.imm]/1.2, [expr.const.defns]/1.6, [expr.const.init]/4;
+  WP-549). The initializer of a variable that is usable in constant
+  expressions or has constant initialization is manifestly
+  constant-evaluated, so a consteval call inside it is in an immediate
+  function context: it is validated by the variable's
+  constant-initialization check, not individually. An intermediate
+  result that is not a permitted result on its own (a class prvalue
+  whose member owns heap, `flat().d` with `consteval P flat()` and `P`
+  holding a vector) is accepted when the whole initializer is constant:
+  the temporary is destroyed at the end of the full-expression and only
+  the final value is checked. The rule:
+  - constexpr or constinit `v` (namespace scope, local, static data
+    member, variable template specialization): a failing outermost
+    invocation waits in `after_var`; `report_deferred_immediates(v,
+    constinit_ok)` drops it unreported when `v` is constexpr with an
+    evaluated value (`VarEvalState::Value`) or `check_constinit`
+    returned `true` (constant initializer; a destruction-only failure
+    counts), and otherwise re-evaluates and reports it after the
+    variable's own error (the WP-465 order). Wrappers keep no value, as
+    clang leaves them unvalued.
+  - any other variable that `checks_constant_init` (static or thread
+    storage duration, not constexpr/constinit): a failing invocation is
+    not reported when the initializer folds (`try_fold`), since it is
+    then a constant initializer ([basic.start.static]/2); otherwise it
+    is reported in place.
+  - a variable template specialization whose initializer is shared with
+    the pattern (non-dependent): `templ/subst/decls.rs` `var_init`
+    brackets the substitution with `note_var_init_subst(Some(v))`, and
+    `recheck_shared_invocation` defers its failed re-check to `v`'s
+    `after_var` (flagged as a repeat report) instead of reporting it,
+    so the specialization's check decides as above; this also removes
+    the second report a failed pattern invocation used to get. When
+    the substitution fails, `v`'s pending entries are reported after
+    its error.
+  - an instantiated initializer whose pattern is a full-expression with
+    cleanups is rebuilt from the wrapper's operand and re-wrapped
+    around the converted instance (clang's `TransformInitializer`), so
+    the temporaries of `template<class T> constexpr T v = q().d;` live
+    until the conversion to `T` is done
+    (`temp.inst/variable-template-dependent-type-temporary-member.cpp`).
+
+  Elsewhere (a return statement, a constexpr function body, an
+  automatic variable, a static-storage variable whose initializer does
+  not fold) each outermost invocation is still checked on its own.
+  Clang 19 and 22 check the call individually in an in-class static
+  data member initializer, and clang 19 also in a variable template
+  specialization whose call has a value-dependent argument or that is
+  first instantiated from a non-constant context; kiln follows GCC 16.1
+  (and clang 22 for the latter) and accepts them. Tests:
+  `expr.const/immediate-invocation-constant-init{,-run,-neg,-dependent,-static-member,-reflection,-static-array}.cpp`.
 - **Default-argument temporaries** ([class.temporary]/6, WP-216): a
   default argument is its own full-expression at the definition
   (`ExprWithCleanups`), but each use takes over its cleanups: the

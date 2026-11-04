@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, Defaulted, FnSpec};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, Defaulted, FnSpec, VarEvalState};
 use kiln_ast::expr::{ExprFlags, ExprKind};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
@@ -77,6 +77,11 @@ pub(crate) struct ImmPending {
     /// Its failed invocations are reported after its constant
     /// initialization is checked ([`Sema::report_deferred_immediates`]).
     var_defer: bool,
+    /// The `constexpr` or `constinit` variable whose instantiated
+    /// initializer is being substituted: its shared failed invocations
+    /// ([`Sema::recheck_shared_invocation`]) wait for its check, as
+    /// [`ImmPending::var_defer`]'s do.
+    shared_var: Option<DeclId>,
     /// The next full-expression is a default argument or default member
     /// initializer: its invocations are not checked here.
     default_init: bool,
@@ -96,8 +101,9 @@ pub(crate) struct ImmState {
     reasons: HashMap<DeclId, Escalation>,
     /// The failed immediate invocations of a `constexpr` or `constinit`
     /// variable's initializer, with the variable and the callee, to be
-    /// reported after the variable's check.
-    after_var: Vec<(DeclId, ExprId, DeclId)>,
+    /// reported after the variable's check; `true` for one of a
+    /// template definition reported again ([`Sema::recheck_shared_invocation`]).
+    after_var: Vec<(DeclId, ExprId, DeclId, bool)>,
 }
 
 /// The pending state of an enclosing full-expression set aside by
@@ -314,21 +320,50 @@ impl Sema<'_, '_> {
     /// Reports the failed immediate invocations of `v`'s initializer set
     /// aside by [`Sema::finish_immediate_invocations`], evaluating each
     /// again (`v` now has its initializer and its evaluation state).
-    pub(crate) fn report_deferred_immediates(&mut self, v: DeclId) {
+    ///
+    /// None is reported when the initializer as a whole was just found to
+    /// be a constant initializer (`constexpr` `v` has a value, or
+    /// `constinit_ok`): that evaluation covered the invocations, whose
+    /// results need not be permitted results of their own — the heap a
+    /// consteval prvalue owns is freed at the end of the full-expression
+    /// (clang's `CheckCompleteVariableDeclaration` evaluates the
+    /// initializer whole and leaves the wrappers unvalued; spec/sema.md
+    /// "Immediate invocations").
+    pub(crate) fn report_deferred_immediates(&mut self, v: DeclId, constinit_ok: bool) {
         if self.imm.after_var.is_empty() {
             return;
         }
         let all = std::mem::take(&mut self.imm.after_var);
         let (mine, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|&(w, ..)| w == v);
         self.imm.after_var = rest;
-        for (_, c, callee) in mine {
+        if mine.is_empty() {
+            return;
+        }
+        let has_value = self.ast.decls.var(v).is_some_and(|x| {
+            x.spec.is_constexpr() && matches!(x.eval.state(), VarEvalState::Value(_))
+        });
+        if has_value || constinit_ok {
+            return;
+        }
+        for (_, c, callee, again) in mine {
             match self.eval_immediate(c) {
-                Ok(val) => {
+                // A shared wrapper is the template definition's.
+                Ok(val) if !again => {
                     let _ = self.ast.exprs.set_constant_value(c, val);
                 }
-                Err(fail) => self.report_immediate_call(c, callee, fail, None, false),
+                Ok(_) => {}
+                Err(fail) => self.report_immediate_call(c, callee, fail, None, again),
             }
         }
+    }
+
+    /// The initializer of instantiated variable `v` is being substituted
+    /// (`Some`) or done (`None`); see [`ImmPending::shared_var`]. Returns
+    /// the previous value, which the caller restores when it is done (a
+    /// variable template instantiated inside another one's initializer).
+    pub(crate) fn note_var_init_subst(&mut self, v: Option<DeclId>) -> Option<DeclId> {
+        let v = v.filter(|&v| self.checked_var(v));
+        std::mem::replace(&mut self.imm.pending.shared_var, v)
     }
 
     /// The variable whose initializer the next full-expression is, if
@@ -450,7 +485,15 @@ impl Sema<'_, '_> {
         let r =
             self.eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at));
         let Err(fail) = r else { return };
-        match self.func.as_ref().map(|s| s.decl).filter(|&g| self.is_immediate_escalating(g)) {
+        let escalating =
+            self.func.as_ref().map(|s| s.decl).filter(|&g| self.is_immediate_escalating(g));
+        if let Some(v) = self.imm.pending.shared_var
+            && escalating.is_none()
+        {
+            self.imm.after_var.push((v, c, f, true));
+            return;
+        }
+        match escalating {
             Some(g) => {
                 let why = Escalation {
                     loc: at,
@@ -731,6 +774,15 @@ impl Sema<'_, '_> {
         let deferred = var.is_some_and(|v| self.checks_constant_init(v))
             && results.iter().all(Result::is_ok)
             && self.try_fold(e).is_some();
+        // One that is not a permitted result of its own (a prvalue owning
+        // heap the full-expression frees) is validated by that check
+        // instead: a constexpr or constinit variable's after it
+        // ([`Sema::report_deferred_immediates`]), another's here.
+        let validated = report_after.is_none()
+            && escalating.is_none()
+            && results.iter().any(Result::is_err)
+            && var.is_some_and(|v| self.checks_constant_init(v))
+            && self.try_fold(e).is_some();
         for (&(c, callee), r) in outer.iter().zip(results) {
             match r {
                 Ok(v) => {
@@ -758,7 +810,8 @@ impl Sema<'_, '_> {
                         self.escalate(g, why);
                     }
                     None => match report_after {
-                        Some(v) => self.imm.after_var.push((v, c, callee)),
+                        Some(v) => self.imm.after_var.push((v, c, callee, false)),
+                        None if validated => {}
                         None => self.report_immediate_call(c, callee, fail, None, false),
                     },
                 },

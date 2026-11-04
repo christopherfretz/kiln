@@ -5286,8 +5286,8 @@ impl Sema<'_, '_> {
         };
         self.act_on_init_inner(v, init);
         self.check_static_tls(v, paren);
-        self.check_constinit(v);
-        self.report_deferred_immediates(v);
+        let constinit_ok = self.check_constinit(v);
+        self.report_deferred_immediates(v, constinit_ok);
         self.check_consteval_only_var(v);
         self.initializing = None;
         self.lambda_mangle.var = None;
@@ -5919,13 +5919,14 @@ impl Sema<'_, '_> {
     /// variable has a constant initializer (clang
     /// `CheckCompleteVariableDeclaration`). Only the initialization is
     /// evaluated, and its value is not made usable in constant
-    /// expressions; destruction is not checked.
-    fn check_constinit(&mut self, v: DeclId) {
+    /// expressions; destruction is not checked. Whether `v` is `constinit`
+    /// and its initializer was found to be a constant initializer.
+    fn check_constinit(&mut self, v: DeclId) -> bool {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var || vn.has(DeclFlags::INVALID) {
-            return;
+            return false;
         }
-        let Some((c, at)) = self.constinit_of(v) else { return };
+        let Some((c, at)) = self.constinit_of(v) else { return false };
         let loc = vn.loc();
         if c != v {
             let name = self.decl_name(v);
@@ -5933,23 +5934,25 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_missing_constinit, loc).arg(name).with_note(note);
             self.emit(msg);
         }
-        let Some(e) = self.ast.decls.var(v).and_then(|x| x.init) else { return };
+        let Some(e) = self.ast.decls.var(v).and_then(|x| x.init) else { return false };
         if self.has_errors_in(e)
             || self.expr_is_value_dependent(e)
             || vn.ty().is_some_and(|t| self.is_dependent_type(t))
         {
-            return;
+            return false;
         }
         if let Err(mut f) = self.eval_const(e, EvalContext::init(v, loc)) {
             if f.kind == kiln_oven::FailKind::Destruction {
-                return;
+                return true;
             }
             let err_at = Self::fold_lone_invalid(&mut f, loc);
             let note = self.diag(DiagId::note_constinit_specified_here, at);
             let msg = self.diag(DiagId::sema_constinit_non_constant, err_at).with_note(note);
             let msg = Self::with_failure_notes(msg, f);
             self.emit(msg);
+            return false;
         }
+        true
     }
 
     /// [dcl.constexpr]/6: a `constexpr` variable has a literal type
