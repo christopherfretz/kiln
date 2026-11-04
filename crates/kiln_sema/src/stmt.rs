@@ -1835,6 +1835,14 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether a call of function `d` ends its block in the control-flow
+    /// graph (clang `CFGBuilder::VisitCallExpr`: `isNoReturn()` or GNU
+    /// `analyzer_noreturn`).
+    fn cfg_noreturn_fn(&self, d: DeclId) -> bool {
+        self.ast.is_noreturn_fn(d)
+            || self.find_attr(d, kiln_ast::attr::AttrKind::ANALYZER_NORETURN).is_some()
+    }
+
     pub(crate) fn is_noreturn_call(&self, e: ExprId) -> bool {
         let n = self.ast.exprs.get(e);
         if !matches!(
@@ -1857,14 +1865,14 @@ impl Sema<'_, '_> {
                             .is_some_and(|i| i.attrs & builtin::attr::NORETURN != 0);
                     }
                     return self.ast.decls.get(d).kind().is_function()
-                        && self.ast.is_noreturn_fn(d);
+                        && self.cfg_noreturn_fn(d);
                 }
                 // `s.m()`: clang's CFG uses the direct callee, virtual or
                 // not.
                 ExprKind::MemberExpr => {
                     let d = self.ast.exprs.decl(c);
                     return self.ast.decls.get(d).kind().is_function()
-                        && self.ast.is_noreturn_fn(d);
+                        && self.cfg_noreturn_fn(d);
                 }
                 _ => return false,
             }

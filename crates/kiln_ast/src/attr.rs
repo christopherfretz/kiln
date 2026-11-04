@@ -197,6 +197,11 @@ impl AttrKind {
     /// `StringLitId`. kiln keeps it only together with `weakref`, whose
     /// target it names.
     pub const ALIAS: AttrKind = AttrKind(181);
+    /// GNU `analyzer_noreturn` on a function (clang
+    /// `AnalyzerNoReturnAttr`): a call of it ends its block in sema's
+    /// control-flow graph (as `noreturn` does), with no effect on code
+    /// generation.
+    pub const ANALYZER_NORETURN: AttrKind = AttrKind(182);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

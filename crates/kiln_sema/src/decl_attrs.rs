@@ -45,6 +45,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::WEAK => "weak",
         AttrKind::WEAKREF => "weakref",
         AttrKind::ALIAS => "alias",
+        AttrKind::ANALYZER_NORETURN => "analyzer_noreturn",
         AttrKind::CONST => "const",
         AttrKind::PURE => "pure",
         AttrKind::COLD => "cold",
@@ -480,6 +481,28 @@ impl Sema<'_, '_> {
                 "functions and Objective-C methods",
             ),
             AttrKind::UNINITIALIZED => self.check_uninitialized_subject(d, kind, node),
+            // clang `handleAnalyzerNoReturnAttr`: a function, or a
+            // declaration of function or block pointer type (ignored with
+            // a warning otherwise).
+            AttrKind::ANALYZER_NORETURN
+                if !kind.is_function()
+                    && !((is_var_kind(kind) || kind == DeclKind::Field)
+                        && self.ast.decls.get(d).ty().is_some_and(|t| {
+                            self.ast.types.is_pointer(t)
+                                && self
+                                    .ast
+                                    .types
+                                    .pointee(t)
+                                    .is_some_and(|p| self.ast.types.is_function(p))
+                        })) =>
+            {
+                wrong(
+                    self,
+                    DiagId::sema_attribute_wrong_decl_type,
+                    "analyzer_noreturn",
+                    "functions, methods and blocks",
+                )
+            }
             // clang `GNUInline`: `SubjectList<[Function]>` (ignored with a
             // warning).
             AttrKind::GNU_INLINE if !kind.is_function() => {

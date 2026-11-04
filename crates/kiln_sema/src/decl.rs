@@ -10468,6 +10468,8 @@ fn attr_kind_of(
         // clang `GCC<"weakref">`, `GCC<"alias">`.
         ("weakref", _, true) => AttrKind::WEAKREF,
         ("alias", _, true) => AttrKind::ALIAS,
+        // clang `GNU<"analyzer_noreturn">`: no `[[...]]` spelling.
+        ("analyzer_noreturn", _, _) if gnu_syntax => AttrKind::ANALYZER_NORETURN,
         ("const", _, true) => AttrKind::CONST,
         ("pure", _, true) => AttrKind::PURE,
         ("cold", _, true) => AttrKind::COLD,
