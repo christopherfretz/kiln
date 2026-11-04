@@ -10,7 +10,7 @@
 //! transparently wherever a namespace is expected.
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::names::DeclName;
+use kiln_ast::names::{DeclName, DeclNameKind};
 use kiln_ast::types::Nns;
 use kiln_ast::{DeclHead, DeclId, NnsId, QualType};
 use kiln_diag::DiagId;
@@ -117,24 +117,31 @@ impl Sema<'_, '_> {
             }
         }
         let qk = self.kind_of(q.ctx);
+        if self.literal_operator_qualifier_error(q, name, name_loc) {
+            return None;
+        }
         if let Some(class) = self.member_spec_class()
             && qk != DeclKind::Enum
         {
             return self.class_using_declarator(class, q, name, name_loc, using_loc, false);
         }
-        if name.as_ident().is_none() && self.in_local_scope() {
-            // Block scopes hold identifiers only.
-            self.unsupported("an operator name in a block-scope using-declarator", name_loc);
+        let dependent = self.dependent_qualifier(q);
+        if name.as_ident().is_none() && self.in_local_scope() && dependent {
+            // A block-scope `using T::operator+;` is an
+            // `UnresolvedUsingValue` in clang, diagnosed when instantiated
+            // (the qualifier is a class, whose only nameable members here
+            // are enumerators, [namespace.udecl]/8); the local scope
+            // records non-identifier names only as resolved shadows
+            // (`Scope.local_names`).
+            self.unsupported(
+                "an operator name with a dependent qualifier in a block-scope using-declarator",
+                name_loc,
+            );
             return None;
         }
         if let Some(n) = name.as_ident()
             && self.in_local_scope()
-            && (self.is_dependent_ctx(q.ctx)
-                || self
-                    .ast
-                    .types
-                    .nns_flags(q.nns)
-                    .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION))
+            && dependent
         {
             // A dependent qualifier in a function template (`using
             // E<T>::A;`, an enumerator, [namespace.udecl]/8): clang's
@@ -208,6 +215,38 @@ impl Sema<'_, '_> {
             let _ = self.introduce_shadow(name, name_loc, t);
         }
         Some(using)
+    }
+
+    /// True if qualifier `q` is dependent (or instantiation-dependent).
+    fn dependent_qualifier(&self, q: Qualifier) -> bool {
+        self.is_dependent_ctx(q.ctx)
+            || self
+                .ast
+                .types
+                .nns_flags(q.nns)
+                .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
+    }
+
+    /// [over.literal]/2: a literal operator is a namespace member, so a
+    /// class, enumeration or dependent qualifier never names one (clang
+    /// `err_literal_operator_id_outside_namespace`, at any scope).
+    /// Reports it and returns true for such a declarator.
+    fn literal_operator_qualifier_error(
+        &mut self,
+        q: Qualifier,
+        name: DeclName,
+        name_loc: Loc,
+    ) -> bool {
+        if name.kind() != DeclNameKind::LiteralOperator
+            || matches!(self.kind_of(q.ctx), DeclKind::Namespace | DeclKind::TranslationUnit)
+        {
+            return false;
+        }
+        let msg = self
+            .diag(DiagId::sema_literal_operator_id_outside_namespace, name_loc)
+            .arg(self.refers_into_str(q.nns));
+        self.emit(msg);
+        true
     }
 
     /// One using-declarator `using typename qual name;`
@@ -708,10 +747,11 @@ impl Sema<'_, '_> {
             h = h.access(self.current_member_access());
         }
         let s = self.builder().using_shadow(h, target, prev);
-        if self.in_local_scope()
-            && let Some(n) = name.as_ident()
-        {
-            self.push_local(n, s);
+        if self.in_local_scope() {
+            match name.as_ident() {
+                Some(n) => self.push_local(n, s),
+                None => self.push_local_name(name, s),
+            }
         }
         Some(s)
     }
