@@ -2466,7 +2466,10 @@ recomputed exactly as for non-template code (clang's
   is rebuilt clause by clause and re-run through the initialization
   action. A semantic list that has a written form (`syntactic_list`,
   spec/ast.md §5.6) is rebuilt from that form, as clang's
-  `TransformInitListExpr` uses the syntactic form. A
+  `TransformInitListExpr` uses the syntactic form. Any other semantic
+  list is rebuilt from its clauses without the trailing fillers
+  (`ImplicitValueInitExpr`, `CXXDefaultInitExpr`) its check appended,
+  which clang's syntactic form never holds (WP-613, spec/sema.md §6). A
   `DesignatedInitExpr` gives its designators back, with array indices
   substituted. A `PackExpansionExpr` of a `DesignatedInitExpr` expands to
   one designated clause per element. Designated lists in default member

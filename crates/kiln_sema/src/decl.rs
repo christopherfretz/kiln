@@ -2705,7 +2705,8 @@ impl Sema<'_, '_> {
             self.act_on_trailing_requires(decl, r);
         }
         self.set_member_access(decl);
-        if let Some(t) = self.finish_template_pattern(decl) {
+        let templ = self.finish_template_pattern(decl);
+        if let Some(t) = templ {
             self.set_member_access(t);
             if d.qualifier.is_some() && self.templ.member_spec.is_some() {
                 self.specialize_member_template(t);
@@ -2714,10 +2715,11 @@ impl Sema<'_, '_> {
         self.act_on_asm_label(ds, d, decl, &mut attrs);
         if d.qualifier.is_none() {
             // Operator and conversion function names too: a member
-            // `operator[]` hides a using-declared base one
-            // ([namespace.udecl]/14).
+            // `operator[]` hides a using-declared base one; a member
+            // template hides a base member template, so the template
+            // (not its pattern) is compared ([namespace.udecl]/14).
             let dn = self.ast.decls.get(decl).name();
-            self.check_using_shadow_conflict(decl, dn);
+            self.check_using_shadow_conflict(templ.unwrap_or(decl), dn);
         }
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
@@ -2760,17 +2762,21 @@ impl Sema<'_, '_> {
             self.act_on_trailing_requires(decl, r);
         }
         self.set_member_access(decl);
-        if let Some(t) = self.finish_template_pattern(decl) {
+        let templ = self.finish_template_pattern(decl);
+        if let Some(t) = templ {
             self.set_member_access(t);
             if d.qualifier.is_some() && self.templ.member_spec.is_some() {
                 self.specialize_member_template(t);
             }
         }
-        if d.qualifier.is_none() && self.kind_of(decl) == DeclKind::CXXConversion {
+        if d.qualifier.is_none()
+            && matches!(self.kind_of(decl), DeclKind::CXXConversion | DeclKind::CXXMethod)
+        {
             // A conversion function hides a using-declared base one with
-            // the same target type ([namespace.udecl]/14).
+            // the same target type, a member `operator=` (template) one
+            // with the same signature ([namespace.udecl]/14).
             let dn = self.ast.decls.get(decl).name();
-            self.check_using_shadow_conflict(decl, dn);
+            self.check_using_shadow_conflict(templ.unwrap_or(decl), dn);
         }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
@@ -3545,6 +3551,7 @@ impl Sema<'_, '_> {
             head: self.templ.cur,
             requires: d.trailing_requires,
             enable_if: self.new_fn_enable_if(&d.attrs),
+            member_using: false,
         };
         let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
