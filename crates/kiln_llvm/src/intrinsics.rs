@@ -349,6 +349,34 @@ pub fn debugtrap(m: &mut Module) -> FuncId {
     declare(m, "llvm.debugtrap", TypeId::VOID, &[], &[], Shape::NoUnwind(false))
 }
 
+/// `void @llvm.prefetch.p0(ptr nocapture readonly, i32 immarg rw, i32
+/// immarg locality, i32 immarg cache)`: `nocallback nofree nosync nounwind
+/// willreturn memory(argmem: readwrite, inaccessiblemem: readwrite)`
+/// (WP-610).
+pub fn prefetch(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.prefetch", &[p]);
+    let f = Attr::Flag;
+    let imm: &[Attr] = &[f(ImmArg)];
+    let params: [(TypeId, &[Attr]); 4] = [
+        (p, &[f(NoCapture), f(ReadOnly)]),
+        (TypeId::I32, imm),
+        (TypeId::I32, imm),
+        (TypeId::I32, imm),
+    ];
+    let mem = MemoryEffects {
+        argmem: ModRef::ReadWrite,
+        inaccessiblemem: ModRef::ReadWrite,
+        ..MemoryEffects::default()
+    };
+    declare(m, &name, TypeId::VOID, &params, &[], Shape::Basic(Some(mem)))
+}
+
+/// `void @llvm.x86.sse2.pause()`: `nounwind` (WP-610).
+pub fn x86_sse2_pause(m: &mut Module) -> FuncId {
+    declare(m, "llvm.x86.sse2.pause", TypeId::VOID, &[], &[], Shape::NoUnwind(false))
+}
+
 /// `ptr @llvm.frameaddress.p0(i32 immarg level)`.
 pub fn frameaddress(m: &mut Module) -> FuncId {
     let p = ptr(m);

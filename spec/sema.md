@@ -3798,6 +3798,11 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
 `BIis_constant_evaluated`; `kiln_ast::decl::builtin`).
 The AArch64 NEON target builtins (`__builtin_neon_*`, a generated
 table) are spec/landed/sema/WP-558.md "Target builtins".
+`void __builtin_ia32_pause() noexcept` (kiln-private id 2152, `v`,
+`NoThrow`; WP-610) is the one x86-64 target builtin: declared only when
+the target is x86-64 (`lazily_create_builtin` / `is_builtin_name` via
+`target_has_builtin`), an undeclared identifier elsewhere, never a
+constant expression (`target.x86/ia32-pause-*.cpp`).
 - **Declaration:** when an unqualified id-expression's lookup finds
   nothing and the name is a builtin (`lazily_create_builtin`), Sema
   declares it in the translation unit: an implicit `LinkageSpecDecl`
@@ -3995,6 +4000,16 @@ table) are spec/landed/sema/WP-558.md "Target builtins".
     with its own name in the warning
     (`ext.gnu.builtins/return-address-args.cpp`).
     `__builtin_debugtrap()` takes no argument.
+  - `__builtin_prefetch(addr [, rw [, locality]])` (id 976, `vvC*.`,
+    `NoThrow, Const`; `check_prefetch`, clang `BuiltinPrefetch`; WP-610):
+    `addr` converts to `const void *` as a parameter; more than three
+    arguments is `too many arguments to function call, expected at most
+    3, have N` at the `)`; a non-dependent `rw` / `locality` must fold
+    (`argument to '__builtin_prefetch' must be a constant integer`, at the
+    callee) into [0, 1] / [0, 3] (`argument value V is outside the valid
+    range [0, M]`, at the callee); a dependent one is checked at
+    instantiation. The call is `void` and never a constant expression
+    (the Oven traps it; `ext.gnu.builtins/prefetch-{args,template-args,constexpr}.cpp`).
   - `__builtin_elementwise_add_sat(x, y)` / `_sub_sat(x, y)` (custom,
     `vector_ops.rs` `builtin_elementwise_sat`; WP-432). At 22
     (`BuiltinElementwiseMath` with clang 22's integer restriction): both

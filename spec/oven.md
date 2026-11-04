@@ -748,7 +748,8 @@ literal is one instruction and one step, not an interpreted loop.
   `std::allocator<T>::allocate`/`deallocate` (WP-061b; clang's
   untyped-memory note; inside them they allocate, "Transient
   allocation", WP-212); `__builtin_debugtrap`, `__builtin_frame_address`
-  and `__builtin_return_address`, noted at the call's begin (WP-432).
+  and `__builtin_return_address`, noted at the call's begin (WP-432);
+  `__builtin_prefetch` and `__builtin_ia32_pause` likewise (WP-610).
 - **Floating-point math, P0533** (WP-365; `bi::FP_MATH`, sub = float
   code | op << 4 | `SECOND` for the pointer output; `softfloat::math`):
   `ceil`/`floor`/`trunc`/`round`/`roundeven`/`rint`/`nearbyint`,
