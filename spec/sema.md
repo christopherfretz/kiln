@@ -3152,6 +3152,37 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     target of using declaration already in scope`, and is marked invalid;
     in a class a member function instead hides the shadow
     ([namespace.udecl]/14, `Decls::hidden_shadow`).
+  - **Member hiding** ([namespace.udecl]/14, WP-612). In a class, a
+    member function or member function template and a base member
+    function (template) a using-declarator introduces never conflict:
+    the member hides the introduced one exactly when both are templates
+    or both are not and they *correspond under the member
+    using-declaration rules* (`member_hides_using_target`, clang's
+    `IsOverload` with `UseMemberUsingDeclRules`): the same
+    parameter-type-list, the same cv- and ref-qualifiers of a
+    non-static member, equivalent trailing requires-clauses and, for
+    templates, equivalent template heads ([temp.over.link]/6). The return
+    type takes no part, for templates either (`M& operator=(int)` hides a
+    using-declared `B& operator=(int)`; clang 19 also hides a template
+    differing only in its return type, gcc does not). Otherwise the two
+    overload and both are candidates. A member template is compared as
+    the `FunctionTemplate`, not its pattern. Either order works: a member
+    declared after the using-declarator marks the shadow hidden
+    (`check_using_shadow_conflict`, from ordinary member declarators and
+    from special-member ones: `operator=`, conversion functions); one
+    declared before it keeps the shadow from being made
+    (`introduce_shadow`). In an instantiated class template
+    specialization the using-declaration and the members are redone in
+    declaration order, so the comparison is between the instantiated
+    declarations (`D&` and `Map&` agree once `D` is `Map<T>`; the
+    `Map`/`MapBase`/`MatrixBase` `operator=` chain, including
+    `using ReadOnlyMapBase::Base::operator=;` naming an indirect base).
+    Known gap: a constrained member template of a class template
+    specialization keeps its pattern's constraints (`member_constraints`),
+    so it is not found equivalent to a constrained template of a
+    non-template class (or one at a different template depth); both then
+    stay candidates. Tests:
+    `tests/conformance/namespace.udecl/hide-*.cpp`.
   - An unqualified friend function (template) in a class of a namespace
     with a using-declarator of that name does not redeclare the shadow
     (redeclaration lookup skips it): a friend that does not correspond to

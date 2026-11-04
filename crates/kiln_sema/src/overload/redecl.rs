@@ -23,6 +23,10 @@ pub(crate) struct NewFn {
     pub requires: Option<ExprId>,
     /// Its `enable_if` conditions (`Sema::enable_if_list`).
     pub enable_if: kiln_ast::ids::ListId,
+    /// Compare under the member using-declaration rules (clang's
+    /// `UseMemberUsingDeclRules`, [namespace.udecl]/14): the return types
+    /// of function templates do not take part.
+    pub member_using: bool,
 }
 
 impl Sema<'_, '_> {
@@ -122,7 +126,9 @@ impl Sema<'_, '_> {
         match (old_head, new.head) {
             (None, None) => {}
             (Some(a), Some(b)) => {
-                if !self.ast.types.same_type(po.ret(), pn.ret()) || !self.heads_equivalent(a, b) {
+                if (!new.member_using && !self.ast.types.same_type(po.ret(), pn.ret()))
+                    || !self.heads_equivalent(a, b)
+                {
                     return false;
                 }
             }
