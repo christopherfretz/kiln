@@ -1866,41 +1866,38 @@ impl Compiler<'_> {
                 if let Some(v) = d.cond_var {
                     self.decl_one(v);
                 }
-                match kind {
-                    // Constant evaluation is always manifestly constant-evaluated.
-                    IfKind::Consteval => {
-                        if let Some(t) = d.then {
-                            self.stmt(t);
-                        }
+                let j = match d.cond {
+                    // [stmt.if]/4: `if consteval` takes its first
+                    // branch iff the evaluation is manifestly
+                    // constant-evaluated; a trial fold (codegen's
+                    // folding of a run-time `if` condition, clang
+                    // `EvaluateAsBooleanCondition` outside a constant
+                    // context) takes the other (WP-584).
+                    _ if matches!(kind, IfKind::Consteval | IfKind::NotConsteval) => {
+                        let r = self.reg();
+                        self.emit(Op::IsConstEval, 16, &[r]);
+                        self.uses_cc = true;
+                        Some(self.jmp_if(r, kind == IfKind::NotConsteval))
                     }
-                    IfKind::NotConsteval => {
-                        if let Some(t) = d.els {
-                            self.stmt(t);
-                        }
+                    Some(c) => {
+                        let r = self.rv(c);
+                        self.cond_bindings(d.cond_var);
+                        Some(self.jmp_if(r, false))
                     }
-                    _ => {
-                        let j = match d.cond {
-                            Some(c) => {
-                                let r = self.rv(c);
-                                self.cond_bindings(d.cond_var);
-                                Some(self.jmp_if(r, false))
-                            }
-                            None => None,
-                        };
-                        if let Some(t) = d.then {
-                            self.stmt(t);
-                        }
-                        if let Some(e) = d.els {
-                            let end = self.jmp();
-                            if let Some(j) = j {
-                                self.patch_here(j);
-                            }
-                            self.stmt(e);
-                            self.patch_here(end);
-                        } else if let Some(j) = j {
-                            self.patch_here(j);
-                        }
+                    None => None,
+                };
+                if let Some(t) = d.then {
+                    self.stmt(t);
+                }
+                if let Some(e) = d.els {
+                    let end = self.jmp();
+                    if let Some(j) = j {
+                        self.patch_here(j);
                     }
+                    self.stmt(e);
+                    self.patch_here(end);
+                } else if let Some(j) = j {
+                    self.patch_here(j);
                 }
                 self.close_scope();
                 self.next = m;
