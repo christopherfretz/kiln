@@ -154,6 +154,11 @@ impl SyntaxJob<'_> {
         if let Some(signed) = a.predef.char_signed {
             target.types.char_signed = signed;
         }
+        // WP-630: `cx16` makes 128-bit atomics lock-free (clang
+        // `X86TargetInfo::setMaxAtomicWidth`).
+        if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
+            target.types.max_atomic_inline_bytes = 16;
+        }
         let Some((mut pp, deps)) = job.build_preprocessor(sm, engine, interner, inputs, true)
         else {
             return;

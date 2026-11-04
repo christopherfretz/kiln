@@ -53,6 +53,7 @@ sema_anon_record_member_redecl = Error (2) "member of anonymous {0} redeclares '
 sema_anon_struct_not_member = Error (0) "anonymous structs and classes must be class members";
 sema_anon_union_not_static = Error (0) "anonymous unions at namespace or global scope must be declared 'static'";
 sema_argument_invalid_range = Error (3) "argument value {0} is outside the valid range [{1}, {2}]";
+sema_argument_outside_range = WarningError [ArgumentOutsideRange] (3) "argument value {0} is outside the valid range [{1}, {2}]";
 sema_arith_enum_enum = Error (3) "invalid {0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} different enumeration types ({1} and {2})";
 sema_arith_anon_enum_enum_deprecated = Warning [DeprecatedAnonEnumEnumConversion] (3) "{0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} different enumeration types ({1} and {2}) is deprecated";
 sema_arith_enum_enum_deprecated = Warning [DeprecatedEnumEnumConversion] (3) "{0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} different enumeration types ({1} and {2}) is deprecated";

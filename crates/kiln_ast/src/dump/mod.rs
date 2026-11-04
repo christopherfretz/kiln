@@ -2038,7 +2038,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             self.line.push_str(&String::from_utf8_lossy(self.ast.strings.bytes(l)));
             self.line.push('"');
         }
-        if node.kind == AttrKind::BUILTIN {
+        if node.kind == AttrKind::BUILTIN || node.kind == AttrKind::MIN_VECTOR_WIDTH {
             let _ = write!(self.line, " {}", node.a);
         }
         if node.kind == AttrKind::FORMAT {

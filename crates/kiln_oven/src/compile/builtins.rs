@@ -772,9 +772,16 @@ impl Compiler<'_> {
             | id::DEBUGTRAP
             | id::FRAME_ADDRESS
             | id::RETURN_ADDRESS
-            // WP-610: nor `__builtin_prefetch` and `__builtin_ia32_pause`.
+            // WP-610: nor `__builtin_prefetch`.
             | id::PREFETCH
-            | id::IA32_PAUSE => self.trap_loc(begin, INVALID.into()),
+            // WP-630: nor the nontemporal accesses and
+            // `__builtin_nondeterministic_value`.
+            | id::NONTEMPORAL_STORE
+            | id::NONTEMPORAL_LOAD
+            | id::NONDETERMINISTIC_VALUE => self.trap_loc(begin, INVALID.into()),
+            // WP-630: the x86 builtins clang evaluates; any other is not a
+            // constant expression.
+            _ if id::x86::is_x86(bid) => return Some(self.x86_builtin_call(e, bid, args, dst)),
             // WP-365: the P0533 `<cmath>` set, exact in every format.
             id::SIGNBIT
             | id::ISGREATER
@@ -1147,6 +1154,77 @@ impl Compiler<'_> {
         let t = self.ty(pointee);
         let info = self.o.types.info(t);
         (false, if info.size == 0 { 0 } else { info.align })
+    }
+
+    /// WP-630: the x86 builtin call `e` (clang 19's
+    /// `IntExprEvaluator::VisitBuiltinCallExpr`): `lzcnt` / `tzcnt` (the
+    /// width at zero), `bextr` / `bextri`, `bzhi`, `pdep` and `pext`, and
+    /// at `-fclang-compat=22` `addcarryx` / `subborrow` (clang 20: the
+    /// carry-in counts as 1 when nonzero; the operands, then the pointer,
+    /// are evaluated, the wrapped result is stored and the carry-out is
+    /// the value). Any other x86 builtin is not a constant expression.
+    fn x86_builtin_call(&mut self, e: ExprId, bid: u32, args: &[ExprId], dst: u32) -> u32 {
+        let begin = self.begin(e);
+        let name = id::info(bid).map_or("", |i| i.name);
+        let n = name.strip_prefix(id::x86::PREFIX).unwrap_or(name);
+        let op = |s: &mut Self, k: u32, sub: u32, r: [u32; 3]| {
+            s.emit_site(Op::Builtin, k | sub << 8, &[dst, r[0], r[1], r[2], 0, 0], e, begin);
+        };
+        let int_op = match n {
+            "bextr_u32" | "bextr_u64" | "bextri_u32" | "bextri_u64" => Some(bi::BEXTR),
+            "bzhi_si" | "bzhi_di" => Some(bi::BZHI),
+            "pdep_si" | "pdep_di" => Some(bi::PDEP),
+            "pext_si" | "pext_di" => Some(bi::PEXT),
+            _ => None,
+        };
+        if let (Some(k), &[x, y]) = (int_op, args) {
+            let w = self.int_width(x);
+            let a = self.rv(x);
+            let b = self.rv(y);
+            op(self, bi::INT_OP, w | k << 8, [a, b, dst]);
+            return self.finish_builtin(dst);
+        }
+        match (n, args) {
+            (
+                "lzcnt_u16" | "lzcnt_u32" | "lzcnt_u64" | "tzcnt_u16" | "tzcnt_u32" | "tzcnt_u64",
+                &[x],
+            ) => {
+                let w = self.int_width(x);
+                let a = self.rv(x);
+                let fb = self.reg();
+                self.konst(fb, u128::from(w));
+                let k = if n.starts_with('l') { bi::CLZ } else { bi::CTZ };
+                op(self, k, w | 1 << 8, [a, fb, dst]);
+            }
+            (
+                "addcarryx_u32" | "addcarryx_u64" | "subborrow_u32" | "subborrow_u64",
+                &[ci, x, y, r],
+            ) if self.o.clang_compat >= 22 => {
+                let w = self.int_width(x);
+                let Some(rt) = self.ast().types.pointee(self.ast().exprs.get(r).ty()) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return self.finish_builtin(dst);
+                };
+                let rt = self.ty(rt);
+                let c = self.rv(ci);
+                let a = self.rv(x);
+                let b = self.rv(y);
+                let p = self.rv(r);
+                let sub = w | u32::from(n.starts_with("sub")) << 8 | bi::CARRY_BOOL_IN;
+                let v = self.reg();
+                self.emit_site(
+                    Op::Builtin,
+                    bi::CARRY | (sub | bi::CARRY_VALUE) << 8,
+                    &[v, a, b, c, 0, 0],
+                    e,
+                    begin,
+                );
+                op(self, bi::CARRY, sub, [a, b, c]);
+                self.emit_site(Op::Store, ak::ASSIGN, &[p, v, rt.0], e, begin);
+            }
+            _ => self.trap_loc(begin, INVALID.into()),
+        }
+        self.finish_builtin(dst)
     }
 
     fn finish_builtin(&mut self, dst: u32) -> u32 {

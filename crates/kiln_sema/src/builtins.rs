@@ -307,6 +307,11 @@ impl Sema<'_, '_> {
         else {
             return;
         };
+        // Another target's builtin name (`_mm_pause` on `AArch64`) is an
+        // ordinary function.
+        if !self.target_has_builtin(id) {
+            return;
+        }
         let Some(info) = builtin::info(id).copied() else { return };
         if !self.c_linkage_file_scope_fn_of_type(f, info.sig) {
             self.check_builtin_redecl(f, &info);
@@ -581,6 +586,18 @@ impl Sema<'_, '_> {
             }
         }
         let _ = self.builder().attach_attrs(f, &attrs);
+        // WP-630: clang `LazilyCreateBuiltin` declares a header builtin
+        // (C++ has no predefined library functions, but these are not
+        // ones), with `ext_implicit_lib_function_decl` and its header.
+        if let Some(h) = builtin::x86::header_of(id)
+            && loc != Loc::INVALID
+        {
+            let ty = self.ty_arg(ty);
+            let msg =
+                self.diag(DiagId::sema_implicit_lib_function_decl, loc).arg(info.name).arg(ty);
+            let note = self.diag(DiagId::note_include_header_or_declare, loc).arg(h).arg(info.name);
+            self.emit(msg.with_note(note));
+        }
         Some(f)
     }
 
@@ -795,6 +812,11 @@ impl Sema<'_, '_> {
             builtin::OPERATOR_NEW | builtin::OPERATOR_DELETE => {
                 return self.builtin_operator_new_delete(callee, b, id, args, loc, rparen);
             }
+            // WP-630.
+            builtin::NONTEMPORAL_STORE | builtin::NONTEMPORAL_LOAD => {
+                self.builtin_nontemporal(callee, id == builtin::NONTEMPORAL_STORE, args, rparen)
+            }
+            builtin::NONDETERMINISTIC_VALUE => self.builtin_nondeterministic_value(args, rparen),
             _ => {
                 self.unsupported("this builtin function", loc);
                 None
@@ -1060,7 +1082,8 @@ impl Sema<'_, '_> {
             return self.check_verbose_trap(args);
         }
         let mask = builtin::ice_params(id);
-        if mask == 0 {
+        let x86 = builtin::x86::row(id);
+        if mask == 0 && x86.is_none_or(|r| r.imms.is_empty()) {
             return true;
         }
         for (i, &a) in args.iter().enumerate().take(32) {
@@ -1074,6 +1097,9 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 return false;
             }
+        }
+        if let Some(r) = x86 {
+            return self.check_x86_imms(r.imms, callee, args);
         }
         if id == builtin::ALLOCA_WITH_ALIGN
             && let Some(&a) = args.get(1)
@@ -1163,6 +1189,91 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 return false;
             }
+        }
+        true
+    }
+
+    /// WP-630: clang `SemaX86::CheckBuiltinFunctionCall` for the x86
+    /// builtin call with the converted arguments `args`, once the integer
+    /// constant arguments are known to be constants: the 32-bit-only
+    /// builtins, then the rounding / SAE, gather-scatter scale and tile
+    /// checks, then the ranges, each reported at the call's start. A
+    /// value-dependent argument waits for instantiation. A range outside
+    /// the AMX tile numbers is `-Wargument-outside-range`, an error by
+    /// default that does not make the call invalid (clang
+    /// `BuiltinConstantArgRange` with `RangeIsError = false`). False after
+    /// an error.
+    fn check_x86_imms(
+        &mut self,
+        imms: &[builtin::x86::Imm],
+        callee: ExprId,
+        args: &[ExprId],
+    ) -> bool {
+        use builtin::x86::Imm;
+        let at = self.begin_loc(callee);
+        let value = |s: &mut Self, i: u8| {
+            let a = *args.get(usize::from(i))?;
+            if s.expr_is_value_dependent(a) { None } else { s.fold_int(a) }
+        };
+        let fail = |s: &mut Self, id: DiagId| {
+            let d = s.diag(id, at);
+            s.emit(d);
+            false
+        };
+        if imms.contains(&Imm::Only32Bit) {
+            return fail(self, DiagId::sema_x86_builtin_32_bit_only);
+        }
+        for &imm in imms {
+            let (i, rc) = match imm {
+                Imm::Rounding(i) => (i, true),
+                Imm::Sae(i) => (i, false),
+                _ => continue,
+            };
+            // clang: 4 (current direction) or 8 (no exceptions), with
+            // rounding control also 9 to 11, without it also 12.
+            let ok = |v: i128| v == 4 || v == 8 || if rc { (9..=11).contains(&v) } else { v == 12 };
+            if value(self, i).is_some_and(|v| !ok(v)) {
+                return fail(self, DiagId::sema_x86_invalid_rounding);
+            }
+        }
+        for &imm in imms {
+            if let Imm::Scale(i) = imm
+                && value(self, i).is_some_and(|v| !matches!(v, 1 | 2 | 4 | 8))
+            {
+                return fail(self, DiagId::sema_x86_invalid_scale);
+            }
+        }
+        let ranges = |imm: &Imm| match *imm {
+            Imm::Range(i, lo, hi) => Some((i, lo, hi, false)),
+            Imm::RangeError(i, lo, hi) => Some((i, lo, hi, true)),
+            _ => None,
+        };
+        // clang `CheckBuiltinTileArguments`: the tile numbers' ranges, then
+        // `CheckBuiltinTileDuplicate`.
+        let mut tiles = Vec::new();
+        for (i, lo, hi, hard) in imms.iter().filter_map(ranges) {
+            let Some(v) = value(self, i) else { continue };
+            if !(i128::from(lo)..=i128::from(hi)).contains(&v) {
+                let id = if hard {
+                    DiagId::sema_argument_invalid_range
+                } else {
+                    DiagId::sema_argument_outside_range
+                };
+                let d = self.diag(id, at).arg(v.to_string());
+                let d = d.arg(lo.to_string()).arg(hi.to_string());
+                self.emit(d);
+                if hard {
+                    return false;
+                }
+            }
+            if hard {
+                tiles.push(v);
+            }
+        }
+        if imms.contains(&Imm::DistinctTiles)
+            && tiles.iter().enumerate().any(|(k, t)| tiles[..k].contains(t))
+        {
+            return fail(self, DiagId::sema_x86_tile_duplicate);
         }
         true
     }
@@ -1577,6 +1688,87 @@ impl Sema<'_, '_> {
             return None;
         }
         Some((vec![a], QualType::BOOL))
+    }
+
+    /// `__builtin_nontemporal_store(v, p)` / `__builtin_nontemporal_load(p)`
+    /// (clang `BuiltinNontemporalOverloaded`; WP-630): `p` decayed must be
+    /// a pointer to an integer, floating, pointer or vector type (else an
+    /// error at the callee); a store converts `v` to the unqualified
+    /// pointee and is `void`, a load has the unqualified pointee's type.
+    fn builtin_nontemporal(
+        &mut self,
+        callee: ExprId,
+        store: bool,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        let n = if store { 2 } else { 1 };
+        if !self.builtin_arg_count(args, n, rparen) {
+            return None;
+        }
+        let at = self.begin_loc(callee);
+        let p = conv::decay(self, args[n - 1]);
+        let pt = self.ety(p);
+        if pt == QualType::ERROR {
+            return None;
+        }
+        let Some(vt) = self.ast.types.pointee(pt).filter(|_| self.ast.types.is_pointer(pt)) else {
+            let msg = self.diag(DiagId::sema_nontemporal_not_pointer, at).arg(self.ty_arg(pt));
+            self.emit(msg);
+            return None;
+        };
+        let vt = conv::strip_cv(self, vt);
+        let t = &self.ast.types;
+        let vector = matches!(t.canonical_view(vt), kiln_ast::types::TypeView::Vector { .. });
+        if !(t.is_integral(vt) || t.is_pointer(vt) || t.is_floating(vt) || vector) {
+            let msg = self.diag(DiagId::sema_nontemporal_bad_pointee, at).arg(self.ty_arg(pt));
+            self.emit(msg);
+            return None;
+        }
+        if !store {
+            return Some((vec![p], vt));
+        }
+        let v = args[0];
+        match conv::implicit_convert(self, v, vt, ConvCtx::Argument) {
+            Ok(x) => Some((vec![x, p], QualType::VOID)),
+            Err(err) => {
+                let msg = err.diag(self, v);
+                self.emit(msg);
+                None
+            }
+        }
+    }
+
+    /// `__builtin_nondeterministic_value(x)` (clang
+    /// `BuiltinNonDeterministicValue`; WP-630): one argument of a builtin
+    /// (not a pointer or enumeration) or vector type, kept as written; the
+    /// call has its type.
+    fn builtin_nondeterministic_value(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 1, rparen) {
+            return None;
+        }
+        let a = args[0];
+        let t = self.ety(a);
+        if t == QualType::ERROR {
+            return None;
+        }
+        let view = self.ast.types.canonical_view(t);
+        let vector = matches!(view, kiln_ast::types::TypeView::Vector { .. });
+        if !(self.ast.types.builtin(t).is_some() || vector) {
+            let id = if self.clang_compat >= 22 {
+                DiagId::sema_nondeterministic_value_arg
+            } else {
+                DiagId::sema_nondeterministic_value_arg_19
+            };
+            let msg = self.diag(id, self.begin_loc(a)).arg(self.ty_arg(t));
+            self.emit(msg);
+            return None;
+        }
+        Some((vec![a], self.non_reference(t)))
     }
 
     /// `__builtin_is_string_literal(p)` (GCC 16, WP-484): one pointer to a
@@ -2044,15 +2236,16 @@ impl Sema<'_, '_> {
     }
 
     /// Whether the target declares builtin `id`: the NEON builtins are
-    /// `AArch64` target builtins (WP-558), `__builtin_ia32_pause` an
-    /// x86-64 one (WP-610); every other builtin is target-independent.
-    fn target_has_builtin(&self, id: u32) -> bool {
+    /// `AArch64` target builtins (WP-558), the x86 ones x86-64 target
+    /// builtins (WP-610, WP-630); every other builtin is
+    /// target-independent.
+    pub(crate) fn target_has_builtin(&self, id: u32) -> bool {
         use kiln_abi::target::Arch;
         let arch = self.abi.triple.arch;
         if builtin::neon::is_neon(id) {
             return arch == Arch::AArch64;
         }
-        id != builtin::IA32_PAUSE || arch == Arch::X86_64
+        !builtin::x86::is_x86(id) || arch == Arch::X86_64
     }
 
     /// The builtin function `callee` (through parentheses) names, if it

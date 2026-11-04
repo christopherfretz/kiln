@@ -1,11 +1,12 @@
-//! Per-function `AArch64` target features: the `target("...")` attribute
-//! and clang's `checkTargetFeatures` (spec/landed/codegen/WP-558.md "Target features";
-//! WP-558).
+//! Per-function target features: the `target("...")` attribute and
+//! clang's `checkTargetFeatures` (spec/landed/codegen/WP-558.md "Target
+//! features", WP-558, for `AArch64`; spec/landed/codegen/WP-630.md, WP-630,
+//! for x86-64).
 
 use std::collections::BTreeMap;
 
 use kiln_ast::attr::AttrKind;
-use kiln_ast::decl::builtin::neon;
+use kiln_ast::decl::builtin::{neon, x86};
 use kiln_ast::ids::RawId;
 use kiln_ast::{DeclId, ExprId, StringLitId};
 use kiln_diag::{Diag, DiagId};
@@ -32,7 +33,7 @@ impl Cg<'_> {
 
     /// The features of `d`'s `target("...")` attribute, if it has one and
     /// the driver gave a parser ([`crate::CodegenOptions::target_attr`]).
-    fn target_attr_features(&self, d: DeclId) -> Option<crate::TargetAttrFeatures> {
+    pub(crate) fn target_attr_features(&self, d: DeclId) -> Option<crate::TargetAttrFeatures> {
         let parse = self.opts.target_attr?;
         let s = self.target_attr_str(d)?;
         let module: Vec<String> = self
@@ -49,6 +50,9 @@ impl Cg<'_> {
     /// [`crate::CodegenOptions::target_features`], then the features of
     /// `d`'s `target("...")` attribute (clang `getFunctionFeatureMap`).
     pub(crate) fn feature_map(&self, d: Option<DeclId>) -> FeatureMap {
+        if self.is_x86() {
+            return self.x86_feature_map(d);
+        }
         let mut f: FeatureMap = [
             ("fp-armv8", true),
             ("neon", true),
@@ -62,6 +66,29 @@ impl Cg<'_> {
         let attr = d.and_then(|d| self.target_attr_features(d));
         let attr = attr.iter().flat_map(|a| &a.features);
         for e in self.opts.target_features.iter().chain(attr) {
+            if let Some((sign, name)) = e.split_at_checked(1) {
+                f.insert(name.to_owned(), sign == "+");
+            }
+        }
+        f
+    }
+
+    /// The x86-64 features of function `d` (`None`: the module's): the
+    /// `-march=` CPU's ([`crate::CodegenOptions::target_features`];
+    /// `x86-64`'s without one), unless its `target("...")` attribute names
+    /// a CPU (`arch=`), then the map of that attribute (clang
+    /// `getFunctionFeatureMap`).
+    fn x86_feature_map(&self, d: Option<DeclId>) -> FeatureMap {
+        const X86_64: [&str; 7] = ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87"];
+        let mut f: FeatureMap = FeatureMap::new();
+        let attr = d.and_then(|d| self.target_attr_features(d));
+        let own_cpu = attr.as_ref().is_some_and(|a| a.cpu.is_some());
+        if self.opts.target_features.is_empty() && !own_cpu {
+            f.extend(X86_64.iter().map(|n| ((*n).to_owned(), true)));
+        }
+        let module = self.opts.target_features.iter().filter(|_| !own_cpu);
+        let attr = attr.iter().flat_map(|a| &a.features);
+        for e in module.chain(attr) {
             if let Some((sign, name)) = e.split_at_checked(1) {
                 f.insert(name.to_owned(), sign == "+");
             }
@@ -92,6 +119,43 @@ impl Cg<'_> {
         let d = Diag::new(DiagId::cg_builtin_needs_feature, Span::empty(self.ast.begin_loc(e)))
             .arg(row.info.name.to_owned())
             .arg(row.features.to_owned());
+        self.diags.push(d);
+        false
+    }
+
+    /// clang `checkTargetFeatures` for the call `e` (arguments `args`) of
+    /// x86 builtin `row` from the current function: its required-feature
+    /// expression must hold for the function's features (an SSE compare
+    /// builtin's predicate above 7 needs `avx` instead), else
+    /// `err_builtin_needs_feature` at the call. Returns whether it holds.
+    pub(crate) fn x86_builtin_features_ok(
+        &mut self,
+        row: &x86::Row,
+        e: ExprId,
+        args: &[ExprId],
+    ) -> bool {
+        let name = row.info.name;
+        let mut req = row.features;
+        if matches!(
+            name,
+            "__builtin_ia32_cmpps"
+                | "__builtin_ia32_cmppd"
+                | "__builtin_ia32_cmpss"
+                | "__builtin_ia32_cmpsd"
+        ) && args.get(2).and_then(|&a| self.fold_int(a)).is_some_and(|v| v > 7)
+        {
+            req = "avx";
+        }
+        if req.is_empty() {
+            return true;
+        }
+        let on = self.feature_map(self.f.decl);
+        if neon::features_hold(req, |n| on.get(n) == Some(&true)) {
+            return true;
+        }
+        let d = Diag::new(DiagId::cg_builtin_needs_feature, Span::empty(self.ast.begin_loc(e)))
+            .arg(name.to_owned())
+            .arg(req.to_owned());
         self.diags.push(d);
         false
     }

@@ -67,6 +67,10 @@ pub(crate) enum Op {
     FNeg {
         v: V,
     },
+    /// `freeze v` (WP-630).
+    Freeze {
+        v: V,
+    },
     ICmp {
         p: IntPredicate,
         l: V,
@@ -306,7 +310,7 @@ impl Op {
             Op::DynAlloca { count, .. } => vec![*count],
             Op::Store { val, ptr, .. } => vec![*val, *ptr],
             Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![*l, *r],
-            Op::FNeg { v } | Op::Cast { v, .. } => vec![*v],
+            Op::FNeg { v } | Op::Freeze { v } | Op::Cast { v, .. } => vec![*v],
             Op::Gep { base, idx, .. } => {
                 std::iter::once(*base).chain(idx.iter().copied()).collect()
             }
@@ -343,7 +347,7 @@ impl Op {
             Op::DynAlloca { count, .. } => vec![count],
             Op::Store { val, ptr, .. } => vec![val, ptr],
             Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![l, r],
-            Op::FNeg { v } | Op::Cast { v, .. } => vec![v],
+            Op::FNeg { v } | Op::Freeze { v } | Op::Cast { v, .. } => vec![v],
             Op::Gep { base, idx, .. } => std::iter::once(base).chain(idx.iter_mut()).collect(),
             Op::Phi { inc, .. } => inc.iter_mut().map(|x| &mut x.0).collect(),
             Op::Select { c, t, f } => vec![c, t, f],
@@ -1047,6 +1051,7 @@ impl Fir {
                         b.binop_ex(*op, *flags, FastMath::NONE, val(*l), val(*r))?
                     }
                     Op::FNeg { v } => b.fneg(val(*v), FastMath::NONE)?,
+                    Op::Freeze { v } => b.freeze(val(*v))?,
                     Op::ICmp { p, l, r } => b.icmp(*p, val(*l), val(*r))?,
                     Op::FCmp { p, l, r } => b.fcmp(*p, val(*l), val(*r))?,
                     Op::Cast { op, flags, v, to } => b.cast_ex(*op, *flags, val(*v), *to)?,

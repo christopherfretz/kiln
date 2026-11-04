@@ -64,6 +64,9 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId, compat: u32) -> bool {
             && b != id::KILN_PLAINLY_CONSTANT_EVALUATED
             && id::checked_op(b).is_none()
             && id::carry_op(b).is_none()
+            // WP-630: nor an x86 builtin with a pointer operand
+            // (`addcarryx` stores its sum).
+            && !id::x86::row(b).is_some_and(|r| r.info.sig.contains('*'))
             && !clang19_unevaluated(b)
             // clang 20 made `abs`/`labs`/`llabs` constant (WP-432).
             && !(compat < 22 && matches!(b, id::ABS | id::LABS | id::LLABS))
@@ -90,22 +93,28 @@ fn clang19_unevaluated(b: u32) -> bool {
 
 /// The arguments of the builtin call `e` codegen folds rather than emits
 /// (the `__builtin_isfpclass` mask, the `__builtin_object_size` type,
-/// the `__builtin_assume_aligned` alignment, a NEON builtin's lane and
-/// type-code immediates), for the fold prepass.
-pub(crate) fn folded_args(ast: &Ast, e: ExprId) -> impl Iterator<Item = ExprId> + '_ {
+/// the `__builtin_assume_aligned` alignment, an x86 builtin's integer
+/// constant operands, a NEON builtin's lane and type-code immediates), for
+/// the fold prepass.
+pub(crate) fn folded_args(ast: &Ast, e: ExprId) -> Vec<ExprId> {
+    let Some((_, b)) = builtin_callee(ast, e) else { return Vec::new() };
+    let args = || ast.lists.iter(ast.exprs.call_args(e));
+    if id::x86::is_x86(b) {
+        let ice = id::ice_params(b);
+        return args()
+            .enumerate()
+            .filter(|&(i, _)| i < 32 && ice & (1 << i) != 0)
+            .map(|x| x.1)
+            .collect();
+    }
     // `__builtin_expect_with_probability`'s probability is evaluated, not
     // emitted (clang `EvaluateAsFloat`).
-    let idx: &'static [usize] = match builtin_callee(ast, e) {
-        Some((
-            _,
-            id::ISFPCLASS | id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE | id::ASSUME_ALIGNED,
-        )) => &[1],
-        Some((_, id::EXPECT_WITH_PROBABILITY)) => &[2],
-        Some((_, b)) => crate::neon::imm_args(b),
-        None => &[],
+    let idx: &'static [usize] = match b {
+        id::ISFPCLASS | id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE | id::ASSUME_ALIGNED => &[1],
+        id::EXPECT_WITH_PROBABILITY => &[2],
+        _ => crate::neon::imm_args(b),
     };
-    let args = ast.exprs.call_args(e);
-    idx.iter().filter_map(move |&i| ast.lists.iter(args).nth(i))
+    idx.iter().filter_map(|&i| args().nth(i)).collect()
 }
 
 /// The name of the library function a library builtin calls (clang
@@ -400,6 +409,9 @@ impl Cg<'_> {
         }
         if id::neon::is_neon(b) {
             return self.emit_neon_builtin(b, e);
+        }
+        if id::x86::is_x86(b) {
+            return self.emit_x86_builtin(b, e);
         }
         let v = match b {
             id::IS_CONSTANT_EVALUATED | id::KILN_PLAINLY_CONSTANT_EVALUATED => {
@@ -866,11 +878,34 @@ impl Cg<'_> {
                 self.intrinsic_call(f, ops);
                 return Ok(BuiltinCall::Emitted(None));
             }
-            // clang `EmitX86BuiltinExpr`: `llvm.x86.sse2.pause()` (WP-610).
-            id::IA32_PAUSE => {
-                let f = kiln_llvm::intrinsics::x86_sse2_pause(&mut self.m);
-                self.intrinsic_call(f, vec![]);
+            // WP-630: clang `EmitNontemporalStore` / `EmitNontemporalLoad`:
+            // an access through the pointer with its known alignment,
+            // marked `!nontemporal !{i32 1}`.
+            id::NONTEMPORAL_STORE => {
+                let Some(p) = arg(1) else {
+                    return err(self.loc_of(e), "__builtin_nontemporal_store needs two arguments");
+                };
+                let v = self.emit_scalar(a0)?;
+                let (ptr, align) = self.ptr_align(p)?;
+                let st = self.store(v, ptr, align, false);
+                let vq = ast.exprs.get(a0).ty();
+                self.tbaa_mark(st, vq, crate::tbaa::Tb::Type);
+                self.mark_nontemporal(st)?;
                 return Ok(BuiltinCall::Emitted(None));
+            }
+            id::NONTEMPORAL_LOAD => {
+                let (ptr, align) = self.ptr_align(a0)?;
+                let ty = self.lty(q);
+                let v = self.load(ty, ptr, align, false);
+                self.tbaa_mark(v, q, crate::tbaa::Tb::Type);
+                self.mark_nontemporal(v)?;
+                v
+            }
+            // clang: `freeze poison`, the operand not evaluated.
+            id::NONDETERMINISTIC_VALUE => {
+                let ty = self.lty(q);
+                let p = V::C(self.m.const_poison(ty));
+                self.f.fir.push(Op::Freeze { v: p }, ty)
             }
             // clang `EmitTrapCall`: no `unreachable` follows. The
             // `__builtin_verbose_trap` category and message only reach the

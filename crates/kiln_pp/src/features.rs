@@ -192,6 +192,10 @@ impl TargetBuiltins {
             return None;
         }
         let req = (self.required)(name)?;
+        // An x86 builtin without a required feature (WP-630).
+        if req.is_empty() {
+            return Some(1);
+        }
         let on = |f: &str| self.enabled.binary_search_by(|e| e.as_str().cmp(f)).is_ok();
         Some(u32::from(req.split(',').all(|all| all.split('|').any(|f| on(f.trim())))))
     }

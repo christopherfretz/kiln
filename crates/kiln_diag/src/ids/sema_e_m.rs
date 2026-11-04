@@ -150,6 +150,7 @@ sema_impcast_pointer_to_bool = Warning [PointerBoolConversion] (2) "address of {
 sema_implicit_coroutine_std_nothrow_type_not_found = Error (0) "std::nothrow was not found; include <new> before defining a coroutine which uses get_return_object_on_allocation_failure()";
 sema_implicit_empty_initializer = Error (0) "initializer for aggregate with no elements requires explicit braces";
 sema_implicit_fallthrough = WarningOff [ImplicitFallthrough] (0) "unannotated fall-through between switch labels";
+sema_implicit_lib_function_decl = ExtWarn [ImplicitFunctionDeclaration] (2) "implicitly declaring library function '{0}' with type {1}";
 sema_implied_coroutine_type_not_found = Error (1) "{0} type was not found; include <coroutine> before defining a coroutine";
 sema_implied_std_coroutine_traits_promise_type_not_class = Error (1) "this function cannot be a coroutine: {0} is not a class";
 sema_implied_std_coroutine_traits_promise_type_not_found = Error (1) "this function cannot be a coroutine: {0} has no member named 'promise_type'";

@@ -34,6 +34,8 @@ enum Shape {
     NoUnwind(bool),
     /// `nounwind memory(argmem: read)`.
     NoUnwindArgRead,
+    /// `nounwind memory(...)`.
+    NoUnwindMem(MemoryEffects),
     /// `nomerge nounwind`.
     NoMerge,
     /// No attributes (an intrinsic that may throw).
@@ -91,6 +93,7 @@ fn fn_attrs(shape: Shape) -> Vec<Attr> {
         Shape::NoUnwindArgRead => {
             vec![f(NoUnwind), Attr::Memory(MemoryEffects::argmem_only(ModRef::Read))]
         }
+        Shape::NoUnwindMem(mem) => vec![f(NoUnwind), Attr::Memory(mem)],
         Shape::NoMerge => vec![f(AttrKind::NoMerge), f(NoUnwind)],
         Shape::Throws => Vec::new(),
     }
@@ -372,11 +375,6 @@ pub fn prefetch(m: &mut Module) -> FuncId {
     declare(m, &name, TypeId::VOID, &params, &[], Shape::Basic(Some(mem)))
 }
 
-/// `void @llvm.x86.sse2.pause()`: `nounwind` (WP-610).
-pub fn x86_sse2_pause(m: &mut Module) -> FuncId {
-    declare(m, "llvm.x86.sse2.pause", TypeId::VOID, &[], &[], Shape::NoUnwind(false))
-}
-
 /// `ptr @llvm.frameaddress.p0(i32 immarg level)`.
 pub fn frameaddress(m: &mut Module) -> FuncId {
     let p = ptr(m);
@@ -394,6 +392,63 @@ pub fn frameaddress(m: &mut Module) -> FuncId {
 pub fn target_nomem(m: &mut Module, name: &str, ret: TypeId, params: &[TypeId]) -> FuncId {
     let params: Vec<(TypeId, &[Attr])> = params.iter().map(|&t| (t, &[][..])).collect();
     declare(m, name, ret, &params, &[], Shape::Basic(Some(MemoryEffects::all(ModRef::None))))
+}
+
+/// The attributes of a target intrinsic, as LLVM declares the `llvm.x86.*`
+/// ones (its `IntrNoMem`, `IntrReadMem`, `IntrArgMemOnly`, ... properties;
+/// the variants are the shapes the x86 builtin table uses, WP-630).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TargetMem {
+    /// `nocallback nofree nosync nounwind willreturn memory(none)`.
+    None,
+    /// `nocallback nofree nosync nounwind willreturn memory(read)`.
+    Read,
+    /// `nocallback nofree nosync nounwind willreturn memory(argmem: read)`.
+    ArgRead,
+    /// `nocallback nofree nosync nounwind willreturn memory(argmem:
+    /// readwrite)`.
+    ArgReadWrite,
+    /// `nounwind` (any memory effect).
+    Unknown,
+    /// `nounwind memory(argmem: readwrite)`.
+    UnknownArgReadWrite,
+    /// `nounwind memory(argmem: write)`.
+    UnknownArgWrite,
+    /// `nounwind memory(inaccessiblemem: readwrite)`.
+    UnknownInaccessible,
+}
+
+/// A target intrinsic by full name, return type and parameter types (each
+/// with whether it is `immarg`), with the attributes `mem` names
+/// (WP-630's x86 builtins).
+pub fn target_intrinsic(
+    m: &mut Module,
+    name: &str,
+    ret: TypeId,
+    params: &[(TypeId, bool)],
+    mem: TargetMem,
+) -> FuncId {
+    let shape = match mem {
+        TargetMem::None => Shape::Basic(Some(MemoryEffects::all(ModRef::None))),
+        TargetMem::Read => Shape::Basic(Some(MemoryEffects::all(ModRef::Read))),
+        TargetMem::ArgRead => Shape::Basic(Some(MemoryEffects::argmem_only(ModRef::Read))),
+        TargetMem::ArgReadWrite => {
+            Shape::Basic(Some(MemoryEffects::argmem_only(ModRef::ReadWrite)))
+        }
+        TargetMem::Unknown => Shape::NoUnwind(false),
+        TargetMem::UnknownArgReadWrite => {
+            Shape::NoUnwindMem(MemoryEffects::argmem_only(ModRef::ReadWrite))
+        }
+        TargetMem::UnknownArgWrite => Shape::NoUnwindMem(MemoryEffects::argmem_only(ModRef::Write)),
+        TargetMem::UnknownInaccessible => Shape::NoUnwindMem(MemoryEffects {
+            inaccessiblemem: ModRef::ReadWrite,
+            ..MemoryEffects::default()
+        }),
+    };
+    let imm: &[Attr] = &[Attr::Flag(ImmArg)];
+    let params: Vec<(TypeId, &[Attr])> =
+        params.iter().map(|&(t, i)| (t, if i { imm } else { &[][..] })).collect();
+    declare(m, name, ret, &params, &[], shape)
 }
 
 /// `ptr @llvm.returnaddress(i32 immarg level)` (WP-432).

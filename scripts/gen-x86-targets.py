@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Generate crates/kiln_driver/src/x86_targets.rs, the x86-64 `-march=` CPU and
+target-feature tables (spec/landed/driver/WP-630.md):
+
+  CPUS     every `-march=` CPU kiln accepts that the clang binary knows: the
+           `"target-features"` clang gives a function under `-march=<cpu>`,
+           and how its predefined macros differ from the default (`x86-64`)
+           ones (`clang -march=<cpu> -dM -E` against `clang -dM -E`)
+  IMPLIES  each target feature and the features enabling it enables
+           (LLVM's `ImpliedFeatures*`, transitively, itself included), without
+           clang's `initFeatureMap` additions (`sse` adds `mmx`, `sse4.2` adds
+           `popcnt` and `crc32`, `avx` adds `xsave`, an `avx512*` feature adds
+           `evex512`), which kiln applies itself
+
+IMPLIES is read from clang's `"target-features"` for
+`__attribute__((target("no-popcnt,no-crc32,no-mmx,no-xsave,<f>")))` on
+`i386` (whose base set is only `x87`): the leading `no-` items suppress
+clang's additions. A name clang does not take there (`cmov`, `cx8`, a lone
+`evex512`) implies only itself. The feature names are those the CPUs, the builtin table
+(crates/kiln_ast/src/x86_builtins.rs) and the resource headers' `target`
+attributes name, closed under the implications.
+
+Usage: scripts/gen-x86-targets.py [path/to/clang++]  (default: clang 21 at
+/usr/lib/llvm-21/bin/clang++)
+"""
+
+import concurrent.futures
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+OUT = ROOT / "crates/kiln_driver/src/x86_targets.rs"
+FEATURES_RS = ROOT / "crates/kiln_driver/src/features.rs"
+BUILTINS_RS = ROOT / "crates/kiln_ast/src/x86_builtins.rs"
+SUPPRESS = ["popcnt", "crc32", "mmx", "xsave"]
+
+
+def clang(cxx, args, src):
+    return subprocess.run([cxx, *args, "-x", "c++", "-"], input=src, capture_output=True,
+                          text=True)
+
+
+def target_features(cxx, args, src="void f(){}\n"):
+    r = clang(cxx, ["-S", "-emit-llvm", "-o", "-", *args], src)
+    if r.returncode:
+        return None
+    m = re.search(r'"target-features"="([^"]*)"', r.stdout)
+    return m.group(1).split(",") if m else []
+
+
+def macros(cxx, args):
+    r = clang(cxx, ["--target=x86_64-unknown-linux-gnu", "-E", "-dM", *args], "")
+    out = {}
+    for line in r.stdout.splitlines():
+        name, _, value = line.removeprefix("#define ").partition(" ")
+        out[name] = value
+    return out
+
+
+def closure(cxx, f):
+    attr = ",".join([f"no-{s}" for s in SUPPRESS if s != f] + [f])
+    src = f'__attribute__((target("{attr}"))) void f(){{}}\n'
+    got = target_features(cxx, ["--target=i386-unknown-linux-gnu", "-march=i386"], src)
+    if got is None:
+        return None
+    on = {g[1:] for g in got if g.startswith("+")} - {"x87"}
+    if f.startswith("avx512"):
+        on.discard("evex512")
+    if f not in on and f != "x87":
+        return None
+    return sorted(on | {f})
+
+
+def main():
+    cxx = sys.argv[1] if len(sys.argv) > 1 else "/usr/lib/llvm-21/bin/clang++"
+    text = FEATURES_RS.read_text()
+    cpus = []
+    for table in ("X86_CPUS", "X86_CPUS_22"):
+        m = re.search(rf"const {table}: &\[&str\] = &\[(.*?)\];", text, re.S)
+        cpus += re.findall(r'"([^"]+)"', m.group(1))
+    base = macros(cxx, [])
+    rows, names = [], set()
+    for cpu in cpus:
+        tf = target_features(cxx, ["--target=x86_64-unknown-linux-gnu", f"-march={cpu}"])
+        if tf is None:
+            print(f"clang does not know -march={cpu}; left out")
+            continue
+        on = sorted(f[1:] for f in tf if f.startswith("+"))
+        names |= set(on)
+        mm = macros(cxx, [f"-march={cpu}"])
+        define = sorted((k, v) for k, v in mm.items() if base.get(k) != v)
+        undef = sorted(k for k in base if k not in mm)
+        rows.append((cpu, on, define, undef))
+    names |= set(re.findall(r"[\w.-]+", " ".join(
+        re.findall(r'^    [rh]\(\d+, "\w+", "[^"]*", \w+, "([^"]*)"', BUILTINS_RS.read_text(),
+                   re.M))))
+    for h in (ROOT / "resource/include").glob("*.h"):
+        for t in re.findall(r'__target__\("([^"]*)"\)', h.read_text(errors="replace")):
+            names |= {x.removeprefix("no-") for x in t.split(",")}
+    implies, todo = {}, set(names)
+    with concurrent.futures.ThreadPoolExecutor(os.cpu_count()) as ex:
+        while todo:
+            batch = sorted(todo)
+            todo = set()
+            for f, c in zip(batch, ex.map(lambda f: closure(cxx, f), batch)):
+                if c is None:
+                    # `cmov` and `cx8` are not `target` attribute names, and
+                    # clang drops a lone `evex512`: nothing else to enable.
+                    print(f"clang takes no target(\"{f}\"); implies only itself")
+                    c = [f]
+                implies[f] = c
+                todo |= set(c) - set(implies) - set(batch)
+    lines = [
+        "// @generated by scripts/gen-x86-targets.py from clang's target features and",
+        "// predefined macros (spec/landed/driver/WP-630.md). Do not edit.",
+        "",
+        "/// An x86-64 `-march=` CPU.",
+        "pub(crate) struct Cpu {",
+        "    /// The `-march=` name.",
+        "    pub name: &'static str,",
+        "    /// The enabled target features, sorted.",
+        "    pub features: &'static [&'static str],",
+        "    /// The predefined macros it defines or redefines (name, value), against",
+        "    /// the default `x86-64`.",
+        "    pub define: &'static [(&'static str, &'static str)],",
+        "    /// The default predefined macros it does not define.",
+        "    pub undef: &'static [&'static str],",
+        "}",
+        "",
+        "/// Every `-march=` CPU kiln accepts that clang 21 knows.",
+        "#[rustfmt::skip]",
+        "pub(crate) const CPUS: &[Cpu] = &[",
+    ]
+    for cpu, on, define, undef in rows:
+        lines.append(f'    Cpu {{ name: "{cpu}", features: &[{", ".join(chr(34) + f + chr(34) for f in on)}], '
+                     f'define: &[{", ".join(f"({chr(34)}{k}{chr(34)}, {chr(34)}{v}{chr(34)})" for k, v in define)}], '
+                     f'undef: &[{", ".join(chr(34) + k + chr(34) for k in undef)}] }},')
+    lines += [
+        "];",
+        "",
+        "/// Each target feature and the features enabling it enables (itself",
+        "/// included), sorted by name.",
+        "#[rustfmt::skip]",
+        "pub(crate) const IMPLIES: &[(&str, &[&str])] = &[",
+    ]
+    for f in sorted(implies):
+        lines.append(f'    ("{f}", &[{", ".join(chr(34) + g + chr(34) for g in implies[f])}]),')
+    lines.append("];")
+    OUT.write_text("\n".join(lines) + "\n")
+    print(f"{OUT.relative_to(ROOT)}: {len(rows)} CPUs, {len(implies)} features")
+
+
+if __name__ == "__main__":
+    main()

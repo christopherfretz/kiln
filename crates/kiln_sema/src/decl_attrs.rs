@@ -71,6 +71,8 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
         AttrKind::FORMAT => "format",
         AttrKind::NOTHROW => "nothrow",
+        AttrKind::NODEBUG => "nodebug",
+        AttrKind::MIN_VECTOR_WIDTH => "min_vector_width",
         _ => return None,
     })
 }
@@ -458,6 +460,9 @@ impl Sema<'_, '_> {
             // with a warning); `MinSizeAttr`'s is an error.
             AttrKind::NAKED if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "naked", "functions")
+            }
+            AttrKind::MIN_VECTOR_WIDTH if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "min_vector_width", "functions")
             }
             AttrKind::OPTNONE if !kind.is_function() => wrong(
                 self,

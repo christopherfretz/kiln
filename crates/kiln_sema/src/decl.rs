@@ -9579,6 +9579,7 @@ impl Sema<'_, '_> {
                         | "uninitialized"
                         | "trivial_abi"
                         | "type_visibility"
+                        | "min_vector_width"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
@@ -9612,6 +9613,9 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::TARGET {
             return self.target_attribute(syntax, &n, args, loc);
+        }
+        if kind == AttrKind::MIN_VECTOR_WIDTH {
+            return self.min_vector_width_attribute(syntax, args, loc);
         }
         if kind == AttrKind::ENABLE_IF {
             return self.enable_if_attribute(syntax, args, loc);
@@ -9780,6 +9784,38 @@ impl Sema<'_, '_> {
         };
         let a = self.ast.exprs.string_lit(lit).raw();
         let node = AttrNode { kind: AttrKind::TARGET, syntax, flags: 0, loc, a, b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// clang `min_vector_width(N)` (`handleMinVectorWidthAttr`): exactly
+    /// one integer constant, kept in `a` (saturated at `u32::MAX`).
+    fn min_vector_width_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let [arg] = args else {
+            let msg = self
+                .diag(DiagId::parse_attribute_wrong_arg_count, loc)
+                .arg("min_vector_width")
+                .arg("1");
+            self.emit(msg);
+            return None;
+        };
+        let v = match arg {
+            AttrArg::Expr(e) => self.fold_int(*e),
+            AttrArg::Type(_) | AttrArg::Ident(..) => None,
+        };
+        let Some(v) = v else {
+            let msg = self
+                .diag(DiagId::sema_attribute_requires_integer_constant, loc)
+                .arg("'min_vector_width'");
+            self.emit(msg);
+            return None;
+        };
+        let a = u32::try_from(v.max(0)).unwrap_or(u32::MAX);
+        let node = AttrNode { kind: AttrKind::MIN_VECTOR_WIDTH, syntax, flags: 0, loc, a, b: 0 };
         Some(self.ast.attrs.push(node))
     }
 
@@ -10419,6 +10455,9 @@ fn attr_kind_of(
         ("nothrow", _, true) => AttrKind::NOTHROW,
         // clang `GCC<"target">`.
         ("target", _, true) => AttrKind::TARGET,
+        // WP-630: clang `GCC<"nodebug">` and `Clang<"min_vector_width">`.
+        ("nodebug", _, true) => AttrKind::NODEBUG,
+        ("min_vector_width", _, _) if gnu_syntax || clang_scope => AttrKind::MIN_VECTOR_WIDTH,
         _ => return None,
     })
 }

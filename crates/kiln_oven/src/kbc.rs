@@ -462,6 +462,9 @@ pub(crate) mod bi {
     pub const CARRY: u32 = 34;
     /// sub flag of `CARRY`: produce the wrapped result.
     pub const CARRY_VALUE: u32 = 1 << 9;
+    /// sub flag of `CARRY`: the carry-in is 1 when nonzero (x86
+    /// `addcarryx` / `subborrow`, WP-630), not taken modulo 2^`w`.
+    pub const CARRY_BOOL_IN: u32 = 1 << 10;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).
@@ -508,6 +511,19 @@ pub(crate) mod bi {
     pub const SSUB_SAT: u32 = 9;
     /// `INT_OP`: `__builtin_elementwise_sub_sat`, unsigned.
     pub const USUB_SAT: u32 = 10;
+    // WP-630: the x86 BMI / TBM builtins.
+    /// `INT_OP`: `bextr` of `a` by the control `b` (start in bits 0-7,
+    /// length in bits 8-15).
+    pub const BEXTR: u32 = 11;
+    /// `INT_OP`: `bzhi`: `a` with the bits from index `b & 0xff` up
+    /// cleared.
+    pub const BZHI: u32 = 12;
+    /// `INT_OP`: `pdep`: the low bits of `a` deposited at the set bits of
+    /// the mask `b`.
+    pub const PDEP: u32 = 13;
+    /// `INT_OP`: `pext`: the bits of `a` at the set bits of the mask `b`,
+    /// packed low.
+    pub const PEXT: u32 = 14;
     // WP-270: checked arithmetic.
     /// `__builtin_{add,sub,mul}_overflow` on canonical `a`, `b`: sub = op
     /// (0 add, 1 sub, 2 mul) | `a` signed << 2 | `b` signed << 3 | result

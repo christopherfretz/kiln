@@ -356,7 +356,14 @@ impl Cg<'_> {
         self.f.is_main = is_main;
         self.f.naked = thunk.is_none() && self.has_fn_attr(d, kiln_ast::attr::AttrKind::NAKED);
         self.f.sig = Some(sig.clone());
-        self.f.vector_width = self.def_vector_width(&sig.info);
+        // clang `StartFunction`: `min_vector_width(N)` raises the start.
+        let min = ast.redecls_of(d).find_map(|r| {
+            ast.lists.iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r)).find_map(|a| {
+                let n = ast.attrs.get(a);
+                (n.kind == kiln_ast::attr::AttrKind::MIN_VECTOR_WIDTH).then_some(n.a)
+            })
+        });
+        self.f.vector_width = self.def_vector_width(&sig.info).max(u64::from(min.unwrap_or(0)));
         self.f.structor = structor;
         self.f.this_class = sig.this;
         self.set_def_linkage(f, d);

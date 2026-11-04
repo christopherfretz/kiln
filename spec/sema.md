@@ -3798,11 +3798,13 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
 `BIis_constant_evaluated`; `kiln_ast::decl::builtin`).
 The AArch64 NEON target builtins (`__builtin_neon_*`, a generated
 table) are spec/landed/sema/WP-558.md "Target builtins".
-`void __builtin_ia32_pause() noexcept` (kiln-private id 2152, `v`,
-`NoThrow`; WP-610) is the one x86-64 target builtin: declared only when
-the target is x86-64 (`lazily_create_builtin` / `is_builtin_name` via
-`target_has_builtin`), an undeclared identifier elsewhere, never a
-constant expression (`target.x86/ia32-pause-*.cpp`).
+The x86-64 target builtins (every `__builtin_ia32_*` name the resource
+headers use, `__builtin_ia32_pause` (WP-610), and the header builtins
+`_mm_pause`, ...; a generated table) are spec/landed/sema/WP-630.md:
+declared only when the target is x86-64 (`lazily_create_builtin` /
+`is_builtin_name` / `recognize_builtin_decl` via `target_has_builtin`),
+an undeclared identifier (or, for a header builtin, an ordinary
+function) elsewhere.
 - **Declaration:** when an unqualified id-expression's lookup finds
   nothing and the name is a builtin (`lazily_create_builtin`), Sema
   declares it in the translation unit: an implicit `LinkageSpecDecl`

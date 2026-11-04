@@ -152,6 +152,7 @@ fn checked(sub: u32, a: u128, b: u128) -> u128 {
 fn carry(sub: u32, a: u128, b: u128, c: u128) -> u128 {
     let (w, minus) = (sub & 0xFF, sub >> 8 & 1 != 0);
     let m = mask(w);
+    let c = if sub & bi::CARRY_BOOL_IN != 0 { u128::from(c != 0) } else { c };
     let (a, b, c) = (a & m, b & m, c & m);
     // A wrapping step overflows when its result is below (above, for a
     // subtraction) its first operand.
@@ -601,6 +602,28 @@ impl Oven {
                     }
                     bi::UADD_SAT => v.saturating_add(b & mask(w)).min(mask(w)),
                     bi::USUB_SAT => v.saturating_sub(b & mask(w)),
+                    // WP-630 (clang 19 `IntExprEvaluator`): the x86
+                    // BMI / TBM bit-field builtins.
+                    bi::BEXTR => {
+                        let (start, len) = ((b & 0xff) as u32, (b >> 8 & 0xff) as u32);
+                        if len == 0 || start >= w { 0 } else { v >> start & mask(len.min(w)) }
+                    }
+                    bi::BZHI => {
+                        let i = (b & 0xff) as u32;
+                        if i < w { v & mask(i) } else { v }
+                    }
+                    bi::PDEP | bi::PEXT => {
+                        let (m, pdep) = (b & mask(w), sub >> 8 == bi::PDEP);
+                        let (mut r, mut p) = (0u128, 0u32);
+                        for i in 0..w {
+                            if m >> i & 1 != 0 {
+                                let (from, to) = if pdep { (p, i) } else { (i, p) };
+                                r |= (v >> from & 1) << to;
+                                p += 1;
+                            }
+                        }
+                        r
+                    }
                     k => {
                         // clang: the amount modulo the width.
                         let n = ((b & mask(w)) % u128::from(w)) as u32;

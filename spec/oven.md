@@ -749,7 +749,21 @@ literal is one instruction and one step, not an interpreted loop.
   untyped-memory note; inside them they allocate, "Transient
   allocation", WP-212); `__builtin_debugtrap`, `__builtin_frame_address`
   and `__builtin_return_address`, noted at the call's begin (WP-432);
-  `__builtin_prefetch` and `__builtin_ia32_pause` likewise (WP-610).
+  `__builtin_prefetch` likewise (WP-610); every x86 builtin but the
+  scalar bit ones below likewise, `__builtin_ia32_pause` (WP-610)
+  included, and `__builtin_nontemporal_store` / `_load` and
+  `__builtin_nondeterministic_value` (WP-630).
+- **x86 builtins** (WP-630; clang 19 `IntExprEvaluator`): `lzcnt_u16` /
+  `_u32` / `_u64` and `tzcnt_*` are `bi::CLZ` / `bi::CTZ` with the width
+  as the zero fallback; `bextr_u32` / `_u64` / `bextri_*`, `bzhi_si` /
+  `_di`, `pdep_si` / `_di` and `pext_si` / `_di` are `bi::INT_OP`'s
+  `BEXTR` (start in control bits 0-7, length in 8-15, clamped to the
+  width; zero for a zero length or a start past the width), `BZHI`,
+  `PDEP` and `PEXT`. At `-fclang-compat=22` (clang 20's addition)
+  `addcarryx_u32` / `_u64` and `subborrow_u32` / `_u64` are `bi::CARRY`
+  with `CARRY_BOOL_IN` (the carry-in counts as 1 when nonzero): the
+  operands, then the pointer, are evaluated, the wrapped result is
+  stored and the carry-out is the value (`target.x86/constexpr-*.cpp`).
 - **Floating-point math, P0533** (WP-365; `bi::FP_MATH`, sub = float
   code | op << 4 | `SECOND` for the pointer output; `softfloat::math`):
   `ceil`/`floor`/`trunc`/`round`/`roundeven`/`rint`/`nearbyint`,

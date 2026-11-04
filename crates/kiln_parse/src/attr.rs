@@ -62,6 +62,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "enable_if"
             | "diagnose_if"
             | "target"
+            | "min_vector_width"
     )
 }
 

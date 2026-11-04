@@ -610,6 +610,52 @@ fn neon_bf16_call_without_feature() {
     }
 }
 
+/// spec/landed/codegen/WP-630.md "Target features" (WP-630): an x86
+/// builtin, or the `always_inline` `target("...")` header wrapper of one,
+/// called from a function without the feature it needs is a codegen error
+/// (`-fsyntax-only` accepts it): the wrapper names the first missing
+/// feature, the builtin its whole feature list, and an SSE compare's
+/// predicate above 7 needs `avx`. Exact clang 21 stderr, x86-64 only.
+#[test]
+fn x86_call_without_feature() {
+    if !cfg!(target_arch = "x86_64") {
+        return;
+    }
+    let d = scratch("x86feat");
+    let cases = [
+        (
+            "#include <immintrin.h>\n\
+             unsigned f(unsigned c, unsigned char v) { return _mm_crc32_u8(c, v); }\n",
+            "t.cpp:2:50: error: always_inline function '_mm_crc32_u8' requires target feature \
+             'crc32', but would be inlined into function 'f' that is compiled without support \
+             for 'crc32'\n    \
+             2 | unsigned f(unsigned c, unsigned char v) { return _mm_crc32_u8(c, v); }\n      \
+             |                                                  ^\n1 error generated.\n",
+        ),
+        (
+            "unsigned g(unsigned c, unsigned v) { return __builtin_ia32_crc32si(c, v); }\n",
+            "t.cpp:1:45: error: '__builtin_ia32_crc32si' needs target feature crc32\n    \
+             1 | unsigned g(unsigned c, unsigned v) { return __builtin_ia32_crc32si(c, v); }\n      \
+             |                                             ^\n1 error generated.\n",
+        ),
+        (
+            "typedef float v4f __attribute__((vector_size(16)));\n\
+             v4f h(v4f a, v4f b) { return __builtin_ia32_cmpps(a, b, 8); }\n",
+            "t.cpp:2:30: error: '__builtin_ia32_cmpps' needs target feature avx\n    \
+             2 | v4f h(v4f a, v4f b) { return __builtin_ia32_cmpps(a, b, 8); }\n      \
+             |                              ^\n1 error generated.\n",
+        ),
+    ];
+    for (src, want) in cases {
+        std::fs::write(d.join("t.cpp"), src).unwrap();
+        let o = kiln_in(&d, &["-S", "-emit-llvm", "-o", "k.ll", "t.cpp"]);
+        assert_eq!(text(&o.stderr), want, "{src}");
+        assert_eq!(o.status.code(), Some(1), "{src}");
+        let o = kiln_in(&d, &["-fsyntax-only", "t.cpp"]);
+        assert_eq!(text(&o.stderr), "", "{src}");
+    }
+}
+
 /// spec/driver.md "Codegen flags" (WP-605): every honoured or ignored
 /// GCC/clang codegen flag compiles `int main(){}` to an object; every
 /// rejected one is the driver error "'<flag>' is not supported by kiln".

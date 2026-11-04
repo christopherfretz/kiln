@@ -4713,19 +4713,26 @@ pub mod builtin {
     /// `std::is_string_literal`, [meta.string.literal]): whether `p`
     /// points into a string literal object. Consteval.
     pub const IS_STRING_LITERAL: u32 = 2151;
+    // ---- WP-630 (the generic builtins the x86 intrinsic headers use).
+    /// `__builtin_nontemporal_store(v, p)` (clang `Builtins.td`
+    /// `NontemporalStore`, `void(...)`, `CustomTypeChecking`): `p` a
+    /// pointer to an integer, floating, pointer or vector type, `v`
+    /// converted to its pointee; a nontemporal store. Kiln-private id.
+    pub const NONTEMPORAL_STORE: u32 = 2153;
+    /// `__builtin_nontemporal_load(p)`: the pointee of `p` (unqualified)
+    /// by a nontemporal load. Kiln-private id.
+    pub const NONTEMPORAL_LOAD: u32 = 2154;
+    /// `__builtin_nondeterministic_value(x)` (`NoThrow`,
+    /// `CustomTypeChecking`): an arbitrary value of `x`'s type (an
+    /// integer, floating or vector type; `freeze poison`), `x` not
+    /// evaluated. Kiln-private id.
+    pub const NONDETERMINISTIC_VALUE: u32 = 2155;
     // ---- WP-610.
     /// `void __builtin_prefetch(const void *addr, ...)` (clang 19
     /// `Builtins.td` `Prefetch`, signature `vvC*.`, `NoThrow, Const`): the
     /// optional `rw` and `locality` are integer constants in [0, 1] and
     /// [0, 3] (clang `Sema::BuiltinPrefetch`).
     pub const PREFETCH: u32 = 976;
-    /// `void __builtin_ia32_pause()` (clang `BuiltinsX86.def`, `"v"`,
-    /// `"n"`): an x86-64 target builtin (declared only for that target;
-    /// libstdc++'s `<bits/atomic_wait.h>` spin loop calls it), lowered to
-    /// `llvm.x86.sse2.pause`. A kiln-private id like the NEON rows' (clang
-    /// numbers target builtins after its own table: 1644 at 19, 2231 at
-    /// 22).
-    pub const IA32_PAUSE: u32 = 2152;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
@@ -4759,7 +4766,10 @@ pub mod builtin {
         row(IS_STRING_LITERAL, "__builtin_is_string_literal", "b.", N | T | I),
         // WP-610.
         row(PREFETCH, "__builtin_prefetch", "vvC*.", N | C),
-        row(IA32_PAUSE, "__builtin_ia32_pause", "v", N),
+        // WP-630.
+        row(NONTEMPORAL_STORE, "__builtin_nontemporal_store", "v.", T),
+        row(NONTEMPORAL_LOAD, "__builtin_nontemporal_load", "v.", T),
+        row(NONDETERMINISTIC_VALUE, "__builtin_nondeterministic_value", "v.", N | T),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19
@@ -5120,6 +5130,9 @@ pub mod builtin {
         if name.starts_with(neon::PREFIX) {
             return neon::by_name(name);
         }
+        if name.starts_with(x86::PREFIX) || name.starts_with(x86::HEADER_PREFIX) {
+            return x86::by_name(name);
+        }
         ALL.iter()
             .chain(INT_MEM)
             .chain(LIBM)
@@ -5140,6 +5153,9 @@ pub mod builtin {
     /// The table row of builtin `id`.
     pub fn info(id: u32) -> Option<&'static Info> {
         if let Some(r) = neon::row(id) {
+            return Some(&r.info);
+        }
+        if let Some(r) = x86::row(id) {
             return Some(&r.info);
         }
         ALL.iter()
@@ -5330,6 +5346,138 @@ pub mod builtin {
         /// diagnostic), if any.
         pub fn first_missing(req: &str, on: impl Fn(&str) -> bool) -> Option<&str> {
             req.split(',').find(|all| !all.split('|').any(|f| on(f.trim())))
+        }
+    }
+
+    /// WP-630: the x86 target builtins: every `__builtin_ia32_*` name kiln's
+    /// resource headers (clang 19's) reference, `__builtin_ia32_pause`, and
+    /// clang's x86 header builtins (`_mm_pause`, `_mm_mfence`, ...;
+    /// spec/landed/sema/WP-630.md). The generated table
+    /// (`scripts/gen-x86-builtins.py`) is sorted by name; a row's id is
+    /// [`x86::BASE`] plus its index. Prototypes use [`Info::sig`]'s
+    /// notation with the NEON codes ([`neon`]): `V<N>` vectors, `x`
+    /// `_Float16`, `y` `__bf16`, `I` an integer constant expression.
+    pub mod x86 {
+        use super::{Info, attr};
+
+        /// The common prefix of the `__builtin_ia32_*` names.
+        pub const PREFIX: &str = "__builtin_ia32_";
+        /// The common prefix of the header builtins' names.
+        pub const HEADER_PREFIX: &str = "_mm_";
+        /// The id of the table's first row (kiln-private ids).
+        pub const BASE: u32 = 0x2_0000;
+
+        /// No attributes.
+        pub(crate) const NONE: u8 = 0;
+        /// `NoThrow`.
+        pub(crate) const N: u8 = attr::NOTHROW;
+        /// `NoThrow`, `Const`.
+        pub(crate) const NC: u8 = attr::NOTHROW | attr::CONST;
+
+        /// A check clang applies to a builtin's immediate operands
+        /// (`SemaX86::CheckBuiltinFunctionCall`, after the operands are
+        /// converted and found to be integer constants). The `u8` is the
+        /// operand's index.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Imm {
+            /// The value is in `[lo, hi]`, else `-Wargument-outside-range`
+            /// (an error by default; clang `BuiltinConstantArgRange` with
+            /// `RangeIsError = false`).
+            Range(u8, i32, i32),
+            /// The value is in `[lo, hi]`, else an error (the AMX tile
+            /// numbers).
+            RangeError(u8, i32, i32),
+            /// A rounding-control operand: 4, 8, 9, 10 or 11, else
+            /// "invalid rounding argument" (clang
+            /// `CheckBuiltinRoundingOrSAE` with `HasRC`).
+            Rounding(u8),
+            /// A suppress-all-exceptions operand: 4, 8 or 12.
+            Sae(u8),
+            /// A gather / scatter scale: 1, 2, 4 or 8.
+            Scale(u8),
+            /// The (immediate) tile operands name different tiles (clang
+            /// `CheckBuiltinTileDuplicate`).
+            DistinctTiles,
+            /// "this builtin is only available on 32-bit targets" on every
+            /// call (`readeflags_u32` / `writeeflags_u32`).
+            Only32Bit,
+        }
+
+        /// One builtin.
+        #[derive(Clone, Copy, Debug)]
+        pub struct Row {
+            /// The builtin.
+            pub info: Info,
+            /// clang's required-features string (as for
+            /// [`super::neon::Row::features`]; empty: none).
+            pub features: &'static str,
+            /// The immediate operand checks.
+            pub imms: &'static [Imm],
+            /// A header builtin (clang `TARGET_HEADER_BUILTIN`): its header
+            /// declares it as an ordinary function, which is the builtin
+            /// when it has the builtin's type in a namespace-scope context
+            /// with C language linkage; declaring it implicitly warns
+            /// ([`header_of`]).
+            pub header: bool,
+        }
+
+        pub(crate) const fn r(
+            index: u32,
+            name: &'static str,
+            sig: &'static str,
+            attrs: u8,
+            features: &'static str,
+            imms: &'static [Imm],
+        ) -> Row {
+            Row { info: Info { id: BASE + index, name, sig, attrs }, features, imms, header: false }
+        }
+
+        pub(crate) const fn h(
+            index: u32,
+            name: &'static str,
+            sig: &'static str,
+            attrs: u8,
+            features: &'static str,
+            imms: &'static [Imm],
+        ) -> Row {
+            Row { header: true, ..r(index, name, sig, attrs, features, imms) }
+        }
+
+        /// Every row, sorted by name.
+        pub fn all() -> &'static [Row] {
+            crate::x86_builtins::X86
+        }
+
+        /// The x86 builtin spelled `name`.
+        pub fn by_name(name: &str) -> Option<u32> {
+            let t = all();
+            t.binary_search_by(|r| r.info.name.cmp(name)).ok().map(|i| t[i].info.id)
+        }
+
+        /// The row of builtin `id`, if it is an x86 builtin.
+        pub fn row(id: u32) -> Option<&'static Row> {
+            all().get(usize::try_from(id.checked_sub(BASE)?).ok()?)
+        }
+
+        /// Whether `id` is an x86 builtin.
+        pub fn is_x86(id: u32) -> bool {
+            row(id).is_some()
+        }
+
+        /// The header that declares header builtin `id` (clang's
+        /// `XMMINTRIN_H` / `EMMINTRIN_H`).
+        pub fn header_of(id: u32) -> Option<&'static str> {
+            let r = row(id).filter(|r| r.header)?;
+            Some(match r.info.name {
+                "_mm_getcsr" | "_mm_setcsr" | "_mm_sfence" => "xmmintrin.h",
+                _ => "emmintrin.h",
+            })
+        }
+
+        /// The required-features string of the `__builtin_ia32_*` builtin
+        /// `name` (for `__has_builtin`; header builtins are not answered).
+        pub fn required_features(name: &str) -> Option<&'static str> {
+            row(by_name(name)?).filter(|r| !r.header).map(|r| r.features)
         }
     }
 }

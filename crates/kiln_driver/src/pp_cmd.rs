@@ -131,6 +131,10 @@ impl Job<'_> {
                 features: f.enabled(),
                 sve_vector_bits: f.sve_vector_bits,
             };
+        } else if let Some(cpu) = crate::features::resolve(self.args, &self.toolchain.target).0.cpu
+        {
+            // WP-630: the `-march=<cpu>` macros.
+            cfg.x86_macros = crate::features::x86_cpu_macros(&cpu);
         }
         cfg.opt = p.opt;
         cfg.no_inline = p.no_inline;
@@ -306,6 +310,16 @@ impl Job<'_> {
                 f.with_target_builtins(kiln_pp::TargetBuiltins {
                     prefix: kiln_ast::decl::builtin::neon::PREFIX,
                     required: kiln_ast::decl::builtin::neon::required_features,
+                    enabled,
+                })
+            });
+        } else {
+            // WP-630: and the x86 ones.
+            let enabled = crate::features::resolve(a, &self.toolchain.target).0.x86_enabled();
+            features = features.map(|f| {
+                f.with_target_builtins(kiln_pp::TargetBuiltins {
+                    prefix: kiln_ast::decl::builtin::x86::PREFIX,
+                    required: kiln_ast::decl::builtin::x86::required_features,
                     enabled,
                 })
             });

@@ -53,6 +53,9 @@ mod va_arg;
 mod visibility;
 mod vla;
 mod vtable;
+mod x86;
+mod x86_intrinsics;
+mod x86_mmx;
 
 use kiln_abi::Target;
 use kiln_ast::Ast;
@@ -79,16 +82,17 @@ pub struct CodegenOptions {
     /// `target-features` (`-moutline-atomics`, the default), else
     /// `-outline-atomics` (`-mno-outline-atomics`). Ignored on x86-64.
     pub outline_atomics: bool,
-    /// `AArch64` only: the `+name`/`-name` target features beyond the
-    /// base set (`-march=armv8-a+sve`, `-target-feature`; one per name),
-    /// merged into the functions' `target-features`. Ignored on x86-64.
+    /// On `AArch64`, the `+name`/`-name` target features beyond the base
+    /// set (`-march=armv8-a+sve`, `-target-feature`; one per name), merged
+    /// into the functions' `target-features`. On x86-64, the `-march=`
+    /// CPU's features as `+name` (empty: the default `x86-64`'s; WP-630).
     pub target_features: Vec<String>,
-    /// `AArch64` only: how a function's `target("...")` attribute string
-    /// changes the module's features (the driver's
-    /// `features::target_attr_features`; its arguments are the string, the
-    /// module's features as `+name`/`-name` and `-fclang-compat=22`).
-    /// `None` ignores the attribute (spec/landed/codegen/WP-558.md "Target features";
-    /// WP-558).
+    /// How a function's `target("...")` attribute string changes the
+    /// module's features (the driver's `features::target_attr_features` /
+    /// `features::x86_target_attr_features`; its arguments are the string,
+    /// the module's features as `+name`/`-name` and `-fclang-compat=22`).
+    /// `None` ignores the attribute (spec/landed/codegen/WP-558.md "Target
+    /// features", WP-558; spec/landed/codegen/WP-630.md, WP-630).
     pub target_attr: Option<TargetAttrParser>,
     /// `AArch64` only: the `sve` target feature is on, so function
     /// definitions carry `vscale_range(1,16)` (clang `getVScaleRange`).
@@ -421,17 +425,23 @@ impl ComplexRange {
     }
 }
 
-/// The target features of one `AArch64` `target("...")` attribute string
-/// (clang `AArch64TargetInfo::parseTargetAttr`, then `initFeatureMap`).
+/// The target features of one `target("...")` attribute string (clang
+/// `TargetInfo::parseTargetAttr`, then `initFeatureMap`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TargetAttrFeatures {
     /// The `+name` / `-name` entries applied in order over the module's
-    /// features (the last naming a feature wins): the attribute's
-    /// non-extension features (an architecture level with the features it
-    /// implies), then every extension feature of the module or the
-    /// attribute with its final state. The `+` ones are what an
+    /// features (the last naming a feature wins). On `AArch64`: the
+    /// attribute's non-extension features (an architecture level with the
+    /// features it implies), then every extension feature of the module or
+    /// the attribute with its final state. On x86-64: the attribute's own
+    /// features, then the function's whole map. The `+` ones are what an
     /// `always_inline` callee requires first, in this order.
     pub features: Vec<String>,
+    /// x86-64: the CPU of an `arch=<cpu>` item, the function's
+    /// `target-cpu` (and no default `tune-cpu`; WP-630).
+    pub cpu: Option<String>,
+    /// x86-64: the CPU of a `tune=<cpu>` item, the function's `tune-cpu`.
+    pub tune: Option<String>,
 }
 
 /// Parses a `target("...")` attribute string (see

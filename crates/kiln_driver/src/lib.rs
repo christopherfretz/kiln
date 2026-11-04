@@ -20,6 +20,7 @@ pub mod syntax_cmd;
 pub mod templ_opts;
 pub mod time;
 pub mod toolchain;
+mod x86_targets;
 
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex, PoisonError};

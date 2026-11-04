@@ -520,7 +520,8 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       three `immarg` operands (WP-610,
       `builtin_prefetch.cpp`); `__builtin_ia32_pause()` is `call void
       @llvm.x86.sse2.pause()`, declared `nounwind`
-      (`target.x86/ia32-pause-ir{,-19}.cpp`).
+      (`target.x86/ia32-pause-ir{,-19}.cpp`); the x86 builtins in
+      general are spec/landed/codegen/WP-630.md.
       `__builtin_elementwise_add_sat` / `_sub_sat` are `llvm.sadd.sat` /
       `uadd.sat` / `ssub.sat` / `usub.sat` by element signedness (a
       `bool` operand as unsigned), folded at 22 when the Oven folds them

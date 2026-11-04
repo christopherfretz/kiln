@@ -1879,8 +1879,8 @@ impl<'a> Cg<'a> {
     }
 
     /// [`Self::target_attrs`] of function `d` (`None`: a helper without a
-    /// declaration): on `AArch64` its `target("...")` attribute adds to
-    /// the `target-features` ([`Self::feature_map`]).
+    /// declaration): its `target("...")` attribute adds to the
+    /// `target-features` ([`Self::feature_map`]).
     pub(crate) fn target_attrs_of(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
         self.size_attrs(out);
         if let Some(fp) = self.frame_pointer().attr() {
@@ -1897,19 +1897,28 @@ impl<'a> Cg<'a> {
         let native = cpu == Some("native");
         if self.is_x86() {
             // clang `getTrivialDefaultFunctionAttributes`: `-march=<cpu>`
-            // names the CPU and drops the default `tune-cpu`.
-            if !native {
-                out.push(Attr::string("target-cpu", cpu.unwrap_or("x86-64")));
+            // names the CPU and drops the default `tune-cpu`. WP-630: so
+            // does a `target("arch=<cpu>")`, and `tune=<cpu>` names the
+            // tune CPU (clang `getFunctionFeatureMap`'s callers).
+            let a = d.and_then(|d| self.target_attr_features(d)).unwrap_or_default();
+            let mut tune = tune.or(if cpu.is_none() { Some("generic") } else { None });
+            if a.cpu.is_some() {
+                tune = None;
             }
-            out.push(Attr::string("target-features", "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"));
-            if let Some(t) = tune.or(if cpu.is_none() { Some("generic") } else { None }) {
+            tune = a.tune.as_deref().or(tune);
+            match a.cpu.as_deref().or(cpu) {
+                Some("native") => {}
+                c => out.push(Attr::string("target-cpu", c.unwrap_or("x86-64"))),
+            }
+            out.push(Attr::string("target-features", &self.features_attr(d)));
+            if let Some(t) = tune {
                 out.push(Attr::string("tune-cpu", t));
             }
         } else {
             if !native {
                 out.push(Attr::string("target-cpu", "generic"));
             }
-            out.push(Attr::string("target-features", &self.aarch64_features(d)));
+            out.push(Attr::string("target-features", &self.features_attr(d)));
             if let Some(t) = tune {
                 out.push(Attr::string("tune-cpu", t));
             }
@@ -1937,10 +1946,10 @@ impl<'a> Cg<'a> {
         out.push(Attr::Flag(ssp));
     }
 
-    /// The `AArch64` `target-features` string of function `d`
+    /// The `target-features` string of function `d`
     /// ([`Self::feature_map`]); clang lists the enabled features sorted,
     /// then the disabled ones sorted.
-    fn aarch64_features(&self, d: Option<DeclId>) -> String {
+    fn features_attr(&self, d: Option<DeclId>) -> String {
         let f = self.feature_map(d);
         let on = f.iter().filter(|e| *e.1).map(|e| format!("+{}", e.0));
         let off = f.iter().filter(|e| !*e.1).map(|e| format!("-{}", e.0));

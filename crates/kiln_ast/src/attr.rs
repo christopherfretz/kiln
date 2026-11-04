@@ -175,6 +175,14 @@ impl AttrKind {
     /// it `available_externally` or not at all (spec/codegen.md "GNU
     /// inline functions"); WP-585.
     pub const GNU_INLINE: AttrKind = AttrKind(146);
+    /// GNU `nodebug` (clang `NoDebugAttr`): no debug information for the
+    /// entity. kiln emits none in any case; the x86 intrinsic headers put
+    /// it on every function (WP-630). Numbered apart from the run above.
+    pub const NODEBUG: AttrKind = AttrKind(170);
+    /// clang `min_vector_width(N)` on a function (clang
+    /// `MinVectorWidthAttr`): `a` = N, the least `"min-legal-vector-width"`
+    /// of its definition (WP-630).
+    pub const MIN_VECTOR_WIDTH: AttrKind = AttrKind(171);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

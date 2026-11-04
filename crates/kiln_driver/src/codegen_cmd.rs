@@ -242,6 +242,11 @@ impl CodegenJob<'_> {
         if let Some(signed) = a.predef.char_signed {
             target.types.char_signed = signed;
         }
+        // WP-630: `cx16` makes 128-bit atomics lock-free (clang
+        // `X86TargetInfo::setMaxAtomicWidth`).
+        if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
+            target.types.max_atomic_inline_bytes = 16;
+        }
         let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let popts = ParseOptions {
@@ -272,9 +277,11 @@ impl CodegenJob<'_> {
                 ident: ident(),
                 outline_atomics: a.outline_atomics.unwrap_or(true),
                 target_features: feats.extra.clone(),
-                target_attr: job.toolchain.target.is_aarch64().then_some(
-                    crate::features::target_attr_features as kiln_codegen::TargetAttrParser,
-                ),
+                target_attr: Some(if job.toolchain.target.is_aarch64() {
+                    crate::features::target_attr_features as kiln_codegen::TargetAttrParser
+                } else {
+                    crate::features::x86_target_attr_features
+                }),
                 // clang 19's `vscale_range` also needs NEON (its `SveMode`).
                 sve: feats.sve
                     && (a.predef.clang_compat == ClangCompat::Clang22

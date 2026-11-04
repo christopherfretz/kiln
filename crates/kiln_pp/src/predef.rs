@@ -91,6 +91,10 @@ pub struct PredefConfig {
     pub reflection: bool,
     /// The `AArch64` target features the `__ARM_*` macros derive from.
     pub arm: ArmTarget,
+    /// Off `AArch64`, how the `-march=<cpu>` macros differ from the base
+    /// file's: a macro (re)defined with its value, or removed with `None`
+    /// (the driver's `features::x86_cpu_macros`; WP-630).
+    pub x86_macros: Vec<(String, Option<String>)>,
 }
 
 /// The `AArch64` target state of `-march=` / `-mcpu=` /
@@ -143,6 +147,7 @@ impl PredefConfig {
             std_float_aliases: true,
             reflection: false,
             arm: ArmTarget::default(),
+            x86_macros: Vec::new(),
         }
     }
 }
@@ -346,6 +351,15 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
     apply_flags(&mut m, cfg);
     if cfg.aarch64 {
         apply_arm(&mut m, &cfg.arm, cfg.clang_compat);
+    } else {
+        for (n, v) in &cfg.x86_macros {
+            match v {
+                Some(v) => set(&mut m, n, v),
+                None => {
+                    m.remove(n);
+                }
+            }
+        }
     }
 
     let mut out = String::with_capacity(base.len() + 256);
