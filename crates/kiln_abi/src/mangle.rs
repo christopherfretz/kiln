@@ -14,7 +14,7 @@ use kiln_ast::consts::{ByteImage, ConstValue, Member, PrintEnv, PtrBase, Scalar,
 use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage};
 use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, QualType, TemplateNameId};
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
-use kiln_ast::types::{ArgView, BuiltinType, RefQual, TemplateName, TypeView};
+use kiln_ast::types::{ArgView, BuiltinType, RefQual, TemplateName, TypeView, VectorKind};
 use kiln_source::fx::FxHashMap;
 
 mod constraint;
@@ -1140,6 +1140,60 @@ impl<'a, 'b> Mangler<'a, 'b> {
         } else {
             builtin_code(b)
         }
+    }
+
+    /// The source name of a Neon vector (WP-558): `AArch64` mangles it as
+    /// its ACLE type `__<Elt>x<N>_t` (clang `mangleAArch64NeonVectorType`),
+    /// other targets as `__simd64_<elt>` / `__simd128_<elt>` (clang
+    /// `mangleNeonVectorType`).
+    fn neon_vector_name(&self, elem: QualType, count: u32, poly: bool) -> String {
+        use BuiltinType as B;
+        let b = self.ast.types.builtin(elem);
+        if self.ast.types.target().long_double == kiln_ast::types::FloatFormat::IeeeQuad {
+            let base = match (poly, b) {
+                (true, Some(B::UChar | B::SChar)) => "Poly8",
+                (true, Some(B::UShort | B::Short)) => "Poly16",
+                (true, _) => "Poly64",
+                (false, Some(B::SChar)) => "Int8",
+                (false, Some(B::Short)) => "Int16",
+                (false, Some(B::Int)) => "Int32",
+                (false, Some(B::Long | B::LongLong)) => "Int64",
+                (false, Some(B::UChar)) => "Uint8",
+                (false, Some(B::UShort)) => "Uint16",
+                (false, Some(B::UInt)) => "Uint32",
+                (false, Some(B::ULong | B::ULongLong)) => "Uint64",
+                (false, Some(B::Half)) => "Float16",
+                (false, Some(B::Double)) => "Float64",
+                (false, Some(B::BFloat16)) => "Bfloat16",
+                (false, _) => "Float32",
+            };
+            return format!("__{base}x{count}_t");
+        }
+        let elt = match (poly, b) {
+            (true, Some(B::UChar | B::SChar)) => "poly8_t",
+            (true, Some(B::UShort | B::Short)) => "poly16_t",
+            (true, _) => "poly64_t",
+            (false, Some(B::SChar)) => "int8_t",
+            (false, Some(B::UChar)) => "uint8_t",
+            (false, Some(B::Short)) => "int16_t",
+            (false, Some(B::UShort)) => "uint16_t",
+            (false, Some(B::Int)) => "int32_t",
+            (false, Some(B::UInt)) => "uint32_t",
+            (false, Some(B::Long | B::LongLong)) => "int64_t",
+            (false, Some(B::ULong | B::ULongLong)) => "uint64_t",
+            (false, Some(B::Double)) => "float64_t",
+            (false, Some(B::Half)) => "float16_t",
+            (false, Some(B::BFloat16)) => "bfloat16_t",
+            (false, _) => "float32_t",
+        };
+        let esize: u32 = match b {
+            Some(B::SChar | B::UChar | B::Char) => 1,
+            Some(B::Short | B::UShort | B::Half | B::BFloat16) => 2,
+            Some(B::Int | B::UInt | B::Float) => 4,
+            _ => 8,
+        };
+        let bits = esize * 8 * count;
+        format!("{}{elt}", if bits == 64 { "__simd64_" } else { "__simd128_" })
     }
 
     fn new(ast: &'a Ast, anon: &'b mut AnonIds, prefix: &str) -> Self {
@@ -2805,6 +2859,13 @@ impl<'a, 'b> Mangler<'a, 'b> {
             TypeView::Atomic(e) => {
                 self.out.push_str("U7_Atomic");
                 self.ty(e);
+            }
+            TypeView::Vector { elem, count, kind }
+                if matches!(kind, VectorKind::Neon | VectorKind::NeonPoly) =>
+            {
+                let name = self.neon_vector_name(elem, count, kind == VectorKind::NeonPoly);
+                self.out.push_str(&name.len().to_string());
+                self.out.push_str(&name);
             }
             TypeView::Vector { elem, count, .. } => {
                 self.out.push_str("Dv");

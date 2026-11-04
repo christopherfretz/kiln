@@ -242,6 +242,9 @@ impl CodegenJob<'_> {
                 ident: ident(),
                 outline_atomics: a.outline_atomics.unwrap_or(true),
                 target_features: feats.extra.clone(),
+                target_attr: job.toolchain.target.is_aarch64().then_some(
+                    crate::features::target_attr_features as kiln_codegen::TargetAttrParser,
+                ),
                 // clang 19's `vscale_range` also needs NEON (its `SveMode`).
                 sve: feats.sve
                     && (a.predef.clang_compat == ClangCompat::Clang22

@@ -11,6 +11,12 @@ cg_auto_var_init_too_large = Remark [AutoVarInit] (3) "erroneous value of variab
 // clang `warn_avx_calling_convention`: {0} is 0 for a return, 1 for an
 // argument; {2} the target feature (`avx`, `avx512f`).
 cg_avx_calling_convention = Warning [Psabi] (3) "AVX vector {0:return|argument} of type {1} without '{2}' enabled changes the ABI";
+// clang `err_builtin_needs_feature` (`checkTargetFeatures`): {0} the
+// builtin, {1} its required-feature expression; WP-558.
+cg_builtin_needs_feature = Error (2) "'{0}' needs target feature {1}";
 // clang `err_duplicate_mangled_name` (`GetOrCreateLLVMFunction`); WP-492.
 cg_duplicate_mangled_name = Error (1) "definition with same mangled name '{0}' as another definition";
 cg_error = Error (1) "{0}";
+// clang `err_function_needs_feature` (`checkTargetFeatures`): {0} the
+// caller, {1} the `always_inline` callee, {2} the missing feature; WP-558.
+cg_function_needs_feature = Error (3) "always_inline function '{1}' requires target feature '{2}', but would be inlined into function '{0}' that is compiled without support for '{2}'";

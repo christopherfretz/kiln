@@ -7,6 +7,8 @@ sema_naked_non_asm_stmt = Error (0) "non-ASM statement in naked function is not 
 sema_namespace_member_extra_qualification = Warning [ExtraQualification] (1) "extra qualification on member '{0}'";
 sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> or import std before using the 'typeid' operator";
 sema_need_header_before_typeid_19 = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
+// ----- WP-558 (clang `err_attribute_bad_neon_vector_size`)
+sema_neon_vector_bad_size = Error (0) "Neon vector size must be 64 or 128 bits";
 sema_nested_name_spec_non_tag = Error (1) "type {0} cannot be used prior to '::' because it has no members";
 sema_new_array_of_auto = Error (0) "cannot allocate array of 'auto'";
 sema_new_array_size_unknown = Error (0) "array size must be specified in new expression with no initializer";

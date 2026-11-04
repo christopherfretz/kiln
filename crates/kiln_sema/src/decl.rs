@@ -9484,6 +9484,9 @@ impl Sema<'_, '_> {
         if kind == AttrKind::DIAGNOSE_IF {
             return self.diagnose_if_attribute(syntax, args, loc);
         }
+        if kind == AttrKind::TARGET {
+            return self.target_attribute(syntax, &n, args, loc);
+        }
         if kind == AttrKind::ENABLE_IF {
             return self.enable_if_attribute(syntax, args, loc);
         }
@@ -9620,6 +9623,37 @@ impl Sema<'_, '_> {
             }
         };
         let node = AttrNode { kind: AttrKind::ENUM_EXTENSIBILITY, syntax, flags: 0, loc, a, b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// GNU `target("features")` (clang `handleTargetAttr`): exactly one
+    /// string literal, kept as its `StringLitId` in `a`. The feature
+    /// names are not checked (clang's `warn_unsupported_target_attribute`
+    /// is a follow-up); codegen reads them on `AArch64`.
+    fn target_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        n: &str,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let [arg] = args else {
+            let msg =
+                self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(n.to_owned()).arg("1");
+            self.emit(msg);
+            return None;
+        };
+        let lit = match arg {
+            AttrArg::Expr(e) => self.string_lit_of(*e),
+            AttrArg::Type(_) | AttrArg::Ident(..) => None,
+        };
+        let Some(lit) = lit else {
+            let msg = self.diag(DiagId::parse_attribute_requires_string, loc).arg(n.to_owned());
+            self.emit(msg);
+            return None;
+        };
+        let a = self.ast.exprs.string_lit(lit).raw();
+        let node = AttrNode { kind: AttrKind::TARGET, syntax, flags: 0, loc, a, b: 0 };
         Some(self.ast.attrs.push(node))
     }
 
@@ -10239,6 +10273,11 @@ fn attr_kind_of(
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
         ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
+        // clang `Clang<"neon_vector_type">` / `Clang<"neon_polyvector_type">`.
+        ("neon_vector_type", _, _) if gnu_syntax || clang_scope => AttrKind::NEON_VECTOR_TYPE,
+        ("neon_polyvector_type", _, _) if gnu_syntax || clang_scope => {
+            AttrKind::NEON_POLYVECTOR_TYPE
+        }
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
         // clang `GNU<"enable_if">`: no `[[...]]` spelling.
@@ -10251,6 +10290,8 @@ fn attr_kind_of(
         }
         ("format", _, true) => AttrKind::FORMAT,
         ("nothrow", _, true) => AttrKind::NOTHROW,
+        // clang `GCC<"target">`.
+        ("target", _, true) => AttrKind::TARGET,
         _ => return None,
     })
 }

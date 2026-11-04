@@ -3151,6 +3151,10 @@ impl Cg<'_> {
             }
             noreturn = unreachable;
         }
+        // clang `EmitCall` checks target features before the arguments.
+        if let Some(d) = direct {
+            self.target_feature_call_check(e, d);
+        }
         let vals = self.emit_call_args(&sig, &args)?;
         let mut ret_extra = Vec::new();
         if let Some(d) = direct {
