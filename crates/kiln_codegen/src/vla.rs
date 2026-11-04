@@ -147,7 +147,8 @@ impl Cg<'_> {
             return Ok(None);
         };
         let (n, _) = self.vla_size(q)?;
-        Ok(Some((self.bin(BinOp::Mul, Flags::NSW, iv, n), elem)))
+        let fl = self.vla_nsw();
+        Ok(Some((self.bin(BinOp::Mul, fl, iv, n), elem)))
     }
 
     /// The `StackRestore` cleanup (clang `CallStackRestore`).
@@ -206,7 +207,8 @@ impl Cg<'_> {
         }
         let (n, elem) = self.vla_size(q)?;
         let ty = self.mty(elem);
-        Ok(Some((self.bin(BinOp::Mul, Flags::NSW, idx, n), ty)))
+        let fl = self.vla_nsw();
+        Ok(Some((self.bin(BinOp::Mul, fl, idx, n), ty)))
     }
 
     /// The step of `++`/`--` on a pointer to the variable length array

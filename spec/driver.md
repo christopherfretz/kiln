@@ -108,6 +108,45 @@ starting with `-` are inputs.
 | `-l<lib>`, `-L<dir>`, `-Wl,<args>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
 | `-dD`, `-dI` | parsed; "not implemented yet" (WP-017) |
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name is accepted and ignored |
+| `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
+
+### Codegen flags (WP-605)
+
+The common GCC/clang code-generation and hardening flags production builds
+pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
+(`crates/kiln_driver/src/codegen_flags.rs`) parses them; within each
+`-fX`/`-fno-X` pair the last wins. Every flag falls in one of three classes.
+
+**1. Honoured** (each matches clang 19's IR for the same flag, pinned by
+`tests/codegen/`):
+
+| flag | effect |
+|---|---|
+| `-fstack-protector`, `-fstack-protector-strong`, `-fstack-protector-all`, `-fno-stack-protector` | function attribute `ssp`, `sspstrong`, `sspreq`, or none (the default) on every function kiln defines (`CodegenOptions::stack_protector`); the last of the four wins. The `no_stack_protector` attribute is not honoured |
+| `-f[no-]asynchronous-unwind-tables`, `-f[no-]unwind-tables` | `CodegenOptions::unwind_tables`: asynchronous (`uwtable`, `"uwtable"` module flag 2) unless the last `-f[no-]asynchronous-unwind-tables` is the negative (default: asynchronous, except under `-ffreestanding`); otherwise synchronous (`uwtable(sync)`, flag 1) with `-funwind-tables`, else none (no attribute, no flag). So the flags never remove the default `uwtable` alone |
+| `-fno-plt`, `-fplt` | `nonlazybind` on every function declared but not defined in the TU, the `"RtLibUseGOT"` module flag, and under `-fno-pic` function declarations are not assumed `dso_local` (clang `shouldAssumeDSOLocal`) (`CodegenOptions::no_plt`) |
+| `-ffunction-sections`, `-fdata-sections` | `llc -function-sections` / `-data-sections` (see "Code generation") |
+| `-march=<cpu>` (x86-64), `-march=native`, `-mcpu=native` (AArch64, without `-march=`), `-mtune=<cpu>` | x86-64: `-march=` names one of clang's x86 CPUs (`x86-64`, `x86-64-v2`..`v4`, `skylake`, `znver4`, ...; clang 22 adds `wildcatlake`, `novalake`, `diamondrapids`) and sets `"target-cpu"` (the default `"tune-cpu"="generic"` is then omitted, as clang); its features and predefines are not expanded (deviation). `native` on either target emits no `"target-cpu"` and passes `llc -mcpu=native` (the IR attribute would override `-mcpu`); kiln never inspects the host. `-mtune=<cpu>` sets `"tune-cpu"`; `-mtune=native` is accepted and adds nothing. The triple is unchanged |
+| `-fwrapv`, `-fno-wrapv`, `-f[no-]wrapv-pointer`, `-fno-strict-overflow`, `-fstrict-overflow` | signed overflow wraps (`CodegenOptions::wrapv`): the last of `-f[no-]wrapv`, else `-fno-strict-overflow`; no `nsw` on signed arithmetic, increments, negation, shifts or VLA sizes. Pointer overflow wraps (`wrapv_pointer`): at `-fclang-compat=19` exactly when `wrapv`; at 22 the last of `-f[no-]wrapv-pointer`, else `-fno-strict-overflow`; no `inbounds` on pointer arithmetic and subscripts, and at 22 none on field GEPs either. The Oven is unchanged: signed overflow in a constant expression stays non-constant ([expr.const]/5), unlike GCC, which folds it as wrapping under `-fwrapv` (deliberate divergence, deferred) |
+| `-fno-delete-null-pointer-checks`, `-fdelete-null-pointer-checks` | `CodegenOptions::null_pointer_is_valid`: every definition gets `null_pointer_is_valid`; reference parameters, returns and `this` lose `nonnull` (`this` gets `dereferenceable_or_null`), `nonnull`/`returns_nonnull` attributes, the `operator new` result and loaded references lose `nonnull` (and `!nonnull` metadata), as clang |
+| `-Wp,<a>,<b>,...`, `-Xpreprocessor <arg>` | spliced into the argument list before parsing (`codegen_flags::splice_preprocessor_args`), as GCC: `-Wp,-MD,<f>` / `-Wp,-MMD,<f>` become `-MD -MF <f>` / `-MMD -MF <f>`, any other list is split at commas (empty pieces dropped), so `-Wp,-D_FORTIFY_SOURCE=2` is `-D_FORTIFY_SOURCE=2`; `-Xpreprocessor <arg>` is `<arg>` |
+
+**2. Accepted and ignored silently** (no observable effect in kiln today;
+do not add a diagnostic): `-f[no-]stack-clash-protection`,
+`-fcf-protection`, `-fcf-protection=full|branch|return|none` (another value
+is `invalid value '<v>' in '-fcf-protection=<v>'`; accepted on AArch64 too,
+where clang errors), `-f[no-]common`, `-fexcess-precision=fast|standard|16`,
+`-f[no-]math-errno`, `-fstack-usage`, `-gz`, `-gz=none|zlib|zstd`,
+`-fno-trapv`, `-fno-short-enums`. Other `-fexcess-precision=`/`-gz=` values
+(and an empty `-mtune=`) are `unsupported argument '<v>' to option '<opt>'`.
+
+**3. Rejected** with `drv_unsupported_flag`, the error `'<flag>' is not
+supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
+`-ftrapv`, `-fshort-enums`, every `-fsanitize*` and `-fno-sanitize*`
+(`-fsanitize=address`, `-fno-sanitize-recover=all`, ...),
+`-fcoverage-mapping`, `-fprofile-arcs`, `-ftest-coverage`, `--coverage`,
+`-fprofile-instr-generate[=...]`, `-fprofile-generate[=...]`,
+`-fprofile-instr-use[=...]`, `-fprofile-use[=...]`.
 
 ## Driver modes
 
@@ -269,8 +308,11 @@ modelled: clang 22 by default, clang 19 at `-fclang-compat=19`.
 - **Errors.** Any other architecture, CPU or extension (`armv8.0-a`,
   `armv7-a`, `cortex-a57`, `sme`, ...) is `unsupported argument '<v>' to
   option '-march='` (`-mcpu=` alike), and so is a `-msve-vector-bits=`
-  value outside the list (`'<v>' to option '-msve-vector-bits='`). On
-  x86-64, `-march=`/`-mcpu=` are the same error, `-msve-vector-bits=` is
+  value outside the list (`'<v>' to option '-msve-vector-bits='`).
+  `native` is accepted (no features; "Codegen flags"). On
+  x86-64, `-march=` takes `native` or one of clang's x86 CPU names
+  ("Codegen flags") and any other value, and every `-mcpu=`, is the same
+  error, `-msve-vector-bits=` is
   `unsupported option '-msve-vector-bits=' for target '<triple>'` (the
   `--target` as written; `drv_unsupported_opt_for_target`) and
   `-target-feature` is ignored. A `-target-feature` value without a sign
@@ -456,7 +498,9 @@ the current directory (standard input is `-`). `-o -` is standard output.
   (`-O2`, `-Os`, `-Oz`) or `-O3` (`-O3`, `-O4`, `-Ofast`), then
   `-relocation-model=static` with `-fno-pic`/`-fno-pie`, else
   `-relocation-model=pic` (clang's default PIE), then `-filetype=obj`
-  unless `-S`.
+  unless `-S`, then `-function-sections` / `-data-sections`
+  (`-ffunction-sections` / `-fdata-sections`) and `-mcpu=native`
+  (`-march=native`, "Codegen flags").
 - **IR optimization (WP-351, WP-370).** `llc` runs no IR pass that
   splits coroutines, and kiln emits unoptimized IR, so before the IR is
   written (`-S -emit-llvm`, `-c -emit-llvm`) or piped to `llc` it goes
@@ -745,12 +789,24 @@ Each deviation is covered by a test or a test note.
     compile. `-Xclang` forwards to the driver parser, not to a `cc1`,
     so only options the driver knows are accepted after it.
 18. **Target features** ("Target features" above): the CPU names other
-    than `generic`, `-march=armv8-r`/`native`, and the extensions kiln does
+    than `generic` and `native`, `-march=armv8-r`, and the extensions kiln does
     not model (`sme*`, `fp8*`, clang 19's `b16b16`/`sve-b16b16`, ...) are
     errors where clang accepts them; on x86-64, `-mcpu=` is "unsupported
     argument" (clang: "unsupported option") and `-target-feature` is
     ignored (clang passes it on); a `-target-feature` value without
     `+`/`-` is an error (clang warns).
+19. **Codegen flags** ("Codegen flags" above, WP-605): `-fno-plt` puts
+    `nonlazybind` only on functions with no definition in the TU, where
+    clang also marks a function used before its later definition and
+    template instantiations; x86-64 `-march=<cpu>` sets only
+    `"target-cpu"` (no `target-features`, no `__AVX__`-style predefines);
+    `-march=native` emits no `"target-cpu"` and `-mtune=native` no
+    `"tune-cpu"` (clang resolves the host); `-fcf-protection` is accepted
+    on AArch64; `-fwrapv-pointer` is accepted at `-fclang-compat=19`
+    (clang 19 has no such flag); `-fno-math-errno` is ignored (clang
+    then treats the libm builtins as not setting `errno`); the sanitizer, coverage,
+    profile, `-ftrapv` and `-fshort-enums` flags are errors; and the Oven
+    ignores `-fwrapv`.
 
 ## Tests
 
@@ -774,7 +830,13 @@ Each deviation is covered by a test or a test note.
   unused-input warnings, missing tools; `kiln_and_kilnpp`: both names as
   real executables, `--version`, `.c` under each). It runs `kiln++`
   (the build script's symlink beside `CARGO_BIN_EXE_kiln`). Steps needing `llc-19`/`clang++-19`
-  are skipped without them.
+  are skipped without them. `codegen_flags_classes` compiles `int
+  main(){}` with each class-1 and class-2 flag of "Codegen flags" (exit 0,
+  no output on stderr) and checks the class-3 error and the bad-value
+  errors; `codegen_flags_backend` checks the `llc` arguments under `-###`,
+  `-Wp,-MD,<f>` and a `-ffunction-sections` object. The IR effects are
+  `tests/codegen/{stack_protector*,unwind_tables_*,no_plt*,wrapv,no_strict_overflow,no_delete_null_pointer_checks}.cpp`;
+  `-Wp,-D` is `tests/conformance/cpp.predefined/wp-preprocessor-args.cpp`.
 - `crates/kiln_driver/tests/record_layouts.rs`: the `tests/layout/`
   corpus (at least 40 programs). Each is dumped by
   `kiln++ -fdump-record-layouts` and by `clang -Xclang

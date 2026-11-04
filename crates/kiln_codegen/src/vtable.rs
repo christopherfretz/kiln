@@ -1164,7 +1164,7 @@ impl Cg<'_> {
             // `available_externally`.
             let fa = self.m.func(f).attrs.func;
             let mut a = self.m.attrs_of(fa).to_vec();
-            a.push(Attr::UwTable(kiln_llvm::UwTableKind::Async));
+            self.def_attrs(&mut a);
             self.size_attrs(&mut a);
             a.dedup();
             let fa = self.m.attr_set(&a);

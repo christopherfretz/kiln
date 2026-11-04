@@ -997,7 +997,7 @@ impl Cg<'_> {
                     return Ok(self.fneg(v));
                 }
                 let z = self.icn(t, 0);
-                let fl = if self.is_signed(q) { Flags::NSW } else { Flags::NONE };
+                let fl = self.nsw_if(self.is_signed(q));
                 Ok(self.bin(BinOp::Sub, fl, z, v))
             }
             UnaryOp::Not => {
@@ -1082,7 +1082,7 @@ impl Cg<'_> {
         } else if ast.types.is_pointer(q) {
             let pq = ast.types.pointee(q).expect("pointee");
             if let Some((n, et)) = self.vla_inc_step(pq, inc)? {
-                return Ok(self.gep_nuw(et, old, vec![n], inc));
+                return Ok(self.gep_arith(et, old, vec![n], inc));
             }
             let et = if ast.types.is_void(pq) || ast.types.is_function(pq) {
                 LTy::I8
@@ -1090,7 +1090,7 @@ impl Cg<'_> {
                 self.mty(pq)
             };
             let c = self.icn(LTy::I32, amount);
-            self.gep_nuw(et, old, vec![c], inc)
+            self.gep_arith(et, old, vec![c], inc)
         } else {
             let t = self.f.fir.ty(&self.m, old);
             if self.is_float_ty(t) && self.is_fp16(q) {
@@ -1105,7 +1105,7 @@ impl Cg<'_> {
             } else {
                 let c = self.icn(t, amount);
                 let can_overflow = !ast.exprs.get(e).has(ExprFlags::CANNOT_OVERFLOW);
-                let fl = if can_overflow && self.is_signed(q) { Flags::NSW } else { Flags::NONE };
+                let fl = self.nsw_if(can_overflow && self.is_signed(q));
                 self.bin(BinOp::Add, fl, old, c)
             }
         })
@@ -1239,7 +1239,7 @@ impl Cg<'_> {
         // clang `hasSignedIntegerRepresentation`: a vector's elements;
         // `nsw` only for scalars (`isSignedIntegerOrEnumerationType`).
         let signed = self.is_signed(self.scalar_of(q));
-        let nsw = if self.is_signed(q) { Flags::NSW } else { Flags::NONE };
+        let nsw = self.nsw_if(self.is_signed(q));
         Ok(match op {
             BinaryOp::Add | BinaryOp::Sub if lp && rp => {
                 let a = self.cast(CastOp::PtrToInt, l, LTy::I64);
@@ -1273,14 +1273,14 @@ impl Cg<'_> {
                 }
                 let et = ast.types.pointee(pq).expect("pointee");
                 if let Some((idx, ety)) = self.vla_pointer_step(et, idx)? {
-                    return Ok(self.gep_nuw(ety, p, vec![idx], !is && !sub));
+                    return Ok(self.gep_arith(ety, p, vec![idx], !is && !sub));
                 }
                 let ety = if ast.types.is_void(et) || ast.types.is_function(et) {
                     LTy::I8
                 } else {
                     self.mty(et)
                 };
-                self.gep_nuw(ety, p, vec![idx], !is && !sub)
+                self.gep_arith(ety, p, vec![idx], !is && !sub)
             }
             BinaryOp::Add => {
                 if float {
@@ -1996,9 +1996,11 @@ impl Cg<'_> {
             return p;
         }
         let i = Fir::last_inst(p);
-        let k = self.m.md_kind("nonnull");
-        let empty = self.m.md_tuple(&[]);
-        self.f.fir.add_md(i, k, empty);
+        if !self.opts.null_pointer_is_valid {
+            let k = self.m.md_kind("nonnull");
+            let empty = self.m.md_tuple(&[]);
+            self.f.fir.add_md(i, k, empty);
+        }
         if !self.ast.types.is_function(referee) {
             let (_, a) = self.pointee_layout(referee);
             if a > 1 {
@@ -2522,7 +2524,7 @@ impl Cg<'_> {
             let mut align = base.align;
             let i = idx.unwrap_or(0);
             if i != 0 && !is_union {
-                v = self.struct_gep(rty, base.v, i);
+                v = self.field_gep(rty, base.v, i);
                 align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
             }
             let st = self.m.types.int(bf.storage_size);
@@ -2621,7 +2623,7 @@ impl Cg<'_> {
             let align = min_align(base.align, off);
             return Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, tb: Tb::Type });
         };
-        let v = self.struct_gep(rty, base.v, i);
+        let v = self.field_gep(rty, base.v, i);
         let align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
         Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, tb: Tb::Type })
     }
@@ -2917,7 +2919,7 @@ impl Cg<'_> {
             Some((_, x, _)) => min_align(addr.align, (x as u64).wrapping_mul(esz)),
             None => min_align(addr.align, esz),
         };
-        let v = self.gep_nuw(addr.ty, addr.v, indices, !self.is_signed(iq));
+        let v = self.gep_arith(addr.ty, addr.v, indices, !self.is_signed(iq));
         Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None, vidx: None, tb })
     }
 

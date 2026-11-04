@@ -171,6 +171,24 @@ pub fn ident() -> String {
     format!("kiln version {}", env!("CARGO_PKG_VERSION"))
 }
 
+/// The [`CodegenOptions`] fields set by the driver's codegen flags
+/// (spec/driver.md "Codegen flags"), the rest defaulted; `cpu` is the
+/// resolved `-march=` CPU ([`crate::features::TargetFeatures::cpu`]).
+fn codegen_flag_options(a: &Args, cpu: Option<String>) -> CodegenOptions {
+    let f = &a.codegen;
+    CodegenOptions {
+        stack_protector: f.stack_protector(),
+        unwind_tables: f.unwind_tables(a.predef.freestanding.unwrap_or(false)),
+        no_plt: f.no_plt,
+        wrapv: f.wrapv(),
+        wrapv_pointer: f.wrapv_pointer(a.predef.clang_compat == ClangCompat::Clang22),
+        null_pointer_is_valid: f.null_pointer_is_valid(),
+        target_cpu: cpu,
+        tune_cpu: f.mtune.clone().filter(|t| t != "native"),
+        ..CodegenOptions::default()
+    }
+}
+
 /// One source input through the frontend and IR generation.
 #[derive(Debug)]
 pub struct CodegenJob<'j>(pub Job<'j>);
@@ -286,6 +304,7 @@ impl CodegenJob<'_> {
                 },
                 semantic_interposition: a.semantic_interposition,
                 direct_access_external_data: a.direct_access_external_data,
+                ..codegen_flag_options(a, feats.cpu.clone())
             };
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
@@ -599,6 +618,17 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
     });
     if phase != Phase::Assembly {
         cmd.arg("-filetype=obj");
+    }
+    // spec/driver.md "Codegen flags": clang's `-ffunction-sections` /
+    // `-fdata-sections` and the `-march=native` / x86 `-march=<cpu>` CPU.
+    if args.codegen.function_sections {
+        cmd.arg("-function-sections");
+    }
+    if args.codegen.data_sections {
+        cmd.arg("-data-sections");
+    }
+    if let Some(cpu) = crate::features::resolve(args, &tc.target).0.cpu {
+        cmd.arg(format!("-mcpu={cpu}"));
     }
     cmd.arg("-o").arg(out).arg("-");
     cmd
