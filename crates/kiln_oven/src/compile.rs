@@ -5142,6 +5142,20 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.effect(op);
             }
+            // An immediate invocation sema left unvalued: one nested in an
+            // immediate-escalating function or lambda (P2564; the call is
+            // part of the enclosing evaluation, [expr.const]/16), or one
+            // evaluated with the enclosing initializer. Evaluated in place,
+            // as `rv_inner` does for a value (spec/oven.md "Nested
+            // immediate invocations").
+            ExprKind::ConstantExpr if self.ast().exprs.constant_value(e).is_none() => {
+                let op = self.ast().exprs.operand(e);
+                self.effect(op);
+            }
+            // A `void` immediate invocation sema evaluated on its own: its
+            // side effects ended with that evaluation (it is a full
+            // constant expression, [expr.const]/16).
+            ExprKind::ConstantExpr if self.kind(ty) == TyKind::Void => {}
             ExprKind::ChooseExpr if self.ast().exprs.choose_chosen(e).is_some() => {
                 let op = self.ast().exprs.choose_chosen(e).expect("guarded");
                 self.effect(op);

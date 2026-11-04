@@ -4461,6 +4461,16 @@ impl Cg<'_> {
     fn emit_one_var_decl(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
+        // A consteval-only variable (`constexpr std::meta::info r`, an
+        // expansion statement's range and iterators over `info`s) exists
+        // only for constant evaluation: sema made it `constexpr` and every
+        // use of it constant ([basic.types.general], P2996R13), so it has
+        // no storage (spec/codegen.md "Consteval-only variables").
+        if let Some(q) = ast.decls.get(d).ty()
+            && self.is_consteval_only(q)
+        {
+            return Ok(());
+        }
         match v.spec.storage() {
             _ if is_static_local(ast, d) => {
                 let g = self.static_local(d)?;
