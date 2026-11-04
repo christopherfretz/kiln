@@ -4775,6 +4775,12 @@ impl Sema<'_, '_> {
         {
             return self.recover_err(&kids, loc);
         }
+        if named.and_then(|d| self.ast.decls.builtin_id(d))
+            == Some(kiln_ast::decl::builtin::PREFETCH)
+            && !self.check_prefetch(callee, &conv_args, rparen)
+        {
+            return self.recover_err(&kids, loc);
+        }
         if let Some(d) = named {
             // A function invalid for an invalid parameter: its arguments
             // were checked, the call itself is erroneous and undiagnosed
@@ -5471,6 +5477,20 @@ impl Sema<'_, '_> {
         arrow: bool,
         loc: Loc,
     ) -> ExprId {
+        self.field_access_extra(base, f, quals, arrow, loc, None)
+    }
+
+    /// [`Self::field_access`] recording `extra` (the qualifier of
+    /// `this->B::m`, which instantiation looks up in again: [class.qual]).
+    pub(crate) fn field_access_extra(
+        &mut self,
+        base: ExprId,
+        f: DeclId,
+        quals: kiln_ast::types::Quals,
+        arrow: bool,
+        loc: Loc,
+        extra: Option<kiln_ast::expr::DeclRefExtra>,
+    ) -> ExprId {
         self.ast.decls.set_flags(f, DeclFlags::REFERENCED);
         let declared = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let mutable = self.ast.decls.field(f).is_some_and(kiln_ast::decl::FieldData::is_mutable);
@@ -5483,7 +5503,7 @@ impl Sema<'_, '_> {
             }
             if q.is_empty() { declared } else { self.ast.types.qualify(declared, q) }
         };
-        self.build_member_expr(base, f, ty, arrow, loc, None)
+        self.build_member_expr(base, f, ty, arrow, loc, extra)
     }
 
     /// Builds the `MemberExpr` `base.m`; one built in an unevaluated operand

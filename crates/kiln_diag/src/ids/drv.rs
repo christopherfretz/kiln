@@ -30,6 +30,8 @@ drv_treating_input_as_cxx = Warning [Deprecated] (2) "treating '{0}' input as '{
 drv_unable_to_execute = Error (1) "unable to execute command: Executable \"{0}\" doesn't exist!";
 drv_unknown_argument = Error (1) "unknown argument: '{0}'";
 drv_unknown_argument_suggest = Error (2) "unknown argument '{0}'; did you mean '{1}'?";
+// WP-605: a recognised GCC/clang flag kiln deliberately does not implement.
+drv_unsupported_flag = Error (1) "'{0}' is not supported by kiln";
 // WP-469: `-msve-vector-bits=` off AArch64.
 drv_unsupported_opt_for_target = Error (2) "unsupported option '{0}' for target '{1}'";
 drv_unsupported_option_argument = Error (2) "unsupported argument '{1}' to option '{0}'";

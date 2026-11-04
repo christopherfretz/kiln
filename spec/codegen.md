@@ -504,6 +504,16 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`,
       `__builtin_return_address(n)` `call ptr @llvm.returnaddress(i32 n)`
       (WP-432, `builtins_return_address.cpp`).
+      `__builtin_prefetch(p, rw, loc)` is `call void
+      @llvm.prefetch.p0(ptr p, i32 rw, i32 loc, i32 1)` (defaults `rw` 0,
+      `loc` 3; the trailing 1 selects the data cache), the intrinsic
+      declared `nocallback nofree nosync nounwind willreturn
+      memory(argmem: readwrite, inaccessiblemem: readwrite)` with a
+      `nocapture readonly` (22: `readonly captures(none)`) pointer and
+      three `immarg` operands (WP-610,
+      `builtin_prefetch.cpp`); `__builtin_ia32_pause()` is `call void
+      @llvm.x86.sse2.pause()`, declared `nounwind`
+      (`target.x86/ia32-pause-ir{,-19}.cpp`).
       `__builtin_elementwise_add_sat` / `_sub_sat` are `llvm.sadd.sat` /
       `uadd.sat` / `ssub.sat` / `usub.sat` by element signedness (a
       `bool` operand as unsigned), folded at 22 when the Oven folds them
@@ -2915,6 +2925,39 @@ Linux targets; `Cg::frame_pointer` applies it.
 - Tests: `kiln_codegen` unit `frame_pointer_matches_clang` (the matrix),
   `kiln_driver` `frame_pointer_flags_last_win`,
   `tests/codegen/frame_pointer_*.cpp` and `noinline_matrix_o{1,2}.cpp`
+  (exact under oracle 19 on both targets).
+
+### Hardening and overflow options (WP-605)
+The driver's "Codegen flags" (spec/driver.md) set these `CodegenOptions`
+fields; each follows clang 19's IR.
+- **`stack_protector: StackProtector`** (`Off`, the default, `On`,
+  `Strong`, `All`): `ssp` / `sspstrong` / `sspreq` in the attribute group of
+  every definition (`module.rs` `def_attrs`; clang
+  `SetLLVMFunctionAttributesForDefinition`), thunks, global-init and TLS
+  helpers included.
+- **`unwind_tables: Option<UnwindTables>`** (`Async` by default): `uwtable`
+  / `uwtable(sync)` on definitions and the `"uwtable"` module flag 2 / 1;
+  `None` emits neither.
+- **`no_plt`**: `nonlazybind` on every function declaration without a
+  definition in the module (`set_decl_attrs`), the `"RtLibUseGOT"` module
+  flag, and `visibility::assume_dso_local` no longer makes function
+  declarations `dso_local` under the static model.
+- **`wrapv`**: signed `add`/`sub`/`mul`/`shl`, increments, negation and
+  VLA size products drop `nsw` (`Cg::nsw_if`, `vla_nsw`).
+  **`wrapv_pointer`**: pointer arithmetic and subscripts are plain GEPs
+  (`Cg::gep_arith`), and at compat 22 member access too (`Cg::field_gep`;
+  clang 22 drops `inbounds nuw` there, clang 19 keeps `inbounds`).
+- **`null_pointer_is_valid`**: the `null_pointer_is_valid` function
+  attribute on definitions; `nonnull` is not emitted on reference
+  parameters/returns, `this` (which gets `dereferenceable_or_null(N)`
+  instead of `dereferenceable(N)`), `nonnull`/`returns_nonnull`
+  attributes, the `operator new` result or `!nonnull` load metadata.
+- **`target_cpu` / `tune_cpu`**: `"target-cpu"` / `"tune-cpu"`; `native`
+  emits no `"target-cpu"` (the driver passes `llc -mcpu=native`), and on
+  x86-64 the default `"tune-cpu"="generic"` is only emitted without a CPU.
+- Tests: `tests/codegen/{stack_protector,stack_protector_strong,
+  stack_protector_all,unwind_tables_sync,unwind_tables_none,no_plt,
+  no_plt_static,wrapv,no_strict_overflow,no_delete_null_pointer_checks}.cpp`
   (exact under oracle 19 on both targets).
 
 ## 7p. Landed (WP-370): optimization-dependent IR

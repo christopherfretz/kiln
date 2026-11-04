@@ -55,6 +55,11 @@ struct Builder {
     align: u64,
     /// `MaxFieldAlignment` (`#pragma pack`), bits; 0 = none.
     max_field_align: u64,
+    /// clang 19/20 `UnadjustedAlignment`, in bits (a multiple of 8): the
+    /// largest field alignment, without the class's own attribute.
+    unadjusted_fields: u64,
+    /// clang 21+ `UnadjustedAlignment`: also the bases'.
+    unadjusted: u64,
     offsets: Vec<u64>,
     /// `Bases`: direct non-virtual bases with their byte offsets, in
     /// declaration order.
@@ -66,6 +71,14 @@ impl Builder {
     fn update_align(&mut self, bits: u64) {
         let bytes_as_bits = bits / 8 * 8;
         self.align = self.align.max(bytes_as_bits);
+    }
+
+    /// clang's `UnadjustedAlignment = max(UnadjustedAlignment, FieldAlign)`
+    /// in `LayoutField` / `LayoutBitField` (not `LayoutWideBitField` nor
+    /// the class's own alignment attribute).
+    fn update_unadjusted(&mut self, bits: u64) {
+        self.unadjusted_fields = self.unadjusted_fields.max(bits / 8 * 8);
+        self.unadjusted = self.unadjusted.max(bits / 8 * 8);
     }
 
     /// `min(a, MaxFieldAlignment)` when a `#pragma pack` is in effect.
@@ -212,6 +225,8 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
         padded_field_size: 0,
         align: 8,
         max_field_align: class.max_field_align,
+        unadjusted_fields: 8,
+        unadjusted: 8,
         offsets: Vec::with_capacity(ins.len()),
         bases: Vec::new(),
     };
@@ -309,6 +324,8 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
         if is_pod { (size, size) } else { (b.data_size / 8, nv_size_bits / 8) };
     let align = u32::try_from(b.align / 8).unwrap_or(u32::MAX);
     let nv_align = u32::try_from(nv_align_bits / 8).unwrap_or(u32::MAX);
+    let unadjusted_align = u32::try_from(b.unadjusted / 8).unwrap_or(u32::MAX);
+    let unadjusted_field_align = u32::try_from(b.unadjusted_fields / 8).unwrap_or(u32::MAX);
     let vbases: Vec<(DeclId, u64)> =
         vlist.iter().map(|&c| (c, v.offsets.get(&c).copied().unwrap_or(0))).collect();
     RecordFacts {
@@ -319,6 +336,8 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
             data_size,
             nv_size,
             nv_align,
+            unadjusted_align,
+            unadjusted_field_align,
             fields: b.offsets.into_boxed_slice(),
             bases: b.bases.into_boxed_slice(),
             vbases: vbases.into_boxed_slice(),
@@ -517,6 +536,9 @@ fn layout_base(
         b.data_size = off.saturating_add(nv_size);
         b.size = b.size.max(b.data_size);
     }
+    // clang 21+ (llvm-project#135551): a base placed here counts toward
+    // the unadjusted alignment; an empty base at offset 0 (above) does not.
+    b.unadjusted = b.unadjusted.max(base_align / 8 * 8);
     b.update_align(base_align);
     off / 8
 }
@@ -565,6 +587,7 @@ fn layout_field(b: &mut Builder, lay: &Layouter<'_>, map: &mut EmptySubobjectMap
         b.padded_field_size = b.padded_field_size.max(off.saturating_add(field_size));
         b.size = b.size.max(b.data_size);
     }
+    b.update_unadjusted(field_align);
     b.update_align(field_align);
 }
 
@@ -615,6 +638,7 @@ fn layout_bit_field(b: &mut Builder, lay: &Layouter<'_>, f: &FieldIn, width: u64
         b.unfilled = b.data_size - end;
     }
     b.size = b.size.max(b.data_size);
+    b.update_unadjusted(field_align);
     b.update_align(field_align);
 }
 

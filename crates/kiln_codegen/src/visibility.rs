@@ -117,6 +117,7 @@ fn assume_dso_local(
     reloc: RelocModel,
     semantic_interposition: Option<bool>,
     direct_access: bool,
+    no_plt: bool,
 ) -> Option<bool> {
     if g.linkage.is_local()
         || (g.visibility != Visibility::Default && g.linkage != Linkage::ExternWeak)
@@ -147,9 +148,11 @@ fn assume_dso_local(
         // initialized temporary): emission made that choice already.
         RelocModel::Static if !g.decl => Some(true),
         RelocModel::Pie(_) if !g.decl => None,
+        // A function's PLT entry can be its address, unless `-fno-plt`.
         _ => Some(
             direct_access
-                && ((!g.function && !g.tls) || (g.function && reloc == RelocModel::Static)),
+                && ((!g.function && !g.tls)
+                    || (g.function && reloc == RelocModel::Static && !no_plt)),
         ),
     }
 }
@@ -689,11 +692,11 @@ impl Cg<'_> {
     pub(crate) fn finish_dso_local(&mut self) {
         let (reloc, si) = (self.opts.reloc, self.opts.semantic_interposition);
         let da = self.direct_access_external_data();
-        finish_module(&mut self.m, reloc, si, da);
+        finish_module(&mut self.m, reloc, si, da, self.opts.no_plt);
     }
 }
 
-fn finish_module(m: &mut Module, reloc: RelocModel, si: Option<bool>, da: bool) {
+fn finish_module(m: &mut Module, reloc: RelocModel, si: Option<bool>, da: bool, no_plt: bool) {
     let avail = |l: Linkage| l == Linkage::AvailableExternally;
     let fids: Vec<_> = m.functions().map(|(id, _)| id).collect();
     for id in fids {
@@ -707,7 +710,7 @@ fn finish_module(m: &mut Module, reloc: RelocModel, si: Option<bool>, da: bool) 
             tls: false,
             comdat: f.comdat.is_some(),
         };
-        let d = assume_dso_local(&facts, reloc, si, da);
+        let d = assume_dso_local(&facts, reloc, si, da, no_plt);
         let f = m.func_mut(id);
         if f.linkage.is_local() {
             f.visibility = Visibility::Default;
@@ -728,7 +731,7 @@ fn finish_module(m: &mut Module, reloc: RelocModel, si: Option<bool>, da: bool) 
             tls: g.thread_local.is_some(),
             comdat: g.comdat.is_some(),
         };
-        let d = assume_dso_local(&facts, reloc, si, da);
+        let d = assume_dso_local(&facts, reloc, si, da, no_plt);
         let g = m.global_mut(id);
         if g.linkage.is_local() {
             g.visibility = Visibility::Default;
@@ -749,7 +752,7 @@ fn finish_module(m: &mut Module, reloc: RelocModel, si: Option<bool>, da: bool) 
             tls: a.thread_local.is_some(),
             comdat: false,
         };
-        let d = assume_dso_local(&facts, reloc, si, da);
+        let d = assume_dso_local(&facts, reloc, si, da, no_plt);
         let a = m.alias_mut(id);
         if a.linkage.is_local() {
             a.visibility = Visibility::Default;

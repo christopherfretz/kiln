@@ -609,3 +609,168 @@ fn neon_bf16_call_without_feature() {
         }
     }
 }
+
+/// spec/driver.md "Codegen flags" (WP-605): every honoured or ignored
+/// GCC/clang codegen flag compiles `int main(){}` to an object; every
+/// rejected one is the driver error "'<flag>' is not supported by kiln".
+#[test]
+fn codegen_flags_classes() {
+    if !tools() {
+        return;
+    }
+    let d = scratch("cgflags");
+    std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
+    let accepted: &[&[&str]] = &[
+        // Class 1: honoured.
+        &["-fstack-protector"],
+        &["-fstack-protector-strong"],
+        &["-fstack-protector-all"],
+        &["-fno-stack-protector"],
+        &["-funwind-tables"],
+        &["-fno-unwind-tables"],
+        &["-fasynchronous-unwind-tables"],
+        &["-fno-asynchronous-unwind-tables"],
+        &["-fno-plt"],
+        &["-fplt"],
+        &["-ffunction-sections"],
+        &["-fno-function-sections"],
+        &["-fdata-sections"],
+        &["-fno-data-sections"],
+        &["-march=native"],
+        &["-mcpu=native"],
+        &["-mtune=native"],
+        &["-mtune=generic"],
+        &["-fwrapv"],
+        &["-fno-wrapv"],
+        &["-fwrapv-pointer"],
+        &["-fno-wrapv-pointer"],
+        &["-fno-strict-overflow"],
+        &["-fstrict-overflow"],
+        &["-fno-delete-null-pointer-checks"],
+        &["-fdelete-null-pointer-checks"],
+        &["-Wp,-D_FORTIFY_SOURCE=2"],
+        &["-Xpreprocessor", "-DX=1"],
+        // Class 2: accepted and ignored.
+        &["-fstack-clash-protection"],
+        &["-fno-stack-clash-protection"],
+        &["-fcf-protection"],
+        &["-fcf-protection=full"],
+        &["-fcf-protection=none"],
+        &["-fno-common"],
+        &["-fcommon"],
+        &["-fexcess-precision=standard"],
+        &["-fno-math-errno"],
+        &["-fmath-errno"],
+        &["-fstack-usage"],
+        &["-gz"],
+        &["-gz=zlib"],
+        &["-fno-trapv"],
+        &["-fno-short-enums"],
+        // The common hardening set together, at -O2.
+        &[
+            "-O2",
+            "-fstack-protector-strong",
+            "-fstack-clash-protection",
+            "-fcf-protection",
+            "-Wp,-D_FORTIFY_SOURCE=2",
+            "-fasynchronous-unwind-tables",
+            "-fno-plt",
+            "-ffunction-sections",
+            "-fdata-sections",
+        ],
+    ];
+    for flags in accepted {
+        // `-mcpu=` is AArch64-only: on x86-64 it is "unsupported argument",
+        // as clang ("Target features"), so the host target decides.
+        if flags.contains(&"-mcpu=native") && !cfg!(target_arch = "aarch64") {
+            continue;
+        }
+        let mut args = flags.to_vec();
+        args.extend(["-c", "m.cpp", "-o", "m.o"]);
+        let o = kiln_in(&d, &args);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{flags:?}");
+        assert_eq!(&std::fs::read(d.join("m.o")).unwrap()[..4], b"\x7fELF", "{flags:?}");
+    }
+}
+
+/// spec/driver.md "Codegen flags" (WP-605): the rejected class is the
+/// driver error "'<flag>' is not supported by kiln", and values outside
+/// clang's sets are clang's errors; no job runs.
+#[test]
+fn codegen_flags_rejected() {
+    let d = scratch("cgflags-rej");
+    std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
+    let rejected = [
+        "-ftrapv",
+        "-fshort-enums",
+        "-fsanitize=address",
+        "-fsanitize=undefined",
+        "-fno-sanitize-recover=all",
+        "-fno-sanitize=all",
+        "-fcoverage-mapping",
+        "-fprofile-arcs",
+        "-ftest-coverage",
+        "--coverage",
+        "-fprofile-instr-generate",
+        "-fprofile-instr-generate=a.profraw",
+        "-fprofile-generate",
+        "-fprofile-use=a.profdata",
+        "-fprofile-instr-use=a.profdata",
+    ];
+    for f in rejected {
+        let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
+        assert_eq!(
+            (o.status.code(), text(&o.stderr)),
+            (Some(1), format!("kiln++: error: '{f}' is not supported by kiln\n")),
+            "{f}"
+        );
+        assert!(!d.join("r.o").exists(), "{f}");
+    }
+    // Values outside clang's sets are clang's errors.
+    for (f, want) in [
+        ("-fcf-protection=bogus", "invalid value 'bogus' in '-fcf-protection=bogus'"),
+        ("-gz=lzma", "unsupported argument 'lzma' to option '-gz='"),
+        ("-fexcess-precision=none", "unsupported argument 'none' to option '-fexcess-precision='"),
+        ("-mtune=", "unsupported argument '' to option '-mtune='"),
+    ] {
+        let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
+        assert_eq!(
+            (o.status.code(), text(&o.stderr)),
+            (Some(1), format!("kiln++: error: {want}\n"))
+        );
+    }
+}
+
+/// `-ffunction-sections` / `-fdata-sections` and `-march=native` reach
+/// `llc` (spec/driver.md "Codegen flags"); `-Wp,-MD,<file>` is `-MD -MF
+/// <file>`.
+#[test]
+fn codegen_flags_backend() {
+    let d = setup("cgbackend");
+    let o = kiln_in(
+        &d,
+        &["-###", "-c", "-ffunction-sections", "-fdata-sections", "-march=native", "add.cpp"],
+    );
+    let err = text(&o.stderr);
+    assert_eq!(o.status.code(), Some(0), "{err}");
+    assert!(
+        err.contains(
+            "\"-filetype=obj\" \"-function-sections\" \"-data-sections\" \"-mcpu=native\" \"-o\""
+        ),
+        "{err}"
+    );
+    let o = kiln_in(&d, &["-###", "-c", "-mtune=native", "add.cpp"]);
+    assert!(text(&o.stderr).contains("\"-filetype=obj\" \"-o\""), "{}", text(&o.stderr));
+    if !tools() {
+        return;
+    }
+    let o = kiln_in(&d, &["-c", "-Wp,-MD,add.dep", "add.cpp"]);
+    assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+    let dep = std::fs::read_to_string(d.join("add.dep")).unwrap();
+    assert!(dep.starts_with("add.o: add.cpp"), "{dep}");
+    let o = kiln_in(&d, &["-c", "-ffunction-sections", "add.cpp", "-o", "fs.o"]);
+    assert_eq!(o.status.code(), Some(0));
+    let obj = std::fs::read(d.join("fs.o")).unwrap();
+    let name: &[u8] = b".text._Z3addii\0";
+    assert!(obj.windows(name.len()).any(|w| w == name), "no .text._Z3addii section");
+}

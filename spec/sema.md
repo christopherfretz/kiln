@@ -3798,6 +3798,11 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
 `BIis_constant_evaluated`; `kiln_ast::decl::builtin`).
 The AArch64 NEON target builtins (`__builtin_neon_*`, a generated
 table) are spec/landed/sema/WP-558.md "Target builtins".
+`void __builtin_ia32_pause() noexcept` (kiln-private id 2152, `v`,
+`NoThrow`; WP-610) is the one x86-64 target builtin: declared only when
+the target is x86-64 (`lazily_create_builtin` / `is_builtin_name` via
+`target_has_builtin`), an undeclared identifier elsewhere, never a
+constant expression (`target.x86/ia32-pause-*.cpp`).
 - **Declaration:** when an unqualified id-expression's lookup finds
   nothing and the name is a builtin (`lazily_create_builtin`), Sema
   declares it in the translation unit: an implicit `LinkageSpecDecl`
@@ -3995,6 +4000,16 @@ table) are spec/landed/sema/WP-558.md "Target builtins".
     with its own name in the warning
     (`ext.gnu.builtins/return-address-args.cpp`).
     `__builtin_debugtrap()` takes no argument.
+  - `__builtin_prefetch(addr [, rw [, locality]])` (id 976, `vvC*.`,
+    `NoThrow, Const`; `check_prefetch`, clang `BuiltinPrefetch`; WP-610):
+    `addr` converts to `const void *` as a parameter; more than three
+    arguments is `too many arguments to function call, expected at most
+    3, have N` at the `)`; a non-dependent `rw` / `locality` must fold
+    (`argument to '__builtin_prefetch' must be a constant integer`, at the
+    callee) into [0, 1] / [0, 3] (`argument value V is outside the valid
+    range [0, M]`, at the callee); a dependent one is checked at
+    instantiation. The call is `void` and never a constant expression
+    (the Oven traps it; `ext.gnu.builtins/prefetch-{args,template-args,constexpr}.cpp`).
   - `__builtin_elementwise_add_sat(x, y)` / `_sub_sat(x, y)` (custom,
     `vector_ops.rs` `builtin_elementwise_sat`; WP-432). At 22
     (`BuiltinElementwiseMath` with clang 22's integer restriction): both
@@ -4141,7 +4156,8 @@ table) are spec/landed/sema/WP-558.md "Target builtins".
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
 `CXXThrowExpr`:
 - With `-fno-exceptions` it is an error
-  (`cannot use 'throw' with exceptions disabled`).
+  (`cannot use 'throw' with exceptions disabled`), except as
+  "Exceptions disabled" below says.
 - The exception object's type is the operand's, with arrays and
   functions decayed and top-level cv removed; it must not be (a
   pointer to) an incomplete type other than cv `void` (clang's
@@ -4152,9 +4168,46 @@ table) are spec/landed/sema/WP-558.md "Target builtins".
   (`thrown_var_in_scope`, WP-100).
 - In `?:`, a throw operand gives the other operand's type and value
   category ([expr.cond]/2).
-- clang's exemption for system headers is not implemented. The Oven
-  treats a `throw` it reaches as not a constant expression; codegen
-  lowers it (spec/codegen.md §7b).
+- The Oven treats a `throw` it reaches as not a constant expression,
+  whatever the flag; codegen lowers it (spec/codegen.md §7b).
+
+**Exceptions disabled** (WP-607; `Sema::check_exceptions_enabled`, shared
+by `act_on_throw` and `act_on_try`). With `-fno-exceptions` a `throw`
+expression or `try` block is diagnosed at its keyword except:
+1. *System headers* (clang `ActOnCXXThrow` / `ActOnCXXTryBlock`): a
+   location whose expansion is in a system header — a header reached
+   through `-isystem`, the `--gcc-toolchain` / resource-dir include
+   directories, the rest of a file after `#pragma GCC system_header`, or
+   a line marker with flag 3 — is not diagnosed, at its definition or in
+   any instantiation. A system macro expanded in user code is diagnosed
+   (the expansion location is the user file's). This is what lets every
+   `-fno-exceptions` TU include libstdc++'s `<exception>`, whose
+   uninstantiated `std::throw_with_nested` holds a raw `throw`.
+2. *Templates* (GCC: `build_throw` returns a dependent `THROW_EXPR` while
+   `processing_template_decl`): inside a template definition
+   (`in_template()`: a function template, a member of a class template, a
+   generic lambda's body, any of those nested) the check waits for the
+   instantiation; a never-instantiated template is accepted. The
+   substitution calls `act_on_throw` / `act_on_try` again outside the
+   template for a rebuilt node (a dependent operand, every try-block); a
+   non-dependent throw-expression the substitution shares instead is kept
+   in `exc_disabled_pattern` and reported by `note_shared_throws` when an
+   instantiation shares it. Either way the error sits at the pattern's
+   keyword with the usual instantiation notes, and a location is
+   reported at most once (`exc_disabled_seen`), at its first
+   instantiation. clang 19 and 22 instead diagnose a template's `throw`
+   / `try` at its definition (and a dependent `throw` again per
+   instantiation); the union of the two compilers' acceptance is what
+   code built with both needs, so kiln accepts the never-instantiated
+   case as GCC does.
+3. *Codegen*: a surviving `throw` lowers to the ordinary
+   `__cxa_allocate_exception` / `__cxa_throw` sequence as plain calls
+   without landing pads, and a surviving `try` to its compound statement
+   with the handlers dropped (no landing pad reaches them), byte-identical
+   to clang (`tests/codegen/throw_no_exceptions.cpp`).
+
+Tests: `tests/conformance/expr.throw/no-exceptions-*.cpp`,
+`tests/conformance/except.pre/try-no-exceptions-*.cpp`.
 
 ### 5.6 `typeid` (`rtti.rs`)
 `act_on_typeid(Ok(expr) | Err(type), loc, rparen)` ([expr.typeid]):
@@ -5614,6 +5667,37 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `tests/conformance/temp.dep/overloaded-operator-arrow-chain.cpp`,
   `tests/conformance/over.oper/arrow-in-template-other-ops.cpp`,
   `tests/conformance/over.oper/arrow-in-template-run.cpp`.
+- **The injected-class-name in pointers to members; base-qualified
+  members** ([temp.dep.type]/1, [temp.local]/1, [dcl.mptr]/1,
+  [expr.unary.op]/3, [class.qual]/1; WP-608). Inside a class template
+  (or a partial specialization), the injected-class-name used as a
+  nested-name-specifier (`Scan::`) denotes the current instantiation: its
+  specifier type is the `InjectedClassName` type `Scan<P...>`, as when
+  `Scan<P...>::` is written (`Sema::nns_component` takes
+  `this_class_type` of a class). So a member-pointer declarator
+  `typedef void (Scan::*Fn)();` has the dependent type
+  `void (Scan<C>::*)()`, which instantiation substitutes to a pointer to
+  member of the specialization; `this->*fn` with `this` of type
+  `Scan<char>*` is then compatible. `&C::m` of a non-static member forms a
+  pointer-to-member constant whether or not `C` is dependent; its class
+  type is the declaring class's `this_class_type` (the current
+  instantiation in the pattern, clang's `getTypeDeclType` of the parent),
+  and its operand `DeclRefExpr` keeps the qualifier as written, so that
+  instantiation forms `&C::m` again instead of the implicit member access
+  `(*this).C::m` (`Sema::member_pointer_of`). A `?:` of two such operands
+  keeps their common pointer-to-member type. A qualified-id `B::m` whose
+  `B` is a base class of the current instantiation (dependent or not)
+  looks `m` up in `B` only, in the pattern and again at instantiation:
+  the implicit `(*this).B::m` of a data member keeps its qualifier on the
+  `MemberExpr` (`Sema::field_access_extra`), so the instantiation's
+  lookup of `m` starts in `B` and a derived member `m()` never hides it
+  (libstdc++ `_State<_CharT>::_M_opcode()` returning
+  `_State_base::_M_opcode`; `_Scanner<_CharT>`'s
+  `&_Scanner::_M_eat_escape_ecma` in <regex>). Tests:
+  `tests/conformance/temp.dep.type/injected-class-name-*.cpp`,
+  `tests/conformance/basic.lookup.qual/class-qual-base-member-hidden-in-template.cpp`,
+  `tests/conformance/re.alg/regex-match-libstdcxx.cpp` (and its
+  `-libstdcxx16` / `-libcxx` siblings).
 
 ### 5.22 Rules from the libc++ `.verify` cluster B (WP-338)
 - **An out-of-line constructor stays explicit** ([dcl.fct.spec]/4,
@@ -6426,6 +6510,38 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     reference through an explicit conversion function, plus clang's
     CWG2327 conversion-function (and conversion-function-template)
     candidates (spec/sema-overload.md §2.6, §10.5 "User-defined conversions")
+  - a class `C` initialized from an expression of type cv `C` or of a class
+    derived from `C` (copy-, direct- or direct-list-initialization, a
+    mem-initializer, a by-value argument, a function-style cast; any value
+    category) is initialized by `C`'s constructors only
+    ([dcl.init.general]/16.6.2.1, [over.match.ctor]/1): a conversion
+    function of the source, template or not, explicit or not, converting
+    to `C` or to a base of the source is never used ([class.conv.fct]/1,
+    [over.ics.user]/4). It stays a candidate, but a non-viable one
+    (clang `AddConversionCandidate`, `ovl_fail_trivial_conversion`),
+    whatever its result type and before its result is looked at, in every
+    candidate set that adds conversion functions for a class target
+    (`add_conversion_candidate`, `overload/ics.rs`): it never ties with or
+    beats the copy or move constructor (no "ambiguous" against the copy
+    constructor, no deleted `operator C() &&` chosen for a prvalue, no
+    access check of a conversion function as if it were a constructor),
+    and it is noted as `candidate function` after the constructors when
+    no constructor is viable (sorted as an arity mismatch: it has no
+    parameter for the one argument, clang `EffectiveFailureKind`). A
+    conversion function template is still deduced for the target (its
+    declaration only, [temp.inst]/11), never defined; an unrelated class
+    `E` is still initialized through `operator T()` with `T = E`. A
+    copy-initialization from `C` or a derived class goes through `C`'s
+    constructors like the direct form, so a constructor parameter may be
+    initialized by a user-defined conversion of the source (`A(X)` for a
+    `const B` with `B : A` and `B::operator X()`); only a copy-initialization
+    from an unrelated class suppresses user-defined conversions there
+    ([over.best.ics]/4, `resolve_ctor_ex`, `class/ctor_select.rs`). WP-609;
+    tests `tests/conformance/over.match.ctor/same-class-conversion-*.cpp`,
+    `same-class-copy-init-user-conversion-run.cpp`,
+    `template-bodies-not-instantiated.cpp`,
+    `unrelated-class-uses-conversion-template-run.cpp`,
+    `class.conv.fct/self-conversion-not-viable-diags.cpp`.
   - character arrays from string literals: the bound is deduced, and
     an over-long string is an error
     (`initializer-string for char array is too long`, two arguments)
@@ -7020,7 +7136,8 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `OpaqueValueExpr` (clang's `ExceptionDecl` init) and its destructor is
   checked (access, deleted).
 - With `-fno-exceptions`, `try` is `cannot use 'try' with exceptions
-  disabled` (the statement is still analyzed).
+  disabled` (the statement is still analyzed), except in a system header
+  or a template definition (§5.5 "Exceptions disabled").
 - `act_on_try`: a `catch (...)` that is not last is `catch-all handler
   must come last`; a handler whose type is the same as, or a public
   unambiguous derived class of, an earlier one gets `-Wexceptions`

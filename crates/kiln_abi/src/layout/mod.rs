@@ -105,6 +105,8 @@ impl RecordFacts {
                 align: 1,
                 preferred_align: 1,
                 nv_align: 1,
+                unadjusted_align: 1,
+                unadjusted_field_align: 1,
                 ..RecordLayout::default()
             },
             is_pod: true,
@@ -214,6 +216,23 @@ impl<'a> Layouter<'a> {
     pub fn type_layout(&mut self, q: QualType) -> TypeLayout {
         let i = self.type_info(q);
         TypeLayout { size: i.width / 8, align: (i.align / 8).max(1) }
+    }
+
+    /// The unadjusted (natural) alignment of `q` in bytes (clang
+    /// `ASTContext::getTypeUnadjustedAlign`; spec/abi.md §5): for a class
+    /// type (through any sugar, so an `aligned` typedef of it is ignored)
+    /// its [`RecordLayout::unadjusted_align`], or with `bases` false
+    /// (clang 19/20) its [`RecordLayout::unadjusted_field_align`];
+    /// otherwise the alignment of the canonical type. AAPCS64 classifies
+    /// composites by it.
+    pub fn type_unadjusted_align(&mut self, q: QualType, bases: bool) -> u64 {
+        let c = self.ast.types.canonical(q);
+        if let TypeView::Record(r) = self.ast.types.canonical_view(c) {
+            let l = self.record(r);
+            let a = if bases { l.unadjusted_align } else { l.unadjusted_field_align };
+            return u64::from(a).max(1);
+        }
+        self.type_layout(c).align
     }
 
     /// The layout of class `record` (any of its declarations). An

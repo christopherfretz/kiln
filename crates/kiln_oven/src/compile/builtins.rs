@@ -771,7 +771,10 @@ impl Compiler<'_> {
             // WP-432: nor the frame builtins.
             | id::DEBUGTRAP
             | id::FRAME_ADDRESS
-            | id::RETURN_ADDRESS => self.trap_loc(begin, INVALID.into()),
+            | id::RETURN_ADDRESS
+            // WP-610: nor `__builtin_prefetch` and `__builtin_ia32_pause`.
+            | id::PREFETCH
+            | id::IA32_PAUSE => self.trap_loc(begin, INVALID.into()),
             // WP-365: the P0533 `<cmath>` set, exact in every format.
             id::SIGNBIT
             | id::ISGREATER

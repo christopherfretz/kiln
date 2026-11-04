@@ -10,6 +10,7 @@
 
 pub mod args;
 pub mod codegen_cmd;
+pub mod codegen_flags;
 pub mod constexpr_opts;
 pub mod deps;
 pub mod features;
@@ -162,6 +163,9 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         }
         ArgError::UnsupportedForTarget(o, t) => {
             Diag::new(DiagId::drv_unsupported_opt_for_target, Span::INVALID).arg(o).arg(t)
+        }
+        ArgError::UnsupportedByKiln(a) => {
+            Diag::new(DiagId::drv_unsupported_flag, Span::INVALID).arg(a)
         }
     };
     d.emit(engine);

@@ -340,6 +340,7 @@ impl Sema<'_, '_> {
             }
             CandidateFailure::None
             | CandidateFailure::BadFinalConversion
+            | CandidateFailure::TrivialConversion
             | CandidateFailure::BadDeduction => {
                 return self.diag(DiagId::note_ovl_candidate, loc).arg(kind);
             }
@@ -509,7 +510,11 @@ impl Sema<'_, '_> {
                         let _ = self.fn_param_types(c.func(), &mut p);
                         Some((p.len(), false))
                     }
-                    _ if set.note_extra_args > 0
+                    // A conversion function (no parameters, or only its
+                    // explicit object one) noted for the one argument of
+                    // its set sorts by that count too (clang's
+                    // `getNumParams`): after the other failures.
+                    _ if (set.note_extra_args > 0 || c.kind == CandidateKind::ConvFn)
                         && c.decl.is_some()
                         && c.kind != CandidateKind::Surrogate =>
                     {

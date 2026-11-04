@@ -55,6 +55,7 @@ impl Substituter<'_, '_, '_> {
             }
             self.sema.mark_shared_expr_referenced(e);
             self.sema.note_shared_consteval_only(e);
+            self.sema.note_shared_throws(e);
             self.sema.reissue_designator_warnings(e);
             self.sema.note_shared_temporaries(e);
             return Ok(e);

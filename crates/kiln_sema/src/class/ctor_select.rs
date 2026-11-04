@@ -67,9 +67,23 @@ impl Sema<'_, '_> {
         let c = self.class_def(class);
         let loc = args.first().map_or(Loc::INVALID, |&a| self.begin_loc(a));
         // [over.match.copy]: converting constructors only, the argument
-        // without user-defined conversions ([over.best.ics]/4.2).
+        // without user-defined conversions ([over.best.ics]/4.2). A
+        // copy-initialization from the class itself or a derived class is
+        // [over.match.ctor] (/16.6.2.1), whose argument may need one
+        // (clang `TryConstructorInitialization`: `A a = b;` through
+        // `A(X)` and `B::operator X()`); its explicit constructors are
+        // still not viable.
         let (kind, opts) = if style == InitStyle::Copy {
-            (SetKind::CopyInit, IcsOptions::SUPPRESS_UDC)
+            let same_or_derived = match args {
+                [a] => self.ast.types.as_record(self.ety(*a)).is_some_and(|r| {
+                    crate::conv::bases::same_class(self, r, c)
+                        || crate::conv::bases::complete_class(self, r)
+                            .is_some_and(|r| crate::conv::bases::is_derived_from(self, r, c))
+                }),
+                _ => false,
+            };
+            let opts = if same_or_derived { IcsOptions::NONE } else { IcsOptions::SUPPRESS_UDC };
+            (SetKind::CopyInit, opts)
         } else {
             (SetKind::Normal, IcsOptions::NONE)
         };

@@ -288,6 +288,10 @@ pub enum ArgError {
     /// An option the target does not support: `(option, triple)`
     /// ("unsupported option '{opt}' for target '{triple}'").
     UnsupportedForTarget(String, String),
+    /// A GCC/clang flag kiln recognises but deliberately does not
+    /// implement (`-ftrapv`, `-fsanitize=`, coverage/profiling;
+    /// spec/driver.md "Codegen flags"): "'{arg}' is not supported by kiln".
+    UnsupportedByKiln(String),
 }
 
 /// The parsed command line.
@@ -404,6 +408,9 @@ pub struct Args {
     pub constexpr: crate::constexpr_opts::ConstexprOpts,
     /// The `-ftemplate-*` / `-fkiln-instantiation-report` options.
     pub templ: crate::templ_opts::TemplOpts,
+    /// The GCC/clang code generation flags (`-fstack-protector*`, unwind
+    /// tables, `-fwrapv`, …; spec/driver.md "Codegen flags").
+    pub codegen: crate::codegen_flags::CodegenFlags,
     /// `-c`, `-S`, `-emit-llvm`.
     pub compile: CompileArgs,
     /// Linker options, in order.
@@ -508,6 +515,8 @@ impl Args {
     /// Parses `argv` (without the program name) for the program `argv0`,
     /// which sets [`Args::program`] and the default [`Args::mode`].
     pub fn parse_as(argv0: &str, argv: &[String]) -> Args {
+        let spliced = crate::codegen_flags::splice_preprocessor_args(argv);
+        let argv = spliced.as_slice();
         let mut a = Args {
             argv: argv.to_vec(),
             program: program_basename(argv0).to_owned(),
@@ -561,7 +570,12 @@ impl Args {
                 }
                 continue;
             }
-            if let Some(r) = a.constexpr.parse_arg(arg).or_else(|| a.templ.parse_arg(arg)) {
+            if let Some(r) = a
+                .constexpr
+                .parse_arg(arg)
+                .or_else(|| a.templ.parse_arg(arg))
+                .or_else(|| a.codegen.parse_arg(arg))
+            {
                 a.errors.extend(r.err());
             } else if !a.flag(arg)
                 && !a.target_flag(arg)

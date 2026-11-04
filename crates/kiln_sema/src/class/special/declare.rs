@@ -339,9 +339,12 @@ impl Sema<'_, '_> {
             }
             Shape::Assign => DeclName::operator(OverloadedOperator::Equal),
         };
+        // Not for a member of an instantiated class (clang suppresses it
+        // for any instantiation, `ActOnConversionDeclarator`).
         if let Shape::Conv(t) = shape
             && in_class
             && !self.is_dependent_ctx(class)
+            && self.inst.stack.depth() == 0
         {
             self.warn_class_conversion(class, t, sloc);
         }

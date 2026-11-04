@@ -163,6 +163,69 @@ pub struct CodegenOptions {
     /// `-f[no-]direct-access-external-data`; `None` is clang's default (on
     /// only for `-fno-pic`): a non-TLS variable declaration is `dso_local`.
     pub direct_access_external_data: Option<bool>,
+    /// `-fstack-protector[-strong|-all]` / `-fno-stack-protector`: the
+    /// `ssp` / `sspstrong` / `sspreq` attribute of every function
+    /// definition (clang `SetLLVMFunctionAttributesForDefinition`;
+    /// spec/codegen.md "Hardening and overflow options").
+    pub stack_protector: StackProtector,
+    /// The `uwtable` attribute of definitions and the `uwtable` module
+    /// flag (`-f[no-]asynchronous-unwind-tables`, `-f[no-]unwind-tables`;
+    /// clang `CodeGenOpts.UnwindTables`): `None` emits neither.
+    pub unwind_tables: Option<UnwindTables>,
+    /// `-fno-plt`: a function declaration with no definition in the
+    /// translation unit is `nonlazybind`, and the module carries
+    /// `RtLibUseGOT` (clang `CodeGenOpts.NoPLT`).
+    pub no_plt: bool,
+    /// Signed integer overflow is defined (`-fwrapv`,
+    /// `-fno-strict-overflow`; clang `SOB_Defined`): no `nsw` on signed
+    /// arithmetic.
+    pub wrapv: bool,
+    /// Pointer overflow is defined (clang 19's `-fwrapv`, clang 20+'s
+    /// `-fwrapv-pointer`, and `-fno-strict-overflow`; clang
+    /// `PointerOverflowDefined`): pointer arithmetic and subscripts are
+    /// plain `getelementptr` (no `inbounds`), and a variable length
+    /// array index is scaled by a plain `mul`.
+    pub wrapv_pointer: bool,
+    /// `-fno-delete-null-pointer-checks` (clang
+    /// `CodeGenOpts.NullPointerIsValid`): functions are
+    /// `null_pointer_is_valid`, and references, `this` and `operator new`
+    /// carry no `nonnull` (`this` is `dereferenceable_or_null`).
+    pub null_pointer_is_valid: bool,
+    /// The x86-64 `-march=<cpu>`: the functions' `target-cpu` (and no
+    /// default `tune-cpu`, as clang); `None` is the target's default
+    /// (`x86-64`, `generic` on `AArch64`). `native` (both targets) emits
+    /// no `target-cpu`, so the backend's `-mcpu=native` decides.
+    pub target_cpu: Option<String>,
+    /// `-mtune=<cpu>`: the functions' `tune-cpu`; `None` is the target's
+    /// default (`generic` on x86-64 without `-march=`, none on `AArch64`).
+    pub tune_cpu: Option<String>,
+}
+
+/// The stack protector level (clang `LangOptions::StackProtectorMode`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StackProtector {
+    /// `-fno-stack-protector`, the default: no attribute.
+    #[default]
+    Off,
+    /// `-fstack-protector`: `ssp`.
+    On,
+    /// `-fstack-protector-strong`: `sspstrong`.
+    Strong,
+    /// `-fstack-protector-all`: `sspreq`.
+    All,
+}
+
+/// The kind of unwind table definitions carry (clang
+/// `CodeGenOptions::UnwindTables`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UnwindTables {
+    /// `-funwind-tables` without asynchronous tables: `uwtable(sync)` and
+    /// module flag `uwtable` 1.
+    Sync,
+    /// `-fasynchronous-unwind-tables`, the hosted default: `uwtable` and
+    /// module flag `uwtable` 2.
+    #[default]
+    Async,
 }
 
 /// The relocation model and its level (clang `-pic-level`, `-pic-is-pie`).
@@ -354,6 +417,14 @@ impl Default for CodegenOptions {
             reloc: RelocModel::default(),
             semantic_interposition: None,
             direct_access_external_data: None,
+            stack_protector: StackProtector::Off,
+            unwind_tables: Some(UnwindTables::Async),
+            no_plt: false,
+            wrapv: false,
+            wrapv_pointer: false,
+            null_pointer_is_valid: false,
+            target_cpu: None,
+            tune_cpu: None,
         }
     }
 }
