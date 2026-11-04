@@ -81,7 +81,12 @@ impl Sema<'_, '_> {
             Q::IsNoexcept => return self.is_noexcept(x, ctx, oven).map(Some),
             Q::IsBitField => self.field(x).is_some_and(|f| f.bit_width.is_some()),
             Q::IsEnumerator => self.decl_kind(x) == Some(DeclKind::EnumConstant),
-            Q::IsConst => self.qualified_type(x).is_some_and(|t| self.type_quals_of(t).0),
+            // `is_const(r)` inspects `type_of(r)`, whose `const` for a const
+            // object or a class-type annotation `const_object` supplies.
+            Q::IsConst => {
+                self.const_object(x)
+                    || self.qualified_type(x).is_some_and(|t| self.type_quals_of(t).0)
+            }
             Q::IsVolatile => self.qualified_type(x).is_some_and(|t| self.type_quals_of(t).1),
             Q::IsMutableMember => self.field(x).is_some_and(kiln_ast::decl::FieldData::is_mutable),
             Q::IsLvalueReferenceQualified => self.ref_qual_of(x) == RefQual::LValue,

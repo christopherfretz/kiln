@@ -118,6 +118,15 @@ impl Sema<'_, '_> {
                 self.ast.decls.get(p).ty()
             }
             Reflectee::BaseSpec(c, i) => self.base_spec(c, i).map(|b| b.ty),
+            // An annotation has the type of its underlying constant
+            // (P3394R4 has-type; `type_of(constant_of(a))`): `T` as
+            // `reflect_constant` deduces it. A class `T` is a const
+            // template parameter object; `const_object` adds the `const`.
+            // None while the operand is dependent.
+            Reflectee::Annotation(a) => {
+                let n = self.ast.annots.get(a);
+                n.value.map(|_| n.written_type)
+            }
             _ => None,
         };
         ty.filter(|&t| t != QualType::ERROR)
@@ -144,9 +153,24 @@ impl Sema<'_, '_> {
     /// template parameter object ([temp.param]/8; `reflect_constant*`),
     /// or a subobject of a variable declared const. Object reflections are
     /// interned cv-unqualified (one per object), so `type_of` restores
-    /// the `const` GCC 16.1 reports from here.
-    fn const_object(&self, x: Reflectee) -> bool {
-        let Reflectee::Object(p) = x else { return false };
+    /// the `const` GCC 16.1 reports from here. An annotation of class
+    /// type counts too: its underlying constant is a template parameter
+    /// object (`annotation_constant`), so `type_of(a)` is `const T`
+    /// exactly as `type_of(constant_of(a))` is.
+    pub(in crate::meta) fn const_object(&self, x: Reflectee) -> bool {
+        let p = match x {
+            Reflectee::Object(p) => p,
+            Reflectee::Annotation(a) => {
+                let n = self.ast.annots.get(a);
+                return n.value.is_some()
+                    && self
+                        .ast
+                        .types
+                        .as_record(self.ast.types.canonical(n.written_type))
+                        .is_some();
+            }
+            _ => return false,
+        };
         match self.ast.consts.scalar(p) {
             Some(Scalar::Pointer { base: PtrBase::Const(_), .. }) => true,
             Some(Scalar::Pointer { base: PtrBase::Decl(d), .. }) => {

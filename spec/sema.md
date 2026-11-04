@@ -7867,7 +7867,7 @@ Specified in **`spec/reflection.md`**:
 - the consteval boundary (§4);
 - splices (§5);
 - `define_aggregate` and the `__kiln_define_member` rules (§6);
-- annotations (§7);
+- annotations, including `type_of` of one (§7; WP-571);
 - the error model (§8).
 
 Everything is gated on `Sema::reflection` (driver `-freflection`).
