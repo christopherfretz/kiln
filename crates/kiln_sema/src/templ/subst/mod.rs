@@ -843,15 +843,18 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         } else {
             self.sema.require_member_enum(inst_parent, loc);
         }
-        if let Some(m) = self.sema.ast.templates.find_member(inst_parent, d) {
+        if let Some(m) = self.find_member_of(inst_parent, d) {
             return Ok(m);
         }
-        // An out-of-line redeclaration of the member (`T C<T>::z = ...;`
-        // found by lookup in a later out-of-line initializer): the
-        // member instantiated from its first declaration.
-        let first = self.sema.ast.first(d);
-        if first != d
-            && let Some(m) = self.sema.ast.templates.find_member(inst_parent, first)
+        // The members of an instantiated member class are recorded on the
+        // redeclaration that was defined: a pattern class declared before
+        // its definition (`struct In; struct In { ... };`) has two
+        // instantiated declarations, and the one the pattern's definition
+        // maps to (through the enclosing class's member map) is not the
+        // one defined (WP-582; clang's `FindInstantiatedDecl` looks the
+        // member up in the instantiated context's definition).
+        if let Some(def) = self.sema.ast.definition(inst_parent).filter(|&x| x != inst_parent)
+            && let Some(m) = self.find_member_of(def, d)
         {
             return Ok(m);
         }
@@ -880,6 +883,20 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
 }
 
 impl Substituter<'_, '_, '_> {
+    /// The member of instantiated class or enumeration `parent`
+    /// instantiated from pattern member `d`, or from its first
+    /// declaration: an out-of-line redeclaration of the member
+    /// (`T C<T>::z = ...;` found by lookup in a later out-of-line
+    /// initializer) names the member instantiated from its first
+    /// declaration.
+    fn find_member_of(&self, parent: DeclId, d: DeclId) -> Option<DeclId> {
+        let templates = &self.sema.ast.templates;
+        templates.find_member(parent, d).or_else(|| {
+            let first = self.sema.ast.first(d);
+            if first == d { None } else { templates.find_member(parent, first) }
+        })
+    }
+
     /// The instantiation of the pattern of a class template or class
     /// template partial specialization `parent` that this substitution's
     /// arguments name: `X<P...>` substituted, made complete. Fails (a
