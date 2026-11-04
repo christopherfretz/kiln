@@ -2361,6 +2361,7 @@ enclosing class (`Cg::explicit_inst_kind`):
 | implicit instantiation (function, variable, member) | `GVA_DiscardableODR` | `linkonce_odr` in its own COMDAT, deferred until used |
 | explicit specialization (`template<>`), non-inline | `GVA_StrongExternal` | strong `external` (`dso_local`); structors use C1/D1 aliases |
 | explicit specialization, inline / constexpr | `GVA_DiscardableODR` | `linkonce_odr` |
+| explicit specialization of a static data member (template) without an initializer | declaration only ([temp.expl.spec]/14; WP-572) | no definition; uses name an `external global` (`Ast::is_member_spec_declaration`) |
 | under an explicit instantiation definition | `GVA_StrongODR` | `weak_odr` in its own COMDAT, never deferred; vtable/RTTI `weak_odr`; C2/D2 in a C5/D5 COMDAT with `weak_odr` C1/D1 aliases |
 | under an explicit instantiation declaration | `GVA_AvailableExternally` (only defined when optimizing) | no definition; references name the external symbol; vtable an `external` declaration |
 | implicitly declared special member of either | `GVA_DiscardableODR` | `linkonce_odr` (not an instantiation) |

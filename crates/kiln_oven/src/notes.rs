@@ -1754,7 +1754,8 @@ fn used_redecl(ast: &Ast, e: Option<ExprId>, d: DeclId) -> DeclId {
 
 /// Whether variable declaration `v` is a definition ([basic.def]/2): one
 /// with an initializer, or neither `extern` nor a static data member
-/// declared in its class without `inline`.
+/// declared in its class without `inline` nor an explicit specialization
+/// of a static data member ([temp.expl.spec]/14).
 fn is_var_definition(ast: &Ast, v: DeclId) -> bool {
     use kiln_ast::decl::VarStorage;
     let Some(x) = ast.decls.var(v) else { return false };
@@ -1768,6 +1769,10 @@ fn is_var_definition(ast: &Ast, v: DeclId) -> bool {
     });
     if in_class {
         return x.spec.is_inline();
+    }
+    // [temp.expl.spec]/14: `template<> int C<char>::n;` declares.
+    if ast.is_member_spec_declaration(v) {
+        return false;
     }
     x.spec.storage() != VarStorage::Extern && !ast.decls.is_single_line_linkage(v)
 }

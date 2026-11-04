@@ -378,7 +378,8 @@ this list and the tables is a spec bug, fixed in the same change.
 - **Define · Stable · WP-480**: `data_member_spec`, `is_data_member_spec`.
 - **Define · Mutating · WP-480**: `define_aggregate`.
 - **Annot · PointDependent · WP-478, done**: `annotations_of`,
-  `annotations_of_with_type`.
+  `annotations_of_with_type` (of a namespace alias: empty, never the
+  aliased namespace's; WP-573, spec/reflection-members.md §5).
 - **Annot · Stable · WP-478, done**: `is_annotation`.
 - **Ext · Stable · WP-470, done**: `name_of`.
 - **Ext · Mutating · WP-470, done**: `__kiln_define_member`.
@@ -431,7 +432,8 @@ answers as of that point.
   no shape returning a class is the same trap.
 - **Result types that follow GCC 16.1** (WP-484). `type_of` of an object
   or value reflection of a const object (a template parameter object, a
-  subobject of a const variable) is `const`-qualified. An empty
+  subobject of a const variable), or of a class-type annotation, is
+  `const`-qualified, and `is_const` of it is true (WP-571). An empty
   `reflect_constant_array` reflects a `const std::array<T, 0>` template
   parameter object (the header's own `array`), where a non-empty one
   reflects a `const T[N]`. `members_of` of a namespace lists the members
@@ -927,8 +929,17 @@ each specialization evaluates its own.
 - Annotations on a templated entity are instantiated with it.
 - `annotations_of_with_type(r, T)` keeps the annotations whose type is
   `remove_const(T)` (spec/reflection-members.md §5).
+- A namespace alias carries no annotations (its definition admits none),
+  and `annotations_of` of one does not see the aliased namespace's: it is
+  empty, not an error (WP-573).
   `constant_of` and `extract` on an annotation yield its value, and
   `is_annotation` tests the kind.
+- An annotation has a type (P3394R4 *has-type*; WP-571): `type_of(a)` is
+  `type_of(constant_of(a))`, the type `T` of the underlying constant
+  (`Annotation::written_type`). A class `T`'s constant is a template
+  parameter object, so `type_of(a)` is `const T` and `is_const(a)` holds;
+  a scalar `T` (`[[=1]]`) is cv-unqualified. GCC 16.1 agrees
+  (`meta.reflection.annotation/type-of-annotation.cpp`).
 
 ## 8. Errors and ABI
 

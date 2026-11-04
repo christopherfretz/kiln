@@ -677,7 +677,6 @@ impl Substituter<'_, '_, '_> {
     /// block scope, introducing its shadows there.
     fn local_using_decl(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
         let dname = self.sema.ast.decls.get(d).name();
-        let name = dname.as_ident().ok_or(SubstFail)?;
         let pnns = self.sema.ast.using_qualifier(d).ok_or(SubstFail)?;
         // Qualifier errors and the qualifier's notes are located where
         // the nested-name-specifier begins, not at the name.
@@ -688,7 +687,9 @@ impl Substituter<'_, '_, '_> {
         if self.nns_still_dependent(nns) {
             // Still dependent (a generic lambda's body inside a function
             // template specialization): the local stays unresolved, its
-            // uses dependent, until the lambda's own instantiation.
+            // uses dependent, until the lambda's own instantiation. (An
+            // operator name never has a dependent block-scope declarator.)
+            let name = dname.as_ident().ok_or(SubstFail)?;
             let h = kiln_ast::builder::DeclHead::new(self.sema.ctx, dname, loc);
             let x = self.sema.builder().unresolved_using_value(h, nns, false);
             if using_loc != loc {
@@ -703,7 +704,7 @@ impl Substituter<'_, '_, '_> {
         // dependent, so the lookup is the definition's). A dependent one
         // (`UnresolvedUsingValue`) is checked now.
         let if_exists = self.sema.kind_of(d) == DeclKind::Using
-            && self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
+            && self.sema.lookup_qualified_dn(ctx, dname, crate::lookup::LookupKind::All).is_empty();
         let q = crate::using::Qualifier { ctx, nns, loc: qloc };
         let r = self.sema.act_on_using_declarator(using_loc, Some(q), dname, loc, if_exists, None);
         r.ok_or(SubstFail)

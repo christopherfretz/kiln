@@ -235,6 +235,7 @@ sema_literal_conversion_out_of_range = Warning [LiteralConversion] (2) "implicit
 sema_literal_operator_bad_param_count = Error (0) "non-template literal operator must have one or two parameters";
 sema_literal_operator_default_argument = Error (0) "literal operator cannot have a default argument";
 sema_literal_operator_extern_c = Error (0) "literal operator must have C++ linkage";
+sema_literal_operator_id_outside_namespace = Error (1) "non-namespace scope '{0}' cannot have a literal operator member";
 sema_literal_operator_invalid_param = Error (0) "parameter of literal operator must have type 'unsigned long long', 'long double', 'char', 'wchar_t', 'char16_t', 'char32_t', or 'const char *'";
 sema_literal_operator_outside_namespace = Error (1) "literal operator {0} must be in a namespace or global scope";
 sema_literal_operator_param = Error (2) "invalid literal operator parameter type {0}, did you mean {1}?";

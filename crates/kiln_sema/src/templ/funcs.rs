@@ -914,7 +914,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let mut exc = None;
-        for c in cands {
+        for &c in &cands {
             if self.kind_of(c).payload() != kiln_ast::decl::PayloadClass::Function
                 || self.ast.member_spec_info(c).is_none()
             {
@@ -948,6 +948,18 @@ impl Sema<'_, '_> {
             // [except.spec]/5.
             let e = self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc());
             let e = self.note_prev(e, p, false);
+            self.emit(e);
+            return Some(None);
+        }
+        // `template<> X C<int>::x();` for a static data member `x`
+        // declares a function ([dcl.ambig.res]/1), not the member's
+        // value-initialized definition ([temp.expl.spec]/14; clang
+        // `MergeFunctionDecl`).
+        if !inst && let Some(o) = self.non_function_member(&cands) {
+            let e = self
+                .diag(DiagId::sema_redefinition_different_kind, d.name_loc())
+                .arg(self.decl_name_str(name));
+            let e = self.note_prev(e, o, true);
             self.emit(e);
             return Some(None);
         }

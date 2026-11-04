@@ -67,7 +67,8 @@ impl Sema<'_, '_> {
         }
         vars.sort_by_key(|&v| self.ast.decls.get(v).loc());
         // Redeclarations count as one variable, diagnosed at its first
-        // declaration that is a definition (else its first).
+        // declaration that is a definition (else at its first explicit
+        // specialization declaration, [temp.expl.spec]/14; else its first).
         let mut seen: Vec<DeclId> = Vec::new();
         for v in vars {
             let first = self.ast.first(v);
@@ -78,7 +79,16 @@ impl Sema<'_, '_> {
             let mut redecls: Vec<DeclId> = self.ast.redecls_of(first).collect();
             redecls.reverse();
             let Some(kind) = self.unused_file_scope_kind(&redecls) else { continue };
-            let at = redecls.iter().copied().find(|&r| self.is_var_definition(r)).unwrap_or(first);
+            let at = redecls
+                .iter()
+                .copied()
+                .find(|&r| self.is_var_definition(r))
+                .or_else(|| {
+                    redecls.iter().copied().find(|&r| {
+                        self.is_member_spec_declaration(r) && !self.is_in_class_static(r)
+                    })
+                })
+                .unwrap_or(first);
             let n = *self.ast.decls.get(at);
             let msg = match kind {
                 Unused::Unneeded => self
