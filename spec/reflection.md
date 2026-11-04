@@ -182,14 +182,17 @@ The value family (`extract`, `reflect_constant*`, P3491 `define_static_*`, `refl
 - Matching is a linear scan of the tables, run once per call site when the
   call is compiled, never per evaluation.
 - **The name table** (WP-484). `kiln_oven/src/meta/gcc16_meta_names.txt`
-  lists every consteval function libstdc++ 16.1's `<meta>` declares in
-  `std::meta` (and its classes), with its parameter classification; a
-  unit test of `kiln_oven::meta` diffs it against the op tables both ways,
-  so a row missing for a header name, or a row whose name or signature
-  the header does not declare (other than the extensions of §1.6), fails
-  `cargo test`. A body-less `<meta>` function defined in the header in
-  terms of another (`reflect_constant_string`, `reflect_constant_array`)
-  is an intrinsic too.
+  lists every consteval function libstdc++ 16.1's `<meta>` declares
+  (free functions of `std::meta` and members of its classes), each marked
+  `intrinsic` (declared without a body) or `library` (defined in the
+  header over the intrinsics). The unit tests of `kiln_oven::meta` check
+  that every intrinsic has a row, that no library function has one, and
+  that every row which is not a kiln extension (§1.6) is a listed
+  intrinsic; with `KILN_GCC16_ROOT` set, a further test re-derives the
+  list from the installed header and fails if it differs. Body-less
+  helpers the header's own definitions call (`reflect_constant_string`
+  and `reflect_constant_array`'s, `_S_exception_cvt_*_utf8`) are
+  intrinsics too.
 - A recognized call with more than `MAX_META_ARGS` (8) arguments is not
   compiled (unsupported). No table row has more than three.
 
