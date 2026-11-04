@@ -605,6 +605,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-607 | sema: throw/try under -fno-exceptions not diagnosed in system headers (clang) and deferred to instantiation in templates (GCC); codegen keeps __cxa_throw | WP-578 | in progress |
 | WP-608 | sema: injected-class-name pointer-to-member (`&Scan::f`, `Scan::*`) and base-qualified member lookup inside class templates (libstdc++ <regex> scanner, httplib) | WP-578 | in progress |
 | WP-605 | driver: honour/ignore/reject the common production flag set (-fstack-protector*, -fcf-protection, -fstack-clash-protection, -ffunction-sections, -march, -fwrapv, -Wp, …) with a driver_unsupported_flag diagnostic for the rejected class (sqlitecpp) | WP-578 | in progress |
+| WP-609 | sema: initializing a class from an expression of the same class must consider constructors only, never its conversion functions (and never instantiate their bodies to decide viability); simdjson, abseil_btree, libdart | WP-578 | in progress |
 | WP-613 | sema: braced init of an aggregate with an uncovered array member inside a template re-feeds the implicit value-init as an element initializer; diagnostic lacks a location (httplib sockaddr_un) | WP-578 | open |
 | WP-611 | specialization default base/member access from its own class-key (eigen gebp_traits) | WP-578 | in progress |
 | WP-606 | sema/parse: accept and ignore the clang thread-safety attribute family (guarded_by, lockable, exclusive_locks_required, …) in GNU and clang:: spellings; no -Wunknown-attributes | WP-578 | in progress |

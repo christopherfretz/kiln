@@ -803,6 +803,20 @@ pre-C++14 array-new size) is `contextual_class_conversion(kind, e, loc)`
 functions whose result `kind` accepts must agree on one target, then
 overload resolution picks one; several targets or an ambiguity is
 clang's `err_*_multiple_conversions`/`ambiguous` + one note per function.
+A conversion function asked to convert an object of class `S` to a class
+target `T` where `S` is `T` or derived from `T` is a non-viable candidate
+(`CandidateFailure::TrivialConversion`, clang `ovl_fail_trivial_conversion`;
+[class.conv.fct]/1, [over.ics.user]/4), checked after the object argument,
+the constraints and `explicit`, before the result: the copy or move
+constructor initializes such an object (spec/sema.md §6, WP-609). Overload
+resolution instantiates only the declaration of a conversion function
+template specialization (deduction and substitution of its type; a
+deduced return type is the one exception that needs the definition,
+[dcl.spec.auto]/12), never its definition; the definition is instantiated
+when the selected specialization is odr-used ([temp.inst]/11).
+-Wclass-conversion ("will never be used") is reported only for a
+conversion function declared outside any template instantiation (clang
+suppresses it for instantiated members).
 
 ### 6.7 Literal operators and user-defined literals ([over.literal], [lex.ext]; `literal_op.rs`)
 - **Declarations.** A literal-operator-id is `operator "" X` or

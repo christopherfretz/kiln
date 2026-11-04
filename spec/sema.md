@@ -6495,6 +6495,38 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     reference through an explicit conversion function, plus clang's
     CWG2327 conversion-function (and conversion-function-template)
     candidates (spec/sema-overload.md §2.6, §10.5 "User-defined conversions")
+  - a class `C` initialized from an expression of type cv `C` or of a class
+    derived from `C` (copy-, direct- or direct-list-initialization, a
+    mem-initializer, a by-value argument, a function-style cast; any value
+    category) is initialized by `C`'s constructors only
+    ([dcl.init.general]/16.6.2.1, [over.match.ctor]/1): a conversion
+    function of the source, template or not, explicit or not, converting
+    to `C` or to a base of the source is never used ([class.conv.fct]/1,
+    [over.ics.user]/4). It stays a candidate, but a non-viable one
+    (clang `AddConversionCandidate`, `ovl_fail_trivial_conversion`),
+    whatever its result type and before its result is looked at, in every
+    candidate set that adds conversion functions for a class target
+    (`add_conversion_candidate`, `overload/ics.rs`): it never ties with or
+    beats the copy or move constructor (no "ambiguous" against the copy
+    constructor, no deleted `operator C() &&` chosen for a prvalue, no
+    access check of a conversion function as if it were a constructor),
+    and it is noted as `candidate function` after the constructors when
+    no constructor is viable (sorted as an arity mismatch: it has no
+    parameter for the one argument, clang `EffectiveFailureKind`). A
+    conversion function template is still deduced for the target (its
+    declaration only, [temp.inst]/11), never defined; an unrelated class
+    `E` is still initialized through `operator T()` with `T = E`. A
+    copy-initialization from `C` or a derived class goes through `C`'s
+    constructors like the direct form, so a constructor parameter may be
+    initialized by a user-defined conversion of the source (`A(X)` for a
+    `const B` with `B : A` and `B::operator X()`); only a copy-initialization
+    from an unrelated class suppresses user-defined conversions there
+    ([over.best.ics]/4, `resolve_ctor_ex`, `class/ctor_select.rs`). WP-609;
+    tests `tests/conformance/over.match.ctor/same-class-conversion-*.cpp`,
+    `same-class-copy-init-user-conversion-run.cpp`,
+    `template-bodies-not-instantiated.cpp`,
+    `unrelated-class-uses-conversion-template-run.cpp`,
+    `class.conv.fct/self-conversion-not-viable-diags.cpp`.
   - character arrays from string literals: the bound is deduced, and
     an over-long string is an error
     (`initializer-string for char array is too long`, two arguments)

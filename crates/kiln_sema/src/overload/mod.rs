@@ -119,6 +119,10 @@ pub(crate) enum CandidateFailure {
     /// The result of a conversion function does not convert to the
     /// target ([over.match.conv]/1).
     BadFinalConversion,
+    /// A conversion function asked to convert an object to its own
+    /// class or to a base of it ([class.conv.fct]/1; clang
+    /// `ovl_fail_trivial_conversion`).
+    TrivialConversion,
     /// A constructor template specialization that would take its own
     /// class by value to copy an object of it ([class.copy.ctor]/5).
     IllegalCtor,
@@ -348,6 +352,13 @@ impl OverloadCandidateSet {
         self.builtin_op = None;
         self.tmpl_order.clear();
         self.exclude = None;
+    }
+
+    /// Adds `cand` as a non-viable candidate failing with `failure`.
+    pub(crate) fn push_non_viable(&mut self, mut cand: Candidate, failure: CandidateFailure) {
+        cand.viable = false;
+        cand.failure = failure;
+        self.cands.push(cand);
     }
 
     /// The conversion sequences of candidate `c`.
