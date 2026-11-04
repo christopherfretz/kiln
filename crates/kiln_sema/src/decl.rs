@@ -6268,8 +6268,17 @@ impl Sema<'_, '_> {
     }
 
     fn act_on_uninit_inner(&mut self, v: DeclId) {
-        self.initializing = None;
         self.lambda_mangle.var = None;
+        // [class.static.data]/3: the default-initialization of an
+        // out-of-line static data member definition is in the scope of
+        // its class too, so its constructor's access is checked as from
+        // a member (`F<int> F<int>::inst;` with a private default
+        // constructor, the reference workload's Metrics).
+        self.default_init_var(v);
+        self.initializing = None;
+    }
+
+    fn default_init_var(&mut self, v: DeclId) {
         if self.ast.decls.decomp_bindings(v).is_some() {
             self.decomposition_requires_init(v);
             return;
