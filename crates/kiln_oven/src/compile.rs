@@ -1867,15 +1867,26 @@ impl Compiler<'_> {
                     self.decl_one(v);
                 }
                 match kind {
-                    // Constant evaluation is always manifestly constant-evaluated.
-                    IfKind::Consteval => {
+                    // `if consteval` takes its compound statement iff the
+                    // evaluation is manifestly constant-evaluated
+                    // ([stmt.if]/4): a run-time test of the evaluation's
+                    // context, as `__builtin_is_constant_evaluated()`, since
+                    // a trial fold runs the same code (spec/oven.md §9.1).
+                    IfKind::Consteval | IfKind::NotConsteval => {
+                        let r = self.reg();
+                        // aux 16: the context alone (no -Wconstant-evaluated).
+                        self.emit(Op::IsConstEval, 16, &[r]);
+                        let j = self.jmp_if(r, kind == IfKind::NotConsteval);
                         if let Some(t) = d.then {
                             self.stmt(t);
                         }
-                    }
-                    IfKind::NotConsteval => {
-                        if let Some(t) = d.els {
-                            self.stmt(t);
+                        if let Some(e) = d.els {
+                            let end = self.jmp();
+                            self.patch_here(j);
+                            self.stmt(e);
+                            self.patch_here(end);
+                        } else {
+                            self.patch_here(j);
                         }
                     }
                     _ => {
