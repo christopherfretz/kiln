@@ -594,6 +594,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-571 | type_of/has-type for annotation reflections: type_of(a) for any annotation (class-type constexpr variable, prvalue, literal; on members/functions/vars/classes) fails with has-no-type; must be type_of(constant_of(a)) per P3394 (GCC 16.1 agrees); blocks the reference workload annotation scanner (synth_skip corpus runs) | WP-550 | open |
 | WP-572 | explicit specialization of a static data member without initializer is a declaration ([temp.expl.spec]/14) but kiln emits a strong definition; libstdc++ __timepunct_cache<char>::_S_timezones becomes multiply defined when linking two TUs that include <locale> (pugixml corpus run) | WP-550 | open |
 | WP-573 | annotations_of / annotations_of_with_type on a namespace-alias reflection fail as unsuitable; GCC 16.1 accepts and yields an empty range (a namespace alias has its own, always empty, annotations); the reference workload scans every members_of entry of a namespace with annotations_of_with_type, so a namespace alias member aborts the bind (spdlog corpus run) | WP-550 | open |
+| WP-584 | runtime: fmt::format("{:08b}", 5) throws format_error "argument not found" at -O2 (correct at -O0) | corpus | open |
 | WP-582 | codegen: i0 members for pointer-to-nested-struct fields in a nested struct (concurrentqueue BlockIndexHeader; invalid IR) | corpus | open |
 | WP-581 | codegen -O2: "reference to an unemitted local variable" for by-ref capture inside visit lambda (tomlplusplus table.inl:309) | corpus | open |
 | WP-588 | codegen: `if consteval` always takes the true branch at run time (kiln_oven compile.rs compiles only the then-branch of IfKind::Consteval); libstdc++ char_traits::length/copy run their constant-evaluation loops at run time; clang/gcc take the else branch (WP-551 find F1) | WP-551 | open |
@@ -602,6 +603,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-580 | explicit instantiation of constructor/member function templates by signature; defaulted-NTTP out-of-line ctor (abseil Cord) | corpus | open |
 | WP-585 | runtime: tinyobjloader LoadMtl unknown_parameter map stays empty (std::map<string,string> insert; -O2) | corpus | open |
 | WP-605 | driver: honour/ignore/reject the common production flag set (-fstack-protector*, -fcf-protection, -fstack-clash-protection, -ffunction-sections, -march, -fwrapv, -Wp, …) with a driver_unsupported_flag diagnostic for the rejected class (sqlitecpp) | WP-578 | in progress |
+| WP-611 | specialization default base/member access from its own class-key (eigen gebp_traits) | WP-578 | in progress |
 | WP-606 | sema/parse: accept and ignore the clang thread-safety attribute family (guarded_by, lockable, exclusive_locks_required, …) in GNU and clang:: spellings; no -Wunknown-attributes | WP-578 | in progress |
+| WP-612 | using-declaration base member hidden by same-signature derived member template (eigen Map::operator=) | WP-578 | open |
 WP-511
 WP-512

@@ -244,6 +244,7 @@ impl Sema<'_, '_> {
                 head: None,
                 requires,
                 enable_if: kiln_ast::ids::ListId::EMPTY,
+                member_using: false,
             };
             let Some(p) = self.pick_prev_function(&found, new) else {
                 self.error(DiagId::sema_no_matching_local_friend, loc);

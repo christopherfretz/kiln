@@ -3147,6 +3147,13 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   stack held; covering it would mean filling at the jump or at function
   entry, which clang does not do either (not planned).
   `=pattern`, constructor and aggregate pre-fills and VLAs: §7y.
+- **Note (WP-584).** The zero fill is correct: a formatting library's
+  `"{:08b}"` failure (`argument not found`) seen only at C++26 `-O2` had a
+  fill byte for byte clang's `-ftrivial-auto-var-init=zero`. The cause
+  was the Oven folding `if consteval` to true in codegen's trial folds,
+  fixed by WP-588 (spec/landed/oven/WP-588.md); the zero fill only made
+  the resulting stray read deterministic. Tests pinning the shape:
+  spec/landed/codegen/WP-584.md.
 
 ## 7s. Landed (WP-450): `bool` ext-vector constants
 - A constant `bool` ext vector (the Oven's packed `BoolVec`,
