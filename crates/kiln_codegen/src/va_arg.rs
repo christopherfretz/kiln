@@ -2,7 +2,7 @@
 //! `EmitVAArg` hooks): the AAPCS64 and `SysV` x86-64 `va_list` walks,
 //! instruction for instruction as clang 19 emits them at `-O0`.
 
-use kiln_abi::call::{ArgKind, classify_va_arg};
+use kiln_abi::call::{ArgKind, classify_va_arg, unadjusted_align};
 use kiln_abi::irtype::IrType;
 use kiln_ast::ExprId;
 use kiln_llvm::{BinOp, Flags, IntPredicate, TypeId as LTy};
@@ -105,7 +105,12 @@ impl Cg<'_> {
             num_regs = n;
         }
         let fpr = base_ty.is_fp() || matches!(base_ty, IrType::Vector(..));
-        let (ty_size, ty_align) = self.size_align(q);
+        // `TyAlign` is the unadjusted (natural) alignment, as in the
+        // parameter classification (AAPCS64 C.10; spec/abi.md §8.12): a
+        // class's own `alignas(16)` neither rounds the register offset up
+        // to an even pair nor the stack pointer up to 16.
+        let ty_size = self.size_align(q).0;
+        let ty_align = unadjusted_align(&mut self.tys, q);
         let mem_ty = self.mty(q);
 
         let maybe_reg = self.f.fir.create_block();
