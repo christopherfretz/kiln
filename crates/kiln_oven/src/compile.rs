@@ -1872,11 +1872,12 @@ impl Compiler<'_> {
                     // constant-evaluated; a trial fold (codegen's
                     // folding of a run-time `if` condition, clang
                     // `EvaluateAsBooleanCondition` outside a constant
-                    // context) takes the other (WP-584).
+                    // context) takes the other (WP-584). The function stays
+                    // memoizable: the memo key holds the context and the
+                    // read warns about nothing.
                     _ if matches!(kind, IfKind::Consteval | IfKind::NotConsteval) => {
                         let r = self.reg();
                         self.emit(Op::IsConstEval, 16, &[r]);
-                        self.uses_cc = true;
                         Some(self.jmp_if(r, kind == IfKind::NotConsteval))
                     }
                     Some(c) => {

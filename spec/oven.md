@@ -541,6 +541,17 @@ asks whether the evaluation is manifestly constant-evaluated.
   `IsConstEval [dst]`, which writes the flag as a `bool`. Its `aux` is 1
   when the enclosing function is `std::is_constant_evaluated` (a function
   of that name in `std`, through inline namespaces).
+- `if consteval` / `if !consteval` ([stmt.if]/4) reads the same flag:
+  its condition compiles to `IsConstEval [r]` with `aux` 16 and a
+  `JmpIfNot`/`JmpIf` over the first substatement, so a manifestly
+  constant-evaluated run takes the first substatement of `if consteval`
+  and a trial fold the second (clang `EvaluateStmt`: `if consteval` is
+  true only `InConstantContext`). The read never warns, and the function
+  stays memoizable (the memo key holds the flag). Before WP-584 the
+  compiler emitted only the first substatement, so codegen's trial fold
+  of a run-time `if (std::is_constant_evaluated())` (libstdc++
+  implements it with `if consteval` from C++23) folded to true and kept
+  the constant-evaluation-only branch.
 - **Warning** (`-Wconstant-evaluated`, clang's
   `warn_is_constant_evaluated_always_true_constexpr`): when the answer is
   true in a non-silent evaluation, and the builtin is called directly by
