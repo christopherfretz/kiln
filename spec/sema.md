@@ -1815,10 +1815,16 @@ and returns the scope it names:
   visibility attribute starts here`, and a push still open at its `}` is
   `#pragma visibility push with no matching #pragma visibility pop` (at
   the innermost push) with `surrounding namespace with visibility
-  attribute ends here`, and is popped. What the attributes mean is
+  attribute ends here`, and is popped. The attributes of an explicit
+  instantiation of a function, variable or class template
+  specialization ([temp.explicit]) are checked the same way and become
+  the specialization's own (clang `ActOnExplicitInstantiation`); one that
+  differs from an earlier explicit instantiation's replaces it after the
+  mismatch error, reported at the earlier one. What the attributes mean is
   codegen's: spec/codegen.md §8. Tests:
   `tests/conformance/ext.gnu.visibility/`,
-  `tests/conformance/cpp.pragma/gcc-visibility{,-syntax,-namespace}.cpp`.
+  `tests/conformance/cpp.pragma/gcc-visibility{,-syntax,-namespace}.cpp`,
+  `tests/codegen/visibility_explicit_inst.cpp`.
 - **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
   `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
   `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in

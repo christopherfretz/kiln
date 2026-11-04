@@ -3647,7 +3647,10 @@ only adds explicitness.
   member of a class template specialization, a class, variable or
   function template specialization, the template). clang does not clone
   the attribute onto an instantiation, and neither does kiln's
-  `copy_attrs`. A replaceable global allocation or deallocation function
+  `copy_attrs`; an explicit instantiation's own attribute is the
+  specialization's (spec/sema.md "Visibility attributes"; libc++ exports
+  hidden function templates' `extern template` specializations this
+  way). A replaceable global allocation or deallocation function
   is default (clang's `-fvisibility-global-new-delete=force-default`).
 - *Namespace scope* (clang `getLVForNamespaceScopeDecl`): explicit
   visibility, else the nearest enclosing namespace's attribute (any of its

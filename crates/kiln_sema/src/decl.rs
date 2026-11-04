@@ -2497,7 +2497,8 @@ impl Sema<'_, '_> {
             // [dcl.constexpr]/9: `constexpr` makes the declared type const.
             let ty =
                 if ds.constexpr.is_some() { self.ast.types.qualify(ty, Quals::CONST) } else { ty };
-            self.act_on_explicit_var_inst(d, (ty, type_loc), ext.is_some(), invalid);
+            let attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            self.act_on_explicit_var_inst(d, (ty, type_loc), &attrs, ext.is_some(), invalid);
             return None;
         }
         if let Some(sid) = &d.spec_id {

@@ -220,6 +220,56 @@ impl Sema<'_, '_> {
         attrs.push(self.ast.attrs.push(node));
     }
 
+    /// clang `ActOnExplicitInstantiation` (`ProcessDeclAttributeList`
+    /// on the specialization): the `visibility` / `type_visibility`
+    /// attributes of an explicit instantiation of a function or variable
+    /// template specialization `spec` are the specialization's own
+    /// (libc++'s `extern template _LIBCPP_EXPORTED_FROM_ABI string
+    /// operator+<char>(...)` exports a hidden template's specialization).
+    /// One that differs from an earlier explicit instantiation's replaces
+    /// it after `err_mismatched_visibility` (clang `mergeVisibilityAttr`).
+    pub(crate) fn explicit_inst_visibility_attrs(&mut self, spec: DeclId, attrs: &[AttrId]) {
+        let mut vis: Vec<AttrId> =
+            attrs.iter().copied().filter(|&a| is_vis(self.ast.attrs.get(a).kind)).collect();
+        if vis.is_empty() {
+            return;
+        }
+        self.check_visibility_attrs(spec, &mut vis);
+        if vis.is_empty() {
+            return;
+        }
+        let old: Vec<AttrId> = self.ast.lists.iter(self.ast.attrs.of_decl(spec)).collect();
+        if old.is_empty() {
+            self.builder().append_attrs(spec, &vis);
+            return;
+        }
+        let mut keep = Vec::with_capacity(old.len() + vis.len());
+        for a in old {
+            let o = *self.ast.attrs.get(a);
+            let new = vis.iter().position(|&n| self.ast.attrs.get(n).kind == o.kind);
+            match new {
+                Some(i) if self.ast.attrs.get(vis[i]).a == o.a => {
+                    vis.remove(i);
+                    keep.push(a);
+                }
+                Some(i) => {
+                    let at = self.ast.attrs.get(vis[i]).loc;
+                    let prev = self.diag(DiagId::note_previous_attribute, at);
+                    let msg = self.diag(DiagId::sema_mismatched_visibility, o.loc).with_note(prev);
+                    self.emit(msg);
+                }
+                None => keep.push(a),
+            }
+        }
+        if vis.is_empty() {
+            return;
+        }
+        keep.extend(vis);
+        // `spec` already has an attribute list (and `HAS_ATTRS`).
+        let list = self.ast.lists.push(&keep);
+        let _ = self.ast.attrs.decl_attrs.refine(spec, list);
+    }
+
     /// The visibility attribute of the nearest previous declaration of
     /// `decl` that has one.
     fn prior_visibility_attr(&self, decl: DeclId) -> Option<AttrNode> {

@@ -746,6 +746,7 @@ impl Sema<'_, '_> {
         &mut self,
         d: &Declarator,
         declared: (QualType, Loc),
+        attrs: &[kiln_ast::AttrId],
         declaration: bool,
         invalid: bool,
     ) {
@@ -764,6 +765,7 @@ impl Sema<'_, '_> {
                 return;
             };
             let Some((i, info)) = self.ast.spec_info(v).map(|(i, s)| (i, *s)) else { return };
+            self.explicit_inst_visibility_attrs(v, attrs);
             // Checked in clang's order: the redeclaration, then (whatever
             // its effect) the type; a later explicit instantiation sees
             // this one even when its type is wrong.
