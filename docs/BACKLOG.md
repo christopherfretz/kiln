@@ -607,6 +607,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-605 | driver: honour/ignore/reject the common production flag set (-fstack-protector*, -fcf-protection, -fstack-clash-protection, -ffunction-sections, -march, -fwrapv, -Wp, …) with a driver_unsupported_flag diagnostic for the rejected class (sqlitecpp) | WP-578 | in progress |
 | WP-609 | sema: initializing a class from an expression of the same class must consider constructors only, never its conversion functions (and never instantiate their bodies to decide viability); simdjson, abseil_btree, libdart | WP-578 | in progress |
 | WP-610 | sema/codegen: __builtin_prefetch (llvm.prefetch, Oven no-op) + audit of common GCC builtins | WP-578 | open |
+| WP-583 | aarch64 ABI: over-aligned 16-byte aggregate passed as i128 instead of [2 x i64] (AAPCS64 uses natural alignment); abseil uint128 printed wrong | corpus | open |
 | WP-613 | sema: braced init of an aggregate with an uncovered array member inside a template re-feeds the implicit value-init as an element initializer; diagnostic lacks a location (httplib sockaddr_un) | WP-578 | open |
 | WP-611 | specialization default base/member access from its own class-key (eigen gebp_traits) | WP-578 | in progress |
 | WP-606 | sema/parse: accept and ignore the clang thread-safety attribute family (guarded_by, lockable, exclusive_locks_required, …) in GNU and clang:: spellings; no -Wunknown-attributes | WP-578 | in progress |

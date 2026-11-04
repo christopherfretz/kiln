@@ -95,6 +95,16 @@ pub struct RecordLayout {
     pub nv_size: u64,
     /// Alignment as a base subobject.
     pub nv_align: u32,
+    /// Unadjusted (natural) alignment, clang 21+ `getUnadjustedAlignment`:
+    /// the largest alignment of a field (after `packed` / `#pragma pack`
+    /// and the field's own `alignas`/`aligned`) or of a base not placed
+    /// as an empty base at offset 0 (its `nv_align`, capped by `#pragma
+    /// pack`); at least 1. The class's own alignment attribute does not
+    /// count. AAPCS64 argument classification reads it (spec/abi.md §5,
+    /// WP-583).
+    pub unadjusted_align: u32,
+    /// The same over the fields only (clang 19/20, before bases counted).
+    pub unadjusted_field_align: u32,
     /// Bit offset of each field, in declaration order.
     pub fields: Box<[u64]>,
     /// Direct non-virtual bases with their byte offsets.

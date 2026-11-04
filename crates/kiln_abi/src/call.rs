@@ -176,6 +176,15 @@ fn type_align_bits(t: &mut IrTypes<'_>, q: QualType) -> u64 {
     t.layouter().type_layout(q).align * 8
 }
 
+/// clang `getTypeUnadjustedAlignInChars` (bytes) at the compat level of
+/// `t`: the AAPCS64 natural alignment that classifies a composite
+/// argument and its `va_arg`, which counts the bases from clang 21 on
+/// (spec/abi.md §5, spec/landed/abi/WP-583.md).
+pub fn unadjusted_align(t: &mut IrTypes<'_>, q: QualType) -> u64 {
+    let bases = t.clang_compat() >= 21;
+    t.layouter().type_unadjusted_align(q, bases)
+}
+
 /// clang `isAggregateTypeForABI`.
 fn is_aggregate(t: &IrTypes<'_>, q: QualType) -> bool {
     match view(t, q) {
@@ -339,7 +348,11 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
         }
     }
     if let Some((base, members)) = homogeneous(t, q) {
-        let align = t.layouter().type_layout(q).align;
+        // AAPCS64 C.4: the stack slot of an HFA/HVA is 16-byte aligned
+        // only for a naturally 16-byte-aligned type (clang
+        // `getTypeUnadjustedAlignInChars`; an `alignas` on the class
+        // itself does not count, one on a member does).
+        let align = unadjusted_align(t, q);
         let bt = t.convert(base);
         return ArgKind::Direct {
             coerce: IrType::Array(Box::new(bt), members),
@@ -349,7 +362,10 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
         };
     }
     if size <= 128 {
-        let a = type_align_bits(t, q);
+        // AAPCS64 C.10 classifies by the natural alignment (clang
+        // `getTypeUnadjustedAlign`): an `alignas(16)` pair of `i64` is
+        // `[2 x i64]` in any register pair, not an even-pair `i128`.
+        let a = unadjusted_align(t, q) * 8;
         let a = if a < 128 { 64 } else { 128 };
         let size = size.next_multiple_of(a);
         let base = IrType::Int(u32::try_from(a).unwrap_or(64));
@@ -389,6 +405,9 @@ fn aarch64_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
         if size <= 64 {
             return direct(IrType::Int(u32::try_from(size).unwrap_or(64)));
         }
+        // clang 19-22 `classifyReturnType` reads the adjusted
+        // `getTypeAlign` here (an `alignas(16)` pair returns as `i128`;
+        // x0:x1 either way).
         let a = type_align_bits(t, q);
         let size = size.next_multiple_of(64);
         if a < 128 && size == 128 {

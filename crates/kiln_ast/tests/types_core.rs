@@ -344,6 +344,8 @@ fn layout_cache() {
         data_size: 8,
         nv_size: 8,
         nv_align: 4,
+        unadjusted_align: 4,
+        unadjusted_field_align: 4,
         fields: vec![0, 32].into_boxed_slice(),
         bases: Box::new([]),
         vbases: Box::new([]),
