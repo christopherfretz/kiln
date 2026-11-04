@@ -8,6 +8,7 @@
 //! and the record layouts; [`NoEnv`] is a context-free fallback (opaque
 //! aggregates, `#d17`-style names).
 
+use std::cell::Cell;
 use std::fmt::Write as _;
 
 use super::ConstStore;
@@ -45,12 +46,23 @@ pub struct PrintOptions {
     /// a known non-`auto` parameter: a specialization's name prints
     /// `A<5, 'x'>`, not `A<5UL, (unsigned char)'x'>`.
     pub include_type: bool,
+    /// [`PrintStyle::TemplateArg`] without [`Self::include_type`]: an
+    /// enumeration value that names no enumerator still prints as a cast
+    /// (`(E)5`, not `5`), so the spelling re-parses as a value of the
+    /// enumeration (`display_string_of`; spec/reflection.md §3.9).
+    pub enum_cast: bool,
 }
 
 impl PrintOptions {
     /// The default limits: depth 10, 32 elements.
     pub const DEFAULT: PrintOptions =
-        PrintOptions { style: PrintStyle::Dump, max_depth: 10, max_elems: 32, include_type: true };
+        PrintOptions {
+        style: PrintStyle::Dump,
+        max_depth: 10,
+        max_elems: 32,
+        include_type: true,
+        enum_cast: false,
+    };
 
     /// The defaults in `style`.
     pub const fn with_style(style: PrintStyle) -> Self {
@@ -260,6 +272,9 @@ struct Printer<'a> {
     strings: &'a StringPool,
     env: &'a dyn PrintEnv,
     opts: &'a PrintOptions,
+    /// Set when a part printed as a placeholder rather than a source
+    /// spelling ([`ConstStore::print_exact`]).
+    lossy: Cell<bool>,
 }
 
 impl ConstStore {
@@ -272,7 +287,24 @@ impl ConstStore {
         opts: &PrintOptions,
         out: &mut String,
     ) {
-        Printer { store: self, strings, env, opts }.value(id, 0, out);
+        Printer { store: self, strings, env, opts, lossy: Cell::new(false) }.value(id, 0, out);
+    }
+
+    /// [`ConstStore::print`], returning whether the text is exact: false
+    /// when some part printed as a placeholder (`?`, `{...}`, a `...`
+    /// truncation, `#c3`, a `+N` offset no designator recovers, a
+    /// temporary), so it is no source spelling of the value.
+    pub fn print_exact(
+        &self,
+        id: ConstValueId,
+        strings: &StringPool,
+        env: &dyn PrintEnv,
+        opts: &PrintOptions,
+        out: &mut String,
+    ) -> bool {
+        let p = Printer { store: self, strings, env, opts, lossy: Cell::new(false) };
+        p.value(id, 0, out);
+        !p.lossy.get()
     }
 
     /// Value `id` as a string ([`ConstStore::print`]).
@@ -314,6 +346,21 @@ impl Printer<'_> {
         self.opts.style == PrintStyle::TemplateArg
     }
 
+    /// Notes that a placeholder was printed ([`ConstStore::print_exact`]).
+    fn lost(&self) {
+        self.lossy.set(true);
+    }
+
+    /// A floating-point value ([`format_float`]); an infinity or NaN has
+    /// no literal, so is no exact spelling.
+    fn float(&self, kind: FloatKind, bits: u128, out: &mut String) {
+        let at = out.len();
+        format_float(kind, bits, out);
+        if out[at..].ends_with("inf") || out[at..].ends_with("nan") {
+            self.lost();
+        }
+    }
+
     fn value(&self, id: ConstValueId, depth: u32, out: &mut String) {
         match self.store.get(id) {
             ConstValue::Scalar(s) => self.scalar(&s, out),
@@ -325,7 +372,7 @@ impl Printer<'_> {
         match *s {
             Scalar::Int { ty, signed, bits } => self.int(ty, signed, &bits, out),
             Scalar::Bool { value, .. } => out.push_str(if value { "true" } else { "false" }),
-            Scalar::Float { kind, bits, .. } => format_float(kind, bits, out),
+            Scalar::Float { kind, bits, .. } => self.float(kind, bits, out),
             Scalar::Null { .. } => out.push_str("nullptr"),
             Scalar::Pointer { ty, base, offset, designated } => {
                 self.pointer(ty, base, offset, designated, out);
@@ -372,7 +419,8 @@ impl Printer<'_> {
                 out.push('\'');
             }
             IntStyle::Enum if self.env.enumerator(ty, bits, out) => {}
-            IntStyle::Enum | IntStyle::Cast if !typed => bits.write_decimal(signed, out),
+            IntStyle::Enum if !typed && !self.opts.enum_cast => bits.write_decimal(signed, out),
+            IntStyle::Cast if !typed => bits.write_decimal(signed, out),
             IntStyle::Enum | IntStyle::Cast => {
                 out.push('(');
                 self.env.arg_type_name(ty, out);
@@ -425,6 +473,7 @@ impl Printer<'_> {
                     if offset.is_multiple_of(unit) {
                         let _ = write!(out, "[{}]", offset / unit);
                     } else {
+                        self.lost();
                         let _ = write!(out, "+{offset}");
                     }
                 }
@@ -443,11 +492,13 @@ impl Printer<'_> {
                 self.env.type_name(t, out);
                 out.push(')');
                 if offset != 0 {
+                    self.lost();
                     let _ = write!(out, "+{offset}");
                 }
             }
             // clang prints an `AddrLabelExpr` base as the expression.
             PtrBase::Label { label, .. } => {
+                self.lost();
                 out.push_str("&&");
                 self.env.decl_name(label, out);
                 if offset != 0 {
@@ -455,6 +506,9 @@ impl Printer<'_> {
                 }
             }
             PtrBase::Decl(d) | PtrBase::Temporary(d) => {
+                if matches!(base, PtrBase::Temporary(_)) {
+                    self.lost();
+                }
                 if amp {
                     out.push('&');
                 }
@@ -462,6 +516,7 @@ impl Printer<'_> {
                 self.designator(self.env.decl_type(d), offset, pointee, out);
             }
             PtrBase::Const(c) => {
+                self.lost();
                 if amp {
                     out.push('&');
                 }
@@ -488,6 +543,7 @@ impl Printer<'_> {
             return;
         }
         if offset != 0 {
+            self.lost();
             let _ = write!(out, "+{offset}");
         }
     }
@@ -564,6 +620,7 @@ impl Printer<'_> {
         }
         match self.env.shape(ty) {
             Shape::Unknown => {
+                self.lost();
                 if depth == 0 && at == 0 && ty == img.ty {
                     out.push_str("{...}");
                 } else {
@@ -579,12 +636,16 @@ impl Printer<'_> {
                 self.image_int(ty, signed, width, &w, out);
             }
             Shape::Float(kind) => {
-                format_float(kind, read_le(img.bytes, at, kind.value_bytes()), out);
+                self.float(kind, read_le(img.bytes, at, kind.value_bytes()), out);
             }
             Shape::NullPtr => out.push_str("nullptr"),
-            Shape::Pointer { .. } | Shape::MemberPointer | Shape::Reflection => out.push('?'),
+            Shape::Pointer { .. } | Shape::MemberPointer | Shape::Reflection => {
+                self.lost();
+                out.push('?');
+            }
             Shape::Array { elem, stride, len } => {
                 if depth >= self.opts.max_depth {
+                    self.lost();
                     out.push_str("{...}");
                     return;
                 }
@@ -597,6 +658,7 @@ impl Printer<'_> {
                     self.object(img, elem, at + i * stride, depth + 1, out);
                 }
                 if shown < len {
+                    self.lost();
                     out.push_str(if shown > 0 { ", ..." } else { "..." });
                 }
                 out.push('}');
@@ -606,6 +668,7 @@ impl Printer<'_> {
                     self.env.type_name(ty, out);
                 }
                 if depth >= self.opts.max_depth {
+                    self.lost();
                     out.push_str("{...}");
                     return;
                 }
@@ -628,6 +691,7 @@ impl Printer<'_> {
                     members.iter().filter(|m| !(m.bit_width.is_some() && m.name.is_empty()));
                 for (n, m) in shown.enumerate() {
                     if n == self.opts.max_elems as usize {
+                        self.lost();
                         out.push_str(if n > 0 { ", ..." } else { "..." });
                         break;
                     }
@@ -660,7 +724,10 @@ impl Printer<'_> {
     fn image_int(&self, ty: QualType, signed: bool, width: u32, words: &[u64], out: &mut String) {
         match IntBits::from_words(width, words) {
             Some(bits) => self.int(ty, signed, &bits, out),
-            None => out.push('?'),
+            None => {
+                self.lost();
+                out.push('?');
+            }
         }
     }
 }

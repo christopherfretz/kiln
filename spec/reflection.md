@@ -530,9 +530,47 @@ answers as of that point.
   |---|---|
   | `has_identifier(r)` | whether `identifier_of(r)` succeeds |
   | `identifier_of(r)`, `u8identifier_of(r)` | a class, enumeration, enumerator, variable, function, data member, namespace, namespace alias, type alias or template (a `Template` reflection answers for its templated declaration): the identifier it was declared with; an unnamed class or enumeration with a typedef name for linkage ([dcl.typedef]/9): that name; a literal operator: its suffix. A type: as its alias when it is a cv-unqualified typedef or alias-declaration type (not an alias template specialization), else as its class or enumeration when it is a cv-unqualified one. Otherwise (a specialization, a constructor, destructor, operator or conversion function, an unnamed entity, the global namespace, any other type or value) fails: "'R' has no identifier" |
-  | `display_string_of(r)`, `u8display_string_of(r)` | implementation-defined; never fails: a type prints as in diagnostics (`const int *`), a declaration as its name, anything else as `^^…` |
+  | `display_string_of(r)`, `u8display_string_of(r)` | implementation-defined; never fails: a type prints canonical and fully scoped as in diagnostics (`const int *`, `N::T1<int>`), a declaration as its qualified name, a value or object as its source spelling (below), anything else as `^^…` |
   | `source_location_of(r)` | the location of the declared name, with an empty `function_name`; a reflection with no declaration (a fundamental or compound type, a value, the translation unit) gives `source_location{}` |
 
+- **`display_string_of` of a value or object** (WP-564): the shortest
+  source spelling that re-parses as a constant of that value, from the
+  diagnostic constant printer (spec/ast.md §9.3, template-argument style
+  with no literal suffix and `enum_cast`; `Sema::value_spelling`,
+  `object_spelling` in `kiln_sema/src/meta/names.rs`). GCC 16.1 prints
+  the same except where noted (`meta.reflection.names/display-string-of-values*.cpp`):
+  - integers in decimal with no suffix (`86400` for `86400L`, `5` for a
+    `short`); `true`/`false`; `nullptr`;
+  - characters as literals with diagnostics' escapes and the encoding
+    prefix (`'a'`, `'\n'`, `u8'a'`; `signed`/`unsigned char` as `'A'`;
+    GCC prints `'\012'` and the code of the prefixed and small ones);
+  - an enumeration value as its enumerator, qualified as diagnostics
+    qualify it (`Col::red`, `ns::e1` for an unscoped one), else as a cast
+    of the fully scoped type (`(ns::F)9`);
+  - floating point as the shortest round-tripping decimal in Rust `{:e}`
+    form (`1.5e0`, `1e-1`; GCC prints `1.5e+0`,
+    `1.0000000000000001e-1`): kiln's contract is the round trip, not
+    GCC's digits;
+  - pointers as `&x` plus the designator (`&arr[1]`, `&fn`; GCC
+    `& gv`, `fn`), member pointers `&S::m`, a null pointer of any type
+    `nullptr` (GCC `0`), a reflection `^^int`, or for a reflection of a
+    value or object the call making it (`std::meta::reflect_constant(5)`);
+  - a class value as `T{...}` with `T` canonical and fully scoped,
+    members in order, nested arrays as `{...}`, a union as `U{.f = 2e0}`
+    (`ns::In{7}`; no element limit or depth cut);
+  - an object (`reflect_object`, a reference template argument) as its
+    qualified name and designator (`ns::nv`, `arr[1]`, `pt.x`; GCC
+    `pt.Pt::x`); a template parameter object (a class-type template
+    argument, `reflect_constant` of a class value) as its value
+    (`Pt{3}`).
+
+  The `^^(value of type T)` / `^^(object of type T)` placeholder is kept
+  only where no part has a source spelling: an infinity or NaN, an
+  unnamed class or closure type, a temporary or `Const` base, a
+  subobject of a template parameter object, an undecodable subobject, a
+  nested reflection of a base specifier, parameter, data member spec or
+  annotation. `identifier_of` / `has_identifier` are unchanged (a value
+  has no identifier).
 - Template parameters and lambdas (their `identifier_of`) are deferred,
   with type aliases as reflections distinct from their types (§2.2).
 
