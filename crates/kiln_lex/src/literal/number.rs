@@ -80,6 +80,10 @@ pub enum FloatSuffix {
     F32x,
     /// `f64x` / `F64x` (GCC extension, lower-case `x` only): `_Float64x`.
     F64x,
+    /// `q` / `Q` (GNU extension): `__float128`. libstdc++'s `<numbers>`
+    /// spells `__float128` constants this way whenever `__FLOAT128__` is
+    /// predefined (clang `NumericLiteralParser::isFloat128`).
+    Q,
 }
 
 /// An integer literal.
@@ -718,6 +722,12 @@ impl Parser<'_> {
                     } else {
                         false
                     }
+                }
+                b'q' | b'Q' if floating && !has_size => {
+                    has_size = true;
+                    sx.fsuffix = FloatSuffix::Q;
+                    i += 1;
+                    true
                 }
                 b'u' | b'U' if !floating && !sx.unsigned => {
                     sx.unsigned = true;

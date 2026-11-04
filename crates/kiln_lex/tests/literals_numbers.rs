@@ -170,7 +170,13 @@ fn lex_fcon_suffixes_and_errors() {
     assert_eq!(diags("1.0ll"), [D::InvalidSuffix { floating: true }]);
     assert_eq!(diags("1.0z"), [D::InvalidSuffix { floating: true }]);
     assert_eq!(diags("1.0u"), [D::InvalidSuffix { floating: true }]);
-    assert_eq!(diags("1.0q"), [D::InvalidSuffix { floating: true }]); // clang: GNU extension
+    // GNU `q`/`Q` (`__float128`), as clang's `isFloat128`: libstdc++'s
+    // `<numbers>` spells its `__float128` constants with it.
+    assert_eq!(suffix("1.0q", Std::Cxx20), FloatSuffix::Q);
+    assert_eq!(suffix("2.5Q", Std::Cxx26), FloatSuffix::Q);
+    assert_eq!(diags("1.0Q"), []);
+    assert_eq!(diags("1.0fq"), [D::InvalidSuffix { floating: true }]);
+    assert_eq!(diags("1.0lq"), [D::InvalidSuffix { floating: true }]);
     assert_eq!(diags("1e"), [D::ExponentNoDigits]);
     assert_eq!(diags("1e+"), [D::ExponentNoDigits]);
     assert_eq!(diags("07e"), [D::ExponentNoDigits]);

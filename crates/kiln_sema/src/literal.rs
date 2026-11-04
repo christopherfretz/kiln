@@ -263,7 +263,8 @@ fn round_literal(kind: FloatKind, lit: &FloatLiteral<'_>) -> soft::Rounded {
 /// `float` for `f`, `long double` for `l`, and the extended types of
 /// [basic.extended.fp] for `f16` (`_Float16`), `f32` (`_Float32`), `f64`
 /// (`_Float64`), `f128` (`_Float128`) and `bf16` (`__bf16`), and GCC's
-/// `f32x` (`_Float32x`) and `f64x` (`_Float64x`); the value is
+/// `f32x` (`_Float32x`) and `f64x` (`_Float64x`), and GNU `q`
+/// (`__float128`); the value is
 /// the literal's exact value rounded to nearest-even in the type's format
 /// (no double rounding: `bf16` rounds from the decimal value).
 ///
@@ -287,6 +288,7 @@ pub fn classify_float_literal(
         FloatSuffix::BF16 => QualType::BFLOAT16,
         FloatSuffix::F32x => QualType::FLOAT32X,
         FloatSuffix::F64x => QualType::FLOAT64X,
+        FloatSuffix::Q => QualType::FLOAT128,
     };
     let b = s.ast.types.builtin(ty).unwrap_or(BuiltinType::Double);
     let kind = float_kind(s, b).unwrap_or(FloatKind::Double);
