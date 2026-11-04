@@ -225,6 +225,14 @@ impl Substituter<'_, '_, '_> {
         let end = self.sema.ast.exprs.end_loc(e).unwrap_or(loc);
         let k = n.kind();
         match k {
+            // An implicit user-defined conversion through a conversion
+            // function is redone from its object (clang
+            // `CastExpr::getSubExprAsWritten`): the call names a
+            // specialization of a conversion function template by the
+            // pattern's `operator T`, whose `T` is the member template's
+            // own parameter, not the enclosing instantiation's
+            // ([temp.deduct.conv]; WP-563).
+            ExprKind::ImplicitCastExpr if let Some(o) = self.udc_object(e) => self.expr(o),
             // Implicit nodes are rebuilt by the actions (§5.4).
             ExprKind::ImplicitCastExpr
             | ExprKind::ConstantExpr
@@ -2232,6 +2240,36 @@ impl Substituter<'_, '_, '_> {
         }))
     }
 
+    /// The object argument of the conversion function call an implicit
+    /// `UserDefinedConversion` cast `e` wraps (seen through the
+    /// temporaries around the call), or `None` for any other cast: the
+    /// operand as written, whose conversion the enclosing action forms
+    /// again (clang `CastExpr::getSubExprAsWritten`; WP-563).
+    pub(crate) fn udc_object(&self, e: ExprId) -> Option<ExprId> {
+        let ex = &self.sema.ast.exprs;
+        if ex.get(e).kind() != ExprKind::ImplicitCastExpr
+            || ex.cast_kind(e) != CastKind::UserDefinedConversion
+        {
+            return None;
+        }
+        let mut x = ex.operand(e);
+        while matches!(
+            ex.get(x).kind(),
+            ExprKind::MaterializeTemporaryExpr | ExprKind::CXXBindTemporaryExpr
+        ) {
+            x = ex.operand(x);
+        }
+        match ex.get(x).kind() {
+            ExprKind::CXXMemberCallExpr
+                if ex.get(ex.callee(x)).kind() == ExprKind::MemberExpr
+                    && self.sema.kind_of(ex.decl(ex.callee(x))) == DeclKind::CXXConversion =>
+            {
+                Some(ex.member_call_object(x))
+            }
+            _ => None,
+        }
+    }
+
     /// The initializer `init` without the implicit nodes clang's
     /// `TransformInitializer` strips: the full-expression, a
     /// materialization, temporary bindings and an implicit conversion.
@@ -2247,7 +2285,7 @@ impl Substituter<'_, '_, '_> {
             init = ex.operand(init);
         }
         if ex.get(init).kind() == ExprKind::ImplicitCastExpr {
-            init = ex.operand(init);
+            init = self.udc_object(init).unwrap_or_else(|| ex.operand(init));
         }
         // `std::initializer_list` over its backing array (WP-106).
         if ex.get(init).kind() == ExprKind::CXXStdInitializerListExpr {
