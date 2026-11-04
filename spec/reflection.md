@@ -532,8 +532,41 @@ answers as of that point.
   |---|---|
   | `has_identifier(r)` | whether `identifier_of(r)` succeeds |
   | `identifier_of(r)`, `u8identifier_of(r)` | a class, enumeration, enumerator, variable, function, data member, namespace, namespace alias, type alias or template (a `Template` reflection answers for its templated declaration): the identifier it was declared with; an unnamed class or enumeration with a typedef name for linkage ([dcl.typedef]/9): that name; a literal operator: its suffix. A type: as its alias when it is a cv-unqualified typedef or alias-declaration type (not an alias template specialization), else as its class or enumeration when it is a cv-unqualified one. Otherwise (a specialization, a constructor, destructor, operator or conversion function, an unnamed entity, the global namespace, any other type or value) fails: "'R' has no identifier" |
-  | `display_string_of(r)`, `u8display_string_of(r)` | implementation-defined; never fails: a type prints canonical and fully scoped as in diagnostics (`const int *`, `N::T1<int>`), a declaration as its qualified name, a value or object as its source spelling (below), anything else as `^^…` |
-  | `source_location_of(r)` | the location of the declared name, with an empty `function_name`; a reflection with no declaration (a fundamental or compound type, a value, the translation unit) gives `source_location{}` |
+  | `display_string_of(r)`, `u8display_string_of(r)` | implementation-defined; never fails; GCC 16.1's string (below): a type as GCC's diagnostic `%T`, a declaration as `%D`, a value or object as its source spelling (below), anything else as `^^…` |
+  | `source_location_of(r)` | the location of the declared name, with an empty `function_name`; a reflection with no declaration (a fundamental or compound type, a value, the translation unit) gives `source_location{}`. The file name is GCC 16.1's (below), then `-ffile-prefix-map=`/`-fmacro-prefix-map=` apply |
+
+- **`display_string_of` of a type or declaration** is GCC 16.1's
+  (gcc/cp/reflect.cc `eval_display_string_of` formats with the
+  diagnostic `%T` and `%D` of gcc/cp/error.cc), reproduced by
+  `kiln_sema/src/meta/gcc_names.rs`
+  (`meta.reflection.names/display-string-of-gcc-types.cpp`, `oracle: gcc`):
+  GCC's fundamental type names (`long unsigned int`, `short int`, `long
+  long int`, `__int128 unsigned`); its declarator spacing (`const char*`,
+  `int&`, `const int* const`, `int [3]`, `char* [2]`, `int (&)[2]`,
+  `void(int, ...)`, `int (*)(int)`, `void (ns::S::*)() const`); class
+  templates' arguments without trailing defaults and with `> >` between
+  closers; inline and unnamed (`{anonymous}`) namespaces in scopes; a type
+  alias or alias template specialization followed by ` {aka T}` with its
+  typedefs stripped; a function with `static`/`virtual`/`constexpr`/
+  `consteval`, return type, parameter types as declared (`std::size_t`),
+  cv- and ref-qualifiers (`int ns::S::h() &&`); an enumerator scoped as
+  its enumeration's scope (`ns::e1`, `ns::F::a`); the global namespace
+  `::`; a template with its header (`template<class T, int N> struct
+  ns::TT`, `template<class T> using ns::A = ns::TT<T, 5>`); a function
+  template specialization or member of a class template specialization
+  through its pattern with its bindings (`void ns::TT<T, N>::mem(T) [with
+  T = int; int N = 3]`; GCC also lists the typedefs the signature names,
+  `; size_type = ...`, which kiln does not yet); a parameter as
+  `<parameter x of F>` / `<unnamed parameter 2 of F>`; a base as `D: B`;
+  the null reflection `<null reflection>`.
+- **The file name of `source_location_of`** is GCC 16.1's: the absolute
+  path of a file reached through `#include` has its empty and `.`
+  components dropped and `dir/..` folded where `dir` is a real directory,
+  not a symbolic link (`-I //opt/inc` gives `/opt/inc/x.h`); the main file,
+  a `#line` name and relative paths are kept
+  (`meta.reflection.names/source-location-of-include-path.cpp`;
+  `SourceManager::gcc_presumed_name`). `__FILE__` and
+  `std::source_location::current()` keep clang's spelling.
 
 - **`display_string_of` of a value or object** (WP-564): the shortest
   source spelling that re-parses as a constant of that value, from the

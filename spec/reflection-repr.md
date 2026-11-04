@@ -139,6 +139,13 @@ and in `b` the interned id, or 0 while the operand is dependent
 (`VALUE_INST`). A dependent qualified name has tag 12
 (`Reflectee::DEPENDENT_NAME_TAG`) with `a` the `ExprId` of its
 `DependentScopeDeclRefExpr`; the AST dump prints it as `name dependent`.
+A declaration or template operand is dependent when its declaration has
+`DEPENDENT_CTX`, except a friend class or class template whose semantic
+context is a namespace: first declared by `template <class A, class B>
+friend class list;` inside a class template, it is a member of that
+namespace ([namespace.memdef]/3) and its reflection is a constant
+(`AstBuilder::reflectee_in_dependent_ctx`;
+`expr.reflect/friend-class-template-first-decl.cpp`).
 
 ## 3. Identity
 
