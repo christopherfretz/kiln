@@ -16,7 +16,7 @@ use kiln_ast::{Ast, DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_llvm::{
     Attr, AttrKind, AttrSetId, ComdatKind, FuncId, GlobalId, Linkage, Module, TypeId as LTy,
-    UnnamedAddr, UwTableKind, Value,
+    UnnamedAddr, UwTableKind, Value, Visibility,
 };
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::{Loc, Span};
@@ -24,7 +24,7 @@ use kiln_source::{Loc, Span};
 use crate::fir::{Op, V};
 use crate::fold::Folds;
 use crate::func::Fx;
-use crate::{CodegenError, CodegenOptions};
+use crate::{CodegenError, CodegenOptions, RelocModel};
 
 /// Result of an emission step.
 pub(crate) type R<T> = Result<T, CodegenError>;
@@ -99,6 +99,12 @@ pub(crate) struct Cg<'a> {
     pub optnone_fns: FxHashSet<FuncId>,
     /// First declaration → global variable.
     pub gvars: FxHashMap<DeclId, GlobalId>,
+    /// Whether any visibility other than default can arise (a
+    /// `-fvisibility*` flag or a visibility attribute in the TU): when
+    /// not, every symbol is default and the model is skipped.
+    pub vis_active: bool,
+    /// Memoised visibility per (declaration, computation kind).
+    pub lv_cache: std::cell::RefCell<FxHashMap<(DeclId, u8), crate::visibility::Lv>>,
     /// Discardable definitions not yet needed: first declaration → definition.
     pub deferred: FxHashMap<DeclId, DeclId>,
     /// Each class definition's index in completion order
@@ -377,6 +383,12 @@ impl<'a> Cg<'a> {
             gi: crate::global_init::GlobalInits::default(),
             anon: mangle::AnonIds::new(),
             tbaa: crate::tbaa::TbaaCache::default(),
+            vis_active: opts.visibility != Visibility::Default
+                || opts.type_visibility != Visibility::Default
+                || opts.inlines_hidden
+                || ast.attrs.has_kind(kiln_ast::attr::AttrKind::VISIBILITY)
+                || ast.attrs.has_kind(kiln_ast::attr::AttrKind::TYPE_VISIBILITY),
+            lv_cache: std::cell::RefCell::default(),
         }
     }
 
@@ -1258,7 +1270,7 @@ impl<'a> Cg<'a> {
     /// instantiated or specialized enclosing class (clang propagates the
     /// class's kind to its members in `InstantiateClassMembers`).
     /// `None` when implicit or an explicit specialization.
-    fn explicit_inst_kind(&self, first: DeclId) -> Option<SpecKind> {
+    pub(crate) fn explicit_inst_kind(&self, first: DeclId) -> Option<SpecKind> {
         self.ast.governing_explicit_inst_kind(first)
     }
 
@@ -2044,8 +2056,12 @@ impl<'a> Cg<'a> {
         // clang `SetFunctionAttributes`: virtual member functions are
         // `unnamed_addr`.
         let virt = self.is_virtual_method(first);
+        // clang `setGVProperties` on a declaration: only a known
+        // visibility (spec/codegen.md "Symbol visibility").
+        let vis = self.decl_visibility(first, false);
         {
             let func = self.m.func_mut(f);
+            func.visibility = vis;
             func.attrs.func = fa;
             func.attrs.ret = ret;
             func.attrs.params = params;
@@ -2086,7 +2102,13 @@ impl<'a> Cg<'a> {
             None
         };
         let available_externally = !internal && self.is_available_externally_fn(self.ast.first(d));
+        let vis = if internal {
+            Visibility::Default
+        } else {
+            self.decl_visibility(d, !available_externally)
+        };
         let func = self.m.func_mut(f);
+        func.visibility = vis;
         if internal {
             func.linkage = Linkage::Internal;
             func.dso_local = false;
@@ -2202,8 +2224,10 @@ impl<'a> Cg<'a> {
         // clang `GetOrCreateLLVMGlobal`: `getDeclAlign(D)`.
         let align = self.var_align(first);
         let constant = constant_storage(ast, ty);
+        let vis = self.decl_visibility(first, false);
         let gv = self.m.global_mut(g);
         gv.linkage = Linkage::External;
+        gv.visibility = vis;
         gv.align = Some(align);
         gv.is_constant = constant;
         self.gvars.insert(first, g);
@@ -2353,9 +2377,12 @@ impl<'a> Cg<'a> {
         if let Err(e) = self.m.set_initializer(g, Some(init)) {
             return err(loc, format!("bad initializer: {e:?}"));
         }
+        // Set before the initialization function, whose guard copies it.
+        let vis = if internal { Visibility::Default } else { self.decl_visibility(d, true) };
         let gv = self.m.global_mut(g);
         gv.is_constant = constant;
         gv.align = Some(align);
+        gv.visibility = vis;
         if internal {
             gv.linkage = Linkage::Internal;
             gv.dso_local = false;
@@ -2442,9 +2469,11 @@ impl<'a> Cg<'a> {
             (self.fn_is_inline(f) || self.is_explicit_inst_definition(f)) && !self.fn_internal(f)
         });
         let comdat = if inline_fn { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
+        let vis = if inline_fn { self.decl_visibility(first, true) } else { Visibility::Default };
         let gv = self.m.global_mut(g);
         gv.is_constant = constant;
         gv.align = Some(align);
+        gv.visibility = vis;
         if inline_fn {
             gv.linkage = Linkage::LinkOnceOdr;
             gv.dso_local = true;
@@ -2499,8 +2528,17 @@ impl<'a> Cg<'a> {
         let internal = mangle::is_internal_symbol(ast, d);
         let comdat = (!internal || self.opts.clang_compat < 22)
             .then(|| self.m.comdat(&name, ComdatKind::Any));
+        // clang: a template parameter object has the visibility of its
+        // type (and value; not modelled: spec/codegen.md "Symbol
+        // visibility"), not the global mode.
+        let vis = if internal || !self.vis_active {
+            Visibility::Default
+        } else {
+            self.type_visibility(ty)
+        };
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
+        gv.visibility = vis;
         gv.linkage = if internal { Linkage::Internal } else { Linkage::LinkOnceOdr };
         gv.dso_local = !internal;
         gv.comdat = comdat;
@@ -2568,15 +2606,31 @@ impl<'a> Cg<'a> {
     // ---- module trailer ------------------------------------------------
 
     fn trailer(&mut self) {
+        self.finish_dso_local();
         let fp = self.frame_pointer().module_flag();
+        let direct_access = self.direct_access_external_data();
         let m = &mut self.m;
         // clang 20+ emits no empty `!llvm.linker.options`.
         if self.opts.clang_compat < 22 {
             m.add_named_metadata("llvm.linker.options", &[]);
         }
+        if matches!(self.opts.reloc, RelocModel::Pic(_))
+            && self.opts.semantic_interposition == Some(true)
+        {
+            m.add_module_flag_i32(1, "SemanticInterposition", 1);
+        }
         m.add_module_flag_i32(1, "wchar_size", 4);
-        m.add_module_flag_i32(8, "PIC Level", 2);
-        m.add_module_flag_i32(7, "PIE Level", 2);
+        match self.opts.reloc {
+            RelocModel::Static => {}
+            RelocModel::Pic(l) => m.add_module_flag_i32(8, "PIC Level", i32::from(l)),
+            RelocModel::Pie(l) => {
+                m.add_module_flag_i32(8, "PIC Level", i32::from(l));
+                m.add_module_flag_i32(7, "PIE Level", i32::from(l));
+            }
+        }
+        if direct_access != (self.opts.reloc == RelocModel::Static) {
+            m.add_module_flag_i32(7, "direct-access-external-data", i32::from(direct_access));
+        }
         m.add_module_flag_i32(7, "uwtable", 2);
         if let Some(v) = fp {
             m.add_module_flag_i32(7, "frame-pointer", v);

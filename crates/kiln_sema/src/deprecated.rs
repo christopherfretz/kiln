@@ -190,6 +190,10 @@ impl Sema<'_, '_> {
         }
         let mut attrs = attrs.to_vec();
         self.take_annotations(ns, &mut attrs);
+        self.check_visibility_attrs(ns, &mut attrs);
+        if attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::VISIBILITY) {
+            self.push_namespace_visibility(ns);
+        }
         let mut kept = Vec::with_capacity(attrs.len());
         for &a in &attrs {
             let attr = *self.ast.attrs.get(a);

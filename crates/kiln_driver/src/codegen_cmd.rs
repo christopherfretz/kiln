@@ -13,7 +13,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use kiln_codegen::{AutoVarInit, CodegenOptions, emit_with_diags};
+use kiln_codegen::{AutoVarInit, CodegenOptions, RelocModel, Visibility, emit_with_diags};
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Group};
 use kiln_lex::Interner;
 use kiln_parse::{ParseOptions, parse_preprocessed};
@@ -263,6 +263,20 @@ impl CodegenJob<'_> {
                 auto_var_init_max_size: a
                     .auto_var_init_max_size
                     .unwrap_or(kiln_codegen::AUTO_VAR_INIT_MAX_SIZE),
+                visibility: a.visibility.unwrap_or_default(),
+                type_visibility: if a.visibility_ms_compat {
+                    Visibility::Default
+                } else {
+                    a.visibility.unwrap_or_default()
+                },
+                inlines_hidden: a.visibility_inlines_hidden,
+                reloc: match a.predef.pic.unwrap_or(PicModel::Pie(2)) {
+                    PicModel::None => RelocModel::Static,
+                    PicModel::Pic(l) => RelocModel::Pic(l),
+                    PicModel::Pie(l) => RelocModel::Pie(l),
+                },
+                semantic_interposition: a.semantic_interposition,
+                direct_access_external_data: a.direct_access_external_data,
             };
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).

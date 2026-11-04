@@ -80,6 +80,39 @@ fn argument_errors() {
     );
 }
 
+/// The visibility and interposition flags (spec/driver.md "Options",
+/// "Visibility"): all accepted silently, as by clang; an unknown
+/// `-fvisibility=` value is clang's per-input `-cc1` error, unless a later
+/// valid `-fvisibility=` (clang forwards only the last) replaces it.
+#[test]
+fn visibility_flags() {
+    let ok = [
+        "-fvisibility=default",
+        "-fvisibility=hidden",
+        "-fvisibility=protected",
+        "-fvisibility=internal",
+        "-fvisibility-ms-compat",
+        "-fvisibility-inlines-hidden",
+        "-fno-visibility-inlines-hidden",
+        "-fsemantic-interposition",
+        "-fno-semantic-interposition",
+        "-fdirect-access-external-data",
+        "-fno-direct-access-external-data",
+    ];
+    for f in ok {
+        let o = kiln(&["-fsyntax-only", f, "-x", "c++", "-"], "int x;\n");
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{f}");
+    }
+    let bad = "error: invalid value 'foo' in '-fvisibility=foo'\n";
+    for mode in ["-E", "-fsyntax-only"] {
+        let o = kiln(&[mode, "-fvisibility=foo", "-x", "c++", "-"], "int x;\n");
+        assert_eq!((o.code, o.stderr.as_str()), (1, bad), "{mode}");
+    }
+    let o =
+        kiln(&["-fsyntax-only", "-fvisibility=foo", "-fvisibility=hidden", "-x", "c++", "-"], "");
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+}
+
 #[test]
 fn syntax_only() {
     let o = kiln(&["-std=c++26", "-fsyntax-only", "-"], "int f();\n");

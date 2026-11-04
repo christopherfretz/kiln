@@ -192,6 +192,10 @@ impl Substituter<'_, '_, '_> {
             .iter::<AttrId>(list)
             .map(|a| *ast.attrs.get(a))
             .filter(|n| !only_aligned || n.kind == AttrKind::ALIGNED)
+            // clang does not clone a visibility attribute (`Clone = 0`):
+            // codegen reads the pattern's (spec/codegen.md "Symbol
+            // visibility").
+            .filter(|n| !matches!(n.kind, AttrKind::VISIBILITY | AttrKind::TYPE_VISIBILITY))
             .collect();
         if nodes.is_empty() || ast.attrs.of_decl(spec) != kiln_ast::ids::ListId::EMPTY {
             return;

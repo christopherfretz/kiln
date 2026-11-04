@@ -2037,6 +2037,13 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         if node.kind == AttrKind::FORMAT {
             let _ = write!(self.line, " printf {} {}", node.b & 0xffff, node.b >> 16);
         }
+        if matches!(node.kind, AttrKind::VISIBILITY | AttrKind::TYPE_VISIBILITY) {
+            self.line.push_str(match node.visibility() {
+                0 => " Default",
+                1 => " Hidden",
+                _ => " Protected",
+            });
+        }
     }
 
     // -------------------------------------------------------------------
