@@ -396,7 +396,9 @@ impl Substituter<'_, '_, '_> {
         // (spec/sema-lambda.md; clang `TemplatedVariable`).
         let saved = self.sema.lambda_mangle.var.replace(v);
         let errors = self.sema.diags.error_count();
+        let outer = self.sema.note_var_init_subst(Some(v));
         let i = self.initializer(init, style);
+        self.sema.note_var_init_subst(outer);
         self.sema.lambda_mangle.var = saved;
         if let Ok(i) = i {
             match i {
@@ -408,6 +410,7 @@ impl Substituter<'_, '_, '_> {
             // clang marks the declaration invalid: no follow-up
             // "must be initialized" diagnostic.
             self.sema.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.sema.report_deferred_immediates(v, false);
             self.init_failures += 1;
             // Only an error of this instantiation: an error of the
             // pattern's initializer leaves its uses `RecoveryExpr`s.
