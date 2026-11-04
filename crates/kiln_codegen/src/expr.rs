@@ -237,7 +237,10 @@ impl Cg<'_> {
             }
             ExprKind::ConstantExpr => match self.immediate_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
-                _ => return self.emit_scalar_opt(ast.exprs.operand(e)),
+                // clang `ScalarExprEmitter::VisitConstantExpr`: a `void`
+                // immediate invocation generates no code.
+                Some(_) => return Ok(None),
+                None => return self.emit_scalar_opt(ast.exprs.operand(e)),
             },
             ExprKind::IntegerLiteral => {
                 if let Some(v) = ast.exprs.int_value(e) {

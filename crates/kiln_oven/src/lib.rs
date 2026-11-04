@@ -472,6 +472,10 @@ pub struct Oven {
     /// The next outermost or nested evaluation is plainly
     /// constant-evaluated ([`EvalContext::plain`], [`Oven::plain`]).
     plain_next: bool,
+    /// The next evaluation is an immediate invocation
+    /// ([`EvalKind::Consteval`]): a `void` result is a value
+    /// (`value::eval_at`).
+    pub(crate) void_next: bool,
     pub(crate) types: Types,
     pub(crate) code: Vec<u32>,
     pub(crate) sites: Vec<Site>,
@@ -584,6 +588,7 @@ impl Oven {
             ub_check_next: false,
             potential_next: false,
             plain_next: false,
+            void_next: false,
             types: Types::default(),
             code: Vec::new(),
             sites: Vec::new(),
@@ -725,8 +730,10 @@ impl Oven {
         ctx: EvalContext,
     ) -> Result<ConstValueId, EvalFailure> {
         self.plain_next = ctx.plain;
+        self.void_next = ctx.kind == EvalKind::Consteval;
         let (r, c) = self.eval_ctx(bridge, e, ctx.object, false, ctx.enum_range_check, true);
         self.plain_next = false;
+        self.void_next = false;
         self.stats.push(EvalRecord {
             loc: ctx.loc,
             kind: ctx.kind,
