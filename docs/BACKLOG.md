@@ -653,5 +653,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-629 | sema: a defaulted template parameter after a parameter pack is absorbed into the pack on an unqualified member-template call inside a class template (libdart make_object()) | — | done (#277) |
 | WP-630 | sema: implicit-this member-template call inside a never-instantiated class template is resolved at definition time (odd-count enable_if mk(1) rejected; clang waits for instantiation); requirement wording prints evaluated 1UL instead of sizeof...(Args); qualified H::mk() loses its qualifier on re-naming (templ/subst/exprs.rs:1496/1630) | WP-629 | deferred |
 | WP-631 | sema: statement expression with a class lvalue result is not supported (gnu.rs:81) — blocks arm_neon.h vld1q_u8_x2 / vld2–vld4 / vst2–vst4 macros; afterwards codegen needs ld1xN/ldN entries in neon.rs | WP-628 | deferred |
+| WP-633 | perf: prod compile of the generated binding TU for the synth_accessor_god corpus slug takes 264 s on kiln vs 76 s on g++ 16.1 (3.5x; every other slug is ≤1.02x, 999 s vs 963 s overall) while the reflection generator stage is 0.64x — profile the non-reflection path (template instantiation / codegen / IR size) on that TU | baseline 11-04 | deferred |
 WP-511
 WP-512
