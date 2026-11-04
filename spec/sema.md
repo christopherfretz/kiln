@@ -5379,6 +5379,24 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   (`rebuild_ci_member_template_id`; libstdc++ valarray:1100
   `valarray<_Tp>::template _UnaryOp<_Name>::_Rt`, WP-332). Test:
   `tests/conformance/temp.dep.type/libstdcxx-out-of-line-member-template-qualifier.cpp`.
+- **Out-of-line members of partial specializations, alias templates and
+  nested classes** ([temp.dep.type]/1.2, /6, [temp.spec.partial.member],
+  [temp.alias]/2; WP-553): `X<A...>::` written with a partial
+  specialization's own arguments names the current instantiation also
+  when a non-dependent non-type argument is written unconverted
+  (`vec<2, T>`: `current_instantiation_at` converts the arguments as
+  the partial specialization's declaration did), in a parameter or
+  trailing position (inside, or in the declarator scope of, that
+  specialization) as well as before the declarator-id. The rebuild before
+  the declarator-id also resolves a qualifier chain through member
+  classes (`typename A::B<P>::C::m`, `typename X<P>::C::m`:
+  `rebuild_ci_nns_record`) and substitutes an alias template
+  specialization again with its rebuilt arguments
+  (`remove_extent_t<typename X<T, C>::element_type>`), so the
+  out-of-line definition, static data member or member template matches
+  the in-class declaration; a qualifier naming another typedef, another
+  partial specialization or another nested class still matches nothing.
+  Tests: `tests/conformance/temp.dep.type/out-of-line-current-instantiation-*.cpp`.
 - **Member template-ids with non-template overloads**
   ([temp.arg.explicit]/4, [over.match.call.general]/1): an unqualified
   function template-id `f<A>(args)` names the whole overload set that
