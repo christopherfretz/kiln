@@ -14,7 +14,7 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use crate::Sema;
-use crate::conv::rank::{int_signed, int_width, is_integral_or_unscoped_enum};
+use crate::conv::rank::{int_signed, int_width, is_integral_or_unscoped_enum, is_scoped_enum};
 use crate::conv::{eval_width, source_bit_field};
 
 impl Sema<'_, '_> {
@@ -97,7 +97,7 @@ impl Sema<'_, '_> {
             let Some(v) = self.try_fold(orig) else { return false };
             let Some(Scalar::Int { bits, .. }) = self.ast.consts.scalar(v) else { return false };
             let words = bits.words().to_vec();
-            let fs = int_signed(self, fty);
+            let fs = self.bit_field_signed(fty);
             let Some((vt, tt, one)) = wide_truncation(&words, ow, v_signed, fw, fs, unary) else {
                 return false;
             };
@@ -115,7 +115,7 @@ impl Sema<'_, '_> {
         if ow <= fw {
             return false;
         }
-        let truncated = truncate(v, fw, int_signed(self, fty));
+        let truncated = truncate(v, fw, self.bit_field_signed(fty));
         if truncated == v {
             return false;
         }
@@ -127,6 +127,15 @@ impl Sema<'_, '_> {
             at,
             (v.to_string(), truncated.to_string(), one_bit),
         )
+    }
+
+    /// Whether a value stored into a bit-field of type `fty` reads back
+    /// signed: clang's `isSignedIntegerType`, which is false for a scoped
+    /// enumeration whatever its underlying type. A scoped enum bit-field
+    /// truncates as unsigned (`enum class E { A, B }; E e : 1; e = E::B;`
+    /// stores 1 and reads back 1); an unscoped one by its underlying type.
+    fn bit_field_signed(&self, fty: kiln_ast::QualType) -> bool {
+        int_signed(self, fty) && !is_scoped_enum(self, fty)
     }
 
     /// The `-Wbitfield-constant-conversion` diagnostic of a value of type
