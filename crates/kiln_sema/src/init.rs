@@ -2033,7 +2033,9 @@ impl Sema<'_, '_> {
                     self.check_aggregate_in(ty, items, pos, sub, at, at)
                 } else {
                     *pos += 1;
-                    let at = self.begin_loc(e);
+                    // An implicit element (no location of its own) is
+                    // diagnosed at its list's brace.
+                    let at = Some(self.begin_loc(e)).filter(|l| l.is_valid()).unwrap_or(at);
                     self.check_narrowing(e, ty, ty);
                     let x = self.init_from_expr(ty, e, ConvCtx::Initialization, at);
                     // A class element converted by a conversion function:

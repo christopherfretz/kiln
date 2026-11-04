@@ -1958,13 +1958,23 @@ impl Substituter<'_, '_, '_> {
         let n = *self.sema.ast.exprs.get(e);
         let l = self.sema.ast.exprs.init_list_inits(e);
         let mut items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-        // The default member initializers filling the trailing fields are
-        // implicit: the rebuilt list uses them again (in its own context,
-        // for the source-location builtins in them).
-        while items
-            .last()
-            .is_some_and(|&x| self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultInitExpr)
-        {
+        // The default member initializers and value-initializations
+        // filling the trailing fields are implicit (clang keeps them out
+        // of the syntactic form): the rebuilt list fills them again, the
+        // default member initializers in its own context (for the
+        // source-location builtins in them). An `ImplicitValueInitExpr`
+        // fed back as a written clause would initialize an array member
+        // by brace elision from an expression of the array's own type
+        // (`S s{};` with `char path[108]`, [dcl.init.aggr]/5; WP-613).
+        // A written `{}` is an `InitListExpr`, never one of these; a
+        // filler before a written clause only comes from designators,
+        // whose list is rebuilt from its syntactic form above.
+        while items.last().is_some_and(|&x| {
+            matches!(
+                self.sema.ast.exprs.get(x).kind(),
+                ExprKind::CXXDefaultInitExpr | ExprKind::ImplicitValueInitExpr
+            )
+        }) {
             items.pop();
         }
         let out = self.init_items(&items)?;
