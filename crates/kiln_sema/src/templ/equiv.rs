@@ -60,6 +60,14 @@ impl Sema<'_, '_> {
     /// deduction for explicit specializations and partial ordering
     /// (WP-106).
     pub fn equivalent_signatures(&mut self, a: DeclId, b: DeclId) -> bool {
+        self.signatures_correspond(a, b, false)
+    }
+
+    /// [`Self::equivalent_signatures`]; `member_using`: under the member
+    /// using-declaration rules ([namespace.udecl]/14, clang's
+    /// `UseMemberUsingDeclRules`), where the return types of function
+    /// templates are not compared.
+    pub(crate) fn signatures_correspond(&mut self, a: DeclId, b: DeclId, member_using: bool) -> bool {
         let (Some((fa, ha)), Some((fb, hb))) = (self.fn_and_head(a), self.fn_and_head(b)) else {
             return false;
         };
@@ -71,7 +79,14 @@ impl Sema<'_, '_> {
             && self.ast.decls.function(fb).is_some_and(|f| f.spec.storage() == FnStorage::Static);
         let requires = self.ast.templates.trailing_requires.get(fb).copied();
         let enable_if = self.enable_if_list_of(fb);
-        self.fn_corresponds(fa, ha, NewFn { ty, is_static, head: hb, requires, enable_if })
+        self.fn_corresponds(fa, ha, NewFn {
+            ty,
+            is_static,
+            head: hb,
+            requires,
+            enable_if,
+            member_using,
+        })
     }
 
     /// The function declaration and template head that `d` names: a
