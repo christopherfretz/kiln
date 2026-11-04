@@ -638,7 +638,7 @@ impl Sema<'_, '_> {
         if !self.misaligned.is_empty() {
             self.diagnose_misaligned_members(e);
         }
-        if self.pending_odr.is_empty() {
+        if self.pending_odr.is_empty() && self.potential_caps.is_empty() {
             return e;
         }
         let mut constant = Vec::new();
@@ -656,6 +656,9 @@ impl Sema<'_, '_> {
                 self.potential_results(self.ast.exprs.operand(x), &mut constant);
             }
             stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+        if !self.potential_caps.is_empty() && self.in_template() {
+            self.resolve_potential_captures(e, &constant);
         }
         let pending = std::mem::take(&mut self.pending_odr);
         for r in pending {
@@ -696,7 +699,7 @@ impl Sema<'_, '_> {
     /// integral or enumeration variable, or a reference, with a constant
     /// initializer. (A reference's initializer is constant in M2 when it
     /// names a function or a variable with static storage duration.)
-    fn usable_in_constant_expressions(&mut self, d: DeclId) -> bool {
+    pub(crate) fn usable_in_constant_expressions(&mut self, d: DeclId) -> bool {
         let n = self.ast.decls.get(d);
         if n.kind() != DeclKind::Var {
             return false;
@@ -2259,6 +2262,10 @@ impl Sema<'_, '_> {
             let at = self.eloc(e);
             self.exc_spec_needed(d, at);
             self.note_immediate_ref(e, d);
+        } else if self.unevaluated == 0
+            && matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding)
+        {
+            self.note_potential_capture(e, d);
         }
         e
     }

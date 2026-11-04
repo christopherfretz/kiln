@@ -690,6 +690,21 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   a thunk: `Cg::delegate_call_arg`, clang `EmitDelegateCallArg`) is a
   plain `load ptr` of its slot with neither, at every compat level
   (WP-416).
+- **Captured locals (WP-581).** A `DeclRefExpr` marked
+  `REFERS_TO_ENCLOSING` names the closure's member for the capture
+  (`captured_var_lvalue`: a by-copy capture is the field, a by-reference
+  one, and a captured reference, is the field's loaded address), in every
+  function emitted from the lambda: each specialization of a generic
+  lambda's call operator, and the call operators of the closures formed
+  again when an enclosing generic call operator is instantiated. Codegen
+  never looks a captured entity up in the emitting function's local table;
+  "reference to an unemitted local variable" for one is a sema bug (a
+  capture that was never recorded), not a codegen case. Sema guarantees
+  the member exists by capturing in the template definition every
+  potential odr-use whose full-expression depends on a lambda parameter
+  (spec/sema-lambda.md §4.2). Minimal repro (failed before WP-581):
+  `bool f(const int& r) { const int& rr = r; return [&](const auto& x) {
+  return x == *reinterpret_cast<const int*>(&rr); }(r); }`.
 - **Pointee alignment of an array of unknown bound (WP-416).** clang
   `getTypeAlignInChars` gives `T[]` its element's alignment, so
   `pointee_layout` reports `(no size, align of T)`: an `int(&)[]` / `int
