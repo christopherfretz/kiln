@@ -1710,8 +1710,7 @@ impl Sema<'_, '_> {
         // whatever its result type (clang `AddConversionCandidate`,
         // `ovl_fail_trivial_conversion`), so it never competes with the
         // copy or move constructor and is never called.
-        if let (Some(fr), Some(tr)) =
-            (self.ast.types.as_record(a.ty), self.ast.types.as_record(to))
+        if let (Some(fr), Some(tr)) = (self.ast.types.as_record(a.ty), self.ast.types.as_record(to))
             && (same_class(self, fr, tr)
                 || complete_class(self, fr).is_some() && is_derived_from(self, fr, tr))
         {
