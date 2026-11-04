@@ -27,6 +27,7 @@ sema_expansion_size_not_constant = Error (0) "expansion size is not a constant e
 sema_expect_int = Error (1) "used type {0} where integer is required";
 sema_expected_class_or_namespace = Error (1) "{0} is not a class, namespace, or enumeration";
 sema_explicit_inst_after_spec_ignored = Warning [InstantiationAfterSpecialization] (1) "explicit instantiation of '{0}' that occurs after an explicit specialization has no effect";
+sema_explicit_inst_ambiguous = Error (1) "partial ordering for explicit instantiation of '{0}' is ambiguous";
 sema_explicit_inst_constexpr = Error (0) "explicit instantiation cannot be 'constexpr'";
 sema_explicit_inst_declaration_after_definition = Error (0) "explicit instantiation declaration (with 'extern') follows explicit instantiation definition (without 'extern')";
 sema_explicit_inst_duplicate = Error (1) "duplicate explicit instantiation of '{0}'";
