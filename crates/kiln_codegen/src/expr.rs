@@ -848,26 +848,52 @@ impl Cg<'_> {
 
     /// The loaded scalar value of the glvalue `s`: a reference-returning
     /// call yields its referee's address from `emit_scalar`, so it is
-    /// loaded through its lvalue (clang `ScalarExprEmitter::VisitCallExpr`);
-    /// anything else is its scalar value. Also each arm of a glvalue
-    /// conditional, whose arms clang visits as scalars (WP-418).
+    /// loaded through its lvalue (clang `ScalarExprEmitter::VisitCallExpr`),
+    /// also beneath the glvalues clang's scalar visitor passes through to
+    /// that call (WP-632); a glvalue `CK_LValueBitCast` is loaded as its
+    /// own type (clang `VisitCastExpr` `CK_LValueBitCast`:
+    /// `EmitLoadOfLValue`); anything else is its scalar value. Also each
+    /// arm of a glvalue conditional, whose arms clang visits as scalars
+    /// (WP-418).
     fn emit_glvalue_load(&mut self, s: ExprId) -> R<Option<V>> {
         // A call returning a reference yields the referee's address
         // (clang `ScalarExprEmitter::VisitCallExpr`: a reference
         // result is `EmitLoadOfLValue`), also through the lvalue
         // `CK_UserDefinedConversion` of a reference-returning conversion
-        // function (`operator bool&()`).
+        // function (`operator bool&()`), any implicit or explicit glvalue
+        // `CK_NoOp` cast (`static_cast<const T&>(f())`, `(const T&)f()`,
+        // `const_cast<T&>(f())`; `VisitCastExpr` visits the operand), the
+        // right operand of a glvalue comma (`VisitBinComma`) and the
+        // chosen operand of `__builtin_choose_expr` (`VisitChooseExpr`).
+        let ast = self.ast;
         let mut inner = self.skip_parens(s);
-        while self.ast.exprs.get(inner).kind() == ExprKind::ImplicitCastExpr
-            && self.ast.exprs.cast_kind(inner) == CastKind::UserDefinedConversion
-            && self.is_glvalue(inner)
-        {
-            inner = self.skip_parens(self.ast.exprs.operand(inner));
+        let mut bit_cast = false;
+        while self.is_glvalue(inner) {
+            let k = ast.exprs.get(inner).kind();
+            inner = if k.is_cast() {
+                match ast.exprs.cast_kind(inner) {
+                    CastKind::NoOp | CastKind::UserDefinedConversion => {}
+                    CastKind::LValueBitCast => bit_cast = true,
+                    _ => break,
+                }
+                ast.exprs.operand(inner)
+            } else if k == ExprKind::BinaryOperator && ast.exprs.binary_op(inner) == BinaryOp::Comma
+            {
+                ast.exprs.operands(inner)[1]
+            } else if k == ExprKind::ChooseExpr
+                && let Some(c) = ast.exprs.choose_chosen(inner)
+            {
+                c
+            } else {
+                break;
+            };
+            inner = self.skip_parens(inner);
         }
-        if matches!(
-            self.ast.exprs.get(inner).kind(),
-            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
-        ) && self.is_glvalue(inner)
+        if bit_cast
+            || matches!(
+                self.ast.exprs.get(inner).kind(),
+                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+            ) && self.is_glvalue(inner)
         {
             let lv = self.emit_lvalue(s)?;
             return Ok(Some(self.load_lv(lv)));
