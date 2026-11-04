@@ -602,6 +602,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-579 | overloads distinguished only by __attribute__((enable_if)) rejected as redeclaration (abseil SpinLock) | corpus | open |
 | WP-580 | explicit instantiation of constructor/member function templates by signature; defaulted-NTTP out-of-line ctor (abseil Cord) | corpus | open |
 | WP-585 | runtime: tinyobjloader LoadMtl unknown_parameter map stays empty (std::map<string,string> insert; -O2) | corpus | open |
+| WP-613 | sema: braced init of an aggregate with an uncovered array member inside a template re-feeds the implicit value-init as an element initializer; diagnostic lacks a location (httplib sockaddr_un) | WP-578 | open |
 | WP-611 | specialization default base/member access from its own class-key (eigen gebp_traits) | WP-578 | in progress |
 | WP-606 | sema/parse: accept and ignore the clang thread-safety attribute family (guarded_by, lockable, exclusive_locks_required, …) in GNU and clang:: spellings; no -Wunknown-attributes | WP-578 | in progress |
 | WP-612 | using-declaration base member hidden by same-signature derived member template (eigen Map::operator=) | WP-578 | open |
