@@ -55,13 +55,15 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId, compat: u32) -> bool {
     let q = ast.exprs.get(e).ty();
     // `__builtin_is_constant_evaluated()` is false outside a manifestly
     // constant-evaluated context, which a fold is not.
-    // A checked arithmetic builtin stores its result, so it is emitted.
+    // A checked arithmetic (or carry, WP-557) builtin stores through its
+    // pointer argument, so it is emitted.
     // WP-365: the `<cmath>` builtins the Oven evaluates and clang 19 does
     // not are emitted as clang emits them.
     builtin_callee(ast, e).is_some_and(|(_, b)| {
         b != id::IS_CONSTANT_EVALUATED
             && b != id::KILN_PLAINLY_CONSTANT_EVALUATED
             && id::checked_op(b).is_none()
+            && id::carry_op(b).is_none()
             && !clang19_unevaluated(b)
             // clang 20 made `abs`/`labs`/`llabs` constant (WP-432).
             && !(compat < 22 && matches!(b, id::ABS | id::LABS | id::LLABS))
@@ -1011,6 +1013,7 @@ impl Cg<'_> {
                 return self.emit_atomic_builtin(b, e, &args).map(BuiltinCall::Emitted);
             }
             _ if id::checked_op(b).is_some() => self.emit_checked(b, e, &args)?,
+            _ if id::carry_op(b).is_some() => self.emit_carry(b, e, &args)?,
             id::ALLOCA | id::ALLOCA_WITH_ALIGN => self.emit_alloca(b, e, &args)?,
             _ if lib_name(b).is_some() => return Ok(BuiltinCall::Library),
             _ => {

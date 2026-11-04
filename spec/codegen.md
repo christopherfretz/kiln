@@ -461,6 +461,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       constants is not folded (IRBuilder `FoldSelect`). The calls are not
       fold candidates, since they store
       (`tests/codegen/builtins_overflow.cpp`);
+    - the carry builtins `__builtin_{add,sub}c{b,s,,l,ll}(x, y, ci, co)`
+      (WP-557, clang `BI__builtin_addcb`..) emit `x`, `y`, `ci`, then
+      the carry-out pointer, then two `llvm.u{add,sub}.with.overflow`
+      calls (`x op y`, then that sum `op ci`); the `or` of the two flags,
+      `zext` to the operand type, is stored through the pointer and the
+      second sum is the value. Not fold candidates, as they store
+      (`checked.rs` `emit_carry`; `tests/codegen/builtins_carry.cpp`);
     - `__builtin_alloca(n)` is `alloca i8, i64 n` in the current block
       (not the entry block, no stack save), aligned to
       `__BIGGEST_ALIGNMENT__` (16); `__builtin_alloca_with_align(n, a)`
