@@ -1449,7 +1449,11 @@ impl Sema<'_, '_> {
                 r,
                 conv::ArithConvKind::Comparison,
             ) {
-                Ok(x) => x,
+                Ok(x) => {
+                    let at = self.ast.exprs.get(l).loc();
+                    self.report_arith_warning(at);
+                    x
+                }
                 Err(e) => {
                     let msg = e.diag(self, l);
                     self.emit(msg);
@@ -2350,8 +2354,10 @@ impl Sema<'_, '_> {
     /// with `getExpansionRange(Loc).getEnd()`, kiln's expansion location);
     /// `location` builds the `__impl` object too.
     fn record_source_loc(&mut self, e: ExprId, loc: Loc, ctx: DeclId, location: bool) {
-        let (file, line, column) = match self.diags.sm().presumed_line_col(loc) {
-            Some(p) => (p.file_name.to_owned(), p.line, p.col),
+        // `-fmacro-prefix-map=` applies (clang `SourceLocExpr::EvaluateInContext`).
+        let sm = self.diags.sm();
+        let (file, line, column) = match sm.presumed_line_col(loc) {
+            Some(p) => (sm.remap_macro_path(p.file_name), p.line, p.col),
             None => (String::new(), 0, 0),
         };
         let file_name = file.rsplit('/').next().unwrap_or(&file).to_owned();
@@ -2462,8 +2468,10 @@ impl Sema<'_, '_> {
             }
             self.srcloc.impl_decl = Some(d);
         }
-        let (file, line, column) = match self.diags.sm().presumed_line_col(loc) {
-            Some(p) => (p.file_name.to_owned(), p.line, p.col),
+        // `-fmacro-prefix-map=` applies (clang `SourceLocExpr::EvaluateInContext`).
+        let sm = self.diags.sm();
+        let (file, line, column) = match sm.presumed_line_col(loc) {
+            Some(p) => (sm.remap_macro_path(p.file_name), p.line, p.col),
             None => (String::new(), 0, 0),
         };
         let file = self.srcloc_string(&file)?;

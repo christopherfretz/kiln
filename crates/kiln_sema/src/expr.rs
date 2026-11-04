@@ -3116,6 +3116,14 @@ impl Sema<'_, '_> {
         self.recover_err(&[l, r], loc)
     }
 
+    /// Reports at `loc` (the operator) the warning the last usual
+    /// arithmetic conversions left, if any ([`Sema::arith_warning`]).
+    pub(crate) fn report_arith_warning(&mut self, loc: Loc) {
+        if let Some(w) = self.arith_warning.take() {
+            self.emit_conv_error(w, loc);
+        }
+    }
+
     pub(crate) fn conv_failed(
         &mut self,
         err: &ConvError,
@@ -3332,6 +3340,7 @@ impl Sema<'_, '_> {
                 }
                 match conv::usual_arithmetic_conversions_kind(self, l, r, kind) {
                     Ok((l2, r2, ty)) => {
+                        self.report_arith_warning(loc);
                         let needs_int = !matches!(op, BinaryOp::Mul | BinaryOp::Div);
                         if needs_int && !self.ast.types.is_integral(ty) {
                             return self.invalid_operands(l, r, loc);
@@ -3482,6 +3491,7 @@ impl Sema<'_, '_> {
                     ArithConvKind::CompoundAssign,
                 ) {
                     Ok((_, r2, ty)) => {
+                        self.report_arith_warning(loc);
                         let needs_int = !matches!(
                             op,
                             BinaryOp::MulAssign
@@ -3581,7 +3591,10 @@ impl Sema<'_, '_> {
             return self.invalid_operands(l, r, loc);
         }
         match conv::usual_arithmetic_conversions_kind(self, l, r, ArithConvKind::Arithmetic) {
-            Ok((l3, r3, ty)) => self.builder().binary(op, l3, r3, ty, loc),
+            Ok((l3, r3, ty)) => {
+                self.report_arith_warning(loc);
+                self.builder().binary(op, l3, r3, ty, loc)
+            }
             Err(err) => self.conv_failed(&err, l, r, loc),
         }
     }
@@ -3905,7 +3918,10 @@ impl Sema<'_, '_> {
             return self.invalid_operands(l, r, loc);
         }
         match conv::usual_arithmetic_conversions_kind(self, l, r, ArithConvKind::Comparison) {
-            Ok((l3, r3, _)) => self.builder().binary(op, l3, r3, QualType::BOOL, loc),
+            Ok((l3, r3, _)) => {
+                self.report_arith_warning(loc);
+                self.builder().binary(op, l3, r3, QualType::BOOL, loc)
+            }
             Err(err) => self.conv_failed(&err, l, r, loc),
         }
     }
@@ -4188,6 +4204,7 @@ impl Sema<'_, '_> {
         Some(
             match conv::usual_arithmetic_conversions_kind(self, t, f, ArithConvKind::Conditional) {
                 Ok((t2, f2, ty)) => {
+                    self.report_arith_warning(loc);
                     // clang's `PrepareScalarCast` to the result type: a
                     // real arm of a complex result becomes complex.
                     let t2 = self.real_to_complex(t2, ty);

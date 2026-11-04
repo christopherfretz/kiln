@@ -347,6 +347,7 @@ impl Sema<'_, '_> {
                 Ok(x) => x,
                 Err(err) => return self.conv_failed(&err, l, r, loc),
             };
+        self.report_arith_warning(loc);
         let Some(cat) = self.builtin_cmp_category(ty) else {
             return self.invalid_operands(l2, r2, loc);
         };

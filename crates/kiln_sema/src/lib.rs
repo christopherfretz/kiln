@@ -666,6 +666,10 @@ pub struct Sema<'a, 'sm> {
     /// (clang `InitializedEntity::EK_Temporary` "a value" for `T{x}`,
     /// `EK_New` "a new value"): a `sema_init_conversion_failed` select.
     pub(crate) init_entity: Option<&'static str>,
+    /// The warning of the last usual arithmetic conversions (C++20's
+    /// deprecated enumeration operands), for the caller to report at the
+    /// operator ([`Sema::report_arith_warning`]).
+    pub(crate) arith_warning: Option<conv::ConvError>,
     /// The variable whose initializer is being analysed (the entity of a
     /// top-level initializer list while [`Sema::init_entity`] is `None`;
     /// a flexible array member's initialization, §5.8).
@@ -1100,6 +1104,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
             init_entity: None,
+            arith_warning: None,
             init_var: None,
             access_ctx: None,
             access_checks: 0,

@@ -3,19 +3,25 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 All = "all" [Most, Switch, SwitchBool, VlaCxxExtension];
+AnonEnumEnumConversion = "anon-enum-enum-conversion" [DeprecatedAnonEnumEnumConversion];
 Asm = "asm" [AsmOperandWidths];
 Attributes = "attributes" [UnknownAttributes, IgnoredAttributes];
 BitfieldConstantConversion = "bitfield-constant-conversion" [SingleBitBitfieldConstantConversion];
 BoolConversion = "bool-conversion" [PointerBoolConversion, UndefinedBoolConversion];
 C99Extensions = "c99-extensions" [C99Designator];
 ConstantConversion = "constant-conversion" [BitfieldConstantConversion];
-Conversion = "conversion" [BoolConversion, LiteralConversion, ConstantConversion, NullConversion];
+Conversion = "conversion" [BoolConversion, LiteralConversion, ConstantConversion, EnumConversion, NullConversion];
 ConversionNull = "conversion-null" [NullConversion];
 Cxx11Extensions = "c++11-extensions" [Cxx11LongLong];
 Cxx14Extensions = "c++14-extensions" [Cxx14BinaryLiteral];
+EnumCompare = "enum-compare" [DeprecatedEnumCompare];
+EnumCompareConditional = "enum-compare-conditional" [DeprecatedEnumCompareConditional];
+EnumConversion = "enum-conversion" [EnumEnumConversion, EnumFloatConversion, EnumCompareConditional];
+EnumEnumConversion = "enum-enum-conversion" [DeprecatedEnumEnumConversion];
+EnumFloatConversion = "enum-float-conversion" [DeprecatedEnumFloatConversion];
 CxxPre20CompatPedantic = "pre-c++20-compat-pedantic" [CxxPre20Compat];
 Dangling = "dangling" [DanglingField, ReturnStackAddress];
-Deprecated = "deprecated" [DeprecatedArrayCompare, DeprecatedDeclarations, DeprecatedLiteralOperator, DeprecatedMissingCommaVariadicParameter, DeprecatedRedundantConstexprStaticDef, DeprecatedThisCapture, DeprecatedType, DeprecatedVolatile];
+Deprecated = "deprecated" [DeprecatedAnonEnumEnumConversion, DeprecatedArrayCompare, DeprecatedDeclarations, DeprecatedEnumCompare, DeprecatedEnumCompareConditional, DeprecatedEnumEnumConversion, DeprecatedEnumFloatConversion, DeprecatedLiteralOperator, DeprecatedMissingCommaVariadicParameter, DeprecatedRedundantConstexprStaticDef, DeprecatedThisCapture, DeprecatedType, DeprecatedVolatile];
 Extra = "extra" [InitializerOverrides, UnusedButSetParameter];
 Format = "format" [FormatExtraArgs, FormatSecurity, FormatInvalidSpecifier, FormatInsufficientArgs];
 Gnu = "gnu" [GnuAlignofExpression, GnuCaseRange, GnuDesignator, GnuEmptyStruct, GnuFlexibleArrayInitializer, GnuFlexibleArrayUnionMember, GnuVariableSizedTypeNotAtEnd, VlaExtension, GnuFoldingConstant, GnuImaginaryConstant, GnuIncludeNext, GnuLabelAsValue, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, ZeroLengthArray];

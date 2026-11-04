@@ -74,36 +74,67 @@ fn compound_lhs_type(s: &Sema<'_, '_>, l: ExprId, lt: QualType) -> QualType {
     promoted_type(s, lt, bit_field_width(s, l)).unwrap_or(lt)
 }
 
-/// The enumeration operand errors of the usual arithmetic conversions
-/// (C++20 [expr.arith.conv]/1.2–1.3, clang's wording): an unscoped
-/// enumeration with a floating type, or two different enumerations.
+/// The enumeration operands of the usual arithmetic conversions
+/// ([expr.arith.conv]/1.2–1.3, clang's wording): an unscoped enumeration
+/// with a floating type, or two different enumerations. Ill-formed since
+/// C++26 (P2864; the error), deprecated in C++20 and C++23 (`Ok` with
+/// clang's `-Wdeprecated-*` warning, for the caller to report at the
+/// operator), and fine before (`Ok(None)`: clang's `-Wenum-*-conversion`
+/// warnings are off by default).
 fn check_enum_operands(
     s: &Sema<'_, '_>,
     lt0: QualType,
     rt0: QualType,
     kind: ArithConvKind,
-) -> Result<(), ConvError> {
+) -> Result<Option<ConvError>, ConvError> {
     let ca = kind == ArithConvKind::CompoundAssign;
     let (le, re) = (is_unscoped_enum(s, lt0), is_unscoped_enum(s, rt0));
     let (lf, rf) = (s.ast.types.is_floating(lt0), s.ast.types.is_floating(rt0));
+    let ill_formed = s.std >= kiln_lex::Std::Cxx26;
+    let deprecated = !ill_formed && s.std >= kiln_lex::Std::Cxx20;
     if (!ca && le && rf) || (re && lf) {
-        return Err(ConvError::new(
-            DiagId::sema_arith_enum_float,
+        let id = if ill_formed {
+            DiagId::sema_arith_enum_float
+        } else if deprecated {
+            DiagId::sema_arith_enum_float_deprecated
+        } else {
+            return Ok(None);
+        };
+        let e = ConvError::new(
+            id,
             vec![
                 kind.select().into(),
                 if le { "1" } else { "0" }.into(),
                 s.ty_arg(lt0),
                 s.ty_arg(rt0),
             ],
-        ));
+        );
+        return if ill_formed { Err(e) } else { Ok(Some(e)) };
     }
     if !ca && le && re && !s.ast.types.same_unqualified(lt0, rt0) {
-        return Err(ConvError::new(
-            DiagId::sema_arith_enum_enum,
-            vec![kind.select().into(), s.ty_arg(lt0), s.ty_arg(rt0)],
-        ));
+        let args = vec![kind.select().into(), s.ty_arg(lt0), s.ty_arg(rt0)];
+        if ill_formed {
+            return Err(ConvError::new(DiagId::sema_arith_enum_enum, args));
+        }
+        if !deprecated {
+            return Ok(None);
+        }
+        // clang `checkEnumArithmeticConversions`: an enumeration without a
+        // name for linkage on either side has its own group.
+        let named = |q: QualType| {
+            s.ast.types.as_enum(q).is_some_and(|d| {
+                !s.ast.decls.get(d).name().is_empty() || s.ast.decls.typedef_for_anon(d).is_some()
+            })
+        };
+        let id = match kind {
+            ArithConvKind::Comparison => DiagId::sema_compare_enum_enum_deprecated,
+            ArithConvKind::Conditional => DiagId::sema_conditional_enum_enum_deprecated,
+            _ if !named(lt0) || !named(rt0) => DiagId::sema_arith_anon_enum_enum_deprecated,
+            _ => DiagId::sema_arith_enum_enum_deprecated,
+        };
+        return Ok(Some(ConvError::new(id, args)));
     }
-    Ok(())
+    Ok(None)
 }
 
 /// The usual arithmetic conversions ([expr.arith.conv]) on the operands
@@ -134,6 +165,7 @@ pub fn usual_arithmetic_conversions_kind(
     r: ExprId,
     kind: ArithConvKind,
 ) -> Result<(ExprId, ExprId, QualType), ConvError> {
+    s.arith_warning = None;
     let (lt0, rt0) = (ty(s, l), ty(s, r));
     if s.ast.types.is_dependent(lt0) || s.ast.types.is_dependent(rt0) {
         return Ok((l, r, QualType::DEPENDENT));
@@ -143,7 +175,7 @@ pub fn usual_arithmetic_conversions_kind(
         return Ok((l, r, QualType::ERROR));
     }
     let ca = kind == ArithConvKind::CompoundAssign;
-    check_enum_operands(s, lt0, rt0, kind)?;
+    s.arith_warning = check_enum_operands(s, lt0, rt0, kind)?;
     let l = if ca { l } else { usual_unary_conversions(s, l) };
     let r = usual_unary_conversions(s, r);
     let (lt, rt) = (super::strip_cv(s, ty(s, l)), super::strip_cv(s, ty(s, r)));

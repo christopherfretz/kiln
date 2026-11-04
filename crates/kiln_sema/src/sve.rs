@@ -379,6 +379,7 @@ impl Sema<'_, '_> {
                 conv::ArithConvKind::Conditional,
             ) {
                 Ok((a, b, ty)) => {
+                    self.report_arith_warning(loc);
                     (*t2, *f2) = (a, b);
                     ty
                 }
