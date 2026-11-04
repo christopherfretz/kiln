@@ -155,7 +155,30 @@ impl Sema<'_, '_> {
     /// constructors, destructors, operator and conversion functions (and
     /// their templates), unnamed entities and other types.
     fn identifier(&self, r: ReflectionId) -> Option<Ident> {
+        if let Reflectee::FnParam(f, i) = self.ast.reflections.get(r) {
+            return self.param_identifier(f, i);
+        }
         self.decl_identifier(self.named_decl(r)?)
+    }
+
+    /// The name of parameter `i` of function `f` ([meta.reflection.names]/1,
+    /// P3096): the one name every declaration of `f` that names the
+    /// parameter gives it; `None` when none names it or two disagree.
+    fn param_identifier(&self, f: DeclId, i: u32) -> Option<Ident> {
+        let mut found = None;
+        for d in self.ast.redecls_of(f) {
+            let Some(data) = self.ast.decls.function(d) else { continue };
+            let Some(p) = self.ast.lists.iter::<DeclId>(data.params).nth(i as usize) else {
+                continue;
+            };
+            let Some(n) = self.ast.decls.get(p).name().as_ident() else { continue };
+            match found {
+                None => found = Some(n),
+                Some(m) if m == n => {}
+                Some(_) => return None,
+            }
+        }
+        found
     }
 
     /// The declaration whose name the names family reports for `r`: a
