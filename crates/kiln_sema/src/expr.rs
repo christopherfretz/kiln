@@ -6250,7 +6250,18 @@ impl Sema<'_, '_> {
         // integral/enum/floating -> enum ([expr.static.cast]/10).
         if to_enum {
             if types.is_integral(from) || from_enum {
-                return Some(CastKind::IntegralCast);
+                // The value is first converted to a fixed underlying type,
+                // so one of `bool` is a boolean conversion (clang
+                // `TryStaticCast`: `CK_IntegralToBoolean`).
+                let to_bool = crate::conv::rank::enum_data(self, to).is_some_and(|d| {
+                    d.is_fixed()
+                        && d.int_type.is_some_and(|i| types.builtin(i) == Some(BuiltinType::Bool))
+                });
+                return Some(if to_bool {
+                    CastKind::IntegralToBoolean
+                } else {
+                    CastKind::IntegralCast
+                });
             }
             if types.is_floating(from) {
                 return Some(CastKind::FloatingToIntegral);

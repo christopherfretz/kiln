@@ -733,7 +733,7 @@ impl Cg<'_> {
             self.store(v, t.v, t.align, false);
             return self.load_scalar(Addr { ty, ..t }, vq);
         }
-        if self.is_bool(vq) { self.cast(CastOp::Trunc, v, LTy::I1) } else { v }
+        if self.has_bool_rep(vq) { self.cast(CastOp::Trunc, v, LTy::I1) } else { v }
     }
 
     /// Whether `q` is `_Atomic(T)` with `T` an aggregate (clang
@@ -890,7 +890,7 @@ impl Cg<'_> {
         let vol = self.is_volatile(lv.q);
         let size = self.size_align(lv.q).0;
         let ty = self.mty(vq);
-        let v = if self.is_bool(vq) && self.f.fir.ty(&self.m, v) == LTy::I1 {
+        let v = if self.has_bool_rep(vq) && self.f.fir.ty(&self.m, v) == LTy::I1 {
             self.cast(CastOp::ZExt, v, ty)
         } else {
             v
@@ -960,7 +960,7 @@ impl Cg<'_> {
         let old = if at == ty { old } else { self.cast(CastOp::BitCast, old, ty) };
         // A `bool` comes back as its value and goes to memory again
         // (`ConvertIntToValueOrAtomic`, then `EmitToMemory`).
-        let old = if self.is_bool(vq) {
+        let old = if self.has_bool_rep(vq) {
             let b = self.cast(CastOp::Trunc, old, LTy::I1);
             self.cast(CastOp::ZExt, b, ty)
         } else {
@@ -979,7 +979,7 @@ impl Cg<'_> {
         op: &mut dyn FnMut(&mut Self, V) -> R<V>,
     ) -> R<(V, V)> {
         let input = self.atomic_load_lv(lv, vq);
-        let value = if self.is_bool(vq) {
+        let value = if self.has_bool_rep(vq) {
             let t = self.mty(vq);
             self.cast(CastOp::ZExt, input, t)
         } else {

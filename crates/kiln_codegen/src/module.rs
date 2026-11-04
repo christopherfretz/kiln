@@ -1618,12 +1618,18 @@ impl<'a> Cg<'a> {
         matches!(self.ast.types.canonical_view(q), TypeView::Builtin(BuiltinType::Bool))
     }
 
-    /// [`Cg::is_bool`], seeing through `_Atomic` (the memory form of an
-    /// `_Atomic(bool)` is `i8` too).
+    /// clang `hasBooleanRepresentation`: `bool`, or an enumeration whose
+    /// underlying type is `bool` (an `i1` value in an `i8` object).
+    pub fn has_bool_rep(&self, q: QualType) -> bool {
+        kiln_abi::irtype::has_boolean_representation(self.ast, q)
+    }
+
+    /// [`Cg::has_bool_rep`], seeing through `_Atomic` (the memory form of
+    /// an `_Atomic(bool)` is `i8` too).
     pub fn is_bool_value(&self, q: QualType) -> bool {
         match self.ast.types.canonical_view(q) {
-            TypeView::Atomic(v) => self.is_bool(v),
-            _ => self.is_bool(q),
+            TypeView::Atomic(v) => self.has_bool_rep(v),
+            _ => self.has_bool_rep(q),
         }
     }
 

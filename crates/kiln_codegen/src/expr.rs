@@ -586,7 +586,7 @@ impl Cg<'_> {
         let mut masked = src;
         if ss != bf.size {
             let old = self.load(st, lv.addr.v, lv.addr.align, vol);
-            if !self.is_bool(lv.q) {
+            if !self.has_bool_rep(lv.q) {
                 let m = self.icn(st, low_mask(bf.size) as i128);
                 src = self.bin(BinOp::And, Flags::NONE, src, m);
             }
@@ -613,8 +613,12 @@ impl Cg<'_> {
                 r = self.bin(BinOp::AShr, Flags::NONE, r, c);
             }
         }
-        let rt = self.lty(lv.q);
-        self.int_cast(r, rt, bf.is_signed)
+        // clang casts the stored value to the load/store type and takes it
+        // `EmitFromMemory` (a `bool` or `bool`-based enumeration: `i8`,
+        // then `i1`).
+        let rt = self.lsty(lv.q);
+        let r = self.int_cast(r, rt, bf.is_signed);
+        self.emit_from_memory(r, lv.q)
     }
 
     /// clang `EmitScalarConversion`.
@@ -628,6 +632,13 @@ impl Cg<'_> {
             return self.conv_to_bool(v, from);
         }
         let ft = self.f.fir.ty(&self.m, v);
+        // An integer converted to an enumeration whose underlying type is
+        // `bool` is first converted to `bool` ([expr.static.cast]/10;
+        // clang's `CK_IntegralToBoolean` to the enumeration): `!= 0`, not
+        // a truncation to `i1`.
+        if self.has_bool_rep(to) && self.m.types.int_width(ft).is_some() {
+            return self.conv_to_bool(v, from);
+        }
         if ft == tt {
             return v;
         }
@@ -677,13 +688,19 @@ impl Cg<'_> {
     fn conv_to_bool(&mut self, v: V, from: QualType) -> V {
         let ft = self.f.fir.ty(&self.m, v);
         if ft == LTy::I1 {
+            // clang `EmitIntToBoolConversion` of an `i1`: the value of an
+            // enumeration with underlying type `bool` (or a `bool` cast
+            // to one) is tested `!= false` (clang's `CK_IntegralToBoolean`).
+            if self.has_bool_rep(from) {
+                let z = self.icn(LTy::I1, 0);
+                return self.icmp(IntPredicate::Ne, v, z);
+            }
             return v;
         }
         if self.is_float_ty(ft) {
             let z = self.fconst(ft, 0.0);
             return self.fcmp(FloatPredicate::Une, v, z);
         }
-        let _ = from;
         // clang `EmitIntToBoolConversion`: a logical value zero-extended
         // and wanted as a logical value again is the `i1` itself (the
         // `zext` is zapped when nothing else uses it).

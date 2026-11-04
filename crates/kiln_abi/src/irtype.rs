@@ -196,6 +196,9 @@ impl<'a> IrTypes<'a> {
         let ast = self.ast();
         match ast.types.canonical_view(q) {
             TypeView::Builtin(BuiltinType::Bool) => return IrType::Int(1),
+            // An enumeration whose underlying type is `bool` is a `bool`
+            // value too (`ConvertType` of its integer type).
+            TypeView::Enum(_) if has_boolean_representation(ast, q) => return IrType::Int(1),
             // A `_BitInt(N)` value is `iN`; in memory it fills its slot.
             TypeView::BitInt { width, .. } => return IrType::Int(width),
             // A vector value is `<N x T>`; an `ext_vector_type` of `bool`
@@ -1100,6 +1103,23 @@ fn int_align(bits: u32) -> u64 {
         17..=32 => 4,
         33..=64 => 8,
         _ => 16,
+    }
+}
+
+/// clang `hasBooleanRepresentation`: `bool`, or an enumeration whose
+/// underlying type is `bool` (`enum class E : bool`). Such a value is `i1`
+/// and its object an `i8` (`EmitToMemory`/`EmitFromMemory`).
+pub fn has_boolean_representation(ast: &Ast, q: QualType) -> bool {
+    match ast.types.canonical_view(q) {
+        TypeView::Builtin(BuiltinType::Bool) => true,
+        TypeView::Enum(d) => ast
+            .decls
+            .enumeration(ast.definition(d).unwrap_or(d))
+            .and_then(|e| e.int_type)
+            .is_some_and(|i| {
+                matches!(ast.types.canonical_view(i), TypeView::Builtin(BuiltinType::Bool))
+            }),
+        _ => false,
     }
 }
 
