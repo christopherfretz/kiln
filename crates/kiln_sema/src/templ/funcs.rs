@@ -14,7 +14,7 @@ use kiln_ast::types::{ExcSpec, NoexceptValue, TypeView};
 use kiln_ast::{DeclId, ExprId};
 use kiln_source::Loc;
 
-use kiln_ast::names::DeclName;
+use kiln_ast::names::{DeclName, DeclNameKind};
 use kiln_diag::DiagId;
 
 use crate::Sema;
@@ -497,6 +497,40 @@ impl Sema<'_, '_> {
         Ok(self.act_on_explicit_function_spec(ds, ty, d, m, name_loc))
     }
 
+    /// `[extern] template C::C(params);` / `template C::operator T*();`:
+    /// an explicit instantiation whose out-of-line constructor or
+    /// conversion-function declarator matched no non-template member of
+    /// `class` names a specialization of one of its member function
+    /// templates (`templates`), deduced from the declarator's type `ty`
+    /// ([temp.explicit]/4, [temp.deduct.decl]; clang
+    /// `ActOnExplicitInstantiation`, which for a conversion function
+    /// considers every conversion function template, [temp.mem]/6).
+    /// No match or an ambiguity is diagnosed as for a named function
+    /// template. Declares nothing.
+    pub(crate) fn act_on_explicit_special_template_inst(
+        &mut self,
+        ds: &DeclSpec,
+        d: &Declarator,
+        templates: &[DeclId],
+        name: DeclName,
+        ty: QualType,
+        loc: Loc,
+    ) {
+        let Some((ext, _)) = self.templ.explicit_inst.take() else { return };
+        self.templ.cur = None;
+        let notes = !matches!(name.kind(), DeclNameKind::Conversion);
+        let Some(m) = self.match_function_spec_noted(templates, None, name, ty, true, loc, notes)
+        else {
+            return;
+        };
+        if !self.check_inst_exc_spec(m.spec, ty, ds.loc) {
+            return;
+        }
+        let attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+        self.explicit_inst_visibility_attrs(m.spec, &attrs);
+        self.act_on_explicit_function_inst(m, ext.is_some(), loc);
+    }
+
     /// The function template specialization declarator `d` names
     /// (§6.9 steps 1-2, [temp.deduct.decl]): every function template
     /// found by redeclaration lookup of `name` is deduced against `ty`;
@@ -548,6 +582,24 @@ impl Sema<'_, '_> {
         inst: bool,
         loc: Loc,
     ) -> Option<SpecMatch> {
+        self.match_function_spec_noted(templates, explicit, name, ty, inst, loc, true)
+    }
+
+    /// [`Self::match_function_spec_in`]; `notes` false lists no
+    /// candidate that failed deduction (a conversion function template
+    /// that does not deduce is not found by lookup, [temp.mem]/6, so
+    /// clang notes none).
+    #[allow(clippy::too_many_arguments, reason = "the matcher's inputs plus the note switch")]
+    fn match_function_spec_noted(
+        &mut self,
+        templates: &[DeclId],
+        explicit: Option<ArgListId>,
+        name: DeclName,
+        ty: QualType,
+        inst: bool,
+        loc: Loc,
+        notes: bool,
+    ) -> Option<SpecMatch> {
         let mut matches: Vec<SpecMatch> = Vec::new();
         let mut failures = Vec::new();
         // [temp.deduct.decl]: the exception specifications take no part
@@ -559,14 +611,17 @@ impl Sema<'_, '_> {
         // has_facet<...>(const locale&)` of a `throw()` template).
         let suppress = self.clang_compat >= 22 && !self.inst.suppress_access.replace(true);
         for &ft in templates {
+            // clang notes the template lookup found: its most recent
+            // declaration (an out-of-line definition).
+            let at = self.loc_of(self.ast.latest(ft));
             match self.deduce_decl(ft, explicit, ty, loc) {
                 Ok(s) => {
                     let sty = self.ast.decls.get(s).ty().unwrap_or(QualType::ERROR);
                     if self.same_ignoring_exc_spec(sty, ty) {
                         matches.push(SpecMatch { spec: s, template: ft });
-                    } else {
+                    } else if notes {
                         let n = self
-                            .diag(DiagId::note_deduction_non_deduced_mismatch, self.loc_of(ft))
+                            .diag(DiagId::note_deduction_non_deduced_mismatch, at)
                             .diff_args(self, sty, ty);
                         failures.push(n);
                     }
@@ -574,7 +629,8 @@ impl Sema<'_, '_> {
                 // An invalid template is not noted (clang
                 // `TemplateDeductionResult::Invalid`).
                 Err(f) if f.tdk == crate::templ::deduce::Tdk::Invalid => {}
-                Err(f) => failures.push(self.deduction_note(ft, &f, self.loc_of(ft))),
+                Err(f) if notes => failures.push(self.deduction_note(ft, &f, at)),
+                Err(_) => {}
             }
         }
         if suppress {
@@ -606,6 +662,26 @@ impl Sema<'_, '_> {
             });
             if let Some(i) = best {
                 return Some(matches.swap_remove(i));
+            }
+            if inst {
+                // [temp.explicit]/4, [temp.func.order]: clang's
+                // `err_explicit_instantiation_ambiguous`, the candidates
+                // first-declared first, each at the declaration its
+                // specialization is instantiated from.
+                let mut e = self.diag(DiagId::sema_explicit_inst_ambiguous, loc).arg(fname);
+                for m in &matches {
+                    let Some((_, info)) = self.ast.spec_info(m.spec).map(|(i, s)| (i, *s)) else {
+                        continue;
+                    };
+                    let at = self.loc_of(self.ast.latest(m.template));
+                    let note = self
+                        .diag(DiagId::note_explicit_instantiation_candidate, at)
+                        .arg(self.spec_decl_name(info.template, info.print_args))
+                        .arg(self.template_args_desc(info.template, info.args));
+                    e = e.with_note(note);
+                }
+                self.emit(e);
+                return None;
             }
             // clang lists the candidates last-declared first.
             let mut e = self.diag(DiagId::sema_fn_template_spec_ambiguous, loc).arg(fname);
