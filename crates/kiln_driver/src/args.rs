@@ -504,6 +504,7 @@ const JOINED_OR_SEPARATE: &[&str] = &[
     "-MQ",
     "-MT",
     "-D",
+    "-B",
     "-F",
     "-I",
     "-L",
@@ -646,6 +647,14 @@ impl Args {
                 pos: self.inputs.len(),
                 arg: format!("{opt}{v}"),
                 kind: if opt == "-l" { LinkOptKind::Input } else { LinkOptKind::Option },
+            }),
+            // A program search directory: clang++ finds the linker there
+            // (the reference workload's toolchain passes `-B/opt/llvm/bin -fuse-ld=lld`).
+            // Silent when compiling, as in clang.
+            "-B" => self.link.push(LinkOpt {
+                pos: self.inputs.len(),
+                arg: format!("-B{v}"),
+                kind: LinkOptKind::Silent,
             }),
             "-MF" => self.deps.file = Some(v_owned),
             "-MT" => self.deps.targets.push((v_owned, false)),
@@ -1258,6 +1267,17 @@ mod tests {
         assert_eq!(
             parse("-mcmodel=huge a.cpp").errors,
             [ArgError::UnsupportedValue("-mcmodel=".into(), "huge".into())]
+        );
+        let a = parse("-B/opt/llvm/bin -B /x -fuse-ld=lld a.o");
+        assert_eq!(a.errors, []);
+        let link: Vec<_> = a.link.iter().map(|l| (l.arg.as_str(), l.kind)).collect();
+        assert_eq!(
+            link,
+            [
+                ("-B/opt/llvm/bin", LinkOptKind::Silent),
+                ("-B/x", LinkOptKind::Silent),
+                ("-fuse-ld=lld", LinkOptKind::Option)
+            ]
         );
         let a = parse("-fno-inline a.cpp");
         assert!(a.predef.no_inline);
