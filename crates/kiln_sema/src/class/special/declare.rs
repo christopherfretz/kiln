@@ -367,6 +367,9 @@ impl Sema<'_, '_> {
             }
         }
         let templ = self.templ.cur.is_some();
+        // Its `enable_if` conditions: differing ones declare an overload
+        // (clang `Sema::IsOverload`; spec/sema-overload.md §4.3).
+        let enable_if = self.new_fn_enable_if(&d.attrs);
         let cands: Vec<DeclId> = self.ast.lookup_local(class, name).iter().collect();
         let mut matched = None;
         for c in cands {
@@ -398,6 +401,7 @@ impl Sema<'_, '_> {
             let creq = self.ast.templates.trailing_requires.get(c).copied();
             if self.same_ignoring_exc_spec(cty, ty)
                 && self.opt_exprs_equivalent(creq, d.trailing_requires)
+                && self.same_enable_if(c, enable_if)
             {
                 matched = Some(c);
                 break;

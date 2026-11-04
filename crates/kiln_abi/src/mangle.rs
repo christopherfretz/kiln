@@ -9,12 +9,13 @@
 //! spec/abi.md §"Mangling".
 
 use kiln_ast::Ast;
+use kiln_ast::RawId;
 use kiln_ast::attr::AttrKind;
 use kiln_ast::consts::{ByteImage, ConstValue, Member, PrintEnv, PtrBase, Scalar, Shape};
 use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage};
-use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, QualType, TemplateNameId};
+use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, ExprId, QualType, TemplateNameId};
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
-use kiln_ast::types::{ArgView, BuiltinType, RefQual, TemplateName, TypeView};
+use kiln_ast::types::{ArgView, BuiltinType, RefQual, TemplateName, TypeView, VectorKind};
 use kiln_source::fx::FxHashMap;
 
 mod constraint;
@@ -801,7 +802,7 @@ pub fn asm_label(ast: &Ast, d: DeclId) -> Option<String> {
             let a = ast.redecls_of(f).find_map(|r| {
                 crate::layout::props::attrs(ast, r).find(|a| a.kind == AttrKind::ASM_LABEL)
             })?;
-            <kiln_ast::StringLitId as kiln_ast::RawId>::from_raw(a.a)?
+            <kiln_ast::StringLitId as RawId>::from_raw(a.a)?
         }
         None => return None,
     };
@@ -1142,6 +1143,60 @@ impl<'a, 'b> Mangler<'a, 'b> {
         }
     }
 
+    /// The source name of a Neon vector (WP-558): `AArch64` mangles it as
+    /// its ACLE type `__<Elt>x<N>_t` (clang `mangleAArch64NeonVectorType`),
+    /// other targets as `__simd64_<elt>` / `__simd128_<elt>` (clang
+    /// `mangleNeonVectorType`).
+    fn neon_vector_name(&self, elem: QualType, count: u32, poly: bool) -> String {
+        use BuiltinType as B;
+        let b = self.ast.types.builtin(elem);
+        if self.ast.types.target().long_double == kiln_ast::types::FloatFormat::IeeeQuad {
+            let base = match (poly, b) {
+                (true, Some(B::UChar | B::SChar)) => "Poly8",
+                (true, Some(B::UShort | B::Short)) => "Poly16",
+                (true, _) => "Poly64",
+                (false, Some(B::SChar)) => "Int8",
+                (false, Some(B::Short)) => "Int16",
+                (false, Some(B::Int)) => "Int32",
+                (false, Some(B::Long | B::LongLong)) => "Int64",
+                (false, Some(B::UChar)) => "Uint8",
+                (false, Some(B::UShort)) => "Uint16",
+                (false, Some(B::UInt)) => "Uint32",
+                (false, Some(B::ULong | B::ULongLong)) => "Uint64",
+                (false, Some(B::Half)) => "Float16",
+                (false, Some(B::Double)) => "Float64",
+                (false, Some(B::BFloat16)) => "Bfloat16",
+                (false, _) => "Float32",
+            };
+            return format!("__{base}x{count}_t");
+        }
+        let elt = match (poly, b) {
+            (true, Some(B::UChar | B::SChar)) => "poly8_t",
+            (true, Some(B::UShort | B::Short)) => "poly16_t",
+            (true, _) => "poly64_t",
+            (false, Some(B::SChar)) => "int8_t",
+            (false, Some(B::UChar)) => "uint8_t",
+            (false, Some(B::Short)) => "int16_t",
+            (false, Some(B::UShort)) => "uint16_t",
+            (false, Some(B::Int)) => "int32_t",
+            (false, Some(B::UInt)) => "uint32_t",
+            (false, Some(B::Long | B::LongLong)) => "int64_t",
+            (false, Some(B::ULong | B::ULongLong)) => "uint64_t",
+            (false, Some(B::Double)) => "float64_t",
+            (false, Some(B::Half)) => "float16_t",
+            (false, Some(B::BFloat16)) => "bfloat16_t",
+            (false, _) => "float32_t",
+        };
+        let esize: u32 = match b {
+            Some(B::SChar | B::UChar | B::Char) => 1,
+            Some(B::Short | B::UShort | B::Half | B::BFloat16) => 2,
+            Some(B::Int | B::UInt | B::Float) => 4,
+            _ => 8,
+        };
+        let bits = esize * 8 * count;
+        format!("{}{elt}", if bits == 64 { "__simd64_" } else { "__simd128_" })
+    }
+
     fn new(ast: &'a Ast, anon: &'b mut AnonIds, prefix: &str) -> Self {
         Mangler {
             ast,
@@ -1313,7 +1368,32 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.fn_depth = (saved.0 + 1, false);
         self.name(d, v);
         self.fn_depth = saved;
+        self.enable_if_conds(d);
         self.bare_function_type(d);
+    }
+
+    /// `Ua9enable_ifI <template-arg>* E`: the conditions of the
+    /// `enable_if` attributes of function `d` in declaration order, each
+    /// mangled as a template argument inside the function's prototype
+    /// scope, so overloads distinguished only by them get distinct names
+    /// (clang `mangleFunctionEncodingBareType`; spec/sema-overload.md
+    /// §4.3). The diagnostic message is not mangled.
+    fn enable_if_conds(&mut self, d: DeclId) {
+        let conds: Vec<ExprId> = crate::layout::props::attrs(self.ast, d)
+            .filter(|a| a.kind == AttrKind::ENABLE_IF)
+            .filter_map(|a| ExprId::from_raw(a.a))
+            .collect();
+        if conds.is_empty() {
+            return;
+        }
+        let saved = self.fn_depth;
+        self.fn_depth = (saved.0 + 1, false);
+        self.out.push_str("Ua9enable_ifI");
+        for c in conds {
+            self.template_arg_expr(Some(c));
+        }
+        self.out.push('E');
+        self.fn_depth = saved;
     }
 
     // ---- implicit ABI tags -----------------------------------------------
@@ -2805,6 +2885,13 @@ impl<'a, 'b> Mangler<'a, 'b> {
             TypeView::Atomic(e) => {
                 self.out.push_str("U7_Atomic");
                 self.ty(e);
+            }
+            TypeView::Vector { elem, count, kind }
+                if matches!(kind, VectorKind::Neon | VectorKind::NeonPoly) =>
+            {
+                let name = self.neon_vector_name(elem, count, kind == VectorKind::NeonPoly);
+                self.out.push_str(&name.len().to_string());
+                self.out.push_str(&name);
             }
             TypeView::Vector { elem, count, .. } => {
                 self.out.push_str("Dv");
