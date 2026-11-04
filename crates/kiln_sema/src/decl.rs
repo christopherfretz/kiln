@@ -10242,6 +10242,7 @@ fn attr_kind_of(
         ("used", _, true) => AttrKind::USED,
         ("noinline", _, true) => AttrKind::NOINLINE,
         ("always_inline", _, true) => AttrKind::ALWAYS_INLINE,
+        ("gnu_inline", _, true) => AttrKind::GNU_INLINE,
         ("weak", _, true) => AttrKind::WEAK,
         ("const", _, true) => AttrKind::CONST,
         ("pure", _, true) => AttrKind::PURE,

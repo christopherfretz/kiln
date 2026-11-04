@@ -27,6 +27,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::NO_UNIQUE_ADDRESS => "NoUniqueAddress",
         AttrKind::ANNOTATION => "Annotation",
         AttrKind::ALWAYS_INLINE => "AlwaysInline",
+        AttrKind::GNU_INLINE => "GNUInline",
         AttrKind::NOINLINE => "NoInline",
         AttrKind::PACKED => "Packed",
         AttrKind::USED => "Used",

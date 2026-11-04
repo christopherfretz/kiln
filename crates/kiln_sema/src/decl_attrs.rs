@@ -37,6 +37,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::NORETURN => "noreturn",
         AttrKind::NO_UNIQUE_ADDRESS => "no_unique_address",
         AttrKind::ALWAYS_INLINE => "always_inline",
+        AttrKind::GNU_INLINE => "gnu_inline",
         AttrKind::NOINLINE => "noinline",
         AttrKind::PACKED => "packed",
         AttrKind::USED => "used",
@@ -411,6 +412,12 @@ impl Sema<'_, '_> {
                 "functions and Objective-C methods",
             ),
             AttrKind::UNINITIALIZED => self.check_uninitialized_subject(d, kind, node),
+            // clang `GNUInline`: `SubjectList<[Function]>` (ignored with a
+            // warning).
+            AttrKind::GNU_INLINE if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "gnu_inline", "functions")
+            }
+            AttrKind::GNU_INLINE => self.check_gnu_inline_attr(d, node),
             // clang `TrivialABI`: `SubjectList<[CXXRecord]>` (ignored
             // with a warning).
             AttrKind::TRIVIAL_ABI if !is_record_kind(kind) => {
@@ -432,6 +439,26 @@ impl Sema<'_, '_> {
             ),
             _ => true,
         }
+    }
+
+    /// GNU `gnu_inline` on function `d` (clang `handleGNUInlineAttr`):
+    /// ignored with a warning unless `d` is `inline`-specified (the
+    /// keyword, not implicit inlineness); in C++ one without `extern`
+    /// warns that it is externally available all the same (codegen gives
+    /// both the `available_externally` treatment, spec/codegen.md "GNU
+    /// inline functions").
+    fn check_gnu_inline_attr(&mut self, d: DeclId, node: AttrNode) -> bool {
+        let Some(spec) = self.ast.decls.function(d).map(|f| f.spec) else { return true };
+        if !spec.is_inline() {
+            let msg = self.diag(DiagId::sema_gnu_inline_requires_inline, node.loc);
+            self.emit(msg);
+            return false;
+        }
+        if spec.storage() != kiln_ast::decl::FnStorage::Extern {
+            let msg = self.diag(DiagId::sema_gnu_inline_cpp_without_extern, node.loc);
+            self.emit(msg);
+        }
+        true
     }
 
     /// `[[clang::uninitialized]]` (clang `UninitializedAttr`,
