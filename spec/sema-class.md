@@ -1181,7 +1181,10 @@ in each instantiation (sema.md §8 "Templates"; WP-227). `reference member
 'r' binds to a temporary object whose lifetime would be shorter than the
 lifetime of the constructed object` + `reference member declared here`.
 Warnings: `field 'b' will be initialized after field 'a'` [-Wreorder-ctor],
-`field 'b' is uninitialized when used here` [-Wuninitialized]; delegation
+`field 'b' is uninitialized when used here` [-Wuninitialized] (the value
+walk reads a `?:` through `operand` + `cond_arms`: condition and both arms are
+uses; `tests/conformance/class.base.init/uninitialized-conditional.cpp`,
+WP-556); delegation
 cycles at TU end: `constructor for 'S' creates a delegation cycle`
 [-Wdelegating-ctor-cycles].
 

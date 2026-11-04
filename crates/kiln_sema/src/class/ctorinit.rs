@@ -995,7 +995,7 @@ impl Sema<'_, '_> {
         match self.ast.exprs.get(e).kind() {
             ExprKind::MemberExpr => self.uninit_member(st, e, false, addr_of, depth + 1),
             ExprKind::ConditionalOperator => {
-                let [c, _] = self.ast.exprs.operands(e);
+                let c = self.ast.exprs.operand(e);
                 let [t, f] = self.ast.exprs.cond_arms(e);
                 self.uninit_visit(st, c, depth + 1);
                 self.uninit_value(st, t, addr_of, depth + 1);
