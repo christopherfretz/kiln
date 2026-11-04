@@ -1703,6 +1703,23 @@ impl Sema<'_, '_> {
                 return;
             }
         }
+        // [class.conv.fct]/1, [over.ics.user]/4: a conversion function
+        // never converts an object to its own class or to a base of it
+        // (that is a copy, or a derived-to-base conversion of Conversion
+        // rank, through a constructor). Such a candidate is not viable
+        // whatever its result type (clang `AddConversionCandidate`,
+        // `ovl_fail_trivial_conversion`), so it never competes with the
+        // copy or move constructor and is never called.
+        if let (Some(fr), Some(tr)) =
+            (self.ast.types.as_record(a.ty), self.ast.types.as_record(to))
+            && (same_class(self, fr, tr)
+                || complete_class(self, fr).is_some() && is_derived_from(self, fr, tr))
+        {
+            cand.viable = false;
+            cand.failure = CandidateFailure::TrivialConversion;
+            set.cands.push(cand);
+            return;
+        }
         // The call's result: a glvalue of the referenced type or a
         // prvalue.
         let (rty, rvk) = match self.ast.types.canonical_view(ret) {
