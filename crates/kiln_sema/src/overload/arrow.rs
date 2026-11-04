@@ -115,6 +115,52 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// One `operator->` call `base.operator->()` re-formed at
+    /// instantiation from a resolved `CXXOperatorCallExpr` whose object
+    /// is `base` ([over.ref]/1, [temp.res.general]/6: overload resolution
+    /// runs again on the substituted operand). A chain is one such call
+    /// per link, so each link is rebuilt by its own node.
+    pub(crate) fn rebuild_operator_arrow(&mut self, base: ExprId, loc: Loc) -> Option<ExprId> {
+        match self.overloaded_arrow(base, loc) {
+            Step::Call(e, _) => Some(e),
+            Step::NotFound => {
+                let m = self.diag(DiagId::sema_ovl_no_viable_oper, loc).arg("operator->");
+                self.emit(m);
+                None
+            }
+            Step::Err => None,
+        }
+    }
+
+    /// The class object a `->` chain starts from: `base` with every
+    /// `operator->` call of the chain ([over.ref]/1) removed, seen
+    /// through the implicit conversions and temporaries semantic analysis
+    /// put between the links (a qualification conversion of the returned
+    /// pointer for a `const` member, a materialized class result whose
+    /// own `operator->` continues the chain). `base` itself when it is
+    /// not such a chain.
+    pub(crate) fn arrow_chain_object(&self, base: ExprId) -> ExprId {
+        use kiln_ast::expr::ExprKind as K;
+        let ex = &self.ast.exprs;
+        let mut cur = base;
+        loop {
+            let mut x = cur;
+            while matches!(
+                ex.get(x).kind(),
+                K::ImplicitCastExpr | K::MaterializeTemporaryExpr | K::CXXBindTemporaryExpr
+            ) {
+                x = ex.operand(x);
+            }
+            if ex.get(x).kind() != K::CXXOperatorCallExpr || ex.operator_call_op(x) != OO::Arrow {
+                return cur;
+            }
+            match self.ast.lists.iter::<ExprId>(ex.call_args(x)).next() {
+                Some(o) => cur = o,
+                None => return cur,
+            }
+        }
+    }
+
     /// clang `noteOperatorArrows`.
     fn operator_arrow_notes(&self, calls: &[(DeclId, QualType)]) -> Vec<Diag> {
         let (skip_start, skip) = if calls.len() > NOTE_LIMIT {

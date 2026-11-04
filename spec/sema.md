@@ -5449,6 +5449,24 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   (`rebuild_ci_member_template_id`; libstdc++ valarray:1100
   `valarray<_Tp>::template _UnaryOp<_Name>::_Rt`, WP-332). Test:
   `tests/conformance/temp.dep.type/libstdcxx-out-of-line-member-template-qualifier.cpp`.
+- **Out-of-line members of partial specializations, alias templates and
+  nested classes** ([temp.dep.type]/1.2, /6, [temp.spec.partial.member],
+  [temp.alias]/2; WP-553): `X<A...>::` written with a partial
+  specialization's own arguments names the current instantiation also
+  when a non-dependent non-type argument is written unconverted
+  (`vec<2, T>`: `current_instantiation_at` converts the arguments as
+  the partial specialization's declaration did), in a parameter or
+  trailing position (inside, or in the declarator scope of, that
+  specialization) as well as before the declarator-id. The rebuild before
+  the declarator-id also resolves a qualifier chain through member
+  classes (`typename A::B<P>::C::m`, `typename X<P>::C::m`:
+  `rebuild_ci_nns_record`) and substitutes an alias template
+  specialization again with its rebuilt arguments
+  (`remove_extent_t<typename X<T, C>::element_type>`), so the
+  out-of-line definition, static data member or member template matches
+  the in-class declaration; a qualifier naming another typedef, another
+  partial specialization or another nested class still matches nothing.
+  Tests: `tests/conformance/temp.dep.type/out-of-line-current-instantiation-*.cpp`.
 - **Member template-ids with non-template overloads**
   ([temp.arg.explicit]/4, [over.match.call.general]/1): an unqualified
   function template-id `f<A>(args)` names the whole overload set that
@@ -5464,6 +5482,26 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   an element of the list is type-dependent (`braced_arg_type_dependent`).
   This is `defer_dependent_init` (<format>:439 `_Utf32_view`). Test:
   `tests/conformance/dcl.init.general/libstdcxx-paren-braced-init-dependent.cpp`.
+- **Resolved operator calls at instantiation** ([temp.res.general]/6,
+  [over.ref]/1, [over.match.oper]; WP-552): a `CXXOperatorCallExpr`
+  resolved in the pattern (non-dependent operands) is formed again from
+  its substituted operands by overload resolution, never by copying the
+  selected function: `()`/`[]` as a call/subscript, `->*`, `,` and every
+  other binary operator function through its built-in binary form, the
+  unary ones and postfix `++`/`--` (the extra `int` operand dropped)
+  through their unary form. `->` has no built-in form: a member access
+  `x->m` re-forms the whole chain from the class object
+  (`Sema::arrow_chain_object` strips the `operator->` calls together with
+  the qualification conversions and materialized temporaries between the
+  links), and any other `operator->` call (a pseudo-destructor `p->~I()`)
+  is one link, `operator->` selected again for the substituted object
+  (`Sema::rebuild_operator_arrow`). `new`/`delete` operator functions
+  are never such a call; the `operator co_await` of a `co_await` is
+  formed again from the operand as written. Tests:
+  `tests/conformance/temp.dep/overloaded-operator-arrow-std.cpp`,
+  `tests/conformance/temp.dep/overloaded-operator-arrow-chain.cpp`,
+  `tests/conformance/over.oper/arrow-in-template-other-ops.cpp`,
+  `tests/conformance/over.oper/arrow-in-template-run.cpp`.
 
 ### 5.22 Rules from the libc++ `.verify` cluster B (WP-338)
 - **An out-of-line constructor stays explicit** ([dcl.fct.spec]/4,
