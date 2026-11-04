@@ -4415,7 +4415,14 @@ whose head the notes name. It evaluates:
     instantiated member template (`respecialized_member_template`); the
     pattern's own specialization stayed value-dependent. Test:
     `temp.constr.decl/libstdcxx-member-template-call-in-requires-clause.cpp`.
-    WP-332.
+    WP-332. When the member template has a parameter pack that is not its
+    last parameter, the substituted arguments (one per parameter, the
+    pack one `Pack`) form the specialization directly
+    (`structural_member_spec`, `get_function_spec`): re-read flat as
+    explicit arguments, the pack would absorb a trailing defaulted or
+    deduced parameter's argument ([temp.arg.explicit]/9; `mk()` for
+    `template <class... Args, class E = int>` became `mk<int>` with
+    `Args = <int>`). Tests: `temp.deduct.call/pack-before-*.cpp`. WP-629.
   - A substitution failure means not satisfied, with the captured
     diagnostic recorded.
   - Otherwise the expression must have type exactly `bool`. Anything else

@@ -1627,6 +1627,9 @@ impl Substituter<'_, '_, '_> {
             return Ok(None);
         }
         let l = self.args(args, loc)?;
+        if let Some(spec) = self.structural_member_spec(it, l, loc)? {
+            return Ok(Some(self.sema.build_decl_ref_qualified(spec, loc, None, None)));
+        }
         let ty = &self.sema.ast.types;
         let flat: Vec<TemplateArg> = ty
             .args(l)
@@ -1644,6 +1647,48 @@ impl Substituter<'_, '_, '_> {
             }
             _ => Err(SubstFail),
         }
+    }
+
+    /// The specialization of member function template `it` for `l`, the
+    /// substituted arguments the pattern's specialization was formed with
+    /// (one per parameter, each pack one `Pack`), when `it` has a
+    /// parameter pack that is not its last parameter: re-reading the
+    /// flattened arguments as explicit ones would give the pack every
+    /// argument after it ([temp.arg.explicit]/9), so a trailing defaulted
+    /// or deduced parameter would be swallowed. The deduction already made
+    /// is kept instead ([temp.deduct.call]/1, [temp.param]/14; clang's
+    /// `FindInstantiatedDecl` re-forms the specialization from its
+    /// structured argument list). `None` (the template-id path) otherwise,
+    /// or while the arguments stay dependent.
+    fn structural_member_spec(
+        &mut self,
+        it: DeclId,
+        l: ArgListId,
+        loc: Loc,
+    ) -> SubstResult<Option<DeclId>> {
+        let params = self.sema.template_params(it);
+        let is_pack = |s: &Self, p: DeclId| s.sema.ast.template_parm(p).is_some_and(|x| x.pack);
+        let inner_pack =
+            params.split_last().is_some_and(|(_, init)| init.iter().any(|&p| is_pack(self, p)));
+        if !inner_pack {
+            return Ok(None);
+        }
+        let ty = &self.sema.ast.types;
+        let args = ty.args(l);
+        let canonical = ty.canonical_args(l);
+        if args.len() != params.len()
+            || params
+                .iter()
+                .zip(args)
+                .any(|(&p, a)| is_pack(self, p) != matches!(a.view(), ArgView::Pack(_)))
+            || ty.arg_list_flags(canonical).intersects(
+                kiln_ast::types::TypeFlags::DEPENDENT | kiln_ast::types::TypeFlags::UNEXPANDED_PACK,
+            )
+        {
+            return Ok(None);
+        }
+        let conv = crate::templ::args::ConvertedArgs { sugared: l, canonical };
+        self.sema.get_function_spec(it, &conv, loc).map(Some).map_err(|()| SubstFail)
     }
 
     /// Whether `decls` are static member functions (or function
