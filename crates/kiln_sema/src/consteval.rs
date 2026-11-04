@@ -614,6 +614,14 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `e`, recorded by [`Sema::note_immediate_ref`], is the callee of a
+    /// call after all: not a reference to check.
+    pub(crate) fn forget_immediate_ref(&mut self, e: ExprId) {
+        if let Some(i) = self.imm.pending.refs.iter().rposition(|&x| x == e) {
+            self.imm.pending.refs.remove(i);
+        }
+    }
+
     /// Records `e` for the immediate checks at the end of the current
     /// full-expression (a consteval-only leaf, `consteval_only.rs`; a
     /// fresh node, so not searched for: a full-expression may hold many).
@@ -634,10 +642,8 @@ impl Sema<'_, '_> {
         if !self.is_immediate_fn(f) {
             return call;
         }
-        if let Some(r) = callee_ref
-            && let Some(i) = self.imm.pending.refs.iter().rposition(|&x| x == r)
-        {
-            self.imm.pending.refs.remove(i);
+        if let Some(r) = callee_ref {
+            self.forget_immediate_ref(r);
         }
         if self.immediate_exempt() || self.has_errors_in(call) || self.expr_is_value_dependent(call)
         {

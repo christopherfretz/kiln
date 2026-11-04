@@ -1134,7 +1134,8 @@ impl Parser<'_, '_> {
 
     /// expansion-statement ([stmt.expand], P1306R5): `template for (
     /// init-statement_opt for-range-declaration : expansion-initializer )
-    /// compound-statement`, the `template` keyword current.
+    /// compound-statement`, the `template` keyword current. Any other
+    /// statement as the body is an extension (spec/sema.md §7.6a).
     fn parse_expansion_stmt(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         if self.std < Std::Cxx26 {
@@ -1233,19 +1234,32 @@ impl Parser<'_, '_> {
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         d.init_style = Some(InitStyle::C);
         let head = self.s.act_on_expansion_head(init, &ds, base, &d, range, colon, loc);
-        if !self.at(Punct::LBrace) {
-            // [stmt.expand]/1: the body is a compound-statement.
-            let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("'{'");
-            self.emit(e);
-            if let Some(h) = head {
-                self.s.act_on_expansion_error(h);
-            }
-            self.parse_dead_loop_body();
-            return None;
-        }
+        // [stmt.expand]/1: the body is a compound-statement; any other
+        // statement is accepted as an extension (clang 23
+        // `ext_expansion_stmt_body_not_compound_stmt`; GCC accepts it).
+        let body_loc = self.loc();
+        let attr = self.at(Punct::LSquare) || self.at_kw(Kw::Attribute);
         self.s.act_on_start_loop();
-        let (body, _) = self.parse_compound(true);
+        let body = self.parse_sub_statement();
         self.s.act_on_end_loop();
+        let mut inner = body;
+        while matches!(
+            self.s.ast.stmts.get(inner).kind(),
+            StmtKind::LabelStmt | StmtKind::AttributedStmt
+        ) {
+            inner = self.s.ast.stmts.sub_stmt(inner);
+        }
+        let ext = if self.s.ast.stmts.get(inner).kind() != StmtKind::CompoundStmt {
+            Some(DiagId::parse_ext_expansion_stmt_body_not_compound_stmt)
+        } else if attr {
+            Some(DiagId::parse_ext_expansion_stmt_body_attr)
+        } else {
+            None
+        };
+        if let Some(id) = ext {
+            let w = self.s.diag(id, body_loc);
+            self.emit(w);
+        }
         head.and_then(|h| self.s.act_on_finish_expansion(h, body))
     }
 

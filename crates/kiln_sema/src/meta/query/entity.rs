@@ -131,7 +131,7 @@ impl Sema<'_, '_> {
     /// class, function or namespace whose scope encloses the target
     /// scope of the declaration (an anonymous union for its members).
     /// `None` for the global namespace, an entity with C language
-    /// linkage, a type that is neither a class nor an enumeration (nor an
+    /// linkage (a function or variable, `has_c_language_linkage`), a type that is neither a class nor an enumeration (nor an
     /// alias), and what is not an entity.
     pub(super) fn parent_of(&mut self, x: Reflectee) -> Option<Reflectee> {
         let d = match x {
@@ -149,7 +149,11 @@ impl Sema<'_, '_> {
             }
             _ => d,
         };
-        if kiln_abi::mangle::is_extern_c(&self.ast, d) {
+        // Only functions and variables have a language linkage
+        // ([dcl.link]/1): a class, enumeration, alias or namespace
+        // declared in an `extern "C"` block has its namespace as parent
+        // (the linkage specification is transparent, [dcl.link]/4).
+        if self.has_c_language_linkage(Reflectee::Decl(d)) {
             return None;
         }
         let mut c = self.ast.decls.get(d).ctx()?;

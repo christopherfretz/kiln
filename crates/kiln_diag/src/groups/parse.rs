@@ -12,6 +12,7 @@ DeprecatedMissingCommaVariadicParameter = "deprecated-missing-comma-variadic-par
 DeprecatedType = "deprecated-type" [];
 DuplicateDeclSpecifier = "duplicate-decl-specifier" [];
 EmptyDecomposition = "empty-decomposition" [];
+ExpansionStmtMissingBraces = "expansion-stmt-missing-braces" [];
 GnuCaseRange = "gnu-case-range" [];
 GnuLabelAsValue = "gnu-label-as-value" [];
 IgnoredPragmas = "ignored-pragmas" [];

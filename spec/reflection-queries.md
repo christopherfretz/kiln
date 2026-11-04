@@ -75,7 +75,7 @@ parity is out of scope. The negative tests are `entity-neg.cpp` and
 | Op | Fails when | Note |
 |---|---|---|
 | `type_of` | `r` has no type ([meta.reflection.queries] *has-type*) | `'X' has no type` |
-| `parent_of` | `r` is null, the global namespace, a type without a declaration, a value or object | `reflection does not represent an entity with parent` |
+| `parent_of` | `r` is null, the global namespace, a type without a declaration, a value or object, or a function or variable with C language linkage (`has_parent` false) | `reflection does not represent an entity with parent` |
 | `object_of` | `r` is not a variable of static storage duration | `reflection does not represent an object with static storage duration, or a reference to such an object` |
 | `constant_of` | `r` is not a value, enumerator, object or variable | `reflection does not represent an annotation or a valid argument to a splice-expression` |
 | `constant_of` | the entity has no type | `reflection does not have a type` |
@@ -100,6 +100,14 @@ parity is out of scope. The negative tests are `entity-neg.cpp` and
   member of an anonymous union answers for the field it names. A
   non-member answers false.
 - **`is_namespace_member`** is false for a fundamental type.
+- **`parent_of` / `has_parent`** look through linkage specifications
+  and `export` declarations ([dcl.link]/4): a class, typedef, alias,
+  enumeration or namespace declared in an `extern "C"` or `extern "C++"`
+  block has the enclosing namespace as parent. Only functions and
+  variables have a language linkage ([dcl.link]/1), so only one with C
+  language linkage (`has_c_language_linkage`, block or bare form) has
+  no parent; GCC 16.1 agrees (WP-533,
+  `meta.syn/parent-of-linkage-spec{,-neg}.cpp`).
 - **`has_template_arguments`** is true for a class, function or variable
   template specialization, and for an alias template specialization
   that is kept as written.

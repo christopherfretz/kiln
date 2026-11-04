@@ -4708,7 +4708,16 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   (`_S_quote().substr(0, 1)` with `_S_quote` a consteval static member
   of a class template, libstdc++ 16 `<format>`) is built and checked at
   instantiation, where taking its address is still an error (WP-525,
-  `expr.const/consteval-member-dependent-call.cpp`).
+  `expr.const/consteval-member-dependent-call.cpp`). The callee of a
+  dependent call (`dependent_call`, type-dependent callee or arguments)
+  is not a reference either: an unqualified callee is rebuilt as an
+  `UnresolvedLookupExpr` for ADL, and a qualified one (`::f(t)`,
+  `N::f(t)`, a using-declaration's `M::f(t)`, also parenthesized) stays
+  the `DeclRefExpr` but is dropped from the full-expression's pending
+  references (`forget_immediate_ref`), as a resolved callee is by
+  `check_immediate_invocation`; the instantiated call is the immediate
+  invocation (WP-533,
+  `expr.const/consteval-qualified-dependent-call-{run,neg}.cpp`).
   The Oven also rejects a constant result (or a subobject of one) that
   is a pointer, reference or member pointer to an immediate function:
   `pointer|reference to a consteval declaration is not a constant
@@ -7058,7 +7067,20 @@ P1306R5 `template for` ([stmt.expand]). The parser accepts
 `template for ( init-statement_opt for-range-declaration :
 expansion-initializer ) compound-statement` in every language mode; before
 C++26 it warns `ext_expansion_statements` (-Wc++26-extensions). The body
-must be a compound-statement (`expected '{'` otherwise); `template`
+is a compound-statement; any other statement is accepted (WP-533, clang
+23 and GCC 16.1 do) with the off-by-default `Extension`
+`parse_ext_expansion_stmt_body_not_compound_stmt` ("ISO C++ requires the
+body of an expansion statement to be a compound statement",
+-Wexpansion-stmt-missing-braces, so -pedantic shows it and
+-pedantic-errors rejects it) at the body's first token, labels and
+attributes looked through; a compound-statement after attributes (`[[]]
+{...}`, `__attribute__((...)) {...}`) gets
+`parse_ext_expansion_stmt_body_attr` ("ISO C++ forbids attributes before
+the compound statement of an expansion statement") instead. A
+non-compound body is parsed as any loop's sub-statement (its own block
+scope, [stmt.pre]/1; `break`/`continue` as in a braced body) and kept
+as written; its element block `{ decl = element; body }` spans the
+body's own location (no `}`). `template`
 followed by anything but `for` in a block keeps clang's `'template' here is
 not supported yet`.
 

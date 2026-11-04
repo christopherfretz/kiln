@@ -1,10 +1,10 @@
 //! Expansion statements ([stmt.expand], P1306R5): `template for`.
 //!
-//! The for-range-declaration and the compound-statement are a template
-//! pattern of a synthetic template level (spec/sema.md "Expansion
-//! statements"): the declaration is initialized from a
-//! `CXXExpansionSelectExpr` naming that level. Once the
-//! expansion-initializer is not dependent (at once outside a template,
+//! The for-range-declaration and the body (a compound-statement, or any
+//! statement as an extension) are a template pattern of a synthetic
+//! template level (spec/sema.md "Expansion statements"): the declaration
+//! is initialized from a `CXXExpansionSelectExpr` naming that level. Once
+//! the expansion-initializer is not dependent (at once outside a template,
 //! else when the enclosing template is instantiated), the statement is
 //! expanded: the form is classified ([stmt.expand]/3), its prelude
 //! declared, and the pattern instantiated once per element, the select
@@ -14,7 +14,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind, InitStyle, VarSpec, VarStorage};
 use kiln_ast::expr::{BinaryOp, ExprKind, Radix, UnaryOp};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::names::DeclName;
-use kiln_ast::stmt::{ExpansionData, ExpansionForm};
+use kiln_ast::stmt::{ExpansionData, ExpansionForm, StmtKind};
 use kiln_ast::types::{AutoKeyword, Quals};
 use kiln_ast::{DeclHead, DeclId, ExprId, ListId, QualType, StmtId};
 use kiln_diag::DiagId;
@@ -54,7 +54,7 @@ pub enum ExpansionInit {
     List(InitList),
 }
 
-/// The head of an expansion statement whose compound-statement is being
+/// The head of an expansion statement whose body is being
 /// parsed (inside its synthetic template level).
 #[derive(Clone, Copy, Debug)]
 pub struct ExpansionHead {
@@ -145,14 +145,9 @@ impl Sema<'_, '_> {
         Some(ExpansionHead { init, decl: v, exprs, range_init, colon, loc, depth, form })
     }
 
-    /// The compound-statement of `h` is missing: closes its level.
-    pub fn act_on_expansion_error(&mut self, h: ExpansionHead) {
-        self.pop_expansion_level();
-        self.ast.decls.set_flags(h.decl, DeclFlags::INVALID);
-    }
-
-    /// The expansion statement `h` with compound-statement `body`: a
-    /// pattern in a template, else expanded now.
+    /// The expansion statement `h` with body `body` (a compound-statement,
+    /// or any statement as an extension): a pattern in a template, else
+    /// expanded now.
     pub fn act_on_finish_expansion(&mut self, h: ExpansionHead, body: StmtId) -> Option<StmtId> {
         self.pop_expansion_level();
         let data = ExpansionData {
@@ -728,8 +723,14 @@ impl Substituter<'_, '_, '_> {
         let mut args = MultiLevelArgs::new();
         args.levels.extend_from_slice(&self.args.levels[..usize::from(depth)]);
         args.push(ArgListId::EMPTY, self.sema.ctx, LevelMode::Substitute);
-        let lb = self.sema.ast.stmts.get(data.body).loc();
-        let rb = self.sema.ast.stmts.rbrace(data.body);
+        // A non-compound body (an extension) spans its own location.
+        let st = &self.sema.ast.stmts;
+        let lb = st.get(data.body).loc();
+        let rb = if st.get(data.body).kind() == StmtKind::CompoundStmt {
+            st.rbrace(data.body)
+        } else {
+            lb
+        };
         let mut child = Substituter::new(&mut *self.sema, &args);
         child.locals.clone_from(&self.locals);
         child.pairs.clone_from(&self.pairs);
