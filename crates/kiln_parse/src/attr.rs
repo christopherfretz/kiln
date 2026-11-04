@@ -53,6 +53,8 @@ fn takes_expr_args(name: &str) -> bool {
             | "naked"
             | "may_alias"
             | "init_priority"
+            | "visibility"
+            | "type_visibility"
             | "nonnull"
             | "format"
             | "enable_if"

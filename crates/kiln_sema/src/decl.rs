@@ -2659,6 +2659,7 @@ impl Sema<'_, '_> {
             self.check_decl_attrs(decl, &mut attrs);
         }
         self.check_optnone_conflicts(decl, &mut attrs);
+        self.finish_visibility_attrs(decl, &mut attrs, false);
         self.finish_decl_alignment(decl, &mut attrs);
         self.add_known_function_attrs(decl, &mut attrs);
         self.recognize_builtin_decl(decl, &mut attrs);
@@ -2713,6 +2714,7 @@ impl Sema<'_, '_> {
             self.check_decl_attrs(decl, &mut attrs);
         }
         self.check_optnone_conflicts(decl, &mut attrs);
+        self.finish_visibility_attrs(decl, &mut attrs, false);
         self.act_on_asm_label(ds, d, decl, &mut attrs);
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
@@ -8020,6 +8022,7 @@ impl Sema<'_, '_> {
 
     /// `}` of a namespace.
     pub fn act_on_finish_namespace(&mut self, ns: DeclId) {
+        self.pop_namespace_visibility(ns);
         self.scopes.pop();
         self.ctx = self.ast.decls.lexical_ctx(ns).unwrap_or(self.ast.tu);
     }
@@ -9359,6 +9362,7 @@ impl Sema<'_, '_> {
                         | "minsize"
                         | "uninitialized"
                         | "trivial_abi"
+                        | "type_visibility"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
@@ -9370,7 +9374,7 @@ impl Sema<'_, '_> {
         let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax)
             .filter(|&k| k != AttrKind::INDETERMINATE || self.std >= kiln_lex::Std::Cxx26)
         else {
-            let id = if gnu && matches!(n.as_str(), "visibility" | "section" | "format") {
+            let id = if gnu && matches!(n.as_str(), "section" | "format") {
                 DiagId::parse_attribute_ignored
             } else {
                 DiagId::parse_unknown_attribute
@@ -9398,6 +9402,9 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::INIT_PRIORITY {
             return self.init_priority_attribute(syntax, &shown, args, loc);
+        }
+        if kind == AttrKind::VISIBILITY || kind == AttrKind::TYPE_VISIBILITY {
+            return self.visibility_attribute(kind, syntax, &shown, args, loc);
         }
         // `preferred_name(typedef-name)`: the type in `b`, checked
         // against its class template in `check_decl_attrs`.
@@ -9635,6 +9642,9 @@ impl Sema<'_, '_> {
         let mut attrs = attrs.to_vec();
         if !attrs.is_empty() {
             self.check_decl_attrs(d, &mut attrs);
+        }
+        if matches!(use_, TagUse::Declaration | TagUse::Definition) {
+            self.finish_visibility_attrs(d, &mut attrs, true);
         }
         if self.ast.decls.get(d).kind() == DeclKind::Enum {
             // `alignas` on an enumeration is rejected ([dcl.align]/1).
@@ -10116,6 +10126,9 @@ fn attr_kind_of(
         ("naked", _, true) => AttrKind::NAKED,
         ("may_alias", _, true) => AttrKind::MAY_ALIAS,
         ("init_priority", _, true) => AttrKind::INIT_PRIORITY,
+        ("visibility", _, true) => AttrKind::VISIBILITY,
+        // clang `Clang<"type_visibility">`.
+        ("type_visibility", _, _) if gnu_syntax || clang_scope => AttrKind::TYPE_VISIBILITY,
         ("nonnull", _, true) => AttrKind::NONNULL,
         ("returns_nonnull", _, true) => AttrKind::RETURNS_NONNULL,
         // clang `Clang<"optnone">` / `Clang<"minsize">` spellings:
