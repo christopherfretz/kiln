@@ -504,6 +504,16 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`,
       `__builtin_return_address(n)` `call ptr @llvm.returnaddress(i32 n)`
       (WP-432, `builtins_return_address.cpp`).
+      `__builtin_prefetch(p, rw, loc)` is `call void
+      @llvm.prefetch.p0(ptr p, i32 rw, i32 loc, i32 1)` (defaults `rw` 0,
+      `loc` 3; the trailing 1 selects the data cache), the intrinsic
+      declared `nocallback nofree nosync nounwind willreturn
+      memory(argmem: readwrite, inaccessiblemem: readwrite)` with a
+      `nocapture readonly` (22: `readonly captures(none)`) pointer and
+      three `immarg` operands (WP-610,
+      `builtin_prefetch.cpp`); `__builtin_ia32_pause()` is `call void
+      @llvm.x86.sse2.pause()`, declared `nounwind`
+      (`target.x86/ia32-pause-ir{,-19}.cpp`).
       `__builtin_elementwise_add_sat` / `_sub_sat` are `llvm.sadd.sat` /
       `uadd.sat` / `ssub.sat` / `usub.sat` by element signedness (a
       `bool` operand as unsigned), folded at 22 when the Oven folds them

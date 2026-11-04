@@ -840,6 +840,36 @@ impl Cg<'_> {
             // clang `EmitTrapCall`: no `unreachable` follows. The
             // `__builtin_verbose_trap` category and message only reach the
             // debug info (WP-282).
+            // WP-610: clang `BI__builtin_prefetch`: `llvm.prefetch(addr,
+            // rw, locality, 1)`, `rw` 0 and `locality` 3 by default, the
+            // trailing 1 the data cache. Sema checked both are constants.
+            id::PREFETCH => {
+                let addr = self.emit_scalar(a0)?;
+                let mut ops = vec![addr];
+                for (i, dflt) in [(1, 0), (2, 3)] {
+                    let v = match arg(i) {
+                        Some(x) => match self.fold_int(x) {
+                            Some(c) => V::C(self.m.const_int(LTy::I32, c)),
+                            None => {
+                                let v = self.emit_scalar(x)?;
+                                self.int_cast(v, LTy::I32, true)
+                            }
+                        },
+                        None => V::C(self.m.const_int(LTy::I32, dflt)),
+                    };
+                    ops.push(v);
+                }
+                ops.push(V::C(self.m.const_int(LTy::I32, 1)));
+                let f = kiln_llvm::intrinsics::prefetch(&mut self.m);
+                self.intrinsic_call(f, ops);
+                return Ok(BuiltinCall::Emitted(None));
+            }
+            // clang `EmitX86BuiltinExpr`: `llvm.x86.sse2.pause()` (WP-610).
+            id::IA32_PAUSE => {
+                let f = kiln_llvm::intrinsics::x86_sse2_pause(&mut self.m);
+                self.intrinsic_call(f, vec![]);
+                return Ok(BuiltinCall::Emitted(None));
+            }
             // clang `BI__builtin_debugtrap`: `llvm.debugtrap()`.
             id::DEBUGTRAP => {
                 let f = kiln_llvm::intrinsics::debugtrap(&mut self.m);

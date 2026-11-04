@@ -4775,6 +4775,12 @@ impl Sema<'_, '_> {
         {
             return self.recover_err(&kids, loc);
         }
+        if named.and_then(|d| self.ast.decls.builtin_id(d))
+            == Some(kiln_ast::decl::builtin::PREFETCH)
+            && !self.check_prefetch(callee, &conv_args, rparen)
+        {
+            return self.recover_err(&kids, loc);
+        }
         if let Some(d) = named {
             // A function invalid for an invalid parameter: its arguments
             // were checked, the call itself is erroneous and undiagnosed

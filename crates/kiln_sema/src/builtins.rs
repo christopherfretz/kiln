@@ -526,8 +526,7 @@ impl Sema<'_, '_> {
     /// then `NoThrowAttr`, `ConstAttr` / `PureAttr`).
     pub(crate) fn lazily_create_builtin(&mut self, name: Symbol, loc: Loc) -> Option<DeclId> {
         let id = builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat)?;
-        // The NEON builtins are `AArch64` target builtins (WP-558).
-        if builtin::neon::is_neon(id) && self.abi.triple.arch != kiln_abi::target::Arch::AArch64 {
+        if !self.target_has_builtin(id) {
             return None;
         }
         let info = *builtin::info(id)?;
@@ -1122,6 +1121,47 @@ impl Sema<'_, '_> {
                 };
                 let d = self.diag(DiagId::sema_frame_address, at).arg(name);
                 self.emit(d);
+            }
+        }
+        true
+    }
+
+    /// WP-610: `__builtin_prefetch(addr [, rw [, locality]])` (clang
+    /// `Sema::BuiltinPrefetch`, after the arguments are converted): at most
+    /// three arguments (`too many arguments to function call, expected at
+    /// most 3, have N` at the `)`), then `rw` and `locality` integer
+    /// constant expressions in [0, 1] and [0, 3] (clang
+    /// `BuiltinConstantArgRange`: `argument to '__builtin_prefetch' must
+    /// be a constant integer` / `argument value V is outside the valid
+    /// range [0, M]` at the call's start). Value-dependent arguments wait
+    /// for instantiation.
+    pub(crate) fn check_prefetch(&mut self, callee: ExprId, args: &[ExprId], rparen: Loc) -> bool {
+        if args.len() > 3 {
+            let d =
+                self.diag(DiagId::sema_call_too_many_args_at_most, rparen).arg(3).arg(args.len());
+            self.emit(d);
+            return false;
+        }
+        let at = self.begin_loc(callee);
+        for (i, &a) in args.iter().enumerate().skip(1) {
+            if self.expr_is_value_dependent(a) {
+                continue;
+            }
+            let max: i128 = if i == 1 { 1 } else { 3 };
+            let Some(v) = self.fold_int(a) else {
+                let d =
+                    self.diag(DiagId::sema_constant_integer_arg_type, at).arg("__builtin_prefetch");
+                self.emit(d);
+                return false;
+            };
+            if !(0..=max).contains(&v) {
+                let d = self
+                    .diag(DiagId::sema_argument_invalid_range, at)
+                    .arg(v.to_string())
+                    .arg("0".to_string())
+                    .arg(max.to_string());
+                self.emit(d);
+                return false;
             }
         }
         true
@@ -1995,11 +2035,20 @@ impl Sema<'_, '_> {
     /// function (clang's `LookupBuiltin`): the parser then treats a call of
     /// it in a template as naming a function, not as an ADL-only name.
     pub fn is_builtin_name(&self, name: Symbol) -> bool {
-        builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat).is_some_and(|id| {
-            builtin::info(id).is_some()
-                && (!builtin::neon::is_neon(id)
-                    || self.abi.triple.arch == kiln_abi::target::Arch::AArch64)
-        })
+        builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat)
+            .is_some_and(|id| builtin::info(id).is_some() && self.target_has_builtin(id))
+    }
+
+    /// Whether the target declares builtin `id`: the NEON builtins are
+    /// `AArch64` target builtins (WP-558), `__builtin_ia32_pause` an
+    /// x86-64 one (WP-610); every other builtin is target-independent.
+    fn target_has_builtin(&self, id: u32) -> bool {
+        use kiln_abi::target::Arch;
+        let arch = self.abi.triple.arch;
+        if builtin::neon::is_neon(id) {
+            return arch == Arch::AArch64;
+        }
+        id != builtin::IA32_PAUSE || arch == Arch::X86_64
     }
 
     /// The builtin function `callee` (through parentheses) names, if it

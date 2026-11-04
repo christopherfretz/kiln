@@ -4711,6 +4711,19 @@ pub mod builtin {
     /// `std::is_string_literal`, [meta.string.literal]): whether `p`
     /// points into a string literal object. Consteval.
     pub const IS_STRING_LITERAL: u32 = 2151;
+    // ---- WP-610.
+    /// `void __builtin_prefetch(const void *addr, ...)` (clang 19
+    /// `Builtins.td` `Prefetch`, signature `vvC*.`, `NoThrow, Const`): the
+    /// optional `rw` and `locality` are integer constants in [0, 1] and
+    /// [0, 3] (clang `Sema::BuiltinPrefetch`).
+    pub const PREFETCH: u32 = 976;
+    /// `void __builtin_ia32_pause()` (clang `BuiltinsX86.def`, `"v"`,
+    /// `"n"`): an x86-64 target builtin (declared only for that target;
+    /// libstdc++'s `<bits/atomic_wait.h>` spin loop calls it), lowered to
+    /// `llvm.x86.sse2.pause`. A kiln-private id like the NEON rows' (clang
+    /// numbers target builtins after its own table: 1644 at 19, 2231 at
+    /// 22).
+    pub const IA32_PAUSE: u32 = 2152;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
@@ -4742,6 +4755,9 @@ pub mod builtin {
         row(KILN_PLAINLY_CONSTANT_EVALUATED, "__kiln_plainly_constant_evaluated", "b", N),
         // WP-484.
         row(IS_STRING_LITERAL, "__builtin_is_string_literal", "b.", N | T | I),
+        // WP-610.
+        row(PREFETCH, "__builtin_prefetch", "vvC*.", N | C),
+        row(IA32_PAUSE, "__builtin_ia32_pause", "v", N),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19
