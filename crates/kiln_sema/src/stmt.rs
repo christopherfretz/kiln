@@ -1478,11 +1478,11 @@ impl Sema<'_, '_> {
         }
         let local = match dn.kind() {
             DeclKind::ParmVar => true,
+            // A block-scope `thread_local` has thread storage duration
+            // ([basic.stc.thread]): not implicitly movable.
             DeclKind::Var => {
-                self.ast.decls.var(d).is_some_and(|v| {
-                    v.spec.storage() == kiln_ast::decl::VarStorage::None
-                        || v.spec.storage() == kiln_ast::decl::VarStorage::Register
-                }) && dn.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
+                self.has_automatic_storage(d)
+                    && dn.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
             }
             _ => false,
         };
