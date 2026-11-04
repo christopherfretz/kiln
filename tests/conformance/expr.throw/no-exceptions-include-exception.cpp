@@ -11,4 +11,4 @@
 #include <string>
 
 std::string s = "x";
-std::unique_ptr<int> p;
+int *p = new (std::nothrow) int(1);
