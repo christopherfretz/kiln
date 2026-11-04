@@ -648,8 +648,10 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-625 | codegen: __builtin_constant_p on a non-constant at -O0 emits 0 instead of llvm.is.constant so LLVM cannot fold it later | WP-610 | open |
 | WP-626 | sema: an explicit instantiation error is not diagnosed when an earlier error already exists in the TU | WP-610 | open |
 | WP-627 | diagnostics: source ranges (not only a caret) for every diagnostic, kiln-wide; needed for clang-style fix-it and tooling output | WP-610 | open |
-| WP-628 | codegen: NEON vld1/vst1 (and lane/dup) load-store builtin lowering in neon.rs; simdjson/eigen/abseil_hash TUs stop at the first unsupported __builtin_neon_* at -O2; plus the arithmetic builtins those TUs reach (the rest stays WP-586) | — | in progress |
-| WP-632 | codegen: a reference cast (static_cast/C-style) whose operand is a reference-returning call, passed to a by-value scalar parameter, drops the lvalue-to-rvalue load (IrError TypeMismatch "expected double, found ptr"); blocks the eigen corpus slug (print_matrix) | — | in progress |
-| WP-629 | sema: a defaulted template parameter after a parameter pack is absorbed into the pack on an unqualified member-template call inside a class template (libdart make_object()) | — | in progress |
+| WP-628 | codegen: NEON vld1/vst1 (and lane/dup) load-store builtin lowering in neon.rs; simdjson/eigen/abseil_hash TUs stop at the first unsupported __builtin_neon_* at -O2; plus the arithmetic builtins those TUs reach (the rest stays WP-586) | — | done (#279) |
+| WP-632 | codegen: a reference cast (static_cast/C-style) whose operand is a reference-returning call, passed to a by-value scalar parameter, drops the lvalue-to-rvalue load (IrError TypeMismatch "expected double, found ptr"); blocks the eigen corpus slug (print_matrix) | — | done (#278) |
+| WP-629 | sema: a defaulted template parameter after a parameter pack is absorbed into the pack on an unqualified member-template call inside a class template (libdart make_object()) | — | done (#277) |
+| WP-630 | sema: implicit-this member-template call inside a never-instantiated class template is resolved at definition time (odd-count enable_if mk(1) rejected; clang waits for instantiation); requirement wording prints evaluated 1UL instead of sizeof...(Args); qualified H::mk() loses its qualifier on re-naming (templ/subst/exprs.rs:1496/1630) | WP-629 | deferred |
+| WP-631 | sema: statement expression with a class lvalue result is not supported (gnu.rs:81) — blocks arm_neon.h vld1q_u8_x2 / vld2–vld4 / vst2–vst4 macros; afterwards codegen needs ld1xN/ldN entries in neon.rs | WP-628 | deferred |
 WP-511
 WP-512
