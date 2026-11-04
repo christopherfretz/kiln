@@ -8180,8 +8180,9 @@ impl Sema<'_, '_> {
         };
         let c = self.act_on_constant_full_expr(c);
         let cloc = self.begin_loc(cond);
-        // [dcl.pre]/11 (P2741): a message that is not a string literal is
-        // checked now, evaluated only if the assertion fails.
+        // [dcl.pre]/11-12 (P2741): a message that is not a string literal
+        // is type-checked now (`size()`, `data()`), and is an unevaluated
+        // operand unless the assertion fails: only then is it evaluated.
         let parts = msg.and_then(|m| self.static_assert_message_parts(m));
         // [dcl.pre]/10: a value-dependent condition waits for instantiation,
         // and so does any condition in a template definition (P2593R1,
@@ -8391,9 +8392,11 @@ impl Sema<'_, '_> {
     }
 
     /// clang's check of the message of a `static_assert` that holds
-    /// (`-Winvalid-static-assert-message`, an error by default): the
-    /// message is still evaluated. [dcl.pre]/12 makes it an unevaluated
-    /// operand, so the check is skipped when the warning is disabled.
+    /// (`-Winvalid-static-assert-message`). [dcl.pre]/12 (P2741R3) makes
+    /// that message an unevaluated operand, so kiln evaluates it only when
+    /// the warning is enabled: it is off by default (clang 19 and 22 make
+    /// it an error by default and reject a valid program; spec/sema.md
+    /// §4.6, WP-570).
     fn check_static_assert_message(&mut self, m: ExprId, size: ExprId, data: ExprId, loc: Loc) {
         let at = self.begin_loc(m);
         if !self.diags.is_enabled_at(DiagId::sema_static_assert_message_not_constant, at) {
