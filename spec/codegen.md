@@ -1365,6 +1365,10 @@ The normative description is spec/driver.md "Code generation". In short:
   packed otherwise; the named type only when layout-identical. A class
   that is not POD for layout (packed IR type with tail padding) is
   therefore a literal `{ i32, i8 }`, as clang.
+- **Record types** are `kiln_abi::IrTypes` lowerings (spec/abi.md §8.6),
+  so a pointer field is `ptr` and no member is ever `i0`, even for a
+  record nested in a member class declared before its definition
+  (WP-582, spec/landed/codegen/WP-582.md).
 - Sema gaps (kiln_sema) that keep `run` tests and corpus cases simple:
   casts to reference types (`static_cast<int&&>`), binding
   `const T(&)[N]` to a `T[N]` argument, copy-initializing a class object
