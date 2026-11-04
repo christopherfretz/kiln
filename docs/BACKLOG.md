@@ -594,5 +594,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-571 | type_of/has-type for annotation reflections: type_of(a) for any annotation (class-type constexpr variable, prvalue, literal; on members/functions/vars/classes) fails with has-no-type; must be type_of(constant_of(a)) per P3394 (GCC 16.1 agrees); blocks the reference workload annotation scanner (synth_skip corpus runs) | WP-550 | open |
 | WP-572 | explicit specialization of a static data member without initializer is a declaration ([temp.expl.spec]/14) but kiln emits a strong definition; libstdc++ __timepunct_cache<char>::_S_timezones becomes multiply defined when linking two TUs that include <locale> (pugixml corpus run) | WP-550 | open |
 | WP-573 | annotations_of / annotations_of_with_type on a namespace-alias reflection fail as unsuitable; GCC 16.1 accepts and yields an empty range (a namespace alias has its own, always empty, annotations); the reference workload scans every members_of entry of a namespace with annotations_of_with_type, so a namespace alias member aborts the bind (spdlog corpus run) | WP-550 | open |
+| WP-581 | codegen -O2: "reference to an unemitted local variable" for by-ref capture inside visit lambda (tomlplusplus table.inl:309) | corpus | open |
 WP-511
 WP-512
