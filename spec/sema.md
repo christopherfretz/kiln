@@ -6630,6 +6630,28 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
       evaluates it once.
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
+  - In a templated entity (WP-613), a declaration's braced initializer
+    is analyzed at definition and initialized again at each
+    instantiation from the list as written, never from its semantic
+    form: `Substituter::init_list` drops the trailing fillers the
+    definition's check appended for omitted members
+    (`ImplicitValueInitExpr`, `CXXDefaultInitExpr`), so the omitted
+    members are initialized anew ([dcl.init.aggr]/5). Fed back as a
+    written clause, the `ImplicitValueInitExpr` of an omitted array
+    member (`S addr{};` with `char path[108]`) would start brace elision
+    and initialize `path[0]` from an expression of type `char[108]`.
+    A written `{}` is an `InitListExpr`, never a filler, and a filler
+    before a written clause only follows a designator, whose list is
+    rebuilt from its written form (spec/sema-templates.md, "Braced
+    lists"). An element without a location of its own that fails to
+    initialize is diagnosed at its list's `{` (`init_element_at`).
+    Tests: `dcl.init.aggr/array-member-filler-in-template{,-cxx17,-cxx20}.cpp`,
+    `dcl.init.aggr/array-element-from-array.cpp`.
+  - Deviation shared with clang 19 and 22: a parenthesized aggregate
+    initialization (P0960) in a template that omits an array member
+    (`S a(1);`) is rejected at instantiation ("array initializer must
+    be an initializer list or string literal", with no location); GCC
+    16.1 accepts it.
 - **References** (`reference_list_init`, [dcl.init.list]/3.10): when
   the single element is not reference-related, a temporary of the
   referenced type is list-initialized with the reference's own kind
