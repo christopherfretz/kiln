@@ -80,9 +80,12 @@ impl Sema<'_, '_> {
             },
             Reflectee::FnParam(f, i) => Source::Param(f, i),
             Reflectee::Namespace(d) => Source::Entity(d),
-            // A base-specifier's annotations are not recorded yet
+            // A namespace alias has its own annotations, and a
+            // namespace-alias-definition admits none: always empty, never
+            // the aliased namespace's (GCC 16.1 agrees; WP-573). A
+            // base-specifier's annotations are not recorded yet
             // (spec/annotations.md §9 item 1).
-            Reflectee::BaseSpec(..) => Source::None,
+            Reflectee::NamespaceAlias(_) | Reflectee::BaseSpec(..) => Source::None,
             Reflectee::Type(t) => match self.ast.types.view(t.ty()) {
                 // An alias has its own annotations.
                 TypeView::Typedef { decl, .. } => Source::Entity(decl),

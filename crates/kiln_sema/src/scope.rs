@@ -6,7 +6,7 @@
 //! `DeclsInScope` plus `IdResolver` collapsed into one vector.
 
 use kiln_ast::DeclId;
-use kiln_ast::names::OverloadedOperator;
+use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_source::symbol::Symbol;
 
 use crate::class::NrvoState;
@@ -60,6 +60,13 @@ pub struct Scope {
     /// A);` in a function body), in declaration order: found only by a
     /// local class's friend redeclaration ([class.friend]/11).
     pub local_ops: Vec<(OverloadedOperator, DeclId)>,
+    /// The `UsingShadow`s that block-scope using-declarators naming an
+    /// operator function or a literal operator (`using N::operator+;`,
+    /// `using udl::operator""_t;`, [namespace.udecl]/1) introduce, in
+    /// declaration order: found by unqualified lookup of that name from
+    /// the point of declaration to the end of the block
+    /// ([basic.lookup.unqual]/4, [over.match.oper]/3.2, [lex.ext]/5).
+    pub local_names: Vec<(DeclName, DeclId)>,
     /// Namespaces nominated by `using namespace` in this scope.
     pub using_dirs: Vec<DeclId>,
     /// The NRVO candidate of this scope (spec/sema-class.md §5.5).
@@ -101,6 +108,7 @@ impl Scope {
             entity,
             locals: Vec::new(),
             local_ops: Vec::new(),
+            local_names: Vec::new(),
             using_dirs: Vec::new(),
             nrvo: NrvoState::default(),
             try_barrier: false,
