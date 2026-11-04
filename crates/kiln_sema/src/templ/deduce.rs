@@ -642,6 +642,12 @@ impl Sema<'_, '_> {
 
     /// The non-type template parameter expression `e` names (through
     /// implicit conversions and parentheses).
+    /// Whether `e` names a non-type template parameter of `depth` as a
+    /// bare (possibly converted) reference: a deduced context.
+    pub(crate) fn nttp_of_expr_at(&self, e: Option<ExprId>, depth: u16) -> bool {
+        e.and_then(|e| self.nttp_of_expr(e)).is_some_and(|r| r.depth == depth)
+    }
+
     fn nttp_of_expr(&self, mut e: ExprId) -> Option<ParmRef> {
         let ex = &self.ast.exprs;
         loop {

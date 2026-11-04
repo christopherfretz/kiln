@@ -1017,6 +1017,15 @@ impl Sema<'_, '_> {
             Some(ArgView::Type(q)) => {
                 self.has_deducible_params(q, d, true) || self.has_deducible_pack_expansion(q, d)
             }
+            // [temp.deduct.type]/5.3: a non-type pattern deduces only as
+            // a bare parameter of the deduced depth (`N...`); any other
+            // expression (`conv<Args>()...`, `sizeof(Args)...`) is a
+            // non-deduced context.
+            Some(ArgView::Expr { expr, .. }) => self.nttp_of_expr_at(Some(expr), d.depth),
+            Some(ArgView::Profile(pr)) => {
+                let e = self.ast.types.profile_expr(pr);
+                self.nttp_of_expr_at(e, d.depth)
+            }
             Some(_) => true,
             None => matches!(a.view(), ArgView::Type(q) if self.has_deducible_pack_expansion(q, d)),
         })
