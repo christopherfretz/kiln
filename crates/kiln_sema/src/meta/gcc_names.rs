@@ -89,11 +89,11 @@ impl Sema<'_, '_> {
     /// `%T` of `t` (gcc/cp/error.cc `type_to_string`): the type, then
     /// ` {aka T'}` with its typedefs stripped when that reads differently.
     pub(crate) fn gcc_type_string(&self, t: QualType) -> String {
-        let mut p = Pp { sema: self, out: String::new(), pad: false, scope: None, parms: Vec::new() };
+        let mut p = Pp::new(self);
         p.dump_type(t, TEMPLATE_HEADER);
         let canon = self.ast.types.canonical(t);
         if canon != t && !self.ast.types.is_dependent(t) {
-            let mut aka = Pp { sema: self, out: String::new(), pad: false, scope: None, parms: Vec::new() };
+            let mut aka = Pp::new(self);
             aka.dump_type(canon, TEMPLATE_HEADER);
             if aka.out != p.out {
                 p.out.push_str(" {aka ");
@@ -119,13 +119,18 @@ impl Sema<'_, '_> {
         if k.is_function() {
             flags |= DECL_SPECIFIERS | RETURN_TYPE;
         }
-        let mut p = Pp { sema: self, out: String::new(), pad: false, scope: None, parms: Vec::new() };
+        let mut p = Pp::new(self);
         p.dump_decl(d, flags);
         p.out
     }
 }
 
 impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
+    /// An empty printer over `sema`.
+    fn new(sema: &'s Sema<'a, 'b>) -> Self {
+        Pp { sema, out: String::new(), pad: false, scope: None, parms: Vec::new() }
+    }
+
     /// The AST, borrowed for `'s` rather than through `self`.
     fn ast(&self) -> &'s kiln_ast::Ast {
         &self.sema.ast
@@ -349,7 +354,9 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 self.out.push_str(&width.to_string());
                 self.punct(")");
             }
-            TypeView::Record(d) | TypeView::Enum(d) => self.dump_aggr_type(d, t.quals_bits(), flags),
+            TypeView::Record(d) | TypeView::Enum(d) => {
+                self.dump_aggr_type(d, t.quals_bits(), flags);
+            }
             TypeView::Complex(e) => {
                 self.cv(t.quals_bits());
                 self.ws("__complex__");
@@ -403,7 +410,10 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
         match shape {
             Shape::Pointer(sub) | Shape::LRef(sub) | Shape::RRef(sub) => {
                 self.dump_type_prefix(sub, flags);
-                if matches!(self.shape(sub).0, Shape::Array(..) | Shape::DepArray(..) | Shape::Function(_)) {
+                if matches!(
+                    self.shape(sub).0,
+                    Shape::Array(..) | Shape::DepArray(..) | Shape::Function(_)
+                ) {
                     self.whitespace();
                     self.punct("(");
                 }
@@ -460,7 +470,10 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
     fn dump_type_suffix(&mut self, t: QualType, flags: u32) {
         match self.shape(t).0 {
             Shape::Pointer(sub) | Shape::LRef(sub) | Shape::RRef(sub) => {
-                if matches!(self.shape(sub).0, Shape::Array(..) | Shape::DepArray(..) | Shape::Function(_)) {
+                if matches!(
+                    self.shape(sub).0,
+                    Shape::Array(..) | Shape::DepArray(..) | Shape::Function(_)
+                ) {
                     self.punct(")");
                 }
                 let f = if matches!(self.shape(t).0, Shape::Pointer(_)) {
