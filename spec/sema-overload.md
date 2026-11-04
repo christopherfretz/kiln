@@ -826,7 +826,12 @@ instantiated on first use, `instantiate_default_arg(fn, param: u16) ->
 Option<ExprId>`, cached in the specialization's `ParamData`; errors note
 "in instantiation of default function argument expression for 'f<int>'
 required here". Virtual calls use the static type's (selected decl's)
-defaults.
+defaults. A static member function named by a class member access
+(`o.f()`, `p->f()`, `this->f()`, also when found at instantiation through
+a dependent base) is a named callee exactly as `f()`/`S::f()` is: its
+omitted trailing parameters take their (lazily instantiated) defaults,
+and the format-attribute and immediate-invocation checks apply
+(`act_on_call`'s `named` callee; WP-555).
 
 ## 8. Resulting AST (dump goldens must match clang)
 | resolved call | shape |
