@@ -153,8 +153,10 @@ fn env_kind(name: &str) -> Option<EnvKind> {
 /// options and [`ClangCompat`] level (`ClangCompat::default()`, clang 22,
 /// unless [`ClangFeatures::with_compat`] says otherwise).
 ///
-/// `-march`/`-mcpu`/`-m<feature>` are not modeled: `__has_builtin` answers
-/// for target builtins are those of the triple's default CPU.
+/// `-march`/`-mcpu`/`-m<feature>` are not modeled by the tables:
+/// `__has_builtin` answers for target builtins are those of the triple's
+/// default CPU, except for the builtins of a [`TargetBuiltins`] hook
+/// ([`ClangFeatures::with_target_builtins`]).
 #[derive(Clone, Debug)]
 pub struct ClangFeatures {
     triple: Triple,
@@ -164,6 +166,35 @@ pub struct ClangFeatures {
     flags: Vec<FeatureFlag>,
     /// Whose answers.
     compat: ClangCompat,
+    /// Feature-gated target builtins answered from the enabled features.
+    target_builtins: Option<TargetBuiltins>,
+}
+
+/// Target builtins whose `__has_builtin` answer depends on the enabled
+/// target features (clang `Builtin::Context::isBuiltinSupported` /
+/// `evaluateRequiredTargetFeatures`; WP-558's NEON builtins): names
+/// starting with `prefix` that `required` knows answer 1 exactly when
+/// their required features hold.
+#[derive(Clone, Debug)]
+pub struct TargetBuiltins {
+    /// The name prefix the hook covers (`__builtin_neon_`).
+    pub prefix: &'static str,
+    /// The required-features string of a builtin (`bf16,neon`: `,` is
+    /// all of, `|` any of), `None` if there is no such builtin.
+    pub required: fn(&str) -> Option<&'static str>,
+    /// The enabled target features, sorted.
+    pub enabled: Vec<String>,
+}
+
+impl TargetBuiltins {
+    fn answer(&self, name: &str) -> Option<u32> {
+        if !name.starts_with(self.prefix) {
+            return None;
+        }
+        let req = (self.required)(name)?;
+        let on = |f: &str| self.enabled.binary_search_by(|e| e.as_str().cmp(f)).is_ok();
+        Some(u32::from(req.split(',').all(|all| all.split('|').any(|f| on(f.trim())))))
+    }
 }
 
 impl ClangFeatures {
@@ -179,7 +210,21 @@ impl ClangFeatures {
             flags.iter().copied().filter(|f| f.supported() & bit != 0).collect();
         flags.sort_unstable();
         flags.dedup();
-        Some(ClangFeatures { triple, bit, flags, compat: ClangCompat::default() })
+        Some(ClangFeatures {
+            triple,
+            bit,
+            flags,
+            compat: ClangCompat::default(),
+            target_builtins: None,
+        })
+    }
+
+    /// These answers with the feature-gated target builtins of `t`.
+    #[must_use]
+    pub fn with_target_builtins(mut self, mut t: TargetBuiltins) -> ClangFeatures {
+        t.enabled.sort_unstable();
+        self.target_builtins = Some(t);
+        self
     }
 
     /// These answers at compatibility level `compat`.
@@ -318,6 +363,9 @@ impl FeatureQueries for ClangFeatures {
     }
 
     fn has_builtin(&self, name: &str) -> u32 {
+        if let Some(v) = self.target_builtins.as_ref().and_then(|t| t.answer(name)) {
+            return v;
+        }
         self.lookup(Kind::Builtin, table::BUILTIN, name)
     }
 

@@ -27,6 +27,7 @@ pub mod lookup;
 pub mod mem;
 pub mod modules;
 pub mod names;
+mod neon_builtins;
 pub mod redecl;
 pub mod reflect;
 pub mod slot;
