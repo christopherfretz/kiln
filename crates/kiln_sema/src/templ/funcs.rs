@@ -1385,17 +1385,7 @@ impl Sema<'_, '_> {
         let loc = self.ast.exprs.get(x).loc();
         // `p->f<T>` through `operator->` ([over.ref]/1): the chain is
         // formed again from the class object at instantiation.
-        let mut base = m.base;
-        while m.arrow
-            && self.ast.exprs.get(base).kind() == kiln_ast::expr::ExprKind::CXXOperatorCallExpr
-            && self.ast.exprs.operator_call_op(base) == kiln_ast::names::OverloadedOperator::Arrow
-        {
-            let l = self.ast.exprs.call_args(base);
-            match self.ast.lists.iter::<ExprId>(l).next() {
-                Some(o) => base = o,
-                None => break,
-            }
-        }
+        let base = if m.arrow { self.arrow_chain_object(m.base) } else { m.base };
         self.builder().dependent_member(Some(base), m.arrow, m.name, false, None, Some(targs), loc)
     }
 }

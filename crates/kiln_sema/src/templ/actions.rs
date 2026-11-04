@@ -452,7 +452,15 @@ impl Sema<'_, '_> {
         ty: QualType,
         loc: Loc,
     ) -> Option<DeclId> {
-        if !self.templ.entering_context || self.kind_of(tmpl) != DeclKind::ClassTemplate {
+        if self.kind_of(tmpl) != DeclKind::ClassTemplate {
+            return None;
+        }
+        // Outside a declarator qualifier, only within (or in the declarator
+        // scope of) a class whose injected-class-name names `tmpl`:
+        // `template<class T> void B<1, T>::f(typename B<1, T>::size_type)`
+        // ([temp.dep.type]/1.2).
+        let entering = self.templ.entering_context;
+        if !entering && self.injected_class_for(tmpl).is_none() {
             return None;
         }
         let TypeView::TemplateSpecialization { args, .. } = self.ast.types.view(ty.ty()) else {
@@ -472,7 +480,23 @@ impl Sema<'_, '_> {
         let conv = self.check_template_args(tmpl, &written, &[], loc).ok()?;
         let i = self.ast.templates.find_partial(self.ast.first(tmpl), conv.canonical)?;
         let pat = self.ast.templates.partial(i)?.partial;
+        if !entering && !self.encloses(pat, self.ctx) && !self.in_declarator_scope_of(pat) {
+            return None;
+        }
         Some(self.ast.definition(pat).unwrap_or(pat))
+    }
+
+    /// [`Sema::current_instantiation`], also when `ty` writes a
+    /// non-dependent non-type argument of a partial specialization
+    /// unconverted (`vec<2, T>`, [temp.dep.type]/1.2).
+    pub(crate) fn current_instantiation_at(
+        &mut self,
+        tmpl: DeclId,
+        ty: QualType,
+        loc: Loc,
+    ) -> Option<DeclId> {
+        self.current_instantiation(tmpl, ty)
+            .or_else(|| self.entered_partial_by_converted_args(tmpl, ty, loc))
     }
 
     /// `list` with each non-dependent expression argument given its
