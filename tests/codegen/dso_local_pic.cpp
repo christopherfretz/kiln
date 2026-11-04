@@ -1,6 +1,6 @@
 //@ args: -fPIC
-// dso_local under -fPIC (spec/codegen.md "Symbol visibility", "dso_local";
-// clang shouldAssumeDSOLocal): a shared-library build may have any
+// dso_local under -fPIC (spec/codegen.md "Symbol visibility and
+// `dso_local`"; clang shouldAssumeDSOLocal): a shared-library build may have any
 // default-visibility symbol interposed, so only local-linkage and hidden
 // or protected symbols are dso_local; a default-visibility function's
 // address (g's initializer) is not. The module carries "PIC Level" 2.

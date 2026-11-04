@@ -1,8 +1,9 @@
-// dso_local (spec/codegen.md "Symbol visibility", "dso_local"; clang
-// shouldAssumeDSOLocal): without -fPIC/-fPIE (the oracle's default is
-// static relocation model) every definition and every non-TLS
-// declaration is dso_local, except declarations of thread_local
-// variables; local-linkage symbols are always dso_local.
+//@ args: -fPIC -fno-semantic-interposition
+// -fno-semantic-interposition (spec/codegen.md "Symbol visibility and
+// `dso_local`"; clang shouldAssumeDSOLocal, canBenefitFromLocalAlias):
+// under -fPIC an external definition of a function that is not in a
+// COMDAT may be called through a local alias, so it is dso_local;
+// variables, inline functions and declarations are not.
 extern int ev;
 extern thread_local int etl;
 int gv = 1;

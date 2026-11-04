@@ -1785,13 +1785,48 @@ and returns the scope it names:
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
+- **Visibility attributes** (GNU extension, WP-544; clang
+  `handleVisibilityAttr`, `mergeVisibilityAttr`,
+  `AddPushedVisibilityAttribute`; `visibility.rs`): `visibility(S)` and
+  `type_visibility(S)` in every GNU spelling (`__attribute__`,
+  `[[gnu::]]`, `__visibility__`) are `AttrKind::VISIBILITY` /
+  `TYPE_VISIBILITY` with `a` 0 default, 1 hidden (also `internal`),
+  2 protected. In clang's order: exactly one argument (`'visibility'
+  attribute takes one argument`), a string literal (`expected string
+  literal as argument of 'visibility' attribute`) naming a known
+  visibility (else `'visibility' attribute argument not supported: S`
+  [-Wignored-attributes], dropped); ignored on a typedef (`'visibility'
+  attribute ignored`); `type_visibility` only on a class, enumeration or
+  namespace (`'type_visibility' attribute only applies to types and
+  namespaces`). Two different values on one declaration, or a value that
+  differs from a previous declaration's, are `visibility does not match
+  previous declaration` (with `previous attribute is here`); an
+  attribute first added on a redeclaration after the definition is
+  `attribute declaration must precede definition` [-Wignored-attributes].
+  `#pragma GCC visibility push(V)`/`pop` keeps a stack
+  (`Sema::vis_stack`); an externally visible namespace-scope function or
+  variable, or a class, declared under a push with no attribute on it or
+  a previous declaration gets the pushed visibility as an implicit
+  attribute. A namespace definition with a `visibility` attribute
+  suspends the stack in its body (a marker, pushed before its `{` is
+  consumed and popped before its `}` is, since consuming either lexes a
+  following pragma): a `pop` there is `#pragma visibility pop with no
+  matching #pragma visibility push` with `surrounding namespace with
+  visibility attribute starts here`, and a push still open at its `}` is
+  `#pragma visibility push with no matching #pragma visibility pop` (at
+  the innermost push) with `surrounding namespace with visibility
+  attribute ends here`, and is popped. What the attributes mean is
+  codegen's: spec/codegen.md §8. Tests:
+  `tests/conformance/ext.gnu.visibility/`,
+  `tests/conformance/cpp.pragma/gcc-visibility{,-syntax,-namespace}.cpp`.
 - **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
   `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
   `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in
   `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
   `always_inline` with the GNU flag. Test:
   `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
-  - GNU `visibility` and `section`: `'x' attribute ignored`
+  - GNU `section`: `'section' attribute ignored` (`visibility`: see
+    "Visibility attributes")
   - GNU `format(archetype, F, A)` (WP-186, clang `handleFormatAttr`, in
     its order): exactly three arguments (`'format' attribute requires
     exactly 3 arguments`), the archetype an identifier (`requires

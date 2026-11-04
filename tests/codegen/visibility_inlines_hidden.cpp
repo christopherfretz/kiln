@@ -1,11 +1,11 @@
 //@ args: -fvisibility-inlines-hidden
-// -fvisibility-inlines-hidden (spec/codegen.md "Symbol visibility"; clang
-// useInlineVisibilityHidden): an inline member function definition, and
-// an implicit instantiation of a member function template, is `hidden`
-// unless it carries an explicit visibility attribute. Free inline
-// functions, the static locals of hidden inline functions and their
-// guard variables keep the default visibility, as do explicit
-// instantiation definitions.
+// -fvisibility-inlines-hidden (spec/codegen.md "Symbol visibility and
+// `dso_local`"; clang useInlineVisibilityHidden): the definition of an
+// inline function, member or not, including an implicit instantiation and
+// a constructor, is `hidden` unless it carries an explicit visibility
+// attribute. The static locals of such a function and their guard
+// variables keep the default visibility (clang getLVForLocalDecl), as do
+// out-of-line non-inline members and explicit instantiation definitions.
 struct S {
   int inl() { return 1; }
   int outl();

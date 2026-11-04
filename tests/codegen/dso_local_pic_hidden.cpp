@@ -1,6 +1,6 @@
 //@ args: -fPIC -fvisibility=hidden
 // dso_local under -fPIC -fvisibility=hidden (spec/codegen.md "Symbol
-// visibility", "dso_local"): hidden definitions are dso_local even in a
+// visibility and `dso_local`"): hidden definitions are dso_local even in a
 // shared library; declarations defined elsewhere stay default and so are
 // not.
 extern int ev;

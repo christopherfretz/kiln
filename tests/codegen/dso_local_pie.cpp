@@ -1,6 +1,6 @@
 //@ args: -fPIE
-// dso_local under -fPIE (spec/codegen.md "Symbol visibility", "dso_local";
-// clang shouldAssumeDSOLocal): definitions are dso_local (an executable
+// dso_local under -fPIE, the driver's default on Linux (spec/codegen.md
+// "Symbol visibility and `dso_local`"; clang shouldAssumeDSOLocal): definitions are dso_local (an executable
 // cannot be interposed); declarations of functions are not (they may come
 // from a shared library through the PLT); declarations of non-TLS
 // variables are dso_local only where direct access to external data is
