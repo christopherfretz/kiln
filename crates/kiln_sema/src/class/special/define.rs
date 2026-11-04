@@ -166,6 +166,11 @@ pub(crate) struct CtorCall<'a> {
     /// candidate's sequence was formed so by
     /// [`crate::overload::IcsOptions::DIRECT_COPY_CTOR`]).
     pub direct: bool,
+    /// A converting constructor of a user-defined conversion
+    /// ([over.match.copy], [over.match.ref]): a deprecated one is
+    /// diagnosed at `DiagSites::access`, the variable or argument (clang
+    /// `SK_UserConversion`'s `Kind.getLocation()`).
+    pub udc: bool,
 }
 
 impl<'a> CtorCall<'a> {
@@ -180,6 +185,7 @@ impl<'a> CtorCall<'a> {
             narrowing: false,
             reject_explicit: false,
             direct: false,
+            udc: false,
         }
     }
 }
@@ -1099,6 +1105,11 @@ impl Sema<'_, '_> {
                 if let Some(msg) = msg {
                     self.emit(msg);
                     return None;
+                }
+                // [dcl.attr.deprecated]/4: the selected constructor is
+                // used (an inheriting one is not checked here).
+                if bc.is_none() {
+                    self.warn_deprecated_use(m, if call.udc { sites.access } else { loc });
                 }
                 self.mark_function_referenced(m, loc);
                 let explicit_first = call.direct

@@ -9,10 +9,11 @@
 //! spec/abi.md §"Mangling".
 
 use kiln_ast::Ast;
+use kiln_ast::RawId;
 use kiln_ast::attr::AttrKind;
 use kiln_ast::consts::{ByteImage, ConstValue, Member, PrintEnv, PtrBase, Scalar, Shape};
 use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage};
-use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, QualType, TemplateNameId};
+use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, ExprId, QualType, TemplateNameId};
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
 use kiln_ast::types::{ArgView, BuiltinType, RefQual, TemplateName, TypeView};
 use kiln_source::fx::FxHashMap;
@@ -801,7 +802,7 @@ pub fn asm_label(ast: &Ast, d: DeclId) -> Option<String> {
             let a = ast.redecls_of(f).find_map(|r| {
                 crate::layout::props::attrs(ast, r).find(|a| a.kind == AttrKind::ASM_LABEL)
             })?;
-            <kiln_ast::StringLitId as kiln_ast::RawId>::from_raw(a.a)?
+            <kiln_ast::StringLitId as RawId>::from_raw(a.a)?
         }
         None => return None,
     };
@@ -1313,7 +1314,32 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.fn_depth = (saved.0 + 1, false);
         self.name(d, v);
         self.fn_depth = saved;
+        self.enable_if_conds(d);
         self.bare_function_type(d);
+    }
+
+    /// `Ua9enable_ifI <template-arg>* E`: the conditions of the
+    /// `enable_if` attributes of function `d` in declaration order, each
+    /// mangled as a template argument inside the function's prototype
+    /// scope, so overloads distinguished only by them get distinct names
+    /// (clang `mangleFunctionEncodingBareType`; spec/sema-overload.md
+    /// §4.3). The diagnostic message is not mangled.
+    fn enable_if_conds(&mut self, d: DeclId) {
+        let conds: Vec<ExprId> = crate::layout::props::attrs(self.ast, d)
+            .filter(|a| a.kind == AttrKind::ENABLE_IF)
+            .filter_map(|a| ExprId::from_raw(a.a))
+            .collect();
+        if conds.is_empty() {
+            return;
+        }
+        let saved = self.fn_depth;
+        self.fn_depth = (saved.0 + 1, false);
+        self.out.push_str("Ua9enable_ifI");
+        for c in conds {
+            self.template_arg_expr(Some(c));
+        }
+        self.out.push('E');
+        self.fn_depth = saved;
     }
 
     // ---- implicit ABI tags -----------------------------------------------

@@ -595,6 +595,50 @@ argument — a selected `Ics::Ambiguous` is diagnosed here: "conversion from
 'B' to 'A' is ambiguous" + the tied UDC candidates ("candidate
 constructor", "candidate function").
 
+### 4.3 `enable_if` overloads (clang extension; WP-460, WP-579)
+Clang's `__attribute__((enable_if(cond, "msg")))` (spec/sema.md §4, the
+`enable_if` bullet, owns parsing and viability) makes conditions part of a
+function's identity, so a set may hold overloads that differ only in them
+(abseil's `SpinLock(base_internal::SchedulingMode)` pair):
+- Identity (clang `Sema::IsOverload`): two declarations with the same
+  signature declare one function only when their condition lists are equal
+  in count and order, each pair equivalent by [temp.over.link]/5 profiles
+  (`Sema::same_enable_if`); the messages are ignored. Equal lists keep every
+  existing redeclaration rule: a second definition is "redefinition of
+  'f'", a second declaration of a constructor or member function in its
+  class "constructor cannot be redeclared" / "class member cannot be
+  redeclared". The list is compared on every declaration path:
+  namespace-scope and out-of-line declarations (`NewFn::enable_if`, read by
+  `fn_corresponds` / `pick_prev_function`), member functions in their class,
+  special members (`act_on_special_declarator`,
+  `class/special/declare.rs`), and instantiated members and member
+  templates of a class template, whose conditions are the pattern's
+  (`Sema::inst_enable_if`, set by `Substituter::function_decl` before the
+  instantiated declaration is checked, since its attributes are copied
+  only afterwards).
+- Tiebreak (clang `compareEnableIfAttrs`, `Sema::compare_enable_if`): the
+  last [over.match.best] criterion, after those of §4.1: a candidate with
+  conditions beats one without; between two with conditions, compared in
+  order, the one whose list properly extends the other's equivalent
+  prefix wins; otherwise neither is better, an ambiguity ("call to 'f' is
+  ambiguous" / "call to constructor of 'S' is ambiguous" with both
+  candidates noted).
+- `[[deprecated]]` and the rest of the post-selection checks of §4.2 apply
+  to the selected overload only. A selected deprecated constructor warns at
+  the variable for direct- and list-initialization, at the initializer for
+  copy-initialization from a class prvalue, and at the converted expression
+  for a converting constructor of a user-defined conversion (clang
+  `PerformConstructorInitialization` / `DiagnoseUseOfDecl`;
+  `Sema::warn_deprecated_use` from `use_ctor`, `CtorCall::udc`).
+- Mangling (clang `mangleFunctionEncodingBareType`; `kiln_abi` mangle.rs
+  `enable_if_conds`): `<name> Ua9enable_ifI <template-arg>* E
+  <bare-function-type>`, each condition in declaration order as a template
+  argument expression (a non-primary one in `X…E`) inside the function's
+  prototype scope (a parameter is `fL0p_`, an enumerator its literal
+  `L <enum-type> <value> E`). The message is not mangled. An unsupported
+  condition falls back to `XLi0EE` (spec/abi.md §8.15), so two such
+  overloads in one translation unit can still collide.
+
 ## 5. Rewritten comparison candidates ([over.match.oper]/3.4, P2468)
 
 ### 5.1 Generation (`oper.rs::add_rewritten`)
@@ -947,8 +991,9 @@ from 'int' to 'WI' (aka 'W<int>')`, `'CI *const' (aka 'const int
 
 ### 9.3 Deviations from clang 19 (authoritative)
 1. `-fshow-overloads=best` unsupported (always `all`).
-2. No `enable_if`/`diagnose_if`, CUDA, `target` multiversioning, ObjC, or C
-   `__attribute__((overloadable))`.
+2. No CUDA, `target` multiversioning, ObjC, or C
+   `__attribute__((overloadable))`. (`enable_if` and `diagnose_if` are
+   supported: §4.3, spec/sema.md §4.)
 3. No fix-it hints on candidate notes.
 4. No typo correction of unresolved callees (sema.md).
 

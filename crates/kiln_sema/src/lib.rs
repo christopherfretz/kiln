@@ -878,6 +878,13 @@ pub struct Sema<'a, 'sm> {
     /// The static data member whose out-of-line initializer is being
     /// analysed: its class is the access context ([class.access]/7).
     pub(crate) initializing: Option<DeclId>,
+    /// The `enable_if` conditions of the pattern of the member function
+    /// being instantiated by `Substituter::function_decl`, for the
+    /// redeclaration check of the declaration it makes (whose attributes
+    /// are instantiated after it is declared; clang instantiates them
+    /// before `CheckFunctionDeclaration`). Taken by
+    /// [`Sema::new_fn_enable_if`].
+    pub(crate) inst_enable_if: Option<kiln_ast::ids::ListId>,
     /// Template heads and parse-time template state (WP-069,
     /// spec/sema-templates.md §11.2).
     pub(crate) templ: templ::TemplState,
@@ -1131,6 +1138,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_specs: kiln_source::fx::FxHashMap::default(),
             nsdmi_this: Vec::new(),
             initializing: None,
+            inst_enable_if: None,
             templ: templ::TemplState::default(),
             inst: templ::InstState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
