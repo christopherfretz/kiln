@@ -425,7 +425,7 @@ impl BindClass {
             bound: i % 8 != 7,
             fields,
             accessors: 1 + i % 2,
-            scale: i % 3 == 0,
+            scale: i.is_multiple_of(3),
             virt: i % 4 == 3,
         }
     }
@@ -975,7 +975,7 @@ mod tests {
         assert!(s7.contains(&format!("digest(binding<^^lib::C0008>()) == {h}u")));
         assert!(s7.contains("bound_classes().size() == 8)"));
         assert!(!s7.contains("C0007\")") && s7.contains("struct C0007 {"));
-        assert!(kiln_flags(shape("s1").unwrap()).is_empty());
+        assert_eq!(kiln_flags(shape("s1").unwrap()), Vec::<String>::new());
     }
 
     #[test]
