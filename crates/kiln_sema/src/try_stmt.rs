@@ -162,9 +162,9 @@ impl Sema<'_, '_> {
     /// A try-block ([except.pre], clang `ActOnCXXTryBlock`): `None` (the
     /// statement is dropped) when a catch-all handler is not last.
     pub fn act_on_try(&mut self, loc: Loc, block: StmtId, handlers: &[StmtId]) -> Option<StmtId> {
-        if !self.exceptions {
-            self.error(DiagId::sema_try_disabled, loc);
-        }
+        // A try-block is always rebuilt by the substitution, so a deferred
+        // check needs no record (unlike a shared throw-expression).
+        let _ = self.check_exceptions_enabled(DiagId::sema_try_disabled, loc);
         let mut seen: Vec<(HandlerKey, DeclId)> = Vec::new();
         let mut seen_bases: Vec<(HandlerKey, DeclId)> = Vec::new();
         for (i, &h) in handlers.iter().enumerate() {
