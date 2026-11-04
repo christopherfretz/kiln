@@ -24,7 +24,7 @@ use kiln_source::{Loc, Span};
 use crate::fir::{Op, V};
 use crate::fold::Folds;
 use crate::func::Fx;
-use crate::{CodegenError, CodegenOptions};
+use crate::{CodegenError, CodegenOptions, RelocModel};
 
 /// Result of an emission step.
 pub(crate) type R<T> = Result<T, CodegenError>;
@@ -2568,15 +2568,31 @@ impl<'a> Cg<'a> {
     // ---- module trailer ------------------------------------------------
 
     fn trailer(&mut self) {
+        self.finish_dso_local();
         let fp = self.frame_pointer().module_flag();
+        let direct_access = self.direct_access_external_data();
         let m = &mut self.m;
         // clang 20+ emits no empty `!llvm.linker.options`.
         if self.opts.clang_compat < 22 {
             m.add_named_metadata("llvm.linker.options", &[]);
         }
+        if matches!(self.opts.reloc, RelocModel::Pic(_))
+            && self.opts.semantic_interposition == Some(true)
+        {
+            m.add_module_flag_i32(1, "SemanticInterposition", 1);
+        }
         m.add_module_flag_i32(1, "wchar_size", 4);
-        m.add_module_flag_i32(8, "PIC Level", 2);
-        m.add_module_flag_i32(7, "PIE Level", 2);
+        match self.opts.reloc {
+            RelocModel::Static => {}
+            RelocModel::Pic(l) => m.add_module_flag_i32(8, "PIC Level", i32::from(l)),
+            RelocModel::Pie(l) => {
+                m.add_module_flag_i32(8, "PIC Level", i32::from(l));
+                m.add_module_flag_i32(7, "PIE Level", i32::from(l));
+            }
+        }
+        if direct_access != (self.opts.reloc == RelocModel::Static) {
+            m.add_module_flag_i32(7, "direct-access-external-data", i32::from(direct_access));
+        }
         m.add_module_flag_i32(7, "uwtable", 2);
         if let Some(v) = fp {
             m.add_module_flag_i32(7, "frame-pointer", v);

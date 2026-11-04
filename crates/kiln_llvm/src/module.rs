@@ -718,6 +718,16 @@ impl Module {
         }
     }
 
+    /// The ids of all global variables, in print order.
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.global_order.iter().copied()
+    }
+
+    /// The ids of all aliases, in creation (print) order.
+    pub fn alias_ids(&self) -> impl Iterator<Item = AliasId> + use<> {
+        (0..self.aliases.len() as u32).map(AliasId)
+    }
+
     /// The global variables in print order.
     pub(crate) fn ordered_globals(&self) -> impl Iterator<Item = &GlobalVar> {
         self.global_order.iter().map(|&g| &self.globals[g.index()])

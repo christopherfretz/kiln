@@ -48,12 +48,14 @@ mod tbaa;
 mod tls;
 mod try_catch;
 mod va_arg;
+mod visibility;
 mod vla;
 mod vtable;
 
 use kiln_abi::Target;
 use kiln_ast::Ast;
 use kiln_llvm::Module;
+pub use kiln_llvm::Visibility;
 use kiln_oven::Oven;
 use kiln_source::Loc;
 
@@ -129,6 +131,47 @@ pub struct CodegenOptions {
     /// `-ftrivial-auto-var-init-max-size=`: a variable larger than this
     /// many bytes is not initialized (0: no limit).
     pub auto_var_init_max_size: u64,
+    /// The visibility of a value (function, variable) that names none
+    /// (`-fvisibility=`; clang `LangOptions::ValueVisibilityMode`;
+    /// spec/codegen.md "Symbol visibility").
+    pub visibility: Visibility,
+    /// The visibility of a type's symbols (vtable, VTT, RTTI) that name
+    /// none: [`Self::visibility`], except default under
+    /// `-fvisibility-ms-compat` (clang `TypeVisibilityMode`).
+    pub type_visibility: Visibility,
+    /// `-fvisibility-inlines-hidden`: an inline member function that
+    /// names no visibility is hidden (clang `InlineVisibilityHidden`).
+    pub inlines_hidden: bool,
+    /// The relocation model (`-fpic`/`-fPIC`/`-fpie`/`-fPIE`/`-fno-pic`):
+    /// the `PIC Level`/`PIE Level` module flags and which globals are
+    /// `dso_local` (clang `shouldAssumeDSOLocal`).
+    pub reloc: RelocModel,
+    /// `-fsemantic-interposition` (`Some(true)`), `-fno-semantic-interposition`
+    /// (`Some(false)`: an external default-visibility function definition
+    /// is `dso_local` under `-fpic`) or neither (clang's
+    /// `-fhalf-no-semantic-interposition`); only `-fpic` reads it.
+    pub semantic_interposition: Option<bool>,
+    /// `-f[no-]direct-access-external-data`; `None` is clang's default (on
+    /// only for `-fno-pic`): a non-TLS variable declaration is `dso_local`.
+    pub direct_access_external_data: Option<bool>,
+}
+
+/// The relocation model and its level (clang `-pic-level`, `-pic-is-pie`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelocModel {
+    /// `-fno-pic`: a position-dependent executable.
+    Static,
+    /// `-fpic` (1) / `-fPIC` (2): a shared object.
+    Pic(u8),
+    /// `-fpie` (1) / `-fPIE` (2, the default): a position-independent
+    /// executable.
+    Pie(u8),
+}
+
+impl Default for RelocModel {
+    fn default() -> Self {
+        RelocModel::Pie(2)
+    }
 }
 
 /// clang's `LangOptions::TrivialAutoVarInitKind`.
@@ -278,6 +321,12 @@ impl Default for CodegenOptions {
             omit_leaf_frame_pointer: None,
             auto_var_init: AutoVarInit::Uninitialized,
             auto_var_init_max_size: AUTO_VAR_INIT_MAX_SIZE,
+            visibility: Visibility::Default,
+            type_visibility: Visibility::Default,
+            inlines_hidden: false,
+            reloc: RelocModel::default(),
+            semantic_interposition: None,
+            direct_access_external_data: None,
         }
     }
 }

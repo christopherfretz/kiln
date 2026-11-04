@@ -2,7 +2,7 @@
 //! implements (`spec/driver.md` "Options"). Anything else is an
 //! `unknown argument` error, never silently ignored.
 
-use kiln_codegen::{AutoVarInit, ComplexRange};
+use kiln_codegen::{AutoVarInit, ComplexRange, Visibility};
 use kiln_pp::{ClangCompat, CmdMacro, DirGroup, OptLevel, PicModel};
 use kiln_sema::LaxVectorConversions;
 
@@ -453,6 +453,21 @@ pub struct Args {
     pub auto_var_init: Option<AutoVarInit>,
     /// `-ftrivial-auto-var-init-max-size=` (the last wins).
     pub auto_var_init_max_size: Option<u64>,
+    /// The last of `-fvisibility=` and `-fvisibility-ms-compat` (clang's
+    /// `OPT_fvisibility_EQ`/`OPT_fvisibility_ms_compat` group): the
+    /// default visibility of values (`internal` is hidden); `None` is
+    /// default visibility (spec/codegen.md "Symbol visibility").
+    pub visibility: Option<Visibility>,
+    /// The last of those was `-fvisibility-ms-compat`: values hidden,
+    /// types (vtables, RTTI) default (clang `-ftype-visibility=default`).
+    pub visibility_ms_compat: bool,
+    /// The last of `-f[no-]visibility-inlines-hidden`.
+    pub visibility_inlines_hidden: bool,
+    /// The last of `-f[no-]semantic-interposition` (`None`: neither, clang's
+    /// `-fhalf-no-semantic-interposition` under `-fpic`).
+    pub semantic_interposition: Option<bool>,
+    /// The last of `-f[no-]direct-access-external-data`.
+    pub direct_access_external_data: Option<bool>,
 }
 
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
@@ -550,6 +565,7 @@ impl Args {
                 && !a.complex_flag(arg)
                 && !a.lax_vector_flag(arg)
                 && !a.auto_var_init_flag(arg)
+                && !a.visibility_flag(arg)
                 && !a.predef_flag(arg)
                 && !a.diag_flag(arg)
             {
@@ -777,6 +793,41 @@ impl Args {
             }
         } else {
             return false;
+        }
+        true
+    }
+
+    /// `-fvisibility=default|hidden|protected|internal` (`internal` is
+    /// hidden, as clang's `LangOptions`), `-fvisibility-ms-compat` and
+    /// `-f[no-]visibility-inlines-hidden`, plus the `dso_local` inputs
+    /// `-f[no-]semantic-interposition` and
+    /// `-f[no-]direct-access-external-data`; the last of each group wins;
+    /// an unknown value is clang's "invalid value 'v' in
+    /// '-fvisibility=v'".
+    fn visibility_flag(&mut self, arg: &str) -> bool {
+        match arg {
+            "-fvisibility-inlines-hidden" => self.visibility_inlines_hidden = true,
+            "-fno-visibility-inlines-hidden" => self.visibility_inlines_hidden = false,
+            "-fsemantic-interposition" => self.semantic_interposition = Some(true),
+            "-fno-semantic-interposition" => self.semantic_interposition = Some(false),
+            "-fdirect-access-external-data" => self.direct_access_external_data = Some(true),
+            "-fno-direct-access-external-data" => self.direct_access_external_data = Some(false),
+            "-fvisibility-ms-compat" => {
+                (self.visibility, self.visibility_ms_compat) = (Some(Visibility::Hidden), true);
+            }
+            _ => {
+                let Some(v) = arg.strip_prefix("-fvisibility=") else { return false };
+                let vis = match v {
+                    "default" => Visibility::Default,
+                    "hidden" | "internal" => Visibility::Hidden,
+                    "protected" => Visibility::Protected,
+                    _ => {
+                        self.errors.push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned()));
+                        return true;
+                    }
+                };
+                (self.visibility, self.visibility_ms_compat) = (Some(vis), false);
+            }
         }
         true
     }
@@ -1152,6 +1203,32 @@ mod tests {
         assert_eq!((a.omit_leaf_frame_pointer, a.errors), (Some(true), vec![]));
         let a = parse("-momit-leaf-frame-pointer -mno-omit-leaf-frame-pointer a.cpp");
         assert_eq!(a.omit_leaf_frame_pointer, Some(false));
+    }
+
+    #[test]
+    fn visibility_flags_last_win() {
+        use Visibility::{Default, Hidden, Protected};
+        let v = |s| {
+            let a = parse(s);
+            (a.visibility, a.visibility_ms_compat, a.visibility_inlines_hidden, a.errors)
+        };
+        assert_eq!(v("a.cpp"), (None, false, false, vec![]));
+        assert_eq!(v("-fvisibility=hidden a.cpp"), (Some(Hidden), false, false, vec![]));
+        assert_eq!(v("-fvisibility=hidden -fvisibility=default a.cpp").0, Some(Default));
+        assert_eq!(v("-fvisibility=internal a.cpp").0, Some(Hidden));
+        assert_eq!(v("-fvisibility=protected a.cpp").0, Some(Protected));
+        assert_eq!(v("-fvisibility=default -fvisibility-ms-compat a.cpp").0, Some(Hidden));
+        assert!(v("-fvisibility-ms-compat a.cpp").1);
+        assert!(!v("-fvisibility-ms-compat -fvisibility=hidden a.cpp").1);
+        assert!(v("-fvisibility-inlines-hidden a.cpp").2);
+        assert!(!v("-fvisibility-inlines-hidden -fno-visibility-inlines-hidden a.cpp").2);
+        let e = ArgError::InvalidFlagValue("-fvisibility=bogus".to_owned(), "bogus".to_owned());
+        assert_eq!(v("-fvisibility=bogus a.cpp").3, vec![e]);
+        let si = |s| parse(s).semantic_interposition;
+        assert_eq!(si("a.cpp"), None);
+        assert_eq!(si("-fsemantic-interposition -fno-semantic-interposition a.cpp"), Some(false));
+        let da = |s| parse(s).direct_access_external_data;
+        assert_eq!(da("-fno-direct-access-external-data a.cpp"), Some(false));
     }
 
     #[test]

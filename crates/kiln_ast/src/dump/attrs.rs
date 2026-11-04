@@ -32,6 +32,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::USED => "Used",
         AttrKind::WEAK => "Weak",
         AttrKind::VISIBILITY => "Visibility",
+        AttrKind::TYPE_VISIBILITY => "TypeVisibility",
         AttrKind::SECTION => "Section",
         AttrKind::FORMAT => "Format",
         AttrKind::CONST => "Const",
