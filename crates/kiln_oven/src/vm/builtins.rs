@@ -146,6 +146,27 @@ fn checked(sub: u32, a: u128, b: u128) -> u128 {
     u128::from(!fits)
 }
 
+/// `bi::CARRY` (WP-557): the wrapped `a + b + c` (`a - b - c`) in `w`
+/// bits, or the carry-out (clang `uadd_ov` / `usub_ov` twice, the flags
+/// OR-ed).
+fn carry(sub: u32, a: u128, b: u128, c: u128) -> u128 {
+    let (w, minus) = (sub & 0xFF, sub >> 8 & 1 != 0);
+    let m = mask(w);
+    let (a, b, c) = (a & m, b & m, c & m);
+    // A wrapping step overflows when its result is below (above, for a
+    // subtraction) its first operand.
+    let (r, carry) = if minus {
+        let r1 = a.wrapping_sub(b) & m;
+        let r2 = r1.wrapping_sub(c) & m;
+        (r2, r1 > a || r2 > r1)
+    } else {
+        let r1 = a.wrapping_add(b) & m;
+        let r2 = r1.wrapping_add(c) & m;
+        (r2, r1 < a || r2 < r1)
+    };
+    if sub & bi::CARRY_VALUE != 0 { r } else { u128::from(carry) }
+}
+
 /// `bi::FP_MATH` (WP-365, spec/oven.md "Floating-point math builtins"):
 /// `None` where the operation is not a constant (an IEEE exception other
 /// than inexact, or a signaling NaN operand).
@@ -589,6 +610,7 @@ impl Oven {
                 })
             }
             bi::OVERFLOW => Ok(checked(sub, a, b)),
+            bi::CARRY => Ok(carry(sub, a, b, c)),
             bi::OBJECT_SIZE => self.bi_object_size(sub, a as u64, b, c, t1),
             bi::BIT_CAST => {
                 let (to_mem, read) = (sub == bi::TO_MEM, sub == bi::READ_ONLY);
