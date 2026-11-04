@@ -219,6 +219,7 @@ impl Sema<'_, '_> {
             narrowing: style.is_list(),
             reject_explicit: style == InitStyle::CopyList,
             direct: matches!(style, InitStyle::Direct | InitStyle::DirectList),
+            udc: style == InitStyle::Copy,
             ..CtorCall::new(args)
         };
         let k = if args.is_empty() { SpecialKind::DefaultCtor } else { SpecialKind::CopyCtor };
