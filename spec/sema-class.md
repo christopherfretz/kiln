@@ -55,11 +55,27 @@ Principles:
    `Record` scope, appends the injected-class-name (§2.2), and now also pushes
    a `ClassBuild` (§8.3) with the default access (`private` for `class`, else
    `public`). An implicit instantiation first takes the class-key of the
-   definition it instantiates (`DeclArena::set_instantiated_tag`): a
+   definition it instantiates (`DeclArena::set_definition_tag`): a
    specialization named through `template<class T> class S;` and
    instantiated from `template<class T> struct S {...}` has public members
    and bases (libstdc++ 16 `<format>` `_Scanner`; WP-525,
-   `class.access/class-key-of-template-definition.cpp`).
+   `class.access/class-key-of-template-definition.cpp`). An explicit or
+   partial specialization takes the class-key of its OWN class-head, never
+   the primary template's (the two may differ, [temp.expl.spec],
+   [dcl.type.elab]/3): `template <class L> class T {...}; template <>
+   struct T<double> : T<float> {};` inherits publicly and has public
+   leading members, and `class` over a `struct` primary makes both private
+   ([class.access.base]/2, [class.access]/3). `act_on_explicit_class_spec`
+   and the partial-specialization redeclaration path re-key a
+   specialization not yet defined at each declaring class-head
+   (`take_spec_class_key`), so the defining head's key wins also over a
+   reference made first (`T<int> *p;`) or a declaration with the other key
+   (`template <> class T<int>; template <> struct T<int> {...};`); a
+   union/class mismatch is never re-keyed. A specialization implicitly
+   instantiated from a partial specialization takes that partial
+   specialization's key as above (WP-611,
+   `temp.expl.spec/class-key-of-specialization-{run,errors}.cpp`,
+   `temp.spec.partial.general/class-key-of-partial-specialization-run.cpp`).
    2a. `act_on_class_final(r, loc)` (WP-065) when the class-head has a
    class-virt-specifier `final` ([class.pre]/1): sets
    `DefinitionBits::FINAL` on the `ClassBuild`, merged into the record's
