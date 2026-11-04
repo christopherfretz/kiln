@@ -1687,6 +1687,20 @@ and returns the scope it names:
     note, and the asm statement is dropped. A naked function gets no
     fall-off (-Wreturn-type) or noreturn-returns warning. Test:
     `tests/conformance/dcl.attr/gnu-optnone-minsize-naked.cpp`.
+  - `gnu_inline` (GNU syntax or `gnu::`; **GNU inline functions**,
+    WP-585, clang `handleGNUInlineAttr`; `AttrKind::GNU_INLINE`): on a
+    non-function `'gnu_inline' attribute only applies to functions`
+    [-Wignored-attributes]. On a function whose declaration does not
+    spell `inline` (implicit inline, `constexpr` or in-class, does not
+    count) it is ignored with `'gnu_inline' attribute requires function
+    to be marked 'inline', attribute ignored` [-Wignored-attributes];
+    otherwise it is kept, and without `extern` it also warns
+    `'gnu_inline' attribute without 'extern' in C++ treated as
+    externally available, this changed in Clang 10`
+    [-Wgnu-inline-cpp-without-extern]. The kept attribute makes the
+    definition not externally visible (codegen rule in spec/codegen.md
+    "GNU inline functions"). Test:
+    `tests/conformance/ext.gnu.inline/attribute-diags.cpp`.
   - `may_alias` (GNU syntax or `gnu::`; WP-423, clang `MayAliasAttr`):
     kept on any declaration without a diagnostic (no subject list); with
     arguments `'may_alias' attribute takes no arguments`. A GNU

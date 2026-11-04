@@ -170,6 +170,11 @@ impl AttrKind {
     /// features to the function's own (spec/landed/codegen/WP-558.md "Target
     /// features"); WP-558.
     pub const TARGET: AttrKind = AttrKind(145);
+    /// GNU `gnu_inline` on an `inline` function (clang `GNUInlineAttr`):
+    /// in C++ its definition is not externally visible, so codegen emits
+    /// it `available_externally` or not at all (spec/codegen.md "GNU
+    /// inline functions"); WP-585.
+    pub const GNU_INLINE: AttrKind = AttrKind(146);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

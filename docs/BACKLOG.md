@@ -598,5 +598,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-578 | -MD/-MMD dependency files when compiling (cmake+ninja; blocks every compiled corpus lib; supersedes the -MMD item of WP-569) | corpus | open |
 | WP-579 | overloads distinguished only by __attribute__((enable_if)) rejected as redeclaration (abseil SpinLock) | corpus | open |
 | WP-580 | explicit instantiation of constructor/member function templates by signature; defaulted-NTTP out-of-line ctor (abseil Cord) | corpus | open |
+| WP-585 | runtime: tinyobjloader LoadMtl unknown_parameter map stays empty (std::map<string,string> insert; -O2) | corpus | open |
 WP-511
 WP-512
