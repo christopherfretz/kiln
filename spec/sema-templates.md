@@ -2356,7 +2356,18 @@ recomputed exactly as for non-template code (clang's
 - **Implicit nodes are stripped, then rebuilt by the action.** This
   covers `ImplicitCastExpr`, `MaterializeTemporaryExpr`,
   `CXXBindTemporaryExpr`, `ExprWithCleanups` and the `ConstantExpr`
-  wrappers. `ParenExpr` is kept.
+  wrappers. `ParenExpr` is kept. An implicit `UserDefinedConversion`
+  cast through a conversion function is stripped down to the call's
+  object argument (`Substituter::udc_object`, also in
+  `peel_initializer`; clang `CastExpr::getSubExprAsWritten`), so the
+  enclosing action performs the conversion again from the substituted
+  object. The call itself is never re-looked-up: a conversion function
+  template specialization keeps the pattern's name `operator T` (§10.1),
+  whose `T` is the member template's own parameter, and substituting it
+  with the enclosing instantiation's arguments of the same depth and
+  index named `operator Self` (`no member named 'operator E' in 'acc'`
+  inside `bind<E>`; WP-563, [temp.deduct.conv]/1,
+  tests/conformance/temp.deduct.conv/conversion-template-in-enclosing-template-*.cpp).
 - **Sharing.** A non-dependent subtree is always shared (§3.3; there is
   no switch). The checks clang would redo by rebuilding it are replayed
   from what the definition recorded: designator warnings of a list

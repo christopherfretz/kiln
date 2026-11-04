@@ -1821,11 +1821,25 @@ impl Parser<'_, '_> {
         (keyword, scoped)
     }
 
+    /// The attributes after a class-key or enum-key. After a class-key,
+    /// `_Nullable` (clang nullability on classes) may appear among them
+    /// any number of times (clang `ParseClassSpecifier`); the other
+    /// nullability keywords are not parsed here.
+    fn parse_tag_key_attrs(&mut self, keyword: TagKeyword) -> Vec<AttrId> {
+        let mut attrs = Vec::new();
+        self.parse_attributes(&mut attrs);
+        while keyword != TagKeyword::Enum && self.at_kw(Kw::Nullable) {
+            let loc = self.bump().span.lo;
+            attrs.push(self.s.act_on_class_nullable(loc));
+            self.parse_attributes(&mut attrs);
+        }
+        attrs
+    }
+
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
         let (keyword, scoped) = self.parse_tag_key(ds, k);
-        let mut attrs = Vec::new();
-        self.parse_attributes(&mut attrs);
+        let mut attrs = self.parse_tag_key_attrs(keyword);
         let qual_loc = self.tok().span.lo;
         self.incomplete_standalone_tag_qualifier(ds, keyword, qual_loc);
         let splice_qual = self.at_splice().then_some(qual_loc);
@@ -2770,7 +2784,9 @@ impl Parser<'_, '_> {
     /// declarator may start) begins a parameter-declaration-clause rather
     /// than grouping parentheses (clang's `ParseParenDeclarator`): `)`,
     /// `...)`, a decl-specifier or `[[`. An undeclared name followed by an
-    /// identifier is taken as a misspelled type.
+    /// identifier is taken as a misspelled type. A class template's
+    /// injected-class-name is a type name ([temp.local]/1), so
+    /// `void(CT)` in its class is a function type ([dcl.ambig.res]/3).
     pub(crate) fn is_param_list_start(&self, n: usize) -> bool {
         let t = self.peek(n);
         match t.kind {
@@ -2783,9 +2799,7 @@ impl Parser<'_, '_> {
             TokKind::Punct(Punct::LSquare) => {
                 self.peek(n + 1).kind == TokKind::Punct(Punct::LSquare)
             }
-            TokKind::Punct(Punct::ColonColon) => {
-                matches!(self.scan_name(self.pos() + n), Some((_, NameClass::Type(..), _)))
-            }
+            TokKind::Punct(Punct::ColonColon) => self.names_type_at(self.pos() + n),
             TokKind::Identifier(s) => match self.kw_of(t) {
                 // An explicit object parameter ([dcl.fct]/6) starts with
                 // `this` followed by its decl-specifiers.
@@ -2795,8 +2809,8 @@ impl Parser<'_, '_> {
                         && self.is_param_list_start(n + 1)
                 }
                 Some(k) => is_decl_specifier_kw(k),
+                None if self.names_type_at(self.pos() + n) => true,
                 None => match self.scan_name(self.pos() + n) {
-                    Some((_, NameClass::Type(..), _)) => true,
                     Some((end, NameClass::Undeclared, _)) => {
                         let _ = s;
                         self.ident_of(self.tok_at(end)).is_some()
@@ -2804,6 +2818,22 @@ impl Parser<'_, '_> {
                     _ => false,
                 },
             },
+            _ => false,
+        }
+    }
+
+    /// Does the (possibly qualified) name at token `i` name a type: a
+    /// type name, or a class template's injected-class-name in its own
+    /// scope not followed by `<` ([temp.local]/1; clang annotates both
+    /// as `annot_typename`)?
+    pub(crate) fn names_type_at(&self, i: usize) -> bool {
+        match self.scan_name(i) {
+            Some((_, NameClass::Type(..), _)) => true,
+            Some((end, NameClass::TypeTemplate(d), _)) => {
+                end == i + 1
+                    && Self::punct_of(self.tok_at(end)) != Some(Punct::Less)
+                    && self.s.names_injected_class(d)
+            }
             _ => false,
         }
     }

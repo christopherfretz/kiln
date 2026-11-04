@@ -268,6 +268,15 @@ copy-list-init explicit ctors stay viable and choosing one is "chosen
 constructor is explicit in copy-initialization" + "explicit constructor
 declared here".
 
+A conversion function template is deduced against the target type of
+each conversion ([temp.deduct.conv]) from its own template parameter
+list, also when the conversion is formed again inside an instantiation
+of an enclosing function or class template (or a lambda in one): the
+instantiation strips the definition's implicit conversion call to its
+object and redoes the conversion (spec/sema-templates.md §5.4), so the
+enclosing instantiation's arguments never stand in for the member
+template's (WP-563).
+
 A conversion function (or conversion function template specialization)
 whose trailing requires-clause is not satisfied is not viable
 ([over.match.viable]/3), checked after the object argument as clang's
@@ -826,7 +835,12 @@ instantiated on first use, `instantiate_default_arg(fn, param: u16) ->
 Option<ExprId>`, cached in the specialization's `ParamData`; errors note
 "in instantiation of default function argument expression for 'f<int>'
 required here". Virtual calls use the static type's (selected decl's)
-defaults.
+defaults. A static member function named by a class member access
+(`o.f()`, `p->f()`, `this->f()`, also when found at instantiation through
+a dependent base) is a named callee exactly as `f()`/`S::f()` is: its
+omitted trailing parameters take their (lazily instantiated) defaults,
+and the format-attribute and immediate-invocation checks apply
+(`act_on_call`'s `named` callee; WP-555).
 
 ## 8. Resulting AST (dump goldens must match clang)
 | resolved call | shape |

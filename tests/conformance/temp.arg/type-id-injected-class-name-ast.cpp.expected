@@ -1,0 +1,23 @@
+TranslationUnitDecl
+|-ClassTemplateDecl W
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-CXXRecordDecl struct W definition
+| `-ClassTemplateSpecializationDecl struct W
+|   `-TemplateArgument type 'void (CT<int>)'
+|-ClassTemplateDecl CT
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-CXXRecordDecl struct CT definition
+| | |-TypeAliasDecl A 'W<void (CT<T>)>'
+| | |-TypeAliasDecl B 'void (CT<T>, const CT<T> &)'
+| | |-CXXMethodDecl g 'void (void (*)(CT<T>))'
+| | | `-ParmVarDecl 'void (*)(CT<T>)'
+| | `-TypeAliasDecl P 'void (*)(CT<T>)'
+| `-ClassTemplateSpecializationDecl struct CT definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-TypeAliasDecl A 'W<void (CT<int>)>'
+|   |-TypeAliasDecl B 'void (CT<int>, const CT<int> &)'
+|   |-CXXMethodDecl g 'void (void (*)(CT<int>))'
+|   | `-ParmVarDecl 'void (*)(CT<int>)'
+|   `-TypeAliasDecl P 'void (*)(CT<int>)'
+`-VarDecl c 'CT<int>' callinit
+  `-CXXConstructExpr 'CT<int>' 'void () noexcept'
