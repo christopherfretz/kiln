@@ -7,7 +7,7 @@
 //! `err_attribute_not_type_attr`).
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
-use kiln_ast::decl::{DeclKind, EnumData};
+use kiln_ast::decl::{DeclKind, EnumData, TagKind};
 use kiln_ast::types::{ExcSpec, NoexceptValue, TagKeyword, TypeView};
 use kiln_ast::{AttrId, DeclId, QualType, StmtId};
 use kiln_diag::DiagId;
@@ -60,6 +60,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::MINSIZE => "minsize",
         AttrKind::VISIBILITY => "visibility",
         AttrKind::TYPE_VISIBILITY => "type_visibility",
+        AttrKind::TYPE_NULLABLE => "_Nullable",
         AttrKind::TRIVIAL_ABI => "trivial_abi",
         AttrKind::NAKED => "naked",
         AttrKind::MAY_ALIAS => "may_alias",
@@ -414,6 +415,14 @@ impl Sema<'_, '_> {
             // with a warning).
             AttrKind::TRIVIAL_ABI if !is_record_kind(kind) => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, "trivial_abi", "classes")
+            }
+            // clang `TypeNullable`: `SubjectList<[Struct]>`, a non-union
+            // class.
+            AttrKind::TYPE_NULLABLE
+                if !is_record_kind(kind)
+                    || self.ast.decls.record(d).is_some_and(|r| r.tag == TagKind::Union) =>
+            {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type_error, "_Nullable", "classes")
             }
             AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE if !is_record_kind(kind) => wrong(
                 self,

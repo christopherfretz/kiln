@@ -488,7 +488,8 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// `class-key [attrs] name <` with `name` a class template: a partial
+    /// `class-key [attrs] name <` with `name` a class template (`attrs`
+    /// including `_Nullable`): a partial
     /// specialization ([temp.spec.partial]/1).
     fn at_partial_specialization(&self) -> bool {
         if !matches!(self.kw(), Some(Kw::Class | Kw::Struct | Kw::Union)) {
@@ -496,6 +497,11 @@ impl Parser<'_, '_> {
         }
         let mut i = self.pos() + 1;
         loop {
+            // `class _Nullable X<int>` (clang nullability on classes).
+            if self.kw_of(self.tok_at(i)) == Some(Kw::Nullable) {
+                i += 1;
+                continue;
+            }
             // `[[attr]]`, `alignas(...)` or `__attribute__((...))`: skip to
             // the matching close.
             let (open, close) = if self.tok_at(i).kind == TokKind::Punct(Punct::LSquare) {

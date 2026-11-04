@@ -1826,6 +1826,15 @@ impl Parser<'_, '_> {
         let (keyword, scoped) = self.parse_tag_key(ds, k);
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
+        // clang nullability on classes: `class _Nullable X`, mixed freely
+        // with the attributes after a class-key (clang
+        // `ParseClassSpecifier`); the other nullability keywords are not
+        // parsed here.
+        while keyword != TagKeyword::Enum && self.at_kw(Kw::Nullable) {
+            let loc = self.bump().span.lo;
+            attrs.push(self.s.act_on_class_nullable(loc));
+            self.parse_attributes(&mut attrs);
+        }
         let qual_loc = self.tok().span.lo;
         self.incomplete_standalone_tag_qualifier(ds, keyword, qual_loc);
         let splice_qual = self.at_splice().then_some(qual_loc);
