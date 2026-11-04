@@ -1112,26 +1112,49 @@ impl<'a> Cg<'a> {
     /// Whether variable or function `first` is under an explicit
     /// instantiation declaration (`extern template`), itself or through
     /// its enclosing class specialization ([temp.explicit]/14: no
-    /// definition is provided), and gets no definition here. An inline
-    /// function clang would give `GVA_AvailableExternally` and keep
+    /// definition is provided), or is a GNU inline function
+    /// ([`Self::is_gnu_inline_fn`]), and gets no definition here. An
+    /// inline function clang would give `GVA_AvailableExternally` and keep
     /// (`shouldEmitFunction`) is the exception
     /// ([`Self::is_available_externally_fn`]).
     pub(crate) fn is_explicit_inst_declaration(&self, first: DeclId) -> bool {
-        self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
-            && !self.keeps_available_externally(first)
+        self.defined_elsewhere(first) && !self.keeps_available_externally(first)
     }
 
     /// clang `GVA_AvailableExternally` kept by `shouldEmitFunction`: an
-    /// inline function under an explicit instantiation declaration,
-    /// emitted `available_externally` so the optimizer can inline it
-    /// (spec/codegen.md "Explicit instantiation declarations").
+    /// inline function under an explicit instantiation declaration, or a
+    /// GNU inline function, emitted `available_externally` so the
+    /// optimizer can inline it (spec/codegen.md "Explicit instantiation
+    /// declarations", "GNU inline functions").
     pub(crate) fn is_available_externally_fn(&self, first: DeclId) -> bool {
+        self.defined_elsewhere(first) && self.keeps_available_externally(first)
+    }
+
+    /// clang `GVA_AvailableExternally`: `first` is under an explicit
+    /// instantiation declaration or is a GNU inline function, so the
+    /// program's definition lives in another translation unit.
+    fn defined_elsewhere(&self, first: DeclId) -> bool {
         self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
-            && self.keeps_available_externally(first)
+            || self.is_gnu_inline_fn(first)
+    }
+
+    /// clang `basicGVALinkageForFunction`'s GNU inline rule: in C++ an
+    /// inline function with external linkage that carries `gnu_inline`
+    /// (on any redeclaration; Sema keeps it only on an `inline`-specified
+    /// one) has a definition that is not externally visible
+    /// (`isInlineDefinitionExternallyVisible` is false in C++, with or
+    /// without `extern`): another translation unit, typically the C
+    /// library, provides the symbol (spec/codegen.md "GNU inline
+    /// functions").
+    fn is_gnu_inline_fn(&self, first: DeclId) -> bool {
+        self.ast.decls.function(first).is_some()
+            && self.has_fn_attr(first, kiln_ast::attr::AttrKind::GNU_INLINE)
+            && !self.fn_internal(first)
     }
 
     /// clang `shouldEmitFunction` for a function under an explicit
-    /// instantiation declaration: at -O0 only an inline `always_inline`
+    /// instantiation declaration or a GNU inline function: at -O0 only an
+    /// inline `always_inline`
     /// one (the O0 pipeline's always-inliner inlines and deletes it, so
     /// the program never references its symbol: libstdc++'s
     /// `std::allocator<char>::allocate` is not exported); at -O1 and above

@@ -36,6 +36,7 @@ struct SavedState {
     unevaluated: u32,
     immediate: u32,
     pending_odr: Vec<kiln_ast::ExprId>,
+    potential_caps: Vec<kiln_ast::ExprId>,
     defining: Vec<DeclId>,
     enums: Vec<crate::decl::EnumBuild>,
     braced_args: Vec<(kiln_ast::ExprId, crate::init::InitList)>,
@@ -76,6 +77,7 @@ impl Sema<'_, '_> {
             unevaluated: std::mem::take(&mut self.unevaluated),
             immediate: std::mem::take(&mut self.immediate),
             pending_odr: std::mem::take(&mut self.pending_odr),
+            potential_caps: std::mem::take(&mut self.potential_caps),
             defining: std::mem::take(&mut self.defining),
             enums: std::mem::take(&mut self.enums),
             braced_args: std::mem::take(&mut self.braced_args),
@@ -133,6 +135,7 @@ impl Sema<'_, '_> {
         self.unevaluated = saved.unevaluated;
         self.immediate = saved.immediate;
         self.pending_odr = saved.pending_odr;
+        self.potential_caps = saved.potential_caps;
         self.restore_immediate_state(imm);
         self.defining = saved.defining;
         self.enums = saved.enums;

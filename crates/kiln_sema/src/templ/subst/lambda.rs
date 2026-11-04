@@ -8,7 +8,7 @@
 //! rebuilt uses capture implicitly again.
 
 use kiln_ast::ExprId;
-use kiln_ast::decl::{ConstexprKind, FnStorage, InitStyle};
+use kiln_ast::decl::{ConstexprKind, DeclKind, FnStorage, InitStyle};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::lambda::LambdaCapture;
 use kiln_ast::names::OverloadedOperator;
@@ -373,15 +373,33 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// Inside a lambda body being rebuilt, a shared (non-dependent)
-    /// expression still uses `this` in the new closure: each potentially
-    /// evaluated `this` in it is captured (clang `MarkThisReferenced` on
-    /// an unchanged `CXXThisExpr`).
-    pub(crate) fn note_shared_this(&mut self, e: ExprId) {
+    /// expression still uses `this` and the enclosing variables in the
+    /// new closure: each potentially evaluated `this` in it is captured
+    /// (clang `MarkThisReferenced` on an unchanged `CXXThisExpr`), and so
+    /// is each variable it names, as a fresh reference would capture it
+    /// (clang `MarkDeclRefReferenced` on an unchanged `DeclRefExpr`):
+    /// at once if it cannot be usable in constant expressions, else at
+    /// the end of the full-expression (the shared reference's
+    /// `pending_odr` entry, or a potential capture while the rebuilt body
+    /// is still dependent; WP-581).
+    pub(crate) fn note_shared_captures(&mut self, e: ExprId) {
         let mut stack = vec![e];
         while let Some(x) = stack.pop() {
             let n = *self.sema.ast.exprs.get(x);
             match n.kind() {
                 ExprKind::CXXThisExpr => self.sema.note_this_use(n.loc()),
+                ExprKind::DeclRefExpr => {
+                    let d = self.sema.ast.exprs.decl(x);
+                    if matches!(
+                        self.sema.kind_of(d),
+                        DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding
+                    ) {
+                        let _ = self.sema.capture_at_decl_ref(d, n.loc());
+                        if self.sema.in_template() && self.sema.unevaluated == 0 {
+                            self.sema.note_potential_capture(x, d);
+                        }
+                    }
+                }
                 // Unevaluated operands and nested closures (their own
                 // captures are complete) are not uses.
                 ExprKind::UnaryExprOrTypeTraitExpr

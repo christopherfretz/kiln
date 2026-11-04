@@ -1,9 +1,10 @@
 //! clang `CodeGenModule::isTriviallyRecursive` (spec/codegen.md
-//! "Explicit instantiation declarations"): an `available_externally`
-//! body is not emitted for a function that calls itself through its
-//! asm label, directly or as the library function a `__builtin_` names
-//! (glibc's `btowc` pattern: such a body is not equivalent to the real
-//! definition elsewhere, PR9614).
+//! "Explicit instantiation declarations", "GNU inline functions"): an
+//! `available_externally` body is not emitted for a function that calls
+//! itself through its name or asm label, directly or as the library
+//! function a `__builtin_` names (glibc's `btowc` and C++ `strchr`
+//! patterns: such a body is not equivalent to the real definition
+//! elsewhere, PR9614).
 
 use kiln_ast::decl::{DeclKind, builtin};
 use kiln_ast::expr::ExprKind;
@@ -14,14 +15,20 @@ use crate::module::Cg;
 
 impl Cg<'_> {
     /// Whether function `first`'s definition is trivially recursive. Its
-    /// name is its asm label (every function reaching here is mangled,
-    /// so one without a label is never recursive); the walk is clang's
+    /// name is its asm label, else its plain name when it is not mangled
+    /// (an `extern "C"` GNU inline function, glibc's `btowc`); a mangled
+    /// one without a label is never recursive (clang
+    /// `shouldMangleDeclName`). The walk is clang's
     /// `FunctionIsDirectlyRecursive`: every statement and expression of
     /// the body, except that a call's operands are not visited.
     pub(crate) fn is_trivially_recursive(&self, first: DeclId) -> bool {
         let ast = self.ast;
-        let Some(name) = kiln_abi::mangle::asm_label(ast, first) else {
-            return false;
+        let name = match kiln_abi::mangle::asm_label(ast, first) {
+            Some(l) => l,
+            None if kiln_abi::mangle::is_unmangled(ast, first) => {
+                kiln_abi::mangle::decl_name(ast, first)
+            }
+            None => return false,
         };
         let Some(body) =
             ast.definition(first).and_then(|d| ast.decls.function(d)).and_then(|f| f.body)

@@ -51,7 +51,7 @@ impl Substituter<'_, '_, '_> {
         // `TransformUnresolvedMemberExpr`).
         if !self.needs_rebuild(e) && self.sema.member_overload(e).is_none() {
             if self.lambda_bodies > 0 {
-                self.note_shared_this(e);
+                self.note_shared_captures(e);
             }
             self.sema.mark_shared_expr_referenced(e);
             self.sema.note_shared_consteval_only(e);
