@@ -382,6 +382,21 @@ impl SourceManager {
         path.to_owned()
     }
 
+    /// The file name of `p` as GCC 16.1 spells it for an included file
+    /// (`__FILE__` there, and `std::meta::source_location_of`, which kiln
+    /// matches; spec/reflection.md §3.9): a buffer reached through
+    /// `#include` whose absolute path has its empty and `.` components
+    /// dropped and `dir/..` folded when `dir` is a real directory, not a
+    /// symbolic link (`//opt/inc//a/./b.h` is `/opt/inc/a/b.h`). The main
+    /// file, a `#line` name and a relative path are kept as written,
+    /// as GCC keeps them.
+    pub fn gcc_presumed_name(&self, p: &PresumedLoc<'_>, loc: Loc) -> String {
+        let simplify = p.file_name.starts_with('/')
+            && p.file_name == self.file_name(p.file)
+            && self.include_loc(loc).is_valid();
+        if simplify { simplify_absolute_path(p.file_name) } else { p.file_name.to_owned() }
+    }
+
     // ----- buffers -------------------------------------------------------
 
     /// Loads the file at `path`.
@@ -1034,3 +1049,28 @@ const _: fn() = || {
 // Expansion entries dominate the manager's memory in deep expansions
 // (one per macro-argument run per substitution): keep them at 24 bytes.
 const _: () = assert!(size_of::<Entry>() == 24);
+
+/// `path` (absolute) with empty and `.` components dropped and `dir/..`
+/// folded where `dir` names a real directory that is not a symbolic link
+/// (folding through a link would change the file named, so GCC keeps it).
+fn simplify_absolute_path(path: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut kept_dotdot = false;
+    for c in path.split('/') {
+        match c {
+            "" | "." => {}
+            ".." if !kept_dotdot && !out.is_empty() => {
+                let dir = format!("/{}", out.join("/"));
+                let real_dir = fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir());
+                if real_dir {
+                    out.pop();
+                } else {
+                    kept_dotdot = true;
+                    out.push(c);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    format!("/{}", out.join("/"))
+}

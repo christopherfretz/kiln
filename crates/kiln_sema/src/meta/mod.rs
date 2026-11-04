@@ -8,6 +8,7 @@ mod access;
 mod annot;
 mod define;
 mod ext;
+mod gcc_names;
 pub(crate) mod member;
 pub(crate) mod names;
 mod query;

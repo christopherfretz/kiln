@@ -2441,7 +2441,7 @@ impl<'a> AstBuilder<'a> {
                 }
             }
             Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
-                if self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX) {
+                if self.reflectee_in_dependent_ctx(d) {
                     deps |= ExprDeps::VALUE_INST;
                 }
             }
@@ -2452,7 +2452,7 @@ impl<'a> AstBuilder<'a> {
                         .ast
                         .types
                         .template_decl(n)
-                        .is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX))
+                        .is_some_and(|d| self.reflectee_in_dependent_ctx(d))
                 {
                     deps |= ExprDeps::VALUE_INST;
                 }
@@ -2469,6 +2469,26 @@ impl<'a> AstBuilder<'a> {
             self.simple(ExprKind::CXXReflectExpr, ValueCategory::PRValue, deps, aux, ty, loc, a, b);
         self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
         e
+    }
+
+    /// Whether a reflection of declaration `d` is value-dependent because
+    /// `d` sits in a dependent context. A friend class (template) first
+    /// declared inside a class template is a member of the enclosing
+    /// namespace ([namespace.memdef]/3): its `DEPENDENT_CTX` reflects
+    /// only the lexical context, so `^^ns::list` stays independent even
+    /// when `list`'s first declaration is `template <class, class>
+    /// friend class list;` in some `Node<V>` (spec/reflection-repr.md §2).
+    fn reflectee_in_dependent_ctx(&self, d: DeclId) -> bool {
+        let n = self.ast.decls.get(d);
+        if !n.has(DeclFlags::DEPENDENT_CTX) {
+            return false;
+        }
+        let friend_class = n.misc().friend() != FriendKind::None
+            && matches!(n.kind(), DeclKind::ClassTemplate | DeclKind::CXXRecord);
+        let ns_member = n.ctx().is_some_and(|c| {
+            matches!(self.ast.decls.get(c).kind(), DeclKind::Namespace | DeclKind::TranslationUnit)
+        });
+        !(friend_class && ns_member)
     }
 
     /// `^^nns name` with a dependent `nns` (P2996 [expr.reflect]/7,

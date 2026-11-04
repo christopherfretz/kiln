@@ -241,29 +241,56 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// `display_string_of(r)` (implementation-defined): a declaration's
-    /// qualified name as a diagnostic prints it (`N::S::operator+`,
-    /// `N::S::~S`; GCC 16.1 qualifies too), a type canonical and fully
-    /// scoped (`N::T1<int>`), a value or object as its source spelling
-    /// ([`Self::value_spelling`], [`Self::object_spelling`]), else the
-    /// reflection as a note prints it.
+    /// `display_string_of(r)` (implementation-defined): GCC 16.1's string
+    /// (gcc/cp/reflect.cc `eval_display_string_of`; spec/reflection.md
+    /// §3.9). A type as the diagnostic `%T` prints it (`long unsigned
+    /// int`, `const char*`, `ns::Al {aka ns::S}`), a declaration as `%D`
+    /// (`void ns::S::f() const`, `ns::e1`, `template<class T> struct
+    /// ns::TT`), a parameter as `<parameter x of void f(int)>`, a base as
+    /// `D: B`, a value or object as its source spelling
+    /// ([`Self::value_spelling`], [`Self::object_spelling`]); anything
+    /// else as the reflection as a note prints it.
     fn display_string(&self, r: ReflectionId) -> String {
         let s = match self.ast.reflections.get(r) {
+            Reflectee::Null => "<null reflection>".to_owned(),
             Reflectee::Value(v) => self.value_spelling(v).unwrap_or_default(),
             Reflectee::Object(p) => self.object_spelling(p).unwrap_or_default(),
-            Reflectee::Type(t) => self.ty_canonical_str(t),
+            Reflectee::Type(t) => self.gcc_type_string(t),
             Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
-                self.qualified_decl_name(d)
+                self.gcc_decl_string(d)
             }
             Reflectee::Template(n) => self
                 .ast
                 .types
                 .template_decl(n)
-                .map(|d| self.qualified_decl_name(d))
+                .map(|d| self.gcc_decl_string(d))
                 .unwrap_or_default(),
+            Reflectee::FnParam(f, i) => {
+                let fs = self.gcc_decl_string(f);
+                match self.param_identifier(f, i) {
+                    Some(n) => {
+                        format!("<parameter {} of {fs}>", self.ast.symbols().as_str(n))
+                    }
+                    None => format!("<unnamed parameter {} of {fs}>", i + 1),
+                }
+            }
+            Reflectee::BaseSpec(c, i) => match self.base_spec_ty(c, i) {
+                Some(b) => {
+                    let d = self.tag_type(c);
+                    let b = self.ast.types.canonical(b);
+                    format!("{}: {}", self.gcc_type_string(d), self.gcc_type_string(b))
+                }
+                None => String::new(),
+            },
             _ => String::new(),
         };
         if s.is_empty() { self.reflection_str(r) } else { s }
+    }
+
+    /// The type of direct base `i` of class `c`.
+    fn base_spec_ty(&self, c: DeclId, i: u32) -> Option<kiln_ast::QualType> {
+        let def = self.ast.definition(c)?;
+        self.ast.decls.bases(def, &self.ast.lists).nth(i as usize).map(|b| b.ty)
     }
 
     /// The source spelling of constant `v` (spec/reflection.md §3.9): the
@@ -276,7 +303,7 @@ impl Sema<'_, '_> {
     /// some part has no spelling (a temporary, an opaque subobject, an
     /// infinity or NaN, an unnamed class or closure type, a reflection
     /// with no `^^` operand such as a base specifier).
-    fn value_spelling(&self, v: ConstValueId) -> Option<String> {
+    pub(super) fn value_spelling(&self, v: ConstValueId) -> Option<String> {
         use kiln_ast::consts::{PrintOptions, PrintStyle};
         let opts = PrintOptions {
             include_type: false,
