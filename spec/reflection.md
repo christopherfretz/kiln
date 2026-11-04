@@ -378,7 +378,8 @@ this list and the tables is a spec bug, fixed in the same change.
 - **Define · Stable · WP-480**: `data_member_spec`, `is_data_member_spec`.
 - **Define · Mutating · WP-480**: `define_aggregate`.
 - **Annot · PointDependent · WP-478, done**: `annotations_of`,
-  `annotations_of_with_type`.
+  `annotations_of_with_type` (of a namespace alias: empty, never the
+  aliased namespace's; WP-573, spec/reflection-members.md §5).
 - **Annot · Stable · WP-478, done**: `is_annotation`.
 - **Ext · Stable · WP-470, done**: `name_of`.
 - **Ext · Mutating · WP-470, done**: `__kiln_define_member`.
@@ -927,6 +928,9 @@ each specialization evaluates its own.
 - Annotations on a templated entity are instantiated with it.
 - `annotations_of_with_type(r, T)` keeps the annotations whose type is
   `remove_const(T)` (spec/reflection-members.md §5).
+- A namespace alias carries no annotations (its definition admits none),
+  and `annotations_of` of one does not see the aliased namespace's: it is
+  empty, not an error (WP-573).
   `constant_of` and `extract` on an annotation yield its value, and
   `is_annotation` tests the kind.
 

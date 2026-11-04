@@ -796,7 +796,10 @@ impl<'a> Cg<'a> {
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
         // [dcl.link]/8: `extern "C" int x;` declares, like `extern`.
         let ext = v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(d);
-        if ext && v.init.is_none() {
+        // [temp.expl.spec]/14: `template<> int C<char>::n;` declares: uses
+        // name the external symbol (a later one with an initializer, or
+        // another unit, defines it).
+        if ext && v.init.is_none() || ast.is_member_spec_declaration(d) {
             return Ok(());
         }
         if matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _))) {

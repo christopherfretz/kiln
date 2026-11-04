@@ -127,6 +127,11 @@ gone; `__kiln_define_member` (spec/reflection.md §6.3) stays.
   instantiated specialization's are substituted first
   (`require_annotations`); a class template specialization is
   instantiated first.
+- A namespace alias is a namespace for `annotations_of` (`is_namespace`
+  is true of it) with its own annotations, not its target's; a
+  namespace-alias-definition admits none, so `annotations_of` and
+  `annotations_of_with_type` of an alias are always empty, even when
+  the aliased namespace is annotated (GCC 16.1 agrees; WP-573).
 - One annotation written on a declaration with several declarators is
   one annotation of each entity (`[[=1]] int x, y;`: the same
   reflection; [dcl.attr.annotation]/3). Sema maps each annotation
