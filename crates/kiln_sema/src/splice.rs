@@ -174,12 +174,21 @@ impl Sema<'_, '_> {
                 | DeclKind::CXXMethod => self.build_decl_ref(d, open),
                 _ => self.splice_misfit_expr(e, at, open),
             },
-            Reflectee::Value(v) | Reflectee::Object(v) => {
-                let ty = self.ast.consts.ty(v);
-                if let Some(x) = self.nttp_value_expr(ty, v, open) {
+            // A value: a prvalue of it; an object: an lvalue naming it
+            // ([expr.prim.splice]/2; `splice_object.rs`).
+            Reflectee::Value(v) => {
+                if let Some(x) = self.splice_value_expr(v, open) {
                     return x;
                 }
-                self.unsupported("splice of a value or object reflection", open);
+                self.unsupported("splice of this value reflection", open);
+                self.recover_err(&[e], open)
+            }
+            Reflectee::Object(p) => {
+                if let Some(x) = self.splice_object_expr(p, open) {
+                    return x;
+                }
+                let what = self.object_splice_unsupported(p);
+                self.unsupported(what, open);
                 self.recover_err(&[e], open)
             }
             // `template [: r :]` / `[: r :]` designating a function
