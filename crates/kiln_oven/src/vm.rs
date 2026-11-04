@@ -1433,6 +1433,9 @@ impl Oven {
                         reg!(0) = u128::from(std::mem::take(&mut self.run.plain));
                     } else if aux & 8 != 0 {
                         self.run.plain = reg!(0) != 0;
+                    } else if aux & 16 != 0 {
+                        // `if consteval` ([stmt.if]/4).
+                        reg!(0) = u128::from(self.run.const_context);
                     } else {
                         let cc = self.run.const_context;
                         reg!(0) = u128::from(cc);
