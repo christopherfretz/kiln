@@ -304,18 +304,32 @@ impl Sema<'_, '_> {
     /// infinity or NaN, an unnamed class or closure type, a reflection
     /// with no `^^` operand such as a base specifier).
     pub(super) fn value_spelling(&self, v: ConstValueId) -> Option<String> {
+        self.value_spelling_in(v, false)
+    }
+
+    /// [`Self::value_spelling`] as GCC 16.1's diagnostics print the
+    /// constant inside a type (`ns::fs<11>{"operator[]"}`, `int [2]{1, 2}`,
+    /// `ns::E()`; [`kiln_ast::consts::PrintOptions::gcc`]), the types in
+    /// it as `display_string_of` prints them.
+    pub(super) fn value_spelling_gcc(&self, v: ConstValueId) -> Option<String> {
+        self.value_spelling_in(v, true)
+    }
+
+    fn value_spelling_in(&self, v: ConstValueId, gcc: bool) -> Option<String> {
         use kiln_ast::consts::{PrintOptions, PrintStyle};
         let opts = PrintOptions {
             include_type: false,
             enum_cast: true,
             max_depth: u32::from(u16::MAX),
             max_elems: u32::MAX,
+            gcc,
             ..PrintOptions::with_style(PrintStyle::TemplateArg)
         };
         let env = SpellEnv {
             sema: self,
             names: kiln_ast::dump::AstNames::new(&self.ast),
             lossy: Cell::new(false),
+            gcc,
         };
         let mut s = String::new();
         let exact = self.ast.consts.print_exact(v, &self.ast.strings, &env, &opts, &mut s);
@@ -436,6 +450,8 @@ struct SpellEnv<'s, 'a, 'b> {
     sema: &'s Sema<'a, 'b>,
     names: kiln_ast::dump::AstNames<'s>,
     lossy: Cell<bool>,
+    /// Types print as GCC's `display_string_of` (`%T`).
+    gcc: bool,
 }
 
 impl SpellEnv<'_, '_, '_> {
@@ -471,12 +487,15 @@ impl kiln_ast::consts::PrintEnv for SpellEnv<'_, '_, '_> {
 
     fn type_name(&self, ty: kiln_ast::QualType, out: &mut String) {
         self.check_type(ty);
-        out.push_str(&self.sema.ty_canonical_str(ty));
+        if self.gcc {
+            out.push_str(&self.sema.gcc_type_string(self.sema.ast.types.canonical(ty)));
+        } else {
+            out.push_str(&self.sema.ty_canonical_str(ty));
+        }
     }
 
     fn arg_type_name(&self, ty: kiln_ast::QualType, out: &mut String) {
-        self.check_type(ty);
-        out.push_str(&self.sema.ty_canonical_str(ty));
+        self.type_name(ty, out);
     }
 
     fn enumerator(

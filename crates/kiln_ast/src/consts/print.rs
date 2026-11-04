@@ -51,6 +51,14 @@ pub struct PrintOptions {
     /// (`(E)5`, not `5`), so the spelling re-parses as a value of the
     /// enumeration (`display_string_of`; spec/reflection.md §3.9).
     pub enum_cast: bool,
+    /// [`PrintStyle::TemplateArg`] as GCC 16.1's diagnostics print a
+    /// constant (`dump_expr`; GCC-style `display_string_of`,
+    /// spec/reflection.md §3.9): a `char` array as a string literal
+    /// (`"ab"`), any other array with its type (`int [2]{1, 2}`), an empty
+    /// class as `T()`, plain `char` with octal escapes (`'\000'`), other
+    /// character types as integers, floating point in `%e` form with the
+    /// type's `max_digits10` digits (`1.5e+0`), a null pointer as `0`.
+    pub gcc: bool,
 }
 
 impl PrintOptions {
@@ -61,6 +69,7 @@ impl PrintOptions {
         max_elems: 32,
         include_type: true,
         enum_cast: false,
+        gcc: false,
     };
 
     /// The defaults in `style`.
@@ -353,6 +362,9 @@ impl Printer<'_> {
     /// A floating-point value ([`format_float`]); an infinity or NaN has
     /// no literal, so is no exact spelling.
     fn float(&self, kind: FloatKind, bits: u128, out: &mut String) {
+        if self.opts.gcc && gcc_float(kind, bits, out) {
+            return;
+        }
         let at = out.len();
         format_float(kind, bits, out);
         if out[at..].ends_with("inf") || out[at..].ends_with("nan") {
@@ -372,6 +384,9 @@ impl Printer<'_> {
             Scalar::Int { ty, signed, bits } => self.int(ty, signed, &bits, out),
             Scalar::Bool { value, .. } => out.push_str(if value { "true" } else { "false" }),
             Scalar::Float { kind, bits, .. } => self.float(kind, bits, out),
+            Scalar::Null { ty, .. } if self.opts.gcc && self.env.shape(ty) != Shape::NullPtr => {
+                out.push('0');
+            }
             Scalar::Null { .. } => out.push_str("nullptr"),
             Scalar::Pointer { ty, base, offset, designated } => {
                 self.pointer(ty, base, offset, designated, out);
@@ -400,6 +415,16 @@ impl Printer<'_> {
                 if typed {
                     out.push_str(suffix);
                 }
+            }
+            IntStyle::SmallChar | IntStyle::Char(_)
+                if self.opts.gcc && style != IntStyle::Char(StringEncoding::Ordinary) =>
+            {
+                bits.write_decimal(signed, out);
+            }
+            IntStyle::Char(_) if self.opts.gcc => {
+                out.push('\'');
+                push_gcc_char(bits.to_u128().map_or(0, |v| v as u32 & 0xff), out);
+                out.push('\'');
             }
             IntStyle::SmallChar => {
                 if typed {
@@ -648,6 +673,27 @@ impl Printer<'_> {
                     out.push_str("{...}");
                     return;
                 }
+                if self.opts.gcc {
+                    let plain_char = matches!(
+                        self.env.shape(elem),
+                        Shape::Int { style: IntStyle::Char(StringEncoding::Ordinary), .. }
+                    );
+                    if plain_char && stride == 1 {
+                        // GCC keeps a `char` array constant as a string
+                        // literal, its trailing NULs not printed.
+                        let n = usize::try_from(len).unwrap_or(0);
+                        let start = usize::try_from(at).unwrap_or(0);
+                        let bytes = img.bytes.get(start..start + n).unwrap_or(&[]);
+                        let end = bytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+                        out.push('"');
+                        for &b in &bytes[..end] {
+                            push_gcc_char(u32::from(b), out);
+                        }
+                        out.push('"');
+                        return;
+                    }
+                    self.env.type_name(ty, out);
+                }
                 out.push('{');
                 let shown = len.min(u64::from(self.opts.max_elems));
                 for i in 0..shown {
@@ -685,9 +731,14 @@ impl Printer<'_> {
                     out.push('}');
                     return;
                 }
-                out.push('{');
                 let shown =
                     members.iter().filter(|m| !(m.bit_width.is_some() && m.name.is_empty()));
+                if self.opts.gcc && shown.clone().next().is_none() {
+                    // GCC prints an empty CONSTRUCTOR as `T()`.
+                    out.push_str("()");
+                    return;
+                }
+                out.push('{');
                 for (n, m) in shown.enumerate() {
                     if n == self.opts.max_elems as usize {
                         self.lost();
@@ -728,4 +779,50 @@ impl Printer<'_> {
             out.push('?');
         }
     }
+}
+
+/// GCC's `pp_c_char`: a printable character as itself (`\\`, `\'` and
+/// `\"` escaped), any other as a three-digit octal escape (`\012`).
+fn push_gcc_char(c: u32, out: &mut String) {
+    match char::from_u32(c) {
+        Some('\\') => out.push_str("\\\\"),
+        Some('\'') => out.push_str("\\'"),
+        Some('"') => out.push_str("\\\""),
+        Some(ch) if (0x20..0x7f).contains(&c) => out.push(ch),
+        _ => {
+            let _ = write!(out, "\\{:03o}", c);
+        }
+    }
+}
+
+/// GCC's `pp_c_floating_constant` for `float` and `double`
+/// (`real_to_decimal` with the type's `max_digits10` significant digits,
+/// trailing zeros cropped, one kept after the point; `1.5e+0`,
+/// `1.0000000000000001e-1`). False for other formats and for an infinity
+/// or NaN (the caller prints those).
+fn gcc_float(kind: FloatKind, bits: u128, out: &mut String) -> bool {
+    let (v, digits) = match kind {
+        FloatKind::Single => (f64::from(f32::from_bits(bits as u32)), 9),
+        FloatKind::Double => (f64::from_bits(bits as u64), 17),
+        _ => return false,
+    };
+    if !v.is_finite() {
+        return false;
+    }
+    let s = format!("{:.*e}", digits - 1, v);
+    let Some((mant, exp)) = s.split_once('e') else { return false };
+    let mut mant = mant.to_owned();
+    if mant.contains('.') {
+        while mant.ends_with('0') {
+            mant.pop();
+        }
+        if mant.ends_with('.') {
+            mant.push('0');
+        }
+    } else {
+        mant.push_str(".0");
+    }
+    let exp: i32 = exp.parse().unwrap_or(0);
+    let _ = write!(out, "{mant}e{}{}", if exp < 0 { '-' } else { '+' }, exp.unsigned_abs());
+    true
 }

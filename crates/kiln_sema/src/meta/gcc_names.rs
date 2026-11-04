@@ -64,6 +64,9 @@ enum Shape {
 /// themselves), innermost first.
 type Levels = Vec<(DeclId, Option<ArgListId>)>;
 
+/// The typedefs a signature names with the types they denote.
+type Names = Vec<(QualType, QualType)>;
+
 /// GCC's `cxx_pretty_printer` state: the text and its padding
 /// (`pp_before` or `pp_none`).
 struct Pp<'s, 'a, 'b> {
@@ -699,7 +702,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 return;
             }
         }
-        let s = self.sema.value_spelling(v).unwrap_or_default();
+        let s = self.sema.value_spelling_gcc(v).unwrap_or_default();
         self.ws(&s);
     }
 
@@ -904,7 +907,13 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             && let Some((pattern, levels)) = self.template_bindings(f)
         {
             self.dump_function_decl_of(pattern, flags);
-            self.bindings(&levels);
+            // The typedefs the signature names, with what they denote
+            // here, unless some level stays a template's own parameters.
+            let mut names = Vec::new();
+            if levels.iter().all(|l| l.1.is_some()) {
+                self.find_typenames(pattern, f, &mut names);
+            }
+            self.bindings(&levels, &names);
         } else {
             self.dump_function_decl_of(f, flags);
         }
@@ -936,6 +945,24 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             levels.extend(class_level);
             return Some((pattern, levels));
         }
+        // The pattern of a member template of a class template
+        // specialization: printed through the primary's member template.
+        if let Some(td) = ast.described_template(f) {
+            // The primary's member template: linked from the template decl
+            // or from its pattern.
+            let general = ast
+                .instantiated_from(ast.first(td))
+                .filter(|&g| ast.template_info(g).is_some())
+                .or_else(|| ast.instantiated_from(f).and_then(|p| ast.described_template(p)));
+            if let Some(g) = general
+                && g != td
+                && let Some(pattern) = ast.template_info(g).and_then(|t| t.pattern)
+            {
+                levels.push((g, None));
+                levels.push(class_level?);
+                return Some((pattern, levels));
+            }
+        }
         let (_, m) = ast.member_spec_info(ast.first(f))?;
         let pattern = m.instantiated_from;
         // The pattern of a member template of a class template
@@ -950,7 +977,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
     /// `dump_template_bindings`: ` [with T = int; int N = 3]`, a pack's
     /// arguments in braces; a type parameter bound to itself is skipped,
     /// a non-type one is not (`long unsigned int SIZE = SIZE`).
-    fn bindings(&mut self, levels: &[(DeclId, Option<ArgListId>)]) {
+    fn bindings(&mut self, levels: &Levels, names: &Names) {
         let ast = self.ast();
         let mut first = true;
         for &(tmpl, args) in levels {
@@ -996,8 +1023,106 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 }
             }
         }
+        for &(t, v) in names {
+            if first {
+                self.whitespace();
+                self.punct("[");
+                self.ws("with");
+                self.whitespace();
+                first = false;
+            } else {
+                self.punct("; ");
+            }
+            self.dump_type(t, 0);
+            self.whitespace();
+            self.out.push('=');
+            self.whitespace();
+            self.dump_type(v, 0);
+        }
         if !first {
             self.punct("]");
+        }
+    }
+
+    /// `find_typenames`: the typedefs and dependent names the signature of
+    /// `pattern` (return type, then parameters) mentions, in walk order,
+    /// each with the canonical type it denotes in instantiation `inst`,
+    /// found at the same place of `inst`'s signature.
+    fn find_typenames(&self, pattern: DeclId, inst: DeclId, out: &mut Names) {
+        let ast = self.ast();
+        let (Some(pt), Some(it)) = (ast.decls.get(pattern).ty(), ast.decls.get(inst).ty()) else {
+            return;
+        };
+        let (Some(pp), Some(ip)) = (self.sugared_proto(pt), ast.types.proto(it).copied()) else {
+            return;
+        };
+        self.walk_typenames(pp.ret(), ip.ret(), out);
+        let ps = ast.types.params(&pp).to_vec();
+        let is = ast.types.params(&ip).to_vec();
+        for (p, i) in ps.into_iter().zip(is) {
+            self.walk_typenames(p, i, out);
+        }
+    }
+
+    /// One step of [`Self::find_typenames`]: `pat` as written in the
+    /// pattern, `inst` the same place in the instantiation.
+    fn walk_typenames(&self, pat: QualType, inst: QualType, out: &mut Names) {
+        let types = &self.ast().types;
+        let inst = types.canonical(inst);
+        let strip = |q: QualType, bits: u8| QualType::new(q.ty(), q.quals_bits() & !bits);
+        match types.view(pat.ty()) {
+            TypeView::Typedef { decl, .. } => {
+                let t = QualType::unqual(pat.ty());
+                if !out.iter().any(|&(x, _)| x == t) {
+                    out.push((t, strip(inst, pat.quals_bits())));
+                }
+                // A compound aliased type is walked too (`typedef
+                // value_type* pointer` names `value_type`); an alias of an
+                // alias is a type of its own with nothing to walk.
+                if let Some(u) = self.ast().decls.typedef(decl).map(|d| d.underlying)
+                    && matches!(
+                        types.view(u.ty()),
+                        TypeView::Pointer(_)
+                            | TypeView::LValueRef(_)
+                            | TypeView::RValueRef(_)
+                            | TypeView::ConstantArray(_)
+                            | TypeView::Function(_)
+                    )
+                {
+                    self.walk_typenames(u, strip(inst, pat.quals_bits()), out);
+                }
+            }
+            TypeView::DependentName { .. } | TypeView::Decltype { .. } => {
+                let t = QualType::unqual(pat.ty());
+                if !out.iter().any(|&(x, _)| x == t) {
+                    out.push((t, strip(inst, pat.quals_bits())));
+                }
+            }
+            TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
+                if let Some(i) = types.pointee(inst) {
+                    self.walk_typenames(p, i, out);
+                }
+            }
+            TypeView::Paren(i) | TypeView::Elaborated { named: i, .. } => {
+                self.walk_typenames(i, inst, out);
+            }
+            TypeView::ConstantArray(a) => {
+                if let TypeView::ConstantArray(b) = types.view(inst.ty()) {
+                    self.walk_typenames(a.elem, b.elem, out);
+                }
+            }
+            TypeView::Function(_) => {
+                if let (Some(pp), Some(ip)) = (self.sugared_proto(pat), types.proto(inst).copied())
+                {
+                    self.walk_typenames(pp.ret(), ip.ret(), out);
+                    let ps = types.params(&pp).to_vec();
+                    let is = types.params(&ip).to_vec();
+                    for (p, i) in ps.into_iter().zip(is) {
+                        self.walk_typenames(p, i, out);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
