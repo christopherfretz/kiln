@@ -576,14 +576,18 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     }
 
     /// clang's non-tentative `isDeclarationSpecifier`: a decl-specifier
-    /// keyword or a type name at the current token.
+    /// keyword or a type name at the current token. A class template's
+    /// injected-class-name in its own scope is a type name there
+    /// ([temp.local]/1), so `void(CT)` is a function type, not `void`
+    /// with a parenthesized declarator `CT` ([dcl.ambig.res]/3).
     fn is_decl_specifier_start(&self) -> bool {
         match self.kw() {
             Some(k) => is_decl_specifier_kw(k),
             None => {
                 self.p.transform_at(self.i).is_some()
                     || (self.ident_at(self.i).is_some() || self.at(Punct::ColonColon))
-                        && matches!(self.name_here(), Some((_, NameClass::Type(..))))
+                        && !matches!(self.name_here(), Some((_, NameClass::Undeclared)))
+                        && self.p.names_type_at(self.i)
             }
         }
     }

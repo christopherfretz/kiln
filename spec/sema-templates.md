@@ -2341,7 +2341,18 @@ recomputed exactly as for non-template code (clang's
 - **Implicit nodes are stripped, then rebuilt by the action.** This
   covers `ImplicitCastExpr`, `MaterializeTemporaryExpr`,
   `CXXBindTemporaryExpr`, `ExprWithCleanups` and the `ConstantExpr`
-  wrappers. `ParenExpr` is kept.
+  wrappers. `ParenExpr` is kept. An implicit `UserDefinedConversion`
+  cast through a conversion function is stripped down to the call's
+  object argument (`Substituter::udc_object`, also in
+  `peel_initializer`; clang `CastExpr::getSubExprAsWritten`), so the
+  enclosing action performs the conversion again from the substituted
+  object. The call itself is never re-looked-up: a conversion function
+  template specialization keeps the pattern's name `operator T` (§10.1),
+  whose `T` is the member template's own parameter, and substituting it
+  with the enclosing instantiation's arguments of the same depth and
+  index named `operator Self` (`no member named 'operator E' in 'acc'`
+  inside `bind<E>`; WP-563, [temp.deduct.conv]/1,
+  tests/conformance/temp.deduct.conv/conversion-template-in-enclosing-template-*.cpp).
 - **Sharing.** A non-dependent subtree is always shared (§3.3; there is
   no switch). The checks clang would redo by rebuilding it are replayed
   from what the definition recorded: designator warnings of a list
@@ -3051,7 +3062,15 @@ formed it:
      its argument is not a deduction failure, and a successful one is
      not an original argument for /4. A pack expanded in P's template
      argument list with a deducible pattern (`Tup<int, Us...>`) is in a
-     deduced context, so a mismatch there still fails deduction.
+     deduced context, so a mismatch there still fails deduction. A
+     non-type expansion is deducible only when its pattern is a bare
+     template parameter of the deduced depth (`Spec<N...>`); any other
+     expression pattern (`Spec<conv<Args>()...>`, `Spec<sizeof(Args)...>`,
+     directly or through an alias) is a non-deduced context
+     ([temp.deduct.type]/5.3), so `Args` comes from the trailing pack and
+     the argument converts to the substituted P, through a consteval
+     converting constructor if need be (WP-566; tests
+     `temp.deduct.type/nttp-pack-expansion-non-deduced-*.cpp`).
 3. **Finish** ([temp.deduct.general]/5):
    - an undeduced parameter takes its default (substituted in order); a
      pack takes the empty pack; anything else gives `Incomplete`;

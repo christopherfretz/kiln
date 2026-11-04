@@ -154,6 +154,10 @@ impl AttrKind {
     /// the visibility of the type's vtable and RTTI (`a` as for
     /// [`AttrKind::VISIBILITY`]); WP-544.
     pub const TYPE_VISIBILITY: AttrKind = AttrKind(141);
+    /// clang nullability on classes: `class _Nullable X` (clang
+    /// `TypeNullableAttr`, keyword syntax) lets `X _Nullable` name a
+    /// nullable class type; WP-554.
+    pub const TYPE_NULLABLE: AttrKind = AttrKind(142);
 }
 
 /// What a loop hint controls (clang `LoopHintAttr::OptionType`).

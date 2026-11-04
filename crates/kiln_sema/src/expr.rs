@@ -4693,12 +4693,19 @@ impl Sema<'_, '_> {
             return e;
         }
         // The function the callee names, if any (calls through pointers
-        // report conversions directly, not as overload candidates).
+        // report conversions directly, not as overload candidates): a
+        // function named by its name, or a static member function named
+        // by a member access (`x.f()`, `this->f()`; a non-static one is
+        // a bound member, called above), whose default arguments, format
+        // checks and immediate invocation are those of a direct call
+        // ([expr.ref], [dcl.fct.default]/1).
         let named = {
             let x = self.ignore_parens(callee);
-            (self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr)
-                .then(|| self.ast.exprs.decl(x))
-                .filter(|&d| self.ast.decls.function(d).is_some())
+            match self.ast.exprs.get(x).kind() {
+                ExprKind::DeclRefExpr | ExprKind::MemberExpr => Some(self.ast.exprs.decl(x)),
+                _ => None,
+            }
+            .filter(|&d| self.ast.decls.function(d).is_some())
         };
         // A function named directly whose definition failed to
         // instantiate when this reference odr-used it (it is now invalid):
