@@ -566,7 +566,22 @@ answers as of that point.
   a `#line` name and relative paths are kept
   (`meta.reflection.names/source-location-of-include-path.cpp`;
   `SourceManager::gcc_presumed_name`). `__FILE__` and
-  `std::source_location::current()` keep clang's spelling.
+  `std::source_location::current()` keep clang's spelling. The line and
+  column are GCC's per-entity location
+  (`meta.reflection.names/source-location-of-definition.cpp`): a class or
+  enumeration where it is defined, a function or variable at its
+  definition else its latest declaration, a parameter in the
+  definition's declarator.
+- **Known differences from GCC 16.1's names** (not yet matched):
+  `display_string_of` of a value or object reflection keeps kiln's
+  spelling (above; GCC's constant style is used for constants inside a
+  type); a canonical template parameter GCC names after the first
+  template that formed it (`is_integral<t_TYPE>` from another template)
+  prints by its name in the template being printed; `source_location_of`
+  of `^^S::f` for a member function or `^^f` for a function template is
+  `0:0` in GCC (its operand stays an overload set there) and the
+  function's location in kiln; an out-of-line definition's column is
+  GCC's start of the qualified name, kiln's the unqualified name.
 
 - **`display_string_of` of a value or object** (WP-564): the shortest
   source spelling that re-parses as a constant of that value, from the
