@@ -901,6 +901,23 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   back-edges are checked by `kiln_codegen` test
   `expansion_statement_lowers_in_order`.
 
+- Consteval-only variables (WP-534): a block-scope variable whose type
+  is consteval-only (P2996R13 [basic.types.general]: `std::meta::info`,
+  or a type that contains one through an array element, pointee,
+  referee, member pointer, function return or parameter type, base or
+  non-static data member; spec/reflection-repr.md §6) is never emitted:
+  `emit_one_var_decl` returns before allocating storage or lowering the
+  initializer (`Cg::is_consteval_only`, `module.rs`, a walk over the
+  canonical type memoized per record). Such a variable can only be used
+  in constant expressions, and every use of it in emitted code is
+  already folded. In particular an expansion statement over a range of
+  `info` (a `define_static_array` variable template or call, a
+  `static constexpr info arr[]` local) emits no range object, no
+  `__range`/`__begin`/`__end` and no structured-binding object: its
+  prelude declarations are all consteval-only, and each element's
+  constexpr `R` is substituted as a constant
+  (`tests/conformance/stmt.expand/reflection-info-range-run.cpp`).
+
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:
 - `-S -emit-llvm` writes a `.ll` file; `-c -emit-llvm` pipes it to

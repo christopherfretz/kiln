@@ -252,6 +252,17 @@ or non-static data member (cached per complete class). Sema enforces:
   is of consteval-only type is such an expression even when the object
   expression is not (GCC 16.1 accepts `g.s` and rejects `G::s`; kiln
   rejects both).
+- **Structured bindings.** The expression of each binding of a
+  decomposition (`e[i]`, `e.m`; spec/sema.md, `struct_bind.rs`
+  `decompose_array`/`decompose_members`) is a full-expression checked as
+  part of the decomposed variable's initializer: for `static constexpr
+  auto [a, b] = arr;` over an `info` array (and the destructuring form
+  of an expansion statement over one) the reference to the
+  consteval-only `e` is reported by the variable rule, which the
+  `constexpr` variable satisfies, not by the expression rule (WP-534).
+
+Codegen emits no block-scope variable of consteval-only type
+(spec/codegen.md §4 "Consteval-only variables"; WP-534).
 
 In a template, the leaves are recorded at definition time (where the
 evaluation context is known) and re-checked in each instantiation; the

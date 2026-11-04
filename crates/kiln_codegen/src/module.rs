@@ -134,6 +134,9 @@ pub(crate) struct Cg<'a> {
     pub srcloc: Option<kiln_ast::ExprId>,
     /// Static locals already emitted.
     pub static_locals: FxHashMap<DeclId, GlobalId>,
+    /// Whether each class definition asked about is consteval-only
+    /// ([`Cg::is_consteval_only`]).
+    pub consteval_only: FxHashMap<DeclId, bool>,
     /// Static locals emitted per (function, name), for discriminators.
     pub static_local_names: FxHashMap<(Option<DeclId>, String), u32>,
     /// `void *`, used to classify implicit object parameters.
@@ -204,6 +207,92 @@ pub(crate) struct Cg<'a> {
 }
 
 impl<'a> Cg<'a> {
+    /// Whether `t` is consteval-only ([basic.types.general], P2996R13;
+    /// sema's `is_consteval_only_type`, spec/reflection-repr.md §6):
+    /// `std::meta::info`, or a pointer, reference, array, function or
+    /// member pointer type or class reaching one through its parts, bases
+    /// or non-static data members. Its objects exist only during constant
+    /// evaluation, so a variable of such a type is never emitted. Classes
+    /// are walked with a worklist and cached.
+    pub(crate) fn is_consteval_only(&mut self, t: QualType) -> bool {
+        let ast = self.ast;
+        let mut seen: FxHashSet<DeclId> = FxHashSet::default();
+        let mut records: Vec<DeclId> = Vec::new();
+        let mut pending: Vec<DeclId> = Vec::new();
+        let mut types = vec![t];
+        let mut found = false;
+        'walk: loop {
+            while let Some(mut t) = types.pop() {
+                // Bounded: a type nests finitely.
+                loop {
+                    match ast.types.canonical_view(t) {
+                        TypeView::Builtin(_) => {
+                            if ast.types.canonical(t).without_quals()
+                                == BuiltinType::MetaInfo.qual_type()
+                            {
+                                found = true;
+                                break 'walk;
+                            }
+                            break;
+                        }
+                        TypeView::Pointer(p)
+                        | TypeView::LValueRef(p)
+                        | TypeView::RValueRef(p)
+                        | TypeView::IncompleteArray(p)
+                        | TypeView::MemberPointer { pointee: p, .. } => t = p,
+                        TypeView::ConstantArray(_) | TypeView::VariableArray { .. } => {
+                            let Some(e) = ast.types.element(t) else { break };
+                            t = e;
+                        }
+                        TypeView::Function(p) => {
+                            types.push(p.ret());
+                            types.extend_from_slice(ast.types.params(&p));
+                            break;
+                        }
+                        TypeView::Record(r) => {
+                            if let Some(def) = ast.definition(r) {
+                                match self.consteval_only.get(&def) {
+                                    Some(&true) => {
+                                        found = true;
+                                        break 'walk;
+                                    }
+                                    Some(&false) => {}
+                                    None => {
+                                        if seen.insert(def) {
+                                            records.push(def);
+                                            pending.push(def);
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            // The next class not yet walked: its bases and fields.
+            let Some(def) = pending.pop() else { break };
+            types.extend(ast.decls.bases(def, &ast.lists).map(|b| b.ty));
+            types.extend(
+                ast.members(def)
+                    .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
+                    .filter_map(|m| ast.decls.get(m).ty()),
+            );
+        }
+        if !found {
+            // Nothing reachable from `t` is consteval-only.
+            for d in records {
+                self.consteval_only.insert(d, false);
+            }
+        } else if let TypeView::Record(r) = ast.types.canonical_view(t)
+            && let Some(def) = ast.definition(r)
+        {
+            self.consteval_only.insert(def, true);
+        }
+        found
+    }
+
     pub fn new(
         ast: &'a Ast,
         folds: &'a Folds,
@@ -259,6 +348,7 @@ impl<'a> Cg<'a> {
             const_objects: FxHashMap::default(),
             srcloc: None,
             static_locals: FxHashMap::default(),
+            consteval_only: FxHashMap::default(),
             static_local_names: FxHashMap::default(),
             void_ptr,
             sfns: FxHashMap::default(),

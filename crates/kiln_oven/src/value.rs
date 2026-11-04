@@ -210,6 +210,7 @@ impl Oven {
         object: Option<DeclId>,
         fb: u32,
     ) -> Result<ConstValueId, EvalFailure> {
+        let void_ok = std::mem::take(&mut self.void_next);
         let f = self.compile_thunk(b, e, object);
         self.let_pending.clear();
         self.exec(b, f, fb)?;
@@ -221,6 +222,14 @@ impl Oven {
             None => expr_loc(b.ast(), e),
         };
         let r = match self.funcs[f as usize].ret {
+            // A `void` immediate invocation ([expr.const]/16): `true`
+            // stands for its value, as for [`Self::eval_call`]; consumers
+            // of a `void` `ConstantExpr` never read it (spec/oven.md
+            // "Nested immediate invocations").
+            RetKind::Void if void_ok => {
+                let ty = self.types.intern(b, QualType::BOOL);
+                self.freeze_scalar(b, ty, 1, loc)
+            }
             RetKind::Void => {
                 Err(Freeze::Notes(vec![Note::new(loc, "expression of type 'void' has no value")]))
             }

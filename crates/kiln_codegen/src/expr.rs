@@ -237,7 +237,10 @@ impl Cg<'_> {
             }
             ExprKind::ConstantExpr => match self.immediate_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
-                _ => return self.emit_scalar_opt(ast.exprs.operand(e)),
+                // clang `ScalarExprEmitter::VisitConstantExpr`: a `void`
+                // immediate invocation generates no code.
+                Some(_) => return Ok(None),
+                None => return self.emit_scalar_opt(ast.exprs.operand(e)),
             },
             ExprKind::IntegerLiteral => {
                 if let Some(v) = ast.exprs.int_value(e) {
@@ -4461,6 +4464,16 @@ impl Cg<'_> {
     fn emit_one_var_decl(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
+        // A consteval-only variable (`constexpr std::meta::info r`, an
+        // expansion statement's range and iterators over `info`s) exists
+        // only for constant evaluation: sema made it `constexpr` and every
+        // use of it constant ([basic.types.general], P2996R13), so it has
+        // no storage (spec/codegen.md "Consteval-only variables").
+        if let Some(q) = ast.decls.get(d).ty()
+            && self.is_consteval_only(q)
+        {
+            return Ok(());
+        }
         match v.spec.storage() {
             _ if is_static_local(ast, d) => {
                 let g = self.static_local(d)?;

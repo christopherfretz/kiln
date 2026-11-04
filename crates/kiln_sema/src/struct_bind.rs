@@ -570,6 +570,10 @@ impl Sema<'_, '_> {
             );
             let idx = self.builder().int_literal(QualType::INT, i as u64, Radix::Decimal, loc);
             let sub = self.builder().subscript(decayed, idx, elem, loc);
+            // A consteval-only `e` is checked as `v`'s initializer
+            // (spec/reflection-repr.md §6): its binding expressions are
+            // not evaluated where they are built.
+            self.note_var_init_full_expr(v);
             let sub = self.act_on_full_expr(sub);
             self.ast.decls.set_ty(b, elem);
             let _ = self.ast.decls.set_binding(b, sub, None);
@@ -1013,6 +1017,8 @@ impl Sema<'_, '_> {
             if self.is_err_expr(e) {
                 return false;
             }
+            // As for an array element ([`Self::decompose_array`]).
+            self.note_var_init_full_expr(v);
             let e = self.act_on_full_expr(e);
             let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
             let mutable =

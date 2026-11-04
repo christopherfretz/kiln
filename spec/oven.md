@@ -3032,6 +3032,32 @@ syntactic form `a <=> b` is never compiled; it is the location of notes
 (`static_assert`s over strong, weak and partial categories, a base, an
 array member, and a call counter that checks the single evaluation).
 
+### Nested immediate invocations — Landed (WP-537)
+A `ConstantExpr` that is a nested immediate invocation (ast.md
+`CONSTANT_ELIDED`: P2564R3 made its enclosing constexpr function
+template specialization or lambda immediate-escalating) carries no
+cached value; it is evaluated in place, as part of the enclosing
+evaluation ([expr.const]/16-18), in every value category: `rv_inner`,
+`lv`, `init_inner`, `tracked_list`, `fn_lv` and `effect` all compile its
+operand as they would compile a `ParenExpr`'s. Its side effects (a void
+`f(x)` that increments the caller's local `x`, a comma fold of such
+calls) are therefore seen by the enclosing evaluation, and a failure in
+it is diagnosed with the enclosing call stack (`in call to 'h(x)'` /
+`in call to 'g2<1>()'`, as clang). For effect, a `ConstantExpr` that
+does carry a value contributes nothing (its operand's side effects were
+those of its own evaluation), as for a `void` one.
+
+A top-level immediate invocation of a `void` consteval function (`h();`
+in `main`, `(void)h()`, `h(), h()`) is a constant expression with no
+value. `Oven::evaluate` with `EvalKind::Consteval` arms `void_next`, so
+`eval_at` freezes a stand-in (`bool` 1) for a `void` result instead of
+"expression of type 'void' has no value"; every other `EvalKind` keeps
+that diagnostic. Nothing reads the stand-in: the AST dump prints no
+value for a `void` `ConstantExpr` and codegen emits no code for it
+(clang `VisitConstantExpr`). Tests:
+`tests/conformance/expr.const/immediate-invocation-nested-void{-run,-neg,-reflection}.cpp`,
+`tests/conformance/expr.const/immediate-invocation-void-run.cpp`.
+
 ### Reflection runtime (M6; `-freflection`)
 Specified in **`spec/reflection.md`** §3:
 - the `info` value (`TyKind::Reflection`, bits `index - 1`) and the
