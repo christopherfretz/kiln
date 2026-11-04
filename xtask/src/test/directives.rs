@@ -102,7 +102,7 @@ impl PpCompare {
 
 /// The `%{name}` placeholders `args:` may use, substituted by the runner
 /// (`spec/harness.md` "Placeholders").
-pub const PLACEHOLDERS: &[&str] = &["repo_root", "resource_dir", "test_dir"];
+pub const PLACEHOLDERS: &[&str] = &["gcc_toolchain", "repo_root", "resource_dir", "test_dir"];
 
 /// Checks that every `%{...}` in `arg` names a known placeholder.
 fn check_placeholders(arg: &str) -> Result<(), String> {
@@ -326,6 +326,10 @@ pub struct TestSpec {
     /// `requires: llvm<N`: every such backend must be older; otherwise a
     /// SKIP (a workaround only an older backend needs).
     pub requires_llvm_below: Option<u32>,
+    /// `meta-header: skip <reason>`: left out of the header-differential
+    /// mode (`xtask test --meta-header`; `spec/harness.md` "Header-
+    /// differential mode"), with the reason it cannot run there.
+    pub meta_header_skip: Option<String>,
 }
 
 /// A clang that a test runs, for `requires: clang>=`: what it is to the
@@ -505,6 +509,7 @@ struct Parser {
     min_oracle: Option<u32>,
     requires_llvm: Option<u32>,
     requires_llvm_below: Option<u32>,
+    meta_header_skip: Option<String>,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     pp_only: Vec<(usize, &'static str)>,
@@ -546,6 +551,7 @@ impl Parser {
             ast_filter: None,
             cfg_diverges: Vec::new(),
             cfg_lines: Vec::new(),
+            meta_header_skip: None,
             inst_report: None,
             inst_report_line: 0,
             ast_implicit: false,
@@ -623,6 +629,13 @@ impl Parser {
                     _ => self.err(line, "`cfg-diverges` requires a function name and a reason"),
                 }
             }
+            "meta-header" => match value.strip_prefix("skip") {
+                _ if self.meta_header_skip.is_some() => self.err(line, "duplicate `meta-header`"),
+                Some(why) if why.starts_with(char::is_whitespace) && !why.trim().is_empty() => {
+                    self.meta_header_skip = Some(why.trim().to_owned());
+                }
+                _ => self.err(line, "expected `meta-header: skip <reason>`"),
+            },
             "ast-filter" => {
                 self.ast_only.push((line, "ast-filter"));
                 if self.ast_filter.is_some() {
@@ -1183,6 +1196,7 @@ impl Parser {
             min_oracle: self.min_oracle,
             requires_llvm: self.requires_llvm,
             requires_llvm_below: self.requires_llvm_below,
+            meta_header_skip: self.meta_header_skip,
         })
     }
 }
@@ -1230,6 +1244,7 @@ fn is_known_key(k: &str) -> bool {
             | "requires"
             | "module"
             | "min-oracle"
+            | "meta-header"
     )
 }
 

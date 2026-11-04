@@ -45,6 +45,11 @@ options:
                       is dropped)
   --no-gcc            drop the GCC comparisons only
   --no-oracle         skip all oracle comparisons (clang and GCC)
+  --meta-header       header-differential mode: run the tests that include
+                      tests/support/kiln_meta*.h again with libstdc++'s real
+                      <meta> (the GCC oracle's installation, --gcc-toolchain)
+                      in its place; no clang oracle, no oven:/inst-report:
+                      budgets (spec/harness.md \"Header-differential mode\")
   --external <dir>    run every .c/.cpp under <dir> (outside the repo) as
                       never-crash: counts only, nothing written (spec/harness.md)
   --filter <substr>   only tests whose path contains <substr>
@@ -94,6 +99,8 @@ pub struct Options {
     /// the harness's own tests are unaffected by CI's.
     pub require_gcc: bool,
     pub no_oracle: bool,
+    /// `--meta-header`: the header-differential mode.
+    pub meta_header: bool,
     /// `--external <dir>`: the never-crash run of [`external`].
     pub external: Option<PathBuf>,
     pub filter: Option<String>,
@@ -123,6 +130,7 @@ impl Default for Options {
             no_gcc: false,
             require_gcc: false,
             no_oracle: false,
+            meta_header: false,
             external: None,
             filter: None,
             update: false,
@@ -185,11 +193,14 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                 );
             }
             "--report-parity" => o.report_parity = Some(PathBuf::from(value("--report-parity")?)),
-            "--no-oracle" | "--no-gcc" | "--update" | "-v" | "--verbose" if inline.is_some() => {
+            "--no-oracle" | "--no-gcc" | "--meta-header" | "--update" | "-v" | "--verbose"
+                if inline.is_some() =>
+            {
                 return Err(format!("`{flag}` takes no value"));
             }
             "--no-oracle" => o.no_oracle = true,
             "--no-gcc" => o.no_gcc = true,
+            "--meta-header" => o.meta_header = true,
             "--update" => o.update = true,
             "-v" | "--verbose" => o.verbose = true,
             f if f.starts_with('-') => return Err(format!("unknown option `{f}`")),
@@ -257,7 +268,10 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     };
     let compiler_id = crate::util::identify(&compiler)?;
     let compiler_kind = compiler_id.kind;
-    let (oracle, oracle_kind, oracle_clang) = if opts.no_oracle {
+    if opts.meta_header && compiler_kind != CompilerKind::Kiln {
+        return Err("--meta-header runs kiln only (the compiler is not kiln)".into());
+    }
+    let (oracle, oracle_kind, oracle_clang) = if opts.no_oracle || opts.meta_header {
         (None, CompilerKind::Other, None)
     } else {
         let oracle = opts.oracle.clone().unwrap_or_else(|| PathBuf::from(toolchain.clang()));
@@ -266,6 +280,17 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         (Some(oracle), id.kind, id.clang_version())
     };
     let gcc = gcc_oracle(opts)?;
+    let gcc_toolchain = gcc.as_ref().and_then(|(path, _)| crate::oracle::gcc_toolchain_of(path));
+    let meta_header = if opts.meta_header {
+        if gcc_toolchain.is_none() {
+            return Err("--meta-header needs a GCC oracle (--gcc / KILN_GCC) whose \
+                        installation prefix holds libstdc++'s <meta>"
+                .into());
+        }
+        Some(root.join("tests").join("support").join("meta-header"))
+    } else {
+        None
+    };
 
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let scratch = target.join("xtask-test").join(format!("run-{}-{nanos}", std::process::id()));
@@ -281,6 +306,8 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         oracle_kind,
         oracle_clang,
         gcc: gcc.as_ref().map(|(path, _)| path.clone()),
+        gcc_toolchain,
+        meta_header,
         llvm_dir: toolchain.llvm_dir(),
         llvm_major: toolchain.version,
         update: opts.update,

@@ -50,6 +50,7 @@ fn cli_parsing() {
             gcc: Some("/opt/g++".into()),
             no_gcc: true,
             no_oracle: true,
+            meta_header: false,
             external: Some("/x/corpus".into()),
             filter: Some("lex".into()),
             update: true,
@@ -855,4 +856,48 @@ fn ci_gate_honours_failure_counts() {
     assert!(ci_corpus_passes(&[skipped.clone(), clean.clone()]));
     assert!(!ci_corpus_passes(&[skipped, ran(&[Status::XPass])]));
     assert!(ci_corpus_passes(&[clean.clone(), clean]));
+}
+
+/// `--meta-header` and `meta-header: skip` (spec/harness.md
+/// "Header-differential mode").
+#[test]
+fn meta_header_mode_selection() {
+    let o = parse_args(strings(&["--meta-header"])).unwrap().unwrap();
+    assert!(o.meta_header);
+    assert!(parse_args(strings(&["--meta-header=1"])).is_err());
+
+    let spec = |src: &str| directives::parse(src, directives::Lang::Cxx).unwrap();
+    let skip = |src: &str| runner::meta_header_skip(&spec(src), src);
+    let head = "//@ expect: compile-ok\n#include \"kiln_meta.h\"\n";
+    assert_eq!(skip(head), None);
+    assert_eq!(skip(&format!("{head}auto x = __kiln_data_members<^^int>();\n")), None);
+    assert_eq!(
+        skip("//@ expect: compile-ok\nint x;\n").as_deref(),
+        Some("meta-header mode: does not include kiln_meta.h")
+    );
+    assert_eq!(
+        skip("//@ expect: compile-ok\n//@ meta-header: skip wording names a signature\n#include \"kiln_meta.h\"\n")
+            .as_deref(),
+        Some("meta-header mode: wording names a signature")
+    );
+    assert_eq!(
+        skip(&format!("{head}auto r = __kiln_define_member(a, b, \"m\");\n")).as_deref(),
+        Some("meta-header mode: uses the kiln extension `__kiln_define_member`")
+    );
+    assert_eq!(
+        skip("//@ expect: compile-ok\n//@ args: -stdlib=libc++\n#include \"kiln_meta_traits.h\"\n")
+            .as_deref(),
+        Some("meta-header mode: the test does not use libstdc++")
+    );
+    assert!(skip("//@ expect: ast\n#include \"kiln_meta.h\"\n").is_some());
+}
+
+#[test]
+fn meta_header_directive_errors() {
+    for bad in ["//@ meta-header: skip\n", "//@ meta-header: off\n", "//@ meta-header: skipx y\n"] {
+        let src = format!("//@ expect: compile-ok\n{bad}");
+        assert!(directives::parse(&src, directives::Lang::Cxx).is_err(), "{bad}");
+    }
+    let dup = "//@ expect: compile-ok\n//@ meta-header: skip a\n//@ meta-header: skip b\n";
+    assert!(directives::parse(dup, directives::Lang::Cxx).is_err());
 }

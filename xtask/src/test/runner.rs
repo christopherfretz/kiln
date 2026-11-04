@@ -39,6 +39,13 @@ pub struct Config {
     /// The GCC oracle of `oracle: gcc` tests (`KILN_GCC`); `None` drops
     /// their GCC comparison (`spec/harness.md` "GCC oracle").
     pub gcc: Option<PathBuf>,
+    /// The GCC oracle's installation prefix (`%{gcc_toolchain}`, what
+    /// `--gcc-toolchain=` takes); `None` without a GCC oracle.
+    pub gcc_toolchain: Option<PathBuf>,
+    /// `--meta-header`: the directory of the compatibility headers that
+    /// stand in for `tests/support/kiln_meta*.h` (they include the real
+    /// `<meta>`); `None` outside the header-differential mode.
+    pub meta_header: Option<PathBuf>,
     /// `/usr/lib/llvm-N` of the oracle release: kiln++ runs with it as
     /// `KILN_LLVM_DIR` (`spec/harness.md` "Oracle toolchain").
     pub llvm_dir: PathBuf,
@@ -215,6 +222,17 @@ impl Test<'_> {
         ) {
             return (Status::Skip, Some(r), String::new());
         }
+        if self.cfg.gcc_toolchain.is_none()
+            && spec.args.iter().any(|a| a.contains("%{gcc_toolchain}"))
+        {
+            let reason = "no GCC oracle, so no `%{gcc_toolchain}` (the test needs GCC's libstdc++)";
+            return (Status::Skip, Some(reason.to_owned()), String::new());
+        }
+        if self.cfg.meta_header.is_some() {
+            if let Some(reason) = meta_header_skip(&spec, &source) {
+                return (Status::Skip, Some(reason), String::new());
+            }
+        }
         if spec.is_kiln_specific() && kind != CompilerKind::Kiln {
             let directive = if spec.oven.is_empty() { "inst-report:" } else { "oven:" };
             let reason =
@@ -268,9 +286,13 @@ impl Test<'_> {
             Expect::Cfg => self.cfg_dump(&spec),
         };
         let outcome = self.with_gcc_verdict(&spec, outcome);
-        // Budgets are checked once the kind's own checks pass.
-        let outcome = outcome.and_then(|()| self.check_oven(&spec));
-        let outcome = outcome.and_then(|()| self.check_inst_report(&spec));
+        // Budgets are checked once the kind's own checks pass; the
+        // header-differential mode has none (the real <meta> evaluates
+        // thousands of its own constants).
+        let budgets = self.cfg.meta_header.is_none();
+        let outcome = outcome.and_then(|()| if budgets { self.check_oven(&spec) } else { Ok(()) });
+        let outcome =
+            outcome.and_then(|()| if budgets { self.check_inst_report(&spec) } else { Ok(()) });
         let xfail = spec.xfail_reason(kind).map(str::to_owned);
         match (outcome, xfail) {
             (Ok(()), None) => (Status::Pass, None, String::new()),
@@ -352,6 +374,9 @@ impl Test<'_> {
         c.args(mode);
         if let Some(n) = self.clang_compat(program, spec) {
             c.arg(format!("-fclang-compat={n}"));
+        }
+        if program == self.cfg.compiler {
+            c.args(self.meta_header_flags(true));
         }
         c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
         if program == self.cfg.compiler {
@@ -441,9 +466,25 @@ impl Test<'_> {
         Some(compat_for(oracle, spec.requires_clang, spec.requires_clang_below))
     }
 
+    /// The header-differential mode's flags, ahead of the test's `args:`:
+    /// the compatibility headers' directory first on the include path (so
+    /// `"kiln_meta.h"` is theirs) and, for kiln (`toolchain`), the GCC
+    /// installation whose libstdc++ has `<meta>`. Empty outside the mode.
+    fn meta_header_flags(&self, toolchain: bool) -> Vec<String> {
+        let (Some(dir), Some(gcc)) = (&self.cfg.meta_header, &self.cfg.gcc_toolchain) else {
+            return Vec::new();
+        };
+        let mut v = vec![format!("-I{}", dir.display())];
+        if toolchain {
+            v.push(format!("--gcc-toolchain={}", gcc.display()));
+        }
+        v
+    }
+
     /// The value of an `args:` placeholder (`spec/harness.md` "Placeholders").
     fn placeholder(&self, name: &str) -> Option<String> {
         let path = match name {
+            "gcc_toolchain" => self.cfg.gcc_toolchain.clone()?,
             "repo_root" => self.cfg.root.clone(),
             "resource_dir" => self.cfg.root.join("resource"),
             "test_dir" => self.case.path.parent()?.to_path_buf(),
@@ -1505,6 +1546,55 @@ fn compat_for(
         return levels.iter().copied().rev().find(|&l| l < b[0]).unwrap_or(oracle);
     }
     oracle
+}
+
+/// Helpers of `tests/support/kiln_meta.h` that its header-differential
+/// stand-in (`tests/support/meta-header/kiln_meta.h`) also defines, over
+/// the standard API: tests that use them still run in the mode.
+const META_HEADER_HELPERS: &[&str] = &["__kiln_data_members", "__kiln_info_array"];
+
+/// Why the header-differential mode (`--meta-header`) leaves a test out,
+/// or `None` when it runs it: it must include a `kiln_meta*.h`, not say
+/// `meta-header: skip`, be a kind whose outcome does not depend on the
+/// header's declarations (`compile-ok`, `compile-fail`, `run`,
+/// `no-crash`), not select libc++, and name no kiln extension
+/// (`__kiln_*`, other than [`META_HEADER_HELPERS`]).
+pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> {
+    const MODE: &str = "meta-header mode";
+    let includes = source.lines().any(|l| {
+        let t = l.trim_start();
+        t.starts_with('#') && t.contains("include") && t.contains("\"kiln_meta")
+    });
+    if !includes {
+        return Some(format!("{MODE}: does not include kiln_meta.h"));
+    }
+    if let Some(r) = &spec.meta_header_skip {
+        return Some(format!("{MODE}: {r}"));
+    }
+    if !matches!(
+        spec.expect,
+        Expect::CompileOk | Expect::CompileFail | Expect::Run | Expect::NoCrash
+    ) {
+        return Some(format!(
+            "{MODE}: a {:?} test compares kiln_meta.h's own declarations",
+            spec.expect
+        ));
+    }
+    if spec.args.iter().any(|a| a == "-stdlib=libc++" || a.starts_with("-nostdinc")) {
+        return Some(format!("{MODE}: the test does not use libstdc++"));
+    }
+    let mut rest = source;
+    while let Some(i) = rest.find("__kiln_") {
+        let tail = &rest[i..];
+        let end =
+            tail.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(tail.len());
+        let ident = &tail[..end];
+        if !META_HEADER_HELPERS.contains(&ident) {
+            return Some(format!("{MODE}: uses the kiln extension `{ident}`"));
+        }
+        rest = &tail[end..];
+    }
+    None
 }
 
 #[cfg(test)]
