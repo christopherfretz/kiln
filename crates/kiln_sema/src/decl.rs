@@ -2118,6 +2118,27 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The member among `found` (an out-of-line member function
+    /// declaration's redeclaration lookup) that is neither a function, a
+    /// function template nor a class or enumeration, when no function is
+    /// found: a variable, data member, type alias or enumerator, which the
+    /// declaration redefines as a different kind of symbol (clang
+    /// `MergeFunctionDecl`; a tag name is hidden and matches nothing).
+    pub(crate) fn non_function_member(&self, found: &[DeclId]) -> Option<DeclId> {
+        let is_fn = |d: DeclId| {
+            let k = self.kind_of(self.ast.strip_shadow(d));
+            k.payload() == kiln_ast::decl::PayloadClass::Function || k == DeclKind::FunctionTemplate
+        };
+        if found.iter().any(|&d| is_fn(d)) {
+            return None;
+        }
+        found.iter().copied().find(|&d| {
+            !is_tag_kind(self.kind_of(d))
+                && !self.ast.decls.get(d).has(DeclFlags::INVALID)
+                && self.kind_of(d) != DeclKind::UsingShadow
+        })
+    }
+
     /// Previous declarations of `name` that `d` may redeclare.
     pub(crate) fn find_prev(&self, name: Symbol, qualifier: Option<DeclId>) -> Option<DeclId> {
         let found = self.prev_candidates(name, qualifier);
@@ -3514,6 +3535,9 @@ impl Sema<'_, '_> {
         // would redeclare once instantiated, whose exception
         // specification it is checked against now (`pattern_friend_prev`).
         let mut pattern_prev = None;
+        // The non-function member an out-of-line member function
+        // declaration names (`X S::x();` for `static X x;`).
+        let mut other_kind_member = None;
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
         let new_fn = NewFn {
             ty,
@@ -3632,7 +3656,11 @@ impl Sema<'_, '_> {
             prev
         } else if method {
             let found = self.prev_candidates_dn(dname, d.qualifier);
-            self.pick_prev_function(&found, new_fn)
+            let p = self.pick_prev_function(&found, new_fn);
+            if !in_class && !friend {
+                other_kind_member = self.non_function_member(&found);
+            }
+            p
         } else {
             self.find_prev_function(dname, d.qualifier, new_fn)
         };
@@ -3729,6 +3757,14 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_friend_def_no_match, d.name_loc())
                 .arg(fname.clone())
                 .arg(self.qualifier_desc(ctx));
+            self.emit(msg);
+            invalid_redecl = true;
+        } else if let Some(o) = other_kind_member {
+            // clang `MergeFunctionDecl`: the member found is not a function
+            // (`template<> X C<int>::x();` for a static data member `x`
+            // declares a function, [dcl.ambig.res]/1, [temp.expl.spec]/14).
+            let msg = self.diag(DiagId::sema_redefinition_different_kind, d.name_loc());
+            let msg = self.note_prev(msg.arg(fname.clone()), o, true);
             self.emit(msg);
             invalid_redecl = true;
         } else if method && !in_class && !matches_member
@@ -4914,6 +4950,11 @@ impl Sema<'_, '_> {
         // a definition only when inline (constexpr implies inline).
         if self.is_in_class_static(v) {
             return self.ast.decls.var(v).is_some_and(|x| x.spec.is_inline());
+        }
+        // [temp.expl.spec]/14: an explicit specialization of a static data
+        // member without an initializer is a declaration.
+        if self.ast.is_member_spec_declaration(v) {
+            return false;
         }
         // [dcl.link]/8: `extern "C" int x;` is treated as `extern`.
         let ext = |x: &kiln_ast::decl::VarData| {

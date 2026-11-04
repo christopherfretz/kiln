@@ -869,6 +869,30 @@ impl Ast {
         }
     }
 
+    /// Whether variable `v`, declared without an initializer, is an
+    /// explicit specialization of a static data member or of a static data
+    /// member template, which is then a declaration, not a definition
+    /// ([temp.expl.spec]/14; clang `VarDecl::isThisDeclarationADefinition`
+    /// returns `DeclarationOnly`): `template<> int C<char>::n;` and
+    /// `template<> const int S::v<int>;` are neither default-initialized
+    /// nor emitted, and a later one with an initializer defines them.
+    pub fn is_member_spec_declaration(&self, v: DeclId) -> bool {
+        if self.decls.var(v).is_none_or(|x| x.init.is_some()) {
+            return false;
+        }
+        let in_record = self
+            .decls
+            .get(v)
+            .ctx()
+            .is_some_and(|c| self.decls.get(c).kind() == DeclKind::CXXRecord);
+        if !in_record {
+            return false;
+        }
+        let explicit = SpecKind::ExplicitSpecialization;
+        self.spec_info(v).is_some_and(|(_, i)| i.kind == explicit)
+            || self.member_spec_info(self.first(v)).is_some_and(|(_, i)| i.kind == explicit)
+    }
+
     /// The pattern `d` was instantiated from (spec/ast.md §8.2): a
     /// specialization's `from`, a member's `instantiated_from`, or the
     /// sparse map.
