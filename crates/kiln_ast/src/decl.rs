@@ -5236,6 +5236,11 @@ pub mod builtin {
             all().get(usize::try_from(id.checked_sub(BASE)?).ok()?)
         }
 
+        /// The required-features string of the NEON builtin `name`.
+        pub fn required_features(name: &str) -> Option<&'static str> {
+            row(by_name(name)?).map(|r| r.features)
+        }
+
         /// Whether `id` is a NEON builtin.
         pub fn is_neon(id: u32) -> bool {
             row(id).is_some()
