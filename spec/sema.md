@@ -2618,13 +2618,32 @@ and returns the scope it names:
     `sema_static_assert_message_constexpr` plus the failure notes, and
     the text is printed as clang prints a string argument (valid UTF-8
     as is, an unprintable code point as `<U+XXXX>`, a stray byte as
-    `<XX>`). When the assertion holds the message is still evaluated,
-    as clang 22 does, and one that is not constant is
-    `sema_static_assert_message_not_constant`
-    (`-Winvalid-static-assert-message`, an error by default; disabling
-    it skips the evaluation, the operand being unevaluated). Wording
-    follows clang 22 (tests `requires: clang>=22`):
-    `dcl.pre/p2741-static-assert-message*.cpp`.
+    `<XX>`). The failing assertion's message is evaluated once (in a
+    template, on each failing instantiation only), and its diagnostic
+    precedes the failed assertion's, as in clang. Wording follows clang
+    22 (tests `requires: clang>=22`):
+    `dcl.pre/p2741-static-assert-message*.cpp`,
+    `dcl.pre/static-assert-message-not-constant-on-failure*.cpp`.
+  - **The message of an assertion that holds is an unevaluated
+    operand** ([dcl.pre]/12, P2741R3; WP-570). When the converted
+    condition is `true`, or the declaration is in a template definition
+    (the condition is not evaluated there at all), the message is only
+    type-checked (the `size()`/`data()` checks above) and never
+    evaluated: a message whose evaluation would throw, read a null
+    pointer or call a non-constexpr function is fine, and a consteval
+    call in it is not an immediate invocation (the parser builds the
+    message in a constant-evaluated context, `parse_constant_expr`).
+    This follows the standard and GCC 16.1. **Deviation from clang 19
+    and 22**, which evaluate such a message and report
+    `sema_static_assert_message_not_constant` as an error by default:
+    in kiln that check is `-Winvalid-static-assert-message`, off by
+    default (`WarningOff`; `-Werror=invalid-static-assert-message`
+    gives clang's behaviour), and the message is evaluated only while
+    it is enabled. Tests:
+    `dcl.pre/static-assert-message-unevaluated-when-true.cpp` (`oracle:
+    gcc`, `xfail(clang)`), `static-assert-message-unevaluated-reflection.cpp`
+    (`oracle: gcc`), `p2741-static-assert-message-diags.cpp` (the
+    opt-in check).
 
 ### 4.7 Exception specifications (`except.rs`)
 The parser calls these while parsing a function declarator, and stores
