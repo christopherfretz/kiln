@@ -433,6 +433,7 @@ mod tests {
             frozen_bytes: 16,
             static_bytes: 0,
             memo_hits: 0,
+            refl_bytes: 0,
             wall_us: 0,
             evaluations: 2,
         };

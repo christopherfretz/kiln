@@ -2656,6 +2656,21 @@ impl DeclArena {
         d.defn = d.defn.with(DefinitionBits::BEING_DEFINED);
     }
 
+    /// The class-key of implicit specialization `r` becomes that of its
+    /// pattern's definition (`tag`) as its definition is instantiated: a
+    /// template first declared `class` and defined `struct` (libstdc++ 16
+    /// `__format::_Scanner`) gives its members public default access
+    /// ([class.access]/3 follows the class-key of the definition).
+    ///
+    /// # Panics
+    /// If `r` is complete, or `tag` changes a union to a class or back.
+    pub fn set_instantiated_tag(&mut self, r: DeclId, tag: TagKind) {
+        let d = self.record_mut(r);
+        assert!(!d.defn.contains(DefinitionBits::COMPLETE), "class key of a complete class");
+        assert_eq!(d.tag == TagKind::Union, tag == TagKind::Union, "union class-key mismatch");
+        d.tag = tag;
+    }
+
     /// Marks class `r` (being defined) as the closure type of lambda `l`
     /// ([expr.prim.lambda.closure]).
     pub fn set_closure(&mut self, r: DeclId, l: LambdaId) {
@@ -4646,6 +4661,11 @@ pub mod builtin {
     /// expression of a consteval block; spec/consteval-blocks.md §3);
     /// false at runtime.
     pub const KILN_PLAINLY_CONSTANT_EVALUATED: u32 = 2150;
+    // ---- WP-484 (GCC builtins libstdc++'s `<meta>` tests for).
+    /// `bool __builtin_is_string_literal(const CharT *p)` (GCC 16;
+    /// `std::is_string_literal`, [meta.string.literal]): whether `p`
+    /// points into a string literal object. Consteval.
+    pub const IS_STRING_LITERAL: u32 = 2151;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
@@ -4675,6 +4695,8 @@ pub mod builtin {
         row(ELEMENTWISE_SUB_SAT, "__builtin_elementwise_sub_sat", "v.", N | C | T),
         // WP-473.
         row(KILN_PLAINLY_CONSTANT_EVALUATED, "__kiln_plainly_constant_evaluated", "b", N),
+        // WP-484.
+        row(IS_STRING_LITERAL, "__builtin_is_string_literal", "b.", N | T | I),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19

@@ -29,7 +29,7 @@ consteval unsigned long loop(int n) {
   return total;
 }
 static_assert(identifier_of(^^Alpha) == "Alpha");
-static_assert(display_string_of(^^Alpha::beta) == "beta");
+static_assert(display_string_of(^^Alpha::beta) == "Alpha::beta");
 static_assert(source_location_of(^^Alpha).line() == 18);
 static_assert(loop(10000) == 2 * (3334 * 5 + 3333 * 4 + 3333 * 5));
 

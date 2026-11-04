@@ -49,7 +49,7 @@ pub fn require_gcc_from_env() -> bool {
 /// A test's `args:` (placeholders already substituted) as GCC 16 takes
 /// them: kiln- and clang-only flags are dropped (`-fclang-compat=`,
 /// `-fkiln-*`, `-fconstexpr-report=`, `-stdlib=`, `-resource-dir`,
-/// `-Xclang <arg>`), and the two limits GCC spells differently are
+/// `-Xclang <arg>`, `--gcc-toolchain=`: GCC is its own toolchain), and the two limits GCC spells differently are
 /// renamed (`-ferror-limit=N` is `-fmax-errors=N`, `-fconstexpr-steps=N`
 /// is `-fconstexpr-ops-limit=N`). `-freflection`, `-I`, `-D`, `-W...` and
 /// the rest pass through: GCC 16.1 spells reflection `-std=c++26
@@ -68,12 +68,36 @@ pub fn gcc_args(args: &[String]) -> Vec<String> {
             || a.starts_with("-fkiln-")
             || a.starts_with("-fconstexpr-report")
             || a.starts_with("-stdlib=")
-            || a.starts_with("-resource-dir="))
+            || a.starts_with("-resource-dir=")
+            || a.starts_with("--gcc-toolchain="))
         {
             out.push(a.clone());
         }
     }
     out
+}
+
+/// The installation prefix of a GCC, from its `-print-search-dirs`
+/// output: the `install:` directory (`<prefix>/lib/gcc/<triple>/<version>/`)
+/// four levels up, not yet canonicalized. What clang's (and kiln's)
+/// `--gcc-toolchain=` takes. `None` without an `install:` line of that depth.
+pub fn gcc_install_prefix(search_dirs: &str) -> Option<PathBuf> {
+    let line = search_dirs.lines().find_map(|l| l.strip_prefix("install:"))?;
+    let mut p = PathBuf::from(line.trim());
+    for _ in 0..4 {
+        if !p.pop() {
+            return None;
+        }
+    }
+    (!p.as_os_str().is_empty()).then_some(p)
+}
+
+/// [`gcc_install_prefix`] of the GCC at `gcc`, canonicalized; `None` when
+/// it cannot be run or names no existing prefix.
+pub fn gcc_toolchain_of(gcc: &std::path::Path) -> Option<PathBuf> {
+    let o = std::process::Command::new(gcc).arg("-print-search-dirs").output().ok()?;
+    let prefix = gcc_install_prefix(&String::from_utf8_lossy(&o.stdout))?;
+    std::fs::canonicalize(prefix).ok().filter(|p| p.is_dir())
 }
 
 /// The environment variable that selects the oracle release.
@@ -165,6 +189,24 @@ impl Oracle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gcc_install_prefix_is_four_up_from_install() {
+        let out =
+            "install: /opt/g/usr/local/bin/../lib/gcc/aarch64-linux-gnu/16.1.0/\nprograms: =/x\n";
+        assert_eq!(gcc_install_prefix(out), Some(PathBuf::from("/opt/g/usr/local/bin/..")));
+        let distro = "install: /usr/lib/gcc/x86_64-linux-gnu/16/\n";
+        assert_eq!(gcc_install_prefix(distro), Some(PathBuf::from("/usr")));
+        assert_eq!(gcc_install_prefix("programs: =/x\n"), None);
+        assert_eq!(gcc_install_prefix("install: /a/b\n"), None);
+    }
+
+    #[test]
+    fn gcc_args_drop_gcc_toolchain() {
+        let a: Vec<String> =
+            ["--gcc-toolchain=/g", "-freflection"].iter().map(|s| (*s).to_owned()).collect();
+        assert_eq!(gcc_args(&a), ["-freflection"]);
+    }
 
     #[test]
     fn unset_and_empty_are_22() {

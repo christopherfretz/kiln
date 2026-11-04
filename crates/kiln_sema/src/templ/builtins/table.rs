@@ -478,6 +478,9 @@ pub static TABLE: &[Row] = &[
     f("__builtin_is_within_lifetime", DONE, Oven::Yes),
     // WP-473: kiln extension, the Oven's `Op::IsConstEval` (aux 2).
     f("__kiln_plainly_constant_evaluated", DONE, Oven::Yes),
+    // WP-484: GCC's (libstdc++ `<meta>` declares `std::is_string_literal`
+    // over it); sema `builtin_is_string_literal`, the Oven `bi::STRING_LIT`.
+    f("__builtin_is_string_literal", DONE, Oven::Yes),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.
@@ -511,6 +514,12 @@ pub fn transform_by_name(name: &str) -> Option<UnaryTransformKind> {
 /// `name` is not in the table (the caller answers as clang 19 does).
 pub fn has_builtin_staged(name: &str) -> Option<bool> {
     lookup(name).map(|r| r.status == Status::Done)
+}
+
+/// Whether `name` is a GCC builtin clang does not have, which kiln
+/// implements and reports through `__has_builtin` (WP-484).
+pub fn gcc_only(name: &str) -> bool {
+    matches!(name, "__builtin_is_string_literal")
 }
 
 /// The staged `__has_constexpr_builtin(name)` answer: `Some(false)` for a

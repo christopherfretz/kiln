@@ -1,9 +1,8 @@
-// [meta.reflection.substitute] (P2996R13): for a function template,
-// substitute throws unless the arguments name a unique specialization: too
-// few arguments to deduce from, or a substitution failure in its type. A
-// specialization whose return type is an undeduced placeholder is not one
-// either: substitution does not instantiate the body to deduce it (GCC 16.1
-// agrees).
+// [meta.reflection.substitute] (P2996R13): for a function template, substitute
+// throws unless the arguments name a unique specialization: too few arguments
+// to deduce from, or a substitution failure in its type. A specialization
+// whose return type is an undeduced placeholder is not one either:
+// substitution does not instantiate the body to deduce it (GCC 16.1 agrees).
 //@ expect: compile-fail
 //@ oracle: gcc
 //@ args: -freflection -I tests/support
@@ -21,6 +20,7 @@
 //@ diag: 36:20 note "'^^ret' cannot be substituted with these template arguments: the specialization's type contains an undeduced placeholder type"
 //@ diag: 36:16 error "constexpr variable 'c' must be initialized by a constant expression"
 //@ diag: 36:20 note "'^^ret' cannot be substituted with these template arguments: the specialization's type contains an undeduced placeholder type"
+//@ meta-header: skip the note spells the real header's default template argument initializer_list<info>
 #if __has_include(<meta>)
 #include <meta>
 #else

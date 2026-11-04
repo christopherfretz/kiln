@@ -1089,6 +1089,16 @@ qualifier's type, checked against the object at instantiation, and
 (parse.md). Tests:
 `tests/conformance/expr.prim.id.dtor/dependent-member-destructor-name*.cpp`.
 
+A member access the pattern resolved into the current instantiation
+(`l.base()` with `l` a `const C&`, in a friend's trailing `decltype`
+inside `C`'s definition) is rebuilt at instantiation without a
+completeness check while that specialization is being defined (clang
+`TreeTransform::RebuildMemberExpr` does not call `RequireCompleteType`;
+`Sema::pattern_member_access`, set by `subst/exprs.rs` for the rebuild
+and read once by `member_object`): libstdc++ 16 `__normal_iterator`'s
+`friend auto operator-(...) -> decltype(l.base() - r.base())` (WP-525,
+`temp.inst/friend-trailing-decltype-current-instantiation.cpp`).
+
 ### 3.5 ADL and operator lookup at instantiation ([temp.dep.candidate])
 
 When a dependent unqualified call or operator is substituted:
@@ -1293,7 +1303,14 @@ arguments are substituted with the enclosing level, so `In<T, B>` of
 original partial as its pattern (`instantiated_from_map`). A
 specialization that matches it is instantiated from the original
 partial's definition, with the enclosing arguments as the outer levels
-plus the deduced arguments (§4.6).
+plus the deduced arguments (§4.6). An in-class partial specialization
+of a member *variable* template is redeclared the same way
+(`AstBuilder::var_partial_spec` with the substituted type), and its
+type and initializer are instantiated from the original partial (the
+`instantiated_from_map` entry; `instantiate_var_spec_decl`): libstdc++
+16 `<optional>` `__not_constructing_bool_from_optional<_From, bool>`,
+`<bits/hashtable.h>` `__is_key_type` (WP-525,
+`temp.spec.partial.member/member-var-partial-spec-in-class-template.cpp`).
 Its associated constraints stay the original partial's, unsubstituted
 (`member_constraints`, as for a member template): matching checks them
 with the enclosing specialization's levels plus the deduced arguments
@@ -2130,11 +2147,21 @@ WP-070b):
    covers:
    - a speculative fold (`try_fold`): it never instantiates;
    - a failed instantiation, or one after a fatal error;
-   - a member that was marked but whose instantiation is still
-     deferred because its pattern was not yet defined at the mark
-     (`InstState.queued`). clang also leaves it undefined: the test
-     `templates/diag/temp.inst-constexpr-defined-later.cpp` pins the
-     note.
+   - a member that was marked while its pattern was undefined
+     (`InstState.queued`) and whose pattern is **still** undefined at
+     the evaluation: `templates/diag/temp.inst-constexpr-still-undefined.cpp`
+     pins the note.
+4. As landed by WP-484 ([temp.inst]/8, GCC 16.1 as the oracle): a
+   queued **constexpr** member whose pattern **is** defined by the time
+   of the evaluation is instantiated on demand, as in step 2 (POI = the
+   evaluation's location); its queue entry then finds it defined at the
+   end of the TU. Nothing else changes: non-Oven instantiation keeps its
+   timing and the queue is never reordered.
+   `templates/diag/temp.inst-constexpr-defined-later.cpp` (`oracle:
+   gcc`) pins it; clang 19/22 still report the function undefined, which
+   is a clang limitation. libstdc++ 16.1 needs it: `operator""s` queues
+   `basic_string::_M_construct<const char8_t*>` before `basic_string.tcc`
+   defines it, and every `std::meta::exception` builds a `u8string`.
 
 **Variable template specializations as declarations (WP-417).**
 - `[[deprecated]]`: an explicit specialization carries its own

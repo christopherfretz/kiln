@@ -2717,6 +2717,9 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
+        if !d.defaulted {
+            self.check_consteval_only_fn(decl, d.name_loc());
+        }
         Some(decl)
     }
 
@@ -4093,7 +4096,9 @@ impl Sema<'_, '_> {
         } else {
             self.register_local(name, f);
         }
-        self.check_consteval_only_fn(f, d.name_loc());
+        if !d.defaulted {
+            self.check_consteval_only_fn(f, d.name_loc());
+        }
         f
     }
 
@@ -5380,14 +5385,30 @@ impl Sema<'_, '_> {
     /// parameter, or any initializer of a dependent class type: kept for
     /// instantiation; returns whether it was.
     fn defer_dependent_init(&mut self, v: DeclId, ty: QualType, init: &Initializer) -> bool {
+        match self.dependent_init_form(ty, init) {
+            Some(e) => {
+                self.set_dependent_var_init(v, e);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The form kept for instantiation of initializer `init` of an
+    /// object of type `ty` (a variable or an init-capture) when it
+    /// depends on a template parameter as [`Sema::defer_dependent_init`]
+    /// describes; `None` when it is initialized now.
+    pub(crate) fn dependent_init_form(
+        &mut self,
+        ty: QualType,
+        init: &Initializer,
+    ) -> Option<ExprId> {
         if let Initializer::List(l) = init
             && (self.ast.types.is_dependent(ty) || self.init_list_type_dependent(l))
         {
             // Initialized at instantiation ([temp.dep.expr]); clang keeps
             // the list as written with type `void` (and `int[]` unbounded).
-            let e = self.dependent_init_list(l);
-            self.set_dependent_var_init(v, e);
-            return true;
+            return Some(self.dependent_init_list(l));
         }
         // A class that is (a member of) the current instantiation is a
         // dependent type ([temp.dep.type]/7): its constructors are chosen
@@ -5398,8 +5419,7 @@ impl Sema<'_, '_> {
         if let Initializer::Expr(e) = init
             && dependent_class
         {
-            self.set_dependent_var_init(v, *e);
-            return true;
+            return Some(*e);
         }
         // `T x({a, b})`: a braced-init-list argument is kept for
         // instantiation with a dependent `T` too (it has no type of its
@@ -5424,11 +5444,9 @@ impl Sema<'_, '_> {
             // argument keeps its nested lists (`T m({{1, 2}, {3, 4}})`):
             // the placeholder holds only the top-level expressions.
             let es = self.dependent_args(es);
-            let e = self.builder().paren_list(&es, *l, *r);
-            self.set_dependent_var_init(v, e);
-            return true;
+            return Some(self.builder().paren_list(&es, *l, *r));
         }
-        false
+        None
     }
 
     /// Initializes variable `v` of type `ty` from `init`. A variable
@@ -5647,7 +5665,7 @@ impl Sema<'_, '_> {
     /// `auto x = e;` ([dcl.type.auto.deduct]): deduces through the
     /// `deduce_auto` seam (`templ/auto.rs`) and reports a failure as
     /// clang's `DeduceVariableDeclarationType` does.
-    fn deduce_var_auto(
+    pub(crate) fn deduce_var_auto(
         &mut self,
         v: DeclId,
         declared: QualType,
@@ -5656,37 +5674,18 @@ impl Sema<'_, '_> {
         direct: bool,
     ) -> Option<QualType> {
         use crate::templ::auto::AutoFail;
-        let (items, kind, lbrace) = auto_init_items(init, direct);
-        // [temp.deduct.call]/6: every member of an overload set deduces
-        // `auto`, so nothing is deduced (a placeholder in a function
-        // declarator selecting one member is not implemented) -- except
-        // that a set of one non-template function deduces from it,
-        // explicit template arguments ignored (clang's
-        // `ResolveOverloadForDeduction`; only typo correction builds one,
-        // and the initialization then fails against the deduced type).
-        let mut items = items;
-        for it in items.iter_mut().flatten() {
-            if let Some((_, d, _)) = self.single_overload_candidate(*it) {
-                let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
-                let at = self.ast.exprs.get(*it).loc();
-                *it = self.builder().decl_ref(
-                    d,
-                    ty,
-                    at,
-                    None,
-                    kiln_ast::expr::NonOdrUse::None,
-                    kiln_ast::expr::ExprFlags::NONE,
-                );
-            }
-        }
+        let (mut items, kind, lbrace) = auto_init_items(init, direct);
+        self.resolve_single_overloads(&mut items);
         let overload = items
             .iter()
             .flatten()
             .copied()
             .find(|&e| self.ast.exprs.get(e).ty() == QualType::OVERLOAD);
-        let fail = match overload {
-            Some(e) => AutoFail::Incompatible(e),
-            None => match self.deduce_auto(declared, &items, kind) {
+        let paren_braces = self.auto_paren_braces(init, direct);
+        let fail = match (overload, paren_braces) {
+            (_, Some(nested)) => AutoFail::ParenBraces(nested),
+            (Some(e), None) => AutoFail::Incompatible(e),
+            (None, None) => match self.deduce_auto(declared, &items, kind) {
                 // clang 19's placeholder-typed specialization
                 // (`undeduced_var_spec_use_19`) deduces only itself; any
                 // other variable "deduced" from it is rejected (clang 19
@@ -5727,10 +5726,26 @@ impl Sema<'_, '_> {
                 Err(f) => f,
             },
         };
-        let lbrace = lbrace.unwrap_or(loc);
+        // A parenthesized initializer's errors point at its `(`.
+        let lbrace = match init {
+            Initializer::Paren(_, lp, _) => *lp,
+            _ => lbrace.unwrap_or(loc),
+        };
         let name = self.decl_name(v);
+        // An init-capture ([expr.prim.lambda.capture]/6) is reported as
+        // clang's `err_init_capture_*` (the capture is named, not its type).
+        if self.init_entity == Some(crate::init::entity::CAPTURE)
+            && self.report_init_capture_auto_fail(fail, &name, loc, lbrace)
+        {
+            return None;
+        }
         let msg = match fail {
             AutoFail::Error => return Some(QualType::ERROR),
+            AutoFail::ParenBraces(nested) => self
+                .diag(DiagId::sema_auto_var_init_paren_braces, lbrace)
+                .arg(name)
+                .arg(self.ty_arg(declared))
+                .arg(nested),
             AutoFail::Incompatible(e) => self
                 .diag(DiagId::sema_auto_var_deduction_failure, loc)
                 .arg(name)
@@ -5758,6 +5773,79 @@ impl Sema<'_, '_> {
         };
         self.emit(msg);
         None
+    }
+
+    /// [temp.deduct.call]/6 for a placeholder's initializer items: every
+    /// member of an overload set deduces `auto`, so nothing is deduced (a
+    /// placeholder in a function declarator selecting one member is not
+    /// implemented) -- except that a set of one non-template function
+    /// deduces from it, explicit template arguments ignored (clang's
+    /// `ResolveOverloadForDeduction`; only typo correction builds one, and
+    /// the initialization then fails against the deduced type).
+    fn resolve_single_overloads(&mut self, items: &mut [Option<ExprId>]) {
+        for it in items.iter_mut().flatten() {
+            if let Some((_, d, _)) = self.single_overload_candidate(*it) {
+                let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                let at = self.ast.exprs.get(*it).loc();
+                *it = self.builder().decl_ref(
+                    d,
+                    ty,
+                    at,
+                    None,
+                    kiln_ast::expr::NonOdrUse::None,
+                    kiln_ast::expr::ExprFlags::NONE,
+                );
+            }
+        }
+    }
+
+    /// clang's `err_auto_var_init_paren_braces`: a direct initializer
+    /// whose only element is itself braced, `auto x({1});` (0) or
+    /// `auto x{{1}};` (1), a type-dependent one included.
+    fn auto_paren_braces(&self, init: &Initializer, direct: bool) -> Option<usize> {
+        match init {
+            Initializer::Paren(es, ..) if es.len() == 1 => {
+                (self.ast.exprs.get(es[0]).kind() == ExprKind::InitListExpr).then_some(0usize)
+            }
+            Initializer::List(l) if direct && l.items.len() == 1 => {
+                let it = &l.items[0];
+                (it.designator.is_empty() && matches!(it.value, crate::init::InitValue::List(_)))
+                    .then_some(1usize)
+            }
+            _ => None,
+        }
+    }
+
+    /// Reports placeholder-deduction failure `fail` of init-capture `name`
+    /// in clang's `err_init_capture_*` wording; false for a failure with
+    /// no capture form (reported as for a variable).
+    fn report_init_capture_auto_fail(
+        &mut self,
+        fail: crate::templ::auto::AutoFail,
+        name: &str,
+        loc: Loc,
+        lbrace: Loc,
+    ) -> bool {
+        use crate::templ::auto::AutoFail;
+        let msg = match fail {
+            AutoFail::Incompatible(e) => self
+                .diag(DiagId::sema_init_capture_deduction_failure, loc)
+                .arg(name)
+                .arg(self.ty_arg(self.ast.exprs.get(e).ty())),
+            AutoFail::Multiple(at) => {
+                self.diag(DiagId::sema_init_capture_multiple_expressions, at).arg(name)
+            }
+            AutoFail::Empty => self.diag(DiagId::sema_init_capture_no_expression, lbrace).arg(name),
+            AutoFail::FromInitList => {
+                self.diag(DiagId::sema_init_capture_deduction_failure_from_init_list, loc).arg(name)
+            }
+            AutoFail::ParenBraces(nested) => {
+                self.diag(DiagId::sema_init_capture_paren_braces, lbrace).arg(name).arg(nested)
+            }
+            _ => return false,
+        };
+        self.emit(msg);
+        true
     }
 
     /// A `constexpr` variable's initializer must be a constant expression
@@ -9740,14 +9828,25 @@ impl Sema<'_, '_> {
                 return;
             };
             // clang `checkParamIsIntegerType`: a dependent parameter is
-            // not an integer either.
-            if !self.ast.types.is_integral(p) {
+            // not an integer either. alloc_align also takes
+            // `std::align_val_t` (`AddAllocAlignAttr`, `Type::isAlignValT`;
+            // libstdc++ 16 `operator new` overloads); alloc_size does not.
+            if !(self.ast.types.is_integral(p) || refs && self.is_align_val_t(p)) {
                 let at = self.ast.exprs.get(e).loc();
                 let msg = self.diag(DiagId::sema_attribute_param_integers_only, at).arg(name);
                 self.emit(msg);
                 return;
             }
         }
+    }
+
+    /// clang `Type::isAlignValT`: `q` is (sugar for) an enumeration
+    /// named `align_val_t` in namespace `std`.
+    fn is_align_val_t(&self, q: QualType) -> bool {
+        self.ast.types.as_enum(q).is_some_and(|d| {
+            self.ast.decls.get(d).name().as_ident() == Some(self.intern("align_val_t"))
+                && self.is_in_std_namespace(d)
+        })
     }
 
     /// GNU `format(archetype, F, A)` on function `d` (WP-186; clang

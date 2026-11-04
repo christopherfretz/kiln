@@ -1081,7 +1081,7 @@ impl Sema<'_, '_> {
                             .arg(s.ty_arg(class_ty))
                     }),
                     InitEntity::Base { inherited_virtual } => {
-                        self.subobject_member_access(m, true, |s, prot| {
+                        self.subobject_member_access(am, true, |s, prot| {
                             s.diag(DiagId::sema_access_base_ctor, loc)
                                 .arg(u8::from(inherited_virtual))
                                 .arg(s.ty_arg(ty))
@@ -1089,7 +1089,7 @@ impl Sema<'_, '_> {
                                 .arg(u8::from(prot))
                         })
                     }
-                    InitEntity::Field(_) => self.subobject_member_access(m, false, |s, prot| {
+                    InitEntity::Field(_) => self.subobject_member_access(am, false, |s, prot| {
                         s.diag(DiagId::sema_access_field_ctor, loc)
                             .arg(s.ty_arg(s.base_element(ty)))
                             .arg(sel)

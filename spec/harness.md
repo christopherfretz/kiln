@@ -18,6 +18,7 @@ cargo xtask test [options] [paths...]
 | `--no-oracle` | Skip all oracle comparisons, clang's and GCC's (`layout`, `vtables` and `ir` tests, which have no other reference, are then a SKIP). |
 | `--gcc <path>` | The GCC oracle of `oracle: gcc` tests (see "GCC oracle"). Default `$KILN_GCC`, else `g++-16` on `PATH`. A GCC named by the flag or by `KILN_GCC` that does not run or does not identify as GCC is a usage error (exit 2); the default one missing drops the GCC comparisons. |
 | `--no-gcc` | Drop the GCC comparisons only. |
+| `--meta-header` | The header-differential mode: the reflection tests compile against GCC 16.1's real `<meta>` instead of kiln's `tests/support/kiln_meta.h` (see "Header-differential mode"). Needs kiln as the compiler under test and a GCC oracle whose install prefix can be found (a usage error, exit 2, otherwise). |
 | `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--update` | Rewrite existing pp and ast `.expected` goldens with the actual output. |
@@ -82,7 +83,7 @@ directives are also ERRORs.
 | `pp-compare: tokens \| text` | `pp` only. How outputs are compared (see "pp comparison"). Default `tokens`. |
 | `ast-implicit` | `ast` only. Include implicit declarations (implicit special members, injected-class-names, ...): kiln gets `-fdump-ast=implicit`, clang's dump is normalized as `xtask clang-ast --implicit`. Use with `ast-filter` to keep the builtin implicit declarations out. |
 | `pp-linemarkers` | `pp` only. Preprocess with `-E` instead of `-E -P`, so the output keeps line markers, and compare them (see "pp comparison"). |
-| `oven: [<line>[:<col>]] <counter><=N\|<counter>>=N ...` | kiln-specific constexpr budget (`<=` an upper bound, `>=` a floor); `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`, `frozen_bytes`, `static_bytes`, `evaluations` or `memo_hits` (a budget-only counter the bench does not record; 0 in a report that lacks it). Not for `pp`. See "kiln-specific tests". |
+| `oven: [<line>[:<col>]] <counter><=N\|<counter>>=N ...` | kiln-specific constexpr budget (`<=` an upper bound, `>=` a floor); `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`, `frozen_bytes`, `static_bytes`, `evaluations`, `memo_hits` or `refl_bytes` (`memo_hits` and `refl_bytes` are budget-only counters the bench does not record; 0 in a report that lacks them). Not for `pp`. See "kiln-specific tests". |
 | `inst-report: <golden.json>` | kiln-specific: the compile's template instantiation report must equal the golden, timings masked. Only `compile-ok`/`compile-fail`. See "kiln-specific tests". |
 | `mem<=N` | Address-space budget of every process the test runs, in MiB (a positive integer; written without a `:` value). It lowers `--mem-limit` for this test (the cap is the smaller of the two) and applies even under `--mem-limit 0`. See "Resource limits". |
 | `requires: target-<arch>` | Run only when the test's **effective target** has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR). The effective target is the last `--target=<triple>`, `--target <triple>` or `-target <triple>` in the test's `args`; without one it is the compiler's default target, taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. The triple's architecture is its first `-` component, with `arm64` read as `aarch64` and `amd64` as `x86_64`. Otherwise **SKIP** with the reason `requires target-<arch>; the test targets <arch> (`<triple>`)` or, without a `--target`, `requires target-<arch>; the default target is <host>`. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228), which then needs no `requires`. A `run` test that pins a `--target` other than the host's skips rather than failing to run its binary (WP-239). |
@@ -93,9 +94,10 @@ directives are also ERRORs.
 | `requires: llvm>=N` / `requires: llvm<N` | Run only when every LLVM backend that consumes the test's IR has major version at least `N` (`>=`) or below `N` (`<`); `N` is a bare major (`llvm>=22.1` is an ERROR), each form at most once. The backends are kiln's when kiln is the compiler under test or the compared oracle (the major of the oracle release whose `/usr/lib/llvm-N` kiln gets as `KILN_LLVM_DIR`, "Oracle toolchain") and every clang the test runs (as for `clang>=`; a clang's LLVM major is its own major, an unreadable version never meets it). Otherwise **SKIP** with the reason `requires llvm>=N; kiln's backend is LLVM <M>` (or `the compiler`/`the oracle`; `... has no known LLVM`). Checked after the `clang` requirements. For IR goldens whose syntax an older LLVM rejects (clang 22's `dead_on_return`, AArch64 `"frame-pointer"="non-leaf-no-reserve"`; spec/codegen.md §6a) and for a workaround only an older backend needs. Unlike `clang>=`, it is never met vacuously by kiln: kiln's backend always counts. WP-386. |
 | `skip[(kiln\|clang\|gcc)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind (`skip(gcc)`: when GCC is the compiler under test; it contradicts `oracle: gcc`, an ERROR). The oracle is a clang, so `skip(clang)` also implies `oracle: none`: a `run`, `pp` or `verify` test clang cannot compile is not compared with the oracle when kiln runs it (its own expectations, `stdout`/`exit`, `.expected` or `expected-*` comments, are the reference), and `oracle: clang` with `skip(clang)` is an error. `layout`, `vtables` and `ir` tests compare with the oracle only (no golden), so `skip(clang)` on them is an ERROR (`skip(clang)` does not apply to ... tests; a test neither compiler should run uses unqualified `skip:`). Running kiln alone would check nothing but that it compiles, which `compile-ok` already says. WP-258. |
 | `xfail[(kiln\|clang\|gcc)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
+| `meta-header: skip <reason>` | **SKIP** the test in the header-differential mode (`--meta-header`), with the reason `meta-header mode: <reason>`; no effect otherwise. For a test whose answer through GCC's library code is known to differ from kiln's built-in one (a step budget the real `std::vector` exceeds, wording that names a `kiln_meta.h` signature). A missing reason, or any other value, is an ERROR. WP-484. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
-`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, each `requires` kind (`target-`, `clang>=`, `clang<`), `min-oracle`, `verify`, each `module` name, and each `skip`/`xfail` qualifier may appear
+`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, `meta-header`, each `requires` kind (`target-`, `clang>=`, `clang<`), `min-oracle`, `verify`, each `module` name, and each `skip`/`xfail` qualifier may appear
 at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
@@ -105,6 +107,7 @@ command is built:
 
 | Placeholder | Value |
 |---|---|
+| `%{gcc_toolchain}` | The GCC oracle's install prefix (absolute; what `--gcc-toolchain=` expects): `<gcc> -print-search-dirs`'s `install:` directory four components up (`<prefix>/lib/gcc/<triple>/<version>/`), when that is a directory. Without one (no GCC configured, or a GCC whose prefix cannot be found) a test whose `args` name it is a **SKIP** (`no GCC oracle, so no %{gcc_toolchain} (the test needs GCC's libstdc++)`). For tests that compile against libstdc++ 16.1's real `<meta>` (`args: -freflection --gcc-toolchain=%{gcc_toolchain}` with `oracle: gcc`; WP-484); CI's GCC image gives `/usr/local`. |
 | `%{repo_root}` | The repo root (absolute). |
 | `%{resource_dir}` | `<repo_root>/resource`, kiln's resource directory (the directory that contains `include/`, which is what `-resource-dir` expects). |
 | `%{test_dir}` | The directory containing the test (absolute). |
@@ -286,7 +289,8 @@ IR and diagnostic wording are **never** compared with GCC (`diag:` and
 `<gcc> [-x c|c++] -std=<std> <mode> <args> <file> [-o <out>]`, where
 `<args>` are the test's with the kiln- and clang-only flags dropped
 (`-fclang-compat=`, `-fkiln-*`, `-fconstexpr-report=`, `-stdlib=`,
-`-resource-dir <dir>`, `-Xclang <arg>`) and two renamed
+`-resource-dir <dir>`, `-Xclang <arg>`, `--gcc-toolchain=<dir>`: GCC
+uses its own library) and two renamed
 (`-ferror-limit=N` to `-fmax-errors=N`, `-fconstexpr-steps=N` to
 `-fconstexpr-ops-limit=N`). Reflection is `-std=c++26 -freflection` in
 both compilers (verified on GCC 16.1.0); libstdc++'s `<meta>` is GCC's
@@ -318,6 +322,45 @@ version, and the summary counts the comparisons ("Output"), so a log
 shows whether the oracle ran. `tests/conformance/meta.reflection.ci/`
 holds the `oracle: gcc` tests that need nothing past the reflection on
 `main` when CI first ran GCC (WP-502).
+
+### Header-differential mode
+
+`cargo xtask test --meta-header [paths...]` (WP-484) runs the reflection
+tests against libstdc++ 16.1's real `<meta>` instead of kiln's own
+declarations in `tests/support/kiln_meta.h`, so a `<meta>` function
+kiln's header declares differently from GCC's (a signature, a library
+function kiln implements as an intrinsic, a layout) shows up as a
+failing test. The mode:
+
+- puts `-I<repo_root>/tests/support/meta-header` and
+  `--gcc-toolchain=<prefix>` (the GCC oracle's, as `%{gcc_toolchain}`)
+  first on kiln's command line, before the test's `args`. That directory
+  holds a stand-in `kiln_meta.h` (and `kiln_meta_queries.h`,
+  `kiln_meta_traits.h`) that includes the real `<meta>` and the other
+  headers kiln's declares, defines the test helpers of kiln's header
+  that are not in the standard (`__kiln_info_array`,
+  `__kiln_data_members`, `name_is`) over the standard API, and defines
+  `KILN_REAL_META`. A test's `#include "kiln_meta.h"` finds the stand-in
+  first, so no test text changes: line numbers and file names in
+  diagnostics stay the same, and `diag:` expectations still apply.
+- passes `-I<dir>` (not the toolchain) to the GCC oracle too, so GCC
+  reads the same stand-in.
+- does not compare with the clang oracle, and does not check `oven:`
+  budgets (they are measured over kiln's built-in calls; the real
+  header's library code costs more steps and allocations).
+- **SKIP**s, with a reason starting `meta-header mode: `, a test that:
+  does not include a `kiln_meta*.h`; says `meta-header: skip <reason>`;
+  is not `compile-ok`, `compile-fail`, `run` or `no-crash` (an `ast`,
+  `ir` or `pp` test compares the declarations of kiln's header
+  themselves); passes `-stdlib=libc++` or `-nostdinc*`; or names a kiln
+  extension: an identifier `__kiln_*` other than the stand-in's helpers,
+  or a call of a non-`__kiln_` extension kiln's header declares
+  (`name_of(`).
+
+A test whose answer through the real header is known to differ guards
+the difference with `#if defined(__KILN__) && !defined(KILN_REAL_META)`
+or opts out with `meta-header: skip`. The mode is a local and release
+check (docs/VALIDATION.md), not part of `cargo xtask ci`.
 
 ### verify tests
 
@@ -1006,6 +1049,11 @@ infrastructure error. Parse errors name their line.
   arguments, working directory and environment survive the wrapper;
   `mem_limit_stops_a_hog`; `out_of_memory_signatures`;
   `kiln_stack_reservation`).
+- Header-differential mode and `%{gcc_toolchain}` (WP-484):
+  `meta_header_mode_selection` and `meta_header_directive_errors`
+  (tests.rs), `gcc_install_prefix_is_four_up_from_install` and
+  `gcc_args_drop_gcc_toolchain` (oracle.rs); the corpus run under
+  `--meta-header` (docs/VALIDATION.md).
 - `module:` / `min-oracle:` (WP-405): `module_and_min_oracle_directives`
   (directives.rs) and the `xtask/fixtures/basic` fixtures
   `pass-module.cpp` (two chained units precompiled by clang),

@@ -26,12 +26,20 @@ Section references in brackets are to the C++26 IS.
    recorded in this section, with the GCC spelling winning.
 2. **Reference compiler** (D1). GCC 16.1 (`g++-16 -std=c++26
    -freflection`) is the behavioural oracle. The differential runs off the
-   merge queue (→ WP-483). Tests stay kiln goldens (`oracle: none`, §9).
-3. **Library vehicle** (D2). The production target is libstdc++ 16.1's
-   `<meta>` (`__cpp_lib_reflection 202603L`), consumed by → WP-484. Until
-   then the test vehicle is `tests/support/kiln_meta.h`, which declares
-   the intrinsics with the IS names in `std::meta`. libc++ 22 ships no
-   `<meta>`.
+   merge queue (→ WP-483). Tests stay kiln goldens (`oracle: none`, §9),
+   except the real-header tests (item 3), which are `oracle: gcc`.
+3. **Library vehicle** (D2; WP-484). The primary header is libstdc++
+   16.1's real `<meta>` (`__cpp_lib_reflection 202603L`), reached with
+   `--gcc-toolchain=<GCC 16.1 prefix>`: every consteval function it
+   declares is an intrinsic row (§3.1) and every class it returns or takes
+   (`vector<info>`, `string_view`, `optional`, `source_location`,
+   `access_context`, `data_member_options`, `std::meta::exception`,
+   `strong_ordering`, the range templates) is read and written by layout
+   (§3.5). `tests/support/kiln_meta.h` stays the test vehicle of the
+   corpus, which runs on any host without GCC; the header-differential
+   mode (`cargo xtask test --meta-header`, spec/harness.md) runs that
+   corpus again over the real header, so the two cannot drift. libc++ 22
+   ships no `<meta>`.
 4. **Flag** (D6). Everything here requires `-freflection` and
    `-std=c++26`; without the flag the lexer produces none of `^^`, `[:`,
    `:]` and no rule below is reachable (implemented:
@@ -41,8 +49,11 @@ Section references in brackets are to the C++26 IS.
    `-freflection`: `__cpp_impl_reflection 202603L`; with `<meta>`,
    `__cpp_lib_reflection 202603L` and `__cpp_lib_define_static 202506L`.
    GCC 16.1 defines no separate consteval-block or annotation macro.
-   kiln predefines none of these until the corresponding surface passes
-   its tests.
+   kiln predefines `__cpp_impl_reflection` under `-freflection` at C++26
+   (WP-525: libstdc++ 16's `<meta>` is empty without it; spec/driver.md
+   "Predefines"); the library macros are the header's own (`<version>`
+   keys them on `__cpp_impl_reflection`), and both are GCC-compared by
+   `meta.syn/feature-macros.cpp` (WP-484).
 6. **Extensions.** `__kiln_define_member` (§6.3) is the only one. It
    requires `-freflection` and warns under `-Wkiln-extension` (D7,
    on by default). `std::meta::name_of`, `__kiln_access_via` and the
@@ -80,20 +91,21 @@ Section references in brackets are to the C++26 IS.
 | Variant | Payload | Designates | Status |
 |---|---|---|---|
 | `Null` | — | the null reflection | implemented |
-| `Type(QualType)` | the type, alias sugar kept at the top (§2.3) | a type, or a type alias | implemented without alias sugar (→ WP-472) |
-| `Decl(DeclId)` | first declaration | variable, function, data member, enumerator, class, structured binding, namespace | implemented for the spike's operands; the rest → WP-472 |
-| `Namespace(DeclId)` | first declaration | a namespace (`^^::` is the TU) | today a `Decl`; split → WP-472 |
-| `NamespaceAlias(DeclId)` | the alias declaration | a namespace alias | → WP-472 |
-| `Template(TemplateNameId)` | the template name | a class, function, variable or alias template, or a concept | → WP-472 |
-| `Value(ConstValueId)` | a typed frozen value | a value (`reflect_constant`, a template argument) | → WP-479 |
-| `Object(ConstValueId)` | a pointer to a static-storage object | an object (`reflect_object`) | → WP-479 |
-| `BaseSpec(DeclId, u32)` | derived class's first declaration, base index | a direct base class relationship | implemented (`bases_of`, WP-478) |
-| `DataMemberSpec(DmsId)` | an interned spec | a `data_member_spec` result | → WP-480 |
+| `Type(QualType)` | the type, alias sugar kept at the top (§2.3) | a type, or a type alias | implemented, dependent `^^typename T::type` included (WP-519) |
+| `Decl(DeclId)` | first declaration | variable, function, data member, enumerator, structured binding | implemented: operator, conversion and destructor functions and dependent qualified names (`^^T::x`) included (WP-519; spec/reflection-repr.md §2) |
+| `Namespace(DeclId)` | first declaration | a namespace (`^^::` is the TU) | implemented |
+| `NamespaceAlias(DeclId)` | the alias declaration | a namespace alias | implemented |
+| `Template(TemplateNameId)` | the template name | a class, function, variable or alias template, or a concept | implemented, dependent `^^T::template m<U>` included (WP-519) |
+| `Value(ConstValueId)` | a typed frozen value | a value (`reflect_constant`, a template argument) | implemented (WP-479) |
+| `Object(ConstValueId)` | a pointer to a static-storage object | an object (`reflect_object`) | implemented (WP-479) |
+| `BaseSpec(DeclId, u32)` | derived class's first declaration, base index | a direct base class relationship | implemented (WP-478) |
+| `DataMemberSpec(DmsId)` | an interned spec | a `data_member_spec` result | implemented (WP-480) |
+| `FnParam(DeclId, u32)` | function's first declaration, parameter index | a function parameter (`parameters_of`) | implemented (WP-478) |
 | `Annotation(AnnId)` | one annotation occurrence | an annotation (§7) | → WP-481 |
 
-- Each variant's payload is at most 12 bytes. A compile-time assertion
-  on `size_of::<Reflectee>()` (at most 16 bytes) is added with the first
-  variant beyond the spike's three (→ WP-472).
+- Each variant's payload is at most 8 bytes: a compile-time assertion
+  keeps `size_of::<Reflectee>()` at most 12 bytes
+  (`kiln_ast/src/reflect.rs`).
 - `ReflectionTable::get` returns `Null` for an id it did not hand out.
 
 ### 2.3 Identity
@@ -107,10 +119,9 @@ the IS equality ([expr.eq]):
 - **Types** are canonicalized except for a type alias at the top: `^^const
   int == ^^int const` and `^^decltype(1) == ^^int`, but `^^Alias !=
   ^^int`, and `dealias(^^Alias) == ^^int` ([meta.reflection.queries];
-  GCC 16.1 agrees). *The spike canonicalizes every type* (`^^Alias ==
-  ^^int`); keeping the top-level alias → WP-472.
+  GCC 16.1 agrees; `expr.reflect/alias-vs-dealias-identity.cpp`).
 - **Values** are interned by type and content in `ConstStore`:
-  `reflect_constant(3) == reflect_constant(3)` (GCC 16.1 agrees; → WP-479).
+  `reflect_constant(3) == reflect_constant(3)` (GCC 16.1 agrees; WP-479).
 - **`data_member_spec`** results are interned by content: equal
   arguments give equal reflections (GCC 16.1 agrees; §6.1).
 - **Annotations** are distinct per occurrence, even with equal values
@@ -135,13 +146,15 @@ the IS equality ([expr.eq]):
 - `memcpy`/`memmove` between an `info` object and an object of another
   type is not a constant expression ("cannot constant evaluate 'memcpy'
   from object of type 'unsigned long' to object of type
-  'std::meta::info'"; implemented, a dedicated test → WP-472), and
+  'std::meta::info'"; implemented, no dedicated test yet), and
   `__builtin_bit_cast` to or from `info` is rejected by sema (not
   trivially copyable; implemented: `reflection/value-model-neg.cpp`).
 - The shadow therefore needs no reflection kind; it keeps only its init
   and pointer bits. No shadow-kind extension is planned.
 
 ## 3. The Oven runtime
+
+The value family (`extract`, `reflect_constant*`, P3491 `define_static_*`, `refl_bytes`) is specified in spec/reflection-values.md (WP-479).
 
 ### 3.1 Recognizing an intrinsic
 - The `std::meta` functions have no bodies: the library declares them, and
@@ -168,6 +181,18 @@ the IS equality ([expr.eq]):
      ordinary undefined function.
 - Matching is a linear scan of the tables, run once per call site when the
   call is compiled, never per evaluation.
+- **The name table** (WP-484). `kiln_oven/src/meta/gcc16_meta_names.txt`
+  lists every consteval function libstdc++ 16.1's `<meta>` declares
+  (free functions of `std::meta` and members of its classes), each marked
+  `intrinsic` (declared without a body) or `library` (defined in the
+  header over the intrinsics). The unit tests of `kiln_oven::meta` check
+  that every intrinsic has a row, that no library function has one, and
+  that every row which is not a kiln extension (§1.6) is a listed
+  intrinsic; with `KILN_GCC16_ROOT` set, a further test re-derives the
+  list from the installed header and fails if it differs. Body-less
+  helpers the header's own definitions call (`reflect_constant_string`
+  and `reflect_constant_array`'s, `_S_exception_cvt_*_utf8`) are
+  intrinsics too.
 - A recognized call with more than `MAX_META_ARGS` (8) arguments is not
   compiled (unsupported). No table row has more than three.
 
@@ -381,7 +406,15 @@ answers as of that point.
   built from (at most 4 leaves, nesting depth at most 8; a union or a
   bit-field leaf does not match). The match is by layout, not by header:
   libc++'s, libstdc++'s and `tests/support/kiln_meta.h`'s classes all
-  qualify.
+  qualify. libstdc++ 16.1's layouts (WP-484): `string_view` is
+  `(size, const C *)`; `vector<info>` is `_Vector_impl`'s three pointers
+  under its allocator base; `source_location` is one `const __impl *`;
+  `access_context` is two `info` members (scope, designating class);
+  `optional<T>` (the `data_member_options` members) is a payload union
+  and a `bool` engaged flag, read by [`Oven::meta_dms_options`]'s leaf
+  walk (§6.1), as is `_Name`, which holds a `u8string` or a `string`;
+  `type_order`'s result is `std::strong_ordering`, built from its
+  `less`/`equal`/`greater` static members.
 
   | Shape | Results of | Layout required | Filled from |
   |---|---|---|---|
@@ -396,6 +429,14 @@ answers as of that point.
   evaluating it is not a constant expression with the note "'T' cannot
   be used by 'F': it does not hold …" at the call. A call of an op with
   no shape returning a class is the same trap.
+- **Result types that follow GCC 16.1** (WP-484). `type_of` of an object
+  or value reflection of a const object (a template parameter object, a
+  subobject of a const variable) is `const`-qualified. An empty
+  `reflect_constant_array` reflects a `const std::array<T, 0>` template
+  parameter object (the header's own `array`), where a non-empty one
+  reflects a `const T[N]`. `members_of` of a namespace lists the members
+  of nested `extern "C"`/`extern "C++"` and `export` blocks in place, in
+  declaration order.
 - **`vector<info>`.** The elements are one `ARRAY | STD` heap allocation
   of `n` `info`, exactly as `std::allocator<info>::allocate(n)` makes, and
   their lifetimes begin as by `construct_at`. The vector owns it: its
@@ -642,11 +683,27 @@ it, with `from() == ^^data_member_spec`:
 13. An unnamed bit-field's type is not cv-qualified: "unnamed bit-field of
     cv-qualified type 'T'".
 
+14. Each element of `annotations` has a type: "reflection does not have
+    a type" (WP-484; `^^int`, a null `info`, a namespace).
+
+**Annotations** (P3394's `data_member_options::annotations`, a
+`vector<info>`; WP-484, GCC 16.1's semantics). The Oven reads the vector
+through the `vector<info>` recipe (§3.5). Each element stands for its
+constant: a value reflection or a reflection of a class-type template
+parameter object is kept as it is, an annotation reflection becomes its
+value, and any other reflection with a type (a variable, an object)
+becomes `constant_of` of it. The list is interned with the description,
+so equal lists give the same reflection. `define_aggregate` attaches one
+annotation per element to the injected member, in order, with no source
+location (`source_location_of` gives line 0), so `annotations_of` of the
+member returns them and each `constant_of` is the element's constant.
+
 The result is a `DataMemberSpec(DmsId)` reflection. The description
-(type, name `Symbol`, alignment, width, `no_unique_address`) is interned
-by content in the Oven (`kiln_oven/src/meta/define.rs`, `DmsTable`), so
-two calls with the same options give the same reflection, whichever form
-the name was spelled in. `is_data_member_spec` tests for that kind.
+(type, name `Symbol`, alignment, width, `no_unique_address`, the
+annotation list) is interned by content in the Oven
+(`kiln_oven/src/meta/define.rs`, `DmsTable`), so two calls with the same
+options give the same reflection, whichever form the name was spelled
+in. `is_data_member_spec` tests for that kind.
 
 ### 6.2 `define_aggregate`
 **Preconditions**, checked in order. They are "Constant When" ones: a
@@ -871,6 +928,13 @@ each specialization evaluates its own.
   own copy: `S<^^int>::count` is not shared across TUs, and the RTTI of
   `S<^^int>` compares unequal across them. The form is **not
   link-compatible with GCC or clang** (spec/abi.md §8).
+- **Dependent operands.** A reflect-expression whose operand is still
+  dependent where the signature is mangled (`template <class T> void
+  f(K<^^T>)`, `K<^^T::x>`) has no id yet; it takes the unsupported
+  expression fallback of spec/abi.md (`XLi0EE`), so `f` above mangles as
+  `_Z1fI1SEv1KIXLi0EEE`. Two templates whose signatures differ only in
+  the reflect operand therefore collide; WP-102 gives the dependent
+  operand a real encoding.
 - **Follow-up (→ WP-102).** WP-102 switches to GCC 16.1's encoding
   (cxx-abi issue #208: `std::meta::info` is `Dm`, a value is
   `L Dm <kind> … E` naming the reflectee), at which point the

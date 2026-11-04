@@ -52,6 +52,7 @@ impl Test<'_> {
         }
         c.arg(format!("-std={}", spec.std));
         c.args(mode);
+        c.args(self.meta_header_flags(false));
         let args: Vec<String> =
             spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))).collect();
         c.args(crate::oracle::gcc_args(&args));

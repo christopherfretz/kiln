@@ -40,8 +40,16 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(e).is_value_dependent() || self.ast.exprs.reflect_value(e).is_some() {
             return e;
         }
-        let d = self.diag(DiagId::sema_too_many_reflections, loc).arg(self.ast.reflections.limit());
-        self.emit(d);
-        self.recover(ty, &[], loc)
+        // The builder's interning failed: the table is full. Report it
+        // through the one helper, with the builder's key (a type's
+        // reflection type).
+        let key = match operand {
+            Reflectee::Type(t) => Reflectee::Type(self.ast.reflection_type(t)),
+            r => r,
+        };
+        match self.intern_reflection(key, loc) {
+            Ok(_) => self.builder().reflect_expr(operand, ty, loc, end),
+            Err(_) => self.recover(ty, &[], loc),
+        }
     }
 }

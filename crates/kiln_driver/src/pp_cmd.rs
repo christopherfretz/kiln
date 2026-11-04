@@ -142,6 +142,7 @@ impl Job<'_> {
         cfg.sized_deallocation = p.sized_deallocation.unwrap_or(true);
         cfg.kiln_version = crate::version_pair();
         cfg.clang_compat = p.clang_compat;
+        cfg.reflection = p.reflection;
         cfg.std_float_aliases =
             self.args.stdlib.unwrap_or_default() != crate::toolchain::StdLib::LibCxx;
         Some(build_predefines(&base, &cfg, &self.args.macros))
@@ -364,6 +365,8 @@ impl kiln_pp::FeatureQueries for StagedFeatures {
         let v = self.0.has_builtin(name);
         match kiln_sema::templ::builtins::table::has_builtin_staged(name) {
             Some(false) => 0,
+            // A GCC builtin clang lacks (WP-484: `__builtin_is_string_literal`).
+            Some(true) if v == 0 && kiln_sema::templ::builtins::table::gcc_only(name) => 1,
             _ => v,
         }
     }

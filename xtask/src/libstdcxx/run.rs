@@ -18,6 +18,8 @@ pub struct Config {
     /// The enumerated include directory (reported, and stripped from paths
     /// in first-error lines).
     pub headers_dir: PathBuf,
+    /// `--gcc-toolchain=` for both compilers (`xtask libstdcxx --gcc-toolchain`).
+    pub gcc_toolchain: Option<PathBuf>,
     pub std: String,
     pub timeout: Duration,
     pub mem: Option<MemLimit>,
@@ -29,12 +31,19 @@ pub struct Config {
 impl Config {
     /// The flags both compilers get, before the source file.
     pub fn common_flags(&self) -> Vec<String> {
-        vec![
+        let mut v = vec![
             format!("-std={}", self.std),
             "-stdlib=libstdc++".to_owned(),
             "-fsyntax-only".to_owned(),
             "-ferror-limit=0".to_owned(),
-        ]
+        ];
+        v.extend(self.gcc_toolchain_flag());
+        v
+    }
+
+    /// `--gcc-toolchain=<dir>`, if one was given.
+    pub fn gcc_toolchain_flag(&self) -> Option<String> {
+        self.gcc_toolchain.as_ref().map(|t| format!("--gcc-toolchain={}", t.display()))
     }
 }
 
@@ -251,6 +260,7 @@ pub fn libstdcxx_version(cfg: &Config) -> String {
     let compiler = cfg.clang.as_ref().unwrap_or(&cfg.kiln);
     let mut cmd = Command::new(compiler);
     cmd.args([format!("-std={}", cfg.std).as_str(), "-stdlib=libstdc++", "-E", "-dM"])
+        .args(cfg.gcc_toolchain_flag())
         .arg(&src)
         .env("TMPDIR", &dir);
     let out = process::run(&mut process::limited(&cmd, cfg.mem), cfg.timeout);

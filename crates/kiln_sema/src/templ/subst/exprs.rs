@@ -543,9 +543,12 @@ impl Substituter<'_, '_, '_> {
                     None => None,
                 };
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
-                Ok(self
+                self.sema.pattern_member_access = true;
+                let r = self
                     .sema
-                    .act_on_template_member_q(base, qual, name, targs, false, loc, op, arrow))
+                    .act_on_template_member_q(base, qual, name, targs, false, loc, op, arrow);
+                self.sema.pattern_member_access = false;
+                Ok(r)
             }
             ExprKind::CXXPseudoDestructorExpr => {
                 let (base, arrow, destroyed) = ex(self).pseudo_destructor(e);
@@ -891,7 +894,7 @@ impl Substituter<'_, '_, '_> {
                     let n = self.sema.ast.types.canonical_template_name(n);
                     Ok(self.sema.make_reflect_expr(Reflectee::Template(n), loc, end))
                 }
-                _ => Ok(e),
+                _ => self.reflect_dependent_name(e, loc, end),
             },
             // spec/reflection.md §5: a dependent splice resolves once its
             // operand (and object) are substituted.
@@ -1160,6 +1163,84 @@ impl Substituter<'_, '_, '_> {
     /// The member name `name` of a member access, substituted: the target
     /// type of a conversion-function-id is rebuilt (`t.operator T()`,
     /// [temp.dep.type]); identifiers and operator names are kept.
+    /// `^^nns name` with a dependent `nns` (spec/reflection-repr.md §2,
+    /// WP-519): the entity the qualified-id names once `nns` is
+    /// substituted, reflected as the parser reflects a non-dependent one
+    /// (the name is not looked up again by its spelling: the
+    /// `DependentScopeDeclRefExpr` keeps the `DeclName`).
+    fn reflect_dependent_name(&mut self, r: ExprId, loc: Loc, end: Loc) -> SubstResult<ExprId> {
+        let Some(e) = self.sema.ast.exprs.reflect_dependent_name(r) else { return Ok(r) };
+        let Some(nns) = kiln_ast::ids::NnsId::try_new(self.sema.ast.exprs.get(e).a()) else {
+            return Err(SubstFail);
+        };
+        let name = self.sema.ast.dependent_scope_ref_name(e);
+        let name_loc = self.sema.ast.exprs.get(e).loc();
+        let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(name_loc);
+        let template_kw = self.sema.ast.templates.template_kw.get(e).copied();
+        let targs = self.sema.ast.templates.expr_targs.get(e).copied();
+        let nns = self.nns(nns, begin)?;
+        // A destructor name keeps its (substituted) type to check against
+        // the class the qualifier names.
+        let (name, destroyed) = match self.sema.ast.names.view(name) {
+            DeclNameView::Destructor(t) => {
+                let t = self.ty(QualType::unqual(t), name_loc)?;
+                let canon = self.sema.ast.types.canonical(t).ty();
+                (self.sema.ast.names.destructor(canon), Some(t))
+            }
+            _ => (self.member_name(name, name_loc)?, None),
+        };
+        if self.nns_still_dependent(nns) {
+            let targs = match targs {
+                Some(l) => Some(self.args(l, loc)?),
+                None => None,
+            };
+            return Ok(self.sema.act_on_reflect_dependent(
+                (nns, begin),
+                name,
+                targs,
+                template_kw,
+                name_loc,
+                loc,
+                end,
+            ));
+        }
+        // `^^T::template m<args>` ([temp.names]/5): the member template's
+        // specialization, as `^^C::m<args>` reflects it.
+        if let Some(l) = targs {
+            let Some(id) = name.as_ident() else {
+                return self.unimplemented("an operator function template-id", name_loc);
+            };
+            let t = self.member_template_named(nns, id, name_loc)?;
+            let l = self.args(l, loc)?;
+            let args = self.sema.ast.types.args(l).to_vec();
+            let tn = self.sema.template_name_for(t);
+            let mut res =
+                self.sema.act_template_id(tn, &args, name_loc, name_loc).map_err(|()| SubstFail)?;
+            if let crate::templ::actions::TemplateIdRef::Overload(x) = res {
+                let ctx = self.nns_context(nns, begin)?;
+                let x = self.sema.widen_function_template_id(x, id, Some(ctx));
+                self.sema.set_template_id_begin(x, begin, name_loc);
+                self.sema.set_template_id_qualifier(x, nns);
+                res = crate::templ::actions::TemplateIdRef::Overload(x);
+            }
+            let ctx = self.nns_context(nns, begin)?;
+            let r = self.sema.act_on_reflect_template_id(res, name_loc, loc, end);
+            return Ok(self.sema.check_reflect_dependent_kind(r, ctx, name, true, name_loc, loc));
+        }
+        let ctx = self.nns_context(nns, begin)?;
+        if let Some(t) = destroyed {
+            let class = self.sema.ast.types.as_record(t);
+            if class.map(|c| self.sema.ast.first(c)) != Some(self.sema.ast.first(ctx)) {
+                return Ok(self.sema.reflect_bad_operand(name_loc, loc));
+            }
+            return Ok(self.sema.reflect_destructor_of(ctx, name_loc, loc, end));
+        }
+        let q = crate::using::Qualifier { ctx, nns, loc: begin };
+        let r = self.sema.act_on_reflect_dn(Some(q), name, name_loc, loc, end);
+        let template_kw = template_kw.is_some();
+        Ok(self.sema.check_reflect_dependent_kind(r, ctx, name, template_kw, name_loc, loc))
+    }
+
     fn member_name(&mut self, name: DeclName, loc: Loc) -> SubstResult<DeclName> {
         match self.sema.ast.names.view(name) {
             DeclNameView::Conversion(t) => {

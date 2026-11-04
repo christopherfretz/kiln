@@ -11,7 +11,9 @@
 //@ expect: compile-ok
 //@ oracle: gcc
 //@ strict-diags
-//@ oven: peak_bytes<=64 peak_arena<=64 allocs<=10000 evaluations<=210 steps<=160000
+// Beyond the vector, each evaluation's 100 new specializations add their
+// 29-byte reflection entries (refl_bytes, spec/oven.md "Reflection bytes").
+//@ oven: peak_bytes<=3000 peak_arena<=3000 refl_bytes<=290100 allocs<=10000 evaluations<=210 steps<=160000
 //@ mem<=1024
 #if __has_include(<meta>)
 #include <meta>

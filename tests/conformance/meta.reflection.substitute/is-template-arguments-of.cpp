@@ -7,11 +7,10 @@
 //@ oracle: gcc
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
-//@ xfail(kiln): is_value and is_object are WP-476, not yet on main
-#if __has_include(<meta>)
-#include <meta>
+#ifdef __KILN__
+#include "kiln_meta_queries.h"
 #else
-#include "kiln_meta.h"
+#include <meta>
 #endif
 using namespace std::meta;
 

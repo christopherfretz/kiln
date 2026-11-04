@@ -257,8 +257,18 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::Complex
                 | Kw::Alignas
                 | Kw::Attribute
-                | Kw::Declspec
-                | Kw::Extension => Tpr::True,
+                | Kw::Declspec => Tpr::True,
+                // GNU `__extension__` is a unary operator as well as a
+                // decl-specifier prefix (clang's `ParseCastExpression`):
+                // it starts a decl-specifier only when one follows it, so
+                // `(__extension__ 1 + 2)` stays a parenthesized expression.
+                Kw::Extension => {
+                    let mut s = Scan { p: self.p, i: self.i, declared: self.declared.clone() };
+                    while s.kw() == Some(Kw::Extension) {
+                        s.i += 1;
+                    }
+                    if s.decl_specifier(braced) == Tpr::False { Tpr::False } else { Tpr::True }
+                }
                 Kw::Void
                 | Kw::Bool
                 | Kw::Char

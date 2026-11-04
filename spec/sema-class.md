@@ -54,7 +54,12 @@ Principles:
 2. `act_on_start_record_definition(r)` (M2): sets `BEING_DEFINED`, pushes a
    `Record` scope, appends the injected-class-name (§2.2), and now also pushes
    a `ClassBuild` (§8.3) with the default access (`private` for `class`, else
-   `public`).
+   `public`). An implicit instantiation first takes the class-key of the
+   definition it instantiates (`DeclArena::set_instantiated_tag`): a
+   specialization named through `template<class T> class S;` and
+   instantiated from `template<class T> struct S {...}` has public members
+   and bases (libstdc++ 16 `<format>` `_Scanner`; WP-525,
+   `class.access/class-key-of-template-definition.cpp`).
    2a. `act_on_class_final(r, loc)` (WP-065) when the class-head has a
    class-virt-specifier `final` ([class.pre]/1): sets
    `DefinitionBits::FINAL` on the `ClassBuild`, merged into the record's
@@ -648,7 +653,12 @@ virtual base 'A'`).
   `tests/conformance/class.virtual/override-control-static-template.cpp`,
   `override-control-requires-out-of-line.cpp`.
 - **consteval** mismatch either way: `consteval function 'f' cannot override a
-  non-consteval function` (and converse).
+  non-consteval function` (and converse). Exception ([class.virtual]/18 as
+  P2996R13 amends it; GCC 16.1 is the oracle, clang 22 has no rule): a
+  consteval function may override a non-consteval one in a class of
+  consteval-only type (a class with a `std::meta::info` member, `<meta>`'s
+  `std::meta::exception::what`; WP-525,
+  `class.virtual/consteval-override-consteval-only.cpp`).
 - **Pure/abstract**: `= 0` only on virtuals (`'p' is not virtual and cannot be
   declared pure`); `ABSTRACT` iff some final overrider is pure. Abstract uses
   ([class.abstract]/3): variable (`variable type 'Abs' is an abstract class` +
@@ -1263,6 +1273,12 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   constructor counts as a constexpr constructor of the derived class for
   the literal-type test ([basic.types.general]/10.5.2, clang `addedMember`
   on a `ConstructorUsingShadowDecl`; `inherited_constexpr_ctor`, WP-241).
+  Its access is the base constructor's, named in the base class
+  ([namespace.udecl]/19), for a complete object and for a base or member
+  subobject a mem-initializer initializes through it alike (clang
+  `CheckConstructorAccess` on the base constructor): a friend of the
+  base may use a private one (WP-525,
+  `namespace.udecl/inherited-ctor-subobject-access.cpp`).
 - **Virtual bases** ([basic.types.general]/10). A class with a virtual
   base is not a literal type: a `constexpr` variable of it (or of an
   array of it) is clang's `RequireLiteralType` error "constexpr variable

@@ -2355,12 +2355,18 @@ impl Parser<'_, '_> {
         self.emit(diag);
     }
 
-    /// The attributes and nullability qualifiers after a `&` or `&&`
-    /// ([dcl.ref]/1; a nullability qualifier there is diagnosed by sema).
+    /// The attributes, nullability qualifiers and GNU `__restrict`s after
+    /// a `&` or `&&` ([dcl.ref]/1; a nullability qualifier there is
+    /// diagnosed by sema). `__restrict` / `__restrict__` on a reference is
+    /// a GNU extension clang accepts silently (`ParseTypeQualifierListOpt`
+    /// then `DeclaratorChunk::getReference`); kiln drops it, as it is only
+    /// an aliasing hint (spec/parse.md "GNU `__restrict` on references").
     pub(crate) fn parse_ref_quals(&mut self) -> Vec<NullSpec> {
         let mut nulls = Vec::new();
         loop {
-            if let Some(kind) = self.kw().and_then(nullability_kw) {
+            if self.at_kw(Kw::Restrict) {
+                self.bump();
+            } else if let Some(kind) = self.kw().and_then(nullability_kw) {
                 let loc = self.bump().span.lo;
                 nulls.push(NullSpec { kind, loc });
             } else if self.at_attr() {
@@ -3701,7 +3707,7 @@ impl Parser<'_, '_> {
                 if allow_fn_def && self.at_function_definition_start() {
                     self.explicit_inst_with_definition(tmpl_kind, &d, true);
                     self.parse_function_definition_after_declarator(
-                        &ds, base, &d, &mut decls, level,
+                        &ds, base, &mut d, &mut decls, level,
                     );
                     return decls;
                 }
@@ -3941,10 +3947,11 @@ impl Parser<'_, '_> {
         &mut self,
         ds: &DeclSpec,
         base: QualType,
-        d: &Declarator,
+        d: &mut Declarator,
         decls: &mut Vec<DeclId>,
         level: usize,
     ) {
+        d.defaulted = self.at_eq_default();
         self.s.act_function_def_next(true);
         let f = self.s.act_on_declarator(ds, base, d);
         self.s.act_function_def_next(false);

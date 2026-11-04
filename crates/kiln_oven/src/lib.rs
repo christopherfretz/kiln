@@ -555,6 +555,9 @@ pub struct Oven {
     inner: Inner,
     /// Reflection call sites and materialization state (spec/reflection.md §3.5).
     pub(crate) meta: meta::materialize::MetaState,
+    /// Interned growth already attributed to an intrinsic call
+    /// (`refl_bytes`, `meta/intern.rs`).
+    pub(crate) refl_seen: meta::intern::ReflSeen,
     /// The data member descriptions of the translation unit (§6.1).
     pub(crate) dms: meta::define::DmsTable,
 }
@@ -620,6 +623,7 @@ impl Oven {
             ctx_depth: 0,
             inner: Inner::default(),
             meta: meta::materialize::MetaState::default(),
+            refl_seen: meta::intern::ReflSeen::default(),
             dms: meta::define::DmsTable::default(),
         }
     }
@@ -735,6 +739,7 @@ impl Oven {
             frozen_bytes: c.frozen,
             static_bytes: self.mem.static_top(),
             memo_hits: c.memo_hits,
+            refl_bytes: c.refl,
             wall_us: c.wall_us,
             ok: r.is_ok(),
         });
@@ -773,6 +778,7 @@ impl Oven {
             frozen_bytes: c.frozen,
             static_bytes: self.mem.static_top(),
             memo_hits: c.memo_hits,
+            refl_bytes: c.refl,
             wall_us: c.wall_us,
             ok: r.is_ok(),
         });
@@ -1095,6 +1101,7 @@ impl Oven {
             arena: c.arena,
             calls: c.calls,
             allocs: c.allocs,
+            refl: c.refl,
             frozen: frozen.saturating_sub(inner.frozen),
             memo_hits: memo_hits.saturating_sub(inner.memo_hits),
             wall_us: wall_us.saturating_sub(inner.wall_us),
@@ -1270,6 +1277,7 @@ impl Oven {
             calls: self.run.counters.calls,
             arena: self.mem.arena_peak.saturating_sub(arena0),
             allocs: self.mem.heap_allocs,
+            refl: self.run.counters.refl,
         };
         self.mem.free_heap_of(ctx, &self.types);
         self.mem.release(mark, &self.types);
@@ -1311,6 +1319,7 @@ struct Cost {
     arena: u64,
     calls: u64,
     allocs: u64,
+    refl: u64,
     frozen: u64,
     memo_hits: u64,
     wall_us: u64,

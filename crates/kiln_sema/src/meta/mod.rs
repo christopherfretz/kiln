@@ -14,6 +14,7 @@ mod query;
 mod recipe;
 mod templ;
 mod traits;
+mod value;
 
 pub(crate) use templ::SubstMemo;
 
@@ -71,7 +72,7 @@ impl Sema<'_, '_> {
             MetaOp::Member(m) => self.meta_member(m, args, out, ctx, oven),
             MetaOp::Access(a) => self.meta_access(a, args, out, ctx, oven),
             MetaOp::Annot(a) => self.meta_annot(a, args, out, ctx, oven),
-            MetaOp::Value(_) => Err(MetaError::not_implemented(op, ctx.loc)),
+            MetaOp::Value(v) => self.meta_value(v, args, out, ctx, oven),
         }
     }
 
@@ -87,6 +88,13 @@ impl Sema<'_, '_> {
         }
         let n = self.ast.decls.get(f);
         if !matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
+            return None;
+        }
+        // A function the library defines is a library function, whatever
+        // its name (`tests/support/kiln_meta.h` defines
+        // `reflect_constant_string` over an intrinsic; libstdc++ declares
+        // it without a body; §3.1).
+        if self.defined_body(self.function_pattern(f)).is_some() {
             return None;
         }
         let ctx = self.skip_inline(n.ctx()?)?;

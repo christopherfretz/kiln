@@ -1,6 +1,5 @@
-// [meta.reflection.substitute] (P2996R13): a substitution failure in an
-// alias template's type makes substitute throw; it is a SFINAE context, so
-// nothing else is diagnosed.
+// [meta.reflection.substitute] (P2996R13): a substitution failure in an alias template's
+// type makes substitute throw; it is a SFINAE context, so nothing else is diagnosed.
 //@ expect: compile-fail
 //@ oracle: gcc
 //@ args: -freflection -I tests/support
@@ -14,6 +13,7 @@
 //@ diag: 27:20 note "'^^Ptr' cannot be substituted with these template arguments: substitution failure ('type name' declared as a pointer to a reference of type 'int &')"
 //@ diag: 27:16 error "constexpr variable 'b' must be initialized by a constant expression"
 //@ diag: 27:20 note "'^^Ptr' cannot be substituted with these template arguments: substitution failure ('type name' declared as a pointer to a reference of type 'int &')"
+//@ meta-header: skip the note spells the real header's default template argument initializer_list<info>
 #if __has_include(<meta>)
 #include <meta>
 #else

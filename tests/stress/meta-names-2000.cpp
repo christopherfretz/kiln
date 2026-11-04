@@ -3,11 +3,12 @@
 // strings are frozen once per (reflection, kind) and the results built in
 // place, so the run allocates nothing on the constexpr heap and the
 // static space holds each name once.
+// display_string_of of a member is qualified ("A0123::m"), as GCC prints it.
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ expect: compile-ok
 //@ strict-diags
-//@ oven: 55 allocs<=0 steps<=150000 calls<=40000 static_bytes<=131072 frozen_bytes<=180000
+//@ oven: 56 allocs<=0 steps<=150000 calls<=40000 static_bytes<=196608 frozen_bytes<=300000
 #include "kiln_meta.h"
 using namespace std::meta;
 
@@ -52,6 +53,6 @@ consteval unsigned long queries() {
   }
   return n;
 }
-static_assert(queries() == 2000 * (1 + 5 + 5 + 5 + 5 + 3) + 2000 * (1 + 1 + 1 + 1 + 1 + 3));
+static_assert(queries() == 2000 * (1 + 5 + 5 + 5 + 5 + 3) + 2000 * (1 + 1 + 1 + 8 + 8 + 3));
 
 int main() {}

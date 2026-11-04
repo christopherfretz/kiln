@@ -33,6 +33,10 @@ pub struct EvalRecord {
     pub static_bytes: u64,
     /// Calls answered from the memo table (spec/oven.md "Memoization").
     pub memo_hits: u64,
+    /// Bytes this evaluation added to the reflection table and the
+    /// interned content reflections designate (spec/oven.md "Reflection
+    /// bytes"); part of `peak_bytes`.
+    pub refl_bytes: u64,
     /// Wall-clock microseconds (not deterministic).
     pub wall_us: u64,
     /// Whether the evaluation produced a value.
@@ -63,6 +67,8 @@ pub struct EvalTotals {
     pub static_bytes: u64,
     /// Sum of `memo_hits`.
     pub memo_hits: u64,
+    /// Sum of `refl_bytes`.
+    pub refl_bytes: u64,
     /// Sum of `wall_us`.
     pub wall_us: u64,
     /// Number of evaluations.
@@ -89,6 +95,7 @@ impl EvalStats {
         t.frozen_bytes += r.frozen_bytes;
         t.static_bytes = t.static_bytes.max(r.static_bytes);
         t.memo_hits += r.memo_hits;
+        t.refl_bytes += r.refl_bytes;
         t.wall_us += r.wall_us;
         t.evaluations += 1;
         self.records.push(r);

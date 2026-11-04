@@ -18,13 +18,14 @@ mod access;
 mod annot;
 pub(crate) mod define;
 mod ext;
+pub(crate) mod intern;
 pub mod materialize;
 mod member;
 pub mod member_cache;
 mod query;
 mod templ;
 mod traits;
-mod value;
+pub(crate) mod value;
 
 pub use access::AccessOp;
 pub use annot::AnnotOp;
@@ -261,8 +262,13 @@ pub struct MetaCtx {
     /// speculative checkpoint): a `Mutating` op never reaches the bridge.
     pub trial: bool,
     /// The element type of the call's last pointer argument (what
-    /// [`crate::Oven::meta_c_string`] reads).
+    /// [`crate::Oven::meta_c_string`] reads); for a value op given a
+    /// range ([`materialize::Shape::Elems`]), the range's element type.
     pub(crate) elem: OTy,
+    /// The intrinsic's declaration: the specialization whose signature
+    /// gives a function template's `T` (`extract<T>`, `reflect_constant`;
+    /// WP-479).
+    pub callee: Option<DeclId>,
 }
 
 /// An intrinsic's result, written by the bridge.
@@ -276,7 +282,13 @@ pub enum MetaOut {
     /// A `std::meta::info`.
     Info(ReflectionId),
     /// A frozen pointer value, thawed as the call's (pointer) result type.
+    /// For a value op (WP-479), any frozen value of the result type: a
+    /// scalar is thawed into the result register, a class through the
+    /// site's [`materialize::Recipe::Whole`] into the result object.
     Frozen(ConstValueId),
+    /// The value of the object a frozen pointer designates, read as the
+    /// call's result type (`extract<T>` of an object or a variable).
+    Deref(ConstValueId),
     /// A string view (`materialize::Shape::Str`): a frozen pointer to the
     /// characters of a static string object, and its length.
     Str(ConstValueId, u64),
@@ -388,6 +400,125 @@ mod tests {
             assert!((470..=485).contains(&op.owner()), "{op:?}");
             assert!(seen.insert((op.name(), op.sig())), "duplicate {op:?}");
         }
+    }
+
+    /// `gcc16_meta_names.txt`: `(name, intrinsic)` per listed function.
+    fn gcc16_names() -> Vec<(&'static str, bool)> {
+        include_str!("gcc16_meta_names.txt")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+            .map(|l| {
+                let (name, how) = l.split_once(' ').expect("`<name> intrinsic|library`");
+                assert!(matches!(how, "intrinsic" | "library"), "{l}");
+                (name, how == "intrinsic")
+            })
+            .collect()
+    }
+
+    /// The row names, unqualified (`access_context::current` is `current`).
+    fn row_names() -> std::collections::BTreeSet<&'static str> {
+        MetaOp::all().map(|op| op.name().rsplit("::").next().unwrap_or_default()).collect()
+    }
+
+    /// The rows that are kiln's, not `<meta>`'s (spec/reflection.md §1.3).
+    const EXTENSIONS: &[&str] = &["name_of"];
+
+    /// The name table (WP-484): every intrinsic GCC 16.1's `<meta>`
+    /// declares has a row (so a call answers or says "not implemented yet
+    /// (WP-NNN)"), no function the header defines has one, and every row
+    /// that is not a kiln extension is a `<meta>` intrinsic.
+    #[test]
+    fn rows_cover_gcc16_meta() {
+        let rows = row_names();
+        let names = gcc16_names();
+        for &(name, intrinsic) in &names {
+            assert_eq!(rows.contains(name), intrinsic, "`{name}`: row present = {}", !intrinsic);
+        }
+        for row in rows {
+            let listed = names.iter().any(|&(n, i)| n == row && i);
+            assert!(
+                listed || row.starts_with("__kiln_") || EXTENSIONS.contains(&row),
+                "row `{row}` is neither a <meta> intrinsic nor a kiln extension"
+            );
+        }
+    }
+
+    /// The `consteval` functions of a header, as `gcc16_meta_names.txt`
+    /// lists them: the identifier before each `consteval` declarator's
+    /// `(`, and whether some declaration of it has a body.
+    fn consteval_functions(header: &str) -> std::collections::BTreeMap<String, bool> {
+        let mut text = String::with_capacity(header.len());
+        let mut rest = header;
+        while let Some(i) = rest.find(['/']) {
+            text.push_str(&rest[..i]);
+            let after = &rest[i..];
+            if after.starts_with("//") {
+                rest = after.find('\n').map_or("", |e| &after[e..]);
+            } else if after.starts_with("/*") {
+                rest = after.find("*/").map_or("", |e| &after[e + 2..]);
+            } else {
+                text.push('/');
+                rest = &after[1..];
+            }
+        }
+        text.push_str(rest);
+        let mut out = std::collections::BTreeMap::<String, bool>::new();
+        for (at, _) in text.match_indices("consteval") {
+            let tail = &text[at + "consteval".len()..];
+            let Some(open) = tail.find('(') else { break };
+            let head = &tail[..open];
+            if head.contains([';', '{', '}']) {
+                continue;
+            }
+            let head = head.trim_end();
+            let start = head
+                .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '~'))
+                .map_or(0, |i| i + 1);
+            let name = &head[start..];
+            if name.is_empty()
+                || name == "operator"
+                || name.starts_with(|c: char| c.is_ascii_digit())
+            {
+                continue;
+            }
+            let mut depth = 0usize;
+            let mut close = open;
+            for (i, c) in tail[open..].char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = open + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let after = &tail[close + 1..];
+            let end = after.find([';', '{']).unwrap_or(after.len());
+            let body = after[end..].starts_with('{')
+                || after[..end].contains("= default")
+                || after[..end].contains("= delete");
+            *out.entry(name.to_owned()).or_default() |= body;
+        }
+        out
+    }
+
+    /// With `KILN_GCC16_ROOT` set (an unpacked GCC 16.1 image;
+    /// docs/VALIDATION.md "GCC 16.1 header sweep"), the checked-in list
+    /// is exactly the header's, so a new GCC header fails loudly.
+    #[test]
+    fn gcc16_meta_names_match_the_header() {
+        let Some(root) = std::env::var_os("KILN_GCC16_ROOT") else { return };
+        let path = std::path::Path::new(&root).join("usr/local/include/c++/16.1.0/meta");
+        let Ok(header) = std::fs::read_to_string(&path) else { return };
+        let header: Vec<(String, bool)> =
+            consteval_functions(&header).into_iter().map(|(n, body)| (n, !body)).collect();
+        let listed: Vec<(String, bool)> =
+            gcc16_names().into_iter().map(|(n, i)| (n.to_owned(), i)).collect();
+        assert_eq!(listed, header, "regenerate gcc16_meta_names.txt from {}", path.display());
     }
 
     #[test]

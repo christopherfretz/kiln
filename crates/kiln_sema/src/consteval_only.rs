@@ -12,7 +12,7 @@
 //! with the immediate invocations in `consteval.rs`. A `std::meta::info`
 //! value therefore never reaches code generation.
 
-use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, Defaulted};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -131,6 +131,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A member access `e` naming data member or static member variable
+    /// `m` with type `ty` (`this->r`, `h.sm`): a consteval-only leaf,
+    /// as a reference to a variable is ([`Sema::note_consteval_only_ref`]).
+    pub(crate) fn note_consteval_only_member(&mut self, e: ExprId, m: DeclId, ty: QualType) {
+        if matches!(
+            self.ast.decls.get(m).kind(),
+            DeclKind::Field | DeclKind::IndirectField | DeclKind::Var
+        ) && self.is_consteval_only_type(ty)
+        {
+            self.note_consteval_only(e);
+        }
+    }
+
     /// The expression `e` of a template, shared unchanged by an
     /// instantiation: its leaves recorded by the definition
     /// ([`Sema::note_inst_consteval_only`]) are recorded again, except in
@@ -166,6 +179,10 @@ impl Sema<'_, '_> {
             ExprKind::DeclRefExpr => !matches!(
                 self.ast.decls.get(self.ast.exprs.decl(r)).kind(),
                 DeclKind::Function | DeclKind::CXXMethod
+            ),
+            ExprKind::MemberExpr => matches!(
+                self.ast.decls.get(self.ast.exprs.decl(r)).kind(),
+                DeclKind::Field | DeclKind::IndirectField | DeclKind::Var
             ),
             _ => false,
         }
@@ -299,8 +316,63 @@ impl Sema<'_, '_> {
             return;
         }
         let ty = n.ty().unwrap_or(QualType::ERROR);
-        if self.is_consteval_only_type(ty) {
+        // A member of a templated class is checked per instantiated
+        // definition, when its class is known (`check_consteval_only_inst`;
+        // GCC 16.1 checks no templated member through its class).
+        if self.is_consteval_only_type(ty)
+            || (!self.in_template() && self.has_consteval_only_object_param(f))
+        {
             self.error(DiagId::sema_consteval_only_fn, loc);
         }
+    }
+
+    /// Instantiated function `f` of pattern `pattern`, at `loc`: the
+    /// rule of `check_consteval_only_fn` for a type that became
+    /// consteval-only by substitution (`template <class T> void h(T)`
+    /// as `h<info>`, a member of `W<info>` with a `T` member), checked when
+    /// the definition is instantiated, as GCC 16.1 does. A pattern whose
+    /// own type was already consteval-only was reported at its
+    /// declaration; a `constexpr` or defaulted pattern is
+    /// immediate-escalating.
+    pub(crate) fn check_consteval_only_inst(&mut self, f: DeclId, pattern: DeclId, loc: Loc) {
+        if !self.reflection
+            || self.ast.decls.get(f).has(DeclFlags::INVALID)
+            || self.is_immediate_fn(f)
+            || self.is_immediate_escalating(f)
+        {
+            return;
+        }
+        let Some(p) = self.ast.decls.function(pattern) else { return };
+        if p.spec.constexpr_kind() != ConstexprKind::None || p.spec.defaulted() != Defaulted::No {
+            return;
+        }
+        // Standard libraries that predate CWG3115 (libc++ 19, libstdc++
+        // 14) define non-constexpr helpers (`vector::__throw_length_error`,
+        // `ranges::__access::__begin`) that `vector<info>` instantiates; a
+        // pattern in a system header is not diagnosed (kiln extension).
+        let ploc = self.ast.decls.get(pattern).loc();
+        if self.diags.sm().is_in_system_header(ploc) {
+            return;
+        }
+        let ty = |s: &Self, d: DeclId| s.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+        let (fty, pty) = (ty(self, f), ty(self, pattern));
+        if (self.is_consteval_only_type(fty) || self.has_consteval_only_object_param(f))
+            && !self.is_consteval_only_type(pty)
+        {
+            self.error(DiagId::sema_consteval_only_fn, loc);
+        }
+    }
+
+    /// Whether implicit object member function `f` (a constructor and a
+    /// destructor included) is of a consteval-only class: GCC 16.1 counts
+    /// the implicit object parameter in the function's type (CWG3115), so
+    /// the class's members declared so far decide, as for its other
+    /// parameters.
+    fn has_consteval_only_object_param(&mut self, f: DeclId) -> bool {
+        if !self.is_implicit_object_member(f) {
+            return false;
+        }
+        let Some(c) = self.ast.decls.get(f).ctx() else { return false };
+        self.kind_of(c) == DeclKind::CXXRecord && self.is_consteval_only_record(c)
     }
 }

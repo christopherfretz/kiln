@@ -565,6 +565,12 @@ pub(crate) struct Memory {
     pub peak: u64,
     /// Peak address space held: `frame.top + heap.top`.
     pub arena_peak: u64,
+    /// Bytes the running evaluation added to the translation unit's
+    /// reflection table and interned constant store (`refl_bytes`;
+    /// spec/oven.md "Reflection bytes"): live for the rest of the
+    /// translation unit, so part of the live bytes and the address space
+    /// the memory limit bounds.
+    pub refl: u64,
     pub limit: u64,
     /// Serial of the running call frame, and the last serial handed out.
     pub cur_frame: u32,
@@ -628,6 +634,7 @@ impl Memory {
             allocated: 0,
             peak: 0,
             arena_peak: 0,
+            refl: 0,
             limit,
             cur_frame: 0,
             serial: 0,
@@ -738,18 +745,34 @@ impl Memory {
         self.allocated = 0;
         self.peak = 0;
         self.arena_peak = 0;
+        self.refl = 0;
         self.trial.clear();
     }
 
     /// Live bytes now (`peak_bytes` is their maximum).
     pub fn live_bytes(&self) -> u64 {
-        self.frame.top + self.heap_live
+        self.frame.top + self.heap_live + self.refl
     }
 
     /// Address space held now (`peak_arena` is its maximum; the memory
     /// limit bounds it).
     pub fn arena(&self) -> u64 {
-        self.frame.top + self.heap.top
+        self.frame.top + self.heap.top + self.refl
+    }
+
+    /// Charges `n` bytes of reflection values and interned content made
+    /// by the running evaluation ([`Memory::refl`]).
+    ///
+    /// # Errors
+    /// [`MemFault::Memory`] when the memory limit is exceeded (the bytes
+    /// stay charged: the evaluation fails).
+    pub fn charge_refl(&mut self, n: u64) -> Result<(), MemFault> {
+        self.refl = self.refl.saturating_add(n);
+        self.note_peak();
+        if self.arena() > self.limit {
+            return Err(MemFault::Memory(self.limit));
+        }
+        Ok(())
     }
 
     fn note_peak(&mut self) {
@@ -799,7 +822,7 @@ impl Memory {
     pub fn alloc(&mut self, ty: OTy, size: u64, fl: u8, origin: Origin) -> Result<u64, MemFault> {
         let base = self.frame.top;
         let end = base + size.max(1).next_multiple_of(GRAN);
-        if end + self.heap.top > self.limit || end > u64::from(u32::MAX) {
+        if end + self.heap.top + self.refl > self.limit || end > u64::from(u32::MAX) {
             return Err(MemFault::Memory(self.limit));
         }
         self.frame.grow(end);
@@ -1243,7 +1266,7 @@ impl Memory {
             None => {
                 let base = self.heap.top;
                 let end = base + block_size(n);
-                if self.frame.top + end > self.limit || end > u64::from(u32::MAX) {
+                if self.frame.top + end + self.refl > self.limit || end > u64::from(u32::MAX) {
                     return Err(MemFault::Memory(self.limit));
                 }
                 self.heap.grow(end);
