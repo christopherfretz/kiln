@@ -3011,10 +3011,32 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     is allowed only for enumerators; otherwise `using declaration
     cannot refer to class member`, with clang's note suggesting an alias
     declaration (types) or a reference (variables).
+  - A literal-operator name with a qualifier that is not a namespace (a
+    class, an enumeration or a dependent type; [over.literal]/2) reports
+    clang's `non-namespace scope 'C::' cannot have a literal operator
+    member` at the name, at any scope (clang 22 prints `'C'`; WP-559).
   - On success, a `Using` declaration (not entered in lookup) records
     the qualifier, and one `UsingShadow` per declaration found is entered
     in the current scope (a local scope's `locals`, or the context's
     table).
+  - Block scope, operator and literal-operator names (WP-559): the
+    shadows of `using N::operator+;` / `using udl::operator""_t;` go to
+    the block's `Scope.local_names` (keyed by the full `DeclName`;
+    `locals` holds identifiers). Unqualified lookup of that name — a
+    ud-suffix's `operator""_t` ([lex.ext]/5, `literal_op_forms`, the
+    call), an operator expression's non-member candidates
+    ([over.match.oper]/3.2, `lookup_operator_name`) or an
+    `operator+(…)` call — stops at the innermost block holding one, from
+    the declarator to the end of the block, hiding outer declarations;
+    the block's declarators of one name form one overload set (ADL still
+    adds its candidates). In a template a non-dependent declarator is
+    redone by the instantiation (`subst/stmts.rs` `local_using_decl`).
+    A dependent qualifier with an operator name (`using T::operator+;`,
+    clang's `UnresolvedUsingValue`, diagnosed at instantiation since
+    only enumerators may be named) reports `an operator name with a
+    dependent qualifier in a block-scope using-declarator is not
+    supported yet`
+    (tests/conformance/namespace.udecl/block-scope-using-*.cpp).
   - `using typename q::x;` ([namespace.udecl]/1, /12;
     `act_on_using_typename_declarator`, WP-169): with a dependent
     qualifier in a class member specification, the declarator is an
@@ -7934,7 +7956,7 @@ Specified in **`spec/reflection.md`**:
 - the consteval boundary (§4);
 - splices (§5);
 - `define_aggregate` and the `__kiln_define_member` rules (§6);
-- annotations (§7);
+- annotations, including `type_of` of one (§7; WP-571);
 - the error model (§8).
 
 Everything is gated on `Sema::reflection` (driver `-freflection`).

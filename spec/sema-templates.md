@@ -2215,6 +2215,21 @@ WP-070b):
   out-of-class member partial specialization without one is not
   instantiated as a definition (`is_spec_of_out_of_line_def`;
   `dcl.init.general/const-default-init-var-template.cpp`).
+- [temp.expl.spec]/14 (WP-572): that declaration
+  (`template<> int C<char>::n;`, `template<> int S::v<char>;`) is not a
+  definition for any purpose: `Ast::is_member_spec_declaration` (shared
+  by Sema's `is_var_definition`, the Oven's notes and codegen) says so,
+  it is not default-initialized nor emitted (uses name an `external
+  global`), a later one with an initializer (`= 1`, `{}`) is the
+  definition rather than a redefinition, and one without an initializer
+  after the definition only redeclares it (`act_on_static_member`).
+  `template<> X C<int>::x();` declares a function ([dcl.ambig.res]/1):
+  like any out-of-line member function declaration whose class lookup
+  finds only a non-function, non-tag member (a variable, data member,
+  type alias or enumerator), it is "redefinition of 'x' as different kind
+  of symbol", noted at the member (clang `MergeFunctionDecl`;
+  `non_function_member`), not "out-of-line declaration ... does not
+  match" (`temp.expl.spec/static-member-spec-declaration-{ir,run,errors}.cpp`).
 - [dcl.spec.auto.general]/11: a deduced-type variable template, partial
   specialization or explicit specialization named in its own
   initializer gets clang 22's wording ("variable template partial

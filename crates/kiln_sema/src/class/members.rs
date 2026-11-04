@@ -214,6 +214,11 @@ impl Sema<'_, '_> {
                     // static data member is a redundant redeclaration.
                     let redundant = d.init_style.is_none()
                         && prev_def.is_some_and(|x| self.is_in_class_static(x));
+                    // [temp.expl.spec]/14: `template<> int C<char>::n;`
+                    // after the definition only redeclares it.
+                    let spec_decl = d.init_style.is_none()
+                        && self.has_explicit_spec_head()
+                        && self.ast.member_spec_info(self.ast.first(p)).is_some();
                     let prev_def = prev_def.filter(|_| !redundant);
                     if compatible {
                         // [dcl.stc]/4: one thread storage kind.
@@ -229,7 +234,7 @@ impl Sema<'_, '_> {
                         let msg = self.note_prev(msg, p, prev_def.is_some());
                         self.emit(msg);
                         invalid = true;
-                    } else if let Some(def) = prev_def {
+                    } else if let Some(def) = prev_def.filter(|_| !spec_decl) {
                         let msg =
                             self.diag(DiagId::sema_redefinition, loc).arg(sym_str(self, name));
                         let msg = self.note_prev(msg, def, true);

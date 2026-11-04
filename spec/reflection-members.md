@@ -127,6 +127,11 @@ gone; `__kiln_define_member` (spec/reflection.md §6.3) stays.
   instantiated specialization's are substituted first
   (`require_annotations`); a class template specialization is
   instantiated first.
+- A namespace alias is a namespace for `annotations_of` (`is_namespace`
+  is true of it) with its own annotations, not its target's; a
+  namespace-alias-definition admits none, so `annotations_of` and
+  `annotations_of_with_type` of an alias are always empty, even when
+  the aliased namespace is annotated (GCC 16.1 agrees; WP-573).
 - One annotation written on a declaration with several declarators is
   one annotation of each entity (`[[=1]] int x, y;`: the same
   reflection; [dcl.attr.annotation]/3). Sema maps each annotation
@@ -152,13 +157,11 @@ directories list every one.
 1. `^^C::priv` names a private member from outside without an error
    (GCC rejects); the operand check belongs to the reflect operand
    (`crates/kiln_sema/src/reflect_operand.rs`).
-2. `type_of` of a `BaseSpec`, `FnParam` or annotation reflection says
-   "has no type" (`crates/kiln_sema/src/meta/query.rs`).
-3. `constexpr auto v = annotations_of(r)[0];` is rejected (the
+2. `constexpr auto v = annotations_of(r)[0];` is rejected (the
    temporary vector escapes): P3032R2's manifestly-constant-evaluated
    immediate context is not implemented; `static_assert` forms work.
-4. The `Vector` recipe stores the result element by element
+3. The `Vector` recipe stores the result element by element
    (`crates/kiln_oven/src/meta/materialize.rs`), which dominates a large
    query's cost; a bulk store would remove it.
-5. A base-specifier's annotations are not recorded
+4. A base-specifier's annotations are not recorded
    (spec/annotations.md §9 item 1), so `annotations_of` of a base is empty.

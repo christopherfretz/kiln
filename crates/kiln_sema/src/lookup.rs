@@ -450,6 +450,17 @@ impl Sema<'_, '_> {
                 {
                     return found;
                 }
+                // An operator or literal-operator name a block-scope
+                // using-declarator introduced hides the outer ones
+                // ([basic.lookup.unqual]/4, [lex.ext]/5).
+                if ident.is_none() && !s.local_names.is_empty() {
+                    let v: Vec<DeclId> =
+                        s.local_names.iter().filter(|e| e.0 == dname).map(|e| e.1).collect();
+                    let found = self.filter(v, kind);
+                    if !found.is_empty() {
+                        return found;
+                    }
+                }
                 continue;
             }
             if s.kind == ScopeKind::LinkageSpec {
@@ -958,7 +969,9 @@ impl Sema<'_, '_> {
         };
         let s = &self.scopes[i];
         if s.is_local() {
-            let Some(name) = dname.as_ident() else { return Vec::new() };
+            let Some(name) = dname.as_ident() else {
+                return s.local_names.iter().filter(|e| e.0 == dname).map(|e| e.1).collect();
+            };
             let mut out: Vec<DeclId> = Vec::new();
             // The outermost block of a control statement's sub-statement
             // also conflicts with the condition's names ([basic.scope.block]/2).
@@ -1014,6 +1027,14 @@ impl Sema<'_, '_> {
             && let Some(s) = self.scopes.iter_mut().rev().find(|s| s.is_local())
         {
             s.local_ops.push((op, d));
+        }
+    }
+
+    /// Adds the `UsingShadow` `d` of an operator or literal-operator name
+    /// to the innermost local scope ([`crate::scope::Scope::local_names`]).
+    pub(crate) fn push_local_name(&mut self, name: DeclName, d: DeclId) {
+        if let Some(s) = self.scopes.iter_mut().rev().find(|s| s.is_local()) {
+            s.local_names.push((name, d));
         }
     }
 

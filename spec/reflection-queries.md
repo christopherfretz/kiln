@@ -33,6 +33,9 @@ declarations are in `tests/support/kiln_meta_queries.h`.
   materialization.
 - **`variable_of(r)`** gives the `ParmVar` of the function definition
   whose body is being evaluated, for a `FnParam` of that function.
+- **`type_of(r)`** of an annotation is the type of its underlying
+  constant, `const T` for a class `T` (spec/reflection.md §7; WP-571).
+  `is_const` / `is_volatile` inspect that type.
 - **`return_type_of(r)`** gives the declared return type of a function or
   function type, canonical like `type_of`.
 - **`has_ellipsis_parameter`** (P3096) is the row `is_vararg_function`,
