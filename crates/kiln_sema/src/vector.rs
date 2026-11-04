@@ -21,7 +21,7 @@ use std::ops::ControlFlow;
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::ids::RawId;
-use kiln_ast::types::{TypeView, VectorKind};
+use kiln_ast::types::{Quals, TypeView, VectorKind};
 use kiln_ast::{AttrId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalKind};
@@ -282,8 +282,34 @@ impl Sema<'_, '_> {
         base: QualType,
         ds: &DeclSpec,
     ) -> QualType {
+        self.apply_declspec_vector_attrs_as(base, ds, ds.is_typedef())
+    }
+
+    /// [`Self::apply_declspec_vector_attrs`] (`typedef` as for
+    /// [`Self::apply_vector_attrs`]). clang `ConvertDeclSpecToType`
+    /// processes the decl-specifier attributes before it applies the
+    /// cv-qualifiers written among the decl-specifiers, so those qualify
+    /// the vector, not its element: `__attribute__((vector_size(16)))
+    /// double const *p` points to a `const` vector of two `double`
+    /// (printed `__attribute__((__vector_size__(2 * sizeof(double))))
+    /// double const *`), as in GCC.
+    fn apply_declspec_vector_attrs_as(
+        &mut self,
+        base: QualType,
+        ds: &DeclSpec,
+        typedef: bool,
+    ) -> QualType {
         let mut attrs = ds.attrs.clone();
-        self.apply_vector_attrs(base, &mut attrs, ds.is_typedef())
+        if !attrs.iter().any(|&a| self.ast.attrs.get(a).kind.is_vector_type()) {
+            return base;
+        }
+        let cv = ds.cv.bits() & base.quals_bits();
+        let elem = QualType::new(base.ty(), base.quals_bits() & !cv);
+        let v = self.apply_vector_attrs(elem, &mut attrs, typedef);
+        if v == elem {
+            return base;
+        }
+        self.ast.types.qualify(v, Quals::from_bits(cv))
     }
 
     /// `base` with the vector attributes among the decl-specifiers of a
@@ -292,8 +318,7 @@ impl Sema<'_, '_> {
     /// them as type attributes, so `ext_vector_type` is accepted here at
     /// clang 19 too (there is no declaration to restrict it to a typedef).
     pub fn apply_type_id_vector_attrs(&mut self, base: QualType, ds: &DeclSpec) -> QualType {
-        let mut attrs = ds.attrs.clone();
-        self.apply_vector_attrs(base, &mut attrs, true)
+        self.apply_declspec_vector_attrs_as(base, ds, true)
     }
 
     /// `attrs` without the vector attributes (applied separately by
