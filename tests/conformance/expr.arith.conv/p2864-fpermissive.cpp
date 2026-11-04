@@ -1,6 +1,6 @@
 // [expr.arith.conv]/1.3 (C++26, P2864R2): arithmetic between two different
 // enumeration types, or an enumeration and a floating-point type, is
-// ill-formed (p2864-probe.cpp). GCC 16.1 only pedwarns
+// ill-formed (p2864-probe.cpp). GCC 16.1 makes it a pedwarn, a warning by default
 // (-Wdeprecated-enum-enum-conversion), and code built with GCC and
 // -fpermissive relies on it (BDE-era headers computing `queue % Num_Areas`
 // across an unnamed enumeration): under -fpermissive kiln diagnoses it with
