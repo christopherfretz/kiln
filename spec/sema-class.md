@@ -1626,7 +1626,12 @@ members with an NSDMI.
 - **Implicit move** (C++23 [expr.prim.id.unqual]/4): in `return` and
   `co_return` operands an id-expression naming an implicitly movable entity is
   an xvalue (clang 19 dump: `ImplicitCastExpr 'const S' xvalue <NoOp>` before
-  binding to `const S&`).
+  binding to `const S&`). The entity is a parameter or a block-scope
+  variable with automatic storage duration ([class.copy.elision]/3): a
+  block-scope `thread_local` (with or without `static`) has thread
+  storage duration and stays an lvalue, so `thread_local int i; return
+  i;` binds an `int&` return (`has_automatic_storage`; WP-533,
+  `basic.stc.thread/local-lvalue-run.cpp`).
 - **NRVO marking (clang 19 `Scope::updateNRVOCandidate` / `applyNRVO` /
   `computeNRVO`).** A copy-elision candidate of `return e` is `e` (through
   parentheses) naming a non-volatile, non-reference local variable with
