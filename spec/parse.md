@@ -154,6 +154,18 @@ clang's `Parser` over `Preprocessor::Lex`.
     `TentativeCXXTypeIdContext`,
   - `is_cxx_function_declarator(name) -> (bool, bool)`
     ([dcl.ambig.res]/1; the ambiguity flag feeds `-Wvexing-parse`).
+  Inside the parentheses of an abstract declarator, `(` followed by a
+  decl-specifier keyword or a type name starts a parameter list, not a
+  grouping paren ([dcl.ambig.res]/3; clang's `isDeclarationSpecifier`).
+  Both the scanner (`is_decl_specifier_start`) and the declarator parser
+  (`is_param_list_start`) ask `Parser::names_type_at`. That counts a class
+  template's injected-class-name used in its own scope without `<` as a
+  type name ([temp.local]/1), so `void(CT)`, `void(CT, const CT &)` and
+  `void (*)(CT)` are function types in a template argument, parameter,
+  alias, `sizeof` or `decltype`. In a template argument the type-id
+  reading then wins ([temp.arg.general]/2). `int(x)`, with `x` a variable,
+  stays a functional cast (WP-554;
+  `tests/conformance/temp.arg/type-id-injected-class-name-*.cpp`).
   Dependent qualified names follow clang's `isCXXDeclarationSpecifier`
   (WP-291). A dependent `N::m` that the scan cannot classify is a
   decl-specifier when an identifier or another decl-specifier follows it
@@ -873,6 +885,16 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `friend class Ts...;` then expands no pack
     (`temp.local/p6-friend-class-shadow.cpp`).
   - Then `act_on_tag_attrs` for the class-head or enum-head attributes.
+  - clang nullability on classes (WP-554): after a class-key (not `enum`),
+    `_Nullable` may appear any number of times, mixed with the attributes
+    there, as in clang's `ParseClassSpecifier`. Each one is a keyword
+    attribute `AttrKind::TYPE_NULLABLE` (`act_on_class_nullable`), and a
+    union is rejected with "'_Nullable' attribute only applies to
+    classes". `at_partial_specialization` skips it, so `template<> class
+    _Nullable X<int>` is an explicit specialization. The other
+    nullability keywords are not parsed there. spec/sema.md §4.1.1 says
+    which class types may then carry a nullability qualifier
+    (`tests/conformance/dcl.type.class/nullability-on-classes-*.cpp`).
   - Then the body:
     - `parse_record_body` (§4.1) holds the base clause, member
       declarations, bit-fields and nested records.

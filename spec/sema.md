@@ -463,7 +463,17 @@ clang's `AttributedType`; the canonical type is unchanged
   canonically a pointer or member pointer, or a dependent type), else
   `sema_nullability_nonpointer` ("nullability specifier '_Nonnull'
   cannot be applied to non-pointer type 'int'") and the qualifier is
-  dropped; a reference is a non-pointer
+  dropped; a reference is a non-pointer. A class marked `class _Nullable
+  X` (nullability on classes, WP-554; `AttrKind::TYPE_NULLABLE`, spec/parse.md
+  §4 "Tags") also can, as clang 19's `canHaveNullability` decides: a
+  class that is not a specialization when any redeclaration carries the
+  mark, and a class template specialization, dependent or not, only when
+  a redeclaration of its primary template's pattern does. A mark on a
+  partial or explicit specialization does not count. Neither does the
+  injected-class-name, nor `X<T>` as the current instantiation inside
+  `X` (clang's `InjectedClassNameType`). clang's implicit marks on
+  `std::unique_ptr`, `std::shared_ptr` and `std::function` are not
+  inferred (follow-up)
 - the same qualifier written twice is `sema_nullability_duplicate`
   (warning, `-Wnullability`); a different one already written on the
   type, or carried through sugar (a typedef), is
