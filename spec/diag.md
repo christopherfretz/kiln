@@ -217,10 +217,11 @@ its diagnostic is an off-by-default Extension.
 (its one id is `WarningError`; `-Wno-array-compare-cxx26` silences the
 C++26 array comparison, as in clang),
 `array-compare`, `deprecated-array-compare`, `tautological-compare` (in
-`most`), `invalid-static-assert-message` (`WarningError`, spec/sema.md
-§4.6) and `c++26-extensions` (the `ExtWarn`s for C++26 features used
-earlier: placeholder variables, user-generated `static_assert`
-messages).
+`most`), `invalid-static-assert-message` (`WarningOff` in kiln, where
+clang makes it `DefaultError`: [dcl.pre]/12 makes the message it
+evaluates an unevaluated operand; spec/sema.md §4.6, WP-570) and
+`c++26-extensions` (the `ExtWarn`s for C++26 features used earlier:
+placeholder variables, user-generated `static_assert` messages).
 
 Clang subgroups kiln does not have yet (add them, in place, when their
 diagnostics land):
