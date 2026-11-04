@@ -80,14 +80,16 @@ impl Sema<'_, '_> {
         let by_init = matches!(style, CastStyle::CStyle | CastStyle::Functional)
             && !(binds && same)
             && self.ref_init_viable(ty, e);
-        if (binds || reinterprets) && !by_init {
-            // [expr.reinterpret.cast]/11: a glvalue as the same type (an
-            // xvalue as an lvalue) or another type.
-            if style.allows_reinterpret() && (keeps_cv || style.allows_const()) {
+        if (binds || reinterprets) && !by_init && style.allows_reinterpret() {
+            if style == CastStyle::Reinterpret {
+                return self.reinterpret_ref(e, et, ty, r, vk, loc, rparen);
+            }
+            // [expr.reinterpret.cast]/11 after [expr.const.cast]: a glvalue
+            // as another type (or an xvalue as an lvalue), cv-qualifiers
+            // cast away as by a `const_cast`.
+            if keeps_cv || style.allows_const() {
                 let ck = if same { CastKind::NoOp } else { CastKind::LValueBitCast };
-                if !binds || !same {
-                    return self.typed_cast(style, ck, e, r, vk, None, loc, rparen);
-                }
+                return self.typed_cast(style, ck, e, r, vk, None, loc, rparen);
             }
         }
         // [expr.const.cast]/3: a class prvalue as an xvalue of the same
@@ -136,6 +138,59 @@ impl Sema<'_, '_> {
             return self.typed_cast(style, CastKind::NoOp, x, r, vk, None, loc, rparen);
         }
         self.bad_cast(style, e, ty, loc)
+    }
+
+    /// `reinterpret_cast<ty>(e)` for the glvalue `e` of type `et` and the
+    /// reference type `ty` to `r` (yielding a `vk`): [expr.reinterpret.cast]/11,
+    /// `*reinterpret_cast<r*>(&e)`, so any `et` whose pointer casts to
+    /// `r*` ([expr.reinterpret.cast]/7), its own type and a more
+    /// cv-qualified one included (the reference workload's source file:
+    /// `reinterpret_cast<const T&>(u)` for a `const U& u` with `T` = `U`),
+    /// but not one that casts away constness ([expr.reinterpret.cast]/2,
+    /// [expr.const.cast]/8, at any level), nor a bit-field (clang
+    /// `TryReinterpretCast`).
+    #[allow(clippy::too_many_arguments, reason = "the cast's parts")]
+    fn reinterpret_ref(
+        &mut self,
+        e: ExprId,
+        et: QualType,
+        ty: QualType,
+        r: QualType,
+        vk: ValueCategory,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let style = CastStyle::Reinterpret;
+        if conv::source_bit_field(self, e).is_some() {
+            let msg = self
+                .diag(DiagId::sema_bad_cxx_cast_bitfield, loc)
+                .arg(style.select())
+                .arg(self.ty_arg(ty));
+            self.emit(msg);
+            return self.recover(ty, &[e], loc);
+        }
+        let from = self.ast.types.pointer_to(et);
+        let to = self.ast.types.pointer_to(r);
+        if matches!(
+            conv::casts_away_constness(self, from, to),
+            conv::CastAway::Similar | conv::CastAway::SimilarKind
+        ) {
+            let msg = self
+                .diag(DiagId::sema_bad_cast_qualifiers_away, loc)
+                .arg(style.select())
+                .arg(self.ty_arg(et))
+                .arg(self.ty_arg(ty));
+            self.emit(msg);
+            return self.recover(ty, &[e], loc);
+        }
+        // clang: `CK_NoOp` when the two pointer types are the same,
+        // cv-qualification included.
+        let ck = if self.ast.types.same_type(et, r) {
+            CastKind::NoOp
+        } else {
+            CastKind::LValueBitCast
+        };
+        self.typed_cast(style, ck, e, r, vk, None, loc, rparen)
     }
 
     /// Whether `T& t(e);` (direct-initialization of the reference type

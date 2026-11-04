@@ -199,6 +199,7 @@ sema_await_suspend_invalid_return_type = Error (1) "return type of 'await_suspen
 sema_bad_cast_qualifiers_away = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} casts away qualifiers";
 sema_bad_const_cast_dest = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} to {1}, which is not a reference, pointer-to-object, or pointer-to-data-member";
 sema_bad_cxx_cast = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} is not allowed";
+sema_bad_cxx_cast_bitfield = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from bit-field lvalue to reference type {1}";
 sema_bad_cxx_cast_rvalue = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from rvalue to reference type {1}";
 sema_bad_cxx_cast_scalar_to_vector_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from scalar {1} to vector {2} of different size";
 sema_bad_cxx_cast_vector_to_scalar_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from vector {1} to scalar {2} of different size";

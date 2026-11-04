@@ -268,3 +268,132 @@ pub fn is_function_pointer_conversion(s: &mut Sema<'_, '_>, from: QualType, to: 
         None => false,
     }
 }
+
+/// How a pointer conversion casts away constness (clang
+/// `CastAwayConstnessKind`), ordered from harmless to worst.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum CastAway {
+    /// It does not ([expr.const.cast]/8).
+    None,
+    /// It does, at a level where both types are similar.
+    Similar,
+    /// It does, below levels of the same kind but not similar (pointers
+    /// to members of different classes, arrays of different bounds).
+    SimilarKind,
+    /// It does, below levels of different kinds (a pointer against an
+    /// array): clang accepts the cast as an extension.
+    Incoherent,
+}
+
+/// The kind of one level of a type for [`casts_away_constness`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CastLevel {
+    None,
+    Ptr,
+    MemPtr,
+    Array,
+}
+
+fn cast_level(s: &Sema<'_, '_>, t: QualType) -> (CastLevel, QualType) {
+    match s.ast.types.canonical_view(t) {
+        TypeView::Pointer(p) => (CastLevel::Ptr, p),
+        TypeView::MemberPointer { pointee, .. } => (CastLevel::MemPtr, pointee),
+        TypeView::ConstantArray(a) => (CastLevel::Array, a.elem),
+        TypeView::IncompleteArray(e) => (CastLevel::Array, e),
+        _ => (CastLevel::None, t),
+    }
+}
+
+/// clang `UnwrapSimilarArrayTypes` (allowing an array of unknown bound
+/// against one of known bound).
+fn unwrap_similar_arrays(s: &Sema<'_, '_>, t1: &mut QualType, t2: &mut QualType) {
+    loop {
+        let bound = |t: QualType| match s.ast.types.canonical_view(t) {
+            TypeView::ConstantArray(a) => Some((Some(a.size), a.elem)),
+            TypeView::IncompleteArray(e) => Some((None, e)),
+            _ => None,
+        };
+        match (bound(*t1), bound(*t2)) {
+            (Some((b1, e1)), Some((b2, e2))) if b1 == b2 || b1.is_none() || b2.is_none() => {
+                *t1 = e1;
+                *t2 = e2;
+            }
+            _ => return,
+        }
+    }
+}
+
+/// clang `unwrapCastAwayConstnessLevel`: strips one level from both
+/// types; `None` when either has no further level.
+fn unwrap_cast_level(s: &Sema<'_, '_>, t1: &mut QualType, t2: &mut QualType) -> Option<CastAway> {
+    unwrap_similar_arrays(s, t1, t2);
+    let (c1, p1) = cast_level(s, *t1);
+    let (c2, p2) = cast_level(s, *t2);
+    let similar = match (s.ast.types.canonical_view(*t1), s.ast.types.canonical_view(*t2)) {
+        (TypeView::Pointer(_), TypeView::Pointer(_)) => true,
+        (
+            TypeView::MemberPointer { class: a, .. },
+            TypeView::MemberPointer { class: b, .. },
+        ) => s.ast.types.same_unqualified(QualType::unqual(a), QualType::unqual(b)),
+        _ => false,
+    };
+    if c1 == CastLevel::None || c2 == CastLevel::None {
+        return None;
+    }
+    let mut kind = if similar {
+        CastAway::Similar
+    } else if c1 == c2 {
+        CastAway::SimilarKind
+    } else {
+        CastAway::Incoherent
+    };
+    *t1 = p1;
+    *t2 = p2;
+    // An array at this level: its element type's qualifiers are the
+    // level's (any qualifier of a matching level of `t2` corresponds).
+    loop {
+        unwrap_similar_arrays(s, t1, t2);
+        let (a1, e1) = cast_level(s, *t1);
+        if a1 != CastLevel::Array {
+            break;
+        }
+        let (a2, e2) = cast_level(s, *t2);
+        if a2 == CastLevel::None {
+            break;
+        }
+        if a2 != CastLevel::Array {
+            kind = CastAway::Incoherent;
+        } else if kind != CastAway::Incoherent {
+            kind = CastAway::SimilarKind;
+        }
+        // An array's qualifiers are its element type's (spec/types.md
+        // §2.1), so `t2`'s carry over.
+        *t1 = e1;
+        *t2 = e2;
+    }
+    Some(kind)
+}
+
+/// clang `CastsAwayConstness` for the pointer (or pointer to member)
+/// types `src` and `dest` ([expr.const.cast]/8): a level whose
+/// cv-qualifiers `dest` does not include, or a level that adds one below
+/// a level of `dest` that is not `const`.
+pub(crate) fn casts_away_constness(s: &Sema<'_, '_>, src: QualType, dest: QualType) -> CastAway {
+    let mut t1 = s.ast.types.canonical(src);
+    let mut t2 = s.ast.types.canonical(dest);
+    let mut worst = CastAway::Similar;
+    let mut all_const = true;
+    while let Some(kind) = unwrap_cast_level(s, &mut t1, &mut t2) {
+        worst = worst.max(kind);
+        let cvr = Quals::CV | Quals::RESTRICT;
+        let q1 = s.ast.types.effective_quals(t1) & cvr;
+        let q2 = s.ast.types.effective_quals(t2) & cvr;
+        if q1 != q2 && (!q2.contains(q1) || !all_const) {
+            return worst;
+        }
+        if all_const && !q2.is_const() {
+            all_const = false;
+        }
+    }
+    CastAway::None
+}

@@ -6328,8 +6328,23 @@ impl Sema<'_, '_> {
         }
         let (fp, tp) = (self.ast.types.is_pointer(from), self.ast.types.is_pointer(to));
         if fp && tp {
-            if style == CastStyle::Reinterpret && self.casts_away_quals(from, to) {
-                return Ok(None);
+            // [expr.reinterpret.cast]/2, [expr.const.cast]/8: not casting
+            // away constness at any level (clang `CastsAwayConstness`;
+            // between levels of different kinds clang only warns, an
+            // extension kiln accepts silently).
+            if style == CastStyle::Reinterpret
+                && matches!(
+                    conv::casts_away_constness(self, from, to),
+                    conv::CastAway::Similar | conv::CastAway::SimilarKind
+                )
+            {
+                let msg = self
+                    .diag(DiagId::sema_bad_cast_qualifiers_away, loc)
+                    .arg(style.select())
+                    .arg(self.ty_arg(from))
+                    .arg(self.ty_arg(to));
+                self.emit(msg);
+                return Err(());
             }
             return Ok(Some(CastKind::BitCast));
         }
