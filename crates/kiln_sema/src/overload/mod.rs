@@ -13,6 +13,7 @@ pub(crate) mod arrow;
 pub(crate) mod best;
 pub(crate) mod builtin;
 pub(crate) mod call;
+pub(crate) mod defer;
 pub(crate) mod diag;
 pub(crate) mod ics;
 pub(crate) mod member;
@@ -308,6 +309,22 @@ pub(crate) struct OverloadCandidateSet {
     /// being analyzed or synthesized ([class.compare.default]/1, clang's
     /// `DefaultedFn` exclusion). Compared by first declaration.
     pub exclude: Option<DeclId>,
+    /// The set resolves in two phases (clang 21+, `clang_compat >= 22`;
+    /// see `defer.rs`): function templates named without explicit
+    /// template arguments are not deduced when added but recorded in
+    /// `deferred`, and deduced only if no non-template candidate is a
+    /// perfect match. Set by the contexts clang's
+    /// `shouldDeferTemplateArgumentDeduction` admits.
+    pub two_phase: bool,
+    /// A candidate was added that forbids picking a perfect match before
+    /// the templates are deduced (clang
+    /// `DisableResolutionByPerfectCandidate`): a constructor template
+    /// with a value-dependent *explicit-specifier*, or a conversion
+    /// function template of an initialization by constructor.
+    pub no_perfect: bool,
+    /// The template candidates not yet deduced, in the order they were
+    /// added (they are appended to `cands` in that order).
+    pub deferred: Vec<defer::Deferred>,
 }
 
 impl Default for OverloadCandidateSet {
@@ -329,6 +346,9 @@ impl Default for OverloadCandidateSet {
             builtin_op: None,
             tmpl_order: Vec::new(),
             exclude: None,
+            two_phase: false,
+            no_perfect: false,
+            deferred: Vec::new(),
         }
     }
 }
@@ -352,6 +372,9 @@ impl OverloadCandidateSet {
         self.builtin_op = None;
         self.tmpl_order.clear();
         self.exclude = None;
+        self.two_phase = false;
+        self.no_perfect = false;
+        self.deferred.clear();
     }
 
     /// Adds `cand` as a non-viable candidate failing with `failure`.
@@ -502,6 +525,7 @@ impl OverloadScratch {
                 + s.ics.capacity() * size_of::<Ics>()
                 + s.found.capacity() * size_of::<DeclId>()
                 + s.params.capacity() * size_of::<QualType>()
+                + s.deferred.capacity() * size_of::<defer::Deferred>()
         };
         self.pool.capacity() * size_of::<OverloadCandidateSet>()
             + self.pool.iter().map(one).sum::<usize>()

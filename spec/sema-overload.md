@@ -639,6 +639,46 @@ function's identity, so a set may hold overloads that differ only in them
   condition falls back to `XLi0EE` (spec/abi.md §8.15), so two such
   overloads in one translation unit can still collide.
 
+### 4.4 Deferred template candidates (clang 21; `overload/defer.rs`)
+At `-fclang-compat=22` most candidate sets resolve in two phases (clang
+21's `TwoPhaseResolution`). `defer_templates(set)` turns it on (sets
+`two_phase`), and a function template named without explicit template
+arguments is then recorded as a `Deferred` entry rather than deduced
+(`Template`, `NonmemberOper`, `MemberOper`, `Found`, `Guide`, each
+holding what its adding context needs to add it later). `resolve_set`
+replaces `order_template_candidates` + `best_viable`:
+- If templates were deferred and `no_perfect` is clear, it looks for a
+  perfect match among the candidates added so far (`perfect_viable`,
+  clang `PerfectViableFunction`). A candidate is perfect when it is
+  viable and every ICS, including the object argument's and a
+  conversion function's final conversion, is an identity standard
+  conversion (lvalue transformations aside) that is not from a braced
+  list. A reference binding must be to the argument's own cv-qualified
+  type, and an lvalue reference must not bind an rvalue
+  (`perfect_conversion`). A static member function's object slot, and
+  that of a member function named without an object, is never perfect.
+  Of several perfect candidates, the one more constrained than every
+  other wins. Otherwise (equally constrained, a built-in or surrogate
+  among them), or for a perfect conversion function while constructor
+  templates are deferred, there is no perfect match. A deleted perfect
+  match injects the deferred templates (for the notes) and is `Deleted`.
+- Otherwise `inject_deferred` deduces every deferred entry in order
+  (with its original point of instantiation and ADL marking), then the
+  usual ordering and selection run.
+
+Sets that defer: calls, member calls, operators (including rewritten
+and reversed forms), `->`, initialization by constructor
+(`resolve_ctor_ex` for direct/list styles or copy from the same or a
+derived class), special-member lookup (`deletion.rs`), range-`for`
+ADL `begin`/`end`, and CTAD. Initialization by user-defined conversion
+does not defer. `no_perfect` is set by a constructor template with a
+dependent *explicit-specifier* (`dependently_explicit`, added at once)
+and by a conversion function template in an elision set (clang
+`DisableResolutionByPerfectCandidate`). At `-fclang-compat=19`
+nothing defers. Not yet deferred: contextual conversion sets
+(`switch_conv.rs`). Tests: `tests/conformance/over.match.best/perfect-match-*.cpp`,
+`run-perfect-match-skips-templates.cpp`.
+
 ## 5. Rewritten comparison candidates ([over.match.oper]/3.4, P2468)
 
 ### 5.1 Generation (`oper.rs::add_rewritten`)

@@ -1274,7 +1274,7 @@ impl Sema<'_, '_> {
     /// reference to P is not viable for a single argument when the
     /// constructed class D is reference-related to P and P to C (it
     /// would copy or move a base subobject).
-    fn exclude_inhctor_slice(
+    pub(crate) fn exclude_inhctor_slice(
         &mut self,
         set: &mut super::OverloadCandidateSet,
         n: usize,
@@ -1357,6 +1357,30 @@ impl Sema<'_, '_> {
         if self.ast.decls.cold.requires_clause.contains(ft) {
             set.uncertain = true;
         }
+        if set.two_phase {
+            // clang 21+: a constructor template whose explicit-specifier
+            // is value-dependent is deduced at once and forbids picking a
+            // perfect match first (clang `AddTemplateOverloadCandidate`).
+            if kind == CandidateKind::Ctor && self.dependently_explicit(pattern) {
+                set.no_perfect = true;
+            } else {
+                set.deferred.push(super::defer::Deferred::Found { ft, found, kind, first_opts });
+                return;
+            }
+        }
+        self.add_found_template_now(set, ft, found, kind, first_opts);
+    }
+
+    /// The deduction part of [`Self::add_found_template`], which a
+    /// two-phase set defers.
+    pub(crate) fn add_found_template_now(
+        &mut self,
+        set: &mut super::OverloadCandidateSet,
+        ft: DeclId,
+        found: DeclId,
+        kind: CandidateKind,
+        first_opts: IcsOptions,
+    ) {
         let n = set.cands.len();
         let loc = set.loc;
         self.add_template_candidate(set, ft, found, None, kind, first_opts, loc);

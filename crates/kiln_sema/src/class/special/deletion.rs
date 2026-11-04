@@ -132,6 +132,7 @@ impl Sema<'_, '_> {
         // conversions, and for an assignment an lvalue object.
         let cty = self.class_type(c);
         let mut set = self.begin_set(SetKind::Normal, Loc::INVALID);
+        self.defer_templates(&mut set);
         if k != K::DefaultCtor {
             let vk = if k.is_move() { ValueCategory::XValue } else { ValueCategory::LValue };
             let ty = self.ast.types.qualify(cty, rhs);
@@ -167,8 +168,7 @@ impl Sema<'_, '_> {
             );
             set.found = found;
         }
-        self.order_template_candidates(&mut set);
-        let out = self.best_viable(&mut set);
+        let out = self.resolve_set(&mut set);
         let r = self.selected_of(set, out);
         // Special-member selection keeps no notes.
         if let Some(old) = self.ovl.failed.take() {

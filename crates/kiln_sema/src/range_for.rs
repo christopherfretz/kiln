@@ -878,9 +878,22 @@ impl Sema<'_, '_> {
             return (Status::NoViable(Vec::new()), None);
         }
         let mut set = self.begin_set(SetKind::Normal, colon);
+        self.defer_templates(&mut set);
         let base = self.push_call_args(&mut set, &[range], &[None]);
         for &(d, f) in &cands {
             if self.kind_of(d) == DeclKind::FunctionTemplate {
+                if set.two_phase {
+                    set.deferred.push(crate::overload::defer::Deferred::Template {
+                        ft: d,
+                        found: f,
+                        kind: CandidateKind::Function,
+                        first_opts: IcsOptions::NONE,
+                        loc: colon,
+                        poi: self.templ.deduce_poi,
+                        adl_only: true,
+                    });
+                    continue;
+                }
                 self.add_template_candidate(
                     &mut set,
                     d,
@@ -897,8 +910,7 @@ impl Sema<'_, '_> {
                 c.adl_only = true;
             }
         }
-        self.order_template_candidates(&mut set);
-        let out = self.best_viable(&mut set);
+        let out = self.resolve_set(&mut set);
         self.ovl.lists.truncate(base);
         if matches!(out, OvlOutcome::NoViable) {
             let notes = self.ovl_notes(&set, false);

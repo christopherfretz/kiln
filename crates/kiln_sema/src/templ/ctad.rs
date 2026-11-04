@@ -19,7 +19,7 @@ use crate::conv;
 use crate::declspec::{Chunk, DeclSpec, Declarator};
 use crate::init::{Designator, InitItem, InitList, InitValue, Initializer};
 use crate::overload::{
-    Candidate, CandidateFailure, CandidateKind, Ics, IcsOptions, OverloadCandidateSet, OvlOutcome,
+    Candidate, CandidateFailure, CandidateKind, IcsOptions, OverloadCandidateSet, OvlOutcome,
     SetKind,
 };
 use crate::templ::args::{LevelMode, MultiLevelArgs};
@@ -1711,14 +1711,10 @@ impl Sema<'_, '_> {
     }
 
     /// Overload resolution over the guides `guides` for initialization
-    /// `how` with the arguments already in `set`.
-    ///
-    /// At clang 21 and later, two phases (clang `BestViableFunction`'s
-    /// `TwoPhaseResolution` over deferred template candidates): the
-    /// non-template guides alone first, and when their best is a perfect
-    /// match ([`Sema::perfect_candidate`]) no template guide is deduced at
-    /// all, so it names no specialization; otherwise every guide, in
-    /// declaration order, as at clang 19.
+    /// `how` with the arguments already in `set`. At clang 21 and later
+    /// the template guides are deferred candidates (`overload/defer.rs`):
+    /// a non-template guide that is a perfect match is the result without
+    /// deducing any template guide, which so names no specialization.
     fn ctad_resolve(
         &mut self,
         set: &mut OverloadCandidateSet,
@@ -1726,56 +1722,14 @@ impl Sema<'_, '_> {
         how: CtadInit,
         loc: Loc,
     ) -> OvlOutcome {
-        if self.clang_compat >= 22 {
-            let plain: Vec<DeclId> = guides
-                .iter()
-                .copied()
-                .filter(|&g| self.kind_of(g) != DeclKind::FunctionTemplate)
-                .collect();
-            if !plain.is_empty() && plain.len() < guides.len() {
-                let (cands, ics, found) = (set.cands.len(), set.ics.len(), set.found.len());
-                let (skipped, uncertain) = (set.skipped_templates, set.uncertain);
-                self.add_ctad_candidates(set, &plain, how, loc);
-                self.order_template_candidates(set);
-                let out = self.best_viable(set);
-                if let OvlOutcome::Success(b) | OvlOutcome::Deleted(b) = out
-                    && self.perfect_candidate(set, b)
-                {
-                    return out;
-                }
-                set.cands.truncate(cands);
-                set.ics.truncate(ics);
-                set.found.truncate(found);
-                set.skipped_templates = skipped;
-                set.uncertain = uncertain;
-            }
-        }
+        self.defer_templates(set);
         self.add_ctad_candidates(set, guides, how, loc);
-        self.order_template_candidates(set);
-        self.best_viable(set)
-    }
-
-    /// clang `OverloadCandidate::isPerfectMatch`: candidate `b` of `set`
-    /// is viable and converts every argument by an identity standard
-    /// conversion sequence (lvalue transformations aside) that, binding a
-    /// reference, binds it to the argument's own type (same
-    /// cv-qualification) and an lvalue reference not to an rvalue.
-    fn perfect_candidate(&self, set: &OverloadCandidateSet, b: u32) -> bool {
-        set.cand(b).viable
-            && set.ics_of(b).iter().all(|ics| match ics {
-                Ics::Standard(scs) => {
-                    scs.is_identity()
-                        && (!scs.rb.contains(conv::RefBinding::IS_REF)
-                            || self.ast.types.same_type(scs.from, scs.to_types[2])
-                                && !(scs.rb.contains(conv::RefBinding::BINDS_RVALUE)
-                                    && scs.rb.contains(conv::RefBinding::LVALUE_REF)))
-                }
-                _ => false,
-            })
+        self.resolve_set(set)
     }
 
     /// The guides `guides` as candidates of `set` for initialization
-    /// `how` (an explicit guide is not one of copy-initialization).
+    /// `how` (an explicit guide is not one of copy-initialization); the
+    /// template guides deferred in a two-phase set.
     fn add_ctad_candidates(
         &mut self,
         set: &mut OverloadCandidateSet,
@@ -1784,34 +1738,49 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) {
         for &g in guides {
-            let (pattern, template) = match self.kind_of(g) {
-                DeclKind::FunctionTemplate => match self.pattern_of(g) {
-                    Some(p) => (p, Some(g)),
-                    None => continue,
-                },
-                DeclKind::CXXDeductionGuide => (g, None),
-                _ => continue,
-            };
-            if self.ast.decls.get(pattern).has(DeclFlags::INVALID) {
+            if set.two_phase && self.kind_of(g) == DeclKind::FunctionTemplate {
+                set.deferred.push(crate::overload::defer::Deferred::Guide { g, how, loc });
                 continue;
             }
-            if how == CtadInit::Copy && self.fn_spec(pattern).is_explicit() {
-                self.add_explicit_guide(set, pattern, g, template);
-                continue;
-            }
-            match template {
-                Some(ft) => self.add_template_candidate(
-                    set,
-                    ft,
-                    g,
-                    None,
-                    CandidateKind::Function,
-                    IcsOptions::NONE,
-                    loc,
-                ),
-                None => {
-                    self.add_candidate(set, pattern, g, CandidateKind::Function, IcsOptions::NONE);
-                }
+            self.add_ctad_candidate(set, g, how, loc);
+        }
+    }
+
+    /// Guide `g` as a candidate of `set` for initialization `how`.
+    pub(crate) fn add_ctad_candidate(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        g: DeclId,
+        how: CtadInit,
+        loc: Loc,
+    ) {
+        let (pattern, template) = match self.kind_of(g) {
+            DeclKind::FunctionTemplate => match self.pattern_of(g) {
+                Some(p) => (p, Some(g)),
+                None => return,
+            },
+            DeclKind::CXXDeductionGuide => (g, None),
+            _ => return,
+        };
+        if self.ast.decls.get(pattern).has(DeclFlags::INVALID) {
+            return;
+        }
+        if how == CtadInit::Copy && self.fn_spec(pattern).is_explicit() {
+            self.add_explicit_guide(set, pattern, g, template);
+            return;
+        }
+        match template {
+            Some(ft) => self.add_template_candidate(
+                set,
+                ft,
+                g,
+                None,
+                CandidateKind::Function,
+                IcsOptions::NONE,
+                loc,
+            ),
+            None => {
+                self.add_candidate(set, pattern, g, CandidateKind::Function, IcsOptions::NONE);
             }
         }
     }

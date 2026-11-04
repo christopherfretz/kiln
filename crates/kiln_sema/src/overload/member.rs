@@ -265,6 +265,7 @@ impl Sema<'_, '_> {
             self.ast.exprs.get(m.base).value_category()
         };
         let mut set = self.begin_set(SetKind::Normal, loc);
+        self.defer_templates(&mut set);
         let mark = self.push_call_args(&mut set, args, braced);
         let obj = self.ast.types.qualify(self.tag_type(m.def), quals);
         set.object = Some(ArgInfo::of_type(obj, vk));
@@ -278,6 +279,18 @@ impl Sema<'_, '_> {
             if self.kind_of(d) == DeclKind::FunctionTemplate {
                 // A member function template: its specialization deduced
                 // from the call's arguments ([temp.deduct.call]).
+                if set.two_phase && m.targs.is_none() {
+                    set.deferred.push(super::defer::Deferred::Template {
+                        ft: d,
+                        found: f,
+                        kind: CandidateKind::Method,
+                        first_opts: IcsOptions::NONE,
+                        loc,
+                        poi: self.templ.deduce_poi,
+                        adl_only: false,
+                    });
+                    continue;
+                }
                 self.add_template_candidate(
                     &mut set,
                     d,
@@ -296,8 +309,7 @@ impl Sema<'_, '_> {
             }
             self.add_candidate(&mut set, d, f, CandidateKind::Method, IcsOptions::NONE);
         }
-        self.order_template_candidates(&mut set);
-        let out = self.best_viable(&mut set);
+        let out = self.resolve_set(&mut set);
         self.ovl.lists.truncate(mark);
         let won = self.call_winner(&set, out, name, loc, loc, true);
         let won = won.map(|b| {

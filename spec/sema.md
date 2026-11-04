@@ -1446,17 +1446,14 @@ and returns the scope it names:
     guides on the elements. A single element whose type is a
     specialization of `X` or derived from one skips phase 1
     (`ctad_list_of_spec`).
-  - At clang 21+ (`clang_compat >= 22`; WP-413) each resolution is
-    two-phase (`ctad_resolve`, clang `BestViableFunction`'s deferred
-    template candidates): when there are both non-template and template
-    guides, the non-template guides are resolved alone first, and a
-    best one that is a perfect match (`perfect_candidate`, clang
-    `isPerfectMatch`: every argument an identity standard conversion,
-    lvalue transformations aside; a reference bound to the argument's
-    own cv-qualified type, not an lvalue reference to an rvalue) is the
-    result without deducing any template guide, which so instantiates
-    nothing. Otherwise the set is reset and every guide is resolved, as
-    at 19. Tests `templates/ctad/over.match.class.deduct-perfect-guide{,-clang19}.cpp`,
+  - At clang 21+ (`clang_compat >= 22`) each resolution is two-phase
+    like every other deferring candidate set (spec/sema-overload.md
+    §4.4, `overload/defer.rs`): template guides are recorded as
+    `Deferred::Guide`, and a perfect match among the non-template
+    guides is the result without deducing any template guide, which so
+    instantiates nothing. Otherwise the template guides are deduced and
+    every guide is resolved, as at 19. Tests
+    `templates/ctad/over.match.class.deduct-perfect-guide{,-clang19}.cpp`,
     `temp.deduct.guide-ast-dump.cpp`.
   - In copy-initialization (`=` and `= {…}`), explicit guides and
     constructors are non-viable (`CandidateFailure::Explicit`).

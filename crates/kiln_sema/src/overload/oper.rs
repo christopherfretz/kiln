@@ -272,6 +272,7 @@ impl Sema<'_, '_> {
             && (extra.is_some() || allows_reversed(op));
         let active = self.cmp_active();
         let mut set = self.begin_set(SetKind::Normal, loc);
+        self.defer_templates(&mut set);
         set.exclude = active;
         set.oper = true;
         set.note_extra_args = usize::from(form != OperForm::Call);
@@ -342,8 +343,7 @@ impl Sema<'_, '_> {
         }
         // /3.3: built-in candidates.
         self.add_builtin_candidates(&mut set, op, form, ops, &types);
-        self.order_template_candidates(&mut set);
-        let out = self.best_viable(&mut set);
+        let out = self.resolve_set(&mut set);
         self.ovl.lists.truncate(mark);
         (set, out, types, reversible)
     }
@@ -609,7 +609,7 @@ impl Sema<'_, '_> {
     /// Adds non-member operator function `d` (found as `found`) and its
     /// reversed form ([over.match.oper]/3.2, /3.4).
     #[allow(clippy::too_many_arguments, reason = "the operator's parts")]
-    fn add_nonmember_oper(
+    pub(super) fn add_nonmember_oper(
         &mut self,
         set: &mut OverloadCandidateSet,
         d: DeclId,
@@ -628,6 +628,18 @@ impl Sema<'_, '_> {
             return;
         }
         let rewrite = if name == Some(op) { Rewrite::None } else { Rewrite::Different };
+        if set.two_phase && self.kind_of(d) == DeclKind::FunctionTemplate {
+            set.deferred.push(super::defer::Deferred::NonmemberOper {
+                d,
+                found,
+                op,
+                extra,
+                ops: ops.to_vec(),
+                types: types.to_vec(),
+                adl_only,
+            });
+            return;
+        }
         let reversed_too = ops.len() == 2 && self.should_add_reversed(d, ops[1]);
         if self.kind_of(d) == DeclKind::FunctionTemplate {
             if rewrite == Rewrite::None {
@@ -747,18 +759,16 @@ impl Sema<'_, '_> {
                 continue;
             }
             if self.kind_of(d) == DeclKind::FunctionTemplate {
-                if reversed || rewrite != Rewrite::None {
-                    self.add_rewritten_template(set, d, f, CandidateKind::Method, rewrite, ops);
-                } else {
-                    self.add_template_candidate(
-                        set,
+                if set.two_phase {
+                    set.deferred.push(super::defer::Deferred::MemberOper {
                         d,
-                        f,
-                        None,
-                        CandidateKind::Method,
-                        IcsOptions::NONE,
+                        found: f,
+                        rewrite,
+                        ops: ops.to_vec(),
                         loc,
-                    );
+                    });
+                } else {
+                    self.add_member_oper_template(set, d, f, rewrite, ops, loc);
                 }
                 continue;
             }
@@ -779,6 +789,33 @@ impl Sema<'_, '_> {
                     x.rewrite = rewrite;
                 }
             }
+        }
+    }
+
+    /// Adds member operator function template `d` (found as `found`) of
+    /// the object operand's class in the form `rewrite`
+    /// ([over.match.oper]/3.1, /3.4).
+    pub(super) fn add_member_oper_template(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        d: DeclId,
+        found: DeclId,
+        rewrite: Rewrite,
+        ops: &[ExprId],
+        loc: Loc,
+    ) {
+        if rewrite != Rewrite::None {
+            self.add_rewritten_template(set, d, found, CandidateKind::Method, rewrite, ops);
+        } else {
+            self.add_template_candidate(
+                set,
+                d,
+                found,
+                None,
+                CandidateKind::Method,
+                IcsOptions::NONE,
+                loc,
+            );
         }
     }
 

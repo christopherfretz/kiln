@@ -156,11 +156,24 @@ impl Sema<'_, '_> {
             return r;
         }
         let mut set = self.begin_set(SetKind::Normal, at);
+        self.defer_templates(&mut set);
         let base = self.push_call_args(&mut set, args, braced);
         for (i, &(d, f)) in cands.iter().enumerate() {
             if self.kind_of(d) == DeclKind::FunctionTemplate {
                 if self.ast.decls.cold.requires_clause.contains(d) {
                     set.uncertain = true;
+                }
+                if set.two_phase && explicit.is_none() {
+                    set.deferred.push(super::defer::Deferred::Template {
+                        ft: d,
+                        found: f,
+                        kind: CandidateKind::Function,
+                        first_opts: IcsOptions::NONE,
+                        loc: at,
+                        poi: Some(n.loc()),
+                        adl_only: i >= decls.len(),
+                    });
+                    continue;
                 }
                 // clang's `TemplateDeductionInfo` takes the candidate set's
                 // location, the callee's begin with its nested-name-specifier
@@ -189,8 +202,7 @@ impl Sema<'_, '_> {
                 c.adl_only = true;
             }
         }
-        self.order_template_candidates(&mut set);
-        let out = self.best_viable(&mut set);
+        let out = self.resolve_set(&mut set);
         self.ovl.lists.truncate(base);
         let r = self.finish_overloaded_call(&set, out, name, at, n.loc(), naming, nns, ule);
         self.end_set(set);

@@ -192,12 +192,13 @@ impl Sema<'_, '_> {
     /// candidates only ([over.ref]/1, [over.match.oper]/3.1).
     fn overloaded_arrow(&mut self, base: ExprId, loc: Loc) -> Step {
         let mut set = self.begin_set(SetKind::Normal, loc);
+        self.defer_templates(&mut set);
         set.oper = true;
         set.note_extra_args = 1;
         set.object = Some(self.arg_info(base));
         let mark = self.push_call_args(&mut set, &[], &[]);
         self.add_member_opers(&mut set, OO::Arrow, &[base], Rewrite::None, loc);
-        let out = self.best_viable(&mut set);
+        let out = self.resolve_set(&mut set);
         self.ovl.lists.truncate(mark);
         let undecided = set.uncertain
             || (set.skipped_templates

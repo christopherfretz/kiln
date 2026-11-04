@@ -73,7 +73,7 @@ impl Sema<'_, '_> {
         // (clang `TryConstructorInitialization`: `A a = b;` through
         // `A(X)` and `B::operator X()`); its explicit constructors are
         // still not viable.
-        let (kind, opts) = if style == InitStyle::Copy {
+        let (kind, opts, by_ctor) = if style == InitStyle::Copy {
             let same_or_derived = match args {
                 [a] => self.ast.types.as_record(self.ety(*a)).is_some_and(|r| {
                     crate::conv::bases::same_class(self, r, c)
@@ -83,11 +83,17 @@ impl Sema<'_, '_> {
                 _ => false,
             };
             let opts = if same_or_derived { IcsOptions::NONE } else { IcsOptions::SUPPRESS_UDC };
-            (SetKind::CopyInit, opts)
+            (SetKind::CopyInit, opts, same_or_derived)
         } else {
-            (SetKind::Normal, IcsOptions::NONE)
+            (SetKind::Normal, IcsOptions::NONE, true)
         };
         let mut set = self.begin_set(kind, loc);
+        // An initialization by constructor (clang `CSK_InitByConstructor`;
+        // not one by user-defined conversion) defers its constructor
+        // templates (clang 21+).
+        if by_ctor {
+            self.defer_templates(&mut set);
+        }
         for &a in args {
             let info = self.ctor_arg_info(a);
             set.args.push(info);
@@ -128,8 +134,7 @@ impl Sema<'_, '_> {
         {
             self.add_elision_candidates(&mut set, c, *arg, style);
         }
-        self.order_template_candidates(&mut set);
-        let out = self.best_viable(&mut set);
+        let out = self.resolve_set(&mut set);
         self.selected_of(set, out)
     }
 
@@ -196,6 +201,10 @@ impl Sema<'_, '_> {
         let opts = if direct { IcsOptions::ALLOW_EXPLICIT } else { IcsOptions::NONE };
         for (found, f) in self.conversion_functions_all(from) {
             if self.kind_of(f) == DeclKind::FunctionTemplate {
+                // Deduced at once, and no perfect match is picked before
+                // the constructor templates are deduced (clang 21+
+                // `DisableResolutionByPerfectCandidate`).
+                set.no_perfect = true;
                 // clang `AddTemplateConversionCandidate` with
                 // `AllowResultConversion` false: the specialization
                 // deduced for `cv T` must yield exactly `cv T`.
