@@ -166,7 +166,7 @@ pub struct CodegenOptions {
     /// `-fstack-protector[-strong|-all]` / `-fno-stack-protector`: the
     /// `ssp` / `sspstrong` / `sspreq` attribute of every function
     /// definition (clang `SetLLVMFunctionAttributesForDefinition`;
-    /// spec/codegen.md "Codegen flags").
+    /// spec/codegen.md "Hardening and overflow options").
     pub stack_protector: StackProtector,
     /// The `uwtable` attribute of definitions and the `uwtable` module
     /// flag (`-f[no-]asynchronous-unwind-tables`, `-f[no-]unwind-tables`;

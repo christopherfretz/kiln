@@ -1919,8 +1919,8 @@ impl<'a> Cg<'a> {
     /// definition (clang `SetLLVMFunctionAttributesForDefinition`):
     /// `uwtable` / `uwtable(sync)` per [`CodegenOptions::unwind_tables`],
     /// and `ssp` / `sspstrong` / `sspreq` per
-    /// [`CodegenOptions::stack_protector`] (spec/codegen.md "Codegen
-    /// flags").
+    /// [`CodegenOptions::stack_protector`] (spec/codegen.md "Hardening
+    /// and overflow options").
     pub(crate) fn def_attrs(&self, out: &mut Vec<Attr>) {
         match self.opts.unwind_tables {
             Some(UnwindTables::Async) => out.push(Attr::UwTable(UwTableKind::Async)),
@@ -2113,7 +2113,7 @@ impl<'a> Cg<'a> {
         }
         // clang `ConstructAttributeList` under `-fno-plt`: a function not
         // yet defined is `nonlazybind` (kiln: none in the translation unit;
-        // spec/codegen.md "Codegen flags").
+        // spec/codegen.md "Hardening and overflow options").
         if self.opts.no_plt && ast.definition(first).is_none() {
             fa.push(Attr::Flag(AttrKind::NonLazyBind));
         }
