@@ -284,7 +284,14 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   - an lvalue-to-rvalue conversion of a reference-returning call, also
     through the lvalue `CK_UserDefinedConversion` of a conversion
     function returning a reference (`operator bool&()`), loads from the
-    returned address (clang `EmitLoadOfLValue`);
+    returned address (clang `EmitLoadOfLValue`), and so does one of a
+    glvalue that clang's scalar visitor passes through to such a call:
+    an implicit or explicit glvalue `CK_NoOp` cast
+    (`static_cast<const T&>(f())`, `(const T&)f()`, `const_cast<T&>(f())`),
+    the right operand of a glvalue comma and the chosen operand of
+    `__builtin_choose_expr`; a glvalue `CK_LValueBitCast`
+    (`reinterpret_cast<const U&>(e)`) loads its operand's address as `U`
+    (spec/landed/codegen/WP-632.md);
   - `&&`/`||` produce an `i1` phi; `EmitBranchOnBoolExpr` splits
     `&&`/`||`/`!`/`?:` conditions into branches and folds constants;
   - bit-fields load the storage unit, then `shl`/`ashr` (signed) or

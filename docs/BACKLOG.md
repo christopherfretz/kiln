@@ -649,6 +649,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-626 | sema: an explicit instantiation error is not diagnosed when an earlier error already exists in the TU | WP-610 | open |
 | WP-627 | diagnostics: source ranges (not only a caret) for every diagnostic, kiln-wide; needed for clang-style fix-it and tooling output | WP-610 | open |
 | WP-628 | codegen: NEON vld1/vst1 (and lane/dup) load-store builtin lowering in neon.rs; simdjson/eigen/abseil_hash TUs stop at the first unsupported __builtin_neon_* at -O2; plus the arithmetic builtins those TUs reach (the rest stays WP-586) | — | in progress |
+| WP-632 | codegen: a reference cast (static_cast/C-style) whose operand is a reference-returning call, passed to a by-value scalar parameter, drops the lvalue-to-rvalue load (IrError TypeMismatch "expected double, found ptr"); blocks the eigen corpus slug (print_matrix) | — | in progress |
 | WP-629 | sema: a defaulted template parameter after a parameter pack is absorbed into the pack on an unqualified member-template call inside a class template (libdart make_object()) | — | in progress |
 WP-511
 WP-512
