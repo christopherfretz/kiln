@@ -56,6 +56,8 @@ enum Shape {
     MemData { pointee: QualType, class: QualType },
     MemFn { pointee: QualType, class: QualType },
     Array(QualType, Option<u64>),
+    /// An array whose bound is value-dependent (`T [size]`).
+    DepArray(QualType, kiln_ast::types::ExprOperand),
     Function(QualType),
     Leaf,
 }
@@ -77,17 +79,21 @@ struct Pp<'s, 'a, 'b> {
     /// is being printed; a scope equal to it is not repeated
     /// (`void ns::S::g(Inner)`).
     scope: Option<DeclId>,
+    /// The template parameters in scope by depth: a canonical parameter
+    /// (`type-parameter-0-0` in kiln) prints by its declared name, as GCC's
+    /// `TEMPLATE_TYPE_PARM` does (`T (&)[size]`).
+    parms: Vec<Vec<DeclId>>,
 }
 
 impl Sema<'_, '_> {
     /// `%T` of `t` (gcc/cp/error.cc `type_to_string`): the type, then
     /// ` {aka T'}` with its typedefs stripped when that reads differently.
     pub(crate) fn gcc_type_string(&self, t: QualType) -> String {
-        let mut p = Pp { sema: self, out: String::new(), pad: false, scope: None };
+        let mut p = Pp { sema: self, out: String::new(), pad: false, scope: None, parms: Vec::new() };
         p.dump_type(t, TEMPLATE_HEADER);
         let canon = self.ast.types.canonical(t);
         if canon != t && !self.ast.types.is_dependent(t) {
-            let mut aka = Pp { sema: self, out: String::new(), pad: false, scope: None };
+            let mut aka = Pp { sema: self, out: String::new(), pad: false, scope: None, parms: Vec::new() };
             aka.dump_type(canon, TEMPLATE_HEADER);
             if aka.out != p.out {
                 p.out.push_str(" {aka ");
@@ -113,7 +119,7 @@ impl Sema<'_, '_> {
         if k.is_function() {
             flags |= DECL_SPECIFIERS | RETURN_TYPE;
         }
-        let mut p = Pp { sema: self, out: String::new(), pad: false, scope: None };
+        let mut p = Pp { sema: self, out: String::new(), pad: false, scope: None, parms: Vec::new() };
         p.dump_decl(d, flags);
         p.out
     }
@@ -210,6 +216,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 }
                 TypeView::ConstantArray(a) => Shape::Array(a.elem, Some(a.size)),
                 TypeView::IncompleteArray(e) => Shape::Array(e, None),
+                TypeView::DependentSizedArray { elem, size } => Shape::DepArray(elem, size),
                 TypeView::QualifiedArray { quals: q, base } => {
                     quals |= q.bits();
                     cur = QualType::unqual(base);
@@ -359,6 +366,21 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 self.cv(t.quals_bits());
                 self.decl_identifier(d);
             }
+            TypeView::CanonTemplateTypeParm { depth, index, .. }
+                if let Some(&d) =
+                    self.parms.get(depth as usize).and_then(|l| l.get(index as usize)) =>
+            {
+                self.cv(t.quals_bits());
+                self.decl_identifier(d);
+            }
+            // `typename T::type` (GCC's TYPENAME_TYPE): `typename`, the
+            // qualifying type in full, then the name.
+            TypeView::DependentName { nns, name, .. } => {
+                self.cv(t.quals_bits());
+                self.ws("typename");
+                self.nns(nns, flags);
+                self.ws(self.ast().symbols().as_str(name));
+            }
             TypeView::TemplateSpecialization { name, args, .. } => {
                 self.cv(t.quals_bits());
                 self.template_name(name, flags);
@@ -381,7 +403,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
         match shape {
             Shape::Pointer(sub) | Shape::LRef(sub) | Shape::RRef(sub) => {
                 self.dump_type_prefix(sub, flags);
-                if matches!(self.shape(sub).0, Shape::Array(..) | Shape::Function(_)) {
+                if matches!(self.shape(sub).0, Shape::Array(..) | Shape::DepArray(..) | Shape::Function(_)) {
                     self.whitespace();
                     self.punct("(");
                 }
@@ -396,7 +418,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             Shape::MemData { pointee, class } => {
                 self.dump_type_prefix(pointee, flags);
                 self.maybe_space();
-                if matches!(self.shape(pointee).0, Shape::Array(..)) {
+                if matches!(self.shape(pointee).0, Shape::Array(..) | Shape::DepArray(..)) {
                     self.punct("(");
                 }
                 self.dump_type(class, flags);
@@ -426,7 +448,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                     self.dump_type_prefix(p.ret(), flags);
                 }
             }
-            Shape::Array(e, _) => self.dump_type_prefix(e, flags),
+            Shape::Array(e, _) | Shape::DepArray(e, _) => self.dump_type_prefix(e, flags),
             Shape::Leaf => {
                 self.dump_type(t, flags);
                 self.pad = true;
@@ -438,7 +460,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
     fn dump_type_suffix(&mut self, t: QualType, flags: u32) {
         match self.shape(t).0 {
             Shape::Pointer(sub) | Shape::LRef(sub) | Shape::RRef(sub) => {
-                if matches!(self.shape(sub).0, Shape::Array(..) | Shape::Function(_)) {
+                if matches!(self.shape(sub).0, Shape::Array(..) | Shape::DepArray(..) | Shape::Function(_)) {
                     self.punct(")");
                 }
                 let f = if matches!(self.shape(t).0, Shape::Pointer(_)) {
@@ -449,7 +471,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 self.dump_type_suffix(sub, f);
             }
             Shape::MemData { pointee, .. } => {
-                if matches!(self.shape(pointee).0, Shape::Array(..)) {
+                if matches!(self.shape(pointee).0, Shape::Array(..) | Shape::DepArray(..)) {
                     self.punct(")");
                 }
                 self.dump_type_suffix(pointee, flags);
@@ -465,6 +487,13 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 if let Some(n) = n {
                     self.out.push_str(&n.to_string());
                 }
+                self.punct("]");
+                self.dump_type_suffix(e, flags);
+            }
+            Shape::DepArray(e, size) => {
+                self.maybe_space();
+                self.punct("[");
+                self.dependent_bound(size);
                 self.punct("]");
                 self.dump_type_suffix(e, flags);
             }
@@ -508,6 +537,82 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 self.ws("&&");
             }
         }
+    }
+
+    /// A nested-name-specifier of a dependent name, GCC-style: a type in
+    /// full (`bsl::enable_if<bsl::is_integral<T>::value, To>::`), a
+    /// namespace by its scope.
+    fn nns(&mut self, n: kiln_ast::NnsId, flags: u32) {
+        use kiln_ast::types::Nns;
+        match self.ast().types.nns_view(n) {
+            Nns::Global => self.punct("::"),
+            Nns::Namespace { ns, .. } | Nns::NamespaceAlias { ns, .. } => {
+                self.dump_namespace(ns, flags & SCOPE);
+                self.punct("::");
+            }
+            Nns::Type { ty, .. } => {
+                self.dump_type(ty, flags & !CLASS_KEY);
+                self.punct("::");
+            }
+            Nns::Identifier { prefix, name } => {
+                if let Some(p) = prefix {
+                    self.nns(p, flags);
+                }
+                self.ws(self.ast().symbols().as_str(name));
+                self.punct("::");
+            }
+            Nns::Splice(_) => self.punct("[: ... :]::"),
+        }
+    }
+
+    /// The bound of a dependent array: a non-type template parameter by its
+    /// name in scope, any other expression as kiln spells it.
+    fn dependent_bound(&mut self, size: kiln_ast::types::ExprOperand) {
+        let ast = self.ast();
+        let e = match size {
+            kiln_ast::types::ExprOperand::Expr(e) => Some(e),
+            kiln_ast::types::ExprOperand::Profile(p) => ast.types.profile_expr(p),
+        };
+        let Some(e) = e else { return };
+        let inner = self.sema.ignore_paren_imp_casts(e);
+        if ast.exprs.get(inner).kind() == kiln_ast::expr::ExprKind::DeclRefExpr {
+            let d = ast.exprs.decl(inner);
+            if let Some(info) = ast.template_parm(d) {
+                let named = self
+                    .parms
+                    .get(info.depth as usize)
+                    .and_then(|l| l.get(info.index as usize))
+                    .copied();
+                self.decl_identifier(named.unwrap_or(d));
+                return;
+            }
+        }
+        let mut s = String::new();
+        kiln_ast::types::TypeNames::write_expr(ast, e, &mut s);
+        self.ws(&s);
+    }
+
+    /// Sets [`Self::parms`] from the template parameter lists enclosing
+    /// declaration `d` (itself included, when it is a template pattern).
+    fn set_parms_for(&mut self, d: DeclId) {
+        let ast = self.ast();
+        let mut lists: Vec<(u16, Vec<DeclId>)> = Vec::new();
+        let mut cur = Some(d);
+        while let Some(c) = cur {
+            if let Some(td) = ast.described_template(c)
+                && let Some(info) = ast.template_info(td)
+            {
+                let pl = ast.templates.param_list(info.params);
+                lists.push((pl.depth, ast.lists.iter::<DeclId>(pl.params).collect()));
+            }
+            cur = ast.decls.get(c).ctx();
+        }
+        let n = lists.iter().map(|l| l.0 as usize + 1).max().unwrap_or(0);
+        let mut parms = vec![Vec::new(); n];
+        for (depth, l) in lists {
+            parms[depth as usize] = l;
+        }
+        self.parms = parms;
     }
 
     /// `dump_parameters`.
@@ -1001,7 +1106,8 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                     self.punct("; ");
                 }
                 if nontype {
-                    let ty = ast.decls.get(p).ty();
+                    // GCC's template parameter types carry no typedefs.
+                    let ty = ast.decls.get(p).ty().map(|t| ast.types.canonical(t));
                     self.dump_simple_decl(p, ty, DECL_SPECIFIERS);
                 } else {
                     self.decl_identifier(p);
@@ -1129,6 +1235,8 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
     /// The body of [`Self::dump_function_decl`] for `f` itself.
     fn dump_function_decl_of(&mut self, f: DeclId, flags: u32) {
         let ast = self.ast();
+        let saved_parms = std::mem::take(&mut self.parms);
+        self.set_parms_for(f);
         let mut show_return = flags & (RETURN_TYPE | DECL_SPECIFIERS) != 0;
         let do_outer_scope = flags & UNQUALIFIED == 0;
         let name_flags = flags & !UNQUALIFIED;
@@ -1201,7 +1309,10 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
         self.scope = ast.decls.get(f).ctx().map(|c| ast.first(c));
         self.pad = false;
         if let Some(p) = proto {
-            let params = ast.types.params(&p).to_vec();
+            // The function type's parameter types: top-level cv-qualifiers
+            // dropped ([dcl.fct]/5), their typedefs kept.
+            let params: Vec<QualType> =
+                ast.types.params(&p).iter().map(|q| q.without_quals()).collect();
             self.dump_parameters(&params, p.variadic(), flags);
             if method {
                 self.pad = true;
@@ -1212,6 +1323,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 self.dump_type_suffix(r, flags);
             }
         }
+        self.parms = saved_parms;
     }
 
     /// `dump_function_name`.
@@ -1353,7 +1465,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 }
             }
             _ => {
-                let ty = ast.decls.get(p).ty();
+                let ty = ast.decls.get(p).ty().map(|t| ast.types.canonical(t));
                 self.dump_simple_decl(p, ty, DECL_SPECIFIERS);
             }
         }

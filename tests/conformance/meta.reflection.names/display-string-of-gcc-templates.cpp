@@ -32,6 +32,11 @@ template <class T, unsigned long N> struct LV {
   size_type size() const;
   template <unsigned long S> int cmp(const LV<T, S>&) const;
 };
+struct D {
+  template <class T, decltype(sizeof 0) size> D& read(T (&)[size]);
+  template <class T> bool write(const T&, const bool);
+  template <class To> typename LV<To, 1>::size_type as() const;
+};
 struct S {
   struct Inner {};
   void g(Inner);
@@ -75,6 +80,9 @@ CHECK((^^B::LV<int, 9>::cmp),
       "template<long unsigned int S> int B::LV<T, N>::cmp(const B::LV<T, S>&) const [with long "
       "unsigned int S = S; T = int; long unsigned int N = 9]");
 CHECK(^^B::S::g, "void B::S::g(Inner)");
+CHECK(^^B::D::read, "template<class T, long unsigned int size> B::D& B::D::read(T (&)[size])");
+CHECK(^^B::D::write, "template<class T> bool B::D::write(const T&, bool)");
+CHECK(^^B::D::as, "template<class To> typename B::LV<To, 1>::size_type B::D::as() const");
 CHECK(^^B::S::make, "static B::S::Inner B::S::make()");
 CHECK(^^B::W<B::fs{"operator[]"}>, "B::W<B::fs<11>{\"operator[]\"}>");
 CHECK(^^B::W<B::fs{"a\nb"}>, "B::W<B::fs<4>{\"a\\012b\"}>");
