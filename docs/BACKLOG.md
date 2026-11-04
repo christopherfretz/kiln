@@ -648,5 +648,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-625 | codegen: __builtin_constant_p on a non-constant at -O0 emits 0 instead of llvm.is.constant so LLVM cannot fold it later | WP-610 | open |
 | WP-626 | sema: an explicit instantiation error is not diagnosed when an earlier error already exists in the TU | WP-610 | open |
 | WP-627 | diagnostics: source ranges (not only a caret) for every diagnostic, kiln-wide; needed for clang-style fix-it and tooling output | WP-610 | open |
+| WP-628 | codegen: NEON vld1/vst1 (and lane/dup) load-store builtin lowering in neon.rs; simdjson/eigen/abseil_hash TUs stop at the first unsupported __builtin_neon_* at -O2 (WP-586 owns the arithmetic _v family) | — | in progress |
 WP-511
 WP-512
