@@ -75,6 +75,66 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
     })
 }
 
+/// clang's thread-safety-analysis attributes (`Attr.td`, the
+/// `-Wthread-safety` family; spec/sema.md §4.5): known and ignored, with
+/// their arguments skipped as balanced tokens by the parser (they may
+/// name members declared later). Each entry is the name, whether clang
+/// spells it `Clang<"x">` (`__attribute__((x))` and `[[clang::x]]`)
+/// rather than only `GNU<"x">`, and the first clang release that knows
+/// it (`reentrant_capability` is new in clang 22).
+const THREAD_SAFETY_ATTRS: &[(&str, bool, u32)] = &[
+    ("acquire_capability", true, 0),
+    ("acquire_shared_capability", true, 0),
+    ("acquired_after", false, 0),
+    ("acquired_before", false, 0),
+    ("assert_capability", true, 0),
+    ("assert_exclusive_lock", false, 0),
+    ("assert_shared_capability", true, 0),
+    ("assert_shared_lock", false, 0),
+    ("capability", true, 0),
+    ("exclusive_lock_function", false, 0),
+    ("exclusive_locks_required", true, 0),
+    ("exclusive_trylock_function", false, 0),
+    ("guarded_by", false, 0),
+    ("guarded_var", true, 0),
+    ("lock_returned", false, 0),
+    ("lockable", false, 0),
+    ("locks_excluded", false, 0),
+    ("no_thread_safety_analysis", true, 0),
+    ("pt_guarded_by", false, 0),
+    ("pt_guarded_var", true, 0),
+    ("reentrant_capability", true, 22),
+    ("release_capability", true, 0),
+    ("release_generic_capability", true, 0),
+    ("release_shared_capability", true, 0),
+    ("requires_capability", true, 0),
+    ("requires_shared_capability", true, 0),
+    ("scoped_lockable", true, 0),
+    ("shared_capability", true, 0),
+    ("shared_lock_function", false, 0),
+    ("shared_locks_required", true, 0),
+    ("shared_trylock_function", false, 0),
+    ("try_acquire_capability", true, 0),
+    ("try_acquire_shared_capability", true, 0),
+    ("unlock_function", true, 0),
+];
+
+/// Whether `n` (its `__` affixes removed), written with `syntax` (and
+/// the `clang::` scope when `clang_scope`), is a thread-safety attribute
+/// clang `compat` knows: such an attribute is accepted silently and
+/// attaches nothing.
+pub(crate) fn is_thread_safety_attr(
+    n: &str,
+    syntax: AttrSyntax,
+    clang_scope: bool,
+    compat: u32,
+) -> bool {
+    THREAD_SAFETY_ATTRS.binary_search_by(|&(name, ..)| name.cmp(n)).is_ok_and(|i| {
+        let (_, clang, since) = THREAD_SAFETY_ATTRS[i];
+        compat >= since && (syntax == AttrSyntax::Gnu || (clang && clang_scope))
+    })
+}
+
 const fn is_record_kind(kind: DeclKind) -> bool {
     matches!(
         kind,
@@ -814,5 +874,23 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The table is searched by name, so it must stay sorted.
+    #[test]
+    fn thread_safety_table_sorted() {
+        assert!(THREAD_SAFETY_ATTRS.windows(2).all(|w| w[0].0 < w[1].0));
+        assert_eq!(THREAD_SAFETY_ATTRS.len(), 34);
+        assert!(is_thread_safety_attr("guarded_by", AttrSyntax::Gnu, false, 19));
+        assert!(!is_thread_safety_attr("guarded_by", AttrSyntax::Cxx11, true, 22));
+        assert!(is_thread_safety_attr("capability", AttrSyntax::Cxx11, true, 19));
+        assert!(!is_thread_safety_attr("capability", AttrSyntax::Cxx11, false, 22));
+        assert!(!is_thread_safety_attr("reentrant_capability", AttrSyntax::Gnu, false, 19));
+        assert!(is_thread_safety_attr("reentrant_capability", AttrSyntax::Gnu, false, 22));
     }
 }
