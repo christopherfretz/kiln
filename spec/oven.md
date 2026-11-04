@@ -976,6 +976,16 @@ literal is one instruction and one step, not an interpreted loop.
   `bool` result clang 19's evaluator truncates to 8 bits (it stores 2 for
   `1 + 1`), while its codegen and GCC use 1 bit; kiln uses 1 bit in both
   (value `0`, overflow `true`).
+  WP-557: the carry builtins `__builtin_{add,sub}c{b,s,,l,ll}`
+  (`builtin::carry_op`; clang 19 `ExprConstant` `BI__builtin_addcb`..)
+  evaluate the three operands, then the carry-out pointer, then emit
+  `bi::CARRY` (kbc 34) twice: once for the carry-out, stored through the
+  pointer with the ordinary assignment checks as above, and once with
+  `CARRY_VALUE` for the call's value. The sub-operand is the width |
+  subtract << 8; the VM does two wrapping steps in the width, `x op y`
+  then `op carryin`, and the carry-out is 1 when either wrapped (the
+  carry-in is any value of the type, not only 0 or 1;
+  `tests/conformance/builtin.carry/carry-constexpr.cpp`).
   `__builtin_alloca`, `__builtin_alloca_with_align`, `__builtin_vsnprintf`,
   `__builtin_snprintf` and `__builtin_sprintf` trap "subexpression not
   valid in a constant expression", as clang 19.
