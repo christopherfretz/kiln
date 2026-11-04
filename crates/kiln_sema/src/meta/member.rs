@@ -444,6 +444,13 @@ impl Sema<'_, '_> {
                 self.walk_block(ns, i, &mut l, loc)?;
             }
         }
+        // GCC 16.1 orders a namespace's members by `DECL_UID`, the creation
+        // order of each entity's first declaration (gcc/cp/reflect.cc
+        // `members_cmp`): a function first declared as a friend in a class
+        // comes where the friend declaration is, not where the namespace
+        // redeclares it. Declarations are allocated in creation order, so
+        // the first declaration's id is that order.
+        l.items.sort_by_key(|e| self.ast.first(e.decl).index());
         l.stamp = stamp;
         self.meta_members.cache.put(ns, MemberList::Members, l);
         Ok(())

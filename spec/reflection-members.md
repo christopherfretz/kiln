@@ -53,7 +53,11 @@ gone; `__kiln_define_member` (spec/reflection.md §6.3) stays.
 - **Namespaces** (`^^::` included): the members declared before the
   evaluation point, first declarations only, across every block of the
   namespace (reopenings, linkage specifications, export blocks), in
-  first-declaration order. A namespace's list is a growing prefix:
+  the creation order of each entity's first declaration, GCC 16.1's
+  `DECL_UID` order: a function first declared as a friend inside a class
+  sits where that friend declaration is
+  (`meta.reflection.member.queries/namespace-members-friend-order.cpp`).
+  A namespace's list is a growing prefix:
   per-block cursors plus the global declaration count as the stamp, so
   an unchanged namespace walks nothing, and a grown one walks only new
   declarations.
