@@ -43,13 +43,13 @@ entries: every bench/<group>/<name>.cpp, plus, only when named explicitly,
                       (record-only: per-test and aggregate ratios against
                       --compare-with, e.g. clang++-22; never judged against
                       baselines)
-  bench/reflect:      the reflection shapes S1-S6 of `cargo xtask gen-reflect`
+  bench/reflect:      the reflection shapes S1-S8 of `cargo xtask gen-reflect`
 
 off-queue modes (spec/bench.md, Scaling sweeps and External corpora):
-  --scaling <shape>        compile gen-reflect shape s1..s6 at N and 4N; report
+  --scaling <shape>        compile gen-reflect shape s1..s8 at N and 4N; report
                            wall, peak RSS, the constexpr counters and the 4N/N
                            ratios; fail above 4.6x or when peak_arena grows on
-                           s1/s2/s4/s5 (writes no records)
+                           s1/s2/s4/s5/s8 (writes no records)
   --n <N>                  N of --scaling (default: the shape's default N)
   --external <dir>         compile every .c/.cpp under <dir> (outside the repo)
                            once, serially, never-crash: print verdict counts,
@@ -936,6 +936,12 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
     let mut flags = vec![format!("-std={}", spec.std)];
     flags.extend(spec.mode.flags().iter().map(|f| (*f).to_owned()));
     flags.extend(spec.args.iter().cloned());
+    if s.id.kind == CompilerKind::Kiln
+        && e.group == "reflect"
+        && let Some(shape) = crate::gen_reflect::shape(&e.name)
+    {
+        flags.extend(crate::gen_reflect::kiln_flags(shape));
+    }
     let run = spec.mode == entry::Mode::Run;
     let mut cmd = Command::new(&s.path);
     cmd.args(&flags);

@@ -27,7 +27,7 @@ pub const MAX_RATIO: f64 = 4.6;
 
 /// Shapes whose every evaluation is independent of N: `peak_arena` must
 /// not grow from N to 4N.
-pub const FLAT_ARENA: &[&str] = &["s1", "s2", "s4", "s5"];
+pub const FLAT_ARENA: &[&str] = &["s1", "s2", "s4", "s5", "s8"];
 
 /// A sweep compile may take this long.
 const TIMEOUT: Duration = Duration::from_secs(600);
@@ -81,7 +81,7 @@ pub fn run(
 ) -> Result<bool, String> {
     let name = opts.scaling.as_deref().unwrap_or_default();
     let shape = gen_reflect::shape(name)
-        .ok_or_else(|| format!("unknown --scaling shape `{name}` (s1..s6)"))?;
+        .ok_or_else(|| format!("unknown --scaling shape `{name}` (s1..s8)"))?;
     let n = opts.scaling_n.unwrap_or(shape.default_n);
     if !n.is_multiple_of(shape.step) {
         return Err(format!("shape {} needs --n to be a multiple of {}", shape.id, shape.step));
@@ -155,6 +155,9 @@ fn measure(
         .map_err(|e| format!("generated {} has bad directives: {e:?}", shape.id))?;
     let mut cmd = Command::new(compiler);
     cmd.arg(format!("-std={}", spec.std)).arg("-fsyntax-only").args(&spec.args);
+    if kind == CompilerKind::Kiln {
+        cmd.args(gen_reflect::kiln_flags(shape));
+    }
     let report =
         (kind == CompilerKind::Kiln).then(|| scratch.join(format!("{}-{n}.jsonl", shape.id)));
     if let Some(r) = &report {
