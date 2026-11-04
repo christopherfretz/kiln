@@ -1,10 +1,9 @@
 // [meta.reflection.traits]/2 P2996R13, [meta.unary.prop]/3, [meta.trans.sign],
-// [meta.trans.other] (spec/reflection-traits.md §2): a non-type reflection,
-// an incomplete type where completeness is required, and an operand outside
-// a transformation's domain make the call not a constant expression, with
-// a note. A failure is never memoized: once Inc is complete the same call
-// succeeds. A library-delegated trait whose std:: template the TU does not
-// declare fails naming the header.
+// [meta.trans.other] (spec/reflection-traits.md §2): a non-type reflection, an incomplete
+// type where completeness is required, and an operand outside a transformation's domain
+// make the call not a constant expression, with a note. A failure is never memoized: once
+// Inc is complete the same call succeeds. A library-delegated trait whose std:: template is
+// undeclared fails naming the header; type_order returning int names std::strong_ordering.
 //@ expect: compile-fail
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
@@ -26,7 +25,8 @@
 //@ diag: 48:15 error "static assertion expression is not an integral constant expression"
 //@ diag: 48:15 note "in call to 'is_constructible_type<std::initializer_list<info>>(^^Inc, {})'"
 //@ diag: 49:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 49:15 note "kiln: 'type_order' is not implemented yet (it returns std::strong_ordering)"
+//@ diag: 49:15 note "'type_order' needs a result class with a static member 'greater' (std::strong_ordering)"
+//@ meta-header: skip it redeclares type_order with another return type
 #include "kiln_meta_traits.h"
 using namespace std::meta;
 namespace std::meta {

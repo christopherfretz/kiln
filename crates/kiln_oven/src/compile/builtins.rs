@@ -668,6 +668,10 @@ impl Compiler<'_> {
                 }
             }
             id::LAUNDER => self.rv_into(arg(0)?, dst),
+            id::IS_STRING_LITERAL => {
+                let p = self.rv(arg(0)?);
+                op(self, bi::STRING_LIT, 0, [p, p, p], [0, 0], begin);
+            }
             // clang: the value of the first operand (the expected value is
             // not evaluated).
             id::EXPECT | id::EXPECT_WITH_PROBABILITY => self.rv_into(arg(0)?, dst),

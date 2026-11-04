@@ -8,6 +8,7 @@
 
 use kiln_ast::QualType;
 use kiln_ast::ReflectionId;
+use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::TypeTrait;
 use kiln_ast::reflect::Reflectee;
@@ -17,6 +18,7 @@ use kiln_source::Loc;
 
 use super::fail;
 use crate::Sema;
+use crate::lookup::LookupKind;
 use crate::templ::builtins::table::{self, Complete};
 use crate::templ::builtins::{LibFailure, TraitFailure};
 
@@ -229,6 +231,25 @@ fn shape(op: TraitOp) -> (Shape, usize) {
     }
 }
 
+/// The `(const info*, size_t)` form of `reflection_range` form `op`, and
+/// the index of its range argument (also the number of leading `info`s).
+pub(super) fn range_n(op: TraitOp) -> Option<(TraitOp, usize)> {
+    use TraitOp as O;
+    Some(match op {
+        O::IsConstructibleType => (O::IsConstructibleTypeN, 1),
+        O::IsTriviallyConstructibleType => (O::IsTriviallyConstructibleTypeN, 1),
+        O::IsNothrowConstructibleType => (O::IsNothrowConstructibleTypeN, 1),
+        O::IsInvocableType => (O::IsInvocableTypeN, 1),
+        O::IsNothrowInvocableType => (O::IsNothrowInvocableTypeN, 1),
+        O::InvokeResult => (O::InvokeResultN, 1),
+        O::IsInvocableRType => (O::IsInvocableRTypeN, 2),
+        O::IsNothrowInvocableRType => (O::IsNothrowInvocableRTypeN, 2),
+        O::CommonType => (O::CommonTypeN, 0),
+        O::CommonReference => (O::CommonReferenceN, 0),
+        _ => return None,
+    })
+}
+
 /// Whether `op` is a `(const info*, size_t)` range form.
 fn is_range_n(op: TraitOp) -> bool {
     use TraitOp as O;
@@ -278,21 +299,19 @@ impl Sema<'_, '_> {
         let (shape, fixed) = shape(op);
         match shape {
             Shape::Range => {
-                return fail(
-                    loc,
-                    format!(
-                        "kiln: the reflection_range form of '{}' is not implemented yet; \
-                         use the (const info*, size_t) overload (kiln_meta_traits.h)",
-                        op.name()
-                    ),
-                );
+                // The `reflection_range` form (<meta>): its range argument
+                // arrives read as `data | n << 64` (the site's
+                // `Shape::Range` recipe); run the `(const info*, size_t)`
+                // form on it.
+                let (n_op, k) = range_n(op).ok_or_else(MetaError::invalid)?;
+                let v = *args.get(k).ok_or_else(MetaError::invalid)?;
+                let mut a = [0u128; 4];
+                a[..k].copy_from_slice(&args[..k]);
+                a[k] = v & u128::from(u64::MAX);
+                a[k + 1] = v >> 64;
+                return self.meta_trait(n_op, &a[..k + 2], out, ctx, oven);
             }
-            Shape::TypeOrder => {
-                return fail(
-                    loc,
-                    "kiln: 'type_order' is not implemented yet (it returns std::strong_ordering)",
-                );
-            }
+            Shape::TypeOrder => return self.meta_type_order(args, out, ctx),
             _ => {}
         }
         // The leading type operands (`tuple_element(I, T)` has its type
@@ -452,6 +471,67 @@ impl Sema<'_, '_> {
 
     /// The type `r` represents ([meta.reflection.traits]/4: a type or a
     /// type alias), else the "does not represent a type" failure (p2).
+    /// `type_order(a, b)` (P2830R10, [meta.reflection.traits]): the
+    /// `strong_ordering::less`/`equal`/`greater` static member of the
+    /// intrinsic's result type, copied whole. The order compares the
+    /// canonical types' spelling, so it is the same in every TU for every
+    /// type with linkage; distinct types spelled alike (local classes)
+    /// are ordered by their interned id, which only one TU can name.
+    fn meta_type_order(
+        &mut self,
+        args: &[u128],
+        out: &mut MetaOut,
+        ctx: &MetaCtx,
+    ) -> Result<(), MetaError> {
+        let loc = ctx.loc;
+        let a = self.trait_operand(info_arg(args, 0)?, loc)?;
+        let b = self.trait_operand(info_arg(args, 1)?, loc)?;
+        let ord = if a == b {
+            std::cmp::Ordering::Equal
+        } else {
+            self.ty_str(a).cmp(&self.ty_str(b)).then(a.cmp(&b))
+        };
+        let name = match ord {
+            std::cmp::Ordering::Less => "less",
+            std::cmp::Ordering::Equal => "equal",
+            std::cmp::Ordering::Greater => "greater",
+        };
+        let ret = ctx
+            .callee
+            .and_then(|f| self.ast.decls.get(f).ty())
+            .and_then(|q| self.ast.types.proto(q))
+            .map(|p| self.ast.types.canonical(p.ret()).without_quals());
+        let member = ret.and_then(|r| {
+            let cls = self.ast.types.as_record(r)?;
+            let cls = self.ast.definition(cls)?;
+            let n = self.intern(name);
+            let m = self.lookup_qualified(cls, n, LookupKind::Ordinary).single()?;
+            (self.kind_of(m) == DeclKind::Var).then_some((r, self.ast.first(m)))
+        });
+        let Some((r, m)) = member else {
+            return fail(
+                loc,
+                format!(
+                    "'type_order' needs a result class with a static member '{name}' \
+                         (std::strong_ordering)"
+                ),
+            );
+        };
+        let ty = self.ast.types.pointer_to(r);
+        let p = self
+            .ast
+            .consts
+            .push_scalar(Scalar::Pointer {
+                ty,
+                base: PtrBase::Decl(m),
+                offset: 0,
+                designated: None,
+            })
+            .map_err(|_| MetaError::memory())?;
+        *out = MetaOut::Deref(p);
+        Ok(())
+    }
+
     fn trait_operand(&self, r: ReflectionId, loc: Loc) -> Result<QualType, MetaError> {
         let t = match self.ast.reflections.get(r) {
             Reflectee::Type(t) => Some(t),

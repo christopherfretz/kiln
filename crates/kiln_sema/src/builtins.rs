@@ -737,6 +737,7 @@ impl Sema<'_, '_> {
             | builtin::ISUNORDERED => self.builtin_unordered_compare(args, rparen),
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
             builtin::IS_WITHIN_LIFETIME => self.builtin_is_within_lifetime(args, rparen),
+            builtin::IS_STRING_LITERAL => self.builtin_is_string_literal(args, rparen),
             builtin::ASSUME_ALIGNED => self.builtin_assume_aligned(callee, args, rparen),
             builtin::COMPLEX => self.builtin_complex(callee, args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
@@ -1504,6 +1505,39 @@ impl Sema<'_, '_> {
         if let Some(which) = bad {
             let at = self.expr_loc(a);
             let msg = self.diag(DiagId::sema_builtin_is_within_lifetime_invalid_arg, at).arg(which);
+            self.emit(msg);
+            return None;
+        }
+        Some((vec![a], QualType::BOOL))
+    }
+
+    /// `__builtin_is_string_literal(p)` (GCC 16, WP-484): one pointer to a
+    /// (cv) character type, else `sema_builtin_is_string_literal_arg`.
+    fn builtin_is_string_literal(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        use kiln_ast::types::BuiltinType as B;
+        if !self.builtin_arg_count(args, 1, rparen) {
+            return None;
+        }
+        let a = conv::decay(self, args[0]);
+        let t = self.ety(a);
+        if t == QualType::ERROR {
+            return None;
+        }
+        let ok = self.ast.types.is_pointer(t)
+            && self.ast.types.pointee(t).is_some_and(|p| {
+                let p = self.ast.types.canonical(p);
+                matches!(
+                    self.ast.types.builtin(p),
+                    Some(B::Char | B::WChar | B::Char8 | B::Char16 | B::Char32)
+                )
+            });
+        if !ok {
+            let at = self.expr_loc(a);
+            let msg = self.diag(DiagId::sema_builtin_is_string_literal_arg, at);
             self.emit(msg);
             return None;
         }

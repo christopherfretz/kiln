@@ -399,6 +399,7 @@ impl Oven {
                 Ok(u128::from(n))
             }
             bi::POPCOUNT => Ok(u128::from((a & mask(sub & 0xFF)).count_ones())),
+            bi::STRING_LIT => Ok(u128::from(self.meta_is_string_literal(a))),
             bi::LIFETIME => {
                 // A `void *` argument's designator is its conversion's
                 // tag (`kbc::VOID_TAG`), if any.

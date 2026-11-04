@@ -1,10 +1,10 @@
-// [meta.reflection.traits] P2996R13, [meta.unary.prop]: the type property
-// traits (is_const_type ... is_scoped_enum_type), delegated to the
-// builtin trait engine. A complete type is required where [meta.unary.prop]
-// requires one (see failures-neg.cpp).
+// [meta.reflection.traits] P2996R13, [meta.unary.prop]: the type property traits
+// (is_const_type ... is_scoped_enum_type), delegated to the builtin trait engine. A
+// complete type is required where [meta.unary.prop] requires one (see failures-neg.cpp).
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
+//@ meta-header: skip GCC 16.1 declares is_structural_type only with __builtin_is_structural (follow-up)
 #include "kiln_meta_traits.h"
 using namespace std::meta;
 

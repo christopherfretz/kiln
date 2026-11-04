@@ -49,11 +49,24 @@ impl Sema<'_, '_> {
                 let t = self.referenced(p0()?);
                 MetaOut::Info(self.reflect_function(arg(0)?, t, loc, oven)?)
             }
-            ValueOp::ReflectConstantString => {
+            ValueOp::ReflectConstantString | ValueOp::ReflectConstantStringStd => {
                 MetaOut::Info(self.reflect_constant_elems(arg(0)?, true, ctx, oven)?)
             }
-            ValueOp::ReflectConstantArray => {
+            ValueOp::ReflectConstantArray | ValueOp::ReflectConstantArrayStd => {
                 MetaOut::Info(self.reflect_constant_elems(arg(0)?, false, ctx, oven)?)
+            }
+            ValueOp::ExcCvtFromUtf8 | ValueOp::ExcCvtToUtf8 => {
+                let r = arg(0)?;
+                let m = (r >> 64) as u64;
+                let s = oven
+                    .meta_elems_bytes(r, m, ctx)?
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .unwrap_or_default();
+                let u8 = v == ValueOp::ExcCvtToUtf8;
+                let Some(cv) = self.frozen_string(&s, u8) else {
+                    return fail(loc, "kiln: message too large for a constant");
+                };
+                MetaOut::Str(cv, s.len() as u64)
             }
             ValueOp::IsStringLiteral => {
                 MetaOut::Scalar(u128::from(oven.meta_is_string_literal(arg(0)?)))
@@ -78,9 +91,15 @@ impl Sema<'_, '_> {
     ) -> Result<Option<Shape>, String> {
         Ok(match (v, param) {
             (ValueOp::Extract, None) => Some(Shape::Whole),
-            (ValueOp::ReflectConstantString | ValueOp::ReflectConstantArray, Some(0)) => {
-                Some(Shape::Elems)
-            }
+            (
+                ValueOp::ReflectConstantString
+                | ValueOp::ReflectConstantArray
+                | ValueOp::ReflectConstantStringStd
+                | ValueOp::ReflectConstantArrayStd
+                | ValueOp::ExcCvtFromUtf8
+                | ValueOp::ExcCvtToUtf8,
+                Some(0),
+            ) => Some(Shape::Elems),
             _ => None,
         })
     }
@@ -175,6 +194,30 @@ impl Sema<'_, '_> {
         }
         let cv = self.bridge(|b| oven.meta_freeze(b, v, t, loc))?;
         self.check_tparg(cv, "the value", loc)?;
+        let r = if self.ast.types.as_record(t).is_some() {
+            let ct = self.ast.types.qualify(t, Quals::CONST);
+            let obj = self.builder().template_param_object(ct, cv);
+            Reflectee::Object(self.object_ptr(t, PtrBase::Decl(obj), 0)?)
+        } else {
+            Reflectee::Value(cv)
+        };
+        self.intern_reflection(r, loc).map_err(MetaError::from)
+    }
+
+    /// The reflection of annotation `a`'s underlying constant
+    /// ([dcl.attr.annotation]/2): `constant_of(a)` (P3394R4). A class
+    /// value is its template parameter object, as `reflect_constant`
+    /// makes it.
+    pub(super) fn annotation_constant(
+        &mut self,
+        a: kiln_ast::AnnId,
+        loc: Loc,
+    ) -> Result<ReflectionId, MetaError> {
+        let Some(cv) = self.ast.annots.get(a).value else {
+            return Err(MetaError::invalid());
+        };
+        let t = self.ast.types.canonical(self.ast.consts.ty(cv));
+        let t = crate::conv::strip_cv(self, t);
         let r = if self.ast.types.as_record(t).is_some() {
             let ct = self.ast.types.qualify(t, Quals::CONST);
             let obj = self.builder().template_param_object(ct, cv);
@@ -287,8 +330,7 @@ impl Sema<'_, '_> {
         }
         let m = oven.meta_elems_len(r, string, ctx)?;
         if m == 0 && !string {
-            // libstdc++ reflects an `array<T, 0>` here (WP-479 follow-up).
-            return fail(loc, "kiln: 'reflect_constant_array' of an empty range is not supported");
+            return self.reflect_empty_array(e, ctx, oven);
         }
         let arr = self.ast.types.constant_array(e, m + u64::from(string), None);
         let cv = self.bridge(|b| oven.meta_freeze_elems(b, (r, m), arr, string, ctx))?;
@@ -297,11 +339,65 @@ impl Sema<'_, '_> {
         self.intern_reflection(Reflectee::Object(p), loc).map_err(MetaError::from)
     }
 
+    /// `reflect_constant_array` of an empty range of `T`s (P3491R3
+    /// [meta.reflection.array]): the template parameter object of type
+    /// `const std::array<T, 0>`, value-initialized. kiln reads it when
+    /// `std::array<T, 0>` holds no data (libstdc++'s does).
+    fn reflect_empty_array(
+        &mut self,
+        e: QualType,
+        ctx: &MetaCtx,
+        oven: &mut Oven,
+    ) -> Result<ReflectionId, MetaError> {
+        let loc = ctx.loc;
+        let unsupported = |s: &Self| {
+            fail(
+                loc,
+                format!(
+                    "kiln: 'reflect_constant_array' of an empty range needs 'std::array<{}, 0>' to be \
+                     declared and to hold no data",
+                    s.ty_str(e)
+                ),
+            )
+        };
+        let Some((_, tmpl)) = self.std_class_template("array") else {
+            return unsupported(self);
+        };
+        // Instantiating `array<T, 0>` may evaluate: with the Oven lent back.
+        let t = self.lend_oven(oven, |s| {
+            let name = s.template_name_for(tmpl);
+            let args = [kiln_ast::types::TemplateArg::ty(e), s.size_t_arg(0)];
+            match s.act_template_id(name, &args, loc, loc) {
+                Ok(crate::templ::actions::TemplateIdRef::Type(t))
+                    if s.require_complete_silent(t, loc) =>
+                {
+                    Some(t)
+                }
+                _ => None,
+            }
+        });
+        let Some(t) = t else {
+            return unsupported(self);
+        };
+        let t = self.unqual(t);
+        let Some(cv) = self.bridge(|b| oven.meta_freeze_blank(b, t))? else {
+            return unsupported(self);
+        };
+        let p = self.object_ptr(t, PtrBase::Const(cv), 0)?;
+        self.intern_reflection(Reflectee::Object(p), loc).map_err(MetaError::from)
+    }
+
     /// `extract<T>(r)` ([meta.reflection.extract]), `t` being `T`.
     fn extract(&mut self, r: ReflectionId, t: QualType, loc: Loc) -> Result<MetaOut, MetaError> {
         let tc = self.ast.types.canonical(t);
         match self.ast.reflections.get(r) {
             Reflectee::Value(cv) => self.extract_value(r, cv, tc, loc),
+            // An annotation's underlying constant ([meta.reflection.extract]
+            // via `constant_of`, P3394R4).
+            Reflectee::Annotation(a) => {
+                let c = self.annotation_constant(a, loc)?;
+                self.extract(c, t, loc)
+            }
             Reflectee::Object(p) => self.extract_object(r, p, tc, loc),
             Reflectee::Decl(d) => match self.kind_of(d) {
                 DeclKind::Var | DeclKind::VarTemplateSpecialization => {

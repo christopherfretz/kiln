@@ -15,8 +15,10 @@ mod linkage;
 mod params;
 mod pred;
 
+use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::reflect::Reflectee;
+use kiln_ast::types::Quals;
 use kiln_ast::{DeclId, QualType, ReflectionId};
 use kiln_oven::{MetaCtx, MetaError, MetaOp, MetaOut, Oven, QueryOp, info_arg};
 use kiln_source::Loc;
@@ -36,7 +38,17 @@ impl Sema<'_, '_> {
         let loc = ctx.loc;
         if let QueryOp::SymbolOf | QueryOp::U8SymbolOf = q {
             let op = *args.first().ok_or_else(MetaError::invalid)?;
-            *out = MetaOut::Frozen(self.reflect_symbol(op, q == QueryOp::U8SymbolOf, loc)?);
+            let (cv, len) = self.reflect_symbol(op, q == QueryOp::U8SymbolOf, loc)?;
+            // `std::[u8]string_view` (the standard's, through <meta>) or
+            // the NTBS of tests/support/kiln_meta_queries.h.
+            let view = ctx
+                .callee
+                .and_then(|f| self.ast.decls.get(f).ty())
+                .and_then(|t| self.ast.types.proto(t))
+                .is_some_and(|p| {
+                    self.ast.types.as_record(self.ast.types.canonical(p.ret())).is_some()
+                });
+            *out = if view { MetaOut::Str(cv, len) } else { MetaOut::Frozen(cv) };
             return Ok(());
         }
         let r = info_arg(args, 0)?;
@@ -84,7 +96,7 @@ impl Sema<'_, '_> {
     /// *has-type*): a value, object, variable, function other than a
     /// constructor or destructor, data member, enumerator, function
     /// parameter or direct base.
-    fn type_of_reflectee(&self, x: Reflectee) -> Option<QualType> {
+    pub(in crate::meta) fn type_of_reflectee(&self, x: Reflectee) -> Option<QualType> {
         let ty = match x {
             Reflectee::Decl(d) => match self.kind_of(d) {
                 DeclKind::Var
@@ -115,12 +127,33 @@ impl Sema<'_, '_> {
     /// represents, canonical (GCC 16.1 drops a type alias there too:
     /// `using A = int; A v;` gives `type_of(^^v) == ^^int`).
     fn reflect_type_of(&mut self, r: ReflectionId, loc: Loc) -> Result<ReflectionId, MetaError> {
-        match self.type_of_reflectee(self.ast.reflections.get(r)) {
+        let x = self.ast.reflections.get(r);
+        match self.type_of_reflectee(x) {
             Some(t) if !self.ast.types.is_dependent(t) => {
-                let t = self.ast.types.canonical(t);
+                let mut t = self.ast.types.canonical(t);
+                if self.const_object(x) {
+                    t = self.ast.types.qualify(t, Quals::CONST);
+                }
                 Ok(self.intern_reflection(Reflectee::Type(t), loc)?)
             }
             _ => fail(loc, format!("'{}' has no type", self.reflection_str(r))),
+        }
+    }
+
+    /// Whether object reflection `x` designates a const object: a
+    /// template parameter object ([temp.param]/8; `reflect_constant*`),
+    /// or a subobject of a variable declared const. Object reflections are
+    /// interned cv-unqualified (one per object), so `type_of` restores
+    /// the `const` GCC 16.1 reports from here.
+    fn const_object(&self, x: Reflectee) -> bool {
+        let Reflectee::Object(p) = x else { return false };
+        match self.ast.consts.scalar(p) {
+            Some(Scalar::Pointer { base: PtrBase::Const(_), .. }) => true,
+            Some(Scalar::Pointer { base: PtrBase::Decl(d), .. }) => {
+                let vt = self.ast.decls.get(d).ty();
+                vt.is_some_and(|t| self.ast.types.effective_quals(t).is_const())
+            }
+            _ => false,
         }
     }
 

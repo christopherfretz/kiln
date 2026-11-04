@@ -1,6 +1,5 @@
-// [meta.reflection.substitute] (P2996R13): substitute with arguments that do
-// not satisfy the template's constraints throws; can_substitute is false for
-// them.
+// [meta.reflection.substitute] (P2996R13): substitute with arguments that do not
+// satisfy the template's constraints throws; can_substitute is false for them.
 //@ expect: compile-fail
 //@ oracle: gcc
 //@ args: -freflection -I tests/support
@@ -14,6 +13,7 @@
 //@ diag: 28:20 note "'^^v' cannot be substituted with these template arguments: constraints not satisfied (constraints not satisfied for variable template 'v' [with T = char])"
 //@ diag: 28:16 error "constexpr variable 'b' must be initialized by a constant expression"
 //@ diag: 28:20 note "'^^v' cannot be substituted with these template arguments: constraints not satisfied (constraints not satisfied for variable template 'v' [with T = char])"
+//@ meta-header: skip the note spells the real header's default template argument initializer_list<info>
 #if __has_include(<meta>)
 #include <meta>
 #else

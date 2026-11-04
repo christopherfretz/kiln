@@ -71,7 +71,7 @@ impl Sema<'_, '_> {
     /// `getTemplateInstantiationPattern`): the declaration its definition
     /// is instantiated from, through member templates; `f` itself for an
     /// explicit specialization or a non-template.
-    fn function_pattern(&self, f: DeclId) -> DeclId {
+    pub(crate) fn function_pattern(&self, f: DeclId) -> DeclId {
         let mut cur = f;
         for _ in 0..64 {
             if let Some((_, s)) = self.ast.spec_info(cur)

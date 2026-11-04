@@ -50,6 +50,18 @@ super::meta_family! {
         /// `std::is_string_literal(p)` ([meta.string.literal]) is
         /// `std::meta::__kiln_is_string_literal(p)`.
         IsStringLiteral = ("__kiln_is_string_literal", "x", Stable, 479);
+        /// `reflect_constant_string(r)` as libstdc++ 16.1 declares it
+        /// (no body; WP-484): the intrinsic itself.
+        ReflectConstantStringStd = ("reflect_constant_string", "x", Stable, 484);
+        /// `reflect_constant_array(r)`: likewise.
+        ReflectConstantArrayStd = ("reflect_constant_array", "x", Stable, 484);
+        /// libstdc++'s `exception::_S_exception_cvt_from_utf8(r)`: the
+        /// UTF-8 range `r` as an ordinary-encoding `string_view` (kiln's
+        /// ordinary literal encoding is UTF-8: the same characters, or an
+        /// empty view when `r` is not valid UTF-8).
+        ExcCvtFromUtf8 = ("exception::_S_exception_cvt_from_utf8", "x", Stable, 484);
+        /// `exception::_S_exception_cvt_to_utf8(r)`: the converse.
+        ExcCvtToUtf8 = ("exception::_S_exception_cvt_to_utf8", "x", Stable, 484);
     }
 }
 
@@ -58,19 +70,26 @@ const MAX_DEPTH: u32 = 8;
 /// At most this many non-empty members in a range class.
 const MAX_LEAVES: usize = 4;
 
-/// The non-empty scalar and array subobjects of `t` at `base`.
+/// The non-empty scalar and array subobjects of `t` at `base`; a union
+/// member is skipped and counted in `unions` (the small-string buffer of
+/// libstdc++'s `basic_string`, whose pointer and length come first).
 fn range_leaves(
     types: &Types,
     t: OTy,
     base: u64,
     depth: u32,
     out: &mut Vec<Leaf>,
+    unions: &mut u32,
 ) -> Result<(), &'static str> {
     if depth > MAX_DEPTH {
         return Err("nests too deeply");
     }
     match types.kind(t) {
-        TyKind::Record { union: true, .. } => Err("is a union"),
+        TyKind::Record { union: true, .. } if depth == 0 => Err("is a union"),
+        TyKind::Record { union: true, .. } => {
+            *unions += 1;
+            Ok(())
+        }
         TyKind::Record { .. } => {
             for f in types.fields(t) {
                 if f.width.is_some() {
@@ -79,7 +98,7 @@ fn range_leaves(
                 if types.size(f.ty) == 0 || types.holds_no_data(f.ty) {
                     continue;
                 }
-                range_leaves(types, f.ty, base + f.offset, depth + 1, out)?;
+                range_leaves(types, f.ty, base + f.offset, depth + 1, out, unions)?;
             }
             Ok(())
         }
@@ -109,7 +128,8 @@ pub(crate) fn elems_recipe(types: &Types, t: OTy) -> Result<Recipe, String> {
         _ => return Err("is not a contiguous range".into()),
     }
     let mut ls = Vec::with_capacity(MAX_LEAVES);
-    range_leaves(types, t, 0, 0, &mut ls).map_err(str::to_owned)?;
+    let mut unions = 0;
+    range_leaves(types, t, 0, 0, &mut ls, &mut unions).map_err(str::to_owned)?;
     ls.sort_by_key(|l| l.off);
     let ptr_to = |l: &Leaf| match types.kind(l.ty) {
         TyKind::Ptr(e) => Some(e),
@@ -120,6 +140,8 @@ pub(crate) fn elems_recipe(types: &Types, t: OTy) -> Result<Recipe, String> {
         ptr_to(a).is_some_and(|x| ptr_to(b).is_some_and(|y| types.info(x).q == types.info(y).q))
     };
     let found = match ls[..] {
+        // A union only after a pointer and a length (a string's buffer).
+        _ if unions > 0 && !(ls.len() == 2 && ptr_to(&ls[0]).is_some() && is_int(&ls[1])) => None,
         [] => Some(Recipe::Inline { off: 0, elem: t, n: 0 }),
         [l] => match types.kind(l.ty) {
             TyKind::Array { elem, n } => Some(Recipe::Inline { off: l.off, elem, n }),
@@ -275,6 +297,57 @@ impl Oven {
         bytes.resize(((m + 1) * w) as usize, 0);
         let img = ByteImage { ty: arr, bytes: &bytes, relocs: &[], padding: &[], unions: &[] };
         b.consts().push_aggregate(img).map_err(|_| fault(Fault::Memory))
+    }
+
+    /// The value of class `q` that holds no data (every byte padding:
+    /// libstdc++'s `array<T, 0>`, whose one member is an empty struct),
+    /// frozen: `reflect_constant_array` of an empty range (P3491R3).
+    /// `None` when `q` holds data.
+    ///
+    /// # Errors
+    /// The constant store's exhaustion.
+    pub fn meta_freeze_blank(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        q: QualType,
+    ) -> Result<Option<ConstValueId>, MetaError> {
+        let t = self.types.intern(b, q);
+        if !self.types.holds_no_data(t) {
+            return Ok(None);
+        }
+        let n = self.types.size(t);
+        let bytes = vec![0; usize::try_from(n).unwrap_or(0)];
+        let len = u32::try_from(n).map_err(|_| fault(Fault::Memory))?;
+        let padding = [kiln_ast::consts::ByteRange { start: 0, len }];
+        let padding = if n == 0 { &padding[..0] } else { &padding[..] };
+        let img = ByteImage { ty: q, bytes: &bytes, relocs: &[], padding, unions: &[] };
+        b.consts().push_aggregate(img).map(Some).map_err(|_| fault(Fault::Memory))
+    }
+
+    /// The first `m` characters of range argument `r` (data | length <<
+    /// 64) of one-byte characters, as bytes (`None`: wider characters).
+    ///
+    /// # Errors
+    /// The evaluator's fault reading one.
+    pub fn meta_elems_bytes(
+        &self,
+        r: u128,
+        m: u64,
+        ctx: &MetaCtx,
+    ) -> Result<Option<Vec<u8>>, MetaError> {
+        let et = ctx.elem;
+        if self.types.size(et) != 1 {
+            return Ok(None);
+        }
+        let mut q = r as u64;
+        let mut bytes = Vec::with_capacity(usize::try_from(m).unwrap_or(0).min(1 << 20));
+        for i in 0..m {
+            if i > 0 {
+                q = self.ptr_add(q, 1, et).map_err(fault)?;
+            }
+            bytes.push(self.load(q, et, ak::READ).map_err(fault)? as u8);
+        }
+        Ok(Some(bytes))
     }
 
     /// Whether `p` points into a string literal object ([lex.string];

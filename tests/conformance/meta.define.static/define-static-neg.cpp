@@ -1,7 +1,6 @@
-// [meta.define.static] (P3491R3), spec/reflection-values.md §4: the
-// ill-formed and throwing cases of reflect_constant_string,
-// reflect_constant_array and the define_static_* functions, each
-// diagnosed with a note.
+// [meta.define.static] (P3491R3), spec/reflection-values.md §4: the ill-formed
+// and throwing cases of reflect_constant_string, reflect_constant_array and
+// the define_static_* functions, each diagnosed with a note.
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ expect: compile-fail
@@ -34,6 +33,7 @@
 //@ diag: 62:21 note "in call to 'define_static_object<NS>(NS{})'"
 //@ diag: 62:16 error "constexpr variable 'n6' must be initialized by a constant expression"
 //@ diag: 62:21 note "in call to 'define_static_object<NS>(NS{})'"
+//@ meta-header: skip the notes name the frames of GCC's library define_static_* code
 #include "kiln_meta.h"
 using namespace std::meta;
 

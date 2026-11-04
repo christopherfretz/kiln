@@ -1,10 +1,9 @@
-// [meta.reflection.result] (P2996R13), spec/reflection-values.md §3: every
-// condition under which reflect_constant, reflect_object and
-// reflect_function throw, each diagnosed with a note (the evaluation
-// fails; std::meta::exception as a thrown object is WP-484's). r4 is the
-// IS example's. GCC 16.1 accepts reflect_function of a consteval function;
-// kiln rejects it, since a reference to an immediate function is not a
-// constant expression and so not a valid argument for TCls<F&>.
+// [meta.reflection.result] (P2996R13), spec/reflection-values.md §3: every condition
+// under which reflect_constant, reflect_object and reflect_function throw, each
+// diagnosed with a note (the evaluation fails; std::meta::exception as a thrown
+// object is WP-484's). r4 is the IS example's. GCC 16.1 accepts reflect_function of
+// a consteval function; kiln rejects it, since a reference to an immediate function
+// is not a constant expression and so not a valid argument for TCls<F&>.
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ expect: compile-fail
@@ -55,6 +54,7 @@
 //@ diag: 90:21 note "the value refers to a string literal, which is not a valid constant template argument"
 //@ diag: 90:16 error "constexpr variable 'n7' must be initialized by a constant expression"
 //@ diag: 90:21 note "the value refers to a string literal, which is not a valid constant template argument"
+//@ meta-header: skip the real reflect_constant takes its argument by value, so a string literal decays
 #include "kiln_meta.h"
 using namespace std::meta;
 

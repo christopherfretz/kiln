@@ -1,16 +1,16 @@
-// [meta.reflection.queries], [meta.reflection.operators] P2996R13:
-// operator_of maps an operator function or operator function template
-// to its std::meta::operators enumerator; symbol_of / u8symbol_of map an
-// enumerator to the operator's spelling ("new[]", "()", "co_await",
-// "<=>"). Kiln returns the spelling as a pointer to a string literal
-// object, like name_of, until string_view results exist (WP-475), so the
-// test compares characters. Operator functions are reached through
-// members_of (^^ of an operator-function-id does not parse yet).
-// Answers checked against GCC 16.1 (-freflection), whose operators
-// numbering (op_new = 1, ..., op_comma) kiln_meta_queries.h copies.
+// [meta.reflection.queries], [meta.reflection.operators] P2996R13: operator_of
+// maps an operator function or operator function template to its
+// std::meta::operators enumerator; symbol_of / u8symbol_of map an enumerator to
+// the operator's spelling ("new[]", "()", "co_await", "<=>"). Kiln returns the
+// spelling as a pointer to a string literal object, like name_of, until
+// string_view results exist (WP-475), so the test compares characters. Operator
+// functions are reached through members_of (^^ of an operator-function-id does
+// not parse yet). Answers checked against GCC 16.1 (-freflection), whose
+// operators numbering (op_new = 1, ..., op_comma) kiln_meta_queries.h copies.
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
+//@ meta-header: skip kiln_meta.h's symbol_of returns const char *, the real one string_view (meta.syn/workload-names.cpp checks it)
 #include "kiln_meta_queries.h"
 using namespace std::meta;
 

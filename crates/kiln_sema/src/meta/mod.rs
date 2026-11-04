@@ -90,6 +90,13 @@ impl Sema<'_, '_> {
         if !matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
             return None;
         }
+        // A function the library defines is a library function, whatever
+        // its name (`tests/support/kiln_meta.h` defines
+        // `reflect_constant_string` over an intrinsic; libstdc++ declares
+        // it without a body; §3.1).
+        if self.defined_body(self.function_pattern(f)).is_some() {
+            return None;
+        }
         let ctx = self.skip_inline(n.ctx()?)?;
         let (name, in_std_meta) = if self.kind_of(ctx) == DeclKind::TranslationUnit {
             (self.decl_name(f), false)

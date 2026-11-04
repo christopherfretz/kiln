@@ -43,6 +43,12 @@ const SPECIAL_ORDER: [SpecialKind; 6] = [
 /// The declarations [meta.reflection.member.queries] never lists: no
 /// entity (an access or using declaration, a `static_assert`, a friend),
 /// or one a query reaches another way (an enumerator, a parameter).
+/// A block of declarations inside a namespace definition whose members
+/// are the namespace's: a linkage specification or an export block.
+fn is_nested_block(k: DeclKind) -> bool {
+    matches!(k, DeclKind::LinkageSpec | DeclKind::Export)
+}
+
 fn never_a_member(k: DeclKind) -> bool {
     use DeclKind as K;
     matches!(
@@ -429,18 +435,50 @@ impl Sema<'_, '_> {
         let mut fresh: Vec<DeclId> = self.ast.redecls_of(ns).filter(|&d| !known(&l, d)).collect();
         fresh.reverse();
         l.cursors.extend(fresh.into_iter().map(|d| (d, 0)));
-        let mut i = 0;
-        while i < l.cursors.len() {
-            let (block, done) = l.cursors[i];
-            let news: Vec<DeclId> = self.ast.members(block).skip(done as usize).collect();
-            l.cursors[i].1 = done + news.len() as u32;
-            for m in news {
-                self.namespace_member(ns, m, &mut l, loc)?;
+        // The namespace's own blocks, in order; a linkage specification or
+        // export block inside one is walked in place, so the list is in
+        // declaration order across them.
+        for i in 0..l.cursors.len() {
+            let block = l.cursors[i].0;
+            if !is_nested_block(self.ast.decls.get(block).kind()) {
+                self.walk_block(ns, i, &mut l, loc)?;
             }
-            i += 1;
         }
         l.stamp = stamp;
         self.meta_members.cache.put(ns, MemberList::Members, l);
+        Ok(())
+    }
+
+    /// Visits the members of the block of cursor `idx` not visited yet,
+    /// walking each nested block (a linkage specification or export
+    /// block) where it appears. Only the last member visited before can
+    /// be a nested block still open, so it catches up first: its new
+    /// members precede the block's own.
+    fn walk_block(
+        &mut self,
+        ns: DeclId,
+        idx: usize,
+        l: &mut CachedList,
+        loc: Loc,
+    ) -> Result<(), MetaError> {
+        let (block, done) = l.cursors[idx];
+        let last = done.checked_sub(1).and_then(|k| self.ast.members(block).nth(k as usize));
+        if let Some(last) = last.filter(|&d| is_nested_block(self.ast.decls.get(d).kind()))
+            && let Some(c) = l.cursors.iter().position(|c| c.0 == last)
+        {
+            self.walk_block(ns, c, l, loc)?;
+        }
+        let news: Vec<DeclId> = self.ast.members(block).skip(done as usize).collect();
+        for m in news {
+            l.cursors[idx].1 += 1;
+            if is_nested_block(self.ast.decls.get(m).kind()) {
+                l.cursors.push((m, 0));
+                let c = l.cursors.len() - 1;
+                self.walk_block(ns, c, l, loc)?;
+            } else {
+                self.namespace_member(ns, m, l, loc)?;
+            }
+        }
         Ok(())
     }
 
@@ -455,10 +493,6 @@ impl Sema<'_, '_> {
     ) -> Result<(), MetaError> {
         let n = self.ast.decls.get(m);
         let kind = n.kind();
-        if matches!(kind, DeclKind::LinkageSpec | DeclKind::Export) {
-            l.cursors.push((m, 0));
-            return Ok(());
-        }
         if never_a_member(kind)
             || n.has(DeclFlags::IMPLICIT)
             || kind == DeclKind::TranslationUnit

@@ -1,6 +1,5 @@
-// [meta.reflection.substitute] (P2996R13): an argument reflection that is
-// not a type, template, constant or object (a namespace, a non-static data
-// member, the null reflection) makes substitute and can_substitute throw.
+// [meta.reflection.substitute] (P2996R13): an argument reflection that is not a type, template, constant or
+// object (a namespace, a non-static data member, the null reflection) makes substitute and can_substitute throw.
 //@ expect: compile-fail
 //@ oracle: gcc
 //@ args: -freflection -I tests/support
@@ -18,6 +17,7 @@
 //@ diag: 32:20 note "'std::meta::info()' cannot be a template argument"
 //@ diag: 32:16 error "constexpr variable 'c' must be initialized by a constant expression"
 //@ diag: 32:20 note "'std::meta::info()' cannot be a template argument"
+//@ meta-header: skip the note spells the real header's default template argument initializer_list<info>
 #if __has_include(<meta>)
 #include <meta>
 #else

@@ -55,10 +55,12 @@ impl Oven {
             }
         }
         let trial = self.run.fold || self.mem.in_trial();
-        let value_op = matches!(op, MetaOp::Value(_));
-        // A value op's range argument: its element type (WP-479).
+        // A value op, or `type_order` (its `strong_ordering` copied whole).
+        let value_op = matches!(op, MetaOp::Value(_) | MetaOp::Trait(crate::TraitOp::TypeOrder));
+        // A value op's range argument: its element type (WP-479); a
+        // trait's `reflection_range` argument: `info` (WP-484).
         let elem = site
-            .filter(|_| value_op)
+            .filter(|_| value_op || matches!(op, MetaOp::Trait(_)))
             .and_then(|s| s.ranges.iter().flatten().find_map(|&rc| recipe_elem(&self.types, rc)))
             .unwrap_or(OTy(t1));
         // The function whose body holds the call (thunks have none).

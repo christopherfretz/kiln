@@ -165,9 +165,10 @@ impl Sema<'_, '_> {
         }
         // `define_aggregate`'s injection path (spec/reflection.md §6.2):
         // the member is placed where the evaluation is.
-        let d = Dms { ty: t, name: Some(sym), alignment: None, bit_width: None, nua: false };
+        let d =
+            Dms { ty: t, name: Some(sym), alignment: None, bit_width: None, nua: false, annots: 0 };
         let point = self.inst.eval_loc.unwrap_or(loc);
-        let f = self.inject_field(r, &d, loc, point);
+        let f = self.inject_field(r, &d, &[], loc, point);
         Ok(self.intern_reflection(Reflectee::Decl(f), loc)?)
     }
 }

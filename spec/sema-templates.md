@@ -2118,11 +2118,21 @@ WP-070b):
    covers:
    - a speculative fold (`try_fold`): it never instantiates;
    - a failed instantiation, or one after a fatal error;
-   - a member that was marked but whose instantiation is still
-     deferred because its pattern was not yet defined at the mark
-     (`InstState.queued`). clang also leaves it undefined: the test
-     `templates/diag/temp.inst-constexpr-defined-later.cpp` pins the
-     note.
+   - a member that was marked while its pattern was undefined
+     (`InstState.queued`) and whose pattern is **still** undefined at
+     the evaluation: `templates/diag/temp.inst-constexpr-still-undefined.cpp`
+     pins the note.
+4. As landed by WP-484 ([temp.inst]/8, GCC 16.1 as the oracle): a
+   queued **constexpr** member whose pattern **is** defined by the time
+   of the evaluation is instantiated on demand, as in step 2 (POI = the
+   evaluation's location); its queue entry then finds it defined at the
+   end of the TU. Nothing else changes: non-Oven instantiation keeps its
+   timing and the queue is never reordered.
+   `templates/diag/temp.inst-constexpr-defined-later.cpp` (`oracle:
+   gcc`) pins it; clang 19/22 still report the function undefined, which
+   is a clang limitation. libstdc++ 16.1 needs it: `operator""s` queues
+   `basic_string::_M_construct<const char8_t*>` before `basic_string.tcc`
+   defines it, and every `std::meta::exception` builds a `u8string`.
 
 **Variable template specializations as declarations (WP-417).**
 - `[[deprecated]]`: an explicit specialization carries its own

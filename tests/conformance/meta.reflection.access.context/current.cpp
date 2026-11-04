@@ -58,9 +58,10 @@ static_assert(access_context::current().via(^^B).scope() == ^^::);
 static_assert(access_context::unchecked().via(^^B).scope() == info());
 static_assert(access_context::current().via(^^B).via(info()).designating_class() == info());
 // A union is a class type ([class.pre]/1); GCC 16.1 rejects it as a
-// designating class.
+// designating class (its library via() tests is_class_type), so this
+// is not checked against the real <meta> (KILN_REAL_META).
 union Un {};
-#ifdef __KILN__
+#if defined(__KILN__) && !defined(KILN_REAL_META)
 static_assert(access_context::current().via(^^Un).designating_class() == ^^Un);
 #endif
 using BA = B;
