@@ -3,6 +3,8 @@
 //! call's arguments, and the winner becomes a `DeclRefExpr` that the
 //! direct call path then converts the arguments for.
 
+use std::ops::ControlFlow;
+
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::names::DeclName;
@@ -62,6 +64,10 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "lookup, ADL, the one-candidate path and the candidate set meet here"
+    )]
     pub(crate) fn resolve_unresolved_call(
         &mut self,
         callee: ExprId,
@@ -116,22 +122,6 @@ impl Sema<'_, '_> {
                 self.diagnose_args_for_non_template(name, &decls, n.loc());
                 return None;
             }
-            // `f<args>(…)` / `C::f<args>(…)` naming member function
-            // templates where `this` may be used: the object argument is
-            // the implicit `*this` ([class.mfct.non.static]/2,
-            // [over.match.funcs]/4), as for the non-template name
-            // (`implicit_member_overload`), so the implicit object
-            // parameters rank the candidates (spec/sema-overload.md §2.3).
-            let nns = self.ast.templates.expr_nns.get(ule).copied();
-            if let Some(e) =
-                self.implicit_member_template_id(name, &cands, naming, nns, explicit, n.loc())
-            {
-                if self.member_overload(e).is_none() {
-                    // `this` is type-dependent: resolved at instantiation.
-                    return Some(e);
-                }
-                return self.resolve_member_call(e, args, braced);
-            }
         }
         let templates = cands.iter().any(|&(d, _)| self.kind_of(d) == DeclKind::FunctionTemplate);
         let plain =
@@ -161,14 +151,9 @@ impl Sema<'_, '_> {
             self.ovl.adl_single = adl.then_some(e);
             return Some(e);
         }
-        if self.lacks_implicit_object(&cands) {
-            // [expr.prim.id.general]/3, [over.match.call.general]/2.2:
-            // every candidate needs an object and no `this` may be used
-            // (a static member function, an unrelated class) — clang's
-            // `IMA_Error_StaticContext` / `IMA_Error_Unrelated`, diagnosed
-            // before overload resolution, also in an unevaluated operand.
-            self.error(DiagId::sema_member_call_without_object, n.loc());
-            return None;
+        if let ControlFlow::Break(r) = self.implicit_object_call(ule, &cands, naming, args, braced)
+        {
+            return r;
         }
         let mut set = self.begin_set(SetKind::Normal, at);
         let base = self.push_call_args(&mut set, args, braced);
@@ -213,6 +198,50 @@ impl Sema<'_, '_> {
             self.diagnose_adl_only_template_id(n.loc());
         }
         r
+    }
+
+    /// The call of the overloaded name `ule` (its candidates `cands`,
+    /// `naming` the recorded naming class) with `args` when its object
+    /// argument is the implicit `*this`, or when every candidate needs one
+    /// and there is none (`Break` with the callee, `None` after
+    /// diagnosing); `Continue` for a call without an object argument.
+    fn implicit_object_call(
+        &mut self,
+        ule: ExprId,
+        cands: &[(DeclId, DeclId)],
+        naming: Option<DeclId>,
+        args: &[ExprId],
+        braced: &[Option<InitList>],
+    ) -> ControlFlow<Option<ExprId>> {
+        let (name, loc) = (self.ast.unresolved_name(ule), self.ast.exprs.get(ule).loc());
+        // `f<args>(…)` / `C::f<args>(…)` naming member function templates
+        // where `this` may be used: the object argument is the implicit
+        // `*this` ([class.mfct.non.static]/2, [over.match.funcs]/4), as
+        // for the non-template name (`implicit_member_overload`), so the
+        // implicit object parameters rank the candidates
+        // (spec/sema-overload.md §2.3).
+        let explicit = self.ast.templates.expr_targs.get(ule).copied();
+        let nns = self.ast.templates.expr_nns.get(ule).copied();
+        if explicit.is_some()
+            && let Some(e) =
+                self.implicit_member_template_id(name, cands, naming, nns, explicit, loc)
+        {
+            if self.member_overload(e).is_none() {
+                // `this` is type-dependent: resolved at instantiation.
+                return ControlFlow::Break(Some(e));
+            }
+            return ControlFlow::Break(self.resolve_member_call(e, args, braced));
+        }
+        if self.lacks_implicit_object(cands) {
+            // [expr.prim.id.general]/3, [over.match.call.general]/2.2:
+            // every candidate needs an object and no `this` may be used
+            // (a static member function, an unrelated class) — clang's
+            // `IMA_Error_StaticContext` / `IMA_Error_Unrelated`, diagnosed
+            // before overload resolution, also in an unevaluated operand.
+            self.error(DiagId::sema_member_call_without_object, loc);
+            return ControlFlow::Break(None);
+        }
+        ControlFlow::Continue(())
     }
 
     /// A call `f<args>(…)` whose `f` ordinary lookup did not find (only
