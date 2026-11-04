@@ -686,6 +686,15 @@ fn codegen_flags_classes() {
         assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{flags:?}");
         assert_eq!(&std::fs::read(d.join("m.o")).unwrap()[..4], b"\x7fELF", "{flags:?}");
     }
+}
+
+/// spec/driver.md "Codegen flags" (WP-605): the rejected class is the
+/// driver error "'<flag>' is not supported by kiln", and values outside
+/// clang's sets are clang's errors; no job runs.
+#[test]
+fn codegen_flags_rejected() {
+    let d = scratch("cgflags-rej");
+    std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
     let rejected = [
         "-ftrapv",
         "-fshort-enums",

@@ -171,6 +171,24 @@ pub fn ident() -> String {
     format!("kiln version {}", env!("CARGO_PKG_VERSION"))
 }
 
+/// The [`CodegenOptions`] fields set by the driver's codegen flags
+/// (spec/driver.md "Codegen flags"), the rest defaulted; `cpu` is the
+/// resolved `-march=` CPU ([`crate::features::TargetFeatures::cpu`]).
+fn codegen_flag_options(a: &Args, cpu: Option<String>) -> CodegenOptions {
+    let f = &a.codegen;
+    CodegenOptions {
+        stack_protector: f.stack_protector(),
+        unwind_tables: f.unwind_tables(a.predef.freestanding.unwrap_or(false)),
+        no_plt: f.no_plt,
+        wrapv: f.wrapv(),
+        wrapv_pointer: f.wrapv_pointer(a.predef.clang_compat == ClangCompat::Clang22),
+        null_pointer_is_valid: f.null_pointer_is_valid(),
+        target_cpu: cpu,
+        tune_cpu: f.mtune.clone().filter(|t| t != "native"),
+        ..CodegenOptions::default()
+    }
+}
+
 /// One source input through the frontend and IR generation.
 #[derive(Debug)]
 pub struct CodegenJob<'j>(pub Job<'j>);
@@ -286,16 +304,7 @@ impl CodegenJob<'_> {
                 },
                 semantic_interposition: a.semantic_interposition,
                 direct_access_external_data: a.direct_access_external_data,
-                stack_protector: a.codegen.stack_protector(),
-                unwind_tables: a.codegen.unwind_tables(a.predef.freestanding.unwrap_or(false)),
-                no_plt: a.codegen.no_plt,
-                wrapv: a.codegen.wrapv(),
-                wrapv_pointer: a
-                    .codegen
-                    .wrapv_pointer(a.predef.clang_compat == ClangCompat::Clang22),
-                null_pointer_is_valid: a.codegen.null_pointer_is_valid(),
-                target_cpu: feats.cpu.clone(),
-                tune_cpu: a.codegen.mtune.clone().filter(|t| t != "native"),
+                ..codegen_flag_options(a, feats.cpu.clone())
             };
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
