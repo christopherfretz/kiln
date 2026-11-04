@@ -59,6 +59,7 @@ GnuFlexibleArrayInitializer = "gnu-flexible-array-initializer" [];
 GnuFlexibleArrayUnionMember = "gnu-flexible-array-union-member" [];
 GnuFoldingConstant = "gnu-folding-constant" [];
 GnuImaginaryConstant = "gnu-imaginary-constant" [];
+GnuInlineCppWithoutExtern = "gnu-inline-cpp-without-extern" [];
 GnuPointerArith = "gnu-pointer-arith" [];
 GnuStringLiteralOperatorTemplate = "gnu-string-literal-operator-template" [];
 GnuVariableSizedTypeNotAtEnd = "gnu-variable-sized-type-not-at-end" [];

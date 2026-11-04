@@ -690,6 +690,21 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   a thunk: `Cg::delegate_call_arg`, clang `EmitDelegateCallArg`) is a
   plain `load ptr` of its slot with neither, at every compat level
   (WP-416).
+- **Captured locals (WP-581).** A `DeclRefExpr` marked
+  `REFERS_TO_ENCLOSING` names the closure's member for the capture
+  (`captured_var_lvalue`: a by-copy capture is the field, a by-reference
+  one, and a captured reference, is the field's loaded address), in every
+  function emitted from the lambda: each specialization of a generic
+  lambda's call operator, and the call operators of the closures formed
+  again when an enclosing generic call operator is instantiated. Codegen
+  never looks a captured entity up in the emitting function's local table;
+  "reference to an unemitted local variable" for one is a sema bug (a
+  capture that was never recorded), not a codegen case. Sema guarantees
+  the member exists by capturing in the template definition every
+  potential odr-use whose full-expression depends on a lambda parameter
+  (spec/sema-lambda.md §4.2). Minimal repro (failed before WP-581):
+  `bool f(const int& r) { const int& rr = r; return [&](const auto& x) {
+  return x == *reinterpret_cast<const int*>(&rr); }(r); }`.
 - **Pointee alignment of an array of unknown bound (WP-416).** clang
   `getTypeAlignInChars` gives `T[]` its element's alignment, so
   `pointee_layout` reports `(no size, align of T)`: an `int(&)[]` / `int
@@ -1350,6 +1365,10 @@ The normative description is spec/driver.md "Code generation". In short:
   packed otherwise; the named type only when layout-identical. A class
   that is not POD for layout (packed IR type with tail padding) is
   therefore a literal `{ i32, i8 }`, as clang.
+- **Record types** are `kiln_abi::IrTypes` lowerings (spec/abi.md §8.6),
+  so a pointer field is `ptr` and no member is ever `i0`, even for a
+  record nested in a member class declared before its definition
+  (WP-582, spec/landed/codegen/WP-582.md).
 - Sema gaps (kiln_sema) that keep `run` tests and corpus cases simple:
   casts to reference types (`static_cast<int&&>`), binding
   `const T(&)[N]` to a `T[N]` argument, copy-initializing a class object
@@ -1607,8 +1626,10 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   At every level (also for the `always_inline` exception at -O0) a
   trivially recursive function stays a declaration (WP-449, clang
   `isTriviallyRecursive`, `Cg::is_trivially_recursive` in
-  `recursion.rs`). The function's name is its asm label, since every
-  function here is mangled, so one without a label never qualifies.
+  `recursion.rs`). The function's name is its asm label, else its plain
+  name when it is unmangled (`extern "C"`, `main`); a mangled function
+  without a label never qualifies (WP-585: clang `isTriviallyRecursive`
+  falls back to the identifier only for an unmangled one).
   Its body is walked as clang's `FunctionIsDirectlyRecursive` walks it:
   every statement and expression (a declaration statement's variable
   initializers included), but not the operands of a call. A call whose
@@ -1628,6 +1649,32 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   `tests/codegen/trivially_recursive.cpp`,
   `tests/codegen/trivially_recursive_always_inline.cpp`,
   `tests/codegen/trivially_recursive_lib.cpp`.
+- **GNU inline functions** (GNU extension, WP-585; clang
+  `basicGVALinkageForFunction` -> `isInlineDefinitionExternallyVisible`,
+  which is false in C++ for every `gnu_inline` function; sema rule in
+  spec/sema.md "GNU inline functions"): an inline function with external
+  linkage that carries `gnu_inline` (`AttrKind::GNU_INLINE`, on any of
+  its declarations; templates, members and `constexpr` functions
+  included) is defined in another translation unit, exactly like a
+  function under an explicit instantiation declaration
+  (`Cg::defined_elsewhere`, `Cg::is_gnu_inline_fn`): its body is
+  emitted `available_externally` under the same conditions
+  (`always_inline` at -O0; at -O1+ any not `noinline`; never when
+  trivially recursive), otherwise it is only declared. It is never a
+  `linkonce_odr` definition of its symbol. One with internal linkage
+  (`static`, unnamed namespace) is defined as usual. The shape that
+  matters is the C library's optimized-only C++ overload
+  (`extern "C++" const char *strchr(const char *, int) __asm("strchr")`,
+  `__extern_always_inline` = `extern __inline
+  __attribute__((__always_inline__, __gnu_inline__))`, body
+  `return __builtin_strchr(s, c);`): it is trivially recursive and
+  stays a declaration. Emitted as a definition (kiln before WP-585) it
+  replaced the C library's `strchr` in the program with a function
+  that calls itself, an infinite loop at -O1 and undefined behaviour
+  (`mustprogress`) at -O2. `tests/codegen/gnu_inline.cpp`,
+  `tests/codegen/gnu_inline_o1.cpp`,
+  `tests/conformance/ext.gnu.inline/available-externally-O1-run.cpp`,
+  `tests/conformance/ext.gnu.inline/available-externally-O2-run.cpp`.
 - **Explicit instantiation definitions** ([temp.explicit], WP-170;
   `Cg::is_explicit_inst_definition`, clang `GetGVALinkageForFunction` ->
   `GVA_StrongODR`): a function or variable that is an explicit

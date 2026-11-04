@@ -243,31 +243,24 @@ fn check_action(args: &Args, drv: &DiagEngine<'_>) {
     if action == Action::Link && args.deps.only.is_some() {
         action = Action::Preprocess;
     }
-    let not_impl = match action {
-        Action::SyntaxOnly if args.deps.side.is_some() => Some("-MD / -MMD with -fsyntax-only"),
-        Action::Compile | Action::Link if args.deps.side.is_some() => {
-            Some("-MD / -MMD when compiling")
-        }
-        Action::Preprocess | Action::SyntaxOnly | Action::Compile | Action::Link => None,
-    };
-    let not_impl = not_impl
-        .or((args.print_commands && matches!(action, Action::Preprocess | Action::SyntaxOnly))
-            .then_some("-### with -E or -fsyntax-only"))
-        .or(args.print.defines_too.then_some("-dD"))
-        .or(args.print.includes_too.then_some("-dI"))
-        .or((action != Action::SyntaxOnly
-            && (args.dump_ast.is_some() || args.dump_ast_filter.is_some()))
-        .then_some("-fdump-ast without -fsyntax-only"))
-        .or((action != Action::SyntaxOnly && args.dump_record_layouts)
-            .then_some("-fdump-record-layouts without -fsyntax-only"))
-        .or((action != Action::SyntaxOnly && args.dump_vtable_layouts)
-            .then_some("-fdump-vtable-layouts without -fsyntax-only"))
-        .or((action != Action::SyntaxOnly && args.dump_cfg)
-            .then_some("-fkiln-dump-cfg without -fsyntax-only"))
-        .or((action != Action::SyntaxOnly && args.cfg_stats)
-            .then_some("-fkiln-cfg-stats without -fsyntax-only"))
-        .or((action != Action::SyntaxOnly && args.verify.is_some())
-            .then_some("-verify without -fsyntax-only"));
+    let not_impl = (args.print_commands
+        && matches!(action, Action::Preprocess | Action::SyntaxOnly))
+    .then_some("-### with -E or -fsyntax-only")
+    .or(args.print.defines_too.then_some("-dD"))
+    .or(args.print.includes_too.then_some("-dI"))
+    .or((action != Action::SyntaxOnly
+        && (args.dump_ast.is_some() || args.dump_ast_filter.is_some()))
+    .then_some("-fdump-ast without -fsyntax-only"))
+    .or((action != Action::SyntaxOnly && args.dump_record_layouts)
+        .then_some("-fdump-record-layouts without -fsyntax-only"))
+    .or((action != Action::SyntaxOnly && args.dump_vtable_layouts)
+        .then_some("-fdump-vtable-layouts without -fsyntax-only"))
+    .or((action != Action::SyntaxOnly && args.dump_cfg)
+        .then_some("-fkiln-dump-cfg without -fsyntax-only"))
+    .or((action != Action::SyntaxOnly && args.cfg_stats)
+        .then_some("-fkiln-cfg-stats without -fsyntax-only"))
+    .or((action != Action::SyntaxOnly && args.verify.is_some())
+        .then_some("-verify without -fsyntax-only"));
     if let Some(what) = not_impl {
         Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg(what).emit(drv);
     }
@@ -507,6 +500,11 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             let r = syntax_only(&args, &tc, std, lang, &input.path, stdin, &diag_opts, &io);
             errors += r.errors;
             output.push_str(&r.output);
+            if let Some(list) = r.dep_list
+                && !deps::write_side_file(&args, &input.path, &list.borrow(), &diag_opts, &mut io)
+            {
+                errors += 1;
+            }
             continue;
         }
         let job = Job {
@@ -522,10 +520,10 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         errors += r.errors;
         output.push_str(&r.output);
         if let Some(files) = r.deps {
-            let text = deps_text(&args, &input.path, &files);
-            match dep_destination(&args, &input.path) {
-                DepDest::Main => output.push_str(&text),
-                DepDest::File(f) => side_deps.push((f, text)),
+            let text = deps::deps_text(&args, &input.path, &files);
+            match deps::dep_destination(&args, &input.path) {
+                deps::DepDest::Main => output.push_str(&text),
+                deps::DepDest::File(f) => side_deps.push((f, text)),
             }
         }
     }
@@ -538,39 +536,4 @@ pub(crate) fn report_output_error(opts: &DiagOptions, stderr: &SharedWriter, pat
     let engine = make_engine(&sm, opts, stderr.clone(), None);
     Diag::new(DiagId::drv_cannot_open_output, Span::INVALID).arg(path).arg(e).emit(&engine);
     engine.flush();
-}
-
-enum DepDest {
-    /// With the main output (`-M`, `-MM`, `-MF -`).
-    Main,
-    /// A file.
-    File(String),
-}
-
-fn dep_destination(args: &Args, input: &str) -> DepDest {
-    if args.deps.only.is_some() {
-        return DepDest::Main;
-    }
-    match args.deps.file.as_deref() {
-        Some("-") => DepDest::Main,
-        Some(f) => DepDest::File(f.to_owned()),
-        None => DepDest::File(deps::default_dep_file(args.output.as_deref(), input)),
-    }
-}
-
-fn deps_text(args: &Args, input: &str, files: &[String]) -> String {
-    let targets: Vec<String> = if args.deps.targets.is_empty() {
-        let t = match args.output.as_deref() {
-            Some(o) if args.deps.only.is_none() => o.to_owned(),
-            _ => deps::default_target(input),
-        };
-        vec![deps::quote_target(&t)]
-    } else {
-        args.deps
-            .targets
-            .iter()
-            .map(|(t, quote)| if *quote { deps::quote_target(t) } else { t.clone() })
-            .collect()
-    };
-    deps::render(&targets, files, args.deps.phony)
 }

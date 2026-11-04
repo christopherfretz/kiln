@@ -285,6 +285,31 @@ value` / `by reference`). A use of an enclosing function's local outside
 any lambda is `reference to local variable 'x' declared in enclosing
 function`.
 
+In a dependent context (a generic lambda's body, or a lambda in a
+template) no use is an odr-use yet ([temp.res.general]/6), but a generic
+lambda's closure type is complete before its call operator is ever
+instantiated, so its implicit captures are decided in the definition
+(WP-581; clang `DoMarkPotentialCapture` and
+`CheckIfAnyEnclosingLambdasMustCaptureAnyPotentialCaptures`). A name of
+a might-be-constant enclosing local there is a *potential capture*
+(`note_potential_capture`, `Sema::potential_caps`; never a reference
+whose initializer is a constant expression), resolved at the end of its
+full-expression (`resolve_potential_captures`): it is captured by the
+enclosing lambdas unless the full-expression is not
+instantiation-dependent and the name is an lvalue-to-rvalue potential
+result of a variable usable in constant expressions. So
+`[=](auto x) { return x + n; }` with `const int n = 10` captures `n`
+(as clang), `[=](auto x) { int y = n; return x + y; }` does not, and
+`const T& rr = *p; [&](const auto& x) { return x == rr; }` captures
+`rr`. When no lambda can capture it, the use is diagnosed at once if the
+full-expression is not dependent or the variable can never be a
+constant expression (`never_constant`); otherwise the instantiation
+decides. When a lambda nested in a generic lambda is formed again for a
+specialization of the outer call operator, the names in the shared
+(non-dependent) expressions of its body capture as fresh names would
+(`Substituter::note_shared_captures`, with `this`). Tests:
+`tests/conformance/expr.prim.lambda/*generic-captured-reference*`.
+
 `this` is captured implicitly by a use of `this` (explicit or through a
 member access) under either capture-default; under `=` clang 19 warns
 `implicit capture of 'this' with a capture default of '=' is

@@ -130,6 +130,10 @@ sema_function_partial_spec = Error (0) "function template partial specialization
 sema_function_spec_not_in_enclosing_ns = Error (2) "function template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_gcc_requires_variadic = Warning [GccCompat] (1) "GCC requires a function with the {0} attribute to be variadic";
 sema_gnu_array_range = Extension [GnuDesignator] (0) "use of GNU array range extension";
+// clang `warn_gnu_inline_cplusplus_without_extern` (WP-585).
+sema_gnu_inline_cpp_without_extern = Warning [GnuInlineCppWithoutExtern] (0) "'gnu_inline' attribute without 'extern' in C++ treated as externally available, this changed in Clang 10";
+// clang `warn_gnu_inline_attribute_requires_inline` (WP-585).
+sema_gnu_inline_requires_inline = Warning [IgnoredAttributes] (0) "'gnu_inline' attribute requires function to be marked 'inline', attribute ignored";
 sema_goto_into_protected_scope = Error (0) "cannot jump from this goto statement to its label";
 sema_hidden_overloaded_virtual = WarningOff [OverloadedVirtual] (2) "'{0}' hides overloaded virtual {1:function|functions}";
 sema_ice_not_integral = Error (1) "integral constant expression must have integral or unscoped enumeration type, not {0}";
