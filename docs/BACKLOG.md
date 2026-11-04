@@ -596,5 +596,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-573 | annotations_of / annotations_of_with_type on a namespace-alias reflection fail as unsuitable; GCC 16.1 accepts and yields an empty range (a namespace alias has its own, always empty, annotations); the reference workload scans every members_of entry of a namespace with annotations_of_with_type, so a namespace alias member aborts the bind (spdlog corpus run) | WP-550 | open |
 | WP-584 | runtime: fmt::format("{:08b}", 5) throws format_error "argument not found" at -O2 (correct at -O0) | corpus | open |
 | WP-588 | codegen: `if consteval` always takes the true branch at run time (kiln_oven compile.rs compiles only the then-branch of IfKind::Consteval); libstdc++ char_traits::length/copy run their constant-evaluation loops at run time; clang/gcc take the else branch (WP-551 find F1) | WP-551 | open |
+| WP-578 | -MD/-MMD dependency files when compiling (cmake+ninja; blocks every compiled corpus lib; supersedes the -MMD item of WP-569) | corpus | open |
+| WP-579 | overloads distinguished only by __attribute__((enable_if)) rejected as redeclaration (abseil SpinLock) | corpus | open |
+| WP-580 | explicit instantiation of constructor/member function templates by signature; defaulted-NTTP out-of-line ctor (abseil Cord) | corpus | open |
 WP-511
 WP-512

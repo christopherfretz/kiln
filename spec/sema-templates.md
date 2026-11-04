@@ -568,6 +568,41 @@ class-head-name (or variable declarator-id) is a template-id:
   `template void f(int);` (the args are deduced),
   `template int A<int>::s;`.
 - A declaration: `extern template …`.
+- By signature ([temp.explicit]/4, [temp.deduct.decl], WP-580): a
+  function declarator with no template-id names the specialization of a
+  function template found by redeclaration lookup of its name whose
+  deduction against the declarator's type succeeds and gives that type
+  (exception specifications aside); a defaulted template parameter takes
+  its default. A non-template member of a class template specialization
+  that matches is preferred (it is a member explicit instantiation). For
+  an out-of-line constructor or conversion-function declarator that
+  matches no non-template member, the candidates are the class's
+  constructor templates, or every conversion function template of the
+  class ([temp.mem]/6: a conversion template specialization is not found
+  by name lookup), `Sema::act_on_explicit_special_template_inst`. Of
+  several matches the most specialized is kept ([temp.func.order]).
+  No match is "explicit instantiation of 'A' does not refer to a function
+  template, variable template, member function, member class, or static
+  data member", with a "candidate template ignored: …" note at each
+  candidate's most recent declaration (none for conversion templates,
+  whose failed candidates lookup never finds). Two matches neither more
+  specialized than the other is "partial ordering for explicit
+  instantiation of 'B' is ambiguous" with "explicit instantiation
+  candidate function 'B::B<int *, int>' template here [with T = int *,
+  U = int]" per candidate, in declaration order (clang
+  `err_explicit_instantiation_ambiguous`). The specialization's kind then
+  moves as for a class (table below), and its emission follows:
+
+  | Form | Emitted (clang -O0) |
+  |---|---|
+  | `template R f(params);` (definition) | defined `weak_odr` in a comdat (structors: every variant, the `C5`/`D5` comdat) |
+  | `extern template R f(params);`, not inline | not instantiated; a use is an external `declare` |
+  | `extern template`, inline / constexpr | definition instantiated for constant evaluation; at -O0 a use is still a `declare`, at -O1 `available_externally` |
+  | `extern template` then `template` | as the definition |
+
+  An explicit instantiation declaration alone therefore needs another
+  translation unit's explicit instantiation definition to link, as with
+  clang.
 
 **One declarator.** [temp.pre]/5: the declaration of a template head,
 `template<>` or an explicit instantiation has at most one declarator.
