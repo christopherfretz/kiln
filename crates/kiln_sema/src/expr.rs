@@ -578,14 +578,42 @@ impl Sema<'_, '_> {
         } else {
             Some(std::mem::take(&mut self.cleanup))
         };
+        // Only the names this constant expression uses are decided here
+        // (clang keeps the potential odr-uses per expression evaluation
+        // context): the later arguments of `f<0, k>()`, or the rest of an
+        // enclosing expression, are still pending, and a constant `k` from
+        // an enclosing function named in a lambda is not captured because
+        // an earlier argument completed first.
+        let names = self.decl_refs_in(e);
+        let (mine, others): (Vec<ExprId>, Vec<ExprId>) =
+            std::mem::take(&mut self.pending_odr).into_iter().partition(|r| names.contains(r));
+        self.pending_odr = mine;
         self.constant_full_expr += 1;
         let r = self.act_on_full_expr(e);
         self.constant_full_expr -= 1;
+        let rest = std::mem::replace(&mut self.pending_odr, others);
+        self.pending_odr.extend(rest);
         if let Some(p) = pending {
             self.cleanup = p;
         }
         self.restore_outer_immediates(outer);
         r
+    }
+
+    /// The `DeclRefExpr`s in `e`.
+    fn decl_refs_in(&self, e: ExprId) -> Vec<ExprId> {
+        let mut out = Vec::new();
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            if out.len() > 1_000_000 {
+                break;
+            }
+            if self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr {
+                out.push(x);
+            }
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+        out
     }
 
     /// Whether `e` materializes or binds a temporary, or uses a default
