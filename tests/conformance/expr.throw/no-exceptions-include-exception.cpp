@@ -7,7 +7,6 @@
 //@ strict-diags
 //@ args: -fno-exceptions
 #include <exception>
-#include <memory>
 #include <new>
 #include <string>
 
