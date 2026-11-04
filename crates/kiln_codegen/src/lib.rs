@@ -199,6 +199,64 @@ pub struct CodegenOptions {
     /// `-mtune=<cpu>`: the functions' `tune-cpu`; `None` is the target's
     /// default (`generic` on x86-64 without `-march=`, none on `AArch64`).
     pub tune_cpu: Option<String>,
+    /// `-fno-inline` (clang `CodeGenOptions::OnlyAlwaysInlining`): every
+    /// definition but an `always_inline` one is `noinline`, at any `-O`.
+    pub no_inline: bool,
+    /// `-mcmodel=`: the `Code Model` module flag (and, on x86-64, `Large
+    /// Data Threshold` for `medium` / `large`, as clang); `None` emits
+    /// neither (the backend's default, `small`).
+    pub code_model: Option<CodeModel>,
+}
+
+/// An `-mcmodel=` code model (LLVM `CodeModel::Model`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodeModel {
+    /// `tiny` (`AArch64`).
+    Tiny,
+    /// `small`, the default.
+    Small,
+    /// `kernel` (x86-64).
+    Kernel,
+    /// `medium`.
+    Medium,
+    /// `large`.
+    Large,
+}
+
+impl CodeModel {
+    /// The `-mcmodel=` spelling, which is also `llc -code-model=`'s.
+    pub fn from_name(name: &str) -> Option<CodeModel> {
+        Some(match name {
+            "tiny" => CodeModel::Tiny,
+            "small" => CodeModel::Small,
+            "kernel" => CodeModel::Kernel,
+            "medium" => CodeModel::Medium,
+            "large" => CodeModel::Large,
+            _ => return None,
+        })
+    }
+
+    /// The `llc -code-model=` value.
+    pub fn name(self) -> &'static str {
+        match self {
+            CodeModel::Tiny => "tiny",
+            CodeModel::Small => "small",
+            CodeModel::Kernel => "kernel",
+            CodeModel::Medium => "medium",
+            CodeModel::Large => "large",
+        }
+    }
+
+    /// The `Code Model` module flag's value (LLVM's enumerator).
+    pub fn flag_value(self) -> i32 {
+        match self {
+            CodeModel::Tiny => 0,
+            CodeModel::Small => 1,
+            CodeModel::Kernel => 2,
+            CodeModel::Medium => 3,
+            CodeModel::Large => 4,
+        }
+    }
 }
 
 /// The stack protector level (clang `LangOptions::StackProtectorMode`).
@@ -425,6 +483,8 @@ impl Default for CodegenOptions {
             null_pointer_is_valid: false,
             target_cpu: None,
             tune_cpu: None,
+            no_inline: false,
+            code_model: None,
         }
     }
 }

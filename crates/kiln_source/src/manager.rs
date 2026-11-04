@@ -310,6 +310,9 @@ pub struct SourceManager {
     /// Include-guarded files and the `#include` spelling suggested for
     /// each, set by the preprocessor.
     guarded: Mutex<HashMap<FileId, Box<str>>>,
+    /// `-ffile-prefix-map=` / `-fmacro-prefix-map=` entries `(old, new)`,
+    /// in clang's lookup order ([`Self::set_macro_prefix_map`]).
+    macro_prefix_map: OnceLock<Box<[(Box<str>, Box<str>)]>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -347,7 +350,36 @@ impl SourceManager {
             prev_file: AtomicU32::new(0),
             last_expansion: AtomicU32::new(0),
             guarded: Mutex::new(HashMap::new()),
+            macro_prefix_map: OnceLock::new(),
         }
+    }
+
+    /// Sets the `-fmacro-prefix-map=` (and `-ffile-prefix-map=`) entries
+    /// `(old, new)` that [`Self::remap_macro_path`] applies; only the first
+    /// call has an effect. Kept, as clang's `LangOptions::MacroPrefixMap`,
+    /// in descending order of `old`, so a longer prefix is tried before a
+    /// shorter one it extends.
+    pub fn set_macro_prefix_map(&self, entries: &[(String, String)]) {
+        let mut v: Vec<(Box<str>, Box<str>)> =
+            entries.iter().map(|(o, n)| (o.as_str().into(), n.as_str().into())).collect();
+        v.sort_by(|a, b| b.0.cmp(&a.0));
+        let _ = self.macro_prefix_map.set(v.into_boxed_slice());
+    }
+
+    /// `path` as `__FILE__`, `__builtin_FILE()` and `std::source_location`
+    /// spell it: with the prefix of the first matching
+    /// `-fmacro-prefix-map=` entry replaced (clang
+    /// `Preprocessor::processPathForFileMacro`; a plain string prefix, as
+    /// `llvm::sys::path::replace_path_prefix`).
+    pub fn remap_macro_path(&self, path: &str) -> String {
+        if let Some(map) = self.macro_prefix_map.get() {
+            for (old, new) in map.iter() {
+                if let Some(rest) = path.strip_prefix(&**old) {
+                    return format!("{new}{rest}");
+                }
+            }
+        }
+        path.to_owned()
     }
 
     // ----- buffers -------------------------------------------------------

@@ -203,6 +203,10 @@ pub struct PredefArgs {
     /// `-f[no-]coro-aligned-allocation`: aligned coroutine frame
     /// allocation (default off, as clang).
     pub coro_aligned_allocation: bool,
+    /// `-fno-inline` (last of it and `-finline`): `__NO_INLINE__` at every
+    /// `-O` level, and every definition but an `always_inline` one is
+    /// `noinline` (clang `CodeGenOptions::OnlyAlwaysInlining`).
+    pub no_inline: bool,
     /// `-f[no-]reflection` (P2996 spike, WP-267): the `^^`/`[: :]` tokens
     /// and the kiln reflection intrinsics. Default off; `__cpp_reflection`
     /// is not defined either way.
@@ -357,6 +361,13 @@ pub struct Args {
     pub frameworks: Vec<String>,
     /// `--embed-dir=<dir>`.
     pub embed_dirs: Vec<String>,
+    /// `-include <file>`, in order: `#include "<file>"` at the end of the
+    /// predefines' `<command line>` section (clang `AddImplicitInclude`).
+    pub includes: Vec<String>,
+    /// `-ffile-prefix-map=<old>=<new>` and `-fmacro-prefix-map=<old>=<new>`,
+    /// in order: the path prefixes `__FILE__` and source locations replace
+    /// (`SourceManager::remap_macro_path`).
+    pub macro_prefix_map: Vec<(String, String)>,
     /// `-fmodule-file=<name>=<path>`: module interface sources
     /// (spec/modules.md §2).
     pub module_files: Vec<(String, String)>,
@@ -484,6 +495,7 @@ pub struct Args {
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
 const JOINED_OR_SEPARATE: &[&str] = &[
     "-cxx-isystem",
+    "-include",
     "-idirafter",
     "-iquote",
     "-isysroot",
@@ -616,6 +628,7 @@ impl Args {
         match opt {
             "-D" => self.macros.push(CmdMacro::Define(v_owned)),
             "-U" => self.macros.push(CmdMacro::Undef(v_owned)),
+            "-include" => self.includes.push(v_owned),
             "-I" => self.dirs.push((DirGroup::Angled, v_owned)),
             "-iquote" => self.dirs.push((DirGroup::Quoted, v_owned)),
             "-isystem" => self.dirs.push((DirGroup::System, v_owned)),
@@ -742,6 +755,26 @@ impl Args {
                     // `<path>` alone names a BMI: none in part A, ignored.
                     if let Some((name, path)) = v.split_once('=') {
                         self.module_files.push((name.to_owned(), path.to_owned()));
+                    }
+                } else if let Some((opt, v)) = ["-ffile-prefix-map=", "-fmacro-prefix-map="]
+                    .iter()
+                    .find_map(|p| arg.strip_prefix(p).map(|v| (p, v)))
+                {
+                    // `__FILE__` and source locations; kiln emits no debug
+                    // information for `-ffile-prefix-map=` to remap too.
+                    match v.split_once('=') {
+                        Some((old, new)) => {
+                            self.macro_prefix_map.push((old.to_owned(), new.to_owned()));
+                        }
+                        None => self
+                            .errors
+                            .push(ArgError::InvalidValue((*opt).to_owned(), v.to_owned())),
+                    }
+                } else if let Some(v) = arg.strip_prefix("-fdebug-prefix-map=") {
+                    // No debug information: validated, otherwise ignored.
+                    if !v.contains('=') {
+                        self.errors
+                            .push(ArgError::InvalidValue("-fdebug-prefix-map=".to_owned(), v.to_owned()));
                     }
                 } else if let Some(v) = arg.strip_prefix("-fprebuilt-module-path=") {
                     self.prebuilt_module_paths.push(v.to_owned());
@@ -960,6 +993,8 @@ impl Args {
             "-fno-sized-deallocation" => p.sized_deallocation = Some(false),
             "-fcoro-aligned-allocation" => p.coro_aligned_allocation = true,
             "-fno-coro-aligned-allocation" => p.coro_aligned_allocation = false,
+            "-fno-inline" => p.no_inline = true,
+            "-finline" => p.no_inline = false,
             _ => return false,
         }
         true
@@ -1208,6 +1243,46 @@ mod tests {
         assert_eq!(
             parse("-fno-strict-aliasing -fstrict-aliasing a.cpp").strict_aliasing,
             Some(true)
+        );
+    }
+
+    #[test]
+    fn build_system_flags_accepted() {
+        // the reference workload's clang toolchain and the reference workload's generator compile.
+        let a = parse("-m64 -pipe -fpermissive -fconstexpr-ops-limit=2000000000 a.cpp");
+        assert_eq!(a.errors, []);
+        assert_eq!(a.constexpr.steps, Some(2_000_000_000));
+        assert_eq!(parse("-m32 a.cpp").errors, [ArgError::Unknown("-m32".into())]);
+        let a = parse("-mcmodel=medium -mcmodel=large a.cpp");
+        assert_eq!((a.codegen.code_model, a.errors), (Some(kiln_codegen::CodeModel::Large), vec![]));
+        assert_eq!(
+            parse("-mcmodel=huge a.cpp").errors,
+            [ArgError::UnsupportedValue("-mcmodel=".into(), "huge".into())]
+        );
+        let a = parse("-fno-inline a.cpp");
+        assert!(a.predef.no_inline);
+        assert!(!parse("-fno-inline -finline a.cpp").predef.no_inline);
+    }
+
+    #[test]
+    fn implicit_includes() {
+        let a = parse("-include a.h -includeb.h -isystem /s t.cpp");
+        assert_eq!(a.errors, []);
+        assert_eq!(a.includes, ["a.h", "b.h"]);
+        assert_eq!(parse("t.cpp -include").errors, [ArgError::MissingValue("-include".into())]);
+    }
+
+    #[test]
+    fn prefix_maps() {
+        let a = parse("-ffile-prefix-map=/src/= -fmacro-prefix-map=/a=/b -fdebug-prefix-map=/c=/d a.cpp");
+        assert_eq!(a.errors, []);
+        assert_eq!(
+            a.macro_prefix_map,
+            [("/src/".to_owned(), String::new()), ("/a".to_owned(), "/b".to_owned())]
+        );
+        assert_eq!(
+            parse("-ffile-prefix-map=/src a.cpp").errors,
+            [ArgError::InvalidValue("-ffile-prefix-map=".into(), "/src".into())]
         );
     }
 

@@ -1400,6 +1400,13 @@ impl Module {
         self.add_module_flag(behavior, key, v);
     }
 
+    /// [`Module::add_module_flag`] with an `i64` value.
+    pub fn add_module_flag_i64(&mut self, behavior: u32, key: &str, value: i64) {
+        let v = self.const_int(TypeId::I64, i128::from(value));
+        let v = self.md_intern(MdNode::Value(TypeId::I64, v));
+        self.add_module_flag(behavior, key, v);
+    }
+
     /// Add `!{!"ident"}` to `!llvm.ident`.
     pub fn add_ident(&mut self, ident: &str) {
         let s = self.md_string(ident.as_bytes());

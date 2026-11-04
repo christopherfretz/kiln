@@ -24,7 +24,7 @@ use kiln_source::{Loc, Span};
 use crate::fir::{Op, V};
 use crate::fold::Folds;
 use crate::func::Fx;
-use crate::{CodegenError, CodegenOptions, RelocModel, StackProtector, UnwindTables};
+use crate::{CodeModel, CodegenError, CodegenOptions, RelocModel, StackProtector, UnwindTables};
 
 /// Result of an emission step.
 pub(crate) type R<T> = Result<T, CodegenError>;
@@ -1210,8 +1210,9 @@ impl<'a> Cg<'a> {
     /// `noinline optnone` (an `optnone` attribute overrides `always_inline`
     /// and `minsize`); otherwise `naked` gives `noinline`, `always_inline`
     /// gives `alwaysinline` (`noinline` alone when `noinline` is also
-    /// present), -O0 gives `noinline` (a `minsize` function), and above -O0
-    /// a `noinline` function keeps `noinline` and an `inline`-specified one
+    /// present), -O0 or `-fno-inline` gives `noinline` (at -O0, a `minsize`
+    /// function), and above -O0 a `noinline` function keeps `noinline` and
+    /// an `inline`-specified one
     /// (on a redeclaration or one of its template pattern's) gets
     /// `inlinehint`. [`Self::def_opt_attrs`] adds `naked`, `minsize` and
     /// `optsize`.
@@ -1227,7 +1228,7 @@ impl<'a> Cg<'a> {
             DefInline::NoInline
         } else if always {
             if noinline { DefInline::NoInline } else { DefInline::Always }
-        } else if !self.opts.optimize() || noinline {
+        } else if !self.opts.optimize() || noinline || self.opts.no_inline {
             DefInline::NoInline
         } else if self.inline_specified(d) {
             DefInline::Hint
@@ -2705,6 +2706,17 @@ impl<'a> Cg<'a> {
             RelocModel::Pie(l) => {
                 m.add_module_flag_i32(8, "PIC Level", i32::from(l));
                 m.add_module_flag_i32(7, "PIE Level", i32::from(l));
+            }
+        }
+        // clang `CodeGenModule::Release`: the x86-64 large data threshold
+        // is the driver's 65536 for `medium` and 0 for `large`.
+        if let Some(cm) = self.opts.code_model {
+            m.add_module_flag_i32(1, "Code Model", cm.flag_value());
+            if self.target.triple.arch == Arch::X86_64
+                && matches!(cm, CodeModel::Medium | CodeModel::Large)
+            {
+                let t = if cm == CodeModel::Medium { 65536 } else { 0 };
+                m.add_module_flag_i64(1, "Large Data Threshold", t);
             }
         }
         if self.opts.no_plt {

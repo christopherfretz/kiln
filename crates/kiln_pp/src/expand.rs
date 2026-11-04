@@ -1053,9 +1053,11 @@ impl Preprocessor<'_, '_> {
             Builtin::File | Builtin::BaseFile | Builtin::FileName => {
                 kind = TokKind::StringLit(Encoding::Ordinary);
                 let name: Option<String> = if b == Builtin::BaseFile {
-                    self.main_file.map(|f| self.sm.file_name(f).to_owned())
+                    self.main_file.map(|f| self.sm.remap_macro_path(self.sm.file_name(f)))
                 } else {
-                    self.sm.presumed_line_col(t.tok.span.lo).map(|p| p.file_name.to_owned())
+                    self.sm
+                        .presumed_line_col(t.tok.span.lo)
+                        .map(|p| self.sm.remap_macro_path(p.file_name))
                 };
                 if let Some(mut n) = name {
                     if b == Builtin::FileName

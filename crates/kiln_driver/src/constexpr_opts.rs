@@ -2,7 +2,8 @@
 //! `spec/driver.md`):
 //!
 //! - `-fconstexpr-steps=N`: statements one top-level evaluation may execute
-//!   (clang's flag and default, 1048576);
+//!   (clang's flag and default, 1048576); GCC's `-fconstexpr-ops-limit=N`
+//!   (which the reference workload's generator compile passes) sets the same budget;
 //! - `-fconstexpr-depth=N`: nested calls (clang's, 512);
 //! - `-fconstexpr-memory=N[k|m|g]`: live abstract-memory bytes (kiln's,
 //!   256 MiB; the suffixes are binary);
@@ -40,7 +41,7 @@ impl ConstexprOpts {
     pub fn parse_arg(&mut self, arg: &str) -> Option<Result<(), ArgError>> {
         let (flag, v) = arg.split_once('=')?;
         let ok = match flag {
-            "-fconstexpr-steps" => set(&mut self.steps, v.parse().ok()),
+            "-fconstexpr-steps" | "-fconstexpr-ops-limit" => set(&mut self.steps, v.parse().ok()),
             "-fconstexpr-depth" => set(&mut self.depth, v.parse().ok()),
             "-fconstexpr-memory" => set(&mut self.memory, parse_bytes(v)),
             "-fconstexpr-backtrace-limit" => set(&mut self.backtrace_limit, v.parse().ok()),

@@ -133,6 +133,8 @@ impl Job<'_> {
             };
         }
         cfg.opt = p.opt;
+        cfg.no_inline = p.no_inline;
+        cfg.implicit_includes.clone_from(&self.args.includes);
         cfg.exceptions = p.exceptions.unwrap_or(cplusplus);
         cfg.rtti = p.rtti.unwrap_or(cplusplus);
         cfg.char8_t = p.char8_t;
@@ -236,6 +238,7 @@ impl Job<'_> {
                 list.verbose_text()
             );
         }
+        sm.set_macro_prefix_map(&self.args.macro_prefix_map);
         let main = self.load_main(sm, engine);
         let predefines = self.predefines(engine);
         Some(PpInputs { list, main: main?, predefines: predefines? })

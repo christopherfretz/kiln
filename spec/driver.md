@@ -54,6 +54,7 @@ starting with `-` are inputs.
 | `-x <lang>` | language of the following inputs: `c`, `c-header`, `cpp-output` -> C; `c++`, `c++-header`, `c++-cpp-output`, `c++-module` -> C++; `none` resets |
 | `-std=<std>` | `c++98`..`c++26`, `gnu++NN`, the `0x/1y/1z/2a/2b/2c` aliases; C: `c89/c99/c11/c17/c23`, `gnuNN`, `iso9899:*` |
 | `-D`, `-U` | command-line macros, in order |
+| `-include <file>` (joined or separate) | `#include "<file>"` at the end of the predefines' `<command line>` section, after the `-D`/`-U` macros, in order (clang `AddImplicitInclude`); found from the working directory first, then the `"..."` search chain |
 | `-I`, `-iquote`, `-isystem`, `-idirafter`, `-cxx-isystem` | user search directories; `-I=dir` is relative to the sysroot |
 | `-nostdinc`, `-nostdinc++`, `-nostdlibinc`, `-nobuiltininc` | drop toolchain directories (see "Toolchain") |
 | `--sysroot`, `-isysroot` | sysroot (`-isysroot` wins for headers) |
@@ -75,7 +76,8 @@ starting with `-` are inputs.
 | `-fclang-compat=<major>` | kiln: which clang release's observable output to reproduce, `19` or `22` (default since WP-394, the oracle switch; the library-level defaults, `ClangCompat::default()` and every crate's `clang_compat`, follow it since WP-413): predefined macros and `__has_*` answers (spec/pp.md "clang compatibility level"), diagnostic text and names, AST dump types and deprecation warnings (spec/sema.md §1.1, spec/ast-dump.md §2, spec/codegen.md); any other value is an error |
 | `-W...`, `-w`, `-pedantic`, `-ferror-limit=`, `-fdiagnostics-format=`, `-f[no-]color-diagnostics`, `-f[no-]caret-diagnostics`, ... | diagnostic options, validated and applied by `kiln_diag::DiagOptions` (`spec/diag.md`) |
 | `-fkiln-reproducible-time` | see "Reproducible time" |
-| `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration" |
+| `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration". GCC's `-fconstexpr-ops-limit=N` (passed by the reference workload's generator compile) sets the step budget too |
+| `-ffile-prefix-map=<old>=<new>`, `-fmacro-prefix-map=<old>=<new>` | `__FILE__`, `__BASE_FILE__`, `__builtin_FILE()`, `std::source_location` and `std::meta::source_location_of` spell a path starting with `<old>` with `<new>` instead (`SourceManager::remap_macro_path`; clang `processPathForFileMacro`). Entries are tried in descending order of `<old>`, the first match wins, and the match is a plain string prefix. A value without `=` is `invalid value`. `-fdebug-prefix-map=<old>=<new>` is validated and otherwise ignored (no debug information) |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
 | `-f[no-]reflection` | kiln: the P2996 reflection spike (WP-267; default off; the last one wins): `^^`, `[:`, `:]` are lexed (C++26 only), and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
 | `-f[no-]coro-aligned-allocation` | aligned coroutine frame allocation (default off, as clang; the last one wins): sema looks up the `std::align_val_t` forms of the frame's `operator new`/`delete` first (spec/sema.md §7.13). Passed to sema for `-fsyntax-only` and codegen jobs |
@@ -122,6 +124,8 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 
 | flag | effect |
 |---|---|
+| `-fno-inline`, `-finline` | the last wins; `-fno-inline` keeps `__NO_INLINE__` defined at every `-O` level and makes every definition but an `always_inline` one `noinline` (clang `CodeGenOptions::OnlyAlwaysInlining`; at `-O0` that is already the case) |
+| `-mcmodel=tiny\|small\|kernel\|medium\|large` | the `Code Model` module flag (LLVM's enumerator, 0 to 4) and `llc -code-model=<model>`; on x86-64, `medium` and `large` also add the `Large Data Threshold` module flag (`i64` 65536 and 0, clang's driver defaults). Another value is `unsupported argument` |
 | `-fstack-protector`, `-fstack-protector-strong`, `-fstack-protector-all`, `-fno-stack-protector` | function attribute `ssp`, `sspstrong`, `sspreq`, or none (the default) on every function kiln defines (`CodegenOptions::stack_protector`); the last of the four wins. The `no_stack_protector` attribute is not honoured |
 | `-f[no-]asynchronous-unwind-tables`, `-f[no-]unwind-tables` | `CodegenOptions::unwind_tables`: asynchronous (`uwtable`, `"uwtable"` module flag 2) unless the last `-f[no-]asynchronous-unwind-tables` is the negative (default: asynchronous, except under `-ffreestanding`); otherwise synchronous (`uwtable(sync)`, flag 1) with `-funwind-tables`, else none (no attribute, no flag). So the flags never remove the default `uwtable` alone |
 | `-fno-plt`, `-fplt` | `nonlazybind` on every function declared but not defined in the TU, the `"RtLibUseGOT"` module flag, and under `-fno-pic` function declarations are not assumed `dso_local` (clang `shouldAssumeDSOLocal`) (`CodegenOptions::no_plt`) |
@@ -137,7 +141,10 @@ do not add a diagnostic): `-f[no-]stack-clash-protection`,
 is `invalid value '<v>' in '-fcf-protection=<v>'`; accepted on AArch64 too,
 where clang errors), `-f[no-]common`, `-fexcess-precision=fast|standard|16`,
 `-f[no-]math-errno`, `-fstack-usage`, `-gz`, `-gz=none|zlib|zstd`,
-`-fno-trapv`, `-fno-short-enums`. Other `-fexcess-precision=`/`-gz=` values
+`-fno-trapv`, `-fno-short-enums`, `-m64` (every kiln target is 64-bit;
+`-m32` stays unknown), `-pipe`, and GCC's `-fpermissive` (the reference workload's
+generator compile passes it; kiln compiles the code as written). Other
+`-fexcess-precision=`/`-gz=` values
 (and an empty `-mtune=`) are `unsupported argument '<v>' to option '<opt>'`.
 
 **3. Rejected** with `drv_unsupported_flag`, the error `'<flag>' is not
@@ -203,8 +210,10 @@ and no job runs. C is preprocessed (`-E`, deviation 1); compiling it
   the nearest `resource/` with a `predefines/` directory above the
   executable, else the source tree's `resource/`. kiln's predefines base
   files are `<resource>/predefines/<triple>.<std>.txt`.
-- **LLVM:** `$KILN_LLVM_DIR`, default `/usr/lib/llvm-19`. This is where
-  libc++'s headers are found. Its major version (`Toolchain::llvm_major`:
+- **LLVM:** `$KILN_LLVM_DIR`, default `/usr/lib/llvm-19` (a build with
+  `KILN_DEFAULT_LLVM_DIR` set in its environment uses that instead, for a
+  package whose LLVM is installed elsewhere; `toolchain::DEFAULT_LLVM_DIR`).
+  This is where libc++'s headers are found. Its major version (`Toolchain::llvm_major`:
   the leading integer of `<dir>/bin/llvm-config --version`, probed once
   per directory per process; if that tool is missing or fails, the `N` of
   a directory named `llvm-N`, after resolving symlinks; else 19) selects
@@ -223,7 +232,15 @@ and no job runs. C is preprocessed (`-E`, deviation 1); compiling it
   the search and names the installation (triple and version are the
   names of `<dir>`'s parent and of `<dir>`). Test:
   `crates/kiln_driver/tests/driver.rs` `gcc_toolchain_matches_clang` (a
-  fake tree; `-v` compared with clang 19).
+  fake tree; `-v` compared with clang 19). A build with
+  `KILN_DEFAULT_GCC=<driver>` in its environment (`toolchain::DEFAULT_GCC`;
+  for a distribution whose C++ compiler is a GCC outside `/usr` behind a
+  wrapper, such as RHEL's gcc-toolset) instead takes, when there is no
+  `--sysroot`, `--gcc-toolchain` or `--gcc-install-dir`, the `install:`
+  directory of `<driver> -print-search-dirs` as if it were given to
+  `--gcc-install-dir` (no candidates; the link passes it to `clang++`), and
+  falls back to the search above if the driver fails or names another
+  target's installation.
 
 The search list is the user's directories in command-line order, then the
 toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
@@ -491,7 +508,7 @@ the current directory (standard input is `-`). `-o -` is standard output.
   With an error, nothing is written to the output and no further step of
   that input runs; other inputs still compile; the link does not run.
 - **Tools.** Each tool is `$KILN_LLVM_DIR/bin/<tool>` (default
-  `/usr/lib/llvm-19`), else the versioned name (`llc-19`, `llvm-as-19`,
+  `/usr/lib/llvm-19` or the build's `KILN_DEFAULT_LLVM_DIR`), else the versioned name (`llc-19`, `llvm-as-19`,
   `clang++-19`) on `PATH`. The IR is piped to the tool's standard input
   (`-o <out> -`).
 - **`llc`** gets `-O0` (default), `-O1` (`-O`, `-O1`, `-Og`), `-O2`
@@ -561,7 +578,8 @@ the current directory (standard input is `-`). `-o -` is standard output.
   `-fclang-compat=19` for IR they read). Bitcode, assembly and objects
   are never rewritten.
 - **Link.** `clang++` with `--target=<triple>` (only if given),
-  `--sysroot=`, the `-O` flag, `-pthread`, `-stdlib=`,
+  `--sysroot=`, `--gcc-toolchain=`, `--gcc-install-dir=` (as given, else
+  the `KILN_DEFAULT_GCC` installation, see "Toolchain"), the `-O` flag, `-pthread`, `-stdlib=`,
   `-fexperimental-library` (if given), then the objects,
   linker inputs and link options in command-line order, then
   `-o <out>` (default `a.out`). The temporary objects are removed
@@ -603,7 +621,7 @@ order:
    `.ixx`, then `.cpp`; a partition `M:P` as `<dir>/M-P.*`.
 3. `std` and `std.compat` only: `<llvm>/share/libc++/v1/std.cppm` /
    `std.compat.cppm`, where `<llvm>` is the toolchain's LLVM directory
-   (`KILN_LLVM_DIR`, default `/usr/lib/llvm-19`; clang 22's libc++ has the
+   (`KILN_LLVM_DIR`, default as above; clang 22's libc++ has the
    same layout).
 
 A module not found is `fatal error: module 'M' not found` at the module

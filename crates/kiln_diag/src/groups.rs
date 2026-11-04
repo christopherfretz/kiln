@@ -14,10 +14,11 @@
 //! diag-split`.
 //!
 //! Group names clang knows but kiln has no member for are listed in
-//! [`CLANG_GROUP_NAMES`](crate::clang_groups::CLANG_GROUP_NAMES); options
-//! naming them are accepted and do nothing.
+//! [`CLANG_GROUP_NAMES`](crate::clang_groups::CLANG_GROUP_NAMES) (and, at
+//! `-fclang-compat=22`, [`CLANG_POST19_GROUP_NAMES`]); options naming them
+//! are accepted and do nothing.
 
-use crate::clang_groups::CLANG_GROUP_NAMES;
+use crate::clang_groups::{CLANG_GROUP_NAMES, CLANG_POST19_GROUP_NAMES};
 use crate::ids::{DiagClass, DiagId};
 
 macro_rules! diag_groups {
@@ -138,7 +139,9 @@ pub(crate) fn group_members(flavor: Flavor, name: &str, compat: u32) -> Option<V
     if let Some(g) = Group::from_name(name) {
         return Some(g.members_at(compat).filter(|&id| flavor.matches(id)).collect());
     }
-    CLANG_GROUP_NAMES.binary_search(&name).is_ok().then(Vec::new)
+    (CLANG_GROUP_NAMES.binary_search(&name).is_ok()
+        || (compat >= 22 && CLANG_POST19_GROUP_NAMES.binary_search(&name).is_ok()))
+    .then(Vec::new)
 }
 
 /// The closest group name to `name` with at least one member of

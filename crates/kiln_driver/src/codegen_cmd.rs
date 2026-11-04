@@ -185,6 +185,8 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>) -> CodegenOptions {
         null_pointer_is_valid: f.null_pointer_is_valid(),
         target_cpu: cpu,
         tune_cpu: f.mtune.clone().filter(|t| t != "native"),
+        no_inline: a.predef.no_inline,
+        code_model: f.code_model,
         ..CodegenOptions::default()
     }
 }
@@ -630,6 +632,11 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
     if let Some(cpu) = crate::features::resolve(args, &tc.target).0.cpu {
         cmd.arg(format!("-mcpu={cpu}"));
     }
+    // The module's `Code Model` flag says the same; explicit, as clang
+    // hands the model to the target machine.
+    if let Some(cm) = args.codegen.code_model {
+        cmd.arg(format!("-code-model={}", cm.name()));
+    }
     cmd.arg("-o").arg(out).arg("-");
     cmd
 }
@@ -649,6 +656,10 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     }
     if let Some(d) = &args.gcc_install_dir {
         cmd.arg(format!("--gcc-install-dir={d}"));
+    } else if let Some(g) = tc.gcc.as_ref().filter(|_| tc.gcc_from_driver) {
+        // The headers came from `toolchain::DEFAULT_GCC`'s installation;
+        // link against the same one rather than clang++'s own choice.
+        cmd.arg(format!("--gcc-install-dir={}", g.path));
     }
     if let Some(o) = &args.opt_flag {
         cmd.arg(o.clone());
@@ -929,7 +940,7 @@ mod tests {
     #[test]
     fn link_order() {
         let a = args(&["-lm", "a.o", "-L/x", "b.o", "-Wl,-z,now", "-static", "-O2"]);
-        let tc = Toolchain::new(crate::toolchain::Target::host(), None, None);
+        let tc = searched_toolchain();
         let inputs: Vec<(usize, String)> =
             a.inputs.iter().enumerate().map(|(i, x)| (i, x.path.clone())).collect();
         let cmd = link_command(&a, &tc, &inputs);
@@ -942,8 +953,36 @@ mod tests {
     #[test]
     fn link_experimental_library() {
         let a = args(&["-stdlib=libc++", "-fexperimental-library", "a.o"]);
-        let tc = Toolchain::new(crate::toolchain::Target::host(), None, None);
+        let tc = searched_toolchain();
         let cmd = link_command(&a, &tc, &[(0, "a.o".to_owned())]);
         assert_eq!(cmd.args, ["-stdlib=libc++", "-fexperimental-library", "a.o", "-o", "a.out"]);
+    }
+
+    /// The host toolchain as if no `KILN_DEFAULT_GCC` were built in, so
+    /// the expected link commands do not depend on the build environment.
+    fn searched_toolchain() -> Toolchain {
+        Toolchain {
+            gcc_from_driver: false,
+            ..Toolchain::new(crate::toolchain::Target::host(), None, None)
+        }
+    }
+
+    #[test]
+    fn link_default_gcc_install_dir() {
+        let gcc = crate::toolchain::GccInstall {
+            path: "/opt/gcc/lib/gcc/x86_64-redhat-linux/13".to_owned(),
+            triple: "x86_64-redhat-linux".to_owned(),
+            version: "13".to_owned(),
+        };
+        let tc = Toolchain { gcc: Some(gcc), gcc_from_driver: true, ..searched_toolchain() };
+        let cmd = link_command(&args(&["a.o"]), &tc, &[(0, "a.o".to_owned())]);
+        assert_eq!(
+            cmd.args,
+            ["--gcc-install-dir=/opt/gcc/lib/gcc/x86_64-redhat-linux/13", "a.o", "-o", "a.out"]
+        );
+        // An explicit `--gcc-install-dir=` wins.
+        let a = args(&["--gcc-install-dir=/x", "a.o"]);
+        let cmd = link_command(&a, &tc, &[(0, "a.o".to_owned())]);
+        assert_eq!(cmd.args, ["--gcc-install-dir=/x", "a.o", "-o", "a.out"]);
     }
 }

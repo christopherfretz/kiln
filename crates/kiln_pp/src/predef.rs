@@ -47,6 +47,12 @@ pub struct PredefConfig {
     pub aarch64: bool,
     /// Optimization.
     pub opt: OptLevel,
+    /// `-fno-inline`: `__NO_INLINE__` even when optimizing.
+    pub no_inline: bool,
+    /// `-include <file>`s: `#include "<file>"` lines after the command
+    /// line's macros, in the `<command line>` section (clang
+    /// `AddImplicitInclude`), so they are found from the working directory.
+    pub implicit_includes: Vec<String>,
     /// `-fexceptions` (C++ default on).
     pub exceptions: bool,
     /// `-frtti` (C++ default on).
@@ -120,6 +126,8 @@ impl PredefConfig {
             cplusplus,
             aarch64: true,
             opt: OptLevel::None,
+            no_inline: false,
+            implicit_includes: Vec::new(),
             exceptions: cplusplus,
             rtti: cplusplus,
             char8_t: None,
@@ -373,6 +381,16 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
     for (n, v) in &driver {
         let _ = writeln!(out, "#define {n} {v}");
     }
+    for f in &cfg.implicit_includes {
+        out.push_str("#include \"");
+        for c in f.chars() {
+            if matches!(c, '\\' | '"') {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out.push_str("\"\n");
+    }
     out.push_str("# 1 \"<built-in>\" 2\n");
     out
 }
@@ -472,7 +490,9 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
     match cfg.opt {
         OptLevel::None => {}
         OptLevel::Speed | OptLevel::Size => {
-            m.remove("__NO_INLINE__");
+            if !cfg.no_inline {
+                m.remove("__NO_INLINE__");
+            }
             set(m, "__OPTIMIZE__", "1");
             if cfg.opt == OptLevel::Size {
                 set(m, "__OPTIMIZE_SIZE__", "1");

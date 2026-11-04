@@ -208,13 +208,16 @@ pub struct Toolchain {
     /// resource directory.
     pub data_dir: PathBuf,
     /// The LLVM installation whose libc++ headers are used
-    /// (`KILN_LLVM_DIR`, default `/usr/lib/llvm-19`).
+    /// (`KILN_LLVM_DIR`, default [`DEFAULT_LLVM_DIR`]).
     pub llvm_dir: String,
     /// The GCC installation, if one was found.
     pub gcc: Option<GccInstall>,
     /// The installations the search saw, in its order (`-v`'s `Found
     /// candidate GCC installation` lines; empty for `--gcc-install-dir`).
     pub gcc_candidates: Vec<String>,
+    /// `gcc` is the installation [`DEFAULT_GCC`] reported, so the link
+    /// step names it to `clang++` (`--gcc-install-dir`) too.
+    pub gcc_from_driver: bool,
 }
 
 /// Where the GCC installation search looks (clang 19/22
@@ -230,6 +233,27 @@ pub enum GccSearch<'a> {
     /// (`.../<triple>/<version>`), if it has a `crtbegin.o`.
     InstallDir(&'a str),
 }
+
+/// The LLVM installation used when `KILN_LLVM_DIR` is unset or empty: the
+/// `KILN_DEFAULT_LLVM_DIR` kiln was built with, if set and non-empty (a
+/// distribution package whose LLVM lives elsewhere sets it), else
+/// `/usr/lib/llvm-19`.
+pub const DEFAULT_LLVM_DIR: &str = match option_env!("KILN_DEFAULT_LLVM_DIR") {
+    Some(d) if !d.is_empty() => d,
+    _ => "/usr/lib/llvm-19",
+};
+
+/// The GCC driver whose installation is used when there is no `--sysroot`,
+/// `--gcc-toolchain` or `--gcc-install-dir`: the `KILN_DEFAULT_GCC` kiln
+/// was built with, if set and non-empty (a distribution whose C++ compiler
+/// is a GCC outside `/usr`, reached through a wrapper, sets it). The
+/// installation is the `install:` line of its `-print-search-dirs`; when
+/// that fails or names an installation for another target, the
+/// `<sysroot>/usr` search runs as usual.
+pub const DEFAULT_GCC: Option<&str> = match option_env!("KILN_DEFAULT_GCC") {
+    Some(d) if !d.is_empty() => Some(d),
+    _ => None,
+};
 
 /// kiln's default resource directory: `$KILN_RESOURCE_DIR`, else the
 /// nearest `resource/` with a `predefines/` directory above the
@@ -268,9 +292,26 @@ impl Toolchain {
         let llvm_dir = std::env::var("KILN_LLVM_DIR")
             .ok()
             .filter(|d| !d.is_empty())
-            .unwrap_or_else(|| "/usr/lib/llvm-19".to_owned());
-        let (gcc, gcc_candidates) = detect_gcc(&format!("{sysroot}/usr"), &target);
-        Toolchain { target, sysroot, resource_dir, data_dir, llvm_dir, gcc, gcc_candidates }
+            .unwrap_or_else(|| DEFAULT_LLVM_DIR.to_owned());
+        let driver_gcc = DEFAULT_GCC
+            .filter(|_| sysroot.is_empty())
+            .and_then(driver_gcc_install)
+            .filter(|g| target.gcc_triples.contains(&g.triple.as_str()));
+        let gcc_from_driver = driver_gcc.is_some();
+        let (gcc, gcc_candidates) = match driver_gcc {
+            Some(g) => (Some(g), Vec::new()),
+            None => detect_gcc(&format!("{sysroot}/usr"), &target),
+        };
+        Toolchain {
+            target,
+            sysroot,
+            resource_dir,
+            data_dir,
+            llvm_dir,
+            gcc,
+            gcc_candidates,
+            gcc_from_driver,
+        }
     }
 
     /// Redoes the GCC installation search for `--gcc-toolchain=` or
@@ -278,6 +319,7 @@ impl Toolchain {
     /// the install directory holds no GCC installation (clang
     /// `err_drv_invalid_gcc_install_dir`); there is then no GCC.
     pub fn select_gcc(&mut self, search: GccSearch<'_>) -> Result<(), String> {
+        self.gcc_from_driver = false;
         match search {
             GccSearch::Default => {
                 (self.gcc, self.gcc_candidates) =
@@ -471,7 +513,7 @@ impl Toolchain {
     }
 
     /// Where `tool` is: `<llvm_dir>/bin/<tool>` (`KILN_LLVM_DIR`, default
-    /// `/usr/lib/llvm-19`), else the versioned name (`llc-19`) on `PATH`.
+    /// [`DEFAULT_LLVM_DIR`]), else the versioned name (`llc-19`) on `PATH`.
     /// `None` if neither exists.
     pub fn find_tool(&self, tool: Tool) -> Option<PathBuf> {
         let in_llvm = Path::new(&self.llvm_dir).join("bin").join(tool.llvm_bin_name());
@@ -511,6 +553,22 @@ fn detect_gcc(prefix: &str, target: &Target) -> (Option<GccInstall>, Vec<String>
         }
     }
     (best.map(|(_, g)| g), seen.into_iter().collect())
+}
+
+/// The installation the GCC driver `gcc` reports: the `install:` line of
+/// `gcc -print-search-dirs`, if it names an installation (see
+/// [`gcc_install_dir`]). `None` when the driver is missing or fails.
+fn driver_gcc_install(gcc: &str) -> Option<GccInstall> {
+    let out = std::process::Command::new(gcc)
+        .arg("-print-search-dirs")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let dir = text.lines().find_map(|l| l.strip_prefix("install:"))?.trim();
+    gcc_install_dir(dir)
 }
 
 /// The installation `--gcc-install-dir=<dir>` names: `<dir>` (without a

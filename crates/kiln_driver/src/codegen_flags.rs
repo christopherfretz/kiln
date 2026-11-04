@@ -6,12 +6,12 @@
 //!    `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-f[no-]wrapv`,
 //!    `-f[no-]wrapv-pointer`, `-f[no-]strict-overflow`,
 //!    `-f[no-]delete-null-pointer-checks`, `-f[no-]function-sections`,
-//!    `-f[no-]data-sections`, `-mtune=`);
+//!    `-f[no-]data-sections`, `-mtune=`, `-mcmodel=`);
 //! 2. accepted and ignored: no observable effect in kiln
 //!    (`-f[no-]stack-clash-protection`, `-fcf-protection[=…]`,
 //!    `-f[no-]common`, `-fexcess-precision=`, `-f[no-]math-errno`,
-//!    `-fstack-usage`, `-gz[=…]`, and the defaults `-fno-trapv`,
-//!    `-fno-short-enums`);
+//!    `-fstack-usage`, `-gz[=…]`, the defaults `-fno-trapv`,
+//!    `-fno-short-enums` and `-m64`, and `-pipe` and GCC's `-fpermissive`);
 //! 3. rejected with "'<flag>' is not supported by kiln" (`-ftrapv`,
 //!    `-fshort-enums`, `-fsanitize*`, `-fno-sanitize*`, coverage and
 //!    profiling).
@@ -19,7 +19,7 @@
 //! `-Wp,<args>` and `-Xpreprocessor <arg>` are spliced into the command
 //! line before parsing ([`splice_preprocessor_args`]).
 
-use kiln_codegen::{StackProtector, UnwindTables};
+use kiln_codegen::{CodeModel, StackProtector, UnwindTables};
 
 use crate::args::ArgError;
 
@@ -52,6 +52,8 @@ pub struct CodegenFlags {
     pub data_sections: bool,
     /// The last `-mtune=<cpu>`.
     pub mtune: Option<String>,
+    /// The last `-mcmodel=<model>`.
+    pub code_model: Option<CodeModel>,
 }
 
 /// Flags accepted and ignored (class 2), exactly as written.
@@ -67,6 +69,13 @@ const IGNORED: &[&str] = &[
     "-gz",
     "-fno-trapv",
     "-fno-short-enums",
+    // Every target kiln has is 64-bit (`-m32` stays unknown).
+    "-m64",
+    // kiln's jobs talk through pipes already.
+    "-pipe",
+    // GCC's: downgrades some errors to warnings. The reference workload's generator
+    // compile passes it to GCC 16; kiln compiles that code as written.
+    "-fpermissive",
 ];
 
 /// Flags rejected (class 3), exactly as written.
@@ -146,6 +155,10 @@ impl CodegenFlags {
                 }
                 self.mtune = Some(v.to_owned());
             }
+            "-mcmodel" => match CodeModel::from_name(v) {
+                Some(m) => self.code_model = Some(m),
+                None => return unsupported(),
+            },
             // clang's values; an unknown one is its "invalid value".
             "-fcf-protection" => {
                 if !matches!(v, "full" | "branch" | "return" | "none") {
