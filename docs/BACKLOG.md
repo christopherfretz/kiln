@@ -602,5 +602,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-580 | explicit instantiation of constructor/member function templates by signature; defaulted-NTTP out-of-line ctor (abseil Cord) | corpus | open |
 | WP-585 | runtime: tinyobjloader LoadMtl unknown_parameter map stays empty (std::map<string,string> insert; -O2) | corpus | open |
 | WP-613 | sema: braced init of an aggregate with an uncovered array member inside a template re-feeds the implicit value-init as an element initializer; diagnostic lacks a location (httplib sockaddr_un) | WP-578 | open |
+| WP-606 | sema/parse: accept and ignore the clang thread-safety attribute family (guarded_by, lockable, exclusive_locks_required, …) in GNU and clang:: spellings; no -Wunknown-attributes | WP-578 | in progress |
 WP-511
 WP-512
