@@ -456,7 +456,8 @@ impl BindClass {
             );
         }
         if self.virt {
-            let _ = writeln!(out, "  [[=bind::method{{}}]] virtual int kind() const {{ return {i}; }}");
+            let _ =
+                writeln!(out, "  [[=bind::method{{}}]] virtual int kind() const {{ return {i}; }}");
         }
         let _ = writeln!(out, "  static int count() {{ return {i}; }}\n}};");
     }
@@ -966,7 +967,8 @@ mod tests {
     #[test]
     fn s7_checks_what_s8_compiles() {
         let (s7, s8) = (generate(shape("s7").unwrap(), 9), generate(shape("s8").unwrap(), 9));
-        let classes: String = (0..9).map(BindClass::new).filter(|c| c.bound).map(|c| c.binding()).collect();
+        let classes: String =
+            (0..9).map(BindClass::new).filter(|c| c.bound).map(|c| c.binding()).collect();
         assert!(s8.contains(&classes));
         let c8 = BindClass::new(8).binding();
         let h = c8.bytes().fold(FNV_BASIS, fnv);
