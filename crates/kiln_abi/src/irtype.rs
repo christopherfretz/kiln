@@ -321,10 +321,14 @@ impl<'a> IrTypes<'a> {
             BuiltinType::Float128 | BuiltinType::StdFloat128 => IrType::Fp128,
             BuiltinType::NullPtr => IrType::Ptr,
             b if b.is_sizeless() => sve_type(b),
-            _ => {
-                let (size, _) = t.builtin_size_align(b);
-                IrType::Int(u32::try_from(size * 8).unwrap_or(8))
-            }
+            // A placeholder with no size (an error or dependent type, which
+            // only an undiagnosed instantiation failure lets reach codegen)
+            // is `i8` like the other unrepresentable types above, never the
+            // invalid `i0` (WP-582).
+            _ => match t.builtin_size_align(b).0 {
+                0 => IrType::Int(8),
+                size => IrType::Int(u32::try_from(size * 8).unwrap_or(8)),
+            },
         }
     }
 
