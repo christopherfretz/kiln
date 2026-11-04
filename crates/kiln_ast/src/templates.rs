@@ -320,6 +320,18 @@ pub struct TemplateTables {
     /// clang's `PerformPendingInstantiations` → `HandleTopLevelDecl`
     /// (spec/codegen.md §2a).
     end_of_tu_defs: Vec<DeclId>,
+    /// The variable definitions instantiated at a reference while the
+    /// translation unit is parsed ([temp.point]/1, [temp.inst]/7; clang
+    /// `DoMarkVarDeclReferenced` instantiates a variable usable in
+    /// constant expressions at once, and `InstantiateVariableDefinition`
+    /// hands it to `HandleCXXStaticMemberVarInstantiation` there), in
+    /// order, as `(anchor, after, variable)`: codegen hands the variable
+    /// to `EmitGlobal` right before namespace member `anchor` (the
+    /// declaration containing the reference), or right after it when
+    /// `after` (the reference is in a declaration that is no member, such
+    /// as a `static_assert`; `anchor` is then the last member before it,
+    /// or the namespace itself when it had none). spec/codegen.md §2a.
+    ref_var_insts: Vec<(DeclId, bool, DeclId)>,
     /// Classes in `explicit_member_insts` whose members codegen defines
     /// only there, not where the class was first declared in its lexical
     /// context: an explicit instantiation definition following an
@@ -407,6 +419,7 @@ impl Default for TemplateTables {
             member_specs: Vec::new(),
             explicit_member_insts: FxHashMap::default(),
             end_of_tu_defs: Vec::new(),
+            ref_var_insts: Vec::new(),
             moved_class_insts: FxHashSet::default(),
             late_explicit_insts: Vec::new(),
             late_explicit_set: FxHashSet::default(),
@@ -576,6 +589,19 @@ impl TemplateTables {
         &self.end_of_tu_defs
     }
 
+    /// Records that variable `var`'s definition was instantiated at a
+    /// reference inside (or, when `after`, after) namespace member
+    /// `anchor` (see `ref_var_insts`).
+    pub fn add_ref_var_inst(&mut self, anchor: DeclId, after: bool, var: DeclId) {
+        self.ref_var_insts.push((anchor, after, var));
+    }
+
+    /// The variable definitions instantiated at a reference, in order,
+    /// as `(anchor, after, variable)` (see `ref_var_insts`).
+    pub fn ref_var_insts(&self) -> &[(DeclId, bool, DeclId)] {
+        &self.ref_var_insts
+    }
+
     /// Records the pattern of an instantiated decl that has no
     /// [`TemplLink`] (fields, enumerators, parameters, typedefs, locals).
     pub fn set_instantiated_from(&mut self, inst: DeclId, pattern: DeclId) {
@@ -658,6 +684,7 @@ impl HeapSize for TemplateTables {
         r.push(MemRow::of_vec("templ.specs", &self.specs));
         r.push(MemRow::of_vec("templ.member_specs", &self.member_specs));
         r.push(MemRow::of_vec("templ.end_of_tu_defs", &self.end_of_tu_defs));
+        r.push(MemRow::of_vec("templ.ref_var_insts", &self.ref_var_insts));
         r.push(MemRow::of_set("templ.preferred_named", &self.preferred_named));
         r.push(MemRow::of_map("templ.specializations", &self.specializations));
         let order = self.spec_order.values().map(|v| v.capacity() * 4).sum::<usize>() as u64;

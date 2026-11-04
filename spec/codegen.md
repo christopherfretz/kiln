@@ -171,6 +171,22 @@ clang's `CodeGenModule` pipeline:
    redeclaration, initializer or not: `template<class T> T A<T>::s;`; a
    variable template specialization used before its template was
    defined has no redeclaration and is replayed itself, WP-238).
+
+   A variable definition Sema instantiated at a reference while parsing
+   (one usable in constant expressions, spec/sema-templates.md §4.6
+   "Points of instantiation") is held the same way and replayed by the
+   top-level walk at the declaration `TemplateTables::ref_var_insts`
+   names (`Cg::ref_vars`, `emit_ref_vars`): before the namespace-scope
+   declaration containing the reference, or after the anchor when the
+   reference was in a non-member declaration (a `static_assert`); any
+   the walk did not reach are replayed after it (WP-490). This is clang's
+   `PassToConsumerRAII` handing the definition to `HandleTopLevelDecl`
+   before the enclosing declaration: a must-emit specialization (dynamic
+   initialization) gets its global, guard and `__cxx_global_var_init`
+   before the function that names it, interleaved with the TU's own
+   dynamic initializations in clang's order; a constant-initialized one
+   is still deferred to its first use
+   (`tests/codegen/var_template_point_of_instantiation.cpp`).
 4. **`emit_deferred`** (clang `EmitDeferred`): deferred vtables first,
    then `to_emit`, recursing depth-first into the names each definition
    newly references.
@@ -3113,6 +3129,26 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   (`k.y`, `EmitLoadOfLValue`) and an `extern` vector without an
   initializer stay loads. As in clang, a write through a cast-away
   `const` (`((i4&)k)[1] = 9`, undefined) does not stop the fold.
+- `__builtin_convertvector` of a `const` vector variable folds the same
+  way (WP-490): `Collect::expr` pushes the `ConvertVectorExpr` operand
+  (a bare vector DeclRef, no `LValueToRValue`), the
+  `ConvertVectorExpr` arm of `emit_scalar_opt` uses its folded value,
+  and `convert_vector`'s `icmp ne`/`fcmp une` against zero (to `bool`)
+  or cast folds lane by lane as LLVM's `ConstantFoldCompareInstruction`
+  / `ConstantFoldCastInstruction` do (`func.rs` `icmp`/`fcmp` over
+  `cmp_lanes`, `fold_vec_cast`; a `half`/`bfloat` lane compares widened
+  exactly to `double`). A lane that is `undef`/`poison` or that the
+  scalar folder leaves (`fp128`, `x86_fp80` compares) is not folded.
+  clang: `ScalarExprEmitter::VisitConvertVectorExpr` visits the
+  operand as a scalar (`tryEmitAsConstant`) and the IRBuilder folds.
+  So `b4 c = __builtin_convertvector(K, b4);` stores `i8 bitcast (<8 x
+  i1> <...> to i8)` and the unused `K` is not emitted. The runtime fold
+  compares a float lane with zero (`0.5f`, `2.0f`, NaN are `true`), as
+  clang's codegen does, while the Oven converts it toward zero first as
+  clang 22's evaluator does (`0.5f` is `false`; spec/oven.md
+  "Vectors"). Tests: `tests/codegen/convertvector_const_fold.cpp`
+  (exact under oracle 19, structural under 22),
+  `tests/conformance/ext.vector/convertvector-const-fold-run.cpp`.
 - A vector variable's non-constant initializer is re-folded like a
   scalar's (§2 `fold.rs`, `is_scalar`): `i4 gv = cv;`, `cv + 1`, a `const
   f4`/`b4`/`l3` source give a static initializer with no

@@ -1267,7 +1267,18 @@ impl Sema<'_, '_> {
     /// variable usable in constant expressions. The out-of-line
     /// definition of a non-inline one is instantiated here when the
     /// variable may be usable in constant expressions, else at the end
-    /// of the translation unit ([temp.point]/7, as clang).
+    /// of the translation unit ([temp.point]/7, as clang). A definition
+    /// instantiated here is handed to codegen at the namespace-scope
+    /// declaration containing the reference ([temp.point]/1,
+    /// [`Self::record_ref_var_inst`]).
+    ///
+    /// A variable that may be usable in constant expressions and is
+    /// odr-used before its template's definition is defined from the
+    /// definition seen since: at its next reference, or at the end of the
+    /// TU, which is also its point of instantiation ([temp.point]/7).
+    /// clang instantiates it only at a later reference and otherwise
+    /// leaves it undefined (spec/sema-templates.md §4.6 "Points of
+    /// instantiation", WP-490).
     pub(crate) fn note_var_referenced(&mut self, v: DeclId, loc: Loc) {
         let deferred = self.inst.deferred_inits.contains(&v);
         if !deferred && !self.inst.member_defs.contains(&v) {
@@ -1282,8 +1293,28 @@ impl Sema<'_, '_> {
                 // the definition was requested already), so a definition
                 // still missing at the end of the TU is reported once
                 // per use (-Wundefined-var-template, §4.5).
-                if used && !self.might_be_constant_var(v) && self.is_implicit_var_spec(v) {
+                // One that may be constant is queued once, quietly (the
+                // end of the TU is a point of instantiation; a deviation).
+                if used
+                    && self.is_implicit_var_spec(v)
+                    && (!self.might_be_constant_var(v) || self.inst.quiet_pending.insert(v))
+                {
                     self.inst.pending.push_back(super::pending::PendingInst { decl: v, poi });
+                }
+            } else if self.is_implicit_var_spec(v)
+                && self.might_be_constant_var(v)
+                && self.ast.decls.var(v).is_some_and(|x| x.init.is_none())
+                && self
+                    .var_pattern_def(v)
+                    .is_some_and(|d| self.ast.spec_info(v).is_some_and(|(_, i)| i.from != d))
+            {
+                // Named before its template's definition, which is seen
+                // now: instantiated here, as the reference may need its
+                // value (clang `InstantiateVariableDefinition` finds the
+                // definition).
+                self.instantiate_late_var_spec(v, loc);
+                if self.ast.decls.var(v).is_some_and(|x| x.init.is_some()) {
+                    self.record_ref_var_inst(v);
                 }
             }
             return;
@@ -1294,6 +1325,9 @@ impl Sema<'_, '_> {
         }
         if deferred && constant {
             self.instantiate_static_member_init(v, loc);
+            if !self.inst.deferred_inits.contains(&v) {
+                self.record_ref_var_inst(v);
+            }
         } else if deferred {
             // clang `DoMarkVarDeclReferenced`: an inline static data
             // member that cannot be constant is queued like any other
@@ -1302,9 +1336,79 @@ impl Sema<'_, '_> {
             self.queue_instantiation(v, loc);
         } else if constant {
             self.instantiate_static_member_def(v, loc);
+            if !self.inst.member_defs.contains(&v) {
+                self.record_ref_var_inst(v);
+            } else if self.unevaluated == 0
+                && !self.is_var_spec(v)
+                && self.inst.quiet_pending.insert(v)
+            {
+                // No out-of-line definition yet: the end of the TU is a
+                // point of instantiation too ([temp.point]/7).
+                self.queue_instantiation(v, loc);
+            }
         } else {
             self.queue_instantiation(v, loc);
         }
+    }
+
+    /// clang `InstantiateVariableDefinition`'s `PassToConsumerRAII`: the
+    /// definition of variable `v`, just instantiated at a reference, is
+    /// handed to codegen at once. While the TU is parsed that is before
+    /// the namespace-scope declaration containing the reference (its
+    /// point of instantiation, [temp.point]/1), or after the last one when
+    /// the reference is in a declaration that is not a member (a
+    /// `static_assert`). A reference inside another instantiation, or
+    /// during the end-of-TU drain, is left to codegen's first use (not
+    /// recorded).
+    fn record_ref_var_inst(&mut self, v: DeclId) {
+        if self.inst.at_end_of_tu || !self.inst.stack.is_empty() {
+            return;
+        }
+        // The innermost enclosing namespace, and its member containing
+        // the current context (a function body's context may be the
+        // namespace itself: then the function's).
+        let (mut ns, mut below) = self.enclosing_ns_member(self.ctx);
+        if below.is_none()
+            && let Some(f) = self.func.as_ref().map(|f| f.decl)
+        {
+            (ns, below) = self.enclosing_ns_member(f);
+        }
+        let Some(ns) = ns else { return };
+        // A namespace-scope variable whose initializer is parsed.
+        let below = below.or_else(|| {
+            self.depr_init
+                .or(self.initializing)
+                .filter(|&d| self.ast.decls.lexical_ctx(d) == Some(ns))
+        });
+        if let Some(d) = below {
+            self.ast.templates.add_ref_var_inst(d, false, v);
+        } else {
+            let last = self.ast.decls.member_list(ns).and_then(|l| l.last);
+            self.ast.templates.add_ref_var_inst(last.unwrap_or(ns), true, v);
+        }
+    }
+
+    /// The innermost namespace (or linkage specification) enclosing `d`
+    /// lexically, with its member containing `d` (`None` when `d` is
+    /// the namespace).
+    fn enclosing_ns_member(&self, d: DeclId) -> (Option<DeclId>, Option<DeclId>) {
+        let mut ns = d;
+        let mut below = None;
+        for _ in 0..1024 {
+            if matches!(
+                self.kind_of(ns),
+                DeclKind::Namespace
+                    | DeclKind::TranslationUnit
+                    | DeclKind::LinkageSpec
+                    | DeclKind::Export
+            ) {
+                return (Some(ns), below);
+            }
+            below = Some(ns);
+            let Some(up) = self.ast.decls.lexical_ctx(ns) else { break };
+            ns = up;
+        }
+        (None, None)
     }
 
     /// Whether variable template specialization `v` is implicitly

@@ -1757,6 +1757,20 @@ class name" at `B`
   `pending.rs` `instantiate_pending` returns it to the drain, which
   records it once that definition's nested queue has drained;
   `tests/codegen/var_template_init_order.cpp`).
+- A variable definition instantiated at a reference while the TU is
+  parsed (one usable in constant expressions, below) is handed to codegen
+  there, as clang's `PassToConsumerRAII` does (WP-490,
+  `note_var_referenced` → `record_ref_var_inst`):
+  `TemplateTables::ref_var_insts` records it with the namespace-scope
+  declaration containing the reference ([temp.point]/1), so codegen emits
+  it right before that declaration. The anchor is the enclosing
+  namespace's member containing the current context (or the current
+  function), else the namespace-scope variable whose initializer is being
+  analysed (`depr_init`, `initializing`); a reference in a declaration
+  that is not a member (a `static_assert`) anchors after the namespace's
+  last member. References inside another instantiation, or during the
+  end-of-TU drain, are not recorded: codegen emits those at first use.
+  `tests/codegen/var_template_point_of_instantiation.cpp`.
 
 ### 4.7 Injected-class-name
 
@@ -2014,6 +2028,21 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
   const integral/enum with an initializer, or a reference) has its
   initializer instantiated **immediately** when it is referenced. Its
   value is then evaluated and cached in `consts()`.
+- Such a variable referenced before its template's (or its static data
+  member's) definition is instantiated from the definition at the next
+  reference after it (WP-490; clang `InstantiateVariableDefinition` finds
+  the definition then), so `template<class T> extern const int e; int
+  g() { return e<int>; } template<class T> const int e = 12;
+  static_assert(e<int> == 12);` holds.
+- **Deviation** (WP-490, docs/status/deviations.md): one odr-used only
+  before the definition is also queued, quietly (`InstState.quiet_pending`),
+  and defined at the end of the TU, which is a point of instantiation too
+  ([temp.point]/7, [temp.inst]/7). clang never queues it (its
+  `DoMarkVarDeclReferenced` FIXME) and GCC does not define it either: both
+  leave the symbol undefined, a link error. The quiet entry never warns
+  (`-Wundefined-var-template` stays clang's, below).
+  `tests/conformance/temp.point/var-template-end-of-tu-instantiation-run.cpp`,
+  `var-template-defined-after-reference-run.cpp`.
 - Other variables are queued in `pending` when they are odr-used.
   That includes an inline static data member whose in-class initializer
   was deferred (§4.4; `deferred_inits`): the drain instantiates its

@@ -115,6 +115,11 @@ pub(crate) struct Cg<'a> {
     /// to `EmitGlobal` (§2a): while held, a reference only declares them,
     /// as clang's references to a pending instantiation without a body.
     pub held: FxHashSet<DeclId>,
+    /// The variable definitions Sema instantiated at a reference while
+    /// parsing, by (namespace-scope declaration, after it): handed to
+    /// `EmitGlobal` right before (or after) that declaration, held until
+    /// then (§2a, clang `PassToConsumerRAII`).
+    pub ref_vars: FxHashMap<(DeclId, bool), Vec<DeclId>>,
     /// String literal globals by (array type, bytes).
     pub strings: FxHashMap<(LTy, Vec<u8>), GlobalId>,
     /// Named struct types by record.
@@ -233,7 +238,20 @@ impl<'a> Cg<'a> {
             deferred: FxHashMap::default(),
             completion_index: FxHashMap::default(),
             walk_epoch: u32::MAX,
-            held: ast.templates.end_of_tu_defs().iter().map(|&d| ast.first(d)).collect(),
+            held: ast
+                .templates
+                .end_of_tu_defs()
+                .iter()
+                .chain(ast.templates.ref_var_insts().iter().map(|(_, _, v)| v))
+                .map(|&d| ast.first(d))
+                .collect(),
+            ref_vars: {
+                let mut m: FxHashMap<(DeclId, bool), Vec<DeclId>> = FxHashMap::default();
+                for &(anchor, after, v) in ast.templates.ref_var_insts() {
+                    m.entry((anchor, after)).or_default().push(ast.first(v));
+                }
+                m
+            },
             to_emit: Vec::new(),
             strings: FxHashMap::default(),
             named: FxHashMap::default(),
@@ -316,6 +334,11 @@ impl<'a> Cg<'a> {
         }
         self.emit_members(tu)?;
         self.walk_epoch = u32::MAX;
+        // A variable instantiated at a reference whose declaration the
+        // walk did not reach (§2a).
+        for (_, _, v) in self.ast.templates.ref_var_insts() {
+            self.emit_instantiated_var(self.ast.first(*v))?;
+        }
         self.emit_late_explicit_insts()?;
         self.emit_key_function_vtables()?;
         self.emit_end_of_tu_instantiations()?;
@@ -368,22 +391,41 @@ impl<'a> Cg<'a> {
         let members: Vec<DeclId> = ast.decls.members(ctx).collect();
         self.emit_explicit_member_insts(ctx)?;
         let epochs = if ctx == ast.tu { self.member_epochs(&members) } else { Vec::new() };
+        if let Some(&e) = epochs.first() {
+            self.walk_epoch = e;
+        }
+        self.emit_ref_vars(ctx, true)?;
         for (i, &d) in members.iter().enumerate() {
-            if ast.templates.is_late_explicit_inst(ast.first(d)) {
-                continue;
-            }
             if let Some(&e) = epochs.get(i) {
                 self.walk_epoch = e;
             }
-            self.emit_member(d)?;
-            if !epochs.is_empty() {
-                // The explicit instantiation definitions after `d` are
-                // top-level declarations of their own, which the member
-                // list does not hold: what was complete when the next
-                // member ended is (at most a declaration later than clang).
-                self.walk_epoch = epochs.get(i + 1).copied().unwrap_or(u32::MAX);
+            self.emit_ref_vars(d, false)?;
+            if !ast.templates.is_late_explicit_inst(ast.first(d)) {
+                self.emit_member(d)?;
+                if !epochs.is_empty() {
+                    // The explicit instantiation definitions after `d` are
+                    // top-level declarations of their own, which the member
+                    // list does not hold: what was complete when the next
+                    // member ended is (at most a declaration later than clang).
+                    self.walk_epoch = epochs.get(i + 1).copied().unwrap_or(u32::MAX);
+                }
+                self.emit_explicit_member_insts(d)?;
             }
-            self.emit_explicit_member_insts(d)?;
+            self.emit_ref_vars(d, true)?;
+        }
+        Ok(())
+    }
+
+    /// The variables Sema instantiated at a reference in (or after)
+    /// namespace-scope declaration `anchor`, handed to `EmitGlobal`
+    /// before it, or after it when `after` (§2a).
+    fn emit_ref_vars(&mut self, anchor: DeclId, after: bool) -> R<()> {
+        if self.ref_vars.is_empty() {
+            return Ok(());
+        }
+        let Some(vars) = self.ref_vars.remove(&(anchor, after)) else { return Ok(()) };
+        for v in vars {
+            self.emit_instantiated_var(v)?;
         }
         Ok(())
     }
@@ -694,27 +736,8 @@ impl<'a> Cg<'a> {
             }
             match ast.decls.get(first).kind() {
                 DeclKind::Var => {
-                    // The out-of-line definition Sema instantiated, with or
-                    // without an initializer (`template<class T> T A<T>::s;`).
-                    let def = self.instantiated_var_def(first).or_else(|| {
-                        ast.redecls_of(first).filter(|&r| r != first).find(|&r| {
-                            let n = ast.decls.get(r);
-                            !n.has(DeclFlags::INVALID)
-                                && !n.has(DeclFlags::DEPENDENT_CTX)
-                                && ast.decls.var(r).is_some_and(|v| {
-                                    !matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _)))
-                                })
-                        })
-                    });
-                    if let Some(def) = def {
-                        self.emit_global_var(def)?;
-                    } else if ast.spec_info(first).is_some() {
-                        // A variable template specialization is its own
-                        // definition (also one used before its template's
-                        // definition; one without an initializer is
-                        // default-initialized).
-                        self.emit_global_var(first)?;
-                    }
+                    self.held.insert(first);
+                    self.emit_instantiated_var(first)?;
                 }
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
                     if let Some(def) = ast.definition(first) {
@@ -727,6 +750,36 @@ impl<'a> Cg<'a> {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Hands the definition Sema instantiated for held variable `first`
+    /// to `EmitGlobal` (once; §2a).
+    fn emit_instantiated_var(&mut self, first: DeclId) -> R<()> {
+        let ast = self.ast;
+        if !self.held.remove(&first) {
+            return Ok(());
+        }
+        // The out-of-line definition Sema instantiated, with or without an
+        // initializer (`template<class T> T A<T>::s;`).
+        let def = self.instantiated_var_def(first).or_else(|| {
+            ast.redecls_of(first).filter(|&r| r != first).find(|&r| {
+                let n = ast.decls.get(r);
+                !n.has(DeclFlags::INVALID)
+                    && !n.has(DeclFlags::DEPENDENT_CTX)
+                    && ast.decls.var(r).is_some_and(|v| {
+                        !matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _)))
+                    })
+            })
+        });
+        if let Some(def) = def {
+            self.emit_global_var(def)?;
+        } else if ast.spec_info(first).is_some() {
+            // A variable template specialization is its own definition
+            // (also one used before its template's definition; one without
+            // an initializer is default-initialized).
+            self.emit_global_var(first)?;
         }
         Ok(())
     }
