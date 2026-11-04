@@ -1802,7 +1802,7 @@ impl Substituter<'_, '_, '_> {
             && s.tag != t
             && (s.tag == TagKind::Union) == (t == TagKind::Union)
         {
-            self.sema.ast.decls.set_instantiated_tag(spec, t);
+            self.sema.ast.decls.set_definition_tag(spec, t);
         }
         self.sema.act_on_start_record_definition(spec);
     }

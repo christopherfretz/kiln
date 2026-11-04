@@ -9,7 +9,7 @@
 //! specialization (a template head is open) and a plain elaborated
 //! reference (`struct X<int>`).
 
-use kiln_ast::decl::{DeclFlags, DeclKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TypeFlags};
@@ -238,7 +238,8 @@ impl Sema<'_, '_> {
                 Ok((Some(p), self.ast.types.elaborated(keyword, None, t)))
             }
             TagForm::ExplicitSpec => {
-                let spec = self.act_on_explicit_class_spec(tmpl, args, &locs, use_, range)?;
+                let spec =
+                    self.act_on_explicit_class_spec(keyword, tmpl, args, &locs, use_, range)?;
                 Ok((Some(spec), self.spec_tag_type(keyword, name, args, spec)))
             }
             TagForm::ExplicitInst { declaration } => {
@@ -397,6 +398,7 @@ impl Sema<'_, '_> {
             }
             if use_ == TagUse::Definition {
                 self.templ.partial_def_loc.insert(p, name_loc);
+                self.take_spec_class_key(p, keyword);
             }
             return Ok(p);
         }
@@ -586,6 +588,7 @@ impl Sema<'_, '_> {
     /// `CheckSpecializationInstantiationRedecl`).
     fn act_on_explicit_class_spec(
         &mut self,
+        keyword: TagKeyword,
         tmpl: DeclId,
         args: &[TemplateArg],
         locs: &[Loc],
@@ -633,6 +636,7 @@ impl Sema<'_, '_> {
                     self.emit(d);
                     return Err(());
                 }
+                self.take_spec_class_key(spec, keyword);
                 return Ok(spec);
             }
         }
@@ -640,12 +644,30 @@ impl Sema<'_, '_> {
             s.kind = SpecKind::ExplicitSpecialization;
             s.from = spec;
         });
+        self.take_spec_class_key(spec, keyword);
         let lexical = self.ctx;
         self.builder().declare_spec_in(spec, lexical, name_loc);
         if self.kind_of(lexical) == DeclKind::CXXRecord {
             self.set_member_access(spec);
         }
         Ok(spec)
+    }
+
+    /// An explicit or partial specialization not yet defined takes the
+    /// class-key of the class-head declaring it, not the primary
+    /// template's (spec/sema-class.md §2.1, WP-611): the key of its
+    /// definition sets its default member and base access
+    /// ([class.access.base]/2, [class.access]/3). A union/class mismatch
+    /// is not a re-keying (keys stay as they were).
+    fn take_spec_class_key(&mut self, spec: DeclId, keyword: TagKeyword) {
+        let tag = Self::tag_kind_of(keyword);
+        if self.ast.definition(spec).is_none()
+            && let Some(r) = self.ast.decls.record(spec)
+            && r.tag != tag
+            && (r.tag == TagKind::Union) == (tag == TagKind::Union)
+        {
+            self.ast.decls.set_definition_tag(spec, tag);
+        }
     }
 
     // -- explicit instantiations -----------------------------------------------------------
