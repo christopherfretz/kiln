@@ -5,8 +5,9 @@
 //! clang's `CheckNullabilityTypeSpecifier` and
 //! `distributeNullabilityTypeAttr` do (SemaType.cpp).
 
-use kiln_ast::QualType;
+use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::types::{TypeAttrKind, TypeView};
+use kiln_ast::{AttrId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -48,9 +49,31 @@ enum PointerKind {
 impl Sema<'_, '_> {
     /// clang's `Type::canHaveNullability`: a pointer or member pointer,
     /// or a dependent type that may become one.
+    /// A class marked `class _Nullable X` (clang nullability on classes)
+    /// also can: a non-template class when any redeclaration carries the
+    /// mark; a class template specialization, dependent or not, only when
+    /// a redeclaration of its primary template's pattern does (a mark on
+    /// a partial or explicit specialization does not count, as in clang
+    /// 19). The injected-class-name inside the template cannot.
     pub(crate) fn can_have_nullability(&self, ty: QualType) -> bool {
         let t = &self.ast.types;
         let c = t.canonical(ty);
+        match t.view(c.ty()) {
+            TypeView::Record(d) => {
+                return match self.ast.spec_info(d) {
+                    Some((_, s)) => self.class_template_nullable(s.template),
+                    None => self.ast.redecls_of(d).take(4096).any(|x| self.marked_nullable(x)),
+                };
+            }
+            TypeView::TemplateSpecialization { name, alias: false, .. } => {
+                if let Some(td) = t.template_decl(name) {
+                    // `X<T>` inside `X` is clang's `InjectedClassNameType`.
+                    return self.current_instantiation(td, c).is_none()
+                        && self.class_template_nullable(td);
+                }
+            }
+            _ => {}
+        }
         matches!(
             t.view(c.ty()),
             TypeView::Pointer(_)
@@ -69,6 +92,39 @@ impl Sema<'_, '_> {
                 | TypeView::Auto { .. }
                 | TypeView::Splice { .. }
         )
+    }
+
+    /// Some redeclaration of class template `td` has a `_Nullable`
+    /// pattern.
+    fn class_template_nullable(&self, td: DeclId) -> bool {
+        self.ast.redecls_of(td).take(4096).any(|x| {
+            self.ast
+                .template_info(x)
+                .and_then(|i| i.pattern)
+                .is_some_and(|p| self.marked_nullable(p))
+        })
+    }
+
+    /// Declaration `d` itself carries `class _Nullable`.
+    fn marked_nullable(&self, d: DeclId) -> bool {
+        self.ast
+            .lists
+            .iter::<AttrId>(self.ast.attrs.of_decl(d))
+            .any(|a| self.ast.attrs.get(a).kind == AttrKind::TYPE_NULLABLE)
+    }
+
+    /// `class _Nullable` after a class-key: a keyword attribute of the
+    /// class, checked with the others ([`Sema::check_decl_attrs`]).
+    pub fn act_on_class_nullable(&mut self, loc: Loc) -> AttrId {
+        let node = AttrNode {
+            kind: AttrKind::TYPE_NULLABLE,
+            syntax: AttrSyntax::Keyword,
+            flags: 0,
+            loc,
+            a: 0,
+            b: 0,
+        };
+        self.ast.attrs.push(node)
     }
 
     /// The nullability `ty` carries, looking through sugar (clang's
