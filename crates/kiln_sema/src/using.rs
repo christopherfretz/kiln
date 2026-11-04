@@ -62,6 +62,12 @@ impl Sema<'_, '_> {
                     DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm
                 ) {
                     self.ast.decls.get(spelled).ty().unwrap_or(QualType::ERROR)
+                } else if k == DeclKind::CXXRecord {
+                    // [temp.dep.type]/1: the injected-class-name of a class
+                    // template (or partial specialization) inside it names
+                    // the current instantiation `X<P...>` (clang's
+                    // `InjectedClassNameType` specifier).
+                    self.this_class_type(spelled)
                 } else {
                     self.tag_type(spelled)
                 };

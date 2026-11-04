@@ -5552,6 +5552,37 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `tests/conformance/temp.dep/overloaded-operator-arrow-chain.cpp`,
   `tests/conformance/over.oper/arrow-in-template-other-ops.cpp`,
   `tests/conformance/over.oper/arrow-in-template-run.cpp`.
+- **The injected-class-name in pointers to members; base-qualified
+  members** ([temp.dep.type]/1, [temp.local]/1, [dcl.mptr]/1,
+  [expr.unary.op]/3, [class.qual]/1; WP-608). Inside a class template
+  (or a partial specialization), the injected-class-name used as a
+  nested-name-specifier (`Scan::`) denotes the current instantiation: its
+  specifier type is the `InjectedClassName` type `Scan<P...>`, as when
+  `Scan<P...>::` is written (`Sema::nns_component` takes
+  `this_class_type` of a class). So a member-pointer declarator
+  `typedef void (Scan::*Fn)();` has the dependent type
+  `void (Scan<C>::*)()`, which instantiation substitutes to a pointer to
+  member of the specialization; `this->*fn` with `this` of type
+  `Scan<char>*` is then compatible. `&C::m` of a non-static member forms a
+  pointer-to-member constant whether or not `C` is dependent; its class
+  type is the declaring class's `this_class_type` (the current
+  instantiation in the pattern, clang's `getTypeDeclType` of the parent),
+  and its operand `DeclRefExpr` keeps the qualifier as written, so that
+  instantiation forms `&C::m` again instead of the implicit member access
+  `(*this).C::m` (`Sema::member_pointer_of`). A `?:` of two such operands
+  keeps their common pointer-to-member type. A qualified-id `B::m` whose
+  `B` is a base class of the current instantiation (dependent or not)
+  looks `m` up in `B` only, in the pattern and again at instantiation:
+  the implicit `(*this).B::m` of a data member keeps its qualifier on the
+  `MemberExpr` (`Sema::field_access_extra`), so the instantiation's
+  lookup of `m` starts in `B` and a derived member `m()` never hides it
+  (libstdc++ `_State<_CharT>::_M_opcode()` returning
+  `_State_base::_M_opcode`; `_Scanner<_CharT>`'s
+  `&_Scanner::_M_eat_escape_ecma` in <regex>). Tests:
+  `tests/conformance/temp.dep.type/injected-class-name-*.cpp`,
+  `tests/conformance/basic.lookup.qual/class-qual-base-member-hidden-in-template.cpp`,
+  `tests/conformance/re.alg/regex-match-libstdcxx.cpp` (and its
+  `-libstdcxx16` / `-libcxx` siblings).
 
 ### 5.22 Rules from the libc++ `.verify` cluster B (WP-338)
 - **An out-of-line constructor stays explicit** ([dcl.fct.spec]/4,

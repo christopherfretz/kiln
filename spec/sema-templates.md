@@ -1840,6 +1840,9 @@ class name" at `B`
   because the specialization exists.
 - Inside a partial specialization, the injected-class-name is the
   partial's own pattern args, as written.
+- As a nested-name-specifier (`A::*`, `&A::m`, `A::m`) it is the
+  `InjectedClassName` type too, so member pointers formed from it are
+  dependent and substituted (spec/sema.md §5.21, WP-608).
 
 ### 4.8 Friends
 
