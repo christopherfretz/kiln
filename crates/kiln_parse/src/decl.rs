@@ -2304,8 +2304,7 @@ impl Parser<'_, '_> {
         self.s.act_on_type_position_attrs(&mut attrs, true);
         attrs.retain(|&a| {
             let n = self.s.ast.attrs.get(a);
-            n.syntax == AttrSyntax::Gnu
-                && !matches!(n.kind, AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE)
+            n.syntax == AttrSyntax::Gnu && !n.kind.is_vector_type()
         });
         self.chunk_decl_attrs.extend(attrs);
     }
@@ -3365,9 +3364,7 @@ impl Parser<'_, '_> {
         let vec_out = out.is_some();
         if let Some(out) = out {
             let ast = &self.s.ast;
-            let is_vec = |a: &AttrId| {
-                matches!(ast.attrs.get(*a).kind, AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE)
-            };
+            let is_vec = |a: &AttrId| ast.attrs.get(*a).kind.is_vector_type();
             out.extend(ds.attrs.iter().copied().filter(is_vec));
             ds.attrs.retain(|a| !is_vec(a));
         }
