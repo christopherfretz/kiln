@@ -104,7 +104,6 @@ parity is out of scope.
 | Library template has no result member | `'std::NAME' has no member 'value'` (or `'type'`) `for these operands` |
 | A range too long | `'F': the range is too long` |
 | A `reflection_range` row (§1.3) | `kiln: the reflection_range form of 'F' is not implemented yet; use the (const info*, size_t) overload (kiln_meta_traits.h)` |
-| `type_order` | `kiln: 'type_order' is not implemented yet (it returns std::strong_ordering)` |
 
 - `std::meta::exception` (P3560) replaces the note when WP-475 lands.
 
@@ -208,7 +207,7 @@ library template's own requirements (§1.2). Result: **b** `bool`, **z**
 | `invoke_result((data, n))`, `common_type((data, n))`, `common_reference((data, n))`, `unwrap_reference`, `unwrap_ref_decay` | `std::X<…>::type` | L | i |
 | `tuple_size`, `variant_size` | `std::X<T>::value` | L | z |
 | `tuple_element(I, T)`, `variant_alternative(I, T)` | `std::X<I, T>::type` | L | i |
-| `type_order` | — (follow-up: needs `std::strong_ordering`) | — | — |
+| `type_order` | GCC 16.1's order: `strcmp` of the canonical types' Itanium manglings (gcc/cp/method.cc `type_order_value`; `meta.reflection.traits/type-order-mangling.cpp`), interned id on a tie; the `std::strong_ordering` static member of the result type | — | i |
 
 An operand may be a cv- or ref-qualified function type (`^^FnC` for
 `using FnC = int() const;`, or `^^int() const`): the operand of `^^`

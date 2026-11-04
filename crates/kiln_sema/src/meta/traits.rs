@@ -478,10 +478,12 @@ impl Sema<'_, '_> {
     /// type alias), else the "does not represent a type" failure (p2).
     /// `type_order(a, b)` (P2830R10, [meta.reflection.traits]): the
     /// `strong_ordering::less`/`equal`/`greater` static member of the
-    /// intrinsic's result type, copied whole. The order compares the
-    /// canonical types' spelling, so it is the same in every TU for every
-    /// type with linkage; distinct types spelled alike (local classes)
-    /// are ordered by their interned id, which only one TU can name.
+    /// intrinsic's result type, copied whole. The order is GCC 16.1's
+    /// (gcc/cp/method.cc `type_order_value`): `strcmp` of the canonical
+    /// types' Itanium manglings (`i` < `j`, `N2ns1AE` < `N2ns1BE`), so it is
+    /// the same in every TU for every type with linkage, and a library
+    /// that sorts types by it iterates them in GCC's order; distinct types
+    /// mangled alike are ordered by their interned id.
     fn meta_type_order(
         &mut self,
         args: &[u128],
@@ -491,10 +493,14 @@ impl Sema<'_, '_> {
         let loc = ctx.loc;
         let a = self.trait_operand(info_arg(args, 0)?, loc)?;
         let b = self.trait_operand(info_arg(args, 1)?, loc)?;
+        let (a, b) = (self.ast.types.canonical(a), self.ast.types.canonical(b));
         let ord = if a == b {
             std::cmp::Ordering::Equal
         } else {
-            self.ty_str(a).cmp(&self.ty_str(b)).then(a.cmp(&b))
+            let mut anon = kiln_abi::mangle::AnonIds::default();
+            let ma = kiln_abi::mangle::mangle_type(&self.ast, &mut anon, a);
+            let mb = kiln_abi::mangle::mangle_type(&self.ast, &mut anon, b);
+            ma.as_bytes().cmp(mb.as_bytes()).then(a.cmp(&b))
         };
         let name = match ord {
             std::cmp::Ordering::Less => "less",

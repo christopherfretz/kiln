@@ -60,23 +60,31 @@ enum Shape {
     Leaf,
 }
 
+/// Template parameter levels and their arguments (`None`: bound to
+/// themselves), innermost first.
+type Levels = Vec<(DeclId, Option<ArgListId>)>;
+
 /// GCC's `cxx_pretty_printer` state: the text and its padding
 /// (`pp_before` or `pp_none`).
 struct Pp<'s, 'a, 'b> {
     sema: &'s Sema<'a, 'b>,
     out: String,
     pad: bool,
+    /// `current_dump_scope`: the context of the function whose declarator
+    /// is being printed; a scope equal to it is not repeated
+    /// (`void ns::S::g(Inner)`).
+    scope: Option<DeclId>,
 }
 
 impl Sema<'_, '_> {
     /// `%T` of `t` (gcc/cp/error.cc `type_to_string`): the type, then
     /// ` {aka T'}` with its typedefs stripped when that reads differently.
     pub(crate) fn gcc_type_string(&self, t: QualType) -> String {
-        let mut p = Pp { sema: self, out: String::new(), pad: false };
+        let mut p = Pp { sema: self, out: String::new(), pad: false, scope: None };
         p.dump_type(t, TEMPLATE_HEADER);
         let canon = self.ast.types.canonical(t);
         if canon != t && !self.ast.types.is_dependent(t) {
-            let mut aka = Pp { sema: self, out: String::new(), pad: false };
+            let mut aka = Pp { sema: self, out: String::new(), pad: false, scope: None };
             aka.dump_type(canon, TEMPLATE_HEADER);
             if aka.out != p.out {
                 p.out.push_str(" {aka ");
@@ -102,7 +110,7 @@ impl Sema<'_, '_> {
         if k.is_function() {
             flags |= DECL_SPECIFIERS | RETURN_TYPE;
         }
-        let mut p = Pp { sema: self, out: String::new(), pad: false };
+        let mut p = Pp { sema: self, out: String::new(), pad: false, scope: None };
         p.dump_decl(d, flags);
         p.out
     }
@@ -717,6 +725,9 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             }
         }
         let Some(c) = ctx else { return };
+        if self.scope == Some(ast.first(c)) {
+            return;
+        }
         let f = flags & SCOPE;
         let k = ast.decls.get(c).kind();
         match k {
@@ -888,26 +899,32 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
     /// = int; int N = 3]`). GCC adds the typedefs the signature names
     /// (`; size_type = long unsigned int`), which kiln does not yet.
     fn dump_function_decl(&mut self, f: DeclId, flags: u32) {
+        let saved = self.scope;
         if flags & NO_TEMPLATE_BINDINGS == 0
             && let Some((pattern, levels)) = self.template_bindings(f)
         {
             self.dump_function_decl_of(pattern, flags);
             self.bindings(&levels);
-            return;
+        } else {
+            self.dump_function_decl_of(f, flags);
         }
-        self.dump_function_decl_of(f, flags);
+        self.scope = saved;
     }
 
     /// The pattern of template instantiation `f` with the parameter lists
-    /// and arguments it binds, outermost first; `None` for a function
-    /// that is not instantiated from a template.
-    fn template_bindings(&self, f: DeclId) -> Option<(DeclId, Vec<(DeclId, ArgListId)>)> {
+    /// it binds, innermost first as GCC lists them (`DECL_TEMPLATE_PARMS`
+    /// runs from the innermost level out), each with its arguments, or
+    /// `None` for a member template's own level, whose parameters stay
+    /// bound to themselves; `None` for a function that is not
+    /// instantiated from a template.
+    fn template_bindings(&self, f: DeclId) -> Option<(DeclId, Levels)> {
         let ast = self.ast();
         let mut levels = Vec::new();
         // The enclosing class template specialization's level.
         let class_level = ast.decls.get(f).ctx().and_then(|c| {
             let (_, info) = ast.spec_info(c)?;
-            (ast.decls.get(c).kind() == DeclKind::CXXRecord).then_some((info.template, info.args))
+            (ast.decls.get(c).kind() == DeclKind::CXXRecord)
+                .then_some((info.template, Some(info.args)))
         });
         if let Some((_, info)) = ast.spec_info(f) {
             let mut tmpl = info.template;
@@ -915,29 +932,38 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 tmpl = m.instantiated_from;
             }
             let pattern = ast.template_info(tmpl)?.pattern?;
-            if let Some(l) = class_level {
-                levels.push(l);
-            }
-            levels.push((tmpl, info.args));
+            levels.push((tmpl, Some(info.args)));
+            levels.extend(class_level);
             return Some((pattern, levels));
         }
         let (_, m) = ast.member_spec_info(ast.first(f))?;
         let pattern = m.instantiated_from;
+        // The pattern of a member template of a class template
+        // specialization: its own parameters are not bound.
+        if let Some(t) = ast.described_template(pattern) {
+            levels.push((t, None));
+        }
         levels.push(class_level?);
         Some((pattern, levels))
     }
 
     /// `dump_template_bindings`: ` [with T = int; int N = 3]`, a pack's
-    /// arguments in braces.
-    fn bindings(&mut self, levels: &[(DeclId, ArgListId)]) {
+    /// arguments in braces; a type parameter bound to itself is skipped,
+    /// a non-type one is not (`long unsigned int SIZE = SIZE`).
+    fn bindings(&mut self, levels: &[(DeclId, Option<ArgListId>)]) {
         let ast = self.ast();
         let mut first = true;
         for &(tmpl, args) in levels {
             let Some(info) = ast.template_info(tmpl) else { continue };
             let params: Vec<DeclId> =
                 ast.lists.iter::<DeclId>(ast.templates.param_list(info.params).params).collect();
-            let args: Vec<_> = ast.types.args(ast.types.canonical_args(args)).to_vec();
+            let args: Option<Vec<_>> =
+                args.map(|a| ast.types.args(ast.types.canonical_args(a)).to_vec());
             for (i, &p) in params.iter().enumerate() {
+                let nontype = ast.decls.get(p).kind() == DeclKind::NonTypeTemplateParm;
+                if args.is_none() && !nontype {
+                    continue;
+                }
                 if first {
                     self.whitespace();
                     self.punct("[");
@@ -947,7 +973,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 } else {
                     self.punct("; ");
                 }
-                if ast.decls.get(p).kind() == DeclKind::NonTypeTemplateParm {
+                if nontype {
                     let ty = ast.decls.get(p).ty();
                     self.dump_simple_decl(p, ty, DECL_SPECIFIERS);
                 } else {
@@ -956,14 +982,17 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 self.whitespace();
                 self.out.push('=');
                 self.whitespace();
-                match args.get(i).map(|a| a.view()) {
-                    Some(ArgView::Pack(pk)) => {
-                        self.punct("{");
-                        self.template_arg(ArgView::Pack(pk), 0);
-                        self.punct("}");
-                    }
-                    Some(a) => self.template_arg(a, 0),
-                    None => self.out.push_str("<missing>"),
+                match &args {
+                    None => self.decl_identifier(p),
+                    Some(args) => match args.get(i).map(|a| a.view()) {
+                        Some(ArgView::Pack(pk)) => {
+                            self.punct("{");
+                            self.template_arg(ArgView::Pack(pk), 0);
+                            self.punct("}");
+                        }
+                        Some(a) => self.template_arg(a, 0),
+                        None => self.out.push_str("<missing>"),
+                    },
                 }
             }
         }
@@ -1043,6 +1072,8 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             }
         }
         self.dump_function_name(f, name_flags);
+        // The rest of the declarator is looked up in the function's scope.
+        self.scope = ast.decls.get(f).ctx().map(|c| ast.first(c));
         self.pad = false;
         if let Some(p) = proto {
             let params = ast.types.params(&p).to_vec();
