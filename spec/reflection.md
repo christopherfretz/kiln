@@ -651,7 +651,7 @@ position's operand).
   | Position | Syntax | Accepts | Status |
   |---|---|---|---|
   | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); `[: r :]` as a template type argument | a type or a type alias | implemented (`dcl.type.splice/`) |
-  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`) |
+  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`); a value or object as below ("Value and object splices", WP-550: `expr.prim.splice/value-*.cpp`, `object-*.cpp`), except an object with no declaration |
   | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category) | implemented; the base form is untested until `bases_of` (WP-478) |
   | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration (or an alias of one) | implemented (`basic.splice/splice-scope-specifier.cpp`, `namespace.udecl/splice-scope.cpp`) |
   | template | `template [: r :] < args >` [temp.names] in an expression, after `typename` or in a type-only context, and as a scope (`template [: r :] < args > ::`); `template [: r :]` alone before a call | a class or alias template in a type or scope; a variable template, concept or function template in an expression | implemented (`temp.names/splice-*.cpp`; spec/landed/reflection/WP-482.md) |
@@ -671,6 +671,39 @@ position's operand).
   some of these). A dependent using-directive splice gets
   `sema_splice_dependent_namespace` at the template definition (GCC 16.1
   accepts it) and the global namespace `sema_splice_global_namespace`.
+- **Value and object splices** (`splice_object.rs`; WP-550). A value
+  reflection splices to a prvalue of the value's type: the expression a
+  constant template argument of that value is substituted as
+  (`Sema::nttp_arg_expr`: an integer, enumerator, `bool` or character
+  literal, a floating literal, `nullptr`, `&x` / `&f`, `&C::m`, or the
+  `CXXReflectExpr` of an `info` value). An object reflection
+  (`reflect_object`; `reflect_constant` of a class value and a
+  class-type template argument reflect the template parameter object,
+  [temp.param]/8, which `nttp_value_expr` makes when the value has none
+  yet) splices to an lvalue of the object's type: a `DeclRefExpr` to the
+  variable or template parameter object, then the derived-to-base
+  conversions, member accesses and subscripts reaching the subobject at
+  the reflection's byte offset (`Sema::object_lvalue`, recovered from the
+  record layout: direct non-virtual bases first, then the virtual bases
+  of an object that is not itself a base subobject, then fields, skipping
+  bit-fields and references; members sharing an offset are tried in order
+  until one holds an object of the pointee type). A pointer or reference
+  template argument into a subobject is substituted the same way
+  (`&outer.in.b[1]`). So `&[: reflect_object(v.m[i]) :] == &v.m[i]`, an
+  object splice of a mutable variable is assignable, and one of a template
+  parameter object or `constexpr` variable is `const`. The misuses get
+  kiln's ordinary diagnostics (`value-object-errors.cpp`; GCC 16.1 rejects
+  each with its own wording): "expression is not assignable" and "cannot
+  take the address of an rvalue" for a value splice, "read-only variable
+  is not assignable" / "cannot assign to variable ... with
+  const-qualified type" for a const object, and `reflect_object` of an
+  automatic variable is not a constant expression ("pointer to 'x' is not
+  a constant expression"). **Not supported yet** (`parse_unsupported`;
+  GCC 16.1 accepts them): an object with no declaration, i.e. a
+  `PtrBase::Const` object of `reflect_constant_string` /
+  `reflect_constant_array` (needs an expression form whose Oven and
+  codegen lvalue is that frozen object), a string literal object and a
+  `std::type_info` object.
 - **Member functions.** A member-function splice is not a qualified-id, so
   `e.[: ^^B::f :]()` of a virtual `f` is a virtual call ([expr.call]/2; the
   [dcl.contract.func] example). `&[: ^^B::f :]` is a pointer to member.
