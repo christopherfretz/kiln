@@ -689,7 +689,12 @@ points, thunks and method indices are clang's.
     rather than wrapping. No diagnostic, since no input reaches it
     (WP-294; `tests/layout/nua_overlap_bitfields.cpp` and
     `tests/codegen/record_type_nua_bitfields.cpp` cover both shapes on
-    both triples).
+    both triples);
+  - no member, element or value is ever `i0` (invalid IR): a builtin
+    without a size (an error or dependent placeholder, which only an
+    undiagnosed instantiation failure lets reach codegen) lowers to
+    `i8`, like the other unrepresentable builtins (`IrTypes::builtin`;
+    WP-582, spec/landed/codegen/WP-582.md).
 - **Argument passing** (`call.rs`): `can_pass_in_registers` follows
   clang's `canPassInRegisters`. A class with a non-trivial copy or move
   constructor or destructor, or with all of them deleted, is passed
