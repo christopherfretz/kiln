@@ -32,7 +32,7 @@ use kiln_source::fx::FxHashMap;
 use super::{FieldInfo, OTy, TyKind, Types};
 
 /// The most entries each map of the path cache holds; the next insert
-/// clears the map (tests/conformance/oven/path-cache-evict.cpp touches
+/// clears the map (tests/conformance/class.union/constexpr-path-cache-evict.cpp touches
 /// more distinct paths than this).
 pub(crate) const PATH_CACHE_MAX: usize = 1 << 14;
 
