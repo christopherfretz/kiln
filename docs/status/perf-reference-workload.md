@@ -1225,3 +1225,180 @@ redesign that is out of this package's scope:
 - `crates/kiln_oven/src/compile/builtins.rs:127` and
   `crates/kiln_codegen/src/fold.rs:697` still call the allocating
   `children()`; neither is above 0.5% on these shapes.
+
+## WP-648: interpreter dispatch
+
+F9 above (spec/landed/oven/WP-648.md). Main is 8b6f177ea.
+
+### Inputs and method
+
+The Ir counts are from `valgrind --tool=cachegrind --cache-sim=no`
+(under `ulimit -v 3000000` and `timeout 1200`, with
+`-fkiln-stack-size=256m` so the 1 GiB default stack reservation fits).
+The shapes are the four in-tree Oven bench entries that execute more
+than a few hundred instructions, `virtual-dispatch` and S7, each with
+its spec/bench.md command line. callgrind did not work here, for two
+reasons. `--toggle-collect='*run_loop*'` turns collection off at the
+first nested `run_loop` (a bridge callback that evaluates), and
+callgrind ran out of memory under the 3 GB limit on `table-nohdr` and
+`churn-vector`.
+
+"`run_loop` self" is the Ir of every line inlined into the `run_loop`
+function: `vm.rs` plus the `kbc.rs`, `index.rs` and `Vec` lines that
+are inlined into it. Callees that are not inlined (`store`, `ptr_add`,
+`enter`, `mem`) are excluded. The executed-instruction counts come
+from the new `op-stats` feature (`cargo build --release --features
+kiln_oven/op-stats`). At exit it prints the dynamic opcode histogram
+and the adjacent-pair histogram to stderr, and it compiles to nothing
+without the feature.
+
+| shape | `run_loop` self Ir | program Ir | share | instructions | Ir / instruction |
+|---|--:|--:|--:|--:|--:|
+| `sieve-nohdr` | 114,738,821 | 171,244,215 | 67.0% | 2,103,515 | 54.5 |
+| `sort-nohdr` | 300,273,562 | 459,980,906 | 65.3% | 4,014,952 | 74.8 |
+| `table-nohdr` | 691,653,149 | 907,870,319 | 76.2% | 12,581,848 | 55.0 |
+| `virtual-dispatch` | 192,023,445 | 279,187,395 | 68.8% | 2,767,152 | 69.4 |
+| `churn-vector` | 8,977,534,428 | 14,851,167,729 | 60.5% | 134,251,174 | 66.9 |
+| S7 | 1,117,720,263 | 6,254,016,462 | 17.9% | 16,736,927 | 66.8 |
+
+`fib` executes 417 instructions (its calls are memoized) and S8 executes
+736,100, so dispatch does not matter for either.
+
+**Where an instruction's Ir goes** (`run_loop` self Ir per executed
+instruction, split by source line). "Fetch" is `self.code[pc]`,
+`from_u8` and the `match op` jump. "Operands" is the `arg!`/`reg!` index
+arithmetic. "Bounds" is `index.rs`, the slice bounds checks of those
+indexings. "Vec" is the `Vec` pointer and length reloads (`alloc` `vec`
+`mod.rs`). "Unattributed" is line 0, which is almost all spills and
+reloads of `pc` and `fb`: the disassembly has 236 stack loads and
+stores of the two. The rest is the arm bodies.
+
+| shape | Ir / insn | fetch | operands | bounds | Vec | unattributed | arm bodies |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| `sieve-nohdr` | 54.5 | 13.1 (24%) | 7.0 (13%) | 12.0 (22%) | 5.0 (9%) | 6.9 (13%) | 10.5 (19%) |
+| `sort-nohdr` | 74.8 | 13.2 (18%) | 7.1 (10%) | 14.2 (19%) | 6.7 (9%) | 8.8 (12%) | 24.8 (33%) |
+| `table-nohdr` | 55.0 | 13.0 (24%) | 7.0 (13%) | 12.6 (23%) | 5.3 (10%) | 6.9 (12%) | 10.1 (18%) |
+| `virtual-dispatch` | 69.4 | 13.0 (19%) | 6.8 (10%) | 14.1 (20%) | 7.2 (10%) | 8.8 (13%) | 19.5 (28%) |
+| `churn-vector` | 66.9 | 13.2 (20%) | 7.8 (12%) | 14.4 (21%) | 5.9 (9%) | 7.9 (12%) | 17.7 (26%) |
+| S7 | 66.8 | 13.2 (20%) | 6.2 (9%) | 12.8 (19%) | 7.3 (11%) | 7.8 (12%) | 19.5 (29%) |
+
+So about 70% of an instruction's cost is dispatch overhead rather than
+the work it does. `run_loop` is 51.7 KB of machine code. `load` is
+inlined into it, while `store` and `ptr_add` are not. With that many
+arms, `pc`, `fb`, the op byte and the `code`/`regs` base pointers do not
+stay in registers: every `arg!` reloads `self.code`'s pointer and
+length, checks the index and loads the word, and `reg!` repeats the same
+steps for `self.regs`.
+
+**Opcode histogram** (share of executed instructions, top entries):
+
+| op | sieve | sort-nohdr | table-nohdr | virtual-dispatch | churn-vector | S7 |
+|---|--:|--:|--:|--:|--:|--:|
+| `Mov` | 27.4 | 13.3 | 21.6 | 26.7 | 18.8 | 20.4 |
+| `Const` | 7.1 | 12.8 | 20.4 | 6.8 | 15.6 | 7.7 |
+| `Step` | 9.4 | 14.4 | 5.9 | 7.7 | 6.2 | 13.8 |
+| `JmpIfNot` | 9.4 | 7.1 | 8.7 | 1.8 | 6.2 | 5.2 |
+| `PtrAdd` | 6.8 | 11.2 | 2.9 | 1.8 | 12.5 | 3.2 |
+| `IAdd` | 7.1 | 5.5 | 6.2 | 5.9 | 9.4 | 2.1 |
+| `Load` | 2.4 | 11.1 | 1.9 | 6.3 | 6.2 | 3.9 |
+| `ICmp` | 7.1 | 7.1 | 5.6 | 1.8 | 6.2 | 3.2 |
+| `Jmp` | 9.0 | 2.5 | 6.7 | 1.8 | 6.2 | 2.2 |
+| `ICast` | 9.6 | 0.0 | 5.5 | 1.8 | 0.0 | 3.0 |
+| `Store` | 4.4 | 4.5 | 0.9 | | 6.2 | |
+| `Ret` | 0.0 | 2.3 | 0.0 | 4.1 | 0.0 | 6.0 |
+| `Call` | 0.0 | 2.3 | 0.0 | | 0.0 | 5.9 |
+| `Field` | | | | 4.5 | | 3.0 |
+| `EndLife` | | | | 4.1 | | 2.6 |
+| `ISub` | | 3.3 | 0.1 | | 3.1 | |
+| `JmpIf` | | | | 4.1 | | 2.2 |
+| `PtrToBool` | | | | 4.1 | | 2.2 |
+| `IMul` | 0.2 | 2.5 | | | 3.1 | |
+| `IAnd` | | | 4.0 | 1.8 | | |
+
+**Adjacent pairs** (share of executed instructions):
+
+| pair | sieve | sort-nohdr | table-nohdr | virtual-dispatch | churn-vector | S7 |
+|---|--:|--:|--:|--:|--:|--:|
+| `Mov+Mov` | 13.3 | | 5.6 | 8.6 | 3.1 | 2.5 |
+| `JmpIfNot+Step` | 9.2 | 4.8 | 5.5 | | 6.2 | 4.9 |
+| `ICmp+JmpIfNot` | 7.1 | 7.1 | 5.6 | | 6.2 | 3.0 |
+| `Mov+Const` | | | 9.2 | 3.6 | 9.4 | 2.2 |
+| `IAdd+Mov` | 7.1 | | 5.6 | 3.6 | 6.2 | |
+| `Const+IAdd` | | 5.5 | 5.1 | | 9.4 | |
+| `Mov+Jmp` | 6.8 | | 5.1 | | 6.2 | |
+| `Step+Const` | 4.4 | 3.7 | 4.2 | | | 2.9 |
+| `PtrAdd+Load` | | 6.7 | | | 6.2 | |
+| `PtrAdd+Store` | 4.4 | | | | 6.2 | |
+| `Step+Mov` | | 4.1 | | | | 5.6 |
+| `Mov+Field` | | | | 4.5 | | 2.9 |
+
+The opcode mix is flat. No pair covers more than about 13% of any
+shape, and `Mov` alone covers 13–27%. Fusing pairs can therefore remove
+only a few percent of dispatches. The bigger lever is the cost per
+dispatch.
+
+### Design note
+
+The target is −25% `run_loop` self Ir on the Oven shapes. For S7, where
+`run_loop` is 17.9% of all Ir, −5% wall needs about −28% of `run_loop`.
+The candidates, each with the evidence for and against it:
+
+1. **Pre-decoded instructions** (a parallel `Vec<Insn>` of decoded op
+   and operands). Against: the pc is an index into `code` for sites,
+   step locations, overflow sites, notes (`notes.rs` reads `code[pc+k]`),
+   builtin arguments, meta, `exc`, `life` and every frame's `ret_pc`.
+   A second instruction space means either rewriting all of those or
+   keeping a pc map. A fixed-size `Insn` of the six-operand maximum is 28
+   bytes or more against today's average of about 3 words, which is
+   roughly ×2.5 bytecode memory. Bytecode is a measurable part of peak
+   RSS on S7/S8, so this fails the +2% bound. Rejected.
+2. **One fetch window per instruction.** One checked slice read
+   `code[pc..pc+8]`, copied into a local `[u32; 8]` that covers the op
+   word and the largest operand count (6), so operand words are read
+   from the window without a check. This removes most of the "bounds"
+   and "Vec" columns for operand words: about 8–10 Ir per instruction,
+   15% of `run_loop`. The encoding does not change. Code is padded with
+   7 `Nop` words at the end of every compiled unit, so the window always
+   fits. When it does not fit (code read mid-compilation by a nested
+   evaluation), a cold fallback copies into a zero-padded window. That
+   fallback still panics, as `code[pc+k]` does today, if an instruction
+   runs past the end. Chosen.
+3. **One register-window borrow** (`&mut self.regs[fb..fb+nregs]`).
+   Against: every arm that calls a `&mut self` method (`load`, `store`,
+   `enter`, every `mem` call) has to end the borrow and take it again,
+   and each `reg!` still needs its own bounds check against the
+   window's length. That saves the `Vec` reload but not the check: a few
+   Ir on `Mov`/`Const` only. Masking the index to make the check
+   disappear changes the failure mode of a bad register from a panic to a
+   wrong value. Rejected.
+4. **Cold arms out of line** (`#[inline(never)]` methods). There are
+   about 30 arms of 13 to 43 lines (`Ret`'s frame teardown, `New`,
+   `Delete`, `EnumCheck`, `MpFn`, `VCall`, `Placement`, `ZeroInit`,
+   `ScopeExit`, `TypeId`, `IsConstEval`, ...). Their slow paths spill
+   `pc`/`fb` and raise register pressure across the whole function.
+   Moving the bodies of the rarely executed arms, and the fault and
+   slow paths of the hot ones, into `#[inline(never)]` methods that take
+   `(pc, fb, window, aux)` targets the "unattributed" column and part of
+   "fetch" (5–8 Ir). Its effect on LLVM's register allocation cannot be
+   predicted, so this step is measured on its own. Chosen as the second
+   step.
+5. **Superinstructions.** `ICmp+JmpIfNot` (3–7%) and `JmpIfNot+Step`
+   (5–9%) are the only pairs that appear in every loop shape. A fused
+   `JmpIfNot+Step` must still report a step fault at the `Step`'s pc and
+   keep the counters identical. That is possible by fusing in place: the
+   `JmpIfNot` arm checks whether the next word is a `Step` and runs it
+   inline, so the old sequence stays the encoding and nothing addresses
+   a new pc. The saving is one dispatch on 5–9% of instructions, which
+   is 3–6% of `run_loop`. Kept in reserve, used only if steps 2 and 4
+   miss the target.
+6. **A cheaper `Step` check.** `Step` is 6–14% of instructions, but its
+   arm is already one add, one compare and one store of the counter.
+   Keeping the counters byte-identical leaves almost nothing to remove
+   beyond what the window saves. Not pursued on its own.
+7. **Threaded code, computed goto, a JIT, `get_unchecked`.** Excluded by
+   the brief and by `forbid(unsafe_code)`.
+
+The plan is three commits, each measured with the same cachegrind runs:
+(A) the fetch window and the padding, (B) the cold arms out of line, and
+(C) the in-place `JmpIfNot+Step` and `ICmp+JmpIfNot` fusion, only if A
+and B leave the Oven shapes short of −25%.
