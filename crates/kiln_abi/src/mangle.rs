@@ -916,7 +916,7 @@ pub fn mangle_structor(ast: &Ast, anon: &mut AnonIds, d: DeclId, v: Structor) ->
 /// `mangleCXXDtorComdat`): the base-object mangling with `5` for `2`.
 pub fn mangle_structor_comdat(ast: &Ast, anon: &mut AnonIds, d: DeclId) -> String {
     let mut m = Mangler::new(ast, anon, "_Z");
-    m.comdat = true;
+    m.structors = StructorSpelling::Comdat;
     m.encoding(d, Structor::Base);
     m.out
 }
@@ -1103,8 +1103,8 @@ struct Mangler<'a, 'b> {
     subs: Vec<Sub>,
     /// The module-name prefixes seen (`A`, `A.B`), for [`Sub::Module`].
     modnames: Vec<&'a str>,
-    /// A structor comdat name: the base-object variant is `C5`/`D5`.
-    comdat: bool,
+    /// How constructor and destructor variants are spelled.
+    structors: StructorSpelling,
     /// Template parameters mangle with their declared depth (`TL0__`):
     /// inside type-constraints and requires-clauses (constraint.rs).
     real_depth: bool,
@@ -1132,9 +1132,18 @@ struct Mangler<'a, 'b> {
     /// declarations listed (the entity and, for a function template
     /// specialization, its template).
     extra_tags: Option<([DeclId; 2], Vec<&'a str>)>,
-    /// A constructor or destructor reflection (`fn <encoding>`) names
-    /// the unified structor (`C4`/`D4`, as GCC).
-    unified: bool,
+}
+
+/// The structor-variant spelling of one [`Mangler`] run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StructorSpelling {
+    /// The variant asked for (`C1`/`C2`, `D0`/`D1`/`D2`).
+    Itanium,
+    /// A structor comdat name: the base-object variant is `C5`/`D5`.
+    Comdat,
+    /// A constructor or destructor reflection (`fn <encoding>`) names the
+    /// unified structor (`C4`/`D4`, as GCC).
+    Unified,
 }
 
 /// The mangler state a trial mangling restores (clang copies the
@@ -1226,7 +1235,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             out: String::from(prefix),
             subs: Vec::new(),
             modnames: Vec::new(),
-            comdat: false,
+            structors: StructorSpelling::Itanium,
             real_depth: false,
             head_only: false,
             fn_depth: (0, false),
@@ -1234,7 +1243,6 @@ impl<'a, 'b> Mangler<'a, 'b> {
             emitted_tags: Vec::new(),
             trials: 0,
             extra_tags: None,
-            unified: false,
         }
     }
 
@@ -1961,7 +1969,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 // added to the substitutions (only its prefixes are).
                 if ast.decls.inheriting_ctor_shadow(d).is_some() {
                     self.out.push_str(match v {
-                        Structor::Base if self.comdat => "CI5",
+                        Structor::Base if self.structors == StructorSpelling::Comdat => "CI5",
                         Structor::Base => "CI2",
                         _ => "CI1",
                     });
@@ -1979,17 +1987,17 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     }
                 } else {
                     self.out.push_str(match v {
-                        _ if self.unified => "C4",
-                        Structor::Base if self.comdat => "C5",
+                        _ if self.structors == StructorSpelling::Unified => "C4",
+                        Structor::Base if self.structors == StructorSpelling::Comdat => "C5",
                         Structor::Base => "C2",
                         _ => "C1",
                     });
                 }
             }
             DeclNameView::Destructor(_) => self.out.push_str(match v {
-                _ if self.unified => "D4",
+                _ if self.structors == StructorSpelling::Unified => "D4",
                 Structor::Complete => "D1",
-                Structor::Base if self.comdat => "D5",
+                Structor::Base if self.structors == StructorSpelling::Comdat => "D5",
                 Structor::Base => "D2",
                 Structor::Deleting => "D0",
             }),

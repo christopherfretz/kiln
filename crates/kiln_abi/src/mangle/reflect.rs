@@ -22,8 +22,8 @@ use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::{BuiltinType, TemplateName, TypeView};
 
 use super::{
-    Mangler, Structor, enclosing_function, has_internal_linkage, in_anon_ns, is_anon_ns,
-    is_function_kind, is_internal_symbol, mangle_param_object, tag_externally_visible,
+    Mangler, Structor, StructorSpelling, enclosing_function, has_internal_linkage, in_anon_ns,
+    is_anon_ns, is_function_kind, is_internal_symbol, mangle_param_object, tag_externally_visible,
     type_externally_visible, value_externally_visible,
 };
 
@@ -212,23 +212,20 @@ impl Mangler<'_, '_> {
             }
             Reflectee::Template(n) => {
                 let n = ast.types.canonical_template_name(n);
-                match ast.types.template_name_view(n) {
-                    TemplateName::Template(t) => {
-                        self.out.push_str(match ast.decls.get(t).kind() {
-                            DeclKind::FunctionTemplate => "ft",
-                            DeclKind::VarTemplate => "vt",
-                            DeclKind::TypeAliasTemplate => "at",
-                            DeclKind::Concept => "co",
-                            _ => "ct",
-                        });
-                        let p = self.parent(t);
-                        self.refl_prefix(p);
-                        self.unqualified(t, Structor::Complete);
-                    }
-                    _ => {
-                        self.out.push_str("tt");
-                        self.template_name(n);
-                    }
+                if let TemplateName::Template(t) = ast.types.template_name_view(n) {
+                    self.out.push_str(match ast.decls.get(t).kind() {
+                        DeclKind::FunctionTemplate => "ft",
+                        DeclKind::VarTemplate => "vt",
+                        DeclKind::TypeAliasTemplate => "at",
+                        DeclKind::Concept => "co",
+                        _ => "ct",
+                    });
+                    let p = self.parent(t);
+                    self.refl_prefix(p);
+                    self.unqualified(t, Structor::Complete);
+                } else {
+                    self.out.push_str("tt");
+                    self.template_name(n);
                 }
             }
             Reflectee::Value(v) => {
@@ -377,10 +374,17 @@ impl Mangler<'_, '_> {
             }
             k if is_function_kind(k) => {
                 self.out.push_str("fn");
-                let saved = self.unified;
-                self.unified = matches!(k, DeclKind::CXXConstructor | DeclKind::CXXDestructor);
+                let saved = self.structors;
+                self.structors = if matches!(k, DeclKind::CXXConstructor | DeclKind::CXXDestructor)
+                {
+                    StructorSpelling::Unified
+                } else if saved == StructorSpelling::Unified {
+                    StructorSpelling::Itanium
+                } else {
+                    saved
+                };
                 self.encoding(d, Structor::Complete);
-                self.unified = saved;
+                self.structors = saved;
             }
             DeclKind::EnumConstant => {
                 self.out.push_str("en");

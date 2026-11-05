@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -112,7 +113,7 @@ const KINDS: &[(&str, &str, &str, &str)] = &[
     ("an", "annotations_of(^^Ann)[0]", "u6__infoan_", "Dman_"),
 ];
 
-const KINDS_DECLS: &str = r#"using namespace std::meta;
+const KINDS_DECLS: &str = r"using namespace std::meta;
 template <info R> int f() { return 0; }
 struct S { int dm; static int sm; int mf(); enum E { e1 }; };
 int S::sm = 0;
@@ -144,7 +145,7 @@ consteval info dtor_of(info c) {
   for (info m : members_of(c, access_context::unchecked())) if (is_destructor(m)) return m;
   return {};
 }
-"#;
+";
 
 /// The `f<…>` symbols `@table` points at, in order.
 fn table(ll: &str) -> Vec<String> {
@@ -167,7 +168,7 @@ fn per_kind_table() {
     src.push_str(KINDS_DECLS);
     src.push_str("int (*table[])() = {\n");
     for (_, e, _, _) in KINDS {
-        src.push_str(&format!("  &f<{e}>,\n"));
+        let _ = writeln!(src, "  &f<{e}>,");
     }
     src.push_str("};\n");
     std::fs::write(d.join("k.cpp"), &src).unwrap();
@@ -275,7 +276,7 @@ int main() {
 
 /// The specializations both compilers emit for one source, named without
 /// the library (`decltype(^^int)` is the info type).
-const COMPAT: &str = r#"using info = decltype(^^int);
+const COMPAT: &str = r"using info = decltype(^^int);
 template <info R> int f() { return 0; }
 template <info A, info B> int two() { return 0; }
 template <info R> struct K { static int c; };
@@ -300,7 +301,7 @@ int use() {
        + f<^^ns::x>() + f<^^const int*>() + two<^^S, ^^S>() + two<^^S::dm, ^^S>() + K<^^int>::c
        + dep<int>() + dep<S>();
 }
-"#;
+";
 
 /// GCC link compatibility (spec/reflection.md §8.3): with
 /// `-fkiln-reflection-mangling=gcc`, kiln names every reflection-keyed

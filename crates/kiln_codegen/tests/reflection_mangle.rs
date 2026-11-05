@@ -142,8 +142,7 @@ fn distinct_reflections_distinct_linkonce_symbols() {
     assert!(f.iter().all(|(_, l)| l == "linkonce_odr"), "{f:?}");
     // The static of each specialization is its own object, shared across
     // TUs like the function.
-    let statics: BTreeSet<_> =
-        symbols(&ir, "_ZZ1fILu6__info").into_iter().map(|(s, l)| (s, l)).collect();
+    let statics: BTreeSet<_> = symbols(&ir, "_ZZ1fILu6__info").into_iter().collect();
     let want: BTreeSet<_> = [
         "_ZZ1fILu6__infotyiEEivE1n",
         "_ZZ1fILu6__infota1I_iEEivE1n",
