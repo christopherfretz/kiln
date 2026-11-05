@@ -312,8 +312,11 @@ pub struct SourceManager {
     guarded: Mutex<HashMap<FileId, Box<str>>>,
     /// `-ffile-prefix-map=` / `-fmacro-prefix-map=` entries `(old, new)`,
     /// in clang's lookup order ([`Self::set_macro_prefix_map`]).
-    macro_prefix_map: OnceLock<Box<[(Box<str>, Box<str>)]>>,
+    macro_prefix_map: OnceLock<PrefixMap>,
 }
+
+/// `(old, new)` prefix pairs of a `-f*-prefix-map=` option.
+type PrefixMap = Box<[(Box<str>, Box<str>)]>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -373,7 +376,7 @@ impl SourceManager {
     /// `llvm::sys::path::replace_path_prefix`).
     pub fn remap_macro_path(&self, path: &str) -> String {
         if let Some(map) = self.macro_prefix_map.get() {
-            for (old, new) in map.iter() {
+            for (old, new) in map {
                 if let Some(rest) = path.strip_prefix(&**old) {
                     return format!("{new}{rest}");
                 }
