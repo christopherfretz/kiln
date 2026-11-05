@@ -27,14 +27,19 @@ pub struct Shape {
     pub step: usize,
     /// What N counts, and what the shape exercises.
     pub what: &'static str,
-    /// The WP whose landing should turn the entry into a pass (its
-    /// `xfail(kiln)` reason), and the other families it needs.
+    /// Where the shape is specified: `docs/plans/m6-reflection.md` §3.8
+    /// (S1–S6), else the document that added it (the header's second line).
+    source: &'static str,
+    /// The WP that owns the shape's reflection family (the `xfail(kiln)`
+    /// reason of an entry that does not compile yet), or, for a shape added
+    /// after §3.8, the WP that added it; and the other families it needs.
     pub owner: &'static str,
     pub needs: &'static str,
     /// The entry compiles today against GCC 16.1's libstdc++ (the GCC
     /// oracle's `--gcc-toolchain`, which kiln is given in the sweeps and in
-    /// bench runs): it carries no `xfail(kiln)`, and `owner` is the WP that
-    /// added it.
+    /// bench runs): it carries no `xfail(kiln)`. S1–S6 were generated
+    /// `xfail(kiln)` against kiln's own headers until their families
+    /// landed and WP-638 moved them here; S7 and S8 were written for it.
     pub libstdcxx: bool,
     /// The entry compiles today without any library: no `#include
     /// <meta>`, no `xfail(kiln)`, and a `mode:` that runs codegen.
@@ -44,6 +49,9 @@ pub struct Shape {
     budget: fn(usize) -> String,
 }
 
+/// The section that specifies S1–S6.
+const PLAN_SECTION: &str = "docs/plans/m6-reflection.md §3.8";
+
 /// The shapes, in order.
 pub const SHAPES: [Shape; 9] = [
     Shape {
@@ -52,9 +60,10 @@ pub const SHAPES: [Shape; 9] = [
         step: 1,
         what: "N aggregates x 16 members; a serializer over nonstatic_data_members_of + \
                identifier_of + member splices in `template for`",
+        source: PLAN_SECTION,
         owner: "WP-478",
         needs: "WP-474 (member splices), WP-475 (identifier_of), WP-479 (define_static_array)",
-        libstdcxx: false,
+        libstdcxx: true,
         bare: false,
         body: s1,
         budget: |_| "peak_arena<=65536".into(),
@@ -64,9 +73,10 @@ pub const SHAPES: [Shape; 9] = [
         default_n: 50,
         step: 1,
         what: "N enums x 64 enumerators; enum<->string tables via enumerators_of",
+        source: PLAN_SECTION,
         owner: "WP-478",
         needs: "WP-474 (expression splices), WP-475 (identifier_of), WP-479 (define_static_array)",
-        libstdcxx: false,
+        libstdcxx: true,
         bare: false,
         body: s2,
         budget: |_| "peak_arena<=65536".into(),
@@ -77,9 +87,10 @@ pub const SHAPES: [Shape; 9] = [
         step: 1,
         what: "define_aggregate: N struct-of-arrays twins of 4-member structs, plus one \
                struct of 10*N members",
+        source: PLAN_SECTION,
         owner: "WP-480",
         needs: "WP-473 (consteval blocks), WP-482 (substitute), WP-478 (members)",
-        libstdcxx: false,
+        libstdcxx: true,
         bare: false,
         body: s3,
         budget: |n| format!("peak_bytes<={}", 64 * 10 * n + 65536),
@@ -90,9 +101,10 @@ pub const SHAPES: [Shape; 9] = [
         step: 1,
         what: "S1's aggregates with annotations; the serializer keeps the members \
                annotations_of_with_type selects",
+        source: PLAN_SECTION,
         owner: "WP-481",
         needs: "WP-478 (annotations_of_with_type), WP-474, WP-475, WP-479",
-        libstdcxx: false,
+        libstdcxx: true,
         bare: false,
         body: s4,
         budget: |_| "peak_arena<=65536".into(),
@@ -103,9 +115,10 @@ pub const SHAPES: [Shape; 9] = [
         step: 100,
         what: "N substitute + template_arguments_of + static_data_members_of round trips \
                (N distinct instantiations), 100 per evaluation",
+        source: PLAN_SECTION,
         owner: "WP-482",
         needs: "WP-478 (static_data_members_of), WP-479 (reflect_constant, extract)",
-        libstdcxx: false,
+        libstdcxx: true,
         bare: false,
         body: s5,
         budget: |_| "peak_arena<=65536".into(),
@@ -115,9 +128,10 @@ pub const SHAPES: [Shape; 9] = [
         default_n: 500,
         step: 1,
         what: "a namespace of N declarations scanned by members_of, 100 times",
+        source: PLAN_SECTION,
         owner: "WP-478",
         needs: "WP-472 (namespace reflections)",
-        libstdcxx: false,
+        libstdcxx: true,
         bare: false,
         body: s6,
         budget: |n| format!("peak_bytes<={}", 16 * n + 65536),
@@ -129,6 +143,7 @@ pub const SHAPES: [Shape; 9] = [
         what: "a binding generator: N annotated classes walked by members_of + \
                annotations_of_with_type, each binding built as a std::string and printed \
                from a template for that splices the bound members",
+        source: "docs/status/perf-reference-workload.md",
         owner: "WP-551",
         needs: "a libstdc++ with <meta> (GCC 16.1)",
         libstdcxx: true,
@@ -142,6 +157,7 @@ pub const SHAPES: [Shape; 9] = [
         step: 1,
         what: "the bindings S7 prints, compiled: N class_<T> instantiations of a \
                nanobind-style binding library (casters, call thunks, constexpr signatures)",
+        source: "docs/status/perf-reference-workload.md",
         owner: "WP-551",
         needs: "a libstdc++ with <meta> (GCC 16.1)",
         libstdcxx: true,
@@ -155,6 +171,7 @@ pub const SHAPES: [Shape; 9] = [
         step: 1,
         what: "N reflection-keyed instantiations: f<^^Ti>() and S<^^Ti>::count for N types, \
                and f<^^W<W<W<Ti>>>>() for every fourth (the reflection mangler's load)",
+        source: "spec/bench.md \"Reflection shapes\"",
         owner: "WP-501",
         needs: "nothing beyond `^^`",
         libstdcxx: false,
@@ -188,15 +205,13 @@ pub fn kiln_flags(shape: &Shape) -> Vec<String> {
 pub fn generate(shape: &Shape, n: usize) -> String {
     let mut out = String::new();
     let upper = shape.id.to_uppercase();
-    let source = if shape.libstdcxx {
-        "docs/status/perf-reference-workload.md"
-    } else if shape.bare {
-        "spec/bench.md \"Reflection shapes\""
-    } else {
-        "docs/plans/m6-reflection.md §3.8"
-    };
-    let needs = if shape.libstdcxx || shape.bare {
+    let source = shape.source;
+    // A §3.8 shape names the families it exercises (still needs, while it
+    // is `xfail(kiln)`); a later one the WP that added it.
+    let needs = if source != PLAN_SECTION {
         format!("Added by {}; needs {}.", shape.owner, shape.needs)
+    } else if shape.libstdcxx {
+        format!("Exercises {} and {}.", shape.owner, shape.needs)
     } else {
         format!("Needs {} and {}.", shape.owner, shape.needs)
     };
@@ -1015,6 +1030,12 @@ mod tests {
             assert!(a.contains(&format!("N={}.", s.default_n)), "{}", s.id);
             assert_eq!(a.contains("//@ xfail(kiln): "), !s.libstdcxx && !s.bare, "{}", s.id);
             assert_eq!(a.contains("#include <meta>"), !s.bare, "{}", s.id);
+            // S1–S6 compile against libstdc++ since WP-638; their header
+            // names the families they exercise.
+            let planned = s.source == PLAN_SECTION;
+            assert_eq!(planned, ["s1", "s2", "s3", "s4", "s5", "s6"].contains(&s.id), "{}", s.id);
+            assert!(!planned || s.libstdcxx, "{}", s.id);
+            assert_eq!(a.contains(&format!("// Exercises {} and ", s.owner)), planned, "{}", s.id);
             assert_eq!(write_or_check(&dir, s, s.default_n, true), Ok(None), "{} is stale", s.id);
             let spec =
                 crate::bench::entry::parse_spec(&a).unwrap_or_else(|e| panic!("{}: {e:?}", s.id));
@@ -1041,7 +1062,7 @@ mod tests {
         assert!(s7.contains(&format!("digest(binding<^^lib::C0008>()) == {h}u")));
         assert!(s7.contains("bound_classes().size() == 8)"));
         assert!(!s7.contains("C0007\")") && s7.contains("struct C0007 {"));
-        assert_eq!(kiln_flags(shape("s1").unwrap()), Vec::<String>::new());
+        assert_eq!(kiln_flags(shape("s9").unwrap()), Vec::<String>::new());
     }
 
     #[test]
