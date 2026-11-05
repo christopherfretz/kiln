@@ -1254,9 +1254,28 @@ impl Memory {
 
     /// Checks an access of `len` bytes at `p` and returns its absolute
     /// address in the pointer's space.
-    #[inline]
+    ///
+    /// The access that passes every check and whose storage is not
+    /// [`flags::TRACKED`] takes [`Memory::check_plain`], inlined into
+    /// every caller (the `Load` and `Store` arms above all); any other
+    /// runs [`Memory::check_slow`].
+    // Always inlined: the plain predicate is a few compares, while the
+    // call and the `Result` returned through memory cost more than it.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub fn check(&self, raw: u64, len: u64, write: bool) -> Result<(Sp, u64, &Alloc), MemFault> {
-        let r = self.check_storage(raw, len, write)?;
+        match self.check_plain(raw, len, flags::EXTERNAL | flags::TRACKED) {
+            Some(r) => Ok(r),
+            None => self.check_slow(raw, len, write),
+        }
+    }
+
+    /// [`Memory::check`] by the checks in their order, then the lifetime
+    /// of tracked storage.
+    #[cold]
+    #[inline(never)]
+    fn check_slow(&self, raw: u64, len: u64, write: bool) -> Result<(Sp, u64, &Alloc), MemFault> {
+        let r = self.check_ordered(raw, len, write)?;
         if r.2.flags & flags::TRACKED != 0 && !self.space(r.0).is_live(r.1, len) {
             return Err(MemFault::Lifetime);
         }
@@ -1278,7 +1297,7 @@ impl Memory {
         len: u64,
         write: bool,
     ) -> Result<(Sp, u64, &Alloc), MemFault> {
-        match self.check_plain(raw, len) {
+        match self.check_plain(raw, len, flags::EXTERNAL) {
             Some(r) => Ok(r),
             None => self.check_ordered(raw, len, write),
         }
@@ -1288,12 +1307,13 @@ impl Memory {
     /// would accept it without consulting the allocation's origin: a live
     /// allocation of the pointer's slot and generation (never the dead
     /// frame slot 0, so not null; not a function pointer), not past the
-    /// end, the bytes in bounds, neither [`flags::EXTERNAL`] nor
-    /// [`UNBACKED`]. `None` otherwise, including every access the ordered
-    /// checks accept only by its origin (the lax read of a
-    /// [`LAX_READ`] object).
+    /// end, the bytes in bounds, not [`UNBACKED`] and no flag of `refuse`
+    /// set (which holds [`flags::EXTERNAL`]). `None` otherwise, including
+    /// every access the ordered checks accept only by its origin (the lax
+    /// read of a [`LAX_READ`] object).
+    #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn check_plain(&self, raw: u64, len: u64) -> Option<(Sp, u64, &Alloc)> {
+    fn check_plain(&self, raw: u64, len: u64, refuse: u8) -> Option<(Sp, u64, &Alloc)> {
         let slot = ((raw >> SLOT_SHIFT) & SLOT_MASK) as u32;
         let (sp, a) = if slot & STATIC_BIT != 0 {
             if slot == FN_SLOT {
@@ -1310,7 +1330,7 @@ impl Memory {
         let off = raw & (OFF_MASK | PAST);
         let ok = u64::from(a.generation) == raw >> GEN_SHIFT
             && a.live
-            && a.flags & flags::EXTERNAL == 0
+            && a.flags & refuse == 0
             && a.base != UNBACKED
             && off + len <= u64::from(a.size);
         ok.then(|| (sp, u64::from(a.base) + off, a))
