@@ -2579,9 +2579,10 @@ impl<'a> Cg<'a> {
             gv.linkage = Linkage::Internal;
             gv.dso_local = false;
         } else if weak_attr {
-            // clang `getLLVMLinkageForDeclarator`: `weak_odr` for a
-            // constant.
-            gv.linkage = if constant { Linkage::WeakOdr } else { Linkage::Weak };
+            // clang `getLLVMLinkageForDeclarator` (since clang 15,
+            // D126324): plain `weak` for a constant too, since the
+            // definition may be replaced at link time.
+            gv.linkage = Linkage::Weak;
             gv.dso_local = true;
             gv.comdat = comdat;
         } else if inline {

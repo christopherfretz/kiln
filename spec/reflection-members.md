@@ -57,10 +57,10 @@ gone; `__kiln_define_member` (spec/reflection.md §6.3) stays.
   `DECL_UID` order: a function first declared as a friend inside a class
   sits where that friend declaration is
   (`meta.reflection.member.queries/namespace-members-friend-order.cpp`).
-  A namespace's list is a growing prefix:
-  per-block cursors plus the global declaration count as the stamp, so
-  an unchanged namespace walks nothing, and a grown one walks only new
-  declarations.
+  A namespace's list is collected incrementally (per-block cursors plus
+  the global declaration count as the stamp, so an unchanged namespace
+  walks nothing, and a grown one walks only new declarations) and then
+  sorted by first declaration.
 - **Classes and enumerations** must be complete at the evaluation point
   (a class template specialization is instantiated first). A member
   function whose trailing requires-clause is not satisfied (a member of a

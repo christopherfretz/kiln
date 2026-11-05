@@ -1022,8 +1022,8 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
     /// specialization or a member of a class template specialization
     /// prints as its pattern followed by the template parameters' bindings
     /// (`T ns::tfn(T) [with T = int]`, `void ns::TT<T, N>::mem(T) [with T
-    /// = int; int N = 3]`). GCC adds the typedefs the signature names
-    /// (`; size_type = long unsigned int`), which kiln does not yet.
+    /// = int; int N = 3]`). The typedefs the signature names
+    /// follow (`; size_type = long unsigned int`).
     fn dump_function_decl(&mut self, f: DeclId, flags: u32) {
         let saved = self.scope;
         if flags & NO_TEMPLATE_BINDINGS == 0

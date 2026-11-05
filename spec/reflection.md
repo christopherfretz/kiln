@@ -488,7 +488,8 @@ answers as of that point.
   `members_of`, the data-member filters and access filtering are one
   filtered copy into the Oven's reusable result buffer.
   - A complete class's list is immutable.
-  - A namespace's list is a prefix extended as the namespace grows.
+  - A namespace's list is in the creation order of each member's first
+    declaration (GCC 16.1's `DECL_UID` order; spec/reflection-members.md).
   - `bases_of` and `enumerators_of` have their own lists.
 - **Dense index** (deferred). The member path interns each entry's
   reflection once when the list is built, so the per-query path does no
@@ -555,8 +556,8 @@ answers as of that point.
   ns::TT`, `template<class T> using ns::A = ns::TT<T, 5>`); a function
   template specialization or member of a class template specialization
   through its pattern with its bindings (`void ns::TT<T, N>::mem(T) [with
-  T = int; int N = 3]`; GCC also lists the typedefs the signature names,
-  `; size_type = ...`, which kiln does not yet); a parameter as
+  T = int; int N = 3]`; followed by the typedefs the
+  signature names, `; size_type = ...`); a parameter as
   `<parameter x of F>` / `<unnamed parameter 2 of F>`; a base as `D: B`;
   the null reflection `<null reflection>`.
 - **The file name of `source_location_of`** is GCC 16.1's: the absolute
@@ -582,6 +583,16 @@ answers as of that point.
   `0:0` in GCC (its operand stays an overload set there) and the
   function's location in kiln; an out-of-line definition's column is
   GCC's start of the qualified name, kiln's the unqualified name.
+- **Matched to GCC 16.1 against the papers' wording** (so a generator
+  sees the same values under both; to revisit): inside a `template for`
+  body, `^^A` for a type alias `A` not declared in a template is the
+  aliased type (`^^A == ^^int`; GCC's `tsubst` drops one alias level
+  there, [expr.reflect] would keep the alias;
+  `expr.reflect/alias-in-expansion-body.cpp`); `identifier_of` of a
+  parameter of a function template specialization is the name in the
+  template's definition, else its latest declaration, even when the
+  declarations disagree (P3096 makes `has_identifier` false then;
+  `meta.reflection.names/parameter-identifier-instantiation.cpp`).
 
 - **`display_string_of` of a value or object** (WP-564): the shortest
   source spelling that re-parses as a constant of that value, from the
