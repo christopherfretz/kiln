@@ -141,7 +141,7 @@ impl Sema<'_, '_> {
         let mut out: Vec<DeclId> =
             self.ast.decls.bases(r, &self.ast.lists).filter_map(|b| self.base_class(b)).collect();
         out.extend(self.virtual_bases(r).into_iter().map(|x| x.0));
-        for f in self.special_fields(r) {
+        for f in self.special_fields_iter(r) {
             let Some(t) = self.ast.decls.get(f).ty() else { continue };
             if self.ast.types.is_reference(t) {
                 continue;

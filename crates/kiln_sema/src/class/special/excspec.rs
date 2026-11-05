@@ -223,8 +223,7 @@ impl Sema<'_, '_> {
     /// initializer awaiting lazy instantiation was parsed in its pattern.
     fn exc_spec_needs_unparsed_inits(&mut self, f: DeclId, class: DeclId) {
         let unparsed: Vec<DeclId> = self
-            .special_fields(class)
-            .into_iter()
+            .special_fields_iter(class)
             .filter(|&fld| {
                 !self.ast.decls.get(fld).has(DeclFlags::INVALID)
                     && self.field_has_nsdmi(fld)
