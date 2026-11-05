@@ -36,7 +36,11 @@ impl Sema<'_, '_> {
         let arg = |i: usize| args.get(i).copied().ok_or_else(MetaError::invalid);
         let p0 = || p0.ok_or_else(MetaError::invalid);
         *out = match v {
-            ValueOp::Extract => self.extract(info_arg(args, 0)?, ret, loc)?,
+            ValueOp::Extract => {
+                let r = info_arg(args, 0)?;
+                self.use_reflected_var(r, loc, oven);
+                self.extract(r, ret, loc)?
+            }
             ValueOp::ReflectConstant | ValueOp::ReflectConstantInfo => {
                 let t = self.referenced(p0()?);
                 MetaOut::Info(self.reflect_constant(arg(0)?, t, loc, oven)?)

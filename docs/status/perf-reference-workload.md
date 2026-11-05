@@ -322,16 +322,33 @@ The host was shared, with a load average of about 12.
 | s7 | 871.8 / 48.8 | 2841 / 466.9 | 0.31x | 0.10x |
 | s8 | 1129.9 / 73.0 | 1310.9 / 282.1 | 0.86x | 0.26x |
 
-- **S1–S6 still `xfail`.** The bench compiles them against libc++, whose
-  `<meta>` kiln lacks. Their committed markers are therefore still right.
-- **S1–S6 against libstdc++** (`--gcc-toolchain`):
-  - kiln compiles S1 0.57 s / 46.9 MB, S2 0.83 s / 57.1 MB, S3
-    0.67 s / 32.9 MB, S4 0.52 s / 44.3 MB and S6 0.41 s / 29.9 MB.
-  - GCC takes 0.74–1.80 s and 150–438 MB on S1–S6.
-  - kiln rejects S5 with "initializer of 'value' is unknown". The failing
-    construct is `extract<int>` of a static data member of a `substitute`d
-    specialization: the member's initializer is not instantiated. That is
-    a correctness bug (follow-up F3).
+S1–S6 compile against GCC 16.1's libstdc++ `<meta>` since WP-638 (F3 and
+F19). The same command, run on 2026-11-05 with a load average of about 9:
+
+| Entry | kiln ms / MB | GCC ms / MB | Time | Memory |
+|---|--:|--:|--:|--:|
+| s1 | 499.8 / 50.8 | 735.0 / 150.8 | 0.68x | 0.34x |
+| s2 | 708.8 / 64.7 | 754.5 / 193.9 | 0.94x | 0.33x |
+| s3 | 487.1 / 37.6 | 1060.1 / 173.3 | 0.46x | 0.22x |
+| s4 | 470.3 / 49.6 | 675.8 / 150.7 | 0.70x | 0.33x |
+| s5 | 347.2 / 36.9 | 734.1 / 150.7 | 0.47x | 0.25x |
+| s6 | 339.7 / 33.7 | 1702.9 / 437.7 | 0.20x | 0.08x |
+
+`cargo xtask bench --scaling s<k> --runs 3` (fastest wall, largest RSS
+in MiB). All six pass the gate: no ratio is above 4.6, and `peak_arena`
+is flat for S1, S2, S4 and S5.
+
+| Shape | N → 4N | kiln N | kiln 4N | kiln growth (time, RSS) | GCC N | GCC 4N | GCC growth |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| S1 | 100 → 400 | 469 ms / 52.5 | 882 ms / 102.1 | 1.88x, 1.95x | 665 ms / 150.8 | 1710 ms / 299.3 | 2.57x, 1.98x |
+| S2 | 50 → 200 | 686 ms / 65.4 | 1658 ms / 155.8 | 2.42x, 2.38x | 734 ms / 194.0 | 1896 ms / 458.3 | 2.58x, 2.36x |
+| S3 | 100 → 400 | 448 ms / 37.6 | 854 ms / 41.0 | 1.91x, 1.09x | 1004 ms / 173.6 | 2943 ms / 381.1 | 2.93x, 2.20x |
+| S4 | 100 → 400 | 464 ms / 53.4 | 846 ms / 101.7 | 1.82x, 1.91x | 629 ms / 150.8 | 1719 ms / 299.3 | 2.73x, 1.99x |
+| S5 | 1000 → 4000 | 343 ms / 38.8 | 404 ms / 49.3 | 1.18x, 1.27x | 698 ms / 150.7 | 1950 ms / 306.6 | 2.79x, 2.03x |
+| S6 | 500 → 2000 | 337 ms / 33.7 | 401 ms / 34.0 | 1.19x, 1.01x | 1660 ms / 438.0 | 5602 ms / 1451.5 | 3.37x, 3.31x |
+
+kiln's `peak_arena` at N → 4N: S1 1464 → 1464, S2 4586 → 4586, S3
+32200 → 127432, S4 1464 → 1464, S5 32272 → 32272, S6 4152 → 16440.
 
 ### `--scaling` (N=40 to N=160)
 
@@ -508,7 +525,7 @@ share of the named profile that the work could remove.
 |---|---|---|---|---|---|---|
 | F1 | `if consteval` is true in trial folds and in runtime code | kiln_oven `compile.rs` `StmtKind::IfStmt`, `IfKind::Consteval`/`NotConsteval` (always picks the consteval branch) | `constexpr bool ice() { if consteval { return true; } else { return false; } } inline int f() { if (ice()) return 1; return 2; }` returns 1 at run time (clang: 2). libstdc++ `char_traits::length`, `copy` and `_M_init_local_buf` take their constant-evaluation loops at run time. | Correctness. Removes the extra loops kiln adds to the -O2 IR. | Medium: must emit `IsConstEval` and branch on it, and must stay correct under call memoization | S–M |
 | F2 | `noexcept(std::__relocate_a(...))` evaluates to false | kiln_sema noexcept-specification evaluation (the cause is not yet isolated) | `static_assert(noexcept(std::__relocate_a(declval<string*>() ×3, declval<allocator<string>&>())))` fails on kiln and passes on GCC 16.1 and clang 19. `vector::_M_realloc_append` takes the copy-and-destroy path. | Correctness and run-time performance. Makes vector growth IR match clang's. | Low–medium | S–M |
-| F3 | `extract` of a static data member of a `substitute`d specialization | kiln_sema, instantiating a variable initializer on a reflection-driven odr-use | `bench/reflect/s5.cpp` on libstdc++: "initializer of 'value' is unknown" | Correctness: lets S5 compile | Medium | S–M |
+| F3 | **Done (landed WP-638).** `extract` of a static data member of a `substitute`d specialization | kiln_sema, instantiating a variable initializer on a reflection-driven odr-use | `bench/reflect/s5.cpp` on libstdc++: "initializer of 'value' is unknown" | Correctness: lets S5 compile | Medium | S–M |
 | P1 | Split the production stage by tool and N (measurement only) | the reference harness | The superlinearity analysis above | Pins down the super-linear term | None | S |
 | F4 | Hand LLVM bitcode, or skip the text round trip | kiln_llvm printer, kiln_driver `ir_passes` | Printing is 11.1% of R3, and `opt` spends 0.9 s parsing text at S8 N=160 | About 11% of R3's frontend plus the parse | Medium: a bitcode writer is new code | M–L |
 | F5 | Cut allocation churn | kiln_sema, kiln_ast (`Vec` growth sites), kiln_codegen | `malloc`/`free` and internals are 11–17% of self in every profile. 99 M allocations in R3, 32% of them from `finish_grow` | 5–8% | Low | M |
@@ -525,4 +542,4 @@ share of the named profile that the work could remove.
 | F16 | Do not re-classify keywords in `decltype` lookahead | kiln_parse `Parser::decltype_scope_end` | 3 M of 7.7 M `Keywords::get` calls in R1 | About 0.6% of R1 | Low | S |
 | F17 | Cache built-in operator candidate sets | kiln_sema `add_builtin_with` | 4.6 M calls at 434 Ir each, 1% of R2 | About 1% | Low | S |
 | F18 | FxHash in codegen and the IR printer | kiln_codegen, kiln_llvm | `SipHasher13` is 0.9% + 0.24% of R3 | About 1% of R3 | Low | S |
-| F19 | Give S1–S6 libstdc++ in the bench | xtask `gen_reflect`, the bench | The bench builds S1–S6 against libc++, which has no `<meta>`, so all six are `xfail` | Brings S1–S6 into the regression gate | Low | S |
+| F19 | **Done (landed WP-638).** Give S1–S6 libstdc++ in the bench | xtask `gen_reflect`, the bench | The bench builds S1–S6 against libc++, which has no `<meta>`, so all six are `xfail` | Brings S1–S6 into the regression gate | Low | S |
