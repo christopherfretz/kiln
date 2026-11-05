@@ -26,7 +26,12 @@ fn generate(manifest: &Path, out: &Path, dir: &str, table: &str, inner: &str) {
     let mut files: Vec<PathBuf> = fs::read_dir(&src)
         .unwrap_or_else(|e| panic!("cannot list {}: {e}", src.display()))
         .map(|e| e.unwrap_or_else(|e| panic!("cannot list {}: {e}", src.display())).path())
-        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        // Hidden files are skipped: a tree copied off macOS can carry `._*.rs`
+        // AppleDouble metadata files, which are not UTF-8.
+        .filter(|p| {
+            p.extension().is_some_and(|x| x == "rs")
+                && !p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('.'))
+        })
         .collect();
     files.sort();
     let mut text = format!(
