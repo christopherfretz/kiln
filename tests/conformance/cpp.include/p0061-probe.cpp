@@ -1,5 +1,7 @@
-// [cpp.cond] (C++17, P0061R1): `__has_include` in #if and as a macro
-// test. WP-646 feature probe.
+// [cpp.cond]/4-5, [cpp.include] (C++17, P0061R1): `__has_include` in #if
+// and as a macro test. Kept here rather than in cpp.cond/, whose in-memory
+// #if test (kiln_pp ifeval_conformance) cannot resolve headers.
+// WP-646 feature probe.
 //@ expect: compile-ok
 //@ std: c++17
 //@ strict-diags

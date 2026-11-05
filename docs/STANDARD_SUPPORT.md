@@ -193,7 +193,7 @@ required observable.
 | P0195R2 | Pack expansions in using-declarations | `__cpp_variadic_using` 201611L / 201611L | done | `conformance/namespace.udecl/pack-expansion-overloaded.cpp` | |
 | P0522R0 | Matching template template arguments | `__cpp_template_template_args` 201611L / 201611L | done | `conformance/temp.arg.template/relaxed-matching.cpp` | |
 | P0003R5 | Removing dynamic exception specifications | — | done | `conformance/except.spec/dynamic-exception-spec.cpp` | |
-| P0061R1 | `__has_include` | — | done | `conformance/cpp.cond/p0061-probe.cpp` | |
+| P0061R1 | `__has_include` | — | done | `conformance/cpp.include/p0061-probe.cpp` | |
 
 ## C++20
 
