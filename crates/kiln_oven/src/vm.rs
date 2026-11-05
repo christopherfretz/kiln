@@ -764,7 +764,27 @@ impl Oven {
                 Op::Halt => return Ok(()),
                 Op::Step => {
                     step!(w, arg!(0), pc);
-                    pc += 2;
+                    // In-place fusion (spec/oven.md "Dispatch"): a Step
+                    // usually opens a block whose first instruction is a
+                    // `Mov` or a `Const`; run it from the same window.
+                    if is_next!(2, Mov) {
+                        #[cfg(feature = "op-stats")]
+                        opstats::count(Op::Mov);
+                        self.regs[fb + win[3] as usize] = self.regs[fb + win[4] as usize];
+                        pc += 5;
+                    } else if is_next!(2, Const) {
+                        #[cfg(feature = "op-stats")]
+                        opstats::count(Op::Const);
+                        let v = u64::from(win[4]) | u64::from(win[5]) << 32;
+                        self.regs[fb + win[3] as usize] = if win[2] >> 8 & 1 != 0 {
+                            v as i64 as i128 as u128
+                        } else {
+                            u128::from(v)
+                        };
+                        pc += 6;
+                    } else {
+                        pc += 2;
+                    }
                 }
                 Op::Const => {
                     let v = u64::from(win[2]) | u64::from(win[3]) << 32;
