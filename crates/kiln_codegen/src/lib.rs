@@ -210,6 +210,9 @@ pub struct CodegenOptions {
     /// Data Threshold` for `medium` / `large`, as clang); `None` emits
     /// neither (the backend's default, `small`).
     pub code_model: Option<CodeModel>,
+    /// How `std::meta::info` template arguments mangle
+    /// (`-fkiln-reflection-mangling=`; spec/reflection.md §8.3).
+    pub reflection_mangling: kiln_abi::ReflectionMangling,
 }
 
 /// An `-mcmodel=` code model (LLVM `CodeModel::Model`).
@@ -495,6 +498,7 @@ impl Default for CodegenOptions {
             tune_cpu: None,
             no_inline: false,
             code_model: None,
+            reflection_mangling: kiln_abi::ReflectionMangling::Kiln,
         }
     }
 }
@@ -540,6 +544,23 @@ pub fn emit_with_diags(
     opts: &CodegenOptions,
 ) -> (Result<Module, CodegenError>, Vec<kiln_diag::Diag>) {
     let folds = fold::prepass(ast, oven, target);
+    // The mangler reads data member descriptions from the AST
+    // (spec/reflection.md §8.3).
+    if oven.dms_count() > 0 {
+        let dms = (1..=oven.dms_count())
+            .filter_map(|i| u32::try_from(i).ok().and_then(kiln_ast::ids::DmsId::try_new))
+            .filter_map(|id| oven.dms(id))
+            .map(|d| kiln_ast::reflect::DmsDesc {
+                ty: d.ty,
+                name: d.name,
+                alignment: d.alignment,
+                bit_width: d.bit_width,
+                nua: d.nua,
+                annotations: oven.dms_annots(d.annots).to_vec(),
+            })
+            .collect();
+        ast.reflections.set_dms(dms);
+    }
     let void_ptr = ast.types.pointer_to(kiln_ast::QualType::VOID);
     module::Cg::new(&*ast, &folds, target, opts, void_ptr).run()
 }

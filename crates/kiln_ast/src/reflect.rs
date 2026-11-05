@@ -175,6 +175,28 @@ pub struct ReflectionTable {
     by_decl: Vec<u32>,
     /// The most reflections (null included) the table holds.
     limit: usize,
+    /// The data member descriptions by `DmsId` index − 1, as the
+    /// mangler reads them ([`ReflectionTable::set_dms`]).
+    dms: Vec<DmsDesc>,
+}
+
+/// A data member description (the evaluator's `Dms`, which lives in the
+/// Oven) as the mangler reads it (spec/reflection.md §8.3: `ds`). Codegen
+/// copies the Oven's table in before mangling.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct DmsDesc {
+    /// The member type.
+    pub ty: QualType,
+    /// The identifier; `None` for an unnamed bit-field.
+    pub name: Option<kiln_source::symbol::Symbol>,
+    /// `alignas(A)`, if given.
+    pub alignment: Option<u32>,
+    /// The bit-field width, if given.
+    pub bit_width: Option<u32>,
+    /// `[[no_unique_address]]`.
+    pub nua: bool,
+    /// The annotations (constant reflections).
+    pub annotations: Vec<ReflectionId>,
 }
 
 /// [`ReflectionTable::intern`] of a new reflection into a full table: the
@@ -200,7 +222,25 @@ impl ReflectionTable {
         let mut map = FxHashMap::default();
         map.insert(Reflectee::Null, ReflectionId::NULL);
         let limit = limit.clamp(1, u32::MAX as usize);
-        ReflectionTable { items: vec![Reflectee::Null], map, by_decl: Vec::new(), limit }
+        ReflectionTable {
+            items: vec![Reflectee::Null],
+            map,
+            by_decl: Vec::new(),
+            limit,
+            dms: Vec::new(),
+        }
+    }
+
+    /// Records the data member descriptions, `DmsId` index − 1 each
+    /// (codegen, from the Oven; replaces any set before).
+    pub fn set_dms(&mut self, dms: Vec<DmsDesc>) {
+        self.dms = dms;
+    }
+
+    /// The data member description `id`, once [`Self::set_dms`] has
+    /// recorded it.
+    pub fn dms(&self, id: DmsId) -> Option<&DmsDesc> {
+        (id.index() as usize).checked_sub(1).and_then(|i| self.dms.get(i))
     }
 
     /// The id of `r`, interning it; an error when `r` is new and the
@@ -271,6 +311,7 @@ impl HeapSize for ReflectionTable {
         r.push(MemRow::of_vec("items", &self.items));
         r.push(MemRow::of_map("map", &self.map));
         r.push(MemRow::of_vec("by_decl", &self.by_decl));
+        r.push(MemRow::of_vec("dms", &self.dms));
         r
     }
 }
