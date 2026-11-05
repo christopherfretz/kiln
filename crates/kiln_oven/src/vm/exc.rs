@@ -255,15 +255,16 @@ impl Oven {
         }
     }
 
-    /// The pc of the Oven's `Op::Unwind` (appended on first use: the code
-    /// is never truncated).
+    /// The pc of the Oven's `Op::Unwind` (appended on first use, over the
+    /// last unit's padding, `kbc::unpad`).
     fn unwind_pc(&mut self) -> usize {
         if let Some(p) = self.exc.unwind_pc {
             return p as usize;
         }
+        crate::kbc::unpad(&mut self.code, &mut self.padded);
         let p = self.code.len() as u32;
         self.code.push(Op::Unwind as u32);
-        crate::kbc::pad(&mut self.code);
+        crate::kbc::pad(&mut self.code, &mut self.padded);
         self.exc.unwind_pc = Some(p);
         p as usize
     }

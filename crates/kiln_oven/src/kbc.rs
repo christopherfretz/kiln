@@ -721,11 +721,26 @@ const _: () = {
 };
 
 /// Ends a unit of code with `WINDOW - 1` `Nop` words, so the fetch window
-/// of its last instruction lies inside the code. The words are never
-/// executed (control never falls off the end of a unit), and the next
-/// unit is appended after them.
-pub(crate) fn pad(code: &mut Vec<u32>) {
+/// of its last instruction lies inside the code; `padded` records where
+/// the padding ends. The words are never executed (control never falls
+/// off the end of a unit).
+pub(crate) fn pad(code: &mut Vec<u32>, padded: &mut usize) {
     code.extend_from_slice(&[Op::Nop as u32; WINDOW - 1]);
+    *padded = code.len();
+}
+
+/// Before a unit is appended: drops the previous unit's padding when it
+/// is still the end of the code, so the new unit starts where the
+/// padding did and only the last unit carries any. The previous unit's
+/// last windows then read the new unit's first words, which no
+/// instruction interprets (they lie past its operands, and control never
+/// falls off the end of a unit into them). Until the new unit is padded,
+/// a window at the previous unit's end takes [`tail_window`].
+pub(crate) fn unpad(code: &mut Vec<u32>, padded: &mut usize) {
+    if *padded != 0 && code.len() == *padded {
+        code.truncate(*padded - (WINDOW - 1));
+    }
+    *padded = 0;
 }
 
 /// The fetch window at `pc` when fewer than [`WINDOW`] words follow it
@@ -858,7 +873,9 @@ mod tests {
     fn padded_unit_windows_are_in_bounds() {
         let mut code = unit();
         let end = code.len();
-        pad(&mut code);
+        let mut padded = 0;
+        pad(&mut code, &mut padded);
+        assert_eq!(padded, code.len());
         for pc in pcs(&code, end) {
             assert!(code.len() - pc >= WINDOW, "pc {pc}");
             let w = window(&code, pc);
@@ -866,6 +883,31 @@ mod tests {
         }
         // The padding disassembles as `Nop`s after the unit's code.
         assert!(code[end..].iter().all(|&w| w == Op::Nop as u32));
+    }
+
+    /// Only the last unit carries padding: the next unit starts where the
+    /// previous one's padding did, and every window of both units still
+    /// holds its instruction.
+    #[test]
+    fn next_unit_reclaims_the_padding() {
+        let mut code = unit();
+        let mut padded = 0;
+        pad(&mut code, &mut padded);
+        unpad(&mut code, &mut padded);
+        let second = code.len();
+        assert_eq!(second, unit().len());
+        code.extend_from_slice(&unit());
+        pad(&mut code, &mut padded);
+        assert_eq!(code.len(), 2 * unit().len() + WINDOW - 1);
+        for pc in pcs(&code, code.len() - (WINDOW - 1)) {
+            let n = 1 + Op::from_u8(code[pc] as u8).operands();
+            assert_eq!(window(&code, pc)[..n], code[pc..pc + n], "pc {pc}");
+        }
+        // Mid-unit (the code does not end in padding) `unpad` is a no-op.
+        code.push(Op::Nop as u32);
+        let len = code.len();
+        unpad(&mut code, &mut padded);
+        assert_eq!(code.len(), len);
     }
 
     #[test]

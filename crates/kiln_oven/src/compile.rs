@@ -1043,7 +1043,7 @@ impl<'a> Compiler<'a> {
     /// of its last instruction is in bounds) and returns its register
     /// count.
     fn end_unit(&mut self) -> u32 {
-        crate::kbc::pad(&mut self.o.code);
+        crate::kbc::pad(&mut self.o.code, &mut self.o.padded);
         self.max
     }
 
@@ -1163,6 +1163,10 @@ impl<'a> Compiler<'a> {
 
     /// The current position as a jump target.
     fn here(&mut self) -> u32 {
+        // A unit's first `here` is its entry: emit it over the previous
+        // unit's padding (`kbc::unpad`; a no-op mid-unit, where the code
+        // does not end in padding).
+        crate::kbc::unpad(&mut self.o.code, &mut self.o.padded);
         self.flush();
         self.o.code.len() as u32
     }
