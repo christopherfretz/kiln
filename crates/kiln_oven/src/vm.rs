@@ -2140,6 +2140,10 @@ impl Oven {
 
     /// The array extent a pointer to `elem` lies in: (start, n, cur index,
     /// is an array).
+    // Always inlined into `ptr_add` (the `PtrAdd` op) and `ptr_sub`:
+    // outlined, its `Result` returns through memory on every step.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn extent_of(&self, raw: u64, elem: OTy) -> Result<(u64, u64, u64, bool), Fault> {
         let p = Ptr::decode(raw);
         let Some(a) = self.alloc_any(p) else {
