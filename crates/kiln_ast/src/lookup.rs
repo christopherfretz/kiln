@@ -347,7 +347,8 @@ impl LookupTables {
     }
 
     pub(crate) fn live_bytes(&self) -> u64 {
-        MemRow::of_map("table", &self.map).live_bytes + self.set_row().live_bytes
+        let sets = crate::mem::VecDims::of("sets", &self.sets).live_bytes();
+        crate::mem::map_live_bytes(&self.map) + sets + self.set_words as u64 * 4
     }
 }
 
@@ -380,6 +381,7 @@ impl HeapSize for LookupTables {
 mod tests {
     use super::{LookupFlags, LookupTables};
     use crate::ids::DeclId;
+    use crate::mem::HeapSize;
     use crate::names::DeclName;
     use kiln_source::symbol::Interner;
 
@@ -403,6 +405,11 @@ mod tests {
             let words: usize = t.sets.iter().map(Vec::len).sum();
             let cap: usize = t.sets.iter().map(Vec::capacity).sum();
             assert_eq!((t.set_words, t.set_cap), (words, cap));
+            // The instantiation meter's allocation-free sum (WP-645) is
+            // the report rows' live bytes (spec/ast.md §2.3).
+            let rows = t.heap_bytes();
+            let report = rows.row("table").unwrap().live_bytes + rows.row("sets").unwrap().live_bytes;
+            assert_eq!(t.live_bytes(), report);
         }
     }
 }

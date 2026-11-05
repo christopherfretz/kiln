@@ -109,6 +109,11 @@ impl<K: Copy + Eq + Hash, V> ColdMap<K, V> {
         self.map.iter().map(|(k, v)| (*k, v))
     }
 
+    /// The live bytes of [`Self::mem_row`], allocating nothing.
+    pub fn live_bytes(&self) -> u64 {
+        crate::mem::map_live_bytes(&self.map)
+    }
+
     /// The memory row of this map (named after the map).
     pub fn mem_row(&self) -> MemRow {
         MemRow::of_map(self.name, &self.map)

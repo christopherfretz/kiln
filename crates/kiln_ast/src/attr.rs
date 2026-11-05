@@ -519,7 +519,7 @@ impl AttrArena {
     }
 
     pub(crate) fn live_bytes(&self) -> u64 {
-        MemRow::of_vec("nodes", &self.nodes).live_bytes + self.decl_attrs.mem_row().live_bytes
+        crate::mem::VecDims::of("nodes", &self.nodes).live_bytes() + self.decl_attrs.live_bytes()
     }
 }
 

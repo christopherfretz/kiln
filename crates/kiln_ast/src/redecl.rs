@@ -74,7 +74,7 @@ impl RedeclTable {
     }
 
     pub(crate) fn live_bytes(&self) -> u64 {
-        MemRow::of_vec("groups", &self.groups).live_bytes
+        crate::mem::VecDims::of("groups", &self.groups).live_bytes()
     }
 }
 
