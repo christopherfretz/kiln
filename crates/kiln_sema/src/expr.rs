@@ -2775,12 +2775,21 @@ impl Sema<'_, '_> {
             }
             return self.builder().dependent_unary(op, e, loc);
         }
-        let x =
+        // `&C::m` of a non-static member forms a pointer to member
+        // ([expr.unary.op]/3) whatever the type of `m`: it never calls an
+        // `operator&` (clang's `isQualifiedMemberAccess` in
+        // `BuildUnaryOp`). Looking one up would also complete the class
+        // of `m` and its associated classes, an instantiation run while
+        // the name is still pending.
+        let x = if op == UnaryOp::AddrOf && self.member_refs.get(&e).is_some_and(|r| r.qualified) {
+            self.builtin_unary(op, e, loc)
+        } else {
             match self.try_overloaded_operator(OperForm::Unary(op), &[e], &[], loc, Loc::INVALID) {
                 OperResult::Done(x) => x,
                 OperResult::Converted(v) => self.builtin_unary(op, v[0], loc),
                 OperResult::Builtin | OperResult::BuiltinNotes(_) => self.builtin_unary(op, e, loc),
-            };
+            }
+        };
         if op == UnaryOp::AddrOf && self.special.has_pending() {
             self.widen_pending_template_id(e, x);
         }
