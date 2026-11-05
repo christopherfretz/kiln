@@ -1031,7 +1031,7 @@ impl Oven {
     }
 
     /// Bytes of heap the evaluator holds (capacities of its code, abstract
-    /// memory, registers, stacks, caches and scratch buffers). Compiling
+    /// memory, registers, stacks, caches, scratch buffers and type table). Compiling
     /// new code grows it; re-evaluating compiled code must not
     /// (spec/oven.md "Memory": the frame arena is reset, not freed).
     pub fn footprint(&self) -> usize {
@@ -1074,6 +1074,7 @@ impl Oven {
             + self.dms.footprint()
             + self.mp.footprint()
             + self.virt.footprint()
+            + self.types.footprint()
     }
 
     /// The disassembly of everything compiled so far (debugging aid).

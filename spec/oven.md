@@ -628,7 +628,8 @@ asks whether the evaluation is manifestly constant-evaluated.
   during the evaluation (an `info` may sit anywhere in Oven memory); a
   per-evaluation overlay table is an M7 item.
 - `EvalStats` holds one `EvalRecord` per `evaluate` call and TU totals.
-  `Oven::footprint()` is the evaluator's own heap (code, memory, caches).
+  `Oven::footprint()` is the evaluator's own heap (code, memory, caches,
+  and the type table with its offset index, WP-642).
 
 ### Reporting protocol
 `-fconstexpr-report=<path>` makes the driver write one report per
@@ -2151,6 +2152,25 @@ designates the member `P[2][3]` although the subscript's element type is
 `const P[3]` (WP-201). A function named by a `DeclRefExpr` or a member access
 (`t.f` with `f` a static member function) is an lvalue whose address is
 `fn_ptr(func_index)`; references to functions evaluate to it (WP-201).
+
+**Offset index (WP-642).** Every by-offset lookup above (`field_at`,
+`member_toward`, `extent_in`, `has_subobject`, `has_base_subobject`,
+`has_bit_unit`, and the path walks `union_path`, `mutable_path` and
+`place_in_unions`) visits its candidates through `Types::near(t, off)`:
+the fields of `t` whose extent `[offset, offset + max(size, 1))` contains
+`off`, a superset of every caller's predicate, in declaration order, so
+each caller's first-match and greatest-offset rules are unchanged. A
+record with at least 16 fields (and each base-subobject view of it) gets,
+once at layout time, its field indices sorted by offset plus a prefix
+maximum of their ends; `near` binary-searches it and walks back while an
+earlier field can still reach `off`. When that yields more than 8
+candidates or needs more than 32 steps back (many members at one offset,
+or one large member spanning many), `near` returns every field, which is
+the linear scan it replaces. Smaller records always take the scan. A
+member access looks its field up by declaration
+(`Types::field_index`, a map for indexed records). The index is part of
+`Types::footprint`, which `Oven::footprint` includes
+(`bench/oven/wide-struct-store.cpp`, `wide-struct-read.cpp`).
 
 **Static members and function lvalues (WP-207).** `E.m`/`E->m` naming a
 static data member evaluates `E` for its side effects only

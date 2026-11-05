@@ -4495,9 +4495,7 @@ impl Compiler<'_> {
             bt
         };
         let (union, idx) = match self.kind(rt) {
-            TyKind::Record { union, .. } => {
-                (union, self.o.types.fields(rt).iter().position(|f| f.decl == fd))
-            }
+            TyKind::Record { union, .. } => (union, self.o.types.field_index(rt, fd)),
             _ => (false, None),
         };
         let Some(idx) = idx else {
