@@ -382,6 +382,13 @@ struct Block {
     placed: bool,
     /// Terminator references to the block.
     uses: u32,
+    /// The instructions that named the block as a successor or as a phi's
+    /// incoming block, oldest first: a superset (an entry may since have
+    /// been erased or redirected), filtered by [`Fir::refs`]. Lets the
+    /// predecessor queries and [`Fir::replace_block_uses`] avoid scanning
+    /// the whole function, which made a function with many cleanups
+    /// quadratic.
+    refs: Vec<u32>,
     /// The LLVM block made for it ahead of lowering, for a
     /// `blockaddress` ([`Fir::block_id`]).
     llvm: Option<BlockId>,
@@ -530,15 +537,17 @@ impl Fir {
     pub fn single_predecessor(&self, b: Blk) -> Option<Blk> {
         let mut pred = None;
         let unplaced = self.igoto.map(|g| g.blk).filter(|&g| !self.is_placed(g));
-        for &bb in self.layout.iter().chain(unplaced.as_ref()) {
-            if let Some(t) = self.terminator(bb) {
-                for s in self.insts[t as usize].op.successors() {
-                    if s == b {
-                        if pred.is_some() {
-                            return None;
-                        }
-                        pred = Some(bb);
+        for i in self.refs(b) {
+            let Some(bb) = self.insts[i as usize].block else { continue };
+            if !(self.is_placed(bb) || Some(bb) == unplaced) || self.terminator(bb) != Some(i) {
+                continue;
+            }
+            for s in self.insts[i as usize].op.successors() {
+                if s == b {
+                    if pred.is_some() {
+                        return None;
                     }
+                    pred = Some(bb);
                 }
             }
         }
@@ -547,13 +556,16 @@ impl Fir {
 
     /// Replaces every branch to `from` with a branch to `to`.
     pub fn replace_block_uses(&mut self, from: Blk, to: Blk) {
-        for inst in &mut self.insts {
+        for i in self.refs(from) {
+            let inst = &mut self.insts[i as usize];
             if inst.block.is_none() {
                 continue;
             }
+            let mut changed = false;
             for s in inst.op.successors_mut() {
                 if *s == from {
                     *s = to;
+                    changed = true;
                     self.blocks[from.0 as usize].uses -= 1;
                     self.blocks[to.0 as usize].uses += 1;
                 }
@@ -562,9 +574,42 @@ impl Fir {
                 for x in inc {
                     if x.1 == from {
                         x.1 = to;
+                        changed = true;
                     }
                 }
             }
+            if changed {
+                self.note_ref(to, i);
+            }
+        }
+    }
+
+    /// The instructions that may name `b` (see `Block::refs`), ascending
+    /// and without duplicates.
+    fn refs(&self, b: Blk) -> Vec<u32> {
+        let mut v = self.blocks[b.0 as usize].refs.clone();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    /// Records that instruction `i` names block `b`.
+    fn note_ref(&mut self, b: Blk, i: u32) {
+        let r = &mut self.blocks[b.0 as usize].refs;
+        if r.last() != Some(&i) {
+            r.push(i);
+        }
+    }
+
+    /// Records the blocks the new instruction `i` names.
+    fn note_refs(&mut self, i: u32) {
+        let op = &self.insts[i as usize].op;
+        let mut bs = op.successors();
+        if let Op::Phi { inc, .. } = op {
+            bs.extend(inc.iter().map(|x| x.1));
+        }
+        for b in bs {
+            self.note_ref(b, i);
         }
     }
 
@@ -643,6 +688,7 @@ impl Fir {
         if let Op::IndirectBr { dests, .. } = &mut self.insts[i as usize].op {
             dests.push(d);
             self.blocks[d.0 as usize].uses += 1;
+            self.note_ref(d, i);
         }
     }
 
@@ -662,6 +708,7 @@ impl Fir {
         if let Op::Switch { cases, .. } = &mut self.insts[i as usize].op {
             cases.push((v, d));
             self.blocks[d.0 as usize].uses += 1;
+            self.note_ref(d, i);
         }
     }
 
@@ -745,6 +792,7 @@ impl Fir {
         };
         self.insts.push(Inst { op, ty, block: Some(b), md });
         self.blocks[b.0 as usize].insts.push(n);
+        self.note_refs(n);
         V::I(n)
     }
 
@@ -756,6 +804,7 @@ impl Fir {
         }
         self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
         self.blocks[b.0 as usize].insts.push(n);
+        self.note_refs(n);
         V::I(n)
     }
 
@@ -771,6 +820,7 @@ impl Fir {
         let insts = &mut self.blocks[b.0 as usize].insts;
         let at = insts.len().saturating_sub(1);
         insts.insert(at, n);
+        self.note_refs(n);
         V::I(n)
     }
 
@@ -813,6 +863,7 @@ impl Fir {
         }
         self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
         self.blocks[b.0 as usize].insts.insert(pos, n);
+        self.note_refs(n);
         V::I(n)
     }
 
@@ -828,6 +879,7 @@ impl Fir {
         let insts = &mut self.blocks[b.0 as usize].insts;
         let pos = insts.iter().position(|&x| x == at).expect("instruction in its block");
         insts.insert(pos, n);
+        self.note_refs(n);
         V::I(n)
     }
 
@@ -900,6 +952,9 @@ impl Fir {
             self.blocks[from.0 as usize].uses -= n;
             self.blocks[to.0 as usize].uses += n;
         }
+        if n > 0 {
+            self.note_ref(to, i);
+        }
     }
 
     /// Moves every instruction of `from` to the end of `to`; `from` is
@@ -917,7 +972,8 @@ impl Fir {
 
     /// The live terminators branching to `b`.
     pub fn branches_to(&self, b: Blk) -> Vec<u32> {
-        (0..self.insts.len() as u32)
+        self.refs(b)
+            .into_iter()
             .filter(|&i| {
                 let x = &self.insts[i as usize];
                 x.block.is_some() && x.op.is_terminator() && x.op.successors().contains(&b)
@@ -929,6 +985,7 @@ impl Fir {
     pub fn add_incoming(&mut self, i: u32, v: V, from: Blk) {
         if let Op::Phi { inc, .. } = &mut self.insts[i as usize].op {
             inc.push((v, from));
+            self.note_ref(from, i);
         }
     }
 
@@ -936,12 +993,12 @@ impl Fir {
     /// created branch first (one entry per edge).
     pub fn predecessors(&self, b: Blk) -> Vec<Blk> {
         let mut out = Vec::new();
-        for (i, inst) in self.insts.iter().enumerate().rev() {
+        for i in self.refs(b).into_iter().rev() {
+            let inst = &self.insts[i as usize];
             let Some(bb) = inst.block else { continue };
             if !inst.op.is_terminator() {
                 continue;
             }
-            let _ = i;
             for s in inst.op.successors().into_iter().rev() {
                 if s == b {
                     out.push(bb);
