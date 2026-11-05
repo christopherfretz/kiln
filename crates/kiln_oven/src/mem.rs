@@ -1265,7 +1265,64 @@ impl Memory {
 
     /// [`Memory::check`] without the lifetime check of tracked storage:
     /// the checks of a placement new, which begins a lifetime.
+    ///
+    /// The access that passes every check takes [`Memory::check_plain`],
+    /// one predicate inlined into the caller; any other runs the checks in
+    /// their order ([`Memory::check_ordered`]), so the fault an access
+    /// reports is the one the order picks (spec/oven.md "Checks on every
+    /// access").
+    #[inline]
     pub fn check_storage(
+        &self,
+        raw: u64,
+        len: u64,
+        write: bool,
+    ) -> Result<(Sp, u64, &Alloc), MemFault> {
+        match self.check_plain(raw, len) {
+            Some(r) => Ok(r),
+            None => self.check_ordered(raw, len, write),
+        }
+    }
+
+    /// The access of `len` bytes at `raw` when [`Memory::check_ordered`]
+    /// would accept it without consulting the allocation's origin: a live
+    /// allocation of the pointer's slot and generation (never the dead
+    /// frame slot 0, so not null; not a function pointer), not past the
+    /// end, the bytes in bounds, neither [`flags::EXTERNAL`] nor
+    /// [`UNBACKED`]. `None` otherwise, including every access the ordered
+    /// checks accept only by its origin (the lax read of a
+    /// [`LAX_READ`] object).
+    #[inline(always)]
+    fn check_plain(&self, raw: u64, len: u64) -> Option<(Sp, u64, &Alloc)> {
+        let slot = ((raw >> SLOT_SHIFT) & SLOT_MASK) as u32;
+        let (sp, a) = if slot & STATIC_BIT != 0 {
+            if slot == FN_SLOT {
+                return None;
+            }
+            (Sp::Static, self.statics.get((slot & !STATIC_BIT) as usize)?)
+        } else if slot & HEAP_BIT != 0 {
+            (Sp::Heap, self.hslots.get((slot - HEAP_BIT) as usize)?)
+        } else {
+            (Sp::Frame, self.slots.get(slot as usize)?)
+        };
+        // With the past-the-end bit kept, a past-the-end pointer's offset
+        // exceeds every size (sizes are below 2^32).
+        let off = raw & (OFF_MASK | PAST);
+        let ok = u64::from(a.generation) == raw >> GEN_SHIFT
+            && a.live
+            && a.flags & flags::EXTERNAL == 0
+            && a.base != UNBACKED
+            && off + len <= u64::from(a.size);
+        ok.then(|| (sp, u64::from(a.base) + off, a))
+    }
+
+    /// The checks of [`Memory::check_storage`] in their order, the first
+    /// failing one the fault: null, function pointer, slot and generation,
+    /// liveness, past the end, bounds, the origin of an
+    /// [`flags::EXTERNAL`] object, [`UNBACKED`].
+    #[cold]
+    #[inline(never)]
+    fn check_ordered(
         &self,
         raw: u64,
         len: u64,
@@ -3046,6 +3103,161 @@ mod tests {
                     .fold(0u128, |r, i| r << 8 | u128::from(want[(abs + i) as usize]));
                 assert_eq!(s.read(abs, len), r, "read {abs} {len}");
             }
+        }
+    }
+
+    // ---- the access check, against the checks in their order ----
+
+    /// The body of `Memory::check_storage` before WP-650, kept as the
+    /// reference: every check in its order, the first failing one the
+    /// fault.
+    fn check_reference(
+        m: &Memory,
+        raw: u64,
+        len: u64,
+        write: bool,
+    ) -> Result<(Sp, u64, &Alloc), MemFault> {
+        if raw == 0 {
+            return Err(MemFault::Null);
+        }
+        let p = Ptr::decode(raw);
+        if p.is_fn() {
+            return Err(MemFault::FnPtr);
+        }
+        let a = m.alloc_of(p)?;
+        if p.past {
+            return Err(MemFault::PastEnd);
+        }
+        if u64::from(p.off) + len > u64::from(a.size) {
+            return Err(if u64::from(p.off) >= u64::from(a.size) {
+                MemFault::PastEnd
+            } else {
+                MemFault::OutOfBounds
+            });
+        }
+        if a.flags & flags::EXTERNAL != 0 {
+            match a.origin {
+                Origin::External(_) if m.lax && !write && a.frame == LAX_READ => {}
+                Origin::External(d) => return Err(MemFault::External(d, write)),
+                Origin::Unknown(d) => return Err(MemFault::Unknown(d)),
+                Origin::Let(t) => return Err(MemFault::Temporary(t)),
+                Origin::Label(e) => return Err(MemFault::Literal(Some(e))),
+                _ => {}
+            }
+        }
+        if a.base == UNBACKED {
+            return Err(MemFault::Stale);
+        }
+        Ok((p.space(), u64::from(a.base) + u64::from(p.off), a))
+    }
+
+    type Checked = Result<(Sp, u64, *const Alloc), MemFault>;
+
+    fn ident(r: Result<(Sp, u64, &Alloc), MemFault>) -> Checked {
+        r.map(|(sp, abs, a)| (sp, abs, std::ptr::from_ref(a)))
+    }
+
+    /// spec/oven.md "Checks on every access" (WP-650): the plain-access
+    /// predicate with the ordered checks behind it gives every access the
+    /// result (the fault, or the space, address and allocation) of the
+    /// checks run in their order: null, function, stale and bad slots,
+    /// dead and reused frame slots, past-the-end pointers, offsets at,
+    /// past and far past the end, lengths that overflow the object,
+    /// external, unknown, temporary, label and lax-readable objects,
+    /// unbacked ones, and tracked storage outside its lifetime.
+    #[test]
+    fn plain_check_agrees_with_the_ordered_checks() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let d = DeclId::new(3);
+        let e = ExprId::new(9);
+        let mut ptrs = vec![0, fn_ptr(0), fn_ptr(5), Ptr::with_off(NOWHERE, 5, false)];
+        // Frame objects released one after another: once more than the
+        // quarantine wait, their slots are reused, so the first ones are
+        // stale and the last ones dead.
+        for i in 0..24 {
+            let mk = m.mark();
+            ptrs.push(m.alloc(OTy(0), 8 + i, 0, Origin::Var(d)).unwrap());
+            m.release(mk, &t);
+        }
+        ptrs.push(m.alloc(OTy(0), 24, 0, Origin::Var(d)).unwrap());
+        ptrs.push(m.alloc(OTy(0), 1, flags::CONST, Origin::Temp(e)).unwrap());
+        ptrs.push(m.alloc(OTy(0), 0, 0, Origin::None).unwrap());
+        let life = m.alloc(OTy(0), 16, 0, Origin::Var(d)).unwrap();
+        m.set_lifetime(Ptr::with_off(life, 8, false), 8, false).unwrap();
+        ptrs.push(life);
+        // Heap objects: live, deleted, `std::allocator` storage half
+        // constructed.
+        ptrs.push(heap(&mut m, 40));
+        let gone = heap(&mut m, 16);
+        free(&mut m, gone);
+        ptrs.push(gone);
+        let sa = m.heap_alloc(OTy(0), 32, flags::STD_ALLOC, Origin::Heap(e, 9)).unwrap();
+        m.set_lifetime(sa, 8, true).unwrap();
+        ptrs.push(sa);
+        // Static objects of every origin an access looks at.
+        ptrs.push(snew(&mut m, 32));
+        ptrs.push(m.alloc_static(OTy(0), 16, flags::CONST, Origin::Global(d)));
+        ptrs.push(m.alloc_static(OTy(0), 16, flags::EXTERNAL, Origin::Global(d)));
+        ptrs.push(m.alloc_static(OTy(0), 16, flags::EXTERNAL, Origin::External(d)));
+        ptrs.push(m.alloc_static_in(OTy(0), 16, flags::EXTERNAL, Origin::External(d), LAX_READ));
+        ptrs.push(m.alloc_static(OTy(0), 8, flags::EXTERNAL, Origin::Let(d)));
+        ptrs.push(m.alloc_unbacked(OTy(0), 8, flags::EXTERNAL, Origin::Label(e)));
+        ptrs.push(m.alloc_unbacked(OTy(0), 64, flags::EXTERNAL, Origin::Unknown(d)));
+        ptrs.push(m.alloc_unbacked(OTy(0), 1 << 40, flags::EXTERNAL, Origin::External(d)));
+        let scratch = snew(&mut m, 8);
+        m.free_static(scratch, &t);
+        ptrs.push(scratch);
+        // Slots no allocation has, in each space, and a wrong generation.
+        for slot in [900, HEAP_BIT + 900, STATIC_BIT + 900, FN_SLOT - 1] {
+            ptrs.push(Ptr { slot, generation: 0, past: false, off: 0 }.encode());
+        }
+        let live = *ptrs.last().unwrap();
+        ptrs.push(live ^ 1 << GEN_SHIFT);
+        let mut seen = std::collections::BTreeSet::new();
+        let mut oks = 0;
+        for &p in &ptrs {
+            let size = m.alloc_any(Ptr::decode(p)).map_or(16, |a| u64::from(a.size));
+            for off in [0, 1, 7, 8, size.saturating_sub(1), size, size + 1, u64::from(u32::MAX)] {
+                for past in [false, true] {
+                    let raw = if p == 0 { 0 } else { Ptr::with_off(p, off, past) };
+                    for len in [0, 1, 4, 8, size, size + 1, 1 << 33] {
+                        for write in [false, true] {
+                            for lax in [false, true] {
+                                m.lax = lax;
+                                let want = ident(check_reference(&m, raw, len, write));
+                                let got = ident(m.check_storage(raw, len, write));
+                                assert_eq!(got, want, "check_storage {raw:#x} {len} {write} {lax}");
+                                let want = want.and_then(|(sp, abs, a)| {
+                                    let fl = m.alloc_any(Ptr::decode(raw)).map_or(0, |a| a.flags);
+                                    if fl & flags::TRACKED != 0 && !m.space(sp).is_live(abs, len) {
+                                        Err(MemFault::Lifetime)
+                                    } else {
+                                        Ok((sp, abs, a))
+                                    }
+                                });
+                                let got = ident(m.check(raw, len, write));
+                                assert_eq!(got, want, "check {raw:#x} {len} {write} {lax}");
+                                match got {
+                                    Ok(_) => oks += 1,
+                                    Err(f) => {
+                                        seen.insert(format!("{f:?}").split('(').next().unwrap().to_owned());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        m.lax = false;
+        assert!(oks > 300, "{oks} accesses pass");
+        let all = [
+            "Null", "FnPtr", "Dead", "Stale", "PastEnd", "OutOfBounds", "External", "Unknown",
+            "Temporary", "Literal", "Lifetime",
+        ];
+        for f in all {
+            assert!(seen.contains(f), "no access faults {f}: {seen:?}");
         }
     }
 }
