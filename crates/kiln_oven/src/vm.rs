@@ -2140,6 +2140,10 @@ impl Oven {
 
     /// The array extent a pointer to `elem` lies in: (start, n, cur index,
     /// is an array).
+    // Always inlined into `ptr_add` (the `PtrAdd` op) and `ptr_sub`:
+    // outlined, its `Result` returns through memory on every step.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn extent_of(&self, raw: u64, elem: OTy) -> Result<(u64, u64, u64, bool), Fault> {
         let p = Ptr::decode(raw);
         let Some(a) = self.alloc_any(p) else {
@@ -2762,6 +2766,10 @@ impl Oven {
     /// (`k` other than [`ak::READ`]) is checked as the write it precedes, so
     /// modifying an object visible outside the evaluation is diagnosed
     /// before reading it ([expr.const]/5.16).
+    // Always inlined into `load`: outlined, its `Result` returns through
+    // memory on every `Load`.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn rmw_check(&self, raw: u64, len: u64, ty: OTy, k: u32) -> Result<(Sp, u64, &Alloc), Fault> {
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let w = k != ak::READ;

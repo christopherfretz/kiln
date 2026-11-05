@@ -1678,19 +1678,232 @@ baseline was re-recorded.
 
 ### What remains in the memory model
 
-- `crates/kiln_oven/src/mem.rs:1258` `Memory::check` →
-  `:1268` `check_storage`: about 45 Ir per access (S7 58.9 M,
-  `churn-vector` 461 M together) for null, function pointer, slot and
-  generation, past-end, bounds, external origin and unbacked checks.
-  Their order fixes which fault (and diagnostic) an access reports, so
-  a faster check has to keep it. A cheaper first test with the full
-  ordered check only on failure is the likely shape.
-- `mem.rs:77` `Ptr::decode` and `:107`/`:1310` `Ptr::space` /
-  `Memory::space` (S7 21.2 M + 22.3 M; `churn-vector` 151 M + 168 M):
-  each access decodes the pointer and matches its space more than once,
-  in `check`, `is_live` and the `Load`/`Store` that follows. Decoding
-  once per access and passing the `Space` along removes the repeats.
-- `mem.rs:145` `Ptr::with_off` (`churn-vector` 101 M): pointer
-  arithmetic re-encodes the whole pointer.
-- `mem.rs:952` `release` (S7 23.2 M): frame release clears the shadow
-  of each released slot.
+Updated after WP-650 ("WP-650: memory-access check" below has the
+numbers):
+
+- `Memory::check` / `check_storage` (about 45 Ir per access): done in
+  WP-650. A cheap-first plain predicate is inlined into every access,
+  and the ordered checks run only when it fails, so the reported fault
+  is unchanged. The check family is −36.6% on `churn-vector` and −28.8%
+  on S7.
+- `Ptr::decode`, `Ptr::space`, `Memory::space` repeats: done in part
+  in WP-650. A plain access no longer decodes the pointer. It still
+  re-matches the space once after the check (`mem.rs:1393`, 2 Ir). The
+  `decode` left is the one in `PtrAdd`'s `extent_of`.
+- `Ptr::with_off`: no change needed. It is already a masked add on the
+  raw word (6 Ir), with no decode or encode.
+- `release`: no change needed for the shadow, because frame release
+  clears none. Its cost is about 18 Ir per slot of bookkeeping (S7
+  0.38%).
+
+## WP-650: memory-access check
+
+The first item of "What remains in the memory model" above
+(spec/landed/oven/WP-650.md). The base is main 8abef735f plus WP-649.
+Method as in WP-649: whole-program `valgrind --tool=cachegrind
+--cache-sim=no` under `ulimit -v 3000000`, `timeout 1200` and
+`-fkiln-stack-size=256m`, with the bench commands of spec/bench.md. Self
+Ir is summed per `mem.rs` source line into the function that contains
+it, so inlined copies count. The brief's callgrind
+`--toggle-collect='*run_loop*'` was not usable. `run_loop` recurses
+(a constexpr call re-enters it), so the toggle switches collection off
+at the first inner return. Whole-program callgrind ran out of the 3 GB
+limit on `churn-vector` and `wide-struct-read`. Call counts below come
+from the code paths and the Ir of lines that run once per access, not
+from call edges, because the access path is inlined.
+
+### Measurement on main
+
+Self Ir (M = 10^6). The first `space` is `Ptr::space`, the second
+`Memory::space`. `is_live` is `Space::is_live`, called only for
+lifetime-tracked storage:
+
+| shape | program Ir | `check` | `check_storage` | `alloc_of` | `decode` | `space` | `space` | `is_live` | `with_off` | `release` | sum |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| `churn-vector` | 12,694,967,444 | 167.8 M | 302.0 M | 100.7 M | 151.0 M | 134.2 M | 33.6 M | 0 | 100.6 M | 1,235 | 989.8 M (7.80%) |
+| `wide-struct-read` | 6,167,083,148 | 58.9 M | 151.4 M | 42.1 M | 25.2 M | 50.4 M | 33.6 M | 0 | 37.8 M | 28 | 399.3 M (6.48%) |
+| `wide-struct-store` | 1,937,185,694 | 2.2 M | 6.4 M | 1.8 M | 1.5 M | 2.2 M | 8,208 | 0 | 0.5 M | 16,416 | 14.6 M (0.76%) |
+| `sort-nohdr` | 397,431,249 | 5.4 M | 11.2 M | 3.1 M | 4.5 M | 4.6 M | 1.8 M | 0 | 2.6 M | 1.8 M | 35.0 M (8.82%) |
+| `table-nohdr` | 744,109,886 | 3.2 M | 6.4 M | 1.8 M | 3.2 M | 2.9 M | 0.9 M | 0 | 2.1 M | 14,550 | 20.6 M (2.77%) |
+| S7 | 6,083,688,266 | 14.9 M | 44.6 M | 15.5 M | 20.7 M | 18.5 M | 3.6 M | 2.1 M | 4.4 M | 23.2 M | 147.6 M (2.43%) |
+| `vector-alloc` | 5,610,500,065 | 32.1 M | 100.6 M | 37.3 M | 36.8 M | 38.7 M | 11.0 M | 4.4 M | 11.1 M | 99.8 M | 371.8 M (6.63%) |
+
+`churn-vector` makes 16.78 M checked accesses (8.39 M `Load`, 8.39 M
+`Store`; `Memory::space` and `space_mut` are 2 Ir each, once per access)
+and 8.39 M `PtrAdd`. On main that is about 53 Ir of `check` +
+`check_storage` + `alloc_of` + `decode` + `Ptr::space` per access. About
+15 Ir of it is the two outlined calls returning a `Result`
+through memory, and `rmw_check` (outlined from `Load`) returns it
+through memory once more.
+
+Decodes and space matches per access, from the code:
+
+| op | main | branch, plain access |
+|---|---|---|
+| `Load` | 1 `decode` (`check_storage`), 2 `Ptr::space` (`alloc_of`, the result), 1 `Memory::space` (the read), +1 `Memory::space` and `is_live` if tracked | 0 full decodes: the slot's class bits pick the space and its allocation vector once; 1 `Memory::space` (the read) |
+| `Store` | as `Load`, + 1 `decode` in `trial_log` (inside a trial only), `space_mut` for the write | as `Load`, `space_mut` for the write |
+| `PtrAdd` | 1 `decode` + `alloc_any` in the outlined `extent_of` | the same `decode`, inlined into `ptr_add` |
+
+### Design note
+
+- **(a) Cheap-first check: taken.** `check_plain` is one predicate:
+  `gen == raw >> GEN_SHIFT && live && flags & refuse == 0 && base !=
+  UNBACKED && (raw & (OFF_MASK | PAST)) + len <= size`. Keeping the
+  past-the-end bit in the offset makes a past-the-end pointer fail the
+  bounds compare (bit 32 exceeds every size), so it needs no test of
+  its own. Null is frame slot 0, which is never live. The
+  function-pointer slot is refused by name. `refuse` always holds
+  `EXTERNAL`, and every allocation whose access depends on its origin
+  carries that flag, so the origin test is not needed. A false result
+  runs the pre-WP-650 body unchanged (`check_ordered`), so the reported
+  fault is still the one the order picks.
+  
+  No "plain" flag bit was added: all eight `Alloc` flag bits are in
+  use, and `flags & refuse` over the existing bits does the same job.
+  `Alloc` does not grow. Alone, step 1 was slower (`churn-vector`
+  +1.7%): the new branch sat inside two outlined calls. Inlining the
+  plain path into every caller (step 2) is what pays.
+- **(b) Decode once per access: taken in part.** The plain path no
+  longer builds a `Ptr`. It splits the slot bits once to pick the space
+  and the allocation vector, and returns `Sp` and the absolute offset to
+  the caller. The `Load`/`Store` that follows still calls
+  `Memory::space(sp)`, a 2 Ir re-match. Passing `&Space` instead of `Sp`
+  would mean changing the signature of every `check` caller in `vm.rs` and `vm/*.rs`, and
+  `store` needs the space mutably after `check`'s shared borrow ends.
+  Not worth 4 Ir per access.
+- **(c) `with_off` in place: not needed.** `Ptr::with_off` already does
+  a masked add and sets the past-the-end bit on the raw word, with no
+  decode or encode: 6 Ir. `churn-vector`'s 100.6 M is 12 Ir per
+  `PtrAdd` over its two calls. The decode and re-encode the brief
+  describes are not in it.
+- **(d) Bulk `release`: not taken.** `release` clears no shadow
+  bitmap. Per released slot it sets `live = false`, tests `HAS_UNION`
+  and pushes the slot onto the free list, about 18 Ir. That is 0.38% of
+  S7 and 1.8% of `vector-alloc`. No range primitive applies.
+
+### Per-step Ir
+
+Program Ir per step. Each step is one commit:
+
+1. `check_plain` + `check_ordered` (cheap-first `check_storage`).
+2. `check` always inlined, with a cold `check_slow`, and `rmw_check`
+   always inlined.
+3. `extent_of` always inlined into `ptr_add` and `ptr_sub`.
+4. The plain path also covers tracked storage whose lifetime test
+   passes.
+
+| shape | main | step 1 | step 2 | step 3 | step 4 (kept) | main → 4 |
+|---|--:|--:|--:|--:|--:|--:|
+| `churn-vector` | 12,694,967,444 | 12,913,067,913 | 12,246,171,663 | 11,793,267,650 | 11,793,262,099 | −7.1% |
+| `wide-struct-read` | 6,167,083,148 | 6,298,060,692 | 5,953,102,850 | 5,958,273,504 | 5,961,396,076 | −3.3% |
+| `sort-nohdr` | 397,431,249 | 406,323,132 | 381,664,920 | 369,975,865 | 369,968,457 | −6.9% |
+| `table-nohdr` | 744,109,886 | 749,118,343 | 733,061,832 | 723,567,143 | 723,564,971 | −2.8% |
+| `wide-struct-store` | 1,937,185,694 | 1,934,220,351 | 1,928,957,135 | 1,926,811,464 | 1,927,231,167 | −0.5% |
+| S7 | 6,083,688,266 | 6,077,337,618 | 6,044,444,445 | 6,032,257,235 | 6,024,869,483 | −1.0% |
+| `vector-alloc` | 5,610,500,065 | – | – | – | 5,492,757,245 | −2.1% |
+
+The check family, main → step 4. It counts `check*`, `alloc_of`,
+`decode`, `Ptr::space` and `Memory::space`, plus the `mem.rs` lines
+cachegrind attributes to line 0:
+
+| shape | main | step 4 | change |
+|---|--:|--:|--:|
+| `churn-vector` | 1,031.8 M (8.13%) | 654.3 M (5.55%) | −36.6% |
+| `wide-struct-read` | 437.1 M (7.09%) | 286.1 M (4.80%) | −34.5% |
+| `sort-nohdr` | 37.2 M (9.35%) | 24.3 M (6.56%) | −34.7% |
+| `table-nohdr` | 22.6 M (3.04%) | 15.0 M (2.07%) | −33.7% |
+| `wide-struct-store` | 15.3 M (0.79%) | 8.9 M (0.46%) | −41.5% |
+| S7 | 138.3 M (2.27%) | 98.5 M (1.63%) | −28.8% |
+| `vector-alloc` | 292.4 M (5.21%) | 207.0 M (3.77%) | −29.2% |
+
+On `churn-vector`, the brief's target sum (`check` + `check_storage` +
+`alloc_of` + `decode` + `Ptr::space` + `Memory::space`, without line 0)
+fell from 889.2 M to 520.1 M, −41.5%. The target was −40%. The plain
+check now costs about 22 Ir per access. All of the remaining `decode`
+(83.9 M) and `Ptr::space` (33.6 M) is the `PtrAdd` path.
+
+Two variants were measured and dropped:
+- Testing the lifetime of tracked storage inline in `check`: +0.3% to
+  +0.6% on the shapes without tracked storage.
+- A `check_slow` that is not `#[cold]`: `churn-vector` +0.3%, because
+  the `Load` arm grows.
+
+S7's −3% target is out of reach on this path. The whole check family
+was 2.27% of S7 on main, and S7 is mostly frontend work
+(`TypeContext::view` about 5%, `malloc`/`free` about 10%).
+
+### A/B
+
+Main (b334807e3, which is main 8abef735f plus WP-649) was run against
+the branch (step 4), alternating. Each side ran 3 pairs. Each cell is
+the median of 5 runs under `/usr/bin/time -f '%e %M'`, and wall time
+has 10 ms resolution. `accessor-wide-emit` (`-c -O2`) takes about 128 s
+a run, so it got 1 run per pair: the median of 3 runs rather than of 15.
+
+| shape | main wall (s) | branch wall (s) | wall | main RSS (KB) | branch RSS (KB) | RSS |
+|---|--:|--:|--:|--:|--:|--:|
+| `churn-vector` | 0.59 | 0.53 | −10.2% | 12,452 | 12,600 | +1.19% |
+| `sort-nohdr` | 0.03 | 0.03 | +0.0% | 12,164 | 12,268 | +0.85% |
+| `table-nohdr` | 0.05 | 0.05 | +0.0% | 12,540 | 12,696 | +1.24% |
+| `wide-struct-read` | 0.30 | 0.30 | +0.0% | 29,736 | 29,924 | +0.63% |
+| `wide-struct-store` | 0.14 | 0.14 | +0.0% | 32,876 | 32,964 | +0.27% |
+| `vector-alloc` | 0.43 | 0.42 | −2.3% | 38,808 | 38,732 | −0.20% |
+| S7 | 0.58 | 0.56 | −3.4% | 46,772 | 46,720 | −0.11% |
+| S8 | 0.71 | 0.72 | +1.4% | 66,068 | 65,108 | −1.45% |
+| `templates_wide` | 0.28 | 0.29 | +3.6% | 63,540 | 64,140 | +0.94% |
+| `accessor-wide-emit` | 127.75 | 128.58 | +0.6% | 653,080 | 652,100 | −0.15% |
+
+The same shapes timed in-process (`perf_counter`), 3 alternating pairs,
+median of 11 runs per pair:
+
+| shape | main (ms) | branch (ms) | change | pair medians main / branch (ms) |
+|---|--:|--:|--:|---|
+| `churn-vector` | 621.8 | 564.0 | −9.3% | 642.7 621.8 609.1 / 559.3 564.0 564.2 |
+| `sort-nohdr` | 39.3 | 38.8 | −1.1% | 39.3 40.9 38.0 / 39.4 38.8 37.8 |
+| `table-nohdr` | 75.2 | 70.9 | −5.6% | 75.8 75.2 70.8 / 70.5 70.9 71.4 |
+| `wide-struct-read` | 336.2 | 326.2 | −3.0% | 336.2 342.0 325.6 / 326.2 327.0 326.0 |
+| `wide-struct-store` | 173.6 | 175.6 | +1.2% | 173.6 183.1 173.1 / 173.7 175.6 175.7 |
+| `vector-alloc` | 458.0 | 429.1 | −6.3% | 479.6 458.0 454.8 / 429.1 428.7 429.1 |
+| S7 | 611.6 | 599.8 | −1.9% | 601.6 611.6 644.0 / 606.2 599.8 588.0 |
+| S8 | 754.5 | 765.2 | +1.4% | 718.0 769.0 754.5 / 766.8 765.2 736.2 |
+| `templates_wide` | 327.9 | 300.8 | −8.3% | 328.0 308.2 327.9 / 291.4 300.8 326.2 |
+
+S8 (+1.4%) and `templates_wide` (+3.6% under `time`, −8.3% in-process)
+move within their pair spread, so they are noise. `wide-struct-store`'s
++1.2% is the same, and its Ir fell 0.5%.
+
+The shapes that moved by 5% or more in either table were run under
+`cargo xtask bench --filter oven/<shape> bench/oven`, twice per side,
+alternating:
+
+| shape | main (ms) | branch (ms) |
+|---|---|---|
+| `churn-vector` | 594.5, 594.3 | 554.2, 539.8 |
+| `vector-alloc` | 432.5, 433.5 | 444.4, 439.4 |
+| `table-nohdr` | 52.3, 54.1 | 52.3, 57.9 |
+
+Only `churn-vector` holds its 5%+ change, about −8%. Its baseline was
+re-recorded at 541.6 ms (it was 580.8 ms, recorded by WP-648).
+
+The `vector-alloc` and `table-nohdr` baselines, both recorded on 11-03,
+report `REGRESSED (mem)` under main and the branch alike: 35.5 → 38.6 MB
+and 9.1 → 12.2 MB. That predates this branch and is not re-recorded
+here.
+
+RSS is flat. Every change is within ±1.5%, and the `Alloc` layout is
+unchanged.
+
+### What remains
+
+- `crates/kiln_oven/src/vm.rs:2170` `ptr_add`: about 198 Ir per
+  `PtrAdd`, 14% of `churn-vector`. The time goes to element-type
+  lookups (`kind`, `size`, `same_unqualified`), index bounds checks and
+  the `off / es` division, not to the pointer word.
+- `vm.rs:2814` `store` is outlined (about 17 Ir of prologue and
+  epilogue per `Store`). `Memory::space`/`space_mut`
+  (`mem.rs:1393`, `:1401`) re-match the space after the check, 2 Ir
+  each per access ((b) above).
+- `mem.rs:1280` `check_slow` takes every access to `EXTERNAL` storage
+  and every tracked access whose lifetime test fails or that misses the
+  plain test. `mem.rs:952` `release` is 0.38% of S7 and 1.8% of
+  `vector-alloc` ((d) above).
