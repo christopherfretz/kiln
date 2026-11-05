@@ -766,6 +766,19 @@ impl Cg<'_> {
                 let t = self.lty(q);
                 self.splat(v, t)
             }
+            // A glvalue `NoOp` or `LValueBitCast` (a cast to a reference,
+            // [expr.static.cast]/4, [expr.reinterpret.cast]/11) is its
+            // operand's object as the cast's type, loaded through the
+            // cast's lvalue (clang `EmitLoadOfLValue(EmitCastLValue)`):
+            // `reinterpret_cast<const float&>(u)` reads a `float`, and
+            // `static_cast<U&&>(f())` the referee of a reference-returning
+            // `f`, not the address `emit_scalar` yields for the call.
+            CastKind::NoOp | CastKind::LValueBitCast
+                if self.is_glvalue(e) && !ast.types.is_function(q) =>
+            {
+                let lv = self.emit_lvalue(e)?;
+                self.load_lv(lv)
+            }
             CastKind::NoOp
             | CastKind::BitCast
             | CastKind::LValueBitCast
@@ -2376,7 +2389,7 @@ impl Cg<'_> {
             | CastKind::LValueToRValue
             | CastKind::UserDefinedConversion => {
                 let mut lv = self.emit_lvalue(ast.exprs.operand(e))?;
-                if lv.bf.is_none() && !ast.types.is_function(q) {
+                if lv.bf.is_none() && lv.vidx.is_none() && !ast.types.is_function(q) {
                     lv.addr.ty = self.mty(q);
                 }
                 if ast.exprs.cast_kind(e) == CastKind::LValueBitCast {
