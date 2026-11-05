@@ -161,7 +161,9 @@ impl Sema<'_, '_> {
                 DeclKind::TranslationUnit => return None,
                 _ => {}
             }
-            c = self.ast.decls.get(x).ctx();
+            // Lexically: a namespace first defined inside `extern "C"` and
+            // reopened at file scope encloses no linkage specification there.
+            c = self.ast.decls.lexical_ctx(x);
         }
         None
     }
