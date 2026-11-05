@@ -544,14 +544,14 @@ share of the named profile that the work could remove.
 | F3 | **Done (landed WP-638).** `extract` of a static data member of a `substitute`d specialization | kiln_sema, instantiating a variable initializer on a reflection-driven odr-use | `bench/reflect/s5.cpp` on libstdc++: "initializer of 'value' is unknown" | Correctness: lets S5 compile | Medium | S–M |
 | P1 | Split the production stage by tool and N (measurement only) | the reference harness | The superlinearity analysis above | Pins down the super-linear term | None | S |
 | F4 | Hand LLVM bitcode, or skip the text round trip | kiln_llvm printer, kiln_driver `ir_passes` | Printing is 11.1% of R3, and `opt` spends 0.9 s parsing text at S8 N=160 | About 11% of R3's frontend plus the parse | Medium: a bitcode writer is new code | M–L |
-| F5 | Cut allocation churn | kiln_sema, kiln_ast (`Vec` growth sites), kiln_codegen | `malloc`/`free` and internals are 11–17% of self in every profile. 99 M allocations in R3, 32% of them from `finish_grow` | 5–8% | Low | M |
-| F6 | Box the Oven inside `Sema` | kiln_sema `oven_bridge.rs` `with_oven` (`Option<Oven>` moved by value) | 414 Ir of `memcpy` per call, 4.6 M calls in R3 | About 1.8% of R3, about 1% of R1 | Low | S |
+| F5 | **Partly done (WP-645):** allocations −17% to −48% on the in-tree shapes; the remaining sites are in "WP-645: allocation churn". Cut allocation churn | kiln_sema, kiln_ast (`Vec` growth sites), kiln_codegen | `malloc`/`free` and internals are 11–17% of self in every profile. 99 M allocations in R3, 32% of them from `finish_grow` | 5–8% | Low | M |
+| F6 | **Done (WP-645).** Box the Oven inside `Sema` | kiln_sema `oven_bridge.rs` `with_oven` (`Option<Oven>` moved by value) | 414 Ir of `memcpy` per call, 4.6 M calls in R3 | About 1.8% of R3, about 1% of R1 | Low | S |
 | F7 | Fewer redeclaration-chain walks | kiln_ast `DeclArena::redecl`, `Ast::first`; kiln_sema `template_redecl` | 6.8% of R1, 4.4% of R3, 3.6% of R2; 60–150 M calls | 3–5% | Low–medium | M |
 | F8 | Cheaper `TypeContext::view` / `canonical_view` | kiln_ast `types` | 4–6% self, 190 M calls in R3 | 2–3% | Low | S–M |
 | F9 | Faster interpreter dispatch in safe Rust | kiln_oven `vm.rs` `run_loop` | 18.3% of R2, 24.8% of S7 | 5–10% of R2 | Medium | M–L |
 | F10 | Copy the init-bit map a word at a time | kiln_oven `mem.rs` `Memory::copy` | `set_bits` is 2.8% of R2 | About 2% of R2 | Low | S |
 | F11 | Cache subobject and union paths | kiln_oven `mem.rs` `union_path`, `Types::has_subobject`, `extent_of`, `field_at` | 9% of S7, about 3% of R2. WP-642 (F23) made the scans sublinear for classes of 16 or more fields; S7 and S8 do not move (three A/B pairs, "WP-642: sublinear subobject lookups"), because S7's lookups are many walks over small classes, so this cache is still the lever | 3–6% of S7 | Medium | M |
-| F12 | Compute node accounting lazily | kiln_sema `templ/stack.rs` push/pop; kiln_ast `node_live_bytes` | About 1–1.2% and 3 M allocations in R3 | About 1% | Low | S |
+| F12 | **Done (WP-645).** Compute node accounting lazily | kiln_sema `templ/stack.rs` push/pop; kiln_ast `node_live_bytes` | About 1–1.2% and 3 M allocations in R3 | About 1% | Low | S |
 | F13 | Fewer deduction and candidate attempts | kiln_sema `deduce_spec`, `add_template_candidate`, `deduce_call_arg` | 34–36% inclusive in S8; 9.8 M `deduce_spec` calls in R2; `deduce_call_arg` grows 18x for 4x N in S8 | Unknown; the largest frontend lever | Medium–high | M–L |
 | F14 | Index hidden-friend redeclaration | kiln_sema `act_on_friend` → `overload/redecl.rs` `pick_prev_function` | 11.5% of S8 at N=400 and growing 13–19x for 4x N. Not seen in the reference. | Removes S8's quadratic term | Low | S–M |
 | F15 | Fast path for trial folds | kiln_sema `try_fold` callers (`fold_int`, narrowing, `known_truth`) | Bytecode compile is 6.3% of R3. 168 k `compile_func` calls for 575 k folds, mostly on literals and simple arithmetic | 3–5% of R3 | Low–medium | S–M |
@@ -893,3 +893,210 @@ into small library classes (string, vector and their bases), below the
 lookups are many short ones, not one long one. F11's cost is the number of
 path walks, which only a cache would cut. F11 therefore stays open, and
 F23 does not touch it.
+
+## WP-645: allocation churn
+
+F5, F6 and F12 above (spec/landed/sema/WP-645.md). The four in-tree
+shapes were run under `valgrind --tool=dhat` (allocation sites, with
+`ulimit -v 3000000`, `timeout 1200`) and `--tool=callgrind` (`malloc`
+call counts and the `memcpy` edges). DHAT is used for the sites:
+callgrind's call graph is unreliable on this host ("Inputs and method"),
+and DHAT records the full stack of every allocation. The commands are
+spec/bench.md's (`-fsyntax-only`; `accessor-wide-emit` at `-S
+-emit-llvm`, so the codegen half is in). Main is 811a810fe.
+
+### Attribution on main
+
+Allocation calls (callgrind, `malloc` + `realloc` + `calloc`) and heap
+blocks (DHAT):
+
+| shape | Ir | allocation calls | DHAT blocks |
+|---|--:|--:|--:|
+| `templates_wide` | 3.46 G | 2,785,946 | 2,846,794 |
+| `templates_deep` | 0.73 G | 103,194 | 103,973 |
+| S8 (N=100) | 6.59 G | 7,418,459 | 7,502,355 |
+| `accessor-wide-emit` | 11.43 G | 13,376,681 | 13,570,984 |
+
+The top sites by blocks, with the allocations made inside the
+`ExprArena::children` worklist helper charged to the function that
+called it (so `begin_loc` is the `Vec` its child loop built). Kiln
+frames only; the percentage is of the shape's blocks:
+
+| site | function | `templates_wide` | `templates_deep` | S8 | `accessor-wide-emit` |
+|---|---|--:|--:|--:|--:|
+| `kiln_ast/src/expr.rs:2659` | `Ast::begin_loc` (children `Vec` per node) | 30,007 (1.1%) | 1 | 75,350 (1.0%) | 2,983,214 (22.0%) |
+| `kiln_sema/src/lookup.rs:181`, `:182` | `Sema::filter` (`Found` pushes) | 4,944 (0.2%) | 24,036 (23.1%) | 636,550 (8.5%) | 607,906 (4.5%) |
+| `kiln_sema/src/lookup.rs:480` | `lookup_name_scoped`, namespace scope collect | 1,226 | 12,006 (11.5%) | 77,742 (1.0%) | 70,780 (0.5%) |
+| `kiln_sema/src/expr.rs:606`, `:624`, `int_in_bool.rs:174`, `impcast.rs:41`, `templ/subst/shared.rs:68`, `class/temporary.rs:233` | the six full-expression walks (`vec![root]` + children `Vec` per node) | 1,010,619 (35.5%) | 11 | 433,340 (5.8%) | 542,945 (4.0%) |
+| `kiln_sema/src/conv/arith.rs:49` | `common_sugar` (both desugaring chains) | 160,012 (5.6%) | – | 8,481 (0.1%) | 9,585 (0.1%) |
+| `kiln_sema/src/class/special/implicit.rs:317` | `special_fields` | 123,648 (4.3%) | 4,519 (4.3%) | 4,351 (0.1%) | – |
+| `kiln_sema/src/decl.rs:130` | `sym_str` (60k via `declarator_name`, 40k via `act_on_field`) | 100,412 (3.5%) | 3,004 (2.9%) | 70,659 (0.9%) | 40,892 (0.3%) |
+| `kiln_ast/src/types/profile_expr.rs:314`, `:138` | `profile_node` / `profile_walk` (constraint comparison) | 4 | – | 425,685 (5.7%) | 25,932 (0.2%) |
+| `kiln_sema/src/overload/redecl.rs:148`, `:149` | `heads_equivalent` (both parameter lists) | – | – | 329,798 (4.4%) | – |
+| `kiln_ast/src/types/args.rs:223` | `TypeContext::arg_list` (canonical copy) | 60,503 (2.1%) | 1,999 (1.9%) | 88,076 (1.2%) | 32,774 (0.2%) |
+| `kiln_sema/src/class/access.rs:106` | `effective_context_at` | 60,300 (2.1%) | 2,997 (2.9%) | 9,519 (0.1%) | 6,560 |
+| `kiln_abi/src/layout/mod.rs:292` | record layout `to_vec` | 60,000 (2.1%) | 1,000 (1.0%) | 122,110 (1.6%) | 121,263 (0.9%) |
+| `kiln_sema/src/lookup.rs:996` | `current_scope_raw_impl` | 50,209 (1.8%) | 2,005 (1.9%) | – | – |
+| `kiln_sema/src/templ/subst/mod.rs:367`, `:368` | `Substituter::args` | – | – | 186,045 (2.5%) | – |
+| `kiln_codegen/src/fir.rs` | `Op::operands` | – | – | – | 209,860 (1.5%) |
+| `kiln_abi/src/mangle.rs:721` | `decl_name` | – | – | – | 201,267 (1.5%) |
+
+F12's node meter (`Ast::node_live_bytes`) made 200, 2, 9,682 and 13,056
+blocks on these shapes; it matters on the 200-class production compile
+(about 3 M allocations there), not on the reduced ones.
+
+**`with_oven`'s `memcpy`.** `with_oven` is inlined into its callers, so
+the move shows as `memcpy` calls from `eval_const` and `try_fold`, about
+430 Ir each: 0.61% of S8's Ir (45,514 + 42,231 calls) and 1.37% of
+`templates_wide`'s (60,201 + 50,200 calls).
+
+### Fixes, one commit each
+
+Before is the site's count on main, after is the same site on the
+branch (DHAT blocks, the shape named):
+
+| commit | fix | shape | before | after |
+|---|---|---|--:|--:|
+| b9605c276 | F6: `Sema.oven: Option<Box<Oven>>` (Ir, not allocations; F6 below) | `templates_wide` / S8 | 3.460 G / 6.590 G Ir | 3.311 G / 6.454 G Ir |
+| bd12f0d89 | F12: the node meter sums `VecDims` / `map_live_bytes` in the annotation, attribute, redeclaration and lookup arenas | S8 / `accessor-wide-emit` | 9,682 / 13,056 | 0 / 0 |
+| ddd196823 | `ExprArena::children_each` / `first_child`: worklists append in place, first-child loops build nothing | `accessor-wide-emit` (`begin_loc`) | 2,983,214 | 0 |
+| 12ddd9f51 | one Sema scratch stack for the six full-expression walks | `templates_wide` | 1,010,619 | 1 |
+| 7587fef27 | `common_sugar` walks the chains in place | `templates_wide` | 160,012 | 0 |
+| d385208a1, c8a890f0e | `Sema::filter` takes an iterator; namespace scope chains its own results with the nominated ones | `templates_deep` (`lookup.rs:480`/`:488`) | 12,006 | 0 |
+| 9e281ed22 | the declarator name is spelled only for a diagnostic | `templates_wide` (`sym_str`) | 100,412 | 40,203 |
+| 2ed6eaded | `heads_equivalent` zips; constraint profiles go to a reused `EquivScratch` | S8 | 755,483 | 0 |
+| 037927d60 | `special_fields_iter` for the callers that only filter | `templates_wide` | 123,648 | 82,434 |
+| e49735b38 | `arg_list` copies to canonical only when an argument is not canonical | `templates_wide` | 60,503 | 0 |
+
+Totals, main → branch (DHAT blocks):
+
+| shape | main | branch | change |
+|---|--:|--:|--:|
+| `templates_wide` | 2,846,794 | 1,493,008 | −47.6% |
+| `templates_deep` | 103,973 | 86,692 | −16.6% |
+| S8 | 7,502,355 | 5,827,785 | −22.3% |
+| `accessor-wide-emit` | 13,570,984 | 9,490,423 | −30.1% |
+
+Instructions and allocation calls (callgrind). The F6-only column is
+b9605c276 (the boxed Oven alone):
+
+| shape | Ir main | Ir F6 only | Ir branch | allocation calls main | branch | change |
+|---|--:|--:|--:|--:|--:|--:|
+| `templates_wide` | 3.460 G | 3.311 G (−4.3%) | 3.008 G (−13.1%) | 2,785,946 | 1,491,960 | −46.4% |
+| `templates_deep` | 0.730 G | 0.730 G (−0.0%) | 0.726 G (−0.5%) | 103,194 | 85,912 | −16.7% |
+| S8 | 6.590 G | 6.454 G (−2.1%) | 5.989 G (−9.1%) | 7,418,459 | 5,796,969 | −21.9% |
+| `accessor-wide-emit` | 11.432 G | 11.288 G (−1.3%) | 10.232 G (−10.5%) | 13,376,681 | 9,357,927 | −30.0% |
+
+### F6: the boxed Oven
+
+Boxing removed four `memcpy` edges, not two. Besides `with_oven`'s take
+and put-back (inlined into `eval_const` and `try_fold`), `Oven::evaluate`
+and `Oven::eval_job` also copied the `Oven` by value, at the same 430 Ir
+per call. On main the four were 1.50% + 1.25% + 0.75% + 0.62% of
+`templates_wide` (142.5 M Ir) and 0.59% + 0.55% + 0.30% + 0.28% of S8
+(113.2 M Ir). None remains in the F6-only profile, and they account for
+most of its Ir drop: 148.8 M on `templates_wide`, 135.9 M on S8.
+
+Three alternating pairs of main against the F6-only binary, medians of
+five, as in the A/B below:
+
+| shape | pair 1 main | pair 1 f6 | pair 2 main | pair 2 f6 | pair 3 main | pair 3 f6 |
+|---|--:|--:|--:|--:|--:|--:|
+| `s8` | 0.67 s, 67,208 KB | 0.65 s, 66,480 KB | 0.67 s, 66,332 KB | 0.65 s, 66,104 KB | 0.67 s, 66,512 KB | 0.65 s, 66,296 KB |
+| `templates_wide` | 0.29 s, 64,364 KB | 0.28 s, 64,292 KB | 0.30 s, 63,868 KB | 0.27 s, 63,908 KB | 0.29 s, 63,880 KB | 0.27 s, 64,308 KB |
+
+| shape | wall main | wall f6 | change | RSS main | RSS f6 | change |
+|---|--:|--:|--:|--:|--:|--:|
+| `s8` | 0.67 s | 0.65 s | -3.0% | 66,512 KB | 66,296 KB | -0.3% |
+| `templates_wide` | 0.29 s | 0.27 s | -6.9% | 63,880 KB | 64,292 KB | +0.6% |
+
+### A/B
+
+`/usr/bin/time -f '%e %M'`, main (811a810fe) and branch alternating,
+three pairs, each cell the median of five runs, one process at a time.
+S7, S8, `templates_wide` and `templates_deep` at `-fsyntax-only`;
+`accessor-wide-emit` and `registration-wide-obj` at `-c -O2`:
+
+| shape | pair 1 main | pair 1 branch | pair 2 main | pair 2 branch | pair 3 main | pair 3 branch |
+|---|--:|--:|--:|--:|--:|--:|
+| `s7` | 0.57 s, 46,960 KB | 0.52 s, 46,680 KB | 0.54 s, 47,000 KB | 0.53 s, 46,872 KB | 0.54 s, 47,020 KB | 0.53 s, 46,928 KB |
+| `s8` | 0.74 s, 65,548 KB | 0.62 s, 65,560 KB | 0.66 s, 66,348 KB | 0.61 s, 66,936 KB | 0.66 s, 66,544 KB | 0.62 s, 66,192 KB |
+| `templates_wide` | 0.33 s, 63,948 KB | 0.25 s, 64,324 KB | 0.30 s, 64,872 KB | 0.25 s, 64,060 KB | 0.29 s, 63,988 KB | 0.25 s, 64,412 KB |
+| `templates_deep` | 0.06 s, 42,920 KB | 0.05 s, 42,668 KB | 0.05 s, 42,956 KB | 0.05 s, 42,652 KB | 0.05 s, 42,876 KB | 0.05 s, 42,668 KB |
+| `accessor-wide-emit` | 119.16 s, 651,480 KB | 118.81 s, 652,952 KB | 118.93 s, 653,464 KB | 118.67 s, 652,140 KB | 118.51 s, 652,072 KB | 118.32 s, 653,252 KB |
+| `registration-wide-obj` | 7.07 s, 264,044 KB | 7.05 s, 264,084 KB | 7.11 s, 264,032 KB | 7.03 s, 264,072 KB | 7.03 s, 264,088 KB | 6.99 s, 263,276 KB |
+
+| shape | wall main | wall branch | change | RSS main | RSS branch | change |
+|---|--:|--:|--:|--:|--:|--:|
+| `s7` | 0.54 s | 0.53 s | -1.9% | 47,000 KB | 46,872 KB | -0.3% |
+| `s8` | 0.66 s | 0.62 s | -6.1% | 66,348 KB | 66,192 KB | -0.2% |
+| `templates_wide` | 0.30 s | 0.25 s | -16.7% | 63,988 KB | 64,324 KB | +0.5% |
+| `templates_deep` | 0.05 s | 0.05 s | +0.0% | 42,920 KB | 42,668 KB | -0.6% |
+| `accessor-wide-emit` | 118.93 s | 118.67 s | -0.2% | 652,072 KB | 652,952 KB | +0.1% |
+| `registration-wide-obj` | 7.07 s | 7.03 s | -0.6% | 264,044 KB | 264,072 KB | +0.0% |
+
+The targets: allocations are −46% on `templates_wide` (the attributed
+shape), −22% on S8 and −30% on `accessor-wide-emit` (target −25%); wall
+is −16.7% on `templates_wide` and −6.1% on S8 (target −3% on two
+shapes). No shape is slower. The `-c -O2` shapes move by less than their
+spread, because `opt` and `llc` dominate them (`accessor-wide-emit`
+spends about 110 s of its 119 s there). RSS moves by at most +0.5%
+(`templates_wide`, 336 KB), within the run-to-run spread and under the
+1% bound. `templates_deep` runs for 50 ms, below the timer's 10 ms
+resolution for a −4% change.
+
+`-fkiln-instantiation-report` (`=all`, `=json`, `=text`) on
+`templates_wide`, `templates_deep` and S8 is byte-identical between main
+and the branch except for the millisecond and `self_us`/`incl_us`
+fields.
+
+**Baselines.** `templates_wide` and S8 moved by 5% or more, so both were
+re-recorded (`cargo xtask bench --record --filter frontend/templates_wide
+bench/frontend`, and `--runs 3 --filter reflect/s8 bench/reflect` as
+WP-640 recorded it): 292.98 ms and 664.30 ms. The run flagged
+`templates_wide`'s memory (68.4 → 77.3 MB) against its 2026-11-03
+baseline. That drift predates this package: main itself measures 77.5
+and 77.0 MB, against 77.2 and 76.8 MB for the branch, under the same
+harness back to back.
+
+### What remains, and why
+
+Each remaining site is under 2% of its shape's allocations, or needs a
+redesign that is out of this package's scope:
+
+- `crates/kiln_sema/src/lookup.rs:181-182` `Sema::filter`: the
+  `Found` result holds two `Vec`s (decls, found), so every non-empty
+  lookup makes two allocations (S8 10.9%, `templates_deep` 27.7%,
+  `accessor-wide-emit` 6.4% of the branch's blocks). Single-result
+  inline storage changes `Found`'s type everywhere it is used: a
+  redesign.
+- `crates/kiln_sema/src/class/special/implicit.rs:313`
+  `special_fields`: the remaining callers keep the `Vec` across calls
+  that need `&mut self` (`class/special/deletion.rs:432`); 5.5% of
+  `templates_wide` on the branch. Caching the field list per record is
+  the fix.
+- `crates/kiln_sema/src/class/access.rs:106` `effective_context_at`
+  (4.0% of `templates_wide`), `crates/kiln_sema/src/lookup.rs:996`
+  `current_scope_raw_impl` (3.4%): both return a fresh scope chain per
+  query; an iterator over the scope stack needs the stack's borrow
+  across the caller's lookups.
+- `crates/kiln_abi/src/layout/mod.rs:292`, `layout/props.rs:148`,
+  `layout/record.rs:133`: per-record layout vectors, built once per
+  record (4.0% + 2.0% + 2.0% of `templates_wide`). They are the layout's
+  own storage, not churn.
+- `crates/kiln_sema/src/decl.rs:4653` `act_on_field` → `decl.rs:130`
+  `sym_str`: the field's name `String` (2.7% of `templates_wide`); the record field
+  table stores it.
+- `crates/kiln_codegen/src/fir.rs` `Op::operands` (2.2% of
+  `accessor-wide-emit`) and `crates/kiln_abi/src/mangle.rs:721`
+  `decl_name` (2.1%): an operand slice view and a mangler that writes
+  into its output; both change a public signature used across codegen.
+- Overload resolution: `crates/kiln_sema/src/templ/funcs.rs`
+  `proto_param_types`, `templ/deduce_call.rs:323` `deduce_spec`,
+  `overload/call.rs:294`/`:297` `add_template_candidate`,
+  `templ/subst/mod.rs:367-368` `Substituter::args`: 1–2% each on S8 and
+  `accessor-wide-emit`. They belong with F13 (fewer attempts) rather
+  than with buffer reuse.
+- `crates/kiln_oven/src/compile/builtins.rs:127` and
+  `crates/kiln_codegen/src/fold.rs:697` still call the allocating
+  `children()`; neither is above 0.5% on these shapes.
