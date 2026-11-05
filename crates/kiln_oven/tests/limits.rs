@@ -34,6 +34,41 @@ constexpr int g() { return f(30); }
 static_assert(g() == 30);
 ";
 
+const FUSE: &str = "\
+constexpr int h(int n) {
+  int a = 0, b = 1;
+  for (int i = 0; i < n; ++i) {
+    int t = a;
+    a = b;
+    b = t + b;
+    if (i == 3) { b = 7; }
+    while (b > 100) b -= 50;
+    switch (i % 3) { case 0: ++b; break; case 1: b += 2; break; default: break; }
+  }
+  do { ++a; } while (a < 40 && b != 0);
+  return a + b;
+}
+static_assert(h(12) > 0);
+";
+
+/// The step-limit note's location (`line:col`) for every budget below
+/// `FUSE`'s 179 steps, recorded from the unfused interpreter (main at
+/// 8b6f177ea): every pair the VM fuses (`Mov`→`Mov`, `Step`→`Mov`,
+/// `Step`→`Const`, `JmpIfNot`→`Step`, `ICmp`→`JmpIf`/`JmpIfNot`;
+/// spec/oven.md "Dispatch") occurs in it.
+const FUSE_NOTES: &str = "1:24 2:3 3:3 3:8 3:31 4:5 5:5 6:5 7:5 8:5 9:5 9:20 9:22 9:30 9:35 \
+     3:31 4:5 5:5 6:5 7:5 8:5 9:5 9:20 9:22 9:30 9:35 9:42 9:50 9:58 3:31 \
+     4:5 5:5 6:5 7:5 8:5 9:5 9:20 9:22 9:30 9:35 9:42 9:52 9:58 9:65 9:74 \
+     3:31 4:5 5:5 6:5 7:5 7:17 7:19 8:5 9:5 9:20 9:22 9:30 9:35 3:31 4:5 \
+     5:5 6:5 7:5 8:5 9:5 9:20 9:22 9:30 9:35 9:42 9:50 9:58 3:31 4:5 5:5 \
+     6:5 7:5 8:5 9:5 9:20 9:22 9:30 9:35 9:42 9:52 9:58 9:65 9:74 3:31 4:5 \
+     5:5 6:5 7:5 8:5 9:5 9:20 9:22 9:30 9:35 3:31 4:5 5:5 6:5 7:5 8:5 \
+     9:5 9:20 9:22 9:30 9:35 9:42 9:50 9:58 3:31 4:5 5:5 6:5 7:5 8:5 8:21 \
+     9:5 9:20 9:22 9:30 9:35 9:42 9:52 9:58 9:65 9:74 3:31 4:5 5:5 6:5 7:5 \
+     8:5 8:21 9:5 9:20 9:22 9:30 9:35 3:31 4:5 5:5 6:5 7:5 8:5 8:21 9:5 \
+     9:20 9:22 9:30 9:35 9:42 9:50 9:58 3:31 4:5 5:5 6:5 7:5 8:5 8:21 8:21 \
+     9:5 9:20 9:22 9:30 9:35 9:42 9:52 9:58 9:65 9:74 11:3 11:6 11:8 12:3";
+
 fn no_memo() -> Budget {
     Budget { memo_entries: 0, ..Budget::default() }
 }
@@ -83,6 +118,29 @@ fn expr_const_5_7_step_limit_note() {
          1:65: constexpr evaluation hit maximum step limit; possible infinite loop?\n\
          2:15: in call to 'f(10)'\n"
     );
+}
+
+/// Fused instructions (spec/oven.md "Dispatch") count and fault exactly as
+/// the unfused sequence: the same step total, and at every smaller budget
+/// the step-limit note at the same statement.
+#[test]
+fn fused_dispatch_keeps_step_faults() {
+    let want: Vec<&str> = FUSE_NOTES.split_whitespace().collect();
+    for b in [no_memo(), Budget::default()] {
+        assert_eq!(steps_exact(FUSE, b), want.len() as u64);
+        for (k, loc) in want.iter().enumerate() {
+            let f = fails_with(FUSE, Budget { steps: k as u64, ..b });
+            let note = f.text.lines().nth(1).unwrap_or_default();
+            assert_eq!(
+                note,
+                format!(
+                    "{loc}: constexpr evaluation hit maximum step limit; possible infinite loop?"
+                ),
+                "budget {k}:\n{}",
+                f.text
+            );
+        }
+    }
 }
 
 /// [implimits]: the depth limit counts active calls, as clang's

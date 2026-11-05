@@ -90,6 +90,44 @@ the evaluator's flattened type table.
 - Top-level expressions compile to cached thunks keyed by `ExprId`;
   re-evaluating an expression compiles nothing.
 
+#### Dispatch — Landed (WP-648)
+`Vm::run_loop` (`vm.rs`) executes the stream in safe Rust; every rule here
+is an implementation choice that leaves results, diagnostics, step and
+fault counts and trap ids unchanged.
+
+- **Fetch window.** Each iteration reads the instruction as one fixed
+  array, `kbc::window(code, pc) -> [u32; kbc::WINDOW]` (`WINDOW` = 8): word
+  0 and up to seven operand words, in one checked slice read
+  (`first_chunk`), so the operands are then indexed with no further bounds
+  check. A `const` assertion keeps every opcode's operand count
+  (`Op::OPERANDS`) below `WINDOW`.
+- **Padding.** Every compiled unit (a function body, a thunk, a stub, the
+  shared `Unwind` landing pad) ends with `WINDOW - 1` `Nop` words
+  (`kbc::pad`, called by `Compiler::end_unit` and `Vm::unwind_pc`), so a
+  window starting at any instruction of a unit lies inside the stream.
+  The padding is never executed (a unit ends in `Ret`, `Halt`, a trap or
+  `Unwind`); it costs 28 bytes per unit. A window that would still run
+  past the end goes to the cold `kbc::tail_window`, which copies the
+  instruction's own words and zero-fills the rest (a truncated instruction
+  panics there, as an out-of-range read did before).
+- **Hot and cold arms.** Opcodes that are rare in measured programs
+  (allocation, unions, member pointers, RTTI, exceptions, `Wide`, `Cx`,
+  `VoidCast`, ...) run in `Vm::run_cold`, an `#[inline(never)]` function
+  taking the window, `pc` and the frame base and returning the next `pc`
+  and frame base (or the fault and its `pc`). `run_loop` names those
+  opcodes in one arm rather than a wildcard, so its `match` is a single
+  jump table, and keeps the common opcodes in a body small enough to stay
+  in registers.
+- **In-place fusion.** A hot arm whose window also holds the next
+  instruction runs that instruction too when it is the usual successor,
+  skipping one dispatch: `Mov`→`Mov`, `Step`→`Mov`, `Step`→`Const`,
+  `JmpIfNot`→`Step` (fall-through) and `ICmp`→`JmpIf`/`JmpIfNot`. The
+  encoding is unchanged: the second instruction is still in the stream,
+  may still be a jump target, and is executed with its own semantics; a
+  step fault in a fused `Step` is reported at that `Step`'s own `pc`. The
+  `op-stats` feature counts a fused instruction as executed, so its
+  histograms match an unfused run.
+
 ### Abstract memory — normative for M2
 - **Pointers** are one `u64`: offset (32 bits) | past-the-end (1) | slot
   (22) | generation (9). Slot `FN_SLOT` encodes function pointers; slots

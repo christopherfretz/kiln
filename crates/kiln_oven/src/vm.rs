@@ -731,6 +731,15 @@ impl Oven {
                     self.regs[fb + arg!($i)]
                 };
             }
+            // The frame's register window as a local slice, for arms that
+            // touch only registers: its base and length stay in machine
+            // registers across the arm's stores, where `self.regs[..]`
+            // reloads both after every store (spec/oven.md "Dispatch").
+            macro_rules! frame {
+                () => {
+                    &mut self.regs[fb..]
+                };
+            }
             macro_rules! fail {
                 ($f:expr) => {
                     return Err(($f, pc))
@@ -770,13 +779,14 @@ impl Oven {
                     if is_next!(2, Mov) {
                         #[cfg(feature = "op-stats")]
                         opstats::count(Op::Mov);
-                        self.regs[fb + win[3] as usize] = self.regs[fb + win[4] as usize];
+                        let r = frame!();
+                        r[win[3] as usize] = r[win[4] as usize];
                         pc += 5;
                     } else if is_next!(2, Const) {
                         #[cfg(feature = "op-stats")]
                         opstats::count(Op::Const);
                         let v = u64::from(win[4]) | u64::from(win[5]) << 32;
-                        self.regs[fb + win[3] as usize] = if win[2] >> 8 & 1 != 0 {
+                        frame!()[win[3] as usize] = if win[2] >> 8 & 1 != 0 {
                             v as i64 as i128 as u128
                         } else {
                             u128::from(v)
@@ -792,11 +802,12 @@ impl Oven {
                     pc += 4;
                 }
                 Op::Mov => {
-                    reg!(0) = reg!(1);
+                    let r = frame!();
+                    r[arg!(0)] = r[arg!(1)];
                     if is_next!(3, Mov) {
                         #[cfg(feature = "op-stats")]
                         opstats::count(Op::Mov);
-                        self.regs[fb + win[4] as usize] = self.regs[fb + win[5] as usize];
+                        r[win[4] as usize] = r[win[5] as usize];
                         pc += 6;
                     } else {
                         pc += 3;
@@ -828,7 +839,8 @@ impl Oven {
                 | Op::IAnd
                 | Op::IOr
                 | Op::IXor => {
-                    let (a, bb) = (reg!(1), reg!(2));
+                    let r = frame!();
+                    let (a, bb) = (r[arg!(1)], r[arg!(2)]);
                     let width = aux & 0xFF;
                     let signed = aux >> 8 & 1 != 0;
                     match arith::int_bin(
@@ -840,7 +852,7 @@ impl Oven {
                         aux >> 9 & 0xFF,
                         aux >> 17 & 1 != 0,
                     ) {
-                        Ok(v) => reg!(0) = v,
+                        Ok(v) => r[arg!(0)] = v,
                         Err(err) => match self.wrap_overflow(pc, err, op, aux, a, bb) {
                             Some(v) => reg!(0) = v,
                             None => fail!(Fault::Int { err, op, a, b: bb, aux }),
@@ -857,21 +869,23 @@ impl Oven {
                     pc += 3;
                 }
                 Op::ICmp => {
-                    let (a, bb) = (reg!(1), reg!(2));
+                    let r = frame!();
+                    let (a, bb) = (r[arg!(1)], r[arg!(2)]);
                     let o =
                         if aux >> 8 & 1 != 0 { (a as i128).cmp(&(bb as i128)) } else { a.cmp(&bb) };
-                    reg!(0) = u128::from(compare(aux >> 9, o));
+                    r[arg!(0)] = u128::from(compare(aux >> 9, o));
                     if is_next!(4, JmpIfNot) || is_next!(4, JmpIf) {
                         #[cfg(feature = "op-stats")]
                         opstats::count(Op::from_u8(win[4] as u8));
-                        let c = self.regs[fb + win[5] as usize] != 0;
+                        let c = r[win[5] as usize] != 0;
                         pc = if c == is_next!(4, JmpIf) { win[6] as usize } else { pc + 7 };
                     } else {
                         pc += 4;
                     }
                 }
                 Op::ICast => {
-                    reg!(0) = canon(reg!(1), aux >> 9 & 0xFF, aux >> 17 & 1 != 0);
+                    let r = frame!();
+                    r[arg!(0)] = canon(r[arg!(1)], aux >> 9 & 0xFF, aux >> 17 & 1 != 0);
                     pc += 3;
                 }
                 Op::ToBool => {
