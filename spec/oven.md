@@ -96,28 +96,36 @@ is an implementation choice that leaves results, diagnostics, step and
 fault counts and trap ids unchanged.
 
 - **Fetch window.** Each iteration reads the instruction as one fixed
-  array, `kbc::window(code, pc) -> [u32; kbc::WINDOW]` (`WINDOW` = 8): word
-  0 and up to seven operand words, in one checked slice read
-  (`first_chunk`), so the operands are then indexed with no further bounds
-  check. A `const` assertion keeps every opcode's operand count
-  (`Op::OPERANDS`) below `WINDOW`.
-- **Padding.** Every compiled unit (a function body, a thunk, a stub, the
-  shared `Unwind` landing pad) ends with `WINDOW - 1` `Nop` words
-  (`kbc::pad`, called by `Compiler::end_unit` and `Vm::unwind_pc`), so a
-  window starting at any instruction of a unit lies inside the stream.
-  The padding is never executed (a unit ends in `Ret`, `Halt`, a trap or
-  `Unwind`); it costs 28 bytes per unit. A window that would still run
-  past the end goes to the cold `kbc::tail_window`, which copies the
-  instruction's own words and zero-fills the rest (a truncated instruction
+  array of `kbc::WINDOW` (8) words: word 0 and up to seven operand words,
+  in one checked slice read (`first_chunk`), so the operands are then
+  indexed with no further bounds check. `run_loop` borrows the window in
+  place (`kbc::window_ref(code, pc, &mut tail) -> &[u32; WINDOW]`) rather
+  than copying it: a copied window is spilled to the stack and every
+  operand read goes through a store-to-load forward, which cost several
+  percent of wall time on loop-heavy programs although it lowers the
+  instruction count. A `const` assertion keeps every opcode's operand
+  count (`Op::OPERANDS`) below `WINDOW`.
+- **Padding.** The stream ends with `WINDOW - 1` `Nop` words (`kbc::pad`,
+  called by `Compiler::end_unit` and `Vm::unwind_pc`), so a window starting
+  at any instruction lies inside the stream. Only the last unit carries
+  them: the next unit's first word (`Compiler::here`, `Vm::unwind_pc`)
+  first truncates them (`kbc::unpad`, keyed on `Oven::padded`, the stream
+  length the last `pad` left), because a unit's own last instruction then
+  has the next unit's words after it. The padding is never executed (a
+  unit ends in `Ret`, `Halt`, a trap or `Unwind`) and never a jump target;
+  it costs 28 bytes in all. A window that would still run past the end
+  goes to the cold `kbc::tail_window`, which copies the instruction's own
+  words into `tail` and zero-fills the rest (a truncated instruction
   panics there, as an out-of-range read did before).
 - **Hot and cold arms.** Opcodes that are rare in measured programs
   (allocation, unions, member pointers, RTTI, exceptions, `Wide`, `Cx`,
   `VoidCast`, ...) run in `Vm::run_cold`, an `#[inline(never)]` function
-  taking the window, `pc` and the frame base and returning the next `pc`
-  and frame base (or the fault and its `pc`). `run_loop` names those
-  opcodes in one arm rather than a wildcard, so its `match` is a single
-  jump table, and keeps the common opcodes in a body small enough to stay
-  in registers.
+  taking the opcode, `pc` and the frame base and returning the next `pc`
+  and frame base (or the fault and its `pc`). It fetches the window again
+  itself, so `run_loop`'s window never has its address taken. `run_loop`
+  names those opcodes in one arm rather than a wildcard, so its `match` is
+  a single jump table, and keeps the common opcodes in a body small enough
+  to stay in registers.
 - **In-place fusion.** A hot arm whose window also holds the next
   instruction runs that instruction too when it is the usual successor,
   skipping one dispatch: `Mov`→`Mov`, `Step`→`Mov`, `Step`→`Const`,

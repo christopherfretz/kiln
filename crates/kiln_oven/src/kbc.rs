@@ -760,9 +760,27 @@ pub(crate) fn tail_window(code: &[u32], pc: usize) -> [u32; WINDOW] {
 /// [`tail_window`]'s when the code ends sooner.
 #[inline]
 pub(crate) fn window(code: &[u32], pc: usize) -> [u32; WINDOW] {
+    let mut tail = [0; WINDOW];
+    *window_ref(code, pc, &mut tail)
+}
+
+/// [`window`] borrowed: the words in place in `code` (no copy), or
+/// [`tail_window`]'s written into `tail` when the code ends sooner. The
+/// dispatch loop reads operands through it straight from the code, where
+/// a copied window is spilled to the stack and read back (spec/oven.md
+/// "Dispatch").
+#[inline]
+pub(crate) fn window_ref<'a>(
+    code: &'a [u32],
+    pc: usize,
+    tail: &'a mut [u32; WINDOW],
+) -> &'a [u32; WINDOW] {
     match code.get(pc..).and_then(|s| s.first_chunk::<WINDOW>()) {
-        Some(w) => *w,
-        None => tail_window(code, pc),
+        Some(w) => w,
+        None => {
+            *tail = tail_window(code, pc);
+            tail
+        }
     }
 }
 

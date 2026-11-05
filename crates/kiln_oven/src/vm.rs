@@ -14,7 +14,7 @@ use crate::arith::{self, FloatErr, IntErr, canon};
 use crate::compile::{FState, GState, float_of};
 use crate::complex;
 use crate::failure::{EvalFailure, FailKind};
-use crate::kbc::{Op, WINDOW, ak, cce, cmp, new_aux};
+use crate::kbc::{Op, ak, cce, cmp, new_aux};
 use crate::mem::{Alloc, DynKind, MemFault, NOWHERE, Origin, Ptr, Sp, TrialMode, flags};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{Hop, OTy, TyKind, Walk, alt_members};
@@ -715,7 +715,8 @@ impl Oven {
             // One checked read of the instruction's words; operands index
             // the local window with constant indices (spec/oven.md
             // "Dispatch").
-            let win = crate::kbc::window(&self.code, pc);
+            let mut tail = [0; crate::kbc::WINDOW];
+            let win = crate::kbc::window_ref(&self.code, pc, &mut tail);
             let w = win[0];
             let op = Op::from_u8(w as u8);
             let aux = w >> 8;
@@ -841,6 +842,7 @@ impl Oven {
                 | Op::IXor => {
                     let r = frame!();
                     let (a, bb) = (r[arg!(1)], r[arg!(2)]);
+                    let d = fb + arg!(0);
                     let width = aux & 0xFF;
                     let signed = aux >> 8 & 1 != 0;
                     match arith::int_bin(
@@ -854,7 +856,7 @@ impl Oven {
                     ) {
                         Ok(v) => r[arg!(0)] = v,
                         Err(err) => match self.wrap_overflow(pc, err, op, aux, a, bb) {
-                            Some(v) => reg!(0) = v,
+                            Some(v) => self.regs[d] = v,
                             None => fail!(Fault::Int { err, op, a, b: bb, aux }),
                         },
                     }
@@ -1010,8 +1012,9 @@ impl Oven {
                     pc += 3;
                 }
                 Op::Builtin => {
+                    let d = fb + arg!(0);
                     match self.exec_builtin(b, pc, fb, aux) {
-                        Ok(v) => reg!(0) = v,
+                        Ok(v) => self.regs[d] = v,
                         Err(f) => fail!(f),
                     }
                     pc += 7;
@@ -1139,7 +1142,7 @@ impl Oven {
                     fb = self.stack[self.stack.len() - 1].fb as usize;
                 }
                 Op::GlobalAddr => {
-                    let g = arg!(1);
+                    let (d, g) = (fb + arg!(0), arg!(1));
                     let p = match self.globals[g].state {
                         GState::Resolved(p) => p,
                         GState::Unresolved => {
@@ -1148,7 +1151,7 @@ impl Oven {
                             self.resolve_global(b, g as u32, top as u32)
                         }
                     };
-                    reg!(0) = u128::from(p);
+                    self.regs[d] = u128::from(p);
                     pc += 3;
                 }
                 // Listed rather than `_`, so the jump table covers every
@@ -1201,7 +1204,7 @@ impl Oven {
                 | Op::Unwind
                 | Op::Catch
                 | Op::CatchBegin => {
-                    (pc, fb) = self.run_cold(b, op, &win, pc, fb)?;
+                    (pc, fb) = self.run_cold(b, op, pc, fb)?;
                 }
             }
         }
@@ -1209,17 +1212,21 @@ impl Oven {
 
     /// The opcodes `run_loop` does not dispatch itself, the rarely executed
     /// ones, out of line so the hot loop stays small (WP-648): the
-    /// instruction at `pc` (its fetch window `win`) in the frame at `fb`.
+    /// instruction at `pc` in the frame at `fb`.
     /// Returns the next `(pc, fb)`.
     #[inline(never)]
     fn run_cold(
         &mut self,
         b: &mut dyn SemaBridge,
         op: Op,
-        win: &[u32; WINDOW],
         mut pc: usize,
         mut fb: usize,
     ) -> Result<(usize, usize), (Fault, usize)> {
+        // Fetched again rather than passed: a window whose address is
+        // taken lives on `run_loop`'s stack, and the store and the reload
+        // of every instruction's words through it cost more wall time
+        // than they save (spec/oven.md "Dispatch").
+        let win = crate::kbc::window(&self.code, pc);
         let aux = win[0] >> 8;
         macro_rules! arg {
             ($i:expr) => {
