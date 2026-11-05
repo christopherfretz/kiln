@@ -185,12 +185,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// lent back to sema, so the work can evaluate (nested, R-OVEN-1).
     pub(crate) fn lend_oven<R>(&mut self, oven: &mut Oven, f: impl FnOnce(&mut Self) -> R) -> R {
         debug_assert!(self.oven.is_none(), "lend_oven outside an evaluation");
-        let spare = self.spare_oven.take().unwrap_or_else(|| Oven::new(oven.budget()));
-        let lent = std::mem::replace(oven, spare);
+        let mut lent =
+            self.spare_oven.take().unwrap_or_else(|| Box::new(Oven::new(oven.budget())));
+        std::mem::swap(oven, &mut *lent);
         self.oven = Some(lent);
         let r = f(self);
-        if let Some(o) = self.oven.take() {
-            self.spare_oven = Some(std::mem::replace(oven, o));
+        if let Some(mut o) = self.oven.take() {
+            std::mem::swap(oven, &mut *o);
+            self.spare_oven = Some(o);
         }
         r
     }
@@ -487,7 +489,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             {
                 return true;
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false
     }
@@ -592,7 +594,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// `backtrace_limit` call frames (0: all) in a failure's notes
     /// (`-fconstexpr-steps=` and friends). Call before parsing.
     pub fn set_constexpr_limits(&mut self, budget: Budget, backtrace_limit: usize) {
-        let mut oven = Oven::new(budget);
+        let mut oven = Box::new(Oven::new(budget));
         oven.set_backtrace_limit(backtrace_limit);
         self.oven = Some(oven);
     }
@@ -601,6 +603,6 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// evaluator's [`Oven::stats`] are its `-fconstexpr-report=`).
     pub fn into_parts(self) -> (Ast, Oven) {
         let Some(oven) = self.oven else { unreachable!("the Oven is out during an evaluation") };
-        (self.ast, oven)
+        (self.ast, *oven)
     }
 }

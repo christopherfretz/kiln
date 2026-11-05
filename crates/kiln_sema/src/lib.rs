@@ -416,8 +416,10 @@ pub struct Sema<'a, 'sm> {
     /// The constant evaluator of the translation unit (spec/sema.md §8).
     /// Taken out for the duration of an evaluation, so the bridge can
     /// reach the rest of `Sema` (`ensure_body` instantiates through it,
-    /// spec/sema-templates.md §4.11); `None` only while one runs.
-    pub(crate) oven: Option<Oven>,
+    /// spec/sema-templates.md §4.11); `None` only while one runs. Boxed,
+    /// so taking it out and putting it back moves a pointer, not the
+    /// evaluator (WP-645).
+    pub(crate) oven: Option<Box<Oven>>,
     /// The implicitly declared global allocation functions.
     pub(crate) global_ops: new_delete::GlobalOps,
     /// Braced-init-list call arguments awaiting their parameter types
@@ -579,7 +581,7 @@ pub struct Sema<'a, 'sm> {
     /// The placeholder [`Sema::lend_oven`] leaves in a bridge callback's
     /// Oven slot while the running Oven is lent, kept for the next loan
     /// (a loan allocates no Oven of its own).
-    pub(crate) spare_oven: Option<Oven>,
+    pub(crate) spare_oven: Option<Box<Oven>>,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -1051,7 +1053,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             missing_typename_fns: kiln_source::fx::FxHashSet::default(),
             extern_c: kiln_source::fx::FxHashMap::default(),
             split_greaters: kiln_source::fx::FxHashSet::default(),
-            oven: Some(Oven::new(Budget::default())),
+            oven: Some(Box::new(Oven::new(Budget::default()))),
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
             prototype_params: Vec::new(),
@@ -1399,7 +1401,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             if self.typo_exprs.contains(&x) {
                 found.insert(x);
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         if found.is_empty() {
             return false;
@@ -1523,7 +1525,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 return false;
             }
             budget -= 1;
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false
     }
@@ -1540,7 +1542,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 return false;
             }
             budget -= 1;
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false
     }
@@ -1659,7 +1661,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 return false;
             }
             budget -= 1;
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false
     }
