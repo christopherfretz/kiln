@@ -1138,7 +1138,8 @@ impl Sema<'_, '_> {
                     return Ok(TemplateIdRef::Type(t));
                 }
                 let list = if ttp { list } else { self.profile_value_args(list) };
-                let mut canon = if ttp { None } else { self.dependent_spec_canon(name, d, args, l) };
+                let mut canon =
+                    if ttp { None } else { self.dependent_spec_canon(name, d, args, l) };
                 if !ttp && canon.is_none() {
                     let t = self.ast.types.template_specialization(name, list, None, false);
                     canon = self.partial_current_instantiation_canon(d, t, l);

@@ -347,7 +347,9 @@ impl Cg<'_> {
                     .collect();
                 self.shuffle(a, None, mask)
             }
-            "pslldqi128_byteshift" | "psrldqi128_byteshift" | "pslldqi256_byteshift"
+            "pslldqi128_byteshift"
+            | "psrldqi128_byteshift"
+            | "pslldqi256_byteshift"
             | "psrldqi256_byteshift" => {
                 let a = arg(self, 0)?;
                 let shift = imm(self, 1)? & 0xff;

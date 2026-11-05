@@ -673,9 +673,12 @@ impl Sema<'_, '_> {
             out.iter().copied().find(|&a| self.ast.attrs.get(a).kind == AttrKind::WEAKREF)
             && !internal
         {
-            let msg = self.diag(DiagId::sema_attribute_weakref_not_static, self.ast.attrs.get(w).loc);
+            let msg =
+                self.diag(DiagId::sema_attribute_weakref_not_static, self.ast.attrs.get(w).loc);
             self.emit(msg);
-            out.retain(|&a| !matches!(self.ast.attrs.get(a).kind, AttrKind::WEAKREF | AttrKind::ALIAS));
+            out.retain(|&a| {
+                !matches!(self.ast.attrs.get(a).kind, AttrKind::WEAKREF | AttrKind::ALIAS)
+            });
         }
         *attrs = out;
     }

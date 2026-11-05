@@ -413,7 +413,11 @@ impl Sema<'_, '_> {
             return None;
         }
         let name_loc = self.eloc(self.ignore_parens(callee));
-        let r = if new_decl == b { self.ignore_parens(callee) } else { self.build_decl_ref(new_decl, name_loc) };
+        let r = if new_decl == b {
+            self.ignore_parens(callee)
+        } else {
+            self.build_decl_ref(new_decl, name_loc)
+        };
         let f = self.builtin_fn_to_ptr(r, new_decl);
         Some(self.builder().call(
             f,
@@ -438,11 +442,8 @@ impl Sema<'_, '_> {
             kiln_ast::names::DeclName::ident(name),
             crate::lookup::LookupKind::Ordinary,
         );
-        let existing = found
-            .decls
-            .iter()
-            .copied()
-            .find(|&d| self.ast.decls.builtin_id(d) == Some(id));
+        let existing =
+            found.decls.iter().copied().find(|&d| self.ast.decls.builtin_id(d) == Some(id));
         existing.or_else(|| self.lazily_create_builtin(name, at))
     }
 }

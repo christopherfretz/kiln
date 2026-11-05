@@ -1960,25 +1960,24 @@ impl Parser<'_, '_> {
         final_loc: Option<Loc>,
         ctx: DeclaratorContext,
     ) -> TagUse {
-        let use_ =
-            if self.at(Punct::LBrace) || (is_class && self.at(Punct::Colon)) || final_loc.is_some()
-            {
-                TagUse::Definition
-            } else if self.at(Punct::Semi)
-                && ds.storage.is_none()
-                && ctx != DeclaratorContext::TypeName
-            {
-                if ds.friend.is_some() { TagUse::Friend } else { TagUse::Declaration }
-            } else if ds.friend.is_some()
-                && ds.storage.is_none()
-                && (self.at(Punct::Comma) || self.at(Punct::Ellipsis))
-            {
-                // An element of a friend-type-specifier-list
-                // ([class.friend]/3, P2893): `friend struct A, struct B;`.
-                TagUse::Friend
-            } else {
-                TagUse::Reference
-            };
+        let use_ = if self.at(Punct::LBrace)
+            || (is_class && self.at(Punct::Colon))
+            || final_loc.is_some()
+        {
+            TagUse::Definition
+        } else if self.at(Punct::Semi) && ds.storage.is_none() && ctx != DeclaratorContext::TypeName
+        {
+            if ds.friend.is_some() { TagUse::Friend } else { TagUse::Declaration }
+        } else if ds.friend.is_some()
+            && ds.storage.is_none()
+            && (self.at(Punct::Comma) || self.at(Punct::Ellipsis))
+        {
+            // An element of a friend-type-specifier-list
+            // ([class.friend]/3, P2893): `friend struct A, struct B;`.
+            TagUse::Friend
+        } else {
+            TagUse::Reference
+        };
         if use_ == TagUse::Definition && ds.friend.is_some() {
             // [class.friend]/2; clang skips the body and treats the
             // specifier as a reference.

@@ -331,10 +331,9 @@ fn unwrap_cast_level(s: &Sema<'_, '_>, t1: &mut QualType, t2: &mut QualType) -> 
     let (c2, p2) = cast_level(s, *t2);
     let similar = match (s.ast.types.canonical_view(*t1), s.ast.types.canonical_view(*t2)) {
         (TypeView::Pointer(_), TypeView::Pointer(_)) => true,
-        (
-            TypeView::MemberPointer { class: a, .. },
-            TypeView::MemberPointer { class: b, .. },
-        ) => s.ast.types.same_unqualified(QualType::unqual(a), QualType::unqual(b)),
+        (TypeView::MemberPointer { class: a, .. }, TypeView::MemberPointer { class: b, .. }) => {
+            s.ast.types.same_unqualified(QualType::unqual(a), QualType::unqual(b))
+        }
         _ => false,
     };
     if c1 == CastLevel::None || c2 == CastLevel::None {

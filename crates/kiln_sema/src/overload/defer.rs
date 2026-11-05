@@ -83,9 +83,7 @@ impl Sema<'_, '_> {
             && let Some(b) = self.perfect_viable(set)
         {
             let c = set.cand(b);
-            if c.decl.is_some()
-                && c.kind != CandidateKind::Surrogate
-                && self.ovl_deleted(c.func())
+            if c.decl.is_some() && c.kind != CandidateKind::Surrogate && self.ovl_deleted(c.func())
             {
                 // The deleted call's notes list every candidate, the
                 // deferred templates deduced for them (clang

@@ -804,8 +804,10 @@ impl Args {
                 } else if let Some(v) = arg.strip_prefix("-fdebug-prefix-map=") {
                     // No debug information: validated, otherwise ignored.
                     if !v.contains('=') {
-                        self.errors
-                            .push(ArgError::InvalidValue("-fdebug-prefix-map=".to_owned(), v.to_owned()));
+                        self.errors.push(ArgError::InvalidValue(
+                            "-fdebug-prefix-map=".to_owned(),
+                            v.to_owned(),
+                        ));
                     }
                 } else if let Some(v) = arg.strip_prefix("-fprebuilt-module-path=") {
                     self.prebuilt_module_paths.push(v.to_owned());
@@ -1286,7 +1288,10 @@ mod tests {
         assert_eq!(a.constexpr.steps, Some(2_000_000_000));
         assert_eq!(parse("-m32 a.cpp").errors, [ArgError::Unknown("-m32".into())]);
         let a = parse("-mcmodel=medium -mcmodel=large a.cpp");
-        assert_eq!((a.codegen.code_model, a.errors), (Some(kiln_codegen::CodeModel::Large), vec![]));
+        assert_eq!(
+            (a.codegen.code_model, a.errors),
+            (Some(kiln_codegen::CodeModel::Large), vec![])
+        );
         assert_eq!(
             parse("-mcmodel=huge a.cpp").errors,
             [ArgError::UnsupportedValue("-mcmodel=".into(), "huge".into())]
@@ -1325,7 +1330,9 @@ mod tests {
 
     #[test]
     fn prefix_maps() {
-        let a = parse("-ffile-prefix-map=/src/= -fmacro-prefix-map=/a=/b -fdebug-prefix-map=/c=/d a.cpp");
+        let a = parse(
+            "-ffile-prefix-map=/src/= -fmacro-prefix-map=/a=/b -fdebug-prefix-map=/c=/d a.cpp",
+        );
         assert_eq!(a.errors, []);
         assert_eq!(
             a.macro_prefix_map,

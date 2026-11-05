@@ -280,12 +280,9 @@ impl Sema<'_, '_> {
             Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
                 self.gcc_decl_string(d)
             }
-            Reflectee::Template(n) => self
-                .ast
-                .types
-                .template_decl(n)
-                .map(|d| self.gcc_decl_string(d))
-                .unwrap_or_default(),
+            Reflectee::Template(n) => {
+                self.ast.types.template_decl(n).map(|d| self.gcc_decl_string(d)).unwrap_or_default()
+            }
             Reflectee::FnParam(f, i) => {
                 let fs = self.gcc_decl_string(f);
                 match self.param_identifier(f, i) {

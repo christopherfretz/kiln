@@ -1864,15 +1864,13 @@ impl Sema<'_, '_> {
                         return builtin::info(b)
                             .is_some_and(|i| i.attrs & builtin::attr::NORETURN != 0);
                     }
-                    return self.ast.decls.get(d).kind().is_function()
-                        && self.cfg_noreturn_fn(d);
+                    return self.ast.decls.get(d).kind().is_function() && self.cfg_noreturn_fn(d);
                 }
                 // `s.m()`: clang's CFG uses the direct callee, virtual or
                 // not.
                 ExprKind::MemberExpr => {
                     let d = self.ast.exprs.decl(c);
-                    return self.ast.decls.get(d).kind().is_function()
-                        && self.cfg_noreturn_fn(d);
+                    return self.ast.decls.get(d).kind().is_function() && self.cfg_noreturn_fn(d);
                 }
                 _ => return false,
             }

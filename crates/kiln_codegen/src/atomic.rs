@@ -1280,12 +1280,7 @@ impl Cg<'_> {
     /// `__sync_synchronize` a `seq_cst` fence. A pointer less aligned than
     /// the value's size warns (`-Wsync-alignment`) and the access takes
     /// the natural alignment.
-    pub(crate) fn emit_sync_builtin(
-        &mut self,
-        b: u32,
-        e: ExprId,
-        args: &[ExprId],
-    ) -> R<Option<V>> {
+    pub(crate) fn emit_sync_builtin(&mut self, b: u32, e: ExprId, args: &[ExprId]) -> R<Option<V>> {
         use kiln_ast::decl::builtin::sync::{self as sy, Op as SOp};
         let arg = |i: usize| args.get(i).copied().map_or_else(|| err(None, "missing argument"), Ok);
         if b == sy::SYNCHRONIZE {
@@ -1381,10 +1376,10 @@ impl Cg<'_> {
                 Rmw::Min => RmwOp::Min,
             },
         };
-        let mut r = self.f.fir.push(
-            Op::AtomicRmw { op: rop, ptr: p, val: v, mem: mem(Ordering::SeqCst) },
-            ity,
-        );
+        let mut r = self
+            .f
+            .fir
+            .push(Op::AtomicRmw { op: rop, ptr: p, val: v, mem: mem(Ordering::SeqCst) }, ity);
         if let Some(post) = post {
             let bop = match post {
                 Rmw::Add => BinOp::Add,

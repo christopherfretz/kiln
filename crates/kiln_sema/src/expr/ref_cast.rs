@@ -185,11 +185,8 @@ impl Sema<'_, '_> {
         }
         // clang: `CK_NoOp` when the two pointer types are the same,
         // cv-qualification included.
-        let ck = if self.ast.types.same_type(et, r) {
-            CastKind::NoOp
-        } else {
-            CastKind::LValueBitCast
-        };
+        let ck =
+            if self.ast.types.same_type(et, r) { CastKind::NoOp } else { CastKind::LValueBitCast };
         self.typed_cast(style, ck, e, r, vk, None, loc, rparen)
     }
 

@@ -761,8 +761,9 @@ impl Sema<'_, '_> {
         match self.ast.types.nns_view(nns) {
             kiln_ast::types::Nns::Type { prefix, ty, template_kw } => {
                 let r = self.rebuild_ci_type(ty, qual, loc, depth + 1);
-                (r != ty)
-                    .then(|| self.ast.types.nns(kiln_ast::types::Nns::Type { prefix, ty: r, template_kw }))
+                (r != ty).then(|| {
+                    self.ast.types.nns(kiln_ast::types::Nns::Type { prefix, ty: r, template_kw })
+                })
             }
             kiln_ast::types::Nns::Identifier { prefix: Some(prefix), name } => {
                 let outer = self.rebuild_ci_nns_record(prefix, qual, loc, depth + 1)?;
@@ -7368,11 +7369,8 @@ impl Sema<'_, '_> {
         // `friend class iterator_core_access;` through
         // `using iterators::iterator_core_access;`; clang `ActOnTag`).
         let found_as = lookup.found.last().copied();
-        let prev = found
-            .last()
-            .copied()
-            .filter(|&p| within(self, found_as.unwrap_or(p)))
-            .or_else(hidden);
+        let prev =
+            found.last().copied().filter(|&p| within(self, found_as.unwrap_or(p))).or_else(hidden);
         if let Some(p) = prev {
             if self.tag_matches(p, keyword) {
                 self.mark_type_referenced(p);
@@ -9825,7 +9823,8 @@ impl Sema<'_, '_> {
     ) -> Option<AttrId> {
         let weakref = kind == AttrKind::WEAKREF;
         if weakref && args.len() > 1 {
-            let msg = self.diag(DiagId::sema_attribute_too_many_arguments_one, loc).arg("'weakref'");
+            let msg =
+                self.diag(DiagId::sema_attribute_too_many_arguments_one, loc).arg("'weakref'");
             self.emit(msg);
             return None;
         }
@@ -9844,7 +9843,8 @@ impl Sema<'_, '_> {
                     AttrArg::Type(_) => (None, loc),
                 };
                 let Some(lit) = lit else {
-                    let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg(n.to_owned());
+                    let msg =
+                        self.diag(DiagId::parse_attribute_requires_string, at).arg(n.to_owned());
                     self.emit(msg);
                     return None;
                 };

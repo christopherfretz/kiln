@@ -1367,10 +1367,7 @@ impl Sema<'_, '_> {
             self.instantiate_static_member_def(v, loc);
             if !self.inst.member_defs.contains(&v) {
                 self.record_ref_var_inst(v);
-            } else if odr
-                && !self.is_var_spec(v)
-                && self.inst.quiet_pending.insert(v)
-            {
+            } else if odr && !self.is_var_spec(v) && self.inst.quiet_pending.insert(v) {
                 // No out-of-line definition yet: the end of the TU is a
                 // point of instantiation too ([temp.point]/7).
                 self.queue_instantiation(v, loc);

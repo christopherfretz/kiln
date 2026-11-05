@@ -53,8 +53,14 @@ enum Shape {
     Pointer(QualType),
     LRef(QualType),
     RRef(QualType),
-    MemData { pointee: QualType, class: QualType },
-    MemFn { pointee: QualType, class: QualType },
+    MemData {
+        pointee: QualType,
+        class: QualType,
+    },
+    MemFn {
+        pointee: QualType,
+        class: QualType,
+    },
     Array(QualType, Option<u64>),
     /// An array whose bound is value-dependent (`T [size]`).
     DepArray(QualType, kiln_ast::types::ExprOperand),
@@ -256,9 +262,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
         let types = &self.ast().types;
         let inner = match types.view(t.ty()) {
             TypeView::Paren(i) | TypeView::Atomic(i) => i,
-            TypeView::Typedef { underlying, .. } | TypeView::Using { underlying, .. } => {
-                underlying
-            }
+            TypeView::Typedef { underlying, .. } | TypeView::Using { underlying, .. } => underlying,
             TypeView::Elaborated { named, .. } => named,
             TypeView::SubstTemplateTypeParm { replacement, .. } => replacement,
             TypeView::TemplateSpecialization { underlying: Some(u), .. } => u,
@@ -838,7 +842,10 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             match n.kind() {
                 DeclKind::LinkageSpec | DeclKind::Export => ctx = n.ctx(),
                 DeclKind::Enum
-                    if ast.decls.enumeration(c).is_some_and(|e| e.flags & EnumData::SCOPED == 0) =>
+                    if ast
+                        .decls
+                        .enumeration(c)
+                        .is_some_and(|e| e.flags & EnumData::SCOPED == 0) =>
                 {
                     ctx = n.ctx();
                 }
