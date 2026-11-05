@@ -23,9 +23,14 @@ use crate::Sema;
 
 impl Sema<'_, '_> {
     /// Whether a declaration in context `ctx` has C language linkage
-    /// (the innermost enclosing linkage specification is `extern "C"`;
-    /// class members and local entities never do), as
+    /// (the innermost lexically enclosing linkage specification is
+    /// `extern "C"`; class members and local entities never do), as
     /// `kiln_abi::mangle::is_extern_c` decides for a declared entity.
+    /// Namespaces are walked through their lexical contexts: a namespace
+    /// reopened inside `extern "C++"` within `extern "C"` has the
+    /// first definition's semantic context but C++ linkage (libstdc++'s
+    /// bits/std_abs.h overloading `std::abs` after `<stdlib.h>` was
+    /// included inside `extern "C"`).
     pub(crate) fn ctx_is_extern_c(&self, ctx: DeclId) -> bool {
         let mut c = Some(ctx);
         for _ in 0..10_000 {
@@ -41,7 +46,7 @@ impl Sema<'_, '_> {
                 DeclKind::Namespace => {}
                 _ => return false,
             }
-            c = self.ast.decls.get(x).ctx();
+            c = self.ast.decls.lexical_ctx(x);
         }
         false
     }
