@@ -275,7 +275,7 @@ impl CodegenJob<'_> {
         let (mut tu, pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
         *deps_out = crate::pp_cmd::finish_deps(pp, deps);
-        let mut ir = None;
+        let mut module = None;
         if engine.error_count() == 0 {
             let opts = CodegenOptions {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
@@ -329,7 +329,7 @@ impl CodegenJob<'_> {
                 w.emit(engine);
             }
             match r {
-                Ok(m) => ir = Some(m.to_string()),
+                Ok(m) => module = Some(m),
                 Err(e) => {
                     let span = e.loc.map_or(Span::INVALID, Span::empty);
                     Diag::new(DiagId::cg_error, span).arg(&e.msg).emit(engine);
@@ -343,7 +343,11 @@ impl CodegenJob<'_> {
             let mut err = job.stderr.clone();
             let _ = err.write_all(tu.inst_report.as_bytes());
         }
-        ir
+        // The AST, the Oven and the module are each about as large as the
+        // IR text for a big unit: print only once the AST is gone, so the
+        // peak holds two of the three, not all of them (WP-633).
+        drop(tu);
+        module.map(|m| m.to_string())
     }
 }
 
@@ -764,7 +768,9 @@ fn execute(
                 if let Some(text) = &ir
                     && let Some(cmds) = ir_passes(args, tc, std::str::from_utf8(text).unwrap_or(""))
                 {
-                    let mut data = text.clone();
+                    // Each run's output replaces its input: the frontend's
+                    // text is not kept alongside a copy (WP-633).
+                    let mut data = ir.take().unwrap_or_default();
                     let mut ok = true;
                     for cmd in &cmds {
                         if args.verbose {
