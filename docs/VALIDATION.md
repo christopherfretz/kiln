@@ -15,7 +15,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Goldens | alongside the above, `*.expected` | AST dumps, diagnostics, IR shapes (FileCheck-style) |
 | libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh [<tag>]`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md`, whole-suite status and the 10% sample procedure in `docs/status/libcxx.md` (M3b) | The real world |
 | libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
-| Feature table | `docs/status/cxx-features.md`, checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every C++23/C++26 paper marked `done` has passing tests and clang 22's `__cpp_*` value |
+| Feature table | `docs/STANDARD_SUPPORT.md`, the standard support table (one section per standard, C++98/03 to C++26, reflection and kiln extensions), checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every core-language feature marked `done` has passing tests and clang 22's `__cpp_*` value at its standard; the summary matches the sections |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
 | Reflection perf | `bench/reflect/` (shapes S1-S6 from `cargo xtask gen-reflect`; named explicitly), `cargo xtask bench --scaling <shape>` (spec/bench.md "Reflection shapes", "Scaling sweeps"); manual/nightly on the dev host, not part of `ci` | The §3.8 budgets of docs/plans/m6-reflection.md: `peak_arena` independent of N, linear wall time and RSS, kiln vs GCC 16.1 |
 | External corpora | `cargo xtask test --external <dir>` / `cargo xtask bench --external <dir>` on directories outside the repo (spec/harness.md "External corpora"); manual, never in `ci` | Never crash: private crash reproducers and the reference workload compile or fail cleanly; counts only reach the repo |
@@ -230,11 +230,14 @@ report could not be written), never for header failures. The contract is
 `spec/libstdcxx.md`.
 
 `cargo xtask features` is outside `ci` as well. It checks the language
-feature table, `docs/status/cxx-features.md`, which has one row per C++23 and
-C++26 paper with its status, its corpus tests and its `__cpp_*` macro value in
-kiln and in clang 22. It fails a `done` row that names no test, whose tests do
+feature table, `docs/STANDARD_SUPPORT.md`, which has one section per standard
+(C++98/03 to C++26, C++26 reflection, DR-level papers, kiln extensions) and one
+row per core-language feature with its status, its corpus tests and its
+`__cpp_*` macro value in kiln and in clang 22 at that standard. It fails a `done` row that names no test, whose tests do
 not all pass under kiln, or whose macro kiln defines differently from clang 22.
-It also fails any row whose kiln macro column is stale. Run it by hand, and at
+It also fails any row whose kiln macro column is stale, and a summary table
+(the per-standard counts at the top) that disagrees with the sections;
+`--summary` prints the counts. Run it by hand, and at
 the M4 gate. The format and checks are in `spec/harness.md` "Feature table".
 
 Each test file names the standard section it covers in its directory path,
@@ -345,7 +348,7 @@ compatibility level"; WP-263). The test runner passes the oracle's major
 version, so `KILN_ORACLE=22` (or `--oracle clang++-22`) compares kiln at
 level 22 with clang 22 and headers take the same `#if` branches under both. The
 `__cpp_*` feature-test macros are not part of the level: they follow what
-kiln implements (docs/status/cxx-features.md). Builtins that only clang 22
+kiln implements (docs/STANDARD_SUPPORT.md). Builtins that only clang 22
 has are tested by `requires: clang>=22` tests (WP-355), checked against
 clang++-22 by the self-check.
 - `-E`: token-wise comparison after both outputs are re-lexed with

@@ -13,3 +13,11 @@ Text between tables.
 | Paper | Feature | `__cpp_*` macro (kiln / clang 22) | Status | Corpus tests | Notes |
 |---|---|---|---|---|---|
 | P1967R14 | `#embed` | - | todo | | a `a|b` span and an escaped \| pipe |
+
+## C++11
+
+| Paper | Feature | `__cpp_*` macro (kiln / clang 22 at `-std=c++11`) | Status | Corpus tests | Notes |
+|---|---|---|---|---|---|
+| N2442 | Raw and Unicode string literals | `__cpp_raw_strings` 200710 / 200710<br>`__cpp_unicode_literals` 200710 / 200710 | done | `conformance/a.cpp` | |
+| N2756 | Default member initializers | — | untested | | |
+| [except] | Exceptions | — | done | `conformance/a.cpp` | |

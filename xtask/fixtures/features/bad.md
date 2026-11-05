@@ -12,3 +12,5 @@
 | P0006R1 | bad value | `__cpp_y` 1 / soon | done | `conformance/a.cpp` | |
 | P0007R1 | first | — | todo | | |
 | P0007R1 | duplicate | — | todo | | |
+| P0008R1 | second macro unquoted | `__cpp_a` 1 / 1<br>__cpp_b 2 / 2 | done | `conformance/a.cpp` | |
+| [Bad Name] | bad stable name | — | done | `conformance/a.cpp` | |

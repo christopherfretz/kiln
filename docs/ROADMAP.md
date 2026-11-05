@@ -107,7 +107,7 @@ Namespaces/ADL corner cases, exceptions, RTTI, coroutines, modules (at least hea
 `consteval`, `constinit`, structured bindings,
 three-way comparison, deducing this, attributes, `thread_local`,
 static initialization order, inline variables.
-- **Feature completeness is the exit, not a header list.** `docs/status/cxx-features.md`
+- **Feature completeness is the exit, not a header list.** `docs/STANDARD_SUPPORT.md`
   holds one row per C++23 language feature (P0847 deducing `this`, P1938
   `if consteval`, P1169 static `operator()`, P2128 multidimensional `operator[]`,
   P0849 `auto(x)`, P1774 `[[assume]]`, P2334 `#elifdef`/`#elifndef`, P2437 `#warning`,

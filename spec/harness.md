@@ -992,51 +992,80 @@ from `tests/conformance/stress/`, with
 
 ## Feature table
 
-`docs/status/cxx-features.md` is the M4 language-feature checklist
-(`docs/ROADMAP.md` M4), and `cargo xtask features` checks it. The command
-is a manual / M4-gate check and is not part of `ci`: a table edit, or a
-corpus change that breaks a `done` row, would otherwise fail unrelated
-merges.
+`docs/STANDARD_SUPPORT.md` is the standard support table: what kiln
+supports in each C++ standard, one `## ` section per standard (C++98/03,
+C++11, C++14, C++17, C++20, C++23, C++26, C++26 reflection, DR-level papers,
+kiln extensions), one row per core-language feature. Library papers are out
+of scope (docs/status/libstdcxx.md and libcxx.md). Its C++23 and C++26 rows
+are also the M4 language-feature checklist (`docs/ROADMAP.md` M4).
+`docs/status/cxx-features.md`, its old home, is a pointer to it.
+`cargo xtask features` checks it. The command is a manual / M4-gate check
+and is not part of `ci`: a table edit, or a corpus change that breaks a
+`done` row, would otherwise fail unrelated merges.
 
 Format. A feature table is a Markdown table whose header row's first cell
-is `Paper`. The file may hold several (C++23, C++26, DR-level). The header
+is `Paper`. The file holds several, normally one per section. The header
 cells must start with, in order, `Paper`, `Feature`, `` `__cpp_*` macro ``,
 `Status`, `Corpus tests` and `Notes`. A `|---` separator follows, then one
-row per paper, up to the first line that does not start with `|`. A `|`
-inside a backtick span, or written `\|`, does not split cells.
+row per feature, up to the first line that does not start with `|`. A `|`
+inside a backtick span, or written `\|`, does not split cells. The macro
+header cell may name the table's standard, as in `` `__cpp_*` macro (kiln
+/ clang 22 at `-std=c++11`) ``; without one the table's standard is
+`c++26`.
 
 | Cell | Form |
 |---|---|
-| Paper | `P<n>R<rev>`, unique across the file |
+| Paper | unique across the file: a paper `P<n>R<rev>` or `N<n>`, a core issue `CWG<n>`, a kiln work package `WP-<n>` (kiln extensions), or a stable name `[<name>]` (lower-case letters, digits and dots) for a baseline area with no single paper |
 | Feature | free text |
-| Macro | `—` (or `-`): the paper has no macro of its own; else `` `__cpp_name` KILN / CLANG22 ``, each value either a number with an optional `L` suffix or `—` for undefined. KILN is `kiln++ -std=c++26 -dM -E`, CLANG22 is `clang++-22 -std=c++26 -dM -E -x c++ /dev/null` |
-| Status | `done` (kiln passes tests covering the core forms), `partial` (some pass, or some are `xfail(kiln)`), `todo` (nothing covers it, or kiln fails) |
+| Macro | `—` (or `-`): the feature has no macro of its own; else one or more `` `__cpp_name` KILN / CLANG22 `` joined by `<br>`, each value either a number with an optional `L` suffix or `—` for undefined. KILN is `kiln++ -std=<std> -dM -E`, CLANG22 is `clang++-22 -std=<std> -dM -E -x c++ /dev/null`, `<std>` the table's standard |
+| Status | `done` (kiln passes tests covering the core forms), `partial` (some pass, or some are `xfail(kiln)`, or only the macro is wrong), `todo` (nothing covers it, or kiln fails), `untested` (accepted, with no corpus test of its own yet) |
 | Corpus tests | backticked paths relative to `tests/`, separated by `<br>` |
 | Notes | free text: clang 19 values that differ, why a test is `xfail`, written reasons for C++26 rows clang 22 lacks |
 
-A paper with no other test gets a probe at
+A feature with no other test gets a probe at
 `tests/conformance/<std-section>/<paper>-probe.cpp` (`strict-diags`,
 `xfail(kiln)` with a reason while kiln fails, `xfail(clang)` naming the clang
 versions that lack the feature).
 
-`cargo xtask features [--compiler <kiln++>] [--table <path>]` builds kiln
-unless `--compiler` is given, then checks:
+Summary. The file opens with a summary table: a header row whose cells
+start with `Standard`, `` `-std=` ``, `` `__cplusplus` ``, `done`,
+`partial`, `todo` and `untested`, a separator, then one row per section.
+The Standard cell is the section's `## ` heading text (or a link whose text
+is); the `-std=` cell's first `` `-std=<std>` `` span is the standard its
+`__cplusplus` cell is checked at (none, as in "every `-std=`", skips the
+check; `—` in the `__cplusplus` cell does too); the four counts are the
+section's rows by status. A section's rows are those of every table under
+its heading with a `Status` header cell, including tables the row checks do
+not read (the C++26 reflection section is per work package, first header
+cell `WP`). `untested` rows count in neither `done` nor `partial`.
+
+`cargo xtask features [--compiler <kiln++>] [--table <path>] [--summary]`
+builds kiln unless `--compiler` or `--summary` is given, then checks:
 
 - (a) every `done` row names at least one test, and every test any row
   names exists;
 - (b) every test of a `done` row passes (`PASS`, not `XFAIL`) under kiln. All
   of them go through one `xtask test` runner invocation (`test::execute`, as
   `ci` uses it), with the default oracle and limits;
-- (c) on a `done` row with a macro, kiln's `-dM -E` value equals the table's
-  CLANG22 value, unless clang 22 does not define the macro (a C++26 feature
-  kiln ships ahead of clang 22, such as P3068; the row's Notes carry the
-  written reason). On every row with a macro, the KILN value must be what kiln
-  defines today, so that column cannot go stale.
+- (c) on a `done` row, each macro's kiln `-dM -E` value at the table's
+  standard equals the table's CLANG22 value, unless clang 22 does not define
+  the macro (a C++26 feature kiln ships ahead of clang 22, such as P3068; the
+  row's Notes carry the written reason). On every row with a macro, each
+  KILN value must be what kiln defines today at that standard, so that column
+  cannot go stale;
+- (d) the summary table matches the sections: a summary row with no section,
+  a section with rows and no summary row, a duplicate row, or a count that
+  differs is a failure naming the summary row (and, for a count, the field
+  and both numbers); and each summary row's `-std=` gives kiln's
+  `__cplusplus` value in its row.
 
-It prints `N rows: D done, P partial, T todo`, then one `FAIL  <paper>
-(<feature>, line <n>): <problems>` line per failing row. Exit status: 0 for
-all rows clean; 1 for a failing row; 2 for a usage, table parse or
-infrastructure error. Parse errors name their line.
+It prints `N rows: D done, P partial, T todo, U untested`, then one `FAIL
+<paper> (<feature>, line <n>): <problems>` line per failing row and one
+`FAIL  summary row ...` line per summary problem. `--summary` parses the
+file, prints each section's counts and runs the static half of (d) only (no
+kiln build, no test run). Exit status: 0 for all rows and the summary
+clean; 1 for a failing row or a stale summary; 2 for a usage, table parse
+or infrastructure error. Parse errors name their line.
 
 ## Tests backing this spec
 
@@ -1136,9 +1165,12 @@ infrastructure error. Parse errors name their line.
 
 - `xtask/src/features.rs` tests: the feature-table parser over
   `xtask/fixtures/features/{good,bad}.md` (cells, macro forms, code-span
-  pipes, line-numbered errors), the static checks (a) and (c), and a check
-  that `docs/status/cxx-features.md` itself parses and names only existing
-  tests.
+  pipes, multi-macro cells, `untested`, line-numbered errors), the static
+  checks (a) and (c) at each table's standard, the summary check (d)
+  (`summary_matches_sections`, `summary_parse_errors`: an inline table
+  with a stale count, a renamed section and a wrong `__cplusplus`), and a
+  check that `docs/STANDARD_SUPPORT.md` itself parses, names only existing
+  tests and has a summary matching its sections.
 
 ## Open questions
 

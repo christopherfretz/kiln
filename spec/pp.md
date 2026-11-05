@@ -402,7 +402,7 @@ spellings). At level 22 the answers are clang 22.1.8's, measured by
 clang 19: 894 base deltas (`COMPAT22`, applied after the base entries)
 and 130 flag overlays (`COMPAT22_OVERLAYS`, applied after the clang 19
 overlays). The level does **not** change the `__cpp_*` feature-test
-macros, which say what kiln implements (docs/status/cxx-features.md),
+macros, which say what kiln implements (docs/STANDARD_SUPPORT.md),
 nor what kiln accepts: kiln's builtins are a superset of both clangs'
 (spec/sema-templates.md §9.1 "clang 22 rows"). In compile modes the
 builtins TABLE still stages `__has_builtin` off for unimplemented rows

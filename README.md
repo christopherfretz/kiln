@@ -32,9 +32,11 @@ wall-clock time and peak memory tracked as part of the test suite.
 
 ## Status
 
-Early. See [docs/ROADMAP.md](docs/ROADMAP.md) for milestones (M1 is
-preprocessor parity with clang on all of libc++'s headers) and
-[docs/BACKLOG.md](docs/BACKLOG.md) for work in progress.
+M6 (C++26 reflection and the reference workload) is closed and the M7
+performance campaign is running; see [docs/ROADMAP.md](docs/ROADMAP.md) for
+the milestones and [docs/BACKLOG.md](docs/BACKLOG.md) for work in progress. What kiln supports
+in each standard, C++98 to C++26, feature by feature with the tests behind
+each row, is in [docs/STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md).
 
 ## Layout
 
@@ -48,7 +50,7 @@ preprocessor parity with clang on all of libc++'s headers) and
 | `crates/kiln_driver` | the `kiln` and `kiln++` commands |
 | `xtask/` | test, bench and libc++ harness (`cargo xtask ...`) |
 | `spec/` | per-crate contracts |
-| `docs/` | architecture, roadmap, validation, contributor model |
+| `docs/` | architecture, roadmap, validation, contributor model, the standard support table (`STANDARD_SUPPORT.md`) |
 | `resource/` | clang 19 builtin headers and predefined macro sets |
 | `tests/`, `bench/` | conformance/differential corpus, perf corpus |
 

@@ -159,7 +159,7 @@ transition.
   writes `*expected` back at every level (clang 22's behaviour; an
   oracle-19 `ir_vs_clang` deviation).
 - Tests that skipped clang 19 now `requires: clang>=22` (with
-  `xfail(kiln)` where kiln lacks the feature); docs/status/cxx-features.md.
+  `xfail(kiln)` where kiln lacks the feature); docs/status/cxx-features.md (now docs/STANDARD_SUPPORT.md).
 
 ### Residuals: burn-down (WP-377)
 WP-355 pinned 152 tests `//@ requires: clang<22` with `// clang 22 emits

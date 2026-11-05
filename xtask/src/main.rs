@@ -47,8 +47,9 @@ commands:
   libstdcxx   compile each public libstdc++ header alone with kiln and clang++-19 and
               report per-header status (docs/status/libstdcxx.md); informational, not
               part of ci (`cargo xtask libstdcxx --help`; contract in spec/libstdcxx.md)
-  features    check docs/status/cxx-features.md: done rows name passing tests and
-              kiln's __cpp_* values match clang 22's; an M4-gate check, not part of
+  features    check docs/STANDARD_SUPPORT.md: done rows name passing tests,
+              kiln's __cpp_* values match clang 22's and the summary matches the
+              sections (--summary prints it); an M4-gate check, not part of
               ci (`cargo xtask features --help`; spec/harness.md \"Feature table\")
   jobserver   status|refill: count, or top up, the shared jobserver pool's idle tokens
               (`cargo xtask jobserver --help`; spec/harness.md \"Jobserver\")
