@@ -20,6 +20,9 @@ use kiln_source::fx::FxHashMap;
 
 mod constraint;
 mod dep;
+mod reflect;
+
+pub use reflect::ReflectionMangling;
 
 /// The ids of unnamed classes that have no mangling number (`$_N`; clang
 /// `getAnonymousStructId`), handed out in first-mangle order: per function
@@ -43,9 +46,11 @@ pub struct AnonIds {
     /// Whether the module has any `abi_tag` attribute (computed on first
     /// use): without one no name carries implicit tags.
     abi_tags: Option<bool>,
-    /// Reflection template-argument literals written (`L u6__info <n> E`,
+    /// Reflection literals written (`L <info> <reflection> E`,
     /// spec/reflection.md §8.3), over every symbol mangled for the module.
     refl_literals: u64,
+    /// How reflections mangle (`-fkiln-reflection-mangling=`).
+    refl_mode: ReflectionMangling,
 }
 
 impl AnonIds {
@@ -54,10 +59,20 @@ impl AnonIds {
         Self::default()
     }
 
-    /// How many reflection template-argument literals the symbols mangled
-    /// with this table contain (spec/reflection.md §8.3): each costs one
-    /// decimal write of its `ReflectionId`, never a read of the reflectee,
-    /// so this is also the mangler's whole reflection workload.
+    /// An empty table whose reflections mangle in form `mode`
+    /// (spec/reflection.md §8.3).
+    pub fn with_reflection_mangling(mode: ReflectionMangling) -> Self {
+        AnonIds { refl_mode: mode, ..Self::default() }
+    }
+
+    /// The reflection mangling form of this table.
+    pub fn reflection_mangling(&self) -> ReflectionMangling {
+        self.refl_mode
+    }
+
+    /// How many reflection literals (`L <info> <reflection> E`) the
+    /// symbols mangled with this table contain (spec/reflection.md §8.3),
+    /// nested ones included.
     pub fn reflection_literals(&self) -> u64 {
         self.refl_literals
     }
@@ -499,10 +514,11 @@ fn value_externally_visible(ast: &Ast, value: ConstValueId) -> bool {
             PtrBase::StringLit { .. } | PtrBase::Const(_) | PtrBase::Label { .. } => false,
         },
         ConstValue::Scalar(Scalar::MemberPtr { member, .. }) => !is_internal_symbol(ast, member),
-        // A reflection mangles as its translation-unit-local id (§8.3 of
-        // spec/reflection.md), so a specialization on one must not be
-        // merged with another TU's: it has internal linkage.
-        ConstValue::Scalar(Scalar::Reflection { .. }) => false,
+        // A reflection mangles as its reflectee (§8.3 of
+        // spec/reflection.md) and has the reflectee's linkage.
+        ConstValue::Scalar(Scalar::Reflection { id, .. }) => {
+            reflect::reflection_externally_visible(ast, id)
+        }
         ConstValue::Scalar(_) => true,
         ConstValue::Aggregate(img) => {
             img.relocs.iter().all(|r| value_externally_visible(ast, r.value))
@@ -900,7 +916,7 @@ pub fn mangle_structor(ast: &Ast, anon: &mut AnonIds, d: DeclId, v: Structor) ->
 /// `mangleCXXDtorComdat`): the base-object mangling with `5` for `2`.
 pub fn mangle_structor_comdat(ast: &Ast, anon: &mut AnonIds, d: DeclId) -> String {
     let mut m = Mangler::new(ast, anon, "_Z");
-    m.comdat = true;
+    m.structors = StructorSpelling::Comdat;
     m.encoding(d, Structor::Base);
     m.out
 }
@@ -1087,8 +1103,8 @@ struct Mangler<'a, 'b> {
     subs: Vec<Sub>,
     /// The module-name prefixes seen (`A`, `A.B`), for [`Sub::Module`].
     modnames: Vec<&'a str>,
-    /// A structor comdat name: the base-object variant is `C5`/`D5`.
-    comdat: bool,
+    /// How constructor and destructor variants are spelled.
+    structors: StructorSpelling,
     /// Template parameters mangle with their declared depth (`TL0__`):
     /// inside type-constraints and requires-clauses (constraint.rs).
     real_depth: bool,
@@ -1118,6 +1134,18 @@ struct Mangler<'a, 'b> {
     extra_tags: Option<([DeclId; 2], Vec<&'a str>)>,
 }
 
+/// The structor-variant spelling of one [`Mangler`] run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StructorSpelling {
+    /// The variant asked for (`C1`/`C2`, `D0`/`D1`/`D2`).
+    Itanium,
+    /// A structor comdat name: the base-object variant is `C5`/`D5`.
+    Comdat,
+    /// A constructor or destructor reflection (`fn <encoding>`) names the
+    /// unified structor (`C4`/`D4`, as GCC).
+    Unified,
+}
+
 /// The mangler state a trial mangling restores (clang copies the
 /// outer mangler, substitutions included, into a throwaway one).
 struct Snapshot {
@@ -1138,6 +1166,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
             && self.ast.types.target().long_double == kiln_ast::types::FloatFormat::IeeeQuad
         {
             "u6__bf16"
+        } else if b == BuiltinType::MetaInfo && self.anon.refl_mode == ReflectionMangling::Gcc {
+            // GCC's builtin `Dm` (not a substitution candidate).
+            "Dm"
         } else {
             builtin_code(b)
         }
@@ -1204,7 +1235,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             out: String::from(prefix),
             subs: Vec::new(),
             modnames: Vec::new(),
-            comdat: false,
+            structors: StructorSpelling::Itanium,
             real_depth: false,
             head_only: false,
             fn_depth: (0, false),
@@ -1938,7 +1969,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 // added to the substitutions (only its prefixes are).
                 if ast.decls.inheriting_ctor_shadow(d).is_some() {
                     self.out.push_str(match v {
-                        Structor::Base if self.comdat => "CI5",
+                        Structor::Base if self.structors == StructorSpelling::Comdat => "CI5",
                         Structor::Base => "CI2",
                         _ => "CI1",
                     });
@@ -1956,15 +1987,17 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     }
                 } else {
                     self.out.push_str(match v {
-                        Structor::Base if self.comdat => "C5",
+                        _ if self.structors == StructorSpelling::Unified => "C4",
+                        Structor::Base if self.structors == StructorSpelling::Comdat => "C5",
                         Structor::Base => "C2",
                         _ => "C1",
                     });
                 }
             }
             DeclNameView::Destructor(_) => self.out.push_str(match v {
+                _ if self.structors == StructorSpelling::Unified => "D4",
                 Structor::Complete => "D1",
-                Structor::Base if self.comdat => "D5",
+                Structor::Base if self.structors == StructorSpelling::Comdat => "D5",
                 Structor::Base => "D2",
                 Structor::Deleting => "D0",
             }),
@@ -2298,22 +2331,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     self.out.push('E');
                 }
             }
-            // The vendor placeholder until WP-102 (spec/reflection.md
-            // §8.3): `L <info-type> <number> E`, the number the
-            // translation unit's `ReflectionId` index, which is the
-            // reflection's identity ([temp.type]/2), so equal reflections
-            // mangle equal and distinct ones distinct. The reflectee is
-            // never read. `<info-type>` is `u6__info`, a substitution
-            // candidate (the second literal of a symbol is `LS<n>_<id>E`).
-            // Not stable across translation units: an entity with such an
-            // argument has internal linkage (`value_externally_visible`).
-            Scalar::Reflection { id, .. } => {
-                use std::fmt::Write as _;
-                self.out.push('L');
-                self.ty(ty);
-                let _ = write!(self.out, "{}E", id.index());
-                self.anon.refl_literals += 1;
-            }
+            // `L <info-type> <reflection> E` (spec/reflection.md §8.3).
+            Scalar::Reflection { id, .. } => self.reflection_literal(ty, Some(id)),
         }
     }
 
@@ -2559,7 +2578,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.float_literal(ty, kind.bits(), bits);
             }
             Shape::NullPtr | Shape::Pointer { .. } | Shape::MemberPointer => self.null_literal(ty),
-            Shape::Unknown | Shape::Reflection => {
+            // A null reflection member (no relocation).
+            Shape::Reflection => self.reflection_literal(ty, None),
+            Shape::Unknown => {
                 self.out.push('L');
                 self.ty(ty);
                 self.out.push('E');
@@ -2802,8 +2823,12 @@ impl<'a, 'b> Mangler<'a, 'b> {
         match view {
             // A vendor extended type (`u <source-name>`) is substitutable:
             // the SVE types and `std::meta::info` (`u6__info`, §8.3 of
-            // spec/reflection.md).
-            TypeView::Builtin(b) if !b.is_sizeless() && b != BuiltinType::MetaInfo => {
+            // spec/reflection.md; GCC's `Dm` is not).
+            TypeView::Builtin(b)
+                if !b.is_sizeless()
+                    && (b != BuiltinType::MetaInfo
+                        || self.anon.refl_mode == ReflectionMangling::Gcc) =>
+            {
                 self.out.push_str(self.builtin_str(b));
                 return;
             }
@@ -2917,7 +2942,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.out.push_str("Dp");
                 self.ty(pattern);
             }
-            TypeView::Builtin(b) => self.out.push_str(builtin_code(b)),
+            TypeView::Builtin(b) => self.out.push_str(self.builtin_str(b)),
             TypeView::TemplateSpecialization { name, args, .. } => self.dependent_tst(name, args),
             TypeView::DependentName { keyword, nns, name } => {
                 self.dependent_name(keyword, nns, name);

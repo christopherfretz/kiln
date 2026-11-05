@@ -387,7 +387,7 @@ impl<'a> Cg<'a> {
             diags: Vec::new(),
             f: Fx::empty(),
             gi: crate::global_init::GlobalInits::default(),
-            anon: mangle::AnonIds::new(),
+            anon: mangle::AnonIds::with_reflection_mangling(opts.reflection_mangling),
             tbaa: crate::tbaa::TbaaCache::default(),
             vis_active: opts.visibility != Visibility::Default
                 || opts.type_visibility != Visibility::Default

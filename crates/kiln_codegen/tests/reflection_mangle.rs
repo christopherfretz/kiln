@@ -1,18 +1,21 @@
-//! The placeholder mangling of reflection template arguments and the
-//! emission of `std::meta::info`-templated entities (spec/reflection.md
-//! §8.3, WP-485). kiln only: clang 19/22 lack `^^`, so the IR is checked
-//! by shape rather than against an oracle.
+//! The mangling of reflection template arguments and the emission of
+//! `std::meta::info`-templated entities (spec/reflection.md §8.3,
+//! WP-501). kiln only: clang 19/22 lack `^^`, so the IR is checked
+//! against pinned strings rather than an oracle (the per-kind table and
+//! the cross-TU and GCC link tests are `kiln_driver/tests/
+//! reflection_mangling.rs`).
 //!
-//! The grammar: `<expr-primary> ::= L <info-type> <number> E`, with
-//! `<info-type> ::= u6__info` a substitution candidate and `<number>` the
-//! `ReflectionId` index (TU-local, so every such symbol is internal).
+//! The default grammar: `<expr-primary> ::= L u6__info <kind> <entity> E`,
+//! with `u6__info` a substitution candidate and `<kind> <entity>` GCC
+//! 16.1's reflection encoding, so the string is a function of the
+//! reflectee alone and the specializations are `linkonce_odr`.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
 use kiln_abi::mangle::{AnonIds, mangle_decl};
-use kiln_abi::{Arch, Target};
+use kiln_abi::{Arch, ReflectionMangling, Target};
 use kiln_ast::decl::DeclKind;
 use kiln_codegen::{CodegenOptions, emit};
 use kiln_diag::{DiagEngine, DiagOptions, Level, MemorySink};
@@ -24,6 +27,15 @@ use kiln_source::symbol::Interner;
 /// and the symbols of the function template specializations named `name`
 /// mangled twice over one fresh [`AnonIds`], with its literal count.
 fn lower(src: &str, name: &str) -> (String, Vec<String>, Vec<String>, u64) {
+    lower_as(src, name, ReflectionMangling::Kiln)
+}
+
+/// [`lower`] with reflection mangling form `mode`.
+fn lower_as(
+    src: &str,
+    name: &str,
+    mode: ReflectionMangling,
+) -> (String, Vec<String>, Vec<String>, u64) {
     let sm = SourceManager::new();
     let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
@@ -42,7 +54,11 @@ fn lower(src: &str, name: &str) -> (String, Vec<String>, Vec<String>, u64) {
     let errors: Vec<String> =
         sink.take().into_iter().filter(|d| d.level >= Level::Error).map(|d| d.message).collect();
     assert!(errors.is_empty(), "parse errors: {errors:?}");
-    let opts = CodegenOptions { source_filename: "t.cpp".to_owned(), ..CodegenOptions::default() };
+    let opts = CodegenOptions {
+        source_filename: "t.cpp".to_owned(),
+        reflection_mangling: mode,
+        ..CodegenOptions::default()
+    };
     let m = emit(&mut tu.ast, &mut tu.oven, &target, &opts).expect("codegen");
     let ir = m.to_string();
     let ast = &tu.ast;
@@ -55,7 +71,7 @@ fn lower(src: &str, name: &str) -> (String, Vec<String>, Vec<String>, u64) {
                 && kiln_abi::mangle::decl_name(ast, d) == name
         })
         .collect();
-    let mut anon = AnonIds::new();
+    let mut anon = AnonIds::with_reflection_mangling(mode);
     let first: Vec<String> = specs.iter().map(|&d| mangle_decl(ast, &mut anon, d)).collect();
     let second: Vec<String> = specs.iter().map(|&d| mangle_decl(ast, &mut anon, d)).collect();
     (ir, first, second, anon.reflection_literals())
@@ -110,65 +126,95 @@ int use() {
 }
 ";
 
-/// [temp.type]/2: `^^int`, `^^I` and `^^J` are three specializations;
-/// each specialization is defined once, with internal linkage.
+/// [temp.type]/2, [basic.link] P2996R13: `^^int`, `^^I` and `^^J` are
+/// three specializations, each spelled by its reflectee alone and defined
+/// `linkonce_odr` (one per program).
 #[test]
-fn distinct_reflections_distinct_internal_symbols() {
+fn distinct_reflections_distinct_linkonce_symbols() {
     let (ir, first, _, _) = lower(SHAPES, "f");
     let f = symbols(&ir, "_Z1fILu6__info");
     let defs: BTreeSet<_> =
-        f.iter().filter(|(s, _)| s.ends_with("Eiv")).map(|(s, _)| s.clone()).collect();
-    assert_eq!(defs.len(), 3, "{f:?}");
+        f.iter().filter(|(s, _)| s.ends_with("Eiv")).map(|(s, _)| s.as_str()).collect();
+    let want: BTreeSet<_> =
+        ["_Z1fILu6__infotyiEEiv", "_Z1fILu6__infota1I_iEEiv", "_Z1fILu6__infota1J_iEEiv"].into();
+    assert_eq!(defs, want, "{f:?}");
     assert_eq!(first.len(), 3);
-    assert!(f.iter().all(|(_, l)| l == "internal"), "{f:?}");
-    // The static of each specialization is its own internal object.
-    let statics = symbols(&ir, "_ZZ1fILu6__info");
-    assert_eq!(statics.len(), 3, "{statics:?}");
-    assert!(statics.iter().all(|(_, l)| l == "internal"), "{statics:?}");
+    assert!(f.iter().all(|(_, l)| l == "linkonce_odr"), "{f:?}");
+    // The static of each specialization is its own object, shared across
+    // TUs like the function.
+    let statics: BTreeSet<_> = symbols(&ir, "_ZZ1fILu6__info").into_iter().collect();
+    let want: BTreeSet<_> = [
+        "_ZZ1fILu6__infotyiEEivE1n",
+        "_ZZ1fILu6__infota1I_iEEivE1n",
+        "_ZZ1fILu6__infota1J_iEEivE1n",
+    ]
+    .into_iter()
+    .map(|s| (s.to_owned(), "linkonce_odr".to_owned()))
+    .collect();
+    assert_eq!(statics, want);
     // The variable template, the class template's static member, vtable
-    // and member function: one internal symbol per reflection.
-    for (prefix, n) in [("_Z1vILu6__info", 2), ("_ZN1SILu6__info", 2), ("_ZTV1SILu6__info", 1)] {
-        let s = symbols(&ir, prefix);
-        let names: BTreeSet<_> = s.iter().map(|(n, _)| n.clone()).collect();
-        assert!(names.len() >= n, "{prefix}: {s:?}");
-        assert!(s.iter().all(|(_, l)| l == "internal"), "{prefix}: {s:?}");
+    // and member function.
+    for want in [
+        "_Z1vILu6__infodm1P1xEE",
+        "_Z1vILu6__infodm1P1yEE",
+        "_ZN1SILu6__infotyiEE5countE",
+        "_ZN1SILu6__infota1I_iEE5countE",
+        "_ZTV1SILu6__infotyiEE",
+        "_ZNK1SILu6__infotyiEE3getEv",
+    ] {
+        let s = symbols(&ir, want);
+        assert!(!s.is_empty() && s.iter().all(|(_, l)| l == "linkonce_odr"), "{want}: {s:?}");
     }
-    let counts: BTreeSet<_> = symbols(&ir, "_ZN1SILu6__info")
-        .into_iter()
-        .filter(|(s, _)| s.ends_with("5countE"))
-        .map(|(s, _)| s)
-        .collect();
-    assert_eq!(counts.len(), 2, "S<^^int>::count and S<^^I>::count: {counts:?}");
 }
 
 /// A second reflection literal in one symbol reuses the info type
 /// through the substitution table (`S_` is the template name `two`, `S0_`
-/// the info type).
+/// the info type); the reflectee's own components are candidates too.
 #[test]
 fn second_literal_uses_substitution() {
     let (ir, ..) = lower(SHAPES, "two");
     let two: BTreeSet<_> = symbols(&ir, "_Z3twoILu6__info").into_iter().map(|(s, _)| s).collect();
-    assert_eq!(two.len(), 2, "{two:?}");
-    for s in &two {
-        let rest = s.strip_prefix("_Z3twoILu6__info").unwrap();
-        let (id, tail) = rest.split_once('E').unwrap();
-        assert!(id.bytes().all(|b| b.is_ascii_digit()), "{s}");
-        let id2 = tail.strip_prefix("LS0_").and_then(|t| t.strip_suffix("EEiv")).unwrap_or("");
-        assert!(!id2.is_empty() && id2.bytes().all(|b| b.is_ascii_digit()), "{s}");
-    }
-    // two<^^int, ^^int> repeats one id; two<^^I, ^^J> has two.
-    let same = two.iter().filter(|s| {
-        let r = s.strip_prefix("_Z3twoILu6__info").unwrap();
-        let (a, t) = r.split_once("ELS0_").unwrap();
-        t.strip_suffix("EEiv") == Some(a)
-    });
-    assert_eq!(same.count(), 1, "{two:?}");
-    // The info type is itself a candidate, so the later references count
-    // past it: in `h<^^P>(Box<P>, P)` S_ = h, S0_ = u6__info, S1_ = P,
-    // S2_ = Box, S3_ = T0_ (= P), S4_ = Box<T0_>; the second parameter is
-    // S3_ (llvm-cxxfilt: `int h<(__info)N, P>(Box<P>, P)`).
+    let want: BTreeSet<_> =
+        ["_Z3twoILu6__infotyiELS0_tyiEEiv", "_Z3twoILu6__infota1I_iELS0_ta1J_iEEiv"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+    assert_eq!(two, want);
+    // In `h<^^P>(Box<P>, P)`: S_ = h, S0_ = u6__info, S1_ = P (inside the
+    // literal), so T0_ = S1_; S2_ = Box, S3_ = T0_, S4_ = Box<T0_>; the
+    // second parameter is S3_.
     let h: Vec<_> = symbols(&ir, "_Z1hILu6__info").into_iter().map(|(s, _)| s).collect();
-    assert!(!h.is_empty() && h.iter().all(|s| s.ends_with("E1PEi3BoxIT0_ES3_")), "{h:?}");
+    assert!(
+        !h.is_empty() && h.iter().all(|s| s == "_Z1hILu6__infoty1PES1_Ei3BoxIT0_ES3_"),
+        "{h:?}"
+    );
+}
+
+/// `-fkiln-reflection-mangling=gcc` spells the info type `Dm` (a builtin,
+/// not a substitution candidate) and the literal `L Dm <kind> <entity>
+/// E`; `kiln-hashed` writes the kiln form's body as a 128-bit FNV-1a
+/// hash (`h <32 hex>`).
+#[test]
+fn gcc_and_hashed_forms() {
+    let (ir, ..) = lower_as(SHAPES, "two", ReflectionMangling::Gcc);
+    let two: BTreeSet<_> = symbols(&ir, "_Z3twoILDm").into_iter().map(|(s, _)| s).collect();
+    let want: BTreeSet<_> = ["_Z3twoILDmtyiELDmtyiEEiv", "_Z3twoILDmta1I_iELDmta1J_iEEiv"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(two, want);
+    assert!(symbols(&ir, "_Z1hILDmty1PES0_Ei3BoxIT0_ES2_").len() == 1, "{ir}");
+    let (ir, first, second, _) = lower_as(SHAPES, "f", ReflectionMangling::KilnHashed);
+    assert_eq!(first, second);
+    let f: BTreeSet<_> = symbols(&ir, "_Z1fILu6__infoh").into_iter().map(|(s, _)| s).collect();
+    assert_eq!(f.len(), 3, "{f:?}");
+    for s in &f {
+        let hex = s.strip_prefix("_Z1fILu6__infoh").and_then(|t| t.strip_suffix("EEiv"));
+        assert!(
+            hex.is_some_and(|h| h.len() == 32 && h.bytes().all(|b| b.is_ascii_hexdigit())),
+            "{s}"
+        );
+    }
 }
 
 /// Mangling is a function of the TU: emitting it twice gives the same IR.
@@ -180,8 +226,9 @@ fn deterministic() {
 }
 
 /// 2,000 specializations differing only in the reflection: 2,000 distinct
-/// symbols, equal on a second mangling, and the mangler's literal counter
-/// (`AnonIds::reflection_literals`) counts one literal per symbol.
+/// `linkonce_odr` symbols, equal on a second mangling, and the mangler's
+/// literal counter (`AnonIds::reflection_literals`) counts one literal
+/// per symbol.
 #[test]
 fn two_thousand_specializations() {
     const N: usize = 2000;
@@ -202,5 +249,6 @@ fn two_thousand_specializations() {
     assert_eq!(distinct.len(), N);
     assert_eq!(literals, 2 * N as u64);
     let defs = symbols(&ir, "_Z4specILu6__info");
-    assert_eq!(defs.iter().filter(|(_, l)| l == "internal").count(), N);
+    assert_eq!(defs.iter().filter(|(_, l)| l == "linkonce_odr").count(), N);
+    assert!(first.iter().all(|s| s.starts_with("_Z4specILu6__infoty")), "{:?}", &first[..2]);
 }

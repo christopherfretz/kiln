@@ -186,12 +186,12 @@ kind names its own specialization and equal reflections share one
 (`nttp-info-kinds.cpp`).
 
 Mangling: until the Itanium ABI defines reflection mangling, kiln emits a
-vendor-extended literal `L u6__info <id> E`, where `<id>` is the
-reflection id's index within the translation unit (`_Z1kILu6__info3EEiv`;
-spec/reflection.md §8.3 has the grammar). That keeps distinct reflections
-distinct within a TU. It is not stable across TUs, so a specialization
-keyed by a reflection has internal linkage (WP-485) until the real
-mangling lands (→ WP-102).
+vendor-extended literal `L u6__info <kind> <entity> E` whose body is GCC
+16.1's encoding of the reflectee (`_Z1kILu6__infotyiEEiv` for `k<^^int>`;
+spec/reflection.md §8.3 has the grammar, WP-501). The string depends on
+the reflectee alone, so it is the same in every TU and a specialization
+keyed by a reflection takes the reflectee's linkage;
+`-fkiln-reflection-mangling=gcc` writes GCC's own `L Dm … E`.
 
 ## 5. Printing
 

@@ -187,6 +187,7 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>) -> CodegenOptions {
         tune_cpu: f.mtune.clone().filter(|t| t != "native"),
         no_inline: a.predef.no_inline,
         code_model: f.code_model,
+        reflection_mangling: a.reflection_mangling,
         ..CodegenOptions::default()
     }
 }

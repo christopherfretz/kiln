@@ -1,8 +1,9 @@
 //! `cargo xtask gen-reflect`: writes the reflection perf shapes S1–S6 of
 //! `docs/plans/m6-reflection.md` §3.8, and the reference-workload shapes S7
 //! (a binding generator) and S8 (the bindings it prints, compiled) of
-//! `docs/status/perf-reference-workload.md`, as bench entries under
-//! `bench/reflect/` (`spec/bench.md` "Reflection shapes").
+//! `docs/status/perf-reference-workload.md`, and S9 (reflection-keyed
+//! instantiations, the mangler's load: spec/reflection.md §8.3), as bench
+//! entries under `bench/reflect/` (`spec/bench.md` "Reflection shapes").
 //!
 //! Each shape is a function of one size parameter N and nothing else: the
 //! same N gives the same bytes on every host, so the committed files (at
@@ -17,7 +18,7 @@ use std::process::ExitCode;
 
 /// One shape.
 pub struct Shape {
-    /// `s1` … `s8`: the file stem under `bench/reflect/`.
+    /// `s1` … `s9`: the file stem under `bench/reflect/`.
     pub id: &'static str,
     /// The N the committed file is generated at (small enough for the
     /// merge-queue S-tier, `docs/plans/m6-reflection.md` §3.9).
@@ -35,13 +36,16 @@ pub struct Shape {
     /// bench runs): it carries no `xfail(kiln)`, and `owner` is the WP that
     /// added it.
     pub libstdcxx: bool,
+    /// The entry compiles today without any library: no `#include
+    /// <meta>`, no `xfail(kiln)`, and a `mode:` that runs codegen.
+    pub bare: bool,
     body: fn(usize, &mut String),
     /// The `oven:` budget, a function of N.
     budget: fn(usize) -> String,
 }
 
 /// The shapes, in order.
-pub const SHAPES: [Shape; 8] = [
+pub const SHAPES: [Shape; 9] = [
     Shape {
         id: "s1",
         default_n: 100,
@@ -51,6 +55,7 @@ pub const SHAPES: [Shape; 8] = [
         owner: "WP-478",
         needs: "WP-474 (member splices), WP-475 (identifier_of), WP-479 (define_static_array)",
         libstdcxx: false,
+        bare: false,
         body: s1,
         budget: |_| "peak_arena<=65536".into(),
     },
@@ -62,6 +67,7 @@ pub const SHAPES: [Shape; 8] = [
         owner: "WP-478",
         needs: "WP-474 (expression splices), WP-475 (identifier_of), WP-479 (define_static_array)",
         libstdcxx: false,
+        bare: false,
         body: s2,
         budget: |_| "peak_arena<=65536".into(),
     },
@@ -74,6 +80,7 @@ pub const SHAPES: [Shape; 8] = [
         owner: "WP-480",
         needs: "WP-473 (consteval blocks), WP-482 (substitute), WP-478 (members)",
         libstdcxx: false,
+        bare: false,
         body: s3,
         budget: |n| format!("peak_bytes<={}", 64 * 10 * n + 65536),
     },
@@ -86,6 +93,7 @@ pub const SHAPES: [Shape; 8] = [
         owner: "WP-481",
         needs: "WP-478 (annotations_of_with_type), WP-474, WP-475, WP-479",
         libstdcxx: false,
+        bare: false,
         body: s4,
         budget: |_| "peak_arena<=65536".into(),
     },
@@ -98,6 +106,7 @@ pub const SHAPES: [Shape; 8] = [
         owner: "WP-482",
         needs: "WP-478 (static_data_members_of), WP-479 (reflect_constant, extract)",
         libstdcxx: false,
+        bare: false,
         body: s5,
         budget: |_| "peak_arena<=65536".into(),
     },
@@ -109,6 +118,7 @@ pub const SHAPES: [Shape; 8] = [
         owner: "WP-478",
         needs: "WP-472 (namespace reflections)",
         libstdcxx: false,
+        bare: false,
         body: s6,
         budget: |n| format!("peak_bytes<={}", 16 * n + 65536),
     },
@@ -122,6 +132,7 @@ pub const SHAPES: [Shape; 8] = [
         owner: "WP-551",
         needs: "a libstdc++ with <meta> (GCC 16.1)",
         libstdcxx: true,
+        bare: false,
         body: s7,
         budget: |n| format!("peak_bytes<={}", 64 * n + 65536),
     },
@@ -134,12 +145,26 @@ pub const SHAPES: [Shape; 8] = [
         owner: "WP-551",
         needs: "a libstdc++ with <meta> (GCC 16.1)",
         libstdcxx: true,
+        bare: false,
         body: s8,
+        budget: |_| "peak_arena<=65536".into(),
+    },
+    Shape {
+        id: "s9",
+        default_n: 500,
+        step: 1,
+        what: "N reflection-keyed instantiations: f<^^Ti>() and S<^^Ti>::count for N types, \
+               and f<^^W<W<W<Ti>>>>() for every fourth (the reflection mangler's load)",
+        owner: "WP-501",
+        needs: "nothing beyond `^^`",
+        libstdcxx: false,
+        bare: true,
+        body: s9,
         budget: |_| "peak_arena<=65536".into(),
     },
 ];
 
-/// The shape named `id` (`s1` … `s8`, case-insensitive).
+/// The shape named `id` (`s1` … `s9`, case-insensitive).
 pub fn shape(id: &str) -> Option<&'static Shape> {
     SHAPES.iter().find(|s| s.id.eq_ignore_ascii_case(id))
 }
@@ -165,10 +190,12 @@ pub fn generate(shape: &Shape, n: usize) -> String {
     let upper = shape.id.to_uppercase();
     let source = if shape.libstdcxx {
         "docs/status/perf-reference-workload.md"
+    } else if shape.bare {
+        "spec/bench.md \"Reflection shapes\""
     } else {
         "docs/plans/m6-reflection.md §3.8"
     };
-    let needs = if shape.libstdcxx {
+    let needs = if shape.libstdcxx || shape.bare {
         format!("Added by {}; needs {}.", shape.owner, shape.needs)
     } else {
         format!("Needs {} and {}.", shape.owner, shape.needs)
@@ -181,11 +208,15 @@ pub fn generate(shape: &Shape, n: usize) -> String {
         shape.what
     );
     out.push_str("//@ std: c++26\n//@ args: -freflection\n");
-    if !shape.libstdcxx {
+    if shape.bare {
+        out.push_str("//@ mode: emit-llvm\n");
+    } else if !shape.libstdcxx {
         let _ = writeln!(out, "//@ xfail(kiln): {} (reflection family not landed)", shape.owner);
     }
     let _ = writeln!(out, "//@ oven: {}\n", (shape.budget)(n));
-    out.push_str("#include <meta>\n");
+    if !shape.bare {
+        out.push_str("#include <meta>\n");
+    }
     (shape.body)(n, &mut out);
     out
 }
@@ -842,12 +873,42 @@ fn s8(n: usize, out: &mut String) {
     }
 }
 
+/// S9: N reflection-keyed instantiations, so the cost is template
+/// instantiation, codegen and the mangling of `L u6__info <kind> <entity>
+/// E` (spec/reflection.md §8.3). The types sit in a namespace (the
+/// entity is a nested name) and every fourth also keys a template-id
+/// three deep. Address tables odr-use every specialization.
+fn s9(n: usize, out: &mut String) {
+    out.push_str(
+        "using info = decltype(^^int);\n\
+         template <info R> int f() { static int n = 0; return ++n; }\n\
+         template <info R> struct S { static int count; };\n\
+         template <info R> int S<R>::count = 0;\n\
+         template <class T> struct W {};\n\nnamespace lib {\n",
+    );
+    for i in 0..n {
+        let _ = writeln!(out, "struct T{i:04} {{}};");
+    }
+    out.push_str("}  // namespace lib\n\nint (*fs[])() = {\n");
+    for i in 0..n {
+        let _ = writeln!(out, "  &f<^^lib::T{i:04}>,");
+        if i % 4 == 0 {
+            let _ = writeln!(out, "  &f<^^W<W<W<lib::T{i:04}>>>>,");
+        }
+    }
+    out.push_str("};\n\nint* counts[] = {\n");
+    for i in 0..n {
+        let _ = writeln!(out, "  &S<^^lib::T{i:04}>::count,");
+    }
+    out.push_str("};\n");
+}
+
 pub const USAGE: &str = "\
-usage: cargo xtask gen-reflect [--shape s1..s8] [--n <N>] [--out <dir>] [--check]
+usage: cargo xtask gen-reflect [--shape s1..s9] [--n <N>] [--out <dir>] [--check]
 
 Writes the reflection perf shapes S1-S6 (docs/plans/m6-reflection.md §3.8) and
-the reference-workload shapes S7-S8 (docs/status/perf-reference-workload.md) as
-bench entries. Without --n each shape is written at its committed default N
+the reference-workload shapes S7-S8 (docs/status/perf-reference-workload.md) and
+the reflection-mangling shape S9 (spec/reflection.md §8.3) as bench entries. Without --n each shape is written at its committed default N
 into bench/reflect/; a different N needs --out (the sweeps of `cargo xtask
 bench --scaling` build their own). --check writes nothing and fails when a
 committed file differs from the generator. See spec/bench.md \"Reflection shapes\".
@@ -877,7 +938,7 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<bool, String> {
             }
             "--shape" => {
                 let v = value("--shape")?;
-                only = Some(shape(&v).ok_or_else(|| format!("unknown shape `{v}` (s1..s8)"))?);
+                only = Some(shape(&v).ok_or_else(|| format!("unknown shape `{v}` (s1..s9)"))?);
             }
             "--n" => {
                 let v = value("--n")?;
@@ -952,12 +1013,17 @@ mod tests {
             assert_eq!(a, generate(s, s.default_n), "{}", s.id);
             assert_ne!(a, generate(s, s.default_n + s.step), "{}", s.id);
             assert!(a.contains(&format!("N={}.", s.default_n)), "{}", s.id);
-            assert_eq!(a.contains("//@ xfail(kiln): "), !s.libstdcxx, "{}", s.id);
+            assert_eq!(a.contains("//@ xfail(kiln): "), !s.libstdcxx && !s.bare, "{}", s.id);
+            assert_eq!(a.contains("#include <meta>"), !s.bare, "{}", s.id);
             assert_eq!(write_or_check(&dir, s, s.default_n, true), Ok(None), "{} is stale", s.id);
             let spec =
                 crate::bench::entry::parse_spec(&a).unwrap_or_else(|e| panic!("{}: {e:?}", s.id));
             let xfail = spec.xfail_kiln.as_deref();
-            assert!(s.libstdcxx || xfail.is_some_and(|r| r.starts_with(s.owner)), "{}", s.id);
+            assert!(
+                s.libstdcxx || s.bare || xfail.is_some_and(|r| r.starts_with(s.owner)),
+                "{}",
+                s.id
+            );
         }
         assert!(write_or_check(&dir, shape("S5").unwrap(), 150, true).is_err());
     }

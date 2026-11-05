@@ -275,7 +275,9 @@ impl Mangler<'_, '_> {
             | ExprKind::CXXBoolLiteralExpr
             | ExprKind::CharacterLiteral
             | ExprKind::CXXNullPtrLiteralExpr
-            | ExprKind::GNUNullExpr => true,
+            | ExprKind::GNUNullExpr
+            // A reflection is a literal (`L <info-type> <reflection> E`).
+            | ExprKind::CXXReflectExpr => true,
             // An enumerator is its value's literal.
             ExprKind::DeclRefExpr => {
                 ast.decls.get(ast.exprs.decl(e)).kind() == DeclKind::EnumConstant
@@ -309,6 +311,7 @@ impl Mangler<'_, '_> {
                 self.out.push_str(if ast.exprs.bool_value(e) { "Lb1E" } else { "Lb0E" });
             }
             ExprKind::CXXNullPtrLiteralExpr => self.out.push_str("LDnE"),
+            ExprKind::CXXReflectExpr => return self.reflect_expr(e),
             // clang mangles `__null` as the integer literal 0 of its type.
             ExprKind::GNUNullExpr => {
                 self.out.push('L');

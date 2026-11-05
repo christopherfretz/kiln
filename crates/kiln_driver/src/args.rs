@@ -425,6 +425,10 @@ pub struct Args {
     /// source-location builtins and `std::meta::source_location_of`
     /// (`SourceManager::presumed_file_name`; the last one wins).
     pub source_path_style: SourcePathStyle,
+    /// `-fkiln-reflection-mangling=<kiln|gcc>`: how `std::meta::info`
+    /// template arguments mangle (spec/reflection.md §8.3; the hidden
+    /// `kiln-hashed` is a prototype; the last one wins).
+    pub reflection_mangling: kiln_abi::ReflectionMangling,
     /// Errors, in order.
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
@@ -779,6 +783,13 @@ impl Args {
                             "-fkiln-source-path-style=".to_owned(),
                             v.to_owned(),
                         )),
+                    }
+                } else if let Some(v) = arg.strip_prefix("-fkiln-reflection-mangling=") {
+                    match kiln_abi::ReflectionMangling::parse(v) {
+                        Some(m) => self.reflection_mangling = m,
+                        None => self
+                            .errors
+                            .push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())),
                     }
                 } else if let Some(v) = arg.strip_prefix("-fkiln-cfg-max-elems=") {
                     match v.parse::<usize>() {
@@ -1356,6 +1367,24 @@ mod tests {
         assert_eq!(
             parse("-ffile-prefix-map=/src a.cpp").errors,
             [ArgError::InvalidValue("-ffile-prefix-map=".into(), "/src".into())]
+        );
+    }
+
+    #[test]
+    fn reflection_mangling() {
+        use kiln_abi::ReflectionMangling as M;
+        assert_eq!(parse("a.cpp").reflection_mangling, M::Kiln);
+        let a = parse("-fkiln-reflection-mangling=gcc a.cpp");
+        assert_eq!((a.reflection_mangling, a.errors), (M::Gcc, vec![]));
+        let a = parse("-fkiln-reflection-mangling=gcc -fkiln-reflection-mangling=kiln a.cpp");
+        assert_eq!(a.reflection_mangling, M::Kiln);
+        assert_eq!(
+            parse("-fkiln-reflection-mangling=kiln-hashed a.cpp").reflection_mangling,
+            M::KilnHashed
+        );
+        assert_eq!(
+            parse("-fkiln-reflection-mangling=msvc a.cpp").errors,
+            [ArgError::InvalidFlagValue("-fkiln-reflection-mangling=msvc".into(), "msvc".into())]
         );
     }
 

@@ -126,7 +126,7 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 --target= -march= -mcpu= -target-feature --embed-dir= -M -MM
 -MD -MMD -MF -MT -MQ -MP -W... -w -pedantic -ferror-limit=
 -fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
--fkiln-source-path-style=<clang|gcc>
+-fkiln-source-path-style=<clang|gcc> -fkiln-reflection-mangling=<kiln|gcc>
 -fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -verify[=<prefixes>]
 -verify-ignore-unexpected[=<levels>] -Xclang <arg> -fconstexpr-steps=
 -fconstexpr-depth= -fconstexpr-memory= -fconstexpr-backtrace-limit=
