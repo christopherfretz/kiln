@@ -143,9 +143,9 @@ impl Ast {
                 }
                 _ => false,
             };
-            let kids = if first { self.exprs.children(e, &self.lists) } else { Vec::new() };
-            match kids.first() {
-                Some(&k) => e = k,
+            let kid = if first { self.exprs.first_child(e, &self.lists) } else { None };
+            match kid {
+                Some(k) => e = k,
                 None => return self.templates.expr_begin.get(e).copied().unwrap_or(n.loc()),
             }
         }
@@ -602,7 +602,7 @@ impl Ast {
                 | ExprKind::ParenExpr
                 | ExprKind::ExprWithCleanups
                 | ExprKind::ConstantExpr => {
-                    e = *self.exprs.children(e, &self.lists).first()?;
+                    e = self.exprs.first_child(e, &self.lists)?;
                 }
                 _ => return None,
             }

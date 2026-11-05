@@ -317,7 +317,7 @@ impl Compiler<'_> {
                 }
                 // Not part of this initializer's evaluation.
                 ExprKind::LambdaExpr | ExprKind::StmtExpr => {}
-                _ => work.extend(ast.exprs.children(e, &ast.lists)),
+                _ => ast.exprs.children_into(e, &ast.lists, &mut work),
             }
         }
         out.reverse();

@@ -383,7 +383,7 @@ impl Cg<'_> {
             {
                 return true;
             }
-            work.extend(ast.exprs.children(x, &ast.lists));
+            ast.exprs.children_into(x, &ast.lists, &mut work);
         }
         false
     }

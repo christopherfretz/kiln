@@ -145,7 +145,7 @@ impl Sema<'_, '_> {
                 return true;
             }
             if !self.overflow_opaque(x) {
-                stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+                self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
             }
         }
         false
@@ -199,7 +199,7 @@ impl Sema<'_, '_> {
                 return true;
             }
             if !self.overflow_opaque(x) {
-                stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+                self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
             }
         }
         false

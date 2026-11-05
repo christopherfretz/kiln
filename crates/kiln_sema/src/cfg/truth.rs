@@ -24,7 +24,7 @@ impl Sema<'_, '_> {
                     ExprKind::LambdaExpr | ExprKind::UnaryExprOrTypeTraitExpr => {}
                     ExprKind::AddrLabelExpr => out.push(self.ast.exprs.addr_label(e)),
                     ExprKind::StmtExpr => stmts.push(self.ast.exprs.stmt_expr_body(e)),
-                    _ => exprs.extend(self.ast.exprs.children(e, &self.ast.lists)),
+                    _ => self.ast.exprs.children_into(e, &self.ast.lists, &mut exprs),
                 }
             }
         }

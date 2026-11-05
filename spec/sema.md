@@ -8050,12 +8050,13 @@ covers the Oven's side). `constfold.rs` keeps only integer helpers
 interpreter and `aggval` were removed by WP-054.
 
 ### 8.1 One Oven per translation unit
-- `Sema` owns one `Oven`, in `Sema.oven: Option<Oven>`. Compiled
+- `Sema` owns one `Oven`, in `Sema.oven: Option<Box<Oven>>`. Compiled
   bytecode, resolved globals and the memo cache are shared by every
-  evaluation in the TU.
+  evaluation in the TU. The Oven is boxed so that taking it out and
+  putting it back moves a pointer, not the evaluator (WP-645).
 - `oven_bridge.rs` implements `SemaBridge` for the duration of one call.
-  `with_oven` takes the Oven out of its `Option` and hands the call a
-  `Bridge` that holds `&mut Sema`:
+  `with_oven` takes the boxed Oven out of its `Option` and hands the
+  call a `Bridge` that holds `&mut Sema`:
   - `ensure_body(f, oven)` returns the body of the function's
     definition. Since WP-070b, a never-marked specialization or member
     of a class specialization is instantiated first, during a

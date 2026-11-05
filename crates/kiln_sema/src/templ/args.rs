@@ -970,7 +970,7 @@ impl Sema<'_, '_> {
             {
                 return true;
             }
-            stack.extend(x.children(e, &self.ast.lists));
+            x.children_into(e, &self.ast.lists, &mut stack);
         }
         false
     }

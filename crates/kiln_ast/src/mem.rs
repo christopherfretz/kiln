@@ -66,7 +66,7 @@ impl MemRow {
         let slot = size_of::<(K, V)>() as u64 + 1;
         let cap = m.capacity() as u64;
         let buckets = if cap == 0 { 0 } else { (cap * 8 / 7).next_power_of_two() };
-        Self::new(name, m.len() as u64, m.len() as u64 * slot, buckets * slot)
+        Self::new(name, m.len() as u64, map_live_bytes(m), buckets * slot)
     }
 
     /// The row for a `HashSet<K, S>` of plain data ([`MemRow::of_map`]
@@ -84,6 +84,13 @@ impl MemRow {
         self.name = format!("{prefix}.{}", self.name);
         self
     }
+}
+
+/// [`MemRow::of_map`]'s `live_bytes` without building the row (no name
+/// `String`): the per-instantiation node meter reads it on every frame
+/// push and pop (WP-645).
+pub fn map_live_bytes<K, V, S>(m: &HashMap<K, V, S>) -> u64 {
+    m.len() as u64 * (size_of::<(K, V)>() as u64 + 1)
 }
 
 /// A memory report: one row per arena.

@@ -80,7 +80,11 @@ holds a static name, length, capacity and element size and has
 `live_bytes()` and `row() -> MemRow`. A `MemRow` and its `String` name
 are built only for the report (WP-116: the meter was allocating about 1M
 `String`s on `templates_wide`, roughly 9% of its instruction count, once
-LLVM stopped eliding them).
+LLVM stopped eliding them). The annotation, attribute, redeclaration and
+lookup arenas sum the same `VecDims` and, for their maps,
+`mem::map_live_bytes` / `ColdMap::live_bytes`, so the meter builds no
+`MemRow` there either (WP-645: about eight allocations per push or pop
+before); their `heap_bytes` rows report the same numbers.
 
 ### 2.4 Mutation discipline
 After a node is created its header and side record are immutable, except:

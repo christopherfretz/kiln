@@ -270,7 +270,7 @@ impl Sema<'_, '_> {
             if self.is_err_expr(x) {
                 return true;
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false
     }
@@ -600,10 +600,24 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// The reused walk stack ([`Sema::walk_stack`]), holding just `root`.
+    /// Give it back with [`Sema::put_walk_stack`].
+    pub(crate) fn take_walk_stack(&self, root: ExprId) -> Vec<ExprId> {
+        let mut stack = self.walk_stack.take();
+        stack.clear();
+        stack.push(root);
+        stack
+    }
+
+    /// Returns the stack of [`Sema::take_walk_stack`] for the next walk.
+    pub(crate) fn put_walk_stack(&self, stack: Vec<ExprId>) {
+        self.walk_stack.replace(stack);
+    }
+
     /// The `DeclRefExpr`s in `e`.
     fn decl_refs_in(&self, e: ExprId) -> Vec<ExprId> {
         let mut out = Vec::new();
-        let mut stack = vec![e];
+        let mut stack = self.take_walk_stack(e);
         while let Some(x) = stack.pop() {
             if out.len() > 1_000_000 {
                 break;
@@ -611,8 +625,9 @@ impl Sema<'_, '_> {
             if self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr {
                 out.push(x);
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
+        self.put_walk_stack(stack);
         out
     }
 
@@ -621,18 +636,23 @@ impl Sema<'_, '_> {
     /// outside a nested `ExprWithCleanups`: its own cleanups, as opposed
     /// to those of a full-expression it is nested in.
     fn has_own_temporaries(&self, e: ExprId) -> bool {
-        let mut stack = vec![e];
+        let mut stack = self.take_walk_stack(e);
+        let mut found = false;
         while let Some(x) = stack.pop() {
             match self.ast.exprs.get(x).kind() {
                 ExprKind::MaterializeTemporaryExpr
                 | ExprKind::CXXBindTemporaryExpr
                 | ExprKind::CXXDefaultArgExpr
-                | ExprKind::CXXDefaultInitExpr => return true,
+                | ExprKind::CXXDefaultInitExpr => {
+                    found = true;
+                    break;
+                }
                 ExprKind::ExprWithCleanups | ExprKind::LambdaExpr => {}
-                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+                _ => self.ast.exprs.children_into(x, &self.ast.lists, &mut stack),
             }
         }
-        false
+        self.put_walk_stack(stack);
+        found
     }
 
     /// [`Sema::act_on_full_expr`] with conversion context `cc` for the
@@ -683,7 +703,7 @@ impl Sema<'_, '_> {
             {
                 self.potential_results(self.ast.exprs.operand(x), &mut constant);
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         if !self.potential_caps.is_empty() && self.in_template() {
             self.resolve_potential_captures(e, &constant);

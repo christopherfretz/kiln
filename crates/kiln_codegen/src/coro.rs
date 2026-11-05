@@ -305,7 +305,7 @@ impl Cg<'_> {
                     return Some(d);
                 }
             }
-            stack.extend(ast.exprs.children(e, &ast.lists));
+            ast.exprs.children_into(e, &ast.lists, &mut stack);
         }
         None
     }
@@ -531,7 +531,7 @@ impl Cg<'_> {
                 }
                 _ => {}
             }
-            stack.extend(ast.exprs.children(x, &ast.lists));
+            ast.exprs.children_into(x, &ast.lists, &mut stack);
         }
         false
     }

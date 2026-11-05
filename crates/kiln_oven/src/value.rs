@@ -1739,7 +1739,7 @@ pub(crate) fn let_mte(ast: &Ast, t: DeclId) -> Option<ExprId> {
         {
             return Some(e);
         }
-        work.extend(ast.exprs.children(e, &ast.lists));
+        ast.exprs.children_into(e, &ast.lists, &mut work);
     }
     None
 }

@@ -407,7 +407,7 @@ impl Substituter<'_, '_, '_> {
                 | ExprKind::CXXNoexceptExpr
                 | ExprKind::LambdaExpr
                 | ExprKind::RequiresExpr => {}
-                _ => stack.extend(self.sema.ast.exprs.children(x, &self.sema.ast.lists)),
+                _ => self.sema.ast.exprs.children_into(x, &self.sema.ast.lists, &mut stack),
             }
         }
     }

@@ -310,11 +310,15 @@ impl Sema<'_, '_> {
     /// The fields of class `r` the special-member rules consider (no
     /// unnamed bit-fields).
     pub(crate) fn special_fields(&self, r: DeclId) -> Vec<DeclId> {
+        self.special_fields_iter(r).collect()
+    }
+
+    /// [`Sema::special_fields`] without collecting them (WP-645).
+    pub(crate) fn special_fields_iter(&self, r: DeclId) -> impl Iterator<Item = DeclId> + '_ {
         self.ast
             .decls
             .members(self.class_def(r))
             .filter(|&f| self.kind_of(f) == DeclKind::Field && !self.is_unnamed_bit_field(f))
-            .collect()
     }
 
     /// Whether class `r` is a union.

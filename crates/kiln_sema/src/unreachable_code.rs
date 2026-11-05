@@ -256,7 +256,7 @@ impl Sema<'_, '_> {
                     return true;
                 }
                 ExprKind::LambdaExpr | ExprKind::UnaryExprOrTypeTraitExpr => {}
-                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+                _ => self.ast.exprs.children_into(x, &self.ast.lists, &mut stack),
             }
         }
         false

@@ -163,7 +163,7 @@ fn has_calls(ast: &Ast, e: ExprId) -> bool {
             | ExprKind::CXXNoexceptExpr
             | ExprKind::LambdaExpr
             | ExprKind::RequiresExpr => {}
-            _ => stack.extend(exprs.children(x, &ast.lists)),
+            _ => exprs.children_into(x, &ast.lists, &mut stack),
         }
     }
     false
@@ -236,7 +236,7 @@ fn side_effects_outside(ast: &Ast, e: ExprId, skip: &[ExprId]) -> bool {
             | ExprKind::CXXNoexceptExpr
             | ExprKind::LambdaExpr
             | ExprKind::RequiresExpr => {}
-            _ => stack.extend(exprs.children(x, &ast.lists)),
+            _ => exprs.children_into(x, &ast.lists, &mut stack),
         }
     }
     false

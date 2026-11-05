@@ -416,8 +416,10 @@ pub struct Sema<'a, 'sm> {
     /// The constant evaluator of the translation unit (spec/sema.md §8).
     /// Taken out for the duration of an evaluation, so the bridge can
     /// reach the rest of `Sema` (`ensure_body` instantiates through it,
-    /// spec/sema-templates.md §4.11); `None` only while one runs.
-    pub(crate) oven: Option<Oven>,
+    /// spec/sema-templates.md §4.11); `None` only while one runs. Boxed,
+    /// so taking it out and putting it back moves a pointer, not the
+    /// evaluator (WP-645).
+    pub(crate) oven: Option<Box<Oven>>,
     /// The implicitly declared global allocation functions.
     pub(crate) global_ops: new_delete::GlobalOps,
     /// Braced-init-list call arguments awaiting their parameter types
@@ -579,7 +581,7 @@ pub struct Sema<'a, 'sm> {
     /// The placeholder [`Sema::lend_oven`] leaves in a bridge callback's
     /// Oven slot while the running Oven is lent, kept for the next loan
     /// (a loan allocates no Oven of its own).
-    pub(crate) spare_oven: Option<Oven>,
+    pub(crate) spare_oven: Option<Box<Oven>>,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -728,6 +730,16 @@ pub struct Sema<'a, 'sm> {
     /// The depth of `synth` whose notes were last printed (clang
     /// `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) synth_noted: std::cell::Cell<usize>,
+    /// The reused stack of the expression walks ([`Sema::take_walk_stack`]):
+    /// a walk takes it, cleared, and puts it back, so a full-expression
+    /// check allocates no stack per call (WP-645). A nested walk finds it
+    /// empty and starts its own.
+    pub(crate) walk_stack: std::cell::RefCell<Vec<ExprId>>,
+    /// [`Sema::walk_stack`] for the implicit-conversion walk, whose work
+    /// items carry the context location.
+    pub(crate) conv_walk_stack: Vec<(ExprId, Loc)>,
+    /// The reused buffers of [`Sema::exprs_equivalent`] (WP-645).
+    pub(crate) equiv_scratch: std::cell::RefCell<kiln_ast::types::EquivScratch>,
     /// Delegating constructors and their targets, checked for cycles at
     /// the end of the translation unit ([class.base.init]/6).
     pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
@@ -1051,7 +1063,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             missing_typename_fns: kiln_source::fx::FxHashSet::default(),
             extern_c: kiln_source::fx::FxHashMap::default(),
             split_greaters: kiln_source::fx::FxHashSet::default(),
-            oven: Some(Oven::new(Budget::default())),
+            oven: Some(Box::new(Oven::new(Budget::default()))),
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
             prototype_params: Vec::new(),
@@ -1129,6 +1141,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             vtable_finals: kiln_source::fx::FxHashMap::default(),
             module_vtables: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
+            walk_stack: std::cell::RefCell::new(Vec::new()),
+            conv_walk_stack: Vec::new(),
+            equiv_scratch: std::cell::RefCell::default(),
             delegating: Vec::new(),
             ctor_entity: None,
             ctor_diag_ty: None,
@@ -1399,7 +1414,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             if self.typo_exprs.contains(&x) {
                 found.insert(x);
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         if found.is_empty() {
             return false;
@@ -1523,7 +1538,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 return false;
             }
             budget -= 1;
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false
     }
@@ -1540,7 +1555,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 return false;
             }
             budget -= 1;
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false
     }
@@ -1659,7 +1674,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 return false;
             }
             budget -= 1;
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false
     }

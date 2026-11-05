@@ -45,20 +45,39 @@ impl ArithConvKind {
 /// first node of `a`'s desugaring chain on `b`'s, else the canonical
 /// type.
 fn common_sugar(s: &Sema<'_, '_>, a: QualType, b: QualType) -> QualType {
-    let chain = |mut q: QualType| {
-        let mut v = vec![q];
+    // The chain of `q`: `q`, then each `desugar_once` step (at most 256),
+    // walked in place rather than collected (WP-645).
+    let on_chain = |mut q: QualType, target: QualType| {
+        if q == target {
+            return true;
+        }
         for _ in 0..256 {
             let n = s.ast.types.desugar_once(q);
             if n == q {
                 break;
             }
-            v.push(n);
+            if n == target {
+                return true;
+            }
             q = n;
         }
-        v
+        false
     };
-    let (ca, cb) = (chain(a), chain(b));
-    ca.iter().find(|q| cb.contains(q)).copied().unwrap_or_else(|| s.ast.types.canonical(a))
+    let mut q = a;
+    if on_chain(b, q) {
+        return q;
+    }
+    for _ in 0..256 {
+        let n = s.ast.types.desugar_once(q);
+        if n == q {
+            break;
+        }
+        if on_chain(b, n) {
+            return n;
+        }
+        q = n;
+    }
+    s.ast.types.canonical(a)
 }
 
 /// The type the left operand `l` (of type `lt`, cv-unqualified) of a

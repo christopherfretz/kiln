@@ -166,7 +166,7 @@ impl Sema<'_, '_> {
                 _ if self.consteval_only_pattern.contains(&x) => self.note_pending_ref(x),
                 _ => {}
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
     }
 

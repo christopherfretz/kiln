@@ -127,7 +127,7 @@ impl Sema<'_, '_> {
                 | ExprKind::CXXNoexceptExpr
                 | ExprKind::LambdaExpr
                 | ExprKind::RequiresExpr => {}
-                _ => stack.extend(exprs.children(x, &self.ast.lists)),
+                _ => exprs.children_into(x, &self.ast.lists, &mut stack),
             }
         }
         false
@@ -197,7 +197,7 @@ impl Sema<'_, '_> {
                     if !pure {
                         return true;
                     }
-                    stack.extend(exprs.children(x, &self.ast.lists));
+                    exprs.children_into(x, &self.ast.lists, &mut stack);
                 }
                 ExprKind::ImplicitCastExpr
                 | ExprKind::CStyleCastExpr
@@ -234,7 +234,7 @@ impl Sema<'_, '_> {
                     if !self.ast.decls.function(c).is_some_and(|f| f.spec.is_trivial()) {
                         return true;
                     }
-                    stack.extend(exprs.children(x, &self.ast.lists));
+                    exprs.children_into(x, &self.ast.lists, &mut stack);
                 }
                 ExprKind::CXXDefaultArgExpr => {
                     let p = exprs.default_arg_param(x);
@@ -254,7 +254,7 @@ impl Sema<'_, '_> {
                 ExprKind::UnaryExprOrTypeTraitExpr
                 | ExprKind::CXXNoexceptExpr
                 | ExprKind::RequiresExpr => {}
-                _ => stack.extend(exprs.children(x, &self.ast.lists)),
+                _ => exprs.children_into(x, &self.ast.lists, &mut stack),
             }
         }
         false

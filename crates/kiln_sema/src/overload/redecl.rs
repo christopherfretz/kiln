@@ -145,12 +145,12 @@ impl Sema<'_, '_> {
             return true;
         }
         let (la, lb) = (*self.ast.templates.param_list(a), *self.ast.templates.param_list(b));
-        let pa: Vec<DeclId> = self.ast.lists.iter::<DeclId>(la.params).collect();
-        let pb: Vec<DeclId> = self.ast.lists.iter::<DeclId>(lb.params).collect();
+        let pa = self.ast.lists.iter::<DeclId>(la.params);
+        let pb = self.ast.lists.iter::<DeclId>(lb.params);
         if pa.len() != pb.len() || !self.opt_exprs_equivalent(la.requires, lb.requires) {
             return false;
         }
-        pa.iter().zip(&pb).all(|(&x, &y)| {
+        pa.zip(pb).all(|(x, y)| {
             let (kx, ky) = (self.kind_of(x), self.kind_of(y));
             if kx != ky {
                 return false;

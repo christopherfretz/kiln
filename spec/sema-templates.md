@@ -2270,12 +2270,13 @@ WP-070b):
   `dcl.spec.auto/own-init-var-template-spec{,-19,-19-accepted}.cpp`.
 
 **Requirement R-OVEN-1 (reentrancy)**, as landed:
-- `Sema.oven` is an `Option<Oven>`. `with_oven` takes it out for the
-  duration of an evaluation and hands the closure a `Bridge` that holds
-  `&mut Sema`.
+- `Sema.oven` is an `Option<Box<Oven>>` (boxed since WP-645).
+  `with_oven` takes it out for the duration of an evaluation and hands
+  the closure a `Bridge` that holds `&mut Sema`.
 - In `ensure_body`, the Oven passes its own `&mut Oven`. Sema lends it
   back by swapping it into `Sema.oven` (a fresh `Oven` with the same
-  budget holds its place) while it instantiates. Nested evaluations
+  budget holds its place; the box is kept in `Sema.spare_oven` between
+  lends) while it instantiates. Nested evaluations
   (`static_assert`, template arguments, `if constexpr`, constexpr
   variable initializers) therefore run on the same Oven, sharing its
   compiled code, memo cache and budget. The Oven is swapped back before

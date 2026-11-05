@@ -149,7 +149,7 @@ impl Cg<'_> {
                     if ast.decls.function(ctor).is_none_or(|f| !f.spec.is_trivial()) {
                         return true;
                     }
-                    stack.extend(exprs.children(x, &ast.lists));
+                    exprs.children_into(x, &ast.lists, &mut stack);
                 }
                 ExprKind::ExprWithCleanups if exprs.cleanups_have_side_effects(x) => return true,
                 ExprKind::CXXTypeidExpr if exprs.typeid_potentially_evaluated(x) => return true,
@@ -157,7 +157,7 @@ impl Cg<'_> {
                 | ExprKind::CXXNoexceptExpr
                 | ExprKind::LambdaExpr
                 | ExprKind::RequiresExpr => {}
-                _ => stack.extend(exprs.children(x, &ast.lists)),
+                _ => exprs.children_into(x, &ast.lists, &mut stack),
             }
         }
         false
@@ -687,7 +687,7 @@ impl Cg<'_> {
                 mte = Some(e);
                 break;
             }
-            stack.extend(ast.exprs.children(e, &ast.lists));
+            ast.exprs.children_into(e, &ast.lists, &mut stack);
         }
         let mte = mte?;
         let first = ast.exprs.operand(mte);
