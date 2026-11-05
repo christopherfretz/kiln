@@ -6,7 +6,8 @@
 // alias ^^J are three specializations, while two uses of ^^I share one
 // (one symbol, one function-local static). The bodies consult the
 // reflection only through consteval queries (type_of, name_of), never a
-// splice; the specializations link within the TU (spec/reflection.md §8.3).
+// splice; each specialization is a linkonce_odr definition named by its
+// reflectee (spec/reflection.md §8.3).
 //@ expect: run
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection

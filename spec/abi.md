@@ -893,10 +893,13 @@ unadjusted alignment, as the classification does (WP-583).
   `Sub::TemplateParm`, the same one used when it is a template argument)
   followed by its arguments. `tests/mangle/dependent_spec.cpp`.
 - Constrained parameters, requires-clauses and `Dk` placeholders: §8.16.
-- **Reflection arguments: not link-compatible with GCC/clang.** A
-  reflection in a template argument mangles as the kiln vendor literal
-  `L u6__info <id> E` and makes the specialization internal;
-  `spec/landed/abi/WP-485.md`, spec/reflection.md §8.3. → WP-102.
+- **Reflection arguments** (`std::meta::info` values): the vendor literal
+  `L u6__info <kind> <entity> E` (GCC 16.1's kind letters and entity
+  encodings; the same in every TU, the reflectee's linkage), or GCC's
+  `L Dm <kind> <entity> E` under `-fkiln-reflection-mangling=gcc`, where
+  the info type itself is `Dm`. The grammar, the per-kind table and the
+  linkage rule are spec/reflection.md §8.3; `spec/landed/abi/WP-501.md`
+  (superseding the TU-local `L u6__info <id> E` of WP-485).
 
 ### 8.15 Landed (WP-172): abi tags and dependent signature types
 **abi_tag.** `[[gnu::abi_tag("a","b")]]` / `__attribute__((abi_tag(...)))`
