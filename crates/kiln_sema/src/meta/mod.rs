@@ -77,6 +77,49 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Reading the variable `r` designates (a variable, or the object of
+    /// one: `object_of`) through a reflection, at `loc`: its definition is
+    /// instantiated as an odr-use by name would instantiate it
+    /// ([temp.inst]/5 and /8, [basic.def.odr]/4; spec/reflection.md
+    /// "Reading a variable through a reflection", WP-638). `extract`,
+    /// `constant_of` and `object_of` come through here, before they read
+    /// the variable's value or take its address, so a static data member
+    /// of a specialization `substitute` produced (or one no expression
+    /// names) has its initializer. The use is potentially evaluated
+    /// whatever context the evaluation runs in: the reflection runtime
+    /// reads the value. Queries of the declaration (`type_of`,
+    /// `is_const`, ...) do not come here, so an initializer that would be
+    /// ill-formed is not instantiated by them.
+    pub(super) fn use_reflected_var(&mut self, r: ReflectionId, loc: Loc, oven: &mut Oven) {
+        use kiln_ast::consts::{PtrBase, Scalar};
+        use kiln_ast::reflect::Reflectee;
+        let d = match self.ast.reflections.get(r) {
+            Reflectee::Decl(d) => d,
+            Reflectee::Object(cv) => match self.ast.consts.scalar(cv) {
+                Some(Scalar::Pointer { base: PtrBase::Decl(d), .. }) => d,
+                _ => return,
+            },
+            _ => return,
+        };
+        // Only a template's specialization or member has a definition
+        // left to instantiate.
+        if self.kind_of(d) != DeclKind::Var
+            || (self.ast.instantiated_from(d).is_none() && self.ast.spec_info(d).is_none())
+        {
+            return;
+        }
+        let d = self.ast.first(d);
+        self.lend_oven(oven, |s| {
+            let unevaluated = std::mem::take(&mut s.unevaluated);
+            let discarded = s.func.as_mut().map(|f| std::mem::take(&mut f.discarded));
+            s.note_var_referenced(d, loc);
+            s.unevaluated = unevaluated;
+            if let (Some(f), Some(n)) = (s.func.as_mut(), discarded) {
+                f.discarded = n;
+            }
+        });
+    }
+
     /// The reflection intrinsic `f` is (spec/reflection.md §3.1): a
     /// function declared in `std::meta` (inline namespaces at any level
     /// skipped), or a member of a class declared there, whose name and
