@@ -265,6 +265,9 @@ pub enum LinkOptKind {
     Option,
     /// Nothing (`-static`, `-nostdlib`).
     Silent,
+    /// The value of `-Xlinker <arg>` (`arg` is the value): passed as
+    /// `-Xlinker <arg>`, unused as `-Xlinker <arg>: 'linker' input unused`.
+    Xlinker,
 }
 
 /// A command-line error.
@@ -547,6 +550,20 @@ impl Args {
             // the argument is parsed like any other. A separate value of a
             // frontend option comes in its own `-Xclang` (`-Xclang
             // -target-feature -Xclang +sve`).
+            // `-Xlinker <arg>`: passed to the link step as is, in order.
+            if arg == "-Xlinker" {
+                let Some(next) = argv.get(i) else {
+                    a.errors.push(ArgError::MissingValue(arg.to_owned()));
+                    continue;
+                };
+                i += 1;
+                a.link.push(LinkOpt {
+                    pos: a.inputs.len(),
+                    arg: next.clone(),
+                    kind: LinkOptKind::Xlinker,
+                });
+                continue;
+            }
             let mut xclang = false;
             if arg == "-Xclang" {
                 let Some(next) = argv.get(i) else {
@@ -1279,6 +1296,14 @@ mod tests {
                 ("-fuse-ld=lld", LinkOptKind::Option)
             ]
         );
+        let a = parse("-Xlinker --push-state -Xlinker --whole-archive a.o");
+        assert_eq!(a.errors, []);
+        let link: Vec<_> = a.link.iter().map(|l| (l.arg.as_str(), l.kind)).collect();
+        assert_eq!(
+            link,
+            [("--push-state", LinkOptKind::Xlinker), ("--whole-archive", LinkOptKind::Xlinker)]
+        );
+        assert_eq!(parse("a.o -Xlinker").errors, [ArgError::MissingValue("-Xlinker".into())]);
         let a = parse("-fno-inline a.cpp");
         assert!(a.predef.no_inline);
         assert!(!parse("-fno-inline -finline a.cpp").predef.no_inline);

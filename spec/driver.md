@@ -107,7 +107,7 @@ starting with `-` are inputs.
 | `-f[no-]semantic-interposition`, `-f[no-]direct-access-external-data` | the `dso_local` inputs of clang's `shouldAssumeDSOLocal` (spec/codegen.md "Symbol visibility and `dso_local`"): under `-fPIC`, `-fno-semantic-interposition` makes external non-COMDAT function definitions `dso_local` and `-fsemantic-interposition` adds the `SemanticInterposition` module flag; `-fdirect-access-external-data` (default only with `-fno-pic`) makes non-TLS variable declarations (and, under `-fno-pic`, function declarations) `dso_local` under `-fPIE`/`-fno-pic`, and a value other than the relocation model's default adds the `direct-access-external-data` module flag. The last of each pair wins |
 | `-fvisibility=default\|hidden\|protected\|internal`, `-fvisibility-ms-compat`, `-f[no-]visibility-inlines-hidden` | the default symbol visibility (`CodegenOptions::visibility` / `type_visibility` / `inlines_hidden`, spec/codegen.md "Symbol visibility and `dso_local`", WP-544): the last `-fvisibility=` or `-fvisibility-ms-compat` wins; `internal` is `hidden`, as clang; `-fvisibility-ms-compat` is hidden value visibility with default type visibility (vtables, RTTI), accepted silently as by clang. `-fvisibility-inlines-hidden` hides inline functions that are not explicit instantiations (the last of the pair wins). An unknown value is clang's `-cc1` error `invalid value '<v>' in '-fvisibility=<v>'` (no `kiln++:` prefix, once per input, as the `-std=` one), unless a later `-fvisibility=`/`-fvisibility-ms-compat` replaces it (clang forwards only the last) |
 | `-g`, `-g0`..`-g3`, `-ggdb`, `-ggdb0`..`-ggdb3` | accepted and ignored (no debug info yet) |
-| `-l<lib>`, `-L<dir>`, `-B<dir>`, `-Wl,<args>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
+| `-l<lib>`, `-L<dir>`, `-B<dir>`, `-Wl,<args>`, `-Xlinker <arg>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
 | `-dD`, `-dI` | parsed; "not implemented yet" (WP-017) |
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name is accepted and ignored |
 | `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
@@ -596,7 +596,7 @@ the current directory (standard input is `-`). `-o -` is standard output.
 - **Unused inputs.** In a compile-only phase, linker inputs and link
   options are unused, warned in command-line order with clang's wording
   (`-Wunused-command-line-argument`): `<x>: 'linker' input unused` for
-  linker inputs, `-l` and `-Wl,`; `argument unused during compilation:
+  linker inputs, `-l`, `-Wl,` and `-Xlinker <arg>`; `argument unused during compilation:
   '<o>'` for `-L`, `-fuse-ld=`, `-shared`, `-rdynamic`, `-pie`, `-no-pie`.
   `-static` and `-nostdlib` are silent, as in clang.
 - **Errors.** `-o` with several sources in a compile-only phase is an

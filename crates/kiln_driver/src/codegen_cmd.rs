@@ -434,6 +434,11 @@ fn warn_unused_link_inputs(args: &Args, inputs: &[&Input], drv: &DiagEngine<'_>)
                     Diag::new(DiagId::drv_argument_unused, Span::INVALID).arg(&o.arg).emit(drv);
                 }
                 LinkOptKind::Silent => {}
+                LinkOptKind::Xlinker => {
+                    Diag::new(DiagId::drv_linker_input_unused, Span::INVALID)
+                        .arg(&format!("-Xlinker {}", o.arg))
+                        .emit(drv);
+                }
             }
         }
     };
@@ -693,6 +698,9 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     }
     let opts_at = |cmd: &mut Command, pos: usize| {
         for o in args.link.iter().filter(|o| o.pos == pos) {
+            if o.kind == LinkOptKind::Xlinker {
+                cmd.arg("-Xlinker");
+            }
             cmd.arg(o.arg.clone());
         }
     };
