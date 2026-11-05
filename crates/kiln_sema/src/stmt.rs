@@ -1836,13 +1836,13 @@ impl Sema<'_, '_> {
     }
 
     /// Whether a call of function `d` ends its block in the control-flow
-    /// graph (clang `CFGBuilder::VisitCallExpr`: `isNoReturn()` or GNU
-    /// `analyzer_noreturn`).
-    /// `analyzer_noreturn` does not count: clang's CFG (`FunctionDecl::
-    /// isNoReturn`) ignores it, so -Wreturn-type fires after such a call;
-    /// only the static analyzer's `NoReturnFunctionChecker` sinks on it.
+    /// graph (clang 22 `CFGBuilder::VisitCallExpr`: `isNoReturn()` or GNU
+    /// `analyzer_noreturn`, so -Wreturn-type does not fire after the call;
+    /// clang 19 ignored the attribute outside the static analyzer). The
+    /// attribute on a function-pointer variable does not count.
     fn cfg_noreturn_fn(&self, d: DeclId) -> bool {
         self.ast.is_noreturn_fn(d)
+            || self.find_attr(d, kiln_ast::attr::AttrKind::ANALYZER_NORETURN).is_some()
     }
 
     pub(crate) fn is_noreturn_call(&self, e: ExprId) -> bool {

@@ -10,14 +10,14 @@
 //@ args: -fclang-compat=19
 //@ skip(clang): -fclang-compat is kiln's option (the diagnostics are clang 19's)
 //@ strict-diags
-//@ diag: 21:17 error "static assertion failed due to requirement 'sizeof(YN) == 0': instantiated"
-//@ diag: 27:29 note "in instantiation of template class 'bad<YN>' requested here"
-//@ diag: 35:10 note "while substituting deduced template arguments into function template 'rank' [with T = YN]"
-//@ diag: 21:27 note "expression evaluates to '4 == 0'"
-//@ diag: 21:17 error "static assertion failed due to requirement 'sizeof(E) == 0': instantiated"
-//@ diag: 30:31 note "in instantiation of template class 'bad<E>' requested here"
-//@ diag: 35:22 note "while substituting deduced template arguments into function template 'f' [with T = E]"
-//@ diag: 21:27 note "expression evaluates to '4 == 0'"
+//@ diag: 22:17 error "static assertion failed due to requirement 'sizeof(YN) == 0': instantiated"
+//@ diag: 28:29 note "in instantiation of template class 'bad<YN>' requested here"
+//@ diag: 36:10 note "while substituting deduced template arguments into function template 'rank' [with T = YN]"
+//@ diag: 22:27 note "expression evaluates to '4 == 0'"
+//@ diag: 22:17 error "static assertion failed due to requirement 'sizeof(E) == 0': instantiated"
+//@ diag: 31:31 note "in instantiation of template class 'bad<E>' requested here"
+//@ diag: 36:22 note "while substituting deduced template arguments into function template 'f' [with T = E]"
+//@ diag: 22:27 note "expression evaluates to '4 == 0'"
 template <class T> struct bad {
   static_assert(sizeof(T) == 0, "instantiated");
   typedef int type;

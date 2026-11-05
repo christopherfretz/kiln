@@ -7,12 +7,12 @@
 // the C++20/23 deprecation warning instead (spec/driver.md).
 //@ std: c++26
 //@ args: -fpermissive
-//@ requires: clang>=21.0.0
+//@ skip(clang): clang's -fpermissive does not downgrade P2864 enum arithmetic (GCC's does; the behaviour is kiln's)
 //@ strict-diags
-//@ diag: 16:28 warning "arithmetic between different enumeration types ('Q' and '(unnamed enum at"
-//@ diag: 17:28 warning "arithmetic between different enumeration types ('Q' and 'R') is deprecated"
-//@ diag: 18:26 warning "arithmetic between enumeration type 'Q' and floating-point type 'double' is deprecated"
-//@ diag: 19:17 warning "arithmetic between different enumeration types ('Q' and 'R') is deprecated"
+//@ diag: 17:28 warning "arithmetic between different enumeration types ('Q' and '(unnamed enum at"
+//@ diag: 18:28 warning "arithmetic between different enumeration types ('Q' and 'R') is deprecated"
+//@ diag: 19:26 warning "arithmetic between enumeration type 'Q' and floating-point type 'double' is deprecated"
+//@ diag: 20:17 warning "arithmetic between different enumeration types ('Q' and 'R') is deprecated"
 enum Q { A }; enum R { B }; enum { N = 4 };
 int f(Q q, R r) { return q % N + 1; }
 int g(Q q, R r) { return q + r; }
