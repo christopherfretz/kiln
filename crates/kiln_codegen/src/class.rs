@@ -2298,19 +2298,32 @@ impl Cg<'_> {
     /// `QualType::isPODType` (C++11: trivial and standard-layout classes,
     /// arrays of them, and every non-class type).
     pub(crate) fn is_pod(&self, q: QualType) -> bool {
-        let mut q = q;
-        while let Some(e) = self.array_elem(q) {
-            q = e;
+        is_pod(self.ast, q)
+    }
+}
+
+/// `QualType::isPODType` (C++11: trivial and standard-layout classes,
+/// arrays of them, and every non-class type).
+pub(crate) fn is_pod(ast: &kiln_ast::Ast, q: QualType) -> bool {
+    let mut q = q;
+    loop {
+        q = match ast.types.canonical_view(q) {
+            TypeView::ConstantArray(a) => a.elem,
+            TypeView::IncompleteArray(e) | TypeView::VariableArray { elem: e, .. } => e,
+            _ => break,
+        };
+    }
+    match ast.types.as_record(q) {
+        Some(r) => {
+            let b = ast
+                .definition(r)
+                .and_then(|d| ast.decls.record(d))
+                .map_or(DefinitionBits::empty(), |r| r.defn);
+            b.contains(DefinitionBits::TRIVIALLY_COPYABLE)
+                && b.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
+                && b.contains(DefinitionBits::STANDARD_LAYOUT)
         }
-        match self.ast.types.as_record(q) {
-            Some(r) => {
-                let b = self.class_bits(r);
-                b.contains(DefinitionBits::TRIVIALLY_COPYABLE)
-                    && b.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
-                    && b.contains(DefinitionBits::STANDARD_LAYOUT)
-            }
-            None => true,
-        }
+        None => true,
     }
 }
 

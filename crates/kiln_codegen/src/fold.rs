@@ -351,14 +351,20 @@ impl Collect<'_> {
                 && !quals.is_volatile()
                 && (ast.types.is_integral(ty)
                     || matches!(ast.types.canonical_view(ty), TypeView::Enum(_))));
+        // An automatic aggregate's value is used only when it is POD
+        // (clang `IsConstantAggregate`, `Cg::emit_var_init`) or, for
+        // its destruction, when it is `const` ([expr.const]/7,
+        // `Oven::has_constant_destruction`): any other is not evaluated,
+        // which would build its whole object once per variable (a
+        // non-trivial class holding a large class by value, WP-633).
         let fold = constant_init
-            || matches!(
-                ast.types.canonical_view(ty),
-                TypeView::ConstantArray(_)
-                    | TypeView::Record(_)
-                    | TypeView::LValueRef(_)
-                    | TypeView::RValueRef(_)
-            );
+            || match ast.types.canonical_view(ty) {
+                TypeView::ConstantArray(_) | TypeView::Record(_) => {
+                    quals.is_const() || crate::class::is_pod(ast, ty)
+                }
+                TypeView::LValueRef(_) | TypeView::RValueRef(_) => true,
+                _ => false,
+            };
         if fold {
             self.out.push(init);
         }
