@@ -58,8 +58,14 @@ impl Sema<'_, '_> {
         }
         *out = match q {
             QueryOp::TypeOf => MetaOut::Info(self.reflect_type_of(r, loc)?),
-            QueryOp::ObjectOf => MetaOut::Info(self.reflect_object_of(r, loc)?),
-            QueryOp::ConstantOf => MetaOut::Info(self.reflect_constant_of(r, loc, oven)?),
+            QueryOp::ObjectOf => {
+                self.use_reflected_var(r, loc, oven);
+                MetaOut::Info(self.reflect_object_of(r, loc)?)
+            }
+            QueryOp::ConstantOf => {
+                self.use_reflected_var(r, loc, oven);
+                MetaOut::Info(self.reflect_constant_of(r, loc, oven)?)
+            }
             QueryOp::ParentOf => match self.parent_of(self.ast.reflections.get(r)) {
                 Some(p) => MetaOut::Info(self.intern_reflection(p, loc)?),
                 None => return fail(loc, "reflection does not represent an entity with parent"),

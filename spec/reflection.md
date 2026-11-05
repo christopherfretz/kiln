@@ -157,6 +157,24 @@ the IS equality ([expr.eq]):
 
 The value family (`extract`, `reflect_constant*`, P3491 `define_static_*`, `refl_bytes`) is specified in spec/reflection-values.md (WP-479).
 
+**Reading a variable through a reflection** (WP-638; [temp.inst]/5 and /8,
+[meta.reflection.extract]): reading a variable through a reflection
+instantiates its definition as an odr-use would. `extract`, `constant_of`
+and `object_of` of a variable (or of the object of one) first call
+`Sema::use_reflected_var` (`crates/kiln_sema/src/meta/mod.rs`), which
+runs the odr-use path of a spelled reference (`note_var_referenced`, the
+deferred-instantiation queue; potentially evaluated whatever context the
+evaluation runs in), so a static data member of a specialization that
+`substitute` produced, or that only `members_of` /
+`static_data_members_of` reached, has its initializer; a splice names
+the variable and takes the ordinary path. Declaration queries (`type_of`,
+`is_const`, `identifier_of`, ...) instantiate only the declaration, so a
+member whose initializer would be ill-formed stays reflectable; reading
+it diagnoses the initializer at the instantiation, with the "in
+instantiation of static data member" note at the reading call. Tests:
+`meta.reflection.substitute/substitute-static-member-init.cpp`,
+`meta.reflection.extract/static-member-instantiate{,-neg}.cpp`.
+
 ### 3.1 Recognizing an intrinsic
 - The `std::meta` functions have no bodies: the library declares them, and
   a direct call to a declaration that sema recognizes compiles to one KBC

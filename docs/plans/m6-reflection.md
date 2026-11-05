@@ -406,7 +406,11 @@ The vs-GCC perf table, the `--scaling` sweeps and the private corpora stay off t
 - (c) the private ICE corpus at 0 crashes
 - (d) every reflection row in cxx-features.md `done`
 - (e) the GCC differential green on the public reflection corpus, or each divergence triaged with an IS citation
-- (f) scaling gate passes for S1–S6
+- (f) scaling gate passes for S1–S6. **Met (WP-638, 2026-11-05):** S1–S6 compile on libstdc++ 16.1 and all six sweeps pass.
+  4N/N growth for kiln (time, RSS) is S1 1.88x, 1.95x; S2 2.42x, 2.38x; S3 1.91x, 1.09x; S4 1.82x, 1.91x; S5 1.18x, 1.27x; S6 1.19x, 1.01x.
+  `peak_arena` is flat on S1, S2, S4 and S5. S7/S8 were already green.
+  At the bench N, kiln/GCC is 0.20x–0.94x in time and 0.08x–0.34x in memory.
+  The tables are in docs/status/perf-reference-workload.md "kiln vs GCC 16.1".
 
 ## 6. Risks and open questions for the operator
 
