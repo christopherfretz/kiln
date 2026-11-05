@@ -220,12 +220,18 @@ impl TypeContext {
             Err(h) => h,
         };
         let mut flags = TypeFlags::NONE;
-        let mut canon: Vec<TemplateArg> = Vec::with_capacity(args.len());
+        let mut is_canonical = true;
         for a in args {
             flags |= self.arg_flags(*a);
-            canon.push(self.canonical_arg(*a));
+            is_canonical &= self.canonical_arg(*a) == *a;
         }
-        let c = if canon.as_slice() == args { None } else { Some(self.arg_list(&canon).index()) };
+        // The canonical list is built only when it differs (WP-645).
+        let c = if is_canonical {
+            None
+        } else {
+            let canon: Vec<TemplateArg> = args.iter().map(|&a| self.canonical_arg(a)).collect();
+            Some(self.arg_list(&canon).index())
+        };
         if let Some(id) = self.args.push(args, hash, c, flags.without(TypeFlags::SUGAR)) {
             ArgListId::new(id)
         } else {
