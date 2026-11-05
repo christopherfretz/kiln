@@ -17,7 +17,7 @@ use crate::failure::{EvalFailure, FailKind};
 use crate::kbc::{Op, ak, cce, cmp, new_aux};
 use crate::mem::{Alloc, DynKind, MemFault, NOWHERE, Origin, Ptr, Sp, TrialMode, flags};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
-use crate::ty::{OTy, TyKind};
+use crate::ty::{Hop, OTy, TyKind, Walk, alt_members};
 use crate::{Oven, SemaBridge};
 
 mod bitcast;
@@ -2391,34 +2391,47 @@ impl Oven {
                     base += i * es;
                     t = elem;
                 }
-                TyKind::Record { union, .. } => {
-                    let rel = target - base;
-                    let fields = self.types.fields(t);
-                    let contains = |f: &&crate::ty::FieldInfo| {
-                        rel >= f.offset && rel < f.offset + self.types.size(f.ty).max(1)
-                    };
-                    // A union member is the active one (a read of another
-                    // is diagnosed by `union_path`).
-                    let active = if union {
-                        self.mem
-                            .unions
-                            .get(&Ptr::union_key(raw, base, t))
-                            .and_then(|&i| fields.get(i as usize))
-                            .filter(contains)
-                    } else {
-                        None
-                    };
-                    let Some(f) = active.or_else(|| self.types.near(t, rel).find(contains)) else {
-                        return Ok(());
-                    };
-                    if f.mutable {
-                        return Err(Fault::Mutable { ak: k, field: f.decl });
+                TyKind::Record { .. } => {
+                    match self.types.hop(Walk::Mutable, t, target - base, ty) {
+                        Hop::Reached => {
+                            t = ty;
+                            base = target;
+                        }
+                        Hop::Stop => return Ok(()),
+                        Hop::Mutable(field) => return Err(Fault::Mutable { ak: k, field }),
+                        Hop::Array { at, t: arr } => {
+                            base += at;
+                            t = arr;
+                        }
+                        Hop::Union { at, u, reach } => {
+                            base += at;
+                            let rel = target - base;
+                            let fields = self.types.fields(u);
+                            // The active member (a read of another is
+                            // diagnosed by `union_path`), else the first one
+                            // holding the byte.
+                            let active =
+                                self.mem.unions.get(&Ptr::union_key(raw, base, u)).copied().filter(
+                                    |&i| self.types.reaches(Walk::Mutable, u, rel, ty, reach, i),
+                                );
+                            let f = match active {
+                                Some(i) => fields.get(i as usize),
+                                None if reach != 0 => fields.get(reach.trailing_zeros() as usize),
+                                None => self.types.near(u, rel).find(|f| {
+                                    self.types.union_member_reaches(Walk::Mutable, rel, ty, f)
+                                }),
+                            };
+                            let Some(f) = f else { return Ok(()) };
+                            if f.mutable {
+                                return Err(Fault::Mutable { ak: k, field: f.decl });
+                            }
+                            if f.width.is_some() {
+                                return Ok(());
+                            }
+                            base += f.offset;
+                            t = f.ty;
+                        }
                     }
-                    if f.width.is_some() {
-                        return Ok(());
-                    }
-                    base += f.offset;
-                    t = f.ty;
                 }
                 _ => return Ok(()),
             }
@@ -2491,72 +2504,71 @@ impl Oven {
                     base += i * es;
                     t = elem;
                 }
-                TyKind::Record { union, .. } => {
-                    let rel = target - base;
-                    let fields = self.types.fields(t);
-                    let contains = |f: &crate::ty::FieldInfo| {
-                        rel >= f.offset && rel < f.offset + self.types.size(f.ty).max(1)
-                    };
-                    if union {
-                        let active = self.mem.unions.get(&Ptr::union_key(raw, base, t)).copied();
-                        let reach = |f: &crate::ty::FieldInfo| {
-                            contains(f)
-                                && (f.width.is_some()
-                                    || self.types.has_subobject(f.ty, rel - f.offset, ty)
-                                    || self.types.has_bit_unit(f.ty, rel - f.offset, ty))
-                        };
-                        let key = Ptr::union_key(raw, base, t);
+                // The member choices are cached per (record, offset,
+                // type) (WP-644); the active members are read here.
+                TyKind::Record { .. } => match self.types.hop(Walk::Union, t, target - base, ty) {
+                    Hop::Reached | Hop::Stop | Hop::Mutable(_) => return Ok(()),
+                    Hop::Array { at, t: arr } => {
+                        base += at;
+                        t = arr;
+                    }
+                    Hop::Union { at, u, reach } => {
+                        base += at;
+                        let rel = target - base;
+                        let fields = self.types.fields(u);
+                        let key = Ptr::union_key(raw, base, u);
+                        let active = self.mem.unions.get(&key).copied();
                         let alts = self.mem.union_alts.get(&key).copied().unwrap_or(0);
-                        let alt = (0..fields.len().min(64) as u32)
-                            .filter(|&i| alts & 1 << i != 0 && active != Some(i));
-                        if let Some(f) = active
+                        let alt = alt_members(alts, fields.len() as u32, active);
+                        let Some(i) = active
                             .into_iter()
                             .chain(alt)
-                            .map(|i| fields[i as usize])
-                            .find(|f| reach(f))
-                        {
-                            base += f.offset;
-                            t = f.ty;
-                            if f.width.is_some() {
-                                return Ok(());
-                            }
-                            continue;
-                        }
-                        // The object of a member call can be one the
-                        // layout does not model (an empty base sharing
-                        // the union's offset, libc++'s `__compressed_pair`
-                        // allocator): only a member holding it is wrong.
-                        let fallback = || {
-                            (k != ak::MEMBER_CALL)
-                                .then(|| self.types.near(t, rel).find(|f| contains(f)))
-                                .flatten()
-                        };
-                        let Some(f) = self.types.near(t, rel).find(|f| reach(f)).or_else(fallback)
+                            .find(|&i| self.types.reaches(Walk::Union, u, rel, ty, reach, i))
                         else {
-                            return Ok(());
+                            return self.union_fault(u, rel, ty, k, active);
                         };
-                        return Err(Fault::Union {
-                            ak: k,
-                            field: f.decl,
-                            active: active.map(|i| fields[i as usize].decl),
-                        });
+                        let f = fields[i as usize];
+                        base += f.offset;
+                        t = f.ty;
+                        if f.width.is_some() {
+                            return Ok(());
+                        }
                     }
-                    let Some(f) = self
-                        .types
-                        .member_toward(t, rel, ty)
-                        .or_else(|| self.types.near(t, rel).find(|f| contains(f)).copied())
-                    else {
-                        return Ok(());
-                    };
-                    if f.width.is_some() {
-                        return Ok(());
-                    }
-                    base += f.offset;
-                    t = f.ty;
-                }
+                },
                 _ => return Ok(()),
             }
         }
+    }
+
+    /// The fault of an access `k` of the `ty` object at byte `rel` of union
+    /// `u` that no (possibly) active member holds: the member that would
+    /// hold it, when there is one.
+    #[cold]
+    fn union_fault(
+        &self,
+        u: OTy,
+        rel: u64,
+        ty: OTy,
+        k: u32,
+        active: Option<u32>,
+    ) -> Result<(), Fault> {
+        let fields = self.types.fields(u);
+        let reach =
+            |f: &crate::ty::FieldInfo| self.types.union_member_reaches(Walk::Union, rel, ty, f);
+        let contains = |f: &crate::ty::FieldInfo| {
+            rel >= f.offset && rel < f.offset + self.types.size(f.ty).max(1)
+        };
+        // The object of a member call can be one the layout does not
+        // model (an empty base sharing the union's offset, libc++'s
+        // `__compressed_pair` allocator): only a member holding it is
+        // wrong.
+        let fallback = || {
+            (k != ak::MEMBER_CALL).then(|| self.types.near(u, rel).find(|f| contains(f))).flatten()
+        };
+        let Some(f) = self.types.near(u, rel).find(|f| reach(f)).or_else(fallback) else {
+            return Ok(());
+        };
+        Err(Fault::Union { ak: k, field: f.decl, active: active.map(|i| fields[i as usize].decl) })
     }
 
     /// The checks of a load from an allocation with unions or with
@@ -3091,30 +3103,21 @@ impl Oven {
                     base += i * es;
                     t = elem;
                 }
-                TyKind::Record { union, .. } => {
+                TyKind::Record { .. } => {
+                    let (at, u, reach) = match self.types.hop(Walk::Place, t, target - base, ty) {
+                        Hop::Reached | Hop::Stop | Hop::Mutable(_) => return Ok(()),
+                        Hop::Array { at, t: arr } => {
+                            base += at;
+                            t = arr;
+                            continue;
+                        }
+                        Hop::Union { at, u, reach } => (at, u, reach),
+                    };
+                    base += at;
+                    t = u;
                     let rel = target - base;
                     let fields = self.types.fields(t);
-                    let contains = |f: &crate::ty::FieldInfo| {
-                        f.width.is_none()
-                            && rel >= f.offset
-                            && rel < f.offset + self.types.size(f.ty).max(1)
-                    };
-                    if !union {
-                        let Some(f) = self
-                            .types
-                            .member_toward(t, rel, ty)
-                            .filter(|f| f.width.is_none())
-                            .or_else(|| self.types.near(t, rel).find(|f| contains(f)).copied())
-                        else {
-                            return Ok(());
-                        };
-                        base += f.offset;
-                        t = f.ty;
-                        continue;
-                    }
-                    let reach = |f: &crate::ty::FieldInfo| {
-                        contains(f) && self.types.has_subobject(f.ty, rel - f.offset, ty)
-                    };
+                    let reach = |i: u32| self.types.reaches(Walk::Place, u, rel, ty, reach, i);
                     let key = Ptr::union_key(raw, base, t);
                     let active = self.mem.unions.get(&key).copied();
                     let alts = self.mem.union_alts.get(&key).copied().unwrap_or(0);
@@ -3129,13 +3132,15 @@ impl Oven {
                         })
                         .fold(0, |m, i| m | 1 << i);
                     // The (possibly) active member holding it.
-                    let held = active
-                        .into_iter()
-                        .chain((0..n).filter(|&i| alts & 1 << i != 0 && active != Some(i)))
-                        .find(|&i| reach(&fields[i as usize]));
+                    let held =
+                        active.into_iter().chain(alt_members(alts, n, active)).find(|&i| reach(i));
                     match held {
                         None if direct == 0 => {
-                            let Some(f) = self.types.near(t, rel).find(|f| reach(f)) else {
+                            let Some(f) = self
+                                .types
+                                .near(t, rel)
+                                .find(|f| self.types.union_member_reaches(Walk::Place, rel, ty, f))
+                            else {
                                 return Ok(());
                             };
                             return Err(Fault::Union {
