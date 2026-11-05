@@ -1090,7 +1090,6 @@ impl Sema<'_, '_> {
         let ty = self.ctad_declarator_check(base, spec_loc, d);
         // [dcl.spec.auto.general]/2-5.
         let mut ty = self.auto_declarator_check(ty, spec_loc, d);
-        let name = self.declarator_name(d);
         if matches!(d.site, DeclSite::TypeParamDefault | DeclSite::Alias) {
             self.pending_chunk_loc = Self::inner_chunk_loc(d);
         }
@@ -1124,7 +1123,7 @@ impl Sema<'_, '_> {
                     if t.is_reference(ty) {
                         let msg = self
                             .diag(DiagId::sema_pointer_to_reference, *loc)
-                            .arg(&name)
+                            .arg(self.declarator_name(d))
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
                         fail!();
@@ -1142,11 +1141,13 @@ impl Sema<'_, '_> {
                     let Some(class) = self.member_pointer_class(qual) else {
                         // clang 22 says "member pointer" for an abstract declarator
                         // (clang 19 "'type name'"; no identifier has a space).
-                        let msg = if self.clang_compat >= 22 && name == "type name" {
-                            self.diag(DiagId::sema_mptr_in_nonclass_22, *loc)
-                        } else {
-                            self.diag(DiagId::sema_mptr_in_nonclass, *loc).arg(&name)
-                        };
+                        let msg =
+                            if self.clang_compat >= 22 && self.declarator_name(d) == "type name" {
+                                self.diag(DiagId::sema_mptr_in_nonclass_22, *loc)
+                            } else {
+                                self.diag(DiagId::sema_mptr_in_nonclass, *loc)
+                                    .arg(self.declarator_name(d))
+                            };
                         self.emit(msg);
                         fail!();
                     };
@@ -1154,13 +1155,14 @@ impl Sema<'_, '_> {
                     if t.is_reference(ty) {
                         let msg = self
                             .diag(DiagId::sema_mptr_to_reference, *loc)
-                            .arg(&name)
+                            .arg(self.declarator_name(d))
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
                         fail!();
                     }
                     if t.is_void(ty) {
-                        let msg = self.diag(DiagId::sema_mptr_to_void, *loc).arg(&name);
+                        let msg =
+                            self.diag(DiagId::sema_mptr_to_void, *loc).arg(self.declarator_name(d));
                         self.emit(msg);
                         fail!();
                     }
@@ -1169,7 +1171,9 @@ impl Sema<'_, '_> {
                 }
                 Chunk::LRef { loc } | Chunk::RRef { loc } => {
                     if t.is_reference(ty) && prev_ref {
-                        let msg = self.diag(DiagId::sema_reference_to_reference, *loc).arg(&name);
+                        let msg = self
+                            .diag(DiagId::sema_reference_to_reference, *loc)
+                            .arg(self.declarator_name(d));
                         self.emit(msg);
                         if !recover {
                             fail!();
@@ -1215,7 +1219,7 @@ impl Sema<'_, '_> {
                     if t.is_function(ty) {
                         let msg = self
                             .diag(DiagId::sema_array_of_functions, *loc)
-                            .arg(&name)
+                            .arg(self.declarator_name(d))
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
                         fail!();
@@ -1223,7 +1227,7 @@ impl Sema<'_, '_> {
                     if t.is_reference(ty) {
                         let msg = self
                             .diag(DiagId::sema_array_of_references, *loc)
-                            .arg(&name)
+                            .arg(self.declarator_name(d))
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
                         fail!();
