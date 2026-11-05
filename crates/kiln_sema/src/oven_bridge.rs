@@ -53,6 +53,10 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         let _ = self.sema.ast.decls.set_lifetime_extended_value(t, v);
     }
 
+    fn lvalue_ref_to(&mut self, t: QualType) -> Option<QualType> {
+        Some(self.sema.ast.types.lvalue_ref_to(t))
+    }
+
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId> {
         // A body exists once its definition has been parsed or
         // instantiated (a later definition is picked up by the next

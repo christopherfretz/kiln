@@ -323,6 +323,15 @@ pub trait SemaBridge {
     fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
         let _ = (t, v);
     }
+    /// The type `t&` (interned in the bridge's AST): the type of the
+    /// address a glvalue immediate invocation's value is frozen as
+    /// ([`Oven::evaluate`], WP-640). A bridge without a mutable AST
+    /// (tests) may return `None`: such an invocation is then frozen as
+    /// the value it designates.
+    fn lvalue_ref_to(&mut self, t: QualType) -> Option<QualType> {
+        let _ = t;
+        None
+    }
 
     // Reflection (`-freflection`; spec/reflection.md §3). The defaults (a
     // bridge without reflection) recognize nothing.
@@ -476,6 +485,10 @@ pub struct Oven {
     /// ([`EvalKind::Consteval`]): a `void` result is a value
     /// (`value::eval_at`).
     pub(crate) void_next: bool,
+    /// The next evaluation is a glvalue immediate invocation: its value
+    /// is the address of the object or function it designates, as a
+    /// reference's initializer (`value::eval_at`; WP-640).
+    pub(crate) addr_next: bool,
     pub(crate) types: Types,
     pub(crate) code: Vec<u32>,
     pub(crate) sites: Vec<Site>,
@@ -500,11 +513,14 @@ pub struct Oven {
     /// being initialized: the bytes before it have begun, it and those
     /// after it have not, an aggregate holding it has.
     pub(crate) ctor_steps: FxHashMap<u32, Box<[CtorStep]>>,
-    pub(crate) thunks: FxHashMap<ExprId, u32>,
+    /// Compiled top-level thunks, by expression, the object it
+    /// initializes and whether it yields a glvalue's address
+    /// ([`Oven::compile_thunk`]).
+    pub(crate) thunks: FxHashMap<(ExprId, Option<DeclId>, bool), u32>,
     /// Thunks compiled inside a default argument use (the key's second
     /// half, [`Oven::fold_immediate_in`]): their source-location builtins
     /// take that use's values.
-    pub(crate) thunks_at: FxHashMap<(ExprId, ExprId), u32>,
+    pub(crate) thunks_at: FxHashMap<(ExprId, ExprId, bool), u32>,
     /// The default argument use the next thunk is compiled in.
     pub(crate) srcloc_root: Option<ExprId>,
     pub(crate) globals: Vec<Global>,
@@ -589,6 +605,7 @@ impl Oven {
             potential_next: false,
             plain_next: false,
             void_next: false,
+            addr_next: false,
             types: Types::default(),
             code: Vec::new(),
             sites: Vec::new(),
@@ -731,9 +748,16 @@ impl Oven {
     ) -> Result<ConstValueId, EvalFailure> {
         self.plain_next = ctx.plain;
         self.void_next = ctx.kind == EvalKind::Consteval;
+        // A glvalue immediate invocation ([expr.const]/16) is a constant
+        // expression whose result is the entity it designates
+        // ([expr.const]/22): its value is that address, not the
+        // designated object's value (which need not be readable: a
+        // non-const variable's; WP-640).
+        self.addr_next = self.void_next && is_glvalue(bridge.ast(), e);
         let (r, c) = self.eval_ctx(bridge, e, ctx.object, false, ctx.enum_range_check, true);
         self.plain_next = false;
         self.void_next = false;
+        self.addr_next = false;
         self.stats.push(EvalRecord {
             loc: ctx.loc,
             kind: ctx.kind,
@@ -918,7 +942,9 @@ impl Oven {
         at: Option<ExprId>,
     ) -> Option<ConstValueId> {
         let saved = std::mem::replace(&mut self.srcloc_root, at);
+        self.addr_next = is_glvalue(bridge.ast(), e);
         let r = self.eval_ctx(bridge, e, None, true, false, true).0.ok();
+        self.addr_next = false;
         self.srcloc_root = saved;
         r
     }
@@ -1330,4 +1356,9 @@ struct Cost {
     frozen: u64,
     memo_hits: u64,
     wall_us: u64,
+}
+
+/// Whether `e` is a glvalue ([basic.lval]/1).
+fn is_glvalue(ast: &Ast, e: ExprId) -> bool {
+    ast.exprs.get(e).value_category().is_glvalue()
 }

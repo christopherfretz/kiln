@@ -211,7 +211,8 @@ impl Oven {
         fb: u32,
     ) -> Result<ConstValueId, EvalFailure> {
         let void_ok = std::mem::take(&mut self.void_next);
-        let f = self.compile_thunk(b, e, object);
+        let addr = std::mem::take(&mut self.addr_next);
+        let f = self.compile_thunk(b, e, object, addr);
         self.let_pending.clear();
         self.exec(b, f, fb)?;
         let v = self.regs[fb as usize];

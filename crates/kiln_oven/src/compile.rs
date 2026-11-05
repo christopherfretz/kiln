@@ -385,21 +385,28 @@ impl Oven {
 
     /// Compiles a top-level thunk evaluating `e`: a scalar result in
     /// register 0, or the address of the result object (whose origin is
-    /// `object`, else a temporary) in register 0.
+    /// `object`, else a temporary) in register 0. With `addr` (a glvalue
+    /// immediate invocation, [`Oven::evaluate`]), the address of the
+    /// entity glvalue `e` designates, as for a reference's initializer.
     pub(crate) fn compile_thunk(
         &mut self,
         b: &mut dyn SemaBridge,
         e: ExprId,
         object: Option<DeclId>,
+        addr: bool,
     ) -> u32 {
         let root = self.srcloc_root.take();
         if let Some(at) = root {
-            if let Some(&f) = self.thunks_at.get(&(e, at)) {
+            if let Some(&f) = self.thunks_at.get(&(e, at, addr)) {
                 return f;
             }
-        } else if let Some(&f) = self.thunks.get(&e)
-            && (object.is_none() || self.funcs[f as usize].decl.is_none())
-        {
+        } else if let Some(&f) = self.thunks.get(&(e, object, addr)) {
+            // Keyed by the object too: a variable's initializer compiles
+            // differently from a fold of the same expression (a
+            // reference's binds its referent's address where the fold
+            // reads its value; extended temporaries are the variable's).
+            // A fold first (sema's check of an initializer's immediate
+            // invocations) must not answer for the initialization (WP-640).
             return f;
         }
         let idx = self.funcs.len() as u32;
@@ -415,19 +422,26 @@ impl Oven {
             this_ty: None,
             base_obj: false,
         });
+        let glvalue = b.ast().exprs.get(e).value_category().is_glvalue();
+        let ref_ty = match object.filter(|&d| is_reference_var(b.ast(), d)) {
+            // A reference's initializer: the address of its referent.
+            Some(d) => Some(b.ast().decls.get(d).ty().unwrap_or(QualType::INT)),
+            // A glvalue immediate invocation: the address it designates.
+            None if addr && glvalue && object.is_none() => {
+                let q = b.ast().exprs.get(e).ty();
+                b.lvalue_ref_to(q)
+            }
+            None => None,
+        };
         let mut c = Compiler::new(self, b);
         c.srcloc = root;
         let entry = c.here();
         let ty = c.ety(e);
-        let glvalue = c.b.ast().exprs.get(e).value_category().is_glvalue();
         if let Some(d) = object {
             c.begin_static_extended(e, d);
         }
 
-        let ref_object = object.filter(|&d| is_reference_var(c.b.ast(), d));
-        let ret = if let Some(d) = ref_object {
-            // A reference's initializer: the address of its referent.
-            let q = c.b.ast().decls.get(d).ty().unwrap_or(QualType::INT);
+        let ret = if let Some(q) = ref_ty {
             let rt = c.ty(q);
             let r = c.reg();
             c.bind_ref(e, r);
@@ -473,8 +487,8 @@ impl Oven {
         f.nregs = nregs;
         f.ret = ret;
         match root {
-            Some(at) => self.thunks_at.insert((e, at), idx),
-            None => self.thunks.insert(e, idx),
+            Some(at) => self.thunks_at.insert((e, at, addr), idx),
+            None => self.thunks.insert((e, object, addr), idx),
         };
         idx
     }
@@ -2869,7 +2883,9 @@ impl Compiler<'_> {
             ExprKind::SourceLocExpr => self.source_loc(e, dst),
             ExprKind::ConstantExpr => {
                 let ast = self.ast();
-                let cv = ast.exprs.constant_value(e);
+                // A glvalue's value is the address it designates
+                // (`Oven::evaluate`, WP-640), not a value of its type.
+                let cv = ast.exprs.constant_value(e).filter(|_| !n.value_category().is_glvalue());
                 let scalar = cv.and_then(|c| ast.consts.scalar(c));
                 let v = scalar.as_ref().and_then(scalar_bits);
                 let ptr = matches!(scalar, Some(Scalar::Pointer { .. }));

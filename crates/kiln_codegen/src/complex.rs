@@ -126,6 +126,11 @@ impl Cg<'_> {
                 self.end_scope(sc);
                 r
             }
+            // A glvalue's value is the address it designates (WP-640).
+            ExprKind::ConstantExpr if self.is_glvalue(e) && self.immediate_value(e).is_some() => {
+                let lv = self.emit_lvalue(e)?;
+                Ok(self.cx_load(lv.addr, lv.q, ign))
+            }
             ExprKind::ConstantExpr => match self.immediate_value(e) {
                 Some(c) => self.cx_const(c, q).map(|(r, i)| (Some(r), Some(i))),
                 None => self.emit_cx(ast.exprs.operand(e), ign),
