@@ -2172,6 +2172,27 @@ member access looks its field up by declaration
 `Types::footprint`, which `Oven::footprint` includes
 (`bench/oven/wide-struct-store.cpp`, `wide-struct-read.cpp`).
 
+**Path cache (WP-644).** The walks from an allocation's root to the
+object an access designates (`union_path`, `mutable_path`,
+`place_in_unions`) take their memory-independent steps from
+`Types::hop(walk, t, off, p)`: from record `t` toward the object of type
+`p` at byte `off` of it, the member each level descends into (by that
+walk's rule above), up to the first array (`Hop::Array`, whose index the
+walk computes), the first union (`Hop::Union`, with a mask of the members,
+among the first 64, that may hold the object by the walk's rule), the
+object (`Reached`), a `mutable` member (`mutable_path` only) or the end of
+the path (`Stop`). The walk still reads the union's active member and
+possibly-active members from memory at every access and picks among the
+mask's members exactly as before, so no active-member answer is cached;
+the diagnostics of a member that no possibly-active one holds are composed
+uncached. `Types::extent` and `Types::has_subobject` strip leading arrays
+by arithmetic and cache their answer per (record, offset, type). The
+cache lives in `Types`; each of its three maps holds at most
+`PATH_CACHE_MAX` (`crates/kiln_oven/src/ty/path.rs`, 16,384) entries and
+is cleared by the insert past that, and all three are cleared when a
+provisional class slot is rebuilt in place (`Types::refresh`). It is part
+of `Types::footprint`, which `Oven::footprint` includes.
+
 **Static members and function lvalues (WP-207).** `E.m`/`E->m` naming a
 static data member evaluates `E` for its side effects only
 ([expr.ref]/7.1, clang's `VisitIgnoredBaseExpression`; a null `E->m` is

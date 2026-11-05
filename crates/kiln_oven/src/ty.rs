@@ -12,6 +12,10 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::SemaBridge;
 
+mod path;
+
+pub(crate) use path::{Hop, Walk, alt_members};
+
 /// A type in the Oven's table.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub(crate) struct OTy(pub u32);
@@ -173,6 +177,9 @@ pub(crate) struct Types {
     /// The index in its record's fields of each member (not base) of a
     /// record with an offset index ([`Types::field_index`]).
     member_idx: FxHashMap<DeclId, u32>,
+    /// The subobject path cache (WP-644, [`path`]): memoized
+    /// memory-independent walk steps, bounded by [`PATH_CACHE_MAX`].
+    paths: path::PathCache,
 }
 
 /// Records with fewer fields are scanned linearly ([`Types::near`]).
@@ -405,6 +412,7 @@ impl Types {
             + cap(&self.idx_order)
             + cap(&self.idx_reach)
             + map(&self.member_idx)
+            + self.paths.footprint()
     }
 
     /// The class type `t` is a view of: the complete class of a
@@ -494,7 +502,7 @@ impl Types {
             f.width.is_none()
                 && off >= f.offset
                 && off < f.offset + self.size(f.ty).max(1)
-                && self.has_subobject(f.ty, off - f.offset, p)
+                && self.subobject_in(f.ty, off - f.offset, p)
         };
         if at.as_ref().is_some_and(reach) {
             return at;
@@ -991,6 +999,9 @@ impl Types {
         // Reserve the slot first so self-referential pointers terminate.
         let me = match slot {
             Some(t) => {
+                // The slot's layout changes from `Opaque`: walks cached
+                // through it are stale.
+                self.paths.clear();
                 let i = &mut self.infos[t.0 as usize];
                 (i.size, i.align) = (size, align.max(1));
                 t
@@ -1153,10 +1164,20 @@ impl Types {
     /// element (treated as an array of one, [expr.add]/4).
     pub fn extent(&self, root: OTy, off: u64, past: bool, p: OTy) -> Option<(u64, u64, bool)> {
         let o = if past { off.checked_sub(1)? } else { off };
-        self.extent_in(root, 0, o, p)
+        self.extent_in(root, 0, o, p, true)
     }
 
-    fn extent_in(&self, mut t: OTy, mut base: u64, o: u64, p: OTy) -> Option<(u64, u64, bool)> {
+    /// [`Types::extent`] of the object at byte `o` below byte `base`
+    /// (of type `t`); with `cache`, the first record on the way is looked
+    /// up in the path cache (its own walk below is not).
+    fn extent_in(
+        &self,
+        mut t: OTy,
+        mut base: u64,
+        o: u64,
+        p: OTy,
+        cache: bool,
+    ) -> Option<(u64, u64, bool)> {
         loop {
             match self.kind(t) {
                 TyKind::Array { elem, n } => {
@@ -1182,6 +1203,9 @@ impl Types {
                 // containing the byte is tried in turn. A zero-size
                 // member (`char pad[0]`) only when no sized one holds
                 // the object: it overlaps the next member's first byte.
+                TyKind::Record { .. } if cache => {
+                    return self.extent_cached(t, o - base, p).map(|(s, n, e)| (s + base, n, e));
+                }
                 TyKind::Record { .. } => {
                     let rel = o - base;
                     for sized in [true, false] {
@@ -1192,7 +1216,7 @@ impl Types {
                             }
                             if rel >= f.offset
                                 && rel < f.offset + sz.max(1)
-                                && let Some(r) = self.extent_in(f.ty, base + f.offset, o, p)
+                                && let Some(r) = self.extent_in(f.ty, base + f.offset, o, p, false)
                             {
                                 return Some(r);
                             }
@@ -1228,24 +1252,48 @@ impl Types {
         self.empty_bases.get(&t).map_or(&[], Vec::as_slice)
     }
 
-    pub fn has_subobject(&self, root: OTy, off: u64, p: OTy) -> bool {
+    pub fn has_subobject(&self, mut root: OTy, mut off: u64, p: OTy) -> bool {
+        // The leading arrays by index arithmetic, then the first record
+        // through the path cache (WP-644).
+        loop {
+            if off == 0 && self.same_class(p, root) {
+                return true;
+            }
+            match self.kind(root) {
+                TyKind::Array { elem, n } => {
+                    let es = self.size(elem);
+                    if es == 0 || off / es >= n {
+                        return false;
+                    }
+                    off %= es;
+                    root = elem;
+                }
+                TyKind::Record { .. } => return self.subobject_cached(root, off, p),
+                _ => return false,
+            }
+        }
+    }
+
+    /// [`Types::has_subobject`], uncached.
+    pub(crate) fn subobject_in(&self, root: OTy, off: u64, p: OTy) -> bool {
         if off == 0 && self.same_class(p, root) {
             return true;
         }
         match self.kind(root) {
             TyKind::Array { elem, n } => {
                 let es = self.size(elem);
-                es != 0 && off / es < n && self.has_subobject(elem, off % es, p)
+                es != 0 && off / es < n && self.subobject_in(elem, off % es, p)
             }
             TyKind::Record { .. } => {
                 self.near(root, off).any(|f| {
                     f.width.is_none()
                         && off >= f.offset
                         && off < f.offset + self.size(f.ty).max(1)
-                        && self.has_subobject(f.ty, off - f.offset, p)
-                }) || self.empty_bases.get(&root).is_some_and(|v| {
-                    v.iter().any(|&(b, o)| o == off && self.has_subobject(b, 0, p))
-                })
+                        && self.subobject_in(f.ty, off - f.offset, p)
+                }) || self
+                    .empty_bases
+                    .get(&root)
+                    .is_some_and(|v| v.iter().any(|&(b, o)| o == off && self.subobject_in(b, 0, p)))
             }
             _ => false,
         }
