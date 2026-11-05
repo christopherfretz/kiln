@@ -38,7 +38,7 @@ panic and never silently wrong IR.
   true in it; a `constexpr` variable sema already evaluated
   (`VarEvalState::Value`) keeps that value instead, since only sema's
   bridge runs reflection intrinsics (`constexpr bool b = type_of(R) ==
-  ^^int;` in an emitted body; WP-485, spec/reflection.md §8.3); the other foldable initializers (local `const` arrays,
+  ^^int;` in an emitted body; WP-485); the other foldable initializers (local `const` arrays,
   records and references) use `try_fold`, where it is false (WP-063,
   matching clang's IR). When that constant initialization fails, a
   scalar initializer (arithmetic, enum, pointer or member pointer type)

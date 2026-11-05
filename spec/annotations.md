@@ -213,25 +213,26 @@ pins `evaluations`, `steps`, `calls`, `allocs`, `peak_bytes`,
 1. Base-specifier annotations: `unsupported` at
    `crates/kiln_sema/src/class/mod.rs:243`; needs a `(class, base index)`
    key in `AnnotArena`.
-2. Parameter annotations across redeclarations (Note 1, Example 1) and
-   the variable-vs-parameter split: M6-09 query work over `of_decl` of
-   each declaration's parameter.
+2. *Resolved (WP-478).* Parameter annotations across redeclarations
+   (Note 1, Example 1): `annotations_of` of a parameter lists the
+   parameter's annotations in every declaration of the function
+   (spec/reflection-members.md §5).
 3. A pattern parameter pack (`Ts... xs`) whose annotations would expand
    to several parameters is not substituted
    (`annotated_param_pairs`, `crates/kiln_sema/src/annot.rs`: counts must
    match).
 4. A pointer to a string literal (`[[="abc"]]`) is accepted; it is not a
    valid template argument ([temp.arg.nontype]/6.2), so
-   `reflect_constant` throws and the annotation should be ill-formed. The
-   same gap exists for NTTPs (`X<"abc">` is accepted); fix both in the
+   `reflect_constant` throws and the annotation should be ill-formed
+   (GCC 16.1 accepts it too). The same gap exists for NTTPs (`X<"abc">` is accepted); fix both in the
    template-argument check.
 5. Annotations on a parameter of a function-pointer or function-type
    declarator chunk, and on a lambda's parameters, are accepted and kept
    on the parameter; whether a lambda parameter is a "function parameter"
    for /1 is for M6-09 to settle with the query.
-6. Pending lazy annotations are never flushed: a specialization that is
-   never referenced shows none, so the M6-09 queries must call
-   `require_annotations`.
+6. *Resolved (WP-478).* Pending lazy annotations are never flushed: a
+   specialization that is never referenced shows none, so the queries
+   call `require_annotations` first (spec/reflection-members.md §5).
 7. Attributes after a label's colon are skipped by `skip_attributes`
    (`crates/kiln_parse/src/attr.rs:363`), so annotations there are
    dropped without a diagnostic.
