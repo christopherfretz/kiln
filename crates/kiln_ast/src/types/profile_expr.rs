@@ -76,6 +76,16 @@ pub(crate) struct ProfileScratch {
     stack: Vec<Work>,
 }
 
+/// Reusable buffers for [`Ast::exprs_equivalent_in`]: the two profiles
+/// and the walk stack, so a caller that compares often allocates only
+/// while they grow.
+#[derive(Debug, Default)]
+pub struct EquivScratch {
+    a: Vec<u32>,
+    b: Vec<u32>,
+    stack: Vec<Work>,
+}
+
 /// The tag word of a node of kind `k` with per-kind detail `extra`
 /// (< 2^16).
 fn tag(k: K, extra: u32) -> u32 {
@@ -130,7 +140,19 @@ impl Ast {
     /// True if `a` and `b` are equivalent ([temp.over.link]/5): their
     /// profiles are equal.
     pub fn exprs_equivalent(&self, a: ExprId, b: ExprId) -> bool {
-        a == b || self.expr_profile_words(a) == self.expr_profile_words(b)
+        self.exprs_equivalent_in(a, b, &mut EquivScratch::default())
+    }
+
+    /// [`Ast::exprs_equivalent`] profiling into the buffers of `s`.
+    pub fn exprs_equivalent_in(&self, a: ExprId, b: ExprId, s: &mut EquivScratch) -> bool {
+        if a == b {
+            return true;
+        }
+        s.a.clear();
+        s.b.clear();
+        self.profile_walk(a, &mut s.a, &mut s.stack);
+        self.profile_walk(b, &mut s.b, &mut s.stack);
+        s.a == s.b
     }
 
     fn profile_walk(&self, root: ExprId, out: &mut Vec<u32>, stack: &mut Vec<Work>) {

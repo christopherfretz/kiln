@@ -27,6 +27,7 @@ mod node;
 mod print;
 mod profile;
 mod profile_expr;
+pub use profile_expr::EquivScratch;
 
 pub use args::{ArgKind, ArgView, TemplateArg};
 pub use context::{

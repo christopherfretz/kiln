@@ -738,6 +738,8 @@ pub struct Sema<'a, 'sm> {
     /// [`Sema::walk_stack`] for the implicit-conversion walk, whose work
     /// items carry the context location.
     pub(crate) conv_walk_stack: Vec<(ExprId, Loc)>,
+    /// The reused buffers of [`Sema::exprs_equivalent`] (WP-645).
+    pub(crate) equiv_scratch: std::cell::RefCell<kiln_ast::types::EquivScratch>,
     /// Delegating constructors and their targets, checked for cycles at
     /// the end of the translation unit ([class.base.init]/6).
     pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
@@ -1141,6 +1143,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             synth_noted: std::cell::Cell::new(0),
             walk_stack: std::cell::RefCell::new(Vec::new()),
             conv_walk_stack: Vec::new(),
+            equiv_scratch: std::cell::RefCell::default(),
             delegating: Vec::new(),
             ctor_entity: None,
             ctor_diag_ty: None,

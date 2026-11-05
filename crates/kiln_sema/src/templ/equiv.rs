@@ -33,7 +33,13 @@ impl Sema<'_, '_> {
         } else {
             (m.get(&a).copied().unwrap_or(a), m.get(&b).copied().unwrap_or(b))
         };
-        a == b || self.ast.exprs_equivalent(a, b)
+        if a == b {
+            return true;
+        }
+        let mut s = self.equiv_scratch.take();
+        let r = self.ast.exprs_equivalent_in(a, b, &mut s);
+        self.equiv_scratch.replace(s);
+        r
     }
 
     /// [`Self::exprs_equivalent`] over optional expressions: both absent,
