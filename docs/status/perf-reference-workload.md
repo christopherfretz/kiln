@@ -548,7 +548,7 @@ share of the named profile that the work could remove.
 | F6 | **Done (WP-645).** Box the Oven inside `Sema` | kiln_sema `oven_bridge.rs` `with_oven` (`Option<Oven>` moved by value) | 414 Ir of `memcpy` per call, 4.6 M calls in R3 | About 1.8% of R3, about 1% of R1 | Low | S |
 | F7 | Fewer redeclaration-chain walks | kiln_ast `DeclArena::redecl`, `Ast::first`; kiln_sema `template_redecl` | 6.8% of R1, 4.4% of R3, 3.6% of R2; 60–150 M calls | 3–5% | Low–medium | M |
 | F8 | Cheaper `TypeContext::view` / `canonical_view` | kiln_ast `types` | 4–6% self, 190 M calls in R3 | 2–3% | Low | S–M |
-| F9 | Faster interpreter dispatch in safe Rust | kiln_oven `vm.rs` `run_loop` | 18.3% of R2, 24.8% of S7 | 5–10% of R2 | Medium | M–L |
+| F9 | **Partly done (WP-648):** dispatch Ir per instruction −16% to −25% on the Oven shapes, `churn-vector` 9–12% faster, S7 unchanged (it is not dispatch-bound); what remains is in "WP-648: interpreter dispatch". Faster interpreter dispatch in safe Rust | kiln_oven `vm.rs` `run_loop` | 18.3% of R2, 24.8% of S7 | 5–10% of R2 | Medium | M–L |
 | F10 | Copy the init-bit map a word at a time | kiln_oven `mem.rs` `Memory::copy` | `set_bits` is 2.8% of R2 | About 2% of R2 | Low | S |
 | F11 | **Done (landed WP-644).** Cache subobject and union paths | kiln_oven `ty/path.rs` `Types::hop`, `vm.rs` `union_path`, `mutable_path`, `place_in_unions`, `extent_of`, `Types::has_subobject` | 9% of S7, about 3% of R2. Measured before the cache: 794,167 `union_path` walks over 21 distinct keys at S7 N = 40, about 7% of S7's instructions. After it: the walks' self cost at S7 N = 8 halves (96.8 M to about 52 M Ir) and S7 is 2.6% faster, with peak RSS unchanged ("WP-644: subobject path cache"). What remains is the per-access hash lookups (`vm.rs:2488` `union_path`, `ty/path.rs:144` `Types::hop`) | 3–6% of S7 (measured 2.6–3.7%) | Medium | M |
 | F12 | **Done (WP-645).** Compute node accounting lazily | kiln_sema `templ/stack.rs` push/pop; kiln_ast `node_live_bytes` | About 1–1.2% and 3 M allocations in R3 | About 1% | Low | S |
@@ -1402,3 +1402,154 @@ The plan is three commits, each measured with the same cachegrind runs:
 (A) the fetch window and the padding, (B) the cold arms out of line, and
 (C) the in-place `JmpIfNot+Step` and `ICmp+JmpIfNot` fusion, only if A
 and B leave the Oven shapes short of −25%.
+
+### Per-step results
+
+Each step is one commit on `wp/648`, measured with the cachegrind runs
+above. "Dispatch Ir" is `run_loop` self Ir plus, from step B on, the
+self Ir of `run_cold` (the out-of-line cold arms), per executed
+instruction. The instruction counts are main's, which the steps do not
+change (`op-stats` counts a fused instruction as executed).
+
+| shape | main | A: window | B: cold arms | C: fusion | D: `Step` fusion | E: frame borrow | G: borrowed window | change |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| `sieve-nohdr` | 54.5 | 47.5 | 44.5 | 41.9 | 41.2 | 40.8 | 40.9 | −25.0% |
+| `sort-nohdr` | 74.8 | 67.0 | 64.3 | 63.6 | 62.8 | 62.2 | 62.9 | −15.9% |
+| `table-nohdr` | 55.0 | 47.0 | 44.3 | 43.1 | 42.3 | 41.9 | 42.2 | −23.3% |
+| `virtual-dispatch` | 69.4 | 61.5 | 58.9 | 57.8 | 56.9 | 56.5 | 57.1 | −17.7% |
+| `churn-vector` | 66.9 | 58.1 | 55.2 | 54.3 | 53.9 | 53.4 | 53.8 | −19.6% |
+| S7 | 66.8 | 59.6 | 57.5 | 57.0 | 55.9 | 55.7 | 56.5 | −15.4% |
+
+Step F (the padding reclaim) does not touch `run_loop` and has no column.
+Program Ir, main → G: `sieve-nohdr` 171.2 M → 142.6 M (−16.7%),
+`sort-nohdr` 460.0 M → 412.1 M (−10.4%), `table-nohdr` 907.9 M →
+746.7 M (−17.8%), `virtual-dispatch` 279.2 M → 245.3 M (−12.1%),
+`churn-vector` 14.85 G → 13.10 G (−11.8%), S7 6.254 G → 6.118 G (−2.2%).
+
+- **A, the fetch window** (−7 to −9 Ir). One checked read of
+  `[u32; 8]` per instruction (`kbc::window`); every compiled unit is
+  padded with 7 `Nop` words so the read always fits.
+- **B, cold arms out of line** (−2 to −3 Ir). 48 opcodes moved into
+  `#[inline(never)] Vm::run_cold`. With a wildcard arm the gain was under
+  0.5%: the `match` then needed a second range check. Naming the cold
+  opcodes in one arm keeps a single jump table. `run_loop` shrank from
+  51.7 KB to 13.1 KB of machine code (13.6 KB after E; `run_cold` is
+  22.0 KB).
+- **C, in-place fusion** (−0.7 to −2.6 Ir). `Mov+Mov`,
+  `JmpIfNot+Step` and `ICmp+JmpIf`/`ICmp+JmpIfNot`. The encoding does
+  not change (spec/oven.md "Dispatch").
+- **D, `Step` fusion** (−0.4 to −1.1 Ir). `Step+Mov` and `Step+Const`,
+  the commonest pairs on S7 after C's.
+- **E, frame borrow** (−0.4 to −0.6 Ir). The pure register arms index
+  a local `&mut self.regs[fb..]`, so the `Vec`'s base and length are not
+  reloaded after each store. The design note rejected this as worth
+  only a few Ir on `Mov`; measured, it is half an Ir, kept because it
+  costs nothing.
+- **F, padding reclaim** (no Ir change). A put 7 `Nop` words after every
+  unit: on S7, 19,867 units × 28 B = 556 KB of stream, +1.1% peak RSS in
+  the first A/B. The next unit now truncates the previous unit's padding
+  before its first word (`kbc::unpad`), so only the end of the stream is
+  padded: 28 bytes in all, against main's stream.
+- **G, borrowed window** (+0.1 to +0.8 Ir; −12% wall on
+  `churn-vector`). The first A/B found `churn-vector` 2.3% *slower* than
+  main at E despite 20% fewer dispatch Ir. Timing each step's binary
+  placed the regression at A (main 680 ms, A 715 ms). The copied
+  `[u32; 8]` was spilled to the stack (`ldp`/`stp`) and every operand
+  read loaded it back, so each operand went through a store-to-load
+  forward on the critical path of the next dispatch. `run_loop` now
+  borrows the window in place (`kbc::window_ref`), and `run_cold` fetches
+  its own instead of taking `run_loop`'s, so no window has its address
+  taken; the dispatch head is one `ldr` of the op word from the stream.
+  Four arms that call `&mut self` methods hoist their destination index
+  first. G costs a few tenths of an Ir (some operand addresses are
+  recomputed from the stream pointer) and is kept for the wall time.
+
+On S7, 3.5 of the 55.7 Ir are `run_cold`: `VoidCast`, `Placement`,
+`SetActive` and `PushCleanup` (3.4% of S7's instructions). Each of those
+arms calls a memory or union walk that costs far more than the call, so
+moving them back would gain under 1 Ir and grow `run_loop` again.
+
+### A/B
+
+Main (8b6f177ea) against the branch head, alternating: 3 pairs, each the
+median of 5 runs, `/usr/bin/time -f '%e %M'`. The binaries are release
+`kiln++` builds from the same toolchain. `s7`, `s8` and
+`templates_wide` are `-fsyntax-only`; `accessor-wide-emit` is `-c -O2`.
+
+| shape | main wall (s) | branch wall (s) | wall | main RSS (KB) | branch RSS (KB) | RSS | pair walls main / branch |
+|---|--:|--:|--:|--:|--:|--:|---|
+| `sieve-nohdr` | 0.01 | 0.01 | +0.0% | 11,980 | 12,144 | +1.37% | 0.01 0.01 0.01 / 0.01 0.01 0.01 |
+| `sort-nohdr` | 0.02 | 0.02 | +0.0% | 12,216 | 12,176 | −0.33% | 0.03 0.02 0.02 / 0.02 0.03 0.02 |
+| `table-nohdr` | 0.05 | 0.04 | −20.0% | 12,616 | 12,680 | +0.51% | 0.05 0.05 0.05 / 0.04 0.04 0.04 |
+| `virtual-dispatch` | 0.02 | 0.02 | +0.0% | 12,344 | 12,416 | +0.58% | 0.02 0.02 0.02 / 0.02 0.02 0.02 |
+| `churn-vector` | 0.64 | 0.58 | −9.4% | 12,472 | 12,352 | −0.96% | 0.65 0.64 0.64 / 0.58 0.57 0.58 |
+| `fib` | 0.01 | 0.00 | — | 12,052 | 11,888 | −1.36% | 0.01 0.01 0.00 / 0.00 0.00 0.00 |
+| `s7` | 0.50 | 0.50 | +0.0% | 46,712 | 46,680 | −0.07% | 0.52 0.50 0.50 / 0.50 0.50 0.50 |
+| `s8` | 0.61 | 0.61 | +0.0% | 66,472 | 66,156 | −0.48% | 0.64 0.61 0.61 / 0.61 0.62 0.61 |
+| `templates_wide` | 0.25 | 0.25 | +0.0% | 63,788 | 63,676 | −0.18% | 0.26 0.25 0.25 / 0.25 0.25 0.25 |
+| `accessor-wide-emit` | 118.68 | 118.63 | −0.0% | 652,332 | 652,472 | +0.02% | 118.68 118.40 118.74 / 118.57 118.73 118.63 |
+
+`/usr/bin/time` resolves 10 ms, too coarse for the small Oven shapes, so
+those were also timed with `perf_counter` (3 pairs, each the median of 11
+runs; ms):
+
+| shape | main | branch | change | pair medians main / branch |
+|---|--:|--:|--:|---|
+| `sieve-nohdr` | 20.3 | 20.6 | +1.4% | 20.3 20.1 20.4 / 20.6 20.3 20.7 |
+| `sort-nohdr` | 38.2 | 37.9 | −1.0% | 38.7 38.2 38.2 / 39.0 37.7 37.9 |
+| `table-nohdr` | 74.2 | 72.9 | −1.7% | 71.8 74.2 74.4 / 72.9 73.3 72.5 |
+| `virtual-dispatch` | 38.8 | 38.6 | −0.7% | 38.8 39.3 38.7 / 37.9 39.4 38.6 |
+| `churn-vector` | 694.5 | 608.1 | −12.4% | 718.2 688.8 694.5 / 584.1 608.1 616.2 |
+| `fib` | 11.1 | 11.1 | +0.3% | 11.1 10.9 19.3 / 11.1 11.3 11.1 |
+
+- **Wall.** `churn-vector`, the one Oven shape whose time is mostly
+  evaluation, is 9–12% faster. The other Oven shapes spend most of their
+  20–75 ms starting up and parsing: `-fconstexpr-report` puts
+  `sieve-nohdr`'s main evaluation at 9.9 ms on main and 7.0 ms on the
+  branch, under the run-to-run spread of the whole process. S7, S8,
+  `templates_wide` and `accessor-wide-emit` are unchanged.
+- **RSS.** Within ±0.5% from S7 up. The 12 MB shapes move ±164 KB in
+  both directions (`sieve-nohdr` +1.37%, `fib` −1.36%), reproducibly. The
+  Oven's counters (`-fconstexpr-report`: bytes, peak_bytes, peak_arena,
+  frozen_bytes, steps) are identical, and so is the minor-fault count
+  (747 against 743 on `sieve-nohdr`); the difference is how many pages of
+  the binary's text each fault maps, which moves with code layout.
+- **Bytecode.** The encoding is unchanged, and after step F only the end
+  of the stream is padded: 28 bytes more than main, on every program.
+- **Baselines.** `oven/churn-vector` is re-recorded (671.6 ms → 580.8 ms
+  against its 2026-11-03 baseline). The bench flags its RSS, 9.1 MB →
+  12.1 MB (MiB), against that baseline; main is at 12.2 in the A/B above, so
+  the growth is from main since that recording, not from this change. No
+  other entry moved by 5%.
+
+### Targets
+
+| target | result |
+|---|---|
+| `run_loop` self Ir −25% on the Oven shapes | Met on `sieve-nohdr` (−25.0%); `table-nohdr` −23.3%, `churn-vector` −19.6%, `virtual-dispatch` −17.7%, `sort-nohdr` −15.9% |
+| S7 wall −5% | Not met: unchanged. Dispatch is 14.1% of S7's Ir on main (13.2 M instructions × 66.8 Ir), so its −15.4% is −2.2% of S7's Ir |
+| No shape slower beyond noise | Met |
+| RSS up ≤ 1% | Met from S7 up; the 12 MB shapes move ±1.4% in both directions with identical Oven counters (above) |
+| Bytecode growth < +2% of peak on S7/S8 | Met: +28 bytes |
+
+### What remains
+
+- **S7 is not dispatch-bound.** After this change, `run_loop` and
+  `run_cold` self are 12.2% of S7's Ir. The rest of its evaluation time is
+  in the memory model (`Memory::copy`'s init bits, F10; loads and stores
+  through `mem.rs`) and in the cold arms' helpers (`VoidCast`,
+  `Placement`, `SetActive`, `PushCleanup`, 3.8 Ir of the 56.5).
+- **Per-instruction overhead left in `run_loop`.** About 40 Ir per
+  instruction on the leanest shape. What is left is the jump table's
+  range check (`Op` has 90 variants and the `match` cannot prove the byte
+  is below 90 without `unsafe` or a 256-entry enum), a store of the op
+  byte to the stack at every dispatch, and `self.regs` reloads in the arms that call
+  `&mut self` helpers. Removing the range check alone is about 1 Ir.
+- **Wall versus Ir.** On this host, step A lowered dispatch Ir by 13% and
+  made `churn-vector` 5% slower; the cause was a stack round trip, not
+  the instruction count. Later dispatch work should be judged by wall
+  time on an evaluation-bound shape (`churn-vector`), not by cachegrind
+  alone.
+- **Not tried.** Superinstructions with a new encoding (more fused pairs
+  need words the window cannot see), register allocation across
+  instructions, and threaded code (excluded by the brief).
