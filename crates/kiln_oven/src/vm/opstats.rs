@@ -2,7 +2,7 @@
 //! never built by default, so the release interpreter carries no counter).
 //! Every executed instruction counts its opcode and the (previous, this)
 //! pair; the totals print to stderr when the compiling thread exits:
-//! `op-stats: insns=N`, then the top 20 opcodes and the top 10 adjacent
+//! `op-stats: insns=N`, then every executed opcode and the top 20 adjacent
 //! pairs (dynamically consecutive instructions, a call's or a jump's
 //! target included).
 
@@ -34,10 +34,10 @@ impl Drop for Stats {
         pairs.sort_unstable_by(|a, b| b.cmp(a));
         let pct = |c: u64| c as f64 * 100.0 / total as f64;
         let mut s = format!("op-stats: insns={total}\n");
-        for &(c, i) in ops.iter().take(20) {
+        for &(c, i) in &ops {
             let _ = writeln!(s, "op-stats: op {} {c} {:.2}%", name(i), pct(c));
         }
-        for &(c, i) in pairs.iter().take(10) {
+        for &(c, i) in pairs.iter().take(20) {
             let (a, b) = (name(i / N), name(i % N));
             let _ = writeln!(s, "op-stats: pair {a}+{b} {c} {:.2}%", pct(c));
         }

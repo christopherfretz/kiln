@@ -736,17 +736,34 @@ impl Oven {
                     return Err(($f, pc))
                 };
             }
+            // The `Step` whose words are `w` (op word) and `idx` (its
+            // operand), at `at`.
+            macro_rules! step {
+                ($w:expr, $idx:expr, $at:expr) => {
+                    let n = u64::from($w >> 8);
+                    let before = self.run.counters.steps;
+                    if before + n > self.budget.steps {
+                        let i = $idx as usize + (self.budget.steps - before) as usize;
+                        return Err((Fault::Steps(self.step_locs[i]), $at));
+                    }
+                    self.run.counters.steps = before + n;
+                };
+            }
+            // Fused pairs: an arm whose window also holds the next
+            // instruction executes that one too when it is the usual
+            // successor, skipping its dispatch. The encoding is unchanged
+            // (spec/oven.md "Dispatch"): the second instruction is still
+            // there, still a jump target, and reports its own pc.
+            macro_rules! is_next {
+                ($at:expr, $op:ident) => {
+                    win[$at] as u8 == Op::$op as u8
+                };
+            }
             match op {
                 Op::Nop => pc += 1,
                 Op::Halt => return Ok(()),
                 Op::Step => {
-                    let n = u64::from(aux);
-                    let before = self.run.counters.steps;
-                    if before + n > self.budget.steps {
-                        let i = arg!(0) + (self.budget.steps - before) as usize;
-                        fail!(Fault::Steps(self.step_locs[i]));
-                    }
-                    self.run.counters.steps = before + n;
+                    step!(w, arg!(0), pc);
                     pc += 2;
                 }
                 Op::Const => {
@@ -756,14 +773,30 @@ impl Oven {
                 }
                 Op::Mov => {
                     reg!(0) = reg!(1);
-                    pc += 3;
+                    if is_next!(3, Mov) {
+                        #[cfg(feature = "op-stats")]
+                        opstats::count(Op::Mov);
+                        self.regs[fb + win[4] as usize] = self.regs[fb + win[5] as usize];
+                        pc += 6;
+                    } else {
+                        pc += 3;
+                    }
                 }
                 Op::Jmp => pc = arg!(0),
                 Op::JmpIf => {
                     pc = if reg!(0) != 0 { arg!(1) } else { pc + 3 };
                 }
                 Op::JmpIfNot => {
-                    pc = if reg!(0) == 0 { arg!(1) } else { pc + 3 };
+                    if reg!(0) == 0 {
+                        pc = arg!(1);
+                    } else if is_next!(3, Step) {
+                        #[cfg(feature = "op-stats")]
+                        opstats::count(Op::Step);
+                        step!(win[3], win[4], pc + 3);
+                        pc += 5;
+                    } else {
+                        pc += 3;
+                    }
                 }
                 Op::IAdd
                 | Op::ISub
@@ -808,7 +841,14 @@ impl Oven {
                     let o =
                         if aux >> 8 & 1 != 0 { (a as i128).cmp(&(bb as i128)) } else { a.cmp(&bb) };
                     reg!(0) = u128::from(compare(aux >> 9, o));
-                    pc += 4;
+                    if is_next!(4, JmpIfNot) || is_next!(4, JmpIf) {
+                        #[cfg(feature = "op-stats")]
+                        opstats::count(Op::from_u8(win[4] as u8));
+                        let c = self.regs[fb + win[5] as usize] != 0;
+                        pc = if c == is_next!(4, JmpIf) { win[6] as usize } else { pc + 7 };
+                    } else {
+                        pc += 4;
+                    }
                 }
                 Op::ICast => {
                     reg!(0) = canon(reg!(1), aux >> 9 & 0xFF, aux >> 17 & 1 != 0);
