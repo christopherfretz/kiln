@@ -1300,6 +1300,24 @@ impl Substituter<'_, '_, '_> {
         if failed {
             self.sema.ast.decls.set_flags(td, DeclFlags::INVALID);
         }
+        // `typedef enum { } D;` in a template: the instantiated unnamed
+        // tag takes the instantiated typedef's name for linkage purposes
+        // as the pattern's did ([dcl.typedef]/9; clang
+        // `VisitTypedefNameDecl`), so `S<false>::D` mangles as
+        // `N1SILb0EE1DE`, not as the unnamed type `Ut_`.
+        if !failed {
+            let types = &self.sema.ast.types;
+            let tag_of = |q: QualType| types.as_record(q).or_else(|| types.as_enum(q));
+            if let Some(old) = tag_of(u)
+                && self.sema.ast.decls.typedef_for_anon(old) == Some(d)
+                && let Some(new) = tag_of(ty)
+                && new != old
+                && self.sema.ast.decls.get(new).name().is_empty()
+                && self.sema.ast.decls.typedef_for_anon(new).is_none()
+            {
+                let _ = self.sema.ast.decls.set_typedef_for_anon(new, td);
+            }
+        }
         // A typedef's `__attribute__((aligned(N)))` is instantiated with
         // it (clang `InstantiateAttrs`; libc++'s `atomic_ref` names its
         // object as `typedef _Tp _Aligned_Tp
