@@ -162,7 +162,7 @@ impl Sema<'_, '_> {
     /// e.g. a declaration and a using-declaration naming it) collapse to
     /// the later path; an unresolved `using_if_exists` target is dropped
     /// when anything else is found.
-    fn filter(&self, v: Vec<DeclId>, kind: LookupKind) -> Found {
+    fn filter(&self, v: impl IntoIterator<Item = DeclId>, kind: LookupKind) -> Found {
         let mut out = Found::default();
         for raw in v {
             if self.ast.decls.hidden_shadow(raw).is_some() {
@@ -244,7 +244,7 @@ impl Sema<'_, '_> {
     /// WP-068b).
     pub(crate) fn lookup_in_dn(&self, ctx: DeclId, name: DeclName, kind: LookupKind) -> Found {
         let r = self.ast.lookup_local(ctx, name);
-        self.filter(r.iter_ordinary().collect(), kind)
+        self.filter(r.iter_ordinary(), kind)
     }
 
     /// Qualified lookup of `name` in `ctx` ([namespace.qual],
@@ -477,14 +477,15 @@ impl Sema<'_, '_> {
                 }
                 continue;
             }
-            let mut v: Vec<DeclId> = self.ast.lookup_local(entity, dname).iter_ordinary().collect();
+            let local = self.ast.lookup_local(entity, dname);
             if !matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit) {
-                let own = self.filter(v, kind);
+                let own = self.filter(local.iter_ordinary(), kind);
                 if !own.is_empty() {
                     return own;
                 }
                 continue;
             }
+            let mut v: Vec<DeclId> = local.iter_ordinary().collect();
             // [namespace.udir]/2: the members of a nominated namespace
             // appear as if declared in the nearest enclosing namespace of
             // both the directive's scope and the nominated namespace; the
@@ -753,7 +754,7 @@ impl Sema<'_, '_> {
         if barren.0.get(&def).is_some_and(|&d| d <= depth) {
             return Vec::new();
         }
-        let mut own = self.filter(self.ast.lookup_local(def, name).iter_ordinary().collect(), kind);
+        let mut own = self.filter(self.ast.lookup_local(def, name).iter_ordinary(), kind);
         if own.is_empty()
             && self.ast.decls.get(def).name() == name
             && !matches!(kind, LookupKind::All)
