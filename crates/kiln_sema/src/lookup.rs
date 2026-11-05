@@ -485,7 +485,8 @@ impl Sema<'_, '_> {
                 }
                 continue;
             }
-            let mut v: Vec<DeclId> = local.iter_ordinary().collect();
+            // The nominated namespaces' results, after the namespace's own.
+            let mut nominated: Vec<DeclId> = Vec::new();
             // [namespace.udir]/2: the members of a nominated namespace
             // appear as if declared in the nearest enclosing namespace of
             // both the directive's scope and the nominated namespace; the
@@ -496,18 +497,16 @@ impl Sema<'_, '_> {
             while j < dirs.len() {
                 if self.encloses(entity, dirs[j].1) {
                     let (n, _) = dirs.remove(j);
-                    v.extend(self.ast.lookup_local(n, dname).iter_ordinary());
+                    nominated.extend(self.ast.lookup_local(n, dname).iter_ordinary());
                 } else {
                     j += 1;
                 }
             }
             // United with the namespace's own declarations (clang's
-            // `CppNamespaceLookup`).
-            if !v.is_empty() {
-                let found = self.filter(v, kind);
-                if !found.is_empty() {
-                    return found;
-                }
+            // `CppNamespaceLookup`); nothing found filters to nothing.
+            let found = self.filter(local.iter_ordinary().chain(nominated), kind);
+            if !found.is_empty() {
+                return found;
             }
         }
         Found::default()
