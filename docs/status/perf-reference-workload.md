@@ -534,7 +534,7 @@ share of the named profile that the work could remove.
 | F8 | Cheaper `TypeContext::view` / `canonical_view` | kiln_ast `types` | 4–6% self, 190 M calls in R3 | 2–3% | Low | S–M |
 | F9 | Faster interpreter dispatch in safe Rust | kiln_oven `vm.rs` `run_loop` | 18.3% of R2, 24.8% of S7 | 5–10% of R2 | Medium | M–L |
 | F10 | Copy the init-bit map a word at a time | kiln_oven `mem.rs` `Memory::copy` | `set_bits` is 2.8% of R2 | About 2% of R2 | Low | S |
-| F11 | Cache subobject and union paths | kiln_oven `mem.rs` `union_path`, `Types::has_subobject`, `extent_of`, `field_at` | 9% of S7, about 3% of R2 | 3–6% of S7 | Medium | M |
+| F11 | Cache subobject and union paths | kiln_oven `mem.rs` `union_path`, `Types::has_subobject`, `extent_of`, `field_at` | 9% of S7, about 3% of R2. WP-642 (F23) made the scans sublinear for classes of 16 or more fields; S7 and S8 do not move (three A/B pairs, "WP-642: sublinear subobject lookups"), because S7's lookups are many walks over small classes, so this cache is still the lever | 3–6% of S7 | Medium | M |
 | F12 | Compute node accounting lazily | kiln_sema `templ/stack.rs` push/pop; kiln_ast `node_live_bytes` | About 1–1.2% and 3 M allocations in R3 | About 1% | Low | S |
 | F13 | Fewer deduction and candidate attempts | kiln_sema `deduce_spec`, `add_template_candidate`, `deduce_call_arg` | 34–36% inclusive in S8; 9.8 M `deduce_spec` calls in R2; `deduce_call_arg` grows 18x for 4x N in S8 | Unknown; the largest frontend lever | Medium–high | M–L |
 | F14 | Index hidden-friend redeclaration | kiln_sema `act_on_friend` → `overload/redecl.rs` `pick_prev_function` | 11.5% of S8 at N=400 and growing 13–19x for 4x N. Not seen in the reference. | Removes S8's quadratic term | Low | S–M |
@@ -712,8 +712,8 @@ Follow-ups:
 |---|---|---|---|---|---|---|
 | F20 | **Done (WP-641): outlining.** Keep the registration function small: emit each binding full-expression's EH cleanups so that landing pads and temporaries' allocas are shared or scoped (`lifetime.start`/`end` per full-expression), or outline very large straight-line bodies | kiln_codegen `outline.rs` (`Cg::emit_stmt_list`, called by `stmt.rs` `emit_compound_without_scope`) | JumpThreading and MemCpyOpt are 92% of `opt`, on one function with 6,455 landing pads and 10,762 allocas. Phase 1 below: landing-pad sharing and lifetime scoping change neither pass; only outlining removes both | Measured: `-c` from about 265 s to about 37 s, RSS unchanged ("WP-641: shrinking the registration function") | High: must stay identical in behaviour, EH order and ABI | L |
 | F21 | Measured per-function guard in the driver pipeline | kiln_driver `codegen_cmd.rs:617` `ir_passes` | The knob run above gave no win; a guard would have to skip or bound JumpThreading/MemCpyOpt on functions above a size threshold, measured against code quality | Bounded by the JumpThreading share | Medium: diverges from clang's `-O2` | S |
-| F22 | Report the super-linearity upstream | LLVM `JumpThreading`, `MemCpyOpt`, LICM in LLVM 22 | Both clang and kiln IR hit it. A reduced synthetic reproducer is the reproducer above. | Long term | None | S |
-| F23 | Sublinear subobject lookups in the Oven | kiln_oven `ty.rs:1074` `has_subobject`, `ty.rs:308` `field_at`, `ty.rs:1102` `has_bit_unit`, `vm.rs:2475` `union_path` | Linear field scans per store. A constexpr struct whose members hold a union goes from 0.08 s to 0.25 s when its members double from 1,024 to 2,048, which is quadratic. Fields are offset-sorted, so `partition_point` applies. | Removes the quadratic term for wide constexpr classes | Low | S–M |
+| F22 | Report the super-linearity upstream. **Issue text written (WP-642), not filed:** `docs/status/upstream/llvm-jumpthreading-memcpyopt.md` | LLVM `JumpThreading`, `MemCpyOpt`, LICM in LLVM 22 | Both clang and kiln IR hit it. A reduced synthetic reproducer is the reproducer above. Clang 19's own IR for `bench/frontend/registration-wide-obj.cpp` reproduces the JumpThreading term (3.8 / 18.8 / 117.9 s at 1,000 / 2,000 / 4,000 bindings), not the MemCpyOpt one. | Long term | None | S |
+| F23 | **Done (WP-642): `Types::near` offset index.** Sublinear subobject lookups in the Oven | kiln_oven `ty.rs:1074` `has_subobject`, `ty.rs:308` `field_at`, `ty.rs:1102` `has_bit_unit`, `vm.rs:2475` `union_path` | Linear field scans per store. A constexpr struct whose members hold a union goes from 0.08 s to 0.25 s when its members double from 1,024 to 2,048, which is quadratic. Fields are offset-sorted, so `partition_point` applies. Measured: `bench/oven/wide-struct-store.cpp` 3.45 s to 0.55 s at 16,384 members, exponent 1.75 to 1.00 ("WP-642: sublinear subobject lookups"). Remaining linear scans: `notes.rs:1371` `union_field_at` (diagnostic notes only) and the `empty_bases` scan at `ty.rs:1246` in `has_subobject`. | Removes the quadratic term for wide constexpr classes | Low | S–M |
 
 F11 above (cache subobject and union paths) overlaps F23. F23 is the
 narrower form, which needs no cache.
@@ -799,3 +799,81 @@ unoptimised IR is about 15.7 s (the `-emit-llvm` runs above), and the
 rest is `opt` and `llc` over the whole module. The standalone `opt`
 times in the phase-1 tables include parsing textual IR and `-time-passes`,
 so they do not add up to these times.
+
+## WP-642: sublinear subobject lookups
+
+F23 above. Every by-offset lookup into a class now goes through
+`Types::near` (`crates/kiln_oven/src/ty.rs`), an offset index built once
+per record with at least 16 fields, so a store into a wide class no
+longer scans its members (spec/oven.md "Offset index",
+spec/landed/oven/WP-642.md).
+
+### The shapes
+
+- `bench/oven/wide-struct-store.cpp`: a constexpr struct of N members,
+  each holding a two-member union. Every member is stored through each
+  union member in turn (16 rounds), then read back. Each store walks the
+  union path to the member, which was a linear scan per store.
+- `bench/oven/wide-struct-read.cpp`: N members without a union, each
+  stored once and then read 1,024 times. No union activity.
+
+N is `1 << WIDE_LOG2`, so k = 12 is 4,096 members, the recorded size.
+The numbers are `-fsyntax-only -fconstexpr-steps=900000000`, wall time
+and peak RSS from `/usr/bin/time`, two back-to-back main/branch pairs
+per size, one process at a time (main is d642a3689).
+
+| shape | k (N) | main pair 1 | branch pair 1 | main pair 2 | branch pair 2 |
+|---|---|---:|---:|---:|---:|
+| store | 12 (4,096) | 0.35 s, 31,796 KB | 0.16 s, 33,580 KB | 0.32 s, 31,820 KB | 0.14 s, 31,736 KB |
+| store | 13 (8,192) | 1.02 s, 52,784 KB | 0.28 s, 52,656 KB | 1.03 s, 52,788 KB | 0.27 s, 50,824 KB |
+| store | 14 (16,384) | 3.45 s, 90,636 KB | 0.55 s, 89,920 KB | 3.44 s, 91,820 KB | 0.55 s, 92,288 KB |
+| read | 12 (4,096) | 0.33 s, 30,088 KB | 0.33 s, 29,956 KB | 0.34 s, 30,084 KB | 0.33 s, 29,812 KB |
+| read | 13 (8,192) | 0.68 s, 47,444 KB | 0.65 s, 47,400 KB | 0.70 s, 48,072 KB | 0.64 s, 47,392 KB |
+| read | 14 (16,384) | 1.48 s, 84,376 KB | 1.29 s, 85,692 KB | 1.49 s, 85,656 KB | 1.31 s, 84,656 KB |
+
+Growth exponents per doubling (means of the pairs):
+
+- store, main: 1.61 and 1.75. Branch: 0.87 and 1.00.
+- read, main: 1.04 and 1.11. Branch: 0.97 and 1.01.
+
+So the union path was the quadratic one, as F23 said. The read shape was
+already close to linear and gains 12% at k = 14. At 16,384 members the
+store shape is 6.3x faster. Peak RSS does not change: the index is 12
+bytes per field of an indexed record plus one map entry per member,
+against about 5 KB of RSS per member that both binaries spend.
+
+Two terms had to go. The first was the per-store scans (`field_at`,
+`member_toward`, `extent_in`, `has_subobject`, `has_bit_unit`, and the
+`union_path`/`mutable_path`/`place_in_unions` fallbacks in
+`crates/kiln_oven/src/vm.rs`). After that, callgrind on the store shape
+at k = 13 put about 15% in the compiler's member lookup:
+`Compiler::member` in `compile.rs` found a member's field index by a
+linear `position`, once per member access expression, so a body naming
+each of N members was quadratic to compile. `Types::field_index` makes
+it a map lookup.
+
+The recorded baselines (`cargo xtask bench --record --filter wide-struct
+bench/oven`, five runs) are:
+
+- `oven/wide-struct-store`: 154.2 ms, 30.9 MB;
+- `oven/wide-struct-read`: 345.4 ms, 29.3 MB.
+
+### S7 and S8
+
+The runs used `cargo xtask bench --compiler <bin> bench/reflect/s7.cpp
+bench/reflect/s8.cpp`, which takes the medians of five runs. Main and
+branch alternated, three pairs, one process at a time:
+
+| pair | S7 main | S7 branch | S8 main | S8 branch |
+|---|---:|---:|---:|---:|
+| 1 | 545.1 ms, 49.2 MB | 553.5 ms, 48.9 MB | 710.0 ms, 75.8 MB | 688.3 ms, 77.3 MB |
+| 2 | 544.1 ms, 49.2 MB | 550.6 ms, 48.9 MB | 695.0 ms, 76.1 MB | 696.1 ms, 76.3 MB |
+| 3 | 551.0 ms, 49.3 MB | 549.7 ms, 48.9 MB | 691.6 ms, 75.9 MB | 699.4 ms, 76.4 MB |
+
+Neither moves: S7 is +0.8% and S8 is -0.4%, both within the spread, and
+the Oven step counts are identical. The S7 lookups that F11 counts are
+into small library classes (string, vector and their bases), below the
+16-field index threshold, where `near` is the scan it replaces. The
+lookups are many short ones, not one long one. F11's cost is the number of
+path walks, which only a cache would cut. F11 therefore stays open, and
+F23 does not touch it.
