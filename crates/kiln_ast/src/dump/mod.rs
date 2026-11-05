@@ -2421,10 +2421,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             ExprKind::ConstantExpr => {
                 // A `void` invocation's stand-in value is not shown (clang
-                // stores none).
+                // stores none), nor a glvalue's address (clang prints no
+                // `LValue` result).
                 if let Some(v) = exprs.constant_value(e)
                     && !exprs.constant_value_hidden(e)
                     && !ast.types.is_void(n.ty())
+                    && !n.value_category().is_glvalue()
                 {
                     self.value(v);
                 }

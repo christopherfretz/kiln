@@ -315,12 +315,28 @@ The term behind the friend rows:
 
 ### `cargo xtask bench bench/reflect --compare-with g++-16.1 --runs 3`
 
-The host was shared, with a load average of about 12.
+S7 and S8 were re-recorded on 2026-11-05 (WP-640) on a shared host with a
+load average of about 10; S1–S6 below are from the run with a load of about 9.
 
 | Entry | kiln ms / MB | GCC ms / MB | Time | Memory |
 |---|--:|--:|--:|--:|
-| s7 | 871.8 / 48.8 | 2841 / 466.9 | 0.31x | 0.10x |
-| s8 | 1129.9 / 73.0 | 1310.9 / 282.1 | 0.86x | 0.26x |
+| s7 | 552.6 / 51.4 | 2282.7 / 468.7 | 0.24x | 0.11x |
+| s8 | 699.0 / 77.4 | 892.4 / 283.0 | 0.78x | 0.27x |
+
+The memory rise since the earlier rows (48.8 → 51.4 MB, 73.0 → 77.4 MB) was
+already on main and does not come from WP-640. This was checked with five
+back-to-back pairs per shape. Each pair runs main (f7cfd9a7c) and then WP-640,
+or the reverse, one process at a time, with the same flags as the bench. The
+load average was 8.6–9.2. Each cell gives the median of the five pairs, with
+the range in brackets:
+
+| Entry | main ms / MB | WP-640 ms / MB |
+|---|--:|--:|
+| s7 | 536.7 [521.4–550.9] / 49.0 | 536.8 [533.2–539.1] / 49.5 |
+| s8 | 683.5 [682.1–710.5] / 77.4 | 687.9 [682.0–690.6] / 76.8 |
+
+The WP-640 binary's baselines are in `bench/baselines/reflect.json` (load
+6.3, `--runs 3`): s7 is 534.0 ms / 49.6 MB and s8 is 699.3 ms / 77.1 MB.
 
 S1–S6 compile against GCC 16.1's libstdc++ `<meta>` since WP-638 (F3 and
 F19). The same command, run on 2026-11-05 with a load average of about 9:

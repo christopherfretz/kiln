@@ -235,6 +235,11 @@ impl Cg<'_> {
                 self.srcloc = saved;
                 return r;
             }
+            // A glvalue's value is the address it designates (WP-640).
+            ExprKind::ConstantExpr if self.is_glvalue(e) && self.immediate_value(e).is_some() => {
+                let lv = self.emit_lvalue(e)?;
+                self.load_lv(lv)
+            }
             ExprKind::ConstantExpr => match self.immediate_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
                 // clang `ScalarExprEmitter::VisitConstantExpr`: a `void`
@@ -2122,7 +2127,10 @@ impl Cg<'_> {
                 };
                 Ok(self.ref_lvalue(p, q))
             }
-            ExprKind::ConstantExpr => self.emit_lvalue(ast.exprs.operand(e)),
+            ExprKind::ConstantExpr => match self.immediate_address(e)? {
+                Some(p) if self.is_glvalue(e) => Ok(self.ref_lvalue(V::C(p), q)),
+                _ => self.emit_lvalue(ast.exprs.operand(e)),
+            },
             ExprKind::CXXTypeidExpr => {
                 let p = self.emit_typeid(e)?;
                 Ok(self.ref_lvalue(p, q))
@@ -3651,6 +3659,13 @@ impl Cg<'_> {
         let n = *ast.exprs.get(e);
         let q = n.ty();
         match n.kind() {
+            // A glvalue's value is the address it designates (WP-640).
+            ExprKind::ConstantExpr if self.is_glvalue(e) && self.immediate_value(e).is_some() => {
+                let lv = self.emit_lvalue(e)?;
+                let size = self.size_align(q).0;
+                self.agg_copy(q, dest, lv.addr, size, false);
+                Ok(())
+            }
             ExprKind::ConstantExpr if self.immediate_value(e).is_some() => {
                 // clang `AggExprEmitter::VisitConstantExpr`: the value of
                 // an immediate invocation, stored by `CreateCoercedStore`.

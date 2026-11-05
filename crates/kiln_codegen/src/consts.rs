@@ -301,6 +301,19 @@ impl Cg<'_> {
         self.ast.exprs.constant_value(e).or_else(|| self.folds.imm.get(&(e, self.srcloc)).copied())
     }
 
+    /// The address glvalue `ConstantExpr` `e` designates, when it has a
+    /// value: the Oven freezes a glvalue immediate invocation as that
+    /// address (`Oven::evaluate`, WP-640; clang `EmitLValue` of a
+    /// `ConstantExpr` with an `APValue` result).
+    pub(crate) fn immediate_address(&mut self, e: ExprId) -> R<Option<Value>> {
+        let ast = self.ast;
+        let Some(c) = self.immediate_value(e) else { return Ok(None) };
+        match ast.consts.scalar(c) {
+            Some(s @ Scalar::Pointer { .. }) => self.scalar_const(s, LTy::PTR).map(Some),
+            _ => Ok(None),
+        }
+    }
+
     /// Enters default argument `e` for emission: the source-location
     /// builtins in it take the values of this use unless an enclosing
     /// default argument already set them. Returns the scope to restore.

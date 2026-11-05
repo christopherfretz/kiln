@@ -111,6 +111,11 @@ shape, so a public name would claim the library template itself.
    array element points at the first element when `T` is an array of `U`
    ([meta.reflection.extract]/3). A constexpr reference variable extracts
    through to its referent. Otherwise "cannot be extracted as".
+   `extract<U&>` is a glvalue immediate invocation: its value is the
+   object's address, never the object's value. That object need not be
+   usable in constant expressions. A reference bound to the result,
+   constexpr or not, holds that address, and codegen emits it as a
+   constant rather than a call (spec/landed/oven/WP-640.md).
 3. A function: `T` a function pointer (noexcept may be dropped);
    `T` a function reference is ill-formed (IS, as GCC).
 4. A non-static data member or member function: `T` a member pointer of

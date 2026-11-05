@@ -110,6 +110,10 @@ impl SemaBridge for Bridge<'_> {
         // value (write-once, as sema's bridge).
         let _ = self.ast.decls.set_lifetime_extended_value(t, v);
     }
+
+    fn lvalue_ref_to(&mut self, t: QualType) -> Option<QualType> {
+        Some(self.ast.types.lvalue_ref_to(t))
+    }
 }
 
 /// Folds every candidate expression of the translation unit.
