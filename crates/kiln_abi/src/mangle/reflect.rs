@@ -99,7 +99,9 @@ fn decl_visible(ast: &Ast, d: DeclId) -> bool {
         // A member of a class or enumeration has the class's linkage.
         DeclKind::Field | DeclKind::IndirectField | DeclKind::EnumConstant => {
             match ast.decls.get(d).ctx() {
-                Some(c) if matches!(ast.decls.get(c).kind(), DeclKind::Enum) || is_record(ast, c) => {
+                Some(c)
+                    if matches!(ast.decls.get(c).kind(), DeclKind::Enum) || is_record(ast, c) =>
+                {
                     tag_externally_visible(ast, ast.first(c))
                 }
                 _ => false,
@@ -330,7 +332,10 @@ impl Mangler<'_, '_> {
                     return;
                 }
                 TypeView::TemplateSpecialization {
-                    name, args, underlying: Some(u), alias: true
+                    name,
+                    args,
+                    underlying: Some(u),
+                    alias: true,
                 } => {
                     if let TemplateName::Template(t) =
                         ast.types.template_name_view(ast.types.canonical_template_name(name))
@@ -443,7 +448,8 @@ impl Mangler<'_, '_> {
                 let _ = write!(self.out, "L_Z{}{s}E", s.len());
                 return;
             }
-            if let Some(i) = self.array_index(d, offset, designated.or_else(|| ast.types.pointee(ty)))
+            if let Some(i) =
+                self.array_index(d, offset, designated.or_else(|| ast.types.pointee(ty)))
             {
                 if addr {
                     self.out.push_str("ad");

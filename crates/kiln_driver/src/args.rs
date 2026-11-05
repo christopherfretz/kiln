@@ -1378,7 +1378,10 @@ mod tests {
         assert_eq!((a.reflection_mangling, a.errors), (M::Gcc, vec![]));
         let a = parse("-fkiln-reflection-mangling=gcc -fkiln-reflection-mangling=kiln a.cpp");
         assert_eq!(a.reflection_mangling, M::Kiln);
-        assert_eq!(parse("-fkiln-reflection-mangling=kiln-hashed a.cpp").reflection_mangling, M::KilnHashed);
+        assert_eq!(
+            parse("-fkiln-reflection-mangling=kiln-hashed a.cpp").reflection_mangling,
+            M::KilnHashed
+        );
         assert_eq!(
             parse("-fkiln-reflection-mangling=msvc a.cpp").errors,
             [ArgError::InvalidFlagValue("-fkiln-reflection-mangling=msvc".into(), "msvc".into())]
