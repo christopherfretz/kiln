@@ -1,12 +1,12 @@
 // [meta.reflection.names]/8 (P2996R13): source_location_of's file name
-// is implementation-defined; kiln gives GCC 16.1's (spec/reflection.md
-// §3.9). GCC simplifies the absolute path of a file found through an
+// is implementation-defined; under -fkiln-source-path-style=gcc kiln gives
+// GCC 16.1's (spec/reflection.md §3.9). GCC simplifies the absolute path of a file found through an
 // include search path: empty and `.` components are dropped and `dir/..`
 // is folded when `dir` is a real directory, so `-I /p//Inputs/../Inputs/./`
 // names the header `/p/Inputs/slo-header.h`. Build systems pass such
 // paths (a `//opt/inc` from an empty prefix), and a generator that derives
 // `#include` lines from source_location_of needs GCC's spelling.
-//@ args: -freflection -I tests/support -I %{test_dir}//Inputs/../Inputs/./
+//@ args: -freflection -fkiln-source-path-style=gcc -I tests/support -I %{test_dir}//Inputs/../Inputs/./
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ expect: compile-ok
 //@ strict-diags
@@ -39,5 +39,7 @@ static_assert(!contains(hf, "/./"));
 static_assert(!contains(hf, "/../"));
 static_assert(ends_with(hf, "/meta.reflection.names/Inputs/slo-header.h"));
 static_assert(source_location_of(^^InHeader).line() == 3);
+// One translation unit is self-consistent: __builtin_FILE() agrees.
+static_assert(ends_with(InHeaderFile, "/meta.reflection.names/Inputs/slo-header.h"));
 
 int main() {}

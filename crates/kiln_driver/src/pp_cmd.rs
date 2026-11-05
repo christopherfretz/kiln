@@ -243,6 +243,7 @@ impl Job<'_> {
             );
         }
         sm.set_macro_prefix_map(&self.args.macro_prefix_map);
+        sm.set_source_path_style(self.args.source_path_style);
         let main = self.load_main(sm, engine);
         let predefines = self.predefines(engine);
         Some(PpInputs { list, main: main?, predefines: predefines? })

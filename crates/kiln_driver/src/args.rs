@@ -5,6 +5,7 @@
 use kiln_codegen::{AutoVarInit, ComplexRange, Visibility};
 use kiln_pp::{ClangCompat, CmdMacro, DirGroup, OptLevel, PicModel};
 use kiln_sema::LaxVectorConversions;
+use kiln_source::SourcePathStyle;
 
 use crate::toolchain::StdLib;
 
@@ -420,6 +421,10 @@ pub struct Args {
     pub dollars: Option<bool>,
     /// `-fkiln-reproducible-time`.
     pub reproducible_time: bool,
+    /// `-fkiln-source-path-style=<clang|gcc>`: the file spelling of the
+    /// source-location builtins and `std::meta::source_location_of`
+    /// (`SourceManager::presumed_file_name`; the last one wins).
+    pub source_path_style: SourcePathStyle,
     /// Errors, in order.
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
@@ -766,7 +771,16 @@ impl Args {
             "-fkiln-cfg-stats" => self.cfg_stats = true,
             "-fpermissive" => self.permissive = true,
             _ => {
-                if let Some(v) = arg.strip_prefix("-fkiln-cfg-max-elems=") {
+                if let Some(v) = arg.strip_prefix("-fkiln-source-path-style=") {
+                    match v {
+                        "clang" => self.source_path_style = SourcePathStyle::Clang,
+                        "gcc" => self.source_path_style = SourcePathStyle::Gcc,
+                        _ => self.errors.push(ArgError::InvalidValue(
+                            "-fkiln-source-path-style=".to_owned(),
+                            v.to_owned(),
+                        )),
+                    }
+                } else if let Some(v) = arg.strip_prefix("-fkiln-cfg-max-elems=") {
                     match v.parse::<usize>() {
                         Ok(n) => self.cfg_max_elems = Some(n),
                         Err(_) => {
@@ -1342,6 +1356,19 @@ mod tests {
         assert_eq!(
             parse("-ffile-prefix-map=/src a.cpp").errors,
             [ArgError::InvalidValue("-ffile-prefix-map=".into(), "/src".into())]
+        );
+    }
+
+    #[test]
+    fn source_path_style() {
+        assert_eq!(parse("a.cpp").source_path_style, SourcePathStyle::Clang);
+        let a = parse("-fkiln-source-path-style=gcc a.cpp");
+        assert_eq!((a.source_path_style, a.errors), (SourcePathStyle::Gcc, vec![]));
+        let a = parse("-fkiln-source-path-style=gcc -fkiln-source-path-style=clang a.cpp");
+        assert_eq!(a.source_path_style, SourcePathStyle::Clang);
+        assert_eq!(
+            parse("-fkiln-source-path-style=msvc a.cpp").errors,
+            [ArgError::InvalidValue("-fkiln-source-path-style=".into(), "msvc".into())]
         );
     }
 
