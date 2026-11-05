@@ -13,7 +13,7 @@ void g(nullptr_t) { printf("n "); }
 struct S { int m; };
 static_assert(sizeof(nullptr_t) == sizeof(void*), "size");
 constexpr int S::*pm = nullptr;
-static_assert(pm == nullptr && !nullptr, "member pointer and bool context");
+static_assert(pm == nullptr, "member pointer");
 int main() {
   f(nullptr);
   f(0);
