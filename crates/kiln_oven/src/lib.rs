@@ -491,6 +491,9 @@ pub struct Oven {
     pub(crate) addr_next: bool,
     pub(crate) types: Types,
     pub(crate) code: Vec<u32>,
+    /// `code.len()` just after its trailing fetch-window padding, while
+    /// that padding is the last thing in `code` (`kbc::pad`/`unpad`).
+    pub(crate) padded: usize,
     pub(crate) sites: Vec<Site>,
     pub(crate) step_locs: Vec<Loc>,
     pub(crate) origins: Vec<mem::Origin>,
@@ -608,6 +611,7 @@ impl Oven {
             addr_next: false,
             types: Types::default(),
             code: Vec::new(),
+            padded: 0,
             sites: Vec::new(),
             step_locs: Vec::new(),
             origins: Vec::new(),
