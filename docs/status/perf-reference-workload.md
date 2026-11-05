@@ -549,7 +549,7 @@ share of the named profile that the work could remove.
 | F7 | Fewer redeclaration-chain walks | kiln_ast `DeclArena::redecl`, `Ast::first`; kiln_sema `template_redecl` | 6.8% of R1, 4.4% of R3, 3.6% of R2; 60–150 M calls | 3–5% | Low–medium | M |
 | F8 | Cheaper `TypeContext::view` / `canonical_view` | kiln_ast `types` | 4–6% self, 190 M calls in R3 | 2–3% | Low | S–M |
 | F9 | **Partly done (WP-648):** dispatch Ir per instruction −16% to −25% on the Oven shapes, `churn-vector` 9–12% faster, S7 unchanged (it is not dispatch-bound); what remains is in "WP-648: interpreter dispatch". Faster interpreter dispatch in safe Rust | kiln_oven `vm.rs` `run_loop` | 18.3% of R2, 24.8% of S7 | 5–10% of R2 | Medium | M–L |
-| F10 | Copy the init-bit map a word at a time | kiln_oven `mem.rs` `Memory::copy` | `set_bits` is 2.8% of R2 | About 2% of R2 | Low | S |
+| F10 | **Partly done (WP-649):** `copy` is not the cost (no call on the Oven shapes, 0.02% of S7); the per-access bitmask and 8-byte read/write fast paths gave −0.8% to −3.8% Ir; the rest is in "WP-649: init-bit copy". Copy the init-bit map a word at a time | kiln_oven `mem.rs` `Memory::copy` | `set_bits` is 2.8% of R2 | About 2% of R2 | Low | S |
 | F11 | **Done (landed WP-644).** Cache subobject and union paths | kiln_oven `ty/path.rs` `Types::hop`, `vm.rs` `union_path`, `mutable_path`, `place_in_unions`, `extent_of`, `Types::has_subobject` | 9% of S7, about 3% of R2. Measured before the cache: 794,167 `union_path` walks over 21 distinct keys at S7 N = 40, about 7% of S7's instructions. After it: the walks' self cost at S7 N = 8 halves (96.8 M to about 52 M Ir) and S7 is 2.6% faster, with peak RSS unchanged ("WP-644: subobject path cache"). What remains is the per-access hash lookups (`vm.rs:2488` `union_path`, `ty/path.rs:144` `Types::hop`) | 3–6% of S7 (measured 2.6–3.7%) | Medium | M |
 | F12 | **Done (WP-645).** Compute node accounting lazily | kiln_sema `templ/stack.rs` push/pop; kiln_ast `node_live_bytes` | About 1–1.2% and 3 M allocations in R3 | About 1% | Low | S |
 | F13 | Fewer deduction and candidate attempts | kiln_sema `deduce_spec`, `add_template_candidate`, `deduce_call_arg` | 34–36% inclusive in S8; 9.8 M `deduce_spec` calls in R2; `deduce_call_arg` grows 18x for 4x N in S8 | Unknown; the largest frontend lever | Medium–high | M–L |
@@ -1553,3 +1553,144 @@ runs; ms):
 - **Not tried.** Superinstructions with a new encoding (more fused pairs
   need words the window cannot see), register allocation across
   instructions, and threaded code (excluded by the brief).
+
+## WP-649: init-bit copy
+
+F10 above (spec/landed/oven/WP-649.md). Main is 07d490895. Every shape
+was run under `valgrind --tool=cachegrind --cache-sim=no` (with `ulimit
+-v 3000000`, `timeout 1200`, `-fkiln-stack-size=256m`) with the bench
+commands of spec/bench.md: the four Oven shapes `churn-vector`,
+`wide-struct-read`, `wide-struct-store`, `sort-nohdr`
+(`bench/oven/`), S7 and S8 (`bench/reflect/`, `-fsyntax-only
+-freflection`). The release build inlines the shadow helpers into their
+callers, so cost is attributed by source line, each `mem.rs` line to the
+function that contains it ("self Ir" below is that sum, inlined copies
+included).
+
+### Measurement on main
+
+Self Ir of the three functions F10 names:
+
+| shape | program Ir | `Memory::copy` | `set_bits` | `all_bits` |
+|---|--:|--:|--:|--:|
+| `churn-vector` | 14,851,165,816 | 0 | 201,356,800 (1.36%) | 176,159,424 (1.19%) |
+| `wide-struct-read` | 7,086,887,362 | 0 | 295,012 | 176,160,810 (2.49%) |
+| `wide-struct-store` | 1,941,440,995 | 0 | 3,178,596 (0.16%) | 86,100 |
+| `sort-nohdr` | 459,995,826 | 0 | 4,314,763 (0.94%) | 9,314,844 (2.02%) |
+| S7 | 6,256,339,260 | 189,750 (0.003%) | 26,861,275 (0.43%) | 19,644,542 (0.31%) |
+
+`Memory::copy` calls by length, counted with a temporary counter
+(not committed). "Same phase" means source and destination have the
+same offset in their 8-byte granule:
+
+| shape | ≤ 8 B | 9–64 B | 65–512 B | > 512 B | bytes | same phase | granule-aligned | same space |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| the four Oven shapes, `templates_wide` | 0 | 0 | 0 | 0 | 0 | – | – | – |
+| S7 | 28 | 1,887 | 5 | 0 | 31,443 | 1,920 | 1,920 | 1,735 |
+| S8 | 1,026 | 1,126 | 5 | 0 | 22,406 | 2,157 | 2,157 | 1,528 |
+
+So `copy` is not where the cost is. The Oven shapes make no
+`Memory::copy` call: class copies of their element types are
+member-wise `Load`/`Store`. S7's 1,920 copies cost about 1.2 M Ir with
+the per-byte `set_bits` they made (0.02% of S7). The shadow cost is the
+per-access `all_bits` (through `Space::is_init`/`is_live`) and
+`set_bits` (through `set_init`), and almost every call covers one
+granule. The whole of `mem.rs` is 4.3% of S7 (274.7 M Ir), whose top
+sites are `check_storage` 44.6 M, `set_bits` 26.9 M, `release` 23.2 M,
+`Memory::space` 22.3 M, `Ptr::decode` 21.2 M and `all_bits` 19.6 M. A
+2% S7 gain from the memory model alone would need half of `mem.rs`.
+
+### What changed
+
+- `Memory::copy`: bit-range copy of the init map (`copy_bits`,
+  `copy_bits_within`, `mem.rs:444`, `:464`). Same-phase ranges move
+  whole map bytes between masked head and tail bits; others move 56-bit
+  little-endian words. Cross-space pointer marks move with one
+  `copy_from_slice`.
+- `all_bits` / `set_bits` (`mem.rs:398`, `:416`): a range within one
+  granule tests or sets one map byte under a mask; a longer one splits
+  into head, whole bytes and tail (`set_bits_slow`).
+- `Space::read` / `write` (`mem.rs:559`, `:579`): up to 8 bytes are one
+  8-byte load or read-merge-store when 8 bytes remain in the space.
+
+A first version (B, not kept) read and wrote every range as a `u128`
+word view. Its variable `u128` shifts cost more on aarch64 than the
+byte loops they replaced, and `set_bits` stopped being inlined.
+
+### Per-step Ir
+
+"Bitmask" is `all_bits` + `set_bits` + their helpers; "read/write" is
+`Space::read` + `Space::write`:
+
+| shape | main | B | C (kept) | main → C | bitmask main → C | read/write main → C |
+|---|--:|--:|--:|--:|--:|--:|
+| `churn-vector` | 14,851,165,816 | 14,721,220,413 | 14,318,446,833 | −3.6% | 419.5 M → 377.5 M (−10.0%) | 201.3 M → 167.8 M (−16.7%) |
+| `wide-struct-read` | 7,086,887,362 | 7,050,066,323 | 6,914,357,087 | −2.4% | 176.5 M → 159.7 M (−9.5%) | 75.5 M → 92.3 M (+22.2%) |
+| `wide-struct-store` | 1,941,440,995 | 1,941,841,470 | 1,947,725,096 | +0.3% | 3.87 M → 3.46 M (−10.7%) | 0.84 M → 0.64 M (−24.0%) |
+| `sort-nohdr` | 459,995,826 | 455,547,469 | 442,689,968 | −3.8% | 14.5 M → 13.1 M (−9.8%) | 7.48 M → 6.50 M (−13.1%) |
+| S7 | 6,256,339,260 | 6,243,298,226 | 6,203,623,809 | −0.8% | 51.6 M → 45.8 M (−11.2%) | 16.0 M → 12.3 M (−23.4%) |
+
+On S7 the `copy` family fell from 189,750 Ir plus about 1 M Ir of
+per-byte `set_bits` to 120,011 Ir. The per-access `set_bits` fell 33%
+(26.9 M → 18.1 M) and `all_bits` 42% (19.6 M → 11.4 M), not counting
+the shared `byte_mask` (8.1 M). Most of `churn-vector`'s gain is outside
+`mem.rs`: `run_loop`'s self Ir fell 490.8 M once `all_bits` stopped
+being inlined into it (`all_bits`' own line moved +167.8 M from
+`store`), likely through lower register pressure in the loop. That
+effect depends on `run_loop`'s shape. `wide-struct-read`'s read/write
+rise is the same attribution move: the 8-byte load is inlined into
+`Space::read`, where the old byte loop was inlined into `load`.
+
+### A/B
+
+Main and the branch alternating, 3 pairs, median of 5 runs per pair
+under `/usr/bin/time` (wall time has 10 ms resolution):
+
+| shape | main wall (s) | branch wall (s) | wall | main RSS (KB) | branch RSS (KB) | RSS |
+|---|--:|--:|--:|--:|--:|--:|
+| `churn-vector` | 0.64 | 0.64 | +0.0% | 12,472 | 12,592 | +0.96% |
+| `wide-struct-read` | 0.33 | 0.32 | −3.0% | 29,664 | 29,920 | +0.86% |
+| `wide-struct-store` | 0.13 | 0.13 | +0.0% | 32,784 | 32,960 | +0.54% |
+| `sort-nohdr` | 0.03 | 0.02 | −33.3% | 12,216 | 12,268 | +0.43% |
+| S7 | 0.50 | 0.51 | +2.0% | 46,848 | 46,940 | +0.20% |
+| S8 | 0.61 | 0.61 | +0.0% | 66,060 | 66,532 | +0.71% |
+| `templates_wide` | 0.25 | 0.25 | +0.0% | 63,720 | 63,800 | +0.13% |
+
+The same shapes timed in-process (`perf_counter`), 3 alternating pairs,
+median of 11 runs per pair:
+
+| shape | main (ms) | branch (ms) | change | pair medians main / branch (ms) |
+|---|--:|--:|--:|---|
+| `churn-vector` | 683.8 | 686.2 | +0.3% | 686.0 666.6 683.8 / 690.0 686.2 685.7 |
+| `wide-struct-read` | 378.3 | 329.4 | −12.9% | 379.1 377.9 378.3 / 340.8 326.6 329.4 |
+| `wide-struct-store` | 176.0 | 174.2 | −1.0% | 176.0 177.2 174.5 / 174.2 175.7 172.5 |
+| `sort-nohdr` | 38.9 | 38.4 | −1.5% | 38.9 40.1 38.4 / 38.4 38.3 38.9 |
+| S7 | 534.3 | 534.4 | +0.0% | 534.3 552.2 532.4 / 534.4 546.2 532.8 |
+
+`churn-vector`'s 3.6% fewer instructions do not show in wall time.
+`wide-struct-read` is the one shape that moved by more than 5%, so it
+was measured again under `cargo xtask bench --filter
+oven/wide-struct-read bench/oven`, twice per side, alternating: main
+333.0 and 334.7 ms, the branch 320.1 and 322.2 ms (−3.8%; the
+recorded baseline is 345.4 ms). RSS moved by under 1% everywhere
+(binary layout). No change reaches 5% under the bench harness, so no
+baseline was re-recorded.
+
+### What remains in the memory model
+
+- `crates/kiln_oven/src/mem.rs:1258` `Memory::check` →
+  `:1268` `check_storage`: about 45 Ir per access (S7 58.9 M,
+  `churn-vector` 461 M together) for null, function pointer, slot and
+  generation, past-end, bounds, external origin and unbacked checks.
+  Their order fixes which fault (and diagnostic) an access reports, so
+  a faster check has to keep it. A cheaper first test with the full
+  ordered check only on failure is the likely shape.
+- `mem.rs:77` `Ptr::decode` and `:107`/`:1310` `Ptr::space` /
+  `Memory::space` (S7 21.2 M + 22.3 M; `churn-vector` 151 M + 168 M):
+  each access decodes the pointer and matches its space more than once,
+  in `check`, `is_live` and the `Load`/`Store` that follows. Decoding
+  once per access and passing the `Space` along removes the repeats.
+- `mem.rs:145` `Ptr::with_off` (`churn-vector` 101 M): pointer
+  arithmetic re-encodes the whole pointer.
+- `mem.rs:952` `release` (S7 23.2 M): frame release clears the shadow
+  of each released slot.
