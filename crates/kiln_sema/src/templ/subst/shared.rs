@@ -65,7 +65,7 @@ impl Sema<'_, '_> {
         let mut callees = Vec::new();
         let mut compares = Vec::new();
         let recompare = !self.null_compare_rewarn.is_empty();
-        let mut stack = vec![e];
+        let mut stack = self.take_walk_stack(e);
         while let Some(x) = stack.pop() {
             let kind = self.ast.exprs.get(x).kind();
             let loc = self.eloc(x);
@@ -120,7 +120,10 @@ impl Sema<'_, '_> {
                 }
                 _ => {}
             }
-            let kids = self.ast.exprs.children(x, &self.ast.lists);
+            // The children, pushed onto the stack: `stack[base..]`.
+            let base = stack.len();
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
+            let kids = &stack[base..];
             // The default arguments and member initializers it uses are
             // used again here: their immediate invocations are evaluated
             // (clang's rebuilt `CXXDefaultArgExpr`/`CXXDefaultInitExpr`).
@@ -143,10 +146,10 @@ impl Sema<'_, '_> {
                         kids.iter().copied().filter(|k| self.diagnose_if_recheck.contains_key(k)),
                     );
                 }
-                self.note_default_uses(&kids, at);
+                self.note_default_uses(kids, at);
             }
-            stack.extend(kids);
         }
+        self.put_walk_stack(stack);
         if !derefs.is_empty() {
             self.reissue_null_derefs(&derefs);
         }

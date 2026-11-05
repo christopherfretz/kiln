@@ -38,7 +38,9 @@ impl Sema<'_, '_> {
         if !self.inst.stack.is_empty() {
             self.recheck_enum_constants_in_bool(root);
         }
-        let mut work = vec![(root, cc)];
+        let mut work = std::mem::take(&mut self.conv_walk_stack);
+        work.clear();
+        work.push((root, cc));
         let mut seen = 0usize;
         while let Some((e, cc)) = work.pop() {
             seen += 1;
@@ -93,10 +95,14 @@ impl Sema<'_, '_> {
                 ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => self.begin_loc(s),
                 _ => n.loc(),
             };
-            let kids = self.ast.exprs.children(s, &self.ast.lists);
             // clang's work list pops the last child first.
-            work.extend(kids.into_iter().map(|k| (k, at)));
+            let mut kids = self.walk_stack.take();
+            kids.clear();
+            self.ast.exprs.children_into(s, &self.ast.lists, &mut kids);
+            work.extend(kids.iter().map(|&k| (k, at)));
+            self.put_walk_stack(kids);
         }
+        self.conv_walk_stack = work;
     }
 
     /// clang's `IgnoreParenImpCasts`.

@@ -171,7 +171,7 @@ impl Sema<'_, '_> {
     /// rebuilt operator already reported is deduplicated (spec/diag.md
     /// §7.4).
     pub(crate) fn recheck_enum_constants_in_bool(&mut self, root: ExprId) {
-        let mut stack = vec![root];
+        let mut stack = self.take_walk_stack(root);
         let mut budget = 1u32 << 16;
         while let Some(e) = stack.pop() {
             budget = budget.saturating_sub(1);
@@ -196,9 +196,12 @@ impl Sema<'_, '_> {
                 }
                 _ => {}
             }
-            let kids = self.ast.exprs.children(e, &self.ast.lists);
-            stack.extend(kids.into_iter().rev());
+            // Reversed, so the children are visited in order.
+            let base = stack.len();
+            self.ast.exprs.children_into(e, &self.ast.lists, &mut stack);
+            stack[base..].reverse();
         }
+        self.put_walk_stack(stack);
     }
 
     /// `e` without its implicit casts (parentheses kept).

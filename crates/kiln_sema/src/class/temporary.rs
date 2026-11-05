@@ -230,7 +230,7 @@ impl Sema<'_, '_> {
         if (self.cleanup.needs && self.cleanup.side_effects) || self.unevaluated > 0 {
             return;
         }
-        let mut stack = vec![e];
+        let mut stack = self.take_walk_stack(e);
         while let Some(x) = stack.pop() {
             match self.ast.exprs.get(x).kind() {
                 ExprKind::MaterializeTemporaryExpr => {
@@ -240,7 +240,7 @@ impl Sema<'_, '_> {
                 ExprKind::CXXBindTemporaryExpr => {
                     self.cleanup.needs = true;
                     self.cleanup.side_effects = true;
-                    return;
+                    break;
                 }
                 // As `note_default_use` does for a default argument it
                 // builds.
@@ -266,6 +266,7 @@ impl Sema<'_, '_> {
                 _ => self.ast.exprs.children_into(x, &self.ast.lists, &mut stack),
             }
         }
+        self.put_walk_stack(stack);
     }
 
     /// Enters a context whose temporaries belong to no enclosing

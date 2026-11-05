@@ -730,6 +730,14 @@ pub struct Sema<'a, 'sm> {
     /// The depth of `synth` whose notes were last printed (clang
     /// `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) synth_noted: std::cell::Cell<usize>,
+    /// The reused stack of the expression walks ([`Sema::take_walk_stack`]):
+    /// a walk takes it, cleared, and puts it back, so a full-expression
+    /// check allocates no stack per call (WP-645). A nested walk finds it
+    /// empty and starts its own.
+    pub(crate) walk_stack: std::cell::RefCell<Vec<ExprId>>,
+    /// [`Sema::walk_stack`] for the implicit-conversion walk, whose work
+    /// items carry the context location.
+    pub(crate) conv_walk_stack: Vec<(ExprId, Loc)>,
     /// Delegating constructors and their targets, checked for cycles at
     /// the end of the translation unit ([class.base.init]/6).
     pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
@@ -1131,6 +1139,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             vtable_finals: kiln_source::fx::FxHashMap::default(),
             module_vtables: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
+            walk_stack: std::cell::RefCell::new(Vec::new()),
+            conv_walk_stack: Vec::new(),
             delegating: Vec::new(),
             ctor_entity: None,
             ctor_diag_ty: None,
