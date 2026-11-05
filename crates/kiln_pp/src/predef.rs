@@ -306,7 +306,7 @@ const P1467_STDCPP: &[&str] = &[
 ];
 
 /// Feature-test macros for what kiln implements beyond clang 19's
-/// predefines (docs/STANDARD_SUPPORT.md, spec/pp.md "clang
+/// predefines (`docs/STANDARD_SUPPORT.md`, spec/pp.md "clang
 /// compatibility level"): (minimum `__cplusplus`, name, value). Applied in
 /// C++ at every compatibility level.
 const KILN_FEATURES: &[(u64, &str, &str)] = &[
@@ -449,7 +449,7 @@ fn apply_p1467(m: &mut BTreeMap<String, String>, std_float_aliases: bool, aarch6
 /// Applies the dialect and flag deltas (measured against clang 19; see
 /// `resource/README.md`).
 /// The feature-test macros of features kiln implements beyond clang 19
-/// (docs/STANDARD_SUPPORT.md), before the flags that remove them:
+/// (`docs/STANDARD_SUPPORT.md`), before the flags that remove them:
 /// P1061 structured binding packs (C++17 on) and P2893 variadic friends
 /// (every C++ mode) at clang 22's values in the same modes, and
 /// `KILN_FEATURES` (P2747, P3068, modules) by `__cplusplus`.
