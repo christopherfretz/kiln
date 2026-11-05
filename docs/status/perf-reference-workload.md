@@ -698,7 +698,8 @@ copy. The real TU's `-emit-llvm` peak falls from 1,044,128 KB to
 
 ### What remains, and why
 
-The brief's target was `-c` at most 115 s. It is not met. About 83% of the
+The brief's target was `-c` at most 115 s. WP-633 did not meet it (WP-641
+did: see "WP-641: shrinking the registration function"). About 83% of the
 `-c` wall time (92% of `opt`'s pass time) is two LLVM pass runs on one
 function. Clang 19 spends more time than kiln on the same TU, and LLVM 22 is slower. The pass pipeline is
 unchanged, because no measured pipeline change closes the gap without
@@ -709,10 +710,92 @@ Follow-ups:
 
 | ID | Title | Where | Evidence | Expected win | Risk | Size |
 |---|---|---|---|---|---|---|
-| F20 | Keep the registration function small: emit each binding full-expression's EH cleanups so that landing pads and temporaries' allocas are shared or scoped (`lifetime.start`/`end` per full-expression), or outline very large straight-line bodies | kiln_codegen `stmt.rs:280` `emit_stmt`, `expr.rs:4617` `emit_var_init`, the cleanup and landing-pad emitter | JumpThreading and MemCpyOpt are 92% of `opt`, on one function with 6,455 landing pads and 10,762 allocas | Most of the 281 s `opt` time if the per-function size drops by an order of magnitude | High: must stay identical in behaviour, EH order and ABI | L |
+| F20 | **Done (WP-641): outlining.** Keep the registration function small: emit each binding full-expression's EH cleanups so that landing pads and temporaries' allocas are shared or scoped (`lifetime.start`/`end` per full-expression), or outline very large straight-line bodies | kiln_codegen `outline.rs` (`Cg::emit_stmt_list`, called by `stmt.rs` `emit_compound_without_scope`) | JumpThreading and MemCpyOpt are 92% of `opt`, on one function with 6,455 landing pads and 10,762 allocas. Phase 1 below: landing-pad sharing and lifetime scoping change neither pass; only outlining removes both | Measured: `-c` from about 265 s to about 37 s, RSS unchanged ("WP-641: shrinking the registration function") | High: must stay identical in behaviour, EH order and ABI | L |
 | F21 | Measured per-function guard in the driver pipeline | kiln_driver `codegen_cmd.rs:617` `ir_passes` | The knob run above gave no win; a guard would have to skip or bound JumpThreading/MemCpyOpt on functions above a size threshold, measured against code quality | Bounded by the JumpThreading share | Medium: diverges from clang's `-O2` | S |
 | F22 | Report the super-linearity upstream | LLVM `JumpThreading`, `MemCpyOpt`, LICM in LLVM 22 | Both clang and kiln IR hit it. A reduced synthetic reproducer is the reproducer above. | Long term | None | S |
 | F23 | Sublinear subobject lookups in the Oven | kiln_oven `ty.rs:1074` `has_subobject`, `ty.rs:308` `field_at`, `ty.rs:1102` `has_bit_unit`, `vm.rs:2475` `union_path` | Linear field scans per store. A constexpr struct whose members hold a union goes from 0.08 s to 0.25 s when its members double from 1,024 to 2,048, which is quadratic. Fields are offset-sorted, so `partition_point` applies. | Removes the quadratic term for wide constexpr classes | Low | S–M |
 
 F11 above (cache subobject and union paths) overlaps F23. F23 is the
 narrower form, which needs no cache.
+
+## WP-641: shrinking the registration function
+
+F20 above. The production TU's `-O2 -c` drops from about 260 s to about
+40 s. The fix is that kiln outlines runs of statements out of any function
+with at least 256 call-containing expression statements, into internal
+`noinline` helpers (spec/landed/codegen/WP-641.md).
+
+### Phase 1: IR surgery
+
+Each variant is the same TU's unoptimised IR (`-c -emit-llvm -Xclang
+-disable-llvm-passes`), changed in one way and timed with `opt-19
+-passes='default<O2>' -time-passes`. The IR counts are for the largest
+function before `opt`, counted by this WP's script (the instruction count
+includes the lifetime calls, so it differs from WP-633's). "opt" is the
+whole module's `opt` wall time. Runs were sequential, one at a time.
+
+Production TU:
+
+| Variant | Instructions | Blocks | Landing pads | Allocas | opt | JumpThreading | MemCpyOpt |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Baseline (two runs) | 107,615 | 17,221 | 6,455 | 10,762 | 252 / 266 s | 144 / 146 s | 68 / 81 s |
+| No exceptions: every invoke a call, the pads dead (IR surgery; `-fno-exceptions` rejects the TU's `throw`) | 107,615 | 17,221 | 6,455, all dead | 10,762 | 125 s | 0.4 s | 86 s |
+| No lifetime markers (the only EH cleanup, so one pad is left) | 28,012 | 8,616 | 1 | 10,762 | 241 s | 131 s | 75 s |
+| `lifetime.end` on the normal path only | 49,528 | 8,616 | 1 | 10,762 | 251 s | 144 s | 68 s |
+| Each statement's invokes unwind to one shared pad (2,150 edges redirected) | 107,615 | 17,221 | 6,455 | 10,762 | 275 s | 151 s | 82 s |
+| Statements outlined (this WP) | 366 | 52 | 4 | 30 | 37 s | 0.3 s | 0.2 s |
+
+Kiln already brackets every full-expression temporary with
+`lifetime.start`/`end` at `-O2`: 32,274 markers. So variant 3 of the brief
+(tight lifetimes) is the baseline, and the two lifetime rows test the
+opposite direction. The two costs have different causes:
+
+- **JumpThreading.** The invokes drive it. Its block merging moves an
+  accumulated block, headed by the entry block's allocas, once per merge
+  along the inlined chain.
+- **MemCpyOpt.** The runs of field stores into 10,762 allocas drive it.
+  `tryMergingIntoMemset` updates one MemorySSA spanning the whole
+  function. It does not depend on the exception edges.
+
+Neither landing-pad sharing nor lifetime scoping changes either cost.
+Removing exceptions entirely halves `opt` and still misses the target.
+Only splitting the function removes both costs.
+
+Reproducer `bench/frontend/registration-wide-obj.cpp` (4,000 bindings in one
+function):
+
+| Variant | Instructions | Blocks | Landing pads | Allocas | opt | JumpThreading | MemCpyOpt |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Baseline (two runs) | 72,010 | 8,002 | 4,000 | 8,003 | 116 / 91 s | 110 / 85 s | 0.06 s |
+| `-fno-exceptions` | 32,003 | 1 | 0 | 8,001 | 110 s | 104 s | 0.06 s |
+| Invokes made calls (IR surgery) | 72,010 | 8,002 | 4,000, all dead | 8,003 | 111 s | 104 s | 0.07 s |
+| No lifetime markers | 60,010 | 8,002 | 4,000 | 8,003 | 86 s | 80 s | 0.06 s |
+| `lifetime.end` on the normal path only | 68,010 | 8,002 | 4,000 | 8,003 | 90 s | 84 s | 0.06 s |
+| Shared pads (one invoke per statement: nothing to share) | 72,010 | 8,002 | 4,000 | 8,003 | 99 s | 93 s | 0.06 s |
+| Statements outlined (this WP; largest helper) | 584 | 66 | 32 | 66 | 6.2 s | 0.2 s | 0.05 s |
+
+The reproducer reproduces the JumpThreading term only. Its chain comes
+from the inlined `def` body's folded branches, so it survives
+`-fno-exceptions`. It does not reproduce the MemCpyOpt term, which needs
+the production descriptors' longer runs of field stores. Outlining is 15x to 19x on
+it.
+
+Threshold sweep, the same shape at N bindings, `opt` inline vs outlined:
+128 is 0.17 s (below the threshold), 256 is 0.39 vs 0.34 s, 512 is 1.09
+vs 0.66 s, 1,024 is 3.45 vs 1.35 s. Below a few hundred statements the
+difference is noise, so the threshold is 256, and below it the IR is
+byte-identical.
+
+### Production TU A/B (`prod633.sh`, `-O2 -c`, back to back)
+
+| Pair | main (harness build) | WP-641 (harness build) |
+|---|---:|---:|
+| 1 | 267.3 s, 1,081,164 KB | 36.7 s, 1,053,116 KB |
+| 2 | 265.1 s, 1,079,624 KB | 36.9 s, 1,053,860 KB |
+
+That is 7.2x on the production compile, now under the 115 s target, and
+peak RSS is 2.6% lower. Of the remaining 37 s, the frontend up to
+unoptimised IR is about 15.7 s (the `-emit-llvm` runs above), and the
+rest is `opt` and `llc` over the whole module. The standalone `opt`
+times in the phase-1 tables include parsing textual IR and `-time-passes`,
+so they do not add up to these times.

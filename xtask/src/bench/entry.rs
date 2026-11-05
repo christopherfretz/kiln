@@ -16,6 +16,9 @@ pub enum Mode {
     Pp,
     /// `-S -emit-llvm -o /dev/null`: the whole frontend including codegen.
     EmitLlvm,
+    /// `-c -o /dev/null`: the whole compile including the optimiser and
+    /// the backend (an entry's `args` choose the `-O` level).
+    Obj,
     /// Compile and link once (`-o <scratch>`, unmeasured), then measure
     /// the program: generated-code speed, not the compiler's.
     Run,
@@ -27,6 +30,7 @@ impl Mode {
             "syntax" => Self::Syntax,
             "pp" => Self::Pp,
             "emit-llvm" => Self::EmitLlvm,
+            "obj" => Self::Obj,
             "run" => Self::Run,
             _ => return None,
         })
@@ -37,6 +41,7 @@ impl Mode {
             Self::Syntax => "syntax",
             Self::Pp => "pp",
             Self::EmitLlvm => "emit-llvm",
+            Self::Obj => "obj",
             Self::Run => "run",
         }
     }
@@ -50,6 +55,7 @@ impl Mode {
             Self::Syntax => &["-fsyntax-only"],
             Self::Pp => &["-E", "-o", "/dev/null"],
             Self::EmitLlvm => &["-S", "-emit-llvm", "-o", "/dev/null"],
+            Self::Obj => &["-c", "-o", "/dev/null"],
         }
     }
 }
@@ -146,7 +152,7 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
             "mode" => match Mode::parse(value) {
                 Some(_) if mode.is_some() => err("duplicate `mode`".into()),
                 Some(m) => mode = Some(m),
-                None => err(format!("unknown mode `{value}` (syntax|pp|emit-llvm|run)")),
+                None => err(format!("unknown mode `{value}` (syntax|pp|emit-llvm|obj|run)")),
             },
             "std" => {
                 if std.is_some() {
@@ -403,6 +409,7 @@ mod tests {
             ("syntax", &["-fsyntax-only"][..]),
             ("pp", &["-E", "-o", "/dev/null"]),
             ("emit-llvm", &["-S", "-emit-llvm", "-o", "/dev/null"]),
+            ("obj", &["-c", "-o", "/dev/null"]),
             ("run", &[]),
         ] {
             let s = parse_spec(&format!("//@ mode: {m}\n")).unwrap();
@@ -415,7 +422,7 @@ mod tests {
     fn rejects_bad_headers() {
         assert_eq!(
             errs("//@ mode: link\n"),
-            ["line 1: unknown mode `link` (syntax|pp|emit-llvm|run)"]
+            ["line 1: unknown mode `link` (syntax|pp|emit-llvm|obj|run)"]
         );
         assert_eq!(errs("//@ mode: pp\n//@ mode: pp\n"), ["line 2: duplicate `mode`"]);
         assert_eq!(errs("//@ mode\n"), ["line 1: `mode` requires a value (`mode: ...`)"]);
