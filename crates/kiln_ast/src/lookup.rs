@@ -408,7 +408,8 @@ mod tests {
             // The instantiation meter's allocation-free sum (WP-645) is
             // the report rows' live bytes (spec/ast.md §2.3).
             let rows = t.heap_bytes();
-            let report = rows.row("table").unwrap().live_bytes + rows.row("sets").unwrap().live_bytes;
+            let report =
+                rows.row("table").unwrap().live_bytes + rows.row("sets").unwrap().live_bytes;
             assert_eq!(t.live_bytes(), report);
         }
     }

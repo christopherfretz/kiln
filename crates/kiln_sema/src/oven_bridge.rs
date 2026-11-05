@@ -185,8 +185,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// lent back to sema, so the work can evaluate (nested, R-OVEN-1).
     pub(crate) fn lend_oven<R>(&mut self, oven: &mut Oven, f: impl FnOnce(&mut Self) -> R) -> R {
         debug_assert!(self.oven.is_none(), "lend_oven outside an evaluation");
-        let mut lent =
-            self.spare_oven.take().unwrap_or_else(|| Box::new(Oven::new(oven.budget())));
+        let mut lent = self.spare_oven.take().unwrap_or_else(|| Box::new(Oven::new(oven.budget())));
         std::mem::swap(oven, &mut *lent);
         self.oven = Some(lent);
         let r = f(self);
