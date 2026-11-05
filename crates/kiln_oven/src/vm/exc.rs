@@ -263,6 +263,7 @@ impl Oven {
         }
         let p = self.code.len() as u32;
         self.code.push(Op::Unwind as u32);
+        crate::kbc::pad(&mut self.code);
         self.exc.unwind_pc = Some(p);
         p as usize
     }

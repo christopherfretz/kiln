@@ -712,14 +712,18 @@ impl Oven {
             serial,
         });
         loop {
-            let w = self.code[pc];
+            // One checked read of the instruction's words; operands index
+            // the local window with constant indices (spec/oven.md
+            // "Dispatch").
+            let win = crate::kbc::window(&self.code, pc);
+            let w = win[0];
             let op = Op::from_u8(w as u8);
             let aux = w >> 8;
             #[cfg(feature = "op-stats")]
             opstats::count(op);
             macro_rules! arg {
                 ($i:expr) => {
-                    self.code[pc + 1 + $i] as usize
+                    win[1 + $i] as usize
                 };
             }
             macro_rules! reg {
@@ -747,14 +751,14 @@ impl Oven {
                 }
                 Op::Trap => fail!(Fault::Trap(arg!(0) as u32)),
                 Op::Const => {
-                    let v = u64::from(self.code[pc + 2]) | u64::from(self.code[pc + 3]) << 32;
+                    let v = u64::from(win[2]) | u64::from(win[3]) << 32;
                     reg!(0) = if aux & 1 != 0 { v as i64 as i128 as u128 } else { u128::from(v) };
                     pc += 4;
                 }
                 Op::Const2 => {
                     let mut v = 0u128;
                     for i in (0..4).rev() {
-                        v = v << 32 | u128::from(self.code[pc + 2 + i]);
+                        v = v << 32 | u128::from(win[2 + i]);
                     }
                     reg!(0) = v;
                     pc += 6;
@@ -833,7 +837,7 @@ impl Oven {
                     pc += 3;
                 }
                 Op::EnumCheck => {
-                    let w = |i: usize| u64::from(self.code[pc + i]);
+                    let w = |i: usize| u64::from(win[i]);
                     let min = i128::from((w(2) | w(3) << 32).cast_signed());
                     let max = i128::from((w(4) | w(5) << 32).cast_signed());
                     // clang 19's `HandleCast`: the operand, sign-extended
@@ -1374,8 +1378,8 @@ impl Oven {
                 Op::VCall => {
                     let base = arg!(1);
                     let slot = fb + base + aux as usize;
-                    let m = DeclId::new(self.code[pc + 1]);
-                    let cls = OTy(self.code[pc + 3]);
+                    let m = DeclId::new(win[1]);
+                    let cls = OTy(win[3]);
                     let adj = arg!(3);
                     let callee = match self.vcall(b, m, cls, self.regs[slot] as u64) {
                         Ok((f, this, cov)) => {

@@ -480,7 +480,7 @@ impl Oven {
             c.emit(Op::Ret, 1, &[r]);
             RetKind::Scalar(ty)
         };
-        let nregs = c.max;
+        let nregs = c.end_unit();
         let f = &mut self.funcs[idx as usize];
         f.entry = entry;
         f.state = FState::Ready;
@@ -533,7 +533,7 @@ impl Oven {
         c.emit_site(Op::Builtin, crate::kbc::bi::MSG_CHARS, &[n, n, p, p, ct.0, 0], data, loc);
         c.close_scope();
         c.emit(Op::Ret, 1, &[n]);
-        let nregs = c.max;
+        let nregs = c.end_unit();
         let f = &mut self.funcs[idx as usize];
         f.entry = entry;
         f.state = FState::Ready;
@@ -595,7 +595,7 @@ impl Oven {
         };
         c.close_scope();
         c.emit(Op::Ret, 1, &[n]);
-        let nregs = c.max;
+        let nregs = c.end_unit();
         let f = &mut self.funcs[idx as usize];
         f.entry = entry;
         f.state = FState::Ready;
@@ -631,7 +631,7 @@ impl Oven {
         let n = c.reg();
         c.emit_loc(Op::Call, 0, &[fi, n], at);
         c.emit(Op::Ret, u32::from(!void), &[n]);
-        let nregs = c.max;
+        let nregs = c.end_unit();
         let idx = self.funcs.len() as u32;
         self.funcs.push(Func {
             decl: None,
@@ -666,7 +666,7 @@ impl Oven {
         let loc = c.b.ast().decls.get(d).loc();
         c.emit_loc(Op::PushCleanup, 0, &[p, f, ty.0], loc);
         c.emit(Op::Ret, 1, &[p]);
-        let nregs = c.max;
+        let nregs = c.end_unit();
         let idx = self.funcs.len() as u32;
         self.funcs.push(Func {
             decl: None,
@@ -707,7 +707,7 @@ impl Oven {
         let r = c.reg();
         c.konst(r, u128::from(fn_ptr(f)));
         c.emit(Op::Ret, 1, &[r]);
-        let nregs = c.max;
+        let nregs = c.end_unit();
         let cls = {
             let ast = c.b.ast();
             ast.decls.get(d).ctx().and_then(|k| ast.decls.get(ast.first(k)).ty())
@@ -867,7 +867,7 @@ impl Oven {
             let loc = ast.stmts.rbrace(end);
             c.trap_loc(loc, "control reached end of constexpr function".into());
         }
-        let nregs = c.max;
+        let nregs = c.end_unit();
         let this_reg = c.this_reg;
         let memo = c.o.budget.memo_entries > 0
             && !c.uses_cc
@@ -1038,6 +1038,14 @@ impl<'a> Compiler<'a> {
     }
 
     // ---- emission -------------------------------------------------------
+
+    /// Ends the unit: pads the code (`kbc::pad`, so the VM's fetch window
+    /// of its last instruction is in bounds) and returns its register
+    /// count.
+    fn end_unit(&mut self) -> u32 {
+        crate::kbc::pad(&mut self.o.code);
+        self.max
+    }
 
     fn flush(&mut self) {
         if self.pending.is_empty() {

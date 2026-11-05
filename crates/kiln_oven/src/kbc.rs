@@ -707,6 +707,50 @@ impl Op {
     }
 }
 
+/// Words the VM fetches per instruction: the op word and up to
+/// `WINDOW - 1` operands, in one checked slice read (spec/oven.md
+/// "Dispatch"). Every instruction fits one window.
+pub(crate) const WINDOW: usize = 8;
+
+const _: () = {
+    let mut i = 0;
+    while i < Op::OPERANDS.len() {
+        assert!((Op::OPERANDS[i] as usize) < WINDOW, "an instruction outgrew the fetch window");
+        i += 1;
+    }
+};
+
+/// Ends a unit of code with `WINDOW - 1` `Nop` words, so the fetch window
+/// of its last instruction lies inside the code. The words are never
+/// executed (control never falls off the end of a unit), and the next
+/// unit is appended after them.
+pub(crate) fn pad(code: &mut Vec<u32>) {
+    code.extend_from_slice(&[Op::Nop as u32; WINDOW - 1]);
+}
+
+/// The fetch window at `pc` when fewer than [`WINDOW`] words follow it
+/// (code read before its unit is padded): the instruction's own words,
+/// zero-filled after. Panics, as indexing the code does, when the
+/// instruction runs past the end of the code.
+#[cold]
+#[inline(never)]
+pub(crate) fn tail_window(code: &[u32], pc: usize) -> [u32; WINDOW] {
+    let n = Op::from_u8(code[pc] as u8).operands();
+    let mut w = [0; WINDOW];
+    w[..=n].copy_from_slice(&code[pc..=pc + n]);
+    w
+}
+
+/// The fetch window at `pc`: `code[pc..pc + WINDOW]`, or
+/// [`tail_window`]'s when the code ends sooner.
+#[inline]
+pub(crate) fn window(code: &[u32], pc: usize) -> [u32; WINDOW] {
+    match code.get(pc..).and_then(|s| s.first_chunk::<WINDOW>()) {
+        Some(w) => *w,
+        None => tail_window(code, pc),
+    }
+}
+
 /// Comparison kinds (the `cmp` field of `ICmp`/`FCmp`/`PtrCmp`).
 pub(crate) mod cmp {
     pub const EQ: u32 = 0;
@@ -785,4 +829,62 @@ pub(crate) fn disassemble(code: &[u32], from: usize, to: usize) -> String {
         pc += 1 + n;
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A unit of every operand count: `Const2` (5), `Builtin` (6) and a
+    /// `Ret` (1) last.
+    fn unit() -> Vec<u32> {
+        let mut code = vec![Op::Const2 as u32, 7, 1, 2, 3, 4];
+        code.extend_from_slice(&[Op::Builtin as u32 | 3 << 8, 1, 2, 3, 4, 5, 6]);
+        code.extend_from_slice(&[Op::Ret as u32 | 1 << 8, 7]);
+        code
+    }
+
+    fn pcs(code: &[u32], end: usize) -> Vec<usize> {
+        let mut pc = 0;
+        let mut out = Vec::new();
+        while pc < end {
+            out.push(pc);
+            pc += 1 + Op::from_u8(code[pc] as u8).operands();
+        }
+        out
+    }
+
+    #[test]
+    fn padded_unit_windows_are_in_bounds() {
+        let mut code = unit();
+        let end = code.len();
+        pad(&mut code);
+        for pc in pcs(&code, end) {
+            assert!(code.len() - pc >= WINDOW, "pc {pc}");
+            let w = window(&code, pc);
+            assert_eq!(w[..], code[pc..pc + WINDOW]);
+        }
+        // The padding disassembles as `Nop`s after the unit's code.
+        assert!(code[end..].iter().all(|&w| w == Op::Nop as u32));
+    }
+
+    #[test]
+    fn tail_window_holds_the_instruction_zero_filled() {
+        let code = unit();
+        for pc in pcs(&code, code.len()) {
+            let n = 1 + Op::from_u8(code[pc] as u8).operands();
+            let w = window(&code, pc);
+            assert_eq!(w[..n], code[pc..pc + n], "pc {pc}");
+            if code.len() - pc < WINDOW {
+                assert!(w[n..].iter().all(|&x| x == 0), "pc {pc}");
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn tail_window_of_a_truncated_instruction_panics() {
+        let code = [Op::Const as u32, 1, 2];
+        let _ = window(&code, 0);
+    }
 }
