@@ -317,43 +317,148 @@ pub(crate) struct Space {
     pub top: u64,
 }
 
+// ---- per-granule bitmasks ----------------------------------------------------
+//
+// `Space::init` and `Space::life` keep one bit per byte: bit `i` of map
+// byte `g` is byte `g * GRAN + i`. Read little-endian, the eight map bytes
+// from map byte `g` are one `u64` whose bit `k` is byte `g * GRAN + k`, so
+// the bits of a run of up to [`WBITS`] bytes are one shift and mask of one
+// word, whatever its alignment.
+
+/// The most bits [`get_bits`] and [`put_bits`] move at once: a word of
+/// eight map bytes less the at most 7-bit offset into its first byte.
+const WBITS: u64 = 56;
+
+/// Ones in the low `n` bits (`n <= WBITS`).
+#[inline]
+fn ones(n: u64) -> u64 {
+    (1u64 << n) - 1
+}
+
+/// The eight map bytes from byte `b` of `v` as a little-endian word (zero
+/// past the end of `v`).
+#[inline]
+fn word(v: &[u8], b: usize) -> u64 {
+    if let Some(w) = v.get(b..b + 8) {
+        return u64::from_le_bytes(w.try_into().unwrap_or_default());
+    }
+    let mut w = [0u8; 8];
+    let tail = v.get(b..).unwrap_or_default();
+    w[..tail.len()].copy_from_slice(tail);
+    u64::from_le_bytes(w)
+}
+
+/// The bits of bytes `[pos, pos + n)` in `v`, in the low `n` bits
+/// (`n <= WBITS`).
+#[inline]
+fn get_bits(v: &[u8], pos: u64, n: u64) -> u64 {
+    word(v, (pos / GRAN) as usize) >> (pos % GRAN) & ones(n)
+}
+
+/// Sets the bits of bytes `[pos, pos + n)` in `v` to the low `n` bits of
+/// `x` (`n <= WBITS`), leaving every other bit as it is.
+#[inline]
+fn put_bits(v: &mut [u8], pos: u64, n: u64, x: u64) {
+    if n == 0 {
+        return;
+    }
+    let (b, sh) = ((pos / GRAN) as usize, pos % GRAN);
+    let m = ones(n) << sh;
+    let w = (word(v, b) & !m | x << sh & m).to_le_bytes();
+    // The whole word when it fits (its other bits are written back
+    // unchanged), else only the map bytes the range touches.
+    match v.get_mut(b..b + 8) {
+        Some(d) => d.copy_from_slice(&w),
+        None => {
+            let nb = (sh + n).div_ceil(GRAN) as usize;
+            v[b..b + nb].copy_from_slice(&w[..nb]);
+        }
+    }
+}
+
+/// Splits `[pos, pos + len)` (`len > WBITS`) at map-byte boundaries: the
+/// head's bit count, the first whole map byte, the number of whole map
+/// bytes, and the tail's bit count.
+#[inline]
+fn split(pos: u64, len: u64) -> (u64, usize, usize, u64) {
+    let h = pos.next_multiple_of(GRAN) - pos;
+    let full = (len - h) / GRAN;
+    (h, ((pos + h) / GRAN) as usize, full as usize, len - h - full * GRAN)
+}
+
 /// Whether every byte of `[abs, abs + len)` has its bit set in the
 /// per-granule bitmask `v`.
 fn all_bits(v: &[u8], abs: u64, len: u64) -> bool {
-    let (mut a, end) = (abs, abs + len);
-    while a < end {
-        let g = (a / GRAN) as usize;
-        let lo = (a % GRAN) as u32;
-        let hi = ((end - a + u64::from(lo)).min(GRAN)) as u32;
-        let mask = (((1u32 << hi) - 1) & !((1u32 << lo) - 1)) as u8;
-        if v[g] & mask != mask {
-            return false;
-        }
-        a += u64::from(hi - lo);
+    if len <= WBITS {
+        return get_bits(v, abs, len) == ones(len);
     }
-    true
+    let (h, g, full, t) = split(abs, len);
+    get_bits(v, abs, h) == ones(h)
+        && v[g..g + full].iter().all(|&b| b == 0xFF)
+        && get_bits(v, abs + len - t, t) == ones(t)
 }
 
 /// Sets (`on`) or clears the bits of `[abs, abs + len)` in the
 /// per-granule bitmask `v`.
 fn set_bits(v: &mut [u8], abs: u64, len: u64, on: bool) {
-    if len == 0 {
+    if len <= WBITS {
+        put_bits(v, abs, len, if on { ones(len) } else { 0 });
         return;
     }
-    let end = abs + len;
-    let (g0, g1) = (abs / GRAN, (end - 1) / GRAN);
-    let mask = |lo: u64, hi: u64| (((1u32 << hi) - 1) & !((1u32 << lo) - 1)) as u8;
-    let mut put = |g: u64, m: u8| {
-        let b = &mut v[g as usize];
-        if on { *b |= m } else { *b &= !m }
-    };
-    if g0 == g1 {
-        put(g0, mask(abs % GRAN, end - g0 * GRAN));
+    let (h, g, full, t) = split(abs, len);
+    put_bits(v, abs, h, if on { ones(h) } else { 0 });
+    v[g..g + full].fill(if on { 0xFF } else { 0 });
+    put_bits(v, abs + len - t, t, if on { ones(t) } else { 0 });
+}
+
+/// Copies the bits of bytes `[src, src + len)` of `s` to bytes
+/// `[dst, dst + len)` of `d` (another map).
+fn copy_bits(d: &mut [u8], dst: u64, s: &[u8], src: u64, len: u64) {
+    if len > WBITS && src % GRAN == dst % GRAN {
+        // The same offset into a map byte: whole map bytes move as bytes.
+        let (h, sg, full, t) = split(src, len);
+        let dg = ((dst + h) / GRAN) as usize;
+        d[dg..dg + full].copy_from_slice(&s[sg..sg + full]);
+        put_bits(d, dst, h, get_bits(s, src, h));
+        put_bits(d, dst + len - t, t, get_bits(s, src + len - t, t));
         return;
     }
-    put(g0, mask(abs % GRAN, GRAN));
-    put(g1, mask(0, end - g1 * GRAN));
-    v[(g0 + 1) as usize..g1 as usize].fill(if on { 0xFF } else { 0 });
+    let mut i = 0;
+    while i < len {
+        let n = (len - i).min(WBITS);
+        put_bits(d, dst + i, n, get_bits(s, src + i, n));
+        i += n;
+    }
+}
+
+/// [`copy_bits`] within one map, as if every source bit were read before
+/// any destination bit is written (the ranges may overlap).
+fn copy_bits_within(v: &mut [u8], dst: u64, src: u64, len: u64) {
+    if len > WBITS && src % GRAN == dst % GRAN {
+        let (h, sg, full, t) = split(src, len);
+        let (hb, tb) = (get_bits(v, src, h), get_bits(v, src + len - t, t));
+        v.copy_within(sg..sg + full, ((dst + h) / GRAN) as usize);
+        put_bits(v, dst, h, hb);
+        put_bits(v, dst + len - t, t, tb);
+        return;
+    }
+    // Chunk by chunk, away from the overlap: a chunk's write reaches no
+    // source bit a later chunk reads.
+    if dst <= src {
+        let mut i = 0;
+        while i < len {
+            let n = (len - i).min(WBITS);
+            put_bits(v, dst + i, n, get_bits(v, src + i, n));
+            i += n;
+        }
+    } else {
+        let mut i = len;
+        while i > 0 {
+            let n = i.min(WBITS);
+            i -= n;
+            put_bits(v, dst + i, n, get_bits(v, src + i, n));
+        }
+    }
 }
 
 impl Space {
@@ -420,7 +525,18 @@ impl Space {
         self.ptr[g0 as usize..=g1 as usize].fill(m);
     }
 
+    /// The `len` bytes at `abs` as a little-endian value (the first 16
+    /// when `len` is more).
     pub fn read(&self, abs: u64, len: u64) -> u128 {
+        // One 16-byte load, masked to `len`, unless it would run past the
+        // end of the space.
+        let a = abs as usize;
+        if len <= 16
+            && let Some(w) = self.bytes.get(a..a + 16)
+        {
+            let v = u128::from_le_bytes(w.try_into().unwrap_or_default());
+            return if len == 16 { v } else { v & ((1u128 << (8 * len)) - 1) };
+        }
         let mut v = 0u128;
         for i in (0..len).rev() {
             v = v << 8 | u128::from(self.bytes[(abs + i) as usize]);
@@ -428,7 +544,18 @@ impl Space {
         v
     }
 
+    /// Writes the low `len` bytes of `v` at `abs`, little-endian (and
+    /// zeros past the 16th).
     pub fn write(&mut self, abs: u64, len: u64, mut v: u128) {
+        let a = abs as usize;
+        if len <= 16
+            && let Some(d) = self.bytes.get_mut(a..a + 16)
+        {
+            let m = if len == 16 { u128::MAX } else { (1u128 << (8 * len)) - 1 };
+            let old = u128::from_le_bytes((&*d).try_into().unwrap_or_default());
+            d.copy_from_slice(&(old & !m | v & m).to_le_bytes());
+            return;
+        }
         for i in 0..len {
             self.bytes[(abs + i) as usize] = v as u8;
             v >>= 8;
@@ -1184,10 +1311,7 @@ impl Memory {
         if dst_sp == src_sp {
             let sp = self.space_mut(dst_sp);
             sp.bytes.copy_within(src as usize..(src + len) as usize, dst as usize);
-            for i in 0..len {
-                let v = sp.init[((src + i) / GRAN) as usize] >> ((src + i) % GRAN) & 1 != 0;
-                sp.set_init(dst + i, 1, v);
-            }
+            copy_bits_within(&mut sp.init, dst, src, len);
             if src.is_multiple_of(GRAN) && dst.is_multiple_of(GRAN) {
                 let n = len.div_ceil(GRAN);
                 let range = (src / GRAN) as usize..(src / GRAN + n) as usize;
@@ -1216,15 +1340,11 @@ impl Memory {
         let (d, s) = self.pair(dst_sp, src_sp);
         d.bytes[dst as usize..(dst + len) as usize]
             .copy_from_slice(&s.bytes[src as usize..(src + len) as usize]);
-        for i in 0..len {
-            let v = s.init[((src + i) / GRAN) as usize] >> ((src + i) % GRAN) & 1 != 0;
-            d.set_init(dst + i, 1, v);
-        }
+        copy_bits(&mut d.init, dst, &s.init, src, len);
         if src.is_multiple_of(GRAN) && dst.is_multiple_of(GRAN) {
             let n = len.div_ceil(GRAN);
-            for g in 0..n {
-                d.ptr[(dst / GRAN + g) as usize] = s.ptr[(src / GRAN + g) as usize];
-            }
+            let (sg, dg) = ((src / GRAN) as usize, (dst / GRAN) as usize);
+            d.ptr[dg..dg + n as usize].copy_from_slice(&s.ptr[sg..sg + n as usize]);
             self.copy_spilled(dst_sp, dst / GRAN, src_sp, src / GRAN, n);
         }
     }
@@ -2777,5 +2897,125 @@ mod tests {
         let r = snew(&mut m, 8);
         assert_eq!(base(&m, r), top, "no hole was made");
         assert_eq!(get(&m, keep), Some(5));
+    }
+
+    // ---- the per-granule bitmasks, against a bit-at-a-time reference ----
+
+    fn bit(v: &[u8], i: u64) -> bool {
+        v[(i / GRAN) as usize] >> (i % GRAN) & 1 != 0
+    }
+
+    fn set_bit(v: &mut [u8], i: u64, on: bool) {
+        let m = 1u8 << (i % GRAN);
+        let b = &mut v[(i / GRAN) as usize];
+        if on { *b |= m } else { *b &= !m }
+    }
+
+    /// The copy of the bits of a range before WP-649, one bit at a time,
+    /// every source bit read before any destination bit is written.
+    fn copy_bits_ref(d: &mut [u8], dst: u64, s: &[u8], src: u64, len: u64) {
+        let bits: Vec<bool> = (0..len).map(|i| bit(s, src + i)).collect();
+        for (i, &b) in (0..len).zip(&bits) {
+            set_bit(d, dst + i, b);
+        }
+    }
+
+    /// A map of `n` bytes of pseudo-random bits (xorshift from `seed`).
+    fn pattern(n: usize, seed: u64) -> Vec<u8> {
+        let mut x = seed | 1;
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bit_ranges_match_the_bit_at_a_time_reference() {
+        // Lengths past `WBITS` take the whole-map-byte paths.
+        const LENS: u64 = 140;
+        for pos in 0..16 {
+            for len in 0..LENS {
+                let v = pattern(48, pos * 1000 + len);
+                let all = (0..len).all(|i| bit(&v, pos + i));
+                assert_eq!(all_bits(&v, pos, len), all, "all_bits {pos} {len}");
+                let mut full = v.clone();
+                (0..len).for_each(|i| set_bit(&mut full, pos + i, true));
+                assert!(all_bits(&full, pos, len));
+                for on in [false, true] {
+                    let (mut a, mut b) = (v.clone(), v.clone());
+                    set_bits(&mut a, pos, len, on);
+                    (0..len).for_each(|i| set_bit(&mut b, pos + i, on));
+                    assert_eq!(a, b, "set_bits {pos} {len} {on}");
+                }
+            }
+        }
+        // A range ending at the map's last byte (the short-word paths).
+        let v = pattern(3, 9);
+        let mut a = v.clone();
+        set_bits(&mut a, 17, 7, true);
+        assert_eq!(a, [v[0], v[1], v[2] | 0xFE]);
+        assert!(all_bits(&a, 17, 7));
+        assert_eq!(all_bits(&a, 16, 8), v[2] & 1 != 0);
+    }
+
+    #[test]
+    fn copy_moves_init_bits_like_the_reference() {
+        let mut m = Memory::new(256 * MIB);
+        m.frame.grow(512);
+        m.heap.grow(512);
+        let (lo, n) = (64u64, 24usize);
+        for so in 0..16u64 {
+            for d in 0..16u64 {
+                for len in 0..140u64 {
+                    let seed = so << 16 | d << 8 | len;
+                    // Same space, the destination before, at and after the
+                    // source (every overlap direction).
+                    let (src, dst) = (lo + 16 + so, lo + d * 2);
+                    for (src, dst) in [(src, dst), (dst, src)] {
+                        m.frame.init[8..8 + n].copy_from_slice(&pattern(n, seed));
+                        let mut want = m.frame.init.clone();
+                        let snap = want.clone();
+                        copy_bits_ref(&mut want, dst, &snap, src, len);
+                        m.copy(Sp::Frame, dst, Sp::Frame, src, len);
+                        assert_eq!(m.frame.init, want, "same space {src} -> {dst}, {len}");
+                    }
+                    // Across spaces.
+                    m.frame.init[8..8 + n].copy_from_slice(&pattern(n, seed ^ 0x55));
+                    m.heap.init[8..8 + n].copy_from_slice(&pattern(n, seed ^ 0xAA));
+                    let mut want = m.heap.init.clone();
+                    copy_bits_ref(&mut want, lo + d, &m.frame.init, lo + so, len);
+                    m.copy(Sp::Heap, lo + d, Sp::Frame, lo + so, len);
+                    assert_eq!(m.heap.init, want, "cross space {so} -> {d}, {len}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn read_and_write_match_byte_at_a_time() {
+        let mut s = Space::default();
+        s.grow(64);
+        let end = s.bytes.len() as u64;
+        for abs in [0, 5, 8, end - 16, end - 9, end - 3] {
+            for len in 0..=16u64.min(end - abs) {
+                let v = u128::from_le_bytes(std::array::from_fn(|i| 0xA0 + i as u8));
+                let before = pattern(s.bytes.len(), abs * 31 + len);
+                s.bytes.copy_from_slice(&before);
+                s.write(abs, len, v);
+                let mut want = before;
+                for i in 0..len as usize {
+                    want[abs as usize + i] = 0xA0 + i as u8;
+                }
+                assert_eq!(s.bytes, want, "write {abs} {len}");
+                let r = (0..len)
+                    .rev()
+                    .fold(0u128, |r, i| r << 8 | u128::from(want[(abs + i) as usize]));
+                assert_eq!(s.read(abs, len), r, "read {abs} {len}");
+            }
+        }
     }
 }
