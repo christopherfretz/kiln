@@ -1,5 +1,5 @@
 // [temp.inst]/5 and /8, [meta.reflection.extract], [meta.reflection.queries]
-// (P2996R13; spec/reflection.md "Reading a variable through a reflection",
+// (P2996R13; spec/reflection.md §3 "Reading a variable through a reflection",
 // WP-638): reading a static data member of a spelled specialization that
 // no expression names, through `static_data_members_of` or `members_of`,
 // instantiates its initializer: `extract`, `constant_of`, `object_of` and

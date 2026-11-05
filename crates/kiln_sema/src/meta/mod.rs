@@ -80,7 +80,7 @@ impl Sema<'_, '_> {
     /// Reading the variable `r` designates (a variable, or the object of
     /// one: `object_of`) through a reflection, at `loc`: its definition is
     /// instantiated as an odr-use by name would instantiate it
-    /// ([temp.inst]/5 and /8, [basic.def.odr]/4; spec/reflection.md
+    /// ([temp.inst]/5 and /8, [basic.def.odr]/4; spec/reflection.md §3
     /// "Reading a variable through a reflection", WP-638). `extract`,
     /// `constant_of` and `object_of` come through here, before they read
     /// the variable's value or take its address, so a static data member

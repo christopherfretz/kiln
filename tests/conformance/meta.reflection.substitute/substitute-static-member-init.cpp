@@ -1,5 +1,5 @@
 // [temp.inst]/5 and /8, [meta.reflection.substitute], [meta.reflection.extract]
-// (P2996R13; spec/reflection.md "Reading a variable through a reflection",
+// (P2996R13; spec/reflection.md §3 "Reading a variable through a reflection",
 // WP-638): a static data member of a class template specialization that
 // `substitute` produced is reached only through `static_data_members_of`;
 // `extract` reads its value, which instantiates its initializer as a

@@ -1,5 +1,5 @@
 // [temp.inst]/5 and /8, [meta.reflection.extract] (P2996R13;
-// spec/reflection.md "Reading a variable through a reflection", WP-638):
+// spec/reflection.md §3 "Reading a variable through a reflection", WP-638):
 // `extract` of a static data member instantiates its initializer, so one
 // that is ill-formed for the specialization is diagnosed there, with the
 // instantiation's note at the `extract` call; the evaluation then fails.
