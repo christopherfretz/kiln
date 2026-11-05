@@ -25,9 +25,13 @@ Section references in brackets are to the C++26 IS.
    `<meta>` where a paper revision differs. A difference found later is
    recorded in this section, with the GCC spelling winning.
 2. **Reference compiler** (D1). GCC 16.1 (`g++-16 -std=c++26
-   -freflection`) is the behavioural oracle. The differential runs off the
-   merge queue (→ WP-483). Tests stay kiln goldens (`oracle: none`, §9),
-   except the real-header tests (item 3), which are `oracle: gcc`.
+   -freflection`) is the behavioural oracle. The differential is the
+   harness's `oracle: gcc` (WP-483; spec/harness.md "GCC oracle"), and
+   merge-queue CI runs it against GCC 16.1 (WP-502, docs/VALIDATION.md).
+   88 reflection conformance files (98 in the corpus) carry `oracle:
+   gcc`; the rest stay kiln goldens (`oracle: none`, §9). A triaged
+   divergence is recorded in docs/status/deviations.md "GCC 16.1
+   reflection divergences".
 3. **Library vehicle** (D2; WP-484). The primary header is libstdc++
    16.1's real `<meta>` (`__cpp_lib_reflection 202603L`), reached with
    `--gcc-toolchain=<GCC 16.1 prefix>`: every consteval function it
@@ -45,7 +49,7 @@ Section references in brackets are to the C++26 IS.
    `:]` and no rule below is reachable (implemented:
    `reflection/flag-off.cpp`). Turning it on by default at `-std=c++26` is
    an operator decision taken after M6.
-5. **Feature macros** (→ WP-484), GCC 16.1's values under
+5. **Feature macros** (WP-484), GCC 16.1's values under
    `-freflection`: `__cpp_impl_reflection 202603L`; with `<meta>`,
    `__cpp_lib_reflection 202603L` and `__cpp_lib_define_static 202506L`.
    GCC 16.1 defines no separate consteval-block or annotation macro.
@@ -84,7 +88,8 @@ Section references in brackets are to the C++26 IS.
   that is not an index the table handed out does not freeze ("kiln: value
   is not a reflection the compiler produced") and is not a valid
   intrinsic operand (§8.1).
-- Overflow of the u32 index is a diagnostic, not a panic (→ WP-471).
+- Overflow of the u32 index is a diagnostic, not a panic
+  (`sema_too_many_reflections`; WP-471).
 
 ### 2.2 `Reflectee`
 `ReflectionTable` interns `ReflectionId → Reflectee`. The variants are:
@@ -102,7 +107,7 @@ Section references in brackets are to the C++26 IS.
 | `BaseSpec(DeclId, u32)` | derived class's first declaration, base index | a direct base class relationship | implemented (WP-478) |
 | `DataMemberSpec(DmsId)` | an interned spec | a `data_member_spec` result | implemented (WP-480) |
 | `FnParam(DeclId, u32)` | function's first declaration, parameter index | a function parameter (`parameters_of`) | implemented (WP-478) |
-| `Annotation(AnnId)` | one annotation occurrence | an annotation (§7) | → WP-481 |
+| `Annotation(AnnId)` | one annotation occurrence | an annotation (§7) | implemented (WP-481; queries WP-478) |
 
 - Each variant's payload is at most 8 bytes: a compile-time assertion
   keeps `size_of::<Reflectee>()` at most 12 bytes
@@ -115,7 +120,7 @@ the IS equality ([expr.eq]):
 - **Declarations** compare by entity. The interned `DeclId` is the
   entity's first declaration, as computed by `Sema::same_entity` and its
   first-declaration helper, which is the identity primitive for every
-  declaration-valued `Reflectee` (→ WP-471). Redeclarations, and the same
+  declaration-valued `Reflectee` (WP-471). Redeclarations, and the same
   entity named through a using-declaration, reflect equal.
 - **Types** are canonicalized except for a type alias at the top: `^^const
   int == ^^int const` and `^^decltype(1) == ^^int`, but `^^Alias !=
@@ -126,7 +131,7 @@ the IS equality ([expr.eq]):
 - **`data_member_spec`** results are interned by content: equal
   arguments give equal reflections (GCC 16.1 agrees; §6.1).
 - **Annotations** are distinct per occurrence, even with equal values
-  (§7; GCC 16.1 agrees; → WP-481).
+  (§7; GCC 16.1 agrees; WP-481).
 
 ### 2.4 Lifetime
 - Ids are valid for the whole translation unit: the table and every arena
@@ -138,7 +143,7 @@ the IS equality ([expr.eq]):
   mid-evaluation, since an `info` may sit anywhere in Oven memory. It is
   bounded by content interning and charged to the evaluation as
   `refl_bytes`, which counts against `-fconstexpr-memory` (D5;
-  → WP-479). A per-evaluation overlay table is an M7 item. This is the
+  WP-479). A per-evaluation overlay table is an M7 item. This is the
   one exception to the Oven's reclaim-during-evaluation rule.
 
 ### 2.5 Typed copy (decided)
@@ -536,12 +541,16 @@ answers as of that point.
   evaluation. It is the one counter that differs with the memo on or off,
   and the `oven:` test directive accepts `memo_hits>=N` floors
   (spec/harness.md).
-- New `-fconstexpr-report` fields (→ WP-483): `meta_calls`,
-  `meta_cache_hits`, `refl_bytes`, `injected_decls`,
-  `instantiations_from_meta`. `refl_bytes` is included in `peak_bytes`
-  and in the `-fconstexpr-memory` limit (§2.4).
-- Performance budgets for the reflection bench shapes (S1–S6) and the
-  4N scaling gate are recorded in docs/status/perf.md by → WP-483.
+- `-fconstexpr-report` carries `refl_bytes` (WP-479; spec/oven.md
+  "Reporting protocol"), which is included in `peak_bytes` and in the
+  `-fconstexpr-memory` limit (§2.4). The plan's further fields
+  (`meta_calls`, `meta_cache_hits`, `injected_decls`,
+  `instantiations_from_meta`) were not added: WP-483's bench gates on the
+  existing counters (`steps`, `peak_bytes`, `peak_arena`, `evaluations`).
+- The reflection bench shapes (`bench/reflect/` S1–S9, spec/bench.md
+  "Reflection shapes") and the 4N scaling gate are WP-483's; their
+  results are in docs/status/perf.md and
+  docs/status/perf-reference-workload.md "kiln vs GCC 16.1".
 
 ### 3.9 The names family
 - [meta.reflection.names] (P2996R13) as implemented by
@@ -976,7 +985,7 @@ at definition time ([temp.res]), so it needs `this->v`.
 The conditions, checked in order (implemented:
 `reflection/define-member{,-neg,-run}.cpp`):
 1. The evaluation is manifestly constant-evaluated (sema's
-   `inst.eval_loc`; `MetaCtx::plainly` after → WP-473), and is not a
+   `inst.eval_loc` and `MetaCtx::plainly`, WP-473), and is not a
    trial. Otherwise the call fails silently.
 2. `cls` reflects a class type: "'X' does not reflect a class type".
 3. That class is the innermost class being defined, compared by first
@@ -998,10 +1007,12 @@ member-specification. In practice that means `static_assert`, called
 directly or through a consteval helper, in a class or a class template;
 each specialization evaluates its own.
 
-## 7. Annotations (syntax and storage → WP-481; queries → WP-478)
+## 7. Annotations (syntax and storage WP-481; queries WP-478)
 - Syntax: `[[=constant-expression]]` in an attribute-specifier-seq on a
   declaration ([dcl.attr.annotation]). An annotation may not be combined
-  with a `using` prefix. The grammar goes in spec/parse.md with → WP-481.
+  with a `using` prefix. The grammar is spec/parse.md "Annotations" and
+  spec/annotations.md §2 (WP-481); the gaps still open against P3394R4
+  are spec/annotations.md §9.
 - The value is copy-initialized from the expression, must have
   structural type, and is frozen. Each occurrence is a distinct
   `Reflectee::Annotation(AnnId)`, even when two values are equal (§2.3).
@@ -1218,8 +1229,9 @@ the spelling; the default is `kiln`.
   -I tests/support`, `skip(clang)`, `oracle: none`, with `strict-diags`
   where they check diagnostics. Each test names the IS section it
   exercises. A test that needs clang 22 behaviour uses `//@ requires:
-  clang>=22` or `//@ min-oracle: 22`. GCC 16.1 differential runs live off
-  the merge queue (→ WP-483).
+  clang>=22` or `//@ min-oracle: 22`. A test whose verdict GCC 16.1 can
+  check carries `oracle: gcc` (WP-483), which merge-queue CI runs
+  (WP-502).
 - **Directories.** The spike's tests stay in `tests/conformance/reflection/`.
   New tests go by IS clause:
 
@@ -1227,7 +1239,7 @@ the spelling; the default is `kiln`.
   |---|---|
   | `expr.reflect/` | the `^^` operator (§2) |
   | `basic.splice/` | splices in every position (§5) |
-  | `dcl.pre.consteval-block/` | consteval blocks, plainly constant-evaluated (§4.2) |
+  | `dcl.pre/consteval-block-*.cpp` | consteval blocks, plainly constant-evaluated (§4.2) |
   | `meta.reflection.queries/`, `meta.reflection.names/` | queries and names |
   | `meta.reflection.traits/` | type traits |
   | `meta.reflection.member.queries/`, `meta.reflection.layout/`, `meta.reflection.access.context/`, `meta.reflection.access.queries/` | members, layout, access (spec/reflection-members.md) |
@@ -1239,8 +1251,8 @@ the spelling; the default is `kiln`.
 
 - **WP-470 tests.** `reflection/dispatch-inline-ns.cpp` covers §3.1.
   `reflection/memo-purity.cpp` covers §3.3 and §3.6.
-- **Bench.** The `bench/reflect/` shapes S1–S6 and the scaling gate are
-  added by → WP-483.
+- **Bench.** The `bench/reflect/` shapes and the scaling gate are WP-483's
+  (S1–S6; S7/S8 WP-551, S9 WP-501; spec/bench.md).
 - **Status.** `docs/status/cxx-features.md` "C++26 reflection (M6)" has one
   row per WP-470..485. The spike's findings are frozen in
   docs/status/reflection-spike.md.

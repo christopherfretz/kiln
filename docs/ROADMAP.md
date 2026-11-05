@@ -174,7 +174,9 @@ from the P2996 text.
 - Exit: the reference workload builds
   and its tests pass; its compile time and peak memory with kiln are recorded
   against GCC 16.1 (whose constexpr memory growth is the problem kiln exists
-  to fix).
+  to fix). Exit recorded 2026-11-05 (docs/plans/m6-reflection.md §5); the
+  one open perf item (one wide binding TU 3.5x slower than GCC) is carried
+  into M7 as WP-641/WP-642.
 
 ## M7 — Performance campaign
 With correctness pinned by M5/M6, optimize the Oven and the frontend against

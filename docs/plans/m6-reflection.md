@@ -137,7 +137,7 @@ Normative target: the C++26 IS wording of P2996R13 plus the papers adopted with 
 8. **Error model and ABI.**
    - Every bridge failure is a `MetaError { notes, kind }`. With P3560 the Oven throws `std::meta::exception(what, from = ^^fn, where)` through the P3068 path. A silent failure stays silent for trials.
    - Diagnostics follow GCC 16.1's shape where kiln has no clang wording.
-   - **Mangling placeholder:** a reflection inside a template argument of an emitted symbol mangles as a kiln-vendor form, deterministic within the TU and cached per `ReflectionId`, until WP-102 picks GCC's Itanium form. It is flagged in spec/abi-mangle as "not link-compatible".
+   - **Mangling placeholder:** a reflection inside a template argument of an emitted symbol mangles as a kiln-vendor form, deterministic within the TU and cached per `ReflectionId`, until WP-102 picks GCC's Itanium form. It is flagged in spec/abi-mangle as "not link-compatible". *Superseded (WP-501):* the mangling is structural, `L u6__info <kind> <entity> E` by default or GCC 16.1's `L Dm … E` under `-fkiln-reflection-mangling=gcc`, with the reflectee's linkage, so equal reflections link across TUs (spec/reflection.md §8.3).
 9. **Tests and status.** Directory map: `tests/conformance/{expr.reflect, basic.splice, meta.reflection.*, dcl.attr.annotation, dcl.pre.consteval-block}/`. Plus the `docs/status/cxx-features.md` reflection rows and the open questions.
 
 ## 3. Performance and memory design (Oven)
@@ -411,6 +411,14 @@ The vs-GCC perf table, the `--scaling` sweeps and the private corpora stay off t
   `peak_arena` is flat on S1, S2, S4 and S5. S7/S8 were already green.
   At the bench N, kiln/GCC is 0.20x–0.94x in time and 0.08x–0.34x in memory.
   The tables are in docs/status/perf-reference-workload.md "kiln vs GCC 16.1".
+
+**M6 exit record (2026-11-05):**
+- (a) Met. The reference workload: all 49 slugs of its harness generate, compile and run their tests under kiln with libstdc++ 16.1 `<meta>` (private harness, supervisor-measured 2026-11-05).
+- (b) Met with one written reason. 48 slugs are measurable on both compilers: generator stage wall 619 s (kiln) vs 1277 s (g++ 16.1), 0.48x; peak RSS sum 29.6 GiB vs 88.7 GiB, 0.33x, kiln lower on every slug; whole-harness wall 1831 s vs 2493 s, 0.73x; production-compile stage 1.04x overall, with one outlier (one wide binding TU: 264 s vs 76 s) (private harness, supervisor-measured 2026-11-05). The written reason is docs/status/perf-reference-workload.md "`synth_accessor_god` production TU (WP-633)": kiln's frontend takes 14 s of it, and the rest is LLVM's JumpThreading and MemCpyOpt on one 92k-instruction registration function; clang 19 on the same IR shape takes 432 s. The §3.8 target of 115 s for that TU is carried into M7 (WP-641, WP-642). The S1–S6 ratios are in (f).
+- (c) Met. The private ICE corpus (36 reproducer sources): kiln has 0 crashes and 0 timeouts, and every diagnosis matches the finding's expectation; g++ 16.1 ICEs on 6 of them (supervisor-measured 2026-11-05).
+- (d) Met (WP-639): every row of docs/status/cxx-features.md "C++26 reflection (M6)" is `done`. The paper row P3394R4 stays `partial` and lists what is missing (base-specifier annotations, a parameter pack's annotations, string-literal pointers; spec/annotations.md §9).
+- (e) Met. 98 conformance files run `oracle: gcc` (88 of them reflection tests) and are green in merge-queue CI; one triaged divergence, recorded with its IS citation in docs/status/deviations.md "GCC 16.1 reflection divergences".
+- (f) Recorded above.
 
 ## 6. Risks and open questions for the operator
 

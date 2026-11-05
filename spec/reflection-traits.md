@@ -112,6 +112,11 @@ parity is out of scope.
 - An operand must be complete where [meta.unary.prop], [meta.rel] and
   [meta.trans] require it of the associated class template: the engine's
   per-trait rule (`table::completeness`, the same check `__is_X` makes).
+- An incomplete operand makes the call not a constant subexpression
+  ([meta.reflection.traits]/3.2: instantiating the associated
+  specialization would have undefined behavior, [meta.rqmts]/5,
+  [res.on.functions]/2.5), so kiln diagnoses it where GCC 16.1 returns
+  a value (docs/status/deviations.md "GCC 16.1 reflection divergences").
 - A failure is never cached: the Oven memoizes only successful calls
   (spec/reflection.md §3.6), so once the type is complete the same call
   succeeds (`failures-neg.cpp`).
