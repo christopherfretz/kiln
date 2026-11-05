@@ -2872,7 +2872,7 @@ impl Compiler<'_> {
                 let cv = ast.exprs.constant_value(e);
                 let scalar = cv.and_then(|c| ast.consts.scalar(c));
                 let v = scalar.as_ref().and_then(scalar_bits);
-                let ptr = matches!(scalar, Some(kiln_ast::consts::Scalar::Pointer { .. }));
+                let ptr = matches!(scalar, Some(Scalar::Pointer { .. }));
                 if let Some(v) = v {
                     self.konst(dst, v);
                 } else if let (true, Some(cv)) = (ptr, cv) {

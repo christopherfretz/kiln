@@ -634,6 +634,7 @@ impl Printer<'_> {
     }
 
     /// Prints the object of type `ty` at byte `at` of `img`.
+    #[allow(clippy::too_many_lines, reason = "one arm per object kind")]
     fn object(&self, img: &ByteImage<'_>, ty: QualType, at: u64, depth: u32, out: &mut String) {
         if let Ok(i) = img.relocs.binary_search_by_key(&at, |r| u64::from(r.at)) {
             // A pointer-like subobject (or an aggregate starting with one).
@@ -790,7 +791,7 @@ fn push_gcc_char(c: u32, out: &mut String) {
         Some('"') => out.push_str("\\\""),
         Some(ch) if (0x20..0x7f).contains(&c) => out.push(ch),
         _ => {
-            let _ = write!(out, "\\{:03o}", c);
+            let _ = write!(out, "\\{c:03o}");
         }
     }
 }
