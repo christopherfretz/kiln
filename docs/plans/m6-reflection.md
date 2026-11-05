@@ -41,7 +41,7 @@ decisions above.
 Inputs read: ROADMAP M6/M7, ARCHITECTURE "The Oven", AGENTS.md, VALIDATION.md, spec/ast.md §10, spec/sema.md §8a, spec/oven.md "Reflection runtime", spec/parse.md §5.2, spec/lex.md, spec/types.md, docs/status/reflection-spike.md, cxx-features.md, BACKLOG WP-030/102/103/139/283/454/467, and the spike code (`kiln_ast/src/reflect.rs`, `kiln_sema/src/reflect.rs`, `kiln_oven/src/vm/meta.rs`, `compile.rs:5227 meta_call`, `lib.rs:194 MetaOp`, `ty.rs:372 intern`/`:646 refresh`, `vm.rs:1675` memo, `mem.rs:1554 TrialMode`). Main at 466032b7f. WP-283 (R1–R5) has not started.
 
 Facts that change the spike's estimate:
-- **P3068 constexpr exceptions is done** (cxx-features.md). The spike called it the largest unknown and part of the critical path. P3560 (`std::meta::exception`) is now an ordinary WP.
+- **P3068 constexpr exceptions is done** (STANDARD_SUPPORT.md). The spike called it the largest unknown and part of the critical path. P3560 (`std::meta::exception`) is now an ordinary WP.
 - **libc++ 22 ships no `<meta>`.** `.toolchain/libcxx-llvmorg-22.1.8/libcxx/include/experimental/` holds only `__simd iterator memory propagate_const simd type_traits utility`. The experimental `<meta>` exists only in the Bloomberg p2996 fork's libc++, and that fork is not in the container. **GCC 16.1 is not installed either**: only `g++-14` and `/usr/include/c++/14`. Both are open questions (§6).
 - `TrialMode::Full` (`mem.rs:1562`) exists but nothing uses it yet. Reflection (`can_substitute`) can be its first real user, which closes the WP-139 item.
 
@@ -138,7 +138,7 @@ Normative target: the C++26 IS wording of P2996R13 plus the papers adopted with 
    - Every bridge failure is a `MetaError { notes, kind }`. With P3560 the Oven throws `std::meta::exception(what, from = ^^fn, where)` through the P3068 path. A silent failure stays silent for trials.
    - Diagnostics follow GCC 16.1's shape where kiln has no clang wording.
    - **Mangling placeholder:** a reflection inside a template argument of an emitted symbol mangles as a kiln-vendor form, deterministic within the TU and cached per `ReflectionId`, until WP-102 picks GCC's Itanium form. It is flagged in spec/abi-mangle as "not link-compatible". *Superseded (WP-501):* the mangling is structural, `L u6__info <kind> <entity> E` by default or GCC 16.1's `L Dm … E` under `-fkiln-reflection-mangling=gcc`, with the reflectee's linkage, so equal reflections link across TUs (spec/reflection.md §8.3).
-9. **Tests and status.** Directory map: `tests/conformance/{expr.reflect, basic.splice, meta.reflection.*, dcl.attr.annotation, dcl.pre.consteval-block}/`. Plus the `docs/status/cxx-features.md` reflection rows and the open questions.
+9. **Tests and status.** Directory map: `tests/conformance/{expr.reflect, basic.splice, meta.reflection.*, dcl.attr.annotation, dcl.pre.consteval-block}/`. Plus the `docs/STANDARD_SUPPORT.md` reflection rows and the open questions.
 
 ## 3. Performance and memory design (Oven)
 
@@ -242,7 +242,7 @@ Every WP follows the same rules:
   - `run.plain` in the Oven, set from `EvalContext`; it replaces the `inst.eval_loc` gate (`reflect.rs:280,339`)
   - immediate escalation of `^^` and splices
   - feature macro
-  - cxx-features row
+  - STANDARD_SUPPORT.md row
 - *Deps:* none. *Parallel:* wave 1.
 - *Tests:* `dcl.pre/consteval-block*.cpp` (namespace, class and template scope; side effects via the extension), a trial-never-mutates test.
 
@@ -349,7 +349,7 @@ Every WP follows the same rules:
   - Consume GCC 16.1's libstdc++ `<meta>`: a name-plus-signature table, its builtin calling convention, and range arguments. That convention is **(verify)** by reading the header.
   - The p2996-fork `<experimental/meta>` `__metafunction` shim only if the operator wants the fork's tests (advisory).
   - `__cpp_impl_reflection` and `__cpp_lib_reflection` at the IS values.
-  - cxx-features reflection rows.
+  - STANDARD_SUPPORT.md reflection rows.
   - `xtask libstdcxx` with GCC 16 headers.
   - Kiln-owned `<meta>` only if both are blocked.
 - *Deps:* 06–11, 13; GCC 16.1 headers provisioned. *Parallel:* 16 plus the cluster WPs.
@@ -404,7 +404,7 @@ The vs-GCC perf table, the `--scaling` sweeps and the private corpora stay off t
 - (a) the reference workload builds and its tests pass under kiln with libstdc++ 16.1 `<meta>`
 - (b) compile wall time and peak RSS recorded against GCC 16.1 on it and on S1–S6, with kiln ≤ GCC on both and the §3.8 targets met or a written reason given
 - (c) the private ICE corpus at 0 crashes
-- (d) every reflection row in cxx-features.md `done`
+- (d) every reflection row in STANDARD_SUPPORT.md `done`
 - (e) the GCC differential green on the public reflection corpus, or each divergence triaged with an IS citation
 - (f) scaling gate passes for S1–S6. **Met (WP-638, 2026-11-05):** S1–S6 compile on libstdc++ 16.1 and all six sweeps pass.
   4N/N growth for kiln (time, RSS) is S1 1.88x, 1.95x; S2 2.42x, 2.38x; S3 1.91x, 1.09x; S4 1.82x, 1.91x; S5 1.18x, 1.27x; S6 1.19x, 1.01x.
@@ -416,7 +416,7 @@ The vs-GCC perf table, the `--scaling` sweeps and the private corpora stay off t
 - (a) Met. The reference workload: all 49 slugs of its harness generate, compile and run their tests under kiln with libstdc++ 16.1 `<meta>` (private harness, supervisor-measured 2026-11-05).
 - (b) Met with one written reason. 48 slugs are measurable on both compilers: generator stage wall 619 s (kiln) vs 1277 s (g++ 16.1), 0.48x; peak RSS sum 29.6 GiB vs 88.7 GiB, 0.33x, kiln lower on every slug; whole-harness wall 1831 s vs 2493 s, 0.73x; production-compile stage 1.04x overall, with one outlier (one wide binding TU: 264 s vs 76 s) (private harness, supervisor-measured 2026-11-05). The written reason is docs/status/perf-reference-workload.md "`synth_accessor_god` production TU (WP-633)": kiln's frontend takes 14 s of it, and the rest is LLVM's JumpThreading and MemCpyOpt on one 92k-instruction registration function; clang 19 on the same IR shape takes 432 s. The §3.8 target of 115 s for that TU is carried into M7 (WP-641, WP-642). The S1–S6 ratios are in (f).
 - (c) Met. The private ICE corpus (36 reproducer sources): kiln has 0 crashes and 0 timeouts, and every diagnosis matches the finding's expectation; g++ 16.1 ICEs on 6 of them (supervisor-measured 2026-11-05).
-- (d) Met (WP-639): every row of docs/status/cxx-features.md "C++26 reflection (M6)" is `done`. The paper row P3394R4 stays `partial` and lists what is missing (base-specifier annotations, a parameter pack's annotations, string-literal pointers; spec/annotations.md §9).
+- (d) Met (WP-639): every row of docs/STANDARD_SUPPORT.md "C++26 reflection" is `done`. The paper row P3394R4 stays `partial` and lists what is missing (base-specifier annotations, a parameter pack's annotations, string-literal pointers; spec/annotations.md §9).
 - (e) Met. 98 conformance files run `oracle: gcc` (88 of them reflection tests) and are green in merge-queue CI; one triaged divergence, recorded with its IS citation in docs/status/deviations.md "GCC 16.1 reflection divergences".
 - (f) Recorded above.
 

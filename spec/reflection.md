@@ -1253,6 +1253,6 @@ the spelling; the default is `kiln`.
   `reflection/memo-purity.cpp` covers §3.3 and §3.6.
 - **Bench.** The `bench/reflect/` shapes and the scaling gate are WP-483's
   (S1–S6; S7/S8 WP-551, S9 WP-501; spec/bench.md).
-- **Status.** `docs/status/cxx-features.md` "C++26 reflection (M6)" has one
+- **Status.** `docs/STANDARD_SUPPORT.md` "C++26 reflection" has one
   row per WP-470..485. The spike's findings are frozen in
   docs/status/reflection-spike.md.
