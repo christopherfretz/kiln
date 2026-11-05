@@ -51,7 +51,7 @@ impl Cg<'_> {
                     // as a function the walk could find.
                     ExprKind::UserDefinedLiteral => {}
                     ExprKind::StmtExpr => stmts.push(ast.exprs.stmt_expr_body(e)),
-                    _ => exprs.extend(ast.exprs.children(e, &ast.lists)),
+                    _ => ast.exprs.children_into(e, &ast.lists, &mut exprs),
                 }
                 continue;
             }

@@ -207,8 +207,8 @@ impl Sema<'_, '_> {
             if self.ast.exprs.get(e).kind() != ExprKind::ImplicitCastExpr {
                 break;
             }
-            match self.ast.exprs.children(e, &self.ast.lists).first() {
-                Some(&c) => e = c,
+            match self.ast.exprs.first_child(e, &self.ast.lists) {
+                Some(c) => e = c,
                 None => break,
             }
         }

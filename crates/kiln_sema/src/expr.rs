@@ -270,7 +270,7 @@ impl Sema<'_, '_> {
             if self.is_err_expr(x) {
                 return true;
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false
     }
@@ -611,7 +611,7 @@ impl Sema<'_, '_> {
             if self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr {
                 out.push(x);
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         out
     }
@@ -629,7 +629,7 @@ impl Sema<'_, '_> {
                 | ExprKind::CXXDefaultArgExpr
                 | ExprKind::CXXDefaultInitExpr => return true,
                 ExprKind::ExprWithCleanups | ExprKind::LambdaExpr => {}
-                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+                _ => self.ast.exprs.children_into(x, &self.ast.lists, &mut stack),
             }
         }
         false
@@ -683,7 +683,7 @@ impl Sema<'_, '_> {
             {
                 self.potential_results(self.ast.exprs.operand(x), &mut constant);
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         if !self.potential_caps.is_empty() && self.in_template() {
             self.resolve_potential_captures(e, &constant);

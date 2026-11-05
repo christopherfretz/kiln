@@ -225,7 +225,7 @@ impl Detector<'_> {
                 }
                 continue;
             }
-            stack.extend(ast.exprs.children(e, &ast.lists));
+            ast.exprs.children_into(e, &ast.lists, &mut stack);
         }
         true
     }

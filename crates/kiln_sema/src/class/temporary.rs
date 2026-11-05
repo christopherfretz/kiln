@@ -235,7 +235,7 @@ impl Sema<'_, '_> {
             match self.ast.exprs.get(x).kind() {
                 ExprKind::MaterializeTemporaryExpr => {
                     self.cleanup.needs = true;
-                    stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+                    self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
                 }
                 ExprKind::CXXBindTemporaryExpr => {
                     self.cleanup.needs = true;
@@ -263,7 +263,7 @@ impl Sema<'_, '_> {
                 | ExprKind::RequiresExpr
                 | ExprKind::ConceptSpecializationExpr => {}
                 ExprKind::CXXTypeidExpr if !self.ast.exprs.typeid_potentially_evaluated(x) => {}
-                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+                _ => self.ast.exprs.children_into(x, &self.ast.lists, &mut stack),
             }
         }
     }

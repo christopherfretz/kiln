@@ -669,7 +669,7 @@ impl Sema<'_, '_> {
                 }
                 _ => {}
             }
-            stack.extend(exprs.children(x, &self.ast.lists));
+            exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false
     }

@@ -456,7 +456,7 @@ impl Mangler<'_, '_> {
                     self.out.push_str(type_code);
                     self.ty(arg);
                 } else {
-                    let Some(&sub) = ast.exprs.children(expr, &ast.lists).first() else {
+                    let Some(sub) = ast.exprs.first_child(expr, &ast.lists) else {
                         return false;
                     };
                     self.out.push_str(expr_code);

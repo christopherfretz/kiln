@@ -137,7 +137,7 @@ impl Sema<'_, '_> {
             if n.kind().is_cast() {
                 self.discard_misaligned_member_address(n.ty(), self.ast.exprs.operand(x));
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         let pending = std::mem::take(&mut self.misaligned);
         for m in pending {

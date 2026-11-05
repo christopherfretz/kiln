@@ -68,8 +68,8 @@ impl Sema<'_, '_> {
         }
         let mut r = exprs.callee(e);
         while matches!(exprs.get(r).kind(), ExprKind::ImplicitCastExpr | ExprKind::ParenExpr) {
-            match exprs.children(r, &self.ast.lists).first() {
-                Some(&c) => r = c,
+            match exprs.first_child(r, &self.ast.lists) {
+                Some(c) => r = c,
                 None => break,
             }
         }

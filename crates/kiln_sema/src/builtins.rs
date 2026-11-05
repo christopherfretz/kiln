@@ -2851,7 +2851,7 @@ impl Sema<'_, '_> {
                         return true;
                     }
                 }
-                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+                _ => self.ast.exprs.children_into(x, &self.ast.lists, &mut stack),
             }
         }
         false
@@ -2903,7 +2903,7 @@ impl Sema<'_, '_> {
                     let f = self.ast.exprs.default_init_field(x);
                     kinds |= self.default_arg_srcloc_kinds(f);
                 }
-                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+                _ => self.ast.exprs.children_into(x, &self.ast.lists, &mut stack),
             }
         }
         self.srcloc.param_kinds.insert(param, kinds);

@@ -748,7 +748,7 @@ impl Collect<'_> {
                 | ExprKind::TypeTraitExpr
                 | ExprKind::ArrayTypeTraitExpr
                 | ExprKind::ExpressionTraitExpr => {}
-                _ => stack.extend(ast.exprs.children(x, &ast.lists)),
+                _ => ast.exprs.children_into(x, &ast.lists, &mut stack),
             }
         }
     }

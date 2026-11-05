@@ -220,7 +220,7 @@ impl Sema<'_, '_> {
             }
             match self.ast.exprs.get(x).kind() {
                 ExprKind::ExprWithCleanups | ExprKind::LambdaExpr => {}
-                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+                _ => self.ast.exprs.children_into(x, &self.ast.lists, &mut stack),
             }
         }
         None
@@ -275,7 +275,7 @@ impl Sema<'_, '_> {
                 break;
             }
             if inside.insert(x) {
-                stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+                self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
             }
         }
         let p = &mut self.imm.pending;

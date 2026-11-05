@@ -494,7 +494,7 @@ impl Sema<'_, '_> {
             if k == ExprKind::CXXThrowExpr && !self.throw_caught(x, handlers) {
                 out.push(x);
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
     }
 

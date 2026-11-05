@@ -282,7 +282,7 @@ impl Sema<'_, '_> {
                 }
                 _ => {}
             }
-            stack.extend(exprs.children(x, &self.ast.lists));
+            exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false
     }
@@ -678,7 +678,7 @@ impl Sema<'_, '_> {
                 let loc = self.ast.exprs.get(x).loc();
                 self.check_exceptions_enabled(DiagId::sema_throw_disabled, loc);
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
     }
 

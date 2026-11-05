@@ -2639,13 +2639,13 @@ impl ExprArena {
     /// each bound `OpaqueValueExpr` by its source (so every subexpression
     /// is visited once); the syntactic form shares the sources and is not
     /// a child.
-    fn pseudo_children(&self, n: &ExprNode, lists: &IdLists, v: &mut Vec<ExprId>) {
-        for c in lists.iter::<ExprId>(ListId::new(n.a)).skip(1) {
+    fn pseudo_children(&self, n: &ExprNode, lists: &IdLists, v: &mut impl Extend<ExprId>) {
+        v.extend(lists.iter::<ExprId>(ListId::new(n.a)).skip(1).map(|c| {
             let src = (self.get(c).kind == ExprKind::OpaqueValueExpr)
                 .then(|| ExprId::from_raw(self.get(c).a))
                 .flatten();
-            v.push(src.unwrap_or(c));
-        }
+            src.unwrap_or(c)
+        }));
     }
 
     /// The child expressions of `e` in dump order (§11): the expressions
@@ -2663,6 +2663,18 @@ impl ExprArena {
     /// [`ExprArena::children`], appended to `v` (no allocation once `v`
     /// has grown: the CFG builder's walk, spec/sema.md §7.5).
     pub fn children_into(&self, e: ExprId, lists: &IdLists, v: &mut Vec<ExprId>) {
+        self.children_each(e, lists, v);
+    }
+
+    /// The first of [`ExprArena::children`], allocating nothing (WP-645).
+    pub fn first_child(&self, e: ExprId, lists: &IdLists) -> Option<ExprId> {
+        let mut first = FirstChild(None);
+        self.children_each(e, lists, &mut first);
+        first.0
+    }
+
+    /// [`ExprArena::children`] fed to `v` in order.
+    fn children_each(&self, e: ExprId, lists: &IdLists, v: &mut impl Extend<ExprId>) {
         let n = self.get(e);
         let id = |w: u32| ExprId::from_raw(w);
         match n.kind {
@@ -2716,7 +2728,7 @@ impl ExprArena {
             }
             ExprKind::CompoundAssignOperator => {
                 v.extend(id(n.a));
-                v.push(self.compound_assigns[n.b as usize].rhs);
+                v.extend([self.compound_assigns[n.b as usize].rhs]);
             }
             ExprKind::ConditionalOperator | ExprKind::ChooseExpr => {
                 v.extend(id(n.a));
@@ -2781,6 +2793,18 @@ impl ExprArena {
             VecDims::of("init_lists", &self.init_lists),
             VecDims::of("news", &self.news),
         ]
+    }
+}
+
+/// The [`Extend`] sink of [`ExprArena::first_child`]: keeps the first
+/// element it is given and pulls no more.
+struct FirstChild(Option<ExprId>);
+
+impl Extend<ExprId> for FirstChild {
+    fn extend<I: IntoIterator<Item = ExprId>>(&mut self, it: I) {
+        if self.0.is_none() {
+            self.0 = it.into_iter().next();
+        }
     }
 }
 
