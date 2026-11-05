@@ -1270,12 +1270,18 @@ impl Memory {
         }
     }
 
-    /// [`Memory::check`] by the checks in their order, then the lifetime
-    /// of tracked storage.
+    /// [`Memory::check`] of an access the plain predicate refused: the
+    /// plain access to tracked storage then tests its lifetime alone
+    /// (the common case of `std::allocator` storage); any other runs the
+    /// checks in their order, then the lifetime test. Cold for the
+    /// callers' code layout: marked otherwise, the `Load` arm grows.
     #[cold]
     #[inline(never)]
     fn check_slow(&self, raw: u64, len: u64, write: bool) -> Result<(Sp, u64, &Alloc), MemFault> {
-        let r = self.check_ordered(raw, len, write)?;
+        let r = match self.check_plain(raw, len, flags::EXTERNAL) {
+            Some(r) => r,
+            None => self.check_ordered(raw, len, write)?,
+        };
         if r.2.flags & flags::TRACKED != 0 && !self.space(r.0).is_live(r.1, len) {
             return Err(MemFault::Lifetime);
         }
@@ -3261,7 +3267,9 @@ mod tests {
                                 match got {
                                     Ok(_) => oks += 1,
                                     Err(f) => {
-                                        seen.insert(format!("{f:?}").split('(').next().unwrap().to_owned());
+                                        seen.insert(
+                                            format!("{f:?}").split('(').next().unwrap().to_owned(),
+                                        );
                                     }
                                 }
                             }
@@ -3273,8 +3281,17 @@ mod tests {
         m.lax = false;
         assert!(oks > 300, "{oks} accesses pass");
         let all = [
-            "Null", "FnPtr", "Dead", "Stale", "PastEnd", "OutOfBounds", "External", "Unknown",
-            "Temporary", "Literal", "Lifetime",
+            "Null",
+            "FnPtr",
+            "Dead",
+            "Stale",
+            "PastEnd",
+            "OutOfBounds",
+            "External",
+            "Unknown",
+            "Temporary",
+            "Literal",
+            "Lifetime",
         ];
         for f in all {
             assert!(seen.contains(f), "no access faults {f}: {seen:?}");
