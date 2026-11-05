@@ -76,8 +76,9 @@ starting with `-` are inputs.
 | `-fclang-compat=<major>` | kiln: which clang release's observable output to reproduce, `19` or `22` (default since WP-394, the oracle switch; the library-level defaults, `ClangCompat::default()` and every crate's `clang_compat`, follow it since WP-413): predefined macros and `__has_*` answers (spec/pp.md "clang compatibility level"), diagnostic text and names, AST dump types and deprecation warnings (spec/sema.md §1.1, spec/ast-dump.md §2, spec/codegen.md); any other value is an error |
 | `-W...`, `-w`, `-pedantic`, `-ferror-limit=`, `-fdiagnostics-format=`, `-f[no-]color-diagnostics`, `-f[no-]caret-diagnostics`, ... | diagnostic options, validated and applied by `kiln_diag::DiagOptions` (`spec/diag.md`) |
 | `-fkiln-reproducible-time` | see "Reproducible time" |
+| `-fkiln-source-path-style=<clang\|gcc>` | kiln: how `__builtin_FILE()`, `__builtin_FILE_NAME()`, `std::source_location::current()` (also as a default argument) and `std::meta::source_location_of` spell a file (`SourcePathStyle`, `SourceManager::presumed_file_name`; WP-636). `clang` (the default): the presumed name as written, as clang 19 and 22 (`SourceLocExpr::EvaluateInContext`), so `-I /p//inc/./` gives `/p//inc/./x.h`; `gcc`: GCC 16.1's, an included file's absolute path with empty and `.` components dropped and `dir/..` folded through a real directory (`/p/inc/x.h`; spec/reflection.md §3.9). `-fmacro-prefix-map=` applies after either; `__FILE__` and `__BASE_FILE__` keep clang's spelling under both. Any other value is `invalid value`; the last one wins |
 | `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration". GCC's `-fconstexpr-ops-limit=N` (passed by the reference workload's generator compile) sets the step budget too |
-| `-ffile-prefix-map=<old>=<new>`, `-fmacro-prefix-map=<old>=<new>` | `__FILE__`, `__BASE_FILE__`, `__builtin_FILE()`, `std::source_location` and `std::meta::source_location_of` spell a path starting with `<old>` with `<new>` instead (`SourceManager::remap_macro_path`; clang `processPathForFileMacro`). Entries are tried in descending order of `<old>`, the first match wins, and the match is a plain string prefix. A value without `=` is `invalid value`. `-fdebug-prefix-map=<old>=<new>` is validated and otherwise ignored (no debug information) |
+| `-ffile-prefix-map=<old>=<new>`, `-fmacro-prefix-map=<old>=<new>` | `__FILE__`, `__BASE_FILE__`, `__builtin_FILE()`, `std::source_location` and `std::meta::source_location_of` spell a path starting with `<old>` with `<new>` instead (`SourceManager::remap_macro_path`; clang `processPathForFileMacro`). Entries are tried in descending order of `<old>`, the first match wins, and the match is a plain string prefix. A value without `=` is `invalid value` (deviation 20). `-fdebug-prefix-map=<old>=<new>` is validated and otherwise ignored (no debug information) |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
 | `-f[no-]reflection` | kiln: the P2996 reflection spike (WP-267; default off; the last one wins): `^^`, `[:`, `:]` are lexed (C++26 only), and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
 | `-f[no-]coro-aligned-allocation` | aligned coroutine frame allocation (default off, as clang; the last one wins): sema looks up the `std::align_val_t` forms of the frame's `operator new`/`delete` first (spec/sema.md §7.13). Passed to sema for `-fsyntax-only` and codegen jobs |
@@ -828,6 +829,13 @@ Each deviation is covered by a test or a test note.
     then treats the libm builtins as not setting `errno`); the sanitizer, coverage,
     profile, `-ftrapv` and `-fshort-enums` flags are errors; and the Oven
     ignores `-fwrapv`.
+20. **`-fmacro-prefix-map=` keeps `.` components and repeated `/`.** Once
+    any `-fmacro-prefix-map=`/`-ffile-prefix-map=` is given, clang also
+    applies `llvm::sys::path::remove_dots` (no `..` folding) to every
+    `__FILE__` and source-location file name, mapped or not (cc1's
+    `UseTargetPathSeparator`; `-fno-file-reproducible` turns it off);
+    kiln replaces the prefix only, so `-I /p//inc/./` with a map that does
+    not swallow the `//` and `/./` keeps them where clang drops them.
 
 ## Tests
 

@@ -4927,7 +4927,10 @@ Tests: `tests/conformance/ext.gnu.builtins/` (`library-builtins-args`,
 
 **Source location.** Sema computes the values once, when it builds the
 `SourceLocExpr` (spec/ast.md §5.8): `LINE`/`COLUMN` from the presumed
-location, `FILE` as written and `FILE_NAME` as its last path component,
+location, `FILE` as written (the default `-fkiln-source-path-style=clang`;
+GCC 16.1's simplified absolute path of an included file under `gcc`,
+spec/driver.md, WP-636), then `-fmacro-prefix-map=`, and `FILE_NAME` as
+its last path component,
 `FUNCTION` from the enclosing function's name (empty at namespace scope),
 and `__builtin_source_location()` as a frozen `std::source_location::__impl`
 built from that record's layout. When a default argument containing a

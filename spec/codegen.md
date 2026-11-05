@@ -594,7 +594,9 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   - a source-location builtin (`SourceLocExpr`, spec/ast.md §5.8) is
     the value sema recorded for it: `__builtin_LINE`/`_COLUMN` an
     integer constant; `__builtin_FILE`/`_FILE_NAME`/`_FUNCTION` a
-    pointer to the string literal's global; `__builtin_source_location()`
+    pointer to the string literal's global (the file spelled as
+    `-fkiln-source-path-style=` selects, spec/driver.md);
+    `__builtin_source_location()`
     a pointer to a private `unnamed_addr constant` named `.constant`
     holding the frozen `__impl` object (clang
     `GetAddrOfUnnamedGlobalConstantDecl`), one per frozen value

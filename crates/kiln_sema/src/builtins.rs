@@ -2553,12 +2553,13 @@ impl Sema<'_, '_> {
     /// with `getExpansionRange(Loc).getEnd()`, kiln's expansion location);
     /// `location` builds the `__impl` object too.
     fn record_source_loc(&mut self, e: ExprId, loc: Loc, ctx: DeclId, location: bool) {
-        // The file as GCC 16.1 names it (an included file's absolute path
-        // simplified, spec/reflection.md §3.9), then `-fmacro-prefix-map=`
+        // The file as `-fkiln-source-path-style=` spells it (clang's as
+        // written by default, GCC 16.1's simplified absolute path under
+        // `gcc`; spec/reflection.md §3.9), then `-fmacro-prefix-map=`
         // applies (clang `SourceLocExpr::EvaluateInContext`).
         let sm = self.diags.sm();
         let (file, line, column) = match sm.presumed_line_col(loc) {
-            Some(p) => (sm.remap_macro_path(&sm.gcc_presumed_name(&p, loc)), p.line, p.col),
+            Some(p) => (sm.remap_macro_path(&sm.presumed_file_name(&p, loc)), p.line, p.col),
             None => (String::new(), 0, 0),
         };
         let file_name = file.rsplit('/').next().unwrap_or(&file).to_owned();
@@ -2669,12 +2670,13 @@ impl Sema<'_, '_> {
             }
             self.srcloc.impl_decl = Some(d);
         }
-        // The file as GCC 16.1 names it (an included file's absolute path
-        // simplified, spec/reflection.md §3.9), then `-fmacro-prefix-map=`
+        // The file as `-fkiln-source-path-style=` spells it (clang's as
+        // written by default, GCC 16.1's simplified absolute path under
+        // `gcc`; spec/reflection.md §3.9), then `-fmacro-prefix-map=`
         // applies (clang `SourceLocExpr::EvaluateInContext`).
         let sm = self.diags.sm();
         let (file, line, column) = match sm.presumed_line_col(loc) {
-            Some(p) => (sm.remap_macro_path(&sm.gcc_presumed_name(&p, loc)), p.line, p.col),
+            Some(p) => (sm.remap_macro_path(&sm.presumed_file_name(&p, loc)), p.line, p.col),
             None => (String::new(), 0, 0),
         };
         let file = self.srcloc_string(&file)?;

@@ -534,7 +534,7 @@ answers as of that point.
   | `has_identifier(r)` | whether `identifier_of(r)` succeeds |
   | `identifier_of(r)`, `u8identifier_of(r)` | a class, enumeration, enumerator, variable, function, data member, namespace, namespace alias, type alias or template (a `Template` reflection answers for its templated declaration): the identifier it was declared with; an unnamed class or enumeration with a typedef name for linkage ([dcl.typedef]/9): that name; a literal operator: its suffix. A type: as its alias when it is a cv-unqualified typedef or alias-declaration type (not an alias template specialization), else as its class or enumeration when it is a cv-unqualified one. Otherwise (a specialization, a constructor, destructor, operator or conversion function, an unnamed entity, the global namespace, any other type or value) fails: "'R' has no identifier" |
   | `display_string_of(r)`, `u8display_string_of(r)` | implementation-defined; never fails; GCC 16.1's string (below): a type as GCC's diagnostic `%T`, a declaration as `%D`, a value or object as its source spelling (below), anything else as `^^…` |
-  | `source_location_of(r)` | the location of the declared name, with an empty `function_name`; a reflection with no declaration (a fundamental or compound type, a value, the translation unit) gives `source_location{}`. The file name is GCC 16.1's (below), then `-ffile-prefix-map=`/`-fmacro-prefix-map=` apply |
+  | `source_location_of(r)` | the location of the declared name, with an empty `function_name`; a reflection with no declaration (a fundamental or compound type, a value, the translation unit) gives `source_location{}`. The file name follows `-fkiln-source-path-style=` (below), then `-ffile-prefix-map=`/`-fmacro-prefix-map=` apply |
 
 - **`display_string_of` of a type or declaration** is GCC 16.1's
   (gcc/cp/reflect.cc `eval_display_string_of` formats with the
@@ -560,14 +560,20 @@ answers as of that point.
   signature names, `; size_type = ...`); a parameter as
   `<parameter x of F>` / `<unnamed parameter 2 of F>`; a base as `D: B`;
   the null reflection `<null reflection>`.
-- **The file name of `source_location_of`** is GCC 16.1's: the absolute
-  path of a file reached through `#include` has its empty and `.`
-  components dropped and `dir/..` folded where `dir` is a real directory,
-  not a symbolic link (`-I //opt/inc` gives `/opt/inc/x.h`); the main file,
-  a `#line` name and relative paths are kept
-  (`meta.reflection.names/source-location-of-include-path.cpp`;
-  `SourceManager::gcc_presumed_name`). `__FILE__` and
-  `std::source_location::current()` keep clang's spelling. The line and
+- **The file name of `source_location_of`** follows
+  `-fkiln-source-path-style=` (spec/driver.md; WP-636), as
+  `__builtin_FILE()` and `std::source_location::current()` do, so one
+  translation unit spells a file one way (`SourceManager::
+  presumed_file_name`). By default (`clang`) it is the presumed name as
+  written (`-I //opt/inc/./` gives `//opt/inc/./x.h`;
+  `meta.reflection.names/source-location-of-include-path-clang.cpp`).
+  Under `gcc` it is GCC 16.1's: the absolute path of a file reached
+  through `#include` has its empty and `.` components dropped and
+  `dir/..` folded where `dir` is a real directory, not a symbolic link
+  (`-I //opt/inc` gives `/opt/inc/x.h`); the main file, a `#line` name and
+  relative paths are kept
+  (`meta.reflection.names/source-location-of-include-path.cpp`).
+  `__FILE__` keeps clang's spelling under both. The line and
   column are GCC's per-entity location
   (`meta.reflection.names/source-location-of-definition.cpp`): a class or
   enumeration where it is defined, a function or variable at its

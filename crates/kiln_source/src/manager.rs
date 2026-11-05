@@ -313,6 +313,22 @@ pub struct SourceManager {
     /// `-ffile-prefix-map=` / `-fmacro-prefix-map=` entries `(old, new)`,
     /// in clang's lookup order ([`Self::set_macro_prefix_map`]).
     macro_prefix_map: OnceLock<PrefixMap>,
+    /// `-fkiln-source-path-style=` ([`Self::set_source_path_style`]).
+    source_path_style: OnceLock<SourcePathStyle>,
+}
+
+/// How the source-location builtins (`__builtin_FILE()`,
+/// `__builtin_FILE_NAME()`, `std::source_location::current()`) and
+/// `std::meta::source_location_of` spell a file
+/// ([`SourceManager::presumed_file_name`]; `-fkiln-source-path-style=`,
+/// spec/driver.md). `__FILE__` keeps clang's spelling under both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SourcePathStyle {
+    /// clang's: the presumed name as written (`SourceLocExpr::EvaluateInContext`).
+    #[default]
+    Clang,
+    /// GCC 16.1's: an included file's absolute path simplified.
+    Gcc,
 }
 
 /// `(old, new)` prefix pairs of a `-f*-prefix-map=` option.
@@ -354,6 +370,7 @@ impl SourceManager {
             last_expansion: AtomicU32::new(0),
             guarded: Mutex::new(HashMap::new()),
             macro_prefix_map: OnceLock::new(),
+            source_path_style: OnceLock::new(),
         }
     }
 
@@ -385,16 +402,33 @@ impl SourceManager {
         path.to_owned()
     }
 
-    /// The file name of `p` as GCC 16.1 spells it for an included file
-    /// (`__FILE__` there, and `std::meta::source_location_of`, which kiln
-    /// matches; spec/reflection.md §3.9): a buffer reached through
-    /// `#include` whose absolute path has its empty and `.` components
-    /// dropped and `dir/..` folded when `dir` is a real directory, not a
-    /// symbolic link (`//opt/inc//a/./b.h` is `/opt/inc/a/b.h`). The main
-    /// file, a `#line` name and a relative path are kept as written,
-    /// as GCC keeps them.
-    pub fn gcc_presumed_name(&self, p: &PresumedLoc<'_>, loc: Loc) -> String {
-        let simplify = p.file_name.starts_with('/')
+    /// Sets the [`SourcePathStyle`] [`Self::presumed_file_name`] follows
+    /// (default [`SourcePathStyle::Clang`]); only the first call has an
+    /// effect.
+    pub fn set_source_path_style(&self, style: SourcePathStyle) {
+        let _ = self.source_path_style.set(style);
+    }
+
+    /// The [`SourcePathStyle`] in effect.
+    pub fn source_path_style(&self) -> SourcePathStyle {
+        self.source_path_style.get().copied().unwrap_or_default()
+    }
+
+    /// The file name of `p` (at `loc`) as the source-location builtins
+    /// and `std::meta::source_location_of` spell it, before
+    /// [`Self::remap_macro_path`], under the [`Self::source_path_style`]:
+    ///
+    /// - [`SourcePathStyle::Clang`]: `p.file_name` as written (clang
+    ///   `SourceLocExpr::EvaluateInContext`), as `__FILE__`.
+    /// - [`SourcePathStyle::Gcc`]: as GCC 16.1 spells it (spec/reflection.md
+    ///   §3.9): a buffer reached through `#include` whose absolute path has
+    ///   its empty and `.` components dropped and `dir/..` folded when `dir`
+    ///   is a real directory, not a symbolic link (`//opt/inc//a/./b.h` is
+    ///   `/opt/inc/a/b.h`). The main file, a `#line` name and a relative
+    ///   path are kept as written, as GCC keeps them.
+    pub fn presumed_file_name(&self, p: &PresumedLoc<'_>, loc: Loc) -> String {
+        let simplify = self.source_path_style() == SourcePathStyle::Gcc
+            && p.file_name.starts_with('/')
             && p.file_name == self.file_name(p.file)
             && self.include_loc(loc).is_valid();
         if simplify { simplify_absolute_path(p.file_name) } else { p.file_name.to_owned() }
