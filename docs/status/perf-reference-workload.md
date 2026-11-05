@@ -550,7 +550,7 @@ share of the named profile that the work could remove.
 | F8 | Cheaper `TypeContext::view` / `canonical_view` | kiln_ast `types` | 4–6% self, 190 M calls in R3 | 2–3% | Low | S–M |
 | F9 | Faster interpreter dispatch in safe Rust | kiln_oven `vm.rs` `run_loop` | 18.3% of R2, 24.8% of S7 | 5–10% of R2 | Medium | M–L |
 | F10 | Copy the init-bit map a word at a time | kiln_oven `mem.rs` `Memory::copy` | `set_bits` is 2.8% of R2 | About 2% of R2 | Low | S |
-| F11 | Cache subobject and union paths | kiln_oven `mem.rs` `union_path`, `Types::has_subobject`, `extent_of`, `field_at` | 9% of S7, about 3% of R2. WP-642 (F23) made the scans sublinear for classes of 16 or more fields; S7 and S8 do not move (three A/B pairs, "WP-642: sublinear subobject lookups"), because S7's lookups are many walks over small classes, so this cache is still the lever | 3–6% of S7 | Medium | M |
+| F11 | **Done (landed WP-644).** Cache subobject and union paths | kiln_oven `ty/path.rs` `Types::hop`, `vm.rs` `union_path`, `mutable_path`, `place_in_unions`, `extent_of`, `Types::has_subobject` | 9% of S7, about 3% of R2. Measured before the cache: 794,167 `union_path` walks over 21 distinct keys at S7 N = 40, about 7% of S7's instructions. After it: the walks' self cost at S7 N = 8 halves (96.8 M to about 52 M Ir) and S7 is 2.6% faster, with peak RSS unchanged ("WP-644: subobject path cache"). What remains is the per-access hash lookups (`vm.rs:2488` `union_path`, `ty/path.rs:144` `Types::hop`) | 3–6% of S7 (measured 2.6–3.7%) | Medium | M |
 | F12 | Compute node accounting lazily | kiln_sema `templ/stack.rs` push/pop; kiln_ast `node_live_bytes` | About 1–1.2% and 3 M allocations in R3 | About 1% | Low | S |
 | F13 | Fewer deduction and candidate attempts | kiln_sema `deduce_spec`, `add_template_candidate`, `deduce_call_arg` | 34–36% inclusive in S8; 9.8 M `deduce_spec` calls in R2; `deduce_call_arg` grows 18x for 4x N in S8 | Unknown; the largest frontend lever | Medium–high | M–L |
 | F14 | Index hidden-friend redeclaration | kiln_sema `act_on_friend` → `overload/redecl.rs` `pick_prev_function` | 11.5% of S8 at N=400 and growing 13–19x for 4x N. Not seen in the reference. | Removes S8's quadratic term | Low | S–M |
@@ -893,3 +893,128 @@ into small library classes (string, vector and their bases), below the
 lookups are many short ones, not one long one. F11's cost is the number of
 path walks, which only a cache would cut. F11 therefore stays open, and
 F23 does not touch it.
+
+## WP-644: subobject path cache
+
+F11 above. The walks from an allocation's root to the object an access
+designates (`union_path`, `mutable_path`, `place_in_unions` and
+`extent_of` in `crates/kiln_oven/src/vm.rs`) now take their
+memory-independent steps from a cache in `Types`
+(`crates/kiln_oven/src/ty/path.rs`, spec/oven.md "Path cache"). Only the
+active-member reads stay per access.
+
+### Walk counts (main, temporary counters)
+
+| program | `union_path` | `place_in_unions` | `extent_of` | `has_subobject` (with recursion) | `member_toward` |
+|---|---:|---:|---:|---:|---:|
+| S7 (N = 40) | 794,167 calls, 1,708,436 levels (2.15 each), 21 distinct keys; 233,321 union levels | 39,042 calls, 4.00 levels each, 16 keys | 192,677 calls, 3.00 levels each, 6 keys | 2,127,541 calls, 7,989 keys | 503,731 calls, 22 keys |
+| S7 (N = 8) | 161,347 calls, 21 keys; 47,329 union levels | 7,888 | 39,057 | 431,539, 4,190 keys | 102,271 |
+| wide-struct-store (k = 12) | 69,632 calls, 4.00 levels each, 8,192 keys | none | none | 491,520 | 139,264, 8,194 keys |
+
+S7 never calls `mutable_path`. S8 walks only in `extent_of`: 31,469
+calls, 2.00 levels each, 19 keys. A key is (root type, offset, target
+type).
+
+Callgrind on S7 at N = 8 (full program; the run loop is recursive, so the
+self cost of the walk functions is summed): `has_subobject`,
+`union_path`, `field_at`, `extent_in`, `extent_of`, `near`, `slow_access`,
+`same_unqualified` and `member_toward` take 96.8 M of 3,409.9 M Ir
+(2.84%), about a fifth of the Oven's 14.1%. At N = 16 they take 4.5%, and
+each added class costs 11.8 M Ir of walks out of 100.9 M Ir, 11.7% of
+it. That extrapolates to about 7% at N = 40 and 9.3% at N = 100, the 9%
+F11 quotes.
+
+### The cache
+
+`Types::hop(walk, t, off, p)` is the walk from record `t` toward the
+object of type `p` at byte `off`, up to its first array or union. At a
+union it returns a mask of the members that may hold the object, so the
+walk reads the active and possibly-active members from memory and tests
+mask bits. `Types::extent` and `has_subobject` cache their answer for
+the first record below any leading arrays. Each of the three maps holds
+at most `PATH_CACHE_MAX` = 16,384 entries and is cleared by the insert
+past that.
+
+Hit rates (temporary counters, all three maps together):
+
+| program | hits | misses | clears | entries at exit | footprint |
+|---|---:|---:|---:|---:|---:|
+| S7 (N = 40) | 654,396 | 58 | 0 | 58 | 3,731 bytes |
+| S8 | 31,450 | 19 | 0 | 19 | 1,148 bytes |
+| wide-struct-store k = 12 | 61,440 | 8,192 | 0 | 8,192 | 0.70 MB |
+| wide-struct-store k = 13 | 122,880 | 16,384 | 0 | 16,384 | 1.40 MB |
+| wide-struct-store k = 14 | 16,384 | 262,144 | 15 | 16,384 | 1.40 MB |
+
+The store shape has one key per member, so at k = 14 its 16,384 members
+plus the other paths exceed the cap and the hop map thrashes. It is
+still no slower, because a miss costs the walk it replaces plus one
+insert.
+
+Callgrind on S7 at N = 8 with the cache: 3,351.2 M Ir in total (-1.7%).
+The walk functions, plus `Types::hop`, take about 52 M Ir, down from
+96.8 M.
+
+### S7 and S8
+
+`cargo xtask bench --compiler <bin> bench/reflect/s7.cpp
+bench/reflect/s8.cpp`, medians of five runs, main (811a810fe) and branch
+alternating, one process at a time:
+
+| pair | S7 main | S7 branch | S8 main | S8 branch |
+|---|---:|---:|---:|---:|
+| 1 | 550.9 ms, 49.4 MB | 539.0 ms, 51.1 MB | 705.3 ms, 77.3 MB | 716.7 ms, 76.5 MB |
+| 2 | 558.4 ms, 49.3 MB | 540.4 ms, 49.3 MB | 705.1 ms, 76.8 MB | 710.0 ms, 75.7 MB |
+| 3 | 551.4 ms, 49.3 MB | 538.9 ms, 51.2 MB | 698.9 ms, 76.0 MB | 699.2 ms, 76.7 MB |
+
+S7 is 2.6% faster (means 553.6 and 539.4 ms), outside the 0.5–2.3%
+spread. S8 does not move (+0.8%, within its spread): it only walks in
+`extent_of`. The Oven step counts are identical.
+
+Peak RSS on S7 is bimodal in both binaries: the 51.1 and 51.2 MB pairs
+are the upper mode, not the cache, which holds 3.7 KB. Twelve more
+alternating runs each under `/usr/bin/time`:
+
+| | wall median | RSS median | RSS min, max | runs in the upper mode |
+|---|---:|---:|---:|---:|
+| S7 main | 0.540 s | 47,026 KB | 46,948, 49,056 KB | 3 of 12 |
+| S7 branch | 0.520 s | 46,980 KB | 46,840, 48,872 KB | 2 of 12 |
+| S8 main | 0.660 s | 66,464 KB | 64,764, 68,120 KB | 10 of 12 |
+| S8 branch | 0.665 s | 66,044 KB | 64,712, 67,048 KB | 8 of 12 |
+
+So peak RSS does not rise: -0.1% on S7 and -0.6% on S8.
+
+### The wide shapes
+
+As in "WP-642: sublinear subobject lookups": `-fsyntax-only
+-fconstexpr-steps=900000000`, `/usr/bin/time`, two main/branch pairs per
+size, one process at a time.
+
+| shape | k (N) | main pair 1 | branch pair 1 | main pair 2 | branch pair 2 |
+|---|---|---:|---:|---:|---:|
+| store | 12 (4,096) | 0.14 s, 31,940 KB | 0.13 s, 33,240 KB | 0.14 s, 31,932 KB | 0.13 s, 33,224 KB |
+| store | 13 (8,192) | 0.27 s, 53,500 KB | 0.26 s, 53,996 KB | 0.28 s, 53,500 KB | 0.28 s, 54,152 KB |
+| store | 14 (16,384) | 0.55 s, 91,668 KB | 0.55 s, 93,940 KB | 0.54 s, 91,468 KB | 0.55 s, 93,792 KB |
+| read | 12 (4,096) | 0.33 s, 30,136 KB | 0.33 s, 32,252 KB | 0.34 s, 32,240 KB | 0.33 s, 30,136 KB |
+| read | 13 (8,192) | 0.66 s, 49,832 KB | 0.67 s, 47,956 KB | 0.66 s, 49,808 KB | 0.67 s, 50,744 KB |
+| read | 14 (16,384) | 1.35 s, 86,584 KB | 1.33 s, 86,676 KB | 1.34 s, 87,352 KB | 1.32 s, 85,444 KB |
+
+Time does not change. The store shape's RSS rises by 1.3, 0.6 and 2.3 MB
+(4.1%, 1.0% and 2.5%), the hop map's one entry per member. The cap bounds
+it at about 1.4 MB per map. The read shape has no union and does not
+touch the cache; its RSS is bimodal in both binaries.
+
+The baselines were not re-recorded. The S7 win is real but small, and
+the recorded S7 baseline (534.0 ms, recorded at a lower host load) is
+below what both binaries measure now, so a re-record would raise it.
+
+### What remains
+
+- The cached walk still costs two hash lookups per union level
+  (`Memory::unions` and `union_alts`, `vm.rs:2488` `union_path`) and one
+  per record level (`ty/path.rs:144` `Types::hop`).
+- A record with more distinct (offset, type) paths than the cap (a class
+  of more than 16,384 members, or one holding a large array of unions)
+  thrashes the hop map. It is no slower than without the cache. Keying
+  the hops of a record's array member by member, not by byte
+  (`ty/path.rs` `Types::hop_in`), would bound the keys by the member
+  count.
