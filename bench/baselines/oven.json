@@ -742,6 +742,68 @@
         },
         "recorded": "2026-11-03T123217"
       }
+    },
+    "wide-struct-read": {
+      "kiln": {
+        "mode": "syntax",
+        "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=900000000",
+        "source_hash": "fnv1a64:1ec2a3379311ea18",
+        "runs": 5,
+        "wall_ms_median": 345.423,
+        "wall_ms_min": 341.244,
+        "wall_ms_max": 352.456,
+        "spread_pct": 1.22,
+        "max_rss_kb": 29964,
+        "oven": {
+          "steps": 4199431,
+          "bytes": 32768,
+          "peak_bytes": 32768,
+          "calls": 1,
+          "allocs": 0,
+          "peak_arena": 32768,
+          "frozen_bytes": 32,
+          "static_bytes": 16,
+          "evaluations": 2
+        },
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-642/release/kiln++",
+        "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
+        "host": {
+          "arch": "aarch64",
+          "cpus": 24
+        },
+        "recorded": "2026-11-05T131939"
+      }
+    },
+    "wide-struct-store": {
+      "kiln": {
+        "mode": "syntax",
+        "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=200000000",
+        "source_hash": "fnv1a64:b42d422b5c2479f1",
+        "runs": 5,
+        "wall_ms_median": 154.245,
+        "wall_ms_min": 152.932,
+        "wall_ms_max": 156.959,
+        "spread_pct": 0.86,
+        "max_rss_kb": 31692,
+        "oven": {
+          "steps": 69647,
+          "bytes": 16384,
+          "peak_bytes": 16384,
+          "calls": 1,
+          "allocs": 0,
+          "peak_arena": 16384,
+          "frozen_bytes": 32,
+          "static_bytes": 16,
+          "evaluations": 2
+        },
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-642/release/kiln++",
+        "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
+        "host": {
+          "arch": "aarch64",
+          "cpus": 24
+        },
+        "recorded": "2026-11-05T131939"
+      }
     }
   }
 }

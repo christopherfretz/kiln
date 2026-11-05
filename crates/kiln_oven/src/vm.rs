@@ -2408,7 +2408,7 @@ impl Oven {
                     } else {
                         None
                     };
-                    let Some(f) = active.or_else(|| fields.iter().find(contains)) else {
+                    let Some(f) = active.or_else(|| self.types.near(t, rel).find(contains)) else {
                         return Ok(());
                     };
                     if f.mutable {
@@ -2528,10 +2528,11 @@ impl Oven {
                         // allocator): only a member holding it is wrong.
                         let fallback = || {
                             (k != ak::MEMBER_CALL)
-                                .then(|| fields.iter().find(|f| contains(f)))
+                                .then(|| self.types.near(t, rel).find(|f| contains(f)))
                                 .flatten()
                         };
-                        let Some(f) = fields.iter().find(|f| reach(f)).or_else(fallback) else {
+                        let Some(f) = self.types.near(t, rel).find(|f| reach(f)).or_else(fallback)
+                        else {
                             return Ok(());
                         };
                         return Err(Fault::Union {
@@ -2543,7 +2544,7 @@ impl Oven {
                     let Some(f) = self
                         .types
                         .member_toward(t, rel, ty)
-                        .or_else(|| fields.iter().find(|f| contains(f)).copied())
+                        .or_else(|| self.types.near(t, rel).find(|f| contains(f)).copied())
                     else {
                         return Ok(());
                     };
@@ -3103,7 +3104,7 @@ impl Oven {
                             .types
                             .member_toward(t, rel, ty)
                             .filter(|f| f.width.is_none())
-                            .or_else(|| fields.iter().find(|f| contains(f)).copied())
+                            .or_else(|| self.types.near(t, rel).find(|f| contains(f)).copied())
                         else {
                             return Ok(());
                         };
@@ -3134,7 +3135,9 @@ impl Oven {
                         .find(|&i| reach(&fields[i as usize]));
                     match held {
                         None if direct == 0 => {
-                            let Some(f) = fields.iter().find(|f| reach(f)) else { return Ok(()) };
+                            let Some(f) = self.types.near(t, rel).find(|f| reach(f)) else {
+                                return Ok(());
+                            };
                             return Err(Fault::Union {
                                 ak: ak::CONSTRUCT,
                                 field: f.decl,

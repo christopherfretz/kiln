@@ -159,6 +159,52 @@ pub(crate) struct Types {
     nv_views: FxHashMap<OTy, OTy>,
     /// The class each such view belongs to.
     nv_class: FxHashMap<OTy, OTy>,
+    /// The offset index of each record with at least [`INDEX_MIN`]
+    /// fields ([`Types::near`]): the start of its rows in `idx_order` and
+    /// `idx_reach`, one row per field.
+    idx_start: FxHashMap<OTy, u32>,
+    /// A record's field indices (into [`Types::fields`] of the record)
+    /// sorted by (offset, index).
+    idx_order: Vec<u32>,
+    /// The greatest end (`offset + max(size, 1)`) of the fields up to and
+    /// including each row of `idx_order`: once it is at most a byte, no
+    /// earlier row holds the byte.
+    idx_reach: Vec<u64>,
+    /// The index in its record's fields of each member (not base) of a
+    /// record with an offset index ([`Types::field_index`]).
+    member_idx: FxHashMap<DeclId, u32>,
+}
+
+/// Records with fewer fields are scanned linearly ([`Types::near`]).
+const INDEX_MIN: usize = 16;
+/// The most fields [`Types::near`] narrows a lookup to, and the most rows
+/// it walks to find them; past either it yields every field.
+const NEAR_MAX: usize = 8;
+const NEAR_WALK: usize = 32;
+
+/// The fields of a record that may hold one byte, in declaration order
+/// ([`Types::near`]).
+pub(crate) enum Near<'a> {
+    All(std::slice::Iter<'a, FieldInfo>),
+    Few { fs: &'a [FieldInfo], idx: [u32; NEAR_MAX], n: u8, i: u8 },
+}
+
+impl<'a> Iterator for Near<'a> {
+    type Item = &'a FieldInfo;
+
+    fn next(&mut self) -> Option<&'a FieldInfo> {
+        match self {
+            Near::All(it) => it.next(),
+            Near::Few { fs, idx, n, i } => {
+                if *i >= *n {
+                    return None;
+                }
+                let f = &fs[idx[usize::from(*i)] as usize];
+                *i += 1;
+                Some(f)
+            }
+        }
+    }
 }
 
 /// Evaluates an integral constant already checked by sema (bit-field
@@ -252,6 +298,115 @@ impl Types {
         }
     }
 
+    /// The fields of record `t` that may hold byte `off`, in declaration
+    /// order: a superset of those with `offset <= off < offset + max(size,
+    /// 1)` (bases, members and bit-fields alike, whose callers test the
+    /// exact rule they need). A record with an offset index yields just
+    /// the fields holding the byte, found by binary search, unless more
+    /// than [`NEAR_MAX`] do (a union's members) or the search would walk
+    /// past [`NEAR_WALK`] rows; then, like a small record, every field.
+    pub fn near(&self, t: OTy, off: u64) -> Near<'_> {
+        let fs = self.fields(t);
+        if fs.len() < INDEX_MIN {
+            return Near::All(fs.iter());
+        }
+        let Some(&s) = self.idx_start.get(&t) else { return Near::All(fs.iter()) };
+        let rows = s as usize..s as usize + fs.len();
+        let (order, reach) = (&self.idx_order[rows.clone()], &self.idx_reach[rows]);
+        let mut j = order.partition_point(|&i| fs[i as usize].offset <= off);
+        let (mut idx, mut n) = ([0u32; NEAR_MAX], 0usize);
+        let mut walked = 0;
+        while j > 0 && reach[j - 1] > off {
+            j -= 1;
+            walked += 1;
+            let f = &fs[order[j] as usize];
+            if f.offset + self.size(f.ty).max(1) > off {
+                if n == NEAR_MAX {
+                    return Near::All(fs.iter());
+                }
+                idx[n] = order[j];
+                n += 1;
+            }
+            if walked == NEAR_WALK && j > 0 && reach[j - 1] > off {
+                return Near::All(fs.iter());
+            }
+        }
+        idx[..n].sort_unstable();
+        Near::Few { fs, idx, n: n as u8, i: 0 }
+    }
+
+    /// The index in [`Types::fields`] of record `t` of the first field
+    /// whose declaration is `decl` (a non-static data member): O(1) in a
+    /// record with an offset index.
+    pub fn field_index(&self, t: OTy, decl: DeclId) -> Option<usize> {
+        let fs = self.fields(t);
+        if fs.len() >= INDEX_MIN
+            && let Some(&i) = self.member_idx.get(&decl)
+            && fs.get(i as usize).is_some_and(|f| f.decl == decl)
+        {
+            return Some(i as usize);
+        }
+        fs.iter().position(|f| f.decl == decl)
+    }
+
+    /// Builds the offset index of record `t` ([`Types::near`]) if it has
+    /// enough fields.
+    fn index_fields(&mut self, t: OTy) {
+        let fs = self.fields(t);
+        if fs.len() < INDEX_MIN {
+            return;
+        }
+        let mut order: Vec<u32> = (0..fs.len() as u32).collect();
+        order.sort_by_key(|&i| (fs[i as usize].offset, i));
+        let mut top = 0;
+        let reach: Vec<u64> = order
+            .iter()
+            .map(|&i| {
+                let f = &fs[i as usize];
+                top = top.max(f.offset + self.size(f.ty).max(1));
+                top
+            })
+            .collect();
+        let members: Vec<(DeclId, u32)> = fs
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !f.base)
+            .map(|(i, f)| (f.decl, i as u32))
+            .collect();
+        self.member_idx.extend(members);
+        let start = self.idx_order.len() as u32;
+        self.idx_order.extend(order);
+        self.idx_reach.extend(reach);
+        let _ = self.idx_start.insert(t, start);
+    }
+
+    /// Bytes of heap the type table holds.
+    pub fn footprint(&self) -> usize {
+        fn cap<T>(v: &Vec<T>) -> usize {
+            v.capacity() * size_of::<T>()
+        }
+        fn map<K, V>(m: &FxHashMap<K, V>) -> usize {
+            m.capacity() * (size_of::<(K, V)>() + 1)
+        }
+        cap(&self.infos)
+            + cap(&self.fields)
+            + cap(&self.union_pos)
+            + map(&self.map)
+            + map(&self.arrays)
+            + map(&self.const_arrays)
+            + map(&self.data_sizes)
+            + map(&self.empty_bases)
+            + self.empty_bases.values().map(cap).sum::<usize>()
+            + map(&self.provisional)
+            + self.provisional_slots.capacity() * (size_of::<OTy>() + 1)
+            + map(&self.nv_views)
+            + map(&self.nv_class)
+            + map(&self.idx_start)
+            + cap(&self.idx_order)
+            + cap(&self.idx_reach)
+            + map(&self.member_idx)
+    }
+
     /// The class type `t` is a view of: the complete class of a
     /// base-subobject view ([`Types::nv_view`]), else `t`.
     pub fn class_of(&self, t: OTy) -> OTy {
@@ -306,23 +461,21 @@ impl Types {
     /// non-POD base, Itanium C++ ABI 2.4 dsize), where the other holds
     /// no object.
     pub fn field_at(&self, t: OTy, off: u64) -> Option<FieldInfo> {
-        let fs = self.fields(t);
         let sized = |f: &&FieldInfo| {
             f.width.is_none() && off >= f.offset && off < f.offset + self.size(f.ty)
         };
         let union = matches!(self.kind(t), TyKind::Record { union: true, .. });
-        let found = fs.iter().position(|f| sized(&f)).map(|i| {
-            let first = &fs[i];
+        let mut near = self.near(t, off);
+        let found = near.find(sized).map(|first| {
             if union {
                 return first;
             }
-            fs[i + 1..]
-                .iter()
-                .fold(first, |best, f| if f.offset > best.offset && sized(&f) { f } else { best })
+            near.fold(first, |best, f| if f.offset > best.offset && sized(&f) { f } else { best })
         });
         found
             .or_else(|| {
-                fs.iter().find(|f| f.width.is_none() && self.size(f.ty) == 0 && off == f.offset)
+                self.near(t, off)
+                    .find(|f| f.width.is_none() && self.size(f.ty) == 0 && off == f.offset)
             })
             .copied()
     }
@@ -346,7 +499,7 @@ impl Types {
         if at.as_ref().is_some_and(reach) {
             return at;
         }
-        self.fields(t).iter().find(|f| reach(f)).copied().or(at)
+        self.near(t, off).find(|f| reach(f)).copied().or(at)
     }
 
     pub fn unions(&self, t: OTy) -> &[(u64, OTy)] {
@@ -986,6 +1139,10 @@ impl Types {
         info.has_vptr = has_vptr;
         info.has_mutable = has_mutable;
         info.upos = (ustart, uend);
+        self.index_fields(me);
+        if let Some(&view) = self.nv_views.get(&me) {
+            self.index_fields(view);
+        }
         me
     }
 
@@ -1028,7 +1185,7 @@ impl Types {
                 TyKind::Record { .. } => {
                     let rel = o - base;
                     for sized in [true, false] {
-                        for f in self.fields(t) {
+                        for f in self.near(t, rel) {
                             let sz = self.size(f.ty);
                             if f.width.is_some() || (sz > 0) != sized {
                                 continue;
@@ -1055,7 +1212,7 @@ impl Types {
             return true;
         }
         matches!(self.kind(root), TyKind::Record { .. })
-            && self.fields(root).iter().any(|f| {
+            && self.near(root, off).any(|f| {
                 f.base
                     && off >= f.offset
                     && off < f.offset + self.size(f.ty).max(1)
@@ -1081,7 +1238,7 @@ impl Types {
                 es != 0 && off / es < n && self.has_subobject(elem, off % es, p)
             }
             TyKind::Record { .. } => {
-                self.fields(root).iter().any(|f| {
+                self.near(root, off).any(|f| {
                     f.width.is_none()
                         && off >= f.offset
                         && off < f.offset + self.size(f.ty).max(1)
@@ -1106,7 +1263,7 @@ impl Types {
                 let es = self.size(elem);
                 es != 0 && off / es < n && self.has_bit_unit(elem, off % es, p)
             }
-            TyKind::Record { .. } => self.fields(root).iter().any(|f| match f.width {
+            TyKind::Record { .. } => self.near(root, off).any(|f| match f.width {
                 Some(_) => off == f.offset && f.ty == p,
                 None => {
                     off >= f.offset
