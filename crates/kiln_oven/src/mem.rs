@@ -376,9 +376,9 @@ fn put_bits(v: &mut [u8], pos: u64, n: u64, x: u64) {
     }
 }
 
-/// Splits `[pos, pos + len)` (`len > WBITS`) at map-byte boundaries: the
-/// head's bit count, the first whole map byte, the number of whole map
-/// bytes, and the tail's bit count.
+/// Splits `[pos, pos + len)` (reaching past the granule of `pos`) at
+/// map-byte boundaries: the head's bit count, the first whole map byte,
+/// the number of whole map bytes, and the tail's bit count.
 #[inline]
 fn split(pos: u64, len: u64) -> (u64, usize, usize, u64) {
     let h = pos.next_multiple_of(GRAN) - pos;
@@ -386,29 +386,57 @@ fn split(pos: u64, len: u64) -> (u64, usize, usize, u64) {
     (h, ((pos + h) / GRAN) as usize, full as usize, len - h - full * GRAN)
 }
 
+/// The mask of bits `[lo, hi)` of a map byte (`lo <= hi <= GRAN`).
+#[inline]
+fn byte_mask(lo: u64, hi: u64) -> u8 {
+    (((1u32 << hi) - 1) & !((1u32 << lo) - 1)) as u8
+}
+
 /// Whether every byte of `[abs, abs + len)` has its bit set in the
 /// per-granule bitmask `v`.
+#[inline]
 fn all_bits(v: &[u8], abs: u64, len: u64) -> bool {
-    if len <= WBITS {
-        return get_bits(v, abs, len) == ones(len);
+    // Almost every access lies within one granule.
+    let lo = abs % GRAN;
+    if lo + len <= GRAN {
+        let m = byte_mask(lo, lo + len);
+        return m == 0 || v[(abs / GRAN) as usize] & m == m;
     }
     let (h, g, full, t) = split(abs, len);
-    get_bits(v, abs, h) == ones(h)
-        && v[g..g + full].iter().all(|&b| b == 0xFF)
-        && get_bits(v, abs + len - t, t) == ones(t)
+    let part = |pos: u64, n: u64| {
+        let m = byte_mask(pos % GRAN, pos % GRAN + n);
+        m == 0 || v[(pos / GRAN) as usize] & m == m
+    };
+    part(abs, h) && v[g..g + full].iter().all(|&b| b == 0xFF) && part(abs + len - t, t)
 }
 
 /// Sets (`on`) or clears the bits of `[abs, abs + len)` in the
 /// per-granule bitmask `v`.
+#[inline]
 fn set_bits(v: &mut [u8], abs: u64, len: u64, on: bool) {
-    if len <= WBITS {
-        put_bits(v, abs, len, if on { ones(len) } else { 0 });
+    let lo = abs % GRAN;
+    if lo + len <= GRAN {
+        if len != 0 {
+            let (b, m) = (&mut v[(abs / GRAN) as usize], byte_mask(lo, lo + len));
+            if on { *b |= m } else { *b &= !m }
+        }
         return;
     }
+    set_bits_slow(v, abs, len, on);
+}
+
+/// [`set_bits`] of a range over more than one granule.
+fn set_bits_slow(v: &mut [u8], abs: u64, len: u64, on: bool) {
     let (h, g, full, t) = split(abs, len);
-    put_bits(v, abs, h, if on { ones(h) } else { 0 });
+    let mut put = |pos: u64, n: u64| {
+        if n != 0 {
+            let (b, m) = (&mut v[(pos / GRAN) as usize], byte_mask(pos % GRAN, pos % GRAN + n));
+            if on { *b |= m } else { *b &= !m }
+        }
+    };
+    put(abs, h);
+    put(abs + len - t, t);
     v[g..g + full].fill(if on { 0xFF } else { 0 });
-    put_bits(v, abs + len - t, t, if on { ones(t) } else { 0 });
 }
 
 /// Copies the bits of bytes `[src, src + len)` of `s` to bytes
@@ -527,15 +555,16 @@ impl Space {
 
     /// The `len` bytes at `abs` as a little-endian value (the first 16
     /// when `len` is more).
+    #[inline]
     pub fn read(&self, abs: u64, len: u64) -> u128 {
-        // One 16-byte load, masked to `len`, unless it would run past the
-        // end of the space.
+        // Up to 8 bytes: one 8-byte load, masked to `len`, unless it would
+        // run past the end of the space.
         let a = abs as usize;
-        if len <= 16
-            && let Some(w) = self.bytes.get(a..a + 16)
+        if len <= 8
+            && let Some(w) = self.bytes.get(a..a + 8)
         {
-            let v = u128::from_le_bytes(w.try_into().unwrap_or_default());
-            return if len == 16 { v } else { v & ((1u128 << (8 * len)) - 1) };
+            let x = u64::from_le_bytes(w.try_into().unwrap_or_default());
+            return u128::from(if len == 8 { x } else { x & ((1u64 << (8 * len)) - 1) });
         }
         let mut v = 0u128;
         for i in (0..len).rev() {
@@ -544,16 +573,17 @@ impl Space {
         v
     }
 
-    /// Writes the low `len` bytes of `v` at `abs`, little-endian (and
-    /// zeros past the 16th).
+    /// Writes the low `len` bytes of `v` at `abs`, little-endian (zeros
+    /// past the 16th).
+    #[inline]
     pub fn write(&mut self, abs: u64, len: u64, mut v: u128) {
         let a = abs as usize;
-        if len <= 16
-            && let Some(d) = self.bytes.get_mut(a..a + 16)
+        if len <= 8
+            && let Some(d) = self.bytes.get_mut(a..a + 8)
         {
-            let m = if len == 16 { u128::MAX } else { (1u128 << (8 * len)) - 1 };
-            let old = u128::from_le_bytes((&*d).try_into().unwrap_or_default());
-            d.copy_from_slice(&(old & !m | v & m).to_le_bytes());
+            let m = if len == 8 { u64::MAX } else { (1u64 << (8 * len)) - 1 };
+            let old = u64::from_le_bytes((&*d).try_into().unwrap_or_default());
+            d.copy_from_slice(&(old & !m | v as u64 & m).to_le_bytes());
             return;
         }
         for i in 0..len {
