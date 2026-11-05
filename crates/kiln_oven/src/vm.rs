@@ -25,6 +25,8 @@ mod builtins;
 pub(crate) mod exc;
 mod life;
 mod meta;
+#[cfg(feature = "op-stats")]
+mod opstats;
 mod virt;
 mod wide;
 
@@ -710,12 +712,19 @@ impl Oven {
             serial,
         });
         loop {
-            let w = self.code[pc];
+            // One checked read of the instruction's words; operands index
+            // the local window with constant indices (spec/oven.md
+            // "Dispatch").
+            let mut tail = [0; crate::kbc::WINDOW];
+            let win = crate::kbc::window_ref(&self.code, pc, &mut tail);
+            let w = win[0];
             let op = Op::from_u8(w as u8);
             let aux = w >> 8;
+            #[cfg(feature = "op-stats")]
+            opstats::count(op);
             macro_rules! arg {
                 ($i:expr) => {
-                    self.code[pc + 1 + $i] as usize
+                    win[1 + $i] as usize
                 };
             }
             macro_rules! reg {
@@ -723,48 +732,103 @@ impl Oven {
                     self.regs[fb + arg!($i)]
                 };
             }
+            // The frame's register window as a local slice, for arms that
+            // touch only registers: its base and length stay in machine
+            // registers across the arm's stores, where `self.regs[..]`
+            // reloads both after every store (spec/oven.md "Dispatch").
+            macro_rules! frame {
+                () => {
+                    &mut self.regs[fb..]
+                };
+            }
             macro_rules! fail {
                 ($f:expr) => {
                     return Err(($f, pc))
+                };
+            }
+            // The `Step` whose words are `w` (op word) and `idx` (its
+            // operand), at `at`.
+            macro_rules! step {
+                ($w:expr, $idx:expr, $at:expr) => {
+                    let n = u64::from($w >> 8);
+                    let before = self.run.counters.steps;
+                    if before + n > self.budget.steps {
+                        let i = $idx as usize + (self.budget.steps - before) as usize;
+                        return Err((Fault::Steps(self.step_locs[i]), $at));
+                    }
+                    self.run.counters.steps = before + n;
+                };
+            }
+            // Fused pairs: an arm whose window also holds the next
+            // instruction executes that one too when it is the usual
+            // successor, skipping its dispatch. The encoding is unchanged
+            // (spec/oven.md "Dispatch"): the second instruction is still
+            // there, still a jump target, and reports its own pc.
+            macro_rules! is_next {
+                ($at:expr, $op:ident) => {
+                    win[$at] as u8 == Op::$op as u8
                 };
             }
             match op {
                 Op::Nop => pc += 1,
                 Op::Halt => return Ok(()),
                 Op::Step => {
-                    let n = u64::from(aux);
-                    let before = self.run.counters.steps;
-                    if before + n > self.budget.steps {
-                        let i = arg!(0) + (self.budget.steps - before) as usize;
-                        fail!(Fault::Steps(self.step_locs[i]));
+                    step!(w, arg!(0), pc);
+                    // In-place fusion (spec/oven.md "Dispatch"): a Step
+                    // usually opens a block whose first instruction is a
+                    // `Mov` or a `Const`; run it from the same window.
+                    if is_next!(2, Mov) {
+                        #[cfg(feature = "op-stats")]
+                        opstats::count(Op::Mov);
+                        let r = frame!();
+                        r[win[3] as usize] = r[win[4] as usize];
+                        pc += 5;
+                    } else if is_next!(2, Const) {
+                        #[cfg(feature = "op-stats")]
+                        opstats::count(Op::Const);
+                        let v = u64::from(win[4]) | u64::from(win[5]) << 32;
+                        frame!()[win[3] as usize] = if win[2] >> 8 & 1 != 0 {
+                            v as i64 as i128 as u128
+                        } else {
+                            u128::from(v)
+                        };
+                        pc += 6;
+                    } else {
+                        pc += 2;
                     }
-                    self.run.counters.steps = before + n;
-                    pc += 2;
                 }
-                Op::Trap => fail!(Fault::Trap(arg!(0) as u32)),
                 Op::Const => {
-                    let v = u64::from(self.code[pc + 2]) | u64::from(self.code[pc + 3]) << 32;
+                    let v = u64::from(win[2]) | u64::from(win[3]) << 32;
                     reg!(0) = if aux & 1 != 0 { v as i64 as i128 as u128 } else { u128::from(v) };
                     pc += 4;
                 }
-                Op::Const2 => {
-                    let mut v = 0u128;
-                    for i in (0..4).rev() {
-                        v = v << 32 | u128::from(self.code[pc + 2 + i]);
-                    }
-                    reg!(0) = v;
-                    pc += 6;
-                }
                 Op::Mov => {
-                    reg!(0) = reg!(1);
-                    pc += 3;
+                    let r = frame!();
+                    r[arg!(0)] = r[arg!(1)];
+                    if is_next!(3, Mov) {
+                        #[cfg(feature = "op-stats")]
+                        opstats::count(Op::Mov);
+                        r[win[4] as usize] = r[win[5] as usize];
+                        pc += 6;
+                    } else {
+                        pc += 3;
+                    }
                 }
                 Op::Jmp => pc = arg!(0),
                 Op::JmpIf => {
                     pc = if reg!(0) != 0 { arg!(1) } else { pc + 3 };
                 }
                 Op::JmpIfNot => {
-                    pc = if reg!(0) == 0 { arg!(1) } else { pc + 3 };
+                    if reg!(0) == 0 {
+                        pc = arg!(1);
+                    } else if is_next!(3, Step) {
+                        #[cfg(feature = "op-stats")]
+                        opstats::count(Op::Step);
+                        step!(win[3], win[4], pc + 3);
+                        pc += 5;
+                    } else {
+                        pc += 3;
+                    }
                 }
                 Op::IAdd
                 | Op::ISub
@@ -776,7 +840,9 @@ impl Oven {
                 | Op::IAnd
                 | Op::IOr
                 | Op::IXor => {
-                    let (a, bb) = (reg!(1), reg!(2));
+                    let r = frame!();
+                    let (a, bb) = (r[arg!(1)], r[arg!(2)]);
+                    let d = fb + arg!(0);
                     let width = aux & 0xFF;
                     let signed = aux >> 8 & 1 != 0;
                     match arith::int_bin(
@@ -788,26 +854,13 @@ impl Oven {
                         aux >> 9 & 0xFF,
                         aux >> 17 & 1 != 0,
                     ) {
-                        Ok(v) => reg!(0) = v,
+                        Ok(v) => r[arg!(0)] = v,
                         Err(err) => match self.wrap_overflow(pc, err, op, aux, a, bb) {
-                            Some(v) => reg!(0) = v,
+                            Some(v) => self.regs[d] = v,
                             None => fail!(Fault::Int { err, op, a, b: bb, aux }),
                         },
                     }
                     pc += 4;
-                }
-                Op::INeg => {
-                    let a = reg!(1);
-                    let width = aux & 0xFF;
-                    let signed = aux >> 8 & 1 != 0;
-                    match arith::int_bin(Op::ISub, width, signed, 0, a, 0, false) {
-                        Ok(v) => reg!(0) = v,
-                        Err(err) => match self.wrap_overflow(pc, err, Op::ISub, aux, 0, a) {
-                            Some(v) => reg!(0) = v,
-                            None => fail!(Fault::Int { err, op, a, b: 0, aux }),
-                        },
-                    }
-                    pc += 3;
                 }
                 Op::INot => {
                     reg!(0) = canon(!reg!(1), aux & 0xFF, aux >> 8 & 1 != 0);
@@ -818,51 +871,24 @@ impl Oven {
                     pc += 3;
                 }
                 Op::ICmp => {
-                    let (a, bb) = (reg!(1), reg!(2));
+                    let r = frame!();
+                    let (a, bb) = (r[arg!(1)], r[arg!(2)]);
                     let o =
                         if aux >> 8 & 1 != 0 { (a as i128).cmp(&(bb as i128)) } else { a.cmp(&bb) };
-                    reg!(0) = u128::from(compare(aux >> 9, o));
-                    pc += 4;
+                    r[arg!(0)] = u128::from(compare(aux >> 9, o));
+                    if is_next!(4, JmpIfNot) || is_next!(4, JmpIf) {
+                        #[cfg(feature = "op-stats")]
+                        opstats::count(Op::from_u8(win[4] as u8));
+                        let c = r[win[5] as usize] != 0;
+                        pc = if c == is_next!(4, JmpIf) { win[6] as usize } else { pc + 7 };
+                    } else {
+                        pc += 4;
+                    }
                 }
                 Op::ICast => {
-                    reg!(0) = canon(reg!(1), aux >> 9 & 0xFF, aux >> 17 & 1 != 0);
+                    let r = frame!();
+                    r[arg!(0)] = canon(r[arg!(1)], aux >> 9 & 0xFF, aux >> 17 & 1 != 0);
                     pc += 3;
-                }
-                Op::EnumCheck => {
-                    let w = |i: usize| u64::from(self.code[pc + i]);
-                    let min = i128::from((w(2) | w(3) << 32).cast_signed());
-                    let max = i128::from((w(4) | w(5) << 32).cast_signed());
-                    // clang 19's `HandleCast`: the operand, sign-extended
-                    // for an enumeration with negative values, else
-                    // zero-extended, and printed in its own signedness.
-                    let (fw, fs) = (aux & 0xFF, aux >> 8 & 1 != 0);
-                    let raw = reg!(0);
-                    let oob = if min < 0 {
-                        let v = canon(raw, fw, true).cast_signed();
-                        v < min || v > max
-                    } else {
-                        canon(raw, fw, false) > max.cast_unsigned()
-                    };
-                    // clang 19 accepts the value and reports it as an error
-                    // (`-Wenum-constexpr-conversion`) only where a constant
-                    // expression proper is required (spec/oven.md
-                    // "Integration"); elsewhere the cast is not checked.
-                    // clang 22 (`note_constexpr_unscoped_enum_out_of_range`):
-                    // the value makes any evaluation non-constant (a speculative
-                    // one goes on, as clang's `CCEDiag` when folding).
-                    if oob && self.clang_compat >= 22 && !self.run.silent {
-                        let v = if fs { raw.cast_signed().to_string() } else { raw.to_string() };
-                        fail!(Fault::EnumRange { v: v.into(), min, max });
-                    }
-                    if oob {
-                        self.run.impure += 1;
-                        if self.run.enum_check && !self.run.silent {
-                            let v =
-                                if fs { raw.cast_signed().to_string() } else { raw.to_string() };
-                            self.enum_range_diag(b, pc, &v, min, max);
-                        }
-                    }
-                    pc += 6;
                 }
                 Op::ToBool => {
                     reg!(0) = u128::from(reg!(1) != 0);
@@ -876,56 +902,6 @@ impl Oven {
                         fail!(Fault::Quiet)
                     }
                     reg!(0) = u128::from(reg!(1) != 0);
-                    pc += 3;
-                }
-                Op::FAdd | Op::FSub | Op::FMul | Op::FDiv => {
-                    let kind = float_of(aux);
-                    match arith::float_bin(op, kind, reg!(1), reg!(2)) {
-                        Ok(v) => reg!(0) = v,
-                        Err(FloatErr::NaN | FloatErr::DivZero) if self.fold_float_ub => {
-                            let Some(v) = arith::float_bin_raw(op, kind, reg!(1), reg!(2)) else {
-                                fail!(Fault::Float(FloatErr::Unsupported))
-                            };
-                            reg!(0) = v;
-                            self.run.impure += 1;
-                        }
-                        Err(e) => fail!(Fault::Float(e)),
-                    }
-                    pc += 4;
-                }
-                Op::FNeg => {
-                    reg!(0) = arith::float_neg(float_of(aux), reg!(1));
-                    pc += 3;
-                }
-                Op::FCmp => {
-                    let c = aux >> 4;
-                    let r = match arith::float_cmp(float_of(aux), reg!(1), reg!(2)) {
-                        Some(o) => compare(c, o),
-                        None => c == cmp::NE,
-                    };
-                    reg!(0) = u128::from(r);
-                    pc += 4;
-                }
-                Op::FCast => {
-                    reg!(0) = arith::float_cast(float_of(aux), float_of(aux >> 4), reg!(1));
-                    pc += 3;
-                }
-                Op::IToF => {
-                    reg!(0) = arith::int_to_float(float_of(aux >> 9), reg!(1), aux >> 8 & 1 != 0);
-                    pc += 3;
-                }
-                Op::FToI => {
-                    let kind = float_of(aux);
-                    let a = reg!(1);
-                    match arith::float_to_int(kind, a, aux >> 4 & 0xFF, aux >> 12 & 1 != 0) {
-                        Ok(v) => reg!(0) = v,
-                        Err(FloatErr::Range) => fail!(Fault::FloatRange { kind, bits: a }),
-                        Err(e) => fail!(Fault::Float(e)),
-                    }
-                    pc += 3;
-                }
-                Op::FToBool => {
-                    reg!(0) = u128::from(arith::float_truth(float_of(aux), reg!(1)));
                     pc += 3;
                 }
                 Op::PtrAdd => {
@@ -988,38 +964,6 @@ impl Oven {
                     }
                     pc += 4;
                 }
-                Op::Downcast => {
-                    let raw = reg!(1) as u64;
-                    let to = OTy(arg!(3) as u32);
-                    if raw == 0 {
-                        if aux == 0 {
-                            fail!(Fault::NullField);
-                        }
-                        reg!(0) = 0;
-                    } else {
-                        match self.downcast(raw, arg!(2) as u64, to) {
-                            Ok(q) => reg!(0) = u128::from(q),
-                            Err(f) => fail!(f),
-                        }
-                    }
-                    pc += 5;
-                }
-                Op::VBase => {
-                    let raw = reg!(1) as u64;
-                    if raw == 0 {
-                        if aux == 0 {
-                            fail!(Fault::NullField);
-                        }
-                        reg!(0) = 0;
-                    } else {
-                        let (cls, k) = (OTy(arg!(2) as u32), arg!(3) as u16);
-                        match self.sub_addr(b, raw, cls, k) {
-                            Some(q) => reg!(0) = u128::from(q),
-                            None => fail!(Fault::Invalid),
-                        }
-                    }
-                    pc += 5;
-                }
                 Op::Load => {
                     let ty = OTy(arg!(2) as u32);
                     let raw = reg!(1) as u64;
@@ -1040,50 +984,6 @@ impl Oven {
                     }
                     pc += 4;
                 }
-                Op::LoadBits => {
-                    let ty = OTy(arg!(2) as u32);
-                    let raw = reg!(1) as u64;
-                    let bw = arg!(3) as u32;
-                    match self.load_bits(raw, ty, bw & 0xFF, bw >> 8, aux) {
-                        Ok(v) => reg!(0) = v,
-                        Err(f) => fail!(f),
-                    }
-                    pc += 5;
-                }
-                Op::StoreBits => {
-                    let ty = OTy(arg!(2) as u32);
-                    let raw = reg!(0) as u64;
-                    let v = reg!(1);
-                    let bw = arg!(3) as u32;
-                    if let Err(f) = self.store_bits(raw, ty, v, bw & 0xFF, bw >> 8, aux & 1 != 0) {
-                        fail!(f);
-                    }
-                    pc += 5;
-                }
-                Op::LoadLane => {
-                    let vty = OTy(arg!(3) as u32);
-                    let r = self
-                        .lane_at(reg!(1) as u64, reg!(2) as u64, vty, aux)
-                        .and_then(|(q, bit, elem)| self.load_bits(q, elem, bit, 1, aux));
-                    match r {
-                        Ok(v) => reg!(0) = v,
-                        Err(f) => fail!(f),
-                    }
-                    pc += 5;
-                }
-                Op::StoreLane => {
-                    let vty = OTy(arg!(3) as u32);
-                    let v = reg!(1);
-                    let init = aux & 1 != 0;
-                    let k = if init { ak::INIT } else { ak::ASSIGN };
-                    let r = self
-                        .lane_at(reg!(0) as u64, reg!(2) as u64, vty, k)
-                        .and_then(|(q, bit, elem)| self.store_bits(q, elem, v, bit, 1, init));
-                    if let Err(f) = r {
-                        fail!(f);
-                    }
-                    pc += 5;
-                }
                 Op::Copy => {
                     let ty = OTy(arg!(2) as u32);
                     let full = (aux & 2 != 0).then(|| b.ast());
@@ -1093,30 +993,6 @@ impl Oven {
                         fail!(f);
                     }
                     pc += 4;
-                }
-                Op::ZeroInit => {
-                    let ty = OTy(arg!(1) as u32);
-                    let raw = reg!(0) as u64;
-                    // An empty class writes nothing: its byte may be
-                    // another subobject's (libc++'s `__compressed_pair`
-                    // value-initializes its empty deleter base over the
-                    // pointer).
-                    let size = if self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
-                    match self.mem.check(raw, size, true).map(|(st, abs, _)| (st, abs)) {
-                        Ok((st, abs)) => {
-                            if let Err(f) = self.mem.trial_write(raw, size) {
-                                fail!(Fault::Mem { f, ak: ak::INIT, ty, p: raw });
-                            }
-                            if size != 0 {
-                                self.mem.zero(st, abs, size);
-                            }
-                            if self.types.info(ty).has_union {
-                                self.zero_unions(raw, u64::from(Ptr::decode(raw).off), ty);
-                            }
-                        }
-                        Err(f) => fail!(Fault::Mem { f, ak: ak::INIT, ty, p: raw }),
-                    }
-                    pc += 3;
                 }
                 Op::Alloc => {
                     let ty = OTy(arg!(1) as u32);
@@ -1129,100 +1005,6 @@ impl Oven {
                     }
                     pc += 4;
                 }
-                Op::New => {
-                    let elem = OTy(arg!(1) as u32);
-                    let mut e = match self.origins[arg!(3)] {
-                        Origin::Heap(e, _) => e,
-                        _ => ExprId::new(0),
-                    };
-                    if aux & new_aux::STD != 0 && self.clang_compat >= 22 {
-                        e = self.std_alloc_site(b, e);
-                    }
-                    let origin = Origin::Heap(e, self.mem.heap_allocs as u32);
-                    let bound = if aux & new_aux::ARRAY != 0 {
-                        let mut v = reg!(2);
-                        if aux & new_aux::STD != 0 {
-                            // A byte count ([allocator.members]/5).
-                            let es = u128::from(self.types.size(elem).max(1));
-                            if !v.is_multiple_of(es) {
-                                fail!(Fault::NewBadSize { bytes: v, elem });
-                            }
-                            v /= es;
-                        }
-                        match self.new_bound(v, aux, elem, arg!(4) as u64) {
-                            Ok(n) => Some(n),
-                            Err(_) if aux & new_aux::NOTHROW != 0 => None,
-                            Err(f) => fail!(f),
-                        }
-                    } else {
-                        Some(u64::MAX)
-                    };
-                    let raw = match bound {
-                        None => 0,
-                        Some(n) => match self.new_alloc(elem, n, aux, origin) {
-                            Ok(p) => p,
-                            Err(f) => fail!(f),
-                        },
-                    };
-                    reg!(0) = u128::from(raw);
-                    pc += 6;
-                }
-                Op::Delete => {
-                    let mut raw = reg!(0) as u64;
-                    let mut pointee = OTy(arg!(1) as u32);
-                    let kind = match aux & 9 {
-                        0 => DynKind::New,
-                        1 => DynKind::ArrayNew,
-                        _ => DynKind::Std,
-                    };
-                    if kind == DynKind::New && raw != 0 {
-                        match self.delete_base(raw, pointee, aux & 4 != 0) {
-                            Ok(Some((r, t))) => (raw, pointee) = (r, t),
-                            Ok(None) => {}
-                            Err(f) => fail!(f),
-                        }
-                    }
-                    if kind != DynKind::Std
-                        && let Err(f) = self.delete_life(raw)
-                    {
-                        fail!(f);
-                    }
-                    // aux 2: the checks only (before the destructors run).
-                    let r = if aux & 2 != 0 {
-                        self.mem.heap_check(raw, kind, Some(pointee), &self.types).map(drop)
-                    } else {
-                        self.mem.heap_free(raw, kind, Some(pointee), &self.types)
-                    };
-                    if let Err(f) = r {
-                        fail!(Fault::Mem { f, ak: ak::READ, ty: pointee, p: raw });
-                    }
-                    pc += 3;
-                }
-                Op::Placement => {
-                    let elem = OTy(arg!(1) as u32);
-                    let ty = if aux & new_aux::ARRAY != 0 {
-                        match self.new_bound(reg!(3), aux, elem, arg!(4) as u64) {
-                            Ok(n) => self.types.array_of(elem, n),
-                            Err(f) => fail!(f),
-                        }
-                    } else {
-                        elem
-                    };
-                    // A `void *` argument: the subobject type its
-                    // conversion from `T *` recorded (`kbc::VOID_TAG`).
-                    let stat = match arg!(2) as u32 {
-                        crate::kbc::bi::DYN => (reg!(0) >> 64) as u32,
-                        s => s.wrapping_add(1),
-                    };
-                    let stat = stat.checked_sub(1).map(OTy);
-                    if aux & new_aux::BOUND == 0 {
-                        if let Err(f) = self.placement(reg!(0) as u64, ty, stat, aux) {
-                            fail!(f);
-                        }
-                        reg!(0) = u128::from(reg!(0) as u64);
-                    }
-                    pc += 6;
-                }
                 Op::EndLife => {
                     if let Err(f) = self.end_life(reg!(0) as u64, OTy(arg!(1) as u32), aux) {
                         fail!(f);
@@ -1230,8 +1012,9 @@ impl Oven {
                     pc += 3;
                 }
                 Op::Builtin => {
+                    let d = fb + arg!(0);
                     match self.exec_builtin(b, pc, fb, aux) {
-                        Ok(v) => reg!(0) = v,
+                        Ok(v) => self.regs[d] = v,
                         Err(f) => fail!(f),
                     }
                     pc += 7;
@@ -1263,115 +1046,11 @@ impl Oven {
                     self.mem.release(m as u64, &self.types);
                     pc += 2;
                 }
-                Op::PushCleanup => {
-                    let raw = reg!(0) as u64;
-                    if let Err(f) =
-                        self.push_cleanup(raw, arg!(1) as u32, OTy(arg!(2) as u32), aux, pc)
-                    {
-                        fail!(f);
-                    }
-                    pc += 4;
-                }
-                Op::MakeConst => {
-                    let p = Ptr::decode(reg!(0) as u64);
-                    if reg!(0) != 0
-                        && let Ok(a) = self.mem.alloc_of(p)
-                    {
-                        let fl = a.flags | flags::CONST;
-                        self.mem.set_flags(p, fl);
-                    }
-                    pc += 2;
-                }
-                Op::SetActive => {
-                    let raw = reg!(0) as u64;
-                    self.revive_union(raw, OTy(arg!(2) as u32));
-                    if let Err(f) =
-                        self.set_active(raw, arg!(1) as u32, OTy(arg!(2) as u32), aux & 1 != 0)
-                    {
-                        fail!(f);
-                    }
-                    pc += 4;
-                }
-                Op::ActiveCheck => {
-                    let raw = reg!(0) as u64;
-                    if let Err(f) = self.active_check(raw, arg!(1) as u32, OTy(arg!(2) as u32), aux)
-                    {
-                        fail!(f);
-                    }
-                    pc += 4;
-                }
-                Op::MpCast => {
-                    let v = reg!(0);
-                    let class = DeclId::new(arg!(1) as u32);
-                    match self.mp_cast(b, v, class, aux == 1) {
-                        Some(r) => reg!(0) = r,
-                        None => fail!(Fault::Invalid),
-                    }
-                    pc += 3;
-                }
-                Op::MpAddr => {
-                    let (raw, v) = (reg!(1) as u64, reg!(2));
-                    match self.mp_addr(raw, v, aux == 1) {
-                        Ok(q) => reg!(0) = u128::from(q),
-                        Err(f) => fail!(f),
-                    }
-                    pc += 4;
-                }
-                Op::MpActive => {
-                    if let Some(e) = self.mp.get(reg!(1))
-                        && e.union
-                        && let Some((_, _, idx)) = e.field
-                    {
-                        // A union's members are all at its offset 0.
-                        let cls = e.cls;
-                        if let Err(f) = self.active_check(reg!(0) as u64, idx, cls, aux) {
-                            fail!(f);
-                        }
-                    }
-                    pc += 3;
-                }
-                Op::MpFn => match self.mp.get(reg!(1)) {
-                    Some(e) if e.virt => {
-                        let (m, cls) = (e.member, e.cls);
-                        let adj = arg!(3);
-                        match self.vcall(b, m, cls, reg!(2) as u64) {
-                            Ok((f, this, cov)) => {
-                                reg!(0) = u128::from(crate::mem::fn_ptr(f));
-                                reg!(2) = u128::from(this);
-                                // A covariant return is adjusted as by a
-                                // direct call ([class.virtual]/8).
-                                if adj as u32 != u32::MAX {
-                                    self.regs[fb + adj] = cov;
-                                } else if cov != 0 {
-                                    fail!(Fault::Invalid);
-                                }
-                            }
-                            Err(f) => fail!(f),
-                        }
-                        pc += 5;
-                    }
-                    Some(e) => {
-                        reg!(0) = u128::from(crate::mem::fn_ptr(e.fn_index));
-                        let adj = arg!(3);
-                        if adj as u32 != u32::MAX {
-                            self.regs[fb + adj] = 0;
-                        }
-                        pc += 5;
-                    }
-                    None => fail!(Fault::Invalid),
-                },
-                Op::SetVptr => {
-                    let cls = OTy(arg!(1) as u32);
-                    if let Err(f) = self.set_vptrs(b, reg!(0) as u64, cls, aux & 1 != 0) {
-                        fail!(f);
-                    }
-                    pc += 3;
-                }
                 Op::VCall => {
                     let base = arg!(1);
                     let slot = fb + base + aux as usize;
-                    let m = DeclId::new(self.code[pc + 1]);
-                    let cls = OTy(self.code[pc + 3]);
+                    let m = DeclId::new(win[1]);
+                    let cls = OTy(win[3]);
                     let adj = arg!(3);
                     let callee = match self.vcall(b, m, cls, self.regs[slot] as u64) {
                         Ok((f, this, cov)) => {
@@ -1393,117 +1072,6 @@ impl Oven {
                         Ok(None) => pc += 5,
                         Err(f) => fail!(f),
                     }
-                }
-                Op::CovAdj => {
-                    let p = reg!(0) as u64;
-                    if p != 0 {
-                        match virt::cov_adj(reg!(1)) {
-                            virt::CovAdj::Off(o) => {
-                                let off = i64::from(Ptr::decode(p).off) + o;
-                                reg!(0) = u128::from(Ptr::with_off(p, off as u64, false));
-                            }
-                            virt::CovAdj::VBase(cls, k) => match self.sub_addr(b, p, cls, k) {
-                                Some(q) => reg!(0) = u128::from(q),
-                                None => fail!(Fault::Invalid),
-                            },
-                        }
-                    }
-                    pc += 3;
-                }
-                Op::DynCast => {
-                    let raw = reg!(1) as u64;
-                    let stat = OTy(arg!(2) as u32);
-                    let t = arg!(3) as u32;
-                    let target = (t != u32::MAX).then_some(OTy(t));
-                    match self.dyn_cast(b, raw, stat, target, aux & 1 != 0) {
-                        Ok(r) => reg!(0) = u128::from(r),
-                        Err(f) => fail!(f),
-                    }
-                    pc += 5;
-                }
-                Op::TypeId => {
-                    let ti = OTy(arg!(2) as u32);
-                    let r = if aux & 1 == 0 {
-                        let Some(q) = QualType::from_raw(arg!(1) as u32) else {
-                            fail!(Fault::Invalid)
-                        };
-                        self.type_info(q, ti)
-                    } else {
-                        let (raw, cls) = (reg!(1) as u64, OTy(arg!(3) as u32));
-                        match self.type_info_dyn(b.ast(), raw, cls, ti) {
-                            Ok(r) => r,
-                            Err(Fault::UnknownDynamic { .. })
-                                if let Some(q) = self.declared_dynamic_type(raw, cls) =>
-                            {
-                                self.type_info(q, ti)
-                            }
-                            Err(f) => fail!(f),
-                        }
-                    };
-                    reg!(0) = u128::from(r);
-                    pc += 5;
-                }
-                Op::IsConstEval => {
-                    if aux & 2 != 0 {
-                        // `__kiln_plainly_constant_evaluated()` (WP-473).
-                        reg!(0) = u128::from(self.plain());
-                    } else if aux & 4 != 0 {
-                        // A constexpr local's initializer: its own
-                        // evaluation, never plainly (spec/consteval-blocks.md §3).
-                        reg!(0) = u128::from(std::mem::take(&mut self.run.plain));
-                    } else if aux & 8 != 0 {
-                        self.run.plain = reg!(0) != 0;
-                    } else if aux & 16 != 0 {
-                        // `if consteval` ([stmt.if]/4).
-                        reg!(0) = u128::from(self.run.const_context);
-                    } else {
-                        let cc = self.run.const_context;
-                        reg!(0) = u128::from(cc);
-                        if cc && (!self.run.silent || self.run.cev_warn) {
-                            self.always_true_diag(b, pc, aux);
-                        }
-                    }
-                    pc += 2;
-                }
-                Op::Wide => {
-                    let regs = [reg!(0), reg!(1), reg!(2)];
-                    match self.exec_wide(regs, OTy(arg!(3) as u32), arg!(4) as u32, aux) {
-                        Ok(Some(v)) => reg!(0) = v,
-                        Ok(None) => {}
-                        Err(f) => fail!(f),
-                    }
-                    pc += 6;
-                }
-                Op::Cx => {
-                    let v = [reg!(2), reg!(3), reg!(4), reg!(5)];
-                    let sub = aux & 3;
-                    let r = if aux >> 6 & 1 == 0 {
-                        Some(complex::float_op(sub, float_of(aux >> 2 & 0xF), v))
-                    } else {
-                        complex::int_op(sub, aux >> 7 & 0xFF, aux >> 15 & 1 != 0, v)
-                    };
-                    let Some([x, y]) = r else {
-                        let err = IntErr::DivZero;
-                        fail!(Fault::Int { err, op: Op::IDiv, a: v[0], b: 0, aux: 0 });
-                    };
-                    reg!(0) = x;
-                    reg!(1) = y;
-                    pc += 7;
-                }
-                Op::Speculate => {
-                    let func = self.stack[self.stack.len() - 1].func;
-                    match self.speculate(b, func, pc + 4, fb, arg!(1), aux & 1 != 0) {
-                        // clang `EvaluateBuiltinConstantP` outside a
-                        // constant context: a lax fold (`EvaluateAsInt`)
-                        // of a non-constant argument fails rather than
-                        // folding to 0.
-                        Ok(false) if aux & 2 != 0 && self.run.lax && !self.run.const_context => {
-                            fail!(Fault::Invalid)
-                        }
-                        Ok(c) => reg!(0) = u128::from(c),
-                        Err(f) => fail!(f),
-                    }
-                    pc = arg!(2);
                 }
                 Op::Call | Op::CallInd => {
                     let callee = if op == Op::Call {
@@ -1573,13 +1141,8 @@ impl Oven {
                     pc = fr.ret_pc as usize;
                     fb = self.stack[self.stack.len() - 1].fb as usize;
                 }
-                Op::LabelAddr => {
-                    let Some(e) = ExprId::try_new(arg!(1) as u32) else { fail!(Fault::Invalid) };
-                    reg!(0) = u128::from(self.label_addr(b, e));
-                    pc += 3;
-                }
                 Op::GlobalAddr => {
-                    let g = arg!(1);
+                    let (d, g) = (fb + arg!(0), arg!(1));
                     let p = match self.globals[g].state {
                         GState::Resolved(p) => p,
                         GState::Unresolved => {
@@ -1588,61 +1151,669 @@ impl Oven {
                             self.resolve_global(b, g as u32, top as u32)
                         }
                     };
-                    reg!(0) = u128::from(p);
+                    self.regs[d] = u128::from(p);
                     pc += 3;
                 }
-                Op::VoidCast if aux == crate::kbc::VOID_TAG => {
-                    let raw = reg!(1) as u64;
-                    let tag = if raw == 0 { 0 } else { u128::from(arg!(2) as u32) + 1 };
-                    reg!(0) = u128::from(raw) | tag << 64;
-                    pc += 4;
-                }
-                Op::VoidCast => {
-                    let (raw, tag) = (reg!(1) as u64, (reg!(1) >> 64) as u32);
-                    match self.void_cast(raw, tag, OTy(arg!(2) as u32)) {
-                        Ok(()) => reg!(0) = u128::from(raw),
-                        Err(f) => fail!(f),
-                    }
-                    pc += 4;
-                }
-                Op::Cce => {
-                    if !self.run.fold {
-                        fail!(Fault::Trap(arg!(2) as u32));
-                    }
-                    match self.cce(aux, reg!(1)) {
-                        Some(v) => {
-                            if aux != cce::CHECK {
-                                reg!(0) = v;
-                            }
-                        }
-                        None => fail!(Fault::Trap(arg!(2) as u32)),
-                    }
-                    pc += 4;
-                }
-                Op::TryEnter => {
-                    let depth = self.stack.len() as u32;
-                    let (this, at) = (arg!(0) as u64, pc as u32);
-                    let c = Cleanup { this, ty: OTy(0), func: exc::TRY_MARK, pc: at, depth };
-                    self.cleanups.push(c);
-                    pc += 2;
-                }
-                Op::Throw | Op::Unwind => (pc, fb) = self.throw_op(b, op, pc, fb, aux)?,
-                Op::Catch => match self.catch_match(b, aux, OTy(arg!(1) as u32)) {
-                    Ok(Some(v)) => {
-                        reg!(0) = v;
-                        pc += 4;
-                    }
-                    Ok(None) => pc = arg!(2),
-                    Err(f) => fail!(f),
-                },
-                Op::CatchBegin => {
-                    if let Err(f) = self.catch_begin(pc) {
-                        fail!(f);
-                    }
-                    pc += 1;
+                // Listed rather than `_`, so the jump table covers every
+                // opcode and needs no second range check.
+                Op::Trap
+                | Op::Const2
+                | Op::INeg
+                | Op::EnumCheck
+                | Op::FAdd
+                | Op::FSub
+                | Op::FMul
+                | Op::FDiv
+                | Op::FNeg
+                | Op::FCmp
+                | Op::FCast
+                | Op::IToF
+                | Op::FToI
+                | Op::FToBool
+                | Op::Downcast
+                | Op::VBase
+                | Op::LoadBits
+                | Op::StoreBits
+                | Op::LoadLane
+                | Op::StoreLane
+                | Op::ZeroInit
+                | Op::New
+                | Op::Delete
+                | Op::Placement
+                | Op::PushCleanup
+                | Op::MakeConst
+                | Op::SetActive
+                | Op::ActiveCheck
+                | Op::MpCast
+                | Op::MpAddr
+                | Op::MpActive
+                | Op::MpFn
+                | Op::SetVptr
+                | Op::CovAdj
+                | Op::DynCast
+                | Op::TypeId
+                | Op::IsConstEval
+                | Op::Wide
+                | Op::Cx
+                | Op::Speculate
+                | Op::LabelAddr
+                | Op::VoidCast
+                | Op::Cce
+                | Op::TryEnter
+                | Op::Throw
+                | Op::Unwind
+                | Op::Catch
+                | Op::CatchBegin => {
+                    (pc, fb) = self.run_cold(b, op, pc, fb)?;
                 }
             }
         }
+    }
+
+    /// The opcodes `run_loop` does not dispatch itself, the rarely executed
+    /// ones, out of line so the hot loop stays small (WP-648): the
+    /// instruction at `pc` in the frame at `fb`.
+    /// Returns the next `(pc, fb)`.
+    #[inline(never)]
+    fn run_cold(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        op: Op,
+        mut pc: usize,
+        mut fb: usize,
+    ) -> Result<(usize, usize), (Fault, usize)> {
+        // Fetched again rather than passed: a window whose address is
+        // taken lives on `run_loop`'s stack, and the store and the reload
+        // of every instruction's words through it cost more wall time
+        // than they save (spec/oven.md "Dispatch").
+        let win = crate::kbc::window(&self.code, pc);
+        let aux = win[0] >> 8;
+        macro_rules! arg {
+            ($i:expr) => {
+                win[1 + $i] as usize
+            };
+        }
+        macro_rules! reg {
+            ($i:expr) => {
+                self.regs[fb + arg!($i)]
+            };
+        }
+        macro_rules! fail {
+            ($f:expr) => {
+                return Err(($f, pc))
+            };
+        }
+        match op {
+            Op::Trap => fail!(Fault::Trap(arg!(0) as u32)),
+            Op::Const2 => {
+                let mut v = 0u128;
+                for i in (0..4).rev() {
+                    v = v << 32 | u128::from(win[2 + i]);
+                }
+                reg!(0) = v;
+                pc += 6;
+            }
+            Op::INeg => {
+                let a = reg!(1);
+                let width = aux & 0xFF;
+                let signed = aux >> 8 & 1 != 0;
+                match arith::int_bin(Op::ISub, width, signed, 0, a, 0, false) {
+                    Ok(v) => reg!(0) = v,
+                    Err(err) => match self.wrap_overflow(pc, err, Op::ISub, aux, 0, a) {
+                        Some(v) => reg!(0) = v,
+                        None => fail!(Fault::Int { err, op, a, b: 0, aux }),
+                    },
+                }
+                pc += 3;
+            }
+            Op::EnumCheck => {
+                let w = |i: usize| u64::from(win[i]);
+                let min = i128::from((w(2) | w(3) << 32).cast_signed());
+                let max = i128::from((w(4) | w(5) << 32).cast_signed());
+                // clang 19's `HandleCast`: the operand, sign-extended
+                // for an enumeration with negative values, else
+                // zero-extended, and printed in its own signedness.
+                let (fw, fs) = (aux & 0xFF, aux >> 8 & 1 != 0);
+                let raw = reg!(0);
+                let oob = if min < 0 {
+                    let v = canon(raw, fw, true).cast_signed();
+                    v < min || v > max
+                } else {
+                    canon(raw, fw, false) > max.cast_unsigned()
+                };
+                // clang 19 accepts the value and reports it as an error
+                // (`-Wenum-constexpr-conversion`) only where a constant
+                // expression proper is required (spec/oven.md
+                // "Integration"); elsewhere the cast is not checked.
+                // clang 22 (`note_constexpr_unscoped_enum_out_of_range`):
+                // the value makes any evaluation non-constant (a speculative
+                // one goes on, as clang's `CCEDiag` when folding).
+                if oob && self.clang_compat >= 22 && !self.run.silent {
+                    let v = if fs { raw.cast_signed().to_string() } else { raw.to_string() };
+                    fail!(Fault::EnumRange { v: v.into(), min, max });
+                }
+                if oob {
+                    self.run.impure += 1;
+                    if self.run.enum_check && !self.run.silent {
+                        let v = if fs { raw.cast_signed().to_string() } else { raw.to_string() };
+                        self.enum_range_diag(b, pc, &v, min, max);
+                    }
+                }
+                pc += 6;
+            }
+            Op::FAdd | Op::FSub | Op::FMul | Op::FDiv => {
+                let kind = float_of(aux);
+                match arith::float_bin(op, kind, reg!(1), reg!(2)) {
+                    Ok(v) => reg!(0) = v,
+                    Err(FloatErr::NaN | FloatErr::DivZero) if self.fold_float_ub => {
+                        let Some(v) = arith::float_bin_raw(op, kind, reg!(1), reg!(2)) else {
+                            fail!(Fault::Float(FloatErr::Unsupported))
+                        };
+                        reg!(0) = v;
+                        self.run.impure += 1;
+                    }
+                    Err(e) => fail!(Fault::Float(e)),
+                }
+                pc += 4;
+            }
+            Op::FNeg => {
+                reg!(0) = arith::float_neg(float_of(aux), reg!(1));
+                pc += 3;
+            }
+            Op::FCmp => {
+                let c = aux >> 4;
+                let r = match arith::float_cmp(float_of(aux), reg!(1), reg!(2)) {
+                    Some(o) => compare(c, o),
+                    None => c == cmp::NE,
+                };
+                reg!(0) = u128::from(r);
+                pc += 4;
+            }
+            Op::FCast => {
+                reg!(0) = arith::float_cast(float_of(aux), float_of(aux >> 4), reg!(1));
+                pc += 3;
+            }
+            Op::IToF => {
+                reg!(0) = arith::int_to_float(float_of(aux >> 9), reg!(1), aux >> 8 & 1 != 0);
+                pc += 3;
+            }
+            Op::FToI => {
+                let kind = float_of(aux);
+                let a = reg!(1);
+                match arith::float_to_int(kind, a, aux >> 4 & 0xFF, aux >> 12 & 1 != 0) {
+                    Ok(v) => reg!(0) = v,
+                    Err(FloatErr::Range) => fail!(Fault::FloatRange { kind, bits: a }),
+                    Err(e) => fail!(Fault::Float(e)),
+                }
+                pc += 3;
+            }
+            Op::FToBool => {
+                reg!(0) = u128::from(arith::float_truth(float_of(aux), reg!(1)));
+                pc += 3;
+            }
+            Op::Downcast => {
+                let raw = reg!(1) as u64;
+                let to = OTy(arg!(3) as u32);
+                if raw == 0 {
+                    if aux == 0 {
+                        fail!(Fault::NullField);
+                    }
+                    reg!(0) = 0;
+                } else {
+                    match self.downcast(raw, arg!(2) as u64, to) {
+                        Ok(q) => reg!(0) = u128::from(q),
+                        Err(f) => fail!(f),
+                    }
+                }
+                pc += 5;
+            }
+            Op::VBase => {
+                let raw = reg!(1) as u64;
+                if raw == 0 {
+                    if aux == 0 {
+                        fail!(Fault::NullField);
+                    }
+                    reg!(0) = 0;
+                } else {
+                    let (cls, k) = (OTy(arg!(2) as u32), arg!(3) as u16);
+                    match self.sub_addr(b, raw, cls, k) {
+                        Some(q) => reg!(0) = u128::from(q),
+                        None => fail!(Fault::Invalid),
+                    }
+                }
+                pc += 5;
+            }
+            Op::LoadBits => {
+                let ty = OTy(arg!(2) as u32);
+                let raw = reg!(1) as u64;
+                let bw = arg!(3) as u32;
+                match self.load_bits(raw, ty, bw & 0xFF, bw >> 8, aux) {
+                    Ok(v) => reg!(0) = v,
+                    Err(f) => fail!(f),
+                }
+                pc += 5;
+            }
+            Op::StoreBits => {
+                let ty = OTy(arg!(2) as u32);
+                let raw = reg!(0) as u64;
+                let v = reg!(1);
+                let bw = arg!(3) as u32;
+                if let Err(f) = self.store_bits(raw, ty, v, bw & 0xFF, bw >> 8, aux & 1 != 0) {
+                    fail!(f);
+                }
+                pc += 5;
+            }
+            Op::LoadLane => {
+                let vty = OTy(arg!(3) as u32);
+                let r = self
+                    .lane_at(reg!(1) as u64, reg!(2) as u64, vty, aux)
+                    .and_then(|(q, bit, elem)| self.load_bits(q, elem, bit, 1, aux));
+                match r {
+                    Ok(v) => reg!(0) = v,
+                    Err(f) => fail!(f),
+                }
+                pc += 5;
+            }
+            Op::StoreLane => {
+                let vty = OTy(arg!(3) as u32);
+                let v = reg!(1);
+                let init = aux & 1 != 0;
+                let k = if init { ak::INIT } else { ak::ASSIGN };
+                let r = self
+                    .lane_at(reg!(0) as u64, reg!(2) as u64, vty, k)
+                    .and_then(|(q, bit, elem)| self.store_bits(q, elem, v, bit, 1, init));
+                if let Err(f) = r {
+                    fail!(f);
+                }
+                pc += 5;
+            }
+            Op::ZeroInit => {
+                let ty = OTy(arg!(1) as u32);
+                let raw = reg!(0) as u64;
+                // An empty class writes nothing: its byte may be
+                // another subobject's (libc++'s `__compressed_pair`
+                // value-initializes its empty deleter base over the
+                // pointer).
+                let size = if self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
+                match self.mem.check(raw, size, true).map(|(st, abs, _)| (st, abs)) {
+                    Ok((st, abs)) => {
+                        if let Err(f) = self.mem.trial_write(raw, size) {
+                            fail!(Fault::Mem { f, ak: ak::INIT, ty, p: raw });
+                        }
+                        if size != 0 {
+                            self.mem.zero(st, abs, size);
+                        }
+                        if self.types.info(ty).has_union {
+                            self.zero_unions(raw, u64::from(Ptr::decode(raw).off), ty);
+                        }
+                    }
+                    Err(f) => fail!(Fault::Mem { f, ak: ak::INIT, ty, p: raw }),
+                }
+                pc += 3;
+            }
+            Op::New => {
+                let elem = OTy(arg!(1) as u32);
+                let mut e = match self.origins[arg!(3)] {
+                    Origin::Heap(e, _) => e,
+                    _ => ExprId::new(0),
+                };
+                if aux & new_aux::STD != 0 && self.clang_compat >= 22 {
+                    e = self.std_alloc_site(b, e);
+                }
+                let origin = Origin::Heap(e, self.mem.heap_allocs as u32);
+                let bound = if aux & new_aux::ARRAY != 0 {
+                    let mut v = reg!(2);
+                    if aux & new_aux::STD != 0 {
+                        // A byte count ([allocator.members]/5).
+                        let es = u128::from(self.types.size(elem).max(1));
+                        if !v.is_multiple_of(es) {
+                            fail!(Fault::NewBadSize { bytes: v, elem });
+                        }
+                        v /= es;
+                    }
+                    match self.new_bound(v, aux, elem, arg!(4) as u64) {
+                        Ok(n) => Some(n),
+                        Err(_) if aux & new_aux::NOTHROW != 0 => None,
+                        Err(f) => fail!(f),
+                    }
+                } else {
+                    Some(u64::MAX)
+                };
+                let raw = match bound {
+                    None => 0,
+                    Some(n) => match self.new_alloc(elem, n, aux, origin) {
+                        Ok(p) => p,
+                        Err(f) => fail!(f),
+                    },
+                };
+                reg!(0) = u128::from(raw);
+                pc += 6;
+            }
+            Op::Delete => {
+                let mut raw = reg!(0) as u64;
+                let mut pointee = OTy(arg!(1) as u32);
+                let kind = match aux & 9 {
+                    0 => DynKind::New,
+                    1 => DynKind::ArrayNew,
+                    _ => DynKind::Std,
+                };
+                if kind == DynKind::New && raw != 0 {
+                    match self.delete_base(raw, pointee, aux & 4 != 0) {
+                        Ok(Some((r, t))) => (raw, pointee) = (r, t),
+                        Ok(None) => {}
+                        Err(f) => fail!(f),
+                    }
+                }
+                if kind != DynKind::Std
+                    && let Err(f) = self.delete_life(raw)
+                {
+                    fail!(f);
+                }
+                // aux 2: the checks only (before the destructors run).
+                let r = if aux & 2 != 0 {
+                    self.mem.heap_check(raw, kind, Some(pointee), &self.types).map(drop)
+                } else {
+                    self.mem.heap_free(raw, kind, Some(pointee), &self.types)
+                };
+                if let Err(f) = r {
+                    fail!(Fault::Mem { f, ak: ak::READ, ty: pointee, p: raw });
+                }
+                pc += 3;
+            }
+            Op::Placement => {
+                let elem = OTy(arg!(1) as u32);
+                let ty = if aux & new_aux::ARRAY != 0 {
+                    match self.new_bound(reg!(3), aux, elem, arg!(4) as u64) {
+                        Ok(n) => self.types.array_of(elem, n),
+                        Err(f) => fail!(f),
+                    }
+                } else {
+                    elem
+                };
+                // A `void *` argument: the subobject type its
+                // conversion from `T *` recorded (`kbc::VOID_TAG`).
+                let stat = match arg!(2) as u32 {
+                    crate::kbc::bi::DYN => (reg!(0) >> 64) as u32,
+                    s => s.wrapping_add(1),
+                };
+                let stat = stat.checked_sub(1).map(OTy);
+                if aux & new_aux::BOUND == 0 {
+                    if let Err(f) = self.placement(reg!(0) as u64, ty, stat, aux) {
+                        fail!(f);
+                    }
+                    reg!(0) = u128::from(reg!(0) as u64);
+                }
+                pc += 6;
+            }
+            Op::PushCleanup => {
+                let raw = reg!(0) as u64;
+                if let Err(f) = self.push_cleanup(raw, arg!(1) as u32, OTy(arg!(2) as u32), aux, pc)
+                {
+                    fail!(f);
+                }
+                pc += 4;
+            }
+            Op::MakeConst => {
+                let p = Ptr::decode(reg!(0) as u64);
+                if reg!(0) != 0
+                    && let Ok(a) = self.mem.alloc_of(p)
+                {
+                    let fl = a.flags | flags::CONST;
+                    self.mem.set_flags(p, fl);
+                }
+                pc += 2;
+            }
+            Op::SetActive => {
+                let raw = reg!(0) as u64;
+                self.revive_union(raw, OTy(arg!(2) as u32));
+                if let Err(f) =
+                    self.set_active(raw, arg!(1) as u32, OTy(arg!(2) as u32), aux & 1 != 0)
+                {
+                    fail!(f);
+                }
+                pc += 4;
+            }
+            Op::ActiveCheck => {
+                let raw = reg!(0) as u64;
+                if let Err(f) = self.active_check(raw, arg!(1) as u32, OTy(arg!(2) as u32), aux) {
+                    fail!(f);
+                }
+                pc += 4;
+            }
+            Op::MpCast => {
+                let v = reg!(0);
+                let class = DeclId::new(arg!(1) as u32);
+                match self.mp_cast(b, v, class, aux == 1) {
+                    Some(r) => reg!(0) = r,
+                    None => fail!(Fault::Invalid),
+                }
+                pc += 3;
+            }
+            Op::MpAddr => {
+                let (raw, v) = (reg!(1) as u64, reg!(2));
+                match self.mp_addr(raw, v, aux == 1) {
+                    Ok(q) => reg!(0) = u128::from(q),
+                    Err(f) => fail!(f),
+                }
+                pc += 4;
+            }
+            Op::MpActive => {
+                if let Some(e) = self.mp.get(reg!(1))
+                    && e.union
+                    && let Some((_, _, idx)) = e.field
+                {
+                    // A union's members are all at its offset 0.
+                    let cls = e.cls;
+                    if let Err(f) = self.active_check(reg!(0) as u64, idx, cls, aux) {
+                        fail!(f);
+                    }
+                }
+                pc += 3;
+            }
+            Op::MpFn => match self.mp.get(reg!(1)) {
+                Some(e) if e.virt => {
+                    let (m, cls) = (e.member, e.cls);
+                    let adj = arg!(3);
+                    match self.vcall(b, m, cls, reg!(2) as u64) {
+                        Ok((f, this, cov)) => {
+                            reg!(0) = u128::from(crate::mem::fn_ptr(f));
+                            reg!(2) = u128::from(this);
+                            // A covariant return is adjusted as by a
+                            // direct call ([class.virtual]/8).
+                            if adj as u32 != u32::MAX {
+                                self.regs[fb + adj] = cov;
+                            } else if cov != 0 {
+                                fail!(Fault::Invalid);
+                            }
+                        }
+                        Err(f) => fail!(f),
+                    }
+                    pc += 5;
+                }
+                Some(e) => {
+                    reg!(0) = u128::from(crate::mem::fn_ptr(e.fn_index));
+                    let adj = arg!(3);
+                    if adj as u32 != u32::MAX {
+                        self.regs[fb + adj] = 0;
+                    }
+                    pc += 5;
+                }
+                None => fail!(Fault::Invalid),
+            },
+            Op::SetVptr => {
+                let cls = OTy(arg!(1) as u32);
+                if let Err(f) = self.set_vptrs(b, reg!(0) as u64, cls, aux & 1 != 0) {
+                    fail!(f);
+                }
+                pc += 3;
+            }
+            Op::CovAdj => {
+                let p = reg!(0) as u64;
+                if p != 0 {
+                    match virt::cov_adj(reg!(1)) {
+                        virt::CovAdj::Off(o) => {
+                            let off = i64::from(Ptr::decode(p).off) + o;
+                            reg!(0) = u128::from(Ptr::with_off(p, off as u64, false));
+                        }
+                        virt::CovAdj::VBase(cls, k) => match self.sub_addr(b, p, cls, k) {
+                            Some(q) => reg!(0) = u128::from(q),
+                            None => fail!(Fault::Invalid),
+                        },
+                    }
+                }
+                pc += 3;
+            }
+            Op::DynCast => {
+                let raw = reg!(1) as u64;
+                let stat = OTy(arg!(2) as u32);
+                let t = arg!(3) as u32;
+                let target = (t != u32::MAX).then_some(OTy(t));
+                match self.dyn_cast(b, raw, stat, target, aux & 1 != 0) {
+                    Ok(r) => reg!(0) = u128::from(r),
+                    Err(f) => fail!(f),
+                }
+                pc += 5;
+            }
+            Op::TypeId => {
+                let ti = OTy(arg!(2) as u32);
+                let r = if aux & 1 == 0 {
+                    let Some(q) = QualType::from_raw(arg!(1) as u32) else { fail!(Fault::Invalid) };
+                    self.type_info(q, ti)
+                } else {
+                    let (raw, cls) = (reg!(1) as u64, OTy(arg!(3) as u32));
+                    match self.type_info_dyn(b.ast(), raw, cls, ti) {
+                        Ok(r) => r,
+                        Err(Fault::UnknownDynamic { .. })
+                            if let Some(q) = self.declared_dynamic_type(raw, cls) =>
+                        {
+                            self.type_info(q, ti)
+                        }
+                        Err(f) => fail!(f),
+                    }
+                };
+                reg!(0) = u128::from(r);
+                pc += 5;
+            }
+            Op::IsConstEval => {
+                if aux & 2 != 0 {
+                    // `__kiln_plainly_constant_evaluated()` (WP-473).
+                    reg!(0) = u128::from(self.plain());
+                } else if aux & 4 != 0 {
+                    // A constexpr local's initializer: its own
+                    // evaluation, never plainly (spec/consteval-blocks.md §3).
+                    reg!(0) = u128::from(std::mem::take(&mut self.run.plain));
+                } else if aux & 8 != 0 {
+                    self.run.plain = reg!(0) != 0;
+                } else if aux & 16 != 0 {
+                    // `if consteval` ([stmt.if]/4).
+                    reg!(0) = u128::from(self.run.const_context);
+                } else {
+                    let cc = self.run.const_context;
+                    reg!(0) = u128::from(cc);
+                    if cc && (!self.run.silent || self.run.cev_warn) {
+                        self.always_true_diag(b, pc, aux);
+                    }
+                }
+                pc += 2;
+            }
+            Op::Wide => {
+                let regs = [reg!(0), reg!(1), reg!(2)];
+                match self.exec_wide(regs, OTy(arg!(3) as u32), arg!(4) as u32, aux) {
+                    Ok(Some(v)) => reg!(0) = v,
+                    Ok(None) => {}
+                    Err(f) => fail!(f),
+                }
+                pc += 6;
+            }
+            Op::Cx => {
+                let v = [reg!(2), reg!(3), reg!(4), reg!(5)];
+                let sub = aux & 3;
+                let r = if aux >> 6 & 1 == 0 {
+                    Some(complex::float_op(sub, float_of(aux >> 2 & 0xF), v))
+                } else {
+                    complex::int_op(sub, aux >> 7 & 0xFF, aux >> 15 & 1 != 0, v)
+                };
+                let Some([x, y]) = r else {
+                    let err = IntErr::DivZero;
+                    fail!(Fault::Int { err, op: Op::IDiv, a: v[0], b: 0, aux: 0 });
+                };
+                reg!(0) = x;
+                reg!(1) = y;
+                pc += 7;
+            }
+            Op::Speculate => {
+                let func = self.stack[self.stack.len() - 1].func;
+                match self.speculate(b, func, pc + 4, fb, arg!(1), aux & 1 != 0) {
+                    // clang `EvaluateBuiltinConstantP` outside a
+                    // constant context: a lax fold (`EvaluateAsInt`)
+                    // of a non-constant argument fails rather than
+                    // folding to 0.
+                    Ok(false) if aux & 2 != 0 && self.run.lax && !self.run.const_context => {
+                        fail!(Fault::Invalid)
+                    }
+                    Ok(c) => reg!(0) = u128::from(c),
+                    Err(f) => fail!(f),
+                }
+                pc = arg!(2);
+            }
+            Op::LabelAddr => {
+                let Some(e) = ExprId::try_new(arg!(1) as u32) else { fail!(Fault::Invalid) };
+                reg!(0) = u128::from(self.label_addr(b, e));
+                pc += 3;
+            }
+            Op::VoidCast if aux == crate::kbc::VOID_TAG => {
+                let raw = reg!(1) as u64;
+                let tag = if raw == 0 { 0 } else { u128::from(arg!(2) as u32) + 1 };
+                reg!(0) = u128::from(raw) | tag << 64;
+                pc += 4;
+            }
+            Op::VoidCast => {
+                let (raw, tag) = (reg!(1) as u64, (reg!(1) >> 64) as u32);
+                match self.void_cast(raw, tag, OTy(arg!(2) as u32)) {
+                    Ok(()) => reg!(0) = u128::from(raw),
+                    Err(f) => fail!(f),
+                }
+                pc += 4;
+            }
+            Op::Cce => {
+                if !self.run.fold {
+                    fail!(Fault::Trap(arg!(2) as u32));
+                }
+                match self.cce(aux, reg!(1)) {
+                    Some(v) => {
+                        if aux != cce::CHECK {
+                            reg!(0) = v;
+                        }
+                    }
+                    None => fail!(Fault::Trap(arg!(2) as u32)),
+                }
+                pc += 4;
+            }
+            Op::TryEnter => {
+                let depth = self.stack.len() as u32;
+                let (this, at) = (arg!(0) as u64, pc as u32);
+                let c = Cleanup { this, ty: OTy(0), func: exc::TRY_MARK, pc: at, depth };
+                self.cleanups.push(c);
+                pc += 2;
+            }
+            Op::Throw | Op::Unwind => (pc, fb) = self.throw_op(b, op, pc, fb, aux)?,
+            Op::Catch => match self.catch_match(b, aux, OTy(arg!(1) as u32)) {
+                Ok(Some(v)) => {
+                    reg!(0) = v;
+                    pc += 4;
+                }
+                Ok(None) => pc = arg!(2),
+                Err(f) => fail!(f),
+            },
+            Op::CatchBegin => {
+                if let Err(f) = self.catch_begin(pc) {
+                    fail!(f);
+                }
+                pc += 1;
+            }
+            _ => unreachable!("{op:?} is dispatched in run_loop"),
+        }
+        Ok((pc, fb))
     }
 
     /// Pops the innermost registered destruction and enters its

@@ -90,6 +90,52 @@ the evaluator's flattened type table.
 - Top-level expressions compile to cached thunks keyed by `ExprId`;
   re-evaluating an expression compiles nothing.
 
+#### Dispatch — Landed (WP-648)
+`Vm::run_loop` (`vm.rs`) executes the stream in safe Rust; every rule here
+is an implementation choice that leaves results, diagnostics, step and
+fault counts and trap ids unchanged.
+
+- **Fetch window.** Each iteration reads the instruction as one fixed
+  array of `kbc::WINDOW` (8) words: word 0 and up to seven operand words,
+  in one checked slice read (`first_chunk`), so the operands are then
+  indexed with no further bounds check. `run_loop` borrows the window in
+  place (`kbc::window_ref(code, pc, &mut tail) -> &[u32; WINDOW]`) rather
+  than copying it: a copied window is spilled to the stack and every
+  operand read goes through a store-to-load forward, which cost several
+  percent of wall time on loop-heavy programs although it lowers the
+  instruction count. A `const` assertion keeps every opcode's operand
+  count (`Op::OPERANDS`) below `WINDOW`.
+- **Padding.** The stream ends with `WINDOW - 1` `Nop` words (`kbc::pad`,
+  called by `Compiler::end_unit` and `Vm::unwind_pc`), so a window starting
+  at any instruction lies inside the stream. Only the last unit carries
+  them: the next unit's first word (`Compiler::here`, `Vm::unwind_pc`)
+  first truncates them (`kbc::unpad`, keyed on `Oven::padded`, the stream
+  length the last `pad` left), because a unit's own last instruction then
+  has the next unit's words after it. The padding is never executed (a
+  unit ends in `Ret`, `Halt`, a trap or `Unwind`) and never a jump target;
+  it costs 28 bytes in all. A window that would still run past the end
+  goes to the cold `kbc::tail_window`, which copies the instruction's own
+  words into `tail` and zero-fills the rest (a truncated instruction
+  panics there, as an out-of-range read did before).
+- **Hot and cold arms.** Opcodes that are rare in measured programs
+  (allocation, unions, member pointers, RTTI, exceptions, `Wide`, `Cx`,
+  `VoidCast`, ...) run in `Vm::run_cold`, an `#[inline(never)]` function
+  taking the opcode, `pc` and the frame base and returning the next `pc`
+  and frame base (or the fault and its `pc`). It fetches the window again
+  itself, so `run_loop`'s window never has its address taken. `run_loop`
+  names those opcodes in one arm rather than a wildcard, so its `match` is
+  a single jump table, and keeps the common opcodes in a body small enough
+  to stay in registers.
+- **In-place fusion.** A hot arm whose window also holds the next
+  instruction runs that instruction too when it is the usual successor,
+  skipping one dispatch: `Mov`→`Mov`, `Step`→`Mov`, `Step`→`Const`,
+  `JmpIfNot`→`Step` (fall-through) and `ICmp`→`JmpIf`/`JmpIfNot`. The
+  encoding is unchanged: the second instruction is still in the stream,
+  may still be a jump target, and is executed with its own semantics; a
+  step fault in a fused `Step` is reported at that `Step`'s own `pc`. The
+  `op-stats` feature counts a fused instruction as executed, so its
+  histograms match an unfused run.
+
 ### Abstract memory — normative for M2
 - **Pointers** are one `u64`: offset (32 bits) | past-the-end (1) | slot
   (22) | generation (9). Slot `FN_SLOT` encodes function pointers; slots
