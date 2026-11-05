@@ -482,9 +482,18 @@ impl Cg<'_> {
 
     /// Whether the complete-object variant of `first` is discardable,
     /// which makes clang replace it by the base variant (RAUW) rather
-    /// than alias it.
+    /// than alias it. A `weak` one is not: its linkage is `weak` whatever
+    /// the inline and instantiation rules say, so clang
+    /// (`getCodegenToUse` → `COMDAT`) aliases it in the `C5`/`D5` comdat.
     fn complete_is_rauw(&self, def: DeclId) -> bool {
-        self.discardable_fn(def)
+        self.discardable_fn(def) && !self.weak_structor(def)
+    }
+
+    /// Whether structor definition `def` is `weak`: a `weak` attribute
+    /// on one of its declarations, and not internal (as
+    /// [`Cg::set_def_linkage`] decides).
+    fn weak_structor(&self, def: DeclId) -> bool {
+        !self.fn_internal(def) && self.ast.is_weak_decl(def)
     }
 
     /// The callee for variant `v` of structor `d` (clang
@@ -537,7 +546,11 @@ impl Cg<'_> {
             self.queue_structor(first, v);
             return Ok((V::C(Value::func(f)), None));
         }
-        // An alias defined later in the translation unit.
+        // An alias defined later in the translation unit (only once it is
+        // used, for a discardable `weak` one).
+        if self.discardable_fn(def) {
+            self.queue_structor(first, v);
+        }
         let p = if let Some(&p) = self.ph_of.get(&(first, v)) {
             p
         } else {
@@ -673,11 +686,17 @@ impl Cg<'_> {
                         );
                     }
                 };
-                // The alias takes the base variant's linkage (`weak_odr`
-                // for an explicit instantiation definition).
-                let linkage = match self.m.func(f).linkage {
-                    Linkage::WeakOdr => Linkage::WeakOdr,
-                    _ => Linkage::External,
+                // The alias takes the base variant's linkage (`weak` for
+                // a `weak` one, whose base variant may not be defined
+                // yet; `weak_odr` for an explicit instantiation
+                // definition; clang `emitConstructorDestructorAlias`).
+                let linkage = if self.weak_structor(d) {
+                    Linkage::Weak
+                } else {
+                    match self.m.func(f).linkage {
+                        Linkage::WeakOdr => Linkage::WeakOdr,
+                        _ => Linkage::External,
+                    }
                 };
                 let visibility = self.m.func(f).visibility;
                 {

@@ -1175,6 +1175,23 @@ impl Sema<'_, '_> {
         // clang `InstantiateFunctionDefinition`: the function is located
         // at the definition it is instantiated from from now on.
         self.builder().relocate_to_pattern_definition(f, pdef);
+        // A `weak` attribute written on the pattern's out-of-line
+        // definition only (`template<class T> __attribute__((weak))
+        // C<T>::C(T) {}`) makes the instantiation weak too, as in clang,
+        // which gives it `weak` linkage; the in-class declaration's
+        // attributes came with the member's declaration.
+        if pdef != pattern && !self.ast.is_weak_decl(f) {
+            let ast = &self.ast;
+            let weak = ast
+                .lists
+                .iter::<kiln_ast::ids::AttrId>(ast.attrs.of_decl(pdef))
+                .map(|a| *ast.attrs.get(a))
+                .find(|n| n.kind == kiln_ast::attr::AttrKind::WEAK);
+            if let Some(n) = weak {
+                let a = self.ast.attrs.push(n);
+                self.builder().append_attrs(f, &[a]);
+            }
+        }
         if self.is_function_spec(f) {
             // A function template specialization (WP-071, §4.4).
             self.instantiate_function_spec_definition(f, pdef, body, poi);

@@ -2229,21 +2229,25 @@ impl<'a> Cg<'a> {
         // definition is `GVA_StrongODR` (`weak_odr`), inline or not.
         let weak = !internal && self.is_explicit_inst_definition(d);
         let inline = self.fn_is_inline(d);
+        // clang `getLLVMLinkageForDeclarator`: a `weak` definition is
+        // `weak` (ahead of the inline and `available_externally` rules;
+        // an inline one keeps its comdat).
+        let weak_attr = !internal && self.ast.is_weak_decl(d);
         let mut name = self.m.func(f).name().to_owned();
-        // clang `getCodegenToUse` → `COMDAT`: a weak structor of a class
-        // without virtual bases puts its base-object and deleting
-        // variants in the `C5`/`D5` comdat (the complete-object variant
-        // is an alias).
-        if weak
+        // clang `getCodegenToUse` → `COMDAT`: a weak (`weak_odr` or
+        // `weak`) structor of a class without virtual bases puts its
+        // base-object and deleting variants in the `C5`/`D5` comdat (the
+        // complete-object variant is an alias).
+        let structor_comdat = (weak || weak_attr)
             && matches!(
                 self.ast.decls.get(d).kind(),
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor
             )
-            && !self.structor_has_vbases(d)
-        {
+            && !self.structor_has_vbases(d);
+        if structor_comdat {
             name = mangle::mangle_structor_comdat(self.ast, &mut self.anon, self.ast.first(d));
         }
-        let comdat = if !internal && (inline || weak) {
+        let comdat = if !internal && (inline || weak || structor_comdat) {
             Some(self.m.comdat(&name, ComdatKind::Any))
         } else {
             None
@@ -2254,10 +2258,6 @@ impl<'a> Cg<'a> {
         } else {
             self.decl_visibility(d, !available_externally)
         };
-        // clang `getLLVMLinkageForDeclarator`: a `weak` definition is
-        // `weak` (ahead of the inline and `available_externally` rules;
-        // an inline one keeps its comdat).
-        let weak_attr = !internal && self.ast.is_weak_decl(d);
         let func = self.m.func_mut(f);
         func.visibility = vis;
         if internal {

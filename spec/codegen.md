@@ -1458,7 +1458,12 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
 - **Structors** (clang `ItaniumCXXABI::emitCXXStructor`): constructors
   and destructors are emitted as the base variant (C2/D2) and then the
   complete variant (C1/D1). A discardable C1 is replaced by C2 (RAUW);
-  otherwise C1 is an `alias` to C2. clang's `applyReplacements` moves
+  otherwise C1 is an `alias` to C2. A GNU `weak` structor is never
+  discardable (its linkage is `weak`, inline or instantiated): C2/D2 and
+  D0 are `weak` in the `C5`/`D5` COMDAT and C1/D1 are `weak` aliases
+  (clang `getCodegenToUse` -> `COMDAT`); a `weak` written only on the
+  out-of-line definition of a class template's member reaches its
+  instantiations. clang's `applyReplacements` moves
   C2 to where the C1 declaration was created: when C2 already exists at
   the first C1 reference, `structor_ref` moves it to the end of the
   function list (`Module::move_function_to_end`, WP-113). Deleting destructors (D0) are WP-080.
