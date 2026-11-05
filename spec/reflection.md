@@ -63,8 +63,9 @@ Section references in brackets are to the C++26 IS.
    `__kiln_members_count` / `__kiln_member_at` were retired by WP-478.
 7. **Out of scope for M6.** Token injection (P3294), reflection of
    attributes (P3385), expressions or statements, `define_class` beyond
-   aggregates, function or body injection, link-compatible reflection
-   mangling (§8.3), and clang wording parity for reflection diagnostics.
+   aggregates, function or body injection, and clang wording parity for
+   reflection diagnostics. (Link-compatible reflection mangling landed
+   with WP-501, §8.3.)
 
 ## 2. Representation
 
@@ -1054,62 +1055,141 @@ each specialization evaluates its own.
 - Where kiln has no clang wording to match, diagnostics follow GCC
   16.1's shape. Wording parity is out of scope (§1.7).
 
-### 8.3 Mangling placeholder (WP-485)
-- **Form.** A reflection inside a template argument of an emitted symbol
-  mangles as a kiln vendor literal (`kiln_abi/src/mangle.rs`,
-  `Mangler::scalar_value`):
+### 8.3 Mangling (WP-501)
+A reflection value inside a template argument of an emitted symbol mangles
+structurally, by naming its reflectee (`kiln_abi/src/mangle/reflect.rs`). It
+follows GCC 16.1's `write_reflection` (the cxx-abi issue #208 proposal) kind
+for kind. Equal reflections in two TUs give the same string, so the
+specialization keeps its ordinary linkage. The driver flag
+`-fkiln-reflection-mangling=<kiln|gcc|kiln-hashed>` (spec/driver.md) picks
+the spelling; the default is `kiln`.
+
+- **Grammar.**
 
   ```
-  <expr-primary> ::= L <info-type> <number> E    # a reflection value
-  <info-type>    ::= u6__info                    # std::meta::info
+  <expr-primary> ::= L <info-type> <reflection> E
+  <info-type>    ::= u6__info                 # kiln, kiln-hashed
+                 ::= Dm                       # gcc
+  <reflection>   ::= <kind> <operand>         # kiln, gcc (table below)
+                 ::= h <32 lowercase hex>     # kiln-hashed
+  <compact>      ::= _ | <n-1> _              # index n
   ```
 
-  `<number>` is the reflection's `ReflectionId` index in decimal (§2.3;
-  the null reflection is 0). `<info-type>` is the mangling of the type
-  `std::meta::info` everywhere (`template <class T>` with `T = info`
-  gives `_Z1kIu6__infoEiv`), and it is a substitution candidate like any
-  vendor type, so a second literal in one symbol writes `LS<seq>_<id>E`
-  and later substitutions count past it: `two<^^I, ^^J>` is
-  `_Z3twoILu6__info4ELS0_5EEiv`, `h<^^P>(Box<P>, P)` is
-  `_Z1hILu6__info3E1PEi3BoxIT0_ES3_`. The literal composes wherever a
-  template argument value does: in a pack (`J…E`), a nested
-  template-id's arguments, a class-type NTTP's `Xtl … E`, and a template
-  parameter object's `_ZTA`.
-- **Properties.** Deterministic within the TU (the id is allocated at the
-  reflection's first evaluation, so the same source gives the same ids).
-  Distinct reflections give distinct strings, because the id is the
-  identity of §2.3: a type and its alias (`^^int`, `^^I`, `^^J`) are
-  three literals. The encoding reads only the id, never the reflectee, so
-  no cache is needed: the id is both the key and the payload, written in
-  at most ten digits. `AnonIds::reflection_literals()` counts the
-  literals written for the module; the 2,000-specialization test of
-  `crates/kiln_codegen/tests/reflection_mangle.rs` asserts it.
-- **Linkage.** The id is TU-local, so the same `f<^^int>` in two TUs has
-  two different strings, and two different reflections could share one.
-  A template argument holding a reflection (directly, inside a class-type
-  NTTP's value, or in a template parameter object) therefore makes the
-  specialization, and everything mangled under it (its statics, vtable,
-  RTTI, guards), internal (`mangle::value_externally_visible`, the
-  unique-external rule of spec/abi.md §8.22). Each TU has its
-  own copy: `S<^^int>::count` is not shared across TUs, and the RTTI of
-  `S<^^int>` compares unequal across them. The form is **not
-  link-compatible with GCC or clang** (spec/abi.md §8).
-- **Dependent operands.** A reflect-expression whose operand is still
-  dependent where the signature is mangled (`template <class T> void
-  f(K<^^T>)`, `K<^^T::x>`) has no id yet; it takes the unsupported
-  expression fallback of spec/abi.md (`XLi0EE`), so `f` above mangles as
-  `_Z1fI1SEv1KIXLi0EEE`. Two templates whose signatures differ only in
-  the reflect operand therefore collide; WP-102 gives the dependent
-  operand a real encoding.
-- **Follow-up (→ WP-102).** WP-102 switches to GCC 16.1's encoding
-  (cxx-abi issue #208: `std::meta::info` is `Dm`, a value is
-  `L Dm <kind> … E` naming the reflectee), at which point the
-  specializations get their normal linkage again. Its link-compat test: a
-  two-TU program, one TU compiled by kiln and one by `g++-16`, each
-  defining and calling `template <std::meta::info R> int f()` for
-  `^^int`, an alias, a namespace-scope variable and a data member, with
-  `inline` statics, linked together; the run checks the shared statics
-  and `&f<^^int>` agree.
+  `<info-type>` is also the mangling of the type `std::meta::info`
+  everywhere (`template <class T>` with `T = info` gives `_Z1kIu6__infoEiv`
+  in kiln mode, `_Z1kIDmEiv` in gcc mode). `u6__info` is a vendor type and
+  so a substitution candidate. `Dm` is a builtin and is not one. The two
+  modes therefore number later substitutions differently: `two<^^int,
+  ^^int>` is `_Z3twoILu6__infotyiELS0_tyiEEiv` (kiln) and
+  `_Z3twoILDmtyiELDmtyiEEiv` (gcc). `h<^^P>(Box<P>, P)` is
+  `_Z1hILu6__infoty1PES1_Ei3BoxIT0_ES3_` and `_Z1hILDmty1PES0_Ei3BoxIT0_ES2_`.
+  Apart from `<info-type>` and that numbering, the two modes write the same
+  `<reflection>` bytes. The one exception is `ta` (below). `kiln-hashed`
+  writes the FNV-1a-128 of the kiln-mode `<reflection>`, mangled in a fresh
+  substitution context so that the hash depends on the reflectee alone. It
+  is a prototype for bounding name length and is not link-compatible with
+  anything.
+- **Per kind.** Each row is `_Z1fIL` + body + `EEiv` for `template <info R>
+  int f()`. The gcc body replaces `u6__info` with `Dm`. Every gcc row is
+  byte-identical to `g++-16 -freflection`
+  (`crates/kiln_driver/tests/reflection_mangling.rs`, the `KINDS` table, all
+  41 rows).
+
+  | kind | operand | kiln body |
+  |---|---|---|
+  | `nu` null | `info{}` | `u6__infonu` |
+  | `ty` type | `^^int`, `^^const int*`, `^^TT<int>` | `u6__infotyi`, `…tyPKi`, `…ty2TTIiE` |
+  | `ta` alias | `^^I`, `^^ns::A` (alias template spec) | `…ta1I_i`, `…ta2ns1A_NS1_1SE` (gcc `…NS0_…`) |
+  | `ns` / `gs` | `^^ns`, `^^::` | `…ns2ns`, `…gs` |
+  | `na` ns alias | `^^na` | `…na2na` |
+  | `vr` variable | `^^var`, `^^S::sm` | `…vr3var`, `…vrN1S2smE` |
+  | `fn` function | `^^g`, `^^S::mf`, ctor, dtor | `…fn1gv`, `…fnN1S2mfEv`, `…fnN2ns1SC4Ev`, `…fnN2ns1SD4Ev` |
+  | `dm` data member | `^^S::dm`, a member of an anonymous union, an unnamed member | `…dm1S2dm`, `…dm2ns1S2u1`, `…dm2ns1S1b` |
+  | `en` enumerator | `^^S::e1`, `^^EC::b` | `…en1S1E2e1`, `…en2EC1b` |
+  | `ct` `ft` `vt` `at` `co` | class, function, variable, alias templates, concept | `…ct2TT`, `…ft2tf`, `…vt2tv`, `…at2TA`, `…co1C` |
+  | `sb` structured binding | `^^sb2` | `…sb3sb2` |
+  | `pa` parameter | `parameters_of(^^pfn)[1]` | `…pa0_3pfnid` (`<compact>` index, then the function) |
+  | `ba` base | `bases_of(^^D2)[1]` | `…ba0_2D2` |
+  | `vl` value | `42`, `'c'`, `true`, `EC::a`, `nullptr`, `&arr[1]`, `^^int` | `…vlLi42E`, `…vlLc99E`, `…vlLb1E`, `…vlL2EC0E`, `…vlLDnE`, `…vladixL_Z3arrELl1E`, `…vlLS0_tyiE` (gcc `…vlLDmtyiE`) |
+  | `ob` object | `var`, `arr[1]`, a class value `Lit{3}` | `…obL_Z3varE`, `…obixL_Z3arrELl1E`, `…obL_Z17_ZTAXtl3LitLi3EEEE` |
+  | `ds` data member spec | `{.name="x"}`, `{.bit_width=3}` | `…dsi_1x___`, `…dsi___3_` |
+  | `an` annotation | `annotations_of(^^v)[0]` | `…an_` |
+
+  `ds` is `ds <type> _ [<source-name>] _ [<align>] _ [<width>] _ [n]
+  <annotation template-arg>*`, where `n` marks `no_unique_address`. A
+  constructor writes `C4` and a destructor `D4`, the unified structor of
+  GCC, whatever variant is being emitted. In kiln mode an alias-template
+  specialization writes the alias's own arguments. In gcc mode it writes
+  the arguments of the underlying class specialization, as g++-16 does.
+- **Linkage.** A reflection takes its reflectee's linkage
+  (`reflect::reflection_externally_visible`, which `value_externally_visible`
+  calls). A namespace-scope or class-member entity, a type, or a value is
+  external when the entity it names is. A local entity is internal, and so
+  is an annotation (`an`), because its index is TU-local. A data member
+  spec is external iff its type and all its annotations are. An internal
+  reflection makes the specialization internal, together with everything
+  mangled under it (the unique-external rule of spec/abi.md §8.22).
+  Otherwise `f<^^int>`, `S<^^int>::count`, their guards, vtables and RTTI
+  are `linkonce_odr` in a comdat and fold across TUs, as for a type
+  argument (`two_translation_units_link` in the driver test).
+- **Dependent operands.** A reflect-expression that is still dependent
+  where a signature is mangled writes `L <info-type> ty <type> E` for a
+  dependent type, and `L <info-type> de <expression> E` for a dependent
+  name. `template <class T> void f(K<^^T>)` gives
+  `_Z1fI1SEv1KILu6__infotyT_EE`, and `g(K<^^T::x>)` gives
+  `_Z1gI1SEv1KILu6__infodesrT_1xEE`. The gcc spellings
+  (`…KILDmtyT_EE`, `…KILDmdesrT_1xEE`) match g++-16.
+- **GCC link compatibility.** In gcc mode, kiln objects and g++-16 objects
+  link against each other for reflection-keyed symbols. `gcc_link_compat`
+  requires every `Dm` symbol defined by both compilers to be equal, with at
+  least 25 of them. The remaining name differences are general ABI
+  divergences, not reflection ones (spec/abi.md §8):
+  - GCC writes `L` before an anonymous namespace's members
+    (`N12_GLOBAL__N_1L5anonvE`);
+  - GCC writes an empty non-type pack as `JE` without `TpTnDm`;
+  - GCC writes an `sr` whose qualifier is a template-id with one fewer `E`
+    and a different substitution count (`…EE1cfp_ES1_`, while kiln and
+    clang write `…EEE1cfp_ES0_`);
+  - GCC gives template static data members `STB_GNU_UNIQUE` (`nm` letter
+    `u`, where kiln writes `V`).
+- **Cost.** These numbers are for bench shape S9 (spec/bench.md):
+  - N types `lib::Tnnnn`;
+  - `f<^^Tnnnn>()` and `S<^^Tnnnn>::count` for each type;
+  - `f<^^W<W<W<Tnnnn>>>>()` for every fourth type.
+
+  Each figure is the median of 11 runs on aarch64, as wall ms / max RSS
+  KiB. `base` is main before WP-501, which used the TU-local id literal
+  with internal linkage.
+
+  | N | mode | base | kiln | gcc | kiln-hashed | g++-16 |
+  |---|---|---|---|---|---|---|
+  | 500 | `-c` | 54 / 64024 | 61 / 67828 | 60 / 67928 | 62 / 67660 | 129 / 48492 |
+  | 2000 | `-c` | 196 / 74468 | 224 / 88460 | 221 / 88200 | 231 / 89492 | 442 / 102228 |
+  | 500 | `-S -emit-llvm` | 23 / 17092 | 25 / 18052 | 25 / 17860 | 26 / 18052 | 109 / 48492 (`-S`) |
+  | 2000 | `-S -emit-llvm` | 82 / 25716 | 91 / 28036 | 90 / 27652 | 96 / 28996 | 336 / 100360 (`-S`) |
+
+  The reflection symbols number 1750 at N=500 and 7000 at N=2000. Their
+  length (max / mean) is 28 / 24.7 in base, 50 / 37.1 in kiln mode,
+  44 / 31.1 in gcc mode (g++-16 is the same), and 57 / 54.1 in kiln-hashed
+  mode.
+
+  The overhead is linear in N, at about 4 µs per specialization. It comes
+  from two sources:
+  - **Cross-TU linkage itself.** Seven `linkonce_odr` comdat symbols per
+    type, instead of internal ones. The same program keyed by types
+    (`template <class R>`, `f<lib::Tnnnn>`) costs the same as base in total
+    (82 ms).
+  - **Longer names.** The new spelling run with internal linkage costs
+    1.05× wall and 1.03× RSS against base. Against the type-keyed program,
+    codegen takes +3.8 ms and +0.3 MB at N=2000, in proportion to the
+    roughly 20% larger IR text.
+
+  Sema is unchanged (55.5 ms in both). The WP-501 pass bar (1.05 wall,
+  1.02 RSS against base at N=2000) is therefore not met: the ratios are
+  1.11 / 1.09 for `-S -emit-llvm` and 1.14 / 1.19 for `-c`. The bar
+  compared against a TU-local form that could not link across TUs. Against
+  a type-keyed template of the same linkage shape, codegen RSS is within
+  3%.
 - A consteval-only value reaching codegen stays the error of §4.1, not a
   mangling question: a non-template `info` variable with static storage
   that is not `constexpr` is rejected before any symbol exists

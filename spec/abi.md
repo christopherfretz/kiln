@@ -900,6 +900,16 @@ unadjusted alignment, as the classification does (WP-583).
   the info type itself is `Dm`. The grammar, the per-kind table and the
   linkage rule are spec/reflection.md §8.3; `spec/landed/abi/WP-501.md`
   (superseding the TU-local `L u6__info <id> E` of WP-485).
+- **Known divergences from GCC 16.1** (not reflection-specific, found by
+  WP-501's `gcc_link_compat`; kiln follows clang here):
+  - GCC writes `L` before the members of an anonymous namespace
+    (`N12_GLOBAL__N_1L5anonvE`);
+  - an empty non-type pack argument is `JE` in GCC but `TpTnDmJE`-style in
+    clang and kiln (`_Z2pkIJEEiv` vs the clang form);
+  - an `sr` whose qualifier is a template-id closes one `E` earlier in GCC
+    and counts substitutions differently (`…EE1cfp_ES1_` vs `…EEE1cfp_ES0_`);
+  - GCC gives template static data members `STB_GNU_UNIQUE` binding (`nm`
+    letter `u`; kiln emits a weak `V`).
 
 ### 8.15 Landed (WP-172): abi tags and dependent signature types
 **abi_tag.** `[[gnu::abi_tag("a","b")]]` / `__attribute__((abi_tag(...)))`
