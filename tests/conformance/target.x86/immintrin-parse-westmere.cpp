@@ -6,6 +6,7 @@
 // (spec/landed/sema/WP-630.md "Immediates"). WP-630.
 //@ args: --target=x86_64-unknown-linux-gnu -std=gnu++23 -march=westmere -Wall -Werror
 //@ std: c++23
+//@ skip(clang): clang on an aarch64 host has no x86-64 glibc headers for the pinned target
 //@ strict-diags
 #include <immintrin.h>
 #include <x86intrin.h>

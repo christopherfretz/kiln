@@ -285,7 +285,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
         };
         let tag = ast.types.as_record(u).or_else(|| ast.types.as_enum(u));
         tag.and_then(|r| ast.decls.typedef_for_anon(r))
-            .is_some_and(|t| ast.first(t) == ast.first(decl))
+            .is_some_and(|t| ast.first(t) == ast.first(decl)) // same_entity: raw ok
     }
 
     /// The prototype of function type `t` as written: its parameter and
@@ -851,6 +851,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             }
         }
         let Some(c) = ctx else { return };
+        // same_entity: raw ok
         if self.scope == Some(ast.first(c)) {
             return;
         }
@@ -1078,7 +1079,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 .filter(|&g| ast.template_info(g).is_some())
                 .or_else(|| ast.instantiated_from(f).and_then(|p| ast.described_template(p)));
             if let Some(g) = general
-                && g != td
+                && g != td // same_entity: raw ok
                 && let Some(pattern) = ast.template_info(g).and_then(|t| t.pattern)
             {
                 levels.push((g, None));

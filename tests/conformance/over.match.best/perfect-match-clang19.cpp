@@ -8,6 +8,7 @@
 //@ expect: compile-fail
 //@ requires: clang<22
 //@ args: -fclang-compat=19
+//@ skip(clang): -fclang-compat is kiln's option (the diagnostics are clang 19's)
 //@ strict-diags
 //@ diag: 21:17 error "static assertion failed due to requirement 'sizeof(YN) == 0': instantiated"
 //@ diag: 27:29 note "in instantiation of template class 'bad<YN>' requested here"

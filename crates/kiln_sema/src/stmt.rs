@@ -1838,9 +1838,11 @@ impl Sema<'_, '_> {
     /// Whether a call of function `d` ends its block in the control-flow
     /// graph (clang `CFGBuilder::VisitCallExpr`: `isNoReturn()` or GNU
     /// `analyzer_noreturn`).
+    /// `analyzer_noreturn` does not count: clang's CFG (`FunctionDecl::
+    /// isNoReturn`) ignores it, so -Wreturn-type fires after such a call;
+    /// only the static analyzer's `NoReturnFunctionChecker` sinks on it.
     fn cfg_noreturn_fn(&self, d: DeclId) -> bool {
         self.ast.is_noreturn_fn(d)
-            || self.find_attr(d, kiln_ast::attr::AttrKind::ANALYZER_NORETURN).is_some()
     }
 
     pub(crate) fn is_noreturn_call(&self, e: ExprId) -> bool {
@@ -1864,15 +1866,7 @@ impl Sema<'_, '_> {
                         return builtin::info(b)
                             .is_some_and(|i| i.attrs & builtin::attr::NORETURN != 0);
                     }
-                    // A function, or a function-pointer variable marked
-                    // `analyzer_noreturn` (clang `CFGBuilder::VisitCallExpr`
-                    // looks at the callee's declaration either way).
-                    let k = self.ast.decls.get(d).kind();
-                    return (k.is_function() && self.cfg_noreturn_fn(d))
-                        || (k == DeclKind::Var
-                            && self
-                                .find_attr(d, kiln_ast::attr::AttrKind::ANALYZER_NORETURN)
-                                .is_some());
+                    return self.ast.decls.get(d).kind().is_function() && self.cfg_noreturn_fn(d);
                 }
                 // `s.m()`: clang's CFG uses the direct callee, virtual or
                 // not.

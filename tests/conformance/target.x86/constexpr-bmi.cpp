@@ -4,6 +4,7 @@
 // clamped), `bzhi`, `pdep` and `pext`, whatever the target features (the
 // features are a codegen check). spec/oven.md "x86 builtins". WP-630.
 //@ args: --target=x86_64-unknown-linux-gnu
+//@ requires: clang>=21.0.0
 //@ strict-diags
 static_assert(__builtin_ia32_lzcnt_u32(1) == 31);
 static_assert(__builtin_ia32_lzcnt_u16(0) == 16);

@@ -7,6 +7,7 @@
 // the C++20/23 deprecation warning instead (spec/driver.md).
 //@ std: c++26
 //@ args: -fpermissive
+//@ requires: clang>=21.0.0
 //@ strict-diags
 //@ diag: 16:28 warning "arithmetic between different enumeration types ('Q' and '(unnamed enum at"
 //@ diag: 17:28 warning "arithmetic between different enumeration types ('Q' and 'R') is deprecated"
