@@ -149,7 +149,7 @@ scanner is shared; the keys are not.
 |---|---|
 | `std: <std>` | Language standard, one of the C++ values accepted by `cargo xtask test`. Default `c++26`. |
 | `args: <flags>` | Extra compiler flags, whitespace-split; may repeat (concatenated in order). |
-| `mode: syntax\|pp\|emit-llvm\|run` | What the compiler does (below). Default `syntax`. |
+| `mode: syntax\|pp\|emit-llvm\|obj\|run` | What the compiler does (below). Default `syntax`. |
 | `oven: [<line>[:<col>]] <counter><=N ...` | A constexpr budget, as in `cargo xtask test` (`spec/harness.md` "kiln-specific tests"); may repeat, once per location. Checked on every kiln run; a breach fails the entry. An error with `mode: pp` or `mode: run`. |
 | `threshold-time: <PCT>` | This entry's allowed wall-clock regression (default 5). |
 | `threshold-mem: <PCT>` | This entry's allowed peak-RSS regression (default 2). |
@@ -163,6 +163,7 @@ scanner is shared; the keys are not.
 | `syntax` | `-fsyntax-only` |
 | `pp` | `-E -o /dev/null` |
 | `emit-llvm` | `-S -emit-llvm -o /dev/null` |
+| `obj` | `-c -o /dev/null` (optimiser and backend included; the `-O` level is the entry's `args`, WP-641) |
 | `run` | none (see below) |
 
 Output goes to `/dev/null` so disk I/O does not enter the timing.
@@ -398,7 +399,7 @@ A **measurement** object:
 
 | Key | Type | Meaning |
 |---|---|---|
-| `mode` | string | `syntax`, `pp`, `emit-llvm` or `run` |
+| `mode` | string | `syntax`, `pp`, `emit-llvm`, `obj` or `run` |
 | `flags` | string | Flags between the compiler and the file name, space-joined |
 | `source_hash` | string | `fnv1a64:<16 hex digits>` of the entry file's bytes |
 | `runs` | integer | N |

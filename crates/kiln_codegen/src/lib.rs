@@ -42,6 +42,7 @@ mod module_init;
 mod neon;
 mod new_delete;
 mod null_init;
+mod outline;
 mod psabi;
 mod recursion;
 mod stmt;

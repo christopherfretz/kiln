@@ -209,6 +209,10 @@ pub(crate) struct Fx {
     /// The variables a jump bypasses, which get no lifetime markers
     /// (clang `Bypasses`).
     pub bypasses: Option<Box<crate::lifetime::Bypasses>>,
+    /// The statement helpers outlined from this function so far
+    /// (`crate::outline`, spec/landed/codegen/WP-641.md): the next one's
+    /// number.
+    pub outlined: u32,
 }
 
 impl Fx {
@@ -262,6 +266,7 @@ impl Fx {
             await_frame: None,
             lifetime_markers: false,
             bypasses: None,
+            outlined: 0,
         }
     }
 }
@@ -738,7 +743,7 @@ impl Cg<'_> {
 
     /// clang `TryMarkNoThrow`: no call or invoke in the body may throw,
     /// and nothing resumes unwinding.
-    fn no_throw_calls(&self) -> bool {
+    pub(crate) fn no_throw_calls(&self) -> bool {
         if self.f.cl.eh_resume_used {
             return false;
         }
