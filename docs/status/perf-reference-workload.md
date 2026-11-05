@@ -526,3 +526,176 @@ share of the named profile that the work could remove.
 | F17 | Cache built-in operator candidate sets | kiln_sema `add_builtin_with` | 4.6 M calls at 434 Ir each, 1% of R2 | About 1% | Low | S |
 | F18 | FxHash in codegen and the IR printer | kiln_codegen, kiln_llvm | `SipHasher13` is 0.9% + 0.24% of R3 | About 1% of R3 | Low | S |
 | F19 | Give S1–S6 libstdc++ in the bench | xtask `gen_reflect`, the bench | The bench builds S1–S6 against libc++, which has no `<meta>`, so all six are `xfail` | Brings S1–S6 into the regression gate | Low | S |
+
+## `synth_accessor_god` production TU (WP-633)
+
+This is the reference workload's stress slug: one class with a very large
+number of accessor member functions, each bound one by one through a
+lambda wrapper and a class-template `def` chain. Its production TU is plain
+C++20 compiled against libstdc++ 16.1 with `-O2 -DNDEBUG -fPIC
+-fvisibility=hidden -c`. The workload's harness measured 263.8 s and
+1.08 GB on kiln, against 75.5 s and 2.43 GB for g++ 16.1 (3.5×). Every
+other slug is at most 1.02×. The measurements below were taken on
+2026-11-05 through the captured harness command. Run-to-run variance on
+this host is about ±30%, so each before/after pair was taken back to
+back.
+
+### Split of the real TU
+
+"Before" is the harness-profile kiln++ at main bd696efeb. "After" adds the
+two WP-633 changes below. The `-c` row runs the driver's own pipeline
+(`opt -passes=default<O2>`, then `llc -O2`) through a timing wrapper that
+records each tool's wall time and peak RSS.
+
+| Stage | Before wall | Before peak RSS | After wall | After peak RSS |
+|---|---|---|---|---|
+| parse + sema (`-fsyntax-only`) | 8.01 s | 459,948 KB | 9.21 s | 460,620 KB |
+| + codegen + IR print (`-emit-llvm -o /dev/null`, no IR passes) | 12.75 s | 1,044,128 KB | 14.07 s | 876,556 KB |
+| full `-c` | 334.75 s | 1,078,920 KB | 310.96 s | 1,083,824 KB |
+| … of which `opt` | 306.48 s | 702,724 KB | 281.37 s | 702,964 KB |
+| … of which `llc` | 15.93 s | 1,078,920 KB | 15.58 s | 1,083,824 KB |
+
+The IR is byte-identical before and after:
+
+- 162,939,973 bytes;
+- 35,431 definitions and 18,272 comdats;
+- 1,771,581 instructions.
+
+The object file is 17,500,448 bytes. One function holds 92,547 of those
+instructions: the TU's registration function, with 17,221 basic blocks,
+8,613 invokes, 6,455 landing pads and 10,762 allocas. All the other
+functions are under 1,000 instructions.
+
+The kiln frontend is 14 s of the 311 s. The rest is LLVM.
+
+### Where `opt` spends it
+
+`-time-passes-per-run` on the real TU reports 226.4 s of pass time. Two
+single pass runs on the registration function account for 91.6% of it:
+
+- one `JumpThreadingPass` run: 52.9%;
+- one `MemCpyOptPass` run: 38.7%.
+
+The aggregated `-time-passes` run agrees: JumpThreading is 64.8% and
+MemCpyOpt is 29.8%. Both passes are super-linear in the size of one
+function with many landing pads and allocas. Smaller functions are not
+the problem: every other function together costs about 8%.
+
+The other compilers on the same TU:
+
+- **clang 19:** 432.52 s and 1,345,980 KB in total. Of that, 417.9 s is
+  codegen, with JumpThreading at 254.7 s and MemCpyOpt at 123.8 s. On this
+  shape kiln's IR costs LLVM no more than clang's own IR does.
+- **LLVM 22** `opt`/`llc` on kiln's IR: 412.73 s in total (`opt` 375.40 s,
+  `llc` 21.62 s). Time moves from JumpThreading to MemCpyOpt (43.2%), LICM
+  (39.9%) and LoopRotate (11.6%).
+
+Neither is faster.
+
+The obvious LLVM limits do not help either. The run used
+`-jump-threading-threshold=0 -jump-threading-implication-search-threshold=0
+-memssa-check-limit=10` on the after binary and gave these results:
+
+- `-c` total: 293.61 s;
+- `opt`: 265.93 s;
+- JumpThreading: 158.7 s, 60.8% of pass time;
+- MemCpyOpt: 84.2 s, 32.3%.
+
+The cost is not in the duplication or the clobber-walk budgets these flags cap.
+It is in the per-function analysis work that both passes repeat over
+17 k blocks. Lazy value info and dominator-tree updates are the likely
+source, but that is not isolated. Since no pass flag helps, the pipeline was
+not changed.
+
+GCC compiles the same TU in 75.5 s. The difference is in the optimizer's
+treatment of one huge function: GCC's pass set at `-O2` is linear enough
+here, and LLVM's is not. It is not in the amount of work kiln hands the
+optimizer.
+
+### Synthetic reproducer and scaling
+
+The reproducer is clean-room. It has one class with 100·K accessor pairs,
+each bound through a `def`-style chain of class templates and a lambda per
+member, inside one registration function. The numbers are `-c` at `-O2`,
+wall time, single runs.
+
+| K | kiln `-c` | `opt` | `llc` | g++ 16.1 `-c` | clang 19 `-c` |
+|---|---|---|---|---|---|
+| 1 | 4.47 s | 2.88 s | 1.09 s | 2.27 s | 4.62 s |
+| 2 | 20.65 s | 10.99 s | 8.83 s | 6.83 s | 23.74 s |
+| 4 | 121.48 s | 45.18 s | 74.04 s | 30.83 s | not run |
+
+Growth exponents:
+
+- kiln `-c`: 2.21 (K 1→2) and 2.56 (K 2→4);
+- `opt`: about 2.0;
+- `llc`: about 3.0;
+- g++: 1.59 and 2.17.
+
+Kiln at K = 2 is at parity with clang 19. Kiln's frontend share stays
+small: the syntax pass takes 0.36 / 0.45 / 0.72 s and `-emit-llvm` takes
+0.49 / 0.83 / 2.25 s.
+
+At this size the reproducer stresses a different pair of passes from the
+real TU:
+
+- at K = 2, DSE is 76% of `opt`;
+- in `llc`, the machine scheduler is 45%.
+
+What it shares with the real TU is the term that matters: one function
+whose cost to LLVM grows as N^2 to N^3.
+
+### What was fixed (frontend)
+
+**1. Trial folds of non-POD automatic aggregates (`kiln_codegen` `fold.rs`
+`Collect::var`).** The fold pre-pass trial-evaluated the initializer of
+every automatic array or record. Codegen uses the result only for a POD or
+`const` aggregate (clang `IsConstantAggregate`). Each binding's call thunk
+holds the whole class by value in a `std::tuple` local, so every thunk
+built the N-member object in the Oven. Each member store did a linear
+subobject scan, so the total was O(N^3). Such variables are no longer
+folded, and the IR does not change.
+
+The second reproducer is `-emit-llvm` only, with IR passes disabled, at
+100·K members:
+
+| K | before | after | `-fsyntax-only` |
+|---|---|---|---|
+| 1 | 0.59 s | 0.48 s | 0.44 s |
+| 2 | 1.04 s | 0.72 s | 0.59 s |
+| 4 | 2.65 s | 1.25 s | 0.88 s |
+| 8 | 11.25 s | 2.68 s | 1.71 s |
+| 16 | 70.04 s, 371 MB | 6.45 s, 322 MB | 3.83 s |
+
+From K = 8 to 16, the growth exponent drops from 2.64 to 1.27. Clang 19
+takes 6.5 s at K = 16. The bench entry is
+`bench/frontend/accessor-wide-emit.cpp`, recorded at 1.96 s and 137 MB
+(3.26 s before; clang 19 takes 3.61 s). On the real TU the class is not
+wide enough for this to show beyond noise.
+
+**2. Driver peak memory (`kiln_driver` `codegen_cmd.rs` `lower`,
+`execute`).** The driver now prints the module after the AST and the Oven
+are dropped. The first `opt` run takes the IR text by move rather than by
+copy. The real TU's `-emit-llvm` peak falls from 1,044,128 KB to
+876,556 KB. The `-c` peak is `llc`'s, at 1.08 GB, and does not change.
+
+### What remains, and why
+
+The brief's target was `-c` at most 115 s. It is not met. About 83% of the
+`-c` wall time (92% of `opt`'s pass time) is two LLVM pass runs on one
+function. Clang 19 spends more time than kiln on the same TU, and LLVM 22 is slower. The pass pipeline is
+unchanged, because no measured pipeline change closes the gap without
+dropping passes that every other TU needs. Peak RSS is 1.08 GB, well
+under GCC's 2.43 GB.
+
+Follow-ups:
+
+| ID | Title | Where | Evidence | Expected win | Risk | Size |
+|---|---|---|---|---|---|---|
+| F20 | Keep the registration function small: emit each binding full-expression's EH cleanups so that landing pads and temporaries' allocas are shared or scoped (`lifetime.start`/`end` per full-expression), or outline very large straight-line bodies | kiln_codegen `stmt.rs:280` `emit_stmt`, `expr.rs:4617` `emit_var_init`, the cleanup and landing-pad emitter | JumpThreading and MemCpyOpt are 92% of `opt`, on one function with 6,455 landing pads and 10,762 allocas | Most of the 281 s `opt` time if the per-function size drops by an order of magnitude | High: must stay identical in behaviour, EH order and ABI | L |
+| F21 | Measured per-function guard in the driver pipeline | kiln_driver `codegen_cmd.rs:617` `ir_passes` | The knob run above gave no win; a guard would have to skip or bound JumpThreading/MemCpyOpt on functions above a size threshold, measured against code quality | Bounded by the JumpThreading share | Medium: diverges from clang's `-O2` | S |
+| F22 | Report the super-linearity upstream | LLVM `JumpThreading`, `MemCpyOpt`, LICM in LLVM 22 | Both clang and kiln IR hit it. A reduced synthetic reproducer is the reproducer above. | Long term | None | S |
+| F23 | Sublinear subobject lookups in the Oven | kiln_oven `ty.rs:1074` `has_subobject`, `ty.rs:308` `field_at`, `ty.rs:1102` `has_bit_unit`, `vm.rs:2475` `union_path` | Linear field scans per store. A constexpr struct whose members hold a union goes from 0.08 s to 0.25 s when its members double from 1,024 to 2,048, which is quadratic. Fields are offset-sorted, so `partition_point` applies. | Removes the quadratic term for wide constexpr classes | Low | S–M |
+
+F11 above (cache subobject and union paths) overlaps F23. F23 is the
+narrower form, which needs no cache.

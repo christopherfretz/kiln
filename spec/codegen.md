@@ -40,7 +40,10 @@ panic and never silently wrong IR.
   bridge runs reflection intrinsics (`constexpr bool b = type_of(R) ==
   ^^int;` in an emitted body; WP-485, spec/reflection.md §8.3); the other foldable initializers (local `const` arrays,
   records and references) use `try_fold`, where it is false (WP-063,
-  matching clang's IR). When that constant initialization fails, a
+  matching clang's IR). A non-`const` automatic array or record is folded only
+  when it is POD (clang `IsConstantAggregate`; a non-POD one's value is
+  never used, and building it cost a copy of the whole object per
+  variable; WP-633). When that constant initialization fails, a
   scalar initializer (arithmetic, enum, pointer or member pointer type)
   is re-folded with `Oven::fold_rvalue`, where it is false, and a value
   it yields becomes the static initializer (clang
