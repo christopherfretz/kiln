@@ -662,6 +662,19 @@ impl Sema<'_, '_> {
             self.emit(msg);
             out.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::WEAKREF);
         }
+        // `alias` alone: clang emits a GlobalAlias; kiln's codegen handles
+        // the attribute only as a `weakref` target (BACKLOG WP-635), so say
+        // so rather than silently reference an undefined symbol.
+        if has_alias
+            && !has(self, &out, AttrKind::WEAKREF)
+            && let Some(a) =
+                out.iter().copied().find(|&a| self.ast.attrs.get(a).kind == AttrKind::ALIAS)
+        {
+            let msg =
+                self.diag(DiagId::parse_attribute_ignored, self.ast.attrs.get(a).loc).arg("alias");
+            self.emit(msg);
+            out.retain(|&x| x != a);
+        }
         let internal = kiln_abi::mangle::has_internal_linkage(&self.ast, d);
         if let Some(w) = out.iter().copied().find(|&a| self.ast.attrs.get(a).kind == AttrKind::WEAK)
             && internal

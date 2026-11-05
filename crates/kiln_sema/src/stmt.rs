@@ -1864,7 +1864,15 @@ impl Sema<'_, '_> {
                         return builtin::info(b)
                             .is_some_and(|i| i.attrs & builtin::attr::NORETURN != 0);
                     }
-                    return self.ast.decls.get(d).kind().is_function() && self.cfg_noreturn_fn(d);
+                    // A function, or a function-pointer variable marked
+                    // `analyzer_noreturn` (clang `CFGBuilder::VisitCallExpr`
+                    // looks at the callee's declaration either way).
+                    let k = self.ast.decls.get(d).kind();
+                    return (k.is_function() && self.cfg_noreturn_fn(d))
+                        || (k == DeclKind::Var
+                            && self
+                                .find_attr(d, kiln_ast::attr::AttrKind::ANALYZER_NORETURN)
+                                .is_some());
                 }
                 // `s.m()`: clang's CFG uses the direct callee, virtual or
                 // not.

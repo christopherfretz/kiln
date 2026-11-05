@@ -21,6 +21,7 @@
 //@ diag: 45:36 error "weak declaration cannot have internal linkage"
 //@ diag: 46:44 error "expected string literal as argument of 'weakref' attribute"
 //@ diag: 47:42 error "expected string literal as argument of 'alias' attribute"
+//@ diag: 48:36 warning "'alias' attribute ignored"
 //@ diag: 50:24 error "definition 'g20' cannot also be an alias"
 //@ diag: 51:36 error "'alias' attribute takes one argument"
 // Not checked: clang's -Wgcc-compat "GCC does not allow 'weakref' attribute
