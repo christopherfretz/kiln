@@ -11,6 +11,9 @@ template <class T> constexpr bool same<T, T> = true;
 
 static_assert(same<decltype(1.5q), __float128>);
 static_assert(same<decltype(2.718281828459045235360287471352662498Q), __float128>);
-static_assert(!same<decltype(1.5Q), _Float128>);
+// (`_Float128` itself is not a C++ type name in clang 19/22, so the
+// distinctness is checked against the standard types instead.)
+static_assert(!same<decltype(1.5Q), long double>);
+static_assert(!same<decltype(1.5Q), double>);
 constexpr __float128 half = 0.5Q;
 static_assert(half + half == 1.0Q);
