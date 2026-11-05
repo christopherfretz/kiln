@@ -25,6 +25,8 @@ mod builtins;
 pub(crate) mod exc;
 mod life;
 mod meta;
+#[cfg(feature = "op-stats")]
+mod opstats;
 mod virt;
 mod wide;
 
@@ -713,6 +715,8 @@ impl Oven {
             let w = self.code[pc];
             let op = Op::from_u8(w as u8);
             let aux = w >> 8;
+            #[cfg(feature = "op-stats")]
+            opstats::count(op);
             macro_rules! arg {
                 ($i:expr) => {
                     self.code[pc + 1 + $i] as usize

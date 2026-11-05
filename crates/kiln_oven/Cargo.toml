@@ -11,6 +11,12 @@ kiln_source.workspace = true
 kiln_diag.workspace = true
 kiln_ast.workspace = true
 
+[features]
+# The dynamic opcode histogram on stderr (`vm/opstats.rs`; WP-648), a
+# measurement aid: `cargo build --release -p kiln_driver --features
+# kiln_oven/op-stats`.
+op-stats = []
+
 [dev-dependencies]
 # Record layouts and target sizes for the test bridge (the real bridge is
 # kiln_sema, which owns the kiln_abi call).
