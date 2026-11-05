@@ -804,9 +804,7 @@ impl Sema<'_, '_> {
         ops: &[ExprId],
         loc: Loc,
     ) {
-        if rewrite != Rewrite::None {
-            self.add_rewritten_template(set, d, found, CandidateKind::Method, rewrite, ops);
-        } else {
+        if rewrite == Rewrite::None {
             self.add_template_candidate(
                 set,
                 d,
@@ -816,6 +814,8 @@ impl Sema<'_, '_> {
                 IcsOptions::NONE,
                 loc,
             );
+        } else {
+            self.add_rewritten_template(set, d, found, CandidateKind::Method, rewrite, ops);
         }
     }
 

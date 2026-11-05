@@ -241,6 +241,10 @@ impl Cg<'_> {
     /// The builtins clang lowers to generic IR (or with a changed operand
     /// list): `None` when `name` is not one of them.
     #[allow(clippy::too_many_lines, reason = "one arm per builtin family, as clang's switch")]
+    #[allow(
+        clippy::option_option,
+        reason = "outer: lowered here or not; inner: the call's value, `None` when void"
+    )]
     fn x86_custom(
         &mut self,
         name: &str,

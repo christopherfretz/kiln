@@ -705,6 +705,7 @@ impl Args {
     }
 
     /// Plain flags. Returns false if `arg` is not one.
+    #[allow(clippy::too_many_lines, reason = "one arm per plain flag")]
     fn flag(&mut self, arg: &str) -> bool {
         match arg {
             "-E" => self.action = Action::Preprocess,

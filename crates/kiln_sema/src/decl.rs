@@ -613,6 +613,10 @@ impl Sema<'_, '_> {
     /// the type arguments of a template-id (libc++'s
     /// `pair<typename __hash_table<...>::iterator, bool>
     /// __hash_table<...>::__node_insert_unique(...)`).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one branch per dependent type form: template-id, dependent template-id, dependent name"
+    )]
     fn rebuild_ci_type(&mut self, base: QualType, qual: DeclId, loc: Loc, depth: u32) -> QualType {
         if depth > 32 || !self.is_dependent_type(base) {
             return base;

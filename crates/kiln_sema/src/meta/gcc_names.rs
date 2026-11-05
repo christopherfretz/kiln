@@ -20,7 +20,7 @@
 
 use kiln_ast::decl::{DeclKind, EnumData, FriendKind};
 use kiln_ast::names::DeclNameView;
-use kiln_ast::types::{ArgView, BuiltinType, ExcSpec, RefQual, TypeView};
+use kiln_ast::types::{ArgView, BuiltinType, ExcSpec, RefQual, TemplateArg, TypeView};
 use kiln_ast::{ArgListId, ConstValueId, DeclId, QualType, TemplateNameId};
 
 use crate::Sema;
@@ -262,11 +262,12 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
         let types = &self.ast().types;
         let inner = match types.view(t.ty()) {
             TypeView::Paren(i) | TypeView::Atomic(i) => i,
-            TypeView::Typedef { underlying, .. } | TypeView::Using { underlying, .. } => underlying,
+            TypeView::Typedef { underlying, .. }
+            | TypeView::Using { underlying, .. }
+            | TypeView::Decltype { underlying, .. } => underlying,
             TypeView::Elaborated { named, .. } => named,
             TypeView::SubstTemplateTypeParm { replacement, .. } => replacement,
             TypeView::TemplateSpecialization { underlying: Some(u), .. } => u,
-            TypeView::Decltype { underlying, .. } => underlying,
             TypeView::InjectedClassName { injected, .. } => injected,
             TypeView::ExtQual { base, .. } => base,
             _ => return None,
@@ -336,13 +337,10 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
         if let Some(next) = self.desugar_step(t) {
             return self.dump_type(next, flags);
         }
-        match self.shape(t).0 {
-            Shape::Leaf => {}
-            _ => {
-                self.dump_type_prefix(t, flags);
-                self.dump_type_suffix(t, flags);
-                return;
-            }
+        if !matches!(self.shape(t).0, Shape::Leaf) {
+            self.dump_type_prefix(t, flags);
+            self.dump_type_suffix(t, flags);
+            return;
         }
         match types.view(t.ty()) {
             TypeView::Builtin(b) => {
@@ -518,7 +516,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
         }
     }
 
-    /// The FUNCTION_TYPE / METHOD_TYPE arm of `dump_type_suffix`: the
+    /// The `FUNCTION_TYPE` / `METHOD_TYPE` arm of `dump_type_suffix`: the
     /// parameters, the member qualifiers, `noexcept`, then the return
     /// type's suffix.
     fn function_suffix(&mut self, f: QualType, flags: u32) {
@@ -877,7 +875,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
         }
     }
 
-    /// `dump_decl` of a NAMESPACE_DECL without specifiers.
+    /// `dump_decl` of a `NAMESPACE_DECL` without specifiers.
     fn dump_namespace(&mut self, ns: DeclId, flags: u32) {
         let ast = self.ast();
         if ast.decls.get(ns).kind() == DeclKind::TranslationUnit {
@@ -1137,7 +1135,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 self.whitespace();
                 match &args {
                     None => self.decl_identifier(p),
-                    Some(args) => match args.get(i).map(|a| a.view()) {
+                    Some(args) => match args.get(i).map(TemplateArg::view) {
                         Some(ArgView::Pack(pk)) => {
                             self.punct("{");
                             self.template_arg(ArgView::Pack(pk), 0);
@@ -1293,7 +1291,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             match spec.constexpr_kind() {
                 kiln_ast::decl::ConstexprKind::Constexpr => self.ws("constexpr"),
                 kiln_ast::decl::ConstexprKind::Consteval => self.ws("consteval"),
-                _ => {}
+                kiln_ast::decl::ConstexprKind::None => {}
             }
         }
         if show_return {

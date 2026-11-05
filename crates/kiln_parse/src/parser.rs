@@ -1116,6 +1116,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     }
 
     /// [`Parser::skip_template_args`] without the memo.
+    #[allow(clippy::too_many_lines, reason = "one token-scanning loop, an arm per token kind")]
     fn scan_template_args(&self, i: usize) -> Option<(usize, bool)> {
         let mut stack = vec![Punct::Less];
         let mut j = i + 1;

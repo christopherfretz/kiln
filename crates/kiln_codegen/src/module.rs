@@ -2002,15 +2002,14 @@ impl<'a> Cg<'a> {
             return Ok(f);
         }
         if let Some(target) = self.weakref_symbol(first) {
-            let f = match self.m.get_function(&target) {
-                Some(f) => f,
-                None => {
-                    let sig = self.decl_sig(first)?;
-                    let f = self.declare_fn(&target, first, &sig)?;
-                    self.m.func_mut(f).linkage = Linkage::ExternWeak;
-                    self.weakref_syms.insert(target);
-                    f
-                }
+            let f = if let Some(f) = self.m.get_function(&target) {
+                f
+            } else {
+                let sig = self.decl_sig(first)?;
+                let f = self.declare_fn(&target, first, &sig)?;
+                self.m.func_mut(f).linkage = Linkage::ExternWeak;
+                self.weakref_syms.insert(target);
+                f
             };
             self.fns.insert(first, f);
             return Ok(f);

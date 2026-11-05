@@ -385,24 +385,21 @@ impl Sema<'_, '_> {
         if let Some(&cv) = self.meta_names.locs.get(&r) {
             return Some(cv);
         }
-        let loc = match self.ast.reflections.get(r) {
-            // A named parameter is where its name is, an unnamed one where
-            // its decl-specifiers begin (GCC's `DECL_SOURCE_LOCATION`).
-            Reflectee::FnParam(f, i) => {
-                let p = self.gcc_param_decl(f, i)?;
-                let n = self.ast.decls.get(p);
-                match n.name().as_ident() {
-                    Some(_) => n.loc(),
-                    None => self.ast.decls.cold.begin_loc.get(p).copied().unwrap_or(n.loc()),
-                }
+        // A named parameter is where its name is, an unnamed one where
+        // its decl-specifiers begin (GCC's `DECL_SOURCE_LOCATION`).
+        let loc = if let Reflectee::FnParam(f, i) = self.ast.reflections.get(r) {
+            let p = self.gcc_param_decl(f, i)?;
+            let n = self.ast.decls.get(p);
+            match n.name().as_ident() {
+                Some(_) => n.loc(),
+                None => self.ast.decls.cold.begin_loc.get(p).copied().unwrap_or(n.loc()),
             }
-            _ => {
-                let d = self.named_decl(r)?;
-                if self.kind_of(d) == DeclKind::TranslationUnit {
-                    return None;
-                }
-                self.ast.decls.get(self.gcc_location_decl(r, d)).loc()
+        } else {
+            let d = self.named_decl(r)?;
+            if self.kind_of(d) == DeclKind::TranslationUnit {
+                return None;
             }
+            self.ast.decls.get(self.gcc_location_decl(r, d)).loc()
         };
         let cv = self.meta_source_location(loc, "")?;
         self.meta_names.locs.insert(r, cv);

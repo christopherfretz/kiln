@@ -566,6 +566,7 @@ impl Sema<'_, '_> {
     ///   declaration must have internal linkage` (dropped with its
     ///   alias), a `weak` one on a declaration with internal linkage
     ///   `weak declaration cannot have internal linkage` ([basic.link]).
+    #[allow(clippy::too_many_lines, reason = "one step per weak/weakref/alias rule above")]
     pub(crate) fn check_weak_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
         let has = |s: &Self, attrs: &[AttrId], k: AttrKind| {
             attrs.iter().any(|&a| s.ast.attrs.get(a).kind == k)

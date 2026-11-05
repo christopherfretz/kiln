@@ -482,6 +482,7 @@ impl Sema<'_, '_> {
     /// the template parameter object, `&x` / `&f` / `f`, or a null
     /// pointer converted to `ty`. `None` for values handled elsewhere
     /// (integers) or not yet supported.
+    #[allow(clippy::too_many_lines, reason = "one arm per `Scalar` kind of the value")]
     pub(crate) fn nttp_value_expr(
         &mut self,
         ty: QualType,

@@ -75,6 +75,10 @@ fn wide(n: &str) -> Option<(&'static str, Wide)> {
 impl Cg<'_> {
     /// The MMX or `vpopcnt` builtin `n` (its `__builtin_ia32_` prefix
     /// removed) of call `e`: `None` when `n` is not one this lowers.
+    #[allow(
+        clippy::option_option,
+        reason = "outer: lowered here or not; inner: the call's value, `None` when void"
+    )]
     pub(crate) fn x86_mmx(
         &mut self,
         n: &str,

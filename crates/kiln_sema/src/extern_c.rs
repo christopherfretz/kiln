@@ -29,7 +29,7 @@ impl Sema<'_, '_> {
     /// Namespaces are walked through their lexical contexts: a namespace
     /// reopened inside `extern "C++"` within `extern "C"` has the
     /// first definition's semantic context but C++ linkage (libstdc++'s
-    /// bits/std_abs.h overloading `std::abs` after `<stdlib.h>` was
+    /// `bits/std_abs.h` overloading `std::abs` after `<stdlib.h>` was
     /// included inside `extern "C"`).
     pub(crate) fn ctx_is_extern_c(&self, ctx: DeclId) -> bool {
         let mut c = Some(ctx);

@@ -264,6 +264,7 @@ impl Candidate {
 /// A set of candidate functions for one resolution
 /// (spec/sema-overload.md §10.1). Pooled: see [`OverloadScratch`].
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent per-set flags, not a state machine")]
 pub(crate) struct OverloadCandidateSet {
     /// What is resolved.
     pub kind: SetKind,

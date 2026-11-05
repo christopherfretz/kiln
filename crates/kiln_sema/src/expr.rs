@@ -6281,7 +6281,7 @@ impl Sema<'_, '_> {
                 // The value is first converted to a fixed underlying type,
                 // so one of `bool` is a boolean conversion (clang
                 // `TryStaticCast`: `CK_IntegralToBoolean`).
-                let to_bool = crate::conv::rank::enum_data(self, to).is_some_and(|d| {
+                let to_bool = conv::rank::enum_data(self, to).is_some_and(|d| {
                     d.is_fixed()
                         && d.int_type.is_some_and(|i| types.builtin(i) == Some(BuiltinType::Bool))
                 });

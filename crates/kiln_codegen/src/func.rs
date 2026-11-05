@@ -2202,8 +2202,8 @@ impl Cg<'_> {
             && self.m.types.int_width(to).is_some()
         {
             let folded = match self.m.const_of(c) {
-                Some(kiln_llvm::ConstData::Null(_)) => Some(None),
-                Some(&kiln_llvm::ConstData::Cast { op: CastOp::IntToPtr, val, .. }) => {
+                Some(ConstData::Null(_)) => Some(None),
+                Some(&ConstData::Cast { op: CastOp::IntToPtr, val, .. }) => {
                     (self.m.const_type(val) == to).then_some(Some(val))
                 }
                 _ => None,

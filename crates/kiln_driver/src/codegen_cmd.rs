@@ -223,6 +223,10 @@ impl CodegenJob<'_> {
         (if errors == 0 { ir } else { None }, errors, deps)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "target, parse and codegen options in one straight-line pipeline"
+    )]
     fn lower<'sm>(
         &self,
         sm: &'sm SourceManager,
@@ -437,7 +441,7 @@ fn warn_unused_link_inputs(args: &Args, inputs: &[&Input], drv: &DiagEngine<'_>)
                 LinkOptKind::Silent => {}
                 LinkOptKind::Xlinker => {
                     Diag::new(DiagId::drv_linker_input_unused, Span::INVALID)
-                        .arg(&format!("-Xlinker {}", o.arg))
+                        .arg(format!("-Xlinker {}", o.arg))
                         .emit(drv);
                 }
             }
