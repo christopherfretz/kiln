@@ -1152,6 +1152,9 @@ impl Sema<'_, '_> {
             // when substituted.
             return Ok(self.builder().template_arg_expr(e));
         }
+        if let Some(arg) = self.substituted_int_nttp_arg(e, pty) {
+            return Ok(arg);
+        }
         let ety = self.ast.exprs.get(e).ty();
         #[cfg(feature = "op-stats")]
         crate::templ::deduce_stats::tally(
@@ -1379,6 +1382,49 @@ impl Sema<'_, '_> {
                 Err(())
             }
         }
+    }
+
+    /// The converted argument of an integral parameter of type `pty` for
+    /// `e`, an already-substituted parameter whose value is a plain
+    /// integer literal of exactly that type (`get<I>` with `I` from an
+    /// enclosing specialization): the value the full conversion below
+    /// computes, without building and evaluating the converted constant
+    /// expression (WP-657). `None` falls back to the full path, as does
+    /// anything the full path would act on beyond `e` itself (pending
+    /// member references, deleted-function notes, misaligned members,
+    /// potential captures) and [`Sema::full_deduction`].
+    fn substituted_int_nttp_arg(&mut self, e: ExprId, pty: QualType) -> Option<TemplateArg> {
+        use kiln_ast::expr::ExprKind;
+        if self.full_deduction
+            || self.ast.exprs.get(e).kind() != ExprKind::SubstNonTypeTemplateParmExpr
+            || !self.member_refs.is_empty()
+            || self.special.has_pending()
+            || !self.misaligned.is_empty()
+            || !self.potential_caps.is_empty()
+        {
+            return None;
+        }
+        let r = self.ast.exprs.subst_replacement(e);
+        if self.ast.exprs.get(r).kind() != ExprKind::IntegerLiteral {
+            return None;
+        }
+        let v = i128::from(self.ast.exprs.int_value(r)?);
+        let canon = self.ast.types.canonical(conv::strip_cv(self, pty));
+        let same = |s: &Self, x: ExprId| {
+            let q = conv::strip_cv(s, s.ast.exprs.get(x).ty());
+            s.ast.types.canonical(q) == canon
+        };
+        let t = &self.ast.types;
+        if !t.is_integral(canon)
+            || t.as_enum(canon).is_some()
+            || t.builtin(canon).is_none()
+            || !same(self, e)
+            || !same(self, r)
+            || !self.int_fits(canon, v)
+        {
+            return None;
+        }
+        Some(TemplateArg::value(canon, self.int_const(canon, v)))
     }
 
     /// Whether the second conversion of `scs` may appear in a converted

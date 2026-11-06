@@ -148,3 +148,45 @@ fn generated_calls_match_the_full_path() {
     let p = same_both_ways(&src);
     p.assert_diag("candidate template ignored");
 }
+
+/// Explicit non-type arguments that are parameters of an enclosing
+/// specialization (`get<I>` inside `tuple<...>`): integral, signed,
+/// negative, wide, `bool`, `char` and enumeration values, through
+/// typedefs and `const`, converted to the parameter's type or narrowed,
+/// form the same specializations and the same failures as the full
+/// conversion.
+#[test]
+fn substituted_non_type_arguments_match_the_full_path() {
+    let p = same_both_ways(
+        r"
+typedef unsigned long size_t;
+enum E { e0, e1 };
+enum class F : short { f0 = -3 };
+template <size_t I> int get(int (&)[I + 1]) { return I; }
+template <size_t I> int get(long) { return int(I); }
+template <int I> int sget() { return I; }
+template <long long I> int wget() { return int(I >> 40); }
+template <unsigned char I> int nget() { return I; }
+template <bool B> int bget() { return B; }
+template <char C> int cget() { return C; }
+template <E V> int eget() { return V; }
+template <F V> int fget() { return int(V); }
+template <size_t I, int J, long long K, bool B, char C, E V, F W> struct A {
+  static int run() {
+    int a[I + 1] = {};
+    return get<I>(a) + get<I>(0L) + sget<J>() + sget<I>() + wget<K>()
+         + bget<B>() + cget<C>() + eget<V>() + fget<W>() + sget<V>();
+  }
+  static int narrow() { return nget<J>(); }
+};
+template <const size_t I> struct C { static int run() { return get<I>(0L) + sget<int(I)>(); } };
+int r1 = A<3, -7, (1LL << 50), true, 'x', e1, F::f0>::run();
+int r2 = A<0, 2, -1, false, '\0', e0, F::f0>::run();
+int r3 = C<5>::run();
+int r4 = A<1, 300, 0, true, 'a', e0, F::f0>::narrow();
+",
+    );
+    // The narrowed `300` is a deduction failure, the only error.
+    p.assert_diag("error: no matching function for call to 'nget'");
+    assert_eq!(p.diags.iter().filter(|d| d.contains("error:")).count(), 1, "{:#?}", p.diags);
+}
