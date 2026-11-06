@@ -1,4 +1,4 @@
-//! WP-657: the call-candidate deduction pre-filters (spec/sema.md §6.1)
+//! WP-657: the call-candidate deduction pre-filters (spec/sema-templates.md §6.1)
 //! change no result. Each program is analysed twice, with the pre-filters
 //! and with every deduction run in full (`ParseOptions::full_deduction`,
 //! the test-only entry), and the two must agree on every diagnostic and

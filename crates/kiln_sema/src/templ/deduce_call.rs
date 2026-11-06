@@ -409,29 +409,29 @@ impl Sema<'_, '_> {
 
     /// The failure [`Self::deduce_head`]'s `tdk` is: nothing deduced, at
     /// `loc`.
-    fn head_failure(&self, ft: DeclId, tdk: Tdk, loc: Loc) -> Box<DeductionFailure> {
+    pub(crate) fn deduce_head_failure(
+        &self,
+        ft: DeclId,
+        tdk: Tdk,
+        loc: Loc,
+    ) -> Box<DeductionFailure> {
         let mut d = DeducedArgs::new(self.template_param_depth(ft), self.template_param_count(ft));
         d.loc = loc;
         DeductionFailure::new(tdk, d)
     }
 
-    /// The pre-filter of a call candidate (WP-657; spec/sema.md §6.1):
-    /// the failure [`Self::deduce_call`] of `ft` with `nargs` arguments
-    /// returns before it substitutes or allocates anything, formed
-    /// without the argument lists. `None` when the full deduction is
-    /// needed, and always under [`crate::Sema::full_deduction`].
-    pub(crate) fn deduce_call_prefail(
-        &self,
-        ft: DeclId,
-        nargs: usize,
-        loc: Loc,
-    ) -> Option<Box<DeductionFailure>> {
+    /// The pre-filter of a call candidate (WP-657; spec/sema-templates.md §6.1):
+    /// the `Tdk` [`Self::deduce_call`] of `ft` with `nargs` arguments
+    /// fails with before it substitutes or allocates anything, found
+    /// without the argument lists; its failure is
+    /// [`Self::deduce_head_failure`] of the first declaration. `None`
+    /// when the full deduction is needed, and always under
+    /// [`crate::Sema::full_deduction`].
+    pub(crate) fn deduce_call_prefail(&self, ft: DeclId, nargs: usize) -> Option<Tdk> {
         if self.full_deduction {
             return None;
         }
-        let ft = self.ast.first(ft);
-        let tdk = self.deduce_head(ft, Some(nargs)).err()?;
-        Some(self.head_failure(ft, tdk, loc))
+        self.deduce_head(self.ast.first(ft), Some(nargs)).err()
     }
 
     #[allow(clippy::too_many_lines, reason = "the steps of §6.1 in order")]
@@ -448,7 +448,7 @@ impl Sema<'_, '_> {
         let ft = self.ast.first(ft);
         let templated = match self.deduce_head(ft, call.map(|(a, _)| a.len())) {
             Ok(t) => t,
-            Err(tdk) => return Err(self.head_failure(ft, tdk, loc)),
+            Err(tdk) => return Err(self.deduce_head_failure(ft, tdk, loc)),
         };
         self.template_params_into(ft, params_buf);
         let params: &[DeclId] = params_buf;

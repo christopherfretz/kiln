@@ -300,21 +300,38 @@ impl Sema<'_, '_> {
         // the argument lists (WP-657).
         #[cfg(feature = "op-stats")]
         let frame = crate::templ::deduce_stats::cand_begin();
-        if let Some(fail) = self.deduce_call_prefail(ft, set.args.len() + usize::from(lead), loc) {
-            #[cfg(feature = "op-stats")]
-            let tdk = fail.tdk;
+        if let Some(tdk) = self.deduce_call_prefail(ft, set.args.len() + usize::from(lead)) {
             #[cfg(feature = "op-stats")]
             crate::templ::deduce_stats::prefiltered(tdk);
-            self.add_template_candidate_with(
-                set,
-                ft,
-                found,
-                kind,
-                first_opts,
-                pattern,
-                lead,
-                Err(fail),
-            );
+            use crate::templ::deduce::Tdk;
+            match tdk {
+                // No candidate (as `add_template_candidate_with`).
+                Tdk::Invalid => {}
+                // The failure is formed only if the arity check of
+                // `add_candidate` leaves the candidate viable.
+                Tdk::TooFewArguments => self.add_arity_failed_candidate(
+                    set,
+                    ft,
+                    found,
+                    kind,
+                    first_opts,
+                    pattern,
+                    |s| s.deduce_head_failure(s.ast.first(ft), tdk, loc),
+                ),
+                _ => {
+                    let fail = self.deduce_head_failure(self.ast.first(ft), tdk, loc);
+                    self.add_template_candidate_with(
+                        set,
+                        ft,
+                        found,
+                        kind,
+                        first_opts,
+                        pattern,
+                        lead,
+                        Err(fail),
+                    );
+                }
+            }
             #[cfg(feature = "op-stats")]
             crate::templ::deduce_stats::cand_end(&frame, tdk);
             return;
@@ -409,15 +426,15 @@ impl Sema<'_, '_> {
                     return;
                 }
                 if matches!(fail.tdk, Tdk::TooManyArguments | Tdk::TooFewArguments) {
-                    self.add_candidate(set, pattern, found, kind, first_opts);
-                    if let Some(c) = set.cands.last_mut() {
-                        c.template = Some(ft);
-                        if c.viable {
-                            c.viable = false;
-                            c.failure = super::CandidateFailure::BadDeduction;
-                            c.deduction = Some(fail);
-                        }
-                    }
+                    self.add_arity_failed_candidate(
+                        set,
+                        ft,
+                        found,
+                        kind,
+                        first_opts,
+                        pattern,
+                        |_| fail,
+                    );
                     return;
                 }
                 self.ovl.stats.candidates += 1;
@@ -429,6 +446,32 @@ impl Sema<'_, '_> {
                 c.failure = super::CandidateFailure::BadDeduction;
                 c.deduction = Some(fail);
                 set.cands.push(c);
+            }
+        }
+    }
+
+    /// The candidate of a template whose deduction failed on the call's
+    /// arity: the pattern as a candidate, so that its own arity check
+    /// gives the note; the deduction's failure (`fail`) only when that
+    /// check passes.
+    #[allow(clippy::too_many_arguments, reason = "add_template_candidate's state")]
+    fn add_arity_failed_candidate(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        ft: DeclId,
+        found: DeclId,
+        kind: CandidateKind,
+        first_opts: IcsOptions,
+        pattern: DeclId,
+        fail: impl FnOnce(&Self) -> Box<crate::templ::deduce_call::DeductionFailure>,
+    ) {
+        self.add_candidate(set, pattern, found, kind, first_opts);
+        if let Some(c) = set.cands.last_mut() {
+            c.template = Some(ft);
+            if c.viable {
+                c.viable = false;
+                c.failure = super::CandidateFailure::BadDeduction;
+                c.deduction = Some(fail(self));
             }
         }
     }
