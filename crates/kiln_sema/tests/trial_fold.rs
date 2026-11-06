@@ -15,7 +15,7 @@ mod conv_common;
 
 use conv_common::*;
 use kiln_ast::consts::{IntBits, Scalar};
-use kiln_ast::decl::{DeclKind, FnSpec, VarSpec};
+use kiln_ast::decl::{DeclKind, DefinitionBits, FnSpec, TagKind, VarSpec};
 use kiln_ast::expr::{BinaryOp, TraitKind, UnaryOp};
 use kiln_ast::types::BuiltinType as B;
 use kiln_ast::{ConstValueId, DeclHead, DeclId, ExprId, QualType};
@@ -733,6 +733,178 @@ fn constant_init_agrees() {
     if !kiln_oven::LEAF_CHECK {
         assert!(fast_thunks < full_thunks, "{fast_thunks} thunks vs {full_thunks}");
     }
+}
+
+/// `.` member reads in the walk (WP-663 B4): an integral member of a
+/// parameter or a non-`const` automatic variable (nested `.` included)
+/// is answered (a definite failure where it is read), as an operand and as
+/// a glvalue fold of the member access itself (codegen's); `->`, a union member, a bit-field, a
+/// reference member and a namespace-scope object are declined. In strict
+/// and lax folds, the answers and the Oven's state after each are those
+/// of a second Sema that runs the full path only.
+/// A member access built on a variable, given a member-access builder.
+type Access = fn(
+    &mut Sema<'_, '_>,
+    DeclId,
+    &dyn Fn(&mut Sema<'_, '_>, ExprId, &str, bool) -> ExprId,
+) -> ExprId;
+
+#[test]
+#[allow(clippy::too_many_lines, reason = "one table of member shapes")]
+fn member_reads_agree() {
+    type Build = fn(&mut Sema<'_, '_>, ExprId) -> ExprId;
+    type Trace = Vec<(String, Option<String>, (u64, u64, u64), String)>;
+    let run = |fast: bool| -> (Trace, usize) {
+        with_sema(|s, _| {
+            let record = |s: &mut Sema<'_, '_>, n: &str, tag, fields: &[(&str, QualType, u64)]| {
+                let h = DeclHead::new(s.ast.tu, name(s, n), L);
+                let r = s.ast.builder().record(h, tag, None);
+                s.ast.builder().begin_record_definition(r).expect("first definition");
+                for &(m, ty, width) in fields {
+                    let w = (width != 0).then(|| {
+                        let l = int_lit(s, QualType::INT, width);
+                        s.ast.builder().constant_expr(l, None)
+                    });
+                    let h = DeclHead::new(r, name(s, m), L);
+                    s.ast.builder().field(h, ty, w, 0);
+                }
+                s.ast.builder().complete_record_definition(r, DefinitionBits::empty());
+                s.ast.decls.get(r).ty().expect("record type")
+            };
+            let uint = builtin(B::UInt);
+            let p = record(
+                s,
+                "P",
+                TagKind::Struct,
+                &[("a", QualType::INT, 0), ("b", QualType::LONG, 0), ("c", uint, 3)],
+            );
+            let q = record(s, "Q", TagKind::Struct, &[("z", QualType::INT, 0), ("p", p, 0)]);
+            let u = record(s, "U", TagKind::Union, &[("a", QualType::INT, 0)]);
+            let ri = lref(s, QualType::INT);
+            let rr = record(s, "R", TagKind::Struct, &[("r", ri, 0)]);
+            let pp = ptr(s, p);
+            let ft = fn_type(s, QualType::INT, &[p]);
+            let h = DeclHead::new(s.ast.tu, name(s, "f"), L);
+            let f = s.ast.builder().function(h, DeclKind::Function, ft, FnSpec::new(), None);
+            let px = name(s, "px");
+            let prm = s.ast.builder().param(f, px, L, p, 0, 0);
+            s.ast.builder().set_params(f, &[prm]).expect("params once");
+            let local = |s: &mut Sema<'_, '_>, n: &str, ty| {
+                let h = DeclHead::new(f, name(s, n), L);
+                s.ast.builder().var(h, ty, VarSpec::new(), None)
+            };
+            let (pl, ql, ul, rl, pt) = (
+                local(s, "pl", p),
+                local(s, "ql", q),
+                local(s, "ul", u),
+                local(s, "rl", rr),
+                local(s, "pt", pp),
+            );
+            let gp = var(s, "gp", p);
+            let member = |s: &mut Sema<'_, '_>, base: ExprId, n: &str, arrow: bool| {
+                let sym = s.ast.symbols().intern(n);
+                s.act_on_member(base, sym, L, L, arrow)
+            };
+            // (name, the access, the walk answers).
+            let dot: Access = |s, d, m| {
+                let r = s.build_decl_ref(d, L);
+                m(s, r, "a", false)
+            };
+            let dot_b: Access = |s, d, m| {
+                let r = s.build_decl_ref(d, L);
+                m(s, r, "b", false)
+            };
+            let nested: Access = |s, d, m| {
+                let r = s.build_decl_ref(d, L);
+                let x = m(s, r, "p", false);
+                m(s, x, "b", false)
+            };
+            let first: Access = |s, d, m| {
+                let r = s.build_decl_ref(d, L);
+                m(s, r, "z", false)
+            };
+            let bits: Access = |s, d, m| {
+                let r = s.build_decl_ref(d, L);
+                m(s, r, "c", false)
+            };
+            let refm: Access = |s, d, m| {
+                let r = s.build_decl_ref(d, L);
+                m(s, r, "r", false)
+            };
+            let arrow: Access = |s, d, m| {
+                let r = s.build_decl_ref(d, L);
+                m(s, r, "a", true)
+            };
+            let objects: [(&str, DeclId, Access, bool); 10] = [
+                ("pl.a (non-const local)", pl, dot, true),
+                ("pl.b (non-const local, long)", pl, dot_b, true),
+                ("px.a (parameter)", prm, dot, true),
+                ("ql.p.b (nested)", ql, nested, true),
+                ("ql.z (offset 0)", ql, first, true),
+                ("pl.c (bit-field)", pl, bits, false),
+                ("ul.a (union)", ul, dot, false),
+                ("rl.r (reference member)", rl, refm, false),
+                ("pt->a (arrow)", pt, arrow, false),
+                ("gp.a (namespace scope)", gp, dot, false),
+            ];
+            let shapes: [(&str, Build); 7] = [
+                ("v (glvalue fold)", |_, v| v),
+                ("+v", |s, v| s.act_on_unary(UnaryOp::Plus, v, L)),
+                ("v + 1", |s, v| {
+                    let one = int_lit(s, QualType::INT, 1);
+                    s.act_on_binary(BinaryOp::Add, v, one, L)
+                }),
+                ("v == 3", |s, v| {
+                    let k = int_lit(s, QualType::INT, 3);
+                    s.act_on_binary(BinaryOp::EQ, v, k, L)
+                }),
+                ("0 && v", |s, v| {
+                    let z = int_lit(s, QualType::INT, 0);
+                    s.act_on_binary(BinaryOp::LAnd, z, v, L)
+                }),
+                ("1 ? 2 : v", |s, v| {
+                    let (c, two) = (int_lit(s, QualType::INT, 1), int_lit(s, QualType::INT, 2));
+                    s.act_on_conditional(c, two, v, L)
+                }),
+                ("v ? 1 : 2", |s, v| {
+                    let (one, two) = (int_lit(s, QualType::INT, 1), int_lit(s, QualType::INT, 2));
+                    s.act_on_conditional(v, one, two, L)
+                }),
+            ];
+            let (mut trace, mut failures) = (Trace::new(), 0usize);
+            for (on, d, access, answers) in objects {
+                for (what, build) in shapes {
+                    for lax in [false, true] {
+                        for round in 0..2 {
+                            let v = access(s, d, &member);
+                            let e = build(s, v);
+                            let w = format!("{what} (v = {on}, lax {lax}, round {round})");
+                            let quick = if fast { s.trial_fold_fast(e) } else { None };
+                            if fast {
+                                if answers {
+                                    assert!(quick.is_some(), "fast path answers {w}");
+                                    failures += usize::from(quick == Some(None));
+                                } else {
+                                    assert_eq!(quick, None, "fast path declines {w}");
+                                }
+                            }
+                            let r = quick.unwrap_or_else(|| s.trial_fold_full(e, lax));
+                            let st = (oven_state(s), s.oven().globals_digest());
+                            trace.push((w, shown(s, r), st.0, st.1));
+                        }
+                    }
+                }
+            }
+            (trace, failures)
+        })
+    };
+    let (fast, failures) = run(true);
+    let (full, _) = run(false);
+    assert_eq!(fast.len(), full.len());
+    for (a, b) in fast.iter().zip(&full) {
+        assert_eq!(a, b, "fast vs full path");
+    }
+    assert!(failures > 0);
 }
 
 /// `Oven::memory` (`-fkiln-memory-report`) splits `Oven::footprint`

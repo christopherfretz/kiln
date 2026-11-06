@@ -408,6 +408,20 @@ fault counts and trap ids unchanged.
       read that faults first is resolved (`resolve_global`, as
       `Op::GlobalAddr` does); and the static peak is noted
       (`end_outermost`).
+    - *member reads*: the read may instead be of a `.` member access
+      (nested, through parentheses) whose innermost base is such a
+      `DeclRefExpr`, where every member is a non-static, non-reference,
+      non-bit-field data member of a non-union class (each compiles to
+      `Op::Field`, which faults only on a null or past-the-end address,
+      neither of which an object's address is). Only the definite
+      failure answers: the base variable's external object faults at
+      the member's `Load` as at its own; a usable base declines. `->`,
+      a union, a bit-field and a reference member decline.
+    - *scalar glvalue roots*: a fold of a glvalue `DeclRefExpr` or
+      `MemberExpr` of `bool` or integer type (codegen's fold of a member
+      access, `compile_thunk`'s `lv` then `load`) is the read its
+      lvalue-to-rvalue conversion would be, and is walked as one, except
+      for `is_constant_initialized`'s walk (an object is placed).
   - **Equivalence rule:** where the walk answers, its value is the one
     the full path would freeze (it computes each node with the same
     `crate::arith` operation on the same register value and freezes with

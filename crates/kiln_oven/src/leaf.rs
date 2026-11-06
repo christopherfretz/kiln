@@ -14,7 +14,9 @@
 //! constant integer variable, or a definite failure for a parameter or
 //! automatic variable the full path faults on (the fold answers `None`
 //! without the full path), whose global entry and resolution the walk
-//! makes as the full path would ([`Oven::leaf_effects`]).
+//! makes as the full path would ([`Oven::leaf_effects`]); so is a `.`
+//! member read of such a parameter or variable, and a scalar glvalue fold
+//! (codegen's integral member accesses), as that read.
 //! The initializer [`Oven::is_constant_initialized`] checks is walked
 //! the same way ([`Oven::leaf_init`]).
 
@@ -162,7 +164,23 @@ impl Oven {
         }
         self.types.refresh(b);
         let mut fx = Vec::new();
-        let r = self.leaf_val(b, e, 0, &mut fx)?;
+        let n = *b.ast().exprs.get(e);
+        let r = if n.value_category().is_glvalue() {
+            // A scalar glvalue fold (`compile_thunk`: `lv`, `load`) is the
+            // read an lvalue-to-rvalue conversion of it would be.
+            if object.is_some() || !matches!(n.kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
+            {
+                return None;
+            }
+            let t = self.types.intern(b, n.ty());
+            let tk = self.types.kind(t);
+            if !matches!(tk, TyKind::Bool | TyKind::Int { width: ..=128, .. }) {
+                return None;
+            }
+            self.leaf_read(b, e, tk, &mut fx)?
+        } else {
+            self.leaf_val(b, e, 0, &mut fx)?
+        };
         self.leaf_effects(b, object, &fx, r.err());
         let Ok((v, _)) = r else { return Some(None) };
         let q = b.ast().exprs.get(e).ty();
@@ -339,7 +357,9 @@ impl Oven {
     /// The full path's read of glvalue `op` (an lvalue-to-rvalue
     /// conversion to `tk`), where the walk knows it: `op` names (through
     /// parentheses) a variable whose `GlobalAddr`, `Load` either reads a
-    /// known value or certainly faults. The global is taken as the next
+    /// known value or certainly faults, or a member of one
+    /// ([`Oven::leaf_member_base`], WP-663 B4: `GlobalAddr`, `Field`s,
+    /// `Load`), which is only ever a definite failure. The global is taken as the next
     /// outermost evaluation finds it: a provisional resolution is
     /// forgotten first (`begin_outermost`).
     ///
@@ -371,11 +391,15 @@ impl Oven {
         tk: TyKind,
         fx: &mut Vec<DeclId>,
     ) -> Option<Lv> {
-        let ast = b.ast();
         let mut x = op;
-        while ast.exprs.get(x).kind() == ExprKind::ParenExpr {
-            x = ast.exprs.operand(x);
+        while b.ast().exprs.get(x).kind() == ExprKind::ParenExpr {
+            x = b.ast().exprs.operand(x);
         }
+        let member = b.ast().exprs.get(x).kind() == ExprKind::MemberExpr;
+        if member {
+            x = self.leaf_member_base(b, x)?;
+        }
+        let ast = b.ast();
         if ast.exprs.get(x).kind() != ExprKind::DeclRefExpr {
             return None;
         }
@@ -391,6 +415,9 @@ impl Oven {
             Some((_, st)) => st,
         };
         if info.usable {
+            if member {
+                return None;
+            }
             let VarEvalState::Value(cv) = info.state else { return None };
             let GState::Resolved(p) = state else { return None };
             let c = ast.types.canonical(info.ty);
@@ -438,6 +465,46 @@ impl Oven {
                 Some(Err(Failed(Some(d))))
             }
         }
+    }
+
+    /// The object variable of `.` member access `e` (through parentheses
+    /// and nested `.` accesses) whose read the full path compiles as
+    /// `GlobalAddr` of the variable, `Field` offsets and a `Load`
+    /// (`Compiler::member`): each member a non-static, non-reference,
+    /// non-bit-field data member of a non-union class the Oven lays out.
+    /// `None` for anything else (`->`, a static data member, a union,
+    /// a base that is not a variable).
+    fn leaf_member_base(&mut self, b: &mut dyn SemaBridge, mut e: ExprId) -> Option<ExprId> {
+        for _ in 0..MAX_DEPTH {
+            let ast = b.ast();
+            match ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr => e = ast.exprs.operand(e),
+                ExprKind::MemberExpr => {
+                    let n = *ast.exprs.get(e);
+                    let fd = ast.exprs.decl(e);
+                    if n.has(kiln_ast::expr::ExprFlags::ARROW)
+                        || ast.decls.get(fd).kind() != DeclKind::Field
+                        || ast.decls.get(fd).ty().is_none_or(|q| ast.types.is_reference(q))
+                    {
+                        return None;
+                    }
+                    let base = ExprId::new(n.a());
+                    let bq = ast.exprs.get(base).ty();
+                    let rt = self.types.intern(b, bq);
+                    let TyKind::Record { union: false, .. } = self.types.kind(rt) else {
+                        return None;
+                    };
+                    let idx = self.types.field_index(rt, fd)?;
+                    if self.types.fields(rt)[idx].width.is_some() {
+                        return None;
+                    }
+                    e = base;
+                }
+                ExprKind::DeclRefExpr => return Some(e),
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// A builtin binary operator of integer type `(w, s)`.
