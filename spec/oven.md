@@ -458,6 +458,21 @@ fault counts and trap ids unchanged.
 - `Oven::is_constant_initialized(bridge, var) -> bool`
   ([basic.start.static]/2): silent, not recorded; uses the variable's
   cached evaluation state when known.
+  - **Fast path** (WP-663, `Oven::leaf_init`): an initializer of a
+    non-reference variable that the trial-fold walk answers (above) is
+    answered by it: the full path compiles it as the variable's
+    initializer, which for a scalar prvalue in the walk's domain is the
+    fold's code (no extended temporary is in the domain), and no walked
+    node depends on the manifest context. What the full path leaves
+    behind is redone in its order: provisional resolutions are
+    forgotten, the placeholder of a non-local variable is placed
+    (`eval_inner`, which `static_bytes` counts), the walked reads' global
+    entries are made and the first faulting read's global resolved, the
+    placeholder's global is left unresolved again, and the static peak
+    is noted; so the globals, the static space and `static_bytes` are
+    the full path's. The full path stays callable
+    (`is_constant_initialized_full`, test-only); `tests/trial_fold.rs`
+    compares answers and state against a full-only Sema.
 - A `const` integral or enumeration variable is usable in constant
   expressions ([expr.const]/4) when its initializer folds; its value is
   evaluated on demand when first read (nested initializations are capped

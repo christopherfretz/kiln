@@ -632,6 +632,109 @@ fn variable_reads_agree() {
     assert!(failures > 0 && values > 0, "{failures} failures, {values} values answered");
 }
 
+/// The variables of [`constant_init_agrees`], in a fresh Sema: by name,
+/// each `const int` unless named otherwise.
+fn constant_init_vars(s: &mut Sema<'_, '_>) -> Vec<(&'static str, DeclId)> {
+    let ft = fn_type(s, QualType::INT, &[QualType::INT]);
+    let h = DeclHead::new(s.ast.tu, name(s, "f"), L);
+    let f = s.ast.builder().function(h, DeclKind::Function, ft, FnSpec::new(), None);
+    let px = name(s, "x");
+    let x = s.ast.builder().param(f, px, L, QualType::INT, 0, 0);
+    s.ast.builder().set_params(f, &[x]).expect("params once");
+    let ck = cnst(s, QualType::INT);
+    let rk = lref(s, ck);
+    let plain = VarSpec::new();
+    let def = |s: &mut Sema<'_, '_>, at: Option<DeclId>, n: &str, ty, spec, init| {
+        let h = DeclHead::new(at.unwrap_or(s.ast.tu), name(s, n), L);
+        let d = s.ast.builder().var(h, ty, spec, None);
+        s.ast.builder().set_var_init(d, init).expect("init once");
+        d
+    };
+    let bin = |s: &mut Sema<'_, '_>, op, l, r| {
+        let (l, r) = (int_lit(s, QualType::INT, l), int_lit(s, QualType::INT, r));
+        s.act_on_binary(op, l, r, L)
+    };
+    let mut out = Vec::new();
+    let e = bin(s, BinaryOp::Mul, 3, 4);
+    out.push(("n1 = 3 * 4 (namespace)", def(s, None, "n1", ck, plain, e)));
+    let e = bin(s, BinaryOp::Div, 1, 0);
+    out.push(("n2 = 1 / 0 (namespace)", def(s, None, "n2", ck, plain, e)));
+    let e = bin(s, BinaryOp::Add, 0x7fff_ffff, 1);
+    out.push(("n3 = INT_MAX + 1 (namespace)", def(s, None, "n3", ck, plain, e)));
+    let i7 = int_lit(s, QualType::INT, 7);
+    let ce = def(s, None, "ce", ck, plain.with_constexpr(true), i7);
+    evaluate_init(s, ce, i7);
+    let rce = s.build_decl_ref(ce, L);
+    let one = int_lit(s, QualType::INT, 1);
+    let e = s.act_on_binary(BinaryOp::Add, rce, one, L);
+    out.push(("n4 = ce + 1 (namespace, ce constexpr)", def(s, None, "n4", ck, plain, e)));
+    let g = var(s, "g", QualType::INT);
+    let rg = s.build_decl_ref(g, L);
+    let e = s.act_on_unary(UnaryOp::Plus, rg, L);
+    out.push(("n5 = +g (namespace, g int)", def(s, None, "n5", ck, plain, e)));
+    let rce = s.build_decl_ref(ce, L);
+    out.push(("n6 = ce (namespace const int&)", def(s, None, "n6", rk, plain, rce)));
+    let e = bin(s, BinaryOp::Shl, 1, 5);
+    out.push(("l1 = 1 << 5 (local)", def(s, Some(f), "l1", ck, plain, e)));
+    let rx = s.build_decl_ref(x, L);
+    let one = int_lit(s, QualType::INT, 1);
+    let e = s.act_on_binary(BinaryOp::Add, rx, one, L);
+    out.push(("l2 = x + 1 (local, x parameter)", def(s, Some(f), "l2", ck, plain, e)));
+    let e = bin(s, BinaryOp::Sub, 9, 2);
+    out.push(("n7 = 9 - 2 (namespace int)", def(s, None, "n7", QualType::INT, plain, e)));
+    out
+}
+
+/// `Oven::is_constant_initialized`'s fast path (WP-663 B2): over three
+/// rounds of every variable of [`constant_init_vars`], the answers and
+/// the Oven's state after each (global entries, the static space's top,
+/// `static_bytes`: the full path's placeholder of a namespace-scope
+/// variable included) are those of a second Sema that runs the full path
+/// only, while the walk answers without compiling a thunk.
+#[test]
+fn constant_init_agrees() {
+    type Trace = Vec<(String, bool, (u64, u64, u64), String)>;
+    let thunks = |s: &Sema<'_, '_>| {
+        let r = s.oven().memory();
+        r.rows.iter().find(|x| x.name == "oven.thunks").map_or(0, |x| x.count)
+    };
+    let run = |fast: bool| -> (Trace, u64) {
+        with_sema(|s, _| {
+            let vars = constant_init_vars(s);
+            let mut trace = Vec::new();
+            for round in 0..3 {
+                for &(n, v) in &vars {
+                    let r = if fast {
+                        s.is_constant_initialized(v)
+                    } else {
+                        s.is_constant_initialized_full(v)
+                    };
+                    let st = (oven_state(s), s.oven().globals_digest());
+                    trace.push((format!("{n}, round {round}"), r, st.0, st.1));
+                }
+            }
+            (trace, thunks(s))
+        })
+    };
+    let (fast, fast_thunks) = run(true);
+    let (full, full_thunks) = run(false);
+    // `n1`'s full path places its placeholder: a global, static bytes.
+    let (globals, _, static_bytes) = full[0].2;
+    assert!(globals >= 1 && static_bytes > 0, "placeholder of n1: {:?}", full[0]);
+    for (a, b) in fast.iter().zip(&full) {
+        assert_eq!(a, b, "fast vs full path");
+    }
+    assert_eq!(fast.len(), full.len());
+    let answer = |n: &str| fast.iter().find(|x| x.0 == format!("{n}, round 2")).map(|x| x.1);
+    assert_eq!(answer("n1 = 3 * 4 (namespace)"), Some(true));
+    assert_eq!(answer("n2 = 1 / 0 (namespace)"), Some(false));
+    assert_eq!(answer("l2 = x + 1 (local, x parameter)"), Some(false));
+    // A `leaf-check` build runs the full path after every walk too.
+    if !kiln_oven::LEAF_CHECK {
+        assert!(fast_thunks < full_thunks, "{fast_thunks} thunks vs {full_thunks}");
+    }
+}
+
 /// `Oven::memory` (`-fkiln-memory-report`) splits `Oven::footprint`
 /// into rows: their reserved bytes sum to it, before and after folds.
 #[test]

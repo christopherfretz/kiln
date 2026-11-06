@@ -75,6 +75,11 @@ pub use meta::{
     TraitOp, ValueOp, info_arg,
 };
 pub use stats::{EvalRecord, EvalStats, EvalTotals};
+
+/// Whether this build checks every trial-fold walk against the full path
+/// (the `leaf-check` feature; then the walk saves no thunk compile).
+#[doc(hidden)]
+pub const LEAF_CHECK: bool = cfg!(feature = "leaf-check");
 pub use value::automatic_referent;
 
 use compile::{Func, Global, Site, TrapInfo};
@@ -1010,8 +1015,30 @@ impl Oven {
 
     /// Whether `var`'s initializer is a constant initializer
     /// ([basic.start.static]/2): it evaluates successfully as a constant
-    /// expression. Not recorded in the statistics.
+    /// expression. Not recorded in the statistics. An initializer in the
+    /// trial-fold walk's domain is answered by the walk (WP-663,
+    /// [`Oven::leaf_init`]).
     pub fn is_constant_initialized(&mut self, bridge: &mut dyn SemaBridge, var: DeclId) -> bool {
+        self.constant_initialized(bridge, var, true)
+    }
+
+    /// [`Oven::is_constant_initialized`] by the full path only (test-only).
+    #[doc(hidden)]
+    pub fn is_constant_initialized_full(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        var: DeclId,
+    ) -> bool {
+        self.constant_initialized(bridge, var, false)
+    }
+
+    /// [`Oven::is_constant_initialized`], with or without its fast path.
+    fn constant_initialized(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        var: DeclId,
+        fast: bool,
+    ) -> bool {
         use kiln_ast::decl::VarEvalState;
         let ast = bridge.ast();
         let Some(data) = ast.decls.var(var) else { return false };
@@ -1026,7 +1053,10 @@ impl Oven {
         let Some(init) = data.init else { return false };
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(ast, Some(init), self.memo.hits);
-        let r = self.eval_ctx(bridge, init, Some(var), true, false, true).0.is_ok();
+        let r = match fast.then(|| self.leaf_init(bridge, var, init)).flatten() {
+            Some(r) => r,
+            None => self.eval_ctx(bridge, init, Some(var), true, false, true).0.is_ok(),
+        };
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "is_constant_initialized", r, self.memo.hits);
         r

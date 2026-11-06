@@ -362,6 +362,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         })
     }
 
+    /// [`Self::is_constant_initialized`] by the Oven's full path only
+    /// (`tests/trial_fold.rs`; test-only).
+    #[doc(hidden)]
+    pub fn is_constant_initialized_full(&mut self, var: DeclId) -> bool {
+        self.with_oven(None, |oven, b| oven.is_constant_initialized_full(b, var))
+    }
+
     /// `cond` (`None`: `true`) evaluated with each parameter of `binds`
     /// initialized from its argument ([`Oven::evaluate_with_params`]),
     /// silently; `loc` is the point of instantiation of what it needs.

@@ -15,6 +15,8 @@
 //! automatic variable the full path faults on (the fold answers `None`
 //! without the full path), whose global entry and resolution the walk
 //! makes as the full path would ([`Oven::leaf_effects`]).
+//! The initializer [`Oven::is_constant_initialized`] checks is walked
+//! the same way ([`Oven::leaf_init`]).
 
 use kiln_ast::consts::Scalar;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, TraitKind, UnaryOp};
@@ -65,7 +67,7 @@ impl Oven {
     /// every answer is checked against the full path's (a validation
     /// build for the corpus and the benches).
     pub(crate) fn leaf_first(&mut self, b: &mut dyn SemaBridge, e: ExprId) -> Option<Leaf> {
-        let r = self.leaf_fold(b, e);
+        let r = self.leaf_fold(b, e, None);
         #[cfg(feature = "leaf-check")]
         if let Some(v) = r {
             let full = self.eval_ctx(b, e, None, true, false, false).0.ok();
@@ -74,6 +76,39 @@ impl Oven {
             assert_eq!(x, y, "leaf fold of {e:?} differs from the full path");
         }
         r
+    }
+
+    /// [`Oven::is_constant_initialized`]'s fast path (WP-663): `Some` of
+    /// whether variable `var`'s initializer `init` is constant, where
+    /// [`Oven::leaf_fold`] answers it, else `None` to run the full path.
+    /// The full path compiles `init` as `var`'s initializer, which for a
+    /// non-reference variable and a scalar prvalue `init` is the fold's
+    /// thunk (`rv_into`, no extended temporary: none is in the walk's
+    /// domain), and no walked node depends on the manifest context (an
+    /// operation failing in one mode only, `Op::Cce`, comes only from
+    /// `reinterpret_cast`). What the full path leaves behind is redone:
+    /// provisional resolutions are forgotten (`begin_outermost`), the
+    /// placeholder of a non-local `var` is placed and its global left
+    /// unresolved (`eval_inner`), and the static peak is noted
+    /// (`end_outermost`), so the globals, the static space and
+    /// `static_bytes` are as the full path leaves them.
+    pub(crate) fn leaf_init(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        var: DeclId,
+        init: ExprId,
+    ) -> Option<bool> {
+        let ast = b.ast();
+        if ast.decls.get(var).ty().is_none_or(|t| ast.types.is_reference(t)) {
+            return None;
+        }
+        let r = self.leaf_fold(b, init, Some(var))?.is_some();
+        #[cfg(feature = "leaf-check")]
+        {
+            let full = self.eval_ctx(b, init, Some(var), true, false, true).0.is_ok();
+            assert_eq!(r, full, "leaf init of {var:?} differs from the full path");
+        }
+        Some(r)
     }
 
     /// [`Oven::try_fold`] by the full path only (test-only: the fast
@@ -100,7 +135,7 @@ impl Oven {
         b: &mut dyn SemaBridge,
         e: ExprId,
     ) -> Option<Option<ConstValueId>> {
-        self.leaf_fold(b, e)
+        self.leaf_fold(b, e, None)
     }
 
     /// `e`'s answer by the fast path (`Some(None)`: the full path
@@ -108,7 +143,12 @@ impl Oven {
     /// evaluation setting would make the full path differ (a running
     /// evaluation, a warning or overflow check, an address or `void`
     /// result, a source-location root); `None` to run the full path.
-    pub(crate) fn leaf_fold(&mut self, b: &mut dyn SemaBridge, e: ExprId) -> Option<Leaf> {
+    pub(crate) fn leaf_fold(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        e: ExprId,
+        object: Option<DeclId>,
+    ) -> Option<Leaf> {
         if self.ctx_depth != 0
             || self.cev_warn_next
             || self.ub_check_next
@@ -123,7 +163,7 @@ impl Oven {
         self.types.refresh(b);
         let mut fx = Vec::new();
         let r = self.leaf_val(b, e, 0, &mut fx)?;
-        self.leaf_effects(b, &fx, r.err());
+        self.leaf_effects(b, object, &fx, r.err());
         let Ok((v, _)) = r else { return Some(None) };
         let q = b.ast().exprs.get(e).ty();
         let ty = self.types.intern(b, q);
@@ -132,18 +172,27 @@ impl Oven {
 
     /// What the full path leaves behind for an answered fold of `e`,
     /// redone in its order: provisional resolutions are forgotten
-    /// (`begin_outermost`); the thunk compile creates the global entries
+    /// (`begin_outermost`); the placeholder of a non-local `object` is
+    /// placed (`eval_inner`); the thunk compile creates the global entries
     /// `news` lacks, in compile order, which is the walk's (every operand,
     /// run or not, left to right: `?:` its condition and then both arms,
     /// as `Compiler::rv_into`, `logical` and `arith_spine` emit them); the
     /// run resolves the global of the variable whose read faults first
-    /// (`Op::GlobalAddr`, `resolve_global`); and the static peak is noted
+    /// (`Op::GlobalAddr`, `resolve_global`); the placeholder's global is
+    /// left unresolved again (`eval_inner`); and the static peak is noted
     /// (`end_outermost`). So the globals, the static space and the
     /// `static_bytes` statistic are as the full path leaves them.
-    fn leaf_effects(&mut self, b: &mut dyn SemaBridge, news: &[DeclId], fail: Option<Failed>) {
+    fn leaf_effects(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        object: Option<DeclId>,
+        news: &[DeclId],
+        fail: Option<Failed>,
+    ) {
         for g in self.provisional.drain(..) {
             self.globals[g as usize].state = GState::Unresolved;
         }
+        let placed = object.and_then(|d| self.place_init_object(b, d));
         for &d in news {
             self.global_index(b.ast(), d);
         }
@@ -152,6 +201,9 @@ impl Oven {
             if self.globals[g as usize].state == GState::Unresolved {
                 self.resolve_global(b, g, 0);
             }
+        }
+        if let Some(g) = placed {
+            self.globals[g as usize].state = GState::Unresolved;
         }
         self.stats.note_static_peak(self.mem.static_peak());
     }

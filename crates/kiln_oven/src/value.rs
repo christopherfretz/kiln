@@ -157,25 +157,33 @@ impl Oven {
         fb: u32,
     ) -> Result<ConstValueId, EvalFailure> {
         self.run.object = object;
-        let mut pre = None;
-        if let Some(d) = object {
-            let ast = b.ast();
-            if !is_local_var(ast, d) && ast.decls.var(d).is_some() {
-                let g = self.global_index(ast, d);
-                if self.globals[g as usize].state == GState::Unresolved {
-                    let q = ast.decls.get(d).ty().unwrap_or(QualType::INT);
-                    let ty = self.types.intern(b, q);
-                    let p = self.placeholder(g, ty, ast_first(b, d));
-                    self.globals[g as usize].state = GState::Resolved(p);
-                    pre = Some(g);
-                }
-            }
-        }
+        let pre = object.and_then(|d| self.place_init_object(b, d));
         let r = self.eval_at(b, e, object, fb);
         if let Some(g) = pre {
             self.globals[g as usize].state = GState::Unresolved;
         }
         r
+    }
+
+    /// The object of non-local variable `d` while its initializer runs:
+    /// its global, if unresolved, is resolved to its placeholder, and
+    /// `Some` of the global the caller resets afterwards. The static
+    /// space it takes counts in `static_bytes` (WP-663: the fast path of
+    /// [`Oven::is_constant_initialized`] places it as well).
+    pub(crate) fn place_init_object(&mut self, b: &mut dyn SemaBridge, d: DeclId) -> Option<u32> {
+        let ast = b.ast();
+        if is_local_var(ast, d) || ast.decls.var(d).is_none() {
+            return None;
+        }
+        let g = self.global_index(ast, d);
+        if self.globals[g as usize].state != GState::Unresolved {
+            return None;
+        }
+        let q = ast.decls.get(d).ty().unwrap_or(QualType::INT);
+        let ty = self.types.intern(b, q);
+        let p = self.placeholder(g, ty, ast_first(b, d));
+        self.globals[g as usize].state = GState::Resolved(p);
+        Some(g)
     }
 
     /// The static storage of global `g` while its initializer runs (reused
