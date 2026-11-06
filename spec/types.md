@@ -71,7 +71,9 @@ qualifiers of the element type for arrays.
   removes one level of sugar (for "aka" and resugaring); `desugar(q)` is
   `canonical`, kept as a name for readability at call sites.
 - Kind queries (`as_pointer`, `as_record`, `is_integral`, ...) look at the
-  **canonical** node unless the function name says `sugared_`.
+  **canonical** node unless the function name says `sugared_`. They read
+  the node and decode only the field they return; none builds a whole
+  `TypeView` (WP-655, spec/landed/ast/WP-655.md).
 - Each canonical node's children are canonical (structural induction), so
   canonical identity is structural identity and hash-consing (§7) makes it
   `u32` identity.
@@ -799,6 +801,9 @@ impl TypeContext {
     pub fn element(&self, q: QualType) -> Option<QualType>; // arrays, vectors, complex
     pub fn proto(&self, q: QualType) -> Option<&FuncProto>;  pub fn params(&self, &FuncProto) -> &[QualType];
     pub fn as_record(&self, q: QualType) -> Option<DeclId>; pub fn as_enum(&self, q: QualType) -> Option<DeclId>;
+    pub fn is_error(&self, q: QualType) -> bool;          // canonical node is the error builtin
+    pub fn canonical_node(&self, q: QualType) -> TypeNode; // the canonical node, undecoded
+    pub fn view_if(&self, t: TypeId, kind: TypeKind) -> Option<TypeView>; // decoded only if `t` has `kind`
     // construction (interning)
     pub fn qualify(&mut self, q: QualType, cv: Quals) -> QualType;
     pub fn unqualified(&mut self, q: QualType) -> QualType;
