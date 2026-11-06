@@ -3197,6 +3197,31 @@ formed it:
 S3O ranks the result. The **body** of the winning candidate is
 instantiated by `mark_referenced` when the call is built (§6.5).
 
+**Shortcuts that change no outcome (WP-657).** Each one answers exactly
+as the full pipeline would: the same `Tdk`, the same note, the same
+frames and instantiations. `Sema::full_deduction` (doc-hidden, set from
+`ParseOptions::full_deduction`) turns all of them off, so tests can
+compare the two paths (`crates/kiln_parse/tests/deduction_prefilter.rs`).
+- **Call pre-filter.** Before `add_template_candidate` builds the
+  argument lists, `deduce_call_prefail` runs the checks that come before
+  step 1 and need neither substitution nor allocation. These are an
+  invalid template and an argument count below the minimum
+  (`TooFewArguments`). On a failure, the candidate is added as the full
+  path would add it. The `DeductionFailure` for `TooFewArguments` is
+  formed only when `add_candidate`'s own arity check leaves the pattern
+  viable, which is the only case where it is kept.
+- **Substituted integer NTTP.** In step 1, an explicit non-type argument
+  that is a `SubstNonTypeTemplateParmExpr` over an integer literal is
+  converted without evaluation (`substituted_int_nttp_arg`). This
+  requires that the literal's type and the parameter's type are the same
+  builtin integral type (not an enumeration), that the value fits, and
+  that no evaluation side state is pending.
+  `Expr` → `TemplateArg::value` is then the value the evaluation
+  would have produced.
+- Explicit arguments are still substituted on every attempt, because the
+  `ExplicitTemplateArgumentSubstitution` frame counts toward
+  `-fkiln-instantiation-report`.
+
 ### 6.2 The deduction core: `deduce(P, A, flags, &mut DeducedArgs) -> Tdk`
 
 This is [temp.deduct.type]. It is a structural recursion over canonical

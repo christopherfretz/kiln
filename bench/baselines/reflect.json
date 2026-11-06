@@ -38,12 +38,12 @@
         "mode": "syntax",
         "flags": "-std=c++26 -fsyntax-only -freflection --gcc-toolchain=/Volumes/AgentWork/kiln-helper/.toolchain/gcc-16.1.0-image/usr/local",
         "source_hash": "fnv1a64:b77263655fe3efd2",
-        "runs": 3,
-        "wall_ms_median": 664.295,
-        "wall_ms_min": 654.999,
-        "wall_ms_max": 666.474,
-        "spread_pct": 1.42,
-        "max_rss_kb": 78216,
+        "runs": 5,
+        "wall_ms_median": 571.604,
+        "wall_ms_min": 563.476,
+        "wall_ms_max": 579.634,
+        "spread_pct": 1.44,
+        "max_rss_kb": 66176,
         "oven": {
           "steps": 50714,
           "bytes": 72688,
@@ -53,15 +53,15 @@
           "peak_arena": 208,
           "frozen_bytes": 6061,
           "static_bytes": 32944,
-          "evaluations": 45514
+          "evaluations": 17361
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/wp645-bin/branch/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-657/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-05T162057"
+        "recorded": "2026-11-06T112237"
       }
     }
   }
