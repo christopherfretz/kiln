@@ -654,6 +654,18 @@ impl Sema<'_, '_> {
         let _t = crate::templ::deduce_stats::timer("fn_min_args");
         #[cfg(feature = "op-stats")]
         crate::templ::deduce_stats::distinct("fn_min_args", u64::from(f.index()));
+        // Recorded with the parameter list (WP-663).
+        if let Some(m) = self.ast.decls.min_args(f) {
+            debug_assert_eq!(m, self.count_min_args(f), "recorded min args of {f:?}");
+            return m;
+        }
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::distinct("fn_min_args counted", u64::from(f.index()));
+        self.count_min_args(f)
+    }
+
+    /// [`Sema::fn_min_args`], counted from the parameters.
+    fn count_min_args(&self, f: DeclId) -> usize {
         let Some(fd) = self.ast.decls.function(f) else { return 0 };
         let n = self.ast.lists.get(fd.params).len();
         // clang's getMinRequiredArguments: a parameter pack is not
