@@ -89,7 +89,7 @@ impl Cg<'_> {
         };
         let rty = self.lty(ast.exprs.get(e).ty());
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
-        if !self.x86_builtin_features_ok(row, e, &args) {
+        if !self.x86_builtin_features_ok(&row, e, &args) {
             let p = if rty == LTy::VOID { None } else { Some(V::C(self.m.const_poison(rty))) };
             return Ok(BuiltinCall::Emitted(p));
         }

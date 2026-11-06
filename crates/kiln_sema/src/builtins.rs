@@ -293,7 +293,7 @@ impl Sema<'_, '_> {
         if let Some(p) = self.ast.prev(f) {
             if let Some(id) = self.ast.decls.builtin_id(p) {
                 if !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
-                    && let Some(info) = builtin::info(id).copied()
+                    && let Some(info) = builtin::info(id)
                     && !self.check_builtin_redecl_exc_spec(f, &info, self.ast.decls.get(p).loc())
                 {
                     return;
@@ -312,7 +312,7 @@ impl Sema<'_, '_> {
         if !self.target_has_builtin(id) {
             return;
         }
-        let Some(info) = builtin::info(id).copied() else { return };
+        let Some(info) = builtin::info(id) else { return };
         if !self.c_linkage_file_scope_fn_of_type(f, info.sig) {
             self.check_builtin_redecl(f, &info);
             return;
@@ -534,7 +534,7 @@ impl Sema<'_, '_> {
         if !self.target_has_builtin(id) {
             return None;
         }
-        let info = *builtin::info(id)?;
+        let info = builtin::info(id)?;
         let (ret, params, variadic) = self.builtin_signature(info.sig);
         let has = |a: u8| info.attrs & a != 0;
         let fi =

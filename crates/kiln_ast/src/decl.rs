@@ -5368,13 +5368,14 @@ pub mod builtin {
             .map(|e| e.id)
     }
 
-    /// The table row of builtin `id`.
-    pub fn info(id: u32) -> Option<&'static Info> {
+    /// The table row of builtin `id`. By value: an x86 row is decoded on
+    /// access ([`x86::row`], WP-652).
+    pub fn info(id: u32) -> Option<Info> {
         if let Some(r) = neon::row(id) {
-            return Some(&r.info);
+            return Some(r.info);
         }
         if let Some(r) = x86::row(id) {
-            return Some(&r.info);
+            return Some(r.info);
         }
         ALL.iter()
             .chain(INT_MEM)
@@ -5391,6 +5392,7 @@ pub mod builtin {
             .chain(C_MATH_INTR)
             .chain(C_MATH_LIB)
             .find(|e| e.id == id)
+            .copied()
     }
 
     /// The parameters of builtin `id` that must be integer constant
@@ -5573,7 +5575,9 @@ pub mod builtin {
     /// clang's x86 header builtins (`_mm_pause`, `_mm_mfence`, ...;
     /// spec/landed/sema/WP-630.md). The generated table
     /// (`scripts/gen-x86-builtins.py`) is sorted by name; a row's id is
-    /// [`x86::BASE`] plus its index. Prototypes use [`Info::sig`]'s
+    /// [`x86::BASE`] plus its index. It is plain data (WP-652): its strings
+    /// are offsets into one blob, so a [`x86::Row`] is decoded on access and
+    /// returned by value. Prototypes use [`Info::sig`]'s
     /// notation with the NEON codes ([`neon`]): `V<N>` vectors, `x`
     /// `_Float16`, `y` `__bf16`, `I` an integer constant expression.
     pub mod x86 {
@@ -5622,7 +5626,7 @@ pub mod builtin {
             Only32Bit,
         }
 
-        /// One builtin.
+        /// One builtin, decoded from its table row ([`row`]).
         #[derive(Clone, Copy, Debug)]
         pub struct Row {
             /// The builtin.
@@ -5640,47 +5644,100 @@ pub mod builtin {
             pub header: bool,
         }
 
-        pub(crate) const fn r(
-            index: u32,
-            name: &'static str,
-            sig: &'static str,
+        /// A row of the generated table: `(offset, length)` of the name,
+        /// the prototype and the features string in
+        /// `x86_builtins::STRS`, and of the immediate checks in
+        /// `x86_builtins::IMMS`. No pointers, so the table needs no
+        /// load-time relocation and the binary holds one copy (WP-652).
+        #[derive(Clone, Copy, Debug)]
+        pub(crate) struct Packed {
+            name: u32,
+            sig: u32,
+            features: u32,
+            name_len: u8,
+            sig_len: u8,
+            features_len: u8,
             attrs: u8,
-            features: &'static str,
-            imms: &'static [Imm],
-        ) -> Row {
-            Row { info: Info { id: BASE + index, name, sig, attrs }, features, imms, header: false }
+            imms: u16,
+            imms_len: u8,
+            header: bool,
+        }
+
+        pub(crate) const fn r(
+            name: (u32, u8),
+            sig: (u32, u8),
+            attrs: u8,
+            features: (u32, u8),
+            imms: (u16, u8),
+        ) -> Packed {
+            Packed {
+                name: name.0,
+                sig: sig.0,
+                features: features.0,
+                name_len: name.1,
+                sig_len: sig.1,
+                features_len: features.1,
+                attrs,
+                imms: imms.0,
+                imms_len: imms.1,
+                header: false,
+            }
         }
 
         pub(crate) const fn h(
-            index: u32,
-            name: &'static str,
-            sig: &'static str,
+            name: (u32, u8),
+            sig: (u32, u8),
             attrs: u8,
-            features: &'static str,
-            imms: &'static [Imm],
-        ) -> Row {
-            Row { header: true, ..r(index, name, sig, attrs, features, imms) }
+            features: (u32, u8),
+            imms: (u16, u8),
+        ) -> Packed {
+            Packed { header: true, ..r(name, sig, attrs, features, imms) }
+        }
+
+        /// The `len` bytes of the string blob at `at` (ASCII, so any range
+        /// is on character boundaries).
+        fn text(at: u32, len: u8) -> &'static str {
+            let at = at as usize;
+            &crate::x86_builtins::STRS[at..at + usize::from(len)]
+        }
+
+        /// The number of rows.
+        pub fn len() -> usize {
+            crate::x86_builtins::X86.len()
         }
 
         /// Every row, sorted by name.
-        pub fn all() -> &'static [Row] {
-            crate::x86_builtins::X86
+        pub fn rows() -> impl Iterator<Item = Row> {
+            (0..len()).filter_map(|i| row(BASE + i as u32))
         }
 
         /// The x86 builtin spelled `name`.
         pub fn by_name(name: &str) -> Option<u32> {
-            let t = all();
-            t.binary_search_by(|r| r.info.name.cmp(name)).ok().map(|i| t[i].info.id)
+            let t = &crate::x86_builtins::X86;
+            let i = t.binary_search_by(|p| text(p.name, p.name_len).cmp(name)).ok()?;
+            Some(BASE + i as u32)
         }
 
         /// The row of builtin `id`, if it is an x86 builtin.
-        pub fn row(id: u32) -> Option<&'static Row> {
-            all().get(usize::try_from(id.checked_sub(BASE)?).ok()?)
+        pub fn row(id: u32) -> Option<Row> {
+            let p = crate::x86_builtins::X86.get(usize::try_from(id.checked_sub(BASE)?).ok()?)?;
+            let imms = usize::from(p.imms);
+            Some(Row {
+                info: Info {
+                    id,
+                    name: text(p.name, p.name_len),
+                    sig: text(p.sig, p.sig_len),
+                    attrs: p.attrs,
+                },
+                features: text(p.features, p.features_len),
+                imms: &crate::x86_builtins::IMMS[imms..imms + usize::from(p.imms_len)],
+                header: p.header,
+            })
         }
 
         /// Whether `id` is an x86 builtin.
         pub fn is_x86(id: u32) -> bool {
-            row(id).is_some()
+            id.checked_sub(BASE).is_some_and(|i| (i as usize) < len())
         }
 
         /// The header that declares header builtin `id` (clang's

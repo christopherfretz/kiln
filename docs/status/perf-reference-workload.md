@@ -2191,8 +2191,140 @@ timings.
 - `vm.rs:857` the `IntArith` arm. Its result write lost a register to
   the new step: +3 Ir per op on `wide-struct-read`, +0.56% Ir and not
   visible in wall time.
-- `crates/kiln_ast/src/x86_builtins.rs:11` `X86` is a `const` slice, and
-  the baseline drift above follows from it. Make it a `static`, and
-  consider pack-relative relocations or offset-encoded strings. The 19
-  `bench/oven` baselines that still report `REGRESSED (mem)` need
-  re-recording once that lands, or now if the startup cost is accepted.
+- `crates/kiln_ast/src/x86_builtins.rs:11` `X86` was a `const` slice,
+  and the baseline drift above follows from it. Done in WP-652 below:
+  the table is plain data, and every `bench/oven` baseline is
+  re-recorded.
+
+## WP-652: start-up RSS
+
+The WP-651 "Baseline drift" follow-up. Every kiln++ compile, the empty
+TU included, started about 2.5 MB bigger in peak RSS than on 11-03
+(2db5dfc55), and about 2 MB of that was the x86 builtin table WP-630
+added. The spec is spec/landed/sema/WP-652.md.
+
+### Measurement
+
+Release build (the profile `cargo xtask bench` builds), the harness's
+command line (`-std=c++26 -fsyntax-only <//@ args>
+-fconstexpr-report=<file>`). RSS is the median of 5 runs under
+`/usr/bin/time -f '%e %M'`, in KB. Section sizes are in bytes, from
+`readelf -S`. Relocations are the `R_AARCH64_RELATIVE` count from
+`readelf -r`. Copies counts the runs of relocated data whose pointers
+lead to the same bytes as the table's: identical blocks of rows in
+`.data.rel.ro`.
+
+| binary | empty TU | table-nohdr | vector-alloc | .rela.dyn | .data.rel.ro | .rodata | RELATIVE relocs | table copies |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| 2db5dfc55 (11-03) | 6728 | 9596 | 37088 | 379,248 | 334,464 | 1,052,561 | 15,789 | 0 |
+| main 3d1afcb1c | 9204 | 12728 | 39420 | 1,606,608 | 1,416,160 | 1,591,604 | 66,929 | 4 |
+| `static` | 8356 | 11452 | 38344 | 1,146,936 | 948,856 | 1,440,084 | 47,776 | 1 |
+| plain data (this branch) | 7860 | 11484 | 38312 | 993,816 | 793,176 | 1,479,172 | 41,396 | 0 (in `.rodata`) |
+
+`size` (text / data): main 13,149,267 / 1,453,664; `static`
+12,537,279 / 986,360; branch 12,425,007 / 830,688. Wall time does not
+move (0.04 s on `table-nohdr`, 0.37 to 0.38 s on `vector-alloc` for
+every binary).
+
+On main the table was in the binary four times, not twice. Each crate
+or codegen unit that inlined an accessor (`all()`, `row()`, `by_name`)
+got its own copy of the `const`. Each copy was
+155,760 bytes of `.data.rel.ro` plus about 6,386 relocations (153 KB of
+`.rela.dyn`). The loader reads all of `.rela.dyn` and writes every
+patched page at start-up, so that is about 1.2 MB of binary touched
+before `main`.
+
+### The fix
+
+1. **`static`** (one copy): the empty TU drops by 848 KB. There are
+   still about 6,400 relocations, one per `&str` or slice in a row.
+2. **Plain data** (no pointers). `scripts/gen-x86-builtins.py` now
+   emits three statics:
+   - `STRS`, one `&str` holding the names in row order, then each
+     distinct prototype and features string once (about 63 KB);
+   - `IMMS`, the distinct immediate-check lists;
+   - `X86`, 1,947 rows of 20 bytes each, holding `u32`/`u8`
+     offset/length pairs into `STRS` and `IMMS`, the attributes and the
+     header mark.
+
+   The rows are `.rodata` with no relocation. The empty TU drops by a
+   further 496 KB, 1,344 KB in all. The generator's `--reemit` rewrote
+   the table from its existing rows, without probing clang.
+
+The stop rule was "the table's cost is under 100 KB". Its start-up cost
+is now one relocation, and its pages are read only when a lookup touches
+them, so the rule is met. `by_name` is still a binary search, and an id
+is still an index. `row` and `builtin::info` now decode the row and
+return it by value. The generator and the decoder are about 270 lines.
+
+### Bench before/after
+
+`cargo xtask bench bench/oven` was run with main's binary and the
+branch's, alternating, 2 rounds each, without recording. Load was 6.3
+to 7.6. Each cell is the entry's median of 5 runs; both rounds are
+shown.
+
+The baselines were then re-recorded with the branch binary (load 6.9),
+with the note "startup RSS drift (WP-652)". That covers all 23 entries:
+- 18 reported `REGRESSED (mem)`, `churn-string` with `(bytes)` too;
+- the other 5 reported `improved`, because their baselines were
+  recorded on 11-05 and 11-06 with the drift included.
+
+No entry's time regressed against its old baseline, so none was held
+back. `vector-alloc` is +0.3%, within its 2.3% spread. A run after the
+recording is clean: 0 regressed, 0 improved.
+
+| entry | old baseline KB (recorded) | main KB | branch KB | branch − main | new baseline KB | old → new baseline ms |
+|---|--:|--:|--:|--:|--:|--:|
+| `builtins-memcpy` | 9,064 (11-03) | 12,248, 12,248 | 10,988, 10,980 | -1,264 | 10,988 | 102.2 → 14.4 |
+| `builtins-popcount` | 8,800 (11-03) | 11,900, 12,076 | 10,768, 10,756 | -1,226 | 10,768 | 100.7 → 59.8 |
+| `builtins-strlen` | 8,860 (11-03) | 12,264, 12,264 | 10,872, 10,872 | -1,392 | 10,872 | 71.2 → 15.2 |
+| `churn-list` | 9,072 (11-03) | 12,164, 12,164 | 10,892, 10,892 | -1,272 | 10,896 | 50.3 → 24.5 |
+| `churn-mixed` | 9,000 (11-03) | 12,200, 12,200 | 10,832, 10,836 | -1,366 | 10,836 | 168.9 → 13.2 |
+| `churn-string` | 9,648 (11-03) | 12,700, 12,700 | 11,348, 11,348 | -1,352 | 11,348 | 518.4 → 406.6 |
+| `churn-tree` | 9,436 (11-03) | 12,708, 12,692 | 11,372, 11,372 | -1,328 | 11,372 | 45.6 → 30.5 |
+| `churn-vector` | 12,608 (11-06) | 12,608, 12,608 | 11,448, 11,452 | -1,158 | 11,452 | 484.3 → 468.6 |
+| `class-churn` | 11,156 (11-03) | 14,292, 14,276 | 12,860, 12,856 | -1,426 | 12,860 | 177.7 → 132.8 |
+| `fib` | 9,040 (11-03) | 11,904, 11,908 | 10,956, 10,956 | -950 | 10,952 | 39.6 → 9.7 |
+| `sieve` | 14,832 (11-03) | 18,376, 18,392 | 17,352, 17,356 | -1,030 | 17,356 | 141.8 → 73.8 |
+| `sieve-nohdr` | 8,824 (11-03) | 11,984, 11,980 | 10,852, 10,844 | -1,134 | 10,852 | 107.8 → 17.4 |
+| `soa` | 9,464 (11-03) | 12,212, 12,212 | 11,164, 11,180 | -1,040 | 11,180 | 120.7 → 68.8 |
+| `sort` | 22,588 (11-03) | 26,740, 26,764 | 25,460, 25,452 | -1,296 | 25,476 | 381.2 → 185.4 |
+| `sort-nohdr` | 8,844 (11-03) | 12,048, 12,048 | 10,904, 10,912 | -1,140 | 10,912 | 60.5 → 25.1 |
+| `string` | 25,176 (11-03) | 28,084, 28,072 | 26,744, 26,752 | -1,330 | 26,764 | 359.0 → 187.5 |
+| `table` | 17,968 (11-03) | 21,464, 21,464 | 20,428, 20,428 | -1,036 | 20,428 | 177.4 → 103.6 |
+| `table-nohdr` | 12,728 (11-06) | 12,728, 12,728 | 11,468, 11,488 | -1,250 | 11,480 | 47.3 → 45.5 |
+| `trial-rollback` | 9,228 (11-03) | 12,028, 12,024 | 10,828, 10,848 | -1,188 | 10,840 | 94.4 → 38.6 |
+| `vector-alloc` | 39,500 (11-06) | 39,496, 39,436 | 38,392, 38,280 | -1,130 | 38,332 | 385.8 → 387.0 |
+| `virtual-dispatch` | 8,928 (11-03) | 12,352, 12,352 | 11,212, 11,204 | -1,144 | 11,212 | 66.9 → 23.1 |
+| `wide-struct-read` | 29,964 (11-05) | 29,864, 29,860 | 28,608, 28,608 | -1,254 | 28,600 | 345.4 → 283.4 |
+| `wide-struct-store` | 31,692 (11-05) | 32,940, 32,940 | 31,664, 31,664 | -1,276 | 31,668 | 154.2 → 132.5 |
+
+The old baselines' times were stale as well. Perf work since 11-03 sped
+most entries up without re-recording them, so the new baselines also
+take those wins. `churn-string`'s `(bytes)` flag was its `static_bytes`
+counter, 0 → 8. It was not RSS, and it comes from an earlier change
+(the steps, `bytes` and `peak_bytes` are identical). The re-recording
+takes it.
+
+### What remains
+
+The empty TU is 7,860 KB against 6,728 KB on 2db5dfc55 (+1,132 KB);
+the bench entries are about 1.9 MB over their 11-03 baselines. That
+matches the binary's remaining relocation growth since 2db5dfc55:
+`.rela.dyn` +614,568 bytes and `.data.rel.ro` +458,712. The largest
+known piece:
+- `crates/kiln_ast/src/neon_builtins.rs:11` `NEON` is a `const &[Row]`
+  with the same shape, also in four copies (about 7,200 duplicate
+  relocations). Making it `static` was measured at −500 KB on the empty
+  TU (7,360 KB), but it is not in this package. The table is
+  `@generated` by `scripts/gen-neon-builtins.py:107`, which needs a
+  clang build directory to run. The `--reemit` approach used here
+  applies to it.
+
+Other candidates:
+- link with packed relative relocations (`-z pack-relative-relocs`),
+  which shrinks `.rela.dyn` for every remaining pointer;
+- the `pub const` builtin tables in `crates/kiln_ast/src/decl.rs` (the
+  `ALL` and libm lists) may be duplicated the same way. They were not
+  measured.
