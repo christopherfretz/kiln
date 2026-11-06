@@ -56,6 +56,8 @@ impl Sema<'_, '_> {
         args: ConvertedArgs,
         loc: Loc,
     ) -> Result<DeclId, ()> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("get_function_spec_signature");
         let tmpl = self.ast.first(tmpl);
         let poi = self.templ.deduce_poi.take().unwrap_or(loc);
         if let Some(s) = self.ast.templates.find_spec(tmpl, args.canonical) {
@@ -228,6 +230,8 @@ impl Sema<'_, '_> {
     /// The parameter types of `f`'s function type (`ERROR`s for a
     /// declaration without a prototype).
     pub(crate) fn proto_param_types(&self, f: DeclId) -> (Vec<QualType>, bool) {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("proto_param_types");
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         // The written (sugared) prototype first, so mismatch notes print
         // the parameter as spelled; the canonical one as the fallback.

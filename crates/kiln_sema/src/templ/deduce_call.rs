@@ -63,6 +63,14 @@ impl DeductionFailure {
     }
 }
 
+/// Marks the deduction step reached (feature `op-stats`).
+macro_rules! stat_step {
+    ($s:literal) => {
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::step($s);
+    };
+}
+
 impl Sema<'_, '_> {
     /// The explicitly given pack (index, length) that the trailing
     /// function parameter pack with pattern `pat` expands
@@ -78,6 +86,8 @@ impl Sema<'_, '_> {
         params: &[DeclId],
         d: &DeducedArgs,
     ) -> Option<(u16, usize)> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("trailing_pack_skip");
         let types = &self.ast.types;
         let mut q = types.canonical(pat);
         while let Some(p) = types.pointee(q) {
@@ -108,6 +118,8 @@ impl Sema<'_, '_> {
         shown: ArgListId,
         loc: Loc,
     ) -> Option<Box<DeductionFailure>> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("check_partial_pack_lengths");
         let n = self.ast.types.args(shown).len();
         let last = n.checked_sub(1)?;
         if !matches!(d.args.get(last).map(TemplateArg::view), Some(ArgView::Pack(_))) {
@@ -162,6 +174,8 @@ impl Sema<'_, '_> {
         held: &mut Vec<Diag>,
         f: impl FnOnce(&mut Self) -> R,
     ) -> Option<(R, Result<(), Option<Diag>>)> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("in_sfinae_held");
         if !self.push_inst_frame(kind, ft, ft, loc) {
             return None;
         }
@@ -203,6 +217,8 @@ impl Sema<'_, '_> {
         opts: &[IcsOptions],
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("deduce_call");
         self.deduce_spec(ft, explicit, Some((args, opts)), DeduceTarget::None, loc)
     }
 
@@ -309,8 +325,58 @@ impl Sema<'_, '_> {
 
     /// [`Self::deduce_call`]; `call` `None` for no call (no arity
     /// check, nothing deduced from arguments).
-    #[allow(clippy::too_many_lines, reason = "the steps of §6.1 in order")]
     fn deduce_spec(
+        &mut self,
+        ft: DeclId,
+        explicit: Option<ArgListId>,
+        call: Option<(&[ArgInfo], &[IcsOptions])>,
+        target: DeduceTarget,
+        loc: Loc,
+    ) -> Result<DeclId, Box<DeductionFailure>> {
+        #[cfg(feature = "op-stats")]
+        let (entry, key, outer) = {
+            let entry = match target {
+                DeduceTarget::None if call.is_some() => "call",
+                DeduceTarget::None => "explicit",
+                DeduceTarget::FuncAddr(_) => "funcaddr",
+                DeduceTarget::Decl(_) => "decl",
+                DeduceTarget::Conversion(_) => "conv",
+            };
+            let key = call.map(|(a, _)| {
+                let v: Vec<_> =
+                    a.iter().map(|x| (x.ty, x.vk as u8, x.list.is_some())).collect();
+                crate::templ::deduce_stats::key(
+                    self.ast.first(ft).index(),
+                    explicit.map(ArgListId::index),
+                    &v,
+                )
+            });
+            let outer = crate::templ::deduce_stats::begin(self.ast.first(ft).index());
+            (entry, key, outer)
+        };
+        let r = self.deduce_spec_steps(ft, explicit, call, target, loc);
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::tally(
+            "template",
+            format!(
+                "{} {:?} explicit={}",
+                self.decl_name_str(self.ast.decls.get(ft).name()),
+                r.as_ref().map_or_else(|f| f.tdk, |_| Tdk::Success),
+                explicit.is_some()
+            ),
+        );
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::end(
+            entry,
+            r.as_ref().map_or_else(|f| f.tdk, |_| Tdk::Success),
+            key,
+            &outer,
+        );
+        r
+    }
+
+    #[allow(clippy::too_many_lines, reason = "the steps of §6.1 in order")]
+    fn deduce_spec_steps(
         &mut self,
         ft: DeclId,
         explicit: Option<ArgListId>,
@@ -325,6 +391,7 @@ impl Sema<'_, '_> {
         let n = params.len();
         let mut d = DeducedArgs::new(depth, n);
         d.loc = loc;
+        stat_step!("invalid");
         let Some(templated) = self.templated_function(ft) else {
             return Err(DeductionFailure::new(Tdk::MiscellaneousDeductionFailure, d));
         };
@@ -383,6 +450,7 @@ impl Sema<'_, '_> {
         // arguments, so `f<void>()` of `f(T&)` is "requires 1 argument"
         // rather than a substitution failure. A function parameter pack
         // anywhere leaves the maximum to the check after substitution.
+        stat_step!("arity-pre");
         if let Some((a, _)) = call {
             if a.len() < self.fn_min_args(templated) {
                 return Err(DeductionFailure::new(Tdk::TooFewArguments, d));
@@ -393,7 +461,10 @@ impl Sema<'_, '_> {
                 return Err(DeductionFailure::new(Tdk::TooManyArguments, d));
             }
         }
+        stat_step!("explicit");
         if !written.is_empty() {
+            #[cfg(feature = "op-stats")]
+            let _te = crate::templ::deduce_stats::timer("step-explicit");
             if written.len() > max_written && !has_pack {
                 // clang: a substitution failure with the arity message.
                 let msg = self
@@ -506,6 +577,8 @@ impl Sema<'_, '_> {
                 }
             }
             let sugared_levels = self.prior_levels(ft, depth, &sugared);
+            #[cfg(feature = "op-stats")]
+            let _te2 = crate::templ::deduce_stats::timer("step-explicit-subst");
             let r = self.in_sfinae_held(
                 FrameKind::ExplicitArgSubstitution,
                 ft,
@@ -594,6 +667,7 @@ impl Sema<'_, '_> {
         // viability: a non-trailing one is a non-deduced context, deduced
         // empty, so `f(1, 2, 3)` of `f(T..., U)` is `f<int>` with "requires
         // 1 argument".
+        stat_step!("arity");
         let nargs = args.len();
         let fn_pack = ptys.last().and_then(|&t| crate::templ::pack::type_pattern(self, t));
         let any_pack = ptys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
@@ -609,6 +683,7 @@ impl Sema<'_, '_> {
         // declaration's must then be the same placeholder (the caller
         // compares the types), the address of a function deduces it from
         // the specialization's definition and compares it below.
+        stat_step!("target");
         let placeholder_ret = matches!(target, DeduceTarget::FuncAddr(_) | DeduceTarget::Decl(_))
             && self.ast.types.proto(pfn).is_some_and(|p| self.contains_placeholder(p.ret()));
         if let DeduceTarget::FuncAddr(a) | DeduceTarget::Decl(a) = target {
@@ -678,6 +753,7 @@ impl Sema<'_, '_> {
         // pack is fixed before any deduction: a pack deduced from an
         // earlier parameter (`tys<Tf...>`) is not a prefix of the
         // trailing function parameter pack.
+        stat_step!("deduce");
         let skip = fn_pack.and_then(|pat| self.trailing_pack_skip(pat, &params, &d));
         // [temp.deduct.call]/4: the (argument index, P, adjusted A) of
         // each deduced-from argument, checked against the deduced A.
@@ -757,6 +833,7 @@ impl Sema<'_, '_> {
                 originals.push((i, p, self.adjusted_call_arg(p, a, d.depth)));
             }
         }
+        stat_step!("defaults");
         // §6.1 step 3: defaults, then completeness.
         for (j, &p) in params.iter().enumerate() {
             // An expanded parameter pack needs one argument per element
@@ -789,6 +866,8 @@ impl Sema<'_, '_> {
                 d.info.param = u16::try_from(j).ok();
                 return Err(DeductionFailure::new(Tdk::Incomplete, d));
             };
+            #[cfg(feature = "op-stats")]
+            let _td = crate::templ::deduce_stats::timer("step-defaults");
             let prior: Vec<TemplateArg> = d.args[..j].to_vec();
             let shown = self.ast.types.arg_list(&prior);
             let r = self.in_sfinae_held(
@@ -821,6 +900,7 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        stat_step!("nondep");
         let sugared = self.ast.types.arg_list(&d.args);
         // [temp.deduct.call]/10 (CWG1391): an argument that does not
         // convert to its non-dependent P fails deduction before the
@@ -843,10 +923,12 @@ impl Sema<'_, '_> {
         // before the deduced arguments are substituted into the function
         // type, so a candidate failing both reports the constraints
         // (spec/sema-templates.md §6.1).
+        stat_step!("constraints");
         let early = self.clang_compat >= 22;
         if early {
             self.deduced_constraints(ft, depth, &d, sugared, loc)?;
         }
+        stat_step!("signature");
         // §6.1 step 4: the specialization, its signature substituted.
         let canonical = self.ast.types.canonical_args(sugared);
         let conv = ConvertedArgs { sugared, canonical };
@@ -872,9 +954,11 @@ impl Sema<'_, '_> {
                 // type has been substituted without failure, so a
                 // candidate failing both reports the substitution failure
                 // (clang 19 `FinishTemplateArgumentDeduction`; §6.1, §8.3).
+                stat_step!("constraints");
                 if !early {
                     self.deduced_constraints(ft, depth, &d, sugared, loc)?;
                 }
+                stat_step!("post");
                 // The explicit-specifier, once the constraints are
                 // satisfied (clang `instantiateExplicitSpecifierDeferred`).
                 if self.templ.explicit_pending.contains(&spec) {
@@ -973,6 +1057,8 @@ impl Sema<'_, '_> {
         sugared: ArgListId,
         loc: Loc,
     ) -> Result<(), Box<DeductionFailure>> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("deduced_constraints");
         let constraints = self.associated_constraints(ft);
         if constraints.is_empty() {
             return Ok(());
@@ -989,6 +1075,8 @@ impl Sema<'_, '_> {
     }
 
     fn has_deducible_params(&mut self, p: QualType, d: &DeducedArgs, pattern: bool) -> bool {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("has_deducible_params");
         let mut probe = DeducedArgs::new(d.depth, d.args.len());
         probe.loc = d.loc;
         // The packs a pack expansion's pattern names, element-wise.
@@ -1005,6 +1093,8 @@ impl Sema<'_, '_> {
     /// itself matches the expansion as a whole, so
     /// [`Self::has_deducible_params`] does not see its packs.
     fn has_deducible_pack_expansion(&mut self, p: QualType, d: &DeducedArgs) -> bool {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("has_deducible_pack_expansion");
         let args = match self.ast.types.canonical_view(p) {
             TypeView::Pointer(i) | TypeView::LValueRef(i) | TypeView::RValueRef(i) => {
                 return self.has_deducible_pack_expansion(i, d);
@@ -1053,6 +1143,8 @@ impl Sema<'_, '_> {
     /// reference's lvalue is `A&`; a non-reference `P` decays `A` and
     /// drops its top-level cv.
     fn adjusted_call_arg(&mut self, p: QualType, a: &ArgInfo, depth: u16) -> QualType {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("adjusted_call_arg");
         let t = &mut self.ast.types;
         match t.canonical_view(p) {
             TypeView::RValueRef(inner)
@@ -1088,6 +1180,8 @@ impl Sema<'_, '_> {
         spec: DeclId,
         originals: &[(usize, QualType, QualType)],
     ) -> Option<(usize, QualType, QualType)> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("original_arg_mismatch");
         if originals.is_empty() {
             return None;
         }
@@ -1238,6 +1332,8 @@ impl Sema<'_, '_> {
     /// Deduces from one call argument `a` for parameter type `p`
     /// ([temp.deduct.call]/2–5).
     fn deduce_call_arg(&mut self, p: QualType, a: &ArgInfo, d: &mut DeducedArgs) -> Tdk {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("deduce_call_arg");
         let t = &self.ast.types;
         let mut p = t.canonical(p);
         let mut flags = TdfFlags::NONE;
@@ -1365,6 +1461,8 @@ impl Sema<'_, '_> {
         undeduced: &[bool],
         d: &mut DeducedArgs,
     ) {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("resugar_call_deduction");
         if a.list.is_some()
             || a.expr.is_some_and(|e| !matches!(self.overload_set_arg(e), OverloadArg::NotASet))
         {
@@ -1443,6 +1541,8 @@ impl Sema<'_, '_> {
     /// or what it refers or points to or the element of an array, at any
     /// depth (`S<T>` in `S<T> (&)[3]`).
     fn resugar_mismatch(&mut self, p: QualType, d: &mut DeducedArgs) {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("resugar_mismatch");
         let Some(first) = d.info.first else { return };
         if let ArgView::Template(n) = first.view() {
             if let Some(w) = self.written_template_in(p, n) {
@@ -1492,6 +1592,8 @@ impl Sema<'_, '_> {
     /// argument type, unqualified, or what it refers or points to or its
     /// element, at any depth, as [`Self::resugar_mismatch`] does for `P`.
     fn resugar_arg_mismatch(&mut self, a: QualType, d: &mut DeducedArgs) {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("resugar_arg_mismatch");
         let Some(second) = d.info.second else { return };
         if let ArgView::Template(n) = second.view() {
             if let Some(w) = self.written_template_in(a, n) {

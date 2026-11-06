@@ -41,7 +41,18 @@ impl Sema<'_, '_> {
     /// (the caller then makes `new` silently invalid, clang's
     /// `MergeFunctionDecl` "if the old declaration is invalid, just give
     /// up here").
+    #[cfg_attr(feature = "op-stats", track_caller)]
     pub(crate) fn pick_prev_function(&mut self, cands: &[DeclId], new: NewFn) -> Option<DeclId> {
+        #[cfg(feature = "op-stats")]
+        let (at, before) =
+            (std::panic::Location::caller(), crate::templ::deduce_stats::prev_begin());
+        let r = self.pick_prev_function_in(cands, new);
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::prev_end(at, cands.len(), before);
+        r
+    }
+
+    fn pick_prev_function_in(&mut self, cands: &[DeclId], new: NewFn) -> Option<DeclId> {
         let mut other = None;
         let mut invalid = None;
         let mut found = |s: &Self, d: DeclId| {
@@ -100,6 +111,8 @@ impl Sema<'_, '_> {
         old_head: Option<TemplateParamListId>,
         new: NewFn,
     ) -> bool {
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::compared();
         let Some(oty) = self.declared_fn_type(old) else { return false };
         let t = &self.ast.types;
         let (Some(po), Some(pn)) = (t.proto(oty).copied(), t.proto(new.ty).copied()) else {

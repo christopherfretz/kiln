@@ -287,6 +287,8 @@ impl Sema<'_, '_> {
         first_opts: IcsOptions,
         loc: Loc,
     ) {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("add_template_candidate");
         // A non-member operator template's first parameter takes the
         // object operand ([over.match.oper]/2), as does an explicit
         // object parameter ([over.match.funcs.general]/4).
@@ -310,7 +312,30 @@ impl Sema<'_, '_> {
             let o = if i == 0 && !oper_fn { first_opts } else { IcsOptions::NONE };
             opts.push(o.with(IcsOptions::CANDIDATE_ARG));
         }
-        match self.deduce_call(ft, explicit, &args, &opts, loc) {
+        #[cfg(feature = "op-stats")]
+        let frame = crate::templ::deduce_stats::cand_begin();
+        let r = self.deduce_call(ft, explicit, &args, &opts, loc);
+        #[cfg(feature = "op-stats")]
+        let tdk = r.as_ref().map_or_else(|f| f.tdk, |_| crate::templ::deduce::Tdk::Success);
+        self.add_template_candidate_with(set, ft, found, kind, first_opts, pattern, lead, r);
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::cand_end(&frame, tdk);
+    }
+
+    /// [`Self::add_template_candidate`] with the deduction's result `r`.
+    #[allow(clippy::too_many_arguments, reason = "add_template_candidate's state")]
+    fn add_template_candidate_with(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        ft: DeclId,
+        found: DeclId,
+        kind: CandidateKind,
+        first_opts: IcsOptions,
+        pattern: DeclId,
+        lead: bool,
+        r: Result<DeclId, Box<crate::templ::deduce_call::DeductionFailure>>,
+    ) {
+        match r {
             Ok(spec) => {
                 let nondep = self.templ.explicit_nondep;
                 self.add_candidate(set, spec, found, kind, first_opts);
