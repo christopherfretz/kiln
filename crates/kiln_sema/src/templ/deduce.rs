@@ -8,7 +8,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::ArgListId;
 use kiln_ast::types::{
-    ArgView, ExcSpec, ExprOperand, NoexceptValue, TemplateArg, TypeFlags, TypeView,
+    ArgView, ExcSpec, ExprOperand, NoexceptValue, TemplateArg, TypeFlags, TypeKind, TypeView,
 };
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
@@ -521,7 +521,7 @@ impl Sema<'_, '_> {
         let t = &self.ast.types;
         match a.view() {
             ArgView::Pack(_) | ArgView::TemplateExpansion { .. } => true,
-            ArgView::Type(q) => matches!(t.canonical_view(q), TypeView::PackExpansion { .. }),
+            ArgView::Type(q) => t.canonical_kind(q) == TypeKind::PackExpansion,
             ArgView::Expr { expr, .. } => {
                 self.ast.exprs.get(expr).kind() == ExprKind::PackExpansionExpr
             }

@@ -546,8 +546,8 @@ share of the named profile that the work could remove.
 | F4 | **Partly done (WP-654):** printing Ir −53% on `accessor-wide-emit` (−46% to −50% on the other emit shapes), text byte-identical; the bitcode writer is NO-GO (its parse saving is 0.35% of the `-c -O2` wall); see "WP-654: IR printer". Hand LLVM bitcode, or skip the text round trip | kiln_llvm printer, kiln_driver `ir_passes` | Printing is 11.1% of R3, and `opt` spends 0.9 s parsing text at S8 N=160 | About 11% of R3's frontend plus the parse | Medium: a bitcode writer is new code | M–L |
 | F5 | **Partly done (WP-645):** allocations −17% to −48% on the in-tree shapes; the remaining sites are in "WP-645: allocation churn". Cut allocation churn | kiln_sema, kiln_ast (`Vec` growth sites), kiln_codegen | `malloc`/`free` and internals are 11–17% of self in every profile. 99 M allocations in R3, 32% of them from `finish_grow` | 5–8% | Low | M |
 | F6 | **Done (WP-645).** Box the Oven inside `Sema` | kiln_sema `oven_bridge.rs` `with_oven` (`Option<Oven>` moved by value) | 414 Ir of `memcpy` per call, 4.6 M calls in R3 | About 1.8% of R3, about 1% of R1 | Low | S |
-| F7 | Fewer redeclaration-chain walks | kiln_ast `DeclArena::redecl`, `Ast::first`; kiln_sema `template_redecl` | 6.8% of R1, 4.4% of R3, 3.6% of R2; 60–150 M calls | 3–5% | Low–medium | M |
-| F8 | Cheaper `TypeContext::view` / `canonical_view` | kiln_ast `types` | 4–6% self, 190 M calls in R3 | 2–3% | Low | S–M |
+| F7 | **Partly done (WP-655):** `redecl` + `first` + `template_redecl` −76% to −88% Ir on tw, nt, aw and S8, from cached `FIRST`/`DEFINITION` bits and a lookup filter that no longer re-walks chains; what remains is in "WP-655: declaration and type queries". Fewer redeclaration-chain walks | kiln_ast `DeclArena::redecl`, `Ast::first`; kiln_sema `template_redecl` | 6.8% of R1, 4.4% of R3, 3.6% of R2; 60–150 M calls | 3–5% | Low–medium | M |
+| F8 | **Done (WP-655).** Kind queries read the node without building a `TypeView`: `view` + `canonical_view` −74% Ir on tw, −59% on S8, −40% on aw. Cheaper `TypeContext::view` / `canonical_view` | kiln_ast `types` | 4–6% self, 190 M calls in R3 | 2–3% | Low | S–M |
 | F9 | **Partly done (WP-648):** dispatch Ir per instruction −16% to −25% on the Oven shapes, `churn-vector` 9–12% faster, S7 unchanged (it is not dispatch-bound); what remains is in "WP-648: interpreter dispatch". Faster interpreter dispatch in safe Rust | kiln_oven `vm.rs` `run_loop` | 18.3% of R2, 24.8% of S7 | 5–10% of R2 | Medium | M–L |
 | F10 | **Partly done (WP-649):** `copy` is not the cost (no call on the Oven shapes, 0.02% of S7); the per-access bitmask and 8-byte read/write fast paths gave −0.8% to −3.8% Ir; the rest is in "WP-649: init-bit copy". Copy the init-bit map a word at a time | kiln_oven `mem.rs` `Memory::copy` | `set_bits` is 2.8% of R2 | About 2% of R2 | Low | S |
 | F11 | **Done (landed WP-644).** Cache subobject and union paths | kiln_oven `ty/path.rs` `Types::hop`, `vm.rs` `union_path`, `mutable_path`, `place_in_unions`, `extent_of`, `Types::has_subobject` | 9% of S7, about 3% of R2. Measured before the cache: 794,167 `union_path` walks over 21 distinct keys at S7 N = 40, about 7% of S7's instructions. After it: the walks' self cost at S7 N = 8 halves (96.8 M to about 52 M Ir) and S7 is 2.6% faster, with peak RSS unchanged ("WP-644: subobject path cache"). What remains is the per-access hash lookups (`vm.rs:2488` `union_path`, `ty/path.rs:144` `Types::hop`) | 3–6% of S7 (measured 2.6–3.7%) | Medium | M |
@@ -2567,7 +2567,7 @@ pre-sized instead of growing by doubling through `Formatter`.
 
 ### What remains
 
-- `crates/kiln_llvm/src/types.rs:502` `TypeTable::is_sized` is 156.6 M
+- **Done in WP-655.** `crates/kiln_llvm/src/types.rs:502` `TypeTable::is_sized` is 156.6 M
   self Ir on `accessor-wide-emit` (1.6%, the largest kiln_llvm function
   there). It walks the whole type on every call, and the builder calls
   it on each alloca, load, store and GEP (`builder.rs:482`, `:507`,
@@ -2582,3 +2582,354 @@ pre-sized instead of growing by doubling through `Formatter`.
   10% more of what is left.
 - Bitcode: NO-GO, as above. The production `-c -O2` wall is in `opt`'s
   passes and `llc`, not in parsing.
+
+## WP-655: declaration and type queries
+
+This WP covers F7 and F8, plus the `TypeTable::is_sized` walk that WP-654
+left open. `TypeContext::view` (37 Ir) and `DeclArena::redecl` (48 Ir)
+are both O(1). Their cost is how often they are called. The spec is
+spec/landed/ast/WP-655.md.
+
+### Measurement on main
+
+Main is 090e033e4. The shapes and flags are:
+- `bench/frontend/templates_wide.cpp` (tw), `templates_deep.cpp` (td),
+  `nested-template-ids.cpp` (nt) and `accessor-wide-emit.cpp` (aw):
+  `-std=c++26 -fsyntax-only`, except aw, which uses
+  `-S -emit-llvm -o /dev/null`;
+- S8 at N=100 (`cargo xtask gen-reflect --shape s8 --n 100`):
+  `-freflection`, libstdc++ from GCC 16.1.
+
+Each shape ran under callgrind with `--cache-sim=no`, `ulimit -v 3000000`
+and `timeout 1200`.
+
+Where the measurements come from:
+- **Self Ir** is the function's own cost plus the cost of its copies
+  inlined into callers, counted by source line.
+- **Calls** are exact counts from the temporary build described
+  below. Callgrind's own call counts run 1.7 to 1.9 times higher on this
+  host. The exception is `is_sized`: its counts are callgrind's.
+- **Callers.** Callgrind's caller edges are not reliable on this aarch64
+  host. It reports `redecl` calling itself, for example. So the exact
+  counts in tables (ii) and (iii) come from a temporary build.
+- **The temporary build** put `#[track_caller]` counters on the queried
+  functions and their `TypeContext` helpers. Each call is charged to the
+  first frame outside those helpers. That build was not committed, so
+  the release path has no counter.
+
+**(i) Self Ir, M, and calls.** Calls are in millions, and include calls
+that were inlined. "—" means under 0.1 M.
+
+| shape (total Ir) | `view` | `canonical_view` | `redecl` | `first` | `latest` | `definition` | `template_redecl` | `described_template` | `is_sized` |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| tw (3.00 G) | 295.4 (9.85%) | 36.2 | 333.5 (11.12%) | 6.7 | 2.8 | 22.0 | 16.2 | 0.8 | 0 |
+| &nbsp;&nbsp;calls | 8.23 | 7.12 | 5.40 | 1.11 | 0.31 | 3.28 | 0.34 | — | 0 |
+| td (0.73 G) | 2.8 | 0.3 | 15.4 (2.12%) | 0.4 | 0.1 | 1.0 | 1.3 | 0.1 | 0 |
+| &nbsp;&nbsp;calls | 0.09 | — | 0.26 | 0.06 | — | — | — | — | 0 |
+| nt (8.64 G) | 30.2 | 1.6 | 581.7 (6.73%) | 46.6 | 11.0 | 2.6 | 263.7 (3.05%) | 12.6 | 0 |
+| &nbsp;&nbsp;calls | 0.77 | 0.26 | 14.35 | 5.64 | 1.54 | 0.51 | 5.12 | — | 0 |
+| aw (9.75 G) | 581.7 (5.97%) | 59.6 | 617.9 (6.34%) | 33.1 | 11.6 | 11.9 | 102.3 (1.05%) | 3.7 | 158.7 (1.63%) |
+| &nbsp;&nbsp;calls | 17.0 | 11.1 | 11.5 | 5.45 | 1.34 | 1.97 | 1.91 | — | 7.74 |
+| S8 (11.37 G) | 660.7 (5.81%) | 56.0 | 730.5 (6.43%) | 42.6 | 5.2 | 22.7 | 172.3 (1.52%) | 8.7 | 0 |
+| &nbsp;&nbsp;calls | 19.0 | 11.0 | 14.27 | 6.16 | 0.89 | 3.72 | 2.73 | — | 0 |
+
+`template_info` has no out-of-line copy: it is always inlined, and its
+cost is inside `template_redecl` and `described_template`.
+
+On aw, the 7.74 M `is_sized` calls include the walk's own recursion.
+
+**(ii) Top callers, in calls (M), counted by the temporary build.**
+- `canonical_view` here includes the `TypeContext` helpers, such as
+  `builtin`, `as_record` and `element`, which all go through it.
+- "Kind" means the caller tests the canonical kind and reads at most one
+  field.
+
+| `view`/`canonical_view`, tw | M | use | | `view`/`canonical_view`, S8 | M | use |
+|---|--:|---|---|---|--:|---|
+| sema `decl.rs:358` `is_error_type` (`builtin`) | 0.60 | kind | | sema `decl.rs:358` `is_error_type` | 1.92 | kind |
+| sema `implicit.rs:219` `base_element` (`element`) | 0.55 | kind | | sema `templ/pack.rs:103` `type_pattern` | 0.76 | kind |
+| sema `overload/oper.rs:241` (`as_record`, `as_enum`) | 0.28 | kind | | sema `templ/subst/types.rs:214` `ty_node` | 0.65 | full view |
+| sema `implicit.rs:229` `element_class` (`as_record`) | 0.24 | kind | | sema `conv/qual.rs:58` | 0.60 | kind (pointer, member pointer, array) |
+| oven `compile.rs:1241` (`BitInt` width) | 0.23 | kind | | sema `conv/scs.rs:374` (`as_record` ×2) | 0.51 | kind |
+| sema `conv/rank.rs:83` (`is_integral`) | 0.21 | kind | | sema `conv/qual.rs:252` | 0.51 | kind (pointer pair) |
+| sema `vector_ops.rs:65` `vector_parts` | 0.21 | kind | | sema `templ/ctad.rs:391` | 0.41 | kind (deduced placeholder) |
+| sema `conv/qual.rs:252` | 0.18 | kind | | sema `templ/deduce.rs:846` | 0.34 | full view |
+| sema `conv/qual.rs:58` | 0.18 | kind | | sema `overload/ics.rs:334` (`as_record` ×2) | 0.32 | kind |
+| sema `conv/scs.rs:374` (`as_record` ×2) | 0.18 | kind | | ast `types/canon.rs:139` (`effective_quals`) | 0.31 | array walk |
+| abi `layout/props.rs:222` `strip_arrays` | 0.18 | array walk | | ast `types/print.rs:1067` | 0.30 | kind (sugar walk) |
+| sema `templ/ctad.rs:391` | 0.16 | kind | | sema `conv/mod.rs:471` (`builtin`) | 0.28 | kind |
+
+| `redecl`, tw | M | via | | `redecl`, S8 | M | via |
+|---|--:|---|---|---|--:|---|
+| sema `implicit.rs:92` `class_def` | 2.21 | `definition` | | ast `ast.rs` `redecls_of` | 1.15 | `latest` + `prev` per step |
+| ast `ast.rs` `redecls_of` | 0.52 | `latest` + `prev` | | sema `templ/mod.rs:1496` `head_template` | 1.15 | `first` (template) |
+| ast `ast.rs` `primary_context` | 0.27 | `definition` | | sema `implicit.rs:92` `class_def` | 0.70 | `definition` |
+| sema `templ/mod.rs:1496` `head_template` | 0.20 | `first` | | sema `templ/deduce.rs:708` | 0.68 | `first` ×2 (template) |
+| sema `implicit.rs:230` `element_class` | 0.12 | `definition` | | sema `templ/mod.rs:1498` | 0.57 | `definition` |
+| sema `decl.rs:6695` `tag_type` | 0.11 | `first` | | ast `ast.rs` `primary_context` | 0.54 | `definition` |
+| sema `templ/mod.rs:1498` | 0.10 | `definition` | | sema `lookup.rs:176` `filter` | 0.50 | `first` |
+| ast `builder.rs:440` `is_inline_namespace` | 0.09 | `first` | | sema `lookup.rs:177` `filter` (per kept result) | 0.43 | `first` |
+| sema `class/special/uses.rs:47` | 0.08 | `first` | | sema `templ/deduce_call.rs:322` | 0.42 | `first` (template) |
+| sema `implicit.rs:1108` `ensure_implicit` | 0.08 | `definition` | | sema `overload/ics.rs:1349` | 0.33 | `first` (template) |
+| sema `expr.rs:1552` | 0.07 | `prev` | | ast `ast.rs` `primary_context` | 0.27 | `first` (namespace) |
+| sema `using.rs:649` `ctor_shadows` | 0.06 | `definition` | | sema `conv/bases.rs:68` `same_class` | 0.24 | `first` ×2 |
+
+On nt, `lookup.rs:176`/`:177` is 6.14 M of the 14.35 M `redecl` calls
+and 3.07 M of the 5.12 M `template_redecl` calls. They all come from one
+loop: for each result, it calls `first` on every result already kept.
+
+**(iii) `first(d)` calls per distinct `d`** (temporary build):
+
+| shape | calls | distinct d | mean | median | p90 | max | top kinds |
+|---|--:|--:|--:|--:|--:|--:|---|
+| tw | 1.11 M | 60,315 | 18.4 | 11 | 28 | 140,033 | CXXRecord 0.61 M, ClassTemplate 0.23 M, CXXConstructor 0.22 M |
+| td | 59,859 | 3,006 | 19.9 | — | — | — | CXXRecord, ClassTemplate |
+| nt | 5.64 M | 2,006 | 2,809 | 256 | 256 | 5,123,233 | ClassTemplate 5.12 M (one template), CXXRecord 0.51 M |
+| aw | 5.45 M | 56,077 | 97 | 7 | 67 | 454,265 | CXXRecord, ClassTemplate, FunctionTemplate |
+| S8 | 6.16 M | 140,224 | 43.9 | 5 | 28 | 335,754 | CXXRecord 1.54 M, ClassTemplate 1.48 M, FunctionTemplate 0.78 M, Function 0.47 M |
+
+The calls concentrate on a few declarations. For most of them `d` is
+the first declaration, and the answer never changes.
+
+### Design note
+
+**(a) Kind predicates (F8).**
+- The `TypeContext` helpers stop building `TypeView`. These are:
+  - `builtin`, `pointee`, `element`, `array_size`, `as_atomic`,
+    `as_complex`, `as_record`, `as_enum`;
+  - `is_integral`, `effective_quals`, and the predicates built on them.
+
+  Each reads the canonical `TypeNode`, matches its kind, and decodes
+  only the field it returns. Their decoding is the same as `view`'s.
+- **New `is_error`.** `is_error(q)` is `canonical(q).ty() ==
+  TypeId::ERROR`, like `is_void`: builtins are interned once.
+  `is_error_type` (the largest single caller) becomes one load.
+- **New `view_if`.** `view_if(t, kind)` decodes `t` only when the node
+  has `kind`. It is for the callers that match a single variant of a
+  full `view`: `type_pattern`, `vector_parts`, the oven's `BitInt`
+  width, `ctad.rs:391`, `conv/qual.rs` and `deduce.rs:524`.
+- **Evidence:** (ii). In the top 12 on both shapes, 20 of 24 callers ask
+  for a kind or one field. The full-view callers (`ty_node`,
+  `deduce.rs:846`) stay as they are.
+
+**(b) First and definition bits (F7).**
+- **No room for a group index.** `DeclNode` is 28 bytes, and only bits
+  14 and 15 of `misc` are free. A `DeclId`-indexed side table of group
+  ids would add 4 bytes per declaration.
+- **Two cache bits instead**, each of which can only go from unset to set:
+  - `FIRST` means `first(d) == d`. `RedeclGroup.first` never changes,
+    and a declaration's redeclaration link is fixed when it is pushed.
+    So `DeclArena::push` sets `FIRST` for every non-template declaration
+    whose link has no `prev`. A template's first declaration is reached
+    through its pattern, so `template_decl` and `detached_template_decl`
+    set `FIRST` when the pattern has it and the pattern's link was set to
+    this template. Concepts have no pattern and are always first.
+  - `DEFINITION` means `definition(d) == Some(d)`. It is set at push for
+    declarations without a redeclaration group, and by
+    `Ast::set_definition` for the definition of a group. A group's
+    definition is set at most once.
+- `first` and `definition` test the bit first. One `get(d)` load replaces
+  the payload dispatch.
+- `push` clears both bits from the incoming `misc`, because
+  `template_decl` copies its pattern's `misc`. `misc` is never printed
+  as raw bits, so dumps do not change.
+- **Caller fix.** `lookup.rs` `filter` keeps the `first` of each kept
+  result next to it, so it calls `first` once per result instead of once
+  per pair.
+- **Evidence:** (iii). The median `d` is queried 5 to 256 times, and the
+  hottest `d`s are first declarations: one ClassTemplate on nt, and the
+  class templates and classes of tw and S8.
+
+**(c) `template_redecl`.**
+- The `FIRST` bit on a template answers `first(T)` without
+  `template_info`, the pattern's `redecl` or `described_template`. On
+  nt, S8 and aw, nearly all `template_redecl` calls come from `first`
+  (`lookup`, `head_template`, `deduce.rs:708`, `deduce_call.rs:322`,
+  `ics.rs:1349`).
+- `latest(T)` keeps the round trip. Template `latest` calls are under
+  0.1 M on every shape, and `latest`'s 0.3 M to 1.5 M calls are almost
+  all `redecls_of` on non-templates.
+
+**(d) `is_sized` (kiln_llvm).**
+- `TypeTable` gets a parallel `Vec<Sized>` (1 byte per type), with three
+  states:
+  - `Yes`.
+  - `No`, which is permanent: void, label, metadata, token, functions,
+    and aggregates containing one of them.
+  - `Pending`: an opaque named struct, or an aggregate containing one
+    and nothing permanently unsized.
+- The state is computed in `intern` from the elements' states.
+- `set_body` computes the named struct's state from its fields.
+- **Dependents do exist:** a literal struct, array or second named body
+  that contains a struct before its body is set. So each `Pending` type is
+  registered as a waiter on its `Pending` elements. When a struct
+  resolves, a worklist re-evaluates its waiters.
+- `is_sized` is `state == Yes`. That matches the walk, because the walk
+  returns false exactly when it reaches an opaque struct or a permanently
+  unsized type.
+- **Test-only checks.** The recursive walk stays as a test-only
+  reference. In debug builds, `TypeTable`'s drop checks every type
+  against it.
+
+**Not worth doing:**
+- **Inline `TypeView` decoding into callers.** `view` is already one
+  match, and the cost is the call count, which (a) cuts at the source.
+- **A side table of group ids,** for the RSS above.
+- **A `LATEST` bit.** `latest` changes with every redeclaration, so a bit
+  could not stay correct.
+- **Rewriting `redecls_of`** (1.15 M `redecl` on S8). It is `latest`
+  plus one `prev` per step, and each step already costs a single
+  payload load.
+- **Speeding up `redecl` itself.** That would mean a second copy of the
+  payload dispatch.
+- **Caching `template_redecl` for `latest`,** for the reason in (c).
+
+### Per-step Ir
+
+Self Ir is counted the same way as in (i): the function itself plus its
+inlined copies, by source line. Steps 2 and 3 are one commit, because
+the template `FIRST` bit is (c). The aw column after step 4 is from the
+branch head, so it includes steps 1 to 4.
+
+| step | shape | measured | before (M) | after (M) | change | total Ir before → after |
+|---|---|---|--:|--:|--:|---|
+| 1 kind queries | tw | `view` + `canonical_view` | 331.7 | 85.4 | −74.3% | 3.00 G → 2.78 G (−7.4%) |
+| 1 | S8 | `view` + `canonical_view` | 716.7 | 297.4 | −58.5% | 11.37 G → 10.97 G (−3.5%) |
+| 1 | aw | `view` + `canonical_view` | 641.3 | 383.5 | −40.2% | 9.75 G → 9.50 G (−2.5%) |
+| 2+3 bits, lookup | tw | `redecl` + `first` + `template_redecl` | 357.7 | 41.7 | −88.3% | 2.78 G → 2.57 G (−7.4%) |
+| 2+3 | S8 | `redecl` + `first` + `template_redecl` | 947.2 | 152.6 | −83.9% | 10.97 G → 10.35 G (−5.7%) |
+| 2+3 | nt (from main) | `redecl` + `first` + `template_redecl` | 892.0 | 192.3 | −78.4% | 8.64 G → 7.88 G (−8.8%) |
+| 2+3 | aw | `redecl` + `first` + `template_redecl` | 754.8 | 177.8 | −76.4% | 9.50 G → 8.92 G (with step 4) |
+| 4 `is_sized` | aw | `is_sized` | 158.7 | 1.3 | −99.2% | (above) |
+
+Notes on the table:
+- **`is_sized` after step 4 inlines to one load at each call site**, so
+  no Ir is charged to its lines. The 1.3 M (119,646 calls) comes from a
+  temporary build with `#[inline(never)]` that was not committed. Before
+  step 4, the walk was about 1,300 Ir per top-level call.
+- **Main to branch, total Ir:**
+  - tw 3.00 G → 2.57 G (−14.3%);
+  - td 0.726 G → 0.713 G (−1.9%);
+  - nt 8.64 G → 7.88 G (−8.8%);
+  - aw 9.75 G → 8.92 G (−8.5%);
+  - S8 11.37 G → 10.35 G (−8.9%).
+- **Targets.** `view` + `canonical_view` on tw: −74%, against a target
+  of −40% or better. `redecl` + `first` + `template_redecl`: −88% on tw
+  and −84% on S8, against −40% or better. `is_sized` on aw: 1.3 M,
+  against ≤ 5 M.
+- **Node sizes.** `DeclNode` stays 28 bytes: the two bits are the spare
+  bits 14 and 15 of `misc`. `TypeNode` is unchanged. `TypeTable` gains
+  1 byte per LLVM type and a map of waiters. The map holds entries only
+  for types that are still waiting on an opaque struct.
+
+### A/B
+
+Main (090e033e4) and the branch (ed94a4617) were run alternating, 3
+pairs, on a shared host at load 10 to 18. Each cell is that pair's
+median of 5 runs of `/usr/bin/time -f '%e %M'`. Δ compares the medians
+of the pairs. The `.o` cells are single runs, as in WP-654. The `.fs`
+rows are `-fsyntax-only`, the `.ll` row is `-S -emit-llvm -o /dev/null`
+and the `.o` rows are `-c -O2 -o /dev/null`. S7 and S8 are
+`-fsyntax-only -freflection` on libstdc++; S8 is the generated shape at
+N = 100. `churn-vector` uses the harness command line.
+
+| shape | main wall s | branch wall s | Δ wall | main RSS KB | branch RSS KB | Δ RSS |
+|---|---|---|--:|---|---|--:|
+| `templates_wide` | 0.30, 0.27, 0.28 | 0.23, 0.26, 0.25 | −10.7% | 62,888, 62,356, 62,352 | 63,360, 63,672, 62,312 | +1.6% |
+| `templates_deep` | 0.06, 0.05, 0.06 | 0.05, 0.06, 0.06 | +0.0% | 41,308, 41,200, 41,248 | 41,448, 41,468, 41,340 | +0.5% |
+| `nested-template-ids` | 0.50, 0.49, 0.49 | 0.47, 0.46, 0.47 | −4.1% | 20,624, 20,628, 20,588 | 21,020, 20,996, 20,524 | +1.8% |
+| `accessor-wide-emit.ll` | 1.76, 1.64, 1.66 | 1.59, 1.62, 1.72 | −2.4% | 140,460, 140,472, 140,464 | 140,428, 140,520, 140,432 | −0.0% |
+| S8 (N = 100) | 1.41, 1.30, 1.32 | 1.21, 1.18, 1.45 | −8.3% | 112,204, 111,492, 111,320 | 112,456, 107,636, 107,332 | −3.5% |
+| S7 | 0.56, 0.52, 0.53 | 0.50, 0.50, 0.61 | −5.7% | 45,512, 45,524, 45,484 | 45,568, 45,560, 45,144 | +0.1% |
+| `churn-vector` | 0.49, 0.48, 0.48 | 0.48, 0.48, 0.51 | +0.0% | 11,524, 11,284, 11,284 | 11,236, 11,236, 11,368 | −0.4% |
+| `accessor-wide-emit.o` | 124.89, 123.59, 124.52 | 126.41, 123.73, 137.96 | +1.5% | 653,156, 653,780, 650,500 | 652,808, 650,312, 650,128 | −0.4% |
+| `registration-wide-obj.o` | 7.16, 7.32, 7.44 | 7.41, 7.38, 8.30 | +1.2% | 264,056, 264,040, 264,196 | 263,972, 264,052, 264,092 | −0.0% |
+
+`time` reports wall time in 10 ms ticks, and the load moved during the
+run. So the frontend shapes, and the `.o` shape that is short enough,
+were rerun as 11 alternating runs each (5 for `registration-wide-obj.o`),
+timed to the millisecond. The table shows medians, with the minimum
+in brackets:
+
+| shape | main ms | branch ms | Δ wall | main RSS KB | branch RSS KB | Δ RSS |
+|---|--:|--:|--:|--:|--:|--:|
+| `templates_wide` | 320 (307) | 298 (290) | −6.9% | 62,300 | 62,436 | +0.2% |
+| `nested-template-ids` | 547 (536) | 521 (512) | −4.8% | 20,632 | 20,988 | +1.7% |
+| `templates_deep` | 75 (71) | 74 (69) | −1.3% | 41,200 | 41,396 | +0.5% |
+| `churn-vector` | 524 (518) | 516 (514) | −1.5% | 11,284 | 11,236 | −0.4% |
+| S8 (N = 100) | 1,521 (1,491) | 1,433 (1,396) | −5.8% | 108,424 | 112,084 | +3.4% |
+| `registration-wide-obj.o` | 8,215 (7,368) | 7,986 (7,117) | −2.8% | 263,144 | 263,992 | +0.3% |
+
+About the RSS:
+- **S8 is bimodal under both binaries**: 107.0 to 112.8 MB on main and
+  106.9 to 113.5 MB on the branch. The two tables' medians fall in
+  opposite modes (−3.5% and +3.4%).
+- **The `nested-template-ids` +356 KB is not heap.** DHAT gives the
+  same heap on both binaries: 133,238,711 vs 133,238,699 bytes total
+  in 7,952,737 blocks, and a t-gmax peak of 6,174,928 vs 6,174,922 bytes
+  in 4,541 blocks. The shape's 20 MB RSS is mostly mapped code and
+  allocator arenas around a 6 MB heap. The branch binary has 60 KB more
+  `.text`: the inlined `first` and `definition` fast paths and the
+  `Sizedness` bookkeeping. The likely cause is code layout and
+  page-touch differences, but this was not isolated.
+- **The bits and the sized state add no memory to the front end.**
+  `DeclNode` and `TypeNode` keep their sizes. `TypeTable` exists only
+  for IR emission, where the `.ll` and `.o` rows are flat.
+
+The `.o` rows are within noise. The emitted IR is byte-identical (see
+"Byte identity" below), so `opt` and `llc` get the same input. The
+front end is about 1.6 s of the 124 s `accessor-wide-emit.o`. One
+outlier branch run per shape (137.96 s and 8.30 s, both at load 18)
+lifts the first table, and the 11-run rerun of `registration-wide-obj.o`
+is −2.8%.
+
+**Targets.**
+- `view` + `canonical_view` −40% on tw: **met**, −74.3% Ir.
+- tw wall −4%: **met**, −6.9% (11 runs at ms resolution) and −10.7%
+  (3 pairs).
+- `redecl` + `first` + `template_redecl` −40% on tw and S8: **met**,
+  −88.3% and −83.9% Ir.
+- `is_sized` ≤ 5 M Ir on aw: **met**, 1.3 M.
+- No shape slower than noise: **met**.
+- RSS ≤ +0.5%: **missed as measured** on `nested-template-ids`
+  (+1.7% process RSS over 11 runs, +1.8% over the 3 pairs), with
+  identical heap (DHAT, above). Every other shape is within ±0.5%,
+  apart from S8, which is bimodal.
+
+**Baselines were not re-recorded.** Two alternating pairs under
+`cargo xtask bench --compiler`, at load about 7, give the following
+(main, then branch, in ms):
+- `frontend/templates_wide`: 315, 313 → 296, 298;
+- `reflect/s7` (`--runs 3`): 549, 549 → 526, 511;
+- `reflect/s8` (`--runs 3`): 685, 690 → 679, 684.
+
+Against the committed baselines (293.0, 534.0 and 664.3 ms), the branch
+is between −4.3% and +2.9% on all three, so none of them moved by 5% or
+more. Main had drifted 5% to 7% above `templates_wide`'s baseline and
+about 3% above S7's, and the branch brings both back.
+
+### Byte identity
+
+`-S -emit-llvm` was compared between the two binaries on every
+conformance test that expects `ir`, `compile-ok` or `run`, on every
+`tests/codegen` source and on the four emit shapes in `bench/frontend`.
+1,960 outputs are byte-identical and none differ. 59 inputs exit
+non-zero on both binaries with the same exit code; the comparison
+script does not apply `requires:` lines. No exit code differs. Standard error differs on 19
+inputs, and in every case it is identical once the binary's own name
+(`argv[0]`) is normalised.
+
+### What remains
+
+- **Redeclaration walks on S8.** About 140 M Ir remains in `redecl`,
+  `first` and `template_redecl`. It comes from:
+  - `latest`, `redecls_of` and `prev`, which still walk the chain;
+  - `first` on a decl that is not the first;
+  - `definition` on a decl that is not the definition.
+
+  Their callers were not measured. A `latest` link kept on the first
+  decl, which `DeclArena::push` would update, is the next step if they
+  matter.
+- **`view` on the remaining paths.** Calls that need the full payload
+  (template arguments, function parameters) still decode a `TypeView`.
+  That is 85 M on tw and 297 M on S8.

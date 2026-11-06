@@ -8,7 +8,7 @@ use kiln_ast::ids::{ArgListId, TemplateNameId, TemplateParamListId};
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{
     ArgView, AutoKeyword, ExcSpec, FuncInfo, FuncProto, Nns, Quals, TagKeyword, TemplateArg,
-    TemplateName, TypeView,
+    TemplateName, TypeKind, TypeView,
 };
 use kiln_ast::{DeclHead, DeclId, ExprId, NnsId, QualType};
 use kiln_diag::DiagId;
@@ -387,8 +387,8 @@ impl Sema<'_, '_> {
     /// The class template `ty` is an undeduced placeholder for
     /// ([dcl.type.class.deduct]), with its template name as written.
     pub(crate) fn undeduced_ctad(&self, ty: QualType) -> Option<(TemplateNameId, DeclId)> {
-        let TypeView::DeducedTemplateSpecialization { name, deduced: None } =
-            self.ast.types.view(ty.ty())
+        let Some(TypeView::DeducedTemplateSpecialization { name, deduced: None }) =
+            self.ast.types.view_if(ty.ty(), TypeKind::DeducedTemplateSpecialization)
         else {
             return None;
         };

@@ -793,95 +793,138 @@ impl TypeContext {
         }
     }
 
+    /// The canonical node of `q` (no [`TypeView`] decoding).
+    #[inline]
+    pub fn canonical_node(&self, q: QualType) -> TypeNode {
+        self.node(self.canonical(q).ty())
+    }
+
+    /// The node's `QualType` operand (as [`Self::view`] decodes it).
+    #[inline]
+    fn q_of(raw: u32) -> QualType {
+        QualType::from_raw(raw).unwrap_or(QualType::ERROR)
+    }
+
+    /// The node's `DeclId` operand (as [`Self::view`] decodes it).
+    #[inline]
+    fn d_of(raw: u32) -> DeclId {
+        DeclId::try_new(raw).unwrap_or(DeclId::new(1))
+    }
+
+    /// [`Self::view`] of `t` when its own kind is `kind`, else `None`:
+    /// for callers that match one variant and would otherwise decode
+    /// every node they test.
+    #[inline]
+    pub fn view_if(&self, t: TypeId, kind: TypeKind) -> Option<TypeView> {
+        (self.kind(t) == kind).then(|| self.view(t))
+    }
+
     /// The builtin `q` canonically is, if any.
+    #[inline]
     pub fn builtin(&self, q: QualType) -> Option<BuiltinType> {
-        match self.canonical_view(q) {
-            TypeView::Builtin(b) => Some(b),
-            _ => None,
-        }
+        let n = self.canonical_node(q);
+        if n.kind() == TypeKind::Builtin { BuiltinType::from_index(n.data) } else { None }
+    }
+
+    /// True if `q` is canonically the error type (any cv).
+    #[inline]
+    pub fn is_error(&self, q: QualType) -> bool {
+        let n = self.canonical_node(q);
+        n.kind() == TypeKind::Builtin && n.data == BuiltinType::Error as u32
     }
 
     /// The pointee of a (canonical) pointer, reference or member pointer.
+    #[inline]
     pub fn pointee(&self, q: QualType) -> Option<QualType> {
-        match self.canonical_view(q) {
-            TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => Some(p),
-            TypeView::MemberPointer { pointee, .. } => Some(pointee),
+        let n = self.canonical_node(q);
+        match n.kind() {
+            TypeKind::Pointer | TypeKind::LValueRef | TypeKind::RValueRef => {
+                Some(Self::q_of(n.data))
+            }
+            TypeKind::MemberPointer => Some(Self::q_of(self.store.pair(n.data)[0])),
             _ => None,
         }
     }
 
     /// The element type of a (canonical) array, vector or complex type.
+    #[inline]
     pub fn element(&self, q: QualType) -> Option<QualType> {
-        match self.canonical_view(q) {
-            TypeView::ConstantArray(a) => Some(a.elem),
-            TypeView::IncompleteArray(e)
-            | TypeView::Complex(e)
-            | TypeView::VariableArray { elem: e, .. }
-            | TypeView::DependentSizedArray { elem: e, .. }
-            | TypeView::Vector { elem: e, .. }
-            | TypeView::DependentVector { elem: e, .. } => Some(e),
+        self.node_element(self.canonical_node(q))
+    }
+
+    /// The element of node `n` if it is an array, vector or complex node.
+    #[inline]
+    fn node_element(&self, n: TypeNode) -> Option<QualType> {
+        match n.kind() {
+            TypeKind::ConstantArray => Some(self.store.arrays[n.data as usize].elem),
+            TypeKind::IncompleteArray | TypeKind::Complex => Some(Self::q_of(n.data)),
+            TypeKind::VariableArray
+            | TypeKind::DependentSizedArray
+            | TypeKind::Vector
+            | TypeKind::DependentVector => Some(Self::q_of(self.store.pair(n.data)[0])),
             _ => None,
         }
     }
 
     /// The bound of a (canonical) constant array.
+    #[inline]
     pub fn array_size(&self, q: QualType) -> Option<u64> {
-        match self.canonical_view(q) {
-            TypeView::ConstantArray(a) => Some(a.size),
-            _ => None,
-        }
+        let n = self.canonical_node(q);
+        (n.kind() == TypeKind::ConstantArray).then(|| self.store.arrays[n.data as usize].size)
     }
 
     /// The value type `T` of an `_Atomic(T)` (canonically; the
     /// qualifiers on `_Atomic(T)` itself are not included).
+    #[inline]
     pub fn as_atomic(&self, q: QualType) -> Option<QualType> {
-        match self.canonical_view(q) {
-            TypeView::Atomic(v) => Some(v),
-            _ => None,
-        }
+        let n = self.canonical_node(q);
+        (n.kind() == TypeKind::Atomic).then(|| Self::q_of(n.data))
     }
 
     /// The element type `T` of a GNU `_Complex T` (canonically).
+    #[inline]
     pub fn as_complex(&self, q: QualType) -> Option<QualType> {
-        match self.canonical_view(q) {
-            TypeView::Complex(e) => Some(e),
+        let n = self.canonical_node(q);
+        (n.kind() == TypeKind::Complex).then(|| Self::q_of(n.data))
+    }
+
+    /// The class of a (canonical) record type.
+    #[inline]
+    pub fn as_record(&self, q: QualType) -> Option<DeclId> {
+        let n = self.canonical_node(q);
+        match n.kind() {
+            TypeKind::Record => Some(Self::d_of(n.data)),
+            TypeKind::TemplateSpecialization => self.injected_record(q),
             _ => None,
         }
     }
 
-    /// The class of a (canonical) record type.
-    pub fn as_record(&self, q: QualType) -> Option<DeclId> {
-        match self.canonical_view(q) {
-            TypeView::Record(d) => Some(d),
-            // The injected-class-name type `X<P...>` (the type of `*this`
-            // in the pattern of class template `X`) names the pattern
-            // ([temp.dep.type]/1; clang's `InjectedClassNameType`). A
-            // specialization written out is not looked through: its
-            // canonical type is shared with every `X<P...>` at the same
-            // depths, inside `X` or not.
-            TypeView::TemplateSpecialization { .. } => {
-                let mut t = q;
-                loop {
-                    if let TypeView::InjectedClassName { pattern, .. } = self.view(t.ty()) {
-                        return Some(pattern);
-                    }
-                    let n = self.desugar_once(t);
-                    if n == t {
-                        return None;
-                    }
-                    t = n;
-                }
+    /// The injected-class-name type `X<P...>` (the type of `*this`
+    /// in the pattern of class template `X`) names the pattern
+    /// ([temp.dep.type]/1; clang's `InjectedClassNameType`). A
+    /// specialization written out is not looked through: its
+    /// canonical type is shared with every `X<P...>` at the same
+    /// depths, inside `X` or not.
+    #[cold]
+    fn injected_record(&self, q: QualType) -> Option<DeclId> {
+        let mut t = q;
+        loop {
+            if let TypeView::InjectedClassName { pattern, .. } = self.view(t.ty()) {
+                return Some(pattern);
             }
-            _ => None,
+            let n = self.desugar_once(t);
+            if n == t {
+                return None;
+            }
+            t = n;
         }
     }
 
     /// The enumeration of a (canonical) enum type.
+    #[inline]
     pub fn as_enum(&self, q: QualType) -> Option<DeclId> {
-        match self.canonical_view(q) {
-            TypeView::Enum(d) => Some(d),
-            _ => None,
-        }
+        let n = self.canonical_node(q);
+        (n.kind() == TypeKind::Enum).then(|| Self::d_of(n.data))
     }
 
     /// True for `void` (any cv).
@@ -890,10 +933,14 @@ impl TypeContext {
     }
 
     /// True for the integral builtins and `_BitInt` ([basic.fundamental]).
+    #[inline]
     pub fn is_integral(&self, q: QualType) -> bool {
-        match self.canonical_view(q) {
-            TypeView::Builtin(b) => b.is_integral(),
-            TypeView::BitInt { .. } => true,
+        let n = self.canonical_node(q);
+        match n.kind() {
+            TypeKind::Builtin => {
+                BuiltinType::from_index(n.data).is_some_and(BuiltinType::is_integral)
+            }
+            TypeKind::BitInt => true,
             _ => false,
         }
     }
@@ -944,11 +991,13 @@ impl TypeContext {
     pub fn effective_quals(&self, q: QualType) -> Quals {
         let mut c = self.canonical(q);
         loop {
-            match self.view(c.ty()) {
-                TypeView::ConstantArray(a) => c = a.elem,
-                TypeView::IncompleteArray(e)
-                | TypeView::VariableArray { elem: e, .. }
-                | TypeView::DependentSizedArray { elem: e, .. } => c = e,
+            let n = self.node(c.ty());
+            match n.kind() {
+                TypeKind::ConstantArray => c = self.store.arrays[n.data as usize].elem,
+                TypeKind::IncompleteArray => c = Self::q_of(n.data),
+                TypeKind::VariableArray | TypeKind::DependentSizedArray => {
+                    c = Self::q_of(self.store.pair(n.data)[0]);
+                }
                 _ => return c.quals(),
             }
             c = self.canonical(c);

@@ -142,7 +142,8 @@ struct DeclNode {        // 28 bytes
     flags: DeclFlags,    // u8: INVALID IMPLICIT USED REFERENCED HAS_ATTRS
                          //     HAS_LEXICAL_CTX DEPENDENT_CTX INJECTED
     misc: DeclMisc,      // u16: access(2) friend(2) local_extern(1) module_ownership(3)
-                         //      name_independent(1, P2169 `_`) linkage cache(3) visibility(2) spare(2)
+                         //      name_independent(1, P2169 `_`) linkage cache(3) visibility(2)
+                         //      first(1) definition(1)
     name: DeclName,      // u32
     ctx: Option<DeclId>, // semantic DeclContext; None only for the TU
     next: Option<DeclId>,// next sibling in the *lexical* context's member list
@@ -151,6 +152,14 @@ struct DeclNode {        // 28 bytes
     data: u32,           // index into the kind's payload arena (0 = none)
 }
 ```
+- `misc.first`/`misc.definition` are query caches the arena owns
+  (WP-655): set, `Ast::first(d) == d` / `Ast::definition(d) == Some(d)`;
+  clear means "ask the redeclaration group" (§4.4). `DeclArena::push`
+  computes them (a head's bits are ignored): a fresh group's first
+  declaration, or a non-redeclarable non-template declaration, is first;
+  a non-redeclarable declaration is its own definition. A template decl
+  is first when its pattern is first and describes it; a concept always
+  is; `Ast::set_definition(d)` sets `d`'s definition bit.
 - The lexical context is stored in a sparse map `lexical_ctx: FxHashMap<
   DeclId, DeclId>` only when it differs from `ctx` (out-of-line member
   definitions, friends, local externs): flag `HAS_LEXICAL_CTX`.

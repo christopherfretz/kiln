@@ -10,7 +10,7 @@
 use kiln_ast::consts::{FloatKind, Scalar};
 use kiln_ast::expr::ValueCategory;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, UnaryOp};
-use kiln_ast::types::{BuiltinType, TypeView, VectorKind};
+use kiln_ast::types::{BuiltinType, TypeKind, TypeView, VectorKind};
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -62,8 +62,9 @@ impl VecParts {
 impl Sema<'_, '_> {
     /// The parts of vector type `q`, or `None` if `q` is not a vector.
     pub(crate) fn vector_parts(&self, q: QualType) -> Option<VecParts> {
-        match self.ast.types.canonical_view(q) {
-            TypeView::Vector { elem, count, kind } => {
+        let c = self.ast.types.canonical(q).ty();
+        match self.ast.types.view_if(c, TypeKind::Vector) {
+            Some(TypeView::Vector { elem, count, kind }) => {
                 Some(VecParts { elem: self.ast.types.canonical(elem).without_quals(), count, kind })
             }
             _ => None,

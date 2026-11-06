@@ -434,7 +434,14 @@ pub enum ModuleOwnership {
 
 /// `DeclNode.misc` (spec/ast.md §4.1): `access(2) friend(2)
 /// local_extern(1) module_ownership(3) name_independent(1)
-/// linkage_cache(3) visibility(2) spare(2)`.
+/// linkage_cache(3) visibility(2) first(1) definition(1)`.
+///
+/// `first` and `definition` are query caches the arena owns (WP-655):
+/// set, the declaration is its entity's first declaration
+/// ([`crate::Ast::first`] returns it) or its definition
+/// ([`crate::Ast::definition`] returns it). Clear means "ask the
+/// redeclaration group". A head's bits are ignored by
+/// [`DeclArena::push`], which computes them.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct DeclMisc(u16);
 
@@ -521,6 +528,25 @@ impl DeclMisc {
     /// The visibility cache (2 bits, sema-defined).
     pub const fn visibility_cache(self) -> u8 {
         self.field(12, 2) as u8
+    }
+    /// The declaration is known to be its entity's first declaration.
+    pub const fn is_first(self) -> bool {
+        self.field(14, 1) != 0
+    }
+    /// The declaration is known to be its entity's definition.
+    pub const fn is_definition(self) -> bool {
+        self.field(15, 1) != 0
+    }
+    /// Without the arena-owned `first`/`definition` caches.
+    const fn without_redecl_caches(self) -> Self {
+        DeclMisc(self.0 & !(0b11 << 14))
+    }
+    /// The caches of a declaration of `kind` without a redeclaration
+    /// group: its own definition, and its own first unless a template
+    /// (whose first follows its pattern's).
+    const fn not_redeclarable(self, kind: DeclKind) -> Self {
+        let first = !crate::templates::is_template_kind(kind);
+        self.with_field(14, 1, first as u16).with_field(15, 1, 1)
     }
 }
 
@@ -2058,10 +2084,31 @@ impl DeclArena {
             Payload::Let(x) => push_payload(&mut self.lets, x),
         };
         let id = DeclId::new(self.nodes.len() as u32);
+        let mut misc = h.misc.without_redecl_caches();
+        if data != 0 {
+            let link = match h.kind.payload() {
+                PayloadClass::Function => Some(self.functions[data as usize].redecl),
+                PayloadClass::Var => Some(self.vars[data as usize].redecl),
+                PayloadClass::Record => Some(self.records[data as usize].redecl),
+                PayloadClass::Enum => Some(self.enums[data as usize].redecl),
+                PayloadClass::Typedef => Some(self.typedefs[data as usize].redecl),
+                PayloadClass::Namespace => Some(self.namespaces[data as usize].redecl),
+                _ => None,
+            }
+            .filter(|r| r.group != DUMMY_GROUP);
+            if let Some(r) = link {
+                // A fresh group's first declaration (`new_group(id)`).
+                misc = misc.with_field(14, 1, u16::from(r.prev.is_none()));
+            } else {
+                misc = misc.not_redeclarable(h.kind);
+            }
+        } else {
+            misc = misc.not_redeclarable(h.kind);
+        }
         self.nodes.push(DeclNode {
             kind: h.kind,
             flags: h.flags,
-            misc: h.misc,
+            misc,
             name: h.name,
             ctx: h.ctx,
             next: None,
@@ -2144,6 +2191,20 @@ impl DeclArena {
             _ => None,
         }
         .filter(|r| r.group != DUMMY_GROUP)
+    }
+
+    /// Marks `d` as its entity's first declaration (a template decl whose
+    /// pattern is first, set by the builder, WP-655).
+    pub(crate) fn mark_first(&mut self, d: DeclId) {
+        let n = &mut self.nodes[d.index() as usize];
+        n.misc = n.misc.with_field(14, 1, 1);
+    }
+
+    /// Marks `d` as its entity's definition (set by
+    /// [`crate::Ast::set_definition`], WP-655).
+    pub(crate) fn mark_definition(&mut self, d: DeclId) {
+        let n = &mut self.nodes[d.index() as usize];
+        n.misc = n.misc.with_field(15, 1, 1);
     }
 
     /// The builtin id of `d` if it is an implicit builtin function
