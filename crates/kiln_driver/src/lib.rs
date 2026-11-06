@@ -132,11 +132,30 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -fconstexpr-depth= -fconstexpr-memory= -fconstexpr-backtrace-limit=
 -fconstexpr-report= -ftemplate-depth= -ftemplate-backtrace-limit=
 -fkiln-instantiation-report[=all|json] -fkiln-stack-size= -fkiln-dump-cfg
--fkiln-cfg-stats -fkiln-cfg-max-elems= -c -S -emit-llvm -O<n> -g (ignored) -l -L -Wl,
--fuse-ld= -static -nostdlib -shared -rdynamic -pie -no-pie -pthread -###
+-fkiln-cfg-stats -fkiln-cfg-max-elems= -fkiln-memory-report -c -S -emit-llvm
+-O<n> -g (ignored) -l -L -Wl, -fuse-ld= -static -nostdlib -shared -rdynamic -pie -no-pie -pthread -###
 -v --version.
 See spec/driver.md.
 ";
+
+/// `-fkiln-memory-report` (spec/driver.md): one line per row of `r`,
+/// `memory: <name> count=N live=N reserved=N`, then `memory: total
+/// live=N reserved=N` ([`MemReport::live_bytes`], which leaves out the
+/// derived `instantiation.*` rows). A measurement aid, not a stable
+/// format.
+pub(crate) fn write_memory_report(r: &kiln_ast::mem::MemReport, out: &mut impl Write) {
+    use std::fmt::Write as _;
+    let mut s = String::new();
+    for row in &r.rows {
+        let _ = writeln!(
+            s,
+            "memory: {} count={} live={} reserved={}",
+            row.name, row.count, row.live_bytes, row.reserved_bytes
+        );
+    }
+    let _ = writeln!(s, "memory: total live={} reserved={}", r.live_bytes(), r.reserved_bytes());
+    let _ = out.write_all(s.as_bytes());
+}
 
 fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
     let d = match e {

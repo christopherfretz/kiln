@@ -528,6 +528,42 @@ fn write_once_slots_spec_ast_2_4() {
     assert_eq!(ast.members(tu).count(), 2);
 }
 
+/// [dcl.fct.default]/1, spec/ast.md §4 item 10: the minimum argument
+/// count recorded with the parameter list counts parameters up to the
+/// last without a default (a pack never counts), goes unknown when a
+/// parameter of the set list gains a default, and is re-recorded by
+/// `Ast::refresh_min_args`.
+#[test]
+fn min_args_recorded_with_params_dcl_fct_default_1() {
+    let mut ast = new_ast();
+    let tu = ast.tu;
+    let f = {
+        let h = head(&ast, tu, "f");
+        ast.builder().function(h, DeclKind::Function, builtin(INT), FnSpec::new(), None)
+    };
+    assert_eq!(ast.decls.min_args(f), Some(0));
+    let pack = kiln_ast::decl::ParamData::PACK;
+    let ps: Vec<DeclId> = [("a", 0), ("b", 0), ("c", pack), ("d", 0)]
+        .iter()
+        .enumerate()
+        .map(|(i, &(s, flags))| {
+            let n = name(&ast, s);
+            ast.builder().param(f, n, L, builtin(INT), i as u16, flags)
+        })
+        .collect();
+    let one = lit(&mut ast, 1);
+    ast.decls.set_default_arg(ps[3], one).unwrap();
+    ast.builder().set_params(f, &ps).unwrap();
+    // `a`, `b` counted; the pack `c` skipped; `d` has a default.
+    assert_eq!(ast.decls.min_args(f), Some(2));
+    ast.decls.mark_default_arg_pending(ps[1]);
+    assert_eq!(ast.decls.min_args(f), None);
+    ast.refresh_min_args(f);
+    assert_eq!(ast.decls.min_args(f), Some(1));
+    // Not a function.
+    assert_eq!(ast.decls.min_args(ps[0]), None);
+}
+
 // ---------------------------------------------------------------------------
 // Lookup (§4.3)
 // ---------------------------------------------------------------------------

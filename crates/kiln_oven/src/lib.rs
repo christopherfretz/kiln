@@ -75,6 +75,11 @@ pub use meta::{
     TraitOp, ValueOp, info_arg,
 };
 pub use stats::{EvalRecord, EvalStats, EvalTotals};
+
+/// Whether this build checks every trial-fold walk against the full path
+/// (the `leaf-check` feature; then the walk saves no thunk compile).
+#[doc(hidden)]
+pub const LEAF_CHECK: bool = cfg!(feature = "leaf-check");
 pub use value::automatic_referent;
 
 use compile::{Func, Global, Site, TrapInfo};
@@ -882,7 +887,7 @@ impl Oven {
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
         let r = match self.leaf_first(bridge, e) {
-            Some(v) => Some(v),
+            Some(r) => r,
             None => self.eval_ctx(bridge, e, None, true, false, false).0.ok(),
         };
         #[cfg(feature = "op-stats")]
@@ -905,7 +910,7 @@ impl Oven {
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
         let r = match self.leaf_first(bridge, e) {
-            Some(v) => Some(v),
+            Some(r) => r,
             None => self.eval_ctx(bridge, e, None, true, false, false).0.ok(),
         };
         #[cfg(feature = "op-stats")]
@@ -1010,8 +1015,30 @@ impl Oven {
 
     /// Whether `var`'s initializer is a constant initializer
     /// ([basic.start.static]/2): it evaluates successfully as a constant
-    /// expression. Not recorded in the statistics.
+    /// expression. Not recorded in the statistics. An initializer in the
+    /// trial-fold walk's domain is answered by the walk (WP-663,
+    /// [`Oven::leaf_init`]).
     pub fn is_constant_initialized(&mut self, bridge: &mut dyn SemaBridge, var: DeclId) -> bool {
+        self.constant_initialized(bridge, var, true)
+    }
+
+    /// [`Oven::is_constant_initialized`] by the full path only (test-only).
+    #[doc(hidden)]
+    pub fn is_constant_initialized_full(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        var: DeclId,
+    ) -> bool {
+        self.constant_initialized(bridge, var, false)
+    }
+
+    /// [`Oven::is_constant_initialized`], with or without its fast path.
+    fn constant_initialized(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        var: DeclId,
+        fast: bool,
+    ) -> bool {
         use kiln_ast::decl::VarEvalState;
         let ast = bridge.ast();
         let Some(data) = ast.decls.var(var) else { return false };
@@ -1026,7 +1053,10 @@ impl Oven {
         let Some(init) = data.init else { return false };
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(ast, Some(init), self.memo.hits);
-        let r = self.eval_ctx(bridge, init, Some(var), true, false, true).0.is_ok();
+        let r = match fast.then(|| self.leaf_init(bridge, var, init)).flatten() {
+            Some(r) => r,
+            None => self.eval_ctx(bridge, init, Some(var), true, false, true).0.is_ok(),
+        };
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "is_constant_initialized", r, self.memo.hits);
         r
@@ -1062,6 +1092,22 @@ impl Oven {
         let r = self.destroy_var(bridge, var, value);
         self.end_outermost();
         r
+    }
+
+    /// The global entries (kind and resolution), the provisional ones and
+    /// their reusable objects, and the static allocations, as text: the
+    /// fast path's equivalence tests compare it (test-only).
+    #[doc(hidden)]
+    pub fn globals_digest(&self) -> String {
+        let mut objs: Vec<_> = self.provisional_objs.iter().collect();
+        objs.sort_unstable_by_key(|x| *x.0);
+        let statics: Vec<_> =
+            self.mem.statics.iter().map(|a| (a.base, a.size, a.flags, a.origin)).collect();
+        format!(
+            "{:?} {:?} {objs:?} {statics:?}",
+            self.globals.iter().map(|g| (g.kind, g.state)).collect::<Vec<_>>(),
+            self.provisional
+        )
     }
 
     /// Per-evaluation records and totals.
@@ -1114,6 +1160,96 @@ impl Oven {
             + self.mp.footprint()
             + self.virt.footprint()
             + self.types.footprint()
+    }
+
+    /// [`Oven::footprint`] as accounting rows (`-fkiln-memory-report`,
+    /// spec/oven.md "Memory report"): `oven.code` (bytecode words),
+    /// `oven.sites` (sites, step locations, origins, traps; count =
+    /// sites), `oven.funcs` (compiled functions and thunks, with their
+    /// maps and construction steps; count = functions), `oven.thunks`
+    /// (the thunk caches; count = cached thunks), `oven.globals` (globals
+    /// and the per-variable and per-literal maps; count = globals),
+    /// `oven.mem` (abstract memory; count = static space bytes),
+    /// `oven.memo` and `oven.other` (registers, stacks, scratch, type
+    /// table). The rows' reserved bytes sum to [`Oven::footprint`].
+    pub fn memory(&self) -> kiln_ast::mem::MemReport {
+        use kiln_ast::mem::{MemReport, MemRow};
+        fn cap<T>(v: &Vec<T>) -> u64 {
+            (v.capacity() * size_of::<T>()) as u64
+        }
+        fn len<T>(v: &[T]) -> u64 {
+            size_of_val(v) as u64
+        }
+        fn map<K, V>(m: &FxHashMap<K, V>) -> u64 {
+            (m.capacity() * (size_of::<(K, V)>() + 1)) as u64
+        }
+        fn mlen<K, V>(m: &FxHashMap<K, V>) -> u64 {
+            (m.len() * (size_of::<(K, V)>() + 1)) as u64
+        }
+        let steps: u64 = self.ctor_steps.values().map(|s| size_of_val(&**s) as u64).sum();
+        let mut r = MemReport::new();
+        r.push(MemRow::of_vec("oven.code", &self.code));
+        r.push(MemRow::new(
+            "oven.sites",
+            self.sites.len() as u64,
+            len(&self.sites) + len(&self.step_locs) + len(&self.origins) + len(&self.traps),
+            cap(&self.sites) + cap(&self.step_locs) + cap(&self.origins) + cap(&self.traps),
+        ));
+        r.push(MemRow::new(
+            "oven.funcs",
+            self.funcs.len() as u64,
+            len(&self.funcs)
+                + mlen(&self.func_map)
+                + mlen(&self.base_funcs)
+                + mlen(&self.ctor_steps)
+                + steps,
+            cap(&self.funcs)
+                + map(&self.func_map)
+                + map(&self.base_funcs)
+                + map(&self.ctor_steps)
+                + steps,
+        ));
+        r.push(MemRow::new(
+            "oven.thunks",
+            (self.thunks.len() + self.thunks_at.len()) as u64,
+            mlen(&self.thunks) + mlen(&self.thunks_at),
+            map(&self.thunks) + map(&self.thunks_at),
+        ));
+        let globals_live = len(&self.globals)
+            + mlen(&self.global_map)
+            + len(&self.provisional)
+            + mlen(&self.provisional_objs)
+            + mlen(&self.lit_exprs)
+            + mlen(&self.thawed)
+            + mlen(&self.lets)
+            + mlen(&self.unknowns)
+            + len(&self.let_pending);
+        let globals_cap = cap(&self.globals)
+            + map(&self.global_map)
+            + cap(&self.provisional)
+            + map(&self.provisional_objs)
+            + map(&self.lit_exprs)
+            + map(&self.thawed)
+            + map(&self.lets)
+            + map(&self.unknowns)
+            + cap(&self.let_pending);
+        r.push(MemRow::new("oven.globals", self.globals.len() as u64, globals_live, globals_cap));
+        let m = self.mem.footprint() as u64;
+        r.push(MemRow::new("oven.mem", self.mem.static_top(), m, m));
+        let m = self.memo.footprint() as u64;
+        r.push(MemRow::new("oven.memo", 0, m, m));
+        let other =
+            (cap(&self.msg_chars) + cap(&self.regs) + cap(&self.stack) + cap(&self.cleanups))
+                as usize
+                + self.exc.footprint()
+                + self.run.footprint()
+                + self.scratch.footprint()
+                + self.dms.footprint()
+                + self.mp.footprint()
+                + self.virt.footprint()
+                + self.types.footprint();
+        r.push(MemRow::new("oven.other", 0, other as u64, other as u64));
+        r
     }
 
     /// The disassembly of everything compiled so far (debugging aid).

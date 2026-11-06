@@ -1222,10 +1222,11 @@ Where the code differs from (or details) the design above:
   `tryDiagnoseOverloadedCast` errors (`sema_ovl_*_conversion_in_cast`).
 - **Accounting (§1.4).** `Sema::overload_stats()` returns the `ovl.*`
   counters (`OverloadStats`); `Sema::overload_memory()` the
-  `sema.ovl.pool` row. There is no `Sema::memory()` yet, and the driver
-  does not print either, so `cargo xtask bench` records the `overload`
-  group's wall time and peak RSS but not `ovl.*` (an open item: a report
-  flag like `-fkiln-instantiation-report`). `sema.ovl.conv_types` and
+  `sema.ovl.*` rows, and `Sema::memory()` (WP-663) sema's rows outside
+  the AST, which `-fkiln-memory-report` prints (spec/driver.md) after the
+  AST's and before the Oven's. The driver does not print `ovl.*`, so
+  `cargo xtask bench` records the `overload` group's wall time and peak
+  RSS but not those counters (an open item). `sema.ovl.conv_types` and
   `ovl.builtin_candidates` are WP-068b's (§10.6).
 - **Bench** `bench/overload/`: `calls` (200 overloads × 3,000 calls) and
   `ctors` (64 converting constructors, 5,440 copy/direct/list

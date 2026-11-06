@@ -1182,6 +1182,19 @@ These refine or replace the text above where they differ; each says why.
     u16}`. Parameters are created after their function (their `ctx` is the
     function), so `FunctionData::params` is attached once afterwards with
     `AstBuilder::set_params` (write-once while the list is `EMPTY`).
+    `set_params` also records the function's minimum argument count
+    ([dcl.fct.default]; clang's `getMinRequiredArguments`: the counted
+    parameters up to the last without a default argument or a
+    `DEFAULT_ARG_PENDING` flag, a pack never counted) in a side vector
+    parallel to the function payloads, one byte each (`DeclArena::min_args`;
+    WP-663). The byte reads "unknown" (`None`) for more than 254 counted
+    parameters and once a parameter of the set list gains a default
+    (`set_default_arg`/`mark_default_arg_pending` on a parameter that had
+    none), until `Ast::refresh_min_args` re-records it; a caller counts
+    then. Whether the byte is known never changes a result. The side
+    vector is a memory-report row (`decls.min_args`) but is left out of
+    the node meter (`Ast::node_live_bytes`), so the instantiation report's
+    bytes do not change with it.
     The high byte of `flags` (`ParamData::SCOPE_DEPTH_MASK`) is the
     parameter's function-scope depth, the number of prototype scopes
     enclosing its own (clang's `getFunctionScopeDepth`; `scope_depth()`,

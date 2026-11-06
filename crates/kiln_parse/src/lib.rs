@@ -28,6 +28,7 @@ pub mod tokens;
 use std::sync::Arc;
 
 use kiln_ast::Ast;
+use kiln_ast::mem::MemReport;
 use kiln_ast::types::TypeContext;
 use kiln_diag::DiagEngine;
 use kiln_lex::Std;
@@ -171,6 +172,25 @@ pub struct ParsedTu {
     /// Splices whose operand was read as a frozen reflection without an
     /// Oven run (spec/reflection.md §5, the fast path).
     pub splice_fast: u64,
+    /// Sema's memory rows at the end of the translation unit
+    /// ([`kiln_sema::Sema::memory`]; sema itself is gone).
+    pub sema_memory: MemReport,
+}
+
+impl ParsedTu {
+    /// The memory report of the translation unit
+    /// (`-fkiln-memory-report`, spec/driver.md): every row of
+    /// [`Ast::memory`] (the arenas, the type context as `types.*`, the
+    /// `journal.*` rows, `instantiation.retained`), then
+    /// [`ParsedTu::sema_memory`], then [`Oven::memory`], each in its
+    /// producer's order. The rows are the producers' own.
+    #[must_use]
+    pub fn memory(&self) -> MemReport {
+        let mut r = self.ast.memory();
+        r.rows.extend(self.sema_memory.rows.iter().cloned());
+        r.rows.extend(self.oven.memory().rows);
+        r
+    }
 }
 
 /// Parses and analyses the translation unit whose main file is `file`,
@@ -274,6 +294,10 @@ pub fn parse_preprocessed<'a, 'sm>(
     let splice_fast = s.splice_fast_count();
     let mut s = s;
     let cfg_dump = std::mem::take(&mut s.cfg_out);
+    let sema_memory = s.memory();
     let (ast, oven) = s.into_parts();
-    (ParsedTu { ast, oven, inst_report, cfg_dump, splice_fast }, src.into_preprocessor())
+    (
+        ParsedTu { ast, oven, inst_report, cfg_dump, splice_fast, sema_memory },
+        src.into_preprocessor(),
+    )
 }

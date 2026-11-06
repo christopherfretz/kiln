@@ -1807,6 +1807,9 @@ impl ColdDeclData {
 pub struct DeclArena {
     nodes: Vec<DeclNode>,
     functions: Vec<FunctionData>,
+    /// Per function payload: its minimum argument count
+    /// ([`DeclArena::min_args`]; WP-663), or [`MIN_ARGS_UNKNOWN`].
+    min_args: Vec<u8>,
     vars: Vec<VarData>,
     records: Vec<RecordData>,
     fields: Vec<FieldData>,
@@ -1834,6 +1837,11 @@ pub struct DeclArena {
     pub ty_journal: crate::journal::Journal<DeclId>,
 }
 
+/// [`DeclArena::min_args`]'s "not recorded" byte: more than 254 counted
+/// parameters, or a default argument added after the parameter list was
+/// set and not yet refreshed ([`DeclArena::refresh_min_args`]).
+const MIN_ARGS_UNKNOWN: u8 = u8::MAX;
+
 const DUMMY_GROUP: RedeclGroupId = RedeclGroupId::new(u32::MAX);
 const DUMMY_REDECL: Redecl = Redecl { prev: None, group: DUMMY_GROUP };
 
@@ -1860,6 +1868,7 @@ impl Default for DeclArena {
                 spec: FnSpec::new(),
                 templ: TemplLink::NONE,
             }],
+            min_args: vec![0],
             vars: vec![VarData {
                 redecl: DUMMY_REDECL,
                 init: None,
@@ -2074,7 +2083,12 @@ impl DeclArena {
         );
         let data = match payload {
             Payload::None(x) => x,
-            Payload::Function(x) => push_payload(&mut self.functions, x),
+            Payload::Function(x) => {
+                // No parameters yet (they name the function as their
+                // context, so they are set after it).
+                self.min_args.push(if x.params == ListId::EMPTY { 0 } else { MIN_ARGS_UNKNOWN });
+                push_payload(&mut self.functions, x)
+            }
             Payload::Var(x) => push_payload(&mut self.vars, x),
             Payload::Record(x) => push_payload(&mut self.records, x),
             Payload::Field(x) => push_payload(&mut self.fields, x),
@@ -2618,14 +2632,82 @@ impl DeclArena {
 
     /// Sets the parameter list of function `f` (once a non-empty list is
     /// set it is frozen; parameters are created after their function
-    /// because they name it as their semantic context).
-    pub fn set_params(&mut self, f: DeclId, params: ListId) -> Result<(), AlreadySet> {
+    /// because they name it as their semantic context). `ids` are the
+    /// list's parameters, from which the minimum argument count is
+    /// recorded ([`DeclArena::min_args`]).
+    pub fn set_params(
+        &mut self,
+        f: DeclId,
+        params: ListId,
+        ids: &[DeclId],
+    ) -> Result<(), AlreadySet> {
         let data = self.function_mut(f);
         if data.params != ListId::EMPTY {
             return Err(AlreadySet { slot: "FunctionData.params", existing: data.params.raw() });
         }
         data.params = params;
+        self.refresh_min_args(f, ids.iter().copied());
         Ok(())
+    }
+
+    /// The minimum argument count of function `f` ([dcl.fct.default]):
+    /// its parameters up to the last without a default argument (or one
+    /// pending late parsing), a parameter pack not counted wherever it
+    /// is (clang `getMinRequiredArguments`). `None` when not recorded:
+    /// not a function, more than 254 counted parameters, or a default
+    /// argument added since the list was set and not yet refreshed
+    /// ([`DeclArena::refresh_min_args`]); the caller counts then.
+    #[inline]
+    pub fn min_args(&self, f: DeclId) -> Option<usize> {
+        let n = self.get(f);
+        if n.kind.payload() != PayloadClass::Function {
+            return None;
+        }
+        let m = self.min_args[n.data as usize];
+        (m != MIN_ARGS_UNKNOWN).then_some(usize::from(m))
+    }
+
+    /// Records the minimum argument count of function `f` from its
+    /// parameters `ids` ([`DeclArena::min_args`]).
+    pub fn refresh_min_args(&mut self, f: DeclId, ids: impl Iterator<Item = DeclId>) {
+        let n = *self.get(f);
+        if n.kind.payload() != PayloadClass::Function {
+            return;
+        }
+        let mut min = 0usize;
+        let mut so_far = 0usize;
+        for p in ids {
+            let Some(x) = self.param(p) else { continue };
+            if x.flags & ParamData::PACK != 0 {
+                continue;
+            }
+            so_far += 1;
+            if x.default_arg.is_none() && x.flags & ParamData::DEFAULT_ARG_PENDING == 0 {
+                min = so_far;
+            }
+        }
+        self.min_args[n.data as usize] =
+            u8::try_from(min).ok().filter(|&m| m != MIN_ARGS_UNKNOWN).unwrap_or(MIN_ARGS_UNKNOWN);
+    }
+
+    /// Forgets the recorded minimum argument count of the function owning
+    /// parameter `p` when `p` gains a default argument after the list was
+    /// set (it is recounted until [`DeclArena::refresh_min_args`]).
+    fn param_gains_default(&mut self, p: DeclId) {
+        let Some(f) = self.get(p).ctx else { return };
+        let n = *self.get(f);
+        if n.kind.payload() == PayloadClass::Function
+            && self.functions[n.data as usize].params != ListId::EMPTY
+        {
+            self.min_args[n.data as usize] = MIN_ARGS_UNKNOWN;
+        }
+    }
+
+    /// Whether parameter `p` has a default argument (possibly pending).
+    fn param_has_default(&self, p: DeclId) -> bool {
+        self.param(p).is_some_and(|x| {
+            x.default_arg.is_some() || x.flags & ParamData::DEFAULT_ARG_PENDING != 0
+        })
     }
 
     /// Sets a template link that was [`TemplLink::NONE`] (M3: the pattern
@@ -2907,6 +2989,9 @@ impl DeclArena {
 
     /// Sets a parameter's default argument (write-once).
     pub fn set_default_arg(&mut self, p: DeclId, arg: ExprId) -> Result<(), AlreadySet> {
+        if !self.param_has_default(p) {
+            self.param_gains_default(p);
+        }
         set_once(&mut self.param_mut(p).default_arg, arg, "ParamData.default_arg", RawId::raw)
     }
 
@@ -2930,6 +3015,9 @@ impl DeclArena {
     /// ([`ParamData::DEFAULT_ARG_PENDING`]; set before the class is
     /// complete, cleared implicitly by reading `default_arg` once set).
     pub fn mark_default_arg_pending(&mut self, p: DeclId) {
+        if !self.param_has_default(p) {
+            self.param_gains_default(p);
+        }
         self.param_mut(p).flags |= ParamData::DEFAULT_ARG_PENDING;
     }
 
@@ -2991,15 +3079,19 @@ impl DeclArena {
         }
     }
 
-    /// Bytes of the node and payload vectors (instantiation meter).
+    /// Bytes of the node and payload vectors (instantiation meter). The
+    /// `min_args` side vector is a cache over the payloads, not a node,
+    /// and stays out of the meter (it is a memory-report row).
     pub(crate) fn live_bytes(&self) -> u64 {
-        self.vec_rows().iter().map(|r| r.live_bytes()).sum()
+        let all: u64 = self.vec_rows().iter().map(|r| r.live_bytes()).sum();
+        all - VecDims::of("min_args", &self.min_args).live_bytes()
     }
 
-    fn vec_rows(&self) -> [VecDims; 17] {
+    fn vec_rows(&self) -> [VecDims; 18] {
         [
             VecDims::of("nodes", &self.nodes),
             VecDims::of("functions", &self.functions),
+            VecDims::of("min_args", &self.min_args),
             VecDims::of("vars", &self.vars),
             VecDims::of("records", &self.records),
             VecDims::of("fields", &self.fields),

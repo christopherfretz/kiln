@@ -197,6 +197,15 @@ impl Ast {
         crate::AstBuilder::new(self)
     }
 
+    /// Re-records the minimum argument count of function `f` from its
+    /// parameter list ([`crate::decl::DeclArena::min_args`]), after
+    /// default arguments were added to parameters already in the list.
+    pub fn refresh_min_args(&mut self, f: DeclId) {
+        let Some(fd) = self.decls.function(f) else { return };
+        let list = fd.params;
+        self.decls.refresh_min_args(f, self.lists.iter::<DeclId>(list));
+    }
+
     /// The access path of an `IndirectField`: the `Field`s from its
     /// context down to the named member (a `ListId` of `DeclId`s).
     ///

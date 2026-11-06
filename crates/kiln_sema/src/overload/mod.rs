@@ -583,6 +583,14 @@ impl Sema<'_, '_> {
         self.ovl.stats
     }
 
+    /// The memory sema holds outside the AST (spec/sema-overload.md §1.4,
+    /// `-fkiln-memory-report`): [`Sema::overload_memory`]'s rows. The AST's
+    /// own rows, `instantiation.retained` among them, are
+    /// [`kiln_ast::Ast::memory`]'s.
+    pub fn memory(&self) -> kiln_ast::mem::MemReport {
+        self.overload_memory()
+    }
+
     /// The memory overload resolution holds (spec/sema-overload.md §1.4):
     /// the row `sema.ovl.pool`, whose count is the pooled candidate sets
     /// (the deepest nesting so far) and whose bytes are the pool's heap;
@@ -646,6 +654,18 @@ impl Sema<'_, '_> {
         let _t = crate::templ::deduce_stats::timer("fn_min_args");
         #[cfg(feature = "op-stats")]
         crate::templ::deduce_stats::distinct("fn_min_args", u64::from(f.index()));
+        // Recorded with the parameter list (WP-663).
+        if let Some(m) = self.ast.decls.min_args(f) {
+            debug_assert_eq!(m, self.count_min_args(f), "recorded min args of {f:?}");
+            return m;
+        }
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::distinct("fn_min_args counted", u64::from(f.index()));
+        self.count_min_args(f)
+    }
+
+    /// [`Sema::fn_min_args`], counted from the parameters.
+    fn count_min_args(&self, f: DeclId) -> usize {
         let Some(fd) = self.ast.decls.function(f) else { return 0 };
         let n = self.ast.lists.get(fd.params).len();
         // clang's getMinRequiredArguments: a parameter pack is not

@@ -868,7 +868,7 @@ impl<'a> AstBuilder<'a> {
     /// If a non-empty list was already set.
     pub fn set_params(&mut self, func: DeclId, params: &[DeclId]) -> Result<(), AlreadySet> {
         let list = self.ast.lists.push(params);
-        self.ast.decls.set_params(func, list)
+        self.ast.decls.set_params(func, list, params)
     }
 
     /// Sets the body of `func` and records it as its entity's definition.

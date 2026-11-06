@@ -1072,7 +1072,15 @@ impl Substituter<'_, '_, '_> {
     /// (the original pattern's, when `pat`'s default is itself pending).
     /// A function in a local scope (a local class's member) gets them now,
     /// as clang (`isInLocalScopeForInstantiation`).
+    /// `f`'s parameter list is set first, so its recorded minimum argument
+    /// count is refreshed after (`Ast::refresh_min_args`, WP-663).
     pub(crate) fn defer_default_args(&mut self, pat: DeclId, f: DeclId) {
+        self.defer_default_args_to(pat, f);
+        self.sema.ast.refresh_min_args(f);
+    }
+
+    /// [`Self::defer_default_args`] without the refresh.
+    fn defer_default_args_to(&mut self, pat: DeclId, f: DeclId) {
         if self.sema.decl_in_local_scope(f) {
             self.default_args(pat, f);
             return;
