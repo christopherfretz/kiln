@@ -2329,6 +2329,205 @@ Other candidates:
   `ALL` and libm lists) may be duplicated the same way. They were not
   measured.
 
+## WP-653: NEON table and start-up relocations
+
+The WP-652 "What remains" follow-up. Every kiln++ compile still started
+about 1.3 MB bigger in peak RSS than on 11-03 (2db5dfc55). This WP makes
+the NEON builtin table plain data, makes the generic builtin `Info`
+lists `static`, and links `kiln` with packed relative relocations. The
+spec is spec/landed/sema/WP-653.md.
+
+### Measurement
+
+The method is WP-652's:
+- release build, the harness's command line;
+- RSS is the median of 5 runs under `/usr/bin/time -f '%e %M'`, in KB;
+- sections are in bytes (`readelf -S`), relocations are the
+  `R_AARCH64_RELATIVE` count (`readelf -r`);
+- copies are found by decoding each relocated pointer to the string it
+  points at, then counting the blocks of `.data.rel.ro` whose pointers
+  spell a table's rows in order.
+
+The columns are cumulative: each step's binary includes the steps above
+it.
+
+| binary | empty TU | table-nohdr | vector-alloc | .rela.dyn | .relr.dyn | .data.rel.ro | .rodata | RELATIVE relocs | NEON copies |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 2db5dfc55 (11-03) | 6728 | 9604 | 37132 | 379,248 | 0 | 334,464 | 1,052,561 | 15,789 | 0 |
+| main 1a3b8deca | 8056 | 11776 | 38004 | 997,104 | 0 | 795,624 | 1,480,228 | 41,533 | 4 |
+| NEON plain data | 7152 | 10760 | 37192 | 685,776 | 0 | 553,448 | 1,407,084 | 28,561 | 0 (in `.rodata`) |
+| `Info` lists `static` | 7152 | 10760 | 37192 | 685,776 | 0 | 553,448 | 1,407,084 | 28,561 | 0 |
+| RELR (this branch) | 6944 | 10264 | 36644 | 312 | 8,832 | 553,448 | 1,407,084 | 28,561 packed | 0 |
+
+`size` (text / data): main 12,547,219 / 833,136; NEON plain data and
+`Info` static 12,175,819 / 590,968; 11-03 10,294,808 / 372,096. Wall
+time does not move: 0.00 s on the empty TU, 0.04 s on `table-nohdr`,
+0.36 to 0.38 s on `vector-alloc`, for every binary.
+
+**NEON.** On main the table was in the binary four times, like the x86
+table before WP-652. Each copy held 1,081 rows of 56 bytes in
+`.data.rel.ro` (60,536 bytes) and 3,243 relocations (77,832 bytes of
+`.rela.dyn`), 12,972 relocations in all. The plain-data table is one
+`.rodata` copy: `NEON` is 1,081 rows of 16 bytes (17,296 bytes) and
+`STRS` is 30,561 bytes. The empty TU drops by 904 KB.
+
+**`Info` lists.** Each of the fifteen `pub const` lists in
+`crates/kiln_ast/src/decl.rs` was already in the binary once. A row is
+40 bytes of `.data.rel.ro` and 2 relocations (48 bytes of `.rela.dyn`):
+
+| list | rows | copies on main | .data.rel.ro | .rela.dyn |
+|---|--:|--:|--:|--:|
+| `ALL` | 124 | 1 | 4,960 | 5,952 |
+| `CORO` | 14 | 1 | 560 | 672 |
+| `LIB` | 232 | 1 | 9,280 | 11,136 |
+| `INT_MEM` | 26 | 1 | 1,040 | 1,248 |
+| `LIBM` | 193 | 1 | 7,720 | 9,264 |
+| `ATOMIC` | 47 | 1 | 1,880 | 2,256 |
+| `SYNC` | 107 | 1 | 4,280 | 5,136 |
+| `CHECKED` | 36 | 1 | 1,440 | 1,728 |
+| `EXTRA` | 27 | 1 | 1,080 | 1,296 |
+| `F128` | 84 | 1 | 3,360 | 4,032 |
+| `FLOATN` | 15 | 1 | 600 | 720 |
+| `F16_INTR` | 14 | 1 | 560 | 672 |
+| `F16_LIBM` | 20 | 1 | 800 | 960 |
+| `C_MATH_INTR` | 12 | 1 | 480 | 576 |
+| `C_MATH_LIB` | 9 | 1 | 360 | 432 |
+| total | 960 | | 38,400 | 46,080 |
+
+No list had more than one copy, so the brief's plain-data rule did not
+apply to any of them. The change is `const` → `static`, the smallest one.
+The binary is identical in every section. It keeps them at one copy if
+another crate starts inlining an accessor (`LIB`, `INT_MEM` and `LIBM`
+are already read from kiln_sema).
+
+**RELR.** With `-z pack-relative-relocs` the 28,561 relative
+relocations are a 8,832-byte `.relr.dyn` bitmap; `.rela.dyn` keeps 13
+non-relative entries (312 bytes). The loader no longer reads 670 KB of
+relocation records at start-up. It still writes every patched page of
+`.data.rel.ro`, because the pointers are still there. The empty TU drops
+by a further 208 KB, `table-nohdr` by 496 KB.
+
+The flag needs:
+- GNU ld 2.38+ (the image's is 2.44), lld 15+ (Debian's 19.1.7) or
+  rust-lld (Rust 1.95's, used by default on x86_64 Linux). Each was
+  checked locally on a small C program;
+- glibc 2.36+ at run time. The binary gains a `GLIBC_ABI_DT_RELR`
+  version need; it already needs `GLIBC_2.39`. Both CI jobs run in the
+  `gcc:16.1.0-trixie` image (glibc 2.41).
+
+Decision: shipped, as its own commit, so it can be dropped alone. It is
+a `cargo:rustc-link-arg-bin=kiln=` line in `crates/kiln_driver/build.rs`
+for Linux targets, so it changes no dependency's build and invalidates
+no cache. aarch64 is checked here (`cargo xtask ci --quick` plus the compat-19 pass green). The x86_64
+runner is only checked by proxy: rust-lld and lld accept the flag, and
+x86_64 CI runs only on a PR. If that job fails at link time, drop that
+commit.
+
+### Bench before/after
+
+`cargo xtask bench bench/oven` was run with main's binary and the
+branch's, alternating, 2 rounds each, without recording (load 6.7 to
+7.2). Each cell is the entry's median of 5 runs; both rounds are shown.
+Every entry moved by more than 5% (−1,040 to −1,664 KB), so all 23 were
+re-recorded, as WP-652 did.
+
+- Main's binary already reported 16 `REGRESSED (mem)` against WP-652's
+  baselines. Those were recorded from the WP-652 branch, and the code
+  landed since (WP-654 to WP-658) added 200 to 500 KB.
+- The branch binary reported 23 `improved` (mem) in both rounds, and no
+  entry's time regressed.
+- The baselines were then re-recorded with the branch binary (load 6.1),
+  note "startup RSS drift (WP-653)". All 23 reported `improved` and none
+  was held back. A run after the recording is clean: 0 regressed,
+  0 improved.
+
+| entry | old baseline KB (recorded) | main KB | branch KB | branch − main | new baseline KB | old → new baseline ms |
+|---|--:|--:|--:|--:|--:|--:|
+| `builtins-memcpy` | 10,988 (11-06) | 11,304, 11,304 | 10,020, 10,012 | -1,288 | 10,020 | 14.4 → 14.0 |
+| `builtins-popcount` | 10,768 (11-06) | 11,056, 11,064 | 9,872, 9,868 | -1,190 | 9,872 | 59.8 → 60.2 |
+| `builtins-strlen` | 10,872 (11-06) | 11,124, 11,140 | 9,916, 9,916 | -1,216 | 9,916 | 15.2 → 14.7 |
+| `churn-list` | 10,896 (11-06) | 11,336, 11,336 | 10,048, 10,048 | -1,288 | 10,048 | 24.5 → 24.1 |
+| `churn-mixed` | 10,836 (11-06) | 11,304, 11,304 | 10,008, 10,020 | -1,290 | 10,020 | 13.2 → 13.1 |
+| `churn-string` | 11,348 (11-06) | 11,704, 11,704 | 10,540, 10,544 | -1,162 | 10,528 | 406.6 → 398.0 |
+| `churn-tree` | 11,372 (11-06) | 11,892, 11,892 | 10,592, 10,600 | -1,296 | 10,600 | 30.5 → 30.5 |
+| `churn-vector` | 11,452 (11-06) | 11,780, 11,780 | 10,740, 10,740 | -1,040 | 10,740 | 468.6 → 463.5 |
+| `class-churn` | 12,860 (11-06) | 13,372, 13,372 | 12,084, 12,084 | -1,288 | 12,084 | 132.8 → 131.1 |
+| `fib` | 10,952 (11-06) | 11,216, 11,216 | 9,952, 9,952 | -1,264 | 9,952 | 9.7 → 9.5 |
+| `sieve` | 17,356 (11-06) | 17,584, 17,584 | 16,108, 16,100 | -1,480 | 16,108 | 73.8 → 71.4 |
+| `sieve-nohdr` | 10,852 (11-06) | 11,272, 11,272 | 9,792, 9,792 | -1,480 | 9,792 | 17.4 → 15.8 |
+| `soa` | 11,180 (11-06) | 11,712, 11,712 | 10,208, 10,212 | -1,502 | 10,212 | 68.8 → 69.6 |
+| `sort` | 25,476 (11-06) | 25,772, 25,772 | 24,376, 24,372 | -1,398 | 24,368 | 185.4 → 176.9 |
+| `sort-nohdr` | 10,912 (11-06) | 11,420, 11,420 | 9,840, 9,840 | -1,580 | 9,840 | 25.1 → 24.5 |
+| `string` | 26,764 (11-06) | 27,060, 27,120 | 25,712, 25,720 | -1,374 | 25,708 | 187.5 → 184.5 |
+| `table` | 20,428 (11-06) | 20,268, 20,268 | 18,604, 18,604 | -1,664 | 18,604 | 103.6 → 100.5 |
+| `table-nohdr` | 11,480 (11-06) | 11,776, 11,776 | 10,256, 10,264 | -1,516 | 10,264 | 45.5 → 45.5 |
+| `trial-rollback` | 10,840 (11-06) | 11,304, 11,304 | 9,996, 9,988 | -1,312 | 9,996 | 38.6 → 37.1 |
+| `vector-alloc` | 38,332 (11-06) | 38,084, 38,024 | 36,616, 36,552 | -1,470 | 36,636 | 387.0 → 376.8 |
+| `virtual-dispatch` | 11,212 (11-06) | 11,616, 11,616 | 10,184, 10,184 | -1,432 | 10,184 | 23.1 → 22.7 |
+| `wide-struct-read` | 28,600 (11-06) | 29,084, 29,084 | 27,552, 27,544 | -1,536 | 27,552 | 283.4 → 280.6 |
+| `wide-struct-store` | 31,668 (11-06) | 32,144, 32,156 | 30,640, 30,636 | -1,512 | 30,636 | 132.5 → 128.8 |
+
+### A/B
+
+main 1a3b8deca against the branch, alternating, 3 pairs. Each pair is
+the median of 5 runs, under `/usr/bin/time -f '%e %M'`, at load 6.1 to
+7.9. The shapes and their command lines:
+- `empty`: an empty TU;
+- `table-nohdr`, `vector-alloc`, `churn-vector`: the bench/oven entries;
+- `templates_wide`: bench/frontend/templates_wide.cpp, `-fsyntax-only`;
+- `accessor-wide-emit`: bench/frontend/accessor-wide-emit.cpp,
+  `-S -emit-llvm`;
+- `s8n200`: bench/reflect/s8.cpp at N=200.
+
+RSS is in KB. Wall is in seconds, the median of the three pairs.
+
+| shape | main RSS (3 pairs) | branch RSS (3 pairs) | Δ median | main wall | branch wall |
+|---|--:|--:|--:|--:|--:|
+| `empty` | 8072, 8072, 8072 | 6948, 6944, 6940 | −1,128 (−14.0%) | 0.00 | 0.00 |
+| `table-nohdr` | 11772, 11772, 11776 | 10264, 10264, 10264 | −1,508 (−12.8%) | 0.04 | 0.04 |
+| `vector-alloc` | 38132, 38068, 38084 | 36612, 36632, 36612 | −1,472 (−3.9%) | 0.37 | 0.37 |
+| `churn-vector` | 11772, 11768, 11780 | 10740, 10740, 10740 | −1,032 (−8.8%) | 0.46 | 0.46 |
+| `templates_wide` | 62084, 61384, 61048 | 60308, 61152, 60396 | −988 (−1.6%) | 0.22 | 0.23 |
+| `accessor-wide-emit` | 140520, 140364, 140404 | 140404, 140416, 140472 | +12 (0.0%) | 1.47 | 1.46 |
+| `s8n200` | 171916, 170668, 171368 | 170720, 168104, 170064 | −1,304 (−0.8%) | 1.81 | 1.81 |
+
+The empty TU is 1,128 KB smaller; the target was 900 KB. No shape is
+slower.
+- `templates_wide`'s 0.22 → 0.23 is the 10 ms resolution of `%e`.
+  Timed with a finer clock (15 alternating runs), it is 231.2 ms on main
+  and 227.2 ms on the branch, both with a minimum of 220.7 ms.
+- `accessor-wide-emit` does not move because its peak is not kiln++'s.
+  `-S -emit-llvm` pipes kiln++'s IR through `opt -passes=default<O0>`
+  and `opt -S` (`crates/kiln_driver/src/codegen_cmd.rs:130`), and
+  `/usr/bin/time` reports the largest RSS in the process tree. That is
+  `opt`, at 140 MB. kiln++'s own peak is about 85 MB, and polling
+  `/proc` shows it is 1.1 MB smaller in `RssFile` on the branch, as
+  everywhere else.
+
+### What remains
+
+The empty TU is 6,944 KB against 6,728 KB on 2db5dfc55 (+216 KB). With
+RELR the loader no longer reads `.rela.dyn`, so what remains of the
+drift is mostly the pages of `.data.rel.ro` that the relocations patch:
+553,448 bytes against 334,464 (+219 KB), in 28,561 relocations against
+15,789. By the strings the relocated pointers lead to, the growth since
+11-03 is:
+- `crates/kiln_codegen/src/x86_intrinsics.rs:10` `MAP`. It is a
+  `pub(crate) const &[Map]` of 1,129 rows (72 bytes each), in one copy.
+  Each row holds four `&str`: the builtin, the `llvm.x86.*` intrinsic,
+  its return type and its parameter types. That is about 4,500
+  relocations and 81 KB of `.data.rel.ro`, the largest piece. It is
+  `@generated` by `scripts/gen-x86-builtins.py`, and the plain-data
+  layout of the builtin tables applies to it.
+- `crates/kiln_driver/src/x86_targets.rs:19` `CPUS` and `:97` `IMPLIES`.
+  These are `const` tables of per-CPU feature and macro lists (`__AVX__`,
+  `sse4.2`, the `"1"` values), about 4,000 relocations.
+- Panic locations: 3,306 → 3,829 (+523). This is code growth, not a
+  table.
+
+Making `MAP`, `CPUS` and `IMPLIES` plain data would close most of the
+remaining ~220 KB. They were not in this package.
+
 ## WP-654: IR printer
 
 F4 and F18. R3 spends 11.1% of its frontend in `kiln_llvm` printing
