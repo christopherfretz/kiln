@@ -882,7 +882,7 @@ impl Oven {
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
         let r = match self.leaf_first(bridge, e) {
-            Some(v) => Some(v),
+            Some(r) => r,
             None => self.eval_ctx(bridge, e, None, true, false, false).0.ok(),
         };
         #[cfg(feature = "op-stats")]
@@ -905,7 +905,7 @@ impl Oven {
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
         let r = match self.leaf_first(bridge, e) {
-            Some(v) => Some(v),
+            Some(r) => r,
             None => self.eval_ctx(bridge, e, None, true, false, false).0.ok(),
         };
         #[cfg(feature = "op-stats")]
@@ -1062,6 +1062,22 @@ impl Oven {
         let r = self.destroy_var(bridge, var, value);
         self.end_outermost();
         r
+    }
+
+    /// The global entries (kind and resolution), the provisional ones and
+    /// their reusable objects, and the static allocations, as text: the
+    /// fast path's equivalence tests compare it (test-only).
+    #[doc(hidden)]
+    pub fn globals_digest(&self) -> String {
+        let mut objs: Vec<_> = self.provisional_objs.iter().collect();
+        objs.sort_unstable_by_key(|x| *x.0);
+        let statics: Vec<_> =
+            self.mem.statics.iter().map(|a| (a.base, a.size, a.flags, a.origin)).collect();
+        format!(
+            "{:?} {:?} {objs:?} {statics:?}",
+            self.globals.iter().map(|g| (g.kind, g.state)).collect::<Vec<_>>(),
+            self.provisional
+        )
     }
 
     /// Per-evaluation records and totals.

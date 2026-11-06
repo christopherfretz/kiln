@@ -363,22 +363,64 @@ fault counts and trap ids unchanged.
     with attributes), a parenthesis, a substituted non-type template
     parameter, a `ConstantExpr`, an integral, boolean or no-op cast (not to an
     enumeration), a unary `+ - ~ !`, a binary arithmetic, shift,
-    comparison or logical operator, or `?:`, at most 64 deep. It
+    comparison or logical operator, `?:`, or a variable read (below),
+    at most 64 deep. It
     declines (runs the full path) outside that domain, on any failing
     operation (overflow, `/ 0`, a bad shift), when either arm of `?:`,
     `&&` or `||` does not walk, inside a running evaluation, and when a
     one-shot setting is pending (`-Wconstant-evaluated`, the overflow
     check, a potential constant expression, a plain, `void` or address
     result, a `source_location` root).
+  - **Variable reads** (WP-663): an lvalue-to-rvalue conversion of a
+    `DeclRefExpr` (through parentheses) to a variable or parameter whose
+    full-path `GlobalAddr`, `Load` either reads a known value or
+    certainly faults. A provisional resolution counts as unresolved
+    (`begin_outermost` forgets it first). The walk answers in two cases
+    and declines otherwise:
+    - *a value*: the variable is usable in constant expressions
+      (`value::var_info`), not a reference, not `volatile`, of the
+      conversion's type kind, its initializer's value is known
+      (`VarEvalState::Value`) and its global is resolved to a `CONST`,
+      `Origin::Global` object of its type that is not `EXTERNAL`,
+      `RESOLVING`, `TRACKED` or lax-only (`LAX_READ`). The `Load` reads
+      that value in a strict and a lax fold alike.
+    - *a definite failure* (the fold's answer is "not a constant"): a
+      function parameter or automatic variable (the walk runs only
+      outermost, so outside its frame) that is neither usable nor laxly
+      readable, whose global is resolved to an `EXTERNAL`,
+      `Origin::External` object that is not lax-only, or is unresolved
+      (or has no entry yet) and is not a reference: `resolve_global`
+      then resolves it to such an object (`resolve_var_in` makes an
+      external one for a variable neither usable nor lax, or reuses the
+      provisional one it made before). The `Load` faults
+      (`MemFault::External`) in both modes. A failure propagates
+      through every strict operator; `&&`, `||` and `?:` take it only
+      from the operand they run (the other arm must still walk, since
+      the full path compiles it), and the first failure in run order
+      (left to right) is reported before the operator's own checks, as
+      the full path's run faults on that `Load` first.
+    - *the full path's leftovers*, redone when the walk answers
+      (`Oven::leaf_effects`), in its order: provisional resolutions are
+      forgotten (`begin_outermost`); the thunk compile's global entries
+      are created for the walked variables that have none, in compile
+      order, which is the walk's (every operand, run or not, left to
+      right; `?:` its condition and then both arms); the global of the
+      read that faults first is resolved (`resolve_global`, as
+      `Op::GlobalAddr` does); and the static peak is noted
+      (`end_outermost`).
   - **Equivalence rule:** where the walk answers, its value is the one
     the full path would freeze (it computes each node with the same
     `crate::arith` operation on the same register value and freezes with
     `freeze_scalar`), and skipping the full path changes nothing else
-    observable: diagnostics, statistics, `-fkiln-cfg-stats` and the
-    emitted IR stay byte-identical. The full path stays callable
-    (`try_fold_full`, test-only) and kiln_sema's `tests/trial_fold.rs`
-    compares the two; the `leaf-check` feature asserts the equivalence
-    on every walk of a build.
+    observable: diagnostics, statistics (`static_bytes` included),
+    `-fkiln-cfg-stats` and the emitted IR stay byte-identical. A definite
+    failure is the full path's `None`, and the global entries, their
+    resolutions and the static space are left as the full path leaves
+    them. The full path stays callable (`try_fold_full`, test-only) and
+    kiln_sema's `tests/trial_fold.rs` compares the two, answers and
+    state (`Oven::globals_digest`), against a second Sema that runs the
+    full path only; the `leaf-check` feature asserts the equivalence of
+    the answers on every walk of a build.
 - `Oven::evaluate_chars(bridge, size, data, EvalContext) -> (Vec<u8>,
   Result<(), EvalFailure>)` (WP-356, [dcl.pre]/11-12, P2741; clang
   `Expr::EvaluateCharRangeAsString`): the characters of a `static_assert`

@@ -334,14 +334,32 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(None, |oven, b| oven.try_fold(b, e))
     }
 
-    /// [`Sema::try_fold`]'s two paths for `e`, the Oven's trial-fold fast
-    /// path and its full path, as `(fast, full)`: the fast path's
-    /// equivalence tests (`tests/trial_fold.rs`; test-only).
+    /// [`Sema::try_fold`]'s two paths for `e` (`lax`: those of the lax
+    /// fold, [`Oven::fold_rvalue`]), the Oven's trial-fold fast path
+    /// (`None` where it declines, `Some(None)` for a definite failure) and
+    /// its full path, as `(fast, full)`: the fast path's equivalence tests
+    /// (`tests/trial_fold.rs`; test-only).
     #[doc(hidden)]
-    pub fn trial_fold_paths(&mut self, e: ExprId) -> (Option<ConstValueId>, Option<ConstValueId>) {
-        let fast = self.with_oven(None, |oven, b| oven.try_fold_leaf(b, e));
-        let full = self.with_oven(None, |oven, b| oven.try_fold_full(b, e));
-        (fast, full)
+    pub fn trial_fold_paths(
+        &mut self,
+        e: ExprId,
+        lax: bool,
+    ) -> (Option<Option<ConstValueId>>, Option<ConstValueId>) {
+        (self.trial_fold_fast(e), self.trial_fold_full(e, lax))
+    }
+
+    /// The fast path of [`Self::trial_fold_paths`] only (test-only).
+    #[doc(hidden)]
+    pub fn trial_fold_fast(&mut self, e: ExprId) -> Option<Option<ConstValueId>> {
+        self.with_oven(None, |oven, b| oven.try_fold_leaf(b, e))
+    }
+
+    /// The full path of [`Self::trial_fold_paths`] only (test-only).
+    #[doc(hidden)]
+    pub fn trial_fold_full(&mut self, e: ExprId, lax: bool) -> Option<ConstValueId> {
+        self.with_oven(None, |oven, b| {
+            if lax { oven.fold_rvalue_full(b, e) } else { oven.try_fold_full(b, e) }
+        })
     }
 
     /// `cond` (`None`: `true`) evaluated with each parameter of `binds`
