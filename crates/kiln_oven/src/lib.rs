@@ -1116,6 +1116,96 @@ impl Oven {
             + self.types.footprint()
     }
 
+    /// [`Oven::footprint`] as accounting rows (`-fkiln-memory-report`,
+    /// spec/oven.md "Memory report"): `oven.code` (bytecode words),
+    /// `oven.sites` (sites, step locations, origins, traps; count =
+    /// sites), `oven.funcs` (compiled functions and thunks, with their
+    /// maps and construction steps; count = functions), `oven.thunks`
+    /// (the thunk caches; count = cached thunks), `oven.globals` (globals
+    /// and the per-variable and per-literal maps; count = globals),
+    /// `oven.mem` (abstract memory; count = static space bytes),
+    /// `oven.memo` and `oven.other` (registers, stacks, scratch, type
+    /// table). The rows' reserved bytes sum to [`Oven::footprint`].
+    pub fn memory(&self) -> kiln_ast::mem::MemReport {
+        use kiln_ast::mem::{MemReport, MemRow};
+        fn cap<T>(v: &Vec<T>) -> u64 {
+            (v.capacity() * size_of::<T>()) as u64
+        }
+        fn len<T>(v: &[T]) -> u64 {
+            size_of_val(v) as u64
+        }
+        fn map<K, V>(m: &FxHashMap<K, V>) -> u64 {
+            (m.capacity() * (size_of::<(K, V)>() + 1)) as u64
+        }
+        fn mlen<K, V>(m: &FxHashMap<K, V>) -> u64 {
+            (m.len() * (size_of::<(K, V)>() + 1)) as u64
+        }
+        let steps: u64 = self.ctor_steps.values().map(|s| size_of_val(&**s) as u64).sum();
+        let mut r = MemReport::new();
+        r.push(MemRow::of_vec("oven.code", &self.code));
+        r.push(MemRow::new(
+            "oven.sites",
+            self.sites.len() as u64,
+            len(&self.sites) + len(&self.step_locs) + len(&self.origins) + len(&self.traps),
+            cap(&self.sites) + cap(&self.step_locs) + cap(&self.origins) + cap(&self.traps),
+        ));
+        r.push(MemRow::new(
+            "oven.funcs",
+            self.funcs.len() as u64,
+            len(&self.funcs)
+                + mlen(&self.func_map)
+                + mlen(&self.base_funcs)
+                + mlen(&self.ctor_steps)
+                + steps,
+            cap(&self.funcs)
+                + map(&self.func_map)
+                + map(&self.base_funcs)
+                + map(&self.ctor_steps)
+                + steps,
+        ));
+        r.push(MemRow::new(
+            "oven.thunks",
+            (self.thunks.len() + self.thunks_at.len()) as u64,
+            mlen(&self.thunks) + mlen(&self.thunks_at),
+            map(&self.thunks) + map(&self.thunks_at),
+        ));
+        let globals_live = len(&self.globals)
+            + mlen(&self.global_map)
+            + len(&self.provisional)
+            + mlen(&self.provisional_objs)
+            + mlen(&self.lit_exprs)
+            + mlen(&self.thawed)
+            + mlen(&self.lets)
+            + mlen(&self.unknowns)
+            + len(&self.let_pending);
+        let globals_cap = cap(&self.globals)
+            + map(&self.global_map)
+            + cap(&self.provisional)
+            + map(&self.provisional_objs)
+            + map(&self.lit_exprs)
+            + map(&self.thawed)
+            + map(&self.lets)
+            + map(&self.unknowns)
+            + cap(&self.let_pending);
+        r.push(MemRow::new("oven.globals", self.globals.len() as u64, globals_live, globals_cap));
+        let m = self.mem.footprint() as u64;
+        r.push(MemRow::new("oven.mem", self.mem.static_top(), m, m));
+        let m = self.memo.footprint() as u64;
+        r.push(MemRow::new("oven.memo", 0, m, m));
+        let other =
+            (cap(&self.msg_chars) + cap(&self.regs) + cap(&self.stack) + cap(&self.cleanups))
+                as usize
+                + self.exc.footprint()
+                + self.run.footprint()
+                + self.scratch.footprint()
+                + self.dms.footprint()
+                + self.mp.footprint()
+                + self.virt.footprint()
+                + self.types.footprint();
+        r.push(MemRow::new("oven.other", 0, other as u64, other as u64));
+        r
+    }
+
     /// The disassembly of everything compiled so far (debugging aid).
     pub fn disassemble(&self) -> String {
         kbc::disassemble(&self.code, 0, self.code.len())

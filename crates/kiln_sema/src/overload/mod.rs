@@ -583,6 +583,14 @@ impl Sema<'_, '_> {
         self.ovl.stats
     }
 
+    /// The memory sema holds outside the AST (spec/sema-overload.md §1.4,
+    /// `-fkiln-memory-report`): [`Sema::overload_memory`]'s rows. The AST's
+    /// own rows, `instantiation.retained` among them, are
+    /// [`kiln_ast::Ast::memory`]'s.
+    pub fn memory(&self) -> kiln_ast::mem::MemReport {
+        self.overload_memory()
+    }
+
     /// The memory overload resolution holds (spec/sema-overload.md §1.4):
     /// the row `sema.ovl.pool`, whose count is the pooled candidate sets
     /// (the deepest nesting so far) and whose bytes are the pool's heap;

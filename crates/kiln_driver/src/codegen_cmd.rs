@@ -343,6 +343,10 @@ impl CodegenJob<'_> {
             let mut err = job.stderr.clone();
             let _ = err.write_all(tu.inst_report.as_bytes());
         }
+        if a.memory_report {
+            engine.flush();
+            crate::write_memory_report(&tu.memory(), &mut job.stderr.clone());
+        }
         // The AST, the Oven and the module are each about as large as the
         // IR text for a big unit: print only once the AST is gone, so the
         // peak holds two of the three, not all of them (WP-633).

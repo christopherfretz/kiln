@@ -715,7 +715,12 @@ asks whether the evaluation is manifestly constant-evaluated.
   per-evaluation overlay table is an M7 item.
 - `EvalStats` holds one `EvalRecord` per `evaluate` call and TU totals.
   `Oven::footprint()` is the evaluator's own heap (code, memory, caches,
-  and the type table with its offset index, WP-642).
+  and the type table with its offset index, WP-642). `Oven::memory()`
+  (WP-663, `-fkiln-memory-report`) splits the same total into rows
+  `oven.code`, `oven.sites`, `oven.funcs`, `oven.thunks` (count = cached
+  thunks), `oven.globals`, `oven.mem` (count = the static top),
+  `oven.memo` and `oven.other`; their reserved bytes sum to
+  `footprint()` (tested).
 
 ### Reporting protocol
 `-fconstexpr-report=<path>` makes the driver write one report per
@@ -3287,6 +3292,7 @@ impl Oven {
     pub fn fold_rvalue(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn stats(&self) -> &EvalStats;
     pub fn footprint(&self) -> usize;
+    pub fn memory(&self) -> kiln_ast::mem::MemReport;             // WP-663
     pub fn disassemble(&self) -> String;                          // debugging aid
 }
 pub mod report { pub fn render(..) -> String; pub fn write(..) -> io::Result<()>; }

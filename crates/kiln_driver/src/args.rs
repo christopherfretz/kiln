@@ -339,6 +339,11 @@ pub struct Args {
     /// function body with its graph's size and build time
     /// (spec/sema.md §7.5.1).
     pub cfg_stats: bool,
+    /// `-fkiln-memory-report` (`-fsyntax-only` and codegen jobs): after
+    /// the diagnostics, one `memory:` line per accounting row of the
+    /// translation unit ([`kiln_parse::ParsedTu::memory`]) and a total,
+    /// on stderr (spec/driver.md).
+    pub memory_report: bool,
     /// GCC's `-fpermissive`: the C++26 enumeration arithmetic error
     /// (P2864) is the C++20 deprecation warning instead
     /// ([`kiln_sema::Sema::permissive`]; spec/driver.md).
@@ -773,6 +778,7 @@ impl Args {
             "-fdump-vtable-layouts" => self.dump_vtable_layouts = true,
             "-fkiln-dump-cfg" => self.dump_cfg = true,
             "-fkiln-cfg-stats" => self.cfg_stats = true,
+            "-fkiln-memory-report" => self.memory_report = true,
             "-fpermissive" => self.permissive = true,
             _ => {
                 if let Some(v) = arg.strip_prefix("-fkiln-source-path-style=") {

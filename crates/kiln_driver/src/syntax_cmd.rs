@@ -205,6 +205,10 @@ impl SyntaxJob<'_> {
             let mut err = job.stderr.clone();
             let _ = err.write_all(tu.inst_report.as_bytes());
         }
+        if a.memory_report {
+            engine.flush();
+            crate::write_memory_report(&tu.memory(), &mut job.stderr.clone());
+        }
         result.output.push_str(&tu.cfg_dump);
         let ast = tu.ast;
         if a.dump_record_layouts {

@@ -464,3 +464,25 @@ fn variable_reads_agree() {
         assert!(t.some > 0 && t.none > 0, "both outcomes: {} some, {} none", t.some, t.none);
     });
 }
+
+/// `Oven::memory` (`-fkiln-memory-report`) splits `Oven::footprint`
+/// into rows: their reserved bytes sum to it, before and after folds.
+#[test]
+fn oven_memory_rows_sum_to_footprint() {
+    with_sema(|s, _| {
+        let sum = |s: &Sema<'_, '_>| {
+            let r = s.oven().memory();
+            assert!(r.rows.iter().all(|row| row.name.starts_with("oven.")));
+            (r.reserved_bytes(), s.oven().footprint() as u64)
+        };
+        let (a, b) = sum(s);
+        assert_eq!(a, b);
+        for v in 0..40 {
+            let (l, r) = (int_lit(s, QualType::INT, v), int_lit(s, QualType::INT, 3));
+            let e = s.act_on_binary(BinaryOp::Mul, l, r, L);
+            let _ = s.trial_fold_paths(e);
+        }
+        let (a, b) = sum(s);
+        assert_eq!(a, b);
+    });
+}

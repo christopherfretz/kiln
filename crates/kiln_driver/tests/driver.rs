@@ -992,3 +992,45 @@ fn aarch64_target_feature_options() {
         (0, String::new(), "int x = 512;\n".to_owned())
     );
 }
+
+/// `-fkiln-memory-report` (spec/driver.md): after the diagnostics, one
+/// `memory:` line per producer row, then the total. The rows come from
+/// the AST, the type context, sema and the Oven; no numbers are pinned.
+#[test]
+fn memory_report_rows() {
+    let src = "template <class T> constexpr T sq(T x) { return x * x; }\n\
+               static_assert(sq(3) == 9);\n\
+               int f();\nint f();\nint g() { return sq<int>(f()); }\n";
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm", "-o", "-"][..]] {
+        let mut args = vec!["-std=c++26", "-fkiln-memory-report"];
+        args.extend_from_slice(mode);
+        args.extend_from_slice(&["-x", "c++", "-"]);
+        let o = kiln(&args, src);
+        assert_eq!(o.code, 0, "{mode:?}: {}", o.stderr);
+        let lines: Vec<&str> = o.stderr.lines().collect();
+        assert!(lines.iter().all(|l| l.starts_with("memory: ")), "{mode:?}: {}", o.stderr);
+        let row = |name: &str| {
+            let p = format!("memory: {name} count=");
+            lines
+                .iter()
+                .any(|l| l.starts_with(&p) && l.contains(" live=") && l.contains(" reserved="))
+        };
+        for name in [
+            "sema.redecl_index",
+            "sema.explicit_memo",
+            "journal.lookup",
+            "instantiation.retained",
+            "oven.code",
+        ] {
+            assert!(row(name), "{mode:?}: missing {name}: {}", o.stderr);
+        }
+        let prefixed = |p: &str| lines.iter().any(|l| l.starts_with(&format!("memory: {p}")));
+        assert!(prefixed("types."), "{mode:?}: no type row: {}", o.stderr);
+        assert!(prefixed("decls"), "{mode:?}: no AST row: {}", o.stderr);
+        let last = lines.last().copied().unwrap_or_default();
+        assert!(last.starts_with("memory: total live=") && last.contains(" reserved="), "{last}");
+    }
+    // Without the flag nothing is printed.
+    let o = kiln(&["-std=c++26", "-fsyntax-only", "-x", "c++", "-"], src);
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+}
