@@ -469,22 +469,22 @@ impl TextCache {
         i: usize,
         print: impl FnOnce(&mut String) -> fmt::Result,
     ) -> fmt::Result {
-        if let Some(&(a, b)) = pick(self).get(i) {
-            if a != NO_SLOT {
-                w.push_str(&self.arena[a as usize..b as usize]);
-                return Ok(());
-            }
+        if let Some(&(a, b)) = pick(self).get(i)
+            && a != NO_SLOT
+        {
+            w.push_str(&self.arena[a as usize..b as usize]);
+            return Ok(());
         }
         let a = self.arena.len();
         print(&mut self.arena)?;
         let b = self.arena.len();
         w.push_str(&self.arena[a..b]);
-        if let (Ok(a), Ok(b)) = (u32::try_from(a), u32::try_from(b)) {
-            if a != NO_SLOT && b != NO_SLOT {
-                if let Some(e) = pick(self).get_mut(i) {
-                    *e = (a, b);
-                }
-            }
+        if let (Ok(a), Ok(b)) = (u32::try_from(a), u32::try_from(b))
+            && a != NO_SLOT
+            && b != NO_SLOT
+            && let Some(e) = pick(self).get_mut(i)
+        {
+            *e = (a, b);
         }
         Ok(())
     }
@@ -653,11 +653,11 @@ impl<'a> Printer<'a> {
     fn ty(&self, w: Out<'_>, ty: TypeId) -> fmt::Result {
         {
             let c = self.cache.borrow();
-            if let Some(&(a, b)) = c.ty.get(ty.index()) {
-                if a != NO_SLOT {
-                    w.push_str(&c.arena[a as usize..b as usize]);
-                    return Ok(());
-                }
+            if let Some(&(a, b)) = c.ty.get(ty.index())
+                && a != NO_SLOT
+            {
+                w.push_str(&c.arena[a as usize..b as usize]);
+                return Ok(());
             }
         }
         let types = &self.m.types;
@@ -1254,7 +1254,7 @@ impl<'a> Printer<'a> {
         self.comdat_ref(w, g.comdat, &g.name, true)?;
         if let Some(a) = g.align {
             w.write_str(", align ")?;
-            write_u64(w, u64::from(a))?;
+            write_u64(w, a)?;
         }
         self.attachments(w, g.md.iter().copied(), ", ")
     }
@@ -1349,7 +1349,7 @@ impl<'a> Printer<'a> {
         self.comdat_ref(w, f.comdat, &f.name, false)?;
         if let Some(a) = f.align {
             w.write_str(" align ")?;
-            write_u64(w, u64::from(a))?;
+            write_u64(w, a)?;
         }
         if let Some(gc) = &f.gc {
             w.write_str(" gc \"")?;
@@ -2178,11 +2178,11 @@ const CHUNK: usize = 1 << 16;
 
 #[inline]
 fn chunk(w: &mut String, flush: &mut Option<Flush<'_>>) -> fmt::Result {
-    if let Some(f) = flush.as_mut() {
-        if w.len() >= CHUNK {
-            f(w)?;
-            w.clear();
-        }
+    if let Some(f) = flush.as_mut()
+        && w.len() >= CHUNK
+    {
+        f(w)?;
+        w.clear();
     }
     Ok(())
 }
