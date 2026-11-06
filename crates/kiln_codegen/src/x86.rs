@@ -19,8 +19,9 @@ use crate::fir::{Fir, Op, V};
 use crate::module::{Cg, R, err};
 
 /// A builtin clang lowers to one `llvm.x86.*` call taking the builtin's
-/// arguments in order.
-pub(crate) struct Map {
+/// arguments in order: a row of [`crate::x86_intrinsics::MAP`], decoded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Map {
     /// The builtin.
     pub name: &'static str,
     /// The intrinsic's full name.
@@ -34,20 +35,76 @@ pub(crate) struct Map {
     pub mem: Mem,
 }
 
-pub(crate) const fn m(
-    name: &'static str,
-    intr: &'static str,
-    ret: &'static str,
-    params: &'static str,
+/// A row of the generated table: `(offset, length)` of the builtin, the
+/// intrinsic, the return type and the parameter types in
+/// `x86_intrinsics::STRS`, and the attributes. No pointers, so the table
+/// needs no load-time relocation (WP-660).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Packed {
+    name: u32,
+    intr: u32,
+    ret: u32,
+    params: u32,
+    name_len: u8,
+    intr_len: u8,
+    ret_len: u8,
+    params_len: u8,
     mem: Mem,
-) -> Map {
-    Map { name, intr, ret, params, mem }
 }
 
-/// The 1:1 lowering of builtin `name`.
-fn mapped(name: &str) -> Option<&'static Map> {
-    let t = crate::x86_intrinsics::MAP;
-    t.binary_search_by(|r| r.name.cmp(name)).ok().map(|i| &t[i])
+pub(crate) const fn p(
+    name: (u32, u8),
+    intr: (u32, u8),
+    ret: (u32, u8),
+    params: (u32, u8),
+    mem: Mem,
+) -> Packed {
+    Packed {
+        name: name.0,
+        intr: intr.0,
+        ret: ret.0,
+        params: params.0,
+        name_len: name.1,
+        intr_len: intr.1,
+        ret_len: ret.1,
+        params_len: params.1,
+        mem,
+    }
+}
+
+/// The `len` bytes of the string blob at `at` (ASCII, so any range is on
+/// character boundaries).
+fn text(at: u32, len: u8) -> &'static str {
+    let at = at as usize;
+    &crate::x86_intrinsics::STRS[at..at + usize::from(len)]
+}
+
+fn decode(p: &Packed) -> Map {
+    Map {
+        name: text(p.name, p.name_len),
+        intr: text(p.intr, p.intr_len),
+        ret: text(p.ret, p.ret_len),
+        params: text(p.params, p.params_len),
+        mem: p.mem,
+    }
+}
+
+/// The number of 1:1 lowerings.
+pub fn len() -> usize {
+    crate::x86_intrinsics::MAP.len()
+}
+
+/// Every 1:1 lowering, sorted by builtin name.
+pub fn rows() -> impl ExactSizeIterator<Item = Map> {
+    crate::x86_intrinsics::MAP.iter().map(decode)
+}
+
+/// The 1:1 lowering of builtin `name` (a binary search over the sorted
+/// names).
+pub fn by_name(name: &str) -> Option<Map> {
+    let t = &crate::x86_intrinsics::MAP;
+    let i = t.binary_search_by(|p| text(p.name, p.name_len).cmp(name)).ok()?;
+    Some(decode(&t[i]))
 }
 
 /// The predicate of an SSE `cmp<cc>ps` / `cmp<cc>pd` builtin's condition
@@ -97,8 +154,8 @@ impl Cg<'_> {
         if let Some(v) = self.x86_custom(name, e, &args, rty)? {
             return Ok(BuiltinCall::Emitted(v));
         }
-        if let Some(map) = mapped(name) {
-            return self.x86_mapped(map, b, e, &args, rty).map(BuiltinCall::Emitted);
+        if let Some(map) = by_name(name) {
+            return self.x86_mapped(&map, b, e, &args, rty).map(BuiltinCall::Emitted);
         }
         err(self.loc_of(e), format!("code generation for {name} is not supported yet"))
     }
@@ -122,10 +179,10 @@ impl Cg<'_> {
     /// already emitted (each bitcast to the intrinsic's parameter type);
     /// for the lowerings built on another builtin (`x86_mmx`).
     pub(crate) fn x86_call_builtin(&mut self, name: &str, ops: Vec<V>, e: ExprId) -> R<V> {
-        let Some(map) = mapped(name) else {
+        let Some(map) = by_name(name) else {
             return err(self.loc_of(e), format!("no lowering for {name}"));
         };
-        let Some((ret, params)) = self.x86_map_types(map) else {
+        let Some((ret, params)) = self.x86_map_types(&map) else {
             return err(self.loc_of(e), format!("bad intrinsic type for {name}"));
         };
         if params.len() != ops.len() {
