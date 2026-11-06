@@ -9,7 +9,10 @@ coerced aggregates).
 
 ## 1. Scope
 `kiln_llvm` is an in-memory model of LLVM IR in the **LLVM 19 dialect**, plus
-a printer for its textual form. It has no LLVM FFI and no dependencies.
+a printer for its textual form. It has no LLVM FFI and no external
+dependencies; its only dependency is `kiln_source`, for `FxHashMap`
+(WP-654: no table's iteration order reaches the output, so the hasher
+cannot change the text).
 `kiln` hands the printed text to LLVM's tools (`llc`, `opt`, `clang -x ir`),
 which own optimization and every platform detail.
 
@@ -317,7 +320,12 @@ Debug intrinsics print in intrinsic form (`call void @llvm.dbg.declare`);
 LLVM 19's `opt -S` reads and writes that form unchanged.
 
 ## 7. Printer
-`Module::print(&mut impl io::Write)` and `Module::to_text()`.
+`Module::print(&mut impl io::Write)`, `Module::write_to(&mut impl
+fmt::Write)`, `Module::to_text()` and `Display`, which all print the same
+bytes. The printer appends whole tokens to one `String`; `print` and
+`write_to` hand it to their writer in chunks of at least 64 KiB, split
+at global, function and metadata-line boundaries, and `to_text` returns
+the `String`, pre-sized from the module's instruction count (WP-654).
 
 - **Accepted**: `llvm-as-19 -` and `opt-19 -passes=verify` accept the
   output of every module the builder and `Module::verify` accept.
@@ -333,8 +341,10 @@ LLVM 19's `opt -S` reads and writes that form unchanged.
 - **Deterministic**: the output depends only on the sequence of API calls
   (no hash-map iteration order, no addresses).
 - **Lean**: printing allocates per-module and per-function side tables
-  (slot numbers, metadata and attribute-group numbering) and nothing per
-  instruction beyond what the writer does.
+  (slot numbers, metadata and attribute-group numbering; the printed text
+  of each type and inline attribute set the module uses, kept in one
+  arena on first use; one quoting flag per global and function) and
+  nothing per instruction beyond what the writer does.
 
 ## 8. Deliberately unsupported (LLVM 19)
 Not modeled; codegen must not need them in M2. Each is additive later.

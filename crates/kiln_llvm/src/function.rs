@@ -1,6 +1,6 @@
 //! Functions and basic blocks (`spec/llvm.md` §2.4, §4.1).
 
-use std::collections::HashSet;
+use kiln_source::fx::FxHashSet;
 
 use crate::attr::AttrList;
 use crate::inst::{CallConv, CallData, Inst, LandingPadData, Opcode};
@@ -68,7 +68,7 @@ pub struct Function {
     pub(crate) calls: Vec<CallData>,
     pub(crate) pads: Vec<LandingPadData>,
     pub(crate) inst_md: Vec<(InstId, MdKindId, MetadataId)>,
-    symtab: HashSet<Box<str>>,
+    symtab: FxHashSet<Box<str>>,
     last_unique: u32,
 }
 
@@ -112,7 +112,7 @@ impl Function {
             calls: Vec::new(),
             pads: Vec::new(),
             inst_md: Vec::new(),
-            symtab: HashSet::new(),
+            symtab: FxHashSet::default(),
             last_unique: 0,
         }
     }

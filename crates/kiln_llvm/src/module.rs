@@ -1,7 +1,7 @@
 //! The module: globals, functions, constants, attributes, metadata
 //! (`spec/llvm.md` §2).
 
-use std::collections::HashMap;
+use kiln_source::fx::FxHashMap;
 
 use crate::attr::{Attr, AttrKind, AttrTable};
 use crate::constant::{ConstData, ConstTable, IntValue, mask128};
@@ -321,19 +321,19 @@ pub struct Module {
     pub(crate) global_order: Vec<GlobalId>,
     pub(crate) aliases: Vec<Alias>,
     pub(crate) comdats: Vec<Comdat>,
-    comdat_names: HashMap<Box<str>, ComdatId>,
+    comdat_names: FxHashMap<Box<str>, ComdatId>,
     pub(crate) asms: Vec<InlineAsm>,
-    asm_map: HashMap<InlineAsm, AsmId>,
+    asm_map: FxHashMap<InlineAsm, AsmId>,
     pub(crate) attrs: AttrTable,
     pub(crate) md: Vec<MdNode>,
-    md_map: HashMap<MdNode, MetadataId>,
+    md_map: FxHashMap<MdNode, MetadataId>,
     pub(crate) named_md: Vec<(Box<str>, Vec<MetadataId>)>,
     pub(crate) md_kinds: Vec<Box<str>>,
     pub(crate) sync_scopes: Vec<Box<str>>,
-    gnames: HashMap<Box<str>, Value>,
+    gnames: FxHashMap<Box<str>, Value>,
     /// Erased function declarations and what their uses now refer to
     /// ([`Module::replace_function`]).
-    replaced: HashMap<FuncId, Value>,
+    replaced: FxHashMap<FuncId, Value>,
     last_unique: u32,
     /// The LLVM release whose textual IR the module is written in (default
     /// 19). At 21 or later [`Module::attr_set`] writes `nocapture` as
@@ -359,17 +359,17 @@ impl Module {
             global_order: Vec::new(),
             aliases: Vec::new(),
             comdats: Vec::new(),
-            comdat_names: HashMap::new(),
+            comdat_names: FxHashMap::default(),
             asms: Vec::new(),
-            asm_map: HashMap::new(),
+            asm_map: FxHashMap::default(),
             attrs: AttrTable::new(),
             md: Vec::new(),
-            md_map: HashMap::new(),
+            md_map: FxHashMap::default(),
             named_md: Vec::new(),
             md_kinds: FIXED_MD_KINDS.iter().map(|&k| Box::from(k)).collect(),
             sync_scopes: vec![Box::from(""), Box::from("singlethread")],
-            gnames: HashMap::new(),
-            replaced: HashMap::new(),
+            gnames: FxHashMap::default(),
+            replaced: FxHashMap::default(),
             last_unique: 0,
             ir_version: 19,
         }
