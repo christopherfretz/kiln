@@ -135,6 +135,20 @@ fault counts and trap ids unchanged.
   step fault in a fused `Step` is reported at that `Step`'s own `pc`. The
   `op-stats` feature counts a fused instruction as executed, so its
   histograms match an unfused run.
+- **Pointer steps.** `PtrAdd`'s aux carries, besides the index's integer
+  aux and the negate bit 9, an element-step field (bits 10..=15,
+  `ptr_add_aux`) the compiler fills from the element type: `k + 1` when
+  the element's size is `1 << k` and the type is not `Opaque` (an
+  incomplete class, whose size may still change), `0` otherwise and for
+  an unsigned 128-bit index (its value may exceed `i128`). With a
+  nonzero field the run loop first tries, inline, a step inside an
+  array allocation of exactly the operand's element type: the current
+  index is the offset shifted right by `k`, and a new index in `0..=n`
+  gives the pointer (past-the-end at `n`); a zero index returns the
+  pointer unchanged. Everything else runs `ptr_add`, which tries the
+  same step with the size read from the type table and otherwise steps
+  within the extent of the subobject the pointer lies in, as before;
+  every result and every fault is the one that general path gives.
 
 ### Abstract memory — normative for M2
 - **Pointers** are one `u64`: offset (32 bits) | past-the-end (1) | slot

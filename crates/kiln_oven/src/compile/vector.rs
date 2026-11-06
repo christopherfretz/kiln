@@ -249,7 +249,7 @@ impl Compiler<'_> {
         }
         let ety = self.ety(e);
         let r = self.reg();
-        let pc = self.emit_at(Op::PtrAdd, int_aux(64, false), &[r, p, ri, ety.0], e);
+        let pc = self.emit_ptr_add(int_aux(64, false), &[r, p, ri, ety.0], e);
         let loc = self.begin(base);
         if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
             site.loc = loc;
