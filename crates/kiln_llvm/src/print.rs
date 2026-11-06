@@ -93,13 +93,19 @@ fn write_ascii_run<W: fmt::Write + ?Sized>(w: &mut W, bytes: &[u8]) -> fmt::Resu
     w.write_str(std::str::from_utf8(bytes).map_err(|_| fmt::Error)?)
 }
 
+/// Whether `printEscapedString` prints `c` as itself.
+#[inline]
+fn is_verbatim(c: u8) -> bool {
+    (0x20..0x7f).contains(&c) && c != b'"' && c != b'\\'
+}
+
 /// LLVM's `printEscapedString`: printable ASCII except `"` and `\` verbatim,
 /// `\` as `\\`, everything else as `\XX`. Verbatim runs are written as one
 /// token.
 pub(crate) fn write_escaped<W: fmt::Write + ?Sized>(w: &mut W, bytes: &[u8]) -> fmt::Result {
     let mut start = 0;
     for (i, &c) in bytes.iter().enumerate() {
-        if (0x20..0x7f).contains(&c) && c != b'"' && c != b'\\' {
+        if is_verbatim(c) {
             continue;
         }
         write_ascii_run(w, &bytes[start..i])?;
@@ -131,18 +137,39 @@ fn write_md_ident(w: Out<'_>, name: &str) -> fmt::Result {
 
 /// The decimal digits of `v`, as `itoa` writes them (no `fmt` machinery).
 pub(crate) fn write_u64<W: fmt::Write + ?Sized>(w: &mut W, mut v: u64) -> fmt::Result {
+    if v < 10 {
+        return w.write_char(char::from(b'0' + v as u8));
+    }
     let mut buf = [0u8; 20];
     let mut i = buf.len();
-    loop {
+    while v >= 100 {
+        let d = (v % 100) as usize * 2;
+        v /= 100;
+        i -= 2;
+        buf[i..i + 2].copy_from_slice(&DIGITS2[d..d + 2]);
+    }
+    if v >= 10 {
+        let d = v as usize * 2;
+        i -= 2;
+        buf[i..i + 2].copy_from_slice(&DIGITS2[d..d + 2]);
+    } else {
         i -= 1;
-        buf[i] = b'0' + (v % 10) as u8;
-        v /= 10;
-        if v == 0 {
-            break;
-        }
+        buf[i] = b'0' + v as u8;
     }
     write_ascii_run(w, &buf[i..])
 }
+
+/// `00`..`99`, two bytes each.
+static DIGITS2: [u8; 200] = {
+    let mut t = [0u8; 200];
+    let mut n = 0;
+    while n < 100 {
+        t[2 * n] = b'0' + (n / 10) as u8;
+        t[2 * n + 1] = b'0' + (n % 10) as u8;
+        n += 1;
+    }
+    t
+};
 
 /// `v` in decimal, with a leading `-` when negative.
 pub(crate) fn write_i64<W: fmt::Write + ?Sized>(w: &mut W, v: i64) -> fmt::Result {
@@ -416,8 +443,12 @@ struct Printer<'a> {
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Quote {
     Unknown,
+    /// `@name`.
     Plain,
+    /// `@"name"`, every byte printed as is.
     Quoted,
+    /// `@"name"` with `\XX` escapes.
+    Escaped,
 }
 
 /// Text of types and attribute sets as printed, in one arena:
@@ -465,16 +496,30 @@ fn global_name(w: Out<'_>, name: &str, slot: u32, q: &Cell<Quote>) -> fmt::Resul
         w.write_char('@')?;
         return write_u64(w, u64::from(slot));
     }
-    let quoted = match q.get() {
-        Quote::Plain => false,
-        Quote::Quoted => true,
-        Quote::Unknown => {
-            let quoted = name_needs_quotes(name);
-            q.set(if quoted { Quote::Quoted } else { Quote::Plain });
-            quoted
+    let mut quote = q.get();
+    if quote == Quote::Unknown {
+        quote = if !name_needs_quotes(name) {
+            Quote::Plain
+        } else if name.bytes().all(is_verbatim) {
+            Quote::Quoted
+        } else {
+            Quote::Escaped
+        };
+        q.set(quote);
+    }
+    match quote {
+        Quote::Plain | Quote::Unknown => {
+            w.push('@');
+            w.push_str(name);
         }
-    };
-    write_name_quoted(w, '@', name, quoted)
+        Quote::Quoted => {
+            w.push_str("@\"");
+            w.push_str(name);
+            w.push('"');
+        }
+        Quote::Escaped => write_name_quoted(w, '@', name, true)?,
+    }
+    Ok(())
 }
 
 fn is_intrinsic_call(m: &Module, callee: Value) -> bool {
@@ -606,6 +651,15 @@ impl<'a> Printer<'a> {
     // ---- operands -------------------------------------------------------
 
     fn ty(&self, w: Out<'_>, ty: TypeId) -> fmt::Result {
+        {
+            let c = self.cache.borrow();
+            if let Some(&(a, b)) = c.ty.get(ty.index()) {
+                if a != NO_SLOT {
+                    w.push_str(&c.arena[a as usize..b as usize]);
+                    return Ok(());
+                }
+            }
+        }
         let types = &self.m.types;
         self.cache.borrow_mut().emit(w, |c| &mut c.ty, ty.index(), |a| types.write(a, ty))
     }
@@ -2193,7 +2247,9 @@ mod tests {
 
     #[test]
     fn integers_match_display() {
-        for v in [0, 1, 9, 10, 99, 100, 4096, i64::MAX, -1, -10, -4096, i64::MIN] {
+        let edges =
+            [0, 1, 9, 10, 99, 100, 101, 999, 1000, 4096, i64::MAX, -1, -10, -4096, i64::MIN];
+        for v in (0..20_000).chain(edges) {
             let mut s = String::new();
             write_i64(&mut s, v).unwrap();
             assert_eq!(s, v.to_string());
@@ -2227,8 +2283,20 @@ mod tests {
             let c = m.const_int(i32t, i128::from(n));
             m.global_mut(g).init = Some(c);
         }
+        for name in ["a$b", "a\"b", "0x", "plain"] {
+            let g = m.add_global(name, i32t);
+            let ptr = m.types.ptr(0);
+            let user = m.add_global(&format!("p.{name}"), ptr);
+            m.global_mut(user).init = Some(Value::global(g));
+        }
         let text = m.to_text();
         assert!(text.len() > 2 * CHUNK);
+        for want in
+            ["@\"a$b\" = ", "@\"a\\22b\" = ", "@\"p.a$b\" = global ptr @\"a$b\"", "@\"0x\" = "]
+        {
+            assert!(text.contains(want), "{want}");
+        }
+        assert!(text.contains("@p.plain = global ptr @plain"));
         assert_eq!(m.to_string(), text);
         let mut s = String::new();
         m.write_to(&mut s).unwrap();
