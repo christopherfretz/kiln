@@ -279,3 +279,41 @@ void g() {
     assert!(fast.iter().any(|r| r.contains("\"kind\":\"default\"")), "{fast:#?}");
     assert_eq!(fast, full, "instantiation report differs with the memo");
 }
+
+/// WP-661: the minimum argument count follows default arguments that later
+/// redeclarations add ([dcl.fct.default]/4), out-of-class member
+/// definitions add (/6) and class-scope late parsing supplies: each call
+/// is checked against the defaults visible at it, after the same
+/// functions were already asked for their minimum (a function template
+/// cannot gain defaults, /4, so it is only asked repeatedly). The arity
+/// failures keep their notes.
+#[test]
+fn min_args_follow_added_default_arguments() {
+    let p = same_both_ways(
+        r"
+void f(int, int, int);
+int a1 = (f(1, 2, 3), 0);
+void f(int, int, int = 3);
+int a2 = (f(1, 2), 0);
+void f(int, int = 2, int);
+int a3 = (f(1), 0);
+template <class T> int t(T, int, int = 3);
+int b1 = t(1, 2, 3) + t(1, 2) + t<long>(1, 2) + t<long>(1, 2, 3);
+struct S {
+  int m(int, int);
+  int n(int = 1) { return m(1, 2) + k(); }
+  int k(int = 0) { return 0; }
+  int u(int, int) { return 0; }
+};
+int c1 = S().m(1, 2) + S().n() + S().k();
+int S::m(int, int = 2) { return 0; }
+int c2 = S().m(1);
+void g(int, int);
+void use() { g(1); }
+void g(int, int = 0);
+void use2() { g(1); g(); }
+",
+    );
+    p.assert_diag("error: no matching function for call to 'g'");
+    assert_eq!(p.diags.iter().filter(|d| d.contains("error:")).count(), 2, "{:#?}", p.diags);
+}
