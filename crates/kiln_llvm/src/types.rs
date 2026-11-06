@@ -136,10 +136,28 @@ struct NamedStruct {
     body: Option<(Box<[TypeId]>, bool)>,
 }
 
+/// Whether a type has a size (WP-655), kept per type next to its data.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Sizedness {
+    /// Sized, for good.
+    Yes,
+    /// Unsized for good: void, label, metadata, token, functions and
+    /// aggregates containing one.
+    No,
+    /// Unsized until the opaque structs it contains get bodies (an opaque
+    /// struct, or an aggregate containing one and nothing unsized for
+    /// good).
+    Pending,
+}
+
 /// Interning table of types. Owned by a [`crate::Module`].
 #[derive(Debug)]
 pub struct TypeTable {
     data: Vec<TypeData>,
+    /// Sizedness of each type, by index (parallel to `data`).
+    sized: Vec<Sizedness>,
+    /// The `Pending` types waiting on each `Pending` type.
+    waiters: FxHashMap<TypeId, Vec<TypeId>>,
     map: FxHashMap<TypeData, TypeId>,
     named: Vec<NamedStruct>,
     named_ids: Vec<TypeId>,
@@ -160,6 +178,8 @@ impl TypeTable {
     pub fn new() -> Self {
         let mut t = TypeTable {
             data: Vec::new(),
+            sized: Vec::new(),
+            waiters: FxHashMap::default(),
             map: FxHashMap::default(),
             named: Vec::new(),
             named_ids: Vec::new(),
@@ -200,7 +220,78 @@ impl TypeTable {
         let id = TypeId(self.data.len() as u32);
         self.data.push(d.clone());
         self.map.insert(d, id);
+        let s = self.compute_sized(id);
+        self.sized.push(s);
+        if s == Sizedness::Pending {
+            self.wait_on_elements(id);
+        }
         id
+    }
+
+    /// The sizedness of `ty` from its elements' (the elements of an
+    /// aggregate are interned, and their states current, before it).
+    fn compute_sized(&self, ty: TypeId) -> Sizedness {
+        let all = |elems: &[TypeId]| {
+            let mut s = Sizedness::Yes;
+            for &e in elems {
+                match self.sized[e.index()] {
+                    Sizedness::No => return Sizedness::No,
+                    Sizedness::Pending => s = Sizedness::Pending,
+                    Sizedness::Yes => {}
+                }
+            }
+            s
+        };
+        match &self.data[ty.index()] {
+            TypeData::Void
+            | TypeData::Label
+            | TypeData::Metadata
+            | TypeData::Token
+            | TypeData::Function { .. } => Sizedness::No,
+            TypeData::Array { elem, .. } | TypeData::Vector { elem, .. } => all(&[*elem]),
+            TypeData::Struct { fields, .. } => all(fields),
+            TypeData::Named(i) => match &self.named[*i as usize].body {
+                Some((fields, _)) => all(fields),
+                None => Sizedness::Pending,
+            },
+            _ => Sizedness::Yes,
+        }
+    }
+
+    /// Registers `Pending` aggregate `ty` as a waiter on its `Pending`
+    /// elements (an opaque struct waits for its body instead).
+    fn wait_on_elements(&mut self, ty: TypeId) {
+        let elems: Vec<TypeId> = match &self.data[ty.index()] {
+            TypeData::Array { elem, .. } | TypeData::Vector { elem, .. } => vec![*elem],
+            TypeData::Struct { fields, .. } => fields.to_vec(),
+            TypeData::Named(i) => {
+                self.named[*i as usize].body.as_ref().map_or_else(Vec::new, |(f, _)| f.to_vec())
+            }
+            _ => Vec::new(),
+        };
+        for e in elems {
+            if self.sized[e.index()] == Sizedness::Pending {
+                self.waiters.entry(e).or_default().push(ty);
+            }
+        }
+    }
+
+    /// `ty` became sized: re-evaluates the types waiting on it, and on
+    /// those that become sized in turn.
+    fn resolve_waiters(&mut self, ty: TypeId) {
+        let mut work = vec![ty];
+        while let Some(t) = work.pop() {
+            for w in self.waiters.remove(&t).unwrap_or_default() {
+                if self.sized[w.index()] != Sizedness::Pending {
+                    continue;
+                }
+                let s = self.compute_sized(w);
+                self.sized[w.index()] = s;
+                if s == Sizedness::Yes {
+                    work.push(w);
+                }
+            }
+        }
     }
 
     pub(crate) fn lookup(&self, d: &TypeData) -> Option<TypeId> {
@@ -289,6 +380,7 @@ impl TypeTable {
         let idx = self.named.len() as u32;
         let id = TypeId(self.data.len() as u32);
         self.data.push(TypeData::Named(idx));
+        self.sized.push(Sizedness::Pending);
         let slot = if name.is_empty() {
             self.unnamed_count += 1;
             self.unnamed_count - 1
@@ -321,6 +413,16 @@ impl TypeTable {
             return Err(IrError::new(IrErrorKind::InvalidType, "struct body already set"));
         }
         n.body = Some((fields.into(), packed));
+        let s = self.compute_sized(ty);
+        self.sized[ty.index()] = s;
+        match s {
+            Sizedness::Yes => self.resolve_waiters(ty),
+            Sizedness::Pending => self.wait_on_elements(ty),
+            // Its waiters stay `Pending`: unsized for good.
+            Sizedness::No => {
+                self.waiters.remove(&ty);
+            }
+        }
         Ok(())
     }
 
@@ -499,17 +601,29 @@ impl TypeTable {
 
     /// True when `ty` has a size: everything except void, label, metadata,
     /// token, functions, opaque structs and aggregates containing them.
+    /// One load: the state is kept as types are interned and bodies set.
+    #[inline]
     pub fn is_sized(&self, ty: TypeId) -> bool {
+        let s = self.sized[ty.index()] == Sizedness::Yes;
+        debug_assert_eq!(s, self.is_sized_walk(ty), "stale sizedness of {}", self.display(ty));
+        s
+    }
+
+    /// [`TypeTable::is_sized`] by walking the type: the reference the
+    /// kept state is checked against (debug builds).
+    fn is_sized_walk(&self, ty: TypeId) -> bool {
         match &self.data[ty.index()] {
             TypeData::Void
             | TypeData::Label
             | TypeData::Metadata
             | TypeData::Token
             | TypeData::Function { .. } => false,
-            TypeData::Array { elem, .. } | TypeData::Vector { elem, .. } => self.is_sized(*elem),
-            TypeData::Struct { fields, .. } => fields.iter().all(|&f| self.is_sized(f)),
+            TypeData::Array { elem, .. } | TypeData::Vector { elem, .. } => {
+                self.is_sized_walk(*elem)
+            }
+            TypeData::Struct { fields, .. } => fields.iter().all(|&f| self.is_sized_walk(f)),
             TypeData::Named(i) => match &self.named[*i as usize].body {
-                Some((fields, _)) => fields.iter().all(|&f| self.is_sized(f)),
+                Some((fields, _)) => fields.iter().all(|&f| self.is_sized_walk(f)),
                 None => false,
             },
             _ => true,
@@ -717,5 +831,68 @@ pub struct TypeDisplay<'a> {
 impl fmt::Display for TypeDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.table.write(f, self.ty)
+    }
+}
+
+/// Debug builds check the kept sizedness of every type against the walk
+/// when the table goes away, so every type a test creates is covered.
+#[cfg(debug_assertions)]
+impl Drop for TypeTable {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        for i in 0..self.data.len() {
+            let ty = TypeId(i as u32);
+            assert_eq!(
+                self.sized[i] == Sizedness::Yes,
+                self.is_sized_walk(ty),
+                "stale sizedness of {}",
+                self.display(ty)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod sized_tests {
+    use super::{TypeId, TypeTable};
+
+    /// Aggregates built on a struct before its body is set become sized
+    /// with it, transitively; an opaque or unsized field keeps them
+    /// unsized ([`TypeTable::is_sized`] against the walk).
+    #[test]
+    #[allow(clippy::many_single_char_names, reason = "struct names A to D, f, t")]
+    fn sizedness_follows_bodies_set_later() {
+        let mut t = TypeTable::new();
+        let a = t.named_struct("A");
+        let b = t.named_struct("B");
+        let arr = t.array(a, 4);
+        let lit = t.struct_literal(&[TypeId::I32, arr], false);
+        let vec_of_lit = t.array(lit, 2);
+        t.set_body(b, &[lit, a], false).unwrap();
+        let c = t.named_struct("C");
+        let with_c = t.struct_literal(&[a, c], false);
+        for ty in [a, b, arr, lit, vec_of_lit, c, with_c] {
+            assert!(!t.is_sized(ty));
+        }
+        t.set_body(a, &[TypeId::I64], false).unwrap();
+        for ty in [a, b, arr, lit, vec_of_lit] {
+            assert!(t.is_sized(ty), "{}", t.display(ty));
+        }
+        assert!(!t.is_sized(with_c) && !t.is_sized(c));
+        let d = t.named_struct("D");
+        t.set_body(c, &[d], false).unwrap();
+        assert!(!t.is_sized(with_c));
+        let f = t.function(TypeId::VOID, &[], false);
+        assert!(!t.is_sized(f) && !t.is_sized(TypeId::VOID));
+        t.set_body(d, &[], false).unwrap();
+        for ty in [c, d, with_c] {
+            assert!(t.is_sized(ty), "{}", t.display(ty));
+        }
+        for i in 0..t.len() {
+            let ty = TypeId(i as u32);
+            assert_eq!(t.is_sized(ty), t.is_sized_walk(ty));
+        }
     }
 }
