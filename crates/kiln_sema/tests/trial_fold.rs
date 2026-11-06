@@ -380,6 +380,7 @@ fn enumerations_agree() {
 /// one and a namespace-scope one, and the full path answers.
 #[test]
 fn variable_reads_agree() {
+    type Build = fn(&mut Sema<'_, '_>, ExprId) -> ExprId;
     with_sema(|s, _| {
         let ft = fn_type(s, QualType::INT, &[QualType::INT]);
         let h = DeclHead::new(s.ast.tu, name(s, "f"), L);
@@ -398,7 +399,6 @@ fn variable_reads_agree() {
         let ck = cnst(s, QualType::INT);
         let k = local(s, "k", ck, 4);
         let g = var(s, "g", QualType::INT);
-        type Build = fn(&mut Sema<'_, '_>, ExprId) -> ExprId;
         let shapes: [(&str, Build); 14] = [
             ("+v", |s, v| s.act_on_unary(UnaryOp::Plus, v, L)),
             ("-v", |s, v| s.act_on_unary(UnaryOp::Minus, v, L)),
@@ -454,7 +454,7 @@ fn variable_reads_agree() {
                 for round in 0..2 {
                     let r = s.build_decl_ref(d, L);
                     let e = build(s, r);
-                    let w = || format!("{} (v = {vn}, round {round})", what);
+                    let w = || format!("{what} (v = {vn}, round {round})");
                     let (fast, full) = s.trial_fold_paths(e);
                     assert_eq!(fast, None, "fast path declines {}", w());
                     tally(full.is_some(), &mut t);
