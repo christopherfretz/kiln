@@ -1,4 +1,4 @@
-//! The redeclaration index (WP-658, spec/sema.md §4.4): a side index over
+//! The redeclaration index (WP-658, spec/sema.md §3): a side index over
 //! the large overload sets of the lookup tables, so that the redeclaration
 //! search of a function declaration (`pick_prev_function`) visits only
 //! the entries that can affect its outcome instead of every same-name

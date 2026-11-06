@@ -357,6 +357,23 @@ residual` (docs/status/wp-184-oracle-switch.md).
   control statement (a Block directly above a Control scope), it also
   searches the Control scope, so `if (int x = 0) { int x; }` is
   diagnosed as [stmt.pre]/5 requires.
+- **Redeclaration index** (`overload/redecl_index.rs`, WP-658). The
+  redeclaration search of an unqualified friend function (and of a
+  friend instantiated from a class template's pattern) in a namespace
+  whose entry for the name holds 32 or more declarations visits only a
+  subsequence of it: the functions and function templates whose
+  parameter-type list (canonical parameter types, variadic, template or
+  not) hashes like the new declaration's, plus every entry the hash
+  cannot judge (non-functions, using-shadows, other templates,
+  declarations without a type or with a non-prototype error type).
+  Lookup order is kept, flags (`INVALID`, inline, ADL-only) are read
+  when the search runs, and `pick_prev_function` still decides, so the
+  previous declaration, the invalid and other-kind outcomes, the
+  using-declarator checks and every diagnostic are those of the full
+  scan; `ParseOptions::full_redecl_scan` turns the index off for tests.
+  The index follows the AST through journals of the mutations its keys
+  read (`kiln_ast::journal`: a lookup slot replaced or a set shrunk, a
+  declaration retyped, a redeclaration group's latest moved).
 - **Block-scope `extern` declarations** are recorded in `local_externs`.
   A later namespace-scope declaration of the same name redeclares them,
   per [basic.link]/6 and clang's local extern decls. A declaration in a

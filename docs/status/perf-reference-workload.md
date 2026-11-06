@@ -553,7 +553,7 @@ share of the named profile that the work could remove.
 | F11 | **Done (landed WP-644).** Cache subobject and union paths | kiln_oven `ty/path.rs` `Types::hop`, `vm.rs` `union_path`, `mutable_path`, `place_in_unions`, `extent_of`, `Types::has_subobject` | 9% of S7, about 3% of R2. Measured before the cache: 794,167 `union_path` walks over 21 distinct keys at S7 N = 40, about 7% of S7's instructions. After it: the walks' self cost at S7 N = 8 halves (96.8 M to about 52 M Ir) and S7 is 2.6% faster, with peak RSS unchanged ("WP-644: subobject path cache"). What remains is the per-access hash lookups (`vm.rs:2488` `union_path`, `ty/path.rs:144` `Types::hop`) | 3–6% of S7 (measured 2.6–3.7%) | Medium | M |
 | F12 | **Done (WP-645).** Compute node accounting lazily | kiln_sema `templ/stack.rs` push/pop; kiln_ast `node_live_bytes` | About 1–1.2% and 3 M allocations in R3 | About 1% | Low | S |
 | F13 | **Partly done (WP-657):** S8 −5.4% wall at N=100 and −7.7% at N=400, −9% RSS, `templates_wide` −4.6%, from an arity pre-filter, a substituted-integer NTTP fast path and per-candidate scratch reuse, with resolution byte-identical; `add_template_candidate` −15% (target −30%), and explicit-argument substitution remains ("WP-657: deduction attempts"). Fewer deduction and candidate attempts | kiln_sema `deduce_spec`, `add_template_candidate`, `deduce_call_arg` | 34–36% inclusive in S8; 9.8 M `deduce_spec` calls in R2; `deduce_call_arg` grows 18x for 4x N in S8 | Unknown; the largest frontend lever | Medium–high | M–L |
-| F14 | Index hidden-friend redeclaration | kiln_sema `act_on_friend` → `overload/redecl.rs` `pick_prev_function` | 11.5% of S8 at N=400 and growing 13–19x for 4x N. Not seen in the reference. | Removes S8's quadratic term | Low | S–M |
+| F14 | **Done (WP-658):** a per-set signature index makes each friend scan only same-signature candidates: entries scanned on S8 N=400 −99.96% (2.06 M → 886, flat in N), Ir −3.2%, wall −8.3% at N=400 and −5.3% at N=200, about 56 bytes per indexed entry, outputs byte-identical. Index hidden-friend redeclaration | kiln_sema `act_on_friend` → `overload/redecl.rs` `pick_prev_function` | 11.5% of S8 at N=400 and growing 13–19x for 4x N. Not seen in the reference. | Removes S8's quadratic term | Low | S–M |
 | F15 | **Partly done (WP-656):** leaf integer trial folds skip the bytecode: trial thunk compiles −86% and `eval_job` Ir −44% on `trial-folds` (wall −8%, RSS −16%), production shapes flat; variable reads, member accesses and `is_constant_initialized` remain ("WP-656: trial-fold fast path"). Fast path for trial folds | kiln_sema `try_fold` callers (`fold_int`, narrowing, `known_truth`) | Bytecode compile is 6.3% of R3. 168 k `compile_func` calls for 575 k folds, mostly on literals and simple arithmetic | 3–5% of R3 | Low–medium | S–M |
 | F16 | Do not re-classify keywords in `decltype` lookahead | kiln_parse `Parser::decltype_scope_end` | 3 M of 7.7 M `Keywords::get` calls in R1 | About 0.6% of R1 | Low | S |
 | F17 | Cache built-in operator candidate sets | kiln_sema `add_builtin_with` | 4.6 M calls at 434 Ir each, 1% of R2 | About 1% | Low | S |
@@ -3506,3 +3506,265 @@ column is identical. Only the timing columns differ.
     `const bool`, and they still evaluate.
   - Converting those is a variable read, which needs WP-656's lvalue
     decision.
+
+## WP-658: friend redeclaration index
+
+This WP covers F14: the redeclaration search of hidden friends. The
+spec is spec/landed/sema/WP-658.md, and spec/sema.md §3 has a new
+paragraph, "Redeclaration index".
+
+### Measurement on main
+
+Main is 56a7396d1. The shapes and flags are those of WP-657: S8 at
+N = 100, 200 and 400 (`xtask gen_reflect`, `-fsyntax-only -freflection`,
+libstdc++ from GCC 16.1), `templates_wide` (tw) and `virtual-lattice`
+(vl) with `-fsyntax-only`, and `accessor-wide-emit` (aw) with
+`-S -emit-llvm -o /dev/null`. Callgrind ran with `--cache-sim=no`,
+`ulimit -v 3000000` and `timeout 1200`. Step 0 (06da1dfe5) adds
+`op-stats` counters per `pick_prev_function` call site and moves the
+friend collect into its own `#[inline(never)]` function,
+`hidden_friend_redecl_set`; its release code is main's.
+
+**(a) Counts.** Entries scanned by `pick_prev_function`, per call site
+and scope. "compared" is `fn_corresponds` calls; "hit pos" is the
+summed position of the hit from the end.
+
+| shape | site | calls | scanned | compared | corresponded | max scanned | hit pos |
+|---|---|--:|--:|--:|--:|--:|--:|
+| S8 N=100 | unqualified friend, Namespace | 848 | 150,948 | 141,122 | 0 | 400 | — |
+| S8 N=200 | unqualified friend, Namespace | 1,542 | 540,976 | 522,128 | 0 | 747 | — |
+| S8 N=400 | unqualified friend, Namespace | 2,942 | 2,060,676 | 2,023,628 | 0 | 1,447 | — |
+| S8 N=400 | member (`prev_candidates_dn`), CXXRecord | 14,671 | 31,462 | 30,317 | 79 | 17 | 49 |
+| S8 N=400 | `find_prev_function`, Namespace | 448 | 3,297 | 2,740 | 44 | 41 | 225 |
+| aw | unqualified friend, Namespace | 99 | 1,174 | 667 | 0 | 43 | — |
+| aw | member, CXXRecord | 1,296 | 3,730 | 2,613 | 71 | 17 | 42 |
+| aw | `find_prev_function`, Namespace | 385 | 2,223 | 1,911 | 26 | 35 | 119 |
+
+- tw and vl scan nothing of note (no set of 32 or more).
+- The long buckets are all namespace-scope hidden friends: the
+  `operator==` and `operator<=>` friend templates every S8 class
+  declares, one set of about N entries per name. No friend
+  corresponds to an earlier one, so every scan runs to the end.
+- Class members never pass 17 entries and `find_prev_function` never
+  passes 41: neither needs the index.
+
+**(b) Ir.** Self Ir by symbol (callgrind `--auto=no`), and the
+inclusive Ir of the friend collect from a run toggled on
+`hidden_friend_redecl_set`. `pick_prev_function` and `fn_corresponds`
+are inlined into `act_on_function_declarator` on the friend path, so a
+run toggled on them sees only the member and `find_prev_function`
+calls (73.0 M at N=100, 210.2 M at N=400, 21.4 M on aw, unchanged by
+this WP). `act_on_friend` itself is small (6.8 M / 11.7 M / 35.6 M):
+the scan runs under `act_on_function_declarator`.
+
+| | S8 N=100 | S8 N=200 | S8 N=400 | aw |
+|---|--:|--:|--:|--:|
+| total Ir | 9,494,679,040 | 16,716,224,369 | 31,678,983,969 | 8,437,085,972 |
+| `hidden_friend_redecl_set` inclusive | 81,741,513 (0.86%) | 286,421,417 (1.71%) | 1,077,123,563 (3.40%) | — |
+| `is_dependent_friend_fn` self | 10,301,368 | 37,104,833 | 141,402,885 (0.45%) | 163,343 |
+| `pick_prev_function` self | 7,514,666 | 25,066,838 | 92,720,159 (0.29%) | 469,746 |
+| `fn_corresponds` self | 12,855,775 | 45,392,716 | 172,592,691 (0.54%) | 434,555 |
+| `declared_fn_type` self | 22,964 | 22,964 | 22,964 | 18,681 |
+| `LookupTables::lookup_local` self (all lookups) | 31,040,006 | 50,336,452 | 87,940,867 | 21,385,159 |
+
+The friend scan grows 3.5x for 2x N and 13x for 4x N. At N=400 it
+is about 4% of S8: the collect with its dependent-friend filter (3.4%)
+plus the comparisons (`pick_prev_function` and `fn_corresponds` self,
+0.83%, which also hold the member calls). `declared_fn_type` is no longer on the
+path (WP-657 step 4). The collect's `lookup_local` is one hash probe
+per friend.
+
+### Design note
+
+(a) **Signature-bucketed index** — implemented.
+- `overload/redecl_index.rs` keeps, per lookup overload set of 32 or
+  more entries, a key per position and a chain per key, newest first.
+- The key hashes "function" or "function template", variadic, and the
+  canonical parameter types (`canonical(q).to_raw()`, the data
+  `fn_corresponds` compares first). A function template is keyed on
+  its latest pattern's type.
+- Every other entry gets a key that every query returns: non-function
+  entities, using-shadows, unresolved using-declarators, other
+  templates, declarations without a type.
+- A query for a new declaration merges its key's chain with that
+  always-returned chain and returns the positions in lookup order. An
+  entry left out is one `fn_corresponds` rejects on its parameters
+  before any side effect, or one `pick_prev_function` skips (a
+  template for a non-template, or the reverse). So `prev`, the first
+  invalid candidate, the newest other entity, `shadows` and every
+  diagnostic are the full scan's. The hash is a filter;
+  `fn_corresponds` decides.
+- **Insertion paths.** The index reads the lookup set itself, so it
+  needs no hook on any declaration path: ordinary declarations,
+  friends, members, instantiated friends (`friend_decl`) and
+  using-declarators all land in `LookupTables::insert_with_flags`.
+  Positions appended since the last query are keyed on the next one.
+  The AST journals the only in-place mutations a key reads: a slot
+  replaced, a set that shrank (`LookupTables::remove`), `set_ty`, and
+  `push_redecl` (which moves a template pattern's latest). Each query
+  drains them and re-keys the positions that read a journaled
+  declaration. A shrunk set, or a journal past 65,536 events, drops
+  the index; it is rebuilt lazily.
+- **Declarations that become invalid.** `INVALID` is not keyed. It is
+  read live by `pick_prev_function`, so an entry that turns invalid
+  keeps its key and is still found; the newest valid corresponding one
+  still wins.
+- **Non-prototype (error) types.** A declaration without a type, or
+  whose type is not a prototype, gets the always-returned key, since
+  `fn_corresponds` treats it as corresponding to everything. A new
+  declaration with a non-prototype type takes the full list.
+  A redeclaration that changes a stored type goes through `set_ty`
+  and is re-keyed.
+- **Template heads.** The key holds only a "template" bit. Two function
+  templates with equal parameter lists and different heads share a
+  key, and `heads_equivalent`, the return type and the
+  requires-clauses still tell them apart.
+- Used by the unqualified-friend arm and by `pattern_friend_prev`
+  (friends instantiated from a pattern). The member arm and
+  `find_prev_function` keep the full list (counts above).
+
+(b) **Cheap reject before `fn_corresponds`** — already in place.
+WP-657 step 4 made `fn_corresponds` read the stored type and reject on
+arity, variadic and parameter types before `declared_fn_type` is
+formed: `declared_fn_type` is 23 K Ir on S8 at any N. What remained
+was O(N) per friend, which (a) removes.
+
+(c) **Lookup result cache** — not needed. The friend collect's
+`lookup_local` is one hash probe per friend. Its cost was the per-entry
+copy and the `is_dependent_friend_fn` filter over every entry, and the
+index removes both: only the returned entries are filtered.
+
+### Per-step
+
+| step | commit | S8 N=100 Ir | S8 N=200 Ir | S8 N=400 Ir | aw Ir | tw Ir | vl Ir |
+|---|---|--:|--:|--:|--:|--:|--:|
+| main + counters | 06da1dfe5 | 9,494,679,040 | 16,716,224,369 | 31,678,983,969 | 8,437,085,972 | 2,481,171,754 | 90,992,473 |
+| 1 index | ffd56dc93 | 9,424,257,903 (−0.74%) | 16,457,991,600 (−1.54%) | 30,653,322,518 (−3.24%) | 8,436,892,435 (±0) | 2,481,355,775 (+0.01%) | 91,015,559 (+0.03%) |
+
+Counts at step 1:
+
+| | S8 N=100 | S8 N=200 | S8 N=400 | aw |
+|---|--:|--:|--:|--:|
+| friend entries scanned, main | 150,948 | 540,976 | 2,060,676 | 1,174 |
+| friend entries scanned, step 1 | 886 | 886 | 886 | 540 |
+| change | −99.4% | −99.8% | −99.96% | −54% |
+| index queries | 715 | 1,409 | 2,809 | 19 |
+| entries returned by queries | 0 | 0 | 0 | 0 |
+| keyed positions | 786 | 1,480 | 2,880 | 54 |
+| index heap bytes | 43,317 | 83,297 | 163,665 | 2,956 |
+| bytes per keyed position | 55 | 56 | 56 | 54 |
+
+The 886 entries left are friends of sets shorter than 32, scanned in
+full as before. Member and `find_prev_function` counts are unchanged.
+
+| symbol (S8 N=400) | main | step 1 |
+|---|--:|--:|
+| `hidden_friend_redecl_set` inclusive | 1,077,123,563 | 36,112,845 |
+| `is_dependent_friend_fn` self | 141,402,885 | 191,683 |
+| `pick_prev_function` self | 92,720,159 | 3,160,397 |
+| `fn_corresponds` self | 172,592,691 | 2,646,831 |
+| `redecl_index` (all functions) self | — | 18,781,921 |
+
+The index costs about 6.7 K Ir per query, most of it draining the
+journals (every `set_ty` since the previous query).
+
+### A/B
+
+Main (56a7396d1) and step 1 (ffd56dc93) release binaries alternated, 3
+pairs, median of 5 runs each, `/usr/bin/time -f '%e %M'`. The table
+gives the median of the three pair medians. S8 and S7 use
+`-fsyntax-only -freflection`; tw and vl `-fsyntax-only`; aw
+`-S -emit-llvm`; `registration-wide-obj` `-c -O2`.
+
+| shape | main wall s | step 1 wall s | Δ wall | main RSS KB | step 1 RSS KB | Δ RSS |
+|---|--:|--:|--:|--:|--:|--:|
+| S8 N=100 | 1.03 | 1.02 | −1.0% | 101,980 | 101,412 | −0.56% |
+| S8 N=200 | 1.90 | 1.80 | −5.3% | 170,276 | 171,572 | +0.76% |
+| S8 N=400 | 3.85 | 3.53 | −8.3% | 307,684 | 307,996 | +0.10% |
+| S7 | 0.47 | 0.46 | −2.1% | 45,680 | 45,804 | +0.27% |
+| templates_wide | 0.22 | 0.22 | 0 | 61,548 | 61,876 | +0.53% |
+| virtual-lattice | 0.01 | 0.01 | 0 | 11,796 | 11,992 | +1.7% |
+| accessor-wide-emit | 1.47 | 1.47 | 0 | 140,348 | 140,388 | +0.03% |
+| registration-wide-obj | 6.90 | 6.85 | −0.7% | 264,080 | 263,244 | −0.32% |
+| churn-vector | 0.47 | 0.46 | −2.1% | 11,472 | 11,764 | +2.5% |
+
+Per-pair values (wall; RSS), main / step 1:
+- S8 N=400: 4.12, 3.84, 3.85 / 3.53, 3.49, 3.53; 308,536, 306,456, 307,684 / 307,996, 307,256, 309,528.
+- S8 N=200: 1.94, 1.89, 1.90 / 1.80, 1.79, 1.80; 170,676, 169,492, 170,276 / 171,300, 171,572, 172,004.
+
+Against the targets:
+- **Scanned entries on S8 N=400.** −99.96% (2,060,676 → 886, flat in N). Met.
+- **S8 N=400 wall.** −8.3%. Met.
+- **N=400/N=100 wall ratio.** It is 3.74 on main and 3.46 on step 1.
+  - Both are under 4x, because S8's fixed cost (the libstdc++ headers, about 0.3 s) is in both.
+  - The branch removes superlinear time, so the ratio falls further below 4x rather than towards it.
+  - Read as "less superlinear than main", the target is met.
+  - The marginal step ratio (N400−N200)/(N200−N100) is 2.24 on main and 2.22 on step 1. The rest of S8's growth above linear is outside this scan (see What remains).
+- **No shape slower than noise.** Met; every wall Δ is ≤ 0.
+- **RSS.**
+  - The shapes that build the index are within +0.1% (S8 N=400) and −0.56% (S8 N=100).
+  - S8 N=200 is +0.76%, above the target.
+    - A second run of 3 pairs gave +0.60%, with one pair at −0.47%. Over all 6 pairs the medians are 170,216 and 171,310 KB, +0.64%.
+    - That is about 1.1 MB, while the index is 83 KB at N=200. At N=400 the index is twice as large and the Δ is +0.10%.
+    - So the growth does not scale with the index. It is consistent with where an allocation lands relative to the peak (a vector's doubling crossing it), not with the index's size. It is left as an open item.
+  - virtual-lattice, churn-vector and templates_wide never reach a set of 32, so they never allocate the index or a journal. Their Δ is binary layout and page-touch noise: the step 1 binary's text is 33 KB larger.
+  - Six alternating reruns of vl and churn-vector went both ways. Branch vl was 11,140 and 10,440 KB against main's 11,780 and 11,432 KB. An empty file was 9,252 and 8,720 KB against 9,476 and 9,340 KB.
+- **Bytes per entry.** About 56 bytes per keyed position: 163,665 heap bytes for 2,880 positions at N=400.
+
+Baselines are not re-recorded. No recorded corpus entry moves by 5% or
+more. The recorded `reflect/s8` entry is S8 at N=40: 3 more pairs gave 0.55 → 0.54 s (−1.8%) and 59,356 → 59,684 KB
+(+0.55%), so it moves by under 5%. S8 at
+N=200 and N=400 are generated shapes, not corpus entries.
+
+### Byte identity
+
+The comparison was between main's binary and the step 1 binary, over:
+- `-fsyntax-only -fkiln-cfg-stats` (stdout, stderr and exit code) on
+  every `tests/conformance` and `tests/stress` source, and on
+  `trial-folds`, `templates_wide` and `templates_deep`;
+- `-S -emit-llvm` on every IR-printing conformance test, every
+  `tests/codegen` source, the four `bench/frontend` emit shapes, S8 at
+  N = 100 and S7.
+
+Results:
+- 4,357 diagnostic outputs are identical and one differs:
+  `tests/stress/stack-guard-parens.cpp`.
+  - Its fatal "stack exhausted during parsing" still names line 22. Its
+    third macro-expansion note names column 19 instead of 21: the
+    8 MiB stack runs out two parentheses earlier.
+  - Where the stack runs out depends on the parser's frame sizes, which
+    differ between the two builds. It is deterministic per binary, and
+    the test's `diag:` directive passes on both.
+- 1,962 IR outputs are identical, and none differ.
+- 59 inputs fail on both binaries with the same exit code.
+- No exit code differs.
+
+The 8 tests in `crates/kiln_parse/tests/redecl_index.rs` compile every
+case twice, with the index and with `ParseOptions::full_redecl_scan`
+(the full linear scan), and assert equal diagnostics and an equal
+`prev` for every declaration. The cases are hidden friends, members,
+overload sets, templates with different heads, using-declarators,
+invalid and deleted declarations, and sets mutated after they were
+indexed.
+
+### What remains
+
+- **`LookupTables::insert_with_flags`** (`crates/kiln_ast/src/lookup.rs:242`
+  and `:251`) scans the whole set for a replaced slot and for a
+  duplicate on every insertion, which is still O(N) per declaration in
+  large sets. It is cheap per entry: a word compare.
+- **The member arm** (`crates/kiln_sema/src/decl.rs:3750`) and
+  **`find_prev_function`** (`decl.rs:2259`) keep the full list. Their
+  sets never pass 17 and 41 entries, but the member arm is 210 M Ir
+  inclusive at S8 N=400 over 14,671 calls, mostly
+  `fn_corresponds` on sets of 2–17.
+- **The per-query journal drain**
+  (`crates/kiln_sema/src/overload/redecl_index.rs:251` `sync`) costs
+  about 6.7 K Ir per query. It is 18.8 M Ir at S8 N=400.
+- The index and the journals have no `MemRow` in the memory tables.
+  `LookupTables::set_row` (`crates/kiln_ast/src/lookup.rs:371`) is the
+  model to follow; the index is 163 KB at S8 N=400.
+- The rest of S8's growth above linear: the marginal step ratio is 2.22
+  per doubling, and none of it is this scan. `fn_min_args`
+  (`crates/kiln_sema/src/overload/mod.rs:625`) and explicit-argument
+  substitution are WP-657's open items.

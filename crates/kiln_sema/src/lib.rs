@@ -301,7 +301,7 @@ pub struct Sema<'a, 'sm> {
     pub full_deduction: bool,
     /// Every function redeclaration search scans its whole lookup entry:
     /// the redeclaration index (`overload/redecl_index.rs`, spec/sema.md
-    /// §4.4) is off. A test hook (WP-658): the results are the same
+    /// §3) is off. A test hook (WP-658): the results are the same
     /// either way.
     #[doc(hidden)]
     pub full_redecl_scan: bool,

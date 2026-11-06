@@ -1,7 +1,7 @@
 //! Opt-in change journals (WP-658).
 //!
 //! A side index sema keeps over AST data (the redeclaration index,
-//! spec/sema.md §4.4) must hear about the few mutations that can change
+//! spec/sema.md §3) must hear about the few mutations that can change
 //! what it indexed: a lookup-set slot replaced or removed, a declaration
 //! retyped, a redeclaration group's latest declaration moved. Each such
 //! mutator pushes onto a [`Journal`] once a reader has started it; the

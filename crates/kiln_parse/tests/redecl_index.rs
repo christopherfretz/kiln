@@ -1,4 +1,4 @@
-//! WP-658: the redeclaration index (spec/sema.md §4.4) changes no result.
+//! WP-658: the redeclaration index (spec/sema.md §3) changes no result.
 //! Each program declares more same-name entities in one namespace than
 //! the index's threshold, then redeclares some of them through friend
 //! declarations (hidden friends, friend templates with different heads,
