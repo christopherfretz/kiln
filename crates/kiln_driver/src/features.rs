@@ -577,8 +577,8 @@ fn is_x86_cpu(v: &str, v22: bool) -> bool {
 const X86_64_FEATURES: [&str; 7] = ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87"];
 
 /// The generated row of x86-64 CPU `name`, if clang 21 knows it.
-fn x86_cpu(name: &str) -> Option<&'static crate::x86_targets::Cpu> {
-    crate::x86_targets::CPUS.iter().find(|c| c.name == name)
+fn x86_cpu(name: &str) -> Option<crate::x86_targets::Cpu> {
+    crate::x86_targets::cpu(name)
 }
 
 /// How the predefined macros of `-march=<cpu>` differ from the default
@@ -587,15 +587,15 @@ fn x86_cpu(name: &str) -> Option<&'static crate::x86_targets::Cpu> {
 /// spec/landed/driver/WP-630.md). Empty for `native` and an unknown CPU.
 pub fn x86_cpu_macros(cpu: &str) -> Vec<(String, Option<String>)> {
     let Some(c) = x86_cpu(cpu) else { return Vec::new() };
-    let def = c.define.iter().map(|&(n, v)| (n.to_owned(), Some(v.to_owned())));
-    def.chain(c.undef.iter().map(|&n| (n.to_owned(), None))).collect()
+    let def = c.define.iter().map(|(n, v)| (n.to_owned(), Some(v.to_owned())));
+    def.chain(c.undef.iter().map(|n| (n.to_owned(), None))).collect()
 }
 
 /// The features x86 feature `f` enables: itself and what it implies
-/// (`x86_targets::IMPLIES`; just itself for a name the table lacks).
-fn x86_implies(f: &str) -> &'static [&'static str] {
-    let t = crate::x86_targets::IMPLIES;
-    t.binary_search_by(|e| e.0.cmp(f)).map_or(&[][..], |i| t[i].1)
+/// (`x86_targets::IMPLIES`; nothing for a name the table lacks, whose
+/// caller enables just the name itself).
+fn x86_implies(f: &str) -> impl Iterator<Item = &'static str> {
+    crate::x86_targets::implies(f).into_iter().flat_map(crate::x86_targets::List::iter)
 }
 
 /// The features of a GNU `target("...")` attribute string on x86-64 over
@@ -642,10 +642,10 @@ pub fn x86_target_attr_features(
         *slot = Some(v.to_owned());
     }
     match cpu.as_deref() {
-        Some(c) => {
-            let feats = x86_cpu(c).map_or(&X86_64_FEATURES as &[&str], |c| c.features);
-            map.extend(feats.iter().map(|&f| (f.to_owned(), true)));
-        }
+        Some(c) => match x86_cpu(c) {
+            Some(c) => map.extend(c.features.iter().map(|f| (f.to_owned(), true))),
+            None => map.extend(X86_64_FEATURES.iter().map(|&f| (f.to_owned(), true))),
+        },
         None => {
             for m in module {
                 if let Some((sign, name)) = m.split_at_checked(1) {
@@ -698,13 +698,13 @@ pub fn x86_target_attr_features(
         let Some((sign, name)) = f.split_at_checked(1) else { continue };
         if sign == "+" {
             map.insert(name.to_owned(), true);
-            for &g in x86_implies(name) {
+            for g in x86_implies(name) {
                 map.insert(g.to_owned(), true);
             }
         } else {
             map.insert(name.to_owned(), false);
-            for &(g, imp) in crate::x86_targets::IMPLIES {
-                if imp.contains(&name) {
+            for (g, imp) in crate::x86_targets::implications() {
+                if imp.contains(name) {
                     map.insert(g.to_owned(), false);
                 }
             }
