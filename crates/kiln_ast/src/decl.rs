@@ -3521,7 +3521,7 @@ pub mod builtin {
     };
 
     /// Every builtin function kiln declares.
-    pub const ALL: &[Info] = &[
+    pub static ALL: &[Info] = &[
         row(IS_CONSTANT_EVALUATED, "__builtin_is_constant_evaluated", "b", N),
         row(ADDRESSOF, "__builtin_addressof", "v*v&", N | C | T),
         row(COMPLEX, "__builtin_complex", "v.", N | C | T),
@@ -3652,7 +3652,7 @@ pub mod builtin {
     /// WP-171: the coroutine builtins the libc++ headers name (clang 19
     /// `Builtins.td` `CoroLangBuiltin`s). Sema type-checks calls; codegen
     /// and the Oven do not implement them.
-    pub const CORO: &[Info] = &[
+    pub static CORO: &[Info] = &[
         row(CORO_RESUME, "__builtin_coro_resume", "vv*", 0),
         row(CORO_DESTROY, "__builtin_coro_destroy", "vv*", 0),
         row(CORO_DONE, "__builtin_coro_done", "bv*", N),
@@ -3680,7 +3680,7 @@ pub mod builtin {
     /// `AddKnownFunctionAttributes`). `P` is the type the file-scope
     /// `FILE` typedef names. clang's library builtins without any of these
     /// attributes (`malloc`, `printf`, `strtol`, ...) are left out.
-    pub const LIB: &[Info] = &[
+    pub static LIB: &[Info] = &[
         row(93, "abs", "ii", N | C),
         row(95, "labs", "LiLi", N | C),
         row(97, "llabs", "LLiLLi", N | C),
@@ -3976,7 +3976,7 @@ pub mod builtin {
     /// WP-150: the remaining GCC integer builtins (`ffs`, `parity`,
     /// `clrsb`, `bitreverse`, `rotate*`) and memory builtins. All but
     /// `memset`/`mempcpy` are constant-evaluated (clang 19 `Constexpr`).
-    pub const INT_MEM: &[Info] = &[
+    pub static INT_MEM: &[Info] = &[
         row(FFS, "__builtin_ffs", "ii", N | C | F),
         row(FFSL, "__builtin_ffsl", "iLi", N | C | F),
         row(FFSLL, "__builtin_ffsll", "iLLi", N | C | F),
@@ -4011,7 +4011,7 @@ pub mod builtin {
     /// a call of the library function the builtin names (`__builtin_sin`
     /// -> `sin`; with clang's default `-fmath-errno` on Linux none of them
     /// becomes an LLVM intrinsic). `frexp` is lowered to `llvm.frexp`.
-    pub const LIBM: &[Info] = &[
+    pub static LIBM: &[Info] = &[
         row(EXP, "__builtin_exp", "dd", N | F),
         row(EXPF, "__builtin_expf", "ff", N | F),
         row(EXPL, "__builtin_expl", "LdLd", N | F),
@@ -4216,7 +4216,7 @@ pub mod builtin {
     /// operations with custom type-checking (`v.`, rebuilt by sema as an
     /// `AtomicExpr`), then the fences, flag operations and lock-freedom
     /// queries, which are ordinary calls.
-    pub const ATOMIC: &[Info] = &[
+    pub static ATOMIC: &[Info] = &[
         row(atomic::C11_INIT, "__c11_atomic_init", "v.", T),
         row(atomic::C11_LOAD, "__c11_atomic_load", "v.", T),
         row(atomic::C11_STORE, "__c11_atomic_store", "v.", T),
@@ -4478,7 +4478,7 @@ pub mod builtin {
     /// (also custom type-checked: sema retargets a call to the form for
     /// the pointee's size, clang `BuiltinAtomicOverloaded`), the clang
     /// `int`/`unsigned` min/max extensions and `__sync_synchronize`.
-    pub const SYNC: &[Info] = &[
+    pub static SYNC: &[Info] = &[
         row(1193, "__sync_lock_test_and_set_1", "ccD*c.", T | N),
         row(1194, "__sync_lock_test_and_set_2", "ssD*s.", T | N),
         row(1195, "__sync_lock_test_and_set_4", "iiD*i.", T | N),
@@ -4774,7 +4774,7 @@ pub mod builtin {
     /// builtins (constant-evaluated), `alloca` and the
     /// `printf`-family library builtins libstdc++ names (lowered to the
     /// libc function; never constant-evaluated). `R` is `restrict`.
-    pub const CHECKED: &[Info] = &[
+    pub static CHECKED: &[Info] = &[
         row(ADD_OVERFLOW, "__builtin_add_overflow", "b.", N | T),
         row(SUB_OVERFLOW, "__builtin_sub_overflow", "b.", N | T),
         row(MUL_OVERFLOW, "__builtin_mul_overflow", "b.", N | T),
@@ -5019,7 +5019,7 @@ pub mod builtin {
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
-    pub const EXTRA: &[Info] = &[
+    pub static EXTRA: &[Info] = &[
         row(ASSUME_ALIGNED, "__builtin_assume_aligned", "v*vC*z.", N | C | T),
         row(OBJECT_SIZE, "__builtin_object_size", "zvC*Ii", N),
         row(DYNAMIC_OBJECT_SIZE, "__builtin_dynamic_object_size", "zvC*Ii", N),
@@ -5063,7 +5063,7 @@ pub mod builtin {
     /// quad-precision Oven arithmetic); `roundevenf128` is
     /// `llvm.roundeven`; the rest are library calls of the function the
     /// builtin names, like [`LIBM`] ([`is_libm`]).
-    pub const F128: &[Info] = &[
+    pub static F128: &[Info] = &[
         row(105, "__builtin_acosf128", "LLdLLd", N | F),
         row(112, "__builtin_acoshf128", "LLdLLd", N | F),
         row(140, "__builtin_asinf128", "LLdLLd", N | F),
@@ -5159,7 +5159,7 @@ pub mod builtin {
     /// WP-361: the P1467 `_Float16` (`x`), `_Float32` (kiln `k`),
     /// `_Float64` (kiln `K`) and `__bf16` (`y`) forms of the builtins
     /// libstdc++ names.
-    pub const FLOATN: &[Info] = &[
+    pub static FLOATN: &[Info] = &[
         row(HUGE_VALF16, "__builtin_huge_valf16", "x", N | C),
         row(INFF16, "__builtin_inff16", "x", N | C),
         row(NANF16, "__builtin_nanf16", "xcC*", N | P | F),
@@ -5245,7 +5245,7 @@ pub mod builtin {
     /// type picks the `half` overload and the Oven format), the others
     /// are lowered by id (`kiln_codegen` `fp_intrinsic`). `sqrtf16` is in [`LIBM`] and
     /// `copysignf16` in [`EXTRA`].
-    pub const F16_INTR: &[Info] = &[
+    pub static F16_INTR: &[Info] = &[
         row(CANONICALIZEF16, "__builtin_canonicalizef16", "hh", N | C),
         row(316, "__builtin_ceilf16", "hh", N | C | F),
         row(FABSF16, "__builtin_fabsf16", "hh", N | C | F),
@@ -5265,7 +5265,7 @@ pub mod builtin {
     /// The `__fp16` libm builtins that are library calls of the function
     /// the builtin names (clang 19 and 22 at `-fmath-errno`), like
     /// [`LIBM`] ([`is_libm`]).
-    pub const F16_LIBM: &[Info] = &[
+    pub static F16_LIBM: &[Info] = &[
         row(104, "__builtin_acosf16", "hh", N | F),
         row(139, "__builtin_asinf16", "hh", N | F),
         row(2035, "__builtin_atan2f16", "hhh", N | F),
@@ -5369,7 +5369,7 @@ pub mod builtin {
     /// clang 22's `fmaximum_num` / `fminimum_num` (constant-evaluated by
     /// clang 22, IEEE 754-2019 `maximumNumber` / `minimumNumber`). The ids
     /// are clang 19's, kiln-private from 2042 for the ones it lacks.
-    pub const C_MATH_INTR: &[Info] = &[
+    pub static C_MATH_INTR: &[Info] = &[
         row(CANONICALIZE, "__builtin_canonicalize", "dd", N | C),
         row(CANONICALIZEF, "__builtin_canonicalizef", "ff", N | C),
         row(CANONICALIZEL, "__builtin_canonicalizel", "LdLd", N | C),
@@ -5388,7 +5388,7 @@ pub mod builtin {
     /// `__has_builtin` for that are library calls, like [`LIBM`]
     /// ([`is_libm`]): `exp10` and clang 22's `sincos` (GNU extensions;
     /// clang 19 lacks `sincos`) and (WP-419) `sincospi`.
-    pub const C_MATH_LIB: &[Info] = &[
+    pub static C_MATH_LIB: &[Info] = &[
         row(522, "__builtin_exp10", "dd", N | F),
         row(521, "__builtin_exp10f", "ff", N | F),
         row(523, "__builtin_exp10l", "LdLd", N | F),
