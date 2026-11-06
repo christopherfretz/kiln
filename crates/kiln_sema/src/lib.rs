@@ -299,6 +299,14 @@ pub struct Sema<'a, 'sm> {
     /// (WP-657): the results are the same either way.
     #[doc(hidden)]
     pub full_deduction: bool,
+    /// Every function redeclaration search scans its whole lookup entry:
+    /// the redeclaration index (`overload/redecl_index.rs`, spec/sema.md
+    /// §3) is off. A test hook (WP-658): the results are the same
+    /// either way.
+    #[doc(hidden)]
+    pub full_redecl_scan: bool,
+    /// The redeclaration index (WP-658).
+    pub(crate) redecl_index: overload::redecl_index::RedeclIndex,
     /// GCC's `-fpermissive` (default off): the C++26 arithmetic between
     /// different enumerations or an enumeration and a floating type
     /// (P2864, ill-formed) is diagnosed with the C++20/23 deprecation
@@ -1039,6 +1047,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_dump: false,
             cfg_stats: false,
             full_deduction: false,
+            full_redecl_scan: false,
+            redecl_index: overload::redecl_index::RedeclIndex::default(),
             permissive: false,
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,

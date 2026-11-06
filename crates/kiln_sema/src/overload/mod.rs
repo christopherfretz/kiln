@@ -19,6 +19,7 @@ pub(crate) mod ics;
 pub(crate) mod member;
 pub(crate) mod oper;
 pub(crate) mod redecl;
+pub(crate) mod redecl_index;
 pub(crate) mod surrogate;
 pub(crate) mod udc;
 

@@ -2308,6 +2308,28 @@ impl Sema<'_, '_> {
         self.pick_prev_function(&locals, new)
     }
 
+    /// The declarations of `dname` in namespace `ctx` an unqualified friend
+    /// declaration may redeclare (redeclaration lookup, declaration order):
+    /// hidden friends included, members of its inline namespaces and
+    /// friends of templated classes not (see [`Sema::is_dependent_friend_fn`]).
+    /// Of a large namespace, only those that can take part in `new`'s
+    /// redeclaration search (`Sema::redecl_candidates`, WP-658).
+    #[inline(never)]
+    fn hidden_friend_redecl_set(
+        &mut self,
+        ctx: DeclId,
+        dname: DeclName,
+        new: &NewFn,
+    ) -> Vec<DeclId> {
+        self.redecl_candidates(ctx, dname, new)
+            .into_iter()
+            .filter(|&(d, f)| {
+                !f.contains(LookupFlags::VIA_INLINE) && !self.is_dependent_friend_fn(d)
+            })
+            .map(|(d, _)| d)
+            .collect()
+    }
+
     /// The innermost namespace (or the translation unit) enclosing the
     /// current context.
     pub(crate) fn enclosing_namespace(&self) -> Option<DeclId> {
@@ -3707,13 +3729,7 @@ impl Sema<'_, '_> {
             // but not the members of its inline namespaces: those are in
             // other scopes ([dcl.meaning.general]/2.3, [namespace.memdef]/3;
             // clang's `FilterLookupForScope` without `AllowInlineNamespace`).
-            let mut found: Vec<DeclId> = self
-                .ast
-                .lookup_local(ctx, dname)
-                .iter_with_inline()
-                .filter(|&(d, via_inline)| !via_inline && !self.is_dependent_friend_fn(d))
-                .map(|(d, _)| d)
-                .collect();
+            let mut found = self.hidden_friend_redecl_set(ctx, dname, &new_fn);
             // A using-declarator of the namespace is not redeclared: the
             // friend overloads its target, or, corresponding to it, cannot
             // befriend it ([namespace.udecl]/10, [basic.scope.scope]/4;
@@ -6468,11 +6484,10 @@ impl Sema<'_, '_> {
     /// `noexcept(expr)` was compared again (`per_instantiation_exc`).
     fn pattern_friend_prev(&mut self, ns: DeclId, dname: DeclName, new: NewFn) -> Option<DeclId> {
         let found: Vec<DeclId> = self
-            .ast
-            .lookup_local(ns, dname)
-            .iter_with_inline()
-            .filter(|&(x, via_inline)| {
-                !via_inline
+            .redecl_candidates(ns, dname, &new)
+            .into_iter()
+            .filter(|&(x, f)| {
+                !f.contains(LookupFlags::VIA_INLINE)
                     && !self.is_dependent_friend_fn(x)
                     && self.kind_of(x) != DeclKind::UsingShadow
             })

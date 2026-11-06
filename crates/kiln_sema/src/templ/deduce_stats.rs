@@ -45,9 +45,12 @@ struct Stats {
     tlosers: u64,
     /// Template candidates per resolved set: histogram by power of two.
     hist: [u64; 12],
-    /// `pick_prev_function` by caller: calls, candidates scanned,
-    /// `fn_corresponds` comparisons.
-    prev: FxHashMap<String, (u64, u64, u64)>,
+    /// `pick_prev_function` by caller and the kind of the candidates'
+    /// scope (WP-658).
+    prev: FxHashMap<String, PrevRow>,
+    /// Redeclaration-index queries, entries scanned for them, and the
+    /// largest (keyed positions, heap bytes) seen (WP-658).
+    index: (u64, u64, u64, u64),
     /// Named timers: name → (active depth, outermost nanoseconds, calls).
     timers: FxHashMap<&'static str, (u32, u64, u64)>,
     /// Free-form tallies: (kind, label) → count.
@@ -96,9 +99,31 @@ impl Drop for Stats {
         t.sort_unstable_by(|a, b| b.cmp(a));
         let _ = writeln!(s, "deduce-stats: per-template top: {:?}", &t[..t.len().min(12)]);
         let mut p: Vec<_> = self.prev.iter().collect();
-        p.sort_by_key(|e| std::cmp::Reverse(e.1.1));
-        for (at, (n, c, f)) in p {
-            let _ = writeln!(s, "deduce-stats: pick-prev {at} calls={n} scanned={c} compared={f}");
+        p.sort_by_key(|e| std::cmp::Reverse(e.1.scanned));
+        for (at, r) in p {
+            let _ = writeln!(
+                s,
+                "deduce-stats: pick-prev {at} calls={} scanned={} compared={} corresponded={} \
+                 hits={} hit-pos-from-end={} max-scanned={} calls-over-32={} scanned-over-32={}",
+                r.calls,
+                r.scanned,
+                r.compared,
+                r.corresponded,
+                r.hits,
+                r.hit_pos,
+                r.max,
+                r.long_calls,
+                r.long_scanned,
+            );
+        }
+        if self.index.0 != 0 {
+            let (q, n, e, b) = self.index;
+            let _ = writeln!(
+                s,
+                "deduce-stats: redecl-index queries={q} returned={n} entries={e} bytes={b} \
+                 bytes-per-entry={}",
+                b / e.max(1)
+            );
         }
         let mut v: Vec<_> = self.timers.iter().collect();
         v.sort_by_key(|e| std::cmp::Reverse(e.1.1));
@@ -119,30 +144,87 @@ impl Drop for Stats {
     }
 }
 
-thread_local! {
-    static COMPARED: Cell<u64> = const { Cell::new(0) };
+/// One `pick_prev_function` row (WP-658).
+#[derive(Default)]
+struct PrevRow {
+    calls: u64,
+    /// Candidates passed in.
+    scanned: u64,
+    /// `fn_corresponds` calls, and those that returned true.
+    compared: u64,
+    corresponded: u64,
+    /// Calls that returned a corresponding declaration, and the summed
+    /// positions of those hits counted from the end of the candidates.
+    hits: u64,
+    hit_pos: u64,
+    max: u64,
+    /// Calls over at least 32 candidates, and their candidates.
+    long_calls: u64,
+    long_scanned: u64,
 }
 
-/// One `fn_corresponds` comparison.
-pub(crate) fn compared() {
-    COMPARED.with(|c| c.set(c.get() + 1));
+thread_local! {
+    static COMPARED: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+    static HIT: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+/// One `fn_corresponds` comparison, which returned `ok`.
+pub(crate) fn compared(ok: bool) {
+    COMPARED.with(|c| {
+        let (n, t) = c.get();
+        c.set((n + 1, t + u64::from(ok)));
+    });
+}
+
+/// `pick_prev_function` returned the corresponding candidate `pos` places
+/// from the end of its candidates (`None`: no corresponding one).
+pub(crate) fn prev_hit(pos: Option<usize>) {
+    HIT.with(|h| h.set(pos.map(|p| p as u64)));
 }
 
 /// A `pick_prev_function` from `at` over `n` candidates; returns the
-/// comparison count before it, for [`prev_end`].
-pub(crate) fn prev_begin() -> u64 {
+/// comparison counts before it, for [`prev_end`].
+/// A redeclaration-index query that returned `n` entries, with the index
+/// at `entries` keyed positions and `bytes` heap bytes (WP-658).
+pub(crate) fn index_query(n: usize, entries: usize, bytes: u64) {
+    STATS.with(|s| {
+        let i = &mut s.borrow_mut().index;
+        i.0 += 1;
+        i.1 += n as u64;
+        if entries as u64 > i.2 {
+            i.2 = entries as u64;
+            i.3 = bytes;
+        }
+    });
+}
+
+pub(crate) fn prev_begin() -> (u64, u64) {
+    HIT.with(|h| h.set(None));
     COMPARED.with(Cell::get)
 }
 
-/// Ends the `pick_prev_function` [`prev_begin`] started.
-pub(crate) fn prev_end(at: &std::panic::Location<'_>, n: usize, before: u64) {
-    let f = COMPARED.with(Cell::get) - before;
+/// Ends the `pick_prev_function` [`prev_begin`] started; `scope` names the
+/// kind of the candidates' context.
+pub(crate) fn prev_end(at: &std::panic::Location<'_>, scope: &str, n: usize, before: (u64, u64)) {
+    let (c, t) = COMPARED.with(Cell::get);
+    let hit = HIT.with(Cell::take);
     STATS.with(|s| {
         let mut s = s.borrow_mut();
-        let e = s.prev.entry(format!("{}:{}", at.file(), at.line())).or_default();
-        e.0 += 1;
-        e.1 += n as u64;
-        e.2 += f;
+        let e = s.prev.entry(format!("{}:{} {scope}", at.file(), at.line())).or_default();
+        let n = n as u64;
+        e.calls += 1;
+        e.scanned += n;
+        e.compared += c - before.0;
+        e.corresponded += t - before.1;
+        if let Some(p) = hit {
+            e.hits += 1;
+            e.hit_pos += p;
+        }
+        e.max = e.max.max(n);
+        if n >= 32 {
+            e.long_calls += 1;
+            e.long_scanned += n;
+        }
     });
 }
 
