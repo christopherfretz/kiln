@@ -4070,11 +4070,8 @@ impl Sema<'_, '_> {
                     // clang's `getNoteDiagForInvalidRedeclaration`: the
                     // builtin-type note for a builtin.
                     let def = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
-                    let builtin = self
-                        .ast
-                        .decls
-                        .builtin_id(p)
-                        .and_then(|id| kiln_ast::decl::builtin::info(id).copied());
+                    let builtin =
+                        self.ast.decls.builtin_id(p).and_then(kiln_ast::decl::builtin::info);
                     let msg = match builtin {
                         Some(info) => {
                             let loc = self.ast.decls.get(p).loc();
