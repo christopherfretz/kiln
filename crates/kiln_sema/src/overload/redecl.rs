@@ -113,7 +113,10 @@ impl Sema<'_, '_> {
     ) -> bool {
         #[cfg(feature = "op-stats")]
         crate::templ::deduce_stats::compared();
-        let Some(oty) = self.declared_fn_type(old) else { return false };
+        // The parameters are those of the declared type, whose return type
+        // only differs from it when deduced: that is formed (interned)
+        // only for the template return-type comparison below (WP-657).
+        let Some(oty) = self.ast.decls.get(old).ty() else { return false };
         let t = &self.ast.types;
         let (Some(po), Some(pn)) = (t.proto(oty).copied(), t.proto(new.ty).copied()) else {
             // A non-prototype (error) type: treat as the same entity.
@@ -139,9 +142,16 @@ impl Sema<'_, '_> {
         match (old_head, new.head) {
             (None, None) => {}
             (Some(a), Some(b)) => {
-                if (!new.member_using && !self.ast.types.same_type(po.ret(), pn.ret()))
-                    || !self.heads_equivalent(a, b)
-                {
+                if !new.member_using {
+                    let oret = self
+                        .declared_fn_type(old)
+                        .and_then(|t| self.ast.types.proto(t).map(|p| p.ret()))
+                        .unwrap_or(po.ret());
+                    if !self.ast.types.same_type(oret, pn.ret()) {
+                        return false;
+                    }
+                }
+                if !self.heads_equivalent(a, b) {
                     return false;
                 }
             }
