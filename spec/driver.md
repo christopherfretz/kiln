@@ -165,8 +165,11 @@ binary target named `kiln++` (a target name must be a crate name), so
 in the profile directory (`target/<profile>/kiln++ -> kiln`); xtask's
 `build_kiln` makes it again if it is missing and returns its path. The
 build script adds no link arguments: WP-653's `-z pack-relative-relocs`
-(RELR) was reverted by WP-662 because it tied the `kiln` binary to GNU ld
-2.38+ / lld 15+ and glibc 2.36+ for about 0.2–0.5 MB of start-up RSS.
+(RELR) was reverted by WP-662: it tied the `kiln` binary to GNU ld 2.38+ /
+lld 15+ and, at run time, glibc 2.36+ (`GLIBC_ABI_DT_RELR`), and failed on
+the first older glibc it met, for about 0.2–0.5 MB of start-up RSS. Any
+future link flag that constrains the build or run-time environment needs
+the operator's explicit approval first.
 
 The mode comes from the program name (`argv[0]`), as clang's driver name
 parsing: take the basename, drop a `.exe`; if that does not end in `++`,

@@ -2416,9 +2416,11 @@ The flag needs:
   `gcc:16.1.0-trixie` image (glibc 2.41).
 
 Decision (updated): shipped in #302 as its own commit, then **reverted by
-WP-662** on the operator's call: a platform requirement (ld 2.38+ /
-lld 15+, glibc 2.36+) is not worth 0.2–0.5 MB this early. The `bench/oven`
-baselines were re-recorded without it. Originally: shipped, as its own commit, so it can be dropped alone. It is
+WP-662**: the binary failed to start on the first machine outside this
+container it was run on (`version 'GLIBC_ABI_DT_RELR' not found`, a glibc
+older than 2.36), and a run-time platform requirement is not worth
+0.2–0.5 MB of start-up RSS. The `bench/oven` baselines were re-recorded
+without it. Originally: shipped, as its own commit, so it can be dropped alone. It is
 a `cargo:rustc-link-arg-bin=kiln=` line in `crates/kiln_driver/build.rs`
 for Linux targets, so it changes no dependency's build and invalidates
 no cache. aarch64 is checked here (`cargo xtask ci --quick` plus the compat-19 pass green). The x86_64
