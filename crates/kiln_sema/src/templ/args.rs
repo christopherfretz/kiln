@@ -196,6 +196,14 @@ impl Sema<'_, '_> {
         self.ast.lists.iter::<DeclId>(l.params).collect()
     }
 
+    /// The number of `tmpl`'s parameters ([`Self::template_params`]'s
+    /// length, without collecting them).
+    pub(crate) fn template_param_count(&self, tmpl: DeclId) -> usize {
+        self.ast
+            .template_info(tmpl)
+            .map_or(0, |i| self.ast.lists.get(self.ast.templates.param_list(i.params).params).len())
+    }
+
     /// The depth of `tmpl`'s parameters.
     pub(crate) fn template_param_depth(&self, tmpl: DeclId) -> u16 {
         self.ast.template_info(tmpl).map_or(0, |i| self.ast.templates.param_list(i.params).depth)

@@ -68,7 +68,9 @@ impl Drop for Stats {
             self.tlosers,
         );
         let mut v: Vec<_> = self.rows.iter().collect();
-        v.sort_by(|a, b| b.1.cmp(a.1).then_with(|| format!("{:?}", a.0).cmp(&format!("{:?}", b.0))));
+        v.sort_by(|a, b| {
+            b.1.cmp(a.1).then_with(|| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)))
+        });
         for ((entry, step, tdk), (n, ns)) in v {
             let _ = writeln!(
                 s,
@@ -86,11 +88,7 @@ impl Drop for Stats {
         s.push('\n');
         let mut t: Vec<_> = self.per_template.values().copied().collect();
         t.sort_unstable_by(|a, b| b.cmp(a));
-        let _ = writeln!(
-            s,
-            "deduce-stats: per-template top: {:?}",
-            &t[..t.len().min(12)]
-        );
+        let _ = writeln!(s, "deduce-stats: per-template top: {:?}", &t[..t.len().min(12)]);
         let mut p: Vec<_> = self.prev.iter().collect();
         p.sort_by(|a, b| b.1.1.cmp(&a.1.1));
         for (at, (n, c, f)) in p {
@@ -99,7 +97,8 @@ impl Drop for Stats {
         let mut v: Vec<_> = self.timers.iter().collect();
         v.sort_by(|a, b| b.1.1.cmp(&a.1.1));
         for (name, (_, ns, n)) in v {
-            let _ = writeln!(s, "deduce-stats: timer {name:<28} {:>9.1}ms calls={n}", *ns as f64 / 1e6);
+            let _ =
+                writeln!(s, "deduce-stats: timer {name:<28} {:>9.1}ms calls={n}", *ns as f64 / 1e6);
         }
         let mut v: Vec<_> = self.tally.iter().collect();
         v.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
@@ -205,7 +204,8 @@ pub(crate) fn end(entry: &'static str, tdk: Tdk, key: Option<u64>, outer: &Frame
     let ns = frame_end(outer);
     STATS.with(|s| {
         let mut s = s.borrow_mut();
-        let e = s.rows.entry((entry, if tdk == Tdk::Success { "ok" } else { st }, tdk)).or_default();
+        let e =
+            s.rows.entry((entry, if tdk == Tdk::Success { "ok" } else { st }, tdk)).or_default();
         e.0 += 1;
         e.1 += ns;
         if let Some(k) = key
@@ -273,4 +273,9 @@ impl Drop for Timer {
 /// Counts one `label` under `kind`.
 pub(crate) fn tally(kind: &'static str, label: String) {
     STATS.with(|s| *s.borrow_mut().tally.entry((kind, label)).or_default() += 1);
+}
+
+/// One call deduction answered by the pre-filter with `tdk`.
+pub(crate) fn prefiltered(tdk: Tdk) {
+    STATS.with(|s| s.borrow_mut().rows.entry(("call", "prefilter", tdk)).or_default().0 += 1);
 }

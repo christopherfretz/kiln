@@ -293,12 +293,36 @@ impl Sema<'_, '_> {
         // object operand ([over.match.oper]/2), as does an explicit
         // object parameter ([over.match.funcs.general]/4).
         let pattern = self.templated_function(ft).unwrap_or(ft);
+        let oper_fn = set.oper && kind == CandidateKind::Function;
+        let lead = (oper_fn || self.has_explicit_object(pattern)) && set.object.is_some();
+        // The deduction's failure before it substitutes anything (an
+        // invalid template, too few arguments): the same failure, without
+        // the argument lists (WP-657).
+        #[cfg(feature = "op-stats")]
+        let frame = crate::templ::deduce_stats::cand_begin();
+        if let Some(fail) = self.deduce_call_prefail(ft, set.args.len() + usize::from(lead), loc) {
+            #[cfg(feature = "op-stats")]
+            let tdk = fail.tdk;
+            #[cfg(feature = "op-stats")]
+            crate::templ::deduce_stats::prefiltered(tdk);
+            self.add_template_candidate_with(
+                set,
+                ft,
+                found,
+                kind,
+                first_opts,
+                pattern,
+                lead,
+                Err(fail),
+            );
+            #[cfg(feature = "op-stats")]
+            crate::templ::deduce_stats::cand_end(&frame, tdk);
+            return;
+        }
         let mut args = Vec::with_capacity(set.args.len() + 1);
         // Each argument's conversion options, as `add_candidate` gives
         // them, for the non-dependent parameters deduction checks.
         let mut opts = Vec::with_capacity(set.args.len() + 1);
-        let oper_fn = set.oper && kind == CandidateKind::Function;
-        let lead = (oper_fn || self.has_explicit_object(pattern)) && set.object.is_some();
         if lead && let Some(o) = set.object {
             args.push(o);
             opts.push(if oper_fn {
@@ -312,8 +336,6 @@ impl Sema<'_, '_> {
             let o = if i == 0 && !oper_fn { first_opts } else { IcsOptions::NONE };
             opts.push(o.with(IcsOptions::CANDIDATE_ARG));
         }
-        #[cfg(feature = "op-stats")]
-        let frame = crate::templ::deduce_stats::cand_begin();
         let r = self.deduce_call(ft, explicit, &args, &opts, loc);
         #[cfg(feature = "op-stats")]
         let tdk = r.as_ref().map_or_else(|f| f.tdk, |_| crate::templ::deduce::Tdk::Success);

@@ -343,8 +343,7 @@ impl Sema<'_, '_> {
                 DeduceTarget::Conversion(_) => "conv",
             };
             let key = call.map(|(a, _)| {
-                let v: Vec<_> =
-                    a.iter().map(|x| (x.ty, x.vk as u8, x.list.is_some())).collect();
+                let v: Vec<_> = a.iter().map(|x| (x.ty, x.vk as u8, x.list.is_some())).collect();
                 crate::templ::deduce_stats::key(
                     self.ast.first(ft).index(),
                     explicit.map(ArgListId::index),
@@ -375,6 +374,64 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// The checks of §6.1 that need nothing substituted or allocated, in
+    /// the full path's order: `ft` (its first declaration) declares a
+    /// function (else `MiscellaneousDeductionFailure`), is valid (else
+    /// `Invalid`), and a call of `nargs` arguments has at least the
+    /// parameters without a default ([temp.deduct.call]/1; else
+    /// `TooFewArguments`). `Ok` the template's function.
+    fn deduce_head(&self, ft: DeclId, nargs: Option<usize>) -> Result<DeclId, Tdk> {
+        stat_step!("invalid");
+        let Some(templated) = self.templated_function(ft) else {
+            return Err(Tdk::MiscellaneousDeductionFailure);
+        };
+        // clang `DeduceTemplateArguments`: an invalid template (its
+        // function has an invalid parameter or return type, already
+        // reported) deduces nothing.
+        if (self.ast.decls.get(templated).has(DeclFlags::INVALID)
+            && !self.templ.body_invalid.contains(&templated))
+            || self.ast.decls.get(ft).has(DeclFlags::INVALID)
+        {
+            return Err(Tdk::Invalid);
+        }
+        // [temp.deduct.call]/1: clang checks the call's arity against
+        // the written parameters before substituting the explicit
+        // arguments (the maximum is checked once the parameter types are
+        // known, below).
+        stat_step!("arity-pre");
+        if nargs.is_some_and(|k| k < self.fn_min_args(templated)) {
+            return Err(Tdk::TooFewArguments);
+        }
+        Ok(templated)
+    }
+
+    /// The failure [`Self::deduce_head`]'s `tdk` is: nothing deduced, at
+    /// `loc`.
+    fn head_failure(&self, ft: DeclId, tdk: Tdk, loc: Loc) -> Box<DeductionFailure> {
+        let mut d = DeducedArgs::new(self.template_param_depth(ft), self.template_param_count(ft));
+        d.loc = loc;
+        DeductionFailure::new(tdk, d)
+    }
+
+    /// The pre-filter of a call candidate (WP-657; spec/sema.md §6.1):
+    /// the failure [`Self::deduce_call`] of `ft` with `nargs` arguments
+    /// returns before it substitutes or allocates anything, formed
+    /// without the argument lists. `None` when the full deduction is
+    /// needed, and always under [`crate::Sema::full_deduction`].
+    pub(crate) fn deduce_call_prefail(
+        &self,
+        ft: DeclId,
+        nargs: usize,
+        loc: Loc,
+    ) -> Option<Box<DeductionFailure>> {
+        if self.full_deduction {
+            return None;
+        }
+        let ft = self.ast.first(ft);
+        let tdk = self.deduce_head(ft, Some(nargs)).err()?;
+        Some(self.head_failure(ft, tdk, loc))
+    }
+
     #[allow(clippy::too_many_lines, reason = "the steps of §6.1 in order")]
     fn deduce_spec_steps(
         &mut self,
@@ -386,24 +443,15 @@ impl Sema<'_, '_> {
     ) -> Result<DeclId, Box<DeductionFailure>> {
         let (args, arg_opts) = call.unwrap_or((&[], &[]));
         let ft = self.ast.first(ft);
+        let templated = match self.deduce_head(ft, call.map(|(a, _)| a.len())) {
+            Ok(t) => t,
+            Err(tdk) => return Err(self.head_failure(ft, tdk, loc)),
+        };
         let params = self.template_params(ft);
         let depth = self.template_param_depth(ft);
         let n = params.len();
         let mut d = DeducedArgs::new(depth, n);
         d.loc = loc;
-        stat_step!("invalid");
-        let Some(templated) = self.templated_function(ft) else {
-            return Err(DeductionFailure::new(Tdk::MiscellaneousDeductionFailure, d));
-        };
-        // clang `DeduceTemplateArguments`: an invalid template (its
-        // function has an invalid parameter or return type, already
-        // reported) deduces nothing.
-        if (self.ast.decls.get(templated).has(DeclFlags::INVALID)
-            && !self.templ.body_invalid.contains(&templated))
-            || self.ast.decls.get(ft).has(DeclFlags::INVALID)
-        {
-            return Err(DeductionFailure::new(Tdk::Invalid, d));
-        }
         let name_loc = self.ast.decls.get(templated).loc();
         // The warnings the phases before the specialization is formed
         // hold back (§5.7): kept with it on success, else dropped.
@@ -452,9 +500,6 @@ impl Sema<'_, '_> {
         // anywhere leaves the maximum to the check after substitution.
         stat_step!("arity-pre");
         if let Some((a, _)) = call {
-            if a.len() < self.fn_min_args(templated) {
-                return Err(DeductionFailure::new(Tdk::TooFewArguments, d));
-            }
             let any_pack =
                 ptys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
             if a.len() > ptys.len() && !variadic && !any_pack {

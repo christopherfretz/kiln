@@ -293,6 +293,12 @@ pub struct Sema<'a, 'sm> {
     /// append a line with its size and build time to [`Sema::cfg_out`]
     /// (spec/sema.md §7.5.1).
     pub cfg_stats: bool,
+    /// Every call candidate's deduction runs in full: the pre-filters
+    /// that return a deduction's early failure without it
+    /// (`deduce_call_prefail`, spec/sema.md §6.1) are off. A test hook
+    /// (WP-657): the results are the same either way.
+    #[doc(hidden)]
+    pub full_deduction: bool,
     /// GCC's `-fpermissive` (default off): the C++26 arithmetic between
     /// different enumerations or an enumeration and a floating type
     /// (P2864, ill-formed) is diagnosed with the C++20/23 deprecation
@@ -1026,6 +1032,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             gnu_lib_builtins: false,
             cfg_dump: false,
             cfg_stats: false,
+            full_deduction: false,
             permissive: false,
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
