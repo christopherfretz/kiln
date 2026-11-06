@@ -129,13 +129,11 @@ impl ExplicitMemo {
     }
 
     /// Heap bytes (the memory report's `sema.explicit_memo` row).
-    #[allow(dead_code)]
     pub(crate) fn heap_bytes(&self) -> usize {
         self.slots.capacity() * size_of::<Option<Entry>>()
     }
 
     /// Slots in use.
-    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.slots.iter().filter(|e| e.is_some()).count()
     }

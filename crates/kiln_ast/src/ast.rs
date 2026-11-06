@@ -839,7 +839,8 @@ impl Ast {
         &self.symbols
     }
 
-    /// The memory report of every arena (spec/ast.md §2.3), plus the
+    /// The memory report of every arena (spec/ast.md §2.3), the
+    /// redeclaration index's change journals (`journal.*`), plus the
     /// derived `instantiation.retained` row (count = instantiations, bytes
     /// = node-arena growth inside outermost instantiations; excluded from
     /// [`MemReport::live_bytes`] as it is a subset of the other rows).
@@ -862,6 +863,12 @@ impl Ast {
         r.extend_prefixed("layouts", self.layouts.heap_bytes());
         r.extend_prefixed("virtuals", self.virtuals.heap_bytes());
         r.extend_prefixed("vtables", self.vtables.heap_bytes());
+        // The change journals of sema's redeclaration index (WP-658,
+        // spec/sema.md §3): bookkeeping, not nodes, so outside the
+        // per-instantiation node meter.
+        r.push(self.lookup.journal.mem_row("journal.lookup"));
+        r.push(self.decls.ty_journal.mem_row("journal.decl_types"));
+        r.push(self.redecls.journal.mem_row("journal.redecls"));
         r.push(MemRow::new(
             "instantiation.retained",
             self.inst.count,

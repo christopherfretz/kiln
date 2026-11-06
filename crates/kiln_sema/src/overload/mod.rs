@@ -585,7 +585,10 @@ impl Sema<'_, '_> {
 
     /// The memory overload resolution holds (spec/sema-overload.md §1.4):
     /// the row `sema.ovl.pool`, whose count is the pooled candidate sets
-    /// (the deepest nesting so far) and whose bytes are the pool's heap.
+    /// (the deepest nesting so far) and whose bytes are the pool's heap;
+    /// `sema.ovl.conv_types`; and (WP-661) `sema.redecl_index` (count:
+    /// keyed positions) and `sema.explicit_memo` (count: slots in use;
+    /// bytes: the whole table once allocated).
     pub fn overload_memory(&self) -> kiln_ast::mem::MemReport {
         let bytes = self.ovl.heap_size() as u64;
         let mut r = kiln_ast::mem::MemReport::new();
@@ -599,6 +602,22 @@ impl Sema<'_, '_> {
         r.push(kiln_ast::mem::MemRow::new(
             "sema.ovl.conv_types",
             self.ovl.conv_types.len() as u64,
+            bytes,
+            bytes,
+        ));
+        // WP-661: the redeclaration index (keyed positions; its journals
+        // are `Ast::memory`'s `journal.*` rows) and the explicit-argument memo.
+        let bytes = self.redecl_index.heap_bytes();
+        r.push(kiln_ast::mem::MemRow::new(
+            "sema.redecl_index",
+            self.redecl_index.entries() as u64,
+            bytes,
+            bytes,
+        ));
+        let bytes = self.explicit_memo.heap_bytes() as u64;
+        r.push(kiln_ast::mem::MemRow::new(
+            "sema.explicit_memo",
+            self.explicit_memo.len() as u64,
             bytes,
             bytes,
         ));
