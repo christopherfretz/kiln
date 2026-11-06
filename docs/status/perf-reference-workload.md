@@ -552,9 +552,9 @@ share of the named profile that the work could remove.
 | F10 | **Partly done (WP-649):** `copy` is not the cost (no call on the Oven shapes, 0.02% of S7); the per-access bitmask and 8-byte read/write fast paths gave −0.8% to −3.8% Ir; the rest is in "WP-649: init-bit copy". Copy the init-bit map a word at a time | kiln_oven `mem.rs` `Memory::copy` | `set_bits` is 2.8% of R2 | About 2% of R2 | Low | S |
 | F11 | **Done (landed WP-644).** Cache subobject and union paths | kiln_oven `ty/path.rs` `Types::hop`, `vm.rs` `union_path`, `mutable_path`, `place_in_unions`, `extent_of`, `Types::has_subobject` | 9% of S7, about 3% of R2. Measured before the cache: 794,167 `union_path` walks over 21 distinct keys at S7 N = 40, about 7% of S7's instructions. After it: the walks' self cost at S7 N = 8 halves (96.8 M to about 52 M Ir) and S7 is 2.6% faster, with peak RSS unchanged ("WP-644: subobject path cache"). What remains is the per-access hash lookups (`vm.rs:2488` `union_path`, `ty/path.rs:144` `Types::hop`) | 3–6% of S7 (measured 2.6–3.7%) | Medium | M |
 | F12 | **Done (WP-645).** Compute node accounting lazily | kiln_sema `templ/stack.rs` push/pop; kiln_ast `node_live_bytes` | About 1–1.2% and 3 M allocations in R3 | About 1% | Low | S |
-| F13 | **Partly done (WP-657):** S8 −5.4% wall at N=100 and −7.7% at N=400, −9% RSS, `templates_wide` −4.6%, from an arity pre-filter, a substituted-integer NTTP fast path and per-candidate scratch reuse, with resolution byte-identical; `add_template_candidate` −15% (target −30%), and explicit-argument substitution remained ("WP-657: deduction attempts"). WP-661 memoizes that substitution: S8 N=100 Ir −4.3%, `accessor-wide-emit` −3.9%, outputs and the instantiation report byte-identical; a `fn_min_args` cache was measured as a net loss and withdrawn ("WP-661: redeclaration and overload constant factors"). Fewer deduction and candidate attempts | kiln_sema `deduce_spec`, `add_template_candidate`, `deduce_call_arg` | 34–36% inclusive in S8; 9.8 M `deduce_spec` calls in R2; `deduce_call_arg` grows 18x for 4x N in S8 | Unknown; the largest frontend lever | Medium–high | M–L |
+| F13 | **Partly done (WP-657):** S8 −5.4% wall at N=100 and −7.7% at N=400, −9% RSS, `templates_wide` −4.6%, from an arity pre-filter, a substituted-integer NTTP fast path and per-candidate scratch reuse, with resolution byte-identical; `add_template_candidate` −15% (target −30%), and explicit-argument substitution remained ("WP-657: deduction attempts"). WP-661 memoizes that substitution: S8 N=100 Ir −4.3%, `accessor-wide-emit` −3.9%, outputs and the instantiation report byte-identical; a `fn_min_args` cache was measured as a net loss and withdrawn ("WP-661: redeclaration and overload constant factors"). WP-663 records the minimum argument count with the parameter list, one byte per function: S8 N=100 Ir −0.61%, S7 −0.52%, `accessor-wide-emit` −0.43%; the explicit-argument memo (0.37% of S8) needs an AST-neutral form ("WP-663: memory report and fold/deduction constant factors"). Fewer deduction and candidate attempts | kiln_sema `deduce_spec`, `add_template_candidate`, `deduce_call_arg` | 34–36% inclusive in S8; 9.8 M `deduce_spec` calls in R2; `deduce_call_arg` grows 18x for 4x N in S8 | Unknown; the largest frontend lever | Medium–high | M–L |
 | F14 | **Done (WP-658):** a per-set signature index makes each friend scan only same-signature candidates: entries scanned on S8 N=400 −99.96% (2.06 M → 886, flat in N), Ir −3.2%, wall −8.3% at N=400 and −5.3% at N=200, about 56 bytes per indexed entry, outputs byte-identical. WP-661: the member arm, `find_prev_function`, the `insert_with_flags` scans and the sync measured under 0.15% of every shape and were left; the index and journals have memory rows; the S8 N=200 RSS +0.64% is noise, not the index. Index hidden-friend redeclaration | kiln_sema `act_on_friend` → `overload/redecl.rs` `pick_prev_function` | 11.5% of S8 at N=400 and growing 13–19x for 4x N. Not seen in the reference. | Removes S8's quadratic term | Low | S–M |
-| F15 | **Partly done (WP-656):** leaf integer trial folds skip the bytecode: trial thunk compiles −86% and `eval_job` Ir −44% on `trial-folds` (wall −8%, RSS −16%), production shapes flat; variable reads, member accesses and `is_constant_initialized` remain ("WP-656: trial-fold fast path"). Fast path for trial folds | kiln_sema `try_fold` callers (`fold_int`, narrowing, `known_truth`) | Bytecode compile is 6.3% of R3. 168 k `compile_func` calls for 575 k folds, mostly on literals and simple arithmetic | 3–5% of R3 | Low–medium | S–M |
+| F15 | **Partly done (WP-656):** leaf integer trial folds skip the bytecode: trial thunk compiles −86% and `eval_job` Ir −44% on `trial-folds` (wall −8%, RSS −16%), production shapes flat; variable reads, member accesses and `is_constant_initialized` remain ("WP-656: trial-fold fast path"). WP-663 takes those three into the walk: `trial-folds` Ir −0.12% and RSS −3.6% with wall unchanged, `registration-wide-obj` thunk compiles 64,022 → 16,007 and Ir −0.58%; reads inside declined expressions (`st.arr[1]`) and failed thunks retained for the TU remain ("WP-663: memory report and fold/deduction constant factors"). Fast path for trial folds | kiln_sema `try_fold` callers (`fold_int`, narrowing, `known_truth`) | Bytecode compile is 6.3% of R3. 168 k `compile_func` calls for 575 k folds, mostly on literals and simple arithmetic | 3–5% of R3 | Low–medium | S–M |
 | F16 | Do not re-classify keywords in `decltype` lookahead | kiln_parse `Parser::decltype_scope_end` | 3 M of 7.7 M `Keywords::get` calls in R1 | About 0.6% of R1 | Low | S |
 | F17 | Cache built-in operator candidate sets | kiln_sema `add_builtin_with` | 4.6 M calls at 434 Ir each, 1% of R2 | About 1% | Low | S |
 | F18 | **Done (WP-654).** FxHash in codegen and the IR printer | kiln_codegen, kiln_llvm | `SipHasher13` is 0.9% + 0.24% of R3 | About 1% of R3 | Low | S |
@@ -4354,3 +4354,297 @@ about 67 KB of that is in the relocated sections. Most of the rest goes
 with the code: `text` is 11.96 MB against 10.29 MB, and the start-up and
 empty-compile paths touch more of it. That is code growth, not a table,
 and it is not in this package.
+
+
+## WP-663: memory report and fold/deduction constant factors
+
+This WP takes the follow-ups that WP-661 (F13) and WP-656 (F15) left
+open: a driver flag for the memory rows (A1), three deduction items
+(A2–A4) and four trial-fold items (B1–B4). The spec is
+spec/landed/sema/WP-663.md. Main is e0ea57e0a.
+
+### Method
+
+The shapes and flags are those of WP-656 and WP-661: S8 at N = 100, 200
+and 400 (`-fsyntax-only -freflection`, libstdc++ from GCC 16.1), S7,
+`trial-folds` (tf), `templates_wide` (tw) and `virtual-lattice` with
+`-fsyntax-only`, `accessor-wide-emit` (aw, `-S -emit-llvm`),
+`registration-wide-obj` (rw, `-c -O2`, front-end process only) and
+`churn-vector` as the control. Callgrind ran with `--cache-sim=no`
+under `ulimit -v 3000000` and `timeout 1200`, on S8 N=100 at most. A4
+was measured at S8 N=1,600 with `op-stats` counters and wall only. Item
+costs that callgrind cannot attribute (tail calls, recursion) were
+measured as WP-661 did: a binary that calls the item a second time,
+discarding the result, against one that calls it once.
+
+### A1: the memory report
+
+`-fkiln-memory-report` prints every frontend memory row after the
+diagnostics (spec/driver.md). The rows come from `Ast::memory`, the new
+`Sema::memory` and the new `Oven::memory`, whose `oven.*` rows sum to
+`Oven::footprint`. The ten largest rows by reserved bytes, on the A1
+commit (bytes):
+
+S8 N=400, total live 224,265,896, reserved 355,570,579:
+
+| row | count | live | reserved |
+|---|--:|--:|--:|
+| decls.nodes | 1,081,245 | 30,274,860 | 58,720,256 |
+| exprs.nodes | 1,427,125 | 28,542,500 | 41,943,040 |
+| types.args.args | 1,238,306 | 14,859,672 | 25,165,824 |
+| oven.funcs | 184,781 | 12,059,029 | 17,037,704 |
+| types.nodes | 1,378,563 | 11,028,504 | 16,777,216 |
+| types.args.lists | 658,279 | 10,532,464 | 16,777,216 |
+| oven.code | 2,784,204 | 11,136,816 | 16,777,216 |
+| decls.functions | 269,517 | 6,468,408 | 12,582,912 |
+| types.intern | 1,378,537 | 5,514,148 | 10,485,768 |
+| oven.sites | 424,028 | 6,673,488 | 8,912,896 |
+
+On the branch head, S8 N=400 is total live 222,926,621 and reserved
+356,094,867. `oven.funcs` is 11,334,037 live and `oven.code` 10,719,304
+live; these are fewer trial thunks. A2's `decls.min_args` is 269,517
+live and 524,288 reserved.
+
+The totals and the three largest rows of the other shapes:
+
+| shape | live | reserved | largest rows (reserved) |
+|---|--:|--:|---|
+| S8 N=100 | 66,094,533 | 93,376,911 | decls.nodes 14.7 MB, exprs.nodes 10.5 MB, types.args.args 6.3 MB |
+| tw | 35,186,960 | 46,994,747 | exprs.nodes 5.2 MB, oven.other 4.2 MB, oven.funcs 4.2 MB |
+| aw | 26,748,609 | 35,017,489 | exprs.nodes 5.2 MB, decls.nodes 3.7 MB, oven.funcs 2.1 MB |
+| rw | 38,014,266 | 58,506,700 | exprs.nodes 21.0 MB, oven.funcs 8.5 MB, oven.code 4.2 MB |
+
+S8's memory is the AST and the type context: `decls.nodes`,
+`exprs.nodes` and the `types.*` rows are 70% of its reserved bytes at
+N=400, and they grow linearly in N (×3.8 for ×4). The Oven's rows are
+16%. On rw, 64,022 `oven.thunks` rows (1.9 MB) and their functions and
+code were the trial folds that B4 removes.
+
+### Ranking
+
+Each item's share of each shape's instructions before the change
+(callgrind Ir; A4 in wall), and what was done. "—" means the item does
+not occur on that shape.
+
+| item | what | S8 N=100 | S7 | tf | tw | aw | rw | done |
+|---|---|--:|--:|--:|--:|--:|--:|---|
+| A2 | `fn_min_args` | 0.87% | 0.66% | — | 0.18% | 0.56% | 0.09% | yes |
+| A3 | explicit substitutions that create nodes, repeated | 0.37% | — | — | — | < 0.3% | — | report-only (would change the AST) |
+| A4 | `insert_with_flags` scans | 0.054% (0.16% of wall at N=1,600) | — | — | 0.012% | 0 | — | skipped (< 0.3%) |
+| B1 | variable reads in the leaf walk | — | 0.18% | 0.04% | — | 0.02% | — | yes |
+| B2 | `is_constant_initialized` through the leaf walk | — | 0.10% | 0.40% | — | 0 | — | yes |
+| B3 | retained failed trial thunks | — | — | about 2.4% of RSS (estimate) | — | — | about 0.7% of RSS (estimate) | report-only |
+| B4 | member reads and scalar glvalue roots | — | 0 | 0.03% | — | 0 | 0.58% | yes |
+
+B1, B2 and B4 shares are the measured savings of the landed change.
+
+The counts behind the table:
+- **A2.** The second call costs 104.8 Ir on aw (431,635 calls) and
+  117.5 Ir on S7 (309,266 calls); WP-661 measured 114 Ir at S8 N=100
+  (716,138 calls). tw makes 40,202 calls and rw 84,002.
+- **A3.** At S8 N=100, 57,264 explicit-argument substitutions over 4,900
+  keys; 52,617 succeed without creating a node (the WP-661 memo's
+  case). 4,647 succeed and create nodes, over 880 keys: 880 first runs
+  and 3,767 repeats. Every repeat creates the same number of nodes,
+  but fresh ones: 2,477 `PackExpansionExpr`, 1,290 `IntegerLiteral` and
+  1,290 `SubstNonTypeTemplateParmExpr`, with new type nodes over them
+  (`types.nodes`, `types.intern`, `types.args.*` and
+  `instantiation.retained` grow on every repeat). A memo would hand back
+  the first run's nodes and so change the AST. At WP-661's 8.8 K Ir per
+  substitution the repeats are about 33 M Ir, 0.37%.
+- **A4.** At S8 N=1,600 (wall 23.07 s, RSS 1,143,024 KB with `op-stats`):
+  564,738 set-path inserts scan 40,038,317 words; the longest set has
+  5,655 entries. The scans take 37.2 ms with the timer's overhead,
+  0.16% of the wall. Under 0.3% even there.
+- **B3.** See "B3" below.
+
+### Changes
+
+**A2: the minimum argument count with the parameter list** (108033924).
+`DeclArena::set_params` records the count in a byte per function
+payload; a default added to a set list makes it unknown until
+`Ast::refresh_min_args`, which `defer_default_args` calls for an
+instantiated declaration. With `op-stats`, no call on aw, S7 or S8 N=100
+had to count. One byte per function: 270 KB at S8 N=400.
+
+| shape | before (B4) | after | Δ |
+|---|--:|--:|--:|
+| S8 N=100 | 9,036,560,574 | 8,981,533,054 | −0.61% |
+| S7 | 5,522,511,966 | 5,494,003,929 | −0.52% |
+| aw | 8,125,054,266 | 8,090,101,116 | −0.43% |
+
+WP-661's per-`DeclId` cache cost more than it saved because it still
+needed `decls.function(f)` and a hash probe; this one is an index into
+a byte vector.
+
+**B1: variable reads in the leaf walk** (4ef943923). A trial fold's read
+of a usable constant integer whose global is resolved answers its value;
+a read of a parameter or automatic variable that is neither usable nor
+laxly readable answers a definite failure. `leaf_effects` redoes what
+the full path leaves behind (resolutions, global entries,
+`static_bytes`), so the Oven's state is the same either way.
+
+| shape | before (A1) | after | Δ |
+|---|--:|--:|--:|
+| tf | 10,879,988,041 | 10,875,603,558 | −0.04% |
+| S7 | 5,535,678,275 | 5,525,747,872 | −0.18% |
+| aw | 8,125,404,110 | 8,123,848,140 | −0.02% |
+
+tf's variable-read thunks fall from 16,000 to 4,000; the 4,000 left are
+reads inside expressions the walk declines (`st.arr[1]`). WP-656's
+286 M Ir estimate for these reads did not hold: after WP-656 most of a
+failing read's cost was already the thunk's compile, which B1 saves,
+while the rest of each trial (the declaration around it) stays.
+
+**B2: `is_constant_initialized`** (afd560ad1). The walk runs with the
+variable's placeholder object placed, as the full path places it.
+
+| shape | before (B1) | after | Δ |
+|---|--:|--:|--:|
+| tf | 10,875,603,558 | 10,832,609,928 | −0.40% |
+| S7 | 5,525,747,872 | 5,520,224,258 | −0.10% |
+| aw | 8,123,848,140 | 8,124,605,589 | +0.01% |
+
+tf: `is_constant_initialized` thunks 12,000 → 0, thunk compiles 96,002 →
+92,003.
+
+**B4: member reads and scalar glvalue roots** (66192251a). rw's 44,012
+`fold_rvalue` thunks were the codegen prepass folding every integral
+member access; none succeeded.
+
+| shape | before | after | Δ |
+|---|--:|--:|--:|
+| rw (main) | 10,677,817,601 | 10,615,595,104 | −0.58% |
+| tf (B2) | 10,832,609,928 | 10,829,801,637 | −0.03% |
+| S7 (B2) | 5,520,224,258 | 5,522,511,966 | +0.04% |
+| aw (B2) | 8,124,605,589 | 8,125,054,266 | +0.01% |
+
+rw: `MemberExpr` thunks 44,012 → 1, lvalue-read thunks 4,000 → 1, thunk
+compiles 64,022 → 16,007; the frontend's reserved memory falls from
+58.5 MB to 47.1 MB. S7's +0.04% is 0.55 M Ir in the walk and the rest
+in `malloc` and `Keywords::get` layout.
+
+**B3: retained failed thunks.** Not landed.
+- A failure cannot be cached in a few bytes: a fold that fails can
+  succeed later in the translation unit (a function defined after the
+  first attempt), and the cached thunk is what the second attempt
+  reuses.
+- A failed thunk's functions and code can be dropped only when nothing
+  was appended after them; a thunk's compile also compiles its callees,
+  which later folds reuse.
+- What it could save: B4 removed 48,015 failing thunks from rw and the
+  frontend's reserved bytes fell by 11.4 MB, about 237 bytes per thunk.
+  After B4, about 8,000 failing thunks remain on rw (about 1.9 MB, 0.7% of its
+  264 MB peak) and 12,000 on tf (about 2.8 MB, 2.4% of 115 MB). Dropping
+  all of rw's would not reach the −1% target for rw.
+
+**Branch total**, main against the final binary (108033924):
+
+Callgrind Ir. tw, rw and tf were measured on the branch binary
+(`fin`). aw and S7 were measured on the A2 binary, which is the same
+build (identical md5). The head adds only clippy-shape changes and
+keeps `decls.min_args` out of the node meter (see "Byte identity").
+
+| shape | main | branch | Δ |
+|---|--:|--:|--:|
+| tw | 2,484,447,307 | 2,481,323,418 | −0.13% |
+| aw | 8,119,286,046 | 8,090,101,116 | −0.36% |
+| rw | 10,677,817,601 | 10,596,184,474 | −0.76% |
+| S7 | 5,530,212,376 | 5,494,003,929 | −0.65% |
+| tf | 10,843,997,373 | 10,830,955,737 | −0.12% |
+
+tf includes +35.5 M Ir in `TokenSource::get`: the same 13,564,227
+calls cost 36.3 Ir each instead of 33.7 since A1 touched
+`kiln_parse/src/lib.rs`. This is code generation, and without it tf is
+about −0.45%. S8 N=100 was measured only from B4 to A2 (−0.61%, above).
+
+### Byte identity
+
+Main (e0ea57e0a) against the branch, with `-fkiln-memory-report` off:
+
+| binary | syntax + cfg-stats | emit-llvm | rc mismatch | instantiation report |
+|---|---|---|---|---|
+| branch with `leaf-check` (every walk answer asserted against the full path) | 4,360 same, 0 differ | 1,963 same, 0 differ (59 fail on both) | 0 | 6 same\* |
+| branch | 4,360 same, 0 differ | 1,963 same, 0 differ (59 fail on both) | 0 | 6 same\* |
+
+\* At A2's first cut the instantiation report differed on aw, S7, S8
+and vl. The rows were the same as a set; their `bytes` rose by one byte
+per function because `decls.min_args` was counted in
+`Ast::node_live_bytes`, and rows are ordered by bytes. The side vector
+now stays out of the meter. With that fix, main against the branch
+gives 6 same and 0 differ (`.build/wp663-rep.log`). Logs:
+`.build/wp663-cmp-Blc.log` and `.build/wp663-cmp-B.log`.
+
+### A/B
+
+Main (e0ea57e0a) against the branch (the A2 build; see "Branch total"), alternating, 3 pairs;
+each value is the median of 5 runs, and the table gives the median of
+the 3 pairs (`/usr/bin/time -f '%e %M'`, log `.build/wp663-bench.log`).
+
+| shape | main wall s | branch wall s | Δ wall | main RSS KB | branch RSS KB | Δ RSS |
+|---|--:|--:|--:|--:|--:|--:|
+| S8 N=100 | 1.00 | 0.97 | −3.0% | 100,320 | 100,588 | +0.27% |
+| S8 N=200 | 1.77 | 1.73 | −2.3% | 169,924 | 170,512 | +0.35% |
+| S8 N=400 | 3.38 | 3.36 | −0.6% | 306,252 | 305,060 | −0.39% |
+| S7 | 0.46 | 0.46 | 0 | 44,696 | 44,924 | +0.51% |
+| trial-folds | 0.87 | 0.87 | 0 | 119,352 | 115,092 | −3.57% |
+| templates_wide | 0.22 | 0.22 | 0 | 60,636 | 61,204 | +0.94% |
+| accessor-wide-emit | 1.44 | 1.44 | 0 | 140,404 | 140,460 | +0.04% |
+| registration-wide-obj | 6.84 | 6.84 | 0 | 263,888 | 263,276 | −0.23% |
+| churn-vector (control) | 0.46 | 0.47 | +2.2% | 10,612 | 10,752 | +1.32% |
+
+Per pair (main / branch), wall then RSS:
+- S8 N=100: 1.02, 0.98, 1.00 / 0.97, 0.97, 0.96; 100,304, 100,340, 100,320 / 100,588, 101,896, 98,588.
+- S8 N=200: 1.77, 1.76, 1.79 / 1.73, 1.73, 1.77; 169,496, 170,920, 169,924 / 170,652, 170,512, 166,204.
+- S8 N=400: 3.38, 3.38, 3.35 / 3.35, 3.36, 3.38; 304,324, 306,252, 308,256 / 304,972, 305,904, 305,060.
+- S7: 0.46, 0.46, 0.47 / 0.46, 0.46, 0.46; 44,692, 44,704, 44,696 / 44,920, 44,924, 44,972.
+- trial-folds: 0.87, 0.87, 0.87 / 0.87, 0.87, 0.88; 120,132, 118,112, 119,352 / 115,316, 115,092, 114,796.
+- templates_wide: 0.22, 0.23, 0.22 / 0.23, 0.22, 0.22; 61,336, 60,636, 60,012 / 60,864, 61,204, 61,380.
+- accessor-wide-emit: 1.42, 1.44, 1.45 / 1.41, 1.45, 1.44; 140,352, 140,440, 140,404 / 140,464, 140,460, 140,356.
+- registration-wide-obj: 6.82, 6.92, 6.84 / 6.84, 6.82, 6.85; 264,160, 263,224, 263,888 / 263,272, 264,052, 263,276.
+- churn-vector: 0.46, 0.46, 0.47 / 0.47, 0.47, 0.47; 10,612 ×3 / 10,752 ×3.
+
+Targets:
+- tf wall −5%: **not met** (0). tf's peak RSS falls 3.57%.
+- S8 N=400 not slower: met (−0.6%).
+- No shape slower than noise: met. churn-vector's +2.2% is one tick of
+  `time`'s 10 ms resolution, as it was in WP-661.
+- rw peak RSS −1%: applies only if B3 lands, and it did not.
+- RSS ≤ +0.3% on every shape: S7 (+0.51%), tw (+0.94%), churn-vector
+  (+1.32%) and S8 N=200 (+0.35%) are over. The cause is page-level
+  layout in the binary, not the heap:
+  - On an empty translation unit, RSS is 8,404–8,424 KB on main and
+    8,684 KB on the branch (+270 KB). Massif's peak heap there is the
+    same: 369,443 B on main against 369,438 B on the branch.
+  - The branch's `.text` is 35 KB larger; `.data.rel.ro` is 2 KB and
+    `.rela.dyn` 7 KB smaller.
+  - Massif peak heap, main → branch (`.build/wp663-massif.log`):
+
+    | shape | main B | branch B | Δ |
+    |---|--:|--:|--:|
+    | templates_wide | 59,906,137 | 59,971,667 | +0.11% |
+    | S7 | 43,923,152 | 41,825,950 | −4.8% |
+    | churn-vector | 1,042,084 | 1,038,562 | −0.34% |
+    | trial-folds | 144,488,325 | 132,986,476 | −8.0% |
+
+### What remains
+
+- tf's wall is unchanged. What remains on it is the declined reads
+  inside expressions the leaf walk does not take (`st.arr[1]`, 4,000
+  thunks): `crates/kiln_oven/src/leaf.rs:236` (`leaf_val`) and
+  `:387` (`leaf_read`).
+- rw: 4,000 `fold_for_overflow` thunks
+  (`crates/kiln_sema/src/oven_bridge.rs:420`) and 8,003 `ImplicitCastExpr`
+  folds in the cast-other bucket.
+- B3, dropping failed thunks: `crates/kiln_oven/src/compile.rs:391`
+  (`compile_thunk`). Worth it only together with a way to drop a
+  thunk's callees; about 1.9 MB on rw.
+- A3, memoising the explicit-argument substitution:
+  `crates/kiln_sema/src/templ/deduce_call.rs:702`. About 0.37% of
+  S8 N=100; needs a memo that leaves the AST unchanged.
+- The lookup insert path: `crates/kiln_ast/src/lookup.rs:212`
+  (`insert_with_flags`).
+- `TokenSource::get` (`crates/kiln_parse/src/tokens.rs:202`) went from
+  33.7 to 36.3 Ir per call after A1 touched `kiln_parse/src/lib.rs`. It
+  makes the same 13,564,227 calls on tf, so this is code generation
+  (+35.5 M Ir on tf), not work.
