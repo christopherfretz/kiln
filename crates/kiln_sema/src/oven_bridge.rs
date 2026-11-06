@@ -334,6 +334,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(None, |oven, b| oven.try_fold(b, e))
     }
 
+    /// [`Sema::try_fold`]'s two paths for `e`, the Oven's trial-fold fast
+    /// path and its full path, as `(fast, full)`: the fast path's
+    /// equivalence tests (`tests/trial_fold.rs`; test-only).
+    #[doc(hidden)]
+    pub fn trial_fold_paths(&mut self, e: ExprId) -> (Option<ConstValueId>, Option<ConstValueId>) {
+        let fast = self.with_oven(None, |oven, b| oven.try_fold_leaf(b, e));
+        let full = self.with_oven(None, |oven, b| oven.try_fold_full(b, e));
+        (fast, full)
+    }
+
     /// `cond` (`None`: `true`) evaluated with each parameter of `binds`
     /// initialized from its argument ([`Oven::evaluate_with_params`]),
     /// silently; `loc` is the point of instantiation of what it needs.

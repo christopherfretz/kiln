@@ -39,6 +39,7 @@ mod compile;
 mod complex;
 mod failure;
 mod kbc;
+mod leaf;
 mod mem;
 mod memo;
 mod memptr;
@@ -880,7 +881,10 @@ impl Oven {
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId> {
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
-        let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
+        let r = match self.leaf_first(bridge, e) {
+            Some(v) => Some(v),
+            None => self.eval_ctx(bridge, e, None, true, false, false).0.ok(),
+        };
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "try_fold", r.is_some(), self.memo.hits);
         r
@@ -900,7 +904,10 @@ impl Oven {
         self.mem.lax = true;
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
-        let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
+        let r = match self.leaf_first(bridge, e) {
+            Some(v) => Some(v),
+            None => self.eval_ctx(bridge, e, None, true, false, false).0.ok(),
+        };
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "fold_rvalue", r.is_some(), self.memo.hits);
         self.run.lax = false;

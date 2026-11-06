@@ -8116,6 +8116,13 @@ unscoped enumeration is reported (spec/oven.md "Integration").
   - constant `if`/loop conditions in the falls-off-the-end analysis
     (`-Wreturn-type`)
   - the alignment of an `alignas` expression for layout
+
+  A speculative fold of an integer expression made of literals,
+  enumerators, `sizeof`/`alignof`, integral casts and integer operators is
+  answered by the Oven's trial-fold fast path (spec/oven.md, WP-656)
+  without compiling or running bytecode; its result is the full
+  evaluation's, so which folds sema asks for, and what it does with the
+  answers, is unchanged.
 - **Usable in constant expressions** ([expr.const]/4) means:
   - a `constexpr` variable, or
   - a `const`, non-`volatile` integral or enumeration variable,

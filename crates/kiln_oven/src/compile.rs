@@ -2707,7 +2707,7 @@ fn enum_range(ast: &kiln_ast::Ast, q: QualType) -> Option<(i64, i64)> {
     }
 }
 
-fn scalar_bits(s: &Scalar<'_>) -> Option<u128> {
+pub(crate) fn scalar_bits(s: &Scalar<'_>) -> Option<u128> {
     match s {
         Scalar::Int { bits, signed, .. } => {
             let w = bits.width();

@@ -16,6 +16,9 @@ kiln_ast.workspace = true
 # measurement aid: `cargo build --release -p kiln_driver --features
 # kiln_oven/op-stats`.
 op-stats = []
+# Checks every trial-fold fast-path answer against the full path
+# (`leaf.rs`; WP-656), a validation build: `--features kiln_oven/leaf-check`.
+leaf-check = []
 
 [dev-dependencies]
 # Record layouts and target sizes for the test bridge (the real bridge is
