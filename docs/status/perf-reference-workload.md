@@ -543,7 +543,7 @@ share of the named profile that the work could remove.
 | F2 | `noexcept(std::__relocate_a(...))` evaluates to false | kiln_sema noexcept-specification evaluation (the cause is not yet isolated) | `static_assert(noexcept(std::__relocate_a(declval<string*>() ×3, declval<allocator<string>&>())))` fails on kiln and passes on GCC 16.1 and clang 19. `vector::_M_realloc_append` takes the copy-and-destroy path. | Correctness and run-time performance. Makes vector growth IR match clang's. | Low–medium | S–M |
 | F3 | **Done (landed WP-638).** `extract` of a static data member of a `substitute`d specialization | kiln_sema, instantiating a variable initializer on a reflection-driven odr-use | `bench/reflect/s5.cpp` on libstdc++: "initializer of 'value' is unknown" | Correctness: lets S5 compile | Medium | S–M |
 | P1 | Split the production stage by tool and N (measurement only) | the reference harness | The superlinearity analysis above | Pins down the super-linear term | None | S |
-| F4 | Hand LLVM bitcode, or skip the text round trip | kiln_llvm printer, kiln_driver `ir_passes` | Printing is 11.1% of R3, and `opt` spends 0.9 s parsing text at S8 N=160 | About 11% of R3's frontend plus the parse | Medium: a bitcode writer is new code | M–L |
+| F4 | **Partly done (WP-654):** printing Ir −53% on `accessor-wide-emit` (−46% to −50% on the other emit shapes), text byte-identical; the bitcode writer is NO-GO (its parse saving is 0.35% of the `-c -O2` wall); see "WP-654: IR printer". Hand LLVM bitcode, or skip the text round trip | kiln_llvm printer, kiln_driver `ir_passes` | Printing is 11.1% of R3, and `opt` spends 0.9 s parsing text at S8 N=160 | About 11% of R3's frontend plus the parse | Medium: a bitcode writer is new code | M–L |
 | F5 | **Partly done (WP-645):** allocations −17% to −48% on the in-tree shapes; the remaining sites are in "WP-645: allocation churn". Cut allocation churn | kiln_sema, kiln_ast (`Vec` growth sites), kiln_codegen | `malloc`/`free` and internals are 11–17% of self in every profile. 99 M allocations in R3, 32% of them from `finish_grow` | 5–8% | Low | M |
 | F6 | **Done (WP-645).** Box the Oven inside `Sema` | kiln_sema `oven_bridge.rs` `with_oven` (`Option<Oven>` moved by value) | 414 Ir of `memcpy` per call, 4.6 M calls in R3 | About 1.8% of R3, about 1% of R1 | Low | S |
 | F7 | Fewer redeclaration-chain walks | kiln_ast `DeclArena::redecl`, `Ast::first`; kiln_sema `template_redecl` | 6.8% of R1, 4.4% of R3, 3.6% of R2; 60–150 M calls | 3–5% | Low–medium | M |
@@ -557,7 +557,7 @@ share of the named profile that the work could remove.
 | F15 | Fast path for trial folds | kiln_sema `try_fold` callers (`fold_int`, narrowing, `known_truth`) | Bytecode compile is 6.3% of R3. 168 k `compile_func` calls for 575 k folds, mostly on literals and simple arithmetic | 3–5% of R3 | Low–medium | S–M |
 | F16 | Do not re-classify keywords in `decltype` lookahead | kiln_parse `Parser::decltype_scope_end` | 3 M of 7.7 M `Keywords::get` calls in R1 | About 0.6% of R1 | Low | S |
 | F17 | Cache built-in operator candidate sets | kiln_sema `add_builtin_with` | 4.6 M calls at 434 Ir each, 1% of R2 | About 1% | Low | S |
-| F18 | FxHash in codegen and the IR printer | kiln_codegen, kiln_llvm | `SipHasher13` is 0.9% + 0.24% of R3 | About 1% of R3 | Low | S |
+| F18 | **Done (WP-654).** FxHash in codegen and the IR printer | kiln_codegen, kiln_llvm | `SipHasher13` is 0.9% + 0.24% of R3 | About 1% of R3 | Low | S |
 | F19 | **Done (landed WP-638).** Give S1–S6 libstdc++ in the bench | xtask `gen_reflect`, the bench | The bench builds S1–S6 against libc++, which has no `<meta>`, so all six are `xfail` | Brings S1–S6 into the regression gate | Low | S |
 
 ## `synth_accessor_god` production TU (WP-633)
@@ -2328,3 +2328,257 @@ Other candidates:
 - the `pub const` builtin tables in `crates/kiln_ast/src/decl.rs` (the
   `ALL` and libm lists) may be duplicated the same way. They were not
   measured.
+
+## WP-654: IR printer
+
+F4 and F18. R3 spends 11.1% of its frontend in `kiln_llvm` printing
+textual IR, and SipHash in the interning tables is another 1.1%. This
+WP makes the printer cheaper and swaps the tables to Fx. It also sizes
+the bitcode writer, which it does not start. The spec is
+spec/landed/codegen/WP-654.md.
+
+### Measurement on main
+
+Main is 6f8937391. The command line is the harness's
+`-std=c++26 -S -emit-llvm -o /dev/null`, under cachegrind
+(`--cache-sim=no`). Each cell is self Ir summed into its containing
+functions, in millions.
+
+The "fmt::Write adapter" row is `String`/`Formatter` `write_str` and
+`write_char`, `core::fmt::write`, `pad_integral` and `fmt::num`. Part of
+it comes from `format!` outside the printer: about 5 M on every shape,
+as `simd-generate` shows. The SipHash and hashbrown callers come from
+callgrind (`hash_one`, inclusive):
+- on `accessor-wide-emit`, `AttrTable::intern` 106 M,
+  `TypeTable::intern` 37 M and `ConstTable::intern` 37 M;
+- on `virtual-lattice-emit`, `ConstTable::intern` 77 M and
+  `TypeTable::intern` 33 M, with the comdat and global-name maps after
+  them.
+
+All of these are kiln_llvm. kiln_codegen already used `FxHashMap`: its
+only std `HashMap` is a test helper. The hashbrown row is mostly the
+rest of the compiler's Fx tables.
+
+| main, M Ir | accessor-wide-emit | registration-wide-obj | virtual-lattice-emit | simd-generate |
+|---|--:|--:|--:|--:|
+| names (`write_llvm_name`, `write_md_ident`) | 64.0 | 86.4 | 12.4 | 0.0 |
+| escaping (`write_escaped`) | 0.2 | 0.5 | 0.0 | 0.0 |
+| constants, ints, floats | 2.4 | 10.2 | 3.3 | 0.0 |
+| types (`TypeTable::write*`, `Printer::ty`) | 20.0 | 47.4 | 18.7 | 0.0 |
+| attributes (`Attr::write`, `attr_set`) | 10.8 | 16.0 | 0.2 | 0.0 |
+| metadata | 1.3 | 1.9 | 0.0 | 0.0 |
+| instructions, operands | 91.7 | 250.7 | 20.4 | 0.0 |
+| module/function/global framing, slots, `TypeFinder` | 62.5 | 174.2 | 6.3 | 0.0 |
+| fmt::Write adapter | 298.6 | 640.3 | 106.2 | 5.0 |
+| &nbsp;&nbsp;of which `write_char` | 101.1 | 170.6 | 12.4 | 0.0 |
+| **printing total** | **551.5** (5.38%) | **1,227.7** (10.40%) | **167.5** (9.77%) | 5.1 (0.09%) |
+| SipHasher13 | 104.4 (1.02%) | 222.8 (1.89%) | 62.3 (3.63%) | 2.7 (0.05%) |
+| hashbrown/HashMap internals | 91.1 (0.89%) | 104.4 (0.88%) | 56.2 (3.27%) | 92.4 (1.59%) |
+| shape total | 10,243.3 | 11,808.0 | 1,714.9 | 5,798.8 |
+| printed size, bytes | 15,554,534 | 26,747,623 | 4,282,150 | 530 |
+
+**`opt` on text against bitcode.** The text was printed with
+`-fclang-compat=19`, so that `opt-19` and `llvm-as-19` accept it. Each
+time is the median of 5 runs, in seconds; sizes are in bytes.
+- `opt -O2` is `opt-19 -passes='default<O2>'`, timed on the text and on
+  `llvm-as` bitcode of the same text.
+- Parse is `opt-19 -passes=verify -disable-output`, which is the parse
+  cost alone.
+- `-c -O2` is kiln++'s whole wall at `-c -O2`.
+
+| shape | text | bitcode | `opt -O2` text | `opt -O2` bc | parse text | parse bc | saving | `-c -O2` wall | saving / wall |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| accessor-wide-emit | 16,019,866 | 3,408,392 | 45.56 | 43.48 | 0.350 | 0.198 | 0.152 | 118.85 | 0.13% |
+| registration-wide-obj | 31,219,855 | 7,548,800 | 4.88 | 4.49 | 0.793 | 0.535 | 0.257 | 7.00 | 3.7% |
+| virtual-lattice-emit | 4,299,658 | 532,500 | 0.13 | 0.09 | 0.066 | 0.030 | 0.036 | 0.39 | 9.2% |
+| simd-generate | 524 | 1,844 | 0.00 | 0.00 | — | — | — | 0.49 | — |
+
+Across the shapes the saving is 0.445 s of 126.7 s, 0.35%. Only
+`virtual-lattice-emit` passes 5%, and there it is 36 ms. The
+production `-c -O2` wall is `opt` and `llc` (on `accessor-wide-emit`, `llc` is
+about 70 s and `opt` about 45 s; kiln++'s own work is 1.6 s).
+
+### Design note
+
+**(a) Printer.**
+- **Tokens.** The printer writes whole `&str` tokens into a concrete
+  `String`, not into `&mut dyn fmt::Write`, so no character costs a
+  dynamic call. `Module::print` (io) and `write_to` (fmt) fill that
+  `String` and flush it in chunks of at least 64 KiB, at global,
+  function and metadata boundaries. The `IoAdapter` is gone.
+- **Pre-sizing.** `to_text` pre-sizes the `String` from a count pass
+  (`text_size_hint`: instructions, functions, globals and metadata
+  times a per-item estimate). The brief's "previous module's size" does
+  not apply, because the driver prints one module per process.
+- **Caches.**
+  - Types and inline attribute sets: their text is cached in one
+    per-module arena `String` with `(offset, len)` spans indexed by id,
+    filled lazily on first use.
+  - Global and function names: each name is already stored once in
+    the module, so a second copy would add memory for nothing. Instead
+    the quoting decision is cached per global as a `Cell<Quote>`:
+    `Plain`, `Quoted` (verbatim inside quotes), or `Escaped`.
+  - Locals: nothing is cached. Most locals are `%N` slots, and a named
+    local is one table lookup per byte.
+- **Integers** go through a local two-digit itoa. **Floats** keep their
+  existing path: constants are 0.02% to 0.2% of the shapes.
+
+**(b) F18.** Every `HashMap`/`HashSet` in kiln_llvm becomes
+`kiln_source::fx::FxHashMap`/`FxHashSet` (24 sites in `attr`,
+`constant`, `function`, `module` and `types`). None of them is iterated:
+- the printed order comes from the `Vec`s the tables index;
+- name uniquing probes the map, then appends a counter.
+
+So no order needs keeping. kiln_codegen needs no change.
+
+**(c) Bitcode writer: NO-GO.** The saving is 0.13% (accessor), 3.7%
+(registration) and 9.2% (virtual-lattice, 36 ms) of the `-c -O2` wall,
+and 0.35% in aggregate, against the 5% bar. Skipping the text round
+trip also saves the printing itself, but that is now 2.6% to 6.1% of the
+frontend's Ir, and under 1% of `-c -O2` on any shape with real
+optimization work. If it is ever revisited, a minimal LLVM 19 writer for
+kiln's IR needs:
+- the bitstream core (fixed and VBR fields, blocks, no abbreviations):
+  about 250 lines;
+- the identification block, and the module block (version, triple,
+  datalayout, source filename, global variable, function, alias and
+  comdat records);
+- the type table, the paramattr group and paramattr blocks;
+- module- and function-level constants, including constant expressions
+  and GEPs;
+- metadata (strings, nodes, kinds, attachments);
+- function blocks (relative value ids, about 60 instruction records,
+  call attributes, operand bundles, sync scopes);
+- the value symbol table, strtab and symtab;
+- tests that round-trip through `llvm-dis` against the text printer.
+
+That is about 4,000 lines (L), plus a second encoding that would have to
+track every printer change.
+
+### Per-step Ir
+
+Each step was measured with the same cachegrind command line on the
+release binary, in millions of Ir:
+1. **Step 1** (8cd067609): whole-token writes, the concrete `String`,
+   chunked io and fmt, pre-sizing, run-based escaping, local itoa.
+2. **Step 2** (a54fb4fd2): the type and attribute-set text arena, and
+   per-global quoting flags.
+3. **Step 3** (a7a82bc1a): Fx tables.
+4. **Step 4** (41e30d2c1): verbatim quoted names, the two-digit itoa,
+   and a borrow-only fast path for cached types.
+
+The `-S -emit-llvm` text of every step is byte-identical to main on the
+four shapes.
+
+| shape | step | printing total | fmt adapter | SipHasher13 | hashbrown | shape total | Δ total vs main |
+|---|---|--:|--:|--:|--:|--:|--:|
+| accessor-wide-emit | main | 551.5 | 298.6 | 104.4 | 91.1 | 10,243.3 | |
+| | 1 | 339.6 | 61.9 | 104.4 | 91.2 | 9,995.0 | −2.4% |
+| | 2 | 272.9 | 22.0 | 104.4 | 91.7 | 9,909.8 | −3.3% |
+| | 3 | 275.8 | 22.0 | 1.4 | 95.5 | 9,787.9 | −4.4% |
+| | 4 | **257.7 (−53.3%)** | 22.0 | 1.4 | 95.5 | 9,755.4 | −4.8% |
+| registration-wide-obj | main | 1,227.7 | 640.3 | 222.8 | 104.4 | 11,808.0 | |
+| | 1 | 800.4 | 124.3 | 222.8 | 104.4 | 11,273.3 | −4.5% |
+| | 2 | 687.3 | 41.3 | 222.8 | 104.4 | 11,122.8 | −5.8% |
+| | 3 | 695.2 | 41.3 | 1.8 | 127.5 | 10,878.4 | −7.9% |
+| | 4 | **659.7 (−46.3%)** | 41.3 | 1.8 | 127.5 | 10,815.7 | −8.4% |
+| virtual-lattice-emit | main | 167.5 | 106.2 | 62.3 | 56.2 | 1,714.9 | |
+| | 1 | 124.7 | 60.5 | 62.3 | 56.2 | 1,655.9 | −3.4% |
+| | 2 | 83.2 | 30.9 | 62.3 | 56.2 | 1,603.5 | −6.5% |
+| | 3 | 84.3 | 30.9 | 0.0 | 57.3 | 1,523.1 | −11.2% |
+| | 4 | **83.8 (−50.0%)** | 30.9 | 0.0 | 57.3 | 1,521.0 | −11.3% |
+| simd-generate | main | 5.1 | 5.0 | 2.7 | 92.4 | 5,798.8 | |
+| | 4 | 5.0 | 5.0 | 2.6 | 92.4 | 5,798.9 | 0.0% |
+
+- **SipHasher13** falls from rank 16 (accessor), 8 (registration) and 5
+  (virtual-lattice) to rank 633, 572 and 1,101. On `simd-generate` it is
+  rank 295 on main and stays there: its 2.6 M are outside kiln_llvm.
+- **hashbrown with Fx.** Fx probes a little more (+23 M on
+  registration), but every shape's total falls.
+- **`write_char`** goes from 101 M to under 1,000 Ir on accessor.
+- **Fmt residue.** The remaining fmt-adapter Ir is `format!` outside
+  the printer: codegen's name building, and `ConstTable` keys on
+  virtual-lattice.
+
+### A/B
+
+Main (6f8937391) and the branch (41e30d2c1) were run alternating, 3
+pairs, with load at 6 to 7. Each cell is that pair's median of 5 runs of
+`/usr/bin/time -f '%e %M'`; Δ compares the medians of the pairs. The
+`accessor-wide-emit.o` and `registration-wide-obj.o` cells are single
+runs, as in WP-651, because `llc` and `opt` take about 2 minutes on the
+first. The `.ll` rows are `-S -emit-llvm -o /dev/null` and the `.o` rows
+are `-c -O2 -o /dev/null`. S7 and S8 are `-fsyntax-only -freflection`.
+`churn-vector` is the harness command line.
+
+| shape | main wall s | branch wall s | Δ wall | main RSS KB | branch RSS KB | Δ RSS |
+|---|---|---|--:|---|---|--:|
+| `accessor-wide-emit.ll` | 1.59, 1.61, 1.59 | 1.60, 1.57, 1.58 | −0.6% | 140,456, 140,420, 140,468 | 140,368, 140,400, 140,472 | −0.0% |
+| `registration-wide-obj.ll` | 0.86, 0.90, 0.88 | 0.82, 0.82, 0.84 | −6.8% | 130,772, 129,744, 130,056 | 128,944, 129,448, 128,956 | −0.8% |
+| `virtual-lattice-emit.ll` | 0.13, 0.13, 0.13 | 0.12, 0.12, 0.12 | −7.7% | 27,736, 27,672, 27,776 | 29,188, 28,788, 27,720 | +3.8% |
+| `simd-generate.ll` | 0.48, 0.49, 0.48 | 0.49, 0.49, 0.49 | +2.1% | 80,476, 79,488, 78,808 | 78,212, 79,224, 78,824 | −0.8% |
+| `s7` | 0.50, 0.51, 0.51 | 0.50, 0.51, 0.50 | −2.0% | 45,496, 45,572, 45,560 | 45,472, 45,516, 45,500 | −0.1% |
+| `s8` | 0.61, 0.62, 0.62 | 0.62, 0.62, 0.62 | +0.0% | 64,156, 64,164, 64,036 | 64,884, 64,972, 64,836 | +1.1% |
+| `churn-vector` | 0.46, 0.47, 0.46 | 0.47, 0.47, 0.47 | +2.2% | 11,452, 11,452, 11,452 | 11,524, 11,524, 11,524 | +0.6% |
+| `virtual-lattice-emit.o` | 0.40, 0.40, 0.39 | 0.38, 0.38, 0.38 | −5.0% | 79,388, 79,372, 79,344 | 79,380, 79,260, 79,184 | −0.1% |
+| `simd-generate.o` | 0.49, 0.51, 0.51 | 0.50, 0.51, 0.51 | +0.0% | 79,436, 79,676, 80,112 | 78,560, 80,064, 78,476 | −1.4% |
+| `accessor-wide-emit.o` | 118.83, 119.72, 119.29 | 128.25, 119.06, 119.15 | −0.1% | 655,780, 653,360, 653,104 | 652,412, 654,108, 653,276 | −0.0% |
+| `registration-wide-obj.o` | 7.36, 7.10, 7.21 | 7.02, 6.98, 7.00 | −2.9% | 263,132, 263,232, 264,112 | 264,068, 264,064, 263,140 | +0.3% |
+
+`time` reports wall time in 10 ms ticks, so the cells that moved by one
+tick were rerun as 10 or 11 alternating runs each, timed to the
+millisecond or for RSS:
+- **`accessor-wide-emit.ll`**: wall 1.595 → 1.565 s (−1.9%), user
+  1.51 → 1.47 s (−2.6%).
+- **`churn-vector`**: 472 → 476 ms (+0.8%, inside its 465–491 ms
+  spread).
+- **`simd-generate.ll`**: 497 → 499 ms.
+- **RSS on `virtual-lattice-emit.ll` and S8**: both compilers have the
+  same two modes (27.6–27.8 MB and 28.8–29.5 MB on virtual-lattice,
+  63.1–66.2 MB on S8). The pair medians above fell in different modes;
+  over 10 runs the distributions match.
+- **`churn-vector` RSS**: +72 KB is the larger binary (+261 KB of
+  code). It runs no kiln_llvm code.
+
+No shape is slower than noise, and RSS is flat. `registration-wide-obj`
+drops 0.8% in RSS, probably because the printer's `String` is
+pre-sized instead of growing by doubling through `Formatter`.
+
+**Targets.**
+- Printing Ir: **met**, −53.3% on `accessor-wide-emit`.
+- SipHasher13 out of the top 40: **met**. It is now rank 633, 572 and
+  1,101.
+- No shape slower than noise: **met**.
+- RSS flat: **met**.
+- `-emit-llvm` wall −5%: **met** on `registration-wide-obj` (−6.8%) and
+  `virtual-lattice-emit` (−7.7%), **missed** on `accessor-wide-emit`
+  (−1.9%). On main, printing is 5.4% of that shape's Ir, and the step
+  table shows the Ir it removed was cheap per instruction: the shape's
+  Ir fell 4.8%, its user time 2.6%. Removing printing entirely would
+  take at most 5.4% of the shape's Ir, and less of its wall. Its next kiln_llvm cost is
+  `is_sized` (below).
+
+**Baselines** were not re-recorded.
+- `bench/baselines/frontend.json` has `accessor-wide-emit`
+  (`emit-llvm`), `virtual-lattice-emit` (`emit-llvm`) and
+  `registration-wide-obj` (`obj`).
+- Only `virtual-lattice-emit` moved by 5% or more. That is one 10 ms
+  tick on a ~0.1 s entry whose baseline spread is 22%.
+
+### What remains
+
+- `crates/kiln_llvm/src/types.rs:502` `TypeTable::is_sized` is 156.6 M
+  self Ir on `accessor-wide-emit` (1.6%, the largest kiln_llvm function
+  there). It walks the whole type on every call, and the builder calls
+  it on each alloca, load, store and GEP (`builder.rs:482`, `:507`,
+  `:541`, `:1327`). A sized bit computed when the type is interned (or
+  when a named body is set) would remove it.
+- `AttrTable::intern` (40.6 M on accessor, 75.9 M on registration) and
+  `IrBuilder::insert` (30.6 M, 79.2 M) are now the largest kiln_llvm
+  costs outside printing.
+- Printing that remains is `Printer::instruction`/`operand`/`module`
+  (about 35 M each on accessor) and `write_u64` for `%N` slots. The next
+  cut would be caching each function's local slot text, which is about
+  10% more of what is left.
+- Bitcode: NO-GO, as above. The production `-c -O2` wall is in `opt`'s
+  passes and `llc`, not in parsing.

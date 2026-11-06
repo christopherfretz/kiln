@@ -7,7 +7,8 @@
 //! `TypeFinder` compute them. Printing allocates only per-module and
 //! per-function side tables, never per instruction.
 
-use std::fmt;
+use std::cell::{Cell, RefCell};
+use std::fmt::{self, Write as _};
 use std::io;
 
 use crate::attr::{Attr, AttrList};
@@ -23,7 +24,28 @@ use crate::value::{AttrSetId, BlockId, ComdatId, FuncId, MdKindId, MetadataId, V
 
 const NO_SLOT: u32 = u32::MAX;
 
-type Out<'w> = &'w mut dyn fmt::Write;
+/// The printer's sink: one `String` (WP-654). Every token is appended as a
+/// whole `&str`; [`Module::print`] and [`Module::write_to`] hand the text
+/// to their writer in chunks.
+type Out<'w> = &'w mut String;
+
+/// Bytes LLVM's `PrintLLVMName` prints without quoting: `[A-Za-z0-9._-]`.
+static NAME_OK: [bool; 256] = {
+    let mut t = [false; 256];
+    let mut c = 0;
+    while c < 256 {
+        let b = c as u8;
+        t[c] = b.is_ascii_alphanumeric() || b == b'-' || b == b'.' || b == b'_';
+        c += 1;
+    }
+    t
+};
+
+/// Whether `name` must be printed quoted (`PrintLLVMName`).
+pub(crate) fn name_needs_quotes(name: &str) -> bool {
+    let b = name.as_bytes();
+    b.first().is_some_and(u8::is_ascii_digit) || !b.iter().all(|&c| NAME_OK[c as usize])
+}
 
 /// Write `prefix` + `name`, quoting and escaping as LLVM's `PrintLLVMName`.
 pub(crate) fn write_llvm_name<W: fmt::Write + ?Sized>(
@@ -31,48 +53,130 @@ pub(crate) fn write_llvm_name<W: fmt::Write + ?Sized>(
     prefix: char,
     name: &str,
 ) -> fmt::Result {
+    write_name_quoted(w, prefix, name, name_needs_quotes(name))
+}
+
+/// [`write_llvm_name`] with the quoting decision already made.
+#[inline]
+fn write_name_quoted<W: fmt::Write + ?Sized>(
+    w: &mut W,
+    prefix: char,
+    name: &str,
+    quoted: bool,
+) -> fmt::Result {
     if prefix != '\0' {
         w.write_char(prefix)?;
     }
-    let b = name.as_bytes();
-    let needs_quotes = b.first().is_some_and(u8::is_ascii_digit)
-        || b.iter().any(|&c| !(c.is_ascii_alphanumeric() || c == b'-' || c == b'.' || c == b'_'));
-    if needs_quotes {
+    if quoted {
         w.write_char('"')?;
-        write_escaped(w, b)?;
+        write_escaped(w, name.as_bytes())?;
         w.write_char('"')
     } else {
         w.write_str(name)
     }
 }
 
+const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+/// `\XX`: two upper-case hex digits.
+fn write_hex_escape<W: fmt::Write + ?Sized>(w: &mut W, c: u8) -> fmt::Result {
+    w.write_char('\\')?;
+    w.write_char(char::from(HEX[usize::from(c >> 4)]))?;
+    w.write_char(char::from(HEX[usize::from(c & 15)]))
+}
+
+/// `bytes`, known to be printable ASCII, as one `&str` token.
+fn write_ascii_run<W: fmt::Write + ?Sized>(w: &mut W, bytes: &[u8]) -> fmt::Result {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    w.write_str(std::str::from_utf8(bytes).map_err(|_| fmt::Error)?)
+}
+
+/// Whether `printEscapedString` prints `c` as itself.
+#[inline]
+fn is_verbatim(c: u8) -> bool {
+    (0x20..0x7f).contains(&c) && c != b'"' && c != b'\\'
+}
+
 /// LLVM's `printEscapedString`: printable ASCII except `"` and `\` verbatim,
-/// `\` as `\\`, everything else as `\XX`.
+/// `\` as `\\`, everything else as `\XX`. Verbatim runs are written as one
+/// token.
 pub(crate) fn write_escaped<W: fmt::Write + ?Sized>(w: &mut W, bytes: &[u8]) -> fmt::Result {
-    for &c in bytes {
+    let mut start = 0;
+    for (i, &c) in bytes.iter().enumerate() {
+        if is_verbatim(c) {
+            continue;
+        }
+        write_ascii_run(w, &bytes[start..i])?;
         if c == b'\\' {
             w.write_str("\\\\")?;
-        } else if (0x20..0x7f).contains(&c) && c != b'"' {
-            w.write_char(c as char)?;
         } else {
-            write!(w, "\\{c:02X}")?;
+            write_hex_escape(w, c)?;
         }
+        start = i + 1;
     }
-    Ok(())
+    write_ascii_run(w, &bytes[start..])
 }
 
 /// LLVM's `printMetadataIdentifier` (named metadata, attachment kinds).
 fn write_md_ident(w: Out<'_>, name: &str) -> fmt::Result {
-    for (i, &c) in name.as_bytes().iter().enumerate() {
+    let b = name.as_bytes();
+    let mut start = 0;
+    for (i, &c) in b.iter().enumerate() {
         let ok = if i == 0 { c.is_ascii_alphabetic() } else { c.is_ascii_alphanumeric() }
             || matches!(c, b'-' | b'$' | b'.' | b'_');
-        if ok {
-            w.write_char(c as char)?;
-        } else {
-            write!(w, "\\{c:02X}")?;
+        if !ok {
+            write_ascii_run(w, &b[start..i])?;
+            write_hex_escape(w, c)?;
+            start = i + 1;
         }
     }
-    Ok(())
+    write_ascii_run(w, &b[start..])
+}
+
+/// The decimal digits of `v`, as `itoa` writes them (no `fmt` machinery).
+pub(crate) fn write_u64<W: fmt::Write + ?Sized>(w: &mut W, mut v: u64) -> fmt::Result {
+    if v < 10 {
+        return w.write_char(char::from(b'0' + v as u8));
+    }
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while v >= 100 {
+        let d = (v % 100) as usize * 2;
+        v /= 100;
+        i -= 2;
+        buf[i..i + 2].copy_from_slice(&DIGITS2[d..d + 2]);
+    }
+    if v >= 10 {
+        let d = v as usize * 2;
+        i -= 2;
+        buf[i..i + 2].copy_from_slice(&DIGITS2[d..d + 2]);
+    } else {
+        i -= 1;
+        buf[i] = b'0' + v as u8;
+    }
+    write_ascii_run(w, &buf[i..])
+}
+
+/// `00`..`99`, two bytes each.
+static DIGITS2: [u8; 200] = {
+    let mut t = [0u8; 200];
+    let mut n = 0;
+    while n < 100 {
+        t[2 * n] = b'0' + (n / 10) as u8;
+        t[2 * n + 1] = b'0' + (n % 10) as u8;
+        n += 1;
+    }
+    t
+};
+
+/// `v` in decimal, with a leading `-` when negative.
+pub(crate) fn write_i64<W: fmt::Write + ?Sized>(w: &mut W, v: i64) -> fmt::Result {
+    if v < 0 {
+        w.write_char('-')?;
+    }
+    write_u64(w, v.unsigned_abs())
 }
 
 #[allow(clippy::many_single_char_names)]
@@ -111,7 +215,10 @@ fn write_int(w: Out<'_>, m: &Module, ty: TypeId, value: &IntValue) -> fmt::Resul
                 let sh = 128 - bits;
                 ((*v << sh) as i128) >> sh
             };
-            write!(w, "{s}")
+            match i64::try_from(s) {
+                Ok(v) => write_i64(w, v),
+                Err(_) => write!(w, "{s}"),
+            }
         }
         IntValue::Big(words) => write_signed_words(w, words, bits),
     }
@@ -119,7 +226,12 @@ fn write_int(w: Out<'_>, m: &Module, ty: TypeId, value: &IntValue) -> fmt::Resul
 
 fn linkage_kw(w: Out<'_>, l: Linkage) -> fmt::Result {
     let k = l.keyword();
-    if k.is_empty() { Ok(()) } else { write!(w, "{k} ") }
+    if k.is_empty() {
+        Ok(())
+    } else {
+        w.write_str(k)?;
+        w.write_char(' ')
+    }
 }
 
 fn write_dso_vis_dll(
@@ -229,7 +341,10 @@ fn write_gep_flags(w: Out<'_>, f: GepFlags, inrange: Option<(i64, i64)>) -> fmt:
 
 fn write_align(w: Out<'_>, a: Align) -> fmt::Result {
     match a.bytes() {
-        Some(n) => write!(w, ", align {n}"),
+        Some(n) => {
+            w.write_str(", align ")?;
+            write_u64(w, n)
+        }
         None => Ok(()),
     }
 }
@@ -254,7 +369,8 @@ fn write_shuffle_mask(w: Out<'_>, scalable: bool, mask: &[u32]) -> fmt::Result {
         if e == crate::builder::SHUFFLE_POISON {
             w.write_str("i32 poison")?;
         } else {
-            write!(w, "i32 {e}")?;
+            w.write_str("i32 ")?;
+            write_u64(w, u64::from(e))?;
         }
     }
     w.write_char('>')
@@ -314,6 +430,96 @@ struct Printer<'a> {
     /// Current function and its slots.
     cur: Option<FuncId>,
     local: LocalSlots,
+    /// The printed form of each type and inline attribute set, filled on
+    /// first use (WP-654).
+    cache: RefCell<TextCache>,
+    /// Per function / global: whether its name prints quoted
+    /// ([`Quote`]), decided on first use.
+    func_quote: Vec<Cell<Quote>>,
+    global_quote: Vec<Cell<Quote>>,
+}
+
+/// A name's quoting, decided once per module.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Quote {
+    Unknown,
+    /// `@name`.
+    Plain,
+    /// `@"name"`, every byte printed as is.
+    Quoted,
+    /// `@"name"` with `\XX` escapes.
+    Escaped,
+}
+
+/// Text of types and attribute sets as printed, in one arena:
+/// `ty[id]`/`attr[id]` is the byte range, `(NO_SLOT, _)` before first use.
+struct TextCache {
+    arena: String,
+    ty: Vec<(u32, u32)>,
+    attr: Vec<(u32, u32)>,
+}
+
+impl TextCache {
+    /// Append the cached text of entry `i` of `table` to `w`, printing it
+    /// into the arena with `print` on first use.
+    fn emit(
+        &mut self,
+        w: &mut String,
+        pick: fn(&mut TextCache) -> &mut Vec<(u32, u32)>,
+        i: usize,
+        print: impl FnOnce(&mut String) -> fmt::Result,
+    ) -> fmt::Result {
+        if let Some(&(a, b)) = pick(self).get(i)
+            && a != NO_SLOT
+        {
+            w.push_str(&self.arena[a as usize..b as usize]);
+            return Ok(());
+        }
+        let a = self.arena.len();
+        print(&mut self.arena)?;
+        let b = self.arena.len();
+        w.push_str(&self.arena[a..b]);
+        if let (Ok(a), Ok(b)) = (u32::try_from(a), u32::try_from(b))
+            && a != NO_SLOT
+            && b != NO_SLOT
+            && let Some(e) = pick(self).get_mut(i)
+        {
+            *e = (a, b);
+        }
+        Ok(())
+    }
+}
+
+/// `@name`, or `@N` for an unnamed global; `q` caches the quoting.
+fn global_name(w: Out<'_>, name: &str, slot: u32, q: &Cell<Quote>) -> fmt::Result {
+    if name.is_empty() {
+        w.write_char('@')?;
+        return write_u64(w, u64::from(slot));
+    }
+    let mut quote = q.get();
+    if quote == Quote::Unknown {
+        quote = if !name_needs_quotes(name) {
+            Quote::Plain
+        } else if name.bytes().all(is_verbatim) {
+            Quote::Quoted
+        } else {
+            Quote::Escaped
+        };
+        q.set(quote);
+    }
+    match quote {
+        Quote::Plain | Quote::Unknown => {
+            w.push('@');
+            w.push_str(name);
+        }
+        Quote::Quoted => {
+            w.push_str("@\"");
+            w.push_str(name);
+            w.push('"');
+        }
+        Quote::Escaped => write_name_quoted(w, '@', name, true)?,
+    }
+    Ok(())
 }
 
 fn is_intrinsic_call(m: &Module, callee: Value) -> bool {
@@ -333,6 +539,13 @@ impl<'a> Printer<'a> {
             func_slot: vec![NO_SLOT; m.funcs.len()],
             cur: None,
             local: LocalSlots::default(),
+            cache: RefCell::new(TextCache {
+                arena: String::new(),
+                ty: vec![(NO_SLOT, 0); m.types.len()],
+                attr: vec![(NO_SLOT, 0); m.attrs.len()],
+            }),
+            func_quote: vec![Cell::new(Quote::Unknown); m.funcs.len()],
+            global_quote: vec![Cell::new(Quote::Unknown); m.globals.len()],
         };
         let mut n = 0u32;
         let mut next = |empty: bool| {
@@ -438,7 +651,17 @@ impl<'a> Printer<'a> {
     // ---- operands -------------------------------------------------------
 
     fn ty(&self, w: Out<'_>, ty: TypeId) -> fmt::Result {
-        self.m.types.write(w, ty)
+        {
+            let c = self.cache.borrow();
+            if let Some(&(a, b)) = c.ty.get(ty.index())
+                && a != NO_SLOT
+            {
+                w.push_str(&c.arena[a as usize..b as usize]);
+                return Ok(());
+            }
+        }
+        let types = &self.m.types;
+        self.cache.borrow_mut().emit(w, |c| &mut c.ty, ty.index(), |a| types.write(a, ty))
     }
 
     fn func(&self) -> Option<&'a Function> {
@@ -458,7 +681,10 @@ impl<'a> Printer<'a> {
         let name = &f.blocks[bb.index()].name;
         if name.is_empty() {
             match slots.get(bb.index()) {
-                Some(&s) if s != NO_SLOT => write!(w, "%{s}"),
+                Some(&s) if s != NO_SLOT => {
+                    w.write_char('%')?;
+                    write_u64(w, u64::from(s))
+                }
                 _ => w.write_str("%<badref>"),
             }
         } else {
@@ -480,7 +706,10 @@ impl<'a> Printer<'a> {
                     Some(&n) if n != NO_NAME => write_llvm_name(w, '%', &f.names[n as usize]),
                     Some(_) => match self.local.insts[i.index()] {
                         NO_SLOT => w.write_str("<badref>"),
-                        s => write!(w, "%{s}"),
+                        s => {
+                            w.write_char('%')?;
+                            write_u64(w, u64::from(s))
+                        }
                     },
                     None => w.write_str("<badref>"),
                 }
@@ -489,7 +718,10 @@ impl<'a> Printer<'a> {
                 let Some(f) = self.func() else { return w.write_str("<badref>") };
                 match f.arg_names.get(n as usize) {
                     Some(name) if !name.is_empty() => write_llvm_name(w, '%', name),
-                    Some(_) => write!(w, "%{}", self.local.args[n as usize]),
+                    Some(_) => {
+                        w.write_char('%')?;
+                        write_u64(w, u64::from(self.local.args[n as usize]))
+                    }
                     None => w.write_str("<badref>"),
                 }
             }
@@ -503,13 +735,16 @@ impl<'a> Printer<'a> {
                 if r != v {
                     return self.operand(w, r);
                 }
-                Self::global_name(w, &m.funcs[f.index()].name, self.func_slot[f.index()])
+                let q = &self.func_quote[f.index()];
+                global_name(w, &m.funcs[f.index()].name, self.func_slot[f.index()], q)
             }
             ValueRef::Global(g) => {
-                Self::global_name(w, &m.globals[g.index()].name, self.global_slot[g.index()])
+                let q = &self.global_quote[g.index()];
+                global_name(w, &m.globals[g.index()].name, self.global_slot[g.index()], q)
             }
             ValueRef::Alias(a) => {
-                Self::global_name(w, &m.aliases[a.index()].name, self.alias_slot[a.index()])
+                let q = &Cell::new(Quote::Unknown);
+                global_name(w, &m.aliases[a.index()].name, self.alias_slot[a.index()], q)
             }
             ValueRef::Asm(a) => {
                 let ia = &m.asms[a.index()];
@@ -534,10 +769,6 @@ impl<'a> Printer<'a> {
             }
             ValueRef::Metadata(md) => self.md_operand(w, md),
         }
-    }
-
-    fn global_name(w: Out<'_>, name: &str, slot: u32) -> fmt::Result {
-        if name.is_empty() { write!(w, "@{slot}") } else { write_llvm_name(w, '@', name) }
     }
 
     /// `T v`.
@@ -640,7 +871,8 @@ impl<'a> Printer<'a> {
                 w.write_char(')')
             }
             ConstData::Cast { op, val, ty } => {
-                write!(w, "{} (", op.name())?;
+                w.write_str(op.name())?;
+                w.write_str(" (")?;
                 self.typed(w, *val)?;
                 w.write_str(" to ")?;
                 self.ty(w, *ty)?;
@@ -708,7 +940,10 @@ impl<'a> Printer<'a> {
             }
             _ if node.is_numbered() => match self.md_slot[md.index()] {
                 NO_SLOT => w.write_str("<badref>"),
-                s => write!(w, "!{s}"),
+                s => {
+                    w.write_char('!')?;
+                    write_u64(w, u64::from(s))
+                }
             },
             _ => self.md_body(w, node),
         }
@@ -781,25 +1016,38 @@ impl<'a> Printer<'a> {
 
     /// Inline attribute set (`noundef align 8`).
     fn attr_set(&self, w: Out<'_>, s: AttrSetId) -> fmt::Result {
-        for (i, a) in self.m.attrs.get(s).iter().enumerate() {
-            if i > 0 {
-                w.write_char(' ')?;
-            }
-            a.write(w, &self.m.types)?;
-        }
-        Ok(())
+        let m = self.m;
+        self.cache.borrow_mut().emit(
+            w,
+            |c| &mut c.attr,
+            s.index(),
+            |w| {
+                for (i, a) in m.attrs.get(s).iter().enumerate() {
+                    if i > 0 {
+                        w.write_char(' ')?;
+                    }
+                    a.write(w, &m.types)?;
+                }
+                Ok(())
+            },
+        )
     }
 
     fn attr_group_ref(&self, w: Out<'_>, s: AttrSetId) -> fmt::Result {
         if s != AttrSetId::EMPTY {
-            write!(w, " #{}", self.attr_slot[s.index()])?;
+            w.write_str(" #")?;
+            write_u64(w, u64::from(self.attr_slot[s.index()]))?;
         }
         Ok(())
     }
 
     // ---- module ---------------------------------------------------------
 
-    fn module(&mut self, w: Out<'_>) -> fmt::Result {
+    /// Print the module into `w`. When `flush` is given, `w` is handed to
+    /// it (and cleared) whenever it passes [`CHUNK`] bytes at a global,
+    /// function or metadata boundary, so an `io::Write`/`fmt::Write` sink
+    /// sees a few large writes instead of one call per token.
+    fn module(&mut self, w: Out<'_>, mut flush: Option<Flush<'_>>) -> fmt::Result {
         let m = self.m;
         if !m.module_id.is_empty() && !m.module_id.contains('\n') {
             writeln!(w, "; ModuleID = '{}'", m.module_id)?;
@@ -833,6 +1081,7 @@ impl<'a> Printer<'a> {
         for g in &m.global_order {
             self.global(w, g.index())?;
             w.write_char('\n')?;
+            chunk(w, &mut flush)?;
         }
         if !m.aliases.is_empty() {
             w.write_char('\n')?;
@@ -843,6 +1092,7 @@ impl<'a> Printer<'a> {
         for &f in &m.func_order {
             w.write_char('\n')?;
             self.function(w, f)?;
+            chunk(w, &mut flush)?;
         }
         if !self.attr_order.is_empty() {
             w.write_char('\n')?;
@@ -879,10 +1129,17 @@ impl<'a> Printer<'a> {
         if !self.md_order.is_empty() {
             w.write_char('\n')?;
             for (n, &md) in self.md_order.iter().enumerate() {
-                write!(w, "!{n} = ")?;
+                w.write_char('!')?;
+                write_u64(w, n as u64)?;
+                w.write_str(" = ")?;
                 self.md_body(w, &m.md[md.index()])?;
                 w.write_char('\n')?;
+                chunk(w, &mut flush)?;
             }
+        }
+        if let Some(f) = flush.as_mut() {
+            f(w)?;
+            w.clear();
         }
         Ok(())
     }
@@ -964,7 +1221,7 @@ impl<'a> Printer<'a> {
 
     fn global(&self, w: Out<'_>, i: usize) -> fmt::Result {
         let g = &self.m.globals[i];
-        Self::global_name(w, &g.name, self.global_slot[i])?;
+        global_name(w, &g.name, self.global_slot[i], &self.global_quote[i])?;
         w.write_str(" = ")?;
         if g.init.is_none() && g.linkage == Linkage::External {
             w.write_str("external ")?;
@@ -974,7 +1231,8 @@ impl<'a> Printer<'a> {
         write_tls(w, g.thread_local)?;
         let ua = unnamed_addr_kw(g.unnamed_addr);
         if !ua.is_empty() {
-            write!(w, "{ua} ")?;
+            w.write_str(ua)?;
+            w.write_char(' ')?;
         }
         if g.addrspace != 0 {
             write!(w, "addrspace({}) ", g.addrspace)?;
@@ -995,21 +1253,23 @@ impl<'a> Printer<'a> {
         }
         self.comdat_ref(w, g.comdat, &g.name, true)?;
         if let Some(a) = g.align {
-            write!(w, ", align {a}")?;
+            w.write_str(", align ")?;
+            write_u64(w, a)?;
         }
         self.attachments(w, g.md.iter().copied(), ", ")
     }
 
     fn alias(&self, w: Out<'_>, i: usize) -> fmt::Result {
         let a = &self.m.aliases[i];
-        Self::global_name(w, &a.name, self.alias_slot[i])?;
+        global_name(w, &a.name, self.alias_slot[i], &Cell::new(Quote::Unknown))?;
         w.write_str(" = ")?;
         linkage_kw(w, a.linkage)?;
         write_dso_vis_dll(w, a.linkage, a.dso_local, a.visibility, a.dll_storage)?;
         write_tls(w, a.thread_local)?;
         let ua = unnamed_addr_kw(a.unnamed_addr);
         if !ua.is_empty() {
-            write!(w, "{ua} ")?;
+            w.write_str(ua)?;
+            w.write_char(' ')?;
         }
         w.write_str("alias ")?;
         self.ty(w, a.value_type)?;
@@ -1050,7 +1310,8 @@ impl<'a> Printer<'a> {
         }
         self.ty(w, f.ret)?;
         w.write_char(' ')?;
-        Self::global_name(w, &f.name, self.func_slot[fid.index()])?;
+        let q = &self.func_quote[fid.index()];
+        global_name(w, &f.name, self.func_slot[fid.index()], q)?;
         w.write_char('(')?;
         for (i, &pt) in f.params.iter().enumerate() {
             if i > 0 {
@@ -1073,7 +1334,8 @@ impl<'a> Printer<'a> {
         w.write_char(')')?;
         let ua = unnamed_addr_kw(f.unnamed_addr);
         if !ua.is_empty() {
-            write!(w, " {ua}")?;
+            w.write_char(' ')?;
+            w.write_str(ua)?;
         }
         if f.addrspace != 0 {
             write!(w, " addrspace({})", f.addrspace)?;
@@ -1086,7 +1348,8 @@ impl<'a> Printer<'a> {
         }
         self.comdat_ref(w, f.comdat, &f.name, false)?;
         if let Some(a) = f.align {
-            write!(w, " align {a}")?;
+            w.write_str(" align ")?;
+            write_u64(w, a)?;
         }
         if let Some(gc) = &f.gc {
             w.write_str(" gc \"")?;
@@ -1109,7 +1372,9 @@ impl<'a> Printer<'a> {
                     write_llvm_name(w, '\0', name)?;
                     w.write_char(':')?;
                 } else if bi != 0 {
-                    write!(w, "\n{}:", self.local.blocks[bb.index()])?;
+                    w.write_char('\n')?;
+                    write_u64(w, u64::from(self.local.blocks[bb.index()]))?;
+                    w.write_char(':')?;
                 }
                 w.write_char('\n')?;
                 for &i in &f.blocks[bb.index()].insts {
@@ -1152,13 +1417,15 @@ impl<'a> Printer<'a> {
                 self.same_typed(w, &[val])?;
             }
             InstKind::ICmp { pred, lhs, rhs } => {
-                write!(w, "icmp {}", pred.name())?;
+                w.write_str("icmp ")?;
+                w.write_str(pred.name())?;
                 self.same_typed(w, &[lhs, rhs])?;
             }
             InstKind::FCmp { pred, fmf, lhs, rhs } => {
                 w.write_str("fcmp")?;
                 write_fmf(w, fmf)?;
-                write!(w, " {}", pred.name())?;
+                w.write_char(' ')?;
+                w.write_str(pred.name())?;
                 self.same_typed(w, &[lhs, rhs])?;
             }
             InstKind::Cast { op, flags, val } => {
@@ -1230,7 +1497,10 @@ impl<'a> Printer<'a> {
                 w.write_str(", ")?;
                 self.typed(w, new)?;
                 self.sync_scope(w, scope)?;
-                write!(w, " {} {}", success.name(), failure.name())?;
+                w.write_char(' ')?;
+                w.write_str(success.name())?;
+                w.write_char(' ')?;
+                w.write_str(failure.name())?;
                 write_align(w, align)?;
             }
             InstKind::AtomicRmw { op, ptr, val, align, ordering, volatile, scope } => {
@@ -1238,7 +1508,9 @@ impl<'a> Printer<'a> {
                 if volatile {
                     w.write_str(" volatile")?;
                 }
-                write!(w, " {} ", op.name())?;
+                w.write_char(' ')?;
+                w.write_str(op.name())?;
+                w.write_char(' ')?;
                 self.typed(w, ptr)?;
                 w.write_str(", ")?;
                 self.typed(w, val)?;
@@ -1257,7 +1529,8 @@ impl<'a> Printer<'a> {
                 w.write_str("extractvalue ")?;
                 self.typed(w, agg)?;
                 for i in f.idx(idx) {
-                    write!(w, ", {i}")?;
+                    w.write_str(", ")?;
+                    write_u64(w, u64::from(*i))?;
                 }
             }
             InstKind::InsertValue { agg, val, idx } => {
@@ -1266,7 +1539,8 @@ impl<'a> Printer<'a> {
                 w.write_str(", ")?;
                 self.typed(w, val)?;
                 for i in f.idx(idx) {
-                    write!(w, ", {i}")?;
+                    w.write_str(", ")?;
+                    write_u64(w, u64::from(*i))?;
                 }
             }
             InstKind::ExtractElement { vec, idx } => {
@@ -1581,7 +1855,8 @@ impl<'a> Printer<'a> {
             return Ok(());
         }
         self.sync_scope(w, s)?;
-        write!(w, " {}", o.name())
+        w.write_char(' ')?;
+        w.write_str(o.name())
     }
 }
 
@@ -1895,19 +2170,21 @@ impl<'a> TypeFinder<'a> {
     }
 }
 
-/// Adapter from `io::Write` to `fmt::Write` that keeps the first I/O error.
-struct IoAdapter<'w, W: io::Write + ?Sized> {
-    inner: &'w mut W,
-    error: Option<io::Error>,
-}
+/// Receives a printed chunk.
+type Flush<'f> = &'f mut dyn FnMut(&str) -> fmt::Result;
 
-impl<W: io::Write + ?Sized> fmt::Write for IoAdapter<'_, W> {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        self.inner.write_all(s.as_bytes()).map_err(|e| {
-            self.error = Some(e);
-            fmt::Error
-        })
+/// Bytes buffered before a chunk is handed to the sink.
+const CHUNK: usize = 1 << 16;
+
+#[inline]
+fn chunk(w: &mut String, flush: &mut Option<Flush<'_>>) -> fmt::Result {
+    if let Some(f) = flush.as_mut()
+        && w.len() >= CHUNK
+    {
+        f(w)?;
+        w.clear();
     }
+    Ok(())
 }
 
 impl Module {
@@ -1917,10 +2194,17 @@ impl Module {
     ///
     /// Returns the writer's I/O error.
     pub fn print<W: io::Write + ?Sized>(&self, w: &mut W) -> io::Result<()> {
-        let mut a = IoAdapter { inner: w, error: None };
-        match Printer::new(self).module(&mut a) {
+        let mut error = None;
+        let mut buf = String::with_capacity(CHUNK + CHUNK / 4);
+        let mut f = |s: &str| {
+            w.write_all(s.as_bytes()).map_err(|e| {
+                error = Some(e);
+                fmt::Error
+            })
+        };
+        match Printer::new(self).module(&mut buf, Some(&mut f)) {
             Ok(()) => Ok(()),
-            Err(fmt::Error) => Err(a.error.unwrap_or_else(|| io::Error::other("formatting error"))),
+            Err(fmt::Error) => Err(error.unwrap_or_else(|| io::Error::other("formatting error"))),
         }
     }
 
@@ -1929,15 +2213,24 @@ impl Module {
     /// # Errors
     ///
     /// Returns the sink's error.
-    pub fn write_to<W: fmt::Write>(&self, w: &mut W) -> fmt::Result {
-        Printer::new(self).module(w)
+    pub fn write_to<W: fmt::Write + ?Sized>(&self, w: &mut W) -> fmt::Result {
+        let mut buf = String::with_capacity(CHUNK + CHUNK / 4);
+        Printer::new(self).module(&mut buf, Some(&mut |s: &str| w.write_str(s)))
+    }
+
+    /// A rough upper-middle estimate of the printed size, used to pre-size
+    /// [`Module::to_text`]'s buffer (an under-estimate only costs a
+    /// `realloc`; capacity that is never written is never resident).
+    fn text_size_hint(&self) -> usize {
+        let insts: usize = self.funcs.iter().map(|f| f.insts.len()).sum();
+        4096 + insts * 40 + self.funcs.len() * 96 + self.globals.len() * 96 + self.md.len() * 48
     }
 
     /// The module as LLVM 19 textual IR.
     pub fn to_text(&self) -> String {
-        let mut s = String::new();
+        let mut s = String::with_capacity(self.text_size_hint());
         // Writing to a String cannot fail.
-        let _ = self.write_to(&mut s);
+        let _ = Printer::new(self).module(&mut s, None);
         s
     }
 }
@@ -1945,5 +2238,71 @@ impl Module {
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.write_to(f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integers_match_display() {
+        let edges =
+            [0, 1, 9, 10, 99, 100, 101, 999, 1000, 4096, i64::MAX, -1, -10, -4096, i64::MIN];
+        for v in (0..20_000).chain(edges) {
+            let mut s = String::new();
+            write_i64(&mut s, v).unwrap();
+            assert_eq!(s, v.to_string());
+        }
+        let mut s = String::new();
+        write_u64(&mut s, u64::MAX).unwrap();
+        assert_eq!(s, u64::MAX.to_string());
+    }
+
+    #[test]
+    fn escaping_writes_runs_and_escapes() {
+        let mut s = String::new();
+        write_escaped(&mut s, b"ab\"c\\d\n\xffe").unwrap();
+        assert_eq!(s, "ab\\22c\\\\d\\0A\\FFe");
+        let mut s = String::new();
+        write_llvm_name(&mut s, '@', "_Z1fv").unwrap();
+        write_llvm_name(&mut s, '%', "a b").unwrap();
+        write_llvm_name(&mut s, '@', "0x").unwrap();
+        write_llvm_name(&mut s, '@', "a.-_9").unwrap();
+        write_llvm_name(&mut s, '@', "$x").unwrap();
+        write_llvm_name(&mut s, '%', "").unwrap();
+        assert_eq!(s, "@_Z1fv%\"a b\"@\"0x\"@a.-_9@\"$x\"%");
+    }
+
+    #[test]
+    fn every_entry_point_prints_the_same_text() {
+        let mut m = Module::new("m");
+        let i32t = m.types.int(32);
+        for n in 0..10_000 {
+            let g = m.add_global(&format!("g{n}"), i32t);
+            let c = m.const_int(i32t, i128::from(n));
+            m.global_mut(g).init = Some(c);
+        }
+        for name in ["a$b", "a\"b", "0x", "plain"] {
+            let g = m.add_global(name, i32t);
+            let ptr = m.types.ptr(0);
+            let user = m.add_global(&format!("p.{name}"), ptr);
+            m.global_mut(user).init = Some(Value::global(g));
+        }
+        let text = m.to_text();
+        assert!(text.len() > 2 * CHUNK);
+        for want in
+            ["@\"a$b\" = ", "@\"a\\22b\" = ", "@\"p.a$b\" = global ptr @\"a$b\"", "@\"0x\" = "]
+        {
+            assert!(text.contains(want), "{want}");
+        }
+        assert!(text.contains("@p.plain = global ptr @plain"));
+        assert_eq!(m.to_string(), text);
+        let mut s = String::new();
+        m.write_to(&mut s).unwrap();
+        assert_eq!(s, text);
+        let mut v = Vec::new();
+        m.print(&mut v).unwrap();
+        assert_eq!(v, text.as_bytes());
     }
 }

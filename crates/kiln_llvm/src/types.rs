@@ -5,7 +5,7 @@
 //! [`TypeId`] and type equality is id equality. Identified (named) structs
 //! are nominal: each [`TypeTable::named_struct`] call creates a new type.
 
-use std::collections::HashMap;
+use kiln_source::fx::FxHashMap;
 use std::fmt;
 
 use crate::error::{IrError, IrErrorKind};
@@ -140,10 +140,10 @@ struct NamedStruct {
 #[derive(Debug)]
 pub struct TypeTable {
     data: Vec<TypeData>,
-    map: HashMap<TypeData, TypeId>,
+    map: FxHashMap<TypeData, TypeId>,
     named: Vec<NamedStruct>,
     named_ids: Vec<TypeId>,
-    by_name: HashMap<Box<str>, TypeId>,
+    by_name: FxHashMap<Box<str>, TypeId>,
     unique_counter: u32,
     unnamed_count: u32,
 }
@@ -160,10 +160,10 @@ impl TypeTable {
     pub fn new() -> Self {
         let mut t = TypeTable {
             data: Vec::new(),
-            map: HashMap::new(),
+            map: FxHashMap::default(),
             named: Vec::new(),
             named_ids: Vec::new(),
-            by_name: HashMap::new(),
+            by_name: FxHashMap::default(),
             unique_counter: 0,
             unnamed_count: 0,
         };

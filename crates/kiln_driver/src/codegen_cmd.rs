@@ -347,7 +347,7 @@ impl CodegenJob<'_> {
         // IR text for a big unit: print only once the AST is gone, so the
         // peak holds two of the three, not all of them (WP-633).
         drop(tu);
-        module.map(|m| m.to_string())
+        module.map(|m| m.to_text())
     }
 }
 

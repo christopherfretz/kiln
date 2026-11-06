@@ -83,6 +83,9 @@ dependencies = [
 [[package]]
 name = "kiln_llvm"
 version = "0.0.1"
+dependencies = [
+ "kiln_source",
+]
 
 [[package]]
 name = "kiln_oven"

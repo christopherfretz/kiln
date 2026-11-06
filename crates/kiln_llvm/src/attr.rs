@@ -6,7 +6,7 @@
 //! `TableGen` record name, then type attributes, then integer attributes, then
 //! string attributes by key), so printed sets look like clang's.
 
-use std::collections::HashMap;
+use kiln_source::fx::FxHashMap;
 use std::fmt;
 
 use crate::types::{TypeId, TypeTable};
@@ -308,12 +308,12 @@ impl From<AttrKind> for Attr {
 #[derive(Debug)]
 pub(crate) struct AttrTable {
     sets: Vec<Box<[Attr]>>,
-    map: HashMap<Box<[Attr]>, AttrSetId>,
+    map: FxHashMap<Box<[Attr]>, AttrSetId>,
 }
 
 impl AttrTable {
     pub(crate) fn new() -> Self {
-        let mut t = AttrTable { sets: Vec::new(), map: HashMap::new() };
+        let mut t = AttrTable { sets: Vec::new(), map: FxHashMap::default() };
         t.sets.push(Box::new([]));
         t.map.insert(Box::new([]), AttrSetId::EMPTY);
         t

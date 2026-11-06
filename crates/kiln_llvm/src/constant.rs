@@ -7,7 +7,7 @@
 //! are integer/float zero or `null`. Interning then makes equal constants
 //! equal [`Value`]s.
 
-use std::collections::HashMap;
+use kiln_source::fx::FxHashMap;
 
 use crate::inst::{BinOp, CastOp, Flags, GepFlags};
 use crate::types::TypeId;
@@ -178,7 +178,7 @@ impl ConstData {
 #[derive(Debug, Default)]
 pub(crate) struct ConstTable {
     data: Vec<ConstData>,
-    map: HashMap<ConstData, ConstId>,
+    map: FxHashMap<ConstData, ConstId>,
 }
 
 impl ConstTable {
