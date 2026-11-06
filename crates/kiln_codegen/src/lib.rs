@@ -58,6 +58,15 @@ mod x86;
 mod x86_intrinsics;
 mod x86_mmx;
 
+/// The x86 builtins clang lowers to one `llvm.x86.*` call
+/// (spec/landed/codegen/WP-630.md "1:1 intrinsics"), decoded from their
+/// plain-data table (spec/landed/codegen/WP-660.md); public for the table
+/// tests.
+pub mod x86_intrinsic_table {
+    pub use crate::x86::{Map, by_name, len, rows};
+    pub use kiln_llvm::intrinsics::TargetMem as Mem;
+}
+
 use kiln_abi::Target;
 use kiln_ast::Ast;
 use kiln_llvm::Module;

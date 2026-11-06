@@ -4218,3 +4218,139 @@ aw (−4.0%) is also under 5%, and S8 at N=100–400 has no recorded entry.
   `-fkiln-mem-stats`-style flag, or `-fkiln-cfg-stats` would need to
   print `Ast::memory` and `Sema::overload_memory`, for `xtask bench` to
   record them.
+
+## WP-660: x86 tables and the remaining start-up relocations
+
+The WP-653 "What remains" follow-up. WP-653 named three tables as most of
+the `.data.rel.ro` and relocation growth since 11-03 (2db5dfc55): the x86
+1:1 intrinsic `MAP`, and the `-march=` `CPUS` and the feature `IMPLIES`.
+This WP makes all three plain data, the WP-652 layout: a string blob
+plus integer rows in `.rodata`. The spec is spec/landed/codegen/WP-660.md.
+Main is d47d9d1a6, which no longer links with RELR (WP-662).
+
+### Measurement
+
+The method is WP-653's:
+- release build, the harness's command line;
+- RSS is the median of 5 runs under `/usr/bin/time -f '%e %M'`, in KB;
+- sections are in bytes (`readelf -S`);
+- relocations are the `R_AARCH64_RELATIVE` count (`readelf -r`). Without
+  RELR, `.relr.dyn` is empty and the count is direct.
+
+The columns are cumulative.
+
+| binary | empty TU | table-nohdr | vector-alloc | text | data | .rela.dyn | .relr.dyn | .data.rel.ro | .rodata | RELATIVE relocs |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 2db5dfc55 (11-03) | 6728 | 9604 | 37132 | 10,294,808 | 372,096 | 379,248 | 0 | 334,464 | 1,052,561 | 15,789 |
+| main d47d9d1a6 | 7220 | 10764 | 37432 | 12,179,271 | 591,040 | 685,848 | 0 | 553,520 | 1,407,148 | 28,564 |
+| `MAP` plain data | 7048 | 10784 | 37216 | 12,095,239 | 509,784 | 578,328 | 0 | 472,256 | 1,434,244 | 24,084 |
+| `CPUS`/`IMPLIES` plain data (this branch) | 7016 | 10488 | 37172 | 11,964,267 | 402,040 | 416,856 | 0 | 364,496 | 1,450,636 | 17,356 |
+
+Wall time does not move: 0.00 s on the empty TU, 0.04 s on
+`table-nohdr` and 0.37 s on `vector-alloc`, for every binary.
+
+**`MAP`.** 1,129 rows of 72 bytes, one copy, with 4,480 relocations
+(81,264 bytes of `.data.rel.ro`, 107,520 of `.rela.dyn`). The plain-data
+table is `STRS` (73,764 bytes) plus 1,129 rows of 24 bytes. The empty TU
+drops by 172 KB.
+
+**`CPUS`/`IMPLIES`.** 6,728 relocations, 107,760 bytes of
+`.data.rel.ro`: 72 CPUs, each with a feature list, a define list of name
+and value pairs, and an undef list, plus 118 implication lists. In
+plain data the 368 distinct texts are stored once (3,312 bytes). Every
+list is a slice of one `u16` index array (6,230 entries), and the rows
+are 14 and 6 bytes. The empty TU drops by a further 32 KB, and
+`table-nohdr` by 296 KB.
+
+The `-march=` path decodes on each compile: `features::resolve` plus
+`x86_cpu_macros`, timed in a scratch release test, median of 201 runs.
+It is 3.4 µs for `skylake-avx512`, 7.9 µs for `diamondrapids` (the
+largest CPU, 104 features and 102 defines), 0.8 µs for `westmere` and
+0.5 µs for `x86-64`. All are under the 10 µs bound.
+
+### A/B
+
+Main d47d9d1a6 against this branch, alternating, 3 pairs. Each cell is
+the median of 5 runs under `/usr/bin/time -f '%e %M'`, and all 3 pairs
+are shown. The machine load was 5.6 to 7.2. All runs exited 0.
+
+The shapes:
+- `empty` is an empty TU.
+- `table-nohdr`, `vector-alloc` and `churn-vector` are `bench/oven` with
+  their `//@ args:`.
+- `templates_wide` is `bench/frontend/templates_wide.cpp`.
+- `accessor-wide-emit` is `bench/frontend/accessor-wide-emit.cpp` with
+  `-S -emit-llvm`.
+- `s8n200` is `xtask gen-reflect --shape S8 --n 200` with `-freflection`.
+- `x86cpu` is `--target=x86_64-unknown-linux-gnu -march=skylake-avx512
+  -ffreestanding -fsyntax-only tests/conformance/target.x86/immintrin-parse.cpp`.
+  The directory's largest file needs x86 libc headers, which are not
+  installed here.
+
+| shape | main wall s | branch wall s | main RSS KB | branch RSS KB |
+|---|--:|--:|--:|--:|
+| empty | 0.00, 0.00, 0.00 | 0.00, 0.00, 0.00 | 7220, 7220, 7220 | 7012, 7016, 7016 |
+| table-nohdr | 0.04, 0.04, 0.04 | 0.04, 0.04, 0.04 | 10764, 10760, 10764 | 10496, 10496, 10496 |
+| vector-alloc | 0.37, 0.37, 0.37 | 0.37, 0.36, 0.37 | 37428, 37360, 37436 | 37112, 37244, 37240 |
+| churn-vector | 0.47, 0.47, 0.48 | 0.46, 0.46, 0.46 | 10836, 10836, 10836 | 10612, 10612, 10612 |
+| templates_wide | 0.23, 0.22, 0.23 | 0.22, 0.23, 0.22 | 60884, 61004, 60860 | 59920, 60008, 60892 |
+| accessor-wide-emit | 1.41, 1.43, 1.42 | 1.42, 1.41, 1.42 | 140472, 140404, 140388 | 140404, 140380, 140444 |
+| s8n200 | 1.74, 1.72, 1.76 | 1.75, 1.76, 1.74 | 170200, 169528, 168760 | 169820, 170440, 169980 |
+| x86cpu | 0.14, 0.13, 0.13 | 0.13, 0.13, 0.13 | 23112, 23120, 23108 | 22664, 22664, 22664 |
+
+All targets are met:
+- **Empty TU:** −204 KB, against a target of −150 KB.
+- **`.data.rel.ro`:** 364,496 bytes, against a target of ≤ 400 KB.
+- **Wall time:** within noise on every shape.
+- **RSS:** no shape grew beyond noise. The large shapes (`accessor-wide-emit`, `s8n200`) move by
+  less than their run-to-run spread.
+- **The CPU path** (`x86cpu`) is 448 KB smaller.
+
+### Bench before/after
+
+`cargo xtask bench bench/oven` was run without recording, with main's
+binary and the branch's (each as `kiln++`), alternating, 2 rounds each
+(load 6.3 to 7.0).
+- Main reported 0 regressed and 0 improved in both rounds.
+- The branch reported 11 `improved` (mem) and 0 regressed in both rounds.
+- Every entry's peak RSS fell by 0.1 to 0.4 MB (1 to 4%). Time moved
+  within ±4% either way, with no pattern.
+
+No entry moved by 5% or more, so no baseline was re-recorded
+(spec/bench.md "Recording"). The 11 flagged entries are those that
+crossed the 2% memory threshold:
+- `builtins-memcpy`, `builtins-popcount`, `builtins-strlen`;
+- `churn-mixed`, `churn-string`, `churn-vector`;
+- `class-churn`, `sieve-nohdr`, `soa`, `table-nohdr`, `trial-rollback`.
+
+### Byte identity
+
+The generators re-emit each file from its own rows (`--reemit`), without
+clang. Parsing main's file and the new one gives the same rows. The two
+table tests also pin FNV-1a hashes of the whole old tables, computed from
+main's files, and recompute them from the decoded rows:
+- `crates/kiln_codegen/tests/x86_intrinsic_table.rs`;
+- `crates/kiln_driver/tests/x86_targets_table.rs`.
+
+`tests/conformance/target.x86` passes under kiln and under
+`--compiler clang++-19`, and so does the full corpus.
+
+### What remains
+
+The relocations are back near 11-03: 17,356 against 15,789 (+1,567),
+`.data.rel.ro` 364,496 bytes against 334,464 (+30 KB), `.rela.dyn`
+416,856 against 379,248 (+37 KB). By the text each relocated pointer leads
+to, the remaining 17,356 are:
+- 4,549 short lowercase words (feature, extension and keyword tables);
+- 3,841 panic and `#[track_caller]` locations (`.rs` paths);
+- 3,445 builtin names (the generic builtin `Info` lists);
+- 2,982 other text (diagnostic and option strings);
+- 1,288 function pointers and vtables.
+
+None of these is a single table, and none grew much since 11-03.
+
+The empty TU is still 7,016 KB against 6,728 KB (+288 KB), but only
+about 67 KB of that is in the relocated sections. Most of the rest goes
+with the code: `text` is 11.96 MB against 10.29 MB, and the start-up and
+empty-compile paths touch more of it. That is code growth, not a table,
+and it is not in this package.
