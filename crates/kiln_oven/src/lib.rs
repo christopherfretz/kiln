@@ -39,6 +39,7 @@ mod compile;
 mod complex;
 mod failure;
 mod kbc;
+mod leaf;
 mod mem;
 mod memo;
 mod memptr;
@@ -47,6 +48,8 @@ mod notes;
 pub mod report;
 mod softfloat;
 mod stats;
+#[cfg(feature = "op-stats")]
+pub mod trial_stats;
 mod ty;
 mod value;
 mod vm;
@@ -876,7 +879,15 @@ impl Oven {
     /// not manifestly constant-evaluated: `__builtin_is_constant_evaluated()`
     /// yields false.
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId> {
-        self.eval_ctx(bridge, e, None, true, false, false).0.ok()
+        #[cfg(feature = "op-stats")]
+        let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
+        let r = match self.leaf_first(bridge, e) {
+            Some(v) => Some(v),
+            None => self.eval_ctx(bridge, e, None, true, false, false).0.ok(),
+        };
+        #[cfg(feature = "op-stats")]
+        trial_stats::end(trial, "try_fold", r.is_some(), self.memo.hits);
+        r
     }
 
     /// As [`Oven::try_fold`], laxly (clang `Expr::EvaluateAsRValue`, as
@@ -891,7 +902,14 @@ impl Oven {
         }
         self.run.lax = true;
         self.mem.lax = true;
-        let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
+        #[cfg(feature = "op-stats")]
+        let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
+        let r = match self.leaf_first(bridge, e) {
+            Some(v) => Some(v),
+            None => self.eval_ctx(bridge, e, None, true, false, false).0.ok(),
+        };
+        #[cfg(feature = "op-stats")]
+        trial_stats::end(trial, "fold_rvalue", r.is_some(), self.memo.hits);
         self.run.lax = false;
         self.mem.lax = false;
         r
@@ -918,7 +936,11 @@ impl Oven {
         self.run.lax = true;
         self.mem.lax = true;
         self.ub_check_next = true;
+        #[cfg(feature = "op-stats")]
+        let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
         let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
+        #[cfg(feature = "op-stats")]
+        trial_stats::end(trial, "fold_for_overflow", r.is_some(), self.memo.hits);
         self.ub_check_next = false;
         self.run.lax = false;
         self.mem.lax = false;
@@ -964,7 +986,12 @@ impl Oven {
         e: ExprId,
         var: DeclId,
     ) -> Option<ConstValueId> {
-        self.eval_ctx(bridge, e, Some(var), true, false, true).0.ok()
+        #[cfg(feature = "op-stats")]
+        let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
+        let r = self.eval_ctx(bridge, e, Some(var), true, false, true).0.ok();
+        #[cfg(feature = "op-stats")]
+        trial_stats::end(trial, "fold_constant_init", r.is_some(), self.memo.hits);
+        r
     }
 
     /// clang's `-Wconstant-evaluated` of a variable's initializer `e`
@@ -989,12 +1016,20 @@ impl Oven {
         let ast = bridge.ast();
         let Some(data) = ast.decls.var(var) else { return false };
         match data.eval.state() {
-            VarEvalState::Value(_) => return true,
-            VarEvalState::NotConstant => return false,
+            VarEvalState::Value(_) | VarEvalState::NotConstant => {
+                #[cfg(feature = "op-stats")]
+                trial_stats::no_eval();
+                return matches!(data.eval.state(), VarEvalState::Value(_));
+            }
             _ => {}
         }
         let Some(init) = data.init else { return false };
-        self.eval_ctx(bridge, init, Some(var), true, false, true).0.is_ok()
+        #[cfg(feature = "op-stats")]
+        let trial = trial_stats::begin(ast, Some(init), self.memo.hits);
+        let r = self.eval_ctx(bridge, init, Some(var), true, false, true).0.is_ok();
+        #[cfg(feature = "op-stats")]
+        trial_stats::end(trial, "is_constant_initialized", r, self.memo.hits);
+        r
     }
 
     /// Whether variable `var` has constant destruction ([expr.const]/7):

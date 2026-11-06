@@ -353,6 +353,32 @@ fault counts and trap ids unchanged.
   initializer (its object is under construction, `RESOLVING`).
 - `Oven::try_fold(bridge, e) -> Option<ConstValueId>`: silent, not
   recorded.
+  - **Trial-fold fast path** (WP-656, `leaf.rs`): an outermost
+    `try_fold` or `fold_rvalue` first walks `e` directly, with no thunk
+    compile, no VM run and no context set-up. Its domain is a prvalue
+    tree whose every node has `bool` or integer type of at most 128 bits
+    and is an integer, character or `bool` literal, `noexcept`, a type
+    or expression trait, an enumerator, `sizeof` of a type or an
+    expression (not a VLA), `alignof` of a type (not through a typedef
+    with attributes), a parenthesis, a substituted non-type template
+    parameter, a `ConstantExpr`, an integral, boolean or no-op cast (not to an
+    enumeration), a unary `+ - ~ !`, a binary arithmetic, shift,
+    comparison or logical operator, or `?:`, at most 64 deep. It
+    declines (runs the full path) outside that domain, on any failing
+    operation (overflow, `/ 0`, a bad shift), when either arm of `?:`,
+    `&&` or `||` does not walk, inside a running evaluation, and when a
+    one-shot setting is pending (`-Wconstant-evaluated`, the overflow
+    check, a potential constant expression, a plain, `void` or address
+    result, a `source_location` root).
+  - **Equivalence rule:** where the walk answers, its value is the one
+    the full path would freeze (it computes each node with the same
+    `crate::arith` operation on the same register value and freezes with
+    `freeze_scalar`), and skipping the full path changes nothing else
+    observable: diagnostics, statistics, `-fkiln-cfg-stats` and the
+    emitted IR stay byte-identical. The full path stays callable
+    (`try_fold_full`, test-only) and kiln_sema's `tests/trial_fold.rs`
+    compares the two; the `leaf-check` feature asserts the equivalence
+    on every walk of a build.
 - `Oven::evaluate_chars(bridge, size, data, EvalContext) -> (Vec<u8>,
   Result<(), EvalFailure>)` (WP-356, [dcl.pre]/11-12, P2741; clang
   `Expr::EvaluateCharRangeAsString`): the characters of a `static_assert`

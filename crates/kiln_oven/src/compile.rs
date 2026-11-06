@@ -409,6 +409,8 @@ impl Oven {
             // invocations) must not answer for the initialization (WP-640).
             return f;
         }
+        #[cfg(feature = "op-stats")]
+        crate::trial_stats::note_thunk();
         let idx = self.funcs.len() as u32;
         self.funcs.push(Func {
             decl: None,
@@ -726,6 +728,8 @@ impl Oven {
 
     /// Compiles function `idx` if it can be: sets its state.
     pub(crate) fn compile_func(&mut self, b: &mut dyn SemaBridge, idx: u32) {
+        #[cfg(feature = "op-stats")]
+        crate::trial_stats::note_func();
         let Some(d) = self.funcs[idx as usize].decl else { return };
         let ast = b.ast();
         let Some(fd) = ast.decls.function(ast.latest(d)) else {
@@ -2703,7 +2707,7 @@ fn enum_range(ast: &kiln_ast::Ast, q: QualType) -> Option<(i64, i64)> {
     }
 }
 
-fn scalar_bits(s: &Scalar<'_>) -> Option<u128> {
+pub(crate) fn scalar_bits(s: &Scalar<'_>) -> Option<u128> {
     match s {
         Scalar::Int { bits, signed, .. } => {
             let w = bits.width();
