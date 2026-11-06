@@ -5433,9 +5433,8 @@ pub mod builtin {
             .find(|e| e.name == name)
             .map(|e| e.id)
     }
-
-    /// The table row of builtin `id`. By value: an x86 row is decoded on
-    /// access ([`x86::row`], WP-652).
+    /// The table row of builtin `id`. By value: a NEON or x86 row is decoded
+    /// on access ([`neon::row`], WP-653; [`x86::row`], WP-652).
     pub fn info(id: u32) -> Option<Info> {
         if let Some(r) = neon::row(id) {
             return Some(r.info);
@@ -5564,7 +5563,9 @@ pub mod builtin {
     /// `arm_neon.h` and `arm_fp16.h` use (spec/landed/sema/WP-558.md "Target
     /// builtins"). The generated table (`scripts/gen-neon-builtins.py`) is
     /// sorted by name; a row's id is [`neon::BASE`] plus its index, so
-    /// lookup by name is a binary search and by id an index. Signatures
+    /// lookup by name is a binary search and by id an index. It is plain
+    /// data (WP-653): its strings are offsets into one blob, so a
+    /// [`neon::Row`] is decoded on access and returned by value. Signatures
     /// add the NEON prototype codes to [`Info::sig`]'s: `V<N>` a GNU
     /// vector of `N` elements, `S` signed, `W` `int64_t` (`long`), `h`
     /// `__fp16`, `y` `__bf16`, `LLL` `__int128`.
@@ -5576,7 +5577,8 @@ pub mod builtin {
         /// The id of the table's first row (kiln-private ids).
         pub const BASE: u32 = 0x1_0000;
 
-        /// One builtin and the target features it needs.
+        /// One builtin and the target features it needs, decoded from its
+        /// table row ([`row`]).
         #[derive(Clone, Copy, Debug)]
         pub struct Row {
             /// The builtin (always `NOTHROW`).
@@ -5586,29 +5588,67 @@ pub mod builtin {
             pub features: &'static str,
         }
 
-        pub(crate) const fn r(
-            index: u32,
-            name: &'static str,
-            sig: &'static str,
-            features: &'static str,
-        ) -> Row {
-            Row { info: Info { id: BASE + index, name, sig, attrs: attr::NOTHROW }, features }
+        /// A row of the generated table: `(offset, length)` of the name,
+        /// the prototype and the features string in
+        /// `neon_builtins::STRS`. No pointers, so the table needs no
+        /// load-time relocation and the binary holds one copy (WP-653).
+        #[derive(Clone, Copy, Debug)]
+        pub(crate) struct Packed {
+            name: u32,
+            sig: u32,
+            features: u32,
+            name_len: u8,
+            sig_len: u8,
+            features_len: u8,
+        }
+
+        pub(crate) const fn r(name: (u32, u8), sig: (u32, u8), features: (u32, u8)) -> Packed {
+            Packed {
+                name: name.0,
+                sig: sig.0,
+                features: features.0,
+                name_len: name.1,
+                sig_len: sig.1,
+                features_len: features.1,
+            }
+        }
+
+        /// The `len` bytes of the string blob at `at` (ASCII, so any range
+        /// is on character boundaries).
+        fn text(at: u32, len: u8) -> &'static str {
+            let at = at as usize;
+            &crate::neon_builtins::STRS[at..at + usize::from(len)]
+        }
+
+        /// The number of rows.
+        pub fn len() -> usize {
+            crate::neon_builtins::NEON.len()
         }
 
         /// Every row, sorted by name.
-        pub fn all() -> &'static [Row] {
-            crate::neon_builtins::NEON
+        pub fn rows() -> impl Iterator<Item = Row> {
+            (0..len()).filter_map(|i| row(BASE + i as u32))
         }
 
         /// The NEON builtin spelled `name`.
         pub fn by_name(name: &str) -> Option<u32> {
-            let t = all();
-            t.binary_search_by(|r| r.info.name.cmp(name)).ok().map(|i| t[i].info.id)
+            let t = &crate::neon_builtins::NEON;
+            let i = t.binary_search_by(|p| text(p.name, p.name_len).cmp(name)).ok()?;
+            Some(BASE + i as u32)
         }
 
         /// The row of builtin `id`, if it is a NEON builtin.
-        pub fn row(id: u32) -> Option<&'static Row> {
-            all().get(usize::try_from(id.checked_sub(BASE)?).ok()?)
+        pub fn row(id: u32) -> Option<Row> {
+            let p = crate::neon_builtins::NEON.get(usize::try_from(id.checked_sub(BASE)?).ok()?)?;
+            Some(Row {
+                info: Info {
+                    id,
+                    name: text(p.name, p.name_len),
+                    sig: text(p.sig, p.sig_len),
+                    attrs: attr::NOTHROW,
+                },
+                features: text(p.features, p.features_len),
+            })
         }
 
         /// The required-features string of the NEON builtin `name`.
@@ -5618,7 +5658,7 @@ pub mod builtin {
 
         /// Whether `id` is a NEON builtin.
         pub fn is_neon(id: u32) -> bool {
-            row(id).is_some()
+            id.checked_sub(BASE).is_some_and(|i| (i as usize) < len())
         }
 
         /// Whether the required-features string `req` holds when exactly

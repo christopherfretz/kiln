@@ -2,1092 +2,2449 @@
 // arm_fp16.inc (clang 19's names: those resource/include/arm_neon.h and
 // arm_fp16.h reference). Do not edit.
 
-use crate::decl::builtin::neon::Row;
-use crate::decl::builtin::neon::r;
+use crate::decl::builtin::neon::{Packed, r};
 
-/// Every `AArch64` NEON / FP16 builtin, sorted by name: (name, prototype,
-/// required target features).
+/// The names (in row order), prototypes and required-features strings of
+/// [`NEON`]'s rows, concatenated, each prototype and features string once.
+/// Rows hold `(offset, length)` pairs into it, so the table is plain data
+/// (WP-653): one copy in the binary, no load-time relocations.
 #[rustfmt::skip]
-pub(crate) const NEON: &[Row] = &[
-    r(0, "__builtin_neon___a32_vcvt_bf16_f32", "V8ScV16Sci", "bf16,neon"),
-    r(1, "__builtin_neon___a64_vcvtq_low_bf16_f32", "V16ScV16Sci", "bf16,neon"),
-    r(2, "__builtin_neon_splat_lane_bf16", "V8ScV8ScIii", "bf16,neon"),
-    r(3, "__builtin_neon_splat_lane_v", "V8ScV8ScIii", "neon"),
-    r(4, "__builtin_neon_splat_laneq_bf16", "V8ScV16ScIii", "bf16,neon"),
-    r(5, "__builtin_neon_splat_laneq_v", "V8ScV16ScIii", "neon"),
-    r(6, "__builtin_neon_splatq_lane_bf16", "V16ScV8ScIii", "bf16,neon"),
-    r(7, "__builtin_neon_splatq_lane_v", "V16ScV8ScIii", "neon"),
-    r(8, "__builtin_neon_splatq_laneq_bf16", "V16ScV16ScIii", "bf16,neon"),
-    r(9, "__builtin_neon_splatq_laneq_v", "V16ScV16ScIii", "neon"),
-    r(10, "__builtin_neon_vabd_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(11, "__builtin_neon_vabd_v", "V8ScV8ScV8Sci", "neon"),
-    r(12, "__builtin_neon_vabdd_f64", "ddd", "neon"),
-    r(13, "__builtin_neon_vabdh_f16", "hhh", "fullfp16"),
-    r(14, "__builtin_neon_vabdq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(15, "__builtin_neon_vabdq_v", "V16ScV16ScV16Sci", "neon"),
-    r(16, "__builtin_neon_vabds_f32", "fff", "neon"),
-    r(17, "__builtin_neon_vabs_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(18, "__builtin_neon_vabs_v", "V8ScV8Sci", "neon"),
-    r(19, "__builtin_neon_vabsd_s64", "WiWi", "neon"),
-    r(20, "__builtin_neon_vabsh_f16", "hh", "fullfp16"),
-    r(21, "__builtin_neon_vabsq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(22, "__builtin_neon_vabsq_v", "V16ScV16Sci", "neon"),
-    r(23, "__builtin_neon_vadd_v", "V8ScV8ScV8Sci", "neon"),
-    r(24, "__builtin_neon_vaddd_s64", "WiWiWi", "neon"),
-    r(25, "__builtin_neon_vaddd_u64", "UWiUWiUWi", "neon"),
-    r(26, "__builtin_neon_vaddh_f16", "hhh", "fullfp16"),
-    r(27, "__builtin_neon_vaddhn_v", "V8ScV16ScV16Sci", "neon"),
-    r(28, "__builtin_neon_vaddlv_s16", "iV4s", "neon"),
-    r(29, "__builtin_neon_vaddlv_s32", "WiV2i", "neon"),
-    r(30, "__builtin_neon_vaddlv_s8", "sV8Sc", "neon"),
-    r(31, "__builtin_neon_vaddlv_u16", "UiV4Us", "neon"),
-    r(32, "__builtin_neon_vaddlv_u32", "UWiV2Ui", "neon"),
-    r(33, "__builtin_neon_vaddlv_u8", "UsV8Uc", "neon"),
-    r(34, "__builtin_neon_vaddlvq_s16", "iV8s", "neon"),
-    r(35, "__builtin_neon_vaddlvq_s32", "WiV4i", "neon"),
-    r(36, "__builtin_neon_vaddlvq_s8", "sV16Sc", "neon"),
-    r(37, "__builtin_neon_vaddlvq_u16", "UiV8Us", "neon"),
-    r(38, "__builtin_neon_vaddlvq_u32", "UWiV4Ui", "neon"),
-    r(39, "__builtin_neon_vaddlvq_u8", "UsV16Uc", "neon"),
-    r(40, "__builtin_neon_vaddq_p128", "ULLLiULLLiULLLi", "neon"),
-    r(41, "__builtin_neon_vaddq_v", "V16ScV16ScV16Sci", "neon"),
-    r(42, "__builtin_neon_vaddv_f32", "fV2f", "neon"),
-    r(43, "__builtin_neon_vaddv_s16", "sV4s", "neon"),
-    r(44, "__builtin_neon_vaddv_s32", "iV2i", "neon"),
-    r(45, "__builtin_neon_vaddv_s8", "ScV8Sc", "neon"),
-    r(46, "__builtin_neon_vaddv_u16", "UsV4Us", "neon"),
-    r(47, "__builtin_neon_vaddv_u32", "UiV2Ui", "neon"),
-    r(48, "__builtin_neon_vaddv_u8", "UcV8Uc", "neon"),
-    r(49, "__builtin_neon_vaddvq_f32", "fV4f", "neon"),
-    r(50, "__builtin_neon_vaddvq_f64", "dV2d", "neon"),
-    r(51, "__builtin_neon_vaddvq_s16", "sV8s", "neon"),
-    r(52, "__builtin_neon_vaddvq_s32", "iV4i", "neon"),
-    r(53, "__builtin_neon_vaddvq_s64", "WiV2Wi", "neon"),
-    r(54, "__builtin_neon_vaddvq_s8", "ScV16Sc", "neon"),
-    r(55, "__builtin_neon_vaddvq_u16", "UsV8Us", "neon"),
-    r(56, "__builtin_neon_vaddvq_u32", "UiV4Ui", "neon"),
-    r(57, "__builtin_neon_vaddvq_u64", "UWiV2UWi", "neon"),
-    r(58, "__builtin_neon_vaddvq_u8", "UcV16Uc", "neon"),
-    r(59, "__builtin_neon_vaesdq_u8", "V16ScV16ScV16Sci", "aes,neon"),
-    r(60, "__builtin_neon_vaeseq_u8", "V16ScV16ScV16Sci", "aes,neon"),
-    r(61, "__builtin_neon_vaesimcq_u8", "V16ScV16Sci", "aes,neon"),
-    r(62, "__builtin_neon_vaesmcq_u8", "V16ScV16Sci", "aes,neon"),
-    r(63, "__builtin_neon_vbcaxq_s16", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(64, "__builtin_neon_vbcaxq_s32", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(65, "__builtin_neon_vbcaxq_s64", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(66, "__builtin_neon_vbcaxq_s8", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(67, "__builtin_neon_vbcaxq_u16", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(68, "__builtin_neon_vbcaxq_u32", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(69, "__builtin_neon_vbcaxq_u64", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(70, "__builtin_neon_vbcaxq_u8", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(71, "__builtin_neon_vbfdot_f32", "V8ScV8ScV8ScV8Sci", "bf16,neon"),
-    r(72, "__builtin_neon_vbfdotq_f32", "V16ScV16ScV16ScV16Sci", "bf16,neon"),
-    r(73, "__builtin_neon_vbfmlalbq_f32", "V16ScV16ScV16ScV16Sci", "bf16,neon"),
-    r(74, "__builtin_neon_vbfmlaltq_f32", "V16ScV16ScV16ScV16Sci", "bf16,neon"),
-    r(75, "__builtin_neon_vbfmmlaq_f32", "V16ScV16ScV16ScV16Sci", "bf16,neon"),
-    r(76, "__builtin_neon_vbsl_v", "V8ScV8ScV8ScV8Sci", "neon"),
-    r(77, "__builtin_neon_vbslq_v", "V16ScV16ScV16ScV16Sci", "neon"),
-    r(78, "__builtin_neon_vcadd_rot270_f16", "V8ScV8ScV8Sci", "v8.3a,fullfp16,neon"),
-    r(79, "__builtin_neon_vcadd_rot270_f32", "V8ScV8ScV8Sci", "v8.3a,neon"),
-    r(80, "__builtin_neon_vcadd_rot90_f16", "V8ScV8ScV8Sci", "v8.3a,fullfp16,neon"),
-    r(81, "__builtin_neon_vcadd_rot90_f32", "V8ScV8ScV8Sci", "v8.3a,neon"),
-    r(82, "__builtin_neon_vcaddq_rot270_f16", "V16ScV16ScV16Sci", "v8.3a,fullfp16,neon"),
-    r(83, "__builtin_neon_vcaddq_rot270_f32", "V16ScV16ScV16Sci", "v8.3a,neon"),
-    r(84, "__builtin_neon_vcaddq_rot270_f64", "V16ScV16ScV16Sci", "v8.3a,neon"),
-    r(85, "__builtin_neon_vcaddq_rot90_f16", "V16ScV16ScV16Sci", "v8.3a,fullfp16,neon"),
-    r(86, "__builtin_neon_vcaddq_rot90_f32", "V16ScV16ScV16Sci", "v8.3a,neon"),
-    r(87, "__builtin_neon_vcaddq_rot90_f64", "V16ScV16ScV16Sci", "v8.3a,neon"),
-    r(88, "__builtin_neon_vcage_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(89, "__builtin_neon_vcage_v", "V8ScV8ScV8Sci", "neon"),
-    r(90, "__builtin_neon_vcaged_f64", "UWidd", "neon"),
-    r(91, "__builtin_neon_vcageh_f16", "Ushh", "fullfp16"),
-    r(92, "__builtin_neon_vcageq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(93, "__builtin_neon_vcageq_v", "V16ScV16ScV16Sci", "neon"),
-    r(94, "__builtin_neon_vcages_f32", "Uiff", "neon"),
-    r(95, "__builtin_neon_vcagt_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(96, "__builtin_neon_vcagt_v", "V8ScV8ScV8Sci", "neon"),
-    r(97, "__builtin_neon_vcagtd_f64", "UWidd", "neon"),
-    r(98, "__builtin_neon_vcagth_f16", "Ushh", "fullfp16"),
-    r(99, "__builtin_neon_vcagtq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(100, "__builtin_neon_vcagtq_v", "V16ScV16ScV16Sci", "neon"),
-    r(101, "__builtin_neon_vcagts_f32", "Uiff", "neon"),
-    r(102, "__builtin_neon_vcale_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(103, "__builtin_neon_vcale_v", "V8ScV8ScV8Sci", "neon"),
-    r(104, "__builtin_neon_vcaled_f64", "UWidd", "neon"),
-    r(105, "__builtin_neon_vcaleh_f16", "Ushh", "fullfp16"),
-    r(106, "__builtin_neon_vcaleq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(107, "__builtin_neon_vcaleq_v", "V16ScV16ScV16Sci", "neon"),
-    r(108, "__builtin_neon_vcales_f32", "Uiff", "neon"),
-    r(109, "__builtin_neon_vcalt_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(110, "__builtin_neon_vcalt_v", "V8ScV8ScV8Sci", "neon"),
-    r(111, "__builtin_neon_vcaltd_f64", "UWidd", "neon"),
-    r(112, "__builtin_neon_vcalth_f16", "Ushh", "fullfp16"),
-    r(113, "__builtin_neon_vcaltq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(114, "__builtin_neon_vcaltq_v", "V16ScV16ScV16Sci", "neon"),
-    r(115, "__builtin_neon_vcalts_f32", "Uiff", "neon"),
-    r(116, "__builtin_neon_vceqd_f64", "UWidd", "neon"),
-    r(117, "__builtin_neon_vceqd_s64", "UWiWiWi", "neon"),
-    r(118, "__builtin_neon_vceqd_u64", "UWiUWiUWi", "neon"),
-    r(119, "__builtin_neon_vceqh_f16", "Ushh", "fullfp16"),
-    r(120, "__builtin_neon_vceqs_f32", "Uiff", "neon"),
-    r(121, "__builtin_neon_vceqz_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(122, "__builtin_neon_vceqz_v", "V8ScV8Sci", "neon"),
-    r(123, "__builtin_neon_vceqzd_f64", "UWid", "neon"),
-    r(124, "__builtin_neon_vceqzd_s64", "UWiWi", "neon"),
-    r(125, "__builtin_neon_vceqzd_u64", "UWiUWi", "neon"),
-    r(126, "__builtin_neon_vceqzh_f16", "Ush", "fullfp16"),
-    r(127, "__builtin_neon_vceqzq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(128, "__builtin_neon_vceqzq_v", "V16ScV16Sci", "neon"),
-    r(129, "__builtin_neon_vceqzs_f32", "Uif", "neon"),
-    r(130, "__builtin_neon_vcged_f64", "UWidd", "neon"),
-    r(131, "__builtin_neon_vcged_s64", "UWiWiWi", "neon"),
-    r(132, "__builtin_neon_vcged_u64", "UWiUWiUWi", "neon"),
-    r(133, "__builtin_neon_vcgeh_f16", "Ushh", "fullfp16"),
-    r(134, "__builtin_neon_vcges_f32", "Uiff", "neon"),
-    r(135, "__builtin_neon_vcgez_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(136, "__builtin_neon_vcgez_v", "V8ScV8Sci", "neon"),
-    r(137, "__builtin_neon_vcgezd_f64", "UWid", "neon"),
-    r(138, "__builtin_neon_vcgezd_s64", "UWiWi", "neon"),
-    r(139, "__builtin_neon_vcgezh_f16", "Ush", "fullfp16"),
-    r(140, "__builtin_neon_vcgezq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(141, "__builtin_neon_vcgezq_v", "V16ScV16Sci", "neon"),
-    r(142, "__builtin_neon_vcgezs_f32", "Uif", "neon"),
-    r(143, "__builtin_neon_vcgtd_f64", "UWidd", "neon"),
-    r(144, "__builtin_neon_vcgtd_s64", "UWiWiWi", "neon"),
-    r(145, "__builtin_neon_vcgtd_u64", "UWiUWiUWi", "neon"),
-    r(146, "__builtin_neon_vcgth_f16", "Ushh", "fullfp16"),
-    r(147, "__builtin_neon_vcgts_f32", "Uiff", "neon"),
-    r(148, "__builtin_neon_vcgtz_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(149, "__builtin_neon_vcgtz_v", "V8ScV8Sci", "neon"),
-    r(150, "__builtin_neon_vcgtzd_f64", "UWid", "neon"),
-    r(151, "__builtin_neon_vcgtzd_s64", "UWiWi", "neon"),
-    r(152, "__builtin_neon_vcgtzh_f16", "Ush", "fullfp16"),
-    r(153, "__builtin_neon_vcgtzq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(154, "__builtin_neon_vcgtzq_v", "V16ScV16Sci", "neon"),
-    r(155, "__builtin_neon_vcgtzs_f32", "Uif", "neon"),
-    r(156, "__builtin_neon_vcled_f64", "UWidd", "neon"),
-    r(157, "__builtin_neon_vcled_s64", "UWiWiWi", "neon"),
-    r(158, "__builtin_neon_vcled_u64", "UWiUWiUWi", "neon"),
-    r(159, "__builtin_neon_vcleh_f16", "Ushh", "fullfp16"),
-    r(160, "__builtin_neon_vcles_f32", "Uiff", "neon"),
-    r(161, "__builtin_neon_vclez_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(162, "__builtin_neon_vclez_v", "V8ScV8Sci", "neon"),
-    r(163, "__builtin_neon_vclezd_f64", "UWid", "neon"),
-    r(164, "__builtin_neon_vclezd_s64", "UWiWi", "neon"),
-    r(165, "__builtin_neon_vclezh_f16", "Ush", "fullfp16"),
-    r(166, "__builtin_neon_vclezq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(167, "__builtin_neon_vclezq_v", "V16ScV16Sci", "neon"),
-    r(168, "__builtin_neon_vclezs_f32", "Uif", "neon"),
-    r(169, "__builtin_neon_vcls_v", "V8ScV8Sci", "neon"),
-    r(170, "__builtin_neon_vclsq_v", "V16ScV16Sci", "neon"),
-    r(171, "__builtin_neon_vcltd_f64", "UWidd", "neon"),
-    r(172, "__builtin_neon_vcltd_s64", "UWiWiWi", "neon"),
-    r(173, "__builtin_neon_vcltd_u64", "UWiUWiUWi", "neon"),
-    r(174, "__builtin_neon_vclth_f16", "Ushh", "fullfp16"),
-    r(175, "__builtin_neon_vclts_f32", "Uiff", "neon"),
-    r(176, "__builtin_neon_vcltz_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(177, "__builtin_neon_vcltz_v", "V8ScV8Sci", "neon"),
-    r(178, "__builtin_neon_vcltzd_f64", "UWid", "neon"),
-    r(179, "__builtin_neon_vcltzd_s64", "UWiWi", "neon"),
-    r(180, "__builtin_neon_vcltzh_f16", "Ush", "fullfp16"),
-    r(181, "__builtin_neon_vcltzq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(182, "__builtin_neon_vcltzq_v", "V16ScV16Sci", "neon"),
-    r(183, "__builtin_neon_vcltzs_f32", "Uif", "neon"),
-    r(184, "__builtin_neon_vclz_v", "V8ScV8Sci", "neon"),
-    r(185, "__builtin_neon_vclzq_v", "V16ScV16Sci", "neon"),
-    r(186, "__builtin_neon_vcmla_f16", "V8ScV8ScV8ScV8Sci", "v8.3a,fullfp16,neon"),
-    r(187, "__builtin_neon_vcmla_f32", "V8ScV8ScV8ScV8Sci", "v8.3a,neon"),
-    r(188, "__builtin_neon_vcmla_f64", "V8ScV8ScV8ScV8Sci", "v8.3a,neon"),
-    r(189, "__builtin_neon_vcmla_rot180_f16", "V8ScV8ScV8ScV8Sci", "v8.3a,fullfp16,neon"),
-    r(190, "__builtin_neon_vcmla_rot180_f32", "V8ScV8ScV8ScV8Sci", "v8.3a,neon"),
-    r(191, "__builtin_neon_vcmla_rot180_f64", "V8ScV8ScV8ScV8Sci", "v8.3a,neon"),
-    r(192, "__builtin_neon_vcmla_rot270_f16", "V8ScV8ScV8ScV8Sci", "v8.3a,fullfp16,neon"),
-    r(193, "__builtin_neon_vcmla_rot270_f32", "V8ScV8ScV8ScV8Sci", "v8.3a,neon"),
-    r(194, "__builtin_neon_vcmla_rot270_f64", "V8ScV8ScV8ScV8Sci", "v8.3a,neon"),
-    r(195, "__builtin_neon_vcmla_rot90_f16", "V8ScV8ScV8ScV8Sci", "v8.3a,fullfp16,neon"),
-    r(196, "__builtin_neon_vcmla_rot90_f32", "V8ScV8ScV8ScV8Sci", "v8.3a,neon"),
-    r(197, "__builtin_neon_vcmla_rot90_f64", "V8ScV8ScV8ScV8Sci", "v8.3a,neon"),
-    r(198, "__builtin_neon_vcmlaq_f16", "V16ScV16ScV16ScV16Sci", "v8.3a,fullfp16,neon"),
-    r(199, "__builtin_neon_vcmlaq_f32", "V16ScV16ScV16ScV16Sci", "v8.3a,neon"),
-    r(200, "__builtin_neon_vcmlaq_f64", "V16ScV16ScV16ScV16Sci", "v8.3a,neon"),
-    r(201, "__builtin_neon_vcmlaq_rot180_f16", "V16ScV16ScV16ScV16Sci", "v8.3a,fullfp16,neon"),
-    r(202, "__builtin_neon_vcmlaq_rot180_f32", "V16ScV16ScV16ScV16Sci", "v8.3a,neon"),
-    r(203, "__builtin_neon_vcmlaq_rot180_f64", "V16ScV16ScV16ScV16Sci", "v8.3a,neon"),
-    r(204, "__builtin_neon_vcmlaq_rot270_f16", "V16ScV16ScV16ScV16Sci", "v8.3a,fullfp16,neon"),
-    r(205, "__builtin_neon_vcmlaq_rot270_f32", "V16ScV16ScV16ScV16Sci", "v8.3a,neon"),
-    r(206, "__builtin_neon_vcmlaq_rot270_f64", "V16ScV16ScV16ScV16Sci", "v8.3a,neon"),
-    r(207, "__builtin_neon_vcmlaq_rot90_f16", "V16ScV16ScV16ScV16Sci", "v8.3a,fullfp16,neon"),
-    r(208, "__builtin_neon_vcmlaq_rot90_f32", "V16ScV16ScV16ScV16Sci", "v8.3a,neon"),
-    r(209, "__builtin_neon_vcmlaq_rot90_f64", "V16ScV16ScV16ScV16Sci", "v8.3a,neon"),
-    r(210, "__builtin_neon_vcnt_v", "V8ScV8Sci", "neon"),
-    r(211, "__builtin_neon_vcntq_v", "V16ScV16Sci", "neon"),
-    r(212, "__builtin_neon_vcvt_f16_f32", "V8ScV16Sci", "neon"),
-    r(213, "__builtin_neon_vcvt_f16_s16", "V8ScV8Sci", "fullfp16,neon"),
-    r(214, "__builtin_neon_vcvt_f16_u16", "V8ScV8Sci", "fullfp16,neon"),
-    r(215, "__builtin_neon_vcvt_f32_f16", "V16ScV8Sci", "neon"),
-    r(216, "__builtin_neon_vcvt_f32_f64", "V8ScV16Sci", "neon"),
-    r(217, "__builtin_neon_vcvt_f32_v", "V8ScV8Sci", "neon"),
-    r(218, "__builtin_neon_vcvt_f64_f32", "V16ScV8Sci", "neon"),
-    r(219, "__builtin_neon_vcvt_f64_v", "V8ScV8Sci", "neon"),
-    r(220, "__builtin_neon_vcvt_n_f16_s16", "V8ScV8ScIii", "fullfp16,neon"),
-    r(221, "__builtin_neon_vcvt_n_f16_u16", "V8ScV8ScIii", "fullfp16,neon"),
-    r(222, "__builtin_neon_vcvt_n_f32_v", "V8ScV8ScIii", "neon"),
-    r(223, "__builtin_neon_vcvt_n_f64_v", "V8ScV8ScIii", "neon"),
-    r(224, "__builtin_neon_vcvt_n_s16_f16", "V8ScV8ScIii", "fullfp16,neon"),
-    r(225, "__builtin_neon_vcvt_n_s32_v", "V8ScV8ScIii", "neon"),
-    r(226, "__builtin_neon_vcvt_n_s64_v", "V8ScV8ScIii", "neon"),
-    r(227, "__builtin_neon_vcvt_n_u16_f16", "V8ScV8ScIii", "fullfp16,neon"),
-    r(228, "__builtin_neon_vcvt_n_u32_v", "V8ScV8ScIii", "neon"),
-    r(229, "__builtin_neon_vcvt_n_u64_v", "V8ScV8ScIii", "neon"),
-    r(230, "__builtin_neon_vcvt_s16_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(231, "__builtin_neon_vcvt_s32_v", "V8ScV8Sci", "neon"),
-    r(232, "__builtin_neon_vcvt_s64_v", "V8ScV8Sci", "neon"),
-    r(233, "__builtin_neon_vcvt_u16_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(234, "__builtin_neon_vcvt_u32_v", "V8ScV8Sci", "neon"),
-    r(235, "__builtin_neon_vcvt_u64_v", "V8ScV8Sci", "neon"),
-    r(236, "__builtin_neon_vcvta_s16_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(237, "__builtin_neon_vcvta_s32_v", "V8ScV8Sci", "neon"),
-    r(238, "__builtin_neon_vcvta_s64_v", "V8ScV8Sci", "neon"),
-    r(239, "__builtin_neon_vcvta_u16_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(240, "__builtin_neon_vcvta_u32_v", "V8ScV8Sci", "neon"),
-    r(241, "__builtin_neon_vcvta_u64_v", "V8ScV8Sci", "neon"),
-    r(242, "__builtin_neon_vcvtad_s64_f64", "Wid", "neon"),
-    r(243, "__builtin_neon_vcvtad_u64_f64", "UWid", "neon"),
-    r(244, "__builtin_neon_vcvtah_s16_f16", "sh", "fullfp16"),
-    r(245, "__builtin_neon_vcvtah_s32_f16", "ih", "fullfp16"),
-    r(246, "__builtin_neon_vcvtah_s64_f16", "Wih", "fullfp16"),
-    r(247, "__builtin_neon_vcvtah_u16_f16", "Ush", "fullfp16"),
-    r(248, "__builtin_neon_vcvtah_u32_f16", "Uih", "fullfp16"),
-    r(249, "__builtin_neon_vcvtah_u64_f16", "UWih", "fullfp16"),
-    r(250, "__builtin_neon_vcvtaq_s16_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(251, "__builtin_neon_vcvtaq_s32_v", "V16ScV16Sci", "neon"),
-    r(252, "__builtin_neon_vcvtaq_s64_v", "V16ScV16Sci", "neon"),
-    r(253, "__builtin_neon_vcvtaq_u16_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(254, "__builtin_neon_vcvtaq_u32_v", "V16ScV16Sci", "neon"),
-    r(255, "__builtin_neon_vcvtaq_u64_v", "V16ScV16Sci", "neon"),
-    r(256, "__builtin_neon_vcvtas_s32_f32", "if", "neon"),
-    r(257, "__builtin_neon_vcvtas_u32_f32", "Uif", "neon"),
-    r(258, "__builtin_neon_vcvtd_f64_s64", "dWi", "neon"),
-    r(259, "__builtin_neon_vcvtd_f64_u64", "dUWi", "neon"),
-    r(260, "__builtin_neon_vcvtd_n_f64_s64", "dWiIi", "neon"),
-    r(261, "__builtin_neon_vcvtd_n_f64_u64", "dUWiIi", "neon"),
-    r(262, "__builtin_neon_vcvtd_n_s64_f64", "WidIi", "neon"),
-    r(263, "__builtin_neon_vcvtd_n_u64_f64", "UWidIi", "neon"),
-    r(264, "__builtin_neon_vcvtd_s64_f64", "Wid", "neon"),
-    r(265, "__builtin_neon_vcvtd_u64_f64", "UWid", "neon"),
-    r(266, "__builtin_neon_vcvth_bf16_f32", "yf", "bf16,neon"),
-    r(267, "__builtin_neon_vcvth_f16_s16", "hs", "fullfp16"),
-    r(268, "__builtin_neon_vcvth_f16_s32", "hi", "fullfp16"),
-    r(269, "__builtin_neon_vcvth_f16_s64", "hWi", "fullfp16"),
-    r(270, "__builtin_neon_vcvth_f16_u16", "hUs", "fullfp16"),
-    r(271, "__builtin_neon_vcvth_f16_u32", "hUi", "fullfp16"),
-    r(272, "__builtin_neon_vcvth_f16_u64", "hUWi", "fullfp16"),
-    r(273, "__builtin_neon_vcvth_n_f16_s16", "hsIi", "fullfp16"),
-    r(274, "__builtin_neon_vcvth_n_f16_s32", "hiIi", "fullfp16"),
-    r(275, "__builtin_neon_vcvth_n_f16_s64", "hWiIi", "fullfp16"),
-    r(276, "__builtin_neon_vcvth_n_f16_u16", "hUsIi", "fullfp16"),
-    r(277, "__builtin_neon_vcvth_n_f16_u32", "hUiIi", "fullfp16"),
-    r(278, "__builtin_neon_vcvth_n_f16_u64", "hUWiIi", "fullfp16"),
-    r(279, "__builtin_neon_vcvth_n_s16_f16", "shIi", "fullfp16"),
-    r(280, "__builtin_neon_vcvth_n_s32_f16", "ihIi", "fullfp16"),
-    r(281, "__builtin_neon_vcvth_n_s64_f16", "WihIi", "fullfp16"),
-    r(282, "__builtin_neon_vcvth_n_u16_f16", "UshIi", "fullfp16"),
-    r(283, "__builtin_neon_vcvth_n_u32_f16", "UihIi", "fullfp16"),
-    r(284, "__builtin_neon_vcvth_n_u64_f16", "UWihIi", "fullfp16"),
-    r(285, "__builtin_neon_vcvth_s16_f16", "sh", "fullfp16"),
-    r(286, "__builtin_neon_vcvth_s32_f16", "ih", "fullfp16"),
-    r(287, "__builtin_neon_vcvth_s64_f16", "Wih", "fullfp16"),
-    r(288, "__builtin_neon_vcvth_u16_f16", "Ush", "fullfp16"),
-    r(289, "__builtin_neon_vcvth_u32_f16", "Uih", "fullfp16"),
-    r(290, "__builtin_neon_vcvth_u64_f16", "UWih", "fullfp16"),
-    r(291, "__builtin_neon_vcvtm_s16_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(292, "__builtin_neon_vcvtm_s32_v", "V8ScV8Sci", "neon"),
-    r(293, "__builtin_neon_vcvtm_s64_v", "V8ScV8Sci", "neon"),
-    r(294, "__builtin_neon_vcvtm_u16_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(295, "__builtin_neon_vcvtm_u32_v", "V8ScV8Sci", "neon"),
-    r(296, "__builtin_neon_vcvtm_u64_v", "V8ScV8Sci", "neon"),
-    r(297, "__builtin_neon_vcvtmd_s64_f64", "Wid", "neon"),
-    r(298, "__builtin_neon_vcvtmd_u64_f64", "UWid", "neon"),
-    r(299, "__builtin_neon_vcvtmh_s16_f16", "sh", "fullfp16"),
-    r(300, "__builtin_neon_vcvtmh_s32_f16", "ih", "fullfp16"),
-    r(301, "__builtin_neon_vcvtmh_s64_f16", "Wih", "fullfp16"),
-    r(302, "__builtin_neon_vcvtmh_u16_f16", "Ush", "fullfp16"),
-    r(303, "__builtin_neon_vcvtmh_u32_f16", "Uih", "fullfp16"),
-    r(304, "__builtin_neon_vcvtmh_u64_f16", "UWih", "fullfp16"),
-    r(305, "__builtin_neon_vcvtmq_s16_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(306, "__builtin_neon_vcvtmq_s32_v", "V16ScV16Sci", "neon"),
-    r(307, "__builtin_neon_vcvtmq_s64_v", "V16ScV16Sci", "neon"),
-    r(308, "__builtin_neon_vcvtmq_u16_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(309, "__builtin_neon_vcvtmq_u32_v", "V16ScV16Sci", "neon"),
-    r(310, "__builtin_neon_vcvtmq_u64_v", "V16ScV16Sci", "neon"),
-    r(311, "__builtin_neon_vcvtms_s32_f32", "if", "neon"),
-    r(312, "__builtin_neon_vcvtms_u32_f32", "Uif", "neon"),
-    r(313, "__builtin_neon_vcvtn_s16_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(314, "__builtin_neon_vcvtn_s32_v", "V8ScV8Sci", "neon"),
-    r(315, "__builtin_neon_vcvtn_s64_v", "V8ScV8Sci", "neon"),
-    r(316, "__builtin_neon_vcvtn_u16_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(317, "__builtin_neon_vcvtn_u32_v", "V8ScV8Sci", "neon"),
-    r(318, "__builtin_neon_vcvtn_u64_v", "V8ScV8Sci", "neon"),
-    r(319, "__builtin_neon_vcvtnd_s64_f64", "Wid", "neon"),
-    r(320, "__builtin_neon_vcvtnd_u64_f64", "UWid", "neon"),
-    r(321, "__builtin_neon_vcvtnh_s16_f16", "sh", "fullfp16"),
-    r(322, "__builtin_neon_vcvtnh_s32_f16", "ih", "fullfp16"),
-    r(323, "__builtin_neon_vcvtnh_s64_f16", "Wih", "fullfp16"),
-    r(324, "__builtin_neon_vcvtnh_u16_f16", "Ush", "fullfp16"),
-    r(325, "__builtin_neon_vcvtnh_u32_f16", "Uih", "fullfp16"),
-    r(326, "__builtin_neon_vcvtnh_u64_f16", "UWih", "fullfp16"),
-    r(327, "__builtin_neon_vcvtnq_s16_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(328, "__builtin_neon_vcvtnq_s32_v", "V16ScV16Sci", "neon"),
-    r(329, "__builtin_neon_vcvtnq_s64_v", "V16ScV16Sci", "neon"),
-    r(330, "__builtin_neon_vcvtnq_u16_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(331, "__builtin_neon_vcvtnq_u32_v", "V16ScV16Sci", "neon"),
-    r(332, "__builtin_neon_vcvtnq_u64_v", "V16ScV16Sci", "neon"),
-    r(333, "__builtin_neon_vcvtns_s32_f32", "if", "neon"),
-    r(334, "__builtin_neon_vcvtns_u32_f32", "Uif", "neon"),
-    r(335, "__builtin_neon_vcvtp_s16_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(336, "__builtin_neon_vcvtp_s32_v", "V8ScV8Sci", "neon"),
-    r(337, "__builtin_neon_vcvtp_s64_v", "V8ScV8Sci", "neon"),
-    r(338, "__builtin_neon_vcvtp_u16_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(339, "__builtin_neon_vcvtp_u32_v", "V8ScV8Sci", "neon"),
-    r(340, "__builtin_neon_vcvtp_u64_v", "V8ScV8Sci", "neon"),
-    r(341, "__builtin_neon_vcvtpd_s64_f64", "Wid", "neon"),
-    r(342, "__builtin_neon_vcvtpd_u64_f64", "UWid", "neon"),
-    r(343, "__builtin_neon_vcvtph_s16_f16", "sh", "fullfp16"),
-    r(344, "__builtin_neon_vcvtph_s32_f16", "ih", "fullfp16"),
-    r(345, "__builtin_neon_vcvtph_s64_f16", "Wih", "fullfp16"),
-    r(346, "__builtin_neon_vcvtph_u16_f16", "Ush", "fullfp16"),
-    r(347, "__builtin_neon_vcvtph_u32_f16", "Uih", "fullfp16"),
-    r(348, "__builtin_neon_vcvtph_u64_f16", "UWih", "fullfp16"),
-    r(349, "__builtin_neon_vcvtpq_s16_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(350, "__builtin_neon_vcvtpq_s32_v", "V16ScV16Sci", "neon"),
-    r(351, "__builtin_neon_vcvtpq_s64_v", "V16ScV16Sci", "neon"),
-    r(352, "__builtin_neon_vcvtpq_u16_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(353, "__builtin_neon_vcvtpq_u32_v", "V16ScV16Sci", "neon"),
-    r(354, "__builtin_neon_vcvtpq_u64_v", "V16ScV16Sci", "neon"),
-    r(355, "__builtin_neon_vcvtps_s32_f32", "if", "neon"),
-    r(356, "__builtin_neon_vcvtps_u32_f32", "Uif", "neon"),
-    r(357, "__builtin_neon_vcvtq_f16_s16", "V16ScV16Sci", "fullfp16,neon"),
-    r(358, "__builtin_neon_vcvtq_f16_u16", "V16ScV16Sci", "fullfp16,neon"),
-    r(359, "__builtin_neon_vcvtq_f32_v", "V16ScV16Sci", "neon"),
-    r(360, "__builtin_neon_vcvtq_f64_v", "V16ScV16Sci", "neon"),
-    r(361, "__builtin_neon_vcvtq_high_bf16_f32", "V16ScV16ScV16Sci", "bf16,neon"),
-    r(362, "__builtin_neon_vcvtq_n_f16_s16", "V16ScV16ScIii", "fullfp16,neon"),
-    r(363, "__builtin_neon_vcvtq_n_f16_u16", "V16ScV16ScIii", "fullfp16,neon"),
-    r(364, "__builtin_neon_vcvtq_n_f32_v", "V16ScV16ScIii", "neon"),
-    r(365, "__builtin_neon_vcvtq_n_f64_v", "V16ScV16ScIii", "neon"),
-    r(366, "__builtin_neon_vcvtq_n_s16_f16", "V16ScV16ScIii", "fullfp16,neon"),
-    r(367, "__builtin_neon_vcvtq_n_s32_v", "V16ScV16ScIii", "neon"),
-    r(368, "__builtin_neon_vcvtq_n_s64_v", "V16ScV16ScIii", "neon"),
-    r(369, "__builtin_neon_vcvtq_n_u16_f16", "V16ScV16ScIii", "fullfp16,neon"),
-    r(370, "__builtin_neon_vcvtq_n_u32_v", "V16ScV16ScIii", "neon"),
-    r(371, "__builtin_neon_vcvtq_n_u64_v", "V16ScV16ScIii", "neon"),
-    r(372, "__builtin_neon_vcvtq_s16_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(373, "__builtin_neon_vcvtq_s32_v", "V16ScV16Sci", "neon"),
-    r(374, "__builtin_neon_vcvtq_s64_v", "V16ScV16Sci", "neon"),
-    r(375, "__builtin_neon_vcvtq_u16_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(376, "__builtin_neon_vcvtq_u32_v", "V16ScV16Sci", "neon"),
-    r(377, "__builtin_neon_vcvtq_u64_v", "V16ScV16Sci", "neon"),
-    r(378, "__builtin_neon_vcvts_f32_s32", "fi", "neon"),
-    r(379, "__builtin_neon_vcvts_f32_u32", "fUi", "neon"),
-    r(380, "__builtin_neon_vcvts_n_f32_s32", "fiIi", "neon"),
-    r(381, "__builtin_neon_vcvts_n_f32_u32", "fUiIi", "neon"),
-    r(382, "__builtin_neon_vcvts_n_s32_f32", "ifIi", "neon"),
-    r(383, "__builtin_neon_vcvts_n_u32_f32", "UifIi", "neon"),
-    r(384, "__builtin_neon_vcvts_s32_f32", "if", "neon"),
-    r(385, "__builtin_neon_vcvts_u32_f32", "Uif", "neon"),
-    r(386, "__builtin_neon_vcvtx_f32_v", "V8ScV16Sci", "neon"),
-    r(387, "__builtin_neon_vcvtxd_f32_f64", "fd", "neon"),
-    r(388, "__builtin_neon_vdivh_f16", "hhh", "fullfp16"),
-    r(389, "__builtin_neon_vdot_s32", "V8ScV8ScV8ScV8Sci", "dotprod,neon"),
-    r(390, "__builtin_neon_vdot_u32", "V8ScV8ScV8ScV8Sci", "dotprod,neon"),
-    r(391, "__builtin_neon_vdotq_s32", "V16ScV16ScV16ScV16Sci", "dotprod,neon"),
-    r(392, "__builtin_neon_vdotq_u32", "V16ScV16ScV16ScV16Sci", "dotprod,neon"),
-    r(393, "__builtin_neon_vdupb_lane_i8", "UcV8ScIi", "neon"),
-    r(394, "__builtin_neon_vdupb_laneq_i8", "UcV16ScIi", "neon"),
-    r(395, "__builtin_neon_vdupd_lane_f64", "dV1dIi", "neon"),
-    r(396, "__builtin_neon_vdupd_lane_i64", "UWiV1WiIi", "neon"),
-    r(397, "__builtin_neon_vdupd_laneq_f64", "dV2dIi", "neon"),
-    r(398, "__builtin_neon_vdupd_laneq_i64", "UWiV2WiIi", "neon"),
-    r(399, "__builtin_neon_vduph_lane_bf16", "yV4yIi", "bf16,neon"),
-    r(400, "__builtin_neon_vduph_lane_f16", "hV4hIi", "neon"),
-    r(401, "__builtin_neon_vduph_lane_i16", "UsV4sIi", "neon"),
-    r(402, "__builtin_neon_vduph_laneq_bf16", "yV8yIi", "bf16,neon"),
-    r(403, "__builtin_neon_vduph_laneq_f16", "hV8hIi", "neon"),
-    r(404, "__builtin_neon_vduph_laneq_i16", "UsV8sIi", "neon"),
-    r(405, "__builtin_neon_vdups_lane_f32", "fV2fIi", "neon"),
-    r(406, "__builtin_neon_vdups_lane_i32", "UiV2iIi", "neon"),
-    r(407, "__builtin_neon_vdups_laneq_f32", "fV4fIi", "neon"),
-    r(408, "__builtin_neon_vdups_laneq_i32", "UiV4iIi", "neon"),
-    r(409, "__builtin_neon_veor3q_s16", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(410, "__builtin_neon_veor3q_s32", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(411, "__builtin_neon_veor3q_s64", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(412, "__builtin_neon_veor3q_s8", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(413, "__builtin_neon_veor3q_u16", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(414, "__builtin_neon_veor3q_u32", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(415, "__builtin_neon_veor3q_u64", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(416, "__builtin_neon_veor3q_u8", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(417, "__builtin_neon_vext_v", "V8ScV8ScV8ScIii", "neon"),
-    r(418, "__builtin_neon_vextq_v", "V16ScV16ScV16ScIii", "neon"),
-    r(419, "__builtin_neon_vfma_f16", "V8ScV8ScV8ScV8Sci", "fullfp16,neon"),
-    r(420, "__builtin_neon_vfma_lane_f16", "V8ScV8ScV8ScV8ScIii", "fullfp16,neon"),
-    r(421, "__builtin_neon_vfma_lane_v", "V8ScV8ScV8ScV8ScIii", "neon"),
-    r(422, "__builtin_neon_vfma_laneq_f16", "V8ScV8ScV8ScV16ScIii", "fullfp16,neon"),
-    r(423, "__builtin_neon_vfma_laneq_v", "V8ScV8ScV8ScV16ScIii", "neon"),
-    r(424, "__builtin_neon_vfma_v", "V8ScV8ScV8ScV8Sci", "neon"),
-    r(425, "__builtin_neon_vfmad_lane_f64", "dddV1dIi", "neon"),
-    r(426, "__builtin_neon_vfmad_laneq_f64", "dddV2dIi", "neon"),
-    r(427, "__builtin_neon_vfmah_f16", "hhhh", "fullfp16"),
-    r(428, "__builtin_neon_vfmah_lane_f16", "hhhV4hIi", "fullfp16,neon"),
-    r(429, "__builtin_neon_vfmah_laneq_f16", "hhhV8hIi", "fullfp16,neon"),
-    r(430, "__builtin_neon_vfmaq_f16", "V16ScV16ScV16ScV16Sci", "fullfp16,neon"),
-    r(431, "__builtin_neon_vfmaq_lane_f16", "V16ScV16ScV16ScV8ScIii", "fullfp16,neon"),
-    r(432, "__builtin_neon_vfmaq_lane_v", "V16ScV16ScV16ScV8ScIii", "neon"),
-    r(433, "__builtin_neon_vfmaq_laneq_f16", "V16ScV16ScV16ScV16ScIii", "fullfp16,neon"),
-    r(434, "__builtin_neon_vfmaq_laneq_v", "V16ScV16ScV16ScV16ScIii", "neon"),
-    r(435, "__builtin_neon_vfmaq_v", "V16ScV16ScV16ScV16Sci", "neon"),
-    r(436, "__builtin_neon_vfmas_lane_f32", "fffV2fIi", "neon"),
-    r(437, "__builtin_neon_vfmas_laneq_f32", "fffV4fIi", "neon"),
-    r(438, "__builtin_neon_vfmlal_high_f16", "V8ScV8ScV8ScV8Sci", "fp16fml,neon"),
-    r(439, "__builtin_neon_vfmlal_low_f16", "V8ScV8ScV8ScV8Sci", "fp16fml,neon"),
-    r(440, "__builtin_neon_vfmlalq_high_f16", "V16ScV16ScV16ScV16Sci", "fp16fml,neon"),
-    r(441, "__builtin_neon_vfmlalq_low_f16", "V16ScV16ScV16ScV16Sci", "fp16fml,neon"),
-    r(442, "__builtin_neon_vfmlsl_high_f16", "V8ScV8ScV8ScV8Sci", "fp16fml,neon"),
-    r(443, "__builtin_neon_vfmlsl_low_f16", "V8ScV8ScV8ScV8Sci", "fp16fml,neon"),
-    r(444, "__builtin_neon_vfmlslq_high_f16", "V16ScV16ScV16ScV16Sci", "fp16fml,neon"),
-    r(445, "__builtin_neon_vfmlslq_low_f16", "V16ScV16ScV16ScV16Sci", "fp16fml,neon"),
-    r(446, "__builtin_neon_vfmsh_f16", "hhhh", "fullfp16"),
-    r(447, "__builtin_neon_vget_lane_bf16", "yV4yIi", "bf16,neon"),
-    r(448, "__builtin_neon_vget_lane_f32", "fV2fIi", "neon"),
-    r(449, "__builtin_neon_vget_lane_f64", "dV1dIi", "neon"),
-    r(450, "__builtin_neon_vget_lane_i16", "UsV4sIi", "neon"),
-    r(451, "__builtin_neon_vget_lane_i32", "UiV2iIi", "neon"),
-    r(452, "__builtin_neon_vget_lane_i64", "UWiV1WiIi", "neon"),
-    r(453, "__builtin_neon_vget_lane_i8", "UcV8ScIi", "neon"),
-    r(454, "__builtin_neon_vgetq_lane_bf16", "yV8yIi", "bf16,neon"),
-    r(455, "__builtin_neon_vgetq_lane_f32", "fV4fIi", "neon"),
-    r(456, "__builtin_neon_vgetq_lane_f64", "dV2dIi", "neon"),
-    r(457, "__builtin_neon_vgetq_lane_i16", "UsV8sIi", "neon"),
-    r(458, "__builtin_neon_vgetq_lane_i32", "UiV4iIi", "neon"),
-    r(459, "__builtin_neon_vgetq_lane_i64", "UWiV2WiIi", "neon"),
-    r(460, "__builtin_neon_vgetq_lane_i8", "UcV16ScIi", "neon"),
-    r(461, "__builtin_neon_vhadd_v", "V8ScV8ScV8Sci", "neon"),
-    r(462, "__builtin_neon_vhaddq_v", "V16ScV16ScV16Sci", "neon"),
-    r(463, "__builtin_neon_vhsub_v", "V8ScV8ScV8Sci", "neon"),
-    r(464, "__builtin_neon_vhsubq_v", "V16ScV16ScV16Sci", "neon"),
-    r(465, "__builtin_neon_vld1_bf16", "V8ScvC*i", "bf16,neon"),
-    r(466, "__builtin_neon_vld1_bf16_x2", "vv*vC*i", "bf16,neon"),
-    r(467, "__builtin_neon_vld1_bf16_x3", "vv*vC*i", "bf16,neon"),
-    r(468, "__builtin_neon_vld1_bf16_x4", "vv*vC*i", "bf16,neon"),
-    r(469, "__builtin_neon_vld1_dup_bf16", "V8ScvC*i", "bf16,neon"),
-    r(470, "__builtin_neon_vld1_dup_v", "V8ScvC*i", "neon"),
-    r(471, "__builtin_neon_vld1_lane_bf16", "V8ScvC*V8ScIii", "bf16,neon"),
-    r(472, "__builtin_neon_vld1_lane_v", "V8ScvC*V8ScIii", "neon"),
-    r(473, "__builtin_neon_vld1_v", "V8ScvC*i", "neon"),
-    r(474, "__builtin_neon_vld1_x2_v", "vv*vC*i", "neon"),
-    r(475, "__builtin_neon_vld1_x3_v", "vv*vC*i", "neon"),
-    r(476, "__builtin_neon_vld1_x4_v", "vv*vC*i", "neon"),
-    r(477, "__builtin_neon_vld1q_bf16", "V16ScvC*i", "bf16,neon"),
-    r(478, "__builtin_neon_vld1q_bf16_x2", "vv*vC*i", "bf16,neon"),
-    r(479, "__builtin_neon_vld1q_bf16_x3", "vv*vC*i", "bf16,neon"),
-    r(480, "__builtin_neon_vld1q_bf16_x4", "vv*vC*i", "bf16,neon"),
-    r(481, "__builtin_neon_vld1q_dup_bf16", "V16ScvC*i", "bf16,neon"),
-    r(482, "__builtin_neon_vld1q_dup_v", "V16ScvC*i", "neon"),
-    r(483, "__builtin_neon_vld1q_lane_bf16", "V16ScvC*V16ScIii", "bf16,neon"),
-    r(484, "__builtin_neon_vld1q_lane_v", "V16ScvC*V16ScIii", "neon"),
-    r(485, "__builtin_neon_vld1q_v", "V16ScvC*i", "neon"),
-    r(486, "__builtin_neon_vld1q_x2_v", "vv*vC*i", "neon"),
-    r(487, "__builtin_neon_vld1q_x3_v", "vv*vC*i", "neon"),
-    r(488, "__builtin_neon_vld1q_x4_v", "vv*vC*i", "neon"),
-    r(489, "__builtin_neon_vld2_bf16", "vv*vC*i", "bf16,neon"),
-    r(490, "__builtin_neon_vld2_dup_bf16", "vv*vC*i", "bf16,neon"),
-    r(491, "__builtin_neon_vld2_dup_v", "vv*vC*i", "neon"),
-    r(492, "__builtin_neon_vld2_lane_bf16", "vv*vC*V8ScV8ScIii", "bf16,neon"),
-    r(493, "__builtin_neon_vld2_lane_v", "vv*vC*V8ScV8ScIii", "neon"),
-    r(494, "__builtin_neon_vld2_v", "vv*vC*i", "neon"),
-    r(495, "__builtin_neon_vld2q_bf16", "vv*vC*i", "bf16,neon"),
-    r(496, "__builtin_neon_vld2q_dup_bf16", "vv*vC*i", "bf16,neon"),
-    r(497, "__builtin_neon_vld2q_dup_v", "vv*vC*i", "neon"),
-    r(498, "__builtin_neon_vld2q_lane_bf16", "vv*vC*V16ScV16ScIii", "bf16,neon"),
-    r(499, "__builtin_neon_vld2q_lane_v", "vv*vC*V16ScV16ScIii", "neon"),
-    r(500, "__builtin_neon_vld2q_v", "vv*vC*i", "neon"),
-    r(501, "__builtin_neon_vld3_bf16", "vv*vC*i", "bf16,neon"),
-    r(502, "__builtin_neon_vld3_dup_bf16", "vv*vC*i", "bf16,neon"),
-    r(503, "__builtin_neon_vld3_dup_v", "vv*vC*i", "neon"),
-    r(504, "__builtin_neon_vld3_lane_bf16", "vv*vC*V8ScV8ScV8ScIii", "bf16,neon"),
-    r(505, "__builtin_neon_vld3_lane_v", "vv*vC*V8ScV8ScV8ScIii", "neon"),
-    r(506, "__builtin_neon_vld3_v", "vv*vC*i", "neon"),
-    r(507, "__builtin_neon_vld3q_bf16", "vv*vC*i", "bf16,neon"),
-    r(508, "__builtin_neon_vld3q_dup_bf16", "vv*vC*i", "bf16,neon"),
-    r(509, "__builtin_neon_vld3q_dup_v", "vv*vC*i", "neon"),
-    r(510, "__builtin_neon_vld3q_lane_bf16", "vv*vC*V16ScV16ScV16ScIii", "bf16,neon"),
-    r(511, "__builtin_neon_vld3q_lane_v", "vv*vC*V16ScV16ScV16ScIii", "neon"),
-    r(512, "__builtin_neon_vld3q_v", "vv*vC*i", "neon"),
-    r(513, "__builtin_neon_vld4_bf16", "vv*vC*i", "bf16,neon"),
-    r(514, "__builtin_neon_vld4_dup_bf16", "vv*vC*i", "bf16,neon"),
-    r(515, "__builtin_neon_vld4_dup_v", "vv*vC*i", "neon"),
-    r(516, "__builtin_neon_vld4_lane_bf16", "vv*vC*V8ScV8ScV8ScV8ScIii", "bf16,neon"),
-    r(517, "__builtin_neon_vld4_lane_v", "vv*vC*V8ScV8ScV8ScV8ScIii", "neon"),
-    r(518, "__builtin_neon_vld4_v", "vv*vC*i", "neon"),
-    r(519, "__builtin_neon_vld4q_bf16", "vv*vC*i", "bf16,neon"),
-    r(520, "__builtin_neon_vld4q_dup_bf16", "vv*vC*i", "bf16,neon"),
-    r(521, "__builtin_neon_vld4q_dup_v", "vv*vC*i", "neon"),
-    r(522, "__builtin_neon_vld4q_lane_bf16", "vv*vC*V16ScV16ScV16ScV16ScIii", "bf16,neon"),
-    r(523, "__builtin_neon_vld4q_lane_v", "vv*vC*V16ScV16ScV16ScV16ScIii", "neon"),
-    r(524, "__builtin_neon_vld4q_v", "vv*vC*i", "neon"),
-    r(525, "__builtin_neon_vldap1_lane_f64", "V8ScvC*V8ScIii", "rcpc3,neon"),
-    r(526, "__builtin_neon_vldap1_lane_p64", "V8ScvC*V8ScIii", "rcpc3,neon"),
-    r(527, "__builtin_neon_vldap1_lane_s64", "V8ScvC*V8ScIii", "rcpc3,neon"),
-    r(528, "__builtin_neon_vldap1_lane_u64", "V8ScvC*V8ScIii", "rcpc3,neon"),
-    r(529, "__builtin_neon_vldap1q_lane_f64", "V16ScvC*V16ScIii", "rcpc3,neon"),
-    r(530, "__builtin_neon_vldap1q_lane_p64", "V16ScvC*V16ScIii", "rcpc3,neon"),
-    r(531, "__builtin_neon_vldap1q_lane_s64", "V16ScvC*V16ScIii", "rcpc3,neon"),
-    r(532, "__builtin_neon_vldap1q_lane_u64", "V16ScvC*V16ScIii", "rcpc3,neon"),
-    r(533, "__builtin_neon_vldrq_p128", "ULLLivC*", "neon"),
-    r(534, "__builtin_neon_vmax_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(535, "__builtin_neon_vmax_v", "V8ScV8ScV8Sci", "neon"),
-    r(536, "__builtin_neon_vmaxh_f16", "hhh", "fullfp16"),
-    r(537, "__builtin_neon_vmaxnm_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(538, "__builtin_neon_vmaxnm_v", "V8ScV8ScV8Sci", "neon"),
-    r(539, "__builtin_neon_vmaxnmh_f16", "hhh", "fullfp16"),
-    r(540, "__builtin_neon_vmaxnmq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(541, "__builtin_neon_vmaxnmq_v", "V16ScV16ScV16Sci", "neon"),
-    r(542, "__builtin_neon_vmaxnmv_f16", "hV8Sc", "fullfp16,neon"),
-    r(543, "__builtin_neon_vmaxnmv_f32", "fV2f", "neon"),
-    r(544, "__builtin_neon_vmaxnmvq_f16", "hV16Sc", "fullfp16,neon"),
-    r(545, "__builtin_neon_vmaxnmvq_f32", "fV4f", "neon"),
-    r(546, "__builtin_neon_vmaxnmvq_f64", "dV2d", "neon"),
-    r(547, "__builtin_neon_vmaxq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(548, "__builtin_neon_vmaxq_v", "V16ScV16ScV16Sci", "neon"),
-    r(549, "__builtin_neon_vmaxv_f16", "hV8Sc", "fullfp16,neon"),
-    r(550, "__builtin_neon_vmaxv_f32", "fV2f", "neon"),
-    r(551, "__builtin_neon_vmaxv_s16", "sV4s", "neon"),
-    r(552, "__builtin_neon_vmaxv_s32", "iV2i", "neon"),
-    r(553, "__builtin_neon_vmaxv_s8", "ScV8Sc", "neon"),
-    r(554, "__builtin_neon_vmaxv_u16", "UsV4Us", "neon"),
-    r(555, "__builtin_neon_vmaxv_u32", "UiV2Ui", "neon"),
-    r(556, "__builtin_neon_vmaxv_u8", "UcV8Uc", "neon"),
-    r(557, "__builtin_neon_vmaxvq_f16", "hV16Sc", "fullfp16,neon"),
-    r(558, "__builtin_neon_vmaxvq_f32", "fV4f", "neon"),
-    r(559, "__builtin_neon_vmaxvq_f64", "dV2d", "neon"),
-    r(560, "__builtin_neon_vmaxvq_s16", "sV8s", "neon"),
-    r(561, "__builtin_neon_vmaxvq_s32", "iV4i", "neon"),
-    r(562, "__builtin_neon_vmaxvq_s8", "ScV16Sc", "neon"),
-    r(563, "__builtin_neon_vmaxvq_u16", "UsV8Us", "neon"),
-    r(564, "__builtin_neon_vmaxvq_u32", "UiV4Ui", "neon"),
-    r(565, "__builtin_neon_vmaxvq_u8", "UcV16Uc", "neon"),
-    r(566, "__builtin_neon_vmin_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(567, "__builtin_neon_vmin_v", "V8ScV8ScV8Sci", "neon"),
-    r(568, "__builtin_neon_vminh_f16", "hhh", "fullfp16"),
-    r(569, "__builtin_neon_vminnm_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(570, "__builtin_neon_vminnm_v", "V8ScV8ScV8Sci", "neon"),
-    r(571, "__builtin_neon_vminnmh_f16", "hhh", "fullfp16"),
-    r(572, "__builtin_neon_vminnmq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(573, "__builtin_neon_vminnmq_v", "V16ScV16ScV16Sci", "neon"),
-    r(574, "__builtin_neon_vminnmv_f16", "hV8Sc", "fullfp16,neon"),
-    r(575, "__builtin_neon_vminnmv_f32", "fV2f", "neon"),
-    r(576, "__builtin_neon_vminnmvq_f16", "hV16Sc", "fullfp16,neon"),
-    r(577, "__builtin_neon_vminnmvq_f32", "fV4f", "neon"),
-    r(578, "__builtin_neon_vminnmvq_f64", "dV2d", "neon"),
-    r(579, "__builtin_neon_vminq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(580, "__builtin_neon_vminq_v", "V16ScV16ScV16Sci", "neon"),
-    r(581, "__builtin_neon_vminv_f16", "hV8Sc", "fullfp16,neon"),
-    r(582, "__builtin_neon_vminv_f32", "fV2f", "neon"),
-    r(583, "__builtin_neon_vminv_s16", "sV4s", "neon"),
-    r(584, "__builtin_neon_vminv_s32", "iV2i", "neon"),
-    r(585, "__builtin_neon_vminv_s8", "ScV8Sc", "neon"),
-    r(586, "__builtin_neon_vminv_u16", "UsV4Us", "neon"),
-    r(587, "__builtin_neon_vminv_u32", "UiV2Ui", "neon"),
-    r(588, "__builtin_neon_vminv_u8", "UcV8Uc", "neon"),
-    r(589, "__builtin_neon_vminvq_f16", "hV16Sc", "fullfp16,neon"),
-    r(590, "__builtin_neon_vminvq_f32", "fV4f", "neon"),
-    r(591, "__builtin_neon_vminvq_f64", "dV2d", "neon"),
-    r(592, "__builtin_neon_vminvq_s16", "sV8s", "neon"),
-    r(593, "__builtin_neon_vminvq_s32", "iV4i", "neon"),
-    r(594, "__builtin_neon_vminvq_s8", "ScV16Sc", "neon"),
-    r(595, "__builtin_neon_vminvq_u16", "UsV8Us", "neon"),
-    r(596, "__builtin_neon_vminvq_u32", "UiV4Ui", "neon"),
-    r(597, "__builtin_neon_vminvq_u8", "UcV16Uc", "neon"),
-    r(598, "__builtin_neon_vmmlaq_s32", "V16ScV16ScV16ScV16Sci", "i8mm,neon"),
-    r(599, "__builtin_neon_vmmlaq_u32", "V16ScV16ScV16ScV16Sci", "i8mm,neon"),
-    r(600, "__builtin_neon_vmovl_v", "V16ScV8Sci", "neon"),
-    r(601, "__builtin_neon_vmovn_v", "V8ScV16Sci", "neon"),
-    r(602, "__builtin_neon_vmul_lane_v", "V8ScV8ScV8ScIii", "neon"),
-    r(603, "__builtin_neon_vmul_laneq_v", "V8ScV8ScV16ScIii", "neon"),
-    r(604, "__builtin_neon_vmul_n_f64", "V1dV1dd", "neon"),
-    r(605, "__builtin_neon_vmul_v", "V8ScV8ScV8Sci", "neon"),
-    r(606, "__builtin_neon_vmulh_f16", "hhh", "fullfp16"),
-    r(607, "__builtin_neon_vmull_p64", "ULLLiUWiUWi", "aes,neon"),
-    r(608, "__builtin_neon_vmull_v", "V16ScV8ScV8Sci", "neon"),
-    r(609, "__builtin_neon_vmulq_v", "V16ScV16ScV16Sci", "neon"),
-    r(610, "__builtin_neon_vmulx_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(611, "__builtin_neon_vmulx_v", "V8ScV8ScV8Sci", "neon"),
-    r(612, "__builtin_neon_vmulxd_f64", "ddd", "neon"),
-    r(613, "__builtin_neon_vmulxh_f16", "hhh", "fullfp16"),
-    r(614, "__builtin_neon_vmulxh_lane_f16", "hhV4hIi", "fullfp16,neon"),
-    r(615, "__builtin_neon_vmulxh_laneq_f16", "hhV8hIi", "fullfp16,neon"),
-    r(616, "__builtin_neon_vmulxq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(617, "__builtin_neon_vmulxq_v", "V16ScV16ScV16Sci", "neon"),
-    r(618, "__builtin_neon_vmulxs_f32", "fff", "neon"),
-    r(619, "__builtin_neon_vnegd_s64", "WiWi", "neon"),
-    r(620, "__builtin_neon_vnegh_f16", "hh", "fullfp16"),
-    r(621, "__builtin_neon_vpadal_v", "V8ScV8ScV8Sci", "neon"),
-    r(622, "__builtin_neon_vpadalq_v", "V16ScV16ScV16Sci", "neon"),
-    r(623, "__builtin_neon_vpadd_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(624, "__builtin_neon_vpadd_v", "V8ScV8ScV8Sci", "neon"),
-    r(625, "__builtin_neon_vpaddd_f64", "dV2d", "neon"),
-    r(626, "__builtin_neon_vpaddd_s64", "WiV2Wi", "neon"),
-    r(627, "__builtin_neon_vpaddd_u64", "UWiV2UWi", "neon"),
-    r(628, "__builtin_neon_vpaddl_v", "V8ScV8Sci", "neon"),
-    r(629, "__builtin_neon_vpaddlq_v", "V16ScV16Sci", "neon"),
-    r(630, "__builtin_neon_vpaddq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(631, "__builtin_neon_vpaddq_v", "V16ScV16ScV16Sci", "neon"),
-    r(632, "__builtin_neon_vpadds_f32", "fV2f", "neon"),
-    r(633, "__builtin_neon_vpmax_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(634, "__builtin_neon_vpmax_v", "V8ScV8ScV8Sci", "neon"),
-    r(635, "__builtin_neon_vpmaxnm_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(636, "__builtin_neon_vpmaxnm_v", "V8ScV8ScV8Sci", "neon"),
-    r(637, "__builtin_neon_vpmaxnmq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(638, "__builtin_neon_vpmaxnmq_v", "V16ScV16ScV16Sci", "neon"),
-    r(639, "__builtin_neon_vpmaxnmqd_f64", "dV2d", "neon"),
-    r(640, "__builtin_neon_vpmaxnms_f32", "fV2f", "neon"),
-    r(641, "__builtin_neon_vpmaxq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(642, "__builtin_neon_vpmaxq_v", "V16ScV16ScV16Sci", "neon"),
-    r(643, "__builtin_neon_vpmaxqd_f64", "dV2d", "neon"),
-    r(644, "__builtin_neon_vpmaxs_f32", "fV2f", "neon"),
-    r(645, "__builtin_neon_vpmin_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(646, "__builtin_neon_vpmin_v", "V8ScV8ScV8Sci", "neon"),
-    r(647, "__builtin_neon_vpminnm_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(648, "__builtin_neon_vpminnm_v", "V8ScV8ScV8Sci", "neon"),
-    r(649, "__builtin_neon_vpminnmq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(650, "__builtin_neon_vpminnmq_v", "V16ScV16ScV16Sci", "neon"),
-    r(651, "__builtin_neon_vpminnmqd_f64", "dV2d", "neon"),
-    r(652, "__builtin_neon_vpminnms_f32", "fV2f", "neon"),
-    r(653, "__builtin_neon_vpminq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(654, "__builtin_neon_vpminq_v", "V16ScV16ScV16Sci", "neon"),
-    r(655, "__builtin_neon_vpminqd_f64", "dV2d", "neon"),
-    r(656, "__builtin_neon_vpmins_f32", "fV2f", "neon"),
-    r(657, "__builtin_neon_vqabs_v", "V8ScV8Sci", "neon"),
-    r(658, "__builtin_neon_vqabsb_s8", "ScSc", "neon"),
-    r(659, "__builtin_neon_vqabsd_s64", "WiWi", "neon"),
-    r(660, "__builtin_neon_vqabsh_s16", "ss", "neon"),
-    r(661, "__builtin_neon_vqabsq_v", "V16ScV16Sci", "neon"),
-    r(662, "__builtin_neon_vqabss_s32", "ii", "neon"),
-    r(663, "__builtin_neon_vqadd_v", "V8ScV8ScV8Sci", "neon"),
-    r(664, "__builtin_neon_vqaddb_s8", "ScScSc", "neon"),
-    r(665, "__builtin_neon_vqaddb_u8", "UcUcUc", "neon"),
-    r(666, "__builtin_neon_vqaddd_s64", "WiWiWi", "neon"),
-    r(667, "__builtin_neon_vqaddd_u64", "UWiUWiUWi", "neon"),
-    r(668, "__builtin_neon_vqaddh_s16", "sss", "neon"),
-    r(669, "__builtin_neon_vqaddh_u16", "UsUsUs", "neon"),
-    r(670, "__builtin_neon_vqaddq_v", "V16ScV16ScV16Sci", "neon"),
-    r(671, "__builtin_neon_vqadds_s32", "iii", "neon"),
-    r(672, "__builtin_neon_vqadds_u32", "UiUiUi", "neon"),
-    r(673, "__builtin_neon_vqdmlal_v", "V16ScV16ScV8ScV8Sci", "neon"),
-    r(674, "__builtin_neon_vqdmlalh_lane_s16", "iisV4sIi", "neon"),
-    r(675, "__builtin_neon_vqdmlalh_laneq_s16", "iisV8sIi", "neon"),
-    r(676, "__builtin_neon_vqdmlalh_s16", "iiss", "neon"),
-    r(677, "__builtin_neon_vqdmlals_lane_s32", "WiWiiV2iIi", "neon"),
-    r(678, "__builtin_neon_vqdmlals_laneq_s32", "WiWiiV4iIi", "neon"),
-    r(679, "__builtin_neon_vqdmlals_s32", "WiWiii", "neon"),
-    r(680, "__builtin_neon_vqdmlsl_v", "V16ScV16ScV8ScV8Sci", "neon"),
-    r(681, "__builtin_neon_vqdmlslh_lane_s16", "iisV4sIi", "neon"),
-    r(682, "__builtin_neon_vqdmlslh_laneq_s16", "iisV8sIi", "neon"),
-    r(683, "__builtin_neon_vqdmlslh_s16", "iiss", "neon"),
-    r(684, "__builtin_neon_vqdmlsls_lane_s32", "WiWiiV2iIi", "neon"),
-    r(685, "__builtin_neon_vqdmlsls_laneq_s32", "WiWiiV4iIi", "neon"),
-    r(686, "__builtin_neon_vqdmlsls_s32", "WiWiii", "neon"),
-    r(687, "__builtin_neon_vqdmulh_lane_v", "V8ScV8ScV8ScIii", "neon"),
-    r(688, "__builtin_neon_vqdmulh_laneq_v", "V8ScV8ScV16ScIii", "neon"),
-    r(689, "__builtin_neon_vqdmulh_v", "V8ScV8ScV8Sci", "neon"),
-    r(690, "__builtin_neon_vqdmulhh_s16", "sss", "neon"),
-    r(691, "__builtin_neon_vqdmulhq_lane_v", "V16ScV16ScV8ScIii", "neon"),
-    r(692, "__builtin_neon_vqdmulhq_laneq_v", "V16ScV16ScV16ScIii", "neon"),
-    r(693, "__builtin_neon_vqdmulhq_v", "V16ScV16ScV16Sci", "neon"),
-    r(694, "__builtin_neon_vqdmulhs_s32", "iii", "neon"),
-    r(695, "__builtin_neon_vqdmull_v", "V16ScV8ScV8Sci", "neon"),
-    r(696, "__builtin_neon_vqdmullh_s16", "iss", "neon"),
-    r(697, "__builtin_neon_vqdmulls_s32", "Wiii", "neon"),
-    r(698, "__builtin_neon_vqmovn_v", "V8ScV16Sci", "neon"),
-    r(699, "__builtin_neon_vqmovnd_s64", "iWi", "neon"),
-    r(700, "__builtin_neon_vqmovnd_u64", "UiUWi", "neon"),
-    r(701, "__builtin_neon_vqmovnh_s16", "Scs", "neon"),
-    r(702, "__builtin_neon_vqmovnh_u16", "UcUs", "neon"),
-    r(703, "__builtin_neon_vqmovns_s32", "si", "neon"),
-    r(704, "__builtin_neon_vqmovns_u32", "UsUi", "neon"),
-    r(705, "__builtin_neon_vqmovun_v", "V8ScV16Sci", "neon"),
-    r(706, "__builtin_neon_vqmovund_s64", "UiWi", "neon"),
-    r(707, "__builtin_neon_vqmovunh_s16", "Ucs", "neon"),
-    r(708, "__builtin_neon_vqmovuns_s32", "Usi", "neon"),
-    r(709, "__builtin_neon_vqneg_v", "V8ScV8Sci", "neon"),
-    r(710, "__builtin_neon_vqnegb_s8", "ScSc", "neon"),
-    r(711, "__builtin_neon_vqnegd_s64", "WiWi", "neon"),
-    r(712, "__builtin_neon_vqnegh_s16", "ss", "neon"),
-    r(713, "__builtin_neon_vqnegq_v", "V16ScV16Sci", "neon"),
-    r(714, "__builtin_neon_vqnegs_s32", "ii", "neon"),
-    r(715, "__builtin_neon_vqrdmlah_s16", "V8ScV8ScV8ScV8Sci", "v8.1a,neon"),
-    r(716, "__builtin_neon_vqrdmlah_s32", "V8ScV8ScV8ScV8Sci", "v8.1a,neon"),
-    r(717, "__builtin_neon_vqrdmlahh_s16", "ssss", "v8.1a,neon"),
-    r(718, "__builtin_neon_vqrdmlahq_s16", "V16ScV16ScV16ScV16Sci", "v8.1a,neon"),
-    r(719, "__builtin_neon_vqrdmlahq_s32", "V16ScV16ScV16ScV16Sci", "v8.1a,neon"),
-    r(720, "__builtin_neon_vqrdmlahs_s32", "iiii", "v8.1a,neon"),
-    r(721, "__builtin_neon_vqrdmlsh_s16", "V8ScV8ScV8ScV8Sci", "v8.1a,neon"),
-    r(722, "__builtin_neon_vqrdmlsh_s32", "V8ScV8ScV8ScV8Sci", "v8.1a,neon"),
-    r(723, "__builtin_neon_vqrdmlshh_s16", "ssss", "v8.1a,neon"),
-    r(724, "__builtin_neon_vqrdmlshq_s16", "V16ScV16ScV16ScV16Sci", "v8.1a,neon"),
-    r(725, "__builtin_neon_vqrdmlshq_s32", "V16ScV16ScV16ScV16Sci", "v8.1a,neon"),
-    r(726, "__builtin_neon_vqrdmlshs_s32", "iiii", "v8.1a,neon"),
-    r(727, "__builtin_neon_vqrdmulh_lane_v", "V8ScV8ScV8ScIii", "neon"),
-    r(728, "__builtin_neon_vqrdmulh_laneq_v", "V8ScV8ScV16ScIii", "neon"),
-    r(729, "__builtin_neon_vqrdmulh_v", "V8ScV8ScV8Sci", "neon"),
-    r(730, "__builtin_neon_vqrdmulhh_s16", "sss", "neon"),
-    r(731, "__builtin_neon_vqrdmulhq_lane_v", "V16ScV16ScV8ScIii", "neon"),
-    r(732, "__builtin_neon_vqrdmulhq_laneq_v", "V16ScV16ScV16ScIii", "neon"),
-    r(733, "__builtin_neon_vqrdmulhq_v", "V16ScV16ScV16Sci", "neon"),
-    r(734, "__builtin_neon_vqrdmulhs_s32", "iii", "neon"),
-    r(735, "__builtin_neon_vqrshl_v", "V8ScV8ScV8Sci", "neon"),
-    r(736, "__builtin_neon_vqrshlb_s8", "ScScSc", "neon"),
-    r(737, "__builtin_neon_vqrshlb_u8", "UcUcSc", "neon"),
-    r(738, "__builtin_neon_vqrshld_s64", "WiWiWi", "neon"),
-    r(739, "__builtin_neon_vqrshld_u64", "UWiUWiWi", "neon"),
-    r(740, "__builtin_neon_vqrshlh_s16", "sss", "neon"),
-    r(741, "__builtin_neon_vqrshlh_u16", "UsUss", "neon"),
-    r(742, "__builtin_neon_vqrshlq_v", "V16ScV16ScV16Sci", "neon"),
-    r(743, "__builtin_neon_vqrshls_s32", "iii", "neon"),
-    r(744, "__builtin_neon_vqrshls_u32", "UiUii", "neon"),
-    r(745, "__builtin_neon_vqrshrn_n_v", "V8ScV16ScIii", "neon"),
-    r(746, "__builtin_neon_vqrshrnd_n_s64", "iWiIi", "neon"),
-    r(747, "__builtin_neon_vqrshrnd_n_u64", "UiUWiIi", "neon"),
-    r(748, "__builtin_neon_vqrshrnh_n_s16", "ScsIi", "neon"),
-    r(749, "__builtin_neon_vqrshrnh_n_u16", "UcUsIi", "neon"),
-    r(750, "__builtin_neon_vqrshrns_n_s32", "siIi", "neon"),
-    r(751, "__builtin_neon_vqrshrns_n_u32", "UsUiIi", "neon"),
-    r(752, "__builtin_neon_vqrshrun_n_v", "V8ScV16ScIii", "neon"),
-    r(753, "__builtin_neon_vqrshrund_n_s64", "UiWiIi", "neon"),
-    r(754, "__builtin_neon_vqrshrunh_n_s16", "UcsIi", "neon"),
-    r(755, "__builtin_neon_vqrshruns_n_s32", "UsiIi", "neon"),
-    r(756, "__builtin_neon_vqshl_n_v", "V8ScV8ScIii", "neon"),
-    r(757, "__builtin_neon_vqshl_v", "V8ScV8ScV8Sci", "neon"),
-    r(758, "__builtin_neon_vqshlb_n_s8", "ScScIi", "neon"),
-    r(759, "__builtin_neon_vqshlb_n_u8", "UcUcIi", "neon"),
-    r(760, "__builtin_neon_vqshlb_s8", "ScScSc", "neon"),
-    r(761, "__builtin_neon_vqshlb_u8", "UcUcSc", "neon"),
-    r(762, "__builtin_neon_vqshld_n_s64", "WiWiIi", "neon"),
-    r(763, "__builtin_neon_vqshld_n_u64", "UWiUWiIi", "neon"),
-    r(764, "__builtin_neon_vqshld_s64", "WiWiWi", "neon"),
-    r(765, "__builtin_neon_vqshld_u64", "UWiUWiWi", "neon"),
-    r(766, "__builtin_neon_vqshlh_n_s16", "ssIi", "neon"),
-    r(767, "__builtin_neon_vqshlh_n_u16", "UsUsIi", "neon"),
-    r(768, "__builtin_neon_vqshlh_s16", "sss", "neon"),
-    r(769, "__builtin_neon_vqshlh_u16", "UsUss", "neon"),
-    r(770, "__builtin_neon_vqshlq_n_v", "V16ScV16ScIii", "neon"),
-    r(771, "__builtin_neon_vqshlq_v", "V16ScV16ScV16Sci", "neon"),
-    r(772, "__builtin_neon_vqshls_n_s32", "iiIi", "neon"),
-    r(773, "__builtin_neon_vqshls_n_u32", "UiUiIi", "neon"),
-    r(774, "__builtin_neon_vqshls_s32", "iii", "neon"),
-    r(775, "__builtin_neon_vqshls_u32", "UiUii", "neon"),
-    r(776, "__builtin_neon_vqshlu_n_v", "V8ScV8ScIii", "neon"),
-    r(777, "__builtin_neon_vqshlub_n_s8", "ScScIi", "neon"),
-    r(778, "__builtin_neon_vqshlud_n_s64", "WiWiIi", "neon"),
-    r(779, "__builtin_neon_vqshluh_n_s16", "ssIi", "neon"),
-    r(780, "__builtin_neon_vqshluq_n_v", "V16ScV16ScIii", "neon"),
-    r(781, "__builtin_neon_vqshlus_n_s32", "iiIi", "neon"),
-    r(782, "__builtin_neon_vqshrn_n_v", "V8ScV16ScIii", "neon"),
-    r(783, "__builtin_neon_vqshrnd_n_s64", "iWiIi", "neon"),
-    r(784, "__builtin_neon_vqshrnd_n_u64", "UiUWiIi", "neon"),
-    r(785, "__builtin_neon_vqshrnh_n_s16", "ScsIi", "neon"),
-    r(786, "__builtin_neon_vqshrnh_n_u16", "UcUsIi", "neon"),
-    r(787, "__builtin_neon_vqshrns_n_s32", "siIi", "neon"),
-    r(788, "__builtin_neon_vqshrns_n_u32", "UsUiIi", "neon"),
-    r(789, "__builtin_neon_vqshrun_n_v", "V8ScV16ScIii", "neon"),
-    r(790, "__builtin_neon_vqshrund_n_s64", "UiWiIi", "neon"),
-    r(791, "__builtin_neon_vqshrunh_n_s16", "UcsIi", "neon"),
-    r(792, "__builtin_neon_vqshruns_n_s32", "UsiIi", "neon"),
-    r(793, "__builtin_neon_vqsub_v", "V8ScV8ScV8Sci", "neon"),
-    r(794, "__builtin_neon_vqsubb_s8", "ScScSc", "neon"),
-    r(795, "__builtin_neon_vqsubb_u8", "UcUcUc", "neon"),
-    r(796, "__builtin_neon_vqsubd_s64", "WiWiWi", "neon"),
-    r(797, "__builtin_neon_vqsubd_u64", "UWiUWiUWi", "neon"),
-    r(798, "__builtin_neon_vqsubh_s16", "sss", "neon"),
-    r(799, "__builtin_neon_vqsubh_u16", "UsUsUs", "neon"),
-    r(800, "__builtin_neon_vqsubq_v", "V16ScV16ScV16Sci", "neon"),
-    r(801, "__builtin_neon_vqsubs_s32", "iii", "neon"),
-    r(802, "__builtin_neon_vqsubs_u32", "UiUiUi", "neon"),
-    r(803, "__builtin_neon_vqtbl1_v", "V8ScV16ScV8Sci", "neon"),
-    r(804, "__builtin_neon_vqtbl1q_v", "V16ScV16ScV16Sci", "neon"),
-    r(805, "__builtin_neon_vqtbl2_v", "V8ScV16ScV16ScV8Sci", "neon"),
-    r(806, "__builtin_neon_vqtbl2q_v", "V16ScV16ScV16ScV16Sci", "neon"),
-    r(807, "__builtin_neon_vqtbl3_v", "V8ScV16ScV16ScV16ScV8Sci", "neon"),
-    r(808, "__builtin_neon_vqtbl3q_v", "V16ScV16ScV16ScV16ScV16Sci", "neon"),
-    r(809, "__builtin_neon_vqtbl4_v", "V8ScV16ScV16ScV16ScV16ScV8Sci", "neon"),
-    r(810, "__builtin_neon_vqtbl4q_v", "V16ScV16ScV16ScV16ScV16ScV16Sci", "neon"),
-    r(811, "__builtin_neon_vqtbx1_v", "V8ScV8ScV16ScV8Sci", "neon"),
-    r(812, "__builtin_neon_vqtbx1q_v", "V16ScV16ScV16ScV16Sci", "neon"),
-    r(813, "__builtin_neon_vqtbx2_v", "V8ScV8ScV16ScV16ScV8Sci", "neon"),
-    r(814, "__builtin_neon_vqtbx2q_v", "V16ScV16ScV16ScV16ScV16Sci", "neon"),
-    r(815, "__builtin_neon_vqtbx3_v", "V8ScV8ScV16ScV16ScV16ScV8Sci", "neon"),
-    r(816, "__builtin_neon_vqtbx3q_v", "V16ScV16ScV16ScV16ScV16ScV16Sci", "neon"),
-    r(817, "__builtin_neon_vqtbx4_v", "V8ScV8ScV16ScV16ScV16ScV16ScV8Sci", "neon"),
-    r(818, "__builtin_neon_vqtbx4q_v", "V16ScV16ScV16ScV16ScV16ScV16ScV16Sci", "neon"),
-    r(819, "__builtin_neon_vraddhn_v", "V8ScV16ScV16Sci", "neon"),
-    r(820, "__builtin_neon_vrax1q_u64", "V16ScV16ScV16Sci", "sha3,neon"),
-    r(821, "__builtin_neon_vrbit_v", "V8ScV8Sci", "neon"),
-    r(822, "__builtin_neon_vrbitq_v", "V16ScV16Sci", "neon"),
-    r(823, "__builtin_neon_vrecpe_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(824, "__builtin_neon_vrecpe_v", "V8ScV8Sci", "neon"),
-    r(825, "__builtin_neon_vrecped_f64", "dd", "neon"),
-    r(826, "__builtin_neon_vrecpeh_f16", "hh", "fullfp16"),
-    r(827, "__builtin_neon_vrecpeq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(828, "__builtin_neon_vrecpeq_v", "V16ScV16Sci", "neon"),
-    r(829, "__builtin_neon_vrecpes_f32", "ff", "neon"),
-    r(830, "__builtin_neon_vrecps_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(831, "__builtin_neon_vrecps_v", "V8ScV8ScV8Sci", "neon"),
-    r(832, "__builtin_neon_vrecpsd_f64", "ddd", "neon"),
-    r(833, "__builtin_neon_vrecpsh_f16", "hhh", "fullfp16"),
-    r(834, "__builtin_neon_vrecpsq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(835, "__builtin_neon_vrecpsq_v", "V16ScV16ScV16Sci", "neon"),
-    r(836, "__builtin_neon_vrecpss_f32", "fff", "neon"),
-    r(837, "__builtin_neon_vrecpxd_f64", "dd", "neon"),
-    r(838, "__builtin_neon_vrecpxh_f16", "hh", "fullfp16"),
-    r(839, "__builtin_neon_vrecpxs_f32", "ff", "neon"),
-    r(840, "__builtin_neon_vrhadd_v", "V8ScV8ScV8Sci", "neon"),
-    r(841, "__builtin_neon_vrhaddq_v", "V16ScV16ScV16Sci", "neon"),
-    r(842, "__builtin_neon_vrnd32x_f32", "V8ScV8Sci", "v8.5a,neon"),
-    r(843, "__builtin_neon_vrnd32x_f64", "V8ScV8Sci", "v8.5a,neon"),
-    r(844, "__builtin_neon_vrnd32xq_f32", "V16ScV16Sci", "v8.5a,neon"),
-    r(845, "__builtin_neon_vrnd32xq_f64", "V16ScV16Sci", "v8.5a,neon"),
-    r(846, "__builtin_neon_vrnd32z_f32", "V8ScV8Sci", "v8.5a,neon"),
-    r(847, "__builtin_neon_vrnd32z_f64", "V8ScV8Sci", "v8.5a,neon"),
-    r(848, "__builtin_neon_vrnd32zq_f32", "V16ScV16Sci", "v8.5a,neon"),
-    r(849, "__builtin_neon_vrnd32zq_f64", "V16ScV16Sci", "v8.5a,neon"),
-    r(850, "__builtin_neon_vrnd64x_f32", "V8ScV8Sci", "v8.5a,neon"),
-    r(851, "__builtin_neon_vrnd64x_f64", "V8ScV8Sci", "v8.5a,neon"),
-    r(852, "__builtin_neon_vrnd64xq_f32", "V16ScV16Sci", "v8.5a,neon"),
-    r(853, "__builtin_neon_vrnd64xq_f64", "V16ScV16Sci", "v8.5a,neon"),
-    r(854, "__builtin_neon_vrnd64z_f32", "V8ScV8Sci", "v8.5a,neon"),
-    r(855, "__builtin_neon_vrnd64z_f64", "V8ScV8Sci", "v8.5a,neon"),
-    r(856, "__builtin_neon_vrnd64zq_f32", "V16ScV16Sci", "v8.5a,neon"),
-    r(857, "__builtin_neon_vrnd64zq_f64", "V16ScV16Sci", "v8.5a,neon"),
-    r(858, "__builtin_neon_vrnd_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(859, "__builtin_neon_vrnd_v", "V8ScV8Sci", "neon"),
-    r(860, "__builtin_neon_vrnda_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(861, "__builtin_neon_vrnda_v", "V8ScV8Sci", "neon"),
-    r(862, "__builtin_neon_vrndah_f16", "hh", "fullfp16"),
-    r(863, "__builtin_neon_vrndaq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(864, "__builtin_neon_vrndaq_v", "V16ScV16Sci", "neon"),
-    r(865, "__builtin_neon_vrndh_f16", "hh", "fullfp16"),
-    r(866, "__builtin_neon_vrndi_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(867, "__builtin_neon_vrndi_v", "V8ScV8Sci", "neon"),
-    r(868, "__builtin_neon_vrndih_f16", "hh", "fullfp16"),
-    r(869, "__builtin_neon_vrndiq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(870, "__builtin_neon_vrndiq_v", "V16ScV16Sci", "neon"),
-    r(871, "__builtin_neon_vrndm_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(872, "__builtin_neon_vrndm_v", "V8ScV8Sci", "neon"),
-    r(873, "__builtin_neon_vrndmh_f16", "hh", "fullfp16"),
-    r(874, "__builtin_neon_vrndmq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(875, "__builtin_neon_vrndmq_v", "V16ScV16Sci", "neon"),
-    r(876, "__builtin_neon_vrndn_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(877, "__builtin_neon_vrndn_v", "V8ScV8Sci", "neon"),
-    r(878, "__builtin_neon_vrndnh_f16", "hh", "fullfp16"),
-    r(879, "__builtin_neon_vrndnq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(880, "__builtin_neon_vrndnq_v", "V16ScV16Sci", "neon"),
-    r(881, "__builtin_neon_vrndns_f32", "ff", "neon"),
-    r(882, "__builtin_neon_vrndp_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(883, "__builtin_neon_vrndp_v", "V8ScV8Sci", "neon"),
-    r(884, "__builtin_neon_vrndph_f16", "hh", "fullfp16"),
-    r(885, "__builtin_neon_vrndpq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(886, "__builtin_neon_vrndpq_v", "V16ScV16Sci", "neon"),
-    r(887, "__builtin_neon_vrndq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(888, "__builtin_neon_vrndq_v", "V16ScV16Sci", "neon"),
-    r(889, "__builtin_neon_vrndx_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(890, "__builtin_neon_vrndx_v", "V8ScV8Sci", "neon"),
-    r(891, "__builtin_neon_vrndxh_f16", "hh", "fullfp16"),
-    r(892, "__builtin_neon_vrndxq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(893, "__builtin_neon_vrndxq_v", "V16ScV16Sci", "neon"),
-    r(894, "__builtin_neon_vrshl_v", "V8ScV8ScV8Sci", "neon"),
-    r(895, "__builtin_neon_vrshld_s64", "WiWiWi", "neon"),
-    r(896, "__builtin_neon_vrshld_u64", "UWiUWiWi", "neon"),
-    r(897, "__builtin_neon_vrshlq_v", "V16ScV16ScV16Sci", "neon"),
-    r(898, "__builtin_neon_vrshr_n_v", "V8ScV8ScIii", "neon"),
-    r(899, "__builtin_neon_vrshrd_n_s64", "WiWiIi", "neon"),
-    r(900, "__builtin_neon_vrshrd_n_u64", "UWiUWiIi", "neon"),
-    r(901, "__builtin_neon_vrshrn_n_v", "V8ScV16ScIii", "neon"),
-    r(902, "__builtin_neon_vrshrq_n_v", "V16ScV16ScIii", "neon"),
-    r(903, "__builtin_neon_vrsqrte_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(904, "__builtin_neon_vrsqrte_v", "V8ScV8Sci", "neon"),
-    r(905, "__builtin_neon_vrsqrted_f64", "dd", "neon"),
-    r(906, "__builtin_neon_vrsqrteh_f16", "hh", "fullfp16"),
-    r(907, "__builtin_neon_vrsqrteq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(908, "__builtin_neon_vrsqrteq_v", "V16ScV16Sci", "neon"),
-    r(909, "__builtin_neon_vrsqrtes_f32", "ff", "neon"),
-    r(910, "__builtin_neon_vrsqrts_f16", "V8ScV8ScV8Sci", "fullfp16,neon"),
-    r(911, "__builtin_neon_vrsqrts_v", "V8ScV8ScV8Sci", "neon"),
-    r(912, "__builtin_neon_vrsqrtsd_f64", "ddd", "neon"),
-    r(913, "__builtin_neon_vrsqrtsh_f16", "hhh", "fullfp16"),
-    r(914, "__builtin_neon_vrsqrtsq_f16", "V16ScV16ScV16Sci", "fullfp16,neon"),
-    r(915, "__builtin_neon_vrsqrtsq_v", "V16ScV16ScV16Sci", "neon"),
-    r(916, "__builtin_neon_vrsqrtss_f32", "fff", "neon"),
-    r(917, "__builtin_neon_vrsra_n_v", "V8ScV8ScV8ScIii", "neon"),
-    r(918, "__builtin_neon_vrsrad_n_s64", "WiWiWiIi", "neon"),
-    r(919, "__builtin_neon_vrsrad_n_u64", "UWiUWiUWiIi", "neon"),
-    r(920, "__builtin_neon_vrsraq_n_v", "V16ScV16ScV16ScIii", "neon"),
-    r(921, "__builtin_neon_vrsubhn_v", "V8ScV16ScV16Sci", "neon"),
-    r(922, "__builtin_neon_vset_lane_bf16", "V4yyV4yIi", "bf16,neon"),
-    r(923, "__builtin_neon_vset_lane_f32", "V2ffV2fIi", "neon"),
-    r(924, "__builtin_neon_vset_lane_f64", "V1ddV1dIi", "neon"),
-    r(925, "__builtin_neon_vset_lane_i16", "V4ssV4sIi", "neon"),
-    r(926, "__builtin_neon_vset_lane_i32", "V2iiV2iIi", "neon"),
-    r(927, "__builtin_neon_vset_lane_i64", "V1WiWiV1WiIi", "neon"),
-    r(928, "__builtin_neon_vset_lane_i8", "V8ScScV8ScIi", "neon"),
-    r(929, "__builtin_neon_vsetq_lane_bf16", "V8yyV8yIi", "bf16,neon"),
-    r(930, "__builtin_neon_vsetq_lane_f32", "V4ffV4fIi", "neon"),
-    r(931, "__builtin_neon_vsetq_lane_f64", "V2ddV2dIi", "neon"),
-    r(932, "__builtin_neon_vsetq_lane_i16", "V8ssV8sIi", "neon"),
-    r(933, "__builtin_neon_vsetq_lane_i32", "V4iiV4iIi", "neon"),
-    r(934, "__builtin_neon_vsetq_lane_i64", "V2WiWiV2WiIi", "neon"),
-    r(935, "__builtin_neon_vsetq_lane_i8", "V16ScScV16ScIi", "neon"),
-    r(936, "__builtin_neon_vsha1cq_u32", "V4iV4UiUiV4Ui", "sha2,neon"),
-    r(937, "__builtin_neon_vsha1h_u32", "UiUi", "sha2,neon"),
-    r(938, "__builtin_neon_vsha1mq_u32", "V4iV4UiUiV4Ui", "sha2,neon"),
-    r(939, "__builtin_neon_vsha1pq_u32", "V4iV4UiUiV4Ui", "sha2,neon"),
-    r(940, "__builtin_neon_vsha1su0q_u32", "V16ScV16ScV16ScV16Sci", "sha2,neon"),
-    r(941, "__builtin_neon_vsha1su1q_u32", "V16ScV16ScV16Sci", "sha2,neon"),
-    r(942, "__builtin_neon_vsha256h2q_u32", "V16ScV16ScV16ScV16Sci", "sha2,neon"),
-    r(943, "__builtin_neon_vsha256hq_u32", "V16ScV16ScV16ScV16Sci", "sha2,neon"),
-    r(944, "__builtin_neon_vsha256su0q_u32", "V16ScV16ScV16Sci", "sha2,neon"),
-    r(945, "__builtin_neon_vsha256su1q_u32", "V16ScV16ScV16ScV16Sci", "sha2,neon"),
-    r(946, "__builtin_neon_vsha512h2q_u64", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(947, "__builtin_neon_vsha512hq_u64", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(948, "__builtin_neon_vsha512su0q_u64", "V16ScV16ScV16Sci", "sha3,neon"),
-    r(949, "__builtin_neon_vsha512su1q_u64", "V16ScV16ScV16ScV16Sci", "sha3,neon"),
-    r(950, "__builtin_neon_vshl_n_v", "V8ScV8ScIii", "neon"),
-    r(951, "__builtin_neon_vshl_v", "V8ScV8ScV8Sci", "neon"),
-    r(952, "__builtin_neon_vshld_n_s64", "WiWiIi", "neon"),
-    r(953, "__builtin_neon_vshld_n_u64", "UWiUWiIi", "neon"),
-    r(954, "__builtin_neon_vshld_s64", "WiWiWi", "neon"),
-    r(955, "__builtin_neon_vshld_u64", "UWiUWiWi", "neon"),
-    r(956, "__builtin_neon_vshll_n_v", "V16ScV8ScIii", "neon"),
-    r(957, "__builtin_neon_vshlq_n_v", "V16ScV16ScIii", "neon"),
-    r(958, "__builtin_neon_vshlq_v", "V16ScV16ScV16Sci", "neon"),
-    r(959, "__builtin_neon_vshr_n_v", "V8ScV8ScIii", "neon"),
-    r(960, "__builtin_neon_vshrd_n_s64", "WiWiIi", "neon"),
-    r(961, "__builtin_neon_vshrd_n_u64", "UWiUWiIi", "neon"),
-    r(962, "__builtin_neon_vshrn_n_v", "V8ScV16ScIii", "neon"),
-    r(963, "__builtin_neon_vshrq_n_v", "V16ScV16ScIii", "neon"),
-    r(964, "__builtin_neon_vsli_n_v", "V8ScV8ScV8ScIii", "neon"),
-    r(965, "__builtin_neon_vslid_n_s64", "WiWiWiIi", "neon"),
-    r(966, "__builtin_neon_vslid_n_u64", "UWiUWiUWiIi", "neon"),
-    r(967, "__builtin_neon_vsliq_n_v", "V16ScV16ScV16ScIii", "neon"),
-    r(968, "__builtin_neon_vsm3partw1q_u32", "V16ScV16ScV16ScV16Sci", "sm4,neon"),
-    r(969, "__builtin_neon_vsm3partw2q_u32", "V16ScV16ScV16ScV16Sci", "sm4,neon"),
-    r(970, "__builtin_neon_vsm3ss1q_u32", "V16ScV16ScV16ScV16Sci", "sm4,neon"),
-    r(971, "__builtin_neon_vsm3tt1aq_u32", "V16ScV16ScV16ScV16ScIii", "sm4,neon"),
-    r(972, "__builtin_neon_vsm3tt1bq_u32", "V16ScV16ScV16ScV16ScIii", "sm4,neon"),
-    r(973, "__builtin_neon_vsm3tt2aq_u32", "V16ScV16ScV16ScV16ScIii", "sm4,neon"),
-    r(974, "__builtin_neon_vsm3tt2bq_u32", "V16ScV16ScV16ScV16ScIii", "sm4,neon"),
-    r(975, "__builtin_neon_vsm4ekeyq_u32", "V16ScV16ScV16Sci", "sm4,neon"),
-    r(976, "__builtin_neon_vsm4eq_u32", "V16ScV16ScV16Sci", "sm4,neon"),
-    r(977, "__builtin_neon_vsqadd_v", "V8ScV8ScV8Sci", "neon"),
-    r(978, "__builtin_neon_vsqaddb_u8", "UcUcSc", "neon"),
-    r(979, "__builtin_neon_vsqaddd_u64", "UWiUWiWi", "neon"),
-    r(980, "__builtin_neon_vsqaddh_u16", "UsUss", "neon"),
-    r(981, "__builtin_neon_vsqaddq_v", "V16ScV16ScV16Sci", "neon"),
-    r(982, "__builtin_neon_vsqadds_u32", "UiUii", "neon"),
-    r(983, "__builtin_neon_vsqrt_f16", "V8ScV8Sci", "fullfp16,neon"),
-    r(984, "__builtin_neon_vsqrt_v", "V8ScV8Sci", "neon"),
-    r(985, "__builtin_neon_vsqrth_f16", "hh", "fullfp16"),
-    r(986, "__builtin_neon_vsqrtq_f16", "V16ScV16Sci", "fullfp16,neon"),
-    r(987, "__builtin_neon_vsqrtq_v", "V16ScV16Sci", "neon"),
-    r(988, "__builtin_neon_vsra_n_v", "V8ScV8ScV8ScIii", "neon"),
-    r(989, "__builtin_neon_vsrad_n_s64", "WiWiWiIi", "neon"),
-    r(990, "__builtin_neon_vsrad_n_u64", "UWiUWiUWiIi", "neon"),
-    r(991, "__builtin_neon_vsraq_n_v", "V16ScV16ScV16ScIii", "neon"),
-    r(992, "__builtin_neon_vsri_n_v", "V8ScV8ScV8ScIii", "neon"),
-    r(993, "__builtin_neon_vsrid_n_s64", "WiWiWiIi", "neon"),
-    r(994, "__builtin_neon_vsrid_n_u64", "UWiUWiUWiIi", "neon"),
-    r(995, "__builtin_neon_vsriq_n_v", "V16ScV16ScV16ScIii", "neon"),
-    r(996, "__builtin_neon_vst1_bf16", "vv*V8Sci", "bf16,neon"),
-    r(997, "__builtin_neon_vst1_bf16_x2", "vv*V8ScV8Sci", "bf16,neon"),
-    r(998, "__builtin_neon_vst1_bf16_x3", "vv*V8ScV8ScV8Sci", "bf16,neon"),
-    r(999, "__builtin_neon_vst1_bf16_x4", "vv*V8ScV8ScV8ScV8Sci", "bf16,neon"),
-    r(1000, "__builtin_neon_vst1_lane_bf16", "vv*V8ScIii", "bf16,neon"),
-    r(1001, "__builtin_neon_vst1_lane_v", "vv*V8ScIii", "neon"),
-    r(1002, "__builtin_neon_vst1_v", "vv*V8Sci", "neon"),
-    r(1003, "__builtin_neon_vst1_x2_v", "vv*V8ScV8Sci", "neon"),
-    r(1004, "__builtin_neon_vst1_x3_v", "vv*V8ScV8ScV8Sci", "neon"),
-    r(1005, "__builtin_neon_vst1_x4_v", "vv*V8ScV8ScV8ScV8Sci", "neon"),
-    r(1006, "__builtin_neon_vst1q_bf16", "vv*V16Sci", "bf16,neon"),
-    r(1007, "__builtin_neon_vst1q_bf16_x2", "vv*V16ScV16Sci", "bf16,neon"),
-    r(1008, "__builtin_neon_vst1q_bf16_x3", "vv*V16ScV16ScV16Sci", "bf16,neon"),
-    r(1009, "__builtin_neon_vst1q_bf16_x4", "vv*V16ScV16ScV16ScV16Sci", "bf16,neon"),
-    r(1010, "__builtin_neon_vst1q_lane_bf16", "vv*V16ScIii", "bf16,neon"),
-    r(1011, "__builtin_neon_vst1q_lane_v", "vv*V16ScIii", "neon"),
-    r(1012, "__builtin_neon_vst1q_v", "vv*V16Sci", "neon"),
-    r(1013, "__builtin_neon_vst1q_x2_v", "vv*V16ScV16Sci", "neon"),
-    r(1014, "__builtin_neon_vst1q_x3_v", "vv*V16ScV16ScV16Sci", "neon"),
-    r(1015, "__builtin_neon_vst1q_x4_v", "vv*V16ScV16ScV16ScV16Sci", "neon"),
-    r(1016, "__builtin_neon_vst2_bf16", "vv*V8ScV8Sci", "bf16,neon"),
-    r(1017, "__builtin_neon_vst2_lane_bf16", "vv*V8ScV8ScIii", "bf16,neon"),
-    r(1018, "__builtin_neon_vst2_lane_v", "vv*V8ScV8ScIii", "neon"),
-    r(1019, "__builtin_neon_vst2_v", "vv*V8ScV8Sci", "neon"),
-    r(1020, "__builtin_neon_vst2q_bf16", "vv*V16ScV16Sci", "bf16,neon"),
-    r(1021, "__builtin_neon_vst2q_lane_bf16", "vv*V16ScV16ScIii", "bf16,neon"),
-    r(1022, "__builtin_neon_vst2q_lane_v", "vv*V16ScV16ScIii", "neon"),
-    r(1023, "__builtin_neon_vst2q_v", "vv*V16ScV16Sci", "neon"),
-    r(1024, "__builtin_neon_vst3_bf16", "vv*V8ScV8ScV8Sci", "bf16,neon"),
-    r(1025, "__builtin_neon_vst3_lane_bf16", "vv*V8ScV8ScV8ScIii", "bf16,neon"),
-    r(1026, "__builtin_neon_vst3_lane_v", "vv*V8ScV8ScV8ScIii", "neon"),
-    r(1027, "__builtin_neon_vst3_v", "vv*V8ScV8ScV8Sci", "neon"),
-    r(1028, "__builtin_neon_vst3q_bf16", "vv*V16ScV16ScV16Sci", "bf16,neon"),
-    r(1029, "__builtin_neon_vst3q_lane_bf16", "vv*V16ScV16ScV16ScIii", "bf16,neon"),
-    r(1030, "__builtin_neon_vst3q_lane_v", "vv*V16ScV16ScV16ScIii", "neon"),
-    r(1031, "__builtin_neon_vst3q_v", "vv*V16ScV16ScV16Sci", "neon"),
-    r(1032, "__builtin_neon_vst4_bf16", "vv*V8ScV8ScV8ScV8Sci", "bf16,neon"),
-    r(1033, "__builtin_neon_vst4_lane_bf16", "vv*V8ScV8ScV8ScV8ScIii", "bf16,neon"),
-    r(1034, "__builtin_neon_vst4_lane_v", "vv*V8ScV8ScV8ScV8ScIii", "neon"),
-    r(1035, "__builtin_neon_vst4_v", "vv*V8ScV8ScV8ScV8Sci", "neon"),
-    r(1036, "__builtin_neon_vst4q_bf16", "vv*V16ScV16ScV16ScV16Sci", "bf16,neon"),
-    r(1037, "__builtin_neon_vst4q_lane_bf16", "vv*V16ScV16ScV16ScV16ScIii", "bf16,neon"),
-    r(1038, "__builtin_neon_vst4q_lane_v", "vv*V16ScV16ScV16ScV16ScIii", "neon"),
-    r(1039, "__builtin_neon_vst4q_v", "vv*V16ScV16ScV16ScV16Sci", "neon"),
-    r(1040, "__builtin_neon_vstl1_lane_f64", "vv*V8ScIii", "rcpc3,neon"),
-    r(1041, "__builtin_neon_vstl1_lane_p64", "vv*V8ScIii", "rcpc3,neon"),
-    r(1042, "__builtin_neon_vstl1_lane_s64", "vv*V8ScIii", "rcpc3,neon"),
-    r(1043, "__builtin_neon_vstl1_lane_u64", "vv*V8ScIii", "rcpc3,neon"),
-    r(1044, "__builtin_neon_vstl1q_lane_f64", "vv*V16ScIii", "rcpc3,neon"),
-    r(1045, "__builtin_neon_vstl1q_lane_p64", "vv*V16ScIii", "rcpc3,neon"),
-    r(1046, "__builtin_neon_vstl1q_lane_s64", "vv*V16ScIii", "rcpc3,neon"),
-    r(1047, "__builtin_neon_vstl1q_lane_u64", "vv*V16ScIii", "rcpc3,neon"),
-    r(1048, "__builtin_neon_vstrq_p128", "vv*ULLLi", "neon"),
-    r(1049, "__builtin_neon_vsubd_s64", "WiWiWi", "neon"),
-    r(1050, "__builtin_neon_vsubd_u64", "UWiUWiUWi", "neon"),
-    r(1051, "__builtin_neon_vsubh_f16", "hhh", "fullfp16"),
-    r(1052, "__builtin_neon_vsubhn_v", "V8ScV16ScV16Sci", "neon"),
-    r(1053, "__builtin_neon_vtbl1_v", "V8ScV8ScV8Sci", "neon"),
-    r(1054, "__builtin_neon_vtbl2_v", "V8ScV8ScV8ScV8Sci", "neon"),
-    r(1055, "__builtin_neon_vtbl3_v", "V8ScV8ScV8ScV8ScV8Sci", "neon"),
-    r(1056, "__builtin_neon_vtbl4_v", "V8ScV8ScV8ScV8ScV8ScV8Sci", "neon"),
-    r(1057, "__builtin_neon_vtbx1_v", "V8ScV8ScV8ScV8Sci", "neon"),
-    r(1058, "__builtin_neon_vtbx2_v", "V8ScV8ScV8ScV8ScV8Sci", "neon"),
-    r(1059, "__builtin_neon_vtbx3_v", "V8ScV8ScV8ScV8ScV8ScV8Sci", "neon"),
-    r(1060, "__builtin_neon_vtbx4_v", "V8ScV8ScV8ScV8ScV8ScV8ScV8Sci", "neon"),
-    r(1061, "__builtin_neon_vtrn_v", "vv*V8ScV8Sci", "neon"),
-    r(1062, "__builtin_neon_vtrnq_v", "vv*V16ScV16Sci", "neon"),
-    r(1063, "__builtin_neon_vtst_v", "V8ScV8ScV8Sci", "neon"),
-    r(1064, "__builtin_neon_vtstd_s64", "UWiWiWi", "neon"),
-    r(1065, "__builtin_neon_vtstd_u64", "UWiUWiUWi", "neon"),
-    r(1066, "__builtin_neon_vtstq_v", "V16ScV16ScV16Sci", "neon"),
-    r(1067, "__builtin_neon_vuqadd_v", "V8ScV8ScV8Sci", "neon"),
-    r(1068, "__builtin_neon_vuqaddb_s8", "ScScUc", "neon"),
-    r(1069, "__builtin_neon_vuqaddd_s64", "WiWiUWi", "neon"),
-    r(1070, "__builtin_neon_vuqaddh_s16", "ssUs", "neon"),
-    r(1071, "__builtin_neon_vuqaddq_v", "V16ScV16ScV16Sci", "neon"),
-    r(1072, "__builtin_neon_vuqadds_s32", "iiUi", "neon"),
-    r(1073, "__builtin_neon_vusdot_s32", "V8ScV8ScV8ScV8Sci", "i8mm,neon"),
-    r(1074, "__builtin_neon_vusdotq_s32", "V16ScV16ScV16ScV16Sci", "i8mm,neon"),
-    r(1075, "__builtin_neon_vusmmlaq_s32", "V16ScV16ScV16ScV16Sci", "i8mm,neon"),
-    r(1076, "__builtin_neon_vuzp_v", "vv*V8ScV8Sci", "neon"),
-    r(1077, "__builtin_neon_vuzpq_v", "vv*V16ScV16Sci", "neon"),
-    r(1078, "__builtin_neon_vxarq_u64", "V16ScV16ScV16ScIii", "sha3,neon"),
-    r(1079, "__builtin_neon_vzip_v", "vv*V8ScV8Sci", "neon"),
-    r(1080, "__builtin_neon_vzipq_v", "vv*V16ScV16Sci", "neon"),
+pub(crate) static STRS: &str = concat!(
+    "__builtin_neon___a32_vcvt_bf16_f32",
+    "__builtin_neon___a64_vcvtq_low_bf16_f32",
+    "__builtin_neon_splat_lane_bf16",
+    "__builtin_neon_splat_lane_v",
+    "__builtin_neon_splat_laneq_bf16",
+    "__builtin_neon_splat_laneq_v",
+    "__builtin_neon_splatq_lane_bf16",
+    "__builtin_neon_splatq_lane_v",
+    "__builtin_neon_splatq_laneq_bf16",
+    "__builtin_neon_splatq_laneq_v",
+    "__builtin_neon_vabd_f16",
+    "__builtin_neon_vabd_v",
+    "__builtin_neon_vabdd_f64",
+    "__builtin_neon_vabdh_f16",
+    "__builtin_neon_vabdq_f16",
+    "__builtin_neon_vabdq_v",
+    "__builtin_neon_vabds_f32",
+    "__builtin_neon_vabs_f16",
+    "__builtin_neon_vabs_v",
+    "__builtin_neon_vabsd_s64",
+    "__builtin_neon_vabsh_f16",
+    "__builtin_neon_vabsq_f16",
+    "__builtin_neon_vabsq_v",
+    "__builtin_neon_vadd_v",
+    "__builtin_neon_vaddd_s64",
+    "__builtin_neon_vaddd_u64",
+    "__builtin_neon_vaddh_f16",
+    "__builtin_neon_vaddhn_v",
+    "__builtin_neon_vaddlv_s16",
+    "__builtin_neon_vaddlv_s32",
+    "__builtin_neon_vaddlv_s8",
+    "__builtin_neon_vaddlv_u16",
+    "__builtin_neon_vaddlv_u32",
+    "__builtin_neon_vaddlv_u8",
+    "__builtin_neon_vaddlvq_s16",
+    "__builtin_neon_vaddlvq_s32",
+    "__builtin_neon_vaddlvq_s8",
+    "__builtin_neon_vaddlvq_u16",
+    "__builtin_neon_vaddlvq_u32",
+    "__builtin_neon_vaddlvq_u8",
+    "__builtin_neon_vaddq_p128",
+    "__builtin_neon_vaddq_v",
+    "__builtin_neon_vaddv_f32",
+    "__builtin_neon_vaddv_s16",
+    "__builtin_neon_vaddv_s32",
+    "__builtin_neon_vaddv_s8",
+    "__builtin_neon_vaddv_u16",
+    "__builtin_neon_vaddv_u32",
+    "__builtin_neon_vaddv_u8",
+    "__builtin_neon_vaddvq_f32",
+    "__builtin_neon_vaddvq_f64",
+    "__builtin_neon_vaddvq_s16",
+    "__builtin_neon_vaddvq_s32",
+    "__builtin_neon_vaddvq_s64",
+    "__builtin_neon_vaddvq_s8",
+    "__builtin_neon_vaddvq_u16",
+    "__builtin_neon_vaddvq_u32",
+    "__builtin_neon_vaddvq_u64",
+    "__builtin_neon_vaddvq_u8",
+    "__builtin_neon_vaesdq_u8",
+    "__builtin_neon_vaeseq_u8",
+    "__builtin_neon_vaesimcq_u8",
+    "__builtin_neon_vaesmcq_u8",
+    "__builtin_neon_vbcaxq_s16",
+    "__builtin_neon_vbcaxq_s32",
+    "__builtin_neon_vbcaxq_s64",
+    "__builtin_neon_vbcaxq_s8",
+    "__builtin_neon_vbcaxq_u16",
+    "__builtin_neon_vbcaxq_u32",
+    "__builtin_neon_vbcaxq_u64",
+    "__builtin_neon_vbcaxq_u8",
+    "__builtin_neon_vbfdot_f32",
+    "__builtin_neon_vbfdotq_f32",
+    "__builtin_neon_vbfmlalbq_f32",
+    "__builtin_neon_vbfmlaltq_f32",
+    "__builtin_neon_vbfmmlaq_f32",
+    "__builtin_neon_vbsl_v",
+    "__builtin_neon_vbslq_v",
+    "__builtin_neon_vcadd_rot270_f16",
+    "__builtin_neon_vcadd_rot270_f32",
+    "__builtin_neon_vcadd_rot90_f16",
+    "__builtin_neon_vcadd_rot90_f32",
+    "__builtin_neon_vcaddq_rot270_f16",
+    "__builtin_neon_vcaddq_rot270_f32",
+    "__builtin_neon_vcaddq_rot270_f64",
+    "__builtin_neon_vcaddq_rot90_f16",
+    "__builtin_neon_vcaddq_rot90_f32",
+    "__builtin_neon_vcaddq_rot90_f64",
+    "__builtin_neon_vcage_f16",
+    "__builtin_neon_vcage_v",
+    "__builtin_neon_vcaged_f64",
+    "__builtin_neon_vcageh_f16",
+    "__builtin_neon_vcageq_f16",
+    "__builtin_neon_vcageq_v",
+    "__builtin_neon_vcages_f32",
+    "__builtin_neon_vcagt_f16",
+    "__builtin_neon_vcagt_v",
+    "__builtin_neon_vcagtd_f64",
+    "__builtin_neon_vcagth_f16",
+    "__builtin_neon_vcagtq_f16",
+    "__builtin_neon_vcagtq_v",
+    "__builtin_neon_vcagts_f32",
+    "__builtin_neon_vcale_f16",
+    "__builtin_neon_vcale_v",
+    "__builtin_neon_vcaled_f64",
+    "__builtin_neon_vcaleh_f16",
+    "__builtin_neon_vcaleq_f16",
+    "__builtin_neon_vcaleq_v",
+    "__builtin_neon_vcales_f32",
+    "__builtin_neon_vcalt_f16",
+    "__builtin_neon_vcalt_v",
+    "__builtin_neon_vcaltd_f64",
+    "__builtin_neon_vcalth_f16",
+    "__builtin_neon_vcaltq_f16",
+    "__builtin_neon_vcaltq_v",
+    "__builtin_neon_vcalts_f32",
+    "__builtin_neon_vceqd_f64",
+    "__builtin_neon_vceqd_s64",
+    "__builtin_neon_vceqd_u64",
+    "__builtin_neon_vceqh_f16",
+    "__builtin_neon_vceqs_f32",
+    "__builtin_neon_vceqz_f16",
+    "__builtin_neon_vceqz_v",
+    "__builtin_neon_vceqzd_f64",
+    "__builtin_neon_vceqzd_s64",
+    "__builtin_neon_vceqzd_u64",
+    "__builtin_neon_vceqzh_f16",
+    "__builtin_neon_vceqzq_f16",
+    "__builtin_neon_vceqzq_v",
+    "__builtin_neon_vceqzs_f32",
+    "__builtin_neon_vcged_f64",
+    "__builtin_neon_vcged_s64",
+    "__builtin_neon_vcged_u64",
+    "__builtin_neon_vcgeh_f16",
+    "__builtin_neon_vcges_f32",
+    "__builtin_neon_vcgez_f16",
+    "__builtin_neon_vcgez_v",
+    "__builtin_neon_vcgezd_f64",
+    "__builtin_neon_vcgezd_s64",
+    "__builtin_neon_vcgezh_f16",
+    "__builtin_neon_vcgezq_f16",
+    "__builtin_neon_vcgezq_v",
+    "__builtin_neon_vcgezs_f32",
+    "__builtin_neon_vcgtd_f64",
+    "__builtin_neon_vcgtd_s64",
+    "__builtin_neon_vcgtd_u64",
+    "__builtin_neon_vcgth_f16",
+    "__builtin_neon_vcgts_f32",
+    "__builtin_neon_vcgtz_f16",
+    "__builtin_neon_vcgtz_v",
+    "__builtin_neon_vcgtzd_f64",
+    "__builtin_neon_vcgtzd_s64",
+    "__builtin_neon_vcgtzh_f16",
+    "__builtin_neon_vcgtzq_f16",
+    "__builtin_neon_vcgtzq_v",
+    "__builtin_neon_vcgtzs_f32",
+    "__builtin_neon_vcled_f64",
+    "__builtin_neon_vcled_s64",
+    "__builtin_neon_vcled_u64",
+    "__builtin_neon_vcleh_f16",
+    "__builtin_neon_vcles_f32",
+    "__builtin_neon_vclez_f16",
+    "__builtin_neon_vclez_v",
+    "__builtin_neon_vclezd_f64",
+    "__builtin_neon_vclezd_s64",
+    "__builtin_neon_vclezh_f16",
+    "__builtin_neon_vclezq_f16",
+    "__builtin_neon_vclezq_v",
+    "__builtin_neon_vclezs_f32",
+    "__builtin_neon_vcls_v",
+    "__builtin_neon_vclsq_v",
+    "__builtin_neon_vcltd_f64",
+    "__builtin_neon_vcltd_s64",
+    "__builtin_neon_vcltd_u64",
+    "__builtin_neon_vclth_f16",
+    "__builtin_neon_vclts_f32",
+    "__builtin_neon_vcltz_f16",
+    "__builtin_neon_vcltz_v",
+    "__builtin_neon_vcltzd_f64",
+    "__builtin_neon_vcltzd_s64",
+    "__builtin_neon_vcltzh_f16",
+    "__builtin_neon_vcltzq_f16",
+    "__builtin_neon_vcltzq_v",
+    "__builtin_neon_vcltzs_f32",
+    "__builtin_neon_vclz_v",
+    "__builtin_neon_vclzq_v",
+    "__builtin_neon_vcmla_f16",
+    "__builtin_neon_vcmla_f32",
+    "__builtin_neon_vcmla_f64",
+    "__builtin_neon_vcmla_rot180_f16",
+    "__builtin_neon_vcmla_rot180_f32",
+    "__builtin_neon_vcmla_rot180_f64",
+    "__builtin_neon_vcmla_rot270_f16",
+    "__builtin_neon_vcmla_rot270_f32",
+    "__builtin_neon_vcmla_rot270_f64",
+    "__builtin_neon_vcmla_rot90_f16",
+    "__builtin_neon_vcmla_rot90_f32",
+    "__builtin_neon_vcmla_rot90_f64",
+    "__builtin_neon_vcmlaq_f16",
+    "__builtin_neon_vcmlaq_f32",
+    "__builtin_neon_vcmlaq_f64",
+    "__builtin_neon_vcmlaq_rot180_f16",
+    "__builtin_neon_vcmlaq_rot180_f32",
+    "__builtin_neon_vcmlaq_rot180_f64",
+    "__builtin_neon_vcmlaq_rot270_f16",
+    "__builtin_neon_vcmlaq_rot270_f32",
+    "__builtin_neon_vcmlaq_rot270_f64",
+    "__builtin_neon_vcmlaq_rot90_f16",
+    "__builtin_neon_vcmlaq_rot90_f32",
+    "__builtin_neon_vcmlaq_rot90_f64",
+    "__builtin_neon_vcnt_v",
+    "__builtin_neon_vcntq_v",
+    "__builtin_neon_vcvt_f16_f32",
+    "__builtin_neon_vcvt_f16_s16",
+    "__builtin_neon_vcvt_f16_u16",
+    "__builtin_neon_vcvt_f32_f16",
+    "__builtin_neon_vcvt_f32_f64",
+    "__builtin_neon_vcvt_f32_v",
+    "__builtin_neon_vcvt_f64_f32",
+    "__builtin_neon_vcvt_f64_v",
+    "__builtin_neon_vcvt_n_f16_s16",
+    "__builtin_neon_vcvt_n_f16_u16",
+    "__builtin_neon_vcvt_n_f32_v",
+    "__builtin_neon_vcvt_n_f64_v",
+    "__builtin_neon_vcvt_n_s16_f16",
+    "__builtin_neon_vcvt_n_s32_v",
+    "__builtin_neon_vcvt_n_s64_v",
+    "__builtin_neon_vcvt_n_u16_f16",
+    "__builtin_neon_vcvt_n_u32_v",
+    "__builtin_neon_vcvt_n_u64_v",
+    "__builtin_neon_vcvt_s16_f16",
+    "__builtin_neon_vcvt_s32_v",
+    "__builtin_neon_vcvt_s64_v",
+    "__builtin_neon_vcvt_u16_f16",
+    "__builtin_neon_vcvt_u32_v",
+    "__builtin_neon_vcvt_u64_v",
+    "__builtin_neon_vcvta_s16_f16",
+    "__builtin_neon_vcvta_s32_v",
+    "__builtin_neon_vcvta_s64_v",
+    "__builtin_neon_vcvta_u16_f16",
+    "__builtin_neon_vcvta_u32_v",
+    "__builtin_neon_vcvta_u64_v",
+    "__builtin_neon_vcvtad_s64_f64",
+    "__builtin_neon_vcvtad_u64_f64",
+    "__builtin_neon_vcvtah_s16_f16",
+    "__builtin_neon_vcvtah_s32_f16",
+    "__builtin_neon_vcvtah_s64_f16",
+    "__builtin_neon_vcvtah_u16_f16",
+    "__builtin_neon_vcvtah_u32_f16",
+    "__builtin_neon_vcvtah_u64_f16",
+    "__builtin_neon_vcvtaq_s16_f16",
+    "__builtin_neon_vcvtaq_s32_v",
+    "__builtin_neon_vcvtaq_s64_v",
+    "__builtin_neon_vcvtaq_u16_f16",
+    "__builtin_neon_vcvtaq_u32_v",
+    "__builtin_neon_vcvtaq_u64_v",
+    "__builtin_neon_vcvtas_s32_f32",
+    "__builtin_neon_vcvtas_u32_f32",
+    "__builtin_neon_vcvtd_f64_s64",
+    "__builtin_neon_vcvtd_f64_u64",
+    "__builtin_neon_vcvtd_n_f64_s64",
+    "__builtin_neon_vcvtd_n_f64_u64",
+    "__builtin_neon_vcvtd_n_s64_f64",
+    "__builtin_neon_vcvtd_n_u64_f64",
+    "__builtin_neon_vcvtd_s64_f64",
+    "__builtin_neon_vcvtd_u64_f64",
+    "__builtin_neon_vcvth_bf16_f32",
+    "__builtin_neon_vcvth_f16_s16",
+    "__builtin_neon_vcvth_f16_s32",
+    "__builtin_neon_vcvth_f16_s64",
+    "__builtin_neon_vcvth_f16_u16",
+    "__builtin_neon_vcvth_f16_u32",
+    "__builtin_neon_vcvth_f16_u64",
+    "__builtin_neon_vcvth_n_f16_s16",
+    "__builtin_neon_vcvth_n_f16_s32",
+    "__builtin_neon_vcvth_n_f16_s64",
+    "__builtin_neon_vcvth_n_f16_u16",
+    "__builtin_neon_vcvth_n_f16_u32",
+    "__builtin_neon_vcvth_n_f16_u64",
+    "__builtin_neon_vcvth_n_s16_f16",
+    "__builtin_neon_vcvth_n_s32_f16",
+    "__builtin_neon_vcvth_n_s64_f16",
+    "__builtin_neon_vcvth_n_u16_f16",
+    "__builtin_neon_vcvth_n_u32_f16",
+    "__builtin_neon_vcvth_n_u64_f16",
+    "__builtin_neon_vcvth_s16_f16",
+    "__builtin_neon_vcvth_s32_f16",
+    "__builtin_neon_vcvth_s64_f16",
+    "__builtin_neon_vcvth_u16_f16",
+    "__builtin_neon_vcvth_u32_f16",
+    "__builtin_neon_vcvth_u64_f16",
+    "__builtin_neon_vcvtm_s16_f16",
+    "__builtin_neon_vcvtm_s32_v",
+    "__builtin_neon_vcvtm_s64_v",
+    "__builtin_neon_vcvtm_u16_f16",
+    "__builtin_neon_vcvtm_u32_v",
+    "__builtin_neon_vcvtm_u64_v",
+    "__builtin_neon_vcvtmd_s64_f64",
+    "__builtin_neon_vcvtmd_u64_f64",
+    "__builtin_neon_vcvtmh_s16_f16",
+    "__builtin_neon_vcvtmh_s32_f16",
+    "__builtin_neon_vcvtmh_s64_f16",
+    "__builtin_neon_vcvtmh_u16_f16",
+    "__builtin_neon_vcvtmh_u32_f16",
+    "__builtin_neon_vcvtmh_u64_f16",
+    "__builtin_neon_vcvtmq_s16_f16",
+    "__builtin_neon_vcvtmq_s32_v",
+    "__builtin_neon_vcvtmq_s64_v",
+    "__builtin_neon_vcvtmq_u16_f16",
+    "__builtin_neon_vcvtmq_u32_v",
+    "__builtin_neon_vcvtmq_u64_v",
+    "__builtin_neon_vcvtms_s32_f32",
+    "__builtin_neon_vcvtms_u32_f32",
+    "__builtin_neon_vcvtn_s16_f16",
+    "__builtin_neon_vcvtn_s32_v",
+    "__builtin_neon_vcvtn_s64_v",
+    "__builtin_neon_vcvtn_u16_f16",
+    "__builtin_neon_vcvtn_u32_v",
+    "__builtin_neon_vcvtn_u64_v",
+    "__builtin_neon_vcvtnd_s64_f64",
+    "__builtin_neon_vcvtnd_u64_f64",
+    "__builtin_neon_vcvtnh_s16_f16",
+    "__builtin_neon_vcvtnh_s32_f16",
+    "__builtin_neon_vcvtnh_s64_f16",
+    "__builtin_neon_vcvtnh_u16_f16",
+    "__builtin_neon_vcvtnh_u32_f16",
+    "__builtin_neon_vcvtnh_u64_f16",
+    "__builtin_neon_vcvtnq_s16_f16",
+    "__builtin_neon_vcvtnq_s32_v",
+    "__builtin_neon_vcvtnq_s64_v",
+    "__builtin_neon_vcvtnq_u16_f16",
+    "__builtin_neon_vcvtnq_u32_v",
+    "__builtin_neon_vcvtnq_u64_v",
+    "__builtin_neon_vcvtns_s32_f32",
+    "__builtin_neon_vcvtns_u32_f32",
+    "__builtin_neon_vcvtp_s16_f16",
+    "__builtin_neon_vcvtp_s32_v",
+    "__builtin_neon_vcvtp_s64_v",
+    "__builtin_neon_vcvtp_u16_f16",
+    "__builtin_neon_vcvtp_u32_v",
+    "__builtin_neon_vcvtp_u64_v",
+    "__builtin_neon_vcvtpd_s64_f64",
+    "__builtin_neon_vcvtpd_u64_f64",
+    "__builtin_neon_vcvtph_s16_f16",
+    "__builtin_neon_vcvtph_s32_f16",
+    "__builtin_neon_vcvtph_s64_f16",
+    "__builtin_neon_vcvtph_u16_f16",
+    "__builtin_neon_vcvtph_u32_f16",
+    "__builtin_neon_vcvtph_u64_f16",
+    "__builtin_neon_vcvtpq_s16_f16",
+    "__builtin_neon_vcvtpq_s32_v",
+    "__builtin_neon_vcvtpq_s64_v",
+    "__builtin_neon_vcvtpq_u16_f16",
+    "__builtin_neon_vcvtpq_u32_v",
+    "__builtin_neon_vcvtpq_u64_v",
+    "__builtin_neon_vcvtps_s32_f32",
+    "__builtin_neon_vcvtps_u32_f32",
+    "__builtin_neon_vcvtq_f16_s16",
+    "__builtin_neon_vcvtq_f16_u16",
+    "__builtin_neon_vcvtq_f32_v",
+    "__builtin_neon_vcvtq_f64_v",
+    "__builtin_neon_vcvtq_high_bf16_f32",
+    "__builtin_neon_vcvtq_n_f16_s16",
+    "__builtin_neon_vcvtq_n_f16_u16",
+    "__builtin_neon_vcvtq_n_f32_v",
+    "__builtin_neon_vcvtq_n_f64_v",
+    "__builtin_neon_vcvtq_n_s16_f16",
+    "__builtin_neon_vcvtq_n_s32_v",
+    "__builtin_neon_vcvtq_n_s64_v",
+    "__builtin_neon_vcvtq_n_u16_f16",
+    "__builtin_neon_vcvtq_n_u32_v",
+    "__builtin_neon_vcvtq_n_u64_v",
+    "__builtin_neon_vcvtq_s16_f16",
+    "__builtin_neon_vcvtq_s32_v",
+    "__builtin_neon_vcvtq_s64_v",
+    "__builtin_neon_vcvtq_u16_f16",
+    "__builtin_neon_vcvtq_u32_v",
+    "__builtin_neon_vcvtq_u64_v",
+    "__builtin_neon_vcvts_f32_s32",
+    "__builtin_neon_vcvts_f32_u32",
+    "__builtin_neon_vcvts_n_f32_s32",
+    "__builtin_neon_vcvts_n_f32_u32",
+    "__builtin_neon_vcvts_n_s32_f32",
+    "__builtin_neon_vcvts_n_u32_f32",
+    "__builtin_neon_vcvts_s32_f32",
+    "__builtin_neon_vcvts_u32_f32",
+    "__builtin_neon_vcvtx_f32_v",
+    "__builtin_neon_vcvtxd_f32_f64",
+    "__builtin_neon_vdivh_f16",
+    "__builtin_neon_vdot_s32",
+    "__builtin_neon_vdot_u32",
+    "__builtin_neon_vdotq_s32",
+    "__builtin_neon_vdotq_u32",
+    "__builtin_neon_vdupb_lane_i8",
+    "__builtin_neon_vdupb_laneq_i8",
+    "__builtin_neon_vdupd_lane_f64",
+    "__builtin_neon_vdupd_lane_i64",
+    "__builtin_neon_vdupd_laneq_f64",
+    "__builtin_neon_vdupd_laneq_i64",
+    "__builtin_neon_vduph_lane_bf16",
+    "__builtin_neon_vduph_lane_f16",
+    "__builtin_neon_vduph_lane_i16",
+    "__builtin_neon_vduph_laneq_bf16",
+    "__builtin_neon_vduph_laneq_f16",
+    "__builtin_neon_vduph_laneq_i16",
+    "__builtin_neon_vdups_lane_f32",
+    "__builtin_neon_vdups_lane_i32",
+    "__builtin_neon_vdups_laneq_f32",
+    "__builtin_neon_vdups_laneq_i32",
+    "__builtin_neon_veor3q_s16",
+    "__builtin_neon_veor3q_s32",
+    "__builtin_neon_veor3q_s64",
+    "__builtin_neon_veor3q_s8",
+    "__builtin_neon_veor3q_u16",
+    "__builtin_neon_veor3q_u32",
+    "__builtin_neon_veor3q_u64",
+    "__builtin_neon_veor3q_u8",
+    "__builtin_neon_vext_v",
+    "__builtin_neon_vextq_v",
+    "__builtin_neon_vfma_f16",
+    "__builtin_neon_vfma_lane_f16",
+    "__builtin_neon_vfma_lane_v",
+    "__builtin_neon_vfma_laneq_f16",
+    "__builtin_neon_vfma_laneq_v",
+    "__builtin_neon_vfma_v",
+    "__builtin_neon_vfmad_lane_f64",
+    "__builtin_neon_vfmad_laneq_f64",
+    "__builtin_neon_vfmah_f16",
+    "__builtin_neon_vfmah_lane_f16",
+    "__builtin_neon_vfmah_laneq_f16",
+    "__builtin_neon_vfmaq_f16",
+    "__builtin_neon_vfmaq_lane_f16",
+    "__builtin_neon_vfmaq_lane_v",
+    "__builtin_neon_vfmaq_laneq_f16",
+    "__builtin_neon_vfmaq_laneq_v",
+    "__builtin_neon_vfmaq_v",
+    "__builtin_neon_vfmas_lane_f32",
+    "__builtin_neon_vfmas_laneq_f32",
+    "__builtin_neon_vfmlal_high_f16",
+    "__builtin_neon_vfmlal_low_f16",
+    "__builtin_neon_vfmlalq_high_f16",
+    "__builtin_neon_vfmlalq_low_f16",
+    "__builtin_neon_vfmlsl_high_f16",
+    "__builtin_neon_vfmlsl_low_f16",
+    "__builtin_neon_vfmlslq_high_f16",
+    "__builtin_neon_vfmlslq_low_f16",
+    "__builtin_neon_vfmsh_f16",
+    "__builtin_neon_vget_lane_bf16",
+    "__builtin_neon_vget_lane_f32",
+    "__builtin_neon_vget_lane_f64",
+    "__builtin_neon_vget_lane_i16",
+    "__builtin_neon_vget_lane_i32",
+    "__builtin_neon_vget_lane_i64",
+    "__builtin_neon_vget_lane_i8",
+    "__builtin_neon_vgetq_lane_bf16",
+    "__builtin_neon_vgetq_lane_f32",
+    "__builtin_neon_vgetq_lane_f64",
+    "__builtin_neon_vgetq_lane_i16",
+    "__builtin_neon_vgetq_lane_i32",
+    "__builtin_neon_vgetq_lane_i64",
+    "__builtin_neon_vgetq_lane_i8",
+    "__builtin_neon_vhadd_v",
+    "__builtin_neon_vhaddq_v",
+    "__builtin_neon_vhsub_v",
+    "__builtin_neon_vhsubq_v",
+    "__builtin_neon_vld1_bf16",
+    "__builtin_neon_vld1_bf16_x2",
+    "__builtin_neon_vld1_bf16_x3",
+    "__builtin_neon_vld1_bf16_x4",
+    "__builtin_neon_vld1_dup_bf16",
+    "__builtin_neon_vld1_dup_v",
+    "__builtin_neon_vld1_lane_bf16",
+    "__builtin_neon_vld1_lane_v",
+    "__builtin_neon_vld1_v",
+    "__builtin_neon_vld1_x2_v",
+    "__builtin_neon_vld1_x3_v",
+    "__builtin_neon_vld1_x4_v",
+    "__builtin_neon_vld1q_bf16",
+    "__builtin_neon_vld1q_bf16_x2",
+    "__builtin_neon_vld1q_bf16_x3",
+    "__builtin_neon_vld1q_bf16_x4",
+    "__builtin_neon_vld1q_dup_bf16",
+    "__builtin_neon_vld1q_dup_v",
+    "__builtin_neon_vld1q_lane_bf16",
+    "__builtin_neon_vld1q_lane_v",
+    "__builtin_neon_vld1q_v",
+    "__builtin_neon_vld1q_x2_v",
+    "__builtin_neon_vld1q_x3_v",
+    "__builtin_neon_vld1q_x4_v",
+    "__builtin_neon_vld2_bf16",
+    "__builtin_neon_vld2_dup_bf16",
+    "__builtin_neon_vld2_dup_v",
+    "__builtin_neon_vld2_lane_bf16",
+    "__builtin_neon_vld2_lane_v",
+    "__builtin_neon_vld2_v",
+    "__builtin_neon_vld2q_bf16",
+    "__builtin_neon_vld2q_dup_bf16",
+    "__builtin_neon_vld2q_dup_v",
+    "__builtin_neon_vld2q_lane_bf16",
+    "__builtin_neon_vld2q_lane_v",
+    "__builtin_neon_vld2q_v",
+    "__builtin_neon_vld3_bf16",
+    "__builtin_neon_vld3_dup_bf16",
+    "__builtin_neon_vld3_dup_v",
+    "__builtin_neon_vld3_lane_bf16",
+    "__builtin_neon_vld3_lane_v",
+    "__builtin_neon_vld3_v",
+    "__builtin_neon_vld3q_bf16",
+    "__builtin_neon_vld3q_dup_bf16",
+    "__builtin_neon_vld3q_dup_v",
+    "__builtin_neon_vld3q_lane_bf16",
+    "__builtin_neon_vld3q_lane_v",
+    "__builtin_neon_vld3q_v",
+    "__builtin_neon_vld4_bf16",
+    "__builtin_neon_vld4_dup_bf16",
+    "__builtin_neon_vld4_dup_v",
+    "__builtin_neon_vld4_lane_bf16",
+    "__builtin_neon_vld4_lane_v",
+    "__builtin_neon_vld4_v",
+    "__builtin_neon_vld4q_bf16",
+    "__builtin_neon_vld4q_dup_bf16",
+    "__builtin_neon_vld4q_dup_v",
+    "__builtin_neon_vld4q_lane_bf16",
+    "__builtin_neon_vld4q_lane_v",
+    "__builtin_neon_vld4q_v",
+    "__builtin_neon_vldap1_lane_f64",
+    "__builtin_neon_vldap1_lane_p64",
+    "__builtin_neon_vldap1_lane_s64",
+    "__builtin_neon_vldap1_lane_u64",
+    "__builtin_neon_vldap1q_lane_f64",
+    "__builtin_neon_vldap1q_lane_p64",
+    "__builtin_neon_vldap1q_lane_s64",
+    "__builtin_neon_vldap1q_lane_u64",
+    "__builtin_neon_vldrq_p128",
+    "__builtin_neon_vmax_f16",
+    "__builtin_neon_vmax_v",
+    "__builtin_neon_vmaxh_f16",
+    "__builtin_neon_vmaxnm_f16",
+    "__builtin_neon_vmaxnm_v",
+    "__builtin_neon_vmaxnmh_f16",
+    "__builtin_neon_vmaxnmq_f16",
+    "__builtin_neon_vmaxnmq_v",
+    "__builtin_neon_vmaxnmv_f16",
+    "__builtin_neon_vmaxnmv_f32",
+    "__builtin_neon_vmaxnmvq_f16",
+    "__builtin_neon_vmaxnmvq_f32",
+    "__builtin_neon_vmaxnmvq_f64",
+    "__builtin_neon_vmaxq_f16",
+    "__builtin_neon_vmaxq_v",
+    "__builtin_neon_vmaxv_f16",
+    "__builtin_neon_vmaxv_f32",
+    "__builtin_neon_vmaxv_s16",
+    "__builtin_neon_vmaxv_s32",
+    "__builtin_neon_vmaxv_s8",
+    "__builtin_neon_vmaxv_u16",
+    "__builtin_neon_vmaxv_u32",
+    "__builtin_neon_vmaxv_u8",
+    "__builtin_neon_vmaxvq_f16",
+    "__builtin_neon_vmaxvq_f32",
+    "__builtin_neon_vmaxvq_f64",
+    "__builtin_neon_vmaxvq_s16",
+    "__builtin_neon_vmaxvq_s32",
+    "__builtin_neon_vmaxvq_s8",
+    "__builtin_neon_vmaxvq_u16",
+    "__builtin_neon_vmaxvq_u32",
+    "__builtin_neon_vmaxvq_u8",
+    "__builtin_neon_vmin_f16",
+    "__builtin_neon_vmin_v",
+    "__builtin_neon_vminh_f16",
+    "__builtin_neon_vminnm_f16",
+    "__builtin_neon_vminnm_v",
+    "__builtin_neon_vminnmh_f16",
+    "__builtin_neon_vminnmq_f16",
+    "__builtin_neon_vminnmq_v",
+    "__builtin_neon_vminnmv_f16",
+    "__builtin_neon_vminnmv_f32",
+    "__builtin_neon_vminnmvq_f16",
+    "__builtin_neon_vminnmvq_f32",
+    "__builtin_neon_vminnmvq_f64",
+    "__builtin_neon_vminq_f16",
+    "__builtin_neon_vminq_v",
+    "__builtin_neon_vminv_f16",
+    "__builtin_neon_vminv_f32",
+    "__builtin_neon_vminv_s16",
+    "__builtin_neon_vminv_s32",
+    "__builtin_neon_vminv_s8",
+    "__builtin_neon_vminv_u16",
+    "__builtin_neon_vminv_u32",
+    "__builtin_neon_vminv_u8",
+    "__builtin_neon_vminvq_f16",
+    "__builtin_neon_vminvq_f32",
+    "__builtin_neon_vminvq_f64",
+    "__builtin_neon_vminvq_s16",
+    "__builtin_neon_vminvq_s32",
+    "__builtin_neon_vminvq_s8",
+    "__builtin_neon_vminvq_u16",
+    "__builtin_neon_vminvq_u32",
+    "__builtin_neon_vminvq_u8",
+    "__builtin_neon_vmmlaq_s32",
+    "__builtin_neon_vmmlaq_u32",
+    "__builtin_neon_vmovl_v",
+    "__builtin_neon_vmovn_v",
+    "__builtin_neon_vmul_lane_v",
+    "__builtin_neon_vmul_laneq_v",
+    "__builtin_neon_vmul_n_f64",
+    "__builtin_neon_vmul_v",
+    "__builtin_neon_vmulh_f16",
+    "__builtin_neon_vmull_p64",
+    "__builtin_neon_vmull_v",
+    "__builtin_neon_vmulq_v",
+    "__builtin_neon_vmulx_f16",
+    "__builtin_neon_vmulx_v",
+    "__builtin_neon_vmulxd_f64",
+    "__builtin_neon_vmulxh_f16",
+    "__builtin_neon_vmulxh_lane_f16",
+    "__builtin_neon_vmulxh_laneq_f16",
+    "__builtin_neon_vmulxq_f16",
+    "__builtin_neon_vmulxq_v",
+    "__builtin_neon_vmulxs_f32",
+    "__builtin_neon_vnegd_s64",
+    "__builtin_neon_vnegh_f16",
+    "__builtin_neon_vpadal_v",
+    "__builtin_neon_vpadalq_v",
+    "__builtin_neon_vpadd_f16",
+    "__builtin_neon_vpadd_v",
+    "__builtin_neon_vpaddd_f64",
+    "__builtin_neon_vpaddd_s64",
+    "__builtin_neon_vpaddd_u64",
+    "__builtin_neon_vpaddl_v",
+    "__builtin_neon_vpaddlq_v",
+    "__builtin_neon_vpaddq_f16",
+    "__builtin_neon_vpaddq_v",
+    "__builtin_neon_vpadds_f32",
+    "__builtin_neon_vpmax_f16",
+    "__builtin_neon_vpmax_v",
+    "__builtin_neon_vpmaxnm_f16",
+    "__builtin_neon_vpmaxnm_v",
+    "__builtin_neon_vpmaxnmq_f16",
+    "__builtin_neon_vpmaxnmq_v",
+    "__builtin_neon_vpmaxnmqd_f64",
+    "__builtin_neon_vpmaxnms_f32",
+    "__builtin_neon_vpmaxq_f16",
+    "__builtin_neon_vpmaxq_v",
+    "__builtin_neon_vpmaxqd_f64",
+    "__builtin_neon_vpmaxs_f32",
+    "__builtin_neon_vpmin_f16",
+    "__builtin_neon_vpmin_v",
+    "__builtin_neon_vpminnm_f16",
+    "__builtin_neon_vpminnm_v",
+    "__builtin_neon_vpminnmq_f16",
+    "__builtin_neon_vpminnmq_v",
+    "__builtin_neon_vpminnmqd_f64",
+    "__builtin_neon_vpminnms_f32",
+    "__builtin_neon_vpminq_f16",
+    "__builtin_neon_vpminq_v",
+    "__builtin_neon_vpminqd_f64",
+    "__builtin_neon_vpmins_f32",
+    "__builtin_neon_vqabs_v",
+    "__builtin_neon_vqabsb_s8",
+    "__builtin_neon_vqabsd_s64",
+    "__builtin_neon_vqabsh_s16",
+    "__builtin_neon_vqabsq_v",
+    "__builtin_neon_vqabss_s32",
+    "__builtin_neon_vqadd_v",
+    "__builtin_neon_vqaddb_s8",
+    "__builtin_neon_vqaddb_u8",
+    "__builtin_neon_vqaddd_s64",
+    "__builtin_neon_vqaddd_u64",
+    "__builtin_neon_vqaddh_s16",
+    "__builtin_neon_vqaddh_u16",
+    "__builtin_neon_vqaddq_v",
+    "__builtin_neon_vqadds_s32",
+    "__builtin_neon_vqadds_u32",
+    "__builtin_neon_vqdmlal_v",
+    "__builtin_neon_vqdmlalh_lane_s16",
+    "__builtin_neon_vqdmlalh_laneq_s16",
+    "__builtin_neon_vqdmlalh_s16",
+    "__builtin_neon_vqdmlals_lane_s32",
+    "__builtin_neon_vqdmlals_laneq_s32",
+    "__builtin_neon_vqdmlals_s32",
+    "__builtin_neon_vqdmlsl_v",
+    "__builtin_neon_vqdmlslh_lane_s16",
+    "__builtin_neon_vqdmlslh_laneq_s16",
+    "__builtin_neon_vqdmlslh_s16",
+    "__builtin_neon_vqdmlsls_lane_s32",
+    "__builtin_neon_vqdmlsls_laneq_s32",
+    "__builtin_neon_vqdmlsls_s32",
+    "__builtin_neon_vqdmulh_lane_v",
+    "__builtin_neon_vqdmulh_laneq_v",
+    "__builtin_neon_vqdmulh_v",
+    "__builtin_neon_vqdmulhh_s16",
+    "__builtin_neon_vqdmulhq_lane_v",
+    "__builtin_neon_vqdmulhq_laneq_v",
+    "__builtin_neon_vqdmulhq_v",
+    "__builtin_neon_vqdmulhs_s32",
+    "__builtin_neon_vqdmull_v",
+    "__builtin_neon_vqdmullh_s16",
+    "__builtin_neon_vqdmulls_s32",
+    "__builtin_neon_vqmovn_v",
+    "__builtin_neon_vqmovnd_s64",
+    "__builtin_neon_vqmovnd_u64",
+    "__builtin_neon_vqmovnh_s16",
+    "__builtin_neon_vqmovnh_u16",
+    "__builtin_neon_vqmovns_s32",
+    "__builtin_neon_vqmovns_u32",
+    "__builtin_neon_vqmovun_v",
+    "__builtin_neon_vqmovund_s64",
+    "__builtin_neon_vqmovunh_s16",
+    "__builtin_neon_vqmovuns_s32",
+    "__builtin_neon_vqneg_v",
+    "__builtin_neon_vqnegb_s8",
+    "__builtin_neon_vqnegd_s64",
+    "__builtin_neon_vqnegh_s16",
+    "__builtin_neon_vqnegq_v",
+    "__builtin_neon_vqnegs_s32",
+    "__builtin_neon_vqrdmlah_s16",
+    "__builtin_neon_vqrdmlah_s32",
+    "__builtin_neon_vqrdmlahh_s16",
+    "__builtin_neon_vqrdmlahq_s16",
+    "__builtin_neon_vqrdmlahq_s32",
+    "__builtin_neon_vqrdmlahs_s32",
+    "__builtin_neon_vqrdmlsh_s16",
+    "__builtin_neon_vqrdmlsh_s32",
+    "__builtin_neon_vqrdmlshh_s16",
+    "__builtin_neon_vqrdmlshq_s16",
+    "__builtin_neon_vqrdmlshq_s32",
+    "__builtin_neon_vqrdmlshs_s32",
+    "__builtin_neon_vqrdmulh_lane_v",
+    "__builtin_neon_vqrdmulh_laneq_v",
+    "__builtin_neon_vqrdmulh_v",
+    "__builtin_neon_vqrdmulhh_s16",
+    "__builtin_neon_vqrdmulhq_lane_v",
+    "__builtin_neon_vqrdmulhq_laneq_v",
+    "__builtin_neon_vqrdmulhq_v",
+    "__builtin_neon_vqrdmulhs_s32",
+    "__builtin_neon_vqrshl_v",
+    "__builtin_neon_vqrshlb_s8",
+    "__builtin_neon_vqrshlb_u8",
+    "__builtin_neon_vqrshld_s64",
+    "__builtin_neon_vqrshld_u64",
+    "__builtin_neon_vqrshlh_s16",
+    "__builtin_neon_vqrshlh_u16",
+    "__builtin_neon_vqrshlq_v",
+    "__builtin_neon_vqrshls_s32",
+    "__builtin_neon_vqrshls_u32",
+    "__builtin_neon_vqrshrn_n_v",
+    "__builtin_neon_vqrshrnd_n_s64",
+    "__builtin_neon_vqrshrnd_n_u64",
+    "__builtin_neon_vqrshrnh_n_s16",
+    "__builtin_neon_vqrshrnh_n_u16",
+    "__builtin_neon_vqrshrns_n_s32",
+    "__builtin_neon_vqrshrns_n_u32",
+    "__builtin_neon_vqrshrun_n_v",
+    "__builtin_neon_vqrshrund_n_s64",
+    "__builtin_neon_vqrshrunh_n_s16",
+    "__builtin_neon_vqrshruns_n_s32",
+    "__builtin_neon_vqshl_n_v",
+    "__builtin_neon_vqshl_v",
+    "__builtin_neon_vqshlb_n_s8",
+    "__builtin_neon_vqshlb_n_u8",
+    "__builtin_neon_vqshlb_s8",
+    "__builtin_neon_vqshlb_u8",
+    "__builtin_neon_vqshld_n_s64",
+    "__builtin_neon_vqshld_n_u64",
+    "__builtin_neon_vqshld_s64",
+    "__builtin_neon_vqshld_u64",
+    "__builtin_neon_vqshlh_n_s16",
+    "__builtin_neon_vqshlh_n_u16",
+    "__builtin_neon_vqshlh_s16",
+    "__builtin_neon_vqshlh_u16",
+    "__builtin_neon_vqshlq_n_v",
+    "__builtin_neon_vqshlq_v",
+    "__builtin_neon_vqshls_n_s32",
+    "__builtin_neon_vqshls_n_u32",
+    "__builtin_neon_vqshls_s32",
+    "__builtin_neon_vqshls_u32",
+    "__builtin_neon_vqshlu_n_v",
+    "__builtin_neon_vqshlub_n_s8",
+    "__builtin_neon_vqshlud_n_s64",
+    "__builtin_neon_vqshluh_n_s16",
+    "__builtin_neon_vqshluq_n_v",
+    "__builtin_neon_vqshlus_n_s32",
+    "__builtin_neon_vqshrn_n_v",
+    "__builtin_neon_vqshrnd_n_s64",
+    "__builtin_neon_vqshrnd_n_u64",
+    "__builtin_neon_vqshrnh_n_s16",
+    "__builtin_neon_vqshrnh_n_u16",
+    "__builtin_neon_vqshrns_n_s32",
+    "__builtin_neon_vqshrns_n_u32",
+    "__builtin_neon_vqshrun_n_v",
+    "__builtin_neon_vqshrund_n_s64",
+    "__builtin_neon_vqshrunh_n_s16",
+    "__builtin_neon_vqshruns_n_s32",
+    "__builtin_neon_vqsub_v",
+    "__builtin_neon_vqsubb_s8",
+    "__builtin_neon_vqsubb_u8",
+    "__builtin_neon_vqsubd_s64",
+    "__builtin_neon_vqsubd_u64",
+    "__builtin_neon_vqsubh_s16",
+    "__builtin_neon_vqsubh_u16",
+    "__builtin_neon_vqsubq_v",
+    "__builtin_neon_vqsubs_s32",
+    "__builtin_neon_vqsubs_u32",
+    "__builtin_neon_vqtbl1_v",
+    "__builtin_neon_vqtbl1q_v",
+    "__builtin_neon_vqtbl2_v",
+    "__builtin_neon_vqtbl2q_v",
+    "__builtin_neon_vqtbl3_v",
+    "__builtin_neon_vqtbl3q_v",
+    "__builtin_neon_vqtbl4_v",
+    "__builtin_neon_vqtbl4q_v",
+    "__builtin_neon_vqtbx1_v",
+    "__builtin_neon_vqtbx1q_v",
+    "__builtin_neon_vqtbx2_v",
+    "__builtin_neon_vqtbx2q_v",
+    "__builtin_neon_vqtbx3_v",
+    "__builtin_neon_vqtbx3q_v",
+    "__builtin_neon_vqtbx4_v",
+    "__builtin_neon_vqtbx4q_v",
+    "__builtin_neon_vraddhn_v",
+    "__builtin_neon_vrax1q_u64",
+    "__builtin_neon_vrbit_v",
+    "__builtin_neon_vrbitq_v",
+    "__builtin_neon_vrecpe_f16",
+    "__builtin_neon_vrecpe_v",
+    "__builtin_neon_vrecped_f64",
+    "__builtin_neon_vrecpeh_f16",
+    "__builtin_neon_vrecpeq_f16",
+    "__builtin_neon_vrecpeq_v",
+    "__builtin_neon_vrecpes_f32",
+    "__builtin_neon_vrecps_f16",
+    "__builtin_neon_vrecps_v",
+    "__builtin_neon_vrecpsd_f64",
+    "__builtin_neon_vrecpsh_f16",
+    "__builtin_neon_vrecpsq_f16",
+    "__builtin_neon_vrecpsq_v",
+    "__builtin_neon_vrecpss_f32",
+    "__builtin_neon_vrecpxd_f64",
+    "__builtin_neon_vrecpxh_f16",
+    "__builtin_neon_vrecpxs_f32",
+    "__builtin_neon_vrhadd_v",
+    "__builtin_neon_vrhaddq_v",
+    "__builtin_neon_vrnd32x_f32",
+    "__builtin_neon_vrnd32x_f64",
+    "__builtin_neon_vrnd32xq_f32",
+    "__builtin_neon_vrnd32xq_f64",
+    "__builtin_neon_vrnd32z_f32",
+    "__builtin_neon_vrnd32z_f64",
+    "__builtin_neon_vrnd32zq_f32",
+    "__builtin_neon_vrnd32zq_f64",
+    "__builtin_neon_vrnd64x_f32",
+    "__builtin_neon_vrnd64x_f64",
+    "__builtin_neon_vrnd64xq_f32",
+    "__builtin_neon_vrnd64xq_f64",
+    "__builtin_neon_vrnd64z_f32",
+    "__builtin_neon_vrnd64z_f64",
+    "__builtin_neon_vrnd64zq_f32",
+    "__builtin_neon_vrnd64zq_f64",
+    "__builtin_neon_vrnd_f16",
+    "__builtin_neon_vrnd_v",
+    "__builtin_neon_vrnda_f16",
+    "__builtin_neon_vrnda_v",
+    "__builtin_neon_vrndah_f16",
+    "__builtin_neon_vrndaq_f16",
+    "__builtin_neon_vrndaq_v",
+    "__builtin_neon_vrndh_f16",
+    "__builtin_neon_vrndi_f16",
+    "__builtin_neon_vrndi_v",
+    "__builtin_neon_vrndih_f16",
+    "__builtin_neon_vrndiq_f16",
+    "__builtin_neon_vrndiq_v",
+    "__builtin_neon_vrndm_f16",
+    "__builtin_neon_vrndm_v",
+    "__builtin_neon_vrndmh_f16",
+    "__builtin_neon_vrndmq_f16",
+    "__builtin_neon_vrndmq_v",
+    "__builtin_neon_vrndn_f16",
+    "__builtin_neon_vrndn_v",
+    "__builtin_neon_vrndnh_f16",
+    "__builtin_neon_vrndnq_f16",
+    "__builtin_neon_vrndnq_v",
+    "__builtin_neon_vrndns_f32",
+    "__builtin_neon_vrndp_f16",
+    "__builtin_neon_vrndp_v",
+    "__builtin_neon_vrndph_f16",
+    "__builtin_neon_vrndpq_f16",
+    "__builtin_neon_vrndpq_v",
+    "__builtin_neon_vrndq_f16",
+    "__builtin_neon_vrndq_v",
+    "__builtin_neon_vrndx_f16",
+    "__builtin_neon_vrndx_v",
+    "__builtin_neon_vrndxh_f16",
+    "__builtin_neon_vrndxq_f16",
+    "__builtin_neon_vrndxq_v",
+    "__builtin_neon_vrshl_v",
+    "__builtin_neon_vrshld_s64",
+    "__builtin_neon_vrshld_u64",
+    "__builtin_neon_vrshlq_v",
+    "__builtin_neon_vrshr_n_v",
+    "__builtin_neon_vrshrd_n_s64",
+    "__builtin_neon_vrshrd_n_u64",
+    "__builtin_neon_vrshrn_n_v",
+    "__builtin_neon_vrshrq_n_v",
+    "__builtin_neon_vrsqrte_f16",
+    "__builtin_neon_vrsqrte_v",
+    "__builtin_neon_vrsqrted_f64",
+    "__builtin_neon_vrsqrteh_f16",
+    "__builtin_neon_vrsqrteq_f16",
+    "__builtin_neon_vrsqrteq_v",
+    "__builtin_neon_vrsqrtes_f32",
+    "__builtin_neon_vrsqrts_f16",
+    "__builtin_neon_vrsqrts_v",
+    "__builtin_neon_vrsqrtsd_f64",
+    "__builtin_neon_vrsqrtsh_f16",
+    "__builtin_neon_vrsqrtsq_f16",
+    "__builtin_neon_vrsqrtsq_v",
+    "__builtin_neon_vrsqrtss_f32",
+    "__builtin_neon_vrsra_n_v",
+    "__builtin_neon_vrsrad_n_s64",
+    "__builtin_neon_vrsrad_n_u64",
+    "__builtin_neon_vrsraq_n_v",
+    "__builtin_neon_vrsubhn_v",
+    "__builtin_neon_vset_lane_bf16",
+    "__builtin_neon_vset_lane_f32",
+    "__builtin_neon_vset_lane_f64",
+    "__builtin_neon_vset_lane_i16",
+    "__builtin_neon_vset_lane_i32",
+    "__builtin_neon_vset_lane_i64",
+    "__builtin_neon_vset_lane_i8",
+    "__builtin_neon_vsetq_lane_bf16",
+    "__builtin_neon_vsetq_lane_f32",
+    "__builtin_neon_vsetq_lane_f64",
+    "__builtin_neon_vsetq_lane_i16",
+    "__builtin_neon_vsetq_lane_i32",
+    "__builtin_neon_vsetq_lane_i64",
+    "__builtin_neon_vsetq_lane_i8",
+    "__builtin_neon_vsha1cq_u32",
+    "__builtin_neon_vsha1h_u32",
+    "__builtin_neon_vsha1mq_u32",
+    "__builtin_neon_vsha1pq_u32",
+    "__builtin_neon_vsha1su0q_u32",
+    "__builtin_neon_vsha1su1q_u32",
+    "__builtin_neon_vsha256h2q_u32",
+    "__builtin_neon_vsha256hq_u32",
+    "__builtin_neon_vsha256su0q_u32",
+    "__builtin_neon_vsha256su1q_u32",
+    "__builtin_neon_vsha512h2q_u64",
+    "__builtin_neon_vsha512hq_u64",
+    "__builtin_neon_vsha512su0q_u64",
+    "__builtin_neon_vsha512su1q_u64",
+    "__builtin_neon_vshl_n_v",
+    "__builtin_neon_vshl_v",
+    "__builtin_neon_vshld_n_s64",
+    "__builtin_neon_vshld_n_u64",
+    "__builtin_neon_vshld_s64",
+    "__builtin_neon_vshld_u64",
+    "__builtin_neon_vshll_n_v",
+    "__builtin_neon_vshlq_n_v",
+    "__builtin_neon_vshlq_v",
+    "__builtin_neon_vshr_n_v",
+    "__builtin_neon_vshrd_n_s64",
+    "__builtin_neon_vshrd_n_u64",
+    "__builtin_neon_vshrn_n_v",
+    "__builtin_neon_vshrq_n_v",
+    "__builtin_neon_vsli_n_v",
+    "__builtin_neon_vslid_n_s64",
+    "__builtin_neon_vslid_n_u64",
+    "__builtin_neon_vsliq_n_v",
+    "__builtin_neon_vsm3partw1q_u32",
+    "__builtin_neon_vsm3partw2q_u32",
+    "__builtin_neon_vsm3ss1q_u32",
+    "__builtin_neon_vsm3tt1aq_u32",
+    "__builtin_neon_vsm3tt1bq_u32",
+    "__builtin_neon_vsm3tt2aq_u32",
+    "__builtin_neon_vsm3tt2bq_u32",
+    "__builtin_neon_vsm4ekeyq_u32",
+    "__builtin_neon_vsm4eq_u32",
+    "__builtin_neon_vsqadd_v",
+    "__builtin_neon_vsqaddb_u8",
+    "__builtin_neon_vsqaddd_u64",
+    "__builtin_neon_vsqaddh_u16",
+    "__builtin_neon_vsqaddq_v",
+    "__builtin_neon_vsqadds_u32",
+    "__builtin_neon_vsqrt_f16",
+    "__builtin_neon_vsqrt_v",
+    "__builtin_neon_vsqrth_f16",
+    "__builtin_neon_vsqrtq_f16",
+    "__builtin_neon_vsqrtq_v",
+    "__builtin_neon_vsra_n_v",
+    "__builtin_neon_vsrad_n_s64",
+    "__builtin_neon_vsrad_n_u64",
+    "__builtin_neon_vsraq_n_v",
+    "__builtin_neon_vsri_n_v",
+    "__builtin_neon_vsrid_n_s64",
+    "__builtin_neon_vsrid_n_u64",
+    "__builtin_neon_vsriq_n_v",
+    "__builtin_neon_vst1_bf16",
+    "__builtin_neon_vst1_bf16_x2",
+    "__builtin_neon_vst1_bf16_x3",
+    "__builtin_neon_vst1_bf16_x4",
+    "__builtin_neon_vst1_lane_bf16",
+    "__builtin_neon_vst1_lane_v",
+    "__builtin_neon_vst1_v",
+    "__builtin_neon_vst1_x2_v",
+    "__builtin_neon_vst1_x3_v",
+    "__builtin_neon_vst1_x4_v",
+    "__builtin_neon_vst1q_bf16",
+    "__builtin_neon_vst1q_bf16_x2",
+    "__builtin_neon_vst1q_bf16_x3",
+    "__builtin_neon_vst1q_bf16_x4",
+    "__builtin_neon_vst1q_lane_bf16",
+    "__builtin_neon_vst1q_lane_v",
+    "__builtin_neon_vst1q_v",
+    "__builtin_neon_vst1q_x2_v",
+    "__builtin_neon_vst1q_x3_v",
+    "__builtin_neon_vst1q_x4_v",
+    "__builtin_neon_vst2_bf16",
+    "__builtin_neon_vst2_lane_bf16",
+    "__builtin_neon_vst2_lane_v",
+    "__builtin_neon_vst2_v",
+    "__builtin_neon_vst2q_bf16",
+    "__builtin_neon_vst2q_lane_bf16",
+    "__builtin_neon_vst2q_lane_v",
+    "__builtin_neon_vst2q_v",
+    "__builtin_neon_vst3_bf16",
+    "__builtin_neon_vst3_lane_bf16",
+    "__builtin_neon_vst3_lane_v",
+    "__builtin_neon_vst3_v",
+    "__builtin_neon_vst3q_bf16",
+    "__builtin_neon_vst3q_lane_bf16",
+    "__builtin_neon_vst3q_lane_v",
+    "__builtin_neon_vst3q_v",
+    "__builtin_neon_vst4_bf16",
+    "__builtin_neon_vst4_lane_bf16",
+    "__builtin_neon_vst4_lane_v",
+    "__builtin_neon_vst4_v",
+    "__builtin_neon_vst4q_bf16",
+    "__builtin_neon_vst4q_lane_bf16",
+    "__builtin_neon_vst4q_lane_v",
+    "__builtin_neon_vst4q_v",
+    "__builtin_neon_vstl1_lane_f64",
+    "__builtin_neon_vstl1_lane_p64",
+    "__builtin_neon_vstl1_lane_s64",
+    "__builtin_neon_vstl1_lane_u64",
+    "__builtin_neon_vstl1q_lane_f64",
+    "__builtin_neon_vstl1q_lane_p64",
+    "__builtin_neon_vstl1q_lane_s64",
+    "__builtin_neon_vstl1q_lane_u64",
+    "__builtin_neon_vstrq_p128",
+    "__builtin_neon_vsubd_s64",
+    "__builtin_neon_vsubd_u64",
+    "__builtin_neon_vsubh_f16",
+    "__builtin_neon_vsubhn_v",
+    "__builtin_neon_vtbl1_v",
+    "__builtin_neon_vtbl2_v",
+    "__builtin_neon_vtbl3_v",
+    "__builtin_neon_vtbl4_v",
+    "__builtin_neon_vtbx1_v",
+    "__builtin_neon_vtbx2_v",
+    "__builtin_neon_vtbx3_v",
+    "__builtin_neon_vtbx4_v",
+    "__builtin_neon_vtrn_v",
+    "__builtin_neon_vtrnq_v",
+    "__builtin_neon_vtst_v",
+    "__builtin_neon_vtstd_s64",
+    "__builtin_neon_vtstd_u64",
+    "__builtin_neon_vtstq_v",
+    "__builtin_neon_vuqadd_v",
+    "__builtin_neon_vuqaddb_s8",
+    "__builtin_neon_vuqaddd_s64",
+    "__builtin_neon_vuqaddh_s16",
+    "__builtin_neon_vuqaddq_v",
+    "__builtin_neon_vuqadds_s32",
+    "__builtin_neon_vusdot_s32",
+    "__builtin_neon_vusdotq_s32",
+    "__builtin_neon_vusmmlaq_s32",
+    "__builtin_neon_vuzp_v",
+    "__builtin_neon_vuzpq_v",
+    "__builtin_neon_vxarq_u64",
+    "__builtin_neon_vzip_v",
+    "__builtin_neon_vzipq_v",
+    "V8ScV16Sci",
+    "V16ScV16Sci",
+    "V8ScV8ScIii",
+    "V8ScV16ScIii",
+    "V16ScV8ScIii",
+    "V16ScV16ScIii",
+    "V8ScV8ScV8Sci",
+    "ddd",
+    "hhh",
+    "V16ScV16ScV16Sci",
+    "fff",
+    "V8ScV8Sci",
+    "WiWi",
+    "hh",
+    "WiWiWi",
+    "UWiUWiUWi",
+    "V8ScV16ScV16Sci",
+    "iV4s",
+    "WiV2i",
+    "sV8Sc",
+    "UiV4Us",
+    "UWiV2Ui",
+    "UsV8Uc",
+    "iV8s",
+    "WiV4i",
+    "sV16Sc",
+    "UiV8Us",
+    "UWiV4Ui",
+    "UsV16Uc",
+    "ULLLiULLLiULLLi",
+    "fV2f",
+    "sV4s",
+    "iV2i",
+    "ScV8Sc",
+    "UsV4Us",
+    "UiV2Ui",
+    "UcV8Uc",
+    "fV4f",
+    "dV2d",
+    "sV8s",
+    "iV4i",
+    "WiV2Wi",
+    "ScV16Sc",
+    "UsV8Us",
+    "UiV4Ui",
+    "UWiV2UWi",
+    "UcV16Uc",
+    "V16ScV16ScV16ScV16Sci",
+    "V8ScV8ScV8ScV8Sci",
+    "UWidd",
+    "Ushh",
+    "Uiff",
+    "UWiWiWi",
+    "UWid",
+    "UWiWi",
+    "UWiUWi",
+    "Ush",
+    "Uif",
+    "V16ScV8Sci",
+    "Wid",
+    "sh",
+    "ih",
+    "Wih",
+    "Uih",
+    "UWih",
+    "if",
+    "dWi",
+    "dUWi",
+    "dWiIi",
+    "dUWiIi",
+    "WidIi",
+    "UWidIi",
+    "yf",
+    "hs",
+    "hi",
+    "hWi",
+    "hUs",
+    "hUi",
+    "hUWi",
+    "hsIi",
+    "hiIi",
+    "hWiIi",
+    "hUsIi",
+    "hUiIi",
+    "hUWiIi",
+    "shIi",
+    "ihIi",
+    "WihIi",
+    "UshIi",
+    "UihIi",
+    "UWihIi",
+    "fi",
+    "fUi",
+    "fiIi",
+    "fUiIi",
+    "ifIi",
+    "UifIi",
+    "fd",
+    "UcV8ScIi",
+    "UcV16ScIi",
+    "dV1dIi",
+    "UWiV1WiIi",
+    "dV2dIi",
+    "UWiV2WiIi",
+    "yV4yIi",
+    "hV4hIi",
+    "UsV4sIi",
+    "yV8yIi",
+    "hV8hIi",
+    "UsV8sIi",
+    "fV2fIi",
+    "UiV2iIi",
+    "fV4fIi",
+    "UiV4iIi",
+    "V8ScV8ScV8ScIii",
+    "V16ScV16ScV16ScIii",
+    "V8ScV8ScV8ScV8ScIii",
+    "V8ScV8ScV8ScV16ScIii",
+    "dddV1dIi",
+    "dddV2dIi",
+    "hhhh",
+    "hhhV4hIi",
+    "hhhV8hIi",
+    "V16ScV16ScV16ScV8ScIii",
+    "V16ScV16ScV16ScV16ScIii",
+    "fffV2fIi",
+    "fffV4fIi",
+    "V8ScvC*i",
+    "vv*vC*i",
+    "V8ScvC*V8ScIii",
+    "V16ScvC*i",
+    "V16ScvC*V16ScIii",
+    "vv*vC*V8ScV8ScIii",
+    "vv*vC*V16ScV16ScIii",
+    "vv*vC*V8ScV8ScV8ScIii",
+    "vv*vC*V16ScV16ScV16ScIii",
+    "vv*vC*V8ScV8ScV8ScV8ScIii",
+    "vv*vC*V16ScV16ScV16ScV16ScIii",
+    "ULLLivC*",
+    "hV8Sc",
+    "hV16Sc",
+    "V8ScV8ScV16ScIii",
+    "V1dV1dd",
+    "ULLLiUWiUWi",
+    "V16ScV8ScV8Sci",
+    "hhV4hIi",
+    "hhV8hIi",
+    "ScSc",
+    "ss",
+    "ii",
+    "ScScSc",
+    "UcUcUc",
+    "sss",
+    "UsUsUs",
+    "iii",
+    "UiUiUi",
+    "V16ScV16ScV8ScV8Sci",
+    "iisV4sIi",
+    "iisV8sIi",
+    "iiss",
+    "WiWiiV2iIi",
+    "WiWiiV4iIi",
+    "WiWiii",
+    "V16ScV16ScV8ScIii",
+    "iss",
+    "Wiii",
+    "iWi",
+    "UiUWi",
+    "Scs",
+    "UcUs",
+    "si",
+    "UsUi",
+    "UiWi",
+    "Ucs",
+    "Usi",
+    "ssss",
+    "iiii",
+    "UcUcSc",
+    "UWiUWiWi",
+    "UsUss",
+    "UiUii",
+    "iWiIi",
+    "UiUWiIi",
+    "ScsIi",
+    "UcUsIi",
+    "siIi",
+    "UsUiIi",
+    "UiWiIi",
+    "UcsIi",
+    "UsiIi",
+    "ScScIi",
+    "UcUcIi",
+    "WiWiIi",
+    "UWiUWiIi",
+    "ssIi",
+    "UsUsIi",
+    "iiIi",
+    "UiUiIi",
+    "V8ScV16ScV8Sci",
+    "V8ScV16ScV16ScV8Sci",
+    "V8ScV16ScV16ScV16ScV8Sci",
+    "V16ScV16ScV16ScV16ScV16Sci",
+    "V8ScV16ScV16ScV16ScV16ScV8Sci",
+    "V16ScV16ScV16ScV16ScV16ScV16Sci",
+    "V8ScV8ScV16ScV8Sci",
+    "V8ScV8ScV16ScV16ScV8Sci",
+    "V8ScV8ScV16ScV16ScV16ScV8Sci",
+    "V8ScV8ScV16ScV16ScV16ScV16ScV8Sci",
+    "V16ScV16ScV16ScV16ScV16ScV16ScV16Sci",
+    "dd",
+    "ff",
+    "WiWiWiIi",
+    "UWiUWiUWiIi",
+    "V4yyV4yIi",
+    "V2ffV2fIi",
+    "V1ddV1dIi",
+    "V4ssV4sIi",
+    "V2iiV2iIi",
+    "V1WiWiV1WiIi",
+    "V8ScScV8ScIi",
+    "V8yyV8yIi",
+    "V4ffV4fIi",
+    "V2ddV2dIi",
+    "V8ssV8sIi",
+    "V4iiV4iIi",
+    "V2WiWiV2WiIi",
+    "V16ScScV16ScIi",
+    "V4iV4UiUiV4Ui",
+    "UiUi",
+    "vv*V8Sci",
+    "vv*V8ScV8Sci",
+    "vv*V8ScV8ScV8Sci",
+    "vv*V8ScV8ScV8ScV8Sci",
+    "vv*V8ScIii",
+    "vv*V16Sci",
+    "vv*V16ScV16Sci",
+    "vv*V16ScV16ScV16Sci",
+    "vv*V16ScV16ScV16ScV16Sci",
+    "vv*V16ScIii",
+    "vv*V8ScV8ScIii",
+    "vv*V16ScV16ScIii",
+    "vv*V8ScV8ScV8ScIii",
+    "vv*V16ScV16ScV16ScIii",
+    "vv*V8ScV8ScV8ScV8ScIii",
+    "vv*V16ScV16ScV16ScV16ScIii",
+    "vv*ULLLi",
+    "V8ScV8ScV8ScV8ScV8Sci",
+    "V8ScV8ScV8ScV8ScV8ScV8Sci",
+    "V8ScV8ScV8ScV8ScV8ScV8ScV8Sci",
+    "ScScUc",
+    "WiWiUWi",
+    "ssUs",
+    "iiUi",
+    "bf16,neon",
+    "neon",
+    "fullfp16,neon",
+    "fullfp16",
+    "aes,neon",
+    "sha3,neon",
+    "v8.3a,fullfp16,neon",
+    "v8.3a,neon",
+    "dotprod,neon",
+    "fp16fml,neon",
+    "rcpc3,neon",
+    "i8mm,neon",
+    "v8.1a,neon",
+    "v8.5a,neon",
+    "sha2,neon",
+    "sm4,neon",
+);
+
+/// Every `AArch64` NEON / FP16 builtin, sorted by name; row `i` is builtin
+/// `BASE + i`: (name, prototype, required target features) in [`STRS`].
+#[rustfmt::skip]
+pub(crate) static NEON: [Packed; 1081] = [
+    r((0, 34), (28175, 10), (30401, 9)), // __builtin_neon___a32_vcvt_bf16_f32
+    r((34, 39), (28185, 11), (30401, 9)), // __builtin_neon___a64_vcvtq_low_bf16_f32
+    r((73, 30), (28196, 11), (30401, 9)), // __builtin_neon_splat_lane_bf16
+    r((103, 27), (28196, 11), (30410, 4)), // __builtin_neon_splat_lane_v
+    r((130, 31), (28207, 12), (30401, 9)), // __builtin_neon_splat_laneq_bf16
+    r((161, 28), (28207, 12), (30410, 4)), // __builtin_neon_splat_laneq_v
+    r((189, 31), (28219, 12), (30401, 9)), // __builtin_neon_splatq_lane_bf16
+    r((220, 28), (28219, 12), (30410, 4)), // __builtin_neon_splatq_lane_v
+    r((248, 32), (28231, 13), (30401, 9)), // __builtin_neon_splatq_laneq_bf16
+    r((280, 29), (28231, 13), (30410, 4)), // __builtin_neon_splatq_laneq_v
+    r((309, 23), (28244, 13), (30414, 13)), // __builtin_neon_vabd_f16
+    r((332, 21), (28244, 13), (30410, 4)), // __builtin_neon_vabd_v
+    r((353, 24), (28257, 3), (30410, 4)), // __builtin_neon_vabdd_f64
+    r((377, 24), (28260, 3), (30427, 8)), // __builtin_neon_vabdh_f16
+    r((401, 24), (28263, 16), (30414, 13)), // __builtin_neon_vabdq_f16
+    r((425, 22), (28263, 16), (30410, 4)), // __builtin_neon_vabdq_v
+    r((447, 24), (28279, 3), (30410, 4)), // __builtin_neon_vabds_f32
+    r((471, 23), (28282, 9), (30414, 13)), // __builtin_neon_vabs_f16
+    r((494, 21), (28282, 9), (30410, 4)), // __builtin_neon_vabs_v
+    r((515, 24), (28291, 4), (30410, 4)), // __builtin_neon_vabsd_s64
+    r((539, 24), (28295, 2), (30427, 8)), // __builtin_neon_vabsh_f16
+    r((563, 24), (28185, 11), (30414, 13)), // __builtin_neon_vabsq_f16
+    r((587, 22), (28185, 11), (30410, 4)), // __builtin_neon_vabsq_v
+    r((609, 21), (28244, 13), (30410, 4)), // __builtin_neon_vadd_v
+    r((630, 24), (28297, 6), (30410, 4)), // __builtin_neon_vaddd_s64
+    r((654, 24), (28303, 9), (30410, 4)), // __builtin_neon_vaddd_u64
+    r((678, 24), (28260, 3), (30427, 8)), // __builtin_neon_vaddh_f16
+    r((702, 23), (28312, 15), (30410, 4)), // __builtin_neon_vaddhn_v
+    r((725, 25), (28327, 4), (30410, 4)), // __builtin_neon_vaddlv_s16
+    r((750, 25), (28331, 5), (30410, 4)), // __builtin_neon_vaddlv_s32
+    r((775, 24), (28336, 5), (30410, 4)), // __builtin_neon_vaddlv_s8
+    r((799, 25), (28341, 6), (30410, 4)), // __builtin_neon_vaddlv_u16
+    r((824, 25), (28347, 7), (30410, 4)), // __builtin_neon_vaddlv_u32
+    r((849, 24), (28354, 6), (30410, 4)), // __builtin_neon_vaddlv_u8
+    r((873, 26), (28360, 4), (30410, 4)), // __builtin_neon_vaddlvq_s16
+    r((899, 26), (28364, 5), (30410, 4)), // __builtin_neon_vaddlvq_s32
+    r((925, 25), (28369, 6), (30410, 4)), // __builtin_neon_vaddlvq_s8
+    r((950, 26), (28375, 6), (30410, 4)), // __builtin_neon_vaddlvq_u16
+    r((976, 26), (28381, 7), (30410, 4)), // __builtin_neon_vaddlvq_u32
+    r((1002, 25), (28388, 7), (30410, 4)), // __builtin_neon_vaddlvq_u8
+    r((1027, 25), (28395, 15), (30410, 4)), // __builtin_neon_vaddq_p128
+    r((1052, 22), (28263, 16), (30410, 4)), // __builtin_neon_vaddq_v
+    r((1074, 24), (28410, 4), (30410, 4)), // __builtin_neon_vaddv_f32
+    r((1098, 24), (28414, 4), (30410, 4)), // __builtin_neon_vaddv_s16
+    r((1122, 24), (28418, 4), (30410, 4)), // __builtin_neon_vaddv_s32
+    r((1146, 23), (28422, 6), (30410, 4)), // __builtin_neon_vaddv_s8
+    r((1169, 24), (28428, 6), (30410, 4)), // __builtin_neon_vaddv_u16
+    r((1193, 24), (28434, 6), (30410, 4)), // __builtin_neon_vaddv_u32
+    r((1217, 23), (28440, 6), (30410, 4)), // __builtin_neon_vaddv_u8
+    r((1240, 25), (28446, 4), (30410, 4)), // __builtin_neon_vaddvq_f32
+    r((1265, 25), (28450, 4), (30410, 4)), // __builtin_neon_vaddvq_f64
+    r((1290, 25), (28454, 4), (30410, 4)), // __builtin_neon_vaddvq_s16
+    r((1315, 25), (28458, 4), (30410, 4)), // __builtin_neon_vaddvq_s32
+    r((1340, 25), (28462, 6), (30410, 4)), // __builtin_neon_vaddvq_s64
+    r((1365, 24), (28468, 7), (30410, 4)), // __builtin_neon_vaddvq_s8
+    r((1389, 25), (28475, 6), (30410, 4)), // __builtin_neon_vaddvq_u16
+    r((1414, 25), (28481, 6), (30410, 4)), // __builtin_neon_vaddvq_u32
+    r((1439, 25), (28487, 8), (30410, 4)), // __builtin_neon_vaddvq_u64
+    r((1464, 24), (28495, 7), (30410, 4)), // __builtin_neon_vaddvq_u8
+    r((1488, 24), (28263, 16), (30435, 8)), // __builtin_neon_vaesdq_u8
+    r((1512, 24), (28263, 16), (30435, 8)), // __builtin_neon_vaeseq_u8
+    r((1536, 26), (28185, 11), (30435, 8)), // __builtin_neon_vaesimcq_u8
+    r((1562, 25), (28185, 11), (30435, 8)), // __builtin_neon_vaesmcq_u8
+    r((1587, 25), (28502, 21), (30443, 9)), // __builtin_neon_vbcaxq_s16
+    r((1612, 25), (28502, 21), (30443, 9)), // __builtin_neon_vbcaxq_s32
+    r((1637, 25), (28502, 21), (30443, 9)), // __builtin_neon_vbcaxq_s64
+    r((1662, 24), (28502, 21), (30443, 9)), // __builtin_neon_vbcaxq_s8
+    r((1686, 25), (28502, 21), (30443, 9)), // __builtin_neon_vbcaxq_u16
+    r((1711, 25), (28502, 21), (30443, 9)), // __builtin_neon_vbcaxq_u32
+    r((1736, 25), (28502, 21), (30443, 9)), // __builtin_neon_vbcaxq_u64
+    r((1761, 24), (28502, 21), (30443, 9)), // __builtin_neon_vbcaxq_u8
+    r((1785, 25), (28523, 17), (30401, 9)), // __builtin_neon_vbfdot_f32
+    r((1810, 26), (28502, 21), (30401, 9)), // __builtin_neon_vbfdotq_f32
+    r((1836, 28), (28502, 21), (30401, 9)), // __builtin_neon_vbfmlalbq_f32
+    r((1864, 28), (28502, 21), (30401, 9)), // __builtin_neon_vbfmlaltq_f32
+    r((1892, 27), (28502, 21), (30401, 9)), // __builtin_neon_vbfmmlaq_f32
+    r((1919, 21), (28523, 17), (30410, 4)), // __builtin_neon_vbsl_v
+    r((1940, 22), (28502, 21), (30410, 4)), // __builtin_neon_vbslq_v
+    r((1962, 31), (28244, 13), (30452, 19)), // __builtin_neon_vcadd_rot270_f16
+    r((1993, 31), (28244, 13), (30471, 10)), // __builtin_neon_vcadd_rot270_f32
+    r((2024, 30), (28244, 13), (30452, 19)), // __builtin_neon_vcadd_rot90_f16
+    r((2054, 30), (28244, 13), (30471, 10)), // __builtin_neon_vcadd_rot90_f32
+    r((2084, 32), (28263, 16), (30452, 19)), // __builtin_neon_vcaddq_rot270_f16
+    r((2116, 32), (28263, 16), (30471, 10)), // __builtin_neon_vcaddq_rot270_f32
+    r((2148, 32), (28263, 16), (30471, 10)), // __builtin_neon_vcaddq_rot270_f64
+    r((2180, 31), (28263, 16), (30452, 19)), // __builtin_neon_vcaddq_rot90_f16
+    r((2211, 31), (28263, 16), (30471, 10)), // __builtin_neon_vcaddq_rot90_f32
+    r((2242, 31), (28263, 16), (30471, 10)), // __builtin_neon_vcaddq_rot90_f64
+    r((2273, 24), (28244, 13), (30414, 13)), // __builtin_neon_vcage_f16
+    r((2297, 22), (28244, 13), (30410, 4)), // __builtin_neon_vcage_v
+    r((2319, 25), (28540, 5), (30410, 4)), // __builtin_neon_vcaged_f64
+    r((2344, 25), (28545, 4), (30427, 8)), // __builtin_neon_vcageh_f16
+    r((2369, 25), (28263, 16), (30414, 13)), // __builtin_neon_vcageq_f16
+    r((2394, 23), (28263, 16), (30410, 4)), // __builtin_neon_vcageq_v
+    r((2417, 25), (28549, 4), (30410, 4)), // __builtin_neon_vcages_f32
+    r((2442, 24), (28244, 13), (30414, 13)), // __builtin_neon_vcagt_f16
+    r((2466, 22), (28244, 13), (30410, 4)), // __builtin_neon_vcagt_v
+    r((2488, 25), (28540, 5), (30410, 4)), // __builtin_neon_vcagtd_f64
+    r((2513, 25), (28545, 4), (30427, 8)), // __builtin_neon_vcagth_f16
+    r((2538, 25), (28263, 16), (30414, 13)), // __builtin_neon_vcagtq_f16
+    r((2563, 23), (28263, 16), (30410, 4)), // __builtin_neon_vcagtq_v
+    r((2586, 25), (28549, 4), (30410, 4)), // __builtin_neon_vcagts_f32
+    r((2611, 24), (28244, 13), (30414, 13)), // __builtin_neon_vcale_f16
+    r((2635, 22), (28244, 13), (30410, 4)), // __builtin_neon_vcale_v
+    r((2657, 25), (28540, 5), (30410, 4)), // __builtin_neon_vcaled_f64
+    r((2682, 25), (28545, 4), (30427, 8)), // __builtin_neon_vcaleh_f16
+    r((2707, 25), (28263, 16), (30414, 13)), // __builtin_neon_vcaleq_f16
+    r((2732, 23), (28263, 16), (30410, 4)), // __builtin_neon_vcaleq_v
+    r((2755, 25), (28549, 4), (30410, 4)), // __builtin_neon_vcales_f32
+    r((2780, 24), (28244, 13), (30414, 13)), // __builtin_neon_vcalt_f16
+    r((2804, 22), (28244, 13), (30410, 4)), // __builtin_neon_vcalt_v
+    r((2826, 25), (28540, 5), (30410, 4)), // __builtin_neon_vcaltd_f64
+    r((2851, 25), (28545, 4), (30427, 8)), // __builtin_neon_vcalth_f16
+    r((2876, 25), (28263, 16), (30414, 13)), // __builtin_neon_vcaltq_f16
+    r((2901, 23), (28263, 16), (30410, 4)), // __builtin_neon_vcaltq_v
+    r((2924, 25), (28549, 4), (30410, 4)), // __builtin_neon_vcalts_f32
+    r((2949, 24), (28540, 5), (30410, 4)), // __builtin_neon_vceqd_f64
+    r((2973, 24), (28553, 7), (30410, 4)), // __builtin_neon_vceqd_s64
+    r((2997, 24), (28303, 9), (30410, 4)), // __builtin_neon_vceqd_u64
+    r((3021, 24), (28545, 4), (30427, 8)), // __builtin_neon_vceqh_f16
+    r((3045, 24), (28549, 4), (30410, 4)), // __builtin_neon_vceqs_f32
+    r((3069, 24), (28282, 9), (30414, 13)), // __builtin_neon_vceqz_f16
+    r((3093, 22), (28282, 9), (30410, 4)), // __builtin_neon_vceqz_v
+    r((3115, 25), (28560, 4), (30410, 4)), // __builtin_neon_vceqzd_f64
+    r((3140, 25), (28564, 5), (30410, 4)), // __builtin_neon_vceqzd_s64
+    r((3165, 25), (28569, 6), (30410, 4)), // __builtin_neon_vceqzd_u64
+    r((3190, 25), (28575, 3), (30427, 8)), // __builtin_neon_vceqzh_f16
+    r((3215, 25), (28185, 11), (30414, 13)), // __builtin_neon_vceqzq_f16
+    r((3240, 23), (28185, 11), (30410, 4)), // __builtin_neon_vceqzq_v
+    r((3263, 25), (28578, 3), (30410, 4)), // __builtin_neon_vceqzs_f32
+    r((3288, 24), (28540, 5), (30410, 4)), // __builtin_neon_vcged_f64
+    r((3312, 24), (28553, 7), (30410, 4)), // __builtin_neon_vcged_s64
+    r((3336, 24), (28303, 9), (30410, 4)), // __builtin_neon_vcged_u64
+    r((3360, 24), (28545, 4), (30427, 8)), // __builtin_neon_vcgeh_f16
+    r((3384, 24), (28549, 4), (30410, 4)), // __builtin_neon_vcges_f32
+    r((3408, 24), (28282, 9), (30414, 13)), // __builtin_neon_vcgez_f16
+    r((3432, 22), (28282, 9), (30410, 4)), // __builtin_neon_vcgez_v
+    r((3454, 25), (28560, 4), (30410, 4)), // __builtin_neon_vcgezd_f64
+    r((3479, 25), (28564, 5), (30410, 4)), // __builtin_neon_vcgezd_s64
+    r((3504, 25), (28575, 3), (30427, 8)), // __builtin_neon_vcgezh_f16
+    r((3529, 25), (28185, 11), (30414, 13)), // __builtin_neon_vcgezq_f16
+    r((3554, 23), (28185, 11), (30410, 4)), // __builtin_neon_vcgezq_v
+    r((3577, 25), (28578, 3), (30410, 4)), // __builtin_neon_vcgezs_f32
+    r((3602, 24), (28540, 5), (30410, 4)), // __builtin_neon_vcgtd_f64
+    r((3626, 24), (28553, 7), (30410, 4)), // __builtin_neon_vcgtd_s64
+    r((3650, 24), (28303, 9), (30410, 4)), // __builtin_neon_vcgtd_u64
+    r((3674, 24), (28545, 4), (30427, 8)), // __builtin_neon_vcgth_f16
+    r((3698, 24), (28549, 4), (30410, 4)), // __builtin_neon_vcgts_f32
+    r((3722, 24), (28282, 9), (30414, 13)), // __builtin_neon_vcgtz_f16
+    r((3746, 22), (28282, 9), (30410, 4)), // __builtin_neon_vcgtz_v
+    r((3768, 25), (28560, 4), (30410, 4)), // __builtin_neon_vcgtzd_f64
+    r((3793, 25), (28564, 5), (30410, 4)), // __builtin_neon_vcgtzd_s64
+    r((3818, 25), (28575, 3), (30427, 8)), // __builtin_neon_vcgtzh_f16
+    r((3843, 25), (28185, 11), (30414, 13)), // __builtin_neon_vcgtzq_f16
+    r((3868, 23), (28185, 11), (30410, 4)), // __builtin_neon_vcgtzq_v
+    r((3891, 25), (28578, 3), (30410, 4)), // __builtin_neon_vcgtzs_f32
+    r((3916, 24), (28540, 5), (30410, 4)), // __builtin_neon_vcled_f64
+    r((3940, 24), (28553, 7), (30410, 4)), // __builtin_neon_vcled_s64
+    r((3964, 24), (28303, 9), (30410, 4)), // __builtin_neon_vcled_u64
+    r((3988, 24), (28545, 4), (30427, 8)), // __builtin_neon_vcleh_f16
+    r((4012, 24), (28549, 4), (30410, 4)), // __builtin_neon_vcles_f32
+    r((4036, 24), (28282, 9), (30414, 13)), // __builtin_neon_vclez_f16
+    r((4060, 22), (28282, 9), (30410, 4)), // __builtin_neon_vclez_v
+    r((4082, 25), (28560, 4), (30410, 4)), // __builtin_neon_vclezd_f64
+    r((4107, 25), (28564, 5), (30410, 4)), // __builtin_neon_vclezd_s64
+    r((4132, 25), (28575, 3), (30427, 8)), // __builtin_neon_vclezh_f16
+    r((4157, 25), (28185, 11), (30414, 13)), // __builtin_neon_vclezq_f16
+    r((4182, 23), (28185, 11), (30410, 4)), // __builtin_neon_vclezq_v
+    r((4205, 25), (28578, 3), (30410, 4)), // __builtin_neon_vclezs_f32
+    r((4230, 21), (28282, 9), (30410, 4)), // __builtin_neon_vcls_v
+    r((4251, 22), (28185, 11), (30410, 4)), // __builtin_neon_vclsq_v
+    r((4273, 24), (28540, 5), (30410, 4)), // __builtin_neon_vcltd_f64
+    r((4297, 24), (28553, 7), (30410, 4)), // __builtin_neon_vcltd_s64
+    r((4321, 24), (28303, 9), (30410, 4)), // __builtin_neon_vcltd_u64
+    r((4345, 24), (28545, 4), (30427, 8)), // __builtin_neon_vclth_f16
+    r((4369, 24), (28549, 4), (30410, 4)), // __builtin_neon_vclts_f32
+    r((4393, 24), (28282, 9), (30414, 13)), // __builtin_neon_vcltz_f16
+    r((4417, 22), (28282, 9), (30410, 4)), // __builtin_neon_vcltz_v
+    r((4439, 25), (28560, 4), (30410, 4)), // __builtin_neon_vcltzd_f64
+    r((4464, 25), (28564, 5), (30410, 4)), // __builtin_neon_vcltzd_s64
+    r((4489, 25), (28575, 3), (30427, 8)), // __builtin_neon_vcltzh_f16
+    r((4514, 25), (28185, 11), (30414, 13)), // __builtin_neon_vcltzq_f16
+    r((4539, 23), (28185, 11), (30410, 4)), // __builtin_neon_vcltzq_v
+    r((4562, 25), (28578, 3), (30410, 4)), // __builtin_neon_vcltzs_f32
+    r((4587, 21), (28282, 9), (30410, 4)), // __builtin_neon_vclz_v
+    r((4608, 22), (28185, 11), (30410, 4)), // __builtin_neon_vclzq_v
+    r((4630, 24), (28523, 17), (30452, 19)), // __builtin_neon_vcmla_f16
+    r((4654, 24), (28523, 17), (30471, 10)), // __builtin_neon_vcmla_f32
+    r((4678, 24), (28523, 17), (30471, 10)), // __builtin_neon_vcmla_f64
+    r((4702, 31), (28523, 17), (30452, 19)), // __builtin_neon_vcmla_rot180_f16
+    r((4733, 31), (28523, 17), (30471, 10)), // __builtin_neon_vcmla_rot180_f32
+    r((4764, 31), (28523, 17), (30471, 10)), // __builtin_neon_vcmla_rot180_f64
+    r((4795, 31), (28523, 17), (30452, 19)), // __builtin_neon_vcmla_rot270_f16
+    r((4826, 31), (28523, 17), (30471, 10)), // __builtin_neon_vcmla_rot270_f32
+    r((4857, 31), (28523, 17), (30471, 10)), // __builtin_neon_vcmla_rot270_f64
+    r((4888, 30), (28523, 17), (30452, 19)), // __builtin_neon_vcmla_rot90_f16
+    r((4918, 30), (28523, 17), (30471, 10)), // __builtin_neon_vcmla_rot90_f32
+    r((4948, 30), (28523, 17), (30471, 10)), // __builtin_neon_vcmla_rot90_f64
+    r((4978, 25), (28502, 21), (30452, 19)), // __builtin_neon_vcmlaq_f16
+    r((5003, 25), (28502, 21), (30471, 10)), // __builtin_neon_vcmlaq_f32
+    r((5028, 25), (28502, 21), (30471, 10)), // __builtin_neon_vcmlaq_f64
+    r((5053, 32), (28502, 21), (30452, 19)), // __builtin_neon_vcmlaq_rot180_f16
+    r((5085, 32), (28502, 21), (30471, 10)), // __builtin_neon_vcmlaq_rot180_f32
+    r((5117, 32), (28502, 21), (30471, 10)), // __builtin_neon_vcmlaq_rot180_f64
+    r((5149, 32), (28502, 21), (30452, 19)), // __builtin_neon_vcmlaq_rot270_f16
+    r((5181, 32), (28502, 21), (30471, 10)), // __builtin_neon_vcmlaq_rot270_f32
+    r((5213, 32), (28502, 21), (30471, 10)), // __builtin_neon_vcmlaq_rot270_f64
+    r((5245, 31), (28502, 21), (30452, 19)), // __builtin_neon_vcmlaq_rot90_f16
+    r((5276, 31), (28502, 21), (30471, 10)), // __builtin_neon_vcmlaq_rot90_f32
+    r((5307, 31), (28502, 21), (30471, 10)), // __builtin_neon_vcmlaq_rot90_f64
+    r((5338, 21), (28282, 9), (30410, 4)), // __builtin_neon_vcnt_v
+    r((5359, 22), (28185, 11), (30410, 4)), // __builtin_neon_vcntq_v
+    r((5381, 27), (28175, 10), (30410, 4)), // __builtin_neon_vcvt_f16_f32
+    r((5408, 27), (28282, 9), (30414, 13)), // __builtin_neon_vcvt_f16_s16
+    r((5435, 27), (28282, 9), (30414, 13)), // __builtin_neon_vcvt_f16_u16
+    r((5462, 27), (28581, 10), (30410, 4)), // __builtin_neon_vcvt_f32_f16
+    r((5489, 27), (28175, 10), (30410, 4)), // __builtin_neon_vcvt_f32_f64
+    r((5516, 25), (28282, 9), (30410, 4)), // __builtin_neon_vcvt_f32_v
+    r((5541, 27), (28581, 10), (30410, 4)), // __builtin_neon_vcvt_f64_f32
+    r((5568, 25), (28282, 9), (30410, 4)), // __builtin_neon_vcvt_f64_v
+    r((5593, 29), (28196, 11), (30414, 13)), // __builtin_neon_vcvt_n_f16_s16
+    r((5622, 29), (28196, 11), (30414, 13)), // __builtin_neon_vcvt_n_f16_u16
+    r((5651, 27), (28196, 11), (30410, 4)), // __builtin_neon_vcvt_n_f32_v
+    r((5678, 27), (28196, 11), (30410, 4)), // __builtin_neon_vcvt_n_f64_v
+    r((5705, 29), (28196, 11), (30414, 13)), // __builtin_neon_vcvt_n_s16_f16
+    r((5734, 27), (28196, 11), (30410, 4)), // __builtin_neon_vcvt_n_s32_v
+    r((5761, 27), (28196, 11), (30410, 4)), // __builtin_neon_vcvt_n_s64_v
+    r((5788, 29), (28196, 11), (30414, 13)), // __builtin_neon_vcvt_n_u16_f16
+    r((5817, 27), (28196, 11), (30410, 4)), // __builtin_neon_vcvt_n_u32_v
+    r((5844, 27), (28196, 11), (30410, 4)), // __builtin_neon_vcvt_n_u64_v
+    r((5871, 27), (28282, 9), (30414, 13)), // __builtin_neon_vcvt_s16_f16
+    r((5898, 25), (28282, 9), (30410, 4)), // __builtin_neon_vcvt_s32_v
+    r((5923, 25), (28282, 9), (30410, 4)), // __builtin_neon_vcvt_s64_v
+    r((5948, 27), (28282, 9), (30414, 13)), // __builtin_neon_vcvt_u16_f16
+    r((5975, 25), (28282, 9), (30410, 4)), // __builtin_neon_vcvt_u32_v
+    r((6000, 25), (28282, 9), (30410, 4)), // __builtin_neon_vcvt_u64_v
+    r((6025, 28), (28282, 9), (30414, 13)), // __builtin_neon_vcvta_s16_f16
+    r((6053, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvta_s32_v
+    r((6079, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvta_s64_v
+    r((6105, 28), (28282, 9), (30414, 13)), // __builtin_neon_vcvta_u16_f16
+    r((6133, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvta_u32_v
+    r((6159, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvta_u64_v
+    r((6185, 29), (28591, 3), (30410, 4)), // __builtin_neon_vcvtad_s64_f64
+    r((6214, 29), (28560, 4), (30410, 4)), // __builtin_neon_vcvtad_u64_f64
+    r((6243, 29), (28594, 2), (30427, 8)), // __builtin_neon_vcvtah_s16_f16
+    r((6272, 29), (28596, 2), (30427, 8)), // __builtin_neon_vcvtah_s32_f16
+    r((6301, 29), (28598, 3), (30427, 8)), // __builtin_neon_vcvtah_s64_f16
+    r((6330, 29), (28575, 3), (30427, 8)), // __builtin_neon_vcvtah_u16_f16
+    r((6359, 29), (28601, 3), (30427, 8)), // __builtin_neon_vcvtah_u32_f16
+    r((6388, 29), (28604, 4), (30427, 8)), // __builtin_neon_vcvtah_u64_f16
+    r((6417, 29), (28185, 11), (30414, 13)), // __builtin_neon_vcvtaq_s16_f16
+    r((6446, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtaq_s32_v
+    r((6473, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtaq_s64_v
+    r((6500, 29), (28185, 11), (30414, 13)), // __builtin_neon_vcvtaq_u16_f16
+    r((6529, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtaq_u32_v
+    r((6556, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtaq_u64_v
+    r((6583, 29), (28608, 2), (30410, 4)), // __builtin_neon_vcvtas_s32_f32
+    r((6612, 29), (28578, 3), (30410, 4)), // __builtin_neon_vcvtas_u32_f32
+    r((6641, 28), (28610, 3), (30410, 4)), // __builtin_neon_vcvtd_f64_s64
+    r((6669, 28), (28613, 4), (30410, 4)), // __builtin_neon_vcvtd_f64_u64
+    r((6697, 30), (28617, 5), (30410, 4)), // __builtin_neon_vcvtd_n_f64_s64
+    r((6727, 30), (28622, 6), (30410, 4)), // __builtin_neon_vcvtd_n_f64_u64
+    r((6757, 30), (28628, 5), (30410, 4)), // __builtin_neon_vcvtd_n_s64_f64
+    r((6787, 30), (28633, 6), (30410, 4)), // __builtin_neon_vcvtd_n_u64_f64
+    r((6817, 28), (28591, 3), (30410, 4)), // __builtin_neon_vcvtd_s64_f64
+    r((6845, 28), (28560, 4), (30410, 4)), // __builtin_neon_vcvtd_u64_f64
+    r((6873, 29), (28639, 2), (30401, 9)), // __builtin_neon_vcvth_bf16_f32
+    r((6902, 28), (28641, 2), (30427, 8)), // __builtin_neon_vcvth_f16_s16
+    r((6930, 28), (28643, 2), (30427, 8)), // __builtin_neon_vcvth_f16_s32
+    r((6958, 28), (28645, 3), (30427, 8)), // __builtin_neon_vcvth_f16_s64
+    r((6986, 28), (28648, 3), (30427, 8)), // __builtin_neon_vcvth_f16_u16
+    r((7014, 28), (28651, 3), (30427, 8)), // __builtin_neon_vcvth_f16_u32
+    r((7042, 28), (28654, 4), (30427, 8)), // __builtin_neon_vcvth_f16_u64
+    r((7070, 30), (28658, 4), (30427, 8)), // __builtin_neon_vcvth_n_f16_s16
+    r((7100, 30), (28662, 4), (30427, 8)), // __builtin_neon_vcvth_n_f16_s32
+    r((7130, 30), (28666, 5), (30427, 8)), // __builtin_neon_vcvth_n_f16_s64
+    r((7160, 30), (28671, 5), (30427, 8)), // __builtin_neon_vcvth_n_f16_u16
+    r((7190, 30), (28676, 5), (30427, 8)), // __builtin_neon_vcvth_n_f16_u32
+    r((7220, 30), (28681, 6), (30427, 8)), // __builtin_neon_vcvth_n_f16_u64
+    r((7250, 30), (28687, 4), (30427, 8)), // __builtin_neon_vcvth_n_s16_f16
+    r((7280, 30), (28691, 4), (30427, 8)), // __builtin_neon_vcvth_n_s32_f16
+    r((7310, 30), (28695, 5), (30427, 8)), // __builtin_neon_vcvth_n_s64_f16
+    r((7340, 30), (28700, 5), (30427, 8)), // __builtin_neon_vcvth_n_u16_f16
+    r((7370, 30), (28705, 5), (30427, 8)), // __builtin_neon_vcvth_n_u32_f16
+    r((7400, 30), (28710, 6), (30427, 8)), // __builtin_neon_vcvth_n_u64_f16
+    r((7430, 28), (28594, 2), (30427, 8)), // __builtin_neon_vcvth_s16_f16
+    r((7458, 28), (28596, 2), (30427, 8)), // __builtin_neon_vcvth_s32_f16
+    r((7486, 28), (28598, 3), (30427, 8)), // __builtin_neon_vcvth_s64_f16
+    r((7514, 28), (28575, 3), (30427, 8)), // __builtin_neon_vcvth_u16_f16
+    r((7542, 28), (28601, 3), (30427, 8)), // __builtin_neon_vcvth_u32_f16
+    r((7570, 28), (28604, 4), (30427, 8)), // __builtin_neon_vcvth_u64_f16
+    r((7598, 28), (28282, 9), (30414, 13)), // __builtin_neon_vcvtm_s16_f16
+    r((7626, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtm_s32_v
+    r((7652, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtm_s64_v
+    r((7678, 28), (28282, 9), (30414, 13)), // __builtin_neon_vcvtm_u16_f16
+    r((7706, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtm_u32_v
+    r((7732, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtm_u64_v
+    r((7758, 29), (28591, 3), (30410, 4)), // __builtin_neon_vcvtmd_s64_f64
+    r((7787, 29), (28560, 4), (30410, 4)), // __builtin_neon_vcvtmd_u64_f64
+    r((7816, 29), (28594, 2), (30427, 8)), // __builtin_neon_vcvtmh_s16_f16
+    r((7845, 29), (28596, 2), (30427, 8)), // __builtin_neon_vcvtmh_s32_f16
+    r((7874, 29), (28598, 3), (30427, 8)), // __builtin_neon_vcvtmh_s64_f16
+    r((7903, 29), (28575, 3), (30427, 8)), // __builtin_neon_vcvtmh_u16_f16
+    r((7932, 29), (28601, 3), (30427, 8)), // __builtin_neon_vcvtmh_u32_f16
+    r((7961, 29), (28604, 4), (30427, 8)), // __builtin_neon_vcvtmh_u64_f16
+    r((7990, 29), (28185, 11), (30414, 13)), // __builtin_neon_vcvtmq_s16_f16
+    r((8019, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtmq_s32_v
+    r((8046, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtmq_s64_v
+    r((8073, 29), (28185, 11), (30414, 13)), // __builtin_neon_vcvtmq_u16_f16
+    r((8102, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtmq_u32_v
+    r((8129, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtmq_u64_v
+    r((8156, 29), (28608, 2), (30410, 4)), // __builtin_neon_vcvtms_s32_f32
+    r((8185, 29), (28578, 3), (30410, 4)), // __builtin_neon_vcvtms_u32_f32
+    r((8214, 28), (28282, 9), (30414, 13)), // __builtin_neon_vcvtn_s16_f16
+    r((8242, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtn_s32_v
+    r((8268, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtn_s64_v
+    r((8294, 28), (28282, 9), (30414, 13)), // __builtin_neon_vcvtn_u16_f16
+    r((8322, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtn_u32_v
+    r((8348, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtn_u64_v
+    r((8374, 29), (28591, 3), (30410, 4)), // __builtin_neon_vcvtnd_s64_f64
+    r((8403, 29), (28560, 4), (30410, 4)), // __builtin_neon_vcvtnd_u64_f64
+    r((8432, 29), (28594, 2), (30427, 8)), // __builtin_neon_vcvtnh_s16_f16
+    r((8461, 29), (28596, 2), (30427, 8)), // __builtin_neon_vcvtnh_s32_f16
+    r((8490, 29), (28598, 3), (30427, 8)), // __builtin_neon_vcvtnh_s64_f16
+    r((8519, 29), (28575, 3), (30427, 8)), // __builtin_neon_vcvtnh_u16_f16
+    r((8548, 29), (28601, 3), (30427, 8)), // __builtin_neon_vcvtnh_u32_f16
+    r((8577, 29), (28604, 4), (30427, 8)), // __builtin_neon_vcvtnh_u64_f16
+    r((8606, 29), (28185, 11), (30414, 13)), // __builtin_neon_vcvtnq_s16_f16
+    r((8635, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtnq_s32_v
+    r((8662, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtnq_s64_v
+    r((8689, 29), (28185, 11), (30414, 13)), // __builtin_neon_vcvtnq_u16_f16
+    r((8718, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtnq_u32_v
+    r((8745, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtnq_u64_v
+    r((8772, 29), (28608, 2), (30410, 4)), // __builtin_neon_vcvtns_s32_f32
+    r((8801, 29), (28578, 3), (30410, 4)), // __builtin_neon_vcvtns_u32_f32
+    r((8830, 28), (28282, 9), (30414, 13)), // __builtin_neon_vcvtp_s16_f16
+    r((8858, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtp_s32_v
+    r((8884, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtp_s64_v
+    r((8910, 28), (28282, 9), (30414, 13)), // __builtin_neon_vcvtp_u16_f16
+    r((8938, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtp_u32_v
+    r((8964, 26), (28282, 9), (30410, 4)), // __builtin_neon_vcvtp_u64_v
+    r((8990, 29), (28591, 3), (30410, 4)), // __builtin_neon_vcvtpd_s64_f64
+    r((9019, 29), (28560, 4), (30410, 4)), // __builtin_neon_vcvtpd_u64_f64
+    r((9048, 29), (28594, 2), (30427, 8)), // __builtin_neon_vcvtph_s16_f16
+    r((9077, 29), (28596, 2), (30427, 8)), // __builtin_neon_vcvtph_s32_f16
+    r((9106, 29), (28598, 3), (30427, 8)), // __builtin_neon_vcvtph_s64_f16
+    r((9135, 29), (28575, 3), (30427, 8)), // __builtin_neon_vcvtph_u16_f16
+    r((9164, 29), (28601, 3), (30427, 8)), // __builtin_neon_vcvtph_u32_f16
+    r((9193, 29), (28604, 4), (30427, 8)), // __builtin_neon_vcvtph_u64_f16
+    r((9222, 29), (28185, 11), (30414, 13)), // __builtin_neon_vcvtpq_s16_f16
+    r((9251, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtpq_s32_v
+    r((9278, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtpq_s64_v
+    r((9305, 29), (28185, 11), (30414, 13)), // __builtin_neon_vcvtpq_u16_f16
+    r((9334, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtpq_u32_v
+    r((9361, 27), (28185, 11), (30410, 4)), // __builtin_neon_vcvtpq_u64_v
+    r((9388, 29), (28608, 2), (30410, 4)), // __builtin_neon_vcvtps_s32_f32
+    r((9417, 29), (28578, 3), (30410, 4)), // __builtin_neon_vcvtps_u32_f32
+    r((9446, 28), (28185, 11), (30414, 13)), // __builtin_neon_vcvtq_f16_s16
+    r((9474, 28), (28185, 11), (30414, 13)), // __builtin_neon_vcvtq_f16_u16
+    r((9502, 26), (28185, 11), (30410, 4)), // __builtin_neon_vcvtq_f32_v
+    r((9528, 26), (28185, 11), (30410, 4)), // __builtin_neon_vcvtq_f64_v
+    r((9554, 34), (28263, 16), (30401, 9)), // __builtin_neon_vcvtq_high_bf16_f32
+    r((9588, 30), (28231, 13), (30414, 13)), // __builtin_neon_vcvtq_n_f16_s16
+    r((9618, 30), (28231, 13), (30414, 13)), // __builtin_neon_vcvtq_n_f16_u16
+    r((9648, 28), (28231, 13), (30410, 4)), // __builtin_neon_vcvtq_n_f32_v
+    r((9676, 28), (28231, 13), (30410, 4)), // __builtin_neon_vcvtq_n_f64_v
+    r((9704, 30), (28231, 13), (30414, 13)), // __builtin_neon_vcvtq_n_s16_f16
+    r((9734, 28), (28231, 13), (30410, 4)), // __builtin_neon_vcvtq_n_s32_v
+    r((9762, 28), (28231, 13), (30410, 4)), // __builtin_neon_vcvtq_n_s64_v
+    r((9790, 30), (28231, 13), (30414, 13)), // __builtin_neon_vcvtq_n_u16_f16
+    r((9820, 28), (28231, 13), (30410, 4)), // __builtin_neon_vcvtq_n_u32_v
+    r((9848, 28), (28231, 13), (30410, 4)), // __builtin_neon_vcvtq_n_u64_v
+    r((9876, 28), (28185, 11), (30414, 13)), // __builtin_neon_vcvtq_s16_f16
+    r((9904, 26), (28185, 11), (30410, 4)), // __builtin_neon_vcvtq_s32_v
+    r((9930, 26), (28185, 11), (30410, 4)), // __builtin_neon_vcvtq_s64_v
+    r((9956, 28), (28185, 11), (30414, 13)), // __builtin_neon_vcvtq_u16_f16
+    r((9984, 26), (28185, 11), (30410, 4)), // __builtin_neon_vcvtq_u32_v
+    r((10010, 26), (28185, 11), (30410, 4)), // __builtin_neon_vcvtq_u64_v
+    r((10036, 28), (28716, 2), (30410, 4)), // __builtin_neon_vcvts_f32_s32
+    r((10064, 28), (28718, 3), (30410, 4)), // __builtin_neon_vcvts_f32_u32
+    r((10092, 30), (28721, 4), (30410, 4)), // __builtin_neon_vcvts_n_f32_s32
+    r((10122, 30), (28725, 5), (30410, 4)), // __builtin_neon_vcvts_n_f32_u32
+    r((10152, 30), (28730, 4), (30410, 4)), // __builtin_neon_vcvts_n_s32_f32
+    r((10182, 30), (28734, 5), (30410, 4)), // __builtin_neon_vcvts_n_u32_f32
+    r((10212, 28), (28608, 2), (30410, 4)), // __builtin_neon_vcvts_s32_f32
+    r((10240, 28), (28578, 3), (30410, 4)), // __builtin_neon_vcvts_u32_f32
+    r((10268, 26), (28175, 10), (30410, 4)), // __builtin_neon_vcvtx_f32_v
+    r((10294, 29), (28739, 2), (30410, 4)), // __builtin_neon_vcvtxd_f32_f64
+    r((10323, 24), (28260, 3), (30427, 8)), // __builtin_neon_vdivh_f16
+    r((10347, 23), (28523, 17), (30481, 12)), // __builtin_neon_vdot_s32
+    r((10370, 23), (28523, 17), (30481, 12)), // __builtin_neon_vdot_u32
+    r((10393, 24), (28502, 21), (30481, 12)), // __builtin_neon_vdotq_s32
+    r((10417, 24), (28502, 21), (30481, 12)), // __builtin_neon_vdotq_u32
+    r((10441, 28), (28741, 8), (30410, 4)), // __builtin_neon_vdupb_lane_i8
+    r((10469, 29), (28749, 9), (30410, 4)), // __builtin_neon_vdupb_laneq_i8
+    r((10498, 29), (28758, 6), (30410, 4)), // __builtin_neon_vdupd_lane_f64
+    r((10527, 29), (28764, 9), (30410, 4)), // __builtin_neon_vdupd_lane_i64
+    r((10556, 30), (28773, 6), (30410, 4)), // __builtin_neon_vdupd_laneq_f64
+    r((10586, 30), (28779, 9), (30410, 4)), // __builtin_neon_vdupd_laneq_i64
+    r((10616, 30), (28788, 6), (30401, 9)), // __builtin_neon_vduph_lane_bf16
+    r((10646, 29), (28794, 6), (30410, 4)), // __builtin_neon_vduph_lane_f16
+    r((10675, 29), (28800, 7), (30410, 4)), // __builtin_neon_vduph_lane_i16
+    r((10704, 31), (28807, 6), (30401, 9)), // __builtin_neon_vduph_laneq_bf16
+    r((10735, 30), (28813, 6), (30410, 4)), // __builtin_neon_vduph_laneq_f16
+    r((10765, 30), (28819, 7), (30410, 4)), // __builtin_neon_vduph_laneq_i16
+    r((10795, 29), (28826, 6), (30410, 4)), // __builtin_neon_vdups_lane_f32
+    r((10824, 29), (28832, 7), (30410, 4)), // __builtin_neon_vdups_lane_i32
+    r((10853, 30), (28839, 6), (30410, 4)), // __builtin_neon_vdups_laneq_f32
+    r((10883, 30), (28845, 7), (30410, 4)), // __builtin_neon_vdups_laneq_i32
+    r((10913, 25), (28502, 21), (30443, 9)), // __builtin_neon_veor3q_s16
+    r((10938, 25), (28502, 21), (30443, 9)), // __builtin_neon_veor3q_s32
+    r((10963, 25), (28502, 21), (30443, 9)), // __builtin_neon_veor3q_s64
+    r((10988, 24), (28502, 21), (30443, 9)), // __builtin_neon_veor3q_s8
+    r((11012, 25), (28502, 21), (30443, 9)), // __builtin_neon_veor3q_u16
+    r((11037, 25), (28502, 21), (30443, 9)), // __builtin_neon_veor3q_u32
+    r((11062, 25), (28502, 21), (30443, 9)), // __builtin_neon_veor3q_u64
+    r((11087, 24), (28502, 21), (30443, 9)), // __builtin_neon_veor3q_u8
+    r((11111, 21), (28852, 15), (30410, 4)), // __builtin_neon_vext_v
+    r((11132, 22), (28867, 18), (30410, 4)), // __builtin_neon_vextq_v
+    r((11154, 23), (28523, 17), (30414, 13)), // __builtin_neon_vfma_f16
+    r((11177, 28), (28885, 19), (30414, 13)), // __builtin_neon_vfma_lane_f16
+    r((11205, 26), (28885, 19), (30410, 4)), // __builtin_neon_vfma_lane_v
+    r((11231, 29), (28904, 20), (30414, 13)), // __builtin_neon_vfma_laneq_f16
+    r((11260, 27), (28904, 20), (30410, 4)), // __builtin_neon_vfma_laneq_v
+    r((11287, 21), (28523, 17), (30410, 4)), // __builtin_neon_vfma_v
+    r((11308, 29), (28924, 8), (30410, 4)), // __builtin_neon_vfmad_lane_f64
+    r((11337, 30), (28932, 8), (30410, 4)), // __builtin_neon_vfmad_laneq_f64
+    r((11367, 24), (28940, 4), (30427, 8)), // __builtin_neon_vfmah_f16
+    r((11391, 29), (28944, 8), (30414, 13)), // __builtin_neon_vfmah_lane_f16
+    r((11420, 30), (28952, 8), (30414, 13)), // __builtin_neon_vfmah_laneq_f16
+    r((11450, 24), (28502, 21), (30414, 13)), // __builtin_neon_vfmaq_f16
+    r((11474, 29), (28960, 22), (30414, 13)), // __builtin_neon_vfmaq_lane_f16
+    r((11503, 27), (28960, 22), (30410, 4)), // __builtin_neon_vfmaq_lane_v
+    r((11530, 30), (28982, 23), (30414, 13)), // __builtin_neon_vfmaq_laneq_f16
+    r((11560, 28), (28982, 23), (30410, 4)), // __builtin_neon_vfmaq_laneq_v
+    r((11588, 22), (28502, 21), (30410, 4)), // __builtin_neon_vfmaq_v
+    r((11610, 29), (29005, 8), (30410, 4)), // __builtin_neon_vfmas_lane_f32
+    r((11639, 30), (29013, 8), (30410, 4)), // __builtin_neon_vfmas_laneq_f32
+    r((11669, 30), (28523, 17), (30493, 12)), // __builtin_neon_vfmlal_high_f16
+    r((11699, 29), (28523, 17), (30493, 12)), // __builtin_neon_vfmlal_low_f16
+    r((11728, 31), (28502, 21), (30493, 12)), // __builtin_neon_vfmlalq_high_f16
+    r((11759, 30), (28502, 21), (30493, 12)), // __builtin_neon_vfmlalq_low_f16
+    r((11789, 30), (28523, 17), (30493, 12)), // __builtin_neon_vfmlsl_high_f16
+    r((11819, 29), (28523, 17), (30493, 12)), // __builtin_neon_vfmlsl_low_f16
+    r((11848, 31), (28502, 21), (30493, 12)), // __builtin_neon_vfmlslq_high_f16
+    r((11879, 30), (28502, 21), (30493, 12)), // __builtin_neon_vfmlslq_low_f16
+    r((11909, 24), (28940, 4), (30427, 8)), // __builtin_neon_vfmsh_f16
+    r((11933, 29), (28788, 6), (30401, 9)), // __builtin_neon_vget_lane_bf16
+    r((11962, 28), (28826, 6), (30410, 4)), // __builtin_neon_vget_lane_f32
+    r((11990, 28), (28758, 6), (30410, 4)), // __builtin_neon_vget_lane_f64
+    r((12018, 28), (28800, 7), (30410, 4)), // __builtin_neon_vget_lane_i16
+    r((12046, 28), (28832, 7), (30410, 4)), // __builtin_neon_vget_lane_i32
+    r((12074, 28), (28764, 9), (30410, 4)), // __builtin_neon_vget_lane_i64
+    r((12102, 27), (28741, 8), (30410, 4)), // __builtin_neon_vget_lane_i8
+    r((12129, 30), (28807, 6), (30401, 9)), // __builtin_neon_vgetq_lane_bf16
+    r((12159, 29), (28839, 6), (30410, 4)), // __builtin_neon_vgetq_lane_f32
+    r((12188, 29), (28773, 6), (30410, 4)), // __builtin_neon_vgetq_lane_f64
+    r((12217, 29), (28819, 7), (30410, 4)), // __builtin_neon_vgetq_lane_i16
+    r((12246, 29), (28845, 7), (30410, 4)), // __builtin_neon_vgetq_lane_i32
+    r((12275, 29), (28779, 9), (30410, 4)), // __builtin_neon_vgetq_lane_i64
+    r((12304, 28), (28749, 9), (30410, 4)), // __builtin_neon_vgetq_lane_i8
+    r((12332, 22), (28244, 13), (30410, 4)), // __builtin_neon_vhadd_v
+    r((12354, 23), (28263, 16), (30410, 4)), // __builtin_neon_vhaddq_v
+    r((12377, 22), (28244, 13), (30410, 4)), // __builtin_neon_vhsub_v
+    r((12399, 23), (28263, 16), (30410, 4)), // __builtin_neon_vhsubq_v
+    r((12422, 24), (29021, 8), (30401, 9)), // __builtin_neon_vld1_bf16
+    r((12446, 27), (29029, 7), (30401, 9)), // __builtin_neon_vld1_bf16_x2
+    r((12473, 27), (29029, 7), (30401, 9)), // __builtin_neon_vld1_bf16_x3
+    r((12500, 27), (29029, 7), (30401, 9)), // __builtin_neon_vld1_bf16_x4
+    r((12527, 28), (29021, 8), (30401, 9)), // __builtin_neon_vld1_dup_bf16
+    r((12555, 25), (29021, 8), (30410, 4)), // __builtin_neon_vld1_dup_v
+    r((12580, 29), (29036, 14), (30401, 9)), // __builtin_neon_vld1_lane_bf16
+    r((12609, 26), (29036, 14), (30410, 4)), // __builtin_neon_vld1_lane_v
+    r((12635, 21), (29021, 8), (30410, 4)), // __builtin_neon_vld1_v
+    r((12656, 24), (29029, 7), (30410, 4)), // __builtin_neon_vld1_x2_v
+    r((12680, 24), (29029, 7), (30410, 4)), // __builtin_neon_vld1_x3_v
+    r((12704, 24), (29029, 7), (30410, 4)), // __builtin_neon_vld1_x4_v
+    r((12728, 25), (29050, 9), (30401, 9)), // __builtin_neon_vld1q_bf16
+    r((12753, 28), (29029, 7), (30401, 9)), // __builtin_neon_vld1q_bf16_x2
+    r((12781, 28), (29029, 7), (30401, 9)), // __builtin_neon_vld1q_bf16_x3
+    r((12809, 28), (29029, 7), (30401, 9)), // __builtin_neon_vld1q_bf16_x4
+    r((12837, 29), (29050, 9), (30401, 9)), // __builtin_neon_vld1q_dup_bf16
+    r((12866, 26), (29050, 9), (30410, 4)), // __builtin_neon_vld1q_dup_v
+    r((12892, 30), (29059, 16), (30401, 9)), // __builtin_neon_vld1q_lane_bf16
+    r((12922, 27), (29059, 16), (30410, 4)), // __builtin_neon_vld1q_lane_v
+    r((12949, 22), (29050, 9), (30410, 4)), // __builtin_neon_vld1q_v
+    r((12971, 25), (29029, 7), (30410, 4)), // __builtin_neon_vld1q_x2_v
+    r((12996, 25), (29029, 7), (30410, 4)), // __builtin_neon_vld1q_x3_v
+    r((13021, 25), (29029, 7), (30410, 4)), // __builtin_neon_vld1q_x4_v
+    r((13046, 24), (29029, 7), (30401, 9)), // __builtin_neon_vld2_bf16
+    r((13070, 28), (29029, 7), (30401, 9)), // __builtin_neon_vld2_dup_bf16
+    r((13098, 25), (29029, 7), (30410, 4)), // __builtin_neon_vld2_dup_v
+    r((13123, 29), (29075, 17), (30401, 9)), // __builtin_neon_vld2_lane_bf16
+    r((13152, 26), (29075, 17), (30410, 4)), // __builtin_neon_vld2_lane_v
+    r((13178, 21), (29029, 7), (30410, 4)), // __builtin_neon_vld2_v
+    r((13199, 25), (29029, 7), (30401, 9)), // __builtin_neon_vld2q_bf16
+    r((13224, 29), (29029, 7), (30401, 9)), // __builtin_neon_vld2q_dup_bf16
+    r((13253, 26), (29029, 7), (30410, 4)), // __builtin_neon_vld2q_dup_v
+    r((13279, 30), (29092, 19), (30401, 9)), // __builtin_neon_vld2q_lane_bf16
+    r((13309, 27), (29092, 19), (30410, 4)), // __builtin_neon_vld2q_lane_v
+    r((13336, 22), (29029, 7), (30410, 4)), // __builtin_neon_vld2q_v
+    r((13358, 24), (29029, 7), (30401, 9)), // __builtin_neon_vld3_bf16
+    r((13382, 28), (29029, 7), (30401, 9)), // __builtin_neon_vld3_dup_bf16
+    r((13410, 25), (29029, 7), (30410, 4)), // __builtin_neon_vld3_dup_v
+    r((13435, 29), (29111, 21), (30401, 9)), // __builtin_neon_vld3_lane_bf16
+    r((13464, 26), (29111, 21), (30410, 4)), // __builtin_neon_vld3_lane_v
+    r((13490, 21), (29029, 7), (30410, 4)), // __builtin_neon_vld3_v
+    r((13511, 25), (29029, 7), (30401, 9)), // __builtin_neon_vld3q_bf16
+    r((13536, 29), (29029, 7), (30401, 9)), // __builtin_neon_vld3q_dup_bf16
+    r((13565, 26), (29029, 7), (30410, 4)), // __builtin_neon_vld3q_dup_v
+    r((13591, 30), (29132, 24), (30401, 9)), // __builtin_neon_vld3q_lane_bf16
+    r((13621, 27), (29132, 24), (30410, 4)), // __builtin_neon_vld3q_lane_v
+    r((13648, 22), (29029, 7), (30410, 4)), // __builtin_neon_vld3q_v
+    r((13670, 24), (29029, 7), (30401, 9)), // __builtin_neon_vld4_bf16
+    r((13694, 28), (29029, 7), (30401, 9)), // __builtin_neon_vld4_dup_bf16
+    r((13722, 25), (29029, 7), (30410, 4)), // __builtin_neon_vld4_dup_v
+    r((13747, 29), (29156, 25), (30401, 9)), // __builtin_neon_vld4_lane_bf16
+    r((13776, 26), (29156, 25), (30410, 4)), // __builtin_neon_vld4_lane_v
+    r((13802, 21), (29029, 7), (30410, 4)), // __builtin_neon_vld4_v
+    r((13823, 25), (29029, 7), (30401, 9)), // __builtin_neon_vld4q_bf16
+    r((13848, 29), (29029, 7), (30401, 9)), // __builtin_neon_vld4q_dup_bf16
+    r((13877, 26), (29029, 7), (30410, 4)), // __builtin_neon_vld4q_dup_v
+    r((13903, 30), (29181, 29), (30401, 9)), // __builtin_neon_vld4q_lane_bf16
+    r((13933, 27), (29181, 29), (30410, 4)), // __builtin_neon_vld4q_lane_v
+    r((13960, 22), (29029, 7), (30410, 4)), // __builtin_neon_vld4q_v
+    r((13982, 30), (29036, 14), (30505, 10)), // __builtin_neon_vldap1_lane_f64
+    r((14012, 30), (29036, 14), (30505, 10)), // __builtin_neon_vldap1_lane_p64
+    r((14042, 30), (29036, 14), (30505, 10)), // __builtin_neon_vldap1_lane_s64
+    r((14072, 30), (29036, 14), (30505, 10)), // __builtin_neon_vldap1_lane_u64
+    r((14102, 31), (29059, 16), (30505, 10)), // __builtin_neon_vldap1q_lane_f64
+    r((14133, 31), (29059, 16), (30505, 10)), // __builtin_neon_vldap1q_lane_p64
+    r((14164, 31), (29059, 16), (30505, 10)), // __builtin_neon_vldap1q_lane_s64
+    r((14195, 31), (29059, 16), (30505, 10)), // __builtin_neon_vldap1q_lane_u64
+    r((14226, 25), (29210, 8), (30410, 4)), // __builtin_neon_vldrq_p128
+    r((14251, 23), (28244, 13), (30414, 13)), // __builtin_neon_vmax_f16
+    r((14274, 21), (28244, 13), (30410, 4)), // __builtin_neon_vmax_v
+    r((14295, 24), (28260, 3), (30427, 8)), // __builtin_neon_vmaxh_f16
+    r((14319, 25), (28244, 13), (30414, 13)), // __builtin_neon_vmaxnm_f16
+    r((14344, 23), (28244, 13), (30410, 4)), // __builtin_neon_vmaxnm_v
+    r((14367, 26), (28260, 3), (30427, 8)), // __builtin_neon_vmaxnmh_f16
+    r((14393, 26), (28263, 16), (30414, 13)), // __builtin_neon_vmaxnmq_f16
+    r((14419, 24), (28263, 16), (30410, 4)), // __builtin_neon_vmaxnmq_v
+    r((14443, 26), (29218, 5), (30414, 13)), // __builtin_neon_vmaxnmv_f16
+    r((14469, 26), (28410, 4), (30410, 4)), // __builtin_neon_vmaxnmv_f32
+    r((14495, 27), (29223, 6), (30414, 13)), // __builtin_neon_vmaxnmvq_f16
+    r((14522, 27), (28446, 4), (30410, 4)), // __builtin_neon_vmaxnmvq_f32
+    r((14549, 27), (28450, 4), (30410, 4)), // __builtin_neon_vmaxnmvq_f64
+    r((14576, 24), (28263, 16), (30414, 13)), // __builtin_neon_vmaxq_f16
+    r((14600, 22), (28263, 16), (30410, 4)), // __builtin_neon_vmaxq_v
+    r((14622, 24), (29218, 5), (30414, 13)), // __builtin_neon_vmaxv_f16
+    r((14646, 24), (28410, 4), (30410, 4)), // __builtin_neon_vmaxv_f32
+    r((14670, 24), (28414, 4), (30410, 4)), // __builtin_neon_vmaxv_s16
+    r((14694, 24), (28418, 4), (30410, 4)), // __builtin_neon_vmaxv_s32
+    r((14718, 23), (28422, 6), (30410, 4)), // __builtin_neon_vmaxv_s8
+    r((14741, 24), (28428, 6), (30410, 4)), // __builtin_neon_vmaxv_u16
+    r((14765, 24), (28434, 6), (30410, 4)), // __builtin_neon_vmaxv_u32
+    r((14789, 23), (28440, 6), (30410, 4)), // __builtin_neon_vmaxv_u8
+    r((14812, 25), (29223, 6), (30414, 13)), // __builtin_neon_vmaxvq_f16
+    r((14837, 25), (28446, 4), (30410, 4)), // __builtin_neon_vmaxvq_f32
+    r((14862, 25), (28450, 4), (30410, 4)), // __builtin_neon_vmaxvq_f64
+    r((14887, 25), (28454, 4), (30410, 4)), // __builtin_neon_vmaxvq_s16
+    r((14912, 25), (28458, 4), (30410, 4)), // __builtin_neon_vmaxvq_s32
+    r((14937, 24), (28468, 7), (30410, 4)), // __builtin_neon_vmaxvq_s8
+    r((14961, 25), (28475, 6), (30410, 4)), // __builtin_neon_vmaxvq_u16
+    r((14986, 25), (28481, 6), (30410, 4)), // __builtin_neon_vmaxvq_u32
+    r((15011, 24), (28495, 7), (30410, 4)), // __builtin_neon_vmaxvq_u8
+    r((15035, 23), (28244, 13), (30414, 13)), // __builtin_neon_vmin_f16
+    r((15058, 21), (28244, 13), (30410, 4)), // __builtin_neon_vmin_v
+    r((15079, 24), (28260, 3), (30427, 8)), // __builtin_neon_vminh_f16
+    r((15103, 25), (28244, 13), (30414, 13)), // __builtin_neon_vminnm_f16
+    r((15128, 23), (28244, 13), (30410, 4)), // __builtin_neon_vminnm_v
+    r((15151, 26), (28260, 3), (30427, 8)), // __builtin_neon_vminnmh_f16
+    r((15177, 26), (28263, 16), (30414, 13)), // __builtin_neon_vminnmq_f16
+    r((15203, 24), (28263, 16), (30410, 4)), // __builtin_neon_vminnmq_v
+    r((15227, 26), (29218, 5), (30414, 13)), // __builtin_neon_vminnmv_f16
+    r((15253, 26), (28410, 4), (30410, 4)), // __builtin_neon_vminnmv_f32
+    r((15279, 27), (29223, 6), (30414, 13)), // __builtin_neon_vminnmvq_f16
+    r((15306, 27), (28446, 4), (30410, 4)), // __builtin_neon_vminnmvq_f32
+    r((15333, 27), (28450, 4), (30410, 4)), // __builtin_neon_vminnmvq_f64
+    r((15360, 24), (28263, 16), (30414, 13)), // __builtin_neon_vminq_f16
+    r((15384, 22), (28263, 16), (30410, 4)), // __builtin_neon_vminq_v
+    r((15406, 24), (29218, 5), (30414, 13)), // __builtin_neon_vminv_f16
+    r((15430, 24), (28410, 4), (30410, 4)), // __builtin_neon_vminv_f32
+    r((15454, 24), (28414, 4), (30410, 4)), // __builtin_neon_vminv_s16
+    r((15478, 24), (28418, 4), (30410, 4)), // __builtin_neon_vminv_s32
+    r((15502, 23), (28422, 6), (30410, 4)), // __builtin_neon_vminv_s8
+    r((15525, 24), (28428, 6), (30410, 4)), // __builtin_neon_vminv_u16
+    r((15549, 24), (28434, 6), (30410, 4)), // __builtin_neon_vminv_u32
+    r((15573, 23), (28440, 6), (30410, 4)), // __builtin_neon_vminv_u8
+    r((15596, 25), (29223, 6), (30414, 13)), // __builtin_neon_vminvq_f16
+    r((15621, 25), (28446, 4), (30410, 4)), // __builtin_neon_vminvq_f32
+    r((15646, 25), (28450, 4), (30410, 4)), // __builtin_neon_vminvq_f64
+    r((15671, 25), (28454, 4), (30410, 4)), // __builtin_neon_vminvq_s16
+    r((15696, 25), (28458, 4), (30410, 4)), // __builtin_neon_vminvq_s32
+    r((15721, 24), (28468, 7), (30410, 4)), // __builtin_neon_vminvq_s8
+    r((15745, 25), (28475, 6), (30410, 4)), // __builtin_neon_vminvq_u16
+    r((15770, 25), (28481, 6), (30410, 4)), // __builtin_neon_vminvq_u32
+    r((15795, 24), (28495, 7), (30410, 4)), // __builtin_neon_vminvq_u8
+    r((15819, 25), (28502, 21), (30515, 9)), // __builtin_neon_vmmlaq_s32
+    r((15844, 25), (28502, 21), (30515, 9)), // __builtin_neon_vmmlaq_u32
+    r((15869, 22), (28581, 10), (30410, 4)), // __builtin_neon_vmovl_v
+    r((15891, 22), (28175, 10), (30410, 4)), // __builtin_neon_vmovn_v
+    r((15913, 26), (28852, 15), (30410, 4)), // __builtin_neon_vmul_lane_v
+    r((15939, 27), (29229, 16), (30410, 4)), // __builtin_neon_vmul_laneq_v
+    r((15966, 25), (29245, 7), (30410, 4)), // __builtin_neon_vmul_n_f64
+    r((15991, 21), (28244, 13), (30410, 4)), // __builtin_neon_vmul_v
+    r((16012, 24), (28260, 3), (30427, 8)), // __builtin_neon_vmulh_f16
+    r((16036, 24), (29252, 11), (30435, 8)), // __builtin_neon_vmull_p64
+    r((16060, 22), (29263, 14), (30410, 4)), // __builtin_neon_vmull_v
+    r((16082, 22), (28263, 16), (30410, 4)), // __builtin_neon_vmulq_v
+    r((16104, 24), (28244, 13), (30414, 13)), // __builtin_neon_vmulx_f16
+    r((16128, 22), (28244, 13), (30410, 4)), // __builtin_neon_vmulx_v
+    r((16150, 25), (28257, 3), (30410, 4)), // __builtin_neon_vmulxd_f64
+    r((16175, 25), (28260, 3), (30427, 8)), // __builtin_neon_vmulxh_f16
+    r((16200, 30), (29277, 7), (30414, 13)), // __builtin_neon_vmulxh_lane_f16
+    r((16230, 31), (29284, 7), (30414, 13)), // __builtin_neon_vmulxh_laneq_f16
+    r((16261, 25), (28263, 16), (30414, 13)), // __builtin_neon_vmulxq_f16
+    r((16286, 23), (28263, 16), (30410, 4)), // __builtin_neon_vmulxq_v
+    r((16309, 25), (28279, 3), (30410, 4)), // __builtin_neon_vmulxs_f32
+    r((16334, 24), (28291, 4), (30410, 4)), // __builtin_neon_vnegd_s64
+    r((16358, 24), (28295, 2), (30427, 8)), // __builtin_neon_vnegh_f16
+    r((16382, 23), (28244, 13), (30410, 4)), // __builtin_neon_vpadal_v
+    r((16405, 24), (28263, 16), (30410, 4)), // __builtin_neon_vpadalq_v
+    r((16429, 24), (28244, 13), (30414, 13)), // __builtin_neon_vpadd_f16
+    r((16453, 22), (28244, 13), (30410, 4)), // __builtin_neon_vpadd_v
+    r((16475, 25), (28450, 4), (30410, 4)), // __builtin_neon_vpaddd_f64
+    r((16500, 25), (28462, 6), (30410, 4)), // __builtin_neon_vpaddd_s64
+    r((16525, 25), (28487, 8), (30410, 4)), // __builtin_neon_vpaddd_u64
+    r((16550, 23), (28282, 9), (30410, 4)), // __builtin_neon_vpaddl_v
+    r((16573, 24), (28185, 11), (30410, 4)), // __builtin_neon_vpaddlq_v
+    r((16597, 25), (28263, 16), (30414, 13)), // __builtin_neon_vpaddq_f16
+    r((16622, 23), (28263, 16), (30410, 4)), // __builtin_neon_vpaddq_v
+    r((16645, 25), (28410, 4), (30410, 4)), // __builtin_neon_vpadds_f32
+    r((16670, 24), (28244, 13), (30414, 13)), // __builtin_neon_vpmax_f16
+    r((16694, 22), (28244, 13), (30410, 4)), // __builtin_neon_vpmax_v
+    r((16716, 26), (28244, 13), (30414, 13)), // __builtin_neon_vpmaxnm_f16
+    r((16742, 24), (28244, 13), (30410, 4)), // __builtin_neon_vpmaxnm_v
+    r((16766, 27), (28263, 16), (30414, 13)), // __builtin_neon_vpmaxnmq_f16
+    r((16793, 25), (28263, 16), (30410, 4)), // __builtin_neon_vpmaxnmq_v
+    r((16818, 28), (28450, 4), (30410, 4)), // __builtin_neon_vpmaxnmqd_f64
+    r((16846, 27), (28410, 4), (30410, 4)), // __builtin_neon_vpmaxnms_f32
+    r((16873, 25), (28263, 16), (30414, 13)), // __builtin_neon_vpmaxq_f16
+    r((16898, 23), (28263, 16), (30410, 4)), // __builtin_neon_vpmaxq_v
+    r((16921, 26), (28450, 4), (30410, 4)), // __builtin_neon_vpmaxqd_f64
+    r((16947, 25), (28410, 4), (30410, 4)), // __builtin_neon_vpmaxs_f32
+    r((16972, 24), (28244, 13), (30414, 13)), // __builtin_neon_vpmin_f16
+    r((16996, 22), (28244, 13), (30410, 4)), // __builtin_neon_vpmin_v
+    r((17018, 26), (28244, 13), (30414, 13)), // __builtin_neon_vpminnm_f16
+    r((17044, 24), (28244, 13), (30410, 4)), // __builtin_neon_vpminnm_v
+    r((17068, 27), (28263, 16), (30414, 13)), // __builtin_neon_vpminnmq_f16
+    r((17095, 25), (28263, 16), (30410, 4)), // __builtin_neon_vpminnmq_v
+    r((17120, 28), (28450, 4), (30410, 4)), // __builtin_neon_vpminnmqd_f64
+    r((17148, 27), (28410, 4), (30410, 4)), // __builtin_neon_vpminnms_f32
+    r((17175, 25), (28263, 16), (30414, 13)), // __builtin_neon_vpminq_f16
+    r((17200, 23), (28263, 16), (30410, 4)), // __builtin_neon_vpminq_v
+    r((17223, 26), (28450, 4), (30410, 4)), // __builtin_neon_vpminqd_f64
+    r((17249, 25), (28410, 4), (30410, 4)), // __builtin_neon_vpmins_f32
+    r((17274, 22), (28282, 9), (30410, 4)), // __builtin_neon_vqabs_v
+    r((17296, 24), (29291, 4), (30410, 4)), // __builtin_neon_vqabsb_s8
+    r((17320, 25), (28291, 4), (30410, 4)), // __builtin_neon_vqabsd_s64
+    r((17345, 25), (29295, 2), (30410, 4)), // __builtin_neon_vqabsh_s16
+    r((17370, 23), (28185, 11), (30410, 4)), // __builtin_neon_vqabsq_v
+    r((17393, 25), (29297, 2), (30410, 4)), // __builtin_neon_vqabss_s32
+    r((17418, 22), (28244, 13), (30410, 4)), // __builtin_neon_vqadd_v
+    r((17440, 24), (29299, 6), (30410, 4)), // __builtin_neon_vqaddb_s8
+    r((17464, 24), (29305, 6), (30410, 4)), // __builtin_neon_vqaddb_u8
+    r((17488, 25), (28297, 6), (30410, 4)), // __builtin_neon_vqaddd_s64
+    r((17513, 25), (28303, 9), (30410, 4)), // __builtin_neon_vqaddd_u64
+    r((17538, 25), (29311, 3), (30410, 4)), // __builtin_neon_vqaddh_s16
+    r((17563, 25), (29314, 6), (30410, 4)), // __builtin_neon_vqaddh_u16
+    r((17588, 23), (28263, 16), (30410, 4)), // __builtin_neon_vqaddq_v
+    r((17611, 25), (29320, 3), (30410, 4)), // __builtin_neon_vqadds_s32
+    r((17636, 25), (29323, 6), (30410, 4)), // __builtin_neon_vqadds_u32
+    r((17661, 24), (29329, 19), (30410, 4)), // __builtin_neon_vqdmlal_v
+    r((17685, 32), (29348, 8), (30410, 4)), // __builtin_neon_vqdmlalh_lane_s16
+    r((17717, 33), (29356, 8), (30410, 4)), // __builtin_neon_vqdmlalh_laneq_s16
+    r((17750, 27), (29364, 4), (30410, 4)), // __builtin_neon_vqdmlalh_s16
+    r((17777, 32), (29368, 10), (30410, 4)), // __builtin_neon_vqdmlals_lane_s32
+    r((17809, 33), (29378, 10), (30410, 4)), // __builtin_neon_vqdmlals_laneq_s32
+    r((17842, 27), (29388, 6), (30410, 4)), // __builtin_neon_vqdmlals_s32
+    r((17869, 24), (29329, 19), (30410, 4)), // __builtin_neon_vqdmlsl_v
+    r((17893, 32), (29348, 8), (30410, 4)), // __builtin_neon_vqdmlslh_lane_s16
+    r((17925, 33), (29356, 8), (30410, 4)), // __builtin_neon_vqdmlslh_laneq_s16
+    r((17958, 27), (29364, 4), (30410, 4)), // __builtin_neon_vqdmlslh_s16
+    r((17985, 32), (29368, 10), (30410, 4)), // __builtin_neon_vqdmlsls_lane_s32
+    r((18017, 33), (29378, 10), (30410, 4)), // __builtin_neon_vqdmlsls_laneq_s32
+    r((18050, 27), (29388, 6), (30410, 4)), // __builtin_neon_vqdmlsls_s32
+    r((18077, 29), (28852, 15), (30410, 4)), // __builtin_neon_vqdmulh_lane_v
+    r((18106, 30), (29229, 16), (30410, 4)), // __builtin_neon_vqdmulh_laneq_v
+    r((18136, 24), (28244, 13), (30410, 4)), // __builtin_neon_vqdmulh_v
+    r((18160, 27), (29311, 3), (30410, 4)), // __builtin_neon_vqdmulhh_s16
+    r((18187, 30), (29394, 17), (30410, 4)), // __builtin_neon_vqdmulhq_lane_v
+    r((18217, 31), (28867, 18), (30410, 4)), // __builtin_neon_vqdmulhq_laneq_v
+    r((18248, 25), (28263, 16), (30410, 4)), // __builtin_neon_vqdmulhq_v
+    r((18273, 27), (29320, 3), (30410, 4)), // __builtin_neon_vqdmulhs_s32
+    r((18300, 24), (29263, 14), (30410, 4)), // __builtin_neon_vqdmull_v
+    r((18324, 27), (29411, 3), (30410, 4)), // __builtin_neon_vqdmullh_s16
+    r((18351, 27), (29414, 4), (30410, 4)), // __builtin_neon_vqdmulls_s32
+    r((18378, 23), (28175, 10), (30410, 4)), // __builtin_neon_vqmovn_v
+    r((18401, 26), (29418, 3), (30410, 4)), // __builtin_neon_vqmovnd_s64
+    r((18427, 26), (29421, 5), (30410, 4)), // __builtin_neon_vqmovnd_u64
+    r((18453, 26), (29426, 3), (30410, 4)), // __builtin_neon_vqmovnh_s16
+    r((18479, 26), (29429, 4), (30410, 4)), // __builtin_neon_vqmovnh_u16
+    r((18505, 26), (29433, 2), (30410, 4)), // __builtin_neon_vqmovns_s32
+    r((18531, 26), (29435, 4), (30410, 4)), // __builtin_neon_vqmovns_u32
+    r((18557, 24), (28175, 10), (30410, 4)), // __builtin_neon_vqmovun_v
+    r((18581, 27), (29439, 4), (30410, 4)), // __builtin_neon_vqmovund_s64
+    r((18608, 27), (29443, 3), (30410, 4)), // __builtin_neon_vqmovunh_s16
+    r((18635, 27), (29446, 3), (30410, 4)), // __builtin_neon_vqmovuns_s32
+    r((18662, 22), (28282, 9), (30410, 4)), // __builtin_neon_vqneg_v
+    r((18684, 24), (29291, 4), (30410, 4)), // __builtin_neon_vqnegb_s8
+    r((18708, 25), (28291, 4), (30410, 4)), // __builtin_neon_vqnegd_s64
+    r((18733, 25), (29295, 2), (30410, 4)), // __builtin_neon_vqnegh_s16
+    r((18758, 23), (28185, 11), (30410, 4)), // __builtin_neon_vqnegq_v
+    r((18781, 25), (29297, 2), (30410, 4)), // __builtin_neon_vqnegs_s32
+    r((18806, 27), (28523, 17), (30524, 10)), // __builtin_neon_vqrdmlah_s16
+    r((18833, 27), (28523, 17), (30524, 10)), // __builtin_neon_vqrdmlah_s32
+    r((18860, 28), (29449, 4), (30524, 10)), // __builtin_neon_vqrdmlahh_s16
+    r((18888, 28), (28502, 21), (30524, 10)), // __builtin_neon_vqrdmlahq_s16
+    r((18916, 28), (28502, 21), (30524, 10)), // __builtin_neon_vqrdmlahq_s32
+    r((18944, 28), (29453, 4), (30524, 10)), // __builtin_neon_vqrdmlahs_s32
+    r((18972, 27), (28523, 17), (30524, 10)), // __builtin_neon_vqrdmlsh_s16
+    r((18999, 27), (28523, 17), (30524, 10)), // __builtin_neon_vqrdmlsh_s32
+    r((19026, 28), (29449, 4), (30524, 10)), // __builtin_neon_vqrdmlshh_s16
+    r((19054, 28), (28502, 21), (30524, 10)), // __builtin_neon_vqrdmlshq_s16
+    r((19082, 28), (28502, 21), (30524, 10)), // __builtin_neon_vqrdmlshq_s32
+    r((19110, 28), (29453, 4), (30524, 10)), // __builtin_neon_vqrdmlshs_s32
+    r((19138, 30), (28852, 15), (30410, 4)), // __builtin_neon_vqrdmulh_lane_v
+    r((19168, 31), (29229, 16), (30410, 4)), // __builtin_neon_vqrdmulh_laneq_v
+    r((19199, 25), (28244, 13), (30410, 4)), // __builtin_neon_vqrdmulh_v
+    r((19224, 28), (29311, 3), (30410, 4)), // __builtin_neon_vqrdmulhh_s16
+    r((19252, 31), (29394, 17), (30410, 4)), // __builtin_neon_vqrdmulhq_lane_v
+    r((19283, 32), (28867, 18), (30410, 4)), // __builtin_neon_vqrdmulhq_laneq_v
+    r((19315, 26), (28263, 16), (30410, 4)), // __builtin_neon_vqrdmulhq_v
+    r((19341, 28), (29320, 3), (30410, 4)), // __builtin_neon_vqrdmulhs_s32
+    r((19369, 23), (28244, 13), (30410, 4)), // __builtin_neon_vqrshl_v
+    r((19392, 25), (29299, 6), (30410, 4)), // __builtin_neon_vqrshlb_s8
+    r((19417, 25), (29457, 6), (30410, 4)), // __builtin_neon_vqrshlb_u8
+    r((19442, 26), (28297, 6), (30410, 4)), // __builtin_neon_vqrshld_s64
+    r((19468, 26), (29463, 8), (30410, 4)), // __builtin_neon_vqrshld_u64
+    r((19494, 26), (29311, 3), (30410, 4)), // __builtin_neon_vqrshlh_s16
+    r((19520, 26), (29471, 5), (30410, 4)), // __builtin_neon_vqrshlh_u16
+    r((19546, 24), (28263, 16), (30410, 4)), // __builtin_neon_vqrshlq_v
+    r((19570, 26), (29320, 3), (30410, 4)), // __builtin_neon_vqrshls_s32
+    r((19596, 26), (29476, 5), (30410, 4)), // __builtin_neon_vqrshls_u32
+    r((19622, 26), (28207, 12), (30410, 4)), // __builtin_neon_vqrshrn_n_v
+    r((19648, 29), (29481, 5), (30410, 4)), // __builtin_neon_vqrshrnd_n_s64
+    r((19677, 29), (29486, 7), (30410, 4)), // __builtin_neon_vqrshrnd_n_u64
+    r((19706, 29), (29493, 5), (30410, 4)), // __builtin_neon_vqrshrnh_n_s16
+    r((19735, 29), (29498, 6), (30410, 4)), // __builtin_neon_vqrshrnh_n_u16
+    r((19764, 29), (29504, 4), (30410, 4)), // __builtin_neon_vqrshrns_n_s32
+    r((19793, 29), (29508, 6), (30410, 4)), // __builtin_neon_vqrshrns_n_u32
+    r((19822, 27), (28207, 12), (30410, 4)), // __builtin_neon_vqrshrun_n_v
+    r((19849, 30), (29514, 6), (30410, 4)), // __builtin_neon_vqrshrund_n_s64
+    r((19879, 30), (29520, 5), (30410, 4)), // __builtin_neon_vqrshrunh_n_s16
+    r((19909, 30), (29525, 5), (30410, 4)), // __builtin_neon_vqrshruns_n_s32
+    r((19939, 24), (28196, 11), (30410, 4)), // __builtin_neon_vqshl_n_v
+    r((19963, 22), (28244, 13), (30410, 4)), // __builtin_neon_vqshl_v
+    r((19985, 26), (29530, 6), (30410, 4)), // __builtin_neon_vqshlb_n_s8
+    r((20011, 26), (29536, 6), (30410, 4)), // __builtin_neon_vqshlb_n_u8
+    r((20037, 24), (29299, 6), (30410, 4)), // __builtin_neon_vqshlb_s8
+    r((20061, 24), (29457, 6), (30410, 4)), // __builtin_neon_vqshlb_u8
+    r((20085, 27), (29542, 6), (30410, 4)), // __builtin_neon_vqshld_n_s64
+    r((20112, 27), (29548, 8), (30410, 4)), // __builtin_neon_vqshld_n_u64
+    r((20139, 25), (28297, 6), (30410, 4)), // __builtin_neon_vqshld_s64
+    r((20164, 25), (29463, 8), (30410, 4)), // __builtin_neon_vqshld_u64
+    r((20189, 27), (29556, 4), (30410, 4)), // __builtin_neon_vqshlh_n_s16
+    r((20216, 27), (29560, 6), (30410, 4)), // __builtin_neon_vqshlh_n_u16
+    r((20243, 25), (29311, 3), (30410, 4)), // __builtin_neon_vqshlh_s16
+    r((20268, 25), (29471, 5), (30410, 4)), // __builtin_neon_vqshlh_u16
+    r((20293, 25), (28231, 13), (30410, 4)), // __builtin_neon_vqshlq_n_v
+    r((20318, 23), (28263, 16), (30410, 4)), // __builtin_neon_vqshlq_v
+    r((20341, 27), (29566, 4), (30410, 4)), // __builtin_neon_vqshls_n_s32
+    r((20368, 27), (29570, 6), (30410, 4)), // __builtin_neon_vqshls_n_u32
+    r((20395, 25), (29320, 3), (30410, 4)), // __builtin_neon_vqshls_s32
+    r((20420, 25), (29476, 5), (30410, 4)), // __builtin_neon_vqshls_u32
+    r((20445, 25), (28196, 11), (30410, 4)), // __builtin_neon_vqshlu_n_v
+    r((20470, 27), (29530, 6), (30410, 4)), // __builtin_neon_vqshlub_n_s8
+    r((20497, 28), (29542, 6), (30410, 4)), // __builtin_neon_vqshlud_n_s64
+    r((20525, 28), (29556, 4), (30410, 4)), // __builtin_neon_vqshluh_n_s16
+    r((20553, 26), (28231, 13), (30410, 4)), // __builtin_neon_vqshluq_n_v
+    r((20579, 28), (29566, 4), (30410, 4)), // __builtin_neon_vqshlus_n_s32
+    r((20607, 25), (28207, 12), (30410, 4)), // __builtin_neon_vqshrn_n_v
+    r((20632, 28), (29481, 5), (30410, 4)), // __builtin_neon_vqshrnd_n_s64
+    r((20660, 28), (29486, 7), (30410, 4)), // __builtin_neon_vqshrnd_n_u64
+    r((20688, 28), (29493, 5), (30410, 4)), // __builtin_neon_vqshrnh_n_s16
+    r((20716, 28), (29498, 6), (30410, 4)), // __builtin_neon_vqshrnh_n_u16
+    r((20744, 28), (29504, 4), (30410, 4)), // __builtin_neon_vqshrns_n_s32
+    r((20772, 28), (29508, 6), (30410, 4)), // __builtin_neon_vqshrns_n_u32
+    r((20800, 26), (28207, 12), (30410, 4)), // __builtin_neon_vqshrun_n_v
+    r((20826, 29), (29514, 6), (30410, 4)), // __builtin_neon_vqshrund_n_s64
+    r((20855, 29), (29520, 5), (30410, 4)), // __builtin_neon_vqshrunh_n_s16
+    r((20884, 29), (29525, 5), (30410, 4)), // __builtin_neon_vqshruns_n_s32
+    r((20913, 22), (28244, 13), (30410, 4)), // __builtin_neon_vqsub_v
+    r((20935, 24), (29299, 6), (30410, 4)), // __builtin_neon_vqsubb_s8
+    r((20959, 24), (29305, 6), (30410, 4)), // __builtin_neon_vqsubb_u8
+    r((20983, 25), (28297, 6), (30410, 4)), // __builtin_neon_vqsubd_s64
+    r((21008, 25), (28303, 9), (30410, 4)), // __builtin_neon_vqsubd_u64
+    r((21033, 25), (29311, 3), (30410, 4)), // __builtin_neon_vqsubh_s16
+    r((21058, 25), (29314, 6), (30410, 4)), // __builtin_neon_vqsubh_u16
+    r((21083, 23), (28263, 16), (30410, 4)), // __builtin_neon_vqsubq_v
+    r((21106, 25), (29320, 3), (30410, 4)), // __builtin_neon_vqsubs_s32
+    r((21131, 25), (29323, 6), (30410, 4)), // __builtin_neon_vqsubs_u32
+    r((21156, 23), (29576, 14), (30410, 4)), // __builtin_neon_vqtbl1_v
+    r((21179, 24), (28263, 16), (30410, 4)), // __builtin_neon_vqtbl1q_v
+    r((21203, 23), (29590, 19), (30410, 4)), // __builtin_neon_vqtbl2_v
+    r((21226, 24), (28502, 21), (30410, 4)), // __builtin_neon_vqtbl2q_v
+    r((21250, 23), (29609, 24), (30410, 4)), // __builtin_neon_vqtbl3_v
+    r((21273, 24), (29633, 26), (30410, 4)), // __builtin_neon_vqtbl3q_v
+    r((21297, 23), (29659, 29), (30410, 4)), // __builtin_neon_vqtbl4_v
+    r((21320, 24), (29688, 31), (30410, 4)), // __builtin_neon_vqtbl4q_v
+    r((21344, 23), (29719, 18), (30410, 4)), // __builtin_neon_vqtbx1_v
+    r((21367, 24), (28502, 21), (30410, 4)), // __builtin_neon_vqtbx1q_v
+    r((21391, 23), (29737, 23), (30410, 4)), // __builtin_neon_vqtbx2_v
+    r((21414, 24), (29633, 26), (30410, 4)), // __builtin_neon_vqtbx2q_v
+    r((21438, 23), (29760, 28), (30410, 4)), // __builtin_neon_vqtbx3_v
+    r((21461, 24), (29688, 31), (30410, 4)), // __builtin_neon_vqtbx3q_v
+    r((21485, 23), (29788, 33), (30410, 4)), // __builtin_neon_vqtbx4_v
+    r((21508, 24), (29821, 36), (30410, 4)), // __builtin_neon_vqtbx4q_v
+    r((21532, 24), (28312, 15), (30410, 4)), // __builtin_neon_vraddhn_v
+    r((21556, 25), (28263, 16), (30443, 9)), // __builtin_neon_vrax1q_u64
+    r((21581, 22), (28282, 9), (30410, 4)), // __builtin_neon_vrbit_v
+    r((21603, 23), (28185, 11), (30410, 4)), // __builtin_neon_vrbitq_v
+    r((21626, 25), (28282, 9), (30414, 13)), // __builtin_neon_vrecpe_f16
+    r((21651, 23), (28282, 9), (30410, 4)), // __builtin_neon_vrecpe_v
+    r((21674, 26), (29857, 2), (30410, 4)), // __builtin_neon_vrecped_f64
+    r((21700, 26), (28295, 2), (30427, 8)), // __builtin_neon_vrecpeh_f16
+    r((21726, 26), (28185, 11), (30414, 13)), // __builtin_neon_vrecpeq_f16
+    r((21752, 24), (28185, 11), (30410, 4)), // __builtin_neon_vrecpeq_v
+    r((21776, 26), (29859, 2), (30410, 4)), // __builtin_neon_vrecpes_f32
+    r((21802, 25), (28244, 13), (30414, 13)), // __builtin_neon_vrecps_f16
+    r((21827, 23), (28244, 13), (30410, 4)), // __builtin_neon_vrecps_v
+    r((21850, 26), (28257, 3), (30410, 4)), // __builtin_neon_vrecpsd_f64
+    r((21876, 26), (28260, 3), (30427, 8)), // __builtin_neon_vrecpsh_f16
+    r((21902, 26), (28263, 16), (30414, 13)), // __builtin_neon_vrecpsq_f16
+    r((21928, 24), (28263, 16), (30410, 4)), // __builtin_neon_vrecpsq_v
+    r((21952, 26), (28279, 3), (30410, 4)), // __builtin_neon_vrecpss_f32
+    r((21978, 26), (29857, 2), (30410, 4)), // __builtin_neon_vrecpxd_f64
+    r((22004, 26), (28295, 2), (30427, 8)), // __builtin_neon_vrecpxh_f16
+    r((22030, 26), (29859, 2), (30410, 4)), // __builtin_neon_vrecpxs_f32
+    r((22056, 23), (28244, 13), (30410, 4)), // __builtin_neon_vrhadd_v
+    r((22079, 24), (28263, 16), (30410, 4)), // __builtin_neon_vrhaddq_v
+    r((22103, 26), (28282, 9), (30534, 10)), // __builtin_neon_vrnd32x_f32
+    r((22129, 26), (28282, 9), (30534, 10)), // __builtin_neon_vrnd32x_f64
+    r((22155, 27), (28185, 11), (30534, 10)), // __builtin_neon_vrnd32xq_f32
+    r((22182, 27), (28185, 11), (30534, 10)), // __builtin_neon_vrnd32xq_f64
+    r((22209, 26), (28282, 9), (30534, 10)), // __builtin_neon_vrnd32z_f32
+    r((22235, 26), (28282, 9), (30534, 10)), // __builtin_neon_vrnd32z_f64
+    r((22261, 27), (28185, 11), (30534, 10)), // __builtin_neon_vrnd32zq_f32
+    r((22288, 27), (28185, 11), (30534, 10)), // __builtin_neon_vrnd32zq_f64
+    r((22315, 26), (28282, 9), (30534, 10)), // __builtin_neon_vrnd64x_f32
+    r((22341, 26), (28282, 9), (30534, 10)), // __builtin_neon_vrnd64x_f64
+    r((22367, 27), (28185, 11), (30534, 10)), // __builtin_neon_vrnd64xq_f32
+    r((22394, 27), (28185, 11), (30534, 10)), // __builtin_neon_vrnd64xq_f64
+    r((22421, 26), (28282, 9), (30534, 10)), // __builtin_neon_vrnd64z_f32
+    r((22447, 26), (28282, 9), (30534, 10)), // __builtin_neon_vrnd64z_f64
+    r((22473, 27), (28185, 11), (30534, 10)), // __builtin_neon_vrnd64zq_f32
+    r((22500, 27), (28185, 11), (30534, 10)), // __builtin_neon_vrnd64zq_f64
+    r((22527, 23), (28282, 9), (30414, 13)), // __builtin_neon_vrnd_f16
+    r((22550, 21), (28282, 9), (30410, 4)), // __builtin_neon_vrnd_v
+    r((22571, 24), (28282, 9), (30414, 13)), // __builtin_neon_vrnda_f16
+    r((22595, 22), (28282, 9), (30410, 4)), // __builtin_neon_vrnda_v
+    r((22617, 25), (28295, 2), (30427, 8)), // __builtin_neon_vrndah_f16
+    r((22642, 25), (28185, 11), (30414, 13)), // __builtin_neon_vrndaq_f16
+    r((22667, 23), (28185, 11), (30410, 4)), // __builtin_neon_vrndaq_v
+    r((22690, 24), (28295, 2), (30427, 8)), // __builtin_neon_vrndh_f16
+    r((22714, 24), (28282, 9), (30414, 13)), // __builtin_neon_vrndi_f16
+    r((22738, 22), (28282, 9), (30410, 4)), // __builtin_neon_vrndi_v
+    r((22760, 25), (28295, 2), (30427, 8)), // __builtin_neon_vrndih_f16
+    r((22785, 25), (28185, 11), (30414, 13)), // __builtin_neon_vrndiq_f16
+    r((22810, 23), (28185, 11), (30410, 4)), // __builtin_neon_vrndiq_v
+    r((22833, 24), (28282, 9), (30414, 13)), // __builtin_neon_vrndm_f16
+    r((22857, 22), (28282, 9), (30410, 4)), // __builtin_neon_vrndm_v
+    r((22879, 25), (28295, 2), (30427, 8)), // __builtin_neon_vrndmh_f16
+    r((22904, 25), (28185, 11), (30414, 13)), // __builtin_neon_vrndmq_f16
+    r((22929, 23), (28185, 11), (30410, 4)), // __builtin_neon_vrndmq_v
+    r((22952, 24), (28282, 9), (30414, 13)), // __builtin_neon_vrndn_f16
+    r((22976, 22), (28282, 9), (30410, 4)), // __builtin_neon_vrndn_v
+    r((22998, 25), (28295, 2), (30427, 8)), // __builtin_neon_vrndnh_f16
+    r((23023, 25), (28185, 11), (30414, 13)), // __builtin_neon_vrndnq_f16
+    r((23048, 23), (28185, 11), (30410, 4)), // __builtin_neon_vrndnq_v
+    r((23071, 25), (29859, 2), (30410, 4)), // __builtin_neon_vrndns_f32
+    r((23096, 24), (28282, 9), (30414, 13)), // __builtin_neon_vrndp_f16
+    r((23120, 22), (28282, 9), (30410, 4)), // __builtin_neon_vrndp_v
+    r((23142, 25), (28295, 2), (30427, 8)), // __builtin_neon_vrndph_f16
+    r((23167, 25), (28185, 11), (30414, 13)), // __builtin_neon_vrndpq_f16
+    r((23192, 23), (28185, 11), (30410, 4)), // __builtin_neon_vrndpq_v
+    r((23215, 24), (28185, 11), (30414, 13)), // __builtin_neon_vrndq_f16
+    r((23239, 22), (28185, 11), (30410, 4)), // __builtin_neon_vrndq_v
+    r((23261, 24), (28282, 9), (30414, 13)), // __builtin_neon_vrndx_f16
+    r((23285, 22), (28282, 9), (30410, 4)), // __builtin_neon_vrndx_v
+    r((23307, 25), (28295, 2), (30427, 8)), // __builtin_neon_vrndxh_f16
+    r((23332, 25), (28185, 11), (30414, 13)), // __builtin_neon_vrndxq_f16
+    r((23357, 23), (28185, 11), (30410, 4)), // __builtin_neon_vrndxq_v
+    r((23380, 22), (28244, 13), (30410, 4)), // __builtin_neon_vrshl_v
+    r((23402, 25), (28297, 6), (30410, 4)), // __builtin_neon_vrshld_s64
+    r((23427, 25), (29463, 8), (30410, 4)), // __builtin_neon_vrshld_u64
+    r((23452, 23), (28263, 16), (30410, 4)), // __builtin_neon_vrshlq_v
+    r((23475, 24), (28196, 11), (30410, 4)), // __builtin_neon_vrshr_n_v
+    r((23499, 27), (29542, 6), (30410, 4)), // __builtin_neon_vrshrd_n_s64
+    r((23526, 27), (29548, 8), (30410, 4)), // __builtin_neon_vrshrd_n_u64
+    r((23553, 25), (28207, 12), (30410, 4)), // __builtin_neon_vrshrn_n_v
+    r((23578, 25), (28231, 13), (30410, 4)), // __builtin_neon_vrshrq_n_v
+    r((23603, 26), (28282, 9), (30414, 13)), // __builtin_neon_vrsqrte_f16
+    r((23629, 24), (28282, 9), (30410, 4)), // __builtin_neon_vrsqrte_v
+    r((23653, 27), (29857, 2), (30410, 4)), // __builtin_neon_vrsqrted_f64
+    r((23680, 27), (28295, 2), (30427, 8)), // __builtin_neon_vrsqrteh_f16
+    r((23707, 27), (28185, 11), (30414, 13)), // __builtin_neon_vrsqrteq_f16
+    r((23734, 25), (28185, 11), (30410, 4)), // __builtin_neon_vrsqrteq_v
+    r((23759, 27), (29859, 2), (30410, 4)), // __builtin_neon_vrsqrtes_f32
+    r((23786, 26), (28244, 13), (30414, 13)), // __builtin_neon_vrsqrts_f16
+    r((23812, 24), (28244, 13), (30410, 4)), // __builtin_neon_vrsqrts_v
+    r((23836, 27), (28257, 3), (30410, 4)), // __builtin_neon_vrsqrtsd_f64
+    r((23863, 27), (28260, 3), (30427, 8)), // __builtin_neon_vrsqrtsh_f16
+    r((23890, 27), (28263, 16), (30414, 13)), // __builtin_neon_vrsqrtsq_f16
+    r((23917, 25), (28263, 16), (30410, 4)), // __builtin_neon_vrsqrtsq_v
+    r((23942, 27), (28279, 3), (30410, 4)), // __builtin_neon_vrsqrtss_f32
+    r((23969, 24), (28852, 15), (30410, 4)), // __builtin_neon_vrsra_n_v
+    r((23993, 27), (29861, 8), (30410, 4)), // __builtin_neon_vrsrad_n_s64
+    r((24020, 27), (29869, 11), (30410, 4)), // __builtin_neon_vrsrad_n_u64
+    r((24047, 25), (28867, 18), (30410, 4)), // __builtin_neon_vrsraq_n_v
+    r((24072, 24), (28312, 15), (30410, 4)), // __builtin_neon_vrsubhn_v
+    r((24096, 29), (29880, 9), (30401, 9)), // __builtin_neon_vset_lane_bf16
+    r((24125, 28), (29889, 9), (30410, 4)), // __builtin_neon_vset_lane_f32
+    r((24153, 28), (29898, 9), (30410, 4)), // __builtin_neon_vset_lane_f64
+    r((24181, 28), (29907, 9), (30410, 4)), // __builtin_neon_vset_lane_i16
+    r((24209, 28), (29916, 9), (30410, 4)), // __builtin_neon_vset_lane_i32
+    r((24237, 28), (29925, 12), (30410, 4)), // __builtin_neon_vset_lane_i64
+    r((24265, 27), (29937, 12), (30410, 4)), // __builtin_neon_vset_lane_i8
+    r((24292, 30), (29949, 9), (30401, 9)), // __builtin_neon_vsetq_lane_bf16
+    r((24322, 29), (29958, 9), (30410, 4)), // __builtin_neon_vsetq_lane_f32
+    r((24351, 29), (29967, 9), (30410, 4)), // __builtin_neon_vsetq_lane_f64
+    r((24380, 29), (29976, 9), (30410, 4)), // __builtin_neon_vsetq_lane_i16
+    r((24409, 29), (29985, 9), (30410, 4)), // __builtin_neon_vsetq_lane_i32
+    r((24438, 29), (29994, 12), (30410, 4)), // __builtin_neon_vsetq_lane_i64
+    r((24467, 28), (30006, 14), (30410, 4)), // __builtin_neon_vsetq_lane_i8
+    r((24495, 26), (30020, 13), (30544, 9)), // __builtin_neon_vsha1cq_u32
+    r((24521, 25), (30033, 4), (30544, 9)), // __builtin_neon_vsha1h_u32
+    r((24546, 26), (30020, 13), (30544, 9)), // __builtin_neon_vsha1mq_u32
+    r((24572, 26), (30020, 13), (30544, 9)), // __builtin_neon_vsha1pq_u32
+    r((24598, 28), (28502, 21), (30544, 9)), // __builtin_neon_vsha1su0q_u32
+    r((24626, 28), (28263, 16), (30544, 9)), // __builtin_neon_vsha1su1q_u32
+    r((24654, 29), (28502, 21), (30544, 9)), // __builtin_neon_vsha256h2q_u32
+    r((24683, 28), (28502, 21), (30544, 9)), // __builtin_neon_vsha256hq_u32
+    r((24711, 30), (28263, 16), (30544, 9)), // __builtin_neon_vsha256su0q_u32
+    r((24741, 30), (28502, 21), (30544, 9)), // __builtin_neon_vsha256su1q_u32
+    r((24771, 29), (28502, 21), (30443, 9)), // __builtin_neon_vsha512h2q_u64
+    r((24800, 28), (28502, 21), (30443, 9)), // __builtin_neon_vsha512hq_u64
+    r((24828, 30), (28263, 16), (30443, 9)), // __builtin_neon_vsha512su0q_u64
+    r((24858, 30), (28502, 21), (30443, 9)), // __builtin_neon_vsha512su1q_u64
+    r((24888, 23), (28196, 11), (30410, 4)), // __builtin_neon_vshl_n_v
+    r((24911, 21), (28244, 13), (30410, 4)), // __builtin_neon_vshl_v
+    r((24932, 26), (29542, 6), (30410, 4)), // __builtin_neon_vshld_n_s64
+    r((24958, 26), (29548, 8), (30410, 4)), // __builtin_neon_vshld_n_u64
+    r((24984, 24), (28297, 6), (30410, 4)), // __builtin_neon_vshld_s64
+    r((25008, 24), (29463, 8), (30410, 4)), // __builtin_neon_vshld_u64
+    r((25032, 24), (28219, 12), (30410, 4)), // __builtin_neon_vshll_n_v
+    r((25056, 24), (28231, 13), (30410, 4)), // __builtin_neon_vshlq_n_v
+    r((25080, 22), (28263, 16), (30410, 4)), // __builtin_neon_vshlq_v
+    r((25102, 23), (28196, 11), (30410, 4)), // __builtin_neon_vshr_n_v
+    r((25125, 26), (29542, 6), (30410, 4)), // __builtin_neon_vshrd_n_s64
+    r((25151, 26), (29548, 8), (30410, 4)), // __builtin_neon_vshrd_n_u64
+    r((25177, 24), (28207, 12), (30410, 4)), // __builtin_neon_vshrn_n_v
+    r((25201, 24), (28231, 13), (30410, 4)), // __builtin_neon_vshrq_n_v
+    r((25225, 23), (28852, 15), (30410, 4)), // __builtin_neon_vsli_n_v
+    r((25248, 26), (29861, 8), (30410, 4)), // __builtin_neon_vslid_n_s64
+    r((25274, 26), (29869, 11), (30410, 4)), // __builtin_neon_vslid_n_u64
+    r((25300, 24), (28867, 18), (30410, 4)), // __builtin_neon_vsliq_n_v
+    r((25324, 30), (28502, 21), (30553, 8)), // __builtin_neon_vsm3partw1q_u32
+    r((25354, 30), (28502, 21), (30553, 8)), // __builtin_neon_vsm3partw2q_u32
+    r((25384, 27), (28502, 21), (30553, 8)), // __builtin_neon_vsm3ss1q_u32
+    r((25411, 28), (28982, 23), (30553, 8)), // __builtin_neon_vsm3tt1aq_u32
+    r((25439, 28), (28982, 23), (30553, 8)), // __builtin_neon_vsm3tt1bq_u32
+    r((25467, 28), (28982, 23), (30553, 8)), // __builtin_neon_vsm3tt2aq_u32
+    r((25495, 28), (28982, 23), (30553, 8)), // __builtin_neon_vsm3tt2bq_u32
+    r((25523, 28), (28263, 16), (30553, 8)), // __builtin_neon_vsm4ekeyq_u32
+    r((25551, 25), (28263, 16), (30553, 8)), // __builtin_neon_vsm4eq_u32
+    r((25576, 23), (28244, 13), (30410, 4)), // __builtin_neon_vsqadd_v
+    r((25599, 25), (29457, 6), (30410, 4)), // __builtin_neon_vsqaddb_u8
+    r((25624, 26), (29463, 8), (30410, 4)), // __builtin_neon_vsqaddd_u64
+    r((25650, 26), (29471, 5), (30410, 4)), // __builtin_neon_vsqaddh_u16
+    r((25676, 24), (28263, 16), (30410, 4)), // __builtin_neon_vsqaddq_v
+    r((25700, 26), (29476, 5), (30410, 4)), // __builtin_neon_vsqadds_u32
+    r((25726, 24), (28282, 9), (30414, 13)), // __builtin_neon_vsqrt_f16
+    r((25750, 22), (28282, 9), (30410, 4)), // __builtin_neon_vsqrt_v
+    r((25772, 25), (28295, 2), (30427, 8)), // __builtin_neon_vsqrth_f16
+    r((25797, 25), (28185, 11), (30414, 13)), // __builtin_neon_vsqrtq_f16
+    r((25822, 23), (28185, 11), (30410, 4)), // __builtin_neon_vsqrtq_v
+    r((25845, 23), (28852, 15), (30410, 4)), // __builtin_neon_vsra_n_v
+    r((25868, 26), (29861, 8), (30410, 4)), // __builtin_neon_vsrad_n_s64
+    r((25894, 26), (29869, 11), (30410, 4)), // __builtin_neon_vsrad_n_u64
+    r((25920, 24), (28867, 18), (30410, 4)), // __builtin_neon_vsraq_n_v
+    r((25944, 23), (28852, 15), (30410, 4)), // __builtin_neon_vsri_n_v
+    r((25967, 26), (29861, 8), (30410, 4)), // __builtin_neon_vsrid_n_s64
+    r((25993, 26), (29869, 11), (30410, 4)), // __builtin_neon_vsrid_n_u64
+    r((26019, 24), (28867, 18), (30410, 4)), // __builtin_neon_vsriq_n_v
+    r((26043, 24), (30037, 8), (30401, 9)), // __builtin_neon_vst1_bf16
+    r((26067, 27), (30045, 12), (30401, 9)), // __builtin_neon_vst1_bf16_x2
+    r((26094, 27), (30057, 16), (30401, 9)), // __builtin_neon_vst1_bf16_x3
+    r((26121, 27), (30073, 20), (30401, 9)), // __builtin_neon_vst1_bf16_x4
+    r((26148, 29), (30093, 10), (30401, 9)), // __builtin_neon_vst1_lane_bf16
+    r((26177, 26), (30093, 10), (30410, 4)), // __builtin_neon_vst1_lane_v
+    r((26203, 21), (30037, 8), (30410, 4)), // __builtin_neon_vst1_v
+    r((26224, 24), (30045, 12), (30410, 4)), // __builtin_neon_vst1_x2_v
+    r((26248, 24), (30057, 16), (30410, 4)), // __builtin_neon_vst1_x3_v
+    r((26272, 24), (30073, 20), (30410, 4)), // __builtin_neon_vst1_x4_v
+    r((26296, 25), (30103, 9), (30401, 9)), // __builtin_neon_vst1q_bf16
+    r((26321, 28), (30112, 14), (30401, 9)), // __builtin_neon_vst1q_bf16_x2
+    r((26349, 28), (30126, 19), (30401, 9)), // __builtin_neon_vst1q_bf16_x3
+    r((26377, 28), (30145, 24), (30401, 9)), // __builtin_neon_vst1q_bf16_x4
+    r((26405, 30), (30169, 11), (30401, 9)), // __builtin_neon_vst1q_lane_bf16
+    r((26435, 27), (30169, 11), (30410, 4)), // __builtin_neon_vst1q_lane_v
+    r((26462, 22), (30103, 9), (30410, 4)), // __builtin_neon_vst1q_v
+    r((26484, 25), (30112, 14), (30410, 4)), // __builtin_neon_vst1q_x2_v
+    r((26509, 25), (30126, 19), (30410, 4)), // __builtin_neon_vst1q_x3_v
+    r((26534, 25), (30145, 24), (30410, 4)), // __builtin_neon_vst1q_x4_v
+    r((26559, 24), (30045, 12), (30401, 9)), // __builtin_neon_vst2_bf16
+    r((26583, 29), (30180, 14), (30401, 9)), // __builtin_neon_vst2_lane_bf16
+    r((26612, 26), (30180, 14), (30410, 4)), // __builtin_neon_vst2_lane_v
+    r((26638, 21), (30045, 12), (30410, 4)), // __builtin_neon_vst2_v
+    r((26659, 25), (30112, 14), (30401, 9)), // __builtin_neon_vst2q_bf16
+    r((26684, 30), (30194, 16), (30401, 9)), // __builtin_neon_vst2q_lane_bf16
+    r((26714, 27), (30194, 16), (30410, 4)), // __builtin_neon_vst2q_lane_v
+    r((26741, 22), (30112, 14), (30410, 4)), // __builtin_neon_vst2q_v
+    r((26763, 24), (30057, 16), (30401, 9)), // __builtin_neon_vst3_bf16
+    r((26787, 29), (30210, 18), (30401, 9)), // __builtin_neon_vst3_lane_bf16
+    r((26816, 26), (30210, 18), (30410, 4)), // __builtin_neon_vst3_lane_v
+    r((26842, 21), (30057, 16), (30410, 4)), // __builtin_neon_vst3_v
+    r((26863, 25), (30126, 19), (30401, 9)), // __builtin_neon_vst3q_bf16
+    r((26888, 30), (30228, 21), (30401, 9)), // __builtin_neon_vst3q_lane_bf16
+    r((26918, 27), (30228, 21), (30410, 4)), // __builtin_neon_vst3q_lane_v
+    r((26945, 22), (30126, 19), (30410, 4)), // __builtin_neon_vst3q_v
+    r((26967, 24), (30073, 20), (30401, 9)), // __builtin_neon_vst4_bf16
+    r((26991, 29), (30249, 22), (30401, 9)), // __builtin_neon_vst4_lane_bf16
+    r((27020, 26), (30249, 22), (30410, 4)), // __builtin_neon_vst4_lane_v
+    r((27046, 21), (30073, 20), (30410, 4)), // __builtin_neon_vst4_v
+    r((27067, 25), (30145, 24), (30401, 9)), // __builtin_neon_vst4q_bf16
+    r((27092, 30), (30271, 26), (30401, 9)), // __builtin_neon_vst4q_lane_bf16
+    r((27122, 27), (30271, 26), (30410, 4)), // __builtin_neon_vst4q_lane_v
+    r((27149, 22), (30145, 24), (30410, 4)), // __builtin_neon_vst4q_v
+    r((27171, 29), (30093, 10), (30505, 10)), // __builtin_neon_vstl1_lane_f64
+    r((27200, 29), (30093, 10), (30505, 10)), // __builtin_neon_vstl1_lane_p64
+    r((27229, 29), (30093, 10), (30505, 10)), // __builtin_neon_vstl1_lane_s64
+    r((27258, 29), (30093, 10), (30505, 10)), // __builtin_neon_vstl1_lane_u64
+    r((27287, 30), (30169, 11), (30505, 10)), // __builtin_neon_vstl1q_lane_f64
+    r((27317, 30), (30169, 11), (30505, 10)), // __builtin_neon_vstl1q_lane_p64
+    r((27347, 30), (30169, 11), (30505, 10)), // __builtin_neon_vstl1q_lane_s64
+    r((27377, 30), (30169, 11), (30505, 10)), // __builtin_neon_vstl1q_lane_u64
+    r((27407, 25), (30297, 8), (30410, 4)), // __builtin_neon_vstrq_p128
+    r((27432, 24), (28297, 6), (30410, 4)), // __builtin_neon_vsubd_s64
+    r((27456, 24), (28303, 9), (30410, 4)), // __builtin_neon_vsubd_u64
+    r((27480, 24), (28260, 3), (30427, 8)), // __builtin_neon_vsubh_f16
+    r((27504, 23), (28312, 15), (30410, 4)), // __builtin_neon_vsubhn_v
+    r((27527, 22), (28244, 13), (30410, 4)), // __builtin_neon_vtbl1_v
+    r((27549, 22), (28523, 17), (30410, 4)), // __builtin_neon_vtbl2_v
+    r((27571, 22), (30305, 21), (30410, 4)), // __builtin_neon_vtbl3_v
+    r((27593, 22), (30326, 25), (30410, 4)), // __builtin_neon_vtbl4_v
+    r((27615, 22), (28523, 17), (30410, 4)), // __builtin_neon_vtbx1_v
+    r((27637, 22), (30305, 21), (30410, 4)), // __builtin_neon_vtbx2_v
+    r((27659, 22), (30326, 25), (30410, 4)), // __builtin_neon_vtbx3_v
+    r((27681, 22), (30351, 29), (30410, 4)), // __builtin_neon_vtbx4_v
+    r((27703, 21), (30045, 12), (30410, 4)), // __builtin_neon_vtrn_v
+    r((27724, 22), (30112, 14), (30410, 4)), // __builtin_neon_vtrnq_v
+    r((27746, 21), (28244, 13), (30410, 4)), // __builtin_neon_vtst_v
+    r((27767, 24), (28553, 7), (30410, 4)), // __builtin_neon_vtstd_s64
+    r((27791, 24), (28303, 9), (30410, 4)), // __builtin_neon_vtstd_u64
+    r((27815, 22), (28263, 16), (30410, 4)), // __builtin_neon_vtstq_v
+    r((27837, 23), (28244, 13), (30410, 4)), // __builtin_neon_vuqadd_v
+    r((27860, 25), (30380, 6), (30410, 4)), // __builtin_neon_vuqaddb_s8
+    r((27885, 26), (30386, 7), (30410, 4)), // __builtin_neon_vuqaddd_s64
+    r((27911, 26), (30393, 4), (30410, 4)), // __builtin_neon_vuqaddh_s16
+    r((27937, 24), (28263, 16), (30410, 4)), // __builtin_neon_vuqaddq_v
+    r((27961, 26), (30397, 4), (30410, 4)), // __builtin_neon_vuqadds_s32
+    r((27987, 25), (28523, 17), (30515, 9)), // __builtin_neon_vusdot_s32
+    r((28012, 26), (28502, 21), (30515, 9)), // __builtin_neon_vusdotq_s32
+    r((28038, 27), (28502, 21), (30515, 9)), // __builtin_neon_vusmmlaq_s32
+    r((28065, 21), (30045, 12), (30410, 4)), // __builtin_neon_vuzp_v
+    r((28086, 22), (30112, 14), (30410, 4)), // __builtin_neon_vuzpq_v
+    r((28108, 24), (28867, 18), (30443, 9)), // __builtin_neon_vxarq_u64
+    r((28132, 21), (30045, 12), (30410, 4)), // __builtin_neon_vzip_v
+    r((28153, 22), (30112, 14), (30410, 4)), // __builtin_neon_vzipq_v
 ];
