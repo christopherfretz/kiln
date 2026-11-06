@@ -407,6 +407,68 @@ impl Sema<'_, '_> {
         Ok(templated)
     }
 
+    /// §6.1 step 1, the substitution: `ft`'s function parameter types
+    /// `tys` with the explicit arguments `levels` substituted (a function
+    /// parameter pack keeps its pattern; a non-trailing one expands to its
+    /// explicit elements, counted in the third result), and, for `whole`
+    /// (`Some` the template's function type), the whole function type.
+    /// Runs under the caller's `ExplicitArgSubstitution` frame.
+    #[inline(never)]
+    fn subst_explicit_param_types(
+        &mut self,
+        ft: DeclId,
+        levels: &crate::templ::args::MultiLevelArgs,
+        tys: &[QualType],
+        whole: Option<QualType>,
+        name_loc: Loc,
+        loc: Loc,
+    ) -> Result<(Vec<QualType>, Option<QualType>, usize), crate::templ::subst::SubstFail> {
+        self.in_template_context(ft, |s| {
+            let mut sub = Substituter::new(s, levels);
+            sub.final_subst = true;
+            // A function parameter pack keeps its pattern: the
+            // explicitly given prefix may be extended by deduction.
+            // A non-trailing one is a non-deduced context
+            // ([temp.deduct.type]/5.7): its explicit elements are
+            // all of it (clang keeps the expansion, unexpanded, in
+            // the parameter count).
+            let mut v = Vec::with_capacity(tys.len());
+            let mut kept = 0usize;
+            for (j, &t) in tys.iter().enumerate() {
+                let Some(pat) = crate::templ::pack::type_pattern(sub.sema, t) else {
+                    let t = sub.ty(t, loc)?;
+                    v.push(sub.param_type(t, loc)?);
+                    continue;
+                };
+                if j + 1 == tys.len() {
+                    v.push(t);
+                    continue;
+                }
+                match sub.expand_pattern_at(None, |sub| sub.ty(pat, loc))? {
+                    crate::templ::pack::Expansion::Elements(e) => {
+                        for t in e {
+                            v.push(sub.param_type(t, loc)?);
+                        }
+                        kept += 1;
+                    }
+                    crate::templ::pack::Expansion::Unexpanded(_) => v.push(t),
+                }
+            }
+            // clang `BuildFunctionType` reports at the function's
+            // name (`Function->getLocation()`).
+            let f = match whole {
+                Some(pfn) => {
+                    sub.type_begin = Some(name_loc);
+                    let f = sub.ty(pfn, loc);
+                    sub.type_begin = None;
+                    Some(f?)
+                }
+                None => None,
+            };
+            Ok((v, f, kept))
+        })
+    }
+
     /// The failure [`Self::deduce_head`]'s `tdk` is: nothing deduced, at
     /// `loc`.
     pub(crate) fn deduce_head_failure(
@@ -628,6 +690,39 @@ impl Sema<'_, '_> {
             let sugared_levels = self.prior_levels(ft, depth, &sugared);
             #[cfg(feature = "op-stats")]
             let _te2 = crate::templ::deduce_stats::timer("step-explicit-subst");
+            #[cfg(feature = "op-stats")]
+            let stat_key = crate::templ::deduce_stats::key_of(&(
+                ft,
+                &sugared_levels,
+                whole.then_some(pfn),
+                held.len(),
+            ));
+            #[cfg(feature = "op-stats")]
+            let stat_nodes = (self.ast.node_count(), self.ast.node_live_bytes(), held.len());
+            // The memo (WP-661, `explicit_memo.rs`): a repeat of a
+            // substitution that only computed types is answered in the
+            // same frame.
+            let memo_key = if self.full_deduction {
+                None
+            } else {
+                let args = sugared_levels.levels.last().map_or(ArgListId::EMPTY, |l| l.args);
+                crate::templ::explicit_memo::ExplicitKey::new(
+                    ft,
+                    depth,
+                    args,
+                    whole.then_some(pfn),
+                    &tys,
+                )
+            };
+            let before = (
+                self.ast.node_count(),
+                self.ast.node_live_bytes(),
+                self.ast.instantiation_count(),
+                held.len(),
+                self.diags.error_count(),
+                self.diags.warning_count(),
+            );
+            let mut answered = false;
             let r = self.in_sfinae_held(
                 FrameKind::ExplicitArgSubstitution,
                 ft,
@@ -635,50 +730,42 @@ impl Sema<'_, '_> {
                 loc,
                 &mut held,
                 |s| {
-                    s.in_template_context(ft, |s| {
-                        let mut sub = Substituter::new(s, &sugared_levels);
-                        sub.final_subst = true;
-                        // A function parameter pack keeps its pattern: the
-                        // explicitly given prefix may be extended by deduction.
-                        // A non-trailing one is a non-deduced context
-                        // ([temp.deduct.type]/5.7): its explicit elements are
-                        // all of it (clang keeps the expansion, unexpanded, in
-                        // the parameter count).
-                        let mut v = Vec::with_capacity(tys.len());
-                        let mut kept = 0usize;
-                        for (j, &t) in tys.iter().enumerate() {
-                            let Some(pat) = crate::templ::pack::type_pattern(sub.sema, t) else {
-                                let t = sub.ty(t, loc)?;
-                                v.push(sub.param_type(t, loc)?);
-                                continue;
-                            };
-                            if j + 1 == tys.len() {
-                                v.push(t);
-                                continue;
-                            }
-                            match sub.expand_pattern_at(None, |sub| sub.ty(pat, loc))? {
-                                crate::templ::pack::Expansion::Elements(e) => {
-                                    for t in e {
-                                        v.push(sub.param_type(t, loc)?);
-                                    }
-                                    kept += 1;
-                                }
-                                crate::templ::pack::Expansion::Unexpanded(_) => v.push(t),
-                            }
-                        }
-                        // clang `BuildFunctionType` reports at the function's
-                        // name (`Function->getLocation()`).
-                        let f = if whole {
-                            sub.type_begin = Some(name_loc);
-                            let f = sub.ty(pfn, loc);
-                            sub.type_begin = None;
-                            Some(f?)
-                        } else {
-                            None
-                        };
-                        Ok::<_, crate::templ::subst::SubstFail>((v, f, kept))
-                    })
+                    if let Some(hit) = memo_key.as_ref().and_then(|k| s.explicit_memo.get(k)) {
+                        answered = true;
+                        return Ok(hit);
+                    }
+                    s.subst_explicit_param_types(
+                        ft,
+                        &sugared_levels,
+                        &tys,
+                        whole.then_some(pfn),
+                        name_loc,
+                        loc,
+                    )
                 },
+            );
+            if let (Some(k), false, Some((Ok((t, f, kept)), Ok(())))) = (memo_key, answered, &r)
+                && before
+                    == (
+                        self.ast.node_count(),
+                        self.ast.node_live_bytes(),
+                        self.ast.instantiation_count() - 1,
+                        held.len(),
+                        self.diags.error_count(),
+                        self.diags.warning_count(),
+                    )
+                && !self.decl_in_local_scope(ft)
+            {
+                self.explicit_memo.put(k, t, *f, *kept);
+            }
+            #[cfg(feature = "op-stats")]
+            crate::templ::deduce_stats::explicit_answered(answered);
+            #[cfg(feature = "op-stats")]
+            crate::templ::deduce_stats::explicit_subst(
+                stat_key,
+                matches!(r, Some((Ok(_), Ok(())))) && held.len() == stat_nodes.2,
+                self.ast.node_count() - stat_nodes.0
+                    + u64::from(self.ast.node_live_bytes() != stat_nodes.1),
             );
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),

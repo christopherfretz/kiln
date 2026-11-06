@@ -1202,7 +1202,10 @@ These refine or replace the text above where they differ; each says why.
     total. `memory()` always has the row `instantiation.retained` (count =
     instantiations, live = reserved = retained bytes); it overlaps the
     arena rows, so `MemReport::live_bytes` excludes rows starting with
-    `total`/`instantiation`.
+    `total`/`instantiation`. It also has the rows `journal.lookup`,
+    `journal.decl_types` and `journal.redecls` (WP-661): the redeclaration
+    index's change journals (spec/sema.md), which the node meter does not
+    count.
 15. **Potentially-constant variables** ([expr.const]/3) are approximated in
     dependence propagation as "const-qualified or `constexpr`" (no
     integral/enumeration type check): over-approximating value dependence

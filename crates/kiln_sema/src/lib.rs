@@ -307,6 +307,9 @@ pub struct Sema<'a, 'sm> {
     pub full_redecl_scan: bool,
     /// The redeclaration index (WP-658).
     pub(crate) redecl_index: overload::redecl_index::RedeclIndex,
+    /// The explicit-argument substitution memo of deduction step 1
+    /// (WP-661; off under [`Sema::full_deduction`]).
+    pub(crate) explicit_memo: templ::explicit_memo::ExplicitMemo,
     /// GCC's `-fpermissive` (default off): the C++26 arithmetic between
     /// different enumerations or an enumeration and a floating type
     /// (P2864, ill-formed) is diagnosed with the C++20/23 deprecation
@@ -1049,6 +1052,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             full_deduction: false,
             full_redecl_scan: false,
             redecl_index: overload::redecl_index::RedeclIndex::default(),
+            explicit_memo: templ::explicit_memo::ExplicitMemo::default(),
             permissive: false,
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,

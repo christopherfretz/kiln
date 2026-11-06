@@ -552,8 +552,8 @@ share of the named profile that the work could remove.
 | F10 | **Partly done (WP-649):** `copy` is not the cost (no call on the Oven shapes, 0.02% of S7); the per-access bitmask and 8-byte read/write fast paths gave −0.8% to −3.8% Ir; the rest is in "WP-649: init-bit copy". Copy the init-bit map a word at a time | kiln_oven `mem.rs` `Memory::copy` | `set_bits` is 2.8% of R2 | About 2% of R2 | Low | S |
 | F11 | **Done (landed WP-644).** Cache subobject and union paths | kiln_oven `ty/path.rs` `Types::hop`, `vm.rs` `union_path`, `mutable_path`, `place_in_unions`, `extent_of`, `Types::has_subobject` | 9% of S7, about 3% of R2. Measured before the cache: 794,167 `union_path` walks over 21 distinct keys at S7 N = 40, about 7% of S7's instructions. After it: the walks' self cost at S7 N = 8 halves (96.8 M to about 52 M Ir) and S7 is 2.6% faster, with peak RSS unchanged ("WP-644: subobject path cache"). What remains is the per-access hash lookups (`vm.rs:2488` `union_path`, `ty/path.rs:144` `Types::hop`) | 3–6% of S7 (measured 2.6–3.7%) | Medium | M |
 | F12 | **Done (WP-645).** Compute node accounting lazily | kiln_sema `templ/stack.rs` push/pop; kiln_ast `node_live_bytes` | About 1–1.2% and 3 M allocations in R3 | About 1% | Low | S |
-| F13 | **Partly done (WP-657):** S8 −5.4% wall at N=100 and −7.7% at N=400, −9% RSS, `templates_wide` −4.6%, from an arity pre-filter, a substituted-integer NTTP fast path and per-candidate scratch reuse, with resolution byte-identical; `add_template_candidate` −15% (target −30%), and explicit-argument substitution remains ("WP-657: deduction attempts"). Fewer deduction and candidate attempts | kiln_sema `deduce_spec`, `add_template_candidate`, `deduce_call_arg` | 34–36% inclusive in S8; 9.8 M `deduce_spec` calls in R2; `deduce_call_arg` grows 18x for 4x N in S8 | Unknown; the largest frontend lever | Medium–high | M–L |
-| F14 | **Done (WP-658):** a per-set signature index makes each friend scan only same-signature candidates: entries scanned on S8 N=400 −99.96% (2.06 M → 886, flat in N), Ir −3.2%, wall −8.3% at N=400 and −5.3% at N=200, about 56 bytes per indexed entry, outputs byte-identical. Index hidden-friend redeclaration | kiln_sema `act_on_friend` → `overload/redecl.rs` `pick_prev_function` | 11.5% of S8 at N=400 and growing 13–19x for 4x N. Not seen in the reference. | Removes S8's quadratic term | Low | S–M |
+| F13 | **Partly done (WP-657):** S8 −5.4% wall at N=100 and −7.7% at N=400, −9% RSS, `templates_wide` −4.6%, from an arity pre-filter, a substituted-integer NTTP fast path and per-candidate scratch reuse, with resolution byte-identical; `add_template_candidate` −15% (target −30%), and explicit-argument substitution remained ("WP-657: deduction attempts"). WP-661 memoizes that substitution: S8 N=100 Ir −4.3%, `accessor-wide-emit` −3.9%, outputs and the instantiation report byte-identical; a `fn_min_args` cache was measured as a net loss and withdrawn ("WP-661: redeclaration and overload constant factors"). Fewer deduction and candidate attempts | kiln_sema `deduce_spec`, `add_template_candidate`, `deduce_call_arg` | 34–36% inclusive in S8; 9.8 M `deduce_spec` calls in R2; `deduce_call_arg` grows 18x for 4x N in S8 | Unknown; the largest frontend lever | Medium–high | M–L |
+| F14 | **Done (WP-658):** a per-set signature index makes each friend scan only same-signature candidates: entries scanned on S8 N=400 −99.96% (2.06 M → 886, flat in N), Ir −3.2%, wall −8.3% at N=400 and −5.3% at N=200, about 56 bytes per indexed entry, outputs byte-identical. WP-661: the member arm, `find_prev_function`, the `insert_with_flags` scans and the sync measured under 0.15% of every shape and were left; the index and journals have memory rows; the S8 N=200 RSS +0.64% is noise, not the index. Index hidden-friend redeclaration | kiln_sema `act_on_friend` → `overload/redecl.rs` `pick_prev_function` | 11.5% of S8 at N=400 and growing 13–19x for 4x N. Not seen in the reference. | Removes S8's quadratic term | Low | S–M |
 | F15 | **Partly done (WP-656):** leaf integer trial folds skip the bytecode: trial thunk compiles −86% and `eval_job` Ir −44% on `trial-folds` (wall −8%, RSS −16%), production shapes flat; variable reads, member accesses and `is_constant_initialized` remain ("WP-656: trial-fold fast path"). Fast path for trial folds | kiln_sema `try_fold` callers (`fold_int`, narrowing, `known_truth`) | Bytecode compile is 6.3% of R3. 168 k `compile_func` calls for 575 k folds, mostly on literals and simple arithmetic | 3–5% of R3 | Low–medium | S–M |
 | F16 | Do not re-classify keywords in `decltype` lookahead | kiln_parse `Parser::decltype_scope_end` | 3 M of 7.7 M `Keywords::get` calls in R1 | About 0.6% of R1 | Low | S |
 | F17 | Cache built-in operator candidate sets | kiln_sema `add_builtin_with` | 4.6 M calls at 434 Ir each, 1% of R2 | About 1% | Low | S |
@@ -3967,3 +3967,248 @@ indexed.
   per doubling, and none of it is this scan. `fn_min_args`
   (`crates/kiln_sema/src/overload/mod.rs:625`) and explicit-argument
   substitution are WP-657's open items.
+
+
+## WP-661: redeclaration and overload constant factors
+
+This WP takes the seven follow-ups that WP-657 and WP-658 left open
+(F13, F14). It measures each one first and implements them in the order
+of their measured share. The spec is spec/landed/sema/WP-661.md. The
+explicit-argument memo is a new bullet in spec/sema-templates.md §6.1
+(Shortcuts). The redeclaration index's scope does not change, so the
+"Redeclaration index" paragraph in spec/sema.md §3 stays as it is.
+
+### Measurement on main
+
+Main is f83d29319. The shapes and flags are those of WP-658: S8 at N =
+100, 200 and 400, plus tw, vl and aw. Callgrind ran only on S8 N=100
+and the three bench shapes, with `--cache-sim=no`,
+`ulimit -v 3000000` and `timeout 1200`.
+
+Callgrind's inclusive costs are not reliable on this aarch64 build: tail
+calls hand a callee's cost to the wrong parent. So each item's cost is
+measured as a difference. Step 0 (bc323945d) moves the member arm and
+the explicit-argument substitution into `#[inline(never)]` functions. A
+measurement-only binary then calls one item a second time, discarding
+the result, under an environment mask. The extra Ir is what the item
+costs. All seven items are pure, so the second call does the same work
+as the first. Run to run, the noise is about 0.3 M Ir.
+
+The Ir totals for S8 N=200 and N=400 are estimates: N=100's total scaled
+by the wall ratio, 17.8 G and 33.6 G. The per-call costs were measured
+at N=100 and multiplied by the op-stats call counts at each N.
+
+| item | what | S8 N=100 | S8 N=200 | S8 N=400 | tw | vl | aw | done |
+|---|---|--:|--:|--:|--:|--:|--:|---|
+| 5 | explicit-argument substitution (deduction step 1) | 5.35% | 5.6% | 6.0% | < noise | < noise | 4.76% | yes |
+| 4 | `fn_min_args` | 0.87% | 0.89% | 0.95% | 0.105% | 0.41% | 0.57% | measured, withdrawn |
+| 1 | member arm + `find_prev_function` without the index | 0.134% | 0.105% | 0.093% | 0.027% | 0.015% | 0.059% | skipped (< 0.3%) |
+| 2 | `insert_with_flags` scans | 0.054% | 0.066% | 0.091% | 0.012% | 0 | 0 | skipped (< 0.3%) |
+| 3 | per-query journal drain (sync) | 0.051% | 0.053% | 0.056% | 0 | 0 | ~0 | skipped (< 0.3%; never empty) |
+| 6 | memory rows | — | — | — | — | — | — | yes |
+| 7 | S8 N=200 RSS +0.64% | — | — | — | — | — | — | not ours (below) |
+
+The counts behind the table:
+- **Explicit-argument substitution.** It costs 8.8 K Ir per call. Calls
+  are 57,264 at N=100, 112,657 at N=200 and 224,399 at N=400; aw has
+  41,199. Only 4,900, 8,880 and 16,909 of these are distinct keys
+  (template plus explicit arguments). tw and vl do not reach it.
+- **`fn_min_args`.** It costs 114 Ir per call. Calls are 716,138,
+  1,392,082 and 2,755,793, with 36,913, 70,664 and 138,744 distinct
+  functions. aw has 431,635 calls, tw 40,202 and vl 4,475.
+- **Member arm.** It costs 564 Ir per call, over 14,988, 25,858 and
+  47,775 calls. `find_prev_function` costs 4.1 M Ir in total and stays
+  at 1,519 calls for every N. WP-658's 210 M inclusive figure for the
+  member arm at N=400 was the tail-call artifact; the difference
+  method gives 27 M.
+- **`insert_with_flags`.** About 7.4 Ir per word scanned. The words
+  scanned are 687,978, 1,590,092 and 4,142,788, over 38,809, 73,594 and
+  143,758 inserts; the largest set reaches 408, 755 and 1,455 entries.
+  This is quadratic, but even at N=400 it is under 0.1%.
+- **Sync.** About 6.7 K Ir per query, over 715, 1,409 and 2,809 queries.
+  None of the syncs found an empty journal: there were 112 K to 422 K
+  retyped declarations, of which 22% are functions. A generation counter
+  only skips an empty sync, so it would skip none.
+
+### Changes
+
+**Item 5: explicit-argument memo** (549948c15). This adds a
+direct-mapped memo of the explicit-argument substitution, keyed by
+`(DeclId, explicit argument types)`. It has 2,048 slots of 56 bytes, or
+112 KiB, allocated on first use (`templ/explicit_memo.rs`).
+
+The substitution frame is still pushed and popped on every attempt. So
+the instantiation report keeps every row, with the same counts, nodes
+and bytes. A result is kept only if all of these hold:
+- the substitution succeeded and hit no SFINAE error;
+- it held back or emitted no diagnostic;
+- it created no node and no node bytes;
+- it pushed no instantiation frame of its own;
+- the template is not declared in a local scope.
+
+A failure is never kept. So every failure's notes and diagnostics come
+at the same point as before, once per attempt. `full_deduction` turns
+the memo off.
+
+| shape | main Ir | branch Ir | Δ | memo answers |
+|---|--:|--:|--:|--:|
+| virtual-lattice | 91,043,286 | 90,822,449 | −0.24% | — |
+| templates_wide | 2,485,198,074 | 2,483,968,918 | −0.05% | — |
+| accessor-wide-emit | 8,446,071,494 | 8,119,640,665 | −3.86% | 36,752 / 41,199 |
+| S8 N=100 | 9,442,574,690 | 9,039,841,920 | −4.27% | 48,486 / 57,264 |
+
+The memo answers 95,672 of 112,657 calls at N=200 and 192,150 of
+224,399 at N=400.
+
+**Item 4: `fn_min_args` cache, measured and withdrawn** (beed35f4c).
+This was a 4,096-slot direct-mapped cache, 64 KiB. Each entry stored
+`(DeclId, parameter list, answer, parameter that fixed it)`, and each hit
+re-checked that parameter's default.
+
+It answered 94–97% of calls: 675,507 of 716,138 on S8 N=100. But the Ir
+went up:
+
+| shape | without | with | Δ |
+|---|--:|--:|--:|
+| virtual-lattice | 90,822,449 | 91,416,451 | +0.65% |
+| templates_wide | 2,483,968,918 | 2,485,751,046 | +0.07% |
+| accessor-wide-emit | 8,119,640,665 | 8,126,638,945 | +0.09% |
+| S8 N=100 | 9,039,841,920 | 9,046,277,134 | +0.07% |
+
+Most of the 114 Ir per call is the function payload lookup
+(`decls.function(f)`). The key needs that lookup, so the cache cannot
+skip it. Most functions have one or two parameters, so the walk the
+cache does skip is shorter than the hit path. vl also pays for
+initialising the table.
+
+The cache is not landed. Its test stays, as
+`min_args_follow_added_default_arguments`. It covers defaults added by
+a redeclaration ([dcl.fct.default]/4), by an out-of-class member
+definition (/6), and by late-parsed class members. Its invalidation
+argument goes in the record: a redeclaration that adds defaults creates
+new parameter declarations. Before the first query, a parameter's
+"has a default" bit is already set, as pending, and it never goes back.
+So a per-`DeclId` answer could never go stale.
+
+**Item 6: memory rows** (43facd663).
+- `Sema::overload_memory` gains `sema.redecl_index`, with count = keyed
+  positions. This is about 56 bytes per entry: 2,769 bytes for 48
+  entries in the test, and 163,665 bytes for 2,880 at S8 N=400.
+- It also gains `sema.explicit_memo`, with count = slots in use and
+  bytes = 114,688 once allocated.
+- `Ast::memory` gains `journal.lookup`, `journal.decl_types` and
+  `journal.redecls`.
+
+The journals stay out of the per-instantiation node meter (spec/ast.md
+§14), so the instantiation report's bytes do not move. spec/driver.md
+has no memory-table flag, and no driver flag prints either report. The
+rows are reachable from the API and from tests only (see What remains).
+
+**Item 7: S8 N=200 RSS.** One binary was built with the index forced off
+(`full_redecl_scan` defaulted on), which means no index and no journals.
+It was run alternately against the branch, 6 pairs per shape:
+
+| shape | branch median KB | index off median KB | Δ | spread (both) |
+|---|--:|--:|--:|--:|
+| S8 N=100 | 100,144 | 99,674 | +0.47% | 98,040–102,168 |
+| S8 N=200 | 169,456 | 169,194 | +0.15% | 166,744–171,524 |
+| S8 N=400 | 303,922 | 305,800 | −0.61% | 301,288–307,744 |
+
+Everything the index allocates is worth +0.15% at N=200: 262 KB,
+against 83 KB of index and at most 9,216 journal events between
+drains. The run-to-run spread of one binary is 2.8% at N=200. WP-658's
++0.64% is inside this noise and does not grow with the index (N=400
+goes the other way). It is not the index, and nothing is changed.
+
+### Byte identity
+
+Main f83d29319 against the branch binary 43facd663, compared with
+`.build/wp661-cmp.sh`, the same method as WP-657:
+- **`-fsyntax-only -fkiln-cfg-stats`.** Every source in tests/conformance
+  and tests/stress, plus trial-folds, templates_wide and templates_deep:
+  4,360 the same, 0 different. Output is compared with `build_ns` and
+  the binary path normalised, along with the exit code.
+- **`-S -emit-llvm`.** Every conformance source expecting
+  `ir|compile-ok|run`, all of tests/codegen, the four bench/frontend emit
+  shapes, S8 N=100 and S7: 1,963 the same, 0 different. 59 sources fail
+  on both binaries with the same exit code. There are 0 exit-code
+  mismatches.
+- **`-fkiln-instantiation-report=json`** for tw, templates_deep, vl, aw,
+  S7 and S8 N=100, with only the `*_us` timings stripped: 6 of 6 the
+  same, including every count, node and byte. S8 has 1,785
+  explicit-argument rows (`"kind":"default"`) on both.
+
+### A/B
+
+Main f83d29319 against the branch binary 43facd663
+(`.build/bench661b.sh`). There are 3 alternating pairs, each the median
+of 5 runs of `/usr/bin/time -f '%e %M'`, and the table gives the median
+of the three pair medians. S8 and S7 use `-fsyntax-only -freflection`;
+tw and vl use `-fsyntax-only`; aw uses `-S -emit-llvm`;
+`registration-wide-obj` uses `-c -O2`.
+
+| shape | main wall s | branch wall s | Δ wall | main RSS KB | branch RSS KB | Δ RSS |
+|---|--:|--:|--:|--:|--:|--:|
+| S8 N=100 | 1.01 | 0.98 | −3.0% | 98,400 | 101,048 | +2.69% |
+| S8 N=200 | 1.83 | 1.74 | −4.9% | 169,708 | 170,184 | +0.28% |
+| S8 N=400 | 3.54 | 3.33 | −5.9% | 305,704 | 306,692 | +0.32% |
+| S7 | 0.46 | 0.46 | 0 | 44,540 | 44,592 | +0.12% |
+| templates_wide | 0.22 | 0.22 | 0 | 60,580 | 60,388 | −0.32% |
+| virtual-lattice | 0.01 | 0.01 | 0 | 10,708 | 10,648 | −0.56% |
+| accessor-wide-emit | 1.49 | 1.43 | −4.0% | 140,444 | 140,460 | +0.01% |
+| registration-wide-obj | 6.87 | 6.87 | 0 | 264,020 | 264,124 | +0.04% |
+| churn-vector (control) | 0.46 | 0.47 | +2.2% | 10,740 | 10,464 | −2.57% |
+
+The values for each pair (wall; RSS), main / branch:
+- S8 N=100: 1.01, 1.01, 1.03 / 0.98, 0.96, 0.98; 99,492, 98,400, 97,952 / 100,652, 101,048, 101,048.
+- S8 N=200: 1.83, 1.81, 1.90 / 1.71, 1.74, 1.76; 170,292, 169,708, 168,176 / 170,184, 169,936, 170,808.
+- S8 N=400: 3.51, 3.55, 3.54 / 3.38, 3.33, 3.32; 308,176, 304,412, 305,704 / 306,692, 304,812, 307,368.
+- churn-vector: 0.46, 0.46, 0.46 / 0.47, 0.47, 0.47; 10,740, 10,740, 10,740 / 10,464, 10,464, 10,464.
+- S8 at N=40 (the recorded `reflect/s8`), 3 more pairs: 0.56, 0.54, 0.55 / 0.52, 0.53, 0.52 (−5.5%); 58,396, 58,464, 58,436 / 58,452, 58,488, 58,468 (+0.05%).
+
+Against the targets:
+- **S8 N=400 wall −4%.** It is −5.9%. Met.
+- **templates_wide −2%.** It is 0. Not met. tw never reaches an
+  explicit-argument substitution. The only item that touches tw is
+  `fn_min_args`, at 0.105% of its Ir, and that cache was a net loss.
+- **No shape slower than noise.** Met. churn-vector (+2.2%) is the
+  control: it compiles no template with explicit arguments, and 0.46 →
+  0.47 is one tick of `time`'s resolution.
+- **RSS ≤ +0.3% peak on every shape.**
+  - Met on the heap, but the RSS medians do not show it. S8 N=100's
+    +2.69% and N=400's +0.32% are page-level noise; S8 N=100's
+    run-to-run spread on one binary is 4%.
+  - Massif on S8 N=100 gives a peak heap of 109,194,245 bytes on main
+    and 109,308,933 on the branch. The difference is +114,688 bytes,
+    +0.105%, which is exactly the memo's table.
+  - 10 more alternating single runs give medians of 100,054 KB for main
+    and 100,216 KB for the branch, +0.16%.
+  - At N=400 the table is +0.04% of the heap.
+- **S8 N=200 within +0.5%.** It is +0.28%. Item 7 was not ours (see
+  above).
+
+**Baselines.** None are re-recorded. The recorded `reflect/s8` is S8 at
+N=40. Its A/B above is −5.5% at `time`'s 0.01 s resolution. The bench
+harness measures it more finely: `cargo xtask bench --record --runs 5
+--filter reflect/s8 bench/reflect` gave a median of 558.1 ms against
+WP-657's 571.6 ms, which is −2.4%, and the harness classed it as
+"0 improved". That is under the 5% bar, so the recording was discarded.
+aw (−4.0%) is also under 5%, and S8 at N=100–400 has no recorded entry.
+
+### What remains
+
+- **`fn_min_args`** (`crates/kiln_sema/src/overload/mod.rs:644`) is
+  0.9% of S8. A cache keyed by `DeclId` cannot beat it while the key
+  needs `decls.function(f)`. Storing the minimum on `FunctionData` when
+  the parameters are set (`set_params`) would skip both the lookup and
+  the walk.
+- **Explicit-argument substitutions that create nodes** are never kept
+  (4,647 of 57,264 at S8 N=100: the first substitution that completes a
+  class it names). A key seen again after such a run is recomputed.
+- **Items 1–3** are each under 0.15% at every N measured. Item 2 grows
+  quadratically (0.054% → 0.091% from N=100 to N=400). It would reach
+  0.3% at roughly N=1,600.
+- **Memory rows** have no driver flag. spec/driver.md would need a
+  `-fkiln-mem-stats`-style flag, or `-fkiln-cfg-stats` would need to
+  print `Ast::memory` and `Sema::overload_memory`, for `xtask bench` to
+  record them.

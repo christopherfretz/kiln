@@ -11,8 +11,15 @@ mod common;
 
 use std::fmt::Write as _;
 
+use std::sync::Arc;
+
 use common::{Parsed, opts19, parse_with};
+use kiln_diag::{DiagEngine, DiagOptions, MemorySink};
 use kiln_parse::ParseOptions;
+use kiln_sema::target::{Arch, Target};
+use kiln_sema::templ::report::ReportFormat;
+use kiln_source::SourceManager;
+use kiln_source::symbol::Interner;
 
 /// Analyses `src` both ways and asserts they agree; returns the
 /// pre-filtered result.
@@ -191,4 +198,122 @@ int r4 = A<1, 300, 0, true, 'a', e0, F::f0>::narrow();
     // The narrowed `300` is a deduction failure, the only error.
     p.assert_diag("error: no matching function for call to 'nget'");
     assert_eq!(p.diags.iter().filter(|d| d.contains("error:")).count(), 1, "{:#?}", p.diags);
+}
+
+/// The NDJSON instantiation report of `src` (WP-661), without its timings,
+/// one line per row, sorted.
+fn report(src: &str, full_deduction: bool) -> Vec<String> {
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let opts = ParseOptions { full_deduction, inst_report: ReportFormat::Json, ..opts19() };
+    let tu = kiln_parse::parse_tu(
+        &sm,
+        &interner,
+        file,
+        &engine,
+        Target::for_arch(Arch::X86_64),
+        &opts,
+        kiln_parse::ConstexprLimits::default(),
+    );
+    let mut rows: Vec<String> = tu
+        .inst_report
+        .lines()
+        .map(|l| {
+            let mut out = String::new();
+            for f in l.trim_matches(|c| c == '{' || c == '}').split(',') {
+                if !f.starts_with("\"self_us\"") && !f.starts_with("\"incl_us\"") {
+                    let _ = write!(out, "{f},");
+                }
+            }
+            out
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+/// WP-661: the explicit-argument substitution memo changes nothing. The
+/// same `(template, explicit arguments)` pairs are deduced many times:
+/// successes (answered from the memo), SFINAE failures (never kept: each
+/// is noted again, at the same call), a failure that later succeeds once
+/// the class it looks into is complete, a substitution that instantiates
+/// a class (not kept: it created nodes), packs, the address of a
+/// specialization, and a generic lambda (a local-scope template, never
+/// kept). Diagnostics, the AST and every instantiation-report row
+/// (count, nodes, bytes) agree with the memo off.
+#[test]
+fn explicit_argument_memo_matches_the_full_path() {
+    let src = r"
+template <class T, class U> T conv(U u) { return T(u); }
+template <class T> struct box { using type = T; T v; };
+template <class T> int unbox(typename box<T>::type t, T) { return int(t); }
+template <class T> typename T::type pick(T) { return 0; }
+template <class T> int pick(...) { return 1; }
+template <class... Ts> int count(int, Ts...) { return sizeof...(Ts); }
+template <class T, class... Ts> int first(T t, Ts...) { return int(t); }
+struct S;
+template <class T> int deref(typename T::type*) { return 2; }
+int c1 = conv<int>(1L) + conv<int>(2L) + conv<long>(3) + conv<int>(4L);
+int c2 = unbox<int>(1, 2) + unbox<int>(3, 4) + unbox<long>(5, 6L);
+int c3 = pick<int>(0) + pick<int>(1) + pick<box<int>>(box<int>{});
+int c4 = count<long, char>(0, 1, 'a') + count<long, char>(1, 2, 'b') + count<long>(2, 3);
+int c5 = first<int, long>(1, 2L) + first<int, long>(3, 4L) + first<int>(5);
+int (*p1)(long) = &conv<int, long>;
+int (*p2)(long) = &conv<int, long>;
+int e1 = deref<S>(0);
+struct S { using type = int; };
+int e2 = deref<S>(0) + deref<S>(0);
+int c6 = pick<char>(0) + pick<char>(0);
+void g() {
+  auto l = []<class T>(T t) { return int(t); };
+  int a = l.operator()<long>(1) + l.operator()<long>(2);
+  (void)a;
+}
+";
+    let p = same_both_ways(src);
+    p.assert_diag("error: no matching function for call to 'deref'");
+    assert_eq!(p.diags.iter().filter(|d| d.contains("error:")).count(), 1, "{:#?}", p.diags);
+    let (fast, full) = (report(src, false), report(src, true));
+    assert!(fast.iter().any(|r| r.contains("\"kind\":\"default\"")), "{fast:#?}");
+    assert_eq!(fast, full, "instantiation report differs with the memo");
+}
+
+/// WP-661: the minimum argument count follows default arguments that later
+/// redeclarations add ([dcl.fct.default]/4), out-of-class member
+/// definitions add (/6) and class-scope late parsing supplies: each call
+/// is checked against the defaults visible at it, after the same
+/// functions were already asked for their minimum (a function template
+/// cannot gain defaults, /4, so it is only asked repeatedly). The arity
+/// failures keep their notes.
+#[test]
+fn min_args_follow_added_default_arguments() {
+    let p = same_both_ways(
+        r"
+void f(int, int, int);
+int a1 = (f(1, 2, 3), 0);
+void f(int, int, int = 3);
+int a2 = (f(1, 2), 0);
+void f(int, int = 2, int);
+int a3 = (f(1), 0);
+template <class T> int t(T, int, int = 3);
+int b1 = t(1, 2, 3) + t(1, 2) + t<long>(1, 2) + t<long>(1, 2, 3);
+struct S {
+  int m(int, int);
+  int n(int = 1) { return m(1, 2) + k(); }
+  int k(int = 0) { return 0; }
+  int u(int, int) { return 0; }
+};
+int c1 = S().m(1, 2) + S().n() + S().k();
+int S::m(int, int = 2) { return 0; }
+int c2 = S().m(1);
+void g(int, int);
+void use() { g(1); }
+void g(int, int = 0);
+void use2() { g(1); g(); }
+",
+    );
+    p.assert_diag("error: no matching function for call to 'g'");
+    assert_eq!(p.diags.iter().filter(|d| d.contains("error:")).count(), 2, "{:#?}", p.diags);
 }

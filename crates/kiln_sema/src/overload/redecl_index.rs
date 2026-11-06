@@ -107,7 +107,6 @@ impl SetIndex {
         self.prev_same[at as usize] = next;
     }
 
-    #[cfg_attr(not(feature = "op-stats"), allow(dead_code))]
     fn heap_bytes(&self) -> u64 {
         (self.keys.capacity() * 8 + self.src.capacity() * 4 + self.prev_same.capacity() * 4) as u64
             + kiln_ast::mem::map_live_bytes(&self.head)
@@ -166,7 +165,6 @@ fn entry_key(ast: &Ast, d: DeclId) -> (u64, u32) {
 
 impl RedeclIndex {
     /// Approximate heap bytes (for the bytes-per-entry measurement).
-    #[cfg_attr(not(feature = "op-stats"), allow(dead_code))]
     pub(crate) fn heap_bytes(&self) -> u64 {
         self.sets.values().map(SetIndex::heap_bytes).sum::<u64>()
             + kiln_ast::mem::map_live_bytes(&self.sets)
@@ -175,7 +173,6 @@ impl RedeclIndex {
     }
 
     /// The number of keyed positions.
-    #[cfg_attr(not(feature = "op-stats"), allow(dead_code))]
     pub(crate) fn entries(&self) -> usize {
         self.sets.values().map(|s| s.keys.len()).sum()
     }
@@ -249,6 +246,8 @@ impl RedeclIndex {
 
     /// Applies the AST journals.
     fn sync(&mut self, ast: &mut Ast) {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("redecl-index-sync");
         if !self.started {
             self.started = true;
             ast.lookup.journal.start();
@@ -263,6 +262,17 @@ impl RedeclIndex {
             *self = RedeclIndex { started: true, ..RedeclIndex::default() };
             return;
         }
+        #[cfg(feature = "op-stats")]
+        let stat = (slots.len(), retyped.len(), relinked.len());
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::index_sync_more(
+            retyped
+                .iter()
+                .filter(|&&d| ast.decls.get(d).kind().payload() == PayloadClass::Function)
+                .count(),
+            retyped.len(),
+            slots.len(),
+        );
         for (set, pos) in slots {
             if pos == NIL {
                 self.drop_set(set);
@@ -280,6 +290,8 @@ impl RedeclIndex {
                 }
             }
         }
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::index_sync(stat.0, stat.1, stat.2, sps.len());
         for sp in sps {
             self.rekey(ast, (sp >> 32) as u32, sp as u32);
         }

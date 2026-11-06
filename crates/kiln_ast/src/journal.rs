@@ -53,6 +53,12 @@ impl<T> Journal<T> {
         self.items.push(t);
     }
 
+    /// The memory row of the journal (`Ast::memory`'s `journal.*` rows,
+    /// WP-661): the events held now, and their buffer.
+    pub fn mem_row(&self, name: &str) -> crate::mem::MemRow {
+        crate::mem::MemRow::of_vec(name, &self.items)
+    }
+
     /// The events since the last drain, and whether some were dropped
     /// (then the reader must not trust anything it derived before).
     pub fn drain(&mut self) -> (Vec<T>, bool) {

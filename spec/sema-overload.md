@@ -89,7 +89,9 @@ object argument's `(QualType, ValueKind)`.
   candidates (144 relational pairs on x86_64 need 24 ICSs, not 288).
 - **Accounting.** `OverloadScratch` and `conv_type_cache` implement
   `HeapSize`; `Sema::memory()` reports rows `sema.ovl.pool`,
-  `sema.ovl.conv_types`. Bench counters (spec/bench.md): `ovl.sets`,
+  `sema.ovl.conv_types`, and (WP-661) `sema.redecl_index` (count = keyed
+  positions) and `sema.explicit_memo` (count = slots in use, bytes = the
+  table once allocated). Bench counters (spec/bench.md): `ovl.sets`,
   `ovl.candidates`, `ovl.ics`, `ovl.builtin_candidates`, `ovl.max_set`.
 - `lookup.rs` fills the set's `found` buffer instead of allocating a
   `Found { decls: Vec }` per lookup.

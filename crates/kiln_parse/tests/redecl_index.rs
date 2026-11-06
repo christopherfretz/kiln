@@ -258,3 +258,55 @@ fn members_match_the_full_path() {
     );
     same_both_ways(&s);
 }
+
+/// WP-661: the index (built for the friends below), its journals and the
+/// explicit-argument memo have memory rows (`Sema::overload_memory`,
+/// `Ast::memory`).
+#[test]
+fn memory_rows_report_the_index_and_the_memo() {
+    use kiln_lex::Std;
+    use kiln_lex::literal::{EncodingParams, LiteralOptions};
+    use kiln_parse::{Parser, TokenSource};
+    use kiln_pp::{PpOptions, Preprocessor};
+    use kiln_sema::Sema;
+
+    let mut src = String::from("namespace ns {\n");
+    for i in 1..=N {
+        writeln!(src, "void f(char (&)[{i}]);").unwrap();
+    }
+    src.push_str("struct D { friend void f(char (&)[3]); friend void f(char (&)[40]); };\n");
+    src.push_str("template <class T> T t(T x) { return x; }\n}\n");
+    src.push_str("int a = ns::t<int>(1) + ns::t<int>(2);\n");
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("t.cpp", src).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let sink = MemorySink::new();
+    let diags = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
+    let target = Target::for_arch(Arch::X86_64);
+    let mut pp = Preprocessor::new(&sm, &diags, &interner, PpOptions::new(Std::Cxx26));
+    pp.enter_main_file(file);
+    let ast = kiln_ast::Ast::new(
+        Arc::clone(&interner),
+        kiln_ast::types::TypeContext::new(target.types.clone()),
+    );
+    let enc = EncodingParams {
+        char_signed: target.types.char_signed,
+        wchar_bits: 32,
+        wchar_signed: target.types.wchar_signed,
+    };
+    let s = Sema::for_target(ast, &diags, target);
+    let mut p = Parser::new(s, TokenSource::new(pp, &diags), LiteralOptions::new(Std::Cxx26, enc));
+    p.parse_translation_unit();
+    let (s, _) = p.finish();
+    assert_eq!(diags.error_count(), 0, "{:#?}", sink.diagnostics());
+    let ovl = s.overload_memory();
+    let index = ovl.row("sema.redecl_index").expect("index row");
+    assert!(index.count >= N as u64 && index.live_bytes > 0, "{index:?}");
+    let memo = ovl.row("sema.explicit_memo").expect("memo row");
+    assert!(memo.count >= 1 && memo.live_bytes > 0, "{memo:?}");
+    let mem = s.ast.memory();
+    for name in ["journal.lookup", "journal.decl_types", "journal.redecls"] {
+        let row = mem.row(name).unwrap_or_else(|| panic!("no {name} row"));
+        assert!(row.reserved_bytes >= row.live_bytes, "{row:?}");
+    }
+}

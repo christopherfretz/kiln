@@ -585,7 +585,10 @@ impl Sema<'_, '_> {
 
     /// The memory overload resolution holds (spec/sema-overload.md §1.4):
     /// the row `sema.ovl.pool`, whose count is the pooled candidate sets
-    /// (the deepest nesting so far) and whose bytes are the pool's heap.
+    /// (the deepest nesting so far) and whose bytes are the pool's heap;
+    /// `sema.ovl.conv_types`; and (WP-661) `sema.redecl_index` (count:
+    /// keyed positions) and `sema.explicit_memo` (count: slots in use;
+    /// bytes: the whole table once allocated).
     pub fn overload_memory(&self) -> kiln_ast::mem::MemReport {
         let bytes = self.ovl.heap_size() as u64;
         let mut r = kiln_ast::mem::MemReport::new();
@@ -599,6 +602,22 @@ impl Sema<'_, '_> {
         r.push(kiln_ast::mem::MemRow::new(
             "sema.ovl.conv_types",
             self.ovl.conv_types.len() as u64,
+            bytes,
+            bytes,
+        ));
+        // WP-661: the redeclaration index (keyed positions; its journals
+        // are `Ast::memory`'s `journal.*` rows) and the explicit-argument memo.
+        let bytes = self.redecl_index.heap_bytes();
+        r.push(kiln_ast::mem::MemRow::new(
+            "sema.redecl_index",
+            self.redecl_index.entries() as u64,
+            bytes,
+            bytes,
+        ));
+        let bytes = self.explicit_memo.heap_bytes() as u64;
+        r.push(kiln_ast::mem::MemRow::new(
+            "sema.explicit_memo",
+            self.explicit_memo.len() as u64,
             bytes,
             bytes,
         ));
@@ -625,6 +644,8 @@ impl Sema<'_, '_> {
     pub(crate) fn fn_min_args(&self, f: DeclId) -> usize {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("fn_min_args");
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::distinct("fn_min_args", u64::from(f.index()));
         let Some(fd) = self.ast.decls.function(f) else { return 0 };
         let n = self.ast.lists.get(fd.params).len();
         // clang's getMinRequiredArguments: a parameter pack is not
