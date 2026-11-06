@@ -1353,7 +1353,8 @@ impl AstBuilder<'_> {
         let d2 = self.add(h, kind, None, Payload::None(i), prev);
         self.ast.templates.dependent_depth = depth;
         debug_assert_eq!(d, d2);
-        let _ = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
+        let linked = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
+        self.mark_template_first(d, pattern, linked.is_ok());
         // A friend class template declared in a class template is a
         // template of the enclosing namespace, which stays independent.
         let friend_class = kind == DeclKind::ClassTemplate && n.misc().friend() != FriendKind::None;
@@ -1389,8 +1390,19 @@ impl AstBuilder<'_> {
         });
         let d2 = self.add_unregistered(h, kind, Payload::None(i), false);
         debug_assert_eq!(d, d2);
-        let _ = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
+        let linked = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
+        self.mark_template_first(d, pattern, linked.is_ok());
         d
+    }
+
+    /// Sets the `first` bit of template decl `d` when its pattern is its
+    /// entity's first declaration and describes `d` ([`Ast::first`] of a
+    /// template is the template its pattern's first declaration
+    /// describes).
+    fn mark_template_first(&mut self, d: DeclId, pattern: DeclId, linked: bool) {
+        if linked && self.ast.decls.get(pattern).misc().is_first() {
+            self.ast.decls.mark_first(d);
+        }
     }
 
     /// A concept ([temp.concept]): `template<params> concept C = e;`.
@@ -1408,6 +1420,8 @@ impl AstBuilder<'_> {
         let d2 = self.add(h, DeclKind::Concept, None, Payload::None(i), None);
         self.ast.templates.dependent_depth = depth;
         debug_assert_eq!(d, d2);
+        // No pattern: a concept is its own first declaration.
+        self.ast.decls.mark_first(d);
         d2
     }
 

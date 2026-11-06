@@ -350,7 +350,17 @@ impl Ast {
     /// redeclarations are those of its pattern ([temp.decls]/1), so the
     /// first one is the template described by the pattern's first
     /// declaration (clang's `RedeclarableTemplateDecl::getFirstDecl`).
+    #[inline]
     pub fn first(&self, d: DeclId) -> DeclId {
+        if self.decls.get(d).misc().is_first() {
+            debug_assert_eq!(self.first_slow(d), d, "stale first bit");
+            return d;
+        }
+        self.first_slow(d)
+    }
+
+    /// [`Ast::first`] through the redeclaration group.
+    fn first_slow(&self, d: DeclId) -> DeclId {
         match self.decls.redecl(d) {
             Some(r) => self.redecls.get(r.group).first,
             None => self.template_redecl(d, true),
@@ -377,7 +387,17 @@ impl Ast {
     }
 
     /// The definition of `d`'s entity, once seen.
+    #[inline]
     pub fn definition(&self, d: DeclId) -> Option<DeclId> {
+        if self.decls.get(d).misc().is_definition() {
+            debug_assert_eq!(self.definition_slow(d), Some(d), "stale definition bit");
+            return Some(d);
+        }
+        self.definition_slow(d)
+    }
+
+    /// [`Ast::definition`] through the redeclaration group.
+    fn definition_slow(&self, d: DeclId) -> Option<DeclId> {
         match self.decls.redecl(d) {
             Some(r) => self.redecls.get(r.group).definition,
             None => Some(d),
@@ -400,7 +420,9 @@ impl Ast {
     /// If `d` is not redeclarable.
     pub fn set_definition(&mut self, d: DeclId) -> Result<(), crate::slot::AlreadySet> {
         let r = self.decls.redecl(d).expect("set_definition on a non-redeclarable decl");
-        self.redecls.set_definition(r.group, d)
+        self.redecls.set_definition(r.group, d)?;
+        self.decls.mark_definition(d);
+        Ok(())
     }
 
     // -- contexts and lookup (§4.3) ------------------------------------

@@ -164,6 +164,10 @@ impl Sema<'_, '_> {
     /// when anything else is found.
     fn filter(&self, v: impl IntoIterator<Item = DeclId>, kind: LookupKind) -> Found {
         let mut out = Found::default();
+        // The `first` of each kept result, by index (WP-655): one `first`
+        // per result instead of one per pair. Inline for the usual few.
+        let mut firsts = [self.ast.tu; 8];
+        let mut firsts_spill: Vec<DeclId> = Vec::new();
         for raw in v {
             if self.ast.decls.hidden_shadow(raw).is_some() {
                 continue;
@@ -174,10 +178,19 @@ impl Sema<'_, '_> {
                 continue;
             }
             let f = self.ast.first(d);
-            if let Some(i) = out.decls.iter().position(|&o| self.ast.first(o) == f) {
+            let n = out.decls.len();
+            let first_of = |i: usize| {
+                if i < firsts.len() { firsts[i] } else { firsts_spill[i - firsts.len()] }
+            };
+            if let Some(i) = (0..n).find(|&i| first_of(i) == f) {
                 out.decls[i] = d;
                 out.found[i] = raw;
             } else {
+                if n < firsts.len() {
+                    firsts[n] = f;
+                } else {
+                    firsts_spill.push(f);
+                }
                 out.decls.push(d);
                 out.found.push(raw);
             }
