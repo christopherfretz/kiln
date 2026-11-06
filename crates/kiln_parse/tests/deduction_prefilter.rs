@@ -4,10 +4,12 @@
 //! the test-only entry), and the two must agree on every diagnostic and
 //! note (the candidate notes name each candidate's deduction failure and
 //! keep their order) and on the AST dump (the chosen candidates and every
-//! specialization the resolutions formed). kiln_sema has no parser, so the
+//! specialization the resolutions formed). `kiln_sema` has no parser, so the
 //! comparison lives with the parser's sema tests.
 
 mod common;
+
+use std::fmt::Write as _;
 
 use common::{Parsed, opts19, parse_with};
 use kiln_parse::ParseOptions;
@@ -142,7 +144,7 @@ fn generated_calls_match_the_full_path() {
     let explicit = ["", "<int>", "<1>", "<int, long>"];
     for (i, a) in args.iter().enumerate() {
         for (j, e) in explicit.iter().enumerate() {
-            src.push_str(&format!("auto v{i}_{j} = g{e}({a});\n"));
+            writeln!(src, "auto v{i}_{j} = g{e}({a});").unwrap();
         }
     }
     let p = same_both_ways(&src);

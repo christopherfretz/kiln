@@ -145,7 +145,7 @@ impl Sema<'_, '_> {
                 if !new.member_using {
                     let oret = self
                         .declared_fn_type(old)
-                        .and_then(|t| self.ast.types.proto(t).map(|p| p.ret()))
+                        .and_then(|t| self.ast.types.proto(t).map(kiln_ast::types::FuncProto::ret))
                         .unwrap_or(po.ret());
                     if !self.ast.types.same_type(oret, pn.ret()) {
                         return false;

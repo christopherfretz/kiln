@@ -803,7 +803,7 @@ impl Sema<'_, '_> {
         // earlier parameter (`tys<Tf...>`) is not a prefix of the
         // trailing function parameter pack.
         stat_step!("deduce");
-        let skip = fn_pack.and_then(|pat| self.trailing_pack_skip(pat, &params, &d));
+        let skip = fn_pack.and_then(|pat| self.trailing_pack_skip(pat, params, &d));
         // [temp.deduct.call]/4: the (argument index, P, adjusted A) of
         // each deduced-from argument, checked against the deduced A.
         let mut originals: Vec<(usize, QualType, QualType)> = Vec::new();

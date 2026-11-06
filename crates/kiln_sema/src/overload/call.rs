@@ -303,13 +303,12 @@ impl Sema<'_, '_> {
         if let Some(tdk) = self.deduce_call_prefail(ft, set.args.len() + usize::from(lead)) {
             #[cfg(feature = "op-stats")]
             crate::templ::deduce_stats::prefiltered(tdk);
-            use crate::templ::deduce::Tdk;
             match tdk {
                 // No candidate (as `add_template_candidate_with`).
-                Tdk::Invalid => {}
+                crate::templ::deduce::Tdk::Invalid => {}
                 // The failure is formed only if the arity check of
                 // `add_candidate` leaves the candidate viable.
-                Tdk::TooFewArguments => self.add_arity_failed_candidate(
+                crate::templ::deduce::Tdk::TooFewArguments => self.add_arity_failed_candidate(
                     set,
                     ft,
                     found,

@@ -1,5 +1,5 @@
 //! Deduction-attempt counts (feature `op-stats`, a measurement aid like
-//! kiln_oven's `trial_stats`; never built by default). Every function
+//! `kiln_oven`'s `trial_stats`; never built by default). Every function
 //! template deduction (`deduce_spec`) is counted by its entry (a call, the
 //! address of an overload set, a declaration, a conversion, explicit
 //! arguments only), the step it ended at and its `Tdk`; the candidate sets
@@ -17,6 +17,12 @@ use std::hash::{Hash, Hasher};
 use kiln_source::fx::{FxHashMap, FxHashSet, FxHasher};
 
 use crate::templ::deduce::Tdk;
+
+/// Nanoseconds as milliseconds, for printing.
+#[allow(clippy::cast_precision_loss, reason = "a printed measurement")]
+fn ms(ns: u64) -> f64 {
+    ns as f64 / 1e6
+}
 
 #[derive(Default)]
 struct Stats {
@@ -75,7 +81,7 @@ impl Drop for Stats {
             let _ = writeln!(
                 s,
                 "deduce-stats:   {n:>10} {:>8.1}ms {entry:<10} {step:<14} {tdk:?}",
-                *ns as f64 / 1e6
+                ms(*ns)
             );
         }
         let _ = write!(s, "deduce-stats: template-candidates-per-set");
@@ -90,15 +96,14 @@ impl Drop for Stats {
         t.sort_unstable_by(|a, b| b.cmp(a));
         let _ = writeln!(s, "deduce-stats: per-template top: {:?}", &t[..t.len().min(12)]);
         let mut p: Vec<_> = self.prev.iter().collect();
-        p.sort_by(|a, b| b.1.1.cmp(&a.1.1));
+        p.sort_by_key(|e| std::cmp::Reverse(e.1.1));
         for (at, (n, c, f)) in p {
             let _ = writeln!(s, "deduce-stats: pick-prev {at} calls={n} scanned={c} compared={f}");
         }
         let mut v: Vec<_> = self.timers.iter().collect();
-        v.sort_by(|a, b| b.1.1.cmp(&a.1.1));
+        v.sort_by_key(|e| std::cmp::Reverse(e.1.1));
         for (name, (_, ns, n)) in v {
-            let _ =
-                writeln!(s, "deduce-stats: timer {name:<28} {:>9.1}ms calls={n}", *ns as f64 / 1e6);
+            let _ = writeln!(s, "deduce-stats: timer {name:<28} {:>9.1}ms calls={n}", ms(*ns));
         }
         let mut v: Vec<_> = self.tally.iter().collect();
         v.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
