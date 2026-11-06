@@ -2415,7 +2415,12 @@ The flag needs:
   version need; it already needs `GLIBC_2.39`. Both CI jobs run in the
   `gcc:16.1.0-trixie` image (glibc 2.41).
 
-Decision: shipped, as its own commit, so it can be dropped alone. It is
+Decision (updated): shipped in #302 as its own commit, then **reverted by
+WP-662**: the binary failed to start on the first machine outside this
+container it was run on (`version 'GLIBC_ABI_DT_RELR' not found`, a glibc
+older than 2.36), and a run-time platform requirement is not worth
+0.2–0.5 MB of start-up RSS. The `bench/oven` baselines were re-recorded
+without it. Originally: shipped, as its own commit, so it can be dropped alone. It is
 a `cargo:rustc-link-arg-bin=kiln=` line in `crates/kiln_driver/build.rs`
 for Linux targets, so it changes no dependency's build and invalidates
 no cache. aarch64 is checked here (`cargo xtask ci --quick` plus the compat-19 pass green). The x86_64
@@ -2506,9 +2511,10 @@ slower.
 
 ### What remains
 
-The empty TU is 6,944 KB against 6,728 KB on 2db5dfc55 (+216 KB). With
-RELR the loader no longer reads `.rela.dyn`, so what remains of the
-drift is mostly the pages of `.data.rel.ro` that the relocations patch:
+The empty TU is 6,944 KB against 6,728 KB on 2db5dfc55 (+216 KB; 7,152 KB
+without RELR after WP-662's revert, +424 KB). With RELR the loader would
+no longer read `.rela.dyn`; without it `.rela.dyn` (685,776 bytes) is read
+at every start, and the rest of the drift is mostly the pages of `.data.rel.ro` that the relocations patch:
 553,448 bytes against 334,464 (+219 KB), in 28,561 relocations against
 15,789. By the strings the relocated pointers lead to, the growth since
 11-03 is:

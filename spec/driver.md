@@ -163,11 +163,13 @@ One binary, two names, as clang/clang++ (WP-244). Cargo cannot build a
 binary target named `kiln++` (a target name must be a crate name), so
 `kiln_driver`'s build script makes `kiln++` a relative symlink to `kiln`
 in the profile directory (`target/<profile>/kiln++ -> kiln`); xtask's
-`build_kiln` makes it again if it is missing and returns its path. On a
-Linux target the build script also links `kiln` with
-`-Wl,-z,pack-relative-relocs` (every profile; spec/landed/sema/WP-653.md),
-so its relative relocations are a `.relr.dyn` bitmap the loader applies
-cheaply instead of a 24-byte `.rela.dyn` entry each.
+`build_kiln` makes it again if it is missing and returns its path. The
+build script adds no link arguments: WP-653's `-z pack-relative-relocs`
+(RELR) was reverted by WP-662: it tied the `kiln` binary to GNU ld 2.38+ /
+lld 15+ and, at run time, glibc 2.36+ (`GLIBC_ABI_DT_RELR`), and failed on
+the first older glibc it met, for about 0.2–0.5 MB of start-up RSS. Any
+future link flag that constrains the build or run-time environment needs
+the operator's explicit approval first.
 
 The mode comes from the program name (`argv[0]`), as clang's driver name
 parsing: take the basename, drop a `.exe`; if that does not end in `++`,
