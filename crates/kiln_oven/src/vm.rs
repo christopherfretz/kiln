@@ -14,7 +14,7 @@ use crate::arith::{self, FloatErr, IntErr, canon};
 use crate::compile::{FState, GState, float_of};
 use crate::complex;
 use crate::failure::{EvalFailure, FailKind};
-use crate::kbc::{Op, ak, cce, cmp, new_aux};
+use crate::kbc::{Op, ak, cce, cmp, new_aux, ptr_add_aux};
 use crate::mem::{Alloc, DynKind, MemFault, NOWHERE, Origin, Ptr, Sp, TrialMode, flags};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{Hop, OTy, TyKind, Walk, alt_members};
@@ -907,18 +907,15 @@ impl Oven {
                 Op::PtrAdd => {
                     let raw = reg!(1) as u64;
                     let v = reg!(2);
-                    let mut i = if aux >> 8 & 1 != 0 || (aux & 0xFF) < 128 {
-                        v as i128
-                    } else {
-                        i128::try_from(v).unwrap_or(i128::MAX)
+                    let elem = OTy(arg!(3) as u32);
+                    let p = match self.ptr_add_step(raw, v, aux, elem) {
+                        Some(p) => p,
+                        None => match self.ptr_add_op(raw, v, aux, elem) {
+                            Ok(p) => p,
+                            Err(f) => fail!(f),
+                        },
                     };
-                    if aux >> 9 & 1 != 0 {
-                        i = i.saturating_neg();
-                    }
-                    match self.ptr_add(raw, i, OTy(arg!(3) as u32)) {
-                        Ok(p) => reg!(0) = u128::from(p),
-                        Err(f) => fail!(f),
-                    }
+                    reg!(0) = u128::from(p);
                     pc += 5;
                 }
                 Op::PtrSub => {
@@ -2167,7 +2164,103 @@ impl Oven {
         }
     }
 
+    /// `p + i` for a pointer `raw` to `elem` (spec/oven.md "Pointer
+    /// arithmetic"): the step within an array allocation of `elem`
+    /// ([`Oven::ptr_add_array`]), else [`Oven::ptr_add_slow`].
     pub(crate) fn ptr_add(&self, raw: u64, i: i128, elem: OTy) -> Result<u64, Fault> {
+        match self.ptr_add_array(raw, i, false, elem, None) {
+            Some(p) => Ok(p),
+            None => self.ptr_add_slow(raw, i, elem),
+        }
+    }
+
+    /// The `PtrAdd` op's inline step: `raw + v` within an array allocation
+    /// of `elem` ([`Oven::ptr_add_array`]) when the compiler put the
+    /// element size's shift in `aux` ([`ptr_add_aux`]: a power of two that
+    /// can no longer change, and an index whose register value is the
+    /// index). `None` sends the op to [`Oven::ptr_add_op`].
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn ptr_add_step(&self, raw: u64, v: u128, aux: u32, elem: OTy) -> Option<u64> {
+        let field = aux >> ptr_add_aux::SHIFT & ptr_add_aux::MASK;
+        if field == 0 {
+            return None;
+        }
+        self.ptr_add_array(raw, v as i128, aux >> 9 & 1 != 0, elem, Some(field - 1))
+    }
+
+    /// The `PtrAdd` op off its array step: the index `v` read as its
+    /// aux says (width, signedness, negated), then [`Oven::ptr_add`].
+    #[cold]
+    #[inline(never)]
+    fn ptr_add_op(&self, raw: u64, v: u128, aux: u32, elem: OTy) -> Result<u64, Fault> {
+        let mut i = if aux >> 8 & 1 != 0 || (aux & 0xFF) < 128 {
+            v as i128
+        } else {
+            i128::try_from(v).unwrap_or(i128::MAX)
+        };
+        if aux >> 9 & 1 != 0 {
+            i = i.saturating_neg();
+        }
+        self.ptr_add(raw, i, elem)
+    }
+
+    /// [`Oven::ptr_add`] of `i`, negated when `neg`, in the common case,
+    /// returning what [`Oven::ptr_add_slow`] returns for it: `i` is 0, or
+    /// `raw` points into an allocation (live or not, as
+    /// [`crate::mem::Memory::alloc_any`] finds it) whose type is an array
+    /// of exactly `elem` and the new index stays in `[0, n]`. `None` for
+    /// anything else, the slow path then deciding (the fault included).
+    /// `sh` is the element size's shift when the compiler knew it
+    /// ([`ptr_add_aux`]), else `None` and the size is read from the type
+    /// table. The wrapped negation differs from the slow path's saturating
+    /// one only for `i128::MIN`, which this step refuses either way.
+    // Always inlined into the `PtrAdd` arm and `ptr_add`: a handful of
+    // compares and one type-table read.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn ptr_add_array(
+        &self,
+        raw: u64,
+        i: i128,
+        neg: bool,
+        elem: OTy,
+        sh: Option<u32>,
+    ) -> Option<u64> {
+        if i == 0 {
+            return Some(raw);
+        }
+        let a = self.mem.alloc_raw(raw)?;
+        let TyKind::Array { elem: e, n } = self.types.kind(a.ty) else {
+            return None;
+        };
+        if e != elem {
+            return None;
+        }
+        let off = raw & 0xFFFF_FFFF;
+        let es = if sh.is_some() { 0 } else { self.types.size(elem).max(1) };
+        let cur = match sh {
+            Some(sh) => off >> sh,
+            None => off / es,
+        };
+        // Wrapping as the slow path's sum does: `cur` is below 2^32, so
+        // a wrapped sum is negative and refused here.
+        let cur = i128::from(cur);
+        let new = if neg { cur.wrapping_sub(i) } else { cur.wrapping_add(i) };
+        if new as u128 > u128::from(n) {
+            return None;
+        }
+        let new = new as u64;
+        let off = match sh {
+            Some(sh) => new << sh,
+            None => new * es,
+        };
+        Some(Ptr::with_off(raw, off, new == n))
+    }
+
+    /// [`Oven::ptr_add`] by the extent of the subobject `raw` lies in, the
+    /// fault when the result leaves it.
+    fn ptr_add_slow(&self, raw: u64, i: i128, elem: OTy) -> Result<u64, Fault> {
         if raw == 0 {
             return if i == 0 { Ok(0) } else { Err(Fault::NullArith) };
         }
@@ -2179,7 +2272,7 @@ impl Oven {
             Err(_) if Ptr::is_nowhere(raw) => return self.nowhere_add(raw, i, elem),
             Err(f) => return Err(f),
         };
-        let new = i128::from(cur) + i;
+        let new = i128::from(cur).wrapping_add(i);
         if new < 0 || new > i128::from(n) {
             return Err(Fault::ArrayIndex { idx: new, n, array });
         }
@@ -3647,4 +3740,189 @@ fn write_fault(sp: Sp, a: &Alloc, ty: OTy) -> Option<MemFault> {
         return Some(MemFault::Literal(e));
     }
     (a.flags & flags::CONST != 0).then_some(MemFault::Const(ty))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Budget;
+    use crate::kbc::int_aux;
+    use crate::mem::{FN_SLOT, HEAP_BIT, STATIC_BIT};
+    use kiln_ast::ExprId;
+
+    /// `ptr_add` as it was before its array step (WP-651), its sum
+    /// wrapping as the release profile's did: the reference the new one
+    /// must agree with.
+    fn ptr_add_reference(o: &Oven, raw: u64, i: i128, elem: OTy) -> Result<u64, Fault> {
+        if raw == 0 {
+            return if i == 0 { Ok(0) } else { Err(Fault::NullArith) };
+        }
+        if i == 0 {
+            return Ok(raw);
+        }
+        let (start, n, cur, array) = match o.extent_of(raw, elem) {
+            Ok(x) => x,
+            Err(_) if Ptr::is_nowhere(raw) => return o.nowhere_add(raw, i, elem),
+            Err(f) => return Err(f),
+        };
+        let new = i128::from(cur).wrapping_add(i);
+        if new < 0 || new > i128::from(n) {
+            return Err(Fault::ArrayIndex { idx: new, n, array });
+        }
+        let es = o.types.size(elem).max(1);
+        let new = new as u64;
+        Ok(Ptr::with_off(raw, start + new * es, new == n))
+    }
+
+    /// The `PtrAdd` op's index as it was read before WP-651.
+    fn index_reference(v: u128, aux: u32) -> i128 {
+        let mut i = if aux >> 8 & 1 != 0 || (aux & 0xFF) < 128 {
+            v as i128
+        } else {
+            i128::try_from(v).unwrap_or(i128::MAX)
+        };
+        if aux >> 9 & 1 != 0 {
+            i = i.saturating_neg();
+        }
+        i
+    }
+
+    fn ident(r: &Result<u64, Fault>) -> String {
+        format!("{r:?}")
+    }
+
+    /// `ptr_add`, the `PtrAdd` op's step (with and without the element
+    /// size's shift in its aux) and the reference agree on pointers into
+    /// arrays of elements of every size class (0, odd, powers of two and
+    /// not), scalars and nested arrays, in each space, dead, stale, of a
+    /// wrong generation, null, function and pointing at nothing; at every
+    /// element, one past the end, unaligned and far past; with element
+    /// types that match the array's, do not, or match its rows; and with
+    /// indices into bounds, exactly to one past the end, beyond either
+    /// end and near the `i128` limits.
+    #[test]
+    fn ptr_add_agrees_with_the_reference() {
+        let mut o = Oven::new(Budget::default());
+        let scalars: Vec<OTy> = [0, 1, 3, 4, 8, 12, 16].map(|s| o.types.test_scalar(s)).to_vec();
+        let other4 = o.types.test_scalar(4);
+        let mut objs: Vec<(OTy, u64)> = Vec::new();
+        for &s in &scalars {
+            for n in [0, 1, 2, 5, 7] {
+                objs.push((o.types.array_of(s, n), n));
+            }
+            objs.push((s, 1));
+        }
+        let row = o.types.array_of(scalars[3], 3);
+        objs.push((o.types.array_of(row, 4), 4));
+        let d = DeclId::new(3);
+        let e = ExprId::new(9);
+        let mut ptrs = vec![0, Ptr::with_off(NOWHERE, 5, false), (u64::from(FN_SLOT) << 33) | 4];
+        for &(t, _) in &objs {
+            let size = o.types.size(t);
+            ptrs.push(o.mem.alloc(t, size, 0, Origin::Var(d)).unwrap());
+            ptrs.push(o.mem.heap_alloc(t, size, 0, Origin::Heap(e, 0)).unwrap());
+            ptrs.push(o.mem.alloc_static(t, size, 0, Origin::Global(d)));
+        }
+        // A dead frame object, a wrong generation, slots no allocation has.
+        let mk = o.mem.mark();
+        let dead = o.mem.alloc(objs[8].0, o.types.size(objs[8].0), 0, Origin::Var(d)).unwrap();
+        o.mem.release(mk, &o.types);
+        ptrs.push(dead);
+        ptrs.push(ptrs[5] ^ 1 << 55);
+        for slot in [900, HEAP_BIT + 900, STATIC_BIT + 900] {
+            ptrs.push(Ptr { slot, generation: 0, past: false, off: 0 }.encode());
+        }
+        let mut elems = scalars.clone();
+        elems.extend([other4, row]);
+        let mut seen = std::collections::BTreeSet::new();
+        let (mut cases, mut oks) = (0u64, 0u64);
+        for &p in &ptrs {
+            let size = o.mem.alloc_any(Ptr::decode(p)).map_or(16, |a| u64::from(a.size));
+            for &elem in &elems {
+                let es = o.types.size(elem).max(1);
+                let mut offs: Vec<u64> = (0..=8).map(|k| k * es).collect();
+                offs.extend([1, es - 1, es + 1, size, size + 1, size.saturating_sub(1)]);
+                offs.push(u64::from(u32::MAX));
+                for off in offs {
+                    for past in [false, true] {
+                        let raw = if p == 0 { 0 } else { Ptr::with_off(p, off, past) };
+                        let mut idx: Vec<i128> = (-9..=9).collect();
+                        if !Ptr::is_nowhere(raw) {
+                            // `nowhere_add` multiplies by the element
+                            // size unchecked, before and after WP-651.
+                            idx.extend([
+                                i128::from(i64::MAX),
+                                i128::from(i64::MIN),
+                                i128::from(u32::MAX),
+                                1 << 40,
+                                -(1 << 40),
+                                i128::MAX,
+                                i128::MAX - 3,
+                                i128::MIN,
+                                i128::MIN + 3,
+                            ]);
+                        }
+                        for i in idx {
+                            let want = ptr_add_reference(&o, raw, i, elem);
+                            let got = o.ptr_add(raw, i, elem);
+                            assert_eq!(ident(&got), ident(&want), "{raw:#x} {i} {elem:?}");
+                            let negated = ptr_add_reference(&o, raw, i.saturating_neg(), elem);
+                            let mut steps = vec![None];
+                            if es.is_power_of_two() {
+                                steps.push(Some(es.trailing_zeros()));
+                            }
+                            for step in steps {
+                                for (neg, want) in [(false, &want), (true, &negated)] {
+                                    if let Some(q) = o.ptr_add_array(raw, i, neg, elem, step) {
+                                        assert_eq!(
+                                            ident(&Ok(q)),
+                                            ident(want),
+                                            "{raw:#x} {i} {neg} {step:?}"
+                                        );
+                                    }
+                                }
+                            }
+                            seen.insert(match &want {
+                                Ok(_) => "Ok".to_owned(),
+                                Err(f) => {
+                                    let f = format!("{f:?}");
+                                    f.split([' ', '{', '(']).next().unwrap_or("").to_owned()
+                                }
+                            });
+                            oks += u64::from(want.is_ok());
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+        // The op's index decoding: every width, signedness and negation.
+        // An array of 5 eight-byte elements (shift 3), at its element 2.
+        let arr = objs[4 * 6 + 3].0;
+        let p = o.mem.alloc(arr, o.types.size(arr), 0, Origin::Var(d)).unwrap();
+        let raw = Ptr::with_off(p, 8 * 2, false);
+        for width in [8u8, 16, 32, 64, 128] {
+            for signed in [false, true] {
+                for neg in [0, 1u32 << 9] {
+                    for v in [0u128, 1, 2, 3, 4, u128::MAX, u128::MAX - 1, 1 << 127, (1 << 127) - 1]
+                    {
+                        let base = int_aux(width, signed) | neg;
+                        let want = ptr_add_reference(&o, raw, index_reference(v, base), scalars[4]);
+                        let steps: &[u32] = if width == 128 && !signed { &[0] } else { &[0, 4] };
+                        for aux in steps.iter().map(|s| base | s << ptr_add_aux::SHIFT) {
+                            let got = match o.ptr_add_step(raw, v, aux, scalars[4]) {
+                                Some(p) => Ok(p),
+                                None => o.ptr_add_op(raw, v, aux, scalars[4]),
+                            };
+                            assert_eq!(ident(&got), ident(&want), "{v} {aux:#x}");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 100_000 && oks > 10_000, "{cases} {oks}");
+        for kind in ["Ok", "ArrayIndex", "Mem", "NullArith"] {
+            assert!(seen.iter().any(|k| k == kind), "{seen:?}");
+        }
+    }
 }

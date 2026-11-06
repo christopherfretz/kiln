@@ -20,7 +20,7 @@ use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::failure::Note;
-use crate::kbc::{Op, ak, cce, cmp, int_aux};
+use crate::kbc::{Op, ak, cce, cmp, int_aux, ptr_add_aux};
 use crate::mem::{Origin, fn_ptr};
 use crate::ty::{OTy, Scal, TyKind, eval_int};
 use crate::{Oven, SemaBridge};
@@ -1090,6 +1090,26 @@ impl<'a> Compiler<'a> {
         let loc = self.b.ast().exprs.get(e).loc();
         self.o.sites.push(Site { pc: pc as u32, loc, e: Some(e) });
         pc
+    }
+
+    /// Emits `PtrAdd` `[dst, p, idx, elem]` with `aux` (index width,
+    /// signedness, negate) and the element step of [`ptr_add_aux`]: the
+    /// size's shift plus one when it is a power of two that can no longer
+    /// change (the type is not an incomplete class's `Opaque` slot), so
+    /// the run loop steps within an array inline, reading no size.
+    fn emit_ptr_add(&mut self, aux: u32, args: &[u32; 4], e: ExprId) -> usize {
+        let elem = OTy(args[3]);
+        let es = self.o.types.size(elem).max(1);
+        let step = if aux & 0x1FF != 128
+            && es.is_power_of_two()
+            && es.trailing_zeros() < ptr_add_aux::MASK
+            && !matches!(self.kind(elem), TyKind::Opaque)
+        {
+            es.trailing_zeros() + 1
+        } else {
+            0
+        };
+        self.emit_at(Op::PtrAdd, aux | step << ptr_add_aux::SHIFT, args, e)
     }
 
     /// The begin location of `e` (spec/ast.md: ranges are computed by
@@ -3246,7 +3266,7 @@ impl Compiler<'_> {
                 let one = self.reg();
                 self.konst(one, 1);
                 let aux = int_aux(64, true) | u32::from(!inc) << 9;
-                self.emit_at(Op::PtrAdd, aux, &[new, old, one, pointee.0], e);
+                self.emit_ptr_add(aux, &[new, old, one, pointee.0], e);
             }
             k => {
                 let (w, s) = int_of(k).unwrap_or((32, true));
@@ -3590,7 +3610,7 @@ impl Compiler<'_> {
                 };
                 let (w, s) = int_of(ik).unwrap_or((64, true));
                 let aux = int_aux(w as u8, s) | u32::from(op == BinaryOp::Sub) << 9;
-                self.emit_at(Op::PtrAdd, aux, &[dst, rp, ri, pointee.0], e);
+                self.emit_ptr_add(aux, &[dst, rp, ri, pointee.0], e);
                 return;
             }
         }
@@ -4293,7 +4313,7 @@ impl Compiler<'_> {
                 let r = self.reg();
                 // clang diagnoses the element step at the base's begin
                 // (`this->b[n]` at `this`, `(*this).b[n]` at the paren).
-                let pc = self.emit_at(Op::PtrAdd, int_aux(w as u8, s), &[r, p, i, ety.0], e);
+                let pc = self.emit_ptr_add(int_aux(w as u8, s), &[r, p, i, ety.0], e);
                 let loc = self.begin(pe);
                 if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
                     site.loc = loc;
@@ -4624,7 +4644,7 @@ impl Compiler<'_> {
         if let TyKind::Ptr(pointee) = self.kind(ty) {
             let (w, s) = int_of(self.kind(rty)).unwrap_or((64, true));
             let aux = int_aux(w as u8, s) | u32::from(op == BinaryOp::SubAssign) << 9;
-            self.emit_at(Op::PtrAdd, aux, &[new, old, r, pointee.0], e);
+            self.emit_ptr_add(aux, &[new, old, r, pointee.0], e);
         } else {
             let lt = self.ty(x.lhs_ty);
             let ct = self.ty(x.result_ty);
@@ -4993,7 +5013,7 @@ impl Compiler<'_> {
                     self.emit(Op::ICmp, int_aux(64, false) | cmp::LT << 9, &[c, k, lim]);
                     let exit = self.jmp_if(c, false);
                     let q = self.reg();
-                    self.emit_at(Op::PtrAdd, int_aux(64, false), &[q, p, k, elem.0], e);
+                    self.emit_ptr_add(int_aux(64, false), &[q, p, k, elem.0], e);
                     self.init(f, q, elem);
                     self.emit(Op::IAdd, int_aux(64, false), &[k, k, one]);
                     let j = self.jmp();
@@ -5132,7 +5152,7 @@ impl Compiler<'_> {
             TyKind::Ptr(_) => {
                 let k = self.reg();
                 self.konst(k, u128::from(n));
-                self.emit_at(Op::PtrAdd, int_aux(64, false), &[r, a, k, elem.0], e);
+                self.emit_ptr_add(int_aux(64, false), &[r, a, k, elem.0], e);
             }
             _ => return self.unsupported(e),
         }

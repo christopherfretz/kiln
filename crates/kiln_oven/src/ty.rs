@@ -655,6 +655,12 @@ impl Types {
         }
     }
 
+    /// A scalar type of `size` bytes for unit tests.
+    #[cfg(test)]
+    pub fn test_scalar(&mut self, size: u64) -> OTy {
+        self.simple(QualType::INT, size, 1, TyKind::Int { width: 8, signed: false })
+    }
+
     fn push(&mut self, info: TyInfo) -> OTy {
         let t = OTy(self.infos.len() as u32);
         self.infos.push(info);

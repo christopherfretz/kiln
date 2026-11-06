@@ -1895,15 +1895,304 @@ unchanged.
 
 ### What remains
 
-- `crates/kiln_oven/src/vm.rs:2170` `ptr_add`: about 198 Ir per
-  `PtrAdd`, 14% of `churn-vector`. The time goes to element-type
-  lookups (`kind`, `size`, `same_unqualified`), index bounds checks and
-  the `off / es` division, not to the pointer word.
-- `vm.rs:2814` `store` is outlined (about 17 Ir of prologue and
-  epilogue per `Store`). `Memory::space`/`space_mut`
-  (`mem.rs:1393`, `:1401`) re-match the space after the check, 2 Ir
-  each per access ((b) above).
-- `mem.rs:1280` `check_slow` takes every access to `EXTERNAL` storage
+- ~~`ptr_add`~~: done by WP-651 below. The figure here counted half of
+  the ops: it was about 121 Ir per `PtrAdd`, and is now about 54 on
+  `churn-vector`.
+- `crates/kiln_oven/src/vm.rs:2907` `store` is outlined (about 17 Ir of
+  prologue and epilogue per `Store`). `Memory::space`/`space_mut`
+  (`mem.rs:1414`, `:1422`) re-match the space after the check, 2 Ir
+  each per access ((b) above). WP-651 measured both and left them
+  (design note (c) below).
+- `mem.rs:1301` `check_slow` takes every access to `EXTERNAL` storage
   and every tracked access whose lifetime test fails or that misses the
   plain test. `mem.rs:952` `release` is 0.38% of S7 and 1.8% of
-  `vector-alloc` ((d) above).
+  `vector-alloc` ((d) above; WP-651 (d) below).
+
+## WP-651: pointer arithmetic
+
+WP-650 left `ptr_add` as the largest single cost on `churn-vector`.
+This section measures it, records the design picked, and checks the
+result. It also bisects the peak-RSS drift of the `vector-alloc` and
+`table-nohdr` baselines.
+
+### Method
+
+Cachegrind, as in WP-650: `--cache-sim=no`, `ulimit -v 3000000`,
+`timeout 1200`, `-fkiln-stack-size=256m`, at the report's N. Self Ir is
+summed per source line into the containing function, so inlined copies
+count. Main is 097713e15.
+
+### Measurement on main
+
+The `ptr_add` columns split its self Ir by line group. "PtrAdd arm" is
+the run loop's own decode for the op. "Ir/PtrAdd" is (arm + `ptr_add`)
+per executed `PtrAdd`, with the count in brackets. WP-650's "about 198
+Ir per `PtrAdd`" counted half the ops: `churn-vector` runs 16.78 M
+`PtrAdd`, not 8.39 M.
+
+| shape | program Ir | PtrAdd arm | type lookups | alloc lookup | index checks | division | ptr update | call/frame | `ptr_add` | Ir/PtrAdd | `ptr_sub` | `store` pro/epilogue | `space`+`space_mut` | `release` |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| `churn-vector` | 11,793,260,252 | 369.1 M | 553.6 M | 285.2 M | 117.4 M | 0 | 151.0 M | 553.6 M | 1660.8 M (14.08%) | 121 (16.78 M) | 0 | 142.6 M | 67.1 M | 1,235 |
+| `sort-nohdr` | 369,964,647 | 9.9 M | 14.4 M | 6.5 M | 3.1 M | 0 | 3.9 M | 15.5 M | 43.5 M (11.74%) | 119 (0.45 M) | 0 | 3.1 M | 2.1 M | 1.8 M |
+| `table-nohdr` | 723,567,795 | 8.1 M | 12.2 M | 5.4 M | 2.5 M | 35,916 | 3.2 M | 12.7 M | 36.0 M (4.97%) | 120 (0.37 M) | 0 | 2.0 M | 1.2 M | 23,474 |
+| `vector-alloc` | 5,493,145,898 | 19.7 M | 29.5 M | 15.2 M | 6.3 M | 0 | 8.0 M | 29.5 M | 88.4 M (1.61%) | 121 (0.89 M) | 13,420 | 19.8 M | 14.6 M | 102.1 M |
+| `wide-struct-read` | 5,953,646,064 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 (0.00%) | – (0.00 M) | 0 | 69,632 | 33.6 M | 51 |
+| `s7` | 6,024,563,679 | 11.8 M | 17.8 M | 8.3 M | 3.7 M | 0.6 M | 4.6 M | 17.6 M | 52.6 M (0.87%) | 117 (0.55 M) | 0.5 M | 9.6 M | 5.5 M | 27.5 M |
+
+`ptr_add` also calls `same_class` (67.1 M on `churn-vector`), which puts
+a `PtrAdd` at about 125 Ir. The division is nearly free: almost every
+`PtrAdd` steps within an array of the element type whose size is a power
+of two, and the compiler divides by a shift. A third of the cost is the
+call and frame (`ptr_add` returns a `Result` through memory), and a third
+is the element-type lookups (`kind`, `size`, `same_unqualified`).
+
+### Design note
+
+- **(a) Element size at compile time: taken.** The compiler knows each
+  `PtrAdd`'s element `OTy`. When the element's size is a power of two
+  and can no longer change (the type is not an incomplete class's
+  `Opaque` slot), and the index is not unsigned 128-bit, it writes
+  log2(size) + 1 into bits 10..=15 of the op's aux (`kbc::ptr_add_aux`).
+  The PtrAdd encoding keeps its four operands, so the bytecode does not
+  grow. The run loop then does an inline step:
+  - one slot lookup (`Memory::alloc_raw`: the slot's class bits pick the
+    space, plus a generation compare);
+  - one type-table read to see whether the allocation is an array of
+    exactly the element type (`OTy`s are cv-unqualified, so identity is
+    `same_unqualified`);
+  - a shift for the current index;
+  - one i128 compare of the new index against `0..=n`.
+
+  The allocation's type is a run-time property, so that one type read
+  stays. Everything else goes to a cold `ptr_add_op` → `ptr_add`.
+  `ptr_add` tries the same step with the size read from the type table,
+  so arrays whose element size is not a power of two skip the old body
+  too. Otherwise it runs the pre-WP-651 body (`ptr_add_slow`), which
+  steps within the extent of the subobject. Results and faults are
+  therefore the old body's. A unit test
+  (`ptr_add_agrees_with_the_reference`) checks every path against the
+  old body, kept as a test-only reference, over (pointer, index, element
+  size) triples. The triples cover:
+  - in bounds, one past the end, and beyond;
+  - negative indices into bounds and beyond;
+  - i128 overflow;
+  - zero, odd and power-of-two element sizes;
+  - every index width, signedness and negate bit.
+
+  Disabling the element-type test makes it fail.
+- **(b) Division-free check: taken, as a shift.** The current index is
+  `off >> k` and the new offset is `new << k`, which is cheaper than the
+  brief's multiply-and-compare and faults on the same inputs. The sum is
+  formed in i128 with wrapping arithmetic. Only an index near the i128
+  limits can wrap, and it then fails the range test and takes the
+  general path. The division remains only on the cold path, for element
+  sizes that are not a power of two.
+- **(c) Inline `store`: not taken.** The prologue and epilogue are 1.2%
+  of `churn-vector`, 0.84% of `sort-nohdr` and at most 0.36% of the other
+  shapes. `space`/`space_mut` add 0.57% of `churn-vector`. The run loop
+  is register-bound: adding the inline step alone cost
+  `wide-struct-read`, which runs no `PtrAdd`, +0.56% Ir in unrelated
+  arms. Left as a follow-up.
+- **(d) Bulk `release`: not taken.** It is 1.86% of `vector-alloc` and
+  0.46% of S7, and the work is per slot (WP-650 (d)).
+- **Considered and dropped:**
+  - outlining the inline step into an `#[inline(never)]` function: about
+    55 Ir per `PtrAdd`, and worse on every shape (s4 below);
+  - 64-bit index arithmetic: it saves about 2 Ir per op and needs a
+    second overflow argument.
+
+### Per-step Ir
+
+One commit lands the design. The columns are the variants measured on
+the way to it:
+- s1: an aux field (0, or shift + 1), with the index-width test at run
+  time and `wrapping_neg` for negate.
+- s2: eligibility folded into the field (a reserved value means "read
+  the size inline"), with negate as `wrapping_sub`.
+- s3 (kept): only power-of-two shifts inline, with the size read on the
+  cold path. The shift serves both the index and the new offset, and the
+  two paths merge as a `u64` in a register rather than a `Result` through
+  memory.
+- s4: s3 with the step outlined.
+
+| shape | main | s1 | s2 | s3 (kept) | s4 (dropped) |
+|---|--:|--:|--:|--:|--:|
+| churn-vector | 11,793,260,252 | 10,736,397,505 | 10,719,603,032 | 10,602,166,026 (−10.10%) | 10,920,922,365 |
+| sort-nohdr | 369,964,647 | 341,896,769 | 341,380,136 | 338,274,076 (−8.57%) | 347,374,072 |
+| table-nohdr | 723,567,795 | 708,908,649 | 708,412,947 | 705,931,336 (−2.44%) | 709,827,086 |
+| vector-alloc | 5,493,145,898 | 5,443,489,316 | 5,441,311,195 | 5,435,246,198 (−1.05%) | – |
+| wide-struct-read | 5,953,646,064 | 5,990,845,517 | 5,990,785,283 | 5,987,294,252 (+0.56%) | 5,995,409,142 |
+| s7 | 6,024,563,679 | 6,019,684,108 | 6,018,449,383 | 6,015,322,370 (−0.15%) | – |
+
+The `PtrAdd` cost in each shape, main → s3. Main is the arm plus
+`ptr_add` plus `same_class`. s3 is the arm plus the run loop's growth
+plus whatever still reaches `ptr_add`/`ptr_add_op`/`same_class`:
+
+| shape | main | s3 | change | Ir/PtrAdd main → s3 |
+|---|--:|--:|--:|--:|
+| `churn-vector` | 2,097.0 M | 905.8 M | −56.8% | 125 → 54 |
+| `sort-nohdr` | 55.1 M | 23.4 M | −57.5% | 122 → 52 |
+| `table-nohdr` | 45.6 M | 27.9 M | −38.8% | 123 → 75 |
+| `vector-alloc` | 112.2 M | 53.8 M | −52.0% | 126 → 60 |
+| S7 | 67.6 M | 57.3 M | −15.2% | 123 → 104 |
+
+On `churn-vector`, everything `ptr_add` did (`ptr_add` + `same_class`,
+1,727.9 M) is replaced by 536.8 M of run-loop growth, −68.9%. The brief
+targeted −60%, or at most 80 Ir per `PtrAdd`, and the result is 54. No
+`PtrAdd` on `churn-vector` or `sort-nohdr` leaves the inline step. In S7
+and `table-nohdr`, the calls that remain are the ones the inline step
+does not cover: steps within a subobject, and elements whose size is not
+a power of two. They take the general path as before.
+
+`wide-struct-read` (+0.56%, 33.6 M) runs no `PtrAdd`. The growth is
+register allocation in the run loop: the `IntArith` result write
+(`vm.rs:857`) gained 3 Ir per op. Outlining the step (s4) did not
+remove it. The A/B below shows it within noise.
+
+Program output (diagnostics and stderr) is byte-identical to main on all
+six shapes.
+
+### Baseline drift
+
+The `vector-alloc` and `table-nohdr` baselines were recorded on 11-03 by
+e46fe36ee, merged as 2db5dfc55: 36,336 KB and 9,316 KB. Since then both
+report `REGRESSED (mem)` under every binary (WP-650 above). Release
+builds of main commits were measured by peak RSS, median of 3 under the
+harness's command line, with an empty TU added as a control:
+
+| binary | empty TU | table-nohdr | vector-alloc |
+|---|--:|--:|--:|
+| 2db5dfc55 | 6504 | 9564 | 36104 |
+| 1fe2ec39d | 7732 | 10664 | 37628 |
+| 7b9507098 | 7236 | 10732 | 37560 |
+| d5c242a42 (c7269ab8d~1) | 7560 | 11084 | 37588 |
+| c7269ab8d | 9568 | 13188 | 39924 |
+| main | 9216 | 12764 | 38556 |
+
+The empty TU moves with the two shapes, so the drift is a fixed cost of
+starting the binary, not Oven memory. Massif agrees: the heap peak on
+the empty TU is 364,666 bytes on 2db5dfc55 and 368,979 on main.
+
+Most of the drift is one commit. c7269ab8d ("sema, codegen, driver: x86
+target builtins and -march=<cpu> features") adds about 2.0 MB to every
+compile. The cause is that kiln++ is a PIE:
+- its `R_AARCH64_RELATIVE` relocations (`.rela.dyn`) are read at
+  startup;
+- every page of `.data.rel.ro` they patch is dirtied.
+
+The commit grows `.rela.dyn` from 717,888 to 1,753,608 bytes,
+`.data.rel.ro` from 598,496 to 1,566,992, and `.rodata` from 1,287,420
+to 1,639,596. The x86 builtin rows are a `const` slice
+(`crates/kiln_ast/src/x86_builtins.rs:11`) reached through `all()`
+(`crates/kiln_ast/src/decl.rs:5666`). Each crate that inlines `all()`
+gets its own copy, so the binary holds the 155,760-byte table twice,
+6,384 relocations each, with a `&str` pointer per name and signature.
+
+The rest of the drift, about 1.1 to 1.2 MB, is spread across the 768
+commits from 2db5dfc55 to 1fe2ec39d. That range also spans the switch of
+toolchain (1.99.1 → 1.95, WP-614). It is broad binary growth with no
+single step, and it was not bisected further within the time box.
+
+This is not an Oven regression, and the fix lies outside `kiln_oven`, so
+it is a follow-up:
+- make `X86` a `static`, which keeps one copy;
+- store the strings as offsets into one `&str` rather than as pointers,
+  so they need no relocation;
+- or link with packed relative relocations (`-z pack-relative-relocs`).
+
+The two baselines are re-recorded on this branch (below), with this
+section as the reason.
+
+### A/B
+
+Main 097713e15 was run against the branch (s3), alternating, 3 pairs.
+Each cell is the median of 5 runs under `/usr/bin/time -f '%e %M'`, and
+wall time has 10 ms resolution. `accessor-wide-emit` (`-c -O2`) got 1 run
+per pair.
+
+| shape | main wall (s) | branch wall (s) | wall | main RSS (KB) | branch RSS (KB) | RSS |
+|---|--:|--:|--:|--:|--:|--:|
+| `churn-vector` | 0.51 | 0.47 | -7.8% | 12,660 | 12,608 | -0.41% |
+| `sort-nohdr` | 0.02 | 0.02 | +0.0% | 12,328 | 12,048 | -2.27% |
+| `table-nohdr` | 0.04 | 0.04 | +0.0% | 12,764 | 12,728 | -0.28% |
+| `vector-alloc` | 0.38 | 0.37 | -2.6% | 38,736 | 38,644 | -0.24% |
+| `wide-struct-read` | 0.28 | 0.28 | +0.0% | 29,896 | 29,860 | -0.12% |
+| S7 | 0.51 | 0.50 | -2.0% | 46,588 | 46,812 | +0.48% |
+| S8 | 0.63 | 0.61 | -3.2% | 65,268 | 65,960 | +1.06% |
+| `templates_wide` | 0.25 | 0.25 | +0.0% | 63,856 | 63,704 | -0.24% |
+| `accessor-wide-emit` | 119.11 | 118.70 | -0.3% | 652,480 | 652,436 | -0.01% |
+
+The same shapes timed in-process (`perf_counter`), 3 alternating pairs,
+median of 11 runs per pair:
+
+| shape | main (ms) | branch (ms) | change | pair medians main / branch (ms) |
+|---|--:|--:|--:|---|
+| `churn-vector` | 543.3 | 485.7 | -10.6% | 543.3 536.4 553.5 / 483.5 485.7 492.7 |
+| `sort-nohdr` | 38.0 | 38.6 | +1.8% | 38.5 37.3 38.0 / 40.3 38.3 38.6 |
+| `table-nohdr` | 72.9 | 71.8 | -1.4% | 73.1 72.9 71.6 / 71.8 71.4 72.3 |
+| `wide-struct-read` | 328.8 | 328.6 | -0.1% | 329.3 328.8 326.0 / 329.5 327.9 328.6 |
+| `wide-struct-store` | 174.3 | 174.2 | -0.1% | 174.3 175.2 174.3 / 173.2 174.2 177.2 |
+| `vector-alloc` | 429.7 | 428.2 | -0.3% | 407.6 432.1 429.7 / 428.2 406.5 429.2 |
+| `s7` | 538.9 | 533.2 | -1.1% | 541.7 538.1 538.9 / 533.2 546.9 517.4 |
+| `s8` | 660.1 | 661.5 | +0.2% | 657.4 660.8 660.1 / 661.5 659.2 666.7 |
+| `templates_wide` | 284.3 | 295.3 | +3.9% | 277.2 284.3 293.2 / 289.6 300.7 295.3 |
+
+`sort-nohdr`, `table-nohdr` and `templates_wide` were run again in
+another 3 pairs: −0.6%, −0.7% and +1.0%. Their first-round moves are
+noise. `sort-nohdr` meets its target in Ir (−8.6%) but not visibly in
+wall time: it runs in 38 ms, most of which is process start and the
+frontend. The branch's S8 RSS (+1.06%) moves within its run-to-run
+spread. The bytecode does not grow, because the step lives in existing
+aux bits.
+
+`cargo xtask bench bench/oven` was run twice per side, alternating. Each
+cell is the median of 5 runs, both rounds shown, for the entries that
+moved by 3% or more:
+
+| shape | main (ms) | branch (ms) |
+|---|---|---|
+| `churn-vector` | 522.7, 517.1 | 477.6, 479.6 |
+| `churn-string` | 431.7, 432.1 | 409.5, 409.7 |
+| `churn-mixed` | 18.4, 16.2 | 14.9, 15.7 |
+| `virtual-dispatch` | 24.2, 26.2 | 23.8, 23.0 |
+| `sort-nohdr` | 27.9, 29.9 | 27.0, 26.8 |
+| `churn-tree` | 31.6, 31.1 | 33.2, 32.6 |
+| `soa` | 65.8, 69.6 | 68.3, 68.7 |
+| `string` | 188.2, 194.9 | 194.8, 195.4 |
+
+`churn-vector` holds about −8% and `churn-string` about −5%. The
+others move within their round-to-round spread. Peak RSS is within
+±0.2 MB on every entry.
+
+Re-recorded on this branch:
+- `churn-vector`: the only ≥ 5% change against its own baseline
+  (541.6 → 484.3 ms).
+- `vector-alloc` and `table-nohdr`: the RSS drift above (36,336 →
+  39,500 KB and 9,316 → 12,728 KB), not this change.
+
+Under both binaries, the 19 other `bench/oven` entries still report
+`REGRESSED (mem)`, most by about 3 MB against baselines recorded on
+10-28 and 11-03, before c7269ab8d. `churn-string` also reports a `bytes` regression under both.
+They are not re-recorded here (see "What remains").
+
+`-fkiln-cfg-stats` output on `churn-vector`, `sort-nohdr`, `table-nohdr`
+and `vector-alloc` is identical to main apart from the `build_ns`
+timings.
+
+### What remains
+
+- `crates/kiln_oven/src/vm.rs:2907` `store` and `mem.rs:1414`/`:1422`
+  `space`/`space_mut`, and `mem.rs:952` `release`: see WP-650's list
+  above. They were measured here (design note (c) and (d)) and left.
+- `vm.rs:2263` `ptr_add_slow` still takes steps within a subobject
+  (class members, array rows reached through a member pointer). These
+  are S7's and `table-nohdr`'s remaining `PtrAdd` cost, about 104 and 75
+  Ir per op.
+- `vm.rs:857` the `IntArith` arm. Its result write lost a register to
+  the new step: +3 Ir per op on `wide-struct-read`, +0.56% Ir and not
+  visible in wall time.
+- `crates/kiln_ast/src/x86_builtins.rs:11` `X86` is a `const` slice, and
+  the baseline drift above follows from it. Make it a `static`, and
+  consider pack-relative relocations or offset-encoded strings. The 19
+  `bench/oven` baselines that still report `REGRESSED (mem)` need
+  re-recording once that lands, or now if the startup cost is accepted.

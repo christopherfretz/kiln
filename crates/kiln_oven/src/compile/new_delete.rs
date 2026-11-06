@@ -307,7 +307,7 @@ impl Compiler<'_> {
         self.emit(Op::ICmp, int_aux(64, false) | cmp::LT << 9, &[c, k, lim]);
         let exit = self.jmp_if(c, false);
         let q = self.reg();
-        self.emit_at(Op::PtrAdd, int_aux(64, false), &[q, p, k, elem.0], e);
+        self.emit_ptr_add(int_aux(64, false), &[q, p, k, elem.0], e);
         self.init(f, q, elem);
         self.emit(Op::IAdd, int_aux(64, false), &[k, k, one]);
         let j = self.jmp();

@@ -103,6 +103,7 @@ ops! {
     // [dst, a]; aux = kind
     FToBool = 2,
     // [dst, p, idx, elem type]; aux = idx width | idx signed << 8 | negate << 9
+    // | element step << 10 (ptr_add_aux)
     PtrAdd = 4,
     // [dst, p, q, elem type]
     PtrSub = 4,
@@ -838,6 +839,19 @@ pub(crate) mod ak {
             _ => "virtual function called on",
         }
     }
+}
+
+/// The aux of `Op::PtrAdd` beyond the integer aux of its index
+/// ([`int_aux`]) and the negate bit 9: bits 10..=15 say how the run loop
+/// steps within an array allocation of the element type inline. 0: it
+/// does not (the element's size is not a power of two or may still
+/// change, or the index is unsigned 128-bit, whose value may exceed
+/// `i128`), and the op runs `Oven::ptr_add`; otherwise the element's size
+/// is `1 << (field - 1)`, known for good (the type is not an incomplete
+/// class's `Opaque` slot).
+pub(crate) mod ptr_add_aux {
+    pub const SHIFT: u32 = 10;
+    pub const MASK: u32 = 0x3F;
 }
 
 /// Packs the aux of an integer op.

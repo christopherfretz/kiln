@@ -1252,6 +1252,27 @@ impl Memory {
         }
     }
 
+    /// [`Memory::alloc_any`] of raw pointer `raw`, decoding only its slot
+    /// and generation.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub fn alloc_raw(&self, raw: u64) -> Option<&Alloc> {
+        let slot = ((raw >> SLOT_SHIFT) & SLOT_MASK) as u32;
+        let a = if slot & STATIC_BIT != 0 {
+            if slot == FN_SLOT {
+                return None;
+            }
+            self.statics.get((slot & !STATIC_BIT) as usize)?
+        } else if slot & HEAP_BIT != 0 {
+            self.hslots.get((slot - HEAP_BIT) as usize)?
+        } else if slot != 0 {
+            self.slots.get(slot as usize)?
+        } else {
+            return None;
+        };
+        (u64::from(a.generation) == raw >> GEN_SHIFT).then_some(a)
+    }
+
     /// Checks an access of `len` bytes at `p` and returns its absolute
     /// address in the pointer's space.
     ///
