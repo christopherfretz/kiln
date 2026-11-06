@@ -822,6 +822,12 @@ impl Ast {
             + self.redecls.live_bytes()
     }
 
+    /// The number of instantiations ended so far (every
+    /// [`Ast::end_instantiation`]).
+    pub fn instantiation_count(&self) -> u64 {
+        self.inst.count
+    }
+
     /// The number of declaration, expression and statement nodes (the
     /// instantiation report's `nodes`, sema-templates.md §11.3).
     pub fn node_count(&self) -> u64 {

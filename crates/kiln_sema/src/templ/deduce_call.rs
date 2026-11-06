@@ -699,6 +699,30 @@ impl Sema<'_, '_> {
             ));
             #[cfg(feature = "op-stats")]
             let stat_nodes = (self.ast.node_count(), self.ast.node_live_bytes(), held.len());
+            // The memo (WP-661, `explicit_memo.rs`): a repeat of a
+            // substitution that only computed types is answered in the
+            // same frame.
+            let memo_key = if self.full_deduction {
+                None
+            } else {
+                let args = sugared_levels.levels.last().map_or(ArgListId::EMPTY, |l| l.args);
+                crate::templ::explicit_memo::ExplicitKey::new(
+                    ft,
+                    depth,
+                    args,
+                    whole.then_some(pfn),
+                    &tys,
+                )
+            };
+            let before = (
+                self.ast.node_count(),
+                self.ast.node_live_bytes(),
+                self.ast.instantiation_count(),
+                held.len(),
+                self.diags.error_count(),
+                self.diags.warning_count(),
+            );
+            let mut answered = false;
             let r = self.in_sfinae_held(
                 FrameKind::ExplicitArgSubstitution,
                 ft,
@@ -706,6 +730,10 @@ impl Sema<'_, '_> {
                 loc,
                 &mut held,
                 |s| {
+                    if let Some(hit) = memo_key.as_ref().and_then(|k| s.explicit_memo.get(k)) {
+                        answered = true;
+                        return Ok(hit);
+                    }
                     s.subst_explicit_param_types(
                         ft,
                         &sugared_levels,
@@ -716,6 +744,22 @@ impl Sema<'_, '_> {
                     )
                 },
             );
+            if let (Some(k), false, Some((Ok((t, f, kept)), Ok(())))) = (memo_key, answered, &r)
+                && before
+                    == (
+                        self.ast.node_count(),
+                        self.ast.node_live_bytes(),
+                        self.ast.instantiation_count() - 1,
+                        held.len(),
+                        self.diags.error_count(),
+                        self.diags.warning_count(),
+                    )
+                && !self.decl_in_local_scope(ft)
+            {
+                self.explicit_memo.put(k, t, *f, *kept);
+            }
+            #[cfg(feature = "op-stats")]
+            crate::templ::deduce_stats::explicit_answered(answered);
             #[cfg(feature = "op-stats")]
             crate::templ::deduce_stats::explicit_subst(
                 stat_key,

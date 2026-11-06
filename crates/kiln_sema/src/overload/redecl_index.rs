@@ -267,6 +267,12 @@ impl RedeclIndex {
         }
         #[cfg(feature = "op-stats")]
         let stat = (slots.len(), retyped.len(), relinked.len());
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::index_sync_more(
+            retyped.iter().filter(|&&d| ast.decls.get(d).kind().payload() == PayloadClass::Function).count(),
+            retyped.len(),
+            slots.len(),
+        );
         for (set, pos) in slots {
             if pos == NIL {
                 self.drop_set(set);

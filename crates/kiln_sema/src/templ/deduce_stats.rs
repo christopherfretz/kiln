@@ -63,10 +63,15 @@ struct Stats {
     /// Explicit-argument substitutions: calls, successes, successes that
     /// created no node, calls a memo of those would answer.
     explicit_n: (u64, u64, u64, u64),
+    /// Explicit-argument substitutions the memo answered (WP-661).
+    explicit_answered: u64,
     /// Redeclaration-index syncs: calls, calls with no journal event,
     /// slot events, retyped events, relinked events, events naming a
     /// watched declaration (WP-661).
     sync: (u64, u64, u64, u64, u64, u64),
+    /// Retyped events naming a function-payload declaration; the largest
+    /// retyped drain; the largest slot drain (WP-661 item 7).
+    sync_more: (u64, u64, u64),
 }
 
 impl Drop for Stats {
@@ -142,7 +147,8 @@ impl Drop for Stats {
             let _ = writeln!(
                 s,
                 "deduce-stats: redecl-sync calls={n} empty={e} slot-events={a} retyped={b} \
-                 relinked={c} watched={w}"
+                 relinked={c} watched={w} retyped-fn={} max-retyped={} max-slots={}",
+                self.sync_more.0, self.sync_more.1, self.sync_more.2
             );
         }
         if self.explicit_n.0 != 0 {
@@ -150,8 +156,9 @@ impl Drop for Stats {
             let _ = writeln!(
                 s,
                 "deduce-stats: explicit-subst calls={n} keys={} ok={ok} ok-no-node={zero} \
-                 memo-hits={hits}",
-                self.explicit.len()
+                 memo-hits={hits} answered={}",
+                self.explicit.len(),
+                self.explicit_answered
             );
         }
         let mut v: Vec<_> = self.distinct.iter().collect();
@@ -446,9 +453,24 @@ pub(crate) fn index_sync(slots: usize, retyped: usize, relinked: usize, watched:
     });
 }
 
+/// Item-7 detail of a sync: function-payload retyped events and drain sizes.
+pub(crate) fn index_sync_more(retyped_fn: usize, retyped: usize, slots: usize) {
+    STATS.with(|s| {
+        let y = &mut s.borrow_mut().sync_more;
+        y.0 += retyped_fn as u64;
+        y.1 = y.1.max(retyped as u64);
+        y.2 = y.2.max(slots as u64);
+    });
+}
+
 /// A hash of `t`, for keyed counts.
 pub(crate) fn key_of<T: Hash>(t: &T) -> u64 {
     let mut h = FxHasher::default();
     t.hash(&mut h);
     h.finish()
+}
+
+/// An explicit-argument substitution, `answered` by the memo (WP-661).
+pub(crate) fn explicit_answered(answered: bool) {
+    STATS.with(|s| s.borrow_mut().explicit_answered += u64::from(answered));
 }

@@ -3218,9 +3218,25 @@ compare the two paths (`crates/kiln_parse/tests/deduction_prefilter.rs`).
   that no evaluation side state is pending.
   `Expr` → `TemplateArg::value` is then the value the evaluation
   would have produced.
-- Explicit arguments are still substituted on every attempt, because the
-  `ExplicitTemplateArgumentSubstitution` frame counts toward
-  `-fkiln-instantiation-report`.
+- **Explicit-argument memo (WP-661).** Step 1's substitution of the
+  explicit arguments into the parameter types (and, for an address or a
+  declaration, the whole function type) is memoized per
+  `(template, depth, explicit argument list, whole type, parameter
+  types)` (`templ/explicit_memo.rs`). The
+  `ExplicitTemplateArgumentSubstitution` frame is still pushed and popped
+  on every attempt, so the instantiation report keeps every row with the
+  same counts, nodes and bytes; only the work inside the frame is
+  skipped. A result is kept only when the substitution succeeded with no
+  SFINAE error, held back or emitted no diagnostic, created no AST node
+  and no bytes, and pushed no instantiation frame of its own. A
+  template declared in a local scope is never kept. A failure is never
+  kept, so every failure's note and diagnostic is produced again at the
+  same point, once per attempt. Such a kept substitution only formed
+  types from types that already existed, so a repeat can answer no
+  differently: completing a class it looked into would have created
+  nodes. The memo is direct-mapped (2,048 slots, allocated on the first
+  kept result, up to four parameter types per slot), so its memory is
+  bounded (112 KiB: 2,048 slots of 56 bytes) whatever the TU size.
 
 ### 6.2 The deduction core: `deduce(P, A, flags, &mut DeducedArgs) -> Tdk`
 
