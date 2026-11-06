@@ -2418,7 +2418,7 @@ The flag needs:
 Decision: shipped, as its own commit, so it can be dropped alone. It is
 a `cargo:rustc-link-arg-bin=kiln=` line in `crates/kiln_driver/build.rs`
 for Linux targets, so it changes no dependency's build and invalidates
-no cache. aarch64 is checked here (`cargo xtask ci` green). The x86_64
+no cache. aarch64 is checked here (`cargo xtask ci --quick` plus the compat-19 pass green). The x86_64
 runner is only checked by proxy: rust-lld and lld accept the flag, and
 x86_64 CI runs only on a PR. If that job fails at link time, drop that
 commit.
