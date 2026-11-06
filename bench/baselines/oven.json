@@ -8,11 +8,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=200000000",
         "source_hash": "fnv1a64:f16fc91375084dc6",
         "runs": 5,
-        "wall_ms_median": 13.971,
-        "wall_ms_min": 13.391,
-        "wall_ms_max": 13.984,
-        "spread_pct": 4.33,
-        "max_rss_kb": 10020,
+        "wall_ms_median": 13.91,
+        "wall_ms_min": 13.385,
+        "wall_ms_max": 14.142,
+        "spread_pct": 3.92,
+        "max_rss_kb": 10164,
         "oven": {
           "steps": 10215,
           "bytes": 65536,
@@ -24,13 +24,13 @@
           "static_bytes": 0,
           "evaluations": 4
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "builtins-popcount": {
@@ -39,11 +39,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=200000000",
         "source_hash": "fnv1a64:9346e1053ebb4ebb",
         "runs": 5,
-        "wall_ms_median": 60.238,
-        "wall_ms_min": 56.366,
-        "wall_ms_max": 69.429,
-        "spread_pct": 6.87,
-        "max_rss_kb": 9872,
+        "wall_ms_median": 57.893,
+        "wall_ms_min": 56.621,
+        "wall_ms_max": 61.053,
+        "spread_pct": 2.25,
+        "max_rss_kb": 10140,
         "oven": {
           "steps": 1600010,
           "bytes": 0,
@@ -55,13 +55,13 @@
           "static_bytes": 0,
           "evaluations": 2
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "builtins-strlen": {
@@ -70,11 +70,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=200000000",
         "source_hash": "fnv1a64:49dfc2d294221c96",
         "runs": 5,
-        "wall_ms_median": 14.663,
-        "wall_ms_min": 14.239,
-        "wall_ms_max": 15.328,
-        "spread_pct": 2.98,
-        "max_rss_kb": 9916,
+        "wall_ms_median": 14.947,
+        "wall_ms_min": 14.294,
+        "wall_ms_max": 15.108,
+        "spread_pct": 4.57,
+        "max_rss_kb": 10316,
         "oven": {
           "steps": 14115,
           "bytes": 4096,
@@ -86,13 +86,13 @@
           "static_bytes": 264,
           "evaluations": 4
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "churn-list": {
@@ -101,11 +101,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=100000000",
         "source_hash": "fnv1a64:7c407d409dd0124e",
         "runs": 5,
-        "wall_ms_median": 24.094,
-        "wall_ms_min": 23.593,
-        "wall_ms_max": 24.926,
-        "spread_pct": 2.12,
-        "max_rss_kb": 10048,
+        "wall_ms_median": 25.223,
+        "wall_ms_min": 24.657,
+        "wall_ms_max": 25.75,
+        "spread_pct": 2.29,
+        "max_rss_kb": 10404,
         "oven": {
           "steps": 610005,
           "bytes": 1600000,
@@ -117,13 +117,13 @@
           "static_bytes": 0,
           "evaluations": 1
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "churn-mixed": {
@@ -132,11 +132,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=100000000",
         "source_hash": "fnv1a64:ad643dcc727cca6c",
         "runs": 5,
-        "wall_ms_median": 13.087,
-        "wall_ms_min": 12.646,
-        "wall_ms_max": 13.548,
-        "spread_pct": 3.49,
-        "max_rss_kb": 10020,
+        "wall_ms_median": 13.326,
+        "wall_ms_min": 12.824,
+        "wall_ms_max": 14.236,
+        "spread_pct": 3.91,
+        "max_rss_kb": 10384,
         "oven": {
           "steps": 100102,
           "bytes": 425248,
@@ -148,13 +148,13 @@
           "static_bytes": 0,
           "evaluations": 4
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "churn-string": {
@@ -163,11 +163,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=100000000",
         "source_hash": "fnv1a64:72e30b83ede62a79",
         "runs": 5,
-        "wall_ms_median": 397.964,
-        "wall_ms_min": 393.767,
-        "wall_ms_max": 400.169,
-        "spread_pct": 1.07,
-        "max_rss_kb": 10528,
+        "wall_ms_median": 398.682,
+        "wall_ms_min": 394.783,
+        "wall_ms_max": 403.338,
+        "spread_pct": 0.99,
+        "max_rss_kb": 10992,
         "oven": {
           "steps": 6002085,
           "bytes": 3399552,
@@ -179,13 +179,13 @@
           "static_bytes": 8,
           "evaluations": 2
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "churn-tree": {
@@ -194,11 +194,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=100000000",
         "source_hash": "fnv1a64:e6c5177523f596f2",
         "runs": 5,
-        "wall_ms_median": 30.452,
-        "wall_ms_min": 30.016,
-        "wall_ms_max": 32.026,
-        "spread_pct": 1.45,
-        "max_rss_kb": 10600,
+        "wall_ms_median": 30.482,
+        "wall_ms_min": 29.542,
+        "wall_ms_max": 31.795,
+        "spread_pct": 3.18,
+        "max_rss_kb": 10800,
         "oven": {
           "steps": 1179557,
           "bytes": 1572480,
@@ -210,13 +210,13 @@
           "static_bytes": 0,
           "evaluations": 1
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "churn-vector": {
@@ -225,11 +225,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=100000000",
         "source_hash": "fnv1a64:a995bcad8c72e8bc",
         "runs": 5,
-        "wall_ms_median": 463.499,
-        "wall_ms_min": 462.694,
-        "wall_ms_max": 471.984,
-        "spread_pct": 0.17,
-        "max_rss_kb": 10740,
+        "wall_ms_median": 466.65,
+        "wall_ms_min": 461.64,
+        "wall_ms_max": 483.709,
+        "spread_pct": 1.09,
+        "max_rss_kb": 10948,
         "oven": {
           "steps": 8398277,
           "bytes": 33554432,
@@ -241,13 +241,13 @@
           "static_bytes": 0,
           "evaluations": 1
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "class-churn": {
@@ -256,11 +256,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=100000000",
         "source_hash": "fnv1a64:5732d216fda94954",
         "runs": 5,
-        "wall_ms_median": 131.14,
-        "wall_ms_min": 129.626,
-        "wall_ms_max": 136.244,
-        "spread_pct": 1.17,
-        "max_rss_kb": 12084,
+        "wall_ms_median": 130.569,
+        "wall_ms_min": 128.901,
+        "wall_ms_max": 131.579,
+        "spread_pct": 1.29,
+        "max_rss_kb": 12544,
         "oven": {
           "steps": 2960095,
           "bytes": 10240016,
@@ -272,13 +272,13 @@
           "static_bytes": 8,
           "evaluations": 1
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "fib": {
@@ -305,11 +305,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=100000000",
         "source_hash": "fnv1a64:b28d18c6e1e2492f",
         "runs": 5,
-        "wall_ms_median": 9.504,
-        "wall_ms_min": 9.264,
-        "wall_ms_max": 12.172,
-        "spread_pct": 2.58,
-        "max_rss_kb": 9952,
+        "wall_ms_median": 10.18,
+        "wall_ms_min": 9.862,
+        "wall_ms_max": 10.389,
+        "spread_pct": 3.22,
+        "max_rss_kb": 10200,
         "oven": {
           "steps": 786024,
           "bytes": 0,
@@ -321,13 +321,13 @@
           "static_bytes": 0,
           "evaluations": 2
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "sieve": {
@@ -354,11 +354,11 @@
         "flags": "-std=c++26 -fsyntax-only -stdlib=libc++ -fconstexpr-steps=200000000",
         "source_hash": "fnv1a64:4469bdfd808493f8",
         "runs": 5,
-        "wall_ms_median": 71.409,
-        "wall_ms_min": 70.285,
-        "wall_ms_max": 71.758,
-        "spread_pct": 1.6,
-        "max_rss_kb": 16108,
+        "wall_ms_median": 74.152,
+        "wall_ms_min": 72.663,
+        "wall_ms_max": 80.258,
+        "spread_pct": 2.05,
+        "max_rss_kb": 16820,
         "oven": {
           "steps": 684419,
           "bytes": 50448,
@@ -370,13 +370,13 @@
           "static_bytes": 1912,
           "evaluations": 542
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "sieve-nohdr": {
@@ -385,11 +385,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=200000000",
         "source_hash": "fnv1a64:0c5537947b3735d1",
         "runs": 5,
-        "wall_ms_median": 15.832,
-        "wall_ms_min": 15.234,
-        "wall_ms_max": 16.841,
-        "spread_pct": 3.92,
-        "max_rss_kb": 9792,
+        "wall_ms_median": 14.968,
+        "wall_ms_min": 14.442,
+        "wall_ms_max": 16.638,
+        "spread_pct": 3.64,
+        "max_rss_kb": 10228,
         "oven": {
           "steps": 253992,
           "bytes": 100000,
@@ -401,13 +401,13 @@
           "static_bytes": 0,
           "evaluations": 3
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "soa": {
@@ -416,11 +416,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=100000000",
         "source_hash": "fnv1a64:861098140e4877c6",
         "runs": 5,
-        "wall_ms_median": 69.568,
-        "wall_ms_min": 68.989,
-        "wall_ms_max": 70.517,
-        "spread_pct": 0.84,
-        "max_rss_kb": 10212,
+        "wall_ms_median": 71.124,
+        "wall_ms_min": 69.585,
+        "wall_ms_max": 72.462,
+        "spread_pct": 2.21,
+        "max_rss_kb": 10692,
         "oven": {
           "steps": 1745460,
           "bytes": 73736,
@@ -432,13 +432,13 @@
           "static_bytes": 16,
           "evaluations": 6
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "sort": {
@@ -465,11 +465,11 @@
         "flags": "-std=c++26 -fsyntax-only -stdlib=libc++ -fconstexpr-steps=200000000",
         "source_hash": "fnv1a64:edc8f87b39f98630",
         "runs": 5,
-        "wall_ms_median": 176.918,
-        "wall_ms_min": 175.017,
-        "wall_ms_max": 184.347,
-        "spread_pct": 1.09,
-        "max_rss_kb": 24368,
+        "wall_ms_median": 177.354,
+        "wall_ms_min": 172.578,
+        "wall_ms_max": 196.861,
+        "spread_pct": 2.77,
+        "max_rss_kb": 24884,
         "oven": {
           "steps": 1659910,
           "bytes": 648080,
@@ -481,13 +481,13 @@
           "static_bytes": 34864,
           "evaluations": 1238
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "sort-nohdr": {
@@ -496,11 +496,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=200000000",
         "source_hash": "fnv1a64:ab46db2c21fd1874",
         "runs": 5,
-        "wall_ms_median": 24.5,
-        "wall_ms_min": 24.025,
-        "wall_ms_max": 25.759,
-        "spread_pct": 1.98,
-        "max_rss_kb": 9840,
+        "wall_ms_median": 25.089,
+        "wall_ms_min": 24.808,
+        "wall_ms_max": 26.457,
+        "spread_pct": 1.13,
+        "max_rss_kb": 10188,
         "oven": {
           "steps": 727499,
           "bytes": 25600,
@@ -512,13 +512,13 @@
           "static_bytes": 0,
           "evaluations": 7
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "string": {
@@ -545,11 +545,11 @@
         "flags": "-std=c++26 -fsyntax-only -stdlib=libc++ -fconstexpr-steps=200000000",
         "source_hash": "fnv1a64:a6df327f218abe80",
         "runs": 5,
-        "wall_ms_median": 184.536,
-        "wall_ms_min": 180.369,
-        "wall_ms_max": 197.049,
-        "spread_pct": 2.31,
-        "max_rss_kb": 25708,
+        "wall_ms_median": 195.359,
+        "wall_ms_min": 179.979,
+        "wall_ms_max": 202.201,
+        "spread_pct": 8.55,
+        "max_rss_kb": 26180,
         "oven": {
           "steps": 1920615,
           "bytes": 626512,
@@ -561,13 +561,13 @@
           "static_bytes": 4960,
           "evaluations": 3433
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "table": {
@@ -594,11 +594,11 @@
         "flags": "-std=c++26 -fsyntax-only -stdlib=libc++ -fconstexpr-steps=200000000",
         "source_hash": "fnv1a64:34120acdbc843b85",
         "runs": 5,
-        "wall_ms_median": 100.512,
-        "wall_ms_min": 98.431,
-        "wall_ms_max": 108.057,
-        "spread_pct": 2.11,
-        "max_rss_kb": 18604,
+        "wall_ms_median": 98.585,
+        "wall_ms_min": 98.411,
+        "wall_ms_max": 99.77,
+        "spread_pct": 0.18,
+        "max_rss_kb": 19316,
         "oven": {
           "steps": 1248889,
           "bytes": 200560,
@@ -610,13 +610,13 @@
           "static_bytes": 200616,
           "evaluations": 571
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "table-nohdr": {
@@ -625,11 +625,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=200000000",
         "source_hash": "fnv1a64:59764f3e87b9706c",
         "runs": 5,
-        "wall_ms_median": 45.498,
-        "wall_ms_min": 43.519,
-        "wall_ms_max": 45.94,
-        "spread_pct": 4.55,
-        "max_rss_kb": 10264,
+        "wall_ms_median": 45.463,
+        "wall_ms_min": 44.642,
+        "wall_ms_max": 45.971,
+        "spread_pct": 1.84,
+        "max_rss_kb": 10772,
         "oven": {
           "steps": 854380,
           "bytes": 330240,
@@ -641,13 +641,13 @@
           "static_bytes": 16,
           "evaluations": 10
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "trial-rollback": {
@@ -656,11 +656,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=100000000",
         "source_hash": "fnv1a64:2ae28a0385a99bd2",
         "runs": 5,
-        "wall_ms_median": 37.072,
-        "wall_ms_min": 36.671,
-        "wall_ms_max": 37.966,
-        "spread_pct": 1.1,
-        "max_rss_kb": 9996,
+        "wall_ms_median": 38.448,
+        "wall_ms_min": 37.116,
+        "wall_ms_max": 41.078,
+        "spread_pct": 3.59,
+        "max_rss_kb": 10452,
         "oven": {
           "steps": 460007,
           "bytes": 1280256,
@@ -672,13 +672,13 @@
           "static_bytes": 0,
           "evaluations": 2
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "vector-alloc": {
@@ -687,11 +687,11 @@
         "flags": "-std=c++26 -fsyntax-only -stdlib=libc++ -fconstexpr-steps=1000000000",
         "source_hash": "fnv1a64:ddcb1dcd2745a168",
         "runs": 5,
-        "wall_ms_median": 376.838,
-        "wall_ms_min": 371.132,
-        "wall_ms_max": 413.657,
-        "spread_pct": 1.54,
-        "max_rss_kb": 36636,
+        "wall_ms_median": 367.821,
+        "wall_ms_min": 365.782,
+        "wall_ms_max": 370.6,
+        "spread_pct": 0.56,
+        "max_rss_kb": 37252,
         "oven": {
           "steps": 9587322,
           "bytes": 3462096,
@@ -703,13 +703,13 @@
           "static_bytes": 17840,
           "evaluations": 5746
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "virtual-dispatch": {
@@ -718,11 +718,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=100000000",
         "source_hash": "fnv1a64:40a86c530df6c8af",
         "runs": 5,
-        "wall_ms_median": 22.719,
-        "wall_ms_min": 22.021,
-        "wall_ms_max": 31.654,
-        "spread_pct": 3.17,
-        "max_rss_kb": 10184,
+        "wall_ms_median": 21.435,
+        "wall_ms_min": 21.035,
+        "wall_ms_max": 23.2,
+        "spread_pct": 1.9,
+        "max_rss_kb": 10408,
         "oven": {
           "steps": 375540,
           "bytes": 2176,
@@ -734,13 +734,13 @@
           "static_bytes": 0,
           "evaluations": 6
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "wide-struct-read": {
@@ -749,11 +749,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=900000000",
         "source_hash": "fnv1a64:1ec2a3379311ea18",
         "runs": 5,
-        "wall_ms_median": 280.591,
-        "wall_ms_min": 277.178,
-        "wall_ms_max": 293.288,
-        "spread_pct": 1.23,
-        "max_rss_kb": 27552,
+        "wall_ms_median": 280.171,
+        "wall_ms_min": 276.924,
+        "wall_ms_max": 289.688,
+        "spread_pct": 1.17,
+        "max_rss_kb": 28048,
         "oven": {
           "steps": 4199431,
           "bytes": 32768,
@@ -765,13 +765,13 @@
           "static_bytes": 16,
           "evaluations": 2
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     },
     "wide-struct-store": {
@@ -780,11 +780,11 @@
         "flags": "-std=c++26 -fsyntax-only -fconstexpr-steps=200000000",
         "source_hash": "fnv1a64:b42d422b5c2479f1",
         "runs": 5,
-        "wall_ms_median": 128.767,
-        "wall_ms_min": 125.582,
-        "wall_ms_max": 134.305,
-        "spread_pct": 2.54,
-        "max_rss_kb": 30636,
+        "wall_ms_median": 126.87,
+        "wall_ms_min": 126.337,
+        "wall_ms_max": 132.743,
+        "spread_pct": 0.42,
+        "max_rss_kb": 31112,
         "oven": {
           "steps": 69647,
           "bytes": 16384,
@@ -796,13 +796,13 @@
           "static_bytes": 16,
           "evaluations": 2
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-653/release/kiln++",
+        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-662/release/kiln++",
         "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-06T154247"
+        "recorded": "2026-11-06T181326"
       }
     }
   }
