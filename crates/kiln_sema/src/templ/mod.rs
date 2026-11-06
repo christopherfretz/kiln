@@ -22,9 +22,9 @@ pub mod deduce;
 pub mod deduce_call;
 #[cfg(feature = "op-stats")]
 pub(crate) mod deduce_stats;
-pub(crate) mod explicit_memo;
 mod default_args;
 mod equiv;
+pub(crate) mod explicit_memo;
 pub mod funcs;
 pub mod member;
 pub mod nttp;

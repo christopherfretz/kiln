@@ -99,7 +99,10 @@ pub(crate) struct ExplicitMemo {
 
 impl ExplicitMemo {
     /// The kept result for `key`.
-    pub(crate) fn get(&self, key: &ExplicitKey) -> Option<(Vec<QualType>, Option<QualType>, usize)> {
+    pub(crate) fn get(
+        &self,
+        key: &ExplicitKey,
+    ) -> Option<(Vec<QualType>, Option<QualType>, usize)> {
         let e = self.slots.get(key.slot())?.as_ref()?;
         (e.key == *key).then(|| {
             let v = e.out[..usize::from(e.n)].iter().map(|t| t.expect("kept")).collect();
