@@ -554,7 +554,7 @@ share of the named profile that the work could remove.
 | F12 | **Done (WP-645).** Compute node accounting lazily | kiln_sema `templ/stack.rs` push/pop; kiln_ast `node_live_bytes` | About 1–1.2% and 3 M allocations in R3 | About 1% | Low | S |
 | F13 | Fewer deduction and candidate attempts | kiln_sema `deduce_spec`, `add_template_candidate`, `deduce_call_arg` | 34–36% inclusive in S8; 9.8 M `deduce_spec` calls in R2; `deduce_call_arg` grows 18x for 4x N in S8 | Unknown; the largest frontend lever | Medium–high | M–L |
 | F14 | Index hidden-friend redeclaration | kiln_sema `act_on_friend` → `overload/redecl.rs` `pick_prev_function` | 11.5% of S8 at N=400 and growing 13–19x for 4x N. Not seen in the reference. | Removes S8's quadratic term | Low | S–M |
-| F15 | Fast path for trial folds | kiln_sema `try_fold` callers (`fold_int`, narrowing, `known_truth`) | Bytecode compile is 6.3% of R3. 168 k `compile_func` calls for 575 k folds, mostly on literals and simple arithmetic | 3–5% of R3 | Low–medium | S–M |
+| F15 | **Partly done (WP-656):** leaf integer trial folds skip the bytecode: trial thunk compiles −86% and `eval_job` Ir −44% on `trial-folds` (wall −8%, RSS −16%), production shapes flat; variable reads, member accesses and `is_constant_initialized` remain ("WP-656: trial-fold fast path"). Fast path for trial folds | kiln_sema `try_fold` callers (`fold_int`, narrowing, `known_truth`) | Bytecode compile is 6.3% of R3. 168 k `compile_func` calls for 575 k folds, mostly on literals and simple arithmetic | 3–5% of R3 | Low–medium | S–M |
 | F16 | Do not re-classify keywords in `decltype` lookahead | kiln_parse `Parser::decltype_scope_end` | 3 M of 7.7 M `Keywords::get` calls in R1 | About 0.6% of R1 | Low | S |
 | F17 | Cache built-in operator candidate sets | kiln_sema `add_builtin_with` | 4.6 M calls at 434 Ir each, 1% of R2 | About 1% | Low | S |
 | F18 | **Done (WP-654).** FxHash in codegen and the IR printer | kiln_codegen, kiln_llvm | `SipHasher13` is 0.9% + 0.24% of R3 | About 1% of R3 | Low | S |
@@ -2933,3 +2933,276 @@ inputs, and in every case it is identical once the binary's own name
 - **`view` on the remaining paths.** Calls that need the full payload
   (template arguments, function parameters) still decode a `TypeView`.
   That is 85 M on tw and 297 M on S8.
+
+## WP-656: trial-fold fast path
+
+This WP covers F15. Sema folds many expressions speculatively, with
+`try_fold`, `fold_int` and `fold_rvalue`. Examples are narrowing checks,
+constant conditions, `case` labels and enumerators. Before this WP,
+each of these folds entered the Oven, compiled a bytecode thunk and ran
+it. The spec is spec/landed/sema/WP-656.md.
+
+### Measurement on main
+
+Main is f16180a38. The shapes and flags are:
+- `bench/frontend/trial-folds.cpp` (tf): new in this WP, ordinary code
+  made of trial folds, `-fsyntax-only`;
+- `templates_wide.cpp` (tw): `-fsyntax-only`;
+- `accessor-wide-emit.cpp` (aw): `-S -emit-llvm -o /dev/null`;
+- `registration-wide-obj.cpp` (rw): `-c -O2 -o /dev/null`, front-end
+  process only;
+- S7: `-freflection`, libstdc++ from GCC 16.1;
+- `bench/oven/trial-rollback.cpp` (tr).
+
+Each shape ran under callgrind with `--cache-sim=no`, `ulimit -v 3000000`
+and `timeout 1200`. The counts come from the `op-stats` build, which
+counts every trial entry by caller and by expression shape
+(`kiln_oven/src/trial_stats.rs`). Callgrind's inclusive costs are
+inflated by recursion on this host, so the reliable Ir figures are
+totals, self Ir per crate, and `eval_job`'s call count. That call count
+matches the exact entry count on every shape.
+
+**(i) Counts, main → branch.**
+- "Trial entries" are the `try_fold`, `fold_rvalue`,
+  `fold_for_overflow`, `fold_constant_init` and `is_constant_initialized`
+  calls. They are unchanged.
+- "Full-path entries" are `eval_job` runs, trial and recorded.
+- "Trial thunks" are the thunks compiled inside a trial.
+
+| shape | trial entries | full-path entries | trial thunks | all thunk compiles | `compile_func` in trials |
+|---|--:|--:|--:|--:|--:|
+| tf | 288,001 | 368,003 → 108,003 (−70.7%) | 200,000 → 28,000 (−86.0%) | 260,002 → 108,002 | 0 → 0 |
+| tw | 50,200 | 110,401 → 60,201 | 30,201 → 0 | 50,202 → 50,201 | 0 → 0 |
+| aw | 70,133 | 96,305 → 53,718 | 27,509 → 16,650 | 31,197 → 25,230 | 943 → 943 |
+| rw | 116,041 | 116,041 → 68,025 | 80,038 → 64,022 | 80,038 → 64,022 | 4,000 → 4,000 |
+| S7 | 10,215 | 24,758 → 21,258 | 7,735 → 4,755 | 19,387 → 17,265 | 39 → 39 |
+| tr | 10 | 12 → 7 | 10 → 5 | 12 → 7 | 0 → 0 |
+
+Where the remaining trial thunks come from, by expression shape:
+- **tf:** 16,000 variable reads, all of which fail, and 12,000
+  `is_constant_initialized` thunks.
+- **rw:** 44,012 member accesses (none succeed), 8,004 other casts, 8,002
+  lvalue reads, 4,001 init lists and 4,000 non-integer folds.
+- **aw:** 7,356 member calls, 3,384 variable reads (1,912 succeed) and
+  3,308 other casts.
+- **S7:** 3,672 variable reads (3,156 succeed) and 2,396 calls.
+
+On tf, 88,001 of the 288,001 entries repeat an `ExprId` already folded,
+and 44,000 of those repeats come from another caller.
+
+**(ii) Ir, main → branch** (G or M Ir):
+
+| shape | total | `kiln_oven` self | `eval_job` incl. | `Sema::try_fold` incl. |
+|---|---|---|---|---|
+| tf | 11.126 → 10.865 G (−2.3%) | 936.9 → 751.9 M (−19.7%) | 1,382.7 → 777.1 M (−43.8%) | 1,385.4 → 1,161.2 M (−16.2%) |
+| tw | 2.570 → 2.574 G (+0.1%) | 283.5 → 295.1 M | 631.2 → 555.1 M | 189.7 → 83.5 M (−56.0%) |
+| aw | 8.919 → 8.901 G (−0.2%) | 246.5 → 240.9 M | 3,247.7 → 3,183.3 M | 100.5 → 79.8 M (−20.6%) |
+| rw | 10.708 → 10.686 G (−0.2%) | 252.9 → 237.3 M | 374.8 → 287.6 M | 122.8 → 81.5 M (−33.6%) |
+| S7 | 5.578 → 5.580 G (+0.0%) | 1,560.7 → 1,559.9 M | 1,658.6 → 1,651.0 M | 50.3 → 46.9 M (−6.8%) |
+| tr | 588.6 → 588.6 M | — | — | — |
+
+**On tw, the work moves instead of going away.** Each of tw's 50,200
+trials is answered by the fast path. But the same expressions are then
+evaluated as recorded constant expressions (template arguments), and
+those evaluations now compile the thunks that the trials used to compile
+and cache. `try_fold` is −56%, and the total is flat.
+
+On tf, the 16,000 variable reads that fail cost about 286 M Ir on the
+full path, about 17,900 Ir each. That is most of what remains in
+`eval_job`.
+
+### Design note
+
+**(a) Leaf fold, done in the Oven instead of sema.**
+- `Oven::leaf_first` (`kiln_oven/src/leaf.rs`) walks the expression
+  before an outermost `try_fold` or `fold_rvalue` would enter
+  `eval_job`.
+- It computes each node with the bytecode's own `crate::arith`
+  operation, on the value `compile::scalar_bits` would put in the
+  register, and freezes the result with `freeze_scalar`.
+- **Why in the Oven.** Sema has no access to the Oven's arithmetic or
+  freezing. A sema-side copy in `i128` would be a second implementation
+  of the overflow, shift and conversion rules, and it could drift.
+- **Domain.** The whitelist is in spec/oven.md and
+  spec/landed/sema/WP-656.md: literals, enumerators, `sizeof`/`alignof`,
+  traits, integral, boolean and no-op casts, unary and binary integer
+  operators, `?:`, `&&` and `||`, up to 64 deep.
+- **It declines on:** anything that reads memory (every `DeclRef` other
+  than an enumerator, and every lvalue); any failing operation; a `?:`,
+  `&&` or `||` arm outside the domain, including the arm not taken; a
+  fold inside a running evaluation; and a pending one-shot setting.
+
+**(c) Interpret without compiling.** This is the same thing as (a).
+Because the walk sits in the Oven, it is (c) for the leaf subset. No
+separate tree evaluator was needed.
+
+**(b) Cheaper `eval_job` entry: not done.**
+- `eval_job`'s own pro- and epilogue is 0.09% of tf's Ir after (a).
+- The clock reads are another 0.09%.
+- `types.refresh` and `content_bytes` do not appear in the top callees.
+- The cost of a full-path entry is the thunk compile and the run, which
+  (a) removes.
+
+**(d) Per-`ExprId` trial memo: not done.**
+- tf repeats 30% of its `ExprId`s, but after (a) those repeats are
+  leaf walks of about 50 Ir per node.
+- The repeats that still take the full path are mostly failing variable
+  reads. A memo would have to be invalidated when the variable becomes
+  usable.
+- An `ExprId`-keyed map over all trials was estimated, not built: 288,001
+  entries at about 16 bytes each is 4.6 MB, or about +3% of tf's peak
+  RSS, for at most a 0.8% Ir saving. That is over the brief's +0.5%
+  budget.
+
+**Considered and set aside: deciding variable reads in the walk.**
+- The walk could answer a read that the full path is certain to fail:
+  a non-`const` variable, or a parameter.
+- A prototype saved 286 M Ir on tf, taking the Oven part of `try_fold`
+  to about −75%.
+- It is outside the brief's whitelist, which excludes lvalues and every
+  `DeclRef` other than an enumerator. The full path's failure also
+  depends on lax mode and on `global_index` creating an entry. So it was
+  not landed (see "What remains").
+
+### Per-step
+
+| step | commit | shape | trial thunks | full-path entries | total Ir |
+|---|---|---|---|---|---|
+| 0 instrumentation, `op-stats` only | ea286892a | — | — | — | release build unchanged |
+| bench `frontend/trial-folds` | e334ae37a | tf | baseline 1,161.6 ms, 158.5 MB | — | — |
+| 1 leaf fast path | 44e6823b5 | tf | 200,000 → 28,000 | 368,003 → 108,003 | 11.126 → 10.865 G |
+| 1 | | tw | 30,201 → 0 | 110,401 → 60,201 | 2.570 → 2.574 G |
+| 1 | | aw | 27,509 → 16,650 | 96,305 → 53,718 | 8.919 → 8.901 G |
+| 1 | | rw | 80,038 → 64,022 | 116,041 → 68,025 | 10.708 → 10.686 G |
+| 1 | | S7 | 7,735 → 4,755 | 24,758 → 21,258 | 5.578 → 5.580 G |
+| test: variable reads are declined | 1955262aa | — | — | — | test only |
+
+### A/B
+
+Main (f16180a38) and the branch were run alternating, 3 pairs, on a
+shared host at load 8 to 10. Each cell is that pair's median of 5 runs of
+`/usr/bin/time -f '%e %M'`. Δ compares the medians of the pairs. The
+branch binary has the same release code as 1955262aa.
+
+| shape | main wall s | branch wall s | Δ wall | main RSS KB | branch RSS KB | Δ RSS |
+|---|---|---|--:|---|---|--:|
+| `trial-folds` | 1.09, 1.12, 1.01 | 1.04, 0.90, 0.95 | −12.8% | 141,276, 141,364, 141,712 | 116,516, 121,348, 119,708 | −15.3% |
+| `templates_wide` | 0.29, 0.29, 0.26 | 0.29, 0.25, 0.26 | −10.3% | 62,452, 63,584, 62,572 | 62,448, 63,412, 63,076 | +0.8% |
+| `accessor-wide-emit.ll` | 1.90, 1.86, 1.65 | 1.85, 1.59, 1.66 | −10.8% | 140,360, 140,492, 140,452 | 140,472, 140,324, 140,380 | −0.1% |
+| `registration-wide-obj.o` | 8.74, 8.74, 7.73 | 8.81, 7.71, 7.79 | −10.9% | 263,168, 264,060, 264,160 | 263,964, 263,156, 264,128 | −0.0% |
+| S7 | 0.56, 0.51, 0.52 | 0.63, 0.52, 0.53 | +1.9% | 45,632, 45,596, 45,600 | 45,612, 45,652, 45,676 | +0.1% |
+| S8 (N = 100) | 1.57, 1.24, 1.29 | 1.64, 1.28, 1.26 | −0.8% | 107,540, 112,124, 111,800 | 111,876, 111,648, 107,224 | −0.1% |
+| `churn-vector` | 0.49, 0.48, 0.48 | 0.50, 0.49, 0.49 | +2.1% | 11,360, 11,232, 11,236 | 11,436, 11,436, 11,436 | +1.8% |
+
+The load moved during the 3 pairs. In the first pair, main ran on a
+louder host, and that pair's medians decide three of the −10% rows. So
+every shape was rerun as 11 alternating runs (5 for
+`registration-wide-obj.o`), timed to the millisecond, with peak RSS from
+`wait4`. The table shows medians, with the minimum in brackets:
+
+| shape | main ms | branch ms | Δ wall | main RSS KB | branch RSS KB | Δ RSS |
+|---|--:|--:|--:|--:|--:|--:|
+| `trial-folds` | 1,033 (1,002) | 950 (921) | −8.0% | 139,444 | 116,568 | −16.4% |
+| `templates_wide` | 263 (256) | 266 (254) | +0.9% | 62,604 | 62,664 | +0.1% |
+| `churn-vector` | 490 (487) | 498 (494) | +1.6% | 11,672 | 11,672 | +0.0% |
+| S7 | 510 (493) | 516 (498) | +1.3% | 45,688 | 45,656 | −0.1% |
+| S8 (N = 100) | 1,243 (1,193) | 1,263 (1,175) | +1.6% | 107,752 | 107,708 | −0.0% |
+| `accessor-wide-emit.ll` | 1,781 (1,731) | 1,803 (1,732) | +1.2% | 140,476 | 140,448 | −0.0% |
+| `registration-wide-obj.o` | 8,452 (8,049) | 8,442 (8,018) | −0.1% | 263,128 | 264,088 | +0.4% |
+
+A second rerun gave:
+- `churn-vector` (21 runs): 496 (488) vs 505 (500), +1.6%.
+- S7 (11 runs): 599 (570) vs 591 (560), −1.3%.
+
+**`churn-vector` runs the same work on both binaries.**
+- Its trials do not change: 8 entries, of which the fast path answers 1.
+- The VM executes 134,251,174 instructions on main and 134,251,171 on
+  the branch.
+- `run_loop` is the same size on both binaries (0x38a0 bytes). It moved
+  from 0x40e6c8 to 0x40d1c4, so its cache-line offset changed from 8 to
+  4.
+- `.text` grew by 1.2 KB.
+
+The +1.6% is therefore placed as code layout. It was not isolated
+further: callgrind cannot run this shape under the 3 GB address-space
+cap.
+
+**Oven share of the `-c -O2` shape.** `registration-wide-obj.o` spends
+most of its 8.4 s in LLVM. In its front-end process:
+- `kiln_oven` self Ir goes from 2.36% to 2.22%.
+- `eval_job` inclusive goes from 3.50% to 2.69%.
+- `Sema::try_fold` inclusive goes from 1.15% to 0.76%.
+
+So the front end improves by 0.2% of its Ir. That is not visible in
+the wall time, and the emitted IR is byte-identical, so `opt` and `llc`
+get the same input.
+
+**Why `trial-folds`' RSS drops by 16%.** Thunks stay in `Oven::funcs`
+and `Oven::thunks` for the rest of the translation unit
+(`compile.rs:403-415`). This applies to failed ones too. The branch
+compiles 172,000 fewer thunks.
+
+**Targets.**
+- Thunk compiles from trial folds −70% on `trial-folds`: **met**,
+  −86.0%, and full-path entries −70.7%. Trial folds on this shape
+  compile thunks only, with no `compile_func` on either binary.
+- `try_fold` inclusive Ir −50% on `trial-folds`: **missed**.
+  - `eval_job` inclusive is −43.8%. `Sema::try_fold` inclusive is
+    −16.2%, but it is inflated by recursion. `kiln_oven` self Ir is
+    −19.7%.
+  - The rest is mostly the 16,000 failing variable reads (286 M), which
+    the whitelist keeps on the full path.
+- `-c -O2` wall −2%: **missed**. `registration-wide-obj.o` is −0.1%,
+  for the Oven share above. `accessor-wide-emit.o` was not run (124 s
+  a run); its front end is −0.2% Ir and its IR is byte-identical.
+- No shape slower than noise: **met, with one caveat**. The caveat is
+  `churn-vector` +1.6%, with identical work, explained as layout above.
+  S7, S8 and `accessor-wide-emit.ll` change sign between the two tables.
+- RSS flat: **met**. `trial-folds` is −16%, every other shape is within
+  ±0.5% in the 11-run table, and there is no memo.
+
+**Baselines.**
+- `frontend/trial-folds` was re-recorded with the branch:
+  1,161.6 → 1,073.6 ms (−7.6%) and 158.5 → 133.4 MB (−15.8%).
+- Its Oven statistics are unchanged.
+- No other entry moved by 5% or more.
+
+### Byte identity
+
+The comparison covered:
+- `-fsyntax-only` with `-fkiln-cfg-stats`, for standard error and the
+  statistics, on every conformance test;
+- `-S -emit-llvm`, on every IR-printing test, every `tests/codegen`
+  source and the `bench/frontend` emit shapes.
+
+Results:
+- 4,358 diagnostic and statistics outputs are identical, and none
+  differ.
+- 1,960 IR outputs are identical, and none differ.
+- 59 inputs fail on both binaries with the same exit code.
+- No exit code differs.
+
+The same corpus was also run on a `leaf-check` build of step 1. That
+build checks every answer the fast path gives against the full path. It
+did not panic, and its IR was identical.
+
+### What remains
+
+- **Variable reads** (`kiln_oven/src/leaf.rs:138`).
+  - Counts: 16,000 trials on tf, all failing; 3,384 on aw; 3,672 on S7.
+  - Answering a read that the full path is certain to fail would save
+    286 M Ir on tf.
+  - Answering a read of a usable `const` integer variable would cover
+    the aw and S7 successes.
+  - Both need the whitelist widened to lvalue reads. That is a decision
+    for the next WP.
+- **Member accesses on rw.** 44,012 `fold_rvalue` thunks, of which none
+  succeed (`kiln_sema` `fold_rvalue` callers). A sema-side check that
+  the base is not a constant object would avoid the entry.
+- **`is_constant_initialized` has no fast path** (`kiln_oven/src/lib.rs:1014`).
+  It accounts for 12,000 thunks on tf. Its full path places a static
+  placeholder, which `static_bytes` counts, so a walk there has to keep
+  that statistic the same.
+- **Retained thunks** (`kiln_oven/src/compile.rs:403-415`). A trial's
+  thunk is cached for the whole translation unit, even when it failed.
+  Dropping failed trial thunks would cut RSS on shapes like rw.
