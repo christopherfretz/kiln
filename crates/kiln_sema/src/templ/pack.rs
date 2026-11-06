@@ -15,7 +15,7 @@ use kiln_ast::QualType;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::RawId;
 use kiln_ast::templates::Requirement;
-use kiln_ast::types::{ArgView, TemplateArg, TypeView};
+use kiln_ast::types::{ArgView, TemplateArg, TypeKind, TypeView};
 use kiln_ast::{DeclId, ExprId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -100,8 +100,8 @@ pub enum Expansion<T> {
 
 /// The pattern of a pack-expansion type.
 pub(crate) fn type_pattern(s: &Sema<'_, '_>, q: QualType) -> Option<QualType> {
-    match s.ast.types.view(q.ty()) {
-        TypeView::PackExpansion { pattern, .. } => Some(pattern),
+    match s.ast.types.view_if(q.ty(), TypeKind::PackExpansion) {
+        Some(TypeView::PackExpansion { pattern, .. }) => Some(pattern),
         _ => None,
     }
 }

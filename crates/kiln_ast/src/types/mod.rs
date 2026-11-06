@@ -27,6 +27,8 @@ mod node;
 mod print;
 mod profile;
 mod profile_expr;
+#[cfg(test)]
+mod query_tests;
 pub use profile_expr::EquivScratch;
 
 pub use args::{ArgKind, ArgView, TemplateArg};

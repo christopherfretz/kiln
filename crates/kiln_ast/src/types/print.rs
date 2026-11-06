@@ -1064,7 +1064,9 @@ enum Qual {
 /// are printed and the qualifiers (clang stores `const A` as `A` + const).
 fn split(ctx: &TypeContext, q: QualType) -> (TypeId, Quals) {
     let (mut t, mut quals) = (q.ty(), q.quals());
-    while let TypeView::QualifiedArray { quals: qa, base } = ctx.view(t) {
+    while let Some(TypeView::QualifiedArray { quals: qa, base }) =
+        ctx.view_if(t, TypeKind::QualifiedArray)
+    {
         // `base` was created before `t`, so this terminates.
         if base.index() >= t.index() {
             break;

@@ -14,7 +14,7 @@
 //! ill-formed, but `auto (*)()` and `C auto` constraints are not).
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
-use kiln_ast::types::{AutoKeyword, TemplateArg, TypeView};
+use kiln_ast::types::{AutoKeyword, TemplateArg, TypeKind, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
@@ -460,7 +460,10 @@ impl Sema<'_, '_> {
     pub(crate) fn contained_placeholder(&self, t: QualType) -> Option<QualType> {
         let mut cur = t;
         for _ in 0..256 {
-            if let TypeView::Auto { deduced: None, .. } = self.ast.types.canonical_view(cur) {
+            let c = self.ast.types.canonical(cur).ty();
+            if let Some(TypeView::Auto { deduced: None, .. }) =
+                self.ast.types.view_if(c, TypeKind::Auto)
+            {
                 return Some(self.ast.types.canonical(cur));
             }
             cur = self.placeholder_step(cur)?;

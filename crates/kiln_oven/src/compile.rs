@@ -14,7 +14,7 @@ use kiln_ast::decl::{ConstexprKind, DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, TraitKind, UnaryOp};
 use kiln_ast::lambda::ClosureThunk;
 use kiln_ast::stmt::{IfKind, StmtKind};
-use kiln_ast::types::TypeView;
+use kiln_ast::types::{TypeKind, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, StringLitId};
 use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -1237,9 +1237,10 @@ impl<'a> Compiler<'a> {
     /// "`_BitInt`").
     fn wide_bit_int(&mut self, e: ExprId) -> bool {
         let q = self.b.ast().exprs.get(e).ty();
+        let types = &self.b.ast().types;
         let wide = matches!(
-            self.b.ast().types.canonical_view(q),
-            TypeView::BitInt { width, .. } if width > 128
+            types.view_if(types.canonical(q).ty(), TypeKind::BitInt),
+            Some(TypeView::BitInt { width, .. }) if width > 128
         );
         if wide {
             self.trap(

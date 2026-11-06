@@ -355,7 +355,7 @@ impl Sema<'_, '_> {
 
     /// True if `q` is the error type.
     pub fn is_error_type(&self, q: QualType) -> bool {
-        self.ast.types.builtin(q) == Some(BuiltinType::Error)
+        self.ast.types.is_error(q)
     }
 
     /// True if `q` is an undeduced `auto`.
