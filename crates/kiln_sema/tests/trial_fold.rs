@@ -4,9 +4,9 @@
 //! values, overflow, `/ 0`, shifts by the width and beyond, nested
 //! casts, `?:`, `&&`/`||`, `sizeof`/`alignof`, enumerators and casts to
 //! enumerations), the fast path's answer is the full path's: the same
-//! value, or `None` from both. A cast to an enumeration is outside the
-//! domain (the full path checks the enumeration's range): the fast path
-//! declines it.
+//! value, or `None` from both. A cast to an enumeration and a read of a
+//! variable are outside the domain (the full path checks the
+//! enumeration's range, and reads memory): the fast path declines them.
 
 #![allow(clippy::many_single_char_names, reason = "short names mirror the C++ under test")]
 
@@ -14,6 +14,7 @@ mod conv_common;
 
 use conv_common::*;
 use kiln_ast::consts::{IntBits, Scalar};
+use kiln_ast::decl::{DeclKind, FnSpec, VarSpec};
 use kiln_ast::expr::{BinaryOp, TraitKind, UnaryOp};
 use kiln_ast::types::BuiltinType as B;
 use kiln_ast::{ConstValueId, DeclHead, ExprId, QualType};
@@ -370,5 +371,96 @@ fn enumerations_agree() {
             }
         }
         assert_eq!(t.none, 0, "every enumerator folds");
+    });
+}
+
+/// A read of a variable is outside the domain, in every operand position
+/// and in an arm that does not run (`0 && v`, `1 ? 2 : v`): the fast
+/// path declines a parameter, an automatic variable, a `const` automatic
+/// one and a namespace-scope one, and the full path answers.
+#[test]
+fn variable_reads_agree() {
+    with_sema(|s, _| {
+        let ft = fn_type(s, QualType::INT, &[QualType::INT]);
+        let h = DeclHead::new(s.ast.tu, name(s, "f"), L);
+        let f = s.ast.builder().function(h, DeclKind::Function, ft, FnSpec::new(), None);
+        let px = name(s, "x");
+        let x = s.ast.builder().param(f, px, L, QualType::INT, 0, 0);
+        s.ast.builder().set_params(f, &[x]).expect("params once");
+        let local = |s: &mut Sema<'_, '_>, n: &str, ty: QualType, v: u64| {
+            let h = DeclHead::new(f, name(s, n), L);
+            let d = s.ast.builder().var(h, ty, VarSpec::new(), None);
+            let init = int_lit(s, QualType::INT, v);
+            s.ast.builder().set_var_init(d, init).expect("init once");
+            d
+        };
+        let y = local(s, "y", QualType::INT, 5);
+        let ck = cnst(s, QualType::INT);
+        let k = local(s, "k", ck, 4);
+        let g = var(s, "g", QualType::INT);
+        type Build = fn(&mut Sema<'_, '_>, ExprId) -> ExprId;
+        let shapes: [(&str, Build); 14] = [
+            ("+v", |s, v| s.act_on_unary(UnaryOp::Plus, v, L)),
+            ("-v", |s, v| s.act_on_unary(UnaryOp::Minus, v, L)),
+            ("v + 1", |s, v| {
+                let one = int_lit(s, QualType::INT, 1);
+                s.act_on_binary(BinaryOp::Add, v, one, L)
+            }),
+            ("1 + v", |s, v| {
+                let one = int_lit(s, QualType::INT, 1);
+                s.act_on_binary(BinaryOp::Add, one, v, L)
+            }),
+            ("v / 0", |s, v| {
+                let z = int_lit(s, QualType::INT, 0);
+                s.act_on_binary(BinaryOp::Div, v, z, L)
+            }),
+            ("v == 3", |s, v| {
+                let k = int_lit(s, QualType::INT, 3);
+                s.act_on_binary(BinaryOp::EQ, v, k, L)
+            }),
+            ("(long)v", |s, v| s.act_on_cast(CastStyle::CStyle, QualType::LONG, v, L, L)),
+            ("0 && v", |s, v| {
+                let z = int_lit(s, QualType::INT, 0);
+                s.act_on_binary(BinaryOp::LAnd, z, v, L)
+            }),
+            ("1 && v", |s, v| {
+                let one = int_lit(s, QualType::INT, 1);
+                s.act_on_binary(BinaryOp::LAnd, one, v, L)
+            }),
+            ("1 || v", |s, v| {
+                let one = int_lit(s, QualType::INT, 1);
+                s.act_on_binary(BinaryOp::LOr, one, v, L)
+            }),
+            ("0 || v", |s, v| {
+                let z = int_lit(s, QualType::INT, 0);
+                s.act_on_binary(BinaryOp::LOr, z, v, L)
+            }),
+            ("1 ? 2 : v", |s, v| {
+                let (c, two) = (int_lit(s, QualType::INT, 1), int_lit(s, QualType::INT, 2));
+                s.act_on_conditional(c, two, v, L)
+            }),
+            ("0 ? 2 : v", |s, v| {
+                let (c, two) = (int_lit(s, QualType::INT, 0), int_lit(s, QualType::INT, 2));
+                s.act_on_conditional(c, two, v, L)
+            }),
+            ("v ? 1 : 2", |s, v| {
+                let (one, two) = (int_lit(s, QualType::INT, 1), int_lit(s, QualType::INT, 2));
+                s.act_on_conditional(v, one, two, L)
+            }),
+        ];
+        let mut t = Tally::default();
+        for (vn, d) in [("x", x), ("y", y), ("k", k), ("g", g)] {
+            for (what, build) in shapes {
+                for round in 0..2 {
+                    let r = s.build_decl_ref(d, L);
+                    let e = build(s, r);
+                    let w = || format!("{} (v = {vn}, round {round})", what);
+                    let (fast, full) = s.trial_fold_paths(e);
+                    assert_eq!(fast, None, "fast path declines {}", w());
+                    tally(full.is_some(), &mut t);
+                }
+            }
+        }
+        assert!(t.some > 0 && t.none > 0, "both outcomes: {} some, {} none", t.some, t.none);
     });
 }
