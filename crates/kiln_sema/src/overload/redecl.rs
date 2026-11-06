@@ -48,7 +48,16 @@ impl Sema<'_, '_> {
             (std::panic::Location::caller(), crate::templ::deduce_stats::prev_begin());
         let r = self.pick_prev_function_in(cands, new);
         #[cfg(feature = "op-stats")]
-        crate::templ::deduce_stats::prev_end(at, cands.len(), before);
+        {
+            let scope = cands.first().and_then(|&d| self.ast.decls.get(d).ctx());
+            let scope = scope.map_or_else(|| "-".to_owned(), |c| format!("{:?}", self.kind_of(c)));
+            if cands.len() >= 32 {
+                let name = self.decl_name_str(self.ast.decls.get(cands[0]).name());
+                let head = if new.head.is_some() { "template" } else { "function" };
+                crate::templ::deduce_stats::tally("prev-long", format!("{scope} {head} {name}"));
+            }
+            crate::templ::deduce_stats::prev_end(at, &scope, cands.len(), before);
+        }
         r
     }
 
@@ -63,7 +72,10 @@ impl Sema<'_, '_> {
                 true
             }
         };
-        for &d in cands.iter().rev() {
+        for (_i, &d) in cands.iter().rev().enumerate() {
+            // The position of a hit; cleared below when there is none.
+            #[cfg(feature = "op-stats")]
+            crate::templ::deduce_stats::prev_hit(Some(_i));
             let k = self.kind_of(d);
             // A dependent using-declarator (`using T::f;`) is checked
             // against the class's functions only at instantiation
@@ -97,6 +109,8 @@ impl Sema<'_, '_> {
                 other = Some(d);
             }
         }
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::prev_hit(None);
         invalid.or(other)
     }
 
@@ -111,8 +125,18 @@ impl Sema<'_, '_> {
         old_head: Option<TemplateParamListId>,
         new: NewFn,
     ) -> bool {
+        let r = self.fn_corresponds_in(old, old_head, new);
         #[cfg(feature = "op-stats")]
-        crate::templ::deduce_stats::compared();
+        crate::templ::deduce_stats::compared(r);
+        r
+    }
+
+    fn fn_corresponds_in(
+        &mut self,
+        old: DeclId,
+        old_head: Option<TemplateParamListId>,
+        new: NewFn,
+    ) -> bool {
         // The parameters are those of the declared type, whose return type
         // only differs from it when deduced: that is formed (interned)
         // only for the template return-type comparison below (WP-657).
