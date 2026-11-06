@@ -249,6 +249,8 @@ impl RedeclIndex {
 
     /// Applies the AST journals.
     fn sync(&mut self, ast: &mut Ast) {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("redecl-index-sync");
         if !self.started {
             self.started = true;
             ast.lookup.journal.start();
@@ -263,6 +265,8 @@ impl RedeclIndex {
             *self = RedeclIndex { started: true, ..RedeclIndex::default() };
             return;
         }
+        #[cfg(feature = "op-stats")]
+        let stat = (slots.len(), retyped.len(), relinked.len());
         for (set, pos) in slots {
             if pos == NIL {
                 self.drop_set(set);
@@ -280,6 +284,8 @@ impl RedeclIndex {
                 }
             }
         }
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::index_sync(stat.0, stat.1, stat.2, sps.len());
         for sp in sps {
             self.rekey(ast, (sp >> 32) as u32, sp as u32);
         }

@@ -2256,12 +2256,15 @@ impl Sema<'_, '_> {
     /// declaration, else, at block scope, one in the innermost enclosing
     /// namespace ([basic.link]/6), else a block-scope declaration of the
     /// same entity ([`Sema::local_externs`]).
+    #[inline(never)]
     fn find_prev_function(
         &mut self,
         dname: DeclName,
         qualifier: Option<DeclId>,
         new: NewFn,
     ) -> Option<DeclId> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("find_prev_function");
         let mut found = self.prev_candidates_dn(dname, qualifier);
         // A friend of a templated class is not visible to redeclaration
         // lookup until instantiated: a later namespace-scope declaration
@@ -2306,6 +2309,27 @@ impl Sema<'_, '_> {
             .map(|x| x.2)
             .collect();
         self.pick_prev_function(&locals, new)
+    }
+
+    /// The previous declaration member function declaration `new`
+    /// redeclares among the members of its class named `dname`
+    /// (`qualifier`: the class of an out-of-line declaration), and, when
+    /// `other_kind` (an out-of-line definition, not a friend), the member
+    /// of another kind it would redefine ([`Sema::non_function_member`]).
+    #[inline(never)]
+    fn member_redecl_prev(
+        &mut self,
+        dname: DeclName,
+        qualifier: Option<DeclId>,
+        new: NewFn,
+        other_kind: bool,
+    ) -> (Option<DeclId>, Option<DeclId>) {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("member_redecl_prev");
+        let found = self.prev_candidates_dn(dname, qualifier);
+        let p = self.pick_prev_function(&found, new);
+        let other = if other_kind { self.non_function_member(&found) } else { None };
+        (p, other)
     }
 
     /// The declarations of `dname` in namespace `ctx` an unqualified friend
@@ -3747,11 +3771,9 @@ impl Sema<'_, '_> {
             }
             prev
         } else if method {
-            let found = self.prev_candidates_dn(dname, d.qualifier);
-            let p = self.pick_prev_function(&found, new_fn);
-            if !in_class && !friend {
-                other_kind_member = self.non_function_member(&found);
-            }
+            let (p, other) =
+                self.member_redecl_prev(dname, d.qualifier, new_fn, !in_class && !friend);
+            other_kind_member = other;
             p
         } else {
             self.find_prev_function(dname, d.qualifier, new_fn)

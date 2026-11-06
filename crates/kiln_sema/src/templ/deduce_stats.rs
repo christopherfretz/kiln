@@ -55,6 +55,18 @@ struct Stats {
     timers: FxHashMap<&'static str, (u32, u64, u64)>,
     /// Free-form tallies: (kind, label) → count.
     tally: FxHashMap<(&'static str, String), u64>,
+    /// Keyed call counts: kind → (calls, distinct keys) (WP-661).
+    distinct: FxHashMap<&'static str, (u64, FxHashSet<u64>)>,
+    /// Explicit-argument substitutions by key: (calls, a previous call
+    /// succeeded creating no node) (WP-661).
+    explicit: FxHashMap<u64, (u64, bool)>,
+    /// Explicit-argument substitutions: calls, successes, successes that
+    /// created no node, calls a memo of those would answer.
+    explicit_n: (u64, u64, u64, u64),
+    /// Redeclaration-index syncs: calls, calls with no journal event,
+    /// slot events, retyped events, relinked events, events naming a
+    /// watched declaration (WP-661).
+    sync: (u64, u64, u64, u64, u64, u64),
 }
 
 impl Drop for Stats {
@@ -124,6 +136,28 @@ impl Drop for Stats {
                  bytes-per-entry={}",
                 b / e.max(1)
             );
+        }
+        if self.sync.0 != 0 {
+            let (n, e, a, b, c, w) = self.sync;
+            let _ = writeln!(
+                s,
+                "deduce-stats: redecl-sync calls={n} empty={e} slot-events={a} retyped={b} \
+                 relinked={c} watched={w}"
+            );
+        }
+        if self.explicit_n.0 != 0 {
+            let (n, ok, zero, hits) = self.explicit_n;
+            let _ = writeln!(
+                s,
+                "deduce-stats: explicit-subst calls={n} keys={} ok={ok} ok-no-node={zero} \
+                 memo-hits={hits}",
+                self.explicit.len()
+            );
+        }
+        let mut v: Vec<_> = self.distinct.iter().collect();
+        v.sort_by_key(|e| e.0);
+        for (kind, (n, keys)) in v {
+            let _ = writeln!(s, "deduce-stats: distinct {kind} calls={n} keys={}", keys.len());
         }
         let mut v: Vec<_> = self.timers.iter().collect();
         v.sort_by_key(|e| std::cmp::Reverse(e.1.1));
@@ -365,4 +399,56 @@ pub(crate) fn tally(kind: &'static str, label: String) {
 /// One call deduction answered by the pre-filter with `tdk`.
 pub(crate) fn prefiltered(tdk: Tdk) {
     STATS.with(|s| s.borrow_mut().rows.entry(("call", "prefilter", tdk)).or_default().0 += 1);
+}
+
+/// A call of kind `kind` keyed `key` (WP-661: how often a per-key cache
+/// would answer).
+pub(crate) fn distinct(kind: &'static str, key: u64) {
+    STATS.with(|s| {
+        let mut s = s.borrow_mut();
+        let e = s.distinct.entry(kind).or_default();
+        e.0 += 1;
+        e.1.insert(key);
+    });
+}
+
+/// An explicit-argument substitution keyed `key` that succeeded (`ok`)
+/// creating `nodes` AST nodes (WP-661).
+pub(crate) fn explicit_subst(key: u64, ok: bool, nodes: u64) {
+    STATS.with(|s| {
+        let mut s = s.borrow_mut();
+        let e = s.explicit.entry(key).or_default();
+        e.0 += 1;
+        let hit = e.1;
+        if ok && nodes == 0 {
+            e.1 = true;
+        }
+        let n = &mut s.explicit_n;
+        n.0 += 1;
+        n.1 += u64::from(ok);
+        n.2 += u64::from(ok && nodes == 0);
+        n.3 += u64::from(hit);
+    });
+}
+
+/// A redeclaration-index sync that drained `slots`, `retyped` and
+/// `relinked` events, `watched` of which name a watched declaration
+/// (WP-661).
+pub(crate) fn index_sync(slots: usize, retyped: usize, relinked: usize, watched: usize) {
+    STATS.with(|s| {
+        let y = &mut s.borrow_mut().sync;
+        y.0 += 1;
+        y.1 += u64::from(slots + retyped + relinked == 0);
+        y.2 += slots as u64;
+        y.3 += retyped as u64;
+        y.4 += relinked as u64;
+        y.5 += watched as u64;
+    });
+}
+
+/// A hash of `t`, for keyed counts.
+pub(crate) fn key_of<T: Hash>(t: &T) -> u64 {
+    let mut h = FxHasher::default();
+    t.hash(&mut h);
+    h.finish()
 }

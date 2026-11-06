@@ -625,6 +625,8 @@ impl Sema<'_, '_> {
     pub(crate) fn fn_min_args(&self, f: DeclId) -> usize {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("fn_min_args");
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::distinct("fn_min_args", u64::from(f.index()));
         let Some(fd) = self.ast.decls.function(f) else { return 0 };
         let n = self.ast.lists.get(fd.params).len();
         // clang's getMinRequiredArguments: a parameter pack is not
