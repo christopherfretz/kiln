@@ -7,6 +7,7 @@
 //! `TypeFinder` compute them. Printing allocates only per-module and
 //! per-function side tables, never per instruction.
 
+use std::cell::{Cell, RefCell};
 use std::fmt::{self, Write as _};
 use std::io;
 
@@ -402,6 +403,78 @@ struct Printer<'a> {
     /// Current function and its slots.
     cur: Option<FuncId>,
     local: LocalSlots,
+    /// The printed form of each type and inline attribute set, filled on
+    /// first use (WP-654).
+    cache: RefCell<TextCache>,
+    /// Per function / global: whether its name prints quoted
+    /// ([`Quote`]), decided on first use.
+    func_quote: Vec<Cell<Quote>>,
+    global_quote: Vec<Cell<Quote>>,
+}
+
+/// A name's quoting, decided once per module.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Quote {
+    Unknown,
+    Plain,
+    Quoted,
+}
+
+/// Text of types and attribute sets as printed, in one arena:
+/// `ty[id]`/`attr[id]` is the byte range, `(NO_SLOT, _)` before first use.
+struct TextCache {
+    arena: String,
+    ty: Vec<(u32, u32)>,
+    attr: Vec<(u32, u32)>,
+}
+
+impl TextCache {
+    /// Append the cached text of entry `i` of `table` to `w`, printing it
+    /// into the arena with `print` on first use.
+    fn emit(
+        &mut self,
+        w: &mut String,
+        pick: fn(&mut TextCache) -> &mut Vec<(u32, u32)>,
+        i: usize,
+        print: impl FnOnce(&mut String) -> fmt::Result,
+    ) -> fmt::Result {
+        if let Some(&(a, b)) = pick(self).get(i) {
+            if a != NO_SLOT {
+                w.push_str(&self.arena[a as usize..b as usize]);
+                return Ok(());
+            }
+        }
+        let a = self.arena.len();
+        print(&mut self.arena)?;
+        let b = self.arena.len();
+        w.push_str(&self.arena[a..b]);
+        if let (Ok(a), Ok(b)) = (u32::try_from(a), u32::try_from(b)) {
+            if a != NO_SLOT && b != NO_SLOT {
+                if let Some(e) = pick(self).get_mut(i) {
+                    *e = (a, b);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `@name`, or `@N` for an unnamed global; `q` caches the quoting.
+fn global_name(w: Out<'_>, name: &str, slot: u32, q: &Cell<Quote>) -> fmt::Result {
+    if name.is_empty() {
+        w.write_char('@')?;
+        return write_u64(w, u64::from(slot));
+    }
+    let quoted = match q.get() {
+        Quote::Plain => false,
+        Quote::Quoted => true,
+        Quote::Unknown => {
+            let quoted = name_needs_quotes(name);
+            q.set(if quoted { Quote::Quoted } else { Quote::Plain });
+            quoted
+        }
+    };
+    write_name_quoted(w, '@', name, quoted)
 }
 
 fn is_intrinsic_call(m: &Module, callee: Value) -> bool {
@@ -421,6 +494,13 @@ impl<'a> Printer<'a> {
             func_slot: vec![NO_SLOT; m.funcs.len()],
             cur: None,
             local: LocalSlots::default(),
+            cache: RefCell::new(TextCache {
+                arena: String::new(),
+                ty: vec![(NO_SLOT, 0); m.types.len()],
+                attr: vec![(NO_SLOT, 0); m.attrs.len()],
+            }),
+            func_quote: vec![Cell::new(Quote::Unknown); m.funcs.len()],
+            global_quote: vec![Cell::new(Quote::Unknown); m.globals.len()],
         };
         let mut n = 0u32;
         let mut next = |empty: bool| {
@@ -526,7 +606,8 @@ impl<'a> Printer<'a> {
     // ---- operands -------------------------------------------------------
 
     fn ty(&self, w: Out<'_>, ty: TypeId) -> fmt::Result {
-        self.m.types.write(w, ty)
+        let types = &self.m.types;
+        self.cache.borrow_mut().emit(w, |c| &mut c.ty, ty.index(), |a| types.write(a, ty))
     }
 
     fn func(&self) -> Option<&'a Function> {
@@ -600,13 +681,16 @@ impl<'a> Printer<'a> {
                 if r != v {
                     return self.operand(w, r);
                 }
-                Self::global_name(w, &m.funcs[f.index()].name, self.func_slot[f.index()])
+                let q = &self.func_quote[f.index()];
+                global_name(w, &m.funcs[f.index()].name, self.func_slot[f.index()], q)
             }
             ValueRef::Global(g) => {
-                Self::global_name(w, &m.globals[g.index()].name, self.global_slot[g.index()])
+                let q = &self.global_quote[g.index()];
+                global_name(w, &m.globals[g.index()].name, self.global_slot[g.index()], q)
             }
             ValueRef::Alias(a) => {
-                Self::global_name(w, &m.aliases[a.index()].name, self.alias_slot[a.index()])
+                let q = &Cell::new(Quote::Unknown);
+                global_name(w, &m.aliases[a.index()].name, self.alias_slot[a.index()], q)
             }
             ValueRef::Asm(a) => {
                 let ia = &m.asms[a.index()];
@@ -630,15 +714,6 @@ impl<'a> Printer<'a> {
                 w.write_char('"')
             }
             ValueRef::Metadata(md) => self.md_operand(w, md),
-        }
-    }
-
-    fn global_name(w: Out<'_>, name: &str, slot: u32) -> fmt::Result {
-        if name.is_empty() {
-            w.write_char('@')?;
-            write_u64(w, u64::from(slot))
-        } else {
-            write_llvm_name(w, '@', name)
         }
     }
 
@@ -887,13 +962,21 @@ impl<'a> Printer<'a> {
 
     /// Inline attribute set (`noundef align 8`).
     fn attr_set(&self, w: Out<'_>, s: AttrSetId) -> fmt::Result {
-        for (i, a) in self.m.attrs.get(s).iter().enumerate() {
-            if i > 0 {
-                w.write_char(' ')?;
-            }
-            a.write(w, &self.m.types)?;
-        }
-        Ok(())
+        let m = self.m;
+        self.cache.borrow_mut().emit(
+            w,
+            |c| &mut c.attr,
+            s.index(),
+            |w| {
+                for (i, a) in m.attrs.get(s).iter().enumerate() {
+                    if i > 0 {
+                        w.write_char(' ')?;
+                    }
+                    a.write(w, &m.types)?;
+                }
+                Ok(())
+            },
+        )
     }
 
     fn attr_group_ref(&self, w: Out<'_>, s: AttrSetId) -> fmt::Result {
@@ -1084,7 +1167,7 @@ impl<'a> Printer<'a> {
 
     fn global(&self, w: Out<'_>, i: usize) -> fmt::Result {
         let g = &self.m.globals[i];
-        Self::global_name(w, &g.name, self.global_slot[i])?;
+        global_name(w, &g.name, self.global_slot[i], &self.global_quote[i])?;
         w.write_str(" = ")?;
         if g.init.is_none() && g.linkage == Linkage::External {
             w.write_str("external ")?;
@@ -1124,7 +1207,7 @@ impl<'a> Printer<'a> {
 
     fn alias(&self, w: Out<'_>, i: usize) -> fmt::Result {
         let a = &self.m.aliases[i];
-        Self::global_name(w, &a.name, self.alias_slot[i])?;
+        global_name(w, &a.name, self.alias_slot[i], &Cell::new(Quote::Unknown))?;
         w.write_str(" = ")?;
         linkage_kw(w, a.linkage)?;
         write_dso_vis_dll(w, a.linkage, a.dso_local, a.visibility, a.dll_storage)?;
@@ -1173,7 +1256,8 @@ impl<'a> Printer<'a> {
         }
         self.ty(w, f.ret)?;
         w.write_char(' ')?;
-        Self::global_name(w, &f.name, self.func_slot[fid.index()])?;
+        let q = &self.func_quote[fid.index()];
+        global_name(w, &f.name, self.func_slot[fid.index()], q)?;
         w.write_char('(')?;
         for (i, &pt) in f.params.iter().enumerate() {
             if i > 0 {
