@@ -81,6 +81,8 @@ impl Sema<'_, '_> {
         kind: CandidateKind,
         first_opts: IcsOptions,
     ) {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("add_candidate");
         if set.exclude.is_some_and(|x| x == self.ast.first(f)) || self.is_deleted_defaulted_move(f)
         {
             return;
@@ -465,6 +467,27 @@ impl Sema<'_, '_> {
     /// `BestViableFunction`'s two passes); marks the candidates of an
     /// ambiguity.
     pub(crate) fn best_viable(&self, set: &mut OverloadCandidateSet) -> OvlOutcome {
+        let r = self.best_viable_of(set);
+        #[cfg(feature = "op-stats")]
+        {
+            let win = match r {
+                OvlOutcome::Success(b) | OvlOutcome::Deleted(b) => Some(b as usize),
+                _ => None,
+            };
+            let t = set.cands.iter().filter(|c| c.template.is_some()).count() as u64;
+            let tv = set.cands.iter().filter(|c| c.template.is_some() && c.viable).count() as u64;
+            let tl = set
+                .cands
+                .iter()
+                .enumerate()
+                .filter(|&(i, c)| c.template.is_some() && c.viable && Some(i) != win)
+                .count() as u64;
+            crate::templ::deduce_stats::set(set.cands.len() as u64, t, tv, tl);
+        }
+        r
+    }
+
+    fn best_viable_of(&self, set: &mut OverloadCandidateSet) -> OvlOutcome {
         let mut best: Option<u32> = None;
         for c in set.viable() {
             best = match best {

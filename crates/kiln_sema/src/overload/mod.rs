@@ -622,6 +622,8 @@ impl Sema<'_, '_> {
     /// The minimum argument count of `f` ([dcl.fct.default]): parameters
     /// up to the last without a default argument.
     pub(crate) fn fn_min_args(&self, f: DeclId) -> usize {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("fn_min_args");
         let Some(fd) = self.ast.decls.function(f) else { return 0 };
         let n = self.ast.lists.get(fd.params).len();
         // clang's getMinRequiredArguments: a parameter pack is not

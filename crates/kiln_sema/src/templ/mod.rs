@@ -20,6 +20,8 @@ pub mod ctad;
 pub(crate) mod ctad_site;
 pub mod deduce;
 pub mod deduce_call;
+#[cfg(feature = "op-stats")]
+pub(crate) mod deduce_stats;
 mod default_args;
 mod equiv;
 pub mod funcs;

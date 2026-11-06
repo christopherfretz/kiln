@@ -88,6 +88,10 @@ pub struct ParseOptions {
     pub cfg_max_elems: usize,
     /// `-fpermissive` ([`kiln_sema::Sema::permissive`]).
     pub permissive: bool,
+    /// No deduction pre-filters ([`kiln_sema::Sema::full_deduction`]; a
+    /// test hook).
+    #[doc(hidden)]
+    pub full_deduction: bool,
 }
 
 impl Default for ParseOptions {
@@ -110,6 +114,7 @@ impl Default for ParseOptions {
             cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
             permissive: false,
+            full_deduction: false,
         }
     }
 }
@@ -248,6 +253,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.cfg_stats = opts.cfg_stats;
     s.cfg_max_elems = opts.cfg_max_elems;
     s.permissive = opts.permissive;
+    s.full_deduction = opts.full_deduction;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;

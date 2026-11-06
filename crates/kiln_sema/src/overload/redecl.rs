@@ -41,7 +41,18 @@ impl Sema<'_, '_> {
     /// (the caller then makes `new` silently invalid, clang's
     /// `MergeFunctionDecl` "if the old declaration is invalid, just give
     /// up here").
+    #[cfg_attr(feature = "op-stats", track_caller)]
     pub(crate) fn pick_prev_function(&mut self, cands: &[DeclId], new: NewFn) -> Option<DeclId> {
+        #[cfg(feature = "op-stats")]
+        let (at, before) =
+            (std::panic::Location::caller(), crate::templ::deduce_stats::prev_begin());
+        let r = self.pick_prev_function_in(cands, new);
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::prev_end(at, cands.len(), before);
+        r
+    }
+
+    fn pick_prev_function_in(&mut self, cands: &[DeclId], new: NewFn) -> Option<DeclId> {
         let mut other = None;
         let mut invalid = None;
         let mut found = |s: &Self, d: DeclId| {
@@ -100,7 +111,12 @@ impl Sema<'_, '_> {
         old_head: Option<TemplateParamListId>,
         new: NewFn,
     ) -> bool {
-        let Some(oty) = self.declared_fn_type(old) else { return false };
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::compared();
+        // The parameters are those of the declared type, whose return type
+        // only differs from it when deduced: that is formed (interned)
+        // only for the template return-type comparison below (WP-657).
+        let Some(oty) = self.ast.decls.get(old).ty() else { return false };
         let t = &self.ast.types;
         let (Some(po), Some(pn)) = (t.proto(oty).copied(), t.proto(new.ty).copied()) else {
             // A non-prototype (error) type: treat as the same entity.
@@ -126,9 +142,16 @@ impl Sema<'_, '_> {
         match (old_head, new.head) {
             (None, None) => {}
             (Some(a), Some(b)) => {
-                if (!new.member_using && !self.ast.types.same_type(po.ret(), pn.ret()))
-                    || !self.heads_equivalent(a, b)
-                {
+                if !new.member_using {
+                    let oret = self
+                        .declared_fn_type(old)
+                        .and_then(|t| self.ast.types.proto(t).map(kiln_ast::types::FuncProto::ret))
+                        .unwrap_or(po.ret());
+                    if !self.ast.types.same_type(oret, pn.ret()) {
+                        return false;
+                    }
+                }
+                if !self.heads_equivalent(a, b) {
                     return false;
                 }
             }

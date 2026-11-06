@@ -287,16 +287,61 @@ impl Sema<'_, '_> {
         first_opts: IcsOptions,
         loc: Loc,
     ) {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("add_template_candidate");
         // A non-member operator template's first parameter takes the
         // object operand ([over.match.oper]/2), as does an explicit
         // object parameter ([over.match.funcs.general]/4).
         let pattern = self.templated_function(ft).unwrap_or(ft);
-        let mut args = Vec::with_capacity(set.args.len() + 1);
-        // Each argument's conversion options, as `add_candidate` gives
-        // them, for the non-dependent parameters deduction checks.
-        let mut opts = Vec::with_capacity(set.args.len() + 1);
         let oper_fn = set.oper && kind == CandidateKind::Function;
         let lead = (oper_fn || self.has_explicit_object(pattern)) && set.object.is_some();
+        // The deduction's failure before it substitutes anything (an
+        // invalid template, too few arguments): the same failure, without
+        // the argument lists (WP-657).
+        #[cfg(feature = "op-stats")]
+        let frame = crate::templ::deduce_stats::cand_begin();
+        if let Some(tdk) = self.deduce_call_prefail(ft, set.args.len() + usize::from(lead)) {
+            #[cfg(feature = "op-stats")]
+            crate::templ::deduce_stats::prefiltered(tdk);
+            match tdk {
+                // No candidate (as `add_template_candidate_with`).
+                crate::templ::deduce::Tdk::Invalid => {}
+                // The failure is formed only if the arity check of
+                // `add_candidate` leaves the candidate viable.
+                crate::templ::deduce::Tdk::TooFewArguments => self.add_arity_failed_candidate(
+                    set,
+                    ft,
+                    found,
+                    kind,
+                    first_opts,
+                    pattern,
+                    |s| s.deduce_head_failure(s.ast.first(ft), tdk, loc),
+                ),
+                _ => {
+                    let fail = self.deduce_head_failure(self.ast.first(ft), tdk, loc);
+                    self.add_template_candidate_with(
+                        set,
+                        ft,
+                        found,
+                        kind,
+                        first_opts,
+                        pattern,
+                        lead,
+                        Err(fail),
+                    );
+                }
+            }
+            #[cfg(feature = "op-stats")]
+            crate::templ::deduce_stats::cand_end(&frame, tdk);
+            return;
+        }
+        // Each argument's conversion options, as `add_candidate` gives
+        // them, for the non-dependent parameters deduction checks. The
+        // buffers are reused across candidates (a deduction may resolve
+        // calls of its own, so one pair per nesting level).
+        let (mut args, mut opts) = self.cand_scratch.pop().unwrap_or_default();
+        args.clear();
+        opts.clear();
         if lead && let Some(o) = set.object {
             args.push(o);
             opts.push(if oper_fn {
@@ -310,7 +355,29 @@ impl Sema<'_, '_> {
             let o = if i == 0 && !oper_fn { first_opts } else { IcsOptions::NONE };
             opts.push(o.with(IcsOptions::CANDIDATE_ARG));
         }
-        match self.deduce_call(ft, explicit, &args, &opts, loc) {
+        let r = self.deduce_call(ft, explicit, &args, &opts, loc);
+        self.cand_scratch.push((args, opts));
+        #[cfg(feature = "op-stats")]
+        let tdk = r.as_ref().map_or_else(|f| f.tdk, |_| crate::templ::deduce::Tdk::Success);
+        self.add_template_candidate_with(set, ft, found, kind, first_opts, pattern, lead, r);
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::cand_end(&frame, tdk);
+    }
+
+    /// [`Self::add_template_candidate`] with the deduction's result `r`.
+    #[allow(clippy::too_many_arguments, reason = "add_template_candidate's state")]
+    fn add_template_candidate_with(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        ft: DeclId,
+        found: DeclId,
+        kind: CandidateKind,
+        first_opts: IcsOptions,
+        pattern: DeclId,
+        lead: bool,
+        r: Result<DeclId, Box<crate::templ::deduce_call::DeductionFailure>>,
+    ) {
+        match r {
             Ok(spec) => {
                 let nondep = self.templ.explicit_nondep;
                 self.add_candidate(set, spec, found, kind, first_opts);
@@ -358,15 +425,15 @@ impl Sema<'_, '_> {
                     return;
                 }
                 if matches!(fail.tdk, Tdk::TooManyArguments | Tdk::TooFewArguments) {
-                    self.add_candidate(set, pattern, found, kind, first_opts);
-                    if let Some(c) = set.cands.last_mut() {
-                        c.template = Some(ft);
-                        if c.viable {
-                            c.viable = false;
-                            c.failure = super::CandidateFailure::BadDeduction;
-                            c.deduction = Some(fail);
-                        }
-                    }
+                    self.add_arity_failed_candidate(
+                        set,
+                        ft,
+                        found,
+                        kind,
+                        first_opts,
+                        pattern,
+                        |_| fail,
+                    );
                     return;
                 }
                 self.ovl.stats.candidates += 1;
@@ -378,6 +445,32 @@ impl Sema<'_, '_> {
                 c.failure = super::CandidateFailure::BadDeduction;
                 c.deduction = Some(fail);
                 set.cands.push(c);
+            }
+        }
+    }
+
+    /// The candidate of a template whose deduction failed on the call's
+    /// arity: the pattern as a candidate, so that its own arity check
+    /// gives the note; the deduction's failure (`fail`) only when that
+    /// check passes.
+    #[allow(clippy::too_many_arguments, reason = "add_template_candidate's state")]
+    fn add_arity_failed_candidate(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        ft: DeclId,
+        found: DeclId,
+        kind: CandidateKind,
+        first_opts: IcsOptions,
+        pattern: DeclId,
+        fail: impl FnOnce(&Self) -> Box<crate::templ::deduce_call::DeductionFailure>,
+    ) {
+        self.add_candidate(set, pattern, found, kind, first_opts);
+        if let Some(c) = set.cands.last_mut() {
+            c.template = Some(ft);
+            if c.viable {
+                c.viable = false;
+                c.failure = super::CandidateFailure::BadDeduction;
+                c.deduction = Some(fail(self));
             }
         }
     }

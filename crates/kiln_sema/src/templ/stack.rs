@@ -408,6 +408,8 @@ impl Sema<'_, '_> {
         template: DeclId,
         poi: Loc,
     ) -> bool {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("push_inst_frame");
         if self.inst.fatal {
             return false;
         }
@@ -498,6 +500,8 @@ impl Sema<'_, '_> {
     /// Pops the innermost frame, charging its meter to its template's
     /// report row (§11.3).
     pub(crate) fn pop_inst_frame(&mut self) {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("pop_inst_frame");
         let Some(f) = self.inst.stack.pop() else { return };
         if let Some((depth, slot)) = &mut self.inst.drain_capture
             && *depth == self.inst.stack.len()

@@ -314,6 +314,8 @@ impl Sema<'_, '_> {
         to: QualType,
         opts: IcsOptions,
     ) -> Ics {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("try_implicit_conversion");
         self.ovl.stats.ics += 1;
         if let Some(i) = a.list {
             return self.list_ics_at(i, to, opts);

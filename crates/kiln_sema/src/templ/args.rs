@@ -115,23 +115,23 @@ impl MultiLevelArgs {
         depth.saturating_sub(u16::try_from(k).unwrap_or(u16::MAX))
     }
 
-    /// What the parameter at `(depth, index)` becomes, reading the
-    /// argument list through `args`.
+    /// What the parameter at `(depth, index)` becomes, reading element
+    /// `i` of an argument list `l` through `arg(l, i)`.
     pub fn lookup(
         &self,
         depth: u16,
         index: u16,
-        args: impl Fn(ArgListId) -> Vec<TemplateArg>,
+        arg: impl Fn(ArgListId, usize) -> Option<TemplateArg>,
     ) -> ArgLookup {
         match self.level(depth) {
             Some(l) if l.mode == LevelMode::Substitute => {
-                match args(l.args).get(usize::from(index)) {
+                match arg(l.args, usize::from(index)) {
                     // Not yet deduced (explicit arguments substituted before
                     // deduction, §6.1 step 1): the parameter stays.
                     Some(a) if matches!(a.view(), ArgView::Null) => {
                         ArgLookup::Retain(self.retained_depth(depth))
                     }
-                    Some(&a) => ArgLookup::Arg(a),
+                    Some(a) => ArgLookup::Arg(a),
                     None => ArgLookup::Missing,
                 }
             }
@@ -189,9 +189,28 @@ impl Sema<'_, '_> {
 
     /// The parameters of template `tmpl`, in order.
     pub(crate) fn template_params(&self, tmpl: DeclId) -> Vec<DeclId> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("template_params");
         let Some(info) = self.ast.template_info(tmpl).copied() else { return Vec::new() };
         let l = *self.ast.templates.param_list(info.params);
         self.ast.lists.iter::<DeclId>(l.params).collect()
+    }
+
+    /// [`Self::template_params`] into `out` (cleared first).
+    pub(crate) fn template_params_into(&self, tmpl: DeclId, out: &mut Vec<DeclId>) {
+        out.clear();
+        if let Some(info) = self.ast.template_info(tmpl) {
+            let l = *self.ast.templates.param_list(info.params);
+            out.extend(self.ast.lists.iter::<DeclId>(l.params));
+        }
+    }
+
+    /// The number of `tmpl`'s parameters ([`Self::template_params`]'s
+    /// length, without collecting them).
+    pub(crate) fn template_param_count(&self, tmpl: DeclId) -> usize {
+        self.ast
+            .template_info(tmpl)
+            .map_or(0, |i| self.ast.lists.get(self.ast.templates.param_list(i.params).params).len())
     }
 
     /// The depth of `tmpl`'s parameters.
@@ -766,6 +785,8 @@ impl Sema<'_, '_> {
         at: Loc,
         prior: &[TemplateArg],
     ) -> Result<TemplateArg, ()> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("check_template_arg");
         match (self.kind_of(p), a.view()) {
             (DeclKind::TemplateTypeParm, ArgView::Type(t)) => Ok(TemplateArg::ty(t)),
             (DeclKind::TemplateTypeParm, ArgView::Template(name))
@@ -896,6 +917,8 @@ impl Sema<'_, '_> {
         tmpl: DeclId,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("in_template_context");
         if self.decl_in_local_scope(tmpl) {
             return f(self);
         }
@@ -911,6 +934,8 @@ impl Sema<'_, '_> {
         depth: u16,
         prior: &[TemplateArg],
     ) -> MultiLevelArgs {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("prior_levels");
         let mut m = Self::outer_levels(tmpl, depth);
         let l = self.ast.types.arg_list(prior);
         m.push(l, tmpl, LevelMode::Substitute);
@@ -1045,6 +1070,8 @@ impl Sema<'_, '_> {
         at: Loc,
         prior: &[TemplateArg],
     ) -> Result<(), ()> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("check_value_dependent_nttp_arg");
         let ety = self.ast.exprs.get(e).ty();
         if self.is_err_expr(e) || ety == QualType::OVERLOAD || self.ast.types.is_dependent(ety) {
             return Ok(());
@@ -1123,6 +1150,8 @@ impl Sema<'_, '_> {
         at: Loc,
         prior: &[TemplateArg],
     ) -> Result<TemplateArg, ()> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("convert_nttp_arg");
         if self.is_err_expr(e) {
             return Err(());
         }
@@ -1132,7 +1161,20 @@ impl Sema<'_, '_> {
             // when substituted.
             return Ok(self.builder().template_arg_expr(e));
         }
+        if let Some(arg) = self.substituted_int_nttp_arg(e, pty) {
+            return Ok(arg);
+        }
         let ety = self.ast.exprs.get(e).ty();
+        #[cfg(feature = "op-stats")]
+        crate::templ::deduce_stats::tally(
+            "nttp",
+            format!(
+                "{:?} {} <- {}",
+                self.ast.exprs.get(e).kind(),
+                self.ty_str(pty),
+                self.ty_str(ety)
+            ),
+        );
         let placeholder = pty;
         if matches!(
             self.ast.types.canonical_view(pty),
@@ -1351,6 +1393,49 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The converted argument of an integral parameter of type `pty` for
+    /// `e`, an already-substituted parameter whose value is a plain
+    /// integer literal of exactly that type (`get<I>` with `I` from an
+    /// enclosing specialization): the value the full conversion below
+    /// computes, without building and evaluating the converted constant
+    /// expression (WP-657). `None` falls back to the full path, as does
+    /// anything the full path would act on beyond `e` itself (pending
+    /// member references, deleted-function notes, misaligned members,
+    /// potential captures) and [`Sema::full_deduction`].
+    fn substituted_int_nttp_arg(&mut self, e: ExprId, pty: QualType) -> Option<TemplateArg> {
+        use kiln_ast::expr::ExprKind;
+        if self.full_deduction
+            || self.ast.exprs.get(e).kind() != ExprKind::SubstNonTypeTemplateParmExpr
+            || !self.member_refs.is_empty()
+            || self.special.has_pending()
+            || !self.misaligned.is_empty()
+            || !self.potential_caps.is_empty()
+        {
+            return None;
+        }
+        let r = self.ast.exprs.subst_replacement(e);
+        if self.ast.exprs.get(r).kind() != ExprKind::IntegerLiteral {
+            return None;
+        }
+        let v = i128::from(self.ast.exprs.int_value(r)?);
+        let canon = self.ast.types.canonical(conv::strip_cv(self, pty));
+        let same = |s: &Self, x: ExprId| {
+            let q = conv::strip_cv(s, s.ast.exprs.get(x).ty());
+            s.ast.types.canonical(q) == canon
+        };
+        let t = &self.ast.types;
+        if !t.is_integral(canon)
+            || t.as_enum(canon).is_some()
+            || t.builtin(canon).is_none()
+            || !same(self, e)
+            || !same(self, r)
+            || !self.int_fits(canon, v)
+        {
+            return None;
+        }
+        Some(TemplateArg::value(canon, self.int_const(canon, v)))
+    }
+
     /// Whether the second conversion of `scs` may appear in a converted
     /// constant expression of pointer, member pointer or `bool` type
     /// ([expr.const]/12; clang `CheckConvertedConstantConversions`, its
@@ -1384,6 +1469,8 @@ impl Sema<'_, '_> {
         loc: Loc,
         prior: &[TemplateArg],
     ) -> Result<TemplateArg, ()> {
+        #[cfg(feature = "op-stats")]
+        let _t = crate::templ::deduce_stats::timer("default_template_arg");
         self.default_template_arg_impl(tmpl, depth, p, def, loc, None, prior)
     }
 
@@ -1530,7 +1617,7 @@ mod tests {
         m.push(ArgListId::EMPTY, d(1), LevelMode::Substitute);
         m.push(ArgListId::EMPTY, d(2), LevelMode::Retain);
         let a = TemplateArg::ty(QualType::INT);
-        let get = |_| vec![a];
+        let get = |_, i: usize| [a].get(i).copied();
         assert_eq!(m.lookup(0, 0, get), ArgLookup::Arg(a));
         assert_eq!(m.lookup(0, 1, get), ArgLookup::Missing);
         assert_eq!(m.lookup(1, 0, get), ArgLookup::Retain(0));
