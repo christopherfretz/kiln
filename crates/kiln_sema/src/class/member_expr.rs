@@ -1840,7 +1840,10 @@ impl Sema<'_, '_> {
     /// when the reference is formed), and the nested and enclosing
     /// expressions share one SFINAE context. WP-445 found no program
     /// whose answer changes, so it is left as is (spec/sema.md §3,
-    /// members named without an object).
+    /// members named without an object). An implicit instantiation is
+    /// not such a nested full-expression: [`Sema::in_inst_context`] sets
+    /// the pending references aside, so completing an associated class
+    /// for a lookup neither reports nor consumes them.
     pub(crate) fn flush_member_refs(&mut self) -> bool {
         if self.member_refs.is_empty() {
             return false;

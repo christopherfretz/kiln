@@ -267,7 +267,15 @@ residual` (docs/status/wp-184-oracle-switch.md).
     (`flush_member_refs`); a nested full-expression's end flushes the
     enclosing one's pending names too, which changes only when the
     (already ill-formed) use is reported (WP-445: no observable
-    difference found).
+    difference found). An implicit instantiation runs with them set
+    aside (`in_inst_context`), so completing an associated class for
+    argument-dependent lookup (`&(S::m)`, `g(S::n)`) neither reports
+    them from inside it nor consumes them; and `&C::m` never looks up
+    an `operator&` (clang's `isQualifiedMemberAccess`), so the class of
+    `m` is not completed at all (`&S::m` of a `std::map<int, int>`
+    member instantiated `std::pair<const int, int>`;
+    `expr.unary.op/member-pointer-to-specialization-member.cpp`,
+    `temp.inst/instantiation-keeps-pending-member-name.cpp`).
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
