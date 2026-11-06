@@ -14,5 +14,9 @@ kiln_oven.workspace = true
 kiln_lex.workspace = true
 kiln_abi.workspace = true
 
+[features]
+# Trial-fold entry counts (kiln_oven's `trial_stats`), a measurement aid.
+op-stats = ["kiln_oven/op-stats"]
+
 [lints]
 workspace = true

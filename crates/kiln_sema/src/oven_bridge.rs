@@ -323,7 +323,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// The value of `e` if it is a constant expression. Silent (no
     /// diagnostics, no notes) and not recorded in the statistics: for
     /// warnings and other speculative folds.
+    #[cfg_attr(feature = "op-stats", track_caller)]
     pub fn try_fold(&mut self, e: ExprId) -> Option<ConstValueId> {
+        #[cfg(feature = "op-stats")]
+        let _caller =
+            kiln_oven::trial_stats::CallerGuard::new("try_fold", std::panic::Location::caller());
         if !self.eval_stack_ok(e) {
             return None;
         }
@@ -350,14 +354,24 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// `EvaluateAsInt`): a `const` non-volatile variable with an
     /// initializer reads as its value even when it is not usable in
     /// constant expressions.
+    #[cfg_attr(feature = "op-stats", track_caller)]
     pub fn fold_rvalue_int(&mut self, e: ExprId) -> Option<i128> {
+        #[cfg(feature = "op-stats")]
+        let _caller = kiln_oven::trial_stats::CallerGuard::new(
+            "fold_rvalue_int",
+            std::panic::Location::caller(),
+        );
         let v = self.fold_rvalue(e)?;
         self.const_int(v)
     }
 
     /// [`Sema::try_fold`], laxly ([`Oven::fold_rvalue`], clang
     /// `EvaluateAsRValue`), of an expression of any type.
+    #[cfg_attr(feature = "op-stats", track_caller)]
     pub fn fold_rvalue(&mut self, e: ExprId) -> Option<ConstValueId> {
+        #[cfg(feature = "op-stats")]
+        let _caller =
+            kiln_oven::trial_stats::CallerGuard::new("fold_rvalue", std::panic::Location::caller());
         if !self.eval_stack_ok(e) {
             return None;
         }
@@ -367,10 +381,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// [`Oven::fold_for_overflow`] of `e` (clang `EvaluateForOverflow`):
     /// its value, if it folds, and the signed integer operations that
     /// overflowed on the way, which yielded their wrapped values.
+    #[cfg_attr(feature = "op-stats", track_caller)]
     pub(crate) fn fold_for_overflow(
         &mut self,
         e: ExprId,
     ) -> (Option<ConstValueId>, Vec<kiln_oven::Overflow>) {
+        #[cfg(feature = "op-stats")]
+        let _caller = kiln_oven::trial_stats::CallerGuard::new(
+            "fold_for_overflow",
+            std::panic::Location::caller(),
+        );
         if !self.eval_stack_ok(e) {
             return (None, Vec::new());
         }
@@ -410,14 +430,24 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     }
 
     /// [`Sema::try_fold`] of an integral (or `bool`) expression.
+    #[cfg_attr(feature = "op-stats", track_caller)]
     pub fn fold_int(&mut self, e: ExprId) -> Option<i128> {
+        #[cfg(feature = "op-stats")]
+        let _caller =
+            kiln_oven::trial_stats::CallerGuard::new("fold_int", std::panic::Location::caller());
         let v = self.try_fold(e)?;
         self.const_int(v)
     }
 
     /// Whether `var`'s initializer is a constant initializer
     /// ([basic.start.static]/2). Silent and not recorded.
+    #[cfg_attr(feature = "op-stats", track_caller)]
     pub fn is_constant_initialized(&mut self, var: DeclId) -> bool {
+        #[cfg(feature = "op-stats")]
+        let _caller = kiln_oven::trial_stats::CallerGuard::new(
+            "is_constant_initialized",
+            std::panic::Location::caller(),
+        );
         if self.stack_exhausted() || self.stack_low() {
             let loc = self.ast.decls.get(var).loc();
             let _ = self.stack_ok(crate::stack_guard::StackPhase::ConstantEvaluation, loc);
