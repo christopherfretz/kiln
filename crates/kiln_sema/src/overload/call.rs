@@ -319,10 +319,13 @@ impl Sema<'_, '_> {
             crate::templ::deduce_stats::cand_end(&frame, tdk);
             return;
         }
-        let mut args = Vec::with_capacity(set.args.len() + 1);
         // Each argument's conversion options, as `add_candidate` gives
-        // them, for the non-dependent parameters deduction checks.
-        let mut opts = Vec::with_capacity(set.args.len() + 1);
+        // them, for the non-dependent parameters deduction checks. The
+        // buffers are reused across candidates (a deduction may resolve
+        // calls of its own, so one pair per nesting level).
+        let (mut args, mut opts) = self.cand_scratch.pop().unwrap_or_default();
+        args.clear();
+        opts.clear();
         if lead && let Some(o) = set.object {
             args.push(o);
             opts.push(if oper_fn {
@@ -337,6 +340,7 @@ impl Sema<'_, '_> {
             opts.push(o.with(IcsOptions::CANDIDATE_ARG));
         }
         let r = self.deduce_call(ft, explicit, &args, &opts, loc);
+        self.cand_scratch.push((args, opts));
         #[cfg(feature = "op-stats")]
         let tdk = r.as_ref().map_or_else(|f| f.tdk, |_| crate::templ::deduce::Tdk::Success);
         self.add_template_candidate_with(set, ft, found, kind, first_opts, pattern, lead, r);

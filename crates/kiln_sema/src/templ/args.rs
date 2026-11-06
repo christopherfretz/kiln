@@ -115,23 +115,23 @@ impl MultiLevelArgs {
         depth.saturating_sub(u16::try_from(k).unwrap_or(u16::MAX))
     }
 
-    /// What the parameter at `(depth, index)` becomes, reading the
-    /// argument list through `args`.
+    /// What the parameter at `(depth, index)` becomes, reading element
+    /// `i` of an argument list `l` through `arg(l, i)`.
     pub fn lookup(
         &self,
         depth: u16,
         index: u16,
-        args: impl Fn(ArgListId) -> Vec<TemplateArg>,
+        arg: impl Fn(ArgListId, usize) -> Option<TemplateArg>,
     ) -> ArgLookup {
         match self.level(depth) {
             Some(l) if l.mode == LevelMode::Substitute => {
-                match args(l.args).get(usize::from(index)) {
+                match arg(l.args, usize::from(index)) {
                     // Not yet deduced (explicit arguments substituted before
                     // deduction, §6.1 step 1): the parameter stays.
                     Some(a) if matches!(a.view(), ArgView::Null) => {
                         ArgLookup::Retain(self.retained_depth(depth))
                     }
-                    Some(&a) => ArgLookup::Arg(a),
+                    Some(a) => ArgLookup::Arg(a),
                     None => ArgLookup::Missing,
                 }
             }
@@ -194,6 +194,15 @@ impl Sema<'_, '_> {
         let Some(info) = self.ast.template_info(tmpl).copied() else { return Vec::new() };
         let l = *self.ast.templates.param_list(info.params);
         self.ast.lists.iter::<DeclId>(l.params).collect()
+    }
+
+    /// [`Self::template_params`] into `out` (cleared first).
+    pub(crate) fn template_params_into(&self, tmpl: DeclId, out: &mut Vec<DeclId>) {
+        out.clear();
+        if let Some(info) = self.ast.template_info(tmpl) {
+            let l = *self.ast.templates.param_list(info.params);
+            out.extend(self.ast.lists.iter::<DeclId>(l.params));
+        }
     }
 
     /// The number of `tmpl`'s parameters ([`Self::template_params`]'s
@@ -1608,7 +1617,7 @@ mod tests {
         m.push(ArgListId::EMPTY, d(1), LevelMode::Substitute);
         m.push(ArgListId::EMPTY, d(2), LevelMode::Retain);
         let a = TemplateArg::ty(QualType::INT);
-        let get = |_| vec![a];
+        let get = |_, i: usize| [a].get(i).copied();
         assert_eq!(m.lookup(0, 0, get), ArgLookup::Arg(a));
         assert_eq!(m.lookup(0, 1, get), ArgLookup::Missing);
         assert_eq!(m.lookup(1, 0, get), ArgLookup::Retain(0));

@@ -353,7 +353,9 @@ impl Sema<'_, '_> {
             let outer = crate::templ::deduce_stats::begin(self.ast.first(ft).index());
             (entry, key, outer)
         };
-        let r = self.deduce_spec_steps(ft, explicit, call, target, loc);
+        let mut params = self.deduce_scratch.pop().unwrap_or_default();
+        let r = self.deduce_spec_steps(ft, explicit, call, target, loc, &mut params);
+        self.deduce_scratch.push(params);
         #[cfg(feature = "op-stats")]
         crate::templ::deduce_stats::tally(
             "template",
@@ -440,6 +442,7 @@ impl Sema<'_, '_> {
         call: Option<(&[ArgInfo], &[IcsOptions])>,
         target: DeduceTarget,
         loc: Loc,
+        params_buf: &mut Vec<DeclId>,
     ) -> Result<DeclId, Box<DeductionFailure>> {
         let (args, arg_opts) = call.unwrap_or((&[], &[]));
         let ft = self.ast.first(ft);
@@ -447,7 +450,8 @@ impl Sema<'_, '_> {
             Ok(t) => t,
             Err(tdk) => return Err(self.head_failure(ft, tdk, loc)),
         };
-        let params = self.template_params(ft);
+        self.template_params_into(ft, params_buf);
+        let params: &[DeclId] = params_buf;
         let depth = self.template_param_depth(ft);
         let n = params.len();
         let mut d = DeducedArgs::new(depth, n);
@@ -464,7 +468,7 @@ impl Sema<'_, '_> {
         // ([temp.variadic]/5).
         let mut max_written = 0usize;
         let mut has_pack = false;
-        for &p in &params {
+        for &p in params {
             match self.expanded_pack_types(p) {
                 Some(t) => max_written += t.len(),
                 None if is_pack(self, p) => has_pack = true,

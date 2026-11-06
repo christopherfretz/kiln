@@ -746,6 +746,12 @@ pub struct Sema<'a, 'sm> {
     pub(crate) conv_walk_stack: Vec<(ExprId, Loc)>,
     /// The reused buffers of [`Sema::exprs_equivalent`] (WP-645).
     pub(crate) equiv_scratch: std::cell::RefCell<kiln_ast::types::EquivScratch>,
+    /// The reused argument and option buffers of call-candidate
+    /// deductions, one entry per nesting level (WP-657).
+    pub(crate) cand_scratch: Vec<(Vec<overload::ArgInfo>, Vec<overload::IcsOptions>)>,
+    /// The reused template-parameter buffers of deductions, one entry per
+    /// nesting level (WP-657).
+    pub(crate) deduce_scratch: Vec<Vec<DeclId>>,
     /// Delegating constructors and their targets, checked for cycles at
     /// the end of the translation unit ([class.base.init]/6).
     pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
@@ -1151,6 +1157,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             walk_stack: std::cell::RefCell::new(Vec::new()),
             conv_walk_stack: Vec::new(),
             equiv_scratch: std::cell::RefCell::default(),
+            cand_scratch: Vec::new(),
+            deduce_scratch: Vec::new(),
             delegating: Vec::new(),
             ctor_entity: None,
             ctor_diag_ty: None,

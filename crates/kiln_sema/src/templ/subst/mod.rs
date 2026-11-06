@@ -289,7 +289,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     /// What template parameter `(depth, index)` becomes.
     pub(crate) fn lookup(&self, depth: u16, index: u16) -> ArgLookup {
         let types = &self.sema.ast.types;
-        self.args.lookup(depth, index, |l| types.args(l).to_vec())
+        self.args.lookup(depth, index, |l, i| types.args(l).get(i).copied())
     }
 
     /// The associated declaration of level `depth` (the
@@ -364,20 +364,34 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     /// Substitutes into an argument list, expanding pack expansions
     /// (§7.2).
     pub fn args(&mut self, l: ArgListId, loc: Loc) -> SubstResult<ArgListId> {
-        let v = self.sema.ast.types.args(l).to_vec();
-        let mut out = Vec::with_capacity(v.len());
-        let mut changed = false;
-        for a in v {
+        // The list is read in place (the arena only grows) and copied only
+        // from its first changed argument on (WP-657).
+        let n = self.sema.ast.types.args(l).len();
+        let mut out: Option<Vec<TemplateArg>> = None;
+        for i in 0..n {
+            let a = self.sema.ast.types.args(l)[i];
+            let prefix = |s: &Self| {
+                let mut v = Vec::with_capacity(n);
+                v.extend_from_slice(&s.sema.ast.types.args(l)[..i]);
+                v
+            };
             if let Some(x) = self.expand_arg(a, loc)? {
-                changed = true;
-                out.extend(x);
+                out.get_or_insert_with(|| prefix(self)).extend(x);
                 continue;
             }
             let b = self.template_arg(a, loc)?;
-            changed |= b != a;
-            out.push(b);
+            if let Some(o) = out.as_mut() {
+                o.push(b);
+            } else if b != a {
+                let mut v = prefix(self);
+                v.push(b);
+                out = Some(v);
+            }
         }
-        Ok(if changed { self.sema.ast.types.arg_list(&out) } else { l })
+        Ok(match out {
+            Some(v) => self.sema.ast.types.arg_list(&v),
+            None => l,
+        })
     }
 
     /// Expands template argument `a` when it is a pack expansion (`T...`,
