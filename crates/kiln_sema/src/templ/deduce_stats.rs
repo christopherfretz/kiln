@@ -48,6 +48,9 @@ struct Stats {
     /// `pick_prev_function` by caller and the kind of the candidates'
     /// scope (WP-658).
     prev: FxHashMap<String, PrevRow>,
+    /// Redeclaration-index queries, entries scanned for them, and the
+    /// largest (keyed positions, heap bytes) seen (WP-658).
+    index: (u64, u64, u64, u64),
     /// Named timers: name → (active depth, outermost nanoseconds, calls).
     timers: FxHashMap<&'static str, (u32, u64, u64)>,
     /// Free-form tallies: (kind, label) → count.
@@ -113,6 +116,15 @@ impl Drop for Stats {
                 r.long_scanned,
             );
         }
+        if self.index.0 != 0 {
+            let (q, n, e, b) = self.index;
+            let _ = writeln!(
+                s,
+                "deduce-stats: redecl-index queries={q} returned={n} entries={e} bytes={b} \
+                 bytes-per-entry={}",
+                b / e.max(1)
+            );
+        }
         let mut v: Vec<_> = self.timers.iter().collect();
         v.sort_by_key(|e| std::cmp::Reverse(e.1.1));
         for (name, (_, ns, n)) in v {
@@ -172,6 +184,20 @@ pub(crate) fn prev_hit(pos: Option<usize>) {
 
 /// A `pick_prev_function` from `at` over `n` candidates; returns the
 /// comparison counts before it, for [`prev_end`].
+/// A redeclaration-index query that returned `n` entries, with the index
+/// at `entries` keyed positions and `bytes` heap bytes (WP-658).
+pub(crate) fn index_query(n: usize, entries: usize, bytes: u64) {
+    STATS.with(|s| {
+        let i = &mut s.borrow_mut().index;
+        i.0 += 1;
+        i.1 += n as u64;
+        if entries as u64 > i.2 {
+            i.2 = entries as u64;
+            i.3 = bytes;
+        }
+    });
+}
+
 pub(crate) fn prev_begin() -> (u64, u64) {
     HIT.with(|h| h.set(None));
     COMPARED.with(Cell::get)

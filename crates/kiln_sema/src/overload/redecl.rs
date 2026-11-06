@@ -72,10 +72,12 @@ impl Sema<'_, '_> {
                 true
             }
         };
-        for (_i, &d) in cands.iter().rev().enumerate() {
+        for (i, &d) in cands.iter().rev().enumerate() {
             // The position of a hit; cleared below when there is none.
             #[cfg(feature = "op-stats")]
-            crate::templ::deduce_stats::prev_hit(Some(_i));
+            crate::templ::deduce_stats::prev_hit(Some(i));
+            #[cfg(not(feature = "op-stats"))]
+            let _ = i;
             let k = self.kind_of(d);
             // A dependent using-declarator (`using T::f;`) is checked
             // against the class's functions only at instantiation

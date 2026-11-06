@@ -1829,6 +1829,9 @@ pub struct DeclArena {
     top_level_ends: Vec<(Option<DeclId>, u32)>,
     /// Cold per-declaration data.
     pub cold: ColdDeclData,
+    /// Every declaration [`DeclArena::set_ty`] retypes (WP-658; see
+    /// [`crate::journal::Journal`]).
+    pub ty_journal: crate::journal::Journal<DeclId>,
 }
 
 const DUMMY_GROUP: RedeclGroupId = RedeclGroupId::new(u32::MAX);
@@ -1918,6 +1921,7 @@ impl Default for DeclArena {
             completed_records: Vec::new(),
             top_level_ends: Vec::new(),
             cold: ColdDeclData::default(),
+            ty_journal: crate::journal::Journal::default(),
         }
     }
 }
@@ -2559,6 +2563,7 @@ impl DeclArena {
     /// Re-points the declared type (deduced return types, resolved
     /// exception specifications; §2.4).
     pub fn set_ty(&mut self, d: DeclId, ty: QualType) {
+        self.ty_journal.push(d);
         self.nodes[d.index() as usize].ty = Some(ty);
     }
 

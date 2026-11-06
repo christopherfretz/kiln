@@ -92,6 +92,10 @@ pub struct ParseOptions {
     /// test hook).
     #[doc(hidden)]
     pub full_deduction: bool,
+    /// No redeclaration index ([`kiln_sema::Sema::full_redecl_scan`]; a
+    /// test hook).
+    #[doc(hidden)]
+    pub full_redecl_scan: bool,
 }
 
 impl Default for ParseOptions {
@@ -115,6 +119,7 @@ impl Default for ParseOptions {
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
             permissive: false,
             full_deduction: false,
+            full_redecl_scan: false,
         }
     }
 }
@@ -254,6 +259,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.cfg_max_elems = opts.cfg_max_elems;
     s.permissive = opts.permissive;
     s.full_deduction = opts.full_deduction;
+    s.full_redecl_scan = opts.full_redecl_scan;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;

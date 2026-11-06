@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 
 use crate::ids::{DeclId, RawId, RedeclGroupId};
+use crate::journal::Journal;
 use crate::mem::{HeapSize, MemReport, MemRow};
 use crate::slot::AlreadySet;
 
@@ -20,12 +21,18 @@ pub struct RedeclGroup {
 #[derive(Debug)]
 pub struct RedeclTable {
     groups: Vec<RedeclGroup>,
+    /// The declaration that stopped being its group's latest, at every
+    /// [`RedeclTable::push_redecl`] (WP-658; see [`Journal`]).
+    pub journal: Journal<DeclId>,
 }
 
 impl Default for RedeclTable {
     fn default() -> Self {
         let d = DeclId::new(DeclId::MAX_INDEX);
-        Self { groups: vec![RedeclGroup { first: d, latest: d, definition: None }] }
+        Self {
+            groups: vec![RedeclGroup { first: d, latest: d, definition: None }],
+            journal: Journal::default(),
+        }
     }
 }
 
@@ -49,7 +56,9 @@ impl RedeclTable {
 
     /// Records `d` as the latest declaration of `g`.
     pub fn push_redecl(&mut self, g: RedeclGroupId, d: DeclId) {
-        self.groups[g.index() as usize].latest = d;
+        let grp = &mut self.groups[g.index() as usize];
+        self.journal.push(grp.latest);
+        grp.latest = d;
     }
 
     /// Records `d` as the definition of `g` (once; a second definition is

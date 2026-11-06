@@ -14,6 +14,7 @@
 use kiln_source::fx::FxHashMap;
 
 use crate::ids::DeclId;
+use crate::journal::Journal;
 use crate::mem::{HeapSize, MemReport, MemRow};
 use crate::names::DeclName;
 
@@ -77,6 +78,11 @@ pub struct LookupTables {
     using_dirs: FxHashMap<DeclId, Vec<DeclId>>,
     /// Bumped by every insertion (see [`LookupTables::generation`]).
     generation: u64,
+    /// `(set, position)` of every set slot replaced in place, and
+    /// `(set, u32::MAX)` for a set an entry was removed from (its later
+    /// positions moved): what sema's redeclaration index re-reads
+    /// (WP-658; see [`Journal`]).
+    pub journal: Journal<(u32, u32)>,
 }
 
 /// The declarations found by [`LookupTables::lookup_local`], in order of
@@ -235,9 +241,11 @@ impl LookupTables {
         let LookupEntry(w) = self.map[&key];
         let set = &mut self.sets[(w & !SET_BIT) as usize];
         if let Some(p) = replaces
-            && let Some(slot) = set.iter_mut().find(|s| **s & !FLAG_MASK == p.index())
+            && let Some(pos) = set.iter().position(|s| *s & !FLAG_MASK == p.index())
         {
+            let slot = &mut set[pos];
             *slot = (*slot & VIA_INLINE) | (word & LookupFlags::ADL_ONLY.0) | d.index();
+            self.journal.push((w & !SET_BIT, pos as u32));
             return;
         }
         if !set.iter().any(|s| *s & !FLAG_MASK == d.index()) {
@@ -267,7 +275,32 @@ impl LookupTables {
         let set = &mut self.sets[(w & !SET_BIT) as usize];
         let before = set.len();
         set.retain(|s| *s & !FLAG_MASK != d.index());
+        if set.len() != before {
+            self.journal.push((w & !SET_BIT, u32::MAX));
+        }
         self.set_words -= before - set.len();
+    }
+
+    /// The overload set `(ctx, name)` names, if its entry is a set (see
+    /// [`LookupTables::set_entry`]); a set keeps its id for good.
+    pub fn set_id(&self, ctx: DeclId, name: DeclName) -> Option<u32> {
+        match self.map.get(&(ctx, name)) {
+            Some(&LookupEntry(w)) if w & SET_BIT != 0 => Some(w & !SET_BIT),
+            _ => None,
+        }
+    }
+
+    /// The length of overload set `set`.
+    pub fn set_len(&self, set: u32) -> usize {
+        self.sets[set as usize].len()
+    }
+
+    /// The declaration at position `pos` of overload set `set`, and its
+    /// flags.
+    pub fn set_entry(&self, set: u32, pos: usize) -> Option<(DeclId, LookupFlags)> {
+        self.sets[set as usize]
+            .get(pos)
+            .map(|&w| (DeclId::new(w & !FLAG_MASK), LookupFlags(w & FLAG_MASK)))
     }
 
     fn new_set(&mut self, v: Vec<u32>) -> LookupEntry {
