@@ -478,10 +478,12 @@ impl Sema<'_, '_> {
         let out = self.best_viable(&mut set);
         self.ovl.lists.truncate(mark);
         let r = match out {
-            super::OvlOutcome::Success(b) => match self.builtin_operand_conversions(&set, b, &[t, f]) {
-                Some(v) if v.len() == 2 => Ok(Some([v[0], v[1]])),
-                _ => Err(()),
-            },
+            super::OvlOutcome::Success(b) => {
+                match self.builtin_operand_conversions(&set, b, &[t, f]) {
+                    Some(v) if v.len() == 2 => Ok(Some([v[0], v[1]])),
+                    _ => Err(()),
+                }
+            }
             super::OvlOutcome::Ambiguous => {
                 let msg = self
                     .diag(kiln_diag::DiagId::sema_conditional_ambiguous_ovl, loc)

@@ -3433,6 +3433,12 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   `act_on_namespace_alias(name, name_loc, qual, target, target_loc)`.
   - The target is looked up with `LookupKind::Nested` and must be a
     namespace or alias: `expected namespace name`.
+  - `lookup_namespace_name(qual, name)` gives that lookup. A
+    using-directive whose name does not classify as a namespace falls
+    back to it, so in both forms only namespaces are considered
+    ([namespace.udir]/1, [namespace.alias]/1): `using namespace index;`
+    with a visible function `::index` nominates the namespace (WP-801,
+    `tests/conformance/namespace.udir/p1-function-does-not-hide-namespace-run.cpp`).
   - Redeclaring an alias to the same namespace is allowed (it links to
     the previous one); to a different namespace: `redefinition of 'Q' as
     an alias for a different namespace`, with a note; any other earlier

@@ -485,7 +485,13 @@ impl Parser<'_, '_> {
                 return Vec::new();
             };
             let nl = self.bump().span.lo;
-            let NameClass::Namespace(ns) = self.s.classify_name(n, qual) else {
+            // [namespace.udir]/1: only namespace names are considered, so
+            // a function of the same name does not hide the namespace.
+            let ns = match self.s.classify_name(n, qual) {
+                NameClass::Namespace(ns) => Some(ns),
+                _ => self.s.lookup_namespace_name(qual, n).map(|d| self.s.ast.resolve_alias(d)),
+            };
+            let Some(ns) = ns else {
                 self.s.error(DiagId::parse_expected_namespace_name, nl);
                 self.skip_to_semi();
                 return Vec::new();
