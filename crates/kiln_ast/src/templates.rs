@@ -2058,9 +2058,20 @@ impl AstBuilder<'_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        // [temp.dep.expr]/3: `T(args)` / `T{args}` is type-dependent only
+        // if `T` is dependent or a placeholder for a deduced type whose
+        // initializer is; otherwise a type-dependent argument makes it
+        // value-dependent, as a cast's operand does ([temp.dep.constexpr]/2).
+        use crate::types::TypeView;
+        let placeholder = matches!(
+            self.ast.types.view(ty.ty()),
+            TypeView::Auto { deduced: None, .. }
+                | TypeView::DeducedTemplateSpecialization { deduced: None, .. }
+        );
+        let drop = if placeholder { ExprDeps::NONE } else { ExprDeps::TYPE };
         let mut deps = self.type_deps(ty);
         for &a in args {
-            deps |= self.deps(a);
+            deps |= self.deps(a).without(drop);
         }
         let vk = self.ref_category(ty);
         let l = self.ast.lists.push(args);

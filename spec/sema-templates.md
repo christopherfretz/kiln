@@ -1146,6 +1146,7 @@ never recomputed (ast.md §5). The rules follow [temp.dep.expr],
 | `UnresolvedLookupExpr` | TYPE \| VALUE \| INST if any explicit template arg is dependent; otherwise `requires_adl` decides at the `CallExpr` |
 | a lambda in a dependent context | INST |
 | a named or C-style cast to a dependent type (`dependent_cast`) | its type's deps; the value category is the target's, read through sugar (`static_cast<result_type>(b)` with `typedef X<R>& result_type;` is an lvalue, rebuilt as a reference cast; libstdc++ future:751; WP-332, test `expr.static.cast/libstdcxx-dependent-cast-to-reference-typedef.cpp`) |
+| `CXXUnresolvedConstructExpr` (`T(args)`, `T{args}`) | its type's deps; an argument's TYPE becomes VALUE unless the type is an undeduced placeholder (`auto(x)`, CTAD), which stays TYPE-dependent ([temp.dep.expr]/3: `u16(t.v)` has type `u16`, so `RP d(u16(t.v));` is direct-initialized at definition; WP-782, test `temp.dep.expr/p3-functional-cast-not-type-dependent.cpp`) |
 | any of the above with an error operand | plus ERROR |
 
 INST alone means the expression mentions a template parameter but neither
