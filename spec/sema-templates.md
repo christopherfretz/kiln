@@ -3874,6 +3874,17 @@ guides.
    partial specializations), so the two packs' template-parameter
    indices need not coincide (WP-726,
    `tests/conformance/temp.func.order/p3-pack-expansion-other-index.cpp`).
+   A template parameter of the deduced template left without a value
+   fails the deduction when the compared parameter types name it, a
+   non-deduced context included ([temp.deduct.partial]/12; clang
+   `MarkUsedTemplateParameters` without `OnlyDeduced`): kiln substitutes
+   `int` for each undeduced type parameter and every other parameter for
+   itself, and a type that changes or fails to substitute names one
+   (`order.rs` `undeduced_params_unused`; with a parameter pack, or an
+   undeduced non-type or template parameter, they count as unused). So
+   `to_pointer(buffer_appender<T>, size_t)` beats `to_pointer(OutputIt,
+   size_t)` for `to_pointer<char>(it, n)` (WP-726,
+   `tests/conformance/temp.func.order/p12-undeduced-used-in-non-deduced-context.cpp`).
    The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
 5. **Constraints.** If both directions succeed, the more constrained one
