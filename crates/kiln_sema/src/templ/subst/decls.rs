@@ -1095,12 +1095,25 @@ impl Substituter<'_, '_, '_> {
         };
         let pp = params(self, pat);
         let fp = params(self, f);
-        if pp.len() != fp.len() {
-            // A pack expanded: substitute now.
-            self.default_args(pat, f);
-            return;
-        }
-        for (&a, &b) in pp.iter().zip(fp.iter()) {
+        // A pack expanded (to any length, none included): the parameters
+        // around it pair up as `map_params` maps them, so an explicit
+        // argument before an empty pack does not instantiate its
+        // parameter's default ([temp.inst]/12; EnTT's `sort(Compare =
+        // Compare{}, Args&&...)` with a lambda `Compare`).
+        let pairs = if pp.len() == fp.len() {
+            pp.iter().copied().zip(fp.iter().copied()).collect()
+        } else {
+            let saved: Vec<_> = pp.iter().map(|&a| (a, self.locals.get(&a).copied())).collect();
+            let pairs = self.param_pairs(&pp, &fp);
+            for (a, old) in saved {
+                match old {
+                    Some(v) => self.locals.insert(a, v),
+                    None => self.locals.remove(&a),
+                };
+            }
+            pairs
+        };
+        for (a, b) in pairs {
             let src = if let Some(&src) = self.sema.inst.lazy_defaults.get(&a) {
                 src
             } else {
@@ -1195,13 +1208,25 @@ impl Substituter<'_, '_, '_> {
             .function(f)
             .map(|x| self.sema.ast.lists.iter::<DeclId>(x.params).collect())
             .unwrap_or_default();
-        self.map_params(&pp, &fp);
-        for (&a, &b) in pp.iter().zip(fp.iter()) {
+        for (a, b) in self.param_pairs(&pp, &fp) {
             self.default_arg_one(a, b);
         }
         for a in pp {
             self.locals.remove(&a);
         }
+    }
+
+    /// Maps pattern parameters `pp` onto `fp` ([`Self::map_params`]) and
+    /// returns the non-pack pairs: a parameter after an expanded pack
+    /// pairs with its shifted counterpart, not the one at its index.
+    fn param_pairs(&mut self, pp: &[DeclId], fp: &[DeclId]) -> Vec<(DeclId, DeclId)> {
+        self.map_params(pp, fp);
+        pp.iter()
+            .filter_map(|&a| match self.locals.get(&a) {
+                Some(&DeclOrPack::Decl(b)) => Some((a, b)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// A field of the pattern; its default member initializer is

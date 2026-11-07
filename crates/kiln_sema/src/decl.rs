@@ -4618,7 +4618,12 @@ impl Sema<'_, '_> {
             && !params.iter().any(|p| p.invalid)
         {
             for (i, p) in params.iter().enumerate().skip(first + 1) {
-                if out[i].is_some() || p.default_arg != DefaultArg::None || p.invalid {
+                // A function parameter pack needs none ([dcl.fct.default]/4).
+                if out[i].is_some()
+                    || p.default_arg != DefaultArg::None
+                    || p.invalid
+                    || self.ast.types.kind(p.ty.ty()) == kiln_ast::types::TypeKind::PackExpansion
+                {
                     continue;
                 }
                 let msg = match p.name {

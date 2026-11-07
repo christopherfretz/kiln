@@ -227,7 +227,10 @@ impl Sema<'_, '_> {
     fn lambda_default_args(&mut self, params: &[ParamInfo]) -> Vec<Option<ExprId>> {
         if let Some(first) = params.iter().position(|p| p.default_arg != DefaultArg::None) {
             for p in params.iter().skip(first + 1) {
-                if p.default_arg != DefaultArg::None || p.invalid {
+                if p.default_arg != DefaultArg::None
+                    || p.invalid
+                    || self.ast.types.kind(p.ty.ty()) == kiln_ast::types::TypeKind::PackExpansion
+                {
                     continue;
                 }
                 let msg = match p.name {

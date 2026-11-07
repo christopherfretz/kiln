@@ -806,6 +806,14 @@ Redeclaration and linkage rules:
   argument saved for the complete-class context is `DefaultArg::Unparsed`
   and replayed through `act_on_param_default_arg`, sema-class.md §2.7.)
   Calls fill omitted trailing arguments with `CXXDefaultArgExpr`.
+  A function parameter pack after a defaulted parameter needs no
+  default argument (`merge_default_args`, `lambda_default_args`). A
+  specialization's default arguments stay pending until a call uses
+  them ([temp.inst]/12, `defer_default_args`) also when a pack
+  expanded: the pattern's parameters pair with the specialization's
+  around the expansion (`param_pairs`), so `f(C c = C{}, A&&... a)`
+  called as `f(x)` never substitutes `C{}` (WP-690). Test:
+  `dcl.fct.default/pack-after-default.cpp`.
 - **Erroneous default arguments** (WP-293; clang's
   `ActOnParamDefaultArgumentError`). A default argument parsed in place
   whose expression is erroneous — including an explicit cast that fails
