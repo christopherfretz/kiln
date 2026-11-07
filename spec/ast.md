@@ -967,7 +967,11 @@ whether it is exact: false when some part printed as a placeholder (an
     `[i]` (one-past-the-end included) and fields `.f`. Bases add no
     designator.
   - The walk stops when the offset is 0 and the type equals the pointee:
-    `&arr` vs `&arr[0]`, `&s.in.y`, `&arr[3]`.
+    `&arr` vs `&arr[0]`, `&s.in.y`, `&arr[3]`. The types are compared
+    ignoring top-level cv, including the cv of array elements
+    (`PrintEnv::same_unqualified`, clang `hasSameUnqualifiedType`), so a
+    `const int (*)[2][2]` to the `int[2][2]` member of a const object
+    prints `&fake.c`, not `&fake.c[0][0]` (WP-792).
   - If no designator can be recovered, the pointer prints as `&name+off`.
   - String literals print as `"hi"` at offset 0, otherwise `&"hi"[1]`
     (index in code units, with the `u8`/`u`/`U`/`L` prefix).

@@ -1661,8 +1661,9 @@ impl PrintEnv for AstNames<'_> {
     }
 
     fn same_unqualified(&self, a: QualType, b: QualType) -> bool {
-        let t = &self.ast.types;
-        t.canonical(a).without_quals() == t.canonical(b).without_quals()
+        // Array element cv too: `&obj.arr` of a const `obj` points to a
+        // `const int[2]` while the member is an `int[2]`.
+        self.ast.types.same_unqualified(a, b)
     }
 
     fn type_name(&self, ty: QualType, out: &mut String) {

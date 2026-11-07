@@ -1203,7 +1203,11 @@ Redeclaration and linkage rules:
   (`copy_elision_candidate`), as in clang. Deduction runs when the body
   is instantiated, so a `return` in a discarded `if constexpr` branch
   never participates (libc++ `__get_comp_type`) and only a real
-  conflict between instantiated returns is reported. `return {…}` is
+  conflict between instantiated returns is reported. In a
+  non-templated function a `return` inside a discarded statement
+  (`in_discarded_statement`) likewise takes no part in deduction
+  ([dcl.spec.auto.general]/9) and its operand is left unconverted, as
+  in clang (WP-792). `return {…}` is
   still an error in the pattern. A call `x.g()` to a member whose
   return type is not yet deduced goes through `check_undeduced_use`
   (instantiating it when it is a specialization member) before
@@ -2995,6 +2999,10 @@ specification as written (`TypeNames` prints ` noexcept`,
   member function` under the `in instantiation of exception
   specification` note, as in clang (WP-290,
   `class.mem.general/static-member-noexcept-this-instantiation.cpp`).
+  Every implicit object member function gets one: a constructor,
+  destructor or conversion function's `noexcept(noexcept(m.f()))` names
+  its members as a member function's does (WP-792,
+  `except.spec/special-member-noexcept-this-instantiation.cpp`).
   `throw()`, `noexcept` and `noexcept(expr)` all go through this path.
 - *Needed*: `exc_spec_needed(f, loc)` runs at every use that marks a
   function referenced, including unevaluated operands such as
@@ -4006,10 +4014,12 @@ constant and never look at the operand.
 | construct | implemented |
 |---|---|
 | a call whose callee's function type (through a pointer or reference) is not non-throwing; a callee without a prototype throws | yes |
-| `throw` expression; `new` expression | yes (neither is produced by the M2 parser) |
+| `throw` expression | yes |
+| `new` expression whose allocation function is not non-throwing ([except.spec]/6.1; clang `canThrow`); its initializer and operands are walked as subexpressions | yes (WP-783: placement and `std::nothrow` forms are non-throwing when the initializer is) |
+| `delete` expression whose deallocation function, or the destroyed (element) type's destructor, is not non-throwing; a trivial destructor never throws ([except.spec]/8) | yes (WP-783) |
 | `dynamic_cast` to a reference type needing a run-time check | yes (not produced by the M2 parser) |
 | `typeid` of a glvalue of polymorphic class type | M3 (no polymorphic classes in M2) |
-| implicit calls: constructors, destructors, conversion functions, allocation functions | yes: constructors (`CXXConstructExpr`), destructors (`CXXBindTemporaryExpr`) and conversion functions (implicit member calls), each resolving the callee's spec first (WP-112); every `new` counts as throwing |
+| implicit calls: constructors, destructors, conversion functions, allocation functions | yes: constructors (`CXXConstructExpr`), destructors (`CXXBindTemporaryExpr`) and conversion functions (implicit member calls), each resolving the callee's spec first (WP-112); allocation and deallocation functions as in the `new`/`delete` rows |
 | `__attribute__((nothrow))` on the callee | yes (WP-186: the function type is non-throwing, §3 "GNU `nothrow`") |
 | a dependent operand (value-dependent `CXXNoexceptExpr`) | yes (lazily instantiated member specs, §4.7) |
 | a pseudo-destructor call `t.~T()` ([expr.prim.id.dtor]/2: no effect) | yes (WP-275): never potentially-throwing, and, as clang's `canThrow`, its object expression is not walked either (`noexcept(f().~I())` is true) |
@@ -7226,6 +7236,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     For an enumeration with a fixed underlying type that includes
     [dcl.init.list]/3.8 (`E{v}`: `v` converted to the underlying type,
     narrowing rejected, then to `E`), as `E e{v};` does.
+    A class `T{y}` whose initialization elides to `y`'s conversion
+    function (an `ImplicitCastExpr` of `UserDefinedConversion`, not a
+    construct expression) is wrapped, as clang does, in a `NoOp`
+    `CXXFunctionalCastExpr` to `T`, so substitution of a pattern holding
+    it (`T2{TP{y}}`) converts to the written `T` again rather than
+    losing it with the stripped implicit cast (WP-792). Test:
+    `expr.type.conv/list-cast-conversion-function-in-template.cpp`.
   - `T(a, b)` (`act_on_paren_list_cast`) is ill-formed for a scalar.
     The expression-list may hold braced-init-lists (`T(a, {b})`, `T({})`).
     They are the placeholders of `act_on_braced_arg`, and the
@@ -7599,7 +7616,10 @@ same graph.
     `checkIncorrectLogicOperator`) prunes the other edge of an `if`, a
     loop, a `?:` or an `&&`/`||`. In the scan bits, a configuration
     value (clang `isConfigurationValue`) does not prune and an
-    `if constexpr` prunes nothing.
+    `if constexpr` prunes nothing. An `if` with a condition variable has
+    an unknown condition, except an `if constexpr`, whose condition is
+    folded even then: an instantiation keeps only one branch, and the
+    dropped one's edge must be dead for -Wreturn-type (WP-792).
   - An `if`/`while`/`for` condition (without a condition variable) that
     is `&&`/`||` is clang's `VisitLogicalOperator`. Each left operand's
     block ends in its operator, and the short-circuit edges go straight

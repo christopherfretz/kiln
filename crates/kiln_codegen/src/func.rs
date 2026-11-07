@@ -118,11 +118,10 @@ pub(crate) struct Fx {
     pub this: Option<V>,
     /// The class of `this` in a member function.
     pub this_class: Option<DeclId>,
-    /// clang `CXXDefaultInitExprThis`: the object whose fields an
-    /// aggregate initialization is initializing, and its class; the
-    /// `this` of the default member initializers it uses
-    /// ([class.mem.general]/12). `None`: the function's own `this` (a
-    /// constructor's member initializers).
+    /// While an aggregate's initializer list is emitted: the object and
+    /// its class, which `this` is in a default member initializer used
+    /// there ([class.mem.general]/9 as [expr.prim.this]/2; clang
+    /// `FieldConstructionScope` / `CXXDefaultInitExprScope`).
     pub default_init_this: Option<(V, DeclId)>,
     /// In a lambda's function call operator: the closure object's
     /// address (clang `CXXABIThisValue`, which `this` no longer is once

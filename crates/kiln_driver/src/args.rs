@@ -355,6 +355,10 @@ pub struct Args {
     /// `-fkiln-cfg-max-elems=N`: the element cap of one body's graph
     /// (spec/sema.md §7.5).
     pub cfg_max_elems: Option<usize>,
+    /// `-fkiln-outline-expansions=N`: the size from which an expansion
+    /// statement's elements are emitted into helpers
+    /// (spec/landed/codegen/WP-793.md; `0` never; the last one wins).
+    pub outline_expansions: Option<usize>,
     /// `-o <file>`.
     pub output: Option<String>,
     /// The action.
@@ -378,6 +382,11 @@ pub struct Args {
     pub dirs: Vec<(DirGroup, String)>,
     /// `-F` directories (ignored with a warning).
     pub frameworks: Vec<String>,
+    /// `-ftime-trace[=<path>]`, `-ftime-trace-granularity=<n>` and
+    /// `-ftime-trace-verbose` as written: accepted for build systems that
+    /// add them for clang, warned about, and otherwise ignored (kiln
+    /// writes no time trace; its own reports are `-fkiln-*-report`).
+    pub time_trace: Vec<String>,
     /// `--embed-dir=<dir>`.
     pub embed_dirs: Vec<String>,
     /// `-include <file>`, in order: `#include "<file>"` at the end of the
@@ -740,6 +749,7 @@ impl Args {
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
             "-###" => self.print_commands = true,
             "-Qunused-arguments" => self.quiet_unused_arguments = true,
+            "-ftime-trace" | "-ftime-trace-verbose" => self.time_trace.push(arg.to_owned()),
             "-disable-llvm-passes" => self.disable_llvm_passes = true,
             "-moutline-atomics" => self.outline_atomics = Some(true),
             "-mno-outline-atomics" => self.outline_atomics = Some(false),
@@ -810,6 +820,13 @@ impl Args {
                             .errors
                             .push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())),
                     }
+                } else if let Some(v) = arg.strip_prefix("-fkiln-outline-expansions=") {
+                    match v.parse::<usize>() {
+                        Ok(n) => self.outline_expansions = Some(n),
+                        Err(_) => {
+                            self.errors.push(ArgError::InvalidInt(arg.to_owned(), v.to_owned()));
+                        }
+                    }
                 } else if let Some(v) = arg.strip_prefix("-fkiln-cfg-max-elems=") {
                     match v.parse::<usize>() {
                         Ok(n) => self.cfg_max_elems = Some(n),
@@ -846,6 +863,10 @@ impl Args {
                             .errors
                             .push(ArgError::InvalidValue((*opt).to_owned(), v.to_owned())),
                     }
+                } else if arg.starts_with("-ftime-trace=")
+                    || arg.starts_with("-ftime-trace-granularity=")
+                {
+                    self.time_trace.push(arg.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdebug-prefix-map=") {
                     // No debug information: validated, otherwise ignored.
                     if !v.contains('=') {
@@ -1436,6 +1457,17 @@ mod tests {
         assert_eq!(
             parse("-ffile-prefix-map=/src a.cpp").errors,
             [ArgError::InvalidValue("-ffile-prefix-map=".into(), "/src".into())]
+        );
+    }
+
+    #[test]
+    fn outline_expansions() {
+        assert_eq!(parse("a.cpp").outline_expansions, None);
+        let a = parse("-fkiln-outline-expansions=0 a.cpp");
+        assert_eq!((a.outline_expansions, a.errors), (Some(0), vec![]));
+        assert_eq!(
+            parse("-fkiln-outline-expansions=x a.cpp").errors,
+            [ArgError::InvalidInt("-fkiln-outline-expansions=x".into(), "x".into())]
         );
     }
 

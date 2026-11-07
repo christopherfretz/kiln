@@ -329,6 +329,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `EmitStoreThroughExtVectorComponentLValue`) shuffles the value into
     the loaded vector, widening it first when the vector is longer than
     the swizzle, and stores the whole vector back.
+  - a braced initializer of a vector type (clang `VisitInitListExpr`):
+    each scalar element an `insertelement` into `poison` (`i32` index),
+    the remaining lanes zeros; an element that is itself a vector (the
+    whole initializer `v16 b{a}` of a GNU vector of its type) is widened
+    to the result's length by a one-operand `shufflevector`, then
+    shuffled in after the lanes already set (WP-792;
+    `tests/conformance/ext.vector/ir-init-list-vector-element-*.cpp`);
 - Variable alignment (clang `getDeclAlign`, WP-312;
   `tests/codegen/alignas_variable.cpp`): `var_align` is
   `kiln_abi::layout::decl_align` (spec/abi.md §3.2), so an `alignas` or
@@ -976,6 +983,12 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   `min-oracle: 23` (verify-only today); the order and the absence of
   back-edges are checked by `kiln_codegen` test
   `expansion_statement_lowers_in_order`.
+  While optimizing, an expansion whose elements together exceed
+  `-fkiln-outline-expansions=N` AST nodes (default 2048) emits each
+  sizeable element as an internal `noinline` helper
+  `<function>.expand.<n>` called in its place, with a status result
+  for `break` and `return` (WP-793, `outline.rs`; the full rule is
+  spec/landed/codegen/WP-793.md).
 
 - Consteval-only variables (WP-534): a block-scope variable whose type
   is consteval-only (P2996R13 [basic.types.general]: `std::meta::info`,
@@ -1046,7 +1059,12 @@ The normative description is spec/driver.md "Code generation". In short:
   `//@ min-oracle: <N>` line compares the case only under oracle release
   N or later; under an older oracle kiln's IR must still verify. The oracle is
   `clang++-N`/`opt-N` for `N` = `$KILN_ORACLE` (default 22; spec/harness.md
-  "Oracle toolchain"); both texts go through that `opt-N`. `KILN_CASE=<stem>`
+  "Oracle toolchain"); both texts go through that `opt-N`. Under oracle 22
+  kiln's text first gets LLVM 22's lifetime-marker form
+  (`ir_norm::lifetime_markers_llvm22`; a no-op on text already in that
+  form). kiln writes its backend's form (spec/driver.md "IR optimization",
+  WP-783), and with an LLVM 19 backend `opt-22` would upgrade the calls
+  but leave the old declarations out of place. `KILN_CASE=<stem>`
   prints both texts (in the oracle's mode); without `opt-N`/`clang++-N` it
   is skipped. Each pair is compared in three ways (WP-355,
   `crates/kiln_codegen/tests/ir_norm/mod.rs`), and the summary line counts
@@ -1616,15 +1634,15 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
 - A C1 that is not discardable is an alias. clang uses a COMDAT or a
   `weak_odr` C1 in some linkage combinations, which kiln has not
   covered yet.
-- (Closed, WP-789.) A `CXXDefaultInitExpr` used to be emitted with the
-  enclosing function's `this`. It now uses the object being initialized,
-  as clang's `FieldConstructionScope` and `CXXDefaultInitExprScope` do
-  ([class.mem.general]/12). Aggregate initialization (`record_init`)
-  records the aggregate and its class in `FnState::default_init_this`.
-  The default member initializers the list uses take that as `this`, in
-  member functions and non-member functions alike. A constructor's
-  member initializers keep the constructor's own `this`. Test:
-  `dcl.init.aggr/default-member-init-this-is-the-aggregate-run.cpp`.
+- A `CXXDefaultInitExpr` is emitted with the enclosing `this`, except
+  inside an aggregate's initializer list, where `this` (and its class)
+  is the aggregate being initialized ([class.mem.general]/9; clang's
+  `FieldConstructionScope` and `CXXDefaultInitExprScope`):
+  `record_init` sets `FuncState::default_init_this` for its fields and
+  `enter_default_init` swaps it in while the default member initializer
+  is emitted. Before WP-792 a `[this]` capture there panicked in a free
+  function and captured the enclosing closure in a lambda. Test:
+  `dcl.init.aggr/default-member-init-this-in-aggregate.cpp`.
 - Sema does not yet synthesize calls to non-trivial `operator=` for
   classes, so codegen sees only trivial assignments.
 - Class `new[]`/`delete[]` with array cookies: see §7g (WP-118).
@@ -3113,10 +3131,10 @@ fields; each follows clang 19's IR.
   signature, and LLVM 22's `(ptr captures(none))` at `-fclang-compat=22`
   (WP-462, §7z): codegen emits the latter itself for an LLVM 22+ backend
   (`kiln_llvm` `Module::ir_version`, `intrinsics::lifetime_has_size`),
-  and for an older one the driver rewrites the `-S -emit-llvm` text after
-  `opt` (driver.md "IR optimization"), so `opt`/`llc` 19 and 21 still get
-  the sized form they verify (LLVM 21 spells its pointer
-  `captures(none)` but keeps the size operand).
+  and for an older one the sized form those tools verify (LLVM 21 spells
+  its pointer `captures(none)` but keeps the size operand), in every
+  output including `-S -emit-llvm` text (WP-783; driver.md "IR
+  optimization").
 - **Cleanup-destination promotion (`fir/mem2reg.rs`).** clang's
   `FinishFunction` replaces a coroutine's `cleanup.dest.slot` alloca by
   SSA values and phis; kiln ports LLVM 19's `PromoteMemToReg` for that
@@ -3551,7 +3569,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   `vcvt`s, `vpmin`/`vpmax`, `vabd`, `vqadd`, `vminnm`/`vmaxnm`, the
   reciprocal estimates and steps, `vrnd*`, `vcnt`, `vclz`, `vcmla*`;
   the widening multiply `vmull_v`: spec/landed/sema/WP-724.md "NEON
-  widening multiply"). The AArch64 ACLE builtins (`__builtin_arm_*`,
+  widening multiply"; the pairwise widening add `vpaddl[q]` as
+  `{s,u}addlp.VTy.N` of the operand bitcast to twice the lanes at half the
+  width, and `vqdmulh[q]`/`vqrdmulh[q]` as one `sq[r]dmulh` call: WP-792,
+  `target.neon/ir-paddl-qdmulh-19.cpp`). The AArch64 ACLE builtins (`__builtin_arm_*`,
   `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition
   and the global-initialization functions (`__cxx_global_var_init`,

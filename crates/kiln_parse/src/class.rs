@@ -1731,6 +1731,7 @@ impl Parser<'_, '_> {
         }
         if let Some(f) = target {
             let end = toks.last().map_or(self.loc(), |t| t.span.hi);
+            self.s.act_on_delayed_body(f);
             self.push_late(LateItem::Body { f, ctor, toks: LateToks { toks, end } });
             if let Some(toks) = late_contracts {
                 self.push_late(LateItem::Contracts { f, toks });

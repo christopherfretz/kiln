@@ -1180,7 +1180,7 @@ impl Parser<'_, '_> {
         let ctad_name = matches!(
             self.scan_name_qual_at(self.pos()),
             Some((_, false, NameClass::TypeTemplate(d), _, q))
-                if self.s.is_ctad_template(d) || q.is_some_and(|q| self.names_member_template(q, d))
+                if self.names_ctad_template(q, d)
         );
         let a = if ctad_name && let Some(t) = self.at_template_name_arg() {
             t
@@ -1265,6 +1265,19 @@ impl Parser<'_, '_> {
         let decls = &self.s.ast.decls;
         matches!(decls.get(q).kind(), DeclKind::Namespace | DeclKind::TranslationUnit)
             || decls.get(d).ctx() == Some(q)
+    }
+
+    /// Whether class template name `d` (qualified by `q`, if any) is a
+    /// deduced class type placeholder here ([dcl.type.class.deduct]/1):
+    /// unqualified outside its own definition, or qualified by a scope in
+    /// which lookup finds the template itself, even inside its definition
+    /// (`::n::X{a}` in `X`'s constructor, [temp.local]/1).
+    pub(crate) fn names_ctad_template(&self, q: Option<DeclId>, d: DeclId) -> bool {
+        self.s.is_ctad_template(d)
+            || q.is_some_and(|q| {
+                self.s.ast.decls.get(d).kind() == DeclKind::ClassTemplate
+                    && self.names_member_template(q, d)
+            })
     }
 
     /// A template-argument that is an id-expression naming a class or

@@ -2,7 +2,7 @@
 //! declarators ([except.spec]) and the `noexcept` operator
 //! ([expr.unary.noexcept]) (spec/sema.md §5.3).
 
-use kiln_ast::decl::DeclFlags;
+use kiln_ast::decl::{DeclFlags, DefinitionBits};
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::types::{BuiltinType, ExcSpec, FuncProto, NoexceptValue};
 use kiln_ast::{DeclId, ExprId};
@@ -229,7 +229,10 @@ impl Sema<'_, '_> {
     /// - a call whose callee's function type is not non-throwing
     ///   ([except.spec]/6.1); a callee without a prototype counts as
     ///   throwing;
-    /// - a `throw` or `new` expression (not produced by the M2 parser);
+    /// - a `throw` expression;
+    /// - a `new` expression whose allocation function is not
+    ///   non-throwing, and a `delete` expression whose deallocation
+    ///   function or destroyed type's destructor is not (WP-783);
     /// - a `dynamic_cast` to a reference type that needs a run-time check
     ///   (not produced by the M2 parser);
     /// - any expression with a potentially-throwing immediate
@@ -255,7 +258,22 @@ impl Sema<'_, '_> {
                 // of a pseudo-destructor is not looked at either, so
                 // `noexcept(f().~I())` is true for any `f`.
                 | ExprKind::CXXPseudoDestructorExpr => continue,
-                ExprKind::CXXThrowExpr | ExprKind::CXXNewExpr => return true,
+                ExprKind::CXXThrowExpr => return true,
+                // [except.spec]/6.1: a new-expression invokes its
+                // allocation function (then the initializer, a child);
+                // a placement `::new (p) T(...)` through the non-throwing
+                // `operator new(size_t, void*)` is not potentially-throwing
+                // when the initialization is not (clang `canThrow`, WP-783).
+                ExprKind::CXXNewExpr
+                    if exprs.new_extra(x).operator_new.is_none_or(|f| self.fn_can_throw(f)) =>
+                {
+                    return true;
+                }
+                // A delete-expression invokes the destroyed type's
+                // destructor and the deallocation function (clang
+                // `canThrow`): `delete p` with a `noexcept(false)`
+                // destructor is potentially-throwing.
+                ExprKind::CXXDeleteExpr if self.delete_can_throw(x) => return true,
                 ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr
                     if self.callee_can_throw(exprs.callee(x)) =>
                 {
@@ -299,6 +317,38 @@ impl Sema<'_, '_> {
         let t = &self.ast.types;
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         t.proto(ty).is_some_and(|p| t.exc_spec(p).is_nothrow())
+    }
+
+    /// Whether an implicitly invoked function `f` (an allocation or
+    /// deallocation function, a destructor) may throw: clang
+    /// `canCalleeThrow` on a declaration, so `NoThrowAttr` counts as
+    /// non-throwing.
+    fn fn_can_throw(&self, f: DeclId) -> bool {
+        !self.ast.has_nothrow_attr(f) && !self.decl_is_nothrow(f)
+    }
+
+    /// Whether delete-expression `e` may throw through its deallocation
+    /// function or the destructor of the type it destroys (the element
+    /// type for `delete[]`).
+    fn delete_can_throw(&self, e: ExprId) -> bool {
+        let exprs = &self.ast.exprs;
+        let t = &self.ast.types;
+        if exprs.operator_delete(e).is_some_and(|f| self.fn_can_throw(f)) {
+            return true;
+        }
+        let Some(mut dt) = t.pointee(exprs.get(exprs.delete_operand(e)).ty()) else {
+            return false;
+        };
+        while let Some(el) = t.element(dt) {
+            dt = el;
+        }
+        // A trivial destructor is implicit and non-throwing ([except.spec]/8)
+        // whether or not its specification was resolved.
+        t.as_record(dt)
+            .and_then(|r| self.ast.definition(r))
+            .filter(|&r| !self.defn_bits(r).contains(DefinitionBits::TRIVIAL_DTOR))
+            .and_then(|r| self.ast.destructor(r))
+            .is_some_and(|d| self.fn_can_throw(d))
     }
 
     /// Whether a member call through `callee` (a `MemberExpr`, or a
@@ -608,9 +658,10 @@ impl Sema<'_, '_> {
         // A static member function has no `this`: an implicit one in the
         // pattern is "invalid use of 'this' outside of a non-static
         // member function" now ([expr.prim.this]/3; clang's
-        // `TransformCXXThisExpr` in `InstantiateExceptionSpec`). A
-        // constructor, destructor or conversion function has one.
-        let method = self.is_instance_member(f);
+        // `TransformCXXThisExpr` in `InstantiateExceptionSpec`). Every
+        // implicit object member function has one, constructors,
+        // destructors and conversion functions included (WP-792).
+        let method = self.is_implicit_object_member(f);
         let at = self.ast.exprs.get(expr).loc();
         let start = self.begin_loc(expr);
         // A friend's is in its class ([class.friend]/7), whose members it

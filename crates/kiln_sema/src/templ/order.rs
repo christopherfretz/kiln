@@ -549,7 +549,7 @@ impl Sema<'_, '_> {
         match kx {
             DeclKind::NonTypeTemplateParm => {
                 match (self.ast.decls.get(x).ty(), self.ast.decls.get(y).ty()) {
-                    (Some(tx), Some(ty)) => self.ast.types.same_type(tx, ty),
+                    (Some(tx), Some(ty)) => self.same_type_ignoring_constraint(tx, ty),
                     _ => false,
                 }
             }
@@ -565,6 +565,22 @@ impl Sema<'_, '_> {
                 (a, b) => a.is_none() && b.is_none(),
             },
             _ => true,
+        }
+    }
+
+    /// Whether non-type template parameter types `x` and `y` are the same
+    /// ignoring the type-constraint of a top-level placeholder
+    /// ([temp.over.link]/6.2, clang `getUnconstrainedType`): `Int auto`
+    /// and `SmallInt auto` are both `auto`.
+    fn same_type_ignoring_constraint(&self, x: QualType, y: QualType) -> bool {
+        let t = &self.ast.types;
+        let (cx, cy) = (t.canonical(x), t.canonical(y));
+        match (t.view(cx.ty()), t.view(cy.ty())) {
+            (
+                TypeView::Auto { keyword: kx, deduced: None, pack: px, .. },
+                TypeView::Auto { keyword: ky, deduced: None, pack: py, .. },
+            ) => kx == ky && px == py && cx.quals_bits() == cy.quals_bits(),
+            _ => t.same_type(x, y),
         }
     }
 

@@ -566,6 +566,13 @@ impl Sema<'_, '_> {
             .unwrap_or(self.ast.tu);
     }
 
+    /// The body of function `f` defined in a class is saved for replay
+    /// after the outermost class ([class.mem.general]/7): `f` will be a
+    /// definition (`Sema::delayed_bodies`).
+    pub fn act_on_delayed_body(&mut self, f: DeclId) {
+        self.delayed_bodies.insert(f);
+    }
+
     /// Re-enters the parameter scope of member function `f` to replay its
     /// default arguments and *noexcept-specifier* (spec/sema-class.md §2.7,
     /// clang `ActOnReenterCXXMethodParameter`): the earlier parameters are
