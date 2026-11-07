@@ -2981,7 +2981,14 @@ recomputed exactly as for non-template code (clang's
   template arguments and its local declarations. Member classes are
   defined with the outermost local class. Member function bodies are
   defined after it is complete, in the re-entered class scopes, as the
-  parser replays them. Local enumerations are substituted the same way.
+  parser replays them. Each body is a function of its own: the enclosing
+  function's references still waiting for the end of their
+  full-expression (odr-use marking, potential lambda captures, as a
+  tuple-like binding's `get` call leaves them) are set aside while it is
+  instantiated, so the body never claims them as references to an
+  enclosing local (WP-789,
+  `tests/conformance/class.local/member-body-after-tuple-binding-run.cpp`).
+  Local enumerations are substituted the same way.
   An anonymous struct or union member of a local class is instantiated as
   in a class template (`unnamed_member_class`), which declares its member
   object and injects its members' names (WP-192). A block-scope
