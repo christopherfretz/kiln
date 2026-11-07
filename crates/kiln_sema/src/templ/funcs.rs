@@ -105,7 +105,9 @@ impl Sema<'_, '_> {
         // the same arguments fails too ([temp.deduct.general]/8).
         let trapped = self.sfinae_errors();
         let held = self.sfinae_warnings();
+        let access = self.friend_template_access_ctx(spec);
         let r = self.in_inst_context(ctx, |s| {
+            s.access_ctx = access;
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
@@ -128,6 +130,19 @@ impl Sema<'_, '_> {
         Ok(spec)
     }
 
+    /// The access context the signature of specialization `spec` of a
+    /// friend function template is substituted in: the specialization
+    /// itself, whose effective context continues into the befriending
+    /// class ([class.friend]/7, [temp.deduct.general]/8: `-> decltype(
+    /// s.priv_)` of a friend defined in the class may name its private
+    /// members). clang substitutes a friend template's declaration with
+    /// its lexical context as the owner and the templated declaration as
+    /// the current context (`FinishTemplateArgumentDeduction`). `None`
+    /// (the specialization's semantic context) for any other template.
+    fn friend_template_access_ctx(&self, spec: DeclId) -> Option<DeclId> {
+        self.friend_decl_of(spec).map(|_| spec)
+    }
+
     /// Substitutes the explicit-specifier [`Self::get_function_spec_signature`]
     /// left pending on function template specialization `spec`
     /// ([temp.deduct.general]/7: a failure is a substitution failure, and
@@ -145,7 +160,9 @@ impl Sema<'_, '_> {
         let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let pairs = self.inst_context_pairs(self.spec_pairs_ctx(spec, tmpl));
         let trapped = self.sfinae_errors();
+        let access = self.friend_template_access_ctx(spec);
         let r = self.in_inst_context(ctx, |s| {
+            s.access_ctx = access;
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
@@ -1424,7 +1441,7 @@ impl Sema<'_, '_> {
         }
         match targs {
             Some(l) => self.act_on_member_template_args(e, l),
-            None => e,
+            None => self.act_on_member_without_template_args(e),
         }
     }
 
@@ -1502,6 +1519,15 @@ impl Sema<'_, '_> {
             .arg_list_flags(targs)
             .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION);
         if !dependent {
+            if let Some(x) = self.member_overload(e)
+                && self
+                    .ovl
+                    .members
+                    .get(&x)
+                    .is_some_and(|m| self.kind_of(m.decls[0]) == DeclKind::VarTemplate)
+            {
+                return self.member_var_template_id(x, targs);
+            }
             let _ = self.set_member_template_args(e, targs);
             return e;
         }

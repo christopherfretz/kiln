@@ -259,7 +259,7 @@ accessible at `R` named in `B`. "As a member of `N`" follows each base path
 with [class.access.base]/1 (private members of a base are inaccessible; a
 protected base demotes public to protected; a private base demotes to private);
 the most permissive path wins. Members of `X` include nested and local classes
-of `X` and their members ([class.local]/2). A friend function defined in a class `C` is in `C`'s scope ([class.friend]/7): its effective context continues from `C` outward, so it shares the access of `C` and of every enclosing class, including friendship granted to them; this holds for each specialization of a friend function template (the template's in-class declaration, not the namespace-scope specialization, names the lexical class). A friend defined outside the class gets none of this (WP-278; libc++ `join_view::__sentinel`'s `operator==` calling `__iterator::__get_outer()`; `tests/conformance/class.friend/friend-template-in-nested-class-access.cpp`). [class.protected]: for a non-static
+of `X` and their members ([class.local]/2). A friend function defined in a class `C` is in `C`'s scope ([class.friend]/7): its effective context continues from `C` outward, so it shares the access of `C` and of every enclosing class, including friendship granted to them; this holds for each specialization of a friend function template (the template's in-class declaration, not the namespace-scope specialization, names the lexical class). A friend defined outside the class gets none of this (WP-278; libc++ `join_view::__sentinel`'s `operator==` calling `__iterator::__get_outer()`; `tests/conformance/class.friend/friend-template-in-nested-class-access.cpp`). The signature of a friend function template's specialization (its trailing return type, its noexcept-specifier) is substituted during deduction with the specialization as the access context, so it has the same access as its body: `template<class S> friend auto get(S &&s) -> decltype(s.priv_)` is viable, as in clang (whose `FinishTemplateArgumentDeduction` substitutes a friend's declaration from its lexical context; `friend_template_access_ctx`; WP-789, `tests/conformance/class.friend/friend-template-signature-private-access-run.cpp`). [class.protected]: for a non-static
 protected member named through an object expression or `&P::m`, when only (c)
 via `P` grants access the object's class must be `P` or derived from `P` (`'p'
 is a protected member of 'S'` + note `can only access this member on an object
@@ -273,7 +273,12 @@ privately from the base reaches it through an object of that class
 (`class.protected/member-template-friend-of-derived-run.cpp`, WP-716). Private: `'x' is a private member of 'S'` + `declared private
 here` / `implicitly declared private here`, located at the member's first
 declaration (a member alias template at its `using` keyword, as clang
-locates a `TypeAliasTemplateDecl`; WP-238).
+locates a `TypeAliasTemplateDecl`; WP-238). An implicit special member defined while an alias template is
+substituted with its use's access context (the destructor of a `noexcept`
+operand's temporary) checks its subobjects' special members from itself, as
+clang's `DefiningSynthesizedFunction` context does: a protected base
+destructor is accessible (`push_synth` sets `access_ctx` aside; WP-789,
+`temp.alias/implicit-dtor-defined-in-alias-checks-access-from-itself.cpp`).
 
 **Checked**: every name found by class member or qualified lookup into a class
 (for functions, the one selected by overload resolution), type names included
@@ -2136,7 +2141,10 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   a non-member, the overridden-method search over all bases
   (`overridden_methods`, same name + `is_method_overload` false: same
   parameter-type-list, cv- and ref-qualifiers; operator functions such
-  as `operator()` included, WP-276), implicit virtualness,
+  as `operator()` included, WP-276; a member function template is not
+  searched, since no specialization of it overrides, [temp.mem]/4,
+  WP-789, `tests/conformance/temp.mem/member-template-does-not-override-run.cpp`),
+  implicit virtualness,
   `override` that overrides nothing, overriding a `final` function,
   covariant returns ([class.virtual]/8, `check_override_return`, clang
   `CheckOverridingFunctionReturnType`, with [class.access.base]
@@ -2560,6 +2568,10 @@ access, out-of-line declarator scope.**
   member's class reaches either one (WP-726;
   `class.member.lookup/p8-qualifier-selects-subobject.cpp`,
   `tests/codegen/qualified_member_subobject.cpp`).
+  A `template` keyword before the qualifier (`e.template B<T>::m`,
+  CWG1835) introduces the qualifier's first template-id; only one after
+  the qualifier (`e.N::template f<T>`) applies to the member name (WP-789;
+  `temp.names/template-kw-before-member-qualifier-run.cpp`).
 - *Out-of-line declarator scope* ([dcl.meaning]/1, [basic.scope.class]/1;
   clang `ActOnCXXEnterDeclaratorScope`): after a qualified declarator-id
   the parser calls `act_on_enter_declarator_scope(qualifier) -> usize`,

@@ -61,9 +61,9 @@ impl Sema<'_, '_> {
     /// [temp.names]/3).
     pub fn is_member_template_ref(&self, e: ExprId) -> bool {
         self.member_overload(e).is_some_and(|x| {
-            self.member_overload_decls(x)
-                .iter()
-                .any(|&d| self.kind_of(d) == DeclKind::FunctionTemplate)
+            self.member_overload_decls(x).iter().any(|&d| {
+                matches!(self.kind_of(d), DeclKind::FunctionTemplate | DeclKind::VarTemplate)
+            })
         })
     }
 

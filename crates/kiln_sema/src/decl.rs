@@ -7762,7 +7762,9 @@ impl Sema<'_, '_> {
         }
         let _ = self.builder().begin_record_definition(r);
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
-        self.classes.push(ClassBuild::new(r, tag, self.ctx));
+        let mut build = ClassBuild::new(r, tag, self.ctx);
+        build.heads = self.templ.heads.len();
+        self.classes.push(build);
         self.defining.push(r);
         self.scopes.push(Scope::new(ScopeKind::Record, Some(r)));
         self.ctx = r;
@@ -9223,6 +9225,17 @@ impl Sema<'_, '_> {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
+        // Not found in the current instantiation, which has a dependent
+        // base: a member of an unknown specialization
+        // ([temp.dep.type]/6; `X::B::type` in `X<T> : B<T>`, clang's
+        // `NotFoundInCurrentInstantiation`).
+        if found.decls.is_empty()
+            && let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::CXXRecord
+            && self.has_dependent_bases(q)
+        {
+            return NameClass::Dependent;
+        }
         self.classify_found(&found)
     }
 
@@ -10955,6 +10968,8 @@ fn attr_kind_of(
         ("target", _, true) => AttrKind::TARGET,
         // WP-630: clang `GCC<"nodebug">` and `Clang<"min_vector_width">`.
         ("nodebug", _, true) => AttrKind::NODEBUG,
+        // clang `GCC<"artificial">` (WP-789).
+        ("artificial", _, true) => AttrKind::ARTIFICIAL,
         ("min_vector_width", _, _) if gnu_syntax || clang_scope => AttrKind::MIN_VECTOR_WIDTH,
         _ => return None,
     })
