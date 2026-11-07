@@ -419,6 +419,12 @@ and unqualified `&m` are not member pointers, [expr.unary.op]/4); `.*`/`->*`
 per [expr.mptr.oper]; conversions `DerivedToBaseMemberPointer` /
 `BaseToDerivedMemberPointer` (sema-conv rank rules apply; virtual-base path is
 ill-formed). The constant form is ast.md §9's `MemberPtr` scalar.
+When the left operand's class differs from the member pointer's class,
+`act_on_ptr_mem` requires it complete before the derivation check, which
+instantiates a class template specialization ([temp.inst]/2); an
+incomplete class gets the "left hand operand" error with the forward
+declaration noted, an undefined template only its instantiation error
+(WP-726; `expr.mptr.oper/lhs-instantiates-derived.cpp`, `lhs-incomplete.cpp`).
 
 **Landed (WP-083): member-pointer declarators.** The parser emits
 `Chunk::MemberPointer { qual: Option<Qualifier>, quals, loc }` (parse.md

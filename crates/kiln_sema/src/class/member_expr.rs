@@ -1705,9 +1705,26 @@ impl Sema<'_, '_> {
             let c = self.ast.types.as_record(t)?;
             Some((t, self.ast.definition(c).unwrap_or(c)))
         });
-        let (Some((obj_ty, obj_class)), Some(class)) = (obj, class) else {
+        let (Some((obj_ty, mut obj_class)), Some(class)) = (obj, class) else {
             return self.ptrmem_lhs_error(spelling, arrow, l, r, loc);
         };
+        // The base check needs the object's class complete, which
+        // instantiates a class template specialization ([temp.inst]/2;
+        // clang's `RequireCompleteType` before `IsDerivedFrom`).
+        // An incomplete class gets the error with its forward-declaration
+        // note (none after an undefined template's own error).
+        if obj_class != class {
+            if !self.require_complete(obj_ty, loc) {
+                let msg = self
+                    .diag(DiagId::sema_ptrmem_lhs_incompatible, loc)
+                    .arg(spelling)
+                    .arg(u8::from(arrow))
+                    .arg(self.ty_arg(self.ety(l)));
+                self.emit(self.incomplete_note(msg, obj_ty));
+                return self.recover_err(&[l, r], loc);
+            }
+            obj_class = self.ast.definition(obj_class).unwrap_or(obj_class);
+        }
         if !self.derived_inclusive(obj_class, class) {
             return self.ptrmem_lhs_error(spelling, arrow, l, r, loc);
         }
