@@ -126,7 +126,7 @@ impl Sema<'_, '_> {
     /// class is in the scope of that class ([class.friend]/7), so its
     /// effective context continues there, into the enclosing classes
     /// (clang's `EffectiveContext` walks `getLexicalDeclContext`).
-    fn friend_decl_of(&self, f: DeclId) -> Option<DeclId> {
+    pub(crate) fn friend_decl_of(&self, f: DeclId) -> Option<DeclId> {
         let is_friend = |d: DeclId| self.ast.decls.get(d).misc().friend() != FriendKind::None;
         // A specialization is marked friend too, but declared at
         // namespace scope: the template's own declaration is the one in
