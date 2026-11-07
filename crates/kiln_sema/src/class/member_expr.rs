@@ -279,6 +279,13 @@ impl Sema<'_, '_> {
         // `DiagnoseUseOfDecl`; `&A::operator==` of a defaulted `==`).
         if self.kind_of(d) == DeclKind::CXXMethod {
             self.resolve_exc_for_type(d, loc);
+            // So is a placeholder return type: `&C::f<int>` instantiates
+            // the definition of a member function template specialization
+            // to deduce it ([dcl.spec.auto.general]/12, clang
+            // `DeduceReturnType`).
+            if self.check_undeduced_use(d, loc) {
+                return self.recover_err(&[], loc);
+            }
         }
         let declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         let ty = self.non_reference(declared);

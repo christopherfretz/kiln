@@ -556,7 +556,11 @@ impl Sema<'_, '_> {
                     return Some(r);
                 }
                 let rt = self.ety(r);
-                if self.ast.types.is_array(rt) {
+                // A pointer to the array itself (`int (*)[2]`, the argument
+                // `&arr`) takes its address below.
+                let to_array =
+                    self.ast.types.pointee(ty).is_some_and(|p| self.ast.types.is_array(p));
+                if self.ast.types.is_array(rt) && !to_array {
                     // `arr` as a pointer argument: the array decays ([conv.array]).
                     return crate::conv::implicit_convert(
                         self,

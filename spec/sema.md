@@ -1143,7 +1143,13 @@ Redeclaration and linkage rules:
   `return` deduces, later ones must agree (clang's
   `'auto' in return type deduced as ... here but deduced as ...`),
   and a use before deduction is `function 'f' with deduced return type
-  cannot be used before it is defined`. A redeclaration
+  cannot be used before it is defined`. Every use checks this
+  (`check_undeduced_use`), `&C::f` included (`member_ref_without_object`):
+  a specialization instantiates its definition first, so
+  `&C::f<int>` of a member function template has the deduced type
+  (WP-690,
+  `tests/conformance/dcl.spec.auto/member-template-address-deduced.cpp`).
+  A redeclaration
   ([dcl.spec.auto.general]/13) is matched against the declared
   placeholder type (`declared_fn_type`, kept in `declared_returns`), not
   the deduced one, and then adopts the deduced type

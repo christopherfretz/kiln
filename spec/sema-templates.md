@@ -3999,7 +3999,11 @@ The `SpecKind` transitions are those of §4.5.
   lvalue). Substitution (`subst/exprs.rs::value_literal` →
   `nttp_value_expr`) builds the replacement: a `DeclRefExpr` to the
   object (class), the entity (reference), `&entity` / the decayed array
-  (pointer), `nullptr` converted to the parameter type, or, for a
+  (pointer; an array is not decayed for a parameter of pointer-to-array
+  type, where `&arr` is the argument: `template<auto D>` with
+  `D = &C::arr`, WP-690,
+  `tests/conformance/temp.arg.nontype/pointer-to-array-argument.cpp`),
+  `nullptr` converted to the parameter type, or, for a
   non-null pointer to member (WP-415), `&C::m` of the member's declaring
   class `C` (an `AddrOf` of a `DeclRefExpr` to the member, as
   `member_pointer_of` builds it) converted to the parameter type along
