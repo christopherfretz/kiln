@@ -352,7 +352,9 @@ impl Sema<'_, '_> {
     /// first; `braced` the braced-init-list operands): an overloaded
     /// operator if an operand has class or enumeration type
     /// ([over.match.oper]/1). `end` is the `)`/`]` of a call or subscript.
-    /// `rewrites`: rewritten comparison candidates are considered.
+    /// Rewritten and reversed comparison candidates ([over.match.oper]/3.4)
+    /// are C++20's: before it, `a != b` never considers `operator==`
+    /// (clang `CreateOverloadedBinOp`).
     pub(crate) fn try_overloaded_operator(
         &mut self,
         form: OperForm,
@@ -361,7 +363,8 @@ impl Sema<'_, '_> {
         loc: Loc,
         end: Loc,
     ) -> OperResult {
-        self.overloaded_operator(form, args, braced, loc, end, true)
+        let rewrites = self.std >= kiln_lex::Std::Cxx20;
+        self.overloaded_operator(form, args, braced, loc, end, rewrites)
     }
 
     #[allow(clippy::too_many_lines, reason = "clang's candidate order, then each outcome")]
@@ -859,8 +862,11 @@ impl Sema<'_, '_> {
 
     /// clang `shouldAddReversed`: whether operator function `d` has a
     /// reversed candidate when `o` is its first operand in the reversed
-    /// form ([over.match.oper]/3.4.4, P2468).
+    /// form ([over.match.oper]/3.4.4, P2468). Never before C++20.
     pub(crate) fn should_add_reversed(&mut self, d: DeclId, o: ExprId) -> bool {
+        if self.std < kiln_lex::Std::Cxx20 {
+            return false;
+        }
         let fd = if self.kind_of(d) == DeclKind::FunctionTemplate {
             match self.pattern_of(d) {
                 Some(p) => p,

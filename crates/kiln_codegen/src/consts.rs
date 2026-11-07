@@ -152,7 +152,7 @@ impl Cg<'_> {
     }
 
     /// A scalar constant of IR type `t`.
-    fn scalar_const(&mut self, s: Scalar<'_>, t: LTy) -> R<Value> {
+    pub(crate) fn scalar_const(&mut self, s: Scalar<'_>, t: LTy) -> R<Value> {
         match s {
             Scalar::Int { bits, signed, .. } => {
                 if let Some(v) = self.extended_int_const(&bits, signed, t) {

@@ -5873,6 +5873,7 @@ impl Sema<'_, '_> {
             self.check_in_class_static_init(v, e);
         }
         self.warn_constant_evaluated_init(v, e);
+        self.check_contract_init(v, e);
     }
 
     /// `ty` with its referenced array of unknown bound replaced by `ety`,
@@ -8931,7 +8932,22 @@ impl Sema<'_, '_> {
             Some(d) => d,
             None => match self.specialization_member(tmpl, name) {
                 Some(d) => d,
-                None => return NameClass::Dependent,
+                // A member template of a class template specialization
+                // whose definition is not instantiated yet (`TO<int>::FSS`
+                // named by an alias template's pattern, LLVM's
+                // `TrailingObjects::FixedSizeStorage`): classified in the
+                // member template it was instantiated from, as for
+                // `TO<int>::FSS<T>::name` (WP-730).
+                None => match self.ast.instantiated_from(tmpl) {
+                    Some(from)
+                        if from != tmpl
+                            && self.ast.definition(p).is_none()
+                            && self.kind_of(from) == DeclKind::ClassTemplate =>
+                    {
+                        return self.classify_template_member(from, name);
+                    }
+                    _ => return NameClass::Dependent,
+                },
             },
         };
         let k = self.kind_of(self.ast.strip_shadow(d));
@@ -9846,6 +9862,42 @@ impl Sema<'_, '_> {
             };
             let node = AttrNode { kind, syntax, flags: 0, loc, a: 0, b: t.to_raw() };
             return Some(self.ast.attrs.push(node));
+        }
+        // clang `handleDeprecatedAttr`: `deprecated(message, replacement)`
+        // takes an optional second string, the replacement a fix-it
+        // offers, but only in the GNU spelling (LLVM's `LLVM_DEPRECATED`);
+        // `[[deprecated]]` and `__declspec` take at most a message (an
+        // error that still applies the attribute with its message).
+        let mut args = args;
+        if kind == AttrKind::DEPRECATED && args.len() > 2 {
+            let msg = self
+                .diag(DiagId::sema_attribute_too_many_arguments, loc)
+                .arg(format!("'{shown}'"))
+                .arg("2");
+            self.emit(msg);
+            return None;
+        }
+        if kind == AttrKind::DEPRECATED && args.len() == 2 {
+            let lit = |s: &Self, a: &AttrArg| match a {
+                AttrArg::Expr(e) => s.string_lit_of(*e).is_some(),
+                _ => false,
+            };
+            if syntax == AttrSyntax::Gnu && lit(self, &args[0]) && !lit(self, &args[1]) {
+                let at = match args[1] {
+                    AttrArg::Expr(e) => self.ast.exprs.get(e).loc(),
+                    _ => loc,
+                };
+                let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg(n.clone());
+                self.emit(msg);
+                return None;
+            }
+            if syntax != AttrSyntax::Gnu && lit(self, &args[0]) {
+                let msg = self
+                    .diag(DiagId::sema_attribute_too_many_arguments_one, loc)
+                    .arg(format!("'{shown}'"));
+                self.emit(msg);
+            }
+            args = &args[..1];
         }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,

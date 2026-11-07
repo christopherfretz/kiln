@@ -483,6 +483,12 @@ pub struct Oven {
     /// The next outermost evaluation checks for undefined behaviour
     /// ([`Oven::fold_for_overflow`]).
     ub_check_next: bool,
+    /// The next outermost evaluation ignores every contract assertion
+    /// (`vm::RunState::contracts_off`).
+    contracts_off_next: bool,
+    /// The outermost evaluation met a contract violation
+    /// ([basic.contract.eval]/7; [`Oven::check_contract_init`]).
+    pub(crate) contract_violated: bool,
     /// The next outermost evaluation is [`Oven::evaluate_call`]'s
     /// (`vm::Run::potential`).
     potential_next: bool,
@@ -613,6 +619,8 @@ impl Oven {
             cxx_year: 2026,
             cev_warn_next: false,
             ub_check_next: false,
+            contracts_off_next: false,
+            contract_violated: false,
             potential_next: false,
             plain_next: false,
             void_next: false,
@@ -1013,6 +1021,58 @@ impl Oven {
         self.cev_warn_next = false;
     }
 
+    /// The contract assertions of the initialization `e` of variable
+    /// `var` that is not checked as `constexpr` or `constinit`
+    /// ([expr.const.init]/4.1, spec/contracts.md §6.4): whether it is
+    /// constant-initialized is decided with every contract assertion
+    /// ignored; if it is, the initialization is manifestly
+    /// constant-evaluated with the translation unit's semantic, so a
+    /// violation under a terminating semantic is an error (GCC's wording,
+    /// at the assertion, with the call stack) and one under observe a
+    /// warning. Sema calls it only when the translation unit has contract
+    /// assertions; an initialization that violates none costs one silent
+    /// evaluation. Not recorded.
+    pub fn check_contract_init(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, var: DeclId) {
+        if self.ctx_depth != 0 {
+            return;
+        }
+        let _ = self.eval_ctx(bridge, e, Some(var), true, false, true);
+        if !std::mem::take(&mut self.contract_violated) {
+            return;
+        }
+        self.contracts_off_next = true;
+        let constant = self.eval_ctx(bridge, e, Some(var), true, false, true).0.is_ok();
+        self.contracts_off_next = false;
+        if !constant {
+            // Dynamic initialization: the assertions are checked at run
+            // time.
+            return;
+        }
+        let (r, _) = self.eval_ctx(bridge, e, Some(var), false, false, true);
+        let violated = std::mem::take(&mut self.contract_violated);
+        let Err(f) = r else { return };
+        if f.notes.is_empty() {
+            return;
+        }
+        let mut notes = f.notes.into_iter();
+        // A violation's note is GCC's message; otherwise a predicate
+        // failed to be a constant (the rest of the evaluation is one,
+        // as the decision above found), noted by its own reason.
+        let (id, loc, first) = if violated {
+            let n = notes.next().map(|n| n.loc).unwrap_or_default();
+            (kiln_diag::DiagId::oven_contract_predicate_false, n, None)
+        } else {
+            let n = notes.next();
+            let loc = n.as_ref().map(|n| n.loc).unwrap_or_default();
+            (kiln_diag::DiagId::oven_contract_condition_not_constant, loc, n)
+        };
+        let mut d = Diag::new(id, kiln_source::Span::empty(loc)).allow_duplicate();
+        for n in first.into_iter().chain(notes) {
+            d = d.note(n.msg, kiln_source::Span::empty(n.loc));
+        }
+        bridge.diag(d);
+    }
+
     /// Whether `var`'s initializer is a constant initializer
     /// ([basic.start.static]/2): it evaluates successfully as a constant
     /// expression. Not recorded in the statistics. An initializer in the
@@ -1364,6 +1424,8 @@ impl Oven {
         self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
         self.run.ub_check = std::mem::take(&mut self.ub_check_next);
         self.run.potential = std::mem::take(&mut self.potential_next);
+        self.run.contracts_off = std::mem::take(&mut self.contracts_off_next);
+        self.contract_violated = false;
         self.run.overflows.clear();
         self.run.plain = std::mem::take(&mut self.plain_next);
         self.run.counters = vm::Counters::default();

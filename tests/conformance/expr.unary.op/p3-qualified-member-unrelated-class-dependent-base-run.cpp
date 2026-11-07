@@ -7,7 +7,8 @@
 // operand. Unrelated at instantiation, `&Int::f` must still be valid.
 // abseil absl/functional/any_invocable_test.cc (`&Int::MemberFunctionAdd`
 // in a gtest typed test, WP-686). An overload set (`&Int::f` naming two
-// members) is not covered yet. Verified against clang 19.
+// members) is p3-qualified-overload-set-dependent-base-run.cpp (WP-715).
+// Verified against clang 19.
 //@ expect: run
 //@ stdout: 6 8 12
 #include <cstdio>
