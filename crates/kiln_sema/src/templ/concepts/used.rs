@@ -211,8 +211,8 @@ impl Sema<'_, '_> {
                 Some(p) => self.used_in_nns(p, u, depth + 1),
                 None => Some(()),
             },
-            #[allow(unreachable_patterns)]
-            _ => None,
+            // A splice's operand is not walked.
+            Nns::Splice(_) => None,
         }
     }
 
