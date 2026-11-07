@@ -742,5 +742,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-722 | parse: `throw(Ts...)` dynamic exception specification with a pack expansion (spec/parse.md:1927) | WP-709 | open |
 | WP-723 | sema: substituting `ExcSpec::DependentNoexcept` is unimplemented (`crates/kiln_sema/src/templ/subst/types.rs:365`) | WP-709 | open |
 | WP-725 | diag: implement -Wdeprecated-copy and subgroups (group names only today, `crates/kiln_diag/src/clang_groups.rs:243`) | WP-720 | open |
+| WP-727 | harness: oss-build.sh tag check warns when two tags point at the checkout (`scripts/oss/oss-build.sh:67`; use `git tag --points-at HEAD`) | WP-716 | open |
+| WP-728 | sema: diagnose conflicting `section` placements (clang err_section_conflict; `crates/kiln_sema/src/decl.rs:9971`) | WP-716 | open |
+| WP-729 | perf: profile protobuf summed compile time (2.65x clang-19; docs/status/oss/protobuf.md) | WP-716 | open |
 WP-511
 WP-512
