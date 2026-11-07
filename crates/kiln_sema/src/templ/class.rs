@@ -361,7 +361,28 @@ impl Sema<'_, '_> {
                 let q = self.ast.types.qualify(ca, cp.quals());
                 return self.ast.types.canonical(q) == ct;
             }
-            TypeView::TemplateSpecialization { .. } => return true,
+            // A specialization recurses into its arguments (clang's
+            // `isSubstitutedType` on a `TemplateSpecializationType`)
+            // before the substitution is made: substituting
+            // `Set<typename GT<G>::NodeRef>` for a written `Set<N*>`
+            // would instantiate `GT<N*>` merely to print the name, ahead
+            // of a later explicit specialization ([temp.expl.spec]/7).
+            TypeView::TemplateSpecialization { args: pargs, .. } => {
+                let targs =
+                    types.as_record(ct).and_then(|r| self.ast.spec_info(r)).map(|(_, x)| x.args);
+                let Some(targs) = targs else { return true };
+                let pa: Vec<TemplateArg> = types.args(pargs).to_vec();
+                let ta: Vec<TemplateArg> = types.args(targs).to_vec();
+                if pa.len() != ta.len() {
+                    return true;
+                }
+                return pa.iter().zip(&ta).all(|(p, a)| match (p.view(), a.view()) {
+                    (ArgView::Type(p), ArgView::Type(a)) => {
+                        self.default_shape_matches(a, p, prefix, depth)
+                    }
+                    _ => true,
+                });
+            }
             _ => {}
         }
         if ct.quals() != cp.quals() {
