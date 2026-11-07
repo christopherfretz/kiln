@@ -2769,7 +2769,7 @@ impl Sema<'_, '_> {
     /// `__builtin_FUNCTION` (`Function`: the unqualified name) and
     /// `_M_function_name` (`PrettyFunction`); both empty outside a
     /// function.
-    fn predefined_function_names(&self, ctx: DeclId) -> (String, String) {
+    pub(crate) fn predefined_function_names(&self, ctx: DeclId) -> (String, String) {
         if !self.ast.decls.get(ctx).kind().is_function() {
             return (String::new(), String::new());
         }

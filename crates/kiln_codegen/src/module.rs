@@ -135,6 +135,11 @@ pub(crate) struct Cg<'a> {
     /// The `.constant` globals of frozen constant objects (clang
     /// `GetAddrOfUnnamedGlobalConstantDecl`), by value.
     pub const_objects: FxHashMap<kiln_ast::ConstValueId, GlobalId>,
+    /// The constant `contract_violation` objects, per assertion and
+    /// detection mode (spec/contracts.md §6.3).
+    pub contract_objects: FxHashMap<(kiln_ast::StmtId, u16), Value>,
+    /// Whether a checked contract assertion was emitted.
+    pub contract_checked: bool,
     /// The outermost default argument being emitted that holds a
     /// source-location builtin (clang `SourceLocExprScopeGuard`).
     pub srcloc: Option<kiln_ast::ExprId>,
@@ -357,6 +362,8 @@ impl<'a> Cg<'a> {
             named: FxHashMap::default(),
             named_base: FxHashMap::default(),
             const_objects: FxHashMap::default(),
+            contract_objects: FxHashMap::default(),
+            contract_checked: false,
             srcloc: None,
             static_locals: FxHashMap::default(),
             consteval_only: FxHashMap::default(),
@@ -454,6 +461,7 @@ impl<'a> Cg<'a> {
         self.emit_vtables_opportunistically()?;
         self.resolve_placeholders()?;
         self.emit_global_init_trailer()?;
+        self.emit_contract_defaults()?;
         self.trailer();
         Ok(())
     }

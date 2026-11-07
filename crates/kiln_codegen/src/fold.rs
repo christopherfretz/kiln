@@ -308,6 +308,14 @@ impl Collect<'_> {
                             }
                         }
                         self.stmt(body);
+                        // Its contract assertions (spec/contracts.md §6.3).
+                        if ast.contract_semantic.checks()
+                            && let Some(l) = ast.function_contracts(d)
+                        {
+                            for c in ast.lists.iter::<StmtId>(l) {
+                                self.stmt(c);
+                            }
+                        }
                     }
                 }
                 DeclKind::Var if !is_local(ast, d) => self.var(d, true),
@@ -469,6 +477,9 @@ impl Collect<'_> {
                 }
             }
             StmtKind::IndirectGotoStmt => self.expr(ast.stmts.indirect_goto_target(s)),
+            StmtKind::ContractAssertStmt if ast.contract_semantic.checks() => {
+                self.expr(ast.stmts.contract_cond(s));
+            }
             StmtKind::GCCAsmStmt => {
                 for op in ast.stmts.asm_operands(s) {
                     self.expr(op.expr);
