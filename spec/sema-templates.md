@@ -3754,7 +3754,12 @@ guides.
    reference and how it was qualified.
 4. **Deduce both ways.** `f1` is at least as specialized as `f2` if
    deducing f2's params from f1's synthesized types succeeds for every
-   pair. Packs follow /8–11. The last tie-breaker for packs is
+   pair. A constant `P` argument (`f(ie<I, 1>)`) does not deduce from a
+   value-dependent `A` argument (the other side's `N`): it is a
+   mismatch, as clang's integral `P` against an expression `A`
+   (`check_nondeduced_value`; WP-669,
+   `tests/conformance/temp.func.order/p3-constant-argument-more-specialized.cpp`).
+   Packs follow /8–11. The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
 5. **Constraints.** If both directions succeed, the more constrained one
    wins ([temp.func.order]/6, P2113; subsumption §8.4), but only when the
