@@ -2146,6 +2146,11 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
   (`-Wundefined-var-template` stays clang's, below).
   `tests/conformance/temp.point/var-template-end-of-tu-instantiation-run.cpp`,
   `var-template-defined-after-reference-run.cpp`.
+- A static data member's instantiated out-of-line definition keeps the
+  pattern definition's `constinit` ([dcl.constinit]/1): it is the
+  initializing declaration with `constinit`, so `template<class I>
+  constinit T C<I>::m{};` gives no "'constinit' specifier missing"
+  warning.
 - Other variables are queued in `pending` when they are odr-used.
   That includes an inline static data member whose in-class initializer
   was deferred (§4.4; `deferred_inits`): the drain instantiates its
