@@ -266,7 +266,11 @@ is a protected member of 'S'` + note `can only access this member on an object
 of type 'D'`; for a constructor or destructor, or a constructor template,
 the note is `protected constructor can only be used to construct a base class
 subobject` / `... destructor ... destroy ...`, clang `TryDiagnoseProtectedAccess`;
-`class.protected/ctor-restricted-note.cpp`, WP-680). Private: `'x' is a private member of 'S'` + `declared private
+`class.protected/ctor-restricted-note.cpp`, WP-680). A member function
+template is non-static when its pattern is: the object's class is checked
+for it as for a member function, so a friend of a class that derives
+privately from the base reaches it through an object of that class
+(`class.protected/member-template-friend-of-derived-run.cpp`, WP-716). Private: `'x' is a private member of 'S'` + `declared private
 here` / `implicitly declared private here`, located at the member's first
 declaration (a member alias template at its `using` keyword, as clang
 locates a `TypeAliasTemplateDecl`; WP-238).
