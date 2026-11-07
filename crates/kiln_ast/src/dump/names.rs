@@ -338,7 +338,13 @@ impl<'a> AstNames<'a> {
             if spec_args && !self.is_unnamed(ctx) {
                 if let Some(args) = self.ast.spec_print_args(ctx) {
                     if self.scoped_spec_args {
-                        crate::types::write_arg_list_scoped_of(&self.ast.types, self, ctx, args, out);
+                        crate::types::write_arg_list_scoped_of(
+                            &self.ast.types,
+                            self,
+                            ctx,
+                            args,
+                            out,
+                        );
                     } else {
                         crate::types::write_arg_list_of(&self.ast.types, self, ctx, args, out);
                     }

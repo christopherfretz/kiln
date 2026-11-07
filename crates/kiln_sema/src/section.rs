@@ -66,8 +66,9 @@ impl Sema<'_, '_> {
             // A dependent initializer is not checked (clang keeps
             // `HasConstInit`).
             let constant = match init {
-                Some(e) if !self.ast.types.is_dependent(ty)
-                    && !self.ast.exprs.get(e).is_value_dependent() =>
+                Some(e)
+                    if !self.ast.types.is_dependent(ty)
+                        && !self.ast.exprs.get(e).is_value_dependent() =>
                 {
                     self.is_constant_initialized(v)
                 }
