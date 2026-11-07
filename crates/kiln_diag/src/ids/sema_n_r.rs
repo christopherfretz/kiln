@@ -154,6 +154,7 @@ sema_partial_spec_redecl_scope = Error (2) "class template partial specializatio
 sema_placeholder_ambiguous = Error (1) "ambiguous reference to placeholder '{0}', which is defined multiple times";
 sema_placeholder_constraints_not_satisfied = Error (2) "deduced type {0} does not satisfy {1}";
 sema_placement_new_no_operator = Error (1) "no matching {0} function for non-allocating placement new expression; include <new>";
+sema_placement_new_non_placement_delete = Error (0) "'new' expression with placement arguments refers to non-placement 'operator delete'";
 // ----- WP-211 (GNU _Complex)
 sema_plain_complex = Warning (0) "plain '_Complex' requires a type specifier; assuming '_Complex double'";
 sema_pointer_to_reference = Error (2) "'{0}' declared as a pointer to a reference of type {1}";

@@ -43,6 +43,7 @@ sema_ambiguous_member_pointer_conv = Error (4) "ambiguous conversion from pointe
 sema_ambiguous_member_subobjects = Error (3) "non-static member '{0}' found in multiple base-class subobjects of type {1}:{2}";
 sema_ambiguous_member_types = Error (1) "member '{0}' found in multiple base classes of different types";
 sema_ambiguous_reference = Error (1) "reference to '{0}' is ambiguous";
+sema_ambiguous_suitable_delete = Warning [AmbiguousDelete] (2) "multiple suitable {0} functions for {1}; no 'operator delete' function will be invoked if initialization throws an exception";
 // WP-509 (spec/sema.md §7.5.1): kiln-only, no clang counterpart.
 sema_analysis_skipped = Remark [KilnAnalysisSkipped] (2) "flow-sensitive warnings for '{0}' skipped: its control-flow graph exceeds -fkiln-cfg-max-elems={1}";
 sema_annotation_non_declaration = Error (0) "an annotation can appertain only to a declaration";
