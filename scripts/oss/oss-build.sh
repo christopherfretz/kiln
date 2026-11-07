@@ -86,6 +86,9 @@ SRC="$OSS/src/$PROJECT"
 BUILD="$OSS/build/$PROJECT/$COMPILER${INSTALL:+-dep}"
 mkdir -p "$OSS/src" "$BUILD"
 export KILN_OSS_LOG="$BUILD/compile.jsonl"
+# The wrapper's address-space cap: the project's `vmem_kb` (default
+# 3000000, at most 6000000) unless the caller set KILN_OSS_VMEM_KB.
+export KILN_OSS_VMEM_KB="${KILN_OSS_VMEM_KB:-$P_VMEM_KB}"
 : > "$KILN_OSS_LOG"
 rm -f "$BUILD/report.json" "$BUILD/configure.log" "$BUILD/build.log" "$BUILD/test.log"
 
@@ -158,7 +161,7 @@ if [ "$CONF_RC" = 0 ]; then
     # under /tmp (leveldb's /tmp/leveldbtest-<uid>) must not collide when the
     # kiln and clang builds, or two checkouts, run their tests at once.
     TTMP="$BUILD/test-tmp"; mkdir -p "$TTMP" && find "$TTMP" -mindepth 1 -delete
-    (cd "$tdir" && TMPDIR="$TTMP" TEST_TMPDIR="$TTMP" timeout 1800 nice -n 10 bash -c "$P_TEST") > "$BUILD/test.log" 2>&1
+    (cd "$tdir" && TMPDIR="$TTMP" TEST_TMPDIR="$TTMP" timeout "$P_TEST_TIMEOUT" nice -n 10 bash -c "$P_TEST") > "$BUILD/test.log" 2>&1
     TEST_RC=$?
     echo "oss-build: test rc=$TEST_RC ($BUILD/test.log)"
   fi

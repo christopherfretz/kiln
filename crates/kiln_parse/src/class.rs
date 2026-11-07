@@ -561,8 +561,17 @@ impl Parser<'_, '_> {
     /// The base-clause and `{ member-specification }` of class `r`
     /// ([class.pre], [class.mem]; spec/sema-class.md §2.1), at `:` or
     /// `{`; `final_loc` is its class-virt-specifier. For the outermost
-    /// class, then replays the saved complete-class contexts.
-    pub(crate) fn parse_record_body(&mut self, r: DeclId, final_loc: Option<Loc>) {
+    /// class, then replays the saved complete-class contexts. `in_type_id`
+    /// says the class is defined in a type-id (`using A = struct {...};`),
+    /// where a following `;` does not make it an anonymous struct or
+    /// union ([class.union.anon]/1 needs a declaration with no
+    /// declarators).
+    pub(crate) fn parse_record_body(
+        &mut self,
+        r: DeclId,
+        final_loc: Option<Loc>,
+        in_type_id: bool,
+    ) {
         let saved = mem::take(&mut self.late_fn);
         let nested = !self.late.is_empty();
         self.late.push(LateClass { record: r, items: Vec::new() });
@@ -596,7 +605,7 @@ impl Parser<'_, '_> {
         } else {
             self.s.error(DiagId::parse_expected_lbrace_after_base, self.prev_end());
         }
-        let then_semi = self.at(Punct::Semi);
+        let then_semi = !in_type_id && self.at(Punct::Semi);
         self.trace(|p| {
             format!(
                 "finish_record_definition({}, {})",

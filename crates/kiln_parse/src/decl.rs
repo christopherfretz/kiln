@@ -2030,7 +2030,7 @@ impl Parser<'_, '_> {
             if keyword == TagKeyword::Enum {
                 self.parse_enum_body(d);
             } else {
-                self.parse_record_body(d, final_loc);
+                self.parse_record_body(d, final_loc, ctx == DeclaratorContext::TypeName);
             }
             self.s.act_on_exit_declarator_scope(entered);
         }
@@ -2151,7 +2151,8 @@ impl Parser<'_, '_> {
                         // are looked up in `Outer<T>` too ([class.nest]/3).
                         let entered =
                             qualifier.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
-                        self.parse_record_body(d, final_loc);
+                        // Named, so never anonymous.
+                        self.parse_record_body(d, final_loc, false);
                         self.s.act_on_exit_declarator_scope(entered);
                     }
                     None => self.skip_class_body(),

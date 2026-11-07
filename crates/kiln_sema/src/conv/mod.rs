@@ -1030,7 +1030,10 @@ fn qualify_prvalue(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> ExprId {
     {
         let ck = s.ast.exprs.cast_kind(e);
         let op = s.ast.exprs.operand(e);
-        return raw_cast(s, ck, op, to, ValueCategory::PRValue, None);
+        // The retyped cast keeps its base path: `S *const &r = u;` with
+        // `u` a `U *` is still a derived-to-base adjustment (WP-782).
+        let path = s.ast.exprs.cast_path(e);
+        return raw_cast(s, ck, op, to, ValueCategory::PRValue, path);
     }
     raw_cast(s, CastKind::NoOp, e, to, ValueCategory::PRValue, None)
 }

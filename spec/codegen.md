@@ -547,6 +547,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`,
       `__builtin_return_address(n)` `call ptr @llvm.returnaddress(i32 n)`
       (WP-432, `builtins_return_address.cpp`).
+      `__builtin_thread_pointer()` is `call ptr @llvm.thread.pointer()`,
+      `@llvm.thread.pointer.p0()` when the consuming LLVM
+      (`CodegenOptions::llvm_major`) is 20 or later, where the intrinsic
+      became address-space overloaded (an LLVM 19 backend leaves the
+      `.p0` name an undefined symbol), declared
+      `memory(none)` (WP-782, `builtins_thread_pointer.cpp`).
       `__builtin_prefetch(p, rw, loc)` is `call void
       @llvm.prefetch.p0(ptr p, i32 rw, i32 loc, i32 1)` (defaults `rw` 0,
       `loc` 3; the trailing 1 selects the data cache), the intrinsic
@@ -1365,7 +1371,8 @@ The normative description is spec/driver.md "Code generation". In short:
   every level. The oracle-22 `DEVIATIONS` entries record the rest of
   what clang 20-22 changed: AArch64 aggregates of pointers
   coerced to `ptr`/`[N x ptr]` (19: integers), `(unnamed struct)` in IR
-  type names, `llvm.modf`, and `-O0` instruction
+  type names, `llvm.modf`, `llvm.thread.pointer.p0` (kiln names the
+  intrinsic for the LLVM it drives, `llvm_major`), and `-O0` instruction
   choices (atomic temporaries, `select` for vector `?:`, constant-folded
   reductions, `undef` widening shuffles, `delete` block order). clang
   22's IR for a `bool` vector element store fails verification

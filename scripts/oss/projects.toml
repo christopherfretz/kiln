@@ -319,6 +319,21 @@ wave = 3
 verified = true
 notes = "lib/Support + lib/ADT unit tests only. Same release as the libc++ 19 test suite; the shallow clone is ~2 GB."
 
+[llvm_full]
+url = "https://github.com/llvm/llvm-project"
+tag = "llvmorg-19.1.7"
+build = "cmake"
+source_subdir = "llvm"
+cxx_std = 17
+configure = ["-DLLVM_TARGETS_TO_BUILD=AArch64;X86", "-DLLVM_ENABLE_PROJECTS=", "-DLLVM_ENABLE_ASSERTIONS=ON", "-DLLVM_INCLUDE_TESTS=ON", "-DLLVM_INCLUDE_BENCHMARKS=OFF", "-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_ENABLE_ZSTD=OFF", "-DLLVM_ENABLE_LIBXML2=OFF", "-DLLVM_LIT_ARGS=-sv -j 4"]
+build_targets = ["all", "llvm-test-depends", "UnitTests"]
+test = "make check-llvm"
+test_timeout = 10800
+c_compiler = "clang-19"
+wave = 4
+verified = false
+notes = "WP-782: all of llvm/ with the AArch64 and X86 backends, every tool, the unit tests and check-llvm (lit + unit tests, lit capped at -j 4). Release with assertions, no debug info. Shares the llvm_project checkout's tag; its own shallow clone."
+
 [folly]
 url = "https://github.com/facebook/folly"
 tag = "v2026.10.26.00"
