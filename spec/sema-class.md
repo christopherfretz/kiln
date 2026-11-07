@@ -2129,7 +2129,10 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   a non-member, the overridden-method search over all bases
   (`overridden_methods`, same name + `is_method_overload` false: same
   parameter-type-list, cv- and ref-qualifiers; operator functions such
-  as `operator()` included, WP-276), implicit virtualness,
+  as `operator()` included, WP-276; a member function template is not
+  searched, since no specialization of it overrides, [temp.mem]/4,
+  WP-789, `tests/conformance/temp.mem/member-template-does-not-override-run.cpp`),
+  implicit virtualness,
   `override` that overrides nothing, overriding a `final` function,
   covariant returns ([class.virtual]/8, `check_override_return`, clang
   `CheckOverridingFunctionReturnType`, with [class.access.base]
