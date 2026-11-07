@@ -2027,8 +2027,8 @@ class name" at `B`
 - `A` followed by `<`, or used as a template template argument, is the
   template-name ([temp.local]/1–2). The parser forms such an argument as
   a type; `template_id` converts it to the template when the
-  corresponding parameter of a class, alias or variable template is a
-  template template parameter (`injected_template_args`, clang's
+  corresponding parameter of a class, alias or variable template or of
+  a concept is a template template parameter (`injected_template_args`, clang's
   `convertTypeTemplateArgumentToTemplate`), so substitution never sees
   the injected type there (libc++ `__split_buffer:160`
   `__split_buffer_pointer_layout<__split_buffer<…>, …>`, WP-398). Test:

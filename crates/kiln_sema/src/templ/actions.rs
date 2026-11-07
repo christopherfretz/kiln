@@ -2146,7 +2146,10 @@ impl Sema<'_, '_> {
         let d = self.ast.types.template_decl(name)?;
         if !matches!(
             self.kind_of(d),
-            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate | DeclKind::VarTemplate
+            DeclKind::ClassTemplate
+                | DeclKind::TypeAliasTemplate
+                | DeclKind::VarTemplate
+                | DeclKind::Concept
         ) {
             return None;
         }
