@@ -812,6 +812,16 @@ impl Substituter<'_, '_, '_> {
         // redeclaring a function keeps that function's own as well, on
         // its earlier declarations.
         self.class_attrs(f, d);
+        // The pattern's GNU `noreturn` function type (spec/types.md §5.4;
+        // clang's `TransformFunctionProtoType` keeps the `ExtInfo`): the
+        // rebuilt declarator carries no attributes, so the bit is set on
+        // the instantiation's type here (WP-749).
+        if info.noreturn()
+            && let Some(ft) = self.sema.ast.decls.get(f).ty()
+            && let Some(nt) = self.sema.with_fn_noreturn(ft, true, false)
+        {
+            self.sema.ast.decls.set_ty(f, nt);
+        }
         // [expr.prim.this]/3: `this` in a static member function's
         // *noexcept-specifier* is diagnosed again in each instantiation
         // of the class, at the pattern's `this` (clang

@@ -3344,6 +3344,17 @@ impl Parser<'_, '_> {
                         exc = Some(self.parse_exception_spec());
                         self.s.act_on_end_this_scope(this);
                     }
+                    // [except.spec]/2 (C++14): no exception specification
+                    // in a typedef or alias-declaration (clang
+                    // `err_exception_spec_in_typedef`; the type keeps it).
+                    let alias = d.site == DeclSite::Alias;
+                    if self.std < Std::Cxx17 && (d.typedef || alias) {
+                        let e = self
+                            .s
+                            .diag(DiagId::sema_exception_spec_in_typedef, loc)
+                            .arg(u8::from(alias));
+                        self.emit(e);
+                    }
                 }
                 _ if exc.is_none()
                     && ref_qual == RefQual::None
