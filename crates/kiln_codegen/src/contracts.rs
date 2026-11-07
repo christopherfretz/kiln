@@ -80,20 +80,18 @@ impl Cg<'_> {
     /// after the result is initialised and the locals (and a destructor's
     /// members and bases) are destroyed; the result name denotes the
     /// return slot. An exception exit never reaches the return block.
+    ///
+    /// A coroutine's return block follows `coro.end`, so only the ramp
+    /// reaches it (the resume and destroy clones return at `coro.end`):
+    /// the postconditions run once, when the coroutine first returns to
+    /// its caller, and the result name denotes the return object that
+    /// `get_return_object()` initialised (P2900R14 §3.5.2,
+    /// [dcl.fct.def.coroutine]/7, spec/contracts.md §6.2).
     pub(crate) fn emit_postconditions(&mut self, d: DeclId) -> R<()> {
         if !self.ast.contract_semantic.checks() || self.f.fir.cur().is_none() {
             return Ok(());
         }
-        let posts = self.contracts_of(d, ContractKind::Post);
-        if let Some(&s) = posts.first()
-            && self.f.coro.is_some()
-        {
-            return err(
-                Some(self.ast.stmts.get(s).loc()),
-                "unsupported: postcondition of a coroutine (spec/contracts.md §9)",
-            );
-        }
-        for s in posts {
+        for s in self.contracts_of(d, ContractKind::Post) {
             if let Some(r) = self.ast.stmts.contract_result_name(s) {
                 let Some(slot) = self.f.ret_slot else {
                     return err(Some(self.ast.stmts.get(s).loc()), "result name without a result");

@@ -243,17 +243,21 @@ struct task {\n\
 };\n\
 ";
 
-// [dcl.contract.func], [dcl.fct.def.coroutine]: a coroutine's
-// precondition runs at entry, before the frame is set up; its
-// postcondition is unsupported in codegen (spec/contracts.md §9) and is a
-// clean error rather than a silently skipped check.
+// [dcl.contract.func], [dcl.fct.def.coroutine], P2900R14 §3.5.2: a
+// coroutine's precondition runs at entry, before the frame is set up; its
+// postcondition runs in the ramp's return path after `coro.end` (so the
+// resume and destroy clones never reach it), on the return object.
 #[test]
-fn coroutine_precondition_and_unsupported_postcondition() {
+fn coroutine_precondition_and_postcondition() {
     let pre = format!("{CORO}task c(const int& x) pre(x > 0) {{ co_return; }}\n");
     let ir = lower(&pre, ContractSemantic::Enforce).expect("a coroutine precondition lowers");
     assert!(body(&ir, "_Z1cRKi").contains(&format!("call void {HANDLER}(")), "{ir}");
     let post = format!("{CORO}task c(const int& x) post(x > 1) {{ co_return; }}\n");
-    let err = lower(&post, ContractSemantic::Enforce).expect_err("unsupported");
-    assert!(err.contains("unsupported: postcondition of a coroutine"), "{err}");
-    lower(&post, ContractSemantic::Ignore).expect("nothing to check under ignore");
+    let ir = lower(&post, ContractSemantic::Enforce).expect("a coroutine postcondition lowers");
+    let b = body(&ir, "_Z1cRKi");
+    let end = b.find("@llvm.coro.end(").expect("coro.end");
+    let check = b.find(&format!("call void {HANDLER}(")).expect("the postcondition check");
+    assert!(end < check, "the check follows coro.end: {ir}");
+    let ir = lower(&post, ContractSemantic::Ignore).expect("nothing to check under ignore");
+    assert!(!body(&ir, "_Z1cRKi").contains(HANDLER), "{ir}");
 }
