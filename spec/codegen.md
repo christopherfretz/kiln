@@ -1371,7 +1371,8 @@ The normative description is spec/driver.md "Code generation". In short:
   every level. The oracle-22 `DEVIATIONS` entries record the rest of
   what clang 20-22 changed: AArch64 aggregates of pointers
   coerced to `ptr`/`[N x ptr]` (19: integers), `(unnamed struct)` in IR
-  type names, `llvm.modf`, and `-O0` instruction
+  type names, `llvm.modf`, `llvm.thread.pointer.p0` (kiln names the
+  intrinsic for the LLVM it drives, `llvm_major`), and `-O0` instruction
   choices (atomic temporaries, `select` for vector `?:`, constant-folded
   reductions, `undef` widening shuffles, `delete` block order). clang
   22's IR for a `bool` vector element store fails verification
