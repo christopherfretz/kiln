@@ -111,7 +111,7 @@ configure = ["-DCLI11_BUILD_TESTS=ON", "-DCLI11_BUILD_EXAMPLES=ON", "-DCLI11_WAR
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 1
-verified = false
+verified = true
 notes = "Tests download the Catch2 single header (or use an installed Catch2)."
 
 [tl_expected]
