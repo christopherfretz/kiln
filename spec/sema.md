@@ -1182,7 +1182,11 @@ Redeclaration and linkage rules:
   (`copy_elision_candidate`), as in clang. Deduction runs when the body
   is instantiated, so a `return` in a discarded `if constexpr` branch
   never participates (libc++ `__get_comp_type`) and only a real
-  conflict between instantiated returns is reported. `return {…}` is
+  conflict between instantiated returns is reported. In a
+  non-templated function a `return` inside a discarded statement
+  (`in_discarded_statement`) likewise takes no part in deduction
+  ([dcl.spec.auto.general]/9) and its operand is left unconverted, as
+  in clang (WP-792). `return {…}` is
   still an error in the pattern. A call `x.g()` to a member whose
   return type is not yet deduced goes through `check_undeduced_use`
   (instantiating it when it is a specialization member) before
