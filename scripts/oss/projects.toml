@@ -429,3 +429,36 @@ c_compiler = "clang-19"
 wave = 4
 verified = true
 notes = "WP-792. C++20 field reflection by structured bindings and __PRETTY_FUNCTION__ (not P2996). JSON only (bundled yyjson); googletest is a dependency built with the same compiler. Precompiled headers off for both compilers; the test flags' -ggdb and -Werror are overridden by -g0 -Wno-error in CMAKE_CXX_FLAGS_RELEASE."
+
+# Big apps 2/3 (WP-803): runtime-heavy suites (SIMD pixels, task-parallel
+# atomics), where miscompiles show up as wrong output or hangs.
+
+[onetbb]
+url = "https://github.com/uxlfoundation/oneTBB"
+tag = "v2022.3.0"
+build = "cmake"
+cxx_std = 20
+configure = ["-DTBB_TEST=ON", "-DTBB_STRICT=OFF", "-DTBBMALLOC_BUILD=ON", "-DTBB_EXAMPLES=OFF"]
+test = "ctest --output-on-failure -j 4 --timeout 300"
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-803. Release, no -g. ctest -j 4, 300 s per test. test_concurrent_map aborts intermittently ('terminate called without an active exception') under the clang-19 control too (4 of 5 runs), so it is flaky in this container, not a kiln finding."
+
+[opencv]
+url = "https://github.com/opencv/opencv"
+tag = "4.12.0"
+build = "cmake"
+cxx_std = 17
+configure = [
+  "-DBUILD_LIST=core,imgproc,features2d,flann,calib3d,ts", "-DBUILD_TESTS=ON", "-DBUILD_PERF_TESTS=OFF",
+  "-DBUILD_EXAMPLES=OFF", "-DBUILD_opencv_python3=OFF", "-DBUILD_JAVA=OFF",
+  "-DWITH_IPP=OFF", "-DWITH_ITT=OFF", "-DWITH_OPENCL=OFF", "-DWITH_FFMPEG=OFF", "-DWITH_GTK=OFF",
+  "-DWITH_GSTREAMER=OFF", "-DWITH_V4L=OFF", "-DWITH_PROTOBUF=OFF", "-DWITH_ADE=OFF", "-DWITH_EIGEN=OFF",
+  "-DWITH_LAPACK=OFF",
+]
+test = "unset OPENCV_TEST_DATA_PATH; export OPENCV_FOR_THREADS_NUM=4 GTEST_FILTER=-$(grep -v '^#' @OSS@/opencv-gtest-exclude.txt | paste -sd:); ctest --output-on-failure -j 4 -E opencv_test_imgcodecs"
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-803. No opencv_contrib, no opencv_extra test data; default CPU_BASELINE and NEON dispatch. BUILD_LIST adds ts (the test framework; without it no tests are built). The 480 gtests failing under the clang control without test data (opencv-gtest-exclude.txt) and opencv_test_imgcodecs (segfaults on its missing data under the control) are excluded in both builds; 4 OpenCV threads per test binary."

@@ -78,8 +78,10 @@ if [ -n "$INSTALL" ]; then
   P_CONFIGURE=("${P_INSTALL_CONFIGURE[@]}" "-DCMAKE_INSTALL_PREFIX=$INSTALL")
   P_BUILD_TARGETS=()
 fi
-# `@OSS@` in a configure flag is this directory (a project shim, WP-726).
+# `@OSS@` in a configure flag is this directory (a project shim, WP-726),
+# and in the test command (a test-exclusion list, WP-803).
 P_CONFIGURE=("${P_CONFIGURE[@]//@OSS@/$KILN/scripts/oss}")
+P_TEST="${P_TEST//@OSS@/$KILN/scripts/oss}"
 [ ${#PREFIXES[@]} -eq 0 ] || P_CONFIGURE+=("-DCMAKE_PREFIX_PATH=$(IFS=';'; echo "${PREFIXES[*]}")")
 
 SRC="$OSS/src/$PROJECT"
