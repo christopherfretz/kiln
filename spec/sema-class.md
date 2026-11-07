@@ -927,7 +927,11 @@ type of assignment, `explicitly-defaulted copy assignment operator must return
 An implicit or defaulted-on-first-declaration member is defined when odr-used
 (`mark_function_referenced` → `define_implicit_*`, clang's `DefineImplicitX`),
 when its exception specification is needed (spec only), or when the Oven asks
-for its body (`SemaBridge::ensure_body`). Bodies, exactly clang's (verified by
+for its body (`SemaBridge::ensure_body`). A use in a template definition
+odr-uses nothing, but a constexpr defaulted (non-trivial, not deleted) member of
+a complete non-dependent class is defined there, because the definition's
+`constexpr` and `constinit` initializers are evaluated without an
+instantiation (clang `NeededForConstantEvaluation`). Bodies, exactly clang's (verified by
 `implicit`-mode goldens):
 - **ctors**: the completed ctor-initializer list (§4.9) and an empty
   `CompoundStmt`. Copy/move: base `CXXConstructExpr` from the unnamed parameter
