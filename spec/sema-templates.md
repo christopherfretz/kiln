@@ -1118,6 +1118,13 @@ These are the current instantiation:
 - `A<T>` or `A<T...>` written with the class's own parameters in order;
 - the nested classes of either.
 
+A template-id of the class whose pack expansion argument falls on a
+parameter that is not a pack (`Ts<T...>` in `template<template<class>
+class H, template<class> class... T> struct Ts`) names neither the
+current instantiation nor a partial specialization's injected class: it
+is a dependent specialization checked once substituted (WP-730,
+`temp.local/injected-name-pack-expansion-args.cpp`).
+
 Qualified lookup into the current instantiation happens at definition.
 Lookup of a found member binds it (`typename A<T>::X` resolves to the
 member typedef, not to `DependentName`). If the member is not found and
