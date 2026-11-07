@@ -119,6 +119,19 @@ starting with `-` are inputs.
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name is accepted and ignored |
 | `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
 
+### Response files (WP-799)
+
+An argument `@file` is replaced by the arguments read from `file`
+before anything else is parsed (`rsp::expand`, both in `main` and in
+`run_as`), as clang's driver (`ExpansionContext::expandResponseFiles`,
+GNU tokenizer): whitespace separates arguments, `'` and `"` quote (an
+empty pair is an empty argument), and a backslash takes the next
+character literally, also inside quotes. A nested `@file` is expanded
+in turn, relative to the current directory, up to 32 levels deep. An
+`@file` that cannot be read is left as written, so it is an input that
+does not exist. CMake's Makefile generator links through
+`@CMakeFiles/<target>.dir/objects1.rsp` when a target has many objects.
+
 ### Codegen flags (WP-605)
 
 The common GCC/clang code-generation and hardening flags production builds
