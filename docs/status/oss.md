@@ -25,6 +25,12 @@ trees go to `.oss/` (gitignored); each build writes
 `.oss/build/<project>/<kiln|clang>/{report.json,compile.jsonl,*.log}`.
 Every compiler invocation runs under `ulimit -v 3000000` and `timeout 600`
 (`scripts/oss/kiln-cxx`); `make` draws from the box's shared jobserver.
+A project with `deps` in the toml (re2 needs abseil, googletest and
+benchmark) first builds and installs each dependency with the same
+compiler into `.oss/<dep>-install-<compiler>/` (once; delete the directory
+to rebuild) and finds them through `CMAKE_PREFIX_PATH`; dependency TUs are
+logged under `.oss/build/<dep>/<compiler>-dep/` and never counted for the
+dependent (spec/landed/harness/WP-666.md "Dependencies").
 `scripts/oss/selftest.sh` checks the scripts. In a repro command `$KILN` is
 the kiln checkout the build ran in, and `kiln++` the binary it used.
 

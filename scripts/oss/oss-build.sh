@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # oss-build.sh <project> [--compiler kiln|clang] [--no-test] [--jobs N]
+#        [--install PREFIX]
 #
 # Builds one project of scripts/oss/projects.toml through its own build
 # system with scripts/oss/kiln-cxx as the C++ compiler, runs its tests, and
 # writes .oss/build/<project>/<compiler>/report.json (schema:
 # spec/landed/harness/WP-666.md). Not part of `cargo xtask ci` (needs the
 # network). Source scripts/env.sh first so `make` draws from the shared
-# jobserver; `--jobs` only applies when there is none.
+# jobserver; `--jobs` only applies when there is none. The project's `deps`
+# are first built and `cmake --install`ed with the same compiler into
+# .oss/<dep>-install-<compiler>/ (`--install PREFIX`, which uses the dep's
+# `install_configure` and skips its tests), unless already installed.
 #
 # Environment: KILN_OSS_CXX (the kiln++ to test; default
 # $CARGO_TARGET_DIR/harness/kiln++), KILN_OSS_ROOT (default <kiln>/.oss).
@@ -18,7 +22,7 @@ OSS="${KILN_OSS_ROOT:-$KILN/.oss}"
 WRAP="$HERE/kiln-cxx"
 
 usage() { sed -n '2,3p' "$0" | sed 's/^# //' >&2; exit 2; }
-PROJECT="" COMPILER=kiln RUN_TEST=1 JOBS=4
+PROJECT="" COMPILER=kiln RUN_TEST=1 JOBS=4 INSTALL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --compiler) COMPILER="${2:-}"; shift 2 ;;
@@ -26,6 +30,7 @@ while [ $# -gt 0 ]; do
     --no-test) RUN_TEST=""; shift ;;
     --jobs) JOBS="${2:-}"; shift 2 ;;
     --jobs=*) JOBS="${1#*=}"; shift ;;
+    --install) INSTALL="${2:-}"; RUN_TEST=""; shift 2 ;;
     -h|--help) usage ;;
     -*) echo "oss-build: unknown option $1" >&2; usage ;;
     *) [ -z "$PROJECT" ] || usage; PROJECT="$1"; shift ;;
@@ -56,8 +61,25 @@ CXX="$(cd "$(dirname "$CXX")" && pwd)/$(basename "$CXX")"
 echo "oss-build: $PROJECT $P_TAG with $CXX (from $how)"
 export KILN_OSS_CXX="$CXX"
 
+# Dependencies: built with this compiler, installed once, found by cmake.
+PREFIXES=()
+for dep in "${P_DEPS[@]}"; do
+  pre="$OSS/$dep-install-$COMPILER"
+  if [ ! -f "$pre/.oss-installed" ]; then
+    echo "oss-build: dependency $dep -> $pre"
+    "$0" "$dep" --compiler "$COMPILER" --jobs "$JOBS" --install "$pre" || { echo "oss-build: dependency $dep failed" >&2; exit 1; }
+  fi
+  PREFIXES+=("$pre")
+done
+if [ -n "$INSTALL" ]; then
+  [ "$P_BUILD" = cmake ] || { echo "oss-build: --install needs a cmake project" >&2; exit 2; }
+  P_CONFIGURE=("${P_INSTALL_CONFIGURE[@]}" "-DCMAKE_INSTALL_PREFIX=$INSTALL")
+  P_BUILD_TARGETS=()
+fi
+[ ${#PREFIXES[@]} -eq 0 ] || P_CONFIGURE+=("-DCMAKE_PREFIX_PATH=$(IFS=';'; echo "${PREFIXES[*]}")")
+
 SRC="$OSS/src/$PROJECT"
-BUILD="$OSS/build/$PROJECT/$COMPILER"
+BUILD="$OSS/build/$PROJECT/$COMPILER${INSTALL:+-dep}"
 mkdir -p "$OSS/src" "$BUILD"
 export KILN_OSS_LOG="$BUILD/compile.jsonl"
 : > "$KILN_OSS_LOG"
@@ -121,6 +143,10 @@ if [ "$CONF_RC" = 0 ]; then
       BUILD_RC=$? ;;
   esac
   echo "oss-build: build rc=$BUILD_RC ($BUILD/build.log)"
+  if [ -n "$INSTALL" ]; then
+    [ "$BUILD_RC" = 0 ] && nice -n 10 cmake --install "$BUILD" >> "$BUILD/build.log" 2>&1 && date -u > "$INSTALL/.oss-installed" || BUILD_RC=1
+    echo "oss-build: install into $INSTALL rc=$BUILD_RC"
+  fi
   if [ -n "$RUN_TEST" ]; then
     export KILN_OSS_PHASE=test
     tdir="$BUILD"; [ "$P_BUILD" = meson ] && tdir="$BUILD/meson"; [ "$P_BUILD" = make ] && tdir="$SRCDIR"
@@ -134,3 +160,4 @@ WALL=$(python3 -c "print($(date +%s.%N) - $T0)")
 python3 "$HERE/projects.py" report-json --project "$PROJECT" --compiler "$COMPILER" \
   --compiler-path "$CXX" --build-dir "$BUILD" --configure-rc "$CONF_RC" \
   ${BUILD_RC:+--build-rc "$BUILD_RC"} ${TEST_RC:+--test-rc "$TEST_RC"} --wall "$WALL"
+[ -z "$INSTALL" ] || [ "$BUILD_RC" = 0 ]

@@ -77,6 +77,7 @@ c_compiler = "clang-19"
 wave = 1
 verified = true
 notes = "Harness verification project (WP-666). Some ctest cases are python3 scripts driving the built binaries."
+install_configure = ["-DBUILD_GMOCK=ON", "-DINSTALL_GTEST=ON"]
 
 [doctest]
 url = "https://github.com/doctest/doctest"
@@ -151,6 +152,7 @@ c_compiler = "clang-19"
 wave = 2
 verified = true
 notes = "LTS release. googletest is downloaded at configure time (ABSL_USE_GOOGLETEST_HEAD)."
+install_configure = ["-DABSL_BUILD_TESTING=OFF", "-DABSL_ENABLE_INSTALL=ON", "-DABSL_PROPAGATE_CXX_STD=ON"]
 
 [re2]
 url = "https://github.com/google/re2"
@@ -162,7 +164,8 @@ test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 2
 verified = false
-notes = "Needs abseil (find_package(absl)), googletest and benchmark installed: build abseil first and pass -DCMAKE_PREFIX_PATH to its install tree."
+deps = ["abseil", "googletest", "benchmark"]
+notes = "abseil, googletest and benchmark are built and installed with the same compiler first (deps)."
 
 [benchmark]
 url = "https://github.com/google/benchmark"
@@ -175,6 +178,7 @@ c_compiler = "clang-19"
 wave = 2
 verified = true
 notes = "googletest is downloaded at configure time."
+install_configure = ["-DBENCHMARK_ENABLE_TESTING=OFF", "-DBENCHMARK_ENABLE_INSTALL=ON", "-DBENCHMARK_ENABLE_WERROR=OFF", "-DBENCHMARK_ENABLE_LTO=OFF"]
 
 [glog]
 url = "https://github.com/google/glog"

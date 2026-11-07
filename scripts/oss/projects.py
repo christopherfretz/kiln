@@ -40,6 +40,12 @@ def load(path=TOML):
         p.setdefault("submodules", False)
         p.setdefault("source_subdir", "")
         p.setdefault("notes", "")
+        p.setdefault("deps", [])
+        p.setdefault("install_configure", [])
+    for name, p in data.items():
+        bad = [d for d in p["deps"] if d not in data or data[d]["build"] != "cmake"]
+        if bad:
+            raise SystemExit(f"{path}: [{name}] deps must name cmake projects: {', '.join(bad)}")
     return data
 
 
@@ -172,6 +178,8 @@ def main():
         print(f"P_SUBMODULES={'1' if p['submodules'] else ''}")
         print("P_CONFIGURE=(" + " ".join(q(x) for x in p["configure"]) + ")")
         print("P_BUILD_TARGETS=(" + " ".join(q(x) for x in p["build_targets"]) + ")")
+        print("P_DEPS=(" + " ".join(q(x) for x in p["deps"]) + ")")
+        print("P_INSTALL_CONFIGURE=(" + " ".join(q(x) for x in p["install_configure"]) + ")")
     elif a.cmd == "report-json":
         cmd_report_json(a)
 
