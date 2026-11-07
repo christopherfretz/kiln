@@ -5638,6 +5638,11 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   defined in a constexpr {function|constructor} before C++23", with the
   type's "not literal because" notes, and marks the function invalid.
   Variables whose own declaration was already diagnosed are checked too.
+  As clang 19's `CheckConstexprFunctionStmt`, the walk looks into an
+  if-statement's branches only: its init-statement and condition
+  variable are not checked (`if (const AssertionResult r = e)` in
+  googletest's `EXPECT_*`), while a switch's, a loop's and a range-for's
+  are (WP-726, `dcl.constexpr/p3-if-condition-variable-not-checked.cpp`).
   In a template (a function template, a member of a class template, a
   generic lambda) only a variable of non-dependent type is checked, at the
   definition; instantiations are not checked. A function template made
