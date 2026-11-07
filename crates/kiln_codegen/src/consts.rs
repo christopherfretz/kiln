@@ -325,6 +325,30 @@ impl Cg<'_> {
         saved
     }
 
+    /// clang `CXXDefaultInitExprScope`: entering default member
+    /// initializer `e`, whose `this` is the object being initialized
+    /// (`FnState::default_init_this`), not the enclosing function's.
+    pub(crate) fn enter_default_init(&mut self, e: ExprId) -> DefaultInitScope {
+        let scope = DefaultInitScope {
+            srcloc: self.enter_default_arg(e),
+            this: self.f.this,
+            class: self.f.this_class,
+        };
+        if let Some((v, rd)) = self.f.default_init_this {
+            self.f.this = Some(v);
+            self.f.this_class = Some(rd);
+        }
+        scope
+    }
+
+    /// Leaves the default member initializer [`Self::enter_default_init`]
+    /// entered.
+    pub(crate) fn exit_default_init(&mut self, s: DefaultInitScope) {
+        self.srcloc = s.srcloc;
+        self.f.this = s.this;
+        self.f.this_class = s.class;
+    }
+
     /// The global holding string literal `lit`, terminator included.
     pub(crate) fn lit_global(&mut self, lit: kiln_ast::StringLitId) -> kiln_llvm::GlobalId {
         self.lit_global_sized(lit, 0)
@@ -920,4 +944,11 @@ fn has_bool_vec(it: &IrType) -> bool {
 
 pub(crate) fn ir_err(e: &kiln_llvm::IrError) -> crate::CodegenError {
     crate::CodegenError { loc: None, msg: format!("constant emission failed: {e:?}") }
+}
+
+/// What [`Cg::enter_default_init`] replaced.
+pub(crate) struct DefaultInitScope {
+    srcloc: Option<ExprId>,
+    this: Option<crate::fir::V>,
+    class: Option<DeclId>,
 }

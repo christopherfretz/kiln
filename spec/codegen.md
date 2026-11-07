@@ -1616,7 +1616,15 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
 - A C1 that is not discardable is an alias. clang uses a COMDAT or a
   `weak_odr` C1 in some linkage combinations, which kiln has not
   covered yet.
-- A `CXXDefaultInitExpr` is emitted with the enclosing `this`.
+- (Closed, WP-789.) A `CXXDefaultInitExpr` used to be emitted with the
+  enclosing function's `this`. It now uses the object being initialized,
+  as clang's `FieldConstructionScope` and `CXXDefaultInitExprScope` do
+  ([class.mem.general]/12). Aggregate initialization (`record_init`)
+  records the aggregate and its class in `FnState::default_init_this`.
+  The default member initializers the list uses take that as `this`, in
+  member functions and non-member functions alike. A constructor's
+  member initializers keep the constructor's own `this`. Test:
+  `dcl.init.aggr/default-member-init-this-is-the-aggregate-run.cpp`.
 - Sema does not yet synthesize calls to non-trivial `operator=` for
   classes, so codegen sees only trivial assignments.
 - Class `new[]`/`delete[]` with array cookies: see §7g (WP-118).
