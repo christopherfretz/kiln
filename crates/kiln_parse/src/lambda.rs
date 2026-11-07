@@ -4,7 +4,7 @@
 use kiln_ast::decl::InitStyle;
 use kiln_ast::lambda::{CaptureDefault, CaptureKind};
 use kiln_diag::DiagId;
-use kiln_lex::Punct;
+use kiln_lex::{Punct, Std};
 use kiln_sema::DeclSite;
 use kiln_sema::DeclaratorContext;
 use kiln_sema::Initializer;
@@ -47,7 +47,12 @@ impl Parser<'_, '_> {
         // precedes the parameter list (clang `ParseLambdaExpression
         // AfterIntroducer`); a GNU attribute here belongs to the
         // lambda-specifier position below, so `[] __attribute__((x)) ()`
-        // is `expected body of lambda expression` at the `(`.
+        // is `expected body of lambda expression` at the `(`. Before C++23
+        // the seq is an extension (P2173R1; clang `ext_decl_attrs_on_lambda`).
+        if self.std < Std::Cxx23 && (self.at_cxx11_attr() || self.at_kw(Kw::Alignas)) {
+            let w = self.s.diag(DiagId::parse_ext_decl_attrs_on_lambda, self.loc());
+            self.emit(w);
+        }
         self.parse_cxx11_attr_seq(&mut specs.attrs);
         let mut d = Declarator::new(DeclaratorContext::Member, lbracket);
         d.op_name = Some(kiln_ast::names::OverloadedOperator::Call);
@@ -61,6 +66,16 @@ impl Parser<'_, '_> {
             open = l;
             (params, variadic) = self.parse_param_clause(&mut d, false, DeclSite::LambdaParam);
             rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        } else if self.std < Std::Cxx23 && self.at_lambda_specifier_without_params() {
+            // [expr.prim.lambda.general]/1: before C++23 (P1102R2) a
+            // lambda-specifier, trailing return type or attribute needs the
+            // parameter clause (clang `ext_lambda_missing_parens`).
+            let at = self.loc();
+            let w = self
+                .s
+                .diag(DiagId::parse_ext_lambda_missing_parens, at)
+                .fixit(kiln_diag::FixIt::insert(at, "() "));
+            self.emit(w);
         }
         // clang `ParseLambdaExpressionAfterIntroducer`: GNU and `__declspec`
         // attributes may precede the lambda-specifier-seq (GCC and MSVC
@@ -256,6 +271,26 @@ impl Parser<'_, '_> {
         };
         let init = init.unwrap_or_else(|| Initializer::Expr(self.s.act_on_error_expr(&[], at)));
         Some((style, init))
+    }
+
+    /// After a lambda's introducer, template head and attributes with no
+    /// `(`: a token clang's `ParseLambdaExpressionAfterIntroducer` takes
+    /// as the start of the declarator without a parameter clause.
+    fn at_lambda_specifier_without_params(&self) -> bool {
+        self.at(Punct::Arrow)
+            || self.at_cxx11_attr()
+            || matches!(
+                self.kw(),
+                Some(
+                    Kw::Mutable
+                        | Kw::Attribute
+                        | Kw::Constexpr
+                        | Kw::Consteval
+                        | Kw::Static
+                        | Kw::Requires
+                        | Kw::Noexcept
+                )
+            )
     }
 
     /// lambda-specifier-seq ([expr.prim.lambda.general]/1): `mutable`,
