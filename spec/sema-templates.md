@@ -4081,7 +4081,11 @@ guides.
    `int` for each undeduced type parameter and every other parameter for
    itself, and a type that changes or fails to substitute names one
    (`order.rs` `undeduced_params_unused`; with a parameter pack, or an
-   undeduced non-type or template parameter, they count as unused). So
+   undeduced non-type or template parameter, they count as unused). The
+   probe substitutes in a SFINAE frame (`DeducedArgSubstitution`): a
+   failure (`typename int::pointer`) is silent and means the parameter is
+   named (WP-782,
+   `tests/conformance/temp.func.order/p12-undeduced-probe-is-sfinae.cpp`). So
    `to_pointer(buffer_appender<T>, size_t)` beats `to_pointer(OutputIt,
    size_t)` for `to_pointer<char>(it, n)` (WP-726,
    `tests/conformance/temp.func.order/p12-undeduced-used-in-non-deduced-context.cpp`).

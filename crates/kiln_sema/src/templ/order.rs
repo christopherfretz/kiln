@@ -708,16 +708,17 @@ impl Sema<'_, '_> {
         let mut levels = Self::outer_levels(b, d.depth);
         levels.push(list, b, LevelMode::Substitute);
         let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
-        let mut unused = true;
-        for x in pb {
-            let r = Substituter::new(self, &levels).ty(x.ty, Loc::INVALID);
-            if r.map_or(true, |t| self.ast.types.canonical(t) != self.ast.types.canonical(x.ty)) {
-                unused = false;
-                break;
-            }
-        }
+        // The probe is a SFINAE context: `int` in `typename P::pointer`
+        // fails without a diagnostic and names `P` (LLVM's ilist
+        // `NodeAccess::getNodePtr<OptionsT>` overloads, WP-782).
+        let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, b, None, Loc::INVALID, |s| {
+            pb.iter().all(|x| {
+                let r = Substituter::new(s, &levels).ty(x.ty, Loc::INVALID);
+                r.is_ok_and(|t| s.ast.types.canonical(t) == s.ast.types.canonical(x.ty))
+            })
+        });
         self.ast.templates.dependent_depth = saved;
-        unused
+        matches!(r, Some((true, Ok(()))))
     }
 }
 
