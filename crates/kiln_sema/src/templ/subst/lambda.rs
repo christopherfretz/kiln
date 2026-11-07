@@ -281,7 +281,27 @@ impl Substituter<'_, '_, '_> {
         let params = self.param_infos(call_op).ok()?;
         let trailing =
             if data.explicit_result { Some((self.ty(p.ret(), loc).ok()?, loc)) } else { None };
-        let exc = self.exc_spec(&p, loc).ok()?;
+        // The noexcept-specifier is substituted with the declaration but
+        // is never in the immediate context of a deduction that reached
+        // the lambda ([temp.deduct.general]/8, P4149R1): inside a SFINAE
+        // context an error in it is an error, under an exception
+        // specification frame. (clang 22 still treats it as a
+        // substitution failure; outside SFINAE nothing changes.)
+        let dependent = matches!(
+            self.sema.ast.types.exc_spec(&p),
+            kiln_ast::types::ExcSpec::NoexceptExpr {
+                value: kiln_ast::types::NoexceptValue::Dependent(_),
+                ..
+            } | kiln_ast::types::ExcSpec::DependentNoexcept(_)
+        );
+        let framed = dependent
+            && self.sema.inst.stack.is_sfinae()
+            && self.sema.push_inst_frame(FrameKind::ExceptionSpec, call_op, call_op, loc);
+        let exc = self.exc_spec(&p, loc);
+        if framed {
+            self.sema.pop_inst_frame();
+        }
+        let exc = exc.ok()?;
         let mut d = Declarator::new(DeclaratorContext::Member, data.lbracket);
         d.op_name = Some(OverloadedOperator::Call);
         // The trailing requires-clause, unsubstituted (checked through

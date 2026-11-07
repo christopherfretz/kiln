@@ -445,6 +445,7 @@ impl Sema<'_, '_> {
             | FrameKind::VarTemplateInit
             | FrameKind::Enum
             | FrameKind::Nsdmi
+            | FrameKind::DefaultFunctionArg
             | FrameKind::LambdaSubstitution => Some(false),
             FrameKind::DeducedArgSubstitution
             | FrameKind::ExplicitArgSubstitution

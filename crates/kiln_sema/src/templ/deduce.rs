@@ -753,6 +753,12 @@ impl Sema<'_, '_> {
         a: TemplateArg,
         d: &mut DeducedArgs,
     ) -> Tdk {
+        // Before C++17 a deduced type keeps no exception specification
+        // (spec/types.md §5.4).
+        let a = match a.view() {
+            ArgView::Type(q) => TemplateArg::ty(self.ast.types.without_exc_sugar(q)),
+            _ => a,
+        };
         if pack {
             // One element of a pack (§6.2): collected by the expansion.
             let Some(cur) = d.pack_cur.as_mut() else { return Tdk::Success };

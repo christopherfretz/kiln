@@ -3216,7 +3216,9 @@ impl Cg<'_> {
         } else {
             let p = self.emit_scalar(callee_e)?;
             let pq = ast.exprs.get(callee_e).ty();
-            let fty = ast.types.pointee(pq).expect("function pointer");
+            // The pointee as written: before C++17 it alone keeps the
+            // exception specification (spec/types.md §5.4).
+            let fty = ast.types.exc_pointee(pq).expect("function pointer");
             // A callee that folded to a function (a constant `int (&)(int)`
             // naming one) is that function, as clang's `CalleePtr` is
             // (`EmitCall` / `TryMarkNoThrow` consult its `nounwind`).

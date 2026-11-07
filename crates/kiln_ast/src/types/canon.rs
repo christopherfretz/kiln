@@ -6,7 +6,7 @@
 use super::context::{
     AUX_PROFILE, TYPEOF_TYPE, TYPEOF_UNQUAL, TypeContext, TypeOfOperand, TypeView,
 };
-use super::func::{ExcSpec, FuncInfo, NoexceptValue};
+use super::func::{ExcSpec, FuncInfo, FuncProto, NoexceptValue};
 use super::kinds::{
     AutoKeyword, BuiltinType, Quals, TagKeyword, TypeAttrKind, TypeFlags, TypeKind,
     UnaryTransformKind, VectorKind,
@@ -486,6 +486,16 @@ impl TypeContext {
                 (!same).then(|| Self::uq(ctx.function(cret, &cparams, cinfo, cexc)))
             })
         };
+        if !self.opts.noexcept_in_type
+            && !matches!(exc, ExcSpec::None)
+            && !self.exc_protos.contains_key(&t)
+            && let Some(&canon) = self.proto_of(self.canonical(t.into()).ty())
+        {
+            // Before C++17 the canonical type has no exception
+            // specification; keep the written one for `proto` (§5.4).
+            let exc_word = self.store.protos[self.node(t).data as usize].exc;
+            self.exc_protos.insert(t, FuncProto { exc: exc_word, ..canon });
+        }
         t.into()
     }
 
@@ -518,6 +528,13 @@ impl TypeContext {
         if !self.opts.noexcept_in_type {
             return ExcSpec::None;
         }
+        Self::exc_identity(exc)
+    }
+
+    /// The C++17 canonical form of `exc` in every language mode: what
+    /// redeclarations must agree on ([except.spec]/5) even before C++17,
+    /// where the specification is not part of the type.
+    pub fn exc_identity(exc: ExcSpec) -> ExcSpec {
         match exc {
             ExcSpec::Nothrow
             | ExcSpec::NothrowAttr

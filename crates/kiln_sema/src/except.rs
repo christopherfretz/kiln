@@ -314,8 +314,8 @@ impl Sema<'_, '_> {
         let mut ty = self.ast.exprs.get(c).ty();
         if self.ast.exprs.get(c).kind() == ExprKind::BinaryOperator
             && let Some(&rhs) = self.ast.exprs.children(c, &self.ast.lists).get(1)
-            && let Some((p, _)) =
-                conv::scs::member_pointer_parts(self, self.ast.exprs.get(rhs).ty())
+            && conv::scs::member_pointer_parts(self, self.ast.exprs.get(rhs).ty()).is_some()
+            && let Some(p) = t.exc_pointee(self.ast.exprs.get(rhs).ty())
         {
             ty = p;
         }
@@ -340,7 +340,7 @@ impl Sema<'_, '_> {
         }
         let t = &self.ast.types;
         let mut ty = self.ast.exprs.get(callee).ty();
-        if let Some(p) = t.pointee(ty) {
+        if let Some(p) = t.exc_pointee(ty) {
             ty = p;
         }
         match t.proto(ty) {
@@ -452,7 +452,7 @@ impl Sema<'_, '_> {
     /// expression takes its type at `loc` (C++17: it is part of the type).
     /// A specification not yet parsed is left to [`Sema::exc_spec_needed`].
     pub(crate) fn resolve_exc_for_type(&mut self, f: DeclId, loc: Loc) {
-        if !self.in_template() && !self.exc_unparsed(f) {
+        if (!self.in_template() || self.exc_resolvable_in_template(f)) && !self.exc_unparsed(f) {
             self.resolve_exception_spec(f, loc);
         }
     }
@@ -464,9 +464,26 @@ impl Sema<'_, '_> {
     /// operand call this directly; evaluated ones through
     /// `mark_function_referenced`.
     pub(crate) fn exc_spec_needed(&mut self, f: DeclId, loc: Loc) {
-        if !self.in_template() && !self.diagnose_unparsed_exc_spec(f, loc) {
+        if (!self.in_template() || self.exc_resolvable_in_template(f))
+            && !self.diagnose_unparsed_exc_spec(f, loc)
+        {
             self.resolve_exception_spec(f, loc);
         }
+    }
+
+    /// Whether the uninstantiated `noexcept(expr)` of `f` is instantiated
+    /// when a template definition names it: `f` is a specialization with
+    /// no dependent argument (a function template specialization or a
+    /// member of a class template specialization, [`Sema::lazy_exc_spec`])
+    /// whose type a non-dependent expression takes there (clang's
+    /// `ResolveExceptionSpec` on a `DeclRefExpr`, in any context). Its
+    /// type then keeps `noexcept` in a template definition as outside
+    /// one: `decltype(&h<true>)` is `void (*)() noexcept` in a template
+    /// parameter's type or a template body, and a deduced argument
+    /// carries it (spec/types.md §5.4, WP-756).
+    fn exc_resolvable_in_template(&self, f: DeclId) -> bool {
+        self.uninstantiated_exc.contains_key(&self.ast.first(f))
+            && !self.ast.decls.get(f).ty().is_some_and(|t| self.is_dependent_type(t))
     }
 
     /// Whether function `d` of a class template, being instantiated now

@@ -54,6 +54,7 @@ sema_nonstatic_member_out_of_line = Error (0) "non-static data member defined ou
 sema_nontemporal_bad_pointee = Error (1) "address argument to nontemporal builtin must be a pointer to integer, float, pointer, or a vector of such types ({0} invalid)";
 sema_nontemporal_not_pointer = Error (1) "address argument to nontemporal builtin must be a pointer ({0} invalid)";
 sema_nonviable_condition_no_candidates = Error (2) "cannot convert {0} to {1} without a conversion operator";
+sema_noreturn_lambda_has_return_expr = Error (0) "lambda declared 'noreturn' should not return";
 sema_noreturn_non_function = Error (0) "'_Noreturn' can only appear on functions";
 sema_not_a_template = Error (1) "{0} is not a template";
 sema_not_assignable = Error (0) "expression is not assignable";
@@ -154,6 +155,7 @@ sema_partial_spec_redecl_scope = Error (2) "class template partial specializatio
 sema_placeholder_ambiguous = Error (1) "ambiguous reference to placeholder '{0}', which is defined multiple times";
 sema_placeholder_constraints_not_satisfied = Error (2) "deduced type {0} does not satisfy {1}";
 sema_placement_new_no_operator = Error (1) "no matching {0} function for non-allocating placement new expression; include <new>";
+sema_placement_new_non_placement_delete = Error (0) "'new' expression with placement arguments refers to non-placement 'operator delete'";
 // ----- WP-211 (GNU _Complex)
 sema_plain_complex = Warning (0) "plain '_Complex' requires a type specifier; assuming '_Complex double'";
 sema_pointer_to_reference = Error (2) "'{0}' declared as a pointer to a reference of type {1}";

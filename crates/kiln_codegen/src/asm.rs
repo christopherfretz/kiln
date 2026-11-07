@@ -27,6 +27,42 @@ struct AsmOuts {
 }
 
 impl Cg<'_> {
+    /// `__builtin_observable_checkpoint()` (P1494R5, [intro.abstract]/5;
+    /// spec/codegen.md "Observable checkpoints"): an opaque barrier that
+    /// emits no instruction, as GCC 16's does, written as `asm volatile(""
+    /// ::: "memory")` would be:
+    /// `call void asm sideeffect "", "~{memory}"()` (plus the target's
+    /// implicit clobbers) marked `nounwind`. LLVM treats the call as
+    /// possibly reading and writing all memory and, lacking `willreturn`,
+    /// as possibly not returning, so neither a store before it nor the
+    /// call itself is removed or moved past it on account of undefined
+    /// behavior after it.
+    pub(crate) fn emit_observable_checkpoint(&mut self) -> R<()> {
+        let arch = self.target.triple.arch;
+        let mut constraints = String::from("~{memory}");
+        let machine = tasm::machine_clobbers(arch);
+        if !machine.is_empty() {
+            constraints.push(',');
+            constraints.push_str(machine);
+        }
+        let fn_ty = self.m.types.function(LTy::VOID, &[], false);
+        let ia = InlineAsm {
+            fn_ty,
+            asm: String::new().into(),
+            constraints: constraints.into(),
+            side_effect: true,
+            align_stack: false,
+            intel_dialect: false,
+            can_throw: false,
+        };
+        let callee = self.m.inline_asm(ia).map_err(|e| crate::consts::ir_err(&e))?;
+        let func = self.m.attr_set(&[Attr::Flag(AttrKind::NoUnwind)]);
+        let call_opts =
+            CallOpts { attrs: AttrList { func, ..AttrList::default() }, ..CallOpts::default() };
+        self.emit_call_op(fn_ty, V::C(callee), Vec::new(), call_opts, LTy::VOID, None, true);
+        Ok(())
+    }
+
     /// clang `EmitAsmStmt` for a `GCCAsmStmt` (`asm goto` is a `callbr`).
     #[allow(clippy::too_many_lines)]
     pub(crate) fn emit_asm(&mut self, s: StmtId) -> R<()> {

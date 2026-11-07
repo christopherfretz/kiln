@@ -1235,8 +1235,25 @@ impl Substituter<'_, '_, '_> {
             .function(f)
             .map(|x| self.sema.ast.lists.iter::<DeclId>(x.params).collect())
             .unwrap_or_default();
+        // Each default argument is substituted under a frame of its own
+        // (clang `SubstDefaultArgument`): "in instantiation of default
+        // function argument expression for 'f<X>'", and never in the
+        // immediate context of a deduction that reached the closure or
+        // local class ([temp.deduct.general]/8, P4149R1).
+        let frame_args = self.args.levels.last().map(|l| l.args);
         for (a, b) in self.param_pairs(&pp, &fp) {
+            let Some(def) = self.sema.ast.decls.param(a).and_then(|x| x.default_arg) else {
+                continue;
+            };
+            let poi = self.sema.ast.exprs.get(def).loc();
+            if !self.sema.push_inst_frame(FrameKind::DefaultFunctionArg, f, pat, poi) {
+                break;
+            }
+            if let Some(l) = frame_args.filter(|&l| l != kiln_ast::ids::ArgListId::EMPTY) {
+                self.sema.set_frame_args(l);
+            }
             self.default_arg_one(a, b);
+            self.sema.pop_inst_frame();
         }
         for a in pp {
             self.locals.remove(&a);
