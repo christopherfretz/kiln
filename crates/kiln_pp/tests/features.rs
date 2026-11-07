@@ -199,6 +199,13 @@ fn oracle_defect(
     None
 }
 
+/// Whether a mismatch on `query` is a deliberate departure of kiln's
+/// table from clang: P3475R2 removes `[[carries_dependency]]` from C++26,
+/// which clang 19 and 22 still report (WP-743).
+fn deliberate(std: Std, query: &str, kiln: Option<&str>) -> bool {
+    std >= Std::Cxx26 && query == "__has_cpp_attribute(carries_dependency)" && kiln == Some("0")
+}
+
 /// Mismatches between kiln (with `ClangFeatures::from_args(triple, std,
 /// args)`, no predefines) and `clang -undef args` on `queries`; known
 /// oracle defects ([`oracle_defect`]) are not mismatches.
@@ -221,7 +228,10 @@ fn compare(triple: &str, std: Std, args: &[&str], queries: &[String]) -> Vec<Str
     let mut bad = Vec::new();
     for (i, q) in queries.iter().enumerate() {
         let (cv, kv) = (c.get(&i).map(String::as_str), k.get(&i).map(String::as_str));
-        if cv != kv && oracle_defect(clang_version_line(), q, cv, kv).is_none() {
+        if cv != kv
+            && oracle_defect(clang_version_line(), q, cv, kv).is_none()
+            && !deliberate(std, q, kv)
+        {
             bad.push(format!(
                 "{triple} {std:?} {args:?}: {q}: clang {:?}, kiln {:?}",
                 c.get(&i),
