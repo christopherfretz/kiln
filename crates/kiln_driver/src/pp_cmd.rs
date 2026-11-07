@@ -332,7 +332,8 @@ impl Job<'_> {
             return None;
         };
         if staged {
-            pp.set_feature_queries(Box::new(StagedFeatures(features)));
+            let clang19 = features.clone().with_compat(kiln_pp::ClangCompat::Clang19);
+            pp.set_feature_queries(Box::new(StagedFeatures(features, clang19)));
         } else {
             pp.set_feature_queries(Box::new(features));
         }
@@ -392,8 +393,23 @@ pub(crate) fn finish_deps(
 /// `__has_constexpr_builtin` answer 0 for a trait, transform, builtin
 /// template or `__builtin_*` function kiln does not implement yet, so
 /// libc++ takes its library fallback instead of reaching
-/// `sema_unimplemented_template_feature`.
-struct StagedFeatures(ClangFeatures);
+/// `sema_unimplemented_template_feature`. A `__builtin_*` name only
+/// clang 22 has (the second field, the clang 19 answers, says 0) that kiln
+/// neither declares nor stages answers 0 too, so a guarded use such as
+/// `#if __has_builtin(__builtin_infer_alloc_token)` is skipped rather
+/// than reaching "use of undeclared identifier".
+struct StagedFeatures(ClangFeatures, ClangFeatures);
+
+impl StagedFeatures {
+    /// Whether `name` is a `__builtin_*` function clang 19 lacks that kiln
+    /// neither declares nor lists in its staging table.
+    fn undeclared_clang22(&self, name: &str) -> bool {
+        name.starts_with("__builtin_")
+            && kiln_pp::FeatureQueries::has_builtin(&self.1, name) == 0
+            && kiln_ast::decl::builtin::by_name(name).is_none()
+            && kiln_sema::templ::builtins::table::lookup(name).is_none()
+    }
+}
 
 impl kiln_pp::FeatureQueries for StagedFeatures {
     fn has_feature(&self, name: &str) -> bool {
@@ -410,6 +426,7 @@ impl kiln_pp::FeatureQueries for StagedFeatures {
             Some(false) => 0,
             // A GCC builtin clang lacks (WP-484: `__builtin_is_string_literal`).
             Some(true) if v == 0 && kiln_sema::templ::builtins::table::gcc_only(name) => 1,
+            None if v != 0 && self.undeclared_clang22(name) => 0,
             _ => v,
         }
     }
@@ -417,6 +434,7 @@ impl kiln_pp::FeatureQueries for StagedFeatures {
     fn has_constexpr_builtin(&self, name: &str) -> bool {
         self.0.has_constexpr_builtin(name)
             && kiln_sema::templ::builtins::table::has_constexpr_builtin_staged(name) != Some(false)
+            && !self.undeclared_clang22(name)
     }
 
     fn has_attribute(&self, name: &str) -> u32 {
