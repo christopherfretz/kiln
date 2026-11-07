@@ -7756,7 +7756,9 @@ impl Sema<'_, '_> {
         }
         let _ = self.builder().begin_record_definition(r);
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
-        self.classes.push(ClassBuild::new(r, tag, self.ctx));
+        let mut build = ClassBuild::new(r, tag, self.ctx);
+        build.heads = self.templ.heads.len();
+        self.classes.push(build);
         self.defining.push(r);
         self.scopes.push(Scope::new(ScopeKind::Record, Some(r)));
         self.ctx = r;

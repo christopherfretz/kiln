@@ -871,6 +871,14 @@ type parameter named `auto:N`, as in clang's dump.
   the specialization's parameters ([temp.inst]/3; WP-298, libc++
   formatter.handle.pass.cpp; `dcl.fct/abbreviated-leading-param-run.cpp`,
   `tests/codegen/abbreviated_template_leading_param.cpp`).
+- `act_on_end_abbreviated` ends only an invented head opened by the
+  declaration that just ended. In a member declaration of a class, the
+  heads that were already open at the class's `{` are not popped
+  (`ClassBuild::heads`). One of them is the head of a generic lambda
+  that encloses a local class, and it stays open until the lambda ends,
+  so the locals declared after the class are still declared in the call
+  operator template ([expr.prim.lambda.general]/6; WP-789,
+  `class.local/generic-lambda-local-class-member-then-local-run.cpp`).
 - A friend function declarator finishes its invented head like any
   other declarator: `friend R f(S, C auto)` (defined in the class or not)
   declares an abbreviated friend function *template* ([dcl.fct]/22,
