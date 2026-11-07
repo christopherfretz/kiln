@@ -455,6 +455,94 @@ impl Sema<'_, '_> {
         self.ovl.builtin_memo = memo;
     }
 
+    /// [expr.cond]/6: arms `t` and `f` of different types, one of class
+    /// type, that neither converts to match the other (/4) are converted
+    /// by overload resolution among the built-in candidates of [over.built]
+    /// (clang `FindConditionalOverload`). `Ok(Some(arms))` is the arms
+    /// after the selected candidate's user-defined conversions (the
+    /// conditional operator applies the standard conversions);
+    /// `Ok(None)`, no viable candidate (the caller reports incompatible
+    /// operands); `Err`, diagnosed.
+    pub(crate) fn conditional_builtin_overload(
+        &mut self,
+        t: ExprId,
+        f: ExprId,
+        loc: Loc,
+    ) -> Result<Option<[ExprId; 2]>, ()> {
+        let types = [self.ety(t), self.ety(f)];
+        let mut set = self.begin_set(super::SetKind::Normal, loc);
+        set.oper = true;
+        set.object = Some(self.arg_info(t));
+        let mark = self.push_call_args(&mut set, &[f], &[None]);
+        self.add_conditional_builtin_candidates(&mut set, &types);
+        let out = self.best_viable(&mut set);
+        self.ovl.lists.truncate(mark);
+        let r = match out {
+            super::OvlOutcome::Success(b) => match self.builtin_operand_conversions(&set, b, &[t, f]) {
+                Some(v) if v.len() == 2 => Ok(Some([v[0], v[1]])),
+                _ => Err(()),
+            },
+            super::OvlOutcome::Ambiguous => {
+                let msg = self
+                    .diag(kiln_diag::DiagId::sema_conditional_ambiguous_ovl, loc)
+                    .diff_args(self, types[0], types[1]);
+                self.emit(msg);
+                Err(())
+            }
+            super::OvlOutcome::NoViable | super::OvlOutcome::Deleted(_) => Ok(None),
+        };
+        self.end_set(set);
+        r
+    }
+
+    /// The built-in candidates of the conditional operator for the class
+    /// arms `ops` of types `types` ([over.built]/24-25, [expr.cond]/6;
+    /// clang `AddBuiltinOperatorCandidates(OO_Conditional)`): `T
+    /// operator?:(bool, T, T)` for each pointer, pointer-to-member and
+    /// scoped enumeration type an arm converts to, then each pair of
+    /// promoted arithmetic types. The condition is not an argument.
+    pub(crate) fn add_conditional_builtin_candidates(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        types: &[QualType; 2],
+    ) {
+        let mut vis = Quals::CONST;
+        for &t in types {
+            vis |= self.visible_vr(t);
+        }
+        let mut sets: Vec<TypeSet> = Vec::with_capacity(2);
+        for &t in types {
+            let mut s = TypeSet::default();
+            self.add_types_converted_from(&mut s, t, true, false, vis);
+            sets.push(s);
+        }
+        let arith_or_enum = sets.iter().any(|s| s.arith_or_enum);
+        let mut memo = std::mem::take(&mut self.ovl.builtin_memo);
+        memo.clear();
+        let mut b = Builder { set, memo: &mut memo, vis, arith_or_enum, sets: &sets };
+        let mut added: Vec<QualType> = Vec::new();
+        for i in 0..2 {
+            let scoped: Vec<QualType> = b.sets[i]
+                .enums
+                .iter()
+                .copied()
+                .filter(|&e| crate::conv::rank::is_scoped_enum(self, e))
+                .collect();
+            let tys: Vec<QualType> =
+                b.sets[i].ptrs.iter().chain(&b.sets[i].mptrs).copied().chain(scoped).collect();
+            for t in tys {
+                if added.contains(&t) {
+                    continue;
+                }
+                added.push(t);
+                self.add_builtin(&mut b, &[t, t]);
+            }
+        }
+        let ar = self.arith_types();
+        self.arith_pairs(&mut b, &ar, 0);
+        self.ovl.builtin_memo = memo;
+    }
+
     /// Promoted arithmetic (or, from `first`, promoted integral) `L × R`
     /// (clang `addGenericBinaryArithmeticOverloads`,
     /// `addBinaryBitwiseArithmeticOverloads`).

@@ -4201,6 +4201,23 @@ impl Sema<'_, '_> {
         if let Some(res) = self.same_category_conditional(ops) {
             return res;
         }
+        // [expr.cond]/6: still different types with a class arm: overload
+        // resolution among the built-in `operator?:` candidates converts
+        // the arms (a class with `operator const T*()` against a `T*`).
+        let (tt, ft) = (self.ety(t), self.ety(f));
+        let ops = if !self.ast.types.same_type(tt, ft)
+            && (self.ast.types.as_record(tt).is_some() || self.ast.types.as_record(ft).is_some())
+        {
+            match self.conditional_builtin_overload(t, f, loc) {
+                Ok(Some([t, f])) if !self.is_err_expr(t) && !self.is_err_expr(f) => {
+                    CondOps { t, f, ..ops }
+                }
+                Ok(None) => ops,
+                Ok(Some(_)) | Err(()) => return self.recover_err(&[c, t, f], loc),
+            }
+        } else {
+            ops
+        };
         if let Some(res) = self.arith_conditional(ops) {
             return res;
         }
