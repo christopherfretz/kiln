@@ -876,7 +876,11 @@ these for non-class types; 068b adds the class-member and placement paths.
 Candidates are the conversion functions (templates via
 `deduce_conversion_candidate`) of the class and bases, not hidden; hiding
 is by converted-to type, so lookup keys on the `DeclName` conversion tag
-plus canonical type. `explicit` ones apply to direct-init, explicit casts
+plus canonical type. A conversion function a using-declaration names in
+the class (`using B::operator T;`) is a candidate found as its shadow, so
+its access is the using-declaration's ([namespace.udecl]/1, /19): a
+private base's conversion made public that way is accessible (WP-726,
+`tests/conformance/namespace.udecl/conversion-function-via-using*.cpp`). `explicit` ones apply to direct-init, explicit casts
 and contextual bool. `contextually_convert_to_bool(e)` becomes
 `resolve_conversion(bool, e, ToNonClass, ALLOW_EXPLICIT)` (as `bool t(e)`):
 `if (w)` accepts `explicit operator bool`, `bool k = w;` is "no viable

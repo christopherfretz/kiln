@@ -1619,7 +1619,12 @@ impl Sema<'_, '_> {
             visited.push(c);
             let Some(def) = self.ast.definition(c) else { continue };
             let mut here: Vec<QualType> = Vec::new();
-            for m in self.ast.decls.members(def) {
+            for found in self.ast.decls.members(def) {
+                // A using-declaration names a base's conversion function
+                // in this class ([namespace.udecl]/1): found as its shadow,
+                // whose access is the using-declaration's
+                // ([namespace.udecl]/19).
+                let m = self.ast.strip_shadow(found);
                 let f = if self.kind_of(m) == DeclKind::FunctionTemplate {
                     match self.templated_function(m) {
                         Some(f) if self.kind_of(f) == DeclKind::CXXConversion => f,
@@ -1647,7 +1652,7 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 here.push(key);
-                out.push((m, m));
+                out.push((found, m));
             }
             seen_types.extend(here);
             for b in self.ast.decls.bases(def, &self.ast.lists) {
