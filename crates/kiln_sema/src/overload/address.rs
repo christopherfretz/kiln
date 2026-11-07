@@ -191,7 +191,7 @@ impl Sema<'_, '_> {
         if self.ast.types.same_type(t, fnty) {
             return true;
         }
-        crate::conv::drop_noexcept(self, t).is_some_and(|x| self.ast.types.same_type(x, fnty))
+        crate::conv::is_function_conversion(self, t, fnty)
     }
 
     /// Whether the specialization `d` matches the function type `fnty`

@@ -227,6 +227,34 @@ pub(crate) fn drop_noexcept(s: &mut Sema<'_, '_>, f: QualType) -> Option<QualTyp
     Some(s.ast.types.function(p.ret(), &params, p.info(), ExcSpec::None))
 }
 
+/// True if function type `from` converts to function type `to` by
+/// dropping its non-throwing exception specification ([conv.fctptr]),
+/// its GNU `noreturn` (a clang extension, spec/types.md §5.4), or both
+/// (clang `IsFunctionConversion`).
+pub(crate) fn is_function_conversion(s: &mut Sema<'_, '_>, from: QualType, to: QualType) -> bool {
+    let (Some(pf), Some(pt)) = (s.ast.types.proto(from).copied(), s.ast.types.proto(to).copied())
+    else {
+        return false;
+    };
+    let mut info = pf.info();
+    let mut exc = s.ast.types.exc_spec(&pf);
+    let mut changed = false;
+    if info.noreturn() && !pt.info().noreturn() {
+        info = info.with_noreturn(false);
+        changed = true;
+    }
+    if matches!(exc, ExcSpec::Nothrow) && !matches!(s.ast.types.exc_spec(&pt), ExcSpec::Nothrow) {
+        exc = ExcSpec::None;
+        changed = true;
+    }
+    if !changed {
+        return false;
+    }
+    let params = s.ast.types.params(&pf).to_vec();
+    let f = s.ast.types.function(pf.ret(), &params, info, exc);
+    s.ast.types.same_type(f, to)
+}
+
 /// True if function type `referee` is reference-compatible with
 /// function type `from` only through a function pointer conversion
 /// ([dcl.init.ref]/4: "pointer to `void (int) noexcept`" converts to
@@ -239,8 +267,7 @@ pub(crate) fn function_ref_compatible(
     referee: QualType,
     from: QualType,
 ) -> bool {
-    s.ast.types.is_function(referee)
-        && drop_noexcept(s, from).is_some_and(|f| s.ast.types.same_type(f, referee))
+    s.ast.types.is_function(referee) && is_function_conversion(s, from, referee)
 }
 
 /// True if a prvalue of `from` converts to `to` by a function pointer
@@ -263,10 +290,8 @@ pub fn is_function_pointer_conversion(s: &mut Sema<'_, '_>, from: QualType, to: 
     if !s.ast.types.canonical(pt).quals().is_empty() {
         return false;
     }
-    match drop_noexcept(s, s.ast.types.canonical(pf)) {
-        Some(f) => s.ast.types.same_type(f, pt),
-        None => false,
-    }
+    let pf = s.ast.types.canonical(pf);
+    is_function_conversion(s, pf, pt)
 }
 
 /// How a pointer conversion casts away constness (clang
