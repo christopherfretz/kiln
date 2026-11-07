@@ -113,7 +113,10 @@ impl Sema<'_, '_> {
         if self.is_dependent_ctx(q.ctx) {
             Some(q.nns)
         } else if template_id
-            && self.classify_name(name, Some(q.ctx)) == crate::decl::NameClass::Undeclared
+            && matches!(
+                self.classify_name(name, Some(q.ctx)),
+                crate::decl::NameClass::Undeclared | crate::decl::NameClass::Dependent
+            )
         {
             self.unknown_specialization_nns(q)
         } else {

@@ -1254,7 +1254,13 @@ function makes `typename D::X` dependent for such a qualifier
 found no type (`N` a member class of the current instantiation with a
 dependent base; WP-803). An id-expression `D::template f<U>` whose lookup in
 such a qualifier found nothing is a `DependentScopeDeclRefExpr`
-(`act_unknown_specialization_template_ref`; WP-803). A qualified id naming no type in a non-dependent
+(`Sema::dep_member_nns`; WP-803). When the class has a dependent base and
+declares nothing of an unqualified id's name, a typedef the definition-time
+lookup finds in an enclosing scope is bound then ([temp.res.general]/1): the
+pattern keeps its type, so a member of the now-known base cannot hide it in
+the instantiation (`_Alloc_hider : allocator_type` whose allocator has a
+member function `allocator_type`; WP-803,
+`class.base.init/typedef-bound-at-definition-run.cpp`). A qualified id naming no type in a non-dependent
 qualifier is still `qualified member initializers` unsupported. A
 mem-initializer that fails in an instantiation (its substitution, or its
 initialization: `decltype(t)(t)` naming a reference type) makes the
