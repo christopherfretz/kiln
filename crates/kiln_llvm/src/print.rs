@@ -739,6 +739,10 @@ impl<'a> Printer<'a> {
                 global_name(w, &m.funcs[f.index()].name, self.func_slot[f.index()], q)
             }
             ValueRef::Global(g) => {
+                let r = m.resolve(v);
+                if r != v {
+                    return self.operand(w, r);
+                }
                 let q = &self.global_quote[g.index()];
                 global_name(w, &m.globals[g.index()].name, self.global_slot[g.index()], q)
             }
@@ -1075,7 +1079,7 @@ impl<'a> Printer<'a> {
         }
         self.type_identities(w)?;
         self.comdats(w)?;
-        if !m.globals.is_empty() {
+        if !m.global_order.is_empty() {
             w.write_char('\n')?;
         }
         for g in &m.global_order {
@@ -1083,11 +1087,17 @@ impl<'a> Printer<'a> {
             w.write_char('\n')?;
             chunk(w, &mut flush)?;
         }
-        if !m.aliases.is_empty() {
-            w.write_char('\n')?;
-        }
-        for i in 0..m.aliases.len() {
-            self.alias(w, i)?;
+        // LLVM's `AsmWriter` prints every alias, then every ifunc, each
+        // list after a blank line.
+        for ifunc in [false, true] {
+            if m.aliases.iter().any(|a| a.ifunc == ifunc) {
+                w.write_char('\n')?;
+            }
+            for i in 0..m.aliases.len() {
+                if m.aliases[i].ifunc == ifunc {
+                    self.alias(w, i)?;
+                }
+            }
         }
         for &f in &m.func_order {
             w.write_char('\n')?;
@@ -1265,13 +1275,17 @@ impl<'a> Printer<'a> {
         w.write_str(" = ")?;
         linkage_kw(w, a.linkage)?;
         write_dso_vis_dll(w, a.linkage, a.dso_local, a.visibility, a.dll_storage)?;
-        write_tls(w, a.thread_local)?;
-        let ua = unnamed_addr_kw(a.unnamed_addr);
-        if !ua.is_empty() {
-            w.write_str(ua)?;
-            w.write_char(' ')?;
+        if a.ifunc {
+            w.write_str("ifunc ")?;
+        } else {
+            write_tls(w, a.thread_local)?;
+            let ua = unnamed_addr_kw(a.unnamed_addr);
+            if !ua.is_empty() {
+                w.write_str(ua)?;
+                w.write_char(' ')?;
+            }
+            w.write_str("alias ")?;
         }
-        w.write_str("alias ")?;
         self.ty(w, a.value_type)?;
         w.write_str(", ")?;
         let is_expr = matches!(

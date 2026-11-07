@@ -2068,8 +2068,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             self.line.push_str(&String::from_utf8_lossy(self.ast.strings.bytes(l)));
             self.line.push_str("\" IsLiteralLabel");
         }
-        if matches!(node.kind, AttrKind::TARGET | AttrKind::ALIAS | AttrKind::SECTION)
-            && let Some(l) = StringLitId::from_raw(node.a)
+        if matches!(
+            node.kind,
+            AttrKind::TARGET | AttrKind::ALIAS | AttrKind::IFUNC | AttrKind::SECTION
+        ) && let Some(l) = StringLitId::from_raw(node.a)
         {
             // `SectionAttr` has two spellings (GNU `section`, `__declspec(
             // allocate)`), so clang names the one written.
