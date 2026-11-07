@@ -16,15 +16,28 @@ fn main() {
     let argv0 = command_line.next().unwrap_or_else(|| "kiln".to_owned());
     let args: Vec<String> = command_line.collect();
     let size = kiln_driver::templ_opts::stack_size_of(&args);
-    let code = std::thread::Builder::new()
-        .name("kiln".into())
-        .stack_size(size)
-        .spawn(move || {
+    let prog = std::path::Path::new(&argv0)
+        .file_name()
+        .map_or_else(|| "kiln".to_owned(), |n| n.to_string_lossy().into_owned());
+    let spawned =
+        std::thread::Builder::new().name("kiln".into()).stack_size(size).spawn(move || {
             StackGuard::install(size);
             kiln_driver::run_as(&argv0, &args, kiln_driver::Io::std())
-        })
-        .ok()
-        .and_then(|h| h.join().ok())
-        .unwrap_or(70);
+        });
+    let code = match spawned {
+        // A panic on the compile thread has already been reported by the
+        // panic hook.
+        Ok(h) => h.join().unwrap_or(70),
+        // The stack is reserved up front, so a low address-space limit
+        // (`ulimit -v`) fails here, before anything is compiled: say so
+        // rather than exit silently (spec/driver.md "Compile thread").
+        Err(e) => {
+            eprintln!(
+                "{prog}: error: cannot create the compile thread with a {size}-byte stack: {e} \
+                 (lower it with -fkiln-stack-size=)"
+            );
+            70
+        }
+    };
     std::process::exit(code);
 }

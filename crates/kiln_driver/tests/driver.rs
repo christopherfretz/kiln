@@ -1034,3 +1034,24 @@ fn memory_report_rows() {
     let o = kiln(&["-std=c++26", "-fsyntax-only", "-x", "c++", "-"], src);
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));
 }
+
+/// spec/driver.md "Output, diagnostics, exit status" (WP-682): a compile
+/// thread that cannot be created (its stack is reserved up front; here one
+/// larger than any address space) is reported, not a silent exit 70.
+#[test]
+fn compile_thread_spawn_failure_is_diagnosed() {
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_kiln"))
+        .args(["-fkiln-stack-size=1000000000g", "-fsyntax-only", "-x", "c++", "-"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(70), "{err}");
+    assert!(
+        err.starts_with(
+            "kiln: error: cannot create the compile thread with a 1073741824000000000-byte stack: "
+        ),
+        "{err}"
+    );
+    assert!(err.ends_with("(lower it with -fkiln-stack-size=)\n"), "{err}");
+}

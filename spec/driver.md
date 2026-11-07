@@ -693,6 +693,13 @@ This is clang's `DependencyCollector` and `DependencyFileGenerator`.
   `-E`.
 - Exit status is 0 on success and 1 if any error was reported (clang's
   convention; `-Werror` promotions count).
+- The compile thread's stack (`-fkiln-stack-size=`, default 1 GiB) is
+  reserved before anything else runs. When the thread cannot be created
+  (typically a `ulimit -v` cap below the reservation) the driver prints
+  `<prog>: error: cannot create the compile thread with a <n>-byte stack:
+  <os reason> (lower it with -fkiln-stack-size=)` and exits with status 70
+  (WP-682); it never exits silently. A panic on the compile thread, already
+  reported by the panic hook, also exits with 70.
 - With errors, `-o <file>` is not written and neither are dependency
   files. Standard output still receives the text, as clang does.
 - An output that cannot be opened reports
