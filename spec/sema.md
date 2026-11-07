@@ -6807,7 +6807,11 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     aggregate member) converted through a user-defined conversion
     checks its second standard conversion (`struct B { operator
     double(); }; int a[] = {B{}};` narrows, clang
-    `checkNarrowing(SCS.After)`; WP-303)
+    `checkNarrowing(SCS.After)`; WP-303); a parenthesized initializer
+    left empty by a pack expansion (`T x(a...)`, [temp.variadic]/7) is
+    `()` and value-initializes a non-class, non-reference `T` as an
+    `ImplicitValueInitExpr` ([dcl.init.general]/16.4; WP-787,
+    `tests/conformance/temp.variadic/empty-expansion-paren-init-value-initializes.cpp`)
   - references, binding directly or to a temporary
   - class objects by constructor ([dcl.init.general]/16.6.2.1; spec/sema-class.md
     §5): a direct-initialization from one expression of an unrelated class
