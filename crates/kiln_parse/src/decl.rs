@@ -3361,11 +3361,13 @@ impl Parser<'_, '_> {
                     self.skip_until(&[Punct::RParen], false, false);
                     break;
                 };
+                // `throw(Ts...)`: a pack expansion ([except.spec]/1 as of
+                // C++14, [temp.variadic]/5), expanded on substitution.
+                let t = match self.eat(Punct::Ellipsis) {
+                    Some(l) => self.s.act_pack_expansion_type(t, l),
+                    None => t,
+                };
                 types.push(t);
-                if self.at(Punct::Ellipsis) {
-                    self.unsupported("pack expansions", self.loc());
-                    self.bump();
-                }
                 if self.eat(Punct::Comma).is_none() {
                     break;
                 }
