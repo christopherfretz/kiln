@@ -1505,7 +1505,12 @@ and the members of member classes. Member templates are excluded. A
 member class that is not yet defined at that point gets the member
 specialization kind `ExplicitInstantiationDefinition` (so its vtable and
 RTTI are emitted `weak_odr`); one already defined keeps its implicit
-kind (clang `InstantiateClassMembers`; `instantiate_members_of`). A
+kind (clang `InstantiateClassMembers`; `instantiate_members_of`). The
+definition marks the class's vtable used, and that of each member class
+it gives the definition kind, so their virtual members are odr-used and
+an implicit virtual destructor is defined with it (clang
+`MarkVTableUsed(..., true)`; WP-730,
+`temp.explicit/vtable-implicit-virtual-destructor-run.cpp`). A
 member explicit instantiation of a constructor or destructor
 (`template X<int>::X();`) reaches sema through the special-member
 declarator path and names the existing member (WP-170). An explicit
