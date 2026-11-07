@@ -2141,6 +2141,12 @@ and the §6.2 tests.
 with a `VarTemplateSpecialization` decl.
 - The type is substituted immediately: the expression needs it.
 - Partial specializations are selected as in §4.4.
+- A template declared with a placeholder anywhere in its type (`auto`,
+  `auto&`, `const auto*`; `contains_undeduced_auto`, not only a
+  top-level `auto`) instantiates its initializer at the specialization
+  to deduce the type, so a use of `v<T>` inside another constexpr
+  initializer is not "depends on itself" (WP-726;
+  `tests/conformance/dcl.spec.auto/variable-template-reference-placeholder.cpp`).
 - The `inline constexpr bool xxx_v` family (142 declarations in the M3
   headers, §13.3) is the hottest path. One probe gives the decl and one
   `consts()` lookup gives its value.
