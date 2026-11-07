@@ -151,6 +151,15 @@ impl Sema<'_, '_> {
         match self.kind_of(y) {
             DeclKind::NonTypeTemplateParm => self.ttp22_nttp_fits(x, y, pr),
             DeclKind::TemplateTemplateParm => {
+                // P2841R7 [temp.arg.template]/1: `P`'s nested parameter
+                // `x`, as an argument for `y`, must be a template of
+                // `y`'s kind (a type, variable or concept template
+                // template parameter).
+                let want = self.ttp_kind(y);
+                if self.ttp_kind(x) != want {
+                    self.reject_ttp_arg_kind(want, x, xl);
+                    return false;
+                }
                 // `y` is now the parameter and `P`'s `x` its argument, so
                 // the sides' prior arguments swap.
                 let yl = self.ast.template_parm(y).and_then(|t| t.params);

@@ -460,13 +460,20 @@ fn apply_p1467(m: &mut BTreeMap<String, String>, std_float_aliases: bool, aarch6
 /// P1061 structured binding packs (C++17 on) and P2893 variadic friends
 /// (every C++ mode) at clang 22's values in the same modes, and
 /// `KILN_FEATURES` (P2747, P3068, modules) by `__cplusplus`.
-fn kiln_features(m: &mut BTreeMap<String, String>) {
+fn kiln_features(m: &mut BTreeMap<String, String>, compat: ClangCompat) {
     let cplusplus =
         m.get("__cplusplus").and_then(|v| v.trim_end_matches('L').parse::<u64>().ok()).unwrap_or(0);
     for &(min, n, v) in KILN_FEATURES {
         if cplusplus >= min {
             set(m, n, v);
         }
+    }
+    // P2841R7 concept and variable template template parameters
+    // (WP-746, WP-771): C++26 at `-fclang-compat=22`, where kiln accepts
+    // them (at 19 it rejects the forms, as clang 19 does). clang 22
+    // implements the paper without defining the macro.
+    if compat == ClangCompat::Clang22 && cplusplus >= 202_400 {
+        set(m, "__cpp_template_parameters", "202502L");
     }
     if m.contains_key("__cpp_structured_bindings") {
         set(m, "__cpp_structured_bindings", "202411L");
@@ -521,7 +528,7 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         }
     }
     if cfg.cplusplus {
-        kiln_features(m);
+        kiln_features(m, cfg.clang_compat);
         if !cfg.exceptions {
             m.remove("__EXCEPTIONS");
             m.remove("__cpp_exceptions");
@@ -924,6 +931,22 @@ mod tests {
         let s = build_predefines(b26, &cfg, &[]);
         assert!(!s.contains("__cpp_constexpr_exceptions"), "{s}");
         assert!(s.contains("#define __cpp_constexpr 202406L\n"), "{s}");
+    }
+
+    /// P2841R7's `__cpp_template_parameters` (WP-771): C++26 at
+    /// `-fclang-compat=22` only.
+    #[test]
+    fn template_parameters_macro() {
+        let b26 = "#define __cplusplus 202400L\n";
+        let b23 = "#define __cplusplus 202302L\n";
+        let mut cfg = PredefConfig::new(true);
+        let s = build_predefines(b26, &cfg, &[]);
+        assert!(s.contains("#define __cpp_template_parameters 202502L\n"), "{s}");
+        let s = build_predefines(b23, &cfg, &[]);
+        assert!(!s.contains("__cpp_template_parameters"), "{s}");
+        cfg.clang_compat = ClangCompat::Clang19;
+        let s = build_predefines(b26, &cfg, &[]);
+        assert!(!s.contains("__cpp_template_parameters"), "{s}");
     }
 
     /// WP-525: `-freflection` predefines GCC 16.1's

@@ -13,8 +13,9 @@ type Clauses = Vec<Vec<NormId>>;
 
 impl Sema<'_, '_> {
     /// Whether normal form `p` subsumes `q` ([temp.constr.order]/1): every
-    /// disjunctive clause of `p`'s DNF shares an atom with every
-    /// conjunctive clause of `q`'s CNF. Cached.
+    /// disjunctive clause of `p`'s DNF has a leaf subsuming a leaf of
+    /// every conjunctive clause of `q`'s CNF ([`Self::leaf_subsumes`]).
+    /// Cached.
     pub(crate) fn subsumes(&mut self, p: NormId, q: NormId) -> bool {
         if p == q {
             return true;
@@ -25,7 +26,7 @@ impl Sema<'_, '_> {
         self.inst.concepts.counters.subsume += 1;
         let r = match (self.clauses(p, true), self.clauses(q, false)) {
             (Some(dnf), Some(cnf)) => {
-                dnf.iter().all(|d| cnf.iter().all(|c| d.iter().any(|a| c.contains(a))))
+                self.clauses_subsume(&dnf, &cnf, &mut |s: &mut Self, a, b| s.leaf_subsumes(a, b))
             }
             _ => false,
         };
@@ -33,11 +34,39 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// Whether leaf `a` of a DNF subsumes leaf `b` of a CNF
+    /// ([temp.constr.order]/1.1): identical atomic constraints
+    /// ([temp.constr.atomic]/2), or fold expanded constraints with the
+    /// same fold-operator that are compatible for subsumption (their
+    /// patterns expand an equivalent pack, [temp.constr.fold]/2) where
+    /// `a`'s constraint subsumes `b`'s (P2963R3).
+    fn leaf_subsumes(&mut self, a: NormId, b: NormId) -> bool {
+        if a == b {
+            return true;
+        }
+        match (self.inst.concepts.norm.get(a), self.inst.concepts.norm.get(b)) {
+            (
+                NormNode::Fold { and: x, pattern: pa, packs: sa },
+                NormNode::Fold { and: y, pattern: pb, packs: sb },
+            ) if x == y && self.packs_compatible(sa, sb, false) => self.subsumes(pa, pb),
+            _ => false,
+        }
+    }
+
+    /// Whether pack sets `a` and `b` share a pack (by depth and index, or
+    /// by index alone when `positional`).
+    fn packs_compatible(&self, a: u32, b: u32, positional: bool) -> bool {
+        let t = &self.inst.concepts.norm;
+        let key = |x: u32| if positional { x & 0xffff } else { x };
+        let (pa, pb) = (t.pack_set(a), t.pack_set(b));
+        pa.iter().any(|&x| pb.iter().any(|&y| key(x) == key(y)))
+    }
+
     /// The clauses of `n`: its DNF (`dnf`, each clause a conjunction) or
     /// CNF (each a disjunction); `None` past [`MAX_CLAUSES`].
     fn clauses(&self, n: NormId, dnf: bool) -> Option<Clauses> {
         match self.inst.concepts.norm.get(n) {
-            NormNode::Atomic { .. } => Some(vec![vec![n]]),
+            NormNode::Atomic { .. } | NormNode::Fold { .. } => Some(vec![vec![n]]),
             NormNode::And(a, b) | NormNode::Or(a, b) => {
                 let join = matches!(self.inst.concepts.norm.get(n), NormNode::Or(..)) == dnf;
                 let (x, y) = (self.clauses(a, dnf)?, self.clauses(b, dnf)?);
@@ -72,7 +101,8 @@ impl Sema<'_, '_> {
 
     /// Whether normal form `n` is eligible for subsumption
     /// ([temp.constr.order]/3): it contains no concept-dependent
-    /// constraint.
+    /// constraint, the constraints of fold expanded constraints
+    /// included.
     fn eligible_for_subsumption(&self, n: NormId) -> bool {
         let mut seen = kiln_source::fx::FxHashSet::default();
         let mut work = vec![n];
@@ -87,6 +117,7 @@ impl Sema<'_, '_> {
                     }
                 }
                 NormNode::And(a, b) | NormNode::Or(a, b) => work.extend([a, b]),
+                NormNode::Fold { pattern, .. } => work.push(pattern),
             }
         }
         true
@@ -152,21 +183,38 @@ impl Sema<'_, '_> {
     ) -> bool {
         let Some(q) = self.normal_form(b, cb) else { return true };
         let Some(p) = self.normal_form(a, ca) else { return false };
+        self.subsumes_positional(p, q, 0)
+    }
+
+    /// [`Self::subsumes`] with atoms compared positionally (same
+    /// expression, [`Self::mappings_match_positional`]) and fold
+    /// expanded constraints' packs by index.
+    fn subsumes_positional(&mut self, p: NormId, q: NormId, depth: u32) -> bool {
+        if depth > 64 {
+            return false;
+        }
         let (Some(dnf), Some(cnf)) = (self.clauses(p, true), self.clauses(q, false)) else {
             return false;
         };
-        self.clauses_subsume(&dnf, &cnf, &mut |s: &Self, x, y| {
+        self.clauses_subsume(&dnf, &cnf, &mut |s: &mut Self, x, y| {
             if x == y {
                 return true;
             }
-            let (
-                NormNode::Atomic { expr: ex, mapping: mx },
-                NormNode::Atomic { expr: ey, mapping: my },
-            ) = (s.inst.concepts.norm.get(x), s.inst.concepts.norm.get(y))
-            else {
-                return false;
-            };
-            ex == ey && s.mappings_match_positional(mx, my)
+            match (s.inst.concepts.norm.get(x), s.inst.concepts.norm.get(y)) {
+                (
+                    NormNode::Atomic { expr: ex, mapping: mx },
+                    NormNode::Atomic { expr: ey, mapping: my },
+                ) => ex == ey && s.mappings_match_positional(mx, my),
+                (
+                    NormNode::Fold { and: ax, pattern: px, packs: sx },
+                    NormNode::Fold { and: ay, pattern: py, packs: sy },
+                ) => {
+                    ax == ay
+                        && s.packs_compatible(sx, sy, true)
+                        && s.subsumes_positional(px, py, depth + 1)
+                }
+                _ => false,
+            }
         })
     }
 
@@ -236,11 +284,11 @@ impl Sema<'_, '_> {
         ) else {
             return Vec::new();
         };
-        let normal12 = self.clauses_subsume(&dnf1, &cnf2, &mut |_, a, b| a == b);
-        let normal21 = self.clauses_subsume(&dnf2, &cnf1, &mut |_, a, b| a == b);
+        let normal12 = self.clauses_subsume(&dnf1, &cnf2, &mut |s, a, b| s.leaf_subsumes(a, b));
+        let normal21 = self.clauses_subsume(&dnf2, &cnf1, &mut |s, a, b| s.leaf_subsumes(a, b));
         let mut pair: Option<(ExprId, ExprId)> = None;
-        let mut identical = |s: &Self, a: NormId, b: NormId| -> bool {
-            if a == b {
+        let mut identical = |s: &mut Self, a: NormId, b: NormId| -> bool {
+            if s.leaf_subsumes(a, b) {
                 return true;
             }
             let (
@@ -298,10 +346,10 @@ impl Sema<'_, '_> {
     /// clang's `subsumes(PDNF, QCNF, E)` over precomputed clauses, with
     /// atom evaluator `eq`.
     fn clauses_subsume(
-        &self,
+        &mut self,
         p: &Clauses,
         q: &Clauses,
-        eq: &mut dyn FnMut(&Self, NormId, NormId) -> bool,
+        eq: &mut dyn FnMut(&mut Self, NormId, NormId) -> bool,
     ) -> bool {
         p.iter().all(|pi| q.iter().all(|qj| pi.iter().any(|&a| qj.iter().any(|&b| eq(self, a, b)))))
     }
