@@ -130,21 +130,124 @@ through an `operator->` chain. Its RSS grew in two steps:
 so the scan still costs about 70 ms. That is its walk plus the folds of
 operands that might succeed.
 
+## Reproduction log
+
+Every finding above can be re-measured with the commands below. The
+numbers in this section come from one sweep, on 11-07 at load average
+14 on 24 CPUs.
+
+**Build a commit.**
+
+```sh
+git worktree add --detach .bisect/b <sha>
+cd .bisect/b && source scripts/env.sh && cargo build --release -p kiln_driver
+```
+
+Then copy `$CARGO_TARGET_DIR/release/kiln` and `resource/` aside, and
+run `git worktree remove .bisect/b`. `fix3` is 861aa4d18, the last fix.
+
+**Measure an entry.**
+
+```sh
+/usr/bin/time -f %M kiln -resource-dir <its resource> <flags> bench/<entry>.cpp
+```
+
+Each entry was run 5 times. The figures are the fastest wall time and the
+median peak RSS.
+
+`<flags>` are the bench's own flags for the entry, as its baseline JSON
+records them:
+
+- `syntax` mode: `-std=c++26 -fsyntax-only`, plus the entry's `//@ args`
+  (the `oven/*` entries add `-fconstexpr-steps=...`).
+- `emit-llvm` mode: `-std=c++26 -S -emit-llvm -o /dev/null`.
+- `obj` mode: `-std=c++26 -c -o /dev/null -O2`.
+
+Each entry below gives wall time and peak RSS for each commit, oldest
+first. The first-bad commit and its parent are named in the Entries
+table.
+
+- `overload/arrow-chain`: dfd0c4b28 640 ms / 79.7 MB, 96dfea53f 963 ms /
+  116.2 MB, d4acbce85 1133 ms / 116.6 MB, c9129d450 1076 ms / 141.9 MB,
+  fix3 561 ms / 81.8 MB.
+- `frontend/simd-generate`: d4acbce85 603 ms / 66.4 MB, c9129d450 742 ms /
+  67.5 MB, fix3 482 ms / 59.4 MB.
+- `overload/less-10k`: e46fe36ee 2040 ms / 18.1 MB, d4acbce85 2148 ms /
+  18.5 MB, c9129d450 2088 ms / 20.0 MB, fix3 1748 ms / 18.9 MB.
+- `overload/ctors`: e46fe36ee 579 ms / 12.5 MB, dfd0c4b28 584 ms /
+  12.1 MB, 96dfea53f 585 ms / 13.1 MB, d4acbce85 588 ms / 13.6 MB,
+  c9129d450 602 ms / 14.2 MB, fix3 546 ms / 14.1 MB.
+- `overload/calls`: e46fe36ee 1744 ms / 14.3 MB, fix3 1043 ms / 15.0 MB.
+- `frontend/nested-template-ids`: e46fe36ee 569 ms / 18.6 MB, 1fe2ec39d
+  602 ms / 19.2 MB, 7b9507098 621 ms / 20.5 MB, fix3 550 ms / 20.7 MB.
+- `frontend/templates_deep`: e46fe36ee 60.1 ms / 38.6 MB, 1fe2ec39d
+  62.0 ms / 39.4 MB, 7b9507098 60.8 ms / 40.5 MB, fix3 62.9 ms /
+  41.0 MB.
+- `frontend/virtual-dtor-chain`: 47a80ba99 3295 ms / 21.0 MB, c33a79ca8
+  3247 ms / 21.3 MB, fix3 200 ms / 22.2 MB.
+- `frontend/virtual-lattice`: e46fe36ee 16.7 ms / 9.6 MB, dfd0c4b28
+  16.1 ms / 9.7 MB, 96dfea53f 15.1 ms / 9.9 MB, fix3 15.6 ms / 11.0 MB.
+- `frontend/virtual-lattice-emit`: e46fe36ee 143 ms / 23.8 MB, dfd0c4b28
+  142 ms / 25.0 MB, 96dfea53f 142 ms / 23.8 MB, fix3 119 ms / 25.9 MB.
+  The peak is bimodal.
+- `frontend/accessor-wide-emit`: e14b98bbc 1988 ms / 139.3 MB, f415f77ee
+  1737 ms / 139.4 MB, 2df9a8322 1770 ms / 139.4 MB, fix3 1670 ms /
+  139.2 MB.
+- `frontend/constant-table-emit`: f57783a9c 553 ms / 124.2 MB, fix3
+  550 ms / 124.1 MB.
+- `frontend/registration-wide-obj`: 4f9a3de97 8610 ms / 262.1 MB, fix3
+  8475 ms / 263.1 MB.
+- `oven/*`, f783ec5c7 then fix3:
+  - `builtins-memcpy`: 24.4 ms / 10.4 MB, then 13.2 ms / 10.1 MB.
+  - `churn-string`: 563 ms / 11.0 MB, then 434 ms / 10.8 MB.
+  - `churn-vector`: 506 ms / 11.0 MB, then 491 ms / 10.8 MB.
+  - `sort`: 199 ms / 24.9 MB, then 199 ms / 24.9 MB.
+  - `table-nohdr`: 44.8 ms / 10.8 MB, then 42.9 ms / 10.6 MB.
+  - `vector-alloc`: 427 ms / 36.6 MB, then 425 ms / 36.2 MB.
+  - `wide-struct-store`: 141 ms / 31.2 MB, then 138 ms / 28.9 MB.
+
+These wall times include process start-up and were taken under load.
+They back the A/B verdicts: no `oven/*` or time-only entry is measurably
+slower at fix3 than at the commit that recorded its baseline. The worst
+is `sort`, at +0.5 ms.
+
 ## Re-recorded
 
-After the fixes, these entries were re-recorded with `--record`. Each
-group's re-record commit lists its entries. No `budget-time` line was
-changed.
+After the fixes and a merge of main, the entries below were re-recorded.
+The command was `cargo xtask bench --record <their bench/*.cpp paths>`,
+using the release kiln++ of the merged head. The results are in
+`bench/results/2026-11-07T211934.json`. Each group's re-record commit
+lists its entries. No `budget-time` line was changed.
 
 - `overload/`: calls, ctors, less-10k.
-- `frontend/`: accessor-wide-emit, constant-table-emit,
-  nested-template-ids, registration-wide-obj, templates_deep,
+- `frontend/`: accessor-wide-emit, nested-template-ids, templates_deep,
   virtual-dtor-chain, virtual-lattice, virtual-lattice-emit.
-- `oven/`: builtins-memcpy, churn-string, churn-vector, sort, table-nohdr,
-  vector-alloc, wide-struct-store.
 
-`overload/arrow-chain` and `frontend/simd-generate` are not re-recorded:
-with the fixes they are within threshold or improved.
+**`templates_deep` keeps its old time fields.** The recording ran at load
+14 on 24 CPUs and measured 74.6 ms against 63.5 ms. Under the A/B rule
+that is the host, not kiln. Taking the new figure would loosen the time
+gate by 17%.
+
+**Not re-recorded.**
+
+- The time-only noise/host entries: `constant-table-emit`,
+  `registration-wide-obj` and every `oven/*` entry.
+  - The A/B shows the commit that recorded each baseline is as slow on
+    today's host as head.
+  - So the old baselines are still valid, and they are the tighter ones.
+  - Recording them at load 14 would have absorbed the load: for example,
+    `builtins-memcpy` measured 24.0 ms against 13.9 ms.
+- `builtins-memcpy`: its memory passes at head (9.7 MB, −2.3%).
+- `overload/arrow-chain` and `frontend/simd-generate`: with the fixes
+  they are within threshold or improved.
+
+**Within threshold, not flagged.** `accessor-wide-emit`'s `static_bytes`
+went 11,144 → 11,152 (+0.07%).
+
+- It is 11,144 at both f415f77ee and 2df9a8322, and 11,152 at head.
+- It does not come from the overflow scan: `-Wno-integer-overflow` gives
+  the same figure.
+- The re-record takes it in.
 
 ## Prevention (proposal, not implemented)
 
