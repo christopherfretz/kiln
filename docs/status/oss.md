@@ -42,7 +42,7 @@ The loop:
 | project | wave | tag | status |
 |---|---|---|---|
 | `catch2` | 1 | `v3.16.1` | tests at parity |
-| `cli11` | 1 | `v2.6.1` | not started |
+| `cli11` | 1 | `v2.6.1` | tests at parity |
 | `doctest` | 1 | `v2.5.3` | tests at parity |
 | `fmt` | 1 | `12.1.0` | not started |
 | `googletest` | 1 | `v1.17.0` | tests at parity |
@@ -129,27 +129,6 @@ clang build. Its working notes are in `docs/status/oss/googletest.md`.
 Failure clusters (kiln): none.
 <!-- /oss:magic_enum -->
 
-The WP-666 cluster (a protected member redeclared by a using-declaration
-in a class template with a dependent base) was fixed by WP-680. WP-683
-fixed the rest of magic_enum, doctest and tl_expected's clusters; see
-docs/status/oss/small-trio.md.
-
-<!-- oss:spdlog -->
-### spdlog (v1.17.0)
-
-| | kiln | clang-19 |
-|---|---|---|
-| configure | ok | ok |
-| build | ok | ok |
-| TUs ok / failed | 140 / 0 | 140 / 0 |
-| links ok / failed | 1 / 0 | 1 / 0 |
-| tests passed / total | 1 / 1 | 1 / 1 |
-| wall | 64 s | 25 s |
-| peak TU RSS | 119 MB | 295 MB |
-
-Failure clusters (kiln): none.
-<!-- /oss:spdlog -->
-
 <!-- oss:doctest -->
 ### doctest (v2.5.3)
 
@@ -181,3 +160,24 @@ Failure clusters (kiln): none.
 
 Failure clusters (kiln): none.
 <!-- /oss:tl_expected -->
+
+The WP-666 cluster (a protected member redeclared by a using-declaration
+in a class template with a dependent base) was fixed by WP-680. WP-683
+fixed the rest of magic_enum, doctest and tl_expected's clusters; see
+docs/status/oss/small-trio.md.
+
+<!-- oss:spdlog -->
+### spdlog (v1.17.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 140 / 0 | 140 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | 1 / 1 | 1 / 1 |
+| wall | 64 s | 25 s |
+| peak TU RSS | 119 MB | 295 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:spdlog -->
