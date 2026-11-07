@@ -6712,6 +6712,17 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   expression) and folded only when they contain none. Unsigned
   arithmetic is silent. The walk is bounded (65 536 nodes, depth 256)
   and skipped when the warning is disabled at the full-expression.
+- **Folds that cannot succeed (WP-798).** An operand is not folded when
+  every evaluation of it reaches a call of a member function the Oven
+  cannot call ([expr.const]/10.2; the Oven's own rule: not `constexpr`
+  on its latest declaration, and neither virtual, trivial, deleted nor a
+  closure's conversion function or invoker): looking through calls,
+  casts, member accesses, temporaries and operators other than `&&` /
+  `||`, nothing guarded by a condition. The fold would compile a thunk
+  and fail at that call; its answer is the same (no value, no record).
+  A failed fold that is tried gives its thunk back (spec/oven.md
+  "Evaluation entry points"). Test: driver
+  `overflow_scan_skips_folds_that_cannot_succeed`.
 - **Calls (WP-468).** An operand that calls a `constexpr` or
   `consteval` function or constructor (directly or below it; the cheap
   filter counts such a call as a candidate) is evaluated in the Oven with

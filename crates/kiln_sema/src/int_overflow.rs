@@ -205,6 +205,70 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// Whether a fold of `e` certainly fails, so it is not tried
+    /// (WP-798): an operand every evaluation of `e` reaches calls a
+    /// member function the Oven cannot call ([expr.const]/10.2), by the
+    /// Oven's own rule (`compile_func`: not `constexpr` on its latest
+    /// declaration). Virtual, trivial and deleted functions and a
+    /// closure's conversion function or invoker, which the Oven handles
+    /// otherwise, do not count. The fold would compile a thunk and fail
+    /// at that call; skipping it saves the compile
+    /// (bench/overload/arrow-chain.cpp: 12,000 operands, each a chain
+    /// of 50 non-`constexpr` `operator->` calls). Only operands no
+    /// condition guards are looked at: the walk stops at anything but a
+    /// call, a cast, a member access, a temporary, a unary operator or
+    /// a binary one other than `&&` and `||`.
+    fn overflow_fold_fails(&self, e: ExprId) -> bool {
+        let mut stack = vec![e];
+        let mut budget = BUDGET;
+        while let Some(x) = stack.pop() {
+            if budget == 0 {
+                return false;
+            }
+            budget -= 1;
+            match self.ast.exprs.get(x).kind() {
+                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
+                    if self.callee_decl(x).is_some_and(|d| self.oven_cannot_call(d)) {
+                        return true;
+                    }
+                }
+                ExprKind::BinaryOperator
+                    if matches!(self.ast.exprs.binary_op(x), BinaryOp::LAnd | BinaryOp::LOr) =>
+                {
+                    continue;
+                }
+                ExprKind::ParenExpr
+                | ExprKind::ImplicitCastExpr
+                | ExprKind::MemberExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::UnaryOperator
+                | ExprKind::BinaryOperator => {}
+                _ => continue,
+            }
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
+        }
+        false
+    }
+
+    /// Whether the Oven traps on a call of member function `d` (see
+    /// [`Sema::overflow_fold_fails`]).
+    fn oven_cannot_call(&self, d: DeclId) -> bool {
+        let latest = self.ast.latest(d);
+        self.ast.decls.get(d).kind() == DeclKind::CXXMethod
+            && self.ast.closure_thunk(latest).is_none()
+            && self.ast.decls.builtin_id(d).is_none()
+            && self.ast.decls.gnu_lib_twin(d).is_none()
+            && self.meta_intrinsic_of(d).is_none()
+            && self.ast.decls.function(d).is_some_and(|f| !f.spec.is_virtual() && !f.spec.is_trivial())
+            && self
+                .ast
+                .decls
+                .function(latest)
+                .is_some_and(|f| f.spec.constexpr_kind() == ConstexprKind::None && !f.spec.is_deleted())
+    }
+
     /// Reports `-Winteger-overflow` at `loc` for operation `e` of type
     /// `ty`, whose result wrapped is `wrapped`. clang reports it straight
     /// to the diagnostics engine: no instantiation notes, and every
@@ -363,7 +427,11 @@ impl Sema<'_, '_> {
         if calls && let Ok(v) = self.overflow_eval(e, w) {
             return v;
         }
-        if (self.overflow_opaque(e) || !self.overflow_scan(e, w)) && need && !calls {
+        if (self.overflow_opaque(e) || !self.overflow_scan(e, w))
+            && need
+            && !calls
+            && !self.overflow_fold_fails(e)
+        {
             return self.fold_rvalue_int(e);
         }
         None
