@@ -198,8 +198,11 @@ impl AttrKind {
     /// Numbered apart from the runs above.
     pub const WEAKREF: AttrKind = AttrKind(180);
     /// GNU `alias("target")` (clang `AliasAttr`): `a` = the target's
-    /// `StringLitId`. kiln keeps it only together with `weakref`, whose
-    /// target it names.
+    /// `StringLitId`, a mangled symbol name. Together with `weakref` it
+    /// names the weak reference's target; alone it makes the declaration
+    /// a definition, emitted as an IR alias of the symbol
+    /// ([`crate::Ast::alias_definition`], spec/codegen.md "Aliases and
+    /// ifuncs").
     pub const ALIAS: AttrKind = AttrKind(181);
     /// GNU `analyzer_noreturn` on a function (clang
     /// `AnalyzerNoReturnAttr`): a call of it ends its block in sema's
@@ -211,6 +214,11 @@ impl AttrKind {
     /// `"disable-tail-calls"="true"`, so the backend makes no call in it a
     /// tail call (WP-682).
     pub const DISABLE_TAIL_CALLS: AttrKind = AttrKind(183);
+    /// GNU `ifunc("resolver")` on a function (clang `IFuncAttr`): `a` =
+    /// the resolver's `StringLitId`, a mangled symbol name. The
+    /// declaration is a definition, emitted as an IR ifunc whose resolver
+    /// picks the implementation at load time (WP-763).
+    pub const IFUNC: AttrKind = AttrKind(184);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

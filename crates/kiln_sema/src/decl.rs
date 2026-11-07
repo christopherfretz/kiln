@@ -9836,7 +9836,8 @@ impl Sema<'_, '_> {
         if kind == AttrKind::TARGET {
             return self.target_attribute(syntax, &n, args, loc);
         }
-        if matches!(kind, AttrKind::WEAKREF | AttrKind::ALIAS | AttrKind::SECTION) {
+        if matches!(kind, AttrKind::WEAKREF | AttrKind::ALIAS | AttrKind::IFUNC | AttrKind::SECTION)
+        {
             return self.weakref_alias_attribute(kind, syntax, &n, args, loc);
         }
         if kind == AttrKind::MIN_VECTOR_WIDTH {
@@ -10048,8 +10049,9 @@ impl Sema<'_, '_> {
         Some(self.ast.attrs.push(node))
     }
 
-    /// GNU `weakref` / `weakref("target")`, `alias("target")` and
-    /// `section("name")` (clang `handleWeakRefAttr`, `handleAliasAttr`,
+    /// GNU `weakref` / `weakref("target")`, `alias("target")`,
+    /// `ifunc("resolver")` and `section("name")` (clang
+    /// `handleWeakRefAttr`, `handleAliasAttr`, `handleIFuncAttr`,
     /// `handleSectionAttr`): `weakref` takes at most one argument, the
     /// others exactly one, a string literal (`expected
     /// string literal` at the argument otherwise; an identifier is not
@@ -10717,9 +10719,11 @@ fn attr_kind_of(
         ("always_inline", _, true) => AttrKind::ALWAYS_INLINE,
         ("gnu_inline", _, true) => AttrKind::GNU_INLINE,
         ("weak", _, true) => AttrKind::WEAK,
-        // clang `GCC<"weakref">`, `GCC<"alias">`.
+        // clang `GCC<"weakref">`, `GCC<"alias">`, `GCC<"ifunc">` (an
+        // ELF-only target attribute; every kiln target is ELF).
         ("weakref", _, true) => AttrKind::WEAKREF,
         ("alias", _, true) => AttrKind::ALIAS,
+        ("ifunc", _, true) => AttrKind::IFUNC,
         // clang `GCC<"section">`.
         ("section", _, true) => AttrKind::SECTION,
         // clang `GNU<"analyzer_noreturn">`: no `[[...]]` spelling.
