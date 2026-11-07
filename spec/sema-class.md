@@ -498,7 +498,11 @@ outermost class's `}` the parser replays in clang's order
 declaration order:
 1. default arguments → `act_on_param_default_arg(p, e)` (write-once; a
    braced one → `act_on_param_default_list(p, list)`, which
-   list-initializes the parameter's type),
+   list-initializes the parameter's type; when that type or the list is
+   dependent the list is kept as written and initialized at instantiation,
+   as for one parsed in place, so `const O (&)[N ? N : 1] = {}` binds to a
+   `const O[N ? N : 1]` (WP-782, test
+   `dcl.fct.default/member-dependent-array-reference-braced.cpp`)),
    noexcept-specifiers → `act_on_exception_spec(f, spec)`;
 2. NSDMIs → `act_on_field_init(field, init)` (`this` usable; own
    full-expression, §5.3);
@@ -1806,8 +1810,11 @@ u16` (abi.md §8.2 sources `ClassDesc.max_field_align` from it).
   stack of `(label, value)` entries.
 - **Applying it.** `act_on_start_record_definition` stores a nonzero N
   in `record_pack` for the class being defined. A class template's
-  pattern gets it too; instantiation must copy it from the pattern
-  (WP-066b/templates; not done yet).
+  pattern gets it too. Its instantiations copy the pattern's value,
+  whatever is in effect where they are instantiated (clang's
+  `InstantiateClass` copying `MaxFieldAlignmentAttr`;
+  `start_instantiated_definition`, WP-782). Test:
+  `tests/conformance/cpp.pragma/pack-template-instantiation-run.cpp`.
 - **Forms** (the argument text of `#pragma pack(...)` and
   `_Pragma("pack(...)")`):
   - `()` resets N to 0;
@@ -2539,7 +2546,12 @@ access, out-of-line declarator scope.**
   up first, [basic.lookup.qual.general]/2), then `act_on_member_q` /
   `act_on_template_member_q`. `qualifier_names_base` checks the
   qualifier names the object's class or a base
-  (`sema_qualified_member_of_unrelated`). A non-static member named
+  (`sema_qualified_member_of_unrelated`); an unscoped enumeration
+  qualifier stands for its class, since its enumerators are members of
+  that class ([class.mem]/3), and a name found in an enumeration is not
+  access-checked (no naming class, as for `B::E::e`): `d.E::e` with `E`
+  in a base is valid (WP-782,
+  `expr.ref/qualified-enumerator-of-base-class-run.cpp`). A non-static member named
   `Q::m`, with `Q` a base other than the member's class, converts the
   object to its `Q` subobject first and then to the member's class
   (`object_to_qualifier`, for fields and the implicit object argument of a

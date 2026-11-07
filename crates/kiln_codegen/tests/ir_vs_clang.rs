@@ -102,6 +102,11 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // libcall).
     ("builtins_math", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("builtins_math", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
+    // `__builtin_thread_pointer()` calls `llvm.thread.pointer`, the name
+    // the LLVM 19 backend kiln drives knows (`llvm_major`); clang 22's
+    // LLVM overloads it as `llvm.thread.pointer.p0` (WP-782).
+    ("builtins_thread_pointer", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    ("builtins_thread_pointer", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // clang 22 instruction-selection changes that kiln has not followed:
     // `alloca` of the atomic flag / order temporaries, `i1` (19: `i8`) overflow-result
     // truncation, `select` for vector `?:`, and the block order of
