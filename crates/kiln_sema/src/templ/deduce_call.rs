@@ -1981,6 +1981,12 @@ impl Sema<'_, '_> {
             member_form = operand == e && self.ast.templates.expr_nns.get(e).is_some();
         }
         if self.ast.exprs.get(e).kind() != ExprKind::UnresolvedLookupExpr {
+            // An overloaded member access (`o.f<K>`, clang's
+            // `UnresolvedMemberExpr`) is a set too: its static members
+            // give their function types (`GetTypeOfFunction`).
+            if !addr && let Some(x) = self.member_overload(e) {
+                return OverloadArg::Set(OverloadSetArg { ule: x, addr, member_form });
+            }
             return OverloadArg::NotASet;
         }
         OverloadArg::Set(OverloadSetArg { ule: e, addr, member_form })
@@ -2020,13 +2026,29 @@ impl Sema<'_, '_> {
             TypeView::MemberPointer { pointee, .. } => t.is_function(pointee),
             _ => false,
         };
-        let decls: Vec<DeclId> = self
-            .ast
-            .unresolved_decls(set.ule)
+        let member = self.ovl.members.get(&set.ule);
+        let decls: Vec<DeclId> = member
+            .map_or_else(|| self.ast.unresolved_decls(set.ule), |m| m.decls.clone())
             .into_iter()
             .filter(|&x| !self.ast.decls.get(x).has(DeclFlags::INVALID))
             .collect();
         if !fn_like {
+            // A template-id naming one specialization (clang
+            // `ResolveSingleFunctionTemplateSpecialization`).
+            if let Some(l) = self.set_explicit_args(set) {
+                let loc = self.ast.exprs.get(set.ule).loc();
+                let mut one = None;
+                for &f in &decls {
+                    if self.kind_of(f) != DeclKind::FunctionTemplate {
+                        continue;
+                    }
+                    let Ok(spec) = self.deduce_explicit_only(f, Some(l), loc) else { continue };
+                    if one.replace(spec).is_some() {
+                        return None;
+                    }
+                }
+                return self.overload_member_type(one?, set);
+            }
             // clang `resolveAddressOfSingleOverloadCandidate`.
             let [f] = decls[..] else { return None };
             if self.kind_of(f) == DeclKind::FunctionTemplate {
@@ -2034,7 +2056,7 @@ impl Sema<'_, '_> {
             }
             return self.overload_member_type(f, set);
         }
-        let explicit = self.ast.templates.expr_targs.get(set.ule).copied();
+        let explicit = self.set_explicit_args(set);
         if explicit.is_some_and(|l| {
             self.ast
                 .types
@@ -2086,6 +2108,14 @@ impl Sema<'_, '_> {
             found = Some(at);
         }
         found
+    }
+
+    /// The explicit template arguments of the overload set `set`.
+    fn set_explicit_args(&self, set: &OverloadSetArg) -> Option<ArgListId> {
+        match self.ovl.members.get(&set.ule) {
+            Some(m) => m.targs,
+            None => self.ast.templates.expr_targs.get(set.ule).copied(),
+        }
     }
 
     /// The type of overload set member `f` as the argument `set` names
@@ -2275,7 +2305,7 @@ enum OverloadArg {
 /// A call argument naming an overload set (clang's
 /// `OverloadExpr::FindResult`).
 struct OverloadSetArg {
-    /// The `UnresolvedLookupExpr`.
+    /// The `UnresolvedLookupExpr`, or the overloaded member access.
     ule: ExprId,
     /// It is the operand of `&`.
     addr: bool,

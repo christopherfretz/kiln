@@ -492,6 +492,14 @@ impl Cg<'_> {
                 };
                 self.load_lv(LV { addr: tmp, q, bf: None, vidx: Some(vidx), tb: Tb::Type })
             }
+            // clang `ScalarExprEmitter::VisitDeclRefExpr` ->
+            // `tryEmitAsConstant`: a variable named without being odr-used
+            // ([basic.def.odr]/5), reached by the scalar visitor through a
+            // glvalue conditional's arm, is its constant, never a load of a
+            // global that need not be defined.
+            ExprKind::DeclRefExpr if let Some(c) = self.non_odr_use_constant(e) => {
+                V::C(self.const_scalar_value(c, q)?)
+            }
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
             | ExprKind::ArraySubscriptExpr
@@ -1621,9 +1629,37 @@ impl Cg<'_> {
             ExprKind::CXXThrowExpr => self.emit_throw(e, false),
             _ => {
                 let v = self.eval_bool(e)?;
-                self.cond_br(v, t, f);
+                let br = self.cond_br(v, t, f);
+                // A condition that is a call of `__builtin_unpredictable`
+                // (implicit conversions stripped, not parentheses) marks
+                // the branch `!unpredictable` when optimizing.
+                let mut c = e;
+                while matches!(
+                    ast.exprs.get(c).kind(),
+                    ExprKind::ImplicitCastExpr
+                        | ExprKind::ExprWithCleanups
+                        | ExprKind::ConstantExpr
+                ) {
+                    c = ast.exprs.operand(c);
+                }
+                self.mark_unpredictable(br, c);
                 Ok(())
             }
+        }
+    }
+
+    /// clang `EmitBranchOnBoolExpr` / `EmitSwitchStmt`: when optimizing,
+    /// a branch or `switch` (instruction `i`) whose condition `c` is a
+    /// call of `__builtin_unpredictable` carries `!unpredictable !{}`.
+    pub(crate) fn mark_unpredictable(&mut self, i: u32, c: ExprId) {
+        if self.opts.optimize()
+            && self.ast.exprs.get(c).kind() == ExprKind::CallExpr
+            && crate::builtins::builtin_callee(self.ast, c)
+                .is_some_and(|(_, b)| b == kiln_ast::decl::builtin::UNPREDICTABLE)
+        {
+            let empty = self.m.md_tuple(&[]);
+            let k = self.m.md_kind("unpredictable");
+            self.f.fir.add_md(i, k, empty);
         }
     }
 
@@ -2013,6 +2049,29 @@ impl Cg<'_> {
             }
             k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
         }
+    }
+
+    /// The folded constant initializer of the scalar, non-reference
+    /// variable `e` names without odr-using it (sema's
+    /// `non_odr_use_constant`); `None` otherwise.
+    fn non_odr_use_constant(&self, e: ExprId) -> Option<kiln_ast::ConstValueId> {
+        let ast = self.ast;
+        if ast.exprs.non_odr_use(e) != NonOdrUse::Constant {
+            return None;
+        }
+        let q = ast.exprs.get(e).ty();
+        if self.is_aggregate(q) || self.is_complex(q) || self.is_volatile(q) {
+            return None;
+        }
+        let d = ast.exprs.decl(e);
+        let dq = ast.decls.get(d).ty()?;
+        if self.referee(dq).is_some() {
+            return None;
+        }
+        let init = std::iter::once(d)
+            .chain(ast.redecls_of(d))
+            .find_map(|x| ast.decls.var(x).and_then(|v| v.init))?;
+        self.folds.get(init)
     }
 
     /// clang `EmitDeclRefLValue` on a reference variable named without
@@ -3088,6 +3147,16 @@ impl Cg<'_> {
                     // An ignored slot: the `va_list` advances, nothing is
                     // copied (clang `EmitAggFinalDestCopy`).
                     return self.emit_va_arg(e, None).map(|_| ());
+                }
+                if ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
+                    // clang `AggExprEmitter::VisitExprWithCleanups` keeps
+                    // the ignored slot: a discarded call on a temporary
+                    // (`M{}.e(E{}, 3);`) gets only `EmitCall`'s result
+                    // temporary, after the object's and the arguments'.
+                    let sc = self.begin_scope(false);
+                    let r = self.emit_ignored(self.sub(e));
+                    self.end_scope(sc);
+                    return r;
                 }
                 // clang `AggExprEmitter::withReturnValueSlot`: an ignored
                 // slot gives the call no address, so `EmitCall` makes its

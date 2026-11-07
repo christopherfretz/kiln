@@ -181,7 +181,7 @@ impl Parser<'_, '_> {
             // `template<> enum class A<int>::E : int { ... };` explicitly
             // specializes a member enumeration ([temp.expl.spec]/1).
             if self.at_partial_specialization()
-                || self.at_alias_spec_member_tag_decl()
+                || self.at_spec_member_tag_decl()
                 || self.at_var_template_spec()
                 || self.at_kw(Kw::Enum)
                 || !self.at_spec_tag_or_template()
@@ -294,29 +294,29 @@ impl Parser<'_, '_> {
             || self.is_final_tok(t)
     }
 
-    /// `class-key Q::identifier` then `{`, `:`, `;` or `final`, where `Q`
-    /// names a class template specialization through a typedef or alias
-    /// (`template<> class Proxy::Result {...}` with `using Proxy =
-    /// P<M, N>;`, LLVM's CGSCCPassManager.h): a member class of a
-    /// specialization, explicitly specialized as when spelled with its
-    /// template-id ([temp.expl.spec]/1, [temp.expl.spec]/17).
-    fn at_alias_spec_member_tag_decl(&self) -> bool {
+    /// `class-key Q::identifier` then `{`, `:`, `;` or `final`, the
+    /// qualifier naming a class template specialization without spelling
+    /// a template-id (`using P = X<int>; template<> class P::R {}`): an
+    /// explicit specialization of a member class of `X<int>`
+    /// ([temp.expl.spec]/1, /16), parsed as the `X<int>::R` spelling is.
+    fn at_spec_member_tag_decl(&self) -> bool {
         if !matches!(self.kw(), Some(Kw::Class | Kw::Struct | Kw::Union)) {
             return false;
         }
         let i = self.pos() + 1;
         let Some((end, _, _, _, Some(q))) = self.scan_name_qual_at(i) else { return false };
-        let class = match self.s.ast.decls.get(q).kind() {
-            DeclKind::Typedef | DeclKind::TypeAlias => self
-                .s
-                .ast
-                .decls
-                .typedef(q)
-                .and_then(|t| self.s.ast.types.as_record(t.underlying)),
-            _ => Some(q),
+        let ast = &self.s.ast;
+        let q = match ast.decls.get(q).kind() {
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                match ast.decls.typedef(q).and_then(|t| ast.types.as_record(t.underlying)) {
+                    Some(r) => r,
+                    None => return false,
+                }
+            }
+            _ => q,
         };
-        if (i..end).any(|j| self.tok_at(j).kind == TokKind::Punct(Punct::Less))
-            || class.is_none_or(|c| self.s.ast.spec_info(c).is_none())
+        if ast.spec_info(q).is_none()
+            || (i..end).any(|j| self.tok_at(j).kind == TokKind::Punct(Punct::Less))
         {
             return false;
         }

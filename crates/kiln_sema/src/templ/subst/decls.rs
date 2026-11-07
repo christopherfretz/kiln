@@ -859,6 +859,9 @@ impl Substituter<'_, '_, '_> {
             self.sema.inst.concepts.member_constraints.insert(f, (d, self.args.clone()));
         }
         if friend.is_some() {
+            // [dcl.contract.func]/7 on the redeclaration it now is: a
+            // parameter of dependent type was not checked on the pattern.
+            self.sema.check_friend_post_params(f);
             self.friend_definition(f, d);
         }
         // Defined in its class: inline before its body is instantiated.
@@ -1626,7 +1629,16 @@ impl Substituter<'_, '_, '_> {
                     return self.unimplemented("this kind of friend declaration", loc);
                 }
                 let ctx = DeclaratorContext::Member;
-                let r = self.function_decl(f, ctx, Some(loc))?;
+                // [temp.friend]/9: a non-template friend with a
+                // requires-clause (only a templated class has one) declares
+                // a function of its own in each specialization, not one of
+                // another scope (clang `FriendConstraintsDependOnEnclosing
+                // Template` / `FriendsDifferByConstraints`).
+                let apart = self.sema.ast.templates.trailing_requires.contains(f);
+                let saved = std::mem::replace(&mut self.sema.friend_template_apart, apart);
+                let r = self.function_decl(f, ctx, Some(loc));
+                self.sema.friend_template_apart = saved;
+                let r = r?;
                 if let FriendTarget::Decl(x) = self.sema.ast.decls.friend_target(r)
                     && self.sema.ast.instantiated_from(x).is_none()
                 {

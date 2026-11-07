@@ -932,9 +932,9 @@ impl Parser<'_, '_> {
             let ty = ty.filter(|&t| !self.s.is_error_type(t))?;
             return Some(self.s.act_on_typeid(Err(ty), loc, rparen));
         }
-        self.s.enter_unevaluated();
+        self.s.enter_typeid_operand();
         let e = self.parse_expression();
-        self.s.exit_unevaluated();
+        self.s.exit_typeid_operand();
         let Some(e) = e else {
             self.skip_until(&[Punct::RParen], true, true);
             return None;

@@ -89,7 +89,12 @@ panic and never silently wrong IR.
   double`, `const _Atomic(int)`, a `const` array or class element), so a
   global whose every use folds is not emitted. A load of a const variable
   is recognized through parentheses and `NoOp` casts (the xvalue cast of
-  an implicitly moved `return x;`). A read of a `mutable` member is not
+  an implicitly moved `return x;`). An arm of a glvalue conditional under
+  a load (`c ? A : B`) is not a load candidate; a scalar non-reference
+  variable it names without odr-use (sema's `non_odr_use_constant`) is
+  emitted as its folded initializer (clang `VisitDeclRefExpr` ->
+  `tryEmitAsConstant`; `expr.rs` `non_odr_use_constant`, WP-775), so no
+  definition of it is needed. A read of a `mutable` member is not
   folded (the Oven's "read of mutable member" check, spec/oven.md); the
   variable's other members are.
   A reference variable whose referee type is `const` non-volatile folds
@@ -375,7 +380,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     call initializes an aggregate, otherwise into a temporary; an
     ignored aggregate call makes that temporary itself, after the
     arguments, and an empty-class (`Ignore`) result still gets an unused
-    temporary (clang `GetUndefRValue`; WP-172);
+    temporary (clang `GetUndefRValue`; WP-172). A discarded
+    `ExprWithCleanups` around such a call (`M{}.e(E{}, 3);`) keeps the
+    ignored slot inside a cleanup scope (clang
+    `AggExprEmitter::VisitExprWithCleanups`), so there is no extra
+    result temporary ahead of the object and argument temporaries
+    (WP-777; `tests/codegen/discarded_member_call_on_temporary.cpp`,
+    `tests/conformance/expr.call/run-discarded-member-call-on-temporary-order.cpp`);
   - an assignment operator call (`CXXOperatorCallExpr` with `=`, `+=`,
     ... and a member callee) evaluates its right operand before the
     object (clang `EvaluationOrder::ForceRightToLeft`): a trivial
@@ -409,7 +420,16 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       (the expected value emitted, the probability not), above -O0
       `llvm.expect.T(value, expected)` and
       `llvm.expect.with.probability.T(value, expected, double P)` with
-      the probability folded (WP-492, `builtin_expect_o1.cpp`); signbit (and WP-419's `signbitf` / `signbitl`, through
+      the probability folded (WP-492, `builtin_expect_o1.cpp`);
+      `__builtin_unpredictable(x)` is `x`, and above -O0 (clang
+      `EmitBranchOnBoolExpr` / `EmitSwitchStmt`) a conditional branch
+      whose condition, parentheses stripped and then implicit conversions
+      (`IgnoreImpCasts`), is the call carries `!unpredictable !{}`: an
+      `if`, a `?:` emitted as branches, an `&&`/`||` operand and a `!`
+      operand do, a parenthesized call under a conversion
+      (`if ((__builtin_unpredictable(b)))`), a loop condition and a
+      `select` do not; a `switch` does when its condition is the call
+      itself (WP-779, `builtin_unpredictable_o1.cpp`); signbit (and WP-419's `signbitf` / `signbitl`, through
       `builtin::f128_twin`) bitcasts to an integer of the
       float's width and tests `slt 0`, and a constant argument folds
       (clang 19 and 22; `builtins_signbit_fl.cpp`); the isgreater family is one
@@ -3978,7 +3998,12 @@ an initializer (clang `CodeGenModule::EmitAliasDefinition`,
   variable) whose mangled name it is, which is emitted now; else a
   declaration created under that name, which a later definition
   completes in place (a function: the aliasing declaration's signature,
-  retyped by the definition if they differ; a variable: a global of the
+  retyped by the definition if they differ; when the types agree the
+  definition keeps the return and parameter attributes the aliasing
+  declaration gave it, as clang's `GetOrCreateLLVMFunction` sets them
+  once, so an `extern "C"` alias of a C++ function leaves its
+  definition without a `noundef` return (`AliasState::declared_for`,
+  WP-777, `tests/codegen/gnu_alias_forward_extern_c.cpp`); a variable: a global of the
   aliasing declaration's type; an ifunc resolver: a `void ()` placeholder
   that the resolver's definition replaces and moves to the end of the
   function list, as clang). A later definition whose mangled name an

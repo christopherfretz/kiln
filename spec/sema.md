@@ -1781,7 +1781,16 @@ and returns the scope it names:
     `definition 'x' cannot also be an {alias|ifunc}`; a definition of the
     entity before or after a declaration carrying one is `redefinition of
     'x'` with `previous definition is here` (`check_alias_redefines`,
-    `check_alias_definition`). `weakref` must have internal
+    `check_alias_definition`). A later variable redeclaration counts the
+    alias declaration as its previous definition (WP-777, clang
+    `MergeVarDecl` / `getDefinition`): `int v;` after `extern int v
+    __attribute__((alias("t")));` is `redefinition of 'v'`, and `extern
+    int v = 2;` is too, without `'extern' variable has an initializer`
+    (the variable is invalid and its initializer dropped, as clang's
+    `AddInitializerToDecl` stops); an `extern "C"` redeclaration's
+    language-linkage note reads `previous definition is here`. Test:
+    `tests/conformance/ext.gnu.alias/alias-is-definition-redefinition.cpp`.
+    `weakref` must have internal
     linkage (`weakref declaration must have internal linkage`) and
     namespace scope, and needs a target. The target checks (defined in
     the TU, no cycle, resolver returns a pointer) are codegen's
@@ -4225,9 +4234,10 @@ function) elsewhere.
     (`ext.gnu.builtins/memcpy-inline-{run,args}.cpp`).
   - `__builtin_unpredictable(x)` (id 2178, `LiLi`, `NoThrow, Const`;
     WP-726) is an ordinary signature builtin whose value is its converted
-    operand; like clang 19 and 22 it is not a constant expression, and
-    codegen emits the operand without the `!unpredictable` branch hint
-    (`ext.gnu.builtins/unpredictable.cpp`).
+    operand; like clang 19 and 22 it is not a constant expression
+    (`ext.gnu.builtins/unpredictable.cpp`). Codegen emits the operand and,
+    above -O0, the `!unpredictable` hint on the branch or `switch` it
+    controls (spec/codegen.md, `__builtin_expect`; WP-779).
   - `__builtin_elementwise_add_sat(x, y)` / `_sub_sat(x, y)` (custom,
     `vector_ops.rs` `builtin_elementwise_sat`; WP-432). At 22
     (`BuiltinElementwiseMath` with clang 22's integer restriction): both

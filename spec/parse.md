@@ -949,10 +949,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     (`tests/conformance/dcl.type.class/nullability-on-classes-*.cpp`).
   - After `template<>`, a class-key with a name `Q::identifier` whose
     qualifier is a typedef or alias of a class template specialization
-    (`at_alias_spec_member_tag_decl`) declares an explicit specialization
+    (`at_spec_member_tag_decl`) declares an explicit specialization
     of that specialization's member class, as with the template-id
-    spelled out ([temp.expl.spec]/1; WP-782,
-    `temp.expl.spec/p17-member-class-through-alias.cpp`).
+    spelled out ([temp.expl.spec]/1; WP-775,
+    `temp.expl.spec/member-class-via-typedef-run.cpp`).
   - Then the body:
     - `parse_record_body` (§4.1) holds the base clause, member
       declarations, bit-fields and nested records.
@@ -973,7 +973,20 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - **Namespaces:**
   - `namespace N { }`, `inline namespace`, `namespace A::B { }`, and
     unnamed namespaces (§sema 4.6)
-  - `extern "C" { }` and `extern "C" decl` (`parse_linkage_spec`)
+  - `extern "C" { }` and `extern "C" decl` (`parse_linkage_spec_with`).
+    GNU `__attribute__((...))` specifiers before the `extern` (detected
+    by `at_gnu_attrs_before_linkage_spec`) belong to the contained
+    declaration's decl-specifiers, as in clang, where `ParseLinkage`
+    runs with the outer DeclSpec: for `extern "C" decl` they are handed
+    on through `lead_decl_attrs` (`__attribute__((section("s"))) extern
+    "C" int f(int);` puts `f` in section `s`), and before a braced body
+    they are accepted and dropped. A `[[...]]` or `alignas` list there,
+    alone or among the GNU ones, is `an attribute list cannot appear
+    here` at its start (clang `ProhibitAttributes`), and the
+    declaration is still parsed (WP-777, [dcl.link]/2;
+    `dcl.link/gnu-attributes-before-linkage-spec.cpp`,
+    `dcl.link/attribute-list-before-linkage-spec-errors.cpp`,
+    `tests/codegen/linkage_spec_gnu_attrs.cpp`).
   - `using namespace N;`
 - **Using-declarations and aliases** (`parse_using`, spec/sema.md §4.8):
   - `using a::x, ::b::y;`: each declarator is a nested-name-specifier

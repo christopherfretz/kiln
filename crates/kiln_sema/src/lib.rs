@@ -95,6 +95,7 @@ mod section;
 mod self_ref;
 mod side_effects;
 mod splice;
+mod splice_local;
 mod splice_object;
 pub mod stack_guard;
 mod static_tls;
@@ -545,11 +546,12 @@ pub struct Sema<'a, 'sm> {
     /// compares instead ([temp.over.link]/6; clang's
     /// `AreConstraintExpressionsEqual`, WP-446).
     pub(crate) friend_cmp_constraints: kiln_source::fx::FxHashMap<ExprId, ExprId>,
-    /// While a friend function template of a class template is
-    /// redeclared: one of its constraints names an enclosing template's
-    /// parameter, so it declares a function template of its own, never
+    /// While a friend of a class template is redeclared: a friend
+    /// function template one of whose constraints names an enclosing
+    /// template's parameter, or a non-template friend with a
+    /// requires-clause, declares a function (template) of its own, never
     /// one of another scope ([temp.friend]/9; clang's
-    /// `FriendConstraintsDependOnEnclosingTemplate`, WP-726).
+    /// `FriendConstraintsDependOnEnclosingTemplate`, WP-726, WP-779).
     pub(crate) friend_template_apart: bool,
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).
@@ -608,6 +610,11 @@ pub struct Sema<'a, 'sm> {
     /// Splices whose operand was read as a frozen constant without an
     /// Oven evaluation (spec/reflection.md §5, the splice fast path).
     pub(crate) splice_fast: u64,
+    /// The `typeid` expression operands being formed, innermost last:
+    /// the open lambda count and the unevaluated depth inside each
+    /// ([`Sema::enter_typeid_operand`]; [expr.prim.splice]/2.1.4
+    /// disregards the effect of an enclosing `typeid`).
+    pub(crate) typeid_operands: Vec<(usize, u32)>,
     /// The `std::meta::substitute` memo (spec/reflection.md §3.3).
     pub(crate) meta_subst: meta::SubstMemo,
     /// The placeholder [`Sema::lend_oven`] leaves in a bridge callback's
@@ -1168,6 +1175,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             va_list_type: None,
             ext_vector_typedefs: Vec::new(),
             splice_fast: 0,
+            typeid_operands: Vec::new(),
             meta_subst: meta::SubstMemo::default(),
             spare_oven: None,
             ovl: overload::OverloadScratch::default(),

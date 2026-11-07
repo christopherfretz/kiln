@@ -172,6 +172,37 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> ExprId {
         self.note_this_use(loc);
+        self.dependent_implicit_access(this_ty, name, nns, loc)
+    }
+
+    /// [`Self::dependent_implicit_member`] for the overload set `decls`:
+    /// `this` is captured now only when every candidate is an instance
+    /// member, else once one wins at instantiation.
+    pub(crate) fn dependent_implicit_set(
+        &mut self,
+        this_ty: QualType,
+        decls: &[DeclId],
+        name: kiln_ast::names::DeclName,
+        nns: Option<kiln_ast::NnsId>,
+        loc: Loc,
+    ) -> ExprId {
+        if decls.iter().all(|&d| self.is_instance_member(self.templated_or_self(d))) {
+            self.dependent_implicit_member(this_ty, name, nns, loc)
+        } else {
+            self.dependent_implicit_access(this_ty, name, nns, loc)
+        }
+    }
+
+    /// [`Self::dependent_implicit_member`] without capturing `this`: for
+    /// an overload set with a static member, whose call uses `this` only
+    /// if an instance member wins at instantiation.
+    pub(crate) fn dependent_implicit_access(
+        &mut self,
+        this_ty: QualType,
+        name: kiln_ast::names::DeclName,
+        nns: Option<kiln_ast::NnsId>,
+        loc: Loc,
+    ) -> ExprId {
         let this = self.builder().this_expr(this_ty, true, loc);
         let b = conv::decay_dependent(self, this);
         self.builder().dependent_member(Some(b), true, name, false, nns, None, loc)
@@ -332,6 +363,17 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// True if `b` is an implicit `this` and `decls` an overload set
+    /// with a static member function.
+    fn implicit_mixed_overload(&self, b: ExprId, decls: &[DeclId]) -> bool {
+        let x = self.ignore_parens(b);
+        self.ast.exprs.get(x).kind() == ExprKind::CXXThisExpr
+            && self.ast.exprs.this_is_implicit(x)
+            && (decls.len() > 1
+                || decls.first().is_some_and(|&d| self.kind_of(d) == DeclKind::FunctionTemplate))
+            && decls.iter().any(|&d| !self.is_instance_member(self.templated_or_self(d)))
+    }
+
     /// True if `b` is an implicit `this` and `decls` an overload set of
     /// non-static member functions (clang builds an implicit-access
     /// `UnresolvedMemberExpr` for it, diagnosed without an object).
@@ -408,6 +450,17 @@ impl Sema<'_, '_> {
                     .range(kiln_source::Span::new(q.loc, end));
                 self.emit(msg);
                 return self.recover_err(&[base], loc);
+            }
+            if self.implicit_mixed_overload(b, &found.decls) {
+                // clang's `CheckQualifiedMemberReference`: an implicit
+                // member reference that finds a static member is not an
+                // error. `B::f(…)` in a member of a class template with a
+                // dependent base was kept as `this->B::f` until `B` was
+                // known not to be a base; it is the plain qualified set
+                // now, and a non-static winner is diagnosed by the call
+                // ([class.mfct.non.static]/2, [expr.prim.id.general]/3).
+                let valid = found.decls.clone();
+                return self.overload_name_ref(name, &found, &valid, false, Some(q.nns), loc);
             }
             // clang's `CheckQualifiedMemberReference`.
             let msg = self

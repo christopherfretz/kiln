@@ -2048,8 +2048,11 @@ impl AstBuilder<'_> {
         e
     }
 
-    /// `T(args)` / `T{args}` with a dependent `T` ([expr.type.conv]):
-    /// `CXXUnresolvedConstructExpr`; `list` for the braced form.
+    /// `T(args)` / `T{args}` with a dependent `T` or a type-dependent
+    /// argument ([expr.type.conv]): `CXXUnresolvedConstructExpr`; `list`
+    /// for the braced form. It is type-dependent only when `T` is
+    /// ([temp.dep.expr]/3: `int(t)` has type `int`); a type-dependent
+    /// argument makes it value-dependent (clang `computeDependence`).
     pub fn unresolved_construct(
         &mut self,
         ty: QualType,
@@ -2058,20 +2061,13 @@ impl AstBuilder<'_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
-        // [temp.dep.expr]/3: `T(args)` / `T{args}` is type-dependent only
-        // if `T` is dependent or a placeholder for a deduced type whose
-        // initializer is; otherwise a type-dependent argument makes it
-        // value-dependent, as a cast's operand does ([temp.dep.constexpr]/2).
-        use crate::types::TypeView;
-        let placeholder = matches!(
-            self.ast.types.view(ty.ty()),
-            TypeView::Auto { deduced: None, .. }
-                | TypeView::DeducedTemplateSpecialization { deduced: None, .. }
-        );
-        let drop = if placeholder { ExprDeps::NONE } else { ExprDeps::TYPE };
         let mut deps = self.type_deps(ty);
         for &a in args {
-            deps |= self.deps(a).without(drop);
+            let d = self.deps(a);
+            if d.contains(ExprDeps::TYPE) {
+                deps |= ExprDeps::VALUE_INST;
+            }
+            deps |= d.without(ExprDeps::TYPE);
         }
         let vk = self.ref_category(ty);
         let l = self.ast.lists.push(args);

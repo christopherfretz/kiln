@@ -700,7 +700,17 @@ impl Cg<'_> {
         // clang `EmitFunctionProlog` adds `noalias` to the `sret` argument,
         // and returns before that in a naked function (no `ReturnValue`
         // slot either way: the `sret` pointer is the return address).
-        let (mut ret, mut params) = self.sig_attrs(&sig, sig.params.len(), !self.f.naked);
+        // A function an alias declared first by name keeps the alias
+        // declaration's parameter and return attributes (clang sets them
+        // once, in `GetOrCreateLLVMFunction`; spec/codegen.md "Aliases and ifuncs").
+        let alias_sig = match self.alias.declared_for.get(&f) {
+            Some(&a) if thunk.is_none() && structor.is_none() => {
+                self.decl_sig(a).ok().filter(|s| s.fn_ty == sig.fn_ty)
+            }
+            _ => None,
+        };
+        let attr_sig = alias_sig.as_ref().unwrap_or(&sig);
+        let (mut ret, mut params) = self.sig_attrs(attr_sig, attr_sig.params.len(), !self.f.naked);
         if thunk.is_some() {
             (ret, params) = self.thunk_attrs(&sig, ret, params);
         }
@@ -942,9 +952,11 @@ impl Cg<'_> {
 
     /// A conditional branch (constant conditions are kept, as `IRBuilder`
     /// does).
-    pub fn cond_br(&mut self, c: V, t: Blk, f: Blk) {
+    pub fn cond_br(&mut self, c: V, t: Blk, f: Blk) -> u32 {
         let v = self.f.fir.push(Op::CondBr { c, t, f }, LTy::VOID);
-        self.loop_md(Fir::last_inst(v), &[t, f]);
+        let i = Fir::last_inst(v);
+        self.loop_md(i, &[t, f]);
+        i
     }
 
     fn loop_md(&mut self, i: u32, succ: &[Blk]) {
