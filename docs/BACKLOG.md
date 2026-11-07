@@ -705,6 +705,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-692 | CI fan-out: shard `cargo xtask ci` across parallel GitHub jobs (`ci --step/--shard/--unit-group`, `xtask test --shard`, `.github/workflows/ci-lane.yml`; target under 5 min per arch) | WP-origin | in progress |
 | WP-680 | M8 wave 1: spdlog v1.17.0 through its own CMake build + tests with kiln++ via scripts/oss (clusters → conformance tests + fixes; docs/status/oss/spdlog.md) | WP-666 | in progress |
 | WP-695 | M8 wave 2: google/benchmark v1.9.5 through its own build + tests with kiln++ via scripts/oss (docs/status/oss/benchmark.md) | WP-666 | in progress |
+| WP-703 | M8 wave 2: taskflow v3.10.0 through its own CMake build + tests with kiln++ via scripts/oss (clusters → conformance tests + fixes) | WP-666 | in progress |
 | WP-681 | M8 wave 1: Catch2 v3.16.1 through its own build + tests with kiln++ via scripts/oss (incl. the protected using-declaration cluster WP-671; docs/status/oss/catch2.md) | WP-666 | in progress |
 | WP-698 | M8 wave 2: build yaml-cpp 0.9.0 with kiln++ (scripts/oss); parity on the first build, no kiln fix; aarch64 needs -Wno-c++11-narrowing for both compilers | WP-666 | done (PR #320; 51/51 TUs, 1011 gtest cases at parity, 0 kiln fixes) |
 | WP-682 | M8 wave 1: googletest v1.17.0 through its own build + tests with kiln++ via scripts/oss (incl. WP-670 bare -W / exit 70 and WP-672 libstdc++ tuple deduction; docs/status/oss/googletest.md) | WP-666 | in progress |
