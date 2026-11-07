@@ -2041,6 +2041,12 @@ class name" at `B`
   template argument too (the parser's `names_member_template`; libstdc++
   `_UnClos<__negate, std::_Expr, _Clos>` in `_Expr`, WP-332). Test:
   `tests/conformance/temp.local/libstdcxx-qualified-template-name-in-own-class.cpp`.
+  The same holds for a deduced class type placeholder: `::n::A{a, b}`
+  or `n::A(a)` inside `A`'s own definition, in an expression or a
+  decl-specifier, deduces `A`'s arguments from its initializer as it does
+  outside (the parser's `names_ctad_template`; mp-units' delegating
+  constructor `quantity(::mp_units::quantity{v, R2{}})`, WP-792). Test:
+  `tests/conformance/temp.local/qualified-name-in-own-definition-ctad.cpp`.
 - The injected-class-name of a base class template *specialization*,
   found by lookup in a derived class (`V` inside `struct B : V<long>`,
   `B::V`, `Doc::V` with `Doc` a typedef of a derived specialization) and
