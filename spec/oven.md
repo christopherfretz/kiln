@@ -316,6 +316,20 @@ fault counts and trap ids unchanged.
   memory faults, uninitialized subobjects and mutable reads alike
   (`tests/conformance/expr.const/call-note-argument-values.cpp`,
   `call-note-constructor.cpp`, `call-note-temporary-arguments.cpp`).
+- A pointer argument's path through an unnamed member (an anonymous
+  union or struct) names that member as clang does:
+  `&v.V::(anonymous union at FILE:L:C).data[1]`, the class qualified and
+  the location the member's type's (`notes::ptr_string`,
+  `write_unnamed_member`). The Oven knows only raw locations, so the
+  location is written as a marked raw `Loc` and resolved to its presumed
+  `file:line:col` when the note is rendered (`SemaBridge::sources`; with
+  no source manager the mark is dropped). Before WP-773 the member was an
+  empty name (`&v..data[1]`)
+  (`tests/conformance/expr.const/oven-note-unnamed-member-path.cpp`).
+  Deviation: for an anonymous union inside a member of unnamed struct
+  type (`v.s.data` with `struct { union { int data[4]; }; } s;`) clang
+  19 prints `v.s.union (anonymous union at ...)`; kiln prints the
+  qualified form there too.
 - Compat-22 note wording (WP-377; each 19 row stays in force below 22):
   | level-19 note | level-22 note |
   |---|---|
@@ -1070,6 +1084,14 @@ literal is one instruction and one step, not an interpreted loop.
   must be 0 or 1. Dense, fully initialized types copy all bytes at once.
   `TO_MEM` builds an aggregate result in place; `READ_ONLY` only reads
   the source (clang reads before its type checks).
+- **`__builtin_start_lifetime(p)`** (WP-773, `bi::START_LIFETIME`;
+  P3726R2, GCC's builtin behind libstdc++'s `std::start_lifetime`): one
+  instruction; `t1` is `p`'s designator type (the pointee; `DYN`, a
+  `void *` with no tag, is invalid, which sema already rejects). It
+  checks `p`'s storage as a placement new would, makes the member path
+  to it active without activating an array member it is an element of,
+  and revives ended tracked storage with uninitialized bytes; see "C++26
+  union lifetime" below. It has no value.
 - **`__builtin_is_within_lifetime(p)`** (WP-418, `bi::LIFETIME`;
   P2641R4, clang 20 `IsWithinLifetime`): a null, function or
   one-past-the-end `p` fails with `'__builtin_is_within_lifetime' cannot
@@ -1982,8 +2004,45 @@ modes keep the WP-334 behaviour above.
   the test runs only on the path through a union, once per placement
   new. Deviation from the DIS wording, which leaves the array object
   inactive until `std::start_lifetime(u.arr)` ([obj.lifetime]); kiln
-  follows GCC 17, which activates it implicitly. `std::start_lifetime`
-  is not provided (a library builtin, follow-up).
+  follows GCC 17, which activates it implicitly (decided in WP-773: code
+  written for GCC 17 and libstdc++'s `inplace_vector` relies on it, and
+  rejecting it buys no safety, since the element's bytes are still
+  uninitialized).
+- **`std::start_lifetime(r)`** (P3726R2, [obj.lifetime]; GCC's
+  `__builtin_start_lifetime(&r)`, `bi::START_LIFETIME`,
+  `Vm::start_lifetime`) begins the lifetime of the implicit-lifetime
+  aggregate `r` and initializes nothing. Through a union it makes `r`'s
+  member the active member (`place_in_unions` with `implicit = false`):
+  an inactive member becomes active, and the previously active member
+  ends without a destructor call, as for placement new. Unlike placement
+  new it does not activate an array member when `r` is an element of
+  one (or lies inside an inactive member at a deeper level): that is
+  "construction of subobject of member 's' of union with active member
+  'i'", GCC's "containing object not within lifetime". If `r` is already
+  within its lifetime it is left as it is (constructed elements keep
+  their values); otherwise tracked storage whose lifetime ended
+  (`std::allocator<T>::allocate`, a destroyed object) is revived with
+  its bytes uninitialized. Storage that is not writable (a constant, a
+  pointer past the end) is the same fault as a placement new there.
+  libc++ has no `std::start_lifetime` yet, so tests declare it over the
+  builtin (`tests/conformance/obj.lifetime/`).
+- **Unconstructed elements are not part of a value.** An element of a
+  union's active array member that was never constructed is an inactive
+  union elemental subobject ([class.union]/2, [expr.const]); so is an
+  element of such an element (nested arrays recurse). Freezing a constant
+  (`Oven::walk_elements`) and the trivial-copy initialization check
+  (`Oven::first_uninit_elements`) skip an element none of whose bytes is
+  initialized (`Space::any_init`); a partly initialized element is still
+  "subobject 'b' is not initialized". The skipped element is not covered
+  in the image, codegen emits it as zero bytes, and reading it (in the
+  constant, or a copy of it) is "read of uninitialized object". The
+  extra work is one bitmap scan per element, and only for a union whose
+  array member is not wholly initialized. Deviation: an element that was
+  constructed but holds only indeterminate bytes (`::new (p) int`) is
+  indistinguishable from an unconstructed one and is accepted as a hole;
+  GCC rejects it. Template-argument equivalence ([temp.type]) compares
+  the image's cover, so two constants that differ only in which elements
+  are holes compare by their constructed elements.
 - **Element or member at offset 0.** A pointer has no designator, so
   `&u.s` and `&u.arr[0]` of one type are both candidates. The entry
   keeps the member and `union_alts` the array (WP-233). Constructing
@@ -2004,7 +2063,9 @@ No new memory state: entries are removed when the member is destroyed,
 and element lifetimes are the existing per-byte bitmap
 (`tests/conformance/class.union/constexpr-trivial-union-lifetime-cxx26.cpp`,
 `tests/conformance/expr.const/constexpr-trivial-union-invalid-cxx26.cpp`,
-`tests/conformance/basic.life/union-member-destroyed-cxx26.cpp`).
+`tests/conformance/basic.life/union-member-destroyed-cxx26.cpp`,
+`tests/conformance/obj.lifetime/start-lifetime-*.cpp`,
+`tests/conformance/expr.const/constexpr-union-partial-array-*.cpp`).
 
 An explicit destruction of a non-union class object whose union members'
 bytes alone are outside their lifetime is accepted too (`EndLife` aux 1,

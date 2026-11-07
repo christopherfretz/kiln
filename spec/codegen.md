@@ -2102,6 +2102,15 @@ bound); `std::observable_checkpoint` itself is not constexpr. Tests:
 (the IR and, with `opt-19`, the store kept at `-O2` where it is dropped
 without the checkpoint); `tests/conformance/intro.abstract/`.
 
+`__builtin_start_lifetime(p)` (WP-773, P3726R2 `std::start_lifetime`)
+evaluates `p` for its side effects and emits nothing else, as GCC folds
+it to `(void)p`: at run time an implicit-lifetime aggregate's lifetime
+begins with its storage ([intro.object]/10), so there is nothing to do.
+A constant whose union holds an array member with unconstructed elements
+(spec/oven.md "C++26 union lifetime") is emitted with those elements as
+zero bytes, like any byte not covered by the constant's image. Test:
+`tests/conformance/obj.lifetime/start-lifetime-run.cpp`.
+
 **Landed (WP-140): `PredefinedExpr`.** The name is a private
 `unnamed_addr constant` array named `<spelling>.<mangled function>`
 (`__func__._Z1fv`), as clang names it (`Module::string_global_named`);
