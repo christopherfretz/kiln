@@ -23,7 +23,7 @@ one, and the library picture is [status/libstdcxx.md](status/libstdcxx.md)
 | [C++17](#c17) | `-std=c++17` (`c++1z`; `gnu++17` is the default) | `201703L` | 35 | 1 | 0 | 0 |
 | [C++20](#c20) | `-std=c++20` (`c++2a`) | `202002L` | 53 | 1 | 0 | 0 |
 | [C++23](#c23) | `-std=c++23` (`c++2b`) | `202302L` | 35 | 0 | 0 | 0 |
-| [C++26](#c26) | `-std=c++26` (`c++2c`) | `202400L` | 30 | 5 | 0 | 0 |
+| [C++26](#c26) | `-std=c++26` (`c++2c`) | `202400L` | 31 | 4 | 0 | 0 |
 | [C++26 reflection](#c26-reflection) | `-std=c++26` plus `-freflection` | `202400L` | 16 | 0 | 0 | 0 |
 | [DR-level papers](#dr-level-papers) | every `-std=` | — | 19 | 0 | 0 | 0 |
 | [kiln extensions](#kiln-extensions) | every `-std=` | — | 5 | 0 | 0 | 0 |
