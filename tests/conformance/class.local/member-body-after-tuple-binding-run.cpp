@@ -23,8 +23,9 @@ template <class T> struct pair {
 } // namespace n
 
 namespace std {
+using size_t = decltype(sizeof 0);
 template <class T> struct tuple_size;
-template <int I, class T> struct tuple_element;
+template <size_t I, class T> struct tuple_element;
 template <class T> struct tuple_size<n::pair<T>> {
   static constexpr int value = 2;
 };
