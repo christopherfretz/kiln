@@ -840,31 +840,25 @@ impl Sema<'_, '_> {
                 Err(())
             }
             (DeclKind::TemplateTemplateParm, ArgView::Template(n)) => {
-                match self.arg_template_decl(n).map(|d| self.kind_of(d)) {
-                    Some(
-                        DeclKind::ClassTemplate
-                        | DeclKind::TypeAliasTemplate
-                        | DeclKind::TemplateTemplateParm,
-                    ) => {
-                        let d = self.arg_template_decl(n);
-                        if let Some(d) = d {
-                            let args = self.prior_levels(tmpl, depth, prior);
-                            if !self.check_template_template_arg(p, d, at, &args) {
-                                return Err(());
-                            }
+                let Some(d) = self.arg_template_decl(n) else { return Ok(a) };
+                // [temp.arg.template]/1, /3: the argument's kind is the
+                // parameter's (a variable template or concept for a type
+                // template template parameter is rejected as clang 22
+                // does, P2841R7).
+                match self.template_arg_kind(d) {
+                    Some(k) if k == self.ttp_kind(p) => {
+                        let args = self.prior_levels(tmpl, depth, prior);
+                        if !self.check_template_template_arg(p, d, at, &args) {
+                            return Err(());
                         }
                         Ok(a)
                     }
-                    None => Ok(a),
-                    // A variable template or concept (parsed as a
-                    // template name by clang 22, P2841).
-                    Some(DeclKind::VarTemplate | DeclKind::Concept) => {
-                        if let Some(d) = self.arg_template_decl(n) {
-                            self.reject_keyless_ttp_arg(d, at);
-                        }
+                    Some(_) => {
+                        let want = self.ttp_kind(p);
+                        self.reject_ttp_arg_kind(want, d, at);
                         Err(())
                     }
-                    Some(_) => {
+                    None => {
                         self.error(DiagId::sema_template_arg_must_be_template, at);
                         Err(())
                     }

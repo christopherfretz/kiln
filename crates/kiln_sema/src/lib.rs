@@ -91,6 +91,7 @@ mod reflect_limit;
 mod reflect_operand;
 mod rtti;
 pub mod scope;
+mod section;
 mod self_ref;
 mod side_effects;
 mod splice;
@@ -213,6 +214,9 @@ pub struct Sema<'a, 'sm> {
     /// The `#pragma pack` directives seen, in order (location and the
     /// spelling of the argument list).
     pub pragma_packs: Vec<(Loc, String)>,
+    /// The named sections seen, each with the first declaration placed in
+    /// it and its flags (clang `ASTContext::SectionInfos`; [`section`]).
+    pub(crate) sections: kiln_source::fx::FxHashMap<Box<[u8]>, (DeclId, u8)>,
     /// The attribute-token as written (scope, name) of each attribute
     /// spelled with a scope or a `__`-affixed name, by its location; how
     /// diagnostics name it ([`Sema::attr_shown`]).
@@ -1043,6 +1047,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             abi,
             layout_cache: kiln_abi::LayoutCache::default(),
             pragma_packs: Vec::new(),
+            sections: kiln_source::fx::FxHashMap::default(),
             attr_spellings: kiln_source::fx::FxHashMap::default(),
             traits: templ::builtins::TraitState::default(),
             exceptions: true,

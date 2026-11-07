@@ -13,7 +13,7 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::BinaryOp;
-use kiln_ast::templates::Requirement;
+use kiln_ast::templates::{Requirement, TtpKind};
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TemplateName};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -792,8 +792,27 @@ impl Parser<'_, '_> {
         };
         let params = self.s.act_template_head(requires, r_angle);
         let mut keyless = false;
+        let mut kind = (TtpKind::Type, Loc::INVALID);
         let typename_kw = match self.kw() {
             Some(Kw::Class) => {
+                self.bump();
+                false
+            }
+            // P2841R7 [temp.param]/1: `concept` (concept-tt-parameter) or
+            // `auto` (variable-tt-parameter), at clang compatibility 22
+            // (clang 19 reports the missing key).
+            Some(k @ (Kw::Concept | Kw::Auto)) if self.s.clang_compat >= 22 => {
+                let concept = k == Kw::Concept;
+                if self.std < Std::Cxx26 {
+                    let id = if concept {
+                        DiagId::parse_ext_concept_template_param
+                    } else {
+                        DiagId::parse_ext_variable_template_template_param
+                    };
+                    let d = self.s.diag(id, self.loc());
+                    self.emit(d);
+                }
+                kind = (if concept { TtpKind::Concept } else { TtpKind::Variable }, self.loc());
                 self.bump();
                 false
             }
@@ -829,6 +848,9 @@ impl Parser<'_, '_> {
         }
         let (pack, name, at) = self.parse_param_pack_and_name();
         let p = self.s.act_on_template_template_param(params, typename_kw, pack, name, at);
+        if kind.0 != TtpKind::Type {
+            self.s.act_on_ttp_kind(p, kind.0, kind.1);
+        }
         if keyless {
             self.s.act_on_keyless_template_template_param(p);
         }
@@ -930,6 +952,13 @@ impl Parser<'_, '_> {
                 } else {
                     match self.s.classify_name(n, qual.map(|q| q.ctx)) {
                         NameClass::TypeTemplate(d) => Some(self.s.template_name_for(d)),
+                        // A concept or variable template for a parameter
+                        // of that kind (P2841R7); sema checks the kinds.
+                        NameClass::VarTemplate(d) | NameClass::Concept(d)
+                            if self.s.ttp_kind(p) != TtpKind::Type =>
+                        {
+                            Some(self.s.template_name_for(d))
+                        }
                         NameClass::VarTemplate(d) | NameClass::Concept(d)
                             if self.s.clang_compat >= 22 =>
                         {

@@ -1249,6 +1249,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// The semantic parent of `d`, looking through linkage
     /// specifications and `export`.
     fn parent(&self, d: DeclId) -> Option<DeclId> {
+        // A concept template parameter's parent is the entity its
+        // template-head templates (clang 22's DeclContext, P2841R7).
+        if let Some(&o) = self.ast.templates.ttp_owner.get(d) {
+            return Some(o);
+        }
         let mut c = effective_ctx(self.ast, d);
         while let Some(ctx) = c {
             match self.ast.decls.get(ctx).kind() {

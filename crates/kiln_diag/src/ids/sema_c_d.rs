@@ -47,6 +47,7 @@ sema_comparison_distinct_pointers = Error (2) "comparison of distinct pointer ty
 sema_comparison_pointer_integer = Error (2) "comparison between pointer and integer ({0} and {1})";
 sema_complex_to_real_cxx = Error (2) "implicit conversion from {0} to {1} is not permitted in C++";
 sema_compound_qualified_function_type = Error (4) "{0:pointer|reference} to function type {1:|{2} }cannot have '{3}' qualifier";
+sema_concept_template_param_constraints = Error (0) "concept template parameter cannot have associated constraints";
 sema_conditional_ambiguous = Error (2) "conditional expression is ambiguous; {0} can be converted to {1} and vice versa";
 sema_conditional_enum_enum_deprecated = Warning [DeprecatedEnumCompareConditional] (3) "{0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} different enumeration types ({1} and {2}) is deprecated";
 sema_conditional_vector_cond_result_mismatch = Error (0) "cannot mix vectors and extended vectors in a vector conditional";

@@ -82,6 +82,22 @@ pub struct TemplateParmInfo {
     pub constraint: Option<ExprId>,
     /// A template template parameter's own parameters.
     pub params: Option<TemplateParamListId>,
+    /// A template template parameter's kind ([temp.param]/1, P2841R7).
+    pub ttp_kind: TtpKind,
+}
+
+/// The kind of a template template parameter ([temp.param]/1): a
+/// type-tt-parameter (`class`/`typename`), a variable-tt-parameter
+/// (`auto`) or a concept-tt-parameter (`concept`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TtpKind {
+    /// `template <...> class P` ([temp.param]/1 type-tt-parameter).
+    #[default]
+    Type,
+    /// `template <...> auto P` (variable-tt-parameter).
+    Variable,
+    /// `template <...> concept P` (concept-tt-parameter).
+    Concept,
 }
 
 /// A requirement of a requires-expression ([expr.prim.req]).
@@ -299,6 +315,11 @@ pub struct TemplateTables {
     /// (`N::template v<T>`; clang's `TemplateKWLoc`), which the printer
     /// writes back (WP-308).
     pub template_kw: ColdMap<ExprId, Loc>,
+    /// The templated declaration (pattern) whose template-head declares
+    /// a concept template parameter: its semantic parent for mangling a
+    /// type-constraint that names it (clang 22's `N <owner> <name> E`,
+    /// spec/abi.md; P2841R7).
+    pub ttp_owner: ColdMap<DeclId, DeclId>,
     /// Set by sema right before it creates a template's pattern: the next
     /// declaration the builder adds is neither a member nor a name (its
     /// template decl is both, [`AstBuilder::template_decl`]).
@@ -403,6 +424,7 @@ impl Default for TemplateTables {
             typename_kw: false,
             constraint: None,
             params: None,
+            ttp_kind: TtpKind::Type,
         };
         Self {
             param_lists: vec![dummy_list],
@@ -418,6 +440,7 @@ impl Default for TemplateTables {
             member_op_loc: ColdMap::new("member_op_loc"),
             pseudo_dtor_name: ColdMap::new("pseudo_dtor_name"),
             template_kw: ColdMap::new("template_kw"),
+            ttp_owner: ColdMap::new("ttp_owner"),
             expr_nns: ColdMap::new("expr_nns"),
             pattern_next: false,
             dependent_depth: 0,
@@ -1208,8 +1231,15 @@ impl AstBuilder<'_> {
     ) -> DeclId {
         let d = self.ast.decls.next_id();
         let ty = self.ast.types.template_type_parm(d, depth.into(), index.into(), pack);
-        let info =
-            TemplateParmInfo { depth, index, pack, typename_kw, constraint: None, params: None };
+        let info = TemplateParmInfo {
+            depth,
+            index,
+            pack,
+            typename_kw,
+            constraint: None,
+            params: None,
+            ttp_kind: TtpKind::Type,
+        };
         self.parm(h, DeclKind::TemplateTypeParm, Some(QualType::unqual(ty)), info)
     }
 
@@ -1229,6 +1259,7 @@ impl AstBuilder<'_> {
             typename_kw: false,
             constraint: None,
             params: None,
+            ttp_kind: TtpKind::Type,
         };
         self.parm(h, DeclKind::NonTypeTemplateParm, Some(ty), info)
     }
@@ -1250,8 +1281,17 @@ impl AstBuilder<'_> {
             typename_kw,
             constraint: None,
             params: Some(params),
+            ttp_kind: TtpKind::Type,
         };
         self.parm(h, DeclKind::TemplateTemplateParm, None, info)
+    }
+
+    /// Sets template template parameter `d`'s kind ([temp.param]/1).
+    pub fn set_ttp_kind(&mut self, d: DeclId, k: TtpKind) {
+        let i = self.ast.decls.get(d).data() as usize;
+        if let Some(p) = self.ast.templates.parms.get_mut(i) {
+            p.ttp_kind = k;
+        }
     }
 
     /// Sets type parameter `d`'s immediately-declared constraint.
@@ -1355,6 +1395,13 @@ impl AstBuilder<'_> {
         debug_assert_eq!(d, d2);
         let linked = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
         self.mark_template_first(d, pattern, linked.is_ok());
+        let pl = self.ast.templates.param_list(params).params;
+        let ps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(pl).collect();
+        for p in ps {
+            if self.ast.template_parm(p).is_some_and(|x| x.ttp_kind == TtpKind::Concept) {
+                let _ = self.ast.templates.ttp_owner.insert(p, pattern);
+            }
+        }
         // A friend class template declared in a class template is a
         // template of the enclosing namespace, which stays independent.
         let friend_class = kind == DeclKind::ClassTemplate && n.misc().friend() != FriendKind::None;
@@ -2357,6 +2404,60 @@ impl AstBuilder<'_> {
         )
     }
 
+    /// `P<args>` naming concept or variable template template parameter
+    /// `p` (P2841R7 [temp.names]): a value-dependent
+    /// `ConceptSpecializationExpr` naming `p` (a `bool` prvalue,
+    /// [temp.dep.constexpr]/2), or a type-dependent
+    /// `UnresolvedLookupExpr` whose one declaration is `p`. Either names
+    /// an unexpanded pack when `p` is a pack. Substitution forms the
+    /// template-id of `p`'s argument.
+    pub fn ttp_template_id_expr(
+        &mut self,
+        p: DeclId,
+        concept: bool,
+        args: ArgListId,
+        bool_ty: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        let pack = self.ast.template_parm(p).is_some_and(|x| x.pack);
+        let mut deps = self.targs_deps(Some(args)) | DEP_ALL;
+        if concept {
+            deps = deps.without(ExprDeps::TYPE);
+        }
+        if pack {
+            deps |= ExprDeps::UNEXPANDED_PACK;
+        }
+        if concept {
+            return self.push_expr(
+                ExprKind::ConceptSpecializationExpr,
+                ValueCategory::PRValue,
+                ObjectKind::Ordinary,
+                ExprFlags::NONE,
+                deps,
+                0,
+                bool_ty,
+                loc,
+                p.raw(),
+                args.raw(),
+            );
+        }
+        let name = self.ast.decls.get(p).name();
+        let list = self.ast.lists.push(&[p]);
+        let ty = self.dependent_ty();
+        let e = self.simple(
+            ExprKind::UnresolvedLookupExpr,
+            ValueCategory::LValue,
+            deps,
+            0,
+            ty,
+            loc,
+            name.to_raw(),
+            list.raw(),
+        );
+        self.side(e, None, Some(args));
+        e
+    }
+
     /// `C<args>` naming concept `c` ([temp.names]/8): a
     /// `ConceptSpecializationExpr`, a `bool` prvalue, value-dependent when
     /// an argument is dependent.
@@ -2371,6 +2472,10 @@ impl AstBuilder<'_> {
         // a merely instantiation-dependent argument (`C<TC<N>>`, `N` a
         // constant local of a function template) leaves it instantiation-
         // dependent, like clang's `ConceptSpecializationExpr` dependence.
+        // A concept template parameter's concept-id is value-dependent.
+        if self.ast.decls.get(c).kind() == DeclKind::TemplateTemplateParm {
+            return self.ttp_template_id_expr(c, true, args, bool_ty, loc);
+        }
         let d = self.targs_deps(Some(args));
         let mut deps = d.without(ExprDeps::TYPE_VALUE_INST);
         if d.intersects(ExprDeps::TYPE.with(ExprDeps::VALUE)) {

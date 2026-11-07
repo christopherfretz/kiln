@@ -1088,6 +1088,24 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   through nested anonymous records (clang `getFirstNamedDataMember`),
   and gets no internal-linkage `L` even though it is `static`:
   `static union { int ga; };` is `_Z2ga`. `tests/codegen/anon_union_global.cpp`.
+- **Concept and variable template template parameters (P2841R7,
+  WP-746).** Matched to clang 22 (no Itanium ABI wording yet; clang 22
+  is the reference, compared exactly by
+  `tests/conformance/temp.param/ir-concept-variable-ttp-mangling.cpp`):
+  a concept or variable template argument is its template name like a
+  class template argument (`_Z1fI3IntiEiT0_`, `_Z2pkIJ3IntS0_EEiv`); a
+  use `C<T>` / `V<T>` in a signature or constraint is an unresolved name
+  `<source-name> I <args> E` (`X1CIT0_EE`, `Q1CIT0_E`, folds
+  `fraa2CsIT0_E`); a head that differs from the argument's is `Tt Tp Ty
+  E` as for a type template template parameter (`_Z2fvITtTpTyE3IntEiv`).
+  A type-constraint (`template <C T>`, `C auto`) naming a concept template
+  parameter mangles as the nested name `N <owner> <parameter name> E`,
+  the owner being the template whose head declares the parameter (the
+  function template `TkN2ct1CEi`, the class template `TkN1X1CEi`, inside
+  a namespace `TkNS_2ct1CEi`): `TemplateTables::ttp_owner` records each
+  concept template parameter's templated declaration at
+  `template_decl`, and `Mangler::parent` answers it. Forms clang 22
+  rejects have no mangling choice beyond these rules and are not run.
 ### 8.17 Landed (WP-211): `_Complex` lowering and mangling
 - **IR type.** `_Complex T` is `{ T, T }` (clang `ConvertType`). The layout
   is in §3: twice the size of `T`, aligned to `T`.
