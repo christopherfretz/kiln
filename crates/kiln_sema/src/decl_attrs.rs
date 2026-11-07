@@ -46,6 +46,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::WEAKREF => "weakref",
         AttrKind::ALIAS => "alias",
         AttrKind::ANALYZER_NORETURN => "analyzer_noreturn",
+        AttrKind::DISABLE_TAIL_CALLS => "disable_tail_calls",
         AttrKind::CONST => "const",
         AttrKind::PURE => "pure",
         AttrKind::COLD => "cold",
@@ -474,6 +475,12 @@ impl Sema<'_, '_> {
                 "optnone",
                 "functions and Objective-C methods",
             ),
+            AttrKind::DISABLE_TAIL_CALLS if !kind.is_function() => wrong(
+                self,
+                DiagId::sema_attribute_wrong_decl_type,
+                "disable_tail_calls",
+                "functions and Objective-C methods",
+            ),
             AttrKind::MINSIZE if !kind.is_function() => wrong(
                 self,
                 DiagId::sema_attribute_wrong_decl_type_error,
@@ -796,6 +803,58 @@ impl Sema<'_, '_> {
         attrs.retain(|&a| {
             let k = self.ast.attrs.get(a).kind;
             k != AttrKind::ALWAYS_INLINE && k != AttrKind::MINSIZE
+        });
+    }
+
+    /// `naked` against `disable_tail_calls` on function `d` (clang
+    /// `MutualExclusions<[Naked, DisableTailCalls]>`, WP-682): the later
+    /// of the two, on this declaration against an earlier attribute of it
+    /// or of a previous declaration, is an error ("'later' and 'earlier'
+    /// attributes are not compatible", a note at the earlier) and is
+    /// dropped from `attrs`.
+    pub(crate) fn check_naked_conflicts(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        const PAIR: [(AttrKind, &str); 2] =
+            [(AttrKind::NAKED, "naked"), (AttrKind::DISABLE_TAIL_CALLS, "disable_tail_calls")];
+        let own: Vec<AttrNode> = attrs
+            .iter()
+            .map(|&a| *self.ast.attrs.get(a))
+            .filter(|n| PAIR.iter().any(|&(k, _)| k == n.kind))
+            .collect();
+        if own.is_empty() || !self.ast.decls.get(d).kind().is_function() {
+            return;
+        }
+        let prior = |s: &Self, k: AttrKind| {
+            s.ast.redecls_of(d).filter(|&r| r != d).find_map(|r| {
+                s.ast
+                    .lists
+                    .iter::<AttrId>(s.ast.attrs.of_decl(r))
+                    .map(|a| *s.ast.attrs.get(a))
+                    .find(|n| n.kind == k)
+            })
+        };
+        let name = |k: AttrKind| PAIR.iter().find(|&&(x, _)| x == k).map_or("", |&(_, n)| n);
+        let mut dropped = Vec::new();
+        for (i, n) in own.iter().enumerate() {
+            let other = if n.kind == AttrKind::NAKED {
+                AttrKind::DISABLE_TAIL_CALLS
+            } else {
+                AttrKind::NAKED
+            };
+            let earlier =
+                prior(self, other).or_else(|| own[..i].iter().copied().find(|e| e.kind == other));
+            let Some(e) = earlier else { continue };
+            let note = self.diag(DiagId::note_conflicting_attribute, e.loc);
+            let msg = self
+                .diag(DiagId::sema_attributes_not_compatible, n.loc)
+                .arg(self.attr_shown(n, name(n.kind)))
+                .arg(self.attr_shown(&e, name(e.kind)))
+                .with_note(note);
+            self.emit(msg);
+            dropped.push(n.loc);
+        }
+        attrs.retain(|&a| {
+            let n = self.ast.attrs.get(a);
+            !(dropped.contains(&n.loc) && PAIR.iter().any(|&(k, _)| k == n.kind))
         });
     }
 

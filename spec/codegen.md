@@ -1111,7 +1111,11 @@ The normative description is spec/driver.md "Code generation". In short:
   `cold` unless the definition is `optnone` by `-O0` (`cold` itself
   comes from `cold_hot_attrs`, also on `optnone` definitions).
   Declarations and call sites get none of `optnone`, `minsize`,
-  `naked`. A naked definition (`Fx::naked`) has no parameter prologue
+  `naked`. A function with `disable_tail_calls` on any declaration has
+  `"disable-tail-calls"="true"` on its declaration and its definition,
+  not on call sites (`Cg::target_attrs_of`, clang
+  `ConstructAttributeList`; WP-682,
+  `tests/codegen/disable_tail_calls_o2.cpp`). A naked definition (`Fx::naked`) has no parameter prologue
   (no parameter or `this` slots: clang `EmitFunctionProlog` returns
   early) and its epilogue is `unreachable` instead of a return (clang
   `EmitFunctionEpilog`); falling off a value-returning naked function
