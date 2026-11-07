@@ -36,9 +36,8 @@ pub(crate) struct AllocFns {
 impl Sema<'_, '_> {
     /// The functions named `operator op` for an object of type `elem`:
     /// the class's own (with those of its bases) unless `global`, else
-    /// the global ones. Class-scope function templates are kept apart
-    /// for [`Sema::find_operator_new_template`]; global ones are not
-    /// candidates yet (WP-071).
+    /// the global ones. Function templates (class-scope or global) are
+    /// kept apart for [`Sema::find_operator_new_template`].
     pub(crate) fn alloc_fns(
         &mut self,
         elem: QualType,
@@ -70,13 +69,15 @@ impl Sema<'_, '_> {
             }
         }
         let tu = self.ast.tu;
-        let fns = self
-            .ast
-            .lookup_local(tu, name)
-            .iter()
-            .filter(|&d| self.ast.decls.get(d).kind() == DeclKind::Function)
-            .collect();
-        AllocFns { fns, templates: Vec::new(), in_class: false, naming: None }
+        let found: Vec<DeclId> = self.ast.lookup_local(tu, name).iter().collect();
+        let of = |s: &Self, k: DeclKind| -> Vec<DeclId> {
+            found.iter().copied().filter(|&d| s.ast.decls.get(d).kind() == k).collect()
+        };
+        // [expr.new]/20, [temp.over]/1: a global allocation function
+        // template is a candidate too (WP-712).
+        let fns = of(self, DeclKind::Function);
+        let templates = of(self, DeclKind::FunctionTemplate);
+        AllocFns { fns, templates, in_class: false, naming: None }
     }
 
     /// The usual deallocation function among `fns` ([basic.stc.dynamic.
