@@ -540,6 +540,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`,
       `__builtin_return_address(n)` `call ptr @llvm.returnaddress(i32 n)`
       (WP-432, `builtins_return_address.cpp`).
+      `__builtin_thread_pointer()` is `call ptr @llvm.thread.pointer()`,
+      `@llvm.thread.pointer.p0()` under `-fclang-compat=22` (the intrinsic
+      became address-space overloaded in LLVM 20), declared
+      `memory(none)` (WP-782, `builtins_thread_pointer.cpp`).
       `__builtin_prefetch(p, rw, loc)` is `call void
       @llvm.prefetch.p0(ptr p, i32 rw, i32 loc, i32 1)` (defaults `rw` 0,
       `loc` 3; the trailing 1 selects the data cache), the intrinsic

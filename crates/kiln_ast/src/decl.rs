@@ -5142,6 +5142,9 @@ pub mod builtin {
     /// union lifetime"); at runtime it evaluates `p` and does nothing.
     /// Kiln-private id (clang 22 has no such builtin).
     pub const START_LIFETIME: u32 = 2179;
+    /// `void *__builtin_thread_pointer()` (clang `NoThrow`; WP-782): the
+    /// thread pointer, `llvm.thread.pointer`; never a constant.
+    pub const THREAD_POINTER: u32 = 2180;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
@@ -5187,6 +5190,8 @@ pub mod builtin {
         row(UNPREDICTABLE, "__builtin_unpredictable", "LiLi", N | C),
         // WP-773.
         row(START_LIFETIME, "__builtin_start_lifetime", "v.", N | T),
+        // WP-782.
+        row(THREAD_POINTER, "__builtin_thread_pointer", "v*", N),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19

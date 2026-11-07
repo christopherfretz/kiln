@@ -952,7 +952,8 @@ literal is one instruction and one step, not an interpreted loop.
   `std::allocator<T>::allocate`/`deallocate` (WP-061b; clang's
   untyped-memory note; inside them they allocate, "Transient
   allocation", WP-212); `__builtin_debugtrap`, `__builtin_frame_address`
-  and `__builtin_return_address`, noted at the call's begin (WP-432);
+  and `__builtin_return_address`, noted at the call's begin (WP-432),
+  and `__builtin_thread_pointer` likewise (WP-782);
   `__builtin_prefetch` likewise (WP-610); every x86 builtin but the
   scalar bit ones below likewise, `__builtin_ia32_pause` (WP-610)
   included, and `__builtin_nontemporal_store` / `_load` and

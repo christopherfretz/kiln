@@ -681,6 +681,15 @@ impl Cg<'_> {
                 let f = kiln_llvm::intrinsics::frameaddress(&mut self.m);
                 self.intrinsic_call(f, vec![level])
             }
+            // clang `BI__builtin_thread_pointer`: `llvm.thread.pointer`
+            // (`.p0` from clang 20).
+            id::THREAD_POINTER => {
+                let f = kiln_llvm::intrinsics::thread_pointer(
+                    &mut self.m,
+                    self.opts.clang_compat >= 22,
+                );
+                self.intrinsic_call(f, vec![])
+            }
             // clang `BI__builtin_return_address`: `llvm.returnaddress(i32 N)`.
             id::RETURN_ADDRESS => {
                 let level = self.emit_scalar(a0)?;
