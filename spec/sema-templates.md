@@ -3922,7 +3922,10 @@ after selection and on any odr-use:
   `__stable_sort` and `__stable_sort_move`) is not instantiated again:
   its definition is in progress, as clang's `isDefined` is once
   `InstantiateFunctionDefinition` has started. Test:
-  `temp.inst/constexpr-mutual-recursion.cpp`.
+  `temp.inst/constexpr-mutual-recursion.cpp`. The same holds for a
+  member function of a class template specialization (a move
+  constructor calling a constexpr `swap` that moves `*this`). Test:
+  `temp.inst/constexpr-members-mutually-recursive-run.cpp`.
 - **Every other specialization** is pushed onto `pending`. It is
   instantiated at end of TU, or earlier through `ensure_body`.
 - **Explicit-instantiation-declaration members** are queued only if they
