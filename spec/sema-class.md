@@ -263,7 +263,13 @@ of `X` and their members ([class.local]/2). A friend function defined in a class
 protected member named through an object expression or `&P::m`, when only (c)
 via `P` grants access the object's class must be `P` or derived from `P` (`'p'
 is a protected member of 'S'` + note `can only access this member on an object
-of type 'D'`). Private: `'x' is a private member of 'S'` + `declared private
+of type 'D'`; for a constructor or destructor the note is `protected
+constructor|destructor can only be used to construct|destroy a base class
+subobject`). A constructor inherited from a protected base constructor
+([namespace.udecl]/19) is called through an object of the class whose
+using-declarator names it (clang's `ObjectClass` is the using-shadow's
+class), so that class's members may construct it (`return {1};` in a static
+member; WP-681). Private: `'x' is a private member of 'S'` + `declared private
 here` / `implicitly declared private here`, located at the member's first
 declaration (a member alias template at its `using` keyword, as clang
 locates a `TypeAliasTemplateDecl`; WP-238).

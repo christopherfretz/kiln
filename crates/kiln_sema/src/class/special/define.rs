@@ -1081,11 +1081,14 @@ impl Sema<'_, '_> {
                 let sel = mk.map_or(3, SpecialKind::index);
                 let class_ty = self.ast.types.canonical(self.class_type(aclass));
                 let msg = match entity {
-                    InitEntity::Var => self.special_member_access(am, aclass, |s, prot| {
-                        s.diag(DiagId::sema_access_ctor, sites.access)
-                            .arg(u8::from(prot))
-                            .arg(s.ty_arg(class_ty))
-                    }),
+                    InitEntity::Var => {
+                        let object = if bc.is_some() { class } else { aclass };
+                        self.special_member_access_as(am, aclass, object, |s, prot| {
+                            s.diag(DiagId::sema_access_ctor, sites.access)
+                                .arg(u8::from(prot))
+                                .arg(s.ty_arg(class_ty))
+                        })
+                    }
                     InitEntity::Base { inherited_virtual } => {
                         self.subobject_member_access(am, true, |s, prot| {
                             s.diag(DiagId::sema_access_base_ctor, loc)

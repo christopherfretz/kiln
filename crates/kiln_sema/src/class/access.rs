@@ -746,8 +746,25 @@ impl Sema<'_, '_> {
         naming: DeclId,
         mk: impl FnOnce(&Self, bool) -> Diag,
     ) -> Option<Diag> {
+        self.special_member_access_as(m, naming, naming, mk)
+    }
+
+    /// [`Sema::special_member_access`] through an object of class
+    /// `object`: for a base constructor an inheriting constructor of
+    /// `object` stands for, `object` (clang's `ObjectClass` is the
+    /// using-shadow's class), so a protected one is accessible to the
+    /// members of the derived class ([namespace.udecl]/19,
+    /// [class.protected]/1).
+    pub(crate) fn special_member_access_as(
+        &self,
+        m: DeclId,
+        naming: DeclId,
+        object: DeclId,
+        mk: impl FnOnce(&Self, bool) -> Diag,
+    ) -> Option<Diag> {
         let naming = self.ast.definition(naming).unwrap_or(naming);
-        let t = self.member_target(m, Some(naming))?;
+        let object = self.ast.definition(object).unwrap_or(object);
+        let t = self.member_target(m, Some(object))?;
         let ec = self.effective_context();
         let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
         if self.is_accessible(&ec, &t, naming, unpriv) {
@@ -1086,6 +1103,15 @@ impl Sema<'_, '_> {
                 Some(ic) => {
                     if self.derived_inclusive(ic, r) {
                         continue;
+                    }
+                    // clang's special wording for a constructor or
+                    // destructor (`TryDiagnoseProtectedAccess`).
+                    let target = t.member.map(|m| self.kind_of(self.ast.strip_shadow(m)));
+                    if let Some(k @ (DeclKind::CXXConstructor | DeclKind::CXXDestructor)) = target {
+                        return Some(
+                            self.diag(DiagId::note_access_protected_restricted_ctordtor, loc)
+                                .arg(u8::from(k == DeclKind::CXXDestructor)),
+                        );
                     }
                     return Some(
                         self.diag(DiagId::note_access_protected_object, loc)
