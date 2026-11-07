@@ -84,6 +84,30 @@ All repro paths are under `tests/conformance/`. Cluster 4 was not in
 the first build's list: it was hidden behind clusters 1-3 and showed
 once they were fixed.
 
+## Performance findings
+
+Across all 424 TUs, kiln's summed time is 0.87× clang's, and no TU's
+peak RSS ratio reaches 1.2×. To find per-TU wall outliers, every TU
+where clang takes at least 1 s and kiln at least 1.3× as long was
+re-timed back to back with GNU `time -f '%e %M'` (best of 3, `nice
+10`, the same command with only the compiler swapped). One TU stayed
+above 1.3×:
+
+- **`folly/TimeoutQueue.cpp`** (folly `v2026.10.26.00`): kiln 1.33 s
+  and 80 MB; clang++-19 0.82 s and 188 MB (1.62× wall, 0.43× RSS). In
+  the harness runs: kiln 1.67 s, clang 1.21 s. Run in
+  `$KILN/.oss/build/folly_coro/kiln/folly`:
+
+  ```sh
+  $CARGO_TARGET_DIR/harness/kiln++ -DFMT_SHARED "-DFOLLY_XLOG_STRIP_PREFIXES=\"$KILN/.oss/src/folly_coro:$KILN/.oss/build/folly_coro/kiln\"" -DGFLAGS_IS_A_DLL=0 -DGLOG_USE_GLOG_EXPORT -D_GNU_SOURCE -D_REENTRANT -I$KILN/scripts/oss/shims/folly-include -I$KILN/.oss/src/folly_coro -I$KILN/.oss/build/folly_coro/kiln -I/usr/include/libdwarf -I/usr/include/libunwind -O3 -DNDEBUG -g -Wall -Wextra -O3 -std=gnu++20 -g -finput-charset=UTF-8 -fsigned-char -Wall -Wno-deprecated -Wno-deprecated-declarations -Wno-sign-compare -Wno-unused -Wuninitialized -Wunused-label -Wunused-result -DGLOG_USE_GLOG_EXPORT -Wno-nullability-completeness -Wno-inconsistent-missing-override -c $KILN/.oss/src/folly_coro/folly/TimeoutQueue.cpp -o /tmp/retime.o
+  /usr/bin/clang++-19 <the same arguments>
+  ```
+
+`folly/debugging/symbolizer/Dwarf.cpp` measured 1.43× in the harness
+runs but 1.18× back to back (1.48 s against 1.25 s). Every other TU
+above 1.5× takes under 0.5 s with either compiler, which is kiln's
+fixed start-up cost.
+
 ## What remains
 
 - Cluster 6 (an immediate invocation in a template `co_return`

@@ -50,6 +50,14 @@ control run shared the host with other harness builds, so only the Σ TU
 wall is comparable. The kiln build prints no warning, the same as
 clang.
 
+## Performance findings
+
+None. No TU's peak RSS ratio reaches 1.2×. Only one TU over 1 s took
+kiln 1.3× clang's time in the harness runs, `test/stdexec/detail/test_intrusive_mpsc_queue.cpp`
+(2.50 s against 1.68 s). Re-timed back to back with GNU `time` (best of
+3, the same command with only the compiler swapped), it was 1.85 s and
+80 MB against 1.65 s and 205 MB, 1.12×.
+
 ## Clusters
 
 | # | Signature (first diagnostic) | TUs | Status | Repro |

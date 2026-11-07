@@ -48,6 +48,16 @@ first build stopped at the library (`source/task.cpp`), so nothing
 linked. The final run shared the host with other harness builds, which
 is most of the wall difference.
 
+## Performance findings
+
+None. No TU's peak RSS ratio reaches 1.2×. Seven TUs over 1 s took kiln
+1.38-1.58× clang's time in the harness runs, which shared the host. The
+two worst were re-timed back to back with GNU `time` (best of 3, the
+same command with only the compiler swapped). `test/nest_test.cpp` was
+1.24 s and 68 MB against 1.14 s and 184 MB (1.09×), and
+`test/task_void_test.cpp` was 1.62 s and 75 MB against 1.47 s and
+204 MB (1.10×).
+
 ## Clusters
 
 | # | Signature (first diagnostic) | TUs | Status | Repro |
