@@ -3402,10 +3402,47 @@ impl Oven {
                                 && self.types.same_unqualified(f.ty, ty)
                         })
                         .fold(0, |m, i| m | 1 << i);
+                    // C++26: the array members of whose elements the
+                    // object is one (the `inplace_vector` pattern, WP-743).
+                    let arrs: u64 = if self.cxx_year >= 2026 {
+                        (0..n)
+                            .filter(|&i| {
+                                let f = fields[i as usize];
+                                f.width.is_none()
+                                    && rel >= f.offset
+                                    && self.array_element_at(f.ty, rel - f.offset, ty)
+                            })
+                            .fold(0, |m, i| m | 1 << i)
+                    } else {
+                        0
+                    };
                     // The (possibly) active member holding it.
                     let held =
                         active.into_iter().chain(alt_members(alts, n, active)).find(|&i| reach(i));
                     match held {
+                        None if direct == 0 && arrs != 0 => {
+                            // [class.union.general] (P3726R2): constructing
+                            // an element of an inactive array member begins
+                            // the array's lifetime and makes it the active
+                            // member, its other elements holes (GCC 17;
+                            // spec/oven.md "Unions").
+                            let size = self.types.size(t);
+                            let at = Ptr::with_off(raw, base, false);
+                            self.mem.trial_write(at, size).map_err(|f| Fault::Mem {
+                                f,
+                                ak: ak::INIT,
+                                ty,
+                                p: raw,
+                            })?;
+                            let i = arrs.trailing_zeros();
+                            let (fo, ft) = (fields[i as usize].offset, fields[i as usize].ty);
+                            self.activate(raw, base, t, i);
+                            if arrs.count_ones() > 1 {
+                                self.mem.union_alts_put(key, Some(arrs));
+                            }
+                            base += fo;
+                            t = ft;
+                        }
                         None if direct == 0 => {
                             let Some(f) = self
                                 .types
@@ -3430,23 +3467,53 @@ impl Oven {
                                 p: raw,
                             })?;
                             self.activate(raw, base, t, direct.trailing_zeros());
-                            if direct.count_ones() > 1 {
-                                self.mem.union_alts_put(key, Some(direct));
+                            if (direct | arrs).count_ones() > 1 {
+                                self.mem.union_alts_put(key, Some(direct | arrs));
                             }
                             return Ok(());
                         }
-                        Some(i) if direct & !(1 << i) == 0 => {
+                        Some(i) if arrs & 1 << i != 0 => {
+                            // An element of the active array member: the
+                            // array is the member (a possibly active one
+                            // becomes the active one).
+                            if active != Some(i) {
+                                self.mem.union_put(key, Some(i));
+                            }
+                            let f = fields[i as usize];
+                            base += f.offset;
+                            t = f.ty;
+                        }
+                        Some(i) if (direct | arrs) & !(1 << i) == 0 => {
                             let f = fields[i as usize];
                             base += f.offset;
                             t = f.ty;
                         }
                         Some(i) => {
-                            self.mem.union_alts_put(key, Some(alts | direct | 1 << i));
+                            self.mem.union_alts_put(key, Some(alts | direct | arrs | 1 << i));
                             return Ok(());
                         }
                     }
                 }
                 _ => return Ok(()),
+            }
+        }
+    }
+
+    /// Whether the byte at `off` of an object of type `t` begins an element
+    /// of type `ty` of it: `t` is an array (of arrays) of `ty`.
+    fn array_element_at(&self, mut t: OTy, mut off: u64, ty: OTy) -> bool {
+        let mut array = false;
+        loop {
+            match self.types.kind(t) {
+                TyKind::Array { elem, n } => {
+                    let es = self.types.size(elem);
+                    if es == 0 || off / es >= n {
+                        return false;
+                    }
+                    off %= es;
+                    (t, array) = (elem, true);
+                }
+                _ => return array && off == 0 && self.types.same_unqualified(t, ty),
             }
         }
     }
@@ -3496,8 +3563,31 @@ impl Oven {
                     r.map_err(fault)?;
                 }
             }
+            // C++26: a union whose active member was destroyed is alive
+            // with no active member (below), so destroying a member that
+            // is not active is checked as an access ("destruction of
+            // member 's' of union with no active member").
+            if self.cxx_year >= 2026
+                && self.alloc_any(Ptr::decode(raw)).is_some_and(|a| a.flags & flags::HAS_UNION != 0)
+            {
+                self.union_path(raw, ty, ak::DESTROY)?;
+            }
         }
         if aux & 2 != 0 {
+            if self.cxx_year >= 2026
+                && let Some((uoff, ut)) = self.union_of_member(raw, ty)
+            {
+                // C++26 ([class.union.general], P3726R2): destroying the
+                // active member of a union leaves the union within its
+                // lifetime with no active member, its storage as its
+                // trivial default constructor leaves it (spec/oven.md
+                // "Unions").
+                let at = Ptr::with_off(raw, uoff, false);
+                self.mem.trial_write(at, self.types.size(ut)).map_err(fault)?;
+                self.activate(raw, uoff, ut, 0);
+                self.mem.union_put(Ptr::union_key(raw, uoff, ut), None);
+                return Ok(());
+            }
             self.mem.set_lifetime(raw, size, false).map_err(fault)?;
             // The unions of the destroyed object lose their active members
             // with their lifetimes.
@@ -3511,6 +3601,70 @@ impl Oven {
             }
         }
         Ok(())
+    }
+
+    /// The union (its offset in `raw`'s allocation and type) of which the
+    /// `ty` object at `raw` is the (possibly) active member, if any.
+    fn union_of_member(&self, raw: u64, ty: OTy) -> Option<(u64, OTy)> {
+        let p = Ptr::decode(raw);
+        let a = self.alloc_any(p)?;
+        if a.flags & flags::HAS_UNION == 0 {
+            return None;
+        }
+        let (mut t, mut base) = (a.ty, 0u64);
+        let target = u64::from(p.off);
+        loop {
+            if t == ty && base == target {
+                return None;
+            }
+            match self.types.kind(t) {
+                TyKind::Array { elem, n } => {
+                    let es = self.types.size(elem).max(1);
+                    let i = (target - base) / es;
+                    if i >= n {
+                        return None;
+                    }
+                    base += i * es;
+                    t = elem;
+                }
+                TyKind::Record { .. } => match self.types.hop(Walk::Union, t, target - base, ty) {
+                    Hop::Reached | Hop::Stop | Hop::Mutable(_) => return None,
+                    Hop::Array { at, t: arr } => {
+                        base += at;
+                        t = arr;
+                    }
+                    Hop::Union { at, u, reach } => {
+                        base += at;
+                        let rel = target - base;
+                        let key = Ptr::union_key(raw, base, u);
+                        let fields = self.types.fields(u);
+                        let n = fields.len().min(64) as u32;
+                        let i = (0..n).find(|&i| {
+                            self.mem.may_be_active(key, i)
+                                && self.types.reaches(Walk::Union, u, rel, ty, reach, i)
+                        })?;
+                        let f = fields[i as usize];
+                        // With a member of an array member at the same
+                        // offset possibly active too (an element was
+                        // constructed through a pointer naming both and no
+                        // other element since, `place_in_unions`), ending
+                        // the union's member ends the element as well.
+                        if f.width.is_none()
+                            && f.offset == rel
+                            && self.types.same_unqualified(f.ty, ty)
+                        {
+                            return Some((base, u));
+                        }
+                        base += f.offset;
+                        t = f.ty;
+                        if f.width.is_some() {
+                            return None;
+                        }
+                    }
+                },
+                _ => return None,
+            }
+        }
     }
 
     /// Whether the union of type `ty` at `raw` (whose bytes are outside
