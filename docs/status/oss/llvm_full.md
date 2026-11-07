@@ -134,12 +134,14 @@ start with `codegen/`.
 - Miscompiles were bisected by swapping kiln's objects for the
   control's: whole libraries, then single objects, then single
   functions (`llvm-extract` and `llvm-link` over `-O0` IR).
-- A lambda's `$_N` closure name (one with no mangling number) is
-  numbered differently from clang's (`$_1` against
-  `$_0` for `GroupByComplexity`'s lambdas in `ScalarEvolution.cpp`).
-  These are internal names, so there is no ABI effect, but object
-  diffs against clang are noisier (`crates/kiln_abi/src/mangle.rs:2066`,
-  `AnonIds`).
+- A lambda's `$_N` closure name (in a function with internal linkage,
+  which gives it no mangling number) is numbered in source order. clang
+  numbers it in the order names are first mangled, so `GroupByComplexity`'s
+  two lambdas in `ScalarEvolution.cpp` swap `$_0` and `$_1`. These are
+  internal names with no ABI effect, but `typeid(...).name()` differs and
+  object diffs against clang are noisier (`crates/kiln_abi/src/mangle.rs:2066`,
+  `AnonIds`). Pinned as xfail:
+  `tests/conformance/expr.prim.lambda.closure/internal-closure-name-numbering-run.cpp`.
 - Perf outliers over 1.5× clang: `WasmDump.cpp` and `Analysis.cpp`
   (above).
 - Variants not run: Debug, assertions off, C++20, libc++, and the other
