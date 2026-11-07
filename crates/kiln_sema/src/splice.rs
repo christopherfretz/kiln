@@ -70,6 +70,7 @@ impl Sema<'_, '_> {
             self.emit(d);
             return Spliced::Error;
         }
+        self.splice_operand_not_odr_used(e);
         if let Some(id) = self.splice_frozen_id(e) {
             self.splice_fast += 1;
             return Spliced::Entity(self.ast.reflections.get(id));
@@ -170,6 +171,11 @@ impl Sema<'_, '_> {
                 // binding declared outside the assertion is const here
                 // as for an id-expression (P3598R0, /2.5;
                 // `contract_constify`).
+                DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding
+                    if self.splice_local_across_lambda(d, open) =>
+                {
+                    self.recover_err(&[e], open)
+                }
                 DeclKind::Var
                 | DeclKind::ParmVar
                 | DeclKind::Binding

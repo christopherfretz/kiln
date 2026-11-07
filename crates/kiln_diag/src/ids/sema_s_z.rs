@@ -33,6 +33,8 @@ sema_splice_declarative_scope = Error (0) "a splice-scope-specifier cannot be us
 sema_splice_dependent_namespace = Error (0) "the splice-specifier of a using-directive cannot be dependent";
 // [namespace.udir]/1 (WP-474)
 sema_splice_global_namespace = Error (0) "the splice-specifier of a using-directive cannot designate the global namespace";
+// [expr.prim.splice]/2.1.4 (WP-781)
+sema_splice_intervening_lambda = Error (1) "cannot splice local entity '{0}' for which there is an intervening lambda expression";
 sema_splice_not_constant = Error (0) "splice operand must be a constant expression";
 // [expr.prim.splice]/2 (WP-474)
 sema_splice_not_expression = Error (0) "splice in an expression position does not designate a variable, function, enumerator, value or object";

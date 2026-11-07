@@ -726,7 +726,7 @@ impl Sema<'_, '_> {
 
     /// The `DeclRefExpr`s among the potential results of `e`
     /// ([basic.def.odr]/3).
-    fn potential_results(&self, e: ExprId, out: &mut Vec<ExprId>) {
+    pub(crate) fn potential_results(&self, e: ExprId, out: &mut Vec<ExprId>) {
         let n = self.ast.exprs.get(e);
         match n.kind() {
             ExprKind::DeclRefExpr => out.push(e),

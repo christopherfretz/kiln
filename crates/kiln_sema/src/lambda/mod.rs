@@ -108,7 +108,7 @@ pub(crate) struct LambdaScope {
     /// `scopes.len()` before the body's function scope: the scopes below
     /// belong to the enclosing context.
     pub(crate) depth: usize,
-    saved_ctx: DeclId,
+    pub(crate) saved_ctx: DeclId,
     saved_pending_odr: Vec<ExprId>,
     saved_potential_caps: Vec<ExprId>,
     saved_cleanup: crate::class::CleanupState,
@@ -119,7 +119,7 @@ pub(crate) struct LambdaScope {
     saved_ctor_entity: Option<(crate::class::InitEntity, kiln_ast::expr::ConstructionKind)>,
     saved_mangle_var: Option<DeclId>,
     saved_default_arg: Option<DeclId>,
-    body_open: bool,
+    pub(crate) body_open: bool,
     /// The body names a parameter pack of an enclosing template that it
     /// does not expand: the lambda-expression contains an unexpanded
     /// pack ([temp.variadic]/5; clang's
