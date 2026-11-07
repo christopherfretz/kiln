@@ -3627,8 +3627,14 @@ and without the undefined-template diagnostic, so its bases exist
 ([temp.inst]/2; clang's `isCompleteType` in `DeduceTemplateBases`; WP-682,
 `tests/conformance/temp.deduct.call/derived-base-instantiates-argument-class.cpp`,
 `libstdcxx-get-uninstantiated-tuple.cpp`: libstdc++ `std::get` on a
-`tuple&` that a qualified call reaches with no ADL to complete it). The
-success must be unique; otherwise the
+`tuple&` that a qualified call reaches with no ADL to complete it).
+`DerivedClass` is set only when P is a template-id or a pointer to one.
+Through a second pointer, `F<T>**` against `X<A, B>**` is a plain type
+match, so a mismatch neither tries the bases nor instantiates `X<A, B>`
+(clang's `isSimpleTemplateIdType` in `getTDF`; WP-787, Boost.Proto
+`template_arity`,
+`tests/conformance/temp.deduct.call/pointer-to-pointer-no-derived-class-deduction.cpp`).
+The success must be unique; otherwise the
 result is `MiscellaneousDeductionFailure` (clang). The template of `A` (or
 of a base) is the class template it is a specialization of: alias
 template sugar is looked through ([temp.alias]/2; clang's
