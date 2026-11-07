@@ -246,7 +246,7 @@ configure = ["-DTF_BUILD_TESTS=ON", "-DTF_BUILD_EXAMPLES=OFF", "-DTF_BUILD_BENCH
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 2
-verified = false
+verified = true
 notes = "Threads, coroutine-free task graphs; tests use the bundled doctest."
 
 [cereal]
