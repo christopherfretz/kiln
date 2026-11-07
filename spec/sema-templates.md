@@ -1881,6 +1881,18 @@ class name" at `B`
   template argument too (the parser's `names_member_template`; libstdc++
   `_UnClos<__negate, std::_Expr, _Clos>` in `_Expr`, WP-332). Test:
   `tests/conformance/temp.local/libstdcxx-qualified-template-name-in-own-class.cpp`.
+- The injected-class-name of a base class template *specialization*,
+  found by lookup in a derived class (`V` inside `struct B : V<long>`,
+  `B::V`, `Doc::V` with `Doc` a typedef of a derived specialization) and
+  not followed by `<`, is a type-name naming that specialization
+  ([temp.local]/1, [class.qual]/2): lookup finds the specialization's
+  class, `classify_name` gives the class template (right for `V<int>`),
+  and the parser's name scan and qualified type-name turn it back into
+  the specialization's type (`Sema::injected_specialization_name`;
+  rapidjson's `Document::GenericValue`, WP-704). Not for the
+  injected-class-name of the class whose scope we are in (the bullets
+  above). Test:
+  `tests/conformance/temp.local/base-specialization-injected-name.cpp`.
 - Substituting an `InjectedClassName` gives
   `Record(get_class_spec(tmpl, level args))`. It always hits the map,
   because the specialization exists.

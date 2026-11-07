@@ -2756,14 +2756,26 @@ impl<'a> AstBuilder<'a> {
         loc: Loc,
         end: Loc,
     ) -> ExprId {
+        // [temp.dep.expr]/3-4: only the allocated type makes a
+        // new-expression type-dependent; a type-dependent array bound,
+        // initializer or placement argument makes it value-dependent
+        // (clang's `computeDependence(CXXNewExpr *)` and
+        // `turnTypeToValueDependence`).
+        let operand = |d: ExprDeps| {
+            if d.contains(ExprDeps::TYPE) {
+                d.without(ExprDeps::TYPE).with(ExprDeps::VALUE)
+            } else {
+                d
+            }
+        };
         let mut deps = self.type_deps(ty) | self.type_deps(extra.allocated_ty);
         for e in [extra.array_size, extra.init].into_iter().flatten() {
-            deps |= self.deps(e);
+            deps |= operand(self.deps(e));
         }
         if let Some(p) = extra.placement {
             let args: Vec<ExprId> = self.ast.lists.iter::<ExprId>(p).collect();
             for e in args {
-                deps |= self.deps(e);
+                deps |= operand(self.deps(e));
             }
         }
         let side = self.ast.exprs.push_new_extra(extra);

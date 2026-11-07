@@ -1443,6 +1443,14 @@ Where the code differs from (or details) the design above:
   specializations ([temp.deduct.conv], `DeduceTarget`);
   `order_conversion_templates` applies /2.5 with
   `more_specialized_conversion`.
+- For a reference target `U cv &` (`conversion_deduction_pair`), A is
+  the referee with its cv when the template's result is a reference
+  (/5: A may be more cv-qualified), else P and A both drop their cv
+  (clang's workaround of a defect in /4). So `operator T const &()`
+  deduces `T = U` for `U const &` and is an [over.match.ref] candidate
+  binding directly to the returned lvalue, not one more way to a
+  temporary that a deleted `operator T()` makes ambiguous (WP-704;
+  test `tests/conformance/temp.deduct.conv/reference-target-keeps-cv.cpp`).
 - `operator->` templates (`arrow.rs`): clang adds invalid `operator->`
   declarations as candidates, so `declares_arrow` decides between "no
   member named" and "no viable".

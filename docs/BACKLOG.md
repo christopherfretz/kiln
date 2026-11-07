@@ -710,6 +710,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-682 | M8 wave 1: googletest v1.17.0 through its own build + tests with kiln++ via scripts/oss (incl. WP-670 bare -W / exit 70 and WP-672 libstdc++ tuple deduction; docs/status/oss/googletest.md) | WP-666 | in progress |
 | WP-691 | M8 wave 2: simdjson v4.2.4 through its own CMake build + tests with kiln++ via scripts/oss (docs/status/oss/simdjson.md) | WP-666 | in progress |
 | WP-683 | M8 wave 1: magic_enum v0.9.7 + doctest v2.5.3 + tl_expected v1.3.1 through their own builds + tests with kiln++ via scripts/oss (one status page each) | WP-666 | in progress |
+| WP-704 | M8 wave 2: cereal v1.3.2 through scripts/oss (parity vs clang-19) | WP-666 | in progress |
 | WP-685 | M8 wave 2: CLI11 v2.6.1 through its own build + tests with kiln++ via scripts/oss (docs/status/oss/cli11.md) | WP-666 | in progress |
 WP-511
 WP-512

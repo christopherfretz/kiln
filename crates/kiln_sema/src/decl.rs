@@ -9086,6 +9086,49 @@ impl Sema<'_, '_> {
         self.classify_found(&found)
     }
 
+    /// The injected-class-name of a class template specialization that
+    /// `name` (in `qualifier`, or unqualified) finds outside that
+    /// specialization's own scope, e.g. a base class's through a derived
+    /// class (`B::V` or `V` in `struct B : V<long>`): not followed by `<`
+    /// it names the specialization's class type ([temp.local]/1,
+    /// [class.qual]/2), while [`Sema::classify_name`] gives the class
+    /// template (for `V<int>`). `None` for any other name, and for the
+    /// injected-class-name of the class whose scope we are in, which
+    /// [`Sema::injected_class_type`] spells.
+    pub fn injected_specialization_name(
+        &self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+    ) -> Option<NameClass> {
+        let found = match qualifier.map(|q| self.type_name_qualifier(q)) {
+            Some(q) if matches!(self.kind_of(q), DeclKind::CXXRecord) => {
+                if self.is_dependent_ctx(q) {
+                    return None;
+                }
+                self.lookup_qualified(q, name, LookupKind::Ordinary)
+            }
+            Some(_) => return None,
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
+        if found.ambiguity.is_some() {
+            return None;
+        }
+        let &[d] = found.decls.as_slice() else { return None };
+        if self.kind_of(d) != DeclKind::CXXRecord
+            || self.ast.decls.get(d).name().as_ident() != Some(name)
+        {
+            return None;
+        }
+        let (_, spec) = self.ast.spec_info(self.ast.first(d))?;
+        if self
+            .injected_class_decl(spec.template)
+            .is_some_and(|c| self.ast.first(c) == self.ast.first(d))
+        {
+            return None;
+        }
+        Some(NameClass::Type(self.tag_type(d), d))
+    }
+
     /// [`Sema::classify_name`] of a name followed by `::`: lookup of a
     /// name before `::` considers only namespaces, types and templates
     /// whose specializations are types ([basic.lookup.qual]/1), so a
