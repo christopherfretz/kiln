@@ -231,6 +231,81 @@ fn print_commands() {
     assert!(text(&o.stderr).contains("\"-o\" \"main.bc\" \"-\"\n"));
 }
 
+/// WP-783, spec/driver.md "IR optimization": at `-O1` and above `-###`
+/// prints the `opt` runs `-v` shows after the frontend step (the
+/// `-discard-value-names` run only for a textual or bitcode output); at
+/// `-O0` (IR-dependent) and under `-disable-llvm-passes` none.
+#[test]
+fn print_commands_shows_opt() {
+    let d = setup("hash-opt");
+    let o = kiln_in(&d, &["-###", "-c", "-O3", "add.cpp"]);
+    let err = text(&o.stderr);
+    let fe = err.find(" (in-process) frontend \"add.cpp\" -> \"|\"\n").expect(&err);
+    let opt = err.find("\"-passes=default<O3>\" \"-o\" \"-\" \"-\"\n").expect(&err);
+    let llc = err.find("\"-O3\" \"-relocation-model=pic\"").expect(&err);
+    assert!(fe < opt && opt < llc, "{err}");
+    assert!(err[fe..opt].contains("opt\""), "{err}");
+    assert!(!err.contains("-discard-value-names"), "{err}");
+    for (flag, level) in [("-O1", "O1"), ("-Og", "O1"), ("-O2", "O2"), ("-Os", "Os"), ("-Oz", "Oz")]
+    {
+        let o = kiln_in(&d, &["-###", "-S", "-emit-llvm", flag, "add.cpp"]);
+        let err = text(&o.stderr);
+        let opt = err.find(&format!("\"-passes=default<{level}>\"")).expect(&err);
+        let names = err.find("\"-discard-value-names\" \"-S\" \"-o\" \"-\" \"-\"\n").expect(&err);
+        assert!(opt < names, "{err}");
+    }
+    for args in [
+        &["-###", "-c", "add.cpp"][..],
+        &["-###", "-c", "-O2", "-Xclang", "-disable-llvm-passes", "add.cpp"],
+    ] {
+        let o = kiln_in(&d, args);
+        assert!(!text(&o.stderr).contains("-passes="), "{}", text(&o.stderr));
+    }
+}
+
+/// WP-783, spec/driver.md "IR optimization": `-S -emit-llvm` writes the
+/// IR of the configured backend, so that LLVM's `opt` and `llc` read it
+/// back. At the default `-fclang-compat` with an LLVM 19 backend the
+/// lifetime markers keep their size operand (LLVM 22's sizeless
+/// `(ptr captures(none))` declaration was a parse error for `opt-19`);
+/// with an LLVM 22 backend they are LLVM 22's.
+#[test]
+fn emit_llvm_text_reads_back_with_backend() {
+    let src = "struct S { int a[4]; };\nvoid use(S *);\nvoid f() { S s; use(&s); }\n";
+    let d = scratch("ll-backend");
+    std::fs::write(d.join("lt.cpp"), src).unwrap();
+    for (major, sized) in [(19, true), (22, false)] {
+        let dir = PathBuf::from(format!("/usr/lib/llvm-{major}"));
+        if !dir.join("bin").join("opt").exists() {
+            eprintln!("skipping LLVM {major}: {} not found", dir.display());
+            continue;
+        }
+        let out = format!("lt{major}.ll");
+        let o = Command::new(kilnpp())
+            .args(["-S", "-emit-llvm", "-O2", "lt.cpp", "-o", &out])
+            .env("KILN_LLVM_DIR", &dir)
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+        let ll = std::fs::read_to_string(d.join(&out)).unwrap();
+        let start = if sized {
+            "@llvm.lifetime.start.p0(i64 16, ptr"
+        } else {
+            "@llvm.lifetime.start.p0(ptr"
+        };
+        assert!(ll.contains(start), "{ll}");
+        for tool in ["opt", "llc"] {
+            let o = Command::new(dir.join("bin").join(tool))
+                .args([&out, "-o", "/dev/null"])
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert_eq!(o.status.code(), Some(0), "{tool}-{major}: {}", text(&o.stderr));
+        }
+    }
+}
+
 #[test]
 fn verbose_prints_commands() {
     if !tools() {
@@ -948,4 +1023,52 @@ fn codegen_flags_backend() {
     let obj = std::fs::read(d.join("fs.o")).unwrap();
     let name: &[u8] = b".text._Z3addii\0";
     assert!(obj.windows(name.len()).any(|w| w == name), "no .text._Z3addii section");
+}
+
+/// [stmt.expand] (P1306R5) elements of a large expansion statement are
+/// emitted as `<fn>.expand.<n>` helpers while optimizing (WP-793,
+/// spec/landed/codegen/WP-793.md): a `break`/`return` element returns an
+/// `i32` status the parent switches on; `-O0`, `=0` and a small expansion
+/// keep the inline emission byte for byte.
+#[test]
+fn expansion_outlining_shape() {
+    const SRC: &str = "void g(int);\n\
+        int f(int n) {\n\
+          template for (constexpr int k : {1, 2, 3}) {\n\
+            for (int i = 0; i < n; ++i) { g(i * k + n); g(i - k); }\n\
+            if (n == k) break;\n\
+            if (n > 10 * k) return k;\n\
+          }\n\
+          template for (constexpr int k : {4, 5}) {\n\
+            for (int i = 0; i < n; ++i) { g(i * k + n); g(i - k); }\n\
+          }\n\
+          return 0;\n\
+        }\n";
+    let d = scratch("expoutline");
+    std::fs::write(d.join("e.cpp"), SRC).unwrap();
+    let ir = |extra: &[&str], out: &str| {
+        let mut a = vec!["-std=c++26", "-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes"];
+        a.extend_from_slice(extra);
+        a.extend(["e.cpp", "-o", out]);
+        let o = kiln_in(&d, &a);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{extra:?}");
+        std::fs::read_to_string(d.join(out)).unwrap()
+    };
+    let on = ir(&["-O2", "-fkiln-outline-expansions=1"], "on.ll");
+    for n in 0..3 {
+        assert!(on.contains(&format!("define internal i32 @_Z1fi.expand.{n}(")), "{on}");
+    }
+    for n in 3..5 {
+        assert!(on.contains(&format!("define internal void @_Z1fi.expand.{n}(")), "{on}");
+    }
+    assert!(!on.contains("@_Z1fi.expand.5("), "{on}");
+    let parent = on.split("define ").find(|f| f.contains("@_Z1fi(")).unwrap();
+    assert_eq!(parent.matches("switch i32").count(), 3, "{parent}");
+    assert_eq!(parent.matches("call ").count(), 5, "{parent}");
+    let default = ir(&["-O2"], "default.ll");
+    let off = ir(&["-O2", "-fkiln-outline-expansions=0"], "off.ll");
+    assert!(!default.contains(".expand."), "{default}");
+    assert_eq!(default, off);
+    let o0 = ir(&["-O0", "-fkiln-outline-expansions=1"], "o0.ll");
+    assert!(!o0.contains(".expand."), "{o0}");
 }

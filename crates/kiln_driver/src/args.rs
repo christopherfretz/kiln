@@ -355,6 +355,10 @@ pub struct Args {
     /// `-fkiln-cfg-max-elems=N`: the element cap of one body's graph
     /// (spec/sema.md §7.5).
     pub cfg_max_elems: Option<usize>,
+    /// `-fkiln-outline-expansions=N`: the size from which an expansion
+    /// statement's elements are emitted into helpers
+    /// (spec/landed/codegen/WP-793.md; `0` never; the last one wins).
+    pub outline_expansions: Option<usize>,
     /// `-o <file>`.
     pub output: Option<String>,
     /// The action.
@@ -815,6 +819,13 @@ impl Args {
                         None => self
                             .errors
                             .push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())),
+                    }
+                } else if let Some(v) = arg.strip_prefix("-fkiln-outline-expansions=") {
+                    match v.parse::<usize>() {
+                        Ok(n) => self.outline_expansions = Some(n),
+                        Err(_) => {
+                            self.errors.push(ArgError::InvalidInt(arg.to_owned(), v.to_owned()));
+                        }
                     }
                 } else if let Some(v) = arg.strip_prefix("-fkiln-cfg-max-elems=") {
                     match v.parse::<usize>() {
@@ -1446,6 +1457,17 @@ mod tests {
         assert_eq!(
             parse("-ffile-prefix-map=/src a.cpp").errors,
             [ArgError::InvalidValue("-ffile-prefix-map=".into(), "/src".into())]
+        );
+    }
+
+    #[test]
+    fn outline_expansions() {
+        assert_eq!(parse("a.cpp").outline_expansions, None);
+        let a = parse("-fkiln-outline-expansions=0 a.cpp");
+        assert_eq!((a.outline_expansions, a.errors), (Some(0), vec![]));
+        assert_eq!(
+            parse("-fkiln-outline-expansions=x a.cpp").errors,
+            [ArgError::InvalidInt("-fkiln-outline-expansions=x".into(), "x".into())]
         );
     }
 

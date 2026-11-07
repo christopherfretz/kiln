@@ -983,6 +983,12 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   `min-oracle: 23` (verify-only today); the order and the absence of
   back-edges are checked by `kiln_codegen` test
   `expansion_statement_lowers_in_order`.
+  While optimizing, an expansion whose elements together exceed
+  `-fkiln-outline-expansions=N` AST nodes (default 2048) emits each
+  sizeable element as an internal `noinline` helper
+  `<function>.expand.<n>` called in its place, with a status result
+  for `break` and `return` (WP-793, `outline.rs`; the full rule is
+  spec/landed/codegen/WP-793.md).
 
 - Consteval-only variables (WP-534): a block-scope variable whose type
   is consteval-only (P2996R13 [basic.types.general]: `std::meta::info`,
@@ -1053,7 +1059,12 @@ The normative description is spec/driver.md "Code generation". In short:
   `//@ min-oracle: <N>` line compares the case only under oracle release
   N or later; under an older oracle kiln's IR must still verify. The oracle is
   `clang++-N`/`opt-N` for `N` = `$KILN_ORACLE` (default 22; spec/harness.md
-  "Oracle toolchain"); both texts go through that `opt-N`. `KILN_CASE=<stem>`
+  "Oracle toolchain"); both texts go through that `opt-N`. Under oracle 22
+  kiln's text first gets LLVM 22's lifetime-marker form
+  (`ir_norm::lifetime_markers_llvm22`; a no-op on text already in that
+  form). kiln writes its backend's form (spec/driver.md "IR optimization",
+  WP-783), and with an LLVM 19 backend `opt-22` would upgrade the calls
+  but leave the old declarations out of place. `KILN_CASE=<stem>`
   prints both texts (in the oracle's mode); without `opt-N`/`clang++-N` it
   is skipped. Each pair is compared in three ways (WP-355,
   `crates/kiln_codegen/tests/ir_norm/mod.rs`), and the summary line counts
@@ -3114,10 +3125,10 @@ fields; each follows clang 19's IR.
   signature, and LLVM 22's `(ptr captures(none))` at `-fclang-compat=22`
   (WP-462, §7z): codegen emits the latter itself for an LLVM 22+ backend
   (`kiln_llvm` `Module::ir_version`, `intrinsics::lifetime_has_size`),
-  and for an older one the driver rewrites the `-S -emit-llvm` text after
-  `opt` (driver.md "IR optimization"), so `opt`/`llc` 19 and 21 still get
-  the sized form they verify (LLVM 21 spells its pointer
-  `captures(none)` but keeps the size operand).
+  and for an older one the sized form those tools verify (LLVM 21 spells
+  its pointer `captures(none)` but keeps the size operand), in every
+  output including `-S -emit-llvm` text (WP-783; driver.md "IR
+  optimization").
 - **Cleanup-destination promotion (`fir/mem2reg.rs`).** clang's
   `FinishFunction` replaces a coroutine's `cleanup.dest.slot` alloca by
   SSA values and phis; kiln ports LLVM 19's `PromoteMemToReg` for that
