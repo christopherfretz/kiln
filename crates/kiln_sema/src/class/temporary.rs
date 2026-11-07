@@ -221,7 +221,14 @@ impl Sema<'_, '_> {
         }
         match kind {
             SpecialKind::Dtor | SpecialKind::DefaultCtor if spec.is_trivial() => {}
-            _ => self.define_implicit_special(first, kind, loc),
+            // Defined outside the template (as at an instantiation):
+            // in the template's context the members it uses would only
+            // be referenced, never odr-used, and stay undefined when a
+            // later use finds it already defined.
+            _ => {
+                let Some(class) = self.ast.decls.get(first).ctx() else { return };
+                self.in_inst_context(class, |s| s.define_implicit_special(first, kind, loc));
+            }
         }
     }
 
