@@ -868,6 +868,13 @@ impl Sema<'_, '_> {
                     }
                 }
             }
+            // A pack expansion `TT...` (a partial specialization's
+            // `E<B, Bs...>`) is checked by its pattern and kept as the
+            // expansion ([temp.arg.template]/1, [temp.variadic]/5).
+            (DeclKind::TemplateTemplateParm, ArgView::TemplateExpansion { name, .. }) => {
+                let pattern = TemplateArg::template(name);
+                self.check_template_arg(tmpl, depth, p, pattern, at, prior).map(|_| a)
+            }
             // An erroneous argument was diagnosed when it was formed.
             (DeclKind::TemplateTemplateParm, ArgView::Expr { expr, .. })
                 if self.is_err_expr(expr) =>

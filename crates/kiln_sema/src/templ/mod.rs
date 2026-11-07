@@ -1850,7 +1850,11 @@ impl Sema<'_, '_> {
         if self.special.has_pending() {
             self.flush_pending_deleted();
         }
-        if self.templ.heads.last().is_some_and(|h| h.invented) {
+        // Only a head the declaration opened: in a member declaration of
+        // a local class of a generic lambda, the invented head below the
+        // class's is the lambda's, open until the lambda ends.
+        let floor = self.classes.last().map_or(0, |c| c.heads);
+        if self.templ.heads.len() > floor && self.templ.heads.last().is_some_and(|h| h.invented) {
             self.templ.heads.pop();
             self.ast.templates.dependent_depth =
                 self.ast.templates.dependent_depth.saturating_sub(1);

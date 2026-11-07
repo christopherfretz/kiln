@@ -422,6 +422,12 @@ residual` (docs/status/wp-184-oracle-switch.md).
   (with `US` a member of the base `G<N>`) finds the enumerator and
   declares a variable ([dcl.ambig.res]/1; WP-782,
   `dcl.ambig.res/member-enum-of-base-specialization-enumerator-run.cpp`).
+  A name that qualified lookup does not find in a class with a
+  dependent base (the current instantiation named by its
+  injected-class-name, `X::B::type` in `X<T> : B<T>`) is `Dependent`: a
+  member of an unknown specialization ([temp.dep.type]/6), so it is a
+  type in a type-only context without `typename` (WP-789;
+  `tests/conformance/temp.dep.type/current-instantiation-qualifier-unknown-member-alias-run.cpp`).
 - A nested-name-specifier component naming a class or enumeration that
   is declared but not defined ([basic.lookup.qual]/1, [class.mem]/1:
   a class is complete only after its definition) is "incomplete type
@@ -1144,7 +1150,13 @@ Redeclaration and linkage rules:
   so `constexpr same_as<const bool> decltype(auto) r = X::v;` (with
   `decltype(X::v)` = `const bool`) is satisfied and `constexpr
   same_as<const int> decltype(auto) d = 1;` is `deduced type 'int' does
-  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335). The
+  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335).
+  The checked concept-id `C<T, A...>` is completed with `C`'s default
+  template arguments first, as for a written concept-id
+  ([temp.arg.general]/9): with `template <class S, class E = env>
+  concept K = sender_in<S, E>;`, `K auto f()` checks `K<T, env>` for
+  variables, return types and parameters alike
+  (`check_placeholder_constraint`, WP-789). The
   variable's type still carries that `const` unless `decltype(e)` is a
   reference: `constexpr decltype(auto) b = 1;` is `const int`,
   `constexpr decltype(auto) r = (g);` is `const int &` for a `constexpr
@@ -1170,6 +1182,15 @@ Redeclaration and linkage rules:
   checks it too (`member_of_object`), so the call through it has the
   deduced type (WP-690,
   `tests/conformance/dcl.spec.auto/static-member-through-dependent-base.cpp`).
+  When the declaration the use names has no instantiable definition,
+  another redeclaration instantiated from a friend definition is
+  instantiated instead ([temp.inst]/4): a friend declared without a body
+  in `key<N>` and defined with a deduced return type in `value<T>` is one
+  function, so once `value<T>` exists `decltype(lookup(key<N>()))` has
+  its deduced type (clang's `isDefined` counts a declaration instantiated
+  from a friend definition; the type map of std::execution
+  implementations, WP-789,
+  `tests/conformance/temp.friend/deduced-friend-defined-by-other-specialization.cpp`).
   A redeclaration
   ([dcl.spec.auto.general]/13) is matched against the declared
   placeholder type (`declared_fn_type`, kept in `declared_returns`), not
@@ -1783,6 +1804,14 @@ and returns the scope it names:
     definition not externally visible (codegen rule in spec/codegen.md
     "GNU inline functions"). Test:
     `tests/conformance/ext.gnu.inline/attribute-diags.cpp`.
+  - `artificial` (GNU syntax or `gnu::`; WP-789, clang `ArtificialAttr`,
+    `SubjectList<[InlineFunction]>`; `AttrKind::ARTIFICIAL`): kept on a
+    function whose declaration spells `inline`; elsewhere (a
+    non-function, or a function that is only implicitly inline) it warns
+    `'artificial' attribute only applies to inline functions`
+    [-Wignored-attributes] and is dropped. It concerns debug information
+    only, so it has no effect on the IR. Test:
+    `tests/conformance/dcl.attr/gnu-artificial.cpp`.
   - `alias("sym")`, `ifunc("resolver")`, `weakref` / `weakref("sym")`
     (GNU syntax or `gnu::`; WP-763, clang `handleAliasAttr`,
     `handleIFuncAttr`, `handleWeakRefAttr`; `AttrKind::ALIAS`,
@@ -2814,6 +2843,12 @@ and returns the scope it names:
     parameter head prints its canonical replacement without scope
     (`T::y` with `T = ns::S` prints `S::y`, clang's
     `NestedNameSpecifier::print` `SuppressScope`) (WP-302).
+  - A concept-id prints as clang's `ConceptReference::print`: its
+    qualifier as written (kept through instantiation), the concept's
+    name and all its converted arguments, types canonical
+    (`!merror<err<why>>` for `!merror<completions>` with a local alias
+    `completions`; WP-789). Test:
+    `dcl.pre/static-assert-concept-id-requirement.cpp`.
   - The printed names are the substituted ones (clang's
     `FailedBooleanConditionPrinterHelper`, WP-303): a qualified
     `DeclRefExpr` prints its nested-name-specifier with the last type
@@ -3204,6 +3239,11 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   may name its own class's private members, but not those of another
   specialization ([class.friend]/2). The frame note names the
   specialization with its arguments (`'h<long>'`), as clang does.
+  Every non-static member function, a constructor, destructor or
+  conversion function included, substitutes its spec with `this`
+  ([expr.prim.this]/3): `C() noexcept(noexcept(conn(m_)))` calls a
+  member through the implicit `this` (WP-789; test
+  `except.spec/ctor-noexcept-implicit-this-member-run.cpp`).
 - *Consumers*: `noexcept(...)`, the resolution of overloads on a
   noexcept function pointer, member pointers and codegen's `nounwind`
   all go through `exc_spec_needed` / `resolve_exc_for_type`, so each
@@ -8384,7 +8424,10 @@ coroutine's body Sema replaces the body with a `CoroutineBodyStmt`
 - the frame allocation ([dcl.fct.def.coroutine]/9-11): the promise
   class's `operator new` is looked up first; when it exists the call
   tries the placement form `(size, [*this,] params...)` then `(size)`;
-  otherwise the global `operator new(size_t)`. When the promise declares
+  otherwise the global `operator new(size_t)`. The promise's `operator
+  new` templates take part in each try as in a new-expression, so
+  `template <class A> operator new(size_t, allocator_arg_t, A)` serves
+  `task f(allocator_arg_t, A)` (WP-789). When the promise declares
   `get_return_object_on_allocation_failure()` (which must be a static
   member function), the allocation must be non-throwing: a global or
   missing `operator new` becomes `::operator new(size_t, std::nothrow)`

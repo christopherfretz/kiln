@@ -1213,6 +1213,14 @@ impl Sema<'_, '_> {
     }
 
     fn instantiate_function_definition_inner(&mut self, f: DeclId, poi: Loc) {
+        // Already being instantiated further up (constexpr members that
+        // use each other, each instantiated at its use: a move
+        // constructor calling a `swap` that moves `*this`): the
+        // definition is in progress (clang's `isDefined` is true once
+        // `InstantiateFunctionDefinition` has started).
+        if self.inst.stack.contains(FrameKind::MemberFunction, f) {
+            return;
+        }
         let Some(pattern) = self.ast.instantiated_from(f) else { return };
         let Some(pdef) = self.ast.definition(pattern) else {
             self.instantiate_out_of_line_defaulted(f, pattern, poi);
@@ -2287,6 +2295,7 @@ impl Substituter<'_, '_, '_> {
                 self.member_partial_spec(m)?;
                 return Ok(None);
             }
+            DeclKind::Var if self.sema.is_var_spec(m) => self.member_explicit_var_spec(m)?,
             DeclKind::Var if self.defers_init(m) => self.deferred_static_member(m)?,
             DeclKind::Var => {
                 let v = self.var_decl(m, DeclaratorContext::Member)?;

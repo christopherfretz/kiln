@@ -1408,6 +1408,29 @@ impl<'a> AstNames<'a> {
                     None => write_type(&ast.types, self, t, PrintOptions::SUGARED, out),
                 }
             }
+            // clang's `ConceptReference::print`: the qualifier as written,
+            // the concept's name and its converted arguments.
+            ExprKind::ConceptSpecializationExpr if DeclId::from_raw(n.a()).is_some() => {
+                if let Some(&nns) = ast.templates.expr_nns.get(e) {
+                    write_nns(&ast.types, self, nns, out);
+                }
+                self.write_name(DeclId::new(n.a()), out);
+                out.push('<');
+                if let Some(args) = crate::ids::ArgListId::from_raw(n.b()) {
+                    for (i, a) in ast.types.args(args).iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        match a.view() {
+                            ArgView::Type(t) => {
+                                write_type(&ast.types, self, t, self.expr_types, out);
+                            }
+                            _ => crate::types::write_template_arg(&ast.types, self, *a, out),
+                        }
+                    }
+                }
+                out.push('>');
+            }
             _ => out.push_str("..."),
         }
     }

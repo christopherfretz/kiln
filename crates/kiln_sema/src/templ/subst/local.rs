@@ -132,7 +132,16 @@ impl Substituter<'_, '_, '_> {
             if self.sema.ast.definition(m.f).is_none()
                 && self.sema.push_inst_frame(FrameKind::MemberFunction, m.f, m.pdef, poi)
             {
+                // The enclosing function's references still waiting for
+                // the end of their full-expression (a tuple-like
+                // binding's `get` call) are not the member's: its body is
+                // a function of its own ([basic.def.odr]/10, clang's
+                // pushed function scope and evaluation context).
+                let odr = std::mem::take(&mut self.sema.pending_odr);
+                let caps = std::mem::take(&mut self.sema.potential_caps);
                 self.function_def(m.f, m.pdef, m.body);
+                self.sema.pending_odr = odr;
+                self.sema.potential_caps = caps;
                 self.sema.pop_inst_frame();
             }
             for &r in &chain {

@@ -109,6 +109,10 @@ pub struct ClassBuild {
     /// `}` (an out-of-line definition of a member partial specialization
     /// declared in its class is lexically outside it).
     pub outer: DeclId,
+    /// The number of open template heads at `{`: a member declaration's
+    /// own invented head is above them; those below belong to enclosing
+    /// declarations (a generic lambda around a local class).
+    pub heads: usize,
 }
 
 /// The function being defined when a nested function definition starts
@@ -133,6 +137,7 @@ impl ClassBuild {
             pending_default_args: 0,
             friends: Vec::new(),
             outer,
+            heads: 0,
         }
     }
 }
