@@ -694,10 +694,10 @@ impl Sema<'_, '_> {
             return Tdk::Success;
         }
         let av = match a.view() {
-            ArgView::Value { value, .. } => {
-                let Some(av) = self.const_int(value) else { return Tdk::Success };
-                Some(av)
-            }
+            ArgView::Value { value, ty } => match self.const_int(value) {
+                Some(av) if !self.is_class_typed(e) => Some(av),
+                _ => return self.check_nondeduced_class_value(e, ty, value, p, a, d),
+            },
             ArgView::Expr { .. } | ArgView::Profile(_) => {
                 if self.ast.types.canonical_arg(p) == self.ast.types.canonical_arg(a) {
                     return Tdk::Success;
@@ -721,6 +721,71 @@ impl Sema<'_, '_> {
         d.info.first = Some(p);
         d.info.second = Some(a);
         Tdk::NonDeducedMismatch
+    }
+
+    /// [`Self::check_nondeduced_value`] for an argument `A` whose value
+    /// `value` of type `ty` is not an integer: a `P` of another class
+    /// type, or of class type `ty` with another value, does not match
+    /// (clang's `DeduceTemplateArguments` compares the substituted
+    /// `P`'s structural value with `A`'s; [temp.type]/2). Base classes
+    /// tried for `P` ([temp.deduct.call]/4.3) need it: `get<Tag>(map)`
+    /// with `Tag` given picks the one base whose tag equals it.
+    fn check_nondeduced_class_value(
+        &mut self,
+        e: ExprId,
+        ty: QualType,
+        value: kiln_ast::ConstValueId,
+        p: TemplateArg,
+        a: TemplateArg,
+        d: &mut DeducedArgs,
+    ) -> Tdk {
+        let et = self.ast.exprs.get(e).ty();
+        if self.ast.types.is_dependent(et) {
+            return Tdk::Success;
+        }
+        let et = crate::conv::strip_cv(self, self.ast.types.canonical(et));
+        let at = crate::conv::strip_cv(self, self.ast.types.canonical(ty));
+        let class = |s: &Self, t: QualType| s.ast.types.as_record(t).is_some();
+        if !class(self, et) && !class(self, at) {
+            return Tdk::Success;
+        }
+        let same = et == at
+            && match self.param_object_of(e) {
+                Some(pv) => pv == value,
+                None => self.try_fold(e).is_none_or(|v| v == value),
+            };
+        if same {
+            return Tdk::Success;
+        }
+        d.info.first = Some(p);
+        d.info.second = Some(a);
+        Tdk::NonDeducedMismatch
+    }
+
+    /// Whether the non-dependent type of `e` is a class type.
+    fn is_class_typed(&self, e: ExprId) -> bool {
+        let t = self.ast.exprs.get(e).ty();
+        !self.ast.types.is_dependent(t)
+            && self.ast.types.as_record(self.ast.types.canonical(t)).is_some()
+    }
+
+    /// The interned value of the template parameter object (§13.2
+    /// [temp.param]/8) that `e` names once wrappers are peeled, if any.
+    fn param_object_of(&self, e: ExprId) -> Option<kiln_ast::ConstValueId> {
+        let mut e = e;
+        for _ in 0..64 {
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr | ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
+                    e = self.ast.exprs.operand(e)
+                }
+                ExprKind::SubstNonTypeTemplateParmExpr => e = self.ast.exprs.subst_replacement(e),
+                ExprKind::DeclRefExpr => {
+                    return self.ast.templates.param_object_value(self.ast.exprs.decl(e));
+                }
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// The index of the non-type template parameter of depth `depth`

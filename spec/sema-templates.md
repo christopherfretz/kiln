@@ -3664,7 +3664,11 @@ next base (`check_nondeduced_value`; clang converts the substituted
 argument to an integral one). `std::get<1>(tuple)` matches
 `_Tuple_impl<1, _Head, _Tail...>` against the second base, not the first
 (`tests/conformance/temp.deduct.call/libstdcxx-base-explicit-nttp-mismatch.cpp`,
-WP-332).
+WP-332). A class-type value ([temp.param]/8) matches only a value of the
+same class type naming the same template parameter object, so an
+explicitly given class-type tag never matches a base whose argument is an
+integer or another class value (`check_nondeduced_class_value`; WP-789,
+`tests/conformance/temp.deduct.call/explicit-class-nttp-selects-base-run.cpp`).
 
 A dependent class template-id `P` written with fewer arguments than its
 template has is first completed with the template's default arguments
