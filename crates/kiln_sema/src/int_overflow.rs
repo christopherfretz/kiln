@@ -227,7 +227,9 @@ impl Sema<'_, '_> {
             }
             budget -= 1;
             match self.ast.exprs.get(x).kind() {
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
+                ExprKind::CallExpr
+                | ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXOperatorCallExpr => {
                     if self.callee_decl(x).is_some_and(|d| self.oven_cannot_call(d)) {
                         return true;
                     }
@@ -261,12 +263,14 @@ impl Sema<'_, '_> {
             && self.ast.decls.builtin_id(d).is_none()
             && self.ast.decls.gnu_lib_twin(d).is_none()
             && self.meta_intrinsic_of(d).is_none()
-            && self.ast.decls.function(d).is_some_and(|f| !f.spec.is_virtual() && !f.spec.is_trivial())
             && self
                 .ast
                 .decls
-                .function(latest)
-                .is_some_and(|f| f.spec.constexpr_kind() == ConstexprKind::None && !f.spec.is_deleted())
+                .function(d)
+                .is_some_and(|f| !f.spec.is_virtual() && !f.spec.is_trivial())
+            && self.ast.decls.function(latest).is_some_and(|f| {
+                f.spec.constexpr_kind() == ConstexprKind::None && !f.spec.is_deleted()
+            })
     }
 
     /// Reports `-Winteger-overflow` at `loc` for operation `e` of type
