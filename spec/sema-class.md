@@ -282,7 +282,11 @@ access context, §4.10), a qualified member template name
 (`A::PT<int>`), a mem-initializer-id, and each member a member
 using-declarator names ([namespace.udecl]/19; named through an object of the
 current class, as clang's `BuildUsingDeclaration` does, so `using B::m;` of a
-protected member of a base is accessible). A using-declarator with a dependent
+protected member of a base is accessible). When the current class is a
+template whose path to that base is dependent, the check is replayed in each
+instantiation with the object of the instantiated class, not of the pattern
+(WP-681; `using ResultBase::m_type;` in a class template deriving from it
+through a dependent base). A using-declarator with a dependent
 qualifier (`using T::f;`, `using typename T::type;`) is checked when the class
 is instantiated, at the declarator's name (`member_using`,
 `member_using_typename`; WP-194); inheriting constructors are not checked. The parser's classification

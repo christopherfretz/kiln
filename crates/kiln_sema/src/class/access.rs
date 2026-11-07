@@ -1108,11 +1108,50 @@ impl Sema<'_, '_> {
         let saved = (self.ctx, self.initializing.take());
         self.ctx = self.ast.definition(inst).unwrap_or(inst);
         self.replaying_access = true;
-        for c in checks {
+        // An object expression of the pattern's own (or an enclosing)
+        // class, such as the implicit one of a member using-declarator
+        // ([namespace.udecl]/19), is of the instantiated class here
+        // ([temp.dep.type]/1).
+        let classes = self.instantiated_classes(pattern, inst);
+        for mut c in checks {
+            if let Some(o) = c.object_class
+                && let Some(&(_, i)) = classes.iter().find(|&&(p, _)| p == self.ast.first(o))
+            {
+                c.object_class = Some(i);
+            }
             self.run_access_check(c);
         }
         self.replaying_access = false;
         (self.ctx, self.initializing) = saved;
+    }
+
+    /// The classes enclosing pattern `pattern` (itself first when it is a
+    /// class) paired with those enclosing its instantiation `inst`, as
+    /// their first declarations, while both are classes.
+    fn instantiated_classes(&self, pattern: DeclId, inst: DeclId) -> Vec<(DeclId, DeclId)> {
+        let is_class = |d: DeclId| {
+            matches!(
+                self.kind_of(d),
+                DeclKind::CXXRecord
+                    | DeclKind::ClassTemplateSpecialization
+                    | DeclKind::ClassTemplatePartialSpecialization
+            )
+        };
+        let mut out = Vec::new();
+        let (mut p, mut i) = (Some(pattern), Some(inst));
+        if !is_class(pattern) {
+            p = self.ast.decls.get(pattern).ctx();
+            i = self.ast.decls.get(inst).ctx();
+        }
+        while let (Some(a), Some(b)) = (p, i) {
+            if !is_class(a) || !is_class(b) || out.len() >= 64 {
+                break;
+            }
+            out.push((self.ast.first(a), self.ast.first(b)));
+            p = self.ast.decls.get(a).ctx();
+            i = self.ast.decls.get(b).ctx();
+        }
+        out
     }
 
     /// Makes the instantiations of `new` (a generic lambda's call
