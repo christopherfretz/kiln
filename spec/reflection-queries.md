@@ -36,6 +36,17 @@ declarations are in `tests/support/kiln_meta_queries.h`.
 - **`type_of(r)`** of an annotation is the type of its underlying
   constant, `const T` for a class `T` (spec/reflection.md §7; WP-571).
   `is_const` / `is_volatile` inspect that type.
+- **`type_of(r)`** of a variable (or static data member) is the type its
+  latest declaration so far gives it, though the reflection designates
+  the first: a later declaration can complete an array of unknown bound
+  ([basic.types.general]/6, [dcl.array]/8), so after
+  `struct S { static const char k[]; };` and
+  `inline const char S::k[] = "SAFE";` it is `const char[5]`, whether `r`
+  came from `^^S::k` or from `members_of`, as `decltype(S::k)` is and as
+  GCC 16.1 answers; before the definition it is `const char[]`.
+  `size_of` measures the same type. An answer that is still an array of
+  unknown bound raises `run.impure` (§2), since a later declaration can
+  change it; a complete one cannot (WP-795).
 - **`return_type_of(r)`** gives the declared return type of a function or
   function type, canonical like `type_of`.
 - **`has_ellipsis_parameter`** (P3096) is the row `is_vararg_function`,
@@ -60,6 +71,8 @@ declarations are in `tests/support/kiln_meta_queries.h`.
     spec/reflection.md §3.3 follows the table.
 
   These rows raise `run.impure`, so a caller of one is never memoized.
+  `type_of` is `Stable` but raises `run.impure` itself for a variable
+  whose type is still an array of unknown bound (§1, WP-795).
 - **Budget.** `meta.reflection.queries/oven-budget.cpp` pins the cost.
   It runs 10,000 calls per loop and checks the report counters:
 
