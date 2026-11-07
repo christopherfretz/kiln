@@ -1256,7 +1256,9 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   using-declarator's qualifier must name a direct or indirect base
   (`using declaration refers into 'X::', which is not a base class of
   'D'`). `using B::B;` (the last component names the qualifier's class:
-  class, typedef or template parameter name) is a `Using` named by the
+  class, typedef or template parameter name; or the name, looked up in the
+  nominated class, is its injected-class-name, as in `using Base::B;` with
+  `Base` a typedef of `B<int>`) is a `Using` named by the
   derived class's constructor name (dump `UsingDecl B::D`) with one
   `ConstructorUsingShadow` per constructor of `B`, its own and the ones `B`
   itself inherits (`inheritable_ctors`); `DefinitionBits::HAS_INHERITED_CTOR`
