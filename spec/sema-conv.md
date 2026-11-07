@@ -266,6 +266,7 @@ here (integer, floating and bool literals, through negation, parens and casts).
 
 The checks:
 - Integer to integer checks range against the target width, sign and enum underlying type.
+- An integral promotion ([conv.prom]) is never narrowing, matching clang, which checks integral conversions only. So a non-constant unscoped enumeration without a fixed underlying type initializes its promotion type (`int` for `enum { A, B = 30000 }`, whose underlying type is `unsigned int`) without a diagnostic, while the same value to `short`, or a fixed `enum : unsigned` to `int`, still narrows (WP-782).
 - Floating to integer is always narrowing.
 - Integer to floating checks that the value round-trips exactly. This uses the soft-float in `conv/soft.rs`, which implements IEEE half, bf16, single, double, x87 and quad with round-to-nearest-even.
 - Floating to floating checks [dcl.init.list]/7.2: the value is in range and exactly representable. When either type is a C++23 extended floating-point type the "lower rank" test is the P1467 value-set rule (`format_subset`; C++23 wording "whose floating-point conversion rank is neither greater than nor equal to"), so `_Float32{1.0}` (constant, exact) is fine and `_Float32{d}` for a `double` variable is narrowing; otherwise clang's ranks.
