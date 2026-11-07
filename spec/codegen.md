@@ -1556,7 +1556,10 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
 - **Pointers to members** (`memptr.rs`; Itanium §2.3, the ARM variant on
   AArch64; see spec/abi.md §8.6):
   - `&C::m` constants and Oven `Scalar::MemberPtr` constants, with
-    clang's `getMemberPointerPathAdjustment`;
+    clang's `getMemberPointerPathAdjustment`; for a member of an
+    anonymous union or struct (an `IndirectField`, [class.union.anon])
+    the offset sums its access path (`ASTContext::getFieldOffset`,
+    WP-716);
   - null member pointers;
   - base-to-derived and derived-to-base conversions (the
     `-1`-preserving `select` for data members; `adj` arithmetic for
