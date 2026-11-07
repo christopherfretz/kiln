@@ -304,6 +304,42 @@ impl Mangler<'_, '_> {
         }
     }
 
+    /// A `DeclRefExpr` operand: a template or function parameter, an
+    /// enumerator's value or a builtin function's name.
+    fn decl_ref_expression(&mut self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let d = ast.exprs.decl(e);
+        match ast.decls.get(d).kind() {
+            DeclKind::NonTypeTemplateParm => {
+                let (depth, idx) = ast
+                    .template_parm(d)
+                    .map_or((0, 0), |p| (u32::from(p.depth), u32::from(p.index)));
+                self.template_param_at(depth, idx);
+            }
+            DeclKind::ParmVar => return self.function_param_ref(d),
+            // `L <enum-type> <value> E` (clang `mangleDeclRefExpr`).
+            DeclKind::EnumConstant => {
+                let Some(v) = ast.decls.enumerator(d).and_then(|x| x.value) else {
+                    return false;
+                };
+                let Some(ty) = ast.decls.get(d).ty() else { return false };
+                self.value_arg(ty, v);
+            }
+            // A builtin function called in a dependent call (WP-726,
+            // clang `mangleDeclRefExpr`): `L_Z <source-name> E`.
+            DeclKind::Function if ast.decls.builtin_id(d).is_some() => {
+                let Some(name) = ast.decls.get(d).name().as_ident() else {
+                    return false;
+                };
+                self.out.push_str("L_Z");
+                self.symbol(name);
+                self.out.push('E');
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// One expression; `false` when it (or a subexpression) has no
     /// supported encoding.
     pub(super) fn expression(&mut self, e: ExprId) -> bool {
@@ -335,27 +371,7 @@ impl Mangler<'_, '_> {
                 self.ty(n.ty());
                 self.out.push_str("0E");
             }
-            ExprKind::DeclRefExpr => {
-                let d = ast.exprs.decl(e);
-                match ast.decls.get(d).kind() {
-                    DeclKind::NonTypeTemplateParm => {
-                        let (depth, idx) = ast
-                            .template_parm(d)
-                            .map_or((0, 0), |p| (u32::from(p.depth), u32::from(p.index)));
-                        self.template_param_at(depth, idx);
-                    }
-                    DeclKind::ParmVar => return self.function_param_ref(d),
-                    // `L <enum-type> <value> E` (clang `mangleDeclRefExpr`).
-                    DeclKind::EnumConstant => {
-                        let Some(v) = ast.decls.enumerator(d).and_then(|x| x.value) else {
-                            return false;
-                        };
-                        let Some(ty) = ast.decls.get(d).ty() else { return false };
-                        self.value_arg(ty, v);
-                    }
-                    _ => return false,
-                }
-            }
+            ExprKind::DeclRefExpr => return self.decl_ref_expression(e),
             ExprKind::ConceptSpecializationExpr => return self.concept_id_expr(e),
             ExprKind::CXXFoldExpr => return self.fold_expr(e),
             ExprKind::RequiresExpr => return self.requires_expr(e),

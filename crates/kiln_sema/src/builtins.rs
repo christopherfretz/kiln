@@ -529,7 +529,19 @@ impl Sema<'_, '_> {
     /// clang's `GetBuiltinType`), one implicit parameter per parameter
     /// type, and the implicit attributes in clang's order (`BuiltinAttr`,
     /// then `NoThrowAttr`, `ConstAttr` / `PureAttr`).
+    /// WP-726: the declaration is a namespace-scope one wherever the
+    /// first use is, never in a dependent context: a reference to it is
+    /// not instantiation-dependent, so `decltype(__builtin_f(a))` in a
+    /// function template's signature names the call's type once `a` is
+    /// substituted (the type of the specialization's return value).
     pub(crate) fn lazily_create_builtin(&mut self, name: Symbol, loc: Loc) -> Option<DeclId> {
+        let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
+        let f = self.lazily_create_builtin_at_tu(name, loc);
+        self.ast.templates.dependent_depth = saved;
+        f
+    }
+
+    fn lazily_create_builtin_at_tu(&mut self, name: Symbol, loc: Loc) -> Option<DeclId> {
         let id = builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat)?;
         if !self.target_has_builtin(id) {
             return None;

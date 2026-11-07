@@ -3898,6 +3898,11 @@ function) elsewhere.
   printf builtins an implicit `format(printf, F, A)` attribute
   (`builtin::printf_format`, WP-282) and an implicit `NoThrow`
   attribute, in clang's order. Later lookups find that declaration.
+  WP-726: it is never in a dependent context, even when first used in a
+  template, so a reference to it is not instantiation-dependent and
+  `decltype(__builtin_f(a))` in a function template's signature is the
+  call's type once `a` is substituted
+  (`dcl.type.decltype/builtin-call-return-type-run.cpp`).
 - **One declaration per builtin** (WP-332): every implicit use looks
   the name up first, as clang does. The memberwise copy of a trivially
   copyable array member (spec/sema-class.md §4.5, clang
