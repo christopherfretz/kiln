@@ -8,7 +8,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage};
 use kiln_ast::expr::{
     BinaryOp, CastKind, DeclRefExtra, ExprFlags, ExprKind, NonOdrUse, UnaryOp, ValueCategory,
 };
-use kiln_ast::types::{Quals, RefQual};
+use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -232,11 +232,21 @@ impl Sema<'_, '_> {
     /// does not form an implicit member access for an address-of operand.
     pub(crate) fn undo_dependent_implicit_member(&mut self, e: ExprId) -> ExprId {
         let Some(r) = self.member_refs.get(&e).copied() else { return e };
-        if !r.qualified || self.ast.exprs.get(e).kind() != ExprKind::CXXDependentScopeMemberExpr {
+        if !r.qualified {
             return e;
         }
+        let nns = match self.ast.exprs.get(e).kind() {
+            ExprKind::CXXDependentScopeMemberExpr => self.ast.templates.expr_nns.get(e).copied(),
+            // `this->C::m` of the current instantiation whose type is
+            // dependent: `act_on_unary` keeps the operand for
+            // instantiation, which must see `C::m`, not the implicit
+            // member access (WP-669).
+            ExprKind::MemberExpr if self.ast.types.is_dependent(self.ety(e)) => {
+                self.ast.exprs.decl_ref_extra(e).and_then(|x| x.qualifier)
+            }
+            _ => return e,
+        };
         self.member_refs.remove(&e);
-        let nns = self.ast.templates.expr_nns.get(e).copied();
         let x = self.member_ref_without_object(r.decl, self.eloc(e), None, nns);
         if let Some(b) = r.begin
             && let Some(m) = self.member_refs.get_mut(&x)
@@ -1880,10 +1890,29 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return;
         }
-        let no_args = (self.ast.exprs.get(x).kind() == ExprKind::MemberExpr)
-            .then(|| self.ast.exprs.decl(x))
-            .and_then(|m| self.ast.decls.function(m))
-            .is_some_and(|f| self.ast.lists.get(f.params).is_empty());
+        let no_args = match self.ast.exprs.get(x).kind() {
+            ExprKind::MemberExpr => self
+                .ast
+                .decls
+                .function(self.ast.exprs.decl(x))
+                .is_some_and(|f| self.ast.lists.get(f.params).is_empty()),
+            // `obj.*pmf` / `ptr->*pmf`: the hint follows the pointee
+            // function type (clang's `tryExprAsCall`).
+            ExprKind::BinaryOperator => {
+                let [_, r] = self.ast.exprs.operands(x);
+                let rt = self.ast.types.canonical(self.ast.exprs.get(r).ty()).ty();
+                match self.ast.types.view(rt) {
+                    TypeView::MemberPointer { pointee, .. } => {
+                        match self.ast.types.view(self.ast.types.canonical(pointee).ty()) {
+                            TypeView::Function(p) => p.num_params() == 0 && !p.variadic(),
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
         let msg =
             self.diag(DiagId::sema_bound_member_not_called, self.eloc(x)).arg(u8::from(no_args));
         self.emit(msg);

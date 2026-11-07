@@ -101,7 +101,10 @@ impl Sema<'_, '_> {
             }
             i += 1;
         }
-        if i < xs.len() {
+        // Trailing pack expansions may be empty (clang keeps them under
+        // `PartialOrderingTTP`): `template<class, class...> class` takes
+        // `template<class> class`.
+        if xs[i.min(xs.len())..].iter().any(|&x| !self.ttp_is_pack(x)) {
             self.diag_template_arity(a, true, at);
             return false;
         }

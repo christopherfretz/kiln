@@ -28,7 +28,10 @@ LINK_EXT = (".o", ".a", ".so", ".obj", ".lo")
 DIAG_RE = re.compile(
     r"error:|panicked|fatal|undefined reference|multiple definition|memory allocation of|LLVM ERROR"
 )
-OOM_RE = re.compile(r"memory allocation of \d+ bytes failed|out of memory|std::bad_alloc|Cannot allocate memory")
+OOM_RE = re.compile(
+    r"memory allocation of \d+ bytes failed|out of memory|std::bad_alloc|Cannot allocate memory"
+    r"|cannot create the compile thread"
+)
 SILENT_SPAWN_RC = 70
 HEAD_CAP = 256 * 1024
 TAIL_CAP = 64 * 1024
@@ -85,9 +88,10 @@ def classify(rc, timed_out, text, source):
     if rc < 0:
         return "oom" if rc == -signal.SIGKILL else "panic"
     if rc == SILENT_SPAWN_RC and not text.strip():
-        # kiln++ exits 70 without a word when it cannot spawn its compile
-        # thread (a 1 GiB stack reservation, crates/kiln_driver/src/main.rs):
-        # under the address-space cap that is memory.
+        # kiln++ before WP-682 exited 70 without a word when it could not
+        # spawn its compile thread (a 1 GiB stack reservation,
+        # crates/kiln_driver/src/main.rs): under the address-space cap that
+        # is memory. It now says `cannot create the compile thread` (OOM_RE).
         return "oom"
     if "backend command failed" in text or "LLVM ERROR" in text:
         return "backend"
