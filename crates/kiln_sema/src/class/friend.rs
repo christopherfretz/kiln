@@ -37,6 +37,19 @@ pub(crate) struct FriendSpec {
 }
 
 impl Sema<'_, '_> {
+    /// GNU `noreturn` and `nothrow` are function type attributes on a
+    /// friend as on any declaration (spec/types.md §5.4, WP-752): a later
+    /// redeclaration inherits them from the friend's type.
+    fn friend_fn_type_attrs(&mut self, ty: QualType, ds: &DeclSpec, d: &Declarator) -> QualType {
+        if !self.ast.types.is_function(ty) {
+            return ty;
+        }
+        let mut attrs = self.non_vector_attrs(&ds.attrs);
+        attrs.extend(d.attrs.iter().copied());
+        let ty = self.apply_nothrow_attrs(ty, &mut attrs);
+        self.apply_noreturn_attrs(ty, &attrs)
+    }
+
     /// [`Sema::act_on_friend`]: the befriended function or type, recorded
     /// in the class being defined (`RecordCold.friends` at `}`).
     pub(crate) fn declare_friend(
@@ -73,17 +86,7 @@ impl Sema<'_, '_> {
         }
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         let ty = self.check_qualified_fn_type(ty, ds, d);
-        // GNU `noreturn` and `nothrow` are function type attributes on a
-        // friend as on any declaration (spec/types.md §5.4, WP-752): a
-        // later redeclaration inherits them from the friend's type.
-        let mut attrs = self.non_vector_attrs(&ds.attrs);
-        attrs.extend(d.attrs.iter().copied());
-        let ty = if self.ast.types.is_function(ty) {
-            let ty = self.apply_nothrow_attrs(ty, &mut attrs);
-            self.apply_noreturn_attrs(ty, &attrs)
-        } else {
-            ty
-        };
+        let ty = self.friend_fn_type_attrs(ty, ds, d);
         let Some((name, _)) = d.name else {
             self.templ.cur = None;
             self.error(DiagId::parse_expected_unqualified_id, d.loc);
