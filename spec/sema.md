@@ -1195,7 +1195,13 @@ Redeclaration and linkage rules:
   still an error in the pattern. A call `x.g()` to a member whose
   return type is not yet deduced goes through `check_undeduced_use`
   (instantiating it when it is a specialization member) before
-  member-call building.
+  member-call building. A use in a class template of a member function
+  template's specialization, before the member template's body is
+  parsed (`static constexpr auto v = compute<true>();`), is
+  type-dependent like a use of a member function of the class
+  (`undeduced_dependent_use` also takes a specialization whose template
+  is in a dependent context; WP-787,
+  `tests/conformance/dcl.spec.auto/deduced-member-template-used-in-class-template.cpp`).
 - Declarator groups ([dcl.spec.auto.general]/3, /8): the parser records
   each declarator of a simple-declaration or member-declaration with
   `act_on_group_declarator(&mut AutoGroup, d)` and closes the group with
@@ -3782,7 +3788,12 @@ the initializer, or after default initialization, and before the
     - unary and binary operators, including compound assignment (its
       computation type promotes the left operand's type, bit-fields
       by width, and an unscoped-enumeration left operand is then an
-      error: sema-conv.md §6)
+      error: sema-conv.md §6). `b += p` with a `bool b` and a pointer
+      (or array) `p` is valid ([expr.ass]/6, [conv.bool]): its
+      computation types are `int` and `p`'s pointer type, and the sum
+      converts back to `bool`. No other left type takes a pointer
+      (WP-787, `tests/conformance/expr.ass/bool-add-assign-pointer-run.cpp`).
+      The Oven rejects it as "subexpression not valid", as clang does.
     - `?:`, the comma operator
     - increment and decrement (of `bool`, or `_Atomic(bool)`: `++` is
       clang's DefaultError `-Wincrement-bool` extension and is then
@@ -6820,7 +6831,11 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     aggregate member) converted through a user-defined conversion
     checks its second standard conversion (`struct B { operator
     double(); }; int a[] = {B{}};` narrows, clang
-    `checkNarrowing(SCS.After)`; WP-303)
+    `checkNarrowing(SCS.After)`; WP-303); a parenthesized initializer
+    left empty by a pack expansion (`T x(a...)`, [temp.variadic]/7) is
+    `()` and value-initializes a non-class, non-reference `T` as an
+    `ImplicitValueInitExpr` ([dcl.init.general]/16.4; WP-787,
+    `tests/conformance/temp.variadic/empty-expansion-paren-init-value-initializes.cpp`)
   - references, binding directly or to a temporary
   - class objects by constructor ([dcl.init.general]/16.6.2.1; spec/sema-class.md
     §5): a direct-initialization from one expression of an unrelated class

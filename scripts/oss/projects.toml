@@ -10,10 +10,12 @@
 #   build_targets  optional list of make targets (default: all)
 #   test           shell command run in the build dir under `timeout 1800`
 #   c_compiler     the C compiler (kiln is C++-only), default clang-19
-#   wave           1, 2 or 3 (docs/ROADMAP.md M8)
+#   wave           1, 2, 3 or 4 (docs/ROADMAP.md M8)
 #   verified       true once the configure flags were run end to end
 #   submodules     optional: clone with --recurse-submodules
 #   source_subdir  optional: the CMake source dir inside the checkout
+#   checkout       optional: the .oss/src/<name> directory (default: the
+#                  project name); rows sharing one must share url/tag/submodules
 #   notes          free text
 
 # ---------------------------------------------------------------- wave 1
@@ -429,3 +431,24 @@ c_compiler = "clang-19"
 wave = 4
 verified = true
 notes = "WP-792. C++20 field reflection by structured bindings and __PRETTY_FUNCTION__ (not P2996). JSON only (bundled yyjson); googletest is a dependency built with the same compiler. Precompiled headers off for both compilers; the test flags' -ggdb and -Werror are overridden by -g0 -Wno-error in CMAKE_CXX_FLAGS_RELEASE."
+
+# Boost: one checkout (`checkout = "boost"`) of the superproject for every
+# boost_* row; the rows differ only in BOOST_INCLUDE_LIBRARIES and
+# KILN_BOOST_JAMFILE_LIBRARIES (the libraries with b2-only tests, registered
+# as CMake tests by shims/boost-jamfile-tests.cmake). Tests are built by the
+# `tests` target (on the jobserver) and run by ctest -j 4.
+
+[boost_meta]
+url = "https://github.com/boostorg/boost"
+tag = "boost-1.90.0"
+checkout = "boost"
+submodules = true
+build = "cmake"
+cxx_std = 20
+configure = ["-DBUILD_TESTING=ON", "-DBOOST_INCLUDE_LIBRARIES=mp11;hana;fusion;mpl;pfr;describe;variant2;variant;spirit;yap;type_traits;tuple;optional;outcome;static_string;callable_traits;type_index;function_types;lambda2;hof", "-DKILN_BOOST_JAMFILE_LIBRARIES=hana;fusion;variant;spirit;yap;type_traits;callable_traits;hof", "-DCMAKE_PROJECT_Boost_INCLUDE=@OSS@/shims/boost-jamfile-tests.cmake"]
+build_targets = ["tests"]
+test = "ctest -j 4 --output-on-failure --timeout 300 -E '^run-(variant-overload_selection|spirit-(karma_format_manip_attr|karma_generate_attr|lex_regression_matlib_static|lex_regression_matlib_switch|qi_match_manip_attr|qi_parse_attr)|yap-(user_expression_transform_1|user_expression_transform_2|call_expr|reference_returns|if_else))$'"
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-787: header-only metaprogramming libraries. docs/status/oss/boost_meta.md. The 12 excluded tests do not compile under the clang-19 control either: yap's 5 (call to constructor of term<T> is ambiguous), variant overload_selection (variant.hpp:1615 no matching member), spirit's {karma,qi}_*_attr (BOOST_PP_ITERATE includes test_manip_attr.hpp, found through the b2 project's <include> requirement the shim does not read) and lex regression_matlib_* (matlib_static.h is written by another test's run)."

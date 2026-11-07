@@ -145,6 +145,11 @@ pub struct DeducedArgs {
     /// (`SubstTemplateTypeParmPackType` in a partially substituted
     /// pattern, §7.2).
     pub pack_elem: Option<usize>,
+    /// The parameters (by index) named by the pattern of a pack expansion
+    /// in `P` that matched no `A` element: a pack among them is deduced
+    /// as empty ([temp.deduct.type]/9; clang `PackDeductionScope::finish`).
+    /// Partial ordering reads it ([temp.deduct.partial]/12).
+    pub empty_expanded: Vec<u16>,
     /// Where the deduction was requested (the call, the declaration, the
     /// alias template): the location of a diagnostic issued from a step
     /// that has none of its own.
@@ -161,6 +166,7 @@ impl DeducedArgs {
             pack_cur: None,
             expansions: false,
             pack_elem: None,
+            empty_expanded: Vec::new(),
             loc: Loc::INVALID,
         }
     }
@@ -267,6 +273,16 @@ impl Sema<'_, '_> {
                     let same = rest.len() == 1
                         && self.ast.types.canonical_arg(p) == self.ast.types.canonical_arg(rest[0]);
                     return if same { Tdk::Success } else { Tdk::MiscellaneousDeductionFailure };
+                }
+                if rest.is_empty() && d.pack_cur.is_none() {
+                    let mut used = vec![false; d.args.len()];
+                    self.mark_used_arg(pat, u32::from(d.depth), &mut used, 0);
+                    for (i, _) in used.iter().enumerate().filter(|x| *x.1) {
+                        let i = i as u16;
+                        if !d.empty_expanded.contains(&i) {
+                            d.empty_expanded.push(i);
+                        }
+                    }
                 }
                 return self.deduce_pack_elements(rest.len(), d, |s, i, d| {
                     s.deduce_arg(pat, rest[i], d, level, loc)

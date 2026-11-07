@@ -51,6 +51,7 @@ def load(path=TOML):
         p.setdefault("notes", "")
         p.setdefault("deps", [])
         p.setdefault("install_configure", [])
+        p.setdefault("checkout", name)
         p.setdefault("test_timeout", 1800)
         p.setdefault("vmem_kb", 3000000)
         if not (isinstance(p["vmem_kb"], int) and 0 < p["vmem_kb"] <= VMEM_MAX_KB):
@@ -61,6 +62,14 @@ def load(path=TOML):
         bad = [d for d in p["deps"] if d not in data or data[d]["build"] != "cmake"]
         if bad:
             raise SystemExit(f"{path}: [{name}] deps must name cmake projects: {', '.join(bad)}")
+    # Rows sharing a checkout (the Boost superproject, WP-787) must agree on
+    # what is cloned.
+    first = {}
+    for name, p in data.items():
+        key = (p["url"], p["tag"], p["submodules"])
+        other = first.setdefault(p["checkout"], (name, key))
+        if other[1] != key:
+            raise SystemExit(f"{path}: [{name}] shares checkout '{p['checkout']}' with [{other[0]}] but not its url/tag/submodules")
     return data
 
 
@@ -218,7 +227,7 @@ def main():
             sys.exit(f"projects.py: unknown project '{a.project}' (see {TOML})")
         p = data[a.project]
         q = shlex.quote
-        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "control_cxx", "source_subdir", "test_timeout", "vmem_kb"):
+        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "control_cxx", "source_subdir", "checkout", "test_timeout", "vmem_kb"):
             print(f"P_{k.upper()}={q(str(p[k]))}")
         print(f"P_SUBMODULES={'1' if p['submodules'] else ''}")
         print("P_CONFIGURE=(" + " ".join(q(x) for x in p["configure"]) + ")")
