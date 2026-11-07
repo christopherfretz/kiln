@@ -434,6 +434,22 @@ impl Sema<'_, '_> {
             })
     }
 
+    /// [dcl.contract.func]/7 on `f`, a friend function declaration just
+    /// instantiated from a templated class without a seq of its own
+    /// (`template<class T> struct S { friend int m(T a); };` redeclaring
+    /// `int m(const int a) post(r: r == a)`): its parameters, of
+    /// dependent type in the pattern, are checked against the first
+    /// declaration's postconditions now that their types are known.
+    pub(crate) fn check_friend_post_params(&mut self, f: DeclId) {
+        let first = self.ast.contract_first(f);
+        if first == f || self.ast.decls.cold.contracts.get(f).is_some() {
+            return;
+        }
+        let Some(l) = self.ast.decls.cold.contracts.get(first).copied() else { return };
+        let posts: Vec<StmtId> = self.ast.lists.iter::<StmtId>(l).collect();
+        self.check_post_params(f, first, &posts);
+    }
+
     /// [dcl.contract.func]/7: a non-reference parameter of `owner` that a
     /// postcondition among `stmts` (of declaration `of`) odr-uses is
     /// `const` on declaration `decl`, and not of array or function type.

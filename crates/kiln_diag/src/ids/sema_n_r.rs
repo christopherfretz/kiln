@@ -206,6 +206,10 @@ sema_reference_to_reference = Error (1) "'{0}' declared as a reference to a refe
 sema_reference_to_unsatisfied_function = Error (1) "invalid reference to function {0}: constraints not satisfied";
 sema_reference_to_void = Error (0) "cannot form a reference to 'void'";
 sema_reference_var_requires_init = Error (1) "declaration of reference variable '{0}' requires an initializer";
+// [expr.reflect]/7.1.1 (WP-781)
+sema_reflect_init_capture = Error (0) "cannot take the reflection of a local entity declared by init-capture";
+// [expr.reflect]/7.1.4 (WP-781)
+sema_reflect_intervening_lambda = Error (0) "cannot take the reflection of a local entity for which there is an intervening lambda expression";
 sema_reflect_nttp = Error (1) "'^^' cannot be applied to a non-type template parameter '{0}'";
 sema_reflect_operand = Error (0) "'^^' cannot be applied to this operand";
 sema_reflect_overload_set = Error (0) "cannot take the reflection of an overload set";

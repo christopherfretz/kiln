@@ -859,6 +859,9 @@ impl Substituter<'_, '_, '_> {
             self.sema.inst.concepts.member_constraints.insert(f, (d, self.args.clone()));
         }
         if friend.is_some() {
+            // [dcl.contract.func]/7 on the redeclaration it now is: a
+            // parameter of dependent type was not checked on the pattern.
+            self.sema.check_friend_post_params(f);
             self.friend_definition(f, d);
         }
         // Defined in its class: inline before its body is instantiated.

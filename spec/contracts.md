@@ -208,6 +208,12 @@ assertion-statement:
   a non-dependent friend of a class template without a seq is checked
   on the definition against the namespace function it will redeclare
   (`pattern_friend_prev`, recorded in `friend_pattern_prev`) (WP-765).
+  A friend whose parameter type is dependent (`template<class T> struct
+  S { friend int m(T a); };` redeclaring `int m(const int a) post(r: r
+  == a)`) is checked when its class is instantiated, against the first
+  declaration's postconditions (`check_friend_post_params`, called from
+  `templ/subst/decls.rs` `function_decl`; `S<int>` is ill-formed,
+  `S<const int>` and a reference parameter are not) (WP-781).
 - **Coroutines** ([dcl.fct.def.coroutine]/6): when the body turns out
   to be a coroutine, a postcondition that odr-uses a non-reference
   parameter is `sema_contract_coroutine_post_param` (once per
@@ -261,6 +267,29 @@ translation unit; any other value is "unsupported argument". A
 `ContractAssertStmt` whose `aux` semantic slot is 0 uses it; slots 1-3
 are reserved for a per-assertion semantic (a later extension) and are
 never written today.
+
+**No per-assertion semantic is required (WP-781).** [basic.contract.eval]/2:
+"It is implementation-defined which evaluation semantic is used for any
+given evaluation of a contract assertion." Note 1 adds that the range of
+choices "need not allow all four evaluation semantics as possibilities"
+and that the semantic "can differ for different evaluations of the same
+contract assertion, including evaluations during constant evaluation";
+/3 (recommended practice) asks only for an all-`ignore` and an
+all-`enforce` translation option, `enforce` by default. A
+translation-unit-wide choice is therefore conforming, and kiln's
+implementation-defined choice ([intro.compliance]: documented here) is:
+every evaluation of every contract assertion in a translation unit, at
+run time and during constant evaluation, uses the semantic of
+`-fcontract-evaluation-semantic=` (default `enforce`). GCC 16.1, the
+P2900 oracle, offers the same and nothing finer: its contract options
+are `-fcontracts`, `-fcontract-evaluation-semantic=`,
+`-fcontracts-client-check=`, `-fcontracts-definition-check=`,
+`-fcontract-checks-outlined`, `-fcontract-disable-optimized-checks`,
+`-fcontracts-conservative-ipa` and `-fpreview=inclusiveincontracts`;
+it has no semantic attribute (it warns that attributes on a
+function-contract-specifier are ignored) and no contract labels. A
+per-assertion form (labels, P3400) is post-C++26 work; the `aux` slots
+stay reserved for it.
 
 ### 6.2 Today (WP-707)
 
@@ -517,9 +546,17 @@ Divergences recorded by WP-765:
   with GCC.
 - [dcl.contract.func]/7 in templates: GCC checks a friend
   redeclaration without a seq only when the class is instantiated, never
-  checks a friend *definition* (`h`), and never checks a dependent
-  friend; kiln checks every non-dependent case on the definition,
-  once for the pattern (`p7-template-definition.cpp`, no oracle).
+  checks a non-dependent friend *definition* (`h`); kiln checks every
+  non-dependent case on the definition, once for the pattern
+  (`p7-template-definition.cpp`, no oracle). A friend whose parameter
+  type is dependent is checked by both on each instantiation of its
+  class, a friend definition included (`p7-friend-dependent.cpp`,
+  `oracle: gcc`; WP-781).
+- [expr.prim.splice]/2.1.4 in a contract predicate: GCC 16.1 says "use
+  of local variable with automatic storage from containing function in
+  a splice expression" for a splice of a local across a lambda in a
+  predicate as anywhere else; kiln's diagnostic is the same rule
+  (spec/reflection.md §5).
 - A violation in an explicit specialization of a member of a class
   template names the specialization as clang 22's
   `__PRETTY_FUNCTION__` does: `int C<long>::m(long) [T = long]` (the
@@ -534,15 +571,9 @@ Divergences recorded by WP-765:
 
 Gaps (follow-ups):
 
-- `-fcontract-evaluation-semantic=` has no per-assertion form;
-  `aux` slots 1-3 are reserved.
-- A friend of a class template whose parameter type is dependent
-  (`friend int m(T a);` redeclaring `int m(const int a) post(r: r == a)`)
-  is not checked against the postcondition-parameter rule on the
-  instantiation either (GCC 16.1 does not check it).
-- `^^p` / `[: ^^p :]` of a local across an intervening lambda
-  ([expr.prim.splice]/2.1.4, [expr.reflect]) is not diagnosed (also
-  outside contracts; `kiln_sema` reflection splice).
+- None known. The per-assertion semantic is not required (§6.1); the
+  dependent friend redeclaration and a local named across a lambda by
+  `^^` or a splice were closed by WP-781 (§5, spec/reflection.md §5).
 
 Decisions:
 
@@ -602,7 +633,11 @@ Decisions:
   the dump goldens `dump-function.cpp`, `dump-lambda-template.cpp`;
   `p4-explicit-spec.cpp`, `p7-friend-redecl.cpp`,
   `coroutine-post-param.cpp` (WP-755); `p7-template-definition.cpp`
-  (WP-765).
+  (WP-765); `p7-friend-dependent.cpp` (WP-781, `oracle: gcc`).
+- `tests/conformance/expr.reflect/p7-local-across-lambda.cpp` and
+  `tests/conformance/expr.prim.splice/p2-local-across-lambda{,-run}.cpp`
+  (WP-781): `^^` and splices of a local across a lambda, in and out of
+  contract predicates, compared with GCC.
 - `tests/conformance/expr.prim.splice/contract-constify*.cpp` (WP-765,
   P3598R0): a write through a splice, the const overload chosen through
   one (compile-fail and run, compared with GCC), and the object splice
