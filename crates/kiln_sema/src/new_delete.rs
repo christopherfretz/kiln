@@ -557,7 +557,7 @@ impl Sema<'_, '_> {
             {
                 self.check_member_access_distinct(od, naming, loc);
             }
-            self.mark_used(od);
+            self.mark_used_at(od, loc);
         }
         let op_delete = op_delete.map(|d| d.0);
         // The initializer ([expr.new]/23).
@@ -1621,7 +1621,7 @@ impl Sema<'_, '_> {
             return self.recover_err(&[operand], loc);
         }
         if let Some(f) = op_delete {
-            self.mark_used(f);
+            self.mark_used_at(f, loc);
         }
         let mut c = conv::lvalue_to_rvalue(self, operand);
         if let Some(f) = op_delete

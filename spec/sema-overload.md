@@ -1327,7 +1327,11 @@ Where the code differs from (or details) the design above:
   matches: `(size_t[, align_val_t], placement...)` go through
   `add_found_candidates`/`resolve_set` and the deduced specialization is
   instantiated on use; a placement `operator delete` template is not
-  matched (WP-686).
+  matched (WP-686). The allocation function, the matching deallocation
+  function of a new-expression and the deallocation function of a
+  delete-expression are odr-used at the expression's location, so a member
+  of a class template specialization is instantiated there ([temp.inst]/11;
+  WP-686).
 - **Gaps (owners).** Reversed and rewritten operator function template
   candidates are not formed (see §10.7). Access
   checks on class `operator new`/`delete`: sema.md §5.9 (WP-457). Destroying
