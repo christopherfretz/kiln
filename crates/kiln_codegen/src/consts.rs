@@ -18,8 +18,7 @@ use crate::fold::{is_local, is_static_local};
 use crate::module::{Cg, R, err, gval};
 
 /// What [`Cg::enter_default_init`] replaced.
-pub(crate) type DefaultInitSave =
-    (Option<ExprId>, Option<(Option<crate::fir::V>, Option<DeclId>)>);
+pub(crate) type DefaultInitSave = (Option<ExprId>, Option<(Option<crate::fir::V>, Option<DeclId>)>);
 
 impl Cg<'_> {
     /// Lowers the folded constant `c` of type `ty` in its in-memory form
