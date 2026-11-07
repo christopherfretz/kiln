@@ -1847,10 +1847,13 @@ impl Sema<'_, '_> {
                 self.set_overload_begin(e, begin, loc);
                 return e;
             }
+            // ADL only for a name followed by `(` ([basic.lookup.argdep]/1:
+            // `(f)(x)` suppresses it; clang `UseArgumentDependentLookup`).
+            let adl = self.call_uses_adl(&found.decls, qualifier.is_none());
             let e = self.builder().unresolved_lookup(
                 name,
                 &lookup_set_order(&found.decls, qualifier.is_none()),
-                qualifier.is_none(),
+                adl,
                 nns,
                 None,
                 loc,

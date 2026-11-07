@@ -146,7 +146,12 @@ reverses segment (1). Verified: `void f(int); void f(double); void(*p)(char)
 
 ### 2.2 Argument-dependent lookup (`adl.rs`, [basic.lookup.argdep])
 `adl_lookup(name, args, out)`. **Suppressed** (clang
-`UseArgumentDependentLookup`) for qualified or parenthesized callees,
+`UseArgumentDependentLookup`) for qualified or parenthesized callees
+(a parenthesized name of a function template too: its
+`UnresolvedLookupExpr` is built without ADL, so `(f)(t)` in a template
+does not find an associated namespace's `f` at instantiation; boost's
+`(iterator_arrow_result)(temp)`, WP-726,
+`tests/conformance/basic.lookup.argdep/parenthesized-function-template-no-adl.cpp`),
 implicit builtins, or when ordinary lookup found a class member, a
 block-scope function declaration (not a using-declaration), or anything
 that is not a function or function template. The suppression holds for a
