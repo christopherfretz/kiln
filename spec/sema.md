@@ -4396,6 +4396,11 @@ function) elsewhere.
   ([class.copy.elision]/3), which applies only when the named local's
   scope does not extend past the innermost enclosing try-block
   (`thrown_var_in_scope`, WP-100).
+- A non-trivial destructor of a class exception object is odr-used
+  ([except.throw]/5; `use_exception_dtor`, clang `CheckCXXThrowOperand`):
+  its access and deletion are checked as for a temporary, and an
+  implicit one is defined in the translation unit, since `__cxa_throw`
+  is passed its complete-object destructor (WP-799).
 - In `?:`, a throw operand gives the other operand's type and value
   category ([expr.cond]/2).
 - The Oven treats a `throw` it reaches as not a constant expression,
