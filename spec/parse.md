@@ -947,6 +947,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     nullability keywords are not parsed there. spec/sema.md §4.1.1 says
     which class types may then carry a nullability qualifier
     (`tests/conformance/dcl.type.class/nullability-on-classes-*.cpp`).
+  - After `template<>`, a class-key with a name `Q::identifier` whose
+    qualifier is a typedef or alias of a class template specialization
+    (`at_alias_spec_member_tag_decl`) declares an explicit specialization
+    of that specialization's member class, as with the template-id
+    spelled out ([temp.expl.spec]/1; WP-782,
+    `temp.expl.spec/p17-member-class-through-alias.cpp`).
   - Then the body:
     - `parse_record_body` (§4.1) holds the base clause, member
       declarations, bit-fields and nested records.
