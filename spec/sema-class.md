@@ -236,6 +236,13 @@ out-of-line member templates instantiated later included, get access
 nested-befriends-enclosing-template*.cpp). An elaborated-type-specifier
 `class X` naming the injected-class-name is the injected type `X<P...>`
 anywhere inside the template, not only in a friend declaration.
+The lookup of an unqualified `friend class X;` searches the class scopes,
+base classes included, before stopping at the innermost enclosing namespace
+([dcl.type.elab]/4): a class found by class member lookup is the friend
+even when it is declared in another namespace, such as the
+injected-class-name of a private base specialization (LLVM's
+`friend class TrailingObjects;`; WP-801; tests/conformance/dcl.type.elab/
+friend-class-found-in-base-class-scope-run.cpp).
 
 A class first declared inside a template by an elaborated-type-specifier
 that is a plain reference (a parameter or template-argument type `struct P*`,

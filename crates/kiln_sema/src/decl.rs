@@ -7546,9 +7546,18 @@ impl Sema<'_, '_> {
         // namespace counts, and the friend is its target (boost's
         // `friend class iterator_core_access;` through
         // `using iterators::iterator_core_access;`; clang `ActOnTag`).
+        // A name found by class member lookup ([class.member.lookup]) was
+        // found in a class scope, which lies inside the innermost enclosing
+        // namespace: a member of a base class in another namespace counts,
+        // such as the injected-class-name of a base specialization (LLVM's
+        // `friend class TrailingObjects;`; [dcl.type.elab]/4).
         let found_as = lookup.found.last().copied();
-        let prev =
-            found.last().copied().filter(|&p| within(self, found_as.unwrap_or(p))).or_else(hidden);
+        let in_class = lookup.naming.is_some();
+        let prev = found
+            .last()
+            .copied()
+            .filter(|&p| in_class || within(self, found_as.unwrap_or(p)))
+            .or_else(hidden);
         if let Some(p) = prev {
             if self.tag_matches(p, keyword) {
                 self.mark_type_referenced(p);
