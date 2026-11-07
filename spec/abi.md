@@ -784,7 +784,13 @@ points, thunks and method indices are clang's.
   as `T_`-style template parameters at the lambda's level). An unnumbered
   one mangles as an unnamed class, `$_N`, from the module's
   `AnonIds` table (clang `getAnonymousStructId`: per function for a
-  class in a function, else one module-wide counter). A closure created
+  class in a function, else one module-wide counter), numbered in
+  first-mangled order: codegen names an internal-linkage definition when
+  it is deferred, as clang `EmitGlobal` does, so a closure in a later
+  template argument of an earlier internal function takes its `$_N`
+  before the closures in that function's body (WP-802,
+  `expr.prim.lambda.closure/internal-closure-name-numbering-run.cpp`).
+  A closure created
   in a default argument of a function's parameter mangles in that
   function's local scope with `d [<number>] _` (the parameter counted
   from the last, clang `mangleLocalName`); one created in the initializer
