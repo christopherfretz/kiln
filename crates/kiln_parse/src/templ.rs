@@ -181,6 +181,7 @@ impl Parser<'_, '_> {
             // `template<> enum class A<int>::E : int { ... };` explicitly
             // specializes a member enumeration ([temp.expl.spec]/1).
             if self.at_partial_specialization()
+                || self.at_spec_member_tag_decl()
                 || self.at_var_template_spec()
                 || self.at_kw(Kw::Enum)
                 || !self.at_spec_tag_or_template()
@@ -285,6 +286,37 @@ impl Parser<'_, '_> {
                 self.s.ast.decls.get(q).kind(),
                 DeclKind::Namespace | DeclKind::TranslationUnit
             )
+        {
+            return false;
+        }
+        let t = self.tok_at(end);
+        matches!(Self::punct_of(t), Some(Punct::LBrace | Punct::Colon | Punct::Semi))
+            || self.is_final_tok(t)
+    }
+
+    /// `class-key Q::identifier` then `{`, `:`, `;` or `final`, the
+    /// qualifier naming a class template specialization without spelling
+    /// a template-id (`using P = X<int>; template<> class P::R {}`): an
+    /// explicit specialization of a member class of `X<int>`
+    /// ([temp.expl.spec]/1, /16), parsed as the `X<int>::R` spelling is.
+    fn at_spec_member_tag_decl(&self) -> bool {
+        if !matches!(self.kw(), Some(Kw::Class | Kw::Struct | Kw::Union)) {
+            return false;
+        }
+        let i = self.pos() + 1;
+        let Some((end, _, _, _, Some(q))) = self.scan_name_qual_at(i) else { return false };
+        let ast = &self.s.ast;
+        let q = match ast.decls.get(q).kind() {
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                match ast.decls.typedef(q).and_then(|t| ast.types.as_record(t.underlying)) {
+                    Some(r) => r,
+                    None => return false,
+                }
+            }
+            _ => q,
+        };
+        if ast.spec_info(q).is_none()
+            || (i..end).any(|j| self.tok_at(j).kind == TokKind::Punct(Punct::Less))
         {
             return false;
         }

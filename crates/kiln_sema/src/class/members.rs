@@ -627,20 +627,22 @@ impl Sema<'_, '_> {
     /// initialized to the parameter type, its own full-expression.
     pub(crate) fn attach_default_arg(&mut self, p: DeclId, e: kiln_ast::ExprId) {
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        let c = if self.is_dependent_class_param(pty) {
-            // Converted at instantiation, as for a variable of that type
-            // (`dependent_init_form`).
-            e
-        } else if self.is_error_type(pty) || self.ast.types.is_dependent(pty) {
-            let loc = self.ast.exprs.get(e).loc();
-            self.perform_init(pty, crate::init::Initializer::Expr(e), loc, false)
-        } else {
-            let note = self.param_decl_note(p);
-            let ploc = self.ast.decls.get(p).loc();
-            self.convert_default_arg(e, pty, ploc, note)
-        };
-        self.note_default_init_full_expr();
-        let c = self.act_on_full_expr(c);
+        let c = self.defer_default_arg_uses(|s| {
+            let c = if s.is_dependent_class_param(pty) {
+                // Converted at instantiation, as for a variable of that
+                // type (`dependent_init_form`).
+                e
+            } else if s.is_error_type(pty) || s.ast.types.is_dependent(pty) {
+                let loc = s.ast.exprs.get(e).loc();
+                s.perform_init(pty, crate::init::Initializer::Expr(e), loc, false)
+            } else {
+                let note = s.param_decl_note(p);
+                let ploc = s.ast.decls.get(p).loc();
+                s.convert_default_arg(e, pty, ploc, note)
+            };
+            s.note_default_init_full_expr();
+            s.act_on_full_expr(c)
+        });
         let _ = self.ast.decls.set_default_arg(p, c);
     }
 
