@@ -110,6 +110,19 @@ system). RSS is its peak, which includes the LLVM backend. A ratio below
 - mp_units is compared with g++-16, because clang 19 cannot build
   mp-units v2.5.0.
 
+g++-16 on the five heaviest TUs of each clang-controlled project. Each
+TU was re-run alone with kiln, clang++-19 and g++-16 with the control's
+command line (clang-only `-W` flags dropped for gcc), under the
+harness's 3 GB address-space cap. Geomean kiln/g++-16:
+
+| project | time | RSS | note |
+|---|---|---|---|
+| `ctre` | 1.21x | 0.29x | g++-16 is the fastest of the three on ctre (2.0 to 3.0 s per TU) |
+| `daw_json_link` | 0.49x | 0.20x | |
+| `scnlib` | 0.66x | 0.57x | |
+| `glaze` | 0.56x | 0.28x | over 2 TUs. g++-16 runs out of the 3 GB cap ("virtual memory exhausted") on `json_test`, `yaml_test` and `beve_test`, where kiln peaks at 1244, 1658 and 759 MB |
+| `reflect_cpp` | 0.68x | 0.21x | |
+
 ## Results
 
 <!-- oss:benchmark -->
