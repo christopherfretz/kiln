@@ -1426,7 +1426,7 @@ impl Sema<'_, '_> {
     }
 
     /// [temp.names]/3.2: whether the dependent member access `e`
-    /// (`this->f`, an unqualified name that lookup in the current
+    /// (`this->f`, `x.f` on an object of type `X<P...>` inside `X`, an unqualified name that lookup in the current
     /// instantiation finds with more than one declaration, so the access
     /// stays dependent) names a member template, so a `<` after it starts
     /// a template argument list without `template` (libstdc++ variant's
@@ -1450,7 +1450,12 @@ impl Sema<'_, '_> {
         } else {
             Some(bt)
         };
-        let Some(rec) = obj.and_then(|o| self.ast.types.as_record(o)) else { return false };
+        // `X<P...>` written inside `X` names the current instantiation as
+        // its injected-class-name does ([temp.dep.type]/1.2).
+        let rec = obj.and_then(|o| {
+            self.ast.types.as_record(o).or_else(|| self.friend_current_instantiation(o))
+        });
+        let Some(rec) = rec else { return false };
         let name = self.ast.dependent_member_name(e);
         self.lookup_in_class_dn(rec, name, crate::lookup::LookupKind::Ordinary).decls.iter().any(
             |&d| {

@@ -5667,6 +5667,11 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   template-argument-list (`dependent_member_names_template`,
   `act_on_dependent_member_template_args`; variant:1526). Test:
   `tests/conformance/temp.names/libstdcxx-this-member-template.cpp`.
+  The object may also have the type `X<P...>` written inside `X` (or a
+  pointer to it): that names the current instantiation like the
+  injected-class-name ([temp.dep.type]/1.2), so `copy.f<10>()` needs no
+  `template` (WP-686, abseil charconv_bigint.cc). Test:
+  `tests/conformance/temp.dep.type/p1-current-instantiation-object-member-template-run.cpp`.
 - **Access through a dependent base** ([class.protected]/1,
   [class.access.base]/5): in `has_access`, a class that does not
   (yet) derive from the naming class but has a dependent base anywhere
