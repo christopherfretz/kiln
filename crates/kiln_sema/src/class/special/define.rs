@@ -217,6 +217,9 @@ pub(crate) struct Saved {
     nsdmi_this: Vec<(DeclId, QualType)>,
     contract_ctx: Vec<crate::contracts::ContractCtx>,
     deferring: bool,
+    /// An alias template's use context does not reach into the member
+    /// being defined: its own subobject accesses are checked from it.
+    access_ctx: Option<DeclId>,
 }
 
 impl Sema<'_, '_> {
@@ -291,6 +294,7 @@ impl Sema<'_, '_> {
             nsdmi_this: std::mem::take(&mut self.nsdmi_this),
             contract_ctx: std::mem::take(&mut self.contract_ctx),
             deferring: std::mem::take(&mut self.deferring_call_ref),
+            access_ctx: self.access_ctx.take(),
         };
         self.ctx = member;
         let fty = self.ast.decls.get(member).ty().unwrap_or(QualType::ERROR);
@@ -316,6 +320,7 @@ impl Sema<'_, '_> {
         self.nsdmi_this = saved.nsdmi_this;
         self.contract_ctx = saved.contract_ctx;
         self.deferring_call_ref = saved.deferring;
+        self.access_ctx = saved.access_ctx;
     }
 
     // -- implicit definitions ------------------------------------------------

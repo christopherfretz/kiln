@@ -1368,6 +1368,7 @@ impl Parser<'_, '_> {
     /// The member designator after `.`/`->` (the operator token at `loc`
     /// already consumed): `[template] id-expression` or a
     /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
+    #[allow(clippy::too_many_lines, reason = "one path per member designator form")]
     fn parse_member_access_suffix(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
         // `e.[: r :]`, `p->[: r :]` ([expr.ref]/1 with a splice-expression).
         if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
@@ -1406,7 +1407,12 @@ impl Parser<'_, '_> {
             let q = self.parse_nested_name_nns();
             self.s.end_member_qualifier();
             let Ok(q) = q else { return None };
-            template_kw |= q.is_some() && self.eat_kw(Kw::Template).is_some();
+            // A leading `template` belonged to the qualifier's first
+            // component (`e.template B<T>::m`, CWG1835); only one after
+            // the qualifier applies to the member's name.
+            if q.is_some() {
+                template_kw = self.eat_kw(Kw::Template).is_some();
+            }
             q
         } else {
             None
@@ -1490,6 +1496,9 @@ impl Parser<'_, '_> {
             self.s.diagnose_expr_intended_as_template_name(name, found, nl, angles);
             self.expr_invalid = true;
             return Some(self.s.act_on_error_expr(&[e], nl));
+        } else if !self.at(Punct::Less) {
+            // `x.v` naming a member variable template needs its arguments.
+            e = self.s.act_on_member_without_template_args(e);
         }
         Some(e)
     }
@@ -1843,10 +1852,10 @@ impl Parser<'_, '_> {
         }
         // A class template's injected-class-name used as a type
         // ([temp.local]/1): `X(args)` / `X{args}` in its definition.
-        if let Some((end, NameClass::TypeTemplate(d), _)) = self.scan_name(self.pos())
+        if let Some((end, _, NameClass::TypeTemplate(d), _, q)) = self.scan_name_qual_at(self.pos())
             && matches!(Self::punct_of(self.tok_at(end)), Some(Punct::LParen | Punct::LBrace))
             && (end == self.pos() + 1 && self.s.names_injected_class(d)
-                || self.s.is_ctad_template(d))
+                || self.names_ctad_template(q, d))
         {
             // Or a class template named for class template argument
             // deduction ([dcl.type.class.deduct]/2): `C(args)`.

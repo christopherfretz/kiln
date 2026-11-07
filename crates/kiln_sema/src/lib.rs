@@ -538,6 +538,13 @@ pub struct Sema<'a, 'sm> {
     /// instantiated (`friend_function_template`): a qualified one that
     /// matches no template is not diagnosed (clang).
     pub(crate) instantiating_friend_template: bool,
+    /// Functions defined in a class whose body is saved for the end of
+    /// the outermost class ([class.mem.general]/7,
+    /// `act_on_delayed_body`): a friend template of a class template
+    /// specialization instantiated before the body is parsed (a use of
+    /// the specialization in a body) is still instantiated from that
+    /// definition (clang's `willHaveBody`).
+    pub(crate) delayed_bodies: kiln_source::fx::FxHashSet<DeclId>,
     /// While a friend function template of a class template is
     /// redeclared (`friend_function_template`): its pattern's
     /// constraints (type-constraints, requires-clauses) mapped to their
@@ -698,6 +705,10 @@ pub struct Sema<'a, 'sm> {
     /// complex-to-real conversion is then allowed; clang's
     /// `isCast(CCK)`).
     pub(crate) explicit_conv: bool,
+    /// A C-style or functional cast is converting a pointer to a base
+    /// class: the base may be inaccessible ([expr.cast]/4, clang's
+    /// `IgnoreBaseAccess`).
+    pub(crate) cast_ignores_base_access: bool,
     /// Access checks in a class template pattern (or partial
     /// specialization) that passed only because the class may instantiate
     /// to a befriended specialization, keyed by the pattern's first
@@ -1160,6 +1171,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
             virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
+            delayed_bodies: kiln_source::fx::FxHashSet::default(),
             friend_cmp_constraints: kiln_source::fx::FxHashMap::default(),
             friend_template_apart: false,
             constinit_locs: kiln_source::fx::FxHashMap::default(),
@@ -1199,6 +1211,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             depr_init: None,
             exempt_next_delay: false,
             explicit_conv: false,
+            cast_ignores_base_access: false,
             dependent_access: kiln_source::fx::FxHashMap::default(),
             speculative_friend: std::cell::Cell::new(false),
             access_failed: kiln_source::fx::FxHashSet::default(),

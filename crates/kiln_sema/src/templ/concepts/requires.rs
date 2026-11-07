@@ -367,9 +367,15 @@ impl Substituter<'_, '_, '_> {
         };
         let mut args = Vec::with_capacity(written.len());
         args.push(TemplateArg::ty(ty));
+        // A pack expansion among them (`-> C<P...>`) expands to its
+        // elements (§7.2).
         for &a in written.iter().skip(1) {
-            match self.template_arg(a, loc) {
-                Ok(a) => args.push(a),
+            match self.expand_arg(a, loc) {
+                Ok(Some(xs)) => args.extend(xs),
+                Ok(None) => match self.template_arg(a, loc) {
+                    Ok(a) => args.push(a),
+                    Err(SubstFail) => return false,
+                },
                 Err(SubstFail) => return false,
             }
         }

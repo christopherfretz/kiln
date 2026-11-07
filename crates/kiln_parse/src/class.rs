@@ -561,8 +561,17 @@ impl Parser<'_, '_> {
     /// The base-clause and `{ member-specification }` of class `r`
     /// ([class.pre], [class.mem]; spec/sema-class.md §2.1), at `:` or
     /// `{`; `final_loc` is its class-virt-specifier. For the outermost
-    /// class, then replays the saved complete-class contexts.
-    pub(crate) fn parse_record_body(&mut self, r: DeclId, final_loc: Option<Loc>) {
+    /// class, then replays the saved complete-class contexts. `in_type_id`
+    /// says the class is defined in a type-id (`using A = struct {...};`),
+    /// where a following `;` does not make it an anonymous struct or
+    /// union ([class.union.anon]/1 needs a declaration with no
+    /// declarators).
+    pub(crate) fn parse_record_body(
+        &mut self,
+        r: DeclId,
+        final_loc: Option<Loc>,
+        in_type_id: bool,
+    ) {
         let saved = mem::take(&mut self.late_fn);
         let nested = !self.late.is_empty();
         self.late.push(LateClass { record: r, items: Vec::new() });
@@ -596,7 +605,7 @@ impl Parser<'_, '_> {
         } else {
             self.s.error(DiagId::parse_expected_lbrace_after_base, self.prev_end());
         }
-        let then_semi = self.at(Punct::Semi);
+        let then_semi = !in_type_id && self.at(Punct::Semi);
         self.trace(|p| {
             format!(
                 "finish_record_definition({}, {})",
@@ -1501,6 +1510,10 @@ impl Parser<'_, '_> {
             && !self.at_qualified_member_declarator()
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one member-declarator list, each kind handled inline"
+    )]
     fn parse_member_declaration_inner(&mut self) {
         let tmpl_kind = self.template_decl_kind.take();
         if !self.stack_ok() || self.parse_member_declaration_leader() {
@@ -1536,6 +1549,7 @@ impl Parser<'_, '_> {
             let mut d = Declarator::new(DeclaratorContext::Member, self.loc());
             d.friend = ds.friend.is_some();
             d.typedef = is_typedef;
+            d.typed = ds.has_type_specifier();
             self.late_fn = LateFnParts {
                 delay_args: !is_typedef,
                 // A friend function's noexcept-specifier is a
@@ -1577,6 +1591,8 @@ impl Parser<'_, '_> {
             if first {
                 self.prohibit_friend_lead_attrs(&mut ds);
             }
+            // A member variable template specialization is static ([temp.expl.spec]/3).
+            let is_static = is_static || d.spec_id.is_some();
             let data_member = !is_static && !is_typedef && ds.friend.is_none();
             let (nsdmi, init) = self.classify_member_init(&mut d, has_width, is_fn, data_member);
             let (decl, target) =
@@ -1726,6 +1742,7 @@ impl Parser<'_, '_> {
         }
         if let Some(f) = target {
             let end = toks.last().map_or(self.loc(), |t| t.span.hi);
+            self.s.act_on_delayed_body(f);
             self.push_late(LateItem::Body { f, ctor, toks: LateToks { toks, end } });
             if let Some(toks) = late_contracts {
                 self.push_late(LateItem::Contracts { f, toks });

@@ -68,6 +68,29 @@ fn print_resource_dir() {
     assert!(Path::new(o.stdout.trim_end()).join("include").is_dir(), "{}", o.stdout);
 }
 
+/// spec/driver.md "Options": clang's `-ftime-trace` family (glaze adds
+/// `-ftime-trace` for clang) is accepted with a
+/// `-Wunused-command-line-argument` warning per spelling, silenced by
+/// `-Qunused-arguments`; the compile is unaffected (WP-792).
+#[test]
+fn time_trace_ignored() {
+    let flags = ["-ftime-trace", "-ftime-trace=t.json", "-ftime-trace-granularity=10"];
+    let mut args = vec!["-std=c++26", "-fsyntax-only"];
+    args.extend(flags);
+    args.push("-");
+    let o = kiln(&args, "int f();\n");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    for f in flags {
+        let w = format!(
+            "kiln++: warning: '{f}' ignored: kiln writes no time trace (see -fkiln-instantiation-report) [-Wunused-command-line-argument]\n"
+        );
+        assert!(o.stderr.contains(&w), "{}", o.stderr);
+    }
+    args.insert(0, "-Qunused-arguments");
+    let o = kiln(&args, "int f();\n");
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+}
+
 #[test]
 fn argument_errors() {
     let o = kiln(&["-E", "-fbogus", "-x", "pascal", "-stdlib=libfoo", "/nonexistent.cpp"], "");
@@ -1063,6 +1086,52 @@ fn memory_report_rows() {
     // Without the flag nothing is printed.
     let o = kiln(&["-std=c++26", "-fsyntax-only", "-x", "c++", "-"], src);
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+}
+
+/// spec/oven.md "Trial folds" (WP-798): a failed outermost trial fold
+/// gives its thunk's code back, so the `-Winteger-overflow` scan
+/// ([expr.pre]/4) of many non-constant operands keeps no thunk per
+/// operand alive (`oven.thunks` stays small; it held one per `+` before).
+#[test]
+fn failed_trial_folds_keep_no_thunks() {
+    let mut src = String::from("int f(int);\nint g(int);\nint use(int x) {\n  int r = 0;\n");
+    for _ in 0..200 {
+        src.push_str("  r += f(x) + g(x);\n");
+    }
+    src.push_str("  return r;\n}\n");
+    let o = kiln(&["-std=c++26", "-fkiln-memory-report", "-fsyntax-only", "-x", "c++", "-"], &src);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let count = o
+        .stderr
+        .lines()
+        .find_map(|l| l.strip_prefix("memory: oven.thunks count="))
+        .and_then(|r| r.split_whitespace().next())
+        .and_then(|n| n.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("no oven.thunks row: {}", o.stderr));
+    assert!(count < 20, "{count} thunks kept for 200 failed folds");
+}
+
+/// spec/sema.md "-Winteger-overflow" (WP-798): an operand that calls a
+/// non-`constexpr` member function on every evaluation ([expr.const]/10.2)
+/// is not folded at all, so the scan of a body made of them compiles no
+/// thunk; an overflow beside one is still diagnosed.
+#[test]
+fn overflow_scan_skips_folds_that_cannot_succeed() {
+    let mut src = String::from(
+        "struct A { int m; int get() const { return m; } };\n\
+         struct B { A *a; A *operator->() const { return a; } };\n\
+         struct C { B b; B operator->() const { return b; } };\n\
+         int use(const C &p) {\n  int r = 0;\n",
+    );
+    for _ in 0..50 {
+        src.push_str("  r += p->m + p->get();\n");
+    }
+    src.push_str("  return r + (2147483647 + 1);\n}\n");
+    let o = kiln(&["-std=c++26", "-fkiln-memory-report", "-fsyntax-only", "-x", "c++", "-"], &src);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let warns = o.stderr.matches("warning: overflow in expression; result is").count();
+    assert_eq!(warns, 1, "{}", o.stderr);
+    assert!(o.stderr.contains("memory: oven.thunks count=0 "), "{}", o.stderr);
 }
 
 /// spec/driver.md "Output, diagnostics, exit status" (WP-682): a compile

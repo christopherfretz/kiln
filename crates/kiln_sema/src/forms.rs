@@ -383,6 +383,31 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// The result `x` of `T{...}` built by `list_construct`, with its
+    /// temporary bound. `T{y}` whose copy is elided to `y`'s conversion
+    /// function (`operator T()`, [dcl.init.list]/3.7, [class.copy.elision])
+    /// keeps, as clang, a no-op functional cast to the written type `T`
+    /// over the conversion, so an instantiation of a pattern holding it
+    /// converts to `T` again (not to the enclosing initialization's type).
+    fn finish_list_construct(&mut self, x: ExprId, ty: QualType, loc: Loc, rbrace: Loc) -> ExprId {
+        let elided = self.ast.exprs.get(x).kind() == ExprKind::ImplicitCastExpr
+            && self.ast.types.as_record(ty).is_some();
+        let x = self.maybe_bind_temporary(x);
+        if !elided {
+            return x;
+        }
+        self.builder().functional_cast(
+            CastKind::NoOp,
+            x,
+            ty,
+            ValueCategory::PRValue,
+            None,
+            loc,
+            rbrace,
+            ExprFlags::NONE,
+        )
+    }
+
     /// [`Sema::act_on_list_cast`] before the type as written is recorded.
     fn build_list_cast(&mut self, ty: QualType, l: &InitList, loc: Loc) -> ExprId {
         if self.list_has_expr_error(l) {
@@ -417,7 +442,11 @@ impl Sema<'_, '_> {
         if let Some(x) =
             self.list_construct(ty, l, crate::class::InitStyle::DirectList, loc, Some(l.rbrace))
         {
-            return if self.is_err_expr(x) { x } else { self.maybe_bind_temporary(x) };
+            return if self.is_err_expr(x) {
+                x
+            } else {
+                self.finish_list_construct(x, ty, loc, l.rbrace)
+            };
         }
         if self.ast.types.as_record(ty).is_some() && self.is_complete(ty) {
             // An aggregate temporary: the list, destroyed at the end of

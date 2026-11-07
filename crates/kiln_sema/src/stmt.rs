@@ -1413,6 +1413,14 @@ impl Sema<'_, '_> {
             return self.builder().return_stmt(value, None, loc);
         };
         if self.func.as_ref().is_some_and(|f| f.auto_ret.is_some()) {
+            // A return in a discarded statement of a non-templated
+            // function takes no part in return type deduction
+            // ([dcl.spec.auto.general]/9, [stmt.if]/2) and, as in clang,
+            // its operand is not converted to the deduced type.
+            if self.in_discarded_statement() && !self.in_template() {
+                let value = value.map(|e| self.act_on_full_expr(e));
+                return self.builder().return_stmt(value, None, loc);
+            }
             ret = self.deduce_return(value, loc);
         }
         // A `return` in a lambda whose call operator has a GNU
@@ -1884,7 +1892,24 @@ impl Sema<'_, '_> {
     /// `Never` when it does not (or there is no graph), `Maybe` when the
     /// body also returns, throws out or calls a `noreturn` function on a
     /// live path, else `Always`.
+    ///
+    /// A body whose last statement is a `return` never does: control
+    /// reaches the closing brace only through its last statement (no
+    /// label follows it), so no graph is built for the question (WP-798:
+    /// a graph is 8 bytes per expression, 24 MB for the 12,000 member
+    /// accesses of bench/overload/arrow-chain.cpp).
     fn falls_off(&mut self, s: StmtId) -> Falloff {
+        let st = &self.ast.stmts;
+        if st.get(s).kind() == StmtKind::CompoundStmt
+            && self
+                .ast
+                .lists
+                .iter::<StmtId>(st.compound_body(s))
+                .last()
+                .is_some_and(|l| st.get(l).kind() == StmtKind::ReturnStmt)
+        {
+            return Falloff::Never;
+        }
         match self.with_cfg(s, |_, c| c.exit_kinds()) {
             Some(k) if k.plain => {
                 if k.ret || k.fake || k.abnormal {

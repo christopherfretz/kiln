@@ -1803,7 +1803,13 @@ impl Sema<'_, '_> {
             default_arg: DefaultArg::None,
             default_loc: Loc::INVALID,
             range: (ds.loc, d.name_loc()),
-            type_loc: ds.type_loc.unwrap_or(ds.loc),
+            // A constrained placeholder of a non-type template parameter:
+            // its concept name, where the immediately-declared constraint
+            // is reported ([temp.param]/5).
+            type_loc: match Self::placeholder_constraint_loc(ds, d) {
+                Some(l) if nttp => l,
+                _ => ds.type_loc.unwrap_or(ds.loc),
+            },
             ref_loc: if d.ellipsis.is_none() { Self::outer_ref_loc(d) } else { Loc::INVALID },
             chunk_loc: if d.ellipsis.is_none() { Self::inner_chunk_loc(d) } else { Loc::INVALID },
             decl: None,
@@ -7781,7 +7787,9 @@ impl Sema<'_, '_> {
         }
         let _ = self.builder().begin_record_definition(r);
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
-        self.classes.push(ClassBuild::new(r, tag, self.ctx));
+        let mut build = ClassBuild::new(r, tag, self.ctx);
+        build.heads = self.templ.heads.len();
+        self.classes.push(build);
         self.defining.push(r);
         self.scopes.push(Scope::new(ScopeKind::Record, Some(r)));
         self.ctx = r;
@@ -9083,10 +9091,12 @@ impl Sema<'_, '_> {
     /// ([temp.inst]/2 happens when the nested-name-specifier is parsed),
     /// so the name is classified in the member's pattern, as a
     /// template-id qualifier is (`L<int>::P::I`). The specialization
-    /// itself (`D::P`) is the WP-276 case above. `None` when `q` is not
-    /// such a class.
+    /// itself (`D::P`) is the WP-276 case above. A member enumeration
+    /// (`N::US::Lazy`, `US` of a base `G<N>`) is classified in its pattern
+    /// too, so `N c(N::US::Lazy);` declares a variable (WP-782). `None`
+    /// when `q` is not such a class or enumeration.
     fn classify_uninstantiated_member(&self, q: DeclId, name: Symbol) -> Option<NameClass> {
-        if self.kind_of(q) != DeclKind::CXXRecord
+        if !matches!(self.kind_of(q), DeclKind::CXXRecord | DeclKind::Enum)
             || self.ast.definition(q).is_some()
             || self.ast.spec_info(q).is_some()
         {
@@ -9240,6 +9250,17 @@ impl Sema<'_, '_> {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
+        // Not found in the current instantiation, which has a dependent
+        // base: a member of an unknown specialization
+        // ([temp.dep.type]/6; `X::B::type` in `X<T> : B<T>`, clang's
+        // `NotFoundInCurrentInstantiation`).
+        if found.decls.is_empty()
+            && let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::CXXRecord
+            && self.has_dependent_bases(q)
+        {
+            return NameClass::Dependent;
+        }
         self.classify_found(&found)
     }
 
@@ -10973,6 +10994,8 @@ fn attr_kind_of(
         ("target", _, true) => AttrKind::TARGET,
         // WP-630: clang `GCC<"nodebug">` and `Clang<"min_vector_width">`.
         ("nodebug", _, true) => AttrKind::NODEBUG,
+        // clang `GCC<"artificial">` (WP-789).
+        ("artificial", _, true) => AttrKind::ARTIFICIAL,
         ("min_vector_width", _, _) if gnu_syntax || clang_scope => AttrKind::MIN_VECTOR_WIDTH,
         _ => return None,
     })

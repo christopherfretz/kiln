@@ -417,6 +417,17 @@ residual` (docs/status/wp-184-oracle-switch.md).
   (WP-288; libc++ `rand.dist.norm.lognormal/param_types.pass.cpp`;
   `tests/conformance/temp.res/qualified-name-through-typedef.cpp`,
   `qualified-name-through-typedef-run.cpp`).
+  A member enumeration of a specialization that is not instantiated
+  yet is classified in its pattern the same way, so `N c(N::US::Lazy);`
+  (with `US` a member of the base `G<N>`) finds the enumerator and
+  declares a variable ([dcl.ambig.res]/1; WP-782,
+  `dcl.ambig.res/member-enum-of-base-specialization-enumerator-run.cpp`).
+  A name that qualified lookup does not find in a class with a
+  dependent base (the current instantiation named by its
+  injected-class-name, `X::B::type` in `X<T> : B<T>`) is `Dependent`: a
+  member of an unknown specialization ([temp.dep.type]/6), so it is a
+  type in a type-only context without `typename` (WP-789;
+  `tests/conformance/temp.dep.type/current-instantiation-qualifier-unknown-member-alias-run.cpp`).
 - A nested-name-specifier component naming a class or enumeration that
   is declared but not defined ([basic.lookup.qual]/1, [class.mem]/1:
   a class is complete only after its definition) is "incomplete type
@@ -1139,7 +1150,13 @@ Redeclaration and linkage rules:
   so `constexpr same_as<const bool> decltype(auto) r = X::v;` (with
   `decltype(X::v)` = `const bool`) is satisfied and `constexpr
   same_as<const int> decltype(auto) d = 1;` is `deduced type 'int' does
-  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335). The
+  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335).
+  The checked concept-id `C<T, A...>` is completed with `C`'s default
+  template arguments first, as for a written concept-id
+  ([temp.arg.general]/9): with `template <class S, class E = env>
+  concept K = sender_in<S, E>;`, `K auto f()` checks `K<T, env>` for
+  variables, return types and parameters alike
+  (`check_placeholder_constraint`, WP-789). The
   variable's type still carries that `const` unless `decltype(e)` is a
   reference: `constexpr decltype(auto) b = 1;` is `const int`,
   `constexpr decltype(auto) r = (g);` is `const int &` for a `constexpr
@@ -1165,6 +1182,15 @@ Redeclaration and linkage rules:
   checks it too (`member_of_object`), so the call through it has the
   deduced type (WP-690,
   `tests/conformance/dcl.spec.auto/static-member-through-dependent-base.cpp`).
+  When the declaration the use names has no instantiable definition,
+  another redeclaration instantiated from a friend definition is
+  instantiated instead ([temp.inst]/4): a friend declared without a body
+  in `key<N>` and defined with a deduced return type in `value<T>` is one
+  function, so once `value<T>` exists `decltype(lookup(key<N>()))` has
+  its deduced type (clang's `isDefined` counts a declaration instantiated
+  from a friend definition; the type map of std::execution
+  implementations, WP-789,
+  `tests/conformance/temp.friend/deduced-friend-defined-by-other-specialization.cpp`).
   A redeclaration
   ([dcl.spec.auto.general]/13) is matched against the declared
   placeholder type (`declared_fn_type`, kept in `declared_returns`), not
@@ -1182,11 +1208,21 @@ Redeclaration and linkage rules:
   (`copy_elision_candidate`), as in clang. Deduction runs when the body
   is instantiated, so a `return` in a discarded `if constexpr` branch
   never participates (libc++ `__get_comp_type`) and only a real
-  conflict between instantiated returns is reported. `return {…}` is
+  conflict between instantiated returns is reported. In a
+  non-templated function a `return` inside a discarded statement
+  (`in_discarded_statement`) likewise takes no part in deduction
+  ([dcl.spec.auto.general]/9) and its operand is left unconverted, as
+  in clang (WP-792). `return {…}` is
   still an error in the pattern. A call `x.g()` to a member whose
   return type is not yet deduced goes through `check_undeduced_use`
   (instantiating it when it is a specialization member) before
-  member-call building.
+  member-call building. A use in a class template of a member function
+  template's specialization, before the member template's body is
+  parsed (`static constexpr auto v = compute<true>();`), is
+  type-dependent like a use of a member function of the class
+  (`undeduced_dependent_use` also takes a specialization whose template
+  is in a dependent context; WP-787,
+  `tests/conformance/dcl.spec.auto/deduced-member-template-used-in-class-template.cpp`).
 - Declarator groups ([dcl.spec.auto.general]/3, /8): the parser records
   each declarator of a simple-declaration or member-declaration with
   `act_on_group_declarator(&mut AutoGroup, d)` and closes the group with
@@ -1700,7 +1736,11 @@ and returns the scope it names:
     class.union.anon/empty-anonymous-record-declares-nothing.cpp.
   - An anonymous struct outside a class is an error.
   - `act_on_finish_record_definition(r, then_semi)` sets `ANONYMOUS`
-    and `HAS_VARIANT_MEMBERS`.
+    and `HAS_VARIANT_MEMBERS`. The parser passes `then_semi` false for
+    a class defined in a type-id: `using I = struct {...};` names an
+    ordinary unnamed class, so a member of type `I` keeps its default
+    member initializer (WP-782). Test:
+    class.union.anon/alias-of-unnamed-class-is-not-anonymous-run.cpp.
 - **Unnamed tags named by a typedef** record their typedef with
   `set_typedef_for_anon` ([dcl.typedef]/9).
 
@@ -1764,6 +1804,14 @@ and returns the scope it names:
     definition not externally visible (codegen rule in spec/codegen.md
     "GNU inline functions"). Test:
     `tests/conformance/ext.gnu.inline/attribute-diags.cpp`.
+  - `artificial` (GNU syntax or `gnu::`; WP-789, clang `ArtificialAttr`,
+    `SubjectList<[InlineFunction]>`; `AttrKind::ARTIFICIAL`): kept on a
+    function whose declaration spells `inline`; elsewhere (a
+    non-function, or a function that is only implicitly inline) it warns
+    `'artificial' attribute only applies to inline functions`
+    [-Wignored-attributes] and is dropped. It concerns debug information
+    only, so it has no effect on the IR. Test:
+    `tests/conformance/dcl.attr/gnu-artificial.cpp`.
   - `alias("sym")`, `ifunc("resolver")`, `weakref` / `weakref("sym")`
     (GNU syntax or `gnu::`; WP-763, clang `handleAliasAttr`,
     `handleIFuncAttr`, `handleWeakRefAttr`; `AttrKind::ALIAS`,
@@ -2814,6 +2862,12 @@ and returns the scope it names:
     parameter head prints its canonical replacement without scope
     (`T::y` with `T = ns::S` prints `S::y`, clang's
     `NestedNameSpecifier::print` `SuppressScope`) (WP-302).
+  - A concept-id prints as clang's `ConceptReference::print`: its
+    qualifier as written (kept through instantiation), the concept's
+    name and all its converted arguments, types canonical
+    (`!merror<err<why>>` for `!merror<completions>` with a local alias
+    `completions`; WP-789). Test:
+    `dcl.pre/static-assert-concept-id-requirement.cpp`.
   - The printed names are the substituted ones (clang's
     `FailedBooleanConditionPrinterHelper`, WP-303): a qualified
     `DeclRefExpr` prints its nested-name-specifier with the last type
@@ -2979,6 +3033,10 @@ specification as written (`TypeNames` prints ` noexcept`,
   member function` under the `in instantiation of exception
   specification` note, as in clang (WP-290,
   `class.mem.general/static-member-noexcept-this-instantiation.cpp`).
+  Every implicit object member function gets one: a constructor,
+  destructor or conversion function's `noexcept(noexcept(m.f()))` names
+  its members as a member function's does (WP-792,
+  `except.spec/special-member-noexcept-this-instantiation.cpp`).
   `throw()`, `noexcept` and `noexcept(expr)` all go through this path.
 - *Needed*: `exc_spec_needed(f, loc)` runs at every use that marks a
   function referenced, including unevaluated operands such as
@@ -3200,6 +3258,11 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   may name its own class's private members, but not those of another
   specialization ([class.friend]/2). The frame note names the
   specialization with its arguments (`'h<long>'`), as clang does.
+  Every non-static member function, a constructor, destructor or
+  conversion function included, substitutes its spec with `this`
+  ([expr.prim.this]/3): `C() noexcept(noexcept(conn(m_)))` calls a
+  member through the implicit `this` (WP-789; test
+  `except.spec/ctor-noexcept-implicit-this-member-run.cpp`).
 - *Consumers*: `noexcept(...)`, the resolution of overloads on a
   noexcept function pointer, member pointers and codegen's `nounwind`
   all go through `exc_spec_needed` / `resolve_exc_for_type`, so each
@@ -3784,7 +3847,12 @@ the initializer, or after default initialization, and before the
     - unary and binary operators, including compound assignment (its
       computation type promotes the left operand's type, bit-fields
       by width, and an unscoped-enumeration left operand is then an
-      error: sema-conv.md §6)
+      error: sema-conv.md §6). `b += p` with a `bool b` and a pointer
+      (or array) `p` is valid ([expr.ass]/6, [conv.bool]): its
+      computation types are `int` and `p`'s pointer type, and the sum
+      converts back to `bool`. No other left type takes a pointer
+      (WP-787, `tests/conformance/expr.ass/bool-add-assign-pointer-run.cpp`).
+      The Oven rejects it as "subexpression not valid", as clang does.
     - `?:`, the comma operator
     - increment and decrement (of `bool`, or `_Atomic(bool)`: `++` is
       clang's DefaultError `-Wincrement-bool` extension and is then
@@ -6742,6 +6810,17 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   expression) and folded only when they contain none. Unsigned
   arithmetic is silent. The walk is bounded (65 536 nodes, depth 256)
   and skipped when the warning is disabled at the full-expression.
+- **Folds that cannot succeed (WP-798).** An operand is not folded when
+  every evaluation of it reaches a call of a member function the Oven
+  cannot call ([expr.const]/10.2; the Oven's own rule: not `constexpr`
+  on its latest declaration, and neither virtual, trivial, deleted nor a
+  closure's conversion function or invoker): looking through calls,
+  casts, member accesses, temporaries and operators other than `&&` /
+  `||`, nothing guarded by a condition. The fold would compile a thunk
+  and fail at that call; its answer is the same (no value, no record).
+  A failed fold that is tried gives its thunk back (spec/oven.md
+  "Evaluation entry points"). Test: driver
+  `overflow_scan_skips_folds_that_cannot_succeed`.
 - **Calls (WP-468).** An operand that calls a `constexpr` or
   `consteval` function or constructor (directly or below it; the cheap
   filter counts such a call as a candidate) is evaluated in the Oven with
@@ -6833,7 +6912,11 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     aggregate member) converted through a user-defined conversion
     checks its second standard conversion (`struct B { operator
     double(); }; int a[] = {B{}};` narrows, clang
-    `checkNarrowing(SCS.After)`; WP-303)
+    `checkNarrowing(SCS.After)`; WP-303); a parenthesized initializer
+    left empty by a pack expansion (`T x(a...)`, [temp.variadic]/7) is
+    `()` and value-initializes a non-class, non-reference `T` as an
+    `ImplicitValueInitExpr` ([dcl.init.general]/16.4; WP-787,
+    `tests/conformance/temp.variadic/empty-expansion-paren-init-value-initializes.cpp`)
   - references, binding directly or to a temporary
   - class objects by constructor ([dcl.init.general]/16.6.2.1; spec/sema-class.md
     §5): a direct-initialization from one expression of an unrelated class
@@ -7218,6 +7301,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     For an enumeration with a fixed underlying type that includes
     [dcl.init.list]/3.8 (`E{v}`: `v` converted to the underlying type,
     narrowing rejected, then to `E`), as `E e{v};` does.
+    A class `T{y}` whose initialization elides to `y`'s conversion
+    function (an `ImplicitCastExpr` of `UserDefinedConversion`, not a
+    construct expression) is wrapped, as clang does, in a `NoOp`
+    `CXXFunctionalCastExpr` to `T`, so substitution of a pattern holding
+    it (`T2{TP{y}}`) converts to the written `T` again rather than
+    losing it with the stripped implicit cast (WP-792). Test:
+    `expr.type.conv/list-cast-conversion-function-in-template.cpp`.
   - `T(a, b)` (`act_on_paren_list_cast`) is ill-formed for a scalar.
     The expression-list may hold braced-init-lists (`T(a, {b})`, `T({})`).
     They are the placeholders of `act_on_braced_arg`, and the
@@ -7533,6 +7623,12 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   is `Never`; a plain edge plus any other is `Maybe` (`... in all
   control paths`); a plain edge alone is `Always`. A body with no graph
   (an `if consteval` under clang 19, or over the size cap) is `Never`.
+  A body whose last statement is a `return` is `Never` without a graph
+  (WP-798): the closing brace is reached only through that statement.
+  The graph costs 8 bytes per expression and nothing else may ask for
+  it, so building it for every value-returning body cost
+  bench/overload/arrow-chain.cpp 24 MB
+  (`stmt.return/return-ending-body-no-cfg.cpp`).
 - Initialization (one condition in `init.rs`, flagged): brace elision
   ([dcl.init.aggr]/16) only descends into an aggregate element; a class
   with a user-provided constructor is copy-initialized from the element
@@ -7591,7 +7687,10 @@ same graph.
     `checkIncorrectLogicOperator`) prunes the other edge of an `if`, a
     loop, a `?:` or an `&&`/`||`. In the scan bits, a configuration
     value (clang `isConfigurationValue`) does not prune and an
-    `if constexpr` prunes nothing.
+    `if constexpr` prunes nothing. An `if` with a condition variable has
+    an unknown condition, except an `if constexpr`, whose condition is
+    folded even then: an instantiation keeps only one branch, and the
+    dropped one's edge must be dead for -Wreturn-type (WP-792).
   - An `if`/`while`/`for` condition (without a condition variable) that
     is `&&`/`||` is clang's `VisitLogicalOperator`. Each left operand's
     block ends in its operator, and the short-circuit edges go straight
@@ -8355,7 +8454,10 @@ coroutine's body Sema replaces the body with a `CoroutineBodyStmt`
 - the frame allocation ([dcl.fct.def.coroutine]/9-11): the promise
   class's `operator new` is looked up first; when it exists the call
   tries the placement form `(size, [*this,] params...)` then `(size)`;
-  otherwise the global `operator new(size_t)`. When the promise declares
+  otherwise the global `operator new(size_t)`. The promise's `operator
+  new` templates take part in each try as in a new-expression, so
+  `template <class A> operator new(size_t, allocator_arg_t, A)` serves
+  `task f(allocator_arg_t, A)` (WP-789). When the promise declares
   `get_return_object_on_allocation_failure()` (which must be a static
   member function), the allocation must be non-throwing: a global or
   missing `operator new` becomes `::operator new(size_t, std::nothrow)`

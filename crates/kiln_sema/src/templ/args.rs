@@ -868,6 +868,13 @@ impl Sema<'_, '_> {
                     }
                 }
             }
+            // A pack expansion `TT...` (a partial specialization's
+            // `E<B, Bs...>`) is checked by its pattern and kept as the
+            // expansion ([temp.arg.template]/1, [temp.variadic]/5).
+            (DeclKind::TemplateTemplateParm, ArgView::TemplateExpansion { name, .. }) => {
+                let pattern = TemplateArg::template(name);
+                self.check_template_arg(tmpl, depth, p, pattern, at, prior).map(|_| a)
+            }
             // An erroneous argument was diagnosed when it was formed.
             (DeclKind::TemplateTemplateParm, ArgView::Expr { expr, .. })
                 if self.is_err_expr(expr) =>
@@ -1399,6 +1406,7 @@ impl Sema<'_, '_> {
             return Ok(TemplateArg::value(self.ast.types.canonical(pty), v));
         }
         match self.eval_const(c, EvalContext::converted(at)) {
+            Ok(v) if self.invalid_template_arg_base(v, false, at) => Err(()),
             Ok(v) => {
                 // Integral values are re-interned at the canonical type so
                 // equal arguments have equal ids (the specialization key).
@@ -1424,6 +1432,44 @@ impl Sema<'_, '_> {
                 Err(())
             }
         }
+    }
+
+    /// [temp.arg.nontype]/6: a pointer argument `v` (or the address a
+    /// `reference` argument binds) must not point to a
+    /// string literal, the result of a `typeid` expression or a temporary
+    /// object (or a subobject of one).
+    /// Diagnosed at `at` as clang's `err_constexpr_invalid_template_arg`
+    /// ("pointer to subobject of string literal is not allowed in a
+    /// template argument"); in a deduction it is the substitution
+    /// failure of the explicitly specified argument.
+    pub(crate) fn invalid_template_arg_base(
+        &mut self,
+        v: kiln_ast::ids::ConstValueId,
+        reference: bool,
+        at: Loc,
+    ) -> bool {
+        use kiln_ast::consts::{PtrBase, Scalar};
+        let Some(Scalar::Pointer { ty, base, offset, .. }) = self.ast.consts.scalar(v) else {
+            return false;
+        };
+        let t = &self.ast.types;
+        let to_array = t.pointee(ty).is_some_and(|p| t.is_array(p));
+        let (what, sub) = match base {
+            // Gap: `__func__` designates its string literal, so it is
+            // named "string literal" here, not "predefined '__func__'
+            // variable" (clang).
+            PtrBase::StringLit { .. } => ("string literal", !to_array),
+            PtrBase::TypeInfo(_) => ("type_info object", offset != 0),
+            PtrBase::Temporary(_) => ("temporary object", offset != 0),
+            _ => return false,
+        };
+        let d = self
+            .diag(DiagId::sema_constexpr_invalid_template_arg, at)
+            .arg(if reference { "reference" } else { "pointer" })
+            .arg(if sub { "subobject of " } else { "" })
+            .arg(what);
+        self.emit(d);
+        true
     }
 
     /// The value of `c`, a converted argument of member pointer type

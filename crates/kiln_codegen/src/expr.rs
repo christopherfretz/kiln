@@ -230,9 +230,9 @@ impl Cg<'_> {
                 let Some(init) = self.default_member_init(e) else {
                     return err(self.loc_of(e), "default member initializer not yet parsed");
                 };
-                let saved = self.enter_default_arg(e);
+                let saved = self.enter_default_init(e);
                 let r = self.emit_scalar_opt(init);
-                self.srcloc = saved;
+                self.exit_default_init(saved);
                 return r;
             }
             // A glvalue's value is the address it designates (WP-640).
@@ -388,7 +388,8 @@ impl Cg<'_> {
             // A scalar initializer list (clang `VisitInitListExpr`): its
             // single element, or zero.
             // clang `VisitInitListExpr` on a vector: `insertelement` of
-            // each element into `poison` (i32 indices), then zeros.
+            // each element into `poison` (i32 indices), then zeros; a
+            // vector element is two `shufflevector`s.
             ExprKind::InitListExpr if self.vec_of(q).is_some() => {
                 let inits: Vec<u32> = ast.lists.get(ast.exprs.init_list_inits(e)).to_vec();
                 let t = self.lty(q);
@@ -400,6 +401,28 @@ impl Cg<'_> {
                 let mut cur = 0u32;
                 for x in inits {
                     let x = self.emit_scalar(ExprId::new(x))?;
+                    let xt = self.f.fir.ty(&self.m, x);
+                    if let Some((_, k, _)) = self.m.types.vector_info(xt) {
+                        // A vector element (sema keeps one only as the
+                        // whole initializer of a vector of its type): clang
+                        // widens it to the result's length, then shuffles
+                        // its lanes in after the `cur` already set.
+                        let p = kiln_llvm::SHUFFLE_POISON;
+                        let pad = |m: &mut Vec<u32>| m.resize(n as usize, p);
+                        let mut m: Vec<u32> = (0..k).collect();
+                        pad(&mut m);
+                        let wide = self.shuffle(x, None, m);
+                        let off = if cur == 0 { 0 } else { n };
+                        let mut m: Vec<u32> = (0..cur).chain((0..k).map(|j| j + off)).collect();
+                        pad(&mut m);
+                        v = if cur == 0 {
+                            self.shuffle(wide, Some(v), m)
+                        } else {
+                            self.shuffle(v, Some(wide), m)
+                        };
+                        cur += k;
+                        continue;
+                    }
                     let idx = self.icn(LTy::I32, i128::from(cur));
                     v = self.insert_elt(v, x, idx);
                     cur += 1;
@@ -914,6 +937,9 @@ impl Cg<'_> {
         // `const_cast<T&>(f())`; `VisitCastExpr` visits the operand), the
         // right operand of a glvalue comma (`VisitBinComma`) and the
         // chosen operand of `__builtin_choose_expr` (`VisitChooseExpr`).
+        // A glvalue `co_await`/`co_yield` is its `await_resume` call
+        // (clang `emitSuspendExpression` visits the resume call), so it
+        // is loaded the same way (WP-789).
         let ast = self.ast;
         let mut inner = self.skip_parens(s);
         let mut bit_cast = false;
@@ -941,7 +967,11 @@ impl Cg<'_> {
         if bit_cast
             || matches!(
                 self.ast.exprs.get(inner).kind(),
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+                ExprKind::CallExpr
+                    | ExprKind::CXXMemberCallExpr
+                    | ExprKind::CXXOperatorCallExpr
+                    | ExprKind::CoawaitExpr
+                    | ExprKind::CoyieldExpr
             ) && self.is_glvalue(inner)
         {
             let lv = self.emit_lvalue(s)?;
@@ -2199,9 +2229,9 @@ impl Cg<'_> {
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
                 Some(init) => {
-                    let saved = self.enter_default_arg(e);
+                    let saved = self.enter_default_init(e);
                     let r = self.emit_lvalue(init);
-                    self.srcloc = saved;
+                    self.exit_default_init(saved);
                     r
                 }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
@@ -3874,9 +3904,9 @@ impl Cg<'_> {
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
                 Some(init) => {
-                    let saved = self.enter_default_arg(e);
+                    let saved = self.enter_default_init(e);
                     let r = self.agg_visit(init, dest, zeroed);
-                    self.srcloc = saved;
+                    self.exit_default_init(saved);
                     r
                 }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
@@ -4244,11 +4274,19 @@ impl Cg<'_> {
     }
 
     fn record_init(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
-        let ast = self.ast;
-        let q = ast.exprs.get(e).ty();
-        let Some(rd) = ast.types.as_record(q) else {
+        let Some(rd) = self.ast.types.as_record(self.ast.exprs.get(e).ty()) else {
             return err(self.loc_of(e), "initializer list of non-aggregate type");
         };
+        // clang `VisitCXXParenListOrInitListExpr`'s `FieldConstructionScope`.
+        let saved = self.f.default_init_this.replace((dest.v, rd));
+        let r = self.record_init_fields(e, rd, dest, zeroed);
+        self.f.default_init_this = saved;
+        r
+    }
+
+    /// [`Self::record_init`] of class `rd`.
+    fn record_init_fields(&mut self, e: ExprId, rd: DeclId, dest: Addr, zeroed: bool) -> R<()> {
+        let ast = self.ast;
         let (inits, _, union_field) = agg_init_parts(ast, e);
         let is_union = self.tys.record(rd).is_union;
         let rty = self.record_ty(rd);

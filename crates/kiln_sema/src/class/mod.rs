@@ -109,6 +109,10 @@ pub struct ClassBuild {
     /// `}` (an out-of-line definition of a member partial specialization
     /// declared in its class is lexically outside it).
     pub outer: DeclId,
+    /// The number of open template heads at `{`: a member declaration's
+    /// own invented head is above them; those below belong to enclosing
+    /// declarations (a generic lambda around a local class).
+    pub heads: usize,
 }
 
 /// The function being defined when a nested function definition starts
@@ -133,6 +137,7 @@ impl ClassBuild {
             pending_default_args: 0,
             friends: Vec::new(),
             outer,
+            heads: 0,
         }
     }
 }
@@ -381,9 +386,11 @@ impl Sema<'_, '_> {
     pub fn act_on_param_default_list(&mut self, p: DeclId, l: &crate::init::InitList) {
         self.unparsed_default_args.remove(&p);
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        if self.is_dependent_class_param(pty) {
+        if self.ast.types.is_dependent(pty) || self.init_list_type_dependent(l) {
             // Kept as written (clang's dependent `InitializationSequence`):
-            // instantiation list-initializes the substituted type.
+            // instantiation list-initializes the substituted type, as
+            // `act_on_param_default_init` does for one parsed in place
+            // (`const O (&)[N] = {}` binds to a `const O[N]`, WP-782).
             let e = self.dependent_init_list(l);
             self.note_default_init_full_expr();
             let e = self.act_on_full_expr(e);
@@ -559,6 +566,13 @@ impl Sema<'_, '_> {
             .lexical_ctx(r)
             .or_else(|| self.ast.decls.get(r).ctx())
             .unwrap_or(self.ast.tu);
+    }
+
+    /// The body of function `f` defined in a class is saved for replay
+    /// after the outermost class ([class.mem.general]/7): `f` will be a
+    /// definition (`Sema::delayed_bodies`).
+    pub fn act_on_delayed_body(&mut self, f: DeclId) {
+        self.delayed_bodies.insert(f);
     }
 
     /// Re-enters the parameter scope of member function `f` to replay its

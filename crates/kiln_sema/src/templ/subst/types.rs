@@ -489,6 +489,14 @@ impl Substituter<'_, '_, '_> {
                     return Ok(self.sema.ast.types.dependent_name(kw, nns, name));
                 }
                 let i = self.find_instantiated_decl(d, loc)?;
+                if i != d {
+                    // A member class of the enclosing template (its
+                    // injected-class-name inside a member class defined
+                    // out of line): names that template's parameters
+                    // ([temp.friend]/9; clang's
+                    // `ConstraintRefersToContainingTemplateChecker`).
+                    self.outer_used.set(true);
+                }
                 Ok(self.sema.tag_type(i))
             }
             TypeView::DependentName { keyword, nns, name } => {
@@ -593,6 +601,17 @@ impl Substituter<'_, '_, '_> {
                     let d = self.ty(d, loc)?;
                     Ok(self.sema.ast.types.auto_type(keyword, Some(d), concept, args, pack))
                 }
+                // An undeduced placeholder whose type-constraint names
+                // outer parameters (`template<int N, C<N> auto V>`): the
+                // constraint's arguments are substituted, so the type is
+                // no longer dependent (clang `TransformAutoType`).
+                None if !pack && self.sema.ast.types.is_dependent(q) => match args {
+                    Some(a) => {
+                        let a = self.args(a, loc)?;
+                        Ok(self.sema.ast.types.auto_type(keyword, None, concept, Some(a), pack))
+                    }
+                    None => Ok(q),
+                },
                 None => Ok(q),
             },
             // A class template placeholder deduced from type-dependent
@@ -827,7 +846,13 @@ impl Substituter<'_, '_, '_> {
             self.sema.emit(d);
             return Err(SubstFail);
         };
-        if let Some(t) = self.sema.template_of(d) {
+        // An overload set that has a function template besides
+        // non-template overloads names a template ([temp.names]/3): the
+        // template-id is resolved over the whole set (reflect-cpp's
+        // `Literal::contains(const std::string&)` beside
+        // `template <StringLiteral> contains()`).
+        let t = found.decls.iter().find_map(|&x| self.sema.template_of(x));
+        if let Some(t) = t {
             // [class.access]/4: a member class or alias template is
             // checked now (a SFINAE failure in a deduction); a function
             // template by overload resolution.

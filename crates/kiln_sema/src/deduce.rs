@@ -647,6 +647,26 @@ impl Sema<'_, '_> {
                 return false;
             }
         }
+        // The definition may come from another redeclaration: a friend
+        // declared without a body in one class template specialization
+        // and defined in another (`friend auto f(key<N>) { ... }`, the
+        // stateful-metaprogramming type map of std::execution
+        // implementations). Its definition is instantiated with the class
+        // that defines it ([temp.inst]/4 makes it available when needed;
+        // clang's `FunctionDecl::isDefined` counts a declaration
+        // instantiated from a friend definition), and the deduced type is
+        // shared by every redeclaration.
+        let others: Vec<DeclId> = self.ast.redecls_of(d).filter(|&r| r != d).collect();
+        for r in others {
+            let Some(pattern) = self.ast.instantiated_from(r) else { continue };
+            if self.ast.definition(pattern).is_none() {
+                continue;
+            }
+            self.instantiate_function_definition(r, loc);
+            if undeduced(self).is_none() {
+                return false;
+            }
+        }
         if self.undeduced_dependent_use(d) {
             return false;
         }
@@ -666,10 +686,15 @@ impl Sema<'_, '_> {
     /// (and the type deduced) with each specialization. The reference is
     /// type-dependent (clang accepts `using C = decltype(get());` after
     /// `static auto get() { ... }` in a class template; libc++
-    /// `move_iterator::__get_iter_concept`).
+    /// `move_iterator::__get_iter_concept`). So is a specialization of
+    /// a member function template of that class (`compute<true>()` in a
+    /// static member's initializer, before the member template's body is
+    /// parsed; Boost.Hana `detail::flatten_indices`): its enclosing
+    /// arguments are the class's dependent ones.
     pub(crate) fn undeduced_dependent_use(&self, d: DeclId) -> bool {
+        let dependent = |x: DeclId| self.ast.decls.get(x).has(DeclFlags::DEPENDENT_CTX);
         self.in_template()
-            && self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX)
+            && (dependent(d) || self.spec_args(d).is_some_and(|(t, _)| dependent(t)))
             && self.ast.decls.get(d).ty().is_some_and(|fty| {
                 self.ast.types.proto(fty).is_some_and(|p| self.contains_undeduced_auto(p.ret()))
             })

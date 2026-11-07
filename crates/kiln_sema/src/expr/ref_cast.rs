@@ -218,7 +218,7 @@ impl Sema<'_, '_> {
         let r = self.ast.types.pointee(ty)?;
         let ec = self.ast.types.as_record(et)?;
         let rc = self.ast.types.as_record(r)?;
-        match self.class_relation(et, ec, r, rc, loc) {
+        match self.class_relation(style, et, ec, r, rc, loc) {
             Ok(Some((ck, path))) => Some(self.typed_cast(style, ck, e, r, vk, path, loc, rparen)),
             Ok(None) => None,
             Err(v) => {
@@ -253,6 +253,7 @@ impl Sema<'_, '_> {
     /// failed cast); `Err(v)` a downcast through virtual base `v`.
     fn class_relation(
         &mut self,
+        style: CastStyle,
         from: QualType,
         fc: kiln_ast::DeclId,
         to: QualType,
@@ -267,7 +268,9 @@ impl Sema<'_, '_> {
         let _ = self.require_complete_silent(tu, loc);
         match find_base(self, fc, tc) {
             BaseSearch::Unique(p) => {
-                self.check_base_access(fu, tu, &p, loc);
+                if !style.ignores_base_access() {
+                    self.check_base_access(fu, tu, &p, loc);
+                }
                 return Ok(Some((CastKind::DerivedToBase, Some(path_list(self, &p)))));
             }
             BaseSearch::Ambiguous(paths) => {
@@ -287,7 +290,9 @@ impl Sema<'_, '_> {
                 if let Some(v) = p.first_virtual {
                     return Err(v);
                 }
-                self.check_base_access(tu, fu, &p, loc);
+                if !style.ignores_base_access() {
+                    self.check_base_access(tu, fu, &p, loc);
+                }
                 Ok(Some((CastKind::BaseToDerived, Some(path_list(self, &p)))))
             }
             _ => Ok(None),
@@ -325,7 +330,9 @@ impl Sema<'_, '_> {
             self.static_downcast_via_virtual(xt, to, v, loc);
             return Some(self.recover(to, &[x], loc));
         }
-        self.check_base_access(tu, fu, &p, loc);
+        if !style.ignores_base_access() {
+            self.check_base_access(tu, fu, &p, loc);
+        }
         let path = Some(path_list(self, &p));
         let vk = ValueCategory::PRValue;
         Some(self.typed_cast(style, CastKind::BaseToDerived, x, to, vk, path, loc, rparen))

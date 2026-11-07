@@ -88,7 +88,8 @@ the evaluator's flattened type table.
   a trap reading `kiln: constant evaluation of <Kind> is not supported yet`:
   an evaluation fails with a note, never a panic.
 - Top-level expressions compile to cached thunks keyed by `ExprId`;
-  re-evaluating an expression compiles nothing.
+  re-evaluating an expression compiles nothing, except after a failed
+  trial fold, whose thunk is reclaimed ("Evaluation entry points").
 
 #### Dispatch — Landed (WP-648)
 `Vm::run_loop` (`vm.rs`) executes the stream in safe Rust; every rule here
@@ -449,6 +450,19 @@ fault counts and trap ids unchanged.
     state (`Oven::globals_digest`), against a second Sema that runs the
     full path only; the `leaf-check` feature asserts the equivalence of
     the answers on every walk of a build.
+  - **Failed trial folds give their thunk back** (WP-798,
+    `reclaim.rs`): when an outermost `try_fold`, `fold_rvalue` or
+    `fold_for_overflow` that took the full path fails, and its run
+    compiled a fresh thunk and nothing else (no callee stub, no other
+    unit) and appended nothing at run time (no unwind block, no
+    reflection trap), the code, site, step-location, origin, trap,
+    function and reflection-site tables are cut back to their lengths
+    before the fold (the padding of the unit before it restored) and the
+    thunk cache forgets the expression; a later fold of it compiles it
+    again. `fold_for_overflow` maps its overflows to sites first. A
+    successful fold, an evaluation and a nested fold keep their thunks.
+    Answers, diagnostics and statistics are unchanged; `oven.code`,
+    `oven.sites`, `oven.funcs` and `oven.thunks` shrink.
 - `Oven::evaluate_chars(bridge, size, data, EvalContext) -> (Vec<u8>,
   Result<(), EvalFailure>)` (WP-356, [dcl.pre]/11-12, P2741; clang
   `Expr::EvaluateCharRangeAsString`): the characters of a `static_assert`
@@ -620,6 +634,15 @@ fault counts and trap ids unchanged.
   (spec/sema.md §4.9) and codegen to skip the fold. Left: a lambda body
   reading through such a pointer in its own `static_assert` is accepted
   (the evaluation point is not known to the Oven).
+- Freezing a pointer or reference to an object with thread storage
+  duration fails silently (`FailKind::NotConstant`, clang
+  `CheckLValueConstantExpression`): [expr.const]/14 permits static
+  storage duration only. This covers the `thread_local` variable being
+  initialized itself (`run.object`, e.g. `S *self = this;` in a default
+  member initializer, or a small-buffer pointer into the object), so
+  such a variable is dynamically initialized per thread rather than
+  emitted with its own address in the `.tdata` image (WP-792; test
+  `basic.stc.thread/self-address-dynamic-init-run.cpp`).
 - Freezing a pointer or reference to a temporary lifetime-extended by
   the variable being initialized ([class.temporary]/6) rejects one whose
   type is destructed (`Ast::needs_destruction`: a non-trivial destructor
@@ -952,7 +975,8 @@ literal is one instruction and one step, not an interpreted loop.
   `std::allocator<T>::allocate`/`deallocate` (WP-061b; clang's
   untyped-memory note; inside them they allocate, "Transient
   allocation", WP-212); `__builtin_debugtrap`, `__builtin_frame_address`
-  and `__builtin_return_address`, noted at the call's begin (WP-432);
+  and `__builtin_return_address`, noted at the call's begin (WP-432),
+  and `__builtin_thread_pointer` likewise (WP-782);
   `__builtin_prefetch` likewise (WP-610); every x86 builtin but the
   scalar bit ones below likewise, `__builtin_ia32_pause` (WP-610)
   included, and `__builtin_nontemporal_store` / `_load` and
@@ -2587,7 +2611,13 @@ evaluated like any other initializer.
 member of `&C::m` for a member of an anonymous union or struct is its
 `IndirectField` ([class.union.anon]/1): the entry's offset sums the
 access path, and the union checked by `MpActive` is the anonymous union
-that directly holds the member (WP-716). Ops:
+that directly holds the member (WP-716). `&C::m` while `C` (or a class
+of the path) is still being defined, as in a static data member
+initializer of `C` or of a class nested in it, interns a *pending* entry
+(member and path only; it compares equal as usual) that
+`Oven::mp_refresh` lays out after `Types::refresh` once the classes are
+complete; a pending entry designates no subobject (`MpAddr` faults,
+WP-792). Ops:
 `MpCast [mp, class]` (castToDerived aux 0, castToBase aux 1, in place),
 `MpAddr [dst, obj, mp]` (`obj.*mp`, checking derived-member containment;
 `Fault::NullBase` for a base step through a null object), `MpActive

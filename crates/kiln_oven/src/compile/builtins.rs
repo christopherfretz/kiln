@@ -784,6 +784,8 @@ impl Compiler<'_> {
             | id::DEBUGTRAP
             | id::FRAME_ADDRESS
             | id::RETURN_ADDRESS
+            // WP-782: nor the thread pointer.
+            | id::THREAD_POINTER
             // WP-610: nor `__builtin_prefetch`.
             | id::PREFETCH
             // WP-630: nor the nontemporal accesses and

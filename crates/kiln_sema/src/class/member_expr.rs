@@ -517,20 +517,114 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[base], loc);
         }
+        // A name found in an enumeration qualifier (`d.E::e`) has no
+        // naming class and no access check, as for `B::E::e` (clang's
+        // `LookupQualifiedName` names only a class).
         let naming = found.naming.unwrap_or(look);
         let via = found.found.first().copied().unwrap_or(m);
-        self.check_member_access(via, naming, Some(def), loc);
+        if found.naming.is_some() || self.kind_of(look) != DeclKind::Enum {
+            self.check_member_access(via, naming, Some(def), loc);
+        }
         // clang `DiagnoseUseOfDecl` in `BuildMemberReferenceExpr`.
         self.diagnose_deprecated(m, loc);
         self.check_sve_use(m, loc);
+        if self.kind_of(m) == DeclKind::VarTemplate {
+            let at = (b, obj_ty, def, arrow, nns);
+            return self.member_var_template_set(name, m, via, naming, at, loc);
+        }
         self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), nns, loc)
+    }
+
+    /// `x.v<args>` naming a static data member template ([temp.names]/3,
+    /// [expr.ref]/6.1): held as the one-member set `set` until its
+    /// template arguments name the specialization
+    /// ([`Sema::act_on_member_template_args`]).
+    /// `at` is the object operand, its type and class, `->` and the
+    /// member's nested-name-specifier.
+    fn member_var_template_set(
+        &mut self,
+        name: kiln_ast::names::DeclName,
+        m: DeclId,
+        via: DeclId,
+        naming: DeclId,
+        at: (ExprId, QualType, DeclId, bool, Option<kiln_ast::NnsId>),
+        loc: Loc,
+    ) -> ExprId {
+        let (base, obj_ty, def, arrow, nns) = at;
+        let set = crate::overload::OvlMember {
+            name,
+            decls: vec![m],
+            found: vec![via],
+            naming,
+            obj_ty,
+            def,
+            base,
+            arrow,
+            nns,
+            implicit: false,
+            targs: None,
+        };
+        self.build_member_overload(set, loc)
+    }
+
+    /// The member variable template-id `x<targs>` of the member access
+    /// `x` naming the static data member template `t` with arguments
+    /// that are not dependent: the specialization, a static data member
+    /// of the object's class (clang `BuildMemberReferenceExpr` →
+    /// `CheckVarTemplateId`).
+    pub(crate) fn member_var_template_id(
+        &mut self,
+        x: ExprId,
+        targs: kiln_ast::ids::ArgListId,
+    ) -> ExprId {
+        let loc = self.ast.exprs.get(x).loc();
+        let Some(m) = self.ovl.members.remove(&x) else { return x };
+        let written = self.ast.types.args(targs).to_vec();
+        let locs = std::mem::take(&mut self.templ.arg_locs);
+        let Ok(v) = self.get_var_spec(m.decls[0], &written, &locs, loc) else {
+            return self.recover_err(&[m.base], loc);
+        };
+        self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, v, None, m.nns, loc)
+    }
+
+    /// A member access `x` naming a static data member template with no
+    /// template arguments after it ([temp.names]/1; clang's
+    /// `err_template_member_noparams`).
+    pub fn act_on_member_without_template_args(&mut self, x: ExprId) -> ExprId {
+        let Some(e) = self.member_overload(x) else { return x };
+        let Some(m) = self.ovl.members.get(&e) else { return x };
+        if m.targs.is_some() || self.kind_of(m.decls[0]) != DeclKind::VarTemplate {
+            return x;
+        }
+        let (d, base) = (m.decls[0], m.base);
+        let loc = self.ast.exprs.get(e).loc();
+        let _ = self.ovl.members.remove(&e);
+        self.missing_template_args(d, "variable template", None, loc);
+        self.recover_err(&[base], loc)
     }
 
     /// True if qualifier context `ctx` names class `def` or one of its
     /// bases ([expr.ref]/4: a qualified member of the object's class).
+    /// An unscoped enumeration qualifier stands for its class: `d.E::e`
+    /// names an enumerator that is a member of `E`'s class ([class.mem]/3;
+    /// clang's `CheckQualifiedMemberReference` uses the member's
+    /// non-transparent context).
     pub(crate) fn qualifier_names_base(&self, ctx: DeclId, def: DeclId) -> bool {
+        let ctx = self.enum_qualifier_class(ctx);
         self.kind_of(ctx) == DeclKind::CXXRecord
             && (self.ast.first(ctx) == self.ast.first(def) || is_derived_from(self, def, ctx))
+    }
+
+    /// `ctx`, or the context of the unscoped enumeration `ctx` (its
+    /// enumerators are members of that class, [class.mem]/3).
+    fn enum_qualifier_class(&self, mut ctx: DeclId) -> DeclId {
+        while self.kind_of(ctx) == DeclKind::Enum
+            && self.ast.is_transparent(self.ast.definition(ctx).unwrap_or(ctx))
+            && let Some(p) = self.ast.decls.get(ctx).ctx()
+        {
+            ctx = p;
+        }
+        ctx
     }
 
     /// `base.~name` / `base->~name` ([expr.ref]/1 with a destructor name,

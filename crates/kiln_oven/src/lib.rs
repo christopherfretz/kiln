@@ -45,6 +45,7 @@ mod memo;
 mod memptr;
 mod meta;
 mod notes;
+mod reclaim;
 pub mod report;
 mod softfloat;
 mod stats;
@@ -546,6 +547,9 @@ pub struct Oven {
     pub(crate) thunks_at: FxHashMap<(ExprId, ExprId, bool), u32>,
     /// The default argument use the next thunk is compiled in.
     pub(crate) srcloc_root: Option<ExprId>,
+    /// The thunk compiled last, for a failed trial fold to reclaim
+    /// (`reclaim.rs`).
+    pub(crate) last_thunk: Option<reclaim::LastThunk>,
     pub(crate) globals: Vec<Global>,
     pub(crate) global_map: FxHashMap<DeclId, u32>,
     /// Globals resolved to an unknown value because they had no
@@ -645,6 +649,7 @@ impl Oven {
             thunks: FxHashMap::default(),
             thunks_at: FxHashMap::default(),
             srcloc_root: None,
+            last_thunk: None,
             globals: Vec::new(),
             global_map: FxHashMap::default(),
             provisional: Vec::new(),
@@ -911,7 +916,7 @@ impl Oven {
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
         let r = match self.leaf_first(bridge, e) {
             Some(r) => r,
-            None => self.eval_ctx(bridge, e, None, true, false, false).0.ok(),
+            None => self.trial_eval(bridge, e),
         };
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "try_fold", r.is_some(), self.memo.hits);
@@ -934,7 +939,7 @@ impl Oven {
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
         let r = match self.leaf_first(bridge, e) {
             Some(r) => r,
-            None => self.eval_ctx(bridge, e, None, true, false, false).0.ok(),
+            None => self.trial_eval(bridge, e),
         };
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "fold_rvalue", r.is_some(), self.memo.hits);
@@ -966,6 +971,7 @@ impl Oven {
         self.ub_check_next = true;
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
+        let mark = self.trial_mark();
         let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "fold_for_overflow", r.is_some(), self.memo.hits);
@@ -980,6 +986,9 @@ impl Oven {
                 Overflow { loc: site.loc, e: site.e, value }
             })
             .collect();
+        if r.is_none() {
+            self.reclaim_failed(mark);
+        }
         (r, found)
     }
 
@@ -1161,6 +1170,7 @@ impl Oven {
             return false;
         }
         self.types.refresh(bridge);
+        self.mp_refresh(bridge);
         self.begin_outermost(true, false, const_context);
         // clang requires no notes at all (`VarDecl::evaluateDestruction`).
         self.run.fold = false;
@@ -1332,6 +1342,18 @@ impl Oven {
         kbc::disassemble(&self.code, 0, self.code.len())
     }
 
+    /// The silent evaluation of a trial fold of `e` (after the leaf fast
+    /// path declined): a failed outermost one gives its fresh thunk's code
+    /// back (`reclaim.rs`).
+    fn trial_eval(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId> {
+        let mark = self.trial_mark();
+        let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
+        if r.is_none() {
+            self.reclaim_failed(mark);
+        }
+        r
+    }
+
     /// Runs one evaluation context: the outermost one, or one nested in a
     /// bridge callback of the running one (R-OVEN-1). The cost is the
     /// context's own: what its nested contexts cost is excluded (they have
@@ -1360,6 +1382,7 @@ impl Oven {
     ) -> (Result<ConstValueId, EvalFailure>, Cost) {
         let start = Instant::now();
         self.types.refresh(bridge);
+        self.mp_refresh(bridge);
         let frozen0 = bridge.consts().content_bytes();
         let hits0 = self.memo.hits;
         let inner0 = std::mem::take(&mut self.inner);

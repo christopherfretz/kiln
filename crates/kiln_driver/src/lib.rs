@@ -444,6 +444,11 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     for f in &args.frameworks {
         Diag::new(DiagId::drv_framework_dir_ignored, Span::INVALID).arg(f).emit(&drv);
     }
+    if !args.quiet_unused_arguments {
+        for f in &args.time_trace {
+            Diag::new(DiagId::drv_time_trace_ignored, Span::INVALID).arg(f).emit(&drv);
+        }
+    }
     let target = match &args.target {
         None => Target::host(),
         Some(t) => Target::parse(t).unwrap_or_else(|| {

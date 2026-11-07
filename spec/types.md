@@ -600,11 +600,18 @@ Encoding (prefix-free, so equal word sequences mean equal trees):
   names are their canonical ids, which already embed nested profiles;
 - declaration references:
   - template parameters are `(depth, index, pack)`, plus the canonical
-    type for a non-type parameter;
+    type for a non-type parameter; a top-level placeholder's
+    type-constraint is not part of it (`C auto V` profiles as `auto V`,
+    [temp.over.link]/6.2, clang's `getUnconstrainedType`; WP-792);
   - `ParmVar` is `(index, pack, in-requires-body, canonical type)`, like
     the Itanium mangling. A requires-expression's parameters are a
     separate scope;
   - any other declaration is its first declaration;
+  - a `DeclRefExpr`/`MemberExpr`'s written template arguments are
+    profiled only when they are dependent or the referenced declaration
+    is itself a function or variable template: a non-dependent list
+    naming a specialization is implied by it (`mag<1>` in two spellings
+    of a requires-clause is one specialization; WP-792);
 - unresolved names (`UnresolvedLookup`, `CXXDependentScopeMemberExpr`,
   `DependentScopeDeclRef`) are `(qualifier, name, explicit args)`. The
   lookup result is not part of the profile;
