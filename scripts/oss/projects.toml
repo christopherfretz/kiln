@@ -163,7 +163,7 @@ configure = ["-DRE2_BUILD_TESTING=ON"]
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 2
-verified = false
+verified = true
 deps = ["abseil", "googletest", "benchmark"]
 notes = "abseil, googletest and benchmark are built and installed with the same compiler first (deps)."
 
