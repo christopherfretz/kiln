@@ -2894,6 +2894,7 @@ impl Sema<'_, '_> {
         self.check_optnone_conflicts(decl, &mut attrs);
         self.check_naked_conflicts(decl, &mut attrs);
         self.finish_visibility_attrs(decl, &mut attrs, false);
+        self.apply_pragma_weak(decl, &mut attrs);
         self.finish_decl_alignment(decl, &mut attrs);
         self.add_known_function_attrs(decl, &mut attrs);
         self.recognize_builtin_decl(decl, &mut attrs);

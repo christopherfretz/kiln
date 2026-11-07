@@ -1997,7 +1997,13 @@ and returns the scope it names:
   visibility attribute starts here`, and a push still open at its `}` is
   `#pragma visibility push with no matching #pragma visibility pop` (at
   the innermost push) with `surrounding namespace with visibility
-  attribute ends here`, and is popped. The attributes of an explicit
+  attribute ends here`, and is popped. `#pragma weak name` (clang
+  `ActOnPragmaWeakID`, `ProcessPragmaWeak`) gives an implicit `weak`
+  attribute to the function or variable `name` found by ordinary lookup
+  in the translation unit's scope; when there is none it is recorded
+  (`Sema::weak_pending`) and applied to the first `extern "C"` function
+  or variable later declared with that name (WP-803;
+  `tests/conformance/cpp.pragma/weak-run.cpp`). The attributes of an explicit
   instantiation of a function, variable or class template
   specialization ([temp.explicit]) are checked the same way and become
   the specialization's own (clang `ActOnExplicitInstantiation`); one that
