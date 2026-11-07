@@ -3576,6 +3576,14 @@ immediate context: errors are hard.
   `act_on_param_default_list`, which list-initializes the instantiated
   parameter's type (the same path as a non-template braced default
   argument; WP-136).
+- A default argument of a parameter whose type is, or is a reference to,
+  a dependent class ([temp.dep.type]/7: a nested class of a class
+  template) is stored as written, unconverted (a braced one as the
+  `void` list of `dependent_init_list`), and converted only when it is
+  instantiated, where the class is complete (WP-690). The template
+  definition never looks at the class's constructors or default member
+  initializers for it, so `const H &h = {}` with an `H` that has default
+  member initializers is valid there.
 
 ### 6.5 Integration with overload resolution; when bodies are instantiated
 

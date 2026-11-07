@@ -608,11 +608,30 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [temp.dep.type]/7, [dcl.fct.default]/5: a parameter of (reference
+    /// to) a class type that is dependent, such as a nested class of a
+    /// class template, has its default argument checked only when the
+    /// argument is instantiated, where the class is complete. Its
+    /// constructors and default member initializers are not looked at
+    /// in the template definition (clang keeps the argument as written).
+    pub(crate) fn is_dependent_class_param(&self, pty: QualType) -> bool {
+        let t = if self.ast.types.is_reference(pty) {
+            self.ast.types.pointee(pty).unwrap_or(pty)
+        } else {
+            pty
+        };
+        self.ast.types.is_dependent(t) && self.ast.types.as_record(t).is_some()
+    }
+
     /// The parameter's default argument ([dcl.fct.default]): copy-
     /// initialized to the parameter type, its own full-expression.
     pub(crate) fn attach_default_arg(&mut self, p: DeclId, e: kiln_ast::ExprId) {
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        let c = if self.is_error_type(pty) || self.ast.types.is_dependent(pty) {
+        let c = if self.is_dependent_class_param(pty) {
+            // Converted at instantiation, as for a variable of that type
+            // (`dependent_init_form`).
+            e
+        } else if self.is_error_type(pty) || self.ast.types.is_dependent(pty) {
             let loc = self.ast.exprs.get(e).loc();
             self.perform_init(pty, crate::init::Initializer::Expr(e), loc, false)
         } else {
