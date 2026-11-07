@@ -316,7 +316,7 @@ build_targets = ["SupportTests", "ADTTests"]
 test = "rc=0; ./unittests/Support/SupportTests --gtest_filter=-FileSystemTest.CreateDir:FileSystemTest.RespectUmask:raw_ostreamTest.filePermissions || rc=1; ./unittests/ADT/ADTTests || rc=1; exit $rc"
 c_compiler = "clang-19"
 wave = 3
-verified = false
+verified = true
 notes = "lib/Support + lib/ADT unit tests only. Same release as the libc++ 19 test suite; the shallow clone is ~2 GB."
 
 [folly]
