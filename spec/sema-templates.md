@@ -5708,7 +5708,10 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   "previous template template parameter is here" at `P`, `P`'s
   parameters, written as arguments at their own locations (a pack as an
   expansion), are checked against `A`'s parameter list as for a
-  template-id `A<...>` (kind, converted-constant conversion, arity); then
+  template-id `A<...>` (kind, converted-constant conversion, arity; a
+  trailing pack expansion left over may be empty, so
+  `template<class, class...> class` takes `template<class> class`,
+  WP-669 `temp.arg.template/p3-trailing-pack-may-be-empty.cpp`); then
   `A`'s parameters are deduced from them (a conflicting deduction is an
   error); last a constrained `P` must be at least as constrained as `A`
   (subsumption over `CanonTemplateTypeParm` atoms). The substituted
