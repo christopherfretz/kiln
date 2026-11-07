@@ -382,8 +382,11 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// [dcl.contract.func]/6 and the virtual-function rule: whether the
-    /// seq may appear on `f` (diagnosed otherwise).
+    /// [dcl.contract.func]/6 (the DIS): a virtual, deleted, or
+    /// first-declaration-defaulted function has no seq; whether the seq
+    /// may appear on `f` (diagnosed otherwise). A function is virtual
+    /// when its first declaration is (spec/contracts.md §9: P3097 lifts
+    /// the virtual rule only for C++29).
     fn check_contract_placement(&mut self, f: DeclId, how: ContractDeclKind, loc: Loc) -> bool {
         let spec = self.ast.decls.function(f).map(|x| x.spec).unwrap_or_default();
         let deleted = how == ContractDeclKind::Deleted || spec.is_deleted();
