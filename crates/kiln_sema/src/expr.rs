@@ -4204,8 +4204,11 @@ impl Sema<'_, '_> {
         // [expr.cond]/6: still different types with a class arm: overload
         // resolution among the built-in `operator?:` candidates converts
         // the arms (a class with `operator const T*()` against a `T*`).
+        // Arms of one class type that differ in cv only were unified by
+        // /4 (clang converts to the more-qualified type) and go on to /7;
+        // `b ? DB() << x : DB()` with `operator bool` must stay a `DB`.
         let (tt, ft) = (self.ety(t), self.ety(f));
-        let ops = if !self.ast.types.same_type(tt, ft)
+        let ops = if !self.ast.types.same_unqualified(tt, ft)
             && (self.ast.types.as_record(tt).is_some() || self.ast.types.as_record(ft).is_some())
         {
             match self.conditional_builtin_overload(t, f, loc) {
