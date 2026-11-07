@@ -1039,7 +1039,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `duplicate 'virtual' in base specifier`. Each base becomes a
   `BaseSpecInfo`. A class-or-decltype is a decltype-specifier, a
   simple-template-id or a (possibly qualified) class-name; the qualifier
-  may begin with `decltype(e)::` (WP-119).
+  may begin with `decltype(e)::` (WP-119). The class-name is a
+  type-only lookup ([class.derived.general]/2; `classify_nested_name`,
+  as clang's `getTypeName` with `isClassName`): a function or variable
+  of the same scope that hides the class from ordinary lookup does not
+  hide it here (WP-686).
 - **Member declarations** (`parse_member_declaration`, clang's
   `ParseCXXClassMemberDeclaration`):
   - leaders: `;`, `public:`/`protected:`/`private:` (a missing `:` is
