@@ -489,6 +489,14 @@ impl Substituter<'_, '_, '_> {
                     return Ok(self.sema.ast.types.dependent_name(kw, nns, name));
                 }
                 let i = self.find_instantiated_decl(d, loc)?;
+                if i != d {
+                    // A member class of the enclosing template (its
+                    // injected-class-name inside a member class defined
+                    // out of line): names that template's parameters
+                    // ([temp.friend]/9; clang's
+                    // `ConstraintRefersToContainingTemplateChecker`).
+                    self.outer_used.set(true);
+                }
                 Ok(self.sema.tag_type(i))
             }
             TypeView::DependentName { keyword, nns, name } => {
