@@ -3966,10 +3966,12 @@ constant and never look at the operand.
 | construct | implemented |
 |---|---|
 | a call whose callee's function type (through a pointer or reference) is not non-throwing; a callee without a prototype throws | yes |
-| `throw` expression; `new` expression | yes (neither is produced by the M2 parser) |
+| `throw` expression | yes |
+| `new` expression whose allocation function is not non-throwing ([except.spec]/6.1; clang `canThrow`); its initializer and operands are walked as subexpressions | yes (WP-783: placement and `std::nothrow` forms are non-throwing when the initializer is) |
+| `delete` expression whose deallocation function, or the destroyed (element) type's destructor, is not non-throwing; a trivial destructor never throws ([except.spec]/8) | yes (WP-783) |
 | `dynamic_cast` to a reference type needing a run-time check | yes (not produced by the M2 parser) |
 | `typeid` of a glvalue of polymorphic class type | M3 (no polymorphic classes in M2) |
-| implicit calls: constructors, destructors, conversion functions, allocation functions | yes: constructors (`CXXConstructExpr`), destructors (`CXXBindTemporaryExpr`) and conversion functions (implicit member calls), each resolving the callee's spec first (WP-112); every `new` counts as throwing |
+| implicit calls: constructors, destructors, conversion functions, allocation functions | yes: constructors (`CXXConstructExpr`), destructors (`CXXBindTemporaryExpr`) and conversion functions (implicit member calls), each resolving the callee's spec first (WP-112); allocation and deallocation functions as in the `new`/`delete` rows |
 | `__attribute__((nothrow))` on the callee | yes (WP-186: the function type is non-throwing, §3 "GNU `nothrow`") |
 | a dependent operand (value-dependent `CXXNoexceptExpr`) | yes (lazily instantiated member specs, §4.7) |
 | a pseudo-destructor call `t.~T()` ([expr.prim.id.dtor]/2: no effect) | yes (WP-275): never potentially-throwing, and, as clang's `canThrow`, its object expression is not walked either (`noexcept(f().~I())` is true) |

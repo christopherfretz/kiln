@@ -10,7 +10,7 @@
 // SROA lead), not kiln: the same body expanded by a macro gives kiln and
 // clang 19 the same pre-opt IR shape (blocks, invokes, landing pads,
 // memsets, lifetime markers within 1%) and the same `opt` time
-// (spec/codegen.md "Wide expansion statements"). kiln only: clang 19/22 lack
+// (spec/landed/codegen/WP-783.md). kiln only: clang 19/22 lack
 // `template for`; g++ 16.1 compiles it in about the same time.
 #include <array>
 #include <set>
