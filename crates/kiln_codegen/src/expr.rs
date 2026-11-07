@@ -388,7 +388,8 @@ impl Cg<'_> {
             // A scalar initializer list (clang `VisitInitListExpr`): its
             // single element, or zero.
             // clang `VisitInitListExpr` on a vector: `insertelement` of
-            // each element into `poison` (i32 indices), then zeros.
+            // each element into `poison` (i32 indices), then zeros; a
+            // vector element is two `shufflevector`s.
             ExprKind::InitListExpr if self.vec_of(q).is_some() => {
                 let inits: Vec<u32> = ast.lists.get(ast.exprs.init_list_inits(e)).to_vec();
                 let t = self.lty(q);
@@ -400,6 +401,28 @@ impl Cg<'_> {
                 let mut cur = 0u32;
                 for x in inits {
                     let x = self.emit_scalar(ExprId::new(x))?;
+                    let xt = self.f.fir.ty(&self.m, x);
+                    if let Some((_, k, _)) = self.m.types.vector_info(xt) {
+                        // A vector element (sema keeps one only as the
+                        // whole initializer of a vector of its type): clang
+                        // widens it to the result's length, then shuffles
+                        // its lanes in after the `cur` already set.
+                        let p = kiln_llvm::SHUFFLE_POISON;
+                        let pad = |m: &mut Vec<u32>| m.resize(n as usize, p);
+                        let mut m: Vec<u32> = (0..k).collect();
+                        pad(&mut m);
+                        let wide = self.shuffle(x, None, m);
+                        let off = if cur == 0 { 0 } else { n };
+                        let mut m: Vec<u32> = (0..cur).chain((0..k).map(|j| j + off)).collect();
+                        pad(&mut m);
+                        v = if cur == 0 {
+                            self.shuffle(wide, Some(v), m)
+                        } else {
+                            self.shuffle(v, Some(wide), m)
+                        };
+                        cur += k;
+                        continue;
+                    }
                     let idx = self.icn(LTy::I32, i128::from(cur));
                     v = self.insert_elt(v, x, idx);
                     cur += 1;

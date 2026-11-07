@@ -329,6 +329,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `EmitStoreThroughExtVectorComponentLValue`) shuffles the value into
     the loaded vector, widening it first when the vector is longer than
     the swizzle, and stores the whole vector back.
+  - a braced initializer of a vector type (clang `VisitInitListExpr`):
+    each scalar element an `insertelement` into `poison` (`i32` index),
+    the remaining lanes zeros; an element that is itself a vector (the
+    whole initializer `v16 b{a}` of a GNU vector of its type) is widened
+    to the result's length by a one-operand `shufflevector`, then
+    shuffled in after the lanes already set (WP-792;
+    `tests/conformance/ext.vector/ir-init-list-vector-element-*.cpp`);
 - Variable alignment (clang `getDeclAlign`, WP-312;
   `tests/codegen/alignas_variable.cpp`): `var_align` is
   `kiln_abi::layout::decl_align` (spec/abi.md §3.2), so an `alignas` or
