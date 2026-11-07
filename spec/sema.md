@@ -1779,6 +1779,14 @@ and returns the scope it names:
     definition not externally visible (codegen rule in spec/codegen.md
     "GNU inline functions"). Test:
     `tests/conformance/ext.gnu.inline/attribute-diags.cpp`.
+  - `artificial` (GNU syntax or `gnu::`; WP-789, clang `ArtificialAttr`,
+    `SubjectList<[InlineFunction]>`; `AttrKind::ARTIFICIAL`): kept on a
+    function whose declaration spells `inline`; elsewhere (a
+    non-function, or a function that is only implicitly inline) it warns
+    `'artificial' attribute only applies to inline functions`
+    [-Wignored-attributes] and is dropped. It concerns debug information
+    only, so it has no effect on the IR. Test:
+    `tests/conformance/dcl.attr/gnu-artificial.cpp`.
   - `alias("sym")`, `ifunc("resolver")`, `weakref` / `weakref("sym")`
     (GNU syntax or `gnu::`; WP-763, clang `handleAliasAttr`,
     `handleIFuncAttr`, `handleWeakRefAttr`; `AttrKind::ALIAS`,

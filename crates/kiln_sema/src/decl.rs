@@ -10958,6 +10958,8 @@ fn attr_kind_of(
         ("target", _, true) => AttrKind::TARGET,
         // WP-630: clang `GCC<"nodebug">` and `Clang<"min_vector_width">`.
         ("nodebug", _, true) => AttrKind::NODEBUG,
+        // clang `GCC<"artificial">` (WP-789).
+        ("artificial", _, true) => AttrKind::ARTIFICIAL,
         ("min_vector_width", _, _) if gnu_syntax || clang_scope => AttrKind::MIN_VECTOR_WIDTH,
         _ => return None,
     })
