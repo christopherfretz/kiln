@@ -601,7 +601,11 @@ the current directory (standard input is `-`). `-o -` is standard output.
   ` (in-process) frontend "<input>" -> "<out>"`, where `<out>` is `|` when
   the IR is piped to the next step. Nothing runs; the exit status is 0.
 - **`-v`** prints the `--version` block and each external command before
-  running it, quoted only where needed (`llvm::sys::printArg`).
+  running it, quoted only where needed (`llvm::sys::printArg`). When
+  linking, `clang++` also gets `-v` (first), so its own `-v` output —
+  its banner and the linker's command line — follows: build systems read
+  the implicit link directories and libraries from it (CMake's compiler
+  ABI probe; WP-667).
 - **Unused inputs.** In a compile-only phase, linker inputs and link
   options are unused, warned in command-line order with clang's wording
   (`-Wunused-command-line-argument`): `<x>: 'linker' input unused` for
@@ -748,6 +752,10 @@ Driver diagnostics, in clang's wording:
   `End of search list.`. That block is byte-identical to clang's (tested).
   The other `-v` lines are not.
 - `-v` or `--version` with no inputs exits 0.
+- `-print-resource-dir` / `--print-resource-dir` prints the resource
+  directory (`-resource-dir`, else the default, "Toolchain") and a
+  newline to standard output and exits 0, whatever else is given, as
+  clang does (WP-667).
 - `--help` prints a short summary of the implemented options and the
   two names' language rule (the usage line says `kiln` under both names).
 

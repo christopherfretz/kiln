@@ -53,6 +53,21 @@ fn version_and_no_inputs() {
     assert_eq!((o.code, o.stderr.as_str()), (1, "kiln++: error: no input files\n"));
 }
 
+/// spec/driver.md "`-v`, `--version`, `--help`": `-print-resource-dir`
+/// (and `--print-resource-dir`) prints the resource directory and exits
+/// 0 whatever else is given, as clang does; `CMake`'s compiler probe asks
+/// for it (WP-667).
+#[test]
+fn print_resource_dir() {
+    for flag in ["-print-resource-dir", "--print-resource-dir"] {
+        let o = kiln(&[flag, "-resource-dir", "/some/res"], "");
+        assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, "/some/res\n", ""));
+    }
+    let o = kiln(&["-print-resource-dir", "-c", "/nonexistent.cpp"], "");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(Path::new(o.stdout.trim_end()).join("include").is_dir(), "{}", o.stdout);
+}
+
 #[test]
 fn argument_errors() {
     let o = kiln(&["-E", "-fbogus", "-x", "pascal", "-stdlib=libfoo", "/nonexistent.cpp"], "");

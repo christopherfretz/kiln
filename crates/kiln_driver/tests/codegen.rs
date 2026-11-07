@@ -233,6 +233,17 @@ fn verbose_prints_commands() {
     assert_eq!(o.status.code(), Some(0));
     let err = text(&o.stderr);
     assert!(err.contains(" -O0 -relocation-model=pic -filetype=obj -o add.o -\n"), "{err}");
+    // Linking, `-v` reaches clang++ too: its own banner and the linker's
+    // command line follow (spec/driver.md "Link"; CMake reads the implicit
+    // link directories from them, WP-667).
+    let o = kiln_in(&d, &["-v", "main.cpp", "add.cpp", "-o", "v.out"]);
+    assert_eq!(o.status.code(), Some(0));
+    let err = text(&o.stderr);
+    let link = err.lines().find(|l| l.contains("clang++\" ")).unwrap_or_default();
+    assert!(link.contains("clang++\" -v "), "{err}");
+    assert!(err.contains("clang version "), "{err}");
+    // The linker's own line (clang's `-v` output), not clang++'s.
+    assert!(err.lines().any(|l| l.contains(" -o v.out ") && !l.contains("clang++")), "{err}");
 }
 
 #[test]

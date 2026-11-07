@@ -141,6 +141,43 @@ pub(crate) fn is_thread_safety_attr(
     })
 }
 
+/// clang attributes kiln accepts silently because they only steer
+/// sanitizers or `-Wdangling` analysis, which kiln does not implement
+/// (spec/sema.md §4.5, WP-667). Each entry is the name, whether clang
+/// spells it `[[clang::x]]`, and the first clang release that spells it
+/// `[[gnu::x]]` (`u32::MAX`: none). Every entry has the
+/// `__attribute__((x))` spelling. `no_sanitize` gained `gnu::` in clang
+/// 22 (clang 19 warns that it is unknown).
+const IGNORED_CLANG_ATTRS: &[(&str, bool, u32)] = &[
+    ("lifetimebound", true, u32::MAX),
+    ("no_address_safety_analysis", false, 0),
+    ("no_sanitize", true, 22),
+    ("no_sanitize_address", false, 0),
+    ("no_sanitize_memory", true, u32::MAX),
+    ("no_sanitize_thread", false, 0),
+];
+
+/// Whether `n` (its `__` affixes removed), written with `syntax` and
+/// scope `scope` (normalized; `None` for none), is one of
+/// [`IGNORED_CLANG_ATTRS`] in a spelling clang `compat` knows: such an
+/// attribute is accepted without a diagnostic and attaches nothing.
+pub(crate) fn is_ignored_clang_attr(
+    n: &str,
+    syntax: AttrSyntax,
+    scope: Option<&str>,
+    compat: u32,
+) -> bool {
+    IGNORED_CLANG_ATTRS.binary_search_by(|&(name, ..)| name.cmp(n)).is_ok_and(|i| {
+        let (_, clang, gnu_since) = IGNORED_CLANG_ATTRS[i];
+        match scope {
+            None => syntax == AttrSyntax::Gnu,
+            Some("clang") => clang,
+            Some("gnu") => compat >= gnu_since,
+            Some(_) => false,
+        }
+    })
+}
+
 const fn is_record_kind(kind: DeclKind) -> bool {
     matches!(
         kind,
@@ -1155,5 +1192,21 @@ mod tests {
         assert!(!is_thread_safety_attr("capability", AttrSyntax::Cxx11, false, 22));
         assert!(!is_thread_safety_attr("reentrant_capability", AttrSyntax::Gnu, false, 19));
         assert!(is_thread_safety_attr("reentrant_capability", AttrSyntax::Gnu, false, 22));
+    }
+
+    #[test]
+    fn ignored_clang_attrs_sorted_and_spelled() {
+        // [dcl.attr.grammar]/5: an unrecognized attribute-token is
+        // implementation-defined; clang's spellings are the contract.
+        assert!(IGNORED_CLANG_ATTRS.windows(2).all(|w| w[0].0 < w[1].0));
+        let ig = is_ignored_clang_attr;
+        assert!(ig("no_sanitize", AttrSyntax::Gnu, None, 19));
+        assert!(ig("no_sanitize", AttrSyntax::Cxx11, Some("clang"), 19));
+        assert!(!ig("no_sanitize", AttrSyntax::Cxx11, Some("gnu"), 19));
+        assert!(ig("no_sanitize", AttrSyntax::Cxx11, Some("gnu"), 22));
+        assert!(!ig("lifetimebound", AttrSyntax::Cxx11, None, 22));
+        assert!(!ig("lifetimebound", AttrSyntax::Cxx11, Some("gnu"), 22));
+        assert!(ig("no_sanitize_address", AttrSyntax::Cxx11, Some("gnu"), 19));
+        assert!(!ig("no_sanitize_address", AttrSyntax::Cxx11, Some("clang"), 22));
     }
 }

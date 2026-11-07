@@ -9622,6 +9622,15 @@ impl Sema<'_, '_> {
         if crate::decl_attrs::is_thread_safety_attr(&n, syntax, clang_scope, self.clang_compat) {
             return None;
         }
+        // Sanitizer and lifetime-analysis attributes: likewise (WP-667).
+        if crate::decl_attrs::is_ignored_clang_attr(
+            &n,
+            syntax,
+            scope_s.as_deref(),
+            self.clang_compat,
+        ) {
+            return None;
+        }
         // clang 19 names only the attribute, not its scope.
         if scope_s.as_deref().is_some_and(|s| s != "gnu")
             && !(clang_scope

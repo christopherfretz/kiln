@@ -1869,6 +1869,22 @@ and returns the scope it names:
   cannot be applied to types` for `[[clang::x]]` after a function
   declarator are not diagnosed. Tests:
   `tests/conformance/dcl.attr.grammar/thread-safety-*.cpp`.
+- **Known and ignored, no diagnostic: sanitizer and lifetime
+  attributes** (WP-667; table `IGNORED_CLANG_ATTRS` in `decl_attrs.rs`,
+  checked right after the thread-safety family). kiln has no sanitizers
+  and no `-Wdangling` analysis, so these attach nothing and get no
+  subject or argument check. `__attribute__((x))` (and `__x__`) for
+  every name; `[[clang::x]]` for `no_sanitize`, `no_sanitize_memory` and
+  `lifetimebound` (clang `Clang<"x">`); `[[gnu::x]]` for
+  `no_sanitize_address`, `no_sanitize_thread` and
+  `no_address_safety_analysis` (clang `GCC<"x">`), and for `no_sanitize`
+  from `-fclang-compat=22` (clang 22's spelling; unknown at 19). Any other
+  scope, and unscoped `[[x]]`, is an unknown attribute. Not yet: clang's
+  subject warnings (`'lifetimebound' attribute only applies to
+  parameters and implicit object parameters`), its `-Wdangling` warnings
+  and the unknown-sanitizer warning. Tests:
+  `tests/conformance/dcl.attr.grammar/sanitizer-*.cpp`,
+  `gnu-no-sanitize-clang{19,22}.cpp`.
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.

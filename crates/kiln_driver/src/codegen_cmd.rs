@@ -675,6 +675,12 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
 /// with the linker options in command-line order.
 fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Command {
     let mut cmd = Command::new(tc, Tool::Linker);
+    // `-v` reaches the linking `clang++` too, so its own `-v` lines (the
+    // linker's command line) follow: build systems read the implicit link
+    // directories and libraries from them (CMake's compiler ABI probe).
+    if args.verbose {
+        cmd.arg("-v");
+    }
     if args.target.is_some() {
         cmd.arg(format!("--target={}", tc.target.triple));
     }
