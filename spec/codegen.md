@@ -3296,6 +3296,11 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   (`k.y`, `EmitLoadOfLValue`) and an `extern` vector without an
   initializer stay loads. As in clang, a write through a cast-away
   `const` (`((i4&)k)[1] = 9`, undefined) does not stop the fold.
+- Otherwise a glvalue base of that arm is loaded from its address
+  (`emit_lvalue` + `load_lv`): a call returning `V&` (`v[i][j]` on a
+  `std::vector<V>`) has the address as its scalar, so `emit_scalar`
+  of it gave `extractelement` a pointer and lowering failed (WP-726;
+  `tests/conformance/ext.vector/subscript-of-reference-returning-call-run.cpp`).
 - `__builtin_convertvector` of a `const` vector variable folds the same
   way (WP-490): `Collect::expr` pushes the `ConvertVectorExpr` operand
   (a bare vector DeclRef, no `LValueToRValue`), the
