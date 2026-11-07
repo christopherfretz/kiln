@@ -314,8 +314,8 @@ impl Sema<'_, '_> {
         let mut ty = self.ast.exprs.get(c).ty();
         if self.ast.exprs.get(c).kind() == ExprKind::BinaryOperator
             && let Some(&rhs) = self.ast.exprs.children(c, &self.ast.lists).get(1)
-            && let Some((p, _)) =
-                conv::scs::member_pointer_parts(self, self.ast.exprs.get(rhs).ty())
+            && conv::scs::member_pointer_parts(self, self.ast.exprs.get(rhs).ty()).is_some()
+            && let Some(p) = t.exc_pointee(self.ast.exprs.get(rhs).ty())
         {
             ty = p;
         }
@@ -340,7 +340,7 @@ impl Sema<'_, '_> {
         }
         let t = &self.ast.types;
         let mut ty = self.ast.exprs.get(callee).ty();
-        if let Some(p) = t.pointee(ty) {
+        if let Some(p) = t.exc_pointee(ty) {
             ty = p;
         }
         match t.proto(ty) {
