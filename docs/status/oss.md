@@ -43,7 +43,7 @@ The loop:
 |---|---|---|---|
 | `catch2` | 1 | `v3.16.1` | tests at parity |
 | `cli11` | 1 | `v2.6.1` | tests at parity |
-| `doctest` | 1 | `v2.5.3` | not started |
+| `doctest` | 1 | `v2.5.3` | tests at parity |
 | `fmt` | 1 | `12.1.0` | not started |
 | `googletest` | 1 | `v1.17.0` | tests at parity |
 | `magic_enum` | 1 | `v0.9.7` | blocked (1 cluster) |
