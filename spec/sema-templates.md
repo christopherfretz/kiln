@@ -4112,8 +4112,9 @@ guides.
    and the function parameter lists (all declared parameters, after the
    /3 object parameter and reversal) have the same length (/6.1), the
    corresponding template parameters are equivalent ignoring their
-   type-constraints (same kind, packness, non-type parameter type,
-   template template parameter head) and the positionally corresponding
+   type-constraints (same kind, packness, non-type parameter type
+   ignoring a placeholder's constraint, template template parameter
+   head) and the positionally corresponding
    parameter types are the same ignoring top-level cv (/6.2.2), and, for
    a conversion, the conversion types are the same. Otherwise neither is
    more specialized: for CTAD the later [over.match.best]/2.11-2.13
@@ -5097,8 +5098,19 @@ the index of the failed requirement.
 - **`C auto` in a parameter.** This creates an invented parameter with
   that constraint (§2.6).
 - **`C auto x = e;`** checks `C` against the deduced type (§6.3).
-- **A constrained NTTP `C auto V`.** The constraint is checked when the
-  argument is converted.
+- **A constrained NTTP `C<A…> auto V`.** The parameter gets the
+  immediately-declared constraint `C<decltype(V), A…>` ([temp.param]/5,
+  clang's `AttachTypeConstraint`; a fold `(C<decltype(Vs), A…> && ...)`
+  for a pack), stored as its type-constraint, so it is an associated
+  constraint: it is checked with the template's other constraints,
+  decides partial-specialization matching and, through subsumption,
+  ordering (WP-792). The type of `V` takes part in a profile and in the
+  /6.2.2 parameter comparison with its type-constraint ignored
+  ([temp.over.link]/6.2, clang's `getUnconstrainedType`), so
+  `decltype(V)` names one type in `C1<decltype(V)>` and
+  `C2<decltype(V)>` of two templates. Other constrained placeholders
+  (`C auto&`, `C auto*`, `C decltype(auto)`) are checked against the
+  deduced type when the argument is converted.
 
 ### 8.7 Note chains (clang's exact texts; used by §10.4)
 
