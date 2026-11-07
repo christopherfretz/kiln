@@ -5120,6 +5120,10 @@ pub mod builtin {
     /// `NoThrow, Const`): `llvm.assume(i1 true)` with a
     /// `"separate_storage"` operand bundle.
     pub const ASSUME_SEPARATE_STORAGE: u32 = 2177;
+    /// `long __builtin_unpredictable(long)` (clang `BuiltinUnpredictable`,
+    /// `LiLi`, `NoThrow, Const`): the value of its operand; the branch hint
+    /// is dropped. Not a constant expression (as in clang).
+    pub const UNPREDICTABLE: u32 = 2178;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
@@ -5160,6 +5164,7 @@ pub mod builtin {
         // WP-726.
         row(MEMCPY_INLINE, "__builtin_memcpy_inline", "vv*vC*Iz", N),
         row(ASSUME_SEPARATE_STORAGE, "__builtin_assume_separate_storage", "vvCD*vCD*", N | C),
+        row(UNPREDICTABLE, "__builtin_unpredictable", "LiLi", N | C),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19
