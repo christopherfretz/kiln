@@ -370,8 +370,13 @@ impl Substituter<'_, '_, '_> {
                         let tys = self.expand_types(&tys, loc)?;
                         ExcSpec::Dynamic(self.sema.ast.types.type_list(&tys))
                     }
-                    ExcSpec::DependentNoexcept(_) => {
-                        return self.unimplemented("dependent exception specification", loc);
+                    // The canonical form of a value-dependent
+                    // `noexcept(expr)` ([except.spec]/13, [temp.inst]/14):
+                    // its operand is the profile's first expression.
+                    ExcSpec::DependentNoexcept(pr) => {
+                        let e = self.sema.ast.types.profile_expr(pr).ok_or(SubstFail)?;
+                        let e = self.expr(e)?;
+                        self.sema.act_on_noexcept_spec(e, loc, loc)
                     }
                     other => other,
                 };
