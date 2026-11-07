@@ -6581,6 +6581,12 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
   it if it is a template specialization member (`check_undeduced_use`).
   Otherwise it reports
   `function {0} with deduced return type cannot be used before it is defined`.
+  A conversion function considered as a candidate is treated the same
+  way before its return type is read (`add_conversion_candidate`, as
+  clang's `AddConversionCandidate`): `operator auto` of a class
+  template specialization is instantiated, and one that stays undeduced
+  is no candidate (WP-789,
+  `class.conv.fct/operator-auto-of-class-template-candidate-run.cpp`).
 - `__has_builtin` (and `__has_constexpr_builtin`) consult the table
   only in the sema modes (`-fsyntax-only`, `-emit-llvm`, …;
   `build_preprocessor(.., staged: true)`). `-E` and `-M` answer as
