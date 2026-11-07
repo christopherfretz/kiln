@@ -1148,6 +1148,12 @@ impl Sema<'_, '_> {
         v: bool,
         outer: bool,
     ) -> Option<QualType> {
+        // Sugar (a typedef, `decltype`, a substituted parameter) is
+        // stepped through, not canonicalized (clang's
+        // `FunctionTypeUnwrapper`): the function type as written keeps
+        // every other bit, its exception specification included, so
+        // `noreturn` is a pure addition (WP-748).
+        let ty = self.ast.types.desugar_top(ty);
         if let TypeView::Function(p) = self.ast.types.view(ty.ty()) {
             if p.info().noreturn() == v {
                 return None;
@@ -1158,14 +1164,21 @@ impl Sema<'_, '_> {
             return Some(self.ast.types.qualify(f, ty.quals()));
         }
         if self.ast.types.is_function(ty) {
-            // Sugar (a typedef, `decltype`) over a function type.
+            // Sugar `desugar_top` keeps (a dependent kind).
             let c = self.ast.types.canonical(ty);
             return self.with_fn_noreturn(c, v, false);
         }
         if !outer {
             return None;
         }
-        let built = match self.ast.types.canonical_view(ty) {
+        let view = match self.ast.types.view(ty.ty()) {
+            w @ (TypeView::Pointer(_)
+            | TypeView::LValueRef(_)
+            | TypeView::RValueRef(_)
+            | TypeView::MemberPointer { .. }) => w,
+            _ => self.ast.types.canonical_view(ty),
+        };
+        let built = match view {
             TypeView::Pointer(p) => {
                 let f = self.with_fn_noreturn(p, v, false)?;
                 self.ast.types.pointer_to(f)
