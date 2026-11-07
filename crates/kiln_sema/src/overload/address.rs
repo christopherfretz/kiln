@@ -662,7 +662,8 @@ impl Sema<'_, '_> {
     /// `ResolveAddressOfOverloadedFunction`: a static winner named
     /// through an explicit object (`this->f`, `o.f`) is "cannot create a
     /// non-constant pointer to member function" at the access
-    /// (`IsStaticMemberFunctionFromBoundPointer`); no match lists every
+    /// (`IsStaticMemberFunctionFromBoundPointer`), unless it is a
+    /// template-id; no match lists every
     /// candidate, the last declared first.
     fn resolve_member_address(
         &mut self,
@@ -677,7 +678,10 @@ impl Sema<'_, '_> {
         let loc = self.ast.exprs.get(x).loc();
         if let [(d, f)] = matches[..] {
             let m = self.ovl.members.remove(&x)?;
-            if !m.implicit && self.is_static_method(d) {
+            // A template-id is resolved to its specialization first
+            // (clang's `ResolveSingleFunctionTemplateSpecialization`), so
+            // `o.f<K>` names the static member without the error.
+            if !m.implicit && m.targs.is_none() && self.is_static_method(d) {
                 if !complain {
                     self.ovl.members.insert(x, m);
                     return None;

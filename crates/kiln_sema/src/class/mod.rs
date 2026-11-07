@@ -392,9 +392,11 @@ impl Sema<'_, '_> {
         }
         let loc = self.ast.decls.get(p).loc();
         let note = Some(self.param_decl_note(p));
-        let e = self.init_list_entity(pty, l, loc, crate::conv::ConvCtx::Argument, note);
-        self.note_default_init_full_expr();
-        let e = self.act_on_full_expr(e);
+        let e = self.defer_default_arg_uses(|s| {
+            let e = s.init_list_entity(pty, l, loc, crate::conv::ConvCtx::Argument, note);
+            s.note_default_init_full_expr();
+            s.act_on_full_expr(e)
+        });
         let _ = self.ast.decls.set_default_arg(p, e);
     }
 

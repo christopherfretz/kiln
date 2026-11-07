@@ -231,6 +231,81 @@ fn print_commands() {
     assert!(text(&o.stderr).contains("\"-o\" \"main.bc\" \"-\"\n"));
 }
 
+/// WP-783, spec/driver.md "IR optimization": at `-O1` and above `-###`
+/// prints the `opt` runs `-v` shows after the frontend step (the
+/// `-discard-value-names` run only for a textual or bitcode output); at
+/// `-O0` (IR-dependent) and under `-disable-llvm-passes` none.
+#[test]
+fn print_commands_shows_opt() {
+    let d = setup("hash-opt");
+    let o = kiln_in(&d, &["-###", "-c", "-O3", "add.cpp"]);
+    let err = text(&o.stderr);
+    let fe = err.find(" (in-process) frontend \"add.cpp\" -> \"|\"\n").expect(&err);
+    let opt = err.find("\"-passes=default<O3>\" \"-o\" \"-\" \"-\"\n").expect(&err);
+    let llc = err.find("\"-O3\" \"-relocation-model=pic\"").expect(&err);
+    assert!(fe < opt && opt < llc, "{err}");
+    assert!(err[fe..opt].contains("opt\""), "{err}");
+    assert!(!err.contains("-discard-value-names"), "{err}");
+    for (flag, level) in [("-O1", "O1"), ("-Og", "O1"), ("-O2", "O2"), ("-Os", "Os"), ("-Oz", "Oz")]
+    {
+        let o = kiln_in(&d, &["-###", "-S", "-emit-llvm", flag, "add.cpp"]);
+        let err = text(&o.stderr);
+        let opt = err.find(&format!("\"-passes=default<{level}>\"")).expect(&err);
+        let names = err.find("\"-discard-value-names\" \"-S\" \"-o\" \"-\" \"-\"\n").expect(&err);
+        assert!(opt < names, "{err}");
+    }
+    for args in [
+        &["-###", "-c", "add.cpp"][..],
+        &["-###", "-c", "-O2", "-Xclang", "-disable-llvm-passes", "add.cpp"],
+    ] {
+        let o = kiln_in(&d, args);
+        assert!(!text(&o.stderr).contains("-passes="), "{}", text(&o.stderr));
+    }
+}
+
+/// WP-783, spec/driver.md "IR optimization": `-S -emit-llvm` writes the
+/// IR of the configured backend, so that LLVM's `opt` and `llc` read it
+/// back. At the default `-fclang-compat` with an LLVM 19 backend the
+/// lifetime markers keep their size operand (LLVM 22's sizeless
+/// `(ptr captures(none))` declaration was a parse error for `opt-19`);
+/// with an LLVM 22 backend they are LLVM 22's.
+#[test]
+fn emit_llvm_text_reads_back_with_backend() {
+    let src = "struct S { int a[4]; };\nvoid use(S *);\nvoid f() { S s; use(&s); }\n";
+    let d = scratch("ll-backend");
+    std::fs::write(d.join("lt.cpp"), src).unwrap();
+    for (major, sized) in [(19, true), (22, false)] {
+        let dir = PathBuf::from(format!("/usr/lib/llvm-{major}"));
+        if !dir.join("bin").join("opt").exists() {
+            eprintln!("skipping LLVM {major}: {} not found", dir.display());
+            continue;
+        }
+        let out = format!("lt{major}.ll");
+        let o = Command::new(kilnpp())
+            .args(["-S", "-emit-llvm", "-O2", "lt.cpp", "-o", &out])
+            .env("KILN_LLVM_DIR", &dir)
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+        let ll = std::fs::read_to_string(d.join(&out)).unwrap();
+        let start = if sized {
+            "@llvm.lifetime.start.p0(i64 16, ptr"
+        } else {
+            "@llvm.lifetime.start.p0(ptr"
+        };
+        assert!(ll.contains(start), "{ll}");
+        for tool in ["opt", "llc"] {
+            let o = Command::new(dir.join("bin").join(tool))
+                .args([&out, "-o", "/dev/null"])
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert_eq!(o.status.code(), Some(0), "{tool}-{major}: {}", text(&o.stderr));
+        }
+    }
+}
+
 #[test]
 fn verbose_prints_commands() {
     if !tools() {

@@ -492,6 +492,14 @@ impl Cg<'_> {
                 };
                 self.load_lv(LV { addr: tmp, q, bf: None, vidx: Some(vidx), tb: Tb::Type })
             }
+            // clang `ScalarExprEmitter::VisitDeclRefExpr` ->
+            // `tryEmitAsConstant`: a variable named without being odr-used
+            // ([basic.def.odr]/5), reached by the scalar visitor through a
+            // glvalue conditional's arm, is its constant, never a load of a
+            // global that need not be defined.
+            ExprKind::DeclRefExpr if let Some(c) = self.non_odr_use_constant(e) => {
+                V::C(self.const_scalar_value(c, q)?)
+            }
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
             | ExprKind::ArraySubscriptExpr
@@ -2041,6 +2049,29 @@ impl Cg<'_> {
             }
             k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
         }
+    }
+
+    /// The folded constant initializer of the scalar, non-reference
+    /// variable `e` names without odr-using it (sema's
+    /// `non_odr_use_constant`); `None` otherwise.
+    fn non_odr_use_constant(&self, e: ExprId) -> Option<kiln_ast::ConstValueId> {
+        let ast = self.ast;
+        if ast.exprs.non_odr_use(e) != NonOdrUse::Constant {
+            return None;
+        }
+        let q = ast.exprs.get(e).ty();
+        if self.is_aggregate(q) || self.is_complex(q) || self.is_volatile(q) {
+            return None;
+        }
+        let d = ast.exprs.decl(e);
+        let dq = ast.decls.get(d).ty()?;
+        if self.referee(dq).is_some() {
+            return None;
+        }
+        let init = std::iter::once(d)
+            .chain(ast.redecls_of(d))
+            .find_map(|x| ast.decls.var(x).and_then(|v| v.init))?;
+        self.folds.get(init)
     }
 
     /// clang `EmitDeclRefLValue` on a reference variable named without

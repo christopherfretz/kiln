@@ -2002,7 +2002,7 @@ impl Sema<'_, '_> {
     /// Unqualified results are listed newest first (§2.1, candidate
     /// order). `None` after diagnosing an unsupported form.
     #[inline(never)]
-    fn overload_name_ref(
+    pub(crate) fn overload_name_ref(
         &mut self,
         name: DeclName,
         found: &crate::lookup::Found,

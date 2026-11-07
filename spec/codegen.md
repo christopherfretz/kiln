@@ -89,7 +89,12 @@ panic and never silently wrong IR.
   double`, `const _Atomic(int)`, a `const` array or class element), so a
   global whose every use folds is not emitted. A load of a const variable
   is recognized through parentheses and `NoOp` casts (the xvalue cast of
-  an implicitly moved `return x;`). A read of a `mutable` member is not
+  an implicitly moved `return x;`). An arm of a glvalue conditional under
+  a load (`c ? A : B`) is not a load candidate; a scalar non-reference
+  variable it names without odr-use (sema's `non_odr_use_constant`) is
+  emitted as its folded initializer (clang `VisitDeclRefExpr` ->
+  `tryEmitAsConstant`; `expr.rs` `non_odr_use_constant`, WP-775), so no
+  definition of it is needed. A read of a `mutable` member is not
   folded (the Oven's "read of mutable member" check, spec/oven.md); the
   variable's other members are.
   A reference variable whose referee type is `const` non-volatile folds
@@ -1041,7 +1046,12 @@ The normative description is spec/driver.md "Code generation". In short:
   `//@ min-oracle: <N>` line compares the case only under oracle release
   N or later; under an older oracle kiln's IR must still verify. The oracle is
   `clang++-N`/`opt-N` for `N` = `$KILN_ORACLE` (default 22; spec/harness.md
-  "Oracle toolchain"); both texts go through that `opt-N`. `KILN_CASE=<stem>`
+  "Oracle toolchain"); both texts go through that `opt-N`. Under oracle 22
+  kiln's text first gets LLVM 22's lifetime-marker form
+  (`ir_norm::lifetime_markers_llvm22`; a no-op on text already in that
+  form). kiln writes its backend's form (spec/driver.md "IR optimization",
+  WP-783), and with an LLVM 19 backend `opt-22` would upgrade the calls
+  but leave the old declarations out of place. `KILN_CASE=<stem>`
   prints both texts (in the oracle's mode); without `opt-N`/`clang++-N` it
   is skipped. Each pair is compared in three ways (WP-355,
   `crates/kiln_codegen/tests/ir_norm/mod.rs`), and the summary line counts
@@ -3094,10 +3104,10 @@ fields; each follows clang 19's IR.
   signature, and LLVM 22's `(ptr captures(none))` at `-fclang-compat=22`
   (WP-462, §7z): codegen emits the latter itself for an LLVM 22+ backend
   (`kiln_llvm` `Module::ir_version`, `intrinsics::lifetime_has_size`),
-  and for an older one the driver rewrites the `-S -emit-llvm` text after
-  `opt` (driver.md "IR optimization"), so `opt`/`llc` 19 and 21 still get
-  the sized form they verify (LLVM 21 spells its pointer
-  `captures(none)` but keeps the size operand).
+  and for an older one the sized form those tools verify (LLVM 21 spells
+  its pointer `captures(none)` but keeps the size operand), in every
+  output including `-S -emit-llvm` text (WP-783; driver.md "IR
+  optimization").
 - **Cleanup-destination promotion (`fir/mem2reg.rs`).** clang's
   `FinishFunction` replaces a coroutine's `cleanup.dest.slot` alloca by
   SSA values and phis; kiln ports LLVM 19's `PromoteMemToReg` for that
