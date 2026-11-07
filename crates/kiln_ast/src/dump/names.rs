@@ -47,6 +47,10 @@ pub struct AstNames<'a> {
     /// canonical type with every name scoped (`n::tr<n::A, int>::value`),
     /// as clang 22 prints a failed requirement (`-fclang-compat=22`).
     pub scoped_nns: bool,
+    /// The template arguments of a specialization in a scope chain print
+    /// with every name scoped (`C<N::X>::`), as clang prints the
+    /// canonical arguments it stores (`__PRETTY_FUNCTION__`).
+    pub scoped_spec_args: bool,
 }
 
 impl std::fmt::Debug for AstNames<'_> {
@@ -64,6 +68,7 @@ impl<'a> AstNames<'a> {
             expr_types: PrintOptions::SUGARED,
             closure_as_lambda: false,
             scoped_nns: false,
+            scoped_spec_args: false,
         }
     }
 
@@ -75,6 +80,7 @@ impl<'a> AstNames<'a> {
             expr_types: PrintOptions::SUGARED,
             closure_as_lambda: false,
             scoped_nns: false,
+            scoped_spec_args: false,
         }
     }
 
@@ -331,7 +337,11 @@ impl<'a> AstNames<'a> {
             self.write_component(ctx, out);
             if spec_args && !self.is_unnamed(ctx) {
                 if let Some(args) = self.ast.spec_print_args(ctx) {
-                    crate::types::write_arg_list_of(&self.ast.types, self, ctx, args, out);
+                    if self.scoped_spec_args {
+                        crate::types::write_arg_list_scoped_of(&self.ast.types, self, ctx, args, out);
+                    } else {
+                        crate::types::write_arg_list_of(&self.ast.types, self, ctx, args, out);
+                    }
                 } else if let Some((args, len)) = self.partial_print_args(ctx) {
                     write_arg_list_prefix(&self.ast.types, self, args, len, out);
                 }

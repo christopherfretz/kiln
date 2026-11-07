@@ -91,8 +91,12 @@ impl Sema<'_, '_> {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn compute_predefined_name(&self, kind: PredefinedKind, f: DeclId) -> String {
         let ast = &self.ast;
-        let mut names = AstNames::new(ast);
+        // Unnamed tags print with their location (`(lambda at F:L:C)`)
+        // and the scopes' template arguments canonical and scoped
+        // (`C<N::X>::m`), as clang prints the arguments it stores.
+        let mut names = AstNames::with_sources(ast, self.diags.sm());
         names.closure_as_lambda = self.clang_compat >= 22;
+        names.scoped_spec_args = true;
         if kind != PredefinedKind::PrettyFunction {
             let mut s = String::new();
             names.write_name(f, &mut s);
@@ -255,7 +259,7 @@ impl Sema<'_, '_> {
         let params: Vec<DeclId> =
             ast.lists.iter::<DeclId>(ast.templates.param_list(info.params).params).collect();
         let args = ast.types.args(s.args);
-        let names = AstNames::new(ast);
+        let names = AstNames::with_sources(ast, self.diags.sm());
         for (i, &p) in params.iter().enumerate() {
             let Some(&a) = args.get(i) else { break };
             let mut pname = String::new();
@@ -288,7 +292,7 @@ impl Sema<'_, '_> {
     /// clang `TemplateArgument::print(Policy, Out, IncludeType)`.
     fn write_predefined_arg(&self, a: TemplateArg, include_type: bool, out: &mut String) {
         let ast = &self.ast;
-        let names = AstNames::new(ast);
+        let names = AstNames::with_sources(ast, self.diags.sm());
         match a.view() {
             ArgView::Value { value, .. } if include_type => {
                 let opts = ValueOptions {
