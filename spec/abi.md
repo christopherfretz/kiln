@@ -955,7 +955,10 @@ substituted parameters are transparent; a parameter reference is `T_`;
 `DependentScopeDeclRefExpr` is an unresolved name (`sr` levels of the
 qualifier as written, a template parameter or `decltype` level an
 unresolved type with no closing `E`, a specialization level its source
-name and arguments, else `E` after the levels); unary/binary operator,
+name and its arguments as the qualifier writes them, without the
+defaulted ones the canonical type adds, so `R<T>::value` for
+`template <class, class = void> struct R` is `sr1RIT_EE5value` (WP-783),
+else `E` after the levels); unary/binary operator,
 `qu`, `st`/`sz`, `at`/`az` and `cv`/`sc`/`cc`/`rc`/`dc` encodings;
 `sp <expr>` for a pack expansion, `sZ <param>` for `sizeof...`,
 `u <trait> <type>* E` for a type trait, `cl <callee> <args> E` for a call
@@ -1019,6 +1022,13 @@ operand. The
 template-parameter-declaration prefixes `Tn`/`Tp` are §8.14's (WP-117);
 the dependent template-specialization types there are the ones above
 (`dependent_tst`, with a pack's arguments grouped by `converted_args`).
+One difference from clang remains for value-dependent arguments (a
+follow-up). clang mangles the expression that first created the
+enclosing canonical type, but kiln mangles the profile's first
+expression in the TU. The two differ only when one TU spells the same
+dependent expression in more than one way. For example, after
+`R<T>::value`, a new signature that writes `R<T, void>::value` is
+`RIT_vEE` in clang and `RIT_EE` in kiln.
 
 ### 8.16 Landed (WP-204): constrained templates (`mangle/constraint.rs`)
 clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by

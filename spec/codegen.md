@@ -1041,7 +1041,12 @@ The normative description is spec/driver.md "Code generation". In short:
   `//@ min-oracle: <N>` line compares the case only under oracle release
   N or later; under an older oracle kiln's IR must still verify. The oracle is
   `clang++-N`/`opt-N` for `N` = `$KILN_ORACLE` (default 22; spec/harness.md
-  "Oracle toolchain"); both texts go through that `opt-N`. `KILN_CASE=<stem>`
+  "Oracle toolchain"); both texts go through that `opt-N`. Under oracle 22
+  kiln's text first gets LLVM 22's lifetime-marker form
+  (`ir_norm::lifetime_markers_llvm22`; a no-op on text already in that
+  form). kiln writes its backend's form (spec/driver.md "IR optimization",
+  WP-783), and with an LLVM 19 backend `opt-22` would upgrade the calls
+  but leave the old declarations out of place. `KILN_CASE=<stem>`
   prints both texts (in the oracle's mode); without `opt-N`/`clang++-N` it
   is skipped. Each pair is compared in three ways (WP-355,
   `crates/kiln_codegen/tests/ir_norm/mod.rs`), and the summary line counts
