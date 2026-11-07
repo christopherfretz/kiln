@@ -498,7 +498,11 @@ outermost class's `}` the parser replays in clang's order
 declaration order:
 1. default arguments → `act_on_param_default_arg(p, e)` (write-once; a
    braced one → `act_on_param_default_list(p, list)`, which
-   list-initializes the parameter's type),
+   list-initializes the parameter's type; when that type or the list is
+   dependent the list is kept as written and initialized at instantiation,
+   as for one parsed in place, so `const O (&)[N ? N : 1] = {}` binds to a
+   `const O[N ? N : 1]` (WP-782, test
+   `dcl.fct.default/member-dependent-array-reference-braced.cpp`)),
    noexcept-specifiers → `act_on_exception_spec(f, spec)`;
 2. NSDMIs → `act_on_field_init(field, init)` (`this` usable; own
    full-expression, §5.3);
