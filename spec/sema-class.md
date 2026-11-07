@@ -2556,6 +2556,10 @@ access, out-of-line declarator scope.**
   member's class reaches either one (WP-726;
   `class.member.lookup/p8-qualifier-selects-subobject.cpp`,
   `tests/codegen/qualified_member_subobject.cpp`).
+  A `template` keyword before the qualifier (`e.template B<T>::m`,
+  CWG1835) introduces the qualifier's first template-id; only one after
+  the qualifier (`e.N::template f<T>`) applies to the member name (WP-789;
+  `temp.names/template-kw-before-member-qualifier-run.cpp`).
 - *Out-of-line declarator scope* ([dcl.meaning]/1, [basic.scope.class]/1;
   clang `ActOnCXXEnterDeclaratorScope`): after a qualified declarator-id
   the parser calls `act_on_enter_declarator_scope(qualifier) -> usize`,

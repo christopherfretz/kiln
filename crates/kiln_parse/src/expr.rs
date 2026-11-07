@@ -1406,7 +1406,12 @@ impl Parser<'_, '_> {
             let q = self.parse_nested_name_nns();
             self.s.end_member_qualifier();
             let Ok(q) = q else { return None };
-            template_kw |= q.is_some() && self.eat_kw(Kw::Template).is_some();
+            // A leading `template` belonged to the qualifier's first
+            // component (`e.template B<T>::m`, CWG1835); only one after
+            // the qualifier applies to the member's name.
+            if q.is_some() {
+                template_kw = self.eat_kw(Kw::Template).is_some();
+            }
             q
         } else {
             None
