@@ -1319,8 +1319,9 @@ impl Sema<'_, '_> {
     /// `__builtin_assume_aligned(p, align[, offset])` (clang
     /// `BuiltinAssumeAligned`): 2 or 3 arguments; `p` decays and must
     /// convert to `const void *` (it keeps its own type); `align` is an
-    /// integer constant power of 2 (left unconverted), warned about above
-    /// 2^32 (`-Wbuiltin-assume-aligned-alignment`); `offset` converts to
+    /// integer (or unscoped enumeration) constant power of 2 (left
+    /// unconverted), warned about above 2^32
+    /// (`-Wbuiltin-assume-aligned-alignment`); `offset` converts to
     /// `size_t`. The call is a `void *` prvalue. Alignment errors are at
     /// the call's start.
     fn builtin_assume_aligned(
@@ -1365,7 +1366,13 @@ impl Sema<'_, '_> {
         let al = args[1];
         if !self.expr_is_value_dependent(al) {
             let at = self.begin_loc(callee);
-            let v = if self.ast.types.is_integral(self.ety(al)) { self.fold_int(al) } else { None };
+            // clang `BuiltinConstantArg`: an integral or unscoped enumeration
+            // constant (LLVM's `PickAlignment<T, A>::value` enumerator).
+            let v = if conv::rank::is_integral_or_unscoped_enum(self, self.ety(al)) {
+                self.fold_int(al)
+            } else {
+                None
+            };
             let Some(v) = v else {
                 let d = self
                     .diag(DiagId::sema_constant_integer_arg_type, at)

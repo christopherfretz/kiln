@@ -4044,7 +4044,9 @@ function) elsewhere.
     clang `BuiltinAssumeAligned`): 2 or 3 arguments (`too few` / `too many
     ... at most` at the `)`); `p` decays and must convert to `const void *`
     (it keeps its own type); `a`, unless value-dependent, an integer
-    constant (`argument to '...' must be a constant integer` at the call),
+    constant of integral or unscoped enumeration type (an enumerator,
+    LLVM's `PickAlignment<T, A>::value`; WP-730) (`argument to '...'
+    must be a constant integer` at the call),
     a power of 2 (`requested alignment is not a power of 2`), warned above
     2^32 (`-Wbuiltin-assume-aligned-alignment`); `off` converts to
     `size_t`. The call is a `void *` prvalue.
