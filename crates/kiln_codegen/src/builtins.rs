@@ -1107,8 +1107,9 @@ impl Cg<'_> {
             // [ptr.launder]: the pointer itself (no `llvm.launder.invariant.group`
             // without `-fstrict-vtable-pointers`).
             id::LAUNDER => self.emit_scalar(a0)?,
-            // WP-726: clang `BI__builtin_unpredictable`: the operand (the
-            // `!unpredictable` branch hint is not emitted).
+            // clang `BI__builtin_unpredictable`: the operand; the branch
+            // or `switch` on the call carries the `!unpredictable` hint
+            // (`Cg::mark_unpredictable`).
             id::UNPREDICTABLE => self.emit_scalar(a0)?,
             id::OPERATOR_NEW | id::OPERATOR_DELETE => {
                 return self.builtin_new_delete(b, e, &args).map(BuiltinCall::Emitted);

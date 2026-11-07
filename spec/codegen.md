@@ -409,7 +409,16 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       (the expected value emitted, the probability not), above -O0
       `llvm.expect.T(value, expected)` and
       `llvm.expect.with.probability.T(value, expected, double P)` with
-      the probability folded (WP-492, `builtin_expect_o1.cpp`); signbit (and WP-419's `signbitf` / `signbitl`, through
+      the probability folded (WP-492, `builtin_expect_o1.cpp`);
+      `__builtin_unpredictable(x)` is `x`, and above -O0 (clang
+      `EmitBranchOnBoolExpr` / `EmitSwitchStmt`) a conditional branch
+      whose condition, parentheses stripped and then implicit conversions
+      (`IgnoreImpCasts`), is the call carries `!unpredictable !{}`: an
+      `if`, a `?:` emitted as branches, an `&&`/`||` operand and a `!`
+      operand do, a parenthesized call under a conversion
+      (`if ((__builtin_unpredictable(b)))`), a loop condition and a
+      `select` do not; a `switch` does when its condition is the call
+      itself (WP-779, `builtin_unpredictable_o1.cpp`); signbit (and WP-419's `signbitf` / `signbitl`, through
       `builtin::f128_twin`) bitcasts to an integer of the
       float's width and tests `slt 0`, and a constant argument folds
       (clang 19 and 22; `builtins_signbit_fl.cpp`); the isgreater family is one

@@ -5129,8 +5129,9 @@ pub mod builtin {
     /// `"separate_storage"` operand bundle.
     pub const ASSUME_SEPARATE_STORAGE: u32 = 2177;
     /// `long __builtin_unpredictable(long)` (clang `BuiltinUnpredictable`,
-    /// `LiLi`, `NoThrow, Const`): the value of its operand; the branch hint
-    /// is dropped. Not a constant expression (as in clang).
+    /// `LiLi`, `NoThrow, Const`): the value of its operand; a branch or
+    /// `switch` on it carries `!unpredictable` when optimizing (WP-779).
+    /// Not a constant expression (as in clang).
     pub const UNPREDICTABLE: u32 = 2178;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
