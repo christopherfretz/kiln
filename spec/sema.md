@@ -3867,7 +3867,11 @@ the initializer, or after default initialization, and before the
     `CreateRecoveryExpr`), so it is not diagnosed again. Not yet: the
     C-style cast's own rvalue message (`(S&)mk()` reports the
     initialization failure of its static step instead of `C-style cast
-    from rvalue to reference type`). A value of type `std::nullptr_t`
+    from rvalue to reference type`). The static step of a C-style or
+    functional cast to a non-class type converts to or from an
+    inaccessible base class without an access error ([expr.cast]/4;
+    `Sema::cast_ignores_base_access`, read by `check_base_access`;
+    WP-803, `expr.cast/cstyle-inaccessible-base-run.cpp`). A value of type `std::nullptr_t`
     converts to an integral type (not an enumeration) as `(void*)0`
     does (`PointerToIntegral`, with the pointer path's
     `cast from pointer to smaller type` error, [expr.reinterpret.cast]/4,

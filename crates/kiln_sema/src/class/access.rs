@@ -918,7 +918,8 @@ impl Sema<'_, '_> {
             let b = self.spec_access(Self::deriving_class(derived, path, j), s);
             acc = if j == 0 { b } else { merge_access(acc, b) };
         }
-        if acc == Access::Public {
+        if acc == Access::Public || (usage == BaseUse::Conversion && self.cast_ignores_base_access)
+        {
             return true;
         }
         let t = Target {

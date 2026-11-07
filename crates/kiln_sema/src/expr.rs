@@ -6059,7 +6059,14 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        // [expr.cast]/4: the static_cast a C-style (or equivalent
+        // functional) cast performs converts to or from an inaccessible
+        // base class (pointer, reference or pointer to member).
+        let lax = matches!(style, CastStyle::CStyle | CastStyle::Functional)
+            && self.ast.types.as_record(self.ast.types.canonical(ty)).is_none();
+        let old = std::mem::replace(&mut self.cast_ignores_base_access, lax);
         let r = self.build_explicit_cast(style, ty, e, loc, rparen);
+        self.cast_ignores_base_access = old;
         self.note_cast_written_type(r, ty);
         r
     }
