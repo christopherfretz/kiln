@@ -702,7 +702,7 @@ impl Cg<'_> {
         // slot either way: the `sret` pointer is the return address).
         // A function an alias declared first by name keeps the alias
         // declaration's parameter and return attributes (clang sets them
-        // once, in `GetOrCreateLLVMFunction`; spec/codegen.md "Aliases").
+        // once, in `GetOrCreateLLVMFunction`; spec/codegen.md "Aliases and ifuncs").
         let alias_sig = match self.alias.declared_for.get(&f) {
             Some(&a) if thunk.is_none() && structor.is_none() => {
                 self.decl_sig(a).ok().filter(|s| s.fn_ty == sig.fn_ty)

@@ -375,7 +375,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     call initializes an aggregate, otherwise into a temporary; an
     ignored aggregate call makes that temporary itself, after the
     arguments, and an empty-class (`Ignore`) result still gets an unused
-    temporary (clang `GetUndefRValue`; WP-172);
+    temporary (clang `GetUndefRValue`; WP-172). A discarded
+    `ExprWithCleanups` around such a call (`M{}.e(E{}, 3);`) keeps the
+    ignored slot inside a cleanup scope (clang
+    `AggExprEmitter::VisitExprWithCleanups`), so there is no extra
+    result temporary ahead of the object and argument temporaries
+    (WP-777; `tests/codegen/discarded_member_call_on_temporary.cpp`,
+    `tests/conformance/expr.call/run-discarded-member-call-on-temporary-order.cpp`);
   - an assignment operator call (`CXXOperatorCallExpr` with `=`, `+=`,
     ... and a member callee) evaluates its right operand before the
     object (clang `EvaluationOrder::ForceRightToLeft`): a trivial
@@ -3969,7 +3975,12 @@ an initializer (clang `CodeGenModule::EmitAliasDefinition`,
   variable) whose mangled name it is, which is emitted now; else a
   declaration created under that name, which a later definition
   completes in place (a function: the aliasing declaration's signature,
-  retyped by the definition if they differ; a variable: a global of the
+  retyped by the definition if they differ; when the types agree the
+  definition keeps the return and parameter attributes the aliasing
+  declaration gave it, as clang's `GetOrCreateLLVMFunction` sets them
+  once, so an `extern "C"` alias of a C++ function leaves its
+  definition without a `noundef` return (`AliasState::declared_for`,
+  WP-777, `tests/codegen/gnu_alias_forward_extern_c.cpp`); a variable: a global of the
   aliasing declaration's type; an ifunc resolver: a `void ()` placeholder
   that the resolver's definition replaces and moves to the end of the
   function list, as clang). A later definition whose mangled name an
