@@ -9183,6 +9183,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The class template of `q` (after [`Self::type_name_qualifier`])
+    /// when `q` is a specialization that is not instantiated yet, so a
+    /// lookahead classifies its members by the template's pattern
+    /// (WP-276); `None` otherwise.
+    pub fn uninstantiated_spec_template(&self, q: DeclId) -> Option<DeclId> {
+        let q = self.type_name_qualifier(q);
+        if self.kind_of(q) != DeclKind::CXXRecord || self.ast.definition(q).is_some() {
+            return None;
+        }
+        let (_, spec) = self.ast.spec_info(q)?;
+        (spec.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization)
+            .then_some(spec.template)
+    }
+
     /// What an identifier names here (for parser decisions,
     /// [basic.lookup.unqual]); `qualifier` is the context named by a
     /// preceding nested-name-specifier.
@@ -9198,12 +9212,9 @@ impl Sema<'_, '_> {
         // lookahead cannot instantiate, so classify by the template as
         // for `X<int>::name` (WP-276).
         if let Some(q) = qualifier
-            && self.kind_of(q) == DeclKind::CXXRecord
-            && self.ast.definition(q).is_none()
-            && let Some((_, spec)) = self.ast.spec_info(q)
-            && spec.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization
+            && let Some(t) = self.uninstantiated_spec_template(q)
         {
-            return self.classify_template_member(spec.template, name);
+            return self.classify_template_member(t, name);
         }
         if let Some(q) = qualifier
             && self.kind_of(q) == DeclKind::TypeAliasTemplate

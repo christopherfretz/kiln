@@ -524,6 +524,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   template: the lookahead cannot instantiate, and an undefined class has
   no members to find (`typedef X<int> T; W<T::rebind<float>, int>`,
   WP-276).
+  A template template argument so classified (`check<Q::fn>`, `Q` a
+  typedef of `quote<int>`; [temp.arg.template]/1) is not the pattern's
+  member template: the qualifier is parsed, which instantiates the
+  specialization, and `fn` is looked up again in it, as for
+  `quote<int>::fn` (WP-802,
+  `tests/conformance/temp.arg.template/member-alias-template-through-typedef-call-run.cpp`).
 - A further component after such a qualifier (`X<args>::m::name`, or
   `D::m::name` with `D` a typedef of `X<args>`) where `m` is a typedef
   or alias member of the pattern naming a class template specialization
