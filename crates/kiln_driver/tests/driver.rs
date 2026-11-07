@@ -197,6 +197,21 @@ fn lax_vector_conversions_like_clang() {
     );
 }
 
+/// `-finput-charset=` / `-fexec-charset=` accept UTF-8 in any case and
+/// nothing else, as clang's driver (folly passes `-finput-charset=UTF-8`).
+#[test]
+fn charset_flags_accept_utf8_only() {
+    for f in ["-finput-charset=UTF-8", "-finput-charset=utf-8", "-fexec-charset=Utf-8"] {
+        let o = kiln(&["-fsyntax-only", f, "-"], "int x;\n");
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{f}");
+    }
+    for (f, v) in [("-finput-charset=latin1", "latin1"), ("-fexec-charset=UTF8", "UTF8")] {
+        let o = kiln(&["-fsyntax-only", f, "-"], "int x;\n");
+        assert_eq!(o.code, 1, "{f}");
+        assert!(o.stderr.contains(&format!("error: invalid value '{v}' in '{f}'")), "{}", o.stderr);
+    }
+}
+
 #[test]
 fn preprocess_stdin() {
     let o = kiln(&["-E", "-P", "-DX=42", "-"], "int a = X;\n#ifdef __KILN__\nkiln\n#endif\n");
