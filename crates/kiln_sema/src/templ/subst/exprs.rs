@@ -1037,6 +1037,12 @@ impl Substituter<'_, '_, '_> {
                 let l = self.braced_list(b)?;
                 Ok(self.sema.init_from_list_at(ty, &l, Some(l.lbrace)))
             }
+            // A braced-init-list template argument (P2308R1): substituted
+            // and kept as written until it initializes the parameter.
+            ExprKind::InitListExpr if n.ty() == QualType::VOID => {
+                let l = self.init_list(e)?;
+                Ok(self.sema.act_on_braced_template_arg(l))
+            }
             _ => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
     }
