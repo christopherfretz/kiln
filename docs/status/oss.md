@@ -170,8 +170,8 @@ Reduced repros (WP-666, kiln at main f3751eadd):
 | TUs ok / failed | 140 / 0 | 140 / 0 |
 | links ok / failed | 1 / 0 | 1 / 0 |
 | tests passed / total | 1 / 1 | 1 / 1 |
-| wall | 29 s | 25 s |
-| peak TU RSS | 117 MB | 295 MB |
+| wall | 64 s | 25 s |
+| peak TU RSS | 119 MB | 295 MB |
 
 Failure clusters (kiln): none.
 <!-- /oss:spdlog -->
