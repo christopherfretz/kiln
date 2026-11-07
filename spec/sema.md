@@ -8391,6 +8391,13 @@ two `member '<m>' first declared here` notes. Flowing off the end
 has `return_void`; otherwise `-Wreturn-type` warns `non-void coroutine
 does not return a value` (`... in all control paths` when only some
 paths fall off).
+Immediate invocations in the operand are evaluated at the end of the
+full-expression holding it ([expr.const]/16, WP-802): the promise
+variable and the suspend points a first `co_return` builds are their
+own full-expressions and do not take them (`coro_isolated`), and in a
+template pattern the operand is finished as a full-expression, so an
+instantiation keeps the non-dependent values (`co_return sq(3) + t;`,
+`tests/conformance/stmt.return.coroutine/immediate-invocation-in-template-operand-run.cpp`).
 
 **The body (`complete_coroutine_body`, clang
 `CheckCompletedCoroutineBody`).** At the end of a non-template
