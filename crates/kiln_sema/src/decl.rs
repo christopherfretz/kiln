@@ -9797,8 +9797,7 @@ impl Sema<'_, '_> {
         let cxx26 = self.std >= kiln_lex::Std::Cxx26;
         let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax).filter(|&k| {
             (k != AttrKind::INDETERMINATE || cxx26) && (k != AttrKind::CARRIES_DEPENDENCY || !cxx26)
-        })
-        else {
+        }) else {
             let id = if gnu && n == "format" {
                 DiagId::parse_attribute_ignored
             } else {

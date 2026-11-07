@@ -664,7 +664,11 @@ impl Sema<'_, '_> {
         let sub = Subobject::Field(f);
         let dtor = self.select_special(rec, SpecialKind::Dtor, Quals::NONE, Quals::NONE);
         if w.kind == SpecialKind::DefaultCtor {
-            return if has_init { self.delete_for_call(w, sub, dtor, true) } else { DeleteReason::No };
+            return if has_init {
+                self.delete_for_call(w, sub, dtor, true)
+            } else {
+                DeleteReason::No
+            };
         }
         let non_trivial = match dtor {
             Selected::Unsupported => return DeleteReason::Unsupported,
@@ -679,7 +683,8 @@ impl Sema<'_, '_> {
         };
         let union = self.ast.decls.get(f).ctx().map_or(w.class, |p| self.class_def(p));
         let anonymous = self.defn_bits(union).contains(DefinitionBits::ANONYMOUS);
-        let ctor_bad = !(has_init && non_trivial || anonymous) && self.union_default_init_bad(union);
+        let ctor_bad =
+            !(has_init && non_trivial || anonymous) && self.union_default_init_bad(union);
         if !(has_init || ctor_bad) {
             return DeleteReason::No;
         }
