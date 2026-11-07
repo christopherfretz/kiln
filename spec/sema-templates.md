@@ -7073,8 +7073,11 @@ declarator scopes.**
   the operands differ in type and either is a class, each is tried
   against the other. The order is: /4.1–4.2, a glvalue target binding
   directly; /4.3.1–4.3.2, same or derived class with at least the
-  target's cv (otherwise no conversion); /4.3.3, implicit conversion to
-  the other's prvalue type. If both directions succeed, the result is
+  target's cv (otherwise no conversion); a base class operand is not
+  converted to match a derived one at all, even by a converting
+  constructor, so `c ? B() : D()` with `D(B)` is a `B` (WP-669,
+  tests/conformance/expr.cond/p4-base-not-converted-to-derived.cpp);
+  /4.3.3, implicit conversion to the other's prvalue type. If both directions succeed, the result is
   `sema_conditional_ambiguous`; if one does, it is applied. Gap: the
   /6 overloaded-operator candidates are not tried.
 - *[expr.cond]/7 class prvalue result*: when the arms are a class type
