@@ -2057,7 +2057,13 @@ class name" at `B`
   `Record(get_class_spec(tmpl, level args))`. It always hits the map,
   because the specialization exists.
 - Inside a partial specialization, the injected-class-name is the
-  partial's own pattern args, as written.
+  partial's own pattern args, as written: the argument pack the
+  conversion formed for the primary's trailing parameter pack is spread
+  into its elements (`vd<int, T...>`, not `vd<int, <T...>>`), so a
+  substitution (a member alias template naming `vd`) converts them
+  against the primary's parameters again (`partial_injected_type`;
+  WP-787,
+  `tests/conformance/temp.local/partial-pack-injected-name-in-alias-template.cpp`).
 - As a nested-name-specifier (`A::*`, `&A::m`, `A::m`) it is the
   `InjectedClassName` type too, so member pointers formed from it are
   dependent and substituted (spec/sema.md §5.21, WP-608).
