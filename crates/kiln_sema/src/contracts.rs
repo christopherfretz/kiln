@@ -380,27 +380,7 @@ impl Sema<'_, '_> {
             .function(decl)
             .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
             .unwrap_or_default();
-        let mut used = Vec::new();
-        for &s in stmts {
-            if self.ast.stmts.contract_kind(s) != ContractKind::Post {
-                continue;
-            }
-            let mut work = vec![self.ast.stmts.contract_cond(s)];
-            while let Some(e) = work.pop() {
-                if self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
-                    && self.ast.exprs.non_odr_use(e) == kiln_ast::expr::NonOdrUse::None
-                {
-                    let d = self.ast.exprs.decl(e);
-                    if let Some(i) = of_params.iter().position(|&p| p == d)
-                        && !used.contains(&i)
-                    {
-                        used.push(i);
-                    }
-                }
-                self.ast.exprs.children_into(e, &self.ast.lists, &mut work);
-            }
-        }
-        for i in used {
+        for i in self.post_odr_used_params(&of_params, stmts) {
             let Some(&p) = decl_params.get(i) else { continue };
             let n = *self.ast.decls.get(p);
             let Some(t) = n.ty() else { continue };
@@ -417,6 +397,63 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 self.ast.decls.set_flags(p, DeclFlags::INVALID);
             }
+        }
+    }
+
+    /// The indices into `params` of the parameters a postcondition among
+    /// `stmts` odr-uses, in first-use order.
+    fn post_odr_used_params(&self, params: &[DeclId], stmts: &[StmtId]) -> Vec<usize> {
+        let mut used = Vec::new();
+        for &s in stmts {
+            if self.ast.stmts.contract_kind(s) != ContractKind::Post {
+                continue;
+            }
+            let mut work = vec![self.ast.stmts.contract_cond(s)];
+            while let Some(e) = work.pop() {
+                if self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
+                    && self.ast.exprs.non_odr_use(e) == kiln_ast::expr::NonOdrUse::None
+                {
+                    let d = self.ast.exprs.decl(e);
+                    if let Some(i) = params.iter().position(|&p| p == d)
+                        && !used.contains(&i)
+                    {
+                        used.push(i);
+                    }
+                }
+                self.ast.exprs.children_into(e, &self.ast.lists, &mut work);
+            }
+        }
+        used
+    }
+
+    /// [dcl.fct.def.coroutine]/6 (note), [dcl.contract.func]: a
+    /// postcondition of the coroutine `f` odr-uses no non-reference
+    /// parameter (it would read the parameter after the coroutine copied
+    /// it into its frame). Checked when the body turns out a coroutine.
+    pub(crate) fn check_coroutine_post_params(&mut self, f: DeclId) {
+        // The seq is on `f` or, for a definition that omits it, on the
+        // first declaration, whose parameters the predicates name.
+        let owner = if self.ast.decls.cold.contracts.get(f).is_some() { f } else { self.ast.first(f) };
+        let stmts = self.function_contracts(owner);
+        if stmts.is_empty() {
+            return;
+        }
+        let params_of = |s: &Self, d: DeclId| -> Vec<DeclId> {
+            s.ast.decls.function(d).map(|x| s.ast.lists.iter::<DeclId>(x.params).collect()).unwrap_or_default()
+        };
+        let owner_params = params_of(self, owner);
+        let params = params_of(self, f);
+        for i in self.post_odr_used_params(&owner_params, &stmts) {
+            let Some(&p) = params.get(i) else { continue };
+            let n = *self.ast.decls.get(p);
+            let Some(t) = n.ty() else { continue };
+            if self.ast.types.is_reference(t) || n.has(DeclFlags::INVALID) {
+                continue;
+            }
+            let msg = self
+                .diag(DiagId::sema_contract_coroutine_post_param, n.loc())
+                .arg(self.decl_name(p));
+            self.emit(msg);
         }
     }
 
