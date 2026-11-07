@@ -458,6 +458,20 @@ pub fn target_intrinsic(
     declare(m, name, ret, &params, &[], shape)
 }
 
+/// `ptr @llvm.thread.pointer()`, overloaded on the address space as
+/// `@llvm.thread.pointer.p0()` from LLVM 20 (`overloaded` when the
+/// consuming LLVM is 20 or later); `memory(none)` (WP-782).
+pub fn thread_pointer(m: &mut Module, overloaded: bool) -> FuncId {
+    let p = ptr(m);
+    let name = if overloaded {
+        overloaded_name(m, "llvm.thread.pointer", &[p])
+    } else {
+        "llvm.thread.pointer".to_owned()
+    };
+    let none = MemoryEffects::all(ModRef::None);
+    declare(m, &name, p, &[], &[], Shape::Basic(Some(none)))
+}
+
 /// `ptr @llvm.returnaddress(i32 immarg level)` (WP-432).
 pub fn returnaddress(m: &mut Module) -> FuncId {
     let p = ptr(m);

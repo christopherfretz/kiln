@@ -417,6 +417,11 @@ residual` (docs/status/wp-184-oracle-switch.md).
   (WP-288; libc++ `rand.dist.norm.lognormal/param_types.pass.cpp`;
   `tests/conformance/temp.res/qualified-name-through-typedef.cpp`,
   `qualified-name-through-typedef-run.cpp`).
+  A member enumeration of a specialization that is not instantiated
+  yet is classified in its pattern the same way, so `N c(N::US::Lazy);`
+  (with `US` a member of the base `G<N>`) finds the enumerator and
+  declares a variable ([dcl.ambig.res]/1; WP-782,
+  `dcl.ambig.res/member-enum-of-base-specialization-enumerator-run.cpp`).
 - A nested-name-specifier component naming a class or enumeration that
   is declared but not defined ([basic.lookup.qual]/1, [class.mem]/1:
   a class is complete only after its definition) is "incomplete type
@@ -1710,7 +1715,11 @@ and returns the scope it names:
     class.union.anon/empty-anonymous-record-declares-nothing.cpp.
   - An anonymous struct outside a class is an error.
   - `act_on_finish_record_definition(r, then_semi)` sets `ANONYMOUS`
-    and `HAS_VARIANT_MEMBERS`.
+    and `HAS_VARIANT_MEMBERS`. The parser passes `then_semi` false for
+    a class defined in a type-id: `using I = struct {...};` names an
+    ordinary unnamed class, so a member of type `I` keeps its default
+    member initializer (WP-782). Test:
+    class.union.anon/alias-of-unnamed-class-is-not-anonymous-run.cpp.
 - **Unnamed tags named by a typedef** record their typedef with
   `set_typedef_for_anon` ([dcl.typedef]/9).
 

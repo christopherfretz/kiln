@@ -1155,6 +1155,7 @@ never recomputed (ast.md §5). The rules follow [temp.dep.expr],
 | `UnresolvedLookupExpr` | TYPE \| VALUE \| INST if any explicit template arg is dependent; otherwise `requires_adl` decides at the `CallExpr` |
 | a lambda in a dependent context | INST |
 | a named or C-style cast to a dependent type (`dependent_cast`) | its type's deps; the value category is the target's, read through sugar (`static_cast<result_type>(b)` with `typedef X<R>& result_type;` is an lvalue, rebuilt as a reference cast; libstdc++ future:751; WP-332, test `expr.static.cast/libstdcxx-dependent-cast-to-reference-typedef.cpp`) |
+| `CXXUnresolvedConstructExpr` (`T(args)`, `T{args}`) | its type's deps; an argument's TYPE becomes VALUE unless the type is an undeduced placeholder (`auto(x)`, CTAD), which stays TYPE-dependent ([temp.dep.expr]/3: `u16(t.v)` has type `u16`, so `RP d(u16(t.v));` is direct-initialized at definition; WP-775, `temp.dep.expr/functional-cast-not-type-dependent-run.cpp`; the placeholder case WP-782, `temp.dep.expr/p3-placeholder-functional-cast-type-dependent-run.cpp`) |
 | any of the above with an error operand | plus ERROR |
 
 INST alone means the expression mentions a template parameter but neither
@@ -1590,6 +1591,16 @@ template), so `I` in `template<class I> struct cmp<I, void> { int f()
 chrono:2449, ranges:1888. Tests:
 `temp.spec.partial.member/libstdcxx-member-partial-spec-params-in-body.cpp`,
 `temp.spec.partial.member/libstdcxx-constrained-member-partial-spec.cpp`.
+
+Out-of-line member template definitions ([temp.local]/7; WP-782): in
+`template<unsigned size> int P::f()` the definition's own template
+parameters (depth at or above the class's template levels) are found
+before the members of `P` and its bases, although their scope lies
+outside the re-entered class scope; the enclosing class template's own
+parameters are still hidden by members (`own_template_param_outside`
+in `kiln_sema/src/lookup.rs`; LLVM `AArch64InstPrinter.cpp`
+`printGPRSeqPairsClassOperand<unsigned size>`). Test:
+`temp.local/p7-member-template-param-not-hidden-out-of-line.cpp`.
 
 Out-of-line members of a partial specialization whose argument list is
 the primary's own (`template<class V> requires fw<V> class C<V>`;
