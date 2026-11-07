@@ -947,6 +947,12 @@ impl Cg<'_> {
                 self.intrinsic_call(f, vec![]);
                 return Ok(BuiltinCall::Emitted(None));
             }
+            // P1494R5 (WP-757): an opaque memory barrier
+            // ([`Cg::emit_observable_checkpoint`]).
+            id::OBSERVABLE_CHECKPOINT => {
+                self.emit_observable_checkpoint()?;
+                return Ok(BuiltinCall::Emitted(None));
+            }
             id::TRAP | id::VERBOSE_TRAP => {
                 let f = kiln_llvm::intrinsics::trap(&mut self.m);
                 self.intrinsic_call(f, vec![]);

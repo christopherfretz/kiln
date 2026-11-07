@@ -290,6 +290,35 @@ fn wide_signed_mul_overflow_is_inline() {
     }
 }
 
+/// [intro.abstract]/5 (P1494R5): `__builtin_observable_checkpoint()`
+/// (GCC's builtin behind `std::observable_checkpoint`) is an empty
+/// `asm sideeffect` with a memory clobber, `nounwind` (spec/codegen.md
+/// "Observable checkpoints"). A store before it survives undefined
+/// behaviour after it at `-O2`, where it is otherwise removed.
+#[test]
+fn observable_checkpoint_is_an_opaque_barrier() {
+    let src = "int g;\n\
+               void with_cp() { g = 1; __builtin_observable_checkpoint(); __builtin_unreachable(); }\n\
+               void without() { g = 1; __builtin_unreachable(); }\n";
+    let ir = kiln_ir(src).unwrap_or_else(|e| panic!("kiln failed: {e}"));
+    let call = "call void asm sideeffect \"\", \"~{memory}\"() #";
+    let at = ir.find(call).unwrap_or_else(|| panic!("{ir}"));
+    let group = ir[at + call.len()..].split_whitespace().next().expect("attribute group");
+    assert!(ir.contains(&format!("attributes #{group} = {{ nounwind }}")), "{ir}");
+    // No call to a declared function: nothing for LTO to see through.
+    assert!(!ir.contains("@__builtin_observable_checkpoint"), "{ir}");
+    let optimizable = ir.replace(" noinline", "").replace(" optnone", "");
+    let o2 = ["-S", "-passes=default<O2>", "-o", "-"];
+    let Some(r) = pipe("opt-19", &o2, &optimizable) else { return };
+    let out = r.unwrap_or_else(|e| panic!("opt-19: {e}\n{ir}"));
+    let body = |name: &str| {
+        let start = out.find(&format!("@{name}()")).unwrap_or_else(|| panic!("{out}"));
+        out[start..].split("\n}").next().unwrap_or_default().to_owned()
+    };
+    assert!(body("_Z7with_cpv").contains("store i32 1, ptr @g"), "{out}");
+    assert!(!body("_Z7withoutv").contains("store"), "{out}");
+}
+
 /// (name, mode, program).
 const CASES: &[(&str, Mode, &str)] = &[
     ("int_lit_return", Exact, "int f() { return 42; }"),

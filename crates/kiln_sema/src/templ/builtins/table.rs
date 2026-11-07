@@ -492,6 +492,11 @@ pub static TABLE: &[Row] = &[
     // WP-484: GCC's (libstdc++ `<meta>` declares `std::is_string_literal`
     // over it); sema `builtin_is_string_literal`, the Oven `bi::STRING_LIT`.
     f("__builtin_is_string_literal", DONE, Oven::Yes),
+    // WP-757: GCC's P1494R5 observable checkpoint (libstdc++ `<utility>`
+    // declares `std::observable_checkpoint` over it); codegen lowers it to
+    // an opaque memory barrier; the Oven evaluates it as a no-op, as GCC
+    // does (spec/codegen.md "Observable checkpoints").
+    f("__builtin_observable_checkpoint", DONE, Oven::Yes),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.
@@ -528,9 +533,9 @@ pub fn has_builtin_staged(name: &str) -> Option<bool> {
 }
 
 /// Whether `name` is a GCC builtin clang does not have, which kiln
-/// implements and reports through `__has_builtin` (WP-484).
+/// implements and reports through `__has_builtin` (WP-484, WP-757).
 pub fn gcc_only(name: &str) -> bool {
-    matches!(name, "__builtin_is_string_literal")
+    matches!(name, "__builtin_is_string_literal" | "__builtin_observable_checkpoint")
 }
 
 /// The staged `__has_constexpr_builtin(name)` answer: `Some(false)` for a

@@ -759,6 +759,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-746 | P2841R7 concept and variable-template template parameters | WP-732 | P2841R7 partial: concept/variable TTPs, kinds, concept-dependent constraints, mangling (#336) |
 | WP-743 | C++26 DIS: trivial unions P3074R7 + union lifetime P3726R2 + P3475R2 core (Oven union lifetime) | WP-732 | P3074R7 done, P3726R2 partial (Oven union lifetime), P3475R2 core done (#337) |
 | WP-733 | triage untested DRs P4143, P4149, P3769 (docs/STANDARD_SUPPORT.md:393-395) | WP-706 | open |
+| WP-757 | Croydon DRs P4143/P4149/P3769 conformance + P1494 observable checkpoint builtin | WP-733 | in progress |
 | WP-734 | P2308 diag nits: nested braced scalar warning, excess-elements note at the parameter (crates/kiln_sema/src/templ/nttp.rs:619) | WP-706 | open |
 | WP-736 | codegen+sema: remaining AArch64 ACLE builtins (ldrex/strex/ldaex/stlex need elementtype on llvm.aarch64.ldxr/stxr; rsr/wsr, rint*, jcvt, rndr, ld64b/st64b, gcs, chkfeat, prefetch, trap, clrex) at `crates/kiln_codegen/src/arm.rs:129`; exclusive-builtin size check + discarded-qualifiers warning in `crates/kiln_sema/src/builtins.rs` | WP-724 | open |
 | WP-737 | pp: `__has_builtin(__dmb)` is 1 in MS modes but `__dmb` and relatives are undeclared (`crates/kiln_pp/src/features.rs`) | WP-724 | open |
