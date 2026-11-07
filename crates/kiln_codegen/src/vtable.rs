@@ -1921,6 +1921,12 @@ impl Cg<'_> {
             TypeView::ConstantArray(_) | TypeView::IncompleteArray(_) => {
                 "_ZTVN10__cxxabiv117__array_type_infoE"
             }
+            // clang `BuildTypeInfo`: vector and complex types are not
+            // in the C++ runtime, so their `__fundamental_type_info` is
+            // emitted where used, like a class's.
+            TypeView::Vector { .. } | TypeView::Complex(_) => {
+                "_ZTVN10__cxxabiv123__fundamental_type_infoE"
+            }
             _ => return err(None, format!("RTTI for type `{name}` is not supported yet")),
         };
         let pre = self.reserve_rtti(&name);
