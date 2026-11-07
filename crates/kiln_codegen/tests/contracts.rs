@@ -145,8 +145,10 @@ fn enforce_golden() {
             "ret void",
         ],
     );
-    assert!(ir.contains("c\"contract violation in function %s at %s:%u: %s\\0A[assertion_kind: %s, \
-                         semantic: %s, mode: %s, terminating: %s]\\0A\\00\""));
+    assert!(ir.contains(
+        "c\"contract violation in function %s at %s:%u: %s\\0A[assertion_kind: %s, \
+                         semantic: %s, mode: %s, terminating: %s]\\0A\\00\""
+    ));
 }
 
 // [basic.contract.eval]/7: an exception escaping the predicate is a
