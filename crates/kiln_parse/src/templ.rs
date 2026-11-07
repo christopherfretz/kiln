@@ -1438,7 +1438,14 @@ impl Parser<'_, '_> {
             };
             return Some(self.s.act_dependent_name_at(q.nns, name, targs, kw, name_loc));
         }
-        let class = self.s.classify_name(name, Some(q.ctx));
+        let mut class = self.s.classify_name(name, Some(q.ctx));
+        if !template_kw
+            && !self.at(Punct::Less)
+            && matches!(class, NameClass::TypeTemplate(_))
+            && let Some(c) = self.s.injected_specialization_name(name, Some(q.ctx))
+        {
+            class = c;
+        }
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
             if let NameClass::TypeTemplate(d) = class {
                 self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
