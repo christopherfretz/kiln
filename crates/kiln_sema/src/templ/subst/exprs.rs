@@ -310,7 +310,15 @@ impl Substituter<'_, '_, '_> {
             ExprKind::UnaryOperator => {
                 let op = ex(self).unary_op(e);
                 let o = ex(self).operand(e);
-                let o = self.expr(o)?;
+                // `&C::m` stays the qualified name, not `this->C::m`
+                // (`Sema::act_on_address_operand_id`).
+                let addr = op == kiln_ast::expr::UnaryOp::AddrOf
+                    && self.sema.ast.exprs.get(o).kind() == ExprKind::DeclRefExpr
+                    && ex(self).decl_ref_extra(o).is_some_and(|x| x.qualifier.is_some());
+                let saved = std::mem::replace(&mut self.sema.address_operand, addr);
+                let o = self.expr(o);
+                self.sema.address_operand = saved;
+                let o = o?;
                 Ok(self.sema.act_on_unary(op, o, loc))
             }
             ExprKind::BinaryOperator => {

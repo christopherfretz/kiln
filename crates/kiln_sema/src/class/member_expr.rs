@@ -197,6 +197,13 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         }
         let qualified = nns.is_some();
+        // `&C::m` in a lambda: the operand is the name, not `this->C::m`,
+        // whose `this` the lambda would capture (clang's
+        // `BuildPossibleImplicitMemberExpr` with `isAddressOfOperand`).
+        let addr_operand = std::mem::take(&mut self.address_operand);
+        if addr_operand && qualified && !self.lambdas.is_empty() {
+            return self.member_ref_without_object(d, loc, shadow, nns);
+        }
         if let Some(class) = self.implicit_object_class(d)
             && let Some((this_ty, _)) = self.this_class()
         {

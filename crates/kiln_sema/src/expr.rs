@@ -1595,6 +1595,23 @@ impl Sema<'_, '_> {
         self.act_on_id_expression_dn(DeclName::ident(name), loc, qualifier)
     }
 
+    /// [`Self::act_on_id_expression`] for a qualified name that is the
+    /// whole operand of unary `&` (clang's `isAddressOfOperand`): in a
+    /// lambda, a non-static member it names forms no implicit member
+    /// access, so `&C::m` does not capture `this` ([expr.prim.id.general]/3,
+    /// [expr.prim.lambda.capture]/8).
+    pub fn act_on_address_operand_id(
+        &mut self,
+        name: Symbol,
+        loc: Loc,
+        qualifier: Option<crate::using::Qualifier>,
+    ) -> ExprId {
+        let saved = std::mem::replace(&mut self.address_operand, true);
+        let e = self.act_on_id_expression(name, loc, qualifier);
+        self.address_operand = saved;
+        e
+    }
+
     /// The qualifier's begin `b` of the overload-set reference `e` named
     /// at `loc` (clang's `OverloadExpr::getBeginLoc`).
     fn set_overload_begin(&mut self, e: ExprId, begin: Option<Loc>, loc: Loc) {

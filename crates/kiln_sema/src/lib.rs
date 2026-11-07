@@ -338,6 +338,9 @@ pub struct Sema<'a, 'sm> {
     pub(crate) func: Option<stmt::FnState>,
     /// Depth of unevaluated operands (`sizeof`, `alignof`).
     pub(crate) unevaluated: u32,
+    /// The id-expression being built is a qualified name that is the
+    /// whole operand of unary `&` ([`Sema::act_on_address_operand_id`]).
+    pub(crate) address_operand: bool,
     /// [`stmt::FnState::volatile_assigns`] outside a function body (a
     /// namespace-scope initializer, a default member initializer).
     pub(crate) volatile_assigns: Vec<ExprId>,
@@ -1066,6 +1069,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ctx: tu,
             func: None,
             unevaluated: 0,
+            address_operand: false,
             volatile_assigns: Vec::new(),
             decltype_calls: Vec::new(),
             agg_list_end: None,

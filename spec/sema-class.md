@@ -372,6 +372,17 @@ SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
   not a base, the error is clang's "'B::m' is not a member of class
   'D<T>'". `&B::m` is a pointer to member, never an implicit access
   (the `&` operand undoes it).
+- **`&C::m` is not an implicit access** ([expr.unary.op]/4,
+  [expr.prim.lambda.capture]/7). When a qualified id-expression is the
+  whole operand of `&` (the parser's `addr_operand_at`, clang's
+  `isAddressOfOperand`: no `(` around it and no postfix suffix after
+  it), sema names the member through `act_on_address_operand_id`.
+  Inside a lambda the member is then not rebuilt as `this->C::m`, so it
+  captures nothing and the operand forms the pointer to member. The
+  substituted `&C::m` of a template does the same. `&(C::m)`,
+  `&C::a[0]` and a plain `C::m` stay implicit accesses and need `this`
+  (tests `expr.prim.lambda/member-pointer-no-this-capture.cpp`,
+  `member-pointer-this-capture-errors.cpp`).
 - In a `const` member function, members through `this` are const unless
   `mutable` ([expr.ref]/6): `cannot assign to non-static data member within
   const member function 'f'` + `member function 'K::f' is declared const here`.
