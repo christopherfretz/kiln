@@ -5862,6 +5862,15 @@ impl Sema<'_, '_> {
             return self.recover_err(&[e], loc);
         }
         self.check_unevaluated_side_effects(e);
+        // A type-dependent operand whose type is not itself dependent (a
+        // static data member of the current instantiation declared as an
+        // array of unknown bound, [temp.dep.expr]/3) is checked at
+        // instantiation (clang `CreateUnaryExprOrTypeTraitExpr`).
+        if self.ast.exprs.get(e).is_type_dependent() && !self.is_dependent_type(self.ety(e)) {
+            let st = self.size_type();
+            return self.builder().trait_of_expr(kind, e, st, loc);
+        }
+        let e = self.complete_expr_array_bound(e);
         let ty = self.ety(e);
         // [expr.sizeof]/1: in C++ an expression of function type is an
         // error, not the GNU extension the type form gets.
@@ -5875,6 +5884,69 @@ impl Sema<'_, '_> {
         }
         let st = self.size_type();
         self.builder().trait_of_expr(kind, e, st, loc)
+    }
+
+    /// clang `completeExprArrayBound`: a (parenthesized) reference to a
+    /// static data member of a class template specialization declared as
+    /// an array of unknown bound instantiates the member's definition,
+    /// whose initializer or declarator gives the bound ([temp.inst]/4,
+    /// [dcl.array]/3), and names that definition with its type, so that
+    /// `sizeof(Ops)` sees the complete array. Anything else is returned
+    /// unchanged.
+    fn complete_expr_array_bound(&mut self, e: ExprId) -> ExprId {
+        let inner = self.ignore_parens(e);
+        let n = *self.ast.exprs.get(inner);
+        if n.kind() != ExprKind::DeclRefExpr
+            || n.is_type_dependent()
+            || !matches!(self.ast.types.canonical_view(n.ty()), TypeView::IncompleteArray(_))
+        {
+            return e;
+        }
+        let v = self.ast.exprs.decl(inner);
+        if self.kind_of(v) != DeclKind::Var
+            || self.ast.instantiated_from(self.ast.first(v)).is_none()
+            || self.inst_owner(self.ast.first(v)).is_none()
+        {
+            return e;
+        }
+        let loc = self.expr_loc(inner);
+        self.instantiate_static_member_def(self.ast.first(v), loc);
+        // The latest declaration that knows the bound: the instantiated
+        // definition (clang names `getDefinition()`).
+        let complete = |s: &Self, x: DeclId| {
+            s.ast.decls.get(x).ty().filter(|&t| {
+                !s.is_error_type(t)
+                    && !matches!(s.ast.types.canonical_view(t), TypeView::IncompleteArray(_))
+            })
+        };
+        let Some((def, dty)) =
+            self.ast.redecls_of(v).find_map(|x| complete(self, x).map(|t| (x, t)))
+        else {
+            return e;
+        };
+        let extra = self.ast.exprs.decl_ref_extra(inner).copied();
+        let odr = self.ast.exprs.non_odr_use(inner);
+        let r = self.builder().decl_ref(def, dty, n.loc(), extra, odr, ExprFlags::NONE);
+        if let Some(end) = self.ast.exprs.end_loc(inner) {
+            let _ = self.ast.exprs.cold.end_loc.insert(r, end);
+        }
+        // Rewrap the parentheses around the new reference.
+        let mut parens = Vec::new();
+        let mut x = e;
+        while x != inner && self.ast.exprs.get(x).kind() == ExprKind::ParenExpr {
+            parens.push(x);
+            x = self.ast.exprs.operand(x);
+        }
+        if x != inner {
+            return e;
+        }
+        let mut out = r;
+        for &p in parens.iter().rev() {
+            let pn = *self.ast.exprs.get(p);
+            let rparen = self.ast.exprs.end_loc(p).unwrap_or(pn.loc());
+            out = self.builder().paren(out, pn.loc(), rparen);
+        }
+        out
     }
 
     /// clang `CheckAlignOfExpr`: `alignof` of a data member (named,

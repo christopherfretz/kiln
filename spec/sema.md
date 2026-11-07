@@ -2024,6 +2024,15 @@ and returns the scope it names:
     result type's attribute wins over the callee's (clang
     `getUnusedResultAttr`); a call returning a reference has no by-value
     result. Not for a `void` call. Reported at the callee's start.
+  - `deprecated` takes an optional message string; the GNU spelling
+    `__attribute__((deprecated(msg, replacement)))` also a replacement
+    string (a fix-it's text, otherwise unused; LLVM's `LLVM_DEPRECATED`).
+    A second argument in `[[deprecated]]`, `[[gnu::deprecated]]` or
+    `__declspec` is `'deprecated' attribute takes no more than 1
+    argument` and the attribute still applies with its message; a third,
+    `takes no more than 2 arguments`; a non-string one, `expected string
+    literal as argument of 'deprecated' attribute` at it (clang
+    `handleDeprecatedAttr`, WP-730).
   - `deprecated` warns on use: a name, and a member named by a member
     access or an implicit `this->` (clang `DiagnoseUseOfDecl` in
     `BuildMemberReferenceExpr`, WP-203). Unlike clang, a non-dependent
@@ -4070,7 +4079,9 @@ function) elsewhere.
     clang `BuiltinAssumeAligned`): 2 or 3 arguments (`too few` / `too many
     ... at most` at the `)`); `p` decays and must convert to `const void *`
     (it keeps its own type); `a`, unless value-dependent, an integer
-    constant (`argument to '...' must be a constant integer` at the call),
+    constant of integral or unscoped enumeration type (an enumerator,
+    LLVM's `PickAlignment<T, A>::value`; WP-730) (`argument to '...'
+    must be a constant integer` at the call),
     a power of 2 (`requested alignment is not a power of 2`), warned above
     2^32 (`-Wbuiltin-assume-aligned-alignment`); `off` converts to
     `size_t`. The call is a `void *` prvalue.
@@ -4978,9 +4989,16 @@ and aggregate element types.
   selects the sized form, clang's C++14+ default); `-Wmismatched-new-delete`
   is not reported; a non-constant bound in a parenthesized type-id is a
   plain warning (clang's is an extension warning, so an error under
-  `-pedantic-errors`); `__hot_cold_t` overloads are not recognized;
-  default arguments of a user-declared allocation function are not
-  used (every parameter must be matched by an argument).
+  `-pedantic-errors`); `__hot_cold_t` overloads are not recognized.
+- **Default arguments of an allocation function** ([expr.new]/19,
+  [dcl.fct.default]; WP-730). The allocation call is an ordinary call: a
+  function whose parameters past the size (and alignment) and placement
+  arguments all have default arguments is viable, and the expression's
+  placement arguments are followed by `CXXDefaultArgExpr`s for them
+  (instantiated then for a class template's member), as clang's
+  `GatherArgumentsForCall`; a template instantiation drops them and
+  re-adds its own. The `requires N arguments` note counts only the
+  required parameters.
 
 ### 5.10 Immediate functions (`consteval.rs`, WP-133)
 clang's `CheckForImmediateInvocation`, `HandleImmediateInvocations` and
@@ -7827,6 +7845,10 @@ cv and ref qualifiers, and ` [T = int, ...]`: enclosing implicit class
 specializations' arguments (outermost first) then the function template
 specialization's, printed with their types (`2U`, `'a'`, packs
 `<int, char *>`, `x:auto` for a generic lambda's invented parameter).
+A type argument prints canonical with every name scoped, as clang stores
+the converted arguments: `[T = (anonymous namespace)::N::S]`,
+`[T = std::basic_string<char>]`, `[T = unsigned long]` for `size_t`
+(LLVM's `getTypeName<T>()` reads these; WP-730).
 The source-location builtins use the same printer (§9.5 of
 sema-templates.md), and a `__builtin_FUNCTION`/`__builtin_source_location`
 in a dependent context, or a default argument evaluating one used there,

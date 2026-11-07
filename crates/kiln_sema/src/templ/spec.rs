@@ -763,6 +763,14 @@ impl Sema<'_, '_> {
             self.ast.templates.add_moved_class_inst(after, spec);
         }
         self.instantiate_members_of(spec, name_loc, declaration, 0);
+        // The vtable of an explicit instantiation definition is emitted
+        // with it, so its virtual members are odr-used: an implicit
+        // virtual destructor is defined here (clang
+        // `ActOnExplicitInstantiation` -> `MarkVTableUsed(..., true)`;
+        // LLVM's `template class cl::opt<std::string>`).
+        if !declaration {
+            self.mark_vtable_used(spec, name_loc);
+        }
         Ok(spec)
     }
 
@@ -893,6 +901,9 @@ impl Sema<'_, '_> {
             }
         }
         self.instantiate_members_of(m, name_loc, declaration, 0);
+        if !declaration {
+            self.mark_vtable_used(m, name_loc);
+        }
     }
 
     /// Instantiates the definition of `spec` for an explicit
@@ -992,6 +1003,7 @@ impl Sema<'_, '_> {
                     } else {
                         SpecKind::ExplicitInstantiationDefinition
                     };
+                    let mut defined = false;
                     if let Some((i, _)) = self.ast.member_spec_info(self.ast.first(m)) {
                         self.ast.templates.update_member_spec(i, |x| {
                             let upgrade = !declaration
@@ -1004,10 +1016,14 @@ impl Sema<'_, '_> {
                                     )
                             {
                                 x.kind = kind;
+                                defined = !declaration;
                             }
                         });
                     }
                     self.instantiate_members_of(m, loc, declaration, depth + 1);
+                    if defined {
+                        self.mark_vtable_used(m, loc);
+                    }
                 }
                 _ => {}
             }
