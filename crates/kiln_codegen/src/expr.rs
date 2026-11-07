@@ -3089,6 +3089,16 @@ impl Cg<'_> {
                     // copied (clang `EmitAggFinalDestCopy`).
                     return self.emit_va_arg(e, None).map(|_| ());
                 }
+                if ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
+                    // clang `AggExprEmitter::VisitExprWithCleanups` keeps
+                    // the ignored slot: a discarded call on a temporary
+                    // (`M{}.e(E{}, 3);`) gets only `EmitCall`'s result
+                    // temporary, after the object's and the arguments'.
+                    let sc = self.begin_scope(false);
+                    let r = self.emit_ignored(self.sub(e));
+                    self.end_scope(sc);
+                    return r;
+                }
                 // clang `AggExprEmitter::withReturnValueSlot`: an ignored
                 // slot gives the call no address, so `EmitCall` makes its
                 // `sret`/coerce temporary after the arguments' `agg.tmp`s.

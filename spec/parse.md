@@ -967,7 +967,20 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - **Namespaces:**
   - `namespace N { }`, `inline namespace`, `namespace A::B { }`, and
     unnamed namespaces (§sema 4.6)
-  - `extern "C" { }` and `extern "C" decl` (`parse_linkage_spec`)
+  - `extern "C" { }` and `extern "C" decl` (`parse_linkage_spec_with`).
+    GNU `__attribute__((...))` specifiers before the `extern` (detected
+    by `at_gnu_attrs_before_linkage_spec`) belong to the contained
+    declaration's decl-specifiers, as in clang, where `ParseLinkage`
+    runs with the outer DeclSpec: for `extern "C" decl` they are handed
+    on through `lead_decl_attrs` (`__attribute__((section("s"))) extern
+    "C" int f(int);` puts `f` in section `s`), and before a braced body
+    they are accepted and dropped. A `[[...]]` or `alignas` list there,
+    alone or among the GNU ones, is `an attribute list cannot appear
+    here` at its start (clang `ProhibitAttributes`), and the
+    declaration is still parsed (WP-777, [dcl.link]/2;
+    `dcl.link/gnu-attributes-before-linkage-spec.cpp`,
+    `dcl.link/attribute-list-before-linkage-spec-errors.cpp`,
+    `tests/codegen/linkage_spec_gnu_attrs.cpp`).
   - `using namespace N;`
 - **Using-declarations and aliases** (`parse_using`, spec/sema.md §4.8):
   - `using a::x, ::b::y;`: each declarator is a nested-name-specifier
