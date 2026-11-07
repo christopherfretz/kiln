@@ -349,8 +349,8 @@ build = "cmake"
 cxx_std = 20
 configure = ["-DBUILD_TESTING=ON", "-DBOOST_INCLUDE_LIBRARIES=mp11;hana;fusion;mpl;pfr;describe;variant2;variant;spirit;yap;type_traits;tuple;optional;outcome;static_string;callable_traits;type_index;function_types;lambda2;hof", "-DKILN_BOOST_JAMFILE_LIBRARIES=hana;fusion;variant;spirit;yap;type_traits;callable_traits;hof", "-DCMAKE_PROJECT_Boost_INCLUDE=@OSS@/shims/boost-jamfile-tests.cmake"]
 build_targets = ["tests"]
-test = "ctest -j 4 --output-on-failure --timeout 300"
+test = "ctest -j 4 --output-on-failure --timeout 300 -E '^run-(variant-overload_selection|spirit-(karma_format_manip_attr|karma_generate_attr|lex_regression_matlib_static|lex_regression_matlib_switch|qi_match_manip_attr|qi_parse_attr)|yap-(user_expression_transform_1|user_expression_transform_2|call_expr|reference_returns|if_else))$'"
 c_compiler = "clang-19"
 wave = 4
 verified = false
-notes = "WP-787: header-only metaprogramming libraries. docs/status/oss/boost_meta.md."
+notes = "WP-787: header-only metaprogramming libraries. docs/status/oss/boost_meta.md. The 12 excluded tests do not compile under the clang-19 control either: yap's 5 (call to constructor of term<T> is ambiguous), variant overload_selection (variant.hpp:1615 no matching member), spirit's {karma,qi}_*_attr (BOOST_PP_ITERATE includes test_manip_attr.hpp, found through the b2 project's <include> requirement the shim does not read) and lex regression_matlib_* (matlib_static.h is written by another test's run)."
