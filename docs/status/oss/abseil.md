@@ -84,7 +84,7 @@ once those were fixed and more of the tree was built.
 | 4 | `&N::m` through a dependent base rejected (`any_invocable_test.cc`) | 1 | fixed, `d1b3ccfe7` | `tests/conformance/expr.unary.op/p3-qualified-member-unrelated-class-dependent-base-run.cpp` |
 | 5 | panic: `CXXMemberCallExpr callee is ParenExpr` (`(g.min)()`, random tests) | 7 | fixed, `95eaaf4f9` | `tests/conformance/expr.call/p1-parenthesized-member-callee-run.cpp` |
 | 6 | `no viable overloaded '='` (inherited constructors in a conversion; flat/node hash set/map tests) | 4 | fixed, `e36044e44` | `tests/conformance/namespace.udecl/p13-inherited-ctor-implicit-conversion-run.cpp` |
-| 7 | `use of undeclared identifier '__builtin_infer_alloc_token'` (`__has_builtin` said yes) | 1 | fixed, `0af1661ef` | `tests/conformance/cpp.cond/has-builtin-undeclared-clang22-builtin.cpp` |
+| 7 | `use of undeclared identifier '__builtin_infer_alloc_token'` (`__has_builtin` said yes) | 1 | fixed, `0af1661ef` | `tests/conformance/ext.gnu.builtins/has-builtin-undeclared-clang22-builtin.cpp` |
 | 8 | `static_assert` failed: `__builtin_is_cpp_trivially_relocatable` with a user-provided move (`type_traits_test.cc`) | 1 | fixed, `993fbb18b` | `tests/conformance/ext.traits/is-cpp-trivially-relocatable-user-move.cpp` |
 | 9 | `no type named 'raw_hash_set'` (a base specialization's injected-class-name) | 1 | fixed, `c9fd77fd8` | `tests/conformance/temp.local/p2-base-specialization-injected-name-run.cpp` |
 | 10 | `expected class name` (`btree`: a member named like the base class template) | 1 | fixed, `dd0e27067` | `tests/conformance/class.derived/p2-base-class-name-type-only-lookup-run.cpp` |
