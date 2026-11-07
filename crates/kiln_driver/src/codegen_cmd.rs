@@ -415,7 +415,9 @@ pub fn compile(
             drv.flush();
             return 1;
         }
-        warn_unused_link_inputs(args, inputs, &drv);
+        if !args.quiet_unused_arguments {
+            warn_unused_link_inputs(args, inputs, &drv);
+        }
     }
     let temp = TempDir::new();
     let plan = plan(args, tc, inputs, phase, &temp);
