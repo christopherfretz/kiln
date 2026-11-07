@@ -107,6 +107,9 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 self.recover(info, &[], loc)
             }
+            &[d] if qual.is_none() && self.reflect_local_across_lambda(d, name_loc) => {
+                self.recover(info, &[], loc)
+            }
             &[d] => self.reflect_entity(d, name_loc, loc, end),
             _ => self.reflect_overload_set(name_loc, loc),
         }

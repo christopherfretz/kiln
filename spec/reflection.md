@@ -828,6 +828,34 @@ position's operand).
   costs one instantiation, as expected.
 - **NTTPs.** A substituted `info` template argument is rebuilt as the
   `CXXReflectExpr` of the same entity (implemented).
+- **Locals across a lambda** (`splice_local.rs`; WP-781). `^^x` naming
+  a variable declared by an init-capture ([expr.reflect]/7.1.1) or a
+  local entity for which a lambda scope intervenes between its
+  declaration and the reflect-expression (/7.1.4) is ill-formed, at the
+  name, even in an unevaluated operand. A potentially-evaluated splice
+  designating such a local is ill-formed too ([expr.prim.splice]/2.1.4),
+  with a note at the declaration; an enclosing `typeid` does not make it
+  unevaluated (`Sema::enter_typeid_operand` marks the levels it adds, so
+  `typeid([: r :])` is rejected while `typeid(sizeof([: r :]))` and
+  `sizeof(typeid([: r :]))` are not), and `sizeof`/`decltype` operands
+  are fine. "Intervenes" walks the lexical context from the current one
+  to the local's home and fails at the first lambda call operator; the
+  lambda scope begins after the lambda-introducer ([basic.scope.lambda]),
+  so a lambda's declarator (parameter defaults, trailing return type) is
+  inside it, except for the lambda's own parameters, while an
+  init-capture's initializer is outside it. Neither form is an odr-use,
+  so neither captures, and a capture-default does not help. A splice
+  operand is a converted constant expression, so a constexpr local it
+  names (the `info` variable `r` itself) is not odr-used either
+  ([basic.def.odr]/5): a captureless lambda may splice a local `r`
+  holding a reflection of a namespace-scope variable or a type. Both
+  hold in contract predicates. GCC 16.1 rejects the same cases ("'^^'
+  cannot be applied a local entity for which there is an intervening
+  lambda expression"; "use of local variable with automatic storage from
+  containing function in a splice expression")
+  (`expr.reflect/p7-local-across-lambda.cpp`,
+  `expr.prim.splice/p2-local-across-lambda{,-run}.cpp`, `oracle: gcc`).
+  Not covered: /2.5's local of a non-enclosing function.
 
 ## 6. Defining classes
 
