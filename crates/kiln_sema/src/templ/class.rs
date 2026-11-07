@@ -361,7 +361,28 @@ impl Sema<'_, '_> {
                 let q = self.ast.types.qualify(ca, cp.quals());
                 return self.ast.types.canonical(q) == ct;
             }
-            TypeView::TemplateSpecialization { .. } => return true,
+            // A specialization recurses into its arguments (clang's
+            // `isSubstitutedType` on a `TemplateSpecializationType`)
+            // before the substitution is made: substituting
+            // `Set<typename GT<G>::NodeRef>` for a written `Set<N*>`
+            // would instantiate `GT<N*>` merely to print the name, ahead
+            // of a later explicit specialization ([temp.expl.spec]/7).
+            TypeView::TemplateSpecialization { args: pargs, .. } => {
+                let targs =
+                    types.as_record(ct).and_then(|r| self.ast.spec_info(r)).map(|(_, x)| x.args);
+                let Some(targs) = targs else { return true };
+                let pa: Vec<TemplateArg> = types.args(pargs).to_vec();
+                let ta: Vec<TemplateArg> = types.args(targs).to_vec();
+                if pa.len() != ta.len() {
+                    return true;
+                }
+                return pa.iter().zip(&ta).all(|(p, a)| match (p.view(), a.view()) {
+                    (ArgView::Type(p), ArgView::Type(a)) => {
+                        self.default_shape_matches(a, p, prefix, depth)
+                    }
+                    _ => true,
+                });
+            }
             _ => {}
         }
         if ct.quals() != cp.quals() {
@@ -1707,10 +1728,56 @@ impl Sema<'_, '_> {
             // constant evaluation, spec/sema-templates.md §4.11).
             self.instantiate_function_definition(f, loc);
             if self.ast.definition(f).is_none() {
-                self.queue_instantiation(f, loc);
+                self.queue_or_defer_instantiation(f, loc);
             }
         } else {
-            self.queue_instantiation(f, loc);
+            self.queue_or_defer_instantiation(f, loc);
+        }
+    }
+
+    /// [`Sema::queue_instantiation`], unless a default argument is being
+    /// converted outside any other function body: then `f` is recorded
+    /// for the default argument and queued where a call uses it.
+    fn queue_or_defer_instantiation(&mut self, f: DeclId, loc: Loc) {
+        let cur = self.func.as_ref().map(|s| s.decl);
+        if let Some((at, uses)) = self.inst.default_arg_uses.as_mut()
+            && *at == cur
+        {
+            uses.push((f, loc));
+            return;
+        }
+        self.queue_instantiation(f, loc);
+    }
+
+    /// Runs `conv`, the conversion of a default argument to its
+    /// parameter's type, giving the stored argument. Function
+    /// definitions it names are not instantiated yet: a default argument
+    /// is potentially evaluated only where a call uses it (clang's
+    /// `PotentiallyEvaluatedIfUsed` context, re-marked by
+    /// `CheckCXXDefaultArgExpr`), so `P<Incomplete> p = nullptr` does not
+    /// instantiate `~P<Incomplete>` until then ([temp.inst]/5,
+    /// [basic.def.odr]/8).
+    pub(crate) fn defer_default_arg_uses(
+        &mut self,
+        conv: impl FnOnce(&mut Self) -> kiln_ast::ExprId,
+    ) -> kiln_ast::ExprId {
+        let cur = self.func.as_ref().map(|s| s.decl);
+        let saved = self.inst.default_arg_uses.replace((cur, Vec::new()));
+        let e = conv(self);
+        let uses = std::mem::replace(&mut self.inst.default_arg_uses, saved);
+        if let Some((_, uses)) = uses.filter(|(_, u)| !u.is_empty()) {
+            self.inst.deferred_default_uses.insert(e, uses);
+        }
+        e
+    }
+
+    /// A call uses parameter `p`'s default argument at `loc`: the
+    /// instantiations its conversion deferred are queued now.
+    pub(crate) fn queue_default_arg_uses(&mut self, p: DeclId, loc: Loc) {
+        let Some(d) = self.ast.decls.param(p).and_then(|x| x.default_arg) else { return };
+        let Some(uses) = self.inst.deferred_default_uses.get(&d) else { return };
+        for (f, _) in uses.clone() {
+            self.note_used_for_instantiation(f, loc);
         }
     }
 }

@@ -352,6 +352,11 @@ pub(crate) enum MemberScope {
     Dependent,
 }
 
+/// The function whose body was current when a default argument's
+/// conversion began, and the member definitions (with the location of
+/// their use) the conversion named.
+pub(crate) type DefaultArgUses = (Option<DeclId>, Vec<(DeclId, Loc)>);
+
 /// The instantiation engine's state (spec/sema-templates.md §11.2).
 #[derive(Debug, Default)]
 pub struct InstState {
@@ -384,6 +389,14 @@ pub struct InstState {
     /// that depth (the definition's own), which the drain keeps active
     /// while the instantiations it required run (§4.4).
     pub(crate) drain_capture: Option<(usize, Option<stack::InstFrame>)>,
+    /// While a default argument is converted to its parameter's type:
+    /// the function whose body was current then, and the member
+    /// definitions the conversion would have queued for instantiation
+    /// (`Sema::defer_default_arg_uses`).
+    pub(crate) default_arg_uses: Option<DefaultArgUses>,
+    /// A default argument's deferred instantiations, keyed by the stored
+    /// default argument: queued where a call uses it.
+    pub(crate) deferred_default_uses: kiln_source::fx::FxHashMap<ExprId, Vec<(DeclId, Loc)>>,
     /// Inline static data members of specializations whose initializer
     /// is not instantiated yet ([temp.inst]/4: on first reference).
     pub(crate) deferred_inits: kiln_source::fx::FxHashSet<DeclId>,

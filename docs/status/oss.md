@@ -69,7 +69,7 @@ The loop:
 | `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | tests at parity |
 | `folly` | 3 | `v2026.10.26.00` | not started |
 | `leveldb` | 3 | `1.23` | tests at parity |
-| `llvm_project` | 3 | `llvmorg-19.1.7` | blocked (1 cluster) |
+| `llvm_project` | 3 | `llvmorg-19.1.7` | tests at parity |
 | `protobuf` | 3 | `v33.1` | tests at parity |
 | `rocksdb` | 3 | `v10.7.5` | tests at parity |
 <!-- /oss:projects -->
@@ -403,18 +403,12 @@ Failure clusters (kiln): none.
 | | kiln | clang-19 |
 |---|---|---|
 | configure | ok | ok |
-| build | rc 2 | ok |
-| TUs ok / failed | 372 / 1 | 373 / 0 |
-| links ok / failed | 2 / 0 | 3 / 0 |
-| tests passed / total | rc 1 | rc 1 |
-| wall | 229 s | 228 s |
-| peak TU RSS | 346 MB | 410 MB |
+| build | ok | ok |
+| TUs ok / failed | 1504 / 0 | 1504 / 0 |
+| links ok / failed | 4 / 0 | 4 / 0 |
+| tests passed / total | ok | ok |
+| wall | 841 s | 679 s |
+| peak TU RSS | 404 MB | 914 MB |
 
-Failure clusters (kiln): 1.
-
-1. **1x** `reject: error: member Q found in multiple base classes of different types`
-   - e.g. `$KILN/.oss/src/llvm_project/llvm/unittests/ADT/SimpleIListTest.cpp`: `$KILN/.oss/src/llvm_project/llvm/unittests/ADT/SimpleIListTest.cpp:608:11: error: member 'ilist_node' found in multiple base classes of different types`
-   - repro: `cd $KILN/.oss/build/llvm_project/kiln/unittests/ADT && kiln++ -DGTEST_HAS_RTTI=0 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I$KILN/.oss/build/llvm_project/kiln/unittests/ADT -I$KILN/.oss/src/llvm_project/llvm/unittests/ADT -I$KILN/.oss/build/llvm_project/kiln/include -I$KILN/.oss/src/llvm_project/llvm/include -I$KILN/.oss/src/llvm_project/third-party/unittest/googletest/include -I$KILN/.oss/src/llvm_project/third-party/unittest/googlemock/include -fPIC -fno-semantic-interposition -fvisibility-inlines-hidden -Werror=date-time -Werror=unguarded-availability-new -Wall -Wextra -Wno-unused-parameter -Wwrite-strings -Wcast-qual -Wmissing-field-initializers -pedantic -Wno-long-long -Wc++98-compat-extra-semi -Wimplicit-fallthrough -Wcovered-switch-default -Wno-noexcept-type -Wnon-virtual-dtor -Wdelete-non-virtual-dtor -Wsuggest-override -Wstring-conversion -Wmisleading-indentation -Wctad-maybe-unsupported -ffunction-sections -fdata-sections -O3 -DNDEBUG -std=c++17 -Wno-variadic-macros -Wno-gnu-zero-variadic-macro-arguments -fno-exceptions -funwind-tables -fno-rtti -Wno-suggest-override -MD -MT unittests/ADT/CMakeFiles/ADTTests.dir/SimpleIListTest.cpp.o -MF CMakeFiles/ADTTests.dir/SimpleIListTest.cpp.o.d -o CMakeFiles/ADTTests.dir/SimpleIListTest.cpp.o -c $KILN/.oss/src/llvm_project/llvm/unittests/ADT/SimpleIListTest.cpp`
-
-kiln test run: `bash: line 1: ./unittests/ADT/ADTTests: No such file or directory`
+Failure clusters (kiln): none.
 <!-- /oss:llvm_project -->

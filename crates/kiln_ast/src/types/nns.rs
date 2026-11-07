@@ -131,10 +131,21 @@ impl TypeContext {
             Nns::Namespace { prefix, ns } | Nns::NamespaceAlias { prefix, ns, .. } => {
                 (Nns::Namespace { prefix: None, ns }, prefix_flags(self, prefix))
             }
-            Nns::Type { prefix, ty, .. } => (
-                Nns::Type { prefix: None, ty: self.canonical(ty), template_kw: false },
-                prefix_flags(self, prefix) | self.qflags(ty),
-            ),
+            // A type naming a dependent name (`RegionT::` with `using
+            // RegionT = typename Tr::RegionT`) canonicalizes to that
+            // name's own qualifier and identifier (`Tr::RegionT::`), so
+            // both spellings name the same member ([temp.type]/1, clang
+            // `getCanonicalNestedNameSpecifier`).
+            Nns::Type { prefix, ty, .. } => {
+                let c = self.canonical(ty);
+                let canon = match self.view(c.ty()) {
+                    super::context::TypeView::DependentName { nns, name, .. } => {
+                        Nns::Identifier { prefix: Some(self.canonical_nns(nns)), name }
+                    }
+                    _ => Nns::Type { prefix: None, ty: c, template_kw: false },
+                };
+                (canon, prefix_flags(self, prefix) | self.qflags(ty))
+            }
             Nns::Identifier { prefix, name } => (
                 Nns::Identifier { prefix: prefix.map(|p| self.canonical_nns(p)), name },
                 prefix_flags(self, prefix) | TypeFlags::DEPENDENT_INSTANTIATION,
