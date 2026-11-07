@@ -1422,7 +1422,7 @@ impl<'a> AstNames<'a> {
                             out.push_str(", ");
                         }
                         match a.view() {
-                            crate::types::ArgView::Type(t) => {
+                            ArgView::Type(t) => {
                                 write_type(&ast.types, self, t, self.expr_types, out);
                             }
                             _ => crate::types::write_template_arg(&ast.types, self, *a, out),
