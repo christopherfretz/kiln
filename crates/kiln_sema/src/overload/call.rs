@@ -37,10 +37,17 @@ impl Sema<'_, '_> {
         // static member `key(const node<K>*)` of a class template beside
         // `key(const nb*)`, libstdc++ `_Rb_tree::_S_key`) is type-dependent,
         // and the call is resolved at instantiation (clang's
-        // `OverloadExpr` of decls in a dependent context; WP-366).
+        // `OverloadExpr` of decls in a dependent context; WP-366). So is
+        // a set with a member of a dependent class, templates included
+        // (clang's `computeDependence(OverloadExpr)`: a decl whose context
+        // is dependent): the SFINAE-selected static member templates
+        // `to_char_type<C = CharType>(std::uint8_t)` of a class template
+        // are resolved per instantiation (WP-668).
         let dependent = decls.iter().any(|&d| {
-            self.kind_of(d) != DeclKind::FunctionTemplate
-                && self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_dependent(t))
+            let n = self.ast.decls.get(d);
+            (self.kind_of(d) != DeclKind::FunctionTemplate
+                && n.ty().is_some_and(|t| self.ast.types.is_dependent(t)))
+                || n.ctx().is_some_and(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX))
         });
         let e = self.builder().unresolved_lookup_in(name, decls, adl, nns, None, dependent, loc);
         if naming.is_some() || found.iter().zip(decls).any(|(f, d)| f != d) {

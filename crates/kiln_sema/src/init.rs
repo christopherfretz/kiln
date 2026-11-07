@@ -1455,6 +1455,42 @@ impl Sema<'_, '_> {
         self.init_bases(def).is_empty() && self.init_fields(def).is_empty()
     }
 
+    /// `char s[] = {"..."}`, `char s[N]{"..."}`: a character array
+    /// initialized by a braced list whose first element is a string
+    /// literal is initialized from the literal ([dcl.init.string]/1, "an
+    /// appropriately-typed string-literal enclosed in braces";
+    /// [dcl.init.list]/3.3). A further element is clang's "excess
+    /// elements in char array initializer". `None` if the rule does not
+    /// apply.
+    fn braced_string_init(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        entity: Option<Loc>,
+    ) -> Option<ExprId> {
+        if !self.ast.types.is_array(ty) {
+            return None;
+        }
+        let Some(InitItem { value: InitValue::Expr(x), designator }) = l.items.first() else {
+            return None;
+        };
+        let x = *x;
+        let elem = self.ast.types.element(ty)?;
+        if !designator.is_empty() || !self.is_char_type(elem) || self.string_lit_of(x).is_none() {
+            return None;
+        }
+        if let Some(extra) = l.items.get(1) {
+            let at = match extra.value {
+                InitValue::Expr(e) => self.begin_loc(e),
+                InitValue::List(_) => extra.value.loc(self),
+            };
+            self.agg_excess.set(true);
+            let msg = self.diag(DiagId::sema_excess_initializers_in_char_array, at);
+            self.emit(msg);
+        }
+        Some(self.init_from_expr(ty, x, ConvCtx::Initialization, entity.unwrap_or(l.lbrace)))
+    }
+
     /// List-initialization ([dcl.init.list]/3).
     pub fn init_from_list(&mut self, ty: QualType, l: &InitList) -> ExprId {
         self.init_from_list_at(ty, l, None)
@@ -1514,6 +1550,9 @@ impl Sema<'_, '_> {
         if self.is_invalid_class(ty) {
             return self.recover(ty, &[], l.lbrace);
         }
+        if let Some(e) = self.braced_string_init(ty, l, entity) {
+            return e;
+        }
         if self.is_aggregate(ty) {
             // [dcl.init.list]/3.2: an aggregate class initialized from a
             // single element of the same or a derived class type is
@@ -1533,26 +1572,7 @@ impl Sema<'_, '_> {
                 self.emit(self.incomplete_note(msg, ty));
                 return self.recover(ty, &[], l.lbrace);
             }
-            let mut pos = 0;
-            let designated = self.in_template() && l.items.iter().any(|i| !i.designator.is_empty());
-            let outer = if designated { self.designator_pending.replace(Vec::new()) } else { None };
-            let outer_end = self.agg_list_end.replace(l.rbrace);
-            let e = self.check_aggregate(ty, &l.items, &mut pos, true, l.lbrace, l.rbrace);
-            self.agg_list_end = outer_end;
-            if designated {
-                let held = std::mem::replace(&mut self.designator_pending, outer);
-                if let Some(held) = held.filter(|h| !h.is_empty()) {
-                    self.designator_rewarn.insert(e, held);
-                }
-            }
-            if pos < l.items.len() {
-                self.excess(ty, &l.items[pos]);
-            }
-            if self.in_template() && l.items.iter().any(|i| !i.designator.is_empty()) {
-                // Instantiation rebuilds a designated list as written.
-                self.note_syntactic_list(e, l);
-            }
-            return e;
+            return self.aggregate_list_init(ty, l);
         }
         if self.is_vector_type(ty) {
             return self.vector_list_init(ty, l, entity.unwrap_or(l.lbrace));
@@ -1603,6 +1623,31 @@ impl Sema<'_, '_> {
             self.emit(self.ref_temp_noted(msg));
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
+    }
+
+    /// List-initialization of an aggregate from `l`'s elements
+    /// ([dcl.init.aggr]), an element left over being an excess one.
+    fn aggregate_list_init(&mut self, ty: QualType, l: &InitList) -> ExprId {
+        let mut pos = 0;
+        let designated = self.in_template() && l.items.iter().any(|i| !i.designator.is_empty());
+        let outer = if designated { self.designator_pending.replace(Vec::new()) } else { None };
+        let outer_end = self.agg_list_end.replace(l.rbrace);
+        let e = self.check_aggregate(ty, &l.items, &mut pos, true, l.lbrace, l.rbrace);
+        self.agg_list_end = outer_end;
+        if designated {
+            let held = std::mem::replace(&mut self.designator_pending, outer);
+            if let Some(held) = held.filter(|h| !h.is_empty()) {
+                self.designator_rewarn.insert(e, held);
+            }
+        }
+        if pos < l.items.len() {
+            self.excess(ty, &l.items[pos]);
+        }
+        if designated {
+            // Instantiation rebuilds a designated list as written.
+            self.note_syntactic_list(e, l);
+        }
+        e
     }
 
     /// List-initialization of a vector (clang `InitListChecker::

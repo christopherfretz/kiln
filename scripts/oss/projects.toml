@@ -51,8 +51,8 @@ configure = ["-DSPDLOG_BUILD_TESTS=ON", "-DSPDLOG_BUILD_EXAMPLE=OFF"]
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 1
-verified = false
-notes = "Tests fetch Catch2 v3 with FetchContent when it is not installed; bundled fmt by default."
+verified = true
+notes = "Tests fetch Catch2 v3.5.0 with FetchContent (built with the same compiler); bundled fmt by default. One ctest test (spdlog-utests: 179 Catch2 cases). WP-680."
 
 [catch2]
 url = "https://github.com/catchorg/Catch2"

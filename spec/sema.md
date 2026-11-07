@@ -1001,7 +1001,9 @@ Redeclaration and linkage rules:
 - **`this` in the declarator** ([expr.prim.this]/2):
   `act_on_start_this_scope(member, quals)` / `act_on_end_this_scope`
   bracket a member function's exception specification and trailing
-  return type, where `this` has type `cv X*`; member access into the
+  return type, where `this` has type `cv X*` (not a friend function's:
+  clang's `InitCXXThisScopeForDeclaratorIfRelevant`, WP-669,
+  `expr.prim.this/p2-not-in-friend-declarator.cpp`); member access into the
   class being defined is allowed there (and in NSDMIs, default
   arguments and bodies, which run after `}`). Anywhere else before the
   class's `}` (a static data member initializer, an array bound, an
@@ -1104,7 +1106,14 @@ Redeclaration and linkage rules:
 - `act_on_decltype(e)` ([dcl.type.decltype]): `DecltypeType` sugar
   over the declared type of an unparenthesized id-expression or member
   access, else `T&&`/`T&`/`T` by value category. The operand is
-  unevaluated.
+  unevaluated. An operand of `decltype` or `noexcept` that is a bound
+  member function (`obj.*pmf`, `obj.f`) or a builtin function name is
+  ill-formed ([expr.mptr.oper]/6, [expr.ref]): "reference to non-static
+  member function must be called" (with clang's "did you mean to call it
+  with no arguments?" when the member function, or the pointee function
+  type of `pmf`, takes none) or "builtin functions must be directly
+  called", so substituting one into a return type is a deduction failure
+  (`check_builtin_fn_use`, WP-669; `expr.mptr.oper/p6-bound-member-*.cpp`).
 - `auto` and `decltype(auto)` variables ([dcl.type.auto.deduct]): a
   top-level placeholder deduces the decayed, cv-stripped initializer
   type plus the written cv-qualifiers, or `decltype(e)`. A
@@ -1859,6 +1868,22 @@ and returns the scope it names:
   cannot be applied to types` for `[[clang::x]]` after a function
   declarator are not diagnosed. Tests:
   `tests/conformance/dcl.attr.grammar/thread-safety-*.cpp`.
+- **Known and ignored, no diagnostic: sanitizer and lifetime
+  attributes** (WP-667; table `IGNORED_CLANG_ATTRS` in `decl_attrs.rs`,
+  checked right after the thread-safety family). kiln has no sanitizers
+  and no `-Wdangling` analysis, so these attach nothing and get no
+  subject or argument check. `__attribute__((x))` (and `__x__`) for
+  every name; `[[clang::x]]` for `no_sanitize`, `no_sanitize_memory` and
+  `lifetimebound` (clang `Clang<"x">`); `[[gnu::x]]` for
+  `no_sanitize_address`, `no_sanitize_thread` and
+  `no_address_safety_analysis` (clang `GCC<"x">`), and for `no_sanitize`
+  from `-fclang-compat=22` (clang 22's spelling; unknown at 19). Any other
+  scope, and unscoped `[[x]]`, is an unknown attribute. Not yet: clang's
+  subject warnings (`'lifetimebound' attribute only applies to
+  parameters and implicit object parameters`), its `-Wdangling` warnings
+  and the unknown-sanitizer warning. Tests:
+  `tests/conformance/dcl.attr.grammar/sanitizer-*.cpp`,
+  `gnu-no-sanitize-clang{19,22}.cpp`.
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -4235,6 +4260,17 @@ expression or `try` block is diagnosed at its keyword except:
 Tests: `tests/conformance/expr.throw/no-exceptions-*.cpp`,
 `tests/conformance/except.pre/try-no-exceptions-*.cpp`.
 
+**Implicit move in `return`** (`stmt.rs` `return_operand`, WP-669;
+[class.copy.elision]/3, [expr.prim.id.unqual]/4). From C++23 (P2266)
+an operand naming an implicitly movable entity is an xvalue. Before
+C++23 the copy-initialization of the result is first tried, in a SFINAE
+frame, with the operand as an xvalue; when that fails other than by
+selecting a deleted constructor or function, the operand is used as the
+lvalue it is (clang's `PerformMoveOrCopyInitialization`): `T& f(T&& t)
+{ return t; }` and a class with only a `C(C&)` copy constructor are
+accepted in C++20. `decltype(auto)` of `return (x);` is then `T&`.
+Test: `tests/conformance/class.copy.elision/p3-cxx20-two-stage.cpp`.
+
 ### 5.6 `typeid` (`rtti.rs`)
 `act_on_typeid(Ok(expr) | Err(type), loc, rparen)` ([expr.typeid]):
 an lvalue of type `const std::type_info`.
@@ -6579,7 +6615,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     `class.conv.fct/self-conversion-not-viable-diags.cpp`.
   - character arrays from string literals: the bound is deduced, and
     an over-long string is an error
-    (`initializer-string for char array is too long`, two arguments)
+    (`initializer-string for char array is too long`, two arguments).
+    The literal may be enclosed in braces ([dcl.init.string]/1,
+    [dcl.init.list]/3.3): a braced list (top level, member or element)
+    for a character array whose first element is a string literal
+    initializes the array from it (`braced_string_init`), and a further
+    element is `excess elements in char array initializer` (WP-668;
+    tests `tests/conformance/dcl.init.string/braced-string-literal-*.cpp`)
   - an array from an expression that is not a braced list or (for a
     character array) a string literal ([dcl.init.general]/16.5) is
     `array initializer must be an initializer list`, at the entity: the

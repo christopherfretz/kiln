@@ -8,6 +8,7 @@ note_access_implicit = Note (1) "implicitly declared {0:private|protected} here"
 note_access_member_declared = Note (0) "member is declared here";
 note_access_protected_noobject = Note (1) "must name member using the type of the current context {0}";
 note_access_protected_object = Note (1) "can only access this member on an object of type {0}";
+note_access_protected_restricted_ctordtor = Note (1) "protected {0:constructor|destructor} can only be used to {0:construct|destroy} a base class subobject";
 note_add_constexpr = Note (0) "add 'constexpr'";
 note_additional_parens_for_variable_declaration = Note (0) "add a pair of parentheses to declare a variable";
 note_alias_not_deducible = Note (2) "cannot deduce template arguments for '{0}' from {1}";
