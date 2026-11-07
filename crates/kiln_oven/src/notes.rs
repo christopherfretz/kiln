@@ -48,10 +48,8 @@ fn resolve_locs(b: &dyn SemaBridge, msg: &str) -> String {
         out.push_str(first);
     }
     while let (Some(raw), Some(rest)) = (parts.next(), parts.next()) {
-        let p = raw
-            .parse::<u32>()
-            .ok()
-            .and_then(|r| b.sources()?.presumed_line_col(Loc::from_raw(r)));
+        let p =
+            raw.parse::<u32>().ok().and_then(|r| b.sources()?.presumed_line_col(Loc::from_raw(r)));
         match p {
             Some(p) => {
                 let _ = write!(out, "{}:{}:{}", p.file_name, p.line, p.col);
@@ -1424,10 +1422,11 @@ impl Oven {
         let name = self.tname(ast, t);
         let decl = ast.types.as_record(self.types.info(t).q);
         match (decl, name.strip_suffix(')')) {
-            (Some(d), Some(head)) if head.ends_with("(anonymous union")
-                || head.ends_with("(anonymous struct")
-                || head.ends_with("(unnamed struct")
-                || head.ends_with("(unnamed union") =>
+            (Some(d), Some(head))
+                if head.ends_with("(anonymous union")
+                    || head.ends_with("(anonymous struct")
+                    || head.ends_with("(unnamed struct")
+                    || head.ends_with("(unnamed union") =>
             {
                 let raw = ast.decls.get(d).loc().to_raw();
                 let _ = write!(s, "{head} at {LOC_MARK}{raw}{LOC_MARK})");

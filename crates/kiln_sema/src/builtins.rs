@@ -1760,9 +1760,12 @@ impl Sema<'_, '_> {
         }
         let bad = if !self.is_aggregate(pointee) {
             Some(1)
-        } else if self
-            .eval_type_trait(kiln_ast::expr::TypeTrait::IsImplicitLifetime, &[(pointee, at)], at, rparen)
-            != Some(true)
+        } else if self.eval_type_trait(
+            kiln_ast::expr::TypeTrait::IsImplicitLifetime,
+            &[(pointee, at)],
+            at,
+            rparen,
+        ) != Some(true)
         {
             Some(2)
         } else {
