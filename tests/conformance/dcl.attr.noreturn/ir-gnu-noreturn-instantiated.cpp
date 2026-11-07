@@ -5,6 +5,7 @@
 // needs no `return`. kiln dropped the bit from the instantiated member's
 // type, so the call returned and fell off the end.
 //@ expect: ir
+//@ min-oracle: 22
 //@ strict-diags
 template <bool B> struct S {
   static void e() noexcept __attribute__((noreturn));
