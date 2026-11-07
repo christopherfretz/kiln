@@ -547,7 +547,8 @@ fn standard_attribute_values() {
     let f = cf("x86_64-unknown-linux-gnu", Std::Cxx26, &[]);
     for (name, v) in [
         ("assume", 202_207),
-        ("carries_dependency", 200_809),
+        // P3475R2 removes it from C++26 (WP-743).
+        ("carries_dependency", 0),
         ("deprecated", 201_309),
         ("fallthrough", 201_603),
         ("likely", 201_803),
@@ -564,6 +565,10 @@ fn standard_attribute_values() {
     // Scoped spellings name the vendor attribute, which has no date.
     assert_eq!(f.has_cpp_attribute(Some("_Clang"), "fallthrough"), 1);
     assert_eq!(f.has_cpp_attribute(Some("nosuch"), "fallthrough"), 0);
+    let f23 = cf("x86_64-unknown-linux-gnu", Std::Cxx23, &[]);
+    assert_eq!(f23.has_cpp_attribute(None, "carries_dependency"), 200_809);
+    assert_eq!(f23.has_cpp_attribute(None, "__carries_dependency__"), 200_809);
+    assert_eq!(f.has_cpp_attribute(None, "__carries_dependency__"), 0);
 }
 
 /// clang extensions: representative values and flag dependence.

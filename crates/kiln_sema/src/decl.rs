@@ -9776,8 +9776,12 @@ impl Sema<'_, '_> {
         }
         // [dcl.attr.indet] is C++26 (clang trunk's `LangOpts<"CPlusPlus26">`
         // spelling): below it, `indeterminate` is an unknown attribute.
-        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax)
-            .filter(|&k| k != AttrKind::INDETERMINATE || self.std >= kiln_lex::Std::Cxx26)
+        // P3475R2 removes `[[carries_dependency]]` from C++26 (WP-743): an
+        // unknown attribute there, as in clang 24.
+        let cxx26 = self.std >= kiln_lex::Std::Cxx26;
+        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax).filter(|&k| {
+            (k != AttrKind::INDETERMINATE || cxx26) && (k != AttrKind::CARRIES_DEPENDENCY || !cxx26)
+        })
         else {
             let id = if gnu && n == "format" {
                 DiagId::parse_attribute_ignored
