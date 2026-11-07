@@ -1103,6 +1103,11 @@ impl Sema<'_, '_> {
                     self.unsupported("this kind of member access", loc);
                     return self.recover_err(&[b], loc);
                 };
+                let (b, obj_class) =
+                    self.object_to_qualifier(b, arrow, obj_class, quals, nns, target);
+                if self.is_err_expr(b) {
+                    return b;
+                }
                 let written = self.member_qualifier_type(nns, target);
                 let b = self.object_to_class_as(
                     b,
@@ -1229,6 +1234,47 @@ impl Sema<'_, '_> {
             Some(p) => self.ast.types.elaborated(kiln_ast::types::TagKeyword::None, Some(p), ty),
             None => ty,
         })
+    }
+
+    /// A non-static member named `Q::m` with `Q` a base of the object's
+    /// class other than `target` (the member's class): the object is
+    /// converted to its `Q` subobject first, which picks one `target`
+    /// subobject when the class has several ([class.member.lookup]/8,
+    /// [expr.ref]/7; clang `PerformObjectMemberConversion`). The object
+    /// and the class it now has; the object unchanged otherwise.
+    #[allow(clippy::too_many_arguments, reason = "the object and both class types")]
+    pub(crate) fn object_to_qualifier(
+        &mut self,
+        b: ExprId,
+        arrow: bool,
+        obj_class: DeclId,
+        quals: Quals,
+        nns: Option<kiln_ast::NnsId>,
+        target: DeclId,
+    ) -> (ExprId, DeclId) {
+        let Some(nns) = nns else { return (b, obj_class) };
+        let kiln_ast::types::Nns::Type { ty, .. } = self.ast.types.nns_view(nns) else {
+            return (b, obj_class);
+        };
+        let Some(q) = self.ast.types.as_record(ty) else { return (b, obj_class) };
+        let q = self.ast.definition(q).unwrap_or(q);
+        if same_class(self, q, obj_class)
+            || same_class(self, q, target)
+            || !is_derived_from(self, obj_class, q)
+        {
+            return (b, obj_class);
+        }
+        let written = self.member_qualifier_type(Some(nns), q);
+        let b = self.object_to_class_as(
+            b,
+            arrow,
+            obj_class,
+            quals,
+            (q, written),
+            quals,
+            CastKind::UncheckedDerivedToBase,
+        );
+        (b, q)
     }
 
     /// Converts the object `b` (a pointer for `arrow`) of class
@@ -1654,8 +1700,13 @@ impl Sema<'_, '_> {
             return None;
         }
         let to_q = (oq & CV) | (mq & CV);
+        let nns = self.ast.exprs.decl_ref_extra(x).and_then(|e| e.qualifier);
+        let (via, obj_class) = self.object_to_qualifier(base, arrow, obj_class, oq, nns, declaring);
+        if self.is_err_expr(via) {
+            return None;
+        }
         let b = self.object_to_class(
-            base,
+            via,
             arrow,
             obj_class,
             oq,

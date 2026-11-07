@@ -2477,7 +2477,15 @@ access, out-of-line declarator scope.**
   up first, [basic.lookup.qual.general]/2), then `act_on_member_q` /
   `act_on_template_member_q`. `qualifier_names_base` checks the
   qualifier names the object's class or a base
-  (`sema_qualified_member_of_unrelated`).
+  (`sema_qualified_member_of_unrelated`). A non-static member named
+  `Q::m`, with `Q` a base other than the member's class, converts the
+  object to its `Q` subobject first and then to the member's class
+  (`object_to_qualifier`, for fields and the implicit object argument of a
+  call, implicit `this` included; [class.member.lookup]/8, clang
+  `PerformObjectMemberConversion`), so a class with two subobjects of the
+  member's class reaches either one (WP-726;
+  `class.member.lookup/p8-qualifier-selects-subobject.cpp`,
+  `tests/codegen/qualified_member_subobject.cpp`).
 - *Out-of-line declarator scope* ([dcl.meaning]/1, [basic.scope.class]/1;
   clang `ActOnCXXEnterDeclaratorScope`): after a qualified declarator-id
   the parser calls `act_on_enter_declarator_scope(qualifier) -> usize`,
