@@ -356,7 +356,12 @@ impl Substituter<'_, '_, '_> {
         for p in old {
             let n = *self.sema.ast.decls.get(p);
             let Some(pi) = self.sema.ast.template_parm(p).copied() else { return Err(SubstFail) };
-            let h = kiln_ast::DeclHead::new(self.sema.ctx, n.name(), n.loc());
+            let mut h = kiln_ast::DeclHead::new(self.sema.ctx, n.name(), n.loc());
+            // An invented parameter ([dcl.fct]/22, a generic lambda's
+            // `auto`) stays implicit, so it still prints as `auto`.
+            if n.flags().contains(kiln_ast::decl::DeclFlags::IMPLICIT) {
+                h = h.flags(kiln_ast::decl::DeclFlags::IMPLICIT);
+            }
             let np = match n.kind() {
                 DeclKind::TemplateTypeParm => self.sema.builder().template_type_parm(
                     h,

@@ -1415,6 +1415,18 @@ impl Sema<'_, '_> {
         if self.func.as_ref().is_some_and(|f| f.auto_ret.is_some()) {
             ret = self.deduce_return(value, loc);
         }
+        // A `return` in a lambda whose call operator has a GNU
+        // `noreturn` function type (spec/types.md §5.4; not
+        // `[[noreturn]]`, a declaration attribute) is an error (clang
+        // `ActOnCapScopeReturnStmt`, `err_noreturn_lambda_has_return_expr`;
+        // WP-752).
+        if self.is_lambda_call_op(fdecl) {
+            let t = &self.ast.types;
+            let fty = self.ast.decls.get(fdecl).ty();
+            if fty.and_then(|q| t.proto(q)).is_some_and(|p| p.info().noreturn()) {
+                self.error(DiagId::sema_noreturn_lambda_has_return_expr, loc);
+            }
+        }
         let ret_void = self.ast.types.is_void(ret);
         let fname = self.decl_name(fdecl);
         let mut candidate = None;
@@ -1740,8 +1752,15 @@ impl Sema<'_, '_> {
             // [dcl.attr.noreturn]/2: control reaching the end of a
             // `noreturn` function (clang `warn_falloff_noreturn_function`,
             // ahead of the return-type check).
+            // A lambda's is an error (clang `MakeForLambda`'s
+            // `err_noreturn_lambda_has_return_expr`, WP-752).
             if !naked && self.falls_off(body) != Falloff::Never {
-                self.error(DiagId::sema_falloff_noreturn, rbrace);
+                let id = if self.is_lambda_call_op(state.decl) {
+                    DiagId::sema_noreturn_lambda_has_return_expr
+                } else {
+                    DiagId::sema_falloff_noreturn
+                };
+                self.error(id, rbrace);
             }
             self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
             return wrapped;

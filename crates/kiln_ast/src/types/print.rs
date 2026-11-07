@@ -605,12 +605,35 @@ pub fn write_arg_list_prefix(
     len: usize,
     out: &mut String,
 ) {
+    arg_list_prefix_with_scope(ctx, names, l, len, false, out);
+}
+
+/// [`write_arg_list_prefix`] with every type argument's scope printed,
+/// as [`write_arg_list_scoped`] (`<T *, N::M::Y>`).
+pub fn write_arg_list_prefix_scoped(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    l: ArgListId,
+    len: usize,
+    out: &mut String,
+) {
+    arg_list_prefix_with_scope(ctx, names, l, len, true, out);
+}
+
+fn arg_list_prefix_with_scope(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    l: ArgListId,
+    len: usize,
+    scope: bool,
+    out: &mut String,
+) {
     let mut p = Printer {
         ctx,
         names,
         out: std::mem::take(out),
         empty_ph: true,
-        scope: false,
+        scope,
         suppress_tag: false,
         c_policy: false,
         split_closers: false,
@@ -618,7 +641,7 @@ pub fn write_arg_list_prefix(
         inside_cc_attr: false,
         diag_desugar: false,
         in_tst_args: false,
-        scoped_args: false,
+        scoped_args: scope,
         canon_args: false,
         written_tags: false,
         c22: names.clang_compat() >= 22,

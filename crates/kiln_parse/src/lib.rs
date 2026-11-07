@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use kiln_ast::Ast;
 use kiln_ast::mem::MemReport;
-use kiln_ast::types::TypeContext;
+use kiln_ast::types::{TypeContext, TypeOptions};
 use kiln_diag::DiagEngine;
 use kiln_lex::Std;
 use kiln_lex::literal::{EncodingParams, LiteralOptions};
@@ -265,7 +265,12 @@ pub fn parse_preprocessed<'a, 'sm>(
         std::ptr::eq(Arc::as_ptr(&interner), std::ptr::from_ref(pp.interner())),
         "the AST and the preprocessor share an interner"
     );
-    let ast = Ast::new(interner, TypeContext::new(target.types.clone()));
+    // Before C++17 the exception specification is not part of the
+    // function type ([except.spec], pre-P0012): canonical function types
+    // drop it, so type identity, mangling and `typeid` ignore `noexcept`
+    // (spec/types.md §5.4).
+    let type_opts = TypeOptions { noexcept_in_type: opts.std >= Std::Cxx17 };
+    let ast = Ast::new(interner, TypeContext::with_options(target.types.clone(), type_opts));
     let lit_opts = LiteralOptions::new(opts.std, encoding_params(&target));
     let mut s = Sema::for_target(ast, diags, target);
     s.set_constexpr_limits(limits.budget, limits.backtrace_limit);

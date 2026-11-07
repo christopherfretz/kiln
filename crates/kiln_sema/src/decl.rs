@@ -3082,6 +3082,21 @@ impl Sema<'_, '_> {
         self.ast.types.same_type(a, b)
     }
 
+    /// Type identity of function types `a` and `b`, their exception
+    /// specifications included: before C++17 the specification is not
+    /// part of the type, but the declarations of a function must still
+    /// agree on it ([except.spec]/5; spec/types.md §5.4).
+    pub(crate) fn same_type_and_exc(&self, a: QualType, b: QualType) -> bool {
+        let t = &self.ast.types;
+        if !t.same_type(a, b) {
+            return false;
+        }
+        t.options().noexcept_in_type || {
+            let id = kiln_ast::types::TypeContext::exc_identity;
+            id(self.written_exc_spec(a)) == id(self.written_exc_spec(b))
+        }
+    }
+
     /// The exception specification of function type `q` as written (the
     /// canonical one when `q` is sugar over the function type).
     pub(crate) fn written_exc_spec(&self, q: QualType) -> ExcSpec {
@@ -3867,7 +3882,7 @@ impl Sema<'_, '_> {
             prev_ok = p;
             if let Some(p) = p {
                 let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
-                if !self.ast.types.same_type(pty, ty)
+                if !self.same_type_and_exc(pty, ty)
                     && self.written_exc_spec(ty) == ExcSpec::None
                     && !self.ast.decls.get(p).has(DeclFlags::INVALID)
                 {
@@ -4048,7 +4063,7 @@ impl Sema<'_, '_> {
                 // [except.spec]/5: a redeclaration without a specification.
                 let mut missing_err = false;
                 if !delayed
-                    && !self.ast.types.same_type(pty, ty)
+                    && !self.same_type_and_exc(pty, ty)
                     && self.written_exc_spec(ty) == ExcSpec::None
                     && self.same_ignoring_exc_spec(pty, ty)
                 {
@@ -4073,7 +4088,7 @@ impl Sema<'_, '_> {
                 };
                 if missing_err {
                     invalid_redecl = true;
-                } else if self.ast.types.same_type(pty, cmp) {
+                } else if self.same_type_and_exc(pty, cmp) {
                     prev_ok = Some(p);
                     // [dcl.spec.auto.general]/13: the redeclaration has
                     // the deduced return type.

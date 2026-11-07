@@ -3078,6 +3078,41 @@ This gives [temp.deduct.general]/8 directly:
   printed with the whole stack, and that specialization is marked
   invalid.
 
+**Immediate context (P4149R1, Croydon DR; WP-757).** [temp.deduct.general]/8
+now defines the immediate context as the substitution itself, excluding
+any instantiation it triggers and any lambda body, default argument,
+default member initializer or noexcept-specifier reached through it.
+kiln realises the boundary cases with frames:
+- `FrameKind::DefaultFunctionArg` is `Some(false)`. Substituting a local
+  class's or closure's member function declaration
+  (`Substituter::default_args`, `templ/subst/decls.rs`) pushes one such
+  frame per default argument at that argument's location, so an error in
+  it is a hard error with clang's "in instantiation of default function
+  argument expression for 'f<X>'" note, even under a deduction.
+- A lambda's noexcept-specifier that is value-dependent is substituted
+  under an `ExceptionSpec` frame (`Some(false)`) when the stack is in
+  SFINAE mode (`templ/subst/lambda.rs`), so an ill-formed one is an error
+  and not a deduction failure. clang 22 still treats it as a substitution
+  failure; outside SFINAE nothing changes.
+- A lambda body, a default member initializer and a class template
+  definition were already `Some(false)` frames (`LambdaSubstitution`,
+  `Nsdmi`, `TemplateInstantiation`); substitution failures in the
+  function type, template parameter types and alias templates stay
+  SFINAE.
+- **Template heads and lambda bodies** ([temp.pre]/2): a declaration in a
+  lambda body takes none of the template heads outside the lambda; those
+  await the declaration whose declarator holds the lambda (`template<class
+  T> auto f() -> decltype([] { int t; return t; }())`).
+  `Sema::lambda_head_floor` returns the head count recorded when the
+  innermost open lambda body began, and `take_template_head` stops below
+  it. Only lambdas from `lambda_base` up count: `in_inst_context` (the
+  point-of-instantiation switch, `templ/class.rs`) sets `lambda_base` to
+  `lambdas.len()` for its duration, because it clears the heads but not
+  the lambda stack, and a lambda around the point of instantiation must
+  not floor the instantiated declaration's heads.
+- Tests: `tests/conformance/temp.deduct.general/p4149-*.cpp`,
+  `tests/conformance/temp.pre/lambda-local-decl-in-declarator.cpp`.
+
 **Failure info** is attached to a non-viable candidate (§10.4):
 
 ```rust

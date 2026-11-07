@@ -751,6 +751,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-727 | harness: oss-build.sh tag check warns when two tags point at the checkout (`scripts/oss/oss-build.sh:67`; use `git tag --points-at HEAD`) | WP-716 | open |
 | WP-728 | sema: diagnose conflicting `section` placements (clang err_section_conflict; `crates/kiln_sema/src/decl.rs:9971`) | WP-716 | fixed by WP-750 (PR #335) |
 | WP-750 | correctness bundle 2: noreturn keeps noexcept/fn-type bits, noreturn on instantiation, class-scope __PRETTY_FUNCTION__, pre-C++17 exception spec in typedef, section conflicts | WP-728 | landed PR #335: 740, 747, 748, 749, 728 fixed; follow-ups WP-751..754 |
+| WP-756 | correctness bundle 3: pre-C++17 noexcept not in fn type/mangling, GNU noreturn on friend redecl/lambda placement, __PRETTY_FUNCTION__ noexcept bracket + scoped partial args | WP-750 | in progress |
 | WP-729 | perf: profile protobuf summed compile time (2.65x clang-19; docs/status/oss/protobuf.md) | WP-716 | open |
 | WP-731 | contracts sema gaps: lambda captures of parameters, explicit specialization adding contracts, friend redecl postcondition-param rule, dump prints type-parameter-0-0, spurious constexpr note after predicate error (spec/contracts.md:324-340) | WP-706 | done by WP-755 (#339) |
 | WP-755 | contracts part 3: WP-731 sema gaps, WP-744 coroutine postconditions, virtual-function rule check | WP-731 | contracts part 3: lambda captures, explicit specs, friend redecl, dump, coroutine postconditions (#339) |
@@ -759,6 +760,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-746 | P2841R7 concept and variable-template template parameters | WP-732 | P2841R7 partial: concept/variable TTPs, kinds, concept-dependent constraints, mangling (#336) |
 | WP-743 | C++26 DIS: trivial unions P3074R7 + union lifetime P3726R2 + P3475R2 core (Oven union lifetime) | WP-732 | P3074R7 done, P3726R2 partial (Oven union lifetime), P3475R2 core done (#337) |
 | WP-733 | triage untested DRs P4143, P4149, P3769 (docs/STANDARD_SUPPORT.md:393-395) | WP-706 | open |
+| WP-757 | Croydon DRs P4143/P4149/P3769 conformance + P1494 observable checkpoint builtin | WP-733 | in progress |
 | WP-734 | P2308 diag nits: nested braced scalar warning, excess-elements note at the parameter (crates/kiln_sema/src/templ/nttp.rs:619) | WP-706 | open |
 | WP-736 | codegen+sema: remaining AArch64 ACLE builtins (ldrex/strex/ldaex/stlex need elementtype on llvm.aarch64.ldxr/stxr; rsr/wsr, rint*, jcvt, rndr, ld64b/st64b, gcs, chkfeat, prefetch, trap, clrex) at `crates/kiln_codegen/src/arm.rs:129`; exclusive-builtin size check + discarded-qualifiers warning in `crates/kiln_sema/src/builtins.rs` | WP-724 | open |
 | WP-737 | pp: `__has_builtin(__dmb)` is 1 in MS modes but `__dmb` and relatives are undeclared (`crates/kiln_pp/src/features.rs`) | WP-724 | open |

@@ -684,7 +684,7 @@ impl Sema<'_, '_> {
                 if let (ArgView::Type(c), ArgView::Type(wt)) = (a.view(), w.view())
                     && self.ast.types.canonical(c) == self.ast.types.canonical(wt)
                 {
-                    *a = TemplateArg::ty(wt);
+                    *a = TemplateArg::ty(self.ast.types.without_exc_sugar(wt));
                 }
             }
             let sugared_levels = self.prior_levels(ft, depth, &sugared);
@@ -1697,6 +1697,9 @@ impl Sema<'_, '_> {
         // (spec/types.md R4); marked as written, so the binding prints it
         // unscoped (clang's `ElaboratedType` without a qualifier).
         let cand = if cand == cq { self.written_bare(cand) } else { cand };
+        // Before C++17 without the argument's exception specification
+        // (spec/types.md §5.4).
+        let cand = self.ast.types.without_exc_sugar(cand);
         if cand != cq {
             d.args[index] = TemplateArg::ty(cand);
         }

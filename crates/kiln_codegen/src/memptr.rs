@@ -339,6 +339,10 @@ impl Cg<'_> {
         let Some((fty, rd)) = self.mp_parts(rq) else {
             return err(self.loc_of(e), "call through a non-member pointer");
         };
+        // Before C++17 the pointee as written keeps its exception
+        // specification, which makes the call `nounwind` (spec/types.md
+        // §5.4).
+        let fty = ast.types.exc_pointee(rq).unwrap_or(fty);
         let this = self.mp_object(bo)?;
         let mfp = self.emit_scalar(r)?;
         let arm = self.arm_mp();

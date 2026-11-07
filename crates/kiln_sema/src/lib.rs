@@ -1002,6 +1002,11 @@ pub struct Sema<'a, 'sm> {
     /// The lambdas whose bodies are being analysed, innermost last
     /// (spec/sema-lambda.md; WP-075).
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
+    /// How many of [`Sema::lambdas`] enclose the point of instantiation
+    /// rather than the code being instantiated ([`Sema::in_inst_context`]
+    /// sets the template heads aside, so those lambdas' head counts no
+    /// longer index them).
+    pub(crate) lambda_base: usize,
     /// The packs of enclosing scopes a finished lambda's body names
     /// outside an expansion ([`lambda::LambdaScope`]'s `packs`): what
     /// the lambda-expression's "contains an unexpanded parameter pack"
@@ -1266,6 +1271,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             meta_names: meta::names::NameCache::default(),
             meta_members: meta::member::MemberState::default(),
             lambdas: Vec::new(),
+            lambda_base: 0,
             lambda_mangle: lambda::ManglingState::default(),
             size_t_sugar: size_t,
             signed_size_t_sugar: ptrdiff_t,
