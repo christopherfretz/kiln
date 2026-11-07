@@ -84,6 +84,9 @@ The loop:
 | peak TU RSS | 721 MB | 807 MB |
 
 Failure clusters (kiln): none.
+yaml-cpp reached parity on its first kiln build (WP-698): no kiln fix was
+needed. Both compilers need `-Wno-c++11-narrowing` on aarch64, where
+`char` is unsigned; see docs/status/oss/yaml_cpp.md.
 <!-- /oss:yaml_cpp -->
 
 <!-- oss:googletest -->
