@@ -718,7 +718,12 @@ nothing defers. Not yet deferred: contextual conversion sets
 ### 5.1 Generation (`oper.rs::add_rewritten`)
 The §2.5 lookups are repeated for the names below; each hit adds a
 candidate with `rewrite: Rewritten` (operands `x, y`) or `Reversed`
-(operands `y, x`). Built-ins are never rewritten.
+(operands `y, x`). Built-ins are never rewritten. Rewritten and
+reversed candidates exist only from C++20 (clang `CreateOverloadedBinOp`
+clears `AllowRewrittenCandidates` before it, WP-730): in C++17, `a != b`
+never considers `operator==`, so a base's member `operator!=` beside a
+more-derived base's friend `operator==` (LLVM's `iterator_facade_base`)
+is not ambiguous.
 
 | `@` | rewritten | reversed |
 |---|---|---|
@@ -1325,7 +1330,7 @@ Where the code differs from (or details) the design above:
   per function found; a deleted class `operator new` is `sema_call_deleted_function`. A member
   `operator delete` without an exception specification is implicitly
   `noexcept` ([except.spec]/9). An `operator new` function
-  template ([temp.over]/1), in class scope or global, is a candidate:
+  template ([temp.over]/1), in class scope or global (WP-730), is a candidate:
   with templates found, the functions and the templates' deduced
   specializations for `(size_t[, align_val_t], placement...)` go through
   overload resolution together ([expr.new]/20; `resolve_set`) and the

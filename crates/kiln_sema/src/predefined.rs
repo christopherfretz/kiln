@@ -297,6 +297,10 @@ impl Sema<'_, '_> {
                 };
                 ast.consts.print(value, &ast.strings, &names, &opts, out);
             }
+            // The specialization's arguments are printed canonical, as
+            // clang stores them: full scopes, `(anonymous namespace)::`
+            // included, and no typedef sugar.
+            ArgView::Type(q) => write_type(&ast.types, &names, q, PrintOptions::CANONICAL, out),
             ArgView::Pack(l) => {
                 out.push('<');
                 for (i, &x) in ast.types.args(l).iter().enumerate() {

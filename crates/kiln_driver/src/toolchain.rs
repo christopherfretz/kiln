@@ -384,6 +384,20 @@ impl Toolchain {
         v
     }
 
+    /// Whether the C++ standard library `stdlib` ships a `<contracts>`
+    /// header, and with it its own default contract-violation handler
+    /// (libstdc++ from GCC 16; spec/contracts.md §6.3). Otherwise kiln's
+    /// resource-directory `<contracts>` is the one found, and codegen
+    /// emits the default handler.
+    pub fn stdlib_ships_contracts(&self, stdlib: StdLib) -> bool {
+        let mut v = Vec::new();
+        match stdlib {
+            StdLib::LibCxx => self.libcxx_dirs(&mut v),
+            StdLib::LibStdCxx => self.libstdcxx_dirs(&mut v),
+        }
+        v.iter().any(|d| Path::new(&d.path).join("contracts").is_file())
+    }
+
     /// clang `Linux::addLibCxxIncludePaths`: the first of
     /// `<llvm>/bin/../include`, `<sysroot>/usr/local/include`,
     /// `<sysroot>/usr/include` with a `c++/v1`, the per-target directory

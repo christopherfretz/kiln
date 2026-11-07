@@ -301,6 +301,11 @@ impl CodegenJob<'_> {
                 strict_aliasing: a.strict_aliasing.unwrap_or(true),
                 clang_compat: a.predef.clang_compat.major(),
                 llvm_major: job.toolchain.llvm_major(),
+                // spec/contracts.md §6.3: kiln's default handler unless the
+                // standard library ships its own (with its `<contracts>`).
+                contract_default_handler: !job
+                    .toolchain
+                    .stdlib_ships_contracts(a.stdlib.unwrap_or_default()),
                 omit_frame_pointer: a.omit_frame_pointer,
                 omit_leaf_frame_pointer: a.omit_leaf_frame_pointer,
                 auto_var_init: a.auto_var_init.unwrap_or(default_auto_var_init(&job.std)),

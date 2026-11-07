@@ -548,6 +548,15 @@ impl Sema<'_, '_> {
             };
             conv_place.push(c);
         }
+        // The default arguments of the parameters past the placement
+        // arguments, as a call's ([expr.call]/7; clang
+        // `GatherArgumentsForCall` in `BuildCXXNew`).
+        if params.len() > skip + place_args.len() {
+            let Some(defs) = self.new_default_args(op_new, skip + place_args.len(), loc) else {
+                return self.recover_err(&kids, loc);
+            };
+            conv_place.extend(defs);
+        }
         // The matching deallocation function, called if the
         // initialization throws ([expr.new]/28).
         // clang treats any allocation function other than `(size_t)` as a
@@ -1047,6 +1056,34 @@ impl Sema<'_, '_> {
         Some(e.ok_or(()))
     }
 
+    /// The default arguments of allocation function `f`'s parameters from
+    /// index `from` on, for a new-expression at `loc` that passes fewer
+    /// arguments (instantiated now if `f` is a member of a class template
+    /// specialization, [temp.inst]/12). `None` once one failed (diagnosed).
+    fn new_default_args(&mut self, f: DeclId, from: usize, loc: Loc) -> Option<Vec<ExprId>> {
+        let pdecls: Vec<DeclId> = self
+            .ast
+            .decls
+            .function(f)
+            .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for &p in pdecls.iter().skip(from) {
+            if self.inst.lazy_defaults.contains_key(&p) && !self.instantiate_lazy_default(f, p, loc)
+            {
+                return None;
+            }
+            let e = self.ast.decls.param(p).and_then(|x| x.default_arg)?;
+            let x = *self.ast.exprs.get(e);
+            let used = self.ctx;
+            let arg = self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID);
+            self.note_default_arg_use(arg, p, loc);
+            self.note_default_use(arg, p, loc);
+            out.push(arg);
+        }
+        Some(out)
+    }
+
     /// The allocation function for `op` with `place` arguments, and
     /// whether it takes the alignment ([expr.new]/19: first with the
     /// alignment argument when the type is over-aligned, then without).
@@ -1067,8 +1104,12 @@ impl Sema<'_, '_> {
             let mut best: Option<(DeclId, usize)> = None;
             for &f in cands {
                 let Some((ps, variadic)) = self.fn_params(f) else { continue };
+                // Parameters past the arguments need default arguments
+                // ([expr.new]/19: an ordinary function call, so
+                // [dcl.fct.default] applies; LLVM's YAML `Node::operator
+                // new(size_t, BumpPtrAllocator &, size_t Alignment = 16)`).
                 let n = lead.len() + place.len();
-                if ps.len() > n || (ps.len() < n && !variadic) {
+                if (ps.len() > n && self.fn_min_args(f) > n) || (ps.len() < n && !variadic) {
                     continue;
                 }
                 if !ps.iter().zip(&lead).all(|(a, b)| self.ast.types.same_type(*a, *b)) {
@@ -1191,11 +1232,10 @@ impl Sema<'_, '_> {
             let implicit = self.ast.decls.get(f).flags().contains(DeclFlags::IMPLICIT);
             let fl = if implicit { Loc::INVALID } else { self.ast.decls.get(f).loc() };
             let n = ps.len();
-            if have < n || (have > n && !variadic) {
-                // Default arguments of allocation functions are not considered
-                // (spec/sema.md §5.9): every parameter is required.
-                let detail = self.arity_detail(f, n, n, have, variadic);
-                arity.push((n.abs_diff(have), implicit, fl, detail));
+            let min = self.fn_min_args(f).min(n);
+            if have < min || (have > n && !variadic) {
+                let detail = self.arity_detail(f, n, min, have, variadic);
+                arity.push((if have < min { min - have } else { have - n }, implicit, fl, detail));
                 continue;
             }
             let args: Vec<(QualType, Option<ExprId>)> = std::iter::once((size_t, None))

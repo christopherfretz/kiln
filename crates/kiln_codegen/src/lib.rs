@@ -26,6 +26,7 @@ mod class;
 mod cleanup;
 mod complex;
 mod consts;
+mod contracts;
 mod coro;
 mod dyncast;
 mod eh;
@@ -231,6 +232,12 @@ pub struct CodegenOptions {
     /// How `std::meta::info` template arguments mangle
     /// (`-fkiln-reflection-mangling=`; spec/reflection.md §8.3).
     pub reflection_mangling: kiln_abi::ReflectionMangling,
+    /// Define the default contract-violation handler (weak
+    /// `handle_contract_violation` and
+    /// `std::contracts::invoke_default_contract_violation_handler`) in a
+    /// translation unit that checks a contract assertion: every stdlib
+    /// but libstdc++, which ships its own (spec/contracts.md §6.3).
+    pub contract_default_handler: bool,
 }
 
 /// An `-mcmodel=` code model (LLVM `CodeModel::Model`).
@@ -518,6 +525,7 @@ impl Default for CodegenOptions {
             no_inline: false,
             code_model: None,
             reflection_mangling: kiln_abi::ReflectionMangling::Kiln,
+            contract_default_handler: true,
         }
     }
 }

@@ -3,7 +3,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
-use kiln_ast::types::{AutoKeyword, Quals, TypeView};
+use kiln_ast::types::{AutoKeyword, Quals, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -110,7 +110,7 @@ impl Sema<'_, '_> {
         if t == QualType::ERROR {
             return None;
         }
-        let dependent = self.ast.types.qflags(t).intersects(kiln_ast::types::TypeFlags::DEPENDENT);
+        let dependent = self.ast.types.qflags(t).intersects(TypeFlags::DEPENDENT);
         if !dependent {
             let c = self.ast.types.canonical(t);
             let bad = match self.ast.types.view(c.ty()) {
@@ -173,7 +173,9 @@ impl Sema<'_, '_> {
         // `getDecltypeType`; the underlying type is `<dependent type>` for a
         // type-dependent operand).
         let deps = self.ast.exprs.get(e).deps();
-        if deps.contains(kiln_ast::expr::ExprDeps::INSTANTIATION) {
+        if deps.contains(kiln_ast::expr::ExprDeps::INSTANTIATION)
+            && !self.names_template_local(e, deps)
+        {
             let u = if deps.contains(kiln_ast::expr::ExprDeps::TYPE) {
                 QualType::DEPENDENT
             } else {
@@ -184,6 +186,34 @@ impl Sema<'_, '_> {
         }
         let u = self.decltype_of(e);
         Some(self.ast.types.decltype_type(e, u, None))
+    }
+
+    /// Whether the `decltype` operand `e` (with dependence `deps`) only
+    /// names a variable or parameter with automatic storage of a template
+    /// whose type is not dependent (`std::vector<int> V; decltype(V)`, or
+    /// `decltype((V))`). Its reference is instantiation-dependent only so
+    /// that instantiation rebinds it to the instantiated local
+    /// (`decl_deps`); clang's `computeDependence(DeclRefExpr *)` does not
+    /// make it so, and `decltype(V)::iterator` names a member of a known
+    /// class ([temp.dep.type]/7, LLVM's MappedIteratorTest.cpp).
+    fn names_template_local(&self, e: ExprId, deps: kiln_ast::expr::ExprDeps) -> bool {
+        if deps != kiln_ast::expr::ExprDeps::INSTANTIATION {
+            return false;
+        }
+        let x = self.ignore_parens(e);
+        if self.ast.exprs.get(x).kind() != ExprKind::DeclRefExpr {
+            return false;
+        }
+        let d = self.ast.exprs.decl(x);
+        matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar)
+            && self.has_local_storage(d)
+            && self.ast.decls.get(d).ty().is_some_and(|t| {
+                !self.ast.types.qflags(t).intersects(
+                    TypeFlags::DEPENDENT_INSTANTIATION
+                        | TypeFlags::UNEXPANDED_PACK
+                        | TypeFlags::UNDEDUCED,
+                )
+            })
     }
 
     /// The type `decltype(e)` denotes ([dcl.type.decltype]/1): the

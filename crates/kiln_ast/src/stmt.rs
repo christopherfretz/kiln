@@ -126,6 +126,23 @@ impl ContractSemantic {
     }
 }
 
+/// Where a contract assertion is and what it says, for the
+/// `contract_violation` object codegen builds (spec/contracts.md §6.3):
+/// the `const char *` values point to frozen string literal objects.
+#[derive(Clone, Copy, Debug)]
+pub struct ContractSite {
+    /// The presumed file name of the assertion's keyword.
+    pub file: crate::ConstValueId,
+    /// `__PRETTY_FUNCTION__` of the function the assertion belongs to.
+    pub function: crate::ConstValueId,
+    /// The predicate's source text.
+    pub comment: crate::ConstValueId,
+    /// The presumed line of the keyword.
+    pub line: u32,
+    /// The column of the keyword.
+    pub column: u32,
+}
+
 /// `IfStmt.aux`: the form of the `if` ([stmt.if]).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 #[repr(u16)]

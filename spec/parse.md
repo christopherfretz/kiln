@@ -506,6 +506,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   no class template (`decltype(...)`) is parsed ahead like an
   unresolved specialization scope (`annotate_template_scope`)
   (`tests/conformance/temp.alias/alias-template-id-qualified-type-as-template-argument.cpp`).
+  The class template found may be a member template of a class template
+  specialization whose definition is not instantiated yet (`template
+  <class T> using G = TO<int>::FSS<T>;`): its members are classified in
+  the member template it was instantiated from, so `G<short>::W<1>::type`
+  is a type-id (WP-730,
+  `tests/conformance/temp.alias/alias-names-member-template-of-specialization-run.cpp`).
 - A typedef qualifier `T::name` whose `T` names a class template
   specialization that is not instantiated yet (and is not an explicit
   specialization) is classified the same way, by the specialization's
