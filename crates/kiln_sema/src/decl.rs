@@ -915,7 +915,12 @@ impl Sema<'_, '_> {
             }
         }
         self.prototype_params.push(frame);
-        (scopes, self.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals))
+        // A friend is no member: no `this` (clang's
+        // `InitCXXThisScopeForDeclaratorIfRelevant`).
+        (
+            scopes,
+            !d.friend && self.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals),
+        )
     }
 
     /// Leaves the scopes [`Sema::act_on_start_trailing_requires`] entered.
@@ -8952,6 +8957,31 @@ impl Sema<'_, '_> {
             }
         }
         None
+    }
+
+    /// For the lookahead of `X<args>::m::name` (WP-668): when member `m`
+    /// of class template `X`'s pattern is a typedef or alias naming a
+    /// class template specialization (`using jp = ptr<S>;`), that class
+    /// template, in which `name` is then classified as for
+    /// `ptr<args>::name` (clang annotates `X<args>::m::` by instantiating
+    /// `X<args>`; the lookahead cannot). `None` for any other member.
+    pub fn member_typedef_class_template(&self, m: DeclId) -> Option<DeclId> {
+        if !matches!(self.kind_of(m), DeclKind::Typedef | DeclKind::TypeAlias) {
+            return None;
+        }
+        let mut ty = self.ast.decls.get(m).ty()?;
+        for _ in 0..64 {
+            ty = match self.ast.types.view(ty.ty()) {
+                TypeView::Typedef { underlying, .. } => underlying,
+                TypeView::Elaborated { named, .. } => named,
+                _ => break,
+            };
+        }
+        let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty()) else {
+            return None;
+        };
+        let t = self.ast.types.template_decl(tn)?;
+        (self.kind_of(t) == DeclKind::ClassTemplate).then_some(t)
     }
 
     /// The first member named `name` of an explicit or partial

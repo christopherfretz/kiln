@@ -504,6 +504,15 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   template: the lookahead cannot instantiate, and an undefined class has
   no members to find (`typedef X<int> T; W<T::rebind<float>, int>`,
   WP-276).
+- A further component after such a qualifier (`X<args>::m::name`, or
+  `D::m::name` with `D` a typedef of `X<args>`) where `m` is a typedef
+  or alias member of the pattern naming a class template specialization
+  (`using m = Y<S>;`) is classified in `Y` the same way
+  (`Sema::member_typedef_class_template`, WP-668), so
+  `is_same<A, basic<int>::jp::string_t>` takes a type-id; the member
+  of a qualifier in a dependent context (`X<T>::m::name`, `m::name` in
+  `X`'s own definition) stays dependent
+  (`tests/conformance/temp.arg.type/member-typedef-of-specialization-qualifier.cpp`).
 - `skip_template_args(i)` memoizes its result by token index `i` in
   `Parser::targs_memo`.
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp

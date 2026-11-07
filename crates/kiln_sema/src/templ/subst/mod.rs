@@ -439,7 +439,11 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             }
             ArgView::Expr { expr, .. } => {
                 let Some(p) = expr_pattern(self.sema, expr) else { return Ok(None) };
-                match self.expand_pattern_rewrap(None, |s| s.expr(p))? {
+                // `element_expr`: an element that still names a pack of a
+                // level not substituted (`B<P<Ts, Us>::value...>` in a
+                // member template, only `Ts` known) keeps the expansion
+                // (§7.2).
+                match self.expand_pattern_rewrap(None, |s| s.element_expr(p))? {
                     Expansion::Elements(v) => {
                         let rw = self.take_rewrap();
                         v.into_iter()

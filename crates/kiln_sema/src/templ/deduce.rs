@@ -613,7 +613,11 @@ impl Sema<'_, '_> {
     /// [temp.deduct]/2) against a value `A`: unequal values are a
     /// mismatch now, so a derived-to-base deduction tries the next base
     /// ([temp.deduct.call]/4.3; clang converts the substituted argument
-    /// to an integral one). Anything else is checked when the deduction
+    /// to an integral one). A constant `P` against a value-dependent `A`
+    /// (a synthesized unique value in partial ordering,
+    /// [temp.deduct.partial]/3) is a mismatch too, as clang's integral
+    /// `P` against an expression `A`: `f(ie<I, 1>)` is more specialized
+    /// than `f(ie<I, N>)`. Anything else is checked when the deduction
     /// is finished.
     fn check_nondeduced_value(
         &mut self,
@@ -622,21 +626,38 @@ impl Sema<'_, '_> {
         a: TemplateArg,
         d: &mut DeducedArgs,
     ) -> Tdk {
-        let (Some(e), ArgView::Value { value, .. }) = (e, a.view()) else {
-            return Tdk::Success;
-        };
+        let Some(e) = e else { return Tdk::Success };
         if self.expr_is_value_dependent(e) {
             return Tdk::Success;
         }
-        let Some(av) = self.const_int(value) else { return Tdk::Success };
-        match self.fold_int(e) {
-            Some(pv) if pv != av => {
-                d.info.first = Some(p);
-                d.info.second = Some(a);
-                Tdk::NonDeducedMismatch
+        let av = match a.view() {
+            ArgView::Value { value, .. } => {
+                let Some(av) = self.const_int(value) else { return Tdk::Success };
+                Some(av)
             }
-            _ => Tdk::Success,
+            ArgView::Expr { .. } | ArgView::Profile(_) => {
+                if self.ast.types.canonical_arg(p) == self.ast.types.canonical_arg(a) {
+                    return Tdk::Success;
+                }
+                let ae = match a.view() {
+                    ArgView::Expr { expr, .. } => Some(expr),
+                    ArgView::Profile(pr) => self.ast.types.profile_expr(pr),
+                    _ => None,
+                };
+                match ae {
+                    Some(x) if self.expr_is_value_dependent(x) => None,
+                    _ => return Tdk::Success,
+                }
+            }
+            _ => return Tdk::Success,
+        };
+        let Some(pv) = self.fold_int(e) else { return Tdk::Success };
+        if av.is_some_and(|av| av == pv) {
+            return Tdk::Success;
         }
+        d.info.first = Some(p);
+        d.info.second = Some(a);
+        Tdk::NonDeducedMismatch
     }
 
     /// The index of the non-type template parameter of depth `depth`
