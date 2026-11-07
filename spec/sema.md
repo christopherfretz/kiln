@@ -2960,6 +2960,10 @@ specification as written (`TypeNames` prints ` noexcept`,
   member function` under the `in instantiation of exception
   specification` note, as in clang (WP-290,
   `class.mem.general/static-member-noexcept-this-instantiation.cpp`).
+  Every implicit object member function gets one: a constructor,
+  destructor or conversion function's `noexcept(noexcept(m.f()))` names
+  its members as a member function's does (WP-792,
+  `except.spec/special-member-noexcept-this-instantiation.cpp`).
   `throw()`, `noexcept` and `noexcept(expr)` all go through this path.
 - *Needed*: `exc_spec_needed(f, loc)` runs at every use that marks a
   function referenced, including unevaluated operands such as
