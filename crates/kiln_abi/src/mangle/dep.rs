@@ -12,7 +12,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, TraitKind, UnaryOp};
 use kiln_ast::ids::{ArgListId, DeclId, ExprId, NnsId, QualType, TemplateNameId};
 use kiln_ast::names::DeclNameView;
-use kiln_ast::types::{ArgView, Nns, TagKeyword, TemplateName, TypeView};
+use kiln_ast::types::{ArgView, ExprOperand, Nns, TagKeyword, TemplateName, TypeView};
 use kiln_source::symbol::Symbol;
 
 impl Mangler<'_, '_> {
@@ -225,6 +225,23 @@ impl Mangler<'_, '_> {
         self.out.truncate(len);
         self.subs.truncate(subs);
         self.out.push_str("u7unknown");
+    }
+
+    /// The `A <expression>` head of a dependent-bound array type; an
+    /// unencodable bound is the vendor placeholder.
+    pub(super) fn dependent_array_bound(&mut self, size: ExprOperand) {
+        let (len, subs) = (self.out.len(), self.subs.len());
+        let e = match size {
+            ExprOperand::Expr(e) => Some(e),
+            ExprOperand::Profile(p) => self.ast.types.profile_expr(p),
+        };
+        self.out.push('A');
+        if e.is_some_and(|e| self.expression(e)) {
+            return;
+        }
+        self.out.truncate(len);
+        self.subs.truncate(subs);
+        self.out.push_str("Au7unknown");
     }
 
     // ---- template-argument expressions -----------------------------------

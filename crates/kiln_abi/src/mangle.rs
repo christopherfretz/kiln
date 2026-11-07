@@ -2901,6 +2901,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     self.ty(e);
                 }
             }
+            // `A <dimension expression> _ <element type>`: a bound that
+            // names a template parameter (`T[N]`) keeps the overloads on
+            // `const char (&)[N]` and `const wchar_t (&)[N]` apart.
+            TypeView::DependentSizedArray { elem, size } => {
+                self.dependent_array_bound(size);
+                self.out.push('_');
+                self.ty(elem);
+            }
             TypeView::Function(p) => self.function_type(q, &p),
             TypeView::MemberPointer { pointee, class } => self.member_pointer(pointee, class),
             TypeView::Complex(e) => {
