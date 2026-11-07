@@ -24,6 +24,11 @@
 //!   compared verbatim.
 //! - [`unname_locals`] renumbers the local values after LLVM passes named
 //!   the ones they created (the `Allow::LoopCanon` comparison).
+//! - [`lifetime_markers_llvm22`] runs on kiln's text before `opt-22`.
+//!   kiln writes the IR of its own backend (spec/driver.md "IR
+//!   optimization"), so with an LLVM 21 or older backend its lifetime
+//!   markers keep the size operand. `opt-22` would upgrade the calls but
+//!   leave the old declarations in a different place.
 
 use std::fmt::Write as _;
 
@@ -482,9 +487,60 @@ pub fn unname_locals(s: &str) -> String {
     out
 }
 
+/// The textual IR `ir` with LLVM 22's lifetime markers. The size operand
+/// of every `llvm.lifetime.start`/`.end` call and declaration is dropped,
+/// and a declaration's `nocapture` (LLVM 19/20) is written `captures(none)`.
+/// Text that is already in LLVM 22's form is unchanged.
+pub fn lifetime_markers_llvm22(ir: &str) -> String {
+    if !ir.contains("@llvm.lifetime.") {
+        return ir.to_owned();
+    }
+    let mut out = String::with_capacity(ir.len());
+    for line in ir.split_inclusive('\n') {
+        out.push_str(&lifetime_line_llvm22(line));
+    }
+    out
+}
+
+fn lifetime_line_llvm22(line: &str) -> std::borrow::Cow<'_, str> {
+    for callee in ["@llvm.lifetime.start.p0(", "@llvm.lifetime.end.p0("] {
+        let Some(at) = line.find(callee) else { continue };
+        let (head, rest) = line.split_at(at + callee.len());
+        if line.starts_with("declare ") {
+            let tail = rest
+                .strip_prefix("i64 immarg, ptr nocapture)")
+                .or_else(|| rest.strip_prefix("i64 immarg, ptr captures(none))"));
+            if let Some(tail) = tail {
+                return format!("{head}ptr captures(none)){tail}").into();
+            }
+        } else if let Some(sized) = rest.strip_prefix("i64 ") {
+            let digits = sized.bytes().take_while(u8::is_ascii_digit).count();
+            if digits > 0
+                && let Some(tail) = sized[digits..].strip_prefix(", ")
+            {
+                return format!("{head}{tail}").into();
+            }
+        }
+    }
+    line.into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifetime_markers_upgrade() {
+        let ir = "  call void @llvm.lifetime.start.p0(i64 16, ptr %3)\n\
+                  declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #1\n";
+        let up = lifetime_markers_llvm22(ir);
+        assert_eq!(
+            up,
+            "  call void @llvm.lifetime.start.p0(ptr %3)\n\
+             declare void @llvm.lifetime.end.p0(ptr captures(none)) #1\n"
+        );
+        assert_eq!(lifetime_markers_llvm22(&up), up);
+    }
 
     #[test]
     fn structural_strips_release_noise() {

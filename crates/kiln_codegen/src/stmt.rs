@@ -791,7 +791,16 @@ impl Cg<'_> {
         for p in ast.lists.iter::<StmtId>(d.prelude) {
             self.emit_stmt(p)?;
         }
-        for e in ast.lists.iter::<StmtId>(d.expansions) {
+        // Large expansions emit their elements into helpers (WP-793,
+        // spec/landed/codegen/WP-793.md).
+        let elems: Vec<StmtId> = ast.lists.iter(d.expansions).collect();
+        let plan = self.expansion_plan(&elems);
+        for (i, &e) in elems.iter().enumerate() {
+            if let Some(sc) = plan.as_ref().and_then(|p| p[i].as_ref())
+                && self.emit_outlined_element(e, sc, end)?
+            {
+                continue;
+            }
             let next = self.jump_dest_here();
             self.f.jumps.push(Jump { brk: end, cont: Some(next) });
             let r = self.emit_stmt(e);

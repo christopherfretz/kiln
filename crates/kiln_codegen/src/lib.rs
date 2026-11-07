@@ -233,6 +233,11 @@ pub struct CodegenOptions {
     /// How `std::meta::info` template arguments mangle
     /// (`-fkiln-reflection-mangling=`; spec/reflection.md §8.3).
     pub reflection_mangling: kiln_abi::ReflectionMangling,
+    /// `-fkiln-outline-expansions=<N>`: an expanded expansion statement
+    /// whose elements total at least `N` statements and expressions has
+    /// each element emitted into an internal helper (above `-O0`; `0`
+    /// never outlines; spec/landed/codegen/WP-793.md).
+    pub outline_expansions: usize,
     /// Define the default contract-violation handler (weak
     /// `handle_contract_violation` and
     /// `std::contracts::invoke_default_contract_violation_handler`) in a
@@ -359,6 +364,10 @@ pub enum AutoVarInit {
 /// kiln's default `-ftrivial-auto-var-init-max-size` (spec/codegen.md
 /// §7r): 4 KiB.
 pub const AUTO_VAR_INIT_MAX_SIZE: u64 = 4096;
+
+/// The default `-fkiln-outline-expansions=` threshold (measured,
+/// spec/landed/codegen/WP-793.md).
+pub const OUTLINE_EXPANSIONS_DEFAULT: usize = 2048;
 
 /// Which functions keep a frame pointer: the `"frame-pointer"` function
 /// attribute and the `frame-pointer` module flag (clang's
@@ -531,6 +540,7 @@ impl Default for CodegenOptions {
             no_inline: false,
             code_model: None,
             reflection_mangling: kiln_abi::ReflectionMangling::Kiln,
+            outline_expansions: OUTLINE_EXPANSIONS_DEFAULT,
             contract_default_handler: true,
             cxx_modules: true,
         }
