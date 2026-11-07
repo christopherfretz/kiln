@@ -5121,7 +5121,12 @@ the index of the failed requirement.
   `decltype(V)` names one type in `C1<decltype(V)>` and
   `C2<decltype(V)>` of two templates. Other constrained placeholders
   (`C auto&`, `C auto*`, `C decltype(auto)`) are checked against the
-  deduced type when the argument is converted.
+  deduced type when the argument is converted. A type-constraint naming
+  an earlier parameter (`template<int N, C<N> auto V>`) has its
+  arguments substituted with the prior arguments, like clang's
+  `TransformAutoType`, so the placeholder is no longer dependent and the
+  argument for `V` is deduced and evaluated: `box<7, make()>` and
+  `box<7, zero>` are one specialization (WP-792).
 
 ### 8.7 Note chains (clang's exact texts; used by §10.4)
 

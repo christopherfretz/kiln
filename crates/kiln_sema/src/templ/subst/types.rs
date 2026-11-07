@@ -593,6 +593,17 @@ impl Substituter<'_, '_, '_> {
                     let d = self.ty(d, loc)?;
                     Ok(self.sema.ast.types.auto_type(keyword, Some(d), concept, args, pack))
                 }
+                // An undeduced placeholder whose type-constraint names
+                // outer parameters (`template<int N, C<N> auto V>`): the
+                // constraint's arguments are substituted, so the type is
+                // no longer dependent (clang `TransformAutoType`).
+                None if !pack && self.sema.ast.types.is_dependent(q) => match args {
+                    Some(a) => {
+                        let a = self.args(a, loc)?;
+                        Ok(self.sema.ast.types.auto_type(keyword, None, concept, Some(a), pack))
+                    }
+                    None => Ok(q),
+                },
                 None => Ok(q),
             },
             // A class template placeholder deduced from type-dependent
