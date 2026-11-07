@@ -3132,6 +3132,7 @@ impl Compiler<'_> {
                 self.load(place, ty, ak::READ, e, dst);
             }
             ExprKind::ConditionalOperator => {
+                let fold = self.bcp_fold_enter(ExprId::new(n.a()));
                 let c = self.rv(ExprId::new(n.a()));
                 let [t, f] = self.ast().exprs.cond_arms(e);
                 let j = self.jmp_if(c, false);
@@ -3140,6 +3141,7 @@ impl Compiler<'_> {
                 self.patch_here(j);
                 self.rv_into(f, dst);
                 self.patch_here(end);
+                self.bcp_fold_exit(fold);
             }
             ExprKind::BinaryConditionalOperator => {
                 let [common, cond, t, f] = self.bind_common(e, Access::Read);
@@ -4550,6 +4552,7 @@ impl Compiler<'_> {
                 Place::Mem(r)
             }
             ExprKind::ConditionalOperator => {
+                let fold = self.bcp_fold_enter(ExprId::new(n.a()));
                 let c = self.rv(ExprId::new(n.a()));
                 let [t, f] = self.ast().exprs.cond_arms(e);
                 let r = self.reg();
@@ -4561,6 +4564,7 @@ impl Compiler<'_> {
                 let pf = self.lv_mem(f, acc);
                 self.emit(Op::Mov, 0, &[r, pf]);
                 self.patch_here(end);
+                self.bcp_fold_exit(fold);
                 Place::Mem(r)
             }
             ExprKind::ConstantExpr => {
@@ -4577,6 +4581,22 @@ impl Compiler<'_> {
             {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
+            }
+            // [expr.reinterpret.cast]/11: the glvalue `reinterpret_cast`
+            // designates the operand's object; not a constant expression
+            // ([expr.const]/5.15) outside a fold (`Op::Cce`).
+            ExprKind::CXXReinterpretCastExpr
+                if n.value_category().is_glvalue()
+                    && self.ast().exprs.cast_kind(e) == CastKind::LValueBitCast =>
+            {
+                self.cce_check(e, "reinterpret_cast is not allowed in a constant expression");
+                let op = self.ast().exprs.operand(e);
+                let sub = match acc {
+                    Access::Write => Access::Write,
+                    Access::Addr => Access::Addr,
+                    Access::Read | Access::Rmw => Access::Addr,
+                };
+                Place::Mem(self.lv_mem(op, sub))
             }
             k if k.is_cast()
                 && n.value_category().is_glvalue()
@@ -5010,6 +5030,7 @@ impl Compiler<'_> {
                 self.member_call(e, Some(p));
             }
             ExprKind::ConditionalOperator => {
+                let fold = self.bcp_fold_enter(ExprId::new(n.a()));
                 let c = self.rv(ExprId::new(n.a()));
                 let [t, f] = self.ast().exprs.cond_arms(e);
                 let j = self.jmp_if(c, false);
@@ -5018,6 +5039,7 @@ impl Compiler<'_> {
                 self.patch_here(j);
                 self.init(f, p, ty);
                 self.patch_here(end);
+                self.bcp_fold_exit(fold);
             }
             ExprKind::BinaryOperator if self.ast().exprs.binary_op(e) == BinaryOp::Comma => {
                 let [a, b] = self.ast().exprs.operands(e);

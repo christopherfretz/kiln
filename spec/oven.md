@@ -1857,6 +1857,20 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   (*)())&f;` folds `p(1)` to a direct call): `VarDecl::evaluateValue`
   re-evaluates any variable without constant initialization in
   `EM_ConstantFold`.
+  A conditional whose condition (through parentheses and casts) is a
+  `__builtin_constant_p` call is a fold in every evaluation, a constant
+  initializer's included (clang `VisitConditionalOperator`'s
+  `FoldConstant`, a GNU extension, GCC PR38377; WP-802): `Op::Fold`
+  (aux 1) saves `RunState::fold` in a register and sets it before the
+  condition, and `Op::Fold` (aux 0) restores it after the chosen arm,
+  in the rvalue, glvalue and initialization lowerings. So
+  `__builtin_constant_p(E) ? E : E` is a constant expression where `E`
+  is a glvalue `reinterpret_cast` (which outside a fold is
+  `Cce`'s "reinterpret_cast is not allowed in a constant expression":
+  `expr.const/5.15/glvalue-reinterpret-cast-bcp-conditional.cpp`). A
+  fold failure inside such a conditional reports the failing access's
+  note, where clang keeps the first `Cce` note (a wording difference
+  only).
   Codegen's folds
   share the TU's bytecode, so they see the TU's language mode
   (`Oven::set_cxx_year`, recorded by sema; before WP-407 they compiled

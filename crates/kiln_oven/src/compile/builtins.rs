@@ -443,6 +443,43 @@ impl Compiler<'_> {
         ok.filter(|&r| Some(r) != init)
     }
 
+    /// clang's `FoldConstant` of a conditional whose condition (through
+    /// parentheses and casts) is a `__builtin_constant_p` call, a GNU
+    /// extension (GCC PR38377): the whole conditional is evaluated as a
+    /// fold (`RunState::fold`), so a cast a constant expression may not
+    /// perform ([expr.const]/5.15) does not fail it. Emits the `Op::Fold`
+    /// that enters the fold and returns the register saving the previous
+    /// mode, for [`Self::bcp_fold_exit`].
+    pub(super) fn bcp_fold_enter(&mut self, cond: ExprId) -> Option<u32> {
+        let ast = self.ast();
+        let mut c = skip_parens(ast, cond);
+        while ast.exprs.get(c).kind().is_cast() {
+            c = skip_parens(ast, ast.exprs.operand(c));
+        }
+        if ast.exprs.get(c).kind() != ExprKind::CallExpr {
+            return None;
+        }
+        let mut f = skip_parens(ast, ast.exprs.callee(c));
+        while ast.exprs.get(f).kind().is_cast() {
+            f = skip_parens(ast, ast.exprs.operand(f));
+        }
+        if ast.exprs.get(f).kind() != ExprKind::DeclRefExpr
+            || ast.decls.builtin_id(ast.exprs.decl(f)) != Some(id::CONSTANT_P)
+        {
+            return None;
+        }
+        let r = self.reg();
+        self.emit(Op::Fold, 1, &[r]);
+        Some(r)
+    }
+
+    /// Leaves the fold [`Self::bcp_fold_enter`] entered.
+    pub(super) fn bcp_fold_exit(&mut self, saved: Option<u32>) {
+        if let Some(r) = saved {
+            self.emit(Op::Fold, 0, &[r]);
+        }
+    }
+
     /// Lowers call `e` of builtin `bid` into a fresh register; `None` for
     /// a builtin evaluated as an ordinary call.
     pub(super) fn builtin_call(&mut self, e: ExprId, bid: u32, args: &[ExprId]) -> Option<u32> {

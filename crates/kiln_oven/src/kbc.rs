@@ -339,6 +339,10 @@ ops! {
     // violation as `ContractFail`'s under observe; execution resumes at
     // `end`.
     ContractTrial = 3,
+    // [saved]: clang's `FoldConstant` of a `__builtin_constant_p`
+    // conditional (`Compiler::bcp_fold_enter`): aux = 1 saves
+    // `RunState::fold` in `saved` and enters a fold; aux = 0 restores it.
+    Fold = 1,
 }
 
 /// The sub-operations of `Op::Wide`. Binary ones are `*d = *a op *b`
