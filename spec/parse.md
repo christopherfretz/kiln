@@ -1660,7 +1660,11 @@ for `^^`, §5 for splices).
   - the decl-specifier sequence and the declarator, for the
     declaration
   - the class-head and enum-head, for the tag (`act_on_tag_attrs`)
-  - before a statement, for the statement (`fallthrough`, `likely`)
+  - before a statement, for the statement (`fallthrough`, `likely`);
+    GNU `__attribute__((...))` specifiers directly followed by `;` are
+    an attributed null statement in every mode
+    (`__attribute__((fallthrough));`, clang
+    `ParseStatementOrDeclarationAfterAttributes`; WP-691)
   - before a declaration statement in a block, when none of them is a
     statement attribute, for the declaration (WP-203): `parse_statement`
     hands them on through `Parser::stmt_attrs` / `lead_decl_attrs` and

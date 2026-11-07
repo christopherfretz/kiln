@@ -229,6 +229,19 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// True at GNU `__attribute__((...))` specifiers followed by `;`: an
+    /// attributed null statement, `__attribute__((fallthrough));` (clang
+    /// `ParseStatementOrDeclarationAfterAttributes`, `kw___attribute`; a
+    /// `[[` after them starts an expression there, so it is not taken).
+    pub(crate) fn at_gnu_attr_null_stmt(&self) -> bool {
+        let mut i = self.pos();
+        while self.kw_of(self.tok_at(i)) == Some(Kw::Attribute) {
+            let Some(j) = self.skip_balanced(i + 1) else { return false };
+            i = j;
+        }
+        i != self.pos() && Self::punct_of(self.tok_at(i)) == Some(Punct::Semi)
+    }
+
     /// A C++11 attribute-specifier-seq at namespace scope before a
     /// declaration that takes none ([dcl.pre]/5, [dcl.attr.grammar]/5):
     /// a namespace-definition or namespace-alias-definition, a
