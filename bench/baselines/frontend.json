@@ -38,6 +38,42 @@
         "recorded": "2026-11-05T084458"
       }
     },
+    "constant-table-emit": {
+      "kiln": {
+        "mode": "emit-llvm",
+        "flags": "-std=c++26 -S -emit-llvm -o /dev/null",
+        "source_hash": "fnv1a64:b273b57b189540cd",
+        "runs": 5,
+        "wall_ms_median": 498.508,
+        "wall_ms_min": 496.758,
+        "wall_ms_max": 513.58,
+        "spread_pct": 0.35,
+        "max_rss_kb": 124252,
+        "oven": {
+          "steps": 0,
+          "bytes": 1280512,
+          "peak_bytes": 1280000,
+          "calls": 0,
+          "allocs": 0,
+          "peak_arena": 1280000,
+          "frozen_bytes": 1795168,
+          "static_bytes": 2561536,
+          "evaluations": 4
+        },
+        "inst": {
+          "count": 0,
+          "nodes": 0,
+          "bytes": 0
+        },
+        "compiler": "/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-665/scratchpad/bin/B/kiln++",
+        "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
+        "host": {
+          "arch": "aarch64",
+          "cpus": 24
+        },
+        "recorded": "2026-11-07T004312"
+      }
+    },
     "nested-template-ids": {
       "kiln": {
         "mode": "syntax",
