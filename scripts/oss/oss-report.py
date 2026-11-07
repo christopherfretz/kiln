@@ -182,9 +182,12 @@ def status_of(data, cs):
         return None
     if kr.get("configure_rc") != 0:
         return "configuring"
+    # A cluster whose every TU also fails with the control does not block.
+    cs = [c for c in cs if c[2] < len(c[1])]
     if cs:
         return f"blocked ({len(cs)} cluster{'s' if len(cs) != 1 else ''})"
-    if kr.get("build_rc") not in (0, None) or kr.get("test_rc") is None:
+    control_failed = cr is not None and cr.get("build_rc") not in (0, None)
+    if (kr.get("build_rc") not in (0, None) and not control_failed) or kr.get("test_rc") is None:
         return "building"
     kt, ct = kr.get("tests"), (cr or {}).get("tests")
     if kt and ct:
