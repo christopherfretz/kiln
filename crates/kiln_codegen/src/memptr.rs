@@ -99,9 +99,18 @@ impl Cg<'_> {
         }
     }
 
-    /// The byte offset of field `f` in its class.
+    /// The byte offset of field `f` in its class; for an `IndirectField`
+    /// (a member of an anonymous union or struct, [class.union.anon]) the
+    /// sum along its access path (clang `ASTContext::getFieldOffset`).
     pub(crate) fn field_byte_offset(&mut self, f: DeclId) -> R<u64> {
         let ast = self.ast;
+        if ast.decls.get(f).kind() == DeclKind::IndirectField {
+            let mut off = 0;
+            for d in ast.lists.iter::<DeclId>(ast.indirect_field_chain(f)) {
+                off += self.field_byte_offset(d)?;
+            }
+            return Ok(off);
+        }
         let Some(rd) = ast.decls.get(f).ctx() else {
             return err(Some(ast.decls.get(f).loc()), "field outside a class");
         };
@@ -146,7 +155,7 @@ impl Cg<'_> {
         }
         let d = ast.exprs.decl(s);
         match ast.decls.get(d).kind() {
-            DeclKind::Field => {
+            DeclKind::Field | DeclKind::IndirectField => {
                 let off = self.field_byte_offset(d)?;
                 Ok(self.i64c(i128::from(off)))
             }

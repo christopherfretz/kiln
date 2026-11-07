@@ -559,6 +559,18 @@ impl Cg<'_> {
         {
             self.f.bypasses = Some(Box::new(crate::lifetime::detect_bypasses(ast, body)));
         }
+        // A function with contract assertions ([dcl.contract.func]):
+        // their evaluation is WP-707's (spec/contracts.md §6), so the
+        // contracts are never silently dropped unless the semantic is
+        // ignore.
+        if body.is_some()
+            && thunk.is_none()
+            && ast.contract_semantic.checks()
+            && let Some(l) = ast.function_contracts(d)
+            && let Some(first) = ast.lists.iter::<kiln_ast::ids::StmtId>(l).next()
+        {
+            return err(Some(ast.stmts.get(first).loc()), crate::stmt::CONTRACT_UNSUPPORTED);
+        }
         match (kind, body) {
             _ if let Some(th) = thunk => {
                 self.f.mustprogress = false;

@@ -102,7 +102,7 @@ pub struct Parser<'a, 'sm> {
     /// Open `(`, `[`, `{` consumed and not yet closed (clang's
     /// `ParenCount`/`BracketCount`/`BraceCount`).
     depth: [u32; 3],
-    kw: Keywords,
+    pub(crate) kw: Keywords,
     pub(crate) lex_opts: LexOptions,
     pub(crate) lit_opts: LiteralOptions,
     pub(crate) std: Std,
@@ -304,7 +304,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         let lex_opts = src.lex_options();
         let std = lex_opts.std;
         let cxx11 = std >= Std::Cxx11;
-        let kw = Keywords::new(s.ast.symbols(), s.gnu, cxx11, s.clang_compat);
+        let cxx26 = std >= Std::Cxx26;
+        let kw = Keywords::with_std(s.ast.symbols(), s.gnu, cxx11, cxx26, s.clang_compat);
         s.set_std(std);
         let sm = src.source_manager();
         let cur = src.get(0);
@@ -1481,7 +1482,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// specialization that is not instantiated yet (`hours::period` with
     /// `typedef duration<long, ratio<3600>> hours`), or an alias template
     /// whose pattern names no class template it can follow (`A<R>::` with
-    /// `template<class T> using A = decltype(f(T()))`).
+    /// `template<class T> using A = decltype(f(T()))`), or a member
+    /// typedef of a class template's pattern naming a dependent type
+    /// (`rr<V>::type::`; WP-724).
     fn unresolved_specialization_scope(&self, q: DeclId) -> bool {
         use kiln_ast::decl::DeclKind;
         let ast = &self.s.ast;
@@ -1491,10 +1494,24 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 let ty = ast.decls.get(q).ty().unwrap_or(QualType::ERROR);
                 ast.types.as_record(ty).is_some_and(|r| {
                     ast.definition(r).is_none() && ast.spec_info(ast.first(r)).is_some()
-                })
+                }) || self.s.is_dependent_type(ty) && self.in_class_template_pattern(q)
             }
             _ => false,
         }
+    }
+
+    /// Whether `d` is a member of a class template's pattern: a member
+    /// typedef naming a template parameter (`rr<V>::type::` with
+    /// `typedef T type;` in `rr`'s pattern) that the lookahead reached
+    /// through a specialization it does not instantiate (WP-724).
+    fn in_class_template_pattern(&self, d: DeclId) -> bool {
+        use kiln_ast::decl::DeclKind;
+        let ast = &self.s.ast;
+        ast.decls
+            .get(d)
+            .ctx()
+            .and_then(|c| ast.described_template(c))
+            .is_some_and(|t| ast.decls.get(t).kind() == DeclKind::ClassTemplate)
     }
 
     /// At a qualified name whose qualifier the lookahead cannot resolve

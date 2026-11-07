@@ -11,8 +11,9 @@ use std::rc::Rc;
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::{Punct, TokKind, Token};
 use kiln_source::symbol::Symbol;
-use kiln_source::{FileId, Span};
+use kiln_source::{FileId, Loc, Span};
 
+use crate::directive::Dir;
 use crate::include::{IncludeKind, IncludeRequest};
 use crate::macros::{MacroDef, MacroTable, SymMap};
 use crate::preprocessor::{Frame, Marker, Preprocessor};
@@ -42,6 +43,11 @@ pub struct ModuleDirective {
     pub kw: Span,
     /// What it declares.
     pub kind: DirectiveKind,
+    /// The `#` of the unit's first directive, when a directive other than
+    /// a null directive, a line marker, `#line`, `#pragma`, `#error`,
+    /// `#warning` or `#ident` preceded this one in the unit's own file
+    /// ([cpp.pre]/1 as amended by P3868R1; clang 22's first pp-token).
+    pub after_directive: Option<Loc>,
 }
 
 /// The kinds of [`ModuleDirective`].
@@ -92,6 +98,8 @@ pub(crate) struct UnitSave {
     pushed: SymMap<Vec<Option<Rc<MacroDef>>>>,
     if_ndef: Option<Symbol>,
     include_depth: u32,
+    first_hash: Option<Loc>,
+    pre_directive: bool,
     module: Option<String>,
 }
 
@@ -148,7 +156,8 @@ impl Preprocessor<'_, '_> {
         let kw_span = if export { self.lex_unexpanded().tok.span } else { t.span };
         let kw = if import { "import" } else { "module" };
         let kind = self.read_directive_body(import, kw);
-        let d = ModuleDirective { span: t.span, export, kw: kw_span, kind };
+        let after_directive = if self.unit_pre_directive { self.unit_first_hash } else { None };
+        let d = ModuleDirective { span: t.span, export, kw: kw_span, kind, after_directive };
         self.finish_directive();
         let perform = match &d.kind {
             DirectiveKind::Module { name, partition, name_span } => {
@@ -178,6 +187,27 @@ impl Preprocessor<'_, '_> {
         }
         if let Some((key, span)) = header {
             self.import_header(key, span);
+        }
+    }
+
+    /// A directive starting at `at` in the current file, at include depth
+    /// 0: records the unit's first directive and whether one that may not
+    /// precede a module directive was seen (`exempt`: a null directive or
+    /// a line marker).
+    pub(crate) fn note_unit_directive(&mut self, at: Loc, dir: Option<Dir>, exempt: bool) {
+        let builtin = self.modules.as_ref().and_then(|m| m.builtin_file);
+        if self.cur_file_ref().is_none_or(|f| Some(f.file) == builtin) {
+            return;
+        }
+        self.unit_first_hash.get_or_insert(at);
+        let allowed = matches!(
+            dir,
+            None | Some(
+                Dir::Line | Dir::Pragma | Dir::Error | Dir::Warning | Dir::Ident | Dir::Sccs
+            )
+        );
+        if !exempt && !allowed {
+            self.unit_pre_directive = true;
         }
     }
 
@@ -429,6 +459,8 @@ impl Preprocessor<'_, '_> {
             pushed: std::mem::take(&mut self.pushed),
             if_ndef: self.if_ndef.take(),
             include_depth: std::mem::replace(&mut self.include_depth, 0),
+            first_hash: self.unit_first_hash.take(),
+            pre_directive: std::mem::take(&mut self.unit_pre_directive),
             module,
         };
         self.define_builtins();
@@ -473,6 +505,8 @@ impl Preprocessor<'_, '_> {
         self.pushed = save.pushed;
         self.if_ndef = save.if_ndef;
         self.include_depth = save.include_depth;
+        self.unit_first_hash = save.first_hash;
+        self.unit_pre_directive = save.pre_directive;
         if let Some(m) = &mut self.modules {
             m.module = save.module;
             m.building.pop();

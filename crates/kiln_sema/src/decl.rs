@@ -3634,9 +3634,27 @@ impl Sema<'_, '_> {
             && self.ast.redecl_context(ctx) == self.ast.tu
             && let Some(p) = self.ast.types.proto(ty)
         {
+            // [basic.start.main]/3: `main` is not static or inline (clang's
+            // `CheckMain` diagnoses and keeps the declaration).
+            if let Some((StorageSpec::Static, l)) = ds.storage {
+                self.error(DiagId::sema_static_main, l);
+            }
+            if let Some(l) = ds.inline {
+                self.error(DiagId::sema_inline_main, l);
+            }
             let ret = p.ret();
             if !self.ast.types.same_type(ret, QualType::INT) && !self.is_error_type(ret) {
                 self.error(DiagId::sema_main_returns_nonint, ds.type_loc.unwrap_or(ds.loc));
+            }
+            // P3618R0 ([basic.start.main]/3): `main` is attached to the
+            // global module; clang 22 warns in a named module's purview
+            // outside a linkage specification (clang 19 is silent).
+            if self.clang_compat >= 22 && !friend && self.attaches_to_named_module(lexical) {
+                let w = self.diag(
+                    DiagId::sema_main_attached_to_named_module,
+                    ds.type_loc.unwrap_or(ds.loc),
+                );
+                self.emit(w);
             }
             // [basic.start.main]/3: `main` is not constexpr or consteval;
             // clang drops the specifier.
@@ -6698,7 +6716,14 @@ impl Sema<'_, '_> {
         }
         self.check_abstract_signature(f);
         self.begin_function_body(f, ret);
-        if let Some(t) = self.method_this_type(f)
+        // A generic lambda's call operator instantiated later: `this` is
+        // the enclosing one, not the closure's ([expr.prim.this]/2).
+        let this_ty = if self.is_lambda_call_op(f) {
+            self.instantiated_lambda_this(f)
+        } else {
+            self.method_this_type(f)
+        };
+        if let Some(t) = this_ty
             && let Some(state) = self.func.as_mut()
         {
             state.this_ty = Some(t);
@@ -9769,7 +9794,7 @@ impl Sema<'_, '_> {
         let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax)
             .filter(|&k| k != AttrKind::INDETERMINATE || self.std >= kiln_lex::Std::Cxx26)
         else {
-            let id = if gnu && matches!(n.as_str(), "section" | "format") {
+            let id = if gnu && n == "format" {
                 DiagId::parse_attribute_ignored
             } else {
                 DiagId::parse_unknown_attribute
@@ -9792,7 +9817,7 @@ impl Sema<'_, '_> {
         if kind == AttrKind::TARGET {
             return self.target_attribute(syntax, &n, args, loc);
         }
-        if kind == AttrKind::WEAKREF || kind == AttrKind::ALIAS {
+        if matches!(kind, AttrKind::WEAKREF | AttrKind::ALIAS | AttrKind::SECTION) {
             return self.weakref_alias_attribute(kind, syntax, &n, args, loc);
         }
         if kind == AttrKind::MIN_VECTOR_WIDTH {
@@ -10004,9 +10029,10 @@ impl Sema<'_, '_> {
         Some(self.ast.attrs.push(node))
     }
 
-    /// GNU `weakref` / `weakref("target")` and `alias("target")` (clang
-    /// `handleWeakRefAttr`, `handleAliasAttr`): `weakref` takes at most
-    /// one argument, `alias` exactly one, a string literal (`expected
+    /// GNU `weakref` / `weakref("target")`, `alias("target")` and
+    /// `section("name")` (clang `handleWeakRefAttr`, `handleAliasAttr`,
+    /// `handleSectionAttr`): `weakref` takes at most one argument, the
+    /// others exactly one, a string literal (`expected
     /// string literal` at the argument otherwise; an identifier is not
     /// looked up). `a` is the literal's `StringLitId` (0 for a bare
     /// `weakref`); the declaration's checks do the rest
@@ -10675,6 +10701,8 @@ fn attr_kind_of(
         // clang `GCC<"weakref">`, `GCC<"alias">`.
         ("weakref", _, true) => AttrKind::WEAKREF,
         ("alias", _, true) => AttrKind::ALIAS,
+        // clang `GCC<"section">`.
+        ("section", _, true) => AttrKind::SECTION,
         // clang `GNU<"analyzer_noreturn">`: no `[[...]]` spelling.
         ("analyzer_noreturn", _, _) if gnu_syntax => AttrKind::ANALYZER_NORETURN,
         ("const", _, true) => AttrKind::CONST,

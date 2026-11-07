@@ -407,7 +407,10 @@ impl Substituter<'_, '_, '_> {
                 let b = self.sema.ast.stmts.coroutine_body(s).body;
                 Ok(self.stmt(b))
             }
-            k => self.unimplemented(&format!("substitution into {k:?}"), loc),
+            StmtKind::ContractAssertStmt => self.contract_stmt(s, None),
+            k @ StmtKind::CXXCatchStmt => {
+                self.unimplemented(&format!("substitution into {k:?}"), loc)
+            }
         }
     }
 

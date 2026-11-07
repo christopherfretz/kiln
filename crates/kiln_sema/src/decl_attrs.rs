@@ -45,6 +45,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::WEAK => "weak",
         AttrKind::WEAKREF => "weakref",
         AttrKind::ALIAS => "alias",
+        AttrKind::SECTION => "section",
         AttrKind::ANALYZER_NORETURN => "analyzer_noreturn",
         AttrKind::DISABLE_TAIL_CALLS => "disable_tail_calls",
         AttrKind::CONST => "const",
@@ -420,6 +421,33 @@ impl Sema<'_, '_> {
                 false
             }
             AttrKind::NODISCARD => self.check_nodiscard_subject(d, kind, node),
+            // clang `Section`: `SubjectList<[Function, GlobalVar,
+            // ObjCMethod, ObjCProperty], ErrorDiag>`.
+            AttrKind::SECTION => {
+                let global_var =
+                    matches!(kind, DeclKind::Var | DeclKind::VarTemplateSpecialization)
+                        && (!self
+                            .ast
+                            .decls
+                            .get(d)
+                            .ctx()
+                            .is_some_and(|c| self.ast.decls.get(c).kind().is_function())
+                            || self.ast.decls.var(d).is_some_and(|v| {
+                                matches!(
+                                    v.spec.storage(),
+                                    kiln_ast::decl::VarStorage::Static
+                                        | kiln_ast::decl::VarStorage::Extern
+                                )
+                            }));
+                kind.is_function()
+                    || global_var
+                    || wrong(
+                        self,
+                        DiagId::sema_attribute_wrong_decl_type_error,
+                        "section",
+                        "functions, global variables, Objective-C methods, and Objective-C properties",
+                    )
+            }
             AttrKind::PREFERRED_NAME => self.check_preferred_name(d, node),
             // clang `handleDeprecatedAttr`: not (yet) on a
             // using-declaration.

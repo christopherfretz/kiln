@@ -1064,6 +1064,7 @@ impl Sema<'_, '_> {
         if self.in_template() {
             return body;
         }
+        self.check_coroutine_post_params(f);
         let Some(coro) = self.coro_state().cloned() else { return body };
         let Some(promise) = coro.promise else {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);

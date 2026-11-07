@@ -6,6 +6,7 @@ use kiln_ast::decl::{DeclKind, DefinitionBits};
 pub use kiln_ast::expr::OffsetofComponent;
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::ids::RawId;
+use kiln_ast::names::DeclName;
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, ListId, QualType, StmtId};
@@ -15,6 +16,7 @@ use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::class::InitStyle as CtorStyle;
+use crate::conv::bases::{BaseSearch, find_base};
 use crate::conv::{self, ConvCtx};
 use crate::init::{Designator, InitList, InitValue};
 use crate::lookup::LookupKind;
@@ -366,7 +368,12 @@ impl Sema<'_, '_> {
             self.emit(d);
             *warned = true;
         }
-        let found = self.lookup_in(def, name, LookupKind::Ordinary);
+        // Class member lookup ([class.member.lookup]): a member of a base
+        // class is found too, as clang's `LookupQualifiedName`.
+        let found = self.lookup_qualified(def, name, LookupKind::Ordinary);
+        if self.diagnose_member_ambiguity(&found, DeclName::ident(name), start) {
+            return None;
+        }
         let member = found.decls.iter().copied().find(|&m| {
             matches!(self.ast.decls.get(m).kind(), DeclKind::Field | DeclKind::IndirectField)
         });
@@ -397,6 +404,11 @@ impl Sema<'_, '_> {
             return None;
         }
         let mut bits = 0i128;
+        if let Some(&outer) = chain.first()
+            && let Some(parent) = self.ast.decls.get(outer).ctx()
+        {
+            bits = self.offsetof_base_bits(def, parent, end)?;
+        }
         for f in chain {
             bits += i128::from(self.field_bit_offset(f));
         }
@@ -407,6 +419,32 @@ impl Sema<'_, '_> {
             fty
         };
         Some((bits, fty))
+    }
+
+    /// The bit offset in class `def` of its base class subobject
+    /// `parent` holding a member an offsetof designator names (0 when
+    /// `parent` is `def`), or `None` after diagnosing a member of a
+    /// virtual base, whose offset is not fixed (clang
+    /// `BuildBuiltinOffsetOf`: "invalid application of 'offsetof' to a
+    /// field of a virtual base"). Lookup already rejected an ambiguous
+    /// base ([class.member.lookup]/6).
+    fn offsetof_base_bits(&mut self, def: DeclId, parent: DeclId, end: Loc) -> Option<i128> {
+        let BaseSearch::Unique(path) = find_base(self, def, parent) else {
+            return Some(0);
+        };
+        if path.last_virtual.is_some() {
+            self.error(DiagId::sema_offsetof_field_of_virtual_base, end);
+            return None;
+        }
+        let mut bytes = 0u64;
+        let mut cur = def;
+        for &c in &path.classes {
+            let first = self.ast.first(c);
+            let bases = kiln_abi::ensure_layout(&mut self.ast, cur, &self.abi)?.bases.clone();
+            bytes += bases.iter().find(|&&(b, _)| self.ast.first(b) == first)?.1;
+            cur = self.ast.definition(c).unwrap_or(c);
+        }
+        Some(i128::from(bytes) * 8)
     }
 
     /// The bit offset of non-static data member `f` in its class.

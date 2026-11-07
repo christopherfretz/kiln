@@ -43,6 +43,10 @@ impl AttrKind {
     /// implicit flag marks one added by `#pragma GCC visibility push`
     /// (spec/codegen.md "Symbol visibility").
     pub const VISIBILITY: AttrKind = AttrKind(70);
+    /// GNU `section("name")` on a function or a variable with static
+    /// storage duration (clang `SectionAttr`): `a` = the name's
+    /// `StringLitId`; codegen places the symbol in that section
+    /// ([`crate::Ast::section_of`]).
     pub const SECTION: AttrKind = AttrKind(71);
     /// GNU `format(archetype, F, A)`: `a` = the archetype (0 `printf`),
     /// `b` = `F | A << 16`, the one-based format-string and first data

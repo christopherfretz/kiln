@@ -840,6 +840,19 @@ impl Oven {
             }
         }
         let ast = c.b.ast();
+        // The function contract assertions of a function evaluated in a
+        // constant expression ([basic.contract.eval]); their evaluation
+        // is WP-707's (spec/contracts.md §6). Under the ignore semantic
+        // they are not evaluated.
+        let contract_loc = ast
+            .function_contracts(def)
+            .filter(|_| ast.contract_semantic.checks())
+            .and_then(|l| ast.lists.iter::<StmtId>(l).next())
+            .map(|s| ast.stmts.get(s).loc());
+        if let Some(loc) = contract_loc {
+            c.trap_loc(loc, CONTRACT_UNSUPPORTED.into());
+        }
+        let ast = c.b.ast();
         if ast.stmts.get(body).kind() == StmtKind::CXXTryStmt {
             // A function-try-block ([except.pre]/4): its handlers cover a
             // constructor's ctor-initializers and a destructor's
@@ -1376,6 +1389,10 @@ pub(crate) fn const_object(ast: &kiln_ast::Ast, q: QualType) -> bool {
 /// clang's `note_constexpr_invalid_cast` for a conversion a
 /// `reinterpret_cast` performs ([expr.const]/5.15).
 const REINTERPRET_CONV: &str = "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression";
+
+/// A contract assertion reached during constant evaluation under a
+/// checking semantic, until WP-707 (spec/contracts.md §6).
+const CONTRACT_UNSUPPORTED: &str = "unsupported: contract evaluation (WP-707)";
 
 /// clang's `note_constexpr_stmt_expr_unsupported`.
 const STMT_EXPR_UNSUPPORTED: &str =
@@ -2113,6 +2130,13 @@ impl Compiler<'_> {
                     self.patch_here(ok);
                 }
                 self.stmt(sub);
+            }
+            // [stmt.contract.assert]: not evaluated under the ignore
+            // semantic; the others are WP-707's (spec/contracts.md §6).
+            StmtKind::ContractAssertStmt => {
+                if ast.contract_semantic.checks() {
+                    self.trap_loc(n.loc(), CONTRACT_UNSUPPORTED.into());
+                }
             }
             k => {
                 self.trap_loc(

@@ -50,6 +50,9 @@ const D_TEMPLATE_PARM: u32 = 1;
 const D_NTTP: u32 = 2;
 const D_PARM: u32 = 3;
 const D_DECL: u32 = 4;
+/// A postcondition's result name: one per assertion, so it compares by
+/// kind alone ([dcl.contract.func]/5, spec/contracts.md §5).
+const D_RESULT_NAME: u32 = 5;
 
 // Requirement encodings inside a `RequiresExpr`.
 const R_SIMPLE: u32 = 1;
@@ -218,6 +221,7 @@ impl Ast {
                     | (depth << 18);
                 out.extend([D_PARM, pos, self.opt_canon_word(node.ty())]);
             }
+            DeclKind::ContractResultName => out.push(D_RESULT_NAME),
             _ => out.extend([D_DECL, self.first(d).raw()]),
         }
     }

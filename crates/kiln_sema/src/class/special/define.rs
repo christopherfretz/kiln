@@ -215,6 +215,7 @@ pub(crate) struct Saved {
     imm: crate::consteval::SavedImm,
     initializing: Option<DeclId>,
     nsdmi_this: Vec<(DeclId, QualType)>,
+    contract_ctx: Vec<crate::contracts::ContractCtx>,
     deferring: bool,
 }
 
@@ -288,6 +289,7 @@ impl Sema<'_, '_> {
             imm: self.take_immediate_state(true),
             initializing: self.initializing.take(),
             nsdmi_this: std::mem::take(&mut self.nsdmi_this),
+            contract_ctx: std::mem::take(&mut self.contract_ctx),
             deferring: std::mem::take(&mut self.deferring_call_ref),
         };
         self.ctx = member;
@@ -312,6 +314,7 @@ impl Sema<'_, '_> {
         self.restore_immediate_state(saved.imm);
         self.initializing = saved.initializing;
         self.nsdmi_this = saved.nsdmi_this;
+        self.contract_ctx = saved.contract_ctx;
         self.deferring_call_ref = saved.deferring;
     }
 

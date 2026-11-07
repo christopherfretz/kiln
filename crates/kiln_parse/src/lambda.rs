@@ -86,6 +86,9 @@ impl Parser<'_, '_> {
         if specs.explicit_params && self.eat_kw(Kw::Requires).is_some() {
             d.trailing_requires = self.parse_requires_clause();
         }
+        // [expr.prim.lambda.general]/1: the seq ends the lambda-declarator;
+        // replayed once the call operator is declared.
+        let contracts = self.capture_contract_specs();
         self.s.act_on_end_prototype();
         let params = self.s.act_on_param_list(params);
         d.chunks.push(Chunk::Function {
@@ -105,11 +108,25 @@ impl Parser<'_, '_> {
             return None;
         }
         self.s.act_on_lambda_declarator(id, d, &specs);
+        // [dcl.contract.res]/2: a deduced return type is known after the
+        // body.
+        let op = self.s.current_lambda_call_op();
+        let late = match (op, contracts) {
+            (Some(op), Some(t)) if self.s.contract_return_undeduced(op) => Some((op, t)),
+            (Some(op), Some(t)) => {
+                self.replay_lambda_contract_specs(op, t);
+                None
+            }
+            _ => None,
+        };
         let saved_stmt_expr = std::mem::replace(&mut self.in_stmt_expr, false);
         // The body's statements are full-expressions of their own: their
         // delayed typos are not held for the enclosing statement (WP-330).
         let typos = self.s.suspend_delayed_typos();
         let (body, rbrace) = self.with_greater_op(true, |p| p.parse_compound(false));
+        if let Some((op, t)) = late {
+            self.replay_lambda_contract_specs(op, t);
+        }
         self.s.resume_delayed_typos(typos);
         self.in_stmt_expr = saved_stmt_expr;
         self.sync_attr_macros();

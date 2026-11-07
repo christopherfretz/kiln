@@ -297,6 +297,11 @@ impl ClangFeatures {
 
     /// The answer of `kind` for `key` (already normalized).
     fn lookup(&self, kind: Kind, table: &[Entry], key: &str) -> u32 {
+        self.lookup_at(kind, table, key, self.compat == ClangCompat::Clang22)
+    }
+
+    /// [`Self::lookup`] with clang 22's answers applied when `clang22`.
+    fn lookup_at(&self, kind: Kind, table: &[Entry], key: &str, clang22: bool) -> u32 {
         let lo = table.partition_point(|e| e.0 < key);
         let mut v = 0;
         for e in table[lo..].iter().take_while(|e| e.0 == key) {
@@ -304,7 +309,6 @@ impl ClangFeatures {
                 v = e.1;
             }
         }
-        let clang22 = self.compat == ClangCompat::Clang22;
         if clang22 {
             let deltas = table::COMPAT22;
             let lo = deltas.partition_point(|d| (d.0, d.1) < (kind, key));
@@ -357,6 +361,15 @@ fn strip_dunder(name: &str) -> &str {
     }
 }
 
+/// clang 22's `arm_acle.h` header builtins (`TARGET_HEADER_BUILTIN`,
+/// `ARMACLE_H`), which kiln does not declare (WP-724): kiln ships clang
+/// 19's `arm_acle.h`, which defines each as a macro or inline function
+/// when `__has_builtin` denies it, so `__has_builtin` answers clang 19's
+/// table for them at every compatibility level (0 unless an MS mode
+/// declares them).
+const ACLE_HEADER_BUILTINS: &[&str] =
+    &["__dmb", "__dsb", "__isb", "__sev", "__sevl", "__wfe", "__wfi", "__yield"];
+
 impl FeatureQueries for ClangFeatures {
     fn has_feature(&self, name: &str) -> bool {
         self.lookup(Kind::Feature, table::FEATURE, strip_dunder(name)) != 0
@@ -369,6 +382,9 @@ impl FeatureQueries for ClangFeatures {
     fn has_builtin(&self, name: &str) -> u32 {
         if let Some(v) = self.target_builtins.as_ref().and_then(|t| t.answer(name)) {
             return v;
+        }
+        if ACLE_HEADER_BUILTINS.contains(&name) {
+            return self.lookup_at(Kind::Builtin, table::BUILTIN, name, false);
         }
         self.lookup(Kind::Builtin, table::BUILTIN, name)
     }
