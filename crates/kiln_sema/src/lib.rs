@@ -545,11 +545,12 @@ pub struct Sema<'a, 'sm> {
     /// compares instead ([temp.over.link]/6; clang's
     /// `AreConstraintExpressionsEqual`, WP-446).
     pub(crate) friend_cmp_constraints: kiln_source::fx::FxHashMap<ExprId, ExprId>,
-    /// While a friend function template of a class template is
-    /// redeclared: one of its constraints names an enclosing template's
-    /// parameter, so it declares a function template of its own, never
+    /// While a friend of a class template is redeclared: a friend
+    /// function template one of whose constraints names an enclosing
+    /// template's parameter, or a non-template friend with a
+    /// requires-clause, declares a function (template) of its own, never
     /// one of another scope ([temp.friend]/9; clang's
-    /// `FriendConstraintsDependOnEnclosingTemplate`, WP-726).
+    /// `FriendConstraintsDependOnEnclosingTemplate`, WP-726, WP-779).
     pub(crate) friend_template_apart: bool,
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).

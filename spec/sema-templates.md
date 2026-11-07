@@ -2073,7 +2073,20 @@ class name" at `B`
   without a "redefines default argument" or "redefinition" error
   (`Sema::friend_template_apart`, `Substituter::outer_used`; clang's
   `FriendConstraintsDependOnEnclosingTemplate`; WP-726,
-  `temp.friend/p9-constraint-on-enclosing-distinct.cpp`).
+  `temp.friend/p9-constraint-on-enclosing-distinct.cpp`). The constraint
+  may be a template parameter's type-constraint
+  (`template<std::convertible_to<T> U>`) or name a level further out
+  (a member class template of a class template). A non-template friend
+  with a requires-clause is apart the same way (the paragraph's "such a
+  constrained friend function"; `friend_decl` sets the flag from the
+  pattern's trailing requires-clause), so `friend int f(Base) requires
+  (sizeof(T) > 0) {}` in `A<char>` and `A<int>` is two functions, not a
+  redefinition (WP-779,
+  `temp.friend/p9-constrained-friend-distinct-general.cpp`). Gap: the
+  paragraph's two "must be a definition" errors (clang
+  `err_non_temp_friend_decl_with_requires_clause_must_be_def`,
+  `err_friend_decl_with_enclosing_temp_constraint_must_be_def`) are not
+  diagnosed.
 - A friend function or function template declared with a qualified name
   in a templated class (`template<class U> friend R N::f(X<U>);`,
   `friend R N::g(T);`) whose template head or type is dependent is not

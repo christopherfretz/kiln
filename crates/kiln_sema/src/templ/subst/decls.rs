@@ -1626,7 +1626,16 @@ impl Substituter<'_, '_, '_> {
                     return self.unimplemented("this kind of friend declaration", loc);
                 }
                 let ctx = DeclaratorContext::Member;
-                let r = self.function_decl(f, ctx, Some(loc))?;
+                // [temp.friend]/9: a non-template friend with a
+                // requires-clause (only a templated class has one) declares
+                // a function of its own in each specialization, not one of
+                // another scope (clang `FriendConstraintsDependOnEnclosing
+                // Template` / `FriendsDifferByConstraints`).
+                let apart = self.sema.ast.templates.trailing_requires.contains(f);
+                let saved = std::mem::replace(&mut self.sema.friend_template_apart, apart);
+                let r = self.function_decl(f, ctx, Some(loc));
+                self.sema.friend_template_apart = saved;
+                let r = r?;
                 if let FriendTarget::Decl(x) = self.sema.ast.decls.friend_target(r)
                     && self.sema.ast.instantiated_from(x).is_none()
                 {
