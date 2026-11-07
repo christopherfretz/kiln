@@ -53,6 +53,9 @@ options:
   --external <dir>    run every .c/.cpp under <dir> (outside the repo) as
                       never-crash: counts only, nothing written (spec/harness.md)
   --filter <substr>   only tests whose path contains <substr>
+  --shard <K/N>       run only shard K of N (1 <= K <= N): test i (0-based) of the
+                      sorted list (after --filter) runs iff i % N == K-1, so shards
+                      1..N together are exactly the unsharded run (CI fan-out)
   --update            rewrite existing pp `.expected` files with the actual output
                       (only those that differ under the comparison rule)
   --pp-compare <how>  compare pp output as `tokens` or `text`, overriding every
@@ -82,6 +85,49 @@ exit status: 0 all passed (xfail/skip allowed), 1 a test failed/xpassed/errored/
 2 usage or infrastructure error.
 ";
 
+/// `--shard K/N` (spec/harness.md "Command line"): of the sorted,
+/// filtered test list, test `i` (0-based) is in shard `K` iff
+/// `i % N == K - 1`. Round-robin rather than contiguous blocks, so a slow
+/// directory is spread over every shard; the shards of one `N` partition
+/// the list (no test is lost or run twice).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shard {
+    /// `K`, 1-based.
+    pub index: usize,
+    /// `N`, at least 1.
+    pub count: usize,
+}
+
+impl Shard {
+    /// Parses `K/N` with `1 <= K <= N`.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let bad = || format!("bad --shard `{s}` (K/N with 1 <= K <= N)");
+        let (k, n) = s.split_once('/').ok_or_else(bad)?;
+        let index: usize = k.trim().parse().map_err(|_| bad())?;
+        let count: usize = n.trim().parse().map_err(|_| bad())?;
+        if index == 0 || index > count {
+            return Err(bad());
+        }
+        Ok(Self { index, count })
+    }
+
+    /// Does test `i` (0-based, in sorted order) belong to this shard?
+    pub fn keeps(self, i: usize) -> bool {
+        i % self.count == self.index - 1
+    }
+
+    /// The tests of `cases` (sorted) in this shard, in order.
+    pub fn select<T>(self, cases: Vec<T>) -> Vec<T> {
+        cases.into_iter().enumerate().filter(|&(i, _)| self.keeps(i)).map(|(_, c)| c).collect()
+    }
+}
+
+impl std::fmt::Display for Shard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.index, self.count)
+    }
+}
+
 /// Parsed command line.
 #[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // independent command-line switches
@@ -104,6 +150,8 @@ pub struct Options {
     /// `--external <dir>`: the never-crash run of [`external`].
     pub external: Option<PathBuf>,
     pub filter: Option<String>,
+    /// `--shard K/N`: only every N-th test of the sorted list, from K-1.
+    pub shard: Option<Shard>,
     pub update: bool,
     pub jobs: Option<usize>,
     pub run_timeout: Duration,
@@ -133,6 +181,7 @@ impl Default for Options {
             meta_header: false,
             external: None,
             filter: None,
+            shard: None,
             update: false,
             jobs: None,
             run_timeout: Duration::from_secs(10),
@@ -165,6 +214,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--gcc" => o.gcc = Some(PathBuf::from(value("--gcc")?)),
             "--external" => o.external = Some(PathBuf::from(value("--external")?)),
             "--filter" => o.filter = Some(value("--filter")?),
+            "--shard" => o.shard = Some(Shard::parse(&value("--shard")?)?),
             "-j" | "--jobs" => {
                 let v = value("--jobs")?;
                 o.jobs = Some(
@@ -224,6 +274,10 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
         }
     };
     if opts.external.is_some() {
+        if opts.shard.is_some() {
+            eprintln!("xtask test: `--shard` does not apply to `--external`\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
         return external::main(&opts);
     }
     opts.require_gcc = crate::oracle::require_gcc_from_env();
@@ -280,6 +334,13 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     if cases.is_empty() {
         return Err("no tests selected".into());
     }
+    // After the emptiness check: a shard of a list shorter than N may be
+    // empty, and that is not an error (its tests are in the other shards).
+    let selected = cases.len();
+    let cases = match opts.shard {
+        Some(shard) => shard.select(cases),
+        None => cases,
+    };
 
     let compiler = match &opts.compiler {
         Some(c) => c.clone(),
@@ -330,10 +391,11 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     let jobs = opts
         .jobs
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(8)))
-        .min(cases.len());
+        .min(cases.len().max(1));
     println!(
-        "running {} tests with {} ({}), oracle: {}, gcc: {}, {jobs} jobs{}, mem limit: {}",
+        "running {} tests{} with {} ({}), oracle: {}, gcc: {}, {jobs} jobs{}, mem limit: {}",
         cases.len(),
+        opts.shard.map_or_else(String::new, |s| format!(" (shard {s} of {selected})")),
         cfg.compiler.display(),
         compiler_kind.as_str(),
         cfg.oracle.as_ref().map_or_else(|| "none".to_owned(), |o| o.display().to_string()),

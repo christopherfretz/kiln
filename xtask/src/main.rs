@@ -114,14 +114,27 @@ fn stress(args: impl Iterator<Item = String>) -> ExitCode {
 }
 
 const CI_USAGE: &str = "\
-usage: cargo xtask ci [--quick] [--oracle-only]
+usage: cargo xtask ci [--quick] [--oracle-only] [--step <steps>] [--shard <K/N>]
+                      [--unit-group <group>]
 
   --quick        skip the clang++-N corpus self-check (N: KILN_ORACLE, default 22;
                  local iteration; merges and GitHub CI use the full form)
   --oracle-only  run only what depends on the oracle release: no diag-split or
                  spec/landed lint, no fmt or clippy, and of `cargo test` only the
                  targets that read KILN_ORACLE; the corpus runs as usual (GitHub CI's
-                 `KILN_ORACLE=19 cargo xtask ci --quick --oracle-only`)
+                 `KILN_ORACLE=19 cargo xtask ci --oracle-only ...` jobs)
+  --step <steps> run only these steps (comma list, or repeat the flag; default all):
+                   lints       diag-split --check, the spec/landed lint, fmt, clippy
+                   unit        cargo test --workspace (--oracle-only: its KILN_ORACLE
+                               targets)
+                   self-check  the clang++-N corpus self-check
+                   kiln        cargo build -p kiln_driver, then the kiln corpus run
+                 an unselected step prints `skipped (--step)`
+  --shard <K/N>  run only shard K of N of each corpus run (`cargo xtask test
+                 --shard K/N`); needs a selected self-check or kiln step
+  --unit-group <group>
+                 run only one group of the unit step (GitHub CI's fan-out):
+                 {groups} (`rest`: the workspace without the other groups' packages)
 
 KILN_REQUIRE_GCC=1: no usable GCC oracle (KILN_GCC, else g++-16) is an error
 (exit 2) before any step runs (spec/harness.md \"GCC oracle\").
@@ -136,38 +149,173 @@ KILN_REQUIRE_GCC=1: no usable GCC oracle (KILN_GCC, else g++-16) is an error
 /// variable without being listed here.
 const ORACLE_TESTS: &[(&str, &str)] = &[("kiln_codegen", "ir_vs_clang")];
 
-/// The `cargo` steps of `ci` before the corpus runs, in order.
-fn ci_cargo_steps(oracle_only: bool) -> Vec<Vec<&'static str>> {
+/// The unit-test groups of GitHub CI's fan-out (`ci --step unit
+/// --unit-group <name>`, spec/harness.md "CI"): each named group is
+/// `cargo test` of its packages, and [`UNIT_REST`] is the workspace without
+/// all of them, so a new crate lands in `rest` and the groups always cover
+/// exactly `cargo test --workspace`. The split balances run time (WP-692):
+/// xtask's own tests (the seed-corpus run, about 75 s) and `kiln_codegen`'s
+/// clang-differential tests are each about as long as all the rest.
+/// `.github/workflows/ci-lane.yml` lists the same names
+/// (`ci_tests::workflow_lists_the_unit_groups`).
+const UNIT_GROUPS: &[(&str, &[&str])] = &[("xtask", &["xtask"]), ("codegen", &["kiln_codegen"])];
+
+/// The unit group of every workspace package no [`UNIT_GROUPS`] entry names.
+const UNIT_REST: &str = "rest";
+
+/// The steps `ci --step` selects, in the order `ci` runs them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CiStep {
+    Lints,
+    Unit,
+    SelfCheck,
+    Kiln,
+}
+
+impl CiStep {
+    const ALL: [Self; 4] = [Self::Lints, Self::Unit, Self::SelfCheck, Self::Kiln];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Lints => "lints",
+            Self::Unit => "unit",
+            Self::SelfCheck => "self-check",
+            Self::Kiln => "kiln",
+        }
+    }
+}
+
+/// The parsed `cargo xtask ci` command line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
+struct CiArgs {
+    quick: bool,
+    oracle_only: bool,
+    /// `--step`, indexed like [`CiStep::ALL`]; all `true` without the flag.
+    steps: [bool; 4],
+    shard: Option<test::Shard>,
+    unit_group: Option<String>,
+}
+
+impl CiArgs {
+    fn runs(&self, step: CiStep) -> bool {
+        self.steps[step as usize]
+    }
+}
+
+/// Parses `ci`'s arguments; `Ok(None)` is `--help`.
+fn parse_ci_args(args: impl IntoIterator<Item = String>) -> Result<Option<CiArgs>, String> {
+    let mut quick = false;
+    let mut oracle_only = false;
+    let mut steps: Option<[bool; 4]> = None;
+    let mut shard = None;
+    let mut unit_group = None;
+    let mut it = args.into_iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f.to_owned(), Some(v.to_owned())),
+            _ => (arg.clone(), None),
+        };
+        let mut value = |name: &str| -> Result<String, String> {
+            inline.clone().or_else(|| it.next()).ok_or_else(|| format!("`{name}` requires a value"))
+        };
+        match flag.as_str() {
+            "--quick" if inline.is_none() => quick = true,
+            "--oracle-only" if inline.is_none() => oracle_only = true,
+            "-h" | "--help" => return Ok(None),
+            "--step" => {
+                let v = value("--step")?;
+                let selected = steps.get_or_insert([false; 4]);
+                for name in v.split(',') {
+                    let step = CiStep::ALL.into_iter().find(|s| s.name() == name.trim());
+                    let step = step.ok_or_else(|| {
+                        format!("unknown --step `{name}` (lints, unit, self-check, kiln)")
+                    })?;
+                    selected[step as usize] = true;
+                }
+            }
+            "--shard" => shard = Some(test::Shard::parse(&value("--shard")?)?),
+            "--unit-group" => {
+                let v = value("--unit-group")?;
+                if v != UNIT_REST && !UNIT_GROUPS.iter().any(|&(g, _)| g == v) {
+                    return Err(format!("unknown --unit-group `{v}` ({})", unit_group_names()));
+                }
+                unit_group = Some(v);
+            }
+            _ => return Err(format!("unknown argument `{arg}`")),
+        }
+    }
+    let args = CiArgs { quick, oracle_only, steps: steps.unwrap_or([true; 4]), shard, unit_group };
+    if args.shard.is_some() && !args.runs(CiStep::SelfCheck) && !args.runs(CiStep::Kiln) {
+        return Err("`--shard` needs a corpus step (`--step self-check` or `kiln`)".into());
+    }
+    if args.unit_group.is_some() && (!args.runs(CiStep::Unit) || args.oracle_only) {
+        return Err("`--unit-group` needs `--step unit` and not `--oracle-only`".into());
+    }
+    Ok(Some(args))
+}
+
+/// `xtask, codegen, rest`: the `--unit-group` values.
+fn unit_group_names() -> String {
+    let mut names: Vec<&str> = UNIT_GROUPS.iter().map(|&(g, _)| g).collect();
+    names.push(UNIT_REST);
+    names.join(", ")
+}
+
+/// The `cargo` commands of the `lints` step after the in-process lints.
+fn ci_lint_steps() -> Vec<Vec<String>> {
+    [
+        &["fmt", "--all", "--check"][..],
+        &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
+    ]
+    .iter()
+    .map(|s| s.iter().map(|&a| a.to_owned()).collect())
+    .collect()
+}
+
+/// The `cargo` commands of the `unit` step: `cargo test --workspace`, or one
+/// [`UNIT_GROUPS`] group of it, or under `--oracle-only` the
+/// [`ORACLE_TESTS`] targets.
+fn ci_unit_steps(oracle_only: bool, group: Option<&str>) -> Vec<Vec<String>> {
+    let own = |v: &[&str]| v.iter().map(|&a| a.to_owned()).collect::<Vec<String>>();
     if oracle_only {
         return ORACLE_TESTS
             .iter()
-            .map(|&(pkg, test)| vec!["test", "-p", pkg, "--test", test])
+            .map(|&(pkg, t)| own(&["test", "-p", pkg, "--test", t]))
             .collect();
     }
-    vec![
-        vec!["fmt", "--all", "--check"],
-        vec!["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
-        vec!["test", "--workspace"],
-    ]
-}
-
-fn ci(args: impl Iterator<Item = String>) -> ExitCode {
-    let mut quick = false;
-    let mut oracle_only = false;
-    for arg in args {
-        match arg.as_str() {
-            "--quick" => quick = true,
-            "--oracle-only" => oracle_only = true,
-            "-h" | "--help" => {
-                print!("{CI_USAGE}");
-                return ExitCode::SUCCESS;
-            }
-            _ => {
-                eprint!("xtask ci: unknown argument `{arg}`\n\n{CI_USAGE}");
-                return ExitCode::from(2);
+    let mut step = own(&["test"]);
+    let named = group.and_then(|g| UNIT_GROUPS.iter().find(|&&(name, _)| name == g));
+    if let Some((_, pkgs)) = named {
+        for p in *pkgs {
+            step.extend(own(&["-p", p]));
+        }
+    } else {
+        // The whole workspace, or `rest`: the workspace without the groups.
+        step.push("--workspace".into());
+        if group.is_some() {
+            for p in UNIT_GROUPS.iter().flat_map(|&(_, pkgs)| pkgs) {
+                step.extend(own(&["--exclude", p]));
             }
         }
     }
+    vec![step]
+}
+
+#[allow(clippy::too_many_lines, reason = "one linear sequence of gate steps")]
+fn ci(args: impl Iterator<Item = String>) -> ExitCode {
+    let usage = CI_USAGE.replace("{groups}", &unit_group_names());
+    let args = match parse_ci_args(args) {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            print!("{usage}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprint!("xtask ci: {e}\n\n{usage}");
+            return ExitCode::from(2);
+        }
+    };
     // The compiler `ci` self-checks the conformance corpus with
     // (`spec/harness.md` "CI"): the corpus must pass with it, or the corpus
     // itself is wrong. A bad `KILN_ORACLE` fails before anything runs.
@@ -185,32 +333,54 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
         eprintln!("xtask ci: {e}");
         return ExitCode::from(2);
     }
-    if !oracle_only && !ci_lints(&util::repo_root()) {
-        return ExitCode::FAILURE;
-    }
-    for step in ci_cargo_steps(oracle_only) {
-        if !ci_step(&step) {
+    let skipped = |step: CiStep| eprintln!("xtask ci: {}: skipped (--step)", step.name());
+    if !args.runs(CiStep::Lints) {
+        skipped(CiStep::Lints);
+    } else if args.oracle_only {
+        eprintln!("xtask ci: lints: skipped (--oracle-only)");
+    } else {
+        let start = std::time::Instant::now();
+        if !ci_lints(&util::repo_root()) || !ci_lint_steps().iter().all(|s| ci_step(s)) {
             return ExitCode::FAILURE;
         }
+        eprintln!("xtask ci: lints: done in {:.1}s", start.elapsed().as_secs_f64());
+    }
+    if args.runs(CiStep::Unit) {
+        let start = std::time::Instant::now();
+        if !ci_unit_steps(args.oracle_only, args.unit_group.as_deref()).iter().all(|s| ci_step(s)) {
+            return ExitCode::FAILURE;
+        }
+        eprintln!("xtask ci: unit: done in {:.1}s", start.elapsed().as_secs_f64());
+    } else {
+        skipped(CiStep::Unit);
     }
     // The kiln++ binary the kiln-mode run tests: built here (a no-op when
     // `cargo test` above already built it), from this checkout, into
     // `$CARGO_TARGET_DIR`.
-    let root = test::repo_root();
-    let kiln = match test::target_dir(&root).and_then(|t| util::build_kiln(&root, &t, "ci", false))
-    {
-        Ok(k) => k,
-        Err(e) => {
-            eprintln!("xtask ci: {e}");
-            return ExitCode::FAILURE;
+    let kiln = if args.runs(CiStep::Kiln) {
+        let root = test::repo_root();
+        let start = std::time::Instant::now();
+        match test::target_dir(&root).and_then(|t| util::build_kiln(&root, &t, "ci", false)) {
+            Ok(k) => {
+                eprintln!("xtask ci: kiln built in {:.1}s", start.elapsed().as_secs_f64());
+                Some(k)
+            }
+            Err(e) => {
+                eprintln!("xtask ci: {e}");
+                return ExitCode::FAILURE;
+            }
         }
+    } else {
+        None
     };
 
     // Both corpus runs are in-process, not a re-exec of `current_exe()`: the
     // `cargo test` step above may have rebuilt and replaced this very binary
     // (its path is then "<exe> (deleted)" and the exec fails). Both always
     // run (when not skipped), so one failing does not hide the other.
-    let self_check = if quick {
+    let self_check = if !args.runs(CiStep::SelfCheck) {
+        test::CorpusOutcome::Skipped("--step".to_owned())
+    } else if args.quick {
         test::CorpusOutcome::Skipped("--quick".to_owned())
     } else if let Err(e) = util::identify(std::path::Path::new(&corpus_compiler)) {
         test::CorpusOutcome::Skipped(format!("{corpus_compiler} not runnable: {e}"))
@@ -219,15 +389,26 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
             &format!("--compiler {corpus_compiler}"),
             Some(corpus_compiler.clone().into()),
             require_gcc,
+            args.shard,
         )
     };
-    // kiln-mode always runs: kiln as the compiler, clang++-N as the oracle
-    // (and kiln's linker), so without clang it fails rather than passing
-    // unchecked.
-    let kiln_mode = ci_corpus(&format!("--compiler {}", kiln.display()), Some(kiln), require_gcc);
+    // kiln-mode always runs unless `--step` leaves it out: kiln as the
+    // compiler, clang++-N as the oracle (and kiln's linker), so without
+    // clang it fails rather than passing unchecked.
+    let kiln_mode = match kiln {
+        Some(kiln) => ci_corpus(
+            &format!("--compiler {}", kiln.display()),
+            Some(kiln),
+            require_gcc,
+            args.shard,
+        ),
+        None => test::CorpusOutcome::Skipped("--step".to_owned()),
+    };
 
-    let self_check_name = format!("{corpus_compiler} self-check");
-    let runs = [(self_check_name.as_str(), self_check), ("kiln", kiln_mode)];
+    let shard = args.shard.map_or_else(String::new, |s| format!(", shard {s}"));
+    let self_check_name = format!("{corpus_compiler} self-check{shard}");
+    let kiln_name = format!("kiln{shard}");
+    let runs = [(self_check_name.as_str(), self_check), (kiln_name.as_str(), kiln_mode)];
     for (name, run) in &runs {
         eprintln!("xtask ci: corpus ({name}): {}", run.line());
     }
@@ -267,14 +448,16 @@ fn ci_lints(root: &std::path::Path) -> bool {
 }
 
 /// One `cargo xtask test` run over the default corpus, with `compiler`
-/// (`require_gcc`: `KILN_REQUIRE_GCC=1`).
+/// (`require_gcc`: `KILN_REQUIRE_GCC=1`; `shard`: `--shard K/N`).
 fn ci_corpus(
     what: &str,
     compiler: Option<std::path::PathBuf>,
     require_gcc: bool,
+    shard: Option<test::Shard>,
 ) -> test::CorpusOutcome {
-    eprintln!("xtask ci: cargo xtask test {what}");
-    let opts = test::Options { compiler, require_gcc, ..test::Options::default() };
+    let shard_flag = shard.map_or_else(String::new, |s| format!(" --shard {s}"));
+    eprintln!("xtask ci: cargo xtask test {what}{shard_flag}");
+    let opts = test::Options { compiler, require_gcc, shard, ..test::Options::default() };
     let start = std::time::Instant::now();
     let run = test::execute(&opts);
     if let Err(e) = &run {
@@ -287,7 +470,7 @@ fn ci_corpus(
 /// once when it failed with `error[E0463]` ([`test::ci_should_retry`]). The
 /// step is in the live-children table, so a SIGINT/SIGTERM to xtask stops
 /// cargo and its rustc and test processes too ([`util::process::run_step`]).
-fn ci_step(step: &[&str]) -> bool {
+fn ci_step(step: &[String]) -> bool {
     let shown = step.join(" ");
     let mut retried = false;
     loop {
@@ -319,7 +502,10 @@ fn ci_step(step: &[&str]) -> bool {
 
 #[cfg(test)]
 mod ci_tests {
-    use super::{ORACLE_TESTS, ci_cargo_steps, util};
+    use super::{
+        CiArgs, CiStep, ORACLE_TESTS, UNIT_GROUPS, UNIT_REST, ci_lint_steps, ci_unit_steps,
+        parse_ci_args, test, util,
+    };
     use std::path::{Path, PathBuf};
 
     fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -375,12 +561,97 @@ mod ci_tests {
     #[test]
     fn cargo_steps() {
         assert_eq!(
-            ci_cargo_steps(true),
+            ci_unit_steps(true, None),
             [["test", "-p", "kiln_codegen", "--test", "ir_vs_clang"]],
             "--oracle-only"
         );
-        let full = ci_cargo_steps(false);
-        assert_eq!(full.len(), 3);
-        assert_eq!(full[2], ["test", "--workspace"]);
+        assert_eq!(ci_unit_steps(false, None), [["test", "--workspace"]]);
+        assert_eq!(ci_unit_steps(false, Some("xtask")), [["test", "-p", "xtask"]]);
+        assert_eq!(ci_unit_steps(false, Some("codegen")), [["test", "-p", "kiln_codegen"]]);
+        assert_eq!(
+            ci_unit_steps(false, Some(UNIT_REST)),
+            [["test", "--workspace", "--exclude", "xtask", "--exclude", "kiln_codegen"]]
+        );
+        let lints = ci_lint_steps();
+        assert_eq!(lints.len(), 2);
+        assert_eq!(lints[0], ["fmt", "--all", "--check"]);
+    }
+
+    /// The unit groups partition the workspace: no package is in two named
+    /// groups, every named package exists, and `rest` excludes exactly
+    /// the named ones (so a new crate runs in `rest`).
+    #[test]
+    fn unit_groups_partition_the_workspace() {
+        let root = util::repo_root();
+        let mut named = std::collections::BTreeSet::new();
+        for &(group, pkgs) in UNIT_GROUPS {
+            assert_ne!(group, UNIT_REST);
+            for p in pkgs {
+                assert!(named.insert(*p), "{p} is in two unit groups");
+                let dir =
+                    if *p == "xtask" { root.join("xtask") } else { root.join("crates").join(p) };
+                assert!(dir.join("Cargo.toml").is_file(), "unit group {group}: no package {p}");
+            }
+        }
+        assert!(!named.is_empty());
+    }
+
+    fn args(v: &[&str]) -> Result<Option<CiArgs>, String> {
+        parse_ci_args(v.iter().map(|s| (*s).to_owned()))
+    }
+
+    /// spec/harness.md "CI": `--step`, `--shard` and `--unit-group`, and
+    /// their usage errors (exit 2 in `ci`).
+    #[test]
+    fn step_and_shard_arguments() {
+        let all = args(&[]).unwrap().unwrap();
+        assert!(CiStep::ALL.iter().all(|&s| all.runs(s)), "no --step is every step");
+        assert_eq!((all.shard, all.unit_group.as_deref()), (None, None));
+        let a = args(&["--step", "lints,unit", "--quick"]).unwrap().unwrap();
+        assert_eq!(a.steps, [true, true, false, false]);
+        assert!(a.quick && !a.oracle_only);
+        let a = args(&["--step=kiln", "--step", "self-check", "--shard", "2/6"]).unwrap().unwrap();
+        assert_eq!(a.steps, [false, false, true, true]);
+        assert_eq!(a.shard, Some(test::Shard { index: 2, count: 6 }));
+        let a = args(&["--oracle-only", "--step", "unit,kiln", "--shard=1/6"]).unwrap().unwrap();
+        assert_eq!(a.steps, [false, true, false, true]);
+        assert!(a.oracle_only);
+        let a = args(&["--step", "unit", "--unit-group", "rest"]).unwrap().unwrap();
+        assert_eq!(a.unit_group.as_deref(), Some("rest"));
+        assert_eq!(args(&["-h"]).unwrap(), None);
+        for bad in [
+            &["--step", "fmt"][..],
+            &["--step"],
+            &["--step", "lints,"],
+            &["--shard", "0/3"],
+            &["--shard", "1/3", "--step", "lints,unit"],
+            &["--unit-group", "xtask", "--step", "kiln"],
+            &["--unit-group", "nope"],
+            &["--unit-group", "xtask", "--oracle-only"],
+            &["--quick=1"],
+            &["--bogus"],
+        ] {
+            assert!(args(bad).is_err(), "{bad:?} should be rejected");
+        }
+        assert!(args(&["--shard", "3/3"]).unwrap().is_some(), "all steps include the corpus");
+    }
+
+    /// GitHub CI runs every unit group: the matrix of the `unit` job in
+    /// `.github/workflows/ci-lane.yml` names exactly [`UNIT_GROUPS`] and
+    /// `rest`, so no group of `cargo test --workspace` silently drops out.
+    #[test]
+    fn workflow_lists_the_unit_groups() {
+        let path = util::repo_root().join(".github/workflows/ci-lane.yml");
+        let yml = std::fs::read_to_string(&path).unwrap();
+        let line = yml
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("group: ["))
+            .expect("ci-lane.yml has a `group: [...]` matrix line");
+        let mut listed: Vec<&str> = line.trim_end_matches(']').split(',').map(str::trim).collect();
+        listed.sort_unstable();
+        let mut want: Vec<&str> = UNIT_GROUPS.iter().map(|&(g, _)| g).collect();
+        want.push(UNIT_REST);
+        want.sort_unstable();
+        assert_eq!(listed, want, "{}", path.display());
     }
 }
