@@ -1033,6 +1033,32 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   at the innermost position, as clang's identifier location: set by
   `parse_direct_declarator` when nothing names it, else the first array
   bound or the next token (WP-385).
+- **Template template parameter kinds** (P2841R7 [temp.param]/1,
+  WP-746, `parse_template_template_param` in `templ.rs`): after the
+  template-head of a template template parameter, `concept` makes a
+  concept-tt-parameter and `auto` a variable-tt-parameter
+  (`template<class> concept C`, `template<class> auto V`); the rest is
+  the type-tt-parameter grammar (named or unnamed, `...` pack, `=`
+  default). The keys are recognised only at `-fclang-compat=22` (at 19
+  they reach the existing "expected 'class'" path, as clang 19). Before
+  C++26 each is an error with clang 22's wording,
+  `parse_ext_concept_template_param` "concept template parameter is a
+  C++2c extension" / `parse_ext_variable_template_template_param`
+  "variable template template parameter is a C++2c extension", at the
+  key, and the parameter is still declared with its kind. The parser
+  records the kind with `Sema::act_on_ttp_kind(p, kind, loc)`
+  (spec/sema-templates.md §2.1.1). A default argument that names a
+  concept or variable template is a template name when the parameter's
+  kind is not Type (`Sema::ttp_kind(p)`); for a type-tt-parameter it is
+  `act_on_wrong_kind_ttp_default`. In a template-argument-list a bare
+  concept or variable-template name (ending the argument, no `<`) is a
+  template-name argument at clang compatibility 22, as clang's
+  `ParseTemplateTemplateArgument`; Sema then checks it against the
+  parameter's kind ([temp.arg.template]). At 19 a bare concept stays
+  "too few template arguments for concept". Tests:
+  `temp.param/concept-variable-ttp.cpp`,
+  `temp.param/concept-variable-ttp-cxx23.cpp`,
+  `temp.param/concept-variable-ttp-defaults-errors.cpp`.
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
   - designated initializers `.x = …` (C++20)

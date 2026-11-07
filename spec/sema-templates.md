@@ -152,7 +152,8 @@ template-param   := type-param | constrained-param | parameter-declaration | tem
 type-param       := ('class'|'typename') '...'? identifier? ('=' type-id)?
 constrained-param:= type-constraint '...'? identifier? ('=' type-id)?
 type-constraint  := nested-name-specifier? concept-name ('<' template-argument-list? '>')?
-template-template-param := template-head ('class'|'typename') '...'? identifier? ('=' id-expression)?
+template-template-param := template-head ('class'|'typename'|'auto') '...'? identifier? ('=' id-expression)?
+                        | 'template' '<' template-parameter-list '>' 'concept' '...'? identifier? ('=' id-expression)?
 ```
 
 **Kind decision.** These rules are clang's `isStartOfTemplateTypeParameter`.
@@ -352,6 +353,97 @@ member function for call to 'f'" without notes. A generic lambda in a
 member function is not a member template and is accepted. Tests:
 `temp.mem/p2-local-class-member-template.cpp`,
 `temp.mem/p2-local-class-abbreviated-template.cpp`.
+
+#### 2.1.1 Concept and variable template template parameters (P2841R7)
+
+**Kinds** ([temp.param]/2-3). A template template parameter is a *type*,
+*variable* or *concept* template template parameter, recorded as
+`TemplateParmInfo::ttp_kind` (`TtpKind::{Type, Variable, Concept}`,
+`Sema::ttp_kind`; `kiln_sema/src/templ/ttpkind.rs`). The parser takes
+`auto` (variable-tt-parameter) or `concept` (concept-tt-parameter) where it
+takes the `class`/`typename` key, only at `-fclang-compat=22` (clang 19
+reports the missing key, unchanged); before C++26 each is the error
+"concept template parameter is a C++2c extension" /
+"variable template template parameter is a C++2c extension"
+(`parse_ext_concept_template_param`,
+`parse_ext_variable_template_template_param`, clang 22's
+`ext_cxx26_*`, error by default) and the parameter is still declared.
+Packs, unnamed parameters and defaults (`= Int`, `= sz`) parse as for a
+type template template parameter. [temp.param]/5: a concept template
+parameter shall not have associated constraints; a requires-clause in its
+`template<...>` or a type-constraint on one of its parameters is
+"concept template parameter cannot have associated constraints"
+(`sema_concept_template_param_constraints`, at the constraint). clang 22
+accepts both silently: kiln follows the wording here. A variable template
+template parameter's template-head may carry a requires-clause.
+
+**Names** ([temp.names], [temp.param]/8). `classify_name` reports a concept
+template parameter as `NameClass::Concept` and a variable template
+template parameter as `NameClass::VarTemplate`, so `C<T>` parses as a
+concept-id, `C auto` and `template <C T>` as type-constraints, and `V<T>`
+as a variable template-id. In a template-argument list, a concept name or
+variable template name for a parameter of that kind is a template
+argument (`TemplateName`); for a type template template parameter it stays
+the clang 22 error of §2.2.
+
+**Uses before substitution.** `C<args>` for a concept template parameter
+`C` is a `ConceptSpecializationExpr` whose decl is the parameter;
+`V<args>` for a variable template template parameter is an
+`UnresolvedLookupExpr` whose single decl is the parameter with the
+arguments in `expr_targs` (`ttp_template_id_expr`). Both are
+value-dependent (and `C<args>` is `bool`), and both carry the parameter
+pack for [temp.variadic] (`expr_packs` visits the parameter and the
+arguments, so `Cs<T>...` and `(Cs<T> && ...)` expand). A type-constraint
+`C T` / `C auto` names the parameter as its concept.
+
+**Substitution** (`Sema::ttp_template_id`). Substituting the parameter
+yields the argument template (`Substituter::template_name`), and the use
+is rebuilt as that template's template-id with the substituted arguments:
+a checked concept-id ([temp.constr.concept]/2, satisfaction memoised on
+the substituted concept and arguments, §8.3) or a variable template
+specialization (`DeclRefExpr` to the instantiated variable), which the
+Oven reads like any other ([expr.const]). A pack of concept or variable
+templates substitutes element-wise through the expansion.
+
+**Arguments** ([temp.arg.template]/1, /3). A template-argument for a
+type template template parameter names a class or alias template, for a
+concept template parameter a concept, for a variable template template
+parameter a variable template (or, each time, a template template
+parameter of the same kind; `template_arg_kind`). Otherwise clang 22's
+"template argument does not refer to a {class or alias template|variable
+template|concept}, or template template parameter"
+(`sema_template_arg_not_valid_template`, at the argument), with the note
+"template argument refers to a {..} '{name}', here" at the template. A
+default argument of the wrong kind is rejected the same way and dropped.
+Matching of an argument of the right kind is P0522's "at least as
+specialized" check (§11.2, `templ/ttarg22.rs`) unchanged: the
+parameter's template-head is formed as arguments to the argument template, so a defaulted or pack
+parameter of the argument absorbs them and an argument that cannot accept
+them is "too few/many template arguments for concept 'Same'" with the
+"different template parameters" notes, as in clang 22. The kinds of the
+parameters *inside* nested template template parameters are not compared
+(follow-up).
+
+**Deduction** ([temp.deduct.type]/8-9). A `TemplateName` argument in P
+that names a concept or variable template template parameter deduces the
+argument's template like a type template template parameter (packs
+included): `template <template <class> auto V> int pick(Q<V>)`, called
+with `Q<sz>{}`, deduces `V = sz`.
+
+**Equivalence** ([temp.over.link]/6.1): §6.8.
+
+**Feature macro.** `__cpp_template_parameters` stays undefined: the paper
+is partial (see `docs/STANDARD_SUPPORT.md` P2841R7). clang 22 does not
+define it either.
+
+Tests: `temp.param/concept-variable-ttp.cpp`,
+`temp.param/concept-variable-ttp-cxx23.cpp`,
+`temp.param/concept-variable-ttp-defaults-errors.cpp`,
+`temp.param/concept-ttp-requires-clause.cpp`,
+`temp.arg.template/ttp-kind-mismatch.cpp`,
+`temp.arg.template/concept-variable-ttp-p0522.cpp`,
+`temp.deduct.type/concept-variable-ttp-deduction-run.cpp`,
+`temp.param/ir-concept-variable-ttp-mangling.cpp` (spec/abi.md).
 
 ### 2.2 Template-ids and the `<` rule
 
@@ -3901,6 +3993,29 @@ This equivalence is used for:
 "Functionally equivalent but not equivalent" is ill-formed NDR. Clang and
 kiln treat it as a different entity.
 
+**Template template parameter kinds** (P2841R7, [temp.over.link]/6.1). A
+type, a concept and a variable template template parameter are three
+kinds: template-heads whose corresponding template template parameters
+differ in kind are not equivalent (`heads_equivalent`,
+`template_params_equivalent`, and the redeclaration check
+`params_match`, which reports "template parameter has a different kind in
+template {|template parameter }redeclaration" as for a type/non-type
+change, nested template template parameters included). So
+`template <template <class> class K> int h()` and the same with
+`concept K` or `auto K` are three overloads, each removed by an argument
+of another kind, while renaming a concept or variable template template
+parameter redeclares. A requires-clause `C<T>` naming a concept template
+parameter is compared like any expression naming template parameters
+(by position), so `requires C<T>` and `requires D<U>` with `C`/`D`
+corresponding are equivalent and the second declaration redeclares the
+first. *Wording over clang:* clang 22 does not compare template template
+parameter kinds across class template redeclarations and keeps the two
+`requires C<T>` / `requires D<U>` declarations as distinct candidates
+(an ambiguous call); kiln follows [temp.over.link]
+(`temp.over.link/concept-variable-ttp-kind-redeclaration.cpp`,
+`temp.over.link/concept-ttp-requires-redeclaration.cpp`; the agreeing
+cases are `temp.over.link/concept-variable-ttp-redeclaration.cpp`).
+
 Constructors, conversion functions and the other special members follow
 the same rule ([temp.over.link]/7). A member template is a redeclaration
 only when both its template-head and its function type are equivalent.
@@ -4563,6 +4678,46 @@ Fold-expanded constraints (P2963) are M4. Until then, the immediately
 declared constraint of a constrained pack `C... Ts` is the fold
 `(C<Ts> && ...)`, treated as one atom (clang 19).
 
+**Concept template parameters** (P2841R7, [temp.constr.normal]/1.4-1.5,
+WP-746; `normalize_concept_id`, `normalize_concept_fold` in
+`templ/concepts/normal.rs`).
+- /1.4.1: a concept-id `C<A…>` whose `C` is a concept template parameter
+  is a *concept-dependent constraint*. Normalized without a mapping that
+  supplies `C` (a declaration's own associated constraints), it is an
+  `Atomic` node of the concept-id as written (identity mapping).
+- /1.4.2: under a mapping that supplies `C` (normalizing a concept
+  `CC = CT<T>` reached through `CC<U*, C>`), the concept template
+  parameter is substituted (`Substituter::template_name`) and, when it
+  names a concept, the concept-id normalizes through that concept: the
+  normal form of `CC<U*, C>` is the normal form of `C<U*>`, so its atoms
+  are `C`'s ([temp.constr.normal] Example 3). clang 22 agrees.
+- /1.5.3: a `&&`/`||` fold whose pattern contains an unexpanded concept
+  template parameter pack, normalized under a mapping that supplies that
+  pack as N concepts (N > 0), normalizes as the expanded
+  `E0 op … op EN-1`, `Ei` being the pattern normalized with the i-th
+  concept substituted, and the fold's init (if any) joined on its side
+  ([temp.constr.normal] Example 4: `all_of<T, A, C>` is `A<T> ∧ C<T>`).
+  An empty pack, or a fold the mapping does not fix, stays one atom
+  (/1.5.3.2's fold-expanded constraint, still the P2963 approximation
+  above).
+- /1.5.3 Example 5: a fold in a constraint whose operands contain a
+  concept template parameter pack and an unexpanded pack of another kind
+  is "fold expression in a constraint contains a concept template
+  parameter pack and a template parameter pack of another kind"
+  (`sema_fold_constraint_mixed_packs`, at the fold, when the constraint
+  is checked as written: `check_constraint_fold`).
+- *Wording over clang:* clang 22 keeps concept-pack folds whole in
+  subsumption, so it reports Example 4 (and the same through a
+  forwarding concept, or with `||`) ambiguous, and it accepts Example 5.
+  Kiln follows the wording: `temp.constr.normal/concept-pack-fold-expansion.cpp`
+  and `temp.constr.normal/concept-pack-fold-mixed-kinds.cpp` are
+  `skip(clang)`; `temp.constr.normal/concept-dependent-substituted.cpp`
+  (clang agrees) is compared.
+- Approximation: atom identity still compares the whole canonical mapping
+  (above), so an atom from a fold's init (`(CTs<T> && ... && true)`) is
+  not identical across two expansions whose concept packs differ, though
+  the wording's mapping for `true` is empty; such pairs are ambiguous.
+
 ### 8.3 Satisfaction ([temp.constr.sat])
 
 `check_satisfaction(entity, args, loc) -> SatId` runs under the frame
@@ -4657,6 +4812,14 @@ change in result ill-formed NDR.
    are thus evaluated once across *all* concepts and overloads that use
    them.
 
+A concept-id naming a concept template parameter is checked only after
+substitution has replaced the parameter by its argument concept
+(§2.1.1), so both levels key on the substituted concept: `all_of<C,
+Ts...>` with `C = Small` is one `sat_cache` entry and `Small<T<i>>` one
+entry per type, shared with every other use. Stress:
+`tests/stress/concept-ttp-all-of-10k.cpp` (four 10,000-type checks and
+their repeats; the repeats are cache hits).
+
 `Satisfaction` records are kept for the TU's life. They are needed for
 the notes, and they are metered as `templ.satisfaction`.
 
@@ -4672,6 +4835,22 @@ cap of 65,536 clauses (D5).
     [temp.func.order]/6);
   - partial-specialization ordering (§4.4);
   - P0522 template template argument matching.
+
+**Eligibility** (P2841R7, [temp.constr.order]/3-4,
+`eligible_for_subsumption`, `is_concept_dependent`). Associated
+constraints that contain a concept-dependent constraint (an atom that is
+a concept-id or fold naming a concept template parameter, §8.2) are not
+eligible for subsumption. D1 is at least as constrained as D2 only if
+D1's constraints are eligible and subsume D2's (or D2 is unconstrained),
+so `more_constrained(P, Q)` is `eligible(P) ∧ P ⊒ Q ∧ ¬(eligible(Q) ∧
+Q ⊒ P)`. Two candidates constrained by `C<T>` and `C<T> && A<T>` (`C` a
+concept template parameter) are ambiguous, with clang 22's "similar
+constraint expressions" notes (a fold atom's note points at its pattern).
+*Wording over an example:* [temp.constr.order] Example 3 says the call
+selects #1 (`requires A<T>`) "because #2 is not eligible"; the normative
+¶4 needs #1's constraints to subsume #2's `X<T>`, which they do not, so
+the call is ambiguous. Kiln follows ¶4, as clang 22 does
+(`temp.constr.order/concept-dependent-not-eligible.cpp`).
 
 ### 8.5 Requires-expressions ([expr.prim.req])
 
