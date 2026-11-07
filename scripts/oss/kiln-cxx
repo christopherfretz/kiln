@@ -29,6 +29,7 @@ DIAG_RE = re.compile(
     r"error:|panicked|fatal|undefined reference|multiple definition|memory allocation of|LLVM ERROR"
 )
 OOM_RE = re.compile(r"memory allocation of \d+ bytes failed|out of memory|std::bad_alloc|Cannot allocate memory")
+SILENT_SPAWN_RC = 70
 HEAD_CAP = 256 * 1024
 TAIL_CAP = 64 * 1024
 
@@ -83,6 +84,11 @@ def classify(rc, timed_out, text, source):
         return "panic"
     if rc < 0:
         return "oom" if rc == -signal.SIGKILL else "panic"
+    if rc == SILENT_SPAWN_RC and not text.strip():
+        # kiln++ exits 70 without a word when it cannot spawn its compile
+        # thread (a 1 GiB stack reservation, crates/kiln_driver/src/main.rs):
+        # under the address-space cap that is memory.
+        return "oom"
     if "backend command failed" in text or "LLVM ERROR" in text:
         return "backend"
     if (
@@ -169,6 +175,8 @@ def main():
             diag = f"timed out after {limit_s:g} s"
         elif not diag and rc < 0:
             diag = f"killed by signal {-rc}"
+        elif not diag and rc == SILENT_SPAWN_RC and not text.strip():
+            diag = "exit 70 without output (compile thread not spawned)"
         rec = {
             "v": 1,
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

@@ -47,6 +47,8 @@ check "clang: default compiler is clang++-19" "field '$TMP/clang.jsonl' 0 'r[\"a
 if [ -n "$KILN_CXX" ]; then
   echo "kiln++: $KILN_CXX"
   run_one kiln "$KILN_CXX"
+  (cd "$TMP" && KILN_OSS_CXX="$KILN_CXX" KILN_OSS_LOG="$TMP/oom.jsonl" KILN_OSS_VMEM_KB=30000 "$HERE/kiln-cxx" -c hello.cpp -o o.o >/dev/null 2>&1)
+  check "kiln: 30 MB address-space cap is kind oom" "field '$TMP/oom.jsonl' 0 'r[\"kind\"]==\"oom\" and r[\"rc\"]!=0 and r[\"diag\"]!=\"\"'"
 else
   echo "SKIP kiln: no kiln++ (set KILN_OSS_CXX or build --profile harness)"
 fi
