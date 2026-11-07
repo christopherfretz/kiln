@@ -923,6 +923,24 @@ impl Sema<'_, '_> {
         self.instantiate_class_as(spec, poi, diagnose, true)
     }
 
+    /// [`Sema::match_partial_specs`] for `spec`'s instantiation. A request
+    /// for `spec` while its partial specializations are matched
+    /// (`X<T, enable_if_t<is_convertible_v<T, S>>>` with a constructor
+    /// template of `S` defaulting an argument to `X<T>::type`) finds it
+    /// incomplete, as clang's `getPatternForClassTemplateSpecialization`
+    /// does (WP-787, Boost.StaticString `enable_if_viewable`).
+    fn select_partial_spec(
+        &mut self,
+        tmpl: DeclId,
+        spec: DeclId,
+        poi: Loc,
+    ) -> Result<Option<super::order::PartialMatch>, ()> {
+        self.inst.selecting.push(spec);
+        let matched = self.match_partial_specs(tmpl, spec, poi);
+        self.inst.selecting.pop();
+        matched
+    }
+
     /// [`Sema::instantiate_class`]; `implicit` relocates an implicit
     /// instantiation at its pattern's definition (false for an explicit
     /// instantiation, already located at its template-name).
@@ -956,16 +974,7 @@ impl Sema<'_, '_> {
         }
         // [temp.spec.partial.match]: the most specialized matching
         // partial specialization, else the primary template.
-        // A request for `spec` while its partial specializations are
-        // matched (`X<T, enable_if_t<is_convertible_v<T, S>>>` with a
-        // constructor template of `S` defaulting an argument to
-        // `X<T>::type`) finds it incomplete, as clang's
-        // `getPatternForClassTemplateSpecialization` does (WP-787,
-        // Boost.StaticString `enable_if_viewable`).
-        self.inst.selecting.push(spec);
-        let matched = self.match_partial_specs(tmpl, spec, poi);
-        self.inst.selecting.pop();
-        let Ok(matched) = matched else {
+        let Ok(matched) = self.select_partial_spec(tmpl, spec, poi) else {
             self.ast.decls.set_flags(spec, DeclFlags::INVALID);
             self.inst.undefined_diagnosed.set(Some(spec));
             return false;
@@ -2123,7 +2132,7 @@ impl Substituter<'_, '_, '_> {
             .ast
             .decls
             .field(field)
-            .map_or(kiln_ast::decl::InitStyle::C, |f| f.init_style());
+            .map_or(kiln_ast::decl::InitStyle::C, kiln_ast::decl::FieldData::init_style);
         let i = if self.sema.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
             self.init_list(init).map(Initializer::List)
         } else if style == kiln_ast::decl::InitStyle::List {
