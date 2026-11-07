@@ -1742,6 +1742,7 @@ impl Sema<'_, '_> {
         // [dcl.align]/1: not on a function parameter.
         self.reject_alignas(&mut attrs, 0);
         ty = self.apply_vector_attrs(ty, &mut attrs, false);
+        ty = self.apply_noreturn_attrs(ty, &attrs);
         let declared = ty;
         ty = self.adjust_param_type(ty);
         let mut original_ty = (ty != declared).then_some(declared);
@@ -2777,6 +2778,7 @@ impl Sema<'_, '_> {
         }
         let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
         let ty = self.apply_nothrow_attrs(ty, &mut attrs);
+        let ty = self.apply_noreturn_attrs(ty, &attrs);
         // [dcl.spec.general]/3: a function or member declared with no
         // type (`y();`, `struct S { y; };`) is an invalid `int` one, as
         // clang's `ConvertDeclSpecToType`: later uses name it silently.
@@ -3061,15 +3063,17 @@ impl Sema<'_, '_> {
     }
 
     /// Whether function types `a` and `b` are the same apart from their
-    /// exception specifications.
+    /// exception specifications and GNU `noreturn` (which declarations of
+    /// one function merge, clang `MergeFunctionDecl`).
     pub(crate) fn same_ignoring_exc_spec(&mut self, a: QualType, b: QualType) -> bool {
         let t = &self.ast.types;
         let (Some(pa), Some(pb)) = (t.proto(a).copied(), t.proto(b).copied()) else {
             return false;
         };
         let (ra, rb) = (t.params(&pa).to_vec(), t.params(&pb).to_vec());
-        let a = self.ast.types.function(pa.ret(), &ra, pa.info(), ExcSpec::None);
-        let b = self.ast.types.function(pb.ret(), &rb, pb.info(), ExcSpec::None);
+        let (ia, ib) = (pa.info().with_noreturn(false), pb.info().with_noreturn(false));
+        let a = self.ast.types.function(pa.ret(), &ra, ia, ExcSpec::None);
+        let b = self.ast.types.function(pb.ret(), &rb, ib, ExcSpec::None);
         self.ast.types.same_type(a, b)
     }
 
@@ -4010,6 +4014,17 @@ impl Sema<'_, '_> {
                 {
                     let _ = self.resolve_cmp_exc(self.ast.first(p));
                     pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                }
+                // A GNU `noreturn` function type (spec/types.md §5.4) is
+                // inherited by a redeclaration and does not take part in
+                // matching (clang `MergeFunctionDecl`).
+                let nr = |s: &Self, t: QualType| {
+                    s.ast.types.proto(t).is_some_and(|p| p.info().noreturn())
+                };
+                if nr(self, pty) && !nr(self, ty) {
+                    ty = self.with_fn_noreturn(ty, true, false).unwrap_or(ty);
+                } else if nr(self, ty) && !nr(self, pty) {
+                    pty = self.with_fn_noreturn(pty, true, false).unwrap_or(pty);
                 }
                 // A friend whose noexcept-specifier waits for the end of
                 // its class (or, instantiated, until needed), or one
@@ -9087,6 +9102,49 @@ impl Sema<'_, '_> {
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
         self.classify_found(&found)
+    }
+
+    /// The injected-class-name of a class template specialization that
+    /// `name` (in `qualifier`, or unqualified) finds outside that
+    /// specialization's own scope, e.g. a base class's through a derived
+    /// class (`B::V` or `V` in `struct B : V<long>`): not followed by `<`
+    /// it names the specialization's class type ([temp.local]/1,
+    /// [class.qual]/2), while [`Sema::classify_name`] gives the class
+    /// template (for `V<int>`). `None` for any other name, and for the
+    /// injected-class-name of the class whose scope we are in, which
+    /// [`Sema::injected_class_type`] spells.
+    pub fn injected_specialization_name(
+        &self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+    ) -> Option<NameClass> {
+        let found = match qualifier.map(|q| self.type_name_qualifier(q)) {
+            Some(q) if matches!(self.kind_of(q), DeclKind::CXXRecord) => {
+                if self.is_dependent_ctx(q) {
+                    return None;
+                }
+                self.lookup_qualified(q, name, LookupKind::Ordinary)
+            }
+            Some(_) => return None,
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
+        if found.ambiguity.is_some() {
+            return None;
+        }
+        let &[d] = found.decls.as_slice() else { return None };
+        if self.kind_of(d) != DeclKind::CXXRecord
+            || self.ast.decls.get(d).name().as_ident() != Some(name)
+        {
+            return None;
+        }
+        let (_, spec) = self.ast.spec_info(self.ast.first(d))?;
+        if self
+            .injected_class_decl(spec.template)
+            .is_some_and(|c| self.ast.first(c) == self.ast.first(d))
+        {
+            return None;
+        }
+        Some(NameClass::Type(self.tag_type(d), d))
     }
 
     /// [`Sema::classify_name`] of a name followed by `::`: lookup of a

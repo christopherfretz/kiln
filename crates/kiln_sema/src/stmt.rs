@@ -1897,6 +1897,15 @@ impl Sema<'_, '_> {
             return false;
         }
         let mut c = self.ast.exprs.callee(e);
+        // clang `getFunctionExtInfo` of the callee's type: a call through
+        // a `noreturn` function type (spec/types.md §5.4; a GNU `noreturn`
+        // function pointer or reference) does not return.
+        let ct = self.ast.exprs.get(c).ty();
+        let t = &self.ast.types;
+        let fnty = if t.is_function(ct) { Some(ct) } else { t.pointee(ct) };
+        if fnty.and_then(|f| t.proto(f)).is_some_and(|p| p.info().noreturn()) {
+            return true;
+        }
         loop {
             let cn = self.ast.exprs.get(c);
             match cn.kind() {

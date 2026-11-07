@@ -446,7 +446,11 @@ Class-feature payloads (`a`, `b`, `aux` of `CXXConstructExpr`,
 shared `ExprFlags` bits: `ARG_IS_TYPE` (`typeid(T)` as `sizeof(T)`: `a` is
 a raw `QualType`) and `HAD_MULTIPLE_CANDIDATES`. There is no `elidable`
 construct flag (C++17 guaranteed elision). An `OpaqueValueExpr`'s `a` is
-its source expression (or 0), shared by every use.
+its source expression (or 0), shared by every use. A `CXXMemberCallExpr`
+callee keeps the parentheses as written (`(o.f)()`, `((o.*pm))()`,
+[expr.call]/1); `member_call_object` looks through them to the
+`MemberExpr` or `.*`/`->*` operator, as clang's
+`getImplicitObjectArgument` does.
 
 Builtin *functions* (`__builtin_memcpy`, `__builtin_is_constant_evaluated`,
 `__builtin_is_within_lifetime`, `__builtin_constant_p`, ...) are ordinary
@@ -546,6 +550,13 @@ needed later). Values of non-constant-context folding (`try_fold`) are
     token) is in the cold `end_loc` map.
   - Children (`Exprs::children`): array size, initializer, placement
     arguments (clang's order).
+  - Dependence: type-dependent only through the allocated type; a
+    type-dependent array bound, initializer or placement argument makes
+    the new-expression value-dependent, not type-dependent
+    ([temp.dep.expr]/3-4; clang's `turnTypeToValueDependence`), so
+    `P p(new D(I()))` in a template is not checked as copy-initialization
+    at definition time (WP-704; test
+    `tests/conformance/temp.dep.expr/new-expression-dependent-initializer.cpp`).
 - **`CXXDeleteExpr`**: `ty` is `void`; `a` is the operand (converted to a
   pointer prvalue; `Exprs::delete_operand`); `b` is the deallocation
   function (`Exprs::operator_delete`, `None` for an erroneous operand);

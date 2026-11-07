@@ -496,9 +496,13 @@ clang's `AttributedType`; the canonical type is unchanged
   a redeclaration of its primary template's pattern does. A mark on a
   partial or explicit specialization does not count. Neither does the
   injected-class-name, nor `X<T>` as the current instantiation inside
-  `X` (clang's `InjectedClassNameType`). clang's implicit marks on
-  `std::unique_ptr`, `std::shared_ptr` and `std::function` are not
-  inferred (follow-up)
+  `X` (clang's `InjectedClassNameType`). As clang's
+  `inferNullableClassAttribute` does, a class or class template pattern
+  named `auto_ptr`, `coroutine_handle`, `exception_ptr`, `function`,
+  `move_only_function`, `shared_ptr` or `unique_ptr` declared directly
+  in `std` (inline namespaces skipped) counts as marked
+  (`std_nullable_class`, WP-686; test
+  `tests/conformance/dcl.type.class/nullability-std-smart-pointers.cpp`)
 - the same qualifier written twice is `sema_nullability_duplicate`
   (warning, `-Wnullability`); a different one already written on the
   type, or carried through sugar (a typedef), is
@@ -2814,9 +2818,12 @@ specification as written (`TypeNames` prints ` noexcept`,
 - **`act_on_dynamic_exception_spec(types, ok, loc, rparen)`**:
   `throw()` is `DynamicNone`, accepted silently (clang 19 accepts it
   in C++26 although P1152/C++20 removed it from the grammar). A
-  non-empty list is `ISO C++17 does not allow dynamic exception
-  specifications` (`-Wdynamic-exception-spec`, default error) with a
-  `use 'noexcept(false)' instead` note, then `Dynamic(types)`.
+  non-empty list is, from C++17 on, `ISO C++17 does not allow dynamic
+  exception specifications` (`-Wdynamic-exception-spec`, default error)
+  with a `use 'noexcept(false)' instead` note, then `Dynamic(types)`;
+  before C++17 it is valid and silent (clang's off-by-default
+  `-Wdeprecated-dynamic-exception-spec` is not implemented; WP-709).
+  Template substitution substitutes the type-id-list (WP-709).
 - **GNU `nothrow`** (WP-186, `apply_nothrow_attrs` in `decl_attrs.rs`;
   clang `handleFunctionTypeAttr` `AT_NoThrow`): `__attribute__((nothrow))`
   or `[[gnu::nothrow]]` anywhere in a declaration whose declared type is
@@ -4456,8 +4463,12 @@ for them.
     used (`sizeof(x)` counts); one marked `[[maybe_unused]]` /
     `__attribute__((unused))`, or whose typedef or class is; a `_`
     placeholder with automatic storage; a variable outside a function,
-    `extern` or a handler's exception variable; one of dependent or
-    incomplete type; one whose (array element) class has a non-trivial
+    `extern` or a handler's exception variable; an init-capture's
+    variable (referenced by its capture; clang reports an unused one only
+    as `-Wunused-lambda-capture`, which kiln does not have yet; it can
+    still be `-Wunused-but-set-variable`; WP-703,
+    `expr.prim.lambda.capture/init-capture-not-unused-variable.cpp`);
+    one of dependent or incomplete type; one whose (array element) class has a non-trivial
     destructor, or is initialized by a non-trivial constructor call that
     is not a constant initialization (a value referring to an automatic
     object, constant only by P2686R5, counts as not constant, as in
@@ -5667,6 +5678,11 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   template-argument-list (`dependent_member_names_template`,
   `act_on_dependent_member_template_args`; variant:1526). Test:
   `tests/conformance/temp.names/libstdcxx-this-member-template.cpp`.
+  The object may also have the type `X<P...>` written inside `X` (or a
+  pointer to it): that names the current instantiation like the
+  injected-class-name ([temp.dep.type]/1.2), so `copy.f<10>()` needs no
+  `template` (WP-686, abseil charconv_bigint.cc). Test:
+  `tests/conformance/temp.dep.type/p1-current-instantiation-object-member-template-run.cpp`.
 - **Access through a dependent base** ([class.protected]/1,
   [class.access.base]/5): in `has_access`, a class that does not
   (yet) derive from the naming class but has a dependent base anywhere

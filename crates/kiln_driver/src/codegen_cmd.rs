@@ -281,6 +281,7 @@ impl CodegenJob<'_> {
             let opts = CodegenOptions {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
                 exceptions: a.predef.exceptions.unwrap_or(true),
+                rtti: a.predef.rtti.unwrap_or(true),
                 ident: ident(),
                 outline_atomics: a.outline_atomics.unwrap_or(true),
                 target_features: feats.extra.clone(),

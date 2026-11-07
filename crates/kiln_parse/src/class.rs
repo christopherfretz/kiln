@@ -2255,7 +2255,11 @@ impl Parser<'_, '_> {
             return None;
         };
         let id_loc = self.bump().span.lo;
-        let NameClass::Type(ty, d) = self.s.classify_name(name, q) else {
+        // The class-name of a base-specifier is a type-only lookup
+        // ([class.derived.general]/2): a function of the same scope does
+        // not hide the class (clang's `getTypeName` with `isClassName`
+        // looks it up as a nested-name-specifier name).
+        let NameClass::Type(ty, d) = self.s.classify_nested_name(name, q) else {
             self.s.error(DiagId::parse_expected_class_name, id_loc);
             return None;
         };

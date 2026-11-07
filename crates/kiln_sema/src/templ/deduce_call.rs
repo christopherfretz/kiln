@@ -833,7 +833,13 @@ impl Sema<'_, '_> {
             };
             let (p0, a0, tdf) = if decl {
                 let p0 = self.with_exc_spec(pfn, ExcSpec::None);
-                (p0, self.with_exc_spec(a, ExcSpec::None), TdfFlags::TOP_LEVEL_PARAMETER_TYPE_LIST)
+                // A declaration's type adopts the template's GNU
+                // `noreturn` (clang `adjustCCAndNoReturn`; spec/types.md
+                // §5.4): the specialization merges it like a redeclaration.
+                let nr = self.ast.types.proto(p0).is_some_and(|p| p.info().noreturn());
+                let a0 = self.with_exc_spec(a, ExcSpec::None);
+                let a0 = self.with_fn_noreturn(a0, nr, false).unwrap_or(a0);
+                (p0, a0, TdfFlags::TOP_LEVEL_PARAMETER_TYPE_LIST)
             } else {
                 let tdf = TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT
                     .union(TdfFlags::TOP_LEVEL_PARAMETER_TYPE_LIST);
@@ -1462,7 +1468,17 @@ impl Sema<'_, '_> {
             _ => None,
         };
         let a = if let Some(x) = a_ref {
-            self.ast.types.unqualified(x)
+            // /4: A reference type: its referee, whose cv /5 lets be
+            // more than the deduced A's. A result that is not a
+            // reference drops the cv of both (clang's workaround of a
+            // defect in /4): `operator T const &()` deduces `T = U` for
+            // `U const &`, `operator T()` deduces `T = U` too.
+            if self.ast.types.is_reference(ret) {
+                x
+            } else {
+                p = self.ast.types.unqualified(p);
+                self.ast.types.unqualified(x)
+            }
         } else {
             // /3: A not a reference: decay P, else drop its top-level cv.
             let t = &mut self.ast.types;

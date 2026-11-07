@@ -963,7 +963,10 @@ and an `UnresolvedLookupExpr` as an unresolved name (the parser records
 the written qualifier of a qualified function template-id,
 `set_template_id_qualifier`, so `std::declval<T>()` is
 `clsr3stdE7declvalIT_EE`). A dependent `decltype(e)` is `Dt <expr> E` for
-an id-expression or member access, else `DT <expr> E`. The arguments of
+an id-expression or member access, else `DT <expr> E`. An array whose bound is value-dependent
+is `A <expr> _ <element>` (`const wchar_t (&)[N]` is `RAT__Kw`, `T[N + 1]`
+is `AplT0_Li1E_T_`; WP-686, `tests/mangle/dependent_array.cpp`), never
+the vendor placeholder, which would merge overloads on the element type. The arguments of
 a dependent specialization of a known template group those of its
 parameter pack into one `J ... E` (clang's converted list:
 `NS_3tupIJDpT_EE`). A function parameter named in a `decltype` of the

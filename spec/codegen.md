@@ -1542,7 +1542,10 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
   - A const member with an in-class initializer, odr-used but never
     defined out of line, is an `available_externally constant`.
   - Naming a static member through `.` evaluates the object and is
-    ignored.
+    ignored. This holds for a static member function used as a value,
+    not called (`std::sort(b, e, arr.less)`, `int (*p)(int) = o.f;`):
+    the member expression is the function's lvalue ([expr.ref]/6.3.1;
+    WP-710, `tests/conformance/expr.ref/p6-static-member-function-value-run.cpp`).
 - **Member-expression folds** (`ScalarExprEmitter::VisitMemberExpr`): an
   integral or enumeration `MemberExpr` that the Oven folds becomes a
   constant, after the object is evaluated for side effects. A `const`
@@ -1746,9 +1749,26 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   with flags and base offset words), pointers (`__pointer_type_info`,
   qualifier flags plus 8 for an incomplete pointee), enums, functions and
   arrays (`{vt, name}`). Fundamental types and (const) pointers to them
-  refer to the runtime's `external constant` objects. RTTI of a type that
+  refer to the runtime's `external constant` objects. Vector types (GNU and
+  NEON) and `_Complex` types are not in the runtime: their
+  `__fundamental_type_info` `{vt, name}` is emitted `linkonce_odr` where
+  used (WP-709). RTTI of a type that
   involves an incomplete class has `internal` linkage. Linkage of class
   RTTI follows the vtable.
+  - *Under `-fno-rtti`* (`CodegenOptions::rtti` false; WP-720): a
+    vtable's (and construction vtable's) RTTI slot is `ptr null`, as is
+    any `typeid`/`dynamic_cast` operand sema let through (clang
+    `shouldEmitRTTI(ForEH=false)`, `Cg::rtti_descriptor`). Exception
+    handling (`throw`, handler types) still builds its `type_info`
+    objects, with their bases and pointees, but never refers to a
+    key-function TU's (clang `ShouldUseExternalRTTIDescriptor` is false
+    without RTTI: that TU may be `-fno-rtti` too): an external-linkage
+    type's `type_info` is a `linkonce_odr` definition in every TU that
+    uses it (clang `getTypeInfoLinkage`); fundamental types still refer
+    to the runtime's. A kiln `-fno-rtti` object therefore links against
+    a clang `-fno-rtti` library (leveldb, docs/status/oss/leveldb.md).
+    Tests: `tests/conformance/except.handle/ir-fno-rtti-type-info.cpp`
+    (and its `-19` sibling), `fno-rtti-catch-by-base.cpp` (run).
 - **Constant objects of polymorphic classes** (`consts.rs`
   `record_elems`, WP-400): a constant initializer of a dynamic class
   gives each vptr field the vtable address point of its subobject in the

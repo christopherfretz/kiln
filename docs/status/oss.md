@@ -25,6 +25,12 @@ trees go to `.oss/` (gitignored); each build writes
 `.oss/build/<project>/<kiln|clang>/{report.json,compile.jsonl,*.log}`.
 Every compiler invocation runs under `ulimit -v 3000000` and `timeout 600`
 (`scripts/oss/kiln-cxx`); `make` draws from the box's shared jobserver.
+A project with `deps` in the toml (re2 needs abseil, googletest and
+benchmark) first builds and installs each dependency with the same
+compiler into `.oss/<dep>-install-<compiler>/` (once; delete the directory
+to rebuild) and finds them through `CMAKE_PREFIX_PATH`; dependency TUs are
+logged under `.oss/build/<dep>/<compiler>-dep/` and never counted for the
+dependent (spec/landed/harness/WP-666.md "Dependencies").
 `scripts/oss/selftest.sh` checks the scripts. In a repro command `$KILN` is
 the kiln checkout the build ran in, and `kiln++` the binary it used.
 
@@ -53,16 +59,16 @@ The loop:
 | `tl_expected` | 1 | `v1.3.1` | tests at parity |
 | `abseil` | 2 | `20260107.1` | not started |
 | `benchmark` | 2 | `v1.9.5` | tests at parity |
-| `cereal` | 2 | `v1.3.2` | not started |
-| `eigen` | 2 | `3.4.1` | not started |
+| `cereal` | 2 | `v1.3.2` | tests at parity |
+| `eigen` | 2 | `3.4.1` | tests at parity (132-target subset) |
 | `entt` | 2 | `v3.15.0` | tests at parity |
-| `glog` | 2 | `v0.7.1` | not started |
-| `re2` | 2 | `2025-11-05` | not started |
+| `glog` | 2 | `v0.7.1` | tests at parity |
+| `re2` | 2 | `2025-11-05` | tests at parity |
 | `simdjson` | 2 | `v4.2.4` | blocked (tests 116/117 vs clang 117/117) |
-| `taskflow` | 2 | `v3.10.0` | not started |
+| `taskflow` | 2 | `v3.10.0` | tests at parity |
 | `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | tests at parity |
 | `folly` | 3 | `v2026.10.26.00` | not started |
-| `leveldb` | 3 | `1.23` | not started |
+| `leveldb` | 3 | `1.23` | tests at parity |
 | `llvm_project` | 3 | `llvmorg-19.1.7` | not started |
 | `protobuf` | 3 | `v33.1` | not started |
 | `rocksdb` | 3 | `v10.7.5` | not started |
@@ -217,6 +223,22 @@ docs/status/oss/small-trio.md.
 Failure clusters (kiln): none.
 <!-- /oss:cli11 -->
 
+<!-- oss:cereal -->
+### cereal (v1.3.2)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 39 / 0 | 39 / 0 |
+| links ok / failed | 39 / 0 | 39 / 0 |
+| tests passed / total | 40 / 40 | 40 / 40 |
+| wall | 31 s | 28 s |
+| peak TU RSS | 257 MB | 530 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:cereal -->
+
 <!-- oss:spdlog -->
 ### spdlog (v1.17.0)
 
@@ -248,3 +270,97 @@ Failure clusters (kiln): none.
 
 Failure clusters (kiln): none.
 <!-- /oss:entt -->
+
+<!-- oss:glog -->
+### glog (v0.7.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 23 / 0 | 23 / 0 |
+| links ok / failed | 14 / 0 | 14 / 0 |
+| tests passed / total | 23 / 24 | 23 / 24 |
+| wall | 20 s | 37 s |
+| peak TU RSS | 99 MB | 169 MB |
+
+Failure clusters (kiln): none.
+
+kiln test run: `96% tests passed, 1 tests failed out of 24`
+<!-- /oss:glog -->
+
+<!-- oss:taskflow -->
+### taskflow (v3.10.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 27 / 0 | 27 / 0 |
+| links ok / failed | 27 / 0 | 27 / 0 |
+| tests passed / total | 2462 / 2462 | 2462 / 2462 |
+| wall | 272 s | 303 s |
+| peak TU RSS | 239 MB | 402 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:taskflow -->
+
+<!-- oss:re2 -->
+### re2 (2025-11-05)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 51 / 0 | 51 / 0 |
+| links ok / failed | 21 / 0 | 21 / 0 |
+| tests passed / total | 20 / 20 | 20 / 20 |
+| wall | 308 s | 314 s |
+| peak TU RSS | 159 MB | 229 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:re2 -->
+
+<!-- oss:eigen -->
+### eigen (3.4.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | rc 2 | rc 2 |
+| TUs ok / failed | 539 / 0 | 539 / 0 |
+| links ok / failed | 535 / 4 | 539 / 0 |
+| tests passed / total | 535 / 539 | 539 / 539 |
+| wall | 1226 s | 1073 s |
+| peak TU RSS | 797 MB | 1408 MB |
+
+Failure clusters (kiln): 1.
+
+1. **4x** `link: undefined reference to Q`
+   - e.g. `link`: `dynalloc.cpp:(.text+0x1550): undefined reference to `Eigen::PlainObjectBase<Eigen::Matrix<float, 2, 1, 0, 2, 1> >::operator delete[](void*)'`
+   - repro: `cd $KILN/.oss/build/eigen/kiln/test && kiln++ -std=c++11 -pedantic -Wall -Wextra -Wundef -Wcast-align -Wchar-subscripts -Wnon-virtual-dtor -Wunused-local-typedefs -Wpointer-arith -Wwrite-strings -Wformat-security -Wshorten-64-to-32 -Wenum-conversion -Wc++11-extensions -Wdouble-promotion -Wshadow -Wno-psabi -Wno-variadic-macros -Wno-long-long -fno-common -fstrict-aliasing -O3 -DNDEBUG -Xlinker --dependency-file=CMakeFiles/dynalloc.dir/link.d CMakeFiles/dynalloc.dir/dynalloc.cpp.o -o dynalloc`
+
+kiln test run: `99% tests passed, 4 tests failed out of 539`
+
+A 132-test subset (539 TUs). The link cluster is the class-template
+`operator new`/`delete` instantiation that WP-686 fixed on main; with
+it, all 539 tests pass (WP-709, docs/status/oss/eigen.md).
+
+With the WP-686 allocation fixes now on main (#324), the 4 targets that failed to link on the WP-709 branch build and pass: 539/539 tests, at parity with clang-19.
+<!-- /oss:eigen -->
+
+<!-- oss:leveldb -->
+### leveldb (1.23)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 121 / 0 | 121 / 0 |
+| links ok / failed | 31 / 0 | 31 / 0 |
+| tests passed / total | 30 / 30 | 30 / 30 |
+| wall | 161 s | 166 s |
+| peak TU RSS | 137 MB | 198 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:leveldb -->

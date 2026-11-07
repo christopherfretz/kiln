@@ -1473,24 +1473,10 @@ impl Sema<'_, '_> {
             let n = set.cands.len();
             // [over.match.copy]/1.1: converting constructors only (clang
             // `isConvertingConstructor`; an explicit one is noted).
-            let c = self.class_def(t);
-            self.ensure_implicit(c, crate::class::SpecialKind::DefaultCtor);
-            self.ensure_implicit(c, crate::class::SpecialKind::CopyCtor);
-            self.ensure_implicit(c, crate::class::SpecialKind::MoveCtor);
+            // Inherited constructors convert too ([namespace.udecl]/13).
             let mut found = std::mem::take(&mut set.found);
             found.clear();
-            found.extend(self.usable_ctors(c));
-            if a.list.is_none() {
-                let mut params = Vec::new();
-                found.retain(|&f| {
-                    if self.kind_of(f) != DeclKind::CXXConstructor {
-                        return true;
-                    }
-                    params.clear();
-                    let variadic = self.fn_param_types(f, &mut params);
-                    if params.is_empty() { variadic } else { self.fn_min_args(f) <= 1 }
-                });
-            }
+            found.extend(self.converting_ctors(t, a.list.is_none()));
             self.add_found_candidates(set, &found, CandidateKind::Ctor, first, false);
             set.found = found;
             for c in &mut set.cands[n..] {

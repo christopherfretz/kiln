@@ -2539,10 +2539,12 @@ impl Cg<'_> {
         let q = n.ty();
         let base = ast.exprs.operand(e);
         let field = ast.exprs.decl(e);
-        if ast.decls.get(field).kind() == DeclKind::Var {
-            // clang `tryToConvertMemberExprToDeclRefExpr`: a static data
-            // member named with `.`/`->` is its base, ignored, and the
-            // variable.
+        if matches!(ast.decls.get(field).kind(), DeclKind::Var | DeclKind::CXXMethod) {
+            // clang `tryToConvertMemberExprToDeclRefExpr` and
+            // `EmitMemberExpr`'s function case: a static data member or a
+            // static member function named with `.`/`->` is its base,
+            // evaluated and ignored ([expr.ref]/6.1, 6.3.1), and the
+            // variable or function.
             self.emit_ignored(base)?;
             return self.decl_lvalue(e, field, q);
         }

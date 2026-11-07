@@ -474,7 +474,11 @@ impl Sema<'_, '_> {
             ArgView::Expr { expr, profile: Some(_) } => self.ast.exprs.get(expr).deps().is_none(),
             _ => false,
         };
-        if !written.iter().any(unconverted) {
+        // Or arguments left to the primary template's defaults: the
+        // partial specialization's own arguments include them
+        // ([temp.arg.general]/9; `template<class T, class S = typename
+        // T::S> struct E;` then `template<class U> class E<W<U>>::I`).
+        if !written.iter().any(unconverted) && written.len() >= self.template_params(tmpl).len() {
             return None;
         }
         let conv = self.check_template_args(tmpl, &written, &[], loc).ok()?;
@@ -488,7 +492,8 @@ impl Sema<'_, '_> {
 
     /// [`Sema::current_instantiation`], also when `ty` writes a
     /// non-dependent non-type argument of a partial specialization
-    /// unconverted (`vec<2, T>`, [temp.dep.type]/1.2).
+    /// unconverted (`vec<2, T>`, [temp.dep.type]/1.2) or leaves an
+    /// argument to its default.
     pub(crate) fn current_instantiation_at(
         &mut self,
         tmpl: DeclId,
@@ -2195,6 +2200,34 @@ impl Sema<'_, '_> {
                 && self.injected_template_of(x).is_some_and(|t| self.ast.first(t) == tmpl))
             .then_some(x)
         })
+    }
+
+    /// The class template specialization whose injected-class-name `name`
+    /// finds by lookup in `qualifier` (unqualified when `None`) through a
+    /// base class, not as an enclosing class: in `struct D : B<int> {}`,
+    /// `B` inside `D`, `D::B` and `typename D::B` name the type `B<int>`
+    /// when no `<` follows ([temp.local]/1-2, [class.qual]/2). `None` for
+    /// any other result, an ambiguous one included.
+    pub fn inherited_injected_class(
+        &self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+    ) -> Option<DeclId> {
+        let found = match qualifier.map(|q| self.type_name_qualifier(q)) {
+            Some(q) if self.is_dependent_ctx(q) => return None,
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
+        let &d = found.decls.first()?;
+        let first = self.ast.first(d);
+        if self.kind_of(d) != DeclKind::CXXRecord
+            || found.decls.iter().any(|&x| self.ast.first(x) != first)
+            || self.ast.described_template(first).is_some()
+            || self.ast.partial_spec_info(first).is_some()
+        {
+            return None;
+        }
+        self.ast.spec_info(first).map(|_| d)
     }
 
     /// The class template whose parameters spell the injected-class-name

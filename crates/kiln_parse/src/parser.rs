@@ -967,6 +967,15 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             if dep_tid && matches!(class, NameClass::Type(..)) {
                 class = NameClass::Dependent;
             }
+            // A base class specialization's injected-class-name not
+            // followed by `<` is a type-name ([temp.local]/1).
+            if !template_kw
+                && matches!(class, NameClass::TypeTemplate(_))
+                && self.tok_at(i + 1).kind != TokKind::Punct(Punct::Less)
+                && let Some(c) = self.s.injected_specialization_name(name, qual)
+            {
+                class = c;
+            }
             let mut end = i + 1;
             if (template_kw || is_template_class(class))
                 && self.tok_at(end).kind == TokKind::Punct(Punct::Less)

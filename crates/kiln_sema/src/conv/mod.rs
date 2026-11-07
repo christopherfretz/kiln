@@ -25,7 +25,7 @@ pub(crate) mod narrow;
 mod qual;
 pub(crate) use qual::{
     CastAway, casts_away_constness, cv_combined_type, drop_noexcept, function_ref_compatible,
-    similar_same_levels,
+    is_function_conversion, similar_same_levels,
 };
 pub(crate) mod rank;
 pub(crate) mod scs;

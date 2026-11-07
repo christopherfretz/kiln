@@ -556,7 +556,7 @@ impl Cg<'_> {
         }
         let l = self.vt_layout(first)?;
         let rd_ty = self.class_type(first);
-        let rtti = self.rtti(rd_ty)?;
+        let rtti = self.rtti_descriptor(rd_ty)?;
         let init = self.vtable_init(&l, rtti, first)?;
         self.define_vtable_global(g, init, linkage, first)
     }
@@ -634,7 +634,7 @@ impl Cg<'_> {
                 gv.align = Some(8);
             }
             let bty = self.class_type(so.class);
-            let rtti = self.rtti(bty)?;
+            let rtti = self.rtti_descriptor(bty)?;
             let init = self.vtable_init(&l, rtti, rd)?;
             self.define_vtable_global(g, init, linkage, rd)?;
             groups.push((Value::global(g), l));
@@ -1894,7 +1894,19 @@ impl Cg<'_> {
 
     // ---- RTTI ----------------------------------------------------------
 
-    /// clang `GetAddrOfRTTIDescriptor(Ty)`.
+    /// clang `GetAddrOfRTTIDescriptor(Ty, /*ForEH=*/false)`: the RTTI a
+    /// vtable slot, `typeid` or `dynamic_cast` refers to; a null pointer
+    /// under `-fno-rtti` (clang `shouldEmitRTTI`).
+    pub(crate) fn rtti_descriptor(&mut self, q: QualType) -> R<Value> {
+        if !self.opts.rtti {
+            return Ok(self.m.const_null(LTy::PTR));
+        }
+        self.rtti(q)
+    }
+
+    /// clang `ItaniumRTTIBuilder::BuildTypeInfo`, also
+    /// `GetAddrOfRTTIDescriptor(Ty, /*ForEH=*/true)`: exception handling
+    /// (`throw`, handlers) needs a `type_info` even under `-fno-rtti`.
     pub(crate) fn rtti(&mut self, q: QualType) -> R<Value> {
         let ast = self.ast;
         let q = QualType::unqual(ast.types.canonical(q).ty());
@@ -1903,7 +1915,13 @@ impl Cg<'_> {
             return Ok(Value::global(g));
         }
         if let Some(rd) = ast.types.as_record(q) {
-            if self.is_dynamic(rd) && self.vtable_linkage(rd) == VtLinkage::External {
+            // clang `ShouldUseExternalRTTIDescriptor`: under `-fno-rtti`
+            // the key function's TU may not define it either, so it is
+            // emitted here.
+            if self.opts.rtti
+                && self.is_dynamic(rd)
+                && self.vtable_linkage(rd) == VtLinkage::External
+            {
                 return Ok(self.external_rtti(&name, Some(rd)));
             }
             return self.class_rtti(q, rd, &name);
@@ -1920,6 +1938,12 @@ impl Cg<'_> {
             TypeView::Function(_) => "_ZTVN10__cxxabiv120__function_type_infoE",
             TypeView::ConstantArray(_) | TypeView::IncompleteArray(_) => {
                 "_ZTVN10__cxxabiv117__array_type_infoE"
+            }
+            // clang `BuildTypeInfo`: vector and complex types are not
+            // in the C++ runtime, so their `__fundamental_type_info` is
+            // emitted where used, like a class's.
+            TypeView::Vector { .. } | TypeView::Complex(_) => {
+                "_ZTVN10__cxxabiv123__fundamental_type_infoE"
             }
             _ => return err(None, format!("RTTI for type `{name}` is not supported yet")),
         };
@@ -2167,7 +2191,9 @@ impl Cg<'_> {
         if mangle::class_is_internal(self.ast, rd) || self.class_def(rd).is_none() {
             return VtLinkage::Internal;
         }
-        if self.is_dynamic(rd) {
+        // Without RTTI a `type_info` exists only for exception handling:
+        // `linkonce_odr` in every TU that needs one.
+        if self.opts.rtti && self.is_dynamic(rd) {
             return match self.vtable_linkage(rd) {
                 VtLinkage::Strong => VtLinkage::Strong,
                 VtLinkage::Weak => VtLinkage::Weak,

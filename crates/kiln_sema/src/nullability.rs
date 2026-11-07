@@ -6,6 +6,7 @@
 //! `distributeNullabilityTypeAttr` do (SemaType.cpp).
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
+use kiln_ast::decl::DeclKind;
 use kiln_ast::types::{TypeAttrKind, TypeView};
 use kiln_ast::{AttrId, QualType};
 use kiln_diag::DiagId;
@@ -105,12 +106,39 @@ impl Sema<'_, '_> {
         })
     }
 
-    /// Declaration `d` itself carries `class _Nullable`.
+    /// Declaration `d` itself carries `class _Nullable`, or is one of the
+    /// standard library classes clang marks implicitly.
     fn marked_nullable(&self, d: DeclId) -> bool {
         self.ast
             .lists
             .iter::<AttrId>(self.ast.attrs.of_decl(d))
             .any(|a| self.ast.attrs.get(a).kind == AttrKind::TYPE_NULLABLE)
+            || self.std_nullable_class(d)
+    }
+
+    /// clang's `inferNullableClassAttribute`: a class (or class template
+    /// pattern) of one of these names directly in `std` (inline
+    /// namespaces skipped) is nullable without a written mark, so
+    /// `_Nonnull std::unique_ptr<int>` is valid.
+    fn std_nullable_class(&self, d: DeclId) -> bool {
+        const NAMES: [&str; 7] = [
+            "auto_ptr",
+            "coroutine_handle",
+            "exception_ptr",
+            "function",
+            "move_only_function",
+            "shared_ptr",
+            "unique_ptr",
+        ];
+        self.kind_of(d) == DeclKind::CXXRecord
+            && self
+                .ast
+                .decls
+                .get(d)
+                .name()
+                .as_ident()
+                .is_some_and(|n| NAMES.iter().any(|&s| self.intern(s) == n))
+            && self.is_in_std_namespace(d)
     }
 
     /// `class _Nullable` after a class-key: a keyword attribute of the

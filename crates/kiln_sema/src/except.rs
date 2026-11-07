@@ -182,9 +182,11 @@ impl Sema<'_, '_> {
     /// `throw ( type-id-list )` ([except.spec], C++14 [except.spec]/1):
     /// `throw()` is the non-throwing `DynamicNone`, accepted silently as
     /// clang does in every mode; a non-empty list was removed in C++17
-    /// and is diagnosed (an error by default, `-Wdynamic-exception-spec`).
-    /// `ok` is false after a syntax error in the list. `rparen` is the
-    /// closing `)`.
+    /// and is diagnosed there (an error by default,
+    /// `-Wdynamic-exception-spec`). Before C++17 it is valid (deprecated:
+    /// clang's `-Wdeprecated-dynamic-exception-spec` is off by default and
+    /// not implemented). `ok` is false after a syntax error in the list.
+    /// `rparen` is the closing `)`.
     pub fn act_on_dynamic_exception_spec(
         &mut self,
         types: &[QualType],
@@ -195,10 +197,12 @@ impl Sema<'_, '_> {
         if types.is_empty() && ok {
             return ExcSpec::DynamicNone;
         }
-        let d = self
-            .diag(DiagId::sema_dynamic_exception_spec, loc)
-            .with_note(self.diag(DiagId::note_use_noexcept_false, loc));
-        self.emit(d);
+        if self.std >= kiln_lex::Std::Cxx17 {
+            let d = self
+                .diag(DiagId::sema_dynamic_exception_spec, loc)
+                .with_note(self.diag(DiagId::note_use_noexcept_false, loc));
+            self.emit(d);
+        }
         if !ok {
             return ExcSpec::None;
         }

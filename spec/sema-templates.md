@@ -1888,6 +1888,18 @@ class name" at `B`
   template argument too (the parser's `names_member_template`; libstdc++
   `_UnClos<__negate, std::_Expr, _Clos>` in `_Expr`, WP-332). Test:
   `tests/conformance/temp.local/libstdcxx-qualified-template-name-in-own-class.cpp`.
+- The injected-class-name of a base class template *specialization*,
+  found by lookup in a derived class (`V` inside `struct B : V<long>`,
+  `B::V`, `Doc::V` with `Doc` a typedef of a derived specialization) and
+  not followed by `<`, is a type-name naming that specialization
+  ([temp.local]/1, [class.qual]/2): lookup finds the specialization's
+  class, `classify_name` gives the class template (right for `V<int>`),
+  and the parser's name scan and qualified type-name turn it back into
+  the specialization's type (`Sema::injected_specialization_name`;
+  rapidjson's `Document::GenericValue`, WP-704). Not for the
+  injected-class-name of the class whose scope we are in (the bullets
+  above). Test:
+  `tests/conformance/temp.local/base-specialization-injected-name.cpp`.
 - Substituting an `InjectedClassName` gives
   `Record(get_class_spec(tmpl, level args))`. It always hits the map,
   because the specialization exists.
@@ -4866,6 +4878,9 @@ omits it) and `__has_builtin` answers 0 for it (WP-394).
   each select a member that is not user-provided and not deleted (or the
   simple implicit one), and the destructor is not user-provided (one
   defaulted after its first declaration is user-provided, so false).
+  The simple implicit copy operation stands in for a move operation
+  only when that move operation is not user-declared: a user-provided
+  move assignment beside a defaulted move constructor is false.
 - **Staged off** (`Status::Owner("WP-263 follow-up")`, so `__has_builtin`
   answers 0 at every level and the headers use their library
   fallbacks): `__builtin_common_type` (a template builtin, like
@@ -7146,12 +7161,16 @@ declarator scopes.**
   B<1, S>::g()` did not find the partial specialization `B<1, S>`
   (registered with converted arguments). When entering a declarator
   context, `entered_partial_by_converted_args` converts the arguments
-  with `check_template_args` and looks again (`find_partial`). Gap:
+  with `check_template_args` and looks again (`find_partial`). It does
+  so too when the qualifier leaves arguments to the primary template's
+  defaults (`E<W<U>>::I` for `E<T, S = typename T::S>`), whose
+  converted form the partial was registered with (WP-709). Gap:
   dependent template-ids elsewhere are still neither checked nor
   converted (clang checks every template-id).
 - Tests: `tests/conformance/temp.mem.class/`, `temp.mem.enum/`,
   `temp.spec.partial.member/out-of-line-ctors.cpp`,
   `temp.spec.partial.member/non-type-arg-scope.cpp`,
+  `temp.spec.partial.member/out-of-line-member-defaulted-args.cpp`,
   `templates/builtins/builtin.is-trivially-constructible-assignable.cpp`.
 
 **Landed (WP-176): libc++ `<type_traits>` follow-ups.**
@@ -7191,6 +7210,13 @@ declarator scopes.**
   dependent type is first built as `this->C::m`; its `&` operand is
   rebuilt as the qualified `DeclRefExpr` (`undo_dependent_implicit_member`,
   WP-669; `expr.unary.op/p3-qualified-member-pointer-dependent-type.cpp`).
+  The same holds where `N::m` names one member of a class `N` that
+  `*this` may derive from only through a dependent base: the
+  `this->N::m` built for it records the member
+  (`note_qualified_dependent_member`), so `&N::m` is a pointer to member
+  even when `N` is unrelated at instantiation (WP-686;
+  `expr.unary.op/p3-qualified-member-unrelated-class-dependent-base-run.cpp`).
+  Gap: an overload set `&N::f` there is still rebuilt as `this->N::f`.
 - *[expr.cond]/4 class unification* (clang `TryClassUnification`): when
   the operands differ in type and either is a class, each is tried
   against the other. The order is: /4.1–4.2, a glvalue target binding
