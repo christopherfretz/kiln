@@ -554,7 +554,11 @@ resolves to a type-id.
 3. Otherwise the parser parses a `conditional-expression` with
    `greater_is_operator = false`.
 
-A trailing `...` wraps the argument in a pack expansion.
+A trailing `...` wraps the argument in a pack expansion. A
+TemplateExpansion `TT...` for a template template parameter (a partial
+specialization's `E<B, Bs...>`) is checked by its pattern and kept as
+the expansion. Test:
+`temp.variadic/template-template-pack-expansion-partial-spec-run.cpp`.
 
 The parser builds `TemplateArg`s of kind Type, Expr, Template or
 TemplateExpansion (types.md §8.3) and calls `act_template_id` (§11.2).

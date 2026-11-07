@@ -10,9 +10,9 @@
 //! reference (`struct X<int>`).
 
 use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
+use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::ArgListId;
 use kiln_ast::templates::SpecKind;
-use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TypeFlags};
 use kiln_ast::{DeclHead, DeclId, QualType};
 use kiln_diag::DiagId;
