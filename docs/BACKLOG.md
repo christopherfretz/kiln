@@ -809,5 +809,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-791 | follow-ups from WP-783 (perf): outline `template for` elements into helper functions (`crates/kiln_codegen/src/stmt.rs:779` emit_expansion) and opt-in size-gated pipeline (proposal `spec/landed/codegen/WP-783.md:172`); record bench baseline for `bench/frontend/expansion-giant-obj.cpp`; decide after reference-workload re-timing | WP-783 | item 1 done by WP-793 (#353); size-gated pipeline unnecessary |
 | WP-793 | reference-workload -O3: post-unroll GVN + LoopFullUnroll cost on a scrubbed IR closure (kiln-specific IR shape causes, instcombine fixpoint abort, `template for` outlining if needed) | WP-791 | PR #353: outline large `template for` expansions at -O2+ (≥2048 AST nodes; outline.rs, -fkiln-outline-expansions=N); reference closure opt -O3 370 s → 8.3 s, projected TU 437 s → ~55 s (g++ 150 s) |
 | WP-794 | follow-ups from WP-793: `template for` elements returning through NRVO are not outlined (`crates/kiln_codegen/src/outline.rs:583`); record bench baselines for `bench/frontend/expansion-outline-obj.cpp` and `expansion-giant-obj.cpp` | WP-793 | deferred |
+| WP-795 | reflection/sema: static data member of array-of-unknown-bound type completed by its out-of-class definition (`type_of`, `decltype`, `sizeof`) | WP-794 | in progress |
 WP-511
 WP-512
