@@ -459,6 +459,11 @@ pub(crate) struct OverloadScratch {
     /// without ADL (qualified, parenthesized, block-scope) reports the
     /// conversion directly. Consumed by [`Sema::act_on_call`].
     pub adl_single: Option<kiln_ast::ExprId>,
+    /// The `get<i>` name of a structured binding's tuple-like
+    /// initializer ([dcl.struct.bind]/4): argument-dependent lookup only,
+    /// built by clang's `BuildCallExpr`, so not the C++20 extension of a
+    /// written ADL-only template-id ([`Sema::diagnose_adl_only_template_id`]).
+    pub binding_get: Option<kiln_ast::ExprId>,
     /// The member access an overloaded member call resolved to
     /// ([`Sema::resolve_member_call`]): its `enable_if` conditions were
     /// checked by overload resolution, so the call does not check them

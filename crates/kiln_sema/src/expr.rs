@@ -4724,6 +4724,7 @@ impl Sema<'_, '_> {
             if c.kind() == ExprKind::UnresolvedLookupExpr
                 && self.ast.templates.expr_targs.contains(callee)
                 && self.ast.unresolved_decls(callee).is_empty()
+                && self.ovl.binding_get != Some(callee)
             {
                 self.diagnose_adl_only_template_id(c.loc());
             }

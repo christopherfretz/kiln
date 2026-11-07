@@ -206,7 +206,7 @@ impl Sema<'_, '_> {
         self.ovl.lists.truncate(base);
         let r = self.finish_overloaded_call(&set, out, name, at, n.loc(), naming, nns, ule);
         self.end_set(set);
-        if explicit.is_some() && decls.is_empty() {
+        if explicit.is_some() && decls.is_empty() && self.ovl.binding_get != Some(ule) {
             self.diagnose_adl_only_template_id(n.loc());
         }
         r
