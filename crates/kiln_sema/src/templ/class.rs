@@ -915,8 +915,7 @@ impl Sema<'_, '_> {
         if self.ast.definition(spec).is_some() {
             return true;
         }
-        if self.defining.contains(&spec) || self.inst.selecting.contains(&spec) || self.inst.fatal
-        {
+        if self.defining.contains(&spec) || self.inst.selecting.contains(&spec) || self.inst.fatal {
             return false;
         }
         if self.ast.spec_info(spec).is_none() {
@@ -2052,8 +2051,12 @@ impl Substituter<'_, '_, '_> {
     /// clang `InstantiateInClassInitializer`).
     fn nsdmi(&mut self, field: DeclId, init: kiln_ast::ExprId) {
         self.sema.act_on_start_field_init(field);
-        let style =
-            self.sema.ast.decls.field(field).map_or(kiln_ast::decl::InitStyle::C, |f| f.init_style());
+        let style = self
+            .sema
+            .ast
+            .decls
+            .field(field)
+            .map_or(kiln_ast::decl::InitStyle::C, |f| f.init_style());
         let i = if self.sema.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
             self.init_list(init).map(Initializer::List)
         } else if style == kiln_ast::decl::InitStyle::List {

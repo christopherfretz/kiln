@@ -137,7 +137,8 @@ impl Sema<'_, '_> {
         let r = if ok {
             let deduced = self.ast.types.arg_list(&d.args);
             self.set_frame_args(deduced);
-            self.partial_args_match(&p, list.depth, deduced, canonical, false, poi).then_some(deduced)
+            self.partial_args_match(&p, list.depth, deduced, canonical, false, poi)
+                .then_some(deduced)
         } else {
             None
         };
