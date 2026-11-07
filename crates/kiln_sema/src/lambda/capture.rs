@@ -648,6 +648,36 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
+    /// Whether `this` named here could be captured by every enclosing
+    /// lambda up to the member function without a diagnostic: each
+    /// captured it already or has a *capture-default*
+    /// ([expr.prim.lambda.capture]/8; clang's `CheckCXXThisCapture` with
+    /// `BuildAndDiagnose` false).
+    pub(crate) fn this_capturable(&self) -> bool {
+        let mut c = self.ctx;
+        for _ in 0..4096 {
+            let Some(l) = self.lambda_of_call_op(c) else {
+                if self.kind_of(c) == DeclKind::RequiresExprBody
+                    && let Some(p) = self.ast.decls.get(c).ctx()
+                {
+                    c = p;
+                    continue;
+                }
+                break;
+            };
+            let data = self.ast.exprs.lambdas.get(l);
+            if data.this_capture().is_some() {
+                break;
+            }
+            if data.default == CaptureDefault::None {
+                return false;
+            }
+            let Some(p) = self.lambda_parent(l) else { break };
+            c = p;
+        }
+        self.current_this().is_some()
+    }
+
     /// clang `CheckCXXThisCapture`: captures `this` named at `loc` in
     /// every lambda up to the enclosing member function; `top` is the
     /// lambda being introduced by an explicit `this` (`true`: `*this`).
@@ -1040,6 +1070,41 @@ impl Sema<'_, '_> {
             t = self.ast.types.qualify(t, Quals::CONST);
         }
         Some(self.ast.types.pointer_to(t))
+    }
+
+    /// The type of `this` in the body of `f`, a specialization of a
+    /// generic lambda's call operator instantiated after the lambda
+    /// (spec/sema-lambda.md): the `this` of the context enclosing the
+    /// closure type, not the closure's own ([expr.prim.this]/2,
+    /// [expr.prim.lambda.closure]/12), as clang's `getCurrentThisType`
+    /// walks out of lambdas. That context is a member function (or
+    /// another lambda's call operator), or the class whose default member
+    /// initializer holds a lambda that may capture `this`.
+    pub(crate) fn instantiated_lambda_this(&mut self, f: DeclId) -> Option<QualType> {
+        let closure = self.ast.decls.get(f).ctx()?;
+        let id = self.ast.decls.record(closure).and_then(|r| r.lambda)?;
+        let outer = self.ast.decls.get(closure).ctx()?;
+        let outer_this = match self.kind_of(outer) {
+            k if k.is_function() && self.is_lambda_call_op(outer) => {
+                self.instantiated_lambda_this(outer)
+            }
+            k if k.is_function() => self.method_this_type(outer),
+            DeclKind::CXXRecord => {
+                let data = self.ast.exprs.lambdas.get(id);
+                let may_capture = data.default != CaptureDefault::None
+                    || data
+                        .captures
+                        .iter()
+                        .any(|c| matches!(c.kind, CaptureKind::This | CaptureKind::StarThis));
+                if !may_capture {
+                    return None;
+                }
+                let t = self.this_class_type(outer);
+                Some(self.ast.types.pointer_to(t))
+            }
+            _ => None,
+        };
+        self.lambda_body_this(id, outer_this)
     }
 
     /// At the `}` of lambda `id` (the enclosing context restored): the

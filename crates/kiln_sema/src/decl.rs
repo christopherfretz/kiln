@@ -6698,7 +6698,14 @@ impl Sema<'_, '_> {
         }
         self.check_abstract_signature(f);
         self.begin_function_body(f, ret);
-        if let Some(t) = self.method_this_type(f)
+        // A generic lambda's call operator instantiated later: `this` is
+        // the enclosing one, not the closure's ([expr.prim.this]/2).
+        let this_ty = if self.is_lambda_call_op(f) {
+            self.instantiated_lambda_this(f)
+        } else {
+            self.method_this_type(f)
+        };
+        if let Some(t) = this_ty
             && let Some(state) = self.func.as_mut()
         {
             state.this_ty = Some(t);

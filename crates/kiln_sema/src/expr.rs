@@ -4785,6 +4785,7 @@ impl Sema<'_, '_> {
             {
                 self.diagnose_adl_only_template_id(c.loc());
             }
+            self.note_implicit_this_of_dependent_call(callee);
             return self.dependent_call(callee, &args, loc, rparen);
         }
         // [over.call.object]: a call of an object of class type.
