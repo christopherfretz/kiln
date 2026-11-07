@@ -53,7 +53,7 @@ The loop:
 | `tl_expected` | 1 | `v1.3.1` | tests at parity |
 | `abseil` | 2 | `20260107.1` | not started |
 | `benchmark` | 2 | `v1.9.5` | tests at parity |
-| `cereal` | 2 | `v1.3.2` | not started |
+| `cereal` | 2 | `v1.3.2` | tests at parity |
 | `eigen` | 2 | `3.4.1` | not started |
 | `entt` | 2 | `v3.15.0` | tests at parity |
 | `glog` | 2 | `v0.7.1` | not started |
@@ -216,6 +216,22 @@ docs/status/oss/small-trio.md.
 
 Failure clusters (kiln): none.
 <!-- /oss:cli11 -->
+
+<!-- oss:cereal -->
+### cereal (v1.3.2)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 39 / 0 | 39 / 0 |
+| links ok / failed | 39 / 0 | 39 / 0 |
+| tests passed / total | 40 / 40 | 40 / 40 |
+| wall | 31 s | 28 s |
+| peak TU RSS | 257 MB | 530 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:cereal -->
 
 <!-- oss:spdlog -->
 ### spdlog (v1.17.0)
