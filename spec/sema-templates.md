@@ -1520,7 +1520,15 @@ silently (`diag = None`) at those sites. S3O lists them.
    `DeducedArgs::expansions`), so `template <class... P> X<0, T<P...>>`
    is more specialized than `template <int R, class... P> X<R, T<P...>>`
    whatever the indices of the two `P`s (WP-292; test
-   `templates/spec/temp.spec.partial.order-pack-expansion.cpp`).
+   `templates/spec/temp.spec.partial.order-pack-expansion.cpp`). Each
+   direction also finishes the deduction ([temp.deduct.partial]/12 via
+   [temp.deduct.type]/1, clang `FinishTemplateArgumentDeduction`): the
+   other partial's arguments with the deduced values substituted must
+   equal the synthesized arguments, non-deduced contexts included, packs
+   compared element-wise and nothing converted, so `X<M, when<c>>` is not
+   at least as specialized as `X<T, when<f<T>::value>>` (WP-787,
+   Boost.Hana; `partial_args_match` with `ordering`,
+   `tests/conformance/temp.spec.partial.match/order-non-deduced-context-must-match.cpp`).
 5. If no unique best partial exists, the error is "ambiguous partial
    specializations of 'X<int *>'", with a note "partial specialization
    matches [with T = int]" for each candidate.
