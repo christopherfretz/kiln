@@ -4091,6 +4091,12 @@ The `SpecKind` transitions are those of §4.5.
   names match clang's (`XadL_ZN1S1vEE`, `mcM1BiadL_ZN1D1dEE`;
   `tests/codegen/nttp_member_pointer.cpp`,
   `tests/conformance/temp.arg.nontype/member-pointer-argument-value.cpp`).
+  `&C::m` of exactly the parameter's type while `C` is still being
+  defined (boost.intrusive's `member_hook<C, H, &C::hook>` in `C`'s own
+  body) is converted without the Oven, which has no layout for `C` yet:
+  the value is the member itself, the same argument as after `C` is
+  complete (`args.rs` `defining_class_member_ptr`; WP-726,
+  `tests/conformance/temp.arg.nontype/member-pointer-of-class-being-defined.cpp`).
 - **Reference arguments** (`convert_ref_nttp_arg`): the conversion must
   exist (`sema_cce_not_implicitly_convertible`), must not bind a
   temporary (`sema_cce_ref_binds_temporary`), and the referent must not
