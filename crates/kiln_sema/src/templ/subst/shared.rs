@@ -89,6 +89,18 @@ impl Sema<'_, '_> {
                         self.recheck_shared_ref(x);
                     }
                     self.reference_shared_decl(x, kind, loc);
+                    // Its explicit template arguments are used again too
+                    // (`f<&C::g>()` kept from a generic lambda's pattern,
+                    // whose `&C::g` was formed in a dependent context;
+                    // clang's `TransformDeclRefExpr` transforms them).
+                    if let Some(l) = self.ast.exprs.decl_ref_extra(x).and_then(|r| r.template_args)
+                    {
+                        for &a in self.ast.types.args(l) {
+                            if let kiln_ast::types::ArgView::Expr { expr, .. } = a.view() {
+                                stack.push(expr);
+                            }
+                        }
+                    }
                 }
                 ExprKind::CXXConstructExpr
                 | ExprKind::CXXTemporaryObjectExpr

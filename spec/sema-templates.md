@@ -1091,6 +1091,16 @@ decls of a dependent context `INSTANTIATION`, so the test is
 `deps & (TYPE_VALUE_INST | UNEXPANDED_PACK) == 0`. The flag does not
 exist. On `libcxx_m3.cpp`, sharing saves 0.8% of `inst.bytes` (at most
 3%).
+- A shared subtree is still odr-used by each instantiation, as
+  clang's rebuilt nodes are: `mark_shared_expr_referenced`
+  (`templ/subst/shared.rs`) walks it and marks the functions and
+  variables it names referenced. The walk includes the expressions in a
+  name's explicit template arguments (`call<&H::c>(*this)`). A
+  non-dependent expression template argument that the substitution keeps
+  (`Subst::template_arg`) is walked as well. Before WP-690 the member
+  function in `&H::c` was never instantiated when the argument sat in a
+  generic lambda in a member of a class template, so the link failed
+  (test `temp.arg.nontype/kept-argument-odr-use.cpp`).
 - The expected saving is 30–60% of the expression nodes in libc++ bodies.
   It is measured by the instantiation report (§11.3).
 
