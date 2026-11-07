@@ -273,7 +273,12 @@ privately from the base reaches it through an object of that class
 (`class.protected/member-template-friend-of-derived-run.cpp`, WP-716). Private: `'x' is a private member of 'S'` + `declared private
 here` / `implicitly declared private here`, located at the member's first
 declaration (a member alias template at its `using` keyword, as clang
-locates a `TypeAliasTemplateDecl`; WP-238).
+locates a `TypeAliasTemplateDecl`; WP-238). An implicit special member defined while an alias template is
+substituted with its use's access context (the destructor of a `noexcept`
+operand's temporary) checks its subobjects' special members from itself, as
+clang's `DefiningSynthesizedFunction` context does: a protected base
+destructor is accessible (`push_synth` sets `access_ctx` aside; WP-789,
+`temp.alias/implicit-dtor-defined-in-alias-checks-access-from-itself.cpp`).
 
 **Checked**: every name found by class member or qualified lookup into a class
 (for functions, the one selected by overload resolution), type names included
