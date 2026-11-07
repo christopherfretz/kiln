@@ -146,10 +146,8 @@ impl Sema<'_, '_> {
     /// Normalizes `e` ([temp.constr.normal]/1); `ctx` is the concept
     /// (and its parameter mapping) `e` appears in.
     fn normalize(&mut self, e: ExprId, ctx: Option<(DeclId, ArgListId)>, depth: u32) -> NormId {
-        let mapping = ctx.map_or(ArgListId::EMPTY, |(_, m)| m);
-        let atom = NormNode::Atomic { expr: e, mapping };
         if depth > MAX_EXPANSION {
-            return self.inst.concepts.norm.intern(atom);
+            return self.intern_atom(e, ctx);
         }
         let n = *self.ast.exprs.get(e);
         match n.kind() {
@@ -185,7 +183,37 @@ impl Sema<'_, '_> {
             }
             _ => {}
         }
-        self.inst.concepts.norm.intern(atom)
+        self.intern_atom(e, ctx)
+    }
+
+    /// The atomic constraint `e` with the parameter mapping `ctx` gives
+    /// it, restricted to the parameters `e` names ([temp.constr.atomic]/1):
+    /// the others' arguments are null, so `sizeof(T) > 1` of `C<T, int>`
+    /// and of `C<T, long>` is one atom. Unknown uses keep the whole
+    /// mapping.
+    fn intern_atom(&mut self, e: ExprId, ctx: Option<(DeclId, ArgListId)>) -> NormId {
+        let mut mapping = ctx.map_or(ArgListId::EMPTY, |(_, m)| m);
+        if let Some((cc, m)) = ctx {
+            let level = self.template_param_depth(cc);
+            if let Some(used) = self.used_template_params(e, level) {
+                let args = self.ast.types.args(m);
+                if args.iter().enumerate().any(|(i, a)| {
+                    (i >= 64 || used & (1 << i) == 0) && a.kind() != kiln_ast::types::ArgKind::Null
+                }) {
+                    let v: Vec<TemplateArg> = args
+                        .iter()
+                        .enumerate()
+                        .map(
+                            |(i, &a)| {
+                                if i < 64 && used & (1 << i) != 0 { a } else { TemplateArg::NULL }
+                            },
+                        )
+                        .collect();
+                    mapping = self.ast.types.arg_list(&v);
+                }
+            }
+        }
+        self.inst.concepts.norm.intern(NormNode::Atomic { expr: e, mapping })
     }
 
     /// [temp.constr.normal]/1.4: the normal form of concept-id `e` is the

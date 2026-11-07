@@ -7,6 +7,7 @@ pub mod normal;
 pub mod requires;
 pub mod sat;
 pub mod subsume;
+mod used;
 
 use kiln_ast::ids::ArgListId;
 use kiln_ast::{DeclId, ExprId};
@@ -81,6 +82,9 @@ pub struct ConceptState {
     pub(crate) norm: NormTable,
     pub(crate) normal_forms: FxHashMap<DeclId, Option<NormId>>,
     pub(crate) subsume_cache: FxHashMap<(NormId, NormId), bool>,
+    /// The parameters of a depth an atom's expression names (§8.2,
+    /// [temp.constr.atomic]/1), `None` when unknown.
+    pub(crate) used_params: FxHashMap<(ExprId, u16), Option<u64>>,
     /// §8.3 `atom_cache`: (atom, canonical arguments) -> (satisfied, the
     /// records explaining a failure).
     pub(crate) atom_cache: FxHashMap<AtomKey, (bool, Vec<SatRecord>)>,
