@@ -53,11 +53,8 @@ fn kiln_obj(caller: bool, out: &Path) -> Result<(), String> {
 /// Runs `cmd`, failing with its stderr.
 fn sh(cmd: &mut Command) -> Result<String, String> {
     let out = cmd.output().map_err(|e| format!("{cmd:?}: {e}"))?;
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let text =
+        format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     if out.status.success() { Ok(text) } else { Err(format!("{cmd:?} failed:\n{text}")) }
 }
 
@@ -71,9 +68,10 @@ fn clang_obj(caller: bool, out: &Path) -> Result<(), String> {
     sh(cmd.arg(source())).map(drop)
 }
 
-/// Links `caller` with `callee` into `exe` and runs it.
-fn link_and_run(caller: &Path, callee: &Path, exe: &Path) -> Result<(), String> {
-    sh(Command::new(CLANG).arg(caller).arg(callee).arg("-o").arg(exe))?;
+/// Links the caller object `from` with the callee object `to` into `exe`
+/// and runs it.
+fn link_and_run(from: &Path, to: &Path, exe: &Path) -> Result<(), String> {
+    sh(Command::new(CLANG).arg(from).arg(to).arg("-o").arg(exe))?;
     let out = sh(&mut Command::new(exe))?;
     if out.trim() == "ok" { Ok(()) } else { Err(format!("unexpected output:\n{out}")) }
 }

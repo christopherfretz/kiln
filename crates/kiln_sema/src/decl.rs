@@ -7786,7 +7786,9 @@ impl Sema<'_, '_> {
             // storage (Itanium C++ ABI §1.1 "empty class"; clang
             // `FieldDecl::isZeroSize`).
             let zero_width_unnamed = self.ast.decls.get(f).name().is_empty()
-                && fd.and_then(|x| x.bit_width).is_some_and(|w| conv::eval_width(self, w) == Some(0));
+                && fd
+                    .and_then(|x| x.bit_width)
+                    .is_some_and(|w| conv::eval_width(self, w) == Some(0));
             if !zero_width_unnamed && !self.is_zero_size_field(f) {
                 any_storage = true;
             }
