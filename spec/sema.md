@@ -496,9 +496,13 @@ clang's `AttributedType`; the canonical type is unchanged
   a redeclaration of its primary template's pattern does. A mark on a
   partial or explicit specialization does not count. Neither does the
   injected-class-name, nor `X<T>` as the current instantiation inside
-  `X` (clang's `InjectedClassNameType`). clang's implicit marks on
-  `std::unique_ptr`, `std::shared_ptr` and `std::function` are not
-  inferred (follow-up)
+  `X` (clang's `InjectedClassNameType`). As clang's
+  `inferNullableClassAttribute` does, a class or class template pattern
+  named `auto_ptr`, `coroutine_handle`, `exception_ptr`, `function`,
+  `move_only_function`, `shared_ptr` or `unique_ptr` declared directly
+  in `std` (inline namespaces skipped) counts as marked
+  (`std_nullable_class`, WP-686; test
+  `tests/conformance/dcl.type.class/nullability-std-smart-pointers.cpp`)
 - the same qualifier written twice is `sema_nullability_duplicate`
   (warning, `-Wnullability`); a different one already written on the
   type, or carried through sugar (a typedef), is
