@@ -55,7 +55,7 @@ The loop:
 | `benchmark` | 2 | `v1.9.5` | not started |
 | `cereal` | 2 | `v1.3.2` | not started |
 | `eigen` | 2 | `3.4.1` | not started |
-| `entt` | 2 | `v3.15.0` | not started |
+| `entt` | 2 | `v3.15.0` | tests at parity |
 | `glog` | 2 | `v0.7.1` | not started |
 | `re2` | 2 | `2025-11-05` | not started |
 | `simdjson` | 2 | `v4.2.4` | not started |
@@ -156,6 +156,22 @@ Reduced repros (WP-666, kiln at main f3751eadd):
   ```
 
   The non-template form (`class R : public V<int>`) compiles.
+
+<!-- oss:entt -->
+### entt (v3.15.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 73 / 0 | 73 / 0 |
+| links ok / failed | 68 / 0 | 68 / 0 |
+| tests passed / total | 68 / 68 | 68 / 68 |
+| wall | 58 s | 31 s |
+| peak TU RSS | 328 MB | 468 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:entt -->
 
 <!-- oss:spdlog -->
 ### spdlog (v1.17.0)
