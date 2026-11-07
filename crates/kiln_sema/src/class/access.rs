@@ -1108,11 +1108,34 @@ impl Sema<'_, '_> {
         let saved = (self.ctx, self.initializing.take());
         self.ctx = self.ast.definition(inst).unwrap_or(inst);
         self.replaying_access = true;
-        for c in checks {
+        let records = self.effective_context().records;
+        for mut c in checks {
+            // The object class was the pattern's own (`*this` in a member
+            // of a class template, the class of a member using-declaration):
+            // substituted like clang's `BaseObjectType`, it is the
+            // instantiated class ([temp.dep.type], [class.protected]).
+            if let Some(o) = c.object_class {
+                c.object_class = Some(self.instantiated_record(o, &records).unwrap_or(o));
+            }
             self.run_access_check(c);
         }
         self.replaying_access = false;
         (self.ctx, self.initializing) = saved;
+    }
+
+    /// The record of `records` (an instantiation's effective context)
+    /// that is `o` or was instantiated from `o`, a class template's
+    /// pattern or a member class of one.
+    fn instantiated_record(&self, o: DeclId, records: &[DeclId]) -> Option<DeclId> {
+        let o = self.ast.first(o);
+        let tmpl = self.ast.redecls_of(o).find_map(|x| self.ast.described_template(x));
+        records.iter().copied().find(|&r| {
+            same_class(self, r, o)
+                || self.ast.instantiated_from(r).is_some_and(|p| self.ast.first(p) == o)
+                || tmpl.is_some_and(|t| {
+                    self.ast.spec_info(r).is_some_and(|(_, i)| self.ast.first(i.template) == self.ast.first(t))
+                })
+        })
     }
 
     /// Makes the instantiations of `new` (a generic lambda's call

@@ -1935,6 +1935,13 @@ class name" at `B`
   generic lambda rebuilt by substitution inherits its pattern's checks
   (`Sema::copy_dependent_access`), so the error carries the
   `in instantiation of function template specialization` note (WP-174).
+  A replayed check's [class.protected] object class is substituted as
+  clang's `BaseObjectType` is: when it is the pattern (or a member class
+  of it), it becomes the instantiated class of the replay's context, so
+  `using B::m;` and an implicit `B::m` naming a protected member of a
+  non-dependent base reached through a dependent base are accessible in
+  `R<int>` (the implicit access records `*this`'s class as its object;
+  `class.protected/dependent-base-current-object.cpp`, WP-680).
   Type names are checked as other names (spec/sema-class.md §2.4).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
