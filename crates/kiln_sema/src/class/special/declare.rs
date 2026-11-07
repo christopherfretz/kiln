@@ -426,6 +426,27 @@ impl Sema<'_, '_> {
             self.act_on_explicit_special_template_inst(ds, d, &templates, name, ty, sloc);
             return None;
         }
+        if matched.is_none()
+            && !in_class
+            && shape != Shape::Dtor
+            && self.at_explicit_head()
+            && self.templ.explicit_spec.is_some()
+        {
+            // [temp.expl.spec]/1, [temp.deduct.decl]: likewise after
+            // `template<>`, the out-of-line declarator names an explicit
+            // specialization of a constructor (conversion function,
+            // `operator=`) template, deduced from its type (WP-668).
+            let templates = if let Shape::Conv(_) = shape {
+                self.conversion_templates_of(ctx)
+            } else {
+                let found: Vec<DeclId> = self.ast.lookup_local(class, name).iter().collect();
+                self.function_templates_in(&found)
+            };
+            if !templates.is_empty() {
+                return self
+                    .act_on_explicit_special_template_spec(ds, d, &templates, name, ty, sloc);
+            }
+        }
         let mut prev_ok = None;
         let mut ty = ty;
         let mut redecl_invalid = false;
