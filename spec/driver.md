@@ -570,9 +570,12 @@ the current directory (standard input is `-`). `-o -` is standard output.
   `-S -emit-llvm`, `-c -emit-llvm` and `-S` keep both runs. `-disable-llvm-passes` (a cc1 option, usually
   spelled `-Xclang -disable-llvm-passes`) skips both runs, so
   `-emit-llvm` writes the frontend's IR (pre-split coroutines). `-v`
-  prints the `opt` commands before the `llc` one; `-###` does not show
-  them (they depend on the generated IR). An `opt` failure is a driver
-  error like `llc`'s. Cost (WP-351, aarch64, LLVM 19, `-O0`): on
+  prints the `opt` commands before the `llc` one. `-###` prints them
+  after the frontend step at `-O1` and above (WP-783:
+  `-passes=default<ON>`, then the `-discard-value-names -S` run unless
+  the output is an object), exactly as `-v` shows them; at `-O0` the
+  runs depend on what the generated IR declares and are not shown. An
+  `opt` failure is a driver error like `llc`'s. Cost (WP-351, aarch64, LLVM 19, `-O0`): on
   libc++'s `end.to.end/generator.pass.cpp` (4.8k lines of IR) `opt`
   takes 0.02 s and 62 MB RSS, against 2.9 s for the whole debug-build
   `kiln++ -c`; `go.pass.cpp` 0.01 s.
@@ -583,13 +586,15 @@ the current directory (standard input is `-`). `-o -` is standard output.
   `(ptr captures(none))` form itself; with an older backend it emits the
   sized form (LLVM 19's `(i64 immarg, ptr nocapture)`, LLVM 21's
   `(i64 immarg, ptr captures(none))`), which that backend's `opt` and
-  `llc` verify, and the `-S -emit-llvm` text is rewritten to the new
-  form after the `opt` runs
-  (`codegen_cmd::lifetime_markers_llvm22`: the size of every call and of
-  the two declarations dropped, `nocapture` written `captures(none)`),
-  so it is clang 22's text, which LLVM 19 and 21 tools then reject (use
-  `-fclang-compat=19` for IR they read). Bitcode, assembly and objects
-  are never rewritten.
+  `llc` verify. **The IR kiln writes is the IR of its backend** (WP-783):
+  `-S -emit-llvm` writes the same module the `-c` path hands to `llc`,
+  in the spelling the configured LLVM's (`KILN_LLVM_DIR`) `opt`, `llc`
+  and `llvm-as` read, whatever the `-fclang-compat`. (Before WP-783 the
+  `-S -emit-llvm` text at `-fclang-compat=22` was rewritten to LLVM 22's
+  sizeless markers even for an LLVM 19 or 21 backend, which those tools
+  then rejected: `expected ')' at end of argument list`.) So the text
+  equals clang 22's only with an LLVM 22 backend, the pairing the test
+  harness uses (spec/harness.md "Oracle toolchain").
 - **Link.** `clang++` with `--target=<triple>` (only if given),
   `--sysroot=`, `--gcc-toolchain=`, `--gcc-install-dir=` (as given, else
   the `KILN_DEFAULT_GCC` installation, see "Toolchain"), the `-O` flag, `-pthread`, `-stdlib=`,
@@ -598,7 +603,8 @@ the current directory (standard input is `-`). `-o -` is standard output.
   `-o <out>` (default `a.out`). The temporary objects are removed
   afterwards (by their directory's explicit path).
 - **`-###`** prints, to standard error, the `--version` block, then one
-  line per step. An external step is clang's format: a leading space, then
+  line per step (at `-O1` and above the `opt` runs follow the frontend
+  step, "IR optimization"). An external step is clang's format: a leading space, then
   every argument quoted (`"`, `\` and `$` escaped). The frontend step is
   ` (in-process) frontend "<input>" -> "<out>"`, where `<out>` is `|` when
   the IR is piped to the next step. Nothing runs; the exit status is 0.

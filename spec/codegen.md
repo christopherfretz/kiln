@@ -3085,10 +3085,10 @@ fields; each follows clang 19's IR.
   signature, and LLVM 22's `(ptr captures(none))` at `-fclang-compat=22`
   (WP-462, §7z): codegen emits the latter itself for an LLVM 22+ backend
   (`kiln_llvm` `Module::ir_version`, `intrinsics::lifetime_has_size`),
-  and for an older one the driver rewrites the `-S -emit-llvm` text after
-  `opt` (driver.md "IR optimization"), so `opt`/`llc` 19 and 21 still get
-  the sized form they verify (LLVM 21 spells its pointer
-  `captures(none)` but keeps the size operand).
+  and for an older one the sized form those tools verify (LLVM 21 spells
+  its pointer `captures(none)` but keeps the size operand), in every
+  output including `-S -emit-llvm` text (WP-783; driver.md "IR
+  optimization").
 - **Cleanup-destination promotion (`fir/mem2reg.rs`).** clang's
   `FinishFunction` replaces a coroutine's `cleanup.dest.slot` alloca by
   SSA values and phis; kiln ports LLVM 19's `PromoteMemToReg` for that
