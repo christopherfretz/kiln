@@ -4958,9 +4958,16 @@ and aggregate element types.
   selects the sized form, clang's C++14+ default); `-Wmismatched-new-delete`
   is not reported; a non-constant bound in a parenthesized type-id is a
   plain warning (clang's is an extension warning, so an error under
-  `-pedantic-errors`); `__hot_cold_t` overloads are not recognized;
-  default arguments of a user-declared allocation function are not
-  used (every parameter must be matched by an argument).
+  `-pedantic-errors`); `__hot_cold_t` overloads are not recognized.
+- **Default arguments of an allocation function** ([expr.new]/19,
+  [dcl.fct.default]; WP-730). The allocation call is an ordinary call: a
+  function whose parameters past the size (and alignment) and placement
+  arguments all have default arguments is viable, and the expression's
+  placement arguments are followed by `CXXDefaultArgExpr`s for them
+  (instantiated then for a class template's member), as clang's
+  `GatherArgumentsForCall`; a template instantiation drops them and
+  re-adds its own. The `requires N arguments` note counts only the
+  required parameters.
 
 ### 5.10 Immediate functions (`consteval.rs`, WP-133)
 clang's `CheckForImmediateInvocation`, `HandleImmediateInvocations` and
