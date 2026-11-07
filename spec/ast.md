@@ -444,7 +444,11 @@ Class-feature payloads (`a`, `b`, `aux` of `CXXConstructExpr`,
 shared `ExprFlags` bits: `ARG_IS_TYPE` (`typeid(T)` as `sizeof(T)`: `a` is
 a raw `QualType`) and `HAD_MULTIPLE_CANDIDATES`. There is no `elidable`
 construct flag (C++17 guaranteed elision). An `OpaqueValueExpr`'s `a` is
-its source expression (or 0), shared by every use.
+its source expression (or 0), shared by every use. A `CXXMemberCallExpr`
+callee keeps the parentheses as written (`(o.f)()`, `((o.*pm))()`,
+[expr.call]/1); `member_call_object` looks through them to the
+`MemberExpr` or `.*`/`->*` operator, as clang's
+`getImplicitObjectArgument` does.
 
 Builtin *functions* (`__builtin_memcpy`, `__builtin_is_constant_evaluated`,
 `__builtin_is_within_lifetime`, `__builtin_constant_p`, ...) are ordinary
