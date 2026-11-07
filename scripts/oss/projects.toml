@@ -272,13 +272,13 @@ url = "https://github.com/protocolbuffers/protobuf"
 tag = "v33.1"
 build = "cmake"
 cxx_std = 17
-configure = ["-Dprotobuf_BUILD_TESTS=ON", "-Dprotobuf_ABSL_PROVIDER=module", "-Dprotobuf_BUILD_CONFORMANCE=OFF"]
-submodules = true
+configure = ["-Dprotobuf_BUILD_TESTS=ON", "-Dprotobuf_FORCE_FETCH_DEPENDENCIES=ON", "-Dprotobuf_BUILD_CONFORMANCE=OFF"]
+submodules = false
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 3
-verified = false
-notes = "abseil and googletest come from the third_party submodules."
+verified = true
+notes = "No submodules: configure fetches Abseil 20250512.1 and GoogleTest 1.15.2 (FetchContent), compiled with the same compiler. ctest runs lite-test, full-test, lazily-build-dependencies-test and upb-test."
 
 [leveldb]
 url = "https://github.com/google/leveldb"
