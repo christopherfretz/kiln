@@ -234,8 +234,8 @@ configure = ["-DENTT_BUILD_TESTING=ON", "-DENTT_BUILD_BENCHMARK=OFF", "-DENTT_BU
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 2
-verified = false
-notes = "googletest is fetched with FetchContent."
+verified = true
+notes = "googletest is fetched with FetchContent at GIT_TAG main (unpinned)."
 
 [taskflow]
 url = "https://github.com/taskflow/taskflow"
