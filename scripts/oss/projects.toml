@@ -491,3 +491,39 @@ c_compiler = "clang-19"
 wave = 4
 verified = true
 notes = "WP-787: header-only metaprogramming libraries. docs/status/oss/boost_meta.md. The 12 excluded tests do not compile under the clang-19 control either: yap's 5 (call to constructor of term<T> is ambiguous), variant overload_selection (variant.hpp:1615 no matching member), spirit's {karma,qi}_*_attr (BOOST_PP_ITERATE includes test_manip_attr.hpp, found through the b2 project's <include> requirement the shim does not read) and lex regression_matlib_* (matlib_static.h is written by another test's run)."
+
+[boost_compiled]
+url = "https://github.com/boostorg/boost"
+tag = "boost-1.90.0"
+checkout = "boost"
+submodules = true
+build = "cmake"
+cxx_std = 20
+configure = [
+  "-DBUILD_TESTING=ON", "-DBUILD_SHARED_LIBS=OFF",
+  "-DBOOST_INCLUDE_LIBRARIES=system;filesystem;thread;chrono;atomic;regex;program_options;serialization;date_time;container;json;url;random;iostreams;log;locale;context;fiber;nowide;charconv;stacktrace;timer;exception;wave;test",
+  "-DCMAKE_PROJECT_Boost_INCLUDE=@OSS@/shims/boost-jamfile-tests.cmake",
+  "-DKILN_BOOST_JAMFILE_LIBRARIES=filesystem;thread;regex;serialization;date_time;iostreams;log;context;fiber;exception;test",
+  "-DKILN_BOOST_JAMFILE_INCLUDE_filesystem=.",
+  "-DKILN_BOOST_JAMFILE_RULES_thread=thread-run=run||0;thread-test=run||0;thread-run2=run|{1}|0;thread-run2-noit=run|{1}|0;thread-run2-noit-pthread=run|{1}|0;thread-run-lib2=run|{1}|0;thread-compile-fail=compile-fail|{2}|0;thread-compile=compile|{2}|0",
+  "-DKILN_BOOST_JAMFILE_DEFINES_thread=BOOST_THREAD_THROW_IF_PRECONDITION_NOT_SATISFIED",
+  "-DKILN_BOOST_JAMFILE_LINK_thread=Boost::unit_test_framework",
+  "-DKILN_BOOST_JAMFILE_INCLUDE_regex=../src;.",
+  "-DKILN_BOOST_JAMFILE_RULES_serialization=test-bsl-run_files=run|{0}|0,1;test-bsl-run=run|{0}|0,1;test-bsl-run_polymorphic_files=run|{0}|0,1",
+  "-DKILN_BOOST_JAMFILE_VARIANTS_serialization=test-bsl-run_files|BOOST_ARCHIVE_TEST=text_archive.hpp|_text_archive;test-bsl-run_files|BOOST_ARCHIVE_TEST=binary_archive.hpp|_binary_archive;test-bsl-run_files|BOOST_ARCHIVE_TEST=xml_archive.hpp|_xml_archive",
+  "-DKILN_BOOST_JAMFILE_LINK_serialization=Boost::filesystem",
+  "-DKILN_BOOST_JAMFILE_RULES_iostreams=test-iostreams=run||0;compile-fail-iostreams=compile-fail||0",
+  "-DKILN_BOOST_JAMFILE_LINK_iostreams=Boost::unit_test_framework;Boost::filesystem",
+  "-DKILN_BOOST_JAMFILE_GLOB_log=compile=compile/*.cpp;compile-fail=compile_fail/*.cpp;run=run/*.cpp",
+  "-DKILN_BOOST_JAMFILE_EXCLUDE_log=self_contained_header",
+  "-DKILN_BOOST_JAMFILE_INCLUDE_log=common",
+  "-DKILN_BOOST_JAMFILE_LINK_log=Boost::log_setup;Boost::unit_test_framework;Boost::filesystem",
+  "-DKILN_BOOST_JAMFILE_LINK_fiber=Boost::unit_test_framework;Boost::thread;Boost::context",
+  "-DKILN_BOOST_JAMFILE_TARGET_test=Boost::unit_test_framework",
+  "-DKILN_BOOST_JAMFILE_RULES_test=boost.test-self-test={0}|{2}|{1}/{2}.cpp;boost.test-mt-test={0}|{2}|{1}/{2}.cpp",
+]
+build_targets = ["all", "tests"]
+test = "ctest -j 4 --output-on-failure --timeout 300"
+c_compiler = "clang-19"
+wave = 4
+notes = "WP-804: compiled Boost libraries (their own .a built by kiln too). docs/status/oss/boost_compiled.md."

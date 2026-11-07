@@ -27,6 +27,23 @@ check "checkout defaults to the project name" "[ \"\$(ck t '')\" = 's b' ]"
 check "a shared checkout is accepted" "[ \"\$(ck t 'checkout=\"s\"')\" = 's s' ]"
 check "a shared checkout at another tag is refused" "case \"\$(ck t2 'checkout=\"s\"')\" in *\"shares checkout 's'\"*) true ;; *) false ;; esac"
 
+# The Boost Jamfile shim's library rules, variants, defines and links
+# (WP-804): a stub superproject whose boost_test() prints what it is given.
+JB="$TMP/jam"; mkdir -p "$JB/cm" "$JB/libs/demo/test/suite"
+printf 'cmake_minimum_required(VERSION 3.20)\nproject(Boost NONE)\nset(BUILD_TESTING ON)\nlist(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cm")\nadd_subdirectory(libs/demo)\n' > "$JB/CMakeLists.txt"
+printf 'add_library(boost_demo INTERFACE)\nadd_library(Boost::demo ALIAS boost_demo)\nadd_library(Boost::demo_fw ALIAS boost_demo)\n' > "$JB/libs/demo/CMakeLists.txt"
+printf 'function(boost_test)\n  cmake_parse_arguments(_ "" "PREFIX;NAME;TYPE" "SOURCES;LINK_LIBRARIES;COMPILE_DEFINITIONS;INCLUDE_DIRECTORIES" ${ARGN})\n  list(TRANSFORM __SOURCES REPLACE "^.*/test/" "")\n  message(STATUS "T ${__TYPE} ${__PREFIX}-${__NAME} [${__SOURCES}] [${__LINK_LIBRARIES}] [${__COMPILE_DEFINITIONS}]")\nendfunction()\n' > "$JB/cm/BoostTest.cmake"
+printf 'run plain.cpp ;\n  [ my-run2 named.cpp ../build//boost_demo : named_t ]\n  [ my-self run-fail : suite : case-one ]\n  [ my-files ser : A : : [ requires x ] ]\n  [ my-files gone ]\n' > "$JB/libs/demo/test/Jamfile"
+for f in plain named ser A suite/case-one; do : > "$JB/libs/demo/test/$f.cpp"; done
+cmake -S "$JB" -B "$JB/b" -G "Unix Makefiles" -DCMAKE_PROJECT_Boost_INCLUDE="$HERE/shims/boost-jamfile-tests.cmake" \
+  -DKILN_BOOST_JAMFILE_LIBRARIES=demo "-DKILN_BOOST_JAMFILE_RULES_demo=my-run2=run|{1}|0;my-self={0}|{2}|{1}/{2}.cpp;my-files=run|{0}|0,1" \
+  "-DKILN_BOOST_JAMFILE_VARIANTS_demo=my-files|ARCH=a|_a;my-files|ARCH=b|_b" -DKILN_BOOST_JAMFILE_DEFINES_demo=PD \
+  -DKILN_BOOST_JAMFILE_LINK_demo=Boost::other -DKILN_BOOST_JAMFILE_TARGET_demo=Boost::demo_fw 2>&1 | sed -n 's/^-- T //p' > "$JB/got.txt"
+printf '%s\n' 'run demo-plain [plain.cpp] [Boost::demo_fw;Boost::other] [PD]' 'run demo-named_t [named.cpp] [Boost::demo_fw;Boost::other] [PD]' \
+  'run-fail demo-case_one [suite/case-one.cpp] [Boost::demo_fw;Boost::other] [PD]' 'run demo-ser_a [ser.cpp;A.cpp] [Boost::demo_fw;Boost::other] [ARCH=a;PD]' \
+  'run demo-ser_b [ser.cpp;A.cpp] [Boost::demo_fw;Boost::other] [ARCH=b;PD]' > "$JB/want.txt"
+check "boost shim: library rules, variants, defines and links" "diff -u '$JB/want.txt' '$JB/got.txt'"
+
 printf '#include <cstdio>\nint main() { std::puts("hello"); }\n' > "$TMP/hello.cpp"
 printf 'int main() { return x; }\n' > "$TMP/bad.cpp"
 
