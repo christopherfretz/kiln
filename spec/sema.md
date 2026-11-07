@@ -2019,6 +2019,15 @@ and returns the scope it names:
     result type's attribute wins over the callee's (clang
     `getUnusedResultAttr`); a call returning a reference has no by-value
     result. Not for a `void` call. Reported at the callee's start.
+  - `deprecated` takes an optional message string; the GNU spelling
+    `__attribute__((deprecated(msg, replacement)))` also a replacement
+    string (a fix-it's text, otherwise unused; LLVM's `LLVM_DEPRECATED`).
+    A second argument in `[[deprecated]]`, `[[gnu::deprecated]]` or
+    `__declspec` is `'deprecated' attribute takes no more than 1
+    argument` and the attribute still applies with its message; a third,
+    `takes no more than 2 arguments`; a non-string one, `expected string
+    literal as argument of 'deprecated' attribute` at it (clang
+    `handleDeprecatedAttr`, WP-730).
   - `deprecated` warns on use: a name, and a member named by a member
     access or an implicit `this->` (clang `DiagnoseUseOfDecl` in
     `BuildMemberReferenceExpr`, WP-203). Unlike clang, a non-dependent

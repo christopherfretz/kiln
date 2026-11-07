@@ -9809,6 +9809,42 @@ impl Sema<'_, '_> {
             let node = AttrNode { kind, syntax, flags: 0, loc, a: 0, b: t.to_raw() };
             return Some(self.ast.attrs.push(node));
         }
+        // clang `handleDeprecatedAttr`: `deprecated(message, replacement)`
+        // takes an optional second string, the replacement a fix-it
+        // offers, but only in the GNU spelling (LLVM's `LLVM_DEPRECATED`);
+        // `[[deprecated]]` and `__declspec` take at most a message (an
+        // error that still applies the attribute with its message).
+        let mut args = args;
+        if kind == AttrKind::DEPRECATED && args.len() > 2 {
+            let msg = self
+                .diag(DiagId::sema_attribute_too_many_arguments, loc)
+                .arg("'deprecated'")
+                .arg("2");
+            self.emit(msg);
+            return None;
+        }
+        if kind == AttrKind::DEPRECATED && args.len() == 2 {
+            let lit = |s: &Self, a: &AttrArg| match a {
+                AttrArg::Expr(e) => s.string_lit_of(*e).is_some(),
+                _ => false,
+            };
+            if syntax == AttrSyntax::Gnu && lit(self, &args[0]) && !lit(self, &args[1]) {
+                let at = match args[1] {
+                    AttrArg::Expr(e) => self.ast.exprs.get(e).loc(),
+                    _ => loc,
+                };
+                let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg(n.clone());
+                self.emit(msg);
+                return None;
+            }
+            if syntax != AttrSyntax::Gnu && lit(self, &args[0]) {
+                let msg = self
+                    .diag(DiagId::sema_attribute_too_many_arguments_one, loc)
+                    .arg("'deprecated'");
+                self.emit(msg);
+            }
+            args = &args[..1];
+        }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
             AttrKind::ALIGNED => {
