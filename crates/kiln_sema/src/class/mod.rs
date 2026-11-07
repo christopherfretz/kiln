@@ -623,12 +623,14 @@ impl Sema<'_, '_> {
     /// The type of `this` where an expression is being analysed, if
     /// `this` may appear there ([expr.prim.this]/2-3).
     pub(crate) fn current_this(&self) -> Option<QualType> {
-        if let Some(t) = self.func.as_ref().and_then(|f| f.this_override) {
-            return Some(t);
-        }
-        if let Some(&(_, t)) = self.nsdmi_this.last() {
-            return Some(t);
-        }
-        self.func.as_ref().and_then(|f| f.this_ty)
+        let t = if let Some(t) = self.func.as_ref().and_then(|f| f.this_override) {
+            Some(t)
+        } else if let Some(&(_, t)) = self.nsdmi_this.last() {
+            Some(t)
+        } else {
+            self.func.as_ref().and_then(|f| f.this_ty)
+        };
+        // [expr.prim.this]/2: a pointer to const in a contract predicate.
+        if self.contract_ctx.is_empty() { t } else { t.map(|t| self.contract_this(t)) }
     }
 }

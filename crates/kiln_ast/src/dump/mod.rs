@@ -622,6 +622,13 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 if let Some(&r) = ast.templates.trailing_requires.get(d) {
                     kids.push((Node::Expr(r), None));
                 }
+                // P2900: the function contract specifiers, in order
+                // (spec/contracts.md §7).
+                if let Some(&c) = decls.cold.contracts.get(d) {
+                    for s in ast.lists.iter::<StmtId>(c) {
+                        kids.push((self.stmt_node(s), None));
+                    }
+                }
                 for i in 0..ast.ctor_inits(d).len() {
                     kids.push((Node::CtorInit(d, i as u32), None));
                 }
@@ -731,6 +738,20 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
         for c in exprs.children(e, &self.ast.lists) {
             kids.push((Node::Expr(c), None));
+        }
+        // P2900: the call operator's function contract specifiers, before
+        // the body (spec/contracts.md §7); a generic lambda's are on its
+        // pattern.
+        let c = l.call_op.and_then(|op| {
+            self.ast.decls.cold.contracts.get(op).or_else(|| {
+                let p = self.ast.template_info(op)?.pattern?;
+                self.ast.decls.cold.contracts.get(p)
+            })
+        });
+        if let Some(&c) = c {
+            for s in self.ast.lists.iter::<StmtId>(c) {
+                kids.push((self.stmt_node(s), None));
+            }
         }
         if let Some(b) = l.body {
             kids.push((self.stmt_node(b), None));
@@ -1021,6 +1042,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             StmtKind::ReturnStmt => expr(stmts.return_value(s), kids),
             StmtKind::IndirectGotoStmt => expr(Some(stmts.indirect_goto_target(s)), kids),
+            StmtKind::ContractAssertStmt => {
+                if let Some(r) = stmts.contract_result_name(s) {
+                    kids.push((Node::Decl(r), None));
+                }
+                expr(Some(stmts.contract_cond(s)), kids);
+            }
             StmtKind::CoreturnStmt => {
                 expr(stmts.coreturn_operand(s), kids);
                 expr(stmts.coreturn_promise_call(s), kids);
@@ -2122,6 +2149,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 self.line.push_str(" '");
                 self.names.write_name(d, &mut self.line);
                 self.line.push('\'');
+            }
+            StmtKind::ContractAssertStmt => {
+                self.line.push(' ');
+                self.line.push_str(stmts.contract_kind(s).name());
             }
             StmtKind::ReturnStmt => {
                 if let Some(v) = stmts.return_nrvo(s) {

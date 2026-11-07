@@ -75,6 +75,10 @@ pub struct Ast {
     pub tu: DeclId,
     /// Module units and declaration ownership (spec/modules.md §5).
     pub modules: crate::modules::ModuleTable,
+    /// The translation unit's contract evaluation semantic
+    /// (`-fcontract-evaluation-semantic=`; spec/contracts.md §6): what a
+    /// contract assertion whose semantic slot is 0 does.
+    pub contract_semantic: crate::stmt::ContractSemantic,
     symbols: Arc<Interner>,
     inst: InstantiationMeter,
 }
@@ -187,6 +191,7 @@ impl Ast {
             cmp_categories: CmpCategories::default(),
             tu,
             modules: crate::modules::ModuleTable::default(),
+            contract_semantic: crate::stmt::ContractSemantic::default(),
             symbols,
             inst: InstantiationMeter::default(),
         }

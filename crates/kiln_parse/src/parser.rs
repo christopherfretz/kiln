@@ -102,7 +102,7 @@ pub struct Parser<'a, 'sm> {
     /// Open `(`, `[`, `{` consumed and not yet closed (clang's
     /// `ParenCount`/`BracketCount`/`BraceCount`).
     depth: [u32; 3],
-    kw: Keywords,
+    pub(crate) kw: Keywords,
     pub(crate) lex_opts: LexOptions,
     pub(crate) lit_opts: LiteralOptions,
     pub(crate) std: Std,
@@ -304,7 +304,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         let lex_opts = src.lex_options();
         let std = lex_opts.std;
         let cxx11 = std >= Std::Cxx11;
-        let kw = Keywords::new(s.ast.symbols(), s.gnu, cxx11, s.clang_compat);
+        let cxx26 = std >= Std::Cxx26;
+        let kw = Keywords::with_std(s.ast.symbols(), s.gnu, cxx11, cxx26, s.clang_compat);
         s.set_std(std);
         let sm = src.source_manager();
         let cur = src.get(0);

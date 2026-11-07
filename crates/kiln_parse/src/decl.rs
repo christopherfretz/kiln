@@ -9,7 +9,6 @@ use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind, UnaryTr
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
-use kiln_sema::DeclSite;
 use kiln_sema::declspec::SpecError;
 use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
@@ -17,9 +16,11 @@ use kiln_sema::{
     Designator, InitItem, InitList, InitValue, Initializer, NameClass, NullSpec, ParamInfo, Sign,
     SpecialName, StorageSpec, TagUse, TypeSpecKind, Width,
 };
+use kiln_sema::{ContractDeclKind, DeclSite};
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
 
+use crate::class::LateToks;
 use crate::keywords::Kw;
 use crate::parser::{ParamTypename, Parser};
 use crate::templ::TemplateDeclKind;
@@ -3739,6 +3740,9 @@ impl Parser<'_, '_> {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
             self.parse_trailing_requires(&mut d);
+            // [dcl.contract.func]/1: after the requires-clause.
+            let contracts =
+                if d.is_function_declarator() { self.capture_contract_specs() } else { None };
             self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
@@ -3762,7 +3766,7 @@ impl Parser<'_, '_> {
                 if allow_fn_def && self.at_function_definition_start() {
                     self.explicit_inst_with_definition(tmpl_kind, &d, true);
                     self.parse_function_definition_after_declarator(
-                        &ds, base, &mut d, &mut decls, level,
+                        &ds, base, &mut d, &mut decls, level, contracts,
                     );
                     return decls;
                 }
@@ -3798,6 +3802,10 @@ impl Parser<'_, '_> {
             }
             let v = self.s.act_on_declarator(&ds, base, &d);
             self.record_declarator_end(v, &d);
+            if d.is_function_declarator() {
+                let f = v.filter(|&f| self.s.ast.decls.function(f).is_some());
+                self.replay_contract_specs(contracts, &d, f, ContractDeclKind::Declaration);
+            }
             // A declarator without a type is invalid too (`static y, z;`).
             type_invalid |= self.s.take_declarator_type_invalid()
                 || (!ds.has_type_specifier() && !is_untyped_special(&d));
@@ -4005,6 +4013,7 @@ impl Parser<'_, '_> {
         d: &mut Declarator,
         decls: &mut Vec<DeclId>,
         level: usize,
+        contracts: Option<LateToks>,
     ) {
         d.defaulted = self.at_eq_default();
         self.s.act_function_def_next(true);
@@ -4020,8 +4029,21 @@ impl Parser<'_, '_> {
             // too (clang `getEndLoc`; an implicit definition's body is
             // located there).
             self.record_declarator_end(f, d);
+            let how = if self.kw_of(self.peek(1)) == Some(Kw::Delete) {
+                ContractDeclKind::Deleted
+            } else {
+                ContractDeclKind::Defaulted
+            };
+            self.replay_contract_specs(contracts, d, f, how);
             self.parse_defaulted_or_deleted(f);
             return;
+        }
+        // [dcl.contract.res]/2: a result name of a deduced return type is
+        // typed once the body has deduced it.
+        let after = f.is_some_and(|f| self.s.contract_return_undeduced(f));
+        let mut contracts = contracts;
+        if !after {
+            self.replay_contract_specs(contracts.take(), d, f, ContractDeclKind::Definition);
         }
         match f {
             Some(f) => {
@@ -4029,6 +4051,9 @@ impl Parser<'_, '_> {
                 self.parse_function_definition(f, ctor);
             }
             None => self.skip_function_body(),
+        }
+        if after {
+            self.replay_contract_specs(contracts, d, f, ContractDeclKind::Definition);
         }
     }
 

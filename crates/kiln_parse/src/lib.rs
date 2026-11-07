@@ -10,6 +10,7 @@ mod asm;
 mod attr;
 mod class;
 mod consteval_block;
+mod contracts;
 mod decl;
 mod expr;
 pub mod keywords;

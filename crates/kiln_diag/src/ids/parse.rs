@@ -29,6 +29,7 @@ parse_class_on_template_template_param = Error (1) "template template parameter 
 parse_concept_has_constraints = Error (0) "concept cannot have associated constraints";
 parse_concept_legacy_bool = Error (0) "ISO C++ does not permit the 'bool' keyword after 'concept'";
 parse_consteval_block_cxx26 = Error (0) "consteval blocks are only supported in C++26";
+parse_contract_attribute_ignored = Warning [IgnoredAttributes] (1) "attributes are ignored on {0:'contract_assert'|function contract specifiers}";
 parse_ctor_init_missing_comma = Error (0) "missing ',' between base or member initializers";
 parse_cxx11_attr_placement = ExtWarn [CxxAttributeExtension] (0) "ISO C++ does not allow an attribute list to appear here";
 parse_decltype_auto_invalid = Error (0) "'decltype(auto)' not allowed here";

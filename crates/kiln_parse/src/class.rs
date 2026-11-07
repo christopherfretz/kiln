@@ -17,11 +17,11 @@ use kiln_ast::types::TagKeyword;
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokFlags, TokKind, Token};
-use kiln_sema::DeclSite;
 use kiln_sema::{
     BaseSpecInfo, Chunk, DeclSpec, Declarator, DeclaratorContext, Initializer, MemInitId,
     MemInitInfo, NameClass, SpecialName, StorageSpec, TypeSpecKind,
 };
+use kiln_sema::{ContractDeclKind, DeclSite};
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
 
@@ -33,8 +33,8 @@ use kiln_sema::templ::auto::AutoGroup;
 /// Saved tokens and the location of the `Eof` sentinel that ends their
 /// replay.
 pub(crate) struct LateToks {
-    toks: Vec<Token>,
-    end: Loc,
+    pub(crate) toks: Vec<Token>,
+    pub(crate) end: Loc,
 }
 
 impl LateToks {
@@ -52,13 +52,16 @@ impl LateToks {
 pub(crate) struct LateFnParts {
     pub(crate) default_args: Vec<(usize, LateToks)>,
     pub(crate) noexcept: Option<LateToks>,
+    /// The *function-contract-specifier-seq* and what the declaration
+    /// is ([dcl.contract.func]/6), replayed with the noexcept-specifier.
+    pub(crate) contracts: Option<(LateToks, ContractDeclKind)>,
     pub(crate) delay_args: bool,
     pub(crate) delay_noexcept: bool,
 }
 
 impl LateFnParts {
     fn is_empty(&self) -> bool {
-        self.default_args.is_empty() && self.noexcept.is_none()
+        self.default_args.is_empty() && self.noexcept.is_none() && self.contracts.is_none()
     }
 }
 
@@ -77,6 +80,10 @@ enum LateItem {
     Nsdmi { field: DeclId, toks: LateToks },
     /// The body of `f`, from its `:`, `try` or `{`.
     Body { f: DeclId, ctor: bool, toks: LateToks },
+    /// The *function-contract-specifier-seq* of an inline definition `f`
+    /// with a deduced return type, replayed after its body
+    /// ([dcl.contract.res]/2).
+    Contracts { f: DeclId, toks: LateToks },
     /// A nested class with saved contexts of its own.
     Nested(LateClass),
 }
@@ -95,7 +102,7 @@ impl LateClass {
         self.items.iter().any(|i| match i {
             LateItem::Method { .. } => ph == Phase::Method,
             LateItem::Nsdmi { .. } => ph == Phase::Nsdmi,
-            LateItem::Body { .. } => ph == Phase::Body,
+            LateItem::Body { .. } | LateItem::Contracts { .. } => ph == Phase::Body,
             LateItem::Nested(c) => c.has(ph),
         })
     }
@@ -124,7 +131,7 @@ impl Parser<'_, '_> {
     // -- token capture --------------------------------------------------------------
 
     /// Consumes the current token into `out`.
-    fn take_into(&mut self, out: &mut Vec<Token>) {
+    pub(crate) fn take_into(&mut self, out: &mut Vec<Token>) {
         let t = self.bump();
         out.push(t);
     }
@@ -651,6 +658,14 @@ impl Parser<'_, '_> {
                     self.s.act_on_exit_reentered_template_scopes(n);
                     self.finish_replay();
                 }
+                LateItem::Contracts { f, toks } if ph == Phase::Body => {
+                    let toks = LateToks { toks: mem::take(&mut toks.toks), end: toks.end };
+                    let n = self.s.act_on_reenter_template_scopes(*f);
+                    self.s.act_on_start_delayed_method(*f);
+                    self.replay_member_contract_specs(*f, toks, ContractDeclKind::Definition);
+                    self.s.act_on_finish_delayed_method(*f);
+                    self.s.act_on_exit_reentered_template_scopes(n);
+                }
                 LateItem::Nested(c) => self.replay_phase(c, ph),
                 _ => {}
             }
@@ -661,7 +676,7 @@ impl Parser<'_, '_> {
     }
 
     /// Skips what is left of the saved tokens and ends the replay.
-    fn finish_replay(&mut self) {
+    pub(crate) fn finish_replay(&mut self) {
         while !self.at_eof() {
             self.bump();
         }
@@ -731,6 +746,9 @@ impl Parser<'_, '_> {
             self.trace(|_| "exception_spec".to_owned());
             self.s.act_on_exception_spec(f, spec);
             self.finish_replay();
+        }
+        if let Some((t, how)) = parts.contracts {
+            self.replay_member_contract_specs(f, t, how);
         }
         self.trace(|p| format!("finish_delayed_method({})", p.decl_name(f)));
         self.s.act_on_finish_delayed_method(f);
@@ -1490,12 +1508,28 @@ impl Parser<'_, '_> {
                 self.parse_trailing_requires(&mut d);
                 self.set_declarator_end(&mut d);
             }
-            let parts = mem::take(&mut self.late_fn);
+            let mut parts = mem::take(&mut self.late_fn);
             let base = *base_ty.get_or_insert_with(|| self.member_base_type(&ds, &d));
             self.repeat_member_declspec_errors(&ds, &d, first, &mut restrict_error);
             let is_fn = d.is_function_declarator();
             let (has_width, width_failed) =
                 self.parse_member_declarator_tail(&mut d, ds.friend.is_some());
+            // [dcl.contract.func]/1: after the virt-specifiers; a
+            // complete-class context ([class.mem.general]/7).
+            if is_fn && let Some(t) = self.capture_contract_specs() {
+                let how = if self.at(Punct::Equal) {
+                    match self.kw_of(self.peek(1)) {
+                        Some(Kw::Delete) => ContractDeclKind::Deleted,
+                        Some(Kw::Default) => ContractDeclKind::Defaulted,
+                        _ => ContractDeclKind::Declaration,
+                    }
+                } else if self.at_function_definition() {
+                    ContractDeclKind::Definition
+                } else {
+                    ContractDeclKind::Declaration
+                };
+                parts.contracts = Some((t, how));
+            }
             if !d.has_name() && !has_width {
                 if !d.invalid {
                     self.error_expected_member_name(ds_range);
@@ -1612,6 +1646,20 @@ impl Parser<'_, '_> {
         if friend {
             self.s.act_function_def_next(false);
         }
+        let mut parts = parts;
+        // [dcl.contract.res]/2: a deduced return type is known after the
+        // body.
+        let late_contracts = match (target, parts.contracts.take()) {
+            (Some(f), Some((t, ContractDeclKind::Definition)))
+                if self.s.contract_return_undeduced(f) =>
+            {
+                Some(t)
+            }
+            (_, c) => {
+                parts.contracts = c;
+                None
+            }
+        };
         if !parts.is_empty()
             && let Some(f) = target
         {
@@ -1649,6 +1697,9 @@ impl Parser<'_, '_> {
         if let Some(f) = target {
             let end = toks.last().map_or(self.loc(), |t| t.span.hi);
             self.push_late(LateItem::Body { f, ctor, toks: LateToks { toks, end } });
+            if let Some(toks) = late_contracts {
+                self.push_late(LateItem::Contracts { f, toks });
+            }
         }
         self.eat(Punct::Semi);
     }

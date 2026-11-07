@@ -203,6 +203,7 @@ impl Parser<'_, '_> {
                     let sub = self.parse_labeled_sub(false);
                     return Some(self.s.act_on_default(sub, loc));
                 }
+                Kw::ContractAssert => return self.parse_contract_assert(),
                 Kw::Break => {
                     self.bump();
                     let s = self.s.act_on_break(loc);
@@ -412,7 +413,7 @@ impl Parser<'_, '_> {
     }
 
     /// Expects the `;` ending a `what` statement.
-    fn expect_semi_after_stmt(&mut self, what: &str) {
+    pub(crate) fn expect_semi_after_stmt(&mut self, what: &str) {
         if self.eat(Punct::Semi).is_none() {
             let at = self.expected_loc();
             let d = self

@@ -337,6 +337,9 @@ impl Sema<'_, '_> {
                 sub.sema.act_on_mem_initializers(f, &[], colon);
             }
             let b = sub.body(body);
+            // After the body: a deduced return type is known
+            // ([dcl.contract.res]/2).
+            sub.function_contracts(f, pdef);
             // A statement of the body failed: the specialization is
             // invalid (clang's `InstantiateFunctionDefinition` marks it
             // when the body is `StmtError`), so a later call deduces it
