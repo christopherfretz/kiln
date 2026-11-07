@@ -2069,7 +2069,11 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   `note_final_overrider` per overrider), static/deleted/consteval
   override mismatches, `-Woverloaded-virtual` (in `-Wmost`/`-Wall`) and
   `-Winconsistent-missing-override` (on by default), and
-  `-Wabstract-final-class`. After the complete-class contexts
+  `-Wabstract-final-class`. `-Winconsistent-missing-override` skips a
+  method whose name, after following a macro argument to the parameter
+  token in the macro body, is spelled in a system header (clang's
+  `DiagnoseAbsenceOfOverrideControl`; WP-682,
+  `tests/conformance/class.virtual/inconsistent-missing-override-system-macro.cpp`). After the complete-class contexts
   (`act_on_virtual_class_contexts`, from `act_on_finish_class_contexts`):
   overrider exception specifications ([except.spec]/13) and the key
   function (Itanium §5.2.3, stored in `cold.key_function`). The

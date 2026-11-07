@@ -1718,6 +1718,16 @@ and returns the scope it names:
     note, and the asm statement is dropped. A naked function gets no
     fall-off (-Wreturn-type) or noreturn-returns warning. Test:
     `tests/conformance/dcl.attr/gnu-optnone-minsize-naked.cpp`.
+  - `disable_tail_calls` (`AttrKind::DISABLE_TAIL_CALLS`; GNU syntax or
+    `clang::`, as `minsize`), WP-682: takes no arguments; on a
+    non-function it warns `only applies to functions and Objective-C
+    methods` and is dropped. `check_naked_conflicts` (after
+    `check_optnone_conflicts`; clang `MutualExclusions<[Naked,
+    DisableTailCalls]>`): `naked` or `disable_tail_calls` on this
+    declaration, when the other is on a prior declaration or earlier on
+    this one, is the error `'X' and 'Y' attributes are not compatible`
+    (X the later) with `conflicting attribute is here` at the earlier, and
+    is dropped. Test: `tests/conformance/dcl.attr/gnu-disable-tail-calls.cpp`.
   - `gnu_inline` (GNU syntax or `gnu::`; **GNU inline functions**,
     WP-585, clang `handleGNUInlineAttr`; `AttrKind::GNU_INLINE`): on a
     non-function `'gnu_inline' attribute only applies to functions`
@@ -6629,7 +6639,11 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     initializer (WP-300). The suffix follows clang's element-type test:
     ` or string literal` for (signed/unsigned) `char`, ` or wide string
     literal` for unqualified `wchar_t`/`char16_t`/`char32_t`, none
-    otherwise (`char8_t`, `const wchar_t`)
+    otherwise (`char8_t`, `const wchar_t`). With a dependent element
+    type or a type-dependent initializer (`T a[N] = "abc";` in a
+    template) neither rule applies until instantiation: the initializer
+    is kept as written ([temp.dep.type]/9; WP-681,
+    `dcl.init.string/string-literal-dependent-element-{run,errors}.cpp`)
   - aggregates, with brace elision, designators (C++20, in order) and
     unions (first member, or the designated one); an aggregate class
     whose list holds one undesignated element of the same or a derived

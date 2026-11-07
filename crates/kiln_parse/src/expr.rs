@@ -1188,6 +1188,15 @@ impl Parser<'_, '_> {
                     let mark = self.s.begin_delayed_typos();
                     let args = if self.at(Punct::RSquare) {
                         Some(Vec::new())
+                    } else if self.std < Std::Cxx23 && !self.at(Punct::LBrace) {
+                        // Before C++23 the index is one expression, so a
+                        // top-level comma is the comma operator
+                        // ([expr.sub]/1 in C++20, [depr.comma.subscript];
+                        // clang `ParsePostfixExpressionSuffix`).
+                        let outer = std::mem::replace(&mut self.expr_invalid, false);
+                        let a = self.with_greater_op(true, Self::parse_expression);
+                        let a = a.filter(|_| !std::mem::replace(&mut self.expr_invalid, outer));
+                        a.map(|a| vec![a])
                     } else {
                         self.with_greater_op(true, |p| p.parse_expr_list(Punct::RSquare))
                     };

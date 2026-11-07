@@ -124,7 +124,7 @@ impl DiagOptions {
     /// recorded in [`pending`](Self::pending).
     ///
     /// Accepted: `-w`, `-W<x>` (except `-Wl,`/`-Wa,`/`-Wp,`), `-WX` (alias
-    /// of `-Werror`), `-R<x>` (except `-Rpass*`), `-pedantic`,
+    /// of `-Werror`), bare `-W` (alias of `-Wextra`), `-R<x>` (except `-Rpass*`), `-pedantic`,
     /// `--pedantic`, `-pedantic-errors`, `-ferror-limit=N`,
     /// `-fmacro-backtrace-limit=N`, `-ftabstop=N`,
     /// `-f[no-]color-diagnostics`, `-f[no-]diagnostics-color`,
@@ -137,6 +137,8 @@ impl DiagOptions {
         match arg {
             "-w" => self.ignore_warnings = true,
             "-WX" => self.warnings.push("error".to_string()),
+            // clang's old spelling of `-Wextra` (`W` in Options.td).
+            "-W" => self.warnings.push("extra".to_string()),
             "-pedantic" | "--pedantic" => self.pedantic = true,
             "-pedantic-errors" | "--pedantic-errors" => self.pedantic_errors = true,
             "-fcolor-diagnostics" | "-fdiagnostics-color" => self.show_colors = true,

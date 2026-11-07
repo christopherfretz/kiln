@@ -260,6 +260,7 @@ command-line order and returns false for anything else.
 | `-w` | ignore all warnings (not positional) | off |
 | `-W<x>` | appended to `warnings` (not `-Wl,` `-Wa,` `-Wp,`) | |
 | `-WX` | alias of `-Werror` | |
+| `-W` | alias of `-Wextra` (clang's old spelling; WP-682, `dcl.fct/unused-but-set-parameter-bare-w.cpp`) | |
 | `-R<x>` | appended to `remarks` (not `-Rpass*`) | |
 | `-pedantic`, `--pedantic` | extensions at least warnings | off |
 | `-pedantic-errors`, `--pedantic-errors` | extensions at least errors | off |

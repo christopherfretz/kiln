@@ -19,7 +19,7 @@ one, and the library picture is [status/libstdcxx.md](status/libstdcxx.md)
 | [C++11](#c11) | `-std=c++11` (`c++0x`) | `201103L` | 42 | 1 | 0 | 0 |
 | [C++14](#c14) | `-std=c++14` (`c++1y`) | `201402L` | 11 | 0 | 0 | 0 |
 | [C++17](#c17) | `-std=c++17` (`c++1z`; `gnu++17` is the default) | `201703L` | 35 | 1 | 0 | 0 |
-| [C++20](#c20) | `-std=c++20` (`c++2a`) | `202002L` | 52 | 2 | 0 | 0 |
+| [C++20](#c20) | `-std=c++20` (`c++2a`) | `202002L` | 53 | 1 | 0 | 0 |
 | [C++23](#c23) | `-std=c++23` (`c++2b`) | `202302L` | 35 | 0 | 0 | 0 |
 | [C++26](#c26) | `-std=c++26` (`c++2c`) | `202400L` | 23 | 3 | 0 | 0 |
 | [C++26 reflection](#c26-reflection) | `-std=c++26` plus `-freflection` | `202400L` | 16 | 0 | 0 | 0 |
@@ -252,7 +252,7 @@ required observable.
 | P1816R0 | CTAD for aggregates | — | done | `conformance/over.match.class.deduct/alias-aggregate.cpp` | |
 | P0692R1 | Access checking on specializations | — | done | `conformance/temp.explicit/access-in-substitution.cpp` | |
 | P1152R4 | Deprecating `volatile` | — | done | `conformance/depr.volatile.type/volatile-param.cpp` | |
-| P1161R3 | Deprecate comma in subscript | — | partial | `conformance/expr.sub/p1161-probe.cpp` | Probe `xfail(kiln)`: at `-std=c++20` kiln parses `a[i++, j]` as a C++23 multidimensional subscript ("type 'int[3]' does not provide a subscript operator") instead of a deprecated comma expression (follow-up). |
+| P1161R3 | Deprecate comma in subscript | — | done | `conformance/expr.sub/p1161-probe.cpp`<br>`conformance/depr.comma.subscript/comma-index-cxx17.cpp`<br>`conformance/depr.comma.subscript/comma-index-cxx20.cpp`<br>`conformance/depr.comma.subscript/comma-index-cxx23.cpp` | Before C++23 the subscript is one expression, so `a[i, j]` is a comma expression and a class's `operator[]` gets one argument. In C++20 the top-level comma warns `-Wdeprecated-comma-subscript`, as clang does. WP-681. |
 | P0859R0 | When constexpr functions are defined (CWG1581) | `__cpp_constexpr_in_decltype` 201711L / 201711L | done | `conformance/expr.const/p0859-probe.cpp` | Both compilers define the macro from C++11. |
 | P1008R1 | No aggregates with user-declared constructors | — | done | `conformance/dcl.init.aggr/p1008-probe.cpp` | |
 
