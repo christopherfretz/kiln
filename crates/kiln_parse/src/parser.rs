@@ -976,7 +976,20 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 end = close + 1;
             }
             if self.tok_at(end).kind == TokKind::Punct(Punct::ColonColon) {
+                // `X<args>::m::` (or `D::m::`, `D` a typedef of `X<args>`)
+                // with `m` a member typedef of `X`'s pattern naming
+                // `Y<...>`: scan on in `Y` (WP-668). Not for a qualifier
+                // in a dependent context (`X<T>::`, the current
+                // instantiation), whose members stay dependent.
+                let tid_member = |d: DeclId| {
+                    qual.filter(|&q| {
+                        self.s.ast.decls.get(q).kind() == DeclKind::ClassTemplate
+                            || !self.s.is_dependent_ctx(q)
+                    })
+                    .and_then(|_| self.s.member_typedef_class_template(d))
+                };
                 qual = Some(match class {
+                    NameClass::Type(_, d) if let Some(t) = tid_member(d) => t,
                     NameClass::Namespace(d) | NameClass::Type(_, d) => d,
                     // `T::x::`: still dependent.
                     NameClass::Dependent => qual.ok_or(NoName)?,

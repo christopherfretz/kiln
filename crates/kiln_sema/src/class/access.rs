@@ -746,16 +746,14 @@ impl Sema<'_, '_> {
         naming: DeclId,
         mk: impl FnOnce(&Self, bool) -> Diag,
     ) -> Option<Diag> {
-        self.special_member_access_as(m, naming, naming, mk)
+        self.special_member_access_on(m, naming, naming, mk)
     }
 
-    /// [`Sema::special_member_access`] through an object of class
-    /// `object`: for a base constructor an inheriting constructor of
-    /// `object` stands for, `object` (clang's `ObjectClass` is the
-    /// using-shadow's class), so a protected one is accessible to the
-    /// members of the derived class ([namespace.udecl]/19,
-    /// [class.protected]/1).
-    pub(crate) fn special_member_access_as(
+    /// [`Sema::special_member_access`] with the [class.protected] object
+    /// class `object`: the derived class an inherited constructor
+    /// constructs ([namespace.udecl]/19; clang `CheckConstructorAccess`
+    /// takes the `ConstructorUsingShadowDecl`'s class).
+    pub(crate) fn special_member_access_on(
         &self,
         m: DeclId,
         naming: DeclId,
@@ -1104,13 +1102,19 @@ impl Sema<'_, '_> {
                     if self.derived_inclusive(ic, r) {
                         continue;
                     }
-                    // clang's special wording for a constructor or
-                    // destructor (`TryDiagnoseProtectedAccess`).
-                    let target = t.member.map(|m| self.kind_of(self.ast.strip_shadow(m)));
-                    if let Some(k @ (DeclKind::CXXConstructor | DeclKind::CXXDestructor)) = target {
+                    // clang: a special diagnostic for constructors and
+                    // destructors (and constructor templates).
+                    let m = t.member.map(|m| self.ast.strip_shadow(m));
+                    let m = m.map(|m| match self.kind_of(m) {
+                        DeclKind::FunctionTemplate => self.pattern_of(m).unwrap_or(m),
+                        _ => m,
+                    });
+                    let k = m.map(|m| self.kind_of(m));
+                    if matches!(k, Some(DeclKind::CXXConstructor | DeclKind::CXXDestructor)) {
+                        let dtor = k == Some(DeclKind::CXXDestructor);
                         return Some(
                             self.diag(DiagId::note_access_protected_restricted_ctordtor, loc)
-                                .arg(u8::from(k == DeclKind::CXXDestructor)),
+                                .arg(u8::from(dtor)),
                         );
                     }
                     return Some(
@@ -1134,16 +1138,14 @@ impl Sema<'_, '_> {
         let saved = (self.ctx, self.initializing.take());
         self.ctx = self.ast.definition(inst).unwrap_or(inst);
         self.replaying_access = true;
-        // An object expression of the pattern's own (or an enclosing)
-        // class, such as the implicit one of a member using-declarator
-        // ([namespace.udecl]/19), is of the instantiated class here
-        // ([temp.dep.type]/1).
-        let classes = self.instantiated_classes(pattern, inst);
+        let records = self.effective_context().records;
         for mut c in checks {
-            if let Some(o) = c.object_class
-                && let Some(&(_, i)) = classes.iter().find(|&&(p, _)| p == self.ast.first(o))
-            {
-                c.object_class = Some(i);
+            // The object class was the pattern's own (`*this` in a member
+            // of a class template, the class of a member using-declaration):
+            // substituted like clang's `BaseObjectType`, it is the
+            // instantiated class ([temp.dep.type], [class.protected]).
+            if let Some(o) = c.object_class {
+                c.object_class = Some(self.instantiated_record(o, &records).unwrap_or(o));
             }
             self.run_access_check(c);
         }
@@ -1151,33 +1153,21 @@ impl Sema<'_, '_> {
         (self.ctx, self.initializing) = saved;
     }
 
-    /// The classes enclosing pattern `pattern` (itself first when it is a
-    /// class) paired with those enclosing its instantiation `inst`, as
-    /// their first declarations, while both are classes.
-    fn instantiated_classes(&self, pattern: DeclId, inst: DeclId) -> Vec<(DeclId, DeclId)> {
-        let is_class = |d: DeclId| {
-            matches!(
-                self.kind_of(d),
-                DeclKind::CXXRecord
-                    | DeclKind::ClassTemplateSpecialization
-                    | DeclKind::ClassTemplatePartialSpecialization
-            )
-        };
-        let mut out = Vec::new();
-        let (mut p, mut i) = (Some(pattern), Some(inst));
-        if !is_class(pattern) {
-            p = self.ast.decls.get(pattern).ctx();
-            i = self.ast.decls.get(inst).ctx();
-        }
-        while let (Some(a), Some(b)) = (p, i) {
-            if !is_class(a) || !is_class(b) || out.len() >= 64 {
-                break;
-            }
-            out.push((self.ast.first(a), self.ast.first(b)));
-            p = self.ast.decls.get(a).ctx();
-            i = self.ast.decls.get(b).ctx();
-        }
-        out
+    /// The record of `records` (an instantiation's effective context)
+    /// that is `o` or was instantiated from `o`, a class template's
+    /// pattern or a member class of one.
+    fn instantiated_record(&self, o: DeclId, records: &[DeclId]) -> Option<DeclId> {
+        let o = self.ast.first(o);
+        let tmpl = self.ast.redecls_of(o).find_map(|x| self.ast.described_template(x));
+        records.iter().copied().find(|&r| {
+            same_class(self, r, o)
+                || self.ast.instantiated_from(r).is_some_and(|p| self.ast.first(p) == o)
+                || tmpl.is_some_and(|t| {
+                    self.ast
+                        .spec_info(r)
+                        .is_some_and(|(_, i)| self.ast.first(i.template) == self.ast.first(t))
+                })
+        })
     }
 
     /// Makes the instantiations of `new` (a generic lambda's call

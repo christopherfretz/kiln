@@ -23,6 +23,7 @@ sema_enumerator_wrapped = Error (0) "enumerator value is not representable in an
 sema_exception_spec_mismatch = Error (0) "exception specification in declaration does not match previous declaration";
 sema_exception_spec_not_parsed = Error (0) "exception specification is not available until end of class definition";
 sema_excess_initializers = Error (1) "excess elements in {0:array|vector|scalar|union|struct} initializer";
+sema_excess_initializers_in_char_array = Error (0) "excess elements in char array initializer";
 sema_expansion_size_not_constant = Error (0) "expansion size is not a constant expression";
 sema_expect_int = Error (1) "used type {0} where integer is required";
 sema_expected_class_or_namespace = Error (1) "{0} is not a class, namespace, or enumeration";

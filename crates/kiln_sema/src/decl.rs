@@ -915,7 +915,12 @@ impl Sema<'_, '_> {
             }
         }
         self.prototype_params.push(frame);
-        (scopes, self.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals))
+        // A friend is no member: no `this` (clang's
+        // `InitCXXThisScopeForDeclaratorIfRelevant`).
+        (
+            scopes,
+            !d.friend && self.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals),
+        )
     }
 
     /// Leaves the scopes [`Sema::act_on_start_trailing_requires`] entered.
@@ -2840,6 +2845,7 @@ impl Sema<'_, '_> {
             self.check_decl_attrs(decl, &mut attrs);
         }
         self.check_optnone_conflicts(decl, &mut attrs);
+        self.check_naked_conflicts(decl, &mut attrs);
         self.finish_visibility_attrs(decl, &mut attrs, false);
         self.finish_decl_alignment(decl, &mut attrs);
         self.add_known_function_attrs(decl, &mut attrs);
@@ -2899,6 +2905,7 @@ impl Sema<'_, '_> {
             self.check_decl_attrs(decl, &mut attrs);
         }
         self.check_optnone_conflicts(decl, &mut attrs);
+        self.check_naked_conflicts(decl, &mut attrs);
         self.finish_visibility_attrs(decl, &mut attrs, false);
         self.act_on_asm_label(ds, d, decl, &mut attrs);
         if !attrs.is_empty() {
@@ -8954,6 +8961,31 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// For the lookahead of `X<args>::m::name` (WP-668): when member `m`
+    /// of class template `X`'s pattern is a typedef or alias naming a
+    /// class template specialization (`using jp = ptr<S>;`), that class
+    /// template, in which `name` is then classified as for
+    /// `ptr<args>::name` (clang annotates `X<args>::m::` by instantiating
+    /// `X<args>`; the lookahead cannot). `None` for any other member.
+    pub fn member_typedef_class_template(&self, m: DeclId) -> Option<DeclId> {
+        if !matches!(self.kind_of(m), DeclKind::Typedef | DeclKind::TypeAlias) {
+            return None;
+        }
+        let mut ty = self.ast.decls.get(m).ty()?;
+        for _ in 0..64 {
+            ty = match self.ast.types.view(ty.ty()) {
+                TypeView::Typedef { underlying, .. } => underlying,
+                TypeView::Elaborated { named, .. } => named,
+                _ => break,
+            };
+        }
+        let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty()) else {
+            return None;
+        };
+        let t = self.ast.types.template_decl(tn)?;
+        (self.kind_of(t) == DeclKind::ClassTemplate).then_some(t)
+    }
+
     /// The first member named `name` of an explicit or partial
     /// specialization of `tmpl` (the lookahead fallback of
     /// [`Sema::classify_template_member`]).
@@ -9643,6 +9675,7 @@ impl Sema<'_, '_> {
                         | "coro_only_destroy_when_complete"
                         | "optnone"
                         | "minsize"
+                        | "disable_tail_calls"
                         | "uninitialized"
                         | "trivial_abi"
                         | "type_visibility"
@@ -10546,6 +10579,8 @@ fn attr_kind_of(
         // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
         ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,
         ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
+        // clang `Clang<"disable_tail_calls">` (WP-682).
+        ("disable_tail_calls", _, _) if gnu_syntax || clang_scope => AttrKind::DISABLE_TAIL_CALLS,
         ("uninitialized", _, _) if gnu_syntax || clang_scope => AttrKind::UNINITIALIZED,
         // clang `Clang<"trivial_abi">`.
         ("trivial_abi", _, _) if gnu_syntax || clang_scope => AttrKind::TRIVIAL_ABI,

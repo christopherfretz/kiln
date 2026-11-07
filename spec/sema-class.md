@@ -263,13 +263,10 @@ of `X` and their members ([class.local]/2). A friend function defined in a class
 protected member named through an object expression or `&P::m`, when only (c)
 via `P` grants access the object's class must be `P` or derived from `P` (`'p'
 is a protected member of 'S'` + note `can only access this member on an object
-of type 'D'`; for a constructor or destructor the note is `protected
-constructor|destructor can only be used to construct|destroy a base class
-subobject`). A constructor inherited from a protected base constructor
-([namespace.udecl]/19) is called through an object of the class whose
-using-declarator names it (clang's `ObjectClass` is the using-shadow's
-class), so that class's members may construct it (`return {1};` in a static
-member; WP-681). Private: `'x' is a private member of 'S'` + `declared private
+of type 'D'`; for a constructor or destructor, or a constructor template,
+the note is `protected constructor can only be used to construct a base class
+subobject` / `... destructor ... destroy ...`, clang `TryDiagnoseProtectedAccess`;
+`class.protected/ctor-restricted-note.cpp`, WP-680). Private: `'x' is a private member of 'S'` + `declared private
 here` / `implicitly declared private here`, located at the member's first
 declaration (a member alias template at its `using` keyword, as clang
 locates a `TypeAliasTemplateDecl`; WP-238).
@@ -288,11 +285,7 @@ access context, §4.10), a qualified member template name
 (`A::PT<int>`), a mem-initializer-id, and each member a member
 using-declarator names ([namespace.udecl]/19; named through an object of the
 current class, as clang's `BuildUsingDeclaration` does, so `using B::m;` of a
-protected member of a base is accessible). When the current class is a
-template whose path to that base is dependent, the check is replayed in each
-instantiation with the object of the instantiated class, not of the pattern
-(WP-681; `using ResultBase::m_type;` in a class template deriving from it
-through a dependent base). A using-declarator with a dependent
+protected member of a base is accessible). A using-declarator with a dependent
 qualifier (`using T::f;`, `using typename T::type;`) is checked when the class
 is instantiated, at the declarator's name (`member_using`,
 `member_using_typename`; WP-194); inheriting constructors are not checked. The parser's classification
@@ -1309,7 +1302,12 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   subobject a mem-initializer initializes through it alike (clang
   `CheckConstructorAccess` on the base constructor): a friend of the
   base may use a private one (WP-525,
-  `namespace.udecl/inherited-ctor-subobject-access.cpp`).
+  `namespace.udecl/inherited-ctor-subobject-access.cpp`). For a complete
+  object the [class.protected] object class is the derived class being
+  constructed (clang: the `ConstructorUsingShadowDecl`'s class), so a
+  member of that class may call an inherited protected constructor
+  (`Sema::special_member_access_on`;
+  `namespace.udecl/inherited-protected-ctor-object.cpp`, WP-680).
 - **Virtual bases** ([basic.types.general]/10). A class with a virtual
   base is not a literal type: a `constexpr` variable of it (or of an
   array of it) is clang's `RequireLiteralType` error "constexpr variable
@@ -2071,7 +2069,11 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   `note_final_overrider` per overrider), static/deleted/consteval
   override mismatches, `-Woverloaded-virtual` (in `-Wmost`/`-Wall`) and
   `-Winconsistent-missing-override` (on by default), and
-  `-Wabstract-final-class`. After the complete-class contexts
+  `-Wabstract-final-class`. `-Winconsistent-missing-override` skips a
+  method whose name, after following a macro argument to the parameter
+  token in the macro body, is spelled in a system header (clang's
+  `DiagnoseAbsenceOfOverrideControl`; WP-682,
+  `tests/conformance/class.virtual/inconsistent-missing-override-system-macro.cpp`). After the complete-class contexts
   (`act_on_virtual_class_contexts`, from `act_on_finish_class_contexts`):
   overrider exception specifications ([except.spec]/13) and the key
   function (Itanium §5.2.3, stored in `cold.key_function`). The

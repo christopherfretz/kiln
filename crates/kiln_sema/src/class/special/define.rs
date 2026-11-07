@@ -1081,9 +1081,10 @@ impl Sema<'_, '_> {
                 let sel = mk.map_or(3, SpecialKind::index);
                 let class_ty = self.ast.types.canonical(self.class_type(aclass));
                 let msg = match entity {
+                    // The object of an inheriting constructor's access
+                    // is the derived class it constructs.
                     InitEntity::Var => {
-                        let object = if bc.is_some() { class } else { aclass };
-                        self.special_member_access_as(am, aclass, object, |s, prot| {
+                        self.special_member_access_on(am, aclass, class, |s, prot| {
                             s.diag(DiagId::sema_access_ctor, sites.access)
                                 .arg(u8::from(prot))
                                 .arg(s.ty_arg(class_ty))

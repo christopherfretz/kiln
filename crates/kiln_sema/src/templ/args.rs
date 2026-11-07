@@ -707,7 +707,7 @@ impl Sema<'_, '_> {
 
     /// The template a template argument names: also a template template
     /// parameter's declaration (`B2<TT>` inside `TT`'s template).
-    fn arg_template_decl(&self, name: TemplateNameId) -> Option<DeclId> {
+    pub(crate) fn arg_template_decl(&self, name: TemplateNameId) -> Option<DeclId> {
         self.ast.types.template_decl(name).or_else(|| {
             match self.ast.types.template_name_view(name) {
                 TemplateName::TemplateTemplateParm { decl, .. } => Some(decl),

@@ -1898,9 +1898,16 @@ impl Sema<'_, '_> {
         }
         if let Some(naming) = found.naming {
             // [class.access.base]/5: the object is `*this` for an implicit
-            // member access.
-            let object =
-                if self.is_instance_member(d) { self.implicit_object_class(d) } else { None };
+            // member access, also one through a dependent base (an implicit
+            // `this->Q::name`, [temp.dep.type]/6) whose check is replayed in
+            // the instantiation with `*this`'s instantiated class.
+            let object = if !self.is_instance_member(d) {
+                None
+            } else if self.member_via_dependent_base(d) {
+                self.this_class().map(|(_, c)| c)
+            } else {
+                self.implicit_object_class(d)
+            };
             let via = found.found.first().copied().unwrap_or(d);
             self.check_member_access(via, naming, object, loc);
         }
@@ -4392,6 +4399,14 @@ impl Sema<'_, '_> {
                         _ => Ok(Some(tty)),
                     };
                 }
+                return Ok(None);
+            }
+            // A base class operand is never converted to match a derived
+            // one, not even by a converting constructor (clang's
+            // `TryClassUnification`, the C++11 [expr.cond]/3 rule that
+            // GCC also keeps): `c ? B() : D()` has type `B` although
+            // `D(B)` exists.
+            if self.ast.definition(tr).is_some() && self.derived_inclusive(td, fd) {
                 return Ok(None);
             }
         }

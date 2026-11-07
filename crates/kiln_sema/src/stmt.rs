@@ -20,6 +20,7 @@ use crate::Sema;
 use crate::conv::{self, ConvCtx, SecondStep, StandardConversion};
 use crate::overload::Ics;
 use crate::scope::{Scope, ScopeKind};
+use crate::templ::stack::FrameKind;
 
 /// A label of the current function.
 #[derive(Clone, Debug)]
@@ -1447,7 +1448,7 @@ impl Sema<'_, '_> {
                     // [dcl.init.general]/16), as in clang.
 
                     candidate = self.copy_elision_candidate(e, ret);
-                    let e = self.implicit_move(e);
+                    let e = self.return_operand(e, ret, fdecl, loc);
                     let c = self.convert_for_init(e, ret, ConvCtx::Return);
                     if !self.is_err_expr(c) {
                         self.check_return_lifetime(c, ret);
@@ -1479,6 +1480,48 @@ impl Sema<'_, '_> {
             return true;
         };
         !self.ast.decls.get(c).kind().is_function() || self.ast.first(c) == self.ast.first(f)
+    }
+
+    /// The operand a `return` copy-initializes its result from. C++23
+    /// (P2266, [expr.prim.id.unqual]/4): an implicitly movable entity is
+    /// an xvalue. Before C++23 ([class.copy.elision]/3 of C++20, clang's
+    /// `PerformMoveOrCopyInitialization`): the initialization is first
+    /// tried with the operand as an rvalue; when that fails (other than by
+    /// selecting a deleted function), it is performed again with the
+    /// operand as the lvalue it is, so `T& f(T&& t) { return t; }` is
+    /// well-formed in C++20.
+    fn return_operand(&mut self, e: ExprId, ret: QualType, f: DeclId, loc: Loc) -> ExprId {
+        let moved = self.implicit_move(e);
+        if moved == e || self.std >= kiln_lex::Std::Cxx23 {
+            return moved;
+        }
+        // Between non-class, non-reference types the two agree.
+        let ety = self.ast.exprs.get(e).ty();
+        if !self.ast.types.is_reference(ret)
+            && self.ast.types.as_record(ret).is_none()
+            && self.ast.types.as_record(ety).is_none()
+        {
+            return moved;
+        }
+        if self.ast.types.is_dependent(ret) || self.expr_is_type_dependent(e) {
+            return moved;
+        }
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, f, None, loc, |s| {
+            let c = s.convert_for_init(moved, ret, ConvCtx::Return);
+            !s.is_err_expr(c)
+        });
+        match r {
+            Some((true, Ok(()))) => moved,
+            Some((_, Err(Some(d))))
+                if matches!(
+                    d.id(),
+                    Some(DiagId::sema_call_deleted_ctor | DiagId::sema_call_deleted_function)
+                ) =>
+            {
+                moved
+            }
+            _ => e,
+        }
     }
 
     /// C++23 implicit move ([expr.prim.id.unqual]/4, [class.copy.elision]/3):
