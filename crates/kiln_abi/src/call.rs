@@ -340,7 +340,7 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
         if t.clang_compat() < 20 {
             return direct(IrType::Int(8));
         }
-        // clang 20+ (GCC's convention, spec/abi.md §8.21): a zero-sized
+        // clang 20+ (GCC's convention, spec/abi.md §8.23): a zero-sized
         // argument is ignored and a non-empty-sized empty class takes the
         // generic path below (`i64`).
         if size == 0 {
@@ -368,10 +368,51 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
         let a = unadjusted_align(t, q) * 8;
         let a = if a < 128 { 64 } else { 128 };
         let size = size.next_multiple_of(a);
-        let base = IrType::Int(u32::try_from(a).unwrap_or(64));
+        // clang 21+: one or two 8-byte slots of an 8-byte-aligned class
+        // made only of pointers are `ptr` / `[2 x ptr]`, not integers
+        // (an argument only; the return keeps `i64` / `[2 x i64]`).
+        let base = if t.clang_compat() >= 21
+            && (size == 64 || size == 128)
+            && a == 64
+            && only_pointers(t, q)
+        {
+            IrType::Ptr
+        } else {
+            IrType::Int(u32::try_from(a).unwrap_or(64))
+        };
         return direct(if size == a { base } else { IrType::Array(Box::new(base), size / a) });
     }
     ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align }
+}
+
+/// clang `AArch64ABIInfo::classifyArgumentType`'s `ContainsOnlyPointers`:
+/// a non-empty class whose bases and fields (arrays looked through) are
+/// all 64-bit object pointers or references into the default address
+/// space, or classes of them.
+fn only_pointers(t: &mut IrTypes<'_>, q: QualType) -> bool {
+    if is_empty_record(t, q, true) {
+        return false;
+    }
+    let ast = t.ast();
+    let TypeView::Record(d) = view(t, q) else { return false };
+    let Some(def) = ast.definition(d) else { return false };
+    let bases: Vec<QualType> = ast.decls.bases(def, &ast.lists).map(|b| b.ty).collect();
+    if !bases.into_iter().all(|b| only_pointers(t, b)) {
+        return false;
+    }
+    let ptr_bits = t.target().pointer_size * 8;
+    props::fields(ast, def).iter().all(|f| {
+        let mut ft = f.ty;
+        while let TypeView::ConstantArray(a) = view(t, ft) {
+            ft = a.elem;
+        }
+        match view(t, ft) {
+            TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
+                ptr_bits == 64 && !matches!(view(t, p), TypeView::ExtQual { .. })
+            }
+            _ => only_pointers(t, ft),
+        }
+    })
 }
 
 fn aarch64_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {

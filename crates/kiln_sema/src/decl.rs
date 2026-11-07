@@ -7740,7 +7740,7 @@ impl Sema<'_, '_> {
     fn record_field_bits(&mut self, r: DeclId, mut bits: DefinitionBits) -> (DefinitionBits, bool) {
         let mut invalid = false;
         let fields: Vec<DeclId> = self.ast.decls.members(r).collect();
-        let mut any_named = false;
+        let mut any_storage = false;
         for f in fields {
             if self.ast.decls.get(f).kind() != DeclKind::Field {
                 continue;
@@ -7766,14 +7766,17 @@ impl Sema<'_, '_> {
             if anon_union {
                 bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
             }
-            if (fd.is_none_or(|x| x.bit_width.is_none())
-                || !self.ast.decls.get(f).name().is_empty())
-                && !self.is_zero_size_field(f)
-            {
-                any_named = true;
+            // Only a zero-width bit-field and a zero-size subobject leave
+            // the class empty: an unnamed bit-field of non-zero width is
+            // storage (Itanium C++ ABI §1.1 "empty class"; clang
+            // `FieldDecl::isZeroSize`).
+            let zero_width_unnamed = self.ast.decls.get(f).name().is_empty()
+                && fd.and_then(|x| x.bit_width).is_some_and(|w| conv::eval_width(self, w) == Some(0));
+            if !zero_width_unnamed && !self.is_zero_size_field(f) {
+                any_storage = true;
             }
         }
-        if !any_named {
+        if !any_storage {
             bits = bits.with(DefinitionBits::EMPTY);
         }
         (bits, invalid)
