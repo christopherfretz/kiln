@@ -3293,6 +3293,14 @@ adjusted to `T`, deducing `T = U&` (`int (*)(int&) = f` for
 `template <class... Args> int f(Args&&...)`). WP-446,
 `tests/conformance/temp.deduct.funcaddr/forwarding-reference-{lvalue,conflict}.cpp`.
 
+In a function type's parameter-type-list, a `P` that is not a pack
+expansion paired with an `A` that is one (partial ordering: `A` came from
+a function parameter pack) is `MiscellaneousDeductionFailure`
+([temp.deduct.type]/10; clang's type-list `PackExpansionType` check), so
+`R (C::*)(A) const` and `void (*)(A)` are more specialized than their
+`(A...)` forms instead of ambiguous. WP-680,
+`tests/conformance/temp.deduct.type/function-param-pack-vs-single-ordering.cpp`.
+
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
 ([temp.deduct.call]/4.3). The success must be unique; otherwise the

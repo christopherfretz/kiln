@@ -310,6 +310,12 @@ impl Sema<'_, '_> {
                 });
             }
             let Some(&a) = as_.get(k) else { return Tdk::MiscellaneousDeductionFailure };
+            // [temp.deduct.type]/10: an `A` that is a function parameter
+            // pack (partial ordering) against a `P` that is not one fails
+            // (clang's `PackExpansionType` check in the type-list case).
+            if matches!(self.ast.types.view(a.ty()), TypeView::PackExpansion { .. }) {
+                return Tdk::MiscellaneousDeductionFailure;
+            }
             let p = if top { self.forwarding_to_lvalue(p, a, d) } else { p };
             let r = self.deduce_ty(p, a, TdfFlags::NONE, d, level);
             if r != Tdk::Success {
