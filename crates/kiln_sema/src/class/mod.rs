@@ -381,6 +381,15 @@ impl Sema<'_, '_> {
     pub fn act_on_param_default_list(&mut self, p: DeclId, l: &crate::init::InitList) {
         self.unparsed_default_args.remove(&p);
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+        if self.is_dependent_class_param(pty) {
+            // Kept as written (clang's dependent `InitializationSequence`):
+            // instantiation list-initializes the substituted type.
+            let e = self.dependent_init_list(l);
+            self.note_default_init_full_expr();
+            let e = self.act_on_full_expr(e);
+            let _ = self.ast.decls.set_default_arg(p, e);
+            return;
+        }
         let loc = self.ast.decls.get(p).loc();
         let note = Some(self.param_decl_note(p));
         let e = self.init_list_entity(pty, l, loc, crate::conv::ConvCtx::Argument, note);

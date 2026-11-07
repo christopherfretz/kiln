@@ -48,6 +48,30 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The shared name `x` used again ([`Self::reference_shared_decl`]),
+    /// with the expressions among its explicit template arguments pushed
+    /// for [`Self::mark_shared_expr_referenced`]'s walk: they are used
+    /// again too (`f<&C::g>()` kept from a generic lambda's pattern, whose
+    /// `&C::g` was formed in a dependent context; clang's
+    /// `TransformDeclRefExpr` transforms them).
+    fn reference_shared_name(
+        &mut self,
+        x: ExprId,
+        kind: ExprKind,
+        loc: Loc,
+        stack: &mut Vec<ExprId>,
+    ) {
+        self.reference_shared_decl(x, kind, loc);
+        let Some(l) = self.ast.exprs.decl_ref_extra(x).and_then(|r| r.template_args) else {
+            return;
+        };
+        for &a in self.ast.types.args(l) {
+            if let kiln_ast::types::ArgView::Expr { expr, .. } = a.view() {
+                stack.push(expr);
+            }
+        }
+    }
+
     /// Marks the functions that the shared expression `e` odr-uses
     /// referenced (which defines or instantiates them on use), warns
     /// again about its null dereferences ([`Sema::reissue_null_derefs`]),
@@ -88,7 +112,7 @@ impl Sema<'_, '_> {
                     if kind == ExprKind::DeclRefExpr && !callees.contains(&x) {
                         self.recheck_shared_ref(x);
                     }
-                    self.reference_shared_decl(x, kind, loc);
+                    self.reference_shared_name(x, kind, loc, &mut stack);
                 }
                 ExprKind::CXXConstructExpr
                 | ExprKind::CXXTemporaryObjectExpr

@@ -1097,6 +1097,16 @@ decls of a dependent context `INSTANTIATION`, so the test is
 `deps & (TYPE_VALUE_INST | UNEXPANDED_PACK) == 0`. The flag does not
 exist. On `libcxx_m3.cpp`, sharing saves 0.8% of `inst.bytes` (at most
 3%).
+- A shared subtree is still odr-used by each instantiation, as
+  clang's rebuilt nodes are: `mark_shared_expr_referenced`
+  (`templ/subst/shared.rs`) walks it and marks the functions and
+  variables it names referenced. The walk includes the expressions in a
+  name's explicit template arguments (`call<&H::c>(*this)`). A
+  non-dependent expression template argument that the substitution keeps
+  (`Subst::template_arg`) is walked as well. Before WP-690 the member
+  function in `&H::c` was never instantiated when the argument sat in a
+  generic lambda in a member of a class template, so the link failed
+  (test `temp.arg.nontype/kept-argument-odr-use.cpp`).
 - The expected saving is 30–60% of the expression nodes in libc++ bodies.
   It is measured by the instantiation report (§11.3).
 
@@ -2132,7 +2142,13 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
   diagnostics and the emitted `__cxx_global_var_init` functions follow
   clang's order (WP-186;
   `tests/conformance/temp.inst/static-member-instantiation-order.cpp`,
-  `tests/codegen/static_member_inst_order.cpp`).
+  `tests/codegen/static_member_inst_order.cpp`). The member was declared
+  without its initializer, so it takes the pattern's init style when the
+  initializer is instantiated: `static constexpr E e{X::v};` stays
+  direct-list-initialization ([dcl.init.list]/3.8, an explicit
+  constructor is viable) and `= {X::v}` copy-list (WP-690;
+  `tests/conformance/class.static.data/template-direct-list-init.cpp`,
+  `template-copy-list-init-errors.cpp`).
 
 This is why the chain `R<N>::v = R<N-1>::v` recurses one frame per level
 in clang (the d1 test in §10.2). Kiln matches its notes exactly.
@@ -3595,6 +3611,14 @@ immediate context: errors are hard.
   `act_on_param_default_list`, which list-initializes the instantiated
   parameter's type (the same path as a non-template braced default
   argument; WP-136).
+- A default argument of a parameter whose type is, or is a reference to,
+  a dependent class ([temp.dep.type]/7: a nested class of a class
+  template) is stored as written, unconverted (a braced one as the
+  `void` list of `dependent_init_list`), and converted only when it is
+  instantiated, where the class is complete (WP-690). The template
+  definition never looks at the class's constructors or default member
+  initializers for it, so `const H &h = {}` with an `H` that has default
+  member initializers is valid there.
 
 ### 6.5 Integration with overload resolution; when bodies are instantiated
 
@@ -4004,7 +4028,11 @@ The `SpecKind` transitions are those of §4.5.
   lvalue). Substitution (`subst/exprs.rs::value_literal` →
   `nttp_value_expr`) builds the replacement: a `DeclRefExpr` to the
   object (class), the entity (reference), `&entity` / the decayed array
-  (pointer), `nullptr` converted to the parameter type, or, for a
+  (pointer; an array is not decayed for a parameter of pointer-to-array
+  type, where `&arr` is the argument: `template<auto D>` with
+  `D = &C::arr`, WP-690,
+  `tests/conformance/temp.arg.nontype/pointer-to-array-argument.cpp`),
+  `nullptr` converted to the parameter type, or, for a
   non-null pointer to member (WP-415), `&C::m` of the member's declaring
   class `C` (an `AddrOf` of a `DeclRefExpr` to the member, as
   `member_pointer_of` builds it) converted to the parameter type along

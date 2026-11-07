@@ -381,8 +381,11 @@ impl Sema<'_, '_> {
         let loc = self.ast.exprs.get(ule).loc();
         let mut found = None;
         for (d, f) in self.ule_candidates(ule) {
+            // A template-id names only templates: a non-template found
+            // with them is not a candidate (clang's template-name lookup
+            // filters it out, `FilterAcceptableTemplateNames`).
             if self.kind_of(d) != DeclKind::FunctionTemplate {
-                return None;
+                continue;
             }
             let Ok(spec) = self.deduce_explicit_only(d, Some(explicit), loc) else { continue };
             if found.is_some() {

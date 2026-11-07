@@ -1772,7 +1772,7 @@ impl Sema<'_, '_> {
     /// the reference directly; otherwise a prvalue of the referenced type
     /// is copy-list-initialized and the reference binds to it (a
     /// non-const lvalue reference cannot).
-    fn reference_list_init(
+    pub(crate) fn reference_list_init(
         &mut self,
         ty: QualType,
         l: &InitList,

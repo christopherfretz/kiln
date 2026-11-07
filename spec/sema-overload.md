@@ -431,7 +431,12 @@ to use a deleted function" at that start (`&(f<3>)`, `(&f<5>)`, `&N::f<4>`
 all at the first token), or by a call through it as "call to deleted
 function 'f'" naming the template and noting "candidate function [with I =
 7] has been explicitly deleted". Test:
-`over.over/deleted-template-id-location.cpp`.
+`over.over/deleted-template-id-location.cpp`. Only the templates of the
+set count (`single_template_spec`): a non-template function found by the
+same lookup is skipped, as clang's template-name lookup drops it
+(`FilterAcceptableTemplateNames`), so `int rm(const char *)` beside
+`template<class T> void rm(T &, int)` leaves `&rm<M>` one specialization
+(WP-690, `over.over/template-id-with-non-template.cpp`).
 
 A called function template-id is not resolved so, parenthesized or not:
 `(f<A>)(x)` and `((N::f<A>))(x)` are the overload set of `f<A>(x)`

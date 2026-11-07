@@ -488,6 +488,9 @@ impl Parser<'_, '_> {
             };
             if let Some(op) = op {
                 self.bump();
+                if op == UnaryOp::AddrOf {
+                    self.addr_operand_at = Some(self.pos());
+                }
                 let e = self.parse_cast_expr()?;
                 return Some(self.s.act_on_unary(op, e, loc));
             }
@@ -1165,6 +1168,30 @@ impl Parser<'_, '_> {
     fn parse_postfix_expr(&mut self) -> PExpr {
         let e = self.parse_primary_expr()?;
         self.parse_postfix_suffix(e)
+    }
+
+    /// Whether a postfix-expression suffix starts here (clang's
+    /// `isPostfixExpressionSuffixStart`).
+    fn at_postfix_suffix_start(&self) -> bool {
+        matches!(
+            Self::punct_of(self.tok()),
+            Some(
+                Punct::LSquare
+                    | Punct::LParen
+                    | Punct::Period
+                    | Punct::Arrow
+                    | Punct::PlusPlus
+                    | Punct::MinusMinus
+            )
+        )
+    }
+
+    /// Whether the id-expression that began at `start` is the whole
+    /// operand of unary `&`: right after it, with no postfix suffix after
+    /// it (clang's `tryParseCXXIdExpression`). A qualified name there
+    /// forms no implicit member access.
+    fn whole_addr_operand(&self, start: usize) -> bool {
+        self.addr_operand_at == Some(start) && !self.at_postfix_suffix_start()
     }
 
     /// The postfix operators applied to `e` (clang's
@@ -2000,6 +2027,7 @@ impl Parser<'_, '_> {
     /// is found by argument-dependent lookup at instantiation
     /// ([temp.dep.general]/2).
     fn parse_id_expression_rest(&mut self) -> PExpr {
+        let start = self.pos();
         let begin = self.name_begin();
         let qual = self.parse_nested_name_nns().ok()?;
         let template_loc = if qual.is_some() { self.eat_kw(Kw::Template) } else { None };
@@ -2104,7 +2132,7 @@ impl Parser<'_, '_> {
         if qual.is_none() && self.at(Punct::LParen) {
             return Some(self.s.act_on_call_name(name, nl));
         }
-        let e = self.s.act_on_id_expression(name, nl, qual);
+        let e = self.s.act_on_id_expression_in(name, nl, qual, self.whole_addr_operand(start));
         if self.s.clang_compat >= 22
             && qual.is_none()
             && class == NameClass::Undeclared

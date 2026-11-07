@@ -197,6 +197,13 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         }
         let qualified = nns.is_some();
+        // `&C::m` in a lambda: the operand is the name, not `this->C::m`,
+        // whose `this` the lambda would capture (clang's
+        // `BuildPossibleImplicitMemberExpr` with `isAddressOfOperand`).
+        let addr_operand = std::mem::take(&mut self.address_operand);
+        if addr_operand && qualified && !self.lambdas.is_empty() {
+            return self.member_ref_without_object(d, loc, shadow, nns);
+        }
         if let Some(class) = self.implicit_object_class(d)
             && let Some((this_ty, _)) = self.this_class()
         {
@@ -279,6 +286,13 @@ impl Sema<'_, '_> {
         // `DiagnoseUseOfDecl`; `&A::operator==` of a defaulted `==`).
         if self.kind_of(d) == DeclKind::CXXMethod {
             self.resolve_exc_for_type(d, loc);
+            // So is a placeholder return type: `&C::f<int>` instantiates
+            // the definition of a member function template specialization
+            // to deduce it ([dcl.spec.auto.general]/12, clang
+            // `DeduceReturnType`).
+            if self.check_undeduced_use(d, loc) {
+                return self.recover_err(&[], loc);
+            }
         }
         let declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         let ty = self.non_reference(declared);
@@ -1120,6 +1134,13 @@ impl Sema<'_, '_> {
                         return self.recover_err(&[b], loc);
                     }
                     self.diagnose_deleted_use(m, loc);
+                    // `x.f` of a static member function takes its type:
+                    // a placeholder return type is deduced first, as for
+                    // `C::f` ([dcl.spec.auto.general]/12, clang
+                    // `DeduceReturnType` in `BuildMemberExpr`).
+                    if self.check_undeduced_use(m, loc) {
+                        return self.recover_err(&[b], loc);
+                    }
                 }
                 let ty = self.non_reference(self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR));
                 let e = self.build_member_expr(b, m, ty, arrow, loc, extra);

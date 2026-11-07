@@ -329,6 +329,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     pub fn template_arg(&mut self, a: TemplateArg, loc: Loc) -> SubstResult<TemplateArg> {
         let flags = self.sema.ast.types.arg_flags(a);
         if !flags.intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK) {
+            // A kept expression argument still odr-uses what it names in
+            // the instantiation (`s.template f<&C::g>()` in a generic
+            // lambda converted `&C::g` in a dependent context; clang's
+            // `TransformDeclRefExpr` marks a kept node referenced).
+            if let ArgView::Expr { expr, .. } = a.view() {
+                self.sema.mark_shared_expr_referenced(expr);
+            }
             return Ok(a);
         }
         match a.view() {

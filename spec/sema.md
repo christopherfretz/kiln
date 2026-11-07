@@ -806,6 +806,14 @@ Redeclaration and linkage rules:
   argument saved for the complete-class context is `DefaultArg::Unparsed`
   and replayed through `act_on_param_default_arg`, sema-class.md §2.7.)
   Calls fill omitted trailing arguments with `CXXDefaultArgExpr`.
+  A function parameter pack after a defaulted parameter needs no
+  default argument (`merge_default_args`, `lambda_default_args`). A
+  specialization's default arguments stay pending until a call uses
+  them ([temp.inst]/12, `defer_default_args`) also when a pack
+  expanded: the pattern's parameters pair with the specialization's
+  around the expansion (`param_pairs`), so `f(C c = C{}, A&&... a)`
+  called as `f(x)` never substitutes `C{}` (WP-690). Test:
+  `dcl.fct.default/pack-after-default.cpp`.
 - **Erroneous default arguments** (WP-293; clang's
   `ActOnParamDefaultArgumentError`). A default argument parsed in place
   whose expression is erroneous — including an explicit cast that fails
@@ -1143,7 +1151,17 @@ Redeclaration and linkage rules:
   `return` deduces, later ones must agree (clang's
   `'auto' in return type deduced as ... here but deduced as ...`),
   and a use before deduction is `function 'f' with deduced return type
-  cannot be used before it is defined`. A redeclaration
+  cannot be used before it is defined`. Every use checks this
+  (`check_undeduced_use`), `&C::f` included (`member_ref_without_object`):
+  a specialization instantiates its definition first, so
+  `&C::f<int>` of a member function template has the deduced type
+  (WP-690,
+  `tests/conformance/dcl.spec.auto/member-template-address-deduced.cpp`).
+  A member access `x.f` or `this->f` naming a static member function
+  checks it too (`member_of_object`), so the call through it has the
+  deduced type (WP-690,
+  `tests/conformance/dcl.spec.auto/static-member-through-dependent-base.cpp`).
+  A redeclaration
   ([dcl.spec.auto.general]/13) is matched against the declared
   placeholder type (`declared_fn_type`, kept in `declared_returns`), not
   the deduced one, and then adopts the deduced type
@@ -6991,6 +7009,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     destructor is bound (`CXXBindTemporaryExpr` of the array type,
     `maybe_bind_temporary` descends to the element type), and so is a
     braced list bound to a reference to array (`reference_list_init`).
+  - Reference `R{...}` (`reference_list_cast`, WP-690; `using CR = const
+    double &; CR{}`) direct-list-initializes the reference
+    (`reference_list_init`, [dcl.init.list]/3.9-10) and is an lvalue (an
+    xvalue for an rvalue reference to an object) `CXXFunctionalCastExpr`
+    of the referenced type, as clang. Tests:
+    `expr.type.conv/reference-list-cast.cpp`,
+    `reference-list-cast-errors.cpp`.
 
 ## 7. Statements (`stmt.rs`)
 - **Compound statements and scopes:** see §2.

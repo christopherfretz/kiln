@@ -159,6 +159,9 @@ pub struct Parser<'a, 'sm> {
     /// unexpanded pack (or `auto`): a `...` before its `)` belongs to the
     /// declarator, not the parameter list ([dcl.fct]/14).
     pub(crate) pack_hint: bool,
+    /// The token position just past the last unary `&`: an id-expression
+    /// starting there is the operand of `&` (clang's `isAddressOfOperand`).
+    pub(crate) addr_operand_at: Option<usize>,
     /// The declarator being parsed is a handler's exception-declaration,
     /// whose direct declarator takes a misplaced `...` (clang
     /// `ParseDirectDeclarator` consumes one wherever a name may follow;
@@ -336,6 +339,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             greater_is_op: true,
             greater_off_depth: 0,
             pack_hint: false,
+            addr_operand_at: None,
             catch_declarator: false,
             type_id_constraint: Loc::INVALID,
             param_typename: ParamTypename::Implicit,
