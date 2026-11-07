@@ -8363,7 +8363,10 @@ coroutine's body Sema replaces the body with a `CoroutineBodyStmt`
 - the frame allocation ([dcl.fct.def.coroutine]/9-11): the promise
   class's `operator new` is looked up first; when it exists the call
   tries the placement form `(size, [*this,] params...)` then `(size)`;
-  otherwise the global `operator new(size_t)`. When the promise declares
+  otherwise the global `operator new(size_t)`. The promise's `operator
+  new` templates take part in each try as in a new-expression, so
+  `template <class A> operator new(size_t, allocator_arg_t, A)` serves
+  `task f(allocator_arg_t, A)` (WP-789). When the promise declares
   `get_return_object_on_allocation_failure()` (which must be a static
   member function), the allocation must be non-throwing: a global or
   missing `operator new` becomes `::operator new(size_t, std::nothrow)`
