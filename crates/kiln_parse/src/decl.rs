@@ -195,6 +195,28 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::Semi], false, true);
             return;
         }
+        if self.at_gnu_attrs_before_linkage_spec(0) {
+            // `__attribute__((section("s"))) extern "C" int f(int);`: clang
+            // parses the GNU attributes as decl-specifiers, then the
+            // linkage specification with that `DeclSpec` (`ParseLinkage`).
+            // A C++11 attribute-specifier-seq among them is reported and
+            // dropped (`ProhibitAttributes`).
+            let mut attrs = Vec::new();
+            while !self.at_kw(Kw::Extern) {
+                let before = self.pos();
+                self.parse_gnu_attr_seq(&mut attrs);
+                self.diagnose_and_skip_cxx11_attrs();
+                if self.pos() == before {
+                    break;
+                }
+            }
+            if !self.at_kw(Kw::Extern) {
+                self.parse_simple_declaration(DeclaratorContext::File, true);
+                return;
+            }
+            self.parse_linkage_spec_with(attrs);
+            return;
+        }
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
                 self.bump();
@@ -222,7 +244,7 @@ impl Parser<'_, '_> {
                     TokKind::StringLit(_) | TokKind::RawStringLit(_)
                 ) =>
             {
-                self.parse_linkage_spec();
+                self.parse_linkage_spec_with(Vec::new());
             }
             // `template [: r :] < args > :: name x;` declares `x` (a
             // splice-scope-specifier, P2996; as GCC 16.1).
@@ -363,8 +385,32 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// Whether the tokens from offset `n` are GNU `__attribute__((...))`
+    /// specifiers (possibly mixed with C++11 attribute-specifiers after
+    /// the first) followed by `extern "lang"` ([dcl.link]).
+    pub(crate) fn at_gnu_attrs_before_linkage_spec(&self, n: usize) -> bool {
+        if self.kw_of(self.peek(n)) != Some(Kw::Attribute) {
+            return false;
+        }
+        let mut j = n;
+        loop {
+            let k = self.past_gnu_attrs(j);
+            let Some(i) = self.after_cxx11_attrs_at(self.pos() + k) else { return false };
+            if i - self.pos() == j {
+                break;
+            }
+            j = i - self.pos();
+        }
+        self.kw_of(self.peek(j)) == Some(Kw::Extern)
+            && matches!(self.peek(j + 1).kind, TokKind::StringLit(_) | TokKind::RawStringLit(_))
+    }
+
     /// `extern "lang" declaration` / `extern "lang" { ... }` ([dcl.link]).
-    fn parse_linkage_spec(&mut self) {
+    /// `gnu` are the GNU attributes written before `extern`: clang's
+    /// `ParseLinkage` continues the `DeclSpec` that holds them into the
+    /// declaration without braces, so they appertain to it; before a
+    /// braced body they are dropped without a diagnostic.
+    fn parse_linkage_spec_with(&mut self, gnu: Vec<AttrId>) {
         let loc = self.bump().span.lo;
         let lang_tok = self.bump();
         let lang = self.unevaluated_text(&lang_tok);
@@ -376,7 +422,11 @@ impl Parser<'_, '_> {
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
         } else {
             self.s.act_on_linkage_spec_braceless(ls);
+            let outer = std::mem::replace(&mut self.lead_decl_attrs, gnu);
             self.parse_external_declaration();
+            // A declaration without decl-specifiers (a namespace, a
+            // template) does not take them.
+            self.lead_decl_attrs = outer;
         }
         self.s.act_on_finish_linkage_spec(ls);
     }

@@ -5417,7 +5417,10 @@ impl Sema<'_, '_> {
                     || self.in_local_scope()
                         && (self.is_dependent_type(pty) || self.is_dependent_type(ty));
                 if compatible {
-                    let prev_def = self.is_var_definition(p);
+                    // clang `VarDecl::isThisDeclarationADefinition`: an
+                    // `alias` declaration is a definition (`hasDefiningAttr`),
+                    // so `int v;` after one redefines `v`.
+                    let prev_def = self.is_var_definition(p) || self.own_alias_attr(p).is_some();
                     let n = sym_str(self, name);
                     self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
                     if self.diagnose_var_redecl_conflict(p, &n, d.name_loc(), ext, prev_def) {
@@ -5555,7 +5558,12 @@ impl Sema<'_, '_> {
             Initializer::Paren(es, l, _) if es.len() == 1 => Some(*l),
             _ => None,
         };
-        self.check_alias_definition(v);
+        if self.check_alias_definition(v) {
+            // clang `AddInitializerToDecl` returns at the redefinition: the
+            // variable is invalid and its initializer unchecked (no
+            // `'extern' variable has an initializer`).
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
         self.act_on_init_inner(v, init);
         self.check_static_tls(v, paren);
         let constinit_ok = self.check_constinit(v);
