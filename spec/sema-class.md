@@ -1766,7 +1766,9 @@ members with an NSDMI.
   cleared (`AstBuilder::clear_return_nrvo`, clang `computeNRVO`). Probes (all
   clang 19, golden `ast/class.copy.elision/nrvo.cpp`): `if (b) { S x; return
   x; } S y; return y;` → both `nrvo`; `S x, y; if (b) return x; return y;` →
-  neither; `S x; if (b) return S(); return x;` → neither; `return p;`
+  neither; `S x; if (b) return S(); return x;` → neither; `S x; if (b) return x; return {1};` → neither
+  (a braced-init-list return has no candidate, so it disables every slot
+  as any other non-candidate return does; WP-799); `return p;`
   (param) → not a candidate. Alignment (`alignas` on the variable) is not
   yet considered (clang `isCopyElisionCandidate` checks it).
 

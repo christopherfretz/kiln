@@ -183,6 +183,10 @@ impl Sema<'_, '_> {
     /// `return { ... };` ([stmt.return]/2): copy-list-initialization of
     /// the returned object. `loc` is the `return` keyword.
     pub fn act_on_return_list(&mut self, l: &InitList, loc: Loc) -> StmtId {
+        // A braced list is never a copy-elision candidate: it disables
+        // NRVO for every variable in scope (clang `BuildReturnStmt` calls
+        // `updateNRVOCandidate(nullptr)`; spec/sema-class.md §5.5).
+        self.update_nrvo_candidate(None);
         let flat = Self::list_exprs(l);
         let Some((fdecl, ret, auto)) =
             self.func.as_ref().map(|f| (f.decl, f.ret, f.auto_ret.is_some()))
