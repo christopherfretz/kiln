@@ -62,7 +62,9 @@ source text
                   as it goes (clang model: C++ syntax is not context-free).
   kiln_sema       name lookup, scopes, types, declarations, templates and
                   deduction, concepts, overload resolution, implicit conversions,
-                  initialization, lambdas, coroutines, modules, reflection.
+                  initialization, lambdas, coroutines, contracts
+                  (spec/contracts.md: parsed in kiln_parse, evaluated by the
+                  Oven and codegen), modules, reflection.
   ▼
   kiln_oven       THE constant evaluator: bytecode compiler + VM + abstract
                   memory model + std::meta runtime. Called by sema for every

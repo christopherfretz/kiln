@@ -558,7 +558,9 @@ error by default).
 | `std::initializer_list<X>` (or ref) | worst element ICS to `X`; identity if empty; any Bad → `Bad(InitList)` |
 | array `X[N]`/`X[]` | worst element ICS; too many elements → Bad |
 | non-aggregate class | `UserDefined` from [over.match.list] (`list_ctor` if phase 1 won) |
+| aggregate class, one undesignated element of that class or a class derived from it | the element's ICS to the class ([over.ics.list]/3, CWG2076; WP-724, `tests/conformance/over.ics.list/aggregate-single-element-of-class-run.cpp`) |
 | aggregate class | `UserDefined{via: Aggregate}` if aggregate init is well-formed. An undesignated list is walked like clang's verify-only aggregate initialization (`aggregate_list_walk`, WP-315). The walk covers each base and then each field (a union's first field; array elements one by one), consuming clauses with brace elision ([dcl.init.aggr]/16) as `init_element` decides it. A braced clause must have a viable list ICS to its element. An unbraced clause either starts an elided subaggregate (an array not initialized by a string literal; an aggregate class when the clause is not of that class or a derived class and does not convert to it) or must implicitly convert to the element. It is not viable when: clauses are left over; an elision reaches an aggregate with no elements (`aggregate_has_no_elements`, the rule `init_element` diagnoses, spec/sema.md §6); an element left over is a reference; or an element left over is a class with no viable `{}`. An element left over does not count if it has a default member initializer or is an anonymous member. Tests: `tests/conformance/over.ics.list/aggregate-brace-elision-viability*.cpp`. A designated list, or one the walk cannot decide (an incomplete or unbounded element, an error-typed clause, a GNU vector element), is bounded from above instead. It must designate no subobject twice and have no more elements than brace elision reaches (`aggregate_list_capacity`): each base and field takes one clause if it is a scalar or non-aggregate class, else its own capacity but at least one, so an empty class, an empty base or libc++'s `std::array<T, 0>` member takes `{}` (WP-304, `tests/conformance/over.ics.list/aggregate-elision-capacity*.cpp`) |
+| reference, one undesignated element reference-related to the referee | the element's reference-binding ICS, also when it is Bad and with its own note ([dcl.init.list]/3.10, clang `TryListConversion`; WP-724, `tests/conformance/over.ics.list/aggregate-single-element-of-class-errors.cpp`) |
 | reference | as the referenced type, bound to the temporary |
 | non-class, one element / empty | element's ICS (narrowing → `Bad(Narrowing)`) / identity |
 
@@ -726,7 +728,12 @@ nothing defers. Not yet deferred: contextual conversion sets
 ### 5.1 Generation (`oper.rs::add_rewritten`)
 The §2.5 lookups are repeated for the names below; each hit adds a
 candidate with `rewrite: Rewritten` (operands `x, y`) or `Reversed`
-(operands `y, x`). Built-ins are never rewritten.
+(operands `y, x`). Built-ins are never rewritten. Rewritten and
+reversed candidates exist only from C++20 (clang `CreateOverloadedBinOp`
+clears `AllowRewrittenCandidates` before it, WP-730): in C++17, `a != b`
+never considers `operator==`, so a base's member `operator!=` beside a
+more-derived base's friend `operator==` (LLVM's `iterator_facade_base`)
+is not ambiguous.
 
 | `@` | rewritten | reversed |
 |---|---|---|
@@ -1336,12 +1343,16 @@ Where the code differs from (or details) the design above:
   is `sema_no_suitable_delete_member` plus `note_member_declared_named`
   per function found; a deleted class `operator new` is `sema_call_deleted_function`. A member
   `operator delete` without an exception specification is implicitly
-  `noexcept` ([except.spec]/9). A class-scope `operator new` function
-  template ([temp.over]/1) is a candidate when no non-template function
-  matches: `(size_t[, align_val_t], placement...)` go through
-  `add_found_candidates`/`resolve_set` and the deduced specialization is
-  instantiated on use; a placement `operator delete` template is not
-  matched (WP-686). The allocation function, the matching deallocation
+  `noexcept` ([except.spec]/9). An `operator new` function
+  template ([temp.over]/1), in class scope or global (WP-730), is a candidate:
+  with templates found, the functions and the templates' deduced
+  specializations for `(size_t[, align_val_t], placement...)` go through
+  overload resolution together ([expr.new]/20; `resolve_set`) and the
+  chosen specialization is instantiated on use (WP-686, WP-712); with
+  no viable candidate the notes are the overload set's, template
+  candidates included. A placement `operator delete` template matches
+  when deduction against `void(void*, P...)` from the allocation
+  function's parameters succeeds ([expr.new]/28, WP-713). The allocation function, the matching deallocation
   function of a new-expression and the deallocation function of a
   delete-expression are odr-used at the expression's location, so a member
   of a class template specialization is instantiated there ([temp.inst]/11;

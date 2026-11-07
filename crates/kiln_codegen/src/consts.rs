@@ -152,7 +152,7 @@ impl Cg<'_> {
     }
 
     /// A scalar constant of IR type `t`.
-    fn scalar_const(&mut self, s: Scalar<'_>, t: LTy) -> R<Value> {
+    pub(crate) fn scalar_const(&mut self, s: Scalar<'_>, t: LTy) -> R<Value> {
         match s {
             Scalar::Int { bits, signed, .. } => {
                 if let Some(v) = self.extended_int_const(&bits, signed, t) {
@@ -211,7 +211,7 @@ impl Cg<'_> {
                 let ty = self.ast.decls.get(t).ty().unwrap_or(QualType::INT);
                 Ok(gval(self.let_global(t, ty)?))
             }
-            PtrBase::TypeInfo(t) => self.rtti(t),
+            PtrBase::TypeInfo(t) => self.rtti_descriptor(t),
             PtrBase::Label { label, origin } => {
                 let at = self.loc_of(origin);
                 self.addr_of_label(label, at)

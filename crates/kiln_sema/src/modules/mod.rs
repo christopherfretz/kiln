@@ -190,6 +190,24 @@ impl Sema<'_, '_> {
         Owner { unit: f.unit, purview, exported: purview && !f.exports.is_empty() }
     }
 
+    /// Whether a declaration made now in lexical context `lexical` is
+    /// attached to a named module ([module.unit]/7): in a purview and in
+    /// no linkage specification.
+    pub(crate) fn attaches_to_named_module(&self, lexical: DeclId) -> bool {
+        if !self.module_owner().purview {
+            return false;
+        }
+        let mut c = Some(lexical);
+        while let Some(x) = c {
+            match self.ast.decls.get(x).kind() {
+                DeclKind::LinkageSpec => return false,
+                DeclKind::Export => c = self.ast.decls.get(x).ctx(),
+                _ => return true,
+            }
+        }
+        true
+    }
+
     fn module_owner_changed(&mut self) {
         let o = self.module_owner();
         let next = self.ast.decls.next_id();
@@ -344,6 +362,24 @@ impl Sema<'_, '_> {
     fn module_unit_is_interface(&self) -> bool {
         let cur = usize::from(self.modules.cur());
         self.ast.modules.units.get(cur).is_some_and(|u| u.kind.is_interface())
+    }
+
+    /// A preprocessing directive that may not precede a module directive
+    /// ([cpp.pre]/1; P3868R1 allows only `#line` and the like) preceded
+    /// the unit's `module;` or module declaration; `loc` is the unit's
+    /// first directive. clang 22 then treats it as the first declaration,
+    /// rejecting the directive (clang 19 accepts).
+    pub fn module_note_pp_directive(&mut self, loc: Loc) {
+        if self.clang_compat < 22 {
+            return;
+        }
+        self.module_activate();
+        if let Some(f) = self.modules.frames.last_mut()
+            && f.phase == Phase::Start
+            && !f.first_decl.is_valid()
+        {
+            f.first_decl = loc;
+        }
     }
 
     /// A namespace-scope declaration starts at `loc` (for the import

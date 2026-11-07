@@ -16,6 +16,7 @@
     clippy::unnecessary_wraps
 )]
 
+mod arm;
 mod asm;
 mod atomic;
 mod auto_init;
@@ -25,6 +26,7 @@ mod class;
 mod cleanup;
 mod complex;
 mod consts;
+mod contracts;
 mod coro;
 mod dyncast;
 mod eh;
@@ -86,6 +88,13 @@ pub struct CodegenOptions {
     /// C++ exceptions are enabled (`-fexceptions`, the default). When
     /// disabled every function is `nounwind`.
     pub exceptions: bool,
+    /// RTTI is enabled (`-frtti`, the default). When disabled (`-fno-rtti`)
+    /// a vtable's RTTI slot is null and `type_info` objects are emitted
+    /// only for exception handling, as `linkonce_odr` definitions in every
+    /// TU that needs one, never as references to a key-function TU (clang
+    /// `shouldEmitRTTI`, `ShouldUseExternalRTTIDescriptor`,
+    /// `getTypeInfoLinkage`; spec/codegen.md "RTTI").
+    pub rtti: bool,
     /// The `llvm.ident` string; empty for none.
     pub ident: String,
     /// `AArch64` only: `+outline-atomics` in the functions'
@@ -223,6 +232,12 @@ pub struct CodegenOptions {
     /// How `std::meta::info` template arguments mangle
     /// (`-fkiln-reflection-mangling=`; spec/reflection.md §8.3).
     pub reflection_mangling: kiln_abi::ReflectionMangling,
+    /// Define the default contract-violation handler (weak
+    /// `handle_contract_violation` and
+    /// `std::contracts::invoke_default_contract_violation_handler`) in a
+    /// translation unit that checks a contract assertion: every stdlib
+    /// but libstdc++, which ships its own (spec/contracts.md §6.3).
+    pub contract_default_handler: bool,
 }
 
 /// An `-mcmodel=` code model (LLVM `CodeModel::Model`).
@@ -476,6 +491,7 @@ impl Default for CodegenOptions {
         CodegenOptions {
             source_filename: String::new(),
             exceptions: true,
+            rtti: true,
             ident: String::new(),
             outline_atomics: true,
             target_features: Vec::new(),
@@ -509,6 +525,7 @@ impl Default for CodegenOptions {
             no_inline: false,
             code_model: None,
             reflection_mangling: kiln_abi::ReflectionMangling::Kiln,
+            contract_default_handler: true,
         }
     }
 }

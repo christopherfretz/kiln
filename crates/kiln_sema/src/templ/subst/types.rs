@@ -368,10 +368,21 @@ impl Substituter<'_, '_, '_> {
                     ExcSpec::Dynamic(l) => {
                         let tys = self.sema.ast.types.type_list_types(l).to_vec();
                         let tys = self.expand_types(&tys, loc)?;
-                        ExcSpec::Dynamic(self.sema.ast.types.type_list(&tys))
+                        // `throw(Ts...)` with an empty pack is `throw()`, non-throwing
+                        // ([except.spec]/12 as of C++14).
+                        if tys.is_empty() {
+                            ExcSpec::DynamicNone
+                        } else {
+                            ExcSpec::Dynamic(self.sema.ast.types.type_list(&tys))
+                        }
                     }
-                    ExcSpec::DependentNoexcept(_) => {
-                        return self.unimplemented("dependent exception specification", loc);
+                    // The canonical form of a value-dependent
+                    // `noexcept(expr)` ([except.spec]/13, [temp.inst]/14):
+                    // its operand is the profile's first expression.
+                    ExcSpec::DependentNoexcept(pr) => {
+                        let e = self.sema.ast.types.profile_expr(pr).ok_or(SubstFail)?;
+                        let e = self.expr(e)?;
+                        self.sema.act_on_noexcept_spec(e, loc, loc)
                     }
                     other => other,
                 };

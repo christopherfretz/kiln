@@ -413,6 +413,9 @@ impl Cg<'_> {
         if id::x86::is_x86(b) {
             return self.emit_x86_builtin(b, e);
         }
+        if id::arm::is_arm(b) {
+            return self.emit_arm_builtin(b, e);
+        }
         let v = match b {
             id::IS_CONSTANT_EVALUATED | id::KILN_PLAINLY_CONSTANT_EVALUATED => {
                 V::C(self.m.const_bool(false))

@@ -381,7 +381,11 @@ impl Cg<'_> {
             StmtKind::GCCAsmStmt => self.emit_asm(s),
             StmtKind::CoreturnStmt => self.emit_coreturn(s),
             StmtKind::CoroutineBodyStmt => self.emit_coroutine_body(s),
-            k => err(Some(n.loc()), format!("statement {k:?} is not supported yet")),
+            // [stmt.contract.assert] (spec/contracts.md §6.3).
+            StmtKind::ContractAssertStmt => self.emit_contract_check(s),
+            k @ StmtKind::CXXCatchStmt => {
+                err(Some(n.loc()), format!("statement {k:?} is not supported yet"))
+            }
         }
     }
 

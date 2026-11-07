@@ -184,6 +184,7 @@ impl SyntaxJob<'_> {
             cfg_stats: a.cfg_stats,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
+            contract_semantic: a.contract_semantic.unwrap_or_default(),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();

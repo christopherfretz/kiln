@@ -1169,6 +1169,33 @@ impl Sema<'_, '_> {
         if let Some(arg) = self.substituted_int_nttp_arg(e, pty) {
             return Ok(arg);
         }
+        // P2308R1 ([temp.arg.nontype]/1): a braced-init-list
+        // copy-list-initializes the parameter (its type deduced first for
+        // a class template placeholder).
+        let e = match self.braced_template_arg(e) {
+            Some(l) => {
+                if !self.is_ctad_placeholder(pty) && self.placeholder_keyword(pty).is_some() {
+                    // `template<auto V>`: deduced as for `auto v = {..};`,
+                    // a `std::initializer_list`, never structural (clang
+                    // words it as for a missing <initializer_list>).
+                    let d = self.diag(DiagId::sema_auto_init_list_deduction, l.lbrace);
+                    self.emit(d);
+                    return Err(());
+                }
+                if self.is_ctad_placeholder(pty) {
+                    let init = crate::init::Initializer::List(l.clone());
+                    pty = self.ctad_for_initializer(pty, &init, false, at).ok_or(())?;
+                }
+                let note = Some(self.param_decl_note(p));
+                let to = conv::strip_cv(self, pty);
+                let c = self.init_list_entity(to, &l, l.lbrace, ConvCtx::Argument, note);
+                if self.is_err_expr(c) || self.has_errors_in(c) {
+                    return Err(());
+                }
+                c
+            }
+            None => e,
+        };
         let ety = self.ast.exprs.get(e).ty();
         #[cfg(feature = "op-stats")]
         crate::templ::deduce_stats::tally(

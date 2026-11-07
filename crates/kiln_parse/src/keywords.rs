@@ -55,6 +55,7 @@ keywords! {
     Constinit = "constinit";
     ConstCast = "const_cast";
     Continue = "continue";
+    ContractAssert = "contract_assert";
     CoAwait = "co_await";
     CoReturn = "co_return";
     CoYield = "co_yield";
@@ -166,6 +167,10 @@ pub struct Keywords {
     pub final_: Symbol,
     /// The contextual keyword `override`.
     pub override_: Symbol,
+    /// The contextual keyword `pre` ([dcl.contract.func]).
+    pub pre_: Symbol,
+    /// The contextual keyword `post` ([dcl.contract.func]).
+    pub post_: Symbol,
     /// The clang type-trait and type-transform names
     /// (spec/sema-templates.md §9.1, §9.2, §9.4). They are identifiers
     /// unless followed by `(` (clang's revertible type-trait keywords), so
@@ -189,12 +194,21 @@ impl Keywords {
     /// in C++; spec/sema.md §5.8). At `compat` 22 `__is_referenceable` is
     /// an ordinary identifier (clang 22 removed the trait; spec/sema.md
     /// §1.1). Before C++11 `nullptr` is an identifier (clang's
-    /// `KEYCXX11`; spec/parse.md §1).
+    /// `KEYCXX11`; spec/parse.md §1). `contract_assert` is a keyword from
+    /// C++26 on, at every `compat` level (spec/contracts.md §2).
     pub fn new(interner: &Interner, gnu: bool, cxx11: bool, compat: u32) -> Self {
+        Self::with_std(interner, gnu, cxx11, false, compat)
+    }
+
+    /// [`Keywords::new`], with `cxx26` enabling the C++26 keywords.
+    pub fn with_std(interner: &Interner, gnu: bool, cxx11: bool, cxx26: bool, compat: u32) -> Self {
         let mut map = HashMap::new();
         for (k, spellings) in Kw::TABLE {
             for s in *spellings {
-                if (!gnu && *s == "typeof") || (!cxx11 && *s == "nullptr") {
+                if (!gnu && *s == "typeof")
+                    || (!cxx11 && *s == "nullptr")
+                    || (!cxx26 && *s == "contract_assert")
+                {
                     continue;
                 }
                 map.insert(interner.intern(s), *k);
@@ -215,6 +229,8 @@ impl Keywords {
             map,
             final_: interner.intern("final"),
             override_: interner.intern("override"),
+            pre_: interner.intern("pre"),
+            post_: interner.intern("post"),
             builtins,
         }
     }

@@ -1003,7 +1003,13 @@ impl Parser<'_, '_> {
         let mut ok = true;
         if let Some(eq) = self.eat(Punct::Equal) {
             let at = self.loc();
-            match self.with_greater_op(false, Self::parse_constant_expr) {
+            // P2308R1: a braced-init-list default ([temp.param]/12).
+            let e = if self.at(Punct::LBrace) {
+                self.parse_init_list().ok().map(|l| self.s.act_on_braced_template_arg(&l))
+            } else {
+                self.with_greater_op(false, Self::parse_constant_expr)
+            };
+            match e {
                 Some(e) => {
                     let a = self.s.builder().template_arg_expr(e);
                     self.s.act_on_template_param_default(p, a, eq, at);
@@ -1127,6 +1133,12 @@ impl Parser<'_, '_> {
             )
         } else if let Some(t) = self.at_template_name_arg() {
             t
+        } else if self.at(Punct::LBrace) {
+            // P2308R1 ([temp.arg.nontype]/1): a braced-init-list
+            // initializes the template parameter.
+            let l = self.parse_init_list().ok()?;
+            let e = self.s.act_on_braced_template_arg(&l);
+            self.s.builder().template_arg_expr(e)
         } else {
             let e = self.with_greater_op(false, Self::parse_constant_expr)?;
             self.s.builder().template_arg_expr(e)

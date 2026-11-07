@@ -646,7 +646,9 @@ impl Sema<'_, '_> {
 
     fn member_target(&self, found: DeclId, object: Option<DeclId>) -> Option<Target> {
         let declaring = self.declaring_class(found)?;
-        let target = self.ast.strip_shadow(found);
+        // A member function template is an instance member when its
+        // pattern is ([class.protected]/1 applies to its specializations).
+        let target = self.templated_or_self(self.ast.strip_shadow(found));
         let instance_member = self.is_instance_member(target);
         Some(Target {
             member: Some(found),

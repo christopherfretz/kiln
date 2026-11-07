@@ -1557,6 +1557,25 @@ impl<'a> AstBuilder<'a> {
                         deps |= ExprDeps::TYPE_VALUE_INST;
                     }
                 }
+                // [temp.dep.expr]/3: a static data member of the current
+                // instantiation declared in its class as an array of
+                // unknown bound, without an initializer there, is
+                // type-dependent: its out-of-line definition gives the
+                // bound (clang's `computeDependence` for `DeclRefExpr`;
+                // `static const Info Ops[];` with `sizeof(Ops)` in a
+                // member of the template).
+                if n.has(DeclFlags::DEPENDENT_CTX)
+                    && n.ctx().is_some_and(|c| self.ast.decls.get(c).kind() == DeclKind::CXXRecord)
+                {
+                    let first = self.ast.first(d);
+                    let fty = self.ast.decls.get(first).ty();
+                    if fty.is_some_and(|t| {
+                        self.ast.types.canonical_kind(t) == crate::types::TypeKind::IncompleteArray
+                    }) && self.ast.decls.var(first).is_some_and(|v| v.init.is_none())
+                    {
+                        deps |= ExprDeps::TYPE_VALUE_INST;
+                    }
+                }
             }
             _ => {}
         }
@@ -4055,6 +4074,27 @@ impl<'a> AstBuilder<'a> {
     /// (already converted to `const void*`), `b` = the `*` location.
     pub fn indirect_goto_stmt(&mut self, target: ExprId, loc: Loc, star: Loc) -> StmtId {
         self.stmt(StmtKind::IndirectGotoStmt, 0, loc, target.raw(), star.to_raw())
+    }
+
+    /// A contract assertion (P2900, spec/contracts.md §4): an
+    /// assertion-statement or one function contract specifier. `a` = the
+    /// predicate (contextually converted to `bool`), `b` = the
+    /// postcondition's `ContractResultName` (0: none), `aux` = the kind
+    /// and the evaluation-semantic slot (0). `loc` is the keyword.
+    pub fn contract_stmt(
+        &mut self,
+        kind: crate::stmt::ContractKind,
+        cond: ExprId,
+        result: Option<DeclId>,
+        loc: Loc,
+    ) -> StmtId {
+        self.stmt(
+            StmtKind::ContractAssertStmt,
+            kind as u16,
+            loc,
+            cond.raw(),
+            RawId::raw_opt(result),
+        )
     }
 
     /// A try-block ([except.pre]/1): `try compound-statement handler-seq`

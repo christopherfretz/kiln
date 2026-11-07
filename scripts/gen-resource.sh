@@ -66,7 +66,7 @@ EXCLUDE_FILES=(
 DST_INC="$RES/include"
 mkdir -p "$DST_INC"
 # Remove previously imported files (keep the hand-maintained ones).
-find "$DST_INC" -mindepth 1 -type f ! -name LICENSE.TXT ! -name README.md -delete
+find "$DST_INC" -mindepth 1 -type f ! -name LICENSE.TXT ! -name README.md ! -name contracts -delete
 find "$DST_INC" -mindepth 1 -type d -empty -delete
 
 find_args=()

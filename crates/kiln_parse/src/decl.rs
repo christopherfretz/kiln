@@ -9,7 +9,6 @@ use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind, UnaryTr
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
-use kiln_sema::DeclSite;
 use kiln_sema::declspec::SpecError;
 use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
@@ -17,9 +16,11 @@ use kiln_sema::{
     Designator, InitItem, InitList, InitValue, Initializer, NameClass, NullSpec, ParamInfo, Sign,
     SpecialName, StorageSpec, TagUse, TypeSpecKind, Width,
 };
+use kiln_sema::{ContractDeclKind, DeclSite};
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
 
+use crate::class::LateToks;
 use crate::keywords::Kw;
 use crate::parser::{ParamTypename, Parser};
 use crate::templ::TemplateDeclKind;
@@ -2369,6 +2370,33 @@ impl Parser<'_, '_> {
         self.chunk_decl_attrs.extend(attrs);
     }
 
+    /// The attributes after a grouping `(` of a declarator
+    /// (`void (__attribute__((noreturn)) *fp)(int)`; clang
+    /// `ParseParenDeclarator`): like those after a ptr-operator
+    /// ([`Parser::skip_type_position_attrs`]), a GNU declaration
+    /// attribute is kept for the declarator, so GNU `noreturn` makes the
+    /// declared function type `noreturn` (spec/types.md §5.4, WP-708).
+    fn grouping_paren_attrs(&mut self, d: &mut Declarator) {
+        let saved = std::mem::take(&mut self.chunk_decl_attrs);
+        self.skip_type_position_attrs();
+        d.attrs.append(&mut self.chunk_decl_attrs);
+        self.chunk_decl_attrs = saved;
+    }
+
+    /// The lookahead offset past GNU `__attribute__((...))` specifiers
+    /// starting at offset `n`: clang's `ParseParenDeclarator` eats them
+    /// before deciding between a grouping paren and a parameter list,
+    /// so `void g(void (__attribute__((noreturn)) *p)(int))` groups.
+    fn past_gnu_attrs(&self, n: usize) -> usize {
+        let base = self.pos();
+        let mut i = base + n;
+        while self.kw_of(self.tok_at(i)) == Some(Kw::Attribute) {
+            let Some(j) = self.skip_balanced(i + 1) else { break };
+            i = j;
+        }
+        i - base
+    }
+
     /// The cv-qualifiers, nullability qualifiers and attributes after a
     /// `*` ([dcl.ptr]/1; clang's `ParseTypeQualifierListOpt`).
     pub(crate) fn parse_ptr_quals(&mut self) -> (Quals, Vec<NullSpec>) {
@@ -2598,7 +2626,7 @@ impl Parser<'_, '_> {
             }
             self.parse_declarator_id_attrs(d);
         } else if self.at(Punct::LParen)
-            && !((abstract_ok || in_catch) && self.is_param_list_start(1))
+            && !((abstract_ok || in_catch) && self.is_param_list_start(self.past_gnu_attrs(1)))
         {
             // Like clang's ParseParenDeclarator: grouping is in effect
             // only for the inner declarator, then restored.
@@ -2609,7 +2637,7 @@ impl Parser<'_, '_> {
             let ellipsis =
                 if d.ctx == DeclaratorContext::Prototype { None } else { d.ellipsis.take() };
             let open = self.bump().span.lo;
-            self.skip_attributes();
+            self.grouping_paren_attrs(d);
             self.parse_declarator(d);
             let close = self.expect_closing(Punct::RParen, Punct::LParen, open);
             d.grouping = had_grouping;
@@ -3377,11 +3405,13 @@ impl Parser<'_, '_> {
                     self.skip_until(&[Punct::RParen], false, false);
                     break;
                 };
+                // `throw(Ts...)`: a pack expansion ([except.spec]/1 as of
+                // C++14, [temp.variadic]/5), expanded on substitution.
+                let t = match self.eat(Punct::Ellipsis) {
+                    Some(l) => self.s.act_pack_expansion_type(t, l),
+                    None => t,
+                };
                 types.push(t);
-                if self.at(Punct::Ellipsis) {
-                    self.unsupported("pack expansions", self.loc());
-                    self.bump();
-                }
                 if self.eat(Punct::Comma).is_none() {
                     break;
                 }
@@ -3467,6 +3497,7 @@ impl Parser<'_, '_> {
             return Some(QualType::ERROR);
         }
         let ty = self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d);
+        let ty = self.s.act_on_type_id_decl_attrs(ty, &d.attrs);
         Some(self.s.check_qualified_fn_type(ty, &ds, &d))
     }
 
@@ -3786,7 +3817,7 @@ impl Parser<'_, '_> {
         loop {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
-            self.parse_trailing_requires(&mut d);
+            let contracts = self.parse_requires_and_contract_specs(&mut d);
             self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
@@ -3810,7 +3841,7 @@ impl Parser<'_, '_> {
                 if allow_fn_def && self.at_function_definition_start() {
                     self.explicit_inst_with_definition(tmpl_kind, &d, true);
                     self.parse_function_definition_after_declarator(
-                        &ds, base, &mut d, &mut decls, level,
+                        &ds, base, &mut d, &mut decls, level, contracts,
                     );
                     return decls;
                 }
@@ -3845,7 +3876,7 @@ impl Parser<'_, '_> {
                 self.explicit_inst_with_definition(tmpl_kind, &d, false);
             }
             let v = self.s.act_on_declarator(&ds, base, &d);
-            self.record_declarator_end(v, &d);
+            self.end_declaration_with_contracts(v, &d, contracts);
             // A declarator without a type is invalid too (`static y, z;`).
             type_invalid |= self.s.take_declarator_type_invalid()
                 || (!ds.has_type_specifier() && !is_untyped_special(&d));
@@ -4053,6 +4084,7 @@ impl Parser<'_, '_> {
         d: &mut Declarator,
         decls: &mut Vec<DeclId>,
         level: usize,
+        contracts: Option<LateToks>,
     ) {
         d.defaulted = self.at_eq_default();
         self.s.act_function_def_next(true);
@@ -4068,8 +4100,21 @@ impl Parser<'_, '_> {
             // too (clang `getEndLoc`; an implicit definition's body is
             // located there).
             self.record_declarator_end(f, d);
+            let how = if self.kw_of(self.peek(1)) == Some(Kw::Delete) {
+                ContractDeclKind::Deleted
+            } else {
+                ContractDeclKind::Defaulted
+            };
+            self.replay_contract_specs(contracts, d, f, how);
             self.parse_defaulted_or_deleted(f);
             return;
+        }
+        // [dcl.contract.res]/2: a result name of a deduced return type is
+        // typed once the body has deduced it.
+        let after = f.is_some_and(|f| self.s.contract_return_undeduced(f));
+        let mut contracts = contracts;
+        if !after {
+            self.replay_contract_specs(contracts.take(), d, f, ContractDeclKind::Definition);
         }
         match f {
             Some(f) => {
@@ -4077,6 +4122,32 @@ impl Parser<'_, '_> {
                 self.parse_function_definition(f, ctor);
             }
             None => self.skip_function_body(),
+        }
+        if after {
+            self.replay_contract_specs(contracts, d, f, ContractDeclKind::Definition);
+        }
+    }
+
+    /// The trailing requires-clause of `d`, then (a function declarator)
+    /// its *function-contract-specifier-seq*, captured for replay
+    /// ([dcl.contract.func]/1: after the requires-clause).
+    fn parse_requires_and_contract_specs(&mut self, d: &mut Declarator) -> Option<LateToks> {
+        self.parse_trailing_requires(d);
+        if d.is_function_declarator() { self.capture_contract_specs() } else { None }
+    }
+
+    /// Records the end of `d`, which declared `v` without defining it,
+    /// then replays its captured contract specifiers.
+    fn end_declaration_with_contracts(
+        &mut self,
+        v: Option<DeclId>,
+        d: &Declarator,
+        contracts: Option<LateToks>,
+    ) {
+        self.record_declarator_end(v, d);
+        if d.is_function_declarator() {
+            let f = v.filter(|&f| self.s.ast.decls.function(f).is_some());
+            self.replay_contract_specs(contracts, d, f, ContractDeclKind::Declaration);
         }
     }
 

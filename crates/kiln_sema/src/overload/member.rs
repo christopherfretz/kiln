@@ -253,6 +253,47 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The dependent call of the name `callee` (`Get<decltype(v)>(0)`,
+    /// an `UnresolvedLookupExpr`) whose candidates include member
+    /// functions (templates) with an implicit object parameter of a class
+    /// `*this` is (derived from): an enclosing lambda captures `this` now
+    /// ([expr.prim.lambda.capture]/8), since its call operator may be
+    /// instantiated only after the closure is complete. As clang: when
+    /// every candidate is such a member the implicit `this->` is known
+    /// and its capture required (`BuildImplicitMemberExpr` with
+    /// `IsKnownInstance`); with a static candidate too `this` is captured
+    /// only where no diagnostic is needed (a potential capture).
+    pub(crate) fn note_implicit_this_of_dependent_call(&mut self, callee: ExprId) {
+        let c = self.ignore_parens(callee);
+        if self.lambdas.is_empty()
+            || self.unevaluated > 0
+            || self.ast.exprs.get(c).kind() != ExprKind::UnresolvedLookupExpr
+        {
+            return;
+        }
+        let instance: Vec<bool> = self
+            .ast
+            .unresolved_decls(c)
+            .iter()
+            .map(|&d| {
+                let f = self.templated_or_self(self.ast.strip_shadow(d));
+                self.kind_of(f) == DeclKind::CXXMethod
+                    && !self.is_static_method(f)
+                    && !self.has_explicit_object(f)
+            })
+            .collect();
+        let decls = self.ast.unresolved_decls(c);
+        let Some(i) = instance.iter().position(|&b| b) else { return };
+        let first = self.templated_or_self(self.ast.strip_shadow(decls[i]));
+        if self.implicit_object_class(first).is_none() {
+            return;
+        }
+        let loc = self.ast.exprs.get(c).loc();
+        if instance.iter().all(|&b| b) || self.this_capturable() {
+            self.note_this_use(loc);
+        }
+    }
+
     /// Resolves the call of the overloaded member access `callee`
     /// (possibly parenthesized) with `args`: the member access naming the
     /// best viable function, or `None` after diagnosing.

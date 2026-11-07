@@ -23,8 +23,8 @@ use crate::lookup::LookupKind;
 pub(crate) struct AllocFns {
     /// The functions found.
     pub fns: Vec<DeclId>,
-    /// The class-scope function templates found (`template<class... A>
-    /// static void* operator new(size_t, A&&...)`, [temp.over]).
+    /// The function templates found (`template<class... A> static void*
+    /// operator new(size_t, A&&...)`, or a global one; [temp.over]).
     pub templates: Vec<DeclId>,
     /// Found in the scope of the allocated class.
     pub in_class: bool,
@@ -36,9 +36,8 @@ pub(crate) struct AllocFns {
 impl Sema<'_, '_> {
     /// The functions named `operator op` for an object of type `elem`:
     /// the class's own (with those of its bases) unless `global`, else
-    /// the global ones. Class-scope function templates are kept apart
-    /// for [`Sema::find_operator_new_template`]; global ones are not
-    /// candidates yet (WP-071).
+    /// the global ones. Function templates, class-scope or global, are
+    /// kept apart for [`Sema::find_operator_new_template`].
     pub(crate) fn alloc_fns(
         &mut self,
         elem: QualType,
@@ -70,13 +69,19 @@ impl Sema<'_, '_> {
             }
         }
         let tu = self.ast.tu;
-        let fns = self
-            .ast
-            .lookup_local(tu, name)
+        let found: Vec<DeclId> = self.ast.lookup_local(tu, name).iter().collect();
+        let fns = found
             .iter()
+            .copied()
             .filter(|&d| self.ast.decls.get(d).kind() == DeclKind::Function)
             .collect();
-        AllocFns { fns, templates: Vec::new(), in_class: false, naming: None }
+        // Global allocation function templates (LLVM's `template <...>
+        // void *operator new(size_t, BumpPtrAllocatorImpl<...> &)`).
+        let templates = found
+            .into_iter()
+            .filter(|&d| self.ast.decls.get(d).kind() == DeclKind::FunctionTemplate)
+            .collect();
+        AllocFns { fns, templates, in_class: false, naming: None }
     }
 
     /// The usual deallocation function among `fns` ([basic.stc.dynamic.

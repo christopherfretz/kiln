@@ -946,6 +946,15 @@ Type flags are computed at intern time (types.md §5.3). The rules:
 | `PackExpansion` | its pattern is dependent | — (and UNEXPANDED_PACK is cleared) |
 | `Auto` | undeduced inside a dependent context | — |
 
+A reference to a variable or parameter with automatic storage declared
+in a template is instantiation-dependent only so that instantiation
+rebinds it (`decl_deps`). The `decltype` of such a reference (or of the
+parenthesized reference) whose declared type is not dependent is the
+plain `Decltype`, as clang computes it: `decltype(V)::iterator` with
+`std::vector<int> V` names a member of a known class, and is a type in a
+template argument with no `typename` (WP-730,
+`tests/conformance/dcl.type.decltype/template-local-nested-name-run.cpp`).
+
 **Three predicates (WP-445).** Every "is this dependent?" question
 asks exactly one of:
 - *dependent type* (`Sema::is_dependent_type`, the `DEPENDENT` bit,
@@ -1003,7 +1012,7 @@ never recomputed (ast.md §5). The rules follow [temp.dep.expr],
 |---|---|
 | any expression | the union of its children's deps, plus `deps_of_type_flags(type)` (gives TYPE when the type is dependent) |
 | `DeclRefExpr` to an NTTP | VALUE \| INST (plus TYPE if the parameter's type is dependent; plus UNEXPANDED_PACK if it is a pack) |
-| `DeclRefExpr` to a variable | TYPE if its type is dependent; VALUE if it is a const integral or `constexpr` variable whose initializer is value-dependent (ast.md §16.15) |
+| `DeclRefExpr` to a variable | TYPE if its type is dependent; VALUE if it is a const integral or `constexpr` variable whose initializer is value-dependent (ast.md §16.15); TYPE \| VALUE \| INST if it is a static data member of the current instantiation declared in its class as an array of unknown bound without an initializer there ([temp.dep.expr]/3, `static const Info Ops[];`). `sizeof`/`alignof` of such a type-dependent operand is checked at instantiation, where a (parenthesized) reference to a static data member of a specialization whose type is an array of unknown bound first instantiates the member's definition and names it with the bound its definition gives (clang `completeExprArrayBound`; [temp.inst]/4; WP-730, test `temp.dep.expr/static-member-array-unknown-bound.cpp`) |
 | `this` in a dependent context | TYPE |
 | `sizeof`, `alignof`, `noexcept`, `typeid(type)`, `__is_*` traits, `requires` | the operand's TYPE becomes VALUE (the result type is fixed); `alignof e` naming a variable or member whose `alignas` operand is dependent is VALUE-dependent too (`Builder::names_dependently_aligned_decl`, clang `computeDependence(UnaryExprOrTypeTraitExpr)`; WP-312) |
 | `noexcept(e)` with a can-throw result that is dependent | also VALUE \| INST |
@@ -1118,16 +1127,20 @@ These are the current instantiation:
 - `A<T>` or `A<T...>` written with the class's own parameters in order;
 - the nested classes of either.
 
+A template-id of the class whose pack expansion argument falls on a
+parameter that is not a pack (`Ts<T...>` in `template<template<class>
+class H, template<class> class... T> struct Ts`) names neither the
+current instantiation nor a partial specialization's injected class: it
+is a dependent specialization checked once substituted (WP-730,
+`temp.local/injected-name-pack-expansion-args.cpp`).
+
 A template-id of a partial specialization's template whose non-type
 arguments are written unconverted is matched by converting them first
-(`entered_partial_by_converted_args`). One with a pack expansion for a
-parameter that is not a pack (`Ts<T...>` in `template<template<class>
-class H, template<class> class... T> struct Ts`) is not converted: it
-names no partial specialization, and its argument check waits for the
-substitution. So is one whose primary template has a template parameter
-pack: the partial specialization's own arguments hold the arguments for
-the pack as one argument pack, so `template<class... A> int B<int,
-A...>::g()` is found only after conversion (WP-726,
+(`entered_partial_by_converted_args`). One whose primary template has a
+template parameter pack is converted first too: the partial
+specialization's own arguments hold the arguments for the pack as one
+argument pack, so `template<class... A> int B<int, A...>::g()` is found
+only after conversion (WP-726,
 `tests/conformance/temp.spec.partial.member/out-of-line-member-pack-arguments.cpp`).
 
 Qualified lookup into the current instantiation happens at definition.
@@ -1286,7 +1299,14 @@ the running `Substituter` instead.
      after it: the conversion function's result is folded and checked
      against the parameter type (`Z<CI{}>` with `operator int` to `bool`,
      "evaluates to 2, which cannot be narrowed"; clang `getNarrowingKind`
-     on `ICS.UserDefined.After`);
+     on `ICS.UserDefined.After`). A braced-init-list argument (P2308,
+     a DR) copy-list-initializes the parameter
+     (`act_on_braced_template_arg`): narrowing is an error, a class type
+     is aggregate- or constructor-initialized, a placeholder type is
+     deduced from the list (CTAD for a class template; plain `auto` is
+     "cannot deduce type of initializer list"), and a dependent list is
+     kept until substitution. A braced default argument of a non-type
+     parameter follows the same rule;
    - packs the trailing args into a `Pack`.
    It returns `ConvertedArgs { sugared: ArgListId, canonical: ArgListId }`.
 2. Probe `specializations[(first(tmpl), canonical)]`. On a hit, return
@@ -1510,7 +1530,12 @@ and the members of member classes. Member templates are excluded. A
 member class that is not yet defined at that point gets the member
 specialization kind `ExplicitInstantiationDefinition` (so its vtable and
 RTTI are emitted `weak_odr`); one already defined keeps its implicit
-kind (clang `InstantiateClassMembers`; `instantiate_members_of`). A
+kind (clang `InstantiateClassMembers`; `instantiate_members_of`). The
+definition marks the class's vtable used, and that of each member class
+it gives the definition kind, so their virtual members are odr-used and
+an implicit virtual destructor is defined with it (clang
+`MarkVTableUsed(..., true)`; WP-730,
+`temp.explicit/vtable-implicit-virtual-destructor-run.cpp`). A
 member explicit instantiation of a constructor or destructor
 (`template X<int>::X();`) reaches sema through the special-member
 declarator path and names the existing member (WP-170). An explicit
@@ -2654,7 +2679,10 @@ recomputed exactly as for non-template code (clang's
   (790 tests, `-fsyntax-only`) found no kind reaching it; the kinds left
   are unreachable today because their construct is rejected or
   unimplemented before substitution: coroutine expressions and
-  statements, `template for`, computed `goto` and `contract_assert`.
+  statements, `template for` and computed `goto`. A `contract_assert`
+  (`ContractAssertStmt`) has its own arm since WP-706, and a function's
+  `pre`/`post` specifiers are substituted with the function
+  (`templ/subst/contracts.rs`; spec/contracts.md §5, Templates).
 - **`ChooseExpr`** (WP-307; clang `TransformChooseExpr`): the condition
   (unwrapped from its `ConstantExpr`) and both operands are substituted
   and `act_on_choose_expr` runs again.
@@ -7268,7 +7296,20 @@ declarator scopes.**
   (`note_qualified_dependent_member`), so `&N::m` is a pointer to member
   even when `N` is unrelated at instantiation (WP-686;
   `expr.unary.op/p3-qualified-member-unrelated-class-dependent-base-run.cpp`).
-  Gap: an overload set `&N::f` there is still rebuilt as `this->N::f`.
+  An overload set `&N::f` there (`Sema::address_operand`) stays the
+  qualified set, resolved at instantiation against the target type
+  ([over.over]; WP-715,
+  `expr.unary.op/p3-qualified-overload-set-dependent-base-run.cpp`).
+- *Dependent `noexcept(expr)` in a type*: the canonical
+  `ExcSpec::DependentNoexcept(profile)` of a function type (as written
+  under a pointer, member pointer, reference or GNU `noreturn`) is
+  substituted from the profile's operand through `act_on_noexcept_spec`
+  ([except.spec]/13, [temp.inst]/14; WP-723,
+  `except.spec/p13-dependent-noexcept-gnu-noreturn-subst-run.cpp`).
+  Deducing from a conversion function template to a pointer to
+  (member) function allows the function pointer conversion that drops
+  `noexcept` ([temp.deduct.conv]/5;
+  `temp.deduct.conv/p5-noexcept-function-pointer-conversion-run.cpp`).
 - *[expr.cond]/4 class unification* (clang `TryClassUnification`): when
   the operands differ in type and either is a class, each is tried
   against the other. The order is: /4.1–4.2, a glvalue target binding

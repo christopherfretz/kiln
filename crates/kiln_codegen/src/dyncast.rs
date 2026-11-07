@@ -197,8 +197,8 @@ impl Cg<'_> {
         let value = if let Some(dst) = dst.filter(|_| !to_void) {
             let st = self.class_type(src);
             let dt = self.class_type(dst);
-            let src_rtti = self.rtti(st)?;
-            let dst_rtti = self.rtti(dt)?;
+            let src_rtti = self.rtti_descriptor(st)?;
+            let dst_rtti = self.rtti_descriptor(dt)?;
             let hint = self.offset_hint(src, dst);
             let f = self.runtime_fn(
                 "__dynamic_cast",
@@ -307,13 +307,13 @@ impl Cg<'_> {
         let x = match ast.exprs.typeid_operand(e) {
             TypeidOperand::Type(t) => {
                 let t = self.referee(t).unwrap_or(t);
-                return Ok(V::C(self.rtti(t)?));
+                return Ok(V::C(self.rtti_descriptor(t)?));
             }
             TypeidOperand::Expr(x) => x,
         };
         let xq = ast.exprs.get(x).ty();
         if !ast.exprs.typeid_potentially_evaluated(e) || self.typeid_most_derived(x) {
-            return Ok(V::C(self.rtti(xq)?));
+            return Ok(V::C(self.rtti_descriptor(xq)?));
         }
         // EmitTypeidFromVTable.
         let lv = self.emit_lvalue(x)?;

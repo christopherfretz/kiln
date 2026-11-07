@@ -2448,7 +2448,11 @@ evaluated like any other initializer.
 
 **Member pointers.** Values are interned per Oven as clang's
 `APValue::MemberPointer` (member, `derived` flag, class path;
-`memptr.rs`), so freeze/thaw maps 1:1 to `Scalar::MemberPtr`. Ops:
+`memptr.rs`), so freeze/thaw maps 1:1 to `Scalar::MemberPtr`. The
+member of `&C::m` for a member of an anonymous union or struct is its
+`IndirectField` ([class.union.anon]/1): the entry's offset sums the
+access path, and the union checked by `MpActive` is the anonymous union
+that directly holds the member (WP-716). Ops:
 `MpCast [mp, class]` (castToDerived aux 0, castToBase aux 1, in place),
 `MpAddr [dst, obj, mp]` (`obj.*mp`, checking derived-member containment;
 `Fault::NullBase` for a base step through a null object), `MpActive

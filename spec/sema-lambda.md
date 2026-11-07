@@ -323,6 +323,19 @@ without a capture-default may call the static one (clang's
 In a class template, where `*this` is dependent, the capture is still
 eager.
 
+(WP-716) A generic lambda's call operator instantiated later gets the
+enclosing `this` ([expr.prim.this]/2), not the closure's: the enclosing
+member function's, through each enclosing lambda, or an NSDMI's class
+under a capture-default or `this` capture (`instantiated_lambda_this`).
+A dependent call naming class members by an unqualified id (e.g.
+`Get<T>(v)` in a generic lambda) captures `this` when the lambda is
+defined, as clang's `BuildImplicitMemberExpr`: when every candidate is
+a non-static member function, with the usual diagnostics, and when the
+set mixes static and non-static members only if `this` is capturable
+without error (a potential capture, `this_capturable`;
+`note_implicit_this_of_dependent_call`). Tests:
+`expr.prim.this/generic-lambda-implicit-this-member-template-run.cpp`.
+
 ### 4.3 The closure's members
 
 Each capture by copy, and each init-capture, gets an unnamed non-static

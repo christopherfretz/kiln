@@ -499,12 +499,13 @@ impl Sema<'_, '_> {
         {
             return None;
         }
-        // A pack expansion for a parameter that is not a pack covers an
-        // unknown number of parameters (`Ts<T...>` in `template<template<
-        // class> class H, template<class> class... T> struct Ts`): the
-        // arguments cannot be converted yet, and checking them would
-        // report the expansion as an argument of the wrong kind.
-        if written.iter().take(first_pack).any(|&a| self.is_pack_expansion_arg(a)) {
+        // A pack expansion for a parameter that is not a pack (`Ts<T...>`
+        // in `template<template<class> class H, template<class> class...
+        // T> struct Ts`, googletest's `Templates`) covers parameters only
+        // once substituted: no partial specialization's own arguments.
+        if let Some(i) = written.iter().position(|&a| self.is_pack_expansion_arg(a))
+            && params.get(i).is_none_or(|&p| !self.ast.template_parm(p).is_some_and(|x| x.pack))
+        {
             return None;
         }
         let conv = self.check_template_args(tmpl, &written, &[], loc).ok()?;

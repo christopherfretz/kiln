@@ -1037,6 +1037,12 @@ impl Substituter<'_, '_, '_> {
                 let l = self.braced_list(b)?;
                 Ok(self.sema.init_from_list_at(ty, &l, Some(l.lbrace)))
             }
+            // A braced-init-list template argument (P2308R1): substituted
+            // and kept as written until it initializes the parameter.
+            ExprKind::InitListExpr if n.ty() == QualType::VOID => {
+                let l = self.init_list(e)?;
+                Ok(self.sema.act_on_braced_template_arg(&l))
+            }
             _ => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
     }
@@ -1086,10 +1092,8 @@ impl Substituter<'_, '_, '_> {
         let n = *self.sema.ast.exprs.get(e);
         let x = *self.sema.ast.exprs.new_extra(e);
         let placement = match x.placement {
-            Some(l) => {
-                let args: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-                Some(NewPlacement { args: self.expand_exprs(&args)?, lparen: loc, rparen: loc })
-            }
+            // The allocation function's default arguments are added again.
+            Some(l) => Some(NewPlacement { args: self.expr_list(l)?, lparen: loc, rparen: loc }),
             None => None,
         };
         let base = self.ty(x.allocated_ty, x.type_loc)?;

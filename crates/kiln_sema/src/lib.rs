@@ -30,6 +30,7 @@ mod consteval_block;
 mod consteval_only;
 mod constexpr_body;
 pub mod constfold;
+mod contracts;
 pub mod conv;
 mod coroutine;
 pub mod decl;
@@ -123,6 +124,7 @@ use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
+pub use contracts::{ContractDeclKind, ContractScope};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
     BindingId, Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
@@ -947,6 +949,12 @@ pub struct Sema<'a, 'sm> {
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
+    /// The contract assertions whose predicates are being analysed,
+    /// innermost last (spec/contracts.md §5).
+    pub(crate) contract_ctx: Vec<contracts::ContractCtx>,
+    /// A contract assertion was seen: initializations are checked for
+    /// contract violations ([`Sema::check_contract_init`]).
+    pub(crate) has_contracts: bool,
     /// The static data member whose out-of-line initializer is being
     /// analysed: its class is the access context ([class.access]/7).
     pub(crate) initializing: Option<DeclId>,
@@ -1226,6 +1234,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             anon_namespaces: kiln_source::fx::FxHashMap::default(),
             friend_specs: kiln_source::fx::FxHashMap::default(),
             nsdmi_this: Vec::new(),
+            contract_ctx: Vec::new(),
+            has_contracts: false,
             initializing: None,
             inst_enable_if: None,
             templ: templ::TemplState::default(),

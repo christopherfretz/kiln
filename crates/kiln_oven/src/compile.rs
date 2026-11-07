@@ -802,6 +802,7 @@ impl Oven {
         c.ret = ret;
         c.ret_ref = c.b.ast().types.is_reference(ret_q);
         c.scan(body, &params);
+        let contracts = c.scan_contracts(def);
         c.scan_inits(def);
         c.cur_fn = Some(def);
         c.cur_params.clone_from(&params);
@@ -839,6 +840,23 @@ impl Oven {
                 c.locals.insert(pi.decl, Local::Reg(pi.reg));
             }
         }
+        // The function contract assertions ([dcl.contract.func]/7,
+        // spec/contracts.md §6.4): the preconditions after the parameters
+        // are initialized, before a constructor's ctor-initializers; the
+        // postconditions at each return. A function without any pays
+        // nothing.
+        for (src, own) in std::mem::take(&mut c.contract_aliases) {
+            if let Some(&l) = c.locals.get(&own) {
+                c.locals.insert(src, l);
+            }
+        }
+        for s in contracts {
+            if c.b.ast().stmts.contract_kind(s) == kiln_ast::stmt::ContractKind::Pre {
+                c.contract_check(s);
+            } else {
+                c.posts.push(s);
+            }
+        }
         let ast = c.b.ast();
         if ast.stmts.get(body).kind() == StmtKind::CXXTryStmt {
             // A function-try-block ([except.pre]/4): its handlers cover a
@@ -857,6 +875,9 @@ impl Oven {
         }
         // Falling off the end ([stmt.return]/4).
         if ret == RetKind::Void {
+            if !c.posts.is_empty() {
+                c.check_posts(None);
+            }
             c.emit(Op::Ret, 0, &[0]);
         } else {
             let ast = c.b.ast();
@@ -910,6 +931,9 @@ pub(crate) struct Compiler<'a> {
     pub max: u32,
     locals: FxHashMap<DeclId, Local>,
     mem_vars: FxHashSet<DeclId>,
+    /// The parameters the function contract assertions name, paired with
+    /// the definition's, when they were written on another declaration.
+    contract_aliases: Vec<(DeclId, DeclId)>,
     pending: Vec<Loc>,
     breakables: Vec<Breakable>,
     /// The enclosing statement expressions: the start of the statement of
@@ -923,6 +947,9 @@ pub(crate) struct Compiler<'a> {
     ret_ref: bool,
     /// The body creates temporaries (scopes are needed per statement).
     has_temps: bool,
+    /// The postconditions checked at each return (spec/contracts.md
+    /// §6.4; empty unless the function has some and the semantic checks).
+    posts: Vec<StmtId>,
     /// The operator location of the innermost read-modify-write being
     /// compiled (clang reports union active-member faults there).
     rmw_loc: Option<Loc>,
@@ -1011,6 +1038,7 @@ impl<'a> Compiler<'a> {
             max: 0,
             locals: FxHashMap::default(),
             mem_vars: FxHashSet::default(),
+            contract_aliases: Vec::new(),
             pending: Vec::new(),
             rmw_loc: None,
             opaque: FxHashMap::default(),
@@ -1021,6 +1049,7 @@ impl<'a> Compiler<'a> {
             ret: RetKind::Void,
             ret_ref: false,
             has_temps: false,
+            posts: Vec::new(),
             std_ice: false,
             std_construct: false,
             uses_cc: false,
@@ -1377,6 +1406,10 @@ pub(crate) fn const_object(ast: &kiln_ast::Ast, q: QualType) -> bool {
 /// `reinterpret_cast` performs ([expr.const]/5.15).
 const REINTERPRET_CONV: &str = "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression";
 
+/// GCC's note for a contract violation in a constant evaluation
+/// ([basic.contract.eval]/8, spec/contracts.md §6.4).
+const CONTRACT_FALSE: &str = "contract predicate is false in constant expression";
+
 /// clang's `note_constexpr_stmt_expr_unsupported`.
 const STMT_EXPR_UNSUPPORTED: &str =
     "this use of statement expressions is not supported in a constant expression";
@@ -1465,6 +1498,7 @@ impl Scan<'_> {
                     self.expr(v, false);
                 }
             }
+            StmtKind::ContractAssertStmt => self.expr(ast.stmts.contract_cond(s), false),
             StmtKind::CXXTryStmt => {
                 self.stmt(ast.stmts.try_block(s));
                 for h in ast.lists.iter::<StmtId>(ast.stmts.try_handlers(s)) {
@@ -1707,6 +1741,101 @@ impl Compiler<'_> {
         s.stmt(body);
         self.has_temps = s.temps;
         let _ = params;
+    }
+
+    /// The function contract assertions of `def` checked in a constant
+    /// evaluation ([basic.contract.eval]; none under the ignore
+    /// semantic), scanned as the body's statements are.
+    fn scan_contracts(&mut self, def: DeclId) -> Vec<StmtId> {
+        let ast = self.b.ast();
+        let Some(l) = ast.function_contracts(def).filter(|_| ast.contract_semantic.checks()) else {
+            return Vec::new();
+        };
+        let list: Vec<StmtId> = ast.lists.iter::<StmtId>(l).collect();
+        let mut s = Scan { ast, mem: &mut self.mem_vars, cur: None, temps: false };
+        for &c in &list {
+            s.stmt(c);
+        }
+        self.has_temps |= s.temps;
+        // Written on another declaration: its parameters are `def`'s.
+        for (src, own) in ast.contract_param_aliases(def) {
+            if self.mem_vars.contains(&src) {
+                self.mem_vars.insert(own);
+            }
+            self.contract_aliases.push((src, own));
+        }
+        list
+    }
+
+    /// A contract assertion `s` under a checking semantic
+    /// ([basic.contract.eval]/4-8, spec/contracts.md §6.4): its predicate
+    /// is evaluated in place (its temporaries in a scope of their own); a
+    /// violation is `Op::ContractFail`'s. Under observe the predicate is a
+    /// trial (`Op::ContractTrial`), so that one that is not a constant
+    /// can be reported and evaluation go on.
+    fn contract_check(&mut self, s: StmtId) {
+        let ast = self.ast();
+        let cond = ast.stmts.contract_cond(s);
+        let loc = ast.stmts.get(s).loc();
+        let observe = ast.contract_semantic == kiln_ast::stmt::ContractSemantic::Observe;
+        let m = self.next;
+        let skip = self.emit(Op::ContractSkip, 0, &[0]) + 1;
+        let trap = self.trap_index(loc, CONTRACT_FALSE.into());
+        let pred = |c: &mut Self| {
+            if c.has_temps {
+                c.open_scope(&[], true);
+                let r = c.rv(cond);
+                c.close_scope();
+                r
+            } else {
+                c.rv(cond)
+            }
+        };
+        if observe {
+            let pc = self.emit_loc(Op::ContractTrial, 0, &[0, 0, trap], loc);
+            let v = pred(self);
+            self.emit(Op::Ret, 1, &[v]);
+            let end = self.here();
+            self.patch(pc + 1, v);
+            self.patch(pc + 2, end);
+        } else {
+            let r = pred(self);
+            let ok = self.jmp_if(r, true);
+            self.emit_loc(Op::ContractFail, 0, &[trap], loc);
+            self.patch_here(ok);
+        }
+        self.patch_here(skip);
+        self.next = m;
+    }
+
+    /// The postconditions at a normal return ([dcl.contract.func]/7,
+    /// spec/contracts.md §6.4): the locals are destroyed, then each is
+    /// checked with its result name bound to the result object in place
+    /// (`res`: the register holding the value, or for a reference or a
+    /// class result its address).
+    fn check_posts(&mut self, res: Option<u32>) {
+        self.exit_scopes(0);
+        let posts = std::mem::take(&mut self.posts);
+        for &p in &posts {
+            let ast = self.ast();
+            if let (Some(rn), Some(r)) = (ast.stmts.contract_result_name(p), res) {
+                let l = if self.ret_ref || matches!(self.ret, RetKind::Sret(_)) {
+                    Local::Mem(r)
+                } else if self.mem_vars.contains(&rn) {
+                    // Its address is taken: a copy in memory.
+                    let RetKind::Scalar(ty) = self.ret else { continue };
+                    let q = self.reg();
+                    self.alloc_var(q, ty, rn, true);
+                    self.emit(Op::InitStore, 0, &[q, r, ty.0]);
+                    Local::Mem(q)
+                } else {
+                    Local::Reg(r)
+                };
+                self.locals.insert(rn, l);
+            }
+            self.contract_check(p);
+        }
+        self.posts = posts;
     }
 
     /// Counts statement `s` as a step; the step-limit note is at its begin
@@ -2026,23 +2155,36 @@ impl Compiler<'_> {
                 {
                     return;
                 }
+                let posts = !self.posts.is_empty();
                 match (self.ret, v) {
                     (RetKind::Sret(ty), Some(v)) => {
                         self.init(v, 0, ty);
+                        if posts {
+                            self.check_posts(Some(0));
+                        }
                         self.emit(Op::Ret, 0, &[0]);
                     }
                     (RetKind::Scalar(_), Some(v)) if self.ret_ref => {
                         let r = self.reg();
                         self.bind_ref(v, r);
+                        if posts {
+                            self.check_posts(Some(r));
+                        }
                         self.emit(Op::Ret, 1, &[r]);
                     }
                     (RetKind::Scalar(_), Some(v)) => {
                         let r = self.rv(v);
+                        if posts {
+                            self.check_posts(Some(r));
+                        }
                         self.emit(Op::Ret, 1, &[r]);
                     }
                     (_, v) => {
                         if let Some(v) = v {
                             self.effect(v);
+                        }
+                        if posts {
+                            self.check_posts(None);
                         }
                         self.emit(Op::Ret, 0, &[0]);
                     }
@@ -2113,6 +2255,13 @@ impl Compiler<'_> {
                     self.patch_here(ok);
                 }
                 self.stmt(sub);
+            }
+            // [stmt.contract.assert]: not evaluated under the ignore
+            // semantic (spec/contracts.md §6.4).
+            StmtKind::ContractAssertStmt => {
+                if ast.contract_semantic.checks() {
+                    self.contract_check(s);
+                }
             }
             k => {
                 self.trap_loc(

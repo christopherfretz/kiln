@@ -68,10 +68,10 @@ The loop:
 | `taskflow` | 2 | `v3.10.0` | tests at parity |
 | `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | tests at parity |
 | `folly` | 3 | `v2026.10.26.00` | not started |
-| `leveldb` | 3 | `1.23` | not started |
-| `llvm_project` | 3 | `llvmorg-19.1.7` | not started |
-| `protobuf` | 3 | `v33.1` | not started |
-| `rocksdb` | 3 | `v10.7.5` | not started |
+| `leveldb` | 3 | `1.23` | tests at parity |
+| `llvm_project` | 3 | `llvmorg-19.1.7` | blocked (1 cluster) |
+| `protobuf` | 3 | `v33.1` | tests at parity |
+| `rocksdb` | 3 | `v10.7.5` | tests at parity |
 <!-- /oss:projects -->
 
 ## Results
@@ -348,3 +348,73 @@ it, all 539 tests pass (WP-709, docs/status/oss/eigen.md).
 
 With the WP-686 allocation fixes now on main (#324), the 4 targets that failed to link on the WP-709 branch build and pass: 539/539 tests, at parity with clang-19.
 <!-- /oss:eigen -->
+
+<!-- oss:leveldb -->
+### leveldb (1.23)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 121 / 0 | 121 / 0 |
+| links ok / failed | 31 / 0 | 31 / 0 |
+| tests passed / total | 30 / 30 | 30 / 30 |
+| wall | 161 s | 166 s |
+| peak TU RSS | 137 MB | 198 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:leveldb -->
+
+<!-- oss:protobuf -->
+### protobuf (v33.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 653 / 0 | 653 / 0 |
+| links ok / failed | 10 / 0 | 10 / 0 |
+| tests passed / total | 4 / 4 | 4 / 4 |
+| wall | 217 s | 367 s |
+| peak TU RSS | 558 MB | 767 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:protobuf -->
+
+<!-- oss:rocksdb -->
+### rocksdb (v10.7.5)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 573 / 0 | 573 / 0 |
+| links ok / failed | 213 / 0 | 213 / 0 |
+| tests passed / total | 2158 / 2158 | 2158 / 2158 |
+| wall | 320 s | 254 s |
+| peak TU RSS | 490 MB | 678 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:rocksdb -->
+
+<!-- oss:llvm_project -->
+### llvm_project (llvmorg-19.1.7)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | rc 2 | ok |
+| TUs ok / failed | 372 / 1 | 373 / 0 |
+| links ok / failed | 2 / 0 | 3 / 0 |
+| tests passed / total | rc 1 | rc 1 |
+| wall | 229 s | 228 s |
+| peak TU RSS | 346 MB | 410 MB |
+
+Failure clusters (kiln): 1.
+
+1. **1x** `reject: error: member Q found in multiple base classes of different types`
+   - e.g. `$KILN/.oss/src/llvm_project/llvm/unittests/ADT/SimpleIListTest.cpp`: `$KILN/.oss/src/llvm_project/llvm/unittests/ADT/SimpleIListTest.cpp:608:11: error: member 'ilist_node' found in multiple base classes of different types`
+   - repro: `cd $KILN/.oss/build/llvm_project/kiln/unittests/ADT && kiln++ -DGTEST_HAS_RTTI=0 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I$KILN/.oss/build/llvm_project/kiln/unittests/ADT -I$KILN/.oss/src/llvm_project/llvm/unittests/ADT -I$KILN/.oss/build/llvm_project/kiln/include -I$KILN/.oss/src/llvm_project/llvm/include -I$KILN/.oss/src/llvm_project/third-party/unittest/googletest/include -I$KILN/.oss/src/llvm_project/third-party/unittest/googlemock/include -fPIC -fno-semantic-interposition -fvisibility-inlines-hidden -Werror=date-time -Werror=unguarded-availability-new -Wall -Wextra -Wno-unused-parameter -Wwrite-strings -Wcast-qual -Wmissing-field-initializers -pedantic -Wno-long-long -Wc++98-compat-extra-semi -Wimplicit-fallthrough -Wcovered-switch-default -Wno-noexcept-type -Wnon-virtual-dtor -Wdelete-non-virtual-dtor -Wsuggest-override -Wstring-conversion -Wmisleading-indentation -Wctad-maybe-unsupported -ffunction-sections -fdata-sections -O3 -DNDEBUG -std=c++17 -Wno-variadic-macros -Wno-gnu-zero-variadic-macro-arguments -fno-exceptions -funwind-tables -fno-rtti -Wno-suggest-override -MD -MT unittests/ADT/CMakeFiles/ADTTests.dir/SimpleIListTest.cpp.o -MF CMakeFiles/ADTTests.dir/SimpleIListTest.cpp.o.d -o CMakeFiles/ADTTests.dir/SimpleIListTest.cpp.o -c $KILN/.oss/src/llvm_project/llvm/unittests/ADT/SimpleIListTest.cpp`
+
+kiln test run: `bash: line 1: ./unittests/ADT/ADTTests: No such file or directory`
+<!-- /oss:llvm_project -->

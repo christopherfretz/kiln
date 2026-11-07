@@ -10,6 +10,7 @@
 //! it happens and returned as [`SubstFail`].
 
 mod anon;
+mod contracts;
 mod decls;
 mod exprs;
 mod lambda;

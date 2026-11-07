@@ -1,0 +1,23 @@
+Dumping test:
+FunctionDecl test 'int (int, int *)'
+|-ParmVarDecl used x 'int'
+|-ParmVarDecl used p 'int *'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used n 'int' cinit
+  |   `-ImplicitCastExpr 'int' <LValueToRValue>
+  |     `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  |-ContractAssertStmt assert
+  | `-BinaryOperator 'bool' '>'
+  |   |-ImplicitCastExpr 'int' <LValueToRValue>
+  |   | `-DeclRefExpr 'const int' lvalue Var 'n' 'int'
+  |   `-IntegerLiteral 'int' 0
+  |-ContractAssertStmt assert
+  | `-ImplicitCastExpr 'bool' <PointerToBoolean>
+  |   `-ImplicitCastExpr 'int *' <LValueToRValue>
+  |     `-DeclRefExpr 'int *const' lvalue ParmVar 'p' 'int *'
+  `-ReturnStmt
+    `-ImplicitCastExpr 'int' <LValueToRValue>
+      `-ImplicitCastExpr 'int' xvalue <NoOp>
+        `-DeclRefExpr 'int' lvalue Var 'n' 'int'
+

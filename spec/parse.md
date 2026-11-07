@@ -171,11 +171,13 @@ clang's `Parser` over `Preprocessor::Lex`.
   `struct D : B<int>`), names `B<int>` in a decl-specifier or a qualified
   type when no `<` follows ([temp.local]/1-2, [class.qual]/2;
   `Sema::inherited_injected_class`, WP-686). As a nested-name-specifier
-  component (`D::B::m`) it is not handled yet. An unqualified lookup
-  that finds the injected-class-names of several specializations of one
-  class template through different bases names that template when `<`
-  follows, and is ambiguous otherwise (clang's "found in multiple base
-  classes of different types"; [temp.local]/4,
+  component (`D::B::m`, also `W::Base::m` through a dependent base)
+  it names the base, so `D::B::m` is the base's member (WP-714;
+  `temp.local/p2-base-injected-name-nested-name-specifier-run.cpp`). An
+  unqualified lookup that finds the injected-class-names of several
+  specializations of one class template through different bases names
+  that template when `<` follows, and is ambiguous otherwise (clang's
+  "found in multiple base classes of different types"; [temp.local]/4,
   `Sema::ambiguous_injected_class`, WP-726;
   `temp.local/p4-injected-names-same-template.cpp`).
   Dependent qualified names follow clang's `isCXXDeclarationSpecifier`
@@ -510,6 +512,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   no class template (`decltype(...)`) is parsed ahead like an
   unresolved specialization scope (`annotate_template_scope`)
   (`tests/conformance/temp.alias/alias-template-id-qualified-type-as-template-argument.cpp`).
+  The class template found may be a member template of a class template
+  specialization whose definition is not instantiated yet (`template
+  <class T> using G = TO<int>::FSS<T>;`): its members are classified in
+  the member template it was instantiated from, so `G<short>::W<1>::type`
+  is a type-id (WP-730,
+  `tests/conformance/temp.alias/alias-names-member-template-of-specialization-run.cpp`).
 - A typedef qualifier `T::name` whose `T` names a class template
   specialization that is not instantiated yet (and is not an explicit
   specialization) is classified the same way, by the specialization's
@@ -525,6 +533,13 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   of a qualifier in a dependent context (`X<T>::m::name`, `m::name` in
   `X`'s own definition) stays dependent
   (`tests/conformance/temp.arg.type/member-typedef-of-specialization-qualifier.cpp`).
+- A further component after a typedef or alias member of the pattern
+  naming a dependent type (`X<args>::type::name` with `typedef T type;`
+  in `X`'s pattern) cannot be classified there: the lookahead parses the
+  qualifier ahead as an unresolved specialization scope
+  (`annotate_template_scope`, `in_class_template_pattern`; WP-724), so
+  `sizeof(rr<decltype(*p)>::type::value_type)` takes a type-id
+  (`tests/conformance/dcl.ambig.res/sizeof-member-typedef-of-specialization-run.cpp`).
 - When `m` in `X<A>::m::name` is a typedef member of `X`'s primary
   pattern but `X<A>` has an explicit specialization, the pattern's `m`
   (`void`, or dependent on the parameters) says nothing about the
@@ -804,8 +819,16 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - `noexcept ( constant-expression )` goes to
     `act_on_noexcept_spec(e, loc, start)` (spec/sema.md §4.7).
   - `throw ( [type-id-list] )` goes to `act_on_dynamic_exception_spec`;
-    a missing `(` is `expected '(' after 'throw'`, and a pack expansion
-    `...` in the list is "not supported yet".
+    a missing `(` is `expected '(' after 'throw'`, and a type-id
+    followed by `...` is a pack expansion (`act_pack_expansion_type`,
+    [temp.variadic]/5), expanded at instantiation; an empty expansion
+    is `throw()` (WP-722; C++17 rejects the whole form as for any
+    dynamic specification, `except.spec/p1-dynamic-pack-expansion*.cpp`).
+  - The attributes after a declarator's grouping `(` are parsed before
+    deciding between grouping and a parameter list (clang
+    `ParseParenDeclarator`): GNU ones are declarator attributes, as after
+    a `*`, and a type-id applies GNU `noreturn` among them
+    (`act_on_type_id_decl_attrs`; spec/types.md §5.4, WP-708).
   - A second specification is not consumed: the declarator ends and
     the next token is diagnosed by the caller.
 - **`parse_simple_declaration`** handles the decl-specifiers, then
@@ -1948,7 +1971,6 @@ Not implemented: `asm goto`, MS-style `__asm { }` blocks.
 expressions ([dcl.fct.def.general]/8) passed to `act_on_predefined_expr`.
 
 - **Other declarations:**
-  - pack expansions in dynamic exception specifications
   - `auto` deduction from braced lists (`std::initializer_list`)
   - `typename`, `operator` and pack forms of using-declarators, and an
     attributed `[[...]] using` as a block-scope statement

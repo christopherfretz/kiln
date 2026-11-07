@@ -611,4 +611,53 @@ impl Sema<'_, '_> {
             _ => None,
         }
     }
+
+    /// A braced-init-list template argument (P2308R1, [temp.arg.general]
+    /// /1): kept as written, nested lists and designators included, until
+    /// [`Sema::braced_template_arg`] gives it back to initialize the
+    /// parameter.
+    pub fn act_on_braced_template_arg(&mut self, l: &crate::init::InitList) -> ExprId {
+        if self.list_has_expr_error(l) {
+            let e = self.recover_err(&Self::list_exprs(l), l.lbrace);
+            return self.mark_expr_error(e);
+        }
+        self.dependent_init_list(l)
+    }
+
+    /// The braced-init-list behind template argument `e`, if it is one
+    /// (a `void` `InitListExpr`, as written or substituted).
+    pub(crate) fn braced_template_arg(&self, e: ExprId) -> Option<crate::init::InitList> {
+        use crate::init::{Designator, InitItem, InitValue};
+        use kiln_ast::expr::Designator as AstDesignator;
+        let ex = &self.ast.exprs;
+        let n = ex.get(e);
+        if n.kind() != ExprKind::InitListExpr || n.ty() != QualType::VOID {
+            return None;
+        }
+        let kids: Vec<ExprId> = self.ast.lists.iter::<ExprId>(ex.init_list_inits(e)).collect();
+        let items = kids
+            .into_iter()
+            .map(|x| {
+                let (designator, x) = if ex.get(x).kind() == ExprKind::DesignatedInitExpr {
+                    let ds = ex.designators(x).iter().map(|d| match *d {
+                        AstDesignator::Field { name, loc } => Designator::Field(name, loc),
+                        AstDesignator::Index { index, loc } => Designator::Index(index, loc),
+                        AstDesignator::Range { first, last, loc, ellipsis } => {
+                            Designator::Range(first, last, loc, ellipsis)
+                        }
+                    });
+                    (ds.collect(), ex.designated_init(x))
+                } else {
+                    (Vec::new(), x)
+                };
+                let value = self.braced_template_arg(x).map_or(InitValue::Expr(x), InitValue::List);
+                InitItem { designator, value }
+            })
+            .collect();
+        Some(crate::init::InitList {
+            items,
+            lbrace: n.loc(),
+            rbrace: ex.end_loc(e).unwrap_or(n.loc()),
+        })
+    }
 }

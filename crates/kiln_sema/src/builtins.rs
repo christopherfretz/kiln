@@ -658,8 +658,10 @@ impl Sema<'_, '_> {
                     s = &s[digits..];
                 }
                 // An integer constant expression argument (checked by
-                // `check_builtin_ice_args`).
-                b'I' => {}
+                // `check_builtin_ice_args`); WP-724 (the ACLE
+                // prototypes): `Z` `int32_t` (`Zi` is `int`, `ZUi`
+                // `unsigned`).
+                b'I' | b'Z' => {}
                 _ => break,
             }
             s = &s[1..];
@@ -835,6 +837,9 @@ impl Sema<'_, '_> {
                 self.builtin_nontemporal(callee, id == builtin::NONTEMPORAL_STORE, args, rparen)
             }
             builtin::NONDETERMINISTIC_VALUE => self.builtin_nondeterministic_value(args, rparen),
+            _ if let Some(load) = builtin::arm::exclusive_load(id) => {
+                self.builtin_arm_exclusive(callee, load, args, rparen)
+            }
             _ => {
                 self.unsupported("this builtin function", loc);
                 None
@@ -1331,8 +1336,9 @@ impl Sema<'_, '_> {
     /// `__builtin_assume_aligned(p, align[, offset])` (clang
     /// `BuiltinAssumeAligned`): 2 or 3 arguments; `p` decays and must
     /// convert to `const void *` (it keeps its own type); `align` is an
-    /// integer constant power of 2 (left unconverted), warned about above
-    /// 2^32 (`-Wbuiltin-assume-aligned-alignment`); `offset` converts to
+    /// integer (or unscoped enumeration) constant power of 2 (left
+    /// unconverted), warned about above 2^32
+    /// (`-Wbuiltin-assume-aligned-alignment`); `offset` converts to
     /// `size_t`. The call is a `void *` prvalue. Alignment errors are at
     /// the call's start.
     fn builtin_assume_aligned(
@@ -1377,7 +1383,13 @@ impl Sema<'_, '_> {
         let al = args[1];
         if !self.expr_is_value_dependent(al) {
             let at = self.begin_loc(callee);
-            let v = if self.ast.types.is_integral(self.ety(al)) { self.fold_int(al) } else { None };
+            // clang `BuiltinConstantArg`: an integral or unscoped enumeration
+            // constant (LLVM's `PickAlignment<T, A>::value` enumerator).
+            let v = if conv::rank::is_integral_or_unscoped_enum(self, self.ety(al)) {
+                self.fold_int(al)
+            } else {
+                None
+            };
             let Some(v) = v else {
                 let d = self
                     .diag(DiagId::sema_constant_integer_arg_type, at)
@@ -1749,6 +1761,67 @@ impl Sema<'_, '_> {
         let v = args[0];
         match conv::implicit_convert(self, v, vt, ConvCtx::Argument) {
             Ok(x) => Some((vec![x, p], QualType::VOID)),
+            Err(err) => {
+                let msg = err.diag(self, v);
+                self.emit(msg);
+                None
+            }
+        }
+    }
+
+    /// `__builtin_arm_ldrex(p)` / `ldaex` and `__builtin_arm_strex(v, p)` /
+    /// `stlex` (clang `CheckARMBuiltinExclusiveCall`; WP-724): `p` decayed
+    /// must be a pointer (else an error at the callee) to an integer,
+    /// floating or pointer type (else an error naming the address as clang
+    /// converts it, `const volatile T *` / `volatile T *`); a load has the
+    /// pointee's type, qualifiers included; a store converts `v` to the
+    /// unqualified pointee and is `int`.
+    fn builtin_arm_exclusive(
+        &mut self,
+        callee: ExprId,
+        load: bool,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        let n = if load { 1 } else { 2 };
+        if !self.builtin_arg_count(args, n, rparen) {
+            return None;
+        }
+        let at = self.begin_loc(callee);
+        let p = conv::decay(self, args[n - 1]);
+        let pt = self.ety(p);
+        if pt == QualType::ERROR {
+            return None;
+        }
+        let Some(vt) = self.ast.types.pointee(pt).filter(|_| self.ast.types.is_pointer(pt)) else {
+            let msg = self
+                .diag(DiagId::sema_atomic_builtin_must_be_pointer, at)
+                .arg(self.ty_arg(pt))
+                .arg(0);
+            self.emit(msg);
+            return None;
+        };
+        let qvt = vt;
+        let vt = conv::strip_cv(self, vt);
+        let t = &self.ast.types;
+        if !(t.is_integral(vt) || t.is_pointer(vt) || t.is_floating(vt)) {
+            // clang names the address as converted: a pointer to the
+            // volatile (and, for a load, const) unqualified pointee.
+            let q = if load { Quals::CONST | Quals::VOLATILE } else { Quals::VOLATILE };
+            let at_ty = self.ast.types.qualify(vt, q);
+            let at_ty = self.ast.types.pointer_to(at_ty);
+            let msg = self
+                .diag(DiagId::sema_atomic_builtin_must_be_pointer_intfltptr, at)
+                .arg(self.ty_arg(at_ty));
+            self.emit(msg);
+            return None;
+        }
+        if load {
+            return Some((vec![p], qvt));
+        }
+        let v = args[0];
+        match conv::implicit_convert(self, v, vt, ConvCtx::Argument) {
+            Ok(x) => Some((vec![x, p], QualType::INT)),
             Err(err) => {
                 let msg = err.diag(self, v);
                 self.emit(msg);
@@ -2260,7 +2333,7 @@ impl Sema<'_, '_> {
     pub(crate) fn target_has_builtin(&self, id: u32) -> bool {
         use kiln_abi::target::Arch;
         let arch = self.abi.triple.arch;
-        if builtin::neon::is_neon(id) {
+        if builtin::neon::is_neon(id) || builtin::arm::is_arm(id) {
             return arch == Arch::AArch64;
         }
         !builtin::x86::is_x86(id) || arch == Arch::X86_64
@@ -2781,7 +2854,7 @@ impl Sema<'_, '_> {
     /// `__builtin_FUNCTION` (`Function`: the unqualified name) and
     /// `_M_function_name` (`PrettyFunction`); both empty outside a
     /// function.
-    fn predefined_function_names(&self, ctx: DeclId) -> (String, String) {
+    pub(crate) fn predefined_function_names(&self, ctx: DeclId) -> (String, String) {
         if !self.ast.decls.get(ctx).kind().is_function() {
             return (String::new(), String::new());
         }

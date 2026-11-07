@@ -1965,8 +1965,13 @@ and returns the scope it names:
   `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
   `always_inline` with the GNU flag. Test:
   `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
-  - GNU `section`: `'section' attribute ignored` (`visibility`: see
-    "Visibility attributes")
+  - GNU `section("name")` (WP-716, clang `handleSectionAttr`): exactly
+    one string literal (`expected string literal as argument of
+    'section' attribute`, `'section' attribute takes one argument`), on
+    functions and variables with static storage duration (clang's
+    subject-list error otherwise); kept as `AttrKind::SECTION` with the
+    literal, for codegen (spec/codegen.md §8 "Sections").
+    (`visibility`: see "Visibility attributes")
   - GNU `format(archetype, F, A)` (WP-186, clang `handleFormatAttr`, in
     its order): exactly three arguments (`'format' attribute requires
     exactly 3 arguments`), the archetype an identifier (`requires
@@ -2019,6 +2024,15 @@ and returns the scope it names:
     result type's attribute wins over the callee's (clang
     `getUnusedResultAttr`); a call returning a reference has no by-value
     result. Not for a `void` call. Reported at the callee's start.
+  - `deprecated` takes an optional message string; the GNU spelling
+    `__attribute__((deprecated(msg, replacement)))` also a replacement
+    string (a fix-it's text, otherwise unused; LLVM's `LLVM_DEPRECATED`).
+    A second argument in `[[deprecated]]`, `[[gnu::deprecated]]` or
+    `__declspec` is `'deprecated' attribute takes no more than 1
+    argument` and the attribute still applies with its message; a third,
+    `takes no more than 2 arguments`; a non-string one, `expected string
+    literal as argument of 'deprecated' attribute` at it (clang
+    `handleDeprecatedAttr`, WP-730).
   - `deprecated` warns on use: a name, and a member named by a member
     access or an implicit `this->` (clang `DiagnoseUseOfDecl` in
     `BuildMemberReferenceExpr`, WP-203). Unlike clang, a non-dependent
@@ -3287,6 +3301,23 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   class`, or `using declaration refers into 'C::', which is not a base
   class of 'D'`. A declarator qualified by an
   enumeration works at class scope as anywhere else.
+  - (WP-724) [namespace.udecl]/10: a using-declarator in a class
+    repeats an earlier one, "redeclaration of using declaration" with
+    "previous using declaration", only when both qualifiers name the
+    same class (`previous_class_using`, clang
+    `CheckUsingDeclRedeclaration`). Through another class (`using
+    A::f; using B::f;` with `B` derived from `A`) a member the class
+    already has a shadow of gets no second shadow and no diagnostic
+    (`introduce_shadow`, clang `CheckUsingShadowDecl`;
+    `namespace.udecl/p10-*.cpp`).
+  - (WP-724) [class.qual]/2.2: the declarator names the constructors
+    of the class `C` its qualifier nominates (an inheriting
+    using-declaration) when the name is the qualifier's last spelled
+    component (`using B::B;`) or `C`'s own name, its
+    injected-class-name, however the qualifier is spelled (`using
+    BC::B;` with `typedef B<char> BC`, `using std::regex::basic_regex;`;
+    `class_using_declarator`;
+    `class.qual/p2-injected-class-name-after-typedef-run.cpp`).
 - **`using enum`** ([enum.udecl]): `act_on_using_enum(qual, class, name,
   name_loc)` takes the parser's classification of the (possibly
   qualified) name.
@@ -3882,6 +3913,10 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
 `BIis_constant_evaluated`; `kiln_ast::decl::builtin`).
 The AArch64 NEON target builtins (`__builtin_neon_*`, a generated
 table) are spec/landed/sema/WP-558.md "Target builtins".
+The AArch64 ACLE builtins (`__builtin_arm_*`, clang's
+`BuiltinsAArch64.def` rows, `kiln_ast::decl::builtin::arm`) are
+spec/landed/sema/WP-724.md "ACLE builtins": declared only when the
+target is AArch64, like the NEON ones.
 The x86-64 target builtins (every `__builtin_ia32_*` name the resource
 headers use, `__builtin_ia32_pause` (WP-610), and the header builtins
 `_mm_pause`, ...; a generated table) are spec/landed/sema/WP-630.md:
@@ -4049,7 +4084,9 @@ function) elsewhere.
     clang `BuiltinAssumeAligned`): 2 or 3 arguments (`too few` / `too many
     ... at most` at the `)`); `p` decays and must convert to `const void *`
     (it keeps its own type); `a`, unless value-dependent, an integer
-    constant (`argument to '...' must be a constant integer` at the call),
+    constant of integral or unscoped enumeration type (an enumerator,
+    LLVM's `PickAlignment<T, A>::value`; WP-730) (`argument to '...'
+    must be a constant integer` at the call),
     a power of 2 (`requested alignment is not a power of 2`), warned above
     2^32 (`-Wbuiltin-assume-aligned-alignment`); `off` converts to
     `size_t`. The call is a `void *` prvalue.
@@ -4567,7 +4604,12 @@ for them.
     type; a bit-field member is an error. Array indices must be
     integral constants; a non-constant index, and a result outside
     0 to 2^32 - 1 (which a negative index gives), are unsupported.
-    clang's error for a member of a virtual base is not implemented.
+  - (WP-716) A member is found by class member lookup, so through
+    base classes too ([class.member.lookup]; an ambiguous name is
+    reported as for a member access). The offset of the base
+    subobject along the unique path is added; a member of a virtual
+    base is clang's error `invalid application of 'offsetof' to a
+    field of a virtual base` (`ext.gnu.offsetof/base-member*.cpp`).
   - For a class that is not standard-layout it warns
     `-Winvalid-offsetof`. Standard-layout is computed from members
     and bases (`is_standard_layout`) until the definition bits track
@@ -4965,9 +5007,16 @@ and aggregate element types.
   selects the sized form, clang's C++14+ default); `-Wmismatched-new-delete`
   is not reported; a non-constant bound in a parenthesized type-id is a
   plain warning (clang's is an extension warning, so an error under
-  `-pedantic-errors`); `__hot_cold_t` overloads are not recognized;
-  default arguments of a user-declared allocation function are not
-  used (every parameter must be matched by an argument).
+  `-pedantic-errors`); `__hot_cold_t` overloads are not recognized.
+- **Default arguments of an allocation function** ([expr.new]/19,
+  [dcl.fct.default]; WP-730). The allocation call is an ordinary call: a
+  function whose parameters past the size (and alignment) and placement
+  arguments all have default arguments is viable, and the expression's
+  placement arguments are followed by `CXXDefaultArgExpr`s for them
+  (instantiated then for a class template's member), as clang's
+  `GatherArgumentsForCall`; a template instantiation drops them and
+  re-adds its own. The `requires N arguments` note counts only the
+  required parameters.
 
 ### 5.10 Immediate functions (`consteval.rs`, WP-133)
 clang's `CheckForImmediateInvocation`, `HandleImmediateInvocations` and
@@ -7819,6 +7868,10 @@ cv and ref qualifiers, and ` [T = int, ...]`: enclosing implicit class
 specializations' arguments (outermost first) then the function template
 specialization's, printed with their types (`2U`, `'a'`, packs
 `<int, char *>`, `x:auto` for a generic lambda's invented parameter).
+A type argument prints canonical with every name scoped, as clang stores
+the converted arguments: `[T = (anonymous namespace)::N::S]`,
+`[T = std::basic_string<char>]`, `[T = unsigned long]` for `size_t`
+(LLVM's `getTypeName<T>()` reads these; WP-730).
 The source-location builtins use the same printer (§9.5 of
 sema-templates.md), and a `__builtin_FUNCTION`/`__builtin_source_location`
 in a dependent context, or a default argument evaluating one used there,

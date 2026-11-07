@@ -43,6 +43,106 @@ pub enum StmtKind {
     ContractAssertStmt,
 }
 
+/// The kind of a contract assertion ([basic.contract.general], P2900;
+/// spec/contracts.md §4): `ContractAssertStmt.aux & ContractKind::MASK`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u16)]
+pub enum ContractKind {
+    /// An assertion-statement, `contract_assert(p);` ([stmt.contract.assert]).
+    Assert = 0,
+    /// A precondition specifier, `pre(p)` ([dcl.contract.func]).
+    Pre = 1,
+    /// A postcondition specifier, `post(r: p)` ([dcl.contract.func]).
+    Post = 2,
+}
+
+impl ContractKind {
+    /// The bits of `aux` holding the kind.
+    pub const MASK: u16 = 3;
+    /// The first `aux` bit of the evaluation-semantic slot (two bits, 0 =
+    /// the translation unit's `-fcontract-evaluation-semantic=`; resolved
+    /// at evaluation, WP-707).
+    pub const SEMANTIC_SHIFT: u16 = 2;
+
+    /// The kind held in `aux`.
+    pub const fn from_aux(aux: u16) -> Self {
+        match aux & Self::MASK {
+            1 => ContractKind::Pre,
+            2 => ContractKind::Post,
+            _ => ContractKind::Assert,
+        }
+    }
+
+    /// The keyword spelling (`contract_assert`, `pre`, `post`).
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            ContractKind::Assert => "contract_assert",
+            ContractKind::Pre => "pre",
+            ContractKind::Post => "post",
+        }
+    }
+
+    /// The ast-dump word (spec/contracts.md §7).
+    pub const fn name(self) -> &'static str {
+        match self {
+            ContractKind::Assert => "assert",
+            ContractKind::Pre => "pre",
+            ContractKind::Post => "post",
+        }
+    }
+}
+
+/// A contract evaluation semantic ([basic.contract.eval]/1, P2900;
+/// spec/contracts.md §6): `-fcontract-evaluation-semantic=`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub enum ContractSemantic {
+    /// The predicate is not evaluated.
+    Ignore,
+    /// A violation calls the handler, then execution continues.
+    Observe,
+    /// A violation calls the handler, then the program terminates (the
+    /// default, as GCC's).
+    #[default]
+    Enforce,
+    /// A violation terminates at once, with no handler.
+    QuickEnforce,
+}
+
+impl ContractSemantic {
+    /// The semantic the driver flag value `s` names.
+    pub fn from_flag(s: &str) -> Option<Self> {
+        Some(match s {
+            "ignore" => ContractSemantic::Ignore,
+            "observe" => ContractSemantic::Observe,
+            "enforce" => ContractSemantic::Enforce,
+            "quick_enforce" | "quick-enforce" => ContractSemantic::QuickEnforce,
+            _ => return None,
+        })
+    }
+
+    /// Whether the semantic checks the predicate at all.
+    pub const fn checks(self) -> bool {
+        !matches!(self, ContractSemantic::Ignore)
+    }
+}
+
+/// Where a contract assertion is and what it says, for the
+/// `contract_violation` object codegen builds (spec/contracts.md §6.3):
+/// the `const char *` values point to frozen string literal objects.
+#[derive(Clone, Copy, Debug)]
+pub struct ContractSite {
+    /// The presumed file name of the assertion's keyword.
+    pub file: crate::ConstValueId,
+    /// `__PRETTY_FUNCTION__` of the function the assertion belongs to.
+    pub function: crate::ConstValueId,
+    /// The predicate's source text.
+    pub comment: crate::ConstValueId,
+    /// The presumed line of the keyword.
+    pub line: u32,
+    /// The column of the keyword.
+    pub column: u32,
+}
+
 /// `IfStmt.aux`: the form of the `if` ([stmt.if]).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 #[repr(u16)]
@@ -595,6 +695,28 @@ impl StmtArena {
     /// of a coroutine body.
     pub fn coreturn_is_implicit(&self, s: StmtId) -> bool {
         self.expect(s, &[StmtKind::CoreturnStmt]).aux & 1 != 0
+    }
+
+    /// The kind of a `ContractAssertStmt` (P2900).
+    pub fn contract_kind(&self, s: StmtId) -> ContractKind {
+        ContractKind::from_aux(self.expect(s, &[StmtKind::ContractAssertStmt]).aux)
+    }
+
+    /// The predicate of a `ContractAssertStmt`, contextually converted to
+    /// `bool` (a full-expression).
+    pub fn contract_cond(&self, s: StmtId) -> ExprId {
+        ExprId::new(self.expect(s, &[StmtKind::ContractAssertStmt]).a)
+    }
+
+    /// The `ContractResultName` of a postcondition that introduces one.
+    pub fn contract_result_name(&self, s: StmtId) -> Option<DeclId> {
+        DeclId::from_raw(self.expect(s, &[StmtKind::ContractAssertStmt]).b)
+    }
+
+    /// The evaluation-semantic slot of a `ContractAssertStmt` (0: the
+    /// translation unit's default; spec/contracts.md §6).
+    pub fn contract_semantic_slot(&self, s: StmtId) -> u16 {
+        (self.expect(s, &[StmtKind::ContractAssertStmt]).aux >> ContractKind::SEMANTIC_SHIFT) & 3
     }
 
     /// The side record of a `GCCAsmStmt`.

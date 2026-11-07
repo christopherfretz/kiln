@@ -75,6 +75,14 @@ pub struct Ast {
     pub tu: DeclId,
     /// Module units and declaration ownership (spec/modules.md §5).
     pub modules: crate::modules::ModuleTable,
+    /// The translation unit's contract evaluation semantic
+    /// (`-fcontract-evaluation-semantic=`; spec/contracts.md §6): what a
+    /// contract assertion whose semantic slot is 0 does.
+    pub contract_semantic: crate::stmt::ContractSemantic,
+    /// The `std::contracts::contract_violation` data of each contract
+    /// assertion sema built outside a template pattern (spec/contracts.md
+    /// §6.3): recorded by sema, read by codegen.
+    pub contract_sites: crate::slot::ColdMap<crate::ids::StmtId, crate::stmt::ContractSite>,
     symbols: Arc<Interner>,
     inst: InstantiationMeter,
 }
@@ -187,6 +195,8 @@ impl Ast {
             cmp_categories: CmpCategories::default(),
             tu,
             modules: crate::modules::ModuleTable::default(),
+            contract_semantic: crate::stmt::ContractSemantic::default(),
+            contract_sites: crate::slot::ColdMap::new("contract_sites"),
             symbols,
             inst: InstantiationMeter::default(),
         }
@@ -374,6 +384,35 @@ impl Ast {
             Some(r) => self.redecls.get(r.group).first,
             None => self.template_redecl(d, true),
         }
+    }
+
+    /// The function contract assertions of function `f`
+    /// ([dcl.contract.func]/1, spec/contracts.md §4): the sequence on
+    /// `f` itself, else the one on its first declaration (a later
+    /// declaration repeats it or has none, [dcl.contract.func]/4).
+    pub fn function_contracts(&self, f: DeclId) -> Option<crate::ids::ListId> {
+        let c = &self.decls.cold.contracts;
+        c.get(f).or_else(|| c.get(self.first(f))).copied()
+    }
+
+    /// When the function contract assertions of `f` were written on
+    /// another declaration (its first; [dcl.contract.func]/4), that
+    /// declaration's parameters paired with `f`'s: the predicates name
+    /// the former, an evaluation binds them to the latter. Empty when
+    /// they are `f`'s own.
+    pub fn contract_param_aliases(&self, f: DeclId) -> Vec<(DeclId, DeclId)> {
+        let c = &self.decls.cold.contracts;
+        let src = self.first(f);
+        if c.get(f).is_some() || src == f || c.get(src).is_none() {
+            return Vec::new();
+        }
+        let params = |d: DeclId| -> Vec<DeclId> {
+            self.decls
+                .function(d)
+                .map(|x| self.lists.iter::<DeclId>(x.params).collect())
+                .unwrap_or_default()
+        };
+        params(src).into_iter().zip(params(f)).collect()
     }
 
     /// The latest declaration of `d`'s entity (a template's follows its
@@ -617,6 +656,20 @@ impl Ast {
                 .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
                 .map(|a| self.attrs.get(a))
                 .find(|a| a.kind == crate::attr::AttrKind::ALIAS)
+                .and_then(|a| crate::ids::StringLitId::from_raw(a.a))
+        })
+    }
+
+    /// The section a GNU `section("name")` attribute on any declaration
+    /// of `d` places it in (clang `SectionAttr`, inherited by
+    /// redeclarations).
+    pub fn section_of(&self, d: DeclId) -> Option<crate::ids::StringLitId> {
+        use crate::ids::RawId as _;
+        self.redecls_of(d).find_map(|r| {
+            self.lists
+                .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
+                .map(|a| self.attrs.get(a))
+                .find(|a| a.kind == crate::attr::AttrKind::SECTION)
                 .and_then(|a| crate::ids::StringLitId::from_raw(a.a))
         })
     }
