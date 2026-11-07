@@ -774,7 +774,7 @@ impl Sema<'_, '_> {
 
     /// A failed conversion is reported at `at`, the entity's location
     /// (clang's `InitializationKind::getLocation`).
-    fn init_from_expr(&mut self, ty: QualType, e: ExprId, ctx: ConvCtx, at: Loc) -> ExprId {
+    pub(crate) fn init_from_expr(&mut self, ty: QualType, e: ExprId, ctx: ConvCtx, at: Loc) -> ExprId {
         let ety = self.ast.exprs.get(e).ty();
         if self.is_error_type(ety) {
             return e;

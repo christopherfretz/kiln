@@ -2690,6 +2690,12 @@ extension, byte-identical at -O0 on both triples (`tests/codegen/vla.cpp`):
   `ArrayToPointerDecay`, clang `DefaultFunctionArrayConversion`). The
   aggregate emitter emits the literal as `EmitAggExpr` of its initializer
   (clang `VisitCompoundLiteralExpr`; C++ literals are not destroyed there).
+- **Class-typed statement expressions** (`expr.rs` `agg_stmt_expr`, WP-803):
+  the aggregate emitter runs the statements, emits the result expression
+  (sema's copy-initialization of the last statement's value) straight into
+  the destination, and only then leaves the statement expression's scope,
+  so its locals are destroyed after the copy (clang
+  `AggExprEmitter::VisitStmtExpr`).
 - **Scalar, vector and complex compound literals** (`compound_literal_lvalue`,
   WP-302): in a function, `(int){x}`, `(v4){x, 2}` and `(_Complex double){x}`
   are clang's `EmitCompoundLiteralLValue`: the initializer is stored into a

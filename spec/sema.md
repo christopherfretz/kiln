@@ -4529,7 +4529,9 @@ for them.
     restores them.
   - The final expression statement goes through
     `act_on_stmt_expr_result`: decay, then copy-initialization of a
-    prvalue of its cv-unqualified type.
+    prvalue of its cv-unqualified type. A class glvalue goes through
+    `init_from_expr`, so its copy or move constructor is selected and
+    the copy is made inside the statement expression's scope (WP-803).
   - The type is that of the last non-null statement, looking through
     labels, when that is an expression statement; otherwise `void`.
     The result is always a prvalue.

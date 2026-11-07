@@ -3110,6 +3110,40 @@ impl Cg<'_> {
             self.emit_stmt(body)?;
             return Ok(None);
         }
+        let (scope, r) = self.stmt_expr_prefix(e)?;
+        let q = ast.exprs.get(r).ty();
+        let tmp = self.temp(q);
+        if self.is_complex(q) {
+            // A complex result is loaded into `cx_ret`.
+            let v = self.emit_complex(r)?;
+            self.cx_store(v, tmp, q);
+            self.end_scope(scope);
+            let (re, im) = self.cx_load(tmp, q, (false, false));
+            self.f.cx_ret = re.zip(im);
+            return Ok(None);
+        }
+        let v = self.emit_scalar(r)?;
+        self.store_scalar(v, tmp, q);
+        self.end_scope(scope);
+        Ok(Some(self.load_scalar(tmp, q)))
+    }
+
+    /// clang `AggExprEmitter::VisitStmtExpr`: the result (a class
+    /// prvalue) initializes `dest` inside the statement expression's
+    /// scope, before its cleanups run (WP-803).
+    fn agg_stmt_expr(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
+        let (scope, r) = self.stmt_expr_prefix(e)?;
+        self.agg_visit(r, dest, zeroed)?;
+        self.end_scope(scope);
+        Ok(())
+    }
+
+    /// Opens the lexical scope of non-`void` statement expression `e`,
+    /// emits its statements before the result and returns the scope and
+    /// the result expression.
+    fn stmt_expr_prefix(&mut self, e: ExprId) -> R<(crate::stmt::Scope, ExprId)> {
+        let ast = self.ast;
+        let body = ast.exprs.stmt_expr_body(e);
         let children: Vec<StmtId> = ast.lists.iter(ast.stmts.compound_body(body)).collect();
         let Some(result) =
             children.iter().rposition(|&c| ast.stmts.get(c).kind() != StmtKind::NullStmt)
@@ -3136,22 +3170,7 @@ impl Cg<'_> {
             }
         }
         self.ensure_insert_point();
-        let r = ast.stmts.expr_stmt_expr(s);
-        let q = ast.exprs.get(r).ty();
-        let tmp = self.temp(q);
-        if self.is_complex(q) {
-            // A complex result is loaded into `cx_ret`.
-            let v = self.emit_complex(r)?;
-            self.cx_store(v, tmp, q);
-            self.end_scope(scope);
-            let (re, im) = self.cx_load(tmp, q, (false, false));
-            self.f.cx_ret = re.zip(im);
-            return Ok(None);
-        }
-        let v = self.emit_scalar(r)?;
-        self.store_scalar(v, tmp, q);
-        self.end_scope(scope);
-        Ok(Some(self.load_scalar(tmp, q)))
+        Ok((scope, ast.stmts.expr_stmt_expr(s)))
     }
 
     // ---- ignored expressions -------------------------------------------
@@ -4041,6 +4060,7 @@ impl Cg<'_> {
                 Ok(())
             }
             ExprKind::ArrayInitLoopExpr => self.array_init_loop(e, dest, None),
+            ExprKind::StmtExpr => self.agg_stmt_expr(e, dest, zeroed),
             // clang `AggExprEmitter::VisitLambdaExpr`: each capture
             // initializes its field; a captureless closure has nothing to
             // initialize.
