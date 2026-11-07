@@ -888,7 +888,7 @@ impl Types {
 
     /// Whether class `d` has no definition or is still being defined
     /// (`kiln_abi::ensure_layout` refuses it).
-    fn incomplete(ast: &Ast, d: DeclId) -> bool {
+    pub(crate) fn incomplete(ast: &Ast, d: DeclId) -> bool {
         ast.definition(d).is_none_or(|def| {
             ast.decls
                 .record(def)
