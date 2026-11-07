@@ -2158,7 +2158,8 @@ impl Sema<'_, '_> {
             | DeclKind::Binding
             | DeclKind::Function
             | DeclKind::EnumConstant
-            | DeclKind::NonTypeTemplateParm => {}
+            | DeclKind::NonTypeTemplateParm
+            | DeclKind::ContractResultName => {}
             DeclKind::IndirectField
                 if self
                     .ast
@@ -2307,6 +2308,12 @@ impl Sema<'_, '_> {
                 None => (ty, ExprFlags::NONE),
             },
             _ => (ty, ExprFlags::NONE),
+        };
+        // [expr.prim.id.unqual]/6-7: const in a contract predicate.
+        let ty = if self.contract_ctx.is_empty() {
+            ty
+        } else {
+            self.contract_constify(d, ty, flags == ExprFlags::REFERS_TO_ENCLOSING)
         };
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, flags);
         if flags == ExprFlags::REFERS_TO_ENCLOSING
@@ -2670,6 +2677,22 @@ impl Sema<'_, '_> {
                 base = self.ignore_parens(v);
             }
             if self.ast.exprs.get(base).kind() == ExprKind::DeclRefExpr
+                && !self.contract_ctx.is_empty()
+                && let d = self.ast.exprs.decl(base)
+                && self.contract_made_const(d)
+            {
+                // [expr.prim.id.unqual]/6-7 (spec/contracts.md §5.2).
+                let msg = self.diag(DiagId::sema_contract_const_modify, loc).arg(self.decl_name(d));
+                self.emit(msg);
+            } else if !self.contract_ctx.is_empty()
+                && let Some(field) = self.contract_this_member(base)
+            {
+                // [expr.prim.this]/2 (P2900R14): `this` points to const
+                // in a contract predicate (spec/contracts.md §5.2).
+                let msg =
+                    self.diag(DiagId::sema_contract_const_modify, loc).arg(self.decl_name(field));
+                self.emit(msg);
+            } else if self.ast.exprs.get(base).kind() == ExprKind::DeclRefExpr
                 && self.ast.exprs.get(base).has(ExprFlags::REFERS_TO_ENCLOSING)
                 && let d = self.ast.exprs.decl(base)
                 && !self

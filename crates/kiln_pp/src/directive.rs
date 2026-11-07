@@ -111,6 +111,10 @@ impl<'a> Preprocessor<'a, '_> {
         let read_before = self.cur_file_ref().is_none_or(|f| f.mi.read_any);
         let name = self.lex_unexpanded();
         let dir = self.dir_of(&name);
+        if self.modules.is_some() && self.include_depth == 0 {
+            let exempt = matches!(name.kind(), TokKind::Eod | TokKind::PpNumber);
+            self.note_unit_directive(hash.span.lo, dir, exempt);
+        }
         if let Some((mname, mspan)) = self.in_args {
             if matches!(
                 dir,

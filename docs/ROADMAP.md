@@ -102,7 +102,7 @@ full test suite (8695 `.cpp`, 7898 under `std/`) runs under
   in `xtask libcxx` cover the whole of `std/`. Then WP-184 steps C–E (oracle
   switch) run and M4 begins.
 
-## M4 — Complete C++23, and C++26 as shipped by clang 22
+## M4 — Complete C++23, and C++26 as balloted (the Croydon DIS draft), plus clang-22 parity below it
 Namespaces/ADL corner cases, exceptions, RTTI, coroutines, modules (at least header units and `import std;` consumption),
 `consteval`, `constinit`, structured bindings,
 three-way comparison, deducing this, attributes, `thread_local`,
@@ -122,7 +122,11 @@ static initialization order, inline variables.
   variadic friends, P2747 `constexpr` placement new, P3068 `constexpr` exceptions,
   P2738 `constexpr` `void*` casts, P1967 `#embed`, P0963/P1061 structured bindings
   in conditions and with packs, P2795 erroneous behavior, P2786 trivial relocation,
-  P2300-adjacent library hooks, expansion statements where clang ships them).
+  P2300-adjacent library hooks, expansion statements where clang ships them). Since
+  WP-706 (operator decision 2026-11-07) the C++26 target is the working draft sent
+  to the DIS ballot from the Croydon plenary (March 2026): every core paper in it
+  has a row, including those clang 22 lacks (P2900 contracts, P3074 trivial
+  unions, P2841, P1494), and P2786 (removed at Kona) stays exempt.
   Each row names its corpus/libc++ tests; status is `done`/`partial`/`todo`.
   Seeded by WP-185; `cargo xtask features` checks it (done rows have passing tests and clang 22's macro value).
 - **Oracle switch (WP-184):** at M3b exit the differential oracle, libc++ headers and
@@ -132,7 +136,7 @@ static initialization order, inline variables.
   knobs) landed early (WP-262/263); C–E landed as WP-355 (2026-11-02): `KILN_ORACLE`
   defaults to 22, CI also runs `KILN_ORACLE=19 cargo xtask ci --quick`, and the
   M4 libc++ baseline is in `docs/status/libcxx.md` (`docs/status/wp-184-oracle-switch.md`); WP-398 took the M4 gate from 11.7% to 95.0% (2448/2661); 99.9% (2632/2661, 2 fail) after WP-416+WP-418, WP-445 owns the 2.
-- Exit: every C++23 row is `done`; every clang-22 C++26 row is `done` or has a
+- Exit: every C++23 row is `done`; every DIS C++26 row is `done` or has a
   written reason; `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
   `<tuple>`, `<algorithm>`, `<ranges>`, `<format>`, `<expected>`, `<mdspan>`,
   `<print>`, `<flat_map>` from libc++ 22 compile and their libc++ tests pass.

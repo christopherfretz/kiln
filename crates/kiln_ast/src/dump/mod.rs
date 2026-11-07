@@ -597,6 +597,43 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
     }
 
+    /// A function's children: the delete message, the overridden methods,
+    /// the parameters, the trailing requires-clause, the contract
+    /// specifiers, the constructor initializers and the body.
+    fn function_children(&self, d: DeclId, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        let ast = self.ast;
+        let decls = &ast.decls;
+        // clang: the delete message and the overridden methods are
+        // children of the line itself, before the parameters.
+        if let Some(&m) = decls.cold.delete_message.get(d) {
+            kids.push((Node::Expr(m), Some("delete message")));
+        }
+        if decls.cold.overrides.get(d).is_some() {
+            kids.push((Node::Overrides(d), None));
+        }
+        if let Some(f) = decls.function(d) {
+            for p in ast.lists.iter::<DeclId>(f.params) {
+                kids.push((Node::Decl(p), None));
+            }
+            if let Some(&r) = ast.templates.trailing_requires.get(d) {
+                kids.push((Node::Expr(r), None));
+            }
+            // P2900: the function contract specifiers, in order
+            // (spec/contracts.md §7).
+            if let Some(&c) = decls.cold.contracts.get(d) {
+                for s in ast.lists.iter::<StmtId>(c) {
+                    kids.push((self.stmt_node(s), None));
+                }
+            }
+            for i in 0..ast.ctor_inits(d).len() {
+                kids.push((Node::CtorInit(d, i as u32), None));
+            }
+            if let Some(b) = f.body {
+                kids.push((self.stmt_node(b), None));
+            }
+        }
+    }
+
     fn decl_children(&self, d: DeclId, kids: &mut Vec<(Node, Option<&'static str>)>) {
         let ast = self.ast;
         let decls = &ast.decls;
@@ -607,28 +644,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
         };
         if kind.is_function() {
-            // clang: the delete message and the overridden methods are
-            // children of the line itself, before the parameters.
-            if let Some(&m) = decls.cold.delete_message.get(d) {
-                kids.push((Node::Expr(m), Some("delete message")));
-            }
-            if decls.cold.overrides.get(d).is_some() {
-                kids.push((Node::Overrides(d), None));
-            }
-            if let Some(f) = decls.function(d) {
-                for p in ast.lists.iter::<DeclId>(f.params) {
-                    kids.push((Node::Decl(p), None));
-                }
-                if let Some(&r) = ast.templates.trailing_requires.get(d) {
-                    kids.push((Node::Expr(r), None));
-                }
-                for i in 0..ast.ctor_inits(d).len() {
-                    kids.push((Node::CtorInit(d, i as u32), None));
-                }
-                if let Some(b) = f.body {
-                    kids.push((self.stmt_node(b), None));
-                }
-            }
+            self.function_children(d, kids);
         } else if crate::templates::is_template_kind(kind) {
             self.template_children(d, kids);
         } else if crate::templates::is_template_parm_kind(kind) {
@@ -731,6 +747,20 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
         for c in exprs.children(e, &self.ast.lists) {
             kids.push((Node::Expr(c), None));
+        }
+        // P2900: the call operator's function contract specifiers, before
+        // the body (spec/contracts.md §7); a generic lambda's are on its
+        // pattern.
+        let c = l.call_op.and_then(|op| {
+            self.ast.decls.cold.contracts.get(op).or_else(|| {
+                let p = self.ast.template_info(op)?.pattern?;
+                self.ast.decls.cold.contracts.get(p)
+            })
+        });
+        if let Some(&c) = c {
+            for s in self.ast.lists.iter::<StmtId>(c) {
+                kids.push((self.stmt_node(s), None));
+            }
         }
         if let Some(b) = l.body {
             kids.push((self.stmt_node(b), None));
@@ -1021,6 +1051,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             StmtKind::ReturnStmt => expr(stmts.return_value(s), kids),
             StmtKind::IndirectGotoStmt => expr(Some(stmts.indirect_goto_target(s)), kids),
+            StmtKind::ContractAssertStmt => {
+                if let Some(r) = stmts.contract_result_name(s) {
+                    kids.push((Node::Decl(r), None));
+                }
+                expr(Some(stmts.contract_cond(s)), kids);
+            }
             StmtKind::CoreturnStmt => {
                 expr(stmts.coreturn_operand(s), kids);
                 expr(stmts.coreturn_promise_call(s), kids);
@@ -2127,6 +2163,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 self.line.push_str(" '");
                 self.names.write_name(d, &mut self.line);
                 self.line.push('\'');
+            }
+            StmtKind::ContractAssertStmt => {
+                self.line.push(' ');
+                self.line.push_str(stmts.contract_kind(s).name());
             }
             StmtKind::ReturnStmt => {
                 if let Some(v) = stmts.return_nrvo(s) {

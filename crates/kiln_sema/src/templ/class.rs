@@ -48,6 +48,7 @@ struct SavedState {
     cleanup: crate::class::CleanupState,
     extend_collector: Option<Vec<kiln_ast::ExprId>>,
     nsdmi_this: Vec<(DeclId, QualType)>,
+    contract_ctx: Vec<crate::contracts::ContractCtx>,
     initializing: Option<DeclId>,
     heads: Vec<super::HeadBuild>,
     cur: Option<kiln_ast::ids::TemplateParamListId>,
@@ -90,6 +91,7 @@ impl Sema<'_, '_> {
             cleanup: std::mem::take(&mut self.cleanup),
             extend_collector: self.extend_collector.take(),
             nsdmi_this: std::mem::take(&mut self.nsdmi_this),
+            contract_ctx: std::mem::take(&mut self.contract_ctx),
             initializing: self.initializing.take(),
             heads: std::mem::take(&mut self.templ.heads),
             cur: self.templ.cur.take(),
@@ -151,6 +153,7 @@ impl Sema<'_, '_> {
         self.extend_collector = saved.extend_collector;
         self.range_for_outer_depth = outer_depth;
         self.nsdmi_this = saved.nsdmi_this;
+        self.contract_ctx = saved.contract_ctx;
         self.initializing = saved.initializing;
         self.templ.heads = saved.heads;
         self.templ.cur = saved.cur;
@@ -1764,6 +1767,9 @@ impl Substituter<'_, '_, '_> {
             sub.sema.act_on_mem_initializers(f, &[], colon);
         }
         let b = sub.body(body);
+        // After the body: a deduced return type is known
+        // ([dcl.contract.res]/2).
+        sub.function_contracts(f, pdef);
         if sub.stmt_failed || inits_failed {
             // [temp.inst]: a body or a mem-initializer that failed to
             // instantiate makes the member specialization invalid (clang

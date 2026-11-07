@@ -1274,7 +1274,14 @@ the running `Substituter` instead.
      after it: the conversion function's result is folded and checked
      against the parameter type (`Z<CI{}>` with `operator int` to `bool`,
      "evaluates to 2, which cannot be narrowed"; clang `getNarrowingKind`
-     on `ICS.UserDefined.After`);
+     on `ICS.UserDefined.After`). A braced-init-list argument (P2308,
+     a DR) copy-list-initializes the parameter
+     (`act_on_braced_template_arg`): narrowing is an error, a class type
+     is aggregate- or constructor-initialized, a placeholder type is
+     deduced from the list (CTAD for a class template; plain `auto` is
+     "cannot deduce type of initializer list"), and a dependent list is
+     kept until substitution. A braced default argument of a non-type
+     parameter follows the same rule;
    - packs the trailing args into a `Pack`.
    It returns `ConvertedArgs { sugared: ArgListId, canonical: ArgListId }`.
 2. Probe `specializations[(first(tmpl), canonical)]`. On a hit, return
@@ -2623,7 +2630,10 @@ recomputed exactly as for non-template code (clang's
   (790 tests, `-fsyntax-only`) found no kind reaching it; the kinds left
   are unreachable today because their construct is rejected or
   unimplemented before substitution: coroutine expressions and
-  statements, `template for`, computed `goto` and `contract_assert`.
+  statements, `template for` and computed `goto`. A `contract_assert`
+  (`ContractAssertStmt`) has its own arm since WP-706, and a function's
+  `pre`/`post` specifiers are substituted with the function
+  (`templ/subst/contracts.rs`; spec/contracts.md §5, Templates).
 - **`ChooseExpr`** (WP-307; clang `TransformChooseExpr`): the condition
   (unwrapped from its `ConstantExpr`) and both operands are substituted
   and `act_on_choose_expr` runs again.

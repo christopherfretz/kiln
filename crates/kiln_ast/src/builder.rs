@@ -4057,6 +4057,27 @@ impl<'a> AstBuilder<'a> {
         self.stmt(StmtKind::IndirectGotoStmt, 0, loc, target.raw(), star.to_raw())
     }
 
+    /// A contract assertion (P2900, spec/contracts.md §4): an
+    /// assertion-statement or one function contract specifier. `a` = the
+    /// predicate (contextually converted to `bool`), `b` = the
+    /// postcondition's `ContractResultName` (0: none), `aux` = the kind
+    /// and the evaluation-semantic slot (0). `loc` is the keyword.
+    pub fn contract_stmt(
+        &mut self,
+        kind: crate::stmt::ContractKind,
+        cond: ExprId,
+        result: Option<DeclId>,
+        loc: Loc,
+    ) -> StmtId {
+        self.stmt(
+            StmtKind::ContractAssertStmt,
+            kind as u16,
+            loc,
+            cond.raw(),
+            RawId::raw_opt(result),
+        )
+    }
+
     /// A try-block ([except.pre]/1): `try compound-statement handler-seq`
     /// (`a` = the compound statement, `b` = the `CXXCatchStmt` list).
     pub fn try_stmt(&mut self, block: StmtId, handlers: &[StmtId], loc: Loc) -> StmtId {

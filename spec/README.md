@@ -33,6 +33,7 @@ say which in the PR. A spec change without tests is incomplete.
 | [consteval-blocks.md](consteval-blocks.md) | kiln_parse, kiln_sema (`consteval_block`, `consteval`), kiln_oven (plain bit) | implemented (WP-473) |
 | [reflection-repr.md](reflection-repr.md) | kiln_ast (`reflect`), kiln_parse, kiln_sema (`reflect_operand`, `consteval_only`) | implemented (WP-472) |
 | [annotations.md](annotations.md) | kiln_parse (`attr`), kiln_sema (`annot`), kiln_ast (`annot`) | implemented (WP-481; queries M6-09) |
+| [contracts.md](contracts.md) | kiln_parse (`contracts`), kiln_sema (`contracts`), kiln_ast (`ContractAssertStmt`), kiln_oven, kiln_codegen | parsed and analysed (WP-706); evaluation WP-707 |
 | codegen, driver | | in progress (M2) |
 
 ## Landed sections

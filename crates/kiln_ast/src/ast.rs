@@ -75,6 +75,10 @@ pub struct Ast {
     pub tu: DeclId,
     /// Module units and declaration ownership (spec/modules.md §5).
     pub modules: crate::modules::ModuleTable,
+    /// The translation unit's contract evaluation semantic
+    /// (`-fcontract-evaluation-semantic=`; spec/contracts.md §6): what a
+    /// contract assertion whose semantic slot is 0 does.
+    pub contract_semantic: crate::stmt::ContractSemantic,
     symbols: Arc<Interner>,
     inst: InstantiationMeter,
 }
@@ -187,6 +191,7 @@ impl Ast {
             cmp_categories: CmpCategories::default(),
             tu,
             modules: crate::modules::ModuleTable::default(),
+            contract_semantic: crate::stmt::ContractSemantic::default(),
             symbols,
             inst: InstantiationMeter::default(),
         }
@@ -374,6 +379,15 @@ impl Ast {
             Some(r) => self.redecls.get(r.group).first,
             None => self.template_redecl(d, true),
         }
+    }
+
+    /// The function contract assertions of function `f`
+    /// ([dcl.contract.func]/1, spec/contracts.md §4): the sequence on
+    /// `f` itself, else the one on its first declaration (a later
+    /// declaration repeats it or has none, [dcl.contract.func]/4).
+    pub fn function_contracts(&self, f: DeclId) -> Option<crate::ids::ListId> {
+        let c = &self.decls.cold.contracts;
+        c.get(f).or_else(|| c.get(self.first(f))).copied()
     }
 
     /// The latest declaration of `d`'s entity (a template's follows its

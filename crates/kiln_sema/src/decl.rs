@@ -3634,9 +3634,27 @@ impl Sema<'_, '_> {
             && self.ast.redecl_context(ctx) == self.ast.tu
             && let Some(p) = self.ast.types.proto(ty)
         {
+            // [basic.start.main]/3: `main` is not static or inline (clang's
+            // `CheckMain` diagnoses and keeps the declaration).
+            if let Some((StorageSpec::Static, l)) = ds.storage {
+                self.error(DiagId::sema_static_main, l);
+            }
+            if let Some(l) = ds.inline {
+                self.error(DiagId::sema_inline_main, l);
+            }
             let ret = p.ret();
             if !self.ast.types.same_type(ret, QualType::INT) && !self.is_error_type(ret) {
                 self.error(DiagId::sema_main_returns_nonint, ds.type_loc.unwrap_or(ds.loc));
+            }
+            // P3618R0 ([basic.start.main]/3): `main` is attached to the
+            // global module; clang 22 warns in a named module's purview
+            // outside a linkage specification (clang 19 is silent).
+            if self.clang_compat >= 22 && !friend && self.attaches_to_named_module(lexical) {
+                let w = self.diag(
+                    DiagId::sema_main_attached_to_named_module,
+                    ds.type_loc.unwrap_or(ds.loc),
+                );
+                self.emit(w);
             }
             // [basic.start.main]/3: `main` is not constexpr or consteval;
             // clang drops the specifier.

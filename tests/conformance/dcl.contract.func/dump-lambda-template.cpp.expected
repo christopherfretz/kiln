@@ -1,0 +1,73 @@
+Dumping test:
+NamespaceDecl test
+|-VarDecl used lam '(lambda at tests/conformance/dcl.contract.func/dump-lambda-template.cpp:10:12)' cinit
+| `-LambdaExpr '(lambda at tests/conformance/dcl.contract.func/dump-lambda-template.cpp:10:12)'
+|   |-ContractAssertStmt pre
+|   | `-BinaryOperator 'bool' '>'
+|   |   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   | `-DeclRefExpr 'const int' lvalue ParmVar 'a' 'int'
+|   |   `-IntegerLiteral 'int' 0
+|   |-ContractAssertStmt post
+|   | |-ContractResultNameDecl referenced r
+|   | `-BinaryOperator 'bool' '>'
+|   |   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   | `-DeclRefExpr 'const int' lvalue ContractResultName 'r'
+|   |   `-IntegerLiteral 'int' 0
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-ImplicitCastExpr 'int' xvalue <NoOp>
+|           `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+|-FunctionTemplateDecl tf
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-FunctionDecl tf 'T (const T)'
+| | |-ParmVarDecl referenced t 'const T'
+| | |-ContractAssertStmt pre
+| | | `-BinaryOperator '<dependent type>' '>'
+| | |   |-DeclRefExpr 'const T' lvalue ParmVar 't' 'const T'
+| | |   `-CXXUnresolvedConstructExpr 'T' list
+| | |     `-InitListExpr 'void'
+| | |-ContractAssertStmt post
+| | | |-ContractResultNameDecl referenced r
+| | | `-BinaryOperator '<dependent type>' '>='
+| | |   |-DeclRefExpr 'const type-parameter-0-0' lvalue ContractResultName 'r'
+| | |   `-DeclRefExpr 'const T' lvalue ParmVar 't' 'const T'
+| | `-CompoundStmt
+| |   `-ReturnStmt
+| |     `-ImplicitCastExpr 'const T' xvalue <NoOp>
+| |       `-DeclRefExpr 'const T' lvalue ParmVar 't' 'const T'
+| `-FunctionDecl used tf 'int (const int)'
+|   |-ParmVarDecl used t 'const int'
+|   |-ContractAssertStmt pre
+|   | `-BinaryOperator 'bool' '>'
+|   |   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   | `-DeclRefExpr 'const int' lvalue ParmVar 't' 'const int'
+|   |   `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+|   |     `-InitListExpr 'int'
+|   |-ContractAssertStmt post
+|   | |-ContractResultNameDecl referenced r
+|   | `-BinaryOperator 'bool' '>='
+|   |   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   | `-DeclRefExpr 'const int' lvalue ContractResultName 'r'
+|   |   `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |     `-DeclRefExpr 'const int' lvalue ParmVar 't' 'const int'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-ImplicitCastExpr 'const int' xvalue <NoOp>
+|           `-DeclRefExpr 'const int' lvalue ParmVar 't' 'const int'
+`-FunctionDecl use 'int ()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-CallExpr 'int'
+        | |-ImplicitCastExpr 'int (*)(const int)' <FunctionToPointerDecay>
+        | | `-DeclRefExpr 'int (const int)' lvalue Function 'tf' 'int (const int)' (FunctionTemplate 'tf')
+        | `-IntegerLiteral 'int' 2
+        `-CXXOperatorCallExpr 'int' '()'
+          |-ImplicitCastExpr 'int (*)(int) const' <FunctionToPointerDecay>
+          | `-DeclRefExpr 'int (int) const' lvalue CXXMethod 'operator()' 'int (int) const'
+          |-ImplicitCastExpr 'const test::(lambda at tests/conformance/dcl.contract.func/dump-lambda-template.cpp:10:12)' lvalue <NoOp>
+          | `-DeclRefExpr '(lambda at tests/conformance/dcl.contract.func/dump-lambda-template.cpp:10:12)' lvalue Var 'lam' '(lambda at tests/conformance/dcl.contract.func/dump-lambda-template.cpp:10:12)'
+          `-IntegerLiteral 'int' 1
+
