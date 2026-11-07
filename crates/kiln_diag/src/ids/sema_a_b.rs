@@ -126,6 +126,7 @@ sema_assume_side_effects = Warning [Assume] (0) "assumption is ignored because i
 sema_atomic_builtin_bit_int_prohibited = Error (0) "argument to atomic builtin of type '_BitInt' is not supported";
 sema_atomic_builtin_cannot_be_const = Error (1) "address argument to atomic builtin cannot be const-qualified ({0} invalid)";
 sema_atomic_builtin_must_be_pointer = Error (2) "address argument to atomic builtin must be a pointer {1:|to a non-zero-sized object }({0} invalid)";
+sema_atomic_builtin_must_be_pointer_intfltptr = Error (1) "address argument to atomic builtin must be a pointer to integer, floating-point or pointer ({0} invalid)";
 sema_atomic_builtin_must_be_pointer_intptr = Error (1) "address argument to atomic builtin must be a pointer to integer or pointer ({0} invalid)";
 sema_atomic_builtin_pointer_size = Error (1) "address argument to atomic builtin must be a pointer to 1,2,4,8 or 16 byte type ({0} invalid)";
 sema_atomic_implicit_seq_cst = WarningOff [AtomicImplicitSeqCst] (0) "implicit use of sequentially-consistent atomic may incur stronger memory barriers than necessary";

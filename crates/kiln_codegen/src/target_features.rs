@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use kiln_ast::attr::AttrKind;
-use kiln_ast::decl::builtin::{neon, x86};
+use kiln_ast::decl::builtin::{arm, neon, x86};
 use kiln_ast::ids::RawId;
 use kiln_ast::{DeclId, ExprId, StringLitId};
 use kiln_diag::{Diag, DiagId};
@@ -112,6 +112,23 @@ impl Cg<'_> {
     /// at the call. Returns whether it holds.
     pub(crate) fn neon_builtin_features_ok(&mut self, b: u32, e: ExprId) -> bool {
         let Some(row) = neon::row(b) else { return true };
+        let on = self.feature_map(self.f.decl);
+        if neon::features_hold(row.features, |n| on.get(n) == Some(&true)) {
+            return true;
+        }
+        let d = Diag::new(DiagId::cg_builtin_needs_feature, Span::empty(self.ast.begin_loc(e)))
+            .arg(row.info.name.to_owned())
+            .arg(row.features.to_owned());
+        self.diags.push(d);
+        false
+    }
+
+    /// clang `checkTargetFeatures` for the call `e` of ACLE builtin `row`
+    /// (WP-724), as [`Self::neon_builtin_features_ok`].
+    pub(crate) fn arm_builtin_features_ok(&mut self, row: &arm::Row, e: ExprId) -> bool {
+        if row.features.is_empty() {
+            return true;
+        }
         let on = self.feature_map(self.f.decl);
         if neon::features_hold(row.features, |n| on.get(n) == Some(&true)) {
             return true;

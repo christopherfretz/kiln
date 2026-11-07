@@ -3466,7 +3466,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   and the `_x2`..`_x4` forms: the immediate shifts `vshl_n`, `vshrn_n`,
   `vsra_n`, `vsri_n`, `vmovl`, `vqmovn`, `vfma` by lane, the float width
   `vcvt`s, `vpmin`/`vpmax`, `vabd`, `vqadd`, `vminnm`/`vmaxnm`, the
-  reciprocal estimates and steps, `vrnd*`, `vcnt`, `vclz`, `vcmla*`).
+  reciprocal estimates and steps, `vrnd*`, `vcnt`, `vclz`, `vcmla*`;
+  the widening multiply `vmull_v`: spec/landed/sema/WP-724.md "NEON
+  widening multiply"). The AArch64 ACLE builtins (`__builtin_arm_*`,
+  `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition
   and the global-initialization functions (`__cxx_global_var_init`,
   `_GLOBAL__sub_I_*`, `__tls_init`: `init_fn_attrs`) carry

@@ -324,8 +324,9 @@ impl Sema<'_, '_> {
 
     /// A using-declarator in a class ([namespace.udecl]/3): it names a
     /// member of a base class (`using B::f;`), or, when the name is the
-    /// qualifier's last component (`using B::B;`, [class.qual]/2), the
-    /// constructors of a direct base (WP-114). A dependent qualifier makes
+    /// qualifier's last component (`using B::B;`, [class.qual]/2) or the
+    /// nominated class's own name (WP-724), the constructors of a direct
+    /// base (WP-114). A dependent qualifier makes
     /// an `UnresolvedUsingValue` redone at instantiation.
     fn class_using_declarator(
         &mut self,
@@ -344,8 +345,16 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
+        // [class.qual]/2.2: the name is the last spelled component
+        // (`using B::B;`), or the injected-class-name of the class the
+        // qualifier nominates however it is spelled (`using
+        // std::regex::basic_regex;`).
         let inheriting = force_inheriting
-            || name.as_ident().is_some_and(|n| self.nns_last_name(q.nns) == Some(n));
+            || name.as_ident().is_some_and(|n| {
+                self.nns_last_name(q.nns) == Some(n)
+                    || qk == DeclKind::CXXRecord
+                        && self.ast.decls.get(q.ctx).name().as_ident() == Some(n)
+            });
         if self.is_dependent_ctx(q.ctx)
             || self
                 .ast
@@ -418,6 +427,18 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_no_member, name_loc)
                 .arg(self.decl_name_str(name))
                 .arg(self.qualifier_desc(q.ctx));
+            self.emit(msg);
+            return None;
+        }
+        // [namespace.udecl]/10 (clang `CheckUsingDeclRedeclaration`): a
+        // using-declarator in a class repeats an earlier one only when both
+        // name the member through the same class. Through another class
+        // (`using A::f; using B::f;`, B derived from A) the members already
+        // introduced are not introduced again (`introduce_shadow`).
+        if let Some(prev) = self.previous_class_using(class, q.ctx, name) {
+            let msg = self
+                .diag(DiagId::sema_using_decl_redeclaration, name_loc)
+                .with_note(self.diag(DiagId::note_previous_using_decl, prev));
             self.emit(msg);
             return None;
         }
@@ -629,6 +650,24 @@ impl Sema<'_, '_> {
             .map(|m| self.ast.decls.get(m).loc())
     }
 
+    /// The location of an earlier using-declarator of `name` in class
+    /// `class` whose nested-name-specifier names class `qual`.
+    fn previous_class_using(&self, class: DeclId, qual: DeclId, name: DeclName) -> Option<Loc> {
+        let def = self.ast.definition(class).unwrap_or(class);
+        let qual = self.ast.first(qual);
+        self.ast
+            .decls
+            .members(def)
+            .filter(|&m| self.kind_of(m) == DeclKind::Using && self.ast.decls.get(m).name() == name)
+            .find(|&m| {
+                let Some(nns) = self.ast.using_qualifier(m) else { return false };
+                let Nns::Type { ty, .. } = self.ast.types.nns_view(nns) else { return false };
+                let ty = self.ast.types.canonical(ty);
+                self.ast.types.as_record(ty).is_some_and(|r| self.ast.first(r) == qual)
+            })
+            .map(|m| self.ast.decls.get(m).loc())
+    }
+
     /// The constructors class `base` offers to a class inheriting them:
     /// its own and the ones it inherits (not hidden), each with the
     /// base's shadow for an inherited one.
@@ -715,12 +754,12 @@ impl Sema<'_, '_> {
             if self.ast.first(es) == self.ast.first(target) {
                 if e != es {
                     if in_class && self.ast.decls.hidden_shadow(e).is_none() {
-                        // [namespace.udecl]/10: a using-declarator in a
-                        // class cannot be repeated.
-                        let msg = self.diag(DiagId::sema_using_decl_redeclaration, loc).with_note(
-                            self.diag(DiagId::note_previous_using_decl, self.decl_loc(e)),
-                        );
-                        self.emit(msg);
+                        // The member is already introduced into the class
+                        // by an earlier using-declarator through another
+                        // class (clang `CheckUsingShadowDecl`: an
+                        // equivalent declaration makes no new shadow). The
+                        // same class twice was diagnosed by
+                        // `previous_class_using`.
                         return None;
                     }
                     prev = Some(e);
