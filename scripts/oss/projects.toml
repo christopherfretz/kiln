@@ -325,8 +325,8 @@ tag = "v2026.10.26.00"
 build = "cmake"
 cxx_std = 20
 configure = ["-DBUILD_TESTS=ON", "-DCMAKE_PROJECT_folly_INCLUDE=@OSS@/shims/folly-no-liburing.cmake"]
-test = "ctest --output-on-failure --timeout 300 -E WriteFileAtomic.directoryPermissions"
+test = "ctest --output-on-failure --timeout 300 -E 'WriteFileAtomic.directoryPermissions|^range_test[.]|^container_map_util_test[.]'"
 c_compiler = "clang-19"
 wave = 3
-verified = false
-notes = "WP-726. Needs boost, double-conversion, gflags, glog, libevent, fmt and fast_float installed. The shim forces FOLLY_HAS_LIBURING 0 (the container's liburing 2.9 lacks the 2.10 zero-copy receive API folly uses). googletest 1.17 is fetched at configure time. The excluded test expects a permission error that root does not get."
+verified = true
+notes = "WP-726. Needs boost, double-conversion, gflags, glog, libevent, fmt and fast_float installed. The shim forces FOLLY_HAS_LIBURING 0 (the container's liburing 2.9 lacks the 2.10 zero-copy receive API folly uses). googletest 1.17 is fetched at configure time. Excluded tests: WriteFileAtomic.directoryPermissions expects a permission error that root does not get; range_test and container_map_util_test do not compile with clang 19 either (RangeTest.cpp, MapUtilTest.cpp), so ctest has no executable for them."
