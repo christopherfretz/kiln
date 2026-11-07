@@ -793,7 +793,11 @@ impl Sema<'_, '_> {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("check_template_arg");
         match (self.kind_of(p), a.view()) {
-            (DeclKind::TemplateTypeParm, ArgView::Type(t)) => Ok(TemplateArg::ty(t)),
+            (DeclKind::TemplateTypeParm, ArgView::Type(t)) => {
+                // Before C++17 an argument's exception specification is
+                // not part of it (spec/types.md §5.4).
+                Ok(TemplateArg::ty(self.ast.types.without_exc_sugar(t)))
+            }
             (DeclKind::TemplateTypeParm, ArgView::Template(name))
                 if self.var_or_concept_arg_missing_args(name, at) =>
             {

@@ -553,6 +553,48 @@ impl TypeContext {
         }
     }
 
+    /// Before C++17: `q` with no function type in it that keeps a
+    /// written exception specification (its canonical type when it has
+    /// one, else `q` itself). A type template argument is converted with
+    /// it, so a template argument's identity, its substitution and what a
+    /// call through it may throw follow the canonical type, as clang's
+    /// do (spec/types.md §5.4).
+    pub fn without_exc_sugar(&self, q: QualType) -> QualType {
+        if self.exc_protos.is_empty() || !self.has_exc_sugar(q, 0) {
+            return q;
+        }
+        self.canonical(q)
+    }
+
+    /// `q`'s structure holds a function node recorded in `exc_protos`.
+    fn has_exc_sugar(&self, q: QualType, depth: u32) -> bool {
+        // A canonical type has none; the depth guards a degenerate chain.
+        if self.is_canonical(q.ty()) || depth > 256 {
+            return false;
+        }
+        if self.exc_protos.contains_key(&q.ty()) {
+            return true;
+        }
+        let d = depth + 1;
+        match self.view(q.ty()) {
+            TypeView::Pointer(p)
+            | TypeView::LValueRef(p)
+            | TypeView::RValueRef(p)
+            | TypeView::IncompleteArray(p)
+            | TypeView::Paren(p) => self.has_exc_sugar(p, d),
+            TypeView::MemberPointer { pointee, .. } => self.has_exc_sugar(pointee, d),
+            TypeView::ConstantArray(a) => self.has_exc_sugar(a.elem, d),
+            TypeView::Function(p) => {
+                self.has_exc_sugar(p.ret(), d)
+                    || self.params(&p).iter().any(|&t| self.has_exc_sugar(t, d))
+            }
+            _ => {
+                let n = self.desugar_once(q);
+                n.ty() != q.ty() && self.has_exc_sugar(n, d)
+            }
+        }
+    }
+
     /// The pointee of pointer, reference or member pointer `q` as written
     /// (sugar kept), for reading a pointee function type's exception
     /// specification before C++17 through [`TypeContext::proto`]; the
