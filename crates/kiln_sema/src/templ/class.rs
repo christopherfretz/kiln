@@ -915,7 +915,8 @@ impl Sema<'_, '_> {
         if self.ast.definition(spec).is_some() {
             return true;
         }
-        if self.defining.contains(&spec) || self.inst.fatal {
+        if self.defining.contains(&spec) || self.inst.selecting.contains(&spec) || self.inst.fatal
+        {
             return false;
         }
         if self.ast.spec_info(spec).is_none() {
@@ -935,7 +936,16 @@ impl Sema<'_, '_> {
         }
         // [temp.spec.partial.match]: the most specialized matching
         // partial specialization, else the primary template.
-        let Ok(matched) = self.match_partial_specs(tmpl, spec, poi) else {
+        // A request for `spec` while its partial specializations are
+        // matched (`X<T, enable_if_t<is_convertible_v<T, S>>>` with a
+        // constructor template of `S` defaulting an argument to
+        // `X<T>::type`) finds it incomplete, as clang's
+        // `getPatternForClassTemplateSpecialization` does (WP-787,
+        // Boost.StaticString `enable_if_viewable`).
+        self.inst.selecting.push(spec);
+        let matched = self.match_partial_specs(tmpl, spec, poi);
+        self.inst.selecting.pop();
+        let Ok(matched) = matched else {
             self.ast.decls.set_flags(spec, DeclFlags::INVALID);
             self.inst.undefined_diagnosed.set(Some(spec));
             return false;

@@ -1529,6 +1529,14 @@ silently (`diag = None`) at those sites. S3O lists them.
    at least as specialized as `X<T, when<f<T>::value>>` (WP-787,
    Boost.Hana; `partial_args_match` with `ordering`,
    `tests/conformance/temp.spec.partial.match/order-non-deduced-context-must-match.cpp`).
+   A request for the specialization while its partials are matched
+   (step 3 substituting a default template argument that names it, as
+   `X<T, enable_if_t<is_convertible_v<T, S>>>` with a constructor
+   template of `S` defaulting to `typename X<T>::type`) finds it
+   incomplete, a substitution failure in that SFINAE context, as clang's
+   `getPatternForClassTemplateSpecialization` does on
+   `isAlreadyInstantiating` (`InstState::selecting`; WP-787,
+   `tests/conformance/temp.inst/partial-match-recursive-request-incomplete.cpp`).
 5. If no unique best partial exists, the error is "ambiguous partial
    specializations of 'X<int *>'", with a note "partial specialization
    matches [with T = int]" for each candidate.

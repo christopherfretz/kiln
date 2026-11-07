@@ -377,6 +377,10 @@ pub struct InstState {
     /// The depth limit was hit: no further instantiation (the error is
     /// fatal).
     pub(crate) fatal: bool,
+    /// The class template specializations whose partial specialization
+    /// is being selected (§4.4): a nested request for one of them finds
+    /// it incomplete (clang `isAlreadyInstantiating`).
+    pub(crate) selecting: Vec<DeclId>,
     /// The members already queued in `pending` (no duplicates).
     pub(crate) queued: kiln_source::fx::FxHashSet<DeclId>,
     /// While the end-of-TU drain instantiates one pending definition:
