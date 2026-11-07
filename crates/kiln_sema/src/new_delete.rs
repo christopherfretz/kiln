@@ -1323,6 +1323,20 @@ impl Sema<'_, '_> {
                 return (sq.is_const() <= pq.is_const() && sq.is_volatile() <= pq.is_volatile())
                     .then_some(false);
             }
+            // [conv.ptr]/3: a pointer to a derived class converts to a
+            // pointer to its base (clang's `Decl::operator new(size_t,
+            // const ASTContext &, DeclContext *)` called with an
+            // `ObjCContainerDecl *`).
+            let record = |q: QualType| t.as_record(t.canonical(q).without_quals());
+            if let (Some(d), Some(b)) = (record(src), record(pp))
+                && self.ast.first(d) != self.ast.first(b)
+                && conv::is_derived_from(self, d, b)
+            {
+                let sq = t.effective_quals(src);
+                let pq = t.effective_quals(pp);
+                return (sq.is_const() <= pq.is_const() && sq.is_volatile() <= pq.is_volatile())
+                    .then_some(false);
+            }
             return t.same_unqualified(src, pp).then_some(t.is_array(at));
         }
         None
