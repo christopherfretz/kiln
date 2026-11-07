@@ -348,6 +348,10 @@ pub struct Args {
     /// (P2864) is the C++20 deprecation warning instead
     /// ([`kiln_sema::Sema::permissive`]; spec/driver.md).
     pub permissive: bool,
+    /// `-fcontract-evaluation-semantic=ignore|observe|enforce|quick_enforce`
+    /// (GCC's spelling; P2900 evaluation semantics, spec/contracts.md §6).
+    /// `None` is the default, enforce.
+    pub contract_semantic: Option<kiln_ast::stmt::ContractSemantic>,
     /// `-fkiln-cfg-max-elems=N`: the element cap of one body's graph
     /// (spec/sema.md §7.5).
     pub cfg_max_elems: Option<usize>,
@@ -636,6 +640,7 @@ impl Args {
                 && !a.complex_flag(arg)
                 && !a.lax_vector_flag(arg)
                 && !a.auto_var_init_flag(arg)
+                && !a.contract_semantic_flag(arg)
                 && !a.visibility_flag(arg)
                 && !a.predef_flag(arg)
                 && !a.diag_flag(arg)
@@ -916,6 +921,21 @@ impl Args {
             }
         } else {
             return false;
+        }
+        true
+    }
+
+    /// `-fcontract-evaluation-semantic=<semantic>`.
+    fn contract_semantic_flag(&mut self, arg: &str) -> bool {
+        let Some(v) = arg.strip_prefix("-fcontract-evaluation-semantic=") else {
+            return false;
+        };
+        match kiln_ast::stmt::ContractSemantic::from_flag(v) {
+            Some(k) => self.contract_semantic = Some(k),
+            None => self.errors.push(ArgError::UnsupportedValue(
+                "-fcontract-evaluation-semantic=".to_owned(),
+                v.to_owned(),
+            )),
         }
         true
     }
@@ -1315,6 +1335,28 @@ mod tests {
         assert_eq!(
             parse("-fno-strict-aliasing -fstrict-aliasing a.cpp").strict_aliasing,
             Some(true)
+        );
+    }
+
+    #[test]
+    fn contract_evaluation_semantic() {
+        use kiln_ast::stmt::ContractSemantic as S;
+        assert_eq!(parse("a.cpp").contract_semantic, None);
+        for (v, k) in [
+            ("ignore", S::Ignore),
+            ("observe", S::Observe),
+            ("enforce", S::Enforce),
+            ("quick_enforce", S::QuickEnforce),
+        ] {
+            let a = parse(&format!("-fcontract-evaluation-semantic={v} a.cpp"));
+            assert_eq!((a.contract_semantic, a.errors), (Some(k), vec![]));
+        }
+        assert_eq!(
+            parse("-fcontract-evaluation-semantic=assume a.cpp").errors,
+            [ArgError::UnsupportedValue(
+                "-fcontract-evaluation-semantic=".into(),
+                "assume".into()
+            )]
         );
     }
 

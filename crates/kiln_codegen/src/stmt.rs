@@ -26,6 +26,10 @@ pub(crate) struct Scope {
     old_stack_save: bool,
 }
 
+/// A contract assertion in a program compiled to IR under a checking
+/// semantic, until WP-707 (spec/contracts.md §6).
+pub(crate) const CONTRACT_UNSUPPORTED: &str = "unsupported: contract evaluation (WP-707)";
+
 impl Cg<'_> {
     /// Emits a function body (clang `EmitFunctionBody`: a compound body
     /// without a lexical scope of its own).
@@ -381,6 +385,10 @@ impl Cg<'_> {
             StmtKind::GCCAsmStmt => self.emit_asm(s),
             StmtKind::CoreturnStmt => self.emit_coreturn(s),
             StmtKind::CoroutineBodyStmt => self.emit_coroutine_body(s),
+            // [stmt.contract.assert]: not evaluated under the ignore
+            // semantic; the others are WP-707's (spec/contracts.md §6).
+            StmtKind::ContractAssertStmt if !ast.contract_semantic.checks() => Ok(()),
+            StmtKind::ContractAssertStmt => err(Some(n.loc()), CONTRACT_UNSUPPORTED),
             k => err(Some(n.loc()), format!("statement {k:?} is not supported yet")),
         }
     }

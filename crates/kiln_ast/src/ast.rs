@@ -381,6 +381,15 @@ impl Ast {
         }
     }
 
+    /// The function contract assertions of function `f`
+    /// ([dcl.contract.func]/1, spec/contracts.md §4): the sequence on
+    /// `f` itself, else the one on its first declaration (a later
+    /// declaration repeats it or has none, [dcl.contract.func]/4).
+    pub fn function_contracts(&self, f: DeclId) -> Option<crate::ids::ListId> {
+        let c = &self.decls.cold.contracts;
+        c.get(f).or_else(|| c.get(self.first(f))).copied()
+    }
+
     /// The latest declaration of `d`'s entity (a template's follows its
     /// pattern's, as for [`Ast::first`]).
     pub fn latest(&self, d: DeclId) -> DeclId {

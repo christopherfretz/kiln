@@ -90,6 +90,9 @@ pub struct ParseOptions {
     pub cfg_max_elems: usize,
     /// `-fpermissive` ([`kiln_sema::Sema::permissive`]).
     pub permissive: bool,
+    /// `-fcontract-evaluation-semantic=` ([`kiln_ast::Ast::contract_semantic`];
+    /// spec/contracts.md §6).
+    pub contract_semantic: kiln_ast::stmt::ContractSemantic,
     /// No deduction pre-filters ([`kiln_sema::Sema::full_deduction`]; a
     /// test hook).
     #[doc(hidden)]
@@ -120,6 +123,7 @@ impl Default for ParseOptions {
             cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
             permissive: false,
+            contract_semantic: kiln_ast::stmt::ContractSemantic::Enforce,
             full_deduction: false,
             full_redecl_scan: false,
         }
@@ -279,6 +283,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.cfg_stats = opts.cfg_stats;
     s.cfg_max_elems = opts.cfg_max_elems;
     s.permissive = opts.permissive;
+    s.ast.contract_semantic = opts.contract_semantic;
     s.full_deduction = opts.full_deduction;
     s.full_redecl_scan = opts.full_redecl_scan;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
