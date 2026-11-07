@@ -99,6 +99,7 @@ starting with `-` are inputs.
 | `-fpermissive` | GCC's; its one effect: in C++26 the arithmetic between different enumeration types, or an enumeration and a floating type (P2864, an error), is diagnosed with the C++20/23 deprecation warning and its group (`-Wdeprecated-enum-enum-conversion`, ...) instead. GCC 16.1 makes it a pedwarn (a warning even without the flag); kiln keeps clang's error by default |
 | `-fkiln-dump-cfg` | with `-fsyntax-only` (otherwise not implemented): the control-flow graph of every function body sema analyzes (spec/sema.md §7.5.1), in clang's `DumpCFG` layout, to the output (after the diagnostics, before an AST dump) |
 | `-fkiln-cfg-max-elems=N` | kiln: the element budget of one body's graph (default 33554432); a body over it builds no graph and its CFG-based warnings are skipped (spec/sema.md §7.5.1). A value that is not an integer is `invalid integral value` |
+| `-fkiln-outline-expansions=N` | kiln: the size threshold, in AST nodes summed over the elements, above which an expansion statement's elements are emitted as separate internal helpers at `-O1` and above (default 2048; `0` disables; spec/landed/codegen/WP-793.md). A value that is not an integer is `invalid integral value` |
 | `-fdump-record-layouts`, `-fdump-record-layouts-complete` | with `-fsyntax-only`: the record layouts (`spec/abi.md` §6, §8.4) to the output |
 | `-fdump-vtable-layouts` | with `-fsyntax-only`: the vtable groups (`spec/abi.md` §8.5) to the output |
 | `-c`, `-S`, `-emit-llvm` | code generation (see "Code generation") |

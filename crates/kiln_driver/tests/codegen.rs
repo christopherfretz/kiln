@@ -1024,3 +1024,51 @@ fn codegen_flags_backend() {
     let name: &[u8] = b".text._Z3addii\0";
     assert!(obj.windows(name.len()).any(|w| w == name), "no .text._Z3addii section");
 }
+
+/// [stmt.expand] (P1306R5) elements of a large expansion statement are
+/// emitted as `<fn>.expand.<n>` helpers while optimizing (WP-793,
+/// spec/landed/codegen/WP-793.md): a `break`/`return` element returns an
+/// `i32` status the parent switches on; `-O0`, `=0` and a small expansion
+/// keep the inline emission byte for byte.
+#[test]
+fn expansion_outlining_shape() {
+    const SRC: &str = "void g(int);\n\
+        int f(int n) {\n\
+          template for (constexpr int k : {1, 2, 3}) {\n\
+            for (int i = 0; i < n; ++i) { g(i * k + n); g(i - k); }\n\
+            if (n == k) break;\n\
+            if (n > 10 * k) return k;\n\
+          }\n\
+          template for (constexpr int k : {4, 5}) {\n\
+            for (int i = 0; i < n; ++i) { g(i * k + n); g(i - k); }\n\
+          }\n\
+          return 0;\n\
+        }\n";
+    let d = scratch("expoutline");
+    std::fs::write(d.join("e.cpp"), SRC).unwrap();
+    let ir = |extra: &[&str], out: &str| {
+        let mut a = vec!["-std=c++26", "-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes"];
+        a.extend_from_slice(extra);
+        a.extend(["e.cpp", "-o", out]);
+        let o = kiln_in(&d, &a);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{extra:?}");
+        std::fs::read_to_string(d.join(out)).unwrap()
+    };
+    let on = ir(&["-O2", "-fkiln-outline-expansions=1"], "on.ll");
+    for n in 0..3 {
+        assert!(on.contains(&format!("define internal i32 @_Z1fi.expand.{n}(")), "{on}");
+    }
+    for n in 3..5 {
+        assert!(on.contains(&format!("define internal void @_Z1fi.expand.{n}(")), "{on}");
+    }
+    assert!(!on.contains("@_Z1fi.expand.5("), "{on}");
+    let parent = on.split("define ").find(|f| f.contains("@_Z1fi(")).unwrap();
+    assert_eq!(parent.matches("switch i32").count(), 3, "{parent}");
+    assert_eq!(parent.matches("call ").count(), 5, "{parent}");
+    let default = ir(&["-O2"], "default.ll");
+    let off = ir(&["-O2", "-fkiln-outline-expansions=0"], "off.ll");
+    assert!(!default.contains(".expand."), "{default}");
+    assert_eq!(default, off);
+    let o0 = ir(&["-O0", "-fkiln-outline-expansions=1"], "o0.ll");
+    assert!(!o0.contains(".expand."), "{o0}");
+}

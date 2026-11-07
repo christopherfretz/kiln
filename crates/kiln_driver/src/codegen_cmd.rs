@@ -188,6 +188,9 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>) -> CodegenOptions {
         no_inline: a.predef.no_inline,
         code_model: f.code_model,
         reflection_mangling: a.reflection_mangling,
+        outline_expansions: a
+            .outline_expansions
+            .unwrap_or(kiln_codegen::OUTLINE_EXPANSIONS_DEFAULT),
         ..CodegenOptions::default()
     }
 }
