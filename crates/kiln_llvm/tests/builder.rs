@@ -323,3 +323,55 @@ fn replace_function_with_alias() {
         IrErrorKind::BadGlobal
     );
 }
+
+/// `replace_function_with_ifunc` / `add_ifunc` (clang
+/// `emitIFuncDefinition`): the ifunc takes the declaration's name and
+/// uses, and ifuncs print after every alias.
+#[test]
+fn replace_function_with_ifunc() {
+    let mut m = module();
+    let fty = m.types.function(TypeId::VOID, &[], false);
+    let rty = m.types.function(TypeId::PTR, &[], false);
+    let old = m.add_function("old", fty).unwrap();
+    let user = m.add_function("user", fty).unwrap();
+    let res = m.add_function("res", rty).unwrap();
+    call_and_ret(&mut m, user, old);
+    let i = m.replace_function_with_ifunc(old, fty, Value::func(res)).unwrap();
+    assert!(m.alias(i).is_ifunc());
+    m.add_alias("al", fty, Value::func(user)).unwrap();
+    let text = m.to_string();
+    assert!(text.contains("call void @old()"), "{text}");
+    let (a, f) = (text.find("@al = alias").unwrap(), text.find("@old = ifunc void (), ptr @res"));
+    assert!(f.is_some_and(|f| a < f), "{text}");
+    assert_eq!(kind(m.add_ifunc("bad", TypeId::I32, Value::func(res))), IrErrorKind::InvalidType);
+}
+
+/// `replace_global_with_alias` (clang `EmitAliasDefinition` for a
+/// variable): the alias takes the declaration's name and uses.
+#[test]
+fn replace_global_with_alias() {
+    let mut m = module();
+    let fty = m.types.function(TypeId::I32, &[], false);
+    let g = m.add_global("g", TypeId::I32);
+    let one = m.const_int(TypeId::I32, 1);
+    m.set_initializer(g, Some(one)).unwrap();
+    let old = m.add_global("va", TypeId::I32);
+    let f = m.add_function("f", fty).unwrap();
+    {
+        let mut b = IrBuilder::new(&mut m, f);
+        let e = b.append_block("entry");
+        b.position_at_end(e);
+        let v = b.load(TypeId::I32, Value::global(old), 4).unwrap();
+        b.ret(Some(v)).unwrap();
+    }
+    let a = m.replace_global_with_alias(old, TypeId::I32, Value::global(g)).unwrap();
+    assert_eq!(m.resolve(Value::global(old)), Value::alias(a));
+    let text = m.to_string();
+    assert!(text.contains("@va = alias i32, ptr @g"), "{text}");
+    assert!(text.contains("load i32, ptr @va"), "{text}");
+    assert!(!text.contains("@va = external"), "{text}");
+    assert_eq!(
+        kind(m.replace_global_with_alias(g, TypeId::I32, Value::alias(a))),
+        IrErrorKind::BadGlobal
+    );
+}

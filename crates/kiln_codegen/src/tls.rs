@@ -93,7 +93,9 @@ impl Cg<'_> {
     pub(crate) fn uses_thread_wrapper(&self, d: DeclId) -> bool {
         let ast = self.ast;
         let first = ast.first(d);
-        if !self.is_dynamic_tls(first) {
+        // An `alias` variable is accessed directly, as clang does (the
+        // aliasee's initialization is not this declaration's).
+        if !self.is_dynamic_tls(first) || ast.alias_definition(first).is_some() {
             return false;
         }
         let Some(ty) = ast.decls.get(first).ty() else { return true };

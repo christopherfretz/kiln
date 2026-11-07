@@ -120,6 +120,25 @@ non-default visibility); the printer omits it there so text is canonical.
   constant (`BadGlobal` otherwise) and fixes the alias's address space.
   Public fields mirror globals (linkage, visibility, `dso_local`, TLS,
   `unnamed_addr`).
+- `add_ifunc(name, value_type, resolver)` (WP-763): a GNU indirect
+  function, `@name = ifunc value_type, ptr @resolver`; `value_type` must
+  be a function type and the resolver a pointer constant. It is an
+  `Alias` with `ifunc` set (`Alias::is_ifunc`, `Alias::aliasee`), kept in
+  the same list and numbered as one, so `Value::alias` names either.
+- Global replacement (clang `takeName` + `replaceAllUsesWith` +
+  `eraseFromParent`): `replace_function_with_alias` /
+  `replace_function_with_ifunc` turn a function *declaration* into an
+  alias / ifunc of the same name, and `replace_global_with_alias` does
+  the same for a global variable declaration (no initializer, not
+  already replaced, not its own aliasee). The erased global stays in the
+  table but no longer prints; `resolve(v)` follows the replacement chain
+  (functions and globals), and the printer resolves every operand
+  through it, so earlier uses print the alias.
+- `set_aliasee(a, v)` re-points an alias or ifunc (clang `setAliasee` /
+  `setResolver`).
+- The printer emits all aliases, then all ifuncs, each group after the
+  globals and preceded by a blank line when non-empty (LLVM's
+  AsmWriter).
 - `comdat(name, kind)` returns a uniqued `ComdatId`; only referenced
   comdats print (`$c = comdat any`), those of functions first, then those
   of globals, each in first-use order. A global

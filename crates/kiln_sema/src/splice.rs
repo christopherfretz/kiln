@@ -166,6 +166,10 @@ impl Sema<'_, '_> {
                     let nns = self.splice_class_nns(d);
                     self.member_ref_without_object(d, open, None, nns)
                 }
+                // In a contract predicate a variable or structured
+                // binding declared outside the assertion is const here
+                // as for an id-expression (P3598R0, /2.5;
+                // `contract_constify`).
                 DeclKind::Var
                 | DeclKind::ParmVar
                 | DeclKind::Binding
