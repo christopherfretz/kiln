@@ -41,10 +41,12 @@ pub(crate) struct MpEntry {
     /// The member's class.
     pub cls: OTy,
     /// A data member: its offset and type in `cls`; `idx` its field index
-    /// (for a union's active member).
+    /// in the class that directly contains it (for a union's active
+    /// member).
     pub field: Option<(u64, OTy, u32)>,
-    /// The member's class is a union.
-    pub union: bool,
+    /// The union that directly contains the data member (`cls`, or for a
+    /// member of an anonymous union the union's type, [class.union.anon]).
+    pub union: Option<OTy>,
     /// A member function: its function index, and whether it is virtual
     /// (a call through the member pointer dispatches, `Op::MpFn`).
     pub fn_index: u32,
@@ -96,7 +98,10 @@ impl Oven {
     /// Interns the member pointer to `member` (a field or member
     /// function) with conversion state `derived` and `path`; returns its
     /// register value (never 0), or `None` if the member cannot be
-    /// designated (an anonymous-member field, an incomplete class).
+    /// designated (a bit-field, a member reached through an anonymous
+    /// union holding an anonymous struct, an incomplete class). A member
+    /// of an anonymous union or struct is its `IndirectField`: the offset
+    /// sums its access path ([class.union.anon]/1).
     pub(crate) fn mp_intern(
         &mut self,
         b: &mut dyn SemaBridge,
@@ -121,21 +126,39 @@ impl Oven {
                 .decls
                 .function(member)
                 .is_some_and(|f| f.spec.is_virtual() && !f.spec.is_final());
+        let chain: Vec<DeclId> = match kind {
+            _ if func => Vec::new(),
+            DeclKind::Field => vec![member],
+            DeclKind::IndirectField => ast.lists.iter(ast.indirect_field_chain(member)).collect(),
+            _ => return None,
+        };
         let cls = self.record_ty(b, owner)?;
-        let union = matches!(self.types.kind(cls), TyKind::Record { union: true, .. });
+        let mut union = None;
         let field = if func {
             None
         } else {
-            if kind != DeclKind::Field {
-                return None;
+            let (mut ty, mut off, mut last) = (cls, 0, None);
+            for (k, &fd) in chain.iter().enumerate() {
+                let is_union = matches!(self.types.kind(ty), TyKind::Record { union: true, .. });
+                if is_union && k + 1 < chain.len() {
+                    // Activating the anonymous struct inside the union is
+                    // not modelled.
+                    return None;
+                }
+                let fs = self.types.fields(ty);
+                let i = fs.iter().position(|f| !f.base && f.decl == fd)?;
+                let f = fs[i];
+                if f.width.is_some() {
+                    return None;
+                }
+                if is_union {
+                    union = Some(ty);
+                }
+                off += f.offset;
+                ty = f.ty;
+                last = Some(i as u32);
             }
-            let fs = self.types.fields(cls);
-            let i = fs.iter().position(|f| !f.base && f.decl == member)?;
-            let f = fs[i];
-            if f.width.is_some() {
-                return None;
-            }
-            Some((f.offset, f.ty, i as u32))
+            Some((off, ty, last?))
         };
         let mut tys = Vec::with_capacity(path.len());
         for &d in &path {
