@@ -202,6 +202,11 @@ impl AttrKind {
     /// control-flow graph (as `noreturn` does), with no effect on code
     /// generation.
     pub const ANALYZER_NORETURN: AttrKind = AttrKind(182);
+    /// `disable_tail_calls` / `clang::disable_tail_calls` on a function
+    /// (clang `DisableTailCallsAttr`): its definition carries
+    /// `"disable-tail-calls"="true"`, so the backend makes no call in it a
+    /// tail call (WP-682).
+    pub const DISABLE_TAIL_CALLS: AttrKind = AttrKind(183);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
