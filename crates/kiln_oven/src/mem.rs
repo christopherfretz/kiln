@@ -410,6 +410,23 @@ fn all_bits(v: &[u8], abs: u64, len: u64) -> bool {
     part(abs, h) && v[g..g + full].iter().all(|&b| b == 0xFF) && part(abs + len - t, t)
 }
 
+/// Whether some byte of `[abs, abs + len)` has its bit set in the
+/// per-granule bitmask `v`.
+#[inline]
+fn any_bits(v: &[u8], abs: u64, len: u64) -> bool {
+    let lo = abs % GRAN;
+    if lo + len <= GRAN {
+        let m = byte_mask(lo, lo + len);
+        return m != 0 && v[(abs / GRAN) as usize] & m != 0;
+    }
+    let (h, g, full, t) = split(abs, len);
+    let part = |pos: u64, n: u64| {
+        let m = byte_mask(pos % GRAN, pos % GRAN + n);
+        m != 0 && v[(pos / GRAN) as usize] & m != 0
+    };
+    part(abs, h) || v[g..g + full].iter().any(|&b| b != 0) || part(abs + len - t, t)
+}
+
 /// Sets (`on`) or clears the bits of `[abs, abs + len)` in the
 /// per-granule bitmask `v`.
 #[inline]
@@ -522,6 +539,11 @@ impl Space {
 
     pub fn is_init(&self, abs: u64, len: u64) -> bool {
         all_bits(&self.init, abs, len)
+    }
+
+    /// Whether some byte of the range is initialized.
+    pub fn any_init(&self, abs: u64, len: u64) -> bool {
+        any_bits(&self.init, abs, len)
     }
 
     pub fn set_init(&mut self, abs: u64, len: u64, v: bool) {

@@ -497,6 +497,10 @@ pub static TABLE: &[Row] = &[
     // an opaque memory barrier; the Oven evaluates it as a no-op, as GCC
     // does (spec/codegen.md "Observable checkpoints").
     f("__builtin_observable_checkpoint", DONE, Oven::Yes),
+    // WP-773: GCC's P3726R2 `std::start_lifetime` builtin; sema
+    // `builtin_start_lifetime`, the Oven `bi::START_LIFETIME`, a no-op in
+    // codegen (spec/oven.md "C++26 union lifetime").
+    f("__builtin_start_lifetime", DONE, Oven::Yes),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.
@@ -533,9 +537,15 @@ pub fn has_builtin_staged(name: &str) -> Option<bool> {
 }
 
 /// Whether `name` is a GCC builtin clang does not have, which kiln
-/// implements and reports through `__has_builtin` (WP-484, WP-757).
+/// implements and reports through `__has_builtin` (WP-484, WP-757,
+/// WP-773).
 pub fn gcc_only(name: &str) -> bool {
-    matches!(name, "__builtin_is_string_literal" | "__builtin_observable_checkpoint")
+    matches!(
+        name,
+        "__builtin_is_string_literal"
+            | "__builtin_observable_checkpoint"
+            | "__builtin_start_lifetime"
+    )
 }
 
 /// The staged `__has_constexpr_builtin(name)` answer: `Some(false)` for a

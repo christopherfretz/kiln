@@ -244,6 +244,12 @@ impl EvalContext {
 pub trait SemaBridge {
     /// The AST (re-borrowed per use, never held).
     fn ast(&self) -> &Ast;
+    /// The translation unit's sources, for the `F:L:C` of an unnamed
+    /// class a note names (`(anonymous union at F:L:C)`, WP-773). The
+    /// default has none, and the location is left out.
+    fn sources(&self) -> Option<&kiln_source::SourceManager> {
+        None
+    }
     /// The body of function `f`'s definition, instantiating it if needed;
     /// for an implicit or defaulted special member this defines it on
     /// demand (sema's `define_implicit_*`, spec/sema-class.md §4.5).
