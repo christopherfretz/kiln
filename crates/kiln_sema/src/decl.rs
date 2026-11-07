@@ -9020,7 +9020,17 @@ impl Sema<'_, '_> {
     /// struct at_impl;` with `template<> struct at_impl<map_tag> {
     /// template<class M, class K> struct apply ...; }`, named as
     /// `at_impl<map_tag>::apply<M, K>` inside another template).
+    ///
+    /// A name not found in the primary pattern is classified in the
+    /// primary patterns of its dependent bases (`H<int>::type` with
+    /// `template<class S> struct H : B<S> {}`): clang annotates `H<int>::`
+    /// by instantiating `H<int>`, whose base `B<int>` declares `type`;
+    /// the lookahead cannot instantiate (WP-802).
     fn classify_template_member(&self, tmpl: DeclId, name: Symbol) -> NameClass {
+        self.classify_template_member_in(tmpl, name, 0)
+    }
+
+    fn classify_template_member_in(&self, tmpl: DeclId, name: Symbol, depth: u32) -> NameClass {
         let Some(p) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
             return NameClass::Dependent;
         };
@@ -9029,6 +9039,7 @@ impl Sema<'_, '_> {
         });
         let d = match in_primary {
             Some(d) => d,
+            None if let Some(c) = self.classify_in_dependent_bases(p, name, depth) => return c,
             None => match self.specialization_member(tmpl, name) {
                 Some(d) => d,
                 // A member template of a class template specialization
@@ -9043,7 +9054,7 @@ impl Sema<'_, '_> {
                             && self.ast.definition(p).is_none()
                             && self.kind_of(from) == DeclKind::ClassTemplate =>
                     {
-                        return self.classify_template_member(from, name);
+                        return self.classify_template_member_in(from, name, depth);
                     }
                     _ => return NameClass::Dependent,
                 },
@@ -9057,6 +9068,40 @@ impl Sema<'_, '_> {
             _ if is_type_kind(k) => NameClass::Type(QualType::DEPENDENT, d),
             _ => NameClass::Value(d),
         }
+    }
+
+    /// [`Sema::classify_template_member`] of `name` in the class
+    /// templates named by the dependent bases of pattern `p` (`B<S>` of
+    /// `H<S> : B<S>`), in declaration order; the first base whose pattern
+    /// declares `name` decides. `None` when none does (or past a depth of
+    /// 16, for a base chain such as `A<T> : A<T*>`).
+    fn classify_in_dependent_bases(&self, p: DeclId, name: Symbol, depth: u32) -> Option<NameClass> {
+        if depth >= 16 {
+            return None;
+        }
+        let def = self.ast.definition(p)?;
+        let bases: Vec<QualType> = self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
+        bases.into_iter().filter(|&t| self.is_dependent_type(t)).find_map(|mut ty| {
+            for _ in 0..64 {
+                ty = match self.ast.types.view(ty.ty()) {
+                    TypeView::Typedef { underlying, .. } => underlying,
+                    TypeView::Elaborated { named, .. } => named,
+                    _ => break,
+                };
+            }
+            let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty())
+            else {
+                return None;
+            };
+            let t = self.ast.types.template_decl(tn)?;
+            if self.kind_of(t) != DeclKind::ClassTemplate {
+                return None;
+            }
+            match self.classify_template_member_in(t, name, depth + 1) {
+                NameClass::Dependent | NameClass::Undeclared => None,
+                c => Some(c),
+            }
+        })
     }
 
     /// [`Sema::classify_name`] of `name` in `q`, a member class of a class
