@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""kiln-cxx: the logging C++ compiler wrapper of the OSS build harness.
+
+Use it as CMAKE_CXX_COMPILER. It runs `$KILN_OSS_CXX` (default clang++-19)
+with its own argv under an address-space cap and a timeout, passes stdout and
+stderr through unchanged, and appends one JSON line per invocation to
+`$KILN_OSS_LOG` (when set). The line's schema and the `kind` rules are the
+contract in spec/landed/harness/WP-666.md.
+
+Environment: KILN_OSS_CXX, KILN_OSS_LOG, KILN_OSS_PHASE (configure | build |
+test, recorded as `phase`), KILN_OSS_VMEM_KB (default 3000000, the
+`ulimit -v`), KILN_OSS_TIMEOUT (seconds, default 600).
+"""
+
+import fcntl
+import json
+import os
+import re
+import resource
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+SOURCE_EXT = (".cpp", ".cc", ".cxx", ".c++", ".cp", ".C", ".CPP")
+LINK_EXT = (".o", ".a", ".so", ".obj", ".lo")
+DIAG_RE = re.compile(
+    r"error:|panicked|fatal|undefined reference|multiple definition|memory allocation of|LLVM ERROR"
+)
+OOM_RE = re.compile(r"memory allocation of \d+ bytes failed|out of memory|std::bad_alloc|Cannot allocate memory")
+SILENT_SPAWN_RC = 70
+HEAD_CAP = 256 * 1024
+TAIL_CAP = 64 * 1024
+
+
+def primary_source(args):
+    """The first C++ source argument, else 'link' when there are linker
+    inputs (objects, archives, response files), else 'none'."""
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in ("-o", "-MF", "-MT", "-MQ", "-x", "-include", "-I", "-isystem", "-D", "-U"):
+            skip = True
+            continue
+        if not a.startswith("-") and a.endswith(SOURCE_EXT):
+            return a
+    if any(a.endswith(LINK_EXT) or a.startswith("@") for a in args) and not any(
+        a in ("-E", "-c", "-S", "-fsyntax-only") for a in args
+    ):
+        return "link"
+    return "none"
+
+
+def output_of(args):
+    for i, a in enumerate(args):
+        if a == "-o" and i + 1 < len(args):
+            return args[i + 1]
+        if a.startswith("-o") and len(a) > 2:
+            return a[2:]
+    return None
+
+
+def first_diag(text):
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if DIAG_RE.search(line):
+            if "panicked at" in line and i + 1 < len(lines):
+                line = line.rstrip() + " | " + lines[i + 1].strip()
+            return line.strip()[:500]
+    return ""
+
+
+def classify(rc, timed_out, text, source):
+    if timed_out:
+        return "timeout"
+    if rc == 0:
+        return "ok"
+    if OOM_RE.search(text):
+        return "oom"
+    if "panicked at" in text or "has overflowed its stack" in text or rc == 101:
+        return "panic"
+    if rc < 0:
+        return "oom" if rc == -signal.SIGKILL else "panic"
+    if rc == SILENT_SPAWN_RC and not text.strip():
+        # kiln++ exits 70 without a word when it cannot spawn its compile
+        # thread (a 1 GiB stack reservation, crates/kiln_driver/src/main.rs):
+        # under the address-space cap that is memory.
+        return "oom"
+    if "backend command failed" in text or "LLVM ERROR" in text:
+        return "backend"
+    if (
+        "linker command failed" in text
+        or "undefined reference" in text
+        or "multiple definition" in text
+        or (source == "link" and "error:" not in text)
+    ):
+        return "link"
+    if "error:" in text:
+        return "reject"
+    return "other"
+
+
+def main():
+    args = sys.argv[1:]
+    cxx = os.environ.get("KILN_OSS_CXX") or "clang++-19"
+    cmd = [cxx] + args
+    log = os.environ.get("KILN_OSS_LOG")
+    vmem_kb = int(os.environ.get("KILN_OSS_VMEM_KB") or 3000000)
+    limit_s = float(os.environ.get("KILN_OSS_TIMEOUT") or 600)
+
+    def cap():
+        lim = vmem_kb * 1024
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        if hard != resource.RLIM_INFINITY:
+            lim = min(lim, hard)
+        resource.setrlimit(resource.RLIMIT_AS, (lim, hard))
+
+    start = time.monotonic()
+    try:
+        proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, preexec_fn=cap, start_new_session=True)
+    except OSError as e:
+        sys.stderr.write(f"kiln-cxx: cannot run {cxx}: {e}\n")
+        return 127
+
+    timed_out = threading.Event()
+
+    def kill_group(sig=signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            pass
+
+    def on_timeout():
+        timed_out.set()
+        kill_group()
+
+    timer = threading.Timer(limit_s, on_timeout)
+    timer.daemon = True
+    timer.start()
+
+    def forward(signum, _frame):
+        kill_group(signum)
+
+    for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(s, forward)
+
+    head = bytearray()
+    tail = bytearray()
+    err_out = sys.stderr.buffer
+    while True:
+        chunk = proc.stderr.read1(65536)
+        if not chunk:
+            break
+        err_out.write(chunk)
+        err_out.flush()
+        if len(head) < HEAD_CAP:
+            head += chunk[: HEAD_CAP - len(head)]
+        else:
+            tail += chunk
+            if len(tail) > TAIL_CAP:
+                del tail[: len(tail) - TAIL_CAP]
+    rc = proc.wait()
+    timer.cancel()
+    wall = time.monotonic() - start
+    rss_kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+
+    if log:
+        text = head.decode("utf-8", "replace") + "\n" + tail.decode("utf-8", "replace")
+        source = primary_source(args)
+        diag = first_diag(text)
+        if not diag and timed_out.is_set():
+            diag = f"timed out after {limit_s:g} s"
+        elif not diag and rc < 0:
+            diag = f"killed by signal {-rc}"
+        elif not diag and rc == SILENT_SPAWN_RC and not text.strip():
+            diag = "exit 70 without output (compile thread not spawned)"
+        rec = {
+            "v": 1,
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "phase": os.environ.get("KILN_OSS_PHASE", ""),
+            "cwd": os.getcwd(),
+            "argv": cmd,
+            "source": source,
+            "output": output_of(args),
+            "rc": rc,
+            "wall_s": round(wall, 3),
+            "max_rss_kb": rss_kb,
+            "diag": diag,
+            "kind": classify(rc, timed_out.is_set(), text, source),
+        }
+        line = (json.dumps(rec, ensure_ascii=False) + "\n").encode("utf-8")
+        with open(log, "ab") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.write(line)
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+    if timed_out.is_set():
+        return 124
+    return rc if rc >= 0 else 128 - rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

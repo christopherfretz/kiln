@@ -1,0 +1,328 @@
+# M8 robustness: the open-source projects kiln builds through their own
+# build systems (docs/status/oss.md, spec/landed/harness/WP-666.md).
+#
+# One table per project, keyed by the name `oss-build.sh <project>` takes.
+#   url            git URL (cloned with --depth 1 --branch <tag>)
+#   tag            pinned release tag (checked with `git ls-remote --tags`)
+#   build          cmake | meson | make   (only cmake is driven end to end)
+#   cxx_std        CMAKE_CXX_STANDARD (or meson cpp_std)
+#   configure      extra configure flags, a list
+#   build_targets  optional list of make targets (default: all)
+#   test           shell command run in the build dir under `timeout 1800`
+#   c_compiler     the C compiler (kiln is C++-only), default clang-19
+#   wave           1, 2 or 3 (docs/ROADMAP.md M8)
+#   verified       true once the configure flags were run end to end
+#   submodules     optional: clone with --recurse-submodules
+#   source_subdir  optional: the CMake source dir inside the checkout
+#   notes          free text
+
+# ---------------------------------------------------------------- wave 1
+
+[fmt]
+url = "https://github.com/fmtlib/fmt"
+tag = "12.1.0"
+build = "cmake"
+cxx_std = 20
+configure = ["-DFMT_TEST=ON", "-DFMT_DOC=OFF", "-DFMT_PEDANTIC=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 1
+verified = false
+notes = "WP-667 drives this one with its own wrapper until the harness lands."
+
+[nlohmann_json]
+url = "https://github.com/nlohmann/json"
+tag = "v3.12.0"
+build = "cmake"
+cxx_std = 20
+configure = ["-DJSON_BuildTests=ON", "-DJSON_MultipleHeaders=ON"]
+test = "ctest --output-on-failure -LE git_required"
+c_compiler = "clang-19"
+wave = 1
+verified = false
+notes = "WP-668. The test data repo is downloaded at configure time; many tests build per -std (JSON_TestStandards)."
+
+[spdlog]
+url = "https://github.com/gabime/spdlog"
+tag = "v1.17.0"
+build = "cmake"
+cxx_std = 20
+configure = ["-DSPDLOG_BUILD_TESTS=ON", "-DSPDLOG_BUILD_EXAMPLE=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 1
+verified = false
+notes = "Tests fetch Catch2 v3 with FetchContent when it is not installed; bundled fmt by default."
+
+[catch2]
+url = "https://github.com/catchorg/Catch2"
+tag = "v3.16.1"
+build = "cmake"
+cxx_std = 20
+configure = ["-DCATCH_DEVELOPMENT_BUILD=ON", "-DCATCH_BUILD_TESTING=ON", "-DCATCH_ENABLE_WERROR=OFF", "-DCATCH_BUILD_EXAMPLES=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 1
+verified = false
+notes = "Some ctest cases run python3 scripts (ApprovalTests)."
+
+[googletest]
+url = "https://github.com/google/googletest"
+tag = "v1.17.0"
+build = "cmake"
+cxx_std = 20
+configure = ["-Dgtest_build_tests=ON", "-Dgmock_build_tests=ON", "-DPython3_EXECUTABLE=/usr/bin/python3"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 1
+verified = true
+notes = "Harness verification project (WP-666). Some ctest cases are python3 scripts driving the built binaries."
+
+[doctest]
+url = "https://github.com/doctest/doctest"
+tag = "v2.5.3"
+build = "cmake"
+cxx_std = 20
+configure = ["-DDOCTEST_WITH_TESTS=ON", "-DDOCTEST_WITH_MAIN_IN_STATIC_LIB=ON"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 1
+verified = false
+notes = "The test CMake turns warnings into errors for clang-identified compilers; a kiln-only warning becomes a reject."
+
+[magic_enum]
+url = "https://github.com/Neargye/magic_enum"
+tag = "v0.9.7"
+build = "cmake"
+cxx_std = 20
+configure = ["-DMAGIC_ENUM_OPT_BUILD_TESTS=ON", "-DMAGIC_ENUM_OPT_BUILD_EXAMPLES=ON"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 1
+verified = true
+notes = "Harness verification project (WP-666). Enum reflection through __PRETTY_FUNCTION__ parsing; tests use the bundled Catch2 v2 header and -Werror."
+
+[cli11]
+url = "https://github.com/CLIUtils/CLI11"
+tag = "v2.6.1"
+build = "cmake"
+cxx_std = 20
+configure = ["-DCLI11_BUILD_TESTS=ON", "-DCLI11_BUILD_EXAMPLES=ON", "-DCLI11_WARNINGS_AS_ERRORS=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 1
+verified = false
+notes = "Tests download the Catch2 single header (or use an installed Catch2)."
+
+[tl_expected]
+url = "https://github.com/TartanLlama/expected"
+tag = "v1.3.1"
+build = "cmake"
+cxx_std = 20
+configure = ["-DEXPECTED_BUILD_TESTS=ON"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 1
+verified = false
+notes = "Tests fetch Catch2 with FetchContent."
+
+[range_v3]
+url = "https://github.com/ericniebler/range-v3"
+tag = "0.12.0"
+build = "cmake"
+cxx_std = 20
+configure = ["-DRANGE_V3_TESTS=ON", "-DRANGE_V3_EXAMPLES=ON", "-DRANGE_V3_PERF=OFF", "-DRANGE_V3_DOCS=OFF", "-DRANGE_V3_HEADER_CHECKS=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 1
+verified = false
+notes = "WP-669. Header-only; the test suite is the build (hundreds of TUs, heavy concept checking)."
+
+# ---------------------------------------------------------------- wave 2
+
+[abseil]
+url = "https://github.com/abseil/abseil-cpp"
+tag = "20260107.1"
+build = "cmake"
+cxx_std = 17
+configure = ["-DABSL_BUILD_TESTING=ON", "-DABSL_USE_GOOGLETEST_HEAD=ON", "-DBUILD_TESTING=ON"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 2
+verified = false
+notes = "LTS release. googletest is downloaded at configure time (ABSL_USE_GOOGLETEST_HEAD)."
+
+[re2]
+url = "https://github.com/google/re2"
+tag = "2025-11-05"
+build = "cmake"
+cxx_std = 17
+configure = ["-DRE2_BUILD_TESTING=ON"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 2
+verified = false
+notes = "Needs abseil (find_package(absl)), googletest and benchmark installed: build abseil first and pass -DCMAKE_PREFIX_PATH to its install tree."
+
+[benchmark]
+url = "https://github.com/google/benchmark"
+tag = "v1.9.5"
+build = "cmake"
+cxx_std = 17
+configure = ["-DBENCHMARK_DOWNLOAD_DEPENDENCIES=ON", "-DBENCHMARK_ENABLE_TESTING=ON", "-DBENCHMARK_ENABLE_WERROR=OFF", "-DBENCHMARK_ENABLE_LTO=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 2
+verified = false
+notes = "googletest is downloaded at configure time."
+
+[glog]
+url = "https://github.com/google/glog"
+tag = "v0.7.1"
+build = "cmake"
+cxx_std = 17
+configure = ["-DBUILD_TESTING=ON", "-DWITH_GFLAGS=OFF", "-DWITH_GTEST=OFF", "-DWITH_UNWIND=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 2
+verified = false
+notes = "Archived upstream; v0.7.1 is the last release."
+
+[yaml_cpp]
+url = "https://github.com/jbeder/yaml-cpp"
+tag = "yaml-cpp-0.9.0"
+build = "cmake"
+cxx_std = 17
+configure = ["-DYAML_CPP_BUILD_TESTS=ON", "-DYAML_CPP_BUILD_TOOLS=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 2
+verified = false
+notes = "Tests use a vendored googletest."
+
+[simdjson]
+url = "https://github.com/simdjson/simdjson"
+tag = "v4.2.4"
+build = "cmake"
+cxx_std = 20
+configure = ["-DSIMDJSON_DEVELOPER_MODE=ON", "-DSIMDJSON_ENABLE_THREADS=ON", "-DSIMDJSON_EXCEPTIONS=ON"]
+test = "ctest --output-on-failure -E 'checkperf|fuzz'"
+c_compiler = "clang-19"
+wave = 2
+verified = false
+notes = "Developer mode downloads test data; target-specific SIMD kernels (NEON on aarch64, AVX on x86_64) exercise intrinsics headers."
+
+[eigen]
+url = "https://gitlab.com/libeigen/eigen.git"
+tag = "3.4.1"
+build = "cmake"
+cxx_std = 17
+configure = ["-DBUILD_TESTING=ON", "-DEIGEN_BUILD_DOC=OFF", "-DEIGEN_BUILD_BLAS=OFF", "-DEIGEN_BUILD_LAPACK=OFF"]
+build_targets = ["buildtests"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 2
+verified = false
+notes = "GitLab, not GitHub. The test suite is ~1000 TUs, several at multi-GiB with clang: expect the per-TU caps to bite; consider a ctest -R subset."
+
+[entt]
+url = "https://github.com/skypjack/entt"
+tag = "v3.15.0"
+build = "cmake"
+cxx_std = 20
+configure = ["-DENTT_BUILD_TESTING=ON", "-DENTT_BUILD_BENCHMARK=OFF", "-DENTT_BUILD_EXAMPLE=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 2
+verified = false
+notes = "googletest is fetched with FetchContent."
+
+[taskflow]
+url = "https://github.com/taskflow/taskflow"
+tag = "v3.10.0"
+build = "cmake"
+cxx_std = 20
+configure = ["-DTF_BUILD_TESTS=ON", "-DTF_BUILD_EXAMPLES=OFF", "-DTF_BUILD_BENCHMARKS=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 2
+verified = false
+notes = "Threads, coroutine-free task graphs; tests use the bundled doctest."
+
+[cereal]
+url = "https://github.com/USCiLab/cereal"
+tag = "v1.3.2"
+build = "cmake"
+cxx_std = 17
+configure = ["-DBUILD_TESTS=ON", "-DSKIP_PERFORMANCE_COMPARISON=ON", "-DBUILD_SANDBOX=OFF", "-DBUILD_DOC=OFF", "-DWITH_WERROR=OFF", "-DCEREAL_INSTALL=OFF"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 2
+verified = false
+notes = "Boost-dependent tests are skipped when Boost is absent."
+
+# ---------------------------------------------------------------- wave 3
+
+[protobuf]
+url = "https://github.com/protocolbuffers/protobuf"
+tag = "v33.1"
+build = "cmake"
+cxx_std = 17
+configure = ["-Dprotobuf_BUILD_TESTS=ON", "-Dprotobuf_ABSL_PROVIDER=module", "-Dprotobuf_BUILD_CONFORMANCE=OFF"]
+submodules = true
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 3
+verified = false
+notes = "abseil and googletest come from the third_party submodules."
+
+[leveldb]
+url = "https://github.com/google/leveldb"
+tag = "1.23"
+build = "cmake"
+cxx_std = 17
+configure = ["-DLEVELDB_BUILD_TESTS=ON", "-DLEVELDB_BUILD_BENCHMARKS=OFF"]
+submodules = true
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 3
+verified = false
+notes = "googletest and benchmark are submodules."
+
+[rocksdb]
+url = "https://github.com/facebook/rocksdb"
+tag = "v10.7.5"
+build = "cmake"
+cxx_std = 20
+configure = ["-DWITH_TESTS=ON", "-DWITH_GFLAGS=OFF", "-DFAIL_ON_WARNINGS=OFF", "-DWITH_BENCHMARK_TOOLS=OFF", "-DWITH_TOOLS=OFF", "-DPORTABLE=1"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 3
+verified = false
+notes = "Large (~1000 TUs); the full ctest run is hours, so the tracked number may be a ctest -R subset."
+
+[llvm_project]
+url = "https://github.com/llvm/llvm-project"
+tag = "llvmorg-19.1.7"
+build = "cmake"
+source_subdir = "llvm"
+cxx_std = 17
+configure = ["-DLLVM_TARGETS_TO_BUILD=", "-DLLVM_ENABLE_PROJECTS=", "-DLLVM_INCLUDE_TESTS=ON", "-DLLVM_INCLUDE_BENCHMARKS=OFF", "-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_ENABLE_ZSTD=OFF", "-DLLVM_ENABLE_LIBXML2=OFF"]
+build_targets = ["SupportTests", "ADTTests"]
+test = "./unittests/Support/SupportTests && ./unittests/ADT/ADTTests"
+c_compiler = "clang-19"
+wave = 3
+verified = false
+notes = "lib/Support + lib/ADT unit tests only. Same release as the libc++ 19 test suite; the shallow clone is ~2 GB."
+
+[folly]
+url = "https://github.com/facebook/folly"
+tag = "v2026.10.26.00"
+build = "cmake"
+cxx_std = 20
+configure = ["-DBUILD_TESTS=ON"]
+test = "ctest --output-on-failure"
+c_compiler = "clang-19"
+wave = 3
+verified = false
+notes = "Stretch. Needs boost, double-conversion, gflags, glog, libevent, fmt and fast_float installed (getdeps.py normally provides them)."
