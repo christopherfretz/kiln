@@ -326,6 +326,20 @@ impl Sema<'_, '_> {
         self.ast.decls.record(self.class_def(r)).is_some_and(|x| x.tag == TagKind::Union)
     }
 
+    /// Whether the P3074R7 trivial-union rules apply (C++26,
+    /// spec/sema-class.md §4.2): a variant member's non-trivial default
+    /// constructor or destructor no longer deletes or makes non-trivial
+    /// its union's.
+    pub(crate) fn trivial_unions(&self) -> bool {
+        self.std >= kiln_lex::Std::Cxx26
+    }
+
+    /// Whether field `f` is a variant member (a direct member of a union,
+    /// named or anonymous; [class.union.general]/1).
+    pub(crate) fn is_variant_member(&self, f: DeclId) -> bool {
+        self.ast.decls.get(f).ctx().is_some_and(|p| self.is_union(p))
+    }
+
     /// Whether an implicit or defaulted `k` of class `class` (copying from
     /// a `const` argument when `const_arg`) is `constexpr`
     /// (spec/sema-class.md §4.6; clang `defaultedSpecialMemberIsConstexpr`):
@@ -909,7 +923,13 @@ impl Sema<'_, '_> {
                 if !cb.contains(DefinitionBits::TRIVIAL_MOVE_ASSIGN) {
                     assign_deleted |= K::MoveAssign.bit();
                 }
-                if !cb.contains(DefinitionBits::TRIVIAL_DTOR) {
+                // P3074R7 [class.dtor]/7.2.2: from C++26 only a variant
+                // member with a default member initializer deletes the
+                // destructor here; /7.2.1 (CWG3041) is decided when the
+                // destructor is declared.
+                if !cb.contains(DefinitionBits::TRIVIAL_DTOR)
+                    && (!self.trivial_unions() || has_init)
+                {
                     bits = bits.with(DefinitionBits::DEFAULTED_DTOR_DELETED);
                 }
             }

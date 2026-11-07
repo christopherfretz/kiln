@@ -439,8 +439,10 @@ impl Sema<'_, '_> {
                 r => return r,
             }
         }
-        // [class.default.ctor]/2: a union whose members are all const.
+        // [class.default.ctor]/2 before C++26: a union whose members are
+        // all const (P3074R7 removes the bullet).
         if self.is_union(w.class)
+            && !self.trivial_unions()
             && w.kind == SpecialKind::DefaultCtor
             && w.all_fields_const
             && !self.special_fields(w.class).is_empty()
@@ -579,7 +581,11 @@ impl Sema<'_, '_> {
                     }
                 }
             }
-            if w.kind == K::DefaultCtor && all_const && !ufields.is_empty() {
+            if w.kind == K::DefaultCtor
+                && all_const
+                && !ufields.is_empty()
+                && !self.trivial_unions()
+            {
                 let rloc = self.ast.decls.get(rec).loc();
                 self.note(w, |s| {
                     s.diag(DiagId::note_deleted_all_const, rloc)
@@ -608,6 +614,13 @@ impl Sema<'_, '_> {
         };
         let mutable = field.is_some_and(|f| self.field_is_mutable(f));
         let has_init = field.is_some_and(|f| self.field_has_nsdmi(f));
+        if let Some(f) = field
+            && matches!(w.kind, K::DefaultCtor | K::Dtor)
+            && self.trivial_unions()
+            && self.is_variant_member(f)
+        {
+            return self.delete_for_variant_member(w, rec, f, has_init);
+        }
         if !(w.kind == K::DefaultCtor && has_init) {
             let lhs = if w.kind.is_assign() { quals } else { Quals::NONE };
             let rhs = if matches!(w.kind, K::DefaultCtor | K::Dtor) {
@@ -628,6 +641,89 @@ impl Sema<'_, '_> {
             return self.delete_for_call(w, sub, sel, true);
         }
         DeleteReason::No
+    }
+
+    /// P3074R7 with CWG3041 (C++26, spec/sema-class.md §4.2): whether
+    /// variant member `f` of class type `rec` deletes the defaulted
+    /// default constructor or destructor being walked. The default
+    /// constructor initializes no variant member without a default member
+    /// initializer ([class.default.ctor]/2.3–2.4); the union's destructor
+    /// is deleted only when `rec`'s destructor is deleted, inaccessible or
+    /// non-trivial and either `f` has a default member initializer or
+    /// default-initializing the union fails or selects a deleted or
+    /// user-provided constructor ([class.dtor]/7.2 as CWG3041 corrects
+    /// "not trivial" to "user-provided"). An anonymous union has no
+    /// user-provided constructor.
+    fn delete_for_variant_member(
+        &mut self,
+        w: &mut Walk,
+        rec: DeclId,
+        f: DeclId,
+        has_init: bool,
+    ) -> DeleteReason {
+        let sub = Subobject::Field(f);
+        let dtor = self.select_special(rec, SpecialKind::Dtor, Quals::NONE, Quals::NONE);
+        if w.kind == SpecialKind::DefaultCtor {
+            return if has_init { self.delete_for_call(w, sub, dtor, true) } else { DeleteReason::No };
+        }
+        let non_trivial = match dtor {
+            Selected::Unsupported => return DeleteReason::Unsupported,
+            Selected::Found(m) => {
+                let is_ok = self.special_accessible_from(m, w.member_class(), false);
+                if is_ok && self.fn_spec(m).is_trivial() {
+                    return DeleteReason::No;
+                }
+                is_ok
+            }
+            _ => false,
+        };
+        let union = self.ast.decls.get(f).ctx().map_or(w.class, |p| self.class_def(p));
+        let anonymous = self.defn_bits(union).contains(DefinitionBits::ANONYMOUS);
+        let ctor_bad = !(has_init && non_trivial || anonymous) && self.union_default_init_bad(union);
+        if !(has_init || ctor_bad) {
+            return DeleteReason::No;
+        }
+        if non_trivial {
+            // The variant member's destructor is usable but non-trivial.
+            let floc = self.ast.decls.get(f).loc();
+            let class = w.class;
+            let head = w.head();
+            self.note(w, |s| {
+                s.diag(DiagId::note_deleted_subobject, floc)
+                    .arg(head)
+                    .arg(s.decl_arg(class))
+                    .arg(2u8)
+                    .arg(s.decl_arg(f))
+                    .arg(4u8)
+                    .arg("destructor")
+            });
+            return DeleteReason::Yes;
+        }
+        self.delete_for_call(w, sub, dtor, false)
+    }
+
+    /// [class.dtor]/7.2.1 with CWG3041: whether default-initializing
+    /// union `u` fails or selects a deleted or user-provided constructor.
+    /// Decided from the declared constructors rather than by overload
+    /// resolution, which may not be possible while `u`'s implicit members
+    /// are being declared: no default constructor when the user declared
+    /// a constructor, more than one (ambiguous), or the one there is
+    /// deleted or user-provided.
+    fn union_default_init_bad(&self, u: DeclId) -> bool {
+        let d = self.class_def(u);
+        let mut ctors = self
+            .ast
+            .constructors(d)
+            .iter()
+            .filter(|&c| self.special_kind_of(c) == Some(SpecialKind::DefaultCtor));
+        match (ctors.next(), ctors.next()) {
+            (None, _) => {
+                self.defn_bits(d).contains(DefinitionBits::USER_DECLARED_CTOR)
+                    || self.known_deleted(d, SpecialKind::DefaultCtor)
+            }
+            (Some(c), None) => self.is_user_provided(c) || self.is_deleted_fn(c),
+            (Some(_), Some(_)) => true,
+        }
     }
 
     fn delete_for_call(
