@@ -620,6 +620,15 @@ fault counts and trap ids unchanged.
   (spec/sema.md §4.9) and codegen to skip the fold. Left: a lambda body
   reading through such a pointer in its own `static_assert` is accepted
   (the evaluation point is not known to the Oven).
+- Freezing a pointer or reference to an object with thread storage
+  duration fails silently (`FailKind::NotConstant`, clang
+  `CheckLValueConstantExpression`): [expr.const]/14 permits static
+  storage duration only. This covers the `thread_local` variable being
+  initialized itself (`run.object`, e.g. `S *self = this;` in a default
+  member initializer, or a small-buffer pointer into the object), so
+  such a variable is dynamically initialized per thread rather than
+  emitted with its own address in the `.tdata` image (WP-792; test
+  `basic.stc.thread/self-address-dynamic-init-run.cpp`).
 - Freezing a pointer or reference to a temporary lifetime-extended by
   the variable being initialized ([class.temporary]/6) rejects one whose
   type is destructed (`Ast::needs_destruction`: a non-trivial destructor
