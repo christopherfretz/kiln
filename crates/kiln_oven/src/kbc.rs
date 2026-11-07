@@ -483,6 +483,10 @@ pub(crate) mod bi {
     /// sub flag of `CARRY`: the carry-in is 1 when nonzero (x86
     /// `addcarryx` / `subborrow`, WP-630), not taken modulo 2^`w`.
     pub const CARRY_BOOL_IN: u32 = 1 << 10;
+    /// `__builtin_start_lifetime(a)` (WP-773; P3726R2 [obj.lifetime]):
+    /// begins the lifetime of the object of static type `t1` at `a`
+    /// without initializing it (`Oven::start_lifetime`); the result is 0.
+    pub const START_LIFETIME: u32 = 35;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).

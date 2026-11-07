@@ -1778,7 +1778,7 @@ impl Parser<'_, '_> {
             let rhs = self.parse_constraint_and()?;
             lhs = self.s.act_on_binary(BinaryOp::LOr, lhs, rhs, l);
         }
-        Some(lhs)
+        Some(self.s.act_on_requires_clause(lhs))
     }
 
     fn parse_constraint_and(&mut self) -> Option<ExprId> {

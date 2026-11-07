@@ -3237,6 +3237,14 @@ impl Oven {
             TyKind::Record { union, first, count, .. } => {
                 let fields = if union {
                     let &i = self.mem.unions.get(&Ptr::union_key(raw, off, t))?;
+                    let f = self.types.fields[(first + i) as usize];
+                    if self.cxx_year >= 2026
+                        && f.width.is_none()
+                        && matches!(self.types.kind(f.ty), TyKind::Array { .. })
+                    {
+                        let (a, o) = (abs + f.offset, off + f.offset);
+                        return self.first_uninit_elements(ast, sp, a, raw, o, f.ty, Some(f.decl));
+                    }
                     first + i..first + i + 1
                 } else {
                     first..first + count
@@ -3259,6 +3267,33 @@ impl Oven {
             }
             TyKind::Void | TyKind::Func | TyKind::Opaque => None,
         }
+    }
+
+    /// `Oven::first_uninit` of the active array member of a union, `t`
+    /// (C++26, P3726R2): its elements outside their lifetime (holding no
+    /// initialized byte) are not part of the value, as freezing skips
+    /// them (`Oven::walk_elements`).
+    #[allow(clippy::too_many_arguments)]
+    fn first_uninit_elements(
+        &self,
+        ast: &kiln_ast::Ast,
+        sp: Sp,
+        abs: u64,
+        raw: u64,
+        off: u64,
+        t: OTy,
+        field: Option<DeclId>,
+    ) -> Option<(Option<DeclId>, OTy)> {
+        let TyKind::Array { elem, n } = self.types.kind(t) else {
+            return self.first_uninit(ast, sp, abs, raw, off, t, field);
+        };
+        let es = self.types.size(elem);
+        (0..n).find_map(|i| {
+            if es != 0 && !self.mem.space(sp).any_init(abs + i * es, es) {
+                return None;
+            }
+            self.first_uninit_elements(ast, sp, abs + i * es, raw, off + i * es, elem, field)
+        })
     }
 
     /// Activates the first member of every union reached through first
@@ -3342,6 +3377,35 @@ impl Oven {
     /// `Op::Placement`: a placement new of a `ty` at `raw` (clang's
     /// `VisitCXXNewExpr` placement path: `findCompleteObject` for
     /// construction, then the type of the designated subobject).
+    /// `bi::START_LIFETIME`: `__builtin_start_lifetime(p)` (P3726R2
+    /// [obj.lifetime], WP-773) of the `ty` object at `raw`. It begins the
+    /// object's lifetime without initializing it or any subobject: a
+    /// union member becomes the active member, its bytes uninitialized
+    /// (an array member's elements are then outside their lifetime,
+    /// `Oven::walk_elements`), and an object of tracked storage none of
+    /// whose bytes is within a lifetime gets its bytes back. An object
+    /// already within its lifetime (the active member) is left as it is.
+    /// Its storage is checked as a placement new's; an object in a
+    /// subobject of an inactive union member is a fault (GCC's
+    /// "containing object not within lifetime"): unlike placement new,
+    /// no array member is activated for its element.
+    pub(super) fn start_lifetime(&mut self, raw: u64, ty: OTy) -> Result<(), Fault> {
+        let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
+        let size = self.types.size(ty);
+        let (sp, _, a) = self.mem.check_storage(raw, size, true).map_err(fault)?;
+        let a = *a;
+        if let Some(f) = write_fault(sp, &a, ty) {
+            return Err(fault(f));
+        }
+        if a.flags & flags::HAS_UNION != 0 {
+            self.place_in_unions(raw, a.ty, ty, false)?;
+        }
+        if size != 0 && self.mem.ended(raw, size) {
+            self.mem.set_lifetime(raw, size, true).map_err(fault)?;
+        }
+        Ok(())
+    }
+
     fn placement(&mut self, raw: u64, ty: OTy, stat: Option<OTy>, aux: u32) -> Result<(), Fault> {
         let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
         let (sp, _, a) = self.mem.check_storage(raw, 0, true).map_err(fault)?;
@@ -3371,7 +3435,7 @@ impl Oven {
         let owns = self.element_type(a.ty, off) == Some(target);
         let size = if !owns && self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
         if a.flags & flags::HAS_UNION != 0 {
-            self.place_in_unions(raw, a.ty, ty)?;
+            self.place_in_unions(raw, a.ty, ty, true)?;
         }
         self.mem.set_lifetime(raw, size, true).map_err(fault)?;
         if size == 0 && self.types.size(ty) > 0 {
@@ -3459,7 +3523,18 @@ impl Oven {
     /// several may (two members of one type, or a member and a subobject
     /// of the active member), each of them is recorded as possibly active
     /// (`Memory::union_alts`, WP-233).
-    fn place_in_unions(&mut self, raw: u64, root: OTy, ty: OTy) -> Result<(), Fault> {
+    ///
+    /// `implicit` (placement new): an element of an inactive array member
+    /// activates the array (below); `__builtin_start_lifetime` passes
+    /// false, the array then being a containing object outside its
+    /// lifetime ("construction of subobject of member").
+    fn place_in_unions(
+        &mut self,
+        raw: u64,
+        root: OTy,
+        ty: OTy,
+        implicit: bool,
+    ) -> Result<(), Fault> {
         let target = u64::from(Ptr::decode(raw).off);
         let (mut t, mut base) = (root, 0u64);
         loop {
@@ -3522,7 +3597,7 @@ impl Oven {
                     let held =
                         active.into_iter().chain(alt_members(alts, n, active)).find(|&i| reach(i));
                     match held {
-                        None if direct == 0 && arrs != 0 => {
+                        None if direct == 0 && arrs != 0 && implicit => {
                             // [class.union.general] (P3726R2): constructing
                             // an element of an inactive array member begins
                             // the array's lifetime and makes it the active

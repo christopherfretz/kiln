@@ -988,6 +988,14 @@ impl Oven {
                     let Some(&i) = self.mem.unions.get(&key) else { return Ok(()) };
                     let f = self.types.fields[first + i as usize];
                     s.unions.push(UnionMember { at: at as u32, field: f.decl });
+                    if self.cxx_year >= 2026
+                        && f.width.is_none()
+                        && matches!(self.types.kind(f.ty), TyKind::Array { .. })
+                    {
+                        let fr = Ptr::with_off(raw, u64::from(p.off) + f.offset, false);
+                        let fa = at + f.offset as usize;
+                        return self.walk_elements(b, s, f.ty, fr, fa, Some(f.decl), loc);
+                    }
                     return self.walk_field(b, s, raw, at, f, loc);
                 }
                 for i in first..first + count {
@@ -1000,6 +1008,46 @@ impl Oven {
                     return Err(Freeze::Fault(FailKind::NotConstant));
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// The active array member of a union, `t` at `raw` (C++26, P3726R2
+    /// [expr.const]/2): an element outside its lifetime is an inactive
+    /// union elemental subobject, not a constituent value, so it is left
+    /// out of the image (uncovered) instead of failing as uninitialized.
+    /// An element is outside its lifetime when it holds no initialized
+    /// byte (spec/oven.md "C++26 union lifetime"); an element of an
+    /// element array is one too. Only this path pays the test.
+    #[allow(clippy::too_many_arguments)]
+    fn walk_elements(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        s: &mut Scratch,
+        t: OTy,
+        raw: u64,
+        at: usize,
+        field: Option<DeclId>,
+        loc: Loc,
+    ) -> Result<(), Freeze> {
+        let TyKind::Array { elem, n } = self.types.kind(t) else {
+            return self.walk(b, s, t, raw, at, field, loc);
+        };
+        let p = Ptr::decode(raw);
+        let Some(a) = self.alloc_any(p).copied().filter(|a| a.base != UNBACKED) else {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        };
+        let abs = u64::from(a.base) + u64::from(p.off);
+        let es = self.types.size(elem);
+        if self.mem.space(p.space()).is_init(abs, es * n) {
+            return self.walk(b, s, t, raw, at, field, loc);
+        }
+        for i in 0..n {
+            if es != 0 && !self.mem.space(p.space()).any_init(abs + i * es, es) {
+                continue;
+            }
+            let r = Ptr::with_off(raw, u64::from(p.off) + i * es, false);
+            self.walk_elements(b, s, elem, r, at + (i * es) as usize, field, loc)?;
         }
         Ok(())
     }

@@ -4168,6 +4168,21 @@ function) elsewhere.
     `-fclang-compat=22` (`__has_builtin` is 0 below). Evaluation is
     spec/oven.md "Builtins". Tests:
     `tests/conformance/meta.const.eval/is-within-lifetime*.cpp`.
+  - `__builtin_start_lifetime(p)` (WP-773; GCC 17 `BUILT_IN_START_LIFETIME`,
+    `builtin_start_lifetime`; P3726R2 `std::start_lifetime`): a GCC-only
+    builtin (`gcc_only`, `__has_builtin` is 1). One argument (`too
+    few`/`too many`), decayed; then, in GCC's order, each failing check
+    is `'__builtin_start_lifetime' argument type T is not {pointer
+    type|a pointer to aggregate type|a pointer to implicit-lifetime
+    type}` at the argument (`sema_builtin_start_lifetime_invalid_arg`),
+    except an incomplete pointee, which is clang's `incomplete type 'X'
+    where a complete type is required` with the forward-declaration
+    note: not a pointer; incomplete pointee; pointee not an aggregate
+    (`is_aggregate`); pointee not implicit-lifetime
+    (`__builtin_is_implicit_lifetime`). The call is a `void` prvalue and
+    `noexcept`. Evaluation is spec/oven.md "Builtins"; codegen evaluates
+    the argument and emits nothing else (spec/codegen.md). Tests:
+    `tests/conformance/obj.lifetime/start-lifetime-*.cpp`.
   - `__builtin_align_up` / `__builtin_align_down` / `__builtin_is_aligned`
     (custom, `builtin_align`, clang `BuiltinAlignment`; WP-416): two
     arguments. The source must be an integer (not `bool` or an

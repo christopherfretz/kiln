@@ -249,4 +249,5 @@ sema_builtin_ordered_compare = Error (2) "ordered compare requires two args of f
 sema_builtin_pass_in_regs_non_class = Error (1) "argument {0} is not an unqualified class type";
 sema_builtin_passing_incompatible = Error (2) "passing {0} to parameter of incompatible type {1}";
 sema_builtin_redeclare = Error (1) "cannot redeclare builtin function '{0}'";
+sema_builtin_start_lifetime_invalid_arg = Error (2) "'__builtin_start_lifetime' argument type {0} is not {1:pointer type|a pointer to aggregate type|a pointer to implicit-lifetime type}";
 sema_builtin_verbose_trap_arg = Error (1) "argument to __builtin_verbose_trap must {0:be a pointer to a constant string|not contain $}";

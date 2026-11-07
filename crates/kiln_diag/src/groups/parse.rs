@@ -6,6 +6,7 @@ AmbiguousEllipsis = "ambiguous-ellipsis" [];
 BitIntExtension = "bit-int-extension" [];
 C11Extensions = "c11-extensions" [];
 Cxx20Extensions = "c++20-extensions" [];
+Cxx23LambdaAttributes = "c++23-lambda-attributes" [];
 Cxx26Extensions = "c++26-extensions" [];
 CxxAttributeExtension = "cxx-attribute-extension" [];
 DeprecatedMissingCommaVariadicParameter = "deprecated-missing-comma-variadic-parameter" [];

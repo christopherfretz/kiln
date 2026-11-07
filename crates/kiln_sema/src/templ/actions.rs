@@ -1353,9 +1353,17 @@ impl Sema<'_, '_> {
         if self.in_local_scope() || self.kind_of(self.ctx) == DeclKind::CXXRecord {
             self.error(DiagId::sema_template_outside_namespace_or_class, loc);
         }
+        // [temp.param]/14: a template parameter pack is the last
+        // parameter of a concept's head.
+        self.check_template_param_list(DeclKind::Concept, head, None);
         // A non-`bool` atom makes the definition invalid (clang's
         // `ParseConstraintExpression`).
-        let e = if self.check_constraint_expression(e) {
+        // [temp.variadic]/12: the constraint-expression names no pack
+        // outside an expansion (clang's `ActOnConceptDefinition`).
+        let e = if self.diagnose_unexpanded_written(e, "expression", None) {
+            let at = self.begin_loc(e);
+            self.act_on_error_expr(&[e], at)
+        } else if self.check_constraint_expression(e) {
             e
         } else {
             let at = self.ast.exprs.get(e).loc();
