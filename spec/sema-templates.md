@@ -4044,16 +4044,21 @@ guides.
    indices need not coincide (WP-726,
    `tests/conformance/temp.func.order/p3-pack-expansion-other-index.cpp`).
    A template parameter of the deduced template left without a value
-   fails the deduction when the compared parameter types name it, a
-   non-deduced context included ([temp.deduct.partial]/12; clang
-   `MarkUsedTemplateParameters` without `OnlyDeduced`): kiln substitutes
-   `int` for each undeduced type parameter and every other parameter for
-   itself, and a type that changes or fails to substitute names one
-   (`order.rs` `undeduced_params_unused`; with a parameter pack, or an
-   undeduced non-type or template parameter, they count as unused). So
-   `to_pointer(buffer_appender<T>, size_t)` beats `to_pointer(OutputIt,
-   size_t)` for `to_pointer<char>(it, n)` (WP-726,
-   `tests/conformance/temp.func.order/p12-undeduced-used-in-non-deduced-context.cpp`).
+   fails the deduction when the compared parameter types name it
+   anywhere ([temp.deduct.partial]/12; clang `isAtLeastAsSpecializedAs`
+   with `MarkUsedTemplateParameters` without `OnlyDeduced`): `order.rs`
+   `undeduced_params_unused` walks the canonical compared types
+   (`mark_used_type`), through nested-name-specifiers, template
+   arguments, template names and expressions (`sizeof(T)`, `N + 1`,
+   `X<T>::value`), marking type, non-type and template template
+   parameters and packs of the deduced template's depth alike. Names
+   gone from the canonical type (an alias template that drops its
+   parameter, a non-dependent `decltype`) and the call's return type do
+   not count. So `to_pointer(buffer_appender<T>, size_t)` beats
+   `to_pointer(OutputIt, size_t)` for `to_pointer<char>(it, n)` (WP-726),
+   and the same holds for a non-type, template template or pack parameter
+   (WP-779, `tests/conformance/temp.func.order/p12-undeduced-used-*.cpp`,
+   clang 19 and 22 agree).
    The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
 5. **Constraints.** If both directions succeed, the more constrained one

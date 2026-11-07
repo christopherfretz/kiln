@@ -7,7 +7,13 @@ use kiln_ast::DeclId;
 use kiln_ast::QualType;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::ArgListId;
-use kiln_ast::types::{ArgView, Quals, TemplateArg, TypeView};
+use kiln_ast::expr::{ExprDeps, ExprKind};
+use kiln_ast::ids::{RawId, TemplateNameId};
+use kiln_ast::types::{
+    ArgView, ExprOperand, Nns, Quals, TemplateArg, TemplateName, TypeFlags, TypeOfOperand, TypeView,
+};
+use kiln_ast::ExprId;
+use kiln_ast::templates::Requirement;
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -681,43 +687,264 @@ impl Sema<'_, '_> {
 impl Sema<'_, '_> {
     /// [temp.deduct.partial]/12: a template parameter of `b` left without
     /// a value fails the deduction when the types `pb` compared name it,
-    /// a non-deduced context included (clang `MarkUsedTemplateParameters`
-    /// without `OnlyDeduced`; fmt's `to_pointer(OutputIt, size_t)` against
-    /// `to_pointer(buffer_appender<T>, size_t)` with `T` explicit). Probed
-    /// by substituting `int` for each undeduced type parameter and every
-    /// other parameter for itself: a type that changes or fails names one.
-    /// With a parameter pack in `b`, or an undeduced non-type or template
-    /// parameter, the parameters count as unused (WP-726).
+    /// a non-deduced context included, whatever its kind (type, non-type,
+    /// template, or a pack): clang `isAtLeastAsSpecializedAs` with
+    /// `MarkUsedTemplateParameters(OnlyDeduced = false)` over the compared
+    /// parameter types. A parameter named only outside them (the return
+    /// type of a call ordering) may stay without a value (WP-726, WP-779).
     fn undeduced_params_unused(&mut self, b: DeclId, d: &DeducedArgs, pb: &[OrderingType]) -> bool {
-        let params = self.template_params(b);
-        if params.iter().any(|&p| self.ast.template_parm(p).is_some_and(|i| i.pack)) {
-            return true;
-        }
-        let mut args = Vec::with_capacity(params.len());
-        for (i, &p) in params.iter().enumerate() {
-            let undeduced = d.args.get(i).is_none_or(|a| matches!(a.view(), ArgView::Null));
-            if !undeduced {
-                args.push(self.template_param_arg(p));
-            } else if self.kind_of(p) == DeclKind::TemplateTypeParm {
-                args.push(TemplateArg::ty(QualType::INT));
-            } else {
-                return true;
-            }
-        }
-        let list = self.ast.types.arg_list(&args);
-        let mut levels = Self::outer_levels(b, d.depth);
-        levels.push(list, b, LevelMode::Substitute);
-        let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
-        let mut unused = true;
+        let n = self.template_params(b).len();
+        let mut used = vec![false; n];
+        let depth = u32::from(d.depth);
         for x in pb {
-            let r = Substituter::new(self, &levels).ty(x.ty, Loc::INVALID);
-            if r.map_or(true, |t| self.ast.types.canonical(t) != self.ast.types.canonical(x.ty)) {
-                unused = false;
-                break;
-            }
+            self.mark_used_type(x.ty, depth, &mut used, 0);
         }
-        self.ast.templates.dependent_depth = saved;
-        unused
+        used.iter().enumerate().all(|(i, &u)| {
+            !u || d.args.get(i).is_some_and(|a| !matches!(a.view(), ArgView::Null))
+        })
+    }
+
+    /// Marks in `used` the template parameters of depth `depth` canonical
+    /// type `q` names anywhere (clang `MarkUsedTemplateParameters` without
+    /// `OnlyDeduced`): sugar is looked through, so an alias template that
+    /// drops its parameter names nothing, and a non-dependent `decltype`
+    /// is its type.
+    pub(crate) fn mark_used_type(&self, q: QualType, depth: u32, used: &mut [bool], lvl: u32) {
+        let t = &self.ast.types;
+        if lvl > 256 || !t.is_dependent(q) && !t.flags(q.ty()).intersects(TypeFlags::INSTANTIATION_DEPENDENT) {
+            return;
+        }
+        let lvl = lvl + 1;
+        let expr_op = |o: ExprOperand| match o {
+            ExprOperand::Expr(e) => Some(e),
+            ExprOperand::Profile(p) => t.profile_expr(p),
+        };
+        match t.canonical_view(q) {
+            TypeView::CanonTemplateTypeParm { depth: dd, index, .. } => {
+                Self::mark_at(used, depth, dd, index);
+            }
+            TypeView::TemplateTypeParm(p) => self.mark_parm(p, depth, used),
+            TypeView::Pointer(x)
+            | TypeView::LValueRef(x)
+            | TypeView::RValueRef(x)
+            | TypeView::IncompleteArray(x)
+            | TypeView::Paren(x)
+            | TypeView::Complex(x)
+            | TypeView::Atomic(x)
+            | TypeView::ExtQual { base: x, .. }
+            | TypeView::Attributed { modified: x, .. }
+            | TypeView::Vector { elem: x, .. }
+            | TypeView::PackExpansion { pattern: x, .. }
+            | TypeView::SubstTemplateTypeParm { replacement: x, .. }
+            | TypeView::UnaryTransform { base: x, .. }
+            | TypeView::ConstantArray(kiln_ast::types::ConstArray { elem: x, .. }) => {
+                self.mark_used_type(x, depth, used, lvl);
+            }
+            TypeView::QualifiedArray { base, .. } => {
+                self.mark_used_type(QualType::unqual(base), depth, used, lvl);
+            }
+            TypeView::VariableArray { elem, size } => {
+                self.mark_used_type(elem, depth, used, lvl);
+                self.mark_used_expr(size, depth, used, lvl);
+            }
+            TypeView::DependentSizedArray { elem, size }
+            | TypeView::DependentVector { elem, size, .. }
+            | TypeView::PackIndexing { pattern: elem, index: size, .. } => {
+                self.mark_used_type(elem, depth, used, lvl);
+                if let Some(e) = expr_op(size) {
+                    self.mark_used_expr(e, depth, used, lvl);
+                }
+            }
+            TypeView::DependentBitInt { width, .. } | TypeView::DependentDecltype(width) => {
+                if let Some(e) = t.profile_expr(width) {
+                    self.mark_used_expr(e, depth, used, lvl);
+                }
+            }
+            TypeView::Decltype { expr, .. } => self.mark_used_expr(expr, depth, used, lvl),
+            TypeView::TypeOf { operand, .. } => match operand {
+                TypeOfOperand::Expr(e) => self.mark_used_expr(e, depth, used, lvl),
+                TypeOfOperand::Type(x) => self.mark_used_type(x, depth, used, lvl),
+                TypeOfOperand::Profile(p) => {
+                    if let Some(e) = t.profile_expr(p) {
+                        self.mark_used_expr(e, depth, used, lvl);
+                    }
+                }
+            },
+            TypeView::Splice { operand, .. } => {
+                if let Some(e) = expr_op(operand) {
+                    self.mark_used_expr(e, depth, used, lvl);
+                }
+            }
+            TypeView::MemberPointer { pointee, class } => {
+                self.mark_used_type(QualType::unqual(class), depth, used, lvl);
+                self.mark_used_type(pointee, depth, used, lvl);
+            }
+            TypeView::Function(p) => {
+                self.mark_used_type(p.ret(), depth, used, lvl);
+                for &x in t.params(&p) {
+                    self.mark_used_type(x, depth, used, lvl);
+                }
+            }
+            TypeView::InjectedClassName { injected, .. } => {
+                self.mark_used_type(injected, depth, used, lvl);
+            }
+            TypeView::DependentName { nns, .. } => self.mark_used_nns(nns, depth, used, lvl),
+            TypeView::DependentTemplateSpecialization { nns, args, .. } => {
+                self.mark_used_nns(nns, depth, used, lvl);
+                self.mark_used_args(args, depth, used, lvl);
+            }
+            TypeView::TemplateSpecialization { name, args, .. } => {
+                self.mark_used_name(name, depth, used, lvl);
+                self.mark_used_args(args, depth, used, lvl);
+            }
+            _ => {}
+        }
+    }
+
+    fn mark_at(used: &mut [bool], depth: u32, at: u32, index: u32) {
+        if at == depth
+            && let Some(u) = used.get_mut(index as usize)
+        {
+            *u = true;
+        }
+    }
+
+    fn mark_parm(&self, p: DeclId, depth: u32, used: &mut [bool]) {
+        if let Some(i) = self.ast.template_parm(p) {
+            Self::mark_at(used, depth, u32::from(i.depth), u32::from(i.index));
+        }
+    }
+
+    fn mark_used_args(&self, args: ArgListId, depth: u32, used: &mut [bool], lvl: u32) {
+        for &a in self.ast.types.args(args) {
+            self.mark_used_arg(a, depth, used, lvl);
+        }
+    }
+
+    fn mark_used_arg(&self, a: TemplateArg, depth: u32, used: &mut [bool], lvl: u32) {
+        match a.view() {
+            ArgView::Type(x) => self.mark_used_type(x, depth, used, lvl),
+            ArgView::Expr { expr, .. } => self.mark_used_expr(expr, depth, used, lvl),
+            ArgView::Profile(p) => {
+                if let Some(e) = self.ast.types.profile_expr(p) {
+                    self.mark_used_expr(e, depth, used, lvl);
+                }
+            }
+            ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. } => {
+                self.mark_used_name(n, depth, used, lvl);
+            }
+            ArgView::Pack(l) => self.mark_used_args(l, depth, used, lvl),
+            _ => {}
+        }
+    }
+
+    fn mark_used_name(&self, n: TemplateNameId, depth: u32, used: &mut [bool], lvl: u32) {
+        match self.ast.types.template_name_view(n) {
+            TemplateName::TemplateTemplateParm { depth: dd, index, .. }
+            | TemplateName::CanonTemplateTemplateParm { depth: dd, index, .. } => {
+                Self::mark_at(used, depth, dd, index);
+            }
+            TemplateName::Qualified { nns, underlying, .. } => {
+                self.mark_used_nns(nns, depth, used, lvl + 1);
+                self.mark_used_name(underlying, depth, used, lvl + 1);
+            }
+            TemplateName::DependentIdentifier { nns, .. }
+            | TemplateName::DependentOperator { nns, .. } => {
+                self.mark_used_nns(nns, depth, used, lvl + 1);
+            }
+            _ => {}
+        }
+    }
+
+    fn mark_used_nns(&self, n: kiln_ast::NnsId, depth: u32, used: &mut [bool], lvl: u32) {
+        let t = &self.ast.types;
+        if lvl > 256 || !t.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+            return;
+        }
+        let (prefix, ty) = match t.nns_view(n) {
+            Nns::Type { prefix, ty, .. } => (prefix, Some(ty)),
+            Nns::Identifier { prefix, .. } => (prefix, None),
+            _ => (None, None),
+        };
+        if let Some(p) = prefix {
+            self.mark_used_nns(p, depth, used, lvl + 1);
+        }
+        if let Some(ty) = ty {
+            self.mark_used_type(ty, depth, used, lvl + 1);
+        }
+    }
+
+    /// [`Self::mark_used_type`] for an expression: a non-type or template
+    /// template parameter it names, and every type it holds.
+    fn mark_used_expr(&self, e: ExprId, depth: u32, used: &mut [bool], lvl: u32) {
+        let n = self.ast.exprs.get(e);
+        if lvl > 256 || !n.deps().intersects(ExprDeps::TYPE_VALUE_INST) {
+            return;
+        }
+        let lvl = lvl + 1;
+        match n.kind() {
+            ExprKind::DeclRefExpr => self.mark_parm(self.ast.exprs.decl(e), depth, used),
+            ExprKind::SizeOfPackExpr => {
+                if let Some(d) = DeclId::from_raw(n.a()) {
+                    self.mark_parm(d, depth, used);
+                }
+            }
+            ExprKind::ConceptSpecializationExpr => {
+                if let Some(d) = DeclId::from_raw(n.a()) {
+                    self.mark_parm(d, depth, used);
+                }
+                if let Some(l) = ArgListId::from_raw(n.b()) {
+                    self.mark_used_args(l, depth, used, lvl);
+                }
+            }
+            ExprKind::UnresolvedLookupExpr | ExprKind::DependentScopeDeclRefExpr => {
+                if n.kind() == ExprKind::DependentScopeDeclRefExpr {
+                    if let Some(q) = kiln_ast::NnsId::from_raw(n.a()) {
+                        self.mark_used_nns(q, depth, used, lvl);
+                    }
+                } else if let Some(d) = self.var_ttp_ref(e) {
+                    self.mark_parm(d, depth, used);
+                }
+                if let Some(&l) = self.ast.templates.expr_targs.get(e) {
+                    self.mark_used_args(l, depth, used, lvl);
+                }
+            }
+            ExprKind::UnaryExprOrTypeTraitExpr => {
+                if let Some(t) = self.ast.exprs.trait_type_arg(e) {
+                    self.mark_used_type(t, depth, used, lvl);
+                }
+            }
+            k if k.is_cast() => {
+                if let Some(t) = self.ast.exprs.cast_written_type(e) {
+                    self.mark_used_type(t, depth, used, lvl);
+                }
+            }
+            ExprKind::RequiresExpr => {
+                let Some(rq) = self.ast.requires_of(e) else { return };
+                for p in self.ast.lists.iter::<DeclId>(rq.params) {
+                    if let Some(t) = self.ast.decls.get(p).ty() {
+                        self.mark_used_type(t, depth, used, lvl);
+                    }
+                }
+                for r in self.ast.templates.requirements(rq) {
+                    match *r {
+                        Requirement::Simple(x)
+                        | Requirement::Nested(x)
+                        | Requirement::Compound { expr: x, .. } => {
+                            self.mark_used_expr(x, depth, used, lvl);
+                        }
+                        Requirement::Type(t, _) => self.mark_used_type(t, depth, used, lvl),
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        for k in self.ast.exprs.children(e, &self.ast.lists) {
+            self.mark_used_expr(k, depth, used, lvl);
+        }
+        // A type the node keeps as its own (`T()`, `T{}`).
+        self.mark_used_type(n.ty(), depth, used, lvl);
     }
 }
 
