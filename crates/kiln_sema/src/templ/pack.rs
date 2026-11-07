@@ -994,6 +994,7 @@ impl Sema<'_, '_> {
     }
 
     /// The packs expression `e` names outside expansions, in order.
+    #[allow(clippy::too_many_lines)]
     fn expr_packs(&self, e: ExprId, out: &mut Vec<DeclId>, depth: u32) {
         use kiln_ast::expr::ExprDeps;
         let n = self.ast.exprs.get(e);

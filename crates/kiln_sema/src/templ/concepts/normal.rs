@@ -260,8 +260,8 @@ impl Sema<'_, '_> {
         let mut acc: Option<NormId> = None;
         for i in 0..len {
             let mut mi = margs.clone();
-            for (k, &s) in slots.iter().enumerate() {
-                mi[s] = elems[k][i];
+            for (&s, e) in slots.iter().zip(&elems) {
+                mi[s] = e[i];
             }
             let mi = self.ast.types.arg_list(&mi);
             let x = self.normalize(pattern, Some((cc, mi)), depth + 1);
