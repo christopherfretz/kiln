@@ -4373,6 +4373,21 @@ The `SpecKind` transitions are those of §4.5.
   be automatic ("reference to 'x' is not a constant expression"). The
   value is the built-in `&` of the bound glvalue, re-interned at the
   reference type so it prints as `T<gi>`.
+- **Disallowed bases** ([temp.arg.nontype]/6, `args.rs`
+  `invalid_template_arg_base`): a pointer argument, or the address a
+  reference argument binds, whose base is a string literal, a `typeid`
+  result or a temporary is an error, "{pointer|reference} to
+  [subobject of ]{string literal|type_info object|temporary object} is
+  not allowed in a template argument" (clang
+  `err_constexpr_invalid_template_arg`); "subobject of" when the value
+  is not the whole object (a decayed literal, a non-zero offset). For an
+  explicitly-specified argument of a function template the error is
+  deduction's invalid-argument failure, so `make<"ab">` drops a
+  `template <auto p>` candidate and picks one whose parameter is a class
+  type (WP-792; `temp.arg.nontype/string-literal-typeid-argument.cpp`,
+  `string-literal-argument-sfinae-run.cpp`). Gap: clang words a
+  `__func__` argument "predefined '__func__' variable"; kiln says
+  "string literal".
 - **Oven.** `var_info` treats the object as a usable constant whose value
   is its `ConstValueId`; `lv()` addresses it as a global.
 - **Codegen.** `param_object_global`: a `linkonce_odr dso_local constant`
