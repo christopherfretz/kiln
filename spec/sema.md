@@ -4096,6 +4096,14 @@ function) elsewhere.
     range [0, M]`, at the callee); a dependent one is checked at
     instantiation. The call is `void` and never a constant expression
     (the Oven traps it; `ext.gnu.builtins/prefetch-{args,template-args,constexpr}.cpp`).
+  - `__builtin_memcpy_inline(dst, src, n)` (id 2176, `vv*vC*Iz`,
+    `NoThrow`) and `__builtin_assume_separate_storage(a, b)` (id 2177,
+    `vvCD*vCD*`, `NoThrow, Const`) are ordinary signature builtins
+    (WP-726): the operands convert to the parameter types, a non-constant
+    `n` is `argument to '__builtin_memcpy_inline' must be a constant
+    integer`, and neither call is a constant expression (clang 19 and 22
+    evaluate neither); `__has_builtin` answers 1 for both
+    (`ext.gnu.builtins/memcpy-inline-{run,args}.cpp`).
   - `__builtin_elementwise_add_sat(x, y)` / `_sub_sat(x, y)` (custom,
     `vector_ops.rs` `builtin_elementwise_sat`; WP-432). At 22
     (`BuiltinElementwiseMath` with clang 22's integer restriction): both

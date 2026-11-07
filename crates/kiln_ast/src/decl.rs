@@ -5109,6 +5109,17 @@ pub mod builtin {
     /// optional `rw` and `locality` are integer constants in [0, 1] and
     /// [0, 3] (clang `Sema::BuiltinPrefetch`).
     pub const PREFETCH: u32 = 976;
+    // ---- WP-726 (kiln-private ids).
+    /// `void __builtin_memcpy_inline(void *, const void *, size_t)` (clang
+    /// `Builtins.td` `MemcpyInline`, `vv*vC*Iz`, `NoThrow`): the size an
+    /// integer constant expression; `llvm.memcpy.inline`. Not a constant
+    /// expression.
+    pub const MEMCPY_INLINE: u32 = 2176;
+    /// `void __builtin_assume_separate_storage(const volatile void *,
+    /// const volatile void *)` (clang `BuiltinAssumeSeparateStorage`,
+    /// `NoThrow, Const`): `llvm.assume(i1 true)` with a
+    /// `"separate_storage"` operand bundle.
+    pub const ASSUME_SEPARATE_STORAGE: u32 = 2177;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
@@ -5146,6 +5157,9 @@ pub mod builtin {
         row(NONTEMPORAL_STORE, "__builtin_nontemporal_store", "v.", T),
         row(NONTEMPORAL_LOAD, "__builtin_nontemporal_load", "v.", T),
         row(NONDETERMINISTIC_VALUE, "__builtin_nondeterministic_value", "v.", N | T),
+        // WP-726.
+        row(MEMCPY_INLINE, "__builtin_memcpy_inline", "vv*vC*Iz", N),
+        row(ASSUME_SEPARATE_STORAGE, "__builtin_assume_separate_storage", "vvCD*vCD*", N | C),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19

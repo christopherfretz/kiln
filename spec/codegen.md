@@ -527,7 +527,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       memory(argmem: readwrite, inaccessiblemem: readwrite)` with a
       `nocapture readonly` (22: `readonly captures(none)`) pointer and
       three `immarg` operands (WP-610,
-      `builtin_prefetch.cpp`); `__builtin_ia32_pause()` is `call void
+      `builtin_prefetch.cpp`); `__builtin_memcpy_inline(d, s, n)` is
+      `call void @llvm.memcpy.inline.p0.p0.i64(ptr align A d, ptr align B
+      s, i64 n, i1 false)` (declared like `llvm.memcpy`), and
+      `__builtin_assume_separate_storage(a, b)` is `call void
+      @llvm.assume(i1 true) [ "separate_storage"(ptr a, ptr b) ]` (WP-726,
+      `builtin_memcpy_inline.cpp`); `__builtin_ia32_pause()` is `call void
       @llvm.x86.sse2.pause()`, declared `nounwind`
       (`target.x86/ia32-pause-ir{,-19}.cpp`); the x86 builtins in
       general are spec/landed/codegen/WP-630.md.
