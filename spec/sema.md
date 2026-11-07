@@ -6577,7 +6577,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     `class.conv.fct/self-conversion-not-viable-diags.cpp`.
   - character arrays from string literals: the bound is deduced, and
     an over-long string is an error
-    (`initializer-string for char array is too long`, two arguments)
+    (`initializer-string for char array is too long`, two arguments).
+    The literal may be enclosed in braces ([dcl.init.string]/1,
+    [dcl.init.list]/3.3): a braced list (top level, member or element)
+    for a character array whose first element is a string literal
+    initializes the array from it (`braced_string_init`), and a further
+    element is `excess elements in char array initializer` (WP-668;
+    tests `tests/conformance/dcl.init.string/braced-string-literal-*.cpp`)
   - an array from an expression that is not a braced list or (for a
     character array) a string literal ([dcl.init.general]/16.5) is
     `array initializer must be an initializer list`, at the entity: the
