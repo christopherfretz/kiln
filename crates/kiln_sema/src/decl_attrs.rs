@@ -399,6 +399,7 @@ impl Sema<'_, '_> {
             }
             self.check_decl_attr(d, kind, node)
         });
+        self.unify_fn_section(d, attrs);
     }
 
     /// One attribute of [`Sema::check_decl_attrs`]; false drops it.
