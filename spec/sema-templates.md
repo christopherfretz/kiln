@@ -3273,6 +3273,14 @@ adjusted to `T`, deducing `T = U&` (`int (*)(int&) = f` for
 `template <class... Args> int f(Args&&...)`). WP-446,
 `tests/conformance/temp.deduct.funcaddr/forwarding-reference-{lvalue,conflict}.cpp`.
 
+In a parameter-type-list, an `A` that is a pack expansion (from a function
+parameter pack) paired with a `P` that is not fails deduction
+([temp.deduct.type]/10, clang's p22): partial ordering then ranks `R(A)`
+above `R(A...)` for class partial specializations and function templates
+alike. WP-681,
+`tests/conformance/temp.deduct.type/function-parameter-pack-vs-single.cpp`
+(Catch2's `UnaryLambdaTraits<R (C::*)(Arg) const>`).
+
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
 ([temp.deduct.call]/4.3). The success must be unique; otherwise the
