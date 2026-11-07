@@ -3301,6 +3301,14 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     already has a shadow of gets no second shadow and no diagnostic
     (`introduce_shadow`, clang `CheckUsingShadowDecl`;
     `namespace.udecl/p10-*.cpp`).
+  - (WP-724) [class.qual]/2.2: the declarator names the constructors
+    of the class `C` its qualifier nominates (an inheriting
+    using-declaration) when the name is the qualifier's last spelled
+    component (`using B::B;`) or `C`'s own name, its
+    injected-class-name, however the qualifier is spelled (`using
+    BC::B;` with `typedef B<char> BC`, `using std::regex::basic_regex;`;
+    `class_using_declarator`;
+    `class.qual/p2-injected-class-name-after-typedef-run.cpp`).
 - **`using enum`** ([enum.udecl]): `act_on_using_enum(qual, class, name,
   name_loc)` takes the parser's classification of the (possibly
   qualified) name.

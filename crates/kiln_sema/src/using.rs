@@ -324,8 +324,9 @@ impl Sema<'_, '_> {
 
     /// A using-declarator in a class ([namespace.udecl]/3): it names a
     /// member of a base class (`using B::f;`), or, when the name is the
-    /// qualifier's last component (`using B::B;`, [class.qual]/2), the
-    /// constructors of a direct base (WP-114). A dependent qualifier makes
+    /// qualifier's last component (`using B::B;`, [class.qual]/2) or the
+    /// nominated class's own name (WP-724), the constructors of a direct
+    /// base (WP-114). A dependent qualifier makes
     /// an `UnresolvedUsingValue` redone at instantiation.
     fn class_using_declarator(
         &mut self,
@@ -344,8 +345,16 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
+        // [class.qual]/2.2: the name is the last spelled component
+        // (`using B::B;`), or the injected-class-name of the class the
+        // qualifier nominates however it is spelled (`using
+        // std::regex::basic_regex;`).
         let inheriting = force_inheriting
-            || name.as_ident().is_some_and(|n| self.nns_last_name(q.nns) == Some(n));
+            || name.as_ident().is_some_and(|n| {
+                self.nns_last_name(q.nns) == Some(n)
+                    || qk == DeclKind::CXXRecord
+                        && self.ast.decls.get(q.ctx).name().as_ident() == Some(n)
+            });
         if self.is_dependent_ctx(q.ctx)
             || self
                 .ast
