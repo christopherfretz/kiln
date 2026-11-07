@@ -21,6 +21,7 @@
 //! parameter); `A`'s parameters are never substituted.
 
 use kiln_ast::decl::DeclKind;
+use kiln_ast::types::{ArgView, TemplateArg};
 use kiln_ast::{DeclId, QualType, TemplateParamListId};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -75,6 +76,63 @@ impl Sema<'_, '_> {
         }
         let sides = Sides { p: Some(prior), a: None };
         self.ttp_at_least_as_specialized(al, pl, sides) || self.ttp_lists_equal(al, pl, at, sides)
+    }
+
+    /// [temp.arg.template]/3 for deduced arguments: whether each
+    /// deduced template template argument in `args` (`tmpl`'s parameters
+    /// `params`, at `depth`) matches its parameter, as clang's
+    /// `ConvertDeducedTemplateArgument` checks it before substitution. A
+    /// mismatch is diagnosed at `at`, a substitution failure in the
+    /// deduction's SFINAE frame (`T<Ts...>` deduced from
+    /// `integer_sequence<int>` for `template<class...> class T`).
+    pub(crate) fn check_deduced_template_template_args(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        params: &[DeclId],
+        args: &[TemplateArg],
+        at: Loc,
+    ) -> bool {
+        (0..params.len().min(args.len()))
+            .all(|j| self.check_deduced_template_template_arg(tmpl, depth, params[j], j, args, at))
+    }
+
+    /// [`Self::check_deduced_template_template_args`] for parameter `p`
+    /// (index `j` of `args`) alone.
+    pub(crate) fn check_deduced_template_template_arg(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        p: DeclId,
+        j: usize,
+        args: &[TemplateArg],
+        at: Loc,
+    ) -> bool {
+        if self.kind_of(p) != DeclKind::TemplateTemplateParm {
+            return true;
+        }
+        let Some(&a) = args.get(j) else { return true };
+        let elems: Vec<TemplateArg> = match a.view() {
+            ArgView::Pack(l) => self.ast.types.args(l).to_vec(),
+            _ => vec![a],
+        };
+        for x in elems {
+            let ArgView::Template(n) = x.view() else { continue };
+            let Some(d) = self.arg_template_decl(n) else { continue };
+            if !matches!(
+                self.kind_of(d),
+                DeclKind::ClassTemplate
+                    | DeclKind::TypeAliasTemplate
+                    | DeclKind::TemplateTemplateParm
+            ) {
+                continue;
+            }
+            let prior = self.prior_levels(tmpl, depth, &args[..j]);
+            if !self.check_template_template_arg(p, d, at, &prior) {
+                return false;
+            }
+        }
+        true
     }
 
     /// The type of non-type parameter `d`, with `subst` applied when it

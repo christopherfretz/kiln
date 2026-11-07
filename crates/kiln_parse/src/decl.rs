@@ -3261,9 +3261,10 @@ impl Parser<'_, '_> {
                         self.late_fn.noexcept = Some(self.capture_exception_spec());
                         exc = Some(ExcSpec::None);
                     } else {
-                        let this = self
-                            .s
-                            .act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
+                        let this = !d.friend
+                            && self
+                                .s
+                                .act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
                         exc = Some(self.parse_exception_spec());
                         self.s.act_on_end_this_scope(this);
                     }
@@ -3283,9 +3284,12 @@ impl Parser<'_, '_> {
                     // A failed type-id was diagnosed: the declarator is
                     // invalid.
                     // [expr.prim.this]/2: `this` may appear in a member
-                    // function's trailing return type.
-                    let this =
-                        self.s.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
+                    // function's trailing return type; a friend is no
+                    // member (clang's `InitCXXThisScopeForDeclaratorIfRelevant`).
+                    let this = !d.friend
+                        && self
+                            .s
+                            .act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
                     self.type_id_constraint = Loc::INVALID;
                     let ty = self.parse_type_id_no_ctad().unwrap_or(QualType::ERROR);
                     if !d.trailing_constraint.is_valid() {

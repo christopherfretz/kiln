@@ -161,6 +161,12 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_member_call_without_object, self.eloc(x));
             return None;
         }
+        // A bound member function or builtin function operand can only be
+        // called ([expr.ref]/7.3.2); clang's `CheckPlaceholderExpr` rejects
+        // it, so a substitution forming one fails ([temp.deduct.general]/8).
+        if self.check_builtin_fn_use(e) {
+            return None;
+        }
         self.check_unevaluated_side_effects(e);
         // An instantiation-dependent operand: the type is computed at
         // instantiation, canonically `DependentDecltype` (clang's
@@ -461,9 +467,12 @@ impl Sema<'_, '_> {
             Some(e) if kw == AutoKeyword::DecltypeAuto => {
                 // An implicitly movable entity named by a parenthesized
                 // id-expression is an xvalue ([expr.prim.id.unqual]/4,
-                // C++23): `decltype((x))` is then `T&&`.
+                // C++23): `decltype((x))` is then `T&&`. Before C++23 it
+                // stays an lvalue (`T&`), as in clang.
                 let moved = self.implicit_move(e);
-                if self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr {
+                if self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
+                    || self.std < kiln_lex::Std::Cxx23
+                {
                     self.decltype_of(e)
                 } else {
                     self.decltype_of(moved)

@@ -209,7 +209,9 @@ impl Sema<'_, '_> {
     /// unless the unevaluated operand `e` is potentially-throwing
     /// ([except.spec]/6; see [`Sema::can_throw`]). `rparen` is the `)`.
     pub fn act_on_noexcept_expr(&mut self, e: ExprId, loc: Loc, rparen: Loc) -> ExprId {
-        if self.is_err_expr(e) {
+        // [expr.ref]/7.3.2: a bound member function (or builtin function)
+        // operand can only be called (clang's `CheckPlaceholderExpr`).
+        if self.is_err_expr(e) || self.check_builtin_fn_use(e) {
             return self.recover_err(&[e], loc);
         }
         self.check_unevaluated_side_effects(e);

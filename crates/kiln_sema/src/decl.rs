@@ -915,7 +915,12 @@ impl Sema<'_, '_> {
             }
         }
         self.prototype_params.push(frame);
-        (scopes, self.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals))
+        // A friend is no member: no `this` (clang's
+        // `InitCXXThisScopeForDeclaratorIfRelevant`).
+        (
+            scopes,
+            !d.friend && self.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals),
+        )
     }
 
     /// Leaves the scopes [`Sema::act_on_start_trailing_requires`] entered.

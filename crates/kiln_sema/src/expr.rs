@@ -4394,6 +4394,14 @@ impl Sema<'_, '_> {
                 }
                 return Ok(None);
             }
+            // A base class operand is never converted to match a derived
+            // one, not even by a converting constructor (clang's
+            // `TryClassUnification`, the C++11 [expr.cond]/3 rule that
+            // GCC also keeps): `c ? B() : D()` has type `B` although
+            // `D(B)` exists.
+            if self.ast.definition(tr).is_some() && self.derived_inclusive(td, fd) {
+                return Ok(None);
+            }
         }
         // /4.3.3: the type `to` has as a prvalue.
         let target =
