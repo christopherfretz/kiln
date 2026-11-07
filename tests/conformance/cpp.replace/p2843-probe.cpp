@@ -1,7 +1,7 @@
-// P2843R3 ([cpp.cond], [cpp.line], [cpp.replace]): `defined` as a macro
-// name is ill-formed; `defined` produced by macro replacement in #if is
-// ill-formed NDR (clang warns); #line numbers outside [1, 2147483647]
-// are conditionally supported (clang accepts them).
+// P2843R3 ([cpp.replace], [cpp.cond], [cpp.line]; not in cpp.cond/, whose
+// kiln_pp-only runner reports no notes): `defined` as a macro name is
+// ill-formed; `defined` from macro replacement in #if is ill-formed NDR
+// (clang warns); #line 0 and > 2147483647 are conditionally supported.
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 11:9 error "'defined' cannot be used as a macro name"
