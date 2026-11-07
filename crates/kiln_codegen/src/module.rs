@@ -1900,9 +1900,17 @@ impl<'a> Cg<'a> {
 
     /// [`Self::target_attrs`] of function `d` (`None`: a helper without a
     /// declaration): its `target("...")` attribute adds to the
-    /// `target-features` ([`Self::feature_map`]).
+    /// `target-features` ([`Self::feature_map`]), and its
+    /// `disable_tail_calls` attribute gives `"disable-tail-calls"="true"`
+    /// on a declaration and a definition alike (clang
+    /// `ConstructAttributeList`, not on a call site; WP-682).
     pub(crate) fn target_attrs_of(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
         self.size_attrs(out);
+        if let Some(d) = d
+            && self.has_fn_attr(d, kiln_ast::attr::AttrKind::DISABLE_TAIL_CALLS)
+        {
+            out.push(Attr::string("disable-tail-calls", "true"));
+        }
         if let Some(fp) = self.frame_pointer().attr() {
             out.push(Attr::string("frame-pointer", fp));
         }

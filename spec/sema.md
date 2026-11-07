@@ -1718,6 +1718,16 @@ and returns the scope it names:
     note, and the asm statement is dropped. A naked function gets no
     fall-off (-Wreturn-type) or noreturn-returns warning. Test:
     `tests/conformance/dcl.attr/gnu-optnone-minsize-naked.cpp`.
+  - `disable_tail_calls` (`AttrKind::DISABLE_TAIL_CALLS`; GNU syntax or
+    `clang::`, as `minsize`), WP-682: takes no arguments; on a
+    non-function it warns `only applies to functions and Objective-C
+    methods` and is dropped. `check_naked_conflicts` (after
+    `check_optnone_conflicts`; clang `MutualExclusions<[Naked,
+    DisableTailCalls]>`): `naked` or `disable_tail_calls` on this
+    declaration, when the other is on a prior declaration or earlier on
+    this one, is the error `'X' and 'Y' attributes are not compatible`
+    (X the later) with `conflicting attribute is here` at the earlier, and
+    is dropped. Test: `tests/conformance/dcl.attr/gnu-disable-tail-calls.cpp`.
   - `gnu_inline` (GNU syntax or `gnu::`; **GNU inline functions**,
     WP-585, clang `handleGNUInlineAttr`; `AttrKind::GNU_INLINE`): on a
     non-function `'gnu_inline' attribute only applies to functions`

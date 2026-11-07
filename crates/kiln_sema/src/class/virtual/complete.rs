@@ -10,6 +10,7 @@ use kiln_ast::templates::SpecKind;
 use kiln_ast::types::Quals;
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
+use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
 use super::graph::{self, is_method_kind, is_pure, is_virtual, overridden};
@@ -210,7 +211,10 @@ impl Sema<'_, '_> {
                 let n = *self.ast.decls.get(m);
                 // The destructor form is off by default
                 // (`-Winconsistent-missing-destructor-override`).
-                if n.has(DeclFlags::INVALID) || n.kind() == DeclKind::CXXDestructor {
+                if n.has(DeclFlags::INVALID)
+                    || n.kind() == DeclKind::CXXDestructor
+                    || self.name_spelled_in_system_header(n.loc())
+                {
                     continue;
                 }
                 let Some(o) = overridden(&self.ast, m).next() else { continue };
@@ -221,6 +225,22 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+    }
+
+    /// clang `DiagnoseAbsenceOfOverrideControl`: a method whose name is
+    /// spelled in a system header is not diagnosed; a name that is a macro
+    /// argument counts where the macro's body uses the parameter, so a
+    /// system-header macro that declares the method (googletest's
+    /// `MOCK_METHOD` under `-isystem`) silences it even though the name
+    /// was written in user code.
+    fn name_spelled_in_system_header(&self, loc: Loc) -> bool {
+        let sm = self.diags.sm();
+        let at = match sm.expansion_info(loc) {
+            Some(e) if e.kind == kiln_source::ExpansionKind::MacroArg => e.expansion.lo,
+            _ => loc,
+        };
+        let at = sm.spelling_loc(at);
+        at.is_valid() && sm.is_in_system_header(at)
     }
 
     /// clang `ReportOverrides` for the static, deleted and consteval
