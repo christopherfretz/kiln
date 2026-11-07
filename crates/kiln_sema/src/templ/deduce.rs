@@ -598,12 +598,75 @@ impl Sema<'_, '_> {
         }
         match a.view() {
             ArgView::Value { .. } | ArgView::Expr { .. } | ArgView::Profile(_) => {
-                self.record_deduction(parm.index, parm.pack, a, d)
+                let r = self.record_deduction(parm.index, parm.pack, a, d);
+                if r != Tdk::Success || parm.pack {
+                    return r;
+                }
+                self.deduce_nttp_type(e, a, d)
             }
             _ => {
                 d.info.first = Some(p);
                 d.info.second = Some(a);
                 Tdk::NonDeducedMismatch
+            }
+        }
+    }
+
+    /// [temp.deduct.type]/20 (C++17): a deduced non-type parameter whose
+    /// type is dependent, `template<class T, T *Ptr>`, deduces its type
+    /// from the type of the argument `a` (clang's
+    /// `DeduceNonTypeTemplateArgument`, `TDF_SkipNonDependent`; a
+    /// reference parameter matches the argument's type as that
+    /// reference). `e` names the parameter.
+    fn deduce_nttp_type(&mut self, e: Option<ExprId>, a: TemplateArg, d: &mut DeducedArgs) -> Tdk {
+        if self.std < kiln_lex::Std::Cxx17 {
+            return Tdk::Success;
+        }
+        let Some(decl) = e.and_then(|e| self.nttp_decl_of_expr(e)) else { return Tdk::Success };
+        let Some(pt) = self.ast.decls.get(decl).ty() else { return Tdk::Success };
+        if !self.ast.types.is_dependent(pt) {
+            return Tdk::Success;
+        }
+        let at = match a.view() {
+            ArgView::Value { ty, .. } => ty,
+            ArgView::Expr { expr, .. } => self.ast.exprs.get(expr).ty(),
+            ArgView::Profile(pr) => match self.ast.types.profile_expr(pr) {
+                Some(x) => self.ast.exprs.get(x).ty(),
+                None => return Tdk::Success,
+            },
+            _ => return Tdk::Success,
+        };
+        if at == QualType::ERROR {
+            return Tdk::Success;
+        }
+        let at = match self.ast.types.canonical_view(pt) {
+            TypeView::LValueRef(_) if !self.ast.types.is_reference(at) => {
+                self.ast.types.lvalue_ref_to(at)
+            }
+            TypeView::RValueRef(_) if !self.ast.types.is_reference(at) => {
+                self.ast.types.rvalue_ref_to(at)
+            }
+            _ => at,
+        };
+        self.deduce_ty(pt, at, TdfFlags::SKIP_NON_DEPENDENT, d, 0)
+    }
+
+    /// The non-type template parameter declaration `e` names (as
+    /// [`Self::nttp_of_expr`]).
+    fn nttp_decl_of_expr(&self, mut e: ExprId) -> Option<DeclId> {
+        let ex = &self.ast.exprs;
+        loop {
+            match ex.get(e).kind() {
+                ExprKind::ImplicitCastExpr | ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                    e = ex.operand(e);
+                }
+                ExprKind::SubstNonTypeTemplateParmExpr => e = ex.subst_replacement(e),
+                ExprKind::DeclRefExpr => {
+                    let decl = ex.decl(e);
+                    return (self.ast.decls.get(decl).kind() == DeclKind::NonTypeTemplateParm)
+                        .then_some(decl);
+                }
+                _ => return None,
             }
         }
     }

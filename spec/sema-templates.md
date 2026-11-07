@@ -2194,7 +2194,12 @@ parameters, their defaults or their depth goes through one of:
   the arguments are not the primary's own parameters
   ([temp.spec.partial.general]/9.3, "class template partial
   specialization does not specialize any template argument";
-  `check_partial_args`).
+  `check_partial_args`). A non-type argument names the primary's
+  parameter only when the partial specialization's parameter also has
+  the primary parameter's canonical type ([temp.over.link]/6, clang's
+  profile of a non-type parameter includes its type): `template<auto K>
+  class C; template<class T, T *K> class C<K>` specializes `K` (WP-789,
+  tests/conformance/temp.spec.partial.general/auto-primary-same-type-partial-is-primary.cpp).
 - `visible_template(t)`: the latest declaration that is not a friend
   (the one name lookup finds; a friend is invisible to it), else the
   first. The constraints checked for a class template-id
@@ -3651,6 +3656,15 @@ deduction fails as before. Tests:
 - `_Atomic(T)` (WP-154: clang 19 does not deduce through an `AtomicType`,
   so `template<class T> void f(_Atomic(T)*)` called with an
   `_Atomic(int)*` fails to deduce `T`).
+
+**Non-type parameter types** ([temp.deduct.type]/20, C++17 and later).
+A deduced non-type parameter whose declared type is dependent also
+deduces that type from the type of its argument, with
+`SkipNonDependent` (clang's `DeduceNonTypeTemplateArgument`; a reference
+parameter matches the argument's type as that reference): `template<class
+T, T *P> struct S<P>` deduces `T` from `S<&g>`, and the deducibility
+check of a partial specialization finds `T` deducible (WP-789,
+tests/conformance/temp.spec.partial.general/auto-primary-typed-nttp-partial-run.cpp).
 
 **Consistency.** Two deductions of the same param must be canonically
 equal. For NTTPs, the values must be equal after conversion to the

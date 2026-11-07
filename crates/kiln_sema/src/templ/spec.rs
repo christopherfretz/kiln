@@ -12,6 +12,7 @@
 use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::templates::SpecKind;
+use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TypeFlags};
 use kiln_ast::{DeclHead, DeclId, QualType};
 use kiln_diag::DiagId;
@@ -468,7 +469,10 @@ impl Sema<'_, '_> {
         let conv_args: Vec<TemplateArg> = self.ast.types.args(conv.sugared).to_vec();
         if !constrained
             && params.len() == conv_args.len()
-            && params.iter().zip(&conv_args).all(|(&p, &a)| self.arg_names_param(p, a))
+            && params
+                .iter()
+                .zip(&conv_args)
+                .all(|(&p, &a)| self.arg_names_param(p, a) && self.same_nttp_type(p, a))
         {
             let d = self
                 .diag(DiagId::sema_partial_spec_args_match_primary, name_loc)
@@ -490,6 +494,29 @@ impl Sema<'_, '_> {
             return Err(());
         }
         Ok(conv)
+    }
+
+    /// Whether argument `a` that names non-type parameter `p` of the
+    /// primary template is a parameter of the same type: `template<auto K>
+    /// class C; template<class T, T *K> class C<K>` specializes `K`
+    /// ([temp.over.link]/6: equivalent non-type template parameters have
+    /// equivalent types; clang profiles the parameter's type). True for
+    /// any other argument.
+    fn same_nttp_type(&self, p: DeclId, a: TemplateArg) -> bool {
+        let ArgView::Expr { expr, .. } = a.view() else { return true };
+        let mut e = expr;
+        if self.ast.exprs.get(e).kind() == ExprKind::PackExpansionExpr {
+            e = self.ast.exprs.operand(e);
+        }
+        if self.ast.exprs.get(e).kind() != ExprKind::DeclRefExpr {
+            return true;
+        }
+        let d = self.ast.exprs.decl(e);
+        let ty = |x: DeclId| {
+            let t = self.ast.decls.get(x).ty().unwrap_or(QualType::ERROR);
+            self.ast.types.canonical(t)
+        };
+        ty(d) == ty(p)
     }
 
     /// [temp.spec.partial.general]/8 (clang's
