@@ -757,6 +757,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-731 | contracts sema gaps: lambda captures of parameters, explicit specialization adding contracts, friend redecl postcondition-param rule, dump prints type-parameter-0-0, spurious constexpr note after predicate error (spec/contracts.md:324-340) | WP-706 | done by WP-755 (#339) |
 | WP-755 | contracts part 3: WP-731 sema gaps, WP-744 coroutine postconditions, virtual-function rule check | WP-731 | contracts part 3: lambda captures, explicit specs, friend redecl, dump, coroutine postconditions (#339) |
 | WP-732 | C++26 DIS todo papers: P3598, P2841, P3074, P3726, P1494, P3475 (docs/STANDARD_SUPPORT.md:337-342) | WP-706 | open |
+| WP-765 | P3598R0 const splices in contract assertions; WP-755 contract follow-ups (unused implicit capture, friend templates, site names) | WP-732 | in progress |
 | WP-746 | P2841R7 concept and variable-template template parameters | WP-732 | P2841R7 partial: concept/variable TTPs, kinds, concept-dependent constraints, mangling (#336) |
 | WP-743 | C++26 DIS: trivial unions P3074R7 + union lifetime P3726R2 + P3475R2 core (Oven union lifetime) | WP-732 | P3074R7 done, P3726R2 partial (Oven union lifetime), P3475R2 core done (#337) |
 | WP-733 | triage untested DRs P4143, P4149, P3769 (docs/STANDARD_SUPPORT.md:393-395) | WP-706 | open |

@@ -151,6 +151,36 @@ assertion-statement:
   `[=]`, `[&]`, by copy and by reference), and the captures carry the
   same const-ness (WP-755). Watermark: a declaration whose index is below
   `ContractCtx::watermark` was declared outside the assertion.
+- **Splices** ([expr.prim.splice]/2.5, P3598R0, with `-freflection`):
+  a splice-expression `[: r :]` in the predicate that designates such a
+  variable or structured binding is built through the same decl
+  reference (`act_on_splice_expr` -> `build_decl_ref`) and gets the same
+  const type, also when `r` is a template argument (on the
+  instantiation); `this->[: ^^C::m :]` is const through `this`. A splice
+  designating an object (`[: std::meta::object_of(^^v) :]`, /2.3) keeps
+  the object's type: `splice_object_expr` builds it with the contract
+  context cleared, so it is the visible way to modify a variable from a
+  predicate, as the paper intends (WP-765).
+- **Implicit captures only for contract assertions**
+  ([expr.prim.lambda.closure]/10): a lambda whose implicit capture of a
+  local entity (a variable, a structured binding, `*this`) has every
+  potential reference in its call operator's function contract
+  assertions or in assertion-statements of its body is ill-formed:
+  `sema_contract_only_implicit_capture` ("'i' is not implicitly captured
+  by a contract assertion", GCC's words; for a variable with the note
+  "'i' declared here") at the first such reference, once per lambda and
+  entity, checked when the lambda ends (`check_contract_only_captures`).
+  A reference from a lambda nested in the assertion counts for every
+  enclosing lambda the capture passes through (Example 6, f7); one
+  outside any assertion, before or after, makes the capture ordinary.
+  Each new implicit capture made inside an assertion is recorded per
+  lambda (`LambdaScope::contract_caps`, `note_contract_capture_use` in
+  `lambda/capture.rs`) and dropped at a reference outside the
+  assertions. A reference that is not an odr-use (a constant's value)
+  captures nothing and is not diagnosed. In a template the check runs
+  on the definition (the pattern's lambda captures as written) and an
+  instantiation does not report it again; a nested lambda reported for an entity is not
+  reported again for its enclosing lambda (WP-765).
 - **Modification**: assigning to (or incrementing) a name that is const
   only by the rule above reports `sema_contract_const_modify` ("cannot
   modify 'x' in a contract predicate: it is implicitly const"), for a
@@ -169,9 +199,15 @@ assertion-statement:
   parameter is adjusted to a pointer and is never const in this sense
   (`sema_contract_post_nonconst_param` at the parameter, once per
   parameter; the parameter stays valid, so the body and a constant
-  evaluation are unaffected). Checked at instantiation, not on the
-  pattern. A friend redeclaration is checked too, with or without a seq
-  (`check_friend_without_contracts` in `kiln_parse/src/class.rs`).
+  evaluation are unaffected). In a template (a function template, a
+  member or a friend of a class template) a parameter of non-dependent
+  type is checked on the definition, once (its instantiations do not
+  report it again: `post_param_pattern_locs`); one of dependent type at
+  instantiation. A friend redeclaration is checked too, with or without
+  a seq (`check_friend_without_contracts` in `kiln_parse/src/class.rs`);
+  a non-dependent friend of a class template without a seq is checked
+  on the definition against the namespace function it will redeclare
+  (`pattern_friend_prev`, recorded in `friend_pattern_prev`) (WP-765).
 - **Coroutines** ([dcl.fct.def.coroutine]/6): when the body turns out
   to be a coroutine, a postcondition that odr-uses a non-reference
   parameter is `sema_contract_coroutine_post_param` (once per
@@ -399,6 +435,7 @@ after the decl, the declared type. clang has no such nodes, so the
 | `sema_contract_const_modify` | cannot modify 'x' in a contract predicate: it is implicitly const |
 | `sema_contract_coroutine_post_param` | a postcondition of a coroutine cannot odr-use the non-reference parameter 'x' |
 | `sema_contract_deleted_or_defaulted` | deleted/defaulted function cannot have function contract specifiers |
+| `sema_contract_only_implicit_capture` | 'x' is not implicitly captured by a contract assertion (note: 'x' declared here) |
 | `sema_contract_post_nonconst_param` | a value parameter used in a postcondition must be const |
 | `sema_contract_redecl_adds` | declaration adds function contract specifiers to 'f' (note: previous declaration) |
 | `sema_contract_redecl_mismatch` | function contract specifiers of 'f' do not match the previous declaration (note) |
@@ -461,21 +498,51 @@ Divergences recorded by WP-755 (`oracle: none` unless noted):
   (`p7-friend-redecl.cpp` is compared with GCC on the verdict only, as
   every `oracle: gcc` compile-fail test is).
 
+Divergences recorded by WP-765:
+
+- P3598R0 ([expr.prim.splice]/2.5): GCC 16.1 const-ifies a splice of
+  an object (`[: std::meta::object_of(^^g) :]`, /2.3) as well; the
+  wording const-ifies only a splice designating a variable or a
+  structured binding, so kiln lets the object splice modify `g`
+  (`expr.prim.splice/contract-constify-object.cpp`, no oracle). GCC also
+  misses the const-ification of a splice whose reflection is a template
+  argument (`t<^^g>`); kiln reports it on the instantiation
+  (`contract-constify.cpp` is compared on the verdict only).
+- [expr.prim.lambda.closure]/10: GCC 16.1 does not diagnose a capture
+  that reaches the assertion only through a nested lambda (Example 6,
+  f7) or an implicit `this` capture, and diagnoses a constant whose use
+  is not an odr-use (it captures nothing);
+  `p10-contract-only-capture-kiln.cpp` has no oracle,
+  `p10-contract-only-capture.cpp` (the rest of Example 6) is compared
+  with GCC.
+- [dcl.contract.func]/7 in templates: GCC checks a friend
+  redeclaration without a seq only when the class is instantiated, never
+  checks a friend *definition* (`h`), and never checks a dependent
+  friend; kiln checks every non-dependent case on the definition,
+  once for the pattern (`p7-template-definition.cpp`, no oracle).
+- A violation in an explicit specialization of a member of a class
+  template names the specialization as clang 22's
+  `__PRETTY_FUNCTION__` does: `int C<long>::m(long) [T = long]` (the
+  specialization's own parameter types, with clang's bracket for the
+  enclosing class's arguments); GCC prints
+  `int C<T>::m(T) [with T = long int]`
+  (`basic.contract.eval/run-site-name-explicit-spec.cpp`,
+  `dcl.fct.def.general/predefined-member-explicit-spec.cpp` compared
+  with clang). The name comes from sema's `predefined_function_names`
+  (`Sema::function_pattern` stops at a member explicit
+  specialization), shared with `__PRETTY_FUNCTION__`.
+
 Gaps (follow-ups):
 
 - `-fcontract-evaluation-semantic=` has no per-assertion form;
   `aux` slots 1-3 are reserved.
-- A friend declared in a class template is checked against the
-  postcondition-parameter rule only when the class is instantiated.
-- The function name in a violation of an explicit specialization of a
-  member of a class template prints the template parameter list
-  (`int C<long>::m(T) [T = long]`), where clang's `__PRETTY_FUNCTION__`
-  prints `int C<long>::m(long)`.
-- [expr.prim.lambda.closure] (P2900R14, the paragraph added after /7):
-  a lambda whose implicit capture of a local entity is referenced only
-  in its own function contract assertions or in `contract_assert`s in
-  its body is ill-formed (`[=] pre(i > 0) {}` with a local `i`); kiln
-  accepts it (GCC 16.1 diagnoses it). `kiln_sema/src/lambda/capture.rs`.
+- A friend of a class template whose parameter type is dependent
+  (`friend int m(T a);` redeclaring `int m(const int a) post(r: r == a)`)
+  is not checked against the postcondition-parameter rule on the
+  instantiation either (GCC 16.1 does not check it).
+- `^^p` / `[: ^^p :]` of a local across an intervening lambda
+  ([expr.prim.splice]/2.1.4, [expr.reflect]) is not diagnosed (also
+  outside contracts; `kiln_sema` reflection splice).
 
 Decisions:
 
@@ -490,6 +557,19 @@ Decisions:
   longer has the virtual clause: P3097 (contracts on virtual functions)
   was adopted for C++29; implementing it is a follow-up behind a
   language-mode check, not a C++26 change.
+- **P3097 (contracts on virtual functions) is not implemented
+  (WP-765).** It is C++29 work and not in the Croydon DIS, which kiln's
+  C++26 mode targets. It removes "A virtual function" from
+  [dcl.contract.func]/6 and, as the paper proposes, checks on a
+  virtual function call both the statically chosen function's and the
+  final overrider's seqs (the caller-facing and callee-facing
+  contracts; an overrider's seq is independent of the overridden
+  one's). Implementing it
+  needs a language mode after C++26 (kiln has none yet), a gate on
+  `sema_contract_virtual` keyed on it, the overriding rules in
+  `contracts.rs` and the caller-side evaluation in codegen and the Oven
+  (§6.3 evaluates on the callee side only). Until then a seq on a
+  virtual function is `sema_contract_virtual` in every mode.
 - **Coroutines (WP-755).** The DIS permits a seq on a coroutine (only
   the postcondition-parameter rule, [dcl.fct.def.coroutine]/6, applies).
   The postconditions are evaluated when the coroutine first returns to
@@ -521,7 +601,15 @@ Decisions:
   parameter rule (`p7-*`), predicate conversion, `run-ignore.cpp`, and
   the dump goldens `dump-function.cpp`, `dump-lambda-template.cpp`;
   `p4-explicit-spec.cpp`, `p7-friend-redecl.cpp`,
-  `coroutine-post-param.cpp` (WP-755).
+  `coroutine-post-param.cpp` (WP-755); `p7-template-definition.cpp`
+  (WP-765).
+- `tests/conformance/expr.prim.splice/contract-constify*.cpp` (WP-765,
+  P3598R0): a write through a splice, the const overload chosen through
+  one (compile-fail and run, compared with GCC), and the object splice
+  that stays modifiable (no oracle).
+- `tests/conformance/expr.prim.lambda.closure/p10-contract-only-capture*.cpp`
+  (WP-765): Example 6 compared with GCC, and the nested, `this`,
+  template and non-odr-use cases without an oracle.
 - `tests/conformance/dcl.contract.res/`: result names, `void`, deduced
   return types, a result name in `pre`, modifying the result.
 - `tests/conformance/stmt.contract.assert/`: the statement, syntax,
@@ -543,7 +631,9 @@ Decisions:
   `run-default-handler.cpp`, `run-invoke-default.cpp`. WP-755:
   `run-coroutine-post-{observe,enforce,quick-enforce,ignore}.cpp` (on
   `Inputs/coroutine-post.h`; compared with GCC), `run-lambda-capture.cpp`,
-  `run-explicit-spec.cpp` (no oracle), `ignore-error-recovery.cpp`.
+  `run-explicit-spec.cpp` (no oracle), `ignore-error-recovery.cpp`;
+  `run-site-name-explicit-spec.cpp` (WP-765, no oracle) and
+  `dcl.fct.def.general/predefined-member-explicit-spec.cpp` (clang).
 - `crates/kiln_codegen/tests/contracts.rs`: the IR shape (an `enforce`
   golden, `observe`'s detection modes, `quick_enforce`, no default
   handler when the stdlib ships one, no cost without contracts, the

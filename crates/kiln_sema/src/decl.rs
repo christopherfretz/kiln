@@ -4325,6 +4325,7 @@ impl Sema<'_, '_> {
             self.delayed_exc_equiv.push((f, p));
         }
         if let Some(p) = pattern_prev {
+            self.friend_pattern_prev.insert(f, p);
             // Compared now, or once its replayed specification is known.
             self.delayed_exc_equiv.push((f, p));
             if !late_exc {
