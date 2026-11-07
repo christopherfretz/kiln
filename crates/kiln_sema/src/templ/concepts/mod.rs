@@ -125,6 +125,20 @@ impl ConceptState {
 }
 
 impl crate::Sema<'_, '_> {
+    /// A complete requires-clause `e` ([temp.pre]/9): one naming a pack
+    /// outside any expansion (`requires Cs<T>` with a concept template
+    /// parameter pack `Cs`, `requires Int<Ts>`) is ill-formed
+    /// ([temp.variadic]/12), diagnosed at its begin as "requires clause
+    /// contains unexpanded parameter pack" (clang's
+    /// `ActOnRequiresClause`) and replaced by an error expression.
+    pub fn act_on_requires_clause(&mut self, e: ExprId) -> ExprId {
+        if self.diagnose_unexpanded_written(e, "requires clause", None) {
+            let at = self.begin_loc(e);
+            return self.act_on_error_expr(&[e], at);
+        }
+        e
+    }
+
     /// Checks a constraint-expression where it is written (a concept's
     /// definition or a requires-clause operand; clang's
     /// `CheckConstraintExpression`, [temp.constr.atomic]/3): each atomic
