@@ -290,8 +290,14 @@ impl Cg<'_> {
             };
             let alignment = if ni > 0 { 8 } else { 16 };
             let reg_size = if ni > 0 { u64::from(ni) * 8 } else { 16 };
+            // clang 20+ reads a coerced value whose saved registers skip
+            // its leading empty bytes (`offset` 8) or cover less than the
+            // whole type (a trailing empty member or `alignas` padding)
+            // into a temporary; clang 19 addresses the save area directly
+            // (spec/abi.md §8.12).
+            let partial = self.opts.clang_compat >= 20 && (reg_size < ty_size);
             match &coerce {
-                Some((co, offset)) if *offset == 8 || reg_size < ty_size => {
+                Some((co, offset)) if *offset == 8 || partial => {
                     let co = self.ir(co);
                     let tmp = self.temp(q);
                     let a = self.gep(LTy::I8, rsa, vec![off], false);

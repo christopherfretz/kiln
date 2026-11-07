@@ -2244,7 +2244,9 @@ clang 19 `CGAtomic` at -O0, mirrored:
     and two-SSE structs are reassembled into a temporary of the coerce
     type. A single register class is read in place, or through a
     temporary when the coerce type sits at offset 8, the type is larger
-    than the register span, or an integer type is over-aligned.
+    than the register span (`-fclang-compat` ≥ 20 only; clang 19 reads
+    such a type in place), or an integer type is over-aligned
+    (spec/landed/abi/WP-766.md).
   - Otherwise the address is `overflow_arg_area` (ptrmask-aligned above
     8), advanced by `alignTo(size, 8)`.
 - **`min-legal-vector-width` of a definition** (`def_vector_width`) counts

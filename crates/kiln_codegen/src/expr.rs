@@ -3517,12 +3517,18 @@ impl Cg<'_> {
                 }
                 None => (self.temp(rq), size),
             };
-            let (ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. }) =
-                sig.info.ret.kind.clone()
-            else {
-                unreachable!()
+            let kind = sig.info.ret.kind.clone();
+            let (coerce, offset) = match &kind {
+                ArgKind::Direct { coerce, offset, .. } => (coerce.clone(), *offset),
+                ArgKind::Extend { coerce, .. } => (coerce.clone(), 0),
+                _ => unreachable!(),
             };
-            if self.ir(&coerce) == self.mty(rq) {
+            if offset != 0 {
+                // clang `EmitCall`: the result's bytes start past the
+                // empty eightbyte (`emitAddressAtOffset`).
+                let at = self.at_abi_offset(d, &kind);
+                self.coerced_store_sized(r, &coerce, at, size.saturating_sub(offset));
+            } else if self.ir(&coerce) == self.mty(rq) {
                 // EmitAggregateStore: element-wise for a first-class struct.
                 self.aggregate_store(r, &coerce, d);
             } else {
