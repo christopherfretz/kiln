@@ -946,6 +946,9 @@ pub struct Sema<'a, 'sm> {
     /// The contract assertions whose predicates are being analysed,
     /// innermost last (spec/contracts.md §5).
     pub(crate) contract_ctx: Vec<contracts::ContractCtx>,
+    /// A contract assertion was seen: initializations are checked for
+    /// contract violations ([`Sema::check_contract_init`]).
+    pub(crate) has_contracts: bool,
     /// The static data member whose out-of-line initializer is being
     /// analysed: its class is the access context ([class.access]/7).
     pub(crate) initializing: Option<DeclId>,
@@ -1225,6 +1228,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_specs: kiln_source::fx::FxHashMap::default(),
             nsdmi_this: Vec::new(),
             contract_ctx: Vec::new(),
+            has_contracts: false,
             initializing: None,
             inst_enable_if: None,
             templ: templ::TemplState::default(),

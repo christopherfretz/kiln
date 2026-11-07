@@ -141,6 +141,11 @@ pub(crate) struct RunState {
     /// `CheckingPotentialConstantExpression`): `-Wconstant-evaluated` is
     /// not reported, nested evaluations included.
     pub potential: bool,
+    /// Every contract assertion is ignored ([expr.const.init]/4.1: the
+    /// run deciding whether an initialization is constant-initializable;
+    /// [`crate::Oven::check_contract_init`]). A skipped assertion makes
+    /// the calls that reach it impure (not memoized).
+    pub contracts_off: bool,
 }
 
 impl RunState {
@@ -630,6 +635,37 @@ impl Oven {
         val: usize,
         ptr: bool,
     ) -> Result<bool, Fault> {
+        let Some(v) = self.trial(b, func, pc0, fb, val, TrialMode::Speculative)? else {
+            return Ok(false);
+        };
+        Ok(!ptr || v == 0 || {
+            // clang `EvaluateBuiltinConstantPForLValue`: a null base
+            // (an integer cast to a pointer), or a string literal at
+            // offset 0.
+            let p = Ptr::decode(v as u64);
+            if Ptr::is_nowhere(v as u64) {
+                p.slot == 0 || (p.off == 0 && self.is_literal_slot(p.slot))
+            } else {
+                p.off == 0 && self.is_literal(v as u64)
+            }
+        })
+    }
+
+    /// Runs the region of `func` at `pc0` (ending in a `Ret`) in the
+    /// frame at `fb` as a silent trial of `mode` (spec/oven.md "Trial
+    /// evaluation"): register `val`'s value if it completes, else `None`
+    /// with its effects on the stack, the cleanups and the memory rolled
+    /// back; a resource limit is rolled back and fails the evaluation. A
+    /// speculative trial is a fold (`__builtin_constant_p`'s).
+    fn trial(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        func: u32,
+        pc0: usize,
+        fb: usize,
+        val: usize,
+        mode: TrialMode,
+    ) -> Result<Option<u128>, Fault> {
         let entry = self.stack.len();
         let saved_entry = self.run.entry;
         let pend = self.run.pending.len();
@@ -643,14 +679,17 @@ impl Oven {
         let lax = (self.run.lax, self.mem.lax);
         self.run.entry = entry;
         self.run.silent = true;
-        // clang `EvaluateBuiltinConstantP` folds (`FoldConstant`,
-        // `EM_ConstantFold`): a read of a `const` variable not usable in
-        // constant expressions is only noted, so it is lax too
-        // (`__builtin_constant_p(d)` of a `const double d = 2.5;` is true).
-        self.run.fold = true;
-        (self.run.lax, self.mem.lax) = (true, true);
+        if mode == TrialMode::Speculative {
+            // clang `EvaluateBuiltinConstantP` folds (`FoldConstant`,
+            // `EM_ConstantFold`): a read of a `const` variable not usable
+            // in constant expressions is only noted, so it is lax too
+            // (`__builtin_constant_p(d)` of a `const double d = 2.5;` is
+            // true).
+            self.run.fold = true;
+            (self.run.lax, self.mem.lax) = (true, true);
+        }
         self.run.cev_warn = false;
-        self.mem.checkpoint(TrialMode::Speculative);
+        self.mem.checkpoint(mode);
         let r = self.run_loop(b, func, pc0, fb as u32);
         if r.is_ok() {
             self.mem.commit();
@@ -666,17 +705,7 @@ impl Oven {
         let v = self.regs[fb + val];
         self.regs[fb] = slot;
         let out = match r {
-            Ok(()) => Ok(!ptr || v == 0 || {
-                // clang `EvaluateBuiltinConstantPForLValue`: a null base
-                // (an integer cast to a pointer), or a string literal at
-                // offset 0.
-                let p = Ptr::decode(v as u64);
-                if Ptr::is_nowhere(v as u64) {
-                    p.slot == 0 || (p.off == 0 && self.is_literal_slot(p.slot))
-                } else {
-                    p.off == 0 && self.is_literal(v as u64)
-                }
-            }),
+            Ok(()) => Ok(Some(v)),
             Err((f, _)) if f.kind() != FailKind::NotConstant => Err(f),
             Err(_) => {
                 while self.run.pending.len() > pend {
@@ -686,7 +715,7 @@ impl Oven {
                         self.run.maxd = self.run.maxd.max(p.maxd_saved);
                     }
                 }
-                Ok(false)
+                Ok(None)
             }
         };
         self.cleanups.truncate(clean);
@@ -695,6 +724,48 @@ impl Oven {
         self.mem.release(mark, &self.types);
         self.mem.cur_frame = self.stack.last().map_or(0, |f| f.serial);
         out
+    }
+
+    /// A contract violation ([basic.contract.eval]/7-8; spec/contracts.md
+    /// §6.4) at the assertion whose note is trap `trap` (`not_constant`:
+    /// its predicate is not a core constant expression, 7.3). Under a
+    /// terminating semantic it fails the evaluation (diagnosed when the
+    /// evaluation is: the trap's note, the call stack). Under observe, a
+    /// manifestly constant-evaluated evaluation continues, warning when
+    /// it is not silent; any other (a fold such as `__builtin_constant_p`'s
+    /// operand included) is not a constant.
+    #[inline(never)]
+    fn contract_violation(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        pc: usize,
+        trap: u32,
+        observe: bool,
+        not_constant: bool,
+    ) -> Result<(), Fault> {
+        self.contract_violated = true;
+        if !observe || !self.run.const_context || self.run.fold {
+            return Err(Fault::Trap(trap));
+        }
+        // A cached result would skip the diagnostic.
+        self.run.impure += 1;
+        if !self.run.silent {
+            let mut notes = self.render(b, Fault::Trap(trap), pc).into_iter();
+            let loc = notes.next().map_or(self.traps[trap as usize].loc, |n| n.loc);
+            let id = if not_constant {
+                kiln_diag::DiagId::oven_contract_condition_not_constant_observe
+            } else {
+                kiln_diag::DiagId::oven_contract_predicate_false_observe
+            };
+            // One assertion violated from different calls warns once per
+            // call: the notes differ.
+            let mut d = kiln_diag::Diag::new(id, kiln_source::Span::empty(loc)).allow_duplicate();
+            for n in notes {
+                d = d.note(n.msg, kiln_source::Span::empty(n.loc));
+            }
+            b.diag(d);
+        }
+        Ok(())
     }
 
     fn run_loop(&mut self, b: &mut dyn SemaBridge, func: u32, pc0: usize, fb0: u32) -> Exit {
@@ -1200,7 +1271,10 @@ impl Oven {
                 | Op::Throw
                 | Op::Unwind
                 | Op::Catch
-                | Op::CatchBegin => {
+                | Op::CatchBegin
+                | Op::ContractSkip
+                | Op::ContractFail
+                | Op::ContractTrial => {
                     (pc, fb) = self.run_cold(b, op, pc, fb)?;
                 }
             }
@@ -1752,6 +1826,34 @@ impl Oven {
                     Err(f) => fail!(f),
                 }
                 pc = arg!(2);
+            }
+            Op::ContractSkip => {
+                if self.run.contracts_off {
+                    self.run.impure += 1;
+                    pc = arg!(0);
+                } else {
+                    pc += 2;
+                }
+            }
+            Op::ContractFail => {
+                if let Err(f) =
+                    self.contract_violation(b, pc, arg!(0) as u32, aux & 1 != 0, aux & 2 != 0)
+                {
+                    fail!(f);
+                }
+                pc += 2;
+            }
+            Op::ContractTrial => {
+                let func = self.stack[self.stack.len() - 1].func;
+                let r = match self.trial(b, func, pc + 4, fb, arg!(0), TrialMode::Transactional) {
+                    Ok(Some(v)) if v != 0 => Ok(()),
+                    Ok(v) => self.contract_violation(b, pc, arg!(2) as u32, true, v.is_none()),
+                    Err(f) => Err(f),
+                };
+                if let Err(f) = r {
+                    fail!(f);
+                }
+                pc = arg!(1);
             }
             Op::LabelAddr => {
                 let Some(e) = ExprId::try_new(arg!(1) as u32) else { fail!(Fault::Invalid) };

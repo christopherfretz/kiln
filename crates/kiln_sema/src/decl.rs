@@ -5873,6 +5873,7 @@ impl Sema<'_, '_> {
             self.check_in_class_static_init(v, e);
         }
         self.warn_constant_evaluated_init(v, e);
+        self.check_contract_init(v, e);
     }
 
     /// `ty` with its referenced array of unknown bound replaced by `ety`,

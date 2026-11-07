@@ -76,6 +76,7 @@ impl Sema<'_, '_> {
         result: Option<(Symbol, Loc)>,
         definition: bool,
     ) -> ContractScope {
+        self.has_contracts = true;
         let watermark = self.ast.decls.next_id().index();
         self.push_scope(ScopeKind::Block);
         let result = result.map(|(name, loc)| {
