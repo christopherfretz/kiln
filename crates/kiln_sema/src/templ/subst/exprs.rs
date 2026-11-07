@@ -515,7 +515,7 @@ impl Substituter<'_, '_, '_> {
                 // `x->m` through `operator->`: the chain is formed again
                 // from the substituted `x` ([over.ref]/1).
                 let base = if arrow { self.sema.arrow_chain_object(base) } else { base };
-                let base = self.member_base(base)?;
+                let (base, this_at) = self.member_base_deferred(base)?;
                 let name = self.sema.ast.decls.get(m).name();
                 if name.is_empty() && self.sema.kind_of(m) == DeclKind::Field {
                     // The unnamed object of an anonymous struct or union
@@ -525,6 +525,7 @@ impl Substituter<'_, '_, '_> {
                     let bt = self.sema.ety(base);
                     let ot = if arrow { self.sema.pointee_sugared(bt).unwrap_or(bt) } else { bt };
                     let q = self.sema.ast.types.effective_quals(ot);
+                    self.note_deferred_this(None, this_at);
                     return Ok(self.sema.field_access(base, f, q, arrow, loc));
                 }
                 if self.sema.kind_of(m) == DeclKind::CXXDestructor {
@@ -539,6 +540,7 @@ impl Substituter<'_, '_, '_> {
                     let ty = self.sema.tag_type(cls);
                     let qualified = ex(self).decl_ref_extra(e).and_then(|x| x.qualifier).is_some();
                     let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
+                    self.note_deferred_this(None, this_at);
                     return Ok(self
                         .sema
                         .rebuild_member_destructor(base, ty, qualified, loc, op, arrow));
@@ -577,6 +579,7 @@ impl Substituter<'_, '_, '_> {
                     .sema
                     .act_on_template_member_q(base, qual, name, targs, false, loc, op, arrow);
                 self.sema.pattern_member_access = false;
+                self.note_deferred_this(Some(r), this_at);
                 Ok(r)
             }
             ExprKind::CXXPseudoDestructorExpr => {
@@ -600,7 +603,7 @@ impl Substituter<'_, '_, '_> {
                 let name = self.sema.ast.dependent_member_name(e);
                 let name = self.member_name(name, loc)?;
                 let arrow = n.aux() & 1 != 0;
-                let base = self.member_base(base)?;
+                let (base, this_at) = self.member_base_deferred(base)?;
                 let qual = match self.sema.ast.templates.expr_nns.get(e).copied() {
                     Some(q) => {
                         let at = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
@@ -614,7 +617,10 @@ impl Substituter<'_, '_, '_> {
                 };
                 let kw = n.aux() & 2 != 0;
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
-                Ok(self.sema.act_on_template_member_q(base, qual, name, targs, kw, loc, op, arrow))
+                let r =
+                    self.sema.act_on_template_member_q(base, qual, name, targs, kw, loc, op, arrow);
+                self.note_deferred_this(Some(r), this_at);
+                Ok(r)
             }
             ExprKind::DependentScopeDeclRefExpr => {
                 let callee = std::mem::take(&mut self.as_callee);
@@ -1405,6 +1411,52 @@ impl Substituter<'_, '_, '_> {
             None => None,
         };
         Ok(self.sema.act_on_id_expression_dn(name, loc, qual))
+    }
+
+    /// [`Self::member_base`], except that an implicit `this` is not yet
+    /// captured: whether the access uses it is known only once the
+    /// member is looked up again ([`Self::note_deferred_this`]). Returns
+    /// the location of that deferred use.
+    fn member_base_deferred(&mut self, base: ExprId) -> SubstResult<(ExprId, Option<Loc>)> {
+        let b = *self.sema.ast.exprs.get(base);
+        if b.kind() == ExprKind::CXXThisExpr
+            && self.sema.ast.exprs.this_is_implicit(base)
+            && let Some(t) = self.sema.current_this()
+        {
+            return Ok((self.sema.builder().this_expr(t, true, b.loc()), Some(b.loc())));
+        }
+        Ok((self.member_base(base)?, None))
+    }
+
+    /// The deferred implicit `this` at `at` of the rebuilt member access
+    /// `r` (`None`: a field or destructor access, which uses it): the
+    /// enclosing lambdas capture `this` unless `r` is an implicit member
+    /// overload set with a static member, which uses `this` only once
+    /// an instance member wins ([`Sema::finish_member_winner`]), or a
+    /// static member named without an object. As clang's
+    /// `TreeTransform`, which does not transform an implicit access's
+    /// `this` and builds the member reference again
+    /// (`BuildPossibleImplicitMemberExpr`; [expr.prim.lambda.capture]/8,
+    /// [class.mfct.non.static]/2).
+    fn note_deferred_this(&mut self, r: Option<ExprId>, at: Option<Loc>) {
+        let Some(loc) = at else { return };
+        if let Some(r) = r {
+            if let Some(x) = self.sema.member_overload(r)
+                && let Some(m) = self.sema.ovl.members.get(&x)
+                && m.implicit
+                && !m.decls.iter().all(|&d| {
+                    let f = self.sema.templated_or_self(d);
+                    self.sema.is_instance_member(f)
+                })
+            {
+                return;
+            }
+            let x = self.sema.ignore_parens(r);
+            if self.sema.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr {
+                return;
+            }
+        }
+        self.sema.note_this_use(loc);
     }
 
     fn this_expr(&mut self, implicit: bool, loc: Loc) -> ExprId {

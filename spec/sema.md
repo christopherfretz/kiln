@@ -4234,9 +4234,10 @@ function) elsewhere.
     (`ext.gnu.builtins/memcpy-inline-{run,args}.cpp`).
   - `__builtin_unpredictable(x)` (id 2178, `LiLi`, `NoThrow, Const`;
     WP-726) is an ordinary signature builtin whose value is its converted
-    operand; like clang 19 and 22 it is not a constant expression, and
-    codegen emits the operand without the `!unpredictable` branch hint
-    (`ext.gnu.builtins/unpredictable.cpp`).
+    operand; like clang 19 and 22 it is not a constant expression
+    (`ext.gnu.builtins/unpredictable.cpp`). Codegen emits the operand and,
+    above -O0, the `!unpredictable` hint on the branch or `switch` it
+    controls (spec/codegen.md, `__builtin_expect`; WP-779).
   - `__builtin_elementwise_add_sat(x, y)` / `_sub_sat(x, y)` (custom,
     `vector_ops.rs` `builtin_elementwise_sat`; WP-432). At 22
     (`BuiltinElementwiseMath` with clang 22's integer restriction): both

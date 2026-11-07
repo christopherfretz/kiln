@@ -1629,9 +1629,37 @@ impl Cg<'_> {
             ExprKind::CXXThrowExpr => self.emit_throw(e, false),
             _ => {
                 let v = self.eval_bool(e)?;
-                self.cond_br(v, t, f);
+                let br = self.cond_br(v, t, f);
+                // A condition that is a call of `__builtin_unpredictable`
+                // (implicit conversions stripped, not parentheses) marks
+                // the branch `!unpredictable` when optimizing.
+                let mut c = e;
+                while matches!(
+                    ast.exprs.get(c).kind(),
+                    ExprKind::ImplicitCastExpr
+                        | ExprKind::ExprWithCleanups
+                        | ExprKind::ConstantExpr
+                ) {
+                    c = ast.exprs.operand(c);
+                }
+                self.mark_unpredictable(br, c);
                 Ok(())
             }
+        }
+    }
+
+    /// clang `EmitBranchOnBoolExpr` / `EmitSwitchStmt`: when optimizing,
+    /// a branch or `switch` (instruction `i`) whose condition `c` is a
+    /// call of `__builtin_unpredictable` carries `!unpredictable !{}`.
+    pub(crate) fn mark_unpredictable(&mut self, i: u32, c: ExprId) {
+        if self.opts.optimize()
+            && self.ast.exprs.get(c).kind() == ExprKind::CallExpr
+            && crate::builtins::builtin_callee(self.ast, c)
+                .is_some_and(|(_, b)| b == kiln_ast::decl::builtin::UNPREDICTABLE)
+        {
+            let empty = self.m.md_tuple(&[]);
+            let k = self.m.md_kind("unpredictable");
+            self.f.fir.add_md(i, k, empty);
         }
     }
 

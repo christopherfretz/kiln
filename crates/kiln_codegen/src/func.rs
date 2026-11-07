@@ -952,9 +952,11 @@ impl Cg<'_> {
 
     /// A conditional branch (constant conditions are kept, as `IRBuilder`
     /// does).
-    pub fn cond_br(&mut self, c: V, t: Blk, f: Blk) {
+    pub fn cond_br(&mut self, c: V, t: Blk, f: Blk) -> u32 {
         let v = self.f.fir.push(Op::CondBr { c, t, f }, LTy::VOID);
-        self.loop_md(Fir::last_inst(v), &[t, f]);
+        let i = Fir::last_inst(v);
+        self.loop_md(i, &[t, f]);
+        i
     }
 
     fn loop_md(&mut self, i: u32, succ: &[Blk]) {
