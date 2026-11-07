@@ -54,7 +54,9 @@ if [ "$COMPILER" = kiln ]; then
   fi
   export KILN_RESOURCE_DIR="${KILN_RESOURCE_DIR:-$KILN/resource}"
 else
-  CXX="$(command -v clang++-19)" || { echo "oss-build: clang++-19 not on PATH" >&2; exit 2; }
+  # The control compiler: clang++-19 unless the toml names another
+  # (`control_cxx`, for a project clang 19 cannot build; WP-792).
+  CXX="$(command -v "$P_CONTROL_CXX")" || { echo "oss-build: $P_CONTROL_CXX not on PATH" >&2; exit 2; }
   how='PATH'
 fi
 CXX="$(cd "$(dirname "$CXX")" && pwd)/$(basename "$CXX")"
