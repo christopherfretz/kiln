@@ -1030,4 +1030,17 @@ it through kiln_diag's fatal handling; the core itself carries on.
   invocation's closing `)` (clang behaviour).
 - **Invalid UTF-8.** pp reports the `load_report(FileId)` replacements
   once per file through kiln_diag (`lex_invalid_utf8`), when it first
-  enters the file.
+  enters the file, except those inside a comment ([lex.phases]/1.1, an
+  implementation-defined mapping; WP-802): clang and GCC accept any
+  bytes in a comment (`-Winvalid-utf8` is off by default). For a file
+  with replacements only, `comment_offsets` raw-lexes the buffer with
+  comment recording on, and a replacement inside a recorded comment is
+  not reported. The decoded text is unchanged and the original bytes
+  stay in the `LoadReport` (lossless), so nothing else changes. A
+  sequence anywhere else stays an error: in an identifier (plus
+  `CharNotAllowedInIdentifier` for the U+FFFD, where clang ends the
+  identifier) and in a string or character literal, where clang only
+  warns (`-Winvalid-source-encoding`) for an ordinary literal and copies
+  the bytes; kiln errors (a known difference). Bytes in a skipped `#if`
+  group are still reported (clang skips them).
+  `lex.phases/p1-invalid-utf8-outside-comment-diagnosed.cpp`.

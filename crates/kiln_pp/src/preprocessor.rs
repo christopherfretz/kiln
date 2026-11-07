@@ -537,8 +537,18 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         if system {
             self.sm.set_file_kind(base, file_kind(system, extern_c));
         }
-        if self.entered.insert(file) {
+        if self.entered.insert(file) && !self.sm.load_report(file).is_clean() {
+            // [lex.phases]/1.1 (implementation-defined): an invalid UTF-8
+            // sequence in a comment is accepted, as clang's and GCC's
+            // (`-Winvalid-utf8` is off by default); anywhere else (a
+            // literal, an identifier, between tokens) it is an error.
+            let comments = self.comment_offsets(file, base);
+            let mut c = comments.iter().peekable();
             for r in &self.sm.load_report(file).replacements {
+                while c.next_if(|&&(_, hi)| hi <= r.offset).is_some() {}
+                if c.peek().is_some_and(|&&(lo, _)| lo <= r.offset) {
+                    continue;
+                }
                 let at = base.with_offset(r.offset);
                 Diag::new(DiagId::lex_invalid_utf8, Span::new(at, at.with_offset(3)))
                     .emit(self.diags);
@@ -563,6 +573,19 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             unit: None,
         })));
         self.file_change(FileChange::Enter { file, from, system, extern_c });
+    }
+
+    /// The byte ranges of the comments of `file` (entered at `base`), in
+    /// file order: a raw lex of the whole buffer recording comments, run
+    /// only for a file with invalid UTF-8 ([`Self::push_file`]). The
+    /// decoded text is not changed; each sequence's original bytes stay
+    /// in the file's `LoadReport`.
+    fn comment_offsets(&self, file: FileId, base: Loc) -> Vec<(u32, u32)> {
+        let mut lx = Lexer::new(self.sm, self.interner, file, base, self.lex_opts);
+        lx.set_record_comments(true);
+        while lx.next().kind != TokKind::Eof {}
+        let at = |l: Loc| l.to_raw().wrapping_sub(base.to_raw());
+        lx.take_comments().iter().map(|sp| (at(sp.lo), at(sp.hi))).collect()
     }
 
     /// Whether warnings located in system headers are dropped (no
