@@ -1449,7 +1449,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 | GEP `nuw` (§3 "GEP flags") | compat ≥ 22 | `inbounds` only |
 | `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors), on definitions, declarations and calls, before `noundef` | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
 | `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 for `non-leaf` (AArch64's default; "Frame pointer") | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
-| no empty `!llvm.linker.options` | compat ≥ 22 | `!llvm.linker.options = !{}` |
+| no empty `!llvm.linker.options` | compat ≥ 22 | `!llvm.linker.options = !{}` in C++20 and later only (clang 19 emits it when the language has modules, `LangOptions::Modules` set by `CPlusPlusModules`; `CodegenOptions::cxx_modules`, WP-769) |
 | a padded `_Atomic` operand's atomic-sized temporary zeroed before the copy, and a failed compare-exchange's old value copied back to `*expected` (`atomic.rs`, WP-411; `tests/codegen/atomic_padded.cpp`) | compat ≥ 22 | the temporary's padding left uninitialized; the old value stored only to the temporary |
 | `captures(none)` for `nocapture` (intrinsic declarations such as `llvm.memcpy`/`llvm.memset`; `kiln_llvm` `Module::ir_version`, spec/llvm.md §5) | compat ≥ 22 and LLVM ≥ 21 | `nocapture` (LLVM 19 rejects `captures(..)`) |
 | `!nonnull`/`!align` on reference loads (§3 "Reference loads") | compat ≥ 22 | none |

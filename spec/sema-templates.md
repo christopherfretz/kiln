@@ -8043,7 +8043,18 @@ Each question has a recommendation (R).
     on; timing only with the flag.
 12. **Q12: Order of the constraint check versus the function-type
     substitution (CWG2369).** **R:** follow clang 19 (after
-    substitution), and revisit when the clang oracle moves.
+    substitution), and revisit when the clang oracle moves. An error in
+    a member typedef of a class template specialization that the
+    substitution instantiates is a hard error, not a deduction failure:
+    the immediate context ends at the class template's instantiation
+    ([temp.deduct.general]/8). Which substitution reaches the
+    instantiation first is what the order changes: under clang 22's
+    order (constraints first) a failing constraint excludes the candidate
+    before its function type instantiates the class, under clang 19's it
+    does not, so code that compiles with clang 22 can be the hard error
+    with clang 19 and `-fclang-compat=19` (WP-769;
+    `tests/conformance/temp.deduct.general/member-typedef-hard-error.cpp`,
+    `member-typedef-hard-error-19.cpp`).
 13. **Q13: A deduction memo cache** keyed by `(ft, argument
     type/category signature)`. **R:** defer to M7 and decide from report
     data.

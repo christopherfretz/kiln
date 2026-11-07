@@ -14,6 +14,7 @@ Conversion = "conversion" [BoolConversion, LiteralConversion, ConstantConversion
 ConversionNull = "conversion-null" [NullConversion];
 Cxx11Extensions = "c++11-extensions" [Cxx11LongLong];
 Cxx14Extensions = "c++14-extensions" [Cxx14BinaryLiteral];
+Cxx23Extensions = "c++23-extensions" [Cxx23LambdaAttributes];
 CxxPre20CompatPedantic = "pre-c++20-compat-pedantic" [CxxPre20Compat];
 Dangling = "dangling" [DanglingField, ReturnStackAddress];
 Deprecated = "deprecated" [DeprecatedAnonEnumEnumConversion, DeprecatedArrayCompare, DeprecatedCommaSubscript, DeprecatedDeclarations, DeprecatedEnumCompare, DeprecatedEnumCompareConditional, DeprecatedEnumEnumConversion, DeprecatedEnumFloatConversion, DeprecatedLiteralOperator, DeprecatedMissingCommaVariadicParameter, DeprecatedRedundantConstexprStaticDef, DeprecatedThisCapture, DeprecatedType, DeprecatedVolatile];
