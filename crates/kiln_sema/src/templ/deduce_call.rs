@@ -1462,7 +1462,17 @@ impl Sema<'_, '_> {
             _ => None,
         };
         let a = if let Some(x) = a_ref {
-            self.ast.types.unqualified(x)
+            // /4: A reference type: its referee, whose cv /5 lets be
+            // more than the deduced A's. A result that is not a
+            // reference drops the cv of both (clang's workaround of a
+            // defect in /4): `operator T const &()` deduces `T = U` for
+            // `U const &`, `operator T()` deduces `T = U` too.
+            if self.ast.types.is_reference(ret) {
+                x
+            } else {
+                p = self.ast.types.unqualified(p);
+                self.ast.types.unqualified(x)
+            }
         } else {
             // /3: A not a reference: decay P, else drop its top-level cv.
             let t = &mut self.ast.types;
