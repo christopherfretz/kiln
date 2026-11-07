@@ -6637,7 +6637,11 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     initializer (WP-300). The suffix follows clang's element-type test:
     ` or string literal` for (signed/unsigned) `char`, ` or wide string
     literal` for unqualified `wchar_t`/`char16_t`/`char32_t`, none
-    otherwise (`char8_t`, `const wchar_t`)
+    otherwise (`char8_t`, `const wchar_t`). With a dependent element
+    type or a type-dependent initializer (`T a[N] = "abc";` in a
+    template) neither rule applies until instantiation: the initializer
+    is kept as written ([temp.dep.type]/9; WP-681,
+    `dcl.init.string/string-literal-dependent-element-{run,errors}.cpp`)
   - aggregates, with brace elision, designators (C++20, in order) and
     unions (first member, or the designated one); an aggregate class
     whose list holds one undesignated element of the same or a derived

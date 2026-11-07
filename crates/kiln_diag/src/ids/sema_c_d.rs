@@ -240,6 +240,7 @@ sema_depr_array_comparison = Warning [DeprecatedArrayCompare] (0) "comparison be
 sema_deprecated = Warning [DeprecatedDeclarations] (1) "'{0}' is deprecated";
 sema_deprecated_anonymous_namespace = Warning [IgnoredAttributes] (0) "'deprecated' attribute on anonymous namespace ignored";
 sema_deprecated_builtin = Warning [DeprecatedBuiltins] (2) "builtin {0} is deprecated; use {1} instead";
+sema_deprecated_comma_subscript = Warning [DeprecatedCommaSubscript] (0) "top-level comma expression in array subscript is deprecated in C++20 and unsupported in C++23";
 // clang 22 (CWG2521, [over.literal]/1, [depr.lit]): default-on; emitted at
 // -fclang-compat=22 only (clang 19 has it DefaultIgnore).
 sema_deprecated_literal_operator_id = Warning [DeprecatedLiteralOperator] (1) "identifier '{0}' preceded by whitespace in a literal operator declaration is deprecated";

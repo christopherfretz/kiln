@@ -63,7 +63,7 @@ configure = ["-DCATCH_DEVELOPMENT_BUILD=ON", "-DCATCH_BUILD_TESTING=ON", "-DCATC
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 1
-verified = false
+verified = true
 notes = "Some ctest cases run python3 scripts (ApprovalTests)."
 
 [googletest]

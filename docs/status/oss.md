@@ -41,7 +41,7 @@ The loop:
 <!-- oss:projects -->
 | project | wave | tag | status |
 |---|---|---|---|
-| `catch2` | 1 | `v3.16.1` | not started |
+| `catch2` | 1 | `v3.16.1` | tests at parity |
 | `cli11` | 1 | `v2.6.1` | not started |
 | `doctest` | 1 | `v2.5.3` | not started |
 | `fmt` | 1 | `12.1.0` | not started |
