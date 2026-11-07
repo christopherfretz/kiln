@@ -315,6 +315,11 @@ pub struct TemplateTables {
     /// (`N::template v<T>`; clang's `TemplateKWLoc`), which the printer
     /// writes back (WP-308).
     pub template_kw: ColdMap<ExprId, Loc>,
+    /// The templated declaration (pattern) whose template-head declares
+    /// a concept template parameter: its semantic parent for mangling a
+    /// type-constraint that names it (clang 22's `N <owner> <name> E`,
+    /// spec/abi.md; P2841R7).
+    pub ttp_owner: ColdMap<DeclId, DeclId>,
     /// Set by sema right before it creates a template's pattern: the next
     /// declaration the builder adds is neither a member nor a name (its
     /// template decl is both, [`AstBuilder::template_decl`]).
@@ -435,6 +440,7 @@ impl Default for TemplateTables {
             member_op_loc: ColdMap::new("member_op_loc"),
             pseudo_dtor_name: ColdMap::new("pseudo_dtor_name"),
             template_kw: ColdMap::new("template_kw"),
+            ttp_owner: ColdMap::new("ttp_owner"),
             expr_nns: ColdMap::new("expr_nns"),
             pattern_next: false,
             dependent_depth: 0,
@@ -1390,6 +1396,13 @@ TemplateParmInfo {
         debug_assert_eq!(d, d2);
         let linked = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
         self.mark_template_first(d, pattern, linked.is_ok());
+        let pl = self.ast.templates.param_list(params).params;
+        let ps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(pl).collect();
+        for p in ps {
+            if self.ast.template_parm(p).is_some_and(|x| x.ttp_kind == TtpKind::Concept) {
+                let _ = self.ast.templates.ttp_owner.insert(p, pattern);
+            }
+        }
         // A friend class template declared in a class template is a
         // template of the enclosing namespace, which stays independent.
         let friend_class = kind == DeclKind::ClassTemplate && n.misc().friend() != FriendKind::None;

@@ -70,10 +70,33 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether normal form `n` is eligible for subsumption
+    /// ([temp.constr.order]/3): it contains no concept-dependent
+    /// constraint.
+    fn eligible_for_subsumption(&self, n: NormId) -> bool {
+        let mut seen = kiln_source::fx::FxHashSet::default();
+        let mut work = vec![n];
+        while let Some(x) = work.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            match self.inst.concepts.norm.get(x) {
+                NormNode::Atomic { .. } => {
+                    if self.is_concept_dependent(x) {
+                        return false;
+                    }
+                }
+                NormNode::And(a, b) | NormNode::Or(a, b) => work.extend([a, b]),
+            }
+        }
+        true
+    }
+
     /// Whether the entity with constraints `ca` (key `a`) is more
     /// constrained than the one with `cb` (key `b`)
-    /// ([temp.constr.order]/3): its normal form subsumes the other's and
-    /// not conversely. No constraints is the weakest.
+    /// ([temp.constr.order]/4, /5): it is at least as constrained (its
+    /// normal form is eligible for subsumption and subsumes the other's)
+    /// and not conversely. No constraints is the weakest.
     pub(crate) fn more_constrained(
         &mut self,
         a: DeclId,
@@ -86,7 +109,11 @@ impl Sema<'_, '_> {
         match (p, q) {
             (Some(_), None) => true,
             (None, _) => false,
-            (Some(p), Some(q)) => self.subsumes(p, q) && !self.subsumes(q, p),
+            (Some(p), Some(q)) => {
+                self.eligible_for_subsumption(p)
+                    && self.subsumes(p, q)
+                    && !(self.eligible_for_subsumption(q) && self.subsumes(q, p))
+            }
         }
     }
 

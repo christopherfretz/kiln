@@ -67,13 +67,16 @@ impl NormTable {
 }
 
 use kiln_ast::DeclId;
+use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{BinaryOp, ExprKind};
+use kiln_ast::templates::TtpKind;
 use kiln_ast::ids::RawId;
 use kiln_ast::types::{ArgView, TemplateArg};
 
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::templ::pack::PackOperand;
 use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
@@ -134,6 +137,11 @@ impl Sema<'_, '_> {
                     return x;
                 }
             }
+            ExprKind::CXXFoldExpr => {
+                if let Some(x) = self.normalize_concept_fold(e, ctx, depth) {
+                    return x;
+                }
+            }
             _ => {}
         }
         self.inst.concepts.norm.intern(atom)
@@ -151,14 +159,35 @@ impl Sema<'_, '_> {
         let n = *self.ast.exprs.get(e);
         let c = self.ast.first(DeclId::from_raw(n.a())?);
         let l = ArgListId::from_raw(n.b())?;
-        let args = match ctx {
-            None => l,
+        let ttp = self.kind_of(c) == DeclKind::TemplateTemplateParm;
+        let (c, args) = match ctx {
+            // [temp.constr.normal]/1.4.1: `C<A...>` naming a concept
+            // template parameter is a concept-dependent constraint.
+            None if ttp => return None,
+            None => (c, l),
             Some((cc, m)) => {
                 let d = self.template_param_depth(cc);
                 let prior: Vec<TemplateArg> = self.ast.types.args(m).to_vec();
                 let levels = self.prior_levels(cc, d, &prior);
+                let name = ttp.then(|| self.template_name_for(c));
                 let mut s = Substituter::new(self, &levels);
-                s.args(l, n.loc()).ok()?
+                let args = s.args(l, n.loc()).ok()?;
+                // /1.4.2: the concept argument the mapping gives a
+                // concept template parameter is substituted; one that is
+                // itself a concept template parameter leaves the
+                // constraint concept-dependent.
+                let c = match name {
+                    Some(t) => {
+                        let t = s.template_name(t, n.loc()).ok()?;
+                        let c2 = self.ast.types.template_decl(t)?;
+                        if self.kind_of(c2) != DeclKind::Concept {
+                            return None;
+                        }
+                        self.ast.first(c2)
+                    }
+                    None => c,
+                };
+                (c, args)
             }
         };
         let args = self.concept_default_args(c, args, n.loc());
@@ -172,6 +201,104 @@ impl Sema<'_, '_> {
         let r = self.normalize(ce, Some((c, canonical)), depth + 1);
         self.inst.concepts.checking.pop();
         Some(r)
+    }
+
+    /// [temp.constr.normal]/1.5.3: a fold `(E op ...)` (or `(E op ... op
+    /// I)`) with `op` `&&` or `||` whose pattern expands only concept
+    /// template parameter packs of the concept `ctx` names, all given
+    /// `N > 0` concept arguments by its parameter mapping, normalizes as
+    /// `E0 op ... op EN-1`, each `Ei` normalized with the packs' `i`th
+    /// arguments in the mapping (/1.5.3.1). Anything else (`None`) stays
+    /// one atom: a fold over other packs, or over concept packs the
+    /// mapping does not fix (/1.5.3.2's fold expanded constraint, which
+    /// is concept-dependent and so never subsumes, §8.5).
+    fn normalize_concept_fold(
+        &mut self,
+        e: ExprId,
+        ctx: Option<(DeclId, ArgListId)>,
+        depth: u32,
+    ) -> Option<NormId> {
+        use kiln_ast::expr::ExprDeps;
+        let (cc, m) = ctx?;
+        let n = *self.ast.exprs.get(e);
+        let op = BinaryOp::from_u8(n.aux())?;
+        if !matches!(op, BinaryOp::LAnd | BinaryOp::LOr) {
+            return None;
+        }
+        let (lhs, rhs) = (ExprId::from_raw(n.a()), ExprId::from_raw(n.b()));
+        let right = lhs.is_some_and(|x| {
+            self.ast.exprs.get(x).deps().contains(ExprDeps::UNEXPANDED_PACK)
+        });
+        let (pattern, init) = if right { (lhs?, rhs) } else { (rhs?, lhs) };
+        let level = self.template_param_depth(cc);
+        let mut slots = Vec::new();
+        for p in self.unexpanded_packs(PackOperand::Expr(pattern)) {
+            let info = self.ast.template_parm(p)?;
+            if self.ttp_kind(p) != TtpKind::Concept || info.depth != level {
+                return None;
+            }
+            slots.push(usize::from(info.index));
+        }
+        let margs: Vec<TemplateArg> = self.ast.types.args(m).to_vec();
+        let mut elems: Vec<Vec<TemplateArg>> = Vec::with_capacity(slots.len());
+        for &i in &slots {
+            let ArgView::Pack(l) = margs.get(i)?.view() else { return None };
+            let v = self.ast.types.args(l).to_vec();
+            let known = v.iter().all(|a| {
+                matches!(a.view(), ArgView::Template(t)
+                    if self.ast.types.template_decl(t)
+                        .is_some_and(|d| self.kind_of(d) == DeclKind::Concept))
+            });
+            if !known || elems.first().is_some_and(|f| f.len() != v.len()) {
+                return None;
+            }
+            elems.push(v);
+        }
+        let len = elems.first().map_or(0, Vec::len);
+        if len == 0 {
+            return None;
+        }
+        let mut acc: Option<NormId> = None;
+        for i in 0..len {
+            let mut mi = margs.clone();
+            for (k, &s) in slots.iter().enumerate() {
+                mi[s] = elems[k][i];
+            }
+            let mi = self.ast.types.arg_list(&mi);
+            let x = self.normalize(pattern, Some((cc, mi)), depth + 1);
+            acc = Some(acc.map_or(x, |a| self.norm_join(op, a, x)));
+        }
+        let mut acc = acc?;
+        if let Some(init) = init {
+            let y = self.normalize(init, ctx, depth + 1);
+            acc = if right { self.norm_join(op, acc, y) } else { self.norm_join(op, y, acc) };
+        }
+        Some(acc)
+    }
+
+    /// `a op b` for `op` `&&` (a conjunction) or `||`.
+    fn norm_join(&mut self, op: BinaryOp, a: NormId, b: NormId) -> NormId {
+        let node = if op == BinaryOp::LAnd { NormNode::And(a, b) } else { NormNode::Or(a, b) };
+        self.inst.concepts.norm.intern(node)
+    }
+
+    /// Whether atom `n` is a concept-dependent constraint
+    /// ([temp.constr.normal]/1.4.1): a concept-id naming a concept
+    /// template parameter, or a fold over a concept template parameter
+    /// pack the normalization left unexpanded (/1.5.3.2).
+    pub(crate) fn is_concept_dependent(&self, n: NormId) -> bool {
+        let NormNode::Atomic { expr, .. } = self.inst.concepts.norm.get(n) else { return false };
+        let x = self.ast.exprs.get(expr);
+        match x.kind() {
+            ExprKind::ConceptSpecializationExpr => DeclId::from_raw(x.a())
+                .is_some_and(|d| self.kind_of(d) == DeclKind::TemplateTemplateParm),
+            ExprKind::CXXFoldExpr => [x.a(), x.b()].into_iter().filter_map(ExprId::from_raw).any(|k| {
+                self.unexpanded_packs(PackOperand::Expr(k))
+                    .iter()
+                    .any(|&p| self.ttp_kind(p) == TtpKind::Concept)
+            }),
+            _ => false,
+        }
     }
 
     /// The arguments `args` of a concept-id of `c` completed with the
