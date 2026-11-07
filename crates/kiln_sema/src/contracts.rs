@@ -574,7 +574,7 @@ impl Sema<'_, '_> {
 /// invocation, level by level; a range that does not come out balanced
 /// widens both bounds to the outermost invocations.
 fn predicate_text(sm: &kiln_source::SourceManager, t: kiln_source::Span) -> Option<&str> {
-    let to_file = |mut l: kiln_source::Loc, hi: bool| {
+    let to_file = |mut l: Loc, hi: bool| {
         for _ in 0..64 {
             let Some(e) = sm.expansion_info(l) else { break };
             l = match e.kind {

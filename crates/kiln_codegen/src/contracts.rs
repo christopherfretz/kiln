@@ -64,6 +64,12 @@ impl Cg<'_> {
         if !self.ast.contract_semantic.checks() {
             return Ok(());
         }
+        // Written on another declaration: its parameters are `d`'s.
+        for (src, own) in self.ast.contract_param_aliases(d) {
+            if let Some(&a) = self.f.locals.get(&own) {
+                self.f.locals.insert(src, a);
+            }
+        }
         for s in self.contracts_of(d, ContractKind::Pre) {
             self.emit_contract_check(s)?;
         }
@@ -247,7 +253,7 @@ impl Cg<'_> {
             && let Some(f) = handler
         {
             let inv = self.m.get_function(INVOKE_DEFAULT).expect("declared above");
-            self.weak_definition(f);
+            self.weak_definition(f, false);
             let mut b = IrBuilder::new(&mut self.m, f);
             let entry = b.append_block("");
             b.position_at_end(entry);
@@ -257,9 +263,13 @@ impl Cg<'_> {
     }
 
     /// Makes `f` a weak (replaceable, never inlined) definition with
-    /// clang's definition attributes.
-    fn weak_definition(&mut self, f: kiln_llvm::FuncId) {
+    /// clang's definition attributes (and `nounwind` for a `noexcept` one).
+    fn weak_definition(&mut self, f: kiln_llvm::FuncId, nounwind: bool) {
         let mut fa = vec![Attr::Flag(AttrKind::NoInline)];
+        if nounwind {
+            fa.push(Attr::Flag(AttrKind::NoUnwind));
+            self.nounwind.insert(f, true);
+        }
         self.def_attrs(&mut fa);
         self.target_attrs(&mut fa);
         let fa = self.m.attr_set(&fa);
@@ -275,7 +285,7 @@ impl Cg<'_> {
     /// with the fields of the
     /// `contract_violation` (GCC 16.1's wording).
     fn define_default_handler(&mut self, f: kiln_llvm::FuncId) -> R<()> {
-        self.weak_definition(f);
+        self.weak_definition(f, true);
         let names = |cg: &mut Self, list: &[&str]| -> R<(Value, u64)> {
             let mut elems = Vec::with_capacity(list.len());
             for s in list {

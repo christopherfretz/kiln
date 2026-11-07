@@ -845,6 +845,11 @@ impl Oven {
         // are initialized, before a constructor's ctor-initializers; the
         // postconditions at each return. A function without any pays
         // nothing.
+        for (src, own) in std::mem::take(&mut c.contract_aliases) {
+            if let Some(&l) = c.locals.get(&own) {
+                c.locals.insert(src, l);
+            }
+        }
         for s in contracts {
             if c.b.ast().stmts.contract_kind(s) == kiln_ast::stmt::ContractKind::Pre {
                 c.contract_check(s);
@@ -926,6 +931,9 @@ pub(crate) struct Compiler<'a> {
     pub max: u32,
     locals: FxHashMap<DeclId, Local>,
     mem_vars: FxHashSet<DeclId>,
+    /// The parameters the function contract assertions name, paired with
+    /// the definition's, when they were written on another declaration.
+    contract_aliases: Vec<(DeclId, DeclId)>,
     pending: Vec<Loc>,
     breakables: Vec<Breakable>,
     /// The enclosing statement expressions: the start of the statement of
@@ -1030,6 +1038,7 @@ impl<'a> Compiler<'a> {
             max: 0,
             locals: FxHashMap::default(),
             mem_vars: FxHashSet::default(),
+            contract_aliases: Vec::new(),
             pending: Vec::new(),
             rmw_loc: None,
             opaque: FxHashMap::default(),
@@ -1748,6 +1757,13 @@ impl Compiler<'_> {
             s.stmt(c);
         }
         self.has_temps |= s.temps;
+        // Written on another declaration: its parameters are `def`'s.
+        for (src, own) in ast.contract_param_aliases(def) {
+            if self.mem_vars.contains(&src) {
+                self.mem_vars.insert(own);
+            }
+            self.contract_aliases.push((src, own));
+        }
         list
     }
 
