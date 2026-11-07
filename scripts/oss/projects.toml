@@ -87,7 +87,7 @@ configure = ["-DDOCTEST_WITH_TESTS=ON", "-DDOCTEST_WITH_MAIN_IN_STATIC_LIB=ON"]
 test = "ctest --output-on-failure --timeout 300 -E test_debugger"
 c_compiler = "clang-19"
 wave = 1
-verified = false
+verified = true
 notes = "The test CMake turns warnings into errors for clang-identified compilers; a kiln-only warning becomes a reject. test_debugger is excluded: on aarch64 its SIGTRAP handler returns to the brk of __builtin_debugtrap and loops forever (clang-19 build too)."
 
 [magic_enum]
@@ -123,7 +123,7 @@ configure = ["-DEXPECTED_BUILD_TESTS=ON"]
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 1
-verified = false
+verified = true
 notes = "Tests fetch Catch2 with FetchContent."
 
 [range_v3]

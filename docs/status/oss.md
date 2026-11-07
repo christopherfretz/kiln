@@ -43,14 +43,14 @@ The loop:
 |---|---|---|---|
 | `catch2` | 1 | `v3.16.1` | not started |
 | `cli11` | 1 | `v2.6.1` | not started |
-| `doctest` | 1 | `v2.5.3` | not started |
+| `doctest` | 1 | `v2.5.3` | tests at parity |
 | `fmt` | 1 | `12.1.0` | not started |
 | `googletest` | 1 | `v1.17.0` | blocked (1 cluster) |
-| `magic_enum` | 1 | `v0.9.7` | blocked (1 cluster) |
+| `magic_enum` | 1 | `v0.9.7` | tests at parity |
 | `nlohmann_json` | 1 | `v3.12.0` | not started |
 | `range_v3` | 1 | `0.12.0` | not started |
 | `spdlog` | 1 | `v1.17.0` | tests at parity |
-| `tl_expected` | 1 | `v1.3.1` | not started |
+| `tl_expected` | 1 | `v1.3.1` | tests at parity |
 | `abseil` | 2 | `20260107.1` | not started |
 | `benchmark` | 2 | `v1.9.5` | not started |
 | `cereal` | 2 | `v1.3.2` | not started |
@@ -122,43 +122,20 @@ Reduced repros (WP-666, kiln at main f3751eadd):
 | | kiln | clang-19 |
 |---|---|---|
 | configure | ok | ok |
-| build | rc 2 | ok |
-| TUs ok / failed | 7 / 15 | 22 / 0 |
-| links ok / failed | 7 / 0 | 22 / 0 |
-| tests passed / total | 0 / 15 | 15 / 15 |
-| wall | 8 s | 19 s |
-| peak TU RSS | 260 MB | 521 MB |
+| build | ok | ok |
+| TUs ok / failed | 22 / 0 | 22 / 0 |
+| links ok / failed | 22 / 0 | 22 / 0 |
+| tests passed / total | 15 / 15 | 15 / 15 |
+| wall | 17 s | 41 s |
+| peak TU RSS | 359 MB | 520 MB |
 
-Failure clusters (kiln): 1.
-
-1. **15x** `reject: error: Q is a protected member of Q`
-   - e.g. `$KILN/.oss/src/magic_enum/test/test_aliases.cpp`: `$KILN/.oss/src/magic_enum/test/3rdparty/Catch2/include/catch2/catch.hpp:9028:27: error: 'm_type' is a protected member of 'ResultBase'`
-   - repro: `cd $KILN/.oss/build/magic_enum/kiln/test && kiln++ -I$KILN/.oss/src/magic_enum/test/3rdparty/Catch2/include -I$KILN/.oss/src/magic_enum/include -O3 -DNDEBUG -std=c++20 -Wall -Wextra -Wshadow -pedantic-errors -Werror -std=c++17 -MD -MT test/CMakeFiles/test_aliases-cpp17.dir/test_aliases.cpp.o -MF CMakeFiles/test_aliases-cpp17.dir/test_aliases.cpp.o.d -o CMakeFiles/test_aliases-cpp17.dir/test_aliases.cpp.o -c $KILN/.oss/src/magic_enum/test/test_aliases.cpp`
-
-kiln test run: `0% tests passed, 15 tests failed out of 15`
+Failure clusters (kiln): none.
 <!-- /oss:magic_enum -->
 
-Reduced repros (WP-666, kiln at main f3751eadd):
-
-- Cluster 1: the bundled Catch2 v2 header (`catch.hpp:9028`) redeclares a
-  protected member of an indirect base with a using-declaration inside a
-  class template, and kiln applies the [class.protected] object-expression
-  check to the using-declaration when the template is instantiated
-  (clang 19 accepts; [namespace.udecl]/19, [class.protected]/1). Every
-  magic_enum test TU includes it, so all 15 tests fail to build. Repro:
-
-  ```cpp
-  class B { protected: int m; public: B(int v) : m(v) {} };
-  template <class T> class V : public B { public: V(int v) : B(v) {} };
-  template <class T> class R : public V<T> {
-  public:
-    R(int v) : V<T>(v) {}
-    using B::m;
-  };
-  int main() { R<int> r(1); return r.m - 1; }
-  ```
-
-  The non-template form (`class R : public V<int>`) compiles.
+The WP-666 cluster (a protected member redeclared by a using-declaration
+in a class template with a dependent base) was fixed by WP-680. WP-683
+fixed the rest of magic_enum, doctest and tl_expected's clusters; see
+docs/status/oss/small-trio.md.
 
 <!-- oss:spdlog -->
 ### spdlog (v1.17.0)
@@ -175,3 +152,35 @@ Reduced repros (WP-666, kiln at main f3751eadd):
 
 Failure clusters (kiln): none.
 <!-- /oss:spdlog -->
+
+<!-- oss:doctest -->
+### doctest (v2.5.3)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 121 / 0 | 121 / 0 |
+| links ok / failed | 43 / 0 | 43 / 0 |
+| tests passed / total | 193 / 193 | 193 / 193 |
+| wall | 12 s | 21 s |
+| peak TU RSS | 99 MB | 165 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:doctest -->
+
+<!-- oss:tl_expected -->
+### tl_expected (v1.3.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 13 / 0 | 13 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | 1 / 1 | 1 / 1 |
+| wall | 9 s | 14 s |
+| peak TU RSS | 209 MB | 337 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:tl_expected -->
