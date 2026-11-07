@@ -7845,6 +7845,10 @@ cv and ref qualifiers, and ` [T = int, ...]`: enclosing implicit class
 specializations' arguments (outermost first) then the function template
 specialization's, printed with their types (`2U`, `'a'`, packs
 `<int, char *>`, `x:auto` for a generic lambda's invented parameter).
+A type argument prints canonical with every name scoped, as clang stores
+the converted arguments: `[T = (anonymous namespace)::N::S]`,
+`[T = std::basic_string<char>]`, `[T = unsigned long]` for `size_t`
+(LLVM's `getTypeName<T>()` reads these; WP-730).
 The source-location builtins use the same printer (§9.5 of
 sema-templates.md), and a `__builtin_FUNCTION`/`__builtin_source_location`
 in a dependent context, or a default argument evaluating one used there,
