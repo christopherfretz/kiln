@@ -16,6 +16,45 @@ use crate::keywords::Kw;
 use crate::parser::{PExpr, Parser};
 
 impl Parser<'_, '_> {
+    /// Before C++23 an attribute-specifier-seq after the
+    /// lambda-introducer is an extension (P2173R1; clang
+    /// `ext_decl_attrs_on_lambda`).
+    fn warn_cxx23_lambda_attrs(&mut self) {
+        if self.std < Std::Cxx23 && (self.at_cxx11_attr() || self.at_kw(Kw::Alignas)) {
+            let w = self.s.diag(DiagId::parse_ext_decl_attrs_on_lambda, self.loc());
+            self.emit(w);
+        }
+    }
+
+    /// [expr.prim.lambda.general]/1: before C++23 (P1102R2) a
+    /// lambda-specifier, trailing return type or attribute needs the
+    /// parameter clause (clang `ext_lambda_missing_parens`).
+    fn warn_cxx23_lambda_missing_parens(&mut self) {
+        if self.std < Std::Cxx23 && self.at_lambda_specifier_without_params() {
+            let at = self.loc();
+            let w = self
+                .s
+                .diag(DiagId::parse_ext_lambda_missing_parens, at)
+                .fixit(kiln_diag::FixIt::insert(at, "() "));
+            self.emit(w);
+        }
+    }
+
+    /// [expr.prim.lambda.general]/1: `<` template-parameter-list `>`
+    /// requires-clause?, at the `<`.
+    fn parse_lambda_template_head(&mut self) {
+        let l_angle = self.bump().span.lo;
+        self.s.act_on_lambda_template_params_start(l_angle);
+        let r_angle = self.parse_template_param_list_tail();
+        let requires = if self.at_kw(Kw::Requires) {
+            self.bump();
+            self.parse_requires_clause()
+        } else {
+            None
+        };
+        let _ = self.s.act_template_head(requires, r_angle);
+    }
+
     /// lambda-expression ([expr.prim.lambda.general]/1). At the `[`.
     pub(crate) fn parse_lambda_expr(&mut self) -> PExpr {
         let Some(intro) = self.parse_lambda_introducer() else {
@@ -29,18 +68,7 @@ impl Parser<'_, '_> {
         let id = self.s.act_on_lambda_start(&intro);
         let lbracket = intro.lbracket;
         if self.at(Punct::Less) {
-            // [expr.prim.lambda.general]/1: `<` template-parameter-list
-            // `>` requires-clause?
-            let l_angle = self.bump().span.lo;
-            self.s.act_on_lambda_template_params_start(l_angle);
-            let r_angle = self.parse_template_param_list_tail();
-            let requires = if self.at_kw(Kw::Requires) {
-                self.bump();
-                self.parse_requires_clause()
-            } else {
-                None
-            };
-            let _ = self.s.act_template_head(requires, r_angle);
+            self.parse_lambda_template_head();
         }
         let mut specs = LambdaSpecifiers::default();
         // [expr.prim.lambda.general]/1: only an attribute-specifier-seq
@@ -49,10 +77,7 @@ impl Parser<'_, '_> {
         // lambda-specifier position below, so `[] __attribute__((x)) ()`
         // is `expected body of lambda expression` at the `(`. Before C++23
         // the seq is an extension (P2173R1; clang `ext_decl_attrs_on_lambda`).
-        if self.std < Std::Cxx23 && (self.at_cxx11_attr() || self.at_kw(Kw::Alignas)) {
-            let w = self.s.diag(DiagId::parse_ext_decl_attrs_on_lambda, self.loc());
-            self.emit(w);
-        }
+        self.warn_cxx23_lambda_attrs();
         self.parse_cxx11_attr_seq(&mut specs.attrs);
         let mut d = Declarator::new(DeclaratorContext::Member, lbracket);
         d.op_name = Some(kiln_ast::names::OverloadedOperator::Call);
@@ -66,16 +91,8 @@ impl Parser<'_, '_> {
             open = l;
             (params, variadic) = self.parse_param_clause(&mut d, false, DeclSite::LambdaParam);
             rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-        } else if self.std < Std::Cxx23 && self.at_lambda_specifier_without_params() {
-            // [expr.prim.lambda.general]/1: before C++23 (P1102R2) a
-            // lambda-specifier, trailing return type or attribute needs the
-            // parameter clause (clang `ext_lambda_missing_parens`).
-            let at = self.loc();
-            let w = self
-                .s
-                .diag(DiagId::parse_ext_lambda_missing_parens, at)
-                .fixit(kiln_diag::FixIt::insert(at, "() "));
-            self.emit(w);
+        } else {
+            self.warn_cxx23_lambda_missing_parens();
         }
         // clang `ParseLambdaExpressionAfterIntroducer`: GNU and `__declspec`
         // attributes may precede the lambda-specifier-seq (GCC and MSVC

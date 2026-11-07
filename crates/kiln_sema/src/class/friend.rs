@@ -56,9 +56,9 @@ impl Sema<'_, '_> {
     /// is reported by `act_on_function`). Checked as written, not on
     /// instantiation; an invalid redeclaration was already reported.
     fn check_friend_default_args(&mut self, f: DeclId, d: &Declarator, def: bool) {
-        let has_default = d.function_params().is_some_and(|ps| {
-            ps.iter().any(|p| !matches!(p.default_arg, DefaultArg::None))
-        });
+        let has_default = d
+            .function_params()
+            .is_some_and(|ps| ps.iter().any(|p| !matches!(p.default_arg, DefaultArg::None)));
         if !has_default || self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID) {
             return;
         }

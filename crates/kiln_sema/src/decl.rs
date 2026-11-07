@@ -307,23 +307,21 @@ impl Sema<'_, '_> {
     /// carries `IDNS_Ordinary` over from the previous declaration).
     pub(crate) fn visible_to_ordinary(&self, ctx: DeclId, name: DeclName, p: DeclId) -> bool {
         let t = self.ast.described_template(p);
-        self.ast.lookup_local(ctx, name).iter_with_flags().any(|(x, fl)| {
-            (x == p || Some(x) == t) && !fl.contains(LookupFlags::ADL_ONLY)
-        })
+        self.ast
+            .lookup_local(ctx, name)
+            .iter_with_flags()
+            .any(|(x, fl)| (x == p || Some(x) == t) && !fl.contains(LookupFlags::ADL_ONLY))
     }
 
     /// Whether a parameter of function `f` has a default argument.
     pub(crate) fn has_own_default_arg(&self, f: DeclId) -> bool {
         self.ast.decls.function(f).is_some_and(|x| {
-            self.ast
-                .lists
-                .iter::<DeclId>(x.params)
-                .any(|p| {
-                    self.ast.decls.param(p).is_some_and(|q| {
-                        q.default_arg.is_some()
-                            || q.flags & kiln_ast::decl::ParamData::DEFAULT_ARG_PENDING != 0
-                    })
+            self.ast.lists.iter::<DeclId>(x.params).any(|p| {
+                self.ast.decls.param(p).is_some_and(|q| {
+                    q.default_arg.is_some()
+                        || q.flags & kiln_ast::decl::ParamData::DEFAULT_ARG_PENDING != 0
                 })
+            })
         })
     }
 

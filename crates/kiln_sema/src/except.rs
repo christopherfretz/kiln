@@ -936,33 +936,35 @@ impl Sema<'_, '_> {
         if self.std >= kiln_lex::Std::Cxx17 || !self.exceptions {
             return None;
         }
-        let (sup_e, sup) = self.underlying_fn_proto(to)?;
-        let (sub_e, sub) = self.underlying_fn_proto(from)?;
+        let (target_spec, target) = self.underlying_fn_proto(to)?;
+        let (source_spec, source) = self.underlying_fn_proto(from)?;
         let t = &self.ast.types;
-        let (bsup, bsub) = (exc_bound(sup_e), exc_bound(sub_e));
-        if bsup == ExcBound::Unknown || bsub == ExcBound::Unknown {
+        let (target_bound, source_bound) = (exc_bound(target_spec), exc_bound(source_spec));
+        if target_bound == ExcBound::Unknown || source_bound == ExcBound::Unknown {
             return None;
         }
         let incompatible =
             || Some(conv::ConvError::new(DiagId::sema_incompatible_exception_specs, Vec::new()));
-        if bsup == ExcBound::Any || bsub == ExcBound::Cannot {
-            return self.param_exc_specs_error(&sup, &sub);
+        if target_bound == ExcBound::Any || source_bound == ExcBound::Cannot {
+            return self.param_exc_specs_error(&target, &source);
         }
-        if bsub == ExcBound::Any || bsup == ExcBound::Cannot {
+        if source_bound == ExcBound::Any || target_bound == ExcBound::Cannot {
             return incompatible();
         }
-        let (ExcSpec::Dynamic(sup_l), ExcSpec::Dynamic(sub_l)) = (sup_e, sub_e) else {
+        let (ExcSpec::Dynamic(target_list), ExcSpec::Dynamic(source_list)) =
+            (target_spec, source_spec)
+        else {
             return None;
         };
-        let sup_ts: Vec<QualType> = t.type_list_types(sup_l).to_vec();
-        let sub_ts: Vec<QualType> = t.type_list_types(sub_l).to_vec();
-        for e in sub_ts {
+        let handlers: Vec<QualType> = t.type_list_types(target_list).to_vec();
+        let thrown: Vec<QualType> = t.type_list_types(source_list).to_vec();
+        for e in thrown {
             let e = self.non_reference(e);
-            if !sup_ts.iter().any(|&h| self.handler_can_catch(h, e)) {
+            if !handlers.iter().any(|&h| self.handler_can_catch(h, e)) {
                 return incompatible();
             }
         }
-        self.param_exc_specs_error(&sup, &sub)
+        self.param_exc_specs_error(&target, &source)
     }
 
     /// clang `GetUnderlyingFunction`: the function type `q` is, or that
@@ -989,11 +991,7 @@ impl Sema<'_, '_> {
 
     /// clang `CheckParamExceptionSpec`: function types in the return and
     /// parameter types of `sup` and `sub` have equivalent specifications.
-    fn param_exc_specs_error(
-        &self,
-        sup: &FuncProto,
-        sub: &FuncProto,
-    ) -> Option<conv::ConvError> {
+    fn param_exc_specs_error(&self, sup: &FuncProto, sub: &FuncProto) -> Option<conv::ConvError> {
         let deep = |which: &str| {
             Some(conv::ConvError::new(
                 DiagId::sema_deep_exception_specs_differ,
@@ -1024,8 +1022,10 @@ impl Sema<'_, '_> {
         };
         let t = &self.ast.types;
         match (exc_bound(ea), exc_bound(eb)) {
-            (ExcBound::Unknown, _) | (_, ExcBound::Unknown) => true,
-            (ExcBound::Cannot, ExcBound::Cannot) | (ExcBound::Any, ExcBound::Any) => true,
+            (ExcBound::Unknown, _)
+            | (_, ExcBound::Unknown)
+            | (ExcBound::Cannot, ExcBound::Cannot)
+            | (ExcBound::Any, ExcBound::Any) => true,
             (ExcBound::Listed, ExcBound::Listed) => {
                 let (ExcSpec::Dynamic(la), ExcSpec::Dynamic(lb)) = (ea, eb) else { return true };
                 let canon = |l| -> Vec<QualType> {
