@@ -263,7 +263,10 @@ of `X` and their members ([class.local]/2). A friend function defined in a class
 protected member named through an object expression or `&P::m`, when only (c)
 via `P` grants access the object's class must be `P` or derived from `P` (`'p'
 is a protected member of 'S'` + note `can only access this member on an object
-of type 'D'`). Private: `'x' is a private member of 'S'` + `declared private
+of type 'D'`; for a constructor or destructor, or a constructor template,
+the note is `protected constructor can only be used to construct a base class
+subobject` / `... destructor ... destroy ...`, clang `TryDiagnoseProtectedAccess`;
+`class.protected/ctor-restricted-note.cpp`, WP-680). Private: `'x' is a private member of 'S'` + `declared private
 here` / `implicitly declared private here`, located at the member's first
 declaration (a member alias template at its `using` keyword, as clang
 locates a `TypeAliasTemplateDecl`; WP-238).
@@ -1299,7 +1302,12 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   subobject a mem-initializer initializes through it alike (clang
   `CheckConstructorAccess` on the base constructor): a friend of the
   base may use a private one (WP-525,
-  `namespace.udecl/inherited-ctor-subobject-access.cpp`).
+  `namespace.udecl/inherited-ctor-subobject-access.cpp`). For a complete
+  object the [class.protected] object class is the derived class being
+  constructed (clang: the `ConstructorUsingShadowDecl`'s class), so a
+  member of that class may call an inherited protected constructor
+  (`Sema::special_member_access_on`;
+  `namespace.udecl/inherited-protected-ctor-object.cpp`, WP-680).
 - **Virtual bases** ([basic.types.general]/10). A class with a virtual
   base is not a literal type: a `constexpr` variable of it (or of an
   array of it) is clang's `RequireLiteralType` error "constexpr variable

@@ -746,8 +746,23 @@ impl Sema<'_, '_> {
         naming: DeclId,
         mk: impl FnOnce(&Self, bool) -> Diag,
     ) -> Option<Diag> {
+        self.special_member_access_on(m, naming, naming, mk)
+    }
+
+    /// [`Sema::special_member_access`] with the [class.protected] object
+    /// class `object`: the derived class an inherited constructor
+    /// constructs ([namespace.udecl]/19; clang `CheckConstructorAccess`
+    /// takes the `ConstructorUsingShadowDecl`'s class).
+    pub(crate) fn special_member_access_on(
+        &self,
+        m: DeclId,
+        naming: DeclId,
+        object: DeclId,
+        mk: impl FnOnce(&Self, bool) -> Diag,
+    ) -> Option<Diag> {
         let naming = self.ast.definition(naming).unwrap_or(naming);
-        let t = self.member_target(m, Some(naming))?;
+        let object = self.ast.definition(object).unwrap_or(object);
+        let t = self.member_target(m, Some(object))?;
         let ec = self.effective_context();
         let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
         if self.is_accessible(&ec, &t, naming, unpriv) {
@@ -1087,6 +1102,21 @@ impl Sema<'_, '_> {
                     if self.derived_inclusive(ic, r) {
                         continue;
                     }
+                    // clang: a special diagnostic for constructors and
+                    // destructors (and constructor templates).
+                    let m = t.member.map(|m| self.ast.strip_shadow(m));
+                    let m = m.map(|m| match self.kind_of(m) {
+                        DeclKind::FunctionTemplate => self.pattern_of(m).unwrap_or(m),
+                        _ => m,
+                    });
+                    let k = m.map(|m| self.kind_of(m));
+                    if matches!(k, Some(DeclKind::CXXConstructor | DeclKind::CXXDestructor)) {
+                        let dtor = k == Some(DeclKind::CXXDestructor);
+                        return Some(
+                            self.diag(DiagId::note_access_protected_restricted_ctordtor, loc)
+                                .arg(u8::from(dtor)),
+                        );
+                    }
                     return Some(
                         self.diag(DiagId::note_access_protected_object, loc)
                             .arg(self.ty_arg(self.tag_type(r))),
@@ -1133,7 +1163,9 @@ impl Sema<'_, '_> {
             same_class(self, r, o)
                 || self.ast.instantiated_from(r).is_some_and(|p| self.ast.first(p) == o)
                 || tmpl.is_some_and(|t| {
-                    self.ast.spec_info(r).is_some_and(|(_, i)| self.ast.first(i.template) == self.ast.first(t))
+                    self.ast
+                        .spec_info(r)
+                        .is_some_and(|(_, i)| self.ast.first(i.template) == self.ast.first(t))
                 })
         })
     }
