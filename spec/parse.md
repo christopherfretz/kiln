@@ -1646,7 +1646,10 @@ for `^^`, §5 for splices).
     `warn_unused_result`, with or without `__` around the name.
     `alignas` has its own parser.
   - Other arguments are skipped as balanced tokens.
-  - `alignas(type-id)` is recognised by `scan_name`; a trailing `...`
+  - `alignas(type-id)` is recognised by the tentative type-id test
+    `sizeof(...)` uses (clang `isTypeIdInParens`), so a class template's
+    injected-class-name in its own scope is a type-id there (WP-691,
+    [dcl.align]/1, [temp.local]/1); a trailing `...`
     makes the operand a pack expansion (`act_on_alignas_operand`,
     spec/sema.md §4.5).
 - **Sema's role:** Sema (`act_on_attribute`) decides what is known,
@@ -1660,7 +1663,11 @@ for `^^`, §5 for splices).
   - the decl-specifier sequence and the declarator, for the
     declaration
   - the class-head and enum-head, for the tag (`act_on_tag_attrs`)
-  - before a statement, for the statement (`fallthrough`, `likely`)
+  - before a statement, for the statement (`fallthrough`, `likely`);
+    GNU `__attribute__((...))` specifiers directly followed by `;` are
+    an attributed null statement in every mode
+    (`__attribute__((fallthrough));`, clang
+    `ParseStatementOrDeclarationAfterAttributes`; WP-691)
   - before a declaration statement in a block, when none of them is a
     statement attribute, for the declaration (WP-203): `parse_statement`
     hands them on through `Parser::stmt_attrs` / `lead_decl_attrs` and

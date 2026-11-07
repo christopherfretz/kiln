@@ -2497,13 +2497,7 @@ impl Sema<'_, '_> {
                 .map(|(p, _)| p.encoding)
                 .find(|&e| e != Encoding::Ordinary)
                 .unwrap_or(Encoding::Ordinary);
-            let elem = match enc {
-                Encoding::Ordinary => QualType::CHAR,
-                Encoding::Wide => QualType::WCHAR,
-                Encoding::Utf8 => QualType::CHAR8,
-                Encoding::Utf16 => QualType::CHAR16,
-                Encoding::Utf32 => QualType::CHAR32,
-            };
+            let elem = literal::string_literal_elem(self.std, enc);
             let plain: Vec<(StringLiteral<'_>, Loc)> = pieces
                 .iter()
                 .map(|(p, l)| (StringLiteral { ud_suffix: None, ..p.clone() }, *l))

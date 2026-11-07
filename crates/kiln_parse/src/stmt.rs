@@ -112,7 +112,7 @@ impl Parser<'_, '_> {
     /// attributes takes the hints into its `AttributedStmt` (clearing
     /// `hints`).
     fn parse_statement_hinted(&mut self, hints: &mut Vec<kiln_ast::AttrId>) -> Option<StmtId> {
-        if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
+        if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) || self.at_gnu_attr_null_stmt() {
             let start = self.loc();
             let mut attrs = Vec::new();
             self.parse_attributes(&mut attrs);
