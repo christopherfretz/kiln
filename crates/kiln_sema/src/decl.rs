@@ -2054,11 +2054,7 @@ impl Sema<'_, '_> {
         // takes the set.
         let e = if self.ety(e) == QualType::OVERLOAD
             && self.overload_operand(e).is_some()
-            && !self.overload_set_converts_to_class(
-                e,
-                pty,
-                crate::overload::ics::IcsOptions::NONE,
-            )
+            && !self.overload_set_converts_to_class(e, pty, crate::overload::ics::IcsOptions::NONE)
         {
             let at = self.begin_loc(e);
             let ctx = crate::overload::address::AddrCtx::Convert;
@@ -3767,6 +3763,10 @@ impl Sema<'_, '_> {
                     pattern_prev = self.pattern_friend_prev(ctx, dname, new_fn);
                 }
             }
+            None
+        } else if friend && d.qualifier.is_none() && self.friend_template_apart {
+            // Constrained on an enclosing template's parameters: its own
+            // template, not one of another scope ([temp.friend]/9).
             None
         } else if friend && d.qualifier.is_none() {
             // Redeclaration lookup in the namespace sees hidden friends,

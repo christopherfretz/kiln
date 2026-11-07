@@ -1946,9 +1946,17 @@ class name" at `B`
   substitution is not dependent names only the enclosing class's
   parameters ([temp.friend]/9): it is compared as written, so the friend
   stays a template of its own (WP-446; libc++ 22 `stack`/`queue`
-  `operator<=>`; `temp.friend/constrained-friend-template-*.cpp`). Gap:
-  a constraint naming both levels is compared substituted, which merges
-  what [temp.friend]/9 keeps apart.
+  `operator<=>`; `temp.friend/constrained-friend-template-*.cpp`). A
+  constraint whose substitution used an enclosing level's argument (or
+  the injected-class-name's instantiated class), even one that also
+  names the friend's own parameters, makes the friend a template of its
+  own: no earlier declaration is looked up, so `template<class Self,
+  class U = T> requires is_same_v<remove_cvref_t<Self>, W> friend U
+  get(Self&&)` defined in `W<int>` and `W<long>` declares two templates,
+  without a "redefines default argument" or "redefinition" error
+  (`Sema::friend_template_apart`, `Substituter::outer_used`; clang's
+  `FriendConstraintsDependOnEnclosingTemplate`; WP-726,
+  `temp.friend/p9-constraint-on-enclosing-distinct.cpp`).
 - A friend function or function template declared with a qualified name
   in a templated class (`template<class U> friend R N::f(X<U>);`,
   `friend R N::g(T);`) whose template head or type is dependent is not

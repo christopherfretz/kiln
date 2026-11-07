@@ -457,6 +457,7 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::InjectedClassName { pattern, injected } => {
                 if let Some(&(_, i)) = self.pairs.iter().rev().find(|p| p.0 == pattern) {
+                    self.outer_used.set(true);
                     return Ok(self.sema.tag_type(i));
                 }
                 self.ty(injected, loc)
