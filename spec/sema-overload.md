@@ -699,7 +699,12 @@ merged with an `extern "C"` function of the same name. In
 with such a parameter beats one without (clang `isBetterOverloadCandidate`
 `HasPassObjSize`). Such a function cannot have its address taken: it is
 skipped by §2.9 address resolution (`address_matches`,
-`single_overload_candidate`). Mangling: spec/abi.md §8.28.
+`single_overload_candidate`). A using-declaration whose target is one of
+the two does not conflict with the other already in scope
+([namespace.udecl]/11; `using_conflicts`; libstdc++'s `<stdlib.h>`
+re-exports glibc's fortify wrappers that way; test
+`namespace.udecl/using-pass-object-size-overload.cpp`). Mangling:
+spec/abi.md §8.28.
 
 ### 4.4 Deferred template candidates (clang 21; `overload/defer.rs`)
 At `-fclang-compat=22` most candidate sets resolve in two phases (clang
