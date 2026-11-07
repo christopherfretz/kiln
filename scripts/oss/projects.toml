@@ -149,7 +149,7 @@ configure = ["-DABSL_BUILD_TESTING=ON", "-DABSL_USE_GOOGLETEST_HEAD=ON", "-DBUIL
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 2
-verified = false
+verified = true
 notes = "LTS release. googletest is downloaded at configure time (ABSL_USE_GOOGLETEST_HEAD)."
 
 [re2]

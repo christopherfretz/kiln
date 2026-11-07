@@ -356,9 +356,10 @@ impl Sema<'_, '_> {
         self.emit(e);
     }
 
-    /// The pattern a dependent `X<P...>` befriended in a class names when
-    /// it is the current instantiation ([temp.dep.type]/1.2).
-    fn friend_current_instantiation(&self, ty: QualType) -> Option<DeclId> {
+    /// The pattern a dependent `X<P...>` (befriended in a class, or the
+    /// type of a member access's object) names when it is the current
+    /// instantiation ([temp.dep.type]/1.2).
+    pub(crate) fn friend_current_instantiation(&self, ty: QualType) -> Option<DeclId> {
         let mut q = ty;
         for _ in 0..16 {
             if let TypeView::TemplateSpecialization { name, .. } = self.ast.types.view(q.ty()) {

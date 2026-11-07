@@ -1326,6 +1326,21 @@ impl Parser<'_, '_> {
                 self.injected_class_name_spec(ds, d, loc);
                 true
             }
+            // The injected-class-name of a base class template
+            // specialization, `B` or `D::B` ([temp.local]/1-2).
+            Some((end, NameClass::TypeTemplate(_), name))
+                if !self.next_is_less(end) && self.inherited_injected_at(start).is_some() =>
+            {
+                if end > start + 1 {
+                    self.qualified_type_name_spec(ds, ctx, loc);
+                } else if let Some(d) = self.s.inherited_injected_class(name, None) {
+                    self.bump();
+                    self.s.mark_type_referenced(d);
+                    let ty = self.s.elaborated_tag_type(d, TagKeyword::None);
+                    self.set_named_base(ds, Some(ty), loc);
+                }
+                true
+            }
             // A placeholder for a deduced class type ([dcl.type.class.deduct]).
             Some((end, NameClass::TypeTemplate(d), _)) if self.s.is_ctad_template(d) => {
                 self.parse_ctad_placeholder(ds, d, end > start + 1, end, loc);
@@ -1451,6 +1466,22 @@ impl Parser<'_, '_> {
             Err(()) => QualType::ERROR,
         };
         self.set_named_base(ds, Some(ty), loc);
+    }
+
+    /// Whether token `i` is `<`.
+    fn next_is_less(&self, i: usize) -> bool {
+        self.tok_at(i).kind == TokKind::Punct(Punct::Less)
+    }
+
+    /// The base class template specialization whose injected-class-name
+    /// the (qualified) name at token `start` finds
+    /// ([`kiln_sema::Sema::inherited_injected_class`]).
+    fn inherited_injected_at(&self, start: usize) -> Option<DeclId> {
+        let (_, _, class, name, qual) = self.scan_name_qual_at(start)?;
+        if !matches!(class, NameClass::TypeTemplate(_)) {
+            return None;
+        }
+        self.s.inherited_injected_class(name, qual)
     }
 
     /// The injected-class-name of the class template `d` ([temp.local]/1).

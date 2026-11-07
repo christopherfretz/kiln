@@ -1465,6 +1465,16 @@ impl Parser<'_, '_> {
                 _ => None,
             };
         }
+        // `D::B` / `typename D::B` with `B` the injected-class-name of a
+        // base class template specialization ([class.qual]/2).
+        if matches!(class, NameClass::TypeTemplate(_))
+            && !template_kw
+            && let Some(d) = self.s.inherited_injected_class(name, Some(q.ctx))
+        {
+            self.s.mark_type_referenced(d);
+            let named = self.s.tag_type(d);
+            return Some(self.s.ast.types.elaborated(kw, Some(q.nns), named));
+        }
         let NameClass::Type(t, d) = class else {
             // `typename D::X` for the current instantiation `D` with a
             // dependent base: looked up at instantiation ([temp.dep.type]/6).

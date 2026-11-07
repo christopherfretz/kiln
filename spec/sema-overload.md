@@ -266,6 +266,13 @@ built-in path silently (as clang).
 | [over.match.ref] reference to `cv2 T2` | `resolve_conversion(T, e, ToReference{lvalue})` | conversion functions yielding lvalue `cv2 T2&` (lvalue ref) or rvalue `cv2 T2`/`T2&&`, reference-compatible; explicit ones only in direct-init (`IcsOptions::EXPLICIT_REF_CONV`) |
 | [over.match.list] list-init of class `T` | `resolve_ctor(T, list, List)` | phase 1: initializer-list ctors with the list as sole argument; phase 2 (none viable): all ctors with the elements |
 
+The converting constructors of `T` include its inherited ones
+([namespace.udecl]/13) wherever they are collected
+(`Sema::converting_ctors`): the user-defined conversion of an implicit
+conversion sequence (`build_conversion_set`, so `d = 3` reaches the
+implicit copy assignment of `D` through an inherited `B(int)`) as well as
+a copy-initialization (WP-686).
+
 **`explicit`** (clang behaviour): in copy-init, explicit constructors and
 conversion functions are added but fail with `CandidateFailure::Explicit`;
 "explicit constructor is not a candidate" / "explicit conversion function is
@@ -839,7 +846,7 @@ added as needed) over the last call.
 ```rust
 pub struct AllocFns { pub new_fn: DeclId, pub delete_fn: Option<DeclId>,
                       pub pass_align: bool, pub sized_delete: bool }
-// as built (overload/alloc.rs): AllocFns { fns, in_class, naming: Option<DeclId> }
+// as built (overload/alloc.rs): AllocFns { fns, templates, in_class, naming: Option<DeclId> }
 // `naming`: the class a class-scope candidate set was found in, for the
 // access check of [expr.new]/19 and [expr.delete]/12 (WP-335).
 fn find_allocation_functions(&mut self, ty: QualType, array: bool, global_only: bool,
@@ -1315,7 +1322,16 @@ Where the code differs from (or details) the design above:
   is `sema_no_suitable_delete_member` plus `note_member_declared_named`
   per function found; a deleted class `operator new` is `sema_call_deleted_function`. A member
   `operator delete` without an exception specification is implicitly
-  `noexcept` ([except.spec]/9).
+  `noexcept` ([except.spec]/9). A class-scope `operator new` function
+  template ([temp.over]/1) is a candidate when no non-template function
+  matches: `(size_t[, align_val_t], placement...)` go through
+  `add_found_candidates`/`resolve_set` and the deduced specialization is
+  instantiated on use; a placement `operator delete` template is not
+  matched (WP-686). The allocation function, the matching deallocation
+  function of a new-expression and the deallocation function of a
+  delete-expression are odr-used at the expression's location, so a member
+  of a class template specialization is instantiated there ([temp.inst]/11;
+  WP-686).
 - **Gaps (owners).** Reversed and rewritten operator function template
   candidates are not formed (see §10.7). Access
   checks on class `operator new`/`delete`: sema.md §5.9 (WP-457). Destroying

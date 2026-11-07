@@ -233,6 +233,24 @@ impl Sema<'_, '_> {
         self.member_ref_without_object(d, loc, shadow, nns)
     }
 
+    /// `N::m` built as the implicit `this->N::m` through a dependent base
+    /// (`e`, [`Sema::dependent_implicit_member`]) names the single member
+    /// `d`: recorded so that `&N::m` is the qualified name itself
+    /// ([expr.unary.op]/3; clang forms no implicit member access for an
+    /// address-of operand, so `&Int::f` of an unrelated class `Int`
+    /// inside a template with a dependent base is a pointer to member).
+    pub(crate) fn note_qualified_dependent_member(
+        &mut self,
+        e: ExprId,
+        d: DeclId,
+        nns: Option<kiln_ast::NnsId>,
+    ) {
+        if nns.is_some() && self.ast.exprs.get(e).kind() == ExprKind::CXXDependentScopeMemberExpr {
+            let r = MemberRef { decl: d, error: false, qualified: true, begin: None };
+            self.member_refs.insert(e, r);
+        }
+    }
+
     /// `&N::m` where [`Self::implicit_member_ref`] built `this->N::m` for
     /// a dependent `this` ([`Self::dependent_implicit_member`]): the
     /// operand is the qualified name itself ([expr.unary.op]/3), as clang

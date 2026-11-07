@@ -1954,9 +1954,14 @@ impl ExprArena {
 
     /// The implied object argument of a `CXXMemberCallExpr`: the base of
     /// its `MemberExpr` callee, or the left operand of a `.*`/`->*`
-    /// callee (sema-class.md §5.1; for `->` a pointer).
+    /// callee (sema-class.md §5.1; for `->` a pointer). Parentheses
+    /// around the callee, as in `(o.f)()` or `(o.*pm)()`, are looked
+    /// through (clang's `getImplicitObjectArgument`).
     pub fn member_call_object(&self, e: ExprId) -> ExprId {
-        let callee = self.get(ExprId::new(self.expect_kind(e, ExprKind::CXXMemberCallExpr).a));
+        let mut callee = self.get(ExprId::new(self.expect_kind(e, ExprKind::CXXMemberCallExpr).a));
+        while callee.kind == ExprKind::ParenExpr {
+            callee = self.get(ExprId::new(callee.a));
+        }
         assert!(
             matches!(callee.kind, ExprKind::MemberExpr | ExprKind::BinaryOperator),
             "CXXMemberCallExpr callee is {:?}",

@@ -1878,6 +1878,9 @@ impl Sema<'_, '_> {
             && let Some((this_ty, _)) = self.this_class()
         {
             let e = self.dependent_implicit_member(this_ty, name, nns, loc);
+            if let [d] = valid[..] {
+                self.note_qualified_dependent_member(e, d, nns);
+            }
             self.set_overload_begin(e, begin, loc);
             return e;
         }
@@ -1934,7 +1937,10 @@ impl Sema<'_, '_> {
             if self.member_via_dependent_base(d)
                 && let Some((this_ty, _)) = self.this_class()
             {
-                return self.dependent_implicit_member(this_ty, name, nns, loc);
+                let e = self.dependent_implicit_member(this_ty, name, nns, loc);
+                self.note_qualified_dependent_member(e, d, nns);
+                self.set_qualified_begin(e, begin, loc);
+                return e;
             }
             let e = self.implicit_member_ref(d, loc, found.shadow(0), nns);
             self.set_qualified_begin(e, begin, loc);

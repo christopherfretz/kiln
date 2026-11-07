@@ -496,9 +496,13 @@ clang's `AttributedType`; the canonical type is unchanged
   a redeclaration of its primary template's pattern does. A mark on a
   partial or explicit specialization does not count. Neither does the
   injected-class-name, nor `X<T>` as the current instantiation inside
-  `X` (clang's `InjectedClassNameType`). clang's implicit marks on
-  `std::unique_ptr`, `std::shared_ptr` and `std::function` are not
-  inferred (follow-up)
+  `X` (clang's `InjectedClassNameType`). As clang's
+  `inferNullableClassAttribute` does, a class or class template pattern
+  named `auto_ptr`, `coroutine_handle`, `exception_ptr`, `function`,
+  `move_only_function`, `shared_ptr` or `unique_ptr` declared directly
+  in `std` (inline namespaces skipped) counts as marked
+  (`std_nullable_class`, WP-686; test
+  `tests/conformance/dcl.type.class/nullability-std-smart-pointers.cpp`)
 - the same qualifier written twice is `sema_nullability_duplicate`
   (warning, `-Wnullability`); a different one already written on the
   type, or carried through sugar (a typedef), is
@@ -5667,6 +5671,11 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   template-argument-list (`dependent_member_names_template`,
   `act_on_dependent_member_template_args`; variant:1526). Test:
   `tests/conformance/temp.names/libstdcxx-this-member-template.cpp`.
+  The object may also have the type `X<P...>` written inside `X` (or a
+  pointer to it): that names the current instantiation like the
+  injected-class-name ([temp.dep.type]/1.2), so `copy.f<10>()` needs no
+  `template` (WP-686, abseil charconv_bigint.cc). Test:
+  `tests/conformance/temp.dep.type/p1-current-instantiation-object-member-template-run.cpp`.
 - **Access through a dependent base** ([class.protected]/1,
   [class.access.base]/5): in `has_access`, a class that does not
   (yet) derive from the naming class but has a dependent base anywhere

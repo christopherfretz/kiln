@@ -159,9 +159,12 @@ impl Sema<'_, '_> {
         // assignment from an xvalue select members that are neither
         // user-provided nor deleted, and the destructor is not
         // user-provided (one defaulted after its first declaration is;
-        // clang 22 agrees).
+        // clang 22 agrees). The simple copy operation stands in only when
+        // the move operation is not user-declared (a user-declared move
+        // is what an xvalue selects, and it deletes the implicit copy).
         for (mv, cp) in [(K::MoveCtor, K::CopyCtor), (K::MoveAssign, K::CopyAssign)] {
-            if self.has_simple(r, mv) || self.has_simple(r, cp) {
+            let mv_declared = bits.contains(mv.user_declared_bit());
+            if self.has_simple(r, mv) || (!mv_declared && self.has_simple(r, cp)) {
                 continue;
             }
             match self.select_special(r, mv, Quals::default(), Quals::default()) {

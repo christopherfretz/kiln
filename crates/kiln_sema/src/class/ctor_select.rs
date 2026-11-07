@@ -147,12 +147,24 @@ impl Sema<'_, '_> {
         c: DeclId,
         opts: IcsOptions,
     ) {
+        let found = self.converting_ctors(c, true);
+        self.add_found_candidates(set, &found, crate::overload::CandidateKind::Ctor, opts, false);
+    }
+
+    /// The constructors of class `c` with the `ConstructorUsingShadow`s
+    /// of its inherited ones ([namespace.udecl]/13), declaring the
+    /// implicit ones first; with `one_arg`, only those callable with one
+    /// argument.
+    pub(crate) fn converting_ctors(&mut self, c: DeclId, one_arg: bool) -> Vec<DeclId> {
         let c = self.class_def(c);
         self.ensure_implicit(c, crate::class::SpecialKind::DefaultCtor);
         self.ensure_implicit(c, crate::class::SpecialKind::CopyCtor);
         self.ensure_implicit(c, crate::class::SpecialKind::MoveCtor);
         let mut found: Vec<DeclId> = self.usable_ctors(c);
         found.extend(self.ctor_shadows(c));
+        if !one_arg {
+            return found;
+        }
         let mut params = Vec::new();
         found.retain(|&fd| {
             // Through an inherited constructor's shadow, and to a
@@ -174,7 +186,7 @@ impl Sema<'_, '_> {
             let variadic = self.fn_param_types(f, &mut params);
             if params.is_empty() { variadic } else { self.fn_min_args(f) <= 1 }
         });
-        self.add_found_candidates(set, &found, crate::overload::CandidateKind::Ctor, opts, false);
+        found
     }
 
     /// clang's workaround for C++17 guaranteed copy elision (CWG2327):

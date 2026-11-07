@@ -472,7 +472,9 @@ impl Sema<'_, '_> {
         let place_args: Vec<ExprId> =
             placement.as_ref().map(|p| p.args.clone()).unwrap_or_default();
         let Some((op_new, with_align)) =
-            self.find_operator_new(&alloc.fns, &place_args, pass_align)
+            self.find_operator_new(&alloc.fns, &place_args, pass_align).or_else(|| {
+                self.find_operator_new_template(&alloc.templates, &place_args, pass_align, loc)
+            })
         else {
             let ptr_like = place_args.len() == 1 && {
                 let t = self.ast.exprs.get(place_args[0]).ty();
@@ -513,7 +515,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&kids, loc);
         }
-        self.mark_used(op_new);
+        self.mark_used_at(op_new, loc);
         let (params, variadic) = self.fn_params(op_new).unwrap_or_default();
         let skip = 1 + usize::from(pass_align);
         let mut conv_place = Vec::with_capacity(place_args.len());
@@ -555,7 +557,7 @@ impl Sema<'_, '_> {
             {
                 self.check_member_access_distinct(od, naming, loc);
             }
-            self.mark_used(od);
+            self.mark_used_at(od, loc);
         }
         let op_delete = op_delete.map(|d| d.0);
         // The initializer ([expr.new]/23).
@@ -1080,6 +1082,56 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// The specialization of a class-scope allocation function template
+    /// among `tmpls` called with `place` ([expr.new]/19-20, [temp.over]):
+    /// overload resolution with a `size_t` prvalue, then a
+    /// `std::align_val_t` one when `pass_align` (first with it, then
+    /// without), then the placement arguments. Templates are tried only
+    /// when no non-template function matches.
+    pub(crate) fn find_operator_new_template(
+        &mut self,
+        tmpls: &[DeclId],
+        place: &[ExprId],
+        pass_align: bool,
+        loc: Loc,
+    ) -> Option<(DeclId, bool)> {
+        use crate::overload::{ArgInfo, CandidateKind, IcsOptions, OvlOutcome, SetKind};
+        use kiln_ast::expr::ValueCategory;
+        if tmpls.is_empty() {
+            return None;
+        }
+        let size_t = self.size_type();
+        let al = self.global_ops.align_val_t;
+        let tries: &[bool] = if pass_align && al.is_some() { &[true, false] } else { &[false] };
+        for &with_align in tries {
+            let mut set = self.begin_set(SetKind::Normal, loc);
+            set.args.push(ArgInfo::of_type(size_t, ValueCategory::PRValue));
+            if with_align && let Some(al) = al {
+                set.args.push(ArgInfo::of_type(al, ValueCategory::PRValue));
+            }
+            for &a in place {
+                set.args.push(self.arg_info(a));
+            }
+            self.add_found_candidates(
+                &mut set,
+                tmpls,
+                CandidateKind::Function,
+                IcsOptions::NONE,
+                false,
+            );
+            let out = self.resolve_set(&mut set);
+            let f = match out {
+                OvlOutcome::Success(b) | OvlOutcome::Deleted(b) => Some(set.cand(b).func()),
+                _ => None,
+            };
+            self.end_set(set);
+            if let Some(f) = f {
+                return Some((f, with_align));
+            }
+        }
+        None
+    }
+
     /// clang's candidate notes for a failed `operator new` lookup: the
     /// candidates with a bad argument conversion first, then those with
     /// the wrong number of parameters, closest arity first (an
@@ -1569,7 +1621,7 @@ impl Sema<'_, '_> {
             return self.recover_err(&[operand], loc);
         }
         if let Some(f) = op_delete {
-            self.mark_used(f);
+            self.mark_used_at(f, loc);
         }
         let mut c = conv::lvalue_to_rvalue(self, operand);
         if let Some(f) = op_delete

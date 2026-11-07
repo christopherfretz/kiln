@@ -406,7 +406,12 @@ macros, which say what kiln implements (docs/STANDARD_SUPPORT.md),
 nor what kiln accepts: kiln's builtins are a superset of both clangs'
 (spec/sema-templates.md §9.1 "clang 22 rows"). In compile modes the
 builtins TABLE still stages `__has_builtin` off for unimplemented rows
-at either level. Where kiln implements a feature that clang 19 lacks,
+at either level, and `__has_builtin` / `__has_constexpr_builtin` answer
+0 for a `__builtin_*` name that clang 19 lacks and kiln neither declares
+(`kiln_ast::decl::builtin::by_name`) nor lists in that table (the
+driver's `StagedFeatures::undeclared_clang22`; e.g.
+`__builtin_infer_alloc_token`, `__builtin_elementwise_popcount`,
+`__builtin_trivially_relocate`). Where kiln implements a feature that clang 19 lacks,
 `build_predefines` raises the macro to clang 22's value in the same modes:
 `__cpp_structured_bindings` is `202411L` wherever it is defined (C++17
 on; P1061 structured binding packs) and `__cpp_variadic_friend` is
