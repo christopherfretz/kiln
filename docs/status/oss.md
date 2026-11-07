@@ -25,6 +25,12 @@ trees go to `.oss/` (gitignored); each build writes
 `.oss/build/<project>/<kiln|clang>/{report.json,compile.jsonl,*.log}`.
 Every compiler invocation runs under `ulimit -v 3000000` and `timeout 600`
 (`scripts/oss/kiln-cxx`); `make` draws from the box's shared jobserver.
+A project with `deps` in the toml (re2 needs abseil, googletest and
+benchmark) first builds and installs each dependency with the same
+compiler into `.oss/<dep>-install-<compiler>/` (once; delete the directory
+to rebuild) and finds them through `CMAKE_PREFIX_PATH`; dependency TUs are
+logged under `.oss/build/<dep>/<compiler>-dep/` and never counted for the
+dependent (spec/landed/harness/WP-666.md "Dependencies").
 `scripts/oss/selftest.sh` checks the scripts. In a repro command `$KILN` is
 the kiln checkout the build ran in, and `kiln++` the binary it used.
 
@@ -57,7 +63,7 @@ The loop:
 | `eigen` | 2 | `3.4.1` | not started |
 | `entt` | 2 | `v3.15.0` | tests at parity |
 | `glog` | 2 | `v0.7.1` | tests at parity |
-| `re2` | 2 | `2025-11-05` | not started |
+| `re2` | 2 | `2025-11-05` | tests at parity |
 | `simdjson` | 2 | `v4.2.4` | blocked (tests 116/117 vs clang 117/117) |
 | `taskflow` | 2 | `v3.10.0` | tests at parity |
 | `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | tests at parity |
@@ -298,3 +304,19 @@ kiln test run: `96% tests passed, 1 tests failed out of 24`
 
 Failure clusters (kiln): none.
 <!-- /oss:taskflow -->
+
+<!-- oss:re2 -->
+### re2 (2025-11-05)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 51 / 0 | 51 / 0 |
+| links ok / failed | 21 / 0 | 21 / 0 |
+| tests passed / total | 20 / 20 | 20 / 20 |
+| wall | 308 s | 314 s |
+| peak TU RSS | 159 MB | 229 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:re2 -->

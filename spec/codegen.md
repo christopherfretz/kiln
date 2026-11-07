@@ -1542,7 +1542,10 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
   - A const member with an in-class initializer, odr-used but never
     defined out of line, is an `available_externally constant`.
   - Naming a static member through `.` evaluates the object and is
-    ignored.
+    ignored. This holds for a static member function used as a value,
+    not called (`std::sort(b, e, arr.less)`, `int (*p)(int) = o.f;`):
+    the member expression is the function's lvalue ([expr.ref]/6.3.1;
+    WP-710, `tests/conformance/expr.ref/p6-static-member-function-value-run.cpp`).
 - **Member-expression folds** (`ScalarExprEmitter::VisitMemberExpr`): an
   integral or enumeration `MemberExpr` that the Oven folds becomes a
   constant, after the object is evaluated for side effects. A `const`
