@@ -20,7 +20,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::{AttrId, StringLitId};
 use kiln_ast::{DeclId, ids::RawId as _};
 use kiln_diag::{Diag, DiagId, FixIt, Severity};
-use kiln_llvm::{AliasId, Attr, FuncId, AttrKind as LAttr, Linkage, TypeId, Value, ValueRef};
+use kiln_llvm::{AliasId, Attr, AttrKind as LAttr, FuncId, Linkage, TypeId, Value, ValueRef};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::{Loc, Span};
 

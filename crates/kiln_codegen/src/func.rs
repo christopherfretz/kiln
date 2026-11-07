@@ -710,8 +710,7 @@ impl Cg<'_> {
             _ => None,
         };
         let attr_sig = alias_sig.as_ref().unwrap_or(&sig);
-        let (mut ret, mut params) =
-            self.sig_attrs(attr_sig, attr_sig.params.len(), !self.f.naked);
+        let (mut ret, mut params) = self.sig_attrs(attr_sig, attr_sig.params.len(), !self.f.naked);
         if thunk.is_some() {
             (ret, params) = self.thunk_attrs(&sig, ret, params);
         }
