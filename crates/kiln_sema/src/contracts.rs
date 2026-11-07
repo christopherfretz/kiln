@@ -131,10 +131,10 @@ impl Sema<'_, '_> {
             .map(|f| self.contract_fn(f))
             .filter(|&f| f != self.ctx && self.kind_of(f).is_function())
             .map(|f| {
-            let saved = self.ctx;
-            self.ctx = f;
-            saved
-        });
+                let saved = self.ctx;
+                self.ctx = f;
+                saved
+            });
         ContractScope { kind, result, func: f, saved_ctx }
     }
 
@@ -226,11 +226,16 @@ impl Sema<'_, '_> {
     }
 
     /// The type of the result name of a postcondition of `f`
-    /// ([dcl.contract.res]/1-2): its return type.
+    /// ([dcl.contract.res]/1-2): its return type, as written (a
+    /// template's pattern dumps `T`, not `type-parameter-0-0`, as clang
+    /// keeps a declaration's written types).
     fn contract_result_type(&mut self, f: DeclId, loc: Loc, definition: bool) -> QualType {
         let f = self.contract_fn(f);
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        let Some(ret) = self.ast.types.proto(ty).map(kiln_ast::types::FuncProto::ret) else {
+        let t = &self.ast.types;
+        let Some(ret) =
+            t.proto_of(ty.ty()).or_else(|| t.proto(ty)).map(kiln_ast::types::FuncProto::ret)
+        else {
             return QualType::ERROR;
         };
         if self.ast.types.is_void(ret) {

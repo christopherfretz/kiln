@@ -832,9 +832,7 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 continue;
             }
-            let Some(var) = found.single().filter(|&d| {
-                is_capturable_kind(self.kind_of(d))
-            }) else {
+            let Some(var) = found.single().filter(|&d| is_capturable_kind(self.kind_of(d))) else {
                 let field = found.single().is_some_and(|d| self.kind_of(d) == DeclKind::Field);
                 let id = if field {
                     DiagId::sema_capture_class_member

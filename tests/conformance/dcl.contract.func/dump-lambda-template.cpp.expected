@@ -30,7 +30,7 @@ NamespaceDecl test
 | | |-ContractAssertStmt post
 | | | |-ContractResultNameDecl referenced r
 | | | `-BinaryOperator '<dependent type>' '>='
-| | |   |-DeclRefExpr 'const type-parameter-0-0' lvalue ContractResultName 'r'
+| | |   |-DeclRefExpr 'const T' lvalue ContractResultName 'r'
 | | |   `-DeclRefExpr 'const T' lvalue ParmVar 't' 'const T'
 | | `-CompoundStmt
 | |   `-ReturnStmt
