@@ -7157,6 +7157,14 @@ declarator scopes.**
   converted form the partial was registered with (WP-709). Gap:
   dependent template-ids elsewhere are still neither checked nor
   converted (clang checks every template-id).
+- *Template arguments of a declarator qualifier*: only the qualifier's
+  own components are entered. Its template arguments are parsed with
+  the entering context off (`parse_template_arg_list`, as clang's
+  `EnteringContext = false`), so in `template<class T> int F<T,
+  typename X<T>::type>::g()` the inner `X<T>` is an ordinary dependent
+  specialization rather than the current instantiation of `X`; the
+  argument stays `typename X<T>::type` and matches the partial
+  specialization ([temp.dep.type]/1; WP-726, fmt 10's `formatter`).
 - Tests: `tests/conformance/temp.mem.class/`, `temp.mem.enum/`,
   `temp.spec.partial.member/out-of-line-ctors.cpp`,
   `temp.spec.partial.member/non-type-arg-scope.cpp`,
