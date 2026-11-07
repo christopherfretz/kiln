@@ -459,8 +459,8 @@ pub fn target_intrinsic(
 }
 
 /// `ptr @llvm.thread.pointer()`, overloaded on the address space as
-/// `@llvm.thread.pointer.p0()` from LLVM 20 (`overloaded` under
-/// `-fclang-compat=22`); `memory(none)` (WP-782).
+/// `@llvm.thread.pointer.p0()` from LLVM 20 (`overloaded` when the
+/// consuming LLVM is 20 or later); `memory(none)` (WP-782).
 pub fn thread_pointer(m: &mut Module, overloaded: bool) -> FuncId {
     let p = ptr(m);
     let name = if overloaded {
