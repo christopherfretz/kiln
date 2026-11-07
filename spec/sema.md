@@ -1342,7 +1342,7 @@ Redeclaration and linkage rules:
   - Instantiation keeps these attributes unchanged
     (`templ/subst/stmts.rs`); they are not checked again.
   - The parser rejects an argument list on a standard attribute that
-    takes none (`carries_dependency`, `fallthrough`, `noreturn`,
+    takes none (`carries_dependency` before C++26, `fallthrough`, `noreturn`,
     `no_unique_address`, `likely`, `unlikely`, `maybe_unused`,
     `indeterminate` from C++26, even
     `()`): `attribute 'likely' cannot have an argument list` at the `(`,
@@ -2290,7 +2290,14 @@ and returns the scope it names:
       non-bit-field non-static data member (error `... only applies to
       non-bit-field non-static data members`). `carries_dependency`:
       only a function or parameter (error `... only applies to
-      parameters, Objective-C methods, and functions`). `packed`: a
+      parameters, Objective-C methods, and functions`); from C++26
+      (P3475R2, WP-743) it is no standard attribute:
+      `__has_cpp_attribute(carries_dependency)` is 0 and
+      `[[carries_dependency]]` (arguments too, skipped) warns `unknown
+      attribute 'carries_dependency' ignored` [-Wunknown-attributes]
+      and is dropped, the warning clang gives any unknown attribute
+      (GCC 16.1 warns `'carries_dependency' attribute ignored`)
+      (`tests/conformance/dcl.attr.depend/`). `packed`: a
       class, an enumeration or a data member; otherwise `'packed'
       attribute ignored` (warning).
     - `indeterminate` ([dcl.attr.indet]/1, C++26 P2795R5, WP-448;

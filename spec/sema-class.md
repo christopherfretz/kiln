@@ -561,7 +561,8 @@ reported before the bases are visited (clang visits the bases first).
 [class.union]: at most one variant member has an NSDMI or appears in a
 ctor-initializer (`initializing multiple members of union` + note `previous
 initialization is here`); union special members are deleted when a variant
-member's corresponding member is non-trivial ([class.union.general]/3, §4.2);
+member's corresponding member is non-trivial ([class.union.general]/3, §4.2;
+from C++26 not for the default constructor and destructor, P3074R7);
 no bases, not a base, no virtual functions, no reference members. Anonymous
 unions are M2 (`IndirectField`).
 
@@ -864,6 +865,42 @@ defaulted member that would be deleted: deleted, plus `explicitly defaulted
 default constructor is implicitly deleted` [-Wdefaulted-function-deleted] +
 note `replace 'default' with 'delete'` (or an error when the declared type
 differs, [dcl.fct.def.default]/2).
+
+**Trivial unions (P3074R7, C++26; WP-743; `trivial_unions()`).** From
+`-std=c++26`, the rules change for a union's default constructor and
+destructor, named or anonymous. They change in two ways.
+- **Deletion.** A variant member's non-trivial default constructor or
+  destructor no longer deletes them. The bullet deleting the default
+  constructor of a union whose members are all const is removed.
+- **Triviality.** A variant member's non-trivial default constructor or
+  destructor no longer makes them non-trivial ([class.default.ctor]/3.4,
+  [class.dtor]/8.3). The defaulted default constructor is trivial unless
+  a variant member has a default member initializer, and it begins no
+  variant member's lifetime (spec/oven.md "C++26 union lifetime").
+
+What still deletes them (`delete_for_variant_member`):
+- **Default constructor.** A variant member with a default member
+  initializer whose constructor is unusable ([class.default.ctor]/2.3-2.4).
+- **Destructor.** A variant member of class type `M` deletes it when
+  `M`'s destructor is deleted, inaccessible or non-trivial, and either
+  - the member has a default member initializer ([class.dtor]/7.2.2), or
+  - default-initializing the union fails or selects a deleted or
+    user-provided constructor ([class.dtor]/7.2.1).
+
+  The second case follows CWG3041, which corrects the DIS's "not
+  trivial" to "user-provided". kiln decides it from the declared
+  constructors (`union_default_init_bad`). Overload resolution is not
+  possible while the implicit members are being declared. So it fails
+  when the user declared a constructor but no default constructor, when
+  there are several default constructors, or when the one there is
+  deleted or user-provided. An anonymous union has no user-provided
+  constructor.
+
+Copy and move members keep the variant-member rule. Earlier modes keep
+all the old rules and diagnostics
+(`tests/conformance/class.union/trivial-union-cxx26.cpp`,
+`trivial-union-deleted-cxx26.cpp`, `trivial-union-cxx23.cpp`). GCC 17
+is the only implementation; clang 22 and GCC 16.1 do not implement it.
 
 ### 4.3 Triviality ([class.default.ctor]/3, [class.copy.ctor]/11, [class.copy.assign]/9, [class.dtor]/8)
 Not user-provided, no virtual functions/bases (ctor, copy/move, assign), every

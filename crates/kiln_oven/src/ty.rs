@@ -1212,8 +1212,14 @@ impl Types {
                 TyKind::Record { .. } if cache => {
                     return self.extent_cached(t, o - base, p).map(|(s, n, e)| (s + base, n, e));
                 }
-                TyKind::Record { .. } => {
+                TyKind::Record { union, .. } => {
                     let rel = o - base;
+                    // In a union, an array member holding the object wins
+                    // over a member that is the object itself (`union {
+                    // T t; T a[N]; }`: `&a[0] + 1` is `&a[1]`, WP-743);
+                    // the access through the result checks the active
+                    // member.
+                    let mut single = None;
                     for sized in [true, false] {
                         for f in self.near(t, rel) {
                             let sz = self.size(f.ty);
@@ -1224,11 +1230,14 @@ impl Types {
                                 && rel < f.offset + sz.max(1)
                                 && let Some(r) = self.extent_in(f.ty, base + f.offset, o, p, false)
                             {
-                                return Some(r);
+                                if !union || r.2 {
+                                    return Some(r);
+                                }
+                                single = single.or(Some(r));
                             }
                         }
                     }
-                    return None;
+                    return single;
                 }
                 _ => return None,
             }

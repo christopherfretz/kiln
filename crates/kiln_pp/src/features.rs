@@ -71,6 +71,15 @@ const KILN_CPP_ATTRIBUTES: &[(u16, &str, u32)] = &[
     (6, "indeterminate", 202_403),
 ];
 
+/// Unscoped standard attributes a later standard removes, which kiln
+/// reports as 0 from that standard on at every compatibility level:
+/// (first [`std_index`] without it, name).
+const KILN_REMOVED_CPP_ATTRIBUTES: &[(u16, &str)] = &[
+    // P3475R2 removes `[[carries_dependency]]` from C++26 (WP-743; GCC 16.1
+    // answers 0 at C++26, clang 22 still 200809L).
+    (6, "carries_dependency"),
+];
+
 /// A target triple, normalized as clang's `TargetInfo` sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Triple {
@@ -407,13 +416,16 @@ impl FeatureQueries for ClangFeatures {
         match scope {
             None => {
                 let name = strip_dunder(name);
+                let std = self.bit.trailing_zeros() as u16 % 7;
+                if KILN_REMOVED_CPP_ATTRIBUTES.iter().any(|&(from, n)| n == name && std >= from) {
+                    return 0;
+                }
                 let v = self.lookup(Kind::CppAttribute, table::CPP_ATTRIBUTE, name);
                 if v != 0 {
                     return v;
                 }
                 // Standard attributes kiln implements beyond clang 22, at
                 // every compatibility level (like `KILN_FEATURES`).
-                let std = self.bit.trailing_zeros() as u16 % 7;
                 KILN_CPP_ATTRIBUTES
                     .iter()
                     .find(|&&(min, n, _)| n == name && std >= min)

@@ -906,6 +906,14 @@ impl Sema<'_, '_> {
                 let mut fb = self.ast.decls.record(fr).map(|x| x.defn).unwrap_or_default();
                 if union {
                     fb = fb.with(DefinitionBits::LITERAL);
+                    // P3074R7 [class.default.ctor]/3.4, [class.dtor]/8.3:
+                    // a union's variant members do not make its default
+                    // constructor or destructor non-trivial.
+                    if self.trivial_unions() {
+                        fb = fb
+                            .with(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
+                            .with(DefinitionBits::TRIVIAL_DTOR);
+                    }
                 }
                 and_with(&mut bits, fb);
                 if !fb.contains(DefinitionBits::STANDARD_LAYOUT) {

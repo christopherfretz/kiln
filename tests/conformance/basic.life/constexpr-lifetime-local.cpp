@@ -1,11 +1,11 @@
-// [basic.life]/1.4, /9, [expr.const]/5.18, [class.union.general]/6: outside
-// std::allocator storage, an explicit destructor call (or pseudo-destructor
-// call) ends the lifetime of a local, parameter, array element or `new`
-// object; destroying it again, reading, assigning or calling a member
-// function of it is not constant, nor is its implicit destruction at scope
-// exit or by `delete` unless a placement new (std::construct_at) re-created
-// it. Assigning a union member after another member's destruction makes it
-// active. spec/oven.md "Object lifetime".
+// [basic.life]/1.4, /9, [expr.const]/5.18, [class.union.general]/6: outside std::allocator storage,
+// an explicit destructor call (or pseudo-destructor call) ends the lifetime of a local, parameter,
+// array element or `new` object; destroying it again, reading, assigning or calling a member
+// function of it is not constant, nor is its implicit destruction at scope exit or by `delete`
+// unless a placement new (std::construct_at) re-created it. Assigning a union member after another
+// member's destruction makes it active. spec/oven.md "Object lifetime". Pinned to C++23 (P3726R2
+// changes union member destruction in C++26: basic.life/union-member-destroyed-cxx26.cpp).
+//@ std: c++23
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 57:15 error "static assertion expression is not an integral constant expression"

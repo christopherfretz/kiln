@@ -1,13 +1,13 @@
-// [dcl.attr.grammar]/5 (an attribute appertains to the entity its position
-// names; ill-formed when it cannot), [dcl.attr.nodiscard]/1,
-// [dcl.attr.noreturn]/1, [dcl.attr.nouniqueaddr]/1, [dcl.align]/1,
-// [dcl.attr.fallthrough]/1, [dcl.attr.likelihood]/1, [dcl.attr.assume]/1,
-// [dcl.typedef]/2 (an alias-declaration's attributes appertain to the
-// typedef-name), [dcl.spec.general]/1, [dcl.ptr]/1, [dcl.fct]/1 (attributes
-// after the decl-specifier-seq, a ptr-operator or a function declarator
-// appertain to the type): one subject table for declarators,
-// alias-declarations, typedefs, class-heads and enum-heads, and clang 19's
-// "cannot be applied to types" for declaration attributes in a type position.
+// [dcl.attr.grammar]/5 (an attribute appertains to the entity its position names; ill-formed
+// when it cannot), [dcl.attr.nodiscard]/1, [dcl.attr.noreturn]/1, [dcl.attr.nouniqueaddr]/1,
+// [dcl.align]/1, [dcl.attr.fallthrough]/1, [dcl.attr.likelihood]/1, [dcl.attr.assume]/1,
+// [dcl.typedef]/2 (an alias-declaration's attributes appertain to the typedef-name),
+// [dcl.spec.general]/1, [dcl.ptr]/1, [dcl.fct]/1 (attributes after the decl-specifier-seq, a
+// ptr-operator or a function declarator appertain to the type): one subject table for
+// declarators, alias-declarations, typedefs, class-heads and enum-heads, and clang 19's "cannot
+// be applied to types" for declaration attributes in a type position. Pinned to C++23 (P3475R2
+// removes carries_dependency in C++26: dcl.attr.depend/carries-dependency-removed-cxx26.cpp).
+//@ std: c++23
 //@ expect: compile-fail
 //@ strict-diags
 //@ args: -ferror-limit=0
