@@ -980,7 +980,13 @@ asks exactly one of:
   `enable_if<sizeof(first_t<int, decltype(T::x)>) == 4>` names the
   specialization `enable_if<true>` (its `::type` is found at the
   definition), while the written argument is what a partial
-  specialization's deduction substitutes again (WP-465).
+  specialization's deduction substitutes again (WP-465). A default
+  argument after it is substituted with that converted value, so in a
+  member of a class template `AS<sizeof(buf)>` with `template<size_t L,
+  size_t A = mx<L>::value>` names `AS<32, 16>`, not a specialization whose
+  second argument is a dependent `mx<sizeof(buf)>::value` (libc++'s
+  `aligned_storage` in `std::function`'s swap; WP-685,
+  tests/conformance/temp.arg.general/default-after-instantiation-dependent-argument.cpp).
 
 `sizeof...(U)` with `U` bound to a list holding pack expansions (an alias
 template named `N<Ts...>`) is the value-dependent `k + sizeof...(P1) +
