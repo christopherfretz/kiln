@@ -166,6 +166,12 @@ clang's `Parser` over `Preprocessor::Lex`.
   reading then wins ([temp.arg.general]/2). `int(x)`, with `x` a variable,
   stays a functional cast (WP-554;
   `tests/conformance/temp.arg/type-id-injected-class-name-*.cpp`).
+  The injected-class-name of a base class template specialization, found
+  through a derived class (`B`, `D::B`, `typename D::B` for
+  `struct D : B<int>`), names `B<int>` in a decl-specifier or a qualified
+  type when no `<` follows ([temp.local]/1-2, [class.qual]/2;
+  `Sema::inherited_injected_class`, WP-686). As a nested-name-specifier
+  component (`D::B::m`) it is not handled yet.
   Dependent qualified names follow clang's `isCXXDeclarationSpecifier`
   (WP-291). A dependent `N::m` that the scan cannot classify is a
   decl-specifier when an identifier or another decl-specifier follows it

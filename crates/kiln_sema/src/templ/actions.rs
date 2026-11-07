@@ -2197,6 +2197,34 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// The class template specialization whose injected-class-name `name`
+    /// finds by lookup in `qualifier` (unqualified when `None`) through a
+    /// base class, not as an enclosing class: in `struct D : B<int> {}`,
+    /// `B` inside `D`, `D::B` and `typename D::B` name the type `B<int>`
+    /// when no `<` follows ([temp.local]/1-2, [class.qual]/2). `None` for
+    /// any other result, an ambiguous one included.
+    pub fn inherited_injected_class(
+        &self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+    ) -> Option<DeclId> {
+        let found = match qualifier.map(|q| self.type_name_qualifier(q)) {
+            Some(q) if self.is_dependent_ctx(q) => return None,
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
+        let &d = found.decls.first()?;
+        let first = self.ast.first(d);
+        if self.kind_of(d) != DeclKind::CXXRecord
+            || found.decls.iter().any(|&x| self.ast.first(x) != first)
+            || self.ast.described_template(first).is_some()
+            || self.ast.partial_spec_info(first).is_some()
+        {
+            return None;
+        }
+        self.ast.spec_info(first).map(|_| d)
+    }
+
     /// The class template whose parameters spell the injected-class-name
     /// of class template pattern `c`: clang builds that type once, when
     /// the first declaration is seen, and caches it in the redeclaration
