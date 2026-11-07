@@ -1913,6 +1913,13 @@ and returns the scope it names:
       elements) and is then `initialization of non-aggregate type T with
       a designated initializer list` (a vector is not an aggregate), at
       the variable or at a nested list's brace.
+    - A list whose leading element is an unbraced vector copy-initializes
+      the whole vector from it (clang `CheckVectorType`, non-OpenCL), so
+      `v4{v2, v2}` with a 2-lane `v2` is `cannot initialize a value of
+      type 'v4' ... with an lvalue of type 'v2'` in clang 19 and 22 alike;
+      kiln does not split a shorter vector into lanes (the OpenCL rule).
+      Test: `tests/conformance/ext.vector/list-init-shorter-vector-element-rejected.cpp`
+      (WP-802).
   - GNU `malloc` (function with a pointer result, else `'malloc'
     attribute only applies to return values that are pointers`; on a
     non-function `... only applies to functions`), `alloc_size(n[, m])`
