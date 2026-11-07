@@ -831,6 +831,13 @@ impl Sema<'_, '_> {
                 return x;
             }
         }
+        // A type-dependent initializer whose type is known (`T x(U(a))`,
+        // `U(a)` a `CXXUnresolvedConstructExpr` of class `U`): initialized
+        // at instantiation, whatever the target (clang
+        // `InitializationSequence::InitializeFrom`'s `DependentSequence`).
+        if self.expr_is_type_dependent(e) && self.ast.types.as_record(ety).is_some() {
+            return e;
+        }
         let class_src = self.ast.types.as_record(ety).is_some()
             && !self.ast.types.is_reference(ty)
             && !self.expr_is_type_dependent(e)
