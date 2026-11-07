@@ -171,7 +171,13 @@ clang's `Parser` over `Preprocessor::Lex`.
   `struct D : B<int>`), names `B<int>` in a decl-specifier or a qualified
   type when no `<` follows ([temp.local]/1-2, [class.qual]/2;
   `Sema::inherited_injected_class`, WP-686). As a nested-name-specifier
-  component (`D::B::m`) it is not handled yet.
+  component (`D::B::m`) it is not handled yet. An unqualified lookup
+  that finds the injected-class-names of several specializations of one
+  class template through different bases names that template when `<`
+  follows, and is ambiguous otherwise (clang's "found in multiple base
+  classes of different types"; [temp.local]/4,
+  `Sema::ambiguous_injected_class`, WP-726;
+  `temp.local/p4-injected-names-same-template.cpp`).
   Dependent qualified names follow clang's `isCXXDeclarationSpecifier`
   (WP-291). A dependent `N::m` that the scan cannot classify is a
   decl-specifier when an identifier or another decl-specifier follows it

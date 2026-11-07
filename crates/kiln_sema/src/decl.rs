@@ -9326,6 +9326,36 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// The first of the injected-class-names of specializations of one
+    /// class template that an ambiguous unqualified lookup of `name` finds
+    /// in several base classes ([temp.local]/4); `None` for any other
+    /// result.
+    pub fn ambiguous_injected_class(&self, name: Symbol) -> Option<DeclId> {
+        let found = self.lookup_name(name, LookupKind::Ordinary);
+        if found.decls.len() < 2 {
+            return None;
+        }
+        let mut tmpls = found.decls.iter().map(|&d| {
+            (self.kind_of(d) == DeclKind::CXXRecord
+                && self.ast.decls.get(d).name() == DeclName::ident(name))
+            .then(|| self.injected_template_of(d))
+            .flatten()
+            .map(|t| self.ast.first(t))
+        });
+        let first = tmpls.next().flatten();
+        (first.is_some() && tmpls.all(|t| t == first)).then(|| found.decls[0])
+    }
+
+    /// [`Sema::diagnose_ambiguous_name`] for an unqualified `name` followed
+    /// by `<` as a template-name: a lookup that finds only
+    /// injected-class-names of specializations of one class template (in
+    /// several base classes) names that template and is not ambiguous
+    /// ([temp.local]/4).
+    pub fn diagnose_ambiguous_template_name(&mut self, name: Symbol, loc: Loc) -> bool {
+        self.ambiguous_injected_class(name).is_none()
+            && self.diagnose_ambiguous_name(name, None, loc)
+    }
+
     /// An ambiguous lookup `decls` of `_` ([basic.scope.scope]/5, P2169)
     /// that clang words as a placeholder ambiguity: the first declaration
     /// (in source order) is name-independent.

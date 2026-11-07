@@ -1267,7 +1267,7 @@ impl Parser<'_, '_> {
         if let Some(name) = self.ident()
             && self.peek_is(1, Punct::Less)
         {
-            self.s.diagnose_ambiguous_name(name, None, loc);
+            self.s.diagnose_ambiguous_template_name(name, loc);
         }
         true
     }
@@ -1336,6 +1336,23 @@ impl Parser<'_, '_> {
                 } else if let Some(d) = self.s.inherited_injected_class(name, None) {
                     self.bump();
                     self.s.mark_type_referenced(d);
+                    let ty = self.s.elaborated_tag_type(d, TagKeyword::None);
+                    self.set_named_base(ds, Some(ty), loc);
+                }
+                true
+            }
+            // The injected-class-names of two specializations of one
+            // template found through different bases, not as a
+            // template-name: ambiguous ([temp.local]/4), recovering with
+            // the first.
+            Some((end, NameClass::TypeTemplate(_), name))
+                if end == start + 1
+                    && !self.next_is_less(end)
+                    && self.s.ambiguous_injected_class(name).is_some() =>
+            {
+                if let Some(d) = self.s.ambiguous_injected_class(name) {
+                    self.bump();
+                    self.s.diagnose_ambiguous_name(name, None, loc);
                     let ty = self.s.elaborated_tag_type(d, TagKeyword::None);
                     self.set_named_base(ds, Some(ty), loc);
                 }
