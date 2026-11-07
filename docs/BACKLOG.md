@@ -748,8 +748,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-723 | sema: substituting `ExcSpec::DependentNoexcept` is unimplemented (`crates/kiln_sema/src/templ/subst/types.rs:365`) | WP-709 | fixed by WP-735 (tests/conformance/except.spec/p13-*, temp.deduct.conv/p5-*) |
 | WP-725 | diag: implement -Wdeprecated-copy and subgroups (group names only today, `crates/kiln_diag/src/clang_groups.rs:243`) | WP-720 | open |
 | WP-727 | harness: oss-build.sh tag check warns when two tags point at the checkout (`scripts/oss/oss-build.sh:67`; use `git tag --points-at HEAD`) | WP-716 | open |
-| WP-728 | sema: diagnose conflicting `section` placements (clang err_section_conflict; `crates/kiln_sema/src/decl.rs:9971`) | WP-716 | open |
-| WP-750 | correctness bundle 2: noreturn keeps noexcept/fn-type bits, noreturn on instantiation, class-scope __PRETTY_FUNCTION__, pre-C++17 exception spec in typedef, section conflicts | WP-728 | in progress |
+| WP-728 | sema: diagnose conflicting `section` placements (clang err_section_conflict; `crates/kiln_sema/src/decl.rs:9971`) | WP-716 | fixed by WP-750 (PR #335) |
+| WP-750 | correctness bundle 2: noreturn keeps noexcept/fn-type bits, noreturn on instantiation, class-scope __PRETTY_FUNCTION__, pre-C++17 exception spec in typedef, section conflicts | WP-728 | landed PR #335: 740, 747, 748, 749, 728 fixed; follow-ups WP-751..754 |
 | WP-729 | perf: profile protobuf summed compile time (2.65x clang-19; docs/status/oss/protobuf.md) | WP-716 | open |
 | WP-731 | contracts sema gaps: lambda captures of parameters, explicit specialization adding contracts, friend redecl postcondition-param rule, dump prints type-parameter-0-0, spurious constexpr note after predicate error (spec/contracts.md:324-340) | WP-706 | open |
 | WP-732 | C++26 DIS todo papers: P3598, P2841, P3074, P3726, P1494, P3475 (docs/STANDARD_SUPPORT.md:337-342) | WP-706 | open |
@@ -759,13 +759,17 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-737 | pp: `__has_builtin(__dmb)` is 1 in MS modes but `__dmb` and relatives are undeclared (`crates/kiln_pp/src/features.rs`) | WP-724 | open |
 | WP-738 | perf: kiln-built objects link 1.5x slower than clang-19 (rocksdb 630 s vs 412 s summed; compare object/debug-info size per TU; docs/status/oss/rocksdb.md) | WP-724 | open |
 | WP-739 | harness: kiln-cxx OOM_RE matches quoted source snippets, so a rejection logged as out-of-memory (`scripts/oss/kiln-cxx:30`) | WP-730 | open |
-| WP-740 | ast-dump/predefined: `__PRETTY_FUNCTION__` class scope prints template args as written not canonical (`C<A, 3>::m`), lambda type arg lacks its location (`crates/kiln_ast/src/dump/names.rs` write_scope_chain) | WP-730 | open |
+| WP-740 | ast-dump/predefined: `__PRETTY_FUNCTION__` class scope prints template args as written not canonical (`C<A, 3>::m`), lambda type arg lacks its location (`crates/kiln_ast/src/dump/names.rs` write_scope_chain) | WP-730 | fixed by WP-750 (PR #335) |
 | WP-741 | attrs: implement `[[gsl::Pointer]]` / `[[gsl::Owner]]` (warn as unknown today; LLVM ADT uses them) | WP-730 | open |
 | WP-742 | oss: llvm_project IRTests + ADTTests re-run after WP-726 lands (kiln build link of ADTTests; docs/status/oss/llvm_project.md) | WP-730 | open |
 | WP-744 | contracts: coroutine postconditions (unsupported today; `crates/kiln_codegen/src/contracts.rs` emit_postconditions, spec/contracts.md §9) | WP-707 | open |
 | WP-745 | bench: rebaseline on a quiet host from tmpfs binaries (WP-707 saw 17 time/RSS flags with +0.0% steps/bytes, constant +0.4 MB RSS baseline skew) | WP-707 | open |
-| WP-747 | diag: exception specification on a typedef/alias before C++17 is not diagnosed (clang: exception specifications are not allowed in typedefs; `crates/kiln_sema/src/except.rs` act_on_dynamic_exception_spec) | WP-735 | open |
-| WP-748 | sema: `&die` loses `noexcept` in C++20 for `static void die() noexcept __attribute__((noreturn))` (`crates/kiln_sema/src/decl_attrs.rs:1137` apply_noreturn_attrs rebuilds from canonical type) | WP-735 | open |
-| WP-749 | sema: `&S<true>::e` loses `noreturn` after instantiation for a noexcept noreturn static member (`crates/kiln_sema/src/templ/subst/decls.rs` function-type substitution) | WP-735 | open |
+| WP-747 | diag: exception specification on a typedef/alias before C++17 is not diagnosed (clang: exception specifications are not allowed in typedefs; `crates/kiln_sema/src/except.rs` act_on_dynamic_exception_spec) | WP-735 | fixed by WP-750 (PR #335) |
+| WP-748 | sema: `&die` loses `noexcept` in C++20 for `static void die() noexcept __attribute__((noreturn))` (`crates/kiln_sema/src/decl_attrs.rs:1137` apply_noreturn_attrs rebuilds from canonical type) | WP-735 | fixed by WP-750 (PR #335) |
+| WP-749 | sema: `&S<true>::e` loses `noreturn` after instantiation for a noexcept noreturn static member (`crates/kiln_sema/src/templ/subst/decls.rs` function-type substitution) | WP-735 | fixed by WP-750 (PR #335) |
+| WP-751 | mangling: before C++17 `noexcept` stays in pointer types and mangling (`PDoFvvE` where clang has `PFvvE` at c++14; `crates/kiln_sema/src/decl_attrs.rs:1140`) — ABI | WP-750 | open |
+| WP-752 | sema/parse: friend redeclaration loses GNU noreturn (`crates/kiln_sema/src/decl.rs:3066`); `[]() noexcept __attribute__((noreturn)) {}` accepted, clang rejects (`crates/kiln_parse/src/lambda.rs:252`) | WP-750 | open |
+| WP-753 | predefined: deduced bracket args print `noexcept(false)`/`noexcept(true)` where clang prints nothing/`noexcept` (`crates/kiln_sema/src/predefined.rs:293`); `partial_print_args` scope chain prints unscoped (`crates/kiln_ast/src/dump/names.rs:345`) | WP-750 | open |
+| WP-754 | diag long tail from WP-750 (deferred): -Wc++17-compat-mangling never emitted, -Wignored-attributes for noreturn after trailing return, -Wundefined-internal, typedef exception-spec outer-chunk order, d4 expected-expression/column, #pragma section/__declspec(allocate) (clang PSF_Implicit) | WP-750 | deferred |
 WP-511
 WP-512
