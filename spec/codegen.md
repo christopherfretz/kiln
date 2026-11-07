@@ -2896,7 +2896,12 @@ of the full-expression are shared by the normal and the `.cleanup`
 path, a value computed before the cleanups and used after them is
 spilled to a `tmp.exprcleanup` alloca right after its definition and
 reloaded after the cleanups (clang `RunCleanupsScope::ForceCleanup(
-ValuesToReload)`; `end_scope_reload` / `pop_cleanup_blocks_reload`).
+ValuesToReload)`; `end_scope_reload` / `pop_cleanup_blocks_reload`). A
+reference bound to such a full-expression (`const auto& r = co_await
+a;` with an lvalue-reference `await_resume`) reloads its bound address
+the same way before the reference is stored (clang
+`EmitExprWithCleanupsLValue`; `Cg::emit_ref_binding`; WP-726,
+`expr.await/reference-result-bound-to-reference.cpp`).
 
 **`CoroEnd` cleanup (EH only, clang `CallCoroEnd`).** On unwinding,
 `llvm.coro.end(ptr null, i1 true, token none)`. For LLVM 19 it returns
