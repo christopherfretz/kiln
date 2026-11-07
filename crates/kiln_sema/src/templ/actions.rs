@@ -503,8 +503,9 @@ impl Sema<'_, '_> {
         // in `template<template<class> class H, template<class> class...
         // T> struct Ts`, googletest's `Templates`) covers parameters only
         // once substituted: no partial specialization's own arguments.
+        // Every argument from `first_pack` on is the pack's, if any.
         if let Some(i) = written.iter().position(|&a| self.is_pack_expansion_arg(a))
-            && params.get(i).is_none_or(|&p| !self.ast.template_parm(p).is_some_and(|x| x.pack))
+            && (i < first_pack || first_pack == params.len())
         {
             return None;
         }
