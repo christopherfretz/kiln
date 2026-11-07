@@ -185,7 +185,7 @@ configure = ["-DBUILD_TESTING=ON", "-DWITH_GFLAGS=OFF", "-DWITH_GTEST=OFF", "-DW
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 2
-verified = false
+verified = true
 notes = "Archived upstream; v0.7.1 is the last release."
 
 [yaml_cpp]

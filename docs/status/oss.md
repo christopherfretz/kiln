@@ -56,7 +56,7 @@ The loop:
 | `cereal` | 2 | `v1.3.2` | not started |
 | `eigen` | 2 | `3.4.1` | not started |
 | `entt` | 2 | `v3.15.0` | tests at parity |
-| `glog` | 2 | `v0.7.1` | not started |
+| `glog` | 2 | `v0.7.1` | tests at parity |
 | `re2` | 2 | `2025-11-05` | not started |
 | `simdjson` | 2 | `v4.2.4` | blocked (tests 116/117 vs clang 117/117) |
 | `taskflow` | 2 | `v3.10.0` | not started |
@@ -229,3 +229,21 @@ Failure clusters (kiln): none.
 
 Failure clusters (kiln): none.
 <!-- /oss:entt -->
+
+<!-- oss:glog -->
+### glog (v0.7.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 23 / 0 | 23 / 0 |
+| links ok / failed | 14 / 0 | 14 / 0 |
+| tests passed / total | 23 / 24 | 23 / 24 |
+| wall | 20 s | 37 s |
+| peak TU RSS | 99 MB | 169 MB |
+
+Failure clusters (kiln): none.
+
+kiln test run: `96% tests passed, 1 tests failed out of 24`
+<!-- /oss:glog -->
