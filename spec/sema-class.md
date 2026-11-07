@@ -696,7 +696,13 @@ virtual base 'A'`).
   `std::meta::exception::what`; WP-525,
   `class.virtual/consteval-override-consteval-only.cpp`).
 - **Pure/abstract**: `= 0` only on virtuals (`'p' is not virtual and cannot be
-  declared pure`); `ABSTRACT` iff some final overrider is pure. Abstract uses
+  declared pure`). In a dependent class (a template pattern or a class
+  nested in one, `Sema::in_dependent_class`; clang `CheckPureMethod`)
+  the member is declared pure unchecked, since a dependent base may make
+  it virtual, and the error comes from the instantiation, which declares
+  it pure again (WP-726,
+  `tests/conformance/class.abstract/pure-override-of-dependent-base.cpp`,
+  `pure-not-virtual-at-instantiation.cpp`). `ABSTRACT` iff some final overrider is pure. Abstract uses
   ([class.abstract]/3): variable (`variable type 'Abs' is an abstract class` +
   `unimplemented pure virtual method 'f' in 'Abs'`), `new` (`allocating an
   object of abstract class type 'Abs'`), field, parameter/return of a
