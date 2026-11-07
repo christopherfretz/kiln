@@ -3292,6 +3292,15 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   class`, or `using declaration refers into 'C::', which is not a base
   class of 'D'`. A declarator qualified by an
   enumeration works at class scope as anywhere else.
+  - (WP-724) [namespace.udecl]/10: a using-declarator in a class
+    repeats an earlier one, "redeclaration of using declaration" with
+    "previous using declaration", only when both qualifiers name the
+    same class (`previous_class_using`, clang
+    `CheckUsingDeclRedeclaration`). Through another class (`using
+    A::f; using B::f;` with `B` derived from `A`) a member the class
+    already has a shadow of gets no second shadow and no diagnostic
+    (`introduce_shadow`, clang `CheckUsingShadowDecl`;
+    `namespace.udecl/p10-*.cpp`).
 - **`using enum`** ([enum.udecl]): `act_on_using_enum(qual, class, name,
   name_loc)` takes the parser's classification of the (possibly
   qualified) name.
