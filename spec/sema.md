@@ -4549,7 +4549,12 @@ for them.
     type; a bit-field member is an error. Array indices must be
     integral constants; a non-constant index, and a result outside
     0 to 2^32 - 1 (which a negative index gives), are unsupported.
-    clang's error for a member of a virtual base is not implemented.
+  - (WP-716) A member is found by class member lookup, so through
+    base classes too ([class.member.lookup]; an ambiguous name is
+    reported as for a member access). The offset of the base
+    subobject along the unique path is added; a member of a virtual
+    base is clang's error `invalid application of 'offsetof' to a
+    field of a virtual base` (`ext.gnu.offsetof/base-member*.cpp`).
   - For a class that is not standard-layout it warns
     `-Winvalid-offsetof`. Standard-layout is computed from members
     and bases (`is_standard_layout`) until the definition bits track
