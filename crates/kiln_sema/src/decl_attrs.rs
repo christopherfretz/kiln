@@ -814,7 +814,7 @@ impl Sema<'_, '_> {
     }
 
     /// The `alias` / `ifunc` attribute written on `d` itself.
-    fn own_alias_attr(&self, d: DeclId) -> Option<AttrNode> {
+    pub(crate) fn own_alias_attr(&self, d: DeclId) -> Option<AttrNode> {
         self.ast
             .lists
             .iter::<AttrId>(self.ast.attrs.of_decl(d))
@@ -828,26 +828,27 @@ impl Sema<'_, '_> {
     /// `ActOnStartOfFunctionDef`, `checkAttributesAfterMerging`); where an
     /// earlier declaration has one, `redefinition of
     /// 'x'` noting it (clang `hasDefiningAttr`; a `weakref`'s `alias`
-    /// counts).
-    pub(crate) fn check_alias_definition(&mut self, d: DeclId) {
+    /// counts). Returns whether a redefinition was reported.
+    pub(crate) fn check_alias_definition(&mut self, d: DeclId) -> bool {
         if let Some(node) = self.own_alias_attr(d) {
             let msg = self
                 .diag(DiagId::sema_alias_is_definition, node.loc)
                 .arg(format!("'{}'", self.decl_name(d)))
                 .arg(u32::from(node.kind == AttrKind::IFUNC));
             self.emit(msg);
-            return;
+            return false;
         }
         let Some(prev) =
             self.ast.redecls_of(d).find(|&p| p != d && self.own_alias_attr(p).is_some())
         else {
-            return;
+            return false;
         };
         let msg = self
             .diag(DiagId::sema_redefinition, self.ast.decls.get(d).loc())
             .arg(self.decl_name(d));
         let msg = self.note_prev(msg, prev, true);
         self.emit(msg);
+        true
     }
 
     /// GNU `gnu_inline` on function `d` (clang `handleGNUInlineAttr`):

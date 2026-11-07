@@ -20,8 +20,8 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::{AttrId, StringLitId};
 use kiln_ast::{DeclId, ids::RawId as _};
 use kiln_diag::{Diag, DiagId, FixIt, Severity};
-use kiln_llvm::{AliasId, Attr, AttrKind as LAttr, Linkage, TypeId, Value, ValueRef};
-use kiln_source::fx::FxHashSet;
+use kiln_llvm::{AliasId, Attr, AttrKind as LAttr, FuncId, Linkage, TypeId, Value, ValueRef};
+use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::{Loc, Span};
 
 use crate::module::{Cg, R, err};
@@ -38,6 +38,12 @@ pub(crate) struct AliasState {
     /// definition of that symbol completes the declaration rather than
     /// being deferred or renamed.
     pub(crate) targets: FxHashSet<String>,
+    /// Functions declared by name as an aliasee, with the alias's first
+    /// declaration: their parameter and return attributes stay that
+    /// declaration's when the aliasee is defined (clang
+    /// `GetOrCreateLLVMFunction` sets them once, from the alias's
+    /// `GlobalDecl`; an `extern "C"` alias gives no `noundef` return).
+    pub(crate) declared_for: FxHashMap<FuncId, DeclId>,
 }
 
 impl Cg<'_> {
@@ -202,7 +208,9 @@ impl Cg<'_> {
             return Ok(Value::global(self.m.add_global(target, vt)));
         }
         let sig = self.decl_sig(first)?;
-        Ok(Value::func(self.declare_fn(target, first, &sig)?))
+        let f = self.declare_fn(target, first, &sig)?;
+        self.alias.declared_for.insert(f, first);
+        Ok(Value::func(f))
     }
 
     /// A deferred definition whose symbol is `target` (clang

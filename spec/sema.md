@@ -1781,7 +1781,16 @@ and returns the scope it names:
     `definition 'x' cannot also be an {alias|ifunc}`; a definition of the
     entity before or after a declaration carrying one is `redefinition of
     'x'` with `previous definition is here` (`check_alias_redefines`,
-    `check_alias_definition`). `weakref` must have internal
+    `check_alias_definition`). A later variable redeclaration counts the
+    alias declaration as its previous definition (WP-777, clang
+    `MergeVarDecl` / `getDefinition`): `int v;` after `extern int v
+    __attribute__((alias("t")));` is `redefinition of 'v'`, and `extern
+    int v = 2;` is too, without `'extern' variable has an initializer`
+    (the variable is invalid and its initializer dropped, as clang's
+    `AddInitializerToDecl` stops); an `extern "C"` redeclaration's
+    language-linkage note reads `previous definition is here`. Test:
+    `tests/conformance/ext.gnu.alias/alias-is-definition-redefinition.cpp`.
+    `weakref` must have internal
     linkage (`weakref declaration must have internal linkage`) and
     namespace scope, and needs a target. The target checks (defined in
     the TU, no cycle, resolver returns a pointer) are codegen's
