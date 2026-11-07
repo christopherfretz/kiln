@@ -1660,6 +1660,8 @@ impl Sema<'_, '_> {
     /// is that class's ([namespace.udecl]/1), found as its shadow
     /// ([namespace.udecl]/19 access). Each function once.
     pub(crate) fn conversion_functions_all(&self, ty: QualType) -> Vec<(DeclId, DeclId)> {
+        // The types the derived classes on a path convert to.
+        type Hidden = std::rc::Rc<Vec<QualType>>;
         let mut out: Vec<(DeclId, DeclId)> = Vec::new();
         let Some(r) = self.ast.types.as_record(ty) else { return out };
         // Virtual bases' conversion functions, added last unless hidden
@@ -1669,7 +1671,6 @@ impl Sema<'_, '_> {
         // (class, reached through a virtual base, the types its derived
         // classes on this path convert to); the bases are pushed in
         // reverse so they are walked in declaration order.
-        type Hidden = std::rc::Rc<Vec<QualType>>;
         let mut work: Vec<(DeclId, bool, Hidden)> =
             vec![(self.ast.first(r), false, Hidden::default())];
         let mut seen: kiln_source::fx::FxHashSet<(DeclId, bool, Hidden)> =
