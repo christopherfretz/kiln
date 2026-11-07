@@ -9215,6 +9215,17 @@ impl Sema<'_, '_> {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
+        // Not found in the current instantiation, which has a dependent
+        // base: a member of an unknown specialization
+        // ([temp.dep.type]/6; `X::B::type` in `X<T> : B<T>`, clang's
+        // `NotFoundInCurrentInstantiation`).
+        if found.decls.is_empty()
+            && let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::CXXRecord
+            && self.has_dependent_bases(q)
+        {
+            return NameClass::Dependent;
+        }
         self.classify_found(&found)
     }
 

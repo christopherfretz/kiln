@@ -417,6 +417,12 @@ residual` (docs/status/wp-184-oracle-switch.md).
   (WP-288; libc++ `rand.dist.norm.lognormal/param_types.pass.cpp`;
   `tests/conformance/temp.res/qualified-name-through-typedef.cpp`,
   `qualified-name-through-typedef-run.cpp`).
+  A name that qualified lookup does not find in a class with a
+  dependent base (the current instantiation named by its
+  injected-class-name, `X::B::type` in `X<T> : B<T>`) is `Dependent`: a
+  member of an unknown specialization ([temp.dep.type]/6), so it is a
+  type in a type-only context without `typename` (WP-789;
+  `tests/conformance/temp.dep.type/current-instantiation-qualifier-unknown-member-alias-run.cpp`).
 - A nested-name-specifier component naming a class or enumeration that
   is declared but not defined ([basic.lookup.qual]/1, [class.mem]/1:
   a class is complete only after its definition) is "incomplete type
