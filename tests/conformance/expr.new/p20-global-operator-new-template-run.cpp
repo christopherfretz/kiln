@@ -2,7 +2,8 @@
 // an allocation candidate. Its specialization is deduced from the size and
 // the placement arguments and competes with the non-template functions
 // (the library's `operator new(size_t, void*)` among them) in overload
-// resolution: an exact-match template beats a conversion (WP-712).
+// resolution: an exact-match template beats a conversion, and on a tie
+// the non-template function wins ([over.match.best]/2.4) (WP-712).
 //@ std: c++20
 //@ expect: run
 //@ strict-diags
@@ -25,6 +26,7 @@ template <class Tag> void* operator new[](std::size_t n, Tag, int k) { std::prin
 template <class Tag> void operator delete[](void* p, Tag, int) noexcept { std::free(p); }
 struct Pool { int n = 0; };
 void* operator new(std::size_t n, Pool& p) { ++p.n; return std::malloc(n); }
+template <class T> void* operator new(std::size_t n, T& t) { t.n += 100; return std::malloc(n); }
 template <class T> void* operator new(std::size_t n, T& t, long) { ++t.n; return std::malloc(n); }
 struct Throws { Throws() { throw 1; } };
 struct V { int v; V(int x) : v(x) {} };

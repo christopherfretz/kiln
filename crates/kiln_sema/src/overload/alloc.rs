@@ -23,8 +23,8 @@ use crate::lookup::LookupKind;
 pub(crate) struct AllocFns {
     /// The functions found.
     pub fns: Vec<DeclId>,
-    /// The class-scope function templates found (`template<class... A>
-    /// static void* operator new(size_t, A&&...)`, [temp.over]).
+    /// The function templates found (`template<class... A> static void*
+    /// operator new(size_t, A&&...)`, or a global one; [temp.over]).
     pub templates: Vec<DeclId>,
     /// Found in the scope of the allocated class.
     pub in_class: bool,
@@ -36,7 +36,7 @@ pub(crate) struct AllocFns {
 impl Sema<'_, '_> {
     /// The functions named `operator op` for an object of type `elem`:
     /// the class's own (with those of its bases) unless `global`, else
-    /// the global ones. Function templates (class-scope or global) are
+    /// the global ones. Function templates, class-scope or global, are
     /// kept apart for [`Sema::find_operator_new_template`].
     pub(crate) fn alloc_fns(
         &mut self,
@@ -70,13 +70,17 @@ impl Sema<'_, '_> {
         }
         let tu = self.ast.tu;
         let found: Vec<DeclId> = self.ast.lookup_local(tu, name).iter().collect();
-        let of = |s: &Self, k: DeclKind| -> Vec<DeclId> {
-            found.iter().copied().filter(|&d| s.ast.decls.get(d).kind() == k).collect()
-        };
-        // [expr.new]/20, [temp.over]/1: a global allocation function
-        // template is a candidate too (WP-712).
-        let fns = of(self, DeclKind::Function);
-        let templates = of(self, DeclKind::FunctionTemplate);
+        let fns = found
+            .iter()
+            .copied()
+            .filter(|&d| self.ast.decls.get(d).kind() == DeclKind::Function)
+            .collect();
+        // Global allocation function templates (LLVM's `template <...>
+        // void *operator new(size_t, BumpPtrAllocatorImpl<...> &)`).
+        let templates = found
+            .into_iter()
+            .filter(|&d| self.ast.decls.get(d).kind() == DeclKind::FunctionTemplate)
+            .collect();
         AllocFns { fns, templates, in_class: false, naming: None }
     }
 
