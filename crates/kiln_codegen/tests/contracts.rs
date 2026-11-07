@@ -214,3 +214,44 @@ fn checking_semantics_cost_nothing_without_contracts() {
         }
     }
 }
+
+/// A minimal coroutine library: just what a `co_return` needs.
+const CORO: &str = "\
+namespace std {\n\
+template <class R, class...> struct coroutine_traits { using promise_type = typename R::promise_type; };\n\
+template <class P = void> struct coroutine_handle {\n\
+  void* p;\n\
+  static coroutine_handle from_address(void* a) noexcept { return {a}; }\n\
+  void* address() const noexcept { return p; }\n\
+};\n\
+struct suspend_never {\n\
+  bool await_ready() const noexcept { return true; }\n\
+  template <class H> void await_suspend(H) const noexcept {}\n\
+  void await_resume() const noexcept {}\n\
+};\n\
+}\n\
+struct task {\n\
+  struct promise_type {\n\
+    task get_return_object() { return {}; }\n\
+    std::suspend_never initial_suspend() noexcept { return {}; }\n\
+    std::suspend_never final_suspend() noexcept { return {}; }\n\
+    void return_void() {}\n\
+    void unhandled_exception() {}\n\
+  };\n\
+};\n\
+";
+
+// [dcl.contract.func], [dcl.fct.def.coroutine]: a coroutine's
+// precondition runs at entry, before the frame is set up; its
+// postcondition is unsupported in codegen (spec/contracts.md §9) and is a
+// clean error rather than a silently skipped check.
+#[test]
+fn coroutine_precondition_and_unsupported_postcondition() {
+    let pre = format!("{CORO}task c(const int& x) pre(x > 0) {{ co_return; }}\n");
+    let ir = lower(&pre, ContractSemantic::Enforce).expect("a coroutine precondition lowers");
+    assert!(body(&ir, "_Z1cRKi").contains(&format!("call void {HANDLER}(")), "{ir}");
+    let post = format!("{CORO}task c(const int& x) post(x > 1) {{ co_return; }}\n");
+    let err = lower(&post, ContractSemantic::Enforce).expect_err("unsupported");
+    assert!(err.contains("unsupported: postcondition of a coroutine"), "{err}");
+    lower(&post, ContractSemantic::Ignore).expect("nothing to check under ignore");
+}
