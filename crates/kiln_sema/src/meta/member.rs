@@ -694,7 +694,7 @@ impl Sema<'_, '_> {
                     false,
                 ),
                 DeclKind::Var | DeclKind::VarTemplateSpecialization => {
-                    let t = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                    let t = self.reflected_var_type(d).unwrap_or(QualType::ERROR);
                     if self.ast.types.is_reference(t) {
                         return bad();
                     }
