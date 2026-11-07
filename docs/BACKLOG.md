@@ -737,6 +737,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-713 | sema: placement operator delete templates are not matched (`crates/kiln_sema/src/new_delete.rs:1259` matching_operator_delete) | WP-686 | open |
 | WP-714 | parse: `D::B::m` through a base injected-class-name is not handled (`crates/kiln_parse/src/parser.rs:1001`) | WP-686 | open |
 | WP-715 | sema: `&N::f` naming an overload set through a dependent base (`crates/kiln_sema/src/class/member_expr.rs:226`) | WP-686 | open |
+| WP-735 | correctness bundle: WP-708, 712-715, 722, 723 (corpus-found parse/sema gaps) | WP-686 | in progress |
 | WP-718 | diag: -Wunused-lambda-capture is not implemented (spec/diag.md:238) | WP-703 | open |
 | WP-719 | harness: offline selftest.sh case for `deps` / `--install` with a tiny local cmake fixture (scripts/oss/selftest.sh) | WP-710 | open |
 | WP-721 | diag: -Wdeprecated-dynamic-exception-spec before C++17 (`crates/kiln_sema/src/except.rs` act_on_dynamic_exception_spec) | WP-709 | open |
