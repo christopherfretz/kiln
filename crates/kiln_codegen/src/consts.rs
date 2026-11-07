@@ -39,7 +39,7 @@ impl Cg<'_> {
                 let bytes = img.bytes.to_vec();
                 let relocs = img.relocs.to_vec();
                 let unions = img.unions.to_vec();
-                let img = Img { bytes, relocs, unions };
+                let img = Img::new(bytes, relocs, unions);
                 self.image_const(&img, 0, &it, e)
             }
         }
@@ -736,8 +736,7 @@ impl Cg<'_> {
     /// context is `rd`'s definition).
     fn image_union_member(&self, img: &Img, off: u64, rd: DeclId) -> Option<DeclId> {
         let def = self.ast.definition(rd).unwrap_or(rd);
-        let mut at = img.unions.iter().filter(|u| u64::from(u.at) == off).map(|u| u.field);
-        at.find(|&f| {
+        img.unions_at(off).find(|&f| {
             let ctx = self.ast.decls.get(f).ctx();
             ctx == Some(def) || ctx == Some(rd)
         })
@@ -863,6 +862,13 @@ impl Cg<'_> {
 }
 
 /// A byte image being decomposed.
+///
+/// Its tables are in the canonical order `ConstStore::push_aggregate`
+/// checks (`ByteImage`): `relocs` strictly increasing in `at` (they do not
+/// overlap and have a non-zero width, so one starts at each offset at
+/// most), `unions` strictly increasing in (`at`, `field`). The lookups
+/// binary-search them, so lowering an image with F fields and R
+/// relocations is O(F log R), not O(F x R) (WP-665).
 struct Img {
     bytes: Vec<u8>,
     relocs: Vec<Reloc>,
@@ -872,12 +878,33 @@ struct Img {
 }
 
 impl Img {
+    fn new(bytes: Vec<u8>, relocs: Vec<Reloc>, unions: Vec<UnionMember>) -> Img {
+        debug_assert!(
+            relocs.windows(2).all(|w| w[0].at < w[1].at),
+            "constant image relocations not sorted by offset"
+        );
+        debug_assert!(
+            unions.windows(2).all(|w| (w[0].at, w[0].field) < (w[1].at, w[1].field)),
+            "constant image union members not sorted by offset"
+        );
+        Img { bytes, relocs, unions }
+    }
+
     fn byte(&self, i: u64) -> u8 {
         self.bytes.get(i as usize).copied().unwrap_or(0)
     }
 
+    /// The relocation starting at byte `at`.
     fn reloc(&self, at: u64) -> Option<ConstValueId> {
-        self.relocs.iter().find(|r| u64::from(r.at) == at).map(|r| r.value)
+        let i = self.relocs.binary_search_by_key(&at, |r| u64::from(r.at)).ok()?;
+        Some(self.relocs[i].value)
+    }
+
+    /// The active members recorded for the unions at byte `at`, in table
+    /// order.
+    fn unions_at(&self, at: u64) -> impl Iterator<Item = DeclId> + '_ {
+        let first = self.unions.partition_point(|u| u64::from(u.at) < at);
+        self.unions[first..].iter().take_while(move |u| u64::from(u.at) == at).map(|u| u.field)
     }
 }
 

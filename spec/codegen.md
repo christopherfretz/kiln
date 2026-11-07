@@ -108,7 +108,13 @@ panic and never silently wrong IR.
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
-  literal globals.
+  literal globals. The relocation of a field and the active members of a
+  union are looked up in the image by offset with a binary search, so
+  lowering an image is O(F log R) in its F fields and R relocations, not
+  O(F x R) (WP-665). This relies on the canonical form
+  `ConstStore::push_aggregate` enforces for every image (`ByteImage`):
+  relocations strictly increasing in offset, union members strictly
+  increasing in (offset, field).
 - `fir.rs`: `Fir`, a mutable per-function instruction buffer. It allows
   erasing, RAUW, block reordering and forwarding-block simplification,
   which clang does at -O0 but the append-only `kiln_llvm` builder cannot.
