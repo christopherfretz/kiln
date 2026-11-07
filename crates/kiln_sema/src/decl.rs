@@ -10951,6 +10951,7 @@ fn attr_kind_of(
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
         ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
+        ("mode", _, true) => AttrKind::MODE,
         // clang `Clang<"neon_vector_type">` / `Clang<"neon_polyvector_type">`.
         ("neon_vector_type", _, _) if gnu_syntax || clang_scope => AttrKind::NEON_VECTOR_TYPE,
         ("neon_polyvector_type", _, _) if gnu_syntax || clang_scope => {

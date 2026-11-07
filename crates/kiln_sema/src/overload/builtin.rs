@@ -474,10 +474,10 @@ impl Sema<'_, '_> {
     pub(crate) fn add_conditional_builtin_candidates(
         &mut self,
         set: &mut OverloadCandidateSet,
-        types: &[QualType; 2],
+        types: [QualType; 2],
     ) {
         set.builtin_op = None;
-        let (sets, vis) = self.builtin_type_sets(types, false);
+        let (sets, vis) = self.builtin_type_sets(&types, false);
         if !sets.iter().any(|s| s.non_record) {
             return;
         }

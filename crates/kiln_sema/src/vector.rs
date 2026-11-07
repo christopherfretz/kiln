@@ -86,6 +86,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> ControlFlow<Option<AttrId>> {
         match kind {
+            AttrKind::MODE => ControlFlow::Break(self.mode_attribute(syntax, args, loc)),
             k if k.is_vector_type() => {
                 ControlFlow::Break(self.vector_attribute(kind, syntax, raw, args, loc))
             }
@@ -96,6 +97,148 @@ impl Sema<'_, '_> {
             AttrKind::FORMAT => ControlFlow::Break(self.format_attribute(syntax, args, loc)),
             _ => ControlFlow::Continue(()),
         }
+    }
+
+    /// GNU `mode(M)` as written (clang `handleModeAttr` /
+    /// `parseModeAttrArg`; spec/sema.md "The `mode` attribute"): one
+    /// identifier, `__M__` normalized to `M`. `QI`/`HI`/`SI`/`DI`/`TI`
+    /// are 8/16/32/64/128-bit integers, `HF`/`SF`/`DF`/`TF` (and `KF`,
+    /// `IF`) floating-point, `byte` 8, `word`/`pointer`/`unwind_word` 64
+    /// (`AArch64`); any other name is an unknown mode, and a complex (`?C`)
+    /// or vector (`V…`) mode is unsupported. Encoded as for
+    /// [`AttrKind::MODE`]; applied by [`Self::apply_vector_attrs`].
+    fn mode_attribute(&mut self, syntax: AttrSyntax, args: &[AttrArg], loc: Loc) -> Option<AttrId> {
+        let name = "'mode'";
+        if args.len() != 1 {
+            let msg =
+                self.diag(DiagId::sema_attribute_wrong_number_arguments, loc).arg(name).arg("1");
+            self.emit(msg);
+            return None;
+        }
+        let AttrArg::Ident(sym, _) = args[0] else {
+            let msg = self.diag(DiagId::sema_attribute_param_not_ident, loc).arg(name).arg("1");
+            self.emit(msg);
+            return None;
+        };
+        let written = self.ast.symbols().as_str(sym).to_owned();
+        let m = match written.strip_prefix("__").and_then(|w| w.strip_suffix("__")) {
+            Some(w) if written.len() >= 4 => w,
+            _ => written.as_str(),
+        };
+        let b = m.as_bytes();
+        let (width, class) = match (m, b.len()) {
+            ("byte", _) => (8, 0),
+            ("word" | "pointer" | "unwind_word", _) => (64, 0),
+            (_, 2) => {
+                let w = match b[0] {
+                    b'Q' => 8,
+                    b'H' => 16,
+                    b'S' => 32,
+                    b'D' => 64,
+                    b'X' => 96,
+                    b'T' | b'K' | b'I' => 128,
+                    _ => 0,
+                };
+                match b[1] {
+                    b'I' if !matches!(b[0], b'K' | b'I') => (w, 0),
+                    b'F' => (
+                        w,
+                        match b[0] {
+                            b'T' => 2,
+                            b'K' | b'I' => 3,
+                            _ => 1,
+                        },
+                    ),
+                    b'C' if w != 0 => (w, 4),
+                    _ => (0, 0),
+                }
+            }
+            _ => (0, 0),
+        };
+        let vector = b.len() >= 4 && b[0] == b'V' && b[1..].iter().any(u8::is_ascii_digit);
+        if width == 0 || class == 4 || vector {
+            let unsupported = if width != 0 || vector { "1" } else { "0" };
+            let msg = self
+                .diag(DiagId::sema_machine_mode, loc)
+                .arg(unsupported)
+                .arg(if vector { "1" } else { "0" })
+                .arg(format!("'{m}'"));
+            self.emit(msg);
+            return None;
+        }
+        let node = AttrNode {
+            kind: AttrKind::MODE,
+            syntax,
+            flags: 0,
+            loc,
+            a: width | class << 8,
+            b: sym.index(),
+        };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// `ty` with the `mode` attribute `node` applied (clang
+    /// `Sema::AddModeAttr`): an integral or enumeration type becomes the
+    /// integer type of the mode's width with its signedness, a
+    /// floating-point type the floating-point type of that width, without
+    /// cv-qualifiers (clang sets the declaration's type to the unqualified
+    /// mode type); a dependent type is left as it is.
+    fn apply_mode(&mut self, ty: QualType, node: AttrNode) -> QualType {
+        if self.is_error_type(ty) || self.ast.types.is_dependent(ty) {
+            return ty;
+        }
+        let (width, class) = (node.a & 0xff, node.a >> 8);
+        let integral = conv::rank::int_width(self, ty).is_some()
+            && !matches!(self.ast.types.canonical_view(ty), TypeView::BitInt { .. });
+        let floating = self.ast.types.is_floating(ty);
+        if !integral && !floating {
+            self.error(DiagId::sema_mode_not_primitive, node.loc);
+            return ty;
+        }
+        if integral != (class == 0) {
+            self.error(DiagId::sema_mode_wrong_type, node.loc);
+            return ty;
+        }
+        let new = if integral {
+            let signed = conv::rank::int_signed(self, ty);
+            match (width, signed) {
+                (8, true) => Some(QualType::SCHAR),
+                (8, false) => Some(QualType::UCHAR),
+                (16, true) => Some(QualType::SHORT),
+                (16, false) => Some(QualType::USHORT),
+                (32, true) => Some(QualType::INT),
+                (32, false) => Some(QualType::UINT),
+                (64, true) => Some(QualType::LONG),
+                (64, false) => Some(QualType::ULONG),
+                (128, true) => Some(QualType::INT128),
+                (128, false) => Some(QualType::UINT128),
+                _ => None,
+            }
+        } else {
+            match (width, class) {
+                (16, _) => Some(QualType::HALF),
+                (32, _) => Some(QualType::FLOAT),
+                (64, _) => Some(QualType::DOUBLE),
+                (128, 1 | 2) => Some(QualType::LONGDOUBLE),
+                _ => None,
+            }
+        };
+        let Some(new) = new else {
+            let m = self
+                .ast
+                .symbols()
+                .as_str(kiln_source::symbol::Symbol::from_index(node.b))
+                .to_owned();
+            let m = m.trim_start_matches("__").trim_end_matches("__");
+            let msg = self
+                .diag(DiagId::sema_machine_mode, node.loc)
+                .arg("1")
+                .arg("0")
+                .arg(format!("'{m}'"));
+            self.emit(msg);
+            return ty;
+        };
+        new
     }
 
     /// GNU `format(archetype, F, A)` as written (WP-186; clang
@@ -239,6 +382,10 @@ impl Sema<'_, '_> {
                 continue;
             }
             attrs.remove(i);
+            if node.kind == AttrKind::MODE {
+                ty = self.apply_mode(ty, node);
+                continue;
+            }
             if matches!(node.kind, AttrKind::NEON_VECTOR_TYPE | AttrKind::NEON_POLYVECTOR_TYPE) {
                 if self.is_error_type(ty) {
                     continue;

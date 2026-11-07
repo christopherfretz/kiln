@@ -1843,6 +1843,25 @@ and returns the scope it names:
     as type attributes (`Sema::apply_type_id_vector_attrs`, clang
     `processTypeAttrs`), so `ext_vector_type` is accepted at clang 19
     too (WP-187; `ext.vector/type-id-run.cpp`).
+  - `mode(M)` (GNU syntax; `vector.rs`, WP-799; clang `handleModeAttr`)
+    takes one identifier (`__M__` is `M`) and is consumed into the
+    declared type like `vector_size`. `QI`/`HI`/`SI`/`DI`/`TI` (and
+    `byte`, `word`, `pointer`, `unwind_word`, 64 on AArch64) are
+    integer modes of 8/16/32/64/128 bits; `HF`/`SF`/`DF`/`TF` are
+    `__fp16`/`float`/`double`/`long double`. An integral or enumeration
+    type becomes the integer type of the mode's width with the same
+    signedness (`signed char`, `short`, `int`, `long`, `__int128`, or
+    their unsigned forms), a floating type the mode's floating type; the
+    result is unqualified (clang replaces the declaration's type). Other
+    names are `unknown machine mode 'M'`; `XI`, `XF`, `KF`, `IF`, complex
+    (`?C`) and vector (`V<n>M`) modes are `unsupported machine mode 'M'`
+    (vector and complex modes: a deviation, clang builds those types);
+    a non-arithmetic type is `mode attribute only supported for integer
+    and floating-point types`, an integer mode on a floating type or the
+    reverse `type of machine mode does not match type of base type`; the
+    type is then unchanged. On a dependent type the attribute is
+    dropped (a deviation: clang applies it at instantiation;
+    `ext.gnu.mode/mode-dependent-run.cpp` is xfail).
     Diagnostics (WP-187, `ext.vector/*-diagnostics.cpp`):
     - A type argument whose desugaring reaches a vector typedef stops at
       that typedef as written, with its scope: `'B' (aka 'X::v')`,

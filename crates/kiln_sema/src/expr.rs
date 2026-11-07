@@ -4298,7 +4298,7 @@ impl Sema<'_, '_> {
         let mut set = self.begin_set(SetKind::Normal, loc);
         set.object = Some(self.arg_info(t));
         let mark = self.push_call_args(&mut set, &[f], &[None]);
-        self.add_conditional_builtin_candidates(&mut set, &types);
+        self.add_conditional_builtin_candidates(&mut set, types);
         let out = self.resolve_set(&mut set);
         self.ovl.lists.truncate(mark);
         let res = match out {
