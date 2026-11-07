@@ -770,6 +770,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-740 | ast-dump/predefined: `__PRETTY_FUNCTION__` class scope prints template args as written not canonical (`C<A, 3>::m`), lambda type arg lacks its location (`crates/kiln_ast/src/dump/names.rs` write_scope_chain) | WP-730 | fixed by WP-750 (PR #335) |
 | WP-741 | attrs: implement `[[gsl::Pointer]]` / `[[gsl::Owner]]` (warn as unknown today; LLVM ADT uses them) | WP-730 | open |
 | WP-742 | oss: llvm_project IRTests + ADTTests re-run after WP-726 lands (kiln build link of ADTTests; docs/status/oss/llvm_project.md) | WP-730 | open |
+| WP-775 | oss: llvm_project re-run, all-kiln ADTTests + IRTests build/link/run; fixes for what IRTests finds | WP-742 | in progress |
 | WP-744 | contracts: coroutine postconditions (unsupported today; `crates/kiln_codegen/src/contracts.rs` emit_postconditions, spec/contracts.md §9) | WP-707 | done by WP-755 (#339) |
 | WP-745 | bench: rebaseline on a quiet host from tmpfs binaries (WP-707 saw 17 time/RSS flags with +0.0% steps/bytes, constant +0.4 MB RSS baseline skew) | WP-707 | open |
 | WP-747 | diag: exception specification on a typedef/alias before C++17 is not diagnosed (clang: exception specifications are not allowed in typedefs; `crates/kiln_sema/src/except.rs` act_on_dynamic_exception_spec) | WP-735 | fixed by WP-750 (PR #335) |
