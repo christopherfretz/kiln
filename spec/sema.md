@@ -1001,7 +1001,9 @@ Redeclaration and linkage rules:
 - **`this` in the declarator** ([expr.prim.this]/2):
   `act_on_start_this_scope(member, quals)` / `act_on_end_this_scope`
   bracket a member function's exception specification and trailing
-  return type, where `this` has type `cv X*`; member access into the
+  return type, where `this` has type `cv X*` (not a friend function's:
+  clang's `InitCXXThisScopeForDeclaratorIfRelevant`, WP-669,
+  `expr.prim.this/p2-not-in-friend-declarator.cpp`); member access into the
   class being defined is allowed there (and in NSDMIs, default
   arguments and bodies, which run after `}`). Anywhere else before the
   class's `}` (a static data member initializer, an array bound, an

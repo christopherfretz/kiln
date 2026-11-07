@@ -7068,7 +7068,11 @@ declarator scopes.**
 - *`&L::m` in a local class of a template*: an implicit member reference
   written `L::m` keeps its qualifier (`DeclRefExtra::qualifier`), and a
   dependent `&L::m` drops its pending `member_refs` entry, so that
-  instantiation rebuilds a pointer to member, not `&this->m`.
+  instantiation rebuilds a pointer to member, not `&this->m`. Where
+  `this` may be used and `C` is the current instantiation, `C::m` of a
+  dependent type is first built as `this->C::m`; its `&` operand is
+  rebuilt as the qualified `DeclRefExpr` (`undo_dependent_implicit_member`,
+  WP-669; `expr.unary.op/p3-qualified-member-pointer-dependent-type.cpp`).
 - *[expr.cond]/4 class unification* (clang `TryClassUnification`): when
   the operands differ in type and either is a class, each is tried
   against the other. The order is: /4.1–4.2, a glvalue target binding
