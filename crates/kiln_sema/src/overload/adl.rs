@@ -282,13 +282,19 @@ impl Sema<'_, '_> {
     }
 
     /// True if some declaration of `d` is lexically in one of `classes`
-    /// (a friend declaration, [basic.lookup.argdep]/4.2).
+    /// (a friend declaration, [basic.lookup.argdep]/4.2). A template's
+    /// declarations are its pattern's: the template decl that holds the
+    /// lookup entry is only the latest one's.
     fn friend_of_any(&self, d: DeclId, classes: &[DeclId]) -> bool {
-        let mut cur = Some(d);
+        let in_assoc = |x: DeclId| {
+            self.ast.decls.lexical_ctx(x).is_some_and(|l| classes.contains(&self.ast.first(l)))
+        };
+        if in_assoc(d) {
+            return true;
+        }
+        let mut cur = Some(self.pattern_of(d).unwrap_or(d));
         while let Some(x) = cur {
-            if let Some(l) = self.ast.decls.lexical_ctx(x)
-                && classes.contains(&self.ast.first(l))
-            {
+            if in_assoc(x) {
                 return true;
             }
             cur = self.ast.prev(x);

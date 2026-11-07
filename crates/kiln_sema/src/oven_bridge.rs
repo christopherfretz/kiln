@@ -33,6 +33,10 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         &self.sema.ast
     }
 
+    fn sources(&self) -> Option<&kiln_source::SourceManager> {
+        Some(self.sema.diags.sm())
+    }
+
     fn cxx_year(&self) -> u32 {
         use kiln_lex::Std;
         match self.sema.std {

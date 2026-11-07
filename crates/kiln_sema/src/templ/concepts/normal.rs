@@ -28,6 +28,22 @@ pub enum NormNode {
     And(NormId, NormId),
     /// A disjunction.
     Or(NormId, NormId),
+    /// A fold expanded constraint ([temp.constr.fold]/1, P2963R3): the
+    /// normal form of a fold `(E && ...)`/`(E || ...)` whose pattern
+    /// expands packs the normalization cannot fix. `pattern` is `E`'s
+    /// normal form (with the packs' parameters standing for one
+    /// element); `packs` the identities of the packs `E` expands
+    /// ([`NormTable::pack_set`]), compared by [temp.constr.fold]/2's
+    /// "equivalent unexpanded pack". A fold is a leaf of the DNF/CNF
+    /// (§8.5).
+    Fold {
+        /// `&&` (a conjunction of the elements) or `||`.
+        and: bool,
+        /// The normal form of the pattern.
+        pattern: NormId,
+        /// The interned pack set.
+        packs: u32,
+    },
 }
 
 /// The interned normal forms: equal nodes share an id, so atomic
@@ -36,6 +52,8 @@ pub enum NormNode {
 pub struct NormTable {
     nodes: Vec<NormNode>,
     map: FxHashMap<NormNode, NormId>,
+    pack_sets: Vec<Box<[u32]>>,
+    pack_map: FxHashMap<Box<[u32]>, u32>,
 }
 
 impl NormTable {
@@ -48,6 +66,26 @@ impl NormTable {
         self.nodes.push(n);
         self.map.insert(n, id);
         id
+    }
+
+    /// The id of the pack set `packs` (each pack `depth << 16 | index`,
+    /// sorted and deduplicated here), interning it.
+    pub fn intern_packs(&mut self, mut packs: Vec<u32>) -> u32 {
+        packs.sort_unstable();
+        packs.dedup();
+        let key = packs.into_boxed_slice();
+        if let Some(&id) = self.pack_map.get(&key) {
+            return id;
+        }
+        let id = u32::try_from(self.pack_sets.len()).unwrap_or(u32::MAX);
+        self.pack_sets.push(key.clone());
+        self.pack_map.insert(key, id);
+        id
+    }
+
+    /// The packs of pack set `id`.
+    pub fn pack_set(&self, id: u32) -> &[u32] {
+        self.pack_sets.get(id as usize).map_or(&[], |b| b)
     }
 
     /// Node `id`.
@@ -108,10 +146,8 @@ impl Sema<'_, '_> {
     /// Normalizes `e` ([temp.constr.normal]/1); `ctx` is the concept
     /// (and its parameter mapping) `e` appears in.
     fn normalize(&mut self, e: ExprId, ctx: Option<(DeclId, ArgListId)>, depth: u32) -> NormId {
-        let mapping = ctx.map_or(ArgListId::EMPTY, |(_, m)| m);
-        let atom = NormNode::Atomic { expr: e, mapping };
         if depth > MAX_EXPANSION {
-            return self.inst.concepts.norm.intern(atom);
+            return self.intern_atom(e, ctx);
         }
         let n = *self.ast.exprs.get(e);
         match n.kind() {
@@ -141,10 +177,43 @@ impl Sema<'_, '_> {
                 if let Some(x) = self.normalize_concept_fold(e, ctx, depth) {
                     return x;
                 }
+                if let Some(x) = self.normalize_fold_expanded(e, ctx, depth) {
+                    return x;
+                }
             }
             _ => {}
         }
-        self.inst.concepts.norm.intern(atom)
+        self.intern_atom(e, ctx)
+    }
+
+    /// The atomic constraint `e` with the parameter mapping `ctx` gives
+    /// it, restricted to the parameters `e` names ([temp.constr.atomic]/1):
+    /// the others' arguments are null, so `sizeof(T) > 1` of `C<T, int>`
+    /// and of `C<T, long>` is one atom. Unknown uses keep the whole
+    /// mapping.
+    fn intern_atom(&mut self, e: ExprId, ctx: Option<(DeclId, ArgListId)>) -> NormId {
+        let mut mapping = ctx.map_or(ArgListId::EMPTY, |(_, m)| m);
+        if let Some((cc, m)) = ctx {
+            let level = self.template_param_depth(cc);
+            if let Some(used) = self.used_template_params(e, level) {
+                let args = self.ast.types.args(m);
+                if args.iter().enumerate().any(|(i, a)| {
+                    (i >= 64 || used & (1 << i) == 0) && a.kind() != kiln_ast::types::ArgKind::Null
+                }) {
+                    let v: Vec<TemplateArg> = args
+                        .iter()
+                        .enumerate()
+                        .map(
+                            |(i, &a)| {
+                                if i < 64 && used & (1 << i) != 0 { a } else { TemplateArg::NULL }
+                            },
+                        )
+                        .collect();
+                    mapping = self.ast.types.arg_list(&v);
+                }
+            }
+        }
+        self.inst.concepts.norm.intern(NormNode::Atomic { expr: e, mapping })
     }
 
     /// [temp.constr.normal]/1.4: the normal form of concept-id `e` is the
@@ -273,6 +342,116 @@ impl Sema<'_, '_> {
             acc = if right { self.norm_join(op, acc, y) } else { self.norm_join(op, y, acc) };
         }
         Some(acc)
+    }
+
+    /// [temp.constr.normal]/1.5.2, [temp.constr.fold]/1 (P2963R3): a fold
+    /// `(E op ...)` or `(... op E)` with `op` `&&` or `||` normalizes to
+    /// a fold expanded constraint whose constraint is `E`'s normal form;
+    /// `(E op ... op I)` to `(E op ...) op I` and `(I op ... op E)` to
+    /// `I op (... op E)`. The packs `E` expands are identified by their
+    /// parameters' (depth, index): the constrained template's own packs,
+    /// or, inside a concept, the packs its mapping gives the concept's
+    /// pack parameters (`AllA<Ts...>`: the concept's pack stands for
+    /// `Ts`, and its pattern is normalized with `Ts` in its place).
+    /// `None` (the fold stays one atom) for a fold over a concept
+    /// template parameter pack (concept-dependent, handled by
+    /// [`Self::normalize_concept_fold`] or kept whole) and for a mapping
+    /// that gives a pack anything but one plain expansion of a pack.
+    fn normalize_fold_expanded(
+        &mut self,
+        e: ExprId,
+        ctx: Option<(DeclId, ArgListId)>,
+        depth: u32,
+    ) -> Option<NormId> {
+        use kiln_ast::expr::ExprDeps;
+        let n = *self.ast.exprs.get(e);
+        let op = BinaryOp::from_u8(n.aux())?;
+        if !matches!(op, BinaryOp::LAnd | BinaryOp::LOr) {
+            return None;
+        }
+        let (lhs, rhs) = (ExprId::from_raw(n.a()), ExprId::from_raw(n.b()));
+        let right =
+            lhs.is_some_and(|x| self.ast.exprs.get(x).deps().contains(ExprDeps::UNEXPANDED_PACK));
+        let (pattern, init) = if right { (lhs?, rhs) } else { (rhs?, lhs) };
+        let packs = self.unexpanded_packs(PackOperand::Expr(pattern));
+        if packs.is_empty() {
+            return None;
+        }
+        let mut ids = Vec::with_capacity(packs.len());
+        let mut pctx = ctx;
+        match ctx {
+            None => {
+                for p in packs {
+                    if self.ttp_kind(p) == TtpKind::Concept {
+                        return None;
+                    }
+                    let info = self.ast.template_parm(p)?;
+                    ids.push(u32::from(info.depth) << 16 | u32::from(info.index));
+                }
+            }
+            Some((cc, m)) => {
+                let level = self.template_param_depth(cc);
+                let mut margs: Vec<TemplateArg> = self.ast.types.args(m).to_vec();
+                for p in packs {
+                    let info = *self.ast.template_parm(p)?;
+                    if self.ttp_kind(p) == TtpKind::Concept || info.depth != level {
+                        return None;
+                    }
+                    let slot = margs.get_mut(usize::from(info.index))?;
+                    let ArgView::Pack(l) = slot.view() else { return None };
+                    let &[x] = self.ast.types.args(l) else { return None };
+                    let (arg, id) = self.fold_pack_element(x)?;
+                    *slot = arg;
+                    ids.push(id);
+                }
+                let mi = self.ast.types.arg_list(&margs);
+                pctx = Some((cc, self.ast.types.canonical_args(mi)));
+            }
+        }
+        let inner = self.normalize(pattern, pctx, depth + 1);
+        let set = self.inst.concepts.norm.intern_packs(ids);
+        let node = NormNode::Fold { and: op == BinaryOp::LAnd, pattern: inner, packs: set };
+        let mut acc = self.inst.concepts.norm.intern(node);
+        if let Some(init) = init {
+            let y = self.normalize(init, ctx, depth + 1);
+            acc = if right { self.norm_join(op, acc, y) } else { self.norm_join(op, y, acc) };
+        }
+        Some(acc)
+    }
+
+    /// The one element `x` of a pack argument in a concept's parameter
+    /// mapping, when it is a plain pack expansion of a pack parameter
+    /// (`Ts...`, `Ns...`): that parameter as the element standing for
+    /// each of its elements, and its identity (`depth << 16 | index`).
+    fn fold_pack_element(&mut self, x: TemplateArg) -> Option<(TemplateArg, u32)> {
+        use kiln_ast::types::TypeView;
+        match x.view() {
+            ArgView::Type(q) => {
+                let p = crate::templ::pack::type_pattern(self, q)?;
+                let id = match self.ast.types.canonical_view(p) {
+                    TypeView::CanonTemplateTypeParm { depth, index, pack: true } => {
+                        depth << 16 | index
+                    }
+                    _ => return None,
+                };
+                Some((TemplateArg::ty(p), id))
+            }
+            ArgView::Expr { expr, .. } => {
+                let p = crate::templ::pack::expr_pattern(self, expr)?;
+                let pn = *self.ast.exprs.get(p);
+                if pn.kind() != ExprKind::DeclRefExpr {
+                    return None;
+                }
+                let d = self.ast.exprs.decl(p);
+                let info = self.ast.template_parm(d)?;
+                if !info.pack {
+                    return None;
+                }
+                let id = u32::from(info.depth) << 16 | u32::from(info.index);
+                Some((self.ast.builder().template_arg_expr(p), id))
+            }
+            _ => None,
+        }
     }
 
     /// `a op b` for `op` `&&` (a conjunction) or `||`.

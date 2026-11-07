@@ -953,6 +953,12 @@ impl Cg<'_> {
                 self.emit_observable_checkpoint()?;
                 return Ok(BuiltinCall::Emitted(None));
             }
+            // P3726R2 (WP-773): GCC folds `__builtin_start_lifetime(p)` to
+            // `(void)p`: the pointer is evaluated, nothing else is emitted.
+            id::START_LIFETIME => {
+                self.emit_ignored(a0)?;
+                return Ok(BuiltinCall::Emitted(None));
+            }
             id::TRAP | id::VERBOSE_TRAP => {
                 let f = kiln_llvm::intrinsics::trap(&mut self.m);
                 self.intrinsic_call(f, vec![]);

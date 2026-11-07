@@ -326,6 +326,7 @@ impl CodegenJob<'_> {
                 },
                 semantic_interposition: a.semantic_interposition,
                 direct_access_external_data: a.direct_access_external_data,
+                cxx_modules: job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20,
                 ..codegen_flag_options(a, feats.cpu.clone())
             };
             // Sema sets the level on each evaluation it runs; a unit that

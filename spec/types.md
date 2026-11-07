@@ -439,6 +439,32 @@ enum ExcSpec /* tag */ {
   specification. Redeclarations still compare the specifications
   ([except.spec]/5) through `exc_identity`, the C++17 canonical form in
   every mode.
+- Before C++17 a conversion that initializes, assigns, passes or
+  returns a pointer to function, reference to function or pointer to
+  member function checks the specifications as written ([except.spec]/5
+  in C++14; clang `CheckExceptionSpecCompatibility`; WP-769,
+  `Sema::exc_spec_compat_error`, called from `conv::implicit_convert`
+  after a standard conversion or reference binding in the contexts
+  `Initialization`, `DirectInitialization`, `Assignment`, `Argument` and
+  `Return`). The target's specification must allow every exception the
+  source's allows: a target that may throw anything (not a `throw(...)`
+  list), or a source that throws nothing, passes; a source that may
+  throw anything, or a target that throws nothing, is the error "target
+  exception specification is not superset of source"; for two
+  `throw(...)` lists each source type (reference stripped) must be caught
+  by a handler for some target type ([except.handle]/3: the same type, a
+  public unambiguous base, a pointer converted by a derived-to-base or
+  qualification conversion, or `void *`). Then a function type among the
+  return and parameter types (or that one points or refers to) must have
+  an equivalent specification on both sides (both non-throwing, both
+  throw anything, or the same `throw(...)` set): "exception
+  specifications of {return|argument} types differ". The error is at the
+  start of the source expression; for an argument of a one-candidate
+  call it is reported as such, not as "no matching function". Not
+  checked: from C++17 (the specification is part of the type), under
+  `-fno-exceptions`, for dependent or deferred specifications, for the
+  second standard conversion of a user-defined conversion (a lambda's
+  conversion function) and for casts.
 - A specialization's `Deferred` specification is resolved when the
   specialization is named in any context, inside a template too, as
   long as its own type is not dependent (clang `ResolveExceptionSpec` on

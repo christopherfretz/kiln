@@ -1110,7 +1110,9 @@ pub fn implicit_convert(
         };
     }
     if s.ast.types.is_reference(to) {
-        return bind_reference(s, e, to, ctx);
+        let r = bind_reference(s, e, to, ctx)?;
+        exc_spec_compat(s, e, from, to, ctx)?;
+        return Ok(r);
     }
     let (fr, tr) = (s.ast.types.as_record(from), s.ast.types.as_record(to));
     if tr.is_some() {
@@ -1137,8 +1139,49 @@ pub fn implicit_convert(
         return user_conversion(s, e, to, ctx, at);
     }
     match standard_conversion(s, e, to, ctx) {
-        Some(scs) => apply_standard_conversion(s, e, &scs, to),
+        Some(scs) => {
+            exc_spec_compat(s, e, from, to, ctx)?;
+            apply_standard_conversion(s, e, &scs, to)
+        }
         None => Err(conversion_error(s, e, to, ctx)),
+    }
+}
+
+/// [except.spec]/5 (C++14) for the conversions clang checks
+/// (`CheckExceptionSpecCompatibility`: assignment, initialization,
+/// argument passing, return; not casts): see
+/// [`Sema::exc_spec_compat_error`].
+fn exc_spec_compat(
+    s: &Sema<'_, '_>,
+    e: ExprId,
+    from: QualType,
+    to: QualType,
+    ctx: ConvCtx,
+) -> Result<(), ConvError> {
+    if !matches!(
+        ctx,
+        ConvCtx::Initialization
+            | ConvCtx::DirectInitialization
+            | ConvCtx::Assignment
+            | ConvCtx::Argument
+            | ConvCtx::Return
+    ) {
+        return Ok(());
+    }
+    // The second standard conversion of a user-defined conversion
+    // sequence is not checked (clang performs it as `AA_Converting`).
+    let n = s.ast.exprs.get(e);
+    if n.kind() == ExprKind::ImplicitCastExpr
+        && s.ast.exprs.cast_kind(e) == CastKind::UserDefinedConversion
+    {
+        return Ok(());
+    }
+    match s.exc_spec_compat_error(from, to) {
+        Some(mut err) => {
+            err.at = Some(s.begin_loc(e));
+            Err(err)
+        }
+        None => Ok(()),
     }
 }
 

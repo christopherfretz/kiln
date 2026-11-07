@@ -5170,6 +5170,10 @@ impl Sema<'_, '_> {
                                 | DiagId::sema_ref_init_ambiguous
                                 | DiagId::sema_conv_deleted_ctor
                                 | DiagId::sema_complex_to_real_cxx
+                                // [except.spec]/5 (C++14): checked once
+                                // the conversion is performed.
+                                | DiagId::sema_incompatible_exception_specs
+                                | DiagId::sema_deep_exception_specs_differ
                         );
                         if let Some(c) = named.filter(|c| c.overloadable && !as_such) {
                             self.bad_argument(c.decl, callee, a, params[i], i);
