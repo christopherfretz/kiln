@@ -7,6 +7,7 @@ pub mod normal;
 pub mod requires;
 pub mod sat;
 pub mod subsume;
+mod used;
 
 use kiln_ast::ids::ArgListId;
 use kiln_ast::{DeclId, ExprId};
@@ -81,6 +82,9 @@ pub struct ConceptState {
     pub(crate) norm: NormTable,
     pub(crate) normal_forms: FxHashMap<DeclId, Option<NormId>>,
     pub(crate) subsume_cache: FxHashMap<(NormId, NormId), bool>,
+    /// The parameters of a depth an atom's expression names (§8.2,
+    /// [temp.constr.atomic]/1), `None` when unknown.
+    pub(crate) used_params: FxHashMap<(ExprId, u16), Option<u64>>,
     /// §8.3 `atom_cache`: (atom, canonical arguments) -> (satisfied, the
     /// records explaining a failure).
     pub(crate) atom_cache: FxHashMap<AtomKey, (bool, Vec<SatRecord>)>,
@@ -125,6 +129,20 @@ impl ConceptState {
 }
 
 impl crate::Sema<'_, '_> {
+    /// A complete requires-clause `e` ([temp.pre]/9): one naming a pack
+    /// outside any expansion (`requires Cs<T>` with a concept template
+    /// parameter pack `Cs`, `requires Int<Ts>`) is ill-formed
+    /// ([temp.variadic]/12), diagnosed at its begin as "requires clause
+    /// contains unexpanded parameter pack" (clang's
+    /// `ActOnRequiresClause`) and replaced by an error expression.
+    pub fn act_on_requires_clause(&mut self, e: ExprId) -> ExprId {
+        if self.diagnose_unexpanded_written(e, "requires clause", None) {
+            let at = self.begin_loc(e);
+            return self.act_on_error_expr(&[e], at);
+        }
+        e
+    }
+
     /// Checks a constraint-expression where it is written (a concept's
     /// definition or a requires-clause operand; clang's
     /// `CheckConstraintExpression`, [temp.constr.atomic]/3): each atomic
