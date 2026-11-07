@@ -1118,6 +1118,14 @@ These are the current instantiation:
 - `A<T>` or `A<T...>` written with the class's own parameters in order;
 - the nested classes of either.
 
+A template-id of a partial specialization's template whose non-type
+arguments are written unconverted is matched by converting them first
+(`entered_partial_by_converted_args`). One with a pack expansion for a
+parameter that is not a pack (`Ts<T...>` in `template<template<class>
+class H, template<class> class... T> struct Ts`) is not converted: it
+names no partial specialization, and its argument check waits for the
+substitution.
+
 Qualified lookup into the current instantiation happens at definition.
 Lookup of a found member binds it (`typename A<T>::X` resolves to the
 member typedef, not to `DependentName`). If the member is not found and

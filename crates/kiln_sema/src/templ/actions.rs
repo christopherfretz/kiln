@@ -481,6 +481,19 @@ impl Sema<'_, '_> {
         if !written.iter().any(unconverted) && written.len() >= self.template_params(tmpl).len() {
             return None;
         }
+        // A pack expansion for a parameter that is not a pack covers an
+        // unknown number of parameters (`Ts<T...>` in `template<template<
+        // class> class H, template<class> class... T> struct Ts`): the
+        // arguments cannot be converted yet, and checking them would
+        // report the expansion as an argument of the wrong kind.
+        let params = self.template_params(tmpl);
+        let first_pack = params
+            .iter()
+            .position(|&p| self.ast.template_parm(p).is_some_and(|x| x.pack))
+            .unwrap_or(params.len());
+        if written.iter().take(first_pack).any(|&a| self.is_pack_expansion_arg(a)) {
+            return None;
+        }
         let conv = self.check_template_args(tmpl, &written, &[], loc).ok()?;
         let i = self.ast.templates.find_partial(self.ast.first(tmpl), conv.canonical)?;
         let pat = self.ast.templates.partial(i)?.partial;
