@@ -994,7 +994,10 @@ whether it is exact: false when some part printed as a placeholder (an
     (`PrintEnv::arg_type_name`; `A<(n::E)5>` for `(n::EE)5`). Sema's
     `TypeNames::write_value` uses this style for every integer, so
     diagnostics print `S<n::E::b>` and `Ch<'x'>`, not `S<1>` and
-    `Ch<120>` (WP-303).
+    `Ch<120>` (WP-303). An enumeration whose underlying type is `bool`
+    has the `Enum` style too (a one-byte unsigned integer shape, not
+    `Bool`), and its enumerators' `bool` values match: `X<B::Nay>`,
+    `[V = B::Nay]` in `__PRETTY_FUNCTION__`, not `1` (WP-683).
   - With `enum_cast` (and no `include_type`), an enumeration value no
     enumerator matches still prints as its cast (`(n::E)7`, not `7`), so
     the spelling re-parses as the enumeration (`display_string_of`).

@@ -457,6 +457,9 @@ pub struct Args {
     pub disable_llvm_passes: bool,
     /// `-###`: print the commands instead of running them.
     pub print_commands: bool,
+    /// `-Qunused-arguments`: no `-Wunused-command-line-argument` warning
+    /// for an unused linker input or link option (clang's driver option).
+    pub quiet_unused_arguments: bool,
     /// `-m[no-]outline-atomics` (the last wins): `AArch64`'s
     /// `+outline-atomics` target feature; ignored on x86-64, with clang's
     /// `-Woption-ignored` warning naming the last spelling. `None` is the
@@ -730,6 +733,7 @@ impl Args {
             "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
             "-###" => self.print_commands = true,
+            "-Qunused-arguments" => self.quiet_unused_arguments = true,
             "-disable-llvm-passes" => self.disable_llvm_passes = true,
             "-moutline-atomics" => self.outline_atomics = Some(true),
             "-mno-outline-atomics" => self.outline_atomics = Some(false),

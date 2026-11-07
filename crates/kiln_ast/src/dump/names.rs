@@ -670,6 +670,21 @@ impl<'a> AstNames<'a> {
                     Shape::Int { width, signed, .. } => {
                         Shape::Int { width, signed, style: IntStyle::Enum }
                     }
+                    // An enumeration with underlying type `bool` is still
+                    // an enumeration: its values print as enumerators
+                    // (`B::Nay`, `(B)1`), not `true`/`false` (clang
+                    // `TemplateArgument::print`; magic_enum's names).
+                    Shape::Bool => Shape::Int {
+                        width: u32::from(
+                            self.ast
+                                .types
+                                .target()
+                                .builtin_size_align(crate::types::BuiltinType::Bool)
+                                .0,
+                        ) * 8,
+                        signed: false,
+                        style: IntStyle::Enum,
+                    },
                     s => s,
                 }
             }
@@ -1612,9 +1627,13 @@ impl PrintEnv for AstNames<'_> {
         let e = self.ast.definition(e).unwrap_or(e);
         for m in self.ast.members(e) {
             let Some(v) = self.ast.decls.enumerator(m).and_then(|d| d.value) else { continue };
-            if let Some(Scalar::Int { bits: b, .. }) = self.ast.consts.scalar(v)
-                && b == *bits
-            {
+            // An enumerator of a `bool`-based enumeration holds a `bool`.
+            let same = match self.ast.consts.scalar(v) {
+                Some(Scalar::Int { bits: b, .. }) => b == *bits,
+                Some(Scalar::Bool { value, .. }) => bits.to_u128() == Some(u128::from(value)),
+                _ => false,
+            };
+            if same {
                 self.write_qualified_name(m, out);
                 return true;
             }

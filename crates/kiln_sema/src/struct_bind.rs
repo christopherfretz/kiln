@@ -814,7 +814,9 @@ impl Sema<'_, '_> {
                 Some(targs),
                 loc,
             );
+            let saved = self.ovl.binding_get.replace(ule);
             let call = self.act_on_call(ule, &[e], loc, loc);
+            self.ovl.binding_get = saved;
             // The lookup is argument-dependent only ([dcl.struct.bind]/4),
             // so the function is clang's `IsADLCandidate` (dumped `adl`).
             let mut c = call;

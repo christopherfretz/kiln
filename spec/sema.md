@@ -3432,7 +3432,9 @@ diagnostics and IR.
       expression argument (`tuple_element<0UL, E>`; §1.1). It is
       initialized with `e.get<i>()` when a member template `get` has a
       non-type first parameter, else with an ADL-only `get<i>(xvalue
-      e)`, which prints `adl`. The `get` index is always a `size_t`
+      e)`, which prints `adl` and, being kiln's call rather than a
+      written template-id, is no C++17 `-Wc++20-extensions` "no prior
+      declaration" warning (`ovl.binding_get`; WP-683). The `get` index is always a `size_t`
       integer literal written as an expression argument (clang
       `getTrivialIntegralTemplateArgument`), so it is converted to the
       type of each candidate's template parameter

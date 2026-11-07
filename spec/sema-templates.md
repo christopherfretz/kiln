@@ -1158,17 +1158,22 @@ When a dependent unqualified call or operator is substituted:
 
 *Implementation (WP-207).* `Substituter::callee` keeps the stored decls
 when every one is a namespace-scope function or function template (through
-`using` shadows, linkage specifications and `export`) and the call has no
-explicit template arguments: it rebuilds the `UnresolvedLookupExpr` from
-them with `requires_adl` set, and the call resolves against them plus ADL.
+`using` shadows, linkage specifications and `export`): it rebuilds the `UnresolvedLookupExpr` from
+them with `requires_adl` set (and the substituted explicit template
+arguments, if any), and the call resolves against them plus ADL.
 It does not look the name up again from the scope current at
 instantiation. That scope can differ from the definition's: constraint
 satisfaction (§8) substitutes outside the instantiation context, so a
 re-lookup from, say, namespace `std` found `std::swap` instead of the
 deleted `ranges::__swap::swap` poison pill, or the `ranges::begin`
-object instead of the deleted `ranges::__begin::begin`. Other stored sets
-(class members, block-scope declarations, calls with explicit template
-arguments) still take the earlier path.
+object instead of the deleted `ranges::__begin::begin`. A partial
+specialization's arguments are substituted where the specialization is
+named: an unqualified template-id call there (`declval<const T &>()` in
+doctest's `is_std_string`) found nothing when named outside the
+template's namespace, so the partial specialization never matched
+(WP-683, `tests/conformance/temp.dep.candidate/template-id-definition-lookup.cpp`).
+Other stored sets (class members, block-scope declarations) still take
+the earlier path.
 
 Kiln, like clang, does not model the lookup scope at each point of
 instantiation. Namespace contents are append-only, so ADL at instantiation
@@ -6392,6 +6397,12 @@ explicit specialization errors remain. The blockers are:
   defaulted argument) and the `std::source_location::__impl` check.
   `Sema::fold_lone_invalid` keeps clang's single "subexpression not
   valid" note for `__builtin_unreachable`.
+  An instantiation that rebuilds a call of a custom-checked builtin
+  calls the builtin's name again (the `BuiltinFnToFnPtr` cast is
+  stripped, as the `FunctionToPointerDecay` of a function's name is), so
+  it goes through `builtin_custom_call` once more: `__builtin_constant_p(s)`
+  of a non-trivial class object `s` in a template is no
+  `-Wnon-pod-varargs` error (WP-683).
 - Landed (WP-153): `__builtin_isfpclass(x, mask)` (custom: `x` a real
   floating type, else `floating point classification requires argument
   of floating point type`; `mask` an integer constant expression in

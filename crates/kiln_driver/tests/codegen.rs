@@ -166,6 +166,14 @@ fn driver_errors_and_warnings() {
         text(&o.stderr),
         "kiln++: error: -lm: 'linker' input unused [-Werror,-Wunused-command-line-argument]\n"
     );
+    // `-Qunused-arguments` silences them all, wherever it is, also under
+    // `-Werror` (clang; WP-683).
+    let o = kiln_in(
+        &d,
+        &["-S", "-emit-llvm", "-Werror", "-lm", "add.cpp", "lib.o", "-L/x", "-Qunused-arguments"],
+    );
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(text(&o.stderr), "");
 }
 
 /// One driver, two names (spec/driver.md "Driver modes"): `kiln` compiles

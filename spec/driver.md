@@ -611,7 +611,9 @@ the current directory (standard input is `-`). `-o -` is standard output.
   (`-Wunused-command-line-argument`): `<x>: 'linker' input unused` for
   linker inputs, `-l`, `-Wl,` and `-Xlinker <arg>`; `argument unused during compilation:
   '<o>'` for `-L`, `-fuse-ld=`, `-shared`, `-rdynamic`, `-pie`, `-no-pie`.
-  `-static` and `-nostdlib` are silent, as in clang.
+  `-static` and `-nostdlib` are silent, as in clang. `-Qunused-arguments`
+  (anywhere on the command line) silences all of them, as in clang
+  (doctest's CMake build passes it; WP-683).
 - **Errors.** `-o` with several sources in a compile-only phase is an
   error, as is `-emit-llvm` when linking. A tool that is missing, cannot
   start, fails or is killed is a driver error (below); the exit status is
