@@ -7,9 +7,10 @@
 // temporaries are reclaimed as for any call. With -DNO_CONTRACTS the same
 // code has no contracts; under ignore the predicates are skipped.
 // WP-707 measured (release kiln, -fsyntax-only, best of 3): enforce
-// 0.43 s / 15 MiB RSS, ignore 0.31 s / 15 MiB, without contracts
-// 0.31 s / 15 MiB; GCC 16.1 at enforce needs a raised
-// -fconstexpr-ops-limit and ~2 s, so there is no oracle.
+// 0.15 s, ignore 0.13 s, without contracts 0.14 s, observe (each
+// predicate a trial) 0.23 s, all 13 MiB RSS and 3,000,005 steps. GCC
+// 16.1 needs -fconstexpr-loop-limit and takes 1.8 s / 198 MiB (1.7 s /
+// 196 MiB without contracts), so there is no oracle.
 //@ expect: compile-ok
 //@ skip(clang): clang 22 does not implement P2900 contracts
 //@ args: -fcontract-evaluation-semantic=enforce -fconstexpr-steps=10000000
