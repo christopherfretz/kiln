@@ -300,10 +300,7 @@ impl Sema<'_, '_> {
                     return Err(());
                 }
                 let l = self.ast.types.arg_list(&elems);
-                out.push(TemplateArg::pack(l));
-                if let Some(c) = canon.as_mut() {
-                    c.push(TemplateArg::pack(l));
-                }
+                push_arg(&mut out, &mut canon, TemplateArg::pack(l));
                 continue;
             }
             let pack = self.ast.template_parm(p).is_some_and(|x| x.pack);
@@ -321,10 +318,7 @@ impl Sema<'_, '_> {
                     wi += 1;
                 }
                 let l = self.ast.types.arg_list(&elems);
-                out.push(TemplateArg::pack(l));
-                if let Some(c) = canon.as_mut() {
-                    c.push(TemplateArg::pack(l));
-                }
+                push_arg(&mut out, &mut canon, TemplateArg::pack(l));
                 continue;
             }
             if wi < written.len() {
@@ -354,10 +348,7 @@ impl Sema<'_, '_> {
             };
             let prior = canon.as_deref().unwrap_or(&out);
             let a = self.checked_default_template_arg(tmpl, depth, p, def, loc, r_angle, prior)?;
-            out.push(a);
-            if let Some(c) = canon.as_mut() {
-                c.push(a);
-            }
+            push_arg(&mut out, &mut canon, a);
         }
         if wi < written.len() {
             self.diag_template_arity(tmpl, true, loc);
@@ -1600,6 +1591,15 @@ impl Sema<'_, '_> {
     pub(crate) fn int_fits(&self, ty: QualType, v: i128) -> bool {
         crate::constfold::int_info(&self.ast, ty)
             .is_none_or(|(bits, signed)| crate::constfold::fits(v, bits, signed))
+    }
+}
+
+/// Appends checked argument `a` to `out` and, once there is one, to the
+/// list with the instantiation-dependent arguments converted.
+fn push_arg(out: &mut Vec<TemplateArg>, canon: &mut Option<Vec<TemplateArg>>, a: TemplateArg) {
+    out.push(a);
+    if let Some(c) = canon.as_mut() {
+        c.push(a);
     }
 }
 
