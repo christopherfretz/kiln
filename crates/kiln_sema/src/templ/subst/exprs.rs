@@ -1582,14 +1582,18 @@ impl Substituter<'_, '_, '_> {
             }
             return Ok(self.sema.act_on_undeclared_call_name_dn(name, n.loc()));
         }
-        if targs.is_none() && decls.iter().all(|&d| self.namespace_scope_decl(d)) {
+        if decls.iter().all(|&d| self.namespace_scope_decl(d)) {
             // [temp.dep.candidate]/1 (§3.5): the declarations unqualified
             // lookup found at the definition, plus argument-dependent
             // lookup at the call. Looking the name up again from the
             // context the instantiation runs in would see that context's
             // names instead (a `swap` of the namespace that requires a
-            // concept, hiding the poison pill beside the concept).
-            let r = self.sema.builder().unresolved_lookup(name, &decls, true, None, None, n.loc());
+            // concept, hiding the poison pill beside the concept), or
+            // none at all: a partial specialization's argument
+            // `decltype(declval<T>().f())` is substituted where the
+            // specialization is named, outside the template's namespace.
+            // Explicit template arguments stay on the name for the call.
+            let r = self.sema.builder().unresolved_lookup(name, &decls, true, None, targs, n.loc());
             if let Some(f) = self.sema.ovl.ule_found.get(&c).cloned() {
                 self.sema.ovl.ule_found.insert(r, f);
             }
