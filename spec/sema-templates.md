@@ -557,6 +557,19 @@ All of these are built by sema actions, which compute dependence as in
   `template<> struct A<int> { … }`.
 - For members: `template<> void A<int>::f() {}`, and nested forms such as
   `template<> template<> void A<int>::g<char>()`.
+- Of a special member template by signature ([temp.expl.spec]/1,
+  [temp.deduct.decl], WP-668): an out-of-line constructor,
+  conversion-function or `operator=` declarator after `template<>`
+  (`template<> P::P(const J&) : P(1) {}`) that matches no non-template
+  member names the specialization of one of the class's constructor
+  templates (every conversion function template, or the `operator=`
+  templates) deduced against the declarator's type, chosen as for an
+  explicit instantiation by signature (below), and is a new declaration
+  of it whose body follows (`Sema::act_on_explicit_special_template_spec`).
+  No match is "no function template matches function template
+  specialization 'P'" with the failed-deduction notes
+  (`temp.expl.spec/special-member-template-spec-run.cpp`,
+  `special-member-template-spec-no-match.cpp`).
 
 **Partial specialization.** A non-empty template-head whose
 class-head-name (or variable declarator-id) is a template-id:
