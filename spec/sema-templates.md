@@ -946,6 +946,15 @@ Type flags are computed at intern time (types.md §5.3). The rules:
 | `PackExpansion` | its pattern is dependent | — (and UNEXPANDED_PACK is cleared) |
 | `Auto` | undeduced inside a dependent context | — |
 
+A reference to a variable or parameter with automatic storage declared
+in a template is instantiation-dependent only so that instantiation
+rebinds it (`decl_deps`). The `decltype` of such a reference (or of the
+parenthesized reference) whose declared type is not dependent is the
+plain `Decltype`, as clang computes it: `decltype(V)::iterator` with
+`std::vector<int> V` names a member of a known class, and is a type in a
+template argument with no `typename` (WP-730,
+`tests/conformance/dcl.type.decltype/template-local-nested-name-run.cpp`).
+
 **Three predicates (WP-445).** Every "is this dependent?" question
 asks exactly one of:
 - *dependent type* (`Sema::is_dependent_type`, the `DEPENDENT` bit,
