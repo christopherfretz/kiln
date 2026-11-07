@@ -704,5 +704,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-681 | M8 wave 1: Catch2 v3.16.1 through its own build + tests with kiln++ via scripts/oss (incl. the protected using-declaration cluster WP-671; docs/status/oss/catch2.md) | WP-666 | in progress |
 | WP-682 | M8 wave 1: googletest v1.17.0 through its own build + tests with kiln++ via scripts/oss (incl. WP-670 bare -W / exit 70 and WP-672 libstdc++ tuple deduction; docs/status/oss/googletest.md) | WP-666 | in progress |
 | WP-683 | M8 wave 1: magic_enum v0.9.7 + doctest v2.5.3 + tl_expected v1.3.1 through their own builds + tests with kiln++ via scripts/oss (one status page each) | WP-666 | in progress |
+| WP-692 | CI fan-out: shard `cargo xtask ci` across parallel GitHub jobs (`ci --step/--shard/--unit-group`, `xtask test --shard`, `.github/workflows/ci-lane.yml`; target under 5 min per arch) | WP-origin | in progress |
 WP-511
 WP-512
