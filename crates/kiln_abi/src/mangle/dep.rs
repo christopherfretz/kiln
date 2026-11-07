@@ -755,7 +755,7 @@ impl Mangler<'_, '_> {
                     return None;
                 };
                 self.symbol(s);
-                self.template_args(args);
+                self.template_args(self.written_args(ty).unwrap_or(args));
                 Some(false)
             }
             TypeView::DependentTemplateSpecialization { name, args, .. } => {
@@ -771,6 +771,30 @@ impl Mangler<'_, '_> {
                 Some(false)
             }
             _ => None,
+        }
+    }
+}
+
+impl Mangler<'_, '_> {
+    /// The arguments of the dependent class template specialization `ty`
+    /// as its qualifier spells them: clang's `mangleUnresolvedTypeOrSimpleId`
+    /// mangles the `TemplateSpecializationType` of the qualifier as
+    /// written, so `R<T>::value` with `template <class, class = void>
+    /// struct R` is `sr1RIT_EE5value`, without the defaulted `void` the
+    /// canonical type carries ([temp.arg.general]/9; WP-783).
+    fn written_args(&self, ty: QualType) -> Option<ArgListId> {
+        let types = &self.ast.types;
+        let mut q = ty;
+        loop {
+            if let TypeView::TemplateSpecialization { args, alias: false, .. } = types.view(q.ty())
+            {
+                return Some(args);
+            }
+            let n = types.desugar_once(q);
+            if n == q {
+                return None;
+            }
+            q = n;
         }
     }
 }

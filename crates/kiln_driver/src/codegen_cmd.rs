@@ -434,6 +434,13 @@ pub fn compile(
         let mut err = io.stderr.clone();
         for step in &plan {
             let _ = err.write_all(render(step, true).as_bytes());
+            // The `opt` runs `execute` makes after the frontend, as `-v`
+            // prints them (spec/driver.md "`-###`").
+            if matches!(step, Step::Frontend { .. }) {
+                for cmd in planned_ir_passes(args, tc).unwrap_or_default() {
+                    let _ = err.write_all(cmd.render(true).as_bytes());
+                }
+            }
         }
         let _ = err.flush();
         drv.flush();
@@ -562,47 +569,6 @@ pub fn needs_coro_lowering(ir: &str) -> bool {
     ir.lines().any(|l| l.starts_with("declare ") && l.contains(" @llvm.coro."))
 }
 
-/// The textual IR `ir` with LLVM 22's lifetime markers: the size operand
-/// of every `llvm.lifetime.start`/`.end` call and declaration dropped
-/// and the declarations' `nocapture` (LLVM 19/20) written
-/// `captures(none)`. clang 22's `-S -emit-llvm` text at
-/// `-fclang-compat=22` when kiln's backend is LLVM 21 or older, whose
-/// `opt` and `llc` take only the sized form codegen emits for them
-/// (spec/driver.md "IR optimization").
-pub fn lifetime_markers_llvm22(ir: &str) -> String {
-    if !ir.contains("@llvm.lifetime.") {
-        return ir.to_owned();
-    }
-    let mut out = String::with_capacity(ir.len());
-    for line in ir.split_inclusive('\n') {
-        out.push_str(&lifetime_line_llvm22(line));
-    }
-    out
-}
-
-fn lifetime_line_llvm22(line: &str) -> std::borrow::Cow<'_, str> {
-    for callee in ["@llvm.lifetime.start.p0(", "@llvm.lifetime.end.p0("] {
-        let Some(at) = line.find(callee) else { continue };
-        let (head, rest) = line.split_at(at + callee.len());
-        if line.starts_with("declare ") {
-            let tail = rest
-                .strip_prefix("i64 immarg, ptr nocapture)")
-                .or_else(|| rest.strip_prefix("i64 immarg, ptr captures(none))"));
-            if let Some(tail) = tail {
-                return format!("{head}ptr captures(none)){tail}").into();
-            }
-        } else if let Some(sized) = rest.strip_prefix("i64 ") {
-            let digits = sized.bytes().take_while(u8::is_ascii_digit).count();
-            if digits > 0
-                && let Some(tail) = sized[digits..].strip_prefix(", ")
-            {
-                return format!("{head}{tail}").into();
-            }
-        }
-    }
-    line.into()
-}
-
 /// Whether the IR defines an `always_inline` function (an attribute
 /// group holds `alwaysinline`; kiln puts it on definitions only). clang's
 /// O0 pipeline (`AlwaysInlinerPass`) inlines every call to one, deleting
@@ -638,14 +604,31 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
         None if needs_coro_lowering(ir) => "coro-early,cgscc(coro-split),coro-cleanup,globaldce",
         None => return None,
     };
+    Some(opt_commands(args, tc, passes))
+}
+
+/// The `opt` runs `-###` prints after a frontend step: those of an `-O1`
+/// or higher level, whose pipeline does not depend on the IR. At `-O0`
+/// the runs depend on what the IR declares ([`ir_passes`]) and are not
+/// shown (spec/driver.md "IR optimization").
+fn planned_ir_passes(args: &Args, tc: &Toolchain) -> Option<Vec<Command>> {
+    if args.disable_llvm_passes {
+        return None;
+    }
+    opt_pipeline(args.opt_flag.as_deref()).map(|p| opt_commands(args, tc, p))
+}
+
+/// The `opt` run of `passes`, then for a textual or bitcode output the
+/// run that discards local value names ([`ir_passes`]).
+fn opt_commands(args: &Args, tc: &Toolchain, passes: &str) -> Vec<Command> {
     let mut run = Command::new(tc, Tool::Opt);
     run.arg(format!("-passes={passes}")).arg("-o").arg("-").arg("-");
     if matches!(Phase::of(args), Phase::Object | Phase::Link) {
-        return Some(vec![run]);
+        return vec![run];
     }
     let mut names = Command::new(tc, Tool::Opt);
     names.arg("-discard-value-names").arg("-S").arg("-o").arg("-").arg("-");
-    Some(vec![run, names])
+    vec![run, names]
 }
 
 /// `llc` for an assembly or object output.
@@ -809,7 +792,8 @@ fn execute(
                 skip_piped = ir.is_none();
                 failed |= ir.is_none();
                 if let (Some(text), Dest::File(f)) = (&ir, dest)
-                    && let Err(e) = write_output(Some(f), &ir_text(args, tc, text), &mut io.stdout)
+                    && let Err(e) =
+                        write_output(Some(f), &String::from_utf8_lossy(text), &mut io.stdout)
                 {
                     report_output_error(diag_opts, &io.stderr, f, &e);
                     failed = true;
@@ -839,19 +823,6 @@ fn execute(
         }
     }
     i32::from(failed)
-}
-
-/// The textual IR `-S -emit-llvm` writes: at `-fclang-compat=22` with an
-/// LLVM 21 or older backend, the lifetime markers in LLVM 22's form
-/// ([`lifetime_markers_llvm22`]; codegen emits that form itself for an
-/// LLVM 22+ backend).
-fn ir_text<'t>(args: &Args, tc: &Toolchain, text: &'t [u8]) -> std::borrow::Cow<'t, str> {
-    let text = String::from_utf8_lossy(text);
-    if args.predef.clang_compat.major() >= 22 && tc.llvm_major() < 22 {
-        lifetime_markers_llvm22(&text).into()
-    } else {
-        text
-    }
 }
 
 /// The frontend on one source input; `None` after an error. Writes the
@@ -935,23 +906,6 @@ mod tests {
         assert!(needs_coro_lowering("declare ptr @llvm.coro.noop() #1\n"));
         assert!(!needs_coro_lowering("define void @\"llvm.coro.id\"() {\n}\n"));
         assert!(!needs_coro_lowering("declare void @f() #0\n"));
-    }
-
-    #[test]
-    fn lifetime_markers_upgrade() {
-        let ir = "  call void @llvm.lifetime.start.p0(i64 16, ptr nonnull %3) #4\n\
-                  call void @llvm.lifetime.end.p0(i64 4, ptr %x)\n\
-                  declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #1\n\
-                  declare void @llvm.lifetime.end.p0(i64 immarg, ptr captures(none)) #1\n\
-                  call void @f(i64 16, ptr %3)\n";
-        let want = "  call void @llvm.lifetime.start.p0(ptr nonnull %3) #4\n\
-                    call void @llvm.lifetime.end.p0(ptr %x)\n\
-                    declare void @llvm.lifetime.start.p0(ptr captures(none)) #1\n\
-                    declare void @llvm.lifetime.end.p0(ptr captures(none)) #1\n\
-                    call void @f(i64 16, ptr %3)\n";
-        assert_eq!(lifetime_markers_llvm22(ir), want);
-        let new = "  call void @llvm.lifetime.start.p0(ptr %3)\n";
-        assert_eq!(lifetime_markers_llvm22(new), new);
     }
 
     #[test]
