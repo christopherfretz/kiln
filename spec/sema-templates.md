@@ -1274,7 +1274,14 @@ the running `Substituter` instead.
      after it: the conversion function's result is folded and checked
      against the parameter type (`Z<CI{}>` with `operator int` to `bool`,
      "evaluates to 2, which cannot be narrowed"; clang `getNarrowingKind`
-     on `ICS.UserDefined.After`);
+     on `ICS.UserDefined.After`). A braced-init-list argument (P2308,
+     a DR) copy-list-initializes the parameter
+     (`act_on_braced_template_arg`): narrowing is an error, a class type
+     is aggregate- or constructor-initialized, a placeholder type is
+     deduced from the list (CTAD for a class template; plain `auto` is
+     "cannot deduce type of initializer list"), and a dependent list is
+     kept until substitution. A braced default argument of a non-type
+     parameter follows the same rule;
    - packs the trailing args into a `Pack`.
    It returns `ConvertedArgs { sugared: ArgListId, canonical: ArgListId }`.
 2. Probe `specializations[(first(tmpl), canonical)]`. On a hit, return
