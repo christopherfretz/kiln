@@ -1,11 +1,11 @@
-// [class.union.general]/6, [class.dtor]/18, [basic.life]/1, [expr.const]/5.8:
-// an explicit destructor call on a union's active member ends that
-// member's lifetime, not the union's: the union may then be destroyed and
-// constructed anew (libc++'s `expected` re-initialization: `destroy_at`
-// of the member, then of the union, then `construct_at` of the union;
-// WP-334). The member stays the active one, so reading it is a read outside
-// its lifetime and reading another member is a read of an inactive member;
-// destroying the member twice, or the union twice, is not constant.
+// [class.union.general]/6, [class.dtor]/18, [basic.life]/1, [expr.const]/5.8: an explicit destructor
+// call on a union's active member ends that member's lifetime, not the union's: the union may then
+// be destroyed and constructed anew (libc++'s `expected` re-initialization: `destroy_at` of the
+// member, then of the union, then `construct_at` of the union; WP-334). The member stays the active
+// one, so reading it is a read outside its lifetime and reading another member is a read of an
+// inactive member; destroying the member twice, or the union twice, is not constant. Pinned to C++23
+// (P3726R2 changes union member destruction in C++26: basic.life/union-member-destroyed-cxx26.cpp).
+//@ std: c++23
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 59:15 error "static assertion expression is not an integral constant expression"

@@ -119,12 +119,7 @@ impl Sema<'_, '_> {
         for x in elems {
             let ArgView::Template(n) = x.view() else { continue };
             let Some(d) = self.arg_template_decl(n) else { continue };
-            if !matches!(
-                self.kind_of(d),
-                DeclKind::ClassTemplate
-                    | DeclKind::TypeAliasTemplate
-                    | DeclKind::TemplateTemplateParm
-            ) {
+            if self.template_arg_kind(d) != Some(self.ttp_kind(p)) {
                 continue;
             }
             let prior = self.prior_levels(tmpl, depth, &args[..j]);

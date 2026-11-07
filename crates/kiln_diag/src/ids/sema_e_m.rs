@@ -100,6 +100,7 @@ sema_float_literal_overflow = Warning [LiteralRange] (2) "magnitude of floating-
 sema_float_literal_underflow = Warning [LiteralRange] (2) "magnitude of floating-point constant too small for type {0}; minimum is {1}";
 sema_fn_template_spec_ambiguous = Error (1) "function template specialization '{0}' ambiguously refers to more than one function template; explicitly specify template arguments to identify a particular function template";
 sema_fn_template_spec_no_match = Error (1) "no function template matches function template specialization '{0}'";
+sema_fold_constraint_mixed_packs = Error (0) "fold expression in a constraint contains a concept template parameter pack and a template parameter pack of another kind";
 sema_fold_empty = Error (1) "unary fold expression has empty expansion for operator '{0}' with no fallback value";
 sema_fold_packs_both_sides = Error (0) "binary fold expression has unexpanded parameter packs in both operands";
 sema_for_range_decl_must_be_var = Error (0) "for range declaration must declare a variable";

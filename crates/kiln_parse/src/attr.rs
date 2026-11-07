@@ -466,7 +466,9 @@ impl Parser<'_, '_> {
                 self.parse_assume_arg(name)
             } else if scope.is_none()
                 && self.at(Punct::LParen)
-                && (forbids_args(&text)
+                && ((forbids_args(&text)
+                    // P3475R2: no longer a standard attribute in C++26.
+                    && !(text == "carries_dependency" && self.std >= kiln_lex::Std::Cxx26))
                     || (text == "indeterminate" && self.std >= kiln_lex::Std::Cxx26))
             {
                 // clang `ParseCXX11AttributeArgs`: a standard attribute

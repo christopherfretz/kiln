@@ -152,7 +152,8 @@ template-param   := type-param | constrained-param | parameter-declaration | tem
 type-param       := ('class'|'typename') '...'? identifier? ('=' type-id)?
 constrained-param:= type-constraint '...'? identifier? ('=' type-id)?
 type-constraint  := nested-name-specifier? concept-name ('<' template-argument-list? '>')?
-template-template-param := template-head ('class'|'typename') '...'? identifier? ('=' id-expression)?
+template-template-param := template-head ('class'|'typename'|'auto') '...'? identifier? ('=' id-expression)?
+                        | 'template' '<' template-parameter-list '>' 'concept' '...'? identifier? ('=' id-expression)?
 ```
 
 **Kind decision.** These rules are clang's `isStartOfTemplateTypeParameter`.
@@ -353,6 +354,97 @@ member function is not a member template and is accepted. Tests:
 `temp.mem/p2-local-class-member-template.cpp`,
 `temp.mem/p2-local-class-abbreviated-template.cpp`.
 
+#### 2.1.1 Concept and variable template template parameters (P2841R7)
+
+**Kinds** ([temp.param]/2-3). A template template parameter is a *type*,
+*variable* or *concept* template template parameter, recorded as
+`TemplateParmInfo::ttp_kind` (`TtpKind::{Type, Variable, Concept}`,
+`Sema::ttp_kind`; `kiln_sema/src/templ/ttpkind.rs`). The parser takes
+`auto` (variable-tt-parameter) or `concept` (concept-tt-parameter) where it
+takes the `class`/`typename` key, only at `-fclang-compat=22` (clang 19
+reports the missing key, unchanged); before C++26 each is the error
+"concept template parameter is a C++2c extension" /
+"variable template template parameter is a C++2c extension"
+(`parse_ext_concept_template_param`,
+`parse_ext_variable_template_template_param`, clang 22's
+`ext_cxx26_*`, error by default) and the parameter is still declared.
+Packs, unnamed parameters and defaults (`= Int`, `= sz`) parse as for a
+type template template parameter. [temp.param]/5: a concept template
+parameter shall not have associated constraints; a requires-clause in its
+`template<...>` or a type-constraint on one of its parameters is
+"concept template parameter cannot have associated constraints"
+(`sema_concept_template_param_constraints`, at the constraint). clang 22
+accepts both silently: kiln follows the wording here. A variable template
+template parameter's template-head may carry a requires-clause.
+
+**Names** ([temp.names], [temp.param]/8). `classify_name` reports a concept
+template parameter as `NameClass::Concept` and a variable template
+template parameter as `NameClass::VarTemplate`, so `C<T>` parses as a
+concept-id, `C auto` and `template <C T>` as type-constraints, and `V<T>`
+as a variable template-id. In a template-argument list, a concept name or
+variable template name for a parameter of that kind is a template
+argument (`TemplateName`); for a type template template parameter it stays
+the clang 22 error of §2.2.
+
+**Uses before substitution.** `C<args>` for a concept template parameter
+`C` is a `ConceptSpecializationExpr` whose decl is the parameter;
+`V<args>` for a variable template template parameter is an
+`UnresolvedLookupExpr` whose single decl is the parameter with the
+arguments in `expr_targs` (`ttp_template_id_expr`). Both are
+value-dependent (and `C<args>` is `bool`), and both carry the parameter
+pack for [temp.variadic] (`expr_packs` visits the parameter and the
+arguments, so `Cs<T>...` and `(Cs<T> && ...)` expand). A type-constraint
+`C T` / `C auto` names the parameter as its concept.
+
+**Substitution** (`Sema::ttp_template_id`). Substituting the parameter
+yields the argument template (`Substituter::template_name`), and the use
+is rebuilt as that template's template-id with the substituted arguments:
+a checked concept-id ([temp.constr.concept]/2, satisfaction memoised on
+the substituted concept and arguments, §8.3) or a variable template
+specialization (`DeclRefExpr` to the instantiated variable), which the
+Oven reads like any other ([expr.const]). A pack of concept or variable
+templates substitutes element-wise through the expansion.
+
+**Arguments** ([temp.arg.template]/1, /3). A template-argument for a
+type template template parameter names a class or alias template, for a
+concept template parameter a concept, for a variable template template
+parameter a variable template (or, each time, a template template
+parameter of the same kind; `template_arg_kind`). Otherwise clang 22's
+"template argument does not refer to a {class or alias template|variable
+template|concept}, or template template parameter"
+(`sema_template_arg_not_valid_template`, at the argument), with the note
+"template argument refers to a {..} '{name}', here" at the template. A
+default argument of the wrong kind is rejected the same way and dropped.
+Matching of an argument of the right kind is P0522's "at least as
+specialized" check (§11.2, `templ/ttarg22.rs`) unchanged: the
+parameter's template-head is formed as arguments to the argument template, so a defaulted or pack
+parameter of the argument absorbs them and an argument that cannot accept
+them is "too few/many template arguments for concept 'Same'" with the
+"different template parameters" notes, as in clang 22. The kinds of the
+parameters *inside* nested template template parameters are not compared
+(follow-up).
+
+**Deduction** ([temp.deduct.type]/8-9). A `TemplateName` argument in P
+that names a concept or variable template template parameter deduces the
+argument's template like a type template template parameter (packs
+included): `template <template <class> auto V> int pick(Q<V>)`, called
+with `Q<sz>{}`, deduces `V = sz`.
+
+**Equivalence** ([temp.over.link]/6.1): §6.8.
+
+**Feature macro.** `__cpp_template_parameters` stays undefined: the paper
+is partial (see `docs/STANDARD_SUPPORT.md` P2841R7). clang 22 does not
+define it either.
+
+Tests: `temp.param/concept-variable-ttp.cpp`,
+`temp.param/concept-variable-ttp-cxx23.cpp`,
+`temp.param/concept-variable-ttp-defaults-errors.cpp`,
+`temp.param/concept-ttp-requires-clause.cpp`,
+`temp.arg.template/ttp-kind-mismatch.cpp`,
+`temp.arg.template/concept-variable-ttp-p0522.cpp`,
+`temp.deduct.type/concept-variable-ttp-deduction-run.cpp`,
+`temp.param/ir-concept-variable-ttp-mangling.cpp` (spec/abi.md).
+
 ### 2.2 Template-ids and the `<` rule
 
 [temp.names]/3 says `<` starts a template-argument-list when it follows:
@@ -529,7 +621,7 @@ All of these are built by sema actions, which compute dependence as in
 
 | Syntax (in a dependent context) | Node |
 |---|---|
-| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309; the same for a nested-name-specifier component `D::N::` when `N` is found neither as a nested name nor as an ordinary name in `D`, e.g. `using G::F::F;` with a dependent base `F<U, T, int>`, WP-367) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
+| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309; the same for a nested-name-specifier component `D::N::` when `N` is found neither as a nested name nor as an ordinary name in `D`, e.g. `using G::F::F;` with a dependent base `F<U, T, int>`, WP-367); also `B::x` when `B` is a member class of the current instantiation named outside its own definition that is declared but not yet defined (`struct Block;` defined out of line after the member function naming `Block::get`), the specifier being dependent (clang `computeDeclContext` has no context for it), so `x` is looked up in the instantiated member class (WP-726, `temp.dep.type/incomplete-member-class-qualifier{,-missing}.cpp`) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
 | `e.m` or `p->m` with a type-dependent object, or a member of the current instantiation that is not found when it has dependent bases | `CXXDependentScopeMemberExpr {base, arrow, nns?, name, targs?}` |
 | unqualified `f(args)` with type-dependent args, where lookup finds functions or templates (or nothing) | `UnresolvedLookupExpr {requires_adl, overloaded, decls, targs?}`, plus `CallExpr` of dependent type |
 | unqualified `operator@(args)` / `operator T(args)` (an operator- or conversion-function-id as the callee) whose lookup finds nothing ([temp.dep.general]/2, [basic.lookup.argdep]/1) | an empty `UnresolvedLookupExpr` with `requires_adl`, as for an undeclared `f(args)` (`Sema::act_on_id_expression_dn` while `deferring_call_ref`); ADL at the call or at instantiation, and no candidate is clang's `use of undeclared 'operator@'` (`sema_undeclared_use`) |
@@ -1133,6 +1225,15 @@ class H, template<class> class... T> struct Ts`) names neither the
 current instantiation nor a partial specialization's injected class: it
 is a dependent specialization checked once substituted (WP-730,
 `temp.local/injected-name-pack-expansion-args.cpp`).
+
+A template-id of a partial specialization's template whose non-type
+arguments are written unconverted is matched by converting them first
+(`entered_partial_by_converted_args`). One whose primary template has a
+template parameter pack is converted first too: the partial
+specialization's own arguments hold the arguments for the pack as one
+argument pack, so `template<class... A> int B<int, A...>::g()` is found
+only after conversion (WP-726,
+`tests/conformance/temp.spec.partial.member/out-of-line-member-pack-arguments.cpp`).
 
 Qualified lookup into the current instantiation happens at definition.
 Lookup of a found member binds it (`typename A<T>::X` resolves to the
@@ -1962,9 +2063,17 @@ class name" at `B`
   substitution is not dependent names only the enclosing class's
   parameters ([temp.friend]/9): it is compared as written, so the friend
   stays a template of its own (WP-446; libc++ 22 `stack`/`queue`
-  `operator<=>`; `temp.friend/constrained-friend-template-*.cpp`). Gap:
-  a constraint naming both levels is compared substituted, which merges
-  what [temp.friend]/9 keeps apart.
+  `operator<=>`; `temp.friend/constrained-friend-template-*.cpp`). A
+  constraint whose substitution used an enclosing level's argument (or
+  the injected-class-name's instantiated class), even one that also
+  names the friend's own parameters, makes the friend a template of its
+  own: no earlier declaration is looked up, so `template<class Self,
+  class U = T> requires is_same_v<remove_cvref_t<Self>, W> friend U
+  get(Self&&)` defined in `W<int>` and `W<long>` declares two templates,
+  without a "redefines default argument" or "redefinition" error
+  (`Sema::friend_template_apart`, `Substituter::outer_used`; clang's
+  `FriendConstraintsDependOnEnclosingTemplate`; WP-726,
+  `temp.friend/p9-constraint-on-enclosing-distinct.cpp`).
 - A friend function or function template declared with a qualified name
   in a templated class (`template<class U> friend R N::f(X<U>);`,
   `friend R N::g(T);`) whose template head or type is dependent is not
@@ -2149,6 +2258,12 @@ and the §6.2 tests.
 with a `VarTemplateSpecialization` decl.
 - The type is substituted immediately: the expression needs it.
 - Partial specializations are selected as in §4.4.
+- A template declared with a placeholder anywhere in its type (`auto`,
+  `auto&`, `const auto*`; `contains_undeduced_auto`, not only a
+  top-level `auto`) instantiates its initializer at the specialization
+  to deduce the type, so a use of `v<T>` inside another constexpr
+  initializer is not "depends on itself" (WP-726;
+  `tests/conformance/dcl.spec.auto/variable-template-reference-placeholder.cpp`).
 - The `inline constexpr bool xxx_v` family (142 declarations in the M3
   headers, §13.3) is the hottest path. One probe gives the decl and one
   `consts()` lookup gives its value.
@@ -2174,6 +2289,11 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
   (`-Wundefined-var-template` stays clang's, below).
   `tests/conformance/temp.point/var-template-end-of-tu-instantiation-run.cpp`,
   `var-template-defined-after-reference-run.cpp`.
+- A static data member's instantiated out-of-line definition keeps the
+  pattern definition's `constinit` ([dcl.constinit]/1): it is the
+  initializing declaration with `constinit`, so `template<class I>
+  constinit T C<I>::m{};` gives no "'constinit' specifier missing"
+  warning.
 - Other variables are queued in `pending` when they are odr-used.
   That includes an inline static data member whose in-class initializer
   was deferred (§4.4; `deferred_inits`): the drain instantiates its
@@ -3882,7 +4002,24 @@ guides.
    mismatch, as clang's integral `P` against an expression `A`
    (`check_nondeduced_value`; WP-669,
    `tests/conformance/temp.func.order/p3-constant-argument-more-specialized.cpp`).
-   Packs follow /8–11. The last tie-breaker for packs is
+   Packs follow /8–11. A template argument pack expansion in the `A`
+   types (`L<I...>`, of the argument template's own pack) is deduced as a
+   whole by a `P` pack expansion (`DeducedArgs::expansions`, as for
+   partial specializations), so the two packs' template-parameter
+   indices need not coincide (WP-726,
+   `tests/conformance/temp.func.order/p3-pack-expansion-other-index.cpp`).
+   A template parameter of the deduced template left without a value
+   fails the deduction when the compared parameter types name it, a
+   non-deduced context included ([temp.deduct.partial]/12; clang
+   `MarkUsedTemplateParameters` without `OnlyDeduced`): kiln substitutes
+   `int` for each undeduced type parameter and every other parameter for
+   itself, and a type that changes or fails to substitute names one
+   (`order.rs` `undeduced_params_unused`; with a parameter pack, or an
+   undeduced non-type or template parameter, they count as unused). So
+   `to_pointer(buffer_appender<T>, size_t)` beats `to_pointer(OutputIt,
+   size_t)` for `to_pointer<char>(it, n)` (WP-726,
+   `tests/conformance/temp.func.order/p12-undeduced-used-in-non-deduced-context.cpp`).
+   The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
 5. **Constraints.** If both directions succeed, the more constrained one
    wins ([temp.func.order]/6, P2113; subsumption §8.4), but only when the
@@ -3921,6 +4058,29 @@ This equivalence is used for:
 
 "Functionally equivalent but not equivalent" is ill-formed NDR. Clang and
 kiln treat it as a different entity.
+
+**Template template parameter kinds** (P2841R7, [temp.over.link]/6.1). A
+type, a concept and a variable template template parameter are three
+kinds: template-heads whose corresponding template template parameters
+differ in kind are not equivalent (`heads_equivalent`,
+`template_params_equivalent`, and the redeclaration check
+`params_match`, which reports "template parameter has a different kind in
+template {|template parameter }redeclaration" as for a type/non-type
+change, nested template template parameters included). So
+`template <template <class> class K> int h()` and the same with
+`concept K` or `auto K` are three overloads, each removed by an argument
+of another kind, while renaming a concept or variable template template
+parameter redeclares. A requires-clause `C<T>` naming a concept template
+parameter is compared like any expression naming template parameters
+(by position), so `requires C<T>` and `requires D<U>` with `C`/`D`
+corresponding are equivalent and the second declaration redeclares the
+first. *Wording over clang:* clang 22 does not compare template template
+parameter kinds across class template redeclarations and keeps the two
+`requires C<T>` / `requires D<U>` declarations as distinct candidates
+(an ambiguous call); kiln follows [temp.over.link]
+(`temp.over.link/concept-variable-ttp-kind-redeclaration.cpp`,
+`temp.over.link/concept-ttp-requires-redeclaration.cpp`; the agreeing
+cases are `temp.over.link/concept-variable-ttp-redeclaration.cpp`).
 
 Constructors, conversion functions and the other special members follow
 the same rule ([temp.over.link]/7). A member template is a redeclaration
@@ -4088,6 +4248,12 @@ The `SpecKind` transitions are those of §4.5.
   names match clang's (`XadL_ZN1S1vEE`, `mcM1BiadL_ZN1D1dEE`;
   `tests/codegen/nttp_member_pointer.cpp`,
   `tests/conformance/temp.arg.nontype/member-pointer-argument-value.cpp`).
+  `&C::m` of exactly the parameter's type while `C` is still being
+  defined (boost.intrusive's `member_hook<C, H, &C::hook>` in `C`'s own
+  body) is converted without the Oven, which has no layout for `C` yet:
+  the value is the member itself, the same argument as after `C` is
+  complete (`args.rs` `defining_class_member_ptr`; WP-726,
+  `tests/conformance/temp.arg.nontype/member-pointer-of-class-being-defined.cpp`).
 - **Reference arguments** (`convert_ref_nttp_arg`): the conversion must
   exist (`sema_cce_not_implicitly_convertible`), must not bind a
   temporary (`sema_cce_ref_binds_temporary`), and the referent must not
@@ -4584,6 +4750,46 @@ Fold-expanded constraints (P2963) are M4. Until then, the immediately
 declared constraint of a constrained pack `C... Ts` is the fold
 `(C<Ts> && ...)`, treated as one atom (clang 19).
 
+**Concept template parameters** (P2841R7, [temp.constr.normal]/1.4-1.5,
+WP-746; `normalize_concept_id`, `normalize_concept_fold` in
+`templ/concepts/normal.rs`).
+- /1.4.1: a concept-id `C<A…>` whose `C` is a concept template parameter
+  is a *concept-dependent constraint*. Normalized without a mapping that
+  supplies `C` (a declaration's own associated constraints), it is an
+  `Atomic` node of the concept-id as written (identity mapping).
+- /1.4.2: under a mapping that supplies `C` (normalizing a concept
+  `CC = CT<T>` reached through `CC<U*, C>`), the concept template
+  parameter is substituted (`Substituter::template_name`) and, when it
+  names a concept, the concept-id normalizes through that concept: the
+  normal form of `CC<U*, C>` is the normal form of `C<U*>`, so its atoms
+  are `C`'s ([temp.constr.normal] Example 3). clang 22 agrees.
+- /1.5.3: a `&&`/`||` fold whose pattern contains an unexpanded concept
+  template parameter pack, normalized under a mapping that supplies that
+  pack as N concepts (N > 0), normalizes as the expanded
+  `E0 op … op EN-1`, `Ei` being the pattern normalized with the i-th
+  concept substituted, and the fold's init (if any) joined on its side
+  ([temp.constr.normal] Example 4: `all_of<T, A, C>` is `A<T> ∧ C<T>`).
+  An empty pack, or a fold the mapping does not fix, stays one atom
+  (/1.5.3.2's fold-expanded constraint, still the P2963 approximation
+  above).
+- /1.5.3 Example 5: a fold in a constraint whose operands contain a
+  concept template parameter pack and an unexpanded pack of another kind
+  is "fold expression in a constraint contains a concept template
+  parameter pack and a template parameter pack of another kind"
+  (`sema_fold_constraint_mixed_packs`, at the fold, when the constraint
+  is checked as written: `check_constraint_fold`).
+- *Wording over clang:* clang 22 keeps concept-pack folds whole in
+  subsumption, so it reports Example 4 (and the same through a
+  forwarding concept, or with `||`) ambiguous, and it accepts Example 5.
+  Kiln follows the wording: `temp.constr.normal/concept-pack-fold-expansion.cpp`
+  and `temp.constr.normal/concept-pack-fold-mixed-kinds.cpp` are
+  `skip(clang)`; `temp.constr.normal/concept-dependent-substituted.cpp`
+  (clang agrees) is compared.
+- Approximation: atom identity still compares the whole canonical mapping
+  (above), so an atom from a fold's init (`(CTs<T> && ... && true)`) is
+  not identical across two expansions whose concept packs differ, though
+  the wording's mapping for `true` is empty; such pairs are ambiguous.
+
 ### 8.3 Satisfaction ([temp.constr.sat])
 
 `check_satisfaction(entity, args, loc) -> SatId` runs under the frame
@@ -4678,6 +4884,14 @@ change in result ill-formed NDR.
    are thus evaluated once across *all* concepts and overloads that use
    them.
 
+A concept-id naming a concept template parameter is checked only after
+substitution has replaced the parameter by its argument concept
+(§2.1.1), so both levels key on the substituted concept: `all_of<C,
+Ts...>` with `C = Small` is one `sat_cache` entry and `Small<T<i>>` one
+entry per type, shared with every other use. Stress:
+`tests/stress/concept-ttp-all-of-10k.cpp` (four 10,000-type checks and
+their repeats; the repeats are cache hits).
+
 `Satisfaction` records are kept for the TU's life. They are needed for
 the notes, and they are metered as `templ.satisfaction`.
 
@@ -4693,6 +4907,22 @@ cap of 65,536 clauses (D5).
     [temp.func.order]/6);
   - partial-specialization ordering (§4.4);
   - P0522 template template argument matching.
+
+**Eligibility** (P2841R7, [temp.constr.order]/3-4,
+`eligible_for_subsumption`, `is_concept_dependent`). Associated
+constraints that contain a concept-dependent constraint (an atom that is
+a concept-id or fold naming a concept template parameter, §8.2) are not
+eligible for subsumption. D1 is at least as constrained as D2 only if
+D1's constraints are eligible and subsume D2's (or D2 is unconstrained),
+so `more_constrained(P, Q)` is `eligible(P) ∧ P ⊒ Q ∧ ¬(eligible(Q) ∧
+Q ⊒ P)`. Two candidates constrained by `C<T>` and `C<T> && A<T>` (`C` a
+concept template parameter) are ambiguous, with clang 22's "similar
+constraint expressions" notes (a fold atom's note points at its pattern).
+*Wording over an example:* [temp.constr.order] Example 3 says the call
+selects #1 (`requires A<T>`) "because #2 is not eligible"; the normative
+¶4 needs #1's constraints to subsume #2's `X<T>`, which they do not, so
+the call is ambiguous. Kiln follows ¶4, as clang 22 does
+(`temp.constr.order/concept-dependent-not-eligible.cpp`).
 
 ### 8.5 Requires-expressions ([expr.prim.req])
 
@@ -7188,6 +7418,14 @@ declarator scopes.**
   converted form the partial was registered with (WP-709). Gap:
   dependent template-ids elsewhere are still neither checked nor
   converted (clang checks every template-id).
+- *Template arguments of a declarator qualifier*: only the qualifier's
+  own components are entered. Its template arguments are parsed with
+  the entering context off (`parse_template_arg_list`, as clang's
+  `EnteringContext = false`), so in `template<class T> int F<T,
+  typename X<T>::type>::g()` the inner `X<T>` is an ordinary dependent
+  specialization rather than the current instantiation of `X`; the
+  argument stays `typename X<T>::type` and matches the partial
+  specialization ([temp.dep.type]/1; WP-726, fmt 10's `formatter`).
 - Tests: `tests/conformance/temp.mem.class/`, `temp.mem.enum/`,
   `temp.spec.partial.member/out-of-line-ctors.cpp`,
   `temp.spec.partial.member/non-type-arg-scope.cpp`,

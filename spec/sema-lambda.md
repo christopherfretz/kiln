@@ -314,7 +314,14 @@ specialization of the outer call operator, the names in the shared
 member access) under either capture-default; under `=` clang 19 warns
 `implicit capture of 'this' with a capture default of '=' is
 deprecated` with its note. `capture_this` walks the enclosing lambdas as
-for variables.
+for variables. An unqualified call whose overload set mixes static and
+instance member functions uses the implicit `this` only when overload
+resolution picks an instance member (`finish_member_winner`), so a lambda
+without a capture-default may call the static one (clang's
+`BuildPossibleImplicitMemberExpr`; WP-726,
+`tests/conformance/expr.prim.lambda.capture/implicit-this-*-overload-winner.cpp`).
+In a class template, where `*this` is dependent, the capture is still
+eager.
 
 (WP-716) A generic lambda's call operator instantiated later gets the
 enclosing `this` ([expr.prim.this]/2), not the closure's: the enclosing

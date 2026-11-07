@@ -639,6 +639,7 @@ impl Args {
                 && !a.stdlib_flag(arg)
                 && !a.complex_flag(arg)
                 && !a.lax_vector_flag(arg)
+                && !a.charset_flag(arg)
                 && !a.auto_var_init_flag(arg)
                 && !a.contract_semantic_flag(arg)
                 && !a.visibility_flag(arg)
@@ -1015,6 +1016,22 @@ impl Args {
                 k
             }
         };
+        true
+    }
+
+    /// `-finput-charset=v` / `-fexec-charset=v`: kiln, like clang, reads
+    /// and writes UTF-8 only, so `v` must be `UTF-8` (any case); another
+    /// value is clang's driver error "invalid value 'v' in
+    /// '-finput-charset=v'".
+    fn charset_flag(&mut self, arg: &str) -> bool {
+        let Some(v) =
+            arg.strip_prefix("-finput-charset=").or_else(|| arg.strip_prefix("-fexec-charset="))
+        else {
+            return false;
+        };
+        if !v.eq_ignore_ascii_case("utf-8") {
+            self.errors.push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned()));
+        }
         true
     }
 

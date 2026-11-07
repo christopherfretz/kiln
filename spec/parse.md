@@ -173,7 +173,13 @@ clang's `Parser` over `Preprocessor::Lex`.
   `Sema::inherited_injected_class`, WP-686). As a nested-name-specifier
   component (`D::B::m`, also `W::Base::m` through a dependent base)
   it names the base, so `D::B::m` is the base's member (WP-714;
-  `temp.local/p2-base-injected-name-nested-name-specifier-run.cpp`).
+  `temp.local/p2-base-injected-name-nested-name-specifier-run.cpp`). An
+  unqualified lookup that finds the injected-class-names of several
+  specializations of one class template through different bases names
+  that template when `<` follows, and is ambiguous otherwise (clang's
+  "found in multiple base classes of different types"; [temp.local]/4,
+  `Sema::ambiguous_injected_class`, WP-726;
+  `temp.local/p4-injected-names-same-template.cpp`).
   Dependent qualified names follow clang's `isCXXDeclarationSpecifier`
   (WP-291). A dependent `N::m` that the scan cannot classify is a
   decl-specifier when an identifier or another decl-specifier follows it
@@ -534,6 +540,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   (`annotate_template_scope`, `in_class_template_pattern`; WP-724), so
   `sizeof(rr<decltype(*p)>::type::value_type)` takes a type-id
   (`tests/conformance/dcl.ambig.res/sizeof-member-typedef-of-specialization-run.cpp`).
+- When `m` in `X<A>::m::name` is a typedef member of `X`'s primary
+  pattern but `X<A>` has an explicit specialization, the pattern's `m`
+  (`void`, or dependent on the parameters) says nothing about the
+  specialization's: unless the pattern is the current instantiation, the
+  qualifier is an unresolved specialization scope and is parsed ahead for
+  real (`annotate_template_scope`), so `v<traits<clk>::spec::fine_clock>`
+  takes a type-id (folly's `clock_traits<steady_clock>::spec`, WP-726;
+  `tests/conformance/temp.expl.spec/member-typedef-through-specialization-in-template-arg.cpp`).
 - `skip_template_args(i)` memoizes its result by token index `i` in
   `Parser::targs_memo`.
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp
@@ -1049,6 +1063,32 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   at the innermost position, as clang's identifier location: set by
   `parse_direct_declarator` when nothing names it, else the first array
   bound or the next token (WP-385).
+- **Template template parameter kinds** (P2841R7 [temp.param]/1,
+  WP-746, `parse_template_template_param` in `templ.rs`): after the
+  template-head of a template template parameter, `concept` makes a
+  concept-tt-parameter and `auto` a variable-tt-parameter
+  (`template<class> concept C`, `template<class> auto V`); the rest is
+  the type-tt-parameter grammar (named or unnamed, `...` pack, `=`
+  default). The keys are recognised only at `-fclang-compat=22` (at 19
+  they reach the existing "expected 'class'" path, as clang 19). Before
+  C++26 each is an error with clang 22's wording,
+  `parse_ext_concept_template_param` "concept template parameter is a
+  C++2c extension" / `parse_ext_variable_template_template_param`
+  "variable template template parameter is a C++2c extension", at the
+  key, and the parameter is still declared with its kind. The parser
+  records the kind with `Sema::act_on_ttp_kind(p, kind, loc)`
+  (spec/sema-templates.md §2.1.1). A default argument that names a
+  concept or variable template is a template name when the parameter's
+  kind is not Type (`Sema::ttp_kind(p)`); for a type-tt-parameter it is
+  `act_on_wrong_kind_ttp_default`. In a template-argument-list a bare
+  concept or variable-template name (ending the argument, no `<`) is a
+  template-name argument at clang compatibility 22, as clang's
+  `ParseTemplateTemplateArgument`; Sema then checks it against the
+  parameter's kind ([temp.arg.template]). At 19 a bare concept stays
+  "too few template arguments for concept". Tests:
+  `temp.param/concept-variable-ttp.cpp`,
+  `temp.param/concept-variable-ttp-cxx23.cpp`,
+  `temp.param/concept-variable-ttp-defaults-errors.cpp`.
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
   - designated initializers `.x = …` (C++20)
@@ -1811,7 +1851,7 @@ for `^^`, §5 for splices).
   `enum_extensibility` parse their arguments (so Sema can count them);
   other attributes outside `takes_expr_args` skip theirs.
 - **No argument list (WP-182):** a standard attribute that takes no
-  arguments (`carries_dependency`, `fallthrough`, `noreturn`,
+  arguments (`carries_dependency` before C++26, P3475R2, `fallthrough`, `noreturn`,
   `no_unique_address`, `likely`, `unlikely`, `maybe_unused`), written
   unscoped in `[[...]]` with `(...)`, even empty, reports `attribute 'x'
   cannot have an argument list` at the `(`; its tokens are skipped and

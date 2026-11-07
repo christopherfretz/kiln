@@ -149,6 +149,11 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// ([stmt.expand], P1306R5), innermost last: what their
     /// `CXXExpansionSelectExpr`s become.
     pub(crate) expansions: Vec<crate::expansion::ExpansionElem>,
+    /// Set when a substituted level's argument (or the instantiated
+    /// class of an injected-class-name) was used: the substituted
+    /// construct names an enclosing template's parameter
+    /// ([temp.friend]/9; clang's `ConstraintRefersToContainingTemplateChecker`).
+    pub(crate) outer_used: std::cell::Cell<bool>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -192,6 +197,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             written_scope: None,
             written_used: std::cell::RefCell::default(),
             expansions: Vec::new(),
+            outer_used: std::cell::Cell::new(false),
         }
     }
 
@@ -290,7 +296,11 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     /// What template parameter `(depth, index)` becomes.
     pub(crate) fn lookup(&self, depth: u16, index: u16) -> ArgLookup {
         let types = &self.sema.ast.types;
-        self.args.lookup(depth, index, |l, i| types.args(l).get(i).copied())
+        let r = self.args.lookup(depth, index, |l, i| types.args(l).get(i).copied());
+        if !matches!(r, ArgLookup::Retain(_)) {
+            self.outer_used.set(true);
+        }
+        r
     }
 
     /// The associated declaration of level `depth` (the

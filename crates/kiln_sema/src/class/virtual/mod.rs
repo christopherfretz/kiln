@@ -156,7 +156,11 @@ impl Sema<'_, '_> {
         if let Some(_zero) = d.pure {
             if site.friend {
                 self.unsupported("pure virtual friend functions", d.name_loc());
-            } else if spec.is_virtual() {
+            } else if spec.is_virtual() || (site.method && self.in_dependent_class(site.class)) {
+                // clang `CheckPureMethod`: in a dependent class the
+                // function may override one of a dependent base, so it is
+                // checked when the class is instantiated (the
+                // instantiation is declared pure again).
                 *spec = spec.with_pure(true);
             } else if !out.invalid {
                 let msg = self
@@ -264,6 +268,23 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name_str(site.name));
             self.emit(msg);
         }
+    }
+
+    /// Whether class `c` is a dependent context ([temp.dep.type]; clang
+    /// `isDependentContext`): it, or a class or function enclosing it,
+    /// is a template pattern.
+    pub(crate) fn in_dependent_class(&self, c: DeclId) -> bool {
+        let mut cur = Some(c);
+        while let Some(d) = cur {
+            let first = self.ast.first(d);
+            if self.ast.described_template(first).is_some()
+                || self.ast.partial_spec_info(first).is_some()
+            {
+                return true;
+            }
+            cur = self.ast.decls.get(d).ctx();
+        }
+        false
     }
 
     /// Whether class `c` has a dependent base ([temp.dep.type]; clang

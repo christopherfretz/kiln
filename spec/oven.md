@@ -884,7 +884,11 @@ literal is one instruction and one step, not an interpreted loop.
   width (`Target::max_atomic_inline_bytes`: aarch64 16, x86_64 8 bytes) is
   lock-free for the c11 form, a null object, a single byte, or an object
   whose pointee alignment is at least the size (the pointee as written:
-  an `aligned` typedef's alignment counts, `typedef_align`; WP-335); otherwise
+  an `aligned` typedef's alignment counts, `typedef_align`; WP-335), or
+  (WP-726) an object argument that is an integer cast to a pointer whose
+  value is a multiple of the size (clang 19 folds the argument with
+  `EvaluateAsRValue`: libstdc++'s `reinterpret_cast<void *>(-_S_alignment)`
+  in `std::atomic<T>::is_lock_free`); otherwise
   `always_lock_free` is false and `is_lock_free` is not a constant.
   `NonAtomicToAtomic`/`AtomicToNonAtomic` casts are no-ops, also when
   they initialize an object in place: `_Atomic(S)` of class type `S` is
@@ -1928,6 +1932,57 @@ lifetime" ([basic.life]/7)
 No new memory state: the entry already existed and is removed with the
 destruction. Clang 19 accepts destroying a union with a user-provided
 destructor twice and reading a member after it; kiln rejects both.
+
+**C++26 union lifetime (P3726R2, WP-743; `Oven::cxx_year >= 2026`).**
+A union whose trivial default constructor ran (P3074R7) is within its
+lifetime with no active member: its bytes are uninitialized and it has
+no side-map entry, so reading any member is "read of member 'i' of union
+with no active member". Four rules differ from earlier modes. Earlier
+modes keep the WP-334 behaviour above.
+- **Destroying the active member** (`std::destroy_at(&u.s)`,
+  `u.s.~S()`, `EndLife` aux 2, `Vm::union_of_member`) leaves the union
+  alive with no active member, as its trivial default constructor leaves
+  it. The union's bytes become uninitialized (not dead), and its entry
+  and nested entries are removed. The union may then be destroyed,
+  assigned, or given a new member by construction. A member read is "no
+  active member", and destroying the member again is "destruction of
+  member 's' of union with no active member" (`EndLife` aux 1 checks the
+  path as a `DESTROY` access).
+- **Constructing an element of an inactive array member**
+  (`std::construct_at(&u.arr[i], ...)`, `Vm::place_in_unions`,
+  `Vm::array_element_at`) activates the array member. Its other elements
+  stay uninitialized, and reading one is "read of uninitialized object".
+  Each element's lifetime is its bytes', so `std::inplace_vector`-style
+  storage (`union { T a[N]; }`) constructs and destroys elements one by
+  one. Destroying an element (`EndLife` aux 2 on a non-member object)
+  ends only that element's bytes. It costs nothing for ordinary arrays:
+  the test runs only on the path through a union, once per placement
+  new. Deviation from the DIS wording, which leaves the array object
+  inactive until `std::start_lifetime(u.arr)` ([obj.lifetime]); kiln
+  follows GCC 17, which activates it implicitly. `std::start_lifetime`
+  is not provided (a library builtin, follow-up).
+- **Element or member at offset 0.** A pointer has no designator, so
+  `&u.s` and `&u.arr[0]` of one type are both candidates. The entry
+  keeps the member and `union_alts` the array (WP-233). Constructing
+  through the pointer again with the array possibly active collapses the
+  union to the array. Destroying the member at the entry ends the
+  union's member (above). Pointer arithmetic on such a pointer uses the
+  array (`Types::extent_in` prefers an array member's extent inside a
+  union, so `&u.arr[0] + 1` is `&u.arr[1]`).
+- **Constructing over an active member of another type** does not end
+  the old member's lifetime by running its destructor ([basic.life]/5:
+  reusing storage ends a lifetime without a destructor call). Both
+  members stay possibly active (`union_alts`). An allocation the old
+  member owned is never freed, so a leak is reported as "allocation
+  performed here was not deallocated" at the end of evaluation, as GCC 17
+  reports it.
+
+No new memory state: entries are removed when the member is destroyed,
+and element lifetimes are the existing per-byte bitmap
+(`tests/conformance/class.union/constexpr-trivial-union-lifetime-cxx26.cpp`,
+`tests/conformance/expr.const/constexpr-trivial-union-invalid-cxx26.cpp`,
+`tests/conformance/basic.life/union-member-destroyed-cxx26.cpp`).
+
 An explicit destruction of a non-union class object whose union members'
 bytes alone are outside their lifetime is accepted too (`EndLife` aux 1,
 `live_but_unions`: every byte outside its `upos` unions must be live, and

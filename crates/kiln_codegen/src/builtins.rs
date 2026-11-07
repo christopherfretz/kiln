@@ -838,6 +838,34 @@ impl Cg<'_> {
                 self.intrinsic_call(f, vec![c]);
                 return Ok(BuiltinCall::Emitted(None));
             }
+            // WP-726: clang `BI__builtin_assume_separate_storage`:
+            // `llvm.assume(i1 true) ["separate_storage"(ptr a, ptr b)]`.
+            id::ASSUME_SEPARATE_STORAGE => {
+                let Some(a1) = arg(1) else {
+                    return err(
+                        self.loc_of(e),
+                        "__builtin_assume_separate_storage without two arguments",
+                    );
+                };
+                let pa = self.emit_scalar(a0)?;
+                let pb = self.emit_scalar(a1)?;
+                if self.f.fir.cur().is_some() {
+                    let f = kiln_llvm::intrinsics::assume(&mut self.m);
+                    let fn_ty = self.m.func(f).ty();
+                    let cond = self.m.const_bool(true);
+                    self.f.fir.push(
+                        Op::AssumeBundle {
+                            fn_ty,
+                            callee: Value::func(f),
+                            cond,
+                            tag: "separate_storage",
+                            args: vec![pa, pb],
+                        },
+                        LTy::VOID,
+                    );
+                }
+                return Ok(BuiltinCall::Emitted(None));
+            }
             id::VA_START | id::VA_END | id::VA_COPY => {
                 // clang `EmitVAStartEnd` / `__builtin_va_copy`: the
                 // `llvm.va_*` intrinsics on the `va_list`'s address (the
@@ -924,7 +952,7 @@ impl Cg<'_> {
                 self.intrinsic_call(f, vec![]);
                 return Ok(BuiltinCall::Emitted(None));
             }
-            id::MEMCPY | id::MEMMOVE | id::MEMPCPY => {
+            id::MEMCPY | id::MEMMOVE | id::MEMPCPY | id::MEMCPY_INLINE => {
                 let (Some(d), Some(s), Some(n)) = (arg(0), arg(1), arg(2)) else {
                     return err(self.loc_of(e), "memory builtin without three arguments");
                 };
@@ -933,6 +961,9 @@ impl Cg<'_> {
                 let nv = self.emit_scalar(n)?;
                 let f = if b == id::MEMMOVE {
                     kiln_llvm::intrinsics::memmove(&mut self.m, LTy::I64)
+                } else if b == id::MEMCPY_INLINE {
+                    // WP-726: clang `BI__builtin_memcpy_inline`.
+                    kiln_llvm::intrinsics::memcpy_inline(&mut self.m, LTy::I64)
                 } else {
                     kiln_llvm::intrinsics::memcpy(&mut self.m, LTy::I64)
                 };
@@ -955,6 +986,9 @@ impl Cg<'_> {
                     LTy::VOID,
                 );
                 self.f.calls.push((Fir::last_inst(c), Some(f), true));
+                if b == id::MEMCPY_INLINE {
+                    return Ok(BuiltinCall::Emitted(None));
+                }
                 if b == id::MEMPCPY {
                     // clang: the end of the destination.
                     self.gep(LTy::I8, dv, vec![nv], true)
@@ -1067,6 +1101,9 @@ impl Cg<'_> {
             // [ptr.launder]: the pointer itself (no `llvm.launder.invariant.group`
             // without `-fstrict-vtable-pointers`).
             id::LAUNDER => self.emit_scalar(a0)?,
+            // WP-726: clang `BI__builtin_unpredictable`: the operand (the
+            // `!unpredictable` branch hint is not emitted).
+            id::UNPREDICTABLE => self.emit_scalar(a0)?,
             id::OPERATOR_NEW | id::OPERATOR_DELETE => {
                 return self.builtin_new_delete(b, e, &args).map(BuiltinCall::Emitted);
             }

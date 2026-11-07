@@ -29,7 +29,7 @@ impl Sema<'_, '_> {
     /// object argument) after its `operator()` candidates.
     pub(crate) fn add_surrogates(&mut self, set: &mut OverloadCandidateSet, obj: ExprId) {
         let t = self.ety(obj);
-        for (f, found) in self.conversion_functions(t) {
+        for (found, f) in self.conversion_functions(t) {
             if self.kind_of(f) != DeclKind::CXXConversion || self.fn_spec(f).is_explicit() {
                 continue;
             }
