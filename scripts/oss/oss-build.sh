@@ -150,7 +150,11 @@ if [ "$CONF_RC" = 0 ]; then
   if [ -n "$RUN_TEST" ]; then
     export KILN_OSS_PHASE=test
     tdir="$BUILD"; [ "$P_BUILD" = meson ] && tdir="$BUILD/meson"; [ "$P_BUILD" = make ] && tdir="$SRCDIR"
-    (cd "$tdir" && timeout 1800 nice -n 10 bash -c "$P_TEST") > "$BUILD/test.log" 2>&1
+    # Test scratch is per build tree: suites that default to a fixed path
+    # under /tmp (leveldb's /tmp/leveldbtest-<uid>) must not collide when the
+    # kiln and clang builds, or two checkouts, run their tests at once.
+    TTMP="$BUILD/test-tmp"; mkdir -p "$TTMP" && find "$TTMP" -mindepth 1 -delete
+    (cd "$tdir" && TMPDIR="$TTMP" TEST_TMPDIR="$TTMP" timeout 1800 nice -n 10 bash -c "$P_TEST") > "$BUILD/test.log" 2>&1
     TEST_RC=$?
     echo "oss-build: test rc=$TEST_RC ($BUILD/test.log)"
   fi

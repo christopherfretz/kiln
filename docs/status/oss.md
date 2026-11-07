@@ -68,7 +68,7 @@ The loop:
 | `taskflow` | 2 | `v3.10.0` | tests at parity |
 | `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | tests at parity |
 | `folly` | 3 | `v2026.10.26.00` | not started |
-| `leveldb` | 3 | `1.23` | not started |
+| `leveldb` | 3 | `1.23` | tests at parity |
 | `llvm_project` | 3 | `llvmorg-19.1.7` | not started |
 | `protobuf` | 3 | `v33.1` | not started |
 | `rocksdb` | 3 | `v10.7.5` | not started |
@@ -348,3 +348,19 @@ it, all 539 tests pass (WP-709, docs/status/oss/eigen.md).
 
 With the WP-686 allocation fixes now on main (#324), the 4 targets that failed to link on the WP-709 branch build and pass: 539/539 tests, at parity with clang-19.
 <!-- /oss:eigen -->
+
+<!-- oss:leveldb -->
+### leveldb (1.23)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 121 / 0 | 121 / 0 |
+| links ok / failed | 31 / 0 | 31 / 0 |
+| tests passed / total | 30 / 30 | 30 / 30 |
+| wall | 161 s | 166 s |
+| peak TU RSS | 137 MB | 198 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:leveldb -->

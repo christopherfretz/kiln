@@ -1755,6 +1755,20 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   used (WP-709). RTTI of a type that
   involves an incomplete class has `internal` linkage. Linkage of class
   RTTI follows the vtable.
+  - *Under `-fno-rtti`* (`CodegenOptions::rtti` false; WP-720): a
+    vtable's (and construction vtable's) RTTI slot is `ptr null`, as is
+    any `typeid`/`dynamic_cast` operand sema let through (clang
+    `shouldEmitRTTI(ForEH=false)`, `Cg::rtti_descriptor`). Exception
+    handling (`throw`, handler types) still builds its `type_info`
+    objects, with their bases and pointees, but never refers to a
+    key-function TU's (clang `ShouldUseExternalRTTIDescriptor` is false
+    without RTTI: that TU may be `-fno-rtti` too): an external-linkage
+    type's `type_info` is a `linkonce_odr` definition in every TU that
+    uses it (clang `getTypeInfoLinkage`); fundamental types still refer
+    to the runtime's. A kiln `-fno-rtti` object therefore links against
+    a clang `-fno-rtti` library (leveldb, docs/status/oss/leveldb.md).
+    Tests: `tests/conformance/except.handle/ir-fno-rtti-type-info.cpp`
+    (and its `-19` sibling), `fno-rtti-catch-by-base.cpp` (run).
 - **Constant objects of polymorphic classes** (`consts.rs`
   `record_elems`, WP-400): a constant initializer of a dynamic class
   gives each vptr field the vtable address point of its subobject in the
