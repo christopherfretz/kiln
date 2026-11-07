@@ -20,7 +20,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::{AttrId, StringLitId};
 use kiln_ast::{DeclId, ids::RawId as _};
 use kiln_diag::{Diag, DiagId, Severity};
-use kiln_llvm::{AliasId, Attr, Linkage, TypeId, Value, ValueRef};
+use kiln_llvm::{AliasId, Attr, AttrKind as LAttr, Linkage, TypeId, Value, ValueRef};
 use kiln_source::fx::FxHashSet;
 use kiln_source::{Loc, Span};
 
@@ -141,7 +141,7 @@ impl Cg<'_> {
         } else if mangle::has_internal_linkage(ast, first) {
             Linkage::Internal
         } else if ast.is_weak_decl(first) {
-            Linkage::WeakAny
+            Linkage::Weak
         } else {
             Linkage::External
         };
@@ -149,6 +149,9 @@ impl Cg<'_> {
         let al = self.m.alias_mut(a);
         al.linkage = linkage;
         al.visibility = vis;
+        // A definition (clang `SetCommonAttributes` -> `setDSOLocal`);
+        // the relocation model settles it ([`Cg::finish_dso_local`]).
+        al.dso_local = linkage != Linkage::Internal;
         self.alias.emitted.push((first, a));
         Ok(true)
     }
@@ -170,9 +173,11 @@ impl Cg<'_> {
         self.alias.targets.insert(target.to_owned());
         let loc = Some(self.ast.decls.get(first).loc());
         if ifunc {
-            // `ptr ()` (`GlobalIFunc::getResolverFunctionType`), no
-            // declaration attributes.
-            let rty = self.m.types.function(TypeId::PTR, &[], false);
+            // clang 22 `emitIFuncDefinition`: an incomplete `void ()`
+            // placeholder without attributes, replaced (moved to the end
+            // of the module) by the resolver's definition
+            // ([`Cg::fn_for_definition`]).
+            let rty = self.m.types.function(TypeId::VOID, &[], false);
             return match self.m.add_function(target, rty) {
                 Ok(f) => Ok(Value::func(f)),
                 Err(e) => err(loc, format!("cannot declare {target}: {e:?}")),
@@ -270,7 +275,7 @@ impl Cg<'_> {
             if let ValueRef::Alias(wa) = aliasee.get()
                 && matches!(
                     self.m.alias(wa).linkage,
-                    Linkage::WeakAny | Linkage::LinkOnceAny | Linkage::ExternWeak
+                    Linkage::Weak | Linkage::LinkOnce | Linkage::ExternWeak | Linkage::Common
                 )
             {
                 let shown = self.global_name(gv);
@@ -287,8 +292,8 @@ impl Cg<'_> {
             if ifunc && let ValueRef::Func(f) = self.m.resolve(self.m.alias(a).aliasee()).get() {
                 let set = self.m.func(f).attrs.func;
                 let mut v = self.m.attrs_of(set).to_vec();
-                if !v.contains(&Attr::DisableSanitizerInstrumentation) {
-                    v.push(Attr::DisableSanitizerInstrumentation);
+                if !v.contains(&Attr::Flag(LAttr::DisableSanitizerInstrumentation)) {
+                    v.push(Attr::Flag(LAttr::DisableSanitizerInstrumentation));
                     self.m.func_mut(f).attrs.func = self.m.attr_set(&v);
                 }
             }
@@ -329,9 +334,10 @@ impl Cg<'_> {
         let target = self.global_name(self.m.resolve(self.m.alias(a).aliasee()));
         let mut diag = Diag::new(DiagId::cg_alias_to_undefined, Span::empty(at))
             .arg(u32::from(ifunc))
-            .note_with(DiagId::note_alias_requires_mangled_name, Span::empty(at), |n| {
-                n.arg(u32::from(ifunc))
-            });
+            .with_note(
+                Diag::new(DiagId::note_alias_requires_mangled_name, Span::empty(at))
+                    .arg(u32::from(ifunc)),
+            );
         let mut decls: Vec<DeclId> =
             self.fns.keys().chain(self.gvars.keys()).chain(self.deferred.keys()).copied().collect();
         decls.sort_unstable();
@@ -349,10 +355,9 @@ impl Cg<'_> {
             }
             let name = mangle::mangle_decl(ast, &mut self.anon, d);
             if shown.insert(name.clone()) {
-                diag = diag.note_with(
-                    DiagId::note_alias_mangled_name_alternative,
-                    Span::empty(at),
-                    |n| n.arg(name),
+                diag = diag.with_note(
+                    Diag::new(DiagId::note_alias_mangled_name_alternative, Span::empty(at))
+                        .arg(name),
                 );
             }
         }

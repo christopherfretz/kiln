@@ -1087,11 +1087,12 @@ impl<'a> Printer<'a> {
             w.write_char('\n')?;
             chunk(w, &mut flush)?;
         }
-        if !m.aliases.is_empty() {
-            w.write_char('\n')?;
-        }
-        // LLVM's `AsmWriter` prints every alias, then every ifunc.
+        // LLVM's `AsmWriter` prints every alias, then every ifunc, each
+        // list after a blank line.
         for ifunc in [false, true] {
+            if m.aliases.iter().any(|a| a.ifunc == ifunc) {
+                w.write_char('\n')?;
+            }
             for i in 0..m.aliases.len() {
                 if m.aliases[i].ifunc == ifunc {
                     self.alias(w, i)?;

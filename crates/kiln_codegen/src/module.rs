@@ -2415,12 +2415,10 @@ impl<'a> Cg<'a> {
                 self.gvars.insert(first, g);
                 return Ok(g);
             }
+            // `GetOrCreateLLVMGlobal` without a declaration: no alignment
+            // and not `constant`.
             let g = self.m.add_global(&target, lt);
-            let align = self.var_align(first);
-            let gv = self.m.global_mut(g);
-            gv.linkage = Linkage::ExternWeak;
-            gv.align = Some(align);
-            gv.is_constant = constant_storage(ast, ty);
+            self.m.global_mut(g).linkage = Linkage::ExternWeak;
             self.gvars.insert(first, g);
             self.weakref_syms.insert(target);
             return Ok(g);
