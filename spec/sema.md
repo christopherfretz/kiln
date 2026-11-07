@@ -1145,7 +1145,13 @@ Redeclaration and linkage rules:
   so `constexpr same_as<const bool> decltype(auto) r = X::v;` (with
   `decltype(X::v)` = `const bool`) is satisfied and `constexpr
   same_as<const int> decltype(auto) d = 1;` is `deduced type 'int' does
-  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335). The
+  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335).
+  The checked concept-id `C<T, A...>` is completed with `C`'s default
+  template arguments first, as for a written concept-id
+  ([temp.arg.general]/9): with `template <class S, class E = env>
+  concept K = sender_in<S, E>;`, `K auto f()` checks `K<T, env>` for
+  variables, return types and parameters alike
+  (`check_placeholder_constraint`, WP-789). The
   variable's type still carries that `const` unless `decltype(e)` is a
   reference: `constexpr decltype(auto) b = 1;` is `const int`,
   `constexpr decltype(auto) r = (g);` is `const int &` for a `constexpr

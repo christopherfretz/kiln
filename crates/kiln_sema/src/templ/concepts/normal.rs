@@ -489,7 +489,7 @@ impl Sema<'_, '_> {
     /// ([temp.constr.normal]/1.4, [temp.constr.atomic]/2). The defaults
     /// are substituted in a SFINAE context; on failure the written
     /// arguments are kept (the concept-id is then an atom of its own).
-    fn concept_default_args(&mut self, c: DeclId, args: ArgListId, loc: Loc) -> ArgListId {
+    pub(crate) fn concept_default_args(&mut self, c: DeclId, args: ArgListId, loc: Loc) -> ArgListId {
         let params = self.template_params(c);
         let written: Vec<TemplateArg> = self.ast.types.args(args).to_vec();
         if written.len() >= params.len() || written.iter().any(|&a| self.is_pack_expansion_arg(a)) {
