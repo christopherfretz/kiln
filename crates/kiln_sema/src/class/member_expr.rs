@@ -239,9 +239,13 @@ impl Sema<'_, '_> {
     /// ([expr.unary.op]/3; clang forms no implicit member access for an
     /// address-of operand, so `&Int::f` of an unrelated class `Int`
     /// inside a template with a dependent base is a pointer to member).
-    pub(crate) fn note_qualified_dependent_member(&mut self, e: ExprId, d: DeclId, nns: Option<kiln_ast::NnsId>) {
-        if nns.is_some() && self.ast.exprs.get(e).kind() == ExprKind::CXXDependentScopeMemberExpr
-        {
+    pub(crate) fn note_qualified_dependent_member(
+        &mut self,
+        e: ExprId,
+        d: DeclId,
+        nns: Option<kiln_ast::NnsId>,
+    ) {
+        if nns.is_some() && self.ast.exprs.get(e).kind() == ExprKind::CXXDependentScopeMemberExpr {
             let r = MemberRef { decl: d, error: false, qualified: true, begin: None };
             self.member_refs.insert(e, r);
         }

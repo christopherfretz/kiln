@@ -266,6 +266,13 @@ built-in path silently (as clang).
 | [over.match.ref] reference to `cv2 T2` | `resolve_conversion(T, e, ToReference{lvalue})` | conversion functions yielding lvalue `cv2 T2&` (lvalue ref) or rvalue `cv2 T2`/`T2&&`, reference-compatible; explicit ones only in direct-init (`IcsOptions::EXPLICIT_REF_CONV`) |
 | [over.match.list] list-init of class `T` | `resolve_ctor(T, list, List)` | phase 1: initializer-list ctors with the list as sole argument; phase 2 (none viable): all ctors with the elements |
 
+The converting constructors of `T` include its inherited ones
+([namespace.udecl]/13) wherever they are collected
+(`Sema::converting_ctors`): the user-defined conversion of an implicit
+conversion sequence (`build_conversion_set`, so `d = 3` reaches the
+implicit copy assignment of `D` through an inherited `B(int)`) as well as
+a copy-initialization (WP-686).
+
 **`explicit`** (clang behaviour): in copy-init, explicit constructors and
 conversion functions are added but fail with `CandidateFailure::Explicit`;
 "explicit constructor is not a candidate" / "explicit conversion function is
