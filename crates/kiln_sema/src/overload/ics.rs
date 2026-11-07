@@ -329,8 +329,7 @@ impl Sema<'_, '_> {
         }
         // [over.over]/1: a class type is not a target; an overload set
         // converts to one through a converting constructor taking it.
-        if a.ty == QualType::OVERLOAD
-            && self.ast.types.as_record(self.non_reference(to)).is_none()
+        if a.ty == QualType::OVERLOAD && self.ast.types.as_record(self.non_reference(to)).is_none()
         {
             return self.overload_set_ics(a, to, opts);
         }

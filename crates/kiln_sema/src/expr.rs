@@ -6009,8 +6009,7 @@ impl Sema<'_, '_> {
                 e,
                 ty,
                 crate::overload::ics::IcsOptions::ALLOW_EXPLICIT,
-            )
-        {
+            ) {
             match self.cast_overload_set(style, ty, e, loc) {
                 Some(x) => x,
                 None => return self.recover(ty, &[e], loc),
