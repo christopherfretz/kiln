@@ -230,6 +230,10 @@ enum Shape {
     /// of `bitcast v to N`, `N` the vector of `VTy`'s lanes at half the
     /// width.
     Movl,
+    /// `vpaddl_v` (operand `v`): `{s,u}addlp.VTy.N(bitcast v to N)`, `N`
+    /// twice `VTy`'s lanes at half the width (clang
+    /// `EmitCommonNeonBuiltinExpr`; WP-792).
+    Paddl,
     /// `vqmovn_v` (operand `v`): `{s,u}qxtn.VTy(bitcast v to W)`, `W` as
     /// for [`Shape::ShrnN`], bitcast to the declared type.
     QMovn,
@@ -322,6 +326,8 @@ fn call(b: &str) -> Option<Call> {
         "vqadd" => {
             Call { declared: true, ..i2("llvm.aarch64.neon.sqadd", "llvm.aarch64.neon.uqadd") }
         }
+        "vqdmulh" => d("llvm.aarch64.neon.sqdmulh", "", "", 2),
+        "vqrdmulh" => d("llvm.aarch64.neon.sqrdmulh", "", "", 2),
         "vqsub" => {
             Call { declared: true, ..i2("llvm.aarch64.neon.sqsub", "llvm.aarch64.neon.uqsub") }
         }
@@ -388,6 +394,7 @@ impl Shape {
             | Shape::CvtF
             | Shape::CvtI
             | Shape::Movl
+            | Shape::Paddl
             | Shape::QMovn
             | Shape::CvtFp(_) => 2,
             Shape::St1 | Shape::SetLane(_) | Shape::Splat { .. } | Shape::ShrN | Shape::Tst => 3,
@@ -407,6 +414,7 @@ impl Shape {
             | Shape::CvtF
             | Shape::CvtI
             | Shape::Movl
+            | Shape::Paddl
             | Shape::QMovn
             | Shape::CvtFp(_) => &[1],
             Shape::Call(c) => match c.arity {
@@ -463,6 +471,7 @@ fn shape(name: &str) -> Option<Shape> {
             "vsra_n" | "vsraq_n" if n.ends_with("_v") => Some(Shape::Sra),
             "vsri_n" | "vsriq_n" if n.ends_with("_v") => Some(Shape::Sri),
             "vmovl" if n.ends_with("_v") => Some(Shape::Movl),
+            "vpaddl" | "vpaddlq" if n.ends_with("_v") => Some(Shape::Paddl),
             "vqmovn" if n.ends_with("_v") => Some(Shape::QMovn),
             "vmull" if n.ends_with("_v") => Some(Shape::Mull),
             "vcvt_f32" | "vcvtq_f32" | "vcvt_f64" | "vcvtq_f64" if n.ends_with("_v") => {
@@ -991,6 +1000,23 @@ impl Cg<'_> {
                 let op = if code & 0x10 != 0 { CastOp::ZExt } else { CastOp::SExt };
                 Some(self.cast(op, v, vt))
             }
+            Shape::Paddl => {
+                let half = matches!(elt, E::I16 | E::I32 | E::I64).then(|| int_elt(elt.bits() / 2));
+                let Some(Some(h)) = half else {
+                    return err(self.loc_of(e), format!("invalid type code for {name}"));
+                };
+                let v = self.emit_scalar(args[0])?;
+                let nt = self.neon_ty(T::V(h, 2 * n));
+                let v = self.neon_as(v, nt, args[0])?;
+                let base = if code & 0x10 != 0 {
+                    "llvm.aarch64.neon.uaddlp"
+                } else {
+                    "llvm.aarch64.neon.saddlp"
+                };
+                let full = intrinsics::overloaded_name(&self.m, base, &[vt, nt]);
+                let f = intrinsics::target_nomem(&mut self.m, &full, vt, &[nt]);
+                Some(self.intrinsic_call(f, vec![v]))
+            }
             Shape::QMovn => {
                 let Some(w) = elt.widened() else {
                     return err(self.loc_of(e), format!("invalid type code for {name}"));
@@ -1215,6 +1241,8 @@ mod tests {
         assert_eq!(s("vsraq_n_v"), Some(Shape::Sra));
         assert_eq!(s("vsri_n_v"), Some(Shape::Sri));
         assert_eq!(s("vmovl_v"), Some(Shape::Movl));
+        assert_eq!(s("vpaddlq_v"), Some(Shape::Paddl));
+        assert!(matches!(s("vqdmulhq_v"), Some(Shape::Call(c)) if c.s.ends_with("sqdmulh")));
         assert_eq!(s("vqmovn_v"), Some(Shape::QMovn));
         assert_eq!(s("vmull_v"), Some(Shape::Mull));
         assert_eq!(s("vfmaq_lane_f16"), Some(Shape::FmaLane { laneq: false }));
