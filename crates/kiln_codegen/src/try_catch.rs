@@ -120,17 +120,33 @@ impl Cg<'_> {
     /// `ExitCXXTryStmt` for [`Cg::enter_catch_all`]: the handler runs
     /// `handler` (`__promise.unhandled_exception();`).
     pub(crate) fn exit_catch_all(&mut self, handler: StmtId) -> R<()> {
+        if let Some(cont) = self.exit_catch_all_to(None, |cg| cg.emit_stmt(handler))? {
+            self.emit_block(cont, false);
+        }
+        Ok(())
+    }
+
+    /// [`Cg::exit_catch_all`] whose handler body `body` emits (after
+    /// `__cxa_begin_catch`, inside the handler's scope); the try region
+    /// and a handler that ends normally branch to `cont` (a new block
+    /// when `None`), which is returned for the caller to place. `None`:
+    /// nothing could throw, no handler emitted (and no branch to `cont`).
+    pub(crate) fn exit_catch_all_to(
+        &mut self,
+        cont: Option<Blk>,
+        body: impl FnOnce(&mut Self) -> R<()>,
+    ) -> R<Option<Blk>> {
         let d = self.f.cl.depth();
         let used = self.f.cl.stack[d - 1].cached_eh.is_some_and(|b| self.f.fir.block_uses(b) > 0);
         if !used {
             self.pop_catch();
-            return Ok(());
+            return Ok(None);
         }
         self.emit_catch_dispatch(d);
         let Kind::Catch(handlers) = self.pop_catch().kind else {
             unreachable!("catch scope");
         };
-        let cont = self.f.fir.create_block();
+        let cont = cont.unwrap_or_else(|| self.f.fir.create_block());
         if self.f.fir.cur().is_some() {
             self.br(cont);
         }
@@ -138,13 +154,12 @@ impl Cg<'_> {
         let sc = self.begin_scope(false);
         let exn = self.exn_from_slot();
         self.call_begin_catch(exn, true);
-        self.emit_stmt(handler)?;
+        body(self)?;
         self.end_scope(sc);
         if self.f.fir.cur().is_some() {
             self.br(cont);
         }
-        self.emit_block(cont, false);
-        Ok(())
+        Ok(Some(cont))
     }
 
     /// `emitCatchDispatchBlock`: compares the selector against each
