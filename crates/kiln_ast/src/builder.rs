@@ -1557,6 +1557,25 @@ impl<'a> AstBuilder<'a> {
                         deps |= ExprDeps::TYPE_VALUE_INST;
                     }
                 }
+                // [temp.dep.expr]/3: a static data member of the current
+                // instantiation declared in its class as an array of
+                // unknown bound, without an initializer there, is
+                // type-dependent: its out-of-line definition gives the
+                // bound (clang's `computeDependence` for `DeclRefExpr`;
+                // `static const Info Ops[];` with `sizeof(Ops)` in a
+                // member of the template).
+                if n.has(DeclFlags::DEPENDENT_CTX)
+                    && n.ctx().is_some_and(|c| self.ast.decls.get(c).kind() == DeclKind::CXXRecord)
+                {
+                    let first = self.ast.first(d);
+                    let fty = self.ast.decls.get(first).ty();
+                    if fty.is_some_and(|t| {
+                        self.ast.types.canonical_kind(t) == crate::types::TypeKind::IncompleteArray
+                    }) && self.ast.decls.var(first).is_some_and(|v| v.init.is_none())
+                    {
+                        deps |= ExprDeps::TYPE_VALUE_INST;
+                    }
+                }
             }
             _ => {}
         }
