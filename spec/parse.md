@@ -1427,7 +1427,11 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   decides. `{` means an expression (`new (int{1}) T` is a placement); a
   `(` is a type-id only when followed by `* & && ^ ) [ ( ...`, a type-id
   start or a decl-specifier keyword, so `new (short(n), 'x') int` is a
-  placement and `new (int (*)[2])` a type-id. A `(` followed by a
+  placement and `new (int (*)[2])` a type-id. An empty `()` (`T()`, a
+  function type) is a type-id only when the token after it can continue
+  one (`) & && [ (`, `const`, `volatile`, `noexcept`, `throw`, or `->`
+  after `auto`), so `new (A<T>().allocate(1)) T` is a placement (WP-803,
+  `expr.new/placement-temporary-member-call-run.cpp`). A `(` followed by a
   member-pointer declarator (`new (void (T::*)())`, `member_pointer_at`;
   WP-216) is a type-id too. `decltype`, `typeof`, `__typeof_unqual`,
   `typename` and a class-key are always a type-id, and so is a
