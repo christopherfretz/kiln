@@ -535,6 +535,31 @@ impl Sema<'_, '_> {
         self.act_on_explicit_function_inst(m, ext.is_some(), loc);
     }
 
+    /// `template<> C::C(params) ...` / `template<> C::operator T()`: the
+    /// explicit specialization counterpart of
+    /// [`Self::act_on_explicit_special_template_inst`]: an out-of-line
+    /// constructor, conversion-function or `operator=` declarator after
+    /// `template<>` that matched no non-template member declares the
+    /// specialization of one of `templates` deduced from `ty`
+    /// ([temp.expl.spec]/1, [temp.deduct.decl]; clang
+    /// `CheckFunctionTemplateSpecialization`). Returns the new
+    /// declaration, whose body follows.
+    pub(crate) fn act_on_explicit_special_template_spec(
+        &mut self,
+        ds: &DeclSpec,
+        d: &Declarator,
+        templates: &[DeclId],
+        name: DeclName,
+        ty: QualType,
+        loc: Loc,
+    ) -> Option<DeclId> {
+        self.templ.explicit_spec = None;
+        self.templ.cur = None;
+        let notes = !matches!(name.kind(), DeclNameKind::Conversion);
+        let m = self.match_function_spec_noted(templates, None, name, ty, false, loc, notes)?;
+        self.act_on_explicit_function_spec(ds, ty, d, m, loc)
+    }
+
     /// The function template specialization declarator `d` names
     /// (§6.9 steps 1-2, [temp.deduct.decl]): every function template
     /// found by redeclaration lookup of `name` is deduced against `ty`;

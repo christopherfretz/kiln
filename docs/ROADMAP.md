@@ -183,6 +183,25 @@ With correctness pinned by M5/M6, optimize the Oven and the frontend against
 the `bench/` corpus: template-heavy code, the reflection-heavy reference workload, and
 synthetic constexpr workloads. Publish the numbers.
 
+## M8 — Robustness: real-world open-source builds
+Build real open-source C++ projects that already build with clang, with
+kiln as the C++ compiler, through each project's OWN build system and test
+suite, and turn every failure into a reduced `tests/conformance` case plus
+a fix. Harness: `scripts/oss/` (spec/landed/harness/WP-666.md); project
+list and pinned tags: `scripts/oss/projects.toml`; status and failure
+clusters: `docs/status/oss.md`. Control build: the same harness with
+clang-19.
+- Wave 1 (fmt, nlohmann/json, spdlog, Catch2, googletest, doctest,
+  magic_enum, CLI11, tl-expected, range-v3) and wave 2 (abseil, RE2,
+  benchmark, glog, yaml-cpp, simdjson, Eigen, EnTT, Taskflow, cereal):
+  every project configures, builds and passes its test suite at parity
+  with clang-19; zero kiln panics; zero false rejects; no TU over the
+  harness caps (3 GB address space, 600 s).
+- Wave 3 (protobuf, LevelDB, RocksDB, LLVM lib/Support + lib/ADT unit
+  tests, folly as a stretch): a tracked pass rate per project.
+- Exit: the above, and every open failure cluster in `docs/status/oss.md`
+  is "not a kiln bug" with a written reason.
+
 ## Continuous
 - Every milestone adds to `tests/conformance/` and `bench/`.
 - Diagnostics quality is tracked from M1 (locations, notes, fix-its later).

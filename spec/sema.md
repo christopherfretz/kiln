@@ -1868,6 +1868,22 @@ and returns the scope it names:
   cannot be applied to types` for `[[clang::x]]` after a function
   declarator are not diagnosed. Tests:
   `tests/conformance/dcl.attr.grammar/thread-safety-*.cpp`.
+- **Known and ignored, no diagnostic: sanitizer and lifetime
+  attributes** (WP-667; table `IGNORED_CLANG_ATTRS` in `decl_attrs.rs`,
+  checked right after the thread-safety family). kiln has no sanitizers
+  and no `-Wdangling` analysis, so these attach nothing and get no
+  subject or argument check. `__attribute__((x))` (and `__x__`) for
+  every name; `[[clang::x]]` for `no_sanitize`, `no_sanitize_memory` and
+  `lifetimebound` (clang `Clang<"x">`); `[[gnu::x]]` for
+  `no_sanitize_address`, `no_sanitize_thread` and
+  `no_address_safety_analysis` (clang `GCC<"x">`), and for `no_sanitize`
+  from `-fclang-compat=22` (clang 22's spelling; unknown at 19). Any other
+  scope, and unscoped `[[x]]`, is an unknown attribute. Not yet: clang's
+  subject warnings (`'lifetimebound' attribute only applies to
+  parameters and implicit object parameters`), its `-Wdangling` warnings
+  and the unknown-sanitizer warning. Tests:
+  `tests/conformance/dcl.attr.grammar/sanitizer-*.cpp`,
+  `gnu-no-sanitize-clang{19,22}.cpp`.
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -6597,7 +6613,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     `class.conv.fct/self-conversion-not-viable-diags.cpp`.
   - character arrays from string literals: the bound is deduced, and
     an over-long string is an error
-    (`initializer-string for char array is too long`, two arguments)
+    (`initializer-string for char array is too long`, two arguments).
+    The literal may be enclosed in braces ([dcl.init.string]/1,
+    [dcl.init.list]/3.3): a braced list (top level, member or element)
+    for a character array whose first element is a string literal
+    initializes the array from it (`braced_string_init`), and a further
+    element is `excess elements in char array initializer` (WP-668;
+    tests `tests/conformance/dcl.init.string/braced-string-literal-*.cpp`)
   - an array from an expression that is not a braced list or (for a
     character array) a string literal ([dcl.init.general]/16.5) is
     `array initializer must be an initializer list`, at the entity: the

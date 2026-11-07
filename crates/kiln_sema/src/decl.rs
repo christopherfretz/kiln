@@ -8959,6 +8959,31 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// For the lookahead of `X<args>::m::name` (WP-668): when member `m`
+    /// of class template `X`'s pattern is a typedef or alias naming a
+    /// class template specialization (`using jp = ptr<S>;`), that class
+    /// template, in which `name` is then classified as for
+    /// `ptr<args>::name` (clang annotates `X<args>::m::` by instantiating
+    /// `X<args>`; the lookahead cannot). `None` for any other member.
+    pub fn member_typedef_class_template(&self, m: DeclId) -> Option<DeclId> {
+        if !matches!(self.kind_of(m), DeclKind::Typedef | DeclKind::TypeAlias) {
+            return None;
+        }
+        let mut ty = self.ast.decls.get(m).ty()?;
+        for _ in 0..64 {
+            ty = match self.ast.types.view(ty.ty()) {
+                TypeView::Typedef { underlying, .. } => underlying,
+                TypeView::Elaborated { named, .. } => named,
+                _ => break,
+            };
+        }
+        let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty()) else {
+            return None;
+        };
+        let t = self.ast.types.template_decl(tn)?;
+        (self.kind_of(t) == DeclKind::ClassTemplate).then_some(t)
+    }
+
     /// The first member named `name` of an explicit or partial
     /// specialization of `tmpl` (the lookahead fallback of
     /// [`Sema::classify_template_member`]).
@@ -9623,6 +9648,15 @@ impl Sema<'_, '_> {
         let clang_scope = scope_s.as_deref() == Some("clang");
         // The thread-safety family: known, ignored, no diagnostic (WP-606).
         if crate::decl_attrs::is_thread_safety_attr(&n, syntax, clang_scope, self.clang_compat) {
+            return None;
+        }
+        // Sanitizer and lifetime-analysis attributes: likewise (WP-667).
+        if crate::decl_attrs::is_ignored_clang_attr(
+            &n,
+            syntax,
+            scope_s.as_deref(),
+            self.clang_compat,
+        ) {
             return None;
         }
         // clang 19 names only the attribute, not its scope.
