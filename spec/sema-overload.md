@@ -1327,12 +1327,14 @@ Where the code differs from (or details) the design above:
   is `sema_no_suitable_delete_member` plus `note_member_declared_named`
   per function found; a deleted class `operator new` is `sema_call_deleted_function`. A member
   `operator delete` without an exception specification is implicitly
-  `noexcept` ([except.spec]/9). A class-scope `operator new` function
-  template ([temp.over]/1) is a candidate when no non-template function
-  matches: `(size_t[, align_val_t], placement...)` go through
-  `add_found_candidates`/`resolve_set` and the deduced specialization is
-  instantiated on use; a placement `operator delete` template is not
-  matched (WP-686). The allocation function, the matching deallocation
+  `noexcept` ([except.spec]/9). An `operator new` function template,
+  class-scope or global ([temp.over]/1; global ones WP-730), is a
+  candidate when no non-template function matches: `(size_t[,
+  align_val_t], placement...)` go through `add_template_candidate`/
+  `resolve_set` and the deduced specialization is instantiated on use
+  (a divergence: clang resolves both in one set, where a template
+  that matches better than a viable non-template wins); a placement `operator
+  delete` template is not matched (WP-686). The allocation function, the matching deallocation
   function of a new-expression and the deallocation function of a
   delete-expression are odr-used at the expression's location, so a member
   of a class template specialization is instantiated there ([temp.inst]/11;

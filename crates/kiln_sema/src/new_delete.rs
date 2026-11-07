@@ -1122,8 +1122,8 @@ impl Sema<'_, '_> {
         None
     }
 
-    /// The specialization of a class-scope allocation function template
-    /// among `tmpls` called with `place` ([expr.new]/19-20, [temp.over]):
+    /// The specialization of an allocation function template (class-scope
+    /// or global) among `tmpls` called with `place` ([expr.new]/19-20, [temp.over]):
     /// overload resolution with a `size_t` prvalue, then a
     /// `std::align_val_t` one when `pass_align` (first with it, then
     /// without), then the placement arguments. Templates are tried only
@@ -1152,13 +1152,22 @@ impl Sema<'_, '_> {
             for &a in place {
                 set.args.push(self.arg_info(a));
             }
-            self.add_found_candidates(
-                &mut set,
-                tmpls,
-                CandidateKind::Function,
-                IcsOptions::NONE,
-                false,
-            );
+            // A class-scope template is a static member, a global one a
+            // non-member: both called without an object.
+            for &ft in tmpls {
+                if self.ast.decls.get(ft).has(DeclFlags::INVALID) {
+                    continue;
+                }
+                self.add_template_candidate(
+                    &mut set,
+                    ft,
+                    ft,
+                    None,
+                    CandidateKind::Function,
+                    IcsOptions::NONE,
+                    loc,
+                );
+            }
             let out = self.resolve_set(&mut set);
             let f = match out {
                 OvlOutcome::Success(b) | OvlOutcome::Deleted(b) => Some(set.cand(b).func()),
