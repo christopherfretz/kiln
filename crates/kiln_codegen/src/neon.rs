@@ -305,6 +305,8 @@ enum Red {
     Max,
     Min,
     Add,
+    /// `vaddlv`: the sum in the next wider element (`uaddlv`/`saddlv`).
+    AddLong,
 }
 
 /// An elementwise NEON intrinsic: its overloaded base names for a
@@ -635,13 +637,14 @@ fn shape(name: &str) -> Option<Shape> {
             "vmaxv" => Some(Red::Max),
             "vminv" => Some(Red::Min),
             "vaddv" => Some(Red::Add),
+            "vaddlv" => Some(Red::AddLong),
             _ => None,
         };
         if let Some(red) = red {
             let (unsigned, e) = match sfx.split_at_checked(1)? {
                 ("s", b) => (false, E::from_suffix(&format!("i{b}"))?),
                 ("u", b) => (true, E::from_suffix(&format!("i{b}"))?),
-                ("f", _) => (false, E::from_suffix(sfx)?),
+                ("f", _) if red != Red::AddLong => (false, E::from_suffix(sfx)?),
                 _ => return None,
             };
             return Some(Shape::Reduce(red, T::vec(e, quad), unsigned));
@@ -1396,12 +1399,18 @@ impl Cg<'_> {
                     (Red::Min, false, true) => "uminv",
                     (Red::Add, false, false) => "saddv",
                     (Red::Add, false, true) => "uaddv",
+                    (Red::AddLong, _, false) => "saddlv",
+                    (Red::AddLong, _, true) => "uaddlv",
                 };
                 let rt = match elt {
                     _ if float => et,
                     E::I64 => LTy::I64,
+                    E::I32 if red == Red::AddLong => LTy::I64,
                     _ => LTy::I32,
                 };
+                // `vaddlv` returns the wider element (clang truncates the
+                // `i32` sum of `u8` lanes to `i16`).
+                let et = if red == Red::AddLong { self.lty(ast.exprs.get(e).ty()) } else { et };
                 let v = self.emit_scalar(args[0])?;
                 let v = self.neon_as(v, vt, args[0])?;
                 let base = format!("llvm.aarch64.neon.{p}");
@@ -1529,6 +1538,8 @@ mod tests {
         assert_eq!(s("vcvtq_s16_f16"), Some(Shape::CvtI));
         assert_eq!(s("vmaxvq_u8"), Some(Shape::Reduce(Red::Max, T::V(E::I8, 16), true)));
         assert_eq!(s("vaddv_f32"), Some(Shape::Reduce(Red::Add, T::V(E::F32, 2), false)));
+        assert_eq!(s("vaddlvq_u8"), Some(Shape::Reduce(Red::AddLong, T::V(E::I8, 16), true)));
+        assert_eq!(s("vaddlv_s32"), Some(Shape::Reduce(Red::AddLong, T::V(E::I32, 2), false)));
         assert_eq!(s("vminv_s16"), Some(Shape::Reduce(Red::Min, T::V(E::I16, 4), false)));
         assert_eq!(s("vrndxq_v"), None);
         assert_eq!(s("vaddvq_p8"), None);

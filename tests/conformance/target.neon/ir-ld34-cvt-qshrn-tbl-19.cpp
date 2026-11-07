@@ -1,8 +1,9 @@
 // [driver] `vld3`/`vld4`/`vst3`/`vst4` lower to `ld3`/`ld4`/`st3`/`st4`, `vcvt{n,a,m,p}` to
 // `fcvt{n,a,m,p}{s,u}`, `vhadd`/`vrhadd`/`vhsub` to `{s,u}hadd`/`{s,u}rhadd`/`{s,u}hsub`,
 // `vq(r)shr(u)n_n` to `{s,u}q(r)shrn`/`sq(r)shrun`, `vqshl_n` to `{s,u}qshl` by a splat,
-// `vrshr_n` to `{s,u}rshl` by a negated splat and `vtbl1`/`vtbl2` to a widening shuffle plus
-// `tbl1`, as clang 19's `EmitAArch64BuiltinExpr` (OpenCV's carotene HAL; WP-803).
+// `vrshr_n` to `{s,u}rshl` by a negated splat, `vtbl1`/`vtbl2` to a widening shuffle plus
+// `tbl1` and `vaddlv` to `{s,u}addlv` (truncated for 8-bit lanes), as clang 19's
+// `EmitAArch64BuiltinExpr` (OpenCV's carotene HAL; WP-803).
 //@ requires: clang<22
 //@ requires: target-aarch64
 //@ expect: ir
@@ -34,3 +35,6 @@ auto f_vrshr_n_s16(int16x4_t a) { return vrshr_n_s16(a, 2); }
 auto f_vrshrq_n_u8(uint8x16_t a) { return vrshrq_n_u8(a, 1); }
 auto f_vtbl1_u8(uint8x8_t a, uint8x8_t b) { return vtbl1_u8(a, b); }
 auto f_vtbl2_s8(int8x8x2_t a, int8x8_t b) { return vtbl2_s8(a, b); }
+auto f_vaddlvq_u8(uint8x16_t a) { return vaddlvq_u8(a); }
+auto f_vaddlv_s16(int16x4_t a) { return vaddlv_s16(a); }
+auto f_vaddlvq_u32(uint32x4_t a) { return vaddlvq_u32(a); }

@@ -2,7 +2,7 @@
 // de-interleaving `vld3`/`vld4`/`vst3`/`vst4`, the directed-rounding conversions
 // `vcvt{n,a,m,p}`, the halving `vhadd`/`vrhadd`/`vhsub`, the saturating narrowing shifts
 // `vq(r)shr(u)n_n`, the saturating `vqshl_n`, the rounding `vrshr_n` and the table lookups
-// `vtbl1`/`vtbl2` (WP-803).
+// `vtbl1`/`vtbl2`, and the widening sums `vaddlv` (WP-803).
 //@ expect: run
 //@ requires: target-aarch64
 //@ args: -O0
@@ -16,6 +16,7 @@
 //@ stdout: qrshrn 1 -1 125 -125 | qshrn 1000 1 | qrshrun 0 255 13 | qshrun 0 65535
 //@ stdout: qshl 127 -128 8 | qshlu 65535 12 | rshr 1 -1 3 | rshru 2 128
 //@ stdout: tbl1 3 0 7 0 | tbl2 15 0 9 2
+//@ stdout: addlv 4080 -16 131070 -6000000000
 #include <arm_neon.h>
 #include <cstdio>
 
@@ -125,4 +126,11 @@ int main() {
   std::printf("tbl1 %d %d %d %d | tbl2 %d %d %d %d\n", vget_lane_u8(r1, 0), vget_lane_u8(r1, 1),
               vget_lane_u8(r1, 2), vget_lane_u8(r1, 3), vget_lane_u8(r2, 0),
               vget_lane_u8(r2, 1), vget_lane_u8(r2, 2), vget_lane_u8(r2, 3));
+
+  uint8x16_t au = vdupq_n_u8(255);
+  int8x8_t as = vdup_n_s8(-2);
+  uint16x4_t au16 = {65535, 65535, 0, 0};
+  int32x4_t as32 = vdupq_n_s32(-1500000000);
+  std::printf("addlv %d %d %u %lld\n", vaddlvq_u8(au), vaddlv_s8(as), vaddlv_u16(au16),
+              (long long)vaddlvq_s32(as32));
 }
