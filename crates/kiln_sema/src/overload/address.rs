@@ -657,6 +657,31 @@ impl Sema<'_, '_> {
         Some((loc, name, fnty, notes))
     }
 
+    /// [over.over]/1: `e`, a function template-id resolved early to the
+    /// one specialization its explicit arguments alone name
+    /// ([`Sema::resolve_single_template_id`]), that does not convert to
+    /// `to` (a pointer or reference to function or a pointer to member
+    /// function): clang keeps the template-id an overload set, so the
+    /// target selects among every template of the set, deducing the
+    /// arguments the template-id leaves out from the target (`&f<1>` to
+    /// `void (*)(void*, int)` with `f<int, class T>(void*, T)` beside
+    /// `f<int>(void*)`). The resolved expression, or `None` (silently)
+    /// when the target selects no single function.
+    pub(crate) fn retarget_template_id(&mut self, e: ExprId, to: QualType) -> Option<ExprId> {
+        let ule = self.overload_set_of(e)?;
+        let (fnty, _) = self.address_target(to);
+        if !self.ast.types.is_function(fnty)
+            || self.ast.templates.expr_targs.get(ule).is_none()
+            || self.ast.exprs.get(ule).ty() != QualType::OVERLOAD
+        {
+            return None;
+        }
+        let at = self.begin_loc(ule);
+        let r = self.resolve_address_of_overloaded(ule, to, false, AddrCtx::Convert, at)?;
+        self.drop_template_id_warnings(e);
+        Some(r)
+    }
+
     /// [`Sema::resolve_address_of_overloaded`] of the overloaded member
     /// access `x` (`e` is it, possibly parenthesized). As clang's
     /// `ResolveAddressOfOverloadedFunction`: a static winner named

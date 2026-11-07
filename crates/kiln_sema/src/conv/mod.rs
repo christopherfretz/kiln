@@ -657,6 +657,21 @@ fn template_id_no_match(
     Some(err)
 }
 
+/// [over.over]/1: the initialization (or `return`) of `to` by `e`, a
+/// function template-id resolved early whose specialization does not
+/// convert, re-resolved against `to` ([`Sema::retarget_template_id`]).
+fn retarget_template_id(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    to: QualType,
+    ctx: ConvCtx,
+) -> Option<ExprId> {
+    if !matches!(ctx, ConvCtx::Initialization | ConvCtx::DirectInitialization | ConvCtx::Return) {
+        return None;
+    }
+    s.retarget_template_id(e, to)
+}
+
 fn unsupported(what: &str) -> ConvError {
     ConvError::new(DiagId::sema_conv_unsupported, vec![what.into()])
 }
@@ -776,6 +791,12 @@ fn bind_reference(
         }
         let x = s.materialize_temporary(x, target, !rvalue_ref);
         return Ok(x);
+    }
+    if !related
+        && s.ast.types.is_function(r_un)
+        && let Some(x) = retarget_template_id(s, e, to, ctx)
+    {
+        return bind_reference(s, x, to, ctx);
     }
     if !related
         && s.ast.types.is_function(r_un)
@@ -1146,7 +1167,12 @@ pub fn implicit_convert(
             exc_spec_compat(s, e, from, to, ctx)?;
             apply_standard_conversion(s, e, &scs, to)
         }
-        None => Err(conversion_error(s, e, to, ctx)),
+        None => {
+            if let Some(x) = retarget_template_id(s, e, to, ctx) {
+                return implicit_convert(s, x, to, ctx);
+            }
+            Err(conversion_error(s, e, to, ctx))
+        }
     }
 }
 
