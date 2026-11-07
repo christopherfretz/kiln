@@ -1186,7 +1186,13 @@ Redeclaration and linkage rules:
   still an error in the pattern. A call `x.g()` to a member whose
   return type is not yet deduced goes through `check_undeduced_use`
   (instantiating it when it is a specialization member) before
-  member-call building.
+  member-call building. A use in a class template of a member function
+  template's specialization, before the member template's body is
+  parsed (`static constexpr auto v = compute<true>();`), is
+  type-dependent like a use of a member function of the class
+  (`undeduced_dependent_use` also takes a specialization whose template
+  is in a dependent context; WP-787,
+  `tests/conformance/dcl.spec.auto/deduced-member-template-used-in-class-template.cpp`).
 - Declarator groups ([dcl.spec.auto.general]/3, /8): the parser records
   each declarator of a simple-declaration or member-declaration with
   `act_on_group_declarator(&mut AutoGroup, d)` and closes the group with
