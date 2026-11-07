@@ -976,6 +976,12 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   `min-oracle: 23` (verify-only today); the order and the absence of
   back-edges are checked by `kiln_codegen` test
   `expansion_statement_lowers_in_order`.
+  While optimizing, an expansion whose elements together exceed
+  `-fkiln-outline-expansions=N` AST nodes (default 2048) emits each
+  sizeable element as an internal `noinline` helper
+  `<function>.expand.<n>` called in its place, with a status result
+  for `break` and `return` (WP-793, `outline.rs`; the full rule is
+  spec/landed/codegen/WP-793.md).
 
 - Consteval-only variables (WP-534): a block-scope variable whose type
   is consteval-only (P2996R13 [basic.types.general]: `std::meta::info`,
