@@ -253,6 +253,11 @@ impl Sema<'_, '_> {
             if [n, p].iter().any(|x| x.has(DeclFlags::REFERENCED) || x.has(DeclFlags::USED)) {
                 return false;
             }
+            // An init-capture's variable is referenced by its capture
+            // (clang: only `-Wunused-lambda-capture` names it).
+            if self.is_init_capture_var(v) || self.is_init_capture_var(pattern) {
+                return false;
+            }
             let Some(name) = n.name().as_ident() else { return false };
             // A C++26 placeholder (`_` with automatic storage).
             if self.has_automatic_storage(v) && self.ast.symbols().as_str(name) == "_" {
@@ -307,6 +312,15 @@ impl Sema<'_, '_> {
             }
         }
         true
+    }
+
+    /// Whether variable `v` is an init-capture's variable
+    /// ([expr.prim.lambda.capture]/6): owned by a lambda's call operator
+    /// and recorded on one of its init-captures.
+    fn is_init_capture_var(&self, v: DeclId) -> bool {
+        let Some(op) = self.ast.decls.get(v).ctx() else { return false };
+        let Some(l) = self.lambda_of_call_op(op) else { return false };
+        self.ast.exprs.lambdas.get(l).captures.iter().any(|c| c.init && c.var == Some(v))
     }
 
     /// Whether declaration `d` is marked `[[maybe_unused]]` /

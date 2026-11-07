@@ -4456,8 +4456,12 @@ for them.
     used (`sizeof(x)` counts); one marked `[[maybe_unused]]` /
     `__attribute__((unused))`, or whose typedef or class is; a `_`
     placeholder with automatic storage; a variable outside a function,
-    `extern` or a handler's exception variable; one of dependent or
-    incomplete type; one whose (array element) class has a non-trivial
+    `extern` or a handler's exception variable; an init-capture's
+    variable (referenced by its capture; clang reports an unused one only
+    as `-Wunused-lambda-capture`, which kiln does not have yet; it can
+    still be `-Wunused-but-set-variable`; WP-703,
+    `expr.prim.lambda.capture/init-capture-not-unused-variable.cpp`);
+    one of dependent or incomplete type; one whose (array element) class has a non-trivial
     destructor, or is initialized by a non-trivial constructor call that
     is not a constant initialization (a value referring to an automatic
     object, constant only by P2686R5, counts as not constant, as in
