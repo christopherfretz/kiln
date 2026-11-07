@@ -1055,7 +1055,8 @@ impl Sema<'_, '_> {
             .unwrap_or_default();
         let mut out = Vec::new();
         for &p in pdecls.iter().skip(from) {
-            if self.inst.lazy_defaults.contains_key(&p) && !self.instantiate_lazy_default(f, p, loc) {
+            if self.inst.lazy_defaults.contains_key(&p) && !self.instantiate_lazy_default(f, p, loc)
+            {
                 return None;
             }
             let e = self.ast.decls.param(p).and_then(|x| x.default_arg)?;
