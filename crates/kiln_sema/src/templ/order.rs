@@ -634,6 +634,11 @@ impl Sema<'_, '_> {
         let n = self.template_params(b).len();
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(depth, n);
+        // [temp.deduct.type]/9: a pack expansion in `pa` (`L<I...>`, of
+        // the other template's own pack) is deduced as a whole by one in
+        // `pb`, as for class template partial specializations; the two
+        // packs need not share an index.
+        d.expansions = true;
         let mut ok = true;
         let mut ai = 0;
         for (pi, p) in pb.iter().enumerate() {

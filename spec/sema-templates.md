@@ -3864,7 +3864,13 @@ guides.
    mismatch, as clang's integral `P` against an expression `A`
    (`check_nondeduced_value`; WP-669,
    `tests/conformance/temp.func.order/p3-constant-argument-more-specialized.cpp`).
-   Packs follow /8–11. The last tie-breaker for packs is
+   Packs follow /8–11. A template argument pack expansion in the `A`
+   types (`L<I...>`, of the argument template's own pack) is deduced as a
+   whole by a `P` pack expansion (`DeducedArgs::expansions`, as for
+   partial specializations), so the two packs' template-parameter
+   indices need not coincide (WP-726,
+   `tests/conformance/temp.func.order/p3-pack-expansion-other-index.cpp`).
+   The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
 5. **Constraints.** If both directions succeed, the more constrained one
    wins ([temp.func.order]/6, P2113; subsumption §8.4), but only when the
