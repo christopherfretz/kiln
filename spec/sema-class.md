@@ -2449,7 +2449,11 @@ access, out-of-line declarator scope.**
   A pseudo-destructor on a scalar ([basic.types.general]/9: a pointer
   to member included, `Sema::is_scalar`; libc++'s `std::function` of a
   member function pointer destroys it as `__f_.~_Fp()`; test
-  `expr.prim.id.dtor/pseudo-destructor-member-pointer-run.cpp`) or
+  `expr.prim.id.dtor/pseudo-destructor-member-pointer-run.cpp`), on a
+  GNU/NEON vector type (clang `BuildPseudoDestructorExpr` accepts
+  `isVectorType`; libstdc++'s `is_destructible` probes
+  `declval<T&>().~T()`, so `std::vector<uint64x2_t>` needs it; WP-726,
+  `expr.prim.id.dtor/pseudo-destructor-vector-type-run.cpp`) or
   dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object

@@ -999,7 +999,10 @@ impl Sema<'_, '_> {
             let dn = self.ast.names.destructor(canon);
             return self.member_access(base, b, obj_ty, def, arrow, dn, None, name_loc);
         }
-        if !self.is_scalar(obj_ty) {
+        // A vector type is destroyed like a scalar (clang
+        // `BuildPseudoDestructorExpr` accepts `isVectorType`; libstdc++'s
+        // `is_destructible` probes `declval<T&>().~T()`).
+        if !self.is_scalar(obj_ty) && !self.is_vector_type(obj_ty) {
             let msg = self
                 .diag(DiagId::sema_pseudo_dtor_base_not_scalar, op_loc)
                 .arg(self.ty_arg(obj_ty));
