@@ -1441,7 +1441,7 @@ impl Sema<'_, '_> {
         }
         match targs {
             Some(l) => self.act_on_member_template_args(e, l),
-            None => e,
+            None => self.act_on_member_without_template_args(e),
         }
     }
 
@@ -1519,6 +1519,15 @@ impl Sema<'_, '_> {
             .arg_list_flags(targs)
             .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION);
         if !dependent {
+            if let Some(x) = self.member_overload(e)
+                && self
+                    .ovl
+                    .members
+                    .get(&x)
+                    .is_some_and(|m| self.kind_of(m.decls[0]) == DeclKind::VarTemplate)
+            {
+                return self.member_var_template_id(x, targs);
+            }
             let _ = self.set_member_template_args(e, targs);
             return e;
         }

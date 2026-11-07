@@ -2325,6 +2325,14 @@ with a `VarTemplateSpecialization` decl.
   to deduce the type, so a use of `v<T>` inside another constexpr
   initializer is not "depends on itself" (WP-726;
   `tests/conformance/dcl.spec.auto/variable-template-reference-placeholder.cpp`).
+- A class member access `x.v<args>` / `p->template v<args>` naming a
+  static data member template ([temp.names]/3, [expr.ref]/6.1) is held as
+  a one-member set until its arguments follow; non-dependent ones name
+  the specialization, accessed as a static data member (clang
+  `BuildMemberReferenceExpr` → `CheckVarTemplateId`), dependent ones form
+  the access again at instantiation, and none at all is "use of variable
+  template 'v' requires template arguments" (WP-789,
+  `tests/conformance/temp.names/member-access-variable-template-run.cpp`).
 - The `inline constexpr bool xxx_v` family (142 declarations in the M3
   headers, §13.3) is the hottest path. One probe gives the decl and one
   `consts()` lookup gives its value.

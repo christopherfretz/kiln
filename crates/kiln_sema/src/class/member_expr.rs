@@ -523,7 +523,63 @@ impl Sema<'_, '_> {
         // clang `DiagnoseUseOfDecl` in `BuildMemberReferenceExpr`.
         self.diagnose_deprecated(m, loc);
         self.check_sve_use(m, loc);
+        if self.kind_of(m) == DeclKind::VarTemplate {
+            // `x.v<args>` naming a static data member template
+            // ([temp.names]/3, [expr.ref]/6.1): held as a member set until
+            // its template arguments name the specialization
+            // ([`Sema::act_on_member_template_args`]).
+            let set = crate::overload::OvlMember {
+                name,
+                decls: vec![m],
+                found: vec![via],
+                naming,
+                obj_ty,
+                def,
+                base: b,
+                arrow,
+                nns,
+                implicit: false,
+                targs: None,
+            };
+            return self.build_member_overload(set, loc);
+        }
         self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), nns, loc)
+    }
+
+    /// The member variable template-id `x<targs>` of the member access
+    /// `x` naming the static data member template `t` with arguments
+    /// that are not dependent: the specialization, a static data member
+    /// of the object's class (clang `BuildMemberReferenceExpr` →
+    /// `CheckVarTemplateId`).
+    pub(crate) fn member_var_template_id(
+        &mut self,
+        x: ExprId,
+        targs: kiln_ast::ids::ArgListId,
+    ) -> ExprId {
+        let loc = self.ast.exprs.get(x).loc();
+        let Some(m) = self.ovl.members.remove(&x) else { return x };
+        let written = self.ast.types.args(targs).to_vec();
+        let locs = std::mem::take(&mut self.templ.arg_locs);
+        let Ok(v) = self.get_var_spec(m.decls[0], &written, &locs, loc) else {
+            return self.recover_err(&[m.base], loc);
+        };
+        self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, v, None, m.nns, loc)
+    }
+
+    /// A member access `x` naming a static data member template with no
+    /// template arguments after it ([temp.names]/1; clang's
+    /// `err_template_member_noparams`).
+    pub fn act_on_member_without_template_args(&mut self, x: ExprId) -> ExprId {
+        let Some(e) = self.member_overload(x) else { return x };
+        let Some(m) = self.ovl.members.get(&e) else { return x };
+        if m.targs.is_some() || self.kind_of(m.decls[0]) != DeclKind::VarTemplate {
+            return x;
+        }
+        let (d, base) = (m.decls[0], m.base);
+        let loc = self.ast.exprs.get(e).loc();
+        let _ = self.ovl.members.remove(&e);
+        self.missing_template_args(d, "variable template", None, loc);
+        self.recover_err(&[base], loc)
     }
 
     /// True if qualifier context `ctx` names class `def` or one of its

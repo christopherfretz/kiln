@@ -1490,6 +1490,9 @@ impl Parser<'_, '_> {
             self.s.diagnose_expr_intended_as_template_name(name, found, nl, angles);
             self.expr_invalid = true;
             return Some(self.s.act_on_error_expr(&[e], nl));
+        } else if !self.at(Punct::Less) {
+            // `x.v` naming a member variable template needs its arguments.
+            e = self.s.act_on_member_without_template_args(e);
         }
         Some(e)
     }
