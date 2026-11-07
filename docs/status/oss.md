@@ -70,25 +70,6 @@ The loop:
 
 ## Results
 
-<!-- oss:yaml_cpp -->
-### yaml_cpp (yaml-cpp-0.9.0)
-
-| | kiln | clang-19 |
-|---|---|---|
-| configure | ok | ok |
-| build | ok | ok |
-| TUs ok / failed | 51 / 0 | 51 / 0 |
-| links ok / failed | 1 / 0 | 1 / 0 |
-| tests passed / total | 1 / 1 | 1 / 1 |
-| wall | 34 s | 32 s |
-| peak TU RSS | 721 MB | 807 MB |
-
-Failure clusters (kiln): none.
-yaml-cpp reached parity on its first kiln build (WP-698): no kiln fix was
-needed. Both compilers need `-Wno-c++11-narrowing` on aarch64, where
-`char` is unsigned; see docs/status/oss/yaml_cpp.md.
-<!-- /oss:yaml_cpp -->
-
 <!-- oss:googletest -->
 ### googletest (v1.17.0)
 
@@ -131,6 +112,25 @@ Reduced repros (WP-666, kiln at main f3751eadd):
 
 Both are fixed by WP-682, which brought googletest to parity with the
 clang build. Its working notes are in `docs/status/oss/googletest.md`.
+
+<!-- oss:yaml_cpp -->
+### yaml_cpp (yaml-cpp-0.9.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 51 / 0 | 51 / 0 |
+| links ok / failed | 1 / 0 | 1 / 0 |
+| tests passed / total | 1 / 1 | 1 / 1 |
+| wall | 34 s | 32 s |
+| peak TU RSS | 721 MB | 807 MB |
+
+Failure clusters (kiln): none.
+yaml-cpp reached parity on its first kiln build (WP-698): no kiln fix was
+needed. Both compilers need `-Wno-c++11-narrowing` on aarch64, where
+`char` is unsigned; see docs/status/oss/yaml_cpp.md.
+<!-- /oss:yaml_cpp -->
 
 <!-- oss:magic_enum -->
 ### magic_enum (v0.9.7)
