@@ -517,9 +517,14 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[base], loc);
         }
-        let naming = found.naming.unwrap_or(look);
-        let via = found.found.first().copied().unwrap_or(m);
-        self.check_member_access(via, naming, Some(def), loc);
+        // A name found in an enumeration qualifier (`d.E::e`) has no
+        // naming class and no access check, as for `B::E::e` (clang's
+        // `LookupQualifiedName` names only a class).
+        if found.naming.is_some() || self.kind_of(look) != DeclKind::Enum {
+            let naming = found.naming.unwrap_or(look);
+            let via = found.found.first().copied().unwrap_or(m);
+            self.check_member_access(via, naming, Some(def), loc);
+        }
         // clang `DiagnoseUseOfDecl` in `BuildMemberReferenceExpr`.
         self.diagnose_deprecated(m, loc);
         self.check_sve_use(m, loc);
@@ -528,9 +533,26 @@ impl Sema<'_, '_> {
 
     /// True if qualifier context `ctx` names class `def` or one of its
     /// bases ([expr.ref]/4: a qualified member of the object's class).
+    /// An unscoped enumeration qualifier stands for its class: `d.E::e`
+    /// names an enumerator that is a member of `E`'s class ([class.mem]/3;
+    /// clang's `CheckQualifiedMemberReference` uses the member's
+    /// non-transparent context).
     pub(crate) fn qualifier_names_base(&self, ctx: DeclId, def: DeclId) -> bool {
+        let ctx = self.enum_qualifier_class(ctx);
         self.kind_of(ctx) == DeclKind::CXXRecord
             && (self.ast.first(ctx) == self.ast.first(def) || is_derived_from(self, def, ctx))
+    }
+
+    /// `ctx`, or the context of the unscoped enumeration `ctx` (its
+    /// enumerators are members of that class, [class.mem]/3).
+    fn enum_qualifier_class(&self, mut ctx: DeclId) -> DeclId {
+        while self.kind_of(ctx) == DeclKind::Enum
+            && self.ast.is_transparent(self.ast.definition(ctx).unwrap_or(ctx))
+            && let Some(p) = self.ast.decls.get(ctx).ctx()
+        {
+            ctx = p;
+        }
+        ctx
     }
 
     /// `base.~name` / `base->~name` ([expr.ref]/1 with a destructor name,

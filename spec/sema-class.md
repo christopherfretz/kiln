@@ -2543,7 +2543,12 @@ access, out-of-line declarator scope.**
   up first, [basic.lookup.qual.general]/2), then `act_on_member_q` /
   `act_on_template_member_q`. `qualifier_names_base` checks the
   qualifier names the object's class or a base
-  (`sema_qualified_member_of_unrelated`). A non-static member named
+  (`sema_qualified_member_of_unrelated`); an unscoped enumeration
+  qualifier stands for its class, since its enumerators are members of
+  that class ([class.mem]/3), and a name found in an enumeration is not
+  access-checked (no naming class, as for `B::E::e`): `d.E::e` with `E`
+  in a base is valid (WP-782,
+  `expr.ref/qualified-enumerator-of-base-class-run.cpp`). A non-static member named
   `Q::m`, with `Q` a base other than the member's class, converts the
   object to its `Q` subobject first and then to the member's class
   (`object_to_qualifier`, for fields and the implicit object argument of a
