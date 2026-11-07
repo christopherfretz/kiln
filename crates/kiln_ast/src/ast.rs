@@ -704,7 +704,9 @@ impl Ast {
             self.lists
                 .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
                 .map(|a| self.attrs.get(a))
-                .find(|a| matches!(a.kind, crate::attr::AttrKind::ALIAS | crate::attr::AttrKind::IFUNC))
+                .find(|a| {
+                    matches!(a.kind, crate::attr::AttrKind::ALIAS | crate::attr::AttrKind::IFUNC)
+                })
                 .and_then(|a| {
                     let l = crate::ids::StringLitId::from_raw(a.a)?;
                     Some((a.kind == crate::attr::AttrKind::IFUNC, l))

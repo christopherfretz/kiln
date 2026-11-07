@@ -569,8 +569,7 @@ fn alias_ifunc_diagnostics() {
     let messages = |s: &str| -> String {
         s.lines()
             .filter(|l| l.starts_with("t.cpp:") || l.ends_with("generated."))
-            .map(|l| format!("{l}\n"))
-            .collect()
+            .fold(String::new(), |acc, l| acc + l + "\n")
     };
     for (src, want, code) in cases {
         std::fs::write(d.join("t.cpp"), src).unwrap();

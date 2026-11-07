@@ -107,8 +107,10 @@ impl Cg<'_> {
                     Diag::new(DiagId::cg_duplicate_mangled_name, Span::empty(loc)).arg(&name);
                 if let Some(&rep) = self.reps.get(&name) {
                     let prev = ast.definition(rep).unwrap_or(rep);
-                    diag = diag
-                        .note(DiagId::note_previous_definition, Span::empty(ast.decls.get(prev).loc()));
+                    diag = diag.note(
+                        DiagId::note_previous_definition,
+                        Span::empty(ast.decls.get(prev).loc()),
+                    );
                 }
                 self.diags.push(diag);
                 self.dup_reported = true;
@@ -253,7 +255,10 @@ impl Cg<'_> {
     /// dropped by the caller (the compilation fails).
     pub(crate) fn check_aliases(&mut self) {
         if self.alias.emitted.is_empty()
-            || self.diags.iter().any(|d| d.id().is_some_and(|i| i.default_severity() == Severity::Error))
+            || self
+                .diags
+                .iter()
+                .any(|d| d.id().is_some_and(|i| i.default_severity() == Severity::Error))
         {
             return;
         }
