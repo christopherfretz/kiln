@@ -5132,6 +5132,15 @@ pub mod builtin {
     /// `LiLi`, `NoThrow, Const`): the value of its operand; the branch hint
     /// is dropped. Not a constant expression (as in clang).
     pub const UNPREDICTABLE: u32 = 2178;
+    // ---- WP-773 (P3726R2, [obj.lifetime]).
+    /// `void __builtin_start_lifetime(T *p)` (GCC trunk, `NoThrow`,
+    /// `CustomTypeChecking`; libstdc++'s `std::start_lifetime` builds on
+    /// it): `T` a complete implicit-lifetime aggregate. In a constant
+    /// evaluation it begins the lifetime of `*p` without initializing it,
+    /// a union member becoming the active member (spec/oven.md "C++26
+    /// union lifetime"); at runtime it evaluates `p` and does nothing.
+    /// Kiln-private id (clang 22 has no such builtin).
+    pub const START_LIFETIME: u32 = 2179;
 
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
@@ -5175,6 +5184,8 @@ pub mod builtin {
         row(MEMCPY_INLINE, "__builtin_memcpy_inline", "vv*vC*Iz", N),
         row(ASSUME_SEPARATE_STORAGE, "__builtin_assume_separate_storage", "vvCD*vCD*", N | C),
         row(UNPREDICTABLE, "__builtin_unpredictable", "LiLi", N | C),
+        // WP-773.
+        row(START_LIFETIME, "__builtin_start_lifetime", "v.", N | T),
     ];
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19

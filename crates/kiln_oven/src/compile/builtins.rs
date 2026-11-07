@@ -682,6 +682,13 @@ impl Compiler<'_> {
             // also evaluates `__builtin_observable_checkpoint`; the
             // library's `std::observable_checkpoint` is not constexpr).
             id::OBSERVABLE_CHECKPOINT => self.konst(dst, 0),
+            // WP-773: P3726R2 `std::start_lifetime` (`Oven::start_lifetime`).
+            id::START_LIFETIME => {
+                let x = arg(0)?;
+                let t = self.designator(x);
+                let p = self.rv(x);
+                op(self, bi::START_LIFETIME, 0, [p, p, p], [t, 0], begin);
+            }
             // WP-292: the pointer, checked against the alignment (and
             // offset); a failure is noted at the pointer operand.
             id::ASSUME_ALIGNED => {

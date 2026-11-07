@@ -7,7 +7,8 @@
 // an inactive array member activates the array, whose other elements are
 // holes with no lifetime (the inplace_vector pattern: per-element
 // lifetime). Following GCC 17 rather than the DIS text, which needs
-// std::start_lifetime for the array (spec/oven.md "Unions").
+// std::start_lifetime for the array (spec/oven.md "C++26 union lifetime";
+// std::start_lifetime itself: tests/conformance/obj.lifetime/).
 //@ skip(clang): clang 22 does not implement P3074/P3726 (trivial unions)
 //@ std: c++26
 //@ expect: compile-ok

@@ -33,6 +33,38 @@ const MAX_ELEMS: u64 = 10;
 /// clang 22's `note_constexpr_dereferencing_null`.
 const NULL_DEREF_22: &str = "dereferencing a null pointer is not allowed in a constant expression";
 
+/// Delimits a raw `Loc` in a note under construction
+/// ([`Oven::render`] replaces it with `F:L:C`).
+const LOC_MARK: char = '\u{1}';
+
+/// `msg` with each [`LOC_MARK`]-delimited raw `Loc` written as clang
+/// prints a declaration's location in a type name (`F:L:C`), or with
+/// ` at <loc>` dropped when the bridge has no sources (as
+/// `AstNames::new` prints an unnamed class).
+fn resolve_locs(b: &dyn SemaBridge, msg: &str) -> String {
+    let mut out = String::with_capacity(msg.len());
+    let mut parts = msg.split(LOC_MARK);
+    if let Some(first) = parts.next() {
+        out.push_str(first);
+    }
+    while let (Some(raw), Some(rest)) = (parts.next(), parts.next()) {
+        let p =
+            raw.parse::<u32>().ok().and_then(|r| b.sources()?.presumed_line_col(Loc::from_raw(r)));
+        match p {
+            Some(p) => {
+                let _ = write!(out, "{}:{}:{}", p.file_name, p.line, p.col);
+            }
+            None => {
+                if out.ends_with(" at ") {
+                    out.truncate(out.len() - 4);
+                }
+            }
+        }
+        out.push_str(rest);
+    }
+    out
+}
+
 fn name_of(ast: &Ast, d: DeclId) -> String {
     let mut s = String::new();
     write_name_for_diag(ast, d, &mut s);
@@ -202,6 +234,16 @@ impl Oven {
 
     /// The notes of `fault` at `pc`, with the call stack.
     pub(crate) fn render(&self, b: &dyn SemaBridge, fault: Fault, pc: usize) -> Vec<Note> {
+        let mut notes = self.render_notes(b, fault, pc);
+        for n in &mut notes {
+            if n.msg.contains(LOC_MARK) {
+                n.msg = resolve_locs(b, &n.msg);
+            }
+        }
+        notes
+    }
+
+    fn render_notes(&self, b: &dyn SemaBridge, fault: Fault, pc: usize) -> Vec<Note> {
         if let Fault::Trap(i) = fault
             && self.traps[i as usize].msg.is_empty()
         {
@@ -1349,7 +1391,16 @@ impl Oven {
                             s.push_str(&name_of(ast, b));
                             s.push_str("::");
                         }
-                        s.push_str(&name_of(ast, f.decl));
+                        // An anonymous struct or union member prints as its
+                        // type (clang `FieldDecl::printName`: `&v.V::(anonymous
+                        // union at f.cpp:1:12).data[1]`), never as an empty
+                        // segment (`&v..data`, WP-773).
+                        let name = name_of(ast, f.decl);
+                        if name.is_empty() {
+                            self.write_unnamed_member(ast, f.ty, &mut s);
+                        } else {
+                            s.push_str(&name);
+                        }
                     }
                     rel -= f.offset;
                     t = f.ty;
@@ -1361,6 +1412,27 @@ impl Oven {
             s.push_str(" + 1");
         }
         s
+    }
+
+    /// The name of an anonymous struct or union member of type `t`: its
+    /// type, `V::(anonymous union at F:L:C)`. The Oven has no source
+    /// manager, so the location is a [`LOC_MARK`]-delimited raw `Loc`
+    /// that [`Oven::render`] resolves through the bridge.
+    fn write_unnamed_member(&self, ast: &Ast, t: OTy, s: &mut String) {
+        let name = self.tname(ast, t);
+        let decl = ast.types.as_record(self.types.info(t).q);
+        match (decl, name.strip_suffix(')')) {
+            (Some(d), Some(head))
+                if head.ends_with("(anonymous union")
+                    || head.ends_with("(anonymous struct")
+                    || head.ends_with("(unnamed struct")
+                    || head.ends_with("(unnamed union") =>
+            {
+                let raw = ast.decls.get(d).loc().to_raw();
+                let _ = write!(s, "{head} at {LOC_MARK}{raw}{LOC_MARK})");
+            }
+            _ => s.push_str(&name),
+        }
     }
 
     /// The member of union `t`, at byte `at` of `raw`'s allocation, that
