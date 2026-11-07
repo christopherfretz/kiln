@@ -1800,6 +1800,13 @@ impl Sema<'_, '_> {
             self.add_conversion_template_candidate(set, f, found, to, opts);
             return;
         }
+        // An undeduced return type (`operator auto` of a class template
+        // specialization) is deduced now, the definition instantiated;
+        // one that cannot be is no candidate ([dcl.spec.auto.general]/12;
+        // clang `AddConversionCandidate`'s `DeduceReturnType`).
+        if self.check_undeduced_use(f, set.loc) {
+            return;
+        }
         self.ovl.stats.candidates += 1;
         let a = set.args[0];
         let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);

@@ -406,6 +406,8 @@ impl Sema<'_, '_> {
             args.extend_from_slice(self.ast.types.args(x));
         }
         let list = self.ast.types.arg_list(&args);
+        // `C auto` names `C<T, args...>`, completed with C's defaults.
+        let list = self.concept_default_args(c, list, loc);
         let sat = self.check_concept(c, list, loc);
         if self.sat_ok(sat) {
             return true;

@@ -937,6 +937,9 @@ impl Cg<'_> {
         // `const_cast<T&>(f())`; `VisitCastExpr` visits the operand), the
         // right operand of a glvalue comma (`VisitBinComma`) and the
         // chosen operand of `__builtin_choose_expr` (`VisitChooseExpr`).
+        // A glvalue `co_await`/`co_yield` is its `await_resume` call
+        // (clang `emitSuspendExpression` visits the resume call), so it
+        // is loaded the same way (WP-789).
         let ast = self.ast;
         let mut inner = self.skip_parens(s);
         let mut bit_cast = false;
@@ -964,7 +967,11 @@ impl Cg<'_> {
         if bit_cast
             || matches!(
                 self.ast.exprs.get(inner).kind(),
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+                ExprKind::CallExpr
+                    | ExprKind::CXXMemberCallExpr
+                    | ExprKind::CXXOperatorCallExpr
+                    | ExprKind::CoawaitExpr
+                    | ExprKind::CoyieldExpr
             ) && self.is_glvalue(inner)
         {
             let lv = self.emit_lvalue(s)?;

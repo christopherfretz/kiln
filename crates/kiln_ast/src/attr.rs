@@ -221,6 +221,10 @@ impl AttrKind {
     /// declaration is a definition, emitted as an IR ifunc whose resolver
     /// picks the implementation at load time (WP-763).
     pub const IFUNC: AttrKind = AttrKind(184);
+    /// GNU `artificial` on an inline function (clang `ArtificialAttr`):
+    /// debug information treats calls to it as one unit. kiln emits no
+    /// debug information, so it has no effect on the IR (WP-789).
+    pub const ARTIFICIAL: AttrKind = AttrKind(185);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

@@ -1420,7 +1420,7 @@ impl Substituter<'_, '_, '_> {
     /// Keeps pattern `d`'s decl-specifier start on its instantiation `new`
     /// while the type `ty` is still dependent (a member of a member
     /// template is substituted again, §5.8).
-    fn copy_begin_loc(&mut self, d: DeclId, new: DeclId, ty: QualType) {
+    pub(crate) fn copy_begin_loc(&mut self, d: DeclId, new: DeclId, ty: QualType) {
         if let Some(&b) = self.sema.ast.decls.cold.begin_loc.get(d)
             && self.sema.is_instantiation_dependent_type(ty)
         {

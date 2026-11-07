@@ -75,10 +75,13 @@ The loop:
 | `boost_meta` | 4 | `boost-1.90.0` | blocked (13 clusters) |
 | `ctre` | 4 | `v3.11.0` | tests at parity |
 | `daw_json_link` | 4 | `v3.38.1` | tests at parity |
+| `folly_coro` | 4 | `v2026.10.26.00` | blocked (1 cluster) |
 | `glaze` | 4 | `v9.1.0` | tests at parity |
+| `libunifex` | 4 | `v0.4.0` | tests at parity |
 | `mp_units` | 4 | `v2.5.0` | tests at parity |
 | `reflect_cpp` | 4 | `v0.27.1` | tests at parity |
 | `scnlib` | 4 | `v4.0.1` | tests at parity |
+| `stdexec` | 4 | `nvhpc-26.05` | tests at parity |
 <!-- /oss:projects -->
 
 ## Constexpr performance (WP-792)
@@ -726,3 +729,59 @@ Failure clusters (kiln): 16.
 
 kiln test run: `99% tests passed, 28 tests failed out of 2087`
 <!-- /oss:boost_meta -->
+
+<!-- oss:folly_coro -->
+### folly_coro (v2026.10.26.00)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | rc 2 | ok |
+| TUs ok / failed | 429 / 0 | 429 / 0 |
+| links ok / failed | 48 / 1 | 49 / 0 |
+| tests passed / total | 583 / 618 | 616 / 618 |
+| wall | 1030 s | 723 s |
+| peak TU RSS | 409 MB | 1372 MB |
+
+Failure clusters (kiln): 1.
+
+1. **1x** `link: undefined reference to Q`
+   - e.g. `link`: `AsyncClosureTest.cpp:(.text+0xb8d0): undefined reference to `_ZN5folly4bind8literals15string_literalsli3_idITnu7unknownXtlNS_14literal_stringIcLm3EEEtlA3_cLc115ELc49EEEEEEDav'`
+   - repro: `cd $KILN/.oss/build/folly_coro/kiln && kiln++ -O3 -DNDEBUG -g -Wall -Wextra -O3 -Xlinker --dependency-file=CMakeFiles/coro_safe_AsyncClosureTest.dir/link.d CMakeFiles/coro_safe_AsyncClosureTest.dir/folly/coro/safe/test/AsyncClosureTest.cpp.o -o coro_safe_AsyncClosureTest libfolly_test_support.a folly/libfollybenchmark.a folly/libfolly_benchmark_util.a folly/detail/libfolly_detail_perf_scoped.a folly/system/libfolly_system_pid.a folly/testing/libfolly_testing_test_util.a folly/io/libfolly_io_fs_util.a folly/ext/libfolly_ext_test_ext.a folly/libfolly_subprocess.a folly/io/libfolly_io_iobuf.a folly/memory/libfolly_memory_sanitize_address.a folly/logging/libfolly_logging_logging.a folly/libfolly_file.a folly/libfolly_exception_wrapper.a folly/portability/libfolly_portability_filesystem.a folly/logging/libfolly_logging_log_handler.a folly/logging/libfolly_logging_log_level.a folly/logging/libfolly_logging_log_name.a folly/logging/libfolly_logging_rate_limiter.a folly/system/libfolly_system_thread_name.a folly/portability/libfolly_portability_dirent.a folly/system/libfolly_system_shell.a folly/libfolly_file_util.a folly/portability/libfolly_portability_sys_uio.a folly/portability/libfolly_portability_stdlib.a folly/portability/libfolly_portability_sys_file.a folly/json/libfolly_json_dynamic.a folly/libfolly_format.a folly/json/libfolly_json_json_pointer.a folly/libfolly_unicode.a folly/libfolly_random.a folly/libfolly_singleton_thread_local.a folly/detail/libfolly_detail_thread_local_detail.a folly/container/detail/libfolly_container_detail_f14_hash_detail.a folly/detail/libfolly_detail_unique_instance.a folly/synchronization/detail/libfolly_synchronization_detail_sleeper.a /usr/lib/aarch64-linux-gnu/libglog.so folly/detail/libfolly_detail_thread_local_globals.a folly/detail/libfolly_detail_static_singleton_manager.a folly/memory/libfolly_memory_reentrant_allocator.a folly/portability/libfolly_portability_sys_mman.a folly/memory/libfolly_memory_sanitize_leak.a folly/synchronization/libfolly_synchronization_atomic_notification.a folly/libfolly_shared_mutex.a folly/portability/libfolly_portability_sys_resource.a folly/portability/libfolly_portability_sys_time.a folly/concurrency/libfolly_concurrency_cache_locality.a folly/portability/libfolly_portability_fcntl.a folly/portability/libfolly_portability_sys_stat.a folly/system/libfolly_system_thread_id.a folly/portability/libfolly_portability_unistd.a folly/portability/libfolly_portability_sockets.a folly/net/libfolly_net_net_ops.a folly/net/detail/libfolly_net_detail_socket_file_descriptor_map.a folly/system/libfolly_system_at_fork.a folly/synchronization/libfolly_synchronization_sanitize_thread.a folly/portability/libfolly_portability_pthread.a folly/portability/libfolly_portability_sched.a folly/portability/libfolly_portability_time.a folly/detail/libfolly_detail_futex.a folly/synchronization/libfolly_synchronization_parking_lot.a folly/libfolly_string.a folly/libfolly_scope_guard.a folly/lang/libfolly_lang_uncaught_exceptions.a folly/libfolly_conv.a folly/detail/libfolly_detail_simple_simd_string_utils.a folly/detail/libfolly_detail_range_simd.a folly/detail/libfolly_detail_range_sse42.a folly/external/nvidia/detail/libfolly_external_nvidia_detail_range_sve2.a folly/detail/libfolly_detail_range_common.a folly/detail/libfolly_detail_sse.a folly/detail/libfolly_detail_avx2.a folly/libfolly_exception_string.a folly/libfolly_demangle.a folly/hash/libfolly_hash_spooky_hash_v2.a folly/lang/libfolly_lang_c_string.a folly/hash/libfolly_hash_spooky_hash_v1.a folly/memory/libfolly_memory_malloc.a folly/lang/libfolly_lang_exception.a folly/lang/libfolly_lang_safe_assert.a folly/detail/libfolly_detail_file_util_detail.a folly/lang/libfolly_lang_to_ascii.a folly/portability/libfolly_portability_builtins.a folly/portability/libfolly_portability_malloc.a folly/memory/detail/libfolly_memory_detail_malloc_impl.a libfolly.a /usr/lib/aarch64-linux-gnu/libfmt.so.10.1.0 /usr/lib/aarch64-linux-gnu/libevent.so /usr/lib/aarch64-linux-gnu/libz.so /usr/lib/aarch64-linux-gnu/libssl.so /usr/lib/aarch64-linux-gnu/libcrypto.so /usr/lib/aarch64-linux-gnu/libbz2.so /usr/lib/aarch64-linux-gnu/liblzma.so /usr/lib/aarch64-linux-gnu/liblz4.so /usr/lib/aarch64-linux-gnu/libzstd.so /usr/lib/aarch64-linux-gnu/libsnappy.so /usr/lib/aarch64-linux-gnu/libdwarf.so /usr/lib/aarch64-linux-gnu/libaio.so /usr/lib/aarch64-linux-gnu/liburing.so -ldl /usr/lib/aarch64-linux-gnu/libboost_regex.so.1.83.0 /usr/lib/aarch64-linux-gnu/libboost_program_options.so.1.83.0 /usr/lib/aarch64-linux-gnu/libsodium.so /usr/lib/aarch64-linux-gnu/libboost_context.so.1.83.0 /usr/lib/aarch64-linux-gnu/libboost_filesystem.so.1.83.0 /usr/lib/aarch64-linux-gnu/libboost_atomic.so.1.83.0 lib/libgmock_main.a lib/libgmock.a lib/libgtest.a /usr/lib/aarch64-linux-gnu/libglog.so /usr/lib/aarch64-linux-gnu/libgflags.so.2.2.2 /usr/lib/aarch64-linux-gnu/libunwind.so`
+
+kiln test run: `94% tests passed, 35 tests failed out of 618`
+<!-- /oss:folly_coro -->
+
+<!-- oss:libunifex -->
+### libunifex (v0.4.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 114 / 0 | 114 / 0 |
+| links ok / failed | 94 / 0 | 94 / 0 |
+| tests passed / total | 91 / 94 | 91 / 94 |
+| wall | 278 s | 194 s |
+| peak TU RSS | 224 MB | 542 MB |
+
+Failure clusters (kiln): none.
+
+kiln test run: `97% tests passed, 3 tests failed out of 94`
+<!-- /oss:libunifex -->
+
+<!-- oss:stdexec -->
+### stdexec (nvhpc-26.05)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 231 / 0 | 231 / 0 |
+| links ok / failed | 20 / 0 | 20 / 0 |
+| tests passed / total | 907 / 907 | 907 / 907 |
+| wall | 69 s | 209 s |
+| peak TU RSS | 541 MB | 1065 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:stdexec -->
