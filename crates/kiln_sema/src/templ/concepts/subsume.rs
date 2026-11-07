@@ -268,13 +268,30 @@ impl Sema<'_, '_> {
             return Vec::new();
         }
         let Some((a, b)) = pair else { return Vec::new() };
+        let (la, lb) = (self.atom_note_loc(a), self.atom_note_loc(b));
         vec![
-            self.diag(DiagId::note_ambiguous_atomic_constraints, self.begin_loc(a)),
-            self.diag(
-                DiagId::note_ambiguous_atomic_constraints_similar_expression,
-                self.begin_loc(b),
-            ),
+            self.diag(DiagId::note_ambiguous_atomic_constraints, la),
+            self.diag(DiagId::note_ambiguous_atomic_constraints_similar_expression, lb),
         ]
+    }
+
+    /// Where a "similar constraint" note points for atom `e`: its begin,
+    /// except that a fold atom (a concept-dependent fold, kept whole)
+    /// points at its pattern, as clang's fold-expanded constraint does.
+    fn atom_note_loc(&self, e: ExprId) -> kiln_source::Loc {
+        use kiln_ast::expr::{ExprDeps, ExprKind};
+        use kiln_ast::ids::RawId;
+        let n = *self.ast.exprs.get(e);
+        if n.kind() == ExprKind::CXXFoldExpr {
+            let (l, r) = (ExprId::from_raw(n.a()), ExprId::from_raw(n.b()));
+            let pat = [l, r].into_iter().flatten().find(|&x| {
+                self.ast.exprs.get(x).deps().contains(ExprDeps::UNEXPANDED_PACK)
+            });
+            if let Some(p) = pat {
+                return self.begin_loc(p);
+            }
+        }
+        self.begin_loc(e)
     }
 
     /// clang's `subsumes(PDNF, QCNF, E)` over precomputed clauses, with
