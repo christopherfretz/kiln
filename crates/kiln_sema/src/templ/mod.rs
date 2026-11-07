@@ -1035,10 +1035,15 @@ impl Sema<'_, '_> {
         self.templ.cur = None;
         self.templ.head_mismatch = false;
         self.templ.local_template = false;
-        // The untaken heads directly around this declaration.
+        // The untaken heads directly around this declaration. A
+        // declaration in a lambda body takes none of the heads outside
+        // the lambda: they await the declaration whose declarator holds
+        // the lambda (`template<class T> auto f() -> decltype([] { int
+        // t; return t; }())`, [temp.pre]/2).
+        let floor = self.lambda_head_floor();
         let mut open = Vec::new();
         for (i, h) in self.templ.heads.iter().enumerate().rev() {
-            if h.taken {
+            if h.taken || i < floor {
                 break;
             }
             open.push(i);

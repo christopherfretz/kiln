@@ -195,6 +195,13 @@ impl Sema<'_, '_> {
         id
     }
 
+    /// The number of template heads outside the innermost lambda whose
+    /// body is open (0 outside lambda bodies): a declaration in the body
+    /// cannot be headed by them ([`Sema::take_template_head`]).
+    pub(crate) fn lambda_head_floor(&self) -> usize {
+        self.lambdas.iter().rev().find(|l| l.body_open).map_or(0, |l| l.heads)
+    }
+
     /// `<` after the *lambda-introducer*: opens the lambda's
     /// *template-parameter-list* ([expr.prim.lambda.general]/1), a head
     /// one level deeper than the enclosing ones. Closed with the lambda.
