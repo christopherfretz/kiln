@@ -7514,6 +7514,12 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   is `Never`; a plain edge plus any other is `Maybe` (`... in all
   control paths`); a plain edge alone is `Always`. A body with no graph
   (an `if consteval` under clang 19, or over the size cap) is `Never`.
+  A body whose last statement is a `return` is `Never` without a graph
+  (WP-798): the closing brace is reached only through that statement.
+  The graph costs 8 bytes per expression and nothing else may ask for
+  it, so building it for every value-returning body cost
+  bench/overload/arrow-chain.cpp 24 MB
+  (`stmt.return/return-ending-body-no-cfg.cpp`).
 - Initialization (one condition in `init.rs`, flagged): brace elision
   ([dcl.init.aggr]/16) only descends into an aggregate element; a class
   with a user-provided constructor is copy-initialized from the element
