@@ -647,6 +647,26 @@ impl Sema<'_, '_> {
                 return false;
             }
         }
+        // The definition may come from another redeclaration: a friend
+        // declared without a body in one class template specialization
+        // and defined in another (`friend auto f(key<N>) { ... }`, the
+        // stateful-metaprogramming type map of std::execution
+        // implementations). Its definition is instantiated with the class
+        // that defines it ([temp.inst]/4 makes it available when needed;
+        // clang's `FunctionDecl::isDefined` counts a declaration
+        // instantiated from a friend definition), and the deduced type is
+        // shared by every redeclaration.
+        let others: Vec<DeclId> = self.ast.redecls_of(d).filter(|&r| r != d).collect();
+        for r in others {
+            let Some(pattern) = self.ast.instantiated_from(r) else { continue };
+            if self.ast.definition(pattern).is_none() {
+                continue;
+            }
+            self.instantiate_function_definition(r, loc);
+            if undeduced(self).is_none() {
+                return false;
+            }
+        }
         if self.undeduced_dependent_use(d) {
             return false;
         }

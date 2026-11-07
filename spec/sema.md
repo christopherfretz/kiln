@@ -1165,6 +1165,15 @@ Redeclaration and linkage rules:
   checks it too (`member_of_object`), so the call through it has the
   deduced type (WP-690,
   `tests/conformance/dcl.spec.auto/static-member-through-dependent-base.cpp`).
+  When the declaration the use names has no instantiable definition,
+  another redeclaration instantiated from a friend definition is
+  instantiated instead ([temp.inst]/4): a friend declared without a body
+  in `key<N>` and defined with a deduced return type in `value<T>` is one
+  function, so once `value<T>` exists `decltype(lookup(key<N>()))` has
+  its deduced type (clang's `isDefined` counts a declaration instantiated
+  from a friend definition; the type map of std::execution
+  implementations, WP-789,
+  `tests/conformance/temp.friend/deduced-friend-defined-by-other-specialization.cpp`).
   A redeclaration
   ([dcl.spec.auto.general]/13) is matched against the declared
   placeholder type (`declared_fn_type`, kept in `declared_returns`), not
