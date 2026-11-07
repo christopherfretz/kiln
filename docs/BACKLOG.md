@@ -753,6 +753,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-750 | correctness bundle 2: noreturn keeps noexcept/fn-type bits, noreturn on instantiation, class-scope __PRETTY_FUNCTION__, pre-C++17 exception spec in typedef, section conflicts | WP-728 | landed PR #335: 740, 747, 748, 749, 728 fixed; follow-ups WP-751..754 |
 | WP-729 | perf: profile protobuf summed compile time (2.65x clang-19; docs/status/oss/protobuf.md) | WP-716 | open |
 | WP-731 | contracts sema gaps: lambda captures of parameters, explicit specialization adding contracts, friend redecl postcondition-param rule, dump prints type-parameter-0-0, spurious constexpr note after predicate error (spec/contracts.md:324-340) | WP-706 | open |
+| WP-755 | contracts part 3: WP-731 sema gaps, WP-744 coroutine postconditions, virtual-function rule check | WP-731 | in progress |
 | WP-732 | C++26 DIS todo papers: P3598, P2841, P3074, P3726, P1494, P3475 (docs/STANDARD_SUPPORT.md:337-342) | WP-706 | open |
 | WP-746 | P2841R7 concept and variable-template template parameters | WP-732 | P2841R7 partial: concept/variable TTPs, kinds, concept-dependent constraints, mangling (#336) |
 | WP-743 | C++26 DIS: trivial unions P3074R7 + union lifetime P3726R2 + P3475R2 core (Oven union lifetime) | WP-732 | P3074R7 done, P3726R2 partial (Oven union lifetime), P3475R2 core done (#337) |

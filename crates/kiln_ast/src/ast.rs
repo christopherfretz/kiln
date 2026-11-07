@@ -392,7 +392,38 @@ impl Ast {
     /// declaration repeats it or has none, [dcl.contract.func]/4).
     pub fn function_contracts(&self, f: DeclId) -> Option<crate::ids::ListId> {
         let c = &self.decls.cold.contracts;
-        c.get(f).or_else(|| c.get(self.first(f))).copied()
+        c.get(f).or_else(|| c.get(self.contract_first(f))).copied()
+    }
+
+    /// The first declaration of function `f`'s entity in the sense of
+    /// [dcl.contract.func]/3-4: [`Ast::first`], except that an explicit
+    /// specialization's own first declaration is its first written one,
+    /// not the declaration that deduction or class instantiation made of
+    /// the specialization before it was explicitly specialized (the
+    /// template's function contract specifiers have no effect on it,
+    /// [temp.expl.spec]/12; spec/contracts.md §4).
+    pub fn contract_first(&self, f: DeclId) -> DeclId {
+        use crate::templates::SpecKind;
+        let first = self.first(f);
+        if first == f {
+            return f;
+        }
+        let explicit =
+            self.spec_info(first).is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
+                || self
+                    .member_spec_info(first)
+                    .is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization);
+        if !explicit {
+            return first;
+        }
+        let mut d = f;
+        while let Some(p) = self.prev(d) {
+            if p == first {
+                return d;
+            }
+            d = p;
+        }
+        first
     }
 
     /// When the function contract assertions of `f` were written on
@@ -402,7 +433,7 @@ impl Ast {
     /// they are `f`'s own.
     pub fn contract_param_aliases(&self, f: DeclId) -> Vec<(DeclId, DeclId)> {
         let c = &self.decls.cold.contracts;
-        let src = self.first(f);
+        let src = self.contract_first(f);
         if c.get(f).is_some() || src == f || c.get(src).is_none() {
             return Vec::new();
         }

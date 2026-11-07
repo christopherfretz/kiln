@@ -959,6 +959,10 @@ pub struct Sema<'a, 'sm> {
     /// A contract assertion was seen: initializations are checked for
     /// contract violations ([`Sema::check_contract_init`]).
     pub(crate) has_contracts: bool,
+    /// The parameters already diagnosed by the postcondition const rule
+    /// ([dcl.contract.func]/7): each once, and the parameter stays
+    /// valid, so the body's uses of it evaluate (spec/contracts.md §9).
+    pub(crate) post_param_diagnosed: kiln_source::fx::FxHashSet<DeclId>,
     /// The static data member whose out-of-line initializer is being
     /// analysed: its class is the access context ([class.access]/7).
     pub(crate) initializing: Option<DeclId>,
@@ -1241,6 +1245,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             nsdmi_this: Vec::new(),
             contract_ctx: Vec::new(),
             has_contracts: false,
+            post_param_diagnosed: kiln_source::fx::FxHashSet::default(),
             initializing: None,
             inst_enable_if: None,
             templ: templ::TemplState::default(),

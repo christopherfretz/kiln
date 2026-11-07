@@ -1549,7 +1549,13 @@ impl Scan<'_> {
         match n.kind() {
             ExprKind::DeclRefExpr => {
                 let d = ast.exprs.decl(e);
-                if (!ok || self.cur == Some(d)) && is_local_var(ast, d) {
+                // A result binding whose address is taken (a lambda in
+                // its postcondition captures it by reference) is copied
+                // to memory (`check_posts`, spec/contracts.md §6.4).
+                if (!ok || self.cur == Some(d))
+                    && (is_local_var(ast, d)
+                        || ast.decls.get(d).kind() == DeclKind::ContractResultName)
+                {
                     self.mem.insert(d);
                 }
             }

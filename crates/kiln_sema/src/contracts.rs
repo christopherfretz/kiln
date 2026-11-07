@@ -40,6 +40,9 @@ pub struct ContractScope {
     result: Option<DeclId>,
     /// The function a precondition or postcondition belongs to.
     func: Option<DeclId>,
+    /// The context to restore after the predicate, when it was analysed
+    /// in the function's (see [`Sema::act_on_start_contract`]).
+    saved_ctx: Option<DeclId>,
 }
 
 impl ContractScope {
@@ -118,7 +121,21 @@ impl Sema<'_, '_> {
             (t, c)
         });
         self.contract_ctx.push(ContractCtx { watermark, lambdas: self.lambdas.len(), this });
-        ContractScope { kind, result, func: f }
+        // A precondition or postcondition is in the function parameter
+        // scope of `f` ([basic.scope.contract]): a lambda in its predicate
+        // is in `f` and may capture `f`'s parameters
+        // ([expr.prim.lambda.capture]/7, spec/contracts.md §5). The seq is
+        // replayed outside `f`, so its context is entered for the
+        // predicate.
+        let saved_ctx = f
+            .map(|f| self.contract_fn(f))
+            .filter(|&f| f != self.ctx && self.kind_of(f).is_function())
+            .map(|f| {
+                let saved = self.ctx;
+                self.ctx = f;
+                saved
+            });
+        ContractScope { kind, result, func: f, saved_ctx }
     }
 
     /// After the predicate `cond` (`None`: it failed to parse) of the
@@ -148,6 +165,9 @@ impl Sema<'_, '_> {
         };
         self.contract_ctx.pop();
         self.pop_scope();
+        if let Some(c) = sc.saved_ctx {
+            self.ctx = c;
+        }
         let s = self.builder().contract_stmt(sc.kind, cond, sc.result, loc);
         if !self.in_template() {
             let ctx = sc.func.map_or(self.ctx, |f| self.contract_fn(f));
@@ -206,11 +226,16 @@ impl Sema<'_, '_> {
     }
 
     /// The type of the result name of a postcondition of `f`
-    /// ([dcl.contract.res]/1-2): its return type.
+    /// ([dcl.contract.res]/1-2): its return type, as written (a
+    /// template's pattern dumps `T`, not `type-parameter-0-0`, as clang
+    /// keeps a declaration's written types).
     fn contract_result_type(&mut self, f: DeclId, loc: Loc, definition: bool) -> QualType {
         let f = self.contract_fn(f);
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        let Some(ret) = self.ast.types.proto(ty).map(kiln_ast::types::FuncProto::ret) else {
+        let t = &self.ast.types;
+        let Some(ret) =
+            t.proto_of(ty.ty()).or_else(|| t.proto(ty)).map(kiln_ast::types::FuncProto::ret)
+        else {
             return QualType::ERROR;
         };
         if self.ast.types.is_void(ret) {
@@ -304,7 +329,7 @@ impl Sema<'_, '_> {
         if self.ast.decls.function(f).is_none() {
             return;
         }
-        let first = self.ast.first(f);
+        let first = self.ast.contract_first(f);
         let first_list =
             if first == f { None } else { self.ast.decls.cold.contracts.get(first).copied() };
         if stmts.is_empty() {
@@ -325,10 +350,6 @@ impl Sema<'_, '_> {
         self.ast.decls.mark_function(f, FnSpec::new().with_has_contracts(true));
         if first != f {
             match first_list {
-                // A function template specialization's first declaration
-                // may be the one deduction made before its explicit
-                // specialization was declared (spec/contracts.md §9).
-                None if self.ast.spec_info(f).is_some() => {}
                 None => {
                     let msg = self
                         .diag(DiagId::sema_contract_redecl_adds, loc)
@@ -361,8 +382,11 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// [dcl.contract.func]/6 and the virtual-function rule: whether the
-    /// seq may appear on `f` (diagnosed otherwise).
+    /// [dcl.contract.func]/6 (the DIS): a virtual, deleted, or
+    /// first-declaration-defaulted function has no seq; whether the seq
+    /// may appear on `f` (diagnosed otherwise). A function is virtual
+    /// when its first declaration is (spec/contracts.md §9: P3097 lifts
+    /// the virtual rule only for C++29).
     fn check_contract_placement(&mut self, f: DeclId, how: ContractDeclKind, loc: Loc) -> bool {
         let spec = self.ast.decls.function(f).map(|x| x.spec).unwrap_or_default();
         let deleted = how == ContractDeclKind::Deleted || spec.is_deleted();
@@ -427,12 +451,11 @@ impl Sema<'_, '_> {
             // An array or function parameter was adjusted to a pointer
             // ([dcl.fct]/5): `const int a[2]` is no const parameter.
             let is_const = self.ast.types.effective_quals(t).contains(Quals::CONST);
-            if !is_const {
+            if !is_const && self.post_param_diagnosed.insert(p) {
                 let msg = self
                     .diag(DiagId::sema_contract_post_nonconst_param, n.loc())
                     .with_note(self.diag(DiagId::note_declared_at, n.loc()));
                 self.emit(msg);
-                self.ast.decls.set_flags(p, DeclFlags::INVALID);
             }
         }
     }
@@ -470,8 +493,11 @@ impl Sema<'_, '_> {
     pub(crate) fn check_coroutine_post_params(&mut self, f: DeclId) {
         // The seq is on `f` or, for a definition that omits it, on the
         // first declaration, whose parameters the predicates name.
-        let owner =
-            if self.ast.decls.cold.contracts.get(f).is_some() { f } else { self.ast.first(f) };
+        let owner = if self.ast.decls.cold.contracts.get(f).is_some() {
+            f
+        } else {
+            self.ast.contract_first(f)
+        };
         let stmts = self.function_contracts(owner);
         if stmts.is_empty() {
             return;
@@ -489,7 +515,10 @@ impl Sema<'_, '_> {
             let Some(&p) = params.get(i) else { continue };
             let n = *self.ast.decls.get(p);
             let Some(t) = n.ty() else { continue };
-            if self.ast.types.is_reference(t) || n.has(DeclFlags::INVALID) {
+            if self.ast.types.is_reference(t)
+                || n.has(DeclFlags::INVALID)
+                || self.post_param_diagnosed.contains(&p)
+            {
                 continue;
             }
             let msg = self

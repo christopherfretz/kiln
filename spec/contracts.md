@@ -4,13 +4,14 @@ Standard: [basic.contract] ([basic.contract.general],
 [basic.contract.eval], [basic.contract.handler]), [dcl.contract.func],
 [dcl.contract.res], [stmt.contract.assert], [basic.scope.contract],
 [expr.prim.id.unqual]/7 and [expr.prim.this]/2 (const-ness in a
-predicate), [dcl.fct.def.coroutine]/6, [intro.defs] (contract
-violation, contract-violation handler), [cpp.predefined]
+predicate), [dcl.fct.def.coroutine]/6, [dcl.fct.def.coroutine]/7 (the return object), [temp.expl.spec]/12,
+[intro.defs] (contract violation, contract-violation handler), [cpp.predefined]
 (`__cpp_contracts`). Draft: the Croydon DIS (C++26 as balloted;
 https://eel.is/c++draft/). Papers: P2900R14 with the Kona amendments.
 Status: parsed, analysed and dumped (WP-706); evaluated in the Oven and
 in codegen, with kiln's violation handler where the standard library
-has none (WP-707, §6); coroutine postconditions are unsupported (§9). This file is the
+has none (WP-707, §6); coroutine postconditions and the remaining sema
+rules (WP-755). This file is the
 contract; spec/ast.md §4 and §6, spec/driver.md (Options) and
 spec/sema-templates.md (substitution) point here.
 
@@ -82,7 +83,7 @@ assertion-statement:
     declaration repeats the same seq (§5) or has none;
   - not on a deleted function or one defaulted on its first
     declaration ([dcl.contract.func]/6);
-  - not on a virtual function (GCC 16.1 rejects; see §9);
+  - not on a virtual function ([dcl.contract.func]/6 of the DIS; see §9);
   - coroutines may carry one, but a postcondition may not odr-use a
     non-reference parameter ([dcl.fct.def.coroutine]/6).
 
@@ -103,13 +104,20 @@ assertion-statement:
   `ContractAssertStmt`s of the function contract specifiers, in written
   order, keyed by the declaration that wrote them (a redeclaration that
   repeats a seq gets its own list; one that omits it gets none).
-  `Ast::function_contracts(f)` is the list on `f`, else on its first
-  declaration. A function template's seq is on its pattern; an
+  `Ast::function_contracts(f)` is the list on `f`, else on
+  `Ast::contract_first(f)`: its first declaration, except for an explicit
+  specialization, whose redeclaration chain starts with the implicit
+  declaration made by deduction or class instantiation; there it is the
+  first *written* declaration, because the template's seq has no effect
+  on an explicit specialization ([temp.expl.spec]/12, P2900R14 §3.4.7),
+  which has only its own (WP-755). `contract_param_aliases` uses the
+  same declaration. A function template's seq is on its pattern; an
   instantiated specialization gets its own substituted list. The
   `has_contracts` function flag is set on every declaration that carries
   a list.
 - **`DeclKind::ContractResultName`**: the result binding of `post(r :
-  ...)`, of the function's return type, named as a `const` lvalue
+  ...)`, of the function's return type as written (a pattern's is
+  `const T`, not the canonical `type-parameter-0-0`), named as a `const` lvalue
   ([dcl.contract.res]/1); its scope is that postcondition only
   ([basic.scope.contract]); its context is the function.
 - **`Ast::contract_semantic`**: the translation unit's
@@ -137,7 +145,11 @@ assertion-statement:
   implicit capture name the outer entity and stay const, and `this` in
   such a lambda is a pointer to const; only a by-copy capture of a
   `mutable` lambda declared in the predicate is a member of the closure
-  and is modifiable. Watermark: a declaration whose index is below
+  and is modifiable. Such a lambda captures the function's parameters
+  and the result binding like any local entity of the enclosing
+  function ([expr.prim.lambda.capture]/3.3, [basic.pre]/9; explicitly,
+  `[=]`, `[&]`, by copy and by reference), and the captures carry the
+  same const-ness (WP-755). Watermark: a declaration whose index is below
   `ContractCtx::watermark` was declared outside the assertion.
 - **Modification**: assigning to (or incrementing) a name that is const
   only by the rule above reports `sema_contract_const_modify` ("cannot
@@ -155,11 +167,15 @@ assertion-statement:
   parameter odr-used by a postcondition is `const` on every declaration
   of the function, also the ones without a seq; an array or function
   parameter is adjusted to a pointer and is never const in this sense
-  (`sema_contract_post_nonconst_param` at the parameter). Checked at
-  instantiation, not on the pattern.
+  (`sema_contract_post_nonconst_param` at the parameter, once per
+  parameter; the parameter stays valid, so the body and a constant
+  evaluation are unaffected). Checked at instantiation, not on the
+  pattern. A friend redeclaration is checked too, with or without a seq
+  (`check_friend_without_contracts` in `kiln_parse/src/class.rs`).
 - **Coroutines** ([dcl.fct.def.coroutine]/6): when the body turns out
   to be a coroutine, a postcondition that odr-uses a non-reference
-  parameter is `sema_contract_coroutine_post_param`.
+  parameter is `sema_contract_coroutine_post_param` (once per
+  parameter; not again as `sema_contract_post_nonconst_param`).
 - **Redeclarations** ([dcl.contract.func]/4-5): a later declaration
   with a seq whose first declaration had none is
   `sema_contract_redecl_adds`; one with a different seq is
@@ -169,8 +185,17 @@ assertion-statement:
   (`exprs_equivalent`, the redeclaration-equivalence of
   [temp.over.link], so renamed parameters and result names match).
 - **Deleted, defaulted, virtual**: `sema_contract_deleted_or_defaulted`
-  ([dcl.contract.func]/6), `sema_contract_virtual`; the seq is then
-  dropped.
+  and `sema_contract_virtual` ([dcl.contract.func]/6: "A virtual
+  function, a deleted function, or a function defaulted on its first
+  declaration shall not have a function-contract-specifier-seq"); the
+  seq is then dropped. A function is virtual when its first declaration
+  is (declared `virtual` or overriding).
+- **Explicit specializations** ([temp.expl.spec]/12,
+  [dcl.contract.func]/4-5): the template's seq has no effect on an
+  explicit specialization; its own first written declaration introduces
+  its assertions, and a later redeclaration that adds a seq or differs
+  is `sema_contract_redecl_adds` / `sema_contract_redecl_mismatch`, as
+  for any function (`Ast::contract_first`).
 - **Templates**: a function template's seq is analysed on the pattern
   (dependent predicates stay dependent) and substituted with the
   function (`templ/subst/contracts.rs`): `pattern_contracts` finds the
@@ -210,10 +235,18 @@ never written today.
   extra IR, no extra Oven bytecode or per-call work
   (`checking_semantics_cost_nothing_without_contracts`,
   `tests/stress/contracts-constexpr-1e6.cpp`).
-- One gap is a clean error rather than a silent skip: a postcondition
-  of a coroutine under a checking semantic is `unsupported:
-  postcondition of a coroutine (spec/contracts.md §9)` in codegen; its
-  preconditions are checked.
+- Coroutines (WP-755): the preconditions are checked at entry, before
+  the frame is allocated; the postconditions are checked once, when the
+  coroutine first returns to its caller (the ramp returns), after
+  `get_return_object()`, the initial suspend and, for a coroutine that
+  does not suspend initially, its run to the first suspension; the
+  result binding denotes the return object (P2900R14 §3.5.2,
+  [dcl.fct.def.coroutine]/7). In codegen the check sits in the
+  function's return block, which follows `llvm.coro.end`, so the resume
+  and destroy clones never reach it. The Oven never evaluates a
+  coroutine (a coroutine is not constexpr, [dcl.constexpr]/3,
+  [expr.const]/5.23; `kiln_oven/src/compile.rs` traps on the body), so there
+  is nothing to check there.
 - Contracts on the first declaration of a function and evaluated for a
   later definition name the first declaration's parameters; codegen and
   the Oven alias them to the definition's
@@ -376,8 +409,7 @@ after the decl, the declared type. clang has no such nodes, so the
 Oven (§6.4): `oven_contract_predicate_false` /
 `oven_contract_condition_not_constant` (errors, enforce and
 quick_enforce) and their `_observe` warnings, as notes of the
-evaluation's failure with the call stack. Codegen: `unsupported:
-postcondition of a coroutine (spec/contracts.md §9)` (§6.2).
+evaluation's failure with the call stack.
 Driver: `unsupported argument 'v' to option '-fcontract-evaluation-semantic='`.
 
 ## 9. Known gaps, divergences and open questions
@@ -410,39 +442,74 @@ oracle):
   through `std::cerr`, which is tied to `std::cout`, so the visible
   order is the same for `printf`-only programs.
 
+Divergences recorded by WP-755 (`oracle: none` unless noted):
+
+- GCC rejects naming a parameter (or the result binding) in a lambda in
+  a predicate; kiln captures it ([expr.prim.lambda.capture]/3.3: a
+  parameter is a local entity of the function, and the predicate is in
+  its scope; `lambda-capture-params.cpp`, `run-lambda-capture.cpp`).
+- GCC does not diagnose an explicit specialization whose redeclaration
+  adds a seq or has a different one, and drops the seq of the
+  specialization's first declaration when the definition omits it;
+  kiln applies [dcl.contract.func]/4-5 to the specialization's own
+  declarations and checks the first one's seq at every call
+  (`p4-explicit-spec.cpp`, `run-explicit-spec.cpp`).
+- GCC reports the postcondition-parameter const rule at the predicate's
+  use of the parameter; kiln reports it at the parameter of each
+  offending declaration, including a friend redeclaration without a seq
+  and the earlier declaration when a friend redeclaration adds the seq
+  (`p7-friend-redecl.cpp` is compared with GCC on the verdict only, as
+  every `oracle: gcc` compile-fail test is).
+
 Gaps (follow-ups):
 
-- A lambda in a function's contract cannot capture that function's
-  parameters (the predicate is replayed outside the parameter scope's
-  capture machinery).
-- An explicit specialization that adds a seq to a template without one
-  is not diagnosed (`act_on_function_contracts`, spec_info branch).
-- A friend redeclaration without a seq is not checked for the
-  postcondition-parameter const rule.
-- The pattern of a function template prints its result name as
-  `'const type-parameter-0-0'` in the dump (clang's canonical spelling
-  of a dependent type), not `'const T'`.
-- After a sema error in a predicate, a constexpr function evaluated
-  under `ignore` can get a spurious "control reached end of constexpr
-  function" note.
 - `-fcontract-evaluation-semantic=` has no per-assertion form;
   `aux` slots 1-3 are reserved.
-- A coroutine's postconditions are not evaluated: codegen rejects them
-  under a checking semantic (§6.2). They must run when the coroutine
-  returns to its caller the first time, on the return object, which
-  the coroutine lowering does not expose to the check yet
-  (`kiln_codegen/src/contracts.rs` `emit_postconditions`).
+- A friend declared in a class template is checked against the
+  postcondition-parameter rule only when the class is instantiated.
+- The function name in a violation of an explicit specialization of a
+  member of a class template prints the template parameter list
+  (`int C<long>::m(T) [T = long]`), where clang's `__PRETTY_FUNCTION__`
+  prints `int C<long>::m(long)`.
+- [expr.prim.lambda.closure] (P2900R14, the paragraph added after /7):
+  a lambda whose implicit capture of a local entity is referenced only
+  in its own function contract assertions or in `contract_assert`s in
+  its body is ill-formed (`[=] pre(i > 0) {}` with a local `i`); kiln
+  accepts it (GCC 16.1 diagnoses it). `kiln_sema/src/lambda/capture.rs`.
 
-Decisions (WP-707):
+Decisions:
 
-- **Virtual functions.** The draft's [class.virtual] has no rule against
-  a seq on a virtual function; GCC 16.1 rejects one and kiln keeps
-  following GCC (`sema_contract_virtual`; `virtual.cpp`). Revisit if the DIS or a DR settles
-  it the other way.
-- **Coroutines.** The DIS permits a seq on a coroutine (only the
-  postcondition-parameter rule applies), as does GCC, so kiln accepts
-  it: preconditions are checked, postconditions are `unsupported`
-  (gaps above).
+- **Virtual functions (WP-755).** The DIS (P2900R14 as balloted, whose
+  revision 14 "made ill-formed pre and post on virtual functions,
+  again") says in [dcl.contract.func]/6: "A virtual function
+  ([class.virtual]), a deleted function ([dcl.fct.def.delete]), or a
+  function defaulted on its first declaration ([dcl.fct.def.default])
+  shall not have a function-contract-specifier-seq." kiln keeps
+  `sema_contract_virtual`, now on the wording rather than on GCC (which
+  agrees; `virtual.cpp`, `oracle: gcc`). The working draft at eel.is no
+  longer has the virtual clause: P3097 (contracts on virtual functions)
+  was adopted for C++29; implementing it is a follow-up behind a
+  language-mode check, not a C++26 change.
+- **Coroutines (WP-755).** The DIS permits a seq on a coroutine (only
+  the postcondition-parameter rule, [dcl.fct.def.coroutine]/6, applies).
+  The postconditions are evaluated when the coroutine first returns to
+  its caller, with the result binding denoting the return object, the
+  prvalue result object initialised by `get_return_object()`
+  ([dcl.contract.res]/1, [dcl.fct.def.coroutine]/7, P2900R14 §3.5.2),
+  never on a resume (§6.2); GCC 16.1 agrees
+  (`run-coroutine-post-*.cpp`, `oracle: gcc`). A coroutine is never
+  constant-evaluated, so the Oven has no coroutine case.
+- **Explicit specializations (WP-755).** [temp.expl.spec]/12 (P2900R14
+  §3.4.7): an explicit specialization has its own seq or none; the
+  template's does not apply. kiln's redeclaration chain of an explicit
+  specialization starts at the implicit declaration deduction or class
+  instantiation made, so the contract rules start at the first
+  *written* declaration (`Ast::contract_first`).
+- **Error recovery.** The postcondition-parameter const rule does not
+  invalidate the parameter: a body that uses it is still analysed and a
+  constant evaluation under `ignore` does not report a spurious
+  "control reached end of constexpr function"
+  (`ignore-error-recovery.cpp`, `oracle: gcc`).
 - **libc++.** kiln's resource `<contracts>` and weak default handler
   (§6.3).
 
@@ -452,7 +519,9 @@ Decisions (WP-707):
   late parsing (`declarations.cpp`), attributes, redeclarations
   (`p4-*`), deleted/defaulted (`p6-*`), virtual, the postcondition
   parameter rule (`p7-*`), predicate conversion, `run-ignore.cpp`, and
-  the dump goldens `dump-function.cpp`, `dump-lambda-template.cpp`.
+  the dump goldens `dump-function.cpp`, `dump-lambda-template.cpp`;
+  `p4-explicit-spec.cpp`, `p7-friend-redecl.cpp`,
+  `coroutine-post-param.cpp` (WP-755).
 - `tests/conformance/dcl.contract.res/`: result names, `void`, deduced
   return types, a result name in `pre`, modifying the result.
 - `tests/conformance/stmt.contract.assert/`: the statement, syntax,
@@ -471,11 +540,14 @@ Decisions (WP-707):
   `run-enforce.cpp`, `run-quick-enforce.cpp` (replaced handlers and a
   terminate handler); without an oracle (GCC links its default from
   `-lstdc++exp`, or diverges): `run-evaluation-exception.cpp`,
-  `run-default-handler.cpp`, `run-invoke-default.cpp`.
+  `run-default-handler.cpp`, `run-invoke-default.cpp`. WP-755:
+  `run-coroutine-post-{observe,enforce,quick-enforce,ignore}.cpp` (on
+  `Inputs/coroutine-post.h`; compared with GCC), `run-lambda-capture.cpp`,
+  `run-explicit-spec.cpp` (no oracle), `ignore-error-recovery.cpp`.
 - `crates/kiln_codegen/tests/contracts.rs`: the IR shape (an `enforce`
   golden, `observe`'s detection modes, `quick_enforce`, no default
   handler when the stdlib ships one, no cost without contracts, the
-  coroutine postcondition error);
+  coroutine pre- and postcondition placement around `llvm.coro.end`);
   `crates/kiln_driver/src/args.rs` unit test `contract_evaluation_semantic`.
 - `tests/stress/contracts-many.cpp`: 10,000 functions with `pre`, `post`
   and `contract_assert`; WP-706 measured 5.6 s and 48 MiB (debug kiln,
@@ -484,3 +556,6 @@ Decisions (WP-707):
 - `tests/stress/contracts-constexpr-1e6.cpp`: a million constant-evaluated
   calls of a function with `pre` and `post`; the Oven budget pins
   bounded steps per call and no memory per call.
+- `tests/stress/contracts-lambda-capture-1e5.cpp` (WP-755): the same
+  with a capturing lambda in each predicate; the closures are reclaimed
+  at once (Oven peak one closure, no allocations).
