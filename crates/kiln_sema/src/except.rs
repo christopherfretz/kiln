@@ -219,8 +219,60 @@ impl Sema<'_, '_> {
             return self.recover_err(&[e], loc);
         }
         self.check_unevaluated_side_effects(e);
+        self.resolve_operand_exc_specs(e, loc);
         let value = !self.can_throw(e);
         self.builder().noexcept_expr(e, value, QualType::BOOL, loc, rparen)
+    }
+
+    /// Resolves the exception specifications [`Sema::can_throw`] reads in
+    /// `e` ([except.spec]/13: needed by `noexcept(e)`): an operand kept
+    /// from a template pattern was built without resolving them (`V()`
+    /// with `V`'s implicit default constructor, WP-802), as clang's
+    /// `canThrow` resolves each (`ResolveExceptionSpec`).
+    fn resolve_operand_exc_specs(&mut self, e: ExprId, loc: Loc) {
+        let mut fns = Vec::new();
+        let exprs = &self.ast.exprs;
+        let mut stack = vec![e];
+        let mut seen = 0usize;
+        while let Some(x) = stack.pop() {
+            seen += 1;
+            if seen > 100_000 {
+                break;
+            }
+            let n = exprs.get(x);
+            match n.kind() {
+                ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::TypeTraitExpr
+                | ExprKind::ArrayTypeTraitExpr
+                | ExprKind::ExpressionTraitExpr
+                | ExprKind::CXXTypeidExpr
+                | ExprKind::CXXPseudoDestructorExpr => continue,
+                ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                    fns.push(exprs.constructor(x));
+                }
+                ExprKind::CXXBindTemporaryExpr => fns.extend(
+                    self.ast
+                        .types
+                        .as_record(n.ty())
+                        .and_then(|r| self.ast.definition(r))
+                        .and_then(|r| self.ast.destructor(r)),
+                ),
+                ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr => {
+                    let c = self.ignore_paren_imp_casts(exprs.callee(x));
+                    if matches!(exprs.get(c).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
+                        && self.kind_of(exprs.decl(c)).is_function()
+                    {
+                        fns.push(exprs.decl(c));
+                    }
+                }
+                _ => {}
+            }
+            exprs.children_into(x, &self.ast.lists, &mut stack);
+        }
+        for f in fns {
+            self.resolve_exc_for_type(f, loc);
+        }
     }
 
     /// Whether `e` is potentially-throwing ([except.spec]/6), clang's

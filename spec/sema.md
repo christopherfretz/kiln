@@ -4046,7 +4046,14 @@ constant and never look at the operand.
 
 The operands of nested `sizeof`, `alignof` and `noexcept` are not
 looked at (they are unevaluated). An erroneous operand gives an error
-expression.
+expression. Before `can_throw` reads them, the exception specifications of the
+constructors, bound temporaries' destructors and direct callees in the
+operand are resolved ([except.spec]/13, `resolve_operand_exc_specs`,
+WP-802): an operand kept unchanged from a template pattern (`V()` in
+`noexcept(noexcept(V().f(0, x)))` of a function template, with `V`'s
+implicit default constructor) was built without resolving them, and
+the instantiation must not count them as potentially-throwing
+(`tests/conformance/except.spec/p13-noexcept-operand-from-pattern-resolves-specs-run.cpp`).
 
 ### 5.4 Builtin functions (`builtins.rs`)
 clang's `LazilyCreateBuiltin`. kiln knows one builtin,
