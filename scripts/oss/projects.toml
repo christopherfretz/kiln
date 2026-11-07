@@ -353,7 +353,7 @@ url = "https://github.com/stephenberry/glaze"
 tag = "v9.1.0"
 build = "cmake"
 cxx_std = 23
-configure = ["-Dglaze_DEVELOPER_MODE=ON", "-DBUILD_TESTING=ON", "-Dglaze_ENABLE_SANITIZERS=OFF", "-Dglaze_BUILD_NETWORKING_TESTS=OFF", "-Dglaze_BUILD_PERFORMANCE_TESTS=OFF", "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON"]
+configure = ["-Dglaze_DEVELOPER_MODE=ON", "-DBUILD_TESTING=ON", "-Dglaze_ENABLE_SANITIZERS=OFF", "-Dglaze_BUILD_NETWORKING_TESTS=OFF", "-Dglaze_BUILD_PERFORMANCE_TESTS=OFF", "-Dglaze_ENABLE_FUZZING=OFF", "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON"]
 test = "ctest --output-on-failure -j 4 --timeout 300"
 c_compiler = "clang-19"
 wave = 4
@@ -369,10 +369,10 @@ configure = ["-DMP_UNITS_API_CONTRACTS=NONE", "-DMP_UNITS_BUILD_CXX_MODULES=OFF"
 deps = ["catch2"]
 test = "ctest --output-on-failure -j 4"
 c_compiler = "clang-19"
-control_cxx = "clang++-22"
+control_cxx = "g++-16"
 wave = 4
 verified = true
-notes = "WP-792. clang 19 cannot build mp-units (its documented unfixable clang 19 bug, llvm-project PR 118288: type constraint differs in template redeclaration), so the control is clang++-22 (control_cxx). Catch2 (the toml's catch2 row, default install) is a dependency built with the same compiler; contracts off (no gsl-lite). test/static is static_assert-only; test/runtime is Catch2."
+notes = "WP-792. clang 19 cannot build mp-units (its documented unfixable clang 19 bug, llvm-project PR 118288: type constraint differs in template redeclaration), and clang 22 rejects most of v2.5.0 too (no viable deduction guide for quantity in quantity_spec.h), so the control is GCC 16 (control_cxx; g++-16 must be on PATH). Catch2 (the toml catch2 row) is a dependency built with clang 19; contracts off (no gsl-lite). test/static is static_assert-only; test/runtime is Catch2."
 
 [scnlib]
 url = "https://github.com/eliaskosunen/scnlib"
@@ -391,12 +391,16 @@ url = "https://github.com/beached/daw_json_link"
 tag = "v3.38.1"
 build = "cmake"
 cxx_std = 20
-configure = ["-DDAW_ENABLE_TESTING=ON"]
+configure = [
+  "-DDAW_ENABLE_TESTING=ON",
+  "-DDAW_JSON_USE_BOOST=OFF",
+  "-DCMAKE_PROJECT_daw-json-link_INCLUDE=@OSS@/shims/daw-pin-header-libraries.cmake",
+]
 test = "ctest --output-on-failure -j 4 --timeout 300"
 c_compiler = "clang-19"
 wave = 4
 verified = true
-notes = "WP-792. daw-header-libraries and daw-utf-range are fetched at configure time (FetchContent); Boost 1.83 from the system."
+notes = "WP-792. daw-header-libraries and daw-utf-range are fetched at configure time (FetchContent); a shim pins header_libraries to v2.135.0 (the tests otherwise take its moving `v2` branch, which no longer builds v3.38.1). The Boost-using tests are off: the system Boost 1.83 has no Boost.Container CMake package."
 
 [reflect_cpp]
 url = "https://github.com/getml/reflect-cpp"

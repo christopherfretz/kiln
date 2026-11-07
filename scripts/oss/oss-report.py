@@ -133,10 +133,13 @@ def cell_rss(rep):
 
 
 def control_name(rep):
-    """The control column's name: `clang-NN` from the control report's
-    compiler path (a toml `control_cxx`), else clang-19."""
-    m = re.search(r"clang\+\+-(\d+)$", (rep or {}).get("compiler_path", ""))
-    return f"clang-{m.group(1)}" if m else "clang-19"
+    """The control column's name: `clang-NN` or `gcc-NN` from the control
+    report's compiler path (a toml `control_cxx`), else clang-19."""
+    path = (rep or {}).get("compiler_path", "")
+    m = re.search(r"(clang|g)\+\+-(\d+)$", path)
+    if not m:
+        return "clang-19"
+    return f"{'clang' if m.group(1) == 'clang' else 'gcc'}-{m.group(2)}"
 
 
 def render(name, data, base):
