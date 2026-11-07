@@ -2048,8 +2048,11 @@ impl AstBuilder<'_> {
         e
     }
 
-    /// `T(args)` / `T{args}` with a dependent `T` ([expr.type.conv]):
-    /// `CXXUnresolvedConstructExpr`; `list` for the braced form.
+    /// `T(args)` / `T{args}` with a dependent `T` or a type-dependent
+    /// argument ([expr.type.conv]): `CXXUnresolvedConstructExpr`; `list`
+    /// for the braced form. It is type-dependent only when `T` is
+    /// ([temp.dep.expr]/3: `int(t)` has type `int`); a type-dependent
+    /// argument makes it value-dependent (clang `computeDependence`).
     pub fn unresolved_construct(
         &mut self,
         ty: QualType,
@@ -2060,7 +2063,11 @@ impl AstBuilder<'_> {
     ) -> ExprId {
         let mut deps = self.type_deps(ty);
         for &a in args {
-            deps |= self.deps(a);
+            let d = self.deps(a);
+            if d.contains(ExprDeps::TYPE) {
+                deps |= ExprDeps::VALUE_INST;
+            }
+            deps |= d.without(ExprDeps::TYPE);
         }
         let vk = self.ref_category(ty);
         let l = self.ast.lists.push(args);
