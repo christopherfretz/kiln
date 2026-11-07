@@ -59,7 +59,7 @@ The loop:
 | `glog` | 2 | `v0.7.1` | tests at parity |
 | `re2` | 2 | `2025-11-05` | not started |
 | `simdjson` | 2 | `v4.2.4` | blocked (tests 116/117 vs clang 117/117) |
-| `taskflow` | 2 | `v3.10.0` | not started |
+| `taskflow` | 2 | `v3.10.0` | tests at parity |
 | `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | tests at parity |
 | `folly` | 3 | `v2026.10.26.00` | not started |
 | `leveldb` | 3 | `1.23` | not started |
@@ -282,3 +282,19 @@ Failure clusters (kiln): none.
 
 kiln test run: `96% tests passed, 1 tests failed out of 24`
 <!-- /oss:glog -->
+
+<!-- oss:taskflow -->
+### taskflow (v3.10.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 27 / 0 | 27 / 0 |
+| links ok / failed | 27 / 0 | 27 / 0 |
+| tests passed / total | 2462 / 2462 | 2462 / 2462 |
+| wall | 272 s | 303 s |
+| peak TU RSS | 239 MB | 402 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:taskflow -->
