@@ -1160,7 +1160,10 @@ or an injected-class-name, including one inherited from a base
 ([class.qual]/2). It is then classified in the enclosing scopes. There, a class
 template's injected-class-name is the injected type ([temp.local]/1). This is
 also true when an instantiated constructor re-resolves its ids, whose scope
-chain lacks the class scope. Errors: `member
+chain lacks the class scope. A qualified id `D::B` naming the
+injected-class-name a base class template specialization brings into
+`D` is that base (`E::Entry(v)`, [temp.local]/1-2; WP-716,
+`class.base.init/qualified-inherited-injected-class-name-run.cpp`). Errors: `member
 initializer 'y' does not name a non-static data member or base class`,
 `multiple initializations given for non-static member 'x'` (`... for base
 'B'`), `an initializer for a delegating constructor must appear alone`,

@@ -972,6 +972,12 @@ impl Parser<'_, '_> {
             Some(q) => {
                 if let NameClass::Type(ty, d) = self.s.classify_name(name, Some(q)) {
                     MemInitId::Type(self.named_type(ty, d))
+                } else if let Some(d) = self.s.inherited_injected_class(name, Some(q)) {
+                    // `D::B()` naming the injected-class-name of a base
+                    // class template specialization ([temp.local]/1-2,
+                    // [class.base.init]/2).
+                    self.s.mark_type_referenced(d);
+                    MemInitId::Type(self.s.elaborated_tag_type(d, TagKeyword::None))
                 } else if let Some(ty) = qual.and_then(|qual| {
                     self.s.act_unknown_specialization_type(qual, name, TagKeyword::None, loc)
                 }) {
