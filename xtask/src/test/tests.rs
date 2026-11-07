@@ -169,7 +169,9 @@ fn seed_corpus_exercises_every_directive() {
     let cases = discover::discover(&root, &seed_roots(&root), None).unwrap();
     let mut seen = BTreeSet::new();
     for c in &cases {
-        let src = std::fs::read_to_string(&c.path).unwrap();
+        // Lossy, as the runner reads tests: a lexer test may hold bytes
+        // that are not UTF-8 (lex.phases/invalid-utf8-in-comment-*).
+        let src = String::from_utf8_lossy(&std::fs::read(&c.path).unwrap()).into_owned();
         let s = directives::parse(&src, c.lang).unwrap();
         seen.insert(s.expect.as_str().to_owned());
         let mut flag = |cond: bool, name: &str| _ = cond && seen.insert(name.to_owned());

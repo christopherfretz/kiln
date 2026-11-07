@@ -455,6 +455,50 @@ impl Sema<'_, '_> {
         self.ovl.builtin_memo = memo;
     }
 
+    /// The built-in `operator?:` candidates for conditional arms of types
+    /// `types` ([over.built]/25-26; clang `addConditionalOperatorOverloads`
+    /// and `addGenericBinaryArithmeticOverloads` for `OO_Conditional`):
+    /// `T(T, T)` for each pointer, pointer-to-member and scoped
+    /// enumeration type `T` an arm converts to, and `LR(L, R)` for the
+    /// promoted arithmetic types. Argument 0 is `set.object`.
+    pub(crate) fn add_conditional_builtin_candidates(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        types: [QualType; 2],
+    ) {
+        let mut vis = Quals::CONST;
+        for &t in &types {
+            vis |= self.visible_vr(t);
+        }
+        let mut sets: Vec<TypeSet> = Vec::with_capacity(2);
+        for &t in &types {
+            let mut s = TypeSet::default();
+            self.add_types_converted_from(&mut s, t, true, false, vis);
+            sets.push(s);
+        }
+        if !sets.iter().any(|s| s.non_record) {
+            return;
+        }
+        let arith_or_enum = sets.iter().any(|s| s.arith_or_enum);
+        let mut memo = std::mem::take(&mut self.ovl.builtin_memo);
+        memo.clear();
+        let mut b = Builder { set, memo: &mut memo, vis, arith_or_enum, sets: &sets };
+        let mut added: Vec<QualType> = Vec::new();
+        for s in &sets {
+            let mut tys: Vec<QualType> = s.ptrs.iter().chain(&s.mptrs).copied().collect();
+            tys.extend(s.enums.iter().filter(|&&e| crate::conv::rank::is_scoped_enum(self, e)));
+            for t in tys {
+                if !added.contains(&t) {
+                    added.push(t);
+                    self.add_builtin(&mut b, &[t, t]);
+                }
+            }
+        }
+        let ar = self.arith_types();
+        self.arith_pairs(&mut b, &ar, 0);
+        self.ovl.builtin_memo = memo;
+    }
+
     /// Promoted arithmetic (or, from `first`, promoted integral) `L × R`
     /// (clang `addGenericBinaryArithmeticOverloads`,
     /// `addBinaryBitwiseArithmeticOverloads`).

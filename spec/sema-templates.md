@@ -672,6 +672,7 @@ All of these are built by sema actions, which compute dependence as in
 | `X<T>` where `X` is a class template | dependent `TemplateSpecialization` type |
 | `T(args)` / `T{args}` with dependent `T` | `CXXUnresolvedConstructExpr` (list flag) |
 | `int x(e)` with a type-dependent `e` | the initializer is kept as `ParenListExpr` |
+| `T x(e)`, `T x = e` with a type-dependent `e` whose type is already a class `U` (`U(a)` with `a` type-dependent, a `CXXUnresolvedConstructExpr`) and a non-dependent `T` | `e` is kept unconverted and the initialization runs at instantiation (clang `InitializationSequence`'s `DependentSequence`), so `T x(U(a))` is direct-initialization there and an explicit `T(const U&)` is a candidate (WP-787, `temp.dep.expr/direct-init-from-dependent-functional-cast-explicit-ctor.cpp`) |
 | a braced argument `{…}` inside a dependent `T(args)`, `new T(args)`, `x(args)` initializer or mem-initializer | kept as a dependent `InitListExpr` with its nested lists intact (`Sema::dependent_args`), not the flattened braced-argument placeholder (`temp.dep.expr/braced-arg-nested-list.cpp`, WP-418). A mem-initializer pattern is rebuilt at instantiation by `written_args` (WP-445) |
 | `X x(e)`, `X x = e`, `X x{e}` whose type `X` is a dependent class type (including the current instantiation, [temp.dep.type]/7) | the initializer is kept unconverted (a `ParenListExpr` for the parenthesized form) and initialization runs only at instantiation, as clang's `AddInitializerToDecl`; overload resolution against a dependent target would treat every candidate's conversion as an identity and report ambiguity (WP-276) |
 | `sizeof...(P)` | `SizeOfPackExpr` |
@@ -1529,7 +1530,23 @@ silently (`diag = None`) at those sites. S3O lists them.
    `DeducedArgs::expansions`), so `template <class... P> X<0, T<P...>>`
    is more specialized than `template <int R, class... P> X<R, T<P...>>`
    whatever the indices of the two `P`s (WP-292; test
-   `templates/spec/temp.spec.partial.order-pack-expansion.cpp`).
+   `templates/spec/temp.spec.partial.order-pack-expansion.cpp`). Each
+   direction also finishes the deduction ([temp.deduct.partial]/12 via
+   [temp.deduct.type]/1, clang `FinishTemplateArgumentDeduction`): the
+   other partial's arguments with the deduced values substituted must
+   equal the synthesized arguments, non-deduced contexts included, packs
+   compared element-wise and nothing converted, so `X<M, when<c>>` is not
+   at least as specialized as `X<T, when<f<T>::value>>` (WP-787,
+   Boost.Hana; `partial_args_match` with `ordering`,
+   `tests/conformance/temp.spec.partial.match/order-non-deduced-context-must-match.cpp`).
+   A request for the specialization while its partials are matched
+   (step 3 substituting a default template argument that names it, as
+   `X<T, enable_if_t<is_convertible_v<T, S>>>` with a constructor
+   template of `S` defaulting to `typename X<T>::type`) finds it
+   incomplete, a substitution failure in that SFINAE context, as clang's
+   `getPatternForClassTemplateSpecialization` does on
+   `isAlreadyInstantiating` (`InstState::selecting`; WP-787,
+   `tests/conformance/temp.inst/partial-match-recursive-request-incomplete.cpp`).
 5. If no unique best partial exists, the error is "ambiguous partial
    specializations of 'X<int *>'", with a note "partial specialization
    matches [with T = int]" for each candidate.
@@ -2082,7 +2099,13 @@ class name" at `B`
   `Record(get_class_spec(tmpl, level args))`. It always hits the map,
   because the specialization exists.
 - Inside a partial specialization, the injected-class-name is the
-  partial's own pattern args, as written.
+  partial's own pattern args, as written: the argument pack the
+  conversion formed for the primary's trailing parameter pack is spread
+  into its elements (`vd<int, T...>`, not `vd<int, <T...>>`), so a
+  substitution (a member alias template naming `vd`) converts them
+  against the primary's parameters again (`partial_injected_type`;
+  WP-787,
+  `tests/conformance/temp.local/partial-pack-injected-name-in-alias-template.cpp`).
 - As a nested-name-specifier (`A::*`, `&A::m`, `A::m`) it is the
   `InjectedClassName` type too, so member pointers formed from it are
   dependent and substituted (spec/sema.md §5.21, WP-608).
@@ -2270,6 +2293,12 @@ and the §6.2 tests.
   clang's error: "default member initializer for 'x' needed within
   definition of enclosing class 'A<int>' outside of member functions".
 - The frame is `DefaultMemberInitializerInstantiation`.
+- A braced NSDMI `T m{x}` whose pattern is already a construction (`x`
+  only value-dependent) is rebuilt from its braced list, as a variable's
+  initializer is (§5.4, `Substituter::initializer`), so it stays
+  direct-list-initialization and an explicit constructor is usable
+  (WP-787, Boost.Hana `Tracked tracker{i}`,
+  `tests/conformance/class.mem.general/default-member-initializer-direct-list-dependent.cpp`).
 - An NSDMI whose substitution fails makes its field invalid (clang
   `InstantiateInClassInitializer`), so a constructor or aggregate
   initialization that uses it reports nothing more (WP-220;
@@ -3637,8 +3666,14 @@ and without the undefined-template diagnostic, so its bases exist
 ([temp.inst]/2; clang's `isCompleteType` in `DeduceTemplateBases`; WP-682,
 `tests/conformance/temp.deduct.call/derived-base-instantiates-argument-class.cpp`,
 `libstdcxx-get-uninstantiated-tuple.cpp`: libstdc++ `std::get` on a
-`tuple&` that a qualified call reaches with no ADL to complete it). The
-success must be unique; otherwise the
+`tuple&` that a qualified call reaches with no ADL to complete it).
+`DerivedClass` is set only when P is a template-id or a pointer to one.
+Through a second pointer, `F<T>**` against `X<A, B>**` is a plain type
+match, so a mismatch neither tries the bases nor instantiates `X<A, B>`
+(clang's `isSimpleTemplateIdType` in `getTDF`; WP-787, Boost.Proto
+`template_arity`,
+`tests/conformance/temp.deduct.call/pointer-to-pointer-no-derived-class-deduction.cpp`).
+The success must be unique; otherwise the
 result is `MiscellaneousDeductionFailure` (clang). The template of `A` (or
 of a base) is the class template it is a specialization of: alias
 template sugar is looked through ([temp.alias]/2; clang's
@@ -4142,6 +4177,11 @@ guides.
    and the same holds for a non-type, template template or pack parameter
    (WP-779, `tests/conformance/temp.func.order/p12-undeduced-used-*.cpp`,
    clang 19 and 22 agree).
+   A pack named by the pattern of a `P` pack expansion that matches no
+   `A` element has a value: the empty pack ([temp.deduct.type]/9; clang
+   `PackDeductionScope::finish`; `DeducedArgs::empty_expanded`). So
+   `f(L<>, F&&)` is more specialized than `f(L<T...>, F&&)` (WP-787,
+   `tests/conformance/temp.func.order/p12-empty-expansion-deduces-empty-pack-run.cpp`).
    The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
 5. **Constraints.** If both directions succeed, the more constrained one
@@ -7696,8 +7736,20 @@ declarator scopes.**
   constructor, so `c ? B() : D()` with `D(B)` is a `B` (WP-669,
   tests/conformance/expr.cond/p4-base-not-converted-to-derived.cpp);
   /4.3.3, implicit conversion to the other's prvalue type. If both directions succeed, the result is
-  `sema_conditional_ambiguous`; if one does, it is applied. Gap: the
-  /6 overloaded-operator candidates are not tried.
+  `sema_conditional_ambiguous`; if one does, it is applied.
+- *[expr.cond]/6 built-in `operator?:` candidates* (clang
+  `FindConditionalOverload`; WP-787): when the arms still differ in type
+  after /4 and /5 and either is a class, overload resolution runs over the
+  built-in candidates of [over.built]/25-26 (`T(T, T)` for each pointer,
+  pointer-to-member and scoped enumeration type an arm converts to;
+  `LR(L, R)` for the promoted arithmetic types;
+  `add_conditional_builtin_candidates`). The best one converts both arms
+  to its parameter types and /7 continues, so two classes converting to
+  `bool` give `int`. No best candidate is
+  `sema_conditional_ambiguous_ovl`; no viable one leaves the arms to /7,
+  which reports them incompatible
+  (tests/conformance/expr.cond/p6-class-arms-builtin-overload-run.cpp,
+  `-errors.cpp`).
 - *[expr.cond]/7 class prvalue result*: when the arms are a class type
   (after /4) and not glvalues of the same category, each glvalue arm
   copy-initializes the prvalue result (clang `PerformCopyInitialization`

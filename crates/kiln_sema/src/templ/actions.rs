@@ -2347,10 +2347,27 @@ impl Sema<'_, '_> {
     }
 
     /// `X<A...>` for partial specialization `p`'s own arguments `A`, as
-    /// an `InjectedClassNameType` ([temp.local]/1).
+    /// an `InjectedClassNameType` ([temp.local]/1). The arguments are as
+    /// written (clang `getInjectedSpecializationType`): the converted
+    /// list's argument pack for the primary's trailing parameter pack
+    /// (`vd<int, T...>` for `template<class I, class... T> struct vd`)
+    /// is spread into its elements, so substituting the type converts
+    /// them against the primary's parameters again (WP-787, Boost.Fusion
+    /// `vector_data`).
     pub(crate) fn partial_injected_type(&mut self, p: DeclId) -> Option<QualType> {
         let (_, info) = self.ast.partial_spec_info(p)?;
-        let (tmpl, args) = (info.template, info.args);
+        let (tmpl, mut args) = (info.template, info.args);
+        let written = self.ast.types.args(args);
+        if written.iter().any(|a| matches!(a.view(), ArgView::Pack(_))) {
+            let mut flat = Vec::with_capacity(written.len());
+            for &a in written {
+                match a.view() {
+                    ArgView::Pack(l) => flat.extend_from_slice(self.ast.types.args(l)),
+                    _ => flat.push(a),
+                }
+            }
+            args = self.ast.types.arg_list(&flat);
+        }
         let name = self.template_name_for(tmpl);
         let spec = self.ast.types.template_specialization(name, args, None, false);
         Some(self.ast.types.injected_class_name(p, spec.ty()).into())
