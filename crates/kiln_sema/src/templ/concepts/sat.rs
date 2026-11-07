@@ -812,6 +812,16 @@ impl Substituter<'_, '_, '_> {
         }
         let nl = self.args(l, loc)?;
         let at = self.sema.ast.exprs.get(e).loc();
-        self.sema.build_concept_id(c, nl, &[], at).map_err(|()| crate::templ::subst::SubstFail)
+        let r = self
+            .sema
+            .build_concept_id(c, nl, &[], at)
+            .map_err(|()| crate::templ::subst::SubstFail)?;
+        // The written qualifier stays with the concept-id (it prints in
+        // a failed `static_assert`'s requirement).
+        if let Some(&q) = self.sema.ast.templates.expr_nns.get(e) {
+            let q = self.nns(q, loc)?;
+            self.sema.set_template_id_qualifier(r, q);
+        }
+        Ok(r)
     }
 }

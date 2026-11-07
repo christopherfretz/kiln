@@ -2818,6 +2818,12 @@ and returns the scope it names:
     parameter head prints its canonical replacement without scope
     (`T::y` with `T = ns::S` prints `S::y`, clang's
     `NestedNameSpecifier::print` `SuppressScope`) (WP-302).
+  - A concept-id prints as clang's `ConceptReference::print`: its
+    qualifier as written (kept through instantiation), the concept's
+    name and all its converted arguments, types canonical
+    (`!merror<err<why>>` for `!merror<completions>` with a local alias
+    `completions`; WP-789). Test:
+    `dcl.pre/static-assert-concept-id-requirement.cpp`.
   - The printed names are the substituted ones (clang's
     `FailedBooleanConditionPrinterHelper`, WP-303): a qualified
     `DeclRefExpr` prints its nested-name-specifier with the last type
