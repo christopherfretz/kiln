@@ -545,6 +545,12 @@ pub struct Sema<'a, 'sm> {
     /// compares instead ([temp.over.link]/6; clang's
     /// `AreConstraintExpressionsEqual`, WP-446).
     pub(crate) friend_cmp_constraints: kiln_source::fx::FxHashMap<ExprId, ExprId>,
+    /// While a friend function template of a class template is
+    /// redeclared: one of its constraints names an enclosing template's
+    /// parameter, so it declares a function template of its own, never
+    /// one of another scope ([temp.friend]/9; clang's
+    /// `FriendConstraintsDependOnEnclosingTemplate`, WP-726).
+    pub(crate) friend_template_apart: bool,
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).
     pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
@@ -1130,6 +1136,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
             friend_cmp_constraints: kiln_source::fx::FxHashMap::default(),
+            friend_template_apart: false,
             constinit_locs: kiln_source::fx::FxHashMap::default(),
             ref_usable: kiln_source::fx::FxHashMap::default(),
             auto_referent: kiln_source::fx::FxHashMap::default(),

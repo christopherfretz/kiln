@@ -434,6 +434,12 @@ impl Cg<'_> {
                         let bq = ast.exprs.get(base).ty();
                         V::C(self.const_scalar_value(c, bq)?)
                     }
+                    // A glvalue base is loaded from its address (a call
+                    // returning `V&` yields the address as its scalar).
+                    None if self.is_glvalue(base) => {
+                        let lv = self.emit_lvalue(base)?;
+                        self.load_lv(lv)
+                    }
                     None => self.emit_scalar(base)?,
                 };
                 let i = self.emit_scalar(idx)?;

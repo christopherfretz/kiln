@@ -173,7 +173,13 @@ clang's `Parser` over `Preprocessor::Lex`.
   `Sema::inherited_injected_class`, WP-686). As a nested-name-specifier
   component (`D::B::m`, also `W::Base::m` through a dependent base)
   it names the base, so `D::B::m` is the base's member (WP-714;
-  `temp.local/p2-base-injected-name-nested-name-specifier-run.cpp`).
+  `temp.local/p2-base-injected-name-nested-name-specifier-run.cpp`). An
+  unqualified lookup that finds the injected-class-names of several
+  specializations of one class template through different bases names
+  that template when `<` follows, and is ambiguous otherwise (clang's
+  "found in multiple base classes of different types"; [temp.local]/4,
+  `Sema::ambiguous_injected_class`, WP-726;
+  `temp.local/p4-injected-names-same-template.cpp`).
   Dependent qualified names follow clang's `isCXXDeclarationSpecifier`
   (WP-291). A dependent `N::m` that the scan cannot classify is a
   decl-specifier when an identifier or another decl-specifier follows it
@@ -534,6 +540,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   (`annotate_template_scope`, `in_class_template_pattern`; WP-724), so
   `sizeof(rr<decltype(*p)>::type::value_type)` takes a type-id
   (`tests/conformance/dcl.ambig.res/sizeof-member-typedef-of-specialization-run.cpp`).
+- When `m` in `X<A>::m::name` is a typedef member of `X`'s primary
+  pattern but `X<A>` has an explicit specialization, the pattern's `m`
+  (`void`, or dependent on the parameters) says nothing about the
+  specialization's: unless the pattern is the current instantiation, the
+  qualifier is an unresolved specialization scope and is parsed ahead for
+  real (`annotate_template_scope`), so `v<traits<clk>::spec::fine_clock>`
+  takes a type-id (folly's `clock_traits<steady_clock>::spec`, WP-726;
+  `tests/conformance/temp.expl.spec/member-typedef-through-specialization-in-template-arg.cpp`).
 - `skip_template_args(i)` memoizes its result by token index `i` in
   `Parser::targs_memo`.
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp

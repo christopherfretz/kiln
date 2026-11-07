@@ -146,7 +146,12 @@ reverses segment (1). Verified: `void f(int); void f(double); void(*p)(char)
 
 ### 2.2 Argument-dependent lookup (`adl.rs`, [basic.lookup.argdep])
 `adl_lookup(name, args, out)`. **Suppressed** (clang
-`UseArgumentDependentLookup`) for qualified or parenthesized callees,
+`UseArgumentDependentLookup`) for qualified or parenthesized callees
+(a parenthesized name of a function template too: its
+`UnresolvedLookupExpr` is built without ADL, so `(f)(t)` in a template
+does not find an associated namespace's `f` at instantiation; boost's
+`(iterator_arrow_result)(temp)`, WP-726,
+`tests/conformance/basic.lookup.argdep/parenthesized-function-template-no-adl.cpp`),
 implicit builtins, or when ordinary lookup found a class member, a
 block-scope function declaration (not a using-declaration), or anything
 that is not a function or function template. The suppression holds for a
@@ -378,7 +383,12 @@ reserves these.
 `resolve_address_of_overloaded(ule, target, complain) -> Option<ExprId>`.
 Targets: an initialized object or reference, assignment LHS, a parameter
 (during ICS a ULE argument converts by [over.over]), a cast, a non-type
-template parameter, a return. A non-template matches when its type equals
+template parameter, a return. A class type, or a reference to one, is not
+a target: when a converting constructor takes the set (`dynamic(ObjectMaker
+(*)())`), the set is that constructor's argument
+(`overload_set_converts_to_class`, so `const dynamic& v = dynamic::object`
+binds a temporary); otherwise the set is resolved against the class type
+and finds no match, as in clang. A non-template matches when its type equals
 the target's function type after function-pointer conversion; non-static
 members only through `&X::f` to a member pointer; templates via
 `deduce_address_candidate`. Then: if any non-template matches, drop
@@ -878,7 +888,11 @@ these for non-class types; 068b adds the class-member and placement paths.
 Candidates are the conversion functions (templates via
 `deduce_conversion_candidate`) of the class and bases, not hidden; hiding
 is by converted-to type, so lookup keys on the `DeclName` conversion tag
-plus canonical type. `explicit` ones apply to direct-init, explicit casts
+plus canonical type. A conversion function a using-declaration names in
+the class (`using B::operator T;`) is a candidate found as its shadow, so
+its access is the using-declaration's ([namespace.udecl]/1, /19): a
+private base's conversion made public that way is accessible (WP-726,
+`tests/conformance/namespace.udecl/conversion-function-via-using*.cpp`). `explicit` ones apply to direct-init, explicit casts
 and contextual bool. `contextually_convert_to_bool(e)` becomes
 `resolve_conversion(bool, e, ToNonClass, ALLOW_EXPLICIT)` (as `bool t(e)`):
 `if (w)` accepts `explicit operator bool`, `bool k = w;` is "no viable

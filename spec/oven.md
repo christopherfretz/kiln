@@ -884,7 +884,11 @@ literal is one instruction and one step, not an interpreted loop.
   width (`Target::max_atomic_inline_bytes`: aarch64 16, x86_64 8 bytes) is
   lock-free for the c11 form, a null object, a single byte, or an object
   whose pointee alignment is at least the size (the pointee as written:
-  an `aligned` typedef's alignment counts, `typedef_align`; WP-335); otherwise
+  an `aligned` typedef's alignment counts, `typedef_align`; WP-335), or
+  (WP-726) an object argument that is an integer cast to a pointer whose
+  value is a multiple of the size (clang 19 folds the argument with
+  `EvaluateAsRValue`: libstdc++'s `reinterpret_cast<void *>(-_S_alignment)`
+  in `std::atomic<T>::is_lock_free`); otherwise
   `always_lock_free` is false and `is_lock_free` is not a constant.
   `NonAtomicToAtomic`/`AtomicToNonAtomic` casts are no-ops, also when
   they initialize an object in place: `_Atomic(S)` of class type `S` is

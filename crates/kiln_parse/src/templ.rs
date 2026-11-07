@@ -1058,6 +1058,18 @@ impl Parser<'_, '_> {
     /// Returns the arguments and the `<` and `>` locations; `None` after
     /// a syntax error, recovered past the list.
     pub(crate) fn parse_template_arg_list(&mut self) -> Option<(Vec<TemplateArg>, Loc, Loc)> {
+        // The arguments of a template-id in a declarator qualifier are not
+        // the scope being entered: in `F<T, typename X<T>::type>::f`,
+        // `X<T>` is an ordinary dependent specialization, not the current
+        // instantiation of `X` ([temp.dep.type]/1; clang parses template
+        // arguments with `EnteringContext` false).
+        let saved = self.s.set_entering_context(false);
+        let r = self.parse_template_arg_list_in();
+        self.s.set_entering_context(saved);
+        r
+    }
+
+    fn parse_template_arg_list_in(&mut self) -> Option<(Vec<TemplateArg>, Loc, Loc)> {
         if !self.stack_ok() {
             return None;
         }

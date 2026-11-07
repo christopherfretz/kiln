@@ -634,6 +634,11 @@ impl Sema<'_, '_> {
         let n = self.template_params(b).len();
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(depth, n);
+        // [temp.deduct.type]/9: a pack expansion in `pa` (`L<I...>`, of
+        // the other template's own pack) is deduced as a whole by one in
+        // `pb`, as for class template partial specializations; the two
+        // packs need not share an index.
+        d.expansions = true;
         let mut ok = true;
         let mut ai = 0;
         for (pi, p) in pb.iter().enumerate() {
@@ -665,8 +670,54 @@ impl Sema<'_, '_> {
         if ok && ai < pa.len() && !(ai + 1 == pa.len() && pa[ai].pack) {
             ok = false;
         }
+        if ok && d.first_undeduced().is_some() && !self.undeduced_params_unused(b, &d, pb) {
+            ok = false;
+        }
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
         ok && !failed
+    }
+}
+
+impl Sema<'_, '_> {
+    /// [temp.deduct.partial]/12: a template parameter of `b` left without
+    /// a value fails the deduction when the types `pb` compared name it,
+    /// a non-deduced context included (clang `MarkUsedTemplateParameters`
+    /// without `OnlyDeduced`; fmt's `to_pointer(OutputIt, size_t)` against
+    /// `to_pointer(buffer_appender<T>, size_t)` with `T` explicit). Probed
+    /// by substituting `int` for each undeduced type parameter and every
+    /// other parameter for itself: a type that changes or fails names one.
+    /// With a parameter pack in `b`, or an undeduced non-type or template
+    /// parameter, the parameters count as unused (WP-726).
+    fn undeduced_params_unused(&mut self, b: DeclId, d: &DeducedArgs, pb: &[OrderingType]) -> bool {
+        let params = self.template_params(b);
+        if params.iter().any(|&p| self.ast.template_parm(p).is_some_and(|i| i.pack)) {
+            return true;
+        }
+        let mut args = Vec::with_capacity(params.len());
+        for (i, &p) in params.iter().enumerate() {
+            let undeduced = d.args.get(i).is_none_or(|a| matches!(a.view(), ArgView::Null));
+            if !undeduced {
+                args.push(self.template_param_arg(p));
+            } else if self.kind_of(p) == DeclKind::TemplateTypeParm {
+                args.push(TemplateArg::ty(QualType::INT));
+            } else {
+                return true;
+            }
+        }
+        let list = self.ast.types.arg_list(&args);
+        let mut levels = Self::outer_levels(b, d.depth);
+        levels.push(list, b, LevelMode::Substitute);
+        let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
+        let mut unused = true;
+        for x in pb {
+            let r = Substituter::new(self, &levels).ty(x.ty, Loc::INVALID);
+            if r.map_or(true, |t| self.ast.types.canonical(t) != self.ast.types.canonical(x.ty)) {
+                unused = false;
+                break;
+            }
+        }
+        self.ast.templates.dependent_depth = saved;
+        unused
     }
 }
 

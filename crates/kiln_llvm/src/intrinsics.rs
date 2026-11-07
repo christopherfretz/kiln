@@ -273,6 +273,12 @@ pub fn memcpy(m: &mut Module, len: TypeId) -> FuncId {
     mem_transfer(m, "llvm.memcpy", len, true)
 }
 
+/// `void @llvm.memcpy.inline.p0.p0.iN(ptr dst, ptr src, iN len, i1
+/// volatile)`: a `memcpy` never lowered to a library call.
+pub fn memcpy_inline(m: &mut Module, len: TypeId) -> FuncId {
+    mem_transfer(m, "llvm.memcpy.inline", len, true)
+}
+
 /// `void @llvm.memmove.p0.p0.iN(ptr dst, ptr src, iN len, i1 volatile)`.
 pub fn memmove(m: &mut Module, len: TypeId) -> FuncId {
     mem_transfer(m, "llvm.memmove", len, false)

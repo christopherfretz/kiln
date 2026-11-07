@@ -76,6 +76,8 @@ if [ -n "$INSTALL" ]; then
   P_CONFIGURE=("${P_INSTALL_CONFIGURE[@]}" "-DCMAKE_INSTALL_PREFIX=$INSTALL")
   P_BUILD_TARGETS=()
 fi
+# `@OSS@` in a configure flag is this directory (a project shim, WP-726).
+P_CONFIGURE=("${P_CONFIGURE[@]//@OSS@/$KILN/scripts/oss}")
 [ ${#PREFIXES[@]} -eq 0 ] || P_CONFIGURE+=("-DCMAKE_PREFIX_PATH=$(IFS=';'; echo "${PREFIXES[*]}")")
 
 SRC="$OSS/src/$PROJECT"
