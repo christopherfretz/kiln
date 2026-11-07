@@ -337,10 +337,9 @@ pub fn type_char_literal(
 #[must_use]
 pub fn string_literal_elem(std: kiln_lex::Std, encoding: Encoding) -> QualType {
     match encoding {
-        Encoding::Ordinary => QualType::CHAR,
-        Encoding::Wide => QualType::WCHAR,
         Encoding::Utf8 if std >= kiln_lex::Std::Cxx20 => QualType::CHAR8,
-        Encoding::Utf8 => QualType::CHAR,
+        Encoding::Ordinary | Encoding::Utf8 => QualType::CHAR,
+        Encoding::Wide => QualType::WCHAR,
         Encoding::Utf16 => QualType::CHAR16,
         Encoding::Utf32 => QualType::CHAR32,
     }

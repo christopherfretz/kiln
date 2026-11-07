@@ -17,8 +17,8 @@ use kiln_source::symbol::Symbol;
 
 use crate::expr::prec;
 use crate::keywords::Kw;
-use crate::tentative::TypeIdContext;
 use crate::parser::Parser;
+use crate::tentative::TypeIdContext;
 
 /// What one `[[...]]` has held so far: an annotation-list mixes with
 /// neither attributes nor a using-prefix (reported once).
