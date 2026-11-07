@@ -989,6 +989,32 @@ impl Sema<'_, '_> {
                 }
             }
             if !matches!(d.args[j].view(), ArgView::Null) {
+                // [temp.arg.template]/3: a deduced template template
+                // argument must match its parameter (clang
+                // `ConvertDeducedTemplateArgument`).
+                if self.kind_of(p) == DeclKind::TemplateTemplateParm {
+                    let prior: Vec<TemplateArg> = d.args[..=j].to_vec();
+                    let shown = self.ast.types.arg_list(&prior);
+                    let r = self.in_sfinae_held(
+                        FrameKind::DeducedArgSubstitution,
+                        ft,
+                        Some(shown),
+                        loc,
+                        &mut held,
+                        |s| s.check_deduced_template_template_arg(ft, depth, p, j, &prior, loc),
+                    );
+                    match r {
+                        None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
+                        Some((true, Ok(()))) => {}
+                        Some((_, failed)) => {
+                            // Shown without the deduced arguments, as
+                            // clang does.
+                            let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
+                            f.diag = failed.err().flatten();
+                            return Err(f);
+                        }
+                    }
+                }
                 continue;
             }
             if is_pack(self, p) {

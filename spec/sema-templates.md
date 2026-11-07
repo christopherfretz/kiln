@@ -1299,6 +1299,16 @@ silently (`diag = None`) at those sites. S3O lists them.
    shapes are computed when the partial is declared.
 3. For each partial `p` that remains:
    - deduce `p.params` from `(p.args, A)` with `deduce_args` (§6.2);
+   - check each deduced template template argument against its
+     parameter ([temp.arg.template]/3, §3.2 rules, in the SFINAE frame):
+     a mismatch fails the deduction, as clang's
+     `ConvertDeducedTemplateArgument` does, so `T<Ts...>` for
+     `template<class...> class T` does not match `iseq<int>` of
+     `template<class T, T...>` and cannot make `iseq<T, Is...>`
+     ambiguous; a function template's deduced template template
+     arguments are checked the same way after deduction, a failure being
+     a substitution failure shown without the deduced arguments (WP-669,
+     `tests/conformance/temp.arg.template/p3-deduced-argument-checked.cpp`);
    - finish the deduction: substitute the deduced args into `p.args` and
      require canonical equality with `A`;
    - check `p`'s associated constraints (§8). For a class template, their
