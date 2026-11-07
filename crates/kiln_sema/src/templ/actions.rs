@@ -99,6 +99,30 @@ impl Sema<'_, '_> {
         Some(self.act_dependent_name_at(nns, name, None, kw, loc))
     }
 
+    /// Whether [`Sema::unknown_specialization_nns`] gives `q` a specifier.
+    pub fn can_name_unknown_specialization(&self, q: crate::using::Qualifier) -> bool {
+        self.is_dependent_ctx(q.ctx)
+            || (self.kind_of(q.ctx) == DeclKind::CXXRecord && self.has_dependent_bases(q.ctx))
+            || (self.is_unentered_dependent_class(q.ctx) && self.ast.definition(q.ctx).is_none())
+    }
+
+    /// `q::template name<targs>` when lookup found nothing in `q` and `q`
+    /// can name an unknown specialization ([temp.dep.type]/6; the current
+    /// instantiation with a dependent base, `D::template f<U>(x)`): a
+    /// `DependentScopeDeclRefExpr` looked up at instantiation (WP-803).
+    /// `None` otherwise.
+    pub fn act_unknown_specialization_template_ref(
+        &mut self,
+        q: crate::using::Qualifier,
+        name: DeclName,
+        targs: Option<ArgListId>,
+        begin: Loc,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        let nns = self.unknown_specialization_nns(q)?;
+        Some(self.act_dependent_scope_ref(nns, name, targs, begin, loc))
+    }
+
     /// The specifier under which `q::name` names a member of an unknown
     /// specialization when lookup found nothing in `q` ([temp.dep.type]/6):
     /// `q`'s own when it is dependent, the injected-class-name type's when

@@ -2056,6 +2056,26 @@ impl Parser<'_, '_> {
             return Some(e);
         }
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
+        // `D::template f<U>(x)` with `f` in a dependent base of the
+        // current instantiation `D` ([temp.dep.type]/6; WP-803).
+        if let Some(q) = qual
+            && template_kw
+            && class == NameClass::Undeclared
+            && self.at(Punct::Less)
+            && self.s.can_name_unknown_specialization(q)
+        {
+            let (args, _, _) = self.parse_template_arg_list()?;
+            let targs = Some(self.s.ast.types.arg_list(&args));
+            let e = self.s.act_unknown_specialization_template_ref(
+                q,
+                DeclName::ident(name),
+                targs,
+                begin,
+                nl,
+            )?;
+            self.s.set_template_kw(e, template_loc);
+            return Some(e);
+        }
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
             return Some(self.template_id_expr(qual, (class, name, nl), begin, template_loc));
         }

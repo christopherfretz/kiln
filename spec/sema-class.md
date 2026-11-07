@@ -1247,7 +1247,9 @@ up in the instantiation (`no type named 'Foo' in 'D7<int>'`). The same
 function makes `typename D::X` dependent for such a qualifier
 ([temp.res.general]/5), and a base-specifier `N::B` whose class-name lookup
 found no type (`N` a member class of the current instantiation with a
-dependent base; WP-803). A qualified id naming no type in a non-dependent
+dependent base; WP-803). An id-expression `D::template f<U>` whose lookup in
+such a qualifier found nothing is a `DependentScopeDeclRefExpr`
+(`act_unknown_specialization_template_ref`; WP-803). A qualified id naming no type in a non-dependent
 qualifier is still `qualified member initializers` unsupported. A
 mem-initializer that fails in an instantiation (its substitution, or its
 initialization: `decltype(t)(t)` naming a reference type) makes the
