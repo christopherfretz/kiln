@@ -1838,7 +1838,7 @@ impl Sema<'_, '_> {
                 && found.decls.iter().any(|&x| self.member_via_dependent_base(x))
                 && let Some((this_ty, _)) = self.this_class()
             {
-                return self.dependent_implicit_member(this_ty, name, nns, loc);
+                return self.dependent_implicit_set(this_ty, &found.decls, name, nns, loc);
             }
             if found.naming.is_some() {
                 // A member template: the member overload set (an
@@ -1888,7 +1888,7 @@ impl Sema<'_, '_> {
             && valid.iter().any(|&x| self.member_via_dependent_base(x))
             && let Some((this_ty, _)) = self.this_class()
         {
-            let e = self.dependent_implicit_member(this_ty, name, nns, loc);
+            let e = self.dependent_implicit_set(this_ty, &valid, name, nns, loc);
             if let [d] = valid[..] {
                 self.note_qualified_dependent_member(e, d, nns);
             }
@@ -2060,7 +2060,9 @@ impl Sema<'_, '_> {
                 return None;
             }
             let this_ty = self.dependent_implicit_this(first)?;
-            return Some(self.dependent_implicit_member(this_ty, name, nns, loc));
+            // With a static candidate too, `this` is captured only if
+            // an instance member wins at instantiation.
+            return Some(self.dependent_implicit_set(this_ty, valid, name, nns, loc));
         };
         let (this_ty, _) = self.this_class()?;
         let mut decls = Vec::with_capacity(valid.len());
@@ -2076,7 +2078,7 @@ impl Sema<'_, '_> {
         let all_instance =
             decls.iter().all(|&d| self.is_instance_member(self.templated_or_self(d)));
         let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
-        if all_instance || self.ast.types.is_dependent(obj_ty) {
+        if all_instance {
             self.note_this_use(loc);
         }
         let this = self.builder().this_expr(this_ty, true, loc);
