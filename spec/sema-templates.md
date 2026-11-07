@@ -797,7 +797,10 @@ non-identifier name; parse.md §2): `template int t<char>(1);` and
 **Deduction guide.** At namespace scope, a declarator whose name is a
 class template visible in scope, followed by a balanced `( … )` and then
 `->`. The parser detects it with a token scan, without tentative sema
-actions. It parses `[explicit-specifier] template-name (params) ->
+actions, and only when the decl-specifier-seq has no type specifier
+(`Declarator::typed`; clang's `AllowDeductionGuide`): `auto mk(F) -> T&`
+declares a function named like a visible class template `mk` (WP-789,
+`temp.deduct.guide/typed-function-named-like-class-template-run.cpp`). It parses `[explicit-specifier] template-name (params) ->
 simple-template-id ;` and calls `act_deduction_guide`.
 
 **Function template partial specialization** (`template<class T> void
@@ -2107,7 +2110,12 @@ class name" at `B`
   `temp.friend/p9-constraint-on-enclosing-distinct.cpp`). The constraint
   may be a template parameter's type-constraint
   (`template<std::convertible_to<T> U>`) or name a level further out
-  (a member class template of a class template). A non-template friend
+  (a member class template of a class template), or name a member class
+  of the enclosing template, which substitutes to another class (the
+  injected-class-name of `outer<C>::type`, defined in the class or out
+  of line; WP-789,
+  `temp.friend/constrained-friend-of-member-class-of-template-run.cpp`).
+  A non-template friend
   with a requires-clause is apart the same way (the paragraph's "such a
   constrained friend function"; `friend_decl` sets the flag from the
   pattern's trailing requires-clause), so `friend int f(Base) requires

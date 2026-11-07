@@ -2644,6 +2644,7 @@ impl Parser<'_, '_> {
             } else if let Some(n) = self.ident() {
                 let ctor = self.names_constructor(n, last_qual, d.ctx);
                 let guide = if ctor
+                    || d.typed
                     || qual.is_some()
                     || !matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 {
@@ -3603,6 +3604,7 @@ impl Parser<'_, '_> {
         let mut d = Declarator::new(ctx, self.loc());
         d.direct_init = Self::may_have_direct_init(ctx, ds.storage);
         d.typedef = ds.is_typedef();
+        d.typed = ds.has_type_specifier();
         d
     }
 
