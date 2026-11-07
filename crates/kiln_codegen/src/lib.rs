@@ -86,6 +86,13 @@ pub struct CodegenOptions {
     /// C++ exceptions are enabled (`-fexceptions`, the default). When
     /// disabled every function is `nounwind`.
     pub exceptions: bool,
+    /// RTTI is enabled (`-frtti`, the default). When disabled (`-fno-rtti`)
+    /// a vtable's RTTI slot is null and `type_info` objects are emitted
+    /// only for exception handling, as `linkonce_odr` definitions in every
+    /// TU that needs one, never as references to a key-function TU (clang
+    /// `shouldEmitRTTI`, `ShouldUseExternalRTTIDescriptor`,
+    /// `getTypeInfoLinkage`; spec/codegen.md "RTTI").
+    pub rtti: bool,
     /// The `llvm.ident` string; empty for none.
     pub ident: String,
     /// `AArch64` only: `+outline-atomics` in the functions'
@@ -476,6 +483,7 @@ impl Default for CodegenOptions {
         CodegenOptions {
             source_filename: String::new(),
             exceptions: true,
+            rtti: true,
             ident: String::new(),
             outline_atomics: true,
             target_features: Vec::new(),
