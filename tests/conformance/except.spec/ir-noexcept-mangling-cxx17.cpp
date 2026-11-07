@@ -4,8 +4,6 @@
 // function pointer, reference or template argument type, deduced,
 // explicit or `decltype(&f)`; `t(&f)` and `t(&g)` are two
 // specializations. Matches clang (WP-751).
-// min-oracle 22: below C++20 clang 19 emits no empty `!llvm.linker.options`
-// and `-fclang-compat=19` codegen does.
 //@ expect: ir
 //@ min-oracle: 22
 //@ std: c++17
