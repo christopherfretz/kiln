@@ -7074,7 +7074,14 @@ explicit specialization errors remain. The blockers are:
   templates ([over.match.oper]/3.4, `add_rewritten_template`,
   `more_specialized_operator`), `&f` deduction notes (`address.rs`), and
   dependent member template-ids (`act_on_template_member`,
-  `act_on_member_template_args`).
+  `act_on_member_template_args`). A member template-id with dependent
+  arguments is a dependent member access again at instantiation. It keeps
+  the access's nested-name-specifier, so `this->Base::g<T>()` looks `g`
+  up in `Base` even when the derived class declares a non-template `g`
+  (WP-801,
+  `tests/conformance/temp.names/p3-qualified-member-template-id-dependent-args-run.cpp`).
+  Gap: `(*this).Base::g<T>()` does not parse `<` as a template argument
+  list, because the dereferenced `this` is a dependent type.
 - **`std::initializer_list`** ([dcl.init.list]/5): `CXXStdInitializerListExpr`
   over a `MaterializeTemporaryExpr 'const E[N]'`; `init.rs`
   `std_initializer_list_init`, `init_list_ctor_init` ([over.match.list]

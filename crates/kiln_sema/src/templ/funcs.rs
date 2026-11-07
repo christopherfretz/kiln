@@ -1511,6 +1511,10 @@ impl Sema<'_, '_> {
         // `p->f<T>` through `operator->` ([over.ref]/1): the chain is
         // formed again from the class object at instantiation.
         let base = if m.arrow { self.arrow_chain_object(m.base) } else { m.base };
-        self.builder().dependent_member(Some(base), m.arrow, m.name, false, None, Some(targs), loc)
+        // `this->Base::g<T>()` keeps its qualifier: at instantiation `g`
+        // is looked up in `Base`, not in the object's class, which may
+        // declare a non-template `g` of its own ([basic.lookup.qual]/1;
+        // lld's `ObjFile<ELFT>::getObj`).
+        self.builder().dependent_member(Some(base), m.arrow, m.name, false, m.nns, Some(targs), loc)
     }
 }
