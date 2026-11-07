@@ -17,6 +17,10 @@ use kiln_llvm::{ConstData, GepFlags, IntValue, TypeId as LTy, Value};
 use crate::fold::{is_local, is_static_local};
 use crate::module::{Cg, R, err, gval};
 
+/// What [`Cg::enter_default_init`] replaced.
+pub(crate) type DefaultInitSave =
+    (Option<ExprId>, Option<(Option<crate::fir::V>, Option<DeclId>)>);
+
 impl Cg<'_> {
     /// Lowers the folded constant `c` of type `ty` in its in-memory form
     /// (clang `tryEmitPrivateForMemory`); `e` is the expression it was
@@ -323,6 +327,29 @@ impl Cg<'_> {
             self.srcloc = Some(e);
         }
         saved
+    }
+
+    /// [`Self::enter_default_arg`] for a `CXXDefaultInitExpr`, whose
+    /// `this` is the aggregate being initialized when one is
+    /// (`FuncState::default_init_this`; clang `CXXDefaultInitExprScope`).
+    pub(crate) fn enter_default_init(&mut self, e: ExprId) -> DefaultInitSave {
+        let src = self.enter_default_arg(e);
+        let this = self.f.default_init_this.map(|(v, rd)| {
+            let old = (self.f.this, self.f.this_class);
+            self.f.this = Some(v);
+            self.f.this_class = Some(rd);
+            old
+        });
+        (src, this)
+    }
+
+    /// Ends [`Self::enter_default_init`].
+    pub(crate) fn exit_default_init(&mut self, s: DefaultInitSave) {
+        self.srcloc = s.0;
+        if let Some((this, class)) = s.1 {
+            self.f.this = this;
+            self.f.this_class = class;
+        }
     }
 
     /// The global holding string literal `lit`, terminator included.

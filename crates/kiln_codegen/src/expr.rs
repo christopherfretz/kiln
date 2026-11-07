@@ -230,9 +230,9 @@ impl Cg<'_> {
                 let Some(init) = self.default_member_init(e) else {
                     return err(self.loc_of(e), "default member initializer not yet parsed");
                 };
-                let saved = self.enter_default_arg(e);
+                let saved = self.enter_default_init(e);
                 let r = self.emit_scalar_opt(init);
-                self.srcloc = saved;
+                self.exit_default_init(saved);
                 return r;
             }
             // A glvalue's value is the address it designates (WP-640).
@@ -2222,9 +2222,9 @@ impl Cg<'_> {
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
                 Some(init) => {
-                    let saved = self.enter_default_arg(e);
+                    let saved = self.enter_default_init(e);
                     let r = self.emit_lvalue(init);
-                    self.srcloc = saved;
+                    self.exit_default_init(saved);
                     r
                 }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
@@ -3878,9 +3878,9 @@ impl Cg<'_> {
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
                 Some(init) => {
-                    let saved = self.enter_default_arg(e);
+                    let saved = self.enter_default_init(e);
                     let r = self.agg_visit(init, dest, zeroed);
-                    self.srcloc = saved;
+                    self.exit_default_init(saved);
                     r
                 }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
@@ -4247,11 +4247,19 @@ impl Cg<'_> {
     }
 
     fn record_init(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
-        let ast = self.ast;
-        let q = ast.exprs.get(e).ty();
-        let Some(rd) = ast.types.as_record(q) else {
+        let Some(rd) = self.ast.types.as_record(self.ast.exprs.get(e).ty()) else {
             return err(self.loc_of(e), "initializer list of non-aggregate type");
         };
+        // clang `VisitCXXParenListOrInitListExpr`'s `FieldConstructionScope`.
+        let saved = self.f.default_init_this.replace((dest.v, rd));
+        let r = self.record_init_fields(e, rd, dest, zeroed);
+        self.f.default_init_this = saved;
+        r
+    }
+
+    /// [`Self::record_init`] of class `rd`.
+    fn record_init_fields(&mut self, e: ExprId, rd: DeclId, dest: Addr, zeroed: bool) -> R<()> {
+        let ast = self.ast;
         let (inits, _, union_field) = agg_init_parts(ast, e);
         let is_union = self.tys.record(rd).is_union;
         let rty = self.record_ty(rd);
