@@ -9075,12 +9075,18 @@ impl Sema<'_, '_> {
     /// `H<S> : B<S>`), in declaration order; the first base whose pattern
     /// declares `name` decides. `None` when none does (or past a depth of
     /// 16, for a base chain such as `A<T> : A<T*>`).
-    fn classify_in_dependent_bases(&self, p: DeclId, name: Symbol, depth: u32) -> Option<NameClass> {
+    fn classify_in_dependent_bases(
+        &self,
+        p: DeclId,
+        name: Symbol,
+        depth: u32,
+    ) -> Option<NameClass> {
         if depth >= 16 {
             return None;
         }
         let def = self.ast.definition(p)?;
-        let bases: Vec<QualType> = self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
+        let bases: Vec<QualType> =
+            self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
         bases.into_iter().filter(|&t| self.is_dependent_type(t)).find_map(|mut ty| {
             for _ in 0..64 {
                 ty = match self.ast.types.view(ty.ty()) {

@@ -258,7 +258,9 @@ impl Sema<'_, '_> {
                         .and_then(|r| self.ast.definition(r))
                         .and_then(|r| self.ast.destructor(r)),
                 ),
-                ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr => {
+                ExprKind::CallExpr
+                | ExprKind::CXXOperatorCallExpr
+                | ExprKind::CXXMemberCallExpr => {
                     let c = self.ignore_paren_imp_casts(exprs.callee(x));
                     if matches!(exprs.get(c).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
                         && self.kind_of(exprs.decl(c)).is_function()
