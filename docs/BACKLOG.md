@@ -716,6 +716,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-691 | M8 wave 2: simdjson v4.2.4 through its own CMake build + tests with kiln++ via scripts/oss (docs/status/oss/simdjson.md) | WP-666 | done (PR #318; simdjson v4.2.4 at 116/117 tests vs clang 117/117; 3 fixes; follow-ups WP-696/697) |
 | WP-683 | M8 wave 1: magic_enum v0.9.7 + doctest v2.5.3 + tl_expected v1.3.1 through their own builds + tests with kiln++ via scripts/oss (one status page each) | WP-666 | done (PR #315; magic_enum 0.9.7, doctest 2.5.3, tl_expected 1.3.1 at parity; 5 fixes; follow-ups WP-688/689) |
 | WP-704 | M8 wave 2: cereal v1.3.2 through scripts/oss (parity vs clang-19) | WP-666 | done (PR #323; cereal v1.3.2 at parity, 39/39 TUs, 40/40 ctest; 3 fixes: base-specialization injected-class-name as type, dependent new-initializer value-dependence, conversion-template reference deduction; follow-up WP-711) |
+| WP-724 | M8 wave 3: rocksdb v10.7.5 through its own CMake build + bounded tests with kiln++ via scripts/oss; every failure → reduced conformance test + fix | WP-666 | landed PR #331: rocksdb v10.7.5 573/573 TUs, 213/213 links, bounded tests 2158/2158 = clang; 1.19x clang summed compile, 0.72x peak RSS; 6 fixes (+ offsetof tests; the fix itself duplicated #329); follow-ups WP-736..738 |
 | WP-716 | M8 wave 3: protobuf v33.1 (abseil/googletest fetched at configure) through its own CMake build + tests with kiln++ via scripts/oss (6 clusters fixed, parity 653/653 TUs, 10/10 links, 4/4 tests) | WP-666 | done |
 | WP-720 | M8 wave 3: leveldb 1.23 through its own CMake build + tests with kiln++ via scripts/oss; every failure → reduced conformance test + fix | WP-666 | done (PR #328; leveldb 1.23 at parity, 30/30 tests; -fno-rtti vtable fix + per-build TEST_TMPDIR; follow-up WP-725) |
 | WP-685 | M8 wave 2: CLI11 v2.6.1 through its own build + tests with kiln++ via scripts/oss (docs/status/oss/cli11.md) | WP-666 | done (PR #316; CLI11 v2.6.1 at parity on libstdc++ and libc++; 2 sema fixes; follow-ups WP-693/694) |
@@ -751,5 +752,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-732 | C++26 DIS todo papers: P3598, P2841, P3074, P3726, P1494, P3475 (docs/STANDARD_SUPPORT.md:337-342) | WP-706 | open |
 | WP-733 | triage untested DRs P4143, P4149, P3769 (docs/STANDARD_SUPPORT.md:393-395) | WP-706 | open |
 | WP-734 | P2308 diag nits: nested braced scalar warning, excess-elements note at the parameter (crates/kiln_sema/src/templ/nttp.rs:619) | WP-706 | open |
+| WP-736 | codegen+sema: remaining AArch64 ACLE builtins (ldrex/strex/ldaex/stlex need elementtype on llvm.aarch64.ldxr/stxr; rsr/wsr, rint*, jcvt, rndr, ld64b/st64b, gcs, chkfeat, prefetch, trap, clrex) at `crates/kiln_codegen/src/arm.rs:129`; exclusive-builtin size check + discarded-qualifiers warning in `crates/kiln_sema/src/builtins.rs` | WP-724 | open |
+| WP-737 | pp: `__has_builtin(__dmb)` is 1 in MS modes but `__dmb` and relatives are undeclared (`crates/kiln_pp/src/features.rs`) | WP-724 | open |
+| WP-738 | perf: kiln-built objects link 1.5x slower than clang-19 (rocksdb 630 s vs 412 s summed; compare object/debug-info size per TU; docs/status/oss/rocksdb.md) | WP-724 | open |
 WP-511
 WP-512

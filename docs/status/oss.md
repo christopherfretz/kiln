@@ -71,7 +71,7 @@ The loop:
 | `leveldb` | 3 | `1.23` | tests at parity |
 | `llvm_project` | 3 | `llvmorg-19.1.7` | not started |
 | `protobuf` | 3 | `v33.1` | tests at parity |
-| `rocksdb` | 3 | `v10.7.5` | not started |
+| `rocksdb` | 3 | `v10.7.5` | tests at parity |
 <!-- /oss:projects -->
 
 ## Results
@@ -380,3 +380,19 @@ Failure clusters (kiln): none.
 
 Failure clusters (kiln): none.
 <!-- /oss:protobuf -->
+
+<!-- oss:rocksdb -->
+### rocksdb (v10.7.5)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 573 / 0 | 573 / 0 |
+| links ok / failed | 213 / 0 | 213 / 0 |
+| tests passed / total | 2158 / 2158 | 2158 / 2158 |
+| wall | 320 s | 254 s |
+| peak TU RSS | 490 MB | 678 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:rocksdb -->

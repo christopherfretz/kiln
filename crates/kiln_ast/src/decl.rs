@@ -5509,6 +5509,9 @@ pub mod builtin {
         if name.starts_with(x86::PREFIX) || name.starts_with(x86::HEADER_PREFIX) {
             return x86::by_name(name);
         }
+        if name.starts_with(arm::PREFIX) {
+            return arm::by_name(name);
+        }
         ALL.iter()
             .chain(INT_MEM)
             .chain(LIBM)
@@ -5533,6 +5536,9 @@ pub mod builtin {
             return Some(r.info);
         }
         if let Some(r) = x86::row(id) {
+            return Some(r.info);
+        }
+        if let Some(r) = arm::row(id) {
             return Some(r.info);
         }
         ALL.iter()
@@ -5567,6 +5573,7 @@ pub mod builtin {
                 | b'L'
                 | b'S'
                 | b'W'
+                | b'Z'
                 | b'V'
                 | b'0'..=b'9'
                 | b'C'
@@ -5766,6 +5773,130 @@ pub mod builtin {
         /// diagnostic), if any.
         pub fn first_missing(req: &str, on: impl Fn(&str) -> bool) -> Option<&str> {
             req.split(',').find(|all| !all.split('|').any(|f| on(f.trim())))
+        }
+    }
+
+    /// WP-724: the `AArch64` ACLE target builtins: every `__builtin_arm_*`
+    /// name clang 19's `BuiltinsAArch64.def` declares outside the NEON, SVE
+    /// and SME tables, with its prototype, attributes and required-features
+    /// string, sorted by name; a row's id is [`arm::BASE`] plus its index
+    /// (kiln-private ids). `__builtin_arm_ldrex` / `ldaex` / `strex` /
+    /// `stlex` are custom type-checked (clang
+    /// `CheckARMBuiltinExclusiveCall`).
+    pub mod arm {
+        use super::{Info, attr};
+
+        /// The common prefix of the names.
+        pub const PREFIX: &str = "__builtin_arm_";
+        /// The id of the table's first row.
+        pub const BASE: u32 = 0x3_0000;
+
+        const NONE: u8 = 0;
+        const N: u8 = attr::NOTHROW;
+        const NC: u8 = attr::NOTHROW | attr::CONST;
+        const NR: u8 = attr::NOTHROW | attr::NORETURN;
+        const T: u8 = attr::CUSTOM;
+
+        /// `(name, prototype, attributes, required features)`, sorted by
+        /// name.
+        static ROWS: &[(&str, &str, u8, &str)] = &[
+            ("__builtin_arm_chkfeat", "WUiWUi", NONE, ""),
+            ("__builtin_arm_clrex", "v", NONE, ""),
+            ("__builtin_arm_cls", "UiZUi", NC, ""),
+            ("__builtin_arm_cls64", "UiWUi", NC, ""),
+            ("__builtin_arm_clz", "UiZUi", NC, ""),
+            ("__builtin_arm_clz64", "UiWUi", NC, ""),
+            ("__builtin_arm_crc32b", "UiUiUc", NC, "crc"),
+            ("__builtin_arm_crc32cb", "UiUiUc", NC, "crc"),
+            ("__builtin_arm_crc32cd", "UiUiWUi", NC, "crc"),
+            ("__builtin_arm_crc32ch", "UiUiUs", NC, "crc"),
+            ("__builtin_arm_crc32cw", "UiUiUi", NC, "crc"),
+            ("__builtin_arm_crc32d", "UiUiWUi", NC, "crc"),
+            ("__builtin_arm_crc32h", "UiUiUs", NC, "crc"),
+            ("__builtin_arm_crc32w", "UiUiUi", NC, "crc"),
+            ("__builtin_arm_dmb", "vUi", NC, ""),
+            ("__builtin_arm_dsb", "vUi", NC, ""),
+            ("__builtin_arm_gcspopm", "WUiWUi", N, "gcs"),
+            ("__builtin_arm_gcsss", "vC*vC*", N, "gcs"),
+            ("__builtin_arm_isb", "vUi", NC, ""),
+            ("__builtin_arm_jcvt", "Zid", NC, "v8.3a"),
+            ("__builtin_arm_ld64b", "vvC*WUi*", N, "ls64"),
+            ("__builtin_arm_ldaex", "v.", T, ""),
+            ("__builtin_arm_ldrex", "v.", T, ""),
+            ("__builtin_arm_nop", "v", NONE, ""),
+            ("__builtin_arm_prefetch", "vvC*UiUiUiUi", NC, ""),
+            ("__builtin_arm_rbit", "UiUi", NC, ""),
+            ("__builtin_arm_rbit64", "WUiWUi", NC, ""),
+            ("__builtin_arm_rint32x", "dd", NONE, "v8.5a"),
+            ("__builtin_arm_rint32xf", "ff", NONE, "v8.5a"),
+            ("__builtin_arm_rint32z", "dd", NONE, "v8.5a"),
+            ("__builtin_arm_rint32zf", "ff", NONE, "v8.5a"),
+            ("__builtin_arm_rint64x", "dd", NONE, "v8.5a"),
+            ("__builtin_arm_rint64xf", "ff", NONE, "v8.5a"),
+            ("__builtin_arm_rint64z", "dd", NONE, "v8.5a"),
+            ("__builtin_arm_rint64zf", "ff", NONE, "v8.5a"),
+            ("__builtin_arm_rndr", "iWUi*", N, "rand"),
+            ("__builtin_arm_rndrrs", "iWUi*", N, "rand"),
+            ("__builtin_arm_rsr", "UicC*", NC, ""),
+            ("__builtin_arm_rsr64", "WUicC*", NC, ""),
+            ("__builtin_arm_rsrp", "v*cC*", NC, ""),
+            ("__builtin_arm_sev", "v", NONE, ""),
+            ("__builtin_arm_sevl", "v", NONE, ""),
+            ("__builtin_arm_st64b", "vv*WUiC*", N, "ls64"),
+            ("__builtin_arm_st64bv", "WUiv*WUiC*", N, "ls64"),
+            ("__builtin_arm_st64bv0", "WUiv*WUiC*", N, "ls64"),
+            ("__builtin_arm_stlex", "i.", T, ""),
+            ("__builtin_arm_strex", "i.", T, ""),
+            ("__builtin_arm_trap", "vUIs", NR, ""),
+            ("__builtin_arm_wfe", "v", NONE, ""),
+            ("__builtin_arm_wfi", "v", NONE, ""),
+            ("__builtin_arm_wsr", "vcC*Ui", NC, ""),
+            ("__builtin_arm_wsr64", "vcC*WUi", NC, ""),
+            ("__builtin_arm_wsrp", "vcC*vC*", NC, ""),
+            ("__builtin_arm_yield", "v", NONE, ""),
+        ];
+
+        /// One builtin and the target features it needs.
+        #[derive(Clone, Copy, Debug)]
+        pub struct Row {
+            /// The builtin.
+            pub info: Info,
+            /// clang's required-features string (empty: none).
+            pub features: &'static str,
+        }
+
+        /// The number of rows.
+        pub fn len() -> usize {
+            ROWS.len()
+        }
+
+        /// The ACLE builtin spelled `name`.
+        pub fn by_name(name: &str) -> Option<u32> {
+            let i = ROWS.binary_search_by(|r| r.0.cmp(name)).ok()?;
+            Some(BASE + i as u32)
+        }
+
+        /// The row of builtin `id`, if it is an ACLE builtin.
+        pub fn row(id: u32) -> Option<Row> {
+            let &(name, sig, attrs, features) =
+                ROWS.get(usize::try_from(id.checked_sub(BASE)?).ok()?)?;
+            Some(Row { info: Info { id, name, sig, attrs }, features })
+        }
+
+        /// Whether `id` is an ACLE builtin.
+        pub fn is_arm(id: u32) -> bool {
+            id.checked_sub(BASE).is_some_and(|i| (i as usize) < len())
+        }
+
+        /// Whether `id` is `__builtin_arm_ldrex` or `__builtin_arm_ldaex`
+        /// (`Some(true)`), `__builtin_arm_strex` or `__builtin_arm_stlex`
+        /// (`Some(false)`).
+        pub fn exclusive_load(id: u32) -> Option<bool> {
+            match row(id)?.info.name.strip_prefix(PREFIX)? {
+                "ldrex" | "ldaex" => Some(true),
+                "strex" | "stlex" => Some(false),
+                _ => None,
+            }
         }
     }
 

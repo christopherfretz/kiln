@@ -411,7 +411,13 @@ at either level, and `__has_builtin` / `__has_constexpr_builtin` answer
 (`kiln_ast::decl::builtin::by_name`) nor lists in that table (the
 driver's `StagedFeatures::undeclared_clang22`; e.g.
 `__builtin_infer_alloc_token`, `__builtin_elementwise_popcount`,
-`__builtin_trivially_relocate`). Where kiln implements a feature that clang 19 lacks,
+`__builtin_trivially_relocate`). For the ACLE hint and barrier names
+clang 22 declares as header builtins (`__dmb`, `__dsb`, `__isb`,
+`__sev`, `__sevl`, `__wfe`, `__wfi`, `__yield`; `ACLE_HEADER_BUILTINS`),
+`__has_builtin` answers clang 19's table at either level (0 outside the
+MS modes): kiln ships clang 19's `arm_acle.h`, which defines them only
+when `__has_builtin` is 0 (spec/landed/sema/WP-724.md "ACLE builtins").
+Where kiln implements a feature that clang 19 lacks,
 `build_predefines` raises the macro to clang 22's value in the same modes:
 `__cpp_structured_bindings` is `202411L` wherever it is defined (C++17
 on; P1061 structured binding packs) and `__cpp_variadic_friend` is
