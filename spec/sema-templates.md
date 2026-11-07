@@ -2777,6 +2777,14 @@ impl Sema<'_, '_> {
   is per diagnostic id; WP-418,
   `tests/conformance/temp.deduct.general/werror-warning-not-substitution-failure.cpp`).
   A warning whose default mapping is an error still fails it.
+  clang's `SFINAEFailure` warnings fail it whatever their mapping
+  (`is_sfinae_failure`): the designated-initializer order/override
+  ExtWarns (spec/sema.md) and the narrowing ones, `-Wc++11-narrowing`
+  in a list-initialization or a converted constant expression
+  ([dcl.init.list]/3.7, [expr.const]), so a trait probing `T{v}` under
+  `#pragma GCC diagnostic ignored "-Wnarrowing"` or `-Wno-narrowing`
+  still sees the substitution fail (WP-685,
+  `tests/conformance/temp.deduct.general/narrowing-ignored-still-substitution-failure.cpp`).
   When function template deduction forms a specialization, the ones its
   signature substitution produced move to
   `TemplState.suppressed_diags: FxHashMap<DeclId, Vec<Diag>>`, keyed by
