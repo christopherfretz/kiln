@@ -29,6 +29,16 @@ use crate::conv::bases::{BaseSearch, ambiguous_paths_string, find_base};
 use crate::init::Initializer;
 use crate::lookup::LookupKind;
 
+/// Whether a declaration of kind `k` names an entity a lambda can
+/// capture ([expr.prim.lambda.capture]/4: a local entity, [basic.pre]/9):
+/// a variable, a structured binding or a result binding.
+fn is_capturable_kind(k: DeclKind) -> bool {
+    matches!(
+        k,
+        DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding | DeclKind::ContractResultName
+    )
+}
+
 /// How a variable is being captured (clang `TryCaptureKind`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TryCapture {
@@ -121,6 +131,9 @@ impl Sema<'_, '_> {
             DeclKind::Binding => {
                 self.ast.decls.binding_decomp(d).is_some_and(|v| self.has_local_storage(v))
             }
+            // A result binding is a local entity ([basic.pre]/9): a lambda
+            // in its postcondition captures it (spec/contracts.md §5).
+            DeclKind::ContractResultName => true,
             _ => false,
         }
     }
@@ -160,7 +173,7 @@ impl Sema<'_, '_> {
     }
 
     pub(crate) fn may_need_capture(&self, d: DeclId) -> bool {
-        matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding)
+        is_capturable_kind(self.kind_of(d))
             && (self.ast.decls.get(d).ctx() != Some(self.ctx)
                 || self.init_capture_owner(d).is_some())
             && (self.has_local_storage(d) || self.init_capture_owner(d).is_some())
@@ -252,7 +265,7 @@ impl Sema<'_, '_> {
         ellipsis: Loc,
         build: bool,
     ) -> Captured {
-        if !matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding) {
+        if !is_capturable_kind(self.kind_of(d)) {
             return Captured::NotNeeded;
         }
         let owner = self.init_capture_owner(d);
@@ -820,7 +833,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             let Some(var) = found.single().filter(|&d| {
-                matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding)
+                is_capturable_kind(self.kind_of(d))
             }) else {
                 let field = found.single().is_some_and(|d| self.kind_of(d) == DeclKind::Field);
                 let id = if field {
