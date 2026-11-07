@@ -4233,6 +4233,17 @@ expression or `try` block is diagnosed at its keyword except:
 Tests: `tests/conformance/expr.throw/no-exceptions-*.cpp`,
 `tests/conformance/except.pre/try-no-exceptions-*.cpp`.
 
+**Implicit move in `return`** (`stmt.rs` `return_operand`, WP-669;
+[class.copy.elision]/3, [expr.prim.id.unqual]/4). From C++23 (P2266)
+an operand naming an implicitly movable entity is an xvalue. Before
+C++23 the copy-initialization of the result is first tried, in a SFINAE
+frame, with the operand as an xvalue; when that fails other than by
+selecting a deleted constructor or function, the operand is used as the
+lvalue it is (clang's `PerformMoveOrCopyInitialization`): `T& f(T&& t)
+{ return t; }` and a class with only a `C(C&)` copy constructor are
+accepted in C++20. `decltype(auto)` of `return (x);` is then `T&`.
+Test: `tests/conformance/class.copy.elision/p3-cxx20-two-stage.cpp`.
+
 ### 5.6 `typeid` (`rtti.rs`)
 `act_on_typeid(Ok(expr) | Err(type), loc, rparen)` ([expr.typeid]):
 an lvalue of type `const std::type_info`.

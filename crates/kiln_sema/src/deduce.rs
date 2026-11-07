@@ -461,9 +461,12 @@ impl Sema<'_, '_> {
             Some(e) if kw == AutoKeyword::DecltypeAuto => {
                 // An implicitly movable entity named by a parenthesized
                 // id-expression is an xvalue ([expr.prim.id.unqual]/4,
-                // C++23): `decltype((x))` is then `T&&`.
+                // C++23): `decltype((x))` is then `T&&`. Before C++23 it
+                // stays an lvalue (`T&`), as in clang.
                 let moved = self.implicit_move(e);
-                if self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr {
+                if self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
+                    || self.std < kiln_lex::Std::Cxx23
+                {
                     self.decltype_of(e)
                 } else {
                     self.decltype_of(moved)
