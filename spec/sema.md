@@ -7567,7 +7567,10 @@ same graph.
     `checkIncorrectLogicOperator`) prunes the other edge of an `if`, a
     loop, a `?:` or an `&&`/`||`. In the scan bits, a configuration
     value (clang `isConfigurationValue`) does not prune and an
-    `if constexpr` prunes nothing.
+    `if constexpr` prunes nothing. An `if` with a condition variable has
+    an unknown condition, except an `if constexpr`, whose condition is
+    folded even then: an instantiation keeps only one branch, and the
+    dropped one's edge must be dead for -Wreturn-type (WP-792).
   - An `if`/`while`/`for` condition (without a condition variable) that
     is `&&`/`||` is clang's `VisitLogicalOperator`. Each left operand's
     block ends in its operator, and the short-circuit edges go straight
