@@ -5100,7 +5100,7 @@ Its requirements are processed **in order**, each under
 |---|---|
 | simple `E;` | substituting `E` succeeds (it is not evaluated) |
 | type `typename T::x;` | substitution forms a valid type |
-| compound `{E} noexcept -> C<A…>;` | `E` substitutes; with `noexcept`, `E` cannot throw; with a type-constraint, `C<decltype((E)), A…>` is satisfied |
+| compound `{E} noexcept -> C<A…>;` | `E` substitutes; with `noexcept`, `E` cannot throw; with a type-constraint, `C<decltype((E)), A…>` is satisfied, a pack expansion among `A…` (`-> C<P...>`) expanded to its elements (WP-789) |
 | nested `requires B;` | `B` is satisfied (§8.3), under `NestedRequirementConstraintsCheck` |
 
 A `requires`-expression outside any template whose requirement is
