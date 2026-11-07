@@ -1810,8 +1810,11 @@ u16` (abi.md §8.2 sources `ClassDesc.max_field_align` from it).
   stack of `(label, value)` entries.
 - **Applying it.** `act_on_start_record_definition` stores a nonzero N
   in `record_pack` for the class being defined. A class template's
-  pattern gets it too; instantiation must copy it from the pattern
-  (WP-066b/templates; not done yet).
+  pattern gets it too. Its instantiations copy the pattern's value,
+  whatever is in effect where they are instantiated (clang's
+  `InstantiateClass` copying `MaxFieldAlignmentAttr`;
+  `start_instantiated_definition`, WP-782). Test:
+  `tests/conformance/cpp.pragma/pack-template-instantiation-run.cpp`.
 - **Forms** (the argument text of `#pragma pack(...)` and
   `_Pragma("pack(...)")`):
   - `()` resets N to 0;
