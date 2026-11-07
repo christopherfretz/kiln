@@ -443,6 +443,9 @@ impl Sema<'_, '_> {
         {
             return self.array_list_cast(ty, l, loc);
         }
+        if self.ast.types.is_reference(ty) {
+            return self.reference_list_cast(ty, l, loc);
+        }
         if let Some(what) = self
             .temporary_unsupported(ty)
             .or_else(|| self.ast.types.is_void(ty).then_some("a void temporary"))
@@ -618,6 +621,38 @@ impl Sema<'_, '_> {
             n.ty(),
             n.value_category(),
             loc,
+        )
+    }
+
+    /// `R{ ... }` for a reference type `R` ([expr.type.conv]/2): the
+    /// reference is direct-list-initialized ([dcl.init.list]/3.9-10) and
+    /// the cast is an lvalue (an xvalue for an rvalue reference to an
+    /// object) of the referenced type ([expr.type.conv]/2, [expr.prop]
+    /// [basic.lval]/1; clang `BuildCXXTypeConstructExpr`).
+    fn reference_list_cast(&mut self, ty: QualType, l: &InitList, loc: Loc) -> ExprId {
+        let entity = self.init_entity.replace(crate::init::entity::VALUE);
+        let init = self.reference_list_init(ty, l, Some(loc), crate::class::InitStyle::DirectList);
+        self.init_entity = entity;
+        if self.is_err_expr(init) {
+            return self.recover(ty, &[init], loc);
+        }
+        let r = self.pointee_sugared(ty).unwrap_or(QualType::ERROR);
+        let rvalue_ref =
+            matches!(self.ast.types.canonical_view(ty), kiln_ast::types::TypeView::RValueRef(_));
+        let vc = if rvalue_ref && !self.ast.types.is_function(r) {
+            ValueCategory::XValue
+        } else {
+            ValueCategory::LValue
+        };
+        self.builder().functional_cast(
+            CastKind::NoOp,
+            init,
+            r,
+            vc,
+            None,
+            loc,
+            l.rbrace,
+            ExprFlags::NONE,
         )
     }
 

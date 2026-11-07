@@ -6991,6 +6991,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     destructor is bound (`CXXBindTemporaryExpr` of the array type,
     `maybe_bind_temporary` descends to the element type), and so is a
     braced list bound to a reference to array (`reference_list_init`).
+  - Reference `R{...}` (`reference_list_cast`, WP-690; `using CR = const
+    double &; CR{}`) direct-list-initializes the reference
+    (`reference_list_init`, [dcl.init.list]/3.9-10) and is an lvalue (an
+    xvalue for an rvalue reference to an object) `CXXFunctionalCastExpr`
+    of the referenced type, as clang. Tests:
+    `expr.type.conv/reference-list-cast.cpp`,
+    `reference-list-cast-errors.cpp`.
 
 ## 7. Statements (`stmt.rs`)
 - **Compound statements and scopes:** see §2.
