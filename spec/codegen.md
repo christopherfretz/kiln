@@ -3548,7 +3548,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   `vcvt`s, `vpmin`/`vpmax`, `vabd`, `vqadd`, `vminnm`/`vmaxnm`, the
   reciprocal estimates and steps, `vrnd*`, `vcnt`, `vclz`, `vcmla*`;
   the widening multiply `vmull_v`: spec/landed/sema/WP-724.md "NEON
-  widening multiply"). The AArch64 ACLE builtins (`__builtin_arm_*`,
+  widening multiply"; the structure loads and stores `vld2`..`vld4`,
+  `vst2`..`vst4` and the shift-and-insert `vsli_n`:
+  spec/landed/sema/WP-799.md "NEON structure loads and stores"). The
+  AArch64 ACLE builtins (`__builtin_arm_*`,
   `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition
   and the global-initialization functions (`__cxx_global_var_init`,

@@ -458,6 +458,18 @@ pub fn target_intrinsic(
     declare(m, name, ret, &params, &[], shape)
 }
 
+/// `void @llvm.aarch64.neon.st{2,3,4}.<VTy>.p0(<VTy> x k, ptr nocapture)`
+/// by full name, as LLVM declares it (`IntrArgMemOnly`,
+/// `NoCapture<ArgIndex<k>>`; WP-799).
+pub fn neon_store_n(m: &mut Module, name: &str, vt: TypeId, k: usize) -> FuncId {
+    let p = ptr(m);
+    let nc: &[Attr] = &[Attr::Flag(NoCapture)];
+    let mut params: Vec<(TypeId, &[Attr])> = vec![(vt, &[][..]); k];
+    params.push((p, nc));
+    let mem = MemoryEffects::argmem_only(ModRef::ReadWrite);
+    declare(m, name, TypeId::VOID, &params, &[], Shape::Basic(Some(mem)))
+}
+
 /// `ptr @llvm.returnaddress(i32 immarg level)` (WP-432).
 pub fn returnaddress(m: &mut Module) -> FuncId {
     let p = ptr(m);
