@@ -426,7 +426,10 @@ template|concept}, or template template parameter"
 (`sema_template_arg_not_valid_template`, at the argument), with the note
 "template argument refers to a {..} '{name}', here" at the template. A
 default argument of the wrong kind is rejected the same way and dropped.
-Matching of an argument of the right kind is P0522's "at least as
+A template pack expansion `TT...` (a non-dependent conversion, as of a
+partial specialization's `S<T, void_t<Cs<T>...>, Cs...>`) is checked as its
+pattern `TT` ([temp.variadic]/5; clang `CheckTemplateArgument` for
+`TemplateExpansion`, WP-803). Matching of an argument of the right kind is P0522's "at least as
 specialized" check (§11.2, `templ/ttarg22.rs`) unchanged: the
 parameter's template-head is formed as arguments to the argument template, so a defaulted or pack
 parameter of the argument absorbs them and an argument that cannot accept

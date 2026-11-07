@@ -843,7 +843,14 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 Err(())
             }
-            (DeclKind::TemplateTemplateParm, ArgView::Template(n)) => {
+            // A template pack expansion `TT...` (a partial
+            // specialization's `S<T, Checks...>`) is checked as its pattern
+            // ([temp.arg.template]/1, [temp.variadic]/5; clang
+            // `CheckTemplateArgument` for `TemplateExpansion`).
+            (
+                DeclKind::TemplateTemplateParm,
+                ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. },
+            ) => {
                 let Some(d) = self.arg_template_decl(n) else { return Ok(a) };
                 // [temp.arg.template]/1, /3: the argument's kind is the
                 // parameter's (a variable template or concept for a type
