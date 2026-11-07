@@ -1705,7 +1705,11 @@ and returns the scope it names:
     class.union.anon/empty-anonymous-record-declares-nothing.cpp.
   - An anonymous struct outside a class is an error.
   - `act_on_finish_record_definition(r, then_semi)` sets `ANONYMOUS`
-    and `HAS_VARIANT_MEMBERS`.
+    and `HAS_VARIANT_MEMBERS`. The parser passes `then_semi` false for
+    a class defined in a type-id: `using I = struct {...};` names an
+    ordinary unnamed class, so a member of type `I` keeps its default
+    member initializer (WP-782). Test:
+    class.union.anon/alias-of-unnamed-class-is-not-anonymous-run.cpp.
 - **Unnamed tags named by a typedef** record their typedef with
   `set_typedef_for_anon` ([dcl.typedef]/9).
 
