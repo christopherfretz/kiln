@@ -2,28 +2,30 @@
 // deleted or inaccessible destructor and a variant member with a non-trivial one;
 // [class.dtor]/15: a variable's destructor is potentially invoked, so it must be
 // accessible and not deleted (extern declarations and pointers do not invoke it).
+// Pinned to C++23 (P3074R7 changes the union rules in C++26: class.union/trivial-union-deleted-cxx26.cpp).
+//@ std: c++23
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 28:4 error "attempt to use a deleted function"
-//@ diag: 27:13 note "'~DD' has been explicitly marked deleted here"
-//@ diag: 29:4 error "attempt to use a deleted function"
-//@ diag: 27:13 note "'~DD' has been explicitly marked deleted here"
-//@ diag: 32:4 error "variable of type 'PD' has private destructor"
-//@ diag: 31:22 note "declared private here"
-//@ diag: 33:4 error "variable of type 'QD' has protected destructor"
-//@ diag: 31:55 note "declared protected here"
-//@ diag: 36:3 warning "explicitly defaulted destructor is implicitly deleted"
-//@ diag: 35:6 note "destructor of 'H' is implicitly deleted because field 'd' has a deleted destructor"
-//@ diag: 27:13 note "'~DD' has been explicitly marked deleted here"
-//@ diag: 36:10 note "replace 'default' with 'delete'"
-//@ diag: 42:3 warning "explicitly defaulted destructor is implicitly deleted"
-//@ diag: 40:5 note "destructor of 'UU' is implicitly deleted because variant field 'u' has a non-trivial destructor"
-//@ diag: 42:11 note "replace 'default' with 'delete'"
-//@ diag: 45:3 warning "explicitly defaulted destructor is implicitly deleted"
-//@ diag: 44:12 note "destructor of 'B' is implicitly deleted because base class 'PD' has an inaccessible destructor"
-//@ diag: 45:10 note "replace 'default' with 'delete'"
-//@ diag: 48:28 error "attempt to use a deleted function"
-//@ diag: 27:13 note "'~DD' has been explicitly marked deleted here"
+//@ diag: 30:4 error "attempt to use a deleted function"
+//@ diag: 29:13 note "'~DD' has been explicitly marked deleted here"
+//@ diag: 31:4 error "attempt to use a deleted function"
+//@ diag: 29:13 note "'~DD' has been explicitly marked deleted here"
+//@ diag: 34:4 error "variable of type 'PD' has private destructor"
+//@ diag: 33:22 note "declared private here"
+//@ diag: 35:4 error "variable of type 'QD' has protected destructor"
+//@ diag: 33:55 note "declared protected here"
+//@ diag: 38:3 warning "explicitly defaulted destructor is implicitly deleted"
+//@ diag: 37:6 note "destructor of 'H' is implicitly deleted because field 'd' has a deleted destructor"
+//@ diag: 29:13 note "'~DD' has been explicitly marked deleted here"
+//@ diag: 38:10 note "replace 'default' with 'delete'"
+//@ diag: 44:3 warning "explicitly defaulted destructor is implicitly deleted"
+//@ diag: 42:5 note "destructor of 'UU' is implicitly deleted because variant field 'u' has a non-trivial destructor"
+//@ diag: 44:11 note "replace 'default' with 'delete'"
+//@ diag: 47:3 warning "explicitly defaulted destructor is implicitly deleted"
+//@ diag: 46:12 note "destructor of 'B' is implicitly deleted because base class 'PD' has an inaccessible destructor"
+//@ diag: 47:10 note "replace 'default' with 'delete'"
+//@ diag: 50:28 error "attempt to use a deleted function"
+//@ diag: 29:13 note "'~DD' has been explicitly marked deleted here"
 struct DD { ~DD() = delete; };
 DD dd;
 DD arr[2];

@@ -438,11 +438,14 @@ impl Oven {
                 // clang 19 `IntExprEvaluator::VisitBuiltinCallExpr`: a
                 // power-of-two size within the inline width is lock-free
                 // for an `_Atomic` (c11) or null object, a single byte,
-                // or an object aligned to the size.
+                // or an object aligned to the size, or (bit 10) a
+                // pointer whose integer value `b` is a multiple of it.
                 let max = u128::from(sub & 0xFF);
+                let int_aligned =
+                    sub >> 10 & 1 != 0 && (b as u64) & (a as u64).wrapping_sub(1) == 0;
                 let yes = a.is_power_of_two()
                     && a <= max
-                    && (sub >> 8 & 1 != 0 || a == 1 || u128::from(t1) >= a);
+                    && (sub >> 8 & 1 != 0 || a == 1 || u128::from(t1) >= a || int_aligned);
                 if yes || sub >> 9 & 1 != 0 { Ok(u128::from(yes)) } else { Err(Fault::Invalid) }
             }
             bi::ALIGN => align(sub, a, b, t2),

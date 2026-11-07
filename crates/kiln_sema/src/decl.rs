@@ -2050,7 +2050,12 @@ impl Sema<'_, '_> {
         }
         // [over.over] against the parameter: a failure keeps clang's
         // "passing argument to parameter" note after the candidates.
-        let e = if self.ety(e) == QualType::OVERLOAD && self.overload_operand(e).is_some() {
+        // A class parameter type is no target: its converting constructor
+        // takes the set.
+        let e = if self.ety(e) == QualType::OVERLOAD
+            && self.overload_operand(e).is_some()
+            && !self.overload_set_converts_to_class(e, pty, crate::overload::ics::IcsOptions::NONE)
+        {
             let at = self.begin_loc(e);
             let ctx = crate::overload::address::AddrCtx::Convert;
             let noted = Some(note.clone());
@@ -3776,6 +3781,10 @@ impl Sema<'_, '_> {
                     pattern_prev = self.pattern_friend_prev(ctx, dname, new_fn);
                 }
             }
+            None
+        } else if friend && d.qualifier.is_none() && self.friend_template_apart {
+            // Constrained on an enclosing template's parameters: its own
+            // template, not one of another scope ([temp.friend]/9).
             None
         } else if friend && d.qualifier.is_none() {
             // Redeclaration lookup in the namespace sees hidden friends,
@@ -9236,6 +9245,19 @@ impl Sema<'_, '_> {
             return NameClass::Type(ty, d);
         }
         match k {
+            // A concept or variable template template parameter's name is
+            // a concept-name or template-name of that kind (P2841R7
+            // [temp.param]/8).
+            DeclKind::TemplateTemplateParm
+                if self.ttp_kind(d) == kiln_ast::templates::TtpKind::Concept =>
+            {
+                return NameClass::Concept(d);
+            }
+            DeclKind::TemplateTemplateParm
+                if self.ttp_kind(d) == kiln_ast::templates::TtpKind::Variable =>
+            {
+                return NameClass::VarTemplate(d);
+            }
             DeclKind::ClassTemplate
             | DeclKind::TypeAliasTemplate
             | DeclKind::TemplateTemplateParm
@@ -9367,6 +9389,36 @@ impl Sema<'_, '_> {
             );
         }
         true
+    }
+
+    /// The first of the injected-class-names of specializations of one
+    /// class template that an ambiguous unqualified lookup of `name` finds
+    /// in several base classes ([temp.local]/4); `None` for any other
+    /// result.
+    pub fn ambiguous_injected_class(&self, name: Symbol) -> Option<DeclId> {
+        let found = self.lookup_name(name, LookupKind::Ordinary);
+        if found.decls.len() < 2 {
+            return None;
+        }
+        let mut tmpls = found.decls.iter().map(|&d| {
+            (self.kind_of(d) == DeclKind::CXXRecord
+                && self.ast.decls.get(d).name() == DeclName::ident(name))
+            .then(|| self.injected_template_of(d))
+            .flatten()
+            .map(|t| self.ast.first(t))
+        });
+        let first = tmpls.next().flatten();
+        (first.is_some() && tmpls.all(|t| t == first)).then(|| found.decls[0])
+    }
+
+    /// [`Sema::diagnose_ambiguous_name`] for an unqualified `name` followed
+    /// by `<` as a template-name: a lookup that finds only
+    /// injected-class-names of specializations of one class template (in
+    /// several base classes) names that template and is not ambiguous
+    /// ([temp.local]/4).
+    pub fn diagnose_ambiguous_template_name(&mut self, name: Symbol, loc: Loc) -> bool {
+        self.ambiguous_injected_class(name).is_none()
+            && self.diagnose_ambiguous_name(name, None, loc)
     }
 
     /// An ambiguous lookup `decls` of `_` ([basic.scope.scope]/5, P2169)
@@ -9794,9 +9846,12 @@ impl Sema<'_, '_> {
         }
         // [dcl.attr.indet] is C++26 (clang trunk's `LangOpts<"CPlusPlus26">`
         // spelling): below it, `indeterminate` is an unknown attribute.
-        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax)
-            .filter(|&k| k != AttrKind::INDETERMINATE || self.std >= kiln_lex::Std::Cxx26)
-        else {
+        // P3475R2 removes `[[carries_dependency]]` from C++26 (WP-743): an
+        // unknown attribute there, warned as clang warns any unknown one.
+        let cxx26 = self.std >= kiln_lex::Std::Cxx26;
+        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax).filter(|&k| {
+            (k != AttrKind::INDETERMINATE || cxx26) && (k != AttrKind::CARRIES_DEPENDENCY || !cxx26)
+        }) else {
             let id = if gnu && n == "format" {
                 DiagId::parse_attribute_ignored
             } else {

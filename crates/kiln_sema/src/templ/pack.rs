@@ -994,6 +994,7 @@ impl Sema<'_, '_> {
     }
 
     /// The packs expression `e` names outside expansions, in order.
+    #[allow(clippy::too_many_lines)]
     fn expr_packs(&self, e: ExprId, out: &mut Vec<DeclId>, depth: u32) {
         use kiln_ast::expr::ExprDeps;
         let n = self.ast.exprs.get(e);
@@ -1011,6 +1012,36 @@ impl Sema<'_, '_> {
                     out.push(d);
                 }
                 return;
+            }
+            // `Cs<T>` / `Vs<T>` naming a concept or variable template
+            // template parameter pack (P2841R7, §2.1.1): the pack, then
+            // the arguments' packs below.
+            ExprKind::ConceptSpecializationExpr | ExprKind::UnresolvedLookupExpr => {
+                let d = if n.kind() == ExprKind::ConceptSpecializationExpr {
+                    DeclId::from_raw(n.a()).filter(|&d| {
+                        self.kind_of(d) == kiln_ast::decl::DeclKind::TemplateTemplateParm
+                    })
+                } else {
+                    self.var_ttp_ref(e)
+                };
+                if let Some(d) = d
+                    && self.is_pack_decl(d)
+                    && !out.contains(&d)
+                {
+                    out.push(d);
+                }
+                let args = if n.kind() == ExprKind::ConceptSpecializationExpr {
+                    kiln_ast::ids::ArgListId::from_raw(n.b())
+                } else {
+                    self.ast.templates.expr_targs.get(e).copied()
+                };
+                for &a in args.map_or(&[][..], |l| self.ast.types.args(l)) {
+                    match a.view() {
+                        ArgView::Type(x) => self.type_packs(x, out, depth + 1),
+                        ArgView::Expr { expr, .. } => self.expr_packs(expr, out, depth + 1),
+                        _ => {}
+                    }
+                }
             }
             ExprKind::LambdaExpr => {
                 // What the body names (recorded when it was analysed), and

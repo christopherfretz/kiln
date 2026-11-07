@@ -201,7 +201,7 @@ impl Sema<'_, '_> {
         }
         pa.zip(pb).all(|(x, y)| {
             let (kx, ky) = (self.kind_of(x), self.kind_of(y));
-            if kx != ky {
+            if kx != ky || self.ttp_kind(x) != self.ttp_kind(y) {
                 return false;
             }
             let (ix, iy) = (self.ast.template_parm(x).copied(), self.ast.template_parm(y).copied());

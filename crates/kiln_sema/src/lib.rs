@@ -545,6 +545,12 @@ pub struct Sema<'a, 'sm> {
     /// compares instead ([temp.over.link]/6; clang's
     /// `AreConstraintExpressionsEqual`, WP-446).
     pub(crate) friend_cmp_constraints: kiln_source::fx::FxHashMap<ExprId, ExprId>,
+    /// While a friend function template of a class template is
+    /// redeclared: one of its constraints names an enclosing template's
+    /// parameter, so it declares a function template of its own, never
+    /// one of another scope ([temp.friend]/9; clang's
+    /// `FriendConstraintsDependOnEnclosingTemplate`, WP-726).
+    pub(crate) friend_template_apart: bool,
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).
     pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
@@ -953,6 +959,10 @@ pub struct Sema<'a, 'sm> {
     /// A contract assertion was seen: initializations are checked for
     /// contract violations ([`Sema::check_contract_init`]).
     pub(crate) has_contracts: bool,
+    /// The parameters already diagnosed by the postcondition const rule
+    /// ([dcl.contract.func]/7): each once, and the parameter stays
+    /// valid, so the body's uses of it evaluate (spec/contracts.md §9).
+    pub(crate) post_param_diagnosed: kiln_source::fx::FxHashSet<DeclId>,
     /// The static data member whose out-of-line initializer is being
     /// analysed: its class is the access context ([class.access]/7).
     pub(crate) initializing: Option<DeclId>,
@@ -1135,6 +1145,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
             friend_cmp_constraints: kiln_source::fx::FxHashMap::default(),
+            friend_template_apart: false,
             constinit_locs: kiln_source::fx::FxHashMap::default(),
             ref_usable: kiln_source::fx::FxHashMap::default(),
             auto_referent: kiln_source::fx::FxHashMap::default(),
@@ -1239,6 +1250,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             nsdmi_this: Vec::new(),
             contract_ctx: Vec::new(),
             has_contracts: false,
+            post_param_diagnosed: kiln_source::fx::FxHashSet::default(),
             initializing: None,
             inst_enable_if: None,
             templ: templ::TemplState::default(),

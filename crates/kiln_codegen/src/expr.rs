@@ -434,6 +434,12 @@ impl Cg<'_> {
                         let bq = ast.exprs.get(base).ty();
                         V::C(self.const_scalar_value(c, bq)?)
                     }
+                    // A glvalue base is loaded from its address (a call
+                    // returning `V&` yields the address as its scalar).
+                    None if self.is_glvalue(base) => {
+                        let lv = self.emit_lvalue(base)?;
+                        self.load_lv(lv)
+                    }
                     None => self.emit_scalar(base)?,
                 };
                 let i = self.emit_scalar(idx)?;
@@ -1975,6 +1981,13 @@ impl Cg<'_> {
             // A postcondition's result name ([dcl.contract.res]): the
             // return slot, bound by `emit_postconditions`.
             DeclKind::ContractResultName => {
+                // Named in a lambda of the postcondition that captured it
+                // ([basic.pre]/9: a local entity).
+                if ast.exprs.get(e).has(ExprFlags::REFERS_TO_ENCLOSING)
+                    && let Some(lv) = self.captured_var_lvalue(d, q)?
+                {
+                    return Ok(lv);
+                }
                 let Some(&slot) = self.f.locals.get(&d) else {
                     return err(self.loc_of(e), "result name outside a postcondition");
                 };

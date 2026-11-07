@@ -452,7 +452,8 @@ pub(crate) mod bi {
     /// `__c11_atomic_is_lock_free` of size `a`: `t1` the object's
     /// alignment (0: unknown); sub = the target's inline width in bytes
     /// | any object qualifies << 8 | `always` (an unknown answer is 0,
-    /// not a failure) << 9.
+    /// not a failure) << 9 | `b` holds the object pointer's integer
+    /// value << 10.
     pub const LOCK_FREE: u32 = 12;
 
     /// A reflection intrinsic (spec/reflection.md §3): sub =

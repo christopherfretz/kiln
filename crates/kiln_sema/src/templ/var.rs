@@ -48,10 +48,10 @@ impl Sema<'_, '_> {
         let sugared = self.settle_inst_sugar(conv.sugared);
         let s = self.instantiate_var_spec_decl(tmpl, sugared, conv.canonical, written.len(), loc);
         if let Ok(v) = s
-            && self.is_undeduced_auto(self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR))
+            && self.contains_undeduced_auto(self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR))
         {
             // [dcl.spec.auto.general]/11: the type comes from the
-            // initializer, needed now.
+            // initializer, needed now (`auto&` and `auto*` too).
             self.instantiate_var_spec_init(v, loc);
         }
         s

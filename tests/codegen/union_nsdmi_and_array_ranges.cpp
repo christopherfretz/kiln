@@ -4,6 +4,10 @@
 // anonymous union member and in a functional cast, so the globals hold
 // that member and local initialization stores it. Plus GNU array range
 // designators (`[a ... b] =`), which initialize every element of the range.
+// C++23: from C++26 (P3074R7) W's anonymous union, and so W, is trivial and
+// POD, so a local `W w{}` is copied from a constant as clang's
+// constant-aggregate rule does, and clang 22 does not implement P3074R7.
+//@ args: -std=c++23
 struct M { int x = 4; union { int i; float f = 2.0f; }; };
 union N { int i; float f = 3.0f; };
 struct W { union { struct { int a; int b = 6; }; long l; }; };

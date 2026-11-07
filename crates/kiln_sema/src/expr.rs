@@ -1848,10 +1848,13 @@ impl Sema<'_, '_> {
                 self.set_overload_begin(e, begin, loc);
                 return e;
             }
+            // ADL only for a name followed by `(` ([basic.lookup.argdep]/1:
+            // `(f)(x)` suppresses it; clang `UseArgumentDependentLookup`).
+            let adl = self.call_uses_adl(&found.decls, qualifier.is_none());
             let e = self.builder().unresolved_lookup(
                 name,
                 &lookup_set_order(&found.decls, qualifier.is_none()),
-                qualifier.is_none(),
+                adl,
                 nns,
                 None,
                 loc,
@@ -2068,9 +2071,15 @@ impl Sema<'_, '_> {
                 via.push(found.found.get(i).copied().unwrap_or(d));
             }
         }
-        self.note_this_use(loc);
-        let this = self.builder().this_expr(this_ty, true, loc);
+        // With a static candidate too, `this` is captured only once the
+        // call names an instance member (`finish_member_winner`).
+        let all_instance =
+            decls.iter().all(|&d| self.is_instance_member(self.templated_or_self(d)));
         let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
+        if all_instance || self.ast.types.is_dependent(obj_ty) {
+            self.note_this_use(loc);
+        }
+        let this = self.builder().this_expr(this_ty, true, loc);
         if self.ast.types.is_dependent(obj_ty) {
             // [temp.dep.expr]/3: `this` is type-dependent in a member of a
             // class template, so the call of an overloaded member through
@@ -2306,10 +2315,12 @@ impl Sema<'_, '_> {
         // [expr.prim.id.unqual]/3: naming a variable captured by an
         // enclosing lambda (spec/sema-lambda.md §3).
         let (ty, flags) = match n.kind() {
-            DeclKind::Var | DeclKind::ParmVar => match self.capture_at_decl_ref(d, loc) {
-                Some(t) => (t, ExprFlags::REFERS_TO_ENCLOSING),
-                None => (ty, ExprFlags::NONE),
-            },
+            DeclKind::Var | DeclKind::ParmVar | DeclKind::ContractResultName => {
+                match self.capture_at_decl_ref(d, loc) {
+                    Some(t) => (t, ExprFlags::REFERS_TO_ENCLOSING),
+                    None => (ty, ExprFlags::NONE),
+                }
+            }
             // clang 19 keeps a captured binding's own type (its
             // `getCapturedDeclRefType` adjusts variables only); clang 22
             // follows [expr.prim.id.unqual]/3 for bindings too (`const`
@@ -6104,7 +6115,14 @@ impl Sema<'_, '_> {
         if is_err {
             return self.recover(ty, &[e], loc);
         }
-        let e = if self.ety(e) == QualType::OVERLOAD {
+        // A class type is no [over.over] target: the cast
+        // direct-initializes it through a constructor taking the set.
+        let e = if self.ety(e) == QualType::OVERLOAD
+            && !self.overload_set_converts_to_class(
+                e,
+                ty,
+                crate::overload::ics::IcsOptions::ALLOW_EXPLICIT,
+            ) {
             match self.cast_overload_set(style, ty, e, loc) {
                 Some(x) => x,
                 None => return self.recover(ty, &[e], loc),

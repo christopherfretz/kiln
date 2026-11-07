@@ -191,12 +191,14 @@ impl Substituter<'_, '_, '_> {
         self.sema.ast.templates.dependent_depth += 1;
         let ol = *self.sema.ast.templates.param_list(info.params);
         let old: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(ol.params).collect();
-        let cmp = self.friend_cmp_constraints(&old, ol.requires, pattern);
+        let (cmp, apart) = self.friend_cmp_constraints(&old, ol.requires, pattern);
         let saved_cmp = std::mem::replace(&mut self.sema.friend_cmp_constraints, cmp);
+        let saved_apart = std::mem::replace(&mut self.sema.friend_template_apart, apart);
         let saved = std::mem::replace(&mut self.sema.instantiating_friend_template, true);
         let r = self.function_decl(pattern, DeclaratorContext::Member, Some(loc));
         self.sema.instantiating_friend_template = saved;
         self.sema.friend_cmp_constraints = saved_cmp;
+        self.sema.friend_template_apart = saved_apart;
         self.sema.act_on_finish_template_decl();
         self.sema.templ.cur = None;
         let fd = r?;
@@ -242,13 +244,16 @@ impl Substituter<'_, '_, '_> {
     /// auto operator<=>(const stack<T1, C>&, ...)` in libc++ 22's
     /// `stack`). A constraint that substitutes to a non-dependent one
     /// names only the enclosing class's parameters ([temp.friend]/9):
-    /// it is not mapped, so the friend stays apart.
+    /// it is not mapped, so the friend stays apart. The flag: some
+    /// constraint names an enclosing template's parameter (or the
+    /// injected-class-name), so the friend declares its own template
+    /// ([temp.friend]/9; `Sema::friend_template_apart`).
     fn friend_cmp_constraints(
         &mut self,
         old: &[DeclId],
         req: Option<kiln_ast::ExprId>,
         pattern: DeclId,
-    ) -> kiln_source::fx::FxHashMap<kiln_ast::ExprId, kiln_ast::ExprId> {
+    ) -> (kiln_source::fx::FxHashMap<kiln_ast::ExprId, kiln_ast::ExprId>, bool) {
         let mut cs: Vec<kiln_ast::ExprId> = old
             .iter()
             .filter_map(|&p| self.sema.ast.template_parm(p).and_then(|i| i.constraint))
@@ -256,8 +261,12 @@ impl Substituter<'_, '_, '_> {
         cs.extend(req);
         cs.extend(self.sema.ast.templates.trailing_requires.get(pattern).copied());
         let mut m = kiln_source::fx::FxHashMap::default();
+        let mut apart = false;
+        let saved_used = self.outer_used.replace(false);
         for c in cs {
-            if let Ok(e) = self.expr(c)
+            let r = self.expr(c);
+            apart |= self.outer_used.replace(false);
+            if let Ok(e) = r
                 && self
                     .sema
                     .ast
@@ -269,7 +278,8 @@ impl Substituter<'_, '_, '_> {
                 m.insert(c, e);
             }
         }
-        m
+        self.outer_used.set(saved_used);
+        (m, apart)
     }
 
     /// Declares the pattern of a member template (the head is open).
@@ -368,14 +378,16 @@ impl Substituter<'_, '_, '_> {
                 DeclKind::TemplateTemplateParm => {
                     let Some(inner) = pi.params else { return Err(SubstFail) };
                     let inner = self.param_list(inner)?;
-                    self.sema.builder().template_template_parm(
+                    let np = self.sema.builder().template_template_parm(
                         h,
                         inner,
                         depth,
                         pi.index,
                         pi.pack,
                         pi.typename_kw,
-                    )
+                    );
+                    self.sema.builder().set_ttp_kind(np, pi.ttp_kind);
+                    np
                 }
                 _ => return Err(SubstFail),
             };

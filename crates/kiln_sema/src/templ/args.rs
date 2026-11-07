@@ -840,31 +840,25 @@ impl Sema<'_, '_> {
                 Err(())
             }
             (DeclKind::TemplateTemplateParm, ArgView::Template(n)) => {
-                match self.arg_template_decl(n).map(|d| self.kind_of(d)) {
-                    Some(
-                        DeclKind::ClassTemplate
-                        | DeclKind::TypeAliasTemplate
-                        | DeclKind::TemplateTemplateParm,
-                    ) => {
-                        let d = self.arg_template_decl(n);
-                        if let Some(d) = d {
-                            let args = self.prior_levels(tmpl, depth, prior);
-                            if !self.check_template_template_arg(p, d, at, &args) {
-                                return Err(());
-                            }
+                let Some(d) = self.arg_template_decl(n) else { return Ok(a) };
+                // [temp.arg.template]/1, /3: the argument's kind is the
+                // parameter's (a variable template or concept for a type
+                // template template parameter is rejected as clang 22
+                // does, P2841R7).
+                match self.template_arg_kind(d) {
+                    Some(k) if k == self.ttp_kind(p) => {
+                        let args = self.prior_levels(tmpl, depth, prior);
+                        if !self.check_template_template_arg(p, d, at, &args) {
+                            return Err(());
                         }
                         Ok(a)
                     }
-                    None => Ok(a),
-                    // A variable template or concept (parsed as a
-                    // template name by clang 22, P2841).
-                    Some(DeclKind::VarTemplate | DeclKind::Concept) => {
-                        if let Some(d) = self.arg_template_decl(n) {
-                            self.reject_keyless_ttp_arg(d, at);
-                        }
+                    Some(_) => {
+                        let want = self.ttp_kind(p);
+                        self.reject_ttp_arg_kind(want, d, at);
                         Err(())
                     }
-                    Some(_) => {
+                    None => {
                         self.error(DiagId::sema_template_arg_must_be_template, at);
                         Err(())
                     }
@@ -1397,6 +1391,9 @@ impl Sema<'_, '_> {
         if self.is_err_expr(c) {
             return Err(());
         }
+        if let Some(v) = self.defining_class_member_ptr(c, pty) {
+            return Ok(TemplateArg::value(self.ast.types.canonical(pty), v));
+        }
         match self.eval_const(c, EvalContext::converted(at)) {
             Ok(v) => {
                 // Integral values are re-interned at the canonical type so
@@ -1423,6 +1420,50 @@ impl Sema<'_, '_> {
                 Err(())
             }
         }
+    }
+
+    /// The value of `c`, a converted argument of member pointer type
+    /// `pty`, when it is `&C::m` (of exactly that type) and `C` is still
+    /// being defined (boost.intrusive's `member_hook<C, H, &C::hook>` in
+    /// `C`'s own body): the member itself, as clang's
+    /// `APValue::MemberPointer` holds it. The Oven would need `C`'s
+    /// layout, which it does not have yet (WP-726). `None` otherwise.
+    fn defining_class_member_ptr(
+        &mut self,
+        c: ExprId,
+        pty: QualType,
+    ) -> Option<kiln_ast::ids::ConstValueId> {
+        use kiln_ast::consts::{MemberKind, Scalar};
+        use kiln_ast::expr::{ExprKind, UnaryOp};
+        let canon = self.ast.types.canonical(pty);
+        let TypeView::MemberPointer { class, .. } = self.ast.types.view(canon.ty()) else {
+            return None;
+        };
+        if self.is_complete(QualType::unqual(class)) {
+            return None;
+        }
+        let x = self.ignore_paren_imp_casts(c);
+        if self.ast.types.canonical(self.ety(x)) != canon
+            || self.ast.exprs.get(x).kind() != ExprKind::UnaryOperator
+            || self.ast.exprs.unary_op(x) != UnaryOp::AddrOf
+        {
+            return None;
+        }
+        let r = self.ast.exprs.operand(x);
+        if self.ast.exprs.get(r).kind() != ExprKind::DeclRefExpr {
+            return None;
+        }
+        let d = self.ast.exprs.decl(r);
+        let kind = match self.kind_of(d) {
+            DeclKind::Field => MemberKind::Data,
+            DeclKind::CXXMethod => MemberKind::Function,
+            _ => return None,
+        };
+        let member = self.ast.first(d);
+        self.ast
+            .consts
+            .push_scalar(Scalar::MemberPtr { ty: canon, member, kind, derived: false, path: &[] })
+            .ok()
     }
 
     /// The converted argument of an integral parameter of type `pty` for
