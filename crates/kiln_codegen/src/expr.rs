@@ -1628,7 +1628,9 @@ impl Cg<'_> {
                 let mut c = e;
                 while matches!(
                     ast.exprs.get(c).kind(),
-                    ExprKind::ImplicitCastExpr | ExprKind::ExprWithCleanups | ExprKind::ConstantExpr
+                    ExprKind::ImplicitCastExpr
+                        | ExprKind::ExprWithCleanups
+                        | ExprKind::ConstantExpr
                 ) {
                     c = ast.exprs.operand(c);
                 }

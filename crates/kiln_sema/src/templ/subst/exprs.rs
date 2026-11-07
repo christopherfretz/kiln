@@ -617,7 +617,8 @@ impl Substituter<'_, '_, '_> {
                 };
                 let kw = n.aux() & 2 != 0;
                 let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
-                let r = self.sema.act_on_template_member_q(base, qual, name, targs, kw, loc, op, arrow);
+                let r =
+                    self.sema.act_on_template_member_q(base, qual, name, targs, kw, loc, op, arrow);
                 self.note_deferred_this(Some(r), this_at);
                 Ok(r)
             }

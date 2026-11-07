@@ -4,16 +4,16 @@
 //! ([temp.func.order]) is WP-071; with function parameter packs, WP-131.
 
 use kiln_ast::DeclId;
+use kiln_ast::ExprId;
 use kiln_ast::QualType;
 use kiln_ast::decl::DeclKind;
-use kiln_ast::ids::ArgListId;
 use kiln_ast::expr::{ExprDeps, ExprKind};
+use kiln_ast::ids::ArgListId;
 use kiln_ast::ids::{RawId, TemplateNameId};
+use kiln_ast::templates::Requirement;
 use kiln_ast::types::{
     ArgView, ExprOperand, Nns, Quals, TemplateArg, TemplateName, TypeFlags, TypeOfOperand, TypeView,
 };
-use kiln_ast::ExprId;
-use kiln_ast::templates::Requirement;
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -699,9 +699,9 @@ impl Sema<'_, '_> {
         for x in pb {
             self.mark_used_type(x.ty, depth, &mut used, 0);
         }
-        used.iter().enumerate().all(|(i, &u)| {
-            !u || d.args.get(i).is_some_and(|a| !matches!(a.view(), ArgView::Null))
-        })
+        used.iter()
+            .enumerate()
+            .all(|(i, &u)| !u || d.args.get(i).is_some_and(|a| !matches!(a.view(), ArgView::Null)))
     }
 
     /// Marks in `used` the template parameters of depth `depth` canonical
@@ -711,7 +711,9 @@ impl Sema<'_, '_> {
     /// is its type.
     pub(crate) fn mark_used_type(&self, q: QualType, depth: u32, used: &mut [bool], lvl: u32) {
         let t = &self.ast.types;
-        if lvl > 256 || !t.is_dependent(q) && !t.flags(q.ty()).intersects(TypeFlags::INSTANTIATION_DEPENDENT) {
+        if lvl > 256
+            || !t.is_dependent(q) && !t.flags(q.ty()).intersects(TypeFlags::INSTANTIATION_DEPENDENT)
+        {
             return;
         }
         let lvl = lvl + 1;
