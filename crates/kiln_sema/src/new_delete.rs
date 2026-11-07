@@ -501,7 +501,7 @@ impl Sema<'_, '_> {
                 let msg = match tmpl_notes.take() {
                     // With templates, the notes are overload resolution's own
                     // (a template's deduced specialization included).
-                    Some(notes) => notes.into_iter().fold(msg, |m, n| m.with_note(n)),
+                    Some(notes) => notes.into_iter().fold(msg, kiln_diag::Diag::with_note),
                     None => self.operator_new_candidate_notes(msg, &alloc.fns, &place_args),
                 };
                 self.emit(msg);
@@ -1162,7 +1162,7 @@ impl Sema<'_, '_> {
                     *notes = Some(self.ovl_notes(&set, false));
                     None
                 }
-                _ => None,
+                OvlOutcome::Ambiguous => None,
             };
             self.end_set(set);
             if let Some(f) = f {
