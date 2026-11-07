@@ -2353,6 +2353,33 @@ impl Parser<'_, '_> {
         self.chunk_decl_attrs.extend(attrs);
     }
 
+    /// The attributes after a grouping `(` of a declarator
+    /// (`void (__attribute__((noreturn)) *fp)(int)`; clang
+    /// `ParseParenDeclarator`): like those after a ptr-operator
+    /// ([`Parser::skip_type_position_attrs`]), a GNU declaration
+    /// attribute is kept for the declarator, so GNU `noreturn` makes the
+    /// declared function type `noreturn` (spec/types.md §5.4, WP-708).
+    fn grouping_paren_attrs(&mut self, d: &mut Declarator) {
+        let saved = std::mem::take(&mut self.chunk_decl_attrs);
+        self.skip_type_position_attrs();
+        d.attrs.append(&mut self.chunk_decl_attrs);
+        self.chunk_decl_attrs = saved;
+    }
+
+    /// The lookahead offset past GNU `__attribute__((...))` specifiers
+    /// starting at offset `n`: clang's `ParseParenDeclarator` eats them
+    /// before deciding between a grouping paren and a parameter list,
+    /// so `void g(void (__attribute__((noreturn)) *p)(int))` groups.
+    fn past_gnu_attrs(&self, n: usize) -> usize {
+        let base = self.pos();
+        let mut i = base + n;
+        while self.kw_of(self.tok_at(i)) == Some(Kw::Attribute) {
+            let Some(j) = self.skip_balanced(i + 1) else { break };
+            i = j;
+        }
+        i - base
+    }
+
     /// The cv-qualifiers, nullability qualifiers and attributes after a
     /// `*` ([dcl.ptr]/1; clang's `ParseTypeQualifierListOpt`).
     pub(crate) fn parse_ptr_quals(&mut self) -> (Quals, Vec<NullSpec>) {
@@ -2582,7 +2609,7 @@ impl Parser<'_, '_> {
             }
             self.parse_declarator_id_attrs(d);
         } else if self.at(Punct::LParen)
-            && !((abstract_ok || in_catch) && self.is_param_list_start(1))
+            && !((abstract_ok || in_catch) && self.is_param_list_start(self.past_gnu_attrs(1)))
         {
             // Like clang's ParseParenDeclarator: grouping is in effect
             // only for the inner declarator, then restored.
@@ -2593,7 +2620,7 @@ impl Parser<'_, '_> {
             let ellipsis =
                 if d.ctx == DeclaratorContext::Prototype { None } else { d.ellipsis.take() };
             let open = self.bump().span.lo;
-            self.skip_attributes();
+            self.grouping_paren_attrs(d);
             self.parse_declarator(d);
             let close = self.expect_closing(Punct::RParen, Punct::LParen, open);
             d.grouping = had_grouping;
@@ -3453,6 +3480,7 @@ impl Parser<'_, '_> {
             return Some(QualType::ERROR);
         }
         let ty = self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d);
+        let ty = self.s.act_on_type_id_decl_attrs(ty, &d.attrs);
         Some(self.s.check_qualified_fn_type(ty, &ds, &d))
     }
 

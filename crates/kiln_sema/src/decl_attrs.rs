@@ -1119,6 +1119,14 @@ impl Sema<'_, '_> {
         Some(self.ast.types.qualify(built, ty.quals()))
     }
 
+    /// A type-id's declarator attributes (`using F = void
+    /// (*__attribute__((noreturn)))(int);`): GNU `noreturn` among them
+    /// makes the function type `noreturn` as on a declaration
+    /// ([`Sema::apply_noreturn_attrs`]; spec/types.md §5.4, WP-708).
+    pub fn act_on_type_id_decl_attrs(&mut self, ty: QualType, attrs: &[AttrId]) -> QualType {
+        self.apply_noreturn_attrs(ty, attrs)
+    }
+
     /// GNU `noreturn` (`__attribute__((noreturn))`, `[[gnu::noreturn]]`)
     /// written on a declaration (clang `handleFunctionTypeAttr`,
     /// `AT_NoReturn`): a function type attribute, so the declared type's
