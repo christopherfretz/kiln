@@ -474,7 +474,11 @@ impl Sema<'_, '_> {
             ArgView::Expr { expr, profile: Some(_) } => self.ast.exprs.get(expr).deps().is_none(),
             _ => false,
         };
-        if !written.iter().any(unconverted) {
+        // Or arguments left to the primary template's defaults: the
+        // partial specialization's own arguments include them
+        // ([temp.arg.general]/9; `template<class T, class S = typename
+        // T::S> struct E;` then `template<class U> class E<W<U>>::I`).
+        if !written.iter().any(unconverted) && written.len() >= self.template_params(tmpl).len() {
             return None;
         }
         let conv = self.check_template_args(tmpl, &written, &[], loc).ok()?;
@@ -488,7 +492,8 @@ impl Sema<'_, '_> {
 
     /// [`Sema::current_instantiation`], also when `ty` writes a
     /// non-dependent non-type argument of a partial specialization
-    /// unconverted (`vec<2, T>`, [temp.dep.type]/1.2).
+    /// unconverted (`vec<2, T>`, [temp.dep.type]/1.2) or leaves an
+    /// argument to its default.
     pub(crate) fn current_instantiation_at(
         &mut self,
         tmpl: DeclId,
