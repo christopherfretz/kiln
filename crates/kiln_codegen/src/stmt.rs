@@ -829,6 +829,9 @@ impl Cg<'_> {
         let outer_cont = self.f.jumps.last().and_then(|j| j.cont);
         self.f.jumps.push(Jump { brk: epilog, cont: outer_cont });
         let inst = crate::fir::Fir::last_inst(sw);
+        // clang `EmitSwitchStmt`: the condition itself (no conversion
+        // stripped) a call of `__builtin_unpredictable`.
+        self.mark_unpredictable(inst, d.cond);
         let ctx = SwitchCtx { inst, cond: c, cond_ty, default, range_head: default };
         let saved = self.f.sw.replace(ctx);
         self.emit_stmt(d.body)?;

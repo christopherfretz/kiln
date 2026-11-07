@@ -335,8 +335,40 @@ resolution picks an instance member (`finish_member_winner`), so a lambda
 without a capture-default may call the static one (clang's
 `BuildPossibleImplicitMemberExpr`; WP-726,
 `tests/conformance/expr.prim.lambda.capture/implicit-this-*-overload-winner.cpp`).
-In a class template, where `*this` is dependent, the capture is still
-eager.
+The rule is general (WP-779; [expr.prim.lambda.capture]/7-8,
+[class.mfct.non.static]/2):
+
+- A set of instance members only (an explicit object member function is
+  one) captures `this` when the name is formed, as clang's
+  `BuildImplicitMemberExpr` with `IsKnownInstance`.
+- A mixed set whose call is resolved when it is formed captures `this`
+  only for an instance winner, qualified (`S::f(s)`) or not.
+- In a template (a member of a class template, a member function
+  template, a member found through a dependent base) the implicit access
+  is kept dependent without a capture, and the lambda is formed again at
+  instantiation: `templ/subst` rebuilds an implicit `this` base without
+  capturing it (`member_base_deferred`) and captures once the member is
+  looked up again (`note_deferred_this`), except for a mixed set, which
+  captures at its winner, and a static member. clang's `TreeTransform`
+  does not transform an implicit access's `this` either.
+- A mixed set whose call stays dependent (an argument depends on a
+  generic lambda's parameter) is a potential use of `this`
+  (`note_implicit_this_of_dependent_call`): if every open lambda can
+  capture `this` (each has a capture-default), the innermost lambda whose
+  closure is formed outside a template captures it then, with the lambdas
+  enclosing it, since the closure is complete before the call operator is
+  instantiated; otherwise nothing is captured (clang
+  `tryImplicitlyCaptureThisIfImplicitMemberFunctionAccessWithDependentArgs`
+  and `getStackIndexOfNearestEnclosingCaptureReadyLambda`). An instance
+  winner in the instantiated call operator then is `'this' cannot be
+  implicitly captured in this context` (`finish_member_winner`).
+
+Tests: `implicit-this-overload-winner-template-run.cpp`,
+`implicit-this-overload-winner-generic-run.cpp`,
+`implicit-this-overload-winner-inst-error.cpp`. Gaps: a qualified
+`A::f()` capture is reported at the member name, clang at the qualifier
+(both before and after WP-779); clang repeats `-Wdeprecated-this-capture`
+in each instantiation of a nested generic lambda, kiln reports it once.
 
 (WP-716) A generic lambda's call operator instantiated later gets the
 enclosing `this` ([expr.prim.this]/2), not the closure's: the enclosing

@@ -172,6 +172,37 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> ExprId {
         self.note_this_use(loc);
+        self.dependent_implicit_access(this_ty, name, nns, loc)
+    }
+
+    /// [`Self::dependent_implicit_member`] for the overload set `decls`:
+    /// `this` is captured now only when every candidate is an instance
+    /// member, else once one wins at instantiation.
+    pub(crate) fn dependent_implicit_set(
+        &mut self,
+        this_ty: QualType,
+        decls: &[DeclId],
+        name: kiln_ast::names::DeclName,
+        nns: Option<kiln_ast::NnsId>,
+        loc: Loc,
+    ) -> ExprId {
+        if decls.iter().all(|&d| self.is_instance_member(self.templated_or_self(d))) {
+            self.dependent_implicit_member(this_ty, name, nns, loc)
+        } else {
+            self.dependent_implicit_access(this_ty, name, nns, loc)
+        }
+    }
+
+    /// [`Self::dependent_implicit_member`] without capturing `this`: for
+    /// an overload set with a static member, whose call uses `this` only
+    /// if an instance member wins at instantiation.
+    pub(crate) fn dependent_implicit_access(
+        &mut self,
+        this_ty: QualType,
+        name: kiln_ast::names::DeclName,
+        nns: Option<kiln_ast::NnsId>,
+        loc: Loc,
+    ) -> ExprId {
         let this = self.builder().this_expr(this_ty, true, loc);
         let b = conv::decay_dependent(self, this);
         self.builder().dependent_member(Some(b), true, name, false, nns, None, loc)
