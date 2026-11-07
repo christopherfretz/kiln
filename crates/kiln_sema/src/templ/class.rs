@@ -131,7 +131,9 @@ impl Sema<'_, '_> {
         }
         self.ctx = ctx;
         let access_ctx = self.access_ctx.take();
+        let lambda_base = std::mem::replace(&mut self.lambda_base, self.lambdas.len());
         let r = f(self);
+        self.lambda_base = lambda_base;
         self.access_ctx = access_ctx;
         self.scopes = saved.scopes;
         self.ctx = saved.ctx.unwrap_or(self.ast.tu);
