@@ -466,6 +466,11 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         let _ = io.stdout.write_all(HELP.as_bytes());
         return 0;
     }
+    if args.print_resource_dir {
+        // clang prints the directory and stops, whatever else is given.
+        let _ = writeln!(io.stdout, "{}", tc.resource_dir);
+        return 0;
+    }
     if args.version {
         print_version(&mut io.stdout, &tc, false);
         let _ = io.stdout.flush();
