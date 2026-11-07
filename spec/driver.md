@@ -90,6 +90,7 @@ starting with `-` are inputs.
 | `-fkiln-stack-size=N[k\|m\|g]` | kiln: the stack reserved for the compiling thread (default 1 GiB; at least 4 MiB; the last valid value wins). Running out is the fatal "kiln: stack exhausted during …" (spec/sema-templates.md §10.3), never a crash |
 | `-v`, `--verbose`, `--version`, `--help` | see below |
 | `-F <dir>` | accepted; warns `ignoring framework directory` |
+| `-ftime-trace[=<path>]`, `-ftime-trace-granularity=<n>`, `-ftime-trace-verbose` | accepted, as build systems add them for clang (glaze's tests); each warns `'<flag>' ignored: kiln writes no time trace` (`drv_time_trace_ignored`, group `-Wunused-command-line-argument`, silenced by `-Qunused-arguments`), and no file is written (WP-792) |
 | `-fsyntax-only` | parse and check (see "Syntax checking") |
 | `-verify[=<prefixes>]`, `-verify-ignore-unexpected[=<levels>]` | with `-fsyntax-only`: check the diagnostics against `expected-*` comments (see "-verify") |
 | `-Xclang <arg>` | `<arg>` is parsed as a driver option (kiln has no separate `cc1`), so `-Xclang -verify` is `-verify` |
