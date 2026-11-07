@@ -198,7 +198,8 @@ impl AttrKind {
     /// Numbered apart from the runs above.
     pub const WEAKREF: AttrKind = AttrKind(180);
     /// GNU `alias("target")` (clang `AliasAttr`): `a` = the target's
-    /// `StringLitId`, a mangled symbol name. Together with `weakref` it
+    /// `StringLitId`, a mangled symbol name; `b` = the raw `Loc` one past
+    /// the attribute's `)` (codegen's fix-it range end). Together with `weakref` it
     /// names the weak reference's target; alone it makes the declaration
     /// a definition, emitted as an IR alias of the symbol
     /// ([`crate::Ast::alias_definition`], spec/codegen.md "Aliases and
@@ -215,7 +216,8 @@ impl AttrKind {
     /// tail call (WP-682).
     pub const DISABLE_TAIL_CALLS: AttrKind = AttrKind(183);
     /// GNU `ifunc("resolver")` on a function (clang `IFuncAttr`): `a` =
-    /// the resolver's `StringLitId`, a mangled symbol name. The
+    /// the resolver's `StringLitId`, a mangled symbol name, and `b` as for
+    /// [`AttrKind::ALIAS`]. The
     /// declaration is a definition, emitted as an IR ifunc whose resolver
     /// picks the implementation at load time (WP-763).
     pub const IFUNC: AttrKind = AttrKind(184);

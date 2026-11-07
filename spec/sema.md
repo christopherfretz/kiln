@@ -1764,6 +1764,32 @@ and returns the scope it names:
     definition not externally visible (codegen rule in spec/codegen.md
     "GNU inline functions"). Test:
     `tests/conformance/ext.gnu.inline/attribute-diags.cpp`.
+  - `alias("sym")`, `ifunc("resolver")`, `weakref` / `weakref("sym")`
+    (GNU syntax or `gnu::`; WP-763, clang `handleAliasAttr`,
+    `handleIFuncAttr`, `handleWeakRefAttr`; `AttrKind::ALIAS`,
+    `AttrKind::IFUNC`, `AttrKind::WEAKREF`). The argument is one string
+    literal (concatenation allowed), the target's *mangled* name, kept
+    as `AttrNode.a` with `AttrNode.b` the location one past the
+    attribute's `)` (for codegen's fix-its). `'X' attribute takes one
+    argument` / `expected string literal as argument of 'X' attribute`
+    otherwise. `ifunc` on anything but a function is `'ifunc' attribute
+    only applies to functions` [-Wignored-attributes] and dropped.
+    `alias` and `ifunc` make the declaration a definition (clang
+    `hasDefiningAttr`): on a function definition, on a variable
+    definition (one with an initializer, or a non-`extern` one), or with
+    a second `alias`/`ifunc` on the same declaration, the later one is
+    `definition 'x' cannot also be an {alias|ifunc}`; a definition of the
+    entity before or after a declaration carrying one is `redefinition of
+    'x'` with `previous definition is here` (`check_alias_redefines`,
+    `check_alias_definition`). `weakref` must have internal
+    linkage (`weakref declaration must have internal linkage`) and
+    namespace scope, and needs a target. The target checks (defined in
+    the TU, no cycle, resolver returns a pointer) are codegen's
+    (spec/codegen.md "Aliases and ifuncs"), as in clang. Not diagnosed:
+    clang's -Wgcc-compat `GCC does not allow 'X' attribute in this
+    position on a function definition`. Test:
+    `tests/conformance/ext.gnu.alias/alias-diagnostics.cpp`,
+    `tests/conformance/ext.gnu.weak/weakref-diagnostics.cpp`.
   - `may_alias` (GNU syntax or `gnu::`; WP-423, clang `MayAliasAttr`):
     kept on any declaration without a diagnostic (no subject list); with
     arguments `'may_alias' attribute takes no arguments`. A GNU
