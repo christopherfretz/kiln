@@ -9858,7 +9858,7 @@ impl Sema<'_, '_> {
         if kind == AttrKind::DEPRECATED && args.len() > 2 {
             let msg = self
                 .diag(DiagId::sema_attribute_too_many_arguments, loc)
-                .arg("'deprecated'")
+                .arg(format!("'{shown}'"))
                 .arg("2");
             self.emit(msg);
             return None;
@@ -9880,7 +9880,7 @@ impl Sema<'_, '_> {
             if syntax != AttrSyntax::Gnu && lit(self, &args[0]) {
                 let msg = self
                     .diag(DiagId::sema_attribute_too_many_arguments_one, loc)
-                    .arg("'deprecated'");
+                    .arg(format!("'{shown}'"));
                 self.emit(msg);
             }
             args = &args[..1];

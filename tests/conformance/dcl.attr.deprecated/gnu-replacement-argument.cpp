@@ -7,16 +7,17 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ std: c++17
-//@ diag: 24:3 error "'deprecated' attribute takes no more than 1 argument"
+//@ requires: clang<22
 //@ diag: 25:3 error "'deprecated' attribute takes no more than 1 argument"
-//@ diag: 26:16 error "'deprecated' attribute takes no more than 2 arguments"
-//@ diag: 27:32 error "expected string literal as argument of 'deprecated' attribute"
-//@ diag: 29:24 warning "'f' is deprecated: Use g instead"
-//@ diag: 21:18 note "'f' has been explicitly marked deprecated here"
-//@ diag: 30:10 warning "'s' is deprecated: m"
-//@ diag: 24:3 note "'s' has been explicitly marked deprecated here"
-//@ diag: 30:16 warning "'u' is deprecated: m"
-//@ diag: 25:3 note "'u' has been explicitly marked deprecated here"
+//@ diag: 26:3 error "'deprecated' attribute takes no more than 1 argument"
+//@ diag: 27:16 error "'deprecated' attribute takes no more than 2 arguments"
+//@ diag: 28:32 error "expected string literal as argument of 'deprecated' attribute"
+//@ diag: 30:24 warning "'f' is deprecated: Use g instead"
+//@ diag: 22:18 note "'f' has been explicitly marked deprecated here"
+//@ diag: 31:10 warning "'s' is deprecated: m"
+//@ diag: 25:3 note "'s' has been explicitly marked deprecated here"
+//@ diag: 31:16 warning "'u' is deprecated: m"
+//@ diag: 26:3 note "'u' has been explicitly marked deprecated here"
 struct T {
   __attribute__((deprecated("Use g instead", "g"))) int f() { return 1; }
   int g() { return 2; }
