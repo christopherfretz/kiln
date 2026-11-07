@@ -413,7 +413,31 @@ impl Sema<'_, '_> {
         if let Some(x) =
             self.list_construct(ty, l, crate::class::InitStyle::DirectList, loc, Some(l.rbrace))
         {
-            return if self.is_err_expr(x) { x } else { self.maybe_bind_temporary(x) };
+            if self.is_err_expr(x) {
+                return x;
+            }
+            // `T{y}` whose copy is elided to `y`'s conversion function
+            // (`operator T()`, [dcl.init.list]/3.7, [class.copy.elision]):
+            // as clang, a no-op functional cast keeps the written type `T`
+            // over the conversion, so an instantiation of a pattern
+            // holding it converts to `T` again (not to the enclosing
+            // initialization's type).
+            if self.ast.exprs.get(x).kind() == ExprKind::ImplicitCastExpr
+                && self.ast.types.as_record(ty).is_some()
+            {
+                let x = self.maybe_bind_temporary(x);
+                return self.builder().functional_cast(
+                    CastKind::NoOp,
+                    x,
+                    ty,
+                    ValueCategory::PRValue,
+                    None,
+                    loc,
+                    l.rbrace,
+                    ExprFlags::NONE,
+                );
+            }
+            return self.maybe_bind_temporary(x);
         }
         if self.ast.types.as_record(ty).is_some() && self.is_complete(ty) {
             // An aggregate temporary: the list, destroyed at the end of

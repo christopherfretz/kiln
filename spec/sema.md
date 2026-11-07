@@ -7194,6 +7194,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     For an enumeration with a fixed underlying type that includes
     [dcl.init.list]/3.8 (`E{v}`: `v` converted to the underlying type,
     narrowing rejected, then to `E`), as `E e{v};` does.
+    A class `T{y}` whose initialization elides to `y`'s conversion
+    function (an `ImplicitCastExpr` of `UserDefinedConversion`, not a
+    construct expression) is wrapped, as clang does, in a `NoOp`
+    `CXXFunctionalCastExpr` to `T`, so substitution of a pattern holding
+    it (`T2{TP{y}}`) converts to the written `T` again rather than
+    losing it with the stripped implicit cast (WP-792). Test:
+    `expr.type.conv/list-cast-conversion-function-in-template.cpp`.
   - `T(a, b)` (`act_on_paren_list_cast`) is ill-formed for a scalar.
     The expression-list may hold braced-init-lists (`T(a, {b})`, `T({})`).
     They are the placeholders of `act_on_braced_arg`, and the
