@@ -250,6 +250,27 @@ impl Ast {
         out.extend([0, self.opt_canon_word(q)]);
     }
 
+    /// The written template arguments of a reference to `d`. A
+    /// non-dependent list naming a specialization is implied by the
+    /// specialization itself and is left out (clang's canonical
+    /// `VisitDeclRefExpr` profiles no written arguments): its
+    /// non-dependent argument expressions have no profile, so keeping them
+    /// would make `mag<1>` in a redeclared requires-clause differ.
+    fn ref_args_word(&self, d: DeclId, l: Option<ArgListId>) -> u32 {
+        match l {
+            Some(l)
+                if !self.types.arg_list_flags(l).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
+                    && !matches!(
+                        self.decls.get(d).kind(),
+                        DeclKind::FunctionTemplate | DeclKind::VarTemplate
+                    ) =>
+            {
+                NONE
+            }
+            _ => self.args_word(l),
+        }
+    }
+
     /// Pushes a length-prefixed expression list.
     fn push_list(&self, l: ListId, stack: &mut Vec<Work>) {
         stack.push(Work::Word(self.lists.len(l) as u32));
@@ -309,14 +330,22 @@ impl Ast {
             K::DeclRefExpr => {
                 out.push(tag(k, 0));
                 self.decl_words(x.decl(e), out);
-                let targs = x.decl_ref_extra(e).and_then(|r| r.template_args);
-                out.push(self.args_word(targs));
+                out.push(
+                    self.ref_args_word(
+                        x.decl(e),
+                        x.decl_ref_extra(e).and_then(|r| r.template_args),
+                    ),
+                );
             }
             K::MemberExpr => {
                 out.push(tag(k, u32::from(n.has(ExprFlags::ARROW))));
                 self.decl_words(x.decl(e), out);
-                let targs = x.decl_ref_extra(e).and_then(|r| r.template_args);
-                out.push(self.args_word(targs));
+                out.push(
+                    self.ref_args_word(
+                        x.decl(e),
+                        x.decl_ref_extra(e).and_then(|r| r.template_args),
+                    ),
+                );
                 stack.push(Work::Opt(id(n.a())));
             }
             K::CXXThisExpr => out.push(tag(k, u32::from(x.this_is_implicit(e)))),
