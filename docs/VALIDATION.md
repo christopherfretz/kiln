@@ -309,7 +309,7 @@ overlapping runs queue each other's jobs.
 
 **Cache policy.** `Swatinem/rust-cache` keeps `~/.cargo` and the
 dependency builds under one `shared-key` per architecture (`ci-arm`,
-`ci-x86_64`), so every job of a lane restores the same entry (about 14 MB,
+`ci-x86_64`), so every job of a lane restores the same entry (about 12 MB,
 a couple of seconds). Only `unit rest` saves it (`save-if`), with
 `cache-on-failure`; an exact hit is not saved again, so the entry changes
 only with `Cargo.lock`, the toolchain or the environment. Workspace
