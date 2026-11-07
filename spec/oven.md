@@ -620,6 +620,15 @@ fault counts and trap ids unchanged.
   (spec/sema.md §4.9) and codegen to skip the fold. Left: a lambda body
   reading through such a pointer in its own `static_assert` is accepted
   (the evaluation point is not known to the Oven).
+- Freezing a pointer or reference to an object with thread storage
+  duration fails silently (`FailKind::NotConstant`, clang
+  `CheckLValueConstantExpression`): [expr.const]/14 permits static
+  storage duration only. This covers the `thread_local` variable being
+  initialized itself (`run.object`, e.g. `S *self = this;` in a default
+  member initializer, or a small-buffer pointer into the object), so
+  such a variable is dynamically initialized per thread rather than
+  emitted with its own address in the `.tdata` image (WP-792; test
+  `basic.stc.thread/self-address-dynamic-init-run.cpp`).
 - Freezing a pointer or reference to a temporary lifetime-extended by
   the variable being initialized ([class.temporary]/6) rejects one whose
   type is destructed (`Ast::needs_destruction`: a non-trivial destructor
@@ -2587,7 +2596,13 @@ evaluated like any other initializer.
 member of `&C::m` for a member of an anonymous union or struct is its
 `IndirectField` ([class.union.anon]/1): the entry's offset sums the
 access path, and the union checked by `MpActive` is the anonymous union
-that directly holds the member (WP-716). Ops:
+that directly holds the member (WP-716). `&C::m` while `C` (or a class
+of the path) is still being defined, as in a static data member
+initializer of `C` or of a class nested in it, interns a *pending* entry
+(member and path only; it compares equal as usual) that
+`Oven::mp_refresh` lays out after `Types::refresh` once the classes are
+complete; a pending entry designates no subobject (`MpAddr` faults,
+WP-792). Ops:
 `MpCast [mp, class]` (castToDerived aux 0, castToBase aux 1, in place),
 `MpAddr [dst, obj, mp]` (`obj.*mp`, checking derived-member containment;
 `Fault::NullBase` for a base step through a null object), `MpActive

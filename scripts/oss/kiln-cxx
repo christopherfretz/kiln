@@ -169,7 +169,9 @@ def main():
     rc = proc.wait()
     timer.cancel()
     wall = time.monotonic() - start
-    rss_kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+    rss_kb = ru.ru_maxrss
+    cpu = ru.ru_utime + ru.ru_stime
 
     if log:
         text = head.decode("utf-8", "replace") + "\n" + tail.decode("utf-8", "replace")
@@ -191,6 +193,7 @@ def main():
             "output": output_of(args),
             "rc": rc,
             "wall_s": round(wall, 3),
+            "cpu_s": round(cpu, 3),
             "max_rss_kb": rss_kb,
             "diag": diag,
             "kind": classify(rc, timed_out.is_set(), text, source),

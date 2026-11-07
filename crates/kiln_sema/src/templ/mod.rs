@@ -767,9 +767,44 @@ impl Sema<'_, '_> {
         self.declarator_type_invalid = false;
         if unexpanded || !self.check_nttp_type(ty, p.loc) {
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
+        } else {
+            self.attach_nttp_type_constraint(d, p.ty, p.type_loc, pack);
         }
         self.push_template_param(d);
         d
+    }
+
+    /// [temp.param]/5: a non-type template parameter `d` whose type `ty`
+    /// contains a placeholder with a type-constraint `C<args>` (`C auto
+    /// V`, `C auto&... Vs`) introduces the immediately-declared
+    /// constraint `C<decltype(V), args...>` (folded over a pack), one of
+    /// the template's associated constraints ([temp.constr.decl]/3.1).
+    /// As clang's `AttachTypeConstraint`, the constrained type is
+    /// `decltype(V)`, the invented type when the type is the placeholder
+    /// `C auto` itself. Another placeholder (`C auto&`, `C auto*`,
+    /// `C decltype(auto)`) is checked when the argument deduces it
+    /// ([dcl.type.auto.deduct]/4), as clang does (it rejects the first
+    /// two "not supported yet").
+    fn attach_nttp_type_constraint(&mut self, d: DeclId, ty: QualType, at: Loc, pack: bool) {
+        let TypeView::Auto {
+            keyword: kiln_ast::types::AutoKeyword::Auto,
+            concept: Some(c),
+            args,
+            ..
+        } = self.ast.types.canonical_view(ty)
+        else {
+            return;
+        };
+        let loc = self.ast.decls.get(d).loc();
+        let at = if at.is_valid() { at } else { loc };
+        let r = self.build_decl_ref(d, loc);
+        let Some(t) = self.act_on_decltype(r, loc, loc) else { return };
+        let extra = args.map(|a| self.ast.types.args(a).to_vec()).unwrap_or_default();
+        let mut e = self.immediately_declared_constraint(c, t, &extra, at);
+        if pack {
+            e = self.pack_constraint(e, at);
+        }
+        self.builder().set_parm_constraint(d, e);
     }
 
     /// Starts the parameter list of a template template parameter

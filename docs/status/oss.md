@@ -72,8 +72,57 @@ The loop:
 | `llvm_project` | 3 | `llvmorg-19.1.7` | tests at parity |
 | `protobuf` | 3 | `v33.1` | tests at parity |
 | `rocksdb` | 3 | `v10.7.5` | tests at parity |
-| `boost_meta` | 4 | `boost-1.90.0` | blocked (16 clusters) |
+| `boost_meta` | 4 | `boost-1.90.0` | blocked (13 clusters) |
+| `ctre` | 4 | `v3.11.0` | tests at parity |
+| `daw_json_link` | 4 | `v3.38.1` | tests at parity |
+| `glaze` | 4 | `v9.1.0` | tests at parity |
+| `mp_units` | 4 | `v2.5.0` | tests at parity |
+| `reflect_cpp` | 4 | `v0.27.1` | tests at parity |
+| `scnlib` | 4 | `v4.0.1` | tests at parity |
 <!-- /oss:projects -->
+
+## Constexpr performance (WP-792)
+
+Wave 4 is the constexpr-heavy projects. Each was built with kiln and
+with the control compiler on the same host, once each, and compared per
+TU over the TUs that compile under both (`oss-report.py --perf`,
+spec/landed/harness/WP-792.md). Time is the TU's CPU time (user plus
+system). RSS is its peak, which includes the LLVM backend. A ratio below
+1 means kiln is faster or smaller.
+
+| project | control | TUs | time (geomean) | RSS (geomean) | Σ CPU kiln / control | peak TU RSS kiln / control | TUs over 1.2x |
+|---|---|---|---|---|---|---|---|
+| `ctre` | clang-19 | 25 | 1.06x | 0.45x | 28 s / 30 s | 166 / 414 MB | 0 of 13 |
+| `mp_units` | gcc-16 | 64 | 0.92x | 0.39x | 235 s / 267 s | 573 / 1539 MB | 3 of 61 |
+| `daw_json_link` | clang-19 | 159 | 1.06x | 0.41x | 351 s / 343 s | 137 / 304 MB | 3 of 152 |
+| `glaze` | clang-19 | 87 | 0.97x | 0.47x | 869 s / 970 s | 1658 / 2171 MB | 2 of 81 |
+| `scnlib` | clang-19 | 47 | 0.97x | 0.43x | 188 s / 190 s | 717 / 827 MB | 0 of 41 |
+| `reflect_cpp` | clang-19 | 317 | 0.91x | 0.39x | 804 s / 884 s | 250 / 549 MB | 0 of 315 |
+
+- RSS is 0.39x to 0.47x of the control's in every project.
+- The heaviest TUs are kiln's best ratios: glaze's `json_test.cpp` is
+  0.72x time and 0.57x RSS (103 s vs 144 s), and mp_units'
+  `fmt_test.cpp` is 0.69x time and 0.31x RSS against gcc-16.
+- The geomean time is above 1 for ctre and daw_json_link, and it comes
+  from their many small TUs of 1 to 3 s.
+- All eight TUs over 1.2x are on time, never on RSS, and all are 1.20x
+  to 1.31x. They are filed as perf clusters on the project pages
+  (mp_units P1, daw_json_link P1, glaze P1).
+- mp_units is compared with g++-16, because clang 19 cannot build
+  mp-units v2.5.0.
+
+g++-16 on the five heaviest TUs of each clang-controlled project. Each
+TU was re-run alone with kiln, clang++-19 and g++-16 with the control's
+command line (clang-only `-W` flags dropped for gcc), under the
+harness's 3 GB address-space cap. Geomean kiln/g++-16:
+
+| project | time | RSS | note |
+|---|---|---|---|
+| `ctre` | 1.21x | 0.29x | g++-16 is the fastest of the three on ctre (2.0 to 3.0 s per TU) |
+| `daw_json_link` | 0.49x | 0.20x | |
+| `scnlib` | 0.66x | 0.57x | |
+| `glaze` | 0.56x | 0.28x | over 2 TUs. g++-16 runs out of the 3 GB cap ("virtual memory exhausted") on `json_test`, `yaml_test` and `beve_test`, where kiln peaks at 1244, 1658 and 759 MB |
+| `reflect_cpp` | 0.68x | 0.21x | |
 
 ## Results
 
@@ -413,6 +462,203 @@ Failure clusters (kiln): none.
 
 Failure clusters (kiln): none.
 <!-- /oss:llvm_project -->
+
+<!-- oss:ctre -->
+### ctre (v3.11.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 25 / 0 | 25 / 0 |
+| links ok / failed | 0 / 0 | 0 / 0 |
+| tests passed / total | ok | ok |
+| wall | 22 s | 28 s |
+| peak TU RSS | 166 MB | 414 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 25 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.06x**, RSS **0.45x**; total 28 s vs 30 s; peak TU RSS 166 MB vs 414 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/ctre/tests/generating.cpp` | 5.1 | 4.2 | 0.82 | 414 | 166 | 0.40 |
+| `$KILN/.oss/src/ctre/tests/matching2.cpp` | 4.1 | 3.4 | 0.83 | 377 | 148 | 0.39 |
+| `$KILN/.oss/src/ctre/tests/matching2-msvc-greedy.cpp` | 3.7 | 3.1 | 0.85 | 354 | 137 | 0.39 |
+| `$KILN/.oss/src/ctre/tests/parsing.cpp` | 3.3 | 2.9 | 0.86 | 314 | 146 | 0.46 |
+| `$KILN/.oss/src/ctre/tests/matching3.cpp` | 3.1 | 2.8 | 0.88 | 325 | 137 | 0.42 |
+
+TUs over 1.2x on time or RSS: 0 of the 13 that take clang-19 at least 0.5 s.
+<!-- /oss:ctre -->
+
+<!-- oss:mp_units -->
+### mp_units (v2.5.0)
+
+| | kiln | gcc-16 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 64 / 0 | 64 / 0 |
+| links ok / failed | 23 / 0 | 23 / 0 |
+| tests passed / total | 25 / 25 | 25 / 25 |
+| wall | 65 s | 70 s |
+| peak TU RSS | 573 MB | 1539 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 64 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/gcc-16 time **0.92x**, RSS **0.39x**; total 235 s vs 267 s; peak TU RSS 573 MB vs 1539 MB.
+
+| heaviest TUs (by gcc-16 time) | gcc-16 s | kiln s | time x | gcc-16 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/mp_units/test/runtime/fmt_test.cpp` | 21.3 | 14.6 | 0.69 | 899 | 277 | 0.31 |
+| `$KILN/.oss/src/mp_units/example/spectroscopy_units.cpp` | 15.1 | 10.4 | 0.69 | 910 | 306 | 0.34 |
+| `$KILN/.oss/src/mp_units/example/foot_pound_second.cpp` | 11.2 | 8.3 | 0.74 | 701 | 238 | 0.34 |
+| `$KILN/.oss/src/mp_units/test/static/isq_test.cpp` | 11.0 | 12.0 | 1.10 | 1539 | 573 | 0.37 |
+| `$KILN/.oss/src/mp_units/example/si_constants.cpp` | 8.6 | 5.9 | 0.68 | 518 | 170 | 0.33 |
+
+TUs over 1.2x on time or RSS: 3 of the 61 that take gcc-16 at least 0.5 s.
+- `$KILN/.oss/src/mp_units/test/static/angular_test.cpp`: time 2.8 / 2.2 s = 1.27x, RSS 145 / 430 MB = 0.34x
+- `$KILN/.oss/src/mp_units/test/static/isq_angle_test.cpp`: time 3.8 / 3.1 s = 1.23x, RSS 234 / 534 MB = 0.44x
+- `$KILN/.oss/src/mp_units/test/static/quantity_spec_test.cpp`: time 2.3 / 1.9 s = 1.22x, RSS 127 / 385 MB = 0.33x
+<!-- /oss:mp_units -->
+
+<!-- oss:daw_json_link -->
+### daw_json_link (v3.38.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 159 / 0 | 159 / 0 |
+| links ok / failed | 158 / 0 | 158 / 0 |
+| tests passed / total | 147 / 147 | 147 / 147 |
+| wall | 377 s | 89 s |
+| peak TU RSS | 137 MB | 304 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 159 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **1.06x**, RSS **0.41x**; total 351 s vs 343 s; peak TU RSS 137 MB vs 304 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/daw_json_link/tests/src/apache_builds_hash_comments_test.cpp` | 7.3 | 6.5 | 0.89 | 304 | 135 | 0.44 |
+| `$KILN/.oss/src/daw_json_link/tests/src/apache_builds_cpp_comments_test.cpp` | 6.9 | 5.9 | 0.85 | 303 | 137 | 0.45 |
+| `$KILN/.oss/src/daw_json_link/tests/src/twitter_timeline_test.cpp` | 5.6 | 5.0 | 0.88 | 285 | 125 | 0.44 |
+| `$KILN/.oss/src/daw_json_link/tests/src/full_unicode_roundtrip_test.cpp` | 4.7 | 4.2 | 0.90 | 287 | 128 | 0.45 |
+| `$KILN/.oss/src/daw_json_link/tests/src/daw_json_simd_block_iterator_test.cpp` | 4.6 | 4.1 | 0.90 | 283 | 110 | 0.39 |
+
+TUs over 1.2x on time or RSS: 3 of the 152 that take clang-19 at least 0.5 s.
+- `$KILN/.oss/src/daw_json_link/tests/src/make_full24.cpp`: time 2.0 / 1.6 s = 1.31x, RSS 96 / 230 MB = 0.42x
+- `$KILN/.oss/src/daw_json_link/tests/src/cookbook_class1_test.cpp`: time 2.7 / 2.2 s = 1.21x, RSS 99 / 245 MB = 0.41x
+- `$KILN/.oss/src/daw_json_link/tests/src/cookbook_kv4_test.cpp`: time 2.2 / 1.8 s = 1.20x, RSS 97 / 240 MB = 0.41x
+<!-- /oss:daw_json_link -->
+
+<!-- oss:glaze -->
+### glaze (v9.1.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | rc 2 | rc 2 |
+| TUs ok / failed | 87 / 2 | 87 / 2 |
+| links ok / failed | 79 / 0 | 79 / 0 |
+| tests passed / total | 100 / 102 | 100 / 102 |
+| wall | 1008 s | 265 s |
+| peak TU RSS | 1658 MB | 2184 MB |
+
+Failure clusters (kiln): 1.
+
+1. **2x** `reject: error: incomplete type Q used in type trait expression`; 2 also fail with clang
+   - e.g. `$KILN/.oss/src/glaze/tests/cbor_test/cbor_test.cpp`: `/usr/lib/gcc/aarch64-linux-gnu/14/../../../../include/c++/14/type_traits:3403:7: error: incomplete type 'cbor_ambiguous::nest_b' used in type trait expression`
+   - repro: `cd $KILN/.oss/build/glaze/kiln/tests/cbor_test && kiln++ -DGLZ_USE_BOOST_ASIO -I$KILN/.oss/src/glaze/tests -I$KILN/.oss/src/glaze/include -O3 -DNDEBUG -std=gnu++23 -fno-exceptions -fno-rtti -Wall -Wextra -pedantic -ftime-trace -Wno-missing-braces -MD -MT tests/cbor_test/CMakeFiles/cbor_test.dir/cbor_test.cpp.o -MF CMakeFiles/cbor_test.dir/cbor_test.cpp.o.d -o CMakeFiles/cbor_test.dir/cbor_test.cpp.o -c $KILN/.oss/src/glaze/tests/cbor_test/cbor_test.cpp`
+
+kiln test run: `98% tests passed, 2 tests failed out of 102`
+
+Performance over the 82 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **0.97x**, RSS **0.47x**; total 869 s vs 970 s; peak TU RSS 1658 MB vs 2171 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/glaze/tests/json_test/json_test.cpp` | 143.5 | 102.9 | 0.72 | 2171 | 1244 | 0.57 |
+| `$KILN/.oss/src/glaze/tests/yaml_test/yaml_test.cpp` | 133.6 | 120.2 | 0.90 | 2049 | 1658 | 0.81 |
+| `$KILN/.oss/src/glaze/tests/beve_test/beve_test.cpp` | 68.0 | 61.3 | 0.90 | 1532 | 759 | 0.50 |
+| `$KILN/.oss/src/glaze/tests/toml_test/toml_test.cpp` | 44.6 | 38.2 | 0.86 | 857 | 506 | 0.59 |
+| `$KILN/.oss/src/glaze/tests/json_test/json_wide_variant_test.cpp` | 36.1 | 29.9 | 0.83 | 1256 | 613 | 0.49 |
+
+TUs over 1.2x on time or RSS: 2 of the 81 that take clang-19 at least 0.5 s.
+- `$KILN/.oss/src/glaze/tests/cli_menu_test/cli_menu_test.cpp`: time 3.4 / 2.7 s = 1.25x, RSS 126 / 291 MB = 0.43x
+- `$KILN/.oss/src/glaze/tests/float_write_test/float_write_test.cpp`: time 2.9 / 2.3 s = 1.23x, RSS 118 / 276 MB = 0.43x
+<!-- /oss:glaze -->
+
+<!-- oss:scnlib -->
+### scnlib (v4.0.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 47 / 0 | 47 / 0 |
+| links ok / failed | 3 / 0 | 3 / 0 |
+| tests passed / total | 25 / 25 | 25 / 25 |
+| wall | 121 s | 90 s |
+| peak TU RSS | 717 MB | 827 MB |
+
+Failure clusters (kiln): none.
+
+Performance over the 43 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **0.97x**, RSS **0.43x**; total 188 s vs 190 s; peak TU RSS 717 MB vs 827 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/scnlib/tests/unittests/impl_tests/float_reader_test.cpp` | 25.8 | 25.9 | 1.00 | 827 | 717 | 0.87 |
+| `$KILN/.oss/src/scnlib/src/scn/impl.cpp` | 23.2 | 24.2 | 1.04 | 620 | 398 | 0.64 |
+| `$KILN/.oss/src/scnlib/tests/unittests/impl_tests/integer_reader_test.impl_wide_localized.cpp` | 18.6 | 18.9 | 1.01 | 626 | 530 | 0.85 |
+| `$KILN/.oss/src/scnlib/tests/unittests/impl_tests/integer_reader_test.impl_wide_classic.cpp` | 18.6 | 18.8 | 1.01 | 625 | 530 | 0.85 |
+| `$KILN/.oss/src/scnlib/tests/unittests/impl_tests/integer_reader_test.impl_narrow_localized.cpp` | 18.0 | 18.0 | 1.00 | 617 | 521 | 0.84 |
+
+TUs over 1.2x on time or RSS: 0 of the 41 that take clang-19 at least 0.5 s.
+<!-- /oss:scnlib -->
+
+<!-- oss:reflect_cpp -->
+### reflect_cpp (v0.27.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | rc 2 | rc 2 |
+| TUs ok / failed | 317 / 4 | 317 / 4 |
+| links ok / failed | 4 / 0 | 4 / 0 |
+| tests passed / total | 219 / 220 | 219 / 220 |
+| wall | 485 s | 169 s |
+| peak TU RSS | 250 MB | 549 MB |
+
+Failure clusters (kiln): 2.
+
+1. **3x** `reject: error: a type specifier is required for all declarations`; 3 also fail with clang
+   - e.g. `$KILN/.oss/src/reflect_cpp/tests/json/test_json_schema5.cpp`: `$KILN/.oss/src/reflect_cpp/tests/json/test_json_schema5.cpp:19:1: error: a type specifier is required for all declarations`
+   - repro: `cd $KILN/.oss/build/reflect_cpp/kiln/tests/json && kiln++ -I$KILN/.oss/src/reflect_cpp/include -I$KILN/.oss/src/reflect_cpp/include/rfl/thirdparty -I$KILN/.oss/build/reflect_cpp/kiln/include -isystem //include -isystem $KILN/.oss/googletest-install-kiln/include -O3 -Wall -Werror -ggdb -ftemplate-backtrace-limit=0 -O3 -DNDEBUG -g0 -Wno-error -std=gnu++20 -MD -MT tests/json/CMakeFiles/reflect-cpp-json-tests.dir/test_json_schema5.cpp.o -MF CMakeFiles/reflect-cpp-json-tests.dir/test_json_schema5.cpp.o.d -o CMakeFiles/reflect-cpp-json-tests.dir/test_json_schema5.cpp.o -c $KILN/.oss/src/reflect_cpp/tests/json/test_json_schema5.cpp`
+2. **1x** `reject: error: unknown type name Q`; 1 also fails with clang
+   - e.g. `$KILN/.oss/src/reflect_cpp/tests/json/test_json_schema_default_vals.cpp`: `$KILN/.oss/src/reflect_cpp/tests/json/test_json_schema_default_vals.cpp:56:6: error: unknown type name 'json'`
+   - repro: `cd $KILN/.oss/build/reflect_cpp/kiln/tests/json && kiln++ -I$KILN/.oss/src/reflect_cpp/include -I$KILN/.oss/src/reflect_cpp/include/rfl/thirdparty -I$KILN/.oss/build/reflect_cpp/kiln/include -isystem //include -isystem $KILN/.oss/googletest-install-kiln/include -O3 -Wall -Werror -ggdb -ftemplate-backtrace-limit=0 -O3 -DNDEBUG -g0 -Wno-error -std=gnu++20 -MD -MT tests/json/CMakeFiles/reflect-cpp-json-tests.dir/test_json_schema_default_vals.cpp.o -MF CMakeFiles/reflect-cpp-json-tests.dir/test_json_schema_default_vals.cpp.o.d -o CMakeFiles/reflect-cpp-json-tests.dir/test_json_schema_default_vals.cpp.o -c $KILN/.oss/src/reflect_cpp/tests/json/test_json_schema_default_vals.cpp`
+
+kiln test run: `99% tests passed, 1 tests failed out of 220`
+
+Performance over the 317 TUs that compiled with both (CPU time, peak RSS of the compiler and its backend):
+geomean kiln/clang-19 time **0.91x**, RSS **0.39x**; total 804 s vs 884 s; peak TU RSS 250 MB vs 549 MB.
+
+| heaviest TUs (by clang-19 time) | clang-19 s | kiln s | time x | clang-19 MB | kiln MB | RSS x |
+|---|---|---|---|---|---|---|
+| `$KILN/.oss/src/reflect_cpp/src/reflectcpp_json.cpp` | 10.6 | 8.8 | 0.83 | 549 | 250 | 0.46 |
+| `$KILN/.oss/src/reflect_cpp/tests/json/test_many_fields.cpp` | 4.9 | 4.2 | 0.84 | 460 | 194 | 0.42 |
+| `$KILN/.oss/src/reflect_cpp/tests/json/test_bitset.cpp` | 4.9 | 4.5 | 0.91 | 364 | 146 | 0.40 |
+| `$KILN/.oss/src/reflect_cpp/tests/json/test_fail_fast.cpp` | 4.8 | 3.9 | 0.81 | 330 | 127 | 0.38 |
+| `$KILN/.oss/src/reflect_cpp/tests/cli/test_wide_char.cpp` | 4.8 | 4.4 | 0.92 | 326 | 127 | 0.39 |
+
+TUs over 1.2x on time or RSS: 0 of the 315 that take clang-19 at least 0.5 s.
+<!-- /oss:reflect_cpp -->
 
 <!-- oss:boost_meta -->
 ### boost_meta (boost-1.90.0)

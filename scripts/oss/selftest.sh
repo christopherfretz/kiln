@@ -3,8 +3,9 @@
 # "Tests"). Runs kiln-cxx on a hello world with clang++-19 and with kiln++
 # (KILN_OSS_CXX, else $CARGO_TARGET_DIR/harness/kiln++, else debug/kiln++;
 # skipped when none is built), checks the JSONL fields, and runs
-# oss-report.py on the two-cluster fixture under fixtures/, plain and with
-# --update. Prints one PASS/FAIL line per check and exits 1 on any FAIL.
+# oss-report.py on the two-cluster fixture under fixtures/, plain, with
+# --perf (WP-792) and with --update. Prints one PASS/FAIL line per check and
+# exits 1 on any FAIL.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIX="$HERE/fixtures"
@@ -40,7 +41,7 @@ run_one() { # <label> <compiler or empty>
   local label="$1" cxx="$2" log="$TMP/$1.jsonl"
   (cd "$TMP" && KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$log" KILN_OSS_PHASE=build "$HERE/kiln-cxx" -O1 hello.cpp -o "hello-$label" >/dev/null 2>&1)
   check "$label: hello builds and runs" "[ \"\$('$TMP/hello-$label')\" = hello ]"
-  check "$label: ok line" "field '$log' 0 'r[\"kind\"]==\"ok\" and r[\"rc\"]==0 and r[\"source\"]==\"hello.cpp\" and r[\"output\"]==\"hello-$label\" and r[\"phase\"]==\"build\" and r[\"cwd\"]==\"$TMP\" and r[\"max_rss_kb\"]>0 and r[\"wall_s\"]>0 and r[\"diag\"]==\"\" and r[\"v\"]==1'"
+  check "$label: ok line" "field '$log' 0 'r[\"kind\"]==\"ok\" and r[\"rc\"]==0 and r[\"source\"]==\"hello.cpp\" and r[\"output\"]==\"hello-$label\" and r[\"phase\"]==\"build\" and r[\"cwd\"]==\"$TMP\" and r[\"max_rss_kb\"]>0 and r[\"wall_s\"]>0 and r[\"cpu_s\"]>=0 and r[\"diag\"]==\"\" and r[\"v\"]==1'"
   (cd "$TMP" && KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$log" "$HERE/kiln-cxx" -c bad.cpp -o bad.o 2>"$TMP/$label.err")
   check "$label: reject exits 1" "[ $? -eq 1 ]"
   check "$label: stderr passes through" "grep -q \"undeclared identifier 'x'\" '$TMP/$label.err'"
@@ -67,6 +68,8 @@ check "report matches fixtures/demo.expected.md" "diff -u '$FIX/demo.expected.md
 cp "$FIX/status.md" "$TMP/status.md"
 python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --update "$TMP/status.md" demo >/dev/null 2>&1
 check "--update rewrites the section" "grep -q 'Failure clusters (kiln): 2.' '$TMP/status.md' && ! grep -q 'stale text' '$TMP/status.md' && grep -q 'trailing text' '$TMP/status.md'"
+python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --perf demo > "$TMP/perf.md"
+check "--perf: geomean and the slow TU" "grep -q 'geomean kiln/clang-19 time \\*\\*2.00x\\*\\*, RSS \\*\\*1.50x\\*\\*' '$TMP/perf.md' && grep -q 'TUs over 1.2x on time or RSS: 1 of the 1' '$TMP/perf.md'"
 check "--update regenerates the projects table" "grep -q '| \`demo\` | 1 | \`v1.0.0\` | blocked (2 clusters) |' '$TMP/status.md' && grep -q '| \`other\` | 2 | \`v2.0.0\` | tests at parity |' '$TMP/status.md'"
 
 echo "selftest: $FAILS failed"

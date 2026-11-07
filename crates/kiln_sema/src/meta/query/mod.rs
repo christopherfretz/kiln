@@ -18,7 +18,7 @@ mod pred;
 use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::reflect::Reflectee;
-use kiln_ast::types::Quals;
+use kiln_ast::types::{Quals, TypeView};
 use kiln_ast::{DeclId, QualType, ReflectionId};
 use kiln_oven::{MetaCtx, MetaError, MetaOp, MetaOut, Oven, QueryOp, info_arg};
 use kiln_source::Loc;
@@ -57,7 +57,7 @@ impl Sema<'_, '_> {
             return Ok(());
         }
         *out = match q {
-            QueryOp::TypeOf => MetaOut::Info(self.reflect_type_of(r, loc)?),
+            QueryOp::TypeOf => MetaOut::Info(self.reflect_type_of(r, loc, oven)?),
             QueryOp::ObjectOf => {
                 self.use_reflected_var(r, loc, oven);
                 MetaOut::Info(self.reflect_object_of(r, loc)?)
@@ -105,10 +105,9 @@ impl Sema<'_, '_> {
     pub(in crate::meta) fn type_of_reflectee(&self, x: Reflectee) -> Option<QualType> {
         let ty = match x {
             Reflectee::Decl(d) => match self.kind_of(d) {
-                DeclKind::Var
-                | DeclKind::ParmVar
+                DeclKind::Var | DeclKind::VarTemplateSpecialization => self.reflected_var_type(d),
+                DeclKind::ParmVar
                 | DeclKind::Binding
-                | DeclKind::VarTemplateSpecialization
                 | DeclKind::Field
                 | DeclKind::IndirectField
                 | DeclKind::Function
@@ -148,14 +147,38 @@ impl Sema<'_, '_> {
         ty.filter(|&t| t != QualType::ERROR)
     }
 
+    /// The type of variable `d` as its latest declaration so far declares
+    /// it. A reflection designates the first declaration, but a later one
+    /// can complete an array of unknown bound ([basic.types.general]/6,
+    /// [dcl.array]/8): after `struct S { static const char k[]; };` and
+    /// `const char S::k[] = "ab";` the type is `const char[3]`, as an
+    /// expression naming `S::k` sees it (`decltype`, `sizeof`) and as
+    /// GCC 16.1's `type_of` answers (WP-795).
+    pub(in crate::meta) fn reflected_var_type(&self, d: DeclId) -> Option<QualType> {
+        self.ast.decls.get(self.ast.latest(d)).ty()
+    }
+
     /// `type_of(r)` ([meta.reflection.queries]): the type of what `r`
     /// represents, canonical (GCC 16.1 drops a type alias there too:
-    /// `using A = int; A v;` gives `type_of(^^v) == ^^int`).
-    fn reflect_type_of(&mut self, r: ReflectionId, loc: Loc) -> Result<ReflectionId, MetaError> {
+    /// `using A = int; A v;` gives `type_of(^^v) == ^^int`). A variable's
+    /// type still an array of unknown bound can be completed by a later
+    /// declaration, so that answer makes the evaluation impure (not
+    /// memoized; spec/reflection.md §3.3); a complete one never changes.
+    fn reflect_type_of(
+        &mut self,
+        r: ReflectionId,
+        loc: Loc,
+        oven: &mut Oven,
+    ) -> Result<ReflectionId, MetaError> {
         let x = self.ast.reflections.get(r);
         match self.type_of_reflectee(x) {
             Some(t) if !self.ast.types.is_dependent(t) => {
                 let mut t = self.ast.types.canonical(t);
+                if matches!(x, Reflectee::Decl(_))
+                    && matches!(self.ast.types.canonical_view(t), TypeView::IncompleteArray(_))
+                {
+                    oven.mark_impure();
+                }
                 if self.const_object(x) {
                     t = self.ast.types.qualify(t, Quals::CONST);
                 }

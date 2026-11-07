@@ -28,8 +28,8 @@ use kiln_source::fx::FxHashSet;
 
 use crate::cleanup::JumpDest;
 use crate::fir::{Fir, Op, V};
-use crate::func::{Addr, Fx};
-use crate::module::{Cg, DefFnAttrs, DefInline, R};
+use crate::func::{Addr, Fx, Jump, RetKind};
+use crate::module::{Cg, DefFnAttrs, DefInline, R, Sig};
 
 /// A compound statement is outlined when it directly holds at least this
 /// many outlinable expression statements (measured,
@@ -41,6 +41,32 @@ pub(crate) const CHUNK: usize = 32;
 /// A run of consecutive outlinable statements shorter than this stays
 /// inline (a call per one or two statements gains nothing).
 pub(crate) const MIN_RUN: usize = 4;
+
+/// An expansion element smaller than this (statements and expressions)
+/// stays inline even in an outlined expansion statement: its call would
+/// cost more than its body.
+pub(crate) const MIN_ELEMENT: usize = 16;
+
+/// How the helper of an expansion element returns to its caller
+/// ([`Cg::emit_outlined_element`]): falling off its end or `continue`,
+/// a `break` of the expansion statement, or a `return` of the function.
+const ELEM_NEXT: i128 = 0;
+const ELEM_BREAK: i128 = 1;
+const ELEM_RETURN: i128 = 2;
+
+/// What [`Cg::scan_element`] learnt of an expansion element.
+pub(crate) struct ElemScan {
+    /// A helper can emit it.
+    ok: bool,
+    /// Its statements and expressions.
+    size: usize,
+    /// It breaks out of the expansion statement.
+    brk: bool,
+    /// It returns from the function.
+    ret: bool,
+    /// Its full-expressions (declaration initializers included).
+    exprs: Vec<ExprId>,
+}
 
 /// Functions whose call may return twice (clang `ReturnsTwice` by name):
 /// a helper would return before the second return.
@@ -146,13 +172,20 @@ impl Cg<'_> {
     /// twice.
     fn stmt_outlinable(&self, s: StmtId) -> bool {
         let ast = self.ast;
-        if ast.stmts.get(s).kind() != StmtKind::ExprStmt {
-            return false;
-        }
-        let mut stack = vec![ast.stmts.expr_stmt_expr(s)];
+        ast.stmts.get(s).kind() == StmtKind::ExprStmt
+            && self.expr_outlinable(ast.stmts.expr_stmt_expr(s), &mut 0) == Some(true)
+    }
+
+    /// Whether a helper can evaluate expression `root` (`None` if not;
+    /// else whether it calls or constructs something), adding its node
+    /// count to `size`.
+    fn expr_outlinable(&self, root: ExprId, size: &mut usize) -> Option<bool> {
+        let ast = self.ast;
+        let mut stack = vec![root];
         let mut kids = Vec::new();
         let mut calls = false;
         while let Some(e) = stack.pop() {
+            *size += 1;
             let k = ast.exprs.get(e).kind();
             calls |= matches!(
                 k,
@@ -186,8 +219,8 @@ impl Cg<'_> {
                 | ExprKind::CXXFoldExpr
                 | ExprKind::CXXUnresolvedConstructExpr
                 | ExprKind::ParenListExpr
-                | ExprKind::CXXInheritedCtorInitExpr => return false,
-                ExprKind::CallExpr if !self.call_outlinable(e) => return false,
+                | ExprKind::CXXInheritedCtorInitExpr => return None,
+                ExprKind::CallExpr if !self.call_outlinable(e) => return None,
                 ExprKind::DeclRefExpr => {
                     let d = ast.exprs.decl(e);
                     if ast.decls.get(d).kind() == DeclKind::Binding
@@ -202,7 +235,7 @@ impl Cg<'_> {
             ast.exprs.children_into(e, &ast.lists, &mut kids);
             stack.extend_from_slice(&kids);
         }
-        calls
+        Some(calls)
     }
 
     /// A call `e` that may run in a helper.
@@ -241,23 +274,36 @@ impl Cg<'_> {
     /// (in first-reference order), with `this` and the closure object.
     fn outline_captures(&self, stmts: &[StmtId]) -> Captures {
         let ast = self.ast;
+        let roots: Vec<ExprId> = stmts.iter().map(|&s| ast.stmts.expr_stmt_expr(s)).collect();
+        self.captures_of(&roots)
+    }
+
+    /// The locals of the current function the expressions `roots` name
+    /// (in first-reference order, through structured bindings and the
+    /// sources of opaque values), with `this` and the closure object.
+    fn captures_of(&self, roots: &[ExprId]) -> Captures {
+        let ast = self.ast;
         let mut seen = FxHashSet::default();
         let mut locals = Vec::new();
         let mut kids = Vec::new();
-        for &s in stmts {
-            let mut stack = vec![ast.stmts.expr_stmt_expr(s)];
+        for &r in roots {
+            let mut stack = vec![r];
             while let Some(e) = stack.pop() {
-                if ast.exprs.get(e).kind() == ExprKind::DeclRefExpr {
-                    let d = ast.exprs.decl(e);
-                    if let Some(&a) = self.f.locals.get(&d) {
-                        if seen.insert(d) {
-                            locals.push((d, a));
+                match ast.exprs.get(e).kind() {
+                    ExprKind::DeclRefExpr => {
+                        let d = ast.exprs.decl(e);
+                        if let Some(&a) = self.f.locals.get(&d) {
+                            if seen.insert(d) {
+                                locals.push((d, a));
+                            }
+                        } else if ast.decls.get(d).kind() == DeclKind::Binding
+                            && let Some(b) = ast.decls.binding_expr(d)
+                        {
+                            stack.push(b);
                         }
-                    } else if ast.decls.get(d).kind() == DeclKind::Binding
-                        && let Some(b) = ast.decls.binding_expr(d)
-                    {
-                        stack.push(b);
                     }
+                    ExprKind::OpaqueValueExpr => stack.extend(ast.exprs.opaque_source(e)),
+                    _ => {}
                 }
                 kids.clear();
                 ast.exprs.children_into(e, &ast.lists, &mut kids);
@@ -321,6 +367,35 @@ impl Cg<'_> {
         decl: Option<DeclId>,
         this_class: Option<DeclId>,
     ) -> R<bool> {
+        self.outlined_prologue(f, ptys, cap, decl, this_class);
+        let ret_block = self.f.fir.create_block();
+        self.f.ret_block = Some(ret_block);
+        self.f.ret_dest = Some(JumpDest { blk: ret_block, depth: Some(0), index: 1 });
+        self.f.cl.next_index = 2;
+        self.f.cl.prologue = self.f.cl.depth();
+        for &s in stmts {
+            self.emit_stmt(s)?;
+        }
+        let noreturn = self.f.fir.cur().is_none();
+        let prologue = self.f.cl.prologue;
+        self.pop_cleanup_blocks(prologue);
+        self.emit_return_block();
+        self.emit_epilog();
+        self.outlined_finish(f, decl, noreturn)
+    }
+
+    /// The start of helper `f`'s body: the captured locals, `this` and
+    /// the closure object bound to its parameters (in that order; any
+    /// further parameter is the caller's to bind); the number of
+    /// parameters bound.
+    fn outlined_prologue(
+        &mut self,
+        f: FuncId,
+        ptys: Vec<LTy>,
+        cap: &Captures,
+        decl: Option<DeclId>,
+        this_class: Option<DeclId>,
+    ) -> u32 {
         self.f.fir = Fir::new(ptys);
         self.f.func = Some(f);
         self.f.decl = decl;
@@ -336,20 +411,15 @@ impl Cg<'_> {
         }
         if let Some((_, l)) = cap.closure {
             self.f.closure = Some((V::Arg(arg), l));
+            arg += 1;
         }
-        let ret_block = self.f.fir.create_block();
-        self.f.ret_block = Some(ret_block);
-        self.f.ret_dest = Some(JumpDest { blk: ret_block, depth: Some(0), index: 1 });
-        self.f.cl.next_index = 2;
-        self.f.cl.prologue = self.f.cl.depth();
-        for &s in stmts {
-            self.emit_stmt(s)?;
-        }
-        let noreturn = self.f.fir.cur().is_none();
-        let prologue = self.f.cl.prologue;
-        self.pop_cleanup_blocks(prologue);
-        self.emit_return_block();
-        self.emit_epilog();
+        arg
+    }
+
+    /// `FinishFunction` of helper `f` after its return block: the EH
+    /// blocks, the attributes and the lowering; `noreturn` is passed
+    /// through.
+    fn outlined_finish(&mut self, f: FuncId, decl: Option<DeclId>, noreturn: bool) -> R<bool> {
         self.finish_eh();
         self.emit_unreachable_if_used();
         if let Some(e) = self.f.error.take() {
@@ -392,5 +462,307 @@ impl Cg<'_> {
             return crate::module::err(loc, format!("IR lowering failed: {e:?}"));
         }
         Ok(noreturn)
+    }
+
+    // ---- expansion statements (WP-793) ---------------------------------
+
+    /// The elements of an expanded expansion statement to emit into
+    /// helpers (`Some` per element to outline), or `None` to emit them
+    /// all inline: the elements total at least `-fkiln-outline-expansions`
+    /// statements and expressions, and the function may outline.
+    pub(crate) fn expansion_plan(&self, elems: &[StmtId]) -> Option<Vec<Option<ElemScan>>> {
+        let min = self.opts.outline_expansions;
+        if min == 0 || elems.len() < 2 || !self.outline_enabled() {
+            return None;
+        }
+        let scans: Vec<ElemScan> = elems.iter().map(|&e| self.scan_element(e)).collect();
+        if scans.iter().map(|x| x.size).sum::<usize>() < min {
+            return None;
+        }
+        let plan: Vec<Option<ElemScan>> =
+            scans.into_iter().map(|x| (x.ok && x.size >= MIN_ELEMENT).then_some(x)).collect();
+        plan.iter().any(Option::is_some).then_some(plan)
+    }
+
+    /// Scans expansion element `e` (a compound statement).
+    fn scan_element(&self, e: StmtId) -> ElemScan {
+        let mut sc = ElemScan { ok: true, size: 0, brk: false, ret: false, exprs: Vec::new() };
+        self.scan_stmt(e, false, false, &mut sc);
+        if sc.ok {
+            let mut size = 0;
+            sc.ok = sc.exprs.iter().all(|&x| self.expr_outlinable(x, &mut size).is_some());
+            sc.size += size;
+        }
+        sc
+    }
+
+    /// Scans statement `s` of an expansion element: `nested` inside a
+    /// loop or `switch` of the element (the target of a `break`),
+    /// `in_switch` inside a `switch` of it (the owner of a `case`). An
+    /// element a helper cannot emit has a label, a `goto`, a `case` of
+    /// an enclosing `switch`, a coroutine, `asm` or contract statement,
+    /// a dependent expansion statement, or a `return` of a named return
+    /// value whose destruction the caller guards.
+    fn scan_stmt(&self, s: StmtId, nested: bool, in_switch: bool, sc: &mut ElemScan) {
+        if !sc.ok {
+            return;
+        }
+        let ast = self.ast;
+        let st = &ast.stmts;
+        sc.size += 1;
+        let n = *st.get(s);
+        match n.kind() {
+            StmtKind::CompoundStmt => {
+                for c in ast.lists.iter::<StmtId>(st.compound_body(s)) {
+                    self.scan_stmt(c, nested, in_switch, sc);
+                }
+            }
+            StmtKind::DeclStmt => {
+                for d in ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)) {
+                    self.scan_var(Some(d), sc);
+                }
+            }
+            StmtKind::ExprStmt => sc.exprs.push(st.expr_stmt_expr(s)),
+            StmtKind::NullStmt | StmtKind::ContinueStmt => {}
+            StmtKind::BreakStmt => sc.brk |= !nested,
+            StmtKind::IfStmt => {
+                let d = *st.if_data(s);
+                self.scan_opt(d.init, nested, in_switch, sc);
+                self.scan_var(d.cond_var, sc);
+                sc.exprs.extend(d.cond);
+                self.scan_opt(d.then, nested, in_switch, sc);
+                self.scan_opt(d.els, nested, in_switch, sc);
+            }
+            StmtKind::SwitchStmt => {
+                let d = *st.switch_data(s);
+                self.scan_opt(d.init, nested, in_switch, sc);
+                self.scan_var(d.cond_var, sc);
+                sc.exprs.push(d.cond);
+                self.scan_stmt(d.body, true, true, sc);
+            }
+            StmtKind::CaseStmt if in_switch => {
+                let d = *st.case_data(s);
+                sc.exprs.push(d.lhs);
+                sc.exprs.extend(d.rhs);
+                self.scan_stmt(d.sub, nested, in_switch, sc);
+            }
+            StmtKind::DefaultStmt if in_switch => {
+                self.scan_stmt(st.default_sub(s), nested, in_switch, sc);
+            }
+            StmtKind::WhileStmt | StmtKind::DoStmt | StmtKind::ForStmt => {
+                let d = *st.loop_data(s);
+                self.scan_opt(d.init, nested, in_switch, sc);
+                self.scan_var(d.cond_var, sc);
+                sc.exprs.extend(d.cond);
+                sc.exprs.extend(d.inc);
+                self.scan_opt(d.body, true, in_switch, sc);
+            }
+            StmtKind::CXXForRangeStmt => {
+                let d = *st.range_for_data(s);
+                self.scan_opt(d.init, nested, in_switch, sc);
+                for v in [Some(d.range), d.begin, d.end, Some(d.loop_var)] {
+                    self.scan_var(v, sc);
+                }
+                sc.exprs.extend(d.cond);
+                sc.exprs.extend(d.inc);
+                self.scan_stmt(d.body, true, in_switch, sc);
+            }
+            StmtKind::CXXExpansionStmt if st.expansion_expanded(s) => {
+                let d = *st.expansion_data(s);
+                self.scan_opt(d.init, nested, in_switch, sc);
+                for p in ast.lists.iter::<StmtId>(d.prelude) {
+                    self.scan_stmt(p, nested, in_switch, sc);
+                }
+                for e in ast.lists.iter::<StmtId>(d.expansions) {
+                    self.scan_stmt(e, true, in_switch, sc);
+                }
+            }
+            StmtKind::ReturnStmt => {
+                sc.ret = true;
+                sc.exprs.extend(st.return_value(s));
+                if let Some(v) = st.return_nrvo(s)
+                    && self.f.nrvo_flags.contains_key(&v)
+                {
+                    sc.ok = false;
+                }
+            }
+            StmtKind::AttributedStmt => {
+                use kiln_ast::attr::{AttrKind as A, AttrNode};
+                for a in ast.lists.iter::<kiln_ast::AttrId>(st.stmt_attrs(s)) {
+                    let node = *ast.attrs.get(a);
+                    if node.kind == A::ASSUME && node.flags & AttrNode::ASSUME_IGNORED == 0 {
+                        sc.exprs.extend(<ExprId as kiln_ast::ids::RawId>::from_raw(node.a));
+                    }
+                }
+                self.scan_stmt(st.sub_stmt(s), nested, in_switch, sc);
+            }
+            StmtKind::CXXTryStmt => {
+                self.scan_stmt(st.try_block(s), nested, in_switch, sc);
+                for h in ast.lists.iter::<StmtId>(st.try_handlers(s)) {
+                    self.scan_stmt(st.catch_block(h), nested, in_switch, sc);
+                }
+            }
+            _ => sc.ok = false,
+        }
+    }
+
+    fn scan_opt(&self, s: Option<StmtId>, nested: bool, in_switch: bool, sc: &mut ElemScan) {
+        if let Some(s) = s {
+            self.scan_stmt(s, nested, in_switch, sc);
+        }
+    }
+
+    /// The initializers of a variable declared in an expansion element
+    /// (and of its tuple-like bindings' holding variables).
+    fn scan_var(&self, d: Option<DeclId>, sc: &mut ElemScan) {
+        let ast = self.ast;
+        let Some(d) = d else { return };
+        if ast.decls.get(d).kind() != DeclKind::Var {
+            return;
+        }
+        sc.size += 1;
+        sc.exprs.extend(ast.decls.var(d).and_then(|v| v.init));
+        if let Some(l) = ast.decls.decomp_bindings(d) {
+            for b in ast.lists.iter::<DeclId>(l) {
+                if let Some(h) = ast.decls.binding_var(b) {
+                    sc.exprs.extend(ast.decls.var(h).and_then(|v| v.init));
+                }
+            }
+        }
+    }
+
+    /// Emits expansion element `e` into a new helper and calls it; `end`
+    /// is the expansion statement's `break` destination. The helper
+    /// returns an `i32` when the element breaks or returns
+    /// ([`ELEM_NEXT`], [`ELEM_BREAK`], [`ELEM_RETURN`]), which the caller
+    /// switches on, branching through its own cleanups; a value the
+    /// element returns is stored through the caller's return slot,
+    /// passed last. Whether it was outlined (else nothing is emitted).
+    pub(crate) fn emit_outlined_element(
+        &mut self,
+        e: StmtId,
+        sc: &ElemScan,
+        end: JumpDest,
+    ) -> R<bool> {
+        let Some(cur) = self.f.func else { return Ok(false) };
+        let ret_ok = !sc.ret
+            || (self.f.ret_dest.is_some()
+                && (self.f.ret_kind == RetKind::Void || self.f.ret_slot.is_some()));
+        if self.f.fir.cur().is_none() || !ret_ok {
+            return Ok(false);
+        }
+        let cap = self.captures_of(&sc.exprs);
+        let status = sc.brk || sc.ret;
+        let ret_slot = if sc.ret { self.f.ret_slot } else { None };
+        let mut args: Vec<V> = cap.locals.iter().map(|&(_, a)| a.v).collect();
+        args.extend(cap.this);
+        args.extend(cap.closure.map(|(v, _)| v));
+        args.extend(ret_slot.map(|a| a.v));
+        let name = format!("{}.expand.{}", self.m.func(cur).name(), self.f.outlined);
+        let ptys = vec![LTy::PTR; args.len()];
+        let rty = if status { LTy::I32 } else { LTy::VOID };
+        let fty = self.m.types.function(rty, &ptys, false);
+        let Ok(f) = self.m.add_function(&name, fty) else { return Ok(false) };
+        self.f.outlined += 1;
+        let pa = self.m.attr_set(&[Attr::Flag(AttrKind::NonNull), Attr::Flag(AttrKind::NoUndef)]);
+        {
+            let func = self.m.func_mut(f);
+            func.linkage = Linkage::Internal;
+            func.attrs.params = vec![pa; ptys.len()];
+        }
+        let ret = (self.f.ret_kind, self.f.sig.clone(), ret_slot);
+        let decl = self.f.decl;
+        let this_class = self.f.this_class;
+        let saved = std::mem::replace(&mut self.f, Fx::empty());
+        let r = self.emit_element_body(f, ptys, e, &cap, decl, this_class, (sc.brk, sc.ret), ret);
+        self.f = saved;
+        let noreturn = r?;
+        let opts = CallOpts::default();
+        let rv = self.emit_call_op(fty, V::C(Value::func(f)), args, opts, rty, Some(f), false);
+        if noreturn {
+            self.f.fir.push(Op::Unreachable, LTy::VOID);
+            self.f.fir.set_cur(None);
+            return Ok(true);
+        }
+        if status {
+            let next = self.f.fir.create_block();
+            let brk = sc.brk.then(|| self.f.fir.create_block());
+            let ret = sc.ret.then(|| self.f.fir.create_block());
+            let mut cases = Vec::new();
+            for (b, k) in [(brk, ELEM_BREAK), (ret, ELEM_RETURN)] {
+                if let Some(b) = b {
+                    cases.push((V::C(self.m.const_int(LTy::I32, k)), b));
+                }
+            }
+            self.f.fir.push(Op::Switch { c: rv, default: next, cases }, LTy::VOID);
+            if let Some(b) = brk {
+                self.emit_block(b, false);
+                self.branch_through_cleanup(end);
+            }
+            if let Some(b) = ret {
+                self.emit_block(b, false);
+                if let Some(rd) = self.f.ret_dest {
+                    self.branch_through_cleanup(rd);
+                }
+            }
+            self.emit_block(next, false);
+        }
+        Ok(true)
+    }
+
+    /// The body of element helper `f` (see [`Self::emit_outlined_element`]):
+    /// `exits` says whether the element breaks and returns, `ret` is the
+    /// caller's return kind, signature and slot. Whether no path returns.
+    #[allow(clippy::too_many_arguments, reason = "one call site, the helper's whole context")]
+    fn emit_element_body(
+        &mut self,
+        f: FuncId,
+        ptys: Vec<LTy>,
+        e: StmtId,
+        cap: &Captures,
+        decl: Option<DeclId>,
+        this_class: Option<DeclId>,
+        exits: (bool, bool),
+        ret: (RetKind, Option<Sig>, Option<Addr>),
+    ) -> R<bool> {
+        let arg = self.outlined_prologue(f, ptys, cap, decl, this_class);
+        let (kind, sig, slot) = ret;
+        self.f.ret_kind = kind;
+        self.f.sig = sig;
+        self.f.ret_slot = slot.map(|a| Addr { v: V::Arg(arg), ..a });
+        self.f.cl.next_index = 1;
+        self.f.cl.prologue = self.f.cl.depth();
+        let next = self.jump_dest_here();
+        let brk = self.jump_dest_here();
+        let retd = self.jump_dest_here();
+        self.f.ret_dest = Some(retd);
+        self.f.jumps.push(Jump { brk, cont: Some(next) });
+        let r = self.emit_stmt(e);
+        self.f.jumps.pop();
+        r?;
+        let prologue = self.f.cl.prologue;
+        self.pop_cleanup_blocks(prologue);
+        let status = exits.0 || exits.1;
+        if (self.f.fir.block_uses(brk.blk) != 0 && !exits.0)
+            || (self.f.fir.block_uses(retd.blk) != 0 && !exits.1)
+        {
+            let loc = self.ast.stmts.get(e).loc();
+            return crate::module::err(Some(loc), "an expansion element left by an unscanned jump");
+        }
+        let mut returns = false;
+        for (d, k) in [(next, ELEM_NEXT), (brk, ELEM_BREAK), (retd, ELEM_RETURN)] {
+            // The fall-through path returns where it is when nothing
+            // continues to the element's end.
+            if !(k == ELEM_NEXT && self.f.fir.block_uses(d.blk) == 0) {
+                self.emit_block(d.blk, true);
+            }
+            if self.f.fir.cur().is_some() {
+                let v = status.then(|| V::C(self.m.const_int(LTy::I32, k)));
+                self.f.fir.push(Op::Ret { v }, LTy::VOID);
+                self.f.fir.set_cur(None);
+                returns = true;
+            }
+        }
+        self.outlined_finish(f, decl, !returns)
     }
 }

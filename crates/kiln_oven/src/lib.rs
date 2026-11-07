@@ -745,6 +745,15 @@ impl Oven {
         self.budget
     }
 
+    /// Marks the running evaluation impure (not memoized) from the
+    /// bridge: a `Stable` reflection op whose answer for these operands
+    /// can still change later in the TU, as a `PointDependent` op's can
+    /// (spec/reflection.md §3.3; `type_of` of a variable whose type is
+    /// still an array of unknown bound). O(1).
+    pub fn mark_impure(&mut self) {
+        self.run.impure += 1;
+    }
+
     /// Opens a transactional trial (spec/oven.md "Trial evaluation",
     /// `TrialMode::Transactional`) around bridge work that may evaluate
     /// nested constants (`std::meta::can_substitute`): every effect is
@@ -1152,6 +1161,7 @@ impl Oven {
             return false;
         }
         self.types.refresh(bridge);
+        self.mp_refresh(bridge);
         self.begin_outermost(true, false, const_context);
         // clang requires no notes at all (`VarDecl::evaluateDestruction`).
         self.run.fold = false;
@@ -1351,6 +1361,7 @@ impl Oven {
     ) -> (Result<ConstValueId, EvalFailure>, Cost) {
         let start = Instant::now();
         self.types.refresh(bridge);
+        self.mp_refresh(bridge);
         let frozen0 = bridge.consts().content_bytes();
         let hits0 = self.memo.hits;
         let inner0 = std::mem::take(&mut self.inner);

@@ -3982,7 +3982,7 @@ impl Oven {
     fn mp_addr(&mut self, raw: u64, v: u128, null_field: bool) -> Result<u64, Fault> {
         // [expr.mptr.oper]/6: a null member pointer (clang's generic
         // note at the operand).
-        let Some(e) = self.mp.get(v) else { return Err(Fault::Invalid) };
+        let Some(e) = self.mp.get(v).filter(|e| !e.pending) else { return Err(Fault::Invalid) };
         let (derived, adj, cls, field) = (e.derived, e.adj, e.cls, e.field);
         let e_path_empty = e.path.is_empty();
         if raw == 0 {

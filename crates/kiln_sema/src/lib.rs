@@ -538,6 +538,13 @@ pub struct Sema<'a, 'sm> {
     /// instantiated (`friend_function_template`): a qualified one that
     /// matches no template is not diagnosed (clang).
     pub(crate) instantiating_friend_template: bool,
+    /// Functions defined in a class whose body is saved for the end of
+    /// the outermost class ([class.mem.general]/7,
+    /// `act_on_delayed_body`): a friend template of a class template
+    /// specialization instantiated before the body is parsed (a use of
+    /// the specialization in a body) is still instantiated from that
+    /// definition (clang's `willHaveBody`).
+    pub(crate) delayed_bodies: kiln_source::fx::FxHashSet<DeclId>,
     /// While a friend function template of a class template is
     /// redeclared (`friend_function_template`): its pattern's
     /// constraints (type-constraints, requires-clauses) mapped to their
@@ -1164,6 +1171,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
             virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
+            delayed_bodies: kiln_source::fx::FxHashSet::default(),
             friend_cmp_constraints: kiln_source::fx::FxHashMap::default(),
             friend_template_apart: false,
             constinit_locs: kiln_source::fx::FxHashMap::default(),

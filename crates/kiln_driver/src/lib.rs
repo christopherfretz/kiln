@@ -132,7 +132,8 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -fconstexpr-depth= -fconstexpr-memory= -fconstexpr-backtrace-limit=
 -fconstexpr-report= -ftemplate-depth= -ftemplate-backtrace-limit=
 -fkiln-instantiation-report[=all|json] -fkiln-stack-size= -fkiln-dump-cfg
--fkiln-cfg-stats -fkiln-cfg-max-elems= -fkiln-memory-report -c -S -emit-llvm
+-fkiln-cfg-stats -fkiln-cfg-max-elems= -fkiln-outline-expansions=
+-fkiln-memory-report -c -S -emit-llvm
 -O<n> -g (ignored) -l -L -Wl, -fuse-ld= -static -nostdlib -shared -rdynamic -pie -no-pie -pthread -###
 -v --version.
 See spec/driver.md.
@@ -440,6 +441,11 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     }
     for f in &args.frameworks {
         Diag::new(DiagId::drv_framework_dir_ignored, Span::INVALID).arg(f).emit(&drv);
+    }
+    if !args.quiet_unused_arguments {
+        for f in &args.time_trace {
+            Diag::new(DiagId::drv_time_trace_ignored, Span::INVALID).arg(f).emit(&drv);
+        }
     }
     let target = match &args.target {
         None => Target::host(),

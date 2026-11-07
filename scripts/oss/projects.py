@@ -36,6 +36,7 @@ def load(path=TOML):
         p.setdefault("configure", [])
         p.setdefault("build_targets", [])
         p.setdefault("c_compiler", "clang-19")
+        p.setdefault("control_cxx", "clang++-19")
         p.setdefault("verified", False)
         p.setdefault("submodules", False)
         p.setdefault("source_subdir", "")
@@ -182,7 +183,7 @@ def main():
             sys.exit(f"projects.py: unknown project '{a.project}' (see {TOML})")
         p = data[a.project]
         q = shlex.quote
-        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "source_subdir", "checkout"):
+        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "control_cxx", "source_subdir", "checkout"):
             print(f"P_{k.upper()}={q(str(p[k]))}")
         print(f"P_SUBMODULES={'1' if p['submodules'] else ''}")
         print("P_CONFIGURE=(" + " ".join(q(x) for x in p["configure"]) + ")")
