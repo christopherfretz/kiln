@@ -1342,7 +1342,7 @@ Redeclaration and linkage rules:
   - Instantiation keeps these attributes unchanged
     (`templ/subst/stmts.rs`); they are not checked again.
   - The parser rejects an argument list on a standard attribute that
-    takes none (`carries_dependency`, `fallthrough`, `noreturn`,
+    takes none (`carries_dependency` before C++26, `fallthrough`, `noreturn`,
     `no_unique_address`, `likely`, `unlikely`, `maybe_unused`,
     `indeterminate` from C++26, even
     `()`): `attribute 'likely' cannot have an argument list` at the `(`,
@@ -2290,7 +2290,14 @@ and returns the scope it names:
       non-bit-field non-static data member (error `... only applies to
       non-bit-field non-static data members`). `carries_dependency`:
       only a function or parameter (error `... only applies to
-      parameters, Objective-C methods, and functions`). `packed`: a
+      parameters, Objective-C methods, and functions`); from C++26
+      (P3475R2, WP-743) it is no standard attribute:
+      `__has_cpp_attribute(carries_dependency)` is 0 and
+      `[[carries_dependency]]` (arguments too, skipped) warns `unknown
+      attribute 'carries_dependency' ignored` [-Wunknown-attributes]
+      and is dropped, the warning clang gives any unknown attribute
+      (GCC 16.1 warns `'carries_dependency' attribute ignored`)
+      (`tests/conformance/dcl.attr.depend/`). `packed`: a
       class, an enumeration or a data member; otherwise `'packed'
       attribute ignored` (warning).
     - `indeterminate` ([dcl.attr.indet]/1, C++26 P2795R5, WP-448;
@@ -3962,6 +3969,11 @@ function) elsewhere.
   printf builtins an implicit `format(printf, F, A)` attribute
   (`builtin::printf_format`, WP-282) and an implicit `NoThrow`
   attribute, in clang's order. Later lookups find that declaration.
+  WP-726: it is never in a dependent context, even when first used in a
+  template, so a reference to it is not instantiation-dependent and
+  `decltype(__builtin_f(a))` in a function template's signature is the
+  call's type once `a` is substituted
+  (`dcl.type.decltype/builtin-call-return-type-run.cpp`).
 - **One declaration per builtin** (WP-332): every implicit use looks
   the name up first, as clang does. The memberwise copy of a trivially
   copyable array member (spec/sema-class.md §4.5, clang
@@ -4162,6 +4174,19 @@ function) elsewhere.
     range [0, M]`, at the callee); a dependent one is checked at
     instantiation. The call is `void` and never a constant expression
     (the Oven traps it; `ext.gnu.builtins/prefetch-{args,template-args,constexpr}.cpp`).
+  - `__builtin_memcpy_inline(dst, src, n)` (id 2176, `vv*vC*Iz`,
+    `NoThrow`) and `__builtin_assume_separate_storage(a, b)` (id 2177,
+    `vvCD*vCD*`, `NoThrow, Const`) are ordinary signature builtins
+    (WP-726): the operands convert to the parameter types, a non-constant
+    `n` is `argument to '__builtin_memcpy_inline' must be a constant
+    integer`, and neither call is a constant expression (clang 19 and 22
+    evaluate neither); `__has_builtin` answers 1 for both
+    (`ext.gnu.builtins/memcpy-inline-{run,args}.cpp`).
+  - `__builtin_unpredictable(x)` (id 2178, `LiLi`, `NoThrow, Const`;
+    WP-726) is an ordinary signature builtin whose value is its converted
+    operand; like clang 19 and 22 it is not a constant expression, and
+    codegen emits the operand without the `!unpredictable` branch hint
+    (`ext.gnu.builtins/unpredictable.cpp`).
   - `__builtin_elementwise_add_sat(x, y)` / `_sub_sat(x, y)` (custom,
     `vector_ops.rs` `builtin_elementwise_sat`; WP-432). At 22
     (`BuiltinElementwiseMath` with clang 22's integer restriction): both
@@ -5703,6 +5728,11 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   defined in a constexpr {function|constructor} before C++23", with the
   type's "not literal because" notes, and marks the function invalid.
   Variables whose own declaration was already diagnosed are checked too.
+  As clang 19's `CheckConstexprFunctionStmt`, the walk looks into an
+  if-statement's branches only: its init-statement and condition
+  variable are not checked (`if (const AssertionResult r = e)` in
+  googletest's `EXPECT_*`), while a switch's, a loop's and a range-for's
+  are (WP-726, `dcl.constexpr/p3-if-condition-variable-not-checked.cpp`).
   In a template (a function template, a member of a class template, a
   generic lambda) only a variable of non-dependent type is checked, at the
   definition; instantiations are not checked. A function template made

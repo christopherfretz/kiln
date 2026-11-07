@@ -1559,6 +1559,11 @@ impl Sema<'_, '_> {
         let d = self.builder().var(h, ty, spec_bits, Some(v));
         self.ast.templates.dependent_depth = depth;
         self.ast.templates.set_instantiated_from(d, pdef);
+        // A `constinit` definition stays the initializing declaration
+        // that has `constinit` ([dcl.constinit]/1).
+        if let Some(&at) = self.constinit_locs.get(&pdef) {
+            self.constinit_locs.insert(d, at);
+        }
         self.in_inst_context(spec, |s| {
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(spec);

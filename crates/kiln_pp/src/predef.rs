@@ -323,6 +323,10 @@ const KILN_FEATURES: &[(u64, &str, &str)] = &[
     // P2900R14 contracts (WP-706, spec/contracts.md §1): C++26 only,
     // whatever the -fclang-compat (clang 22 does not define it).
     (202_400, "__cpp_contracts", "202502L"),
+    // P3074R7 trivial unions with P3726R2's value (WP-743): C++26 only,
+    // whatever the -fclang-compat (neither clang 22 nor GCC 16.1 defines
+    // it).
+    (202_400, "__cpp_trivial_union", "202603L"),
 ];
 
 /// The driver-injected `-D` that clang's driver appends after the user's

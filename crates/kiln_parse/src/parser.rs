@@ -1484,7 +1484,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// whose pattern names no class template it can follow (`A<R>::` with
     /// `template<class T> using A = decltype(f(T()))`), or a member
     /// typedef of a class template's pattern naming a dependent type
-    /// (`rr<V>::type::`; WP-724).
+    /// (`rr<V>::type::`; WP-724), or a member typedef of a class
+    /// template's primary pattern reached through `X<A>::m::` (an explicit
+    /// or partial specialization may declare `m` otherwise: folly's
+    /// `clock_traits<steady_clock>::spec::`; WP-726).
     fn unresolved_specialization_scope(&self, q: DeclId) -> bool {
         use kiln_ast::decl::DeclKind;
         let ast = &self.s.ast;
@@ -1495,6 +1498,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 ast.types.as_record(ty).is_some_and(|r| {
                     ast.definition(r).is_none() && ast.spec_info(ast.first(r)).is_some()
                 }) || self.s.is_dependent_type(ty) && self.in_class_template_pattern(q)
+                    || ast
+                        .decls
+                        .get(q)
+                        .ctx()
+                        .and_then(|c| ast.described_template(ast.first(c)))
+                        .is_some_and(|t| !self.s.may_name_current_instantiation(t))
             }
             _ => false,
         }

@@ -156,13 +156,18 @@ impl Sema<'_, '_> {
     /// or instantiated, as constant evaluation may need it (clang's
     /// `NeededForConstantEvaluation` through
     /// `isImplicitlyDefinableConstexprFunction`), and `f` is not marked
-    /// used.
+    /// used. In a template definition only a constexpr defaulted special
+    /// member is defined, for the same reason.
     pub(crate) fn mark_function_referenced(&mut self, f: DeclId, loc: Loc) {
         self.ast.decls.set_flags(f, DeclFlags::REFERENCED);
         self.define_cmp_on_use(f, loc);
         self.exc_spec_needed(f, loc);
         self.require_annotations(f, loc);
-        if self.unevaluated > 0 || self.in_template() {
+        if self.unevaluated > 0 {
+            return;
+        }
+        if self.in_template() {
+            self.define_constexpr_special_in_template(f, loc);
             return;
         }
         let first = self.ast.first(f);
@@ -198,6 +203,33 @@ impl Sema<'_, '_> {
         // A member function of a class template specialization is
         // instantiated ([temp.inst]/5).
         self.mark_used_at(f, loc);
+    }
+
+    /// A use of `f` in a template definition: `f` is not odr-used, but a
+    /// constexpr defaulted special member of a non-dependent class is
+    /// defined, as a constant expression in the template (a `constexpr`
+    /// or `constinit` initializer) is evaluated at its definition (clang's
+    /// `NeededForConstantEvaluation` through
+    /// `isImplicitlyDefinableConstexprFunction`).
+    fn define_constexpr_special_in_template(&mut self, f: DeclId, loc: Loc) {
+        let first = self.ast.first(f);
+        let Some(kind) = self.special_kind_of(first) else { return };
+        let spec = self.ast.decls.function(first).map(|x| x.spec).unwrap_or_default();
+        if spec.defaulted() == Defaulted::No || spec.is_deleted() || !self.declared_constexpr(first)
+        {
+            return;
+        }
+        match kind {
+            SpecialKind::Dtor | SpecialKind::DefaultCtor if spec.is_trivial() => {}
+            // Defined outside the template (as at an instantiation):
+            // in the template's context the members it uses would only
+            // be referenced, never odr-used, and stay undefined when a
+            // later use finds it already defined.
+            _ => {
+                let Some(class) = self.ast.decls.get(first).ctx() else { return };
+                self.in_inst_context(class, |s| s.define_implicit_special(first, kind, loc));
+            }
+        }
     }
 
     /// Whether some declaration of function `f` is `constexpr` or

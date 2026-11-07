@@ -1553,9 +1553,16 @@ impl Cg<'_> {
     pub(crate) fn emit_ref_binding(&mut self, e: ExprId) -> R<V> {
         let ast = self.ast;
         if ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
+            // clang `EmitExprWithCleanupsLValue`: the bound address
+            // survives a cleanup block shared with a branch out of the
+            // full-expression (a `co_await` suspension's destroy path),
+            // `ForceCleanup({&V})` (WP-726).
             let sc = self.begin_scope(false);
-            let r = self.emit_ref_binding(self.sub(e));
-            self.end_scope(sc);
+            let mut r = self.emit_ref_binding(self.sub(e));
+            match &mut r {
+                Ok(v) => self.end_scope_reload(sc, &mut [v]),
+                Err(_) => self.end_scope(sc),
+            }
             return r;
         }
         if self.is_glvalue(e) {

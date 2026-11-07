@@ -1071,7 +1071,10 @@ pub fn implicit_convert(
         let loc = s.eloc(e);
         return Ok(s.recover_err(&[e], loc));
     }
-    if from == QualType::OVERLOAD {
+    // [over.over]/1: an object or reference of class type is not a target;
+    // the overload set is the argument of the class's converting
+    // constructor (`const D& d = f;` with `D(R (*)())`).
+    if from == QualType::OVERLOAD && !s.overload_set_converts_to_class(e, to, IcsOptions::NONE) {
         // [over.over]: the target selects the function.
         let resolved = if ctx == ConvCtx::Condition {
             s.check_overload_use(e);
