@@ -284,9 +284,10 @@ impl Sema<'_, '_> {
         let n = *self.ast.exprs.get(e);
         if n.kind() == ExprKind::CXXFoldExpr {
             let (l, r) = (ExprId::from_raw(n.a()), ExprId::from_raw(n.b()));
-            let pat = [l, r].into_iter().flatten().find(|&x| {
-                self.ast.exprs.get(x).deps().contains(ExprDeps::UNEXPANDED_PACK)
-            });
+            let pat = [l, r]
+                .into_iter()
+                .flatten()
+                .find(|&x| self.ast.exprs.get(x).deps().contains(ExprDeps::UNEXPANDED_PACK));
             if let Some(p) = pat {
                 return self.begin_loc(p);
             }

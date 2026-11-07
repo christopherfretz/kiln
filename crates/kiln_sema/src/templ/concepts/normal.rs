@@ -69,8 +69,8 @@ impl NormTable {
 use kiln_ast::DeclId;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{BinaryOp, ExprKind};
-use kiln_ast::templates::TtpKind;
 use kiln_ast::ids::RawId;
+use kiln_ast::templates::TtpKind;
 use kiln_ast::types::{ArgView, TemplateArg};
 
 use kiln_source::Loc;
@@ -226,9 +226,8 @@ impl Sema<'_, '_> {
             return None;
         }
         let (lhs, rhs) = (ExprId::from_raw(n.a()), ExprId::from_raw(n.b()));
-        let right = lhs.is_some_and(|x| {
-            self.ast.exprs.get(x).deps().contains(ExprDeps::UNEXPANDED_PACK)
-        });
+        let right =
+            lhs.is_some_and(|x| self.ast.exprs.get(x).deps().contains(ExprDeps::UNEXPANDED_PACK));
         let (pattern, init) = if right { (lhs?, rhs) } else { (rhs?, lhs) };
         let level = self.template_param_depth(cc);
         let mut slots = Vec::new();
@@ -292,11 +291,13 @@ impl Sema<'_, '_> {
         match x.kind() {
             ExprKind::ConceptSpecializationExpr => DeclId::from_raw(x.a())
                 .is_some_and(|d| self.kind_of(d) == DeclKind::TemplateTemplateParm),
-            ExprKind::CXXFoldExpr => [x.a(), x.b()].into_iter().filter_map(ExprId::from_raw).any(|k| {
-                self.unexpanded_packs(PackOperand::Expr(k))
-                    .iter()
-                    .any(|&p| self.ttp_kind(p) == TtpKind::Concept)
-            }),
+            ExprKind::CXXFoldExpr => {
+                [x.a(), x.b()].into_iter().filter_map(ExprId::from_raw).any(|k| {
+                    self.unexpanded_packs(PackOperand::Expr(k))
+                        .iter()
+                        .any(|&p| self.ttp_kind(p) == TtpKind::Concept)
+                })
+            }
             _ => false,
         }
     }

@@ -1231,8 +1231,7 @@ impl AstBuilder<'_> {
     ) -> DeclId {
         let d = self.ast.decls.next_id();
         let ty = self.ast.types.template_type_parm(d, depth.into(), index.into(), pack);
-        let info =
-TemplateParmInfo {
+        let info = TemplateParmInfo {
             depth,
             index,
             pack,

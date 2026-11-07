@@ -1122,13 +1122,8 @@ impl Sema<'_, '_> {
                 let k = self.ttp_kind(decl);
                 if k != kiln_ast::templates::TtpKind::Type {
                     let concept = k == kiln_ast::templates::TtpKind::Concept;
-                    let e = self.builder().ttp_template_id_expr(
-                        decl,
-                        concept,
-                        list,
-                        QualType::BOOL,
-                        l,
-                    );
+                    let e =
+                        self.builder().ttp_template_id_expr(decl, concept, list, QualType::BOOL, l);
                     return Ok(TemplateIdRef::Value(e));
                 }
             }

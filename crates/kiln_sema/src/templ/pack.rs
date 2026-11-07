@@ -1017,8 +1017,9 @@ impl Sema<'_, '_> {
             // the arguments' packs below.
             ExprKind::ConceptSpecializationExpr | ExprKind::UnresolvedLookupExpr => {
                 let d = if n.kind() == ExprKind::ConceptSpecializationExpr {
-                    DeclId::from_raw(n.a())
-                        .filter(|&d| self.kind_of(d) == kiln_ast::decl::DeclKind::TemplateTemplateParm)
+                    DeclId::from_raw(n.a()).filter(|&d| {
+                        self.kind_of(d) == kiln_ast::decl::DeclKind::TemplateTemplateParm
+                    })
                 } else {
                     self.var_ttp_ref(e)
                 };
