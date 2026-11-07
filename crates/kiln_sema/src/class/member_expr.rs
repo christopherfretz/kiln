@@ -1134,6 +1134,13 @@ impl Sema<'_, '_> {
                         return self.recover_err(&[b], loc);
                     }
                     self.diagnose_deleted_use(m, loc);
+                    // `x.f` of a static member function takes its type:
+                    // a placeholder return type is deduced first, as for
+                    // `C::f` ([dcl.spec.auto.general]/12, clang
+                    // `DeduceReturnType` in `BuildMemberExpr`).
+                    if self.check_undeduced_use(m, loc) {
+                        return self.recover_err(&[b], loc);
+                    }
                 }
                 let ty = self.non_reference(self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR));
                 let e = self.build_member_expr(b, m, ty, arrow, loc, extra);

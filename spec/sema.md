@@ -1157,6 +1157,10 @@ Redeclaration and linkage rules:
   `&C::f<int>` of a member function template has the deduced type
   (WP-690,
   `tests/conformance/dcl.spec.auto/member-template-address-deduced.cpp`).
+  A member access `x.f` or `this->f` naming a static member function
+  checks it too (`member_of_object`), so the call through it has the
+  deduced type (WP-690,
+  `tests/conformance/dcl.spec.auto/static-member-through-dependent-base.cpp`).
   A redeclaration
   ([dcl.spec.auto.general]/13) is matched against the declared
   placeholder type (`declared_fn_type`, kept in `declared_returns`), not
