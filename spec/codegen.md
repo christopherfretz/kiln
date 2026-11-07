@@ -89,7 +89,12 @@ panic and never silently wrong IR.
   double`, `const _Atomic(int)`, a `const` array or class element), so a
   global whose every use folds is not emitted. A load of a const variable
   is recognized through parentheses and `NoOp` casts (the xvalue cast of
-  an implicitly moved `return x;`). A read of a `mutable` member is not
+  an implicitly moved `return x;`). An arm of a glvalue conditional under
+  a load (`c ? A : B`) is not a load candidate; a scalar non-reference
+  variable it names without odr-use (sema's `non_odr_use_constant`) is
+  emitted as its folded initializer (clang `VisitDeclRefExpr` ->
+  `tryEmitAsConstant`; `expr.rs` `non_odr_use_constant`, WP-775), so no
+  definition of it is needed. A read of a `mutable` member is not
   folded (the Oven's "read of mutable member" check, spec/oven.md); the
   variable's other members are.
   A reference variable whose referee type is `const` non-volatile folds
