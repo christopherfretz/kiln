@@ -2061,10 +2061,21 @@ impl AstBuilder<'_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        // [temp.dep.expr]/3: with a placeholder for a deduced type
+        // (`auto(x)`, CTAD `W(x)`), a type-dependent argument makes the
+        // whole expression type-dependent; otherwise only value-dependent.
+        use crate::types::TypeView;
+        let placeholder = matches!(
+            self.ast.types.view(ty.ty()),
+            TypeView::Auto { deduced: None, .. }
+                | TypeView::DeducedTemplateSpecialization { deduced: None, .. }
+        );
         let mut deps = self.type_deps(ty);
         for &a in args {
             let d = self.deps(a);
-            if d.contains(ExprDeps::TYPE) {
+            if placeholder {
+                deps |= d;
+            } else if d.contains(ExprDeps::TYPE) {
                 deps |= ExprDeps::VALUE_INST;
             }
             deps |= d.without(ExprDeps::TYPE);
