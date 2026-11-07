@@ -346,6 +346,7 @@ impl Sema<'_, '_> {
             }
         });
         match r {
+            Ok(v) if self.invalid_template_arg_base(v, true, at) => Err(()),
             Ok(v) => Ok(TemplateArg::value(canon, v)),
             Err(f) => {
                 let d = self.diag(DiagId::sema_expr_not_cce, at).arg("non-type template argument");

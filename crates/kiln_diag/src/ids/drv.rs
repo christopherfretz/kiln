@@ -26,6 +26,8 @@ drv_not_implemented = Error (1) "{0} is not implemented yet";
 // ----- WP-228 (driver flags a target does not support)
 drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";
 drv_out_file_multiple = Error (0) "cannot specify -o when generating multiple output files";
+// WP-792: clang's `-ftime-trace` family, added by build systems for clang.
+drv_time_trace_ignored = Warning [UnusedCommandLineArgument] (1) "'{0}' ignored: kiln writes no time trace (see -fkiln-instantiation-report)";
 drv_treating_input_as_cxx = Warning [Deprecated] (2) "treating '{0}' input as '{1}' when in C++ mode, this behavior is deprecated";
 drv_unable_to_execute = Error (1) "unable to execute command: Executable \"{0}\" doesn't exist!";
 drv_unknown_argument = Error (1) "unknown argument: '{0}'";

@@ -329,6 +329,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `EmitStoreThroughExtVectorComponentLValue`) shuffles the value into
     the loaded vector, widening it first when the vector is longer than
     the swizzle, and stores the whole vector back.
+  - a braced initializer of a vector type (clang `VisitInitListExpr`):
+    each scalar element an `insertelement` into `poison` (`i32` index),
+    the remaining lanes zeros; an element that is itself a vector (the
+    whole initializer `v16 b{a}` of a GNU vector of its type) is widened
+    to the result's length by a one-operand `shufflevector`, then
+    shuffled in after the lanes already set (WP-792;
+    `tests/conformance/ext.vector/ir-init-list-vector-element-*.cpp`);
 - Variable alignment (clang `getDeclAlign`, WP-312;
   `tests/codegen/alignas_variable.cpp`): `var_align` is
   `kiln_abi::layout::decl_align` (spec/abi.md §3.2), so an `alignas` or
@@ -1633,7 +1640,15 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
 - A C1 that is not discardable is an alias. clang uses a COMDAT or a
   `weak_odr` C1 in some linkage combinations, which kiln has not
   covered yet.
-- A `CXXDefaultInitExpr` is emitted with the enclosing `this`.
+- A `CXXDefaultInitExpr` is emitted with the enclosing `this`, except
+  inside an aggregate's initializer list, where `this` (and its class)
+  is the aggregate being initialized ([class.mem.general]/9; clang's
+  `FieldConstructionScope` and `CXXDefaultInitExprScope`):
+  `record_init` sets `FuncState::default_init_this` for its fields and
+  `enter_default_init` swaps it in while the default member initializer
+  is emitted. Before WP-792 a `[this]` capture there panicked in a free
+  function and captured the enclosing closure in a lambda. Test:
+  `dcl.init.aggr/default-member-init-this-in-aggregate.cpp`.
 - Sema does not yet synthesize calls to non-trivial `operator=` for
   classes, so codegen sees only trivial assignments.
 - Class `new[]`/`delete[]` with array cookies: see §7g (WP-118).
@@ -3554,7 +3569,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   `vcvt`s, `vpmin`/`vpmax`, `vabd`, `vqadd`, `vminnm`/`vmaxnm`, the
   reciprocal estimates and steps, `vrnd*`, `vcnt`, `vclz`, `vcmla*`;
   the widening multiply `vmull_v`: spec/landed/sema/WP-724.md "NEON
-  widening multiply"). The AArch64 ACLE builtins (`__builtin_arm_*`,
+  widening multiply"; the pairwise widening add `vpaddl[q]` as
+  `{s,u}addlp.VTy.N` of the operand bitcast to twice the lanes at half the
+  width, and `vqdmulh[q]`/`vqrdmulh[q]` as one `sq[r]dmulh` call: WP-792,
+  `target.neon/ir-paddl-qdmulh-19.cpp`). The AArch64 ACLE builtins (`__builtin_arm_*`,
   `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition
   and the global-initialization functions (`__cxx_global_var_init`,

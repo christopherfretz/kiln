@@ -194,7 +194,7 @@ pub trait PrintEnv {
         None
     }
     /// Whether `a` and `b` are the same type, ignoring top-level
-    /// qualifiers.
+    /// qualifiers, including those of array elements.
     fn same_unqualified(&self, a: QualType, b: QualType) -> bool {
         a.without_quals() == b.without_quals()
     }

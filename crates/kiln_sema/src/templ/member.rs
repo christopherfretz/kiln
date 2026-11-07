@@ -213,8 +213,12 @@ impl Substituter<'_, '_, '_> {
             // arguments as the enclosing level, as a member template's
             // ([temp.friend]/1, [temp.inst]/4; clang's
             // `getTemplateInstantiationPattern` through
-            // `getInstantiatedFromMemberTemplate`).
-            if self.sema.ast.decls.function(pattern).is_some_and(|f| f.body.is_some())
+            // `getInstantiatedFromMemberTemplate`). A body still saved
+            // for the end of the class (the specialization used in a
+            // member's body) counts: it is there by the time a
+            // specialization of the friend is instantiated.
+            if (self.sema.ast.decls.function(pattern).is_some_and(|f| f.body.is_some())
+                || self.sema.delayed_bodies.contains(&pattern))
                 && self.sema.ast.first(x) == x
                 && self.sema.ast.templates.instantiated_from_map(x).is_none()
             {

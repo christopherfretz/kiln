@@ -739,7 +739,11 @@ impl Sema<'_, '_> {
             let mut kv = Truth::UNKNOWN;
             if let Some(c) = d.cond {
                 self.cfg_expr(c, b);
-                if d.cond_var.is_none() {
+                // An `if constexpr` condition is a constant expression
+                // even naming its condition variable (`if constexpr
+                // (constexpr auto o = f())`): an instantiation drops the
+                // discarded branch, so its edge must be known dead.
+                if d.cond_var.is_none() || kind == IfKind::Constexpr {
                     kv = self.cfg_truth(c, c, b);
                     // The scan prunes no edge of an `if constexpr` (clang
                     // `shouldTreatSuccessorsAsReachable`).

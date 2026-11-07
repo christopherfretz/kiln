@@ -5,8 +5,9 @@
 super::meta_family! {
     /// The query family.
     pub enum QueryOp {
-        /// `type_of(r)`: the type of the reflected entity (of its first
-        /// declaration).
+        /// `type_of(r)`: the type of the reflected entity (a variable's as
+        /// its latest declaration gives it; one still an array of unknown
+        /// bound makes the call impure, spec/reflection-queries.md §1).
         TypeOf = ("type_of", "i", Stable, 470);
         ObjectOf = ("object_of", "i", Stable, 476);
         ConstantOf = ("constant_of", "i", Stable, 476);

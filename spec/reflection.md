@@ -309,7 +309,9 @@ whether the op may run in a trial (§4.3):
 (241 ops). The Rust tables are the source of truth: a difference between
 this list and the tables is a spec bug, fixed in the same change.
 
-- **Query · Stable · WP-470, done**: `type_of`.
+- **Query · Stable · WP-470, done**: `type_of` (it raises `run.impure`
+  itself while a variable's type is still an array of unknown bound:
+  spec/reflection-queries.md §1, WP-795).
 - **Query · Stable · WP-476, done** (contract: spec/reflection-queries.md):
   `object_of`, `constant_of`, `parent_of`,
   `dealias`, `has_template_arguments`, `operator_of`, `symbol_of`,

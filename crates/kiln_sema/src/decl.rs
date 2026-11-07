@@ -1803,7 +1803,13 @@ impl Sema<'_, '_> {
             default_arg: DefaultArg::None,
             default_loc: Loc::INVALID,
             range: (ds.loc, d.name_loc()),
-            type_loc: ds.type_loc.unwrap_or(ds.loc),
+            // A constrained placeholder of a non-type template parameter:
+            // its concept name, where the immediately-declared constraint
+            // is reported ([temp.param]/5).
+            type_loc: match Self::placeholder_constraint_loc(ds, d) {
+                Some(l) if nttp => l,
+                _ => ds.type_loc.unwrap_or(ds.loc),
+            },
             ref_loc: if d.ellipsis.is_none() { Self::outer_ref_loc(d) } else { Loc::INVALID },
             chunk_loc: if d.ellipsis.is_none() { Self::inner_chunk_loc(d) } else { Loc::INVALID },
             decl: None,
