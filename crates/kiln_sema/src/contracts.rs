@@ -333,7 +333,15 @@ impl Sema<'_, '_> {
         if self.ast.decls.function(f).is_none() {
             return;
         }
-        let first = self.ast.contract_first(f);
+        let mut first = self.ast.contract_first(f);
+        if first == f
+            && stmts.is_empty()
+            && let Some(&p) = self.friend_pattern_prev.get(&f)
+        {
+            // A non-dependent friend of a templated class: checked on the
+            // pattern against the function it will redeclare.
+            first = self.ast.contract_first(p);
+        }
         let first_list =
             if first == f { None } else { self.ast.decls.cold.contracts.get(first).copied() };
         if stmts.is_empty() {
@@ -429,10 +437,11 @@ impl Sema<'_, '_> {
     /// [dcl.contract.func]/7: a non-reference parameter of `owner` that a
     /// postcondition among `stmts` (of declaration `of`) odr-uses is
     /// `const` on declaration `decl`, and not of array or function type.
+    /// In a template a parameter of non-dependent type is checked at
+    /// definition (a member or friend of a class template, a function
+    /// template), once for the pattern; a dependent one at instantiation.
     fn check_post_params(&mut self, decl: DeclId, of: DeclId, stmts: &[StmtId]) {
-        if self.in_template() {
-            return;
-        }
+        let in_template = self.in_template();
         let of_params: Vec<DeclId> = self
             .ast
             .decls
@@ -449,13 +458,20 @@ impl Sema<'_, '_> {
             let Some(&p) = decl_params.get(i) else { continue };
             let n = *self.ast.decls.get(p);
             let Some(t) = n.ty() else { continue };
-            if self.ast.types.is_reference(t) || n.has(DeclFlags::INVALID) {
+            if self.ast.types.is_reference(t)
+                || n.has(DeclFlags::INVALID)
+                || (in_template && self.is_dependent_type(t))
+                || self.post_param_pattern_locs.contains(&n.loc())
+            {
                 continue;
             }
             // An array or function parameter was adjusted to a pointer
             // ([dcl.fct]/5): `const int a[2]` is no const parameter.
             let is_const = self.ast.types.effective_quals(t).contains(Quals::CONST);
             if !is_const && self.post_param_diagnosed.insert(p) {
+                if in_template {
+                    self.post_param_pattern_locs.insert(n.loc());
+                }
                 let msg = self
                     .diag(DiagId::sema_contract_post_nonconst_param, n.loc())
                     .with_note(self.diag(DiagId::note_declared_at, n.loc()));
@@ -522,6 +538,7 @@ impl Sema<'_, '_> {
             if self.ast.types.is_reference(t)
                 || n.has(DeclFlags::INVALID)
                 || self.post_param_diagnosed.contains(&p)
+                || self.post_param_pattern_locs.contains(&n.loc())
             {
                 continue;
             }
