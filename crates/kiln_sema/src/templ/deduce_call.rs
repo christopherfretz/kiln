@@ -1502,7 +1502,12 @@ impl Sema<'_, '_> {
             matches!(s.ast.types.canonical_view(t), TypeView::MemberPointer { .. })
         };
         if (ptr(self, p) && ptr(self, a)) || (mptr(self, p) && mptr(self, a)) {
-            tdf = tdf.union(TdfFlags::IGNORE_QUALIFIERS);
+            // /5: a pointer to (member) function `A` may be the deduced
+            // pointer to `noexcept` function, through a function pointer
+            // conversion (clang `TDF_AllowCompatibleFunctionType`).
+            tdf = tdf
+                .union(TdfFlags::IGNORE_QUALIFIERS)
+                .union(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE);
         }
         (p, a, tdf)
     }

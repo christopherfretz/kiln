@@ -504,33 +504,67 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// "Constant initialization"). Only an initializer that names one
     /// of them is evaluated.
     pub(crate) fn warn_constant_evaluated_init(&mut self, v: DeclId, e: ExprId) {
+        if !self.constant_init_candidate(v)
+            || !self.calls_is_constant_evaluated(e)
+            || !self.constant_init_evaluable(v, e)
+        {
+            return;
+        }
+        self.with_oven(None, |oven, b| oven.warn_constant_evaluated(b, e, v));
+    }
+
+    /// The contract assertions of the initializer `e` of variable `v`
+    /// that is neither `constexpr` nor `constinit` (those are checked as
+    /// constant expressions): one whose initialization is
+    /// constant-initialized is manifestly constant-evaluated
+    /// ([expr.const.init]/4.1, [basic.contract.eval]/8;
+    /// [`kiln_oven::Oven::check_contract_init`], spec/contracts.md §6.4).
+    /// Only once the translation unit has contract assertions under a
+    /// checking semantic.
+    pub(crate) fn check_contract_init(&mut self, v: DeclId, e: ExprId) {
+        if !self.has_contracts
+            || !self.ast.contract_semantic.checks()
+            || !self.constant_init_candidate(v)
+            || !self.constant_init_evaluable(v, e)
+        {
+            return;
+        }
+        self.with_oven(None, |oven, b| oven.check_contract_init(b, e, v));
+    }
+
+    /// Whether `v` is a variable neither `constexpr` nor `constinit`
+    /// whose initializer clang's `CheckCompleteVariableDeclaration`
+    /// evaluates as a constant initializer: one with static or thread
+    /// storage, or that might be usable in constant expressions (a
+    /// `const` non-volatile integral or enumeration variable, a
+    /// reference).
+    fn constant_init_candidate(&self, v: DeclId) -> bool {
         let n = *self.ast.decls.get(v);
-        let Some(data) = self.ast.decls.var(v) else { return };
+        let Some(data) = self.ast.decls.var(v) else { return false };
         if n.kind() != kiln_ast::decl::DeclKind::Var
             || n.has(kiln_ast::decl::DeclFlags::INVALID)
             || data.spec.is_constexpr()
             || data.spec.is_constinit()
         {
-            return;
+            return false;
         }
         let ty = n.ty().unwrap_or(QualType::ERROR);
-        let candidate = self.has_static_storage(v)
+        self.has_static_storage(v)
             || data.spec.tls() != kiln_ast::decl::TlsKind::None
             || self.ast.types.is_reference(ty)
             || {
                 let q = self.ast.types.effective_quals(ty);
                 q.is_const() && !q.is_volatile() && self.is_integral_or_enum(ty)
-            };
-        if !candidate
-            || !self.calls_is_constant_evaluated(e)
-            || self.is_dependent_type(ty)
-            || self.expr_is_value_dependent(e)
-            || self.has_errors_in(e)
-            || !self.eval_stack_ok(e)
-        {
-            return;
-        }
-        self.with_oven(None, |oven, b| oven.warn_constant_evaluated(b, e, v));
+            }
+    }
+
+    /// Whether the initializer `e` of `v` can be evaluated at all.
+    fn constant_init_evaluable(&mut self, v: DeclId, e: ExprId) -> bool {
+        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        !self.is_dependent_type(ty)
+            && !self.expr_is_value_dependent(e)
+            && !self.has_errors_in(e)
+            && self.eval_stack_ok(e)
     }
 
     /// Whether `e` calls `__builtin_is_constant_evaluated` or

@@ -323,6 +323,22 @@ ops! {
     // [dst, expr]: the address a GNU `&&label` (`AddrLabelExpr` `expr`)
     // evaluates to (`Oven::label_addr`; spec/oven.md "Label addresses")
     LabelAddr = 2,
+    // [end]: the start of a contract assertion's check (P2900,
+    // [basic.contract.eval]; spec/contracts.md §6.4): a run deciding
+    // constant-initializability ([expr.const.init]/4.1, every assertion
+    // ignored: `RunState::contracts_off`) jumps to `end`.
+    ContractSkip = 1,
+    // [trap]: a contract violation ([basic.contract.eval]/7), the
+    // predicate false (aux = 1: under observe; 2: the predicate was not
+    // a constant, 7.3). `trap` is the assertion's note.
+    ContractFail = 1,
+    // [value, end, trap]: an observed predicate: the region after this
+    // instruction, which ends in a `Ret` of register `value`, runs as a
+    // transactional trial (spec/oven.md "Trial evaluation"); a false
+    // value, or a failure (rolled back: not a constant, 7.3), is a
+    // violation as `ContractFail`'s under observe; execution resumes at
+    // `end`.
+    ContractTrial = 3,
 }
 
 /// The sub-operations of `Op::Wide`. Binary ones are `*d = *a op *b`

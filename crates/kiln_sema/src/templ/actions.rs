@@ -478,7 +478,17 @@ impl Sema<'_, '_> {
         // partial specialization's own arguments include them
         // ([temp.arg.general]/9; `template<class T, class S = typename
         // T::S> struct E;` then `template<class U> class E<W<U>>::I`).
-        if !written.iter().any(unconverted) && written.len() >= self.template_params(tmpl).len() {
+        let params = self.template_params(tmpl);
+        if !written.iter().any(unconverted) && written.len() >= params.len() {
+            return None;
+        }
+        // A pack expansion for a parameter that is not a pack (`Ts<T...>`
+        // in `template<template<class> class H, template<class> class...
+        // T> struct Ts`, googletest's `Templates`) covers parameters only
+        // once substituted: no partial specialization's own arguments.
+        if let Some(i) = written.iter().position(|&a| self.is_pack_expansion_arg(a))
+            && params.get(i).is_none_or(|&p| !self.ast.template_parm(p).is_some_and(|x| x.pack))
+        {
             return None;
         }
         let conv = self.check_template_args(tmpl, &written, &[], loc).ok()?;

@@ -1972,6 +1972,19 @@ impl Cg<'_> {
                 }
                 Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, tb: Tb::Type })
             }
+            // A postcondition's result name ([dcl.contract.res]): the
+            // return slot, bound by `emit_postconditions`.
+            DeclKind::ContractResultName => {
+                let Some(&slot) = self.f.locals.get(&d) else {
+                    return err(self.loc_of(e), "result name outside a postcondition");
+                };
+                let dq = ast.decls.get(d).ty().unwrap_or(q);
+                if self.referee(dq).is_some() {
+                    let p = self.load_reference(slot.v, slot.align, dq);
+                    return Ok(self.ref_lvalue(p, q));
+                }
+                Ok(LV { addr: slot, q, bf: None, vidx: None, tb: Tb::Type })
+            }
             DeclKind::TemplateParamObject => {
                 let g = self.param_object_global(d)?;
                 let dq = ast.decls.get(d).ty().unwrap_or(q);

@@ -38,6 +38,8 @@ pub(crate) struct ContractCtx {
 pub struct ContractScope {
     kind: ContractKind,
     result: Option<DeclId>,
+    /// The function a precondition or postcondition belongs to.
+    func: Option<DeclId>,
 }
 
 impl ContractScope {
@@ -76,6 +78,7 @@ impl Sema<'_, '_> {
         result: Option<(Symbol, Loc)>,
         definition: bool,
     ) -> ContractScope {
+        self.has_contracts = true;
         let watermark = self.ast.decls.next_id().index();
         self.push_scope(ScopeKind::Block);
         let result = result.map(|(name, loc)| {
@@ -115,7 +118,7 @@ impl Sema<'_, '_> {
             (t, c)
         });
         self.contract_ctx.push(ContractCtx { watermark, lambdas: self.lambdas.len(), this });
-        ContractScope { kind, result }
+        ContractScope { kind, result, func: f }
     }
 
     /// After the predicate `cond` (`None`: it failed to parse) of the
@@ -128,6 +131,7 @@ impl Sema<'_, '_> {
         cond: Option<ExprId>,
         loc: Loc,
     ) -> StmtId {
+        let site_text = cond.map(|c| self.expr_range(c));
         let cond = match cond {
             Some(c) => {
                 let c = match conv::contextually_convert_to_bool(self, c) {
@@ -144,7 +148,40 @@ impl Sema<'_, '_> {
         };
         self.contract_ctx.pop();
         self.pop_scope();
-        self.builder().contract_stmt(sc.kind, cond, sc.result, loc)
+        let s = self.builder().contract_stmt(sc.kind, cond, sc.result, loc);
+        if !self.in_template() {
+            let ctx = sc.func.map_or(self.ctx, |f| self.contract_fn(f));
+            self.record_contract_site(s, loc, ctx, site_text);
+        }
+        s
+    }
+
+    /// Records the `contract_violation` data of the contract assertion
+    /// `s` whose keyword is at `loc`, belonging to function `ctx`, with
+    /// the predicate spelled at `text` (spec/contracts.md §6.3): GCC's
+    /// presumed file, line and keyword column, `__PRETTY_FUNCTION__`, and
+    /// the predicate's source text as the comment.
+    fn record_contract_site(
+        &mut self,
+        s: StmtId,
+        loc: Loc,
+        ctx: DeclId,
+        text: Option<kiln_source::Span>,
+    ) {
+        let sm = self.diags.sm();
+        let (file, line, column) = match sm.presumed_line_col(loc) {
+            Some(p) => (sm.remap_macro_path(&sm.presumed_file_name(&p, loc)), p.line, p.col),
+            None => (String::new(), 0, 0),
+        };
+        let comment = text.and_then(|t| predicate_text(sm, t)).unwrap_or_default().to_owned();
+        let (_, pretty) = self.predefined_function_names(ctx);
+        let (Some(file), Some(function), Some(comment)) =
+            (self.srcloc_string(&file), self.srcloc_string(&pretty), self.srcloc_string(&comment))
+        else {
+            return;
+        };
+        let site = kiln_ast::stmt::ContractSite { file, function, comment, line, column };
+        let _ = self.ast.contract_sites.insert(s, site);
     }
 
     /// The function a contract of `f` belongs to: a function template's
@@ -529,4 +566,50 @@ impl Sema<'_, '_> {
             .map(|&l| self.ast.lists.iter::<StmtId>(l).collect())
             .unwrap_or_default()
     }
+}
+
+/// The predicate spelled at `t` as written (the `contract_violation`
+/// comment, spec/contracts.md §6.3): a bound in a macro argument is where
+/// the argument is written, one in a macro body widens to that
+/// invocation, level by level; a range that does not come out balanced
+/// widens both bounds to the outermost invocations.
+fn predicate_text(sm: &kiln_source::SourceManager, t: kiln_source::Span) -> Option<&str> {
+    let to_file = |mut l: Loc, hi: bool| {
+        for _ in 0..64 {
+            let Some(e) = sm.expansion_info(l) else { break };
+            l = match e.kind {
+                kiln_source::ExpansionKind::MacroArg => {
+                    e.spelling.with_offset(l.to_raw() - e.base.to_raw())
+                }
+                kiln_source::ExpansionKind::Macro { .. } if hi => e.expansion.hi,
+                kiln_source::ExpansionKind::Macro { .. } => e.expansion.lo,
+            };
+        }
+        l
+    };
+    let balanced = |s: &str| {
+        let mut depth = 0i32;
+        for c in s.bytes() {
+            match c {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => depth -= 1,
+                _ => {}
+            }
+            if depth < 0 {
+                return false;
+            }
+        }
+        depth == 0
+    };
+    let (lo, hi) = (to_file(t.lo, false), to_file(t.hi, true));
+    if lo.is_file()
+        && hi.is_file()
+        && sm.same_entry_distance(lo, hi).is_some()
+        && let Some(s) = sm.span_text(kiln_source::Span::new(lo, hi)).filter(|s| balanced(s))
+    {
+        return Some(s);
+    }
+    let lo = if t.lo.is_macro() { sm.expansion_span(t.lo).lo } else { t.lo };
+    let hi = if t.hi.is_macro() { sm.expansion_span(t.hi).hi } else { t.hi };
+    sm.span_text(kiln_source::Span::new(lo, hi))
 }

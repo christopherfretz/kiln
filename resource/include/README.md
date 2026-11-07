@@ -11,10 +11,13 @@ ships them unchanged (see `spec/pp.md`, `#include` resolution).
   `/usr/lib/llvm-19/lib/clang/19/include` (= `clang-19 -print-resource-dir` + `/include`).
 - **License:** Apache-2.0 WITH LLVM-exception; full text in `LICENSE.TXT`
   (verbatim `clang/LICENSE.TXT` at tag `llvmorg-19.1.7`).
-- **kiln changes:** none. Every file is byte-identical to the source.
-  Any future local change must be listed here, file by file, with the reason.
-- **Regenerate:** `scripts/gen-resource.sh` (re-copies; leaves `LICENSE.TXT`
-  and this README alone).
+- **kiln changes:** every imported file is byte-identical to the source.
+  One file is kiln's own, not clang's: `contracts`, the P2900
+  `std::contracts` declarations for a standard library that ships none
+  (libc++ 19; spec/contracts.md §6.3). Any future local change must be
+  listed here, file by file, with the reason.
+- **Regenerate:** `scripts/gen-resource.sh` (re-copies; leaves `LICENSE.TXT`,
+  this README and `contracts` alone).
 
 ## What was skipped, and why
 

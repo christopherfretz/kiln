@@ -2,7 +2,6 @@
 // A skip rather than an xfail: clang 19's parse errors say nothing useful.
 //@ expect: run
 //@ skip(clang): clang 19 does not implement contracts (P2900)
-//@ xfail(kiln): checking evaluation semantics are WP-707; kiln rejects them at codegen
 int main() {
   int x = 2;
   contract_assert(x + x == 4);
