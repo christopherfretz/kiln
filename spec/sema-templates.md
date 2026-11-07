@@ -4269,7 +4269,12 @@ The fold and expansion patterns detect a partial element through
 that, after substitution with a pack index, still names an unexpanded
 pack is rebuilt in keep mode as one unexpanded expansion. A
 `PackExpansionExpr` pattern met in keep mode is still "not yet
-implemented".
+implemented". An expression pack expansion in a template argument list
+uses the same detection (`expand_arg` → `element_expr`, WP-669):
+`B<P<Ts, Us>::value...>` in a member template of `A<Ts...>`, met while
+the class is instantiated and only `Ts` is known, stays one partially
+substituted expansion until the member template's `Us` is supplied
+(`tests/conformance/temp.variadic/p5-partial-expr-expansion-member-template.cpp`).
 
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial
