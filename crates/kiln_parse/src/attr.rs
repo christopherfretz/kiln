@@ -18,6 +18,7 @@ use kiln_source::symbol::Symbol;
 use crate::expr::prec;
 use crate::keywords::Kw;
 use crate::parser::Parser;
+use crate::tentative::TypeIdContext;
 
 /// What one `[[...]]` has held so far: an annotation-list mixes with
 /// neither attributes nor a using-prefix (reported once).
@@ -228,6 +229,19 @@ impl Parser<'_, '_> {
                 return Some(i);
             }
         }
+    }
+
+    /// True at GNU `__attribute__((...))` specifiers followed by `;`: an
+    /// attributed null statement, `__attribute__((fallthrough));` (clang
+    /// `ParseStatementOrDeclarationAfterAttributes`, `kw___attribute`; a
+    /// `[[` after them starts an expression there, so it is not taken).
+    pub(crate) fn at_gnu_attr_null_stmt(&self) -> bool {
+        let mut i = self.pos();
+        while self.kw_of(self.tok_at(i)) == Some(Kw::Attribute) {
+            let Some(j) = self.skip_balanced(i + 1) else { return false };
+            i = j;
+        }
+        i != self.pos() && Self::punct_of(self.tok_at(i)) == Some(Punct::Semi)
     }
 
     /// A C++11 attribute-specifier-seq at namespace scope before a
@@ -661,7 +675,10 @@ impl Parser<'_, '_> {
         let loc = self.bump().span.lo;
         let Some(open) = self.expect(Punct::LParen) else { return };
         let begin = self.tok().span.lo;
-        let arg = if self.is_type_id_start(self.pos()) {
+        // clang `ParseAlignArgument`: `isTypeIdInParens`, the same test as
+        // `sizeof(...)`, so a class template's injected-class-name
+        // (`alignas(V)` inside `V<T>`, [temp.local]/1) is a type-id.
+        let arg = if self.is_cxx_type_id_at(self.pos(), TypeIdContext::InParens).0 {
             self.parse_type_id().map(AttrArg::Type)
         } else {
             self.parse_constant_expr().map(AttrArg::Expr)

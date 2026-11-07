@@ -53,6 +53,7 @@ fn cli_parsing() {
             meta_header: false,
             external: Some("/x/corpus".into()),
             filter: Some("lex".into()),
+            shard: None,
             update: true,
             jobs: Some(3),
             run_timeout: Duration::from_millis(2500),
@@ -589,6 +590,48 @@ fn ast_fixtures_with_clang() {
         "constexpr values come from the text dump"
     );
     assert!(!logged("pass-filter.cpp", "-Xclang -ast-dump "), "no constexpr value, no text dump");
+}
+
+/// `--shard K/N` (spec/harness.md "Command line"; the CI fan-out of
+/// "CI"): shards 1/3, 2/3 and 3/3 of a fixture directory partition its
+/// sorted test list round-robin, each test with the outcome it has in the
+/// unsharded run, and a shard past the end of a short list is empty
+/// rather than an error.
+#[test]
+fn shards_partition_the_test_list() {
+    assert_eq!(Shard::parse("2/3"), Ok(Shard { index: 2, count: 3 }));
+    assert_eq!(Shard::parse("1/1"), Ok(Shard { index: 1, count: 1 }));
+    for bad in ["0/3", "4/3", "3", "a/b", "1/0", "", "1/3/5", "-1/3"] {
+        assert!(Shard::parse(bad).is_err(), "{bad:?} should be rejected");
+    }
+    assert_eq!(Shard { index: 2, count: 6 }.to_string(), "2/6");
+    let o = parse_args(strings(&["--shard=2/4"])).unwrap().unwrap();
+    assert_eq!(o.shard, Some(Shard { index: 2, count: 4 }));
+    assert!(parse_args(strings(&["--shard", "5/4"])).is_err());
+    assert!(parse_args(strings(&["--shard"])).is_err());
+    if !have_clang() {
+        return;
+    }
+    let dir = repo_root().join("xtask/fixtures/ast/clang");
+    let outcomes = |shard| {
+        let o = Options { shard, ..clang_opts(std::slice::from_ref(&dir)) };
+        let results = execute(&o).unwrap();
+        results.into_iter().map(|r| (r.name, r.status)).collect::<Vec<_>>()
+    };
+    let all = outcomes(None);
+    assert_eq!(all.len(), 8);
+    let mut union = Vec::new();
+    for k in 1..=3 {
+        let got = outcomes(Some(Shard { index: k, count: 3 }));
+        let want: Vec<_> = all.iter().skip(k - 1).step_by(3).cloned().collect();
+        assert_eq!(got, want, "shard {k}/3");
+        union.extend(got);
+    }
+    union.sort();
+    let mut sorted = all.clone();
+    sorted.sort();
+    assert_eq!(union, sorted, "the shards are exactly the unsharded run");
+    assert!(outcomes(Some(Shard { index: 9, count: 9 })).is_empty());
 }
 
 /// `expect: ast` with kiln (a fake that prints canned dumps) as the compiler

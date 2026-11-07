@@ -296,7 +296,7 @@ the target:
   - a literal that fits in nothing returns `LiteralError(sema_int_literal_too_large)`.
 - `type_float_literal` / `classify_float_literal`: [lex.fcon]. Values are rounded exactly from the decimal or hex string, using bignum rationals in `soft.rs`, into `FloatBits`. Suffixes none, `f`, `l`, `f16`, and (P1467, WP-361) `f32`/`F32`, `f64`/`F64`, `f128`/`F128` and `bf16`/`BF16` are typed, as `_Float32`, `_Float64`, `_Float128` and `__bf16`, each rounded once from the exact decimal or hex value (`bf16` too, not through `float`; spec/lex.md). Before C++23 they are an extension (`lit_float_suffix_ext`, `-Wc++23-extensions`). Overflow and underflow produce `sema_float_literal_overflow` / `_underflow` (group `literal-range`).
 - `type_char_literal`: [lex.ccon], giving `char`, `wchar_t`, `char8_t`, `char16_t`, `char32_t`, or `int` for a multicharacter literal.
-- `string_literal_type(encoding, units)`: [lex.string]/10, giving `const C[units]`, where `units` includes the terminating NUL.
+- `string_literal_type(encoding, units)`: [lex.string]/10, giving `const C[units]`, where `units` includes the terminating NUL. `C` is `string_literal_elem(std, encoding)`: a UTF-8 string literal's is `char8_t` from C++20 and `char` before (C++17 [lex.string]/8, P0482R6), also for the literal-operator call of `u8"..."_x` ([lex.ext]/5; WP-691).
 - `float_const(ty, bits)`: interns the constant.
 
 `LiteralError { id, args }` has `diag(s, loc)` for the caller to emit.
