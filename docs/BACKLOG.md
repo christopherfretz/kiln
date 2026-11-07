@@ -749,6 +749,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-725 | diag: implement -Wdeprecated-copy and subgroups (group names only today, `crates/kiln_diag/src/clang_groups.rs:243`) | WP-720 | open |
 | WP-727 | harness: oss-build.sh tag check warns when two tags point at the checkout (`scripts/oss/oss-build.sh:67`; use `git tag --points-at HEAD`) | WP-716 | open |
 | WP-728 | sema: diagnose conflicting `section` placements (clang err_section_conflict; `crates/kiln_sema/src/decl.rs:9971`) | WP-716 | open |
+| WP-750 | correctness bundle 2: noreturn keeps noexcept/fn-type bits, noreturn on instantiation, class-scope __PRETTY_FUNCTION__, pre-C++17 exception spec in typedef, section conflicts | WP-728 | in progress |
 | WP-729 | perf: profile protobuf summed compile time (2.65x clang-19; docs/status/oss/protobuf.md) | WP-716 | open |
 | WP-731 | contracts sema gaps: lambda captures of parameters, explicit specialization adding contracts, friend redecl postcondition-param rule, dump prints type-parameter-0-0, spurious constexpr note after predicate error (spec/contracts.md:324-340) | WP-706 | open |
 | WP-732 | C++26 DIS todo papers: P3598, P2841, P3074, P3726, P1494, P3475 (docs/STANDARD_SUPPORT.md:337-342) | WP-706 | open |

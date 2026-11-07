@@ -223,6 +223,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 expr_types: PrintOptions::SUGARED,
                 closure_as_lambda: false,
                 scoped_nns: false,
+                scoped_spec_args: false,
             },
             opts,
             out,

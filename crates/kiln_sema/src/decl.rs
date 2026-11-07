@@ -5535,6 +5535,7 @@ impl Sema<'_, '_> {
         self.check_static_tls(v, paren);
         let constinit_ok = self.check_constinit(v);
         self.report_deferred_immediates(v, constinit_ok);
+        self.unify_var_section(v);
         self.check_consteval_only_var(v);
         self.initializing = None;
         self.lambda_mangle.var = None;
@@ -6353,6 +6354,7 @@ impl Sema<'_, '_> {
         if self.is_var_definition(v) {
             self.check_static_tls(v, None);
             self.check_constinit(v);
+            self.unify_var_section(v);
         }
         self.check_consteval_only_var(v);
     }
