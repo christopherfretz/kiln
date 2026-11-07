@@ -2080,6 +2080,15 @@ class name" at `B`
 - If its signature does not depend on the template's parameters, the
   second specialization to instantiate it reports "redefinition of 'f'"
   (clang). The note shows the first instantiation.
+- A friend function template defined in a class template has its
+  specializations instantiated from that definition even when the class
+  specialization was instantiated before the body was parsed (a body of
+  the class naming `M<int>`, [class.mem.general]/7): the parser records
+  the saved body (`Sema::act_on_delayed_body`), and the instantiated
+  friend is linked to the pattern as if the body were there (clang's
+  `willHaveBody`), rather than left a declaration whose use is "function
+  'pow' with deduced return type cannot be used before it is defined"
+  (WP-792; `temp.friend/friend-template-body-names-own-specialization.cpp`).
 - A friend function declared (unqualified) in a templated class
   redeclares nothing when the template is defined: it is not linked
   to an earlier declaration of the same name, nor checked against an
