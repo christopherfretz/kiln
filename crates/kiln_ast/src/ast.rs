@@ -691,6 +691,29 @@ impl Ast {
         })
     }
 
+    /// The GNU `alias("target")` or `ifunc("resolver")` that makes `d` a
+    /// definition (clang `Decl::getDefiningAttr`, ignoring the `alias` of
+    /// a `weakref`): `(is_ifunc, target)` from the first declaration of
+    /// `d` that carries one, or `None`.
+    pub fn alias_definition(&self, d: DeclId) -> Option<(bool, crate::ids::StringLitId)> {
+        use crate::ids::RawId as _;
+        if self.any_redecl_has(d, crate::attr::AttrKind::WEAKREF) {
+            return None;
+        }
+        self.redecls_of(d).find_map(|r| {
+            self.lists
+                .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
+                .map(|a| self.attrs.get(a))
+                .find(|a| {
+                    matches!(a.kind, crate::attr::AttrKind::ALIAS | crate::attr::AttrKind::IFUNC)
+                })
+                .and_then(|a| {
+                    let l = crate::ids::StringLitId::from_raw(a.a)?;
+                    Some((a.kind == crate::attr::AttrKind::IFUNC, l))
+                })
+        })
+    }
+
     /// The section a GNU `section("name")` attribute on any declaration
     /// of `d` places it in (clang `SectionAttr`, inherited by
     /// redeclarations).

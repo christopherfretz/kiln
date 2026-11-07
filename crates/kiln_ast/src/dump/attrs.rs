@@ -34,6 +34,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::WEAK => "Weak",
         AttrKind::WEAKREF => "WeakRef",
         AttrKind::ALIAS => "Alias",
+        AttrKind::IFUNC => "IFunc",
         AttrKind::ANALYZER_NORETURN => "AnalyzerNoReturn",
         AttrKind::DISABLE_TAIL_CALLS => "DisableTailCalls",
         AttrKind::VISIBILITY => "Visibility",
