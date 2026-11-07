@@ -1971,6 +1971,25 @@ and returns the scope it names:
     functions and variables with static storage duration (clang's
     subject-list error otherwise); kept as `AttrKind::SECTION` with the
     literal, for codegen (spec/codegen.md §8 "Sections").
+    Section type conflicts (WP-728, clang `Sema::UnifySection`,
+    `section.rs`): each declaration placed in a named section gives it
+    flags, read|execute for a function (each declaration that carries
+    the attribute, when its attributes are checked), read or read|write
+    for a variable with static or thread storage duration (at its
+    definition, the attribute possibly inherited from an earlier
+    declaration). A variable is read-only when its storage is constant
+    (clang `isNonConstantStorage(ExcludeCtor=true, ExcludeDtor=false)`
+    empty: a reference, or a `const` type or element type that, if a
+    class, has no `mutable` member and a trivial destructor) and its
+    initialization is a constant initialization (no initializer counts;
+    a dependent one is not checked). The first declaration fixes the
+    section's flags; a later one whose flags differ is an error `'b'
+    causes a section type conflict with 'a'` (unqualified names) with a
+    `declared here` note at the first. Nothing is placed inside a
+    template instantiation, so a pattern counts and its specializations
+    do not. `#pragma section` and `__declspec(allocate)` (clang
+    `PSF_Implicit`) are not modelled. Test:
+    `tests/conformance/ext.gnu.section/section-conflict.cpp`.
     (`visibility`: see "Visibility attributes")
   - GNU `format(archetype, F, A)` (WP-186, clang `handleFormatAttr`, in
     its order): exactly three arguments (`'format' attribute requires
@@ -2801,6 +2820,16 @@ the result in `Chunk::Function::exc`; the function type keeps the
 specification as written (`TypeNames` prints ` noexcept`,
 ` noexcept(<expr>)`, ` throw()`), the canonical type folds it to
 `Nothrow` or `None`.
+- **In a typedef or alias** before C++17 ([except.spec]/2 in C++14,
+  WP-747; clang `err_exception_spec_in_typedef`): a function declarator
+  chunk of a `typedef` or alias-declaration that has a `noexcept` or
+  `throw` specification is an error at the keyword, `exception
+  specifications are not allowed in typedefs` / `... in type aliases`,
+  once per chunk; the specification is still kept. The parser
+  (`parse_function_qualifiers`) emits it, inner chunk first, where clang
+  emits a nested declarator's outer chunk first. From C++17 the
+  specification is part of the type and is allowed. Tests:
+  `tests/conformance/except.spec/exception-spec-in-typedef-*.cpp`.
 - **`noexcept`** is `ExcSpec::BasicNoexcept`.
 - **`act_on_noexcept_spec(e, loc, start)`** ([except.spec]/2): `e` is
   a contextually converted constant expression of type `bool`
@@ -7849,6 +7878,15 @@ A type argument prints canonical with every name scoped, as clang stores
 the converted arguments: `[T = (anonymous namespace)::N::S]`,
 `[T = std::basic_string<char>]`, `[T = unsigned long]` for `size_t`
 (LLVM's `getTypeName<T>()` reads these; WP-730).
+The scope's specialization arguments print the same way (WP-740,
+clang prints the canonical arguments it stores): `C<N::X>::f`, an
+alias or a defaulted argument as what it names, an unnamed namespace
+as `N::(anonymous namespace)::Z`, a closure type as `(lambda at
+F:L:C)`, both in the scope and in the bracket (`C<(lambda at
+F:L:C)>::f() [T = (lambda at F:L:C)]`). The closure that is itself the
+scope of a lambda's call operator prints `(lambda)` at clang_compat >=
+22 and `(anonymous class)` before (`auto f()::(lambda)::operator()()
+const`).
 The source-location builtins use the same printer (§9.5 of
 sema-templates.md), and a `__builtin_FUNCTION`/`__builtin_source_location`
 in a dependent context, or a default argument evaluating one used there,
