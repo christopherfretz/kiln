@@ -330,3 +330,33 @@ c_compiler = "clang-19"
 wave = 3
 verified = true
 notes = "WP-726. Needs boost, double-conversion, gflags, glog, libevent, fmt and fast_float installed. The shim forces FOLLY_HAS_LIBURING 0 (the container's liburing 2.9 lacks the 2.10 zero-copy receive API folly uses). googletest 1.17 is fetched at configure time. Excluded tests: WriteFileAtomic.directoryPermissions expects a permission error that root does not get; range_test and container_map_util_test do not compile with clang 19 either (RangeTest.cpp, MapUtilTest.cpp), so ctest has no executable for them."
+
+# ---------------------------------------------------------------- wave 4
+# Big applications (WP-799): large self-contained programs whose own test
+# suites check a lot of runtime behaviour.
+
+[duckdb]
+url = "https://github.com/duckdb/duckdb"
+tag = "v1.5.6"
+build = "cmake"
+cxx_std = 17
+configure = ["-DBUILD_UNITTESTS=ON", "-DBUILD_SHELL=ON"]
+build_targets = ["unittest", "shell"]
+test = "DUCKDB_TEST_MAX_THREADS=4 SUMMARIZE_FAILURES=1 test/unittest"
+c_compiler = "clang-19"
+wave = 4
+verified = false
+notes = "WP-799. Release, default extensions (core_functions, parquet), not the amalgamation. The test is unittest with no arguments: the default (non-slow) SQL logic tests, at most 4 threads per database (DUCKDB_TEST_MAX_THREADS)."
+
+[z3]
+url = "https://github.com/Z3Prover/z3"
+tag = "z3-4.15.8"
+build = "cmake"
+cxx_std = 20
+configure = []
+build_targets = ["shell", "test-z3"]
+test = 'rc=0; ./test-z3 /a || rc=1; n=0; for f in ../../../src/z3/examples/SMT-LIB2/*/*.smt2 ../../../src/z3/examples/python/data/*.smt2; do n=$((n+1)); echo "== ${f##*/}: $(timeout 10 ./z3 "$f" 2>&1 | head -c 300 | tr "\n" " ")"; done; echo "test-z3 /a rc=$rc; $n smt2 examples run"; exit $rc'
+c_compiler = "clang-19"
+wave = 4
+verified = false
+notes = "WP-799. Release; z3 pins C++20 itself. test-z3 /a runs all unit tests; then the z3 shell runs each smt2 file of examples/ (10 s each, found from the build dir as ../../../src/z3) and prints its answers, which are compared with the control's."
