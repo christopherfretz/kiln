@@ -3196,6 +3196,11 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   may name its own class's private members, but not those of another
   specialization ([class.friend]/2). The frame note names the
   specialization with its arguments (`'h<long>'`), as clang does.
+  Every non-static member function, a constructor, destructor or
+  conversion function included, substitutes its spec with `this`
+  ([expr.prim.this]/3): `C() noexcept(noexcept(conn(m_)))` calls a
+  member through the implicit `this` (WP-789; test
+  `except.spec/ctor-noexcept-implicit-this-member-run.cpp`).
 - *Consumers*: `noexcept(...)`, the resolution of overloads on a
   noexcept function pointer, member pointers and codegen's `nounwind`
   all go through `exc_spec_needed` / `resolve_exc_for_type`, so each

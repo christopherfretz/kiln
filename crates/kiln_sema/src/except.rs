@@ -608,9 +608,9 @@ impl Sema<'_, '_> {
         // A static member function has no `this`: an implicit one in the
         // pattern is "invalid use of 'this' outside of a non-static
         // member function" now ([expr.prim.this]/3; clang's
-        // `TransformCXXThisExpr` in `InstantiateExceptionSpec`).
-        let method =
-            self.kind_of(f) == kiln_ast::decl::DeclKind::CXXMethod && !self.is_static_method(f);
+        // `TransformCXXThisExpr` in `InstantiateExceptionSpec`). A
+        // constructor, destructor or conversion function has one.
+        let method = self.is_instance_member(f);
         let at = self.ast.exprs.get(expr).loc();
         let start = self.begin_loc(expr);
         // A friend's is in its class ([class.friend]/7), whose members it
