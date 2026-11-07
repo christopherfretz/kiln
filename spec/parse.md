@@ -525,6 +525,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   of a qualifier in a dependent context (`X<T>::m::name`, `m::name` in
   `X`'s own definition) stays dependent
   (`tests/conformance/temp.arg.type/member-typedef-of-specialization-qualifier.cpp`).
+- When `m` in `X<A>::m::name` is a typedef member of `X`'s primary
+  pattern but `X<A>` has an explicit specialization, the pattern's `m`
+  (`void`, or dependent on the parameters) says nothing about the
+  specialization's: unless the pattern is the current instantiation, the
+  qualifier is an unresolved specialization scope and is parsed ahead for
+  real (`annotate_template_scope`), so `v<traits<clk>::spec::fine_clock>`
+  takes a type-id (folly's `clock_traits<steady_clock>::spec`, WP-726;
+  `tests/conformance/temp.expl.spec/member-typedef-through-specialization-in-template-arg.cpp`).
 - `skip_template_args(i)` memoizes its result by token index `i` in
   `Parser::targs_memo`.
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp

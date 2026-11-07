@@ -1481,7 +1481,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// specialization that is not instantiated yet (`hours::period` with
     /// `typedef duration<long, ratio<3600>> hours`), or an alias template
     /// whose pattern names no class template it can follow (`A<R>::` with
-    /// `template<class T> using A = decltype(f(T()))`).
+    /// `template<class T> using A = decltype(f(T()))`), or a member
+    /// typedef of a class template's primary pattern reached through
+    /// `X<A>::m::` (an explicit or partial specialization may declare
+    /// `m` otherwise: folly's `clock_traits<steady_clock>::spec::`).
     fn unresolved_specialization_scope(&self, q: DeclId) -> bool {
         use kiln_ast::decl::DeclKind;
         let ast = &self.s.ast;
@@ -1491,7 +1494,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 let ty = ast.decls.get(q).ty().unwrap_or(QualType::ERROR);
                 ast.types.as_record(ty).is_some_and(|r| {
                     ast.definition(r).is_none() && ast.spec_info(ast.first(r)).is_some()
-                })
+                }) || ast
+                    .decls
+                    .get(q)
+                    .ctx()
+                    .and_then(|c| ast.described_template(ast.first(c)))
+                    .is_some_and(|t| !self.s.may_name_current_instantiation(t))
             }
             _ => false,
         }
