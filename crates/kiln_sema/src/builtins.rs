@@ -797,6 +797,7 @@ impl Sema<'_, '_> {
             | builtin::ISUNORDERED => self.builtin_unordered_compare(args, rparen),
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
             builtin::IS_WITHIN_LIFETIME => self.builtin_is_within_lifetime(args, rparen),
+            builtin::START_LIFETIME => self.builtin_start_lifetime(args, rparen),
             builtin::IS_STRING_LITERAL => self.builtin_is_string_literal(args, rparen),
             builtin::ASSUME_ALIGNED => self.builtin_assume_aligned(callee, args, rparen),
             builtin::COMPLEX => self.builtin_complex(callee, args, rparen),
@@ -1718,6 +1719,64 @@ impl Sema<'_, '_> {
             return None;
         }
         Some((vec![a], QualType::BOOL))
+    }
+
+    /// `__builtin_start_lifetime(p)` (P3726R2 [obj.lifetime]; GCC's
+    /// `check_frontend_builtin`, WP-773): one argument, decayed and
+    /// converted to an rvalue, a pointer to a complete aggregate
+    /// implicit-lifetime type, diagnosed at the argument in that order;
+    /// the call is `void`.
+    fn builtin_start_lifetime(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 1, rparen) {
+            return None;
+        }
+        let a = conv::decay(self, args[0]);
+        let t = self.ety(a);
+        if t == QualType::ERROR {
+            return None;
+        }
+        let at = self.expr_loc(a);
+        let Some(pointee) = self.ast.types.pointee(t).filter(|_| self.ast.types.is_pointer(t))
+        else {
+            let msg = self
+                .diag(DiagId::sema_builtin_start_lifetime_invalid_arg, at)
+                .arg(self.ty_arg(t))
+                .arg(0);
+            self.emit(msg);
+            return None;
+        };
+        if !self.ast.types.is_function(pointee)
+            && !self.ast.types.is_void(pointee)
+            && !self.require_complete(pointee, at)
+        {
+            let msg =
+                self.diag(DiagId::sema_incomplete_type_required, at).arg(self.ty_arg(pointee));
+            self.emit(self.incomplete_note(msg, pointee));
+            return None;
+        }
+        let bad = if !self.is_aggregate(pointee) {
+            Some(1)
+        } else if self
+            .eval_type_trait(kiln_ast::expr::TypeTrait::IsImplicitLifetime, &[(pointee, at)], at, rparen)
+            != Some(true)
+        {
+            Some(2)
+        } else {
+            None
+        };
+        if let Some(which) = bad {
+            let msg = self
+                .diag(DiagId::sema_builtin_start_lifetime_invalid_arg, at)
+                .arg(self.ty_arg(t))
+                .arg(which);
+            self.emit(msg);
+            return None;
+        }
+        Some((vec![a], QualType::VOID))
     }
 
     /// `__builtin_nontemporal_store(v, p)` / `__builtin_nontemporal_load(p)`
