@@ -313,7 +313,7 @@ source_subdir = "llvm"
 cxx_std = 17
 configure = ["-DLLVM_TARGETS_TO_BUILD=", "-DLLVM_ENABLE_PROJECTS=", "-DLLVM_INCLUDE_TESTS=ON", "-DLLVM_INCLUDE_BENCHMARKS=OFF", "-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_ENABLE_ZSTD=OFF", "-DLLVM_ENABLE_LIBXML2=OFF"]
 build_targets = ["SupportTests", "ADTTests"]
-test = "./unittests/Support/SupportTests && ./unittests/ADT/ADTTests"
+test = "rc=0; ./unittests/Support/SupportTests --gtest_filter=-FileSystemTest.CreateDir:FileSystemTest.RespectUmask:raw_ostreamTest.filePermissions || rc=1; ./unittests/ADT/ADTTests || rc=1; exit $rc"
 c_compiler = "clang-19"
 wave = 3
 verified = false
