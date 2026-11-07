@@ -27,6 +27,10 @@ pub(crate) struct NewFn {
     /// `UseMemberUsingDeclRules`, [namespace.udecl]/14): the return types
     /// of function templates do not take part.
     pub member_using: bool,
+    /// Some parameter has `pass_object_size` (clang `IsOverload`: a
+    /// function with such parameters and one without do not correspond;
+    /// WP-803).
+    pub pass_object_size: bool,
 }
 
 impl Sema<'_, '_> {
@@ -184,7 +188,9 @@ impl Sema<'_, '_> {
             _ => return false,
         }
         let old_req = self.ast.templates.trailing_requires.get(old).copied();
-        self.opt_exprs_equivalent(old_req, new.requires) && self.same_enable_if(old, new.enable_if)
+        self.opt_exprs_equivalent(old_req, new.requires)
+            && self.same_enable_if(old, new.enable_if)
+            && self.ast.pass_object_size_params(old).is_empty() != new.pass_object_size
     }
 
     /// [temp.over.link]/6: equivalent template heads (same kinds, packs,

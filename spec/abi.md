@@ -1483,6 +1483,15 @@ above), so open pull requests never conflict on this chapter
 (spec/README.md "Landed sections"). They are as normative as this file;
 read that directory after the last numbered subsection above.
 
+### 8.28 Landed (WP-803): `pass_object_size` and `overloadable`
+A function declared `overloadable` is mangled even with C language
+linkage (clang `shouldMangleCXXName`). A `pass_object_size(t)` parameter
+appends the vendor qualifier `U17pass_object_size<t>`
+(`U25pass_dynamic_object_size<t>`) after the parameter's type in the
+`<bare-function-type>` (clang `mangleBareFunctionType`; `mangle.rs`
+`bare_function_type`), e.g. `_Z5namedPKcU17pass_object_size0i`. The
+hidden `size_t` arguments are not part of the mangled type.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

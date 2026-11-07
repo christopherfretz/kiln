@@ -2896,9 +2896,13 @@ impl Sema<'_, '_> {
         self.finish_visibility_attrs(decl, &mut attrs, false);
         self.apply_pragma_weak(decl, &mut attrs);
         self.finish_decl_alignment(decl, &mut attrs);
-        self.add_known_function_attrs(decl, &mut attrs);
-        self.recognize_builtin_decl(decl, &mut attrs);
-        self.record_gnu_lib_twin(decl);
+        // WP-803: an `overloadable` function is never the C library
+        // function of its name (clang `FunctionDecl::getBuiltinID`).
+        if !attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::OVERLOADABLE) {
+            self.add_known_function_attrs(decl, &mut attrs);
+            self.recognize_builtin_decl(decl, &mut attrs);
+            self.record_gnu_lib_twin(decl);
+        }
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
@@ -3757,6 +3761,11 @@ impl Sema<'_, '_> {
             requires: d.trailing_requires,
             enable_if: self.new_fn_enable_if(&d.attrs),
             member_using: false,
+            pass_object_size: d.function_params().is_some_and(|ps| {
+                ps.iter()
+                    .flat_map(|p| &p.attrs)
+                    .any(|&a| self.ast.attrs.get(a).kind == AttrKind::PASS_OBJECT_SIZE)
+            }),
         };
         let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
@@ -3882,7 +3891,10 @@ impl Sema<'_, '_> {
                 && self.templ.cur.is_none()
                 && dname.as_ident().is_some() =>
             {
-                let p = self.extern_c_prev(name, false, new_fn.is_static, d.name_loc());
+                // WP-803: a `pass_object_size` overload is never the C
+                // entity of its name (clang `IsOverload`).
+                let own = new_fn.is_static || new_fn.pass_object_size;
+                let p = self.extern_c_prev(name, false, own, d.name_loc());
                 extern_c_redecl = p.is_some();
                 p
             }
@@ -4624,6 +4636,7 @@ impl Sema<'_, '_> {
                 self.take_annotations(pd, &mut attrs);
                 let range = Span::new(p.range.0, p.range.1);
                 self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
+                self.check_param_pass_object_size(p.ty, p.range.0, &mut attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
             }
             match p.default_arg {
@@ -6783,6 +6796,27 @@ impl Sema<'_, '_> {
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+            // clang `CheckParmsForFunctionDef`: a definition's
+            // `pass_object_size` parameter must be `const` (reported at
+            // the parameter's name, the attribute unquoted, as clang).
+            if !pty.quals().is_const()
+                && !self.ast.types.is_dependent(pty)
+                && let Some(a) = self
+                    .ast
+                    .lists
+                    .iter::<AttrId>(self.ast.attrs.of_decl(p))
+                    .find(|&a| self.ast.attrs.get(a).kind == AttrKind::PASS_OBJECT_SIZE)
+            {
+                let node = *self.ast.attrs.get(a);
+                let shown = self.attr_shown(&node, "pass_object_size");
+                let msg = self
+                    .diag(
+                        DiagId::sema_attribute_const_pointer_args_only,
+                        self.ast.decls.get(p).loc(),
+                    )
+                    .arg(shown);
+                self.emit(msg);
+            }
             // clang `CheckParmsForFunctionDef`: a parameter whose class
             // template specialization fails to instantiate is invalid.
             if self.invalid_by_failed_spec(p, pty, self.ast.decls.get(p).loc()) {
@@ -9927,6 +9961,9 @@ impl Sema<'_, '_> {
                         | "trivial_abi"
                         | "type_visibility"
                         | "min_vector_width"
+                        | "pass_object_size"
+                        | "pass_dynamic_object_size"
+                        | "overloadable"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
@@ -9970,6 +10007,9 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::MIN_VECTOR_WIDTH {
             return self.min_vector_width_attribute(syntax, args, loc);
+        }
+        if kind == AttrKind::PASS_OBJECT_SIZE {
+            return self.pass_object_size_attribute(syntax, &n, args, loc);
         }
         if kind == AttrKind::ENABLE_IF {
             return self.enable_if_attribute(syntax, args, loc);
@@ -10304,6 +10344,46 @@ impl Sema<'_, '_> {
         };
         let a = u32::try_from(v.max(0)).unwrap_or(u32::MAX);
         let node = AttrNode { kind: AttrKind::MIN_VECTOR_WIDTH, syntax, flags: 0, loc, a, b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// clang `handlePassObjectSizeAttr`: exactly one integer constant in
+    /// [0, 3], kept in `a`; `b` = 1 for `pass_dynamic_object_size`.
+    fn pass_object_size_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        n: &str,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let shown = format!("'{n}'");
+        let [arg] = args else {
+            let msg =
+                self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(n.to_owned()).arg("1");
+            self.emit(msg);
+            return None;
+        };
+        // clang reports at the argument.
+        let (v, at) = match arg {
+            AttrArg::Expr(e) => (self.fold_int(*e), self.begin_loc(*e)),
+            AttrArg::Type(_) | AttrArg::Ident(..) => (None, loc),
+        };
+        let Some(v) = v else {
+            let msg = self.diag(DiagId::sema_attribute_requires_integer_constant, at).arg(shown);
+            self.emit(msg);
+            return None;
+        };
+        let Ok(a @ 0..=3) = u32::try_from(v) else {
+            let msg = self
+                .diag(DiagId::sema_attribute_argument_out_of_range, at)
+                .arg(shown)
+                .arg("0")
+                .arg("3");
+            self.emit(msg);
+            return None;
+        };
+        let b = u32::from(n.contains("dynamic"));
+        let node = AttrNode { kind: AttrKind::PASS_OBJECT_SIZE, syntax, flags: 0, loc, a, b };
         Some(self.ast.attrs.push(node))
     }
 
@@ -10899,6 +10979,12 @@ fn attr_kind_of(
         ("weakref", _, true) => AttrKind::WEAKREF,
         ("alias", _, true) => AttrKind::ALIAS,
         ("ifunc", _, true) => AttrKind::IFUNC,
+        // WP-803: clang `pass_object_size` / `pass_dynamic_object_size`
+        // and `overloadable` (GNU and `clang::`).
+        ("pass_object_size" | "pass_dynamic_object_size", _, _) if gnu_syntax || clang_scope => {
+            AttrKind::PASS_OBJECT_SIZE
+        }
+        ("overloadable", _, _) if gnu_syntax || clang_scope => AttrKind::OVERLOADABLE,
         // clang `GCC<"section">`.
         ("section", _, true) => AttrKind::SECTION,
         // clang `GNU<"analyzer_noreturn">`: no `[[...]]` spelling.

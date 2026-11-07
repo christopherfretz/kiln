@@ -138,6 +138,7 @@ impl Sema<'_, '_> {
             || self.ast.decls.get(d).flags().contains(kiln_ast::decl::DeclFlags::INVALID)
             || !self.ctx_is_extern_c(self.ctx)
             || kiln_abi::mangle::has_internal_linkage(&self.ast, d)
+            || !self.ast.pass_object_size_params(d).is_empty()
         {
             return;
         }

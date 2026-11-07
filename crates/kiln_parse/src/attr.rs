@@ -65,6 +65,8 @@ fn takes_expr_args(name: &str) -> bool {
             | "diagnose_if"
             | "target"
             | "min_vector_width"
+            | "pass_object_size"
+            | "pass_dynamic_object_size"
             | "weakref"
             | "alias"
             | "ifunc"

@@ -735,7 +735,9 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
     if ast.decls.decomp_bindings(d).is_some() {
         return false;
     }
-    if is_extern_c(ast, d) {
+    // An `overloadable` function is always mangled (clang
+    // `shouldMangleCXXName`), even with C language linkage.
+    if is_extern_c(ast, d) && !ast.is_overloadable(d) {
         return true;
     }
     match n.kind() {
@@ -1365,7 +1367,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let ast = self.ast;
         let n = ast.decls.get(d);
         let is_fn = is_function_kind(n.kind());
-        if is_fn && (is_extern_c(ast, d) || (decl_name(ast, d) == "main" && in_global_ns(ast, d))) {
+        if is_fn
+            && ((is_extern_c(ast, d) && !ast.is_overloadable(d))
+                || (decl_name(ast, d) == "main" && in_global_ns(ast, d)))
+        {
             // Unmangled functions appear in local names by source name only.
             self.source_name(&decl_name(ast, d));
             return;
@@ -1563,8 +1568,15 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if params.is_empty() && !p.variadic() {
             self.out.push('v');
         }
-        for q in params {
+        // `pass_object_size(N)` is a vendor qualifier on the parameter
+        // type (clang `mangleBareFunctionType`): `U17pass_object_size1`.
+        let ps = ast.pass_object_size_params(src);
+        for (i, q) in params.into_iter().enumerate() {
             self.ty(self.param_type(q));
+            if let Some(&(_, t, dynamic)) = ps.iter().find(|p| p.0 == i) {
+                let a = if dynamic { "pass_dynamic_object_size" } else { "pass_object_size" };
+                self.out.push_str(&format!("U{}{a}{t}", a.len() + 1));
+            }
         }
         self.fn_depth = saved;
         if p.variadic() {

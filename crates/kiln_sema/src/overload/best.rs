@@ -335,8 +335,15 @@ impl Sema<'_, '_> {
                 return true;
             }
         }
-        // clang's `enable_if` ranking (`compareEnableIfAttrs`), last.
-        x.decl.zip(y.decl).and_then(|(f1, f2)| self.compare_enable_if(f1, f2)).unwrap_or(false)
+        // clang's `enable_if` ranking (`compareEnableIfAttrs`), then a
+        // candidate with `pass_object_size` parameters over one without
+        // (WP-803).
+        if let Some(b) = x.decl.zip(y.decl).and_then(|(f1, f2)| self.compare_enable_if(f1, f2)) {
+            return b;
+        }
+        let ps =
+            |d: Option<DeclId>| d.is_some_and(|d| !self.ast.pass_object_size_params(d).is_empty());
+        ps(x.decl) && !ps(y.decl)
     }
 
     /// [over.match.best.general]/2.10 (P2582): a guide not formed from an
