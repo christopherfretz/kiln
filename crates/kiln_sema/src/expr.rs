@@ -4729,8 +4729,10 @@ impl Sema<'_, '_> {
             && !self.expr_is_type_dependent(callee)
             && !args_dep
         {
+            // `(f)(x)`, `(f<A>)(x)`: the parentheses stay around the
+            // resolved name (clang's `FixOverloadedFunctionReference`).
             match self.resolve_unresolved_call(callee, args, &braced) {
-                Some(e) if !self.is_err_expr(e) => e,
+                Some(e) if !self.is_err_expr(e) => self.rebuild_parens(callee, e),
                 _ => return self.recover_err(&kids, loc),
             }
         } else if self.member_overload(callee).is_some() && !args_dep {

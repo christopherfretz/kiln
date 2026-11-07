@@ -1850,12 +1850,12 @@ impl Parser<'_, '_> {
                     self.s.set_template_id_qualifier(e, q.nns);
                     self.s.set_template_kw(e, template_loc);
                 }
-                if !self.at(Punct::LParen) {
+                if !self.template_id_is_callee(begin) {
                     let r = self.s.resolve_single_template_id(e);
                     self.s.set_template_id_end(r, r_angle);
                     return r;
                 }
-                if qual.is_none() {
+                if qual.is_none() && self.at(Punct::LParen) {
                     self.s.act_on_template_id_call_name(e);
                 }
                 e
@@ -2292,6 +2292,36 @@ impl Parser<'_, '_> {
     /// The rest of a parenthesized expression or fold-expression after
     /// `(` at `lparen` ([expr.prim.paren], [expr.prim.fold]).
     fn parse_paren_rest(&mut self, lparen: Loc) -> PExpr {
+        // `(e)(args)`, `((e))(args)`: the parenthesized expression is a
+        // callee ([`Parser::template_id_is_callee`]).
+        let start = self.pos();
+        let callee = start.checked_sub(1).and_then(|open| {
+            let after = self.skip_balanced(open)?;
+            let called = self.tok_at(after).kind == TokKind::Punct(Punct::LParen)
+                || self.paren_callee == Some((open, after));
+            called.then_some((start, after - 1))
+        });
+        let outer = std::mem::replace(&mut self.paren_callee, callee);
+        let r = self.parse_paren_rest_inner(lparen);
+        self.paren_callee = outer;
+        r
+    }
+
+    /// True when the function template-id beginning at `begin`, whose
+    /// template argument list has just been parsed, is called: followed
+    /// by `(`, or the whole of a parenthesized callee, `(f<A>)(x)`. A
+    /// called template-id stays an overload set: the call deduces the
+    /// remaining template arguments ([temp.arg.explicit]/4,
+    /// [over.call.func]); one not called names its single
+    /// specialization ([over.over]/3).
+    fn template_id_is_callee(&self, begin: Loc) -> bool {
+        self.at(Punct::LParen)
+            || self.paren_callee.is_some_and(|(first, close)| {
+                close == self.pos() && self.tok_at(first).span.lo == begin
+            })
+    }
+
+    fn parse_paren_rest_inner(&mut self, lparen: Loc) -> PExpr {
         // `( ... op e )`.
         if self.at(Punct::Ellipsis)
             && let Some(op) =

@@ -433,6 +433,18 @@ function 'f'" naming the template and noting "candidate function [with I =
 7] has been explicitly deleted". Test:
 `over.over/deleted-template-id-location.cpp`.
 
+A called function template-id is not resolved so, parenthesized or not:
+`(f<A>)(x)` and `((N::f<A>))(x)` are the overload set of `f<A>(x)`
+([temp.arg.explicit]/4, [over.call.func]/3, without argument-dependent
+lookup), so the call deduces the remaining template arguments, a trailing
+parameter pack included, and the specialization with only the explicit
+arguments is never formed or instantiated (the parser's
+`template_id_is_callee`: a template-id followed by `(`, or the whole of a
+parenthesized expression followed by `(`). The parentheses stay around the
+resolved name in the AST, as for `(f)(x)` (clang's
+`FixOverloadedFunctionReference`). Test:
+`temp.arg.explicit/parenthesized-template-id-callee.cpp` (WP-695).
+
 ## 3. Viable functions ([over.match.viable])
 
 Some functions are never added as candidates (`add_candidate`). These are

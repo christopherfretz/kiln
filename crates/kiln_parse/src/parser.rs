@@ -137,6 +137,12 @@ pub struct Parser<'a, 'sm> {
     /// clang parses it as a `ParenListExpr` whose commas are built at
     /// the `(` (`MaybeConvertParenListExprToParenExpr`).
     pub(crate) cast_paren_list: Option<Loc>,
+    /// The innermost parenthesized expression being parsed that is a
+    /// call's callee, `(e)(args)` or `((e))(args)`: the token index of
+    /// its first inner token and of its `)`. A function template-id that
+    /// is the whole of it stays an overload set for the call to resolve
+    /// ([`Parser::template_id_is_callee`]).
+    pub(crate) paren_callee: Option<(usize, usize)>,
     /// The `(` of a C-style cast's parenthesized operand for the next
     /// [`Parser::parse_rhs`] (taken at its entry): its top-level commas
     /// are [`Parser::parse_paren_list_rest`]'s.
@@ -325,6 +331,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             in_stmt_expr: false,
             expr_invalid: false,
             cast_paren_list: None,
+            paren_callee: None,
             comma_loc: None,
             greater_is_op: true,
             greater_off_depth: 0,

@@ -173,7 +173,7 @@ configure = ["-DBENCHMARK_DOWNLOAD_DEPENDENCIES=ON", "-DBENCHMARK_ENABLE_TESTING
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 2
-verified = false
+verified = true
 notes = "googletest is downloaded at configure time."
 
 [glog]

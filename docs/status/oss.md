@@ -52,7 +52,7 @@ The loop:
 | `spdlog` | 1 | `v1.17.0` | tests at parity |
 | `tl_expected` | 1 | `v1.3.1` | not started |
 | `abseil` | 2 | `20260107.1` | not started |
-| `benchmark` | 2 | `v1.9.5` | not started |
+| `benchmark` | 2 | `v1.9.5` | tests at parity |
 | `cereal` | 2 | `v1.3.2` | not started |
 | `eigen` | 2 | `3.4.1` | not started |
 | `entt` | 2 | `v3.15.0` | not started |
@@ -69,6 +69,22 @@ The loop:
 <!-- /oss:projects -->
 
 ## Results
+
+<!-- oss:benchmark -->
+### benchmark (v1.9.5)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 73 / 0 | 73 / 0 |
+| links ok / failed | 49 / 0 | 49 / 0 |
+| tests passed / total | 84 / 84 | 84 / 84 |
+| wall | 31 s | 27 s |
+| peak TU RSS | 146 MB | 221 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:benchmark -->
 
 <!-- oss:googletest -->
 ### googletest (v1.17.0)

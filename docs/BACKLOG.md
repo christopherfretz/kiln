@@ -702,6 +702,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-679 | sema: -Wmissing-noreturn false positive on a lambda with an explicit return type whose body only throws (`[](int,int) -> bool { throw 0; }`, range-v3 chunk_by.cpp); `crates/kiln_sema/src/missing_noreturn.rs` | WP-669 | open |
 | WP-692 | CI fan-out: shard `cargo xtask ci` across parallel GitHub jobs (`ci --step/--shard/--unit-group`, `xtask test --shard`, `.github/workflows/ci-lane.yml`; target under 5 min per arch) | WP-origin | in progress |
 | WP-680 | M8 wave 1: spdlog v1.17.0 through its own CMake build + tests with kiln++ via scripts/oss (clusters → conformance tests + fixes; docs/status/oss/spdlog.md) | WP-666 | in progress |
+| WP-695 | M8 wave 2: google/benchmark v1.9.5 through its own build + tests with kiln++ via scripts/oss (docs/status/oss/benchmark.md) | WP-666 | in progress |
 | WP-681 | M8 wave 1: Catch2 v3.16.1 through its own build + tests with kiln++ via scripts/oss (incl. the protected using-declaration cluster WP-671; docs/status/oss/catch2.md) | WP-666 | in progress |
 | WP-682 | M8 wave 1: googletest v1.17.0 through its own build + tests with kiln++ via scripts/oss (incl. WP-670 bare -W / exit 70 and WP-672 libstdc++ tuple deduction; docs/status/oss/googletest.md) | WP-666 | in progress |
 | WP-691 | M8 wave 2: simdjson v4.2.4 through its own CMake build + tests with kiln++ via scripts/oss (docs/status/oss/simdjson.md) | WP-666 | in progress |
