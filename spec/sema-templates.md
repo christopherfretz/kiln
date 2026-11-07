@@ -7716,6 +7716,10 @@ declarator scopes.**
   `const F *`. An ambiguous set is `sema_conditional_ambiguous_ovl`; no
   viable candidate falls through to `sema_conditional_incompatible`
   (WP-801, tests/conformance/expr.cond/p6-builtin-candidates-*.cpp).
+  Arms of one class type that differ only in cv-qualification (a
+  `const B` lvalue and a `B` prvalue) do not reach this step: /4.3.1
+  unified them, and the result stays a `B` prvalue even when `B` has
+  `operator bool` (tests/conformance/expr.cond/p4-cv-differing-class-arms-not-builtin-run.cpp).
 - *[expr.cond]/7 class prvalue result*: when the arms are a class type
   (after /4) and not glvalues of the same category, each glvalue arm
   copy-initializes the prvalue result (clang `PerformCopyInitialization`
