@@ -2050,7 +2050,16 @@ impl Sema<'_, '_> {
         }
         // [over.over] against the parameter: a failure keeps clang's
         // "passing argument to parameter" note after the candidates.
-        let e = if self.ety(e) == QualType::OVERLOAD && self.overload_operand(e).is_some() {
+        // A class parameter type is no target: its converting constructor
+        // takes the set.
+        let e = if self.ety(e) == QualType::OVERLOAD
+            && self.overload_operand(e).is_some()
+            && !self.overload_set_converts_to_class(
+                e,
+                pty,
+                crate::overload::ics::IcsOptions::NONE,
+            )
+        {
             let at = self.begin_loc(e);
             let ctx = crate::overload::address::AddrCtx::Convert;
             let noted = Some(note.clone());

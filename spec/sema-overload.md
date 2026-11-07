@@ -378,7 +378,12 @@ reserves these.
 `resolve_address_of_overloaded(ule, target, complain) -> Option<ExprId>`.
 Targets: an initialized object or reference, assignment LHS, a parameter
 (during ICS a ULE argument converts by [over.over]), a cast, a non-type
-template parameter, a return. A non-template matches when its type equals
+template parameter, a return. A class type, or a reference to one, is not
+a target: when a converting constructor takes the set (`dynamic(ObjectMaker
+(*)())`), the set is that constructor's argument
+(`overload_set_converts_to_class`, so `const dynamic& v = dynamic::object`
+binds a temporary); otherwise the set is resolved against the class type
+and finds no match, as in clang. A non-template matches when its type equals
 the target's function type after function-pointer conversion; non-static
 members only through `&X::f` to a member pointer; templates via
 `deduce_address_candidate`. Then: if any non-template matches, drop
