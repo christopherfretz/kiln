@@ -8906,7 +8906,22 @@ impl Sema<'_, '_> {
             Some(d) => d,
             None => match self.specialization_member(tmpl, name) {
                 Some(d) => d,
-                None => return NameClass::Dependent,
+                // A member template of a class template specialization
+                // whose definition is not instantiated yet (`TO<int>::FSS`
+                // named by an alias template's pattern, LLVM's
+                // `TrailingObjects::FixedSizeStorage`): classified in the
+                // member template it was instantiated from, as for
+                // `TO<int>::FSS<T>::name` (WP-730).
+                None => match self.ast.instantiated_from(tmpl) {
+                    Some(from)
+                        if from != tmpl
+                            && self.ast.definition(p).is_none()
+                            && self.kind_of(from) == DeclKind::ClassTemplate =>
+                    {
+                        return self.classify_template_member(from, name);
+                    }
+                    _ => return NameClass::Dependent,
+                },
             },
         };
         let k = self.kind_of(self.ast.strip_shadow(d));
