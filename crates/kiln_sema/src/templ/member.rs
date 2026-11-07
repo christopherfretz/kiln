@@ -41,6 +41,51 @@ impl Substituter<'_, '_, '_> {
         Err(SubstFail)
     }
 
+    /// Redeclares explicit specialization `m` of a member variable
+    /// template declared in the pattern class (`template<> constexpr bool
+    /// v<int> = true;`, [temp.expl.spec]/3, CWG 727; clang's
+    /// `VisitVarTemplateSpecializationDecl`): its arguments and type
+    /// substituted, it specializes the member template the pattern's was
+    /// redeclared as, and its initializer is instantiated with it.
+    pub(crate) fn member_explicit_var_spec(&mut self, m: DeclId) -> SubstResult<DeclId> {
+        let Some((_, info)) = self.sema.ast.spec_info(m).map(|(i, s)| (i, *s)) else {
+            return Err(SubstFail);
+        };
+        let Some(pattern) = self.sema.pattern_of(info.template) else { return Err(SubstFail) };
+        let Some(&DeclOrPack::Decl(new_pattern)) = self.locals.get(&pattern) else {
+            return Err(SubstFail);
+        };
+        let Some(new_tmpl) = self.sema.template_of(new_pattern) else { return Err(SubstFail) };
+        let loc = self.sema.ast.decls.get(m).loc();
+        let t = self.decl_ty(m);
+        let ty = self.named_decl_ty(m, t, loc)?;
+        let args = self.args(info.args, loc)?;
+        let args = self.sema.ast.types.args(args).to_vec();
+        let mut ds = self.pattern_declspec(m, ty);
+        // Static as a member, not as written.
+        ds.storage = None;
+        let mut dr = self.pattern_declarator(m, DeclaratorContext::Member)?;
+        if let Some(x) = self.sema.ast.decls.var(m)
+            && x.init.is_some()
+        {
+            dr.init_style = Some(x.spec.init_style());
+        }
+        let arg_locs = vec![loc; args.len()];
+        dr.spec_id = Some(crate::templ::spec::SpecDeclaratorId {
+            template: new_tmpl,
+            args,
+            arg_locs,
+            loc,
+            range: kiln_source::Span::new(loc, loc),
+        });
+        let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
+        self.copy_begin_loc(m, v, ty);
+        self.locals.insert(m, DeclOrPack::Decl(v));
+        self.class_attrs(v, m);
+        self.var_init(m, v)?;
+        Ok(v)
+    }
+
     /// Redeclares partial specialization `m` of a member class or
     /// variable template of the pattern class for the member template it was redeclared as
     /// ([temp.spec.partial.member]/2, [temp.mem]; clang's

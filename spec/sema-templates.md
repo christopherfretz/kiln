@@ -1537,6 +1537,19 @@ silently (`diag = None`) at those sites. S3O lists them.
 Explicit specializations never reach this step: they are found by the
 probe in §4.2.
 
+**In-class explicit specializations of member variable templates**
+([temp.expl.spec]/3, CWG 727). `template<> constexpr bool v<int> =
+true;` in a class declares a static data member without `static` being
+written: its initializer is parsed in place, not saved as a default
+member initializer. In a class template, each instantiation redeclares
+it for the instantiated member template
+(`Substituter::member_explicit_var_spec`): its arguments and type are
+substituted, it becomes that template's explicit specialization, and its
+initializer is instantiated at once. Codegen emits an odr-used one as it
+does a member of the instantiated class, `linkonce_odr`
+(`instantiated_var_def`), as clang (WP-789,
+`temp.expl.spec/in-class-member-variable-template-spec-run.cpp`).
+
 **Member class templates** ([temp.spec.partial.member]/2). When a class
 template is instantiated, each in-class partial specialization of a
 member class template is redeclared for the instantiated member template

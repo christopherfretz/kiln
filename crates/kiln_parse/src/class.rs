@@ -1578,6 +1578,10 @@ impl Parser<'_, '_> {
             if first {
                 self.prohibit_friend_lead_attrs(&mut ds);
             }
+            // A variable template's specialization (`template<> constexpr
+            // bool v<int> = true;`) is a static data member as written
+            // ([temp.expl.spec]/3): its initializer is parsed in place.
+            let is_static = is_static || d.spec_id.is_some();
             let data_member = !is_static && !is_typedef && ds.friend.is_none();
             let (nsdmi, init) = self.classify_member_init(&mut d, has_width, is_fn, data_member);
             let (decl, target) =

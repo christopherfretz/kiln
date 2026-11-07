@@ -2254,6 +2254,7 @@ impl Substituter<'_, '_, '_> {
                 self.member_partial_spec(m)?;
                 return Ok(None);
             }
+            DeclKind::Var if self.sema.is_var_spec(m) => self.member_explicit_var_spec(m)?,
             DeclKind::Var if self.defers_init(m) => self.deferred_static_member(m)?,
             DeclKind::Var => {
                 let v = self.var_decl(m, DeclaratorContext::Member)?;
