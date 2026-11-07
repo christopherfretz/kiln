@@ -408,7 +408,9 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.stmt(b))
             }
             StmtKind::ContractAssertStmt => self.contract_stmt(s, None),
-            k => self.unimplemented(&format!("substitution into {k:?}"), loc),
+            k @ StmtKind::CXXCatchStmt => {
+                self.unimplemented(&format!("substitution into {k:?}"), loc)
+            }
         }
     }
 

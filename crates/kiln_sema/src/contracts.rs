@@ -34,7 +34,7 @@ pub(crate) struct ContractCtx {
 
 /// What [`Sema::act_on_start_contract`] opened, for
 /// [`Sema::act_on_end_contract`].
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ContractScope {
     kind: ContractKind,
     result: Option<DeclId>,

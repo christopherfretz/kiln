@@ -1005,7 +1005,7 @@ impl Parser<'_, '_> {
             let at = self.loc();
             // P2308R1: a braced-init-list default ([temp.param]/12).
             let e = if self.at(Punct::LBrace) {
-                self.parse_init_list().ok().map(|l| self.s.act_on_braced_template_arg(l))
+                self.parse_init_list().ok().map(|l| self.s.act_on_braced_template_arg(&l))
             } else {
                 self.with_greater_op(false, Self::parse_constant_expr)
             };
@@ -1125,7 +1125,7 @@ impl Parser<'_, '_> {
             // P2308R1 ([temp.arg.nontype]/1): a braced-init-list
             // initializes the template parameter.
             let l = self.parse_init_list().ok()?;
-            let e = self.s.act_on_braced_template_arg(l);
+            let e = self.s.act_on_braced_template_arg(&l);
             self.s.builder().template_arg_expr(e)
         } else {
             let e = self.with_greater_op(false, Self::parse_constant_expr)?;

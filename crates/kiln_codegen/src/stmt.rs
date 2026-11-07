@@ -389,7 +389,9 @@ impl Cg<'_> {
             // semantic; the others are WP-707's (spec/contracts.md §6).
             StmtKind::ContractAssertStmt if !ast.contract_semantic.checks() => Ok(()),
             StmtKind::ContractAssertStmt => err(Some(n.loc()), CONTRACT_UNSUPPORTED),
-            k => err(Some(n.loc()), format!("statement {k:?} is not supported yet")),
+            k @ StmtKind::CXXCatchStmt => {
+                err(Some(n.loc()), format!("statement {k:?} is not supported yet"))
+            }
         }
     }
 

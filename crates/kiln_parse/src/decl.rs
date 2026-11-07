@@ -3770,10 +3770,7 @@ impl Parser<'_, '_> {
         loop {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
-            self.parse_trailing_requires(&mut d);
-            // [dcl.contract.func]/1: after the requires-clause.
-            let contracts =
-                if d.is_function_declarator() { self.capture_contract_specs() } else { None };
+            let contracts = self.parse_requires_and_contract_specs(&mut d);
             self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
@@ -3832,11 +3829,7 @@ impl Parser<'_, '_> {
                 self.explicit_inst_with_definition(tmpl_kind, &d, false);
             }
             let v = self.s.act_on_declarator(&ds, base, &d);
-            self.record_declarator_end(v, &d);
-            if d.is_function_declarator() {
-                let f = v.filter(|&f| self.s.ast.decls.function(f).is_some());
-                self.replay_contract_specs(contracts, &d, f, ContractDeclKind::Declaration);
-            }
+            self.end_declaration_with_contracts(v, &d, contracts);
             // A declarator without a type is invalid too (`static y, z;`).
             type_invalid |= self.s.take_declarator_type_invalid()
                 || (!ds.has_type_specifier() && !is_untyped_special(&d));
@@ -4085,6 +4078,29 @@ impl Parser<'_, '_> {
         }
         if after {
             self.replay_contract_specs(contracts, d, f, ContractDeclKind::Definition);
+        }
+    }
+
+    /// The trailing requires-clause of `d`, then (a function declarator)
+    /// its *function-contract-specifier-seq*, captured for replay
+    /// ([dcl.contract.func]/1: after the requires-clause).
+    fn parse_requires_and_contract_specs(&mut self, d: &mut Declarator) -> Option<LateToks> {
+        self.parse_trailing_requires(d);
+        if d.is_function_declarator() { self.capture_contract_specs() } else { None }
+    }
+
+    /// Records the end of `d`, which declared `v` without defining it,
+    /// then replays its captured contract specifiers.
+    fn end_declaration_with_contracts(
+        &mut self,
+        v: Option<DeclId>,
+        d: &Declarator,
+        contracts: Option<LateToks>,
+    ) {
+        self.record_declarator_end(v, d);
+        if d.is_function_declarator() {
+            let f = v.filter(|&f| self.s.ast.decls.function(f).is_some());
+            self.replay_contract_specs(contracts, d, f, ContractDeclKind::Declaration);
         }
     }
 

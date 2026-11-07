@@ -675,6 +675,24 @@ impl Parser<'_, '_> {
         self.s.act_on_exit_reentered_template_scopes(heads);
     }
 
+    /// A member function declarator's *function-contract-specifier-seq*,
+    /// captured with what the declaration is ([dcl.contract.func]/6).
+    fn capture_member_contract_specs(&mut self) -> Option<(LateToks, ContractDeclKind)> {
+        let t = self.capture_contract_specs()?;
+        let how = if self.at(Punct::Equal) {
+            match self.kw_of(self.peek(1)) {
+                Some(Kw::Delete) => ContractDeclKind::Deleted,
+                Some(Kw::Default) => ContractDeclKind::Defaulted,
+                _ => ContractDeclKind::Declaration,
+            }
+        } else if self.at_function_definition() {
+            ContractDeclKind::Definition
+        } else {
+            ContractDeclKind::Declaration
+        };
+        Some((t, how))
+    }
+
     /// Skips what is left of the saved tokens and ends the replay.
     pub(crate) fn finish_replay(&mut self) {
         while !self.at_eof() {
@@ -1516,20 +1534,7 @@ impl Parser<'_, '_> {
                 self.parse_member_declarator_tail(&mut d, ds.friend.is_some());
             // [dcl.contract.func]/1: after the virt-specifiers; a
             // complete-class context ([class.mem.general]/7).
-            if is_fn && let Some(t) = self.capture_contract_specs() {
-                let how = if self.at(Punct::Equal) {
-                    match self.kw_of(self.peek(1)) {
-                        Some(Kw::Delete) => ContractDeclKind::Deleted,
-                        Some(Kw::Default) => ContractDeclKind::Defaulted,
-                        _ => ContractDeclKind::Declaration,
-                    }
-                } else if self.at_function_definition() {
-                    ContractDeclKind::Definition
-                } else {
-                    ContractDeclKind::Declaration
-                };
-                parts.contracts = Some((t, how));
-            }
+            parts.contracts = if is_fn { self.capture_member_contract_specs() } else { None };
             if !d.has_name() && !has_width {
                 if !d.invalid {
                     self.error_expected_member_name(ds_range);

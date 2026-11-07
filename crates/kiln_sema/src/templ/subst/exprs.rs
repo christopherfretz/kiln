@@ -1041,7 +1041,7 @@ impl Substituter<'_, '_, '_> {
             // and kept as written until it initializes the parameter.
             ExprKind::InitListExpr if n.ty() == QualType::VOID => {
                 let l = self.init_list(e)?;
-                Ok(self.sema.act_on_braced_template_arg(l))
+                Ok(self.sema.act_on_braced_template_arg(&l))
             }
             _ => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }

@@ -616,12 +616,12 @@ impl Sema<'_, '_> {
     /// /1): kept as written, nested lists and designators included, until
     /// [`Sema::braced_template_arg`] gives it back to initialize the
     /// parameter.
-    pub fn act_on_braced_template_arg(&mut self, l: crate::init::InitList) -> ExprId {
-        if self.list_has_expr_error(&l) {
-            let e = self.recover_err(&Self::list_exprs(&l), l.lbrace);
+    pub fn act_on_braced_template_arg(&mut self, l: &crate::init::InitList) -> ExprId {
+        if self.list_has_expr_error(l) {
+            let e = self.recover_err(&Self::list_exprs(l), l.lbrace);
             return self.mark_expr_error(e);
         }
-        self.dependent_init_list(&l)
+        self.dependent_init_list(l)
     }
 
     /// The braced-init-list behind template argument `e`, if it is one

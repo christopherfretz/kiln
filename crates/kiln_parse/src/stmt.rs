@@ -204,18 +204,7 @@ impl Parser<'_, '_> {
                     return Some(self.s.act_on_default(sub, loc));
                 }
                 Kw::ContractAssert => return self.parse_contract_assert(),
-                Kw::Break => {
-                    self.bump();
-                    let s = self.s.act_on_break(loc);
-                    self.expect_semi_after_stmt("break");
-                    return Some(s);
-                }
-                Kw::Continue => {
-                    self.bump();
-                    let s = self.s.act_on_continue(loc);
-                    self.expect_semi_after_stmt("continue");
-                    return Some(s);
-                }
+                Kw::Break | Kw::Continue => return Some(self.parse_break_continue(k, loc)),
                 Kw::Return => return self.parse_return(),
                 Kw::Goto => return self.parse_goto(),
                 Kw::Try => return self.parse_try_stmt(),
@@ -410,6 +399,14 @@ impl Parser<'_, '_> {
         self.bump();
         self.bump();
         true
+    }
+
+    /// `break;` or `continue;` (`k`) at `loc`.
+    fn parse_break_continue(&mut self, k: Kw, loc: Loc) -> StmtId {
+        self.bump();
+        let s = if k == Kw::Break { self.s.act_on_break(loc) } else { self.s.act_on_continue(loc) };
+        self.expect_semi_after_stmt(k.spelling());
+        s
     }
 
     /// Expects the `;` ending a `what` statement.
