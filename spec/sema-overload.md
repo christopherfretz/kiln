@@ -716,7 +716,12 @@ nothing defers. Not yet deferred: contextual conversion sets
 ### 5.1 Generation (`oper.rs::add_rewritten`)
 The §2.5 lookups are repeated for the names below; each hit adds a
 candidate with `rewrite: Rewritten` (operands `x, y`) or `Reversed`
-(operands `y, x`). Built-ins are never rewritten.
+(operands `y, x`). Built-ins are never rewritten. Rewritten and
+reversed candidates exist only from C++20 (clang `CreateOverloadedBinOp`
+clears `AllowRewrittenCandidates` before it, WP-730): in C++17, `a != b`
+never considers `operator==`, so a base's member `operator!=` beside a
+more-derived base's friend `operator==` (LLVM's `iterator_facade_base`)
+is not ambiguous.
 
 | `@` | rewritten | reversed |
 |---|---|---|
