@@ -11,7 +11,12 @@ note_access_protected_object = Note (1) "can only access this member on an objec
 note_access_protected_restricted_ctordtor = Note (1) "protected {0:constructor|destructor} can only be used to {0:construct|destroy} a base class subobject";
 note_add_constexpr = Note (0) "add 'constexpr'";
 note_additional_parens_for_variable_declaration = Note (0) "add a pair of parentheses to declare a variable";
+// clang `note_alias_mangled_name_alternative` (`checkAliases`); WP-763.
+note_alias_mangled_name_alternative = Note (1) "function by that name is mangled as \"{0}\"";
 note_alias_not_deducible = Note (2) "cannot deduce template arguments for '{0}' from {1}";
+// clang `note_alias_requires_mangled_name` (`checkAliases`): {0} is 0
+// for an alias, 1 for an ifunc; WP-763.
+note_alias_requires_mangled_name = Note (1) "the {0:function or variable|function} specified in an {0:alias|ifunc} must refer to its mangled name";
 note_alignas_on_declaration = Note (1) "declared with {0} attribute here";
 note_ambiguous_atomic_constraints = Note (0) "similar constraint expressions not considered equivalent; constraint expressions cannot be considered equivalent unless they originate from the same concept";
 note_ambiguous_atomic_constraints_similar_expression = Note (0) "similar constraint expression here";

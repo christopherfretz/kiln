@@ -16,6 +16,7 @@
     clippy::unnecessary_wraps
 )]
 
+mod alias;
 mod arm;
 mod asm;
 mod atomic;

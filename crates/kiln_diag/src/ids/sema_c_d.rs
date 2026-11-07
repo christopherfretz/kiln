@@ -93,6 +93,7 @@ sema_continue_not_in_loop = Error (0) "'continue' statement not in loop statemen
 sema_contract_const_modify = Error (1) "cannot modify '{0}' in a contract predicate: it is implicitly const";
 sema_contract_coroutine_post_param = Error (1) "a postcondition of a coroutine cannot odr-use the non-reference parameter '{0}'";
 sema_contract_deleted_or_defaulted = Error (1) "{0:deleted|defaulted} function cannot have function contract specifiers";
+sema_contract_only_implicit_capture = Error (1) "'{0}' is not implicitly captured by a contract assertion";
 sema_contract_post_nonconst_param = Error (0) "a value parameter used in a postcondition must be const";
 sema_contract_redecl_adds = Error (1) "declaration adds function contract specifiers to '{0}'";
 sema_contract_redecl_mismatch = Error (1) "function contract specifiers of '{0}' do not match the previous declaration";

@@ -170,12 +170,15 @@ impl GlobalVar {
     }
 }
 
-/// A global alias.
+/// A global alias, or (when [`Alias::is_ifunc`]) a GNU indirect function
+/// whose `aliasee` is its resolver.
 #[derive(Clone, Debug)]
 pub struct Alias {
     pub(crate) name: Box<str>,
     pub(crate) value_type: TypeId,
     pub(crate) aliasee: Value,
+    /// An `ifunc` (printed after every alias) rather than an `alias`.
+    pub(crate) ifunc: bool,
     /// Linkage.
     pub linkage: Linkage,
     /// Visibility.
@@ -196,6 +199,14 @@ impl Alias {
     /// Name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+    /// The aliased value (an ifunc's resolver).
+    pub fn aliasee(&self) -> Value {
+        self.aliasee
+    }
+    /// Whether this is an `ifunc` ([`Module::add_ifunc`]).
+    pub fn is_ifunc(&self) -> bool {
+        self.ifunc
     }
 }
 
@@ -334,6 +345,9 @@ pub struct Module {
     /// Erased function declarations and what their uses now refer to
     /// ([`Module::replace_function`]).
     replaced: FxHashMap<FuncId, Value>,
+    /// Erased global variable declarations and what their uses now refer
+    /// to ([`Module::replace_global_with_alias`]).
+    replaced_globals: FxHashMap<GlobalId, Value>,
     last_unique: u32,
     /// The LLVM release whose textual IR the module is written in (default
     /// 19). At 21 or later [`Module::attr_set`] writes `nocapture` as
@@ -370,6 +384,7 @@ impl Module {
             sync_scopes: vec![Box::from(""), Box::from("singlethread")],
             gnames: FxHashMap::default(),
             replaced: FxHashMap::default(),
+            replaced_globals: FxHashMap::default(),
             last_unique: 0,
             ir_version: 19,
         }
@@ -570,7 +585,36 @@ impl Module {
         value_type: TypeId,
         aliasee: Value,
     ) -> IrResult<AliasId> {
-        let a = self.add_alias("", value_type, aliasee)?;
+        self.replace_function_with(old, value_type, aliasee, false)
+    }
+
+    /// Replace the function declaration `old` by a new `ifunc value_type,
+    /// ptr resolver` that takes its name (clang `emitIFuncDefinition`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Module::replace_function`] and [`Module::add_ifunc`].
+    pub fn replace_function_with_ifunc(
+        &mut self,
+        old: FuncId,
+        value_type: TypeId,
+        resolver: Value,
+    ) -> IrResult<AliasId> {
+        self.replace_function_with(old, value_type, resolver, true)
+    }
+
+    fn replace_function_with(
+        &mut self,
+        old: FuncId,
+        value_type: TypeId,
+        aliasee: Value,
+        ifunc: bool,
+    ) -> IrResult<AliasId> {
+        let a = if ifunc {
+            self.add_ifunc("", value_type, aliasee)?
+        } else {
+            self.add_alias("", value_type, aliasee)?
+        };
         if let Err(e) = self.check_replaceable(old, Value::alias(a)) {
             let _ = self.aliases.pop();
             return Err(e);
@@ -606,11 +650,69 @@ impl Module {
         self.replaced.insert(old, new);
     }
 
-    /// What `v` denotes after [`Module::replace_function`]: `v` itself
-    /// unless it is an erased function.
+    /// Replace the global variable declaration `old` by a new alias
+    /// `alias value_type, ptr aliasee` that takes its name and its uses
+    /// (clang `EmitAliasDefinition` for a variable: `takeName`,
+    /// `replaceAllUsesWith`, `eraseFromParent`).
+    ///
+    /// # Errors
+    ///
+    /// `old` has an initializer or is already replaced, `aliasee` is
+    /// `old`, or as [`Module::add_alias`].
+    pub fn replace_global_with_alias(
+        &mut self,
+        old: GlobalId,
+        value_type: TypeId,
+        aliasee: Value,
+    ) -> IrResult<AliasId> {
+        if self.globals[old.index()].init.is_some() || self.replaced_globals.contains_key(&old) {
+            return Err(IrError::new(
+                IrErrorKind::BadGlobal,
+                "only a live global declaration can be replaced",
+            ));
+        }
+        if self.resolve(aliasee) == Value::global(old) {
+            return Err(IrError::new(IrErrorKind::BadGlobal, "a global cannot alias itself"));
+        }
+        let a = self.add_alias("", value_type, aliasee)?;
+        if let Some(i) = self.global_order.iter().position(|&x| x == old) {
+            let _ = self.global_order.remove(i);
+        }
+        let name = std::mem::take(&mut self.globals[old.index()].name);
+        if self.gnames.get(name.as_ref()) == Some(&Value::global(old)) {
+            let _ = self.gnames.remove(name.as_ref());
+        }
+        self.replaced_globals.insert(old, Value::alias(a));
+        self.register_global_name(&name, Value::alias(a));
+        self.aliases[a.index()].name = name;
+        Ok(a)
+    }
+
+    /// Point alias (or ifunc) `a` at `aliasee` instead (clang
+    /// `GlobalAlias::setAliasee` / `GlobalIFunc::setResolver`).
+    ///
+    /// # Errors
+    ///
+    /// `aliasee` is not a pointer constant.
+    pub fn set_aliasee(&mut self, a: AliasId, aliasee: Value) -> IrResult<()> {
+        if !aliasee.is_constant() || !self.types.is_ptr(self.const_type(aliasee)) {
+            return Err(IrError::new(IrErrorKind::BadGlobal, "aliasee must be a pointer constant"));
+        }
+        self.aliases[a.index()].aliasee = aliasee;
+        Ok(())
+    }
+
+    /// What `v` denotes after [`Module::replace_function`] or
+    /// [`Module::replace_global_with_alias`]: `v` itself unless it is an
+    /// erased function or global.
     pub fn resolve(&self, mut v: Value) -> Value {
-        while let ValueRef::Func(f) = v.get() {
-            match self.replaced.get(&f) {
+        loop {
+            let next = match v.get() {
+                ValueRef::Func(f) => self.replaced.get(&f),
+                ValueRef::Global(g) => self.replaced_globals.get(&g),
+                _ => None,
+            };
+            match next {
                 Some(&n) => v = n,
                 None => break,
             }
@@ -745,6 +847,36 @@ impl Module {
         value_type: TypeId,
         aliasee: Value,
     ) -> IrResult<AliasId> {
+        self.push_alias(name, value_type, aliasee, false)
+    }
+
+    /// Add a GNU indirect function `@name = ifunc value_type, ptr
+    /// resolver`: calls of `@name` go to the function `resolver` returns
+    /// at load time.
+    ///
+    /// # Errors
+    ///
+    /// `value_type` is not a function type or `resolver` not a pointer
+    /// constant.
+    pub fn add_ifunc(
+        &mut self,
+        name: &str,
+        value_type: TypeId,
+        resolver: Value,
+    ) -> IrResult<AliasId> {
+        if self.types.function_info(value_type).is_none() {
+            return Err(IrError::new(IrErrorKind::InvalidType, "an ifunc has a function type"));
+        }
+        self.push_alias(name, value_type, resolver, true)
+    }
+
+    fn push_alias(
+        &mut self,
+        name: &str,
+        value_type: TypeId,
+        aliasee: Value,
+        ifunc: bool,
+    ) -> IrResult<AliasId> {
         if !aliasee.is_constant() || !self.types.is_ptr(self.const_type(aliasee)) {
             return Err(IrError::new(IrErrorKind::BadGlobal, "aliasee must be a pointer constant"));
         }
@@ -756,6 +888,7 @@ impl Module {
             name,
             value_type,
             aliasee,
+            ifunc,
             linkage: Linkage::External,
             visibility: Visibility::Default,
             dll_storage: DllStorage::Default,

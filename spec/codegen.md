@@ -2079,6 +2079,29 @@ aarch64 and x86_64. Not implemented: `asm goto` (callbr), the `unwind`
 clobber inside a `try` (no `invoke`), `=@cc` outputs, register-variable
 operands, MMX type adjustment.
 
+**Landed (WP-757): observable checkpoints (P1494R5).**
+`__builtin_observable_checkpoint()` is GCC's builtin behind libstdc++'s
+`std::observable_checkpoint()` ([intro.abstract]/5,
+[utility.undefined]): a `void` noexcept function builtin, reported by
+`__has_builtin` (a GCC-only row, as `__builtin_is_string_literal`;
+`__has_constexpr_builtin` answers 0, as clang has no row). clang has no
+lowering to copy; GCC 16.1's keeps the stores before it and emits no
+instruction (an opaque compiler barrier). kiln emits an
+empty volatile asm statement with a memory clobber, as `asm volatile(""
+::: "memory")` lowers (`emit_observable_checkpoint` in `asm.rs`):
+`call void asm sideeffect "", "~{memory}"() #N` with the target's
+machine clobbers appended (x86_64 `~{dirflag},~{fpsr},~{flags}`) and
+`#N = { nounwind }`. LLVM treats the call as one that may read and
+write all memory and may not return, so stores before it are kept and
+undefined behaviour after it cannot be hoisted above it (an `unreachable`
+after it does not erase them). No external call or declaration is
+emitted, so LTO cannot see through it. The Oven evaluates the builtin as
+a no-op, as GCC does (constant evaluation has no undefined behaviour to
+bound); `std::observable_checkpoint` itself is not constexpr. Tests:
+`kiln_codegen/tests/lower.rs` `observable_checkpoint_is_an_opaque_barrier`
+(the IR and, with `opt-19`, the store kept at `-O2` where it is dropped
+without the checkpoint); `tests/conformance/intro.abstract/`.
+
 **Landed (WP-140): `PredefinedExpr`.** The name is a private
 `unnamed_addr constant` array named `<spelling>.<mangled function>`
 (`__func__._Z1fv`), as clang names it (`Module::string_global_named`);
@@ -3926,6 +3949,84 @@ local and an instantiated template included, so the ELF linker's
 `__start_name`/`__stop_name` bound the section. Section type conflicts
 (clang `err_section_conflict`) are not diagnosed.
 `tests/codegen/section_attr.cpp`, `tests/conformance/ext.gnu.section/`.
+
+## 9. Aliases and ifuncs (WP-763; `alias.rs`)
+
+GNU `alias("sym")` and `ifunc("resolver")` on a namespace-scope function
+or variable (sema rules in spec/sema.md §4.5) make the declaration a
+definition: an IR alias or ifunc, never a function body or a global with
+an initializer (clang `CodeGenModule::EmitAliasDefinition`,
+`emitIFuncDefinition`, `checkAliases`).
+
+- **When.** At the first declaration carrying the attribute
+  (`Ast::alias_definition`), in source order with the other top-level
+  emission; an alias already emitted for the entity is not emitted again.
+- **Target.** The string is the target's *mangled* symbol name, looked up
+  as-is: an existing function or global of that name; else a deferred
+  definition (an unused inline function, a static function, an internal
+  variable) whose mangled name it is, which is emitted now; else a
+  declaration created under that name, which a later definition
+  completes in place (a function: the aliasing declaration's signature,
+  retyped by the definition if they differ; a variable: a global of the
+  aliasing declaration's type; an ifunc resolver: a `void ()` placeholder
+  that the resolver's definition replaces and moves to the end of the
+  function list, as clang). A later definition whose mangled name an
+  alias named is emitted even when nothing else uses it.
+- **IR.** `@name = <linkage> <visibility> alias <ty>, ptr @target` with
+  `<ty>` the declaration's function or value type, or `@name = ifunc
+  <fnty>, ptr @resolver`. An earlier declaration of `@name` (a use) is
+  replaced by the alias (`replace_function_with_alias` /
+  `_with_ifunc` / `replace_global_with_alias`, spec/llvm.md §2.5). An
+  alias of a variable copies its `thread_local` mode (and gets no TLS
+  wrapper, `tls.rs`).
+- **Linkage and visibility.** An ifunc is `external`. An alias is
+  `internal` when the declaration has internal linkage, `weak` when it is
+  `weak`, else `external`. Visibility is the declaration's (`visibility`
+  attribute, `-fvisibility`; §8); every non-internal alias or ifunc is
+  `dso_local`.
+- **`weakref`.** Not an alias: a use of the declaration is a use of the
+  target symbol, declared `extern_weak` (a global variable target with no
+  `align` and not `constant`, as clang's `GetOrCreateLLVMGlobal` without
+  a declaration) unless the symbol is also referenced or defined
+  normally (`Ast::weakref_target`, clang `GetWeakRefReference`). Test:
+  `tests/conformance/ext.gnu.weak/weakref-run.cpp`.
+- **Diagnostics at emission.** An ifunc (or an alias, through an asm
+  label) whose name is already a definition is `definition with same
+  mangled name 'x' as another definition` with `previous definition is
+  here` (the alias is not emitted). An alias naming itself is `alias
+  definition is part of a cycle`.
+- **Checks at the end of the module** (`check_aliases`, after all
+  emission, skipped once an error has been reported, as clang's
+  `checkAliases` under `Diags.hasErrorOccurred()`), in alias order:
+  - the chain of aliases from each one must end at a function or global
+    *definition*: a cycle is `alias definition is part of a cycle`; an
+    undefined end is `{alias must point to a defined variable or
+    function|ifunc must point to a defined function}` with `the {function
+    or variable|function} specified in an {alias|ifunc} must refer to its
+    mangled name`, and then, for every function or variable of the TU
+    whose unqualified name is the target string, `{function|variable} by
+    that name is mangled as "sym"` with a fix-it replacing
+    `alias("…")` / `ifunc("…")` (up to the attribute's `)`) by the
+    mangled spelling, sorted by mangled name;
+  - an ifunc's resolver must be a function returning a pointer: `ifunc
+    resolver function must return a pointer`;
+  - a `section("s")` on the alias that differs from the aliasee's is
+    `{alias|ifunc} will not be in section 's' but in the same section as
+    the {aliasee|resolver}` [-Wignored-attributes];
+  - an alias whose aliasee is a weak (`weak`, `linkonce`, `extern_weak`,
+    `common`) alias is `{alias|ifunc} will always resolve to t even if
+    weak definition of w is overridden` [-Wignored-attributes] and is
+    re-pointed at that alias's aliasee;
+  - every ifunc resolver gets `disable_sanitizer_instrumentation`.
+- These diagnostics are reported at code generation (not under
+  `-fsyntax-only`), at the attribute, as clang.
+- Not done: clang's diagnostics for targets without alias or ifunc
+  support (kiln targets ELF only).
+
+Tests: `tests/codegen/gnu_alias.cpp`, `tests/codegen/gnu_ifunc.cpp`,
+`tests/codegen/gnu_weakref.cpp` (ir_vs_clang),
+`crates/kiln_driver/tests/codegen.rs` `alias_ifunc_diagnostics`,
+`tests/conformance/ext.gnu.alias/`.
 
 ## Landed sections after WP-488: `spec/landed/codegen/`
 

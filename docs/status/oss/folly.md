@@ -157,7 +157,7 @@ and 28 were invalid IR, caught before run time; cluster 31 was a run-time miscom
 - **`[[gnu::ifunc]]` / `[[gnu::alias]]`**: not lowered, so `__folly_memcpy`
   and `__folly_memset` (`folly/memcpy_select_aarch64.cpp:133`) are
   undefined and `memcpy_test`, `memcpy_benchmark` and `memset_benchmark`
-  do not link (the 6 failing tests).
+  do not link (the 6 failing tests). Fixed by WP-763; see the addendum.
 - **`MapUtilTest.cpp`**: clang 19 rejects it ("type 'const std::map<int,
   int> *' cannot be used prior to '::'", from `NestedMapType` instantiated
   while substituting `get_default`, `folly/container/MapUtil.h:337`); kiln
@@ -172,3 +172,26 @@ and 28 were invalid IR, caught before run time; cluster 31 was a run-time miscom
   a pack in the other template, or an undeduced non-type or template
   parameter, undeduced parameters count as unused, a narrower rule than
   clang's [temp.deduct.partial]/12 handling.
+
+## Addendum (WP-763, 2026-11-07): `ifunc` / `alias`
+
+kiln now lowers GNU `alias` and `ifunc` (spec/codegen.md §9). The same
+tag, configured as above through the harness wrapper `scripts/oss/kiln-cxx`
+with the harness-profile kiln++, with only the three affected targets
+built:
+
+```sh
+nice -n 10 make -k memcpy_test memcpy_benchmark memset_benchmark
+ctest --output-on-failure --timeout 300 -R '^memcpy_test[.]'
+./memcpy_benchmark --bm_min_iters=1 --bm_max_secs=1
+./memset_benchmark --bm_min_iters=1 --bm_max_secs=1
+```
+
+- Build: 386 compile and link invocations, all clean (213 s on the
+  shared jobserver); `__folly_memcpy` is an ifunc (`nm`: `i`) over the
+  `__folly_memcpy_aarch64{,_simd,_mops,_sve}` variants.
+- `memcpy_test`: 6 of 6 pass (was: does not link), which brings the
+  suite to 3773 of 3773, the clang 19 count; the full suite was not
+  re-run.
+- `memcpy_benchmark` and `memset_benchmark` link and run to completion
+  (exit 0). Timings were not compared with clang.

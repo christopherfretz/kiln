@@ -1764,6 +1764,32 @@ and returns the scope it names:
     definition not externally visible (codegen rule in spec/codegen.md
     "GNU inline functions"). Test:
     `tests/conformance/ext.gnu.inline/attribute-diags.cpp`.
+  - `alias("sym")`, `ifunc("resolver")`, `weakref` / `weakref("sym")`
+    (GNU syntax or `gnu::`; WP-763, clang `handleAliasAttr`,
+    `handleIFuncAttr`, `handleWeakRefAttr`; `AttrKind::ALIAS`,
+    `AttrKind::IFUNC`, `AttrKind::WEAKREF`). The argument is one string
+    literal (concatenation allowed), the target's *mangled* name, kept
+    as `AttrNode.a` with `AttrNode.b` the location one past the
+    attribute's `)` (for codegen's fix-its). `'X' attribute takes one
+    argument` / `expected string literal as argument of 'X' attribute`
+    otherwise. `ifunc` on anything but a function is `'ifunc' attribute
+    only applies to functions` [-Wignored-attributes] and dropped.
+    `alias` and `ifunc` make the declaration a definition (clang
+    `hasDefiningAttr`): on a function definition, on a variable
+    definition (one with an initializer, or a non-`extern` one), or with
+    a second `alias`/`ifunc` on the same declaration, the later one is
+    `definition 'x' cannot also be an {alias|ifunc}`; a definition of the
+    entity before or after a declaration carrying one is `redefinition of
+    'x'` with `previous definition is here` (`check_alias_redefines`,
+    `check_alias_definition`). `weakref` must have internal
+    linkage (`weakref declaration must have internal linkage`) and
+    namespace scope, and needs a target. The target checks (defined in
+    the TU, no cycle, resolver returns a pointer) are codegen's
+    (spec/codegen.md "Aliases and ifuncs"), as in clang. Not diagnosed:
+    clang's -Wgcc-compat `GCC does not allow 'X' attribute in this
+    position on a function definition`. Test:
+    `tests/conformance/ext.gnu.alias/alias-diagnostics.cpp`,
+    `tests/conformance/ext.gnu.weak/weakref-diagnostics.cpp`.
   - `may_alias` (GNU syntax or `gnu::`; WP-423, clang `MayAliasAttr`):
     kept on any declaration without a diagnostic (no subject list); with
     arguments `'may_alias' attribute takes no arguments`. A GNU
@@ -4956,6 +4982,32 @@ and aggregate element types.
 - **Deallocation function for new** ([expr.new]/28): for a placement
   form, the one with the same extra parameters; otherwise the sized usual
   one (with `align_val_t` when aligned).
+  **Placement selection (P3769R1, Croydon DR; WP-757;
+  `Sema::matching_operator_delete`, `new_delete.rs`).** For a placement
+  form, every candidate found by the lookup whose parameter types after
+  the first match the allocation function's is collected: a non-template
+  directly, a template through deduction from those parameter types (so
+  `template<int = 0> void operator delete(void*, Tag)` matches). With
+  more than one match, those whose constraints are not satisfied are
+  dropped (clang does not filter non-templates; kiln does, as the
+  wording's "suitable" requires). Exactly one left is the deallocation
+  function; none means none is called. Several left is clang's
+  `-Wambiguous-delete` warning at the new-expression, "multiple suitable
+  'operator delete' functions for 'T'; no 'operator delete'
+  function will be invoked if initialization throws an exception", with a
+  "member 'operator delete' declared here" note per candidate in
+  declaration order (`T` the allocated type), and no deallocation
+  function. A candidate with an extra trailing parameter that has a
+  default argument does not match. In
+  C++14 and later a single match that is a usual (sized) deallocation
+  function of a placement new-expression is clang's error "'new'
+  expression with placement arguments refers to non-placement 'operator
+  delete'" with an "'operator delete' declared here" note, unless a
+  class-scope unsized usual form corresponds to it. All of this runs
+  only with exceptions enabled (`Sema::exceptions`): then the selected
+  function is access-checked, a deleted one is the use-of-deleted error,
+  and it is odr-used. Tests:
+  `tests/conformance/expr.new/p3769-placement-delete-{selection-run,deleted}.cpp`.
 - **Initializer** ([expr.new]/23): none is default-initialization (a
   `const` scalar or array is an error: `default initialization of an
   object of const type 'const int[]'`, the array type printed for array

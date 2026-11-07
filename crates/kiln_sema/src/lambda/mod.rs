@@ -147,6 +147,11 @@ pub(crate) struct LambdaScope {
     /// introducer on (P2036: in the *lambda-declarator* too; the body
     /// declares them in its own scope).
     pub(crate) init_cap_vars: Vec<(Symbol, DeclId)>,
+    /// The local entities (`None`: `*this`) this lambda captured
+    /// implicitly whose every reference so far is in one of its contract
+    /// assertions, with the first such reference
+    /// ([expr.prim.lambda.closure]/10; [`Sema::note_contract_capture_use`]).
+    pub(crate) contract_caps: Vec<(Option<DeclId>, Loc)>,
 }
 
 impl Sema<'_, '_> {
@@ -189,10 +194,21 @@ impl Sema<'_, '_> {
             cap_tys: Vec::new(),
             init_caps: Vec::new(),
             init_cap_vars: Vec::new(),
+            contract_caps: Vec::new(),
         });
         self.act_on_explicit_captures(id, intro);
         self.create_init_capture_vars(id);
         id
+    }
+
+    /// The number of template heads outside the innermost lambda whose
+    /// body is open (0 outside lambda bodies): a declaration in the body
+    /// cannot be headed by them ([`Sema::take_template_head`]). The
+    /// lambdas around a point of instantiation do not count
+    /// ([`Sema::lambda_base`]).
+    pub(crate) fn lambda_head_floor(&self) -> usize {
+        let inner = self.lambdas.get(self.lambda_base..).unwrap_or_default();
+        inner.iter().rev().find(|l| l.body_open).map_or(0, |l| l.heads)
     }
 
     /// `<` after the *lambda-introducer*: opens the lambda's
@@ -690,6 +706,7 @@ impl Sema<'_, '_> {
         self.ast.exprs.lambdas.get_mut(id).body = Some(body);
         let closure = top.closure;
         self.finish_captures(id, closure, &top.cap_tys);
+        self.check_contract_only_captures(&top.contract_caps);
         if let Some(f) = top.call_op {
             self.add_function_pointer_conversion(id, closure, f, top.explicit_constexpr);
         }

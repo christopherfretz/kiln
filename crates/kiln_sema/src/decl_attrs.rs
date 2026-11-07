@@ -45,6 +45,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::WEAK => "weak",
         AttrKind::WEAKREF => "weakref",
         AttrKind::ALIAS => "alias",
+        AttrKind::IFUNC => "ifunc",
         AttrKind::SECTION => "section",
         AttrKind::ANALYZER_NORETURN => "analyzer_noreturn",
         AttrKind::DISABLE_TAIL_CALLS => "disable_tail_calls",
@@ -620,9 +621,9 @@ impl Sema<'_, '_> {
         true
     }
 
-    /// GNU `weak`, `weakref` and `alias` on `d` (clang
-    /// `handleWeakRefAttr`, `handleAliasAttr`, the end of
-    /// `ProcessDeclAttributeList` and `checkAttributesAfterMerging`):
+    /// GNU `weak`, `weakref`, `alias` and `ifunc` on `d` (clang
+    /// `handleWeakRefAttr`, `handleAliasAttr`, `handleIFuncAttr`, the end
+    /// of `ProcessDeclAttributeList` and `checkAttributesAfterMerging`):
     /// - `weakref` appertains to a variable or function (an error
     ///   otherwise) declared in a namespace (`must be in a global
     ///   context`); `weakref("target")` becomes an `alias("target")`
@@ -633,6 +634,12 @@ impl Sema<'_, '_> {
     ///   externally visible variable definition is `definition 'x' cannot
     ///   also be an alias` (a function body or a variable initializer is
     ///   reported when it is seen, [`Sema::check_alias_definition`]);
+    /// - `ifunc` appertains to a function (`'ifunc' attribute only applies
+    ///   to functions`, a `-Wignored-attributes` warning, otherwise); an
+    ///   `alias` and an `ifunc` each make the declaration a definition, so
+    ///   whichever of the two comes second is `definition 'f' cannot also
+    ///   be an alias/ifunc`, and either on a redeclaration of a defined
+    ///   entity is `redefinition of 'f'` (clang `hasDefiningAttr`);
     /// - a `weakref` without a target is `must also have an alias
     ///   attribute`, at the first attribute, and dropped;
     /// - a `weakref` on a declaration with external linkage is `weakref
@@ -646,6 +653,7 @@ impl Sema<'_, '_> {
         };
         if !has(self, attrs, AttrKind::WEAKREF)
             && !has(self, attrs, AttrKind::ALIAS)
+            && !has(self, attrs, AttrKind::IFUNC)
             && !has(self, attrs, AttrKind::WEAK)
         {
             return;
@@ -659,6 +667,7 @@ impl Sema<'_, '_> {
             .map(|n| n.loc);
         let mut out = Vec::with_capacity(attrs.len() + 1);
         let mut has_alias = false;
+        let mut has_ifunc = false;
         for &a in attrs.iter() {
             let node = *self.ast.attrs.get(a);
             match node.kind {
@@ -709,12 +718,11 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         continue;
                     }
-                    let definition = if kind.is_function() {
-                        has_alias
-                    } else {
-                        self.is_var_definition(d)
-                            && !kiln_abi::mangle::has_internal_linkage(&self.ast, d)
-                    };
+                    let definition = has_alias
+                        || has_ifunc
+                        || (!kind.is_function()
+                            && self.is_var_definition(d)
+                            && !kiln_abi::mangle::has_internal_linkage(&self.ast, d));
                     if definition {
                         let msg = self
                             .diag(DiagId::sema_alias_is_definition, node.loc)
@@ -724,6 +732,28 @@ impl Sema<'_, '_> {
                         continue;
                     }
                     has_alias = true;
+                    out.push(a);
+                }
+                AttrKind::IFUNC => {
+                    // clang `IFunc`: `SubjectList<[Function]>`, a warning.
+                    if !kind.is_function() {
+                        let shown = self.attr_shown(&node, "ifunc");
+                        let msg = self
+                            .diag(DiagId::sema_attribute_wrong_decl_type, node.loc)
+                            .arg(format!("'{shown}'"))
+                            .arg("functions");
+                        self.emit(msg);
+                        continue;
+                    }
+                    if has_alias || has_ifunc {
+                        let msg = self
+                            .diag(DiagId::sema_alias_is_definition, node.loc)
+                            .arg(quoted.clone())
+                            .arg(1);
+                        self.emit(msg);
+                        continue;
+                    }
+                    has_ifunc = true;
                     out.push(a);
                 }
                 _ => out.push(a),
@@ -754,27 +784,69 @@ impl Sema<'_, '_> {
                 !matches!(self.ast.attrs.get(a).kind, AttrKind::WEAKREF | AttrKind::ALIAS)
             });
         }
+        if has(self, &out, AttrKind::ALIAS) || has(self, &out, AttrKind::IFUNC) {
+            self.check_alias_redefines(d, kind);
+        }
         *attrs = out;
     }
 
-    /// The definition of `d` (`body`: a function body, else a variable
-    /// initializer) where `d` has an `alias` attribute: `definition 'x'
-    /// cannot also be an alias` at the attribute (clang
-    /// `ActOnStartOfFunctionDef`, `checkAttributesAfterMerging`).
-    pub(crate) fn check_alias_definition(&mut self, d: DeclId) {
-        let Some(node) = self
-            .ast
+    /// An `alias` / `ifunc` declaration `d` whose entity an earlier
+    /// declaration already defines (a function body, a variable
+    /// definition, or another `alias` / `ifunc`): `redefinition of 'x'`
+    /// at `d`, noting the definition (clang `checkNewAttributesAfterDef`
+    /// via `hasDefiningAttr`).
+    fn check_alias_redefines(&mut self, d: DeclId, kind: DeclKind) {
+        let prev = self.ast.redecls_of(d).find(|&p| {
+            p != d
+                && (self.own_alias_attr(p).is_some()
+                    || if kind.is_function() {
+                        self.ast.decls.function(p).is_some_and(|f| f.body.is_some())
+                    } else {
+                        self.is_var_definition(p)
+                    })
+        });
+        let Some(prev) = prev else { return };
+        let msg = self
+            .diag(DiagId::sema_redefinition, self.ast.decls.get(d).loc())
+            .arg(self.decl_name(d));
+        let msg = self.note_prev(msg, prev, true);
+        self.emit(msg);
+    }
+
+    /// The `alias` / `ifunc` attribute written on `d` itself.
+    fn own_alias_attr(&self, d: DeclId) -> Option<AttrNode> {
+        self.ast
             .lists
             .iter::<AttrId>(self.ast.attrs.of_decl(d))
             .map(|a| *self.ast.attrs.get(a))
-            .find(|n| n.kind == AttrKind::ALIAS)
+            .find(|n| matches!(n.kind, AttrKind::ALIAS | AttrKind::IFUNC))
+    }
+
+    /// The definition of `d` (a function body or a variable initializer)
+    /// where `d` has an `alias` or `ifunc` attribute: `definition 'x'
+    /// cannot also be an alias/ifunc` at the attribute (clang
+    /// `ActOnStartOfFunctionDef`, `checkAttributesAfterMerging`); where an
+    /// earlier declaration has one, `redefinition of
+    /// 'x'` noting it (clang `hasDefiningAttr`; a `weakref`'s `alias`
+    /// counts).
+    pub(crate) fn check_alias_definition(&mut self, d: DeclId) {
+        if let Some(node) = self.own_alias_attr(d) {
+            let msg = self
+                .diag(DiagId::sema_alias_is_definition, node.loc)
+                .arg(format!("'{}'", self.decl_name(d)))
+                .arg(u32::from(node.kind == AttrKind::IFUNC));
+            self.emit(msg);
+            return;
+        }
+        let Some(prev) =
+            self.ast.redecls_of(d).find(|&p| p != d && self.own_alias_attr(p).is_some())
         else {
             return;
         };
         let msg = self
-            .diag(DiagId::sema_alias_is_definition, node.loc)
-            .arg(format!("'{}'", self.decl_name(d)))
-            .arg(0);
+            .diag(DiagId::sema_redefinition, self.ast.decls.get(d).loc())
+            .arg(self.decl_name(d));
+        let msg = self.note_prev(msg, prev, true);
         self.emit(msg);
     }
 

@@ -70,12 +70,15 @@ impl Sema<'_, '_> {
     /// The instantiation pattern of function `f` (clang
     /// `getTemplateInstantiationPattern`): the declaration its definition
     /// is instantiated from, through member templates; `f` itself for an
-    /// explicit specialization or a non-template.
+    /// explicit specialization (also of a member of a class template
+    /// specialization, `template<> int C<long>::m(long)`) or a
+    /// non-template.
     pub(crate) fn function_pattern(&self, f: DeclId) -> DeclId {
         let mut cur = f;
         for _ in 0..64 {
-            if let Some((_, s)) = self.ast.spec_info(cur)
-                && s.kind == SpecKind::ExplicitSpecialization
+            let explicit = SpecKind::ExplicitSpecialization;
+            if self.ast.spec_info(cur).is_some_and(|(_, s)| s.kind == explicit)
+                || self.ast.member_spec_info(cur).is_some_and(|(_, s)| s.kind == explicit)
             {
                 break;
             }
