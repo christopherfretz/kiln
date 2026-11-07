@@ -182,6 +182,22 @@ in a class template with a dependent base) was fixed by WP-680. WP-683
 fixed the rest of magic_enum, doctest and tl_expected's clusters; see
 docs/status/oss/small-trio.md.
 
+<!-- oss:cli11 -->
+### cli11 (v2.6.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 65 / 0 | 65 / 0 |
+| links ok / failed | 60 / 0 | 60 / 0 |
+| tests passed / total | 86 / 86 | 86 / 86 |
+| wall | 54 s | 29 s |
+| peak TU RSS | 330 MB | 433 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:cli11 -->
+
 <!-- oss:spdlog -->
 ### spdlog (v1.17.0)
 

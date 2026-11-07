@@ -262,9 +262,12 @@ impl Sema<'_, '_> {
         };
         let mut wi = 0usize;
         let mut open_expansion = false;
-        // Arguments kept as written only for their instantiation-dependence
-        // (index, parameter, location): folded for the canonical list.
-        let mut fold: Vec<(usize, DeclId, Loc)> = Vec::new();
+        // `out` with each argument kept as written only for its
+        // instantiation-dependence converted, once there is one:
+        // the canonical list, and the prior arguments a later default is
+        // substituted with (`A = mx<L>::value` after `L = sizeof(member)`
+        // names `mx<32>::value`, not a dependent `mx<sizeof(member)>`).
+        let mut canon: Option<Vec<TemplateArg>> = None;
         for (pi, &p) in params.iter().enumerate() {
             if let Some(tys) = self.expanded_pack_types(p) {
                 // An expanded parameter pack takes one argument per
@@ -297,7 +300,7 @@ impl Sema<'_, '_> {
                     return Err(());
                 }
                 let l = self.ast.types.arg_list(&elems);
-                out.push(TemplateArg::pack(l));
+                push_arg(&mut out, &mut canon, TemplateArg::pack(l));
                 continue;
             }
             let pack = self.ast.template_parm(p).is_some_and(|x| x.pack);
@@ -315,13 +318,19 @@ impl Sema<'_, '_> {
                     wi += 1;
                 }
                 let l = self.ast.types.arg_list(&elems);
-                out.push(TemplateArg::pack(l));
+                push_arg(&mut out, &mut canon, TemplateArg::pack(l));
                 continue;
             }
             if wi < written.len() {
                 let a = self.check_template_arg(tmpl, depth, p, written[wi], arg_loc(wi), &out)?;
-                if self.inst_dependent_nttp_arg(p, a) {
-                    fold.push((out.len(), p, arg_loc(wi)));
+                if let (true, ArgView::Expr { expr, .. }) =
+                    (self.inst_dependent_nttp_arg(p, a), a.view())
+                {
+                    let c = canon.get_or_insert_with(|| out.clone());
+                    let v = self.convert_nttp_arg(tmpl, depth, p, expr, arg_loc(wi), c)?;
+                    c.push(v);
+                } else if let Some(c) = canon.as_mut() {
+                    c.push(a);
                 }
                 out.push(a);
                 wi += 1;
@@ -337,28 +346,24 @@ impl Sema<'_, '_> {
                 self.diag_template_arity(tmpl, false, loc);
                 return Err(());
             };
-            let a = self.checked_default_template_arg(tmpl, depth, p, def, loc, r_angle, &out)?;
-            out.push(a);
+            let prior = canon.as_deref().unwrap_or(&out);
+            let a = self.checked_default_template_arg(tmpl, depth, p, def, loc, r_angle, prior)?;
+            push_arg(&mut out, &mut canon, a);
         }
         if wi < written.len() {
             self.diag_template_arity(tmpl, true, loc);
             return Err(());
         }
         let sugared = self.ast.types.arg_list(&out);
-        if fold.is_empty() {
+        let Some(canon) = canon else {
             let canonical = self.ast.types.canonical_args(sugared);
             return Ok(ConvertedArgs { sugared, canonical });
-        }
+        };
         // The canonical argument is the value ([temp.arg.nontype]/2; clang
         // converts an argument that is not value-dependent), so
         // `enable_if<sizeof(first_t<int, decltype(T::x)>) == 4>` names
         // `enable_if<true>`; the written form is what substitution
         // re-checks ([temp.deduct.general]/8).
-        let mut canon = out.clone();
-        for (i, p, at) in fold {
-            let ArgView::Expr { expr, .. } = out[i].view() else { continue };
-            canon[i] = self.convert_nttp_arg(tmpl, depth, p, expr, at, &canon[..i])?;
-        }
         let canon = self.ast.types.arg_list(&canon);
         let canonical = self.ast.types.canonical_args(canon);
         Ok(ConvertedArgs { sugared, canonical })
@@ -1586,6 +1591,15 @@ impl Sema<'_, '_> {
     pub(crate) fn int_fits(&self, ty: QualType, v: i128) -> bool {
         crate::constfold::int_info(&self.ast, ty)
             .is_none_or(|(bits, signed)| crate::constfold::fits(v, bits, signed))
+    }
+}
+
+/// Appends checked argument `a` to `out` and, once there is one, to the
+/// list with the instantiation-dependent arguments converted.
+fn push_arg(out: &mut Vec<TemplateArg>, canon: &mut Option<Vec<TemplateArg>>, a: TemplateArg) {
+    out.push(a);
+    if let Some(c) = canon.as_mut() {
+        c.push(a);
     }
 }
 

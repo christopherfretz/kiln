@@ -1916,10 +1916,17 @@ fn is_access_error(id: DiagId) -> bool {
     )
 }
 
+/// clang's `SFINAEFailure` warnings: a substitution failure whatever the
+/// mapped severity, even under `-Wno-…` or `#pragma … ignored` (narrowing:
+/// [dcl.init.list]/3, [temp.deduct.general]/8).
 fn is_sfinae_failure(id: DiagId) -> bool {
     matches!(
         id,
-        DiagId::sema_designated_init_reordered
+        DiagId::sema_cce_narrowing_value
+            | DiagId::sema_designated_init_reordered
+            | DiagId::sema_init_list_constant_narrowing
+            | DiagId::sema_init_list_type_narrowing
+            | DiagId::sema_init_list_variable_narrowing
             | DiagId::sema_initializer_overrides
             | DiagId::sema_initializer_union_overrides
     )
