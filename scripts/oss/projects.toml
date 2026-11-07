@@ -63,7 +63,7 @@ configure = ["-DCATCH_DEVELOPMENT_BUILD=ON", "-DCATCH_BUILD_TESTING=ON", "-DCATC
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 1
-verified = false
+verified = true
 notes = "Some ctest cases run python3 scripts (ApprovalTests)."
 
 [googletest]
@@ -209,7 +209,7 @@ configure = ["-DSIMDJSON_DEVELOPER_MODE=ON", "-DSIMDJSON_ENABLE_THREADS=ON", "-D
 test = "ctest --output-on-failure -E 'checkperf|fuzz'"
 c_compiler = "clang-19"
 wave = 2
-verified = false
+verified = true
 notes = "Developer mode downloads test data; target-specific SIMD kernels (NEON on aarch64, AVX on x86_64) exercise intrinsics headers."
 
 [eigen]

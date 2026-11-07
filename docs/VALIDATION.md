@@ -270,12 +270,55 @@ cargo xtask ci --quick --oracle-only` must be green too, and before a merge that
 an expectation `cargo xtask test --compiler clang++-19 <dirs>` checks the
 corpus against clang 19 as well.
 
-`.github/workflows/ci.yml` runs the same `cargo xtask ci` (full form, clang
-self-check included) and then `KILN_ORACLE=19 cargo xtask ci --quick
+`.github/workflows/ci.yml` runs the same gate as `cargo xtask ci` (full
+form, clang self-check included) plus `KILN_ORACLE=19 cargo xtask ci --quick
 --oracle-only` (only the oracle-dependent `cargo test` targets and the kiln
-corpus; spec/harness.md "CI") on every push to `main`, on every pull request and every
-merge-queue group (`merge_group`). A newer push to the same ref cancels the
-older run (`concurrency: ci-<ref>`).
+corpus; spec/harness.md "CI") on every push to `main`, on every pull request
+and every merge-queue group (`merge_group`). A newer push to the same ref
+cancels the older run (`concurrency: ci-<ref>`).
+
+**Job graph** (WP-692). The gate is fanned out over parallel jobs, each a
+slice of `cargo xtask ci` (`--step`, `--shard`, `--unit-group`;
+spec/harness.md "CI"). `ci.yml` calls the reusable workflow
+`.github/workflows/ci-lane.yml` once per architecture (callers `arm` and
+`x86_64`, so the jobs show as `arm / kiln-22 2/6`), and each lane runs:
+
+- `lints`: `ci --step lints` (`cargo xtask lint`, fmt, clippy);
+- `unit <group>`, one per unit group (`xtask`, `codegen`, `rest`): `ci
+  --step unit --unit-group <group>`, the `cargo test --workspace` split by
+  package so no job runs more than about two minutes of tests (the
+  `xtask` group alone is the seed-corpus tests). `unit codegen` also runs
+  the `ORACLE_TESTS` again under `KILN_ORACLE=19`, where they are already
+  built;
+- `self-check K/2`: `ci --step self-check --shard K/2`, the corpus under
+  clang;
+- `kiln-22 K/6` and `kiln-19 K/6`: `ci --step kiln --shard K/6`, and the
+  same under `KILN_ORACLE=19 ... --oracle-only`.
+
+The shard count `S = 6` is one constant: the anchored matrix list
+`&kiln-shards` in `ci-lane.yml`, which both kiln runs reuse; every job
+passes `K/${{ strategy.job-total }}`, so the list length is `N`.
+Sharding is round-robin over the sorted test list (test `i` runs in shard
+`K` iff `i % N == K - 1`), which spreads every directory, slow or fast,
+over all shards. The fan-in jobs `check` (needs `arm`) and `check-x86_64`
+(needs `x86_64`) run `if: always()` and pass only when the lane's result
+is `success`, so a failed, cancelled or skipped job fails them; they are
+the status checks branch rules name. That is 18 jobs per architecture
+plus the fan-in, 38 per run: on a plan with a 60-job concurrency limit two
+overlapping runs queue each other's jobs.
+
+**Cache policy.** `Swatinem/rust-cache` keeps `~/.cargo` and the
+dependency builds under one `shared-key` per architecture (`ci-arm`,
+`ci-x86_64`), so every job of a lane restores the same entry (about 12 MB,
+a couple of seconds). Only `unit rest` saves it (`save-if`), with
+`cache-on-failure`; an exact hit is not saved again, so the entry changes
+only with `Cargo.lock`, the toolchain or the environment. Workspace
+crates are deliberately not cached (`cache-workspace-crates` stays off):
+a fresh checkout gives every source a new mtime, so cargo rebuilds them
+anyway; restoring commit times instead would be unsound, because a
+pull request's commit can be older than the cached build and cargo would
+then reuse a stale artifact. Each job therefore rebuilds the workspace
+(about a minute), in parallel with every other job.
 
 The job runs in a `gcc:16.1.0-trixie` container on the `ubuntu-24.04-arm`
 runner: the same aarch64 Debian 13 with Debian's clang 22.1.8 and 19.1.7,
@@ -306,8 +349,8 @@ with it (the GH111477 probes skip), but it is not what CI runs.
 `KILN_REQUIRE_LLVM=1` turns a missing LLVM tool into a failure instead of a
 skip.
 
-A second job, `check-x86_64`, runs the same steps in the same container on
-the x86-64 `ubuntu-24.04` runner (WP-228), so the host-dependent paths
+The `x86_64` lane runs the same jobs in the same container on the
+x86-64 `ubuntu-24.04` runner (WP-228), so the host-dependent paths
 (default target, GCC detection, `run` tests compiled for and run on
 x86-64) are exercised too. Tests whose expectations are aarch64-specific
 pin `//@ args: --target=aarch64-unknown-linux-gnu` (compile-only kinds) or
@@ -315,18 +358,17 @@ carry `//@ requires: target-aarch64` (`run` tests, which cannot cross-run;
 spec/harness.md). The `-v` search-list test compares with clang++-19 live
 rather than with the reference container's goldens. `check` is the
 required status check; whether `check-x86_64` is too is a branch-rule
-decision. The two jobs stay separate jobs (a matrix would rename the
-required check to `check (…)`). Each checks out (the image has git) and runs
-the shared composite action `.github/actions/kiln-ci` (toolchain packages,
-Rust 1.95.0, the cache, `cargo xtask ci`), so the steps are written once.
+decision. Every job checks out (the image has git) and runs the
+setup-only composite action `.github/actions/kiln-ci` (toolchain
+packages, the GCC check, Rust 1.95.0, the cache), so the setup is
+written once.
 `ext.c11.atomic/alignment-warning-x86_64-run.cpp` is the x86-64 twin of an
 aarch64-only `run` test (WP-239).
 
-`Swatinem/rust-cache` keeps `~/.cargo` and the dependency builds, and
-saves them even when the run fails. A warm run takes about 6 minutes:
-17 s of packages, about 1 minute of workspace build, 2.5 minutes of
-`cargo test`, and then the two corpus runs (46 s clang, 74 s kiln). A cold
-run adds a minute or two. Locally, `cargo xtask ci` is the same gate. Run
+Before WP-692 the whole gate ran serially in one job per architecture,
+18 minutes on aarch64 and 26 on x86-64; the fanned-out times and the
+per-job floor are in docs/status/perf.md "WP-692: CI fan-out". Locally,
+`cargo xtask ci` is the same gate. Run
 it before pushing `main`, because Actions only reports after the push, and
 the local run is still the merge gate (docs/AGENTS.md rule 3).
 

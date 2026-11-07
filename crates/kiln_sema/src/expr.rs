@@ -2497,13 +2497,7 @@ impl Sema<'_, '_> {
                 .map(|(p, _)| p.encoding)
                 .find(|&e| e != Encoding::Ordinary)
                 .unwrap_or(Encoding::Ordinary);
-            let elem = match enc {
-                Encoding::Ordinary => QualType::CHAR,
-                Encoding::Wide => QualType::WCHAR,
-                Encoding::Utf8 => QualType::CHAR8,
-                Encoding::Utf16 => QualType::CHAR16,
-                Encoding::Utf32 => QualType::CHAR32,
-            };
+            let elem = literal::string_literal_elem(self.std, enc);
             let plain: Vec<(StringLiteral<'_>, Loc)> = pieces
                 .iter()
                 .map(|(p, l)| (StringLiteral { ud_suffix: None, ..p.clone() }, *l))
@@ -4462,6 +4456,16 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         }
         let single = (args.len() == 1 && braced[0].is_none()).then(|| args[0]);
+        if let Some(i) = single
+            && self.std >= kiln_lex::Std::Cxx20
+            && self.is_comma_expr(i)
+        {
+            // [depr.comma.subscript]: before C++23 the index is one
+            // expression (clang `warn_deprecated_comma_subscript`, at the
+            // comma; C++23 parses an expression-list instead).
+            let at = self.ast.exprs.get(i).loc();
+            self.error(DiagId::sema_deprecated_comma_subscript, at);
+        }
         if kids.iter().any(|&e| self.expr_is_type_dependent(e)) {
             if let Some(idx) =
                 single.filter(|&i| self.ast.exprs.get(i).kind() != ExprKind::PackExpansionExpr)
@@ -4505,6 +4509,17 @@ impl Sema<'_, '_> {
             self.emit(msg);
         }
         self.recover_err(&kids, loc)
+    }
+
+    /// A built-in or overloaded comma operator expression, unparenthesized.
+    fn is_comma_expr(&self, e: ExprId) -> bool {
+        match self.ast.exprs.get(e).kind() {
+            ExprKind::BinaryOperator => self.ast.exprs.binary_op(e) == BinaryOp::Comma,
+            ExprKind::CXXOperatorCallExpr => {
+                self.ast.exprs.operator_call_op(e) == kiln_ast::names::OverloadedOperator::Comma
+            }
+            _ => false,
+        }
     }
 
     /// `e1[e2]` ([expr.sub]).

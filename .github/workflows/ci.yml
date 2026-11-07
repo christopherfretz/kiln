@@ -6,50 +6,42 @@ on:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-# Two jobs rather than a matrix: a matrix would rename the required status
-# check `check` to `check (<axis>)`. The shared steps live once in the
-# composite action .github/actions/kiln-ci (WP-239); each job only checks
-# out, which the local action needs before it can be read (the gcc image
-# ships git).
+# The gate fans out (WP-692, docs/VALIDATION.md "GitHub Actions"): each
+# architecture is one call of the reusable workflow ci-lane.yml, whose jobs
+# (lints, the unit-test groups, the sharded corpus runs) all run in
+# parallel and show up as `arm / kiln-22 1/6` and so on. The two fan-in
+# jobs keep the names of the REQUIRED status checks, `check` and
+# `check-x86_64` (the main ruleset and the merge queue wait for them), so
+# they are plain jobs: a matrix axis would rename them.
 jobs:
+  arm:
+    # The reference environment: aarch64 Debian 13 (see ci-lane.yml).
+    uses: ./.github/workflows/ci-lane.yml
+    with: { runner: ubuntu-24.04-arm, cache-key: ci-arm }
+  x86_64:
+    # The same container on an x86-64 host (WP-228): the default target is
+    # x86_64-unknown-linux-gnu, so the host-dependent paths (driver
+    # defaults, GCC detection, run tests natively on x86-64) are covered.
+    uses: ./.github/workflows/ci-lane.yml
+    with: { runner: ubuntu-24.04, cache-key: ci-x86_64 }
+  # Fan-in: passes only if every job of the lane succeeded. `always()` so a
+  # failed, cancelled or skipped lane makes this job FAIL (a skipped
+  # required check would otherwise count as passing).
   check:
-    # The reference environment (docs/VALIDATION.md "GitHub Actions"): an
-    # aarch64 Debian 13 host with Debian's clang 22.1.8 (the oracle) and
-    # 19.1.7 (the second oracle and the M3 gate's) and GCC 14, as the
-    # development container, plus GCC 16.1 as the reflection oracle. The
-    # differential tests and goldens compare against those clangs on that
-    # host (search paths, target defaults, va_list); target-dependent tests
-    # pin aarch64 or `requires:` it.
+    needs: [arm]
+    if: always()
     runs-on: ubuntu-24.04-arm
-    # gcc:16.1.0-trixie is debian:trixie (buildpack-deps) plus GCC 16.1 in
-    # /usr/local: GCC 16.1 is the reflection oracle (spec/harness.md "GCC
-    # oracle"), so every `oracle: gcc` test is compared with it here, and
-    # KILN_REQUIRE_GCC makes a missing GCC an error, never a skip. The
-    # image's /usr/local/bin/{gcc,cc} come first on PATH (Rust links with
-    # them); Debian's GCC 14 stays in /usr/lib/gcc/<triple>/14, which both
-    # clang and kiln detect for libstdc++ (they never look in /usr/local);
-    # at run time every binary loads GCC 16.1's libstdc++.so.6 (the image's
-    # ld.so.conf lists /usr/local/lib64 first), which is ABI-compatible.
-    # Measured cost: docs/status/perf.md "WP-502: GCC 16.1 in CI".
-    container: gcc:16.1.0-trixie
-    env:
-      KILN_REQUIRE_LLVM: "1"
-      KILN_GCC: /usr/local/bin/g++
-      KILN_REQUIRE_GCC: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/kiln-ci
+      - name: every arm job succeeded
+        run: |
+          echo "arm lane: ${{ needs.arm.result }}"
+          test "${{ needs.arm.result }}" = success
   check-x86_64:
-    # The same Debian 13 environment on an x86-64 host (WP-228): the default
-    # target is x86_64-unknown-linux-gnu, so this covers the host-dependent
-    # paths (driver defaults, GCC detection, run tests natively on x86-64).
-    # Not a required status check unless the branch rules say so.
+    needs: [x86_64]
+    if: always()
     runs-on: ubuntu-24.04
-    container: gcc:16.1.0-trixie
-    env:
-      KILN_REQUIRE_LLVM: "1"
-      KILN_GCC: /usr/local/bin/g++
-      KILN_REQUIRE_GCC: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/kiln-ci
+      - name: every x86_64 job succeeded
+        run: |
+          echo "x86_64 lane: ${{ needs.x86_64.result }}"
+          test "${{ needs.x86_64.result }}" = success

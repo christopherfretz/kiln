@@ -33,6 +33,7 @@ DeleteIncomplete = "delete-incomplete" [];
 DeprecatedAnonEnumEnumConversion = "deprecated-anon-enum-enum-conversion" [];
 DeprecatedArrayCompare = "deprecated-array-compare" [];
 DeprecatedBuiltins = "deprecated-builtins" [];
+DeprecatedCommaSubscript = "deprecated-comma-subscript" [];
 DeprecatedDeclarations = "deprecated-declarations" [];
 DeprecatedEnumCompare = "deprecated-enum-compare" [];
 DeprecatedEnumCompareConditional = "deprecated-enum-compare-conditional" [];

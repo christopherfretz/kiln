@@ -41,7 +41,7 @@ The loop:
 <!-- oss:projects -->
 | project | wave | tag | status |
 |---|---|---|---|
-| `catch2` | 1 | `v3.16.1` | not started |
+| `catch2` | 1 | `v3.16.1` | tests at parity |
 | `cli11` | 1 | `v2.6.1` | tests at parity |
 | `doctest` | 1 | `v2.5.3` | not started |
 | `fmt` | 1 | `12.1.0` | not started |
@@ -58,7 +58,7 @@ The loop:
 | `entt` | 2 | `v3.15.0` | not started |
 | `glog` | 2 | `v0.7.1` | not started |
 | `re2` | 2 | `2025-11-05` | not started |
-| `simdjson` | 2 | `v4.2.4` | not started |
+| `simdjson` | 2 | `v4.2.4` | blocked (tests 116/117 vs clang 117/117) |
 | `taskflow` | 2 | `v3.10.0` | not started |
 | `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | not started |
 | `folly` | 3 | `v2026.10.26.00` | not started |
