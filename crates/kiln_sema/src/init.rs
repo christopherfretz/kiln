@@ -781,6 +781,12 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.is_array(ty) {
             let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
+            // `T a[N] = "abc";` with a dependent `T`: whether the literal
+            // initializes the array is known only at instantiation
+            // ([temp.dep.type]/9; clang `AddInitializerToDecl`).
+            if self.ast.types.is_dependent(elem) || self.expr_is_type_dependent(e) {
+                return e;
+            }
             if let Some(s) = self.string_lit_of(e)
                 && self.is_char_type(elem)
             {
