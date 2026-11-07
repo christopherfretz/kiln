@@ -17,6 +17,7 @@ use kiln_source::symbol::Symbol;
 
 use crate::expr::prec;
 use crate::keywords::Kw;
+use crate::tentative::TypeIdContext;
 use crate::parser::Parser;
 
 /// What one `[[...]]` has held so far: an annotation-list mixes with
@@ -673,7 +674,10 @@ impl Parser<'_, '_> {
         let loc = self.bump().span.lo;
         let Some(open) = self.expect(Punct::LParen) else { return };
         let begin = self.tok().span.lo;
-        let arg = if self.is_type_id_start(self.pos()) {
+        // clang `ParseAlignArgument`: `isTypeIdInParens`, the same test as
+        // `sizeof(...)`, so a class template's injected-class-name
+        // (`alignas(V)` inside `V<T>`, [temp.local]/1) is a type-id.
+        let arg = if self.is_cxx_type_id_at(self.pos(), TypeIdContext::InParens).0 {
             self.parse_type_id().map(AttrArg::Type)
         } else {
             self.parse_constant_expr().map(AttrArg::Expr)
