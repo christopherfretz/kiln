@@ -806,6 +806,10 @@ impl Substituter<'_, '_, '_> {
         let (Some(c), Some(l)) = (DeclId::from_raw(n.a()), ArgListId::from_raw(n.b())) else {
             return Err(crate::templ::subst::SubstFail);
         };
+        // `C<args>` with `C` a concept template parameter (P2841R7).
+        if let Some(r) = self.ttp_template_id(e, c, loc) {
+            return r;
+        }
         let nl = self.args(l, loc)?;
         let at = self.sema.ast.exprs.get(e).loc();
         self.sema.build_concept_id(c, nl, &[], at).map_err(|()| crate::templ::subst::SubstFail)

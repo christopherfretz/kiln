@@ -297,12 +297,21 @@ impl Ast {
             }
             K::CXXThisExpr => out.push(tag(k, u32::from(x.this_is_implicit(e)))),
             K::PredefinedExpr | K::SourceLocExpr => out.push(tag(k, aux)),
-            K::UnresolvedLookupExpr => out.extend([
-                tag(k, aux & 1),
-                n.a(),
-                self.nns_word(self.templates.expr_nns.get(e).copied()),
-                self.args_word(self.templates.expr_targs.get(e).copied()),
-            ]),
+            K::UnresolvedLookupExpr => {
+                out.extend([tag(k, aux & 1), n.a()]);
+                // `V<args>` for a variable template template parameter:
+                // the parameter by position (P2841R7 [temp.over.link]/5).
+                if let Some(d) = self.lists.iter::<DeclId>(ListId::new(n.b())).next()
+                    && self.decls.get(d).kind() == DeclKind::TemplateTemplateParm
+                {
+                    out.pop();
+                    self.decl_words(d, out);
+                }
+                out.extend([
+                    self.nns_word(self.templates.expr_nns.get(e).copied()),
+                    self.args_word(self.templates.expr_targs.get(e).copied()),
+                ]);
+            }
             K::DependentScopeDeclRefExpr => out.extend([
                 tag(k, 0),
                 self.nns_word(NnsId::from_raw(n.a())),
@@ -532,6 +541,11 @@ impl Ast {
             K::ConceptSpecializationExpr => {
                 out.push(tag(k, 0));
                 match DeclId::from_raw(n.a()) {
+                    // A concept template parameter by position (P2841R7
+                    // [temp.over.link]/5).
+                    Some(c) if self.decls.get(c).kind() == DeclKind::TemplateTemplateParm => {
+                        self.decl_words(c, out);
+                    }
                     Some(c) => out.push(self.first(c).raw()),
                     None => out.push(NONE),
                 }

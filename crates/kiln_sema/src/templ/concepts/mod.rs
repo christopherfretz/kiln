@@ -151,6 +151,7 @@ impl crate::Sema<'_, '_> {
                     let o = self.ast.exprs.operand(e);
                     return self.check_constraint_at(o, depth + 1);
                 }
+                ExprKind::CXXFoldExpr if !self.check_constraint_fold(e) => return false,
                 _ => {}
             }
         }
@@ -166,6 +167,29 @@ impl crate::Sema<'_, '_> {
         }
         let arg = self.ty_arg(ty);
         let d = self.diag(DiagId::sema_non_bool_atomic_constraint, n.loc()).arg(arg);
+        self.emit(d);
+        false
+    }
+
+    /// [temp.constr.normal]/1.5.3: a fold whose pattern contains an
+    /// unexpanded concept template parameter pack shall not contain an
+    /// unexpanded template parameter pack of another kind (Example 5;
+    /// kiln follows the wording, clang 22 accepts, spec/sema-templates.md
+    /// §8.2). Diagnosed where the constraint is written.
+    fn check_constraint_fold(&mut self, e: ExprId) -> bool {
+        use crate::templ::pack::PackOperand;
+        use kiln_ast::ids::RawId;
+        use kiln_ast::templates::TtpKind;
+        let n = *self.ast.exprs.get(e);
+        let mut packs = Vec::new();
+        for k in [n.a(), n.b()].into_iter().filter_map(ExprId::from_raw) {
+            packs.extend(self.unexpanded_packs(PackOperand::Expr(k)));
+        }
+        let concept = packs.iter().filter(|&&p| self.ttp_kind(p) == TtpKind::Concept).count();
+        if concept == 0 || concept == packs.len() {
+            return true;
+        }
+        let d = self.diag(DiagId::sema_fold_constraint_mixed_packs, n.loc());
         self.emit(d);
         false
     }
