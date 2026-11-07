@@ -546,16 +546,17 @@ Divergences recorded by WP-765:
   with GCC.
 - [dcl.contract.func]/7 in templates: GCC checks a friend
   redeclaration without a seq only when the class is instantiated, never
-  checks a friend *definition* (`h`), and never checks a dependent
-  friend; kiln checks every non-dependent case on the definition,
-  once for the pattern (`p7-template-definition.cpp`, no oracle), and
-  a dependent friend on each instantiation of its class
-  (`p7-friend-dependent.cpp`, no oracle; WP-781).
+  checks a non-dependent friend *definition* (`h`); kiln checks every
+  non-dependent case on the definition, once for the pattern
+  (`p7-template-definition.cpp`, no oracle). A friend whose parameter
+  type is dependent is checked by both on each instantiation of its
+  class, a friend definition included (`p7-friend-dependent.cpp`,
+  `oracle: gcc`; WP-781).
 - [expr.prim.splice]/2.1.4 in a contract predicate: GCC 16.1 says "use
   of local variable with automatic storage from containing function in
   a splice expression" for a splice of a local across a lambda in a
   predicate as anywhere else; kiln's diagnostic is the same rule
-  (spec/reflection.md §5.4).
+  (spec/reflection.md §5).
 - A violation in an explicit specialization of a member of a class
   template names the specialization as clang 22's
   `__PRETTY_FUNCTION__` does: `int C<long>::m(long) [T = long]` (the
@@ -572,7 +573,7 @@ Gaps (follow-ups):
 
 - None known. The per-assertion semantic is not required (§6.1); the
   dependent friend redeclaration and a local named across a lambda by
-  `^^` or a splice were closed by WP-781 (§5, spec/reflection.md §5.4).
+  `^^` or a splice were closed by WP-781 (§5, spec/reflection.md §5).
 
 Decisions:
 
@@ -632,7 +633,11 @@ Decisions:
   the dump goldens `dump-function.cpp`, `dump-lambda-template.cpp`;
   `p4-explicit-spec.cpp`, `p7-friend-redecl.cpp`,
   `coroutine-post-param.cpp` (WP-755); `p7-template-definition.cpp`
-  (WP-765).
+  (WP-765); `p7-friend-dependent.cpp` (WP-781, `oracle: gcc`).
+- `tests/conformance/expr.reflect/p7-local-across-lambda.cpp` and
+  `tests/conformance/expr.prim.splice/p2-local-across-lambda{,-run}.cpp`
+  (WP-781): `^^` and splices of a local across a lambda, in and out of
+  contract predicates, compared with GCC.
 - `tests/conformance/expr.prim.splice/contract-constify*.cpp` (WP-765,
   P3598R0): a write through a splice, the const overload chosen through
   one (compile-fail and run, compared with GCC), and the object splice

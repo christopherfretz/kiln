@@ -1,5 +1,5 @@
 //! Local entities named by a reflection or a splice across a lambda
-//! (spec/reflection.md §5.4; [expr.reflect]/7.1, [expr.prim.splice]/2.1.4,
+//! (spec/reflection.md §5; [expr.reflect]/7.1, [expr.prim.splice]/2.1.4,
 //! [basic.def.odr]/5).
 //!
 //! `^^x` of a local entity `x` is ill-formed when a lambda scope
