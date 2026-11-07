@@ -9,13 +9,11 @@ harness (`scripts/oss/`, spec/landed/harness/WP-666.md). Host: aarch64
 Linux, libstdc++ 14, C++17 (the project row), default `-fclang-compat`.
 Date: 2026-11-07.
 
-**Result: near parity.** Every TU compiles, every target links, and 231
-of the 232 tests pass. The remaining failure, `absl_statusor_test`, is
-fixed by WP-683 (`9825ed31c`, a dependent template-id call keeps its
-definition's namespace-scope lookup), which has not landed on this
-branch. To get here kiln needed 13 fixes: 11 rejected-valid code (one of
-them a panic) and 2 miscompiles (one wrong-code mangling, one link
-failure).
+**Result: parity.** Every TU compiles, every target links and all 232
+tests pass. kiln needed 13 fixes in this WP: 11 for rejected valid code
+(one of them a panic) and 2 for miscompiles (a wrong-code mangling and a
+link failure). A 14th failure, in `absl_statusor_test`, was fixed by
+WP-683 (`9825ed31c`), which landed before the final build.
 
 ## Commands
 
@@ -59,17 +57,19 @@ Each build ran once.
 | kiln, first (chain tip `65ef91c38`) | 126 / 4 (283 not attempted) | 51 / 0 | 50/232 | 78 s | — | 163 MB |
 | clang++-19 (control) | 413 / 0 | 232 / 0 | 232/232 | 443 s † | 1230.9 s | 1853 MB (`any_invocable_test.cc`) |
 | kiln, run 3 (8 fixes) | 397 / 16 | 216 / 0 | 214/232 | 324 s | — | 1665 MB (`any_invocable_test.cc`) |
-| **kiln, final** (`1ac5ca05a`) | **413 / 0** | **232 / 0** | **231/232** | 356 s | 2288.3 s | **1665 MB** (`any_invocable_test.cc`) |
+| kiln, all 13 fixes (`1ac5ca05a`) | 413 / 0 | 232 / 0 | 231/232 (`absl_statusor_test`) | 356 s | 2288.3 s | 1665 MB (`any_invocable_test.cc`) |
+| **kiln, final** (`f3c4eea7f`, with origin/main) | **413 / 0** | **232 / 0** | **232/232** | 360 s | 2113.3 s | **1670 MB** (`any_invocable_test.cc`) |
 
 In the first kiln build, a rejected TU in `absl_strings` (cluster 1)
 stopped `make -k` from building most dependent targets.
 
 † The control's wall includes the clone. The kiln runs reused the source,
 and all builds shared the host with other harness builds. Σ TU wall is
-the cost comparison: kiln takes **1.86×** clang's summed compile time.
-The slowest TU is close under both compilers (`any_invocable_test.cc`:
-126 s kiln, 123 s clang), so the overhead is spread across the
-mid-sized TUs. kiln's peak RSS is **0.90×** clang's.
+the cost comparison: in the final build kiln takes **1.72×** clang's
+summed compile time. The slowest TU takes about the same time under both
+compilers (`any_invocable_test.cc`: 127 s with kiln, 123 s with clang),
+so the extra time comes from the mid-sized TUs. kiln's peak RSS is
+**0.90×** clang's.
 
 ## Clusters
 
@@ -80,7 +80,7 @@ once those were fixed and more of the tree was built.
 |---|---|---|---|---|
 | 1 | `missing 'template' keyword` (`charconv_bigint.cc`: `copy.DivMod<10>()` on an object of the current instantiation) | 1, which blocked most of the build | fixed, `8bf596420` | `tests/conformance/temp.dep.type/p1-current-instantiation-object-member-template-run.cpp` |
 | 2 | `nullability specifier '_Nonnull' cannot be applied to non-pointer type` (`std::unique_ptr`) | 1 | fixed, `edb19d34c` | `tests/conformance/dcl.type.class/nullability-std-smart-pointers.cpp` |
-| 3 | `no matching constructor` (`u8"…"` as `const char *` in C++17) | 1 | fixed, `30d954ea3` | `tests/conformance/lex.string/u8-literal-char-before-cxx20-run.cpp` |
+| 3 | `no matching constructor` (`u8"…"` as `const char *` in C++17) | 1 | fixed, `30d954ea3` (WP-691 landed the same rule first; the merge keeps its code) | `tests/conformance/lex.string/u8-literal-char-before-cxx20-run.cpp` |
 | 4 | `&N::m` through a dependent base rejected (`any_invocable_test.cc`) | 1 | fixed, `d1b3ccfe7` | `tests/conformance/expr.unary.op/p3-qualified-member-unrelated-class-dependent-base-run.cpp` |
 | 5 | panic: `CXXMemberCallExpr callee is ParenExpr` (`(g.min)()`, random tests) | 7 | fixed, `95eaaf4f9` | `tests/conformance/expr.call/p1-parenthesized-member-callee-run.cpp` |
 | 6 | `no viable overloaded '='` (inherited constructors in a conversion; flat/node hash set/map tests) | 4 | fixed, `e36044e44` | `tests/conformance/namespace.udecl/p13-inherited-ctor-implicit-conversion-run.cpp` |
@@ -91,15 +91,14 @@ once those were fixed and more of the tree was built.
 | 11 | `no matching 'operator new'` (class-scope `operator new` template, `exception_safety_testing`) | 1 | fixed, `9f71f7e7f` | `tests/conformance/expr.new/class-operator-new-template-run.cpp` |
 | 12 | link: undefined `ThrowingValue<…>::operator delete(void*)` (class template allocation functions never instantiated) | 1 link | fixed, `1ac5ca05a` | `tests/conformance/temp.inst/class-template-allocation-functions-instantiated-run.cpp` |
 | 13 | miscompile: `absl_log_format_test` failures (`f(const T (&)[sizeof(T)])` for `char`/`wchar_t` mangled alike, so one definition replaced the other) | 0 (1 test) | fixed, `3b16fe7bb` | `tests/conformance/temp.over.link/dependent-array-bound-overloads-distinct-run.cpp`, `tests/mangle/dependent_array.cpp` |
-| 14 | runtime: `absl_statusor_test` (2 cases) | 0 (1 test) | fixed by WP-683 `9825ed31c`, not merged here | WP-683's test |
+| 14 | runtime: `absl_statusor_test` (2 cases) | 0 (1 test) | fixed by WP-683 `9825ed31c` (a dependent template-id call keeps its definition's namespace-scope lookup) | `tests/conformance/temp.dep.candidate/template-id-definition-lookup.cpp` |
 
 No cluster was a bug outside kiln. Every TU that clang accepts, kiln
 accepts as well.
 
 ## What remains
 
-- `absl_statusor_test` passes once WP-683 lands.
-- Compile time is 1.86× clang's Σ TU wall and needs profiling (M8 perf
+- Summed compile time is 1.72× clang's and needs profiling (M8 perf
   work).
 - Gaps found while reducing, not on abseil's path:
   - A global `operator new` template is not an allocation candidate
