@@ -1925,37 +1925,46 @@ impl Sema<'_, '_> {
             }
             return;
         }
-        let e = match init {
-            // Initialized at instantiation ([temp.dep.expr]), the list
-            // kept as written (WP-192: a designated list needs it).
-            Initializer::List(l)
-                if self.ast.types.is_dependent(p.ty) || self.init_list_type_dependent(&l) =>
-            {
-                self.dependent_init_list(&l)
-            }
-            Initializer::List(mut l) => {
-                let scalar = !self.ast.types.is_array(p.ty)
-                    && self.ast.types.as_record(p.ty).is_none()
-                    && !self.ast.types.is_reference(p.ty);
-                if scalar && l.items.len() > 1 {
-                    let d = self.diag(DiagId::sema_excess_initializers, p.loc).arg("2");
-                    let d = self.with_param_note(d, p);
-                    self.emit(d);
-                    l.items.truncate(1);
-                    self.init_from_list_at(p.ty, &l, Some(p.loc))
-                } else {
-                    let note = Some(self.with_param_note_only(p));
-                    self.init_list_entity(p.ty, &l, p.loc, ConvCtx::Argument, note)
+        let pi: &ParamInfo = p;
+        let e = self.defer_default_arg_uses(|s| {
+            let e = match init {
+                // Initialized at instantiation ([temp.dep.expr]), the
+                // list kept as written (WP-192: a designated list needs
+                // it).
+                Initializer::List(l)
+                    if s.ast.types.is_dependent(pi.ty) || s.init_list_type_dependent(&l) =>
+                {
+                    s.dependent_init_list(&l)
                 }
-            }
-            Initializer::Expr(e) => {
-                let note = self.with_param_note_only(p);
-                self.convert_default_arg(e, p.ty, p.loc, note)
-            }
-            Initializer::Paren(v, l, _) => self.recover(p.ty, &v, l),
-        };
-        self.note_default_init_full_expr();
-        let e = self.act_on_full_expr(e);
+                Initializer::List(mut l) => {
+                    let scalar = !s.ast.types.is_array(pi.ty)
+                        && s.ast.types.as_record(pi.ty).is_none()
+                        && !s.ast.types.is_reference(pi.ty);
+                    if scalar && l.items.len() > 1 {
+                        let d = s.diag(DiagId::sema_excess_initializers, pi.loc).arg("2");
+                        let d = s.with_param_note(d, pi);
+                        s.emit(d);
+                        l.items.truncate(1);
+                        s.init_from_list_at(pi.ty, &l, Some(pi.loc))
+                    } else {
+                        let note = Some(s.with_param_note_only(pi));
+                        s.init_list_entity(pi.ty, &l, pi.loc, ConvCtx::Argument, note)
+                    }
+                }
+                Initializer::Expr(e) => {
+                    let note = s.with_param_note_only(pi);
+                    s.convert_default_arg(e, pi.ty, pi.loc, note)
+                }
+                Initializer::Paren(v, l, _) => s.recover(pi.ty, &v, l),
+            };
+            s.note_default_init_full_expr();
+            s.act_on_full_expr(e)
+        });
+        self.store_param_default(p, e);
+    }
+
+    /// Stores converted default argument `e` in `p`.
+    fn store_param_default(&mut self, p: &mut ParamInfo, e: ExprId) {
         // An erroneous default argument makes the parameter, and so its
         // function, invalid (clang's `ActOnParamDefaultArgumentError`).
         if self.has_errors_in(e) {
