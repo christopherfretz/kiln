@@ -735,6 +735,12 @@ impl Sema<'_, '_> {
                         return x;
                     }
                 }
+                if settled && v.is_empty() && !self.ast.types.is_reference(ty) {
+                    // [dcl.init.general]/16.4: `()` value-initializes; only
+                    // an empty pack expansion writes it (`T x(a...)`,
+                    // [temp.variadic]/7; clang `ImplicitValueInitExpr`).
+                    return self.paren_value_init(ty, l);
+                }
                 if v.len() == 1 {
                     self.init_from_expr(ty, v[0], ConvCtx::DirectInitialization, loc)
                 } else if !self.is_aggregate(ty) && !self.ast.types.is_reference(ty) {
@@ -824,6 +830,13 @@ impl Sema<'_, '_> {
             } else if let Some(x) = self.convert_to_class(e, ty, ctx, at, DeletedAs::Call) {
                 return x;
             }
+        }
+        // A type-dependent initializer whose type is known (`T x(U(a))`,
+        // `U(a)` a `CXXUnresolvedConstructExpr` of class `U`): initialized
+        // at instantiation, whatever the target (clang
+        // `InitializationSequence::InitializeFrom`'s `DependentSequence`).
+        if self.expr_is_type_dependent(e) && self.ast.types.as_record(ety).is_some() {
+            return e;
         }
         let class_src = self.ast.types.as_record(ety).is_some()
             && !self.ast.types.is_reference(ty)

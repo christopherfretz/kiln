@@ -870,6 +870,9 @@ impl Sema<'_, '_> {
         path: &BasePath,
         loc: Loc,
     ) -> bool {
+        if self.cast_ignores_base_access {
+            return true;
+        }
         self.check_base_access_impl(derived_ty, base_ty, path, loc, BaseUse::Conversion)
     }
 

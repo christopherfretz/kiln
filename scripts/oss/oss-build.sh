@@ -82,7 +82,7 @@ fi
 P_CONFIGURE=("${P_CONFIGURE[@]//@OSS@/$KILN/scripts/oss}")
 [ ${#PREFIXES[@]} -eq 0 ] || P_CONFIGURE+=("-DCMAKE_PREFIX_PATH=$(IFS=';'; echo "${PREFIXES[*]}")")
 
-SRC="$OSS/src/$PROJECT"
+SRC="$OSS/src/$P_CHECKOUT"
 BUILD="$OSS/build/$PROJECT/$COMPILER${INSTALL:+-dep}"
 mkdir -p "$OSS/src" "$BUILD"
 export KILN_OSS_LOG="$BUILD/compile.jsonl"

@@ -137,7 +137,8 @@ impl Sema<'_, '_> {
         let r = if ok {
             let deduced = self.ast.types.arg_list(&d.args);
             self.set_frame_args(deduced);
-            self.partial_args_match(&p, list.depth, deduced, canonical, poi).then_some(deduced)
+            self.partial_args_match(&p, list.depth, deduced, canonical, false, poi)
+                .then_some(deduced)
         } else {
             None
         };
@@ -184,13 +185,16 @@ impl Sema<'_, '_> {
     /// Whether the arguments of partial specialization `p`, with
     /// `deduced` substituted, are the specialization's arguments
     /// `canonical` ([temp.spec.partial.match]/2: non-deduced contexts
-    /// must match too).
+    /// must match too). With `ordering`, `deduced` and `canonical` name
+    /// another partial specialization's synthesized parameters
+    /// ([temp.deduct.partial]/12) and are compared without conversion.
     fn partial_args_match(
         &mut self,
         p: &kiln_ast::templates::PartialSpecInfo,
         depth: u16,
         deduced: ArgListId,
         canonical: ArgListId,
+        ordering: bool,
         loc: Loc,
     ) -> bool {
         let mut written: Vec<TemplateArg> = Vec::new();
@@ -252,7 +256,25 @@ impl Sema<'_, '_> {
         {
             return true;
         }
-        if !has_expr {
+        // A converted pack of either side compares element-wise.
+        let flat = |l: &[TemplateArg]| -> Vec<TemplateArg> {
+            let mut v = Vec::with_capacity(l.len());
+            for &x in l {
+                match x.view() {
+                    ArgView::Pack(p) => {
+                        v.extend(types.args(p).iter().map(|&e| types.canonical_arg(e)));
+                    }
+                    _ => v.push(types.canonical_arg(x)),
+                }
+            }
+            v
+        };
+        if flat(&out) == flat(want) {
+            return true;
+        }
+        // In partial ordering both sides name `a`'s synthesized
+        // parameters: nothing to convert.
+        if !has_expr || ordering {
             return false;
         }
         // A substituted expression argument (`N + 1`) is converted to
@@ -374,7 +396,17 @@ impl Sema<'_, '_> {
             // with `B` empty, as in matching.
             self.empty_undeduced_packs(lb.params, &mut d);
         }
-        let ok = ok && d.first_undeduced().is_none();
+        let mut ok = ok && d.first_undeduced().is_none();
+        if ok {
+            // [temp.deduct.partial]/12 via [temp.deduct.type]/1 (clang
+            // `FinishTemplateArgumentDeduction` with `IsPartialOrdering`):
+            // `b`'s arguments with the deduced values substituted must be
+            // `a`'s, its non-deduced contexts included, so
+            // `X<T, when<f(T)>>` is not deduced from `X<M, when<c>>`
+            // (Boost.Hana's `when<condition>` dispatch; WP-787).
+            let deduced = self.ast.types.arg_list(&d.args);
+            ok = self.partial_args_match(&pb, lb.depth, deduced, pa.canonical, true, loc);
+        }
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
         let r = ok && !failed;
         let _ = self.templ.partial_order.insert((a, b), r);
@@ -692,6 +724,18 @@ impl Sema<'_, '_> {
         if ok && ai < pa.len() && !(ai + 1 == pa.len() && pa[ai].pack) {
             ok = false;
         }
+        // A pack named only by an expansion that matched nothing has the
+        // empty deduction ([temp.deduct.type]/9): `J` of
+        // `f(L<int, J...>)` from `f(L<int>)` (mp11 `mp_for_each_impl`).
+        let params = self.template_params(b);
+        for &i in &d.empty_expanded {
+            let at = usize::from(i);
+            let pack =
+                params.get(at).and_then(|&p| self.ast.template_parm(p)).is_some_and(|x| x.pack);
+            if pack && matches!(d.args.get(at).map(TemplateArg::view), Some(ArgView::Null)) {
+                d.args[at] = TemplateArg::pack(self.ast.types.arg_list(&[]));
+            }
+        }
         if ok && d.first_undeduced().is_some() && !self.undeduced_params_unused(b, &d, pb) {
             ok = false;
         }
@@ -839,7 +883,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn mark_used_arg(&self, a: TemplateArg, depth: u32, used: &mut [bool], lvl: u32) {
+    pub(crate) fn mark_used_arg(&self, a: TemplateArg, depth: u32, used: &mut [bool], lvl: u32) {
         match a.view() {
             ArgView::Type(x) => self.mark_used_type(x, depth, used, lvl),
             ArgView::Expr { expr, .. } => self.mark_used_expr(expr, depth, used, lvl),

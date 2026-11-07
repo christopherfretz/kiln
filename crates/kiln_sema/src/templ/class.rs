@@ -923,6 +923,24 @@ impl Sema<'_, '_> {
         self.instantiate_class_as(spec, poi, diagnose, true)
     }
 
+    /// [`Sema::match_partial_specs`] for `spec`'s instantiation. A request
+    /// for `spec` while its partial specializations are matched
+    /// (`X<T, enable_if_t<is_convertible_v<T, S>>>` with a constructor
+    /// template of `S` defaulting an argument to `X<T>::type`) finds it
+    /// incomplete, as clang's `getPatternForClassTemplateSpecialization`
+    /// does (WP-787, Boost.StaticString `enable_if_viewable`).
+    fn select_partial_spec(
+        &mut self,
+        tmpl: DeclId,
+        spec: DeclId,
+        poi: Loc,
+    ) -> Result<Option<super::order::PartialMatch>, ()> {
+        self.inst.selecting.push(spec);
+        let matched = self.match_partial_specs(tmpl, spec, poi);
+        self.inst.selecting.pop();
+        matched
+    }
+
     /// [`Sema::instantiate_class`]; `implicit` relocates an implicit
     /// instantiation at its pattern's definition (false for an explicit
     /// instantiation, already located at its template-name).
@@ -936,7 +954,7 @@ impl Sema<'_, '_> {
         if self.ast.definition(spec).is_some() {
             return true;
         }
-        if self.defining.contains(&spec) || self.inst.fatal {
+        if self.defining.contains(&spec) || self.inst.selecting.contains(&spec) || self.inst.fatal {
             return false;
         }
         if self.ast.spec_info(spec).is_none() {
@@ -956,7 +974,7 @@ impl Sema<'_, '_> {
         }
         // [temp.spec.partial.match]: the most specialized matching
         // partial specialization, else the primary template.
-        let Ok(matched) = self.match_partial_specs(tmpl, spec, poi) else {
+        let Ok(matched) = self.select_partial_spec(tmpl, spec, poi) else {
             self.ast.decls.set_flags(spec, DeclFlags::INVALID);
             self.inst.undefined_diagnosed.set(Some(spec));
             return false;
@@ -2124,8 +2142,24 @@ impl Substituter<'_, '_, '_> {
     /// clang `InstantiateInClassInitializer`).
     fn nsdmi(&mut self, field: DeclId, init: kiln_ast::ExprId) {
         self.sema.act_on_start_field_init(field);
+        let style = self
+            .sema
+            .ast
+            .decls
+            .field(field)
+            .map_or(kiln_ast::decl::InitStyle::C, kiln_ast::decl::FieldData::init_style);
         let i = if self.sema.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
             self.init_list(init).map(Initializer::List)
+        } else if style == kiln_ast::decl::InitStyle::List {
+            // `T m{x}` built in the pattern (a construction, `x` only
+            // value-dependent) goes back to its braced list and stays
+            // direct-list-initialization ([dcl.init.general]/15), as for
+            // a variable (clang `TransformInitializer`).
+            match self.initializer(init, style) {
+                Ok(Some(i)) => Ok(i),
+                Ok(None) => self.expr(init).map(Initializer::Expr),
+                Err(e) => Err(e),
+            }
         } else {
             self.expr(init).map(Initializer::Expr)
         };
