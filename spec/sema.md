@@ -1104,7 +1104,14 @@ Redeclaration and linkage rules:
 - `act_on_decltype(e)` ([dcl.type.decltype]): `DecltypeType` sugar
   over the declared type of an unparenthesized id-expression or member
   access, else `T&&`/`T&`/`T` by value category. The operand is
-  unevaluated.
+  unevaluated. An operand of `decltype` or `noexcept` that is a bound
+  member function (`obj.*pmf`, `obj.f`) or a builtin function name is
+  ill-formed ([expr.mptr.oper]/6, [expr.ref]): "reference to non-static
+  member function must be called" (with clang's "did you mean to call it
+  with no arguments?" when the member function, or the pointee function
+  type of `pmf`, takes none) or "builtin functions must be directly
+  called", so substituting one into a return type is a deduction failure
+  (`check_builtin_fn_use`, WP-669; `expr.mptr.oper/p6-bound-member-*.cpp`).
 - `auto` and `decltype(auto)` variables ([dcl.type.auto.deduct]): a
   top-level placeholder deduces the decayed, cv-stripped initializer
   type plus the written cv-qualifiers, or `decltype(e)`. A

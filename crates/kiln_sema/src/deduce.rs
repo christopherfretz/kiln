@@ -161,6 +161,12 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_member_call_without_object, self.eloc(x));
             return None;
         }
+        // A bound member function or builtin function operand can only be
+        // called ([expr.ref]/7.3.2); clang's `CheckPlaceholderExpr` rejects
+        // it, so a substitution forming one fails ([temp.deduct.general]/8).
+        if self.check_builtin_fn_use(e) {
+            return None;
+        }
         self.check_unevaluated_side_effects(e);
         // An instantiation-dependent operand: the type is computed at
         // instantiation, canonically `DependentDecltype` (clang's
