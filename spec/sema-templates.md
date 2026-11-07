@@ -7659,8 +7659,20 @@ declarator scopes.**
   constructor, so `c ? B() : D()` with `D(B)` is a `B` (WP-669,
   tests/conformance/expr.cond/p4-base-not-converted-to-derived.cpp);
   /4.3.3, implicit conversion to the other's prvalue type. If both directions succeed, the result is
-  `sema_conditional_ambiguous`; if one does, it is applied. Gap: the
-  /6 overloaded-operator candidates are not tried.
+  `sema_conditional_ambiguous`; if one does, it is applied.
+- *[expr.cond]/6 built-in `operator?:` candidates* (clang
+  `FindConditionalOverload`; WP-787): when the arms still differ in type
+  after /4 and /5 and either is a class, overload resolution runs over the
+  built-in candidates of [over.built]/25-26 (`T(T, T)` for each pointer,
+  pointer-to-member and scoped enumeration type an arm converts to;
+  `LR(L, R)` for the promoted arithmetic types;
+  `add_conditional_builtin_candidates`). The best one converts both arms
+  to its parameter types and /7 continues, so two classes converting to
+  `bool` give `int`. No best candidate is
+  `sema_conditional_ambiguous_ovl`; no viable one leaves the arms to /7,
+  which reports them incompatible
+  (tests/conformance/expr.cond/p6-class-arms-builtin-overload-run.cpp,
+  `-errors.cpp`).
 - *[expr.cond]/7 class prvalue result*: when the arms are a class type
   (after /4) and not glvalues of the same category, each glvalue arm
   copy-initializes the prvalue result (clang `PerformCopyInitialization`

@@ -4222,6 +4222,20 @@ impl Sema<'_, '_> {
         if let Some(res) = self.same_category_conditional(ops) {
             return res;
         }
+        // [expr.cond]/6: arms still of different types, one of class
+        // type: overload resolution over the built-in `operator?:`
+        // candidates converts them.
+        let (tt, ft) = (self.ety(t), self.ety(f));
+        let ops = if !self.ast.types.same_unqualified(tt, ft)
+            && (self.ast.types.as_record(tt).is_some() || self.ast.types.as_record(ft).is_some())
+        {
+            match self.overload_class_arms(ops) {
+                Ok((t, f)) => CondOps { c, c2, t, f, loc },
+                Err(res) => return res,
+            }
+        } else {
+            ops
+        };
         if let Some(res) = self.arith_conditional(ops) {
             return res;
         }
@@ -4290,6 +4304,50 @@ impl Sema<'_, '_> {
             return Err(self.recover_err(&[c, t, f], loc));
         }
         Ok((t, f))
+    }
+
+    /// [expr.cond]/6: the arms converted by overload resolution over the
+    /// built-in `operator?:` candidates ([over.built]/25-26; clang
+    /// `FindConditionalOverload`). No viable candidate leaves the arms
+    /// unchanged (the caller reports them incompatible); `Err` carries
+    /// the recovery expression after a diagnosed failure.
+    fn overload_class_arms(&mut self, o: CondOps) -> Result<(ExprId, ExprId), ExprId> {
+        use crate::overload::{OvlOutcome, SetKind};
+        let CondOps { c, t, f, loc, .. } = o;
+        let mut set = self.begin_set(SetKind::Normal, loc);
+        set.object = Some(self.arg_info(t));
+        let mark = self.push_call_args(&mut set, &[f], &[]);
+        let types = [self.ety(t), self.ety(f)];
+        self.add_conditional_builtin_candidates(&mut set, types);
+        let out = self.resolve_set(&mut set);
+        self.ovl.lists.truncate(mark);
+        let res = match out {
+            OvlOutcome::Success(b) => {
+                let params = set.cand(b).builtin;
+                let conv = self.builtin_operand_conversions(&set, b, &[t, f]);
+                self.end_set(set);
+                let Some(arms) = conv else { return Err(self.recover_err(&[c, t, f], loc)) };
+                let mut out = [t, f];
+                for (i, &a) in arms.iter().enumerate().take(2) {
+                    match conv::implicit_convert(self, a, params[i], ConvCtx::Initialization) {
+                        Ok(x) if !self.is_err_expr(x) => out[i] = x,
+                        Ok(_) => return Err(self.recover_err(&[c, t, f], loc)),
+                        Err(err) => return Err(self.conv_failed(&err, t, f, loc)),
+                    }
+                }
+                return Ok((out[0], out[1]));
+            }
+            OvlOutcome::Ambiguous => {
+                let msg = self
+                    .diag(DiagId::sema_conditional_ambiguous_ovl, loc)
+                    .diff_args(self, types[0], types[1]);
+                self.emit(msg);
+                Err(self.recover_err(&[c, t, f], loc))
+            }
+            OvlOutcome::NoViable | OvlOutcome::Deleted(_) => Ok((t, f)),
+        };
+        self.end_set(set);
+        res
     }
 
     /// [expr.cond]/4 and /5: glvalues of the same type and value category
