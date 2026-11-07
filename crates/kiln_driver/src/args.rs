@@ -363,6 +363,8 @@ pub struct Args {
     pub verbose: bool,
     /// `--help`.
     pub help: bool,
+    /// `-print-resource-dir` / `--print-resource-dir`.
+    pub print_resource_dir: bool,
     /// `-E` printing options.
     pub print: PrintArgs,
     /// `-D` / `-U`, in order.
@@ -751,6 +753,7 @@ impl Args {
             "--version" => self.version = true,
             "-v" | "--verbose" => self.verbose = true,
             "--help" | "-help" => self.help = true,
+            "-print-resource-dir" | "--print-resource-dir" => self.print_resource_dir = true,
             "-P" => self.print.no_line_markers = true,
             "-C" => self.print.comments = true,
             "-CC" => self.print.macro_comments = true,
