@@ -19,6 +19,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
 | Reflection perf | `bench/reflect/` (shapes S1-S6 from `cargo xtask gen-reflect`; named explicitly), `cargo xtask bench --scaling <shape>` (spec/bench.md "Reflection shapes", "Scaling sweeps"); manual/nightly on the dev host, not part of `ci` | The §3.8 budgets of docs/plans/m6-reflection.md: `peak_arena` independent of N, linear wall time and RSS, kiln vs GCC 16.1 |
 | External corpora | `cargo xtask test --external <dir>` / `cargo xtask bench --external <dir>` on directories outside the repo (spec/harness.md "External corpora"); manual, never in `ci` | Never crash: private crash reproducers and the reference workload compile or fail cleanly; counts only reach the repo |
+| OSS builds | real open-source projects (`scripts/oss/projects.toml`) built through their own build systems and test suites with kiln as the C++ compiler (`scripts/oss/`, spec/landed/harness/WP-666.md); manual, needs the network, never in `ci`; status in `docs/status/oss.md` | Real code bases build and pass their tests at parity with clang-19 (ROADMAP M8) |
 
 **What runs where.** Merge-queue CI (`cargo xtask ci`, both jobs) runs the
 unit tests, the corpus in clang and kiln mode, and the `oven:` counter
@@ -31,6 +32,24 @@ oracle"). On the dev host, where `scripts/env.sh` sets `KILN_GCC`,
 host: `cargo xtask bench` (including `bench/reflect` and the vs-GCC table
 via `--compiler $KILN_GCC`), `--scaling` sweeps, `--external` corpora,
 `cargo xtask libcxx`, `libstdcxx` and `features`.
+
+**OSS builds** (ROADMAP M8). `scripts/oss/oss-build.sh <project>
+[--compiler kiln|clang]` clones a project of `scripts/oss/projects.toml`
+at its pinned tag into `.oss/src/`, configures it with CMake ("Unix
+Makefiles", so `make` draws from the box's shared jobserver) with the
+logging wrapper `scripts/oss/kiln-cxx` as `CMAKE_CXX_COMPILER`, builds with
+`make -k`, runs its test suite, and writes
+`.oss/build/<project>/<compiler>/report.json`; the wrapper caps every
+compiler invocation (3 GB address space, 600 s) and logs one JSON line per
+invocation to `compile.jsonl`. The same harness with `--compiler clang`
+is the control build. `scripts/oss/oss-report.py --update
+docs/status/oss.md` turns the two reports into the per-project table and
+the kiln failure clusters (normalized diagnostic signature, count,
+representative TU, reproduction command), which are reduced into
+`tests/conformance` cases and work packages. Not in `ci` (it needs the
+network and hours of CPU); run by hand or by agents; `.oss/` is
+gitignored and only the regenerated status page reaches the repo.
+`scripts/oss/selftest.sh` checks the scripts themselves.
 
 ## Conformance test format
 

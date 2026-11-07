@@ -1,0 +1,18 @@
+# Fixture project list for selftest.sh (one project, the two-cluster demo).
+[demo]
+url = "https://example.invalid/demo"
+tag = "v1.0.0"
+build = "cmake"
+cxx_std = 20
+configure = []
+test = "ctest"
+wave = 1
+
+[other]
+url = "https://example.invalid/other"
+tag = "v2.0.0"
+build = "cmake"
+cxx_std = 17
+configure = []
+test = "ctest"
+wave = 2

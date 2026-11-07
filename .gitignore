@@ -9,3 +9,7 @@
 
 # implementer scratch space (per-WP notes, logs, local binaries); never committed
 /scratchpad/
+
+# OSS build harness checkouts, build trees and reports (scripts/oss/)
+/.oss/
+__pycache__/

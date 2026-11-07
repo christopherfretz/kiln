@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "project": "demo",
+  "compiler": "kiln",
+  "compiler_path": "x",
+  "url": "https://example.invalid/demo",
+  "tag": "v1.0.0",
+  "cxx_std": 20,
+  "date": "2026-11-06T00:00:00Z",
+  "configure_rc": 0,
+  "build_rc": 2,
+  "test_rc": null,
+  "test_summary": null,
+  "tests": null,
+  "wall_s": 12.0,
+  "tus": {
+    "total": 5,
+    "ok": 1,
+    "failed": 4,
+    "by_kind": {
+      "ok": 1,
+      "panic": 1,
+      "reject": 3
+    }
+  },
+  "links": {
+    "total": 0,
+    "ok": 0,
+    "failed": 0
+  },
+  "peak_tu_rss_kb": 300000,
+  "peak_tu": "/work/kiln/.oss/src/demo/test/e.cc",
+  "max_tu_wall_s": 2.0
+}
