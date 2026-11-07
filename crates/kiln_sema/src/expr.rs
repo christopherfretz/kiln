@@ -92,6 +92,12 @@ impl CastStyle {
     fn allows_const(self) -> bool {
         matches!(self, CastStyle::Const | CastStyle::CStyle | CastStyle::Functional)
     }
+
+    /// Whether a conversion between a derived class and its base is
+    /// valid even if the base is inaccessible ([expr.cast]/4).
+    fn ignores_base_access(self) -> bool {
+        matches!(self, CastStyle::CStyle | CastStyle::Functional)
+    }
 }
 
 impl Sema<'_, '_> {
@@ -6289,8 +6295,11 @@ impl Sema<'_, '_> {
             && let Some(scs) = conv::standard_conversion(self, e, to, ConvCtx::Cast)
         {
             let was = std::mem::replace(&mut self.explicit_conv, true);
+            let was_access =
+                std::mem::replace(&mut self.cast_ignores_base_access, style.ignores_base_access());
             let r = conv::apply_standard_conversion(self, e, &scs, to);
             self.explicit_conv = was;
+            self.cast_ignores_base_access = was_access;
             match r {
                 Ok(x) => {
                     self.mark_explicit(x, e);

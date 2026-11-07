@@ -698,6 +698,10 @@ pub struct Sema<'a, 'sm> {
     /// complex-to-real conversion is then allowed; clang's
     /// `isCast(CCK)`).
     pub(crate) explicit_conv: bool,
+    /// A C-style or functional cast is converting a pointer to a base
+    /// class: the base may be inaccessible ([expr.cast]/4, clang's
+    /// `IgnoreBaseAccess`).
+    pub(crate) cast_ignores_base_access: bool,
     /// Access checks in a class template pattern (or partial
     /// specialization) that passed only because the class may instantiate
     /// to a befriended specialization, keyed by the pattern's first
@@ -1199,6 +1203,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             depr_init: None,
             exempt_next_delay: false,
             explicit_conv: false,
+            cast_ignores_base_access: false,
             dependent_access: kiln_source::fx::FxHashMap::default(),
             speculative_friend: std::cell::Cell::new(false),
             access_failed: kiln_source::fx::FxHashSet::default(),
