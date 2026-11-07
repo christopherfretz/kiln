@@ -43,9 +43,12 @@ impl Parser<'_, '_> {
             let _ = self.s.act_template_head(requires, r_angle);
         }
         let mut specs = LambdaSpecifiers::default();
-        if self.at_attr() {
-            self.parse_attributes(&mut specs.attrs);
-        }
+        // [expr.prim.lambda.general]/1: only an attribute-specifier-seq
+        // precedes the parameter list (clang `ParseLambdaExpression
+        // AfterIntroducer`); a GNU attribute here belongs to the
+        // lambda-specifier position below, so `[] __attribute__((x)) ()`
+        // is `expected body of lambda expression` at the `(`.
+        self.parse_cxx11_attr_seq(&mut specs.attrs);
         let mut d = Declarator::new(DeclaratorContext::Member, lbracket);
         d.op_name = Some(kiln_ast::names::OverloadedOperator::Call);
         let mut params = Vec::new();
@@ -75,9 +78,17 @@ impl Parser<'_, '_> {
         } else {
             kiln_ast::types::ExcSpec::None
         };
-        if self.at_attr() {
-            self.parse_attributes(&mut specs.attrs);
-        }
+        // [expr.prim.lambda.general]/1, [dcl.fct]/1: the
+        // attribute-specifier-seq after the noexcept-specifier appertains
+        // to the call operator's type, so a declaration attribute there
+        // is rejected as in `void f() noexcept [[noreturn]];` (clang
+        // `ParseLambdaSpecifiers`). A GNU attribute is not accepted after
+        // the lambda-specifiers or the noexcept-specifier: it ends the
+        // declarator, `expected body of lambda expression` (WP-752).
+        let mut type_attrs = Vec::new();
+        self.parse_cxx11_attr_seq(&mut type_attrs);
+        self.s.act_on_type_position_attrs(&mut type_attrs, true);
+        specs.attrs.extend(type_attrs);
         let mut trailing = None;
         if let Some(arrow) = self.eat(Punct::Arrow) {
             let ty = self.parse_type_id_no_ctad().unwrap_or(kiln_ast::QualType::ERROR);

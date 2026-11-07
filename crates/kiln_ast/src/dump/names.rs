@@ -349,7 +349,19 @@ impl<'a> AstNames<'a> {
                         crate::types::write_arg_list_of(&self.ast.types, self, ctx, args, out);
                     }
                 } else if let Some((args, len)) = self.partial_print_args(ctx) {
-                    write_arg_list_prefix(&self.ast.types, self, args, len, out);
+                    // A partial specialization's arguments print scoped
+                    // too, as the specialization's (WP-753).
+                    if self.scoped_spec_args {
+                        crate::types::write_arg_list_prefix_scoped(
+                            &self.ast.types,
+                            self,
+                            args,
+                            len,
+                            out,
+                        );
+                    } else {
+                        write_arg_list_prefix(&self.ast.types, self, args, len, out);
+                    }
                 }
             }
             if kind.is_function() {

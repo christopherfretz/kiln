@@ -420,6 +420,30 @@ enum ExcSpec /* tag */ {
   `exc` canonical: from C++17 `Nothrow`/`None`/`DependentNoexcept`/
   `Deferred`; before C++17 the exception specification is not part of the
   type and the canonical form is `None` (clang's behavior).
+- Before C++17 (`TypeOptions::noexcept_in_type` false; WP-751/756) a
+  `Function` node built with a specification keeps it as written (it is
+  sugar over the canonical, specification-free node) and the context
+  records the hybrid prototype in `exc_protos`. `proto(q)` returns the
+  prototype of the first function node in `q`'s sugar chain, so the
+  declared entity's own type, a variable's declared pointer type and an
+  `auto` copy of `&f` still say `noexcept`; `exc_pointee(q)` is the
+  pointee of a pointer, reference or member pointer as written, which
+  `noexcept(p())`, the call-can-throw analysis and codegen's `nounwind`
+  on a call through `p` read. Everything that is type identity sees the
+  canonical type: `is_same`, overloading (a second definition differing
+  only in it is a redefinition), mangling (no `Do`: `PFvvE`), `typeid`
+  and template arguments. A type template argument (explicit, deduced,
+  or resugared from a call argument) is converted with
+  `without_exc_sugar`, which yields the canonical type when the
+  argument holds such a node, as clang's template arguments carry no
+  specification. Redeclarations still compare the specifications
+  ([except.spec]/5) through `exc_identity`, the C++17 canonical form in
+  every mode.
+- A specialization's `Deferred` specification is resolved when the
+  specialization is named in any context, inside a template too, as
+  long as its own type is not dependent (clang `ResolveExceptionSpec` on
+  a `DeclRefExpr`): `decltype(&h<true>)` in a template body, template
+  parameter type or default argument is `void (*)() noexcept`.
 - `Deferred(D)` types are canonical and distinct per declaration. Sema
   resolves them (`resolve_exception_spec(D)`) before any comparison that
   depends on the specification and then re-points `D` and its

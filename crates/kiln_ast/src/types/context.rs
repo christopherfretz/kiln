@@ -238,6 +238,15 @@ pub struct TypeContext {
     /// ([`TypeContext::dtst_display_name`]); clang 22 prints each one as
     /// written (`-fclang-compat=22` clears it, WP-377).
     pub dtst_first_spelling: bool,
+    /// Before C++17 ([`TypeOptions::noexcept_in_type`] false): for each
+    /// non-canonical function node written with an exception
+    /// specification, its canonical prototype carrying that written
+    /// specification. The canonical type has none (the specification is
+    /// not part of the type), but a declaration's own specification is
+    /// still read through [`TypeContext::proto`] (clang's
+    /// `getAs<FunctionProtoType>` stops at the first prototype in the
+    /// sugar chain; spec/types.md §5.4).
+    pub(crate) exc_protos: kiln_source::fx::FxHashMap<TypeId, FuncProto>,
     pub(crate) nns: KeyedTable,
     pub(crate) args: ArgTable,
     pub(crate) profiles: ProfileTable,
@@ -289,6 +298,7 @@ impl TypeContext {
             dependent_templates: kiln_source::fx::FxHashSet::default(),
             first_dtst_names: kiln_source::fx::FxHashMap::default(),
             dtst_first_spelling: true,
+            exc_protos: kiln_source::fx::FxHashMap::default(),
             nns: KeyedTable::new(),
             args: ArgTable::new(),
             profiles: ProfileTable::new(),
@@ -513,8 +523,101 @@ impl TypeContext {
     }
 
     /// The canonical function prototype of `q`, if `q` is a function type.
+    /// Before C++17 its exception specification is the one written on the
+    /// first function type in `q`'s sugar chain (the canonical type has
+    /// none; spec/types.md §5.4).
     pub fn proto(&self, q: QualType) -> Option<&FuncProto> {
+        if !self.exc_protos.is_empty()
+            && let Some(p) = self.written_exc_proto(q)
+        {
+            return Some(p);
+        }
         self.proto_of(self.canonical(q).ty())
+    }
+
+    /// Before C++17: the prototype recorded in `exc_protos` for the first
+    /// function node in `q`'s sugar chain.
+    fn written_exc_proto(&self, mut q: QualType) -> Option<&FuncProto> {
+        loop {
+            if self.kind(q.ty()) == TypeKind::Function {
+                return self.exc_protos.get(&q.ty());
+            }
+            if self.is_canonical(q.ty()) {
+                return None;
+            }
+            let n = self.desugar_once(q);
+            if n.ty() == q.ty() {
+                return None;
+            }
+            q = n;
+        }
+    }
+
+    /// Before C++17: `q` with no function type in it that keeps a
+    /// written exception specification (its canonical type when it has
+    /// one, else `q` itself). A type template argument is converted with
+    /// it, so a template argument's identity, its substitution and what a
+    /// call through it may throw follow the canonical type, as clang's
+    /// do (spec/types.md §5.4).
+    pub fn without_exc_sugar(&self, q: QualType) -> QualType {
+        if self.exc_protos.is_empty() || !self.has_exc_sugar(q, 0) {
+            return q;
+        }
+        self.canonical(q)
+    }
+
+    /// `q`'s structure holds a function node recorded in `exc_protos`.
+    fn has_exc_sugar(&self, q: QualType, depth: u32) -> bool {
+        // A canonical type has none; the depth guards a degenerate chain.
+        if self.is_canonical(q.ty()) || depth > 256 {
+            return false;
+        }
+        if self.exc_protos.contains_key(&q.ty()) {
+            return true;
+        }
+        let d = depth + 1;
+        match self.view(q.ty()) {
+            TypeView::Pointer(p)
+            | TypeView::LValueRef(p)
+            | TypeView::RValueRef(p)
+            | TypeView::IncompleteArray(p)
+            | TypeView::Paren(p) => self.has_exc_sugar(p, d),
+            TypeView::MemberPointer { pointee, .. } => self.has_exc_sugar(pointee, d),
+            TypeView::ConstantArray(a) => self.has_exc_sugar(a.elem, d),
+            TypeView::Function(p) => {
+                self.has_exc_sugar(p.ret(), d)
+                    || self.params(&p).iter().any(|&t| self.has_exc_sugar(t, d))
+            }
+            _ => {
+                let n = self.desugar_once(q);
+                n.ty() != q.ty() && self.has_exc_sugar(n, d)
+            }
+        }
+    }
+
+    /// The pointee of pointer, reference or member pointer `q` as written
+    /// (sugar kept), for reading a pointee function type's exception
+    /// specification before C++17 through [`TypeContext::proto`]; the
+    /// canonical pointee otherwise.
+    pub fn exc_pointee(&self, q: QualType) -> Option<QualType> {
+        if !self.exc_protos.is_empty() {
+            let mut w = q;
+            loop {
+                match self.view(w.ty()) {
+                    TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
+                        return Some(p);
+                    }
+                    TypeView::MemberPointer { pointee, .. } => return Some(pointee),
+                    _ => {}
+                }
+                let n = self.desugar_once(w);
+                if self.is_canonical(w.ty()) || n.ty() == w.ty() {
+                    break;
+                }
+                w = n;
+            }
+        }
+        self.pointee(q)
     }
 
     /// The parameter types of `p` (adjusted, [dcl.fct]/5).
@@ -1131,6 +1234,7 @@ impl TypeContext {
         r.push(MemRow::of_vec("names.decls", &self.name_decls));
         r.push(MemRow::of_set("names.dependent_templates", &self.dependent_templates));
         r.push(MemRow::of_map("names.first_dtst", &self.first_dtst_names));
+        r.push(MemRow::of_map("exc_protos", &self.exc_protos));
         self.nns.memory("nns", &mut r);
         self.args.memory(&mut r);
         self.profiles.memory(&mut r);
