@@ -2352,7 +2352,12 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
   direct-list-initialization ([dcl.init.list]/3.8, an explicit
   constructor is viable) and `= {X::v}` copy-list (WP-690;
   `tests/conformance/class.static.data/template-direct-list-init.cpp`,
-  `template-copy-list-init-errors.cpp`).
+  `template-copy-list-init-errors.cpp`). A member whose type comes from
+  its initializer is never deferred: a placeholder (`auto`, `auto*`,
+  `const auto&`), a deduced class type (`std::array const tbl =
+  f<T>();`, clang's `isUndeducedType`; WP-792,
+  `tests/conformance/temp.inst/static-member-deduced-class-type.cpp`) or
+  an array of unknown bound.
 
 This is why the chain `R<N>::v = R<N-1>::v` recurses one frame per level
 in clang (the d1 test in §10.2). Kiln matches its notes exactly.
