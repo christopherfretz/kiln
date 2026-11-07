@@ -1567,6 +1567,16 @@ chrono:2449, ranges:1888. Tests:
 `temp.spec.partial.member/libstdcxx-member-partial-spec-params-in-body.cpp`,
 `temp.spec.partial.member/libstdcxx-constrained-member-partial-spec.cpp`.
 
+Out-of-line member template definitions ([temp.local]/7; WP-782): in
+`template<unsigned size> int P::f()` the definition's own template
+parameters (depth at or above the class's template levels) are found
+before the members of `P` and its bases, although their scope lies
+outside the re-entered class scope; the enclosing class template's own
+parameters are still hidden by members (`own_template_param_outside`
+in `kiln_sema/src/lookup.rs`; LLVM `AArch64InstPrinter.cpp`
+`printGPRSeqPairsClassOperand<unsigned size>`). Test:
+`temp.local/p7-member-template-param-not-hidden-out-of-line.cpp`.
+
 Out-of-line members of a partial specialization whose argument list is
 the primary's own (`template<class V> requires fw<V> class C<V>`;
 [temp.spec.partial.member]/1, [temp.over.link]/6; WP-332): the qualifier
