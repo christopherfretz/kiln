@@ -2121,7 +2121,13 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
   diagnostics and the emitted `__cxx_global_var_init` functions follow
   clang's order (WP-186;
   `tests/conformance/temp.inst/static-member-instantiation-order.cpp`,
-  `tests/codegen/static_member_inst_order.cpp`).
+  `tests/codegen/static_member_inst_order.cpp`). The member was declared
+  without its initializer, so it takes the pattern's init style when the
+  initializer is instantiated: `static constexpr E e{X::v};` stays
+  direct-list-initialization ([dcl.init.list]/3.8, an explicit
+  constructor is viable) and `= {X::v}` copy-list (WP-690;
+  `tests/conformance/class.static.data/template-direct-list-init.cpp`,
+  `template-copy-list-init-errors.cpp`).
 
 This is why the chain `R<N>::v = R<N-1>::v` recurses one frame per level
 in clang (the d1 test in §10.2). Kiln matches its notes exactly.

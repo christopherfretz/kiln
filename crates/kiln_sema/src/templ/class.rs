@@ -1586,6 +1586,17 @@ impl Sema<'_, '_> {
             return;
         }
         self.ast.decls.mark_var(v, kiln_ast::decl::VarSpec::new().with_inline(true));
+        // The member was declared without its initializer: it takes the
+        // pattern's form now (`static constexpr E e{X::v};` is direct-list-
+        // initialization, [dcl.init.list]/3.8).
+        let style = self.ast.decls.var(pattern).map(|x| x.spec.init_style());
+        let cur = self.ast.decls.var(v).map(|x| x.spec.init_style());
+        if let Some(style) = style
+            && cur == Some(kiln_ast::decl::InitStyle::C)
+            && style != kiln_ast::decl::InitStyle::C
+        {
+            self.ast.decls.mark_var(v, kiln_ast::decl::VarSpec::new().with_init_style(style));
+        }
         let ctx = self.ast.decls.get(v).ctx().unwrap_or(self.ast.tu);
         self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &args);

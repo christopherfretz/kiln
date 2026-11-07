@@ -1006,8 +1006,9 @@ impl VarSpec {
     /// the `Call` init style of a default-initialized class variable
     /// (set over `C` only, with its `CXXConstructExpr`), `ParenList` (set
     /// over `Call` once the parenthesized initializer turns out to
-    /// initialize an aggregate), and `inline` (an instantiated static data
-    /// member becomes inline with its deferred initializer, [temp.inst]/4),
+    /// initialize an aggregate), and `inline` and any init style (an
+    /// instantiated static data member becomes inline with its deferred
+    /// initializer and takes its form, [temp.inst]/4),
     /// and `cxx_for_range` (a for-range-declaration is known as one after
     /// it is declared, clang `ActOnCXXForRangeDecl`).
     pub const LATE: VarSpec = VarSpec((1 << 12) | (1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
