@@ -930,17 +930,26 @@ impl Compiler<'_> {
             | id::atomic::IS_LOCK_FREE
             | id::atomic::C11_IS_LOCK_FREE => {
                 let size = arg(0)?;
-                let (any, align) = if bid == id::atomic::C11_IS_LOCK_FREE {
-                    (true, 0)
+                let max = u32::from(self.ast().types.target().max_atomic_inline_bytes);
+                let (any, align, int) = if bid == id::atomic::C11_IS_LOCK_FREE {
+                    (true, 0, None)
                 } else {
                     let p = arg(1)?;
-                    self.lock_free_object(p)
+                    let (any, align) = self.lock_free_object(p);
+                    // WP-726: clang 19 first folds the pointer to an
+                    // integer (libstdc++'s `reinterpret_cast<void *>(
+                    // -_S_alignment)`) and checks its alignment; only
+                    // needed when the type's alignment may not suffice.
+                    let int = if any || align >= max { None } else { self.lock_free_int(p) };
+                    (any, align, int)
                 };
-                let max = u32::from(self.ast().types.target().max_atomic_inline_bytes);
                 let a = self.rv(size);
-                let sub =
-                    max | u32::from(any) << 8 | u32::from(bid == id::atomic::ALWAYS_LOCK_FREE) << 9;
-                op(self, bi::LOCK_FREE, sub, [a, dst, dst], [align, 0], begin);
+                let b = int.map_or(dst, |x| self.rv(x));
+                let sub = max
+                    | u32::from(any) << 8
+                    | u32::from(bid == id::atomic::ALWAYS_LOCK_FREE) << 9
+                    | u32::from(int.is_some()) << 10;
+                op(self, bi::LOCK_FREE, sub, [a, b, dst], [align, 0], begin);
             }
             id::MEMCPY | id::MEMMOVE | id::WMEMCPY | id::WMEMMOVE => {
                 let (d, s, n) = (arg(0)?, arg(1)?, arg(2)?);
@@ -1154,6 +1163,27 @@ impl Compiler<'_> {
         let t = self.ty(pointee);
         let info = self.o.types.info(t);
         (false, if info.size == 0 { 0 } else { info.align })
+    }
+
+    /// The integer operand of the object argument `p` of
+    /// `__atomic_is_lock_free` when `p` is an integer cast to a pointer
+    /// (through implicit and pointer-to-pointer casts), clang 19's
+    /// `EvaluateAsRValue` + `toIntegralConstant` of the argument.
+    fn lock_free_int(&self, p: ExprId) -> Option<ExprId> {
+        use kiln_ast::expr::CastKind as K;
+        let ast = self.ast();
+        let mut x = skip_parens(ast, p);
+        for _ in 0..16 {
+            if !ast.exprs.get(x).kind().is_cast() {
+                return None;
+            }
+            match ast.exprs.cast_kind(x) {
+                K::IntegralToPointer => return Some(ast.exprs.operand(x)),
+                K::BitCast | K::NoOp => x = skip_parens(ast, ast.exprs.operand(x)),
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// WP-630: the x86 builtin call `e` (clang 19's

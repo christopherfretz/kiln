@@ -117,6 +117,13 @@ impl Sema<'_, '_> {
             };
             let ty = self.this_class_type(q.ctx);
             Some(self.ast.types.nns(Nns::Type { prefix, ty, template_kw: false }))
+        } else if self.is_unentered_dependent_class(q.ctx) && self.ast.definition(q.ctx).is_none() {
+            // A member class of the current instantiation declared but not
+            // yet defined (`struct Block;` defined out of line after the
+            // member functions that name `Block::get`): its specifier is
+            // dependent (clang `computeDeclContext` has no context for
+            // it), so the name is looked up at instantiation (WP-726).
+            Some(q.nns)
         } else {
             None
         }
@@ -478,16 +485,27 @@ impl Sema<'_, '_> {
         // partial specialization's own arguments include them
         // ([temp.arg.general]/9; `template<class T, class S = typename
         // T::S> struct E;` then `template<class U> class E<W<U>>::I`).
+        // Or arguments for a template parameter pack, which the partial
+        // specialization's own arguments hold as one argument pack
+        // (`template<class... A> int B<int, A...>::g()`).
         let params = self.template_params(tmpl);
-        if !written.iter().any(unconverted) && written.len() >= params.len() {
+        let first_pack = params
+            .iter()
+            .position(|&p| self.ast.template_parm(p).is_some_and(|x| x.pack))
+            .unwrap_or(params.len());
+        if !written.iter().any(unconverted)
+            && written.len() >= params.len()
+            && first_pack == params.len()
+        {
             return None;
         }
         // A pack expansion for a parameter that is not a pack (`Ts<T...>`
         // in `template<template<class> class H, template<class> class...
         // T> struct Ts`, googletest's `Templates`) covers parameters only
         // once substituted: no partial specialization's own arguments.
+        // Every argument from `first_pack` on is the pack's, if any.
         if let Some(i) = written.iter().position(|&a| self.is_pack_expansion_arg(a))
-            && params.get(i).is_none_or(|&p| !self.ast.template_parm(p).is_some_and(|x| x.pack))
+            && (i < first_pack || first_pack == params.len())
         {
             return None;
         }

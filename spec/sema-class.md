@@ -423,6 +423,12 @@ and unqualified `&m` are not member pointers, [expr.unary.op]/4); `.*`/`->*`
 per [expr.mptr.oper]; conversions `DerivedToBaseMemberPointer` /
 `BaseToDerivedMemberPointer` (sema-conv rank rules apply; virtual-base path is
 ill-formed). The constant form is ast.md §9's `MemberPtr` scalar.
+When the left operand's class differs from the member pointer's class,
+`act_on_ptr_mem` requires it complete before the derivation check, which
+instantiates a class template specialization ([temp.inst]/2); an
+incomplete class gets the "left hand operand" error with the forward
+declaration noted, an undefined template only its instantiation error
+(WP-726; `expr.mptr.oper/lhs-instantiates-derived.cpp`, `lhs-incomplete.cpp`).
 
 **Landed (WP-083): member-pointer declarators.** The parser emits
 `Chunk::MemberPointer { qual: Option<Qualifier>, quals, loc }` (parse.md
@@ -695,7 +701,13 @@ virtual base 'A'`).
   `std::meta::exception::what`; WP-525,
   `class.virtual/consteval-override-consteval-only.cpp`).
 - **Pure/abstract**: `= 0` only on virtuals (`'p' is not virtual and cannot be
-  declared pure`); `ABSTRACT` iff some final overrider is pure. Abstract uses
+  declared pure`). In a dependent class (a template pattern or a class
+  nested in one, `Sema::in_dependent_class`; clang `CheckPureMethod`)
+  the member is declared pure unchecked, since a dependent base may make
+  it virtual, and the error comes from the instantiation, which declares
+  it pure again (WP-726,
+  `tests/conformance/class.abstract/pure-override-of-dependent-base.cpp`,
+  `pure-not-virtual-at-instantiation.cpp`). `ABSTRACT` iff some final overrider is pure. Abstract uses
   ([class.abstract]/3): variable (`variable type 'Abs' is an abstract class` +
   `unimplemented pure virtual method 'f' in 'Abs'`), `new` (`allocating an
   object of abstract class type 'Abs'`), field, parameter/return of a
@@ -962,7 +974,13 @@ type of assignment, `explicitly-defaulted copy assignment operator must return
 An implicit or defaulted-on-first-declaration member is defined when odr-used
 (`mark_function_referenced` → `define_implicit_*`, clang's `DefineImplicitX`),
 when its exception specification is needed (spec only), or when the Oven asks
-for its body (`SemaBridge::ensure_body`). Bodies, exactly clang's (verified by
+for its body (`SemaBridge::ensure_body`). A use in a template definition
+odr-uses nothing, but a constexpr defaulted (non-trivial, not deleted) member of
+a complete non-dependent class is defined there, because the definition's
+`constexpr` and `constinit` initializers are evaluated without an
+instantiation (clang `NeededForConstantEvaluation`). It is defined in the
+class's context outside the template (`in_inst_context`), so the members it uses
+are odr-used and defined as at any other definition (WP-726). Bodies, exactly clang's (verified by
 `implicit`-mode goldens):
 - **ctors**: the completed ctor-initializer list (§4.9) and an empty
   `CompoundStmt`. Copy/move: base `CXXConstructExpr` from the unnamed parameter
@@ -1290,7 +1308,9 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   using-declarator's qualifier must name a direct or indirect base
   (`using declaration refers into 'X::', which is not a base class of
   'D'`). `using B::B;` (the last component names the qualifier's class:
-  class, typedef or template parameter name) is a `Using` named by the
+  class, typedef or template parameter name; or the name, looked up in the
+  nominated class, is its injected-class-name, as in `using Base::B;` with
+  `Base` a typedef of `B<int>`) is a `Using` named by the
   derived class's constructor name (dump `UsingDecl B::D`) with one
   `ConstructorUsingShadow` per constructor of `B`, its own and the ones `B`
   itself inherits (`inheritable_ctors`); `DefinitionBits::HAS_INHERITED_CTOR`
@@ -2473,7 +2493,11 @@ access, out-of-line declarator scope.**
   A pseudo-destructor on a scalar ([basic.types.general]/9: a pointer
   to member included, `Sema::is_scalar`; libc++'s `std::function` of a
   member function pointer destroys it as `__f_.~_Fp()`; test
-  `expr.prim.id.dtor/pseudo-destructor-member-pointer-run.cpp`) or
+  `expr.prim.id.dtor/pseudo-destructor-member-pointer-run.cpp`), on a
+  GNU/NEON vector type (clang `BuildPseudoDestructorExpr` accepts
+  `isVectorType`; libstdc++'s `is_destructible` probes
+  `declval<T&>().~T()`, so `std::vector<uint64x2_t>` needs it; WP-726,
+  `expr.prim.id.dtor/pseudo-destructor-vector-type-run.cpp`) or
   dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
@@ -2515,7 +2539,15 @@ access, out-of-line declarator scope.**
   up first, [basic.lookup.qual.general]/2), then `act_on_member_q` /
   `act_on_template_member_q`. `qualifier_names_base` checks the
   qualifier names the object's class or a base
-  (`sema_qualified_member_of_unrelated`).
+  (`sema_qualified_member_of_unrelated`). A non-static member named
+  `Q::m`, with `Q` a base other than the member's class, converts the
+  object to its `Q` subobject first and then to the member's class
+  (`object_to_qualifier`, for fields and the implicit object argument of a
+  call, implicit `this` included; [class.member.lookup]/8, clang
+  `PerformObjectMemberConversion`), so a class with two subobjects of the
+  member's class reaches either one (WP-726;
+  `class.member.lookup/p8-qualifier-selects-subobject.cpp`,
+  `tests/codegen/qualified_member_subobject.cpp`).
 - *Out-of-line declarator scope* ([dcl.meaning]/1, [basic.scope.class]/1;
   clang `ActOnCXXEnterDeclaratorScope`): after a qualified declarator-id
   the parser calls `act_on_enter_declarator_scope(qualifier) -> usize`,

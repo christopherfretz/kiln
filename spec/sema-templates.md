@@ -621,7 +621,7 @@ All of these are built by sema actions, which compute dependence as in
 
 | Syntax (in a dependent context) | Node |
 |---|---|
-| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309; the same for a nested-name-specifier component `D::N::` when `N` is found neither as a nested name nor as an ordinary name in `D`, e.g. `using G::F::F;` with a dependent base `F<U, T, int>`, WP-367) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
+| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309; the same for a nested-name-specifier component `D::N::` when `N` is found neither as a nested name nor as an ordinary name in `D`, e.g. `using G::F::F;` with a dependent base `F<U, T, int>`, WP-367); also `B::x` when `B` is a member class of the current instantiation named outside its own definition that is declared but not yet defined (`struct Block;` defined out of line after the member function naming `Block::get`), the specifier being dependent (clang `computeDeclContext` has no context for it), so `x` is looked up in the instantiated member class (WP-726, `temp.dep.type/incomplete-member-class-qualifier{,-missing}.cpp`) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
 | `e.m` or `p->m` with a type-dependent object, or a member of the current instantiation that is not found when it has dependent bases | `CXXDependentScopeMemberExpr {base, arrow, nns?, name, targs?}` |
 | unqualified `f(args)` with type-dependent args, where lookup finds functions or templates (or nothing) | `UnresolvedLookupExpr {requires_adl, overloaded, decls, targs?}`, plus `CallExpr` of dependent type |
 | unqualified `operator@(args)` / `operator T(args)` (an operator- or conversion-function-id as the callee) whose lookup finds nothing ([temp.dep.general]/2, [basic.lookup.argdep]/1) | an empty `UnresolvedLookupExpr` with `requires_adl`, as for an undeclared `f(args)` (`Sema::act_on_id_expression_dn` while `deferring_call_ref`); ADL at the call or at instantiation, and no candidate is clang's `use of undeclared 'operator@'` (`sema_undeclared_use`) |
@@ -1225,6 +1225,15 @@ class H, template<class> class... T> struct Ts`) names neither the
 current instantiation nor a partial specialization's injected class: it
 is a dependent specialization checked once substituted (WP-730,
 `temp.local/injected-name-pack-expansion-args.cpp`).
+
+A template-id of a partial specialization's template whose non-type
+arguments are written unconverted is matched by converting them first
+(`entered_partial_by_converted_args`). One whose primary template has a
+template parameter pack is converted first too: the partial
+specialization's own arguments hold the arguments for the pack as one
+argument pack, so `template<class... A> int B<int, A...>::g()` is found
+only after conversion (WP-726,
+`tests/conformance/temp.spec.partial.member/out-of-line-member-pack-arguments.cpp`).
 
 Qualified lookup into the current instantiation happens at definition.
 Lookup of a found member binds it (`typename A<T>::X` resolves to the
@@ -2054,9 +2063,17 @@ class name" at `B`
   substitution is not dependent names only the enclosing class's
   parameters ([temp.friend]/9): it is compared as written, so the friend
   stays a template of its own (WP-446; libc++ 22 `stack`/`queue`
-  `operator<=>`; `temp.friend/constrained-friend-template-*.cpp`). Gap:
-  a constraint naming both levels is compared substituted, which merges
-  what [temp.friend]/9 keeps apart.
+  `operator<=>`; `temp.friend/constrained-friend-template-*.cpp`). A
+  constraint whose substitution used an enclosing level's argument (or
+  the injected-class-name's instantiated class), even one that also
+  names the friend's own parameters, makes the friend a template of its
+  own: no earlier declaration is looked up, so `template<class Self,
+  class U = T> requires is_same_v<remove_cvref_t<Self>, W> friend U
+  get(Self&&)` defined in `W<int>` and `W<long>` declares two templates,
+  without a "redefines default argument" or "redefinition" error
+  (`Sema::friend_template_apart`, `Substituter::outer_used`; clang's
+  `FriendConstraintsDependOnEnclosingTemplate`; WP-726,
+  `temp.friend/p9-constraint-on-enclosing-distinct.cpp`).
 - A friend function or function template declared with a qualified name
   in a templated class (`template<class U> friend R N::f(X<U>);`,
   `friend R N::g(T);`) whose template head or type is dependent is not
@@ -2241,6 +2258,12 @@ and the §6.2 tests.
 with a `VarTemplateSpecialization` decl.
 - The type is substituted immediately: the expression needs it.
 - Partial specializations are selected as in §4.4.
+- A template declared with a placeholder anywhere in its type (`auto`,
+  `auto&`, `const auto*`; `contains_undeduced_auto`, not only a
+  top-level `auto`) instantiates its initializer at the specialization
+  to deduce the type, so a use of `v<T>` inside another constexpr
+  initializer is not "depends on itself" (WP-726;
+  `tests/conformance/dcl.spec.auto/variable-template-reference-placeholder.cpp`).
 - The `inline constexpr bool xxx_v` family (142 declarations in the M3
   headers, §13.3) is the hottest path. One probe gives the decl and one
   `consts()` lookup gives its value.
@@ -2266,6 +2289,11 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
   (`-Wundefined-var-template` stays clang's, below).
   `tests/conformance/temp.point/var-template-end-of-tu-instantiation-run.cpp`,
   `var-template-defined-after-reference-run.cpp`.
+- A static data member's instantiated out-of-line definition keeps the
+  pattern definition's `constinit` ([dcl.constinit]/1): it is the
+  initializing declaration with `constinit`, so `template<class I>
+  constinit T C<I>::m{};` gives no "'constinit' specifier missing"
+  warning.
 - Other variables are queued in `pending` when they are odr-used.
   That includes an inline static data member whose in-class initializer
   was deferred (§4.4; `deferred_inits`): the drain instantiates its
@@ -3974,7 +4002,24 @@ guides.
    mismatch, as clang's integral `P` against an expression `A`
    (`check_nondeduced_value`; WP-669,
    `tests/conformance/temp.func.order/p3-constant-argument-more-specialized.cpp`).
-   Packs follow /8–11. The last tie-breaker for packs is
+   Packs follow /8–11. A template argument pack expansion in the `A`
+   types (`L<I...>`, of the argument template's own pack) is deduced as a
+   whole by a `P` pack expansion (`DeducedArgs::expansions`, as for
+   partial specializations), so the two packs' template-parameter
+   indices need not coincide (WP-726,
+   `tests/conformance/temp.func.order/p3-pack-expansion-other-index.cpp`).
+   A template parameter of the deduced template left without a value
+   fails the deduction when the compared parameter types name it, a
+   non-deduced context included ([temp.deduct.partial]/12; clang
+   `MarkUsedTemplateParameters` without `OnlyDeduced`): kiln substitutes
+   `int` for each undeduced type parameter and every other parameter for
+   itself, and a type that changes or fails to substitute names one
+   (`order.rs` `undeduced_params_unused`; with a parameter pack, or an
+   undeduced non-type or template parameter, they count as unused). So
+   `to_pointer(buffer_appender<T>, size_t)` beats `to_pointer(OutputIt,
+   size_t)` for `to_pointer<char>(it, n)` (WP-726,
+   `tests/conformance/temp.func.order/p12-undeduced-used-in-non-deduced-context.cpp`).
+   The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
 5. **Constraints.** If both directions succeed, the more constrained one
    wins ([temp.func.order]/6, P2113; subsumption §8.4), but only when the
@@ -4203,6 +4248,12 @@ The `SpecKind` transitions are those of §4.5.
   names match clang's (`XadL_ZN1S1vEE`, `mcM1BiadL_ZN1D1dEE`;
   `tests/codegen/nttp_member_pointer.cpp`,
   `tests/conformance/temp.arg.nontype/member-pointer-argument-value.cpp`).
+  `&C::m` of exactly the parameter's type while `C` is still being
+  defined (boost.intrusive's `member_hook<C, H, &C::hook>` in `C`'s own
+  body) is converted without the Oven, which has no layout for `C` yet:
+  the value is the member itself, the same argument as after `C` is
+  complete (`args.rs` `defining_class_member_ptr`; WP-726,
+  `tests/conformance/temp.arg.nontype/member-pointer-of-class-being-defined.cpp`).
 - **Reference arguments** (`convert_ref_nttp_arg`): the conversion must
   exist (`sema_cce_not_implicitly_convertible`), must not bind a
   temporary (`sema_cce_ref_binds_temporary`), and the referent must not
@@ -7367,6 +7418,14 @@ declarator scopes.**
   converted form the partial was registered with (WP-709). Gap:
   dependent template-ids elsewhere are still neither checked nor
   converted (clang checks every template-id).
+- *Template arguments of a declarator qualifier*: only the qualifier's
+  own components are entered. Its template arguments are parsed with
+  the entering context off (`parse_template_arg_list`, as clang's
+  `EnteringContext = false`), so in `template<class T> int F<T,
+  typename X<T>::type>::g()` the inner `X<T>` is an ordinary dependent
+  specialization rather than the current instantiation of `X`; the
+  argument stays `typename X<T>::type` and matches the partial
+  specialization ([temp.dep.type]/1; WP-726, fmt 10's `formatter`).
 - Tests: `tests/conformance/temp.mem.class/`, `temp.mem.enum/`,
   `temp.spec.partial.member/out-of-line-ctors.cpp`,
   `temp.spec.partial.member/non-type-arg-scope.cpp`,

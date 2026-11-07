@@ -527,7 +527,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       memory(argmem: readwrite, inaccessiblemem: readwrite)` with a
       `nocapture readonly` (22: `readonly captures(none)`) pointer and
       three `immarg` operands (WP-610,
-      `builtin_prefetch.cpp`); `__builtin_ia32_pause()` is `call void
+      `builtin_prefetch.cpp`); `__builtin_memcpy_inline(d, s, n)` is
+      `call void @llvm.memcpy.inline.p0.p0.i64(ptr align A d, ptr align B
+      s, i64 n, i1 false)` (declared like `llvm.memcpy`), and
+      `__builtin_assume_separate_storage(a, b)` is `call void
+      @llvm.assume(i1 true) [ "separate_storage"(ptr a, ptr b) ]` (WP-726,
+      `builtin_memcpy_inline.cpp`); `__builtin_ia32_pause()` is `call void
       @llvm.x86.sse2.pause()`, declared `nounwind`
       (`target.x86/ia32-pause-ir{,-19}.cpp`); the x86 builtins in
       general are spec/landed/codegen/WP-630.md.
@@ -2908,7 +2913,12 @@ of the full-expression are shared by the normal and the `.cleanup`
 path, a value computed before the cleanups and used after them is
 spilled to a `tmp.exprcleanup` alloca right after its definition and
 reloaded after the cleanups (clang `RunCleanupsScope::ForceCleanup(
-ValuesToReload)`; `end_scope_reload` / `pop_cleanup_blocks_reload`).
+ValuesToReload)`; `end_scope_reload` / `pop_cleanup_blocks_reload`). A
+reference bound to such a full-expression (`const auto& r = co_await
+a;` with an lvalue-reference `await_resume`) reloads its bound address
+the same way before the reference is stored (clang
+`EmitExprWithCleanupsLValue`; `Cg::emit_ref_binding`; WP-726,
+`expr.await/reference-result-bound-to-reference.cpp`).
 
 **`CoroEnd` cleanup (EH only, clang `CallCoroEnd`).** On unwinding,
 `llvm.coro.end(ptr null, i1 true, token none)`. For LLVM 19 it returns
@@ -3303,6 +3313,11 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   (`k.y`, `EmitLoadOfLValue`) and an `extern` vector without an
   initializer stay loads. As in clang, a write through a cast-away
   `const` (`((i4&)k)[1] = 9`, undefined) does not stop the fold.
+- Otherwise a glvalue base of that arm is loaded from its address
+  (`emit_lvalue` + `load_lv`): a call returning `V&` (`v[i][j]` on a
+  `std::vector<V>`) has the address as its scalar, so `emit_scalar`
+  of it gave `extractelement` a pointer and lowering failed (WP-726;
+  `tests/conformance/ext.vector/subscript-of-reference-returning-call-run.cpp`).
 - `__builtin_convertvector` of a `const` vector variable folds the same
   way (WP-490): `Collect::expr` pushes the `ConvertVectorExpr` operand
   (a bare vector DeclRef, no `LValueToRValue`), the

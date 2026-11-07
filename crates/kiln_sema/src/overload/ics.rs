@@ -327,7 +327,10 @@ impl Sema<'_, '_> {
             }
             to = self.retarget_to_class(a.ty, to);
         }
-        if a.ty == QualType::OVERLOAD {
+        // [over.over]/1: a class type is not a target; an overload set
+        // converts to one through a converting constructor taking it.
+        if a.ty == QualType::OVERLOAD && self.ast.types.as_record(self.non_reference(to)).is_none()
+        {
             return self.overload_set_ics(a, to, opts);
         }
         if self.ast.types.is_reference(to) {
@@ -359,6 +362,23 @@ impl Sema<'_, '_> {
             Some(s) => Ics::Standard(s),
             None => Ics::bad(BadKind::NoConversion, a.ty, to),
         }
+    }
+
+    /// Whether overload set `e` converts to `to`, a class or reference to
+    /// class, through a constructor taking it (the set is the
+    /// constructor's argument, not an [over.over] target: folly's
+    /// `const dynamic& v = dynamic::object` with `dynamic(ObjectMaker
+    /// (*)())`). Otherwise the set is resolved against `to` and fails
+    /// with clang's "address of overloaded function" error.
+    pub(crate) fn overload_set_converts_to_class(
+        &mut self,
+        e: ExprId,
+        to: QualType,
+        opts: IcsOptions,
+    ) -> bool {
+        self.ety(e) == QualType::OVERLOAD
+            && self.ast.types.as_record(self.non_reference(to)).is_some()
+            && !self.try_implicit_conversion(&self.arg_info(e), to, opts).is_bad()
     }
 
     /// The conversion sequence of an overload-set argument ([over.ics.scs]
@@ -1639,7 +1659,12 @@ impl Sema<'_, '_> {
             visited.push(c);
             let Some(def) = self.ast.definition(c) else { continue };
             let mut here: Vec<QualType> = Vec::new();
-            for m in self.ast.decls.members(def) {
+            for found in self.ast.decls.members(def) {
+                // A using-declaration names a base's conversion function
+                // in this class ([namespace.udecl]/1): found as its shadow,
+                // whose access is the using-declaration's
+                // ([namespace.udecl]/19).
+                let m = self.ast.strip_shadow(found);
                 let f = if self.kind_of(m) == DeclKind::FunctionTemplate {
                     match self.templated_function(m) {
                         Some(f) if self.kind_of(f) == DeclKind::CXXConversion => f,
@@ -1667,7 +1692,7 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 here.push(key);
-                out.push((m, m));
+                out.push((found, m));
             }
             seen_types.extend(here);
             for b in self.ast.decls.bases(def, &self.ast.lists) {

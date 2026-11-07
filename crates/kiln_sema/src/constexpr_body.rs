@@ -199,11 +199,11 @@ impl Sema<'_, '_> {
                 StmtKind::DeclStmt => {
                     vars.extend(self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)));
                 }
-                StmtKind::IfStmt => {
-                    let d = st.if_data(s);
-                    subs.extend(d.init);
-                    vars.extend(d.cond_var);
-                }
+                // clang 19 `CheckConstexprFunctionStmt` checks only an
+                // if-statement's branches: its init-statement and
+                // condition variable are not (WP-726; googletest's
+                // `EXPECT_*` declares a non-literal `AssertionResult`
+                // there).
                 StmtKind::SwitchStmt => {
                     let d = st.switch_data(s);
                     subs.extend(d.init);
