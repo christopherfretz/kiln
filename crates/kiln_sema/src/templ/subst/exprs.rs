@@ -311,7 +311,7 @@ impl Substituter<'_, '_, '_> {
                 let op = ex(self).unary_op(e);
                 let o = ex(self).operand(e);
                 // `&C::m` stays the qualified name, not `this->C::m`
-                // (`Sema::act_on_address_operand_id`).
+                // (`Sema::act_on_id_expression_in`).
                 let addr = op == kiln_ast::expr::UnaryOp::AddrOf
                     && self.sema.ast.exprs.get(o).kind() == ExprKind::DeclRefExpr
                     && ex(self).decl_ref_extra(o).is_some_and(|x| x.qualifier.is_some());

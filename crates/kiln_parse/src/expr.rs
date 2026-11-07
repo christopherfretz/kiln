@@ -1186,6 +1186,14 @@ impl Parser<'_, '_> {
         )
     }
 
+    /// Whether the id-expression that began at `start` is the whole
+    /// operand of unary `&`: right after it, with no postfix suffix after
+    /// it (clang's `tryParseCXXIdExpression`). A qualified name there
+    /// forms no implicit member access.
+    fn whole_addr_operand(&self, start: usize) -> bool {
+        self.addr_operand_at == Some(start) && !self.at_postfix_suffix_start()
+    }
+
     /// The postfix operators applied to `e` (clang's
     /// `ParsePostfixExpressionSuffix`).
     pub(crate) fn parse_postfix_suffix(&mut self, mut e: ExprId) -> PExpr {
@@ -2115,16 +2123,7 @@ impl Parser<'_, '_> {
         if qual.is_none() && self.at(Punct::LParen) {
             return Some(self.s.act_on_call_name(name, nl));
         }
-        // clang's `tryParseCXXIdExpression`: a qualified name that is the
-        // whole operand of `&` forms no implicit member access.
-        let e = if qual.is_some()
-            && self.addr_operand_at == Some(start)
-            && !self.at_postfix_suffix_start()
-        {
-            self.s.act_on_address_operand_id(name, nl, qual)
-        } else {
-            self.s.act_on_id_expression(name, nl, qual)
-        };
+        let e = self.s.act_on_id_expression_in(name, nl, qual, self.whole_addr_operand(start));
         if self.s.clang_compat >= 22
             && qual.is_none()
             && class == NameClass::Undeclared

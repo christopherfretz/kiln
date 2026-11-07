@@ -1595,18 +1595,20 @@ impl Sema<'_, '_> {
         self.act_on_id_expression_dn(DeclName::ident(name), loc, qualifier)
     }
 
-    /// [`Self::act_on_id_expression`] for a qualified name that is the
-    /// whole operand of unary `&` (clang's `isAddressOfOperand`): in a
-    /// lambda, a non-static member it names forms no implicit member
-    /// access, so `&C::m` does not capture `this` ([expr.prim.id.general]/3,
-    /// [expr.prim.lambda.capture]/8).
-    pub fn act_on_address_operand_id(
+    /// [`Self::act_on_id_expression`], told whether the name is the whole
+    /// operand of unary `&` (clang's `isAddressOfOperand`). A qualified
+    /// name there that names a non-static member forms no implicit member
+    /// access in a lambda, so `&C::m` does not capture `this`
+    /// ([expr.prim.id.general]/3, [expr.prim.lambda.capture]/8).
+    pub fn act_on_id_expression_in(
         &mut self,
         name: Symbol,
         loc: Loc,
         qualifier: Option<crate::using::Qualifier>,
+        address_operand: bool,
     ) -> ExprId {
-        let saved = std::mem::replace(&mut self.address_operand, true);
+        let addr = address_operand && qualifier.is_some();
+        let saved = std::mem::replace(&mut self.address_operand, addr);
         let e = self.act_on_id_expression(name, loc, qualifier);
         self.address_operand = saved;
         e

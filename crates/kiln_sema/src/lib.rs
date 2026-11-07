@@ -339,7 +339,7 @@ pub struct Sema<'a, 'sm> {
     /// Depth of unevaluated operands (`sizeof`, `alignof`).
     pub(crate) unevaluated: u32,
     /// The id-expression being built is a qualified name that is the
-    /// whole operand of unary `&` ([`Sema::act_on_address_operand_id`]).
+    /// whole operand of unary `&` ([`Sema::act_on_id_expression_in`]).
     pub(crate) address_operand: bool,
     /// [`stmt::FnState::volatile_assigns`] outside a function body (a
     /// namespace-scope initializer, a default member initializer).

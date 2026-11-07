@@ -376,7 +376,7 @@ SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
   [expr.prim.lambda.capture]/7). When a qualified id-expression is the
   whole operand of `&` (the parser's `addr_operand_at`, clang's
   `isAddressOfOperand`: no `(` around it and no postfix suffix after
-  it), sema names the member through `act_on_address_operand_id`.
+  it), sema names the member through `act_on_id_expression_in`.
   Inside a lambda the member is then not rebuilt as `this->C::m`, so it
   captures nothing and the operand forms the pointer to member. The
   substituted `&C::m` of a template does the same. `&(C::m)`,
