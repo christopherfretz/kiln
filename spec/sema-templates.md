@@ -2250,6 +2250,12 @@ and the §6.2 tests.
   clang's error: "default member initializer for 'x' needed within
   definition of enclosing class 'A<int>' outside of member functions".
 - The frame is `DefaultMemberInitializerInstantiation`.
+- A braced NSDMI `T m{x}` whose pattern is already a construction (`x`
+  only value-dependent) is rebuilt from its braced list, as a variable's
+  initializer is (§5.4, `Substituter::initializer`), so it stays
+  direct-list-initialization and an explicit constructor is usable
+  (WP-787, Boost.Hana `Tracked tracker{i}`,
+  `tests/conformance/class.mem.general/default-member-initializer-direct-list-dependent.cpp`).
 - An NSDMI whose substitution fails makes its field invalid (clang
   `InstantiateInClassInitializer`), so a constructor or aggregate
   initialization that uses it reports nothing more (WP-220;
