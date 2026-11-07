@@ -10,10 +10,12 @@
 #   build_targets  optional list of make targets (default: all)
 #   test           shell command run in the build dir under `timeout 1800`
 #   c_compiler     the C compiler (kiln is C++-only), default clang-19
-#   wave           1, 2 or 3 (docs/ROADMAP.md M8)
+#   wave           1, 2, 3 or 4 (docs/ROADMAP.md M8)
 #   verified       true once the configure flags were run end to end
 #   submodules     optional: clone with --recurse-submodules
 #   source_subdir  optional: the CMake source dir inside the checkout
+#   checkout       optional: the .oss/src/<name> directory (default: the
+#                  project name); rows sharing one must share url/tag/submodules
 #   notes          free text
 
 # ---------------------------------------------------------------- wave 1
@@ -330,3 +332,25 @@ c_compiler = "clang-19"
 wave = 3
 verified = true
 notes = "WP-726. Needs boost, double-conversion, gflags, glog, libevent, fmt and fast_float installed. The shim forces FOLLY_HAS_LIBURING 0 (the container's liburing 2.9 lacks the 2.10 zero-copy receive API folly uses). googletest 1.17 is fetched at configure time. Excluded tests: WriteFileAtomic.directoryPermissions expects a permission error that root does not get; range_test and container_map_util_test do not compile with clang 19 either (RangeTest.cpp, MapUtilTest.cpp), so ctest has no executable for them."
+
+# ---------------------------------------------------------------- wave 4
+# Boost: one checkout (`checkout = "boost"`) of the superproject for every
+# boost_* row; the rows differ only in BOOST_INCLUDE_LIBRARIES and
+# KILN_BOOST_JAMFILE_LIBRARIES (the libraries with b2-only tests, registered
+# as CMake tests by shims/boost-jamfile-tests.cmake). Tests are built by the
+# `tests` target (on the jobserver) and run by ctest -j 4.
+
+[boost_meta]
+url = "https://github.com/boostorg/boost"
+tag = "boost-1.90.0"
+checkout = "boost"
+submodules = true
+build = "cmake"
+cxx_std = 20
+configure = ["-DBUILD_TESTING=ON", "-DBOOST_INCLUDE_LIBRARIES=mp11;hana;fusion;mpl;pfr;describe;variant2;variant;spirit;yap;type_traits;tuple;optional;outcome;static_string;callable_traits;type_index;function_types;lambda2;hof", "-DKILN_BOOST_JAMFILE_LIBRARIES=hana;fusion;variant;spirit;yap;type_traits;callable_traits;hof", "-DCMAKE_PROJECT_Boost_INCLUDE=@OSS@/shims/boost-jamfile-tests.cmake"]
+build_targets = ["tests"]
+test = "ctest -j 4 --output-on-failure --timeout 300"
+c_compiler = "clang-19"
+wave = 4
+verified = false
+notes = "WP-787: header-only metaprogramming libraries. docs/status/oss/boost_meta.md."

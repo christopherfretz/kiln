@@ -42,10 +42,19 @@ def load(path=TOML):
         p.setdefault("notes", "")
         p.setdefault("deps", [])
         p.setdefault("install_configure", [])
+        p.setdefault("checkout", name)
     for name, p in data.items():
         bad = [d for d in p["deps"] if d not in data or data[d]["build"] != "cmake"]
         if bad:
             raise SystemExit(f"{path}: [{name}] deps must name cmake projects: {', '.join(bad)}")
+    # Rows sharing a checkout (the Boost superproject, WP-787) must agree on
+    # what is cloned.
+    first = {}
+    for name, p in data.items():
+        key = (p["url"], p["tag"], p["submodules"])
+        other = first.setdefault(p["checkout"], (name, key))
+        if other[1] != key:
+            raise SystemExit(f"{path}: [{name}] shares checkout '{p['checkout']}' with [{other[0]}] but not its url/tag/submodules")
     return data
 
 
@@ -173,7 +182,7 @@ def main():
             sys.exit(f"projects.py: unknown project '{a.project}' (see {TOML})")
         p = data[a.project]
         q = shlex.quote
-        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "source_subdir"):
+        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "source_subdir", "checkout"):
             print(f"P_{k.upper()}={q(str(p[k]))}")
         print(f"P_SUBMODULES={'1' if p['submodules'] else ''}")
         print("P_CONFIGURE=(" + " ".join(q(x) for x in p["configure"]) + ")")
