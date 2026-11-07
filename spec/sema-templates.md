@@ -645,6 +645,14 @@ less-than. When the name is followed by `<`, clang's diagnostic
 treat 'f' as a dependent template name") is emitted and the parser
 recovers as if `template` had been written.
 
+At instantiation, `T::template f<A>` names a template when the lookup of
+`f` in the substituted `T` finds any template: an overload set that also
+has non-template functions resolves the template-id over the whole set
+(`member_template_named`; WP-792,
+`tests/conformance/temp.names/template-kw-mixed-overload-set.cpp`). Only
+a set without a template gets "'f' following the 'template' keyword
+does not refer to a template".
+
 ### 2.4 Dependent nodes built at parse time
 
 All of these are built by sema actions, which compute dependence as in

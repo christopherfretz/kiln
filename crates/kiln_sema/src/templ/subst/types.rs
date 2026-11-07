@@ -838,7 +838,13 @@ impl Substituter<'_, '_, '_> {
             self.sema.emit(d);
             return Err(SubstFail);
         };
-        if let Some(t) = self.sema.template_of(d) {
+        // An overload set that has a function template besides
+        // non-template overloads names a template ([temp.names]/3): the
+        // template-id is resolved over the whole set (reflect-cpp's
+        // `Literal::contains(const std::string&)` beside
+        // `template <StringLiteral> contains()`).
+        let t = found.decls.iter().find_map(|&x| self.sema.template_of(x));
+        if let Some(t) = t {
             // [class.access]/4: a member class or alias template is
             // checked now (a SFINAE failure in a deduction); a function
             // template by overload resolution.
