@@ -4132,6 +4132,11 @@ guides.
    and the same holds for a non-type, template template or pack parameter
    (WP-779, `tests/conformance/temp.func.order/p12-undeduced-used-*.cpp`,
    clang 19 and 22 agree).
+   A pack named by the pattern of a `P` pack expansion that matches no
+   `A` element has a value: the empty pack ([temp.deduct.type]/9; clang
+   `PackDeductionScope::finish`; `DeducedArgs::empty_expanded`). So
+   `f(L<>, F&&)` is more specialized than `f(L<T...>, F&&)` (WP-787,
+   `tests/conformance/temp.func.order/p12-empty-expansion-deduces-empty-pack-run.cpp`).
    The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
 5. **Constraints.** If both directions succeed, the more constrained one

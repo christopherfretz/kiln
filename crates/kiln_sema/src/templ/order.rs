@@ -708,6 +708,18 @@ impl Sema<'_, '_> {
         if ok && ai < pa.len() && !(ai + 1 == pa.len() && pa[ai].pack) {
             ok = false;
         }
+        // A pack named only by an expansion that matched nothing has the
+        // empty deduction ([temp.deduct.type]/9): `J` of
+        // `f(L<int, J...>)` from `f(L<int>)` (mp11 `mp_for_each_impl`).
+        let params = self.template_params(b);
+        for &i in &d.empty_expanded {
+            let at = usize::from(i);
+            let pack =
+                params.get(at).and_then(|&p| self.ast.template_parm(p)).is_some_and(|x| x.pack);
+            if pack && matches!(d.args.get(at).map(TemplateArg::view), Some(ArgView::Null)) {
+                d.args[at] = TemplateArg::pack(self.ast.types.arg_list(&[]));
+            }
+        }
         if ok && d.first_undeduced().is_some() && !self.undeduced_params_unused(b, &d, pb) {
             ok = false;
         }
@@ -855,7 +867,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn mark_used_arg(&self, a: TemplateArg, depth: u32, used: &mut [bool], lvl: u32) {
+    pub(crate) fn mark_used_arg(&self, a: TemplateArg, depth: u32, used: &mut [bool], lvl: u32) {
         match a.view() {
             ArgView::Type(x) => self.mark_used_type(x, depth, used, lvl),
             ArgView::Expr { expr, .. } => self.mark_used_expr(expr, depth, used, lvl),
