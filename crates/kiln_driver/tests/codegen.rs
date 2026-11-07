@@ -480,6 +480,117 @@ fn coro_wrappers_before_passes_match_clang19() {
     assert_eq!(k, c);
 }
 
+/// The diagnostics of GNU `alias` / `ifunc` definitions at code
+/// generation (spec/codegen.md "Aliases and ifuncs", WP-763; clang
+/// `EmitAliasDefinition`, `emitIFuncDefinition`, `checkAliases`): a
+/// self-alias is a cycle; an alias chain must end at a definition (the
+/// target is a mangled name: a note per declaration of that identifier
+/// names its symbol, with a fix-it); an ifunc's resolver must return a
+/// pointer; an ifunc over a definition is a duplicate definition; an
+/// alias in another section than its aliasee, or of a weak alias, is
+/// `-Wignored-attributes`. The checks after emission are skipped once an
+/// error was reported. Each case's message lines (sources and carets
+/// dropped) are pinned; the whole text is compared with clang++-19's.
+#[test]
+fn alias_ifunc_diagnostics() {
+    let d = scratch("alias-diags");
+    let cases: [(&str, &str, i32); 7] = [
+        (
+            "int undef(int);\nint a1(int) __attribute__((alias(\"undef\")));\n",
+            "t.cpp:2:28: error: alias must point to a defined variable or function\n\
+             t.cpp:2:28: note: the function or variable specified in an alias must refer to its mangled name\n\
+             1 error generated.\n",
+            1,
+        ),
+        (
+            "extern \"C\" int c1(int) __attribute__((alias(\"c2\")));\n\
+             extern \"C\" int c2(int) __attribute__((alias(\"c1\")));\n\
+             int self(int) __attribute__((alias(\"_Z4selfi\")));\n",
+            "t.cpp:3:30: error: alias definition is part of a cycle\n1 error generated.\n",
+            1,
+        ),
+        (
+            "extern \"C\" int c1(int) __attribute__((alias(\"c2\")));\n\
+             extern \"C\" int c2(int) __attribute__((alias(\"c1\")));\n",
+            "t.cpp:1:39: error: alias definition is part of a cycle\n\
+             t.cpp:2:39: error: alias definition is part of a cycle\n2 errors generated.\n",
+            1,
+        ),
+        (
+            "extern \"C\" int r() { return 0; }\nextern \"C\" int f(int) __attribute__((ifunc(\"r\")));\n",
+            "t.cpp:2:38: error: ifunc resolver function must return a pointer\n1 error generated.\n",
+            1,
+        ),
+        (
+            "int foo(int x) { return x; }\nnamespace n { int foo(int x) { return x; } }\n\
+             extern \"C\" int a(int) __attribute__((alias( \"fo\" \"o\" )));\n\
+             extern \"C\" int i(int) __attribute__((ifunc(\"foo\")));\n\
+             int v;\nextern int va __attribute__((alias(\"missing\")));\n",
+            "t.cpp:3:38: error: alias must point to a defined variable or function\n\
+             t.cpp:3:38: note: the function or variable specified in an alias must refer to its mangled name\n\
+             t.cpp:3:38: note: function by that name is mangled as \"_Z3fooi\"\n\
+             t.cpp:3:38: note: function by that name is mangled as \"_ZN1n3fooEi\"\n\
+             t.cpp:4:38: error: ifunc must point to a defined function\n\
+             t.cpp:4:38: note: the function specified in an ifunc must refer to its mangled name\n\
+             t.cpp:4:38: note: function by that name is mangled as \"_Z3fooi\"\n\
+             t.cpp:4:38: note: function by that name is mangled as \"_ZN1n3fooEi\"\n\
+             t.cpp:6:30: error: alias must point to a defined variable or function\n\
+             t.cpp:6:30: note: the function or variable specified in an alias must refer to its mangled name\n\
+             3 errors generated.\n",
+            1,
+        ),
+        (
+            "extern \"C\" int impl(int x) { return x; }\n\
+             int g(int) asm(\"impl\") __attribute__((ifunc(\"r\")));\n\
+             extern \"C\" void *r() { return 0; }\n",
+            "t.cpp:2:5: error: definition with same mangled name 'impl' as another definition\n\
+             t.cpp:1:16: note: previous definition is here\n1 error generated.\n",
+            1,
+        ),
+        (
+            "extern \"C\" int impl(int x) { return x; }\n\
+             extern \"C\" __attribute__((weak)) int w(int) __attribute__((alias(\"impl\")));\n\
+             extern \"C\" int a(int) __attribute__((alias(\"w\")));\n\
+             extern \"C\" __attribute__((section(\"s1\"))) int sa(int) __attribute__((alias(\"impl\")));\n\
+             extern \"C\" __attribute__((weak)) int wi(int) __attribute__((alias(\"r\")));\n\
+             extern \"C\" int i2(int) __attribute__((ifunc(\"wi\")));\n\
+             extern \"C\" __attribute__((section(\"s3\"))) int i3(int) __attribute__((ifunc(\"r\")));\n\
+             extern \"C\" void *r() { return 0; }\n\
+             int gv = 1;\nextern int gs __attribute__((section(\"s2\"), alias(\"gv\")));\n",
+            "t.cpp:3:38: warning: alias will always resolve to impl even if weak definition of w is overridden [-Wignored-attributes]\n\
+             t.cpp:4:27: warning: alias will not be in section 's1' but in the same section as the aliasee [-Wignored-attributes]\n\
+             t.cpp:6:39: warning: ifunc will always resolve to r even if weak definition of wi is overridden [-Wignored-attributes]\n\
+             t.cpp:7:27: warning: ifunc will not be in section 's3' but in the same section as the resolver [-Wignored-attributes]\n\
+             t.cpp:10:30: warning: alias will not be in section 's2' but in the same section as the aliasee [-Wignored-attributes]\n\
+             5 warnings generated.\n",
+            0,
+        ),
+    ];
+    let messages = |s: &str| -> String {
+        s.lines()
+            .filter(|l| l.starts_with("t.cpp:") || l.ends_with("generated."))
+            .map(|l| format!("{l}\n"))
+            .collect()
+    };
+    for (src, want, code) in cases {
+        std::fs::write(d.join("t.cpp"), src).unwrap();
+        let _ = std::fs::remove_file(d.join("t.ll"));
+        let o = kiln_in(&d, &["-S", "-emit-llvm", "t.cpp"]);
+        let got = text(&o.stderr);
+        assert_eq!(messages(&got), want, "{src}");
+        assert_eq!(o.status.code(), Some(code), "{src}");
+        assert_eq!(d.join("t.ll").exists(), code == 0, "{src}");
+        if have("clang++-19") {
+            let c = Command::new("clang++-19")
+                .args(["-S", "-emit-llvm", "-o", "c.ll", "t.cpp"])
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert_eq!(text(&c.stderr), got, "clang++-19: {src}");
+        }
+    }
+}
+
 /// clang `err_duplicate_mangled_name` (spec/codegen.md "Duplicate mangled
 /// names", WP-492): a definition whose symbol (an asm label, or a name
 /// equal to another entity's mangled name) is already defined by another

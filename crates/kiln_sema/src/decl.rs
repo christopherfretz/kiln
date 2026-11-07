@@ -10096,8 +10096,55 @@ impl Sema<'_, '_> {
                 self.ast.exprs.string_lit(lit).raw()
             }
         };
-        let node = AttrNode { kind, syntax, flags: 0, loc, a, b: 0 };
+        // `alias` / `ifunc`: `b` is one past the attribute's closing `)`,
+        // the end of the range codegen's mangled-name fix-it replaces
+        // (clang `AA->getRange()`).
+        let b = match (kind, args.first()) {
+            (AttrKind::ALIAS | AttrKind::IFUNC, Some(AttrArg::Expr(e))) => {
+                self.close_paren_after(self.begin_loc(*e)).to_raw()
+            }
+            _ => 0,
+        };
+        let node = AttrNode { kind, syntax, flags: 0, loc, a, b };
         Some(self.ast.attrs.push(node))
+    }
+
+    /// One past the `)` that closes an attribute whose string-literal
+    /// argument starts at `at` (the literal's pieces and whitespace
+    /// skipped), or `at` when that cannot be measured (a macro, a raw
+    /// string).
+    fn close_paren_after(&self, at: Loc) -> Loc {
+        let sm = self.diags.sm();
+        if at.is_macro() {
+            return at;
+        }
+        let Some((file, pos)) = sm.offset_of(at) else { return at };
+        let text = sm.text(file).as_bytes();
+        let start = pos as usize;
+        let mut i = start;
+        loop {
+            while text.get(i).is_some_and(u8::is_ascii_whitespace) {
+                i += 1;
+            }
+            // An encoding prefix, then `"..."` with escapes.
+            while text.get(i).is_some_and(|c| matches!(c, b'u' | b'U' | b'L' | b'8')) {
+                i += 1;
+            }
+            if text.get(i) != Some(&b'"') {
+                break;
+            }
+            i += 1;
+            while let Some(&c) = text.get(i) {
+                i += if c == b'\\' { 2 } else { 1 };
+                if c == b'"' || c == b'\n' {
+                    break;
+                }
+            }
+        }
+        match text.get(i) {
+            Some(b')') => u32::try_from(i + 1 - start).map_or(at, |n| at.with_offset(n)),
+            _ => at,
+        }
     }
 
     /// clang `min_vector_width(N)` (`handleMinVectorWidthAttr`): exactly

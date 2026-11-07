@@ -19,7 +19,7 @@ use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::{AttrId, StringLitId};
 use kiln_ast::{DeclId, ids::RawId as _};
-use kiln_diag::{Diag, DiagId, Severity};
+use kiln_diag::{Diag, DiagId, FixIt, Severity};
 use kiln_llvm::{AliasId, Attr, AttrKind as LAttr, Linkage, TypeId, Value, ValueRef};
 use kiln_source::fx::FxHashSet;
 use kiln_source::{Loc, Span};
@@ -54,6 +54,19 @@ impl Cg<'_> {
                     let l = StringLitId::from_raw(a.a)?;
                     Some((a.kind == AttrKind::IFUNC, l, a.loc))
                 })
+        })
+    }
+
+    /// One past the `)` of `first`'s `alias` / `ifunc` attribute (recorded
+    /// by Sema in the node's `b`).
+    fn alias_attr_end(&self, first: DeclId) -> Option<Loc> {
+        let ast = self.ast;
+        ast.redecls_of(first).find_map(|r| {
+            ast.lists
+                .iter::<AttrId>(ast.attrs.of_decl(r))
+                .map(|a| *ast.attrs.get(a))
+                .find(|a| matches!(a.kind, AttrKind::ALIAS | AttrKind::IFUNC) && a.b != 0)
+                .map(|a| Loc::from_raw(a.b))
         })
     }
 
@@ -256,7 +269,7 @@ impl Cg<'_> {
                 _ => true,
             };
             if declaration {
-                self.alias_undefined(a, at, ifunc);
+                self.alias_undefined(a, first, at, ifunc);
                 continue;
             }
             if ifunc {
@@ -329,8 +342,9 @@ impl Cg<'_> {
     /// clang `checkAliasedGlobal` for an undefined aliasee: the error, the
     /// mangled-name note, and a note naming each emitted declaration whose
     /// identifier is the target, with its symbol.
-    fn alias_undefined(&mut self, a: AliasId, at: Loc, ifunc: bool) {
+    fn alias_undefined(&mut self, a: AliasId, first: DeclId, at: Loc, ifunc: bool) {
         let ast = self.ast;
+        let range_end = self.alias_attr_end(first).unwrap_or(at);
         let target = self.global_name(self.m.resolve(self.m.alias(a).aliasee()));
         let mut diag = Diag::new(DiagId::cg_alias_to_undefined, Span::empty(at))
             .arg(u32::from(ifunc))
@@ -355,9 +369,12 @@ impl Cg<'_> {
             }
             let name = mangle::mangle_decl(ast, &mut self.anon, d);
             if shown.insert(name.clone()) {
+                let kw = if ifunc { "ifunc" } else { "alias" };
+                let fix = FixIt::replace(Span::new(at, range_end), format!("{kw}(\"{name}\")"));
                 diag = diag.with_note(
                     Diag::new(DiagId::note_alias_mangled_name_alternative, Span::empty(at))
-                        .arg(name),
+                        .arg(name)
+                        .fixit(fix),
                 );
             }
         }
