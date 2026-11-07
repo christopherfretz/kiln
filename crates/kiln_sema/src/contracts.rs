@@ -428,6 +428,27 @@ impl Sema<'_, '_> {
         !self.ast.types.effective_quals(t).is_const()
     }
 
+    /// The non-static data member `e` (`m` or `this->m`) names, when it
+    /// is const only because `this` points to const in a contract
+    /// predicate ([expr.prim.this]/2): a member declared neither const
+    /// nor of reference type, accessed through `this`.
+    pub(crate) fn contract_this_member(&self, e: ExprId) -> Option<DeclId> {
+        let x = self.ast.exprs.get(e);
+        if x.kind() != ExprKind::MemberExpr || !x.has(kiln_ast::expr::ExprFlags::ARROW) {
+            return None;
+        }
+        let obj = self.ignore_paren_imp_casts(self.ast.exprs.operand(e));
+        if self.ast.exprs.get(obj).kind() != ExprKind::CXXThisExpr {
+            return None;
+        }
+        let field = self.ast.exprs.decl(e);
+        let ty = self.ast.decls.get(field).ty()?;
+        (self.ast.decls.get(field).kind() == DeclKind::Field
+            && !self.ast.types.is_reference(ty)
+            && !self.ast.types.effective_quals(ty).is_const())
+        .then_some(field)
+    }
+
     /// The function contract assertions of pattern `pdef`, from the
     /// declaration of it that carries them.
     pub(crate) fn pattern_contracts(&self, pdef: DeclId) -> Option<(DeclId, Vec<StmtId>)> {

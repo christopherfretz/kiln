@@ -2678,6 +2678,14 @@ impl Sema<'_, '_> {
                 // [expr.prim.id.unqual]/6-7 (spec/contracts.md §5.2).
                 let msg = self.diag(DiagId::sema_contract_const_modify, loc).arg(self.decl_name(d));
                 self.emit(msg);
+            } else if !self.contract_ctx.is_empty()
+                && let Some(field) = self.contract_this_member(base)
+            {
+                // [expr.prim.this]/2 (P2900R14): `this` points to const
+                // in a contract predicate (spec/contracts.md §5.2).
+                let msg =
+                    self.diag(DiagId::sema_contract_const_modify, loc).arg(self.decl_name(field));
+                self.emit(msg);
             } else if self.ast.exprs.get(base).kind() == ExprKind::DeclRefExpr
                 && self.ast.exprs.get(base).has(ExprFlags::REFERS_TO_ENCLOSING)
                 && let d = self.ast.exprs.decl(base)

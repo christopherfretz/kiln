@@ -1,0 +1,67 @@
+Dumping test:
+NamespaceDecl test
+|-FunctionDecl f 'int (const int)'
+| |-ParmVarDecl used x 'const int'
+| |-ContractAssertStmt pre
+| | `-BinaryOperator 'bool' '>'
+| |   |-ImplicitCastExpr 'int' <LValueToRValue>
+| |   | `-DeclRefExpr 'const int' lvalue ParmVar 'x' 'const int'
+| |   `-IntegerLiteral 'int' 0
+| `-ContractAssertStmt post
+|   |-ContractResultNameDecl referenced r
+|   `-BinaryOperator 'bool' '>'
+|     |-ImplicitCastExpr 'int' <LValueToRValue>
+|     | `-DeclRefExpr 'const int' lvalue ContractResultName 'r'
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-DeclRefExpr 'const int' lvalue ParmVar 'x' 'const int'
+|-FunctionDecl f 'int (const int)'
+| |-ParmVarDecl used x 'const int'
+| |-ContractAssertStmt pre
+| | `-BinaryOperator 'bool' '>'
+| |   |-ImplicitCastExpr 'int' <LValueToRValue>
+| |   | `-DeclRefExpr 'const int' lvalue ParmVar 'x' 'const int'
+| |   `-IntegerLiteral 'int' 0
+| |-ContractAssertStmt post
+| | |-ContractResultNameDecl referenced r
+| | `-BinaryOperator 'bool' '>'
+| |   |-ImplicitCastExpr 'int' <LValueToRValue>
+| |   | `-DeclRefExpr 'const int' lvalue ContractResultName 'r'
+| |   `-ImplicitCastExpr 'int' <LValueToRValue>
+| |     `-DeclRefExpr 'const int' lvalue ParmVar 'x' 'const int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator 'int' '+'
+|       |-ImplicitCastExpr 'int' <LValueToRValue>
+|       | `-DeclRefExpr 'const int' lvalue ParmVar 'x' 'const int'
+|       `-IntegerLiteral 'int' 1
+|-FunctionDecl g 'int (int)'
+| |-ParmVarDecl used x 'int'
+| `-ContractAssertStmt pre
+|   `-BinaryOperator 'bool' '!='
+|     |-ImplicitCastExpr 'int' <LValueToRValue>
+|     | `-DeclRefExpr 'const int' lvalue ParmVar 'x' 'int'
+|     `-IntegerLiteral 'int' 0
+|-FunctionDecl g 'int (int)'
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-ImplicitCastExpr 'int' xvalue <NoOp>
+|         `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+`-CXXRecordDecl struct S definition
+  |-FieldDecl referenced m 'int'
+  `-CXXMethodDecl get 'int (int) const' implicit-inline
+    |-ParmVarDecl used a 'int'
+    |-ContractAssertStmt pre
+    | `-BinaryOperator 'bool' '>'
+    |   |-ImplicitCastExpr 'int' <LValueToRValue>
+    |   | `-DeclRefExpr 'const int' lvalue ParmVar 'a' 'int'
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-MemberExpr 'const int' lvalue ->m
+    |       `-CXXThisExpr 'const S *' implicit this
+    `-CompoundStmt
+      `-ReturnStmt
+        `-ImplicitCastExpr 'int' <LValueToRValue>
+          `-ImplicitCastExpr 'int' xvalue <NoOp>
+            `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+
