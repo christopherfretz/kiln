@@ -70,22 +70,6 @@ The loop:
 
 ## Results
 
-<!-- oss:entt -->
-### entt (v3.15.0)
-
-| | kiln | clang-19 |
-|---|---|---|
-| configure | ok | ok |
-| build | ok | ok |
-| TUs ok / failed | 73 / 0 | 73 / 0 |
-| links ok / failed | 68 / 0 | 68 / 0 |
-| tests passed / total | 68 / 68 | 68 / 68 |
-| wall | 58 s | 31 s |
-| peak TU RSS | 328 MB | 468 MB |
-
-Failure clusters (kiln): none.
-<!-- /oss:entt -->
-
 <!-- oss:googletest -->
 ### googletest (v1.17.0)
 
@@ -188,3 +172,19 @@ Reduced repros (WP-666, kiln at main f3751eadd):
 
 Failure clusters (kiln): none.
 <!-- /oss:spdlog -->
+
+<!-- oss:entt -->
+### entt (v3.15.0)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 73 / 0 | 73 / 0 |
+| links ok / failed | 68 / 0 | 68 / 0 |
+| tests passed / total | 68 / 68 | 68 / 68 |
+| wall | 58 s | 31 s |
+| peak TU RSS | 328 MB | 468 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:entt -->
