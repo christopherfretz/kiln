@@ -1516,9 +1516,15 @@ impl Substituter<'_, '_, '_> {
             // A resolved callee rebuilt because of an argument (a
             // function-name-dependent default argument): the call is redone
             // on the function itself, so it adds its default arguments again.
+            // A builtin's name (`BuiltinFnToFnPtr`) is called again as the
+            // builtin: a custom-checked one (`__builtin_constant_p`) keeps
+            // its own argument checks, not its declared type's ellipsis.
             let ex = &self.sema.ast.exprs;
             if n.kind() == ExprKind::ImplicitCastExpr
-                && ex.cast_kind(c) == CastKind::FunctionToPointerDecay
+                && matches!(
+                    ex.cast_kind(c),
+                    CastKind::FunctionToPointerDecay | CastKind::BuiltinFnToFnPtr
+                )
                 && ex.get(ex.operand(c)).kind() == ExprKind::DeclRefExpr
             {
                 let o = ex.operand(c);

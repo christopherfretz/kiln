@@ -6332,6 +6332,12 @@ explicit specialization errors remain. The blockers are:
   defaulted argument) and the `std::source_location::__impl` check.
   `Sema::fold_lone_invalid` keeps clang's single "subexpression not
   valid" note for `__builtin_unreachable`.
+  An instantiation that rebuilds a call of a custom-checked builtin
+  calls the builtin's name again (the `BuiltinFnToFnPtr` cast is
+  stripped, as the `FunctionToPointerDecay` of a function's name is), so
+  it goes through `builtin_custom_call` once more: `__builtin_constant_p(s)`
+  of a non-trivial class object `s` in a template is no
+  `-Wnon-pod-varargs` error (WP-683).
 - Landed (WP-153): `__builtin_isfpclass(x, mask)` (custom: `x` a real
   floating type, else `floating point classification requires argument
   of floating point type`; `mask` an integer constant expression in
