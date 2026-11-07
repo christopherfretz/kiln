@@ -833,7 +833,13 @@ impl Sema<'_, '_> {
             };
             let (p0, a0, tdf) = if decl {
                 let p0 = self.with_exc_spec(pfn, ExcSpec::None);
-                (p0, self.with_exc_spec(a, ExcSpec::None), TdfFlags::TOP_LEVEL_PARAMETER_TYPE_LIST)
+                // A declaration's type adopts the template's GNU
+                // `noreturn` (clang `adjustCCAndNoReturn`; spec/types.md
+                // §5.4): the specialization merges it like a redeclaration.
+                let nr = self.ast.types.proto(p0).is_some_and(|p| p.info().noreturn());
+                let a0 = self.with_exc_spec(a, ExcSpec::None);
+                let a0 = self.with_fn_noreturn(a0, nr, false).unwrap_or(a0);
+                (p0, a0, TdfFlags::TOP_LEVEL_PARAMETER_TYPE_LIST)
             } else {
                 let tdf = TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT
                     .union(TdfFlags::TOP_LEVEL_PARAMETER_TYPE_LIST);

@@ -427,6 +427,16 @@ enum ExcSpec /* tag */ {
   (clang's `updateExceptionSpec` mutates; we cannot and need not).
 - Calling conventions other than the target default only arise through
   attributes (`Attributed` sugar over a `Function` whose `cc` differs).
+- `noreturn` is GNU `noreturn` (`__attribute__((noreturn))`,
+  `[[gnu::noreturn]]`; not `[[noreturn]]` or `_Noreturn`), a function type
+  attribute as in clang (WP-700): written on a declarator it sets the bit on
+  the declared function type or on the function type a pointer, reference
+  or member pointer designates, and on a lambda's call operator.
+  Redeclarations and explicit specializations/instantiations of a function
+  merge it (clang `MergeFunctionDecl`, `adjustCCAndNoReturn`); a function
+  pointer conversion may drop it but never add it (clang
+  `IsFunctionConversion`); a call through a `noreturn` function type ends
+  control flow. Mangling ignores it.
 
 ## 6. Flags
 `TypeFlags` (u8), computed at construction as the union over operands plus

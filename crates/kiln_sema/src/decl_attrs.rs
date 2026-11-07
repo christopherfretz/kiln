@@ -1091,6 +1091,74 @@ impl Sema<'_, '_> {
         Some(self.ast.types.qualify(built, ty.quals()))
     }
 
+    /// GNU `noreturn` (`__attribute__((noreturn))`, `[[gnu::noreturn]]`)
+    /// written on a declaration (clang `handleFunctionTypeAttr`,
+    /// `AT_NoReturn`): a function type attribute, so the declared type's
+    /// function type (directly or through one pointer, reference or
+    /// member pointer) becomes `noreturn` (spec/types.md §5.4). The
+    /// attribute stays in `attrs`: [`Sema::check_decl_attrs`] validates
+    /// it and a function keeps it ([`kiln_ast::Ast::is_noreturn_fn`]).
+    /// `[[noreturn]]` and `_Noreturn` appertain to the function and do
+    /// not change its type.
+    pub(crate) fn apply_noreturn_attrs(&mut self, ty: QualType, attrs: &[AttrId]) -> QualType {
+        let gnu = attrs.iter().any(|&a| {
+            let n = self.ast.attrs.get(a);
+            n.kind == AttrKind::NORETURN && n.is_gnu_spelling()
+        });
+        if !gnu || self.is_error_type(ty) {
+            return ty;
+        }
+        self.with_fn_noreturn(ty, true, true).unwrap_or(ty)
+    }
+
+    /// `ty` (a function type, or a pointer, reference or member pointer
+    /// to one when `outer`) with its function type's `noreturn` bit set
+    /// to `v`; None when it is no such type or already has it.
+    pub(crate) fn with_fn_noreturn(
+        &mut self,
+        ty: QualType,
+        v: bool,
+        outer: bool,
+    ) -> Option<QualType> {
+        if let TypeView::Function(p) = self.ast.types.view(ty.ty()) {
+            if p.info().noreturn() == v {
+                return None;
+            }
+            let params = self.ast.types.params(&p).to_vec();
+            let exc = self.ast.types.exc_spec(&p);
+            let f = self.ast.types.function(p.ret(), &params, p.info().with_noreturn(v), exc);
+            return Some(self.ast.types.qualify(f, ty.quals()));
+        }
+        if self.ast.types.is_function(ty) {
+            // Sugar (a typedef, `decltype`) over a function type.
+            let c = self.ast.types.canonical(ty);
+            return self.with_fn_noreturn(c, v, false);
+        }
+        if !outer {
+            return None;
+        }
+        let built = match self.ast.types.canonical_view(ty) {
+            TypeView::Pointer(p) => {
+                let f = self.with_fn_noreturn(p, v, false)?;
+                self.ast.types.pointer_to(f)
+            }
+            TypeView::LValueRef(p) => {
+                let f = self.with_fn_noreturn(p, v, false)?;
+                self.ast.types.lvalue_ref_to(f)
+            }
+            TypeView::RValueRef(p) => {
+                let f = self.with_fn_noreturn(p, v, false)?;
+                self.ast.types.rvalue_ref_to(f)
+            }
+            TypeView::MemberPointer { pointee, class } => {
+                let f = self.with_fn_noreturn(pointee, v, false)?;
+                self.ast.types.member_pointer(f, class)
+            }
+            _ => return None,
+        };
+        Some(self.ast.types.qualify(built, ty.quals()))
+    }
+
     /// A written GNU `nothrow` [`Sema::apply_nothrow_attrs`] did not
     /// apply: kept on a function (a declarator path that does not apply
     /// type attributes; [`kiln_ast::Ast`]'s `NOTHROW` check still makes

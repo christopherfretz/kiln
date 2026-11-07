@@ -251,6 +251,30 @@ impl Sema<'_, '_> {
             .collect()
     }
 
+    /// The call operator's type `ty` as written, adjusted: clang
+    /// `getDummyLambdaType` makes it `auto () const -> R` with no
+    /// parameter-declaration-clause, and a GNU `noreturn` makes it a
+    /// `noreturn` function type, and so the conversion function's
+    /// pointer (spec/types.md §5.4).
+    fn adjust_lambda_call_type(
+        &mut self,
+        mut ty: QualType,
+        specs: &LambdaSpecifiers,
+        d: &Declarator,
+    ) -> QualType {
+        if !specs.explicit_params
+            && let TypeView::Function(p) = self.ast.types.view(ty.ty())
+            && !p.info().trailing_return()
+        {
+            let params = self.ast.types.params(&p).to_vec();
+            let exc = self.ast.types.exc_spec(&p);
+            let info = p.info().with_trailing_return(true);
+            ty = self.ast.types.function(p.ret(), &params, info, exc);
+        }
+        let written: Vec<AttrId> = specs.attrs.iter().chain(&d.attrs).copied().collect();
+        self.apply_noreturn_attrs(ty, &written)
+    }
+
     /// The *lambda-declarator* `d` (a member declarator whose single
     /// function chunk holds the parameters, the *noexcept-specifier* and
     /// the trailing return type) with specifiers `specs`: declares the
@@ -301,7 +325,7 @@ impl Sema<'_, '_> {
                 _ => None,
             })
             .unwrap_or(lbracket);
-        let mut ty = self.type_for_declarator_at(base, lparen, &d);
+        let ty = self.type_for_declarator_at(base, lparen, &d);
         // [temp.variadic]/5: a parameter or return type naming a pack it
         // does not expand (`[](Ts a) {}`, also after the varargs `...` of
         // `[](Ts a...)`) makes the lambda-expression contain an
@@ -311,17 +335,7 @@ impl Sema<'_, '_> {
         {
             top.has_packs = true;
         }
-        // clang `getDummyLambdaType`: with no parameter-declaration-clause
-        // the call operator's type is `auto () const -> R`.
-        if !specs.explicit_params
-            && let TypeView::Function(p) = self.ast.types.view(ty.ty())
-            && !p.info().trailing_return()
-        {
-            let params = self.ast.types.params(&p).to_vec();
-            let exc = self.ast.types.exc_spec(&p);
-            let info = p.info().with_trailing_return(true);
-            ty = self.ast.types.function(p.ret(), &params, info, exc);
-        }
+        let ty = self.adjust_lambda_call_type(ty, specs, &d);
         // [dcl.constexpr]/1: `consteval` makes the call operator an
         // immediate function; otherwise it is constexpr if it can be.
         let kind = if specs.consteval.is_some() {
