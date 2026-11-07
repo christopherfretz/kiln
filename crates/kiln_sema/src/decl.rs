@@ -9236,6 +9236,19 @@ impl Sema<'_, '_> {
             return NameClass::Type(ty, d);
         }
         match k {
+            // A concept or variable template template parameter's name is
+            // a concept-name or template-name of that kind (P2841R7
+            // [temp.param]/8).
+            DeclKind::TemplateTemplateParm
+                if self.ttp_kind(d) == kiln_ast::templates::TtpKind::Concept =>
+            {
+                return NameClass::Concept(d);
+            }
+            DeclKind::TemplateTemplateParm
+                if self.ttp_kind(d) == kiln_ast::templates::TtpKind::Variable =>
+            {
+                return NameClass::VarTemplate(d);
+            }
             DeclKind::ClassTemplate
             | DeclKind::TypeAliasTemplate
             | DeclKind::TemplateTemplateParm

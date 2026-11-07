@@ -206,7 +206,9 @@ impl Sema<'_, '_> {
     fn params_match(&mut self, x: DeclId, y: DeclId, which: u8) -> bool {
         let (kx, ky) = (self.kind_of(x), self.kind_of(y));
         let (lx, ly) = (self.ast.decls.get(x).loc(), self.ast.decls.get(y).loc());
-        if kx != ky {
+        // P2841R7 [temp.over.link]/6.1: a type, concept and variable
+        // template template parameter are three different kinds.
+        if kx != ky || self.ttp_kind(x) != self.ttp_kind(y) {
             let d = self.diag(DiagId::sema_template_param_different_kind, lx).arg(which);
             let note = self.diag(DiagId::note_template_prev_declaration, ly).arg(which);
             self.emit(d.with_note(note));

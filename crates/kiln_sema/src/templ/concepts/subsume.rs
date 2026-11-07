@@ -70,10 +70,33 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether normal form `n` is eligible for subsumption
+    /// ([temp.constr.order]/3): it contains no concept-dependent
+    /// constraint.
+    fn eligible_for_subsumption(&self, n: NormId) -> bool {
+        let mut seen = kiln_source::fx::FxHashSet::default();
+        let mut work = vec![n];
+        while let Some(x) = work.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            match self.inst.concepts.norm.get(x) {
+                NormNode::Atomic { .. } => {
+                    if self.is_concept_dependent(x) {
+                        return false;
+                    }
+                }
+                NormNode::And(a, b) | NormNode::Or(a, b) => work.extend([a, b]),
+            }
+        }
+        true
+    }
+
     /// Whether the entity with constraints `ca` (key `a`) is more
     /// constrained than the one with `cb` (key `b`)
-    /// ([temp.constr.order]/3): its normal form subsumes the other's and
-    /// not conversely. No constraints is the weakest.
+    /// ([temp.constr.order]/4, /5): it is at least as constrained (its
+    /// normal form is eligible for subsumption and subsumes the other's)
+    /// and not conversely. No constraints is the weakest.
     pub(crate) fn more_constrained(
         &mut self,
         a: DeclId,
@@ -86,7 +109,11 @@ impl Sema<'_, '_> {
         match (p, q) {
             (Some(_), None) => true,
             (None, _) => false,
-            (Some(p), Some(q)) => self.subsumes(p, q) && !self.subsumes(q, p),
+            (Some(p), Some(q)) => {
+                self.eligible_for_subsumption(p)
+                    && self.subsumes(p, q)
+                    && !(self.eligible_for_subsumption(q) && self.subsumes(q, p))
+            }
         }
     }
 
@@ -241,13 +268,31 @@ impl Sema<'_, '_> {
             return Vec::new();
         }
         let Some((a, b)) = pair else { return Vec::new() };
+        let (la, lb) = (self.atom_note_loc(a), self.atom_note_loc(b));
         vec![
-            self.diag(DiagId::note_ambiguous_atomic_constraints, self.begin_loc(a)),
-            self.diag(
-                DiagId::note_ambiguous_atomic_constraints_similar_expression,
-                self.begin_loc(b),
-            ),
+            self.diag(DiagId::note_ambiguous_atomic_constraints, la),
+            self.diag(DiagId::note_ambiguous_atomic_constraints_similar_expression, lb),
         ]
+    }
+
+    /// Where a "similar constraint" note points for atom `e`: its begin,
+    /// except that a fold atom (a concept-dependent fold, kept whole)
+    /// points at its pattern, as clang's fold-expanded constraint does.
+    fn atom_note_loc(&self, e: ExprId) -> kiln_source::Loc {
+        use kiln_ast::expr::{ExprDeps, ExprKind};
+        use kiln_ast::ids::RawId;
+        let n = *self.ast.exprs.get(e);
+        if n.kind() == ExprKind::CXXFoldExpr {
+            let (l, r) = (ExprId::from_raw(n.a()), ExprId::from_raw(n.b()));
+            let pat = [l, r]
+                .into_iter()
+                .flatten()
+                .find(|&x| self.ast.exprs.get(x).deps().contains(ExprDeps::UNEXPANDED_PACK));
+            if let Some(p) = pat {
+                return self.begin_loc(p);
+            }
+        }
+        self.begin_loc(e)
     }
 
     /// clang's `subsumes(PDNF, QCNF, E)` over precomputed clauses, with
