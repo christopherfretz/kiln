@@ -1162,18 +1162,14 @@ pub fn implicit_convert(
         let at = s.begin_loc(e);
         return user_conversion(s, e, to, ctx, at);
     }
-    match standard_conversion(s, e, to, ctx) {
-        Some(scs) => {
-            exc_spec_compat(s, e, from, to, ctx)?;
-            apply_standard_conversion(s, e, &scs, to)
-        }
-        None => {
-            if let Some(x) = retarget_template_id(s, e, to, ctx) {
-                return implicit_convert(s, x, to, ctx);
-            }
-            Err(conversion_error(s, e, to, ctx))
-        }
+    if let Some(scs) = standard_conversion(s, e, to, ctx) {
+        exc_spec_compat(s, e, from, to, ctx)?;
+        return apply_standard_conversion(s, e, &scs, to);
     }
+    if let Some(x) = retarget_template_id(s, e, to, ctx) {
+        return implicit_convert(s, x, to, ctx);
+    }
+    Err(conversion_error(s, e, to, ctx))
 }
 
 /// [except.spec]/5 (C++14) for the conversions clang checks
