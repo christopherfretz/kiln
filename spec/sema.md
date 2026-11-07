@@ -4931,6 +4931,32 @@ and aggregate element types.
 - **Deallocation function for new** ([expr.new]/28): for a placement
   form, the one with the same extra parameters; otherwise the sized usual
   one (with `align_val_t` when aligned).
+  **Placement selection (P3769R1, Croydon DR; WP-757;
+  `Sema::matching_operator_delete`, `new_delete.rs`).** For a placement
+  form, every candidate found by the lookup whose parameter types after
+  the first match the allocation function's is collected: a non-template
+  directly, a template through deduction from those parameter types (so
+  `template<int = 0> void operator delete(void*, Tag)` matches). With
+  more than one match, those whose constraints are not satisfied are
+  dropped (clang does not filter non-templates; kiln does, as the
+  wording's "suitable" requires). Exactly one left is the deallocation
+  function; none means none is called. Several left is clang's
+  `-Wambiguous-delete` warning at the new-expression, "multiple suitable
+  'operator delete' functions for 'T'; no 'operator delete'
+  function will be invoked if initialization throws an exception", with a
+  "member 'operator delete' declared here" note per candidate in
+  declaration order (`T` the allocated type), and no deallocation
+  function. A candidate with an extra trailing parameter that has a
+  default argument does not match. In
+  C++14 and later a single match that is a usual (sized) deallocation
+  function of a placement new-expression is clang's error "'new'
+  expression with placement arguments refers to non-placement 'operator
+  delete'" with an "'operator delete' declared here" note, unless a
+  class-scope unsized usual form corresponds to it. All of this runs
+  only with exceptions enabled (`Sema::exceptions`): then the selected
+  function is access-checked, a deleted one is the use-of-deleted error,
+  and it is odr-used. Tests:
+  `tests/conformance/expr.new/p3769-placement-delete-{selection-run,deleted}.cpp`.
 - **Initializer** ([expr.new]/23): none is default-initialization (a
   `const` scalar or array is an error: `default initialization of an
   object of const type 'const int[]'`, the array type printed for array

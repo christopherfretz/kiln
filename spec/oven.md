@@ -730,6 +730,29 @@ asks whether the evaluation is manifestly constant-evaluated.
   statement, so a trial fold of a libstdc++ `char_traits::length` took
   the constant-evaluation loop and the folded result replaced the run-time
   call. Tests: `tests/conformance/stmt.if.consteval/`.
+- **P4143R0 "Constant evaluation fixes"** (Croydon DR, every `-std=`;
+  WP-757). The paper rewords [lex.phases]/1.7 and [expr.const] without
+  changing what kiln does, so it is pinned by tests only:
+  - *Each* manifestly constant-evaluated expression is evaluated during
+    translation ([lex.phases]/1.7), and its side effects (a consteval
+    block's `define_aggregate`) are complete from every point from which
+    the evaluation is reachable: a complete-class context of the class
+    holding the consteval block sees the completed type, a nested class's
+    static member initializer before the block does not (spec/sema.md
+    "Other complete-class contexts"; spec/consteval-blocks.md).
+  - A manifestly constant-evaluated expression is evaluated even in an
+    unevaluated operand ([expr.const]/27 footnote): a template argument
+    in `decltype`, `sizeof` or `noexcept` is evaluated and its failure
+    diagnosed, while a call to an immediate function in an unevaluated
+    operand is not an immediate invocation and is not evaluated. The
+    *static_assert-message* of a holding assertion is the exception (an
+    unevaluated operand, spec/sema.md §4.6).
+  - `std::is_constant_evaluated()` is true while determining whether an
+    initializer is constant-initializable ([expr.const]/5.1 notes; the
+    `const_context` rule above), and a `constexpr` local of a recursive
+    function is a distinct object per invocation, created at run time.
+  - Tests: `tests/conformance/lex.phases/p4143-*.cpp`,
+    `tests/conformance/expr.const/p4143-*.cpp`.
 - **Memoization:** a function whose body uses `IsConstEval` for the
   builtin is never memoized (the warning is a side effect); every memo
   key carries the context (bit 31 of the function word), so a call cached
