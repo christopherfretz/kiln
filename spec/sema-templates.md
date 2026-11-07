@@ -7625,8 +7625,17 @@ declarator scopes.**
   constructor, so `c ? B() : D()` with `D(B)` is a `B` (WP-669,
   tests/conformance/expr.cond/p4-base-not-converted-to-derived.cpp);
   /4.3.3, implicit conversion to the other's prvalue type. If both directions succeed, the result is
-  `sema_conditional_ambiguous`; if one does, it is applied. Gap: the
-  /6 overloaded-operator candidates are not tried. An arm converted
+  `sema_conditional_ambiguous`; if one does, it is applied. If neither
+  does and the arms still differ in type, /6 resolves among the built-in
+  `?:` candidates of [over.built]/27-28 (clang `FindConditionalOverload`:
+  `T(T, T)` for each pointer, pointer-to-member and scoped enumeration
+  type an arm converts to, then `LR(L, R)` for the promoted arithmetic
+  pairs; `Sema::conditional_overload`) and converts both arms to the
+  best candidate's parameter types, so a `ref<expr>` converting to
+  `expr *` and an `app *` give `expr *`. An ambiguous choice is
+  `sema_conditional_ambiguous_ovl`; none viable leaves the arms to the
+  incompatible-operands error (WP-799,
+  tests/conformance/expr.cond/p6-builtin-candidates-{run,errors}.cpp). An arm converted
   to a class type (not a reference) has exactly that type, cv included
   (clang's `NoOp` cast): `b ? V() : cref` with `const V &cref` has two
   `const V` arms and is a `const V` prvalue, so `auto &r = b ? V() :

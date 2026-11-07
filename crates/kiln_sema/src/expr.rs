@@ -4197,6 +4197,19 @@ impl Sema<'_, '_> {
         } else {
             (t, f)
         };
+        // [expr.cond]/6: still of different types with a class arm, the
+        // built-in candidates choose the conversions.
+        let (tt, ft) = (self.ety(t), self.ety(f));
+        let (t, f) = if !self.ast.types.same_type(tt, ft)
+            && (self.ast.types.as_record(tt).is_some() || self.ast.types.as_record(ft).is_some())
+        {
+            match self.conditional_overload(CondOps { c, c2, t, f, loc }) {
+                Ok(x) => x,
+                Err(res) => return res,
+            }
+        } else {
+            (t, f)
+        };
         let ops = CondOps { c, c2, t, f, loc };
         if let Some(res) = self.same_category_conditional(ops) {
             return res;
@@ -4269,6 +4282,56 @@ impl Sema<'_, '_> {
             return Err(self.recover_err(&[c, t, f], loc));
         }
         Ok((t, f))
+    }
+
+    /// [expr.cond]/6: arms of different types, one of class type, after
+    /// /4: overload resolution among the built-in `?:` candidates
+    /// ([over.built]/27-28) converts both arms to the best candidate's
+    /// parameter types (clang `FindConditionalOverload`), so
+    /// `b ? ref : (D *)p` with `ref` converting to `B *` gives `B *`. No
+    /// viable candidate leaves the arms as they are (the incompatible
+    /// operands error follows); an ambiguous choice is an error.
+    fn conditional_overload(&mut self, o: CondOps) -> Result<(ExprId, ExprId), ExprId> {
+        use crate::overload::{OvlOutcome, SetKind};
+        let CondOps { c, t, f, loc, .. } = o;
+        let types = [self.ety(t), self.ety(f)];
+        let mut set = self.begin_set(SetKind::Normal, loc);
+        set.object = Some(self.arg_info(t));
+        let mark = self.push_call_args(&mut set, &[f], &[None]);
+        self.add_conditional_builtin_candidates(&mut set, &types);
+        let out = self.resolve_set(&mut set);
+        self.ovl.lists.truncate(mark);
+        let res = match out {
+            OvlOutcome::Success(b) => {
+                let tys = set.cand(b).builtin;
+                let mut arms = [t, f];
+                for (a, ty) in arms.iter_mut().zip(tys) {
+                    match conv::implicit_convert(self, *a, ty, ConvCtx::Initialization) {
+                        Ok(x) if !self.is_err_expr(x) => *a = x,
+                        Ok(_) => {
+                            self.end_set(set);
+                            return Err(self.recover_err(&[c, t, f], loc));
+                        }
+                        Err(err) => {
+                            self.end_set(set);
+                            return Err(self.conv_failed(&err, t, f, loc));
+                        }
+                    }
+                }
+                Ok((arms[0], arms[1]))
+            }
+            OvlOutcome::Ambiguous => {
+                let msg = self
+                    .diag(DiagId::sema_conditional_ambiguous_ovl, loc)
+                    .arg(self.ty_arg(types[0]))
+                    .arg(self.ty_arg(types[1]));
+                self.emit(msg);
+                Err(self.recover_err(&[c, t, f], loc))
+            }
+            OvlOutcome::NoViable | OvlOutcome::Deleted(_) => Ok((t, f)),
+        };
+        self.end_set(set);
+        res
     }
 
     /// [expr.cond]/4.3: an arm converted to a class type `ty` (not a

@@ -289,17 +289,8 @@ impl Sema<'_, '_> {
             return;
         }
         set.builtin_op = Some(op);
-        let mut vis = Quals::CONST;
-        for &t in types {
-            vis |= self.visible_vr(t);
-        }
         let logical = matches!(op, OO::Exclaim | OO::AmpAmp | OO::PipePipe);
-        let mut sets: Vec<TypeSet> = Vec::with_capacity(types.len());
-        for &t in types {
-            let mut s = TypeSet::default();
-            self.add_types_converted_from(&mut s, t, true, logical, vis);
-            sets.push(s);
-        }
+        let (sets, vis) = self.builtin_type_sets(types, logical);
         if !sets.iter().any(|s| s.non_record) && !logical {
             return;
         }
@@ -452,6 +443,65 @@ impl Sema<'_, '_> {
             OO::ArrowStar if n == 2 => self.arrow_star(&mut b),
             _ => {}
         }
+        self.ovl.builtin_memo = memo;
+    }
+
+    /// The types each operand converts to, and the qualifiers visible
+    /// through its class conversions (clang `AddBuiltinOperatorCandidates`'s
+    /// `CandidateTypes` and `VisibleTypeConversionsQuals`).
+    fn builtin_type_sets(&mut self, types: &[QualType], logical: bool) -> (Vec<TypeSet>, Quals) {
+        let mut vis = Quals::CONST;
+        for &t in types {
+            vis |= self.visible_vr(t);
+        }
+        let mut sets: Vec<TypeSet> = Vec::with_capacity(types.len());
+        for &t in types {
+            let mut s = TypeSet::default();
+            self.add_types_converted_from(&mut s, t, true, logical, vis);
+            sets.push(s);
+        }
+        (sets, vis)
+    }
+
+    /// Adds the built-in candidates of the conditional operator for the
+    /// arms of types `types` ([expr.cond]/6, [over.built]/27-28; clang
+    /// `addConditionalOperatorOverloads` then
+    /// `addGenericBinaryArithmeticOverloads`): `T(T, T)` for each
+    /// pointer, pointer-to-member and scoped enumeration type `T` an arm
+    /// converts to, and `LR(L, R)` for each pair of promoted arithmetic
+    /// types. The set's object is the second operand, its one argument
+    /// the third; the `bool` condition is not a parameter.
+    pub(crate) fn add_conditional_builtin_candidates(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        types: &[QualType; 2],
+    ) {
+        set.builtin_op = None;
+        let (sets, vis) = self.builtin_type_sets(types, false);
+        if !sets.iter().any(|s| s.non_record) {
+            return;
+        }
+        let arith_or_enum = sets.iter().any(|s| s.arith_or_enum);
+        let mut memo = std::mem::take(&mut self.ovl.builtin_memo);
+        memo.clear();
+        let mut b = Builder { set, memo: &mut memo, vis, arith_or_enum, sets: &sets };
+        let mut added: Vec<QualType> = Vec::new();
+        for i in 0..2 {
+            let mut tys = b.sets[i].ptrs.clone();
+            tys.extend_from_slice(&b.sets[i].mptrs);
+            if self.std >= kiln_lex::Std::Cxx11 {
+                let scoped = b.sets[i].enums.iter().copied();
+                tys.extend(scoped.filter(|&e| crate::conv::is_scoped_enum(self, e)));
+            }
+            for t in tys {
+                if !added.contains(&t) {
+                    added.push(t);
+                    self.add_builtin(&mut b, &[t, t]);
+                }
+            }
+        }
+        let ar = self.arith_types();
+        self.arith_pairs(&mut b, &ar, 0);
         self.ovl.builtin_memo = memo;
     }
 
