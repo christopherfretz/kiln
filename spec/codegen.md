@@ -2972,7 +2972,13 @@ reference bound to such a full-expression (`const auto& r = co_await
 a;` with an lvalue-reference `await_resume`) reloads its bound address
 the same way before the reference is stored (clang
 `EmitExprWithCleanupsLValue`; `Cg::emit_ref_binding`; WP-726,
-`expr.await/reference-result-bound-to-reference.cpp`).
+`expr.await/reference-result-bound-to-reference.cpp`). A prvalue use
+of a glvalue `co_await` (`auto v = co_await a;` with a reference
+`await_resume`, the operand of `CK_LValueToRValue`) loads the referee
+through the resume call's lvalue, as for a reference-returning call, so
+the value and not its address is spilled (clang `emitSuspendExpression`
+visits the resume call; `Cg::emit_glvalue_load`; WP-789,
+`expr.await/reference-result-loaded-by-value-run.cpp`).
 
 **`CoroEnd` cleanup (EH only, clang `CallCoroEnd`).** On unwinding,
 `llvm.coro.end(ptr null, i1 true, token none)`. For LLVM 19 it returns
