@@ -144,6 +144,7 @@ impl Oven {
             // is rebuilt now, so the rest of this evaluation sees it
             // complete (spec/reflection.md §6.2; O(1) when nothing did).
             self.types.refresh(b);
+            self.mp_refresh(b);
         }
         let cur = self.stack[self.stack.len() - 1].func;
         let top = fb + self.funcs[cur as usize].nregs as usize + 1;

@@ -645,6 +645,14 @@ less-than. When the name is followed by `<`, clang's diagnostic
 treat 'f' as a dependent template name") is emitted and the parser
 recovers as if `template` had been written.
 
+At instantiation, `T::template f<A>` names a template when the lookup of
+`f` in the substituted `T` finds any template: an overload set that also
+has non-template functions resolves the template-id over the whole set
+(`member_template_named`; WP-792,
+`tests/conformance/temp.names/template-kw-mixed-overload-set.cpp`). Only
+a set without a template gets "'f' following the 'template' keyword
+does not refer to a template".
+
 ### 2.4 Dependent nodes built at parse time
 
 All of these are built by sema actions, which compute dependence as in
@@ -1146,6 +1154,7 @@ never recomputed (ast.md §5). The rules follow [temp.dep.expr],
 | `UnresolvedLookupExpr` | TYPE \| VALUE \| INST if any explicit template arg is dependent; otherwise `requires_adl` decides at the `CallExpr` |
 | a lambda in a dependent context | INST |
 | a named or C-style cast to a dependent type (`dependent_cast`) | its type's deps; the value category is the target's, read through sugar (`static_cast<result_type>(b)` with `typedef X<R>& result_type;` is an lvalue, rebuilt as a reference cast; libstdc++ future:751; WP-332, test `expr.static.cast/libstdcxx-dependent-cast-to-reference-typedef.cpp`) |
+| `CXXUnresolvedConstructExpr` (`T(args)`, `T{args}`) | its type's deps; an argument's TYPE becomes VALUE unless the type is an undeduced placeholder (`auto(x)`, CTAD), which stays TYPE-dependent ([temp.dep.expr]/3: `u16(t.v)` has type `u16`, so `RP d(u16(t.v));` is direct-initialized at definition; WP-775, `temp.dep.expr/functional-cast-not-type-dependent-run.cpp`; the placeholder case WP-782, `temp.dep.expr/p3-placeholder-functional-cast-type-dependent-run.cpp`) |
 | any of the above with an error operand | plus ERROR |
 
 INST alone means the expression mentions a template parameter but neither
@@ -1565,6 +1574,16 @@ template), so `I` in `template<class I> struct cmp<I, void> { int f()
 chrono:2449, ranges:1888. Tests:
 `temp.spec.partial.member/libstdcxx-member-partial-spec-params-in-body.cpp`,
 `temp.spec.partial.member/libstdcxx-constrained-member-partial-spec.cpp`.
+
+Out-of-line member template definitions ([temp.local]/7; WP-782): in
+`template<unsigned size> int P::f()` the definition's own template
+parameters (depth at or above the class's template levels) are found
+before the members of `P` and its bases, although their scope lies
+outside the re-entered class scope; the enclosing class template's own
+parameters are still hidden by members (`own_template_param_outside`
+in `kiln_sema/src/lookup.rs`; LLVM `AArch64InstPrinter.cpp`
+`printGPRSeqPairsClassOperand<unsigned size>`). Test:
+`temp.local/p7-member-template-param-not-hidden-out-of-line.cpp`.
 
 Out-of-line members of a partial specialization whose argument list is
 the primary's own (`template<class V> requires fw<V> class C<V>`;
@@ -2041,6 +2060,12 @@ class name" at `B`
   template argument too (the parser's `names_member_template`; libstdc++
   `_UnClos<__negate, std::_Expr, _Clos>` in `_Expr`, WP-332). Test:
   `tests/conformance/temp.local/libstdcxx-qualified-template-name-in-own-class.cpp`.
+  The same holds for a deduced class type placeholder: `::n::A{a, b}`
+  or `n::A(a)` inside `A`'s own definition, in an expression or a
+  decl-specifier, deduces `A`'s arguments from its initializer as it does
+  outside (the parser's `names_ctad_template`; mp-units' delegating
+  constructor `quantity(::mp_units::quantity{v, R2{}})`, WP-792). Test:
+  `tests/conformance/temp.local/qualified-name-in-own-definition-ctad.cpp`.
 - The injected-class-name of a base class template *specialization*,
   found by lookup in a derived class (`V` inside `struct B : V<long>`,
   `B::V`, `Doc::V` with `Doc` a typedef of a derived specialization) and
@@ -2074,6 +2099,15 @@ class name" at `B`
 - If its signature does not depend on the template's parameters, the
   second specialization to instantiate it reports "redefinition of 'f'"
   (clang). The note shows the first instantiation.
+- A friend function template defined in a class template has its
+  specializations instantiated from that definition even when the class
+  specialization was instantiated before the body was parsed (a body of
+  the class naming `M<int>`, [class.mem.general]/7): the parser records
+  the saved body (`Sema::act_on_delayed_body`), and the instantiated
+  friend is linked to the pattern as if the body were there (clang's
+  `willHaveBody`), rather than left a declaration whose use is "function
+  'pow' with deduced return type cannot be used before it is defined"
+  (WP-792; `temp.friend/friend-template-body-names-own-specialization.cpp`).
 - A friend function declared (unqualified) in a templated class
   redeclares nothing when the template is defined: it is not linked
   to an earlier declaration of the same name, nor checked against an
@@ -2352,7 +2386,12 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
   direct-list-initialization ([dcl.init.list]/3.8, an explicit
   constructor is viable) and `= {X::v}` copy-list (WP-690;
   `tests/conformance/class.static.data/template-direct-list-init.cpp`,
-  `template-copy-list-init-errors.cpp`).
+  `template-copy-list-init-errors.cpp`). A member whose type comes from
+  its initializer is never deferred: a placeholder (`auto`, `auto*`,
+  `const auto&`), a deduced class type (`std::array const tbl =
+  f<T>();`, clang's `isUndeducedType`; WP-792,
+  `tests/conformance/temp.inst/static-member-deduced-class-type.cpp`) or
+  an array of unknown bound.
 
 This is why the chain `R<N>::v = R<N-1>::v` recurses one frame per level
 in clang (the d1 test in §10.2). Kiln matches its notes exactly.
@@ -4112,8 +4151,9 @@ guides.
    and the function parameter lists (all declared parameters, after the
    /3 object parameter and reversal) have the same length (/6.1), the
    corresponding template parameters are equivalent ignoring their
-   type-constraints (same kind, packness, non-type parameter type,
-   template template parameter head) and the positionally corresponding
+   type-constraints (same kind, packness, non-type parameter type
+   ignoring a placeholder's constraint, template template parameter
+   head) and the positionally corresponding
    parameter types are the same ignoring top-level cv (/6.2.2), and, for
    a conversion, the conversion types are the same. Otherwise neither is
    more specialized: for CTAD the later [over.match.best]/2.11-2.13
@@ -4344,6 +4384,21 @@ The `SpecKind` transitions are those of §4.5.
   be automatic ("reference to 'x' is not a constant expression"). The
   value is the built-in `&` of the bound glvalue, re-interned at the
   reference type so it prints as `T<gi>`.
+- **Disallowed bases** ([temp.arg.nontype]/6, `args.rs`
+  `invalid_template_arg_base`): a pointer argument, or the address a
+  reference argument binds, whose base is a string literal, a `typeid`
+  result or a temporary is an error, "{pointer|reference} to
+  [subobject of ]{string literal|type_info object|temporary object} is
+  not allowed in a template argument" (clang
+  `err_constexpr_invalid_template_arg`); "subobject of" when the value
+  is not the whole object (a decayed literal, a non-zero offset). For an
+  explicitly-specified argument of a function template the error is
+  deduction's invalid-argument failure, so `make<"ab">` drops a
+  `template <auto p>` candidate and picks one whose parameter is a class
+  type (WP-792; `temp.arg.nontype/string-literal-typeid-argument.cpp`,
+  `string-literal-argument-sfinae-run.cpp`). Gap: clang words a
+  `__func__` argument "predefined '__func__' variable"; kiln says
+  "string literal".
 - **Oven.** `var_info` treats the object as a usable constant whose value
   is its `ConstValueId`; `lv()` addresses it as a global.
 - **Codegen.** `param_object_global`: a `linkonce_odr dso_local constant`
@@ -5097,8 +5152,24 @@ the index of the failed requirement.
 - **`C auto` in a parameter.** This creates an invented parameter with
   that constraint (§2.6).
 - **`C auto x = e;`** checks `C` against the deduced type (§6.3).
-- **A constrained NTTP `C auto V`.** The constraint is checked when the
-  argument is converted.
+- **A constrained NTTP `C<A…> auto V`.** The parameter gets the
+  immediately-declared constraint `C<decltype(V), A…>` ([temp.param]/5,
+  clang's `AttachTypeConstraint`; a fold `(C<decltype(Vs), A…> && ...)`
+  for a pack), stored as its type-constraint, so it is an associated
+  constraint: it is checked with the template's other constraints,
+  decides partial-specialization matching and, through subsumption,
+  ordering (WP-792). The type of `V` takes part in a profile and in the
+  /6.2.2 parameter comparison with its type-constraint ignored
+  ([temp.over.link]/6.2, clang's `getUnconstrainedType`), so
+  `decltype(V)` names one type in `C1<decltype(V)>` and
+  `C2<decltype(V)>` of two templates. Other constrained placeholders
+  (`C auto&`, `C auto*`, `C decltype(auto)`) are checked against the
+  deduced type when the argument is converted. A type-constraint naming
+  an earlier parameter (`template<int N, C<N> auto V>`) has its
+  arguments substituted with the prior arguments, like clang's
+  `TransformAutoType`, so the placeholder is no longer dependent and the
+  argument for `V` is deduced and evaluated: `box<7, make()>` and
+  `box<7, zero>` are one specialization (WP-792).
 
 ### 8.7 Note chains (clang's exact texts; used by §10.4)
 

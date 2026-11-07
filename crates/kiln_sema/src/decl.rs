@@ -1803,7 +1803,13 @@ impl Sema<'_, '_> {
             default_arg: DefaultArg::None,
             default_loc: Loc::INVALID,
             range: (ds.loc, d.name_loc()),
-            type_loc: ds.type_loc.unwrap_or(ds.loc),
+            // A constrained placeholder of a non-type template parameter:
+            // its concept name, where the immediately-declared constraint
+            // is reported ([temp.param]/5).
+            type_loc: match Self::placeholder_constraint_loc(ds, d) {
+                Some(l) if nttp => l,
+                _ => ds.type_loc.unwrap_or(ds.loc),
+            },
             ref_loc: if d.ellipsis.is_none() { Self::outer_ref_loc(d) } else { Loc::INVALID },
             chunk_loc: if d.ellipsis.is_none() { Self::inner_chunk_loc(d) } else { Loc::INVALID },
             decl: None,
@@ -9058,10 +9064,12 @@ impl Sema<'_, '_> {
     /// ([temp.inst]/2 happens when the nested-name-specifier is parsed),
     /// so the name is classified in the member's pattern, as a
     /// template-id qualifier is (`L<int>::P::I`). The specialization
-    /// itself (`D::P`) is the WP-276 case above. `None` when `q` is not
-    /// such a class.
+    /// itself (`D::P`) is the WP-276 case above. A member enumeration
+    /// (`N::US::Lazy`, `US` of a base `G<N>`) is classified in its pattern
+    /// too, so `N c(N::US::Lazy);` declares a variable (WP-782). `None`
+    /// when `q` is not such a class or enumeration.
     fn classify_uninstantiated_member(&self, q: DeclId, name: Symbol) -> Option<NameClass> {
-        if self.kind_of(q) != DeclKind::CXXRecord
+        if !matches!(self.kind_of(q), DeclKind::CXXRecord | DeclKind::Enum)
             || self.ast.definition(q).is_some()
             || self.ast.spec_info(q).is_some()
         {

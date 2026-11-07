@@ -320,12 +320,22 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// Whether `t` is a placeholder under pointer and reference
-    /// declarators (`auto`, `auto*`, `const auto&`).
+    /// declarators (`auto`, `auto*`, `const auto&`), or a deduced class
+    /// type (`std::array const`, [dcl.type.class.deduct]; clang's
+    /// `isUndeducedType`).
     fn has_placeholder(ast: &kiln_ast::Ast, t: QualType) -> bool {
         let mut cur = t;
         for _ in 0..256 {
+            if matches!(
+                ast.types.canonical_view(cur),
+                TypeView::DeducedTemplateSpecialization { .. }
+            ) {
+                return true;
+            }
             match ast.types.view(cur.ty()) {
-                TypeView::Auto { .. } => return true,
+                TypeView::Auto { .. } | TypeView::DeducedTemplateSpecialization { .. } => {
+                    return true;
+                }
                 TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
                 _ => return false,
             }

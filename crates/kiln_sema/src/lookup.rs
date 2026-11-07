@@ -413,6 +413,32 @@ impl Sema<'_, '_> {
             .map_or(hit, |e| e.1)
     }
 
+    /// A template parameter named `name` in a template parameter scope
+    /// outside class scope `i` (of class `entity`) that belongs to a
+    /// member of the class rather than to the class's own templates: its
+    /// depth is at least the class's template levels. Such scopes are
+    /// outside the class scope only for an out-of-line member definition.
+    fn own_template_param_outside(
+        &self,
+        i: usize,
+        entity: DeclId,
+        name: Symbol,
+        kind: LookupKind,
+    ) -> Option<DeclId> {
+        let mut outer = self.scopes[..i].iter().rev();
+        if !outer.clone().any(|s| s.kind == ScopeKind::TemplateParams) {
+            return None;
+        }
+        let levels = self.ctx_template_levels(entity);
+        outer.find_map(|s| {
+            let d = (s.kind == ScopeKind::TemplateParams)
+                .then(|| s.find(name, Ns::Ordinary))
+                .flatten()?;
+            let depth = self.ast.template_parm(d)?.depth;
+            (depth >= levels && self.accept(d, kind)).then_some(d)
+        })
+    }
+
     fn lookup_name_scoped(&self, dname: DeclName, kind: LookupKind, skip_records: bool) -> Found {
         let ident = dname.as_ident();
         let name = ident.unwrap_or(Symbol::from_index(0));
@@ -483,6 +509,17 @@ impl Sema<'_, '_> {
             if s.kind == ScopeKind::Record {
                 if skip_records {
                     continue;
+                }
+                // [temp.local]/7: in a member template defined outside its
+                // class, the class's members (and its bases') do not hide
+                // the member's own template parameters, whose scopes lie
+                // outside the re-entered class scope (`template <unsigned
+                // size> void P::f() { size; }` with a base `size()`).
+                if kind != LookupKind::Tag
+                    && ident.is_some()
+                    && let Some(d) = self.own_template_param_outside(i, entity, name, kind)
+                {
+                    return self.filter(vec![d], kind);
                 }
                 let found = self.lookup_in_class_dn(entity, dname, kind);
                 if !found.is_empty() || found.ambiguity.is_some() {

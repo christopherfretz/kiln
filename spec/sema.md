@@ -417,6 +417,11 @@ residual` (docs/status/wp-184-oracle-switch.md).
   (WP-288; libc++ `rand.dist.norm.lognormal/param_types.pass.cpp`;
   `tests/conformance/temp.res/qualified-name-through-typedef.cpp`,
   `qualified-name-through-typedef-run.cpp`).
+  A member enumeration of a specialization that is not instantiated
+  yet is classified in its pattern the same way, so `N c(N::US::Lazy);`
+  (with `US` a member of the base `G<N>`) finds the enumerator and
+  declares a variable ([dcl.ambig.res]/1; WP-782,
+  `dcl.ambig.res/member-enum-of-base-specialization-enumerator-run.cpp`).
 - A nested-name-specifier component naming a class or enumeration that
   is declared but not defined ([basic.lookup.qual]/1, [class.mem]/1:
   a class is complete only after its definition) is "incomplete type
@@ -1182,7 +1187,11 @@ Redeclaration and linkage rules:
   (`copy_elision_candidate`), as in clang. Deduction runs when the body
   is instantiated, so a `return` in a discarded `if constexpr` branch
   never participates (libc++ `__get_comp_type`) and only a real
-  conflict between instantiated returns is reported. `return {…}` is
+  conflict between instantiated returns is reported. In a
+  non-templated function a `return` inside a discarded statement
+  (`in_discarded_statement`) likewise takes no part in deduction
+  ([dcl.spec.auto.general]/9) and its operand is left unconverted, as
+  in clang (WP-792). `return {…}` is
   still an error in the pattern. A call `x.g()` to a member whose
   return type is not yet deduced goes through `check_undeduced_use`
   (instantiating it when it is a specialization member) before
@@ -1700,7 +1709,11 @@ and returns the scope it names:
     class.union.anon/empty-anonymous-record-declares-nothing.cpp.
   - An anonymous struct outside a class is an error.
   - `act_on_finish_record_definition(r, then_semi)` sets `ANONYMOUS`
-    and `HAS_VARIANT_MEMBERS`.
+    and `HAS_VARIANT_MEMBERS`. The parser passes `then_semi` false for
+    a class defined in a type-id: `using I = struct {...};` names an
+    ordinary unnamed class, so a member of type `I` keeps its default
+    member initializer (WP-782). Test:
+    class.union.anon/alias-of-unnamed-class-is-not-anonymous-run.cpp.
 - **Unnamed tags named by a typedef** record their typedef with
   `set_typedef_for_anon` ([dcl.typedef]/9).
 
@@ -2960,6 +2973,10 @@ specification as written (`TypeNames` prints ` noexcept`,
   member function` under the `in instantiation of exception
   specification` note, as in clang (WP-290,
   `class.mem.general/static-member-noexcept-this-instantiation.cpp`).
+  Every implicit object member function gets one: a constructor,
+  destructor or conversion function's `noexcept(noexcept(m.f()))` names
+  its members as a member function's does (WP-792,
+  `except.spec/special-member-noexcept-this-instantiation.cpp`).
   `throw()`, `noexcept` and `noexcept(expr)` all go through this path.
 - *Needed*: `exc_spec_needed(f, loc)` runs at every use that marks a
   function referenced, including unevaluated operands such as
@@ -7199,6 +7216,13 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     For an enumeration with a fixed underlying type that includes
     [dcl.init.list]/3.8 (`E{v}`: `v` converted to the underlying type,
     narrowing rejected, then to `E`), as `E e{v};` does.
+    A class `T{y}` whose initialization elides to `y`'s conversion
+    function (an `ImplicitCastExpr` of `UserDefinedConversion`, not a
+    construct expression) is wrapped, as clang does, in a `NoOp`
+    `CXXFunctionalCastExpr` to `T`, so substitution of a pattern holding
+    it (`T2{TP{y}}`) converts to the written `T` again rather than
+    losing it with the stripped implicit cast (WP-792). Test:
+    `expr.type.conv/list-cast-conversion-function-in-template.cpp`.
   - `T(a, b)` (`act_on_paren_list_cast`) is ill-formed for a scalar.
     The expression-list may hold braced-init-lists (`T(a, {b})`, `T({})`).
     They are the placeholders of `act_on_braced_arg`, and the
@@ -7578,7 +7602,10 @@ same graph.
     `checkIncorrectLogicOperator`) prunes the other edge of an `if`, a
     loop, a `?:` or an `&&`/`||`. In the scan bits, a configuration
     value (clang `isConfigurationValue`) does not prune and an
-    `if constexpr` prunes nothing.
+    `if constexpr` prunes nothing. An `if` with a condition variable has
+    an unknown condition, except an `if constexpr`, whose condition is
+    folded even then: an instantiation keeps only one branch, and the
+    dropped one's edge must be dead for -Wreturn-type (WP-792).
   - An `if`/`while`/`for` condition (without a condition variable) that
     is `&&`/`||` is clang's `VisitLogicalOperator`. Each left operand's
     block ends in its operator, and the short-circuit edges go straight

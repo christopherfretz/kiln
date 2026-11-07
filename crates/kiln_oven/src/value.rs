@@ -755,6 +755,14 @@ impl Oven {
             && a.live
         {
             let ast = b.ast();
+            // Nor does the variable itself when it is `thread_local`
+            // (`S *self = this;` in an NSDMI, a `std::string`'s SSO
+            // pointer): the variable is dynamically initialized, once per
+            // thread, instead of from a `.tdata` image holding the main
+            // thread's address.
+            if ast.decls.var(d).is_some_and(|v| v.spec.tls() != kiln_ast::decl::TlsKind::None) {
+                return Err(Freeze::Fault(FailKind::NotConstant));
+            }
             return Ok(Scalar::Pointer {
                 ty: q,
                 base: PtrBase::Decl(ast.first(d)),

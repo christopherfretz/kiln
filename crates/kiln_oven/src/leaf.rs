@@ -163,6 +163,7 @@ impl Oven {
             return None;
         }
         self.types.refresh(b);
+        self.mp_refresh(b);
         let mut fx = Vec::new();
         let n = *b.ast().exprs.get(e);
         let r = if n.value_category().is_glvalue() {

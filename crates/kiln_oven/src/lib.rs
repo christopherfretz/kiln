@@ -1170,6 +1170,7 @@ impl Oven {
             return false;
         }
         self.types.refresh(bridge);
+        self.mp_refresh(bridge);
         self.begin_outermost(true, false, const_context);
         // clang requires no notes at all (`VarDecl::evaluateDestruction`).
         self.run.fold = false;
@@ -1381,6 +1382,7 @@ impl Oven {
     ) -> (Result<ConstValueId, EvalFailure>, Cost) {
         let start = Instant::now();
         self.types.refresh(bridge);
+        self.mp_refresh(bridge);
         let frozen0 = bridge.consts().content_bytes();
         let hits0 = self.memo.hits;
         let inner0 = std::mem::take(&mut self.inner);

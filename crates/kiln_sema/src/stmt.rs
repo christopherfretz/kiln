@@ -1413,6 +1413,14 @@ impl Sema<'_, '_> {
             return self.builder().return_stmt(value, None, loc);
         };
         if self.func.as_ref().is_some_and(|f| f.auto_ret.is_some()) {
+            // A return in a discarded statement of a non-templated
+            // function takes no part in return type deduction
+            // ([dcl.spec.auto.general]/9, [stmt.if]/2) and, as in clang,
+            // its operand is not converted to the deduced type.
+            if self.in_discarded_statement() && !self.in_template() {
+                let value = value.map(|e| self.act_on_full_expr(e));
+                return self.builder().return_stmt(value, None, loc);
+            }
             ret = self.deduce_return(value, loc);
         }
         // A `return` in a lambda whose call operator has a GNU
