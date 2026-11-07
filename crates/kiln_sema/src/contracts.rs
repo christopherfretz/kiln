@@ -324,7 +324,7 @@ impl Sema<'_, '_> {
         if self.ast.decls.function(f).is_none() {
             return;
         }
-        let first = self.ast.first(f);
+        let first = self.ast.contract_first(f);
         let first_list =
             if first == f { None } else { self.ast.decls.cold.contracts.get(first).copied() };
         if stmts.is_empty() {
@@ -345,10 +345,6 @@ impl Sema<'_, '_> {
         self.ast.decls.mark_function(f, FnSpec::new().with_has_contracts(true));
         if first != f {
             match first_list {
-                // A function template specialization's first declaration
-                // may be the one deduction made before its explicit
-                // specialization was declared (spec/contracts.md §9).
-                None if self.ast.spec_info(f).is_some() => {}
                 None => {
                     let msg = self
                         .diag(DiagId::sema_contract_redecl_adds, loc)
@@ -490,8 +486,11 @@ impl Sema<'_, '_> {
     pub(crate) fn check_coroutine_post_params(&mut self, f: DeclId) {
         // The seq is on `f` or, for a definition that omits it, on the
         // first declaration, whose parameters the predicates name.
-        let owner =
-            if self.ast.decls.cold.contracts.get(f).is_some() { f } else { self.ast.first(f) };
+        let owner = if self.ast.decls.cold.contracts.get(f).is_some() {
+            f
+        } else {
+            self.ast.contract_first(f)
+        };
         let stmts = self.function_contracts(owner);
         if stmts.is_empty() {
             return;
