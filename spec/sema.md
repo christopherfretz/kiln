@@ -3771,7 +3771,12 @@ the initializer, or after default initialization, and before the
     - unary and binary operators, including compound assignment (its
       computation type promotes the left operand's type, bit-fields
       by width, and an unscoped-enumeration left operand is then an
-      error: sema-conv.md §6)
+      error: sema-conv.md §6). `b += p` with a `bool b` and a pointer
+      (or array) `p` is valid ([expr.ass]/6, [conv.bool]): its
+      computation types are `int` and `p`'s pointer type, and the sum
+      converts back to `bool`. No other left type takes a pointer
+      (WP-787, `tests/conformance/expr.ass/bool-add-assign-pointer-run.cpp`).
+      The Oven rejects it as "subexpression not valid", as clang does.
     - `?:`, the comma operator
     - increment and decrement (of `bool`, or `_Atomic(bool)`: `++` is
       clang's DefaultError `-Wincrement-bool` extension and is then

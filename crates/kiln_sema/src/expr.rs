@@ -3602,6 +3602,21 @@ impl Sema<'_, '_> {
                 let p = conv::strip_cv(self, lt);
                 (r2, p, p)
             }
+            // [expr.ass]/6: `b += p` is `b = b + p`, and only a `bool`
+            // takes the pointer back ([conv.bool]); the computation is the
+            // promoted `b` plus `p` (clang's `CheckAdditionOperands` with
+            // `CompLHSTy`, then `CheckAssignmentOperands`).
+            BinaryOp::AddAssign
+                if (self.ast.types.is_pointer(rt) || self.ast.types.is_array(rt))
+                    && self.ast.types.same_unqualified(lt, QualType::BOOL) =>
+            {
+                let r2 = conv::usual_unary_conversions(self, r);
+                let p = conv::strip_cv(self, self.ety(r2));
+                if !self.check_pointer_arith(p, loc) {
+                    return self.recover_err(&[l, r], loc);
+                }
+                (r2, QualType::INT, p)
+            }
             BinaryOp::ShlAssign | BinaryOp::ShrAssign => {
                 let int_like = |s: &Self, t: QualType| {
                     s.ast.types.is_integral(t) || conv::is_unscoped_enum(s, t)
