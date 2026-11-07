@@ -417,6 +417,11 @@ residual` (docs/status/wp-184-oracle-switch.md).
   (WP-288; libc++ `rand.dist.norm.lognormal/param_types.pass.cpp`;
   `tests/conformance/temp.res/qualified-name-through-typedef.cpp`,
   `qualified-name-through-typedef-run.cpp`).
+  A member enumeration of a specialization that is not instantiated
+  yet is classified in its pattern the same way, so `N c(N::US::Lazy);`
+  (with `US` a member of the base `G<N>`) finds the enumerator and
+  declares a variable ([dcl.ambig.res]/1; WP-782,
+  `dcl.ambig.res/member-enum-of-base-specialization-enumerator-run.cpp`).
 - A nested-name-specifier component naming a class or enumeration that
   is declared but not defined ([basic.lookup.qual]/1, [class.mem]/1:
   a class is complete only after its definition) is "incomplete type

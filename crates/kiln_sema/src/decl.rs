@@ -9058,10 +9058,12 @@ impl Sema<'_, '_> {
     /// ([temp.inst]/2 happens when the nested-name-specifier is parsed),
     /// so the name is classified in the member's pattern, as a
     /// template-id qualifier is (`L<int>::P::I`). The specialization
-    /// itself (`D::P`) is the WP-276 case above. `None` when `q` is not
-    /// such a class.
+    /// itself (`D::P`) is the WP-276 case above. A member enumeration
+    /// (`N::US::Lazy`, `US` of a base `G<N>`) is classified in its pattern
+    /// too, so `N c(N::US::Lazy);` declares a variable (WP-782). `None`
+    /// when `q` is not such a class or enumeration.
     fn classify_uninstantiated_member(&self, q: DeclId, name: Symbol) -> Option<NameClass> {
-        if self.kind_of(q) != DeclKind::CXXRecord
+        if !matches!(self.kind_of(q), DeclKind::CXXRecord | DeclKind::Enum)
             || self.ast.definition(q).is_some()
             || self.ast.spec_info(q).is_some()
         {
