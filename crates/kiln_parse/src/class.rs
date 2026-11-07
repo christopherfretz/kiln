@@ -679,8 +679,15 @@ impl Parser<'_, '_> {
     /// checked against the seq of its first declaration: the const rule
     /// on postcondition parameters holds on every declaration
     /// ([dcl.contract.func]/7).
-    fn check_friend_without_contracts(&mut self, f: Option<DeclId>, d: &Declarator) {
-        if f.is_some() {
+    fn check_friend_without_contracts(
+        &mut self,
+        is_fn: bool,
+        ds: &DeclSpec,
+        parts: &LateFnParts,
+        f: Option<DeclId>,
+        d: &Declarator,
+    ) {
+        if is_fn && ds.friend.is_some() && parts.contracts.is_none() && f.is_some() {
             self.s.act_on_function_contracts(f, &[], ContractDeclKind::Declaration, d.loc);
         }
     }
@@ -1575,9 +1582,7 @@ impl Parser<'_, '_> {
             let (decl, target) =
                 if width_failed { (None, None) } else { self.act_on_member(&ds, base, &d) };
             self.record_declarator_end(target, &d);
-            if is_fn && ds.friend.is_some() && parts.contracts.is_none() {
-                self.check_friend_without_contracts(target, &d);
-            }
+            self.check_friend_without_contracts(is_fn, &ds, &parts, target, &d);
             if let Some(x) = decl {
                 self.s.act_on_group_declarator(&mut group, x);
             }
@@ -1669,9 +1674,7 @@ impl Parser<'_, '_> {
         let (_, target) = self.act_on_member(ds, base, d);
         if friend {
             self.s.act_function_def_next(false);
-            if parts.contracts.is_none() {
-                self.check_friend_without_contracts(target, d);
-            }
+            self.check_friend_without_contracts(true, ds, &parts, target, d);
         }
         let mut parts = parts;
         // [dcl.contract.res]/2: a deduced return type is known after the

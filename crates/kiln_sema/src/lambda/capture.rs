@@ -121,7 +121,9 @@ impl Sema<'_, '_> {
     /// duration ([basic.stc.auto]).
     pub(crate) fn has_local_storage(&self, d: DeclId) -> bool {
         match self.kind_of(d) {
-            DeclKind::ParmVar => true,
+            // A result binding is a local entity ([basic.pre]/9): a lambda
+            // in its postcondition captures it (spec/contracts.md §5).
+            DeclKind::ParmVar | DeclKind::ContractResultName => true,
             DeclKind::Var => {
                 let Some(v) = self.ast.decls.var(d) else { return false };
                 v.spec.tls() == kiln_ast::decl::TlsKind::None && !self.has_static_storage(d)
@@ -131,9 +133,6 @@ impl Sema<'_, '_> {
             DeclKind::Binding => {
                 self.ast.decls.binding_decomp(d).is_some_and(|v| self.has_local_storage(v))
             }
-            // A result binding is a local entity ([basic.pre]/9): a lambda
-            // in its postcondition captures it (spec/contracts.md §5).
-            DeclKind::ContractResultName => true,
             _ => false,
         }
     }

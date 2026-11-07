@@ -408,12 +408,11 @@ impl Ast {
         if first == f {
             return f;
         }
-        let explicit = self
-            .spec_info(first)
-            .is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
-            || self
-                .member_spec_info(first)
-                .is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization);
+        let explicit =
+            self.spec_info(first).is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
+                || self
+                    .member_spec_info(first)
+                    .is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization);
         if !explicit {
             return first;
         }
