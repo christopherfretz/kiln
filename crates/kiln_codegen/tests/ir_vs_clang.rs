@@ -94,10 +94,6 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // slice.
     ("module_gmf_vtable", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("module_gmf_vtable", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    // clang 20+ coerces an AArch64 aggregate of pointers to `ptr` /
-    // `[N x ptr]` instead of `i64` / `[N x i64]` (the same registers).
-    ("srcloc_immediate", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("struct_pointers", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     // clang 22 names members of an unnamed class `(unnamed struct)::N` in
     // IR type names (19: `(anonymous struct)`).
     ("lambda_names", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
@@ -130,14 +126,12 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     ("delete_oz", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // clang 22 gives a coroutine's `await_suspend` wrappers internal (19:
     // private) linkage, and LLVM 22's coroutine lowering reshapes the
-    // resume/destroy functions; kiln's coroutine IR follows clang 19. On
-    // AArch64 the ABI slice also differs by the `coroutine_handle<>`
-    // (aggregate of a pointer) coercion to `ptr` noted above.
-    ("coro_aligned_alloc", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    // resume/destroy functions; kiln's coroutine IR follows clang 19.
+    ("coro_aligned_alloc", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("coro_aligned_alloc", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("coro_await_suspend", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    ("coro_await_suspend", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("coro_await_suspend", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("coro_only_destroy_when_complete", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    ("coro_only_destroy_when_complete", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("coro_only_destroy_when_complete", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     // `__builtin_coro_noop`'s `__NoopCoro_ResumeDestroy` is made by the
     // `opt-19` CoroEarly pass kiln runs (private; LLVM 22: internal).

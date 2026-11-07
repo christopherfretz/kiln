@@ -5,8 +5,6 @@
 // member) cannot throw and is `nounwind`, as clang emits it; a template
 // argument keeps none, so a call through a deduced `F` may throw. kiln
 // read the canonical pointee, which has no specification (WP-751).
-// min-oracle 22: below C++20 clang 19 emits no empty `!llvm.linker.options`
-// and `-fclang-compat=19` codegen does.
 //@ expect: ir
 //@ min-oracle: 22
 //@ std: c++14

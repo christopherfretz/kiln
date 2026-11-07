@@ -81,6 +81,21 @@ Delayed default arguments of a call operator in a class definition use
 `act_on_start_delayed_default_arg(p)` / `act_on_end_delayed_default_arg()`
 to set the numbering context of lambdas inside them.
 
+Before C++23 the parser accepts two C++23 lambda forms as extensions, as
+clang does (WP-769, P2173R1 and P1102R2):
+- an *attribute-specifier-seq* (`[[...]]` or `alignas`) directly after
+  the *lambda-introducer* gets `parse_ext_decl_attrs_on_lambda`
+  (`-Wc++23-lambda-attributes`, inside `-Wc++23-extensions`) at the
+  attribute;
+- a *lambda-declarator* without a parameter clause that starts with a
+  specifier (`mutable`, `constexpr`, `consteval`, `static`), `->`,
+  `__attribute__`, `[[`, `noexcept` or `requires` gets
+  `parse_ext_lambda_missing_parens` (`-Wc++23-extensions`) with a `() `
+  insertion fix-it at that token
+  (`at_lambda_specifier_without_params`).
+Both are warnings only; the lambda means the same as in C++23
+(`tests/conformance/expr.prim.lambda/lambda-cxx23-extensions-cxx17.cpp`).
+
 ## 3. The closure type
 
 `RecordData.lambda = Some(LambdaId)`; `DefinitionBits::LAMBDA` marks it,

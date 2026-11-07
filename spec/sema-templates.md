@@ -377,6 +377,17 @@ parameter shall not have associated constraints; a requires-clause in its
 accepts both silently: kiln follows the wording here. A variable template
 template parameter's template-head may carry a requires-clause.
 
+**Concept heads** ([temp.param]/14). A concept's template-head is checked
+like a primary class template's for packs: a template parameter pack
+before the last parameter is "template parameter pack must be the last
+template parameter" (`check_template_param_list` with
+`DeclKind::Concept`), so `template <class T, template <class> concept...
+Cs> concept all_of` is fine and `template <template <class> concept...
+Cs, class T>` is not. Like clang 22, the rule that a default argument be
+followed only by defaults is not applied to a concept's head (clang
+checks it only for the "ordered" kinds). Test
+`temp.param/p14-concept-pack-last.cpp` (WP-771).
+
 **Names** ([temp.names], [temp.param]/8). `classify_name` reports a concept
 template parameter as `NameClass::Concept` and a variable template
 template parameter as `NameClass::VarTemplate`, so `C<T>` parses as a
@@ -421,8 +432,13 @@ parameter's template-head is formed as arguments to the argument template, so a 
 parameter of the argument absorbs them and an argument that cannot accept
 them is "too few/many template arguments for concept 'Same'" with the
 "different template parameters" notes, as in clang 22. The kinds of the
-parameters *inside* nested template template parameters are not compared
-(follow-up).
+parameters inside nested template template parameters are compared too
+([temp.arg.template]/3 with [temp.param]/1, WP-771; `ttp22_arg_fits`):
+for `template <template <template <class> concept> class> class P`, an
+argument whose corresponding parameter is `template <class> class` or
+`template <class> auto` is the same "does not refer to a ..." error at the
+argument's parameter, with clang 22's notes. Test
+`temp.arg.template/p1-nested-ttp-kind-mismatch.cpp`.
 
 **Deduction** ([temp.deduct.type]/8-9). A `TemplateName` argument in P
 that names a concept or variable template template parameter deduces the
@@ -432,9 +448,24 @@ with `Q<sz>{}`, deduces `V = sz`.
 
 **Equivalence** ([temp.over.link]/6.1): §6.8.
 
-**Feature macro.** `__cpp_template_parameters` stays undefined: the paper
-is partial (see `docs/STANDARD_SUPPORT.md` P2841R7). clang 22 does not
-define it either.
+**Unexpanded packs** ([temp.variadic]/12). A requires-clause
+(`act_on_requires_clause`, from `parse_requires_clause`) and a concept's
+constraint-expression (`act_concept`) are checked like a full-expression:
+`requires C<Ts>` or `requires Cs<T>` with `Ts`/`Cs` unexpanded is
+"expression contains unexpanded parameter pack 'Ts'" at the expression's
+start, and the clause becomes a `RecoveryExpr` (never satisfied). Tests
+`temp.variadic/p12-unexpanded-requires-clause.cpp`,
+`temp.variadic/p12-unexpanded-requires-clause-concept-pack.cpp`
+(WP-771). Not done: a lambda's requires-clause naming an enclosing pack
+is reported as an empty expansion, and a lambda's own pack in its
+requires-clause is not diagnosed (lambda pack tracking,
+`kiln_parse/src/lambda.rs`).
+
+**Feature macro.** `__cpp_template_parameters` is 202502L at `-std=c++26`
+and `-fclang-compat=22` (`kiln_pp` `kiln_features`, WP-771); at
+`-fclang-compat=19` the forms are rejected and the macro is undefined.
+clang 22 implements the paper without defining it. Tests
+`cpp.predefined/template-parameters-macro*.cpp`.
 
 Tests: `temp.param/concept-variable-ttp.cpp`,
 `temp.param/concept-variable-ttp-cxx23.cpp`,
@@ -4738,9 +4769,10 @@ cost is small.
 
 ```rust
 pub struct NormId(NonZeroU32);
-pub enum NormNode {                         // 12 B, hash-consed in NormTable
-    Atomic { expr: ExprId, mapping: ArgListId },   // ExprId of the expression as written; mapping canonical
+pub enum NormNode {                         // 16 B, hash-consed in NormTable
+    Atomic { expr: ExprId, mapping: ArgListId },   // ExprId of the expression as written; mapping canonical, used parameters only
     And(NormId, NormId), Or(NormId, NormId),
+    Fold { and: bool, pattern: NormId, packs: u32 }, // P2963 fold expanded constraint; packs = interned pack set
 }
 ```
 
@@ -4777,13 +4809,51 @@ identical iff:
 - their mappings are equivalent, i.e. the same canonical `ArgListId`
   (comparing dependent args by `ProfileId`).
 
+The mapping holds only the parameters the expression names
+([temp.constr.atomic]/1; clang's `MarkUsedTemplateParameters`): when an
+atom is formed under a concept's mapping (`intern_atom`), the arguments of
+the concept's parameters the expression does not name are null. So
+`sizeof(T) > 1` of `C<T, int>` and of `C<T, long>` is one atom, and
+`requires C<T, long> && true` subsumes `requires C<T, int>`. The used set
+(`used_template_params`, `templ/concepts/used.rs`, cached per expression
+and depth) is a whitelist walk over expressions, types, nested-name-
+specifiers, template names and arguments (`DeclRefExpr`, concept-ids,
+`UnresolvedLookupExpr` and dependent-scope names with their qualifiers and
+template arguments, casts, traits, requires-expressions, operators, calls,
+folds); any other dependent node keeps the whole mapping, which is never
+looser than the wording. Test
+`temp.constr.atomic/p1-used-parameter-mapping.cpp` (WP-771; clang 19 and
+22 agree).
+
 Hash-consing therefore makes identical atoms the **same `NormId`**.
 `normal_forms: DeclId → NormId` caches each entity's associated
 constraints, built under the `ConstraintNormalization` frame.
 
-Fold-expanded constraints (P2963) are M4. Until then, the immediately
-declared constraint of a constrained pack `C... Ts` is the fold
-`(C<Ts> && ...)`, treated as one atom (clang 19).
+**Fold expanded constraints** ([temp.constr.fold], P2963R3, WP-771;
+`normalize_fold_expanded`). A `&&`/`||` fold whose pattern names
+unexpanded type or non-type template parameter packs (no concept
+template parameter pack) normalizes to `Fold { and, pattern, packs }`:
+the pattern's normal form and the set of packs it expands (each
+`depth << 16 | index`, interned sorted in `NormTable::pack_sets`). The
+init of `(E op ... op I)` is joined on its side ([temp.constr.normal]/1.5.2:
+`(E && ... && I)` is `(E && ...) ∧ I`). Under a concept's mapping, each
+pack parameter must be mapped to a plain expansion of a pack of the
+constrained declaration (`Ts...` / `Vs...`, `fold_pack_element`); its
+slot becomes that element and the pack set names the declaration's
+packs, so `C<Ts...>` through `concept AllC = (C<Ts> && ...)` and the
+fold written directly give the same node. The immediately declared
+constraint of `C... Ts` is such a fold. Any other fold stays one atom.
+
+Subsumption (§8.4) treats a `Fold` as a leaf: `leaf_subsumes(a, b)` holds
+when `a == b` or both are folds with the same operator, compatible pack
+sets (the same packs, [temp.constr.fold]/2: "an equivalent unexpanded
+pack") and `a.pattern` subsumes `b.pattern`. So `(C<Ts> && ...)` is
+subsumed by `(D<Ts> && ...)` when `D` subsumes `C`
+([temp.constr.fold] Example). The positional comparison of
+[temp.constr.order]/4 compares packs by index. Tests
+`temp.constr.fold/p1-fold-expanded-subsumption.cpp` (clang 19 and 22
+agree), `temp.constr.fold/p1-fold-expanded-subsumption-concepts.cpp`
+(`requires: clang>=22`; clang 19 keeps concept folds atomic).
 
 **Concept template parameters** (P2841R7, [temp.constr.normal]/1.4-1.5,
 WP-746; `normalize_concept_id`, `normalize_concept_fold` in
@@ -4804,9 +4874,9 @@ WP-746; `normalize_concept_id`, `normalize_concept_fold` in
   `E0 op … op EN-1`, `Ei` being the pattern normalized with the i-th
   concept substituted, and the fold's init (if any) joined on its side
   ([temp.constr.normal] Example 4: `all_of<T, A, C>` is `A<T> ∧ C<T>`).
-  An empty pack, or a fold the mapping does not fix, stays one atom
-  (/1.5.3.2's fold-expanded constraint, still the P2963 approximation
-  above).
+  An empty pack, or a fold the mapping does not fix, is /1.5.3.2's fold
+  expanded constraint (above) when its packs are type or non-type
+  packs, else one atom.
 - /1.5.3 Example 5: a fold in a constraint whose operands contain a
   concept template parameter pack and an unexpanded pack of another kind
   is "fold expression in a constraint contains a concept template
@@ -4820,10 +4890,14 @@ WP-746; `normalize_concept_id`, `normalize_concept_fold` in
   and `temp.constr.normal/concept-pack-fold-mixed-kinds.cpp` are
   `skip(clang)`; `temp.constr.normal/concept-dependent-substituted.cpp`
   (clang agrees) is compared.
-- Approximation: atom identity still compares the whole canonical mapping
-  (above), so an atom from a fold's init (`(CTs<T> && ... && true)`) is
-  not identical across two expansions whose concept packs differ, though
-  the wording's mapping for `true` is empty; such pairs are ambiguous.
+- Atom identity uses the used-parameter mapping (above), so an atom of a
+  fold's init (`(CTs<T> && ... && true)`) or of its pattern that names no
+  concept parameter (`sizeof(T) > 0`) is the same atom across expansions
+  whose concept packs differ ([temp.constr.atomic]/1): `all_t<T, B>`
+  subsumes `all_t<T, A>` when `B` subsumes `A`. clang 22 keeps these
+  folds whole and is ambiguous;
+  `temp.constr.normal/concept-pack-fold-atom-identity.cpp` is
+  `skip(clang)` (WP-771).
 
 ### 8.3 Satisfaction ([temp.constr.sat])
 
@@ -7969,7 +8043,18 @@ Each question has a recommendation (R).
     on; timing only with the flag.
 12. **Q12: Order of the constraint check versus the function-type
     substitution (CWG2369).** **R:** follow clang 19 (after
-    substitution), and revisit when the clang oracle moves.
+    substitution), and revisit when the clang oracle moves. An error in
+    a member typedef of a class template specialization that the
+    substitution instantiates is a hard error, not a deduction failure:
+    the immediate context ends at the class template's instantiation
+    ([temp.deduct.general]/8). Which substitution reaches the
+    instantiation first is what the order changes: under clang 22's
+    order (constraints first) a failing constraint excludes the candidate
+    before its function type instantiates the class, under clang 19's it
+    does not, so code that compiles with clang 22 can be the hard error
+    with clang 19 and `-fclang-compat=19` (WP-769;
+    `tests/conformance/temp.deduct.general/member-typedef-hard-error.cpp`,
+    `member-typedef-hard-error-19.cpp`).
 13. **Q13: A deduction memo cache** keyed by `(ft, argument
     type/category signature)`. **R:** defer to M7 and decide from report
     data.

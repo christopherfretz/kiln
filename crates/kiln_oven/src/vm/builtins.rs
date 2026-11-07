@@ -429,6 +429,12 @@ impl Oven {
                 let t = if t1 == bi::DYN && tag != 0 { tag - 1 } else { t1 };
                 self.bi_within_lifetime(ast, a as u64, b != 0, t)
             }
+            // Sema requires a pointer to an aggregate: the type is known.
+            bi::START_LIFETIME if t1 == bi::DYN => Err(Fault::Invalid),
+            bi::START_LIFETIME => {
+                self.start_lifetime(a as u64, OTy(t1))?;
+                Ok(0)
+            }
             bi::UNION_LIVE => {
                 let raw = a as u64;
                 let key = Ptr::union_key(raw, u64::from(Ptr::decode(raw).off), OTy(t1));

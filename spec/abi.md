@@ -1367,6 +1367,10 @@ are spec/codegen.md §6a. Tests: `tests/conformance/expr.call/
 ir-clang22-argument-passing.cpp` (exact against clang 22) and the
 oracle-22 `ir_vs_clang` corpus, whose former empty-class `Abi`
 deviations now match.
+The full classification audit against clang 19 and 22 (empty classes
+and `[[no_unique_address]]`, unnamed bit-fields, AArch64 pointer
+aggregates, x86-64 ABI offset 8, `va_arg` temporaries) and the
+differential matrix that gates it are spec/landed/abi/WP-766.md.
 
 ### 8.24 Landed (WP-423): unnamed-type discriminators
 - **Numbering** (`AnonIds::unnamed_tag`, Itanium §5.1.8

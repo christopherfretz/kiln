@@ -300,6 +300,31 @@ impl Sema<'_, '_> {
     /// True if `restrict` may qualify `ty`: a pointer, reference or
     /// member pointer, or a type not known yet (dependent, a placeholder,
     /// an error).
+    /// Whether `p` (or the template it describes) is in `(ctx, name)`'s
+    /// lookup entry as an ordinary, non-ADL-only declaration: a friend
+    /// redeclaring it is then visible too, otherwise it stays hidden
+    /// ([namespace.memdef]/3; clang `Redeclarable::setPreviousDecl`
+    /// carries `IDNS_Ordinary` over from the previous declaration).
+    pub(crate) fn visible_to_ordinary(&self, ctx: DeclId, name: DeclName, p: DeclId) -> bool {
+        let t = self.ast.described_template(p);
+        self.ast
+            .lookup_local(ctx, name)
+            .iter_with_flags()
+            .any(|(x, fl)| (x == p || Some(x) == t) && !fl.contains(LookupFlags::ADL_ONLY))
+    }
+
+    /// Whether a parameter of function `f` has a default argument.
+    pub(crate) fn has_own_default_arg(&self, f: DeclId) -> bool {
+        self.ast.decls.function(f).is_some_and(|x| {
+            self.ast.lists.iter::<DeclId>(x.params).any(|p| {
+                self.ast.decls.param(p).is_some_and(|q| {
+                    q.default_arg.is_some()
+                        || q.flags & kiln_ast::decl::ParamData::DEFAULT_ARG_PENDING != 0
+                })
+            })
+        })
+    }
+
     fn restrict_ok(&self, ty: QualType) -> bool {
         self.is_error_type(ty)
             || self.is_dependent_type(ty)
@@ -4214,6 +4239,19 @@ impl Sema<'_, '_> {
             None => {}
         }
         let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params, !prev_invalid);
+        // [dcl.fct.default]/4: a friend declaration with a default
+        // argument is the only declaration of its function; clang
+        // `MergeCXXFunctionDecl` reports any redeclaration of a hidden
+        // friend that has one (the friend side is
+        // `check_friend_default_args`).
+        if let Some(p) = prev_ok
+            && self.ast.decls.get(p).misc().friend() == FriendKind::Undeclared
+            && self.has_own_default_arg(p)
+        {
+            let msg = self.diag(DiagId::sema_friend_decl_with_def_arg_redeclared, d.name_loc());
+            let msg = self.note_prev(msg, p, false);
+            self.emit(msg);
+        }
         if let Some(p) = prev_ok {
             self.check_param_nullability(p, &params);
             self.check_param_indeterminate(p, &params);
@@ -4229,12 +4267,7 @@ impl Sema<'_, '_> {
         if friend {
             // [namespace.memdef]/3: visible to ordinary lookup only if
             // declared outside the class (before or after).
-            let visible = prev_ok.is_some_and(|p| {
-                self.ast.lookup_local(ctx, dname).iter_with_flags().any(|(x, fl)| {
-                    (x == p || Some(x) == self.ast.described_template(p))
-                        && !fl.contains(LookupFlags::ADL_ONLY)
-                })
-            });
+            let visible = prev_ok.is_some_and(|p| self.visible_to_ordinary(ctx, dname, p));
             let k = if visible || d.qualifier.is_some() && !quiet_friend {
                 FriendKind::Declared
             } else {
@@ -5426,7 +5459,10 @@ impl Sema<'_, '_> {
                     || self.in_local_scope()
                         && (self.is_dependent_type(pty) || self.is_dependent_type(ty));
                 if compatible {
-                    let prev_def = self.is_var_definition(p);
+                    // clang `VarDecl::isThisDeclarationADefinition`: an
+                    // `alias` declaration is a definition (`hasDefiningAttr`),
+                    // so `int v;` after one redefines `v`.
+                    let prev_def = self.is_var_definition(p) || self.own_alias_attr(p).is_some();
                     let n = sym_str(self, name);
                     self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
                     if self.diagnose_var_redecl_conflict(p, &n, d.name_loc(), ext, prev_def) {
@@ -5564,7 +5600,12 @@ impl Sema<'_, '_> {
             Initializer::Paren(es, l, _) if es.len() == 1 => Some(*l),
             _ => None,
         };
-        self.check_alias_definition(v);
+        if self.check_alias_definition(v) {
+            // clang `AddInitializerToDecl` returns at the redefinition: the
+            // variable is invalid and its initializer unchecked (no
+            // `'extern' variable has an initializer`).
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
         self.act_on_init_inner(v, init);
         self.check_static_tls(v, paren);
         let constinit_ok = self.check_constinit(v);
@@ -7572,10 +7613,19 @@ impl Sema<'_, '_> {
                 if self.tag_matches(p, keyword) {
                     // A redeclaration of the template, lexically in the
                     // class (clang's friend `ClassTemplateDecl`); the
-                    // befriended entity is its first declaration.
-                    let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
+                    // befriended entity is its first declaration. It is
+                    // visible to ordinary lookup only if `p` is: a
+                    // redeclaration of a hidden friend template stays
+                    // hidden ([namespace.memdef]/3).
+                    let name = DeclName::ident(n);
+                    let k = if self.visible_to_ordinary(ns, name, p) {
+                        FriendKind::Declared
+                    } else {
+                        FriendKind::Undeclared
+                    };
+                    let mut h = DeclHead::new(ns, name, nloc);
                     h.lexical = Some(self.ctx);
-                    h.misc = h.misc.with_friend(FriendKind::Declared);
+                    h.misc = h.misc.with_friend(k);
                     self.mark_pattern_next();
                     let d = self.builder().record(h, Self::tag_kind_of(keyword), Some(p));
                     self.friend_class_template = self.finish_template_pattern(d);
@@ -7765,7 +7815,7 @@ impl Sema<'_, '_> {
     fn record_field_bits(&mut self, r: DeclId, mut bits: DefinitionBits) -> (DefinitionBits, bool) {
         let mut invalid = false;
         let fields: Vec<DeclId> = self.ast.decls.members(r).collect();
-        let mut any_named = false;
+        let mut any_storage = false;
         for f in fields {
             if self.ast.decls.get(f).kind() != DeclKind::Field {
                 continue;
@@ -7791,14 +7841,19 @@ impl Sema<'_, '_> {
             if anon_union {
                 bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
             }
-            if (fd.is_none_or(|x| x.bit_width.is_none())
-                || !self.ast.decls.get(f).name().is_empty())
-                && !self.is_zero_size_field(f)
-            {
-                any_named = true;
+            // Only a zero-width bit-field and a zero-size subobject leave
+            // the class empty: an unnamed bit-field of non-zero width is
+            // storage (Itanium C++ ABI §1.1 "empty class"; clang
+            // `FieldDecl::isZeroSize`).
+            let zero_width_unnamed = self.ast.decls.get(f).name().is_empty()
+                && fd
+                    .and_then(|x| x.bit_width)
+                    .is_some_and(|w| conv::eval_width(self, w) == Some(0));
+            if !zero_width_unnamed && !self.is_zero_size_field(f) {
+                any_storage = true;
             }
         }
-        if !any_named {
+        if !any_storage {
             bits = bits.with(DefinitionBits::EMPTY);
         }
         (bits, invalid)

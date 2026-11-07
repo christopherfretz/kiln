@@ -4,5 +4,4 @@
 
 Cxx14BinaryLiteral = "c++14-binary-literal" [];
 Cxx17Extensions = "c++17-extensions" [];
-Cxx23Extensions = "c++23-extensions" [];
 FourByteMultiChar = "four-char-constants" [];

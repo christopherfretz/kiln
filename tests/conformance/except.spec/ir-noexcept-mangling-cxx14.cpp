@@ -4,8 +4,6 @@
 // template argument type, deduced, explicit or `decltype(&f)`, mangles
 // without `Do` (`void (*)() noexcept` is `PFvvE`), and `t(&f)` and
 // `t(&g)` are one specialization. kiln mangled `Do` at c++14 (WP-751).
-// min-oracle 22: below C++20 clang 19 emits no empty `!llvm.linker.options`
-// and `-fclang-compat=19` codegen does.
 //@ expect: ir
 //@ min-oracle: 22
 //@ std: c++14

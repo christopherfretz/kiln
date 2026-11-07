@@ -2855,8 +2855,9 @@ impl<'a> Cg<'a> {
         let fp = self.frame_pointer().module_flag();
         let direct_access = self.direct_access_external_data();
         let m = &mut self.m;
-        // clang 20+ emits no empty `!llvm.linker.options`.
-        if self.opts.clang_compat < 22 {
+        // clang 19 emits an empty `!llvm.linker.options` when the language
+        // has modules (C++20 and later); clang 20+ emits none.
+        if self.opts.clang_compat < 22 && self.opts.cxx_modules {
             m.add_named_metadata("llvm.linker.options", &[]);
         }
         if matches!(self.opts.reloc, RelocModel::Pic(_))

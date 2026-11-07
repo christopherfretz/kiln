@@ -700,7 +700,17 @@ impl Cg<'_> {
         // clang `EmitFunctionProlog` adds `noalias` to the `sret` argument,
         // and returns before that in a naked function (no `ReturnValue`
         // slot either way: the `sret` pointer is the return address).
-        let (mut ret, mut params) = self.sig_attrs(&sig, sig.params.len(), !self.f.naked);
+        // A function an alias declared first by name keeps the alias
+        // declaration's parameter and return attributes (clang sets them
+        // once, in `GetOrCreateLLVMFunction`; spec/codegen.md "Aliases and ifuncs").
+        let alias_sig = match self.alias.declared_for.get(&f) {
+            Some(&a) if thunk.is_none() && structor.is_none() => {
+                self.decl_sig(a).ok().filter(|s| s.fn_ty == sig.fn_ty)
+            }
+            _ => None,
+        };
+        let attr_sig = alias_sig.as_ref().unwrap_or(&sig);
+        let (mut ret, mut params) = self.sig_attrs(attr_sig, attr_sig.params.len(), !self.f.naked);
         if thunk.is_some() {
             (ret, params) = self.thunk_attrs(&sig, ret, params);
         }
@@ -879,6 +889,11 @@ impl Cg<'_> {
             RetKind::Coerced => {
                 let slot = self.f.ret_slot.expect("retval");
                 let ct = self.f.ret_coerce.clone().expect("coerce type");
+                let kind = self.f.sig.as_ref().map(|g| g.info.ret.kind.clone());
+                let slot = match kind {
+                    Some(k) => self.at_abi_offset(slot, &k),
+                    None => slot,
+                };
                 Some(self.coerced_load(slot, &ct))
             }
         };
@@ -1250,12 +1265,22 @@ impl Cg<'_> {
                     *arg_no += 1;
                     return Ok(ParamVal::Direct(v));
                 }
-                if offset != 0 {
-                    return err(loc, "an argument at a nonzero ABI offset is not supported yet");
-                }
                 let align = self.global_align(pq);
                 let a = self.f.fir.alloca(mt, align);
                 let alloca = Addr { v: a, ty: mt, align };
+                if offset != 0 {
+                    // x86-64 `{ [[no_unique_address]] E pad[8]; long b; }`:
+                    // the register holds the bytes past the empty prefix.
+                    let (size, _) = self.size_align(pq);
+                    let at = self.at_abi_offset(alloca, kind);
+                    self.coerced_store_sized(V::Arg(*arg_no), coerce, at, size - offset);
+                    *arg_no += 1;
+                    return Ok(if agg {
+                        ParamVal::Indirect(alloca, false)
+                    } else {
+                        ParamVal::Direct(self.load_scalar(alloca, pq))
+                    });
+                }
                 match kind {
                     ArgKind::Direct {
                         coerce: IrType::Struct(fs, packed), flatten: true, ..
@@ -1355,7 +1380,10 @@ impl Cg<'_> {
                     }
                 };
                 if offset != 0 {
-                    return err(loc, "an argument at a nonzero ABI offset is not supported yet");
+                    let at = self.at_abi_offset(src, kind);
+                    let v = self.coerced_load(at, coerce);
+                    out.push(v);
+                    return Ok(());
                 }
                 if let ArgKind::Direct {
                     coerce: IrType::Struct(fs, packed), flatten: true, ..
@@ -1389,6 +1417,20 @@ impl Cg<'_> {
                 Ok(())
             }
         }
+    }
+
+    /// clang `emitAddressAtOffset`: where a `Direct` value at a nonzero
+    /// ABI offset starts in its memory `a` (x86-64 skips an eightbyte
+    /// that holds only empty members), typed as the coerce type; `a`
+    /// itself otherwise.
+    pub(crate) fn at_abi_offset(&mut self, a: Addr, kind: &ArgKind) -> Addr {
+        let ArgKind::Direct { coerce, offset, .. } = kind else { return a };
+        if *offset == 0 {
+            return a;
+        }
+        let k = self.i64c(i128::from(*offset));
+        let v = self.gep(LTy::I8, a.v, vec![k], true);
+        Addr { v, ty: self.ir(coerce), align: min_align(a.align, *offset) }
     }
 
     /// clang `CreateCoercedLoad` from `src` to the ABI type `ct`.

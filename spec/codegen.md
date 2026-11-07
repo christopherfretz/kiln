@@ -380,7 +380,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     call initializes an aggregate, otherwise into a temporary; an
     ignored aggregate call makes that temporary itself, after the
     arguments, and an empty-class (`Ignore`) result still gets an unused
-    temporary (clang `GetUndefRValue`; WP-172);
+    temporary (clang `GetUndefRValue`; WP-172). A discarded
+    `ExprWithCleanups` around such a call (`M{}.e(E{}, 3);`) keeps the
+    ignored slot inside a cleanup scope (clang
+    `AggExprEmitter::VisitExprWithCleanups`), so there is no extra
+    result temporary ahead of the object and argument temporaries
+    (WP-777; `tests/codegen/discarded_member_call_on_temporary.cpp`,
+    `tests/conformance/expr.call/run-discarded-member-call-on-temporary-order.cpp`);
   - an assignment operator call (`CXXOperatorCallExpr` with `=`, `+=`,
     ... and a member callee) evaluates its right operand before the
     object (clang `EvaluationOrder::ForceRightToLeft`): a trivial
@@ -1454,7 +1460,7 @@ LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
 | GEP `nuw` (§3 "GEP flags") | compat ≥ 22 | `inbounds` only |
 | `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors), on definitions, declarations and calls, before `noundef` | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
 | `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 for `non-leaf` (AArch64's default; "Frame pointer") | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
-| no empty `!llvm.linker.options` | compat ≥ 22 | `!llvm.linker.options = !{}` |
+| no empty `!llvm.linker.options` | compat ≥ 22 | `!llvm.linker.options = !{}` in C++20 and later only (clang 19 emits it when the language has modules, `LangOptions::Modules` set by `CPlusPlusModules`; `CodegenOptions::cxx_modules`, WP-769) |
 | a padded `_Atomic` operand's atomic-sized temporary zeroed before the copy, and a failed compare-exchange's old value copied back to `*expected` (`atomic.rs`, WP-411; `tests/codegen/atomic_padded.cpp`) | compat ≥ 22 | the temporary's padding left uninitialized; the old value stored only to the temporary |
 | `captures(none)` for `nocapture` (intrinsic declarations such as `llvm.memcpy`/`llvm.memset`; `kiln_llvm` `Module::ir_version`, spec/llvm.md §5) | compat ≥ 22 and LLVM ≥ 21 | `nocapture` (LLVM 19 rejects `captures(..)`) |
 | `!nonnull`/`!align` on reference loads (§3 "Reference loads") | compat ≥ 22 | none |
@@ -2107,6 +2113,15 @@ bound); `std::observable_checkpoint` itself is not constexpr. Tests:
 (the IR and, with `opt-19`, the store kept at `-O2` where it is dropped
 without the checkpoint); `tests/conformance/intro.abstract/`.
 
+`__builtin_start_lifetime(p)` (WP-773, P3726R2 `std::start_lifetime`)
+evaluates `p` for its side effects and emits nothing else, as GCC folds
+it to `(void)p`: at run time an implicit-lifetime aggregate's lifetime
+begins with its storage ([intro.object]/10), so there is nothing to do.
+A constant whose union holds an array member with unconstructed elements
+(spec/oven.md "C++26 union lifetime") is emitted with those elements as
+zero bytes, like any byte not covered by the constant's image. Test:
+`tests/conformance/obj.lifetime/start-lifetime-run.cpp`.
+
 **Landed (WP-140): `PredefinedExpr`.** The name is a private
 `unnamed_addr constant` array named `<spelling>.<mangled function>`
 (`__func__._Z1fv`), as clang names it (`Module::string_global_named`);
@@ -2249,7 +2264,9 @@ clang 19 `CGAtomic` at -O0, mirrored:
     and two-SSE structs are reassembled into a temporary of the coerce
     type. A single register class is read in place, or through a
     temporary when the coerce type sits at offset 8, the type is larger
-    than the register span, or an integer type is over-aligned.
+    than the register span (`-fclang-compat` ≥ 20 only; clang 19 reads
+    such a type in place), or an integer type is over-aligned
+    (spec/landed/abi/WP-766.md).
   - Otherwise the address is `overflow_arg_area` (ptrmask-aligned above
     8), advanced by `alignTo(size, 8)`.
 - **`min-legal-vector-width` of a definition** (`def_vector_width`) counts
@@ -3972,7 +3989,12 @@ an initializer (clang `CodeGenModule::EmitAliasDefinition`,
   variable) whose mangled name it is, which is emitted now; else a
   declaration created under that name, which a later definition
   completes in place (a function: the aliasing declaration's signature,
-  retyped by the definition if they differ; a variable: a global of the
+  retyped by the definition if they differ; when the types agree the
+  definition keeps the return and parameter attributes the aliasing
+  declaration gave it, as clang's `GetOrCreateLLVMFunction` sets them
+  once, so an `extern "C"` alias of a C++ function leaves its
+  definition without a `noundef` return (`AliasState::declared_for`,
+  WP-777, `tests/codegen/gnu_alias_forward_extern_c.cpp`); a variable: a global of the
   aliasing declaration's type; an ifunc resolver: a `void ()` placeholder
   that the resolver's definition replaces and moves to the end of the
   function list, as clang). A later definition whose mangled name an

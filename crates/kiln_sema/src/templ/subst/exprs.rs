@@ -884,7 +884,10 @@ impl Substituter<'_, '_, '_> {
                 let operand = match ex(self).typeid_operand(e) {
                     TypeidOperand::Type(t) => Err(self.ty_written_after(t, loc)?),
                     TypeidOperand::Expr(o) => {
-                        let u = self.unevaluated_operand(o)?;
+                        self.sema.enter_typeid_operand();
+                        let u = self.expr(o);
+                        self.sema.exit_typeid_operand();
+                        let u = u?;
                         if self.sema.is_polymorphic_glvalue(u) { Ok(self.expr(o)?) } else { Ok(u) }
                     }
                 };

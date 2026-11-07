@@ -990,7 +990,8 @@ impl Sema<'_, '_> {
     ///   redeclaration; one given earlier is inherited;
     /// - [temp.param]/14: in a class, variable or alias template, every
     ///   parameter after one with a (possibly inherited) default has one or
-    ///   is a pack, and a pack is the last parameter.
+    ///   is a pack, and a pack is the last parameter; in a concept
+    ///   (P2841R7, `kind` = `Concept`), only the pack rule applies.
     pub(crate) fn check_template_param_list(
         &mut self,
         kind: DeclKind,
@@ -1055,7 +1056,11 @@ impl Sema<'_, '_> {
             // parameter that is a pack expansion of an enclosing level's
             // pack (`template<Ts... a, int n>` in a member template) is
             // not one (clang's `isPackExpansion`).
-            if ordered && pack && i + 1 != params.len() && !self.is_nttp_pack_expansion(p) {
+            // A concept's head obeys the pack rule but not the default
+            // one (clang's `CheckTemplateParameterList` with
+            // `TPC_Other`, which clang 19 and 22 apply to concepts).
+            let pack_last = ordered || kind == DeclKind::Concept;
+            if pack_last && pack && i + 1 != params.len() && !self.is_nttp_pack_expansion(p) {
                 let loc = self.ast.decls.get(p).loc();
                 self.error(DiagId::sema_template_param_pack_not_last, loc);
             }

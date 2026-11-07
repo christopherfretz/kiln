@@ -9,7 +9,7 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use crate::Sema;
-use crate::declspec::{DeclSpec, Declarator};
+use crate::declspec::{DeclSpec, Declarator, DefaultArg};
 use crate::local_friend::LocalFriendMember;
 use crate::lookup::LookupKind;
 use crate::templ::pack::PackOperand;
@@ -48,6 +48,27 @@ impl Sema<'_, '_> {
         attrs.extend(d.attrs.iter().copied());
         let ty = self.apply_nothrow_attrs(ty, &mut attrs);
         self.apply_noreturn_attrs(ty, &attrs)
+    }
+
+    /// [dcl.fct.default]/4: a friend declaration `f` that specifies a
+    /// default argument is a definition and the only declaration of its
+    /// function (clang `ActOnFriendFunctionDecl`; a later redeclaration
+    /// is reported by `act_on_function`). Checked as written, not on
+    /// instantiation; an invalid redeclaration was already reported.
+    fn check_friend_default_args(&mut self, f: DeclId, d: &Declarator, def: bool) {
+        let has_default = d
+            .function_params()
+            .is_some_and(|ps| ps.iter().any(|p| !matches!(p.default_arg, DefaultArg::None)));
+        if !has_default || self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID) {
+            return;
+        }
+        if let Some(p) = self.ast.prev(f) {
+            let msg = self.diag(DiagId::sema_friend_decl_with_def_arg_redeclared, d.name_loc());
+            let msg = self.note_prev(msg, p, false);
+            self.emit(msg);
+        } else if !def {
+            self.error(DiagId::sema_friend_decl_with_def_arg_must_be_def, d.name_loc());
+        }
     }
 
     /// [`Sema::act_on_friend`]: the befriended function or type, recorded
@@ -150,6 +171,9 @@ impl Sema<'_, '_> {
         }
         if ds.invalid || d.invalid {
             self.ast.decls.set_flags(f, kiln_ast::decl::DeclFlags::INVALID);
+        }
+        if self.inst.stack.is_empty() {
+            self.check_friend_default_args(f, d, def);
         }
         if let Some(r) = d.trailing_requires {
             self.act_on_trailing_requires(f, r);

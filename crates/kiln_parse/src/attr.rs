@@ -267,6 +267,9 @@ impl Parser<'_, '_> {
                 matches!(self.tok_at(j + 1).kind, TokKind::StringLit(_) | TokKind::RawStringLit(_))
                     || self.kw_of(self.tok_at(j + 1)) == Some(Kw::Template)
             }
+            // `[[x]] __attribute__((y)) extern "C" ...`: clang's
+            // `ProhibitAttributes` after the GNU decl-specifiers.
+            Some(Kw::Attribute) => self.at_gnu_attrs_before_linkage_spec(j - self.pos()),
             _ => false,
         };
         if bad {

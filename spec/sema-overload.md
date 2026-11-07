@@ -979,7 +979,19 @@ old `ExprId` with `ParamFlags::INHERITED_DEFAULT`; giving one again is
 parameter without a default after one with a default (after merging) is
 "missing default argument on parameter 'b'"; a block-scope redeclaration
 starts fresh (/4); friend declarations with defaults must be definitions;
-out-of-class members of class templates may not add defaults. **Calls**:
+out-of-class members of class templates may not add defaults.
+A friend function declaration with a default argument must be a
+definition and the only declaration of the function in the translation
+unit ([dcl.fct.default]/4; clang `ActOnFriendFunctionDecl`,
+`MergeCXXFunctionDecl`; WP-769): a written friend declaration with one
+that redeclares an earlier declaration is "friend declaration specifying
+a default argument must be the only declaration" (note at the previous
+declaration), one that declares the function first but is not a
+definition is "friend declaration specifying a default argument must be
+a definition" (`check_friend_default_args`, class/friend.rs; checked as
+written, not at instantiation); a later redeclaration of a function
+first declared by a friend declaration with a default argument is the
+first error at the later declaration's name. **Calls**:
 arity (§3.1) uses the called decl, i.e. the most recent visible
 redeclaration. `build_call_args` appends per missing argument a
 `CXXDefaultArgExpr` (parameter type, prvalue, `<<invalid sloc>>` in the

@@ -95,6 +95,7 @@ mod section;
 mod self_ref;
 mod side_effects;
 mod splice;
+mod splice_local;
 mod splice_object;
 pub mod stack_guard;
 mod static_tls;
@@ -608,6 +609,11 @@ pub struct Sema<'a, 'sm> {
     /// Splices whose operand was read as a frozen constant without an
     /// Oven evaluation (spec/reflection.md §5, the splice fast path).
     pub(crate) splice_fast: u64,
+    /// The `typeid` expression operands being formed, innermost last:
+    /// the open lambda count and the unevaluated depth inside each
+    /// ([`Sema::enter_typeid_operand`]; [expr.prim.splice]/2.1.4
+    /// disregards the effect of an enclosing `typeid`).
+    pub(crate) typeid_operands: Vec<(usize, u32)>,
     /// The `std::meta::substitute` memo (spec/reflection.md §3.3).
     pub(crate) meta_subst: meta::SubstMemo,
     /// The placeholder [`Sema::lend_oven`] leaves in a bridge callback's
@@ -1168,6 +1174,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             va_list_type: None,
             ext_vector_typedefs: Vec::new(),
             splice_fast: 0,
+            typeid_operands: Vec::new(),
             meta_subst: meta::SubstMemo::default(),
             spare_oven: None,
             ovl: overload::OverloadScratch::default(),

@@ -3120,6 +3120,16 @@ impl Cg<'_> {
                     // copied (clang `EmitAggFinalDestCopy`).
                     return self.emit_va_arg(e, None).map(|_| ());
                 }
+                if ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
+                    // clang `AggExprEmitter::VisitExprWithCleanups` keeps
+                    // the ignored slot: a discarded call on a temporary
+                    // (`M{}.e(E{}, 3);`) gets only `EmitCall`'s result
+                    // temporary, after the object's and the arguments'.
+                    let sc = self.begin_scope(false);
+                    let r = self.emit_ignored(self.sub(e));
+                    self.end_scope(sc);
+                    return r;
+                }
                 // clang `AggExprEmitter::withReturnValueSlot`: an ignored
                 // slot gives the call no address, so `EmitCall` makes its
                 // `sret`/coerce temporary after the arguments' `agg.tmp`s.
@@ -3548,12 +3558,18 @@ impl Cg<'_> {
                 }
                 None => (self.temp(rq), size),
             };
-            let (ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. }) =
-                sig.info.ret.kind.clone()
-            else {
-                unreachable!()
+            let kind = sig.info.ret.kind.clone();
+            let (coerce, offset) = match &kind {
+                ArgKind::Direct { coerce, offset, .. } => (coerce.clone(), *offset),
+                ArgKind::Extend { coerce, .. } => (coerce.clone(), 0),
+                _ => unreachable!(),
             };
-            if self.ir(&coerce) == self.mty(rq) {
+            if offset != 0 {
+                // clang `EmitCall`: the result's bytes start past the
+                // empty eightbyte (`emitAddressAtOffset`).
+                let at = self.at_abi_offset(d, &kind);
+                self.coerced_store_sized(r, &coerce, at, size.saturating_sub(offset));
+            } else if self.ir(&coerce) == self.mty(rq) {
                 // EmitAggregateStore: element-wise for a first-class struct.
                 self.aggregate_store(r, &coerce, d);
             } else {

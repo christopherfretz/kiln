@@ -239,6 +239,11 @@ pub struct CodegenOptions {
     /// translation unit that checks a contract assertion: every stdlib
     /// but libstdc++, which ships its own (spec/contracts.md §6.3).
     pub contract_default_handler: bool,
+    /// The language has C++20 modules: C++20 or later (clang
+    /// `LangOptions::CPlusPlusModules`, which turns on `Modules`). Before
+    /// clang 20 that is what emits the empty `!llvm.linker.options`
+    /// (spec/codegen.md §2).
+    pub cxx_modules: bool,
 }
 
 /// An `-mcmodel=` code model (LLVM `CodeModel::Model`).
@@ -527,6 +532,7 @@ impl Default for CodegenOptions {
             code_model: None,
             reflection_mangling: kiln_abi::ReflectionMangling::Kiln,
             contract_default_handler: true,
+            cxx_modules: true,
         }
     }
 }
