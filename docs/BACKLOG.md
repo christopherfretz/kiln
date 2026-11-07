@@ -715,7 +715,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-691 | M8 wave 2: simdjson v4.2.4 through its own CMake build + tests with kiln++ via scripts/oss (docs/status/oss/simdjson.md) | WP-666 | done (PR #318; simdjson v4.2.4 at 116/117 tests vs clang 117/117; 3 fixes; follow-ups WP-696/697) |
 | WP-683 | M8 wave 1: magic_enum v0.9.7 + doctest v2.5.3 + tl_expected v1.3.1 through their own builds + tests with kiln++ via scripts/oss (one status page each) | WP-666 | done (PR #315; magic_enum 0.9.7, doctest 2.5.3, tl_expected 1.3.1 at parity; 5 fixes; follow-ups WP-688/689) |
 | WP-704 | M8 wave 2: cereal v1.3.2 through scripts/oss (parity vs clang-19) | WP-666 | done (PR #323; cereal v1.3.2 at parity, 39/39 TUs, 40/40 ctest; 3 fixes: base-specialization injected-class-name as type, dependent new-initializer value-dependence, conversion-template reference deduction; follow-up WP-711) |
-| WP-720 | M8 wave 3: leveldb 1.23 through its own CMake build + tests with kiln++ via scripts/oss; every failure → reduced conformance test + fix | WP-666 | in progress |
+| WP-720 | M8 wave 3: leveldb 1.23 through its own CMake build + tests with kiln++ via scripts/oss; every failure → reduced conformance test + fix | WP-666 | done (PR #328; leveldb 1.23 at parity, 30/30 tests; -fno-rtti vtable fix + per-build TEST_TMPDIR; follow-up WP-725) |
 | WP-685 | M8 wave 2: CLI11 v2.6.1 through its own build + tests with kiln++ via scripts/oss (docs/status/oss/cli11.md) | WP-666 | done (PR #316; CLI11 v2.6.1 at parity on libstdc++ and libc++; 2 sema fixes; follow-ups WP-693/694) |
 | WP-684 | protected destructor access on a local variable: clang error + "protected destructor can only be used to destroy a base class subobject" note; hook next to use_ctor in class/special/define.rs | WP-680 | open |
 | WP-687 | M8: Catch2 v3.16.1 extra configurations under kiln++: C++23 build (multi-argument operator[] in Message.tests.cpp) and -DCATCH_ENABLE_WERROR=ON | WP-681 | open |
@@ -740,5 +740,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-721 | diag: -Wdeprecated-dynamic-exception-spec before C++17 (`crates/kiln_sema/src/except.rs` act_on_dynamic_exception_spec) | WP-709 | open |
 | WP-722 | parse: `throw(Ts...)` dynamic exception specification with a pack expansion (spec/parse.md:1927) | WP-709 | open |
 | WP-723 | sema: substituting `ExcSpec::DependentNoexcept` is unimplemented (`crates/kiln_sema/src/templ/subst/types.rs:365`) | WP-709 | open |
+| WP-725 | diag: implement -Wdeprecated-copy and subgroups (group names only today, `crates/kiln_diag/src/clang_groups.rs:243`) | WP-720 | open |
 WP-511
 WP-512
