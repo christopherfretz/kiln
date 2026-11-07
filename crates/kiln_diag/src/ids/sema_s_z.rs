@@ -2,6 +2,7 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+sema_section_conflict = Error (2) "{0} causes a section type conflict with {1}";
 sema_shift_gt_typewidth = Warning [ShiftCountOverflow] (0) "shift count >= width of type";
 sema_shift_negative = Warning [ShiftCountNegative] (0) "shift count is negative";
 sema_shufflevector_argument_too_large = Error (0) "index for __builtin_shufflevector must be less than the total number of vector elements";

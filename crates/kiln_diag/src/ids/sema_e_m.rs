@@ -20,6 +20,7 @@ sema_enum_template = Error (0) "enumeration cannot be a template";
 sema_enum_unfixed_redecl_fixed = Error (0) "enumeration previously declared with nonfixed underlying type";
 sema_enumerator_too_large = Error (2) "enumerator value {0} is not representable in the underlying type {1}";
 sema_enumerator_wrapped = Error (0) "enumerator value is not representable in any integral type";
+sema_exception_spec_in_typedef = Error (1) "exception specifications are not allowed in {0:typedefs|type aliases}";
 sema_exception_spec_mismatch = Error (0) "exception specification in declaration does not match previous declaration";
 sema_exception_spec_not_parsed = Error (0) "exception specification is not available until end of class definition";
 sema_excess_initializers = Error (1) "excess elements in {0:array|vector|scalar|union|struct} initializer";
