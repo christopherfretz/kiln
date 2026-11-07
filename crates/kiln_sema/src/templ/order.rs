@@ -711,12 +711,13 @@ impl Sema<'_, '_> {
         // The probe is a SFINAE context: `int` in place of a parameter a
         // qualifier names (`typename O::pointer`) fails the substitution
         // quietly (LLVM's `NodeAccess::getNodePtr<O>` overloads).
-        let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, b, Some(list), Loc::INVALID, |s| {
-            pb.iter().all(|x| {
-                let r = Substituter::new(s, &levels).ty(x.ty, Loc::INVALID);
-                r.is_ok_and(|t| s.ast.types.canonical(t) == s.ast.types.canonical(x.ty))
-            })
-        });
+        let r =
+            self.in_sfinae(FrameKind::DeducedArgSubstitution, b, Some(list), Loc::INVALID, |s| {
+                pb.iter().all(|x| {
+                    let r = Substituter::new(s, &levels).ty(x.ty, Loc::INVALID);
+                    r.is_ok_and(|t| s.ast.types.canonical(t) == s.ast.types.canonical(x.ty))
+                })
+            });
         self.ast.templates.dependent_depth = saved;
         matches!(r, Some((true, Ok(()))))
     }
