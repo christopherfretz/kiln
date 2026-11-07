@@ -1965,8 +1965,13 @@ and returns the scope it names:
   `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
   `always_inline` with the GNU flag. Test:
   `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
-  - GNU `section`: `'section' attribute ignored` (`visibility`: see
-    "Visibility attributes")
+  - GNU `section("name")` (WP-716, clang `handleSectionAttr`): exactly
+    one string literal (`expected string literal as argument of
+    'section' attribute`, `'section' attribute takes one argument`), on
+    functions and variables with static storage duration (clang's
+    subject-list error otherwise); kept as `AttrKind::SECTION` with the
+    literal, for codegen (spec/codegen.md §8 "Sections").
+    (`visibility`: see "Visibility attributes")
   - GNU `format(archetype, F, A)` (WP-186, clang `handleFormatAttr`, in
     its order): exactly three arguments (`'format' attribute requires
     exactly 3 arguments`), the archetype an identifier (`requires

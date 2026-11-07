@@ -9761,7 +9761,7 @@ impl Sema<'_, '_> {
         let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax)
             .filter(|&k| k != AttrKind::INDETERMINATE || self.std >= kiln_lex::Std::Cxx26)
         else {
-            let id = if gnu && matches!(n.as_str(), "section" | "format") {
+            let id = if gnu && n == "format" {
                 DiagId::parse_attribute_ignored
             } else {
                 DiagId::parse_unknown_attribute
@@ -9784,7 +9784,7 @@ impl Sema<'_, '_> {
         if kind == AttrKind::TARGET {
             return self.target_attribute(syntax, &n, args, loc);
         }
-        if kind == AttrKind::WEAKREF || kind == AttrKind::ALIAS {
+        if matches!(kind, AttrKind::WEAKREF | AttrKind::ALIAS | AttrKind::SECTION) {
             return self.weakref_alias_attribute(kind, syntax, &n, args, loc);
         }
         if kind == AttrKind::MIN_VECTOR_WIDTH {
@@ -9960,9 +9960,10 @@ impl Sema<'_, '_> {
         Some(self.ast.attrs.push(node))
     }
 
-    /// GNU `weakref` / `weakref("target")` and `alias("target")` (clang
-    /// `handleWeakRefAttr`, `handleAliasAttr`): `weakref` takes at most
-    /// one argument, `alias` exactly one, a string literal (`expected
+    /// GNU `weakref` / `weakref("target")`, `alias("target")` and
+    /// `section("name")` (clang `handleWeakRefAttr`, `handleAliasAttr`,
+    /// `handleSectionAttr`): `weakref` takes at most one argument, the
+    /// others exactly one, a string literal (`expected
     /// string literal` at the argument otherwise; an identifier is not
     /// looked up). `a` is the literal's `StringLitId` (0 for a bare
     /// `weakref`); the declaration's checks do the rest
@@ -10631,6 +10632,8 @@ fn attr_kind_of(
         // clang `GCC<"weakref">`, `GCC<"alias">`.
         ("weakref", _, true) => AttrKind::WEAKREF,
         ("alias", _, true) => AttrKind::ALIAS,
+        // clang `GCC<"section">`.
+        ("section", _, true) => AttrKind::SECTION,
         // clang `GNU<"analyzer_noreturn">`: no `[[...]]` spelling.
         ("analyzer_noreturn", _, _) if gnu_syntax => AttrKind::ANALYZER_NORETURN,
         ("const", _, true) => AttrKind::CONST,

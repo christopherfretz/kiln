@@ -67,6 +67,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "min_vector_width"
             | "weakref"
             | "alias"
+            | "section"
             | "analyzer_noreturn"
     )
 }

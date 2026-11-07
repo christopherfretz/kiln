@@ -3899,6 +3899,16 @@ namespace,pragma,templates,vtable_hidden_o1}.cpp`,
 (both oracles, both triples), `crates/kiln_driver/tests/codegen.rs`
 `pic_visibility_and_objects` (`-fPIC -S -emit-llvm` and `-fPIC -c`).
 
+**Sections** (WP-716; clang `SetFunctionAttributes`,
+`setNonAliasAttributes`, `EmitStaticVarDecl`): a GNU `section("name")`
+on any declaration of a function or of a variable with static storage
+duration (`Ast::section_of`) gives its LLVM function or global
+`section "name"`, whether it is defined here or only declared, a static
+local and an instantiated template included, so the ELF linker's
+`__start_name`/`__stop_name` bound the section. Section type conflicts
+(clang `err_section_conflict`) are not diagnosed.
+`tests/codegen/section_attr.cpp`, `tests/conformance/ext.gnu.section/`.
+
 ## Landed sections after WP-488: `spec/landed/codegen/`
 
 From WP-488 on, a work package's Landed section is not appended here: it
