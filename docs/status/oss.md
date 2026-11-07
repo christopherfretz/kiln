@@ -42,7 +42,7 @@ The loop:
 | project | wave | tag | status |
 |---|---|---|---|
 | `catch2` | 1 | `v3.16.1` | not started |
-| `cli11` | 1 | `v2.6.1` | not started |
+| `cli11` | 1 | `v2.6.1` | tests at parity |
 | `doctest` | 1 | `v2.5.3` | not started |
 | `fmt` | 1 | `12.1.0` | not started |
 | `googletest` | 1 | `v1.17.0` | blocked (1 cluster) |
@@ -159,3 +159,19 @@ Reduced repros (WP-666, kiln at main f3751eadd):
   ```
 
   The non-template form (`class R : public V<int>`) compiles.
+
+<!-- oss:cli11 -->
+### cli11 (v2.6.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | ok | ok |
+| TUs ok / failed | 65 / 0 | 65 / 0 |
+| links ok / failed | 60 / 0 | 60 / 0 |
+| tests passed / total | 86 / 86 | 86 / 86 |
+| wall | 54 s | 29 s |
+| peak TU RSS | 330 MB | 433 MB |
+
+Failure clusters (kiln): none.
+<!-- /oss:cli11 -->
