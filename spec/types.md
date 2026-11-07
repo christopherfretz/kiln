@@ -440,7 +440,7 @@ enum ExcSpec /* tag */ {
   pointer conversion may drop it but never add it (clang
   `IsFunctionConversion`); a call through a `noreturn` function type ends
   control flow. Mangling ignores it.
-  Adding the bit is a pure addition (WP-740/749): the rebuilt type keeps
+  Adding the bit is a pure addition (WP-748/749): the rebuilt type keeps
   the exception specification (a dependent `noexcept(B)` included), the
   cv and ref qualifiers and the ellipsis, and steps through sugar
   (typedefs, `Attributed`, `Paren`) one level at a time rather than
