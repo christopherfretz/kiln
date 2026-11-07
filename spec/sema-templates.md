@@ -4856,6 +4856,9 @@ omits it) and `__has_builtin` answers 0 for it (WP-394).
   each select a member that is not user-provided and not deleted (or the
   simple implicit one), and the destructor is not user-provided (one
   defaulted after its first declaration is user-provided, so false).
+  The simple implicit copy operation stands in for a move operation
+  only when that move operation is not user-declared: a user-provided
+  move assignment beside a defaulted move constructor is false.
 - **Staged off** (`Status::Owner("WP-263 follow-up")`, so `__has_builtin`
   answers 0 at every level and the headers use their library
   fallbacks): `__builtin_common_type` (a template builtin, like
