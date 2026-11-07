@@ -1,12 +1,19 @@
 name: kiln-ci
 description: >
-  The steps shared by the `check` and `check-x86_64` jobs (docs/VALIDATION.md
-  "GitHub Actions"): the Debian toolchain packages, a check that the image's
-  GCC 16.1 (the reflection oracle, `KILN_GCC` from the job env) compiles a
-  `<meta>` TU, the pinned Rust toolchain, the cargo cache, `cargo xtask ci`
-  (oracle clang 22, `oracle: gcc` tests against GCC 16.1) and
-  `KILN_ORACLE=19 cargo xtask ci --quick --oracle-only`. A local action is only
-  readable after checkout, so each job checks out first.
+  The setup every job of .github/workflows/ci-lane.yml shares
+  (docs/VALIDATION.md "GitHub Actions"): the Debian toolchain packages, a
+  check that the image's GCC 16.1 (the reflection oracle, `KILN_GCC` from the
+  job env) compiles a `<meta>` TU, the pinned Rust toolchain and the cargo
+  cache. The job then runs its slice of `cargo xtask ci`. A local action is
+  only readable after checkout, so each job checks out first.
+inputs:
+  cache-key:
+    description: rust-cache's shared-key; one per architecture, so every job of a lane restores the same cache.
+    required: true
+  save-cache:
+    description: '"true" in the one job per lane that saves the cache (it builds the most targets).'
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -39,20 +46,15 @@ runs:
     - uses: dtolnay/rust-toolchain@stable
       with: { toolchain: "1.95.0", components: "rustfmt, clippy" }
       env: { RUSTUP_INIT_SKIP_SUDO_CHECK: "yes" }
-    # Saved even when `ci` fails, so the next run starts warm.
+    # ~/.cargo and the dependency builds, keyed per architecture
+    # (`shared-key`) so every job of the lane restores the same entry; only
+    # the `save-cache` job writes it, and saves it even when its tests fail,
+    # so the next run starts warm. The workspace crates are not cached: a
+    # fresh checkout gives every source file a new mtime, so cargo would
+    # rebuild them all anyway, and they would make the cache (and every
+    # job's restore) many times larger (docs/status/perf.md "WP-692").
     - uses: Swatinem/rust-cache@v2
-      with: { cache-on-failure: true }
-    # fmt, clippy, cargo test, then both corpus runs (clang self-check and
-    # kiln), as `cargo xtask ci` locally; the oracle is clang 22.
-    - name: cargo xtask ci
-      shell: bash
-      run: cargo xtask ci
-    # The two-oracle policy (spec/harness.md "Oracle toolchain", WP-355):
-    # the corpus also stays green with clang 19 as the oracle. Only the
-    # cargo test targets that read KILN_ORACLE are rerun; fmt, clippy and
-    # the rest of `cargo test` do not depend on it (spec/harness.md "CI",
-    # `--oracle-only`, WP-488).
-    - name: KILN_ORACLE=19 cargo xtask ci --quick --oracle-only
-      if: ${{ !cancelled() }}
-      shell: bash
-      run: KILN_ORACLE=19 cargo xtask ci --quick --oracle-only
+      with:
+        shared-key: ${{ inputs.cache-key }}
+        save-if: ${{ inputs.save-cache == 'true' }}
+        cache-on-failure: true
