@@ -274,6 +274,11 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) pushed: SymMap<Vec<Option<Rc<MacroDef>>>>,
     pub(crate) entered: HashSet<FileId>,
     pub(crate) include_depth: u32,
+    /// The first directive's `#` in the current unit's own file, and
+    /// whether a directive that P3868R1 does not allow before a module
+    /// directive was seen there (`note_unit_directive`).
+    pub(crate) unit_first_hash: Option<Loc>,
+    pub(crate) unit_pre_directive: bool,
     pub(crate) main_file: Option<FileId>,
     /// Lex without macro expansion (clang `DisableMacroExpansion`).
     pub(crate) disable_expand: bool,
@@ -370,6 +375,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             pushed: SymMap::default(),
             entered: HashSet::new(),
             include_depth: 0,
+            unit_first_hash: None,
+            unit_pre_directive: false,
             main_file: None,
             disable_expand: false,
             in_args: None,

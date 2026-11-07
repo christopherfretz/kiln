@@ -89,6 +89,14 @@ impl Parser<'_, '_> {
             match e {
                 Event::ModuleDirective(d) => {
                     let lo = d.span.lo;
+                    if let Some(at) = d.after_directive
+                        && matches!(
+                            d.kind,
+                            DirectiveKind::GlobalFragment | DirectiveKind::Module { .. }
+                        )
+                    {
+                        self.s.module_note_pp_directive(at);
+                    }
                     let dir = match &d.kind {
                         DirectiveKind::Invalid => continue,
                         DirectiveKind::GlobalFragment => Directive::GlobalFragment,
