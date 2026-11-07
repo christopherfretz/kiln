@@ -21,6 +21,7 @@ cargo xtask test [options] [paths...]
 | `--meta-header` | The header-differential mode: the reflection tests compile against GCC 16.1's real `<meta>` instead of kiln's `tests/support/kiln_meta.h` (see "Header-differential mode"). Needs kiln as the compiler under test and a GCC oracle whose install prefix can be found (a usage error, exit 2, otherwise). |
 | `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
+| `--shard K/N` | Run only shard `K` of `N` (`1 <= K <= N`, else a usage error): of the sorted test list (after `--filter`), test `i` (0-based) runs iff `i % N == K - 1`. Round-robin, so a slow directory is spread over every shard, and shards `1..N` of one `N` are exactly the unsharded run, each test in one shard. A shard of a list shorter than `N` may be empty, which is not an error (an empty selection before sharding still is). The run's first line says `(shard K/N of M)`. Not with `--external` (usage error). `ci --shard` passes it to both corpus runs (WP-692, "CI"). |
 | `--update` | Rewrite existing pp and ast `.expected` goldens with the actual output. |
 | `--pp-compare tokens\|text` | Override every pp test's `pp-compare:` directive (see "pp comparison"). |
 | `--report-parity <file>` | After the run, write a parity table into `<file>` (see "Parity report"). A relative path is relative to the repo root. |
@@ -893,8 +894,9 @@ informational (exit status non-zero only on tool errors); its contract is
 `cargo xtask features` ("Feature table") is not part of `ci` either: it is a
 manual / M4-gate check.
 
-`cargo xtask ci [--quick] [--oracle-only]` is the merge gate
-(`docs/AGENTS.md` rule 3). It runs, stopping at the first failing step:
+`cargo xtask ci [--quick] [--oracle-only] [--step <steps>] [--shard K/N]
+[--unit-group <group>]` is the merge gate (`docs/AGENTS.md` rule 3). It
+runs, stopping at the first failing step:
 
 0. two in-process lints, each listing every problem it finds:
    `cargo xtask diag-split --check` (kiln_diag's id and group tables are
@@ -944,6 +946,31 @@ or an infrastructure error; otherwise it exits 1. The decision is
 `--quick` is for local iteration only; merges to `main` and GitHub CI use the
 full form. Any other argument is a usage error (exit 2).
 
+**`--step`, `--shard`, `--unit-group`** (WP-692) cut `ci` into the slices
+GitHub CI runs as parallel jobs; together the slices are exactly the full
+form. `--step <steps>` (a comma list, or the flag repeated; default every
+step) selects among `lints` (step 0 and fmt and clippy), `unit` (`cargo
+test --workspace`, or under `--oracle-only` the `ORACLE_TESTS` targets),
+`self-check` (run 3; step 2's build is not needed for it) and `kiln` (step
+2 and run 4); an unknown name is a usage error. The bad-`KILN_ORACLE` and
+`KILN_REQUIRE_GCC` checks run in every invocation. An unselected step
+prints `xtask ci: <step>: skipped (--step)`, and an unselected corpus run
+reports `corpus (<run>): skipped (--step)`, which passes like a `--quick`
+skip; `ci_corpus_passes` judges the runs that ran. `--shard K/N` is passed
+to both corpus runs as `cargo xtask test --shard K/N` ("Command line": the
+sorted default list, test `i` in shard `K` iff `i % N == K - 1`), and the
+corpus lines then name the shard (`corpus (kiln, shard 2/6): ...`); with
+neither `self-check` nor `kiln` selected it is a usage error.
+`--unit-group <group>` runs one group of the `unit` step: `cargo test -p
+<pkg>...` for a group of `UNIT_GROUPS` (`xtask/src/main.rs`: today `xtask`
+and `codegen` = `kiln_codegen`), or `rest` = `cargo test --workspace
+--exclude <every grouped package>`, so a new crate falls into `rest` and
+the groups always cover the workspace. It needs `unit` selected and not
+`--oracle-only` (usage error otherwise). `ci_tests` checks the groups are
+disjoint packages that exist, and that `.github/workflows/ci-lane.yml`'s
+unit matrix lists every group. Each selected step prints its time
+(`xtask ci: unit: done in 61.2s`, `xtask ci: kiln built in 48.0s`).
+
 **`--oracle-only`** (WP-488) is the second oracle's gate: GitHub CI runs
 `KILN_ORACLE=19 cargo xtask ci --quick --oracle-only` after `cargo xtask
 ci`. It skips step 0, fmt and clippy, and replaces `cargo test
@@ -963,9 +990,11 @@ default oracle is allowed, but checks nothing the full form does not.
 
 The end-to-end tests in `xtask/src/test/tests.rs` and
 `xtask/src/bench/tests.rs` skip themselves with a note when clang 19 is
-missing. GitHub CI (`.github/workflows/ci.yml`) runs `cargo xtask ci`, then
-`KILN_ORACLE=19 cargo xtask ci --quick --oracle-only`, in a
-`gcc:16.1.0-trixie` container on `ubuntu-24.04-arm`, the reference
+missing. GitHub CI (`.github/workflows/ci.yml`) runs the equivalent of `cargo
+xtask ci` and then `KILN_ORACLE=19 cargo xtask ci --quick --oracle-only`,
+fanned out over parallel jobs (WP-692; the job graph is in
+docs/VALIDATION.md "GitHub Actions"), each in a
+`gcc:16.1.0-trixie` container, on `ubuntu-24.04-arm`, the reference
 environment (aarch64 Debian 13, clang 19.1.7, GCC 14 for libstdc++
 detection, plus GCC 16.1 in `/usr/local` as the GCC oracle), with
 `clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev` installed,
@@ -974,10 +1003,11 @@ detection, plus GCC 16.1 in `/usr/local` as the GCC oracle), with
 "GitHub Actions", WP-226, WP-502). The action first checks that
 `$KILN_GCC -dumpfullversion` is 16.1.x and that it compiles a `<meta>`
 TU with `-std=c++26 -freflection`.
-The job `check` (the required status check) and the job `check-x86_64`
-(the same container on the x86-64 `ubuntu-24.04` runner, WP-228) share
-their steps through the composite action `.github/actions/kiln-ci` rather
-than a matrix, which would rename `check` (WP-239).
+The fan-in jobs `check` (aarch64) and `check-x86_64` (the same container
+on the x86-64 `ubuntu-24.04` runner, WP-228), the required status checks,
+pass only when every job of their architecture succeeded; the jobs share
+their setup through the composite action `.github/actions/kiln-ci`
+(WP-239, WP-692).
 
 Landed (WP-096): the kiln-mode run, `--quick`, and the pass criteria above.
 Before it, `ci` ran only the clang self-check, and kiln regressions in the
@@ -1104,6 +1134,9 @@ or infrastructure error. Parse errors name their line.
     on a FAIL, XPASS or ERROR in either run or an infrastructure error, and
     allows XFAIL, SKIP and a skipped run;
   - `ci_retries_only_missing_crates_once`: the E0463 retry decision;
+  - `shards_partition_the_test_list` (WP-692): `--shard` parsing and
+    rejection, and shards 1/3, 2/3, 3/3 of `xtask/fixtures/ast/clang` are
+    the round-robin slices of the unsharded list and together exactly it;
   - `memory_limits_with_a_fake_hog`: `xtask/fixtures/memory/` under
     `xtask/fixtures/fake-hog/kiln`, a shell script that identifies as kiln
     and allocates the MiB a `// fake-hog-mib: N` line asks for (with

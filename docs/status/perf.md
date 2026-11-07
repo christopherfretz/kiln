@@ -419,3 +419,80 @@ and `4 compared with gcc` in both kiln-corpus summary lines.
 **Conclusion:** the `gcc:16.1.0-trixie` image costs +9 s (`check`) and
 +16 s (`check-x86_64`) per job, well under the 60 s threshold, so the
 image stays and the `actions/cache` fallback is not taken.
+
+### WP-692: CI fan-out (2026-11-07)
+
+**Before:** one serial job per architecture, run 42338130087 (main):
+`check` 18.3 min, `check-x86_64` 26 min. **After:** the fanned-out graph
+(docs/VALIDATION.md "GitHub Actions": per architecture `lints`, `unit` x3,
+`self-check` x2, `kiln-22` x6, `kiln-19` x6), PR run 42342017979 on
+wp/692. Attempt 1 had a cold cache under the new per-architecture keys;
+attempt 2 restored it. Times are from the run's jobs API, measured from
+when the run's first job was created.
+
+| | aarch64 cold | aarch64 warm | x86-64 cold | x86-64 warm |
+|---|---|---|---|---|
+| fan-in done (run wall-clock) | 200 s | 196 s (3.3 min) | 208 s | 228 s (3.8 min) |
+| longest job | `unit rest` 187 s | `unit rest` 185 s | `kiln-22 3/6` 200 s | `unit rest`, `kiln-22 5/6` 218 s |
+| `kiln-22`/`kiln-19` shard jobs | 135-167 s | 131-165 s | 119-200 s | 112-218 s |
+| `unit xtask` / `codegen` / `rest` | 153 / 140 / 187 s | 139 / 131 / 185 s | 169 / 157 / 199 s | 155 / 150 / 218 s |
+| `self-check` 1/2, 2/2 | 108 / 103 s | 110 / 110 s | 118 / 114 s | 114 / 117 s |
+| `lints` | 94 s | 93 s | 118 s | 93 s |
+| runner time, all 18 jobs | | 42 min | | 46 min |
+
+The deps-only cache is so small (12 MB) that a cold run costs almost
+nothing. Each run uses about twice the runner minutes of the serial
+job (42 against 18 and 46 against 26) in exchange for a 5.5x and 6.8x
+shorter wait.
+
+**Per-job fixed overhead** (warm, from the step log timestamps; aarch64 /
+x86-64):
+- set up job: 1 s;
+- container (`gcc:16.1.0-trixie` pull and start): 19-24 s / 19-25 s;
+- checkout: 1 s / 3 s;
+- apt and the GCC 16.1 `<meta>` check: 12 s / 13 s;
+- rustup 1.95.0: 6 s / 10 s;
+- rust-cache restore (12 MB, exact hit): 1-2 s / 2 s;
+- xtask build: 14 s / 15 s;
+- workspace rebuild: `cargo build -p kiln_driver` 24 s / 25 s in the
+  corpus jobs, `cargo test` build of the `rest` group 55 s / 59 s.
+
+That is about 58 s / 66 s before any job compiles kiln, and 82 s / 91 s
+before a kiln shard starts testing.
+
+**Critical path** (warm):
+- aarch64: `unit rest` = 45 s setup + 14 s xtask + 55 s test build + 70 s
+  of tests = 185 s.
+- x86-64: `unit rest` = 50 s + 15 s + 59 s + 100 s = 218 s, tied with
+  `kiln-22 5/6` = 52 s + 15 s + 25 s kiln build + 122 s corpus = 218 s.
+
+The x86-64 corpus shards vary by 2x between attempts on the same commit
+(`kiln-22 3/6` took 200 s cold and 122 s warm; `5/6` took 189 s and
+218 s), so the tail there is runner variance, not shard imbalance. A
+larger `S` would cut the mean shard but not the variance, and costs 4
+jobs per step of `S`.
+
+**What the floor is made of, and the options:**
+- **A prebuilt toolchain image** (Dockerfile in the repo, published to
+  GHCR) would fold apt, the GCC check and rustup (18 s / 23 s per job)
+  into the image. The image would gain clang 19 and 22, LLVM and lld,
+  roughly 1 GB on top of `gcc:16.1.0-trixie`. Hosted runners pull it
+  cold every job, and the container step already takes about 22 s, so
+  the net saving is likely 5-15 s per job. That is worth measuring
+  before building, but it is not a big lever.
+- **A build-once job** that uploads `kiln++` and the test binaries as an
+  artifact would be sound: same checkout, same image, same absolute
+  `/__w` paths. It would put a whole serial job on the critical path:
+  setup of about 50 s, the build of about 60 s, then upload and
+  download. It would save each parallel job only its 25-60 s rebuild,
+  which today runs concurrently anyway. It would therefore save runner
+  minutes but lengthen the wall clock by roughly 45-60 s. Not measured,
+  since the estimate is one-sided.
+- **Caching workspace crates is not done.** Cargo rebuilds them anyway,
+  because a fresh checkout's mtimes are newer than the cache. Restoring
+  commit mtimes would be unsound, because a PR commit can be older than
+  the cached build (docs/VALIDATION.md "Cache policy").
+- **`unit rest` is now the longest job** (55-59 s of test build plus
+  70-100 s of serial test binaries). It could split again, but its
+  build cost repeats in every split, so a split would cut at most 30-40 s
+  and only on aarch64.
