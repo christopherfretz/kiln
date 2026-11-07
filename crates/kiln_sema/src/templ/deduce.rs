@@ -1121,6 +1121,10 @@ impl Sema<'_, '_> {
                 self.deduce_noexcept(pexc, aexc, flags, d, p, a)
             }
             TypeView::TemplateSpecialization { name, args, .. } => {
+                // The bases are tried from the deductions made before `A`
+                // itself was (clang's `DeducedOrig`): a failed match of
+                // `I<B>` against `ref<iface>` deduced `I = ref` already.
+                let orig = flags.contains(TdfFlags::DERIVED_CLASS).then(|| d.clone());
                 let r = self.deduce_template_id(name, args, a, d, next);
                 // A mismatch inside the arguments keeps its own `P`/`A`
                 // (clang reports the innermost pair); only an `A` that is
@@ -1134,7 +1138,8 @@ impl Sema<'_, '_> {
                 }
                 // No base matches: the result for `A` itself (clang's
                 // `DeduceTemplateSpecArguments`).
-                match self.deduce_from_bases(name, args, a, d, next) {
+                let orig = orig.unwrap_or_else(|| d.clone());
+                match self.deduce_from_bases(name, args, a, &orig, d, next) {
                     Some(b) => b,
                     None if not_id => mismatch(d),
                     None => r,
@@ -1437,8 +1442,10 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// [temp.deduct.call]/4.3: `P` against the bases of `A`; the
-    /// successful base must be unique. `None` when none matches. A class
+    /// [temp.deduct.call]/4.3: `P` against the bases of `A`, each from
+    /// the deductions `orig` made before `A` was tried; the successful
+    /// base must be unique, its deductions then replace `d`. `None` when
+    /// none matches. A class
     /// template specialization `A` not yet instantiated is instantiated
     /// first, at the deduction's location, so that its bases exist
     /// ([temp.inst]/2; clang's `isCompleteType` in
@@ -1449,6 +1456,7 @@ impl Sema<'_, '_> {
         name: kiln_ast::ids::TemplateNameId,
         args: ArgListId,
         a: QualType,
+        orig: &DeducedArgs,
         d: &mut DeducedArgs,
         level: u32,
     ) -> Option<Tdk> {
@@ -1472,7 +1480,7 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 seen.push(first);
-                let mut trial = d.clone();
+                let mut trial = orig.clone();
                 if self.deduce_template_id(name, args, b, &mut trial, level) == Tdk::Success {
                     let cb = self.ast.types.canonical(b);
                     match &found {

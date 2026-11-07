@@ -3616,7 +3616,10 @@ a function parameter pack) is `MiscellaneousDeductionFailure`
 
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
-([temp.deduct.call]/4.3). An `A` that is a class template specialization
+([temp.deduct.call]/4.3), each from the deductions made before A was
+tried (clang's `DeducedOrig`): what the failed match of A deduced
+(`I = ref` from `I<B>` against `ref<iface>`) is dropped (WP-789,
+`tests/conformance/temp.deduct.call/base-after-template-template-mismatch-run.cpp`). An `A` that is a class template specialization
 not yet instantiated is instantiated first, at the deduction's location
 and without the undefined-template diagnostic, so its bases exist
 ([temp.inst]/2; clang's `isCompleteType` in `DeduceTemplateBases`; WP-682,
