@@ -117,6 +117,13 @@ impl Sema<'_, '_> {
             };
             let ty = self.this_class_type(q.ctx);
             Some(self.ast.types.nns(Nns::Type { prefix, ty, template_kw: false }))
+        } else if self.is_unentered_dependent_class(q.ctx) && self.ast.definition(q.ctx).is_none() {
+            // A member class of the current instantiation declared but not
+            // yet defined (`struct Block;` defined out of line after the
+            // member functions that name `Block::get`): its specifier is
+            // dependent (clang `computeDeclContext` has no context for
+            // it), so the name is looked up at instantiation (WP-726).
+            Some(q.nns)
         } else {
             None
         }
