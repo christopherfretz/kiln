@@ -15,7 +15,8 @@
 //!   (hash-consed) ids, which already embed the profiles of the
 //!   expressions inside them.
 //! - Template parameters are `(depth, index, pack)` (plus the canonical
-//!   type for a non-type parameter); function parameters are
+//!   type for a non-type parameter, a placeholder's type-constraint
+//!   ignored); function parameters are
 //!   `(index, pack, canonical type)` like the Itanium mangling; every
 //!   other declaration is its first declaration.
 //! - Unresolved names are `(qualifier, name, template args)`; the
@@ -199,7 +200,8 @@ impl Ast {
                 };
                 let pos = (u32::from(p.depth) << 16) | u32::from(p.index);
                 if node.kind() == DeclKind::NonTypeTemplateParm {
-                    out.extend([D_NTTP, pos, u32::from(p.pack), self.opt_canon_word(node.ty())]);
+                    out.extend([D_NTTP, pos, u32::from(p.pack)]);
+                    self.nttp_type_words(node.ty(), out);
                 } else {
                     out.extend([D_TEMPLATE_PARM, pos, u32::from(p.pack)]);
                 }
@@ -223,6 +225,49 @@ impl Ast {
             }
             DeclKind::ContractResultName => out.push(D_RESULT_NAME),
             _ => out.extend([D_DECL, self.first(d).raw()]),
+        }
+    }
+
+    /// The type of a non-type template parameter, ignoring the
+    /// type-constraint of a top-level placeholder ([temp.over.link]/6.2,
+    /// clang's `getUnconstrainedType`): `D` of `template <C auto D>` and of
+    /// `template <auto D>` profile alike, so `decltype(D)` in the
+    /// immediately-declared constraints `C<decltype(D)>` and
+    /// `C2<decltype(D)>` of two templates names one type and their atoms
+    /// can subsume ([temp.param]/5, [temp.constr.order]). Two words:
+    /// `[0, canonical type]` or `[1, keyword | pack | qualifiers]`.
+    fn nttp_type_words(&self, q: Option<QualType>, out: &mut Vec<u32>) {
+        if let Some(q) = q {
+            let c = self.types.canonical(q);
+            if let super::TypeView::Auto { keyword, deduced: None, pack, .. } =
+                self.types.view(c.ty())
+            {
+                let w = keyword as u32 | (u32::from(pack) << 4) | (u32::from(c.quals_bits()) << 8);
+                out.extend([1, w]);
+                return;
+            }
+        }
+        out.extend([0, self.opt_canon_word(q)]);
+    }
+
+    /// The written template arguments of a reference to `d`. A
+    /// non-dependent list naming a specialization is implied by the
+    /// specialization itself and is left out (clang's canonical
+    /// `VisitDeclRefExpr` profiles no written arguments): its
+    /// non-dependent argument expressions have no profile, so keeping them
+    /// would make `mag<1>` in a redeclared requires-clause differ.
+    fn ref_args_word(&self, d: DeclId, l: Option<ArgListId>) -> u32 {
+        match l {
+            Some(l)
+                if !self.types.arg_list_flags(l).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
+                    && !matches!(
+                        self.decls.get(d).kind(),
+                        DeclKind::FunctionTemplate | DeclKind::VarTemplate
+                    ) =>
+            {
+                NONE
+            }
+            _ => self.args_word(l),
         }
     }
 
@@ -285,14 +330,22 @@ impl Ast {
             K::DeclRefExpr => {
                 out.push(tag(k, 0));
                 self.decl_words(x.decl(e), out);
-                let targs = x.decl_ref_extra(e).and_then(|r| r.template_args);
-                out.push(self.args_word(targs));
+                out.push(
+                    self.ref_args_word(
+                        x.decl(e),
+                        x.decl_ref_extra(e).and_then(|r| r.template_args),
+                    ),
+                );
             }
             K::MemberExpr => {
                 out.push(tag(k, u32::from(n.has(ExprFlags::ARROW))));
                 self.decl_words(x.decl(e), out);
-                let targs = x.decl_ref_extra(e).and_then(|r| r.template_args);
-                out.push(self.args_word(targs));
+                out.push(
+                    self.ref_args_word(
+                        x.decl(e),
+                        x.decl_ref_extra(e).and_then(|r| r.template_args),
+                    ),
+                );
                 stack.push(Work::Opt(id(n.a())));
             }
             K::CXXThisExpr => out.push(tag(k, u32::from(x.this_is_implicit(e)))),

@@ -606,7 +606,11 @@ impl Sema<'_, '_> {
                             // clang 19 quotes a type argument, not a
                             // value; clang 22 quotes both.
                             args: vec![
-                                if self.clang_compat >= 22
+                                // A type is quoted with its `aka` (`'decltype(1)'
+                                // (aka 'int')`, [temp.param]/5).
+                                if let ArgView::Type(t) = a.view() {
+                                    self.ty_arg(t)
+                                } else if self.clang_compat >= 22
                                     || matches!(
                                         a.view(),
                                         ArgView::Type(_)

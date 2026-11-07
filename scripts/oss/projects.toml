@@ -330,3 +330,87 @@ c_compiler = "clang-19"
 wave = 3
 verified = true
 notes = "WP-726. Needs boost, double-conversion, gflags, glog, libevent, fmt and fast_float installed. The shim forces FOLLY_HAS_LIBURING 0 (the container's liburing 2.9 lacks the 2.10 zero-copy receive API folly uses). googletest 1.17 is fetched at configure time. Excluded tests: WriteFileAtomic.directoryPermissions expects a permission error that root does not get; range_test and container_map_util_test do not compile with clang 19 either (RangeTest.cpp, MapUtilTest.cpp), so ctest has no executable for them."
+
+# ---------------------------------------------------------------- wave 4
+# Constexpr stress (WP-792): the heaviest constant-evaluation workloads; the
+# status pages record kiln vs clang-19 per-TU time and peak RSS.
+
+[ctre]
+url = "https://github.com/hanickadot/compile-time-regular-expressions"
+tag = "v3.11.0"
+build = "cmake"
+cxx_std = 20
+configure = ["-DCTRE_BUILD_TESTS=ON", "-DCTRE_BUILD_PACKAGE=OFF"]
+build_targets = ["ctre-test"]
+test = "n=$(ls tests/libctre-test-*.a 2>/dev/null | wc -l); echo \"$n/25 test archives\"; [ \"$n\" -eq 25 ]"
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-792. The test suite is compile-only: 25 static_assert-heavy TUs, each built into a static library by the EXCLUDE_FROM_ALL target ctre-test; the test command checks that all 25 archives exist."
+
+[glaze]
+url = "https://github.com/stephenberry/glaze"
+tag = "v9.1.0"
+build = "cmake"
+cxx_std = 23
+configure = ["-Dglaze_DEVELOPER_MODE=ON", "-DBUILD_TESTING=ON", "-Dglaze_ENABLE_SANITIZERS=OFF", "-Dglaze_BUILD_NETWORKING_TESTS=OFF", "-Dglaze_BUILD_PERFORMANCE_TESTS=OFF", "-Dglaze_ENABLE_FUZZING=OFF", "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON"]
+test = "ctest --output-on-failure -j 4 --timeout 300"
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-792. C++23 (the library requires it). Sanitizers (on by default for clang), networking tests (OpenSSL) and performance tests are off; standalone Asio is fetched at configure time (FetchContent)."
+
+[mp_units]
+url = "https://github.com/mpusz/mp-units"
+tag = "v2.5.0"
+build = "cmake"
+cxx_std = 20
+configure = ["-DMP_UNITS_API_CONTRACTS=NONE", "-DMP_UNITS_BUILD_CXX_MODULES=OFF"]
+deps = ["catch2"]
+test = "ctest --output-on-failure -j 4"
+c_compiler = "clang-19"
+control_cxx = "g++-16"
+wave = 4
+verified = true
+notes = "WP-792. clang 19 cannot build mp-units (its documented unfixable clang 19 bug, llvm-project PR 118288: type constraint differs in template redeclaration), and clang 22 rejects most of v2.5.0 too (no viable deduction guide for quantity in quantity_spec.h), so the control is GCC 16 (control_cxx; g++-16 must be on PATH). Catch2 (the toml catch2 row) is a dependency built with clang 19; contracts off (no gsl-lite). test/static is static_assert-only; test/runtime is Catch2."
+
+[scnlib]
+url = "https://github.com/eliaskosunen/scnlib"
+tag = "v4.0.1"
+build = "cmake"
+cxx_std = 20
+configure = ["-DSCN_TESTS=ON", "-DSCN_BENCHMARKS=OFF", "-DSCN_BENCHMARKS_BUILDTIME=OFF", "-DSCN_BENCHMARKS_BINARYSIZE=OFF", "-DSCN_EXAMPLES=OFF", "-DSCN_DOCS=OFF", "-DSCN_WERROR=OFF"]
+test = "ctest --output-on-failure -j 4"
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-792. googletest and fast_float are fetched at configure time (FetchContent) and built with the same compiler; std regex backend."
+
+[daw_json_link]
+url = "https://github.com/beached/daw_json_link"
+tag = "v3.38.1"
+build = "cmake"
+cxx_std = 20
+configure = [
+  "-DDAW_ENABLE_TESTING=ON",
+  "-DDAW_JSON_USE_BOOST=OFF",
+  "-DCMAKE_PROJECT_daw-json-link_INCLUDE=@OSS@/shims/daw-pin-header-libraries.cmake",
+]
+test = "ctest --output-on-failure -j 4 --timeout 300"
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-792. daw-header-libraries and daw-utf-range are fetched at configure time (FetchContent); a shim pins header_libraries to v2.135.0 (the tests otherwise take its moving `v2` branch, which no longer builds v3.38.1). The Boost-using tests are off: the system Boost 1.83 has no Boost.Container CMake package."
+
+[reflect_cpp]
+url = "https://github.com/getml/reflect-cpp"
+tag = "v0.27.1"
+build = "cmake"
+cxx_std = 20
+configure = ["-DREFLECTCPP_BUILD_TESTS=ON", "-DREFLECTCPP_USE_VCPKG=OFF", "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON", "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g0 -Wno-error"]
+deps = ["googletest"]
+test = "ctest --output-on-failure -j 4 --timeout 300"
+c_compiler = "clang-19"
+wave = 4
+verified = true
+notes = "WP-792. C++20 field reflection by structured bindings and __PRETTY_FUNCTION__ (not P2996). JSON only (bundled yyjson); googletest is a dependency built with the same compiler. Precompiled headers off for both compilers; the test flags' -ggdb and -Werror are overridden by -g0 -Wno-error in CMAKE_CXX_FLAGS_RELEASE."

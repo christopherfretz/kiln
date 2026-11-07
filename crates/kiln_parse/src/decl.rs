@@ -1410,7 +1410,9 @@ impl Parser<'_, '_> {
                 true
             }
             // A placeholder for a deduced class type ([dcl.type.class.deduct]).
-            Some((end, NameClass::TypeTemplate(d), _)) if self.s.is_ctad_template(d) => {
+            Some((end, NameClass::TypeTemplate(d), _))
+                if self.names_ctad_template(self.scan_name_qual_at(start).and_then(|x| x.4), d) =>
+            {
                 self.parse_ctad_placeholder(ds, d, end > start + 1, end, loc);
                 true
             }

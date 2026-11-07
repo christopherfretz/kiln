@@ -382,6 +382,11 @@ pub struct Args {
     pub dirs: Vec<(DirGroup, String)>,
     /// `-F` directories (ignored with a warning).
     pub frameworks: Vec<String>,
+    /// `-ftime-trace[=<path>]`, `-ftime-trace-granularity=<n>` and
+    /// `-ftime-trace-verbose` as written: accepted for build systems that
+    /// add them for clang, warned about, and otherwise ignored (kiln
+    /// writes no time trace; its own reports are `-fkiln-*-report`).
+    pub time_trace: Vec<String>,
     /// `--embed-dir=<dir>`.
     pub embed_dirs: Vec<String>,
     /// `-include <file>`, in order: `#include "<file>"` at the end of the
@@ -744,6 +749,7 @@ impl Args {
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
             "-###" => self.print_commands = true,
             "-Qunused-arguments" => self.quiet_unused_arguments = true,
+            "-ftime-trace" | "-ftime-trace-verbose" => self.time_trace.push(arg.to_owned()),
             "-disable-llvm-passes" => self.disable_llvm_passes = true,
             "-moutline-atomics" => self.outline_atomics = Some(true),
             "-mno-outline-atomics" => self.outline_atomics = Some(false),
@@ -857,6 +863,10 @@ impl Args {
                             .errors
                             .push(ArgError::InvalidValue((*opt).to_owned(), v.to_owned())),
                     }
+                } else if arg.starts_with("-ftime-trace=")
+                    || arg.starts_with("-ftime-trace-granularity=")
+                {
+                    self.time_trace.push(arg.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdebug-prefix-map=") {
                     // No debug information: validated, otherwise ignored.
                     if !v.contains('=') {

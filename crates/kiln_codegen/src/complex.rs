@@ -153,9 +153,9 @@ impl Cg<'_> {
                 let Some(init) = self.default_member_init(e) else {
                     return err(self.loc_of(e), "default member initializer not yet parsed");
                 };
-                let saved = self.enter_default_arg(e);
+                let saved = self.enter_default_init(e);
                 let r = self.emit_cx(init, ign);
-                self.srcloc = saved;
+                self.exit_default_init(saved);
                 r
             }
             ExprKind::SubstNonTypeTemplateParmExpr => self.emit_cx(ExprId::new(n.b()), ign),

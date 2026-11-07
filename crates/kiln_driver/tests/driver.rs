@@ -68,6 +68,29 @@ fn print_resource_dir() {
     assert!(Path::new(o.stdout.trim_end()).join("include").is_dir(), "{}", o.stdout);
 }
 
+/// spec/driver.md "Options": clang's `-ftime-trace` family (glaze adds
+/// `-ftime-trace` for clang) is accepted with a
+/// `-Wunused-command-line-argument` warning per spelling, silenced by
+/// `-Qunused-arguments`; the compile is unaffected (WP-792).
+#[test]
+fn time_trace_ignored() {
+    let flags = ["-ftime-trace", "-ftime-trace=t.json", "-ftime-trace-granularity=10"];
+    let mut args = vec!["-std=c++26", "-fsyntax-only"];
+    args.extend(flags);
+    args.push("-");
+    let o = kiln(&args, "int f();\n");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    for f in flags {
+        let w = format!(
+            "kiln++: warning: '{f}' ignored: kiln writes no time trace (see -fkiln-instantiation-report) [-Wunused-command-line-argument]\n"
+        );
+        assert!(o.stderr.contains(&w), "{}", o.stderr);
+    }
+    args.insert(0, "-Qunused-arguments");
+    let o = kiln(&args, "int f();\n");
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+}
+
 #[test]
 fn argument_errors() {
     let o = kiln(&["-E", "-fbogus", "-x", "pascal", "-stdlib=libfoo", "/nonexistent.cpp"], "");
