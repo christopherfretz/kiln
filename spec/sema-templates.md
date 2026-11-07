@@ -7181,6 +7181,13 @@ declarator scopes.**
   dependent type is first built as `this->C::m`; its `&` operand is
   rebuilt as the qualified `DeclRefExpr` (`undo_dependent_implicit_member`,
   WP-669; `expr.unary.op/p3-qualified-member-pointer-dependent-type.cpp`).
+  The same holds where `N::m` names one member of a class `N` that
+  `*this` may derive from only through a dependent base: the
+  `this->N::m` built for it records the member
+  (`note_qualified_dependent_member`), so `&N::m` is a pointer to member
+  even when `N` is unrelated at instantiation (WP-686;
+  `expr.unary.op/p3-qualified-member-unrelated-class-dependent-base-run.cpp`).
+  Gap: an overload set `&N::f` there is still rebuilt as `this->N::f`.
 - *[expr.cond]/4 class unification* (clang `TryClassUnification`): when
   the operands differ in type and either is a class, each is tried
   against the other. The order is: /4.1–4.2, a glvalue target binding
