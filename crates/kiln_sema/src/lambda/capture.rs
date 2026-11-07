@@ -293,6 +293,7 @@ impl Sema<'_, '_> {
             let t = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
             (t, self.non_reference(t))
         };
+        let mut fresh: Vec<LambdaId> = Vec::new();
         for (j, &l) in chain.iter().enumerate().rev() {
             let explicit = j == 0 && top == Some(l);
             let data = self.ast.exprs.lambdas.get(l);
@@ -329,7 +330,13 @@ impl Sema<'_, '_> {
                     init: false,
                 };
                 self.add_capture(l, c, cap);
+                if !explicit {
+                    fresh.push(l);
+                }
             }
+        }
+        if build {
+            self.note_contract_capture_use(Some(d), loc, &fresh);
         }
         // A pack names its pattern ([temp.variadic]/5), as an uncaptured
         // pack's `DeclRefExpr`: a use of an init-capture pack `xs` of type
@@ -729,6 +736,13 @@ impl Sema<'_, '_> {
             c = p;
         }
         let Some(this_ty) = self.current_this() else { return false };
+        let fresh: Vec<LambdaId> = chain
+            .iter()
+            .enumerate()
+            .filter(|&(j, &l)| !(j == 0 && top.is_some_and(|t| t.0 == l)))
+            .map(|(_, &l)| l)
+            .collect();
+        self.note_contract_capture_use(None, loc, &fresh);
         for (j, &l) in chain.iter().enumerate() {
             let explicit = j == 0 && top.is_some_and(|t| t.0 == l);
             let star = explicit && top.is_some_and(|t| t.1);
@@ -749,6 +763,58 @@ impl Sema<'_, '_> {
             self.add_capture(l, c, ty);
         }
         true
+    }
+
+    /// [expr.prim.lambda.closure]/10 (P2900R14): a reference at `loc` to
+    /// the local entity `d` (`None`: `*this`) that the open lambdas
+    /// `fresh` have just captured implicitly. A lambda for which the
+    /// reference is in one of its contract assertions (its call
+    /// operator's function contract assertions, or a `contract_assert`
+    /// in its body, a nested lambda's included) remembers a fresh capture
+    /// as contract-only; a reference outside its contract assertions
+    /// clears that. Free when no contract assertion is open and none is
+    /// pending.
+    fn note_contract_capture_use(&mut self, d: Option<DeclId>, loc: Loc, fresh: &[LambdaId]) {
+        if self.contract_ctx.is_empty() && self.lambdas.iter().all(|s| s.contract_caps.is_empty())
+        {
+            return;
+        }
+        for i in 0..self.lambdas.len() {
+            // A contract assertion opened while lambda `i` was open is
+            // one of its own or lies in its body.
+            let inside = self.contract_ctx.iter().any(|c| c.lambdas > i);
+            let s = &mut self.lambdas[i];
+            if inside {
+                if fresh.contains(&s.id) {
+                    s.contract_caps.push((d, loc));
+                }
+            } else if !s.contract_caps.is_empty() {
+                s.contract_caps.retain(|x| x.0 != d);
+            }
+        }
+    }
+
+    /// At a lambda's end: each implicit capture `caps` left referenced
+    /// only in the lambda's contract assertions makes the program
+    /// ill-formed ([expr.prim.lambda.closure]/10: "adding a contract
+    /// assertion to an existing C++ program cannot cause additional
+    /// captures"); GCC 16.1's wording. The enclosing lambda does not
+    /// report the same reference again.
+    pub(crate) fn check_contract_only_captures(&mut self, caps: &[(Option<DeclId>, Loc)]) {
+        for &(d, loc) in caps {
+            let name = d.map_or_else(|| "this".to_string(), |d| self.decl_name(d));
+            let mut msg = self.diag(DiagId::sema_contract_only_implicit_capture, loc).arg(name.clone());
+            if let Some(d) = d {
+                msg = msg.with_note(
+                    self.diag(DiagId::note_entity_declared_at, self.ast.decls.get(d).loc())
+                        .arg(format!("'{name}'")),
+                );
+            }
+            self.emit(msg);
+            if let Some(outer) = self.lambdas.last_mut() {
+                outer.contract_caps.retain(|x| *x != (d, loc));
+            }
+        }
     }
 
     /// A potentially-evaluated use of `this` at `loc` (written, or the

@@ -263,6 +263,10 @@ impl Sema<'_, '_> {
     /// predicate of a contract assertion: `const` if `d` is a variable,
     /// a reference template parameter, or a structured binding declared
     /// outside the assertion, or a result name ([expr.prim.id.unqual]/6-7).
+    /// A splice-expression `[: r :]` designating such a variable or
+    /// structured binding is built through the same reference and gets
+    /// the same type (P3598R0, [expr.prim.splice]/2.5); a splice of an
+    /// object reflection is not (`splice_object_expr`).
     /// A name that denotes a member of the closure of a lambda in the
     /// predicate (a capture by copy) is not const-ified.
     pub(crate) fn contract_constify(
