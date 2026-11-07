@@ -7151,12 +7151,16 @@ declarator scopes.**
   B<1, S>::g()` did not find the partial specialization `B<1, S>`
   (registered with converted arguments). When entering a declarator
   context, `entered_partial_by_converted_args` converts the arguments
-  with `check_template_args` and looks again (`find_partial`). Gap:
+  with `check_template_args` and looks again (`find_partial`). It does
+  so too when the qualifier leaves arguments to the primary template's
+  defaults (`E<W<U>>::I` for `E<T, S = typename T::S>`), whose
+  converted form the partial was registered with (WP-709). Gap:
   dependent template-ids elsewhere are still neither checked nor
   converted (clang checks every template-id).
 - Tests: `tests/conformance/temp.mem.class/`, `temp.mem.enum/`,
   `temp.spec.partial.member/out-of-line-ctors.cpp`,
   `temp.spec.partial.member/non-type-arg-scope.cpp`,
+  `temp.spec.partial.member/out-of-line-member-defaulted-args.cpp`,
   `templates/builtins/builtin.is-trivially-constructible-assignable.cpp`.
 
 **Landed (WP-176): libc++ `<type_traits>` follow-ups.**

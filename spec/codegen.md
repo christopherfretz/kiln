@@ -1749,7 +1749,10 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   with flags and base offset words), pointers (`__pointer_type_info`,
   qualifier flags plus 8 for an incomplete pointee), enums, functions and
   arrays (`{vt, name}`). Fundamental types and (const) pointers to them
-  refer to the runtime's `external constant` objects. RTTI of a type that
+  refer to the runtime's `external constant` objects. Vector types (GNU and
+  NEON) and `_Complex` types are not in the runtime: their
+  `__fundamental_type_info` `{vt, name}` is emitted `linkonce_odr` where
+  used (WP-709). RTTI of a type that
   involves an incomplete class has `internal` linkage. Linkage of class
   RTTI follows the vtable.
 - **Constant objects of polymorphic classes** (`consts.rs`

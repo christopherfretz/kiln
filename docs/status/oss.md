@@ -60,7 +60,7 @@ The loop:
 | `abseil` | 2 | `20260107.1` | not started |
 | `benchmark` | 2 | `v1.9.5` | tests at parity |
 | `cereal` | 2 | `v1.3.2` | tests at parity |
-| `eigen` | 2 | `3.4.1` | not started |
+| `eigen` | 2 | `3.4.1` | tests at parity (132-target subset) |
 | `entt` | 2 | `v3.15.0` | tests at parity |
 | `glog` | 2 | `v0.7.1` | tests at parity |
 | `re2` | 2 | `2025-11-05` | tests at parity |
@@ -320,3 +320,31 @@ Failure clusters (kiln): none.
 
 Failure clusters (kiln): none.
 <!-- /oss:re2 -->
+
+<!-- oss:eigen -->
+### eigen (3.4.1)
+
+| | kiln | clang-19 |
+|---|---|---|
+| configure | ok | ok |
+| build | rc 2 | rc 2 |
+| TUs ok / failed | 539 / 0 | 539 / 0 |
+| links ok / failed | 535 / 4 | 539 / 0 |
+| tests passed / total | 535 / 539 | 539 / 539 |
+| wall | 1226 s | 1073 s |
+| peak TU RSS | 797 MB | 1408 MB |
+
+Failure clusters (kiln): 1.
+
+1. **4x** `link: undefined reference to Q`
+   - e.g. `link`: `dynalloc.cpp:(.text+0x1550): undefined reference to `Eigen::PlainObjectBase<Eigen::Matrix<float, 2, 1, 0, 2, 1> >::operator delete[](void*)'`
+   - repro: `cd $KILN/.oss/build/eigen/kiln/test && kiln++ -std=c++11 -pedantic -Wall -Wextra -Wundef -Wcast-align -Wchar-subscripts -Wnon-virtual-dtor -Wunused-local-typedefs -Wpointer-arith -Wwrite-strings -Wformat-security -Wshorten-64-to-32 -Wenum-conversion -Wc++11-extensions -Wdouble-promotion -Wshadow -Wno-psabi -Wno-variadic-macros -Wno-long-long -fno-common -fstrict-aliasing -O3 -DNDEBUG -Xlinker --dependency-file=CMakeFiles/dynalloc.dir/link.d CMakeFiles/dynalloc.dir/dynalloc.cpp.o -o dynalloc`
+
+kiln test run: `99% tests passed, 4 tests failed out of 539`
+
+A 132-test subset (539 TUs). The link cluster is the class-template
+`operator new`/`delete` instantiation that WP-686 fixed on main; with
+it, all 539 tests pass (WP-709, docs/status/oss/eigen.md).
+
+With the WP-686 allocation fixes now on main (#324), the 4 targets that failed to link on the WP-709 branch build and pass: 539/539 tests, at parity with clang-19.
+<!-- /oss:eigen -->
