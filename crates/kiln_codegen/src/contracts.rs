@@ -306,13 +306,13 @@ impl Cg<'_> {
         let fmt = Value::global(self.string_global(&fmt, 1, n));
         let yes = Value::global(self.string_global(b"yes\0", 1, 4));
         let no = Value::global(self.string_global(b"no\0", 1, 3));
-        let stream = |cg: &mut Self, name: &str| match cg.m.get_global(name) {
-            Some(g) => g,
-            None => {
-                let g = cg.m.add_global(name, LTy::PTR);
-                cg.m.global_mut(g).align = Some(8);
-                g
+        let stream = |cg: &mut Self, name: &str| {
+            if let Some(g) = cg.m.get_global(name) {
+                return g;
             }
+            let g = cg.m.add_global(name, LTy::PTR);
+            cg.m.global_mut(g).align = Some(8);
+            g
         };
         let stdout = stream(self, "stdout");
         let stderr = stream(self, "stderr");

@@ -602,10 +602,12 @@ fn predicate_text(sm: &kiln_source::SourceManager, t: kiln_source::Span) -> Opti
         depth == 0
     };
     let (lo, hi) = (to_file(t.lo, false), to_file(t.hi, true));
-    if lo.is_file() && hi.is_file() && sm.same_entry_distance(lo, hi).is_some() {
-        if let Some(s) = sm.span_text(kiln_source::Span::new(lo, hi)).filter(|s| balanced(s)) {
-            return Some(s);
-        }
+    if lo.is_file()
+        && hi.is_file()
+        && sm.same_entry_distance(lo, hi).is_some()
+        && let Some(s) = sm.span_text(kiln_source::Span::new(lo, hi)).filter(|s| balanced(s))
+    {
+        return Some(s);
     }
     let lo = if t.lo.is_macro() { sm.expansion_span(t.lo).lo } else { t.lo };
     let hi = if t.hi.is_macro() { sm.expansion_span(t.hi).hi } else { t.hi };
