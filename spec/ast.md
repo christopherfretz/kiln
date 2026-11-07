@@ -260,8 +260,10 @@ ExprId, loc }` in initialization order, read by `Ast::ctor_inits`),
 class's befriended first declarations), `key_function`, `dtor_delete` (the
 operator delete a virtual destructor uses), `record_pack` —
 `= delete("reason")` messages (P2573), `explicit(expr)`, trailing
-requires-clauses, contract lists (P2900: `ListId` of `ContractSpec { kind:
-pre|post, cond: ExprId, result_name: Option<DeclId> }`), `asm` labels,
+requires-clauses, contract lists (P2900: `contracts`, a `ListId` of the
+`ContractAssertStmt`s of a function's `pre`/`post` specifiers in written
+order, keyed by the declaration that wrote them; `Ast::function_contracts`;
+spec/contracts.md §4), `asm` labels,
 default arguments of templates, alignment overrides, deprecation messages.
 A cold map costs ~16 B per *entry* and nothing for decls without one;
 fields used by fewer than ~5% of decls of a kind go there.
@@ -641,7 +643,7 @@ struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, 
 | `CoroutineBodyStmt` (WP-351) | `a` = index of a `CoroutineBodyData` side record (`Stmts::coroutine_body`) with clang's fixed slots: `body` (as written), `promise`/`promise_stmt`, `init_suspend`/`final_suspend` (implicit `CoawaitExpr`s), `on_exception` (`__promise.unhandled_exception();`, `None` with `-fno-exceptions`), `on_fallthrough` (implicit `co_return;`), `allocate`/`deallocate` (the `operator new`/`delete` calls over `__builtin_coro_size`/`__builtin_coro_free`), `return_value` (`get_return_object()`), `result_decl` (`__coro_gro` when its type is not the return type), `return_stmt` (`return __coro_gro;` converted, or `return get_return_object();` for the same type; `None` for `void`), `return_on_alloc_failure`, `param_moves` (`ListId` of `DeclStmt`s, parameter order). It replaces the function's body (`FunctionData::body`); built only outside template patterns (`Builder::coroutine_body_stmt`) |
 | `CoreturnStmt` (WP-351) | `a` = the operand as written (`coreturn_operand`, `None` for `co_return;`), `b` = the promise call `return_value(e)`/`return_void()` as a full-expression (`coreturn_promise_call`, `None` in a template pattern), `aux` bit 0 = the implicit `co_return;` that ends the body (`coreturn_is_implicit`) |
 | `GCCAsmStmt` | side record: template `StringLitId`, outputs/inputs `ListId` of `(constraint StringLitId, ExprId)`, clobbers, labels; volatile/goto bits |
-| `ContractAssertStmt` (P2900) | `a` = cond, `aux` = evaluation semantic slot (resolved at codegen) |
+| `ContractAssertStmt` (P2900, WP-706) | one contract assertion: a `contract_assert` statement or one `pre`/`post` of a function (spec/contracts.md §4). `a` = the predicate (`contract_cond`), `b` = a postcondition's `ContractResultName` (`contract_result_name`, 0 = none), `aux` bits 0-1 = `ContractKind` (assert/pre/post, `contract_kind`), bits 2-3 = the evaluation-semantic slot (`contract_semantic_slot`; 0 = the translation unit's `Ast::contract_semantic`) |
 
 ## 7. Attributes
 `AttrNode { kind: AttrKind /*u16*/, syntax: u8 /*[[ ]], GNU, keyword, declspec*/, flags: u8, loc, a, b }`

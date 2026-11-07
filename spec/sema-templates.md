@@ -2611,7 +2611,10 @@ recomputed exactly as for non-template code (clang's
   (790 tests, `-fsyntax-only`) found no kind reaching it; the kinds left
   are unreachable today because their construct is rejected or
   unimplemented before substitution: coroutine expressions and
-  statements, `template for`, computed `goto` and `contract_assert`.
+  statements, `template for` and computed `goto`. A `contract_assert`
+  (`ContractAssertStmt`) has its own arm since WP-706, and a function's
+  `pre`/`post` specifiers are substituted with the function
+  (`templ/subst/contracts.rs`; spec/contracts.md §5, Templates).
 - **`ChooseExpr`** (WP-307; clang `TransformChooseExpr`): the condition
   (unwrapped from its `ConstantExpr`) and both operands are substituted
   and `act_on_choose_expr` runs again.
