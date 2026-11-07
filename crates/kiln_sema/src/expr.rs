@@ -1834,6 +1834,7 @@ impl Sema<'_, '_> {
             // an overload set resolved at the call (clang's
             // `UnresolvedLookupExpr`; deduction is WP-071).
             if found.naming.is_some()
+                && !self.address_operand
                 && found.decls.iter().any(|&x| self.member_via_dependent_base(x))
                 && let Some((this_ty, _)) = self.this_class()
             {
@@ -1872,7 +1873,14 @@ impl Sema<'_, '_> {
         if fns && valid.is_empty() {
             valid.extend(found.decls.last().copied());
         }
+        // `&N::f` naming an overload set stays the qualified name, not
+        // `this->N::f`: an address-of operand forms no implicit member
+        // access ([expr.unary.op]/3), so the set is resolved against the
+        // target type ([over.over]) even when `N` turns out unrelated to
+        // the instantiated class (WP-715).
+        let addr_set = self.address_operand && valid.len() > 1;
         if fns
+            && !addr_set
             && found.naming.is_some()
             && valid.iter().any(|&x| self.member_via_dependent_base(x))
             && let Some((this_ty, _)) = self.this_class()
@@ -2043,7 +2051,11 @@ impl Sema<'_, '_> {
         };
         let Some(class) = self.implicit_object_class(first) else {
             // A base on the way to the members' class is dependent: the
-            // call is resolved at instantiation.
+            // call is resolved at instantiation. Not for `&N::f`, which
+            // stays the qualified set (WP-715).
+            if self.address_operand && nns.is_some() {
+                return None;
+            }
             let this_ty = self.dependent_implicit_this(first)?;
             return Some(self.dependent_implicit_member(this_ty, name, nns, loc));
         };

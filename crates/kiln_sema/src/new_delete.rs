@@ -471,11 +471,20 @@ impl Sema<'_, '_> {
         let alloc = self.alloc_fns(elem, op, global, tid.loc);
         let place_args: Vec<ExprId> =
             placement.as_ref().map(|p| p.args.clone()).unwrap_or_default();
-        let Some((op_new, with_align)) =
-            self.find_operator_new(&alloc.fns, &place_args, pass_align).or_else(|| {
-                self.find_operator_new_template(&alloc.templates, &place_args, pass_align, loc)
-            })
-        else {
+        // With function templates among them, the non-template functions
+        // and the templates' deduced specializations go through overload
+        // resolution together ([expr.new]/20, [over.match.best]): a
+        // template's exact match beats a non-template's conversion
+        // (`template <class A> void* operator new(size_t, A*)` over the
+        // library's `operator new(size_t, void*)`).
+        let mut tmpl_notes: Option<Vec<kiln_diag::Diag>> = None;
+        let found = if alloc.templates.is_empty() {
+            self.find_operator_new(&alloc.fns, &place_args, pass_align)
+        } else {
+            let all: Vec<DeclId> = alloc.fns.iter().chain(&alloc.templates).copied().collect();
+            self.find_operator_new_template(&all, &place_args, pass_align, loc, &mut tmpl_notes)
+        };
+        let Some((op_new, with_align)) = found else {
             let ptr_like = place_args.len() == 1 && {
                 let t = self.ast.exprs.get(place_args[0]).ty();
                 self.ast.types.is_array(t)
@@ -489,7 +498,12 @@ impl Sema<'_, '_> {
                 let msg = self
                     .diag(DiagId::sema_ovl_no_viable_function_in_call, loc)
                     .arg(op_spelling(op));
-                let msg = self.operator_new_candidate_notes(msg, &alloc.fns, &place_args);
+                let msg = match tmpl_notes.take() {
+                    // With templates, the notes are overload resolution's own
+                    // (a template's deduced specialization included).
+                    Some(notes) => notes.into_iter().fold(msg, kiln_diag::Diag::with_note),
+                    None => self.operator_new_candidate_notes(msg, &alloc.fns, &place_args),
+                };
                 self.emit(msg);
             }
             return self.recover_err(&kids, loc);
@@ -1123,18 +1137,20 @@ impl Sema<'_, '_> {
         None
     }
 
-    /// The specialization of an allocation function template (class-scope
-    /// or global) among `tmpls` called with `place` ([expr.new]/19-20, [temp.over]):
-    /// overload resolution with a `size_t` prvalue, then a
-    /// `std::align_val_t` one when `pass_align` (first with it, then
-    /// without), then the placement arguments. Templates are tried only
-    /// when no non-template function matches.
+    /// The allocation function among `tmpls` (functions and function
+    /// templates, class-scope or global) called with `place`
+    /// ([expr.new]/19-20, [temp.over]): overload resolution with a
+    /// `size_t` prvalue, then a `std::align_val_t` one when `pass_align`
+    /// (first with it, then without), then the placement arguments. Used
+    /// when the lookup found a function template; a template's deduced
+    /// specialization is instantiated on use.
     pub(crate) fn find_operator_new_template(
         &mut self,
         tmpls: &[DeclId],
         place: &[ExprId],
         pass_align: bool,
         loc: Loc,
+        notes: &mut Option<Vec<kiln_diag::Diag>>,
     ) -> Option<(DeclId, bool)> {
         use crate::overload::{ArgInfo, CandidateKind, IcsOptions, OvlOutcome, SetKind};
         use kiln_ast::expr::ValueCategory;
@@ -1153,26 +1169,41 @@ impl Sema<'_, '_> {
             for &a in place {
                 set.args.push(self.arg_info(a));
             }
-            // A class-scope template is a static member, a global one a
-            // non-member: both called without an object.
-            for &ft in tmpls {
-                if self.ast.decls.get(ft).has(DeclFlags::INVALID) {
+            // Class members go through the member adder; a namespace-scope
+            // function or function template is added directly, each
+            // function once over its redeclarations.
+            let (members, globals): (Vec<DeclId>, Vec<DeclId>) = tmpls.iter().partition(|&&d| {
+                self.ast.decls.get(d).ctx().is_some_and(|c| self.kind_of(c) == DeclKind::CXXRecord)
+            });
+            self.add_found_candidates(
+                &mut set,
+                &members,
+                CandidateKind::Function,
+                IcsOptions::NONE,
+                false,
+            );
+            let mut seen: Vec<DeclId> = Vec::new();
+            for d in globals {
+                let first = self.ast.first(d);
+                if seen.contains(&first) {
                     continue;
                 }
-                self.add_template_candidate(
-                    &mut set,
-                    ft,
-                    ft,
-                    None,
-                    CandidateKind::Function,
-                    IcsOptions::NONE,
-                    loc,
-                );
+                seen.push(first);
+                if self.kind_of(d) == DeclKind::FunctionTemplate {
+                    let (k, o) = (CandidateKind::Function, IcsOptions::NONE);
+                    self.add_template_candidate(&mut set, d, d, None, k, o, loc);
+                } else if !self.ast.decls.get(d).has(DeclFlags::INVALID) {
+                    self.add_candidate(&mut set, d, d, CandidateKind::Function, IcsOptions::NONE);
+                }
             }
             let out = self.resolve_set(&mut set);
             let f = match out {
                 OvlOutcome::Success(b) | OvlOutcome::Deleted(b) => Some(set.cand(b).func()),
-                _ => None,
+                OvlOutcome::NoViable => {
+                    *notes = Some(self.ovl_notes(&set, false));
+                    None
+                }
+                OvlOutcome::Ambiguous => None,
             };
             self.end_set(set);
             if let Some(f) = f {
@@ -1326,18 +1357,33 @@ impl Sema<'_, '_> {
         let vp = self.ast.types.pointer_to(QualType::VOID);
         let mut params = vec![vp];
         params.extend(new_params.iter().skip(1));
-        found
-            .fns
-            .iter()
-            .copied()
-            .find(|&f| {
-                self.fn_params(f).is_some_and(|(ps, variadic)| {
-                    !variadic
-                        && ps.len() == params.len()
-                        && ps.iter().zip(&params).all(|(a, b)| self.ast.types.same_type(*a, *b))
-                })
+        let matches = |s: &Self, f: DeclId| {
+            s.fn_params(f).is_some_and(|(ps, variadic)| {
+                !variadic
+                    && ps.len() == params.len()
+                    && ps.iter().zip(&params).all(|(a, b)| s.ast.types.same_type(*a, *b))
             })
-            .map(|f| (f, naming))
+        };
+        if let Some(f) = found.fns.iter().copied().find(|&f| matches(self, f)) {
+            return Some((f, naming));
+        }
+        // [expr.new]/28 (clang `FindAllocationFunctions`): a placement
+        // deallocation function template matches through deduction
+        // against the expected type `void(void*, P2, ..., Pn)`, the
+        // allocation function's parameters after the first (WP-713).
+        if found.templates.is_empty() {
+            return None;
+        }
+        let info = FuncInfo::default();
+        let expected = self.ast.types.function(QualType::VOID, &params, info, ExcSpec::None);
+        for &ft in &found.templates {
+            if let Ok(f) = self.deduce_decl(ft, None, expected, loc)
+                && matches(self, f)
+            {
+                return Some((f, naming));
+            }
+        }
+        None
     }
 
     /// The semantic initializer of a new-expression ([expr.new]/23) and,

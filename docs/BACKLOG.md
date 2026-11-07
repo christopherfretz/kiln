@@ -734,17 +734,18 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-701 | Implement -Wshadow (accepted, currently ignored; surfaced by yaml-cpp) | WP-698 | open |
 | WP-702 | Implement -Wimplicit-int-float-conversion (accepted, currently ignored; surfaced by yaml-cpp) | WP-698 | open |
 | WP-705 | perf tracking for the OSS corpus: oss-report emits per-TU kiln/clang wall and RSS ratios, a cross-corpus top-10 slowest-TU page under docs/status/oss/, and a quiet-box re-measure; feeds serial perf WPs on the worst offenders (operator 11-07: up to 1.4x slower than clang is unfortunate; PARKED 06:35Z: robustness first, wide perf timing later) | WP-666 | open |
-| WP-708 | parse: GNU `noreturn` in pointer / grouping-paren declarator positions (`crates/kiln_parse/src/decl.rs:2313`) | WP-700 | open |
+| WP-708 | parse: GNU `noreturn` in pointer / grouping-paren declarator positions (`crates/kiln_parse/src/decl.rs:2313`) | WP-700 | fixed by WP-735 (tests/conformance/dcl.attr.noreturn/gnu-noreturn-declarator-positions.cpp) |
 | WP-711 | diag: emit -Wmissing-template-arg-list-after-template-kw and -Wc++11-narrowing-const-reference (clang errors by default) and -Wdeprecated-copy; cereal has instances of all three (cereal/details/tuple.hpp:98, unittests/multimap.hpp:75) | WP-704 | open |
 | WP-712 | sema: global operator new templates are not allocation candidates (`crates/kiln_sema/src/overload/alloc.rs:77`) | WP-686 | fixed by WP-730 (PR #332, tests/conformance/expr.new/global-operator-new-template.cpp) |
-| WP-713 | sema: placement operator delete templates are not matched (`crates/kiln_sema/src/new_delete.rs:1259` matching_operator_delete) | WP-686 | open |
-| WP-714 | parse: `D::B::m` through a base injected-class-name is not handled (`crates/kiln_parse/src/parser.rs:1001`) | WP-686 | open |
-| WP-715 | sema: `&N::f` naming an overload set through a dependent base (`crates/kiln_sema/src/class/member_expr.rs:226`) | WP-686 | open |
+| WP-713 | sema: placement operator delete templates are not matched (`crates/kiln_sema/src/new_delete.rs:1259` matching_operator_delete) | WP-686 | fixed by WP-735 (tests/conformance/expr.new/p28-*-run.cpp) |
+| WP-714 | parse: `D::B::m` through a base injected-class-name is not handled (`crates/kiln_parse/src/parser.rs:1001`) | WP-686 | already worked; regression test by WP-735 (tests/conformance/temp.local/p2-*-run.cpp) |
+| WP-715 | sema: `&N::f` naming an overload set through a dependent base (`crates/kiln_sema/src/class/member_expr.rs:226`) | WP-686 | fixed by WP-735 (tests/conformance/expr.unary.op/p3-qualified-overload-set-dependent-base-run.cpp) |
+| WP-735 | correctness bundle: WP-708, 712-715, 722, 723 (corpus-found parse/sema gaps) | WP-686 | landed PR #334: 708, 713, 714 (regression test only), 715, 722, 723 fixed; 712 shared with WP-730; follow-ups WP-747..749 |
 | WP-718 | diag: -Wunused-lambda-capture is not implemented (spec/diag.md:238) | WP-703 | open |
 | WP-719 | harness: offline selftest.sh case for `deps` / `--install` with a tiny local cmake fixture (scripts/oss/selftest.sh) | WP-710 | open |
 | WP-721 | diag: -Wdeprecated-dynamic-exception-spec before C++17 (`crates/kiln_sema/src/except.rs` act_on_dynamic_exception_spec) | WP-709 | open |
-| WP-722 | parse: `throw(Ts...)` dynamic exception specification with a pack expansion (spec/parse.md:1927) | WP-709 | open |
-| WP-723 | sema: substituting `ExcSpec::DependentNoexcept` is unimplemented (`crates/kiln_sema/src/templ/subst/types.rs:365`) | WP-709 | open |
+| WP-722 | parse: `throw(Ts...)` dynamic exception specification with a pack expansion (spec/parse.md:1927) | WP-709 | fixed by WP-735 (tests/conformance/except.spec/p1-dynamic-pack-expansion-run.cpp) |
+| WP-723 | sema: substituting `ExcSpec::DependentNoexcept` is unimplemented (`crates/kiln_sema/src/templ/subst/types.rs:365`) | WP-709 | fixed by WP-735 (tests/conformance/except.spec/p13-*, temp.deduct.conv/p5-*) |
 | WP-725 | diag: implement -Wdeprecated-copy and subgroups (group names only today, `crates/kiln_diag/src/clang_groups.rs:243`) | WP-720 | open |
 | WP-727 | harness: oss-build.sh tag check warns when two tags point at the checkout (`scripts/oss/oss-build.sh:67`; use `git tag --points-at HEAD`) | WP-716 | open |
 | WP-728 | sema: diagnose conflicting `section` placements (clang err_section_conflict; `crates/kiln_sema/src/decl.rs:9971`) | WP-716 | open |
@@ -763,5 +764,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-742 | oss: llvm_project IRTests + ADTTests re-run after WP-726 lands (kiln build link of ADTTests; docs/status/oss/llvm_project.md) | WP-730 | open |
 | WP-744 | contracts: coroutine postconditions (unsupported today; `crates/kiln_codegen/src/contracts.rs` emit_postconditions, spec/contracts.md §9) | WP-707 | open |
 | WP-745 | bench: rebaseline on a quiet host from tmpfs binaries (WP-707 saw 17 time/RSS flags with +0.0% steps/bytes, constant +0.4 MB RSS baseline skew) | WP-707 | open |
+| WP-747 | diag: exception specification on a typedef/alias before C++17 is not diagnosed (clang: exception specifications are not allowed in typedefs; `crates/kiln_sema/src/except.rs` act_on_dynamic_exception_spec) | WP-735 | open |
+| WP-748 | sema: `&die` loses `noexcept` in C++20 for `static void die() noexcept __attribute__((noreturn))` (`crates/kiln_sema/src/decl_attrs.rs:1137` apply_noreturn_attrs rebuilds from canonical type) | WP-735 | open |
+| WP-749 | sema: `&S<true>::e` loses `noreturn` after instantiation for a noexcept noreturn static member (`crates/kiln_sema/src/templ/subst/decls.rs` function-type substitution) | WP-735 | open |
 WP-511
 WP-512

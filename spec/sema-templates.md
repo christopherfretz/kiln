@@ -7237,7 +7237,20 @@ declarator scopes.**
   (`note_qualified_dependent_member`), so `&N::m` is a pointer to member
   even when `N` is unrelated at instantiation (WP-686;
   `expr.unary.op/p3-qualified-member-unrelated-class-dependent-base-run.cpp`).
-  Gap: an overload set `&N::f` there is still rebuilt as `this->N::f`.
+  An overload set `&N::f` there (`Sema::address_operand`) stays the
+  qualified set, resolved at instantiation against the target type
+  ([over.over]; WP-715,
+  `expr.unary.op/p3-qualified-overload-set-dependent-base-run.cpp`).
+- *Dependent `noexcept(expr)` in a type*: the canonical
+  `ExcSpec::DependentNoexcept(profile)` of a function type (as written
+  under a pointer, member pointer, reference or GNU `noreturn`) is
+  substituted from the profile's operand through `act_on_noexcept_spec`
+  ([except.spec]/13, [temp.inst]/14; WP-723,
+  `except.spec/p13-dependent-noexcept-gnu-noreturn-subst-run.cpp`).
+  Deducing from a conversion function template to a pointer to
+  (member) function allows the function pointer conversion that drops
+  `noexcept` ([temp.deduct.conv]/5;
+  `temp.deduct.conv/p5-noexcept-function-pointer-conversion-run.cpp`).
 - *[expr.cond]/4 class unification* (clang `TryClassUnification`): when
   the operands differ in type and either is a class, each is tried
   against the other. The order is: /4.1–4.2, a glvalue target binding

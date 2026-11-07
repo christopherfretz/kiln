@@ -431,7 +431,10 @@ enum ExcSpec /* tag */ {
   `[[gnu::noreturn]]`; not `[[noreturn]]` or `_Noreturn`), a function type
   attribute as in clang (WP-700): written on a declarator it sets the bit on
   the declared function type or on the function type a pointer, reference
-  or member pointer designates, and on a lambda's call operator.
+  or member pointer designates, and on a lambda's call operator. That
+  holds wherever the declarator carries it: after a `*`, after a grouping
+  `(` (`void (__attribute__((noreturn)) *fp)(int)`), and in a type-id
+  (`using F = void (*__attribute__((noreturn)))(int)`; WP-708).
   Redeclarations and explicit specializations/instantiations of a function
   merge it (clang `MergeFunctionDecl`, `adjustCCAndNoReturn`); a function
   pointer conversion may drop it but never add it (clang
