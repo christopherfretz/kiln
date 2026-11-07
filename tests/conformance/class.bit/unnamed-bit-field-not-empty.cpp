@@ -2,7 +2,7 @@
 // non-zero width is storage, so its class is not empty (Itanium C++ ABI
 // §1.1 "empty class"; clang/GCC agree); only a zero-width one keeps the
 // class empty. The answer feeds the calling convention (spec/abi.md §8.6).
-//@ expect: compile-pass
+//@ expect: compile-ok
 //@ strict-diags
 struct U4 { int : 4; };
 struct U0 { int : 0; };

@@ -13,8 +13,8 @@
 //! the two compilers agree. CI runs it on aarch64 and x86-64 hosts.
 //!
 //! The comparison needs structured-binding packs (P1061R10), which clang
-//! has since 21, so the oracle is always clang 22 whatever `KILN_ORACLE`
-//! says; the compat-19 ABI is covered by `ir_vs_clang`. Without
+//! has since 21, so the oracle is always clang 22, whichever oracle release
+//! the harness selects; the compat-19 ABI is covered by `ir_vs_clang`. Without
 //! `clang++-22` the test is skipped.
 
 use std::path::{Path, PathBuf};
