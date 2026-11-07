@@ -168,9 +168,18 @@ impl Sema<'_, '_> {
         }
         let &first = decls.iter().find(|&&d| self.is_instance_member(self.templated_or_self(d)))?;
         let first = self.templated_or_self(first);
+        // With a static candidate too, `this` is captured only once the
+        // call names an instance member ([`Self::finish_member_winner`];
+        // at instantiation for a dependent `this`): the static `f` of
+        // `[](int s) { return f(s); }` needs none (clang's
+        // `BuildPossibleImplicitMemberExpr`).
+        let all_instance =
+            decls.iter().all(|&d| self.is_instance_member(self.templated_or_self(d)));
         let Some(class) = self.implicit_object_class(first) else {
             let this_ty = self.dependent_implicit_this(first)?;
-            self.note_this_use(loc);
+            if all_instance {
+                self.note_this_use(loc);
+            }
             let this = self.builder().this_expr(this_ty, true, loc);
             let b = crate::conv::decay_dependent(self, this);
             return Some(self.builder().dependent_member(
@@ -184,14 +193,8 @@ impl Sema<'_, '_> {
             ));
         };
         let (this_ty, _) = self.this_class()?;
-        // With a static candidate too, `this` is captured only once the
-        // call names an instance member ([`Self::finish_member_winner`]):
-        // the static `f` of `[](int s) { return f(s); }` needs none
-        // (clang's `BuildPossibleImplicitMemberExpr`).
-        let all_instance =
-            decls.iter().all(|&d| self.is_instance_member(self.templated_or_self(d)));
         let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
-        if all_instance || self.ast.types.is_dependent(obj_ty) {
+        if all_instance {
             self.note_this_use(loc);
         }
         let this = self.builder().this_expr(this_ty, true, loc);
@@ -263,12 +266,30 @@ impl Sema<'_, '_> {
     /// and its capture required (`BuildImplicitMemberExpr` with
     /// `IsKnownInstance`); with a static candidate too `this` is captured
     /// only where no diagnostic is needed (a potential capture).
+    ///
+    /// An implicit member overload set (`f(s)` in a generic lambda, `s` a
+    /// generic parameter, `f` static and instance members) whose call is
+    /// dependent: when every enclosing lambda can capture `this` it does
+    /// so now, since the closure is complete before the call is resolved;
+    /// otherwise nothing is captured and an instance winner is diagnosed
+    /// at instantiation (clang
+    /// `tryImplicitlyCaptureThisIfImplicitMemberFunctionAccessWithDependentArgs`,
+    /// [expr.prim.lambda.capture]/7-8). A set of instance members only
+    /// captured `this` when it was formed.
     pub(crate) fn note_implicit_this_of_dependent_call(&mut self, callee: ExprId) {
         let c = self.ignore_parens(callee);
-        if self.lambdas.is_empty()
-            || self.unevaluated > 0
-            || self.ast.exprs.get(c).kind() != ExprKind::UnresolvedLookupExpr
-        {
+        if self.lambdas.is_empty() || self.unevaluated > 0 {
+            return;
+        }
+        if let Some(x) = self.member_overload(c) {
+            let implicit = self.ovl.members.get(&x).is_some_and(|m| m.implicit);
+            if implicit {
+                let loc = self.ast.exprs.get(x).loc();
+                self.note_potential_this(loc);
+            }
+            return;
+        }
+        if self.ast.exprs.get(c).kind() != ExprKind::UnresolvedLookupExpr {
             return;
         }
         let instance: Vec<bool> = self
@@ -289,9 +310,51 @@ impl Sema<'_, '_> {
             return;
         }
         let loc = self.ast.exprs.get(c).loc();
-        if instance.iter().all(|&b| b) || self.this_capturable() {
+        if instance.iter().all(|&b| b) {
             self.note_this_use(loc);
+        } else {
+            self.note_potential_this(loc);
         }
+    }
+
+    /// A potential use of `this` at `loc` by a dependent call of an
+    /// overload set with static and instance members: captured by the
+    /// innermost capture-ready lambda and the lambdas enclosing it when
+    /// every open lambda can capture it, else not at all.
+    fn note_potential_this(&mut self, loc: Loc) {
+        if self.this_capturable()
+            && let Some(op) = self.capture_ready_call_op()
+        {
+            let saved = std::mem::replace(&mut self.ctx, op);
+            self.note_this_use(loc);
+            self.ctx = saved;
+        }
+    }
+
+    /// The call operator of the innermost open lambda whose closure type
+    /// is not in a dependent context (clang
+    /// `getStackIndexOfNearestEnclosingCaptureReadyLambda`): a capture
+    /// there is final, while a lambda in a template is formed again, with
+    /// its captures, at instantiation. `None` outside a lambda.
+    fn capture_ready_call_op(&self) -> Option<DeclId> {
+        let mut c = self.ctx;
+        for _ in 0..4096 {
+            let Some(l) = self.ast.call_op_lambda(c) else {
+                if self.kind_of(c) == DeclKind::RequiresExprBody
+                    && let Some(p) = self.ast.decls.get(c).ctx()
+                {
+                    c = p;
+                    continue;
+                }
+                return None;
+            };
+            let closure = self.ast.exprs.lambdas.get(l).closure;
+            if !self.ast.decls.get(closure).has(DeclFlags::DEPENDENT_CTX) {
+                return Some(c);
+            }
+            c = self.ast.decls.get(closure).ctx()?;
+        }
+        None
     }
 
     /// Resolves the call of the overloaded member access `callee`
@@ -397,7 +460,23 @@ impl Sema<'_, '_> {
             // An implicit `this->` naming an instance member: the
             // enclosing lambdas capture `this` (already done when every
             // candidate was one).
-            self.note_this_use(loc);
+            let mixed =
+                !m.decls.iter().all(|&x| self.is_instance_member(self.templated_or_self(x)));
+            if mixed
+                && self.lambdas.is_empty()
+                && self.unevaluated == 0
+                && self.ast.call_op_lambda(self.ctx).is_some()
+            {
+                // A generic lambda's call operator being instantiated:
+                // its closure is complete, so `this` must have been
+                // captured when the lambda was formed (a potential
+                // capture, [`Self::note_implicit_this_of_dependent_call`]);
+                // without a capture-default it is an error here, as
+                // clang's `CheckCXXThisCapture` from the instantiation.
+                let _ = self.capture_this(loc, None);
+            } else {
+                self.note_this_use(loc);
+            }
         }
         self.diagnose_deprecated(d, loc);
         let e = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, d, shadow, m.nns, loc);
